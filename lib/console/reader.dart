@@ -9,12 +9,20 @@ import 'ansi.dart';
 
 /// Dedicated console input reader for interactive CLI prompts.
 class ConsoleReader {
-  /// Read a raw line from standard input.
+  /// Reads a single raw UTF-8 line from standard input.
   Future<String?> line() async {
     return stdin.readLineSync(encoding: utf8);
   }
 
-  /// Prompt user for a text response with optional default and validator (1-word).
+  /// Prompts the user for text input with an optional default value and validator.
+  ///
+  /// ```dart
+  /// final name = await console.reader.ask('Enter project name', defaultVal: 'my_app');
+  /// final age = await console.reader.ask(
+  ///   'Enter age',
+  ///   validator: (s) => int.tryParse(s) != null,
+  /// );
+  /// ```
   Future<String> ask(
     String question, {
     String? defaultVal,
@@ -30,7 +38,12 @@ class ConsoleReader {
     }
   }
 
-  /// Prompt user with a Yes/No boolean confirmation question (1-word).
+  /// Prompts user with a Yes/No boolean confirmation question.
+  ///
+  /// ```dart
+  /// final proceed = await console.reader.confirm('Deploy to production?', defaultVal: false);
+  /// if (proceed) { ... }
+  /// ```
   Future<bool> confirm(
     String question, {
     bool defaultVal = true,
@@ -42,7 +55,14 @@ class ConsoleReader {
     return l == 'y' || l == 'yes' || l == '1' || l == 'true';
   }
 
-  /// Present a numbered selection list for the user to choose an option (1-word).
+  /// Presents an interactive numbered selection list for the user to choose an option.
+  ///
+  /// ```dart
+  /// final region = await console.reader.pick(
+  ///   'Select deployment region:',
+  ///   options: ['us-east-1', 'eu-west-1', 'ap-south-1'],
+  /// );
+  /// ```
   Future<O> pick<O>(
     String question, {
     required List<O> options,
@@ -65,7 +85,11 @@ class ConsoleReader {
     }
   }
 
-  /// Read sensitive input (like password or token) masking echo if possible (1-word).
+  /// Reads sensitive input (e.g. passwords, API tokens) while masking terminal echo.
+  ///
+  /// ```dart
+  /// final token = await console.reader.secret('Enter GitHub Token');
+  /// ```
   Future<String> secret(String prompt) async {
     stdout.write('$prompt: ');
     try {

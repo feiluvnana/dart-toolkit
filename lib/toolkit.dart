@@ -1,4 +1,15 @@
-/// Main toolkit package entrypoint exporting all core namespaces.
+/// # Core Toolkit Aggregator
+///
+/// Exports all 6 core namespaces for automation and scraping:
+/// ```dart
+/// import 'package:dart_toolkit/dart_toolkit.dart';
+///
+/// void main(List<String> args) async {
+///   cli.parse(args);
+///   sys.listen();
+///   console.ok('Dart Script Toolkit initialized!');
+/// }
+/// ```
 library;
 
 export 'cli/cli.dart';

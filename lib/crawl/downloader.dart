@@ -13,32 +13,51 @@ import 'pipeline.dart';
 // DOWNLOADER & HTTP STREAMING DOWNLOADER
 // ============================================================================
 
+/// Event callback namespace for downloader lifecycle notifications (`downloader.on.*`).
 class DownloaderEvents {
   void Function(dynamic req)? _start;
   void Function(int received, int total)? _progress;
   void Function(dynamic res)? _done;
   void Function(Object error, dynamic req)? _error;
 
+  /// Registers a callback triggered when a download begins.
   void start(void Function(dynamic req) handler) => _start = handler;
+
+  /// Registers a callback triggered as streaming chunks arrive with received and total bytes.
   void progress(void Function(int received, int total) handler) =>
       _progress = handler;
+
+  /// Registers a callback triggered when a download finishes successfully.
   void done(void Function(dynamic res) handler) => _done = handler;
+
+  /// Registers a callback triggered when a download encounters an error.
   void error(void Function(Object error, dynamic req) handler) =>
       _error = handler;
 }
 
+/// Abstract contract for downloading web pages and assets.
 abstract class Downloader<T> {
+  /// Back-reference to the parent [Engine].
   Engine<T>? engine;
+
+  /// Base local directory for relative destination paths.
   String? base;
+
+  /// Counter of newly saved assets during the lifetime of this downloader.
   int count = 0;
+
+  /// Sub-namespace for download event callbacks.
   late final DownloaderEvents on = DownloaderEvents();
 
+  /// Attaches this downloader to an [Engine].
   void attach(Engine<T> engine) {
     this.engine = engine;
   }
 
+  /// Downloads [requestOrUrl] and returns a parsed [Response].
   Future<Response<T>> download(dynamic requestOrUrl);
 
+  /// Performs an HTTP GET request for [url] and returns a [Response].
   Future<Response<T>> get(
     dynamic url, {
     Map<String, String>? headers,
@@ -50,6 +69,7 @@ abstract class Downloader<T> {
     return download(req);
   }
 
+  /// Performs an HTTP POST request for [url] with optional [body] and returns a [Response].
   Future<Response<T>> post(
     dynamic url, {
     Object? body,
@@ -62,11 +82,18 @@ abstract class Downloader<T> {
     return download(req);
   }
 
+  /// Checks whether a local asset already exists and is non-empty.
+  ///
+  /// If [match] is true, checks for existing files with matching basenames ignoring
+  /// common prefix/suffix differences.
   bool has(String path, {bool match = true}) {
     final file = _resolve(path);
     return Fs.has(file, match: match);
   }
 
+  /// Downloads an asset from a source URL and saves it to a local destination file.
+  ///
+  /// Uses atomic `.part` writing and skips existing files if [match] is true.
   Future<void> save(
     dynamic targetOrRequest,
     dynamic sourceOrDestination, {
@@ -75,6 +102,12 @@ abstract class Downloader<T> {
     bool match = true,
   });
 
+  /// Concurrently synchronizes a collection of download tasks into local files.
+  ///
+  /// [tasks] can be a `Map<String, String>`, an `Iterable` of `MapEntry`, or
+  /// record tuples `({String path, String url})`.
+  ///
+  /// If [prefix] is supplied, it is prepended to relative URLs.
   Future<void> sync(
     dynamic tasks, {
     String? prefix,
@@ -113,6 +146,7 @@ abstract class Downloader<T> {
     await pool.run(entries, (t) => save(t.path, t.url, match: match));
   }
 
+  /// Closes underlying HTTP connections and resources.
   Future<void> close() async {}
 
   File _resolve(dynamic pathOrFile) {
@@ -125,12 +159,18 @@ abstract class Downloader<T> {
   }
 }
 
+/// Standard HTTP streaming downloader implementation with custom headers, timeouts, and atomic writes.
 class HttpDownloader<T> extends Downloader<T> {
   final http.Client _client;
   final bool _ownsClient;
+
+  /// Default headers sent with each request (e.g. User-Agent).
   final Map<String, String> headers;
+
+  /// Request timeout duration.
   final Duration timeout;
 
+  /// Creates an [HttpDownloader] instance.
   HttpDownloader({
     http.Client? client,
     Map<String, String>? defaultHeaders,

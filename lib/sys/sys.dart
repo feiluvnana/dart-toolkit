@@ -8,18 +8,25 @@ import 'package:path/path.dart' as p;
 // SYSTEM, PROCESS RUNNER & SHUTDOWN SIGNALS
 // ============================================================================
 
-/// Result of a process execution.
+/// Result of an executed external process.
 class ProcResult {
+  /// The process exit code (0 indicates success).
   final int code;
+
+  /// Standard output captured from the process.
   final String stdout;
+
+  /// Standard error output captured from the process.
   final String stderr;
 
+  /// Creates a [ProcResult].
   ProcResult({
     required this.code,
     required this.stdout,
     required this.stderr,
   });
 
+  /// Whether the process exited successfully with code 0.
   bool get ok => code == 0;
 
   @override
@@ -28,18 +35,34 @@ class ProcResult {
 
 /// Shutdown and exit lifecycle events namespace (`sys.on.exit(...)`).
 class SysEvents {
+  /// Registers an asynchronous or synchronous cleanup callback executed upon exit or Ctrl+C.
   void exit(dynamic Function() callback) {
     Exit.hook(callback);
   }
 }
 
-/// System namespace accessor (`sys.run(...)`, `sys.which(...)`, `sys.listen()`).
+/// System, process, environment, and graceful shutdown namespace accessor.
 class SysAccessor {
+  /// Sub-namespace for exit and shutdown lifecycle events.
   final SysEvents on = SysEvents();
 
+  /// Creates a [SysAccessor] instance.
   SysAccessor();
 
-  /// Execute an external process (1-word).
+  /// Executes an external process and returns its captured [ProcResult].
+  ///
+  /// If [inherit] is true, streams standard input, output, and error directly to the console.
+  /// If [echo] is true, prints the command invocation before running.
+  /// Standard output and error can also be streamed line-by-line via [out] and [err] callbacks.
+  ///
+  /// Automatically registers the running process with signal cleanup so Ctrl+C will terminate it.
+  ///
+  /// ```dart
+  /// final res = await sys.run('git', ['status', '--short']);
+  /// if (res.ok) {
+  ///   print(res.stdout);
+  /// }
+  /// ```
   Future<ProcResult> run(
     String executable,
     List<String> arguments, {
@@ -59,36 +82,42 @@ class SysAccessor {
         err: err,
       );
 
-  /// Locate executable in PATH or candidate paths (1-word).
+  /// Locates an executable binary in the system `PATH` or specified candidate [paths].
+  ///
+  /// On Windows, automatically checks `.exe`, `.cmd`, and `.bat` extensions.
+  ///
+  /// ```dart
+  /// final ffmpeg = sys.which('ffmpeg');
+  /// ```
   String? which(String name, {List<String>? paths}) =>
       Proc.which(name, paths: paths);
 
-  /// Listen to Ctrl+C (SIGINT) and run cleanup hooks (1-word).
+  /// Starts listening for Ctrl+C (`SIGINT`) signals to invoke registered shutdown hooks.
   void listen() => Exit.listen();
 
-  /// Track a temporary or partial file for automatic cleanup upon abort (1-word).
+  /// Tracks a temporary or partial file for automatic deletion if the process is aborted.
   void track(File file) => Exit.track(file);
 
-  /// Untrack file after successful completion (1-word).
+  /// Untracks a file after it has completed successfully, preventing cleanup.
   void untrack(File file) => Exit.untrack(file);
 
-  /// Register shutdown cleanup hook (1-word).
+  /// Registers a shutdown cleanup callback.
   void hook(dynamic Function() fn) => Exit.hook(fn);
 
-  /// Trigger immediate graceful shutdown (1-word).
+  /// Triggers an immediate graceful shutdown, executing hooks and cleaning up tracked files.
   Future<void> now([int code = 0]) => Exit.now(code);
 
-  /// Cleanly exit application with optional status code (1-word).
+  /// Cleanly exits the application with an optional status [code].
   Future<void> exit([int code = 0]) => Exit.now(code);
 
-  /// Query environment variable (1-word).
+  /// Reads an environment variable by [key].
   String? env(String key) => Platform.environment[key];
 
-  /// Create and start a new benchmark stopwatch (1-word).
+  /// Creates and starts a new [Stopwatch] benchmark timer.
   Stopwatch clock() => Stopwatch()..start();
 }
 
-/// Top-level system accessor instance.
+/// Top-level system and process accessor singleton.
 final SysAccessor sys = SysAccessor();
 
 /// Alias for system accessor (`proc.*`).
@@ -96,6 +125,7 @@ final SysAccessor proc = sys;
 
 /// Process execution utilities class (also available via lowercase `sys.*` and `proc.*`).
 class Proc {
+  /// Executes external [executable] with [arguments] and returns captured [ProcResult].
   static Future<ProcResult> run(
     String executable,
     List<String> arguments, {
@@ -168,6 +198,7 @@ class Proc {
     }
   }
 
+  /// Finds executable binary in PATH or candidate paths.
   static String? which(
     String name, {
     List<String>? paths,
@@ -207,13 +238,23 @@ class Proc {
     return null;
   }
 
+  /// Starts listening for Ctrl+C signals.
   static void listen() => Exit.listen();
+
+  /// Tracks a temporary file for automatic deletion on abort.
   static void track(File file) => Exit.track(file);
+
+  /// Untracks a file after completion.
   static void untrack(File file) => Exit.untrack(file);
+
+  /// Registers a shutdown cleanup callback.
   static void hook(dynamic Function() fn) => Exit.hook(fn);
+
+  /// Initiates immediate graceful shutdown.
   static Future<void> now([int code = 0]) => Exit.now(code);
 }
 
+/// Global exit lifecycle manager for SIGINT trapping, process cleanup, and file deletion.
 class Exit {
   static final Set<File> _files = <File>{};
   static final Set<Process> _procs = <Process>{};
@@ -221,6 +262,7 @@ class Exit {
   static bool _init = false;
   static bool _stopping = false;
 
+  /// Initializes signal handlers for Ctrl+C (SIGINT).
   static void listen() {
     if (_init) return;
     _init = true;
@@ -231,25 +273,30 @@ class Exit {
     } catch (_) {}
   }
 
+  /// Registers [file] to be deleted if the application is interrupted.
   static void track(File file) {
     listen();
     _files.add(file);
   }
 
+  /// Untracks [file] when successfully completed.
   static void untrack(File file) {
     _files.remove(file);
   }
 
+  /// Registers child [process] to be killed if the parent exits.
   static void proc(Process process) {
     listen();
     _procs.add(process);
   }
 
+  /// Registers an exit hook callback.
   static void hook(FutureOr<void> Function() fn) {
     listen();
     _hooks.add(fn);
   }
 
+  /// Kills spawned processes, deletes tracked files, runs hooks, and terminates with [code].
   static Future<void> now([int code = 0]) async {
     if (_stopping) return;
     _stopping = true;

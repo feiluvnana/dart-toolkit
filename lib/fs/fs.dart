@@ -15,19 +15,43 @@ export 'archive.dart';
 // FILESYSTEM, PATHS & STORAGE (fs.* / Fs.*)
 // ============================================================================
 
-/// Top-level filesystem accessor instance (`fs.write(...)`, `fs.archive(...)`).
+/// Top-level filesystem and path manipulation accessor singleton.
+///
+/// Provides convenient, fluent access to atomic file writing, streaming downloads,
+/// directory creation, file search, path utilities, and 7-Zip archiving:
+/// ```dart
+/// // Atomic file writing with .part protection
+/// await fs.write('data/output.json', jsonString);
+///
+/// // Download streaming asset
+/// await fs.download(Uri.parse('https://example.com/file.zip'), 'downloads/file.zip');
+///
+/// // Path helpers without extra imports
+/// final full = fs.join('parent', 'child', 'file.txt');
+/// final name = fs.name(full); // 'file'
+/// final ext = fs.ext(full);   // '.txt'
+/// ```
 const FsAccessor fs = FsAccessor();
 
 /// Filesystem and path namespace accessor.
 class FsAccessor {
   const FsAccessor();
 
-  /// Create or manage archive for path (1-word).
+  /// Creates or manages an [Archive] for the specified file [path].
+  ///
+  /// ```dart
+  /// final arch = fs.archive('backups/data.7z');
+  /// await arch.sync('data/');
+  /// ```
   Archive archive(String path) => Fs.archive(path);
 
   // --- Path utilities directly under fs namespace ---
 
-  /// Join path segments safely without needing package:path (1-word).
+  /// Safely joins path segments using the host platform's path separator.
+  ///
+  /// ```dart
+  /// final p = fs.join('dir', 'subdir', 'file.txt');
+  /// ```
   String join(
     String part1, [
     String? part2,
@@ -49,21 +73,29 @@ class FsAccessor {
         part8,
       );
 
-  /// Return basename of path (e.g. 'foo.txt' from '/path/foo.txt') (1-word).
+  /// Returns the basename of [path] (e.g. `'file.txt'` from `'/dir/file.txt'`).
   String base(String path) => p.basename(path);
 
-  /// Return basename without extension (e.g. 'foo' from '/path/foo.txt') (1-word).
+  /// Returns the basename of [path] without its extension (e.g. `'file'` from `'/dir/file.txt'`).
   String name(String path) => p.basenameWithoutExtension(path);
 
-  /// Return extension of path (e.g. '.txt') (1-word).
+  /// Returns the extension of [path] including the dot (e.g. `'.txt'` from `'/dir/file.txt'`).
   String ext(String path) => p.extension(path);
 
-  /// Return directory name of path (e.g. '/path' from '/path/foo.txt') (1-word).
+  /// Returns the directory component of [path] (e.g. `'/dir'` from `'/dir/file.txt'`).
   String dir(String path) => p.dirname(path);
 
   // --- File and directory operations ---
 
-  /// Sanitize filename for local OS (ASCII or Japanese full-width) (1-word).
+  /// Sanitizes a file or folder [name] to be valid across Windows, macOS, and Linux.
+  ///
+  /// Replaces illegal characters (`:`, `"`, `/`, `\`, `*`, `?`, `<`, `>`, `|`) with [replace],
+  /// or with full-width equivalents if [full] is true.
+  /// Strips control characters and trailing dots.
+  ///
+  /// ```dart
+  /// final safe = fs.sanitize('AC/DC: Back in Black?.mp3'); // 'AC_DC_ Back in Black_.mp3'
+  /// ```
   String sanitize(
     String name, {
     String replace = '_',
@@ -71,31 +103,39 @@ class FsAccessor {
   }) =>
       Fs.sanitize(name, replace: replace, full: full);
 
-  /// Format bytes into human-readable size string (1-word).
+  /// Formats byte count into a human-readable size string (e.g. `'1.5 MB'`, `'250 KB'`).
   String size(int bytes, {int decimals = 1}) =>
       Fs.size(bytes, decimals: decimals);
 
-  /// Parse human-readable size string into bytes (1-word).
+  /// Parses human-readable size strings (e.g. `'10MB'`, `'2.5 GB'`, `'500K'`) into bytes.
   int parse(String text) => Fs.parse(text);
 
-  /// Format duration into standard timer string mm:ss or hh:mm:ss (1-word).
+  /// Formats a [Duration] into `mm:ss` or `hh:mm:ss` format.
   String time(Duration duration) => Fs.time(duration);
 
-  /// Ensure directory exists (creates recursively) (1-word).
+  /// Ensures that [path] exists as a directory, creating missing parent folders recursively.
   Future<Directory> mkdir(String path, {bool sync = false}) =>
       Fs.mkdir(path, sync: sync);
 
-  /// Ensure parent directory for filePath exists (1-word).
+  /// Ensures the parent directory of [filePath] exists, creating it recursively if needed.
   void parent(String filePath) => Fs.parent(filePath);
 
-  /// Check if file exists and has content > 0 bytes (1-word).
+  /// Checks whether [target] file exists and has non-zero byte size.
+  ///
+  /// If [match] is true, also checks whether a file with matching basename exists in the folder.
   bool has(dynamic target, {bool match = false}) =>
       Fs.has(target, match: match);
 
-  /// Match existing file by basename ignoring prefix/suffix differences (1-word).
+  /// Matches existing files in the directory by basename ignoring common prefix/suffix differences.
   bool match(dynamic target) => Fs.match(target);
 
-  /// Write string or byte content atomically with .part tracking (1-word).
+  /// Writes string or byte [content] atomically to [target] with temporary `.part` tracking.
+  ///
+  /// If interrupted or aborted, partial files are automatically cleaned up.
+  ///
+  /// ```dart
+  /// await fs.write('output.json', jsonEncode(data));
+  /// ```
   Future<File> write(
     dynamic target,
     dynamic content, {
@@ -106,19 +146,19 @@ class FsAccessor {
     return Fs.write(file, content, part: part, encoding: encoding);
   }
 
-  /// Read file content as string (1-word).
+  /// Reads [target] file synchronously as a string with [encoding].
   String read(dynamic target, {Encoding encoding = utf8}) {
     final file = target is File ? target : File(target.toString());
     return file.readAsStringSync(encoding: encoding);
   }
 
-  /// Read file content as byte buffer (1-word).
+  /// Reads [target] file synchronously as raw bytes.
   List<int> bytes(dynamic target) {
     final file = target is File ? target : File(target.toString());
     return file.readAsBytesSync();
   }
 
-  /// Copy source file to destination (1-word).
+  /// Copies [source] file to [destination], creating parent directories as necessary.
   File copy(dynamic source, dynamic destination) {
     final src = source is File ? source : File(source.toString());
     final dest = destination is File ? destination : File(destination.toString());
@@ -126,7 +166,7 @@ class FsAccessor {
     return src.copySync(dest.path);
   }
 
-  /// Move/rename source file to destination (1-word).
+  /// Moves or renames [source] file to [destination], creating parent directories as necessary.
   File move(dynamic source, dynamic destination) {
     final src = source is File ? source : File(source.toString());
     final dest = destination is File ? destination : File(destination.toString());
@@ -134,11 +174,13 @@ class FsAccessor {
     return src.renameSync(dest.path);
   }
 
-  /// Create a temporary directory (1-word).
+  /// Creates a unique temporary directory in the system temp location.
   Directory temp([String prefix = 'tmp_']) =>
       Directory.systemTemp.createTempSync(prefix);
 
-  /// Download URL directly to destination file with atomic .part tracking (1-word).
+  /// Downloads [url] directly to [destination] file with atomic `.part` writing and progress callback.
+  ///
+  /// If the download fails or process exits, the partial `.part` file is cleanly discarded.
   Future<File> download(
     Uri url,
     dynamic destination, {
@@ -158,7 +200,7 @@ class FsAccessor {
     );
   }
 
-  /// Find files matching pattern within directory (1-word).
+  /// Recursively finds files in [dir] matching an optional regex or string [pattern].
   List<File> find(
     dynamic dir, {
     Pattern? pattern,
@@ -168,7 +210,7 @@ class FsAccessor {
     return Fs.find(d, pattern: pattern, recursive: recursive);
   }
 
-  /// Delete files matching pattern within directory (1-word).
+  /// Deletes files in [dir] matching an optional [pattern] and returns the count of deleted files.
   int delete(
     dynamic dir, {
     Pattern? pattern,
@@ -181,9 +223,10 @@ class FsAccessor {
 
 /// Static filesystem utilities class (also available via lowercase `fs.*`).
 class Fs {
-  /// Create or manage archive for path (1-word).
+  /// Creates or manages an [Archive] for the specified file [path].
   static Archive archive(String path) => Archive(path);
 
+  /// Sanitizes [name] for use in filenames, replacing illegal characters with [replace] or full-width equivalents.
   static String sanitize(
     String name, {
     String replace = '_',
@@ -211,6 +254,7 @@ class Fs {
     return s.isEmpty ? 'unnamed' : s;
   }
 
+  /// Formats byte count into a human-readable size string.
   static String size(int bytes, {int decimals = 1}) {
     if (bytes <= 0) return '0 B';
     const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
@@ -219,6 +263,7 @@ class Fs {
     return '${val.toStringAsFixed(decimals)} ${units[i]}';
   }
 
+  /// Parses human-readable size strings (e.g. `'10MB'`) into byte counts.
   static int parse(String text) {
     final match = RegExp(r'^([\d.]+)\s*([A-Za-z]+)?$').firstMatch(text.trim());
     if (match == null) return 0;
@@ -238,6 +283,7 @@ class Fs {
     return (value * (map[unit] ?? 1)).round();
   }
 
+  /// Formats a [Duration] into `mm:ss` or `hh:mm:ss`.
   static String time(Duration duration) {
     final h = duration.inHours;
     final m = duration.inMinutes.remainder(60);
@@ -251,6 +297,7 @@ class Fs {
         '${s.toString().padLeft(2, '0')}';
   }
 
+  /// Recursively creates directory at [path] asynchronously.
   static Future<Directory> mkdir(String path, {bool sync = false}) async {
     final dir = Directory(path);
     if (sync) {
@@ -261,17 +308,20 @@ class Fs {
     return dir;
   }
 
+  /// Recursively creates directory at [path] synchronously.
   static Directory mkdirSync(String path) {
     final dir = Directory(path);
     if (!dir.existsSync()) dir.createSync(recursive: true);
     return dir;
   }
 
+  /// Ensures the parent directory of [filePath] exists.
   static void parent(String filePath) {
     final dir = Directory(p.dirname(filePath));
     if (!dir.existsSync()) dir.createSync(recursive: true);
   }
 
+  /// Checks whether [target] file exists and has content > 0 bytes.
   static bool has(dynamic target, {bool match = false}) {
     final file = target is File ? target : File(target.toString());
     if (file.existsSync() && file.lengthSync() > 0) return true;
@@ -279,6 +329,7 @@ class Fs {
     return false;
   }
 
+  /// Matches existing files in the directory by basename ignoring minor variations.
   static bool match(dynamic target) {
     final file = target is File ? target : File(target.toString());
     if (has(file)) return true;
@@ -295,6 +346,7 @@ class Fs {
     return false;
   }
 
+  /// Atomically writes [content] to [target] with temporary `.part` file protection.
   static Future<File> write(
     File target,
     dynamic content, {
@@ -330,6 +382,7 @@ class Fs {
     }
   }
 
+  /// Downloads [url] directly to [destination] with atomic `.part` writing and signal tracking.
   static Future<File> download(
     Uri url,
     File destination, {
@@ -389,6 +442,7 @@ class Fs {
     }
   }
 
+  /// Recursively finds files in [dir] matching an optional [pattern].
   static List<File> find(
     Directory dir, {
     Pattern? pattern,
@@ -402,6 +456,7 @@ class Fs {
         .toList();
   }
 
+  /// Deletes files in [dir] matching [pattern] and returns the count of deleted files.
   static int delete(
     Directory dir, {
     Pattern? pattern,

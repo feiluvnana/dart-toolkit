@@ -5,38 +5,76 @@ import 'dart:io';
 // ============================================================================
 
 /// Top-level CLI argument accessor singleton.
+///
+/// Provides access to the currently parsed command-line arguments:
+/// ```dart
+/// cli.parse(args);
+/// final force = cli.has('force', 'f');
+/// final concurrency = cli.get('concurrency', 4);
+/// final targets = cli.list();
+/// ```
 final CliAccessor cli = CliAccessor();
 
 /// CLI argument accessor and state holder.
 class CliAccessor {
   Cli _instance = Cli();
 
-  /// Parse or re-bind command line arguments into active namespace session (1-word).
+  /// Parses and binds command-line arguments into the active session.
+  ///
+  /// ```dart
+  /// void main(List<String> rawArgs) {
+  ///   cli.parse(rawArgs);
+  /// }
+  /// ```
   void parse(List<String> args) {
     _instance = Cli(args);
   }
 
-  /// Check if a flag exists, e.g. `--force` or `-f` (1-word).
+  /// Checks whether a boolean flag or its alias was passed.
+  ///
+  /// Matches `--name`, `-alias`, or `--no-name`.
+  /// ```dart
+  /// final verbose = cli.has('verbose', 'v');
+  /// final force = cli.has('force', 'f');
+  /// ```
   bool has(String name, [String? alias]) => _instance.has(name, alias);
 
-  /// Parse option value to target type (int, double, bool, String) (1-word).
+  /// Extracts a typed option value with an optional fallback default.
+  ///
+  /// Supports `--key=value`, `--key value`, and `-k value`.
+  /// Type is automatically inferred from [fallback] or specified generic [T]:
+  /// ```dart
+  /// final port = cli.get('port', 8080);            // inferred as int
+  /// final ratio = cli.get('ratio', 0.5);           // inferred as double
+  /// final env = cli.get('env', 'production');      // inferred as String
+  /// final token = cli.get<String?>('token');       // nullable String
+  /// ```
   T get<T>(String name, [T? fallback, String? alias]) =>
       _instance.get<T>(name, fallback, alias);
 
-  /// Return positional non-option arguments list (1-word).
+  /// Returns the unmodifiable list of positional non-option arguments.
+  ///
+  /// ```bash
+  /// dart run my_script.dart --concurrency=4 build deploy
+  /// ```
+  /// ```dart
+  /// final targets = cli.list(); // ['build', 'deploy']
+  /// ```
   List<String> list() => _instance.list();
 
-  /// Return all raw arguments.
+  /// Returns the raw unmodified argument strings passed to the CLI.
   List<String> get raw => _instance.raw;
 }
 
 /// Standalone CLI argument parser instance.
 class Cli {
+  /// The raw list of argument strings.
   final List<String> raw;
   final Map<String, String> _options = {};
   final Set<String> _flags = {};
   final List<String> _rest = [];
 
+  /// Creates a parser instance for [args], defaulting to [Platform.executableArguments].
   Cli([List<String>? args]) : raw = args ?? Platform.executableArguments {
     _parse();
   }
@@ -84,6 +122,7 @@ class Cli {
     }
   }
 
+  /// Checks if flag [name] or [alias] is present.
   bool has(String name, [String? alias]) {
     final cleanName = name.replaceFirst(RegExp(r'^-+'), '');
     final cleanAlias = alias?.replaceFirst(RegExp(r'^-+'), '');
@@ -91,6 +130,7 @@ class Cli {
         (cleanAlias != null && _flags.contains(cleanAlias));
   }
 
+  /// Retrieves an option value converted to type [T].
   T get<T>(String name, [T? fallback, String? alias]) {
     final cleanName = name.replaceFirst(RegExp(r'^-+'), '');
     final cleanAlias = alias?.replaceFirst(RegExp(r'^-+'), '');
@@ -111,5 +151,6 @@ class Cli {
     return val as T;
   }
 
+  /// Returns unmodifiable list of positional non-option arguments.
   List<String> list() => List.unmodifiable(_rest);
 }

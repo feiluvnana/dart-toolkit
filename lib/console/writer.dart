@@ -9,21 +9,42 @@ import 'terminal.dart';
 // CONSOLE WRITER, TABLE, PROGRESS & SPINNER
 // ============================================================================
 
-enum ColumnAlign { left, center, right }
+/// Alignment options for table columns.
+enum ColumnAlign {
+  /// Left-aligned column content.
+  left,
+  /// Centered column content.
+  center,
+  /// Right-aligned column content.
+  right,
+}
 
+/// Border styling definition for [Table].
 class TableStyle {
+  /// Top-left corner character.
   final String topLeft;
+  /// Top-right corner character.
   final String topRight;
+  /// Bottom-left corner character.
   final String bottomLeft;
+  /// Bottom-right corner character.
   final String bottomRight;
+  /// Horizontal border character.
   final String horizontal;
+  /// Vertical border character.
   final String vertical;
+  /// Cross intersection character.
   final String cross;
+  /// Top header divider character.
   final String topDivider;
+  /// Bottom footer divider character.
   final String bottomDivider;
+  /// Left row divider character.
   final String leftDivider;
+  /// Right row divider character.
   final String rightDivider;
 
+  /// Creates custom table border styling.
   const TableStyle({
     required this.topLeft,
     required this.topRight,
@@ -38,6 +59,7 @@ class TableStyle {
     required this.rightDivider,
   });
 
+  /// Standard Unicode box-drawing table borders (`┌─┬─┐`).
   static const TableStyle unicode = TableStyle(
     topLeft: '┌',
     topRight: '┐',
@@ -52,6 +74,7 @@ class TableStyle {
     rightDivider: '┤',
   );
 
+  /// ASCII-compatible table borders (`+-+-+`).
   static const TableStyle ascii = TableStyle(
     topLeft: '+',
     topRight: '+',
@@ -67,12 +90,17 @@ class TableStyle {
   );
 }
 
+/// A formatted tabular display generator.
 class Table {
+  /// Column header titles.
   final List<String> headers;
   final List<List<String>> _rows = [];
+  /// Alignments per column.
   final List<ColumnAlign> columnAlignments;
+  /// Border style.
   final TableStyle style;
 
+  /// Creates a table instance with [headers].
   Table({
     required this.headers,
     List<ColumnAlign>? alignments,
@@ -80,6 +108,7 @@ class Table {
   }) : columnAlignments =
             alignments ?? List.filled(headers.length, ColumnAlign.left);
 
+  /// Appends a single row or multiple rows.
   void add(dynamic rowOrRows) {
     if (rowOrRows is Iterable<List<Object?>>) {
       for (final r in rowOrRows) {
@@ -90,6 +119,7 @@ class Table {
     }
   }
 
+  /// Renders the table into a multi-line formatted string.
   String render() {
     final colCount = headers.length;
     final widths = List<int>.filled(colCount, 0);
@@ -154,6 +184,7 @@ class Table {
     return buf.toString();
   }
 
+  /// Directly prints the rendered table to stdout.
   void print() {
     stdout.write(render());
   }
@@ -174,14 +205,27 @@ class Table {
   }
 }
 
-enum ProgressUnit { count, bytes }
+/// Unit displayed alongside progress metrics.
+enum ProgressUnit {
+  /// Unit counted in items / discrete units.
+  count,
+  /// Unit counted in bytes (KB, MB, GB).
+  bytes,
+}
 
+/// An interactive, real-time command-line progress bar.
 class Progress {
+  /// Total target count or bytes. Can be updated dynamically.
   int total;
+  /// Visual character width of the progress bar gauge.
   final int width;
+  /// Metrics unit (count vs bytes).
   final ProgressUnit unit;
+  /// Fill character for completed progress.
   final String fill;
+  /// Head pointer character.
   final String head;
+  /// Empty track character.
   final String empty;
 
   int _current = 0;
@@ -189,6 +233,7 @@ class Progress {
   final Stopwatch _stopwatch = Stopwatch();
   DateTime? _lastRender;
 
+  /// Creates and initializes a progress bar.
   Progress({
     required this.total,
     this.width = 25,
@@ -201,6 +246,7 @@ class Progress {
     _stopwatch.start();
   }
 
+  /// Current completed progress count or bytes.
   int get current => _current;
 
   static String _formatSize(int bytes) {
@@ -224,6 +270,7 @@ class Progress {
         '${s.toString().padLeft(2, '0')}';
   }
 
+  /// Updates current progress to [current] with optional [newTotal] and status [message].
   void update(int current, {int? newTotal, String? message}) {
     if (newTotal != null) total = newTotal;
     _current = current;
@@ -238,10 +285,12 @@ class Progress {
     }
   }
 
+  /// Increments progress by [delta] (default: 1) with optional status [message].
   void tick([int delta = 1, String? message]) {
     update(_current + delta, message: message);
   }
 
+  /// Renders the current progress bar state to the terminal line.
   void render() {
     if (!stdout.hasTerminal) return;
 
@@ -286,12 +335,14 @@ class Progress {
     stdout.write('\r${parts.join(' ')}');
   }
 
+  /// Finalizes the progress bar at 100% with optional [message].
   void done([String? message]) {
     _stopwatch.stop();
     update(total, message: message);
     stdout.writeln();
   }
 
+  /// Aborts the progress bar with an error symbol and optional [message].
   void fail([String? message]) {
     _stopwatch.stop();
     stdout.writeln();
@@ -299,23 +350,29 @@ class Progress {
   }
 }
 
+/// An animated terminal spinner indicator.
 class Spinner {
+  /// Default Braille dot animation frames.
   static const List<String> defaultFrames = [
     '⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'
   ];
 
+  /// The list of character frames for the animation loop.
   final List<String> frames;
+  /// Duration interval between animation frame ticks.
   final Duration interval;
   Timer? _timer;
   int _idx = 0;
   String _msg = '';
   bool _spinning = false;
 
+  /// Creates a spinner instance.
   Spinner({
     this.frames = defaultFrames,
     this.interval = const Duration(milliseconds: 80),
   });
 
+  /// Starts the spinner animation with initial [message].
   void start([String message = '']) {
     if (_spinning) return;
     _spinning = true;
@@ -331,6 +388,7 @@ class Spinner {
     });
   }
 
+  /// Updates the message displayed next to the running spinner.
   void update(String message) {
     _msg = message;
     if (_spinning) _render();
@@ -342,6 +400,7 @@ class Spinner {
     stdout.write('\r${frames[_idx].brightCyan().bold()} $_msg');
   }
 
+  /// Stops the spinner animation and restores cursor visibility.
   void stop() {
     if (!_spinning) return;
     _spinning = false;
@@ -352,11 +411,13 @@ class Spinner {
     Cursor().show();
   }
 
+  /// Stops the spinner with a green success checkmark and optional [message].
   void ok([String? message]) {
     stop();
     stdout.writeln('${'✔'.brightGreen()} ${message ?? _msg}');
   }
 
+  /// Stops the spinner with a red error cross and optional [message].
   void fail([String? message]) {
     stop();
     stderr.writeln('${'✖'.brightRed()} ${message ?? _msg}');
@@ -367,7 +428,7 @@ class Spinner {
 class ConsoleWriter {
   final Terminal _terminal = Terminal();
 
-  /// Render and print a formatted table in 1 shot.
+  /// Renders and prints a formatted table with [headers] and optional [rows].
   Table table(
     List<String> headers, [
     List<List<dynamic>>? rows,
@@ -384,7 +445,7 @@ class ConsoleWriter {
     return tbl;
   }
 
-  /// Output a horizontal divider rule.
+  /// Outputs a full-width horizontal divider rule with optional centered [title].
   void rule([String title = '']) {
     final w = _terminal.width;
     if (title.isEmpty) {
@@ -398,17 +459,17 @@ class ConsoleWriter {
     stdout.writeln('${'─' * left}${pad.bold()}${'─' * right}');
   }
 
-  /// Write a single line to standard output.
+  /// Writes a line to standard output.
   void line([String message = '']) {
     stdout.writeln(message);
   }
 
-  /// Write text without newline.
+  /// Writes text to standard output without trailing newline.
   void write(String message) {
     stdout.write(message);
   }
 
-  /// Write text in a bordered box.
+  /// Displays text enclosed inside a decorative bordered callout box.
   void box(String text, {String? title, TableStyle style = TableStyle.unicode}) {
     final lines = text.split('\n');
     var maxLen = title != null ? Ansi.visibleLength(title) + 4 : 0;
@@ -430,10 +491,10 @@ class ConsoleWriter {
     stdout.writeln('${style.bottomLeft}${style.horizontal * (maxLen + 2)}${style.bottomRight}');
   }
 
-  /// Create a progress bar instance.
+  /// Creates a progress bar instance for [total] units with optional [message].
   Progress bar(int total, [String message = '']) =>
       Progress(total: total, message: message, unit: ProgressUnit.count);
 
-  /// Create and start an animated spinner.
+  /// Creates and starts an animated spinner with optional [message].
   Spinner spin([String message = '']) => Spinner()..start(message);
 }
