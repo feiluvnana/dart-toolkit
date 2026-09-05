@@ -1,4 +1,4 @@
-import 'package:toolkit/toolkit.dart';
+import 'package:dart_toolkit/dart_toolkit.dart';
 
 void main(List<String> rawArgs) async {
   // 1. CLI Parsing

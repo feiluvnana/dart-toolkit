@@ -1,4 +1,4 @@
-# Dart Script Toolkit
+# Dart Script Toolkit (`dart-toolkit`)
 
 A modern, lightweight automation and scripting framework for Dart developed by **feiluvnana**. Designed for writing clean, concise command-line automation scripts with **1-word methods** and **6 intuitive lowercase namespaces**:
 
@@ -13,19 +13,19 @@ A modern, lightweight automation and scripting framework for Dart developed by *
 
 ## Installation
 
-Add `toolkit` to your `pubspec.yaml`:
+Add `dart_toolkit` to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  toolkit:
+  dart_toolkit:
     git:
-      url: https://github.com/feiluvnana/toolkit.git
+      url: https://github.com/feiluvnana/dart-toolkit.git
 ```
 
 Then import the single aggregate entrypoint:
 
 ```dart
-import 'package:toolkit/toolkit.dart';
+import 'package:dart_toolkit/dart_toolkit.dart';
 ```
 
 ---
@@ -33,7 +33,7 @@ import 'package:toolkit/toolkit.dart';
 ## Quickstart
 
 ```dart
-import 'package:toolkit/toolkit.dart';
+import 'package:dart_toolkit/dart_toolkit.dart';
 
 void main(List<String> rawArgs) async {
   // 1. Parse CLI arguments

@@ -1,4 +1,4 @@
-import 'package:toolkit/toolkit.dart';
+import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:test/test.dart';
 
 void main() {
