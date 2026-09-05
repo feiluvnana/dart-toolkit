@@ -17,7 +17,8 @@ import 'package:html/parser.dart' as html_parser;
 /// // Query inside a specific context
 /// final links = $('a.track', response.doc).links();
 /// ```
-QueryResult $(dynamic target, [dynamic context]) {
+QueryResult $(Object? target, [Object? context]) {
+  if (target == null) return QueryResult([]);
   if (target is QueryResult) {
     if (context == null) return target;
     return target.find(context.toString());
@@ -158,18 +159,28 @@ class QueryResult with IterableMixin<Element> {
   }
 
   /// Filters the collection by a CSS selector string or predicate function `bool Function(Element)`.
-  QueryResult filter(dynamic test) {
+  QueryResult filter(Object test) {
     if (test is String) {
       return filterBy(test);
+    } else if (test is bool Function(Element)) {
+      return QueryResult(_elements.where(test).toList());
     } else if (test is Function) {
-      return QueryResult(_elements.where((e) => test(e) == true).toList());
+      return QueryResult(
+        _elements.where((e) {
+          try {
+            return Function.apply(test, [e]) == true;
+          } catch (_) {
+            return false;
+          }
+        }).toList(),
+      );
     }
     return this;
   }
 
   /// Retains only elements that match the given CSS [selector].
   QueryResult filterBy(String selector) {
-    return filter((elem) {
+    return filter((Element elem) {
       final parent = elem.parent;
       if (parent == null) return false;
       return parent.querySelectorAll(selector).contains(elem);
@@ -178,7 +189,7 @@ class QueryResult with IterableMixin<Element> {
 
   /// Removes elements that match the given CSS [selector].
   QueryResult not(String selector) {
-    return filter((elem) {
+    return filter((Element elem) {
       final parent = elem.parent;
       if (parent == null) return true;
       return !parent.querySelectorAll(selector).contains(elem);
@@ -234,7 +245,8 @@ class QueryResult with IterableMixin<Element> {
       Element? current = elem;
       while (current != null) {
         final parent = current.parent;
-        if (parent != null && parent.querySelectorAll(selector).contains(current)) {
+        if (parent != null &&
+            parent.querySelectorAll(selector).contains(current)) {
           if (seen.add(current)) {
             results.add(current);
           }
@@ -256,7 +268,8 @@ class QueryResult with IterableMixin<Element> {
       if (p == null) continue;
       for (final sibling in p.children) {
         if (sibling == elem) continue;
-        if (selector != null && !p.querySelectorAll(selector).contains(sibling)) {
+        if (selector != null &&
+            !p.querySelectorAll(selector).contains(sibling)) {
           continue;
         }
         if (seen.add(sibling)) {
@@ -267,8 +280,55 @@ class QueryResult with IterableMixin<Element> {
     return QueryResult(results);
   }
 
+  /// Returns the immediately preceding sibling element for each element in the set, optionally filtered by [selector].
+  QueryResult prev([String? selector]) {
+    final results = <Element>[];
+    final seen = <Element>{};
+
+    for (final elem in _elements) {
+      final p = elem.parent;
+      if (p == null) continue;
+      final idx = p.children.indexOf(elem);
+      if (idx > 0) {
+        final prevElem = p.children[idx - 1];
+        if (selector != null &&
+            !p.querySelectorAll(selector).contains(prevElem)) {
+          continue;
+        }
+        if (seen.add(prevElem)) {
+          results.add(prevElem);
+        }
+      }
+    }
+    return QueryResult(results);
+  }
+
+  /// Returns the immediately following sibling element for each element in the set, optionally filtered by [selector].
+  QueryResult next([String? selector]) {
+    final results = <Element>[];
+    final seen = <Element>{};
+
+    for (final elem in _elements) {
+      final p = elem.parent;
+      if (p == null) continue;
+      final idx = p.children.indexOf(elem);
+      if (idx != -1 && idx + 1 < p.children.length) {
+        final nextElem = p.children[idx + 1];
+        if (selector != null &&
+            !p.querySelectorAll(selector).contains(nextElem)) {
+          continue;
+        }
+        if (seen.add(nextElem)) {
+          results.add(nextElem);
+        }
+      }
+    }
+    return QueryResult(results);
+  }
+
   /// Combined trimmed text content of all matched elements joined by spaces.
-  String get text => _elements.map((e) => e.text.trim()).where((s) => s.isNotEmpty).join(' ');
+  String get text =>
+      _elements.map((e) => e.text.trim()).where((s) => s.isNotEmpty).join(' ');
 
   /// Returns the trimmed text content of the element at [index], or an empty string if out of bounds.
   String textAt(int index) {
@@ -297,6 +357,34 @@ class QueryResult with IterableMixin<Element> {
         .toList();
   }
 
+  /// Gets the input, select, or textarea value of the first matched element.
+  String? val() {
+    if (_elements.isEmpty) return null;
+    final elem = _elements.first;
+    if (elem.localName == 'textarea') {
+      return elem.text;
+    }
+    return elem.attributes['value'];
+  }
+
+  /// Gets data attribute(s). If [key] is supplied, returns `data-[key]`.
+  /// Otherwise, returns a Map of all `data-*` attributes for the first matched element.
+  Object? data([String? key]) {
+    if (_elements.isEmpty) return key != null ? null : <String, String>{};
+    final elem = _elements.first;
+    if (key != null) {
+      return elem.attributes['data-$key'] ?? elem.attributes[key];
+    }
+    final map = <String, String>{};
+    for (final entry in elem.attributes.entries) {
+      final k = entry.key.toString();
+      if (k.startsWith('data-')) {
+        map[k.substring(5)] = entry.value;
+      }
+    }
+    return map;
+  }
+
   /// Checks whether any element in the collection has the given CSS [className].
   bool hasClass(String className) {
     for (final elem in _elements) {
@@ -304,9 +392,6 @@ class QueryResult with IterableMixin<Element> {
     }
     return false;
   }
-
-  /// Alias for [hasClass].
-  bool has(String className) => hasClass(className);
 
   /// Iterates over each element with its 0-based index.
   void each(void Function(Element element, int index) fn) {
@@ -326,9 +411,6 @@ class QueryResult with IterableMixin<Element> {
 
   /// Returns an unmodifiable list of the underlying [Element] instances.
   List<Element> list() => List.unmodifiable(_elements);
-
-  /// Alias for [list] returning raw elements.
-  List<Element> toElements() => list();
 
   /// Extracts text lines split by `<br>` tags and newlines, stripping all internal HTML tags.
   List<String> get lines {
@@ -351,7 +433,8 @@ class QueryResult with IterableMixin<Element> {
     final list = <String>[];
     for (final elem in _elements) {
       final href = elem.attributes['href'];
-      if (href != null && (filter == null || filter.allMatches(href).isNotEmpty)) {
+      if (href != null &&
+          (filter == null || filter.allMatches(href).isNotEmpty)) {
         list.add(href);
       }
       for (final a in elem.querySelectorAll('a, link, area')) {
@@ -375,9 +458,12 @@ class QueryResult with IterableMixin<Element> {
       if (s != null && (filter == null || filter.allMatches(s).isNotEmpty)) {
         list.add(s);
       }
-      for (final img in elem.querySelectorAll('img, audio, video, source, script')) {
+      for (final img in elem.querySelectorAll(
+        'img, audio, video, source, script',
+      )) {
         final isrc = img.attributes['src'];
-        if (isrc != null && (filter == null || filter.allMatches(isrc).isNotEmpty)) {
+        if (isrc != null &&
+            (filter == null || filter.allMatches(isrc).isNotEmpty)) {
           list.add(isrc);
         }
       }

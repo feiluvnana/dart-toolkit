@@ -1,0 +1,16 @@
+# Git and local environment
+.git/
+.github/
+.dart_tool/
+build/
+
+# Media and KeyBOX downloads
+Key BOX*/
+*.7z
+*.part
+*.zip
+*.tar.gz
+tmp*
+
+# Bin scripts meant for internal automation
+bin/

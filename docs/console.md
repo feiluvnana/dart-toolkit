@@ -1,6 +1,6 @@
-# Console & Terminal Subsystem (`console.*`)
+# Console & Terminal Subsystem (`util.console.*`)
 
-The `console` namespace in **Dart Script Toolkit** provides rich terminal formatting, responsive tables, real-time progress bars, spinners, ANSI color extensions, and interactive command-line prompts.
+The `util.console` sub-namespace in **Dart Script Toolkit** provides rich terminal formatting, responsive tables, real-time progress bars, spinners, ANSI color extensions, and interactive command-line prompts.
 
 ---
 
@@ -11,18 +11,18 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 
 void main() async {
   // 1. Step headers and status icons
-  console.logger.step(1, 3, 'Preparing environment...');
-  console.logger.ok('Dependencies installed.');
-  console.logger.warn('Memory usage high.');
-  console.logger.fail('Could not bind port 8080.');
-  console.logger.info('Using default fallback configuration.');
+  util.console.logger.step(1, 3, 'Preparing environment...');
+  util.console.logger.ok('Dependencies installed.');
+  util.console.logger.warn('Memory usage high.');
+  util.console.logger.fail('Could not bind port 8080.');
+  util.console.logger.info('Using default fallback configuration.');
 
   // 2. Interactive user prompt
-  final proceed = console.reader.confirm('Do you want to continue?', true);
+  final proceed = util.console.reader.confirm('Do you want to continue?', true);
   if (!proceed) return;
 
   // 3. Formatted Unicode table
-  console.writer.table(
+  util.console.writer.table(
     ['Name', 'Status', 'Latency'],
     [
       ['us-east-1', 'ONLINE'.green(), '24ms'],
@@ -32,7 +32,7 @@ void main() async {
   );
 
   // 4. Progress bar
-  final bar = console.bar(100, 'Uploading');
+  final bar = util.console.bar(100, 'Uploading');
   for (var i = 0; i < 100; i++) {
     await Future.delayed(const Duration(milliseconds: 20));
     bar.tick(1, 'Chunk #${i + 1}');
@@ -43,32 +43,32 @@ void main() async {
 
 ---
 
-## 1. Status Loggers (`console.logger.*`)
+## 1. Status Loggers (`util.console.logger.*`)
 
 High-visibility visual feedback indicators:
 
-- `console.logger.step(step, total, message)`: Formats step progress headers like `[1/5] Building source...`.
-- `console.logger.ok(message)`: Success indicator with green checkmark `✔ Success message`.
-- `console.logger.warn(message)`: Warning indicator with yellow symbol `⚠ Warning message`.
-- `console.logger.fail(message)` / `console.logger.error(message)`: Error indicator with red symbol `✖ Failure message`.
-- `console.logger.info(message)`: Informational notice with cyan/blue symbol `ℹ Notice message`.
-- `console.logger.debug(message)`: Debug message with dimmed symbol `⚙ Debug message`.
-- `console.logger.task(name, fn)`: Wraps an async task with automatic spinner and ok/fail completion indicator:
+- `util.console.logger.step(step, total, message)`: Formats step progress headers like `[1/5] Building source...`.
+- `util.console.logger.ok(message)`: Success indicator with green checkmark `✔ Success message`.
+- `util.console.logger.warn(message)`: Warning indicator with yellow symbol `⚠ Warning message`.
+- `util.console.logger.fail(message)` / `util.console.logger.error(message)`: Error indicator with red symbol `✖ Failure message`.
+- `util.console.logger.info(message)`: Informational notice with cyan/blue symbol `ℹ Notice message`.
+- `util.console.logger.debug(message)`: Debug message with dimmed symbol `⚙ Debug message`.
+- `util.console.logger.task(name, fn)`: Wraps an async task with automatic spinner and ok/fail completion indicator:
   ```dart
-  await console.logger.task('Running migrations', () async {
+  await util.console.logger.task('Running migrations', () async {
     await runMigrations();
   });
   ```
 
 ---
 
-## 2. Structured Output (`console.writer.*`)
+## 2. Structured Output (`util.console.writer.*`)
 
-### Formatted Tables (`console.writer.table`)
+### Formatted Tables (`util.console.writer.table`)
 Renders auto-aligned ASCII or Unicode tables with configurable alignments:
 
 ```dart
-console.writer.table(
+util.console.writer.table(
   ['Package', 'Version', 'License'],
   [
     ['dart_toolkit', '1.0.0', 'MIT'],
@@ -80,26 +80,26 @@ console.writer.table(
 );
 ```
 
-### Callout Boxes (`console.writer.box`)
+### Callout Boxes (`util.console.writer.box`)
 Draws text inside a bordered box with optional title:
 
 ```dart
-console.writer.box(
+util.console.writer.box(
   'Server listening on http://localhost:3000\nEnvironment: production',
   title: 'Service Ready',
 );
 ```
 
-### Horizontal Divider Rules (`console.writer.rule`)
+### Horizontal Divider Rules (`util.console.writer.rule`)
 ```dart
-console.writer.rule('Diagnostics');
+util.console.writer.rule('Diagnostics');
 ```
 
-### Interactive Progress Bars (`console.writer.bar` / `console.bar`)
+### Interactive Progress Bars (`util.console.writer.bar` / `util.console.bar`)
 Real-time dynamic terminal progress bar with automatic speed, percentage, elapsed time, and ETA calculations:
 
 ```dart
-final bar = console.bar(500, 'Processing items');
+final bar = util.console.bar(500, 'Processing items');
 
 for (var i = 0; i < 500; i++) {
   // Update progress
@@ -115,9 +115,9 @@ Dynamic updates:
 - `bar.total++`: Dynamically increment total as new tasks are discovered.
 - `bar.fail([message])`: Terminate with failure symbol.
 
-### Animated Spinners (`console.writer.spin`)
+### Animated Spinners (`util.console.writer.spin` / `util.console.spin`)
 ```dart
-final spinner = console.spin('Connecting to database...');
+final spinner = util.console.spin('Connecting to database...');
 await Future.delayed(const Duration(seconds: 1));
 spinner.update('Authenticating...');
 await Future.delayed(const Duration(seconds: 1));
@@ -126,33 +126,33 @@ spinner.ok('Connected!');
 
 ---
 
-## 3. Interactive Prompts (`console.reader.*`)
+## 3. Interactive Prompts (`util.console.reader.*`)
 
-### `console.reader.ask(prompt, [default])`
+### `util.console.reader.ask(prompt, [default])`
 Prompts for user text input with fallback default:
 ```dart
-final name = console.reader.ask('Enter deployment environment', 'staging');
+final name = util.console.reader.ask('Enter deployment environment', 'staging');
 ```
 
-### `console.reader.confirm(prompt, [default])`
+### `util.console.reader.confirm(prompt, [default])`
 Boolean Yes/No prompt:
 ```dart
-final runMigrations = console.reader.confirm('Apply pending schema migrations?', false);
+final runMigrations = util.console.reader.confirm('Apply pending schema migrations?', false);
 ```
 
-### `console.reader.pick(prompt, options)`
+### `util.console.reader.pick(prompt, options)`
 Select an item from a list with numbered menu:
 ```dart
-final region = console.reader.pick(
+final region = util.console.reader.pick(
   'Choose AWS region:',
   ['us-east-1', 'eu-west-1', 'ap-southeast-1'],
 );
 ```
 
-### `console.reader.secret(prompt)`
+### `util.console.reader.secret(prompt)`
 Prompts for sensitive input (passwords, tokens) without terminal echo:
 ```dart
-final token = console.reader.secret('Enter API secret key');
+final token = util.console.reader.secret('Enter API secret key');
 ```
 
 ---
@@ -189,17 +189,17 @@ print('CRITICAL FAILURE'.brightRed().bold());
 
 ```dart
 // Dimensions
-final cols = console.terminal.width;
-final rows = console.terminal.height;
+final cols = util.console.terminal.width;
+final rows = util.console.terminal.height;
 
 // Clear
-console.terminal.clear();
-console.terminal.line();
+util.console.terminal.clear();
+util.console.terminal.line();
 
 // Cursor Manipulation
-console.cursor.hide();
-console.cursor.show();
-console.cursor.up(2);
-console.cursor.down(1);
-console.cursor.home();
+util.console.cursor.hide();
+util.console.cursor.show();
+util.console.cursor.up(2);
+util.console.cursor.down(1);
+util.console.cursor.home();
 ```

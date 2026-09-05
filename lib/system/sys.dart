@@ -9,7 +9,7 @@ import 'package:path/path.dart' as p;
 // ============================================================================
 
 /// Result of an executed external process.
-class ProcResult {
+class SysResult {
   /// The process exit code (0 indicates success).
   final int code;
 
@@ -19,24 +19,29 @@ class ProcResult {
   /// Standard error output captured from the process.
   final String stderr;
 
-  /// Creates a [ProcResult].
-  ProcResult({
-    required this.code,
-    required this.stdout,
-    required this.stderr,
-  });
+  /// Creates a [SysResult].
+  SysResult({required this.code, required this.stdout, required this.stderr});
 
   /// Whether the process exited successfully with code 0.
   bool get ok => code == 0;
 
+  /// Standard output captured from the process (1-word).
+  String get out => stdout;
+
+  /// Standard error output captured from the process (1-word).
+  String get err => stderr;
+
+  /// Output string captured from the process (1-word).
+  String get output => stdout.isNotEmpty ? stdout : stderr;
+
   @override
-  String toString() => 'ProcResult(code: $code)';
+  String toString() => 'SysResult(code: $code)';
 }
 
 /// Shutdown and exit lifecycle events namespace (`sys.on.exit(...)`).
 class SysEvents {
   /// Registers an asynchronous or synchronous cleanup callback executed upon exit or Ctrl+C.
-  void exit(dynamic Function() callback) {
+  void exit(FutureOr<void> Function() callback) {
     Exit.hook(callback);
   }
 }
@@ -49,7 +54,7 @@ class SysAccessor {
   /// Creates a [SysAccessor] instance.
   SysAccessor();
 
-  /// Executes an external process and returns its captured [ProcResult].
+  /// Executes an external process and returns its captured [SysResult].
   ///
   /// If [inherit] is true, streams standard input, output, and error directly to the console.
   /// If [echo] is true, prints the command invocation before running.
@@ -63,24 +68,25 @@ class SysAccessor {
   ///   print(res.stdout);
   /// }
   /// ```
-  Future<ProcResult> run(
+  Future<SysResult> run(
     String executable,
     List<String> arguments, {
     String? cwd,
     bool inherit = false,
     bool echo = false,
+    Duration? timeout,
     void Function(String line)? out,
     void Function(String line)? err,
-  }) =>
-      Proc.run(
-        executable,
-        arguments,
-        cwd: cwd,
-        inherit: inherit,
-        echo: echo,
-        out: out,
-        err: err,
-      );
+  }) => Sys.run(
+    executable,
+    arguments,
+    cwd: cwd,
+    inherit: inherit,
+    echo: echo,
+    timeout: timeout,
+    out: out,
+    err: err,
+  );
 
   /// Locates an executable binary in the system `PATH` or specified candidate [paths].
   ///
@@ -90,10 +96,13 @@ class SysAccessor {
   /// final ffmpeg = sys.which('ffmpeg');
   /// ```
   String? which(String name, {List<String>? paths}) =>
-      Proc.which(name, paths: paths);
+      Sys.which(name, paths: paths);
 
   /// Starts listening for Ctrl+C (`SIGINT`) signals to invoke registered shutdown hooks.
   void listen() => Exit.listen();
+
+  /// Stops listening for termination signals (1-word).
+  void unlisten() => Exit.unlisten();
 
   /// Tracks a temporary or partial file for automatic deletion if the process is aborted.
   void track(File file) => Exit.track(file);
@@ -102,36 +111,37 @@ class SysAccessor {
   void untrack(File file) => Exit.untrack(file);
 
   /// Registers a shutdown cleanup callback.
-  void hook(dynamic Function() fn) => Exit.hook(fn);
+  void hook(FutureOr<void> Function() fn) => Exit.hook(fn);
 
   /// Triggers an immediate graceful shutdown, executing hooks and cleaning up tracked files.
   Future<void> now([int code = 0]) => Exit.now(code);
-
-  /// Cleanly exits the application with an optional status [code].
-  Future<void> exit([int code = 0]) => Exit.now(code);
 
   /// Reads an environment variable by [key].
   String? env(String key) => Platform.environment[key];
 
   /// Creates and starts a new [Stopwatch] benchmark timer.
   Stopwatch clock() => Stopwatch()..start();
+
+  /// Whether the host platform is Windows.
+  bool get win => Platform.isWindows;
+
+  /// Whether the host platform is macOS.
+  bool get mac => Platform.isMacOS;
+
+  /// Whether the host platform is Linux.
+  bool get nix => Platform.isLinux;
 }
 
-/// Top-level system and process accessor singleton.
-final SysAccessor sys = SysAccessor();
-
-/// Alias for system accessor (`proc.*`).
-final SysAccessor proc = sys;
-
-/// Process execution utilities class (also available via lowercase `sys.*` and `proc.*`).
-class Proc {
-  /// Executes external [executable] with [arguments] and returns captured [ProcResult].
-  static Future<ProcResult> run(
+/// System process and environment execution utilities class (available via lowercase `sys.*`).
+class Sys {
+  /// Executes external [executable] with [arguments] and returns captured [SysResult].
+  static Future<SysResult> run(
     String executable,
     List<String> arguments, {
     String? cwd,
     bool inherit = false,
     bool echo = false,
+    Duration? timeout,
     void Function(String line)? out,
     void Function(String line)? err,
   }) async {
@@ -149,8 +159,24 @@ class Proc {
 
       Exit.proc(process);
       try {
-        final code = await process.exitCode;
-        return ProcResult(code: code, stdout: '', stderr: '');
+        var waitExit = process.exitCode;
+        if (timeout != null) {
+          waitExit = waitExit.timeout(
+            timeout,
+            onTimeout: () {
+              process.kill();
+              return -1;
+            },
+          );
+        }
+        final code = await waitExit;
+        return SysResult(
+          code: code,
+          stdout: '',
+          stderr: code == -1
+              ? 'Process timed out after ${timeout?.inSeconds}s'
+              : '',
+        );
       } finally {
         Exit.proc(process);
       }
@@ -186,9 +212,26 @@ class Proc {
         .asFuture<void>();
 
     try {
-      final code = await process.exitCode;
+      var waitExit = process.exitCode;
+      if (timeout != null) {
+        waitExit = waitExit.timeout(
+          timeout,
+          onTimeout: () {
+            process.kill();
+            return -1;
+          },
+        );
+      }
+      final code = await waitExit;
+      if (code == -1) {
+        return SysResult(
+          code: -1,
+          stdout: outBuf.toString(),
+          stderr: 'Process timed out after ${timeout?.inSeconds}s',
+        );
+      }
       await Future.wait([outFuture, errFuture]);
-      return ProcResult(
+      return SysResult(
         code: code,
         stdout: outBuf.toString(),
         stderr: errBuf.toString(),
@@ -199,10 +242,7 @@ class Proc {
   }
 
   /// Finds executable binary in PATH or candidate paths.
-  static String? which(
-    String name, {
-    List<String>? paths,
-  }) {
+  static String? which(String name, {List<String>? paths}) {
     final isWin = Platform.isWindows;
     final exts = isWin ? ['.exe', '.cmd', '.bat', ''] : [''];
 
@@ -241,6 +281,9 @@ class Proc {
   /// Starts listening for Ctrl+C signals.
   static void listen() => Exit.listen();
 
+  /// Stops listening for termination signals (1-word).
+  static void unlisten() => Exit.unlisten();
+
   /// Tracks a temporary file for automatic deletion on abort.
   static void track(File file) => Exit.track(file);
 
@@ -248,7 +291,7 @@ class Proc {
   static void untrack(File file) => Exit.untrack(file);
 
   /// Registers a shutdown cleanup callback.
-  static void hook(dynamic Function() fn) => Exit.hook(fn);
+  static void hook(FutureOr<void> Function() fn) => Exit.hook(fn);
 
   /// Initiates immediate graceful shutdown.
   static Future<void> now([int code = 0]) => Exit.now(code);
@@ -259,6 +302,7 @@ class Exit {
   static final Set<File> _files = <File>{};
   static final Set<Process> _procs = <Process>{};
   static final List<FutureOr<void> Function()> _hooks = [];
+  static StreamSubscription<ProcessSignal>? _sigintSub;
   static bool _init = false;
   static bool _stopping = false;
 
@@ -267,10 +311,17 @@ class Exit {
     if (_init) return;
     _init = true;
     try {
-      ProcessSignal.sigint.watch().listen((_) async {
+      _sigintSub = ProcessSignal.sigint.watch().listen((_) async {
         await now(130);
       });
     } catch (_) {}
+  }
+
+  /// Cancels signal listeners and restores default termination behavior (1-word).
+  static void unlisten() {
+    _sigintSub?.cancel();
+    _sigintSub = null;
+    _init = false;
   }
 
   /// Registers [file] to be deleted if the application is interrupted.

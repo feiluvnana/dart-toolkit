@@ -22,14 +22,19 @@ class Ansi {
   // Styles
   /// Reset all styling and colors.
   static const String reset = '\x1B[0m';
+
   /// Bold text style.
   static const String bold = '\x1B[1m';
+
   /// Dim / low-intensity text style.
   static const String dim = '\x1B[2m';
+
   /// Italic text style.
   static const String italic = '\x1B[3m';
+
   /// Underlined text style.
   static const String underline = '\x1B[4m';
+
   /// Inverted foreground and background colors.
   static const String inverse = '\x1B[7m';
 
@@ -76,9 +81,6 @@ class Ansi {
 
   /// Calculates the visible printable character length of [input], ignoring ANSI escape sequences.
   static int visibleLength(String input) => strip(input).length;
-
-  /// Alias for [visibleLength] (1-word).
-  static int len(String input) => visibleLength(input);
 }
 
 /// Convenience extensions for applying ANSI styles and colors directly to strings.
@@ -160,9 +162,6 @@ extension AnsiStringExtension on String {
 
   /// Returns the printable visible length of the string, excluding ANSI codes.
   int get visibleLength => Ansi.visibleLength(this);
-
-  /// Alias for [visibleLength] (1-word).
-  int get len => visibleLength;
 
   /// Returns a clean copy of the string with all ANSI escape codes stripped.
   String get stripAnsi => Ansi.strip(this);

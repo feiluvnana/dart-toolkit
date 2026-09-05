@@ -1,6 +1,6 @@
-# File System & Storage Subsystem (`fs.*`)
+# File System & Storage Subsystem (`io.*` / `io.file.*`)
 
-The `fs` namespace in **Dart Script Toolkit** provides atomic file writes, zero-dependency path manipulation (no `package:path` imports required), streaming downloads, recursive searches, and integrated 7-Zip archiving.
+The `io` namespace in **Dart Script Toolkit** provides atomic file writes, zero-dependency path manipulation (no `package:path` imports required), streaming downloads, recursive searches, and integrated 7-Zip archiving.
 
 ---
 
@@ -11,23 +11,23 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 
 void main() async {
   // 1. Zero-dependency path operations
-  final filePath = fs.join('data', 'reports', '2026.json');
-  console.logger.info('Base: ${fs.base(filePath)}'); // 2026.json
-  console.logger.info('Name: ${fs.name(filePath)}'); // 2026
-  console.logger.info('Ext:  ${fs.ext(filePath)}');  // .json
-  console.logger.info('Dir:  ${fs.dir(filePath)}');  // data/reports
+  final filePath = io.join('data', 'reports', '2026.json');
+  util.console.logger.info('Base: ${io.base(filePath)}'); // 2026.json
+  util.console.logger.info('Name: ${io.name(filePath)}'); // 2026
+  util.console.logger.info('Ext:  ${io.ext(filePath)}');  // .json
+  util.console.logger.info('Dir:  ${io.dir(filePath)}');  // data/reports
 
   // 2. Atomic file write (.part staging + rename)
-  await fs.write(filePath, '{"status": "ok"}');
+  await io.write(filePath, '{"status": "ok"}');
 
   // 3. Direct streaming download
-  await fs.download(
+  await io.download(
     Uri.parse('https://example.com/asset.zip'),
-    fs.join('downloads', 'asset.zip'),
+    io.join('downloads', 'asset.zip'),
   );
 
   // 4. Archive into 7z
-  final arc = fs.archive('bundle.7z');
+  final arc = io.archive('bundle.7z');
   await arc.sync('downloads');
 }
 ```
@@ -38,11 +38,11 @@ void main() async {
 
 Eliminates the need for `package:path` imports in automation scripts:
 
-- `fs.join(p1, [p2, p3, p4...])`: Platform-agnostic safe path joining with slash normalization.
-- `fs.base(path)`: Filename with extension (`archive.tar.gz` -> `archive.tar.gz`).
-- `fs.name(path)`: Filename without extension (`archive.tar.gz` -> `archive.tar`).
-- `fs.ext(path)`: File extension including dot (`config.json` -> `.json`).
-- `fs.dir(path)`: Parent directory path (`a/b/c.txt` -> `a/b`).
+- `io.join(p1, [p2, p3, p4...])`: Platform-agnostic safe path joining with slash normalization.
+- `io.base(path)`: Filename with extension (`archive.tar.gz` -> `archive.tar.gz`).
+- `io.name(path)`: Filename without extension (`archive.tar.gz` -> `archive.tar`).
+- `io.ext(path)`: File extension including dot (`config.json` -> `.json`).
+- `io.dir(path)`: Parent directory path (`a/b/c.txt` -> `a/b`).
 
 ---
 
@@ -50,30 +50,30 @@ Eliminates the need for `package:path` imports in automation scripts:
 
 Guarantees data integrity by writing to a temporary `.part` file first and renaming atomically upon completion. If a script is cancelled or fails mid-write, partial corrupted files are never left in place.
 
-### `fs.write(file, content, {part})`
+### `io.write(file, content, {part})`
 Accepts `String`, `List<int>`, or raw bytes. Automatically creates parent directories:
 
 ```dart
-await fs.write('output/config.yaml', 'version: 1\nenabled: true');
+await io.write('output/config.yaml', 'version: 1\nenabled: true');
 ```
 
-### `fs.read(path)` & `fs.bytes(path)`
+### `io.read(path)` & `io.bytes(path)`
 Convenient helpers to read file contents:
 
 ```dart
-final text = await fs.read('output/config.yaml');
-final raw = await fs.bytes('images/logo.png');
+final text = await io.read('output/config.yaml');
+final raw = await io.bytes('images/logo.png');
 ```
 
-### `fs.download(url, destination, {part, headers, onProgress})`
+### `io.download(url, destination, {part, headers, onProgress})`
 Streams an HTTP download directly to disk with atomic `.part` protection:
 
 ```dart
-await fs.download(
+await io.download(
   Uri.parse('https://example.com/huge-file.iso'),
   'downloads/file.iso',
   onProgress: (received, total) {
-    print('Downloaded ${fs.size(received)} of ${fs.size(total)}');
+    print('Downloaded ${io.size(received)} of ${io.size(total)}');
   },
 );
 ```
@@ -81,82 +81,82 @@ await fs.download(
 ### Directory Creation & Moving
 ```dart
 // Ensure directory exists
-await fs.mkdir('deeply/nested/output/folder');
+await io.mkdir('deeply/nested/output/folder');
 
 // Safe copy and move (auto-creates destination directories)
-await fs.copy('source.txt', 'backup/source.txt');
-await fs.move('old.txt', 'archive/old.txt');
+await io.copy('source.txt', 'backup/source.txt');
+await io.move('old.txt', 'archive/old.txt');
 ```
 
 ---
 
 ## 3. Search & Inspection
 
-### `fs.has(path, {match: true})`
+### `io.has(path, {match: true})`
 Checks if a file exists and is not empty (`length > 0`):
 
 ```dart
-if (fs.has('output/cache.bin')) {
-  console.logger.ok('Cache exists and has valid data.');
+if (io.has('output/cache.bin')) {
+  util.console.logger.ok('Cache exists and has valid data.');
 }
 ```
 
-### `fs.find(directory, [pattern])`
+### `io.find(directory, [pattern])`
 Recursively finds files matching regex or substring:
 
 ```dart
 // Find all audio files
-final audioFiles = fs.find('media', RegExp(r'\.(mp3|flac|wav)$'));
+final audioFiles = io.find('media', RegExp(r'\.(mp3|flac|wav)$'));
 for (final f in audioFiles) {
-  console.logger.info('Found: ${f.path} (${fs.size(f.lengthSync())})');
+  util.console.logger.info('Found: ${f.path} (${io.size(f.lengthSync())})');
 }
 ```
 
-### `fs.delete(directory, [pattern])`
+### `io.delete(directory, [pattern])`
 Removes files matching criteria or deletes directory:
 
 ```dart
 // Clean up all .tmp files
-await fs.delete('temp', RegExp(r'\.tmp$'));
+await io.delete('temp', RegExp(r'\.tmp$'));
 ```
 
 ---
 
 ## 4. Formatters & Helpers
 
-### `fs.size(bytes)` & `fs.parse(sizeStr)`
+### `io.size(bytes)` & `io.parse(sizeStr)`
 Formats raw bytes into human-readable strings (`KB`, `MB`, `GB`, `TB`) and parses them:
 
 ```dart
-print(fs.size(1048576));   // "1.0 MB"
-print(fs.size(5368709120)); // "5.0 GB"
+print(io.size(1048576));   // "1.0 MB"
+print(io.size(5368709120)); // "5.0 GB"
 
-final bytes = fs.parse('2.5 GB'); // 2684354560
+final bytes = io.parse('2.5 GB'); // 2684354560
 ```
 
-### `fs.time(duration)`
+### `io.time(duration)`
 Formats duration into clean `MM:SS` or `HH:MM:SS`:
 
 ```dart
-print(fs.time(Duration(seconds: 145))); // "02:25"
+print(io.time(Duration(seconds: 145))); // "02:25"
 ```
 
-### `fs.sanitize(name, {full: false})`
+### `io.sanitize(name, {full: false})`
 Sanitizes filenames to remove illegal operating system characters (`/ \ : * ? " < > |`):
 
 ```dart
-final clean = fs.sanitize('Song Title / (2026)? [Special Edition]');
+final clean = io.sanitize('Song Title / (2026)? [Special Edition]');
 // "Song Title _ (2026)_ [Special Edition]"
 ```
 
 ---
 
-## 5. 7-Zip Archive Management (`fs.archive()`)
+## 5. 7-Zip Archive Management (`io.archive()`)
 
 Integrated wrapper around 7-Zip with integrity checks and automatic volume management:
 
 ```dart
-final arc = fs.archive('backups/2026.7z');
+final arc = io.archive('backups/2026.7z');
 
 // Check integrity via 7z 't'
 final isHealthy = await arc.check();
@@ -168,5 +168,5 @@ final result = await arc.sync(
   changed: true,
 );
 
-console.logger.ok('Archive result: $result'); // "Created", "Verified", or "Updated"
+util.console.logger.ok('Archive result: $result'); // "Created", "Verified", or "Updated"
 ```

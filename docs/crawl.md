@@ -1,6 +1,6 @@
-# Web Crawling & Scraping Subsystem (`crawl.*` / `$()`)
+# Web Crawling & Scraping Subsystem (`net.crawl.*` / `net.$()`)
 
-The `crawl` namespace in **Dart Script Toolkit** provides a complete, modern web scraping and crawling framework with jQuery-like DOM manipulation, declarative routing, pipeline link-following, streaming atomic file downloads, and bounded concurrency.
+The `net.crawl` sub-namespace in **Dart Script Toolkit** provides a complete, modern web scraping and crawling framework with jQuery-like DOM manipulation, declarative routing, pipeline link-following, streaming atomic file downloads, and bounded concurrency.
 
 ---
 
@@ -11,12 +11,12 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 
 void main() async {
   // 1. One-liner scraping with jQuery-like selector
-  final res = await crawl.get('https://news.ycombinator.com');
+  final res = await net.crawl.get('https://news.ycombinator.com');
   final titles = res.$('.titleline > a').texts;
-  console.logger.ok('Fetched ${titles.length} news titles.');
+  util.console.logger.ok('Fetched ${titles.length} news titles.');
 
   // 2. Fluent builder crawler with concurrent, delay, and process-only arguments
-  await crawl('https://example.com/catalog')
+  await net.crawl('https://example.com/catalog')
       .concurrent(4)
       .delay(Duration(milliseconds: 100))
       .base('downloads')
@@ -37,19 +37,19 @@ void main() async {
 
 ---
 
-## 1. Fluent Crawler Builder (`crawl(...)`)
+## 1. Fluent Crawler Builder (`net.crawl(...)`)
 
 ### Builder Pattern with Process-Only Arguments
-Options like `concurrent`, `delay`, `base`, `dl`, and `tag` are configured via method chaining. Execution methods (`run`, `process`, `collect`) accept only the process function:
+Options like `concurrent`, `delay`, `base`, `downloader` (or `dl`), and `tag` are configured via method chaining. Execution methods (`run`, `process`, `collect`) accept only the process function:
 
 ```dart
-final stats = await crawl('https://books.toscrape.com')
+final stats = await net.crawl('https://books.toscrape.com')
     .concurrent(4)
     .delay(Duration(milliseconds: 100))
     .tag('book', (res) async {
       final title = res.$('h1').text;
       final price = res.$('.price_color').text;
-      console.logger.info('$title -> $price');
+      util.console.logger.info('$title -> $price');
     })
     .run((res) async {
       // Catalog page: follow product links and pagination
@@ -61,14 +61,14 @@ final stats = await crawl('https://books.toscrape.com')
       }
     });
 
-console.logger.ok('Crawled ${stats.completed} pages in ${stats.elapsed}.');
+util.console.logger.ok('Crawled ${stats.completed} pages in ${stats.elapsed}.');
 ```
 
-### `crawl(urls).concurrent(n).collect<T>(process)`
+### `net.crawl(urls).concurrent(n).collect<T>(process)`
 Crawls URLs with bounded concurrency and collects all emitted items via `res.emit(item)` into a typed `List<T>`:
 
 ```dart
-final headlines = await crawl.collect<String>(
+final headlines = await net.crawl.collect<String>(
   'https://news.ycombinator.com',
   (res) {
     for (final title in res.$('.titleline > a').texts) {
@@ -78,19 +78,24 @@ final headlines = await crawl.collect<String>(
   concurrency: 4,
 );
 
-console.writer.table(['Index', 'Headline'], [
+util.console.writer.table(['Index', 'Headline'], [
   for (var i = 0; i < headlines.take(10).length; i++) [i + 1, headlines[i]]
 ]);
 ```
 
 ---
 
-## 2. Crawler Engine Architecture (`crawl.engine()`)
+## 2. Crawler Architecture (`Engine`, `Downloader`, `Processor`, `Deduplicator`)
 
-The `Engine<T>` is the core scheduler and worker pool coordinator:
+The crawling framework is organized into 4 focused, modular components:
+
+1. **`Engine`**: Coordinates the request queue, route dispatch, lifecycle events, and serves pending requests via `engine.serve()`.
+2. **`Downloader`**: Controls concurrency and rate-limiting delays. Workers in `downloader.work(engine)` actively pull requests from `engine.serve()`, execute HTTP requests, and yield responses.
+3. **`Processor` / `Router`**: Processes responses via pattern or tag handlers.
+4. **`Deduplicator`**: High-performance URL deduplication tracker (`add`, `has`, `see`, `clear`, `reset`) with automatic fragment and trailing slash normalization.
 
 ```dart
-final engine = crawl.engine<Map<String, dynamic>>(
+final engine = net.crawl.engine<Map<String, Object?>>(
   concurrency: 8,
   delay: Duration(milliseconds: 50),
   base: 'output',
@@ -101,12 +106,18 @@ final engine = crawl.engine<Map<String, dynamic>>(
 ### Configuration Options
 | Option | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `concurrency` | `int` | `1` | Number of concurrent worker fibers. |
-| `delay` | `Duration` | `Duration.zero` | Polite rate-limiting pause between downloads per worker. |
+| `concurrency` | `int` | `1` | Number of concurrent downloader worker loops (managed by `Downloader`). |
+| `delay` | `Duration` | `Duration.zero` | Polite rate-limiting pause between requests per worker (managed by `Downloader`). |
 | `base` | `String?` | `null` | Base storage folder for relative file saves. |
 | `dedupe` | `bool` | `true` | When true, ignores duplicate URLs (normalized, minus fragments). |
-| `dl` | `Downloader<T>?` | `HttpDownloader<T>()` | Custom or mocked HTTP downloader. |
-| `scheduler` | `Scheduler<T>?` | `Scheduler<T>()` | Custom request scheduler or `Priority<T>()`. |
+| `downloader` / `dl` | `Downloader<T>?` | `HttpDownloader<T>()` | Custom or mocked HTTP downloader. |
+| `deduplicator` | `Deduplicator?` | `Deduplicator()` | Custom URL deduplication tracker (`add`, `has`, `see`, `clear`). |
+
+### Deduplicator Methods (`engine.deduplicator.*`)
+- `deduplicator.has(url)`: Checks if a URL has already been visited.
+- `deduplicator.add(url)`: Adds a URL. Returns `true` if new, `false` if duplicate.
+- `deduplicator.see(url)`: Alias for `add`.
+- `deduplicator.clear()` / `reset()`: Clears visited history.
 
 ### Routing & Tagging
 Handlers can be registered directly on the engine using either URL patterns (`route`) or explicit pipeline tags (`tag`):
@@ -114,7 +125,7 @@ Handlers can be registered directly on the engine using either URL patterns (`ro
 ```dart
 // Match URL pattern
 engine.route(RegExp(r'/category/(\d+)'), (res) async {
-  console.logger.info('Processing category: ${res.url}');
+  util.console.logger.info('Processing category: ${res.url}');
 });
 
 // Match tagged requests
@@ -129,11 +140,11 @@ engine.tag('product', (res) async {
 
 ### Event Listeners (`engine.on.*`)
 ```dart
-engine.on.start(() => console.logger.info('Crawler pipeline starting...'));
-engine.on.progress((res) => console.logger.write('.'));
-engine.on.item((item) => console.logger.ok('Scraped: $item'));
-engine.on.done((stats) => console.logger.ok('Completed ${stats.completed} requests.'));
-engine.on.error((err, stack) => console.logger.fail('Error: $err'));
+engine.on.start(() => util.console.logger.info('Crawler pipeline starting...'));
+engine.on.progress((res) => util.console.logger.write('.'));
+engine.on.item((item) => util.console.logger.ok('Scraped: $item'));
+engine.on.done((stats) => util.console.logger.ok('Completed ${stats.completed} requests.'));
+engine.on.error((err, stack) => util.console.logger.fail('Error: $err'));
 ```
 
 ---
@@ -191,11 +202,11 @@ You can query the DOM on responses, raw HTML strings, elements, or documents:
 final items = res.$('div.card');
 
 // On raw HTML string
-final q = $('<div><a href="/link" class="cta">Click here</a></div>');
+final q = net.$('<div><a href="/link" class="cta">Click here</a></div>');
 ```
 
 ### CSS Queries & Traversal
-- `res.$(selector)`: Find descendant elements matching CSS selector.
+- `res.$(selector)` / `net.$(target)`: Find descendant elements matching CSS selector.
 - `q.find(selector)`: Search descendants.
 - `q.children([selector])`: Direct child elements.
 - `q.parent([selector])`: Immediate parent element.
@@ -223,7 +234,7 @@ final allJpgs = res.$('img').srcs('.jpg');  // All image sources
 
 ---
 
-## 5. Batch Asset Synchronization (`crawl.sync()`)
+## 5. Batch Asset Synchronization (`net.crawl.sync()`)
 
 Concurrently download and synchronize asset maps with optional URL prefixes and existence checks:
 
@@ -233,7 +244,7 @@ final assets = {
   'images/logo.png': 'common/logo.png', // uses prefix
 };
 
-await crawl.sync(
+await net.crawl.sync(
   assets,
   prefix: 'https://example.com/',
   base: 'downloads',

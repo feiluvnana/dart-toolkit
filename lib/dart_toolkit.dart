@@ -1,15 +1,14 @@
-/// # Dart Script Toolkit (`dart-toolkit`)
+﻿/// # Dart Script Toolkit (`dart-toolkit`)
 ///
 /// A modern, lightweight automation and web scraping framework for Dart
 /// developed by **feiluvnana**.
 ///
-/// Designed with strictly **1-word methods** and organized across **6 lowercase namespaces**:
-/// - [console]: Terminal output, tables, progress bars, spinners, and user prompts.
-/// - [fs]: Atomic file I/O (.part staging), path helpers, and 7-Zip archiving.
-/// - [crawl]: Web scraping, crawler engine, pipeline routing, and jQuery-like `$()` DOM queries.
-/// - [parallel]: Bounded async concurrency, pooling, and iteration.
-/// - [sys]: Subprocess execution, signals (Ctrl+C), exit hooks, and benchmarks.
-/// - [cli]: Command-line arguments, short/long flags, and typed options.
+/// Organized into 5 cohesive, Java-inspired domain namespaces with strictly **1-word methods**:
+/// - [io]: Input/Output, atomic file writes (`.part`), paths, CSV (`io.csv`), JSON store (`io.store`), 7-Zip archives (`io.archive`).
+/// - [net]: Networking, HTTP requests (`net.http` / `net.get`), web scraping & crawling (`net.crawl`), jQuery-like DOM selectors (`net.$()`).
+/// - [system]: Subprocess execution (`system.run`), environment variables (`system.env`), CLI args (`system.cli`), OS signals.
+/// - [concurrent]: Bounded async concurrency pool (`concurrent.pool`) and parallel runners (`concurrent.run`).
+/// - [util]: Time & delays (`util.time`), Git automation (`util.git`), terminal logging, tables & prompts (`util.console`).
 library;
 
 export 'toolkit.dart';

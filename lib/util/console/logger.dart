@@ -8,47 +8,64 @@ import 'writer.dart';
 // CONSOLE LOGGER (STATUS LOGGERS & VISUAL FEEDBACK)
 // ============================================================================
 
+/// Severity level for console logging.
+enum LogLevel {
+  /// Silence all output.
+  none,
+
+  /// Show only error / fail messages.
+  error,
+
+  /// Show errors and warnings.
+  warn,
+
+  /// Show info, ok, warn, and error messages.
+  info,
+
+  /// Show all messages including debug.
+  debug,
+}
+
 /// Dedicated console status and event logger for CLI applications.
 class ConsoleLogger {
+  /// Current active log level filter.
+  LogLevel level = LogLevel.debug;
+
   /// Prints an informational message prefixed with a blue notice symbol `ℹ`.
   void info(String message) {
+    if (level.index < LogLevel.info.index) return;
     stdout.writeln('${'ℹ'.brightBlue()} $message');
   }
 
   /// Prints a success message prefixed with a green checkmark `✔`.
   void ok(String message) {
+    if (level.index < LogLevel.info.index) return;
     stdout.writeln('${'✔'.brightGreen()} $message');
   }
 
-  /// Alias for [ok].
-  void success(String message) => ok(message);
-
   /// Prints a warning message prefixed with a yellow warning symbol `⚠`.
   void warn(String message) {
+    if (level.index < LogLevel.warn.index) return;
     stdout.writeln('${'⚠'.brightYellow()} $message');
   }
 
-  /// Alias for [warn].
-  void warning(String message) => warn(message);
-
   /// Prints an error message prefixed with a red error cross `✖` and optional stack trace.
   void error(String message, [Object? exception, StackTrace? stack]) {
+    if (level.index < LogLevel.error.index) return;
     stderr.writeln('${'✖'.brightRed()} $message');
     if (exception != null) stderr.writeln('  ${exception.toString().red()}');
     if (stack != null) stderr.writeln(stack.toString().dim());
   }
 
-  /// Alias for [error] (1-word).
-  void fail(String message, [Object? exception, StackTrace? stack]) =>
-      error(message, exception, stack);
-
   /// Prints a workflow step header in `[step/total]` format.
   void step(int step, int total, String message) {
+    if (level.index < LogLevel.info.index) return;
     stdout.writeln('${'[$step/$total]'.cyan().bold()} $message');
   }
 
   /// Prints a debug message prefixed with a dimmed symbol `⚙`.
   void debug(String message) {
+    if (level.index < LogLevel.debug.index) return;
     stdout.writeln('${'⚙'.dim()} $message');
   }
 
@@ -57,9 +74,6 @@ class ConsoleLogger {
 
   /// Writes a line to standard output.
   void writeln([String message = '']) => stdout.writeln(message);
-
-  /// Alias for [writeln] (1-word).
-  void line([String message = '']) => stdout.writeln(message);
 
   /// Runs an asynchronous [action] with a spinner, automatically reporting ok or fail.
   Future<T> task<T>(String message, Future<T> Function() action) async {

@@ -1,20 +1,21 @@
 /// # Core Toolkit Aggregator
 ///
-/// Exports all 6 core namespaces for automation and scraping:
-/// ```dart
-/// import 'package:dart_toolkit/dart_toolkit.dart';
-///
-/// void main(List<String> args) async {
-///   cli.parse(args);
-///   sys.listen();
-///   console.logger.ok('Dart Script Toolkit initialized!');
-/// }
-/// ```
+/// Exports the 5 cohesive Java-style domain namespaces:
+/// - [io]: File system, atomic writing, paths, CSV, key-value storage, archives.
+/// - [net]: HTTP networking, streaming downloads, crawler engine, and jQuery-like `$()` selectors.
+/// - [system]: Process execution, environment variables, CLI argument parsing, OS signals.
+/// - [concurrent]: Concurrency pool and bounded async workers.
+/// - [util]: Time/delays, Git automation, terminal console, and ANSI colors.
 library;
 
-export 'cli/cli.dart';
-export 'console/console.dart';
-export 'crawl/crawl.dart';
-export 'fs/fs.dart';
-export 'parallel/parallel.dart';
-export 'sys/sys.dart';
+import 'concurrent/concurrent.dart';
+import 'io/io.dart';
+import 'net/net.dart';
+import 'system/system.dart';
+import 'util/util.dart';
+
+export 'concurrent/concurrent.dart';
+export 'io/io.dart';
+export 'net/net.dart';
+export 'system/system.dart';
+export 'util/util.dart';

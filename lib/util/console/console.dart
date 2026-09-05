@@ -58,20 +58,22 @@ class Console {
     String question, {
     String? defaultVal,
     bool Function(String)? validator,
-  }) =>
-      reader.ask(question, defaultVal: defaultVal, validator: validator);
+  }) => reader.ask(question, defaultVal: defaultVal, validator: validator);
 
   /// Prompts user to pick an option from a numbered list.
   static Future<O> pick<O>(
     String question, {
     required List<O> options,
     String Function(O item)? label,
-  }) =>
-      reader.pick(question, options: options, label: label);
-}
+  }) => reader.pick(question, options: options, label: label);
 
-/// Top-level console instance (`console.logger.info(...)`, `console.writer.table(...)`, `console.reader.ask(...)`).
-const ConsoleAccessor console = ConsoleAccessor();
+  /// Prompts user to select multiple options from a numbered list.
+  static Future<List<O>> picks<O>(
+    String question, {
+    required List<O> options,
+    String Function(O item)? label,
+  }) => reader.picks(question, options: options, label: label);
+}
 
 /// Namespace accessor for console subsystem.
 class ConsoleAccessor {
@@ -108,7 +110,7 @@ class ConsoleAccessor {
   Spinner spin([String message = '']) => Console.spin(message);
 
   /// Prints a formatted table with [headers] and optional [rows].
-  Table table(List<String> headers, [List<List<dynamic>>? rows]) =>
+  Table table(List<String> headers, [List<List<Object?>>? rows]) =>
       Console.writer.table(headers, rows);
 
   /// Prompts user with a Yes/No boolean confirmation question.
@@ -120,14 +122,19 @@ class ConsoleAccessor {
     String question, {
     String? defaultVal,
     bool Function(String)? validator,
-  }) =>
-      Console.ask(question, defaultVal: defaultVal, validator: validator);
+  }) => Console.ask(question, defaultVal: defaultVal, validator: validator);
 
   /// Prompts user to choose from a list of options.
   Future<O> pick<O>(
     String question, {
     required List<O> options,
     String Function(O item)? label,
-  }) =>
-      Console.pick(question, options: options, label: label);
+  }) => Console.pick(question, options: options, label: label);
+
+  /// Prompts user to choose multiple options from a list.
+  Future<List<O>> picks<O>(
+    String question, {
+    required List<O> options,
+    String Function(O item)? label,
+  }) => Console.picks(question, options: options, label: label);
 }

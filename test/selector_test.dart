@@ -45,7 +45,10 @@ void main() {
     test('text, texts, and html extraction', () {
       final doc = $(sampleHtml);
       expect(doc.find('h1').text, equals('Album Title'));
-      expect(doc.find('.track a').texts, equals(['Track One', 'Track Two', 'Bonus Track']));
+      expect(
+        doc.find('.track a').texts,
+        equals(['Track One', 'Track Two', 'Bonus Track']),
+      );
       expect(doc.find('.footer p').text, equals('Copyright 2026'));
       expect(doc.find('.footer').html.trim(), equals('<p>Copyright 2026</p>'));
     });
@@ -67,7 +70,9 @@ void main() {
       expect(doc.find('.track').eq(1).find('.link').text, equals('Track Two'));
 
       // filter
-      final bonus = doc.find('.track').filter((el) => el.classes.contains('bonus'));
+      final bonus = doc
+          .find('.track')
+          .filter((el) => el.classes.contains('bonus'));
       expect(bonus.length, equals(1));
       expect(bonus.find('.link').text, equals('Bonus Track'));
 

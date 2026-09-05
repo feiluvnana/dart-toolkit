@@ -13,8 +13,10 @@ import 'terminal.dart';
 enum ColumnAlign {
   /// Left-aligned column content.
   left,
+
   /// Centered column content.
   center,
+
   /// Right-aligned column content.
   right,
 }
@@ -23,24 +25,34 @@ enum ColumnAlign {
 class TableStyle {
   /// Top-left corner character.
   final String topLeft;
+
   /// Top-right corner character.
   final String topRight;
+
   /// Bottom-left corner character.
   final String bottomLeft;
+
   /// Bottom-right corner character.
   final String bottomRight;
+
   /// Horizontal border character.
   final String horizontal;
+
   /// Vertical border character.
   final String vertical;
+
   /// Cross intersection character.
   final String cross;
+
   /// Top header divider character.
   final String topDivider;
+
   /// Bottom footer divider character.
   final String bottomDivider;
+
   /// Left row divider character.
   final String leftDivider;
+
   /// Right row divider character.
   final String rightDivider;
 
@@ -95,8 +107,10 @@ class Table {
   /// Column header titles.
   final List<String> headers;
   final List<List<String>> _rows = [];
+
   /// Alignments per column.
   final List<ColumnAlign> columnAlignments;
+
   /// Border style.
   final TableStyle style;
 
@@ -106,10 +120,10 @@ class Table {
     List<ColumnAlign>? alignments,
     this.style = TableStyle.unicode,
   }) : columnAlignments =
-            alignments ?? List.filled(headers.length, ColumnAlign.left);
+           alignments ?? List.filled(headers.length, ColumnAlign.left);
 
   /// Appends a single row or multiple rows.
-  void add(dynamic rowOrRows) {
+  void add(Object? rowOrRows) {
     if (rowOrRows is Iterable<List<Object?>>) {
       for (final r in rowOrRows) {
         add(r);
@@ -209,6 +223,7 @@ class Table {
 enum ProgressUnit {
   /// Unit counted in items / discrete units.
   count,
+
   /// Unit counted in bytes (KB, MB, GB).
   bytes,
 }
@@ -217,14 +232,19 @@ enum ProgressUnit {
 class Progress {
   /// Total target count or bytes. Can be updated dynamically.
   int total;
+
   /// Visual character width of the progress bar gauge.
   final int width;
+
   /// Metrics unit (count vs bytes).
   final ProgressUnit unit;
+
   /// Fill character for completed progress.
   final String fill;
+
   /// Head pointer character.
   final String head;
+
   /// Empty track character.
   final String empty;
 
@@ -252,7 +272,10 @@ class Progress {
   static String _formatSize(int bytes) {
     if (bytes <= 0) return '0 B';
     const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
-    final i = (math.log(bytes) / math.log(1024)).floor().clamp(0, units.length - 1);
+    final i = (math.log(bytes) / math.log(1024)).floor().clamp(
+      0,
+      units.length - 1,
+    );
     final val = bytes / math.pow(1024, i);
     return '${val.toStringAsFixed(1)} ${units[i]}';
   }
@@ -354,11 +377,21 @@ class Progress {
 class Spinner {
   /// Default Braille dot animation frames.
   static const List<String> defaultFrames = [
-    '⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'
+    '⠋',
+    '⠙',
+    '⠹',
+    '⠸',
+    '⠼',
+    '⠴',
+    '⠦',
+    '⠧',
+    '⠇',
+    '⠏',
   ];
 
   /// The list of character frames for the animation loop.
   final List<String> frames;
+
   /// Duration interval between animation frame ticks.
   final Duration interval;
   Timer? _timer;
@@ -431,7 +464,7 @@ class ConsoleWriter {
   /// Renders and prints a formatted table with [headers] and optional [rows].
   Table table(
     List<String> headers, [
-    List<List<dynamic>>? rows,
+    List<List<Object?>>? rows,
     List<ColumnAlign>? alignments,
     TableStyle style = TableStyle.unicode,
   ]) {
@@ -470,7 +503,11 @@ class ConsoleWriter {
   }
 
   /// Displays text enclosed inside a decorative bordered callout box.
-  void box(String text, {String? title, TableStyle style = TableStyle.unicode}) {
+  void box(
+    String text, {
+    String? title,
+    TableStyle style = TableStyle.unicode,
+  }) {
     final lines = text.split('\n');
     var maxLen = title != null ? Ansi.visibleLength(title) + 4 : 0;
     for (final l in lines) {
@@ -483,12 +520,16 @@ class ConsoleWriter {
     final leftTop = (topPad / 2).floor();
     final rightTop = topPad - leftTop;
 
-    stdout.writeln('${style.topLeft}${style.horizontal * leftTop}$topTitle${style.horizontal * rightTop}${style.topRight}');
+    stdout.writeln(
+      '${style.topLeft}${style.horizontal * leftTop}$topTitle${style.horizontal * rightTop}${style.topRight}',
+    );
     for (final l in lines) {
       final pad = maxLen - Ansi.visibleLength(l);
       stdout.writeln('${style.vertical} $l${' ' * pad} ${style.vertical}');
     }
-    stdout.writeln('${style.bottomLeft}${style.horizontal * (maxLen + 2)}${style.bottomRight}');
+    stdout.writeln(
+      '${style.bottomLeft}${style.horizontal * (maxLen + 2)}${style.bottomRight}',
+    );
   }
 
   /// Creates a progress bar instance for [total] units with optional [message].

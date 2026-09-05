@@ -44,10 +44,7 @@ class ConsoleReader {
   /// final proceed = await console.reader.confirm('Deploy to production?', defaultVal: false);
   /// if (proceed) { ... }
   /// ```
-  Future<bool> confirm(
-    String question, {
-    bool defaultVal = true,
-  }) async {
+  Future<bool> confirm(String question, {bool defaultVal = true}) async {
     final hint = defaultVal ? '[Y/n]' : '[y/N]';
     stdout.write('$question ${hint.dim()} ');
     final l = (await line())?.trim().toLowerCase();
@@ -82,6 +79,53 @@ class ConsoleReader {
         return options[n - 1];
       }
       stderr.writeln('${'✖'.brightRed()} Please enter 1-${options.length}.');
+    }
+  }
+
+  /// Presents an interactive numbered selection list allowing multiple choices.
+  ///
+  /// Users can enter numbers separated by spaces or commas (e.g. `1, 3` or `all`).
+  ///
+  /// ```dart
+  /// final selected = await console.reader.picks(
+  ///   'Select components to install:',
+  ///   options: ['CLI', 'Server', 'Docs', 'Examples'],
+  /// );
+  /// ```
+  Future<List<O>> picks<O>(
+    String question, {
+    required List<O> options,
+    String Function(O item)? label,
+  }) async {
+    if (options.isEmpty) throw ArgumentError('Options cannot be empty');
+    stdout.writeln(question.bold());
+    for (var i = 0; i < options.length; i++) {
+      final text = label != null ? label(options[i]) : options[i].toString();
+      stdout.writeln('  ${'${i + 1})'.cyan()} $text');
+    }
+    while (true) {
+      stdout.write('Select (e.g. 1, 3 or all): ');
+      final l = (await line())?.trim().toLowerCase();
+      if (l == null || l.isEmpty) return [];
+      if (l == 'all' || l == '*') return List.of(options);
+      final tokens = l.split(RegExp(r'[\s,]+')).where((s) => s.isNotEmpty);
+      final indices = <int>{};
+      var valid = true;
+      for (final t in tokens) {
+        final n = int.tryParse(t);
+        if (n != null && n >= 1 && n <= options.length) {
+          indices.add(n - 1);
+        } else {
+          valid = false;
+          break;
+        }
+      }
+      if (valid && indices.isNotEmpty) {
+        return indices.map((i) => options[i]).toList();
+      }
+      stderr.writeln(
+        '${'✖'.brightRed()} Please enter valid numbers between 1 and ${options.length}.',
+      );
     }
   }
 

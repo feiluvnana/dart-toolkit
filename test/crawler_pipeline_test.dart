@@ -12,12 +12,13 @@ class MockDownloader<T> extends Downloader<T> {
   MockDownloader(this.htmlResponses);
 
   @override
-  Future<Response<T>> download(dynamic requestOrUrl) async {
+  Future<Response<T>> download(Object requestOrUrl) async {
     final Request<T> request = requestOrUrl is Request<T>
         ? requestOrUrl
         : Request<T>.get(requestOrUrl);
     final urlStr = request.url.toString();
-    final body = htmlResponses[urlStr] ?? '<html><body>404 Not Found</body></html>';
+    final body =
+        htmlResponses[urlStr] ?? '<html><body>404 Not Found</body></html>';
     final statusCode = htmlResponses.containsKey(urlStr) ? 200 : 404;
 
     return Response<T>(
@@ -31,8 +32,8 @@ class MockDownloader<T> extends Downloader<T> {
 
   @override
   Future<void> save(
-    dynamic targetOrRequest,
-    dynamic sourceOrDestination, {
+    Object targetOrRequest,
+    Object sourceOrDestination, {
     void Function(int received, int total)? onProgress,
     String part = '.part',
     bool match = true,
@@ -52,166 +53,175 @@ class MockDownloader<T> extends Downloader<T> {
 }
 
 void main() {
-  group('Scheduler Tests', () {
-    test('Scheduler enqueues, dequeues, and deduplicates with concise names', () {
-      final scheduler = Scheduler<String>();
-      final engine = Engine<String>(scheduler: scheduler);
+  group('Deduplicator & Queue Tests', () {
+    test('Deduplicator tracks and deduplicates URLs with 1-word methods', () {
+      final dedupe = Deduplicator();
 
-      final req1 = Request<String>.get('https://example.com/page1');
-      final req2 = Request<String>.get('https://example.com/page2');
-      final reqDuplicate = Request<String>.get('https://example.com/page1#section');
+      expect(dedupe.add('https://example.com/page1'), isTrue);
+      expect(dedupe.add('https://example.com/page2'), isTrue);
+      expect(
+        dedupe.add('https://example.com/page1#section'),
+        isFalse,
+      ); // Deduplicated!
 
-      scheduler.add(req1);
-      scheduler.add(req2);
-      scheduler.add(reqDuplicate); // Should be deduplicated
+      expect(dedupe.has('https://example.com/page1'), isTrue);
+      expect(dedupe.has('https://example.com/page3'), isFalse);
+      expect(dedupe.length, equals(2));
 
-      expect(scheduler.length, equals(2));
-      expect(engine.queue.length, equals(2));
-      expect(scheduler.next()?.url.path, equals('/page1'));
-      expect(scheduler.next()?.url.path, equals('/page2'));
-      expect(scheduler.next(), isNull);
-      expect(engine.queue.isEmpty, isTrue);
-
-      // Verify engine access
-      expect(scheduler.engine, equals(engine));
+      dedupe.clear();
+      expect(dedupe.isEmpty, isTrue);
+      expect(dedupe.has('https://example.com/page1'), isFalse);
     });
 
-    test('Priority scheduler orders by priority descending', () {
-      final scheduler = Priority<String>();
-      Engine<String>(scheduler: scheduler);
+    test('Engine serves requests to downloader and manages queue', () {
+      final engine = Engine<String>();
 
-      scheduler.add(Request<String>.get('https://example.com/low', priority: 1));
-      scheduler.add(Request<String>.get('https://example.com/high', priority: 10));
-      scheduler.add(Request<String>.get('https://example.com/medium', priority: 5));
+      engine.add('https://example.com/page1');
+      engine.add('https://example.com/page2');
+      engine.add('https://example.com/page1#section'); // deduplicated!
 
-      expect(scheduler.next()?.url.path, equals('/high'));
-      expect(scheduler.next()?.url.path, equals('/medium'));
-      expect(scheduler.next()?.url.path, equals('/low'));
+      expect(engine.queue.length, equals(2));
+      expect(engine.queue.isNotEmpty, isTrue);
+
+      final req1 = engine.serve();
+      expect(req1?.url.path, equals('/page1'));
+      final req2 = engine.serve();
+      expect(req2?.url.path, equals('/page2'));
+      expect(engine.serve(), isNull);
+      expect(engine.queue.isEmpty, isTrue);
     });
   });
 
   group('Engine Pipeline & Processor Tests', () {
-    test('Engine runs pipeline with namespaced queue and concise 1-word methods', () async {
-      final mockData = {
-        'https://example.com/album': '''
+    test(
+      'Engine runs pipeline with namespaced queue and concise 1-word methods',
+      () async {
+        final mockData = {
+          'https://example.com/album': '''
           <div class="album">
             <h1>Sample Album</h1>
             <a href="/disc/1" class="disc-link">Disc 1</a>
             <a href="/disc/2" class="disc-link">Disc 2</a>
           </div>
         ''',
-        'https://example.com/disc/1': '''
+          'https://example.com/disc/1': '''
           <div class="disc" data-num="1">
             <span class="disc-title">Key+Lia Best 2001</span>
             <div class="track">01. Natukage</div>
           </div>
         ''',
-        'https://example.com/disc/2': '''
+          'https://example.com/disc/2': '''
           <div class="disc" data-num="2">
             <span class="disc-title">Kanon Original Soundtrack</span>
             <div class="track">01. Morning Shadows</div>
           </div>
         ''',
-      };
+        };
 
-      final downloader = MockDownloader<Map<String, dynamic>>(mockData);
-      final router = Router<Map<String, dynamic>>();
+        final downloader = MockDownloader<Map<String, Object?>>(mockData);
+        final router = Router<Map<String, Object?>>();
 
-      // 1. Root album page route with 1-word .on()
-      router.on(RegExp(r'/album$'), (response, engine) {
-        expect(response.engine, equals(engine));
-        expect(response.ok, isTrue);
+        // 1. Root album page route with 1-word .on()
+        router.on(RegExp(r'/album$'), (response, engine) {
+          expect(response.engine, equals(engine));
+          expect(response.ok, isTrue);
 
-        // Use jQuery-like $() to find disc links and follow them
-        for (final a in response.$('a.disc-link')) {
-          final href = a.attributes['href'];
-          if (href != null) {
-            response.follow(href, tag: 'disc_page');
+          // Use jQuery-like $() to find disc links and follow them
+          for (final a in response.$('a.disc-link')) {
+            final href = a.attributes['href'];
+            if (href != null) {
+              response.follow(href, tag: 'disc_page');
+            }
           }
-        }
-      });
-
-      // 2. Disc pages route matching tag with 1-word .tag()
-      router.tag('disc_page', (response, engine) {
-        final discNum = int.parse(response.$('.disc').attr('data-num') ?? '0');
-        final discTitle = response.$('.disc-title').text;
-        final track = response.$('.track').text;
-
-        // 1-word emit
-        response.emit({
-          'disc': discNum,
-          'title': discTitle,
-          'firstTrack': track,
         });
-      });
 
-      final engine = Engine<Map<String, dynamic>>(
-        downloader: downloader,
-        processor: router,
-      );
+        // 2. Disc pages route matching tag with 1-word .tag()
+        router.tag('disc_page', (response, engine) {
+          final discNum = int.parse(
+            response.$('.disc').attr('data-num') ?? '0',
+          );
+          final discTitle = response.$('.disc-title').text;
+          final track = response.$('.track').text;
 
-      // Verify all components have engine reference
-      expect(downloader.engine, equals(engine));
-      expect(router.engine, equals(engine));
+          // 1-word emit
+          response.emit({
+            'disc': discNum,
+            'title': discTitle,
+            'firstTrack': track,
+          });
+        });
 
-      // 1-word .url() schedule
-      engine.url('https://example.com/album');
+        final engine = Engine<Map<String, Object?>>(
+          downloader: downloader,
+          processor: router,
+        );
 
-      final emittedItems = <Map<String, dynamic>>[];
-      engine.items.listen((item) {
-        emittedItems.add(item);
-      });
+        // Verify all components have engine reference
+        expect(downloader.engine, equals(engine));
+        expect(router.engine, equals(engine));
 
-      final stats = await engine.run();
+        // 1-word .add() schedule
+        engine.add('https://example.com/album');
 
-      expect(stats.completed, equals(3));
-      expect(stats.emitted, equals(2));
-      expect(emittedItems.length, equals(2));
+        final emittedItems = <Map<String, Object?>>[];
+        engine.items.listen((item) {
+          emittedItems.add(item);
+        });
 
-      expect(emittedItems[0]['disc'], equals(1));
-      expect(emittedItems[0]['title'], equals('Key+Lia Best 2001'));
-      expect(emittedItems[0]['firstTrack'], equals('01. Natukage'));
+        final stats = await engine.run();
 
-      expect(emittedItems[1]['disc'], equals(2));
-      expect(emittedItems[1]['title'], equals('Kanon Original Soundtrack'));
-      expect(emittedItems[1]['firstTrack'], equals('01. Morning Shadows'));
-    });
+        expect(stats.completed, equals(3));
+        expect(stats.emitted, equals(2));
+        expect(emittedItems.length, equals(2));
 
-    test('Response processor can abort pipeline early with 1-word method', () async {
-      final mockData = {
-        'https://example.com/item/1': '<div>Page 1</div>',
-        'https://example.com/item/2': '<div>Page 2 (Abort)</div>',
-        'https://example.com/item/3': '<div>Page 3</div>',
-      };
+        expect(emittedItems[0]['disc'], equals(1));
+        expect(emittedItems[0]['title'], equals('Key+Lia Best 2001'));
+        expect(emittedItems[0]['firstTrack'], equals('01. Natukage'));
 
-      final downloader = MockDownloader<String>(mockData);
+        expect(emittedItems[1]['disc'], equals(2));
+        expect(emittedItems[1]['title'], equals('Kanon Original Soundtrack'));
+        expect(emittedItems[1]['firstTrack'], equals('01. Morning Shadows'));
+      },
+    );
 
-      final engine = Engine<String>(
-        downloader: downloader,
-        onResponse: (response, engine) {
-          final text = response.$('div').text;
-          response.emit(text);
-          if (text.contains('Abort')) {
-            response.stop('Found abort keyword');
-          }
-        },
-      );
+    test(
+      'Response processor can abort pipeline early with 1-word method',
+      () async {
+        final mockData = {
+          'https://example.com/item/1': '<div>Page 1</div>',
+          'https://example.com/item/2': '<div>Page 2 (Abort)</div>',
+          'https://example.com/item/3': '<div>Page 3</div>',
+        };
 
-      engine.url('https://example.com/item/1');
-      engine.url('https://example.com/item/2');
-      engine.url('https://example.com/item/3');
+        final downloader = MockDownloader<String>(mockData);
 
-      final items = <String>[];
-      engine.items.listen(items.add);
+        final engine = Engine<String>(
+          downloader: downloader,
+          onResponse: (response, engine) {
+            final text = response.$('div').text;
+            response.emit(text);
+            if (text.contains('Abort')) {
+              response.stop('Found abort keyword');
+            }
+          },
+        );
 
-      final stats = await engine.run();
+        engine.add('https://example.com/item/1');
+        engine.add('https://example.com/item/2');
+        engine.add('https://example.com/item/3');
 
-      expect(engine.stopped, isTrue);
-      expect(stats.reason, equals('Found abort keyword'));
-      expect(items, contains('Page 1'));
-      expect(items, contains('Page 2 (Abort)'));
-      expect(items, isNot(contains('Page 3')));
-    });
+        final items = <String>[];
+        engine.items.listen(items.add);
+
+        final stats = await engine.run();
+
+        expect(engine.stopped, isTrue);
+        expect(stats.reason, equals('Found abort keyword'));
+        expect(items, contains('Page 1'));
+        expect(items, contains('Page 2 (Abort)'));
+        expect(items, isNot(contains('Page 3')));
+      },
+    );
 
     test('crawl.run executes multi-step follow with tags and meta', () async {
       final mockData = {
@@ -236,29 +246,28 @@ void main() {
       final dl = MockDownloader<String>(mockData);
       final visitedSongs = <String>[];
 
-      final stats = await crawl.run(
-        'https://music.example.com/album',
-        (res) {
-          if (res.tag == 'song') {
-            final trackName = res.meta['name'] as String;
-            final mp3Link = res.link('.mp3');
-            visitedSongs.add('$trackName: $mp3Link');
-          } else {
-            for (final a in res.$('#songlist a')) {
-              final href = a.attr('href')!;
-              final name = a.text;
-              res.follow(href, tag: 'song', meta: {'name': name});
-            }
+      final stats = await net.crawl.run('https://music.example.com/album', (res) {
+        if (res.tag == 'song') {
+          final trackName = res.meta['name'] as String;
+          final mp3Link = res.link('.mp3');
+          visitedSongs.add('$trackName: $mp3Link');
+        } else {
+          for (final a in res.$('#songlist a')) {
+            final href = a.attr('href')!;
+            final name = a.text;
+            res.follow(href, tag: 'song', meta: {'name': name});
           }
-        },
-        dl: dl,
-      );
+        }
+      }, downloader: dl);
 
       expect(stats.completed, equals(3));
-      expect(visitedSongs, equals([
-        'Track 1: https://music.example.com/audio/t1.mp3',
-        'Track 2: https://music.example.com/audio/t2.mp3',
-      ]));
+      expect(
+        visitedSongs,
+        equals([
+          'Track 1: https://music.example.com/audio/t1.mp3',
+          'Track 2: https://music.example.com/audio/t2.mp3',
+        ]),
+      );
     });
 
     test('crawl.collect gathers all emitted items in one call', () async {
@@ -274,17 +283,18 @@ void main() {
 
       final dl = MockDownloader<String>(mockData);
 
-      final titles = await crawl.collect<String>(
-        'https://news.example.com',
-        (res) {
-          for (final t in res.$('.title').texts) {
-            res.emit(t);
-          }
-        },
-        dl: dl,
-      );
+      final titles = await net.crawl.collect<String>('https://news.example.com', (
+        res,
+      ) {
+        for (final t in res.$('.title').texts) {
+          res.emit(t);
+        }
+      }, downloader: dl);
 
-      expect(titles, equals(['Article Alpha', 'Article Beta', 'Article Gamma']));
+      expect(
+        titles,
+        equals(['Article Alpha', 'Article Beta', 'Article Gamma']),
+      );
     });
 
     test('crawl.engine supports direct .tag and .route registration', () async {
@@ -298,7 +308,7 @@ void main() {
       };
 
       final dl = MockDownloader<String>(mockData);
-      final eng = crawl.engine<String>(dl: dl);
+      final eng = net.crawl.engine<String>(downloader: dl);
       final results = <String>[];
 
       eng.route(RegExp(r'/catalog$'), (res) {
@@ -316,30 +326,34 @@ void main() {
       expect(results, equals(['Super Gadget']));
     });
 
-    test('crawl(...) builder pattern works with single process function', () async {
-      final mockData = {
-        'https://site.example.com': '<h1>Hello World</h1><a href="/sub">Sub</a>',
-        'https://site.example.com/sub': '<h2>Subpage</h2>',
-      };
-      final dl = MockDownloader<String>(mockData);
-      final titles = <String>[];
+    test(
+      'crawl(...) builder pattern works with single process function',
+      () async {
+        final mockData = {
+          'https://site.example.com':
+              '<h1>Hello World</h1><a href="/sub">Sub</a>',
+          'https://site.example.com/sub': '<h2>Subpage</h2>',
+        };
+        final dl = MockDownloader<String>(mockData);
+        final titles = <String>[];
 
-      final stats = await crawl('https://site.example.com')
-          .concurrent(2)
-          .delay(Duration(milliseconds: 10))
-          .dl(dl)
-          .run((res) {
-            if (res.url.path == '/sub') {
-              titles.add(res.$('h2').text);
-            } else {
-              titles.add(res.$('h1').text);
-              res.follow('/sub');
-            }
-          });
+        final stats = await net.crawl('https://site.example.com')
+            .concurrent(2)
+            .delay(Duration(milliseconds: 10))
+            .downloader(dl)
+            .run((res) {
+              if (res.url.path == '/sub') {
+                titles.add(res.$('h2').text);
+              } else {
+                titles.add(res.$('h1').text);
+                res.follow('/sub');
+              }
+            });
 
-      expect(stats.completed, equals(2));
-      expect(titles, equals(['Hello World', 'Subpage']));
-    });
+        expect(stats.completed, equals(2));
+        expect(titles, equals(['Hello World', 'Subpage']));
+      },
+    );
 
     test('crawl(...) builder pattern works with multi-stage tags', () async {
       final mockData = {
@@ -350,9 +364,9 @@ void main() {
       final dl = MockDownloader<String>(mockData);
       final items = <String>[];
 
-      final stats = await crawl('https://site.example.com')
+      final stats = await net.crawl('https://site.example.com')
           .concurrent(2)
-          .dl(dl)
+          .downloader(dl)
           .tag('item', (res) {
             items.add(res.$('span').text);
           })
@@ -366,15 +380,15 @@ void main() {
       expect(items, equals(['Item One', 'Item Two']));
     });
 
-    test('crawl(...) builder supports .process and .collect with process-only argument', () async {
+    test('crawl(...) builder supports .collect with process-only argument', () async {
       final mockData = {
         'https://site.example.com': '<span>Alpha</span><span>Beta</span>',
       };
       final dl = MockDownloader<String>(mockData);
 
-      final collected = await crawl('https://site.example.com')
+      final collected = await net.crawl('https://site.example.com')
           .concurrent(2)
-          .dl(dl)
+          .downloader(dl)
           .collect<String>((res) {
             for (final span in res.$('span').texts) {
               res.emit(span);

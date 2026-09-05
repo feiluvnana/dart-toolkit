@@ -41,9 +41,6 @@ export 'selector.dart';
 /// ```
 ///
 /// Also provides functional sub-actions like `crawl.collect(...)`, `crawl.get(...)`,
-/// `crawl.post(...)`, `crawl.sync(...)`, and `crawl.dl()`.
-const Crawl crawl = Crawl();
-
 /// Function-based crawler API callable directly as `crawl(...)`.
 class Crawl {
   const Crawl();
@@ -62,42 +59,44 @@ class Crawl {
   ///   });
   /// ```
   CrawlBuilder<T> call<T>([
-    dynamic urls,
+    Object? urls,
     FutureOr<void> Function(Response<T> res)? process,
-  ]) =>
-      CrawlBuilder<T>(urls, process);
+  ]) => CrawlBuilder<T>(urls, process);
 
   /// Starts a crawler builder configured with maximum [count] concurrent workers (1-word).
   CrawlBuilder<T> concurrent<T>(int count) =>
       CrawlBuilder<T>().concurrent(count);
 
   /// Starts a crawler builder configured with polite request [delay] (1-word).
-  CrawlBuilder<T> delay<T>(dynamic delay) => CrawlBuilder<T>().delay(delay);
+  CrawlBuilder<T> delay<T>(Object delay) => CrawlBuilder<T>().delay(delay);
 
   /// Starts a crawler builder configured with base storage directory (1-word).
   CrawlBuilder<T> base<T>(String baseFolder) =>
       CrawlBuilder<T>().base(baseFolder);
 
+  /// Starts a crawler builder configured with maximum [count] download retry attempts (1-word).
+  CrawlBuilder<T> retry<T>(int count) => CrawlBuilder<T>().retry(count);
+
   /// Runs an end-to-end crawling workflow on [urls] and returns [Stats] (1-word).
   Future<Stats> run<T>(
-    dynamic urls,
+    Object? urls,
     FutureOr<void> Function(Response<T> res)? process, {
     int concurrency = 4,
     Duration delay = Duration.zero,
     String? base,
     bool dedupe = true,
-    Downloader<T>? dl,
-    Scheduler<T>? scheduler,
+    Downloader<T>? downloader,
+    Deduplicator? deduplicator,
     Map<String, FutureOr<void> Function(Response<T> res)>? tags,
-    Map<dynamic, FutureOr<void> Function(Response<T> res)>? routes,
+    Map<Pattern, FutureOr<void> Function(Response<T> res)>? routes,
   }) {
-    var b = call<T>(urls, process)
-        .concurrent(concurrency)
-        .delay(delay)
-        .dedupe(dedupe);
+    var b = call<T>(
+      urls,
+      process,
+    ).concurrent(concurrency).delay(delay).dedupe(dedupe);
     if (base != null) b.base(base);
-    if (dl != null) b = b.dl(dl);
-    if (scheduler != null) b = b.scheduler(scheduler);
+    if (downloader != null) b = b.downloader(downloader);
+    if (deduplicator != null) b = b.deduplicator(deduplicator);
     if (tags != null) b.tags(tags);
     if (routes != null) b.routes(routes);
     return b.run(process);
@@ -105,24 +104,24 @@ class Crawl {
 
   /// Runs a crawling session and collects all emitted items via `res.emit(item)` into a list.
   Future<List<T>> collect<T>(
-    dynamic urls,
+    Object? urls,
     FutureOr<void> Function(Response<T> res)? process, {
     int concurrency = 4,
     Duration delay = Duration.zero,
     String? base,
     bool dedupe = true,
-    Downloader<T>? dl,
-    Scheduler<T>? scheduler,
+    Downloader<T>? downloader,
+    Deduplicator? deduplicator,
     Map<String, FutureOr<void> Function(Response<T> res)>? tags,
-    Map<dynamic, FutureOr<void> Function(Response<T> res)>? routes,
+    Map<Pattern, FutureOr<void> Function(Response<T> res)>? routes,
   }) {
-    var b = call<T>(urls, process)
-        .concurrent(concurrency)
-        .delay(delay)
-        .dedupe(dedupe);
+    var b = call<T>(
+      urls,
+      process,
+    ).concurrent(concurrency).delay(delay).dedupe(dedupe);
     if (base != null) b.base(base);
-    if (dl != null) b = b.dl(dl);
-    if (scheduler != null) b = b.scheduler(scheduler);
+    if (downloader != null) b = b.downloader(downloader);
+    if (deduplicator != null) b = b.deduplicator(deduplicator);
     if (tags != null) b.tags(tags);
     if (routes != null) b.routes(routes);
     return b.collect<T>(process);
@@ -134,25 +133,43 @@ class Crawl {
     Duration delay = Duration.zero,
     String? base,
     bool dedupe = true,
-    Downloader<T>? dl,
-    Scheduler<T>? scheduler,
+    Downloader<T>? downloader,
+    Deduplicator? deduplicator,
     Process<T>? onResponse,
-  }) =>
-      Engine<T>(
-        concurrency: concurrency,
-        delay: delay,
-        downloader: dl ?? HttpDownloader<T>(base: base),
-        scheduler: scheduler ?? Scheduler<T>(dedupe: dedupe),
-        onResponse: onResponse,
-      );
+  }) => Engine<T>(
+    concurrency: concurrency,
+    delay: delay,
+    base: base,
+    dedupe: dedupe,
+    downloader: downloader,
+    deduplicator: deduplicator,
+    onResponse: onResponse,
+  );
 
-  /// Creates a standalone [HttpDownloader] instance with an optional base output directory.
-  HttpDownloader<T> dl<T>({String? base, http.Client? client}) =>
-      HttpDownloader<T>(base: base, client: client);
+  /// Creates a standalone [HttpDownloader] instance (1-word).
+  HttpDownloader<T> downloader<T>({
+    int concurrency = 4,
+    Duration delay = Duration.zero,
+    String? base,
+    int retries = 2,
+    Duration backoff = const Duration(milliseconds: 500),
+    Duration timeout = const Duration(seconds: 30),
+    Map<String, String>? headers,
+    http.Client? client,
+  }) => HttpDownloader<T>(
+    concurrency: concurrency,
+    delay: delay,
+    base: base,
+    retries: retries,
+    backoff: backoff,
+    timeout: timeout,
+    headers: headers,
+    client: client,
+  );
 
   /// Performs a quick HTTP GET request and returns a parsed [Response].
   Future<Response<T>> get<T>(
-    dynamic url, {
+    Object url, {
     Map<String, String>? headers,
     http.Client? client,
   }) {
@@ -162,29 +179,30 @@ class Crawl {
 
   /// Performs a quick HTTP POST request and returns a parsed [Response].
   Future<Response<T>> post<T>(
-    dynamic url, {
+    Object url, {
     Map<String, String>? headers,
     Object? body,
     http.Client? client,
   }) {
     final uri = url is Uri ? url : Uri.parse(url.toString());
-    return HttpDownloader<T>(client: client).post(uri, headers: headers, body: body);
+    return HttpDownloader<T>(client: client)
+        .post(uri, headers: headers, body: body);
   }
 
   /// Downloads a [Request] or URL using the default [HttpDownloader].
-  Future<Response<T>> download<T>(dynamic req, {http.Client? client}) {
+  Future<Response<T>> download<T>(Object req, {http.Client? client}) {
     return HttpDownloader<T>(client: client).download(req);
   }
 
   /// Concurrently synchronizes a collection of download tasks into local files.
   Future<void> sync(
-    dynamic tasks, {
+    Object tasks, {
     String? base,
     String? prefix,
     int concurrency = 4,
     bool match = true,
   }) {
-    final downloader = HttpDownloader(base: base);
+    final downloader = HttpDownloader<Object?>(base: base);
     return downloader.sync(
       tasks,
       prefix: prefix,
@@ -194,21 +212,22 @@ class Crawl {
   }
 
   /// Queries an HTML document, element, or string using a CSS selector.
-  QueryResult query(dynamic target, [dynamic context]) => sel.$(target, context);
+  QueryResult query(Object? target, [Object? context]) =>
+      sel.$(target, context);
 
   /// jQuery-like selector alias for [query].
-  QueryResult $(dynamic target, [dynamic context]) => sel.$(target, context);
+  QueryResult $(Object? target, [Object? context]) => sel.$(target, context);
 
-  static List<dynamic> _normalizeUrls<T>(
-    dynamic urls, {
+  static List<Request<T>> _normalizeUrls<T>(
+    Object? urls, {
     String? tag,
-    Map<String, dynamic>? meta,
+    Map<String, Object?>? meta,
   }) {
     if (urls == null) return [];
     final list = urls is Iterable ? urls.toList() : [urls];
-    if (tag != null || meta != null) {
-      return list.map((u) {
-        if (u is Request<T>) {
+    return list.map((u) {
+      if (u is Request<T>) {
+        if (tag != null || meta != null) {
           return Request<T>(
             u.url,
             method: u.method,
@@ -219,10 +238,10 @@ class Crawl {
             priority: u.priority,
           );
         }
-        return Request<T>.get(u, tag: tag, meta: meta);
-      }).toList();
-    }
-    return list;
+        return u;
+      }
+      return Request<T>.get(u as Object, tag: tag, meta: meta);
+    }).toList();
   }
 }
 
@@ -243,16 +262,17 @@ class Crawl {
 ///   });
 /// ```
 class CrawlBuilder<T> implements Future<Stats> {
-  dynamic _urls;
+  Object? _urls;
   final FutureOr<void> Function(Response<T> res)? _process;
   int _concurrency = 4;
   Duration _delay = Duration.zero;
   String? _base;
+  int _retries = 2;
   bool _dedupe = true;
   Downloader<T>? _dl;
-  Scheduler<T>? _scheduler;
+  Deduplicator? _deduplicator;
   final Map<String, FutureOr<void> Function(Response<T> res)> _tags = {};
-  final Map<dynamic, FutureOr<void> Function(Response<T> res)> _routes = {};
+  final Map<Pattern, FutureOr<void> Function(Response<T> res)> _routes = {};
 
   void Function()? _onStart;
   void Function(Stats stats)? _onDone;
@@ -266,7 +286,7 @@ class CrawlBuilder<T> implements Future<Stats> {
   CrawlBuilder([this._urls, this._process]);
 
   /// Sets or replaces the target URL(s) to crawl.
-  CrawlBuilder<T> urls(dynamic urls) {
+  CrawlBuilder<T> urls(Object? urls) {
     _urls = urls;
     return this;
   }
@@ -280,7 +300,7 @@ class CrawlBuilder<T> implements Future<Stats> {
   /// Sets polite rate-limiting delay between requests (1-word).
   ///
   /// Accepts a [Duration] or integer milliseconds.
-  CrawlBuilder<T> delay(dynamic delay) {
+  CrawlBuilder<T> delay(Object delay) {
     if (delay is Duration) {
       _delay = delay;
     } else if (delay is num) {
@@ -295,15 +315,25 @@ class CrawlBuilder<T> implements Future<Stats> {
     return this;
   }
 
+  /// Sets maximum retry attempts for failed downloads (1-word).
+  CrawlBuilder<T> retry(int count) {
+    _retries = count >= 0 ? count : 0;
+    return this;
+  }
+
   /// Sets custom [Downloader] instance (1-word).
-  CrawlBuilder<R> dl<R>(Downloader<R> downloader) {
-    final b = CrawlBuilder<R>(_urls, _process as FutureOr<void> Function(Response<R> res)?);
+  CrawlBuilder<R> downloader<R>(Downloader<R> downloader) {
+    final b = CrawlBuilder<R>(
+      _urls,
+      _process as FutureOr<void> Function(Response<R> res)?,
+    );
     b._concurrency = _concurrency;
     b._delay = _delay;
     b._base = _base;
+    b._retries = _retries;
     b._dedupe = _dedupe;
     b._dl = downloader;
-    b._scheduler = _scheduler as Scheduler<R>?;
+    b._deduplicator = _deduplicator;
     b._tags.addAll(_tags.cast());
     b._routes.addAll(_routes.cast());
     b._onStart = _onStart;
@@ -313,22 +343,10 @@ class CrawlBuilder<T> implements Future<Stats> {
     return b;
   }
 
-  /// Sets custom [Scheduler] instance (1-word).
-  CrawlBuilder<R> scheduler<R>(Scheduler<R> scheduler) {
-    final b = CrawlBuilder<R>(_urls, _process as FutureOr<void> Function(Response<R> res)?);
-    b._concurrency = _concurrency;
-    b._delay = _delay;
-    b._base = _base;
-    b._dedupe = _dedupe;
-    b._dl = _dl as Downloader<R>?;
-    b._scheduler = scheduler;
-    b._tags.addAll(_tags.cast());
-    b._routes.addAll(_routes.cast());
-    b._onStart = _onStart;
-    b._onDone = _onDone;
-    b._onProgress = _onProgress as void Function(Response<R> res)?;
-    b._onError = _onError;
-    return b;
+  /// Sets custom [Deduplicator] instance (1-word).
+  CrawlBuilder<T> deduplicator(Deduplicator deduplicator) {
+    _deduplicator = deduplicator;
+    return this;
   }
 
   /// Enables or disables URL deduplication (1-word).
@@ -338,25 +356,35 @@ class CrawlBuilder<T> implements Future<Stats> {
   }
 
   /// Registers a handler for requests tagged with [name] (1-word).
-  CrawlBuilder<T> tag(String name, FutureOr<void> Function(Response<T> res) handler) {
+  CrawlBuilder<T> tag(
+    String name,
+    FutureOr<void> Function(Response<T> res) handler,
+  ) {
     _tags[name] = handler;
     return this;
   }
 
   /// Registers multiple tag handlers (1-word).
-  CrawlBuilder<T> tags(Map<String, FutureOr<void> Function(Response<T> res)> tags) {
+  CrawlBuilder<T> tags(
+    Map<String, FutureOr<void> Function(Response<T> res)> tags,
+  ) {
     _tags.addAll(tags);
     return this;
   }
 
   /// Registers a handler matching URL [pattern] (1-word).
-  CrawlBuilder<T> route(Pattern pattern, FutureOr<void> Function(Response<T> res) handler) {
+  CrawlBuilder<T> route(
+    Pattern pattern,
+    FutureOr<void> Function(Response<T> res) handler,
+  ) {
     _routes[pattern] = handler;
     return this;
   }
 
   /// Registers multiple route handlers (1-word).
-  CrawlBuilder<T> routes(Map<dynamic, FutureOr<void> Function(Response<T> res)> routes) {
+  CrawlBuilder<T> routes(
+    Map<Pattern, FutureOr<void> Function(Response<T> res)> routes,
+  ) {
     _routes.addAll(routes);
     return this;
   }
@@ -368,11 +396,18 @@ class CrawlBuilder<T> implements Future<Stats> {
   Future<Stats> run([FutureOr<void> Function(Response<T> res)? process]) {
     if (_executed != null) return _executed!;
     final handler = process ?? _process;
+    final dl =
+        _dl ??
+        HttpDownloader<T>(
+          concurrency: _concurrency,
+          delay: _delay,
+          base: _base,
+          retries: _retries,
+        );
     final eng = Engine<T>(
-      concurrency: _concurrency,
-      delay: _delay,
-      downloader: _dl ?? HttpDownloader<T>(base: _base),
-      scheduler: _scheduler ?? Scheduler<T>(dedupe: _dedupe),
+      downloader: dl,
+      dedupe: _dedupe,
+      deduplicator: _deduplicator,
       onResponse: handler != null ? (res, engine) => handler(res) : null,
     );
 
@@ -393,16 +428,14 @@ class CrawlBuilder<T> implements Future<Stats> {
     return _executed = eng.run(reqs);
   }
 
-  /// Alias for [run] where the argument is the function for process only.
-  Future<Stats> process(FutureOr<void> Function(Response<T> res) process) =>
-      run(process);
-
   /// Callable shortcut: `builder(process)`.
   Future<Stats> call([FutureOr<void> Function(Response<T> res)? process]) =>
       run(process);
 
   /// Executes the crawl and collects emitted items. The argument is the function for process only.
-  Future<List<I>> collect<I>([FutureOr<void> Function(Response<T> res)? process]) async {
+  Future<List<I>> collect<I>([
+    FutureOr<void> Function(Response<T> res)? process,
+  ]) async {
     final items = <I>[];
     final orig = _onItem;
     _onItem = (item) {
@@ -420,16 +453,22 @@ class CrawlBuilder<T> implements Future<Stats> {
   Stream<Stats> asStream() => _future.asStream();
 
   @override
-  Future<Stats> catchError(Function onError, {bool Function(Object error)? test}) =>
-      _future.catchError(onError, test: test);
+  Future<Stats> catchError(
+    Function onError, {
+    bool Function(Object error)? test,
+  }) => _future.catchError(onError, test: test);
 
   @override
-  Future<R> then<R>(FutureOr<R> Function(Stats value) onValue, {Function? onError}) =>
-      _future.then(onValue, onError: onError);
+  Future<R> then<R>(
+    FutureOr<R> Function(Stats value) onValue, {
+    Function? onError,
+  }) => _future.then(onValue, onError: onError);
 
   @override
-  Future<Stats> timeout(Duration timeLimit, {FutureOr<Stats> Function()? onTimeout}) =>
-      _future.timeout(timeLimit, onTimeout: onTimeout);
+  Future<Stats> timeout(
+    Duration timeLimit, {
+    FutureOr<Stats> Function()? onTimeout,
+  }) => _future.timeout(timeLimit, onTimeout: onTimeout);
 
   @override
   Future<Stats> whenComplete(FutureOr<void> Function() action) =>

@@ -3,13 +3,12 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 
-import '../sys/sys.dart';
-import 'archive.dart';
-
-export 'archive.dart';
+import '../system/sys.dart';
+import '../util/console/console.dart';
 
 // ============================================================================
 // FILESYSTEM, PATHS & STORAGE (fs.* / Fs.*)
@@ -30,9 +29,6 @@ export 'archive.dart';
 /// final full = fs.join('parent', 'child', 'file.txt');
 /// final name = fs.name(full); // 'file'
 /// final ext = fs.ext(full);   // '.txt'
-/// ```
-const FsAccessor fs = FsAccessor();
-
 /// Filesystem and path namespace accessor.
 class FsAccessor {
   const FsAccessor();
@@ -61,17 +57,7 @@ class FsAccessor {
     String? part6,
     String? part7,
     String? part8,
-  ]) =>
-      p.join(
-        part1,
-        part2,
-        part3,
-        part4,
-        part5,
-        part6,
-        part7,
-        part8,
-      );
+  ]) => p.join(part1, part2, part3, part4, part5, part6, part7, part8);
 
   /// Returns the basename of [path] (e.g. `'file.txt'` from `'/dir/file.txt'`).
   String base(String path) => p.basename(path);
@@ -96,11 +82,7 @@ class FsAccessor {
   /// ```dart
   /// final safe = fs.sanitize('AC/DC: Back in Black?.mp3'); // 'AC_DC_ Back in Black_.mp3'
   /// ```
-  String sanitize(
-    String name, {
-    String replace = '_',
-    bool full = false,
-  }) =>
+  String sanitize(String name, {String replace = '_', bool full = false}) =>
       Fs.sanitize(name, replace: replace, full: full);
 
   /// Formats byte count into a human-readable size string (e.g. `'1.5 MB'`, `'250 KB'`).
@@ -122,12 +104,13 @@ class FsAccessor {
 
   /// Checks whether [target] file exists and has non-zero byte size.
   ///
+  /// Checks whether [target] file exists and has non-zero byte size.
+  ///
   /// If [match] is true, also checks whether a file with matching basename exists in the folder.
-  bool has(dynamic target, {bool match = false}) =>
-      Fs.has(target, match: match);
+  bool has(Object target, {bool match = false}) => Fs.has(target, match: match);
 
   /// Matches existing files in the directory by basename ignoring common prefix/suffix differences.
-  bool match(dynamic target) => Fs.match(target);
+  bool match(Object target) => Fs.match(target);
 
   /// Writes string or byte [content] atomically to [target] with temporary `.part` tracking.
   ///
@@ -137,8 +120,8 @@ class FsAccessor {
   /// await fs.write('output.json', jsonEncode(data));
   /// ```
   Future<File> write(
-    dynamic target,
-    dynamic content, {
+    Object target,
+    Object content, {
     String part = '.part',
     Encoding encoding = utf8,
   }) {
@@ -147,29 +130,33 @@ class FsAccessor {
   }
 
   /// Reads [target] file synchronously as a string with [encoding].
-  String read(dynamic target, {Encoding encoding = utf8}) {
+  String read(Object target, {Encoding encoding = utf8}) {
     final file = target is File ? target : File(target.toString());
     return file.readAsStringSync(encoding: encoding);
   }
 
   /// Reads [target] file synchronously as raw bytes.
-  List<int> bytes(dynamic target) {
+  List<int> bytes(Object target) {
     final file = target is File ? target : File(target.toString());
     return file.readAsBytesSync();
   }
 
   /// Copies [source] file to [destination], creating parent directories as necessary.
-  File copy(dynamic source, dynamic destination) {
+  File copy(Object source, Object destination) {
     final src = source is File ? source : File(source.toString());
-    final dest = destination is File ? destination : File(destination.toString());
+    final dest = destination is File
+        ? destination
+        : File(destination.toString());
     Fs.parent(dest.path);
     return src.copySync(dest.path);
   }
 
   /// Moves or renames [source] file to [destination], creating parent directories as necessary.
-  File move(dynamic source, dynamic destination) {
+  File move(Object source, Object destination) {
     final src = source is File ? source : File(source.toString());
-    final dest = destination is File ? destination : File(destination.toString());
+    final dest = destination is File
+        ? destination
+        : File(destination.toString());
     Fs.parent(dest.path);
     return src.renameSync(dest.path);
   }
@@ -183,13 +170,15 @@ class FsAccessor {
   /// If the download fails or process exits, the partial `.part` file is cleanly discarded.
   Future<File> download(
     Uri url,
-    dynamic destination, {
+    Object destination, {
     http.Client? client,
     Map<String, String>? headers,
     void Function(int received, int total)? onProgress,
     String part = '.part',
   }) {
-    final dest = destination is File ? destination : File(destination.toString());
+    final dest = destination is File
+        ? destination
+        : File(destination.toString());
     return Fs.download(
       url,
       dest,
@@ -201,24 +190,53 @@ class FsAccessor {
   }
 
   /// Recursively finds files in [dir] matching an optional regex or string [pattern].
-  List<File> find(
-    dynamic dir, {
-    Pattern? pattern,
-    bool recursive = true,
-  }) {
+  List<File> find(Object dir, {Pattern? pattern, bool recursive = true}) {
     final d = dir is Directory ? dir : Directory(dir.toString());
     return Fs.find(d, pattern: pattern, recursive: recursive);
   }
 
   /// Deletes files in [dir] matching an optional [pattern] and returns the count of deleted files.
-  int delete(
-    dynamic dir, {
-    Pattern? pattern,
-    bool recursive = false,
-  }) {
+  int delete(Object dir, {Pattern? pattern, bool recursive = false}) {
     final d = dir is Directory ? dir : Directory(dir.toString());
     return Fs.delete(d, pattern: pattern, recursive: recursive);
   }
+
+  /// Reads or writes JSON data.
+  ///
+  /// If [data] is omitted, synchronously reads and parses JSON from [target].
+  /// If [data] is provided, serializes [data] and atomically writes it to [target].
+  ///
+  /// ```dart
+  /// // Read JSON
+  /// final config = fs.json('config.json');
+  ///
+  /// // Write JSON atomically
+  /// await fs.json('config.json', {'debug': true}, true);
+  /// ```
+  T json<T>(Object target, [Object? data, bool pretty = false]) =>
+      Fs.json<T>(target, data, pretty);
+
+  /// Streams lines from [target] file asynchronously using [encoding].
+  ///
+  /// ```dart
+  /// await for (final line in fs.lines('large_dataset.csv')) {
+  ///   print(line);
+  /// }
+  /// ```
+  Stream<String> lines(Object target, {Encoding encoding = utf8}) =>
+      Fs.lines(target, encoding: encoding);
+
+  /// Computes the cryptographic checksum (SHA-256 or MD5) of [target] file.
+  ///
+  /// ```dart
+  /// final sha = fs.hash('release.zip');
+  /// final md5Hex = fs.hash('release.zip', 'md5');
+  /// ```
+  String hash(Object target, [String algorithm = 'sha256']) =>
+      Fs.hash(target, algorithm);
+
+  /// Retrieves status and timestamp metadata for [target].
+  FileStat stat(Object target) => Fs.stat(target);
 }
 
 /// Static filesystem utilities class (also available via lowercase `fs.*`).
@@ -258,7 +276,10 @@ class Fs {
   static String size(int bytes, {int decimals = 1}) {
     if (bytes <= 0) return '0 B';
     const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
-    final i = (math.log(bytes) / math.log(1024)).floor().clamp(0, units.length - 1);
+    final i = (math.log(bytes) / math.log(1024)).floor().clamp(
+      0,
+      units.length - 1,
+    );
     final val = bytes / math.pow(1024, i);
     return '${val.toStringAsFixed(decimals)} ${units[i]}';
   }
@@ -322,7 +343,7 @@ class Fs {
   }
 
   /// Checks whether [target] file exists and has content > 0 bytes.
-  static bool has(dynamic target, {bool match = false}) {
+  static bool has(Object target, {bool match = false}) {
     final file = target is File ? target : File(target.toString());
     if (file.existsSync() && file.lengthSync() > 0) return true;
     if (match) return Fs.match(file);
@@ -330,7 +351,7 @@ class Fs {
   }
 
   /// Matches existing files in the directory by basename ignoring minor variations.
-  static bool match(dynamic target) {
+  static bool match(Object target) {
     final file = target is File ? target : File(target.toString());
     if (has(file)) return true;
     final par = file.parent;
@@ -348,13 +369,14 @@ class Fs {
 
   /// Atomically writes [content] to [target] with temporary `.part` file protection.
   static Future<File> write(
-    File target,
-    dynamic content, {
+    Object target,
+    Object content, {
     String part = '.part',
     Encoding encoding = utf8,
   }) async {
-    parent(target.path);
-    final partFile = File('${target.path}$part');
+    final file = target is File ? target : File(target.toString());
+    parent(file.path);
+    final partFile = File('${file.path}$part');
     if (partFile.existsSync()) partFile.deleteSync();
 
     Exit.track(partFile);
@@ -367,9 +389,9 @@ class Fs {
         throw ArgumentError('content must be List<int> or String');
       }
 
-      if (target.existsSync()) target.deleteSync();
-      partFile.renameSync(target.path);
-      return target;
+      if (file.existsSync()) file.deleteSync();
+      partFile.renameSync(file.path);
+      return file;
     } catch (_) {
       if (partFile.existsSync()) {
         try {
@@ -452,16 +474,16 @@ class Fs {
     return dir
         .listSync(recursive: recursive)
         .whereType<File>()
-        .where((f) => pattern == null || pattern.allMatches(p.basename(f.path)).isNotEmpty)
+        .where(
+          (f) =>
+              pattern == null ||
+              pattern.allMatches(p.basename(f.path)).isNotEmpty,
+        )
         .toList();
   }
 
   /// Deletes files in [dir] matching [pattern] and returns the count of deleted files.
-  static int delete(
-    Directory dir, {
-    Pattern? pattern,
-    bool recursive = false,
-  }) {
+  static int delete(Directory dir, {Pattern? pattern, bool recursive = false}) {
     if (!dir.existsSync()) return 0;
     var count = 0;
     for (final file in find(dir, pattern: pattern, recursive: recursive)) {
@@ -471,5 +493,174 @@ class Fs {
       } catch (_) {}
     }
     return count;
+  }
+
+  /// Reads or writes JSON data.
+  static T json<T>(Object target, [Object? data, bool pretty = false]) {
+    final file = target is File ? target : File(target.toString());
+    if (data != null) {
+      final encoder = pretty
+          ? const JsonEncoder.withIndent('  ')
+          : const JsonEncoder();
+      return write(file, encoder.convert(data)) as T;
+    }
+    return jsonDecode(file.readAsStringSync()) as T;
+  }
+
+  /// Streams lines from [target] file asynchronously using [encoding].
+  static Stream<String> lines(Object target, {Encoding encoding = utf8}) {
+    final file = target is File ? target : File(target.toString());
+    return file
+        .openRead()
+        .transform(encoding.decoder)
+        .transform(const LineSplitter());
+  }
+
+  /// Computes the cryptographic checksum (SHA-256 or MD5) of [target] file.
+  static String hash(Object target, [String algorithm = 'sha256']) {
+    final file = target is File ? target : File(target.toString());
+    final b = file.readAsBytesSync();
+    if (algorithm.toLowerCase() == 'md5') {
+      return md5.convert(b).toString();
+    }
+    return sha256.convert(b).toString();
+  }
+
+  /// Retrieves status and timestamp metadata for [target].
+  static FileStat stat(Object target) {
+    final file = target is File ? target : File(target.toString());
+    return file.statSync();
+  }
+}
+
+/// Archive compression, integrity testing, and volume management utility.
+///
+/// Wraps 7-Zip CLI (`7z`) with 1-word methods (`check`, `zip`, `wipe`, `sync`).
+/// Automatically discovers `7z.exe` in `PATH` or standard installation locations.
+class Archive {
+  /// Target archive file path.
+  final String path;
+
+  /// Creates an [Archive] bound to [path].
+  Archive(this.path);
+
+  /// Whether the archive file exists and is non-empty.
+  bool get exists => Fs.has(File(path));
+
+  /// Locates the 7-Zip (`7z`) binary in `PATH` or standard program directories.
+  static String? which({List<String>? paths}) {
+    return Sys.which(
+      '7z',
+      paths: [
+        r'D:\dev\winget\7zip.7zip\7z.exe',
+        r'C:\Program Files\7-Zip\7z.exe',
+        r'C:\Program Files (x86)\7-Zip\7z.exe',
+        ...?paths,
+      ],
+    );
+  }
+
+  /// Tests the structural integrity of [archivePath] using 7-Zip's test command (`7z t`).
+  static Future<bool> test(String archivePath, {String? exe}) async {
+    final bin = exe ?? which();
+    if (bin == null) return false;
+    final res = await Sys.run(bin, ['t', archivePath]);
+    return res.ok;
+  }
+
+  /// Compresses [sourcePath] into [archivePath] with compression [level] (0-9).
+  static Future<SysResult> pack(
+    String archivePath,
+    String sourcePath, {
+    int level = 5,
+    bool inherit = true,
+    String? exe,
+  }) async {
+    final bin = exe ?? which();
+    if (bin == null) {
+      return SysResult(code: 1, stdout: '', stderr: '7z executable not found');
+    }
+    return Sys.run(bin, [
+      'a',
+      '-mx=$level',
+      '-bsp1',
+      archivePath,
+      sourcePath,
+    ], inherit: inherit);
+  }
+
+  /// Deletes [archivePath] and any matching split multi-volume parts (e.g. `.7z.001`, `.7z.002`).
+  static int clean(String archivePath) {
+    final file = File(archivePath);
+    final dir = file.parent;
+    final name = file.uri.pathSegments.last;
+    return Fs.delete(
+      dir,
+      pattern: RegExp(
+        '^${RegExp.escape(name)}(\\.\\d+)?\$',
+        caseSensitive: false,
+      ),
+    );
+  }
+
+  /// Verifies the integrity of this archive file.
+  Future<bool> check({String? exe}) => Archive.test(path, exe: exe);
+
+  /// Compresses [sourcePath] into this archive file.
+  Future<SysResult> zip(
+    String sourcePath, {
+    int level = 5,
+    bool inherit = true,
+    String? exe,
+  }) =>
+      Archive.pack(path, sourcePath, level: level, inherit: inherit, exe: exe);
+
+  /// Wipes this archive file and any split volume segments.
+  int wipe() => Archive.clean(path);
+
+  /// Synchronizes [source] directory into this archive.
+  Future<String> sync(
+    String source, {
+    bool force = false,
+    bool changed = true,
+    int level = 5,
+  }) async {
+    final sourceDir = Directory(source);
+    if (!sourceDir.existsSync()) {
+      Console.logger.warn(
+        '"$source" directory not found, skipping compression.',
+      );
+      return 'Source folder missing';
+    }
+
+    final bin = which();
+    if (bin == null) {
+      Console.logger.error('7z.exe not found in PATH or standard folders.');
+      return '7z not found';
+    }
+
+    final file = File(path);
+    if (!force && !changed && file.existsSync()) {
+      Console.logger.write('Checking existing archive ($path)... ');
+      if (await check(exe: bin)) {
+        Console.logger.ok(
+          'Archive is intact and up-to-date, skipping compression.',
+        );
+        return 'Intact (up to date)';
+      }
+      Console.logger.warn('Archive check failed. Recreating archive...');
+    }
+
+    Console.logger.step(7, 7, 'Compressing "$source" into $path (1 volume)...');
+    wipe();
+
+    final res = await zip(source, level: level, exe: bin, inherit: true);
+    if (res.ok) {
+      Console.logger.ok('Successfully compressed $path into project root.');
+      return 'Created / Updated';
+    } else {
+      Console.logger.error('Compression failed with exit code ${res.code}.');
+      return 'Failed (${res.code})';
+    }
   }
 }

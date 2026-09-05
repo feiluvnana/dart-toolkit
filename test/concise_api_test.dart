@@ -36,13 +36,10 @@ void main() {
       pool.on.progress((item) => progressed.add(item as int));
       pool.on.done(() => completed = true);
 
-      final results = await pool.run<int, int>(
-        [1, 2, 3, 4],
-        (item) async {
-          await Future.delayed(const Duration(milliseconds: 10));
-          return item * 10;
-        },
-      );
+      final results = await pool.run<int, int>([1, 2, 3, 4], (item) async {
+        await Future.delayed(const Duration(milliseconds: 10));
+        return item * 10;
+      });
 
       expect(started, isTrue);
       expect(completed, isTrue);
@@ -50,11 +47,11 @@ void main() {
       expect(results, equals([10, 20, 30, 40]));
     });
 
-    test('Pool.each static helper executes tasks', () async {
-      final results = await Pool.each<String, String>(
+    test('concurrent.run helper executes tasks', () async {
+      final results = await concurrent.run<String, String>(
         ['a', 'b', 'c'],
         (s) async => s.toUpperCase(),
-        concurrency: 3,
+        size: 3,
       );
       expect(results, equals(['A', 'B', 'C']));
     });
@@ -74,10 +71,10 @@ void main() {
       </div>
     ''';
 
-    test('QueryResult link, links, src, srcs, lines, has, list', () {
+    test('QueryResult link, links, src, srcs, lines, hasClass, list', () {
       final q = $(html);
-      expect(q.has('active'), isTrue);
-      expect(q.has('missing'), isFalse);
+      expect(q.hasClass('active'), isTrue);
+      expect(q.hasClass('missing'), isFalse);
 
       expect(q.link('.mp3'), equals('/track/1.mp3'));
       expect(q.link('.flac'), equals('https://example.com/2.flac'));
@@ -132,20 +129,20 @@ void main() {
   });
 
   group('Condensed Namespaces', () {
-    test('Fs.archive and Proc.listen', () {
+    test('Fs.archive and Sys.listen', () {
       final arc = Fs.archive('test_sample.7z');
       expect(arc.exists, isFalse);
       expect(Archive.which(), isNotNull);
-      expect(() => Proc.listen(), returnsNormally);
+      expect(() => Sys.listen(), returnsNormally);
 
-      // Namespaced fs and sys
-      final arc2 = fs.archive('test_sample2.7z');
+      // Namespaced io and system
+      final arc2 = io.archive('test_sample2.7z');
       expect(arc2.exists, isFalse);
-      expect(() => sys.listen(), returnsNormally);
+      expect(() => system.listen(), returnsNormally);
     });
 
     test('console.writer.table and console.bar', () {
-      final t = console.writer.table(
+      final t = util.console.writer.table(
         ['Col 1', 'Col 2'],
         [
           ['Val 1', 'Val 2'],
@@ -154,29 +151,28 @@ void main() {
       expect(t.render(), contains('Col 1'));
       expect(t.render(), contains('Val 1'));
 
-      final bar = console.bar(10, 'Testing');
+      final bar = util.console.bar(10, 'Testing');
       expect(bar.total, equals(10));
     });
 
     test('console.logger sub-namespace provides logging methods', () {
-      expect(console.logger, isA<ConsoleLogger>());
-      expect(() => console.logger.info('Info message'), returnsNormally);
-      expect(() => console.logger.ok('Success message'), returnsNormally);
-      expect(() => console.logger.warn('Warn message'), returnsNormally);
-      expect(() => console.logger.error('Error message'), returnsNormally);
-      expect(() => console.logger.fail('Fail message'), returnsNormally);
-      expect(() => console.logger.step(1, 1, 'Step message'), returnsNormally);
-      expect(() => console.logger.debug('Debug message'), returnsNormally);
+      expect(util.console.logger, isA<ConsoleLogger>());
+      expect(() => util.console.logger.info('Info message'), returnsNormally);
+      expect(() => util.console.logger.ok('Success message'), returnsNormally);
+      expect(() => util.console.logger.warn('Warn message'), returnsNormally);
+      expect(() => util.console.logger.error('Error message'), returnsNormally);
+      expect(() => util.console.logger.step(1, 1, 'Step message'), returnsNormally);
+      expect(() => util.console.logger.debug('Debug message'), returnsNormally);
     });
 
     test('crawl accessor creates engine, dl, and parses DOM', () {
-      final eng = crawl.engine();
+      final eng = net.crawl.engine();
       expect(eng, isNotNull);
 
-      final dl = crawl.dl(base: 'output');
+      final dl = net.crawl.downloader(base: 'output');
       expect(dl.base, equals('output'));
 
-      final q = crawl.query('<div><span>Toolkit</span></div>');
+      final q = net.crawl.query('<div><span>Toolkit</span></div>');
       expect(q.find('span').text, equals('Toolkit'));
     });
   });
