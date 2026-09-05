@@ -14,7 +14,7 @@ void main(List<String> rawArgs) async {
 
   // 3. Web Crawling & Scraping (net.crawl.* or crawl.*)
   util.console.logger.step(2, 4, 'Crawling news headlines with crawl engine...');
-  final titles = await net.crawl('https://news.ycombinator.com')
+  final titles = await net.crawl<String>('https://news.ycombinator.com')
       .concurrent(concurrency)
       .collect<String>((res) {
         for (final title in res.$('.titleline > a').texts) {

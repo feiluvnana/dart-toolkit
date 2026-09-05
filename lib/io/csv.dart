@@ -157,6 +157,18 @@ class CsvAccessor {
     return records as List<T>;
   }
 
+  /// Reads a CSV file as a list of header-keyed maps (1-word).
+  Future<List<Map<String, String>>> maps(
+    Object filePath, {
+    String delimiter = ',',
+  }) => read<Map<String, String>>(filePath, header: true, delimiter: delimiter);
+
+  /// Reads a CSV file as a raw matrix of rows and column values (1-word).
+  Future<List<List<String>>> matrix(
+    Object filePath, {
+    String delimiter = ',',
+  }) => read<List<String>>(filePath, header: false, delimiter: delimiter);
+
   /// Atomically writes [data] (maps or matrix) to a CSV file (1-word).
   Future<File> write(
     Object filePath,

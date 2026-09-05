@@ -72,7 +72,7 @@ void main() {
       // filter
       final bonus = doc
           .find('.track')
-          .filter((el) => el.classes.contains('bonus'));
+          .filter((Element el) => el.classes.contains('bonus'));
       expect(bonus.length, equals(1));
       expect(bonus.find('.link').text, equals('Bonus Track'));
 

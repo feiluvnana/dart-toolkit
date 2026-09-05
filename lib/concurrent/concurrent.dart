@@ -110,7 +110,7 @@ class Pool {
         await Future.any(active);
       }
       if (delay > Duration.zero && i < list.length - 1) {
-        await Future.delayed(delay);
+        await Future<void>.delayed(delay);
       }
     }
 

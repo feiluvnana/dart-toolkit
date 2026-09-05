@@ -46,91 +46,6 @@ class SysEvents {
   }
 }
 
-/// System, process, environment, and graceful shutdown namespace accessor.
-class SysAccessor {
-  /// Sub-namespace for exit and shutdown lifecycle events.
-  final SysEvents on = SysEvents();
-
-  /// Creates a [SysAccessor] instance.
-  SysAccessor();
-
-  /// Executes an external process and returns its captured [SysResult].
-  ///
-  /// If [inherit] is true, streams standard input, output, and error directly to the console.
-  /// If [echo] is true, prints the command invocation before running.
-  /// Standard output and error can also be streamed line-by-line via [out] and [err] callbacks.
-  ///
-  /// Automatically registers the running process with signal cleanup so Ctrl+C will terminate it.
-  ///
-  /// ```dart
-  /// final res = await sys.run('git', ['status', '--short']);
-  /// if (res.ok) {
-  ///   print(res.stdout);
-  /// }
-  /// ```
-  Future<SysResult> run(
-    String executable,
-    List<String> arguments, {
-    String? cwd,
-    bool inherit = false,
-    bool echo = false,
-    Duration? timeout,
-    void Function(String line)? out,
-    void Function(String line)? err,
-  }) => Sys.run(
-    executable,
-    arguments,
-    cwd: cwd,
-    inherit: inherit,
-    echo: echo,
-    timeout: timeout,
-    out: out,
-    err: err,
-  );
-
-  /// Locates an executable binary in the system `PATH` or specified candidate [paths].
-  ///
-  /// On Windows, automatically checks `.exe`, `.cmd`, and `.bat` extensions.
-  ///
-  /// ```dart
-  /// final ffmpeg = sys.which('ffmpeg');
-  /// ```
-  String? which(String name, {List<String>? paths}) =>
-      Sys.which(name, paths: paths);
-
-  /// Starts listening for Ctrl+C (`SIGINT`) signals to invoke registered shutdown hooks.
-  void listen() => Exit.listen();
-
-  /// Stops listening for termination signals (1-word).
-  void unlisten() => Exit.unlisten();
-
-  /// Tracks a temporary or partial file for automatic deletion if the process is aborted.
-  void track(File file) => Exit.track(file);
-
-  /// Untracks a file after it has completed successfully, preventing cleanup.
-  void untrack(File file) => Exit.untrack(file);
-
-  /// Registers a shutdown cleanup callback.
-  void hook(FutureOr<void> Function() fn) => Exit.hook(fn);
-
-  /// Triggers an immediate graceful shutdown, executing hooks and cleaning up tracked files.
-  Future<void> now([int code = 0]) => Exit.now(code);
-
-  /// Reads an environment variable by [key].
-  String? env(String key) => Platform.environment[key];
-
-  /// Creates and starts a new [Stopwatch] benchmark timer.
-  Stopwatch clock() => Stopwatch()..start();
-
-  /// Whether the host platform is Windows.
-  bool get win => Platform.isWindows;
-
-  /// Whether the host platform is macOS.
-  bool get mac => Platform.isMacOS;
-
-  /// Whether the host platform is Linux.
-  bool get nix => Platform.isLinux;
-}
 
 /// System process and environment execution utilities class (available via lowercase `sys.*`).
 class Sys {
@@ -178,7 +93,7 @@ class Sys {
               : '',
         );
       } finally {
-        Exit.proc(process);
+        Exit.unproc(process);
       }
     }
 
@@ -237,7 +152,7 @@ class Sys {
         stderr: errBuf.toString(),
       );
     } finally {
-      Exit.proc(process);
+      Exit.unproc(process);
     }
   }
 
@@ -290,6 +205,12 @@ class Sys {
   /// Untracks a file after completion.
   static void untrack(File file) => Exit.untrack(file);
 
+  /// Tracks a child [process] to terminate on exit.
+  static void proc(Process process) => Exit.proc(process);
+
+  /// Untracks a child [process] after completion.
+  static void unproc(Process process) => Exit.unproc(process);
+
   /// Registers a shutdown cleanup callback.
   static void hook(FutureOr<void> Function() fn) => Exit.hook(fn);
 
@@ -339,6 +260,11 @@ class Exit {
   static void proc(Process process) {
     listen();
     _procs.add(process);
+  }
+
+  /// Untracks child [process] when successfully completed.
+  static void unproc(Process process) {
+    _procs.remove(process);
   }
 
   /// Registers an exit hook callback.

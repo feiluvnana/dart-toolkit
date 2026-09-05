@@ -20,6 +20,7 @@ import 'file.dart';
 /// // Or use the default shared store
 /// store.set('token', 'xyz');
 /// print(store.get('token'));
+/// ```
 /// Persistent key-value store backed by a local JSON file.
 class Store {
   final File? _file;
@@ -42,6 +43,9 @@ class Store {
     if (val is T) return val as T;
     return fallback;
   }
+
+  /// Retrieves a string value for [key] with an optional [fallback] (1-word).
+  String? str(String key, [String? fallback]) => get<String>(key, fallback);
 
   /// Sets a value for [key] (1-word).
   void set(String key, Object? value) {
@@ -73,7 +77,7 @@ class Store {
         if (decoded is Map) {
           _data.clear();
           for (final entry in decoded.entries) {
-            _data[entry.key.toString()] = entry.value;
+            _data[entry.key.toString()] = entry.value as Object?;
           }
         }
       }
@@ -117,6 +121,9 @@ class StoreAccessor {
 
   /// Retrieves a value from the default store (1-word).
   T? get<T>(String key, [T? fallback]) => _defaultStore.get<T>(key, fallback);
+
+  /// Retrieves a string value from the default store (1-word).
+  String? str(String key, [String? fallback]) => _defaultStore.str(key, fallback);
 
   /// Sets a value in the default store (1-word).
   void set(String key, Object? value) => _defaultStore.set(key, value);

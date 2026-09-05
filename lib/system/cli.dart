@@ -49,6 +49,10 @@ class CliAccessor {
   T get<T>(String name, [T? fallback, String? alias]) =>
       _instance.get<T>(name, fallback, alias);
 
+  /// Extracts an option value parsed as a [String] with an optional [fallback] (1-word).
+  String str(String name, [String fallback = '', String? alias]) =>
+      _instance.str(name, fallback, alias);
+
   /// Returns the unmodifiable list of positional non-option arguments.
   ///
   /// ```bash
@@ -175,7 +179,7 @@ class Cli {
     if (cleanAlias != null && _multi.containsKey(cleanAlias)) {
       values.addAll(_multi[cleanAlias]!);
     }
-    if (values.isEmpty) return [];
+    if (values.isEmpty) return <T>[];
 
     if (T == int) {
       return values.map((v) => int.tryParse(v)).whereType<T>().toList();
@@ -224,6 +228,10 @@ class Cli {
     }
     return val as T;
   }
+
+  /// Retrieves an option value as a [String] with an optional [fallback] (1-word).
+  String str(String name, [String fallback = '', String? alias]) =>
+      get<String>(name, fallback, alias);
 
   /// Displays or prints a formatted help screen for this CLI tool.
   void help({

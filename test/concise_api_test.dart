@@ -37,7 +37,7 @@ void main() {
       pool.on.done(() => completed = true);
 
       final results = await pool.run<int, int>([1, 2, 3, 4], (item) async {
-        await Future.delayed(const Duration(milliseconds: 10));
+        await Future<void>.delayed(const Duration(milliseconds: 10));
         return item * 10;
       });
 
@@ -94,8 +94,8 @@ void main() {
     });
 
     test('Response resolves relative URLs with link and src', () {
-      final res = Response(
-        request: Request.get('https://example.com/sub/index.html'),
+      final res = Response<void>(
+        request: Request<void>.get('https://example.com/sub/index.html'),
         bytes: html.codeUnits,
       );
 
@@ -166,10 +166,10 @@ void main() {
     });
 
     test('crawl accessor creates engine, dl, and parses DOM', () {
-      final eng = net.crawl.engine();
+      final eng = net.crawl.engine<Object>();
       expect(eng, isNotNull);
 
-      final dl = net.crawl.downloader(base: 'output');
+      final dl = net.crawl.downloader<Object>(base: 'output');
       expect(dl.base, equals('output'));
 
       final q = net.crawl.query('<div><span>Toolkit</span></div>');

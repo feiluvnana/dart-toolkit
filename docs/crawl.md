@@ -92,7 +92,7 @@ The crawling framework is organized into 4 focused, modular components:
 1. **`Engine`**: Coordinates the request queue, route dispatch, lifecycle events, and serves pending requests via `engine.serve()`.
 2. **`Downloader`**: Controls concurrency and rate-limiting delays. Workers in `downloader.work(engine)` actively pull requests from `engine.serve()`, execute HTTP requests, and yield responses.
 3. **`Processor` / `Router`**: Processes responses via pattern or tag handlers.
-4. **`Deduplicator`**: High-performance URL deduplication tracker (`add`, `has`, `see`, `clear`, `reset`) with automatic fragment and trailing slash normalization.
+4. **`Deduplicator`**: High-performance URL deduplication tracker (`add`, `has`, `clear`) with automatic fragment and trailing slash normalization.
 
 ```dart
 final engine = net.crawl.engine<Map<String, Object?>>(
@@ -111,13 +111,12 @@ final engine = net.crawl.engine<Map<String, Object?>>(
 | `base` | `String?` | `null` | Base storage folder for relative file saves. |
 | `dedupe` | `bool` | `true` | When true, ignores duplicate URLs (normalized, minus fragments). |
 | `downloader` / `dl` | `Downloader<T>?` | `HttpDownloader<T>()` | Custom or mocked HTTP downloader. |
-| `deduplicator` | `Deduplicator?` | `Deduplicator()` | Custom URL deduplication tracker (`add`, `has`, `see`, `clear`). |
+| `deduplicator` | `Deduplicator?` | `Deduplicator()` | Custom URL deduplication tracker (`add`, `has`, `clear`). |
 
 ### Deduplicator Methods (`engine.deduplicator.*`)
 - `deduplicator.has(url)`: Checks if a URL has already been visited.
 - `deduplicator.add(url)`: Adds a URL. Returns `true` if new, `false` if duplicate.
-- `deduplicator.see(url)`: Alias for `add`.
-- `deduplicator.clear()` / `reset()`: Clears visited history.
+- `deduplicator.clear()`: Clears visited history.
 
 ### Routing & Tagging
 Handlers can be registered directly on the engine using either URL patterns (`route`) or explicit pipeline tags (`tag`):

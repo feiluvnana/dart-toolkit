@@ -497,6 +497,11 @@ class ConsoleWriter {
     stdout.writeln(message);
   }
 
+  /// Writes a line to standard output (alias for [line]).
+  void writeln([String message = '']) {
+    stdout.writeln(message);
+  }
+
   /// Writes text to standard output without trailing newline.
   void write(String message) {
     stdout.write(message);

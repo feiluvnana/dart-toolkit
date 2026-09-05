@@ -11,11 +11,11 @@ export 'env.dart';
 export 'sys.dart';
 
 // ============================================================================
-final SysAccessor _sysAccessor = SysAccessor();
+final SysEvents _sysEvents = SysEvents();
 final EnvAccessor _sysEnv = EnvAccessor();
 final CliAccessor _sysCli = CliAccessor();
 
-/// Top-level System & OS domain accessor singleton (`system.*` or `sys.*`).
+/// Top-level System & OS domain accessor singleton (`system.*`).
 ///
 /// Provides unified access to subprocess execution, environment variables, CLI args, and shutdown signals.
 ///
@@ -43,7 +43,7 @@ class SystemAccessor {
   CliAccessor get cli => _sysCli;
 
   /// Sub-namespace for system lifecycle event listeners (`system.on.*`).
-  SysEvents get on => _sysAccessor.on;
+  SysEvents get on => _sysEvents;
 
   // --- Forwarded subprocess execution & OS methods ---
 
@@ -72,7 +72,7 @@ class SystemAccessor {
   String? which(String tool) => Sys.which(tool);
 
   /// Starts and returns a benchmark stopwatch (1-word).
-  Stopwatch clock() => _sysAccessor.clock();
+  Stopwatch clock() => Stopwatch()..start();
 
   /// Intercepts termination signals (SIGINT, SIGTERM) for graceful shutdown (1-word).
   void listen() => Sys.listen();
@@ -86,8 +86,17 @@ class SystemAccessor {
   /// Untracks a file after it has completed successfully, preventing cleanup.
   void untrack(File file) => Sys.untrack(file);
 
+  /// Tracks a child [process] to terminate on exit.
+  void proc(Process process) => Sys.proc(process);
+
+  /// Untracks a child [process] after completion.
+  void unproc(Process process) => Sys.unproc(process);
+
   /// Registers a cleanup hook to run on process exit (1-word).
   void hook(FutureOr<void> Function() fn) => Sys.hook(fn);
+
+  /// Triggers an immediate graceful shutdown, executing hooks and cleaning up tracked files (1-word).
+  Future<void> now([int code = 0]) => Sys.now(code);
 
   /// Terminates the process with an exit [code] (1-word).
   Never exit([int code = 0]) => io_pkg.exit(code);

@@ -32,18 +32,18 @@ class MockDownloader<T> extends Downloader<T> {
 
   @override
   Future<void> save(
-    Object targetOrRequest,
-    Object sourceOrDestination, {
+    Object destination,
+    Object source, {
     void Function(int received, int total)? onProgress,
     String part = '.part',
     bool match = true,
   }) async {
-    final Request<T> req = targetOrRequest is Request<T>
-        ? targetOrRequest
-        : Request<T>.get(sourceOrDestination);
-    final dest = sourceOrDestination is File
-        ? sourceOrDestination
-        : File(targetOrRequest.toString());
+    final Request<T> req = destination is Request<T>
+        ? destination
+        : Request<T>.get(source);
+    final dest = source is File
+        ? source
+        : File(destination.toString());
     final response = await download(req);
     await response.save(dest.path, null, part);
   }
@@ -337,7 +337,7 @@ void main() {
         final dl = MockDownloader<String>(mockData);
         final titles = <String>[];
 
-        final stats = await net.crawl('https://site.example.com')
+        final stats = await net.crawl<String>('https://site.example.com')
             .concurrent(2)
             .delay(Duration(milliseconds: 10))
             .downloader(dl)
@@ -364,7 +364,7 @@ void main() {
       final dl = MockDownloader<String>(mockData);
       final items = <String>[];
 
-      final stats = await net.crawl('https://site.example.com')
+      final stats = await net.crawl<String>('https://site.example.com')
           .concurrent(2)
           .downloader(dl)
           .tag('item', (res) {
@@ -386,7 +386,7 @@ void main() {
       };
       final dl = MockDownloader<String>(mockData);
 
-      final collected = await net.crawl('https://site.example.com')
+      final collected = await net.crawl<String>('https://site.example.com')
           .concurrent(2)
           .downloader(dl)
           .collect<String>((res) {

@@ -69,9 +69,6 @@ class Deduplicator {
     return _visited.add(_norm(uri));
   }
 
-  /// Marks [url] as visited (1-word).
-  bool see(Object url) => add(url);
-
   /// Clears the history of visited URLs (1-word).
   void clear() => _visited.clear();
 

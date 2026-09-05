@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:html/dom.dart';
 import 'package:html/parser.dart' as html_parser;
 import 'package:http/http.dart' as http_lib;
 
@@ -194,7 +193,7 @@ class HttpClient {
 
         if ((res.statusCode >= 500 || res.statusCode == 429) &&
             attempts < maxAttempts) {
-          await Future.delayed(backoff * attempts);
+          await Future<void>.delayed(backoff * attempts);
           continue;
         }
 
@@ -206,7 +205,7 @@ class HttpClient {
         );
       } catch (e) {
         if (attempts < maxAttempts) {
-          await Future.delayed(backoff * attempts);
+          await Future<void>.delayed(backoff * attempts);
           continue;
         }
         rethrow;
@@ -293,7 +292,7 @@ class HttpClient {
         return saved;
       } catch (e) {
         if (attempts < maxAttempts) {
-          await Future.delayed(backoff * attempts);
+          await Future<void>.delayed(backoff * attempts);
           continue;
         }
         rethrow;

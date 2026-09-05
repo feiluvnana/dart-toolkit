@@ -79,7 +79,7 @@ abstract class Downloader<T> {
       final request = engine.serve();
       if (request == null) {
         if (engine.idle) break;
-        await Future.delayed(const Duration(milliseconds: 50));
+        await Future<void>.delayed(const Duration(milliseconds: 50));
         continue;
       }
 
@@ -96,7 +96,7 @@ abstract class Downloader<T> {
       }
 
       if (delay > Duration.zero && !engine.stopped) {
-        await Future.delayed(delay);
+        await Future<void>.delayed(delay);
       }
     }
   }
@@ -135,10 +135,10 @@ abstract class Downloader<T> {
     return Fs.has(file, match: match);
   }
 
-  /// Downloads an asset from a source URL and saves it to a local destination file.
+  /// Downloads an asset from a [source] URL and saves it to a local [destination] file.
   Future<void> save(
-    Object targetOrRequest,
-    Object sourceOrDestination, {
+    Object destination,
+    Object source, {
     void Function(int received, int total)? onProgress,
     String part = '.part',
     bool match = true,
@@ -257,46 +257,44 @@ class HttpDownloader<T> extends Downloader<T> {
 
   @override
   Future<void> save(
-    Object targetOrRequest,
-    Object sourceOrDestination, {
+    Object destination,
+    Object source, {
     void Function(int received, int total)? onProgress,
     String part = '.part',
     bool match = true,
   }) async {
-    File destination;
+    File destFile;
     Uri url;
     Map<String, String> extraHeaders = {};
 
-    if (targetOrRequest is Request) {
-      destination = sourceOrDestination is File
-          ? sourceOrDestination
-          : _resolve(sourceOrDestination);
-      url = targetOrRequest.url;
-      extraHeaders = targetOrRequest.headers;
+    if (destination is Request) {
+      destFile = source is File ? source : _resolve(source);
+      url = destination.url;
+      extraHeaders = destination.headers;
     } else {
-      destination = _resolve(targetOrRequest);
-      if (sourceOrDestination is Request) {
-        url = sourceOrDestination.url;
-        extraHeaders = sourceOrDestination.headers;
-      } else if (sourceOrDestination is Uri) {
-        url = sourceOrDestination;
+      destFile = _resolve(destination);
+      if (source is Request) {
+        url = source.url;
+        extraHeaders = source.headers;
+      } else if (source is Uri) {
+        url = source;
       } else {
-        url = Uri.parse(sourceOrDestination.toString());
+        url = Uri.parse(source.toString());
       }
     }
 
-    if (Fs.has(destination, match: match)) {
+    if (Fs.has(destFile, match: match)) {
       return;
     }
 
     Console.logger.info(
-      'Downloading /${destination.path.replaceAll('\\', '/')}...',
+      'Downloading /${destFile.path.replaceAll('\\', '/')}...',
     );
 
     try {
       await _client.download(
         url,
-        destination,
+        destFile,
         headers: extraHeaders,
         onProgress: onProgress ?? on._progress,
         part: part,

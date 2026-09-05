@@ -174,7 +174,7 @@ void main() {
     test('concurrent.run executes tasks concurrently', () async {
       final items = [1, 2, 3, 4, 5];
       final processed = await concurrent.run(items, (n) async {
-        await Future.delayed(const Duration(milliseconds: 10));
+        await Future<void>.delayed(const Duration(milliseconds: 10));
         return n * 10;
       }, size: 2);
 
@@ -186,7 +186,7 @@ void main() {
       () async {
         final items = [30, 10, 20, 5];
         final results = await concurrent.run(items, (n) async {
-          await Future.delayed(Duration(milliseconds: n));
+          await Future<void>.delayed(Duration(milliseconds: n));
           return 'item-$n';
         }, size: 4);
         expect(results, equals(['item-30', 'item-10', 'item-20', 'item-5']));
@@ -201,7 +201,8 @@ void main() {
       expect(system.cli.has('force'), isTrue);
       expect(system.cli.has('p'), isTrue);
       expect(system.cli.get('p', 0), equals(8));
-      expect(system.cli.get('name'), equals('test'));
+      expect(system.cli.str('name'), equals('test'));
+      expect(system.cli.get<String>('name'), equals('test'));
       expect(system.cli.list(), equals(['file1', 'file2']));
     });
 
@@ -209,7 +210,7 @@ void main() {
       'system.cli.all collects multi-value options and system.cli.no checks negative flags',
       () {
         system.cli.parse(['--tag', 'a', '--tag', 'b', '--no-compress', '--cache']);
-        expect(system.cli.all('tag'), equals(['a', 'b']));
+        expect(system.cli.all<String>('tag'), equals(['a', 'b']));
         expect(system.cli.no('compress'), isTrue);
         expect(system.cli.has('compress'), isTrue);
         expect(system.cli.get<bool>('compress', true), isFalse);
@@ -224,7 +225,7 @@ void main() {
       try {
         final jsonFile = io.join(tempDir.path, 'data.json');
         await io.json(jsonFile, {'hello': 'world', 'count': 42}, true);
-        final data = io.json(jsonFile);
+        final data = io.json<Map<String, Object?>>(jsonFile);
         expect(data['hello'], equals('world'));
         expect(data['count'], equals(42));
 
@@ -238,12 +239,28 @@ void main() {
 
         final stat = io.stat(jsonFile);
         expect(stat.size, greaterThan(0));
+
+        // Test direct Map auto-serialization in io.write
+        final mapFile = io.join(tempDir.path, 'direct_map.json');
+        await io.write(mapFile, {'direct': true, 'num': 99});
+        final mapData = io.json<Map<String, Object?>>(mapFile);
+        expect(mapData['direct'], isTrue);
+        expect(mapData['num'], equals(99));
+
+        // Test Archive methods
+        final testArc = io.archive(io.join(tempDir.path, 'sample.7z'));
+        expect(testArc.check, isNotNull);
+        expect(testArc.zip, isNotNull);
+        expect(testArc.wipe, isNotNull);
+        expect(Archive.test, isNotNull);
+        expect(Archive.pack, isNotNull);
+        expect(Archive.clean, isNotNull);
       } finally {
         tempDir.deleteSync(recursive: true);
       }
     });
 
-    test('system platform predicates and timeout', () async {
+    test('system platform predicates, process tracking and timeout', () async {
       expect(system.win, equals(Platform.isWindows));
       expect(system.mac, equals(Platform.isMacOS));
       expect(system.nix, equals(Platform.isLinux));
@@ -252,14 +269,20 @@ void main() {
         '--version',
       ], timeout: const Duration(seconds: 10));
       expect(res.ok, isTrue);
+
+      // Verify Sys proc and unproc
+      expect(() => system.proc, returnsNormally);
+      expect(() => system.unproc, returnsNormally);
     });
 
-    test('util.console.logger respects LogLevel filter', () {
+    test('util.console.logger respects LogLevel filter and writer writeln', () {
       util.console.logger.level = LogLevel.warn;
       expect(() => util.console.logger.debug('should be silent'), returnsNormally);
       expect(() => util.console.logger.info('should be silent'), returnsNormally);
       expect(() => util.console.logger.warn('should output'), returnsNormally);
       util.console.logger.level = LogLevel.debug;
+
+      expect(() => util.console.writer.writeln('test line'), returnsNormally);
     });
 
     test('QueryResult prev, next, val, data (1-word)', () {
@@ -504,13 +527,14 @@ void main() {
         final written = await io.csv.write(filePath, data);
         expect(written.existsSync(), isTrue);
 
-        final readMaps = await io.csv.read(filePath);
+        final readMaps = await io.csv.read<Map<String, String>>(filePath);
         expect(readMaps.length, equals(2));
         expect(readMaps[0]['fruit'], equals('Apple'));
         expect(readMaps[0]['price'], equals('1.50'));
         expect(readMaps[1]['fruit'], equals('Banana'));
 
-        final readMatrix = await io.csv.read(filePath, header: false);
+        final readMatrix =
+            await io.csv.read<List<String>>(filePath, header: false);
         expect(readMatrix.length, equals(3)); // header + 2 data rows
       } finally {
         tempDir.deleteSync(recursive: true);
@@ -527,8 +551,9 @@ void main() {
         io.store.set('counter', 42);
 
         expect(io.store.has('theme'), isTrue);
-        expect(io.store.get('theme'), equals('dark'));
-        expect(io.store.get('counter'), equals(42));
+        expect(io.store.str('theme'), equals('dark'));
+        expect(io.store.get<String>('theme'), equals('dark'));
+        expect(io.store.get<int>('counter'), equals(42));
         expect(io.store.get('missing', 'default'), equals('default'));
 
         io.store.delete('theme');
@@ -546,8 +571,9 @@ void main() {
           expect(File(dbFile).existsSync(), isTrue);
 
           final db2 = io.store.open(dbFile);
-          expect(db2.get('user_id'), equals('user_101'));
-          expect(db2.get('visits'), equals(5));
+          expect(db2.str('user_id'), equals('user_101'));
+          expect(db2.get<String>('user_id'), equals('user_101'));
+          expect(db2.get<int>('visits'), equals(5));
 
           db2.clear();
           expect(db2.isEmpty, isTrue);
@@ -584,7 +610,7 @@ void main() {
         await io.csv.write(csvPath, [
           {'key': 'k1', 'val': 'v1'},
         ]);
-        final csvRows = await io.csv.read(csvPath);
+        final csvRows = await io.csv.read<Map<String, String>>(csvPath);
         expect(csvRows.length, equals(1));
         expect(csvRows[0]['key'], equals('k1'));
 
@@ -623,7 +649,8 @@ void main() {
       // CLI
       system.cli.parse(['--mode=release', '-v', 'target.dart']);
       expect(system.cli.has('v'), isTrue);
-      expect(system.cli.get('mode'), equals('release'));
+      expect(system.cli.str('mode'), equals('release'));
+      expect(system.cli.get<String>('mode'), equals('release'));
 
       // Clock
       final sw = system.clock();

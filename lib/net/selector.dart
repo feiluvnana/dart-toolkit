@@ -3,6 +3,8 @@ import 'dart:collection';
 import 'package:html/dom.dart';
 import 'package:html/parser.dart' as html_parser;
 
+export 'package:html/dom.dart' show Document, Element;
+
 // ============================================================================
 // SELECTOR & QUERY RESULT ($() and QueryResult)
 // ============================================================================
@@ -161,7 +163,11 @@ class QueryResult with IterableMixin<Element> {
   /// Filters the collection by a CSS selector string or predicate function `bool Function(Element)`.
   QueryResult filter(Object test) {
     if (test is String) {
-      return filterBy(test);
+      return filter((Element elem) {
+        final parent = elem.parent;
+        if (parent == null) return false;
+        return parent.querySelectorAll(test).contains(elem);
+      });
     } else if (test is bool Function(Element)) {
       return QueryResult(_elements.where(test).toList());
     } else if (test is Function) {
@@ -176,15 +182,6 @@ class QueryResult with IterableMixin<Element> {
       );
     }
     return this;
-  }
-
-  /// Retains only elements that match the given CSS [selector].
-  QueryResult filterBy(String selector) {
-    return filter((Element elem) {
-      final parent = elem.parent;
-      if (parent == null) return false;
-      return parent.querySelectorAll(selector).contains(elem);
-    });
   }
 
   /// Removes elements that match the given CSS [selector].

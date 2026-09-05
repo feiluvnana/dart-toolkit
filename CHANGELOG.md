@@ -19,7 +19,7 @@ All notable changes to this project will be documented in this file.
 - **Zero `dynamic` Usage Across Codebase**:
   - Completely eliminated the `dynamic` type across `lib/`, `bin/`, `example/`, and `test/`.
   - Replaced all loosely typed parameters and variables with concrete types, generics (`<T>`), `Object`, and `Object?`.
-  - Enabled `strict-casts: true` and the `avoid_annotating_with_dynamic: true` linter rule in `analysis_options.yaml`.
+  - Enabled `strict-casts: true`, `strict-inference: true`, `strict-raw-types: true`, and the `avoid_dynamic_calls` and `avoid_annotating_with_dynamic` rules in `analysis_options.yaml`.
 - **Complete Elimination of Legacy Compatibility Variables & Shims**:
   - Removed legacy forwarder file `lib/crawler.dart`.
   - Merged archive logic directly into `lib/io/` for a unified filesystem and archive architecture.
@@ -30,8 +30,14 @@ All notable changes to this project will be documented in this file.
     - `console.logger`: removed `success` (use `ok`), `warning` (use `warn`), `fail` (use `error`), and `line` (use `writeln`).
     - `console.ansi`: removed `Ansi.len` and `String.len` (use `visibleLength`).
     - `concurrent`: consolidated `each`, `map` into `concurrent.run`.
-    - `crawl`: removed `Deduplicator.reset` (use `clear`), `Engine.isIdle` (use `idle`), `Engine.url` (use `add`), `QueryResult.toElements` (use `list`), `QueryResult.has` (use `hasClass`), and `CrawlBuilder.process` (use `run`).
-    - `system`: removed redundant `sys.exit` alias in favor of `exit()`.
+    - `crawl`: removed `Deduplicator.reset` and `Deduplicator.see` (use `add` or `clear`), `Engine.isIdle` (use `idle`), `Engine.url` (use `add`), `QueryResult.toElements` (use `list`), `QueryResult.has` (use `hasClass`), `QueryResult.filterBy` (use `filter`), and `CrawlBuilder.process` (use `run`).
+    - `io`: removed `FsAccessor` (consolidated into `IoAccessor`) and `Fs.mkdirSync` (use `Fs.mkdir(..., sync: true)`).
+    - `system`: removed `SysAccessor` (consolidated into `SystemAccessor`) and redundant `sys.exit` alias in favor of `exit()`.
+- **API Simplifications & Consistency Enhancements**:
+  - `io.write`: Automatically serializes non-string/bytes objects (such as `Map` and `List`) to formatted JSON, enabling clean atomic writes (`await io.write('data.json', {'debug': true})`).
+  - `Downloader.save`: Standardized parameter ordering to `save(destination, source)` across `Downloader` and `HttpDownloader`, aligning with `Response.save(dest, source)` and `Engine.save(dest, source)`.
+  - `Sys.run` & `Exit`: Added `Sys.proc`, `Sys.unproc`, `system.proc`, and `system.unproc`. Fixed process lifecycle cleanup by untracking completed child processes in `Sys.run`'s `finally` block, preventing process reference leaks.
+  - `util.console.writer`: Added `writeln` method for API consistency across `ConsoleLogger`, `ConsoleWriter`, and `Console`.
 
 ## 1.2.0
 
