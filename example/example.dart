@@ -14,15 +14,13 @@ void main(List<String> rawArgs) async {
 
   // 3. Web Crawling & Scraping with Engine
   console.logger.step(2, 4, 'Crawling news headlines with crawl engine...');
-  final titles = await crawl.collect<String>(
-    'https://news.ycombinator.com',
-    (res) {
-      for (final title in res.$('.titleline > a').texts) {
-        res.emit(title);
-      }
-    },
-    concurrency: concurrency,
-  );
+  final titles = await crawl('https://news.ycombinator.com')
+      .concurrent(concurrency)
+      .collect<String>((res) {
+        for (final title in res.$('.titleline > a').texts) {
+          res.emit(title);
+        }
+      });
   console.logger.ok('Engine collected ${titles.length} news items.');
 
   // 4. Concurrently processing items

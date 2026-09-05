@@ -62,15 +62,13 @@ void main(List<String> rawArgs) async {
 
   // 3. Web Crawling & Scraping with Engine
   console.logger.step(1, 4, 'Crawling news headlines...');
-  final titles = await crawl.collect<String>(
-    'https://news.ycombinator.com',
-    (res) {
-      for (final title in res.$('.titleline > a').texts) {
-        res.emit(title);
-      }
-    },
-    concurrency: poolSize,
-  );
+  final titles = await crawl('https://news.ycombinator.com')
+      .concurrent(poolSize)
+      .collect<String>((res) {
+        for (final title in res.$('.titleline > a').texts) {
+          res.emit(title);
+        }
+      });
   console.logger.ok('Found ${titles.length} news items.');
 
   // 4. Concurrently process items with progress bar
@@ -175,15 +173,11 @@ void main(List<String> rawArgs) async {
 ### 3. `crawl.*` & `$()` &mdash; Web Scraping & Crawler Engine
 [Read Detailed Guide &rarr;](docs/crawl.md)
 
-- **Function-Based & Engine-Powered Crawling**:
-  - `await crawl(urls, handler, {tags, routes, concurrency, dl, base})`: Function-based end-to-end crawl with multi-stage tags/routes.
-  - `crawl.run(startUrls, (res) async { ... }, {concurrency, base, dl})`: Multi-step recursive crawl.
-  - `crawl.collect<T>(startUrls, (res) { res.emit(item); })`: Collect emitted items directly into a `List<T>`.
-  - `final engine = crawl.engine({concurrency, base, dl});`:
-    - `engine.route(pattern, (res) => ...)`: Route requests matching URL pattern.
-    - `engine.tag(tagName, (res) => ...)`: Handle requests tagged with specific label.
-    - `engine.on.progress((res) => ...)`: Progress callback per completed request.
-    - `engine.run(urls)`: Execute crawling workflow.
+- **Fluent Builder Crawling (`crawl(urls)`)**:
+  - `await crawl(urls).concurrent(n).delay(d).base(...).tag(...).run(process)`: Builder pattern with process-only argument.
+  - `await crawl(urls).concurrent(n).collect<T>(process)`: Collect emitted items into a typed `List<T>`.
+  - `await crawl.run(startUrls, process)` / `await crawl.collect(...)`: Quick functional shortcuts.
+  - `final engine = crawl.engine({concurrency, base, dl});`: Direct engine coordinator.
 - **Pipeline Response Controls (`res.*`)**:
   - `res.follow(url, {tag, meta, priority})`: Schedule URL to crawl next (auto-resolves relative URLs).
   - `res.save(filePath, [sourceUrl])`: Save response body or stream remote asset to disk atomically.

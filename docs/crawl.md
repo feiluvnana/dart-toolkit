@@ -15,63 +15,57 @@ void main() async {
   final titles = res.$('.titleline > a').texts;
   console.logger.ok('Fetched ${titles.length} news titles.');
 
-  // 2. Function-based crawling with declarative tags
-  await crawl(
-    'https://example.com/catalog',
-    (res) {
-      for (final a in res.$('.item-card a')) {
-        res.follow(a.attr('href')!, tag: 'item');
-      }
-    },
-    tags: {
-      'item': (res) async {
+  // 2. Fluent builder crawler with concurrent, delay, and process-only arguments
+  await crawl('https://example.com/catalog')
+      .concurrent(4)
+      .delay(Duration(milliseconds: 100))
+      .base('downloads')
+      .tag('item', (res) async {
         final title = res.$('h1.title').text;
         final pdfUrl = res.link('.pdf');
         if (pdfUrl != null) {
           await res.save('docs/$title.pdf', pdfUrl);
         }
-      },
-    },
-    concurrency: 4,
-    base: 'downloads',
-  );
+      })
+      .run((res) {
+        for (final a in res.$('.item-card a')) {
+          res.follow(a.attr('href')!, tag: 'item');
+        }
+      });
 }
 ```
 
 ---
 
-## 1. Function-Based Crawler (`crawl(...)` / `crawl.run`)
+## 1. Fluent Crawler Builder (`crawl(...)`)
 
-### `await crawl(urls, handler, {tags, routes, concurrency, base, delay, dl, ...})`
-Executes an end-to-end multi-page crawling session starting from `urls` directly as a function call, returning `Stats`:
+### Builder Pattern with Process-Only Arguments
+Options like `concurrent`, `delay`, `base`, `dl`, and `tag` are configured via method chaining. Execution methods (`run`, `process`, `collect`) accept only the process function:
 
 ```dart
-final stats = await crawl.run(
-  'https://books.toscrape.com',
-  (res) async {
-    if (res.tag == 'book') {
+final stats = await crawl('https://books.toscrape.com')
+    .concurrent(4)
+    .delay(Duration(milliseconds: 100))
+    .tag('book', (res) async {
       final title = res.$('h1').text;
       final price = res.$('.price_color').text;
       console.logger.info('$title -> $price');
-    } else {
-      // Album or Catalog page: follow product links and pagination
+    })
+    .run((res) async {
+      // Catalog page: follow product links and pagination
       for (final a in res.$('.product_pod h3 a')) {
         res.follow(a.attr('href')!, tag: 'book');
       }
       if (res.link('next') case final next?) {
         res.follow(next);
       }
-    }
-  },
-  concurrency: 4,
-  delay: Duration(milliseconds: 100),
-);
+    });
 
 console.logger.ok('Crawled ${stats.completed} pages in ${stats.elapsed}.');
 ```
 
-### `crawl.collect<T>(urls, handler, {concurrency, base, dl})`
-Crawls URLs and collects all items emitted via `res.emit(item)` into a strongly typed `List<T>`:
+### `crawl(urls).concurrent(n).collect<T>(process)`
+Crawls URLs with bounded concurrency and collects all emitted items via `res.emit(item)` into a typed `List<T>`:
 
 ```dart
 final headlines = await crawl.collect<String>(
