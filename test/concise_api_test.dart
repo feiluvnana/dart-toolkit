@@ -158,6 +158,17 @@ void main() {
       expect(bar.total, equals(10));
     });
 
+    test('console.logger sub-namespace provides logging methods', () {
+      expect(console.logger, isA<ConsoleLogger>());
+      expect(() => console.logger.info('Info message'), returnsNormally);
+      expect(() => console.logger.ok('Success message'), returnsNormally);
+      expect(() => console.logger.warn('Warn message'), returnsNormally);
+      expect(() => console.logger.error('Error message'), returnsNormally);
+      expect(() => console.logger.fail('Fail message'), returnsNormally);
+      expect(() => console.logger.step(1, 1, 'Step message'), returnsNormally);
+      expect(() => console.logger.debug('Debug message'), returnsNormally);
+    });
+
     test('crawl accessor creates engine, dl, and parses DOM', () {
       final eng = crawl.engine();
       expect(eng, isNotNull);

@@ -12,10 +12,10 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 void main() async {
   // 1. Zero-dependency path operations
   final filePath = fs.join('data', 'reports', '2026.json');
-  console.info('Base: ${fs.base(filePath)}'); // 2026.json
-  console.info('Name: ${fs.name(filePath)}'); // 2026
-  console.info('Ext:  ${fs.ext(filePath)}');  // .json
-  console.info('Dir:  ${fs.dir(filePath)}');  // data/reports
+  console.logger.info('Base: ${fs.base(filePath)}'); // 2026.json
+  console.logger.info('Name: ${fs.name(filePath)}'); // 2026
+  console.logger.info('Ext:  ${fs.ext(filePath)}');  // .json
+  console.logger.info('Dir:  ${fs.dir(filePath)}');  // data/reports
 
   // 2. Atomic file write (.part staging + rename)
   await fs.write(filePath, '{"status": "ok"}');
@@ -97,7 +97,7 @@ Checks if a file exists and is not empty (`length > 0`):
 
 ```dart
 if (fs.has('output/cache.bin')) {
-  console.ok('Cache exists and has valid data.');
+  console.logger.ok('Cache exists and has valid data.');
 }
 ```
 
@@ -108,7 +108,7 @@ Recursively finds files matching regex or substring:
 // Find all audio files
 final audioFiles = fs.find('media', RegExp(r'\.(mp3|flac|wav)$'));
 for (final f in audioFiles) {
-  console.info('Found: ${f.path} (${fs.size(f.lengthSync())})');
+  console.logger.info('Found: ${f.path} (${fs.size(f.lengthSync())})');
 }
 ```
 
@@ -168,5 +168,5 @@ final result = await arc.sync(
   changed: true,
 );
 
-console.ok('Archive result: $result'); // "Created", "Verified", or "Updated"
+console.logger.ok('Archive result: $result'); // "Created", "Verified", or "Updated"
 ```

@@ -315,5 +315,58 @@ void main() {
       expect(stats.completed, equals(2));
       expect(results, equals(['Super Gadget']));
     });
+
+    test('crawl(...) functional invocation works with single handler', () async {
+      final mockData = {
+        'https://site.example.com': '<h1>Hello World</h1><a href="/sub">Sub</a>',
+        'https://site.example.com/sub': '<h2>Subpage</h2>',
+      };
+      final dl = MockDownloader<String>(mockData);
+      final titles = <String>[];
+
+      final stats = await crawl(
+        'https://site.example.com',
+        (res) {
+          if (res.url.path == '/sub') {
+            titles.add(res.$('h2').text);
+          } else {
+            titles.add(res.$('h1').text);
+            res.follow('/sub');
+          }
+        },
+        dl: dl,
+      );
+
+      expect(stats.completed, equals(2));
+      expect(titles, equals(['Hello World', 'Subpage']));
+    });
+
+    test('crawl(...) functional invocation works with multi-stage tags', () async {
+      final mockData = {
+        'https://site.example.com': '<h1>Root</h1><a href="/item1">Item 1</a><a href="/item2">Item 2</a>',
+        'https://site.example.com/item1': '<span>Item One</span>',
+        'https://site.example.com/item2': '<span>Item Two</span>',
+      };
+      final dl = MockDownloader<String>(mockData);
+      final items = <String>[];
+
+      final stats = await crawl(
+        'https://site.example.com',
+        (res) {
+          for (final a in res.$('a')) {
+            res.follow(a.attr('href')!, tag: 'item');
+          }
+        },
+        dl: dl,
+        tags: {
+          'item': (res) {
+            items.add(res.$('span').text);
+          },
+        },
+      );
+
+      expect(stats.completed, equals(3));
+      expect(items, equals(['Item One', 'Item Two']));
+    });
   });
 }

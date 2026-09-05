@@ -119,35 +119,35 @@ class Archive {
   }) async {
     final sourceDir = Directory(source);
     if (!sourceDir.existsSync()) {
-      Console.warn('"$source" directory not found, skipping compression.');
+      Console.logger.warn('"$source" directory not found, skipping compression.');
       return 'Source folder missing';
     }
 
     final bin = which();
     if (bin == null) {
-      Console.error('7z.exe not found in PATH or standard folders.');
+      Console.logger.error('7z.exe not found in PATH or standard folders.');
       return '7z not found';
     }
 
     final file = File(path);
     if (!force && !changed && file.existsSync()) {
-      Console.write('Checking existing archive ($path)... ');
+      Console.logger.write('Checking existing archive ($path)... ');
       if (await check(exe: bin)) {
-        Console.ok('Archive is intact and up-to-date, skipping compression.');
+        Console.logger.ok('Archive is intact and up-to-date, skipping compression.');
         return 'Intact (up to date)';
       }
-      Console.warn('Archive check failed. Recreating archive...');
+      Console.logger.warn('Archive check failed. Recreating archive...');
     }
 
-    Console.step(7, 7, 'Compressing "$source" into $path (1 volume)...');
+    Console.logger.step(7, 7, 'Compressing "$source" into $path (1 volume)...');
     wipe();
 
     final res = await zip(source, level: level, exe: bin, inherit: true);
     if (res.ok) {
-      Console.ok('Successfully compressed $path into project root.');
+      Console.logger.ok('Successfully compressed $path into project root.');
       return 'Created / Updated';
     } else {
-      Console.error('Compression failed with exit code ${res.code}.');
+      Console.logger.error('Compression failed with exit code ${res.code}.');
       return 'Failed (${res.code})';
     }
   }

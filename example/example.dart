@@ -10,10 +10,10 @@ void main(List<String> rawArgs) async {
   sys.listen();
   final clock = sys.clock();
 
-  console.step(1, 4, 'Starting automation workflow...');
+  console.logger.step(1, 4, 'Starting automation workflow...');
 
   // 3. Web Crawling & Scraping with Engine
-  console.step(2, 4, 'Crawling news headlines with crawl engine...');
+  console.logger.step(2, 4, 'Crawling news headlines with crawl engine...');
   final titles = await crawl.collect<String>(
     'https://news.ycombinator.com',
     (res) {
@@ -23,10 +23,10 @@ void main(List<String> rawArgs) async {
     },
     concurrency: concurrency,
   );
-  console.ok('Engine collected ${titles.length} news items.');
+  console.logger.ok('Engine collected ${titles.length} news items.');
 
   // 4. Concurrently processing items
-  console.step(3, 4, 'Processing items concurrently...');
+  console.logger.step(3, 4, 'Processing items concurrently...');
   final bar = console.bar(titles.take(10).length, 'Processing');
   final processed = await parallel.run(titles.take(10), (title) async {
     await Future.delayed(const Duration(milliseconds: 50));
@@ -36,11 +36,11 @@ void main(List<String> rawArgs) async {
   bar.done();
 
   // 5. Atomic File System & Paths
-  console.step(4, 4, 'Saving output atomically...');
+  console.logger.step(4, 4, 'Saving output atomically...');
   final outFile = fs.join('output', 'summary.txt');
   if (force || !fs.has(outFile)) {
     await fs.write(outFile, processed.join('\n'));
-    console.ok('Saved output to $outFile');
+    console.logger.ok('Saved output to $outFile');
   }
 
   // 6. Visual Table Output
@@ -51,5 +51,5 @@ void main(List<String> rawArgs) async {
     ['Elapsed Time', fs.time(clock.elapsed)],
   ]);
 
-  console.ok('Automation finished successfully!');
+  console.logger.ok('Automation finished successfully!');
 }

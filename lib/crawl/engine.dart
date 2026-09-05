@@ -315,7 +315,10 @@ class Engine<T> {
         if (on._response != null) {
           await on._response!(response, this);
         } else if (router.isNotEmpty) {
-          await router(response, this);
+          final matched = await router.handle(response, this);
+          if (!matched) {
+            await processor(response, this);
+          }
         } else {
           await processor(response, this);
         }

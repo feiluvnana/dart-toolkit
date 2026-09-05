@@ -6,6 +6,7 @@ import 'package:html/dom.dart';
 import 'package:html/parser.dart' as html_parser;
 
 import '../fs/fs.dart';
+import 'downloader.dart';
 import 'engine.dart';
 import 'selector.dart';
 
@@ -172,6 +173,9 @@ class Response<T> {
 
   /// Request routing tag.
   String? get tag => request.tag;
+
+  /// Downloader component associated with this response's crawl engine.
+  Downloader<T>? get dl => engine?.dl;
 
   /// Extracts non-empty text lines from the document body, stripping HTML tags and splitting on breaks.
   List<String> get lines => QueryResult([doc.documentElement ?? doc.body ?? Element.tag('body')]).lines;
@@ -400,16 +404,24 @@ class Router<T> {
   }
 
   /// Evaluates routing rules against [response] and invokes the first matching handler.
-  Future<void> call(Response<T> response, Engine<T> engine) async {
+  /// Returns `true` if a matching rule or explicit fallback handled the response, `false` otherwise.
+  Future<bool> handle(Response<T> response, Engine<T> engine) async {
     for (final rule in _rules) {
       if (rule.test(response)) {
         await rule.handler(response, engine);
-        return;
+        return true;
       }
     }
     if (_fallback != null) {
       await _fallback!(response, engine);
+      return true;
     }
+    return false;
+  }
+
+  /// Evaluates routing rules against [response] and invokes the first matching handler.
+  Future<void> call(Response<T> response, Engine<T> engine) async {
+    await handle(response, engine);
   }
 }
 

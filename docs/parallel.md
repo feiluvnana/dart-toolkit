@@ -22,7 +22,7 @@ void main() async {
     return res.json;
   }, size: 2);
 
-  console.ok('Fetched ${results.length} records.');
+  console.logger.ok('Fetched ${results.length} records.');
 }
 ```
 
@@ -69,10 +69,10 @@ final pool = parallel.pool(4);
 final bar = console.bar(tasks.length, 'Executing');
 
 // Register lifecycle hooks
-pool.on.start(() => console.info('Worker pool started'));
+pool.on.start(() => console.logger.info('Worker pool started'));
 pool.on.progress((task) => bar.tick(1, task.name));
 pool.on.done(() => bar.done('All tasks completed!'));
-pool.on.error((err) => console.fail('Task failed: $err'));
+pool.on.error((err) => console.logger.fail('Task failed: $err'));
 
 await pool.run(tasks, (t) async {
   await executeTask(t);

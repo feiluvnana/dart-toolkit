@@ -267,7 +267,7 @@ class HttpDownloader<T> extends Downloader<T> {
     }
 
     final merged = Map<String, String>.from(headers)..addAll(extraHeaders);
-    Console.info('Downloading /${destination.path.replaceAll('\\', '/')}...');
+    Console.logger.info('Downloading /${destination.path.replaceAll('\\', '/')}...');
 
     try {
       await Fs.download(

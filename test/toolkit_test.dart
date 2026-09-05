@@ -23,10 +23,27 @@ void main() {
       console.writer.rule('Test Rule');
     });
 
-    test('console.reader is accessible and console.task runs task', () async {
+    test('console.reader and console.logger are accessible and console.logger.task runs task', () async {
       expect(console.reader, isNotNull);
-      final res = await console.task('Running quick task', () async => 42);
+      expect(console.logger, isNotNull);
+      expect(Console.logger, isNotNull);
+      final res = await console.logger.task('Running quick task', () async => 42);
       expect(res, equals(42));
+    });
+
+    test('console.logger methods execute without errors', () {
+      expect(() => console.logger.info('Test info'), returnsNormally);
+      expect(() => console.logger.ok('Test ok'), returnsNormally);
+      expect(() => console.logger.success('Test success'), returnsNormally);
+      expect(() => console.logger.warn('Test warn'), returnsNormally);
+      expect(() => console.logger.warning('Test warning'), returnsNormally);
+      expect(() => console.logger.error('Test error'), returnsNormally);
+      expect(() => console.logger.fail('Test fail'), returnsNormally);
+      expect(() => console.logger.step(1, 2, 'Test step'), returnsNormally);
+      expect(() => console.logger.debug('Test debug'), returnsNormally);
+      expect(() => console.logger.write(''), returnsNormally);
+      expect(() => console.logger.writeln('Test line'), returnsNormally);
+      expect(() => console.logger.line('Test line 2'), returnsNormally);
     });
   });
 

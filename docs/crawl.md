@@ -13,35 +13,37 @@ void main() async {
   // 1. One-liner scraping with jQuery-like selector
   final res = await crawl.get('https://news.ycombinator.com');
   final titles = res.$('.titleline > a').texts;
-  console.ok('Fetched ${titles.length} news titles.');
+  console.logger.ok('Fetched ${titles.length} news titles.');
 
-  // 2. Multi-step crawler with declarative routes
-  final app = crawl.engine(concurrency: 4, base: 'downloads');
-
-  app.route(RegExp(r'/catalog$'), (res) {
-    for (final a in res.$('.item-card a')) {
-      res.follow(a.attr('href')!, tag: 'item');
-    }
-  });
-
-  app.tag('item', (res) async {
-    final title = res.$('h1.title').text;
-    final pdfUrl = res.link('.pdf');
-    if (pdfUrl != null) {
-      await res.save('docs/$title.pdf', pdfUrl);
-    }
-  });
-
-  await app.run(['https://example.com/catalog']);
+  // 2. Function-based crawling with declarative tags
+  await crawl(
+    'https://example.com/catalog',
+    (res) {
+      for (final a in res.$('.item-card a')) {
+        res.follow(a.attr('href')!, tag: 'item');
+      }
+    },
+    tags: {
+      'item': (res) async {
+        final title = res.$('h1.title').text;
+        final pdfUrl = res.link('.pdf');
+        if (pdfUrl != null) {
+          await res.save('docs/$title.pdf', pdfUrl);
+        }
+      },
+    },
+    concurrency: 4,
+    base: 'downloads',
+  );
 }
 ```
 
 ---
 
-## 1. High-Level Crawler Workflows
+## 1. Function-Based Crawler (`crawl(...)` / `crawl.run`)
 
-### `crawl.run(urls, handler, {concurrency, base, delay, dedupe, dl})`
-Executes an end-to-end multi-page crawling session starting from `urls` and returns a `Stats` summary:
+### `await crawl(urls, handler, {tags, routes, concurrency, base, delay, dl, ...})`
+Executes an end-to-end multi-page crawling session starting from `urls` directly as a function call, returning `Stats`:
 
 ```dart
 final stats = await crawl.run(
@@ -50,7 +52,7 @@ final stats = await crawl.run(
     if (res.tag == 'book') {
       final title = res.$('h1').text;
       final price = res.$('.price_color').text;
-      console.info('$title -> $price');
+      console.logger.info('$title -> $price');
     } else {
       // Album or Catalog page: follow product links and pagination
       for (final a in res.$('.product_pod h3 a')) {
@@ -65,7 +67,7 @@ final stats = await crawl.run(
   delay: Duration(milliseconds: 100),
 );
 
-console.ok('Crawled ${stats.completed} pages in ${stats.elapsed}.');
+console.logger.ok('Crawled ${stats.completed} pages in ${stats.elapsed}.');
 ```
 
 ### `crawl.collect<T>(urls, handler, {concurrency, base, dl})`
@@ -118,7 +120,7 @@ Handlers can be registered directly on the engine using either URL patterns (`ro
 ```dart
 // Match URL pattern
 engine.route(RegExp(r'/category/(\d+)'), (res) async {
-  console.info('Processing category: ${res.url}');
+  console.logger.info('Processing category: ${res.url}');
 });
 
 // Match tagged requests
@@ -133,11 +135,11 @@ engine.tag('product', (res) async {
 
 ### Event Listeners (`engine.on.*`)
 ```dart
-engine.on.start(() => console.info('Crawler pipeline starting...'));
-engine.on.progress((res) => console.write('.'));
-engine.on.item((item) => console.ok('Scraped: $item'));
-engine.on.done((stats) => console.ok('Completed ${stats.completed} requests.'));
-engine.on.error((err, stack) => console.fail('Error: $err'));
+engine.on.start(() => console.logger.info('Crawler pipeline starting...'));
+engine.on.progress((res) => console.logger.write('.'));
+engine.on.item((item) => console.logger.ok('Scraped: $item'));
+engine.on.done((stats) => console.logger.ok('Completed ${stats.completed} requests.'));
+engine.on.error((err, stack) => console.logger.fail('Error: $err'));
 ```
 
 ---

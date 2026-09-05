@@ -7,7 +7,7 @@
 /// void main(List<String> args) async {
 ///   cli.parse(args);
 ///   sys.listen();
-///   console.ok('Dart Script Toolkit initialized!');
+///   console.logger.ok('Dart Script Toolkit initialized!');
 /// }
 /// ```
 library;

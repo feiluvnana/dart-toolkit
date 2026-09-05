@@ -11,11 +11,11 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 
 void main() async {
   // 1. Step headers and status icons
-  console.step(1, 3, 'Preparing environment...');
-  console.ok('Dependencies installed.');
-  console.warn('Memory usage high.');
-  console.fail('Could not bind port 8080.');
-  console.info('Using default fallback configuration.');
+  console.logger.step(1, 3, 'Preparing environment...');
+  console.logger.ok('Dependencies installed.');
+  console.logger.warn('Memory usage high.');
+  console.logger.fail('Could not bind port 8080.');
+  console.logger.info('Using default fallback configuration.');
 
   // 2. Interactive user prompt
   final proceed = console.reader.confirm('Do you want to continue?', true);
@@ -43,18 +43,19 @@ void main() async {
 
 ---
 
-## 1. Status Loggers
+## 1. Status Loggers (`console.logger.*`)
 
 High-visibility visual feedback indicators:
 
-- `console.step(step, total, message)`: Formats step progress headers like `[1/5] Building source...`.
-- `console.ok(message)`: Success indicator with green checkmark `✔ Success message`.
-- `console.warn(message)`: Warning indicator with yellow symbol `⚠ Warning message`.
-- `console.fail(message)` / `console.error(message)`: Error indicator with red symbol `✖ Failure message`.
-- `console.info(message)`: Informational notice with cyan/blue symbol `ℹ Notice message`.
-- `console.task(name, fn)`: Wraps an async task with automatic spinner and ok/fail completion indicator:
+- `console.logger.step(step, total, message)`: Formats step progress headers like `[1/5] Building source...`.
+- `console.logger.ok(message)`: Success indicator with green checkmark `✔ Success message`.
+- `console.logger.warn(message)`: Warning indicator with yellow symbol `⚠ Warning message`.
+- `console.logger.fail(message)` / `console.logger.error(message)`: Error indicator with red symbol `✖ Failure message`.
+- `console.logger.info(message)`: Informational notice with cyan/blue symbol `ℹ Notice message`.
+- `console.logger.debug(message)`: Debug message with dimmed symbol `⚙ Debug message`.
+- `console.logger.task(name, fn)`: Wraps an async task with automatic spinner and ok/fail completion indicator:
   ```dart
-  await console.task('Running migrations', () async {
+  await console.logger.task('Running migrations', () async {
     await runMigrations();
   });
   ```

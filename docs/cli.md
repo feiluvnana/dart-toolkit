@@ -24,7 +24,7 @@ void main(List<String> rawArgs) {
   // 4. Access positional non-option arguments
   final targets = cli.list();
 
-  console.info('Running on $host:$port (force: $force, targets: $targets)');
+  console.logger.info('Running on $host:$port (force: $force, targets: $targets)');
 }
 ```
 

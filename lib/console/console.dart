@@ -1,12 +1,13 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'ansi.dart';
+import 'logger.dart';
 import 'reader.dart';
 import 'terminal.dart';
 import 'writer.dart';
 
 export 'ansi.dart';
+export 'logger.dart';
 export 'reader.dart';
 export 'terminal.dart';
 export 'writer.dart';
@@ -17,6 +18,9 @@ export 'writer.dart';
 
 /// Main Console logging, prompt, and output interface.
 class Console {
+  /// Structured status logger for workflow steps, success, warnings, errors, and tasks.
+  static final ConsoleLogger logger = ConsoleLogger();
+
   /// Structured output writer for tables, boxes, rules, bars, and spinners.
   static final ConsoleWriter writer = ConsoleWriter();
 
@@ -28,33 +32,6 @@ class Console {
 
   /// Terminal cursor positioning and visibility manipulation.
   static final Cursor cursor = Cursor();
-
-  /// Prints an informational message prefixed with a blue notice symbol `ℹ`.
-  static void info(String message) {
-    stdout.writeln('${'ℹ'.brightBlue()} $message');
-  }
-
-  /// Prints a success message prefixed with a green checkmark `✔`.
-  static void ok(String message) {
-    stdout.writeln('${'✔'.brightGreen()} $message');
-  }
-
-  /// Prints a warning message prefixed with a yellow warning symbol `⚠`.
-  static void warn(String message) {
-    stdout.writeln('${'⚠'.brightYellow()} $message');
-  }
-
-  /// Prints an error message prefixed with a red error cross `✖` and optional stack trace.
-  static void error(String message, [Object? error, StackTrace? stack]) {
-    stderr.writeln('${'✖'.brightRed()} $message');
-    if (error != null) stderr.writeln('  ${error.toString().red()}');
-    if (stack != null) stderr.writeln(stack.toString().dim());
-  }
-
-  /// Prints a progress step header in `[step/total]` format.
-  static void step(int step, int total, String message) {
-    stdout.writeln('${'[$step/$total]'.cyan().bold()} $message');
-  }
 
   /// Writes text directly to standard output without trailing newline.
   static void write(String message) => stdout.write(message);
@@ -91,27 +68,17 @@ class Console {
     String Function(O item)? label,
   }) =>
       reader.pick(question, options: options, label: label);
-
-  /// Runs an asynchronous [action] with a spinner, automatically reporting ok or fail.
-  static Future<T> task<T>(String message, Future<T> Function() action) async {
-    final s = spin(message);
-    try {
-      final res = await action();
-      s.ok(message);
-      return res;
-    } catch (e) {
-      s.fail('$message ($e)');
-      rethrow;
-    }
-  }
 }
 
-/// Top-level console instance (`console.step(...)`, `console.writer.table(...)`, `console.reader.ask(...)`).
+/// Top-level console instance (`console.logger.info(...)`, `console.writer.table(...)`, `console.reader.ask(...)`).
 const ConsoleAccessor console = ConsoleAccessor();
 
 /// Namespace accessor for console subsystem.
 class ConsoleAccessor {
   const ConsoleAccessor();
+
+  /// Sub-namespace for status and event logging (info, ok, warn, error, fail, step, task, debug).
+  ConsoleLogger get logger => Console.logger;
 
   /// Sub-namespace for structured output (tables, boxes, rules, bars, spinners).
   ConsoleWriter get writer => Console.writer;
@@ -124,27 +91,6 @@ class ConsoleAccessor {
 
   /// Sub-namespace for terminal cursor manipulation.
   Cursor get cursor => Console.cursor;
-
-  /// Prints an informational message prefixed with `ℹ`.
-  void info(String message) => Console.info(message);
-
-  /// Prints a success message prefixed with `✔`.
-  void ok(String message) => Console.ok(message);
-
-  /// Prints a warning message prefixed with `⚠`.
-  void warn(String message) => Console.warn(message);
-
-  /// Prints an error message prefixed with `✖` and optional stack trace.
-  void error(String message, [Object? error, StackTrace? stack]) =>
-      Console.error(message, error, stack);
-
-  /// Alias for [error] (1-word).
-  void fail(String message, [Object? error, StackTrace? stack]) =>
-      Console.error(message, error, stack);
-
-  /// Prints a workflow step header: `[step/total] message`.
-  void step(int step, int total, String message) =>
-      Console.step(step, total, message);
 
   /// Draws a horizontal divider rule with optional centered [title].
   void rule([String title = '']) => Console.rule(title);
@@ -184,8 +130,4 @@ class ConsoleAccessor {
     String Function(O item)? label,
   }) =>
       Console.pick(question, options: options, label: label);
-
-  /// Runs an async [action] wrapped in a terminal spinner.
-  Future<T> task<T>(String message, Future<T> Function() action) =>
-      Console.task(message, action);
 }

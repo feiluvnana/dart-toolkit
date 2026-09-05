@@ -20,7 +20,7 @@ A modern, highly concise, and cohesive automation scripting toolkit for Dart dev
 ## Design Philosophy
 
 1. **Strictly 1-Word Methods**: All primary actions are exactly one word (`run`, `get`, `post`, `save`, `follow`, `emit`, `stop`, `step`, `ok`, `warn`, `fail`, `info`, `ask`, `pick`, `which`, `clock`).
-2. **Dot-Separated Sub-Namespaces**: Compound actions use intuitive dot namespaces rather than camelCase identifiers (e.g. `console.writer.table`, `console.reader.ask`, `engine.on.progress`, `sys.on.exit`).
+2. **Dot-Separated Sub-Namespaces**: Compound actions use intuitive dot namespaces rather than camelCase identifiers (e.g. `console.logger.info`, `console.writer.table`, `console.reader.ask`, `engine.on.progress`, `sys.on.exit`).
 3. **Batteries Included**: Zero external utility dependencies required in user scripts. Built-in path manipulation (`fs.join`, `fs.base`), atomic writing (`.part` staging), and ANSI terminal formatting.
 4. **Engine-Driven Pipelines**: Multi-stage web crawlers use declarative URL routing, pipeline link following, and automatic relative URL resolution.
 
@@ -61,7 +61,7 @@ void main(List<String> rawArgs) async {
   final clock = sys.clock();
 
   // 3. Web Crawling & Scraping with Engine
-  console.step(1, 4, 'Crawling news headlines...');
+  console.logger.step(1, 4, 'Crawling news headlines...');
   final titles = await crawl.collect<String>(
     'https://news.ycombinator.com',
     (res) {
@@ -71,10 +71,10 @@ void main(List<String> rawArgs) async {
     },
     concurrency: poolSize,
   );
-  console.ok('Found ${titles.length} news items.');
+  console.logger.ok('Found ${titles.length} news items.');
 
   // 4. Concurrently process items with progress bar
-  console.step(2, 4, 'Processing documents...');
+  console.logger.step(2, 4, 'Processing documents...');
   final bar = console.bar(titles.take(10).length, 'Processing');
 
   final processed = await parallel.run(titles.take(10), (title) async {
@@ -85,7 +85,7 @@ void main(List<String> rawArgs) async {
   bar.done('Processing finished!');
 
   // 5. Output summary table
-  console.step(3, 4, 'Generating summary...');
+  console.logger.step(3, 4, 'Generating summary...');
   console.writer.table(['Metric', 'Value'], [
     ['Total Crawled', titles.length],
     ['Total Processed', processed.length],
@@ -93,14 +93,14 @@ void main(List<String> rawArgs) async {
   ]);
 
   // 6. Save output atomically (.part staging)
-  console.step(4, 4, 'Saving output...');
+  console.logger.step(4, 4, 'Saving output...');
   final dest = fs.join('output', 'summary.txt');
   if (force || !fs.has(dest)) {
     await fs.write(dest, processed.join('\n'));
-    console.ok('Saved output to $dest');
+    console.logger.ok('Saved output to $dest');
   }
 
-  console.ok('Completed in ${fs.time(clock.elapsed)}!');
+  console.logger.ok('Completed in ${fs.time(clock.elapsed)}!');
 }
 ```
 
@@ -111,13 +111,14 @@ void main(List<String> rawArgs) async {
 ### 1. `console.*` &mdash; Terminal Formatting & Prompts
 [Read Detailed Guide &rarr;](docs/console.md)
 
-- **Loggers**:
-  - `console.step(n, total, msg)`: Step header `[1/4] Starting workflow...`
-  - `console.ok(msg)`: Green checkmark `✔ Success`
-  - `console.warn(msg)`: Yellow warning `⚠ Warning`
-  - `console.fail(msg)` / `console.error(msg)`: Red cross `✖ Failure`
-  - `console.info(msg)`: Blue info `ℹ Notice`
-  - `console.task(msg, fn)`: Run an async task with spinner indicator.
+- **Loggers (`console.logger.*`)**:
+  - `console.logger.step(n, total, msg)`: Step header `[1/4] Starting workflow...`
+  - `console.logger.ok(msg)`: Green checkmark `✔ Success`
+  - `console.logger.warn(msg)`: Yellow warning `⚠ Warning`
+  - `console.logger.fail(msg)` / `console.logger.error(msg)`: Red cross `✖ Failure`
+  - `console.logger.info(msg)`: Blue info `ℹ Notice`
+  - `console.logger.debug(msg)`: Dimmed debug symbol `⚙ Debug`
+  - `console.logger.task(msg, fn)`: Run an async task with spinner indicator.
 - **Visual Output (`console.writer.*`)**:
   - `console.writer.table(headers, rows, [alignments, style])`: Formatted tables.
   - `console.writer.box(text, [title])`: Text wrapped in a bordered callout box.
@@ -174,7 +175,8 @@ void main(List<String> rawArgs) async {
 ### 3. `crawl.*` & `$()` &mdash; Web Scraping & Crawler Engine
 [Read Detailed Guide &rarr;](docs/crawl.md)
 
-- **Engine-Powered Crawling**:
+- **Function-Based & Engine-Powered Crawling**:
+  - `await crawl(urls, handler, {tags, routes, concurrency, dl, base})`: Function-based end-to-end crawl with multi-stage tags/routes.
   - `crawl.run(startUrls, (res) async { ... }, {concurrency, base, dl})`: Multi-step recursive crawl.
   - `crawl.collect<T>(startUrls, (res) { res.emit(item); })`: Collect emitted items directly into a `List<T>`.
   - `final engine = crawl.engine({concurrency, base, dl});`:
@@ -258,7 +260,7 @@ void main() async {
   });
 
   await app.run(['https://books.toscrape.com/catalogue/page-1.html']);
-  console.ok('All books crawled and covers saved.');
+  console.logger.ok('All books crawled and covers saved.');
 }
 ```
 
@@ -283,7 +285,7 @@ void main(List<String> args) async {
   }
   spinner.ok('Build complete.');
 
-  console.ok('Deployed successfully to $env!');
+  console.logger.ok('Deployed successfully to $env!');
 }
 ```
 

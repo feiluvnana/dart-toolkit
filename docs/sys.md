@@ -12,7 +12,7 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 void main() async {
   // 1. Listen for Ctrl+C and register automatic cleanup
   sys.listen();
-  sys.on.exit(() => console.info('Cleaning up temp resources...'));
+  sys.on.exit(() => console.logger.info('Cleaning up temp resources...'));
 
   // 2. Track temporary files for deletion if aborted
   sys.track('output/temp.bin');
@@ -25,7 +25,7 @@ void main() async {
   print(result.output);
 
   clock.stop();
-  console.ok('Finished in ${fs.time(clock.elapsed)}');
+  console.logger.ok('Finished in ${fs.time(clock.elapsed)}');
 }
 ```
 
@@ -39,9 +39,9 @@ Executes an external binary, captures stdout/stderr, and returns a `ProcResult`:
 final res = await sys.run('7z', ['a', 'out.7z', 'data/'], echo: true);
 
 if (res.ok) {
-  console.ok('Command succeeded with code ${res.code}');
+  console.logger.ok('Command succeeded with code ${res.code}');
 } else {
-  console.fail('Command failed: ${res.err}');
+  console.logger.fail('Command failed: ${res.err}');
 }
 ```
 
@@ -64,7 +64,7 @@ Binds signal listeners for `SIGINT` (Ctrl+C) and `SIGTERM`. When received:
 sys.listen();
 
 sys.hook(() {
-  console.info('Custom cleanup routine executing...');
+  console.logger.info('Custom cleanup routine executing...');
 });
 ```
 
