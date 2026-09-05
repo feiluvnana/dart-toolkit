@@ -1,0 +1,17 @@
+name: toolkit
+description: A lightweight, modular web crawling pipeline and command-line automation toolkit for Dart.
+version: 1.0.0
+repository: https://github.com/feiluvnana/toolkit
+homepage: https://github.com/feiluvnana/toolkit
+
+environment:
+  sdk: ^3.13.2
+
+dependencies:
+  html: ^0.15.7
+  http: ^1.6.0
+  path: ^1.9.0
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.25.6

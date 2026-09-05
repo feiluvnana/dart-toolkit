@@ -1,0 +1,216 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:toolkit/toolkit.dart';
+import 'package:test/test.dart';
+
+/// In-memory mock downloader for deterministic unit testing.
+class MockDownloader<T> extends Downloader<T> {
+  final Map<String, String> htmlResponses;
+
+  MockDownloader(this.htmlResponses);
+
+  @override
+  Future<Response<T>> download(dynamic requestOrUrl) async {
+    final Request<T> request = requestOrUrl is Request<T>
+        ? requestOrUrl
+        : Request<T>.get(requestOrUrl);
+    final urlStr = request.url.toString();
+    final body = htmlResponses[urlStr] ?? '<html><body>404 Not Found</body></html>';
+    final statusCode = htmlResponses.containsKey(urlStr) ? 200 : 404;
+
+    return Response<T>(
+      request: request,
+      status: statusCode,
+      headers: {'content-type': 'text/html; charset=utf-8'},
+      bytes: utf8.encode(body),
+      engine: engine,
+    );
+  }
+
+  @override
+  Future<void> save(
+    dynamic targetOrRequest,
+    dynamic sourceOrDestination, {
+    void Function(int received, int total)? onProgress,
+    String part = '.part',
+    bool match = true,
+  }) async {
+    final Request<T> req = targetOrRequest is Request<T>
+        ? targetOrRequest
+        : Request<T>.get(sourceOrDestination);
+    final dest = sourceOrDestination is File
+        ? sourceOrDestination
+        : File(targetOrRequest.toString());
+    final response = await download(req);
+    await response.save(dest.path, part: part);
+  }
+
+  @override
+  Future<void> close() async {}
+}
+
+void main() {
+  group('Scheduler Tests', () {
+    test('Scheduler enqueues, dequeues, and deduplicates with concise names', () {
+      final scheduler = Scheduler<String>();
+      final engine = Engine<String>(scheduler: scheduler);
+
+      final req1 = Request<String>.get('https://example.com/page1');
+      final req2 = Request<String>.get('https://example.com/page2');
+      final reqDuplicate = Request<String>.get('https://example.com/page1#section');
+
+      scheduler.add(req1);
+      scheduler.add(req2);
+      scheduler.add(reqDuplicate); // Should be deduplicated
+
+      expect(scheduler.length, equals(2));
+      expect(engine.queue.length, equals(2));
+      expect(scheduler.next()?.url.path, equals('/page1'));
+      expect(scheduler.next()?.url.path, equals('/page2'));
+      expect(scheduler.next(), isNull);
+      expect(engine.queue.isEmpty, isTrue);
+
+      // Verify engine access
+      expect(scheduler.engine, equals(engine));
+    });
+
+    test('Priority scheduler orders by priority descending', () {
+      final scheduler = Priority<String>();
+      Engine<String>(scheduler: scheduler);
+
+      scheduler.add(Request<String>.get('https://example.com/low', priority: 1));
+      scheduler.add(Request<String>.get('https://example.com/high', priority: 10));
+      scheduler.add(Request<String>.get('https://example.com/medium', priority: 5));
+
+      expect(scheduler.next()?.url.path, equals('/high'));
+      expect(scheduler.next()?.url.path, equals('/medium'));
+      expect(scheduler.next()?.url.path, equals('/low'));
+    });
+  });
+
+  group('Engine Pipeline & Processor Tests', () {
+    test('Engine runs pipeline with namespaced queue and concise 1-word methods', () async {
+      final mockData = {
+        'https://example.com/album': '''
+          <div class="album">
+            <h1>Sample Album</h1>
+            <a href="/disc/1" class="disc-link">Disc 1</a>
+            <a href="/disc/2" class="disc-link">Disc 2</a>
+          </div>
+        ''',
+        'https://example.com/disc/1': '''
+          <div class="disc" data-num="1">
+            <span class="disc-title">Key+Lia Best 2001</span>
+            <div class="track">01. Natukage</div>
+          </div>
+        ''',
+        'https://example.com/disc/2': '''
+          <div class="disc" data-num="2">
+            <span class="disc-title">Kanon Original Soundtrack</span>
+            <div class="track">01. Morning Shadows</div>
+          </div>
+        ''',
+      };
+
+      final downloader = MockDownloader<Map<String, dynamic>>(mockData);
+      final router = Router<Map<String, dynamic>>();
+
+      // 1. Root album page route with 1-word .on()
+      router.on(RegExp(r'/album$'), (response, engine) {
+        expect(response.engine, equals(engine));
+        expect(response.ok, isTrue);
+
+        // Use jQuery-like $() to find disc links and follow them
+        for (final a in response.$('a.disc-link')) {
+          final href = a.attributes['href'];
+          if (href != null) {
+            response.follow(href, tag: 'disc_page');
+          }
+        }
+      });
+
+      // 2. Disc pages route matching tag with 1-word .tag()
+      router.tag('disc_page', (response, engine) {
+        final discNum = int.parse(response.$('.disc').attr('data-num') ?? '0');
+        final discTitle = response.$('.disc-title').text;
+        final track = response.$('.track').text;
+
+        // 1-word emit
+        response.emit({
+          'disc': discNum,
+          'title': discTitle,
+          'firstTrack': track,
+        });
+      });
+
+      final engine = Engine<Map<String, dynamic>>(
+        downloader: downloader,
+        processor: router,
+      );
+
+      // Verify all components have engine reference
+      expect(downloader.engine, equals(engine));
+      expect(router.engine, equals(engine));
+
+      // 1-word .url() schedule
+      engine.url('https://example.com/album');
+
+      final emittedItems = <Map<String, dynamic>>[];
+      engine.items.listen((item) {
+        emittedItems.add(item);
+      });
+
+      final stats = await engine.run();
+
+      expect(stats.completed, equals(3));
+      expect(stats.emitted, equals(2));
+      expect(emittedItems.length, equals(2));
+
+      expect(emittedItems[0]['disc'], equals(1));
+      expect(emittedItems[0]['title'], equals('Key+Lia Best 2001'));
+      expect(emittedItems[0]['firstTrack'], equals('01. Natukage'));
+
+      expect(emittedItems[1]['disc'], equals(2));
+      expect(emittedItems[1]['title'], equals('Kanon Original Soundtrack'));
+      expect(emittedItems[1]['firstTrack'], equals('01. Morning Shadows'));
+    });
+
+    test('Response processor can abort pipeline early with 1-word method', () async {
+      final mockData = {
+        'https://example.com/item/1': '<div>Page 1</div>',
+        'https://example.com/item/2': '<div>Page 2 (Abort)</div>',
+        'https://example.com/item/3': '<div>Page 3</div>',
+      };
+
+      final downloader = MockDownloader<String>(mockData);
+
+      final engine = Engine<String>(
+        downloader: downloader,
+        onResponse: (response, engine) {
+          final text = response.$('div').text;
+          response.emit(text);
+          if (text.contains('Abort')) {
+            response.stop('Found abort keyword');
+          }
+        },
+      );
+
+      engine.url('https://example.com/item/1');
+      engine.url('https://example.com/item/2');
+      engine.url('https://example.com/item/3');
+
+      final items = <String>[];
+      engine.items.listen(items.add);
+
+      final stats = await engine.run();
+
+      expect(engine.stopped, isTrue);
+      expect(stats.reason, equals('Found abort keyword'));
+      expect(items, contains('Page 1'));
+      expect(items, contains('Page 2 (Abort)'));
+      expect(items, isNot(contains('Page 3')));
+    });
+  });
+}
