@@ -118,8 +118,10 @@ class Engine<T> {
   }
 
   void url(dynamic url) => add(url);
-  void get(dynamic url) => add(Request<T>.get(url));
-  void post(dynamic url, {Object? body}) => add(Request<T>.post(url, body: body));
+  void get(dynamic url, {String? tag, Map<String, dynamic>? meta}) =>
+      add(Request<T>.get(url, tag: tag, meta: meta));
+  void post(dynamic url, {Object? body, String? tag, Map<String, dynamic>? meta}) =>
+      add(Request<T>.post(url, body: body, tag: tag, meta: meta));
 
   Future<Response<T>> download(dynamic req) => downloader.download(req);
 
