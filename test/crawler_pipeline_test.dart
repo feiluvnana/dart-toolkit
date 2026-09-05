@@ -44,7 +44,7 @@ class MockDownloader<T> extends Downloader<T> {
         ? sourceOrDestination
         : File(targetOrRequest.toString());
     final response = await download(req);
-    await response.save(dest.path, part: part);
+    await response.save(dest.path, null, part);
   }
 
   @override
@@ -211,6 +211,109 @@ void main() {
       expect(items, contains('Page 1'));
       expect(items, contains('Page 2 (Abort)'));
       expect(items, isNot(contains('Page 3')));
+    });
+
+    test('crawl.run executes multi-step follow with tags and meta', () async {
+      final mockData = {
+        'https://music.example.com/album': '''
+          <table id="songlist">
+            <tr><td><a href="/song/1">Track 1</a></td></tr>
+            <tr><td><a href="/song/2">Track 2</a></td></tr>
+          </table>
+        ''',
+        'https://music.example.com/song/1': '''
+          <div>
+            <a href="/audio/t1.mp3">Download MP3</a>
+          </div>
+        ''',
+        'https://music.example.com/song/2': '''
+          <div>
+            <a href="/audio/t2.mp3">Download MP3</a>
+          </div>
+        ''',
+      };
+
+      final dl = MockDownloader<String>(mockData);
+      final visitedSongs = <String>[];
+
+      final stats = await crawl.run(
+        'https://music.example.com/album',
+        (res) {
+          if (res.tag == 'song') {
+            final trackName = res.meta['name'] as String;
+            final mp3Link = res.link('.mp3');
+            visitedSongs.add('$trackName: $mp3Link');
+          } else {
+            for (final a in res.$('#songlist a')) {
+              final href = a.attr('href')!;
+              final name = a.text;
+              res.follow(href, tag: 'song', meta: {'name': name});
+            }
+          }
+        },
+        dl: dl,
+      );
+
+      expect(stats.completed, equals(3));
+      expect(visitedSongs, equals([
+        'Track 1: https://music.example.com/audio/t1.mp3',
+        'Track 2: https://music.example.com/audio/t2.mp3',
+      ]));
+    });
+
+    test('crawl.collect gathers all emitted items in one call', () async {
+      final mockData = {
+        'https://news.example.com': '''
+          <div class="articles">
+            <h2 class="title">Article Alpha</h2>
+            <h2 class="title">Article Beta</h2>
+            <h2 class="title">Article Gamma</h2>
+          </div>
+        ''',
+      };
+
+      final dl = MockDownloader<String>(mockData);
+
+      final titles = await crawl.collect<String>(
+        'https://news.example.com',
+        (res) {
+          for (final t in res.$('.title').texts) {
+            res.emit(t);
+          }
+        },
+        dl: dl,
+      );
+
+      expect(titles, equals(['Article Alpha', 'Article Beta', 'Article Gamma']));
+    });
+
+    test('crawl.engine supports direct .tag and .route registration', () async {
+      final mockData = {
+        'https://shop.example.com/catalog': '''
+          <a href="/item/100" class="item">Item 100</a>
+        ''',
+        'https://shop.example.com/item/100': '''
+          <h1 class="name">Super Gadget</h1>
+        ''',
+      };
+
+      final dl = MockDownloader<String>(mockData);
+      final eng = crawl.engine<String>(dl: dl);
+      final results = <String>[];
+
+      eng.route(RegExp(r'/catalog$'), (res) {
+        for (final a in res.$('a.item')) {
+          res.follow(a.attr('href')!, tag: 'item');
+        }
+      });
+
+      eng.tag('item', (res) {
+        results.add(res.$('h1.name').text);
+      });
+
+      final stats = await eng.run(['https://shop.example.com/catalog']);
+      expect(stats.completed, equals(2));
+      expect(results, equals(['Super Gadget']));
     });
   });
 }

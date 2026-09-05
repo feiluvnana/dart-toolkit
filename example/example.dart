@@ -12,12 +12,21 @@ void main(List<String> rawArgs) async {
 
   console.step(1, 4, 'Starting automation workflow...');
 
-  // 3. Web Scraping
-  final res = await crawl.get('https://news.ycombinator.com');
-  final titles = res.$('.titleline > a').texts;
-  console.ok('Found ${titles.length} news items.');
+  // 3. Web Crawling & Scraping with Engine
+  console.step(2, 4, 'Crawling news headlines with crawl engine...');
+  final titles = await crawl.collect<String>(
+    'https://news.ycombinator.com',
+    (res) {
+      for (final title in res.$('.titleline > a').texts) {
+        res.emit(title);
+      }
+    },
+    concurrency: concurrency,
+  );
+  console.ok('Engine collected ${titles.length} news items.');
 
   // 4. Concurrently processing items
+  console.step(3, 4, 'Processing items concurrently...');
   final bar = console.bar(titles.take(10).length, 'Processing');
   final processed = await parallel.run(titles.take(10), (title) async {
     await Future.delayed(const Duration(milliseconds: 50));
@@ -27,6 +36,7 @@ void main(List<String> rawArgs) async {
   bar.done();
 
   // 5. Atomic File System & Paths
+  console.step(4, 4, 'Saving output atomically...');
   final outFile = fs.join('output', 'summary.txt');
   if (force || !fs.has(outFile)) {
     await fs.write(outFile, processed.join('\n'));
@@ -35,6 +45,7 @@ void main(List<String> rawArgs) async {
 
   // 6. Visual Table Output
   console.writer.table(['Metric', 'Value'], [
+    ['Total Crawled', titles.length],
     ['Total Processed', processed.length],
     ['Output Destination', outFile],
     ['Elapsed Time', fs.time(clock.elapsed)],

@@ -140,13 +140,25 @@ void main(List<String> rawArgs) async {
 
 ### 3. `crawl.*` & `$()`
 
-- **Requests & Engine**:
+- **Engine-Powered Crawling**:
+  - `crawl.run(startUrls, (res) async { ... }, {concurrency, base, dl})`: Multi-step recursive crawl.
+  - `crawl.collect(startUrls, (res) { res.emit(item); })`: Collect emitted items directly into a `List<T>`.
+  - `final engine = crawl.engine({concurrency, base, dl});`:
+    - `engine.route(pattern, (res) => ...)`: Route requests matching URL pattern.
+    - `engine.tag(tagName, (res) => ...)`: Handle requests tagged with specific label.
+    - `engine.on.progress((res) => ...)`: Progress callback per completed request.
+    - `engine.run(urls)`: Execute crawling workflow.
+- **Pipeline Response Controls (`res.*`)**:
+  - `res.follow(url, {tag, meta, priority})`: Schedule URL to crawl next (auto-resolves relative URLs).
+  - `res.save(filePath, [sourceUrl])`: Save response body or stream remote asset to disk atomically.
+  - `res.emit(item)`: Emit structured scraped record to stream or collector.
+  - `res.tag`, `res.meta`, `res.url`, `res.status`, `res.ok`, `res.stop()`
+- **Quick Requests & Asset Syncing**:
   - `final res = await crawl.get(url);`
   - `final res = await crawl.post(url, body);`
   - `final dl = crawl.dl(base: 'downloads');`
   - `await crawl.sync(assetMap, base: 'assets', prefix: baseUrl);`
-  - `final engine = crawl.engine();`
-- **DOM Queries & Traversal**:
+- **DOM Queries & Traversal (`$()`)**:
   - `res.$(selector)` or `$(html)`:
     - Traversal: `find()`, `filter()`, `not()`, `children()`, `parent()`, `closest()`, `eq()`.
     - Content: `text`, `texts`, `lines`, `html`, `attr(name)`, `attrs(name)`.

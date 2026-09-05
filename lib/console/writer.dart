@@ -177,7 +177,7 @@ class Table {
 enum ProgressUnit { count, bytes }
 
 class Progress {
-  final int total;
+  int total;
   final int width;
   final ProgressUnit unit;
   final String fill;
@@ -225,6 +225,7 @@ class Progress {
   }
 
   void update(int current, {int? newTotal, String? message}) {
+    if (newTotal != null) total = newTotal;
     _current = current;
     if (message != null) _msg = message;
 

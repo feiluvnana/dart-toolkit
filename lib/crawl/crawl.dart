@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:http/http.dart' as http;
 
 import 'downloader.dart';
@@ -18,12 +20,74 @@ export 'selector.dart';
 /// Top-level web crawling and scraping accessor singleton.
 const CrawlAccessor crawl = CrawlAccessor();
 
-/// Crawler namespace accessor (`crawl.get(...)`, `crawl.sync(...)`, `crawl.engine()`, `crawl.dl()`).
+/// Crawler namespace accessor (`crawl.run(...)`, `crawl.collect(...)`, `crawl.engine()`, `crawl.dl()`).
 class CrawlAccessor {
   const CrawlAccessor();
 
   /// Create a new crawling engine (1-word).
-  Engine<T> engine<T>() => Engine<T>();
+  Engine<T> engine<T>({
+    int concurrency = 1,
+    Duration delay = Duration.zero,
+    String? base,
+    bool dedupe = true,
+    Downloader<T>? dl,
+    Scheduler<T>? scheduler,
+    Process<T>? onResponse,
+  }) =>
+      Engine<T>(
+        concurrency: concurrency,
+        delay: delay,
+        downloader: dl ?? HttpDownloader<T>(base: base),
+        scheduler: scheduler ?? Scheduler<T>(dedupe: dedupe),
+        onResponse: onResponse,
+      );
+
+  /// Run an end-to-end crawling workflow on URLs and return Stats (1-word).
+  Future<Stats> run<T>(
+    dynamic urls,
+    FutureOr<void> Function(Response<T> res) handler, {
+    int concurrency = 4,
+    Duration delay = Duration.zero,
+    String? base,
+    bool dedupe = true,
+    Downloader<T>? dl,
+    Scheduler<T>? scheduler,
+  }) async {
+    final eng = Engine<T>(
+      concurrency: concurrency,
+      delay: delay,
+      downloader: dl ?? HttpDownloader<T>(base: base),
+      scheduler: scheduler ?? Scheduler<T>(dedupe: dedupe),
+      onResponse: (res, engine) => handler(res),
+    );
+    final list = urls is Iterable ? urls : [urls];
+    return eng.run(list);
+  }
+
+  /// Run crawling workflow and collect all items emitted via res.emit(item) (1-word).
+  Future<List<T>> collect<T>(
+    dynamic urls,
+    FutureOr<void> Function(Response<T> res) handler, {
+    int concurrency = 4,
+    Duration delay = Duration.zero,
+    String? base,
+    bool dedupe = true,
+    Downloader<T>? dl,
+    Scheduler<T>? scheduler,
+  }) async {
+    final items = <T>[];
+    final eng = Engine<T>(
+      concurrency: concurrency,
+      delay: delay,
+      downloader: dl ?? HttpDownloader<T>(base: base),
+      scheduler: scheduler ?? Scheduler<T>(dedupe: dedupe),
+      onResponse: (res, engine) => handler(res),
+    );
+    eng.on.item((item) => items.add(item));
+    final list = urls is Iterable ? urls : [urls];
+    await eng.run(list);
+    return items;
+  }
 
   /// Create a new HTTP downloader with optional base directory (1-word).
   HttpDownloader<T> dl<T>({String? base, http.Client? client}) =>

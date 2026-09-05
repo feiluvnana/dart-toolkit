@@ -114,6 +114,10 @@ class Response<T> {
     return raw.map((s) => request.url.resolve(s).toString()).toList();
   }
 
+  Uri get url => request.url;
+  Map<String, dynamic> get meta => request.meta;
+  String? get tag => request.tag;
+
   List<String> get lines => QueryResult([doc.documentElement ?? doc.body ?? Element.tag('body')]).lines;
 
   void emit(T item) {
@@ -126,16 +130,35 @@ class Response<T> {
     engine!.add(urlOrReq);
   }
 
-  void follow(dynamic url, {String? tag, Map<String, dynamic>? meta}) {
+  void follow(
+    dynamic url, {
+    String? tag,
+    Map<String, dynamic>? meta,
+    int priority = 0,
+  }) {
     if (engine == null) throw StateError('No engine attached to this response');
     final target = url is Uri ? url : request.url.resolve(url.toString());
-    engine!.add(Request<T>.get(target, tag: tag, meta: meta));
+    engine!.add(Request<T>.get(target, tag: tag, meta: meta, priority: priority));
   }
 
   void stop([String reason = 'Stopped']) => engine?.stop(reason);
 
-  Future<File> save(String filePath, {String part = '.part'}) {
-    return Fs.write(File(filePath), bytes, part: part);
+  Future<void> save(
+    dynamic filePath, [
+    dynamic sourceUrl,
+    String part = '.part',
+  ]) async {
+    if (sourceUrl != null) {
+      final resolved = request.url.resolve(sourceUrl.toString());
+      if (engine != null) {
+        await engine!.downloader.save(filePath, resolved, part: part);
+      } else {
+        await Fs.download(resolved, filePath is File ? filePath : File(filePath.toString()), part: part);
+      }
+    } else {
+      final file = filePath is File ? filePath : File(filePath.toString());
+      await Fs.write(file, bytes, part: part);
+    }
   }
 
   @override
@@ -212,6 +235,10 @@ class Router<T> {
   void attach(Engine<T> engine) {
     this.engine = engine;
   }
+
+  bool get isNotEmpty => _rules.isNotEmpty || _fallback != null;
+  bool get isEmpty => !isNotEmpty;
+  int get length => _rules.length;
 
   Router<T> on(Pattern pattern, Process<T> handler) {
     _rules.add(

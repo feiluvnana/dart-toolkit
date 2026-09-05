@@ -45,12 +45,14 @@ class EngineEvents<T> {
   void Function(Stats stats)? _done;
   void Function(T item)? _item;
   Process<T>? _response;
+  void Function(Response<T> res)? _progress;
   void Function(Object error, StackTrace stack)? _error;
 
   void start(void Function() handler) => _start = handler;
   void done(void Function(Stats stats) handler) => _done = handler;
   void item(void Function(T item) handler) => _item = handler;
   void response(Process<T> handler) => _response = handler;
+  void progress(void Function(Response<T> res) handler) => _progress = handler;
   void error(void Function(Object error, StackTrace stack) handler) =>
       _error = handler;
 }
@@ -71,6 +73,9 @@ class Engine<T> {
 
   late final QueueAccess<T> queue = QueueAccess<T>(this);
   late final EngineEvents<T> on = EngineEvents<T>(this);
+  late final Router<T> router = Router<T>()..attach(this);
+
+  Downloader<T> get dl => downloader;
 
   Engine({
     Scheduler<T>? scheduler,
@@ -96,6 +101,14 @@ class Engine<T> {
   bool get isRunning => _running;
   bool get stopped => _stopped;
   bool get isIdle => _active == 0 && scheduler.isEmpty;
+
+  void route(Pattern pattern, FutureOr<void> Function(Response<T> res) handler) {
+    router.on(pattern, (res, engine) => handler(res));
+  }
+
+  void tag(String name, FutureOr<void> Function(Response<T> res) handler) {
+    router.tag(name, (res, engine) => handler(res));
+  }
 
   void add(dynamic requestOrUrl) {
     scheduler.attach(this);
@@ -175,10 +188,13 @@ class Engine<T> {
 
         if (on._response != null) {
           await on._response!(response, this);
+        } else if (router.isNotEmpty) {
+          await router(response, this);
         } else {
           await processor(response, this);
         }
         _stats.completed++;
+        on._progress?.call(response);
       } catch (e, s) {
         on._error?.call(e, s);
       } finally {
