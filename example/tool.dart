@@ -1,11 +1,12 @@
-// A small, complete CLI: declared arguments, prompts, progress, cleanup.
+// A small, complete CLI: declared commands, prompts, progress, cleanup.
 //
 //   dart run example/tool.dart --help
 //   dart run example/tool.dart build --out dist -c 8
 //   dart run example/tool.dart clean --yes
 //
-// This is the shape of a real script: declare the interface once, validate it,
-// dispatch on the subcommand, and leave nothing behind if it is interrupted.
+// This is the shape of a real script: declare the interface once and let `run`
+// parse it, print `--help`, validate it, pick the handler and turn what the
+// handler returns into an exit code — leaving nothing behind if interrupted.
 
 import 'package:dart_toolkit/dart_toolkit.dart';
 
@@ -13,41 +14,29 @@ final log = system.console.logger;
 final out = system.console.writer;
 
 void main(List<String> args) async {
-  // Declare once. `--help` and validation both read these declarations, and an
+  // `.env` fills in what the shell did not, so `--token` stays required in the
+  // declaration while `API_TOKEN` satisfies it in practice.
+  system.env.load();
+
+  // Declare once. `--help`, `--version` and validation all read these, and an
   // alias given here is honoured by every later `get` and `has`.
   system.cli
-    ..flag('help', alias: 'h', desc: 'Show this message')
     ..flag('verbose', alias: 'v', desc: 'Log every step')
     ..flag('yes', alias: 'y', desc: 'Skip confirmation prompts')
     ..option('out', alias: 'o', desc: 'Output directory', def: 'dist')
+    ..option('token', desc: 'API token', env: 'API_TOKEN', required: true);
+
+  // Each command carries the arguments only it uses.
+  system.cli.handle('build', _build, desc: 'Build every target')
     ..option('concurrency', alias: 'c', desc: 'Parallel workers', def: 4)
-    ..option('token', desc: 'API token', required: true)
-    ..parse(args);
-
-  if (system.cli.has('help') || system.cli.command == null) {
-    system.cli.help(
-      syntax: 'tool.dart <build|clean|report> [options]',
-      desc: 'A worked example of the CLI, console and concurrency domains.',
+    ..option(
+      'mode',
+      desc: 'Build mode',
+      allowed: ['debug', 'release'],
+      def: 'debug',
     );
-    return;
-  }
-
-  // `.env` fills in what the shell did not, so `--token` can be optional in
-  // practice while staying required in the declaration.
-  system.env.load();
-  if (!system.cli.has('token') && system.env.has('API_TOKEN')) {
-    log.debug('Using API_TOKEN from the environment.');
-  } else {
-    // Throws with a readable message naming what is missing.
-    try {
-      system.cli.require();
-    } on ArgumentError catch (error) {
-      log.error(error.message.toString());
-      return;
-    }
-  }
-
-  if (system.cli.has('verbose')) log.level = LogLevel.debug;
+  system.cli.handle('clean', _clean, desc: 'Remove the output directory');
+  system.cli.handle('report', _report, desc: 'Summarise what was built');
 
   // Anything tracked here is cleaned up on Ctrl-C as well as on a normal exit.
   system.on.exit(() async {
@@ -55,27 +44,31 @@ void main(List<String> args) async {
     await io.async.delete(io.temp('tool_').path, recursive: true);
   });
 
-  final ok = switch (system.cli.command) {
-    'build' => await _build(),
-    'clean' => await _clean(),
-    'report' => await _report(),
-    final unknown => _unknown(unknown),
-  };
-
-  await system.shutdown(ok ? 0 : 1);
+  // `run` returns the exit code: whatever the handler returned, or 64 for a
+  // command line it could not make sense of.
+  await system.shutdown(
+    await system.cli.run(
+      args,
+      syntax: 'tool.dart <command> [options]',
+      desc: 'A worked example of the CLI, console and concurrency domains.',
+      version: '1.1.0',
+      strict: true,
+    ),
+  );
 }
 
 // ---------------------------------------------------------------------------
 
-Future<bool> _build() async {
-  final dest = system.cli.get('out', 'dist');
-  final size = system.cli.get('concurrency', 4);
-  final targets =
-      system.cli.rest.isEmpty
-          ? const ['app', 'worker', 'cli']
-          : system.cli.rest;
+Future<bool> _build(Cli cli) async {
+  if (cli.has('verbose')) log.level = LogLevel.debug;
 
-  out.rule('build');
+  // Defaults live in the declaration, so reading one takes no second copy.
+  final dest = cli.get('out', '');
+  final size = cli.get('concurrency', 0);
+  final targets =
+      cli.list().isEmpty ? const ['app', 'worker', 'cli'] : cli.list();
+
+  out.rule('build (${cli.get('mode', '')})');
 
   // A spinner for work with no measurable total.
   final spinner = system.console.spinner()..start('Resolving dependencies');
@@ -114,15 +107,15 @@ Future<bool> _build() async {
   return false;
 }
 
-Future<bool> _clean() async {
-  final dest = system.cli.get('out', 'dist');
+Future<bool> _clean(Cli cli) async {
+  final dest = cli.get('out', '');
   if (!io.has(io.join(dest, 'app.txt')) && io.find(dest).isEmpty) {
     log.info('Nothing to clean.');
     return true;
   }
 
   // Prompt unless --yes. Interactive input lives on the console reader.
-  if (!system.cli.has('yes')) {
+  if (!cli.has('yes')) {
     final go = await system.console.reader.confirm('Delete $dest/?');
     await system.console.reader.close();
     if (!go) {
@@ -136,8 +129,8 @@ Future<bool> _clean() async {
   return true;
 }
 
-Future<bool> _report() async {
-  final dest = system.cli.get('out', 'dist');
+Future<bool> _report(Cli cli) async {
+  final dest = cli.get('out', '');
   final files = await io.async.find(dest);
   if (files.isEmpty) {
     log.warn('No build output in $dest/. Run `build` first.');
@@ -162,10 +155,4 @@ Future<bool> _report() async {
     title: 'report',
   );
   return true;
-}
-
-bool _unknown(String? command) {
-  log.error('Unknown command: $command');
-  system.cli.help(syntax: 'tool.dart <build|clean|report> [options]');
-  return false;
 }

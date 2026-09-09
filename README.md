@@ -240,6 +240,16 @@ system.cli.get('concurrency', 4);
 system.env.get('PORT', 8080);
 ```
 
+Declare commands and `system.cli.run` parses, prints `--help`, validates and
+dispatches, returning an exit code:
+
+```dart
+system.cli.handle('build', _build, desc: 'Build the project')
+  ..option('out', alias: 'o', def: 'dist', desc: 'Output directory');
+
+await system.shutdown(await system.cli.run(args));
+```
+
 See [docs/system.md](docs/system.md), [docs/cli.md](docs/cli.md), [docs/env.md](docs/env.md).
 
 ### `concurrent` — bounded async work

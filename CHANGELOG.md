@@ -2,6 +2,65 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.1.0
+
+Expands `system.cli` from an argument parser into a full command-line
+front end: commands with their own arguments, defaults and environment
+fallbacks that are declared once, and validation that catches typos.
+
+### Added
+
+- **`system.cli.handle`** registers a command and returns it, so the arguments
+  only that command uses are declared on the spot. **`system.cli.group`** nests
+  commands, so `remote add` resolves through a tree.
+- **`system.cli.run`** parses, resolves the deepest matching command, re-reads
+  the arguments against that command's declarations plus the global ones,
+  prints `--help` or `--version`, applies validation, awaits the handler and
+  turns what it returns into an exit code: `null` and `true` mean success,
+  `false` means failure, an `int` is used as given, and a command line it could
+  not understand yields `Cli.usageExit` (`64`) after printing the reason. `--help`,
+  `-h` and `--version` are declared for you. `body:` runs when no command
+  matches, so a script with no commands at all still gets automatic help and
+  validation. Only `ArgumentError` is caught, leaving a genuine failure inside
+  a handler its stack trace.
+- **`system.cli.strict`** throws on any switch no declaration covers, and
+  **`unknown`** returns them, so `--verbse` no longer parses silently as a flag
+  nothing reads. `run` applies it with `strict: true`.
+- **`option`** gained `allowed:` to limit accepted values, `env:` to name an
+  environment variable to fall back on, and `csv:` to split one
+  comma-separated value into repeats for `all`.
+- **`Cli.usageExit`**, the conventional `EX_USAGE` exit code.
+- **`Cli.parsed`** on the accessor, for handing the parsed command line to code
+  that takes a `Cli`.
+
+### Changed
+
+- **`get` now resolves the declaration.** Sources are tried in order: the
+  command line, the `env` variable, the declared `def`, then the fallback at
+  the call site. A default is written once in the declaration instead of at
+  every call site.
+- **`require` accepts a default or a set environment variable as supplied,** as
+  documented, and also checks every given value against its `allowed` list. Its
+  message now names each failure rather than only the missing names.
+- **Usage blocks wrap to the terminal width**, size the label column to its
+  contents, and list commands alongside `allowed` values and `env` fallbacks.
+  `(required)` is printed only when nothing else can supply a value.
+- **`flag`'s `def` is now `bool?`**, so an unset default falls through to the
+  call site rather than forcing `false`.
+
+### Fixed
+
+- **`-abc` now clusters into the short flags `a`, `b` and `c`**, as the
+  documentation always claimed; it previously parsed as one flag named `abc`. A
+  clustered switch declared with a value ends the cluster and takes the rest of
+  it or the next argument, so `-o dist`, `-odist` and `-vodist` all set `o`.
+  Only all-letter tokens cluster, and a declared multi-letter short name is
+  never split.
+- **Declarations registered before `system.cli.parse` are honoured by the
+  parse itself.** They were dropped, so a declared flag still swallowed the
+  token after it: `tool build --verbose main.dart` lost `main.dart`.
+- **`require` no longer throws for an option that declares a default.**
+
 ## 1.0.0
 
 First release. A lightweight web-crawling pipeline and command-line automation

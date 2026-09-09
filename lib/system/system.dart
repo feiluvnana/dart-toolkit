@@ -10,6 +10,7 @@ import 'dart:io' hide exit;
 import 'dart:io' as io show exit;
 
 import '../src/proc.dart';
+import '../src/shared.dart';
 import 'cli.dart';
 import 'console/console.dart';
 import 'env.dart';
@@ -23,7 +24,7 @@ export 'env.dart';
 // SYSTEM DOMAIN (system.*) - Processes, Environment, CLI & Signals
 // ============================================================================
 
-final EnvAccessor _env = EnvAccessor();
+final EnvAccessor _env = sharedEnv;
 final CliAccessor _cli = CliAccessor();
 
 /// The `system` domain: processes, environment, CLI arguments and signals.

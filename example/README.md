@@ -8,7 +8,7 @@ in-memory fixtures, and the networked parts are behind a flag.
 | [`example.dart`](example.dart) | A tour of all seven domains, end to end |
 | [`crawler.dart`](crawler.dart) | A multi-stage crawl: routes, tags, `meta`, scope, robots |
 | [`scrape.dart`](scrape.dart) | One-off requests: selectors, extraction, sessions, downloads |
-| [`tool.dart`](tool.dart) | A small CLI: declared arguments, prompts, progress, cleanup |
+| [`tool.dart`](tool.dart) | A small CLI: declared commands, prompts, progress, cleanup |
 
 ```sh
 dart run example/example.dart
@@ -42,6 +42,7 @@ between the fixture and live runs.
 frontier — just `net.http` and the selector API, with the loose string schema
 and the typed `Field` form side by side.
 
-**`tool.dart`** if you are writing a command-line program. Arguments are
-declared once and `--help` writes itself; `system.on.exit` plus
-`system.shutdown()` make the script safe to Ctrl-C.
+**`tool.dart`** if you are writing a command-line program. Commands and their
+arguments are declared once, and `system.cli.run` handles `--help`, validation,
+dispatch and the exit code; `system.on.exit` plus `system.shutdown()` make the
+script safe to Ctrl-C.

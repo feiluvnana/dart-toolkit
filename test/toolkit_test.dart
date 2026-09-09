@@ -540,9 +540,23 @@ void main() async {
               required: true,
             );
 
-      // 'port' was not supplied even though it is required
-      expect(() => cli.require(), throwsA(isA<ArgumentError>()));
+      // 'port' is required but declares a default, which supplies it.
+      expect(() => cli.require(), returnsNormally);
       expect(() => cli.require(['output']), returnsNormally);
+
+      // Required with nothing to fall back on still throws, and names itself.
+      final bare = Cli(const <String>[])
+        ..option('output', alias: 'o', required: true);
+      expect(
+        () => bare.require(),
+        throwsA(
+          isA<ArgumentError>().having(
+            (e) => e.message.toString(),
+            'message',
+            contains('--output'),
+          ),
+        ),
+      );
 
       final validCli =
           Cli(['--output', 'dist', '-p', '3000'])
