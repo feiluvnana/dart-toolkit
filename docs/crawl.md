@@ -1,0 +1,279 @@
+# Web Crawler (`net.crawl`)
+
+A declarative multi-stage crawler. You describe how to handle each kind of page; the engine schedules, de-duplicates, fetches and routes.
+
+---
+
+## Quick Overview
+
+```dart
+import 'package:dart_toolkit/dart_toolkit.dart';
+
+void main() async {
+  final titles = await net.crawl<String>('https://news.ycombinator.com')
+      .concurrent(4)
+      .delay(250.ms)
+      .limit(50)
+      .collect((res) {
+        for (final title in res.$('.titleline > a').texts) {
+          res.emit(title);
+        }
+        for (final next in res.$('a.morelink').hrefs) {
+          res.follow(next);
+        }
+      });
+
+  system.console.logger.ok('Collected ${titles.length} titles.');
+}
+```
+
+`T` in `net.crawl<T>` is the type of item your handlers emit.
+
+---
+
+## 1. Seeding
+
+| Entry point | Seeds |
+| :--- | :--- |
+| `net.crawl<T>(String target)` | One URL, raw HTML markup, or custom task string |
+| `net.crawl.all<T>(Iterable<String> targets)` | Several URLs, raw HTML markups, or task strings |
+| `net.crawl.html<T>(String markup)` | Explicit raw HTML markup |
+| `net.crawl.file<T>(String path)` | Explicit local file path |
+| `net.crawl.sitemap<T>(Uri sitemapUrl)` | Seeds discovered by parsing XML/text sitemap |
+| `net.crawl.seed<T>(requests)` | Fully-formed `Request` objects |
+
+> Seeds and `res.follow(String url)` accept plain **`String`** inputs — they do not need to be `Uri` objects. You can pass raw HTML markup (`'<article>...</article>'`), local file paths, or custom task identifiers directly.
+
+Use `seed` when the starting pages need their own headers, tag, priority, depth, or HTTP method:
+
+```dart
+await net.crawl.seed<String>([
+  Request('https://example.com/a', tag: 'listing', priority: 10),
+  Request('https://example.com/b', headers: {'Cookie': 'session=abc'}),
+]).run((res) { ... });
+```
+
+---
+
+## 2. Configuration
+
+Every setter returns the builder, so configuration reads as one expression. **Nothing runs until you finish it.**
+
+```dart
+net.crawl<String>(url)
+    .concurrent(8)                       // max simultaneous fetches
+    .delay(500.ms, perhost: true)        // pause after each fetch (optionally per-host)
+    .perhost(true)                       // enforce delay per host independently
+    .retry(3)                            // retries per failed fetch
+    .base('downloads')                   // base dir for relative save paths
+    .dedupe(false)                       // allow revisiting URLs (default: on)
+    .deduplicator(restored)              // supply a pre-seeded visited set
+    .downloader(mock)                    // swap the transport (e.g. MapDownloader)
+    .limit(100)                          // stop after crawling at most 100 pages
+    .depth(3)                            // maximum link traversal depth
+    .allow(RegExp(r'/blog/'))            // only crawl URLs matching pattern
+    .deny(RegExp(r'\.pdf$'))             // skip URLs matching pattern
+    .samehost(true)                      // restrict crawl to the seed's host
+    .robots(true, 'MyBot')               // obey robots.txt rules before requests
+    .sitemap('https://example.com/sitemap.xml'.url) // seed with all sitemap URLs
+    .headers({'User-Agent': 'CustomBot'}) // custom headers for every request
+    .timeout(10.seconds)                 // per-request timeout
+```
+
+### Crawl Scope & Politeness
+
+- **`limit(n)`**: Caps the total number of pages fetched. Workers exit once the limit is reached.
+- **`depth(depth)`**: Restricts recursion depth. Seeds have depth 0; links discovered via `res.follow` have `request.depth + 1`.
+- **`allow(pattern)`** and **`deny(pattern)`**: Filter URLs before scheduling.
+- **`samehost([enabled = true])`**: Prevents following external links.
+- **`robots([enabled = true, agent = '*'])`**: Fetches and respects `robots.txt` disallow paths and crawl delays.
+- **`perhost([enabled = true])`**: When delays are configured, rate-limits per domain host instead of stalling all concurrent workers globally.
+
+---
+
+## 3. Finishing
+
+| Method | Returns |
+| :--- | :--- |
+| `run([process])` | `Future<Stats>` |
+| `collect([process])` | `Future<List<T>>` of everything emitted |
+| `stream([process])` | `Stream<T>`, yielding items as they are emitted |
+| `to(sinkOrPath, [process])` | `Future<Stats>`, writing items to file path or `IOSink` |
+| `engine([process])` | The configured `Engine`, unrun |
+
+Prefer `stream` or `to` over `collect` for large crawls — they do not hold every item in memory:
+
+```dart
+// Stream items to an async consumer:
+await for (final title in net.crawl<String>(url).stream(handler)) {
+  await sink.write(title);
+}
+
+// Or stream directly to a file (Maps/Lists formatted as JSON lines):
+final stats = await net.crawl<Map<String, Object?>>(url).save('out/results.jsonl', handler);
+```
+
+---
+
+## 4. Multi-Stage Crawls
+
+A handler advances the crawl with `res.follow(...)`. Relative URLs resolve against the current page, a `Referer` is set, and duplicates are dropped.
+
+Tags keep the stages apart:
+
+```dart
+final stats = await net.crawl<String>('https://music.example.com/album')
+    .tag('song', (res) {
+      final name = res.meta['name'] as String;
+      print('$name -> ${res.$('a').href}');
+    })
+    .run((res) {
+      for (final a in res.$('#songlist a')) {
+        res.follow(
+          a.href!,
+          tag: 'song',
+          meta: {'name': a.text},
+        );
+      }
+    });
+```
+
+- `tag(name, handler)` routes pages queued with that tag.
+- `route(pattern, handler)` routes by URL pattern.
+- The function passed to `run`/`collect`/`stream` handles anything unmatched.
+
+`meta` is carried untouched from request to response, which is how a handler recovers the context it queued a page with.
+
+---
+
+## 5. Inside a Handler
+
+```dart
+res.emit(item);                    // yield a result
+res.follow(url, tag: ..., meta: ..., priority: ...);
+res.stop('reason');                // wind down after in-flight work
+res.tag;                           // the tag this page was queued with
+res.meta;                          // the context it was queued with
+res.engine;                        // the running Engine
+res.request;                       // the scheduled Request
+res.depth;                         // current hop depth (seed is 0)
+```
+
+### Declarative Extraction (`res.extract`)
+
+Extract structured data declaratively using CSS selectors and property targets (`@attr` or `@text`):
+
+```dart
+final article = res.extract({
+  'title': 'h1.headline',
+  'author': '.byline > a',
+  'link': 'link[rel="canonical"]@href',
+  'tags': ['ul.tags > li'],
+  'comments': ['.comment', {
+    'user': '.author',
+    'body': '.text',
+  }],
+});
+```
+
+For a typed read, `res.pick(Field.text('h1'))` returns a `String?` rather than
+an `Object?` — see [`http.md`](http.md#declarative-extraction-extract).
+
+Everything from [`HttpResponse`](http.md) is available too — `res.$('...')`, `res.$xpath('...')`, `res.body`, `res.json`, `res.save(...)`.
+
+---
+
+## 6. Priority & De-duplication
+
+Higher `priority` is served first; ties keep insertion order. Useful for draining detail pages before discovering more listings:
+
+```dart
+res.follow(detailUrl, tag: 'detail', priority: 10);
+```
+
+`Deduplicator` normalizes trailing slashes, folds host case, and keys on HTTP method, URL, and tag. It can be persisted and restored:
+
+```dart
+final dedup = Deduplicator();
+// ... run crawl ...
+final jsonState = dedup.toJson();
+io.dump('cache/seen.json', jsonState);
+
+// Later:
+final restored = Deduplicator.fromJson(io.json<Map<String, Object?>>('cache/seen.json')!);
+await net.crawl<String>(url).deduplicator(restored).run(handler);
+```
+
+---
+
+## 7. Events
+
+```dart
+final builder = net.crawl<String>(url);
+builder.on.start(() => log.info('starting'));
+builder.on.item((item) => bar.tick());
+builder.on.progress((res) => log.debug('${res.status} ${res.url}'));
+builder.on.error((error, stack) => log.error('failed', error, stack));
+builder.on.done((stats) => log.ok('${stats.completed} pages'));
+await builder.run(handler);
+```
+
+> Without an `on.error` handler, a failing page is skipped silently so one bad URL cannot end the run. Register it while developing.
+
+`Stats` carries `scheduled`, `completed`, `failed`, `retried`, `emitted`, `bytes`, `elapsed` and `reason`.
+
+---
+
+## 8. Testing a Pipeline
+
+Use `MapDownloader` to serve fixture responses from an in-memory map without network access:
+
+```dart
+final titles = await net.crawl<String>('https://site.test')
+    .downloader(MapDownloader<String>({
+      'https://site.test': '<html><body><h1>Hi</h1></body></html>',
+    }))
+    .collect((res) => res.emit(res.$('h1').text));
+```
+
+For custom fixture resolution, subclass `Downloader`:
+
+```dart
+class MockDownloader<T> extends Downloader<T> {
+  final Map<String, String> pages;
+  MockDownloader(this.pages);
+
+  @override
+  Future<Response<T>> download(Request<T> request) async => Response<T>(
+        request: request,
+        status: pages.containsKey('${request.url}') ? 200 : 404,
+        bytes: utf8.encode(pages['${request.url}'] ?? ''),
+        engine: engine,
+      );
+}
+```
+
+---
+
+## 9. Driving the Engine Directly
+
+For full control, build the engine and use its router:
+
+```dart
+final engine = Engine<String>(
+  downloader: HttpDownloader(concurrency: 4),
+  process: (res) => res.emit(res.$('h1').text),
+);
+
+engine.router
+  ..on(RegExp(r'/album$'), (res) { ... })
+  ..tag('disc', (res) { ... })
+  ..status(404, (res) => log.warn('missing ${res.url}'))
+  ..fallback((res) => log.debug('unhandled ${res.url}'));
+
+engine.items.listen(print);
+final stats = await engine.run(['https://example.com']);
+```
+
+`engine.queue` reports the frontier (`length`, `isEmpty`, `clear()`); `engine.stopped`, `engine.running`, `engine.active` and `engine.idle` report state.
+

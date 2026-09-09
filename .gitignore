@@ -1,0 +1,21 @@
+# Dart environment & builds
+.dart_tool/
+.packages
+build/
+
+# Temporary files & archives
+*.7z
+*.part
+*.zip
+*.tar.gz
+tmp*
+
+# KeyBOX-specific automation scripts and media downloads
+Key BOX*
+keybox*
+bin/
+
+# Example output
+output/
+tracks.jsonl
+dist/
