@@ -93,6 +93,12 @@ class Sys {
     );
     Exit.adopt(process);
 
+    // Nothing is going to be written to a captured child, and a child that
+    // reads stdin would otherwise wait on a pipe that never closes.
+    try {
+      await process.stdin.close();
+    } catch (_) {}
+
     final outBuf = StringBuffer();
     final errBuf = StringBuffer();
 
@@ -133,12 +139,23 @@ class Sys {
     }
   }
 
+  /// How long a killed process is given to exit before `SIGKILL` follows.
+  static const Duration _graceOnKill = Duration(seconds: 3);
+
   static Future<int> _await(Process process, Duration? timeout) {
     if (timeout == null) return process.exitCode;
     return process.exitCode.timeout(
       timeout,
       onTimeout: () {
+        // SIGTERM first, so the child can unwind, then SIGKILL if it ignores
+        // it. Without the escalation a process that traps SIGTERM outlives the
+        // result that claims to have killed it.
         process.kill();
+        Future<void>.delayed(_graceOnKill).then((_) {
+          try {
+            process.kill(ProcessSignal.sigkill);
+          } catch (_) {}
+        });
         return -1;
       },
     );
@@ -218,7 +235,11 @@ class Sys {
 class Exit {
   const Exit._();
 
-  static final Set<File> _files = <File>{};
+  // Keyed by path: dart:io's File has no value equality, so a Set<File> would
+  // leave `untrack(File(path))` unable to remove an entry that `track` added
+  // through a different instance — and a stuck entry keeps the SIGINT watcher,
+  // and so the process, alive forever.
+  static final Map<String, File> _files = <String, File>{};
   static final Set<Process> _procs = <Process>{};
   static final List<FutureOr<void> Function()> _hooks = [];
   static StreamSubscription<ProcessSignal>? _signal;
@@ -255,12 +276,14 @@ class Exit {
   /// Registers [file] for deletion if the program is interrupted.
   static void track(File file) {
     watch();
-    _files.add(file);
+    _files[file.path] = file;
   }
 
   /// Stops tracking [file] and releases the watcher if nothing else is tracked.
+  ///
+  /// Matched by path, so any [File] naming the same target unregisters it.
   static void untrack(File file) {
-    _files.remove(file);
+    _files.remove(file.path);
     _idle();
   }
 
@@ -301,7 +324,7 @@ class Exit {
     }
     _procs.clear();
 
-    for (final file in _files) {
+    for (final file in _files.values) {
       try {
         if (file.existsSync()) file.deleteSync();
       } catch (_) {}

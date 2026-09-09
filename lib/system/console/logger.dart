@@ -76,15 +76,19 @@ class ConsoleLogger {
   /// Runs [action] behind a [Spinner], reporting success or failure.
   ///
   /// The spinner resolves to a tick on success and a cross on failure; the
-  /// error is rethrown either way.
+  /// error is rethrown either way. Honours [level] like every other method
+  /// here: below [LogLevel.info] the work still runs, silently, and a
+  /// [LogLevel.none] logger does not even report the failure.
   Future<T> task<T>(String message, Future<T> Function() action) async {
-    final spinner = Spinner()..start(message);
+    final show = level.index >= LogLevel.info.index;
+    final spinner = show ? (Spinner()..start(message)) : null;
     try {
       final result = await action();
-      spinner.ok(message);
+      spinner?.ok(message);
       return result;
     } catch (e) {
-      spinner.fail('$message ($e)');
+      spinner?.stop();
+      error('$message ($e)');
       rethrow;
     }
   }

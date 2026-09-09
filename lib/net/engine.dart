@@ -216,10 +216,11 @@ class EngineEvents<T> {
       _errorHandlers.add(handler);
 }
 
-/// Drives a crawl: schedule, fetch, process, repeat.
+/// A bucketed FIFO priority frontier.
 ///
-/// Prefer the `net.crawl(...)` builder for ordinary use; construct an engine
-/// High-performance bucketed FIFO priority frontier queue.
+/// Requests are held in one queue per [Request.priority], kept in descending
+/// priority order, so serving is O(log buckets) and ties keep the order they
+/// were scheduled in.
 class _Frontier<T> {
   final SplayTreeMap<int, ListQueue<Request<T>>> _buckets =
       SplayTreeMap<int, ListQueue<Request<T>>>((a, b) => b.compareTo(a));
@@ -380,8 +381,12 @@ class Engine<T> {
     final origin =
         '${url.scheme}://${url.host.toLowerCase()}'
         '${url.hasPort ? ':${url.port}' : ''}';
-    final cached = _robotsCache[origin];
-    if (cached != null) return cached;
+    final cached = _robotsCache.remove(origin);
+    if (cached != null) {
+      // Reinserting on every hit orders the map least-recently-used, so a host
+      // the crawl keeps returning to is not evicted ahead of one seen once.
+      return _robotsCache[origin] = cached;
+    }
 
     if (_robotsCache.length >= _robotsCacheLimit) {
       _robotsCache.remove(_robotsCache.keys.first);

@@ -46,8 +46,19 @@ class RandAccessor {
   List<T> shuffle<T>(List<T> items) => [...items]..shuffle(_rng);
 
   /// A whole number in `[min, max)`.
-  int between(int min, int max) =>
-      max <= min ? min : min + _rng.nextInt(max - min);
+  ///
+  /// Spans wider than 2^32 are drawn from two smaller draws, since
+  /// [Random.nextInt] only accepts a 32-bit bound.
+  int between(int min, int max) {
+    if (max <= min) return min;
+    final span = max - min;
+    if (span <= _maxDraw) return min + _rng.nextInt(span);
+    final high = _rng.nextInt(1 << 32);
+    final low = _rng.nextInt(1 << 32);
+    return min + (((high << 32) | low) % span).abs();
+  }
+
+  static const int _maxDraw = 1 << 32;
 
   /// A random URL-safe id of [length] characters.
   String id([int length = 12]) => String.fromCharCodes([
@@ -57,13 +68,20 @@ class RandAccessor {
 
   /// [base] varied by up to [spread] of itself, never shorter than [base].
   ///
+  /// A negative [spread] is treated as zero.
+  ///
   /// Spacing requests by a jittered delay stops a pool of workers from
   /// resynchronising onto the same instant.
-  Duration jitter(Duration base, {double spread = 0.25}) => Duration(
-    microseconds:
-        base.inMicroseconds +
-        (base.inMicroseconds * spread * _rng.nextDouble()).round(),
-  );
+  Duration jitter(Duration base, {double spread = 0.25}) {
+    // Only ever added, so the result is a delay of at least [base]; a negative
+    // spread would otherwise make a "jittered" wait finish early.
+    final width = spread.isNaN ? 0.0 : (spread < 0 ? 0.0 : spread);
+    return Duration(
+      microseconds:
+          base.inMicroseconds +
+          (base.inMicroseconds * width * _rng.nextDouble()).round(),
+    );
+  }
 
   /// `true` with probability [chance], which is clamped to `0..1`.
   bool chance([double chance = 0.5]) => _rng.nextDouble() < chance.clamp(0, 1);

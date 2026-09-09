@@ -53,27 +53,56 @@ class Sitemap {
     return List.unmodifiable(uris);
   }
 
+  /// The deepest chain of sitemap indices [load] will follow.
+  static const int maxDepth = 8;
+
   /// Fetches a sitemap from [url] and parses its URLs.
   ///
   /// If the target is a Sitemap Index and [recursive] is `true`, fetches all
-  /// linked child sitemaps and returns the aggregated leaf URLs.
+  /// linked child sitemaps and returns the aggregated leaf URLs. An index that
+  /// points back at itself, or at another index that points back to it, is
+  /// followed only once: every fetched URL is remembered, and the descent
+  /// stops at [maxDepth] regardless.
   static Future<List<Uri>> load(
     Uri url, {
     HttpClient? client,
     bool recursive = true,
+    int maxDepth = maxDepth,
+  }) => _load(
+    url,
+    client ?? net.http,
+    recursive: recursive,
+    remaining: maxDepth,
+    visited: <String>{},
+  );
+
+  static Future<List<Uri>> _load(
+    Uri url,
+    HttpClient client, {
+    required bool recursive,
+    required int remaining,
+    required Set<String> visited,
   }) async {
-    final c = client ?? net.http;
-    final res = await c.get(url);
+    if (!visited.add(url.removeFragment().toString())) return const [];
+
+    final res = await client.get(url);
     if (!res.ok) return const [];
 
     final isIdx = nested(res.body);
     final uris = parse(res.body);
 
-    if (isIdx && recursive) {
+    if (isIdx && recursive && remaining > 0) {
       final results = <Uri>[];
       for (final childUrl in uris) {
-        final childUris = await load(childUrl, client: c, recursive: true);
-        results.addAll(childUris);
+        results.addAll(
+          await _load(
+            childUrl,
+            client,
+            recursive: true,
+            remaining: remaining - 1,
+            visited: visited,
+          ),
+        );
       }
       return List.unmodifiable(results);
     }

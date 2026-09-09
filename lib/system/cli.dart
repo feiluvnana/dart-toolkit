@@ -502,13 +502,21 @@ class Cli with _Spec<Cli> {
       if (no(clean) || (cleanAlias != null && no(cleanAlias))) {
         return false as T;
       }
-      if (given != null) return (given == 'true' || given == '1') as T;
+      if (given != null) return _truthy(given) as T;
       if (_flags.contains(clean) ||
           (cleanAlias != null && _flags.contains(cleanAlias))) {
         return true as T;
       }
-      final def = decl?.def ?? _fromEnv(decl);
-      return def is T ? def : fallback;
+      // Same precedence as every other type: env before def. An environment
+      // variable arrives as text, so it is read as a flag word rather than
+      // type-tested against bool — without that, `env: 'FORCE'` could never
+      // satisfy a boolean option.
+      final fromEnv = _fromEnv(decl);
+      if (fromEnv != null) return (_truthy(fromEnv) as T);
+      final def = decl?.def;
+      if (def is T) return def;
+      if (def is String) return _truthy(def) as T;
+      return fallback;
     }
 
     final raw = given ?? _fromEnv(decl) ?? decl?.def;
@@ -521,6 +529,15 @@ class Cli with _Spec<Cli> {
       _ => text as T,
     };
   }
+
+  /// Whether [value] spells a true boolean.
+  ///
+  /// Accepts the words an environment variable or `.env` file is likely to
+  /// carry, matching [EnvAccessor.get].
+  static bool _truthy(String value) => switch (value.trim().toLowerCase()) {
+    'true' || '1' || 'yes' || 'on' => true,
+    _ => false,
+  };
 
   /// The value of the environment variable this declaration names, if set.
   String? _fromEnv(_Decl? decl) {
@@ -554,11 +571,21 @@ class Cli with _Spec<Cli> {
   }
 
   /// Whether [name] resolved to a value from any source.
+  ///
+  /// For an option this means a *value*: `--out` with nothing after it parses
+  /// as a bare switch, and satisfying `required` with it would leave [get]
+  /// handing back the call site's fallback for an argument the script was
+  /// told it had. A flag is satisfied by its presence alone.
   bool _supplied(String name) {
-    final decl = _decl(_clean(name));
-    return has(name, decl?.alias) ||
-        decl?.def != null ||
-        _fromEnv(decl) != null;
+    final clean = _clean(name);
+    final decl = _decl(clean);
+    if (decl?.flag ?? false) return has(name, decl?.alias);
+    if (decl?.def != null || _fromEnv(decl) != null) return true;
+    final alias = _alias(name, null);
+    if (_options.containsKey(clean)) return true;
+    if (alias != null && _options.containsKey(alias)) return true;
+    // Undeclared names have no shape to enforce; presence is all there is.
+    return decl == null && has(name, alias);
   }
 
   /// Descriptions of every given value that its declaration disallows.

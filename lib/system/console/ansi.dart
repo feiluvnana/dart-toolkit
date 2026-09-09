@@ -1,3 +1,11 @@
+/// # ANSI Colours & Styling
+///
+/// Escape sequences, the detection that decides whether to emit them, and the
+/// [AnsiStringExtension] helpers that wrap a string in one. [Ansi.width]
+/// measures what a terminal will actually render, which is what every box in
+/// `system.console` lines its columns up with.
+library;
+
 import 'dart:io';
 
 // ============================================================================
@@ -67,33 +75,57 @@ class Ansi {
   static const String inverse = '\x1B[7m';
 
   // Foreground Colors
+  /// Black foreground.
   static const String black = '\x1B[30m';
+  /// Red foreground.
   static const String red = '\x1B[31m';
+  /// Green foreground.
   static const String green = '\x1B[32m';
+  /// Yellow foreground.
   static const String yellow = '\x1B[33m';
+  /// Blue foreground.
   static const String blue = '\x1B[34m';
+  /// Magenta foreground.
   static const String magenta = '\x1B[35m';
+  /// Cyan foreground.
   static const String cyan = '\x1B[36m';
+  /// White foreground.
   static const String white = '\x1B[37m';
+  /// Gray foreground.
   static const String gray = '\x1B[90m';
 
   // Bright Foreground Colors
+  /// Bright red foreground.
   static const String brightred = '\x1B[91m';
+  /// Bright green foreground.
   static const String brightgreen = '\x1B[92m';
+  /// Bright yellow foreground.
   static const String brightyellow = '\x1B[93m';
+  /// Bright blue foreground.
   static const String brightblue = '\x1B[94m';
+  /// Bright magenta foreground.
   static const String brightmagenta = '\x1B[95m';
+  /// Bright cyan foreground.
   static const String brightcyan = '\x1B[96m';
+  /// Bright white foreground.
   static const String brightwhite = '\x1B[97m';
 
   // Background Colors
+  /// Black background.
   static const String bgblack = '\x1B[40m';
+  /// Red background.
   static const String bgred = '\x1B[41m';
+  /// Green background.
   static const String bggreen = '\x1B[42m';
+  /// Yellow background.
   static const String bgyellow = '\x1B[43m';
+  /// Blue background.
   static const String bgblue = '\x1B[44m';
+  /// Magenta background.
   static const String bgmagenta = '\x1B[45m';
+  /// Cyan background.
   static const String bgcyan = '\x1B[46m';
+  /// White background.
   static const String bgwhite = '\x1B[47m';
 
   /// 256-color foreground ANSI sequence for [code] (0-255).
@@ -142,8 +174,59 @@ class Ansi {
     return input.replaceAll(RegExp(r'\x1B\[[0-?]*[ -/]*[@-~]'), '');
   }
 
-  /// Calculates the visible printable character length of [input], ignoring ANSI escape sequences.
-  static int width(String input) => strip(input).length;
+  /// The number of terminal columns [input] occupies, ANSI codes excluded.
+  ///
+  /// Counting code units would be wrong in both directions: an emoji is two
+  /// code units but two columns, a CJK ideograph is one code unit but two
+  /// columns, and a combining accent is one code unit but no width at all.
+  /// Every box drawn from this — tables, rules, progress bars — depends on
+  /// the count matching what the terminal actually renders.
+  static int width(String input) {
+    var columns = 0;
+    for (final rune in strip(input).runes) {
+      columns += _runeWidth(rune);
+    }
+    return columns;
+  }
+
+  /// How many columns one code point occupies.
+  static int _runeWidth(int rune) {
+    // Combining marks and zero-width joiners hang off the previous character.
+    if (rune == 0x200B ||
+        rune == 0x200C ||
+        rune == 0x200D ||
+        rune == 0xFEFF ||
+        (rune >= 0x0300 && rune <= 0x036F) ||
+        (rune >= 0x1AB0 && rune <= 0x1AFF) ||
+        (rune >= 0x20D0 && rune <= 0x20FF) ||
+        (rune >= 0xFE00 && rune <= 0xFE0F)) {
+      return 0;
+    }
+    return _isWide(rune) ? 2 : 1;
+  }
+
+  /// Whether [rune] is East Asian Wide or Fullwidth, or an emoji presentation.
+  ///
+  /// The ranges follow Unicode's East Asian Width property, kept as a short
+  /// table rather than a dependency: these are the blocks scraped pages and
+  /// terminal output actually carry.
+  static bool _isWide(int rune) =>
+      (rune >= 0x1100 && rune <= 0x115F) || // Hangul Jamo
+      (rune >= 0x2E80 && rune <= 0x303E) || // CJK radicals, Kangxi
+      (rune >= 0x3041 && rune <= 0x33FF) || // Hiragana .. CJK compatibility
+      (rune >= 0x3400 && rune <= 0x4DBF) || // CJK extension A
+      (rune >= 0x4E00 && rune <= 0x9FFF) || // CJK unified
+      (rune >= 0xA000 && rune <= 0xA4CF) || // Yi
+      (rune >= 0xAC00 && rune <= 0xD7A3) || // Hangul syllables
+      (rune >= 0xF900 && rune <= 0xFAFF) || // CJK compatibility ideographs
+      (rune >= 0xFE10 && rune <= 0xFE19) || // Vertical forms
+      (rune >= 0xFE30 && rune <= 0xFE6F) || // CJK compatibility forms
+      (rune >= 0xFF00 && rune <= 0xFF60) || // Fullwidth forms
+      (rune >= 0xFFE0 && rune <= 0xFFE6) ||
+      (rune >= 0x1F300 && rune <= 0x1F64F) || // Emoji, emoticons
+      (rune >= 0x1F900 && rune <= 0x1F9FF) ||
+      (rune >= 0x1FA70 && rune <= 0x1FAFF) ||
+      (rune >= 0x20000 && rune <= 0x3FFFD); // CJK extensions B+
 }
 
 /// Convenience extensions for applying ANSI styles and colors directly to strings.

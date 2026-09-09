@@ -67,13 +67,23 @@ class Store {
 
   /// Reloads from [path], or from this store's own file when omitted.
   ///
-  /// A missing, empty, or non-object document leaves the store untouched.
+  /// A missing, empty, unreadable, malformed or non-object document leaves the
+  /// store untouched. A half-written file is exactly what an interrupted run
+  /// leaves behind, and a store that throws from its own constructor would
+  /// take the next run down with it.
   void load([String? path]) {
     final target = path ?? _path;
     if (target == null || !File(target).existsSync()) return;
-    final text = File(target).readAsStringSync();
-    if (text.trim().isEmpty) return;
-    final decoded = jsonDecode(text);
+    final Object? decoded;
+    try {
+      final text = File(target).readAsStringSync();
+      if (text.trim().isEmpty) return;
+      decoded = jsonDecode(text);
+    } on FormatException {
+      return;
+    } on FileSystemException {
+      return;
+    }
     if (decoded is! Map) return;
     _data
       ..clear()

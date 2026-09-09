@@ -90,7 +90,13 @@ class ZipAccessor {
 
     if (type == FileSystemEntityType.directory) {
       final root = Directory(source);
-      await for (final entity in root.list(recursive: true)) {
+      // followLinks defaults to true, which lets a link out of the tree pull
+      // unrelated files in — and a link that points at an ancestor walk
+      // forever.
+      await for (final entity in root.list(
+        recursive: true,
+        followLinks: false,
+      )) {
         final name = p
             .relative(entity.path, from: source)
             .replaceAll(r'\', '/');
@@ -135,7 +141,8 @@ class ZipAccessor {
   ///
   /// Returns the files written. Entries that would escape [dest] — a `..`
   /// segment or an absolute path, the "zip slip" attack — are skipped rather
-  /// than trusted, since an archive is usually something you downloaded.
+  /// than trusted, since an archive is usually something you downloaded, and
+  /// so are symlink entries, which can point anywhere at all.
   Future<List<File>> unpack(
     String source,
     String dest, {
@@ -151,6 +158,10 @@ class ZipAccessor {
     for (final entry in archive) {
       final target = p.normalize(p.join(root, entry.name));
       if (!p.isWithin(root, target)) continue;
+      // A link entry names a path this has no business creating: recreating it
+      // as a directory is simply wrong, and honouring it could point out of
+      // [dest] the way a `..` entry would.
+      if (entry.isSymbolicLink) continue;
       if (!entry.isFile) {
         await Directory(target).create(recursive: true);
         continue;
@@ -187,9 +198,12 @@ class ZipAccessor {
   }
 
   /// Gzip-compresses [bytes].
+  ///
+  /// Named for the operation, not the container: the output carries a gzip
+  /// header, so it is what a `.gz` file holds rather than a raw deflate stream.
   List<int> deflate(List<int> bytes) => GZipEncoder().encodeBytes(bytes);
 
-  /// Reverses [deflate].
+  /// Reverses [deflate], decompressing a gzip stream.
   List<int> inflate(List<int> bytes) =>
       GZipDecoder().decodeBytes(_asBytes(bytes));
 

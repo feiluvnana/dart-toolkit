@@ -25,6 +25,17 @@ import 'selector.dart';
 // HTTP NETWORKING (HttpClient / HttpResponse)
 // ============================================================================
 
+/// An HTTP failure that retrying cannot fix.
+///
+/// Thrown for a body larger than [HttpClient.cap] and for a redirect chain
+/// past its limit: both are settled answers from the server, so
+/// [HttpClient.send] rethrows them instead of spending its retry budget
+/// re-downloading the same refusal.
+final class FatalHttpException extends HttpException {
+  /// Creates a non-retryable HTTP exception.
+  const FatalHttpException(super.message, {super.uri});
+}
+
 /// HTTP verbs supported by [HttpClient.send].
 enum HttpMethod {
   /// Retrieve a resource.
@@ -718,7 +729,7 @@ class HttpClient with PathResolver {
         currentBody?.apply(request);
         try {
           final streamed = await _client.send(request).timeout(deadline);
-          final response = await _collect(streamed, currentUrl);
+          final response = await _collect(streamed, currentUrl, deadline);
           if (jar != null && response.headers.containsKey('set-cookie')) {
             jar!.add(response.headers['set-cookie']!, uri: currentUrl);
           }
@@ -736,7 +747,7 @@ class HttpClient with PathResolver {
               _isRedirect(response.statusCode) &&
               response.headers.containsKey('location')) {
             if (redirectCount >= redirects) {
-              throw HttpException(
+              throw FatalHttpException(
                 'Redirect limit of $redirects exceeded',
                 uri: currentUrl,
               );
@@ -763,7 +774,10 @@ class HttpClient with PathResolver {
             bytes: response.bodyBytes,
             encoding: encoding ?? this.encoding,
           );
-        } catch (_) {
+        } catch (error) {
+          // A body over the cap, or a redirect loop, is the server's settled
+          // answer: replaying it only re-downloads the same refusal.
+          if (error is FatalHttpException) rethrow;
           if (!allowRetry || attempt >= maxAttempts) rethrow;
           await Future<void>.delayed(_backoffWithJitter(backoff * attempt));
         }
@@ -772,38 +786,50 @@ class HttpClient with PathResolver {
   }
 
   /// Reads [streamed] into a response, refusing bodies larger than [cap].
+  ///
+  /// [deadline] bounds the whole body transfer, not just the headers, so a
+  /// server that dribbles bytes cannot hold a worker open indefinitely.
   Future<http.Response> _collect(
     http.StreamedResponse streamed,
     Uri url,
-  ) async {
+    Duration deadline,
+  ) {
     final limit = cap;
-    if (limit == null) return http.Response.fromStream(streamed);
 
-    final declared = streamed.contentLength;
-    if (declared != null && declared > limit) {
-      await streamed.stream.drain<void>();
-      throw HttpException(
-        'Response of $declared bytes exceeds the cap of $limit',
-        uri: url,
+    Future<http.Response> read() async {
+      if (limit == null) return http.Response.fromStream(streamed);
+
+      final declared = streamed.contentLength;
+      if (declared != null && declared > limit) {
+        await streamed.stream.drain<void>();
+        throw FatalHttpException(
+          'Response of $declared bytes exceeds the cap of $limit',
+          uri: url,
+        );
+      }
+
+      final builder = BytesBuilder(copy: false);
+      await for (final chunk in streamed.stream) {
+        builder.add(chunk);
+        if (builder.length > limit) {
+          throw FatalHttpException(
+            'Response exceeds the cap of $limit',
+            uri: url,
+          );
+        }
+      }
+      return http.Response.bytes(
+        builder.takeBytes(),
+        streamed.statusCode,
+        request: streamed.request,
+        headers: streamed.headers,
+        isRedirect: streamed.isRedirect,
+        persistentConnection: streamed.persistentConnection,
+        reasonPhrase: streamed.reasonPhrase,
       );
     }
 
-    final builder = BytesBuilder(copy: false);
-    await for (final chunk in streamed.stream) {
-      builder.add(chunk);
-      if (builder.length > limit) {
-        throw HttpException('Response exceeds the cap of $limit', uri: url);
-      }
-    }
-    return http.Response.bytes(
-      builder.takeBytes(),
-      streamed.statusCode,
-      request: streamed.request,
-      headers: streamed.headers,
-      isRedirect: streamed.isRedirect,
-      persistentConnection: streamed.persistentConnection,
-      reasonPhrase: streamed.reasonPhrase,
-    );
+    return read().timeout(deadline);
   }
 
   static bool _isRedirect(int statusCode) =>
@@ -1116,7 +1142,8 @@ class Cookie {
 
   /// Parses a single `Set-Cookie` header value.
   ///
-  /// For a header that may carry several cookies use [parseAll].
+  /// For a header that may carry several cookies use [CookieJar.add], which
+  /// splits the comma-joined form with [split] first.
   factory Cookie.parse(String setCookieHeader, {Uri? uri}) {
     final parts = setCookieHeader.split(';');
     final nameValue = parts.first.split('=');
@@ -1155,7 +1182,9 @@ class Cookie {
     return Cookie(
       name,
       value,
-      domain: domain ?? uri?.host,
+      // A Domain the request host does not belong to is ignored, falling back
+      // to a host-only cookie. See [_acceptDomain].
+      domain: _acceptDomain(domain, uri?.host) ?? uri?.host,
       // Max-Age wins over Expires per RFC 6265 section 5.3.
       path: (path != null && path.startsWith('/')) ? path : _defaultPath(uri),
       expires:
@@ -1165,6 +1194,27 @@ class Cookie {
       secure: secure,
       httponly: httponly,
     );
+  }
+
+  /// The `Domain` attribute to honour, or `null` to make the cookie host-only.
+  ///
+  /// RFC 6265 section 5.3.6: a server may only widen a cookie to a domain the
+  /// request host itself belongs to. Without this check a response from
+  /// `evil.example.com` could set `Domain=com` and have the cookie sent to
+  /// every other `.com` host the client later visits. A domain with no dot in
+  /// it — a bare TLD such as `com` — is refused outright, and so is a host
+  /// that is only a suffix match without a label boundary (`notexample.com`
+  /// against `Domain=example.com`).
+  static String? _acceptDomain(String? domain, String? host) {
+    if (domain == null || domain.isEmpty) return null;
+    final wanted = domain.toLowerCase();
+    // A bare TLD, or anything without a label separator, is far too broad.
+    if (!wanted.contains('.') || wanted.startsWith('.')) return null;
+    if (host == null || host.isEmpty) return null;
+    final source = host.toLowerCase();
+    if (source == wanted) return wanted;
+    if (source.endsWith('.$wanted')) return wanted;
+    return null;
   }
 
   /// Whether this cookie should be sent with a request to [url].
@@ -1204,8 +1254,9 @@ class CookieJar {
   /// Parses and stores every cookie in a `Set-Cookie` header.
   ///
   /// Handles the comma-joined form `package:http` produces for a response that
-  /// sent several `Set-Cookie` headers. A cookie with an empty value or a past
-  /// expiry deletes the entry it names, as a server clearing a session does.
+  /// sent several `Set-Cookie` headers. A cookie with a past expiry deletes the
+  /// entry it names, as a server clearing a session does. A `Domain` the
+  /// responding host does not belong to is ignored — see [Cookie.parse].
   void add(String headerValue, {Uri? uri}) {
     for (final cookie in Cookie._parseAll(headerValue, uri: uri)) {
       if (cookie.name.isEmpty) continue;

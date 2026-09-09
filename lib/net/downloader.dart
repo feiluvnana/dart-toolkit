@@ -65,12 +65,14 @@ abstract class Downloader<T> with PathResolver {
   Future<void> _throttleHost(String host, Duration gap) async {
     if (gap <= Duration.zero) return;
     final now = DateTime.now();
-    final scheduled = _nextHostAccess[host];
+    final scheduled = _nextHostAccess.remove(host);
     final targetTime =
         (scheduled != null && scheduled.isAfter(now)) ? scheduled : now;
     if (scheduled == null && _nextHostAccess.length >= _hostTableLimit) {
-      // A broad crawl meets more hosts than it needs to remember; the oldest
-      // entry is the least likely to be due a wait.
+      // A broad crawl meets more hosts than it needs to remember. Removing and
+      // reinserting above makes this map least-recently-used, so the entry
+      // dropped here is the host longest untouched rather than merely the one
+      // seen first — a busy host stays paced however long the crawl runs.
       _nextHostAccess.remove(_nextHostAccess.keys.first);
     }
     _nextHostAccess[host] = targetTime.add(gap);
@@ -306,6 +308,15 @@ class HttpDownloader<T> extends Downloader<T> {
           engine: engine,
         );
       }
+      // A path that is not there is a miss, not a page whose body is its own
+      // URL: report it the way a 404 from the network would arrive.
+      return Response<T>(
+        request: request,
+        status: 404,
+        headers: const {'content-type': 'text/plain'},
+        bytes: const [],
+        engine: engine,
+      );
     }
     if (uri.scheme != 'http' && uri.scheme != 'https') {
       final content =
@@ -375,9 +386,12 @@ class HttpDownloader<T> extends Downloader<T> {
       return file;
     }
     try {
+      // Resolve here: the client has a base of its own (often none, when the
+      // shared net.http client is reused), so handing it a bare relative path
+      // would quietly ignore this downloader's base.
       final file = await _client.download(
         source,
-        path,
+        resolve(path),
         onProgress: onProgress ?? on._progress,
         part: part,
         match: match,

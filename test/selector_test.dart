@@ -277,16 +277,41 @@ void main() {
     );
 
     test('handles nested and quoted pseudo-selectors', () {
+      // The targets sit *below* the fragment's top-level element, because
+      // find() searches descendants — see the agreement test further down.
       final nested = $(
-        '<div><p><b>hi</b></p></div>',
+        '<section><div><p><b>hi</b></p></div></section>',
       ).find('div:has(p:contains(hi))');
       expect(nested.length, equals(1));
 
-      final quotedParen = $('<p>a)b</p>').find('p:contains("a)b")');
+      final quotedParen = $(
+        '<div><p>a)b</p></div>',
+      ).find('p:contains("a)b")');
       expect(quotedParen.length, equals(1));
 
-      final escapedQuote = $('<p>a"b</p>').find(r'p:contains("a\"b")');
+      final escapedQuote = $(
+        '<div><p>a"b</p></div>',
+      ).find(r'p:contains("a\"b")');
       expect(escapedQuote.length, equals(1));
+    });
+
+    test('find searches descendants for CSS and jQuery selectors alike', () {
+      // An extended selector used to match the context element itself while
+      // the plain-CSS fast path did not, so the same query answered
+      // differently depending on whether it happened to carry a pseudo.
+      final fragment = $('<div class="x">hello</div>');
+      expect(fragment.find('div'), isEmpty);
+      expect(fragment.find('div:contains(hello)'), isEmpty);
+      expect(fragment.find('.x:first'), isEmpty);
+
+      // matching() is how you ask whether the set itself qualifies, and the
+      // callable shorthand still searches the whole parsed document.
+      expect(fragment.matching('div:contains(hello)').length, equals(1));
+      expect(fragment('div:contains(hello)').length, equals(1));
+
+      // A document root can still match itself, as querySelectorAll does.
+      final page = $('<html><body><p>x</p></body></html>');
+      expect(page('body:has(p)').length, equals(1));
     });
 
     test('value and values agree on textarea text and input value', () {

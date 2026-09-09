@@ -30,11 +30,13 @@ class CsvAccessor {
   /// Parses CSV [text] into rows of cells.
   ///
   /// Handles quoted fields containing [delimiter], newlines, and `""` escaped
-  /// quotes.
+  /// quotes. [delimiter] may be more than one character. Blank lines produce
+  /// no row, so a trailing newline does not add an empty one.
   List<List<String>> parse(String text, {String delimiter = ','}) {
     final rows = <List<String>>[];
     final field = StringBuffer();
     final row = <String>[];
+    final sep = delimiter.isEmpty ? ',' : delimiter;
     var quoted = false;
 
     void endField() {
@@ -43,6 +45,8 @@ class CsvAccessor {
     }
 
     void endRow() {
+      // A line with nothing on it at all is separation, not an empty record.
+      if (field.isEmpty && row.isEmpty) return;
       endField();
       rows.add(List<String>.of(row));
       row.clear();
@@ -61,19 +65,25 @@ class CsvAccessor {
         }
         continue;
       }
-      switch (char) {
-        case '"':
-          quoted = true;
-        case '\r':
-          if (i + 1 < text.length && text[i + 1] == '\n') i++;
-          endRow();
-        case '\n':
-          endRow();
-        case final c when c == delimiter:
-          endField();
-        default:
-          field.write(char);
+      if (char == '"') {
+        quoted = true;
+        continue;
       }
+      if (char == '\r') {
+        if (i + 1 < text.length && text[i + 1] == '\n') i++;
+        endRow();
+        continue;
+      }
+      if (char == '\n') {
+        endRow();
+        continue;
+      }
+      if (text.startsWith(sep, i)) {
+        endField();
+        i += sep.length - 1;
+        continue;
+      }
+      field.write(char);
     }
     if (field.isNotEmpty || row.isNotEmpty) endRow();
     return rows;
@@ -81,7 +91,8 @@ class CsvAccessor {
 
   /// Renders [rows] (maps or rows of cells) as CSV text.
   ///
-  /// When [rows] contains maps, column order comes from [headers] or the first row's keys.
+  /// When [rows] contains maps, columns come from [headers], or from the union
+  /// of every row's keys in the order they are first seen.
   /// When [rows] contains cell lists, rows are prefixed with [headers] if supplied.
   String format(
     Iterable<dynamic> rows, {
@@ -98,7 +109,14 @@ class CsvAccessor {
     final first = rows.first;
     if (first is Map) {
       final list = rows.cast<Map<dynamic, dynamic>>().toList();
-      final keys = headers ?? list.first.keys.map((k) => k.toString()).toList();
+      // Every key any row carries becomes a column, in first-seen order.
+      // Taking them from the first row alone would silently drop a field that
+      // only later records have.
+      final keys =
+          headers ??
+          <String>{
+            for (final row in list) ...row.keys.map((k) => k.toString()),
+          }.toList();
       final buffer =
           StringBuffer()
             ..writeln(keys.map((k) => _escape(k, delimiter)).join(delimiter));
@@ -208,16 +226,25 @@ class CsvAccessor {
 
     final field = StringBuffer();
     final row = <String>[];
+    final sep = delimiter.isEmpty ? ',' : delimiter;
     var quoted = false;
     var pendingQuote = false;
+    var carry = '';
 
     void endField() {
       row.add(field.toString());
       field.clear();
     }
 
-    await for (final chunk in file.openRead().transform(encoding.decoder)) {
-      for (var i = 0; i < chunk.length; i++) {
+    await for (final raw in file.openRead().transform(encoding.decoder)) {
+      // A multi-character delimiter can straddle a chunk boundary, so hold
+      // back the tail that might be the start of one.
+      final chunk = carry + raw;
+      final safe =
+          sep.length > 1 ? chunk.length - (sep.length - 1) : chunk.length;
+      var i = 0;
+      for (; i < chunk.length; i++) {
+        if (i >= safe && !pendingQuote && !quoted) break;
         final char = chunk[i];
 
         if (pendingQuote) {
@@ -238,24 +265,45 @@ class CsvAccessor {
           continue;
         }
 
-        switch (char) {
-          case '"':
-            quoted = true;
-          case '\r':
-            if (i + 1 < chunk.length && chunk[i + 1] == '\n') i++;
-            endField();
-            yield List<String>.of(row);
-            row.clear();
-          case '\n':
-            endField();
-            yield List<String>.of(row);
-            row.clear();
-          case final c when c == delimiter:
-            endField();
-          default:
-            field.write(char);
+        if (char == '"') {
+          quoted = true;
+          continue;
         }
+        if (char == '\r') {
+          if (i + 1 < chunk.length && chunk[i + 1] == '\n') i++;
+          if (field.isNotEmpty || row.isNotEmpty) {
+            endField();
+            yield List<String>.of(row);
+            row.clear();
+          }
+          continue;
+        }
+        if (char == '\n') {
+          if (field.isNotEmpty || row.isNotEmpty) {
+            endField();
+            yield List<String>.of(row);
+            row.clear();
+          }
+          continue;
+        }
+        if (chunk.startsWith(sep, i)) {
+          endField();
+          i += sep.length - 1;
+          continue;
+        }
+        field.write(char);
       }
+      carry = chunk.substring(i);
+    }
+    for (var i = 0; i < carry.length; i++) {
+      final char = carry[i];
+      if (char == '\r' || char == '\n') continue;
+      if (carry.startsWith(sep, i)) {
+        endField();
+        i += sep.length - 1;
+        continue;
+      }
+      field.write(char);
     }
     if (field.isNotEmpty || row.isNotEmpty) {
       endField();

@@ -2,6 +2,145 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+An audit of the library against its own documentation. Every item below was
+reproduced first and now has a regression test in `test/regression_test.dart`.
+
+### Security
+
+- **A `Set-Cookie` header can no longer widen a cookie to a domain the
+  responding host does not belong to.** The `Domain` attribute was stored
+  verbatim, so a response from `evil.example.com` could set `Domain=com` and
+  have that cookie sent to every other `.com` host the client later visited.
+  A domain is now honoured only when the request host equals it or sits under
+  it at a label boundary, and a bare TLD is refused outright; anything else
+  falls back to a host-only cookie (RFC 6265 section 5.3.6).
+
+### Fixed
+
+- **`system.cli.get<bool>` reads the `env` variable an option declares.** The
+  environment value arrives as text and was type-tested against `bool`, so it
+  could never satisfy a boolean option, and `def` was consulted ahead of `env`
+  against the documented order. Both now match every other type: the command
+  line, then `env`, then `def`, then the call site's fallback.
+- **`require` no longer accepts a valueless switch for an option.** `--out`
+  with nothing after it parses as a bare switch, which satisfied
+  `required: true` while `get` still handed back the call site's fallback. A
+  flag is still satisfied by its presence alone.
+- **A `robots.txt` group holding only `Crawl-delay` no longer absorbs the
+  rules of the group after it.** Group boundaries were inferred from whether
+  any rule had been collected, so a `User-agent` with just a crawl delay stayed
+  open and inherited the next agent's `Disallow` lines.
+- **`Sitemap.load` cannot recurse forever.** A sitemap index pointing at itself,
+  or at another index pointing back, looped indefinitely. Fetched URLs are now
+  remembered and the descent stops at `Sitemap.maxDepth`.
+- **`coerce` no longer turns a URL into a `data:` document** because its query
+  carried `</` or `/>`; recognised schemes are tested before markup is sniffed.
+- **A `file:` URI for a path that is not there reports 404.** It fell through to
+  the generic branch and returned status 200 with the URI string as the body.
+- **A crawl's `.base()` is honoured for HTTP downloads.** `Downloader.save`
+  delegated the destination to the client, which resolves against its own base
+  — usually the shared `net.http` client, which has none — so `.base('out')`
+  silently wrote to the working directory. The other schemes already resolved.
+- **`HttpClient.send` no longer spends its retry budget on settled failures.**
+  A body over `cap` and a redirect chain past its limit were caught by the
+  generic retry handler and re-downloaded; both now raise
+  `FatalHttpException`, which is rethrown immediately.
+- **The per-request `timeout` covers the response body.** It wrapped only the
+  request, so a server dribbling bytes could hold a worker open indefinitely.
+- **`find` searches descendants for jQuery selectors as it always did for
+  plain CSS.** An extended selector also matched the context element itself, so
+  `find('div')` and `find('div:contains(x)')` disagreed on the same fragment.
+  Use `matching` to ask whether the set itself qualifies, or the callable
+  shorthand to search the whole parsed document; a document root can still
+  match itself, as `querySelectorAll` does.
+- **`system.untrack` releases the file it names.** Tracked files were held in a
+  `Set<File>` and `dart:io`'s `File` has no value equality, so untracking
+  through a different instance left the entry — and a stuck entry keeps the
+  `SIGINT` watcher, and so the process, alive.
+- **A timed-out subprocess is followed to `SIGKILL`.** `system.run` sent
+  `SIGTERM`, reported `-1` and disowned the process, leaving a child that traps
+  the signal orphaned. Its stdin is also closed now, so a child that reads
+  input cannot block a captured run forever.
+- **Atomic writes no longer unlink the destination first.** POSIX `rename`
+  replaces atomically; deleting first opened a window in which a reader saw no
+  file at all. The unlink now happens only on Windows, where it is required.
+- **`Fs.download` closes its sink when a transfer fails**, instead of leaking
+  the descriptor and blocking the cleanup unlink on Windows.
+- **`io.hash` streams the file**, as `util.hash`'s documentation always claimed;
+  both variants read the whole thing into memory.
+- **`io.csv.format` keeps columns that only later rows carry.** Columns came
+  from the first row's keys alone, so a field absent from it was dropped with
+  no error. Columns are now the union of every row's keys, first-seen order.
+- **`io.csv` honours a multi-character delimiter**, in `parse` and in the
+  streaming reader, including one straddling a chunk boundary. It was compared
+  a character at a time, so anything longer never matched.
+- **A blank line no longer yields an empty CSV row**, so a trailing newline
+  does not add one.
+- **`io.store` survives a malformed file.** `load` threw `FormatException`
+  from the constructor, so one interrupted write made every later run fail.
+  A missing, empty, unreadable, malformed or non-object document leaves the
+  store untouched.
+- **`Ansi.width` counts terminal columns.** It counted UTF-16 code units, so a
+  CJK ideograph measured 1 against the 2 it renders and every table, box and
+  rule built from wide text came out crooked. Combining marks now measure zero.
+- **`Table` renders with a partial `alignments` list** instead of throwing
+  `RangeError`; it is padded to the column count with `ColumnAlign.left`.
+- **`util.text.number` stops merging separate numbers.** A space counted as
+  digit grouping unconditionally, so `'12 34'` read as `1234` and
+  `numbers('1 2 3')` as `[123]`. A space now groups only when it separates
+  whole groups of three, leaving `'1 234 567'` a single number.
+- **`util.text.slug` keeps letters of other scripts.** Everything outside
+  `a-z0-9` collapsed, so a CJK or Cyrillic title produced an empty slug — and
+  an empty filename with it.
+- **`util.text.clip` never splits a character in half**, which turned a clipped
+  emoji into a replacement character.
+- **`util.size.format` picks the unit after rounding**, so 1048575 bytes is
+  `1.0 MB` rather than `1024.0 KB`.
+- **`util.size.parse` returns 0 for a unit it does not know**, as documented,
+  instead of reading `'10 XB'` as ten bytes.
+- **`util.rand.jitter` is never shorter than its base**, as documented; a
+  negative spread is treated as zero. **`between`** handles spans wider than
+  `Random.nextInt`'s 32-bit bound instead of throwing `RangeError`.
+- **`Semaphore.release` no longer raises the permit ceiling.** A release that
+  paired with no acquire pushed the count above the maximum, removing the bound
+  the semaphore exists to enforce.
+- **`PoolFailure.toString` describes an empty failure list** instead of
+  throwing `StateError`.
+- **`reader.pick`, `picks` and `ask` give up at end of input.** Each re-prompted
+  forever once stdin closed — an unattended run spun writing prompts nothing
+  could answer — and now throw `StateError` explaining how to supply the value.
+  **`reader.close`** completes any prompt still waiting rather than leaving its
+  future pending, and **`secret`** works off a terminal, where reading
+  `echoMode` threw before the guard could restore it.
+- **`logger.task` honours `level`**, so a `LogLevel.none` logger no longer
+  prints a spinner. **`Progress.done`, `Progress.fail` and `Spinner.stop`** no
+  longer write a stray newline or carriage return when stdout is not a
+  terminal, as "piped output stays clean" promised.
+- **`git` query methods fail softly when `git` is not installed.**
+  `ProcessException` escaped, against the documented contract; the result now
+  carries `GitAccessor.missingExit`. **`branch`** reports `''` for a detached
+  `HEAD` rather than the literal `HEAD`.
+- **`zip.pack` no longer follows symlinks**, which pulled in files from outside
+  the tree and could walk in circles, and **`unpack` skips link entries**
+  rather than recreating them as directories.
+- **The robots, host-throttle and selector caches evict least-recently-used
+  entries**, as their comments claimed; all three dropped the oldest insertion,
+  so a host or selector in constant use could be evicted ahead of one seen once.
+
+### Changed
+
+- **`Progress`'s default glyphs match `system.console.progress`** (`█` and `░`);
+  the two entry points disagreed.
+- **`Cli.get<bool>` accepts the same words as `system.env.get`** — `true`, `1`,
+  `yes`, `on` — for values reached through `env` or `def`.
+- Documentation corrected where the code was right and the prose was not:
+  `io.async` mirrors every disk operation rather than literally every name on
+  `io`; `Cookie.parse` points at `CookieJar.add` instead of a private method;
+  `Engine`'s truncated doc comment no longer sits on the frontier queue; and
+  `zip.deflate` says plainly that it produces a gzip stream.
+
 ## 1.1.0
 
 Expands `system.cli` from an argument parser into a full command-line

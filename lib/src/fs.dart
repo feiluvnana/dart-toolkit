@@ -12,7 +12,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:crypto/crypto.dart';
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 
@@ -184,8 +184,7 @@ class Fs {
     Exit.track(staging);
     try {
       await fill(staging);
-      if (file.existsSync()) file.deleteSync();
-      staging.renameSync(path);
+      _swap(staging, file);
       return file;
     } catch (_) {
       _discard(staging);
@@ -210,8 +209,7 @@ class Fs {
     Exit.track(staging);
     try {
       fill(staging);
-      if (file.existsSync()) file.deleteSync();
-      staging.renameSync(path);
+      _swap(staging, file);
       return file;
     } catch (_) {
       _discard(staging);
@@ -418,13 +416,19 @@ class Fs {
         final total = response.contentLength ?? -1;
         var received = 0;
         final sink = staging.openWrite();
-        await response.stream.listen((chunk) {
-          sink.add(chunk);
-          received += chunk.length;
-          onProgress?.call(received, total);
-        }).asFuture<void>();
-        await sink.flush();
-        await sink.close();
+        try {
+          await response.stream.listen((chunk) {
+            sink.add(chunk);
+            received += chunk.length;
+            onProgress?.call(received, total);
+          }).asFuture<void>();
+          await sink.flush();
+        } finally {
+          // A transfer that dies mid-stream still holds an open handle on the
+          // staging file; leaving it open leaks the descriptor and blocks the
+          // cleanup unlink on Windows.
+          await sink.close();
+        }
 
         if (total != -1 && staging.lengthSync() != total) {
           throw HttpException('Incomplete download', uri: url);
@@ -479,29 +483,71 @@ class Fs {
     path,
   ).openRead().transform(encoding.decoder).transform(const LineSplitter());
 
+  /// How much of a file is read at a time when hashing it.
+  static const int _hashChunk = 64 * 1024;
+
+  static crypto.Hash _digest(Digest algorithm) => switch (algorithm) {
+    Digest.md5 => crypto.md5,
+    Digest.sha256 => crypto.sha256,
+  };
+
   /// Returns the hex digest of [path] using [algorithm].
+  ///
+  /// Reads the file in chunks, so hashing a file larger than memory works.
   static String hash(String path, [Digest algorithm = Digest.sha256]) {
-    final bytes = File(path).readAsBytesSync();
-    return switch (algorithm) {
-      Digest.md5 => md5.convert(bytes).toString(),
-      Digest.sha256 => sha256.convert(bytes).toString(),
-    };
+    final handle = File(path).openSync();
+    try {
+      final sink = _CollectingSink();
+      final input = _digest(algorithm).startChunkedConversion(sink);
+      try {
+        while (true) {
+          final chunk = handle.readSync(_hashChunk);
+          if (chunk.isEmpty) break;
+          input.add(chunk);
+        }
+      } finally {
+        input.close();
+      }
+      return sink.value.toString();
+    } finally {
+      handle.closeSync();
+    }
   }
 
   /// Returns the hex digest of [path] using [algorithm] asynchronously.
+  ///
+  /// Streams the file rather than holding it in memory.
   static Future<String> hashAsync(
     String path, [
     Digest algorithm = Digest.sha256,
   ]) async {
-    final bytes = await File(path).readAsBytes();
-    return switch (algorithm) {
-      Digest.md5 => md5.convert(bytes).toString(),
-      Digest.sha256 => sha256.convert(bytes).toString(),
-    };
+    final sink = _CollectingSink();
+    final input = _digest(algorithm).startChunkedConversion(sink);
+    try {
+      await for (final chunk in File(path).openRead()) {
+        input.add(chunk);
+      }
+    } finally {
+      input.close();
+    }
+    return sink.value.toString();
   }
 
   /// Returns filesystem metadata for [path].
   static FileStat stat(String path) => File(path).statSync();
+
+  /// Moves [staging] over [destination] without exposing a gap.
+  ///
+  /// POSIX `rename` replaces the destination atomically, so a reader either
+  /// sees the old file or the new one — never a moment with neither. Deleting
+  /// first would open exactly that window, so the unlink happens only on
+  /// Windows, where renaming onto an existing path fails.
+  static void _swap(File staging, File destination) {
+    if (Platform.isWindows && destination.existsSync()) {
+      destination.deleteSync();
+    }
+    staging.renameSync(destination.path);
+  }
 
   /// Removes a staging file, ignoring failures during error unwinding.
   static void _discard(File staging) {
@@ -510,4 +556,15 @@ class Fs {
       staging.deleteSync();
     } catch (_) {}
   }
+}
+
+/// Captures the single digest a chunked hash conversion produces.
+class _CollectingSink implements Sink<crypto.Digest> {
+  late crypto.Digest value;
+
+  @override
+  void add(crypto.Digest data) => value = data;
+
+  @override
+  void close() {}
 }

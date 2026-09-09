@@ -18,18 +18,20 @@ Uri coerce(String target, {Uri? base}) {
   final str = target.trim();
   if (str.isEmpty) return Uri();
 
-  // HTML content
-  if (str.startsWith('<') || str.contains('</') || str.contains('/>')) {
-    return Uri.dataFromString(str, mimeType: 'text/html', encoding: utf8);
-  }
-
-  // Recognized schemes
+  // Recognized schemes come first: a URL is a URL even when its query happens
+  // to carry markup-looking characters, so `?q=</b>` stays a request rather
+  // than becoming an inline document.
   if (str.startsWith('http://') ||
       str.startsWith('https://') ||
       str.startsWith('file://') ||
       str.startsWith('data:') ||
       str.startsWith('string:')) {
     return Uri.parse(str);
+  }
+
+  // HTML content
+  if (str.startsWith('<') || str.contains('</') || str.contains('/>')) {
+    return Uri.dataFromString(str, mimeType: 'text/html', encoding: utf8);
   }
 
   // Resolve relative against base

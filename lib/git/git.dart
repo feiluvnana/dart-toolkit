@@ -4,6 +4,8 @@
 /// current branch, HEAD hash, working-tree cleanliness.
 library;
 
+import 'dart:io';
+
 import '../src/proc.dart';
 
 // ============================================================================
@@ -26,14 +28,33 @@ class GitAccessor {
   /// Creates the accessor. Prefer the shared [git] instance.
   const GitAccessor();
 
+  /// The exit code reported when `git` itself cannot be run.
+  ///
+  /// The shell convention for "command not found", so [SysResult.ok] is false
+  /// and the query methods fall back to their empty answers.
+  static const int missingExit = 127;
+
   /// Runs `git` with [args] in the working directory [cwd], returning the
   /// full result.
-  Future<SysResult> run(List<String> args, [String? cwd]) =>
-      Sys.run('git', args, cwd: cwd);
+  ///
+  /// A machine with no `git` on its `PATH` reports [missingExit] rather than
+  /// throwing, so every method here keeps the contract of failing softly.
+  Future<SysResult> run(List<String> args, [String? cwd]) async {
+    try {
+      return await Sys.run('git', args, cwd: cwd);
+    } on ProcessException catch (error) {
+      return SysResult(code: missingExit, out: '', err: error.message);
+    }
+  }
 
   /// The current branch name, or `''` outside a repository.
-  Future<String> branch([String? cwd]) =>
-      _text(['rev-parse', '--abbrev-ref', 'HEAD'], cwd);
+  ///
+  /// A detached `HEAD` has no branch to name, so that reports `''` too rather
+  /// than the literal string `HEAD`.
+  Future<String> branch([String? cwd]) async {
+    final name = await _text(['rev-parse', '--abbrev-ref', 'HEAD'], cwd);
+    return name == 'HEAD' ? '' : name;
+  }
 
   /// The HEAD commit hash, abbreviated unless [full] is set.
   Future<String> hash({bool full = false, String? cwd}) =>

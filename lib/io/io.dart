@@ -36,8 +36,8 @@ const IoAccessor io = IoAccessor();
 ///
 /// Paths are plain strings; given a [File], pass its [File.path].
 ///
-/// Everything here blocks. The identical set of names lives on [async] as
-/// futures, which is what a crawl or any other concurrent script should use.
+/// Everything here blocks. Every disk operation also lives on [async] as a
+/// future, which is what a crawl or any other concurrent script should use.
 ///
 /// ```dart
 /// io.write(io.join('out', 'report.txt'), 'done');   // blocking
@@ -240,9 +240,14 @@ class IoAccessor {
 
 /// The non-blocking mirror of [IoAccessor], reachable as `io.async`.
 ///
-/// Same names, same arguments, futures instead of blocking calls. A crawl runs
-/// many requests on one isolate, so a blocking read stalls every other task in
-/// flight; reach for this inside handlers and pool workers.
+/// Every operation that touches the disk appears here under the same name and
+/// arguments, returning a future instead of blocking. The purely
+/// computational helpers — [IoAccessor.join], [IoAccessor.base],
+/// [IoAccessor.name], [IoAccessor.ext], [IoAccessor.dir] and
+/// [IoAccessor.sanitize] — stay on `io` alone, since there is nothing to wait
+/// for. A crawl runs many requests on one isolate, so a blocking read stalls
+/// every other task in flight; reach for this inside handlers and pool
+/// workers.
 ///
 /// ```dart
 /// await net.crawl<String>(seed).collect((res) async {

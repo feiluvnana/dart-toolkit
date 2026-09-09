@@ -23,15 +23,25 @@ class TextAccessor {
   static final _tags = RegExp(r'<[^>]*>');
   static final _spaces = RegExp(r'\s+');
   static final _invisible = RegExp(r'[​-‍﻿­]');
-  static final _notSlug = RegExp(r'[^a-z0-9]+');
+  // Letters and digits from any script survive: collapsing on [^a-z0-9] left
+  // a CJK or Cyrillic title with an empty slug, and an empty filename with it.
+  static final _notSlug = RegExp(r'[^\p{L}\p{N}]+', unicode: true);
   static final _edges = RegExp(r'^-+|-+$');
-  static final _digits = RegExp(r'-?\d[\d,_ ]*(?:\.\d+)?');
+  // A space only groups digits when it separates full groups of three, so
+  // '1 234 567' reads as one number while '12 34' stays two. Treating any
+  // space as grouping merged distinct numbers into one.
+  static final _digits = RegExp(
+    r'-?\d{1,3}(?:[ \u00A0\u202F]\d{3})+(?:\.\d+)?'
+    r'|-?\d[\d,_]*(?:\.\d+)?',
+  );
+  static final _grouping = RegExp(r'[,_ \u00A0\u202F]');
   static final _wordish = RegExp(r"[\w']+");
 
   /// A lowercase, hyphenated form of [text], safe in a URL or a filename.
   ///
-  /// Accented Latin letters fold to their plain form; everything else that is
-  /// not a letter or digit becomes a single hyphen.
+  /// Accented Latin letters fold to their plain form; letters and digits of
+  /// other scripts are kept as they are, and everything else becomes a single
+  /// hyphen.
   String slug(String text, {String separator = '-'}) {
     final folded = fold(text).toLowerCase();
     final hyphenated = folded.replaceAll(_notSlug, '-').replaceAll(_edges, '');
@@ -75,24 +85,41 @@ class TextAccessor {
     if (text.length <= length) return text;
     final room = length - ellipsis.length;
     if (room <= 0) return ellipsis.substring(0, length);
-    return '${text.substring(0, room).trimRight()}$ellipsis';
+    return '${_cut(text, room).trimRight()}$ellipsis';
+  }
+
+  /// The first [room] code units of [text], without splitting a character.
+  ///
+  /// Slicing a plain [String] can land between the two halves of a surrogate
+  /// pair — an emoji cut down the middle renders as a replacement character —
+  /// so the boundary is walked back to the start of the last whole rune.
+  static String _cut(String text, int room) {
+    var end = room;
+    if (end > 0 && end < text.length) {
+      final unit = text.codeUnitAt(end - 1);
+      // A high surrogate here would have its pair sliced off.
+      if (unit >= 0xD800 && unit <= 0xDBFF) end--;
+    }
+    return text.substring(0, end);
   }
 
   /// The first number in [text], ignoring currency symbols and separators.
   ///
-  /// Returns `null` when there is no number. Commas, underscores and spaces
-  /// inside the digits are treated as grouping and dropped.
+  /// Returns `null` when there is no number. Commas and underscores inside the
+  /// digits are grouping and dropped; a space counts as grouping only when it
+  /// separates whole groups of three, so `'1 234'` is one number and
+  /// `'12 34'` is two.
   num? number(String text) {
     final match = _digits.firstMatch(text);
     if (match == null) return null;
-    final digits = match.group(0)!.replaceAll(RegExp(r'[,_ ]'), '');
+    final digits = match.group(0)!.replaceAll(_grouping, '');
     return num.tryParse(digits);
   }
 
   /// Every number in [text], in order.
   List<num> numbers(String text) => [
     for (final match in _digits.allMatches(text))
-      if (num.tryParse(match.group(0)!.replaceAll(RegExp(r'[,_ ]'), ''))
+      if (num.tryParse(match.group(0)!.replaceAll(_grouping, ''))
           case final value?)
         value,
   ];

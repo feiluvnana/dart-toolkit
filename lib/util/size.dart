@@ -26,18 +26,27 @@ class SizeAccessor {
   /// as `'0 B'`.
   String format(int bytes, {int decimals = 1}) {
     if (bytes <= 0) return '0 B';
-    final i = (math.log(bytes) / math.log(1024)).floor().clamp(
+    var i = (math.log(bytes) / math.log(1024)).floor().clamp(
       0,
       _units.length - 1,
     );
-    final value = bytes / math.pow(1024, i);
+    var value = bytes / math.pow(1024, i);
+    // Rounding can push the value up to a full 1024 of its unit — 1048575
+    // bytes is '1024.0 KB' before this, where '1.0 MB' is what it means.
+    if (i < _units.length - 1 &&
+        double.parse(value.toStringAsFixed(decimals)) >= 1024) {
+      i++;
+      value = bytes / math.pow(1024, i);
+    }
     return '${value.toStringAsFixed(decimals)} ${_units[i]}';
   }
 
   /// Parses a human-readable size such as `'10 KB'` or `'2.5MB'` into bytes.
   ///
-  /// Returns `0` when [text] cannot be parsed. Both `KB` and `K` style units
-  /// are accepted, and a bare number is treated as bytes.
+  /// Returns `0` when [text] cannot be parsed, including when it carries a
+  /// unit this does not know — reading `'10 XB'` as ten bytes would be a
+  /// wrong answer dressed as a right one. Both `KB` and `K` style units are
+  /// accepted, and a bare number is treated as bytes.
   int parse(String text) {
     final match = RegExp(r'^([\d.]+)\s*([A-Za-z]+)?$').firstMatch(text.trim());
     if (match == null) return 0;
@@ -54,6 +63,8 @@ class SizeAccessor {
       'T': 1024 * 1024 * 1024 * 1024,
       'TB': 1024 * 1024 * 1024 * 1024,
     };
-    return (value * (scales[unit] ?? 1)).round();
+    final scale = scales[unit];
+    if (scale == null) return 0;
+    return (value * scale).round();
   }
 }

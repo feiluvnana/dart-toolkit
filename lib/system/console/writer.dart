@@ -135,11 +135,20 @@ class Table {
   final List<List<String>> _rows = [];
 
   /// Creates a table with [headers].
+  ///
+  /// [alignments] is padded to the column count with [ColumnAlign.left], so a
+  /// partial list aligns the columns it names and leaves the rest alone
+  /// instead of failing when the table is rendered.
   Table({
     required this.headers,
     List<ColumnAlign>? alignments,
     this.style = TableStyle.unicode,
-  }) : alignments = alignments ?? List.filled(headers.length, ColumnAlign.left);
+  }) : alignments = [
+         for (var i = 0; i < headers.length; i++)
+           (alignments != null && i < alignments.length)
+               ? alignments[i]
+               : ColumnAlign.left,
+       ];
 
   /// Appends one [row]. Cells are rendered with `toString`.
   void add(List<Object?> row) =>
@@ -245,12 +254,15 @@ class Progress {
   DateTime? _painted;
 
   /// Creates a bar counting up to [total].
+  ///
+  /// The glyph defaults match `system.console.progress`, so a bar built either
+  /// way looks the same.
   Progress({
     required this.total,
     this.width = 25,
     this.unit = ProgressUnit.count,
-    this.fill = '=',
-    this.empty = ' ',
+    this.fill = '█',
+    this.empty = '░',
     String message = '',
   }) : _message = message {
     _clock.start();
@@ -320,16 +332,19 @@ class Progress {
   }
 
   /// Fills the bar, prints [message] and moves to the next line.
+  ///
+  /// Off a terminal nothing was drawn, so nothing is closed off either — a
+  /// bare newline would be the one mark a redirected run still carried.
   void done([String? message]) {
     _clock.stop();
     update(total, message: message);
-    stdout.writeln();
+    if (stdout.hasTerminal) stdout.writeln();
   }
 
   /// Abandons the bar and reports [message] as a failure.
   void fail([String? message]) {
     _clock.stop();
-    stdout.writeln();
+    if (stdout.hasTerminal) stdout.writeln();
     if (message != null) stderr.writeln('${'✖'.brightred()} $message');
   }
 }
@@ -399,8 +414,10 @@ class Spinner {
     if (!spinning) return;
     _timer?.cancel();
     _timer = null;
-    const Terminal().line();
-    stdout.write('\r');
+    if (stdout.hasTerminal) {
+      const Terminal().line();
+      stdout.write('\r');
+    }
     const Cursor().show();
   }
 
@@ -460,6 +477,11 @@ class ConsoleWriter {
     }
     final caption = ' $title ';
     final remaining = width - Ansi.width(caption);
+    if (remaining < 4) {
+      // No room to rule around it; the caption is the line.
+      out.writeln(caption.trim().bold());
+      return;
+    }
     final left = (remaining ~/ 2).clamp(2, width);
     final right = (remaining - left).clamp(2, width);
     out.writeln('${'─' * left}${caption.bold()}${'─' * right}');

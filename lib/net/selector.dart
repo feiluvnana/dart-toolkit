@@ -667,8 +667,14 @@ class JQuerySelector {
     final baseCss = parsed.baseCss;
 
     if (isFirst) {
+      // A document-rooted query can match the root element itself, the way
+      // `Document.querySelectorAll('html')` does. An element-rooted one cannot:
+      // `find` and `:has` both mean "search below here", so including the
+      // context element would make an extended selector behave differently
+      // from the plain-CSS fast path.
+      final includeSelf = root is Document;
       for (final p in parents) {
-        if (_matchesBase(p, baseCss)) {
+        if (includeSelf && _matchesBase(p, baseCss)) {
           addCandidate(p);
         }
         final matches = _queryBase(p, baseCss);
@@ -1100,14 +1106,16 @@ class JQuerySelector {
   }
 }
 
-/// A bounded, insertion-ordered memo. Oldest entries are evicted first.
+/// A bounded memo that evicts the least recently used entry.
 class _Memo<V> {
   static const _limit = 512;
   final Map<String, V> _entries = {};
 
   V of(String key, V Function() compute) {
-    final hit = _entries[key];
-    if (hit != null) return hit;
+    final hit = _entries.remove(key);
+    // Reinserting on a hit keeps the map in least-recently-used order, so the
+    // handful of selectors a crawl actually reuses survive eviction.
+    if (hit != null) return _entries[key] = hit;
     if (_entries.length >= _limit) _entries.remove(_entries.keys.first);
     return _entries[key] = compute();
   }

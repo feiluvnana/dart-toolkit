@@ -84,7 +84,6 @@ class ConcurrentAccessor {
 }
 
 /// Lifecycle handlers for a [Pool], reachable as `pool.on`.
-/// Lifecycle handlers for a [Pool], reachable as `pool.on`.
 class PoolEvents<I> {
   final List<void Function()> _startHandlers = [];
   final List<void Function(I item)> _progressHandlers = [];
@@ -126,9 +125,11 @@ class PoolFailure<I> implements Exception {
   const PoolFailure(this.failures, [this.results = const []]);
 
   @override
-  String toString() =>
-      'PoolFailure: ${failures.length} of the pool\'s tasks failed '
-      '(first: ${failures.first.error})';
+  String toString() {
+    if (failures.isEmpty) return 'PoolFailure: no failures recorded';
+    return 'PoolFailure: ${failures.length} of the pool\'s tasks failed '
+        '(first: ${failures.first.error})';
+  }
 }
 
 /// A bounded pool that runs at most [size] tasks concurrently.
@@ -419,12 +420,16 @@ class Semaphore {
   }
 
   /// Releases a permit, unblocking the next waiting caller.
+  ///
+  /// Never hands back more than the semaphore was created with: a release that
+  /// pairs with no acquire is ignored rather than raising the ceiling and
+  /// quietly removing the bound this exists to enforce.
   void release() {
     if (_waiters.isNotEmpty) {
       _waiters.removeFirst().complete();
-    } else {
-      _availablePermits++;
+      return;
     }
+    if (_availablePermits < permits) _availablePermits++;
   }
 
   /// Acquires a permit, runs [action], and releases the permit upon completion.

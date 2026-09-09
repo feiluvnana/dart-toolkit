@@ -79,6 +79,12 @@ class Robots {
 
     final lines = content.split(RegExp(r'\r?\n'));
     var currentAgents = <String>[];
+    // Consecutive `User-agent` lines share one group; the first directive of
+    // any other kind closes it, so the next `User-agent` starts a fresh group.
+    // Tracking that explicitly — rather than inferring it from whether rules
+    // were collected — keeps a group holding only `Crawl-delay` from absorbing
+    // the rules of the group that follows it.
+    var groupOpen = false;
 
     for (var line in lines) {
       // Strip comments
@@ -96,31 +102,29 @@ class Robots {
       switch (directive) {
         case 'user-agent':
           final agent = value.toLowerCase();
-          // If previous directive was not user-agent, start a new group
-          if (currentAgents.isNotEmpty &&
-              rules.containsKey(currentAgents.first) &&
-              rules[currentAgents.first]!.isNotEmpty) {
-            currentAgents = [agent];
-          } else {
-            currentAgents.add(agent);
-          }
+          if (!groupOpen) currentAgents = <String>[];
+          groupOpen = true;
+          currentAgents.add(agent);
           for (final a in currentAgents) {
             rules.putIfAbsent(a, () => []);
           }
 
         case 'disallow':
+          groupOpen = false;
           if (currentAgents.isEmpty) currentAgents = ['*'];
           for (final a in currentAgents) {
             rules.putIfAbsent(a, () => []).add(RobotsRule(value, allow: false));
           }
 
         case 'allow':
+          groupOpen = false;
           if (currentAgents.isEmpty) currentAgents = ['*'];
           for (final a in currentAgents) {
             rules.putIfAbsent(a, () => []).add(RobotsRule(value, allow: true));
           }
 
         case 'crawl-delay':
+          groupOpen = false;
           if (currentAgents.isEmpty) currentAgents = ['*'];
           final seconds = double.tryParse(value);
           if (seconds != null && seconds >= 0) {
