@@ -242,30 +242,47 @@ class Exit {
   static final Map<String, File> _files = <String, File>{};
   static final Set<Process> _procs = <Process>{};
   static final List<FutureOr<void> Function()> _hooks = [];
-  static StreamSubscription<ProcessSignal>? _signal;
+  static final List<StreamSubscription<ProcessSignal>> _signals = [];
   static bool _stopping = false;
 
-  /// Starts watching for `SIGINT`. Safe to call repeatedly.
+  // SIGINT is Ctrl-C; SIGTERM is what `kill`, a supervisor and a container
+  // runtime send. Watching only the first left a terminated run's .part files
+  // on disk and its exit hooks unrun.
+  static const List<ProcessSignal> _watched = [
+    ProcessSignal.sigint,
+    ProcessSignal.sigterm,
+  ];
+
+  /// Starts watching for `SIGINT` and `SIGTERM`. Safe to call repeatedly.
   static void watch() {
-    if (_signal != null) return;
-    try {
-      _signal = ProcessSignal.sigint.watch().listen((_) async {
-        await shutdown(130);
-      });
-    } catch (_) {
-      // Signal handling is unavailable on some platforms; cleanup still runs
-      // through the explicit `now()` path.
+    if (_signals.isNotEmpty) return;
+    for (final signal in _watched) {
+      try {
+        _signals.add(
+          signal.watch().listen((_) async {
+            // The shell convention: 128 plus the signal number, so a caller
+            // can tell a Ctrl-C (130) from a `kill` (143).
+            await shutdown(128 + signal.signalNumber);
+          }),
+        );
+      } catch (_) {
+        // Windows raises for SIGTERM, and signal handling is unavailable
+        // entirely on some platforms; cleanup still runs through the explicit
+        // `shutdown()` path.
+      }
     }
   }
 
-  /// Stops watching for `SIGINT` and releases the subscription.
+  /// Stops watching for signals and releases the subscriptions.
   ///
   /// A live signal subscription keeps the Dart isolate alive, so this must run
-  /// before a script can exit. [untrack], [unproc] and [now] call it for you
-  /// once the last tracked resource is released.
+  /// before a script can exit. [untrack], [disown], [unhook] and [shutdown]
+  /// call it for you once the last tracked resource is released.
   static void unwatch() {
-    _signal?.cancel();
-    _signal = null;
+    for (final signal in _signals) {
+      signal.cancel();
+    }
+    _signals.clear();
   }
 
   /// Releases the signal watcher when no resources remain tracked.
@@ -307,6 +324,17 @@ class Exit {
   static void hook(FutureOr<void> Function() fn) {
     watch();
     _hooks.add(fn);
+  }
+
+  /// Unregisters [fn], releasing the watcher if nothing else is tracked.
+  ///
+  /// A hook registered for the length of one operation has to come off again
+  /// when that operation ends: the watcher it installed keeps the process
+  /// alive, so a library that registered one and never removed it would leave
+  /// every script that used it hanging at exit.
+  static void unhook(FutureOr<void> Function() fn) {
+    _hooks.remove(fn);
+    _idle();
   }
 
   /// Kills tracked processes, deletes tracked files and runs hooks.

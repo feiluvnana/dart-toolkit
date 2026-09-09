@@ -21,6 +21,9 @@ import 'robots.dart';
 
 /// Counters describing a completed or in-flight run.
 class Stats {
+  /// Creates a zeroed set of counters.
+  Stats();
+
   /// Requests accepted into the queue, after de-duplication.
   int scheduled = 0;
 
@@ -60,6 +63,43 @@ class Stats {
       start == null
           ? Duration.zero
           : (end ?? DateTime.now()).difference(start!);
+
+  /// Restores counters from the map [toJson] produced.
+  factory Stats.fromJson(Map<String, Object?> json) {
+    int count(String key) => (json[key] as num? ?? 0).toInt();
+    DateTime? when(String key) {
+      final raw = json[key] as String?;
+      return raw == null ? null : DateTime.tryParse(raw);
+    }
+
+    return Stats()
+      ..scheduled = count('scheduled')
+      ..completed = count('completed')
+      ..emitted = count('emitted')
+      ..bytes = count('bytes')
+      ..failed = count('failed')
+      ..retried = count('retried')
+      ..skipped = count('skipped')
+      ..dropped = count('dropped')
+      ..start = when('start')
+      ..end = when('end')
+      ..reason = json['reason'] as String?;
+  }
+
+  /// Serializes these counters to a JSON-compatible map.
+  Map<String, Object?> toJson() => {
+    'scheduled': scheduled,
+    'completed': completed,
+    'emitted': emitted,
+    'bytes': bytes,
+    'failed': failed,
+    'retried': retried,
+    'skipped': skipped,
+    'dropped': dropped,
+    if (start != null) 'start': start!.toIso8601String(),
+    if (end != null) 'end': end!.toIso8601String(),
+    if (reason != null) 'reason': reason,
+  };
 
   @override
   String toString() =>
@@ -167,6 +207,83 @@ class Deduplicator {
   }
 }
 
+/// The saved position of a crawl: its frontier, its visited set and its
+/// counters.
+///
+/// [Engine.snapshot] captures one and [Engine.restore] applies it, which is
+/// what lets an interrupted crawl carry on where it stopped rather than
+/// starting over. `CrawlBuilder.resume` wires both ends to a file for you.
+///
+/// ```dart
+/// final saved = engine.snapshot();
+/// await io.async.dump('crawl.state', saved);
+/// // ... later, in another process ...
+/// final restored = Snapshot<String>.fromJson(await io.async.json('crawl.state'));
+/// engine.restore(restored);
+/// ```
+class Snapshot<T> {
+  /// The version of the serialized form this class writes and reads.
+  static const int version = 1;
+
+  /// Requests that had not completed: those still queued, and those in flight
+  /// when the snapshot was taken.
+  ///
+  /// A request that was mid-fetch is pending rather than done, so a resumed
+  /// crawl fetches it again instead of losing the page.
+  final List<Request<T>> pending;
+
+  /// The visited set as it stood.
+  final Deduplicator deduplicator;
+
+  /// The counters as they stood.
+  final Stats stats;
+
+  /// Creates a snapshot.
+  Snapshot({
+    Iterable<Request<T>>? pending,
+    Deduplicator? deduplicator,
+    Stats? stats,
+  }) : pending = pending?.toList() ?? <Request<T>>[],
+       deduplicator = deduplicator ?? Deduplicator(),
+       stats = stats ?? Stats();
+
+  /// Restores a snapshot from the map [toJson] produced.
+  ///
+  /// Throws [FormatException] when [json] was written by a newer [version]
+  /// than this one, rather than restoring half a frontier.
+  factory Snapshot.fromJson(Map<String, Object?> json) {
+    final found = (json['version'] as num? ?? version).toInt();
+    if (found > version) {
+      throw FormatException(
+        'Snapshot version $found is newer than the supported $version',
+      );
+    }
+    return Snapshot<T>(
+      pending: [
+        for (final entry in (json['pending'] as List? ?? const []))
+          Request<T>.fromJson((entry as Map).cast<String, Object?>()),
+      ],
+      deduplicator: Deduplicator.fromJson(json['seen'] as List? ?? const []),
+      stats: Stats.fromJson(
+        (json['stats'] as Map? ?? const {}).cast<String, Object?>(),
+      ),
+    );
+  }
+
+  /// Serializes this snapshot to a JSON-compatible map.
+  Map<String, Object?> toJson() => {
+    'version': version,
+    'pending': [for (final request in pending) request.toJson()],
+    'seen': deduplicator.toJson(),
+    'stats': stats.toJson(),
+  };
+
+  @override
+  String toString() =>
+      'Snapshot(pending: ${pending.length}, seen: ${deduplicator.length}, '
+      'completed: ${stats.completed})';
+}
+
 /// Read-only view of an engine's frontier, reachable as [Engine.queue].
 class QueueAccess<T> {
   final Engine<T> _engine;
@@ -257,6 +374,11 @@ class _Frontier<T> {
     _buckets.clear();
     _count = 0;
   }
+
+  /// Everything waiting, in the order [serve] would hand it out.
+  Iterable<Request<T>> get all => [
+    for (final queue in _buckets.values) ...queue,
+  ];
 }
 
 /// The crawling engine.
@@ -269,7 +391,10 @@ class Engine<T> {
   final bool _ownsDownloader;
 
   /// Frontier de-duplicator. Defaults to an in-memory [Deduplicator].
-  final Deduplicator deduplicator;
+  ///
+  /// Replaced wholesale by [restore], whose visited set is the authority for a
+  /// resumed run.
+  Deduplicator deduplicator;
 
   /// Whether de-duplication is active. Defaults to true.
   final bool dedupe;
@@ -299,6 +424,9 @@ class Engine<T> {
 
   final Process<T>? _process;
   final _Frontier<T> _queue = _Frontier<T>();
+  // Served but not yet settled. A snapshot counts these as pending, so a crawl
+  // killed mid-fetch refetches the page instead of dropping it.
+  final Set<Request<T>> _inflight = <Request<T>>{};
   final Map<String, Future<Robots>> _robotsCache = {};
   final ListQueue<T> _bufferedItems = ListQueue<T>();
   bool _hasItemListener = false;
@@ -454,8 +582,15 @@ class Engine<T> {
 
   /// Takes the next request, or `null` when the queue is empty.
   ///
+  /// The request is held as in flight until [leave] or [skip] is told it
+  /// settled, so [snapshot] can count it as unfinished work.
+  ///
   /// Called by the [Downloader]'s workers.
-  Request<T>? serve() => _queue.serve();
+  Request<T>? serve() {
+    final request = _queue.serve();
+    if (request != null) _inflight.add(request);
+    return request;
+  }
 
   /// Marks a request as in flight. Called by the [Downloader]'s workers.
   void enter() => _active++;
@@ -464,6 +599,10 @@ class Engine<T> {
   ///
   /// Called by the [Downloader]'s workers. Waking on drain is what lets an
   /// idle worker notice the run is over instead of waiting forever.
+  ///
+  /// This does not finish the request: [process] and [skip] do. A fetch that
+  /// threw, or one whose response arrived after the run stopped, stays pending
+  /// in a [snapshot] so a resumed crawl picks the page up again.
   void leave() {
     _active--;
     if (idle) _signal();
@@ -524,6 +663,10 @@ class Engine<T> {
     final routed = router.isNotEmpty && await router.handle(response);
     if (!routed) await _process?.call(response);
 
+    // Done only now, once the handler has run. A handler that threw has not
+    // emitted what the page held, so the request stays pending for a resume
+    // rather than counting as completed work.
+    _inflight.remove(response.request);
     _stats.completed++;
     for (final h in on._progressHandlers) {
       h(response);
@@ -535,7 +678,11 @@ class Engine<T> {
   }
 
   /// Records a request dropped before fetching. Called by the [Downloader].
-  void skip() {
+  ///
+  /// Pass the [request] that was dropped so it is not held as in flight — a
+  /// page `robots.txt` refuses is settled, not pending.
+  void skip([Request<dynamic>? request]) {
+    if (request != null) _inflight.remove(request);
     _stats.skipped++;
     if (idle) _signal();
   }
@@ -547,6 +694,48 @@ class Engine<T> {
     _stats.failed++;
     for (final h in on._errorHandlers) {
       h(error, stack);
+    }
+  }
+
+  /// Captures the run's position: everything unfinished, plus the visited set
+  /// and the counters.
+  ///
+  /// Safe to call while running. A request counts as pending until [process]
+  /// has run its handler or [skip] has dropped it, so nothing that was
+  /// mid-fetch — or fetched but never handled — is lost.
+  Snapshot<T> snapshot() => Snapshot<T>(
+    pending: [..._inflight, ..._queue.all],
+    deduplicator: Deduplicator(deduplicator.toJson()),
+    stats: Stats.fromJson(_stats.toJson()),
+  );
+
+  /// Reinstates a [snapshot] taken earlier, before the run starts.
+  ///
+  /// Pending requests go straight into the frontier: they were recorded in the
+  /// visited set when first scheduled, so routing them through [add] would see
+  /// them as duplicates and drop every one. The counters come back too, which
+  /// is what keeps [limit] meaning the same thing across a resume.
+  ///
+  /// Throws [StateError] once the engine is running or finished.
+  void restore(Snapshot<T> snapshot) {
+    if (_running) throw StateError('Cannot restore a running engine');
+    if (_finished) throw StateError('Cannot restore a finished engine');
+
+    deduplicator = snapshot.deduplicator;
+    final counters = snapshot.stats;
+    _stats
+      ..scheduled = counters.scheduled
+      ..completed = counters.completed
+      ..emitted = counters.emitted
+      ..bytes = counters.bytes
+      ..failed = counters.failed
+      ..retried = counters.retried
+      ..skipped = counters.skipped
+      ..dropped = counters.dropped;
+
+    for (final request in snapshot.pending) {
+      request.engine = this;
+      _queue.add(request);
     }
   }
 

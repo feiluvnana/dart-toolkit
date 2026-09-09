@@ -2,7 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased
+## 1.2.0
+
+A crawl you can interrupt. The frontier — the queue of pages a run has found
+but not yet fetched — used to live only in memory, so a crawl stopped at hour
+three restarted from the seed. It now serializes, alongside the visited set and
+the counters, and a run picks up where the last one stopped.
+
+Shipped on top of an audit of the library against its own documentation.
+
+### Added
+
+- **`net.crawl(...).resume(path)` saves a crawl's position and carries on from
+  it.** An existing file restores the frontier, the visited set and the
+  counters, so seeds already visited are not fetched twice and `limit` still
+  counts the whole crawl rather than this leg of it. The file is rewritten on a
+  timer (`every`, five seconds by default), once more when the run stops, and
+  once more again if the process is interrupted. A crawl that drains on its own
+  deletes it, having nothing left to resume.
+- **`Engine.snapshot()` and `Engine.restore(snapshot)`**, the pair `resume` is
+  built from, so a position can be kept anywhere a `Map` can go — `io.store`, a
+  database row, a key-value service. `Snapshot` carries the pending requests,
+  the `Deduplicator` and the `Stats`, and round-trips through
+  `toJson`/`fromJson` with a `version` it refuses to read from the future.
+- **`Request`, `Body` and `Stats` serialize.** Everything scheduling and
+  routing depend on survives the trip: the method, headers, body, priority,
+  tag, depth and `meta`. A `Body.bytes` body is base64-encoded, so a body that
+  is not valid UTF-8 comes back intact.
+- **`SIGTERM` is watched alongside `SIGINT`.** `kill`, a supervisor and a
+  container runtime all send the former, which the watcher ignored — so a
+  terminated run left its `.part` files on disk and its exit hooks unrun. The
+  exit code follows the shell convention of 128 plus the signal number, so a
+  caller can tell a Ctrl-C (130) from a `kill` (143).
 
 An audit of the library against its own documentation. Every item below was
 reproduced first and now has a regression test in `test/regression_test.dart`.
@@ -135,11 +166,18 @@ reproduced first and now has a regression test in `test/regression_test.dart`.
   the two entry points disagreed.
 - **`Cli.get<bool>` accepts the same words as `system.env.get`** — `true`, `1`,
   `yes`, `on` — for values reached through `env` or `def`.
+- **A request counts as crawled when its handler has run, not when its worker
+  settles.** A response that arrived after the run stopped, or one whose
+  handler threw, is unfinished work: it stays pending in a snapshot so a
+  resumed crawl fetches the page again rather than losing it. `Engine.skip`
+  now takes the request it dropped, as an optional argument, for the same
+  reason. `Engine.leave` is unchanged.
 - Documentation corrected where the code was right and the prose was not:
   `io.async` mirrors every disk operation rather than literally every name on
   `io`; `Cookie.parse` points at `CookieJar.add` instead of a private method;
   `Engine`'s truncated doc comment no longer sits on the frontier queue; and
-  `zip.deflate` says plainly that it produces a gzip stream.
+  `zip.deflate` says plainly that it produces a gzip stream. `docs/crawl.md`
+  finishes a crawl with `save`, the name `to` was given in 1.1.0.
 
 ## 1.1.0
 

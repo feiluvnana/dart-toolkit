@@ -103,7 +103,7 @@ system.exit(1);          // exit immediately, skipping cleanup
 
 ### Why your script exits
 
-Tracking a resource installs a `SIGINT` watcher, and a live watcher keeps the Dart isolate alive. The watcher is **released automatically** once nothing is tracked, so a script that finishes its work exits on its own:
+Tracking a resource installs a `SIGINT` and `SIGTERM` watcher — Ctrl-C and `kill` both run the cleanup — and a live watcher keeps the Dart isolate alive. The watcher is **released automatically** once nothing is tracked, so a script that finishes its work exits on its own:
 
 ```dart
 void main() async {

@@ -116,6 +116,59 @@ class Request<T> {
   }) : headers = headers ?? {},
        meta = meta ?? {};
 
+  /// Restores a request from the map [toJson] produced.
+  ///
+  /// [engine] is not part of the serialized form: a restored request belongs
+  /// to whichever engine schedules it next.
+  ///
+  /// Throws [FormatException] when [json] carries no usable `url`.
+  factory Request.fromJson(Map<String, Object?> json) {
+    final url = Uri.tryParse(json['url'] as String? ?? '');
+    if (url == null) {
+      throw FormatException('Request has no usable url: ${json['url']}');
+    }
+    final wire = (json['method'] as String? ?? 'GET').toUpperCase();
+    final body = json['body'];
+    return Request<T>(
+      url,
+      method: HttpMethod.values.firstWhere(
+        (m) => m.wire == wire,
+        orElse: () => HttpMethod.get,
+      ),
+      headers: {
+        for (final entry in (json['headers'] as Map? ?? const {}).entries)
+          entry.key.toString(): entry.value.toString(),
+      },
+      body:
+          body is Map
+              ? Body.fromJson(body.cast<String, Object?>())
+              : null,
+      priority: (json['priority'] as num? ?? 0).toInt(),
+      tag: json['tag'] as String?,
+      meta: (json['meta'] as Map? ?? const {}).cast<String, Object?>(),
+      dedupe: json['dedupe'] as bool? ?? true,
+      depth: (json['depth'] as num? ?? 0).toInt(),
+    );
+  }
+
+  /// Serializes this request to a JSON-compatible map.
+  ///
+  /// This is what a crawl writes when it saves its frontier, so everything
+  /// scheduling and routing depend on round-trips: the method, headers, body,
+  /// priority, tag, depth and [meta]. Values in [meta] must be JSON-encodable
+  /// to survive; anything else throws when the snapshot is written.
+  Map<String, Object?> toJson() => {
+    'url': url.toString(),
+    if (method != HttpMethod.get) 'method': method.wire,
+    if (headers.isNotEmpty) 'headers': headers,
+    if (body != null) 'body': body!.toJson(),
+    if (priority != 0) 'priority': priority,
+    if (tag != null) 'tag': tag,
+    if (meta.isNotEmpty) 'meta': meta,
+    if (!dedupe) 'dedupe': false,
+    if (depth != 0) 'depth': depth,
+  };
+
   @override
   String toString() => '${method.wire} $url';
 }

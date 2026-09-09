@@ -79,11 +79,34 @@ sealed class Body {
   /// A JSON body; [data] accepts any value `jsonEncode` understands.
   const factory Body.json(Object? data) = JsonBody;
 
+  /// Restores a body from the map [toJson] produced.
+  ///
+  /// This is what lets a queued request survive being written to disk and read
+  /// back — see `Request.fromJson`.
+  ///
+  /// Throws [FormatException] when [json] names no known body shape.
+  factory Body.fromJson(Map<String, Object?> json) {
+    final kind = json['kind'];
+    return switch (kind) {
+      'text' => TextBody(json['text'] as String? ?? ''),
+      'bytes' => BytesBody(base64Decode(json['data'] as String? ?? '')),
+      'form' => FormBody({
+        for (final entry in (json['fields'] as Map? ?? const {}).entries)
+          entry.key.toString(): entry.value.toString(),
+      }),
+      'json' => JsonBody(json['data']),
+      _ => throw FormatException('Unknown body kind: $kind'),
+    };
+  }
+
   /// Applies this body to [request].
   void apply(http.Request request);
 
   /// Returns the body as bytes.
   List<int> bytes();
+
+  /// Serializes this body to a JSON-compatible map. See [Body.fromJson].
+  Map<String, Object?> toJson();
 }
 
 /// A body carrying text verbatim.
@@ -99,6 +122,9 @@ final class TextBody extends Body {
 
   @override
   List<int> bytes() => utf8.encode(text);
+
+  @override
+  Map<String, Object?> toJson() => {'kind': 'text', 'text': text};
 }
 
 /// A body carrying raw bytes.
@@ -114,6 +140,13 @@ final class BytesBody extends Body {
 
   @override
   List<int> bytes() => data;
+
+  @override
+  Map<String, Object?> toJson() => {
+    'kind': 'bytes',
+    // Base64 so an arbitrary byte body survives a JSON round trip.
+    'data': base64Encode(data),
+  };
 }
 
 /// A form-encoded body.
@@ -136,6 +169,9 @@ final class FormBody extends Body {
         )
         .join('&'),
   );
+
+  @override
+  Map<String, Object?> toJson() => {'kind': 'form', 'fields': fields};
 }
 
 /// A JSON body, sent with a `application/json` content type.
@@ -154,6 +190,9 @@ final class JsonBody extends Body {
 
   @override
   List<int> bytes() => utf8.encode(jsonEncode(data));
+
+  @override
+  Map<String, Object?> toJson() => {'kind': 'json', 'data': data};
 }
 
 /// An HTTP response, with helpers for scraping its body.

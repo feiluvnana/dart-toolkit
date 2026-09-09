@@ -84,13 +84,14 @@ class SystemAccessor {
   String? which(String tool, {List<String>? paths}) =>
       Sys.which(tool, paths: paths);
 
-  /// Starts watching for `SIGINT` so tracked resources are cleaned up on Ctrl-C.
+  /// Starts watching for `SIGINT` and `SIGTERM` so tracked resources are
+  /// cleaned up on Ctrl-C and on `kill`.
   ///
   /// Writes call this for you. Note that a live watcher keeps the process
   /// alive, so calling it directly pairs with [unwatch].
   void watch() => Sys.watch();
 
-  /// Stops watching for `SIGINT` and releases the signal subscription.
+  /// Stops watching for signals and releases the subscriptions.
   void unwatch() => Sys.unwatch();
 
   /// Registers [file] for deletion if the program is interrupted.
@@ -110,7 +111,7 @@ class SystemAccessor {
   /// files, runs the [SysEvents.exit] hooks, then exits with [code] when it is
   /// non-zero.
   ///
-  /// A script that registered an exit hook or watched for `SIGINT` finishes
+  /// A script that registered an exit hook or watched for signals finishes
   /// with this — the watcher holds the process open until it runs.
   ///
   /// ```dart
@@ -143,7 +144,7 @@ class SysEvents {
   /// Registers [callback] to run during graceful shutdown.
   ///
   /// Hooks run after adopted child processes are killed and tracked partial
-  /// files are deleted. A registered hook keeps the `SIGINT` watcher — and so
+  /// files are deleted. A registered hook keeps the signal watcher — and so
   /// the process — alive until [SystemAccessor.shutdown] runs it.
   void exit(FutureOr<void> Function() callback) => Sys.hook(callback);
 }

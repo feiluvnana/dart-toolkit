@@ -9,6 +9,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import '../src/fs.dart';
+import '../src/proc.dart';
 import 'downloader.dart';
 import 'engine.dart';
 import 'pipeline.dart';
@@ -105,6 +107,8 @@ class CrawlBuilder<T> {
   Uri? _sitemapUrl;
   Map<String, String>? _headers;
   Duration? _timeout;
+  String? _resumePath;
+  Duration _resumeEvery = const Duration(seconds: 5);
 
   final List<({Pattern pattern, Process<T> handler})> _routes = [];
   final List<({String name, Process<T> handler})> _tags = [];
@@ -229,6 +233,37 @@ class CrawlBuilder<T> {
     return this;
   }
 
+  /// Saves the crawl's position to [path], and picks it up again from there.
+  ///
+  /// An interrupted crawl otherwise starts over: the visited set can be handed
+  /// back with [deduplicator], but the queue of pages it had yet to fetch
+  /// cannot. With this, both survive.
+  ///
+  /// On the way in, an existing [path] is restored — its frontier, its visited
+  /// set and its counters, so [limit] still counts the whole crawl rather than
+  /// this leg of it, and seeds already visited are dropped instead of fetched
+  /// twice. On the way out, the file is written every [every], once more when
+  /// the run stops, and once more again if the process is interrupted; a crawl
+  /// that finishes on its own deletes it, having nothing left to resume.
+  ///
+  /// ```dart
+  /// await net.crawl<String>('https://example.com')
+  ///     .resume('crawl.state')
+  ///     .collect((res) => res.emit(res.url.toString()));
+  /// ```
+  ///
+  /// Requests carry [Request.meta] through the file, so anything a handler
+  /// stores there has to be JSON-encodable. Supplying a [deduplicator] as well
+  /// loses to the restored one, which is the authority for a resumed run.
+  CrawlBuilder<T> resume(
+    String path, {
+    Duration every = const Duration(seconds: 5),
+  }) {
+    _resumePath = path;
+    if (every > Duration.zero) _resumeEvery = every;
+    return this;
+  }
+
   /// Routes responses whose URL matches [pattern] to [handler].
   CrawlBuilder<T> route(Pattern pattern, Process<T> handler) {
     _routes.add((pattern: pattern, handler: handler));
@@ -314,10 +349,93 @@ class CrawlBuilder<T> {
       engine.on.error(h);
     }
 
+    final resumePath = _resumePath;
+    if (resumePath != null) {
+      // Before the seeds: a seed already visited on the last leg is then
+      // dropped as a duplicate rather than fetched a second time.
+      final saved = _read<T>(resumePath);
+      if (saved != null) engine.restore(saved);
+    }
+
     for (final seed in _seeds) {
       engine.add(seed);
     }
     return engine;
+  }
+
+  /// Reads the snapshot at [path], or `null` when there is nothing saved yet.
+  ///
+  /// A file that is there but unreadable throws: the caller asked to carry on
+  /// from it, and quietly starting the crawl over would throw away the very
+  /// progress they were protecting.
+  static Snapshot<T>? _read<T>(String path) {
+    final file = File(path);
+    if (!file.existsSync()) return null;
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(file.readAsStringSync());
+    } on FormatException catch (error) {
+      throw FormatException('Resume file $path is not valid JSON: $error');
+    }
+    if (decoded is! Map) {
+      throw FormatException('Resume file $path does not hold a snapshot');
+    }
+    return Snapshot<T>.fromJson(decoded.cast<String, Object?>());
+  }
+
+  Timer? _resumeTimer;
+  FutureOr<void> Function()? _resumeHook;
+  Future<void> _resumeWrites = Future<void>.value();
+
+  /// Starts saving [engine]'s position: on a timer, and on interruption.
+  void _arm(Engine<T> engine) {
+    final path = _resumePath;
+    if (path == null) return;
+    _resumeTimer = Timer.periodic(_resumeEvery, (_) {
+      // A periodic save is best effort. Letting a full disk throw from a timer
+      // callback would take down the isolate mid-crawl, which is a worse
+      // outcome than a snapshot that is a few seconds stale.
+      _write(path, engine).catchError((Object _) {});
+    });
+    final hook = _resumeHook = () => _write(path, engine);
+    // Ctrl-C and `kill` both reach this, so an interrupted crawl saves the
+    // position it actually reached rather than the last tick's.
+    Exit.hook(hook);
+  }
+
+  /// Stops saving, writes the final position, and clears the file when the
+  /// crawl has nothing left to resume.
+  Future<void> _disarm(Engine<T> engine) async {
+    final path = _resumePath;
+    if (path == null) return;
+    _resumeTimer?.cancel();
+    _resumeTimer = null;
+    final hook = _resumeHook;
+    if (hook != null) {
+      // The hook holds the signal watcher, and so the process, open. Leaving
+      // it registered would hang every script that finished a resumable crawl.
+      Exit.unhook(hook);
+      _resumeHook = null;
+    }
+
+    if (engine.stopped || engine.queue.isNotEmpty) {
+      await _write(path, engine);
+      return;
+    }
+    // Drained on its own: there is no position left worth keeping.
+    await _resumeWrites;
+    final file = File(path);
+    if (file.existsSync()) await file.delete();
+  }
+
+  /// Writes [engine]'s position to [path], one write at a time.
+  Future<void> _write(String path, Engine<T> engine) {
+    // Captured now, so a snapshot queued behind an in-flight write still
+    // records the frontier as it stood when the save was asked for.
+    final snapshot = engine.snapshot().toJson();
+    return _resumeWrites = _resumeWrites.then(
+      (_) => Fs.dump(path, snapshot, pretty: false),
+    );
   }
 
   Future<List<String>> _resolveUrls() async {
@@ -335,7 +453,13 @@ class CrawlBuilder<T> {
   /// function given to `net.crawl(...)`.
   Future<Stats> run([Process<T>? process]) async {
     final urls = await _resolveUrls();
-    return engine(process).run(urls);
+    final engine = this.engine(process);
+    _arm(engine);
+    try {
+      return await engine.run(urls);
+    } finally {
+      await _disarm(engine);
+    }
   }
 
   /// Runs the crawl and collects everything handlers emitted.
@@ -346,10 +470,12 @@ class CrawlBuilder<T> {
     final items = <T>[];
     final engine = this.engine(process);
     final subscription = engine.items.listen(items.add);
+    _arm(engine);
     try {
       final urls = await _resolveUrls();
       await engine.run(urls);
     } finally {
+      await _disarm(engine);
       await subscription.cancel();
     }
     return items;
@@ -387,11 +513,13 @@ class CrawlBuilder<T> {
       }
     });
 
+    _arm(engine);
     try {
       final stats = await engine.run(await _resolveUrls());
       await sink.flush();
       return stats;
     } finally {
+      await _disarm(engine);
       if (ownsSink) await sink.close();
     }
   }
@@ -409,11 +537,13 @@ class CrawlBuilder<T> {
       onCancel: () => engine.stop('Stream cancelled'),
     );
     final subscription = engine.items.listen(controller.add);
+    _arm(engine);
     _resolveUrls().then((urls) {
       engine
           .run(urls)
           .then((_) => null, onError: controller.addError)
           .whenComplete(() async {
+            await _disarm(engine);
             await subscription.cancel();
             if (!controller.isClosed) await controller.close();
           });

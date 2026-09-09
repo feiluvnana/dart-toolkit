@@ -78,6 +78,7 @@ net.crawl<String>(url)
     .sitemap('https://example.com/sitemap.xml'.url) // seed with all sitemap URLs
     .headers({'User-Agent': 'CustomBot'}) // custom headers for every request
     .timeout(10.seconds)                 // per-request timeout
+    .resume('crawl.state')               // save the position, and carry on from it
 ```
 
 ### Crawl Scope & Politeness
@@ -98,10 +99,10 @@ net.crawl<String>(url)
 | `run([process])` | `Future<Stats>` |
 | `collect([process])` | `Future<List<T>>` of everything emitted |
 | `stream([process])` | `Stream<T>`, yielding items as they are emitted |
-| `to(sinkOrPath, [process])` | `Future<Stats>`, writing items to file path or `IOSink` |
+| `save(sinkOrPath, [process])` | `Future<Stats>`, writing items to file path or `IOSink` |
 | `engine([process])` | The configured `Engine`, unrun |
 
-Prefer `stream` or `to` over `collect` for large crawls — they do not hold every item in memory:
+Prefer `stream` or `save` over `collect` for large crawls — they do not hold every item in memory:
 
 ```dart
 // Stream items to an async consumer:
@@ -115,7 +116,64 @@ final stats = await net.crawl<Map<String, Object?>>(url).save('out/results.jsonl
 
 ---
 
-## 4. Multi-Stage Crawls
+## 4. Resuming an Interrupted Crawl
+
+A crawl that dies partway through has two things worth keeping: the pages it already visited, and the pages it had queued but not yet fetched. `deduplicator` hands back the first. `resume` hands back both.
+
+```dart
+import 'package:dart_toolkit/dart_toolkit.dart';
+
+void main() async {
+  final stats = await net.crawl<String>('https://example.com')
+      .resume('crawl.state')
+      .concurrent(4)
+      .limit(5000)
+      .run((res) {
+        for (final href in res.$('a').hrefs) res.follow(href);
+      });
+
+  system.console.logger.ok('Crawled ${stats.completed} pages');
+}
+```
+
+Run it, stop it with Ctrl-C, run it again: the second run picks up the frontier where the first left off. Ctrl-C and `kill` both flush the file before the process goes, so the position saved is the one actually reached rather than the last tick's.
+
+| | |
+| :--- | :--- |
+| **On the way in** | An existing file restores the frontier, the visited set and the counters. Seeds already visited are dropped instead of fetched twice, and `limit` keeps counting the whole crawl rather than this leg of it. |
+| **While running** | The file is rewritten every `every` (5 seconds by default), and once more when the run stops. |
+| **On the way out** | A crawl that drained on its own deletes the file, having nothing left to resume. One that stopped early — `limit`, `res.stop`, a signal — keeps it. |
+
+A page that was mid-fetch when the run stopped counts as pending, not as done, so it is fetched again rather than silently skipped. `Request.meta` travels through the file, so anything a handler stores there has to be JSON-encodable. A file that exists but cannot be read throws rather than starting the crawl over.
+
+### Driving it yourself
+
+`resume` is `Engine.snapshot` and `Engine.restore` wired to a file. Both are public, so a crawl can keep its position anywhere — a database row, a key-value store, `io.store`:
+
+```dart
+import 'package:dart_toolkit/dart_toolkit.dart';
+
+void main() async {
+  final engine = net.crawl<String>('https://example.com').engine((res) {
+    for (final href in res.$('a').hrefs) res.follow(href);
+  });
+
+  final store = io.store.open('crawl.json');
+  final saved = store.get<Map<String, Object?>>('position');
+  if (saved != null) engine.restore(Snapshot<String>.fromJson(saved));
+
+  await engine.run(['https://example.com']);
+
+  store.set('position', engine.snapshot().toJson());
+  await store.save();
+}
+```
+
+`Snapshot` carries `pending` (the unfinished requests), `deduplicator` (the visited set) and `stats` (the counters), and round-trips through `toJson`/`fromJson`.
+
+---
+
+## 5. Multi-Stage Crawls
 
 A handler advances the crawl with `res.follow(...)`. Relative URLs resolve against the current page, a `Referer` is set, and duplicates are dropped.
 
@@ -146,7 +204,7 @@ final stats = await net.crawl<String>('https://music.example.com/album')
 
 ---
 
-## 5. Inside a Handler
+## 6. Inside a Handler
 
 ```dart
 res.emit(item);                    // yield a result
@@ -183,7 +241,7 @@ Everything from [`HttpResponse`](http.md) is available too — `res.$('...')`, `
 
 ---
 
-## 6. Priority & De-duplication
+## 7. Priority & De-duplication
 
 Higher `priority` is served first; ties keep insertion order. Useful for draining detail pages before discovering more listings:
 
@@ -206,7 +264,7 @@ await net.crawl<String>(url).deduplicator(restored).run(handler);
 
 ---
 
-## 7. Events
+## 8. Events
 
 ```dart
 final builder = net.crawl<String>(url);
@@ -224,7 +282,7 @@ await builder.run(handler);
 
 ---
 
-## 8. Testing a Pipeline
+## 9. Testing a Pipeline
 
 Use `MapDownloader` to serve fixture responses from an in-memory map without network access:
 
@@ -255,7 +313,7 @@ class MockDownloader<T> extends Downloader<T> {
 
 ---
 
-## 9. Driving the Engine Directly
+## 10. Driving the Engine Directly
 
 For full control, build the engine and use its router:
 
@@ -275,5 +333,5 @@ engine.items.listen(print);
 final stats = await engine.run(['https://example.com']);
 ```
 
-`engine.queue` reports the frontier (`length`, `isEmpty`, `clear()`); `engine.stopped`, `engine.running`, `engine.active` and `engine.idle` report state.
+`engine.queue` reports the frontier (`length`, `isEmpty`, `clear()`); `engine.stopped`, `engine.running`, `engine.active` and `engine.idle` report state. `engine.snapshot()` captures its position and `engine.restore(snapshot)` puts one back — see [section 4](#4-resuming-an-interrupted-crawl).
 

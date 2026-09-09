@@ -155,7 +155,7 @@ abstract class Downloader<T> with PathResolver {
           (request.url.scheme == 'http' || request.url.scheme == 'https')) {
         final r = await engine.robots(request.url);
         if (!r.allowed(request.url, agent: engine.agent)) {
-          engine.skip();
+          engine.skip(request);
           continue;
         }
         robotsDelay = r.delay(agent: engine.agent) ?? Duration.zero;
