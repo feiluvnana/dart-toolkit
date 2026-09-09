@@ -243,65 +243,64 @@ void main() {
             docsDir.listSync().whereType<dart_io.File>().toList()
               ..add(dart_io.File('README.md'));
 
-        final tempDir = dart_io.Directory('.dart_tool/doc_snippets')
-          ..createSync(recursive: true);
+        final tempDir = dart_io.Directory('.dart_tool/doc_snippets');
+        if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+        tempDir.createSync(recursive: true);
+
         try {
-          var testedPrograms = 0;
+          // Every snippet is written out first and analyzed in one pass. One
+          // `dart analyze` per snippet spent most of a minute starting the
+          // analyzer over and over, which is what put this test over its
+          // timeout as the docs grew.
+          final written = <String, dart_io.File>{};
           for (final mdFile in mdFiles) {
-            final content = mdFile.readAsStringSync();
+            final doc = mdFile.uri.pathSegments.last.replaceAll('.md', '');
             final matches = RegExp(
               r'```dart(.*?)```',
               dotAll: true,
-            ).allMatches(content);
+            ).allMatches(mdFile.readAsStringSync());
 
             for (final match in matches) {
               final snippet = match.group(1)!.trim();
-              // Check if this snippet is a complete runnable/analyzable program
-              if (snippet.contains('void main(') ||
-                  snippet.contains('void main()')) {
-                testedPrograms++;
-                final docFileName = mdFile.uri.pathSegments.last.replaceAll(
-                  '.md',
-                  '',
-                );
-                final snippetFile = dart_io.File(
-                  '${tempDir.path}/${docFileName}_snippet_$testedPrograms.dart',
-                );
+              // Only snippets that are whole programs can be analyzed.
+              if (!snippet.contains('void main(')) continue;
 
-                // Ensure snippet imports package:dart_toolkit if none imported
-                var code = snippet;
-                if (!code.contains("package:dart_toolkit/")) {
-                  code =
-                      "import 'package:dart_toolkit/dart_toolkit.dart';\n$code";
-                }
-
-                snippetFile.writeAsStringSync(code);
-
-                final result = await dart_io.Process.run('dart', [
-                  'analyze',
-                  snippetFile.path,
-                ], workingDirectory: dart_io.Directory.current.path);
-
-                expect(
-                  result.exitCode,
-                  equals(0),
-                  reason:
-                      'Failed to analyze code snippet from ${mdFile.path}:\n$code\nStderr: ${result.stderr}\nStdout: ${result.stdout}',
-                );
+              var code = snippet;
+              if (!code.contains('package:dart_toolkit/')) {
+                code = "import 'package:dart_toolkit/dart_toolkit.dart';\n$code";
               }
+              final file = dart_io.File(
+                '${tempDir.path}/${doc}_snippet_${written.length + 1}.dart',
+              )..writeAsStringSync(code);
+              written['$doc #${written.length + 1}'] = file;
             }
           }
 
           expect(
-            testedPrograms,
-            greaterThanOrEqualTo(10),
+            written,
+            hasLength(greaterThanOrEqualTo(10)),
+            reason: 'Should have found at least 10 main() programs in the docs',
+          );
+
+          final result = await dart_io.Process.run('dart', [
+            'analyze',
+            ...written.values.map((file) => file.path),
+          ], workingDirectory: dart_io.Directory.current.path);
+
+          expect(
+            result.exitCode,
+            equals(0),
             reason:
-                'Should have verified at least 10 main() programs across docs',
+                'A documentation snippet does not analyze cleanly.\n'
+                'Snippets: ${written.keys.join(', ')}\n'
+                'Files are kept in ${tempDir.path} for inspection.\n'
+                '${result.stdout}\n${result.stderr}',
           );
         } finally {
           if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
         }
       },
+      timeout: const Timeout(Duration(minutes: 3)),
     );
   });
 }

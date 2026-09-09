@@ -10,6 +10,10 @@ import 'package:html/dom.dart';
 import 'package:html/parser.dart' as html_parser;
 import 'package:xpath_selector_html_parser/xpath_selector_html_parser.dart';
 
+import '../util/text.dart';
+
+const TextAccessor _text = TextAccessor();
+
 // ============================================================================
 // SELECTOR & QUERY RESULT
 // ============================================================================
@@ -216,12 +220,42 @@ class QueryResult with IterableMixin<Element> {
   /// The immediately following sibling of each element.
   QueryResult next([String? selector]) => _sibling(1, selector);
 
-  /// The trimmed text of every match, joined by a space.
+  /// The text of every match, joined by a space.
+  ///
+  /// Read as a browser renders it: runs of whitespace collapse to one space.
+  /// See [readable].
   String get text =>
-      _elements.map((e) => e.text.trim()).where((s) => s.isNotEmpty).join(' ');
+      [for (final e in _elements) readable(e)]
+          .where((s) => s.isNotEmpty)
+          .join(' ');
 
-  /// The trimmed text of each match, one entry per element.
-  List<String> get texts => _elements.map((e) => e.text.trim()).toList();
+  /// The text of each match, one entry per element, read as [text] reads it.
+  List<String> get texts => [for (final e in _elements) readable(e)];
+
+  /// [element]'s text as a reader sees it rather than as the source spells it.
+  ///
+  /// A page is indented, so the markup for one heading carries newlines and
+  /// runs of spaces that a browser collapses to one space before it draws
+  /// anything. Reporting the source formatting as content made
+  /// `res.\$('h1').text` come back as `'Wireless\n        Keyboard'`, and every
+  /// call site had to collapse it again by hand.
+  ///
+  /// Inside a `<pre>` or a `<textarea>` the whitespace *is* the content — that
+  /// is what those elements mean — so there it is kept and only trimmed.
+  ///
+  /// This is the one place text is read, so `res.\$(...).text`, `res.extract`
+  /// and `res.pick` cannot drift apart.
+  static String readable(Element element) =>
+      _preformatted(element) ? element.text.trim() : _text.clean(element.text);
+
+  /// Whether [element] sits anywhere inside a `<pre>` or `<textarea>`.
+  static bool _preformatted(Element element) {
+    for (Element? node = element; node != null; node = node.parent) {
+      final name = node.localName;
+      if (name == 'pre' || name == 'textarea') return true;
+    }
+    return false;
+  }
 
   /// The `href` attribute of the first match, or `null`.
   String? get href => _elements.firstOrNull?.attributes['href'];

@@ -50,7 +50,7 @@ void main(List<String> args) async {
   crawl.on
     ..start(() => log.info('Starting...'))
     ..progress((res) => log.debug('${res.status} ${res.url}'))
-    ..error((error, _) => log.warn('$error'))
+    ..error((f) => log.warn('${f.request?.url ?? 'crawl'}: ${f.error}'))
     ..done((stats) {
       log.ok(
         '${stats.completed} pages, ${stats.emitted} tracks, '

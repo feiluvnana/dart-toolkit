@@ -42,6 +42,50 @@ class ConsoleReader {
     return completer.future;
   }
 
+  /// Every remaining line of stdin, until end of input.
+  ///
+  /// This is how a tool reads what was piped into it — `cat urls.txt | mytool`
+  /// — without a hand-rolled loop around [line]:
+  ///
+  /// ```dart
+  /// await for (final url in system.console.reader.lines) {
+  ///   await fetch(url.trim());
+  /// }
+  /// ```
+  ///
+  /// Shares one stdin subscription with [line] and the prompts, so a tool can
+  /// read a pipe and still ask a question. Ends when stdin closes; against a
+  /// terminal that means it waits for the reader to end the input themselves,
+  /// so guard it with [piped] where both modes are supported.
+  Stream<String> get lines async* {
+    while (true) {
+      final next = await line();
+      if (next == null) return;
+      yield next;
+    }
+  }
+
+  /// Whether stdin is a pipe or a file rather than a keyboard.
+  ///
+  /// The question a tool asks to decide between reading its input and prompting
+  /// for it:
+  ///
+  /// ```dart
+  /// final urls =
+  ///     system.console.reader.piped
+  ///         ? await system.console.reader.lines.toList()
+  ///         : [await system.console.reader.ask('URL')];
+  /// ```
+  bool get piped {
+    try {
+      return !stdin.hasTerminal;
+    } catch (_) {
+      // Querying a detached stdin throws on some platforms; nothing is being
+      // piped in that case either.
+      return false;
+    }
+  }
+
   void _listen() {
     if (_subscription != null) return;
     _subscription = stdin

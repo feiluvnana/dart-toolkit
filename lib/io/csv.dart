@@ -330,6 +330,75 @@ class CsvAccessor {
     part: part,
   );
 
+  /// Writes [rows] to [path] as they arrive, atomically.
+  ///
+  /// The streaming twin of [write]: where that one takes a collection already
+  /// in memory, this takes a [Stream] and never holds more than one row. That
+  /// is what turns a crawl of any size into a spreadsheet in one line —
+  /// [write] would need every result collected first:
+  ///
+  /// ```dart
+  /// await io.csv.pipe(
+  ///   'products.csv',
+  ///   net.crawl<Map<String, Object?>>(seed).stream(handler),
+  ///   headers: ['name', 'price', 'url'],
+  /// );
+  /// ```
+  ///
+  /// Rows are maps or lists of cells, as in [format]. A stream cannot be read
+  /// twice, so the columns have to be settled before the first row is written:
+  /// [headers] names them, and without it they are taken from the first row's
+  /// keys. A later key the header line does not carry is dropped — pass
+  /// [headers] when the rows are not all the same shape.
+  ///
+  /// The file appears complete or not at all: rows are written to a `.part`
+  /// staging file that is renamed into place once the stream closes, and
+  /// discarded if it fails.
+  Future<File> pipe(
+    String path,
+    Stream<dynamic> rows, {
+    List<String>? headers,
+    String delimiter = ',',
+    String newline = '\n',
+    String part = '.part',
+    Encoding encoding = utf8,
+  }) => Fs.atomic(path, (staging) async {
+    final sink = staging.openWrite(encoding: encoding);
+    var columns = headers;
+    var headed = false;
+
+    void line(Iterable<String> cells) => sink.write(
+      '${cells.map((cell) => _escape(cell, delimiter)).join(delimiter)}'
+      '$newline',
+    );
+
+    void header() {
+      final names = columns;
+      if (headed || names == null) return;
+      line(names);
+      headed = true;
+    }
+
+    try {
+      await for (final row in rows) {
+        if (row is Map) {
+          columns ??= [for (final key in row.keys) key.toString()];
+          header();
+          line([for (final key in columns) row[key]?.toString() ?? '']);
+        } else if (row is Iterable) {
+          header();
+          line([for (final cell in row) cell?.toString() ?? '']);
+        }
+      }
+      // A stream that closed without yielding still writes the header it was
+      // given, so an empty result reads as an empty table, not an empty file.
+      header();
+      await sink.flush();
+    } finally {
+      await sink.close();
+    }
+  }, part: part);
+
   Future<List<List<String>>> _all(String path, String delimiter) async {
     final file = File(path);
     if (!file.existsSync()) return [];

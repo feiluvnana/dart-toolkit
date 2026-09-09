@@ -198,7 +198,7 @@ void main() {
         }),
         process: (res) => throw StateError('handler blew up'),
       );
-      engine.on.error((error, stack) => errors.add(error));
+      engine.on.error((failure) => errors.add(failure.error));
 
       await engine.run(['https://example.com/']);
       expect(errors.single, isA<StateError>());

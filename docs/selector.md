@@ -103,18 +103,17 @@ All plural property extractors are getters returning `List<String>` across all m
 | :--- | :--- | :--- |
 | `href` / `hrefs` | Getter | First raw `href` / list of all raw `href` attributes |
 | `src` / `srcs` | Getter | First raw `src` / list of all raw `src` attributes |
-| `text` | Getter | Trimmed text of all matches, space-joined |
-| `texts` | Getter | `List<String>`, one entry per match |
+| `text` | Getter | Text of all matches as a browser renders it, space-joined |
+| `texts` | Getter | The same, one entry per match |
 | `title` / `titles` | Getter | `title` attribute on first match / across matches |
 | `alt` / `alts` | Getter | `alt` attribute on first match / across matches |
 | `action` / `actions` | Getter | `action` attribute on first match / across matches |
-| `value` / `values` | Getter | Form values (input/textarea) across matches |
+| `value` / `values` | Getter | Form values as a browser would submit them — see below |
 | `html` / `outer` | Getter | Inner / outer HTML string of the first match |
-| `lines` | Getter | Text split on `<br>` and newlines, markup stripped |
+| `lines` | Getter | Text split on `<br>` and newlines, markup stripped and entities decoded |
 | `dataset` | Getter | `Map<String, String>` of every `data-*` attribute on the first match |
 | `attr(name)` | Method | `String?` on the first match |
 | `attrs(name)` | Method | `List<String>` across every match |
-| `val()` | Method | Input value or `<textarea>` text |
 | `data(key)` | Method | The `data-[key]` attribute value of the first match |
 | `has(name)` | Method | Whether any match carries the class |
 | `links()` / `link()` | Method | Raw `href` values on matches and descendants |
@@ -132,11 +131,47 @@ final allTitles = res.$('.titleline > a').texts;     // all texts (List<String>)
 final xpathText = res.$xpath('//h2').texts;          // XPath text list
 ```
 
-`lines` is built for `<br>`-separated blocks like tracklists:
+`lines` is built for `<br>`-separated blocks like tracklists, and decodes entities on the way out:
 
 ```dart
-final list = $('<div>01. First<br>02. Second</div>').lines;
-// ['01. First', '02. Second']
+final list = $('<div>01. First<br>02. Tom &amp; Jerry</div>').lines;
+// ['01. First', '02. Tom & Jerry']
+```
+
+### Whitespace
+
+Text comes back the way a browser draws it: runs of spaces and newlines collapse to one space. Pages are indented, so the markup for one heading usually holds both:
+
+```html
+<h1 class="name">
+  Wireless
+  Keyboard
+</h1>
+```
+
+```dart
+res.$('.name').text;                  // 'Wireless Keyboard'
+res.extract({'name': '.name'});       // {'name': 'Wireless Keyboard'}
+res.pick(Field.text('.name'));        // 'Wireless Keyboard'
+```
+
+Inside a `<pre>` or a `<textarea>` the whitespace *is* the content, so there it is kept and only trimmed — a scraped code sample survives intact. `util.text.clean` does the same job to a plain string.
+
+### Form values
+
+`value` reads a control the way a browser would submit it:
+
+| Control | `value` |
+| :--- | :--- |
+| `<textarea>` | Its text |
+| `<select>` | The selected `<option>`'s value, or its text when it has none; the first option when nothing is marked `selected` |
+| checkbox, radio | Its value only when `checked` — `'on'` when it has none — and `null` otherwise |
+| anything else | Its `value` attribute |
+
+```dart
+final form = res.$('form');
+final size = form.find('select[name=size]').value;   // 'm'
+final ticked = form.find('input[type=checkbox]').values;  // only the checked ones
 ```
 
 > `QueryResult.links()` returns **raw** attribute strings. To get absolute URLs, use `HttpResponse.links()`, which resolves against the response URL.

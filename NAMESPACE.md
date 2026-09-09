@@ -200,3 +200,8 @@ form rather than replacing it: `res.extract` takes the string schema,
 | Randomness | `util.rand` | Pure; `rand` alone is too collision-prone |
 | Non-blocking IO | `io.async` | A complete mirror of `io`, so it is a prefix rather than new names |
 | `Fs`, `Sys`, `Exit` | Unexported, `lib/src/` | Implementation behind `io` and `system`; never a public name |
+| HTTP caching | `HttpCache` type, `HttpClient(cache:)`, `crawl.cache(dir)` | A whole tool by Rule 2's first test, but entangled with `net.http` by its second: the client is what decides to revalidate. So a type in `net` and an option on the two things that fetch, not a domain and not a namespace |
+| A crawl's position | `Snapshot` + `Engine.snapshot`/`restore`, `crawl.resume(path)` | The type is the noun, the engine pair is the operation, and `resume` is the two of them wired to a file. `save` was taken by "write items to", and Rule 5 forbids a second meaning for it |
+| A request that failed | `Failure`, passed to `on.error` | A count without the pages is not an answer. Widening the handler's argument list would have fixed one question and left the next one — an attempt number, a response — needing another break, so the argument is a type |
+| Streaming CSV out | `io.csv.pipe`, beside `write` | Different behaviour, not an alias: `write` takes a collection, `pipe` takes a `Stream` and holds one row. A `CsvWriter` you open and close would have been a new noun and a lifecycle to get wrong |
+| Terminal geometry | `ConsoleWriter.width` / `.height`, moved off `Terminal` | Geometry belongs to the thing that knows where the output is going — and to the thing a test can size. `Terminal` keeps what it is named for: the control codes |

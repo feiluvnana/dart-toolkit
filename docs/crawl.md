@@ -299,19 +299,51 @@ await net.crawl<String>(url).deduplicator(restored).run(handler);
 
 ## 8. Events
 
+Every handler hands the builder back, so they join the same expression as the rest of the configuration:
+
 ```dart
-final builder = net.crawl<String>(url);
-builder.on.start(() => log.info('starting'));
-builder.on.item((item) => bar.tick());
-builder.on.progress((res) => log.debug('${res.status} ${res.url}'));
-builder.on.error((error, stack) => log.error('failed', error, stack));
-builder.on.done((stats) => log.ok('${stats.completed} pages'));
-await builder.run(handler);
+await net.crawl<String>(url)
+    .concurrent(4)
+    .on.start(() => log.info('starting'))
+    .on.item((item) => bar.tick())
+    .on.progress((res) => log.debug('${res.status} ${res.url}'))
+    .on.error((f) => log.error('${f.request?.url} failed', f.error, f.stack))
+    .on.done((stats) => log.ok('${stats.completed} pages'))
+    .run(handler);
 ```
 
 > Without an `on.error` handler, a failing page is skipped silently so one bad URL cannot end the run. Register it while developing.
 
 `Stats` carries `scheduled`, `completed`, `failed`, `retried`, `emitted`, `bytes`, `elapsed` and `reason`.
+
+### The pages that did not make it
+
+`stats.failed` counts the failures; `on.error` says which pages they were. A `Failure` carries the `error`, the `stack` and the `request` it happened on, so a crawl can keep its own dead-letter list:
+
+```dart
+import 'package:dart_toolkit/dart_toolkit.dart';
+
+void main() async {
+  final lost = <Failure<String>>[];
+
+  final stats = await net.crawl<String>('https://example.com')
+      .on.error(lost.add)
+      .run((res) {});
+
+  system.console.logger.warn('${stats.failed} failed');
+  for (final failure in lost) {
+    system.console.logger.warn('${failure.request?.url}: ${failure.error}');
+  }
+
+  // Retry just those, on their own.
+  await net.crawl.seed<String>([
+    for (final failure in lost)
+      if (failure.request case final request?) request,
+  ]).run((res) {});
+}
+```
+
+A failed request is unfinished work, so a crawl using [`resume`](#4-resuming-an-interrupted-crawl) keeps it pending and fetches it again on the next run without being asked.
 
 ---
 

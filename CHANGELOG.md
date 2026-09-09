@@ -2,6 +2,61 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.5.0
+
+The parts a real script needs and had to hand-roll. Scraped text arrived with
+the page's own indentation in it. A crawl counted its failures without saying
+which pages they were, so there was nothing to retry or report. Results could
+only reach a CSV by way of memory. And a tool could not read what was piped
+into it without a loop of its own.
+
+### Added
+
+- **`Failure`, and `on.error` receives it.** It carries the `error`, the
+  `stack` and the `request` the failure happened on, so a crawl can keep a
+  dead-letter list, log which URLs it lost, or queue those requests again:
+  `net.crawl(seed).on.error(lost.add)`. `Stats.failed` counted them; nothing
+  said which.
+- **`io.csv.pipe(path, stream)`** writes a stream of rows as they arrive,
+  holding one row at a time. That is a crawl of any size into a spreadsheet in
+  one call, where `write` needed every result collected first. The file appears
+  complete or not at all: rows go to a `.part` staging file that is renamed
+  once the stream closes and discarded if it fails.
+- **`system.console.reader.lines` and `.piped`.** `lines` is what was piped in
+  — `cat urls.txt | mytool` — sharing the one stdin subscription with the
+  prompts, so a tool can read a pipe and still ask a question. `piped` says
+  which mode it is in.
+- **`net.crawl(...).on` hands the builder back**, so lifecycle handlers join
+  the same expression as the rest of the configuration instead of being the one
+  part that has to be written separately.
+
+### Fixed
+
+- **Scraped text reads as text.** A page is indented, so the markup for one
+  heading carries newlines and runs of spaces that a browser collapses before
+  it draws anything — `res.$('h1').text` came back as
+  `'Wireless\n        Keyboard'`, and every call site had to collapse it again
+  by hand. `res.$(...).text`, `.texts`, `res.extract` and `res.pick` now read
+  through one reader, so they cannot drift apart. Inside a `<pre>` or a
+  `<textarea>` the whitespace *is* the content, so there it is kept and only
+  trimmed.
+- **A crawl whose pages all failed no longer deletes its resume file.**
+  `resume` decided there was nothing left to save by looking at the queue,
+  which a failed request is not in — throwing away the very list worth
+  resuming. It now asks the snapshot, which counts anything unfinished.
+- **`$('select').value` and the checkbox reading** landed in 1.4.0; the
+  documentation table describing form values, and the removed
+  `QueryResult.val()`, are corrected here.
+
+### Changed
+
+- **`on.error` takes one argument, not two.** `(error, stack)` becomes
+  `(Failure failure)`, with the request alongside them. A handler that wants
+  what it had before reads `failure.error` and `failure.stack`.
+- `test/doc_samples_test.dart` analyzes every documentation snippet in one
+  pass rather than starting the analyzer once per snippet, which had grown to
+  take longer than the test's own timeout.
+
 ## 1.4.0
 
 Output you can test. `ConsoleWriter` took injectable sinks, but `Progress`,

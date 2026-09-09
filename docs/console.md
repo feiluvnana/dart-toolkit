@@ -186,6 +186,30 @@ final targets = await system.console.reader.picks(
 await system.console.reader.ask('Port', validator: (v) => int.tryParse(v) != null);
 ```
 
+### Reading a pipe
+
+A tool is often given its input rather than asked for it — `cat urls.txt | mytool`. `lines` is that input, and `piped` is how a tool tells which mode it is in:
+
+```dart
+import 'package:dart_toolkit/dart_toolkit.dart';
+
+void main() async {
+  final reader = system.console.reader;
+
+  final urls =
+      reader.piped
+          ? await reader.lines.toList()
+          : [await reader.ask('URL')];
+
+  for (final url in urls) {
+    system.console.logger.info(url.trim());
+  }
+  await reader.close();
+}
+```
+
+`lines` shares the one stdin subscription with `line` and the prompts, so a tool can read a pipe and still ask a question. It ends at end of input; against a terminal that means it waits for the reader to end the input themselves, which is what `piped` is for.
+
 ---
 
 ## 6. Colours (`Ansi`)

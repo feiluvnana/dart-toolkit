@@ -173,7 +173,7 @@ abstract class Downloader<T> with PathResolver {
         final response = await download(request as Request<T>);
         if (!engine.stopped) await engine.process(response);
       } catch (error, stack) {
-        engine.fail(error, stack);
+        engine.fail(error, stack, request);
       } finally {
         engine.leave();
       }

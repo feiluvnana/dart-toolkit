@@ -90,3 +90,30 @@ await io.csv.write('out/for-excel.csv', rows, newline: '\r\n');
 
 Reading handles either, so a file written one way reads back the same.
 
+### Streaming out
+
+`write` takes a collection already in memory. `pipe` takes a `Stream` and never holds more than one row, which is what turns a crawl of any size into a spreadsheet in one call:
+
+```dart
+import 'package:dart_toolkit/dart_toolkit.dart';
+
+void main() async {
+  await io.csv.pipe(
+    'products.csv',
+    net.crawl<Map<String, Object?>>('https://shop.example.com/products')
+        .stream((res) {
+          for (final row in res.extract({
+            'items': ['.product', {'name': '.name', 'price': '.price'}],
+          })['items']! as List<Map<String, Object?>>) {
+            res.emit(row);
+          }
+        }),
+    headers: ['name', 'price'],
+  );
+}
+```
+
+A stream cannot be read twice, so the columns are settled before the first row is written: `headers` names them, and without it they are taken from the first row's keys. A later key the header line does not carry is dropped — pass `headers` when the rows are not all the same shape.
+
+The file appears complete or not at all. Rows go to a `.part` staging file that is renamed into place when the stream closes, and discarded if it fails, so a crawl that dies halfway leaves no truncated CSV behind.
+

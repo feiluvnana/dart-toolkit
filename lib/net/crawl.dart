@@ -121,7 +121,7 @@ class CrawlBuilder<T> {
   final List<void Function(Stats stats)> _doneHandlers = [];
   final List<void Function(T item)> _itemHandlers = [];
   final List<void Function(Response<T> response)> _progressHandlers = [];
-  final List<void Function(Object error, StackTrace stack)> _errorHandlers = [];
+  final List<void Function(Failure<T> failure)> _errorHandlers = [];
 
   /// Creates a builder seeded with [urls] and an optional [_process].
   ///
@@ -480,23 +480,32 @@ class CrawlBuilder<T> {
       _resumeHook = null;
     }
 
-    if (engine.stopped || engine.queue.isNotEmpty) {
-      await _write(path, engine);
+    // Asking the snapshot rather than the queue: a request that failed, or one
+    // whose response arrived after the run stopped, is unfinished work too.
+    // Reading the queue alone deleted the file after a crawl whose every page
+    // failed — throwing away the very list worth resuming.
+    final position = engine.snapshot();
+    if (engine.stopped || position.pending.isNotEmpty) {
+      await _save(path, position);
       return;
     }
-    // Drained on its own: there is no position left worth keeping.
+    // Every page handled: there is no position left worth keeping.
     await _resumeWrites;
     final file = File(path);
     if (file.existsSync()) await file.delete();
   }
 
   /// Writes [engine]'s position to [path], one write at a time.
-  Future<void> _write(String path, Engine<T> engine) {
-    // Captured now, so a snapshot queued behind an in-flight write still
-    // records the frontier as it stood when the save was asked for.
-    final snapshot = engine.snapshot().toJson();
+  Future<void> _write(String path, Engine<T> engine) =>
+      // Captured now, so a snapshot queued behind an in-flight write still
+      // records the frontier as it stood when the save was asked for.
+      _save(path, engine.snapshot());
+
+  /// Writes [position] to [path], behind any write already in flight.
+  Future<void> _save(String path, Snapshot<T> position) {
+    final json = position.toJson();
     return _resumeWrites = _resumeWrites.then(
-      (_) => Fs.dump(path, snapshot, pretty: false),
+      (_) => Fs.dump(path, json, pretty: false),
     );
   }
 
@@ -626,6 +635,17 @@ class CrawlBuilder<T> {
 }
 
 /// Lifecycle handlers for a [CrawlBuilder], reachable as `builder.on`.
+///
+/// Every registration hands the builder back, so handlers join the same
+/// expression the rest of the configuration is written in:
+///
+/// ```dart
+/// await net.crawl<String>(seed)
+///     .concurrent(4)
+///     .on.error((f) => log.warn('${f.request?.url}: ${f.error}'))
+///     .on.done((stats) => log.ok('${stats.completed} pages'))
+///     .run(handler);
+/// ```
 class CrawlEvents<T> {
   final CrawlBuilder<T> _builder;
 
@@ -633,24 +653,41 @@ class CrawlEvents<T> {
   const CrawlEvents(this._builder);
 
   /// Called once before the first request is fetched.
-  void start(void Function() handler) => _builder._startHandlers.add(handler);
+  CrawlBuilder<T> start(void Function() handler) {
+    _builder._startHandlers.add(handler);
+    return _builder;
+  }
 
   /// Called once after the crawl finishes, with the final [Stats].
-  void done(void Function(Stats stats) handler) =>
-      _builder._doneHandlers.add(handler);
+  CrawlBuilder<T> done(void Function(Stats stats) handler) {
+    _builder._doneHandlers.add(handler);
+    return _builder;
+  }
 
   /// Called for each item a handler emits.
-  void item(void Function(T item) handler) =>
-      _builder._itemHandlers.add(handler);
+  CrawlBuilder<T> item(void Function(T item) handler) {
+    _builder._itemHandlers.add(handler);
+    return _builder;
+  }
 
   /// Called after each response is processed.
-  void progress(void Function(Response<T> response) handler) =>
-      _builder._progressHandlers.add(handler);
+  CrawlBuilder<T> progress(void Function(Response<T> response) handler) {
+    _builder._progressHandlers.add(handler);
+    return _builder;
+  }
 
-  /// Called when a fetch or handler throws.
+  /// Called when a fetch or handler throws, with the [Failure] that names the
+  /// request as well as the error.
   ///
   /// Without a handler, errors are swallowed so one bad page cannot end the
   /// crawl; register this to see them.
-  void error(void Function(Object error, StackTrace stack) handler) =>
-      _builder._errorHandlers.add(handler);
+  ///
+  /// ```dart
+  /// final lost = <Failure<String>>[];
+  /// await net.crawl<String>(seed).on.error(lost.add).run(handler);
+  /// ```
+  CrawlBuilder<T> error(void Function(Failure<T> failure) handler) {
+    _builder._errorHandlers.add(handler);
+    return _builder;
+  }
 }

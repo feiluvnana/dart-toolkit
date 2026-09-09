@@ -493,7 +493,8 @@ sealed class Field<T> {
   }
 }
 
-/// The trimmed text of the first match. See [Field.text].
+/// The text of the first match, read as a browser renders it. See
+/// [Field.text].
 final class TextField extends Field<String?> {
   /// The CSS selector to read.
   final String selector;
@@ -502,8 +503,12 @@ final class TextField extends Field<String?> {
   const TextField(this.selector);
 
   @override
-  String? read(Element root) =>
-      (selector.isEmpty ? root : root.querySelector(selector))?.text.trim();
+  String? read(Element root) {
+    final target = selector.isEmpty ? root : root.querySelector(selector);
+    // The one text reader, so extract and res.$ never disagree about what
+    // the text of an element is.
+    return target == null ? null : QueryResult.readable(target);
+  }
 }
 
 /// An attribute of the first match. See [Field.attr].
@@ -522,12 +527,12 @@ final class AttrField extends Field<String?> {
     final target = selector.isEmpty ? root : root.querySelector(selector);
     if (target == null) return null;
     return attribute == 'text'
-        ? target.text.trim()
+        ? QueryResult.readable(target)
         : target.attributes[attribute];
   }
 }
 
-/// The trimmed text of every match. See [Field.texts].
+/// The text of every match, read as a browser renders it. See [Field.texts].
 final class TextsField extends Field<List<String>> {
   /// The CSS selector to read.
   final String selector;
@@ -537,7 +542,7 @@ final class TextsField extends Field<List<String>> {
 
   @override
   List<String> read(Element root) => [
-    for (final el in root.querySelectorAll(selector)) el.text.trim(),
+    for (final el in root.querySelectorAll(selector)) QueryResult.readable(el),
   ];
 }
 

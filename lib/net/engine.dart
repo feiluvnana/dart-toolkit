@@ -208,6 +208,40 @@ class Deduplicator {
   }
 }
 
+/// A request that did not make it, and why.
+///
+/// Handed to [EngineEvents.error]. [Stats.failed] counts these; this says
+/// which ones, so a crawl can log the pages it lost, report them, or queue
+/// them again:
+///
+/// ```dart
+/// final lost = <Failure<String>>[];
+/// await net.crawl<String>(seed).on.error(lost.add).run(handler);
+/// for (final failure in lost) {
+///   system.console.logger.warn('${failure.request.url}: ${failure.error}');
+/// }
+/// ```
+///
+/// A failed request is unfinished work, so it also stays pending in
+/// [Engine.snapshot] and a resumed crawl fetches it again.
+class Failure<T> {
+  /// What was thrown.
+  final Object error;
+
+  /// Where it was thrown.
+  final StackTrace stack;
+
+  /// The request being served, or `null` when the failure was not tied to one.
+  final Request<T>? request;
+
+  /// Creates a failure.
+  const Failure(this.error, this.stack, [this.request]);
+
+  @override
+  String toString() =>
+      request == null ? 'Failure($error)' : 'Failure(${request!.url}: $error)';
+}
+
 /// The saved position of a crawl: its frontier, its visited set and its
 /// counters.
 ///
@@ -311,7 +345,7 @@ class EngineEvents<T> {
   final List<void Function(Stats stats)> _doneHandlers = [];
   final List<void Function(T item)> _itemHandlers = [];
   final List<void Function(Response<T> response)> _progressHandlers = [];
-  final List<void Function(Object error, StackTrace stack)> _errorHandlers = [];
+  final List<void Function(Failure<T> failure)> _errorHandlers = [];
 
   /// Called once before the first request is served.
   void start(void Function() handler) => _startHandlers.add(handler);
@@ -326,11 +360,12 @@ class EngineEvents<T> {
   void progress(void Function(Response<T> response) handler) =>
       _progressHandlers.add(handler);
 
-  /// Called when a request or its handler throws.
+  /// Called when a request or its handler throws, with the [Failure] that
+  /// names the request as well as the error.
   ///
   /// Without a handler, errors are swallowed so one bad page cannot end the
   /// run; register this to see them.
-  void error(void Function(Object error, StackTrace stack) handler) =>
+  void error(void Function(Failure<T> failure) handler) =>
       _errorHandlers.add(handler);
 }
 
@@ -725,10 +760,13 @@ class Engine<T> {
   /// Reports [error] to the [EngineEvents.error] handlers.
   ///
   /// Called by the [Downloader]'s workers when a fetch or handler throws.
-  void fail(Object error, StackTrace stack) {
+  /// Pass the [request] being served: a count of failures without the pages
+  /// they happened on leaves nothing to retry or report.
+  void fail(Object error, StackTrace stack, [Request<dynamic>? request]) {
     _stats.failed++;
+    final failure = Failure<T>(error, stack, request as Request<T>?);
     for (final h in on._errorHandlers) {
-      h(error, stack);
+      h(failure);
     }
   }
 

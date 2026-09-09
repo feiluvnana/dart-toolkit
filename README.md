@@ -165,6 +165,12 @@ final text = await io.async.read('out/notes.txt');
 await io.async.download(url, 'out/file.zip');
 ```
 
+A crawl reaches a spreadsheet without passing through memory:
+
+```dart
+await io.csv.pipe('products.csv', crawl.stream(handler), headers: ['name', 'price']);
+```
+
 See [docs/io.md](docs/io.md), [docs/csv.md](docs/csv.md), [docs/store.md](docs/store.md).
 
 ### `net.http` — requests that scrape themselves
@@ -217,7 +223,20 @@ await net.crawl<String>('https://music.example.com/album')
     });
 ```
 
-`follow` resolves relative URLs, sets a `Referer`, and de-duplicates. Finish with `run` (stats), `collect` (a list) or `stream` (items as they arrive). See [docs/crawl.md](docs/crawl.md).
+`follow` resolves relative URLs, sets a `Referer`, and de-duplicates — and takes a `method` and `body`, so a form is followed the way a link is. Finish with `run` (stats), `collect` (a list), `stream` (items as they arrive) or `save` (straight to a file).
+
+A crawl that has to survive the real world adds four things:
+
+```dart
+await net.crawl<String>(seed)
+    .resume('crawl.state')      // carry on where an interrupted run stopped
+    .cache('.cache')            // reuse pages that have not changed
+    .accept(['text/html'])      // never hand a PDF to the HTML parser
+    .on.error((f) => log.warn('${f.request?.url}: ${f.error}'))
+    .run(handler);
+```
+
+See [docs/crawl.md](docs/crawl.md).
 
 ### `$()` — selectors
 
