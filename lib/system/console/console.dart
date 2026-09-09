@@ -46,18 +46,27 @@ class ConsoleAccessor {
   /// Interactive prompts: [ConsoleReader.ask], [ConsoleReader.pick] and more.
   ConsoleReader get reader => _reader;
 
-  /// Terminal geometry and screen control.
-  Terminal get terminal => const Terminal();
+  /// Screen control. Geometry is [ConsoleWriter.width] and
+  /// [ConsoleWriter.height], on [writer].
+  Terminal get terminal => Terminal(_writer);
 
   /// Cursor positioning and visibility.
-  Cursor get cursor => const Cursor();
+  Cursor get cursor => Cursor(_writer);
 
   /// Creates a [Table] with [headers].
+  ///
+  /// Pass [width] to cap the rendered width; cells then wrap to fit.
   Table table({
     required List<String> headers,
     List<ColumnAlign>? alignments,
     TableStyle style = TableStyle.unicode,
-  }) => Table(headers: headers, alignments: alignments, style: style);
+    int? width,
+  }) => Table(
+    headers: headers,
+    alignments: alignments,
+    style: style,
+    width: width,
+  );
 
   /// Creates a [Progress] bar counting up to [total].
   Progress progress({
@@ -74,11 +83,12 @@ class ConsoleAccessor {
     fill: fill,
     empty: empty,
     message: message,
+    writer: _writer,
   );
 
   /// Creates a [Spinner].
   Spinner spinner({
     List<String> frames = Spinner.braille,
     Duration interval = const Duration(milliseconds: 80),
-  }) => Spinner(frames: frames, interval: interval);
+  }) => Spinner(frames: frames, interval: interval, writer: _writer);
 }

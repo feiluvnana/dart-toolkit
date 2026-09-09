@@ -49,6 +49,13 @@ Entries that would escape the destination — a `..` segment or an absolute path
 the "zip slip" attack — are skipped rather than trusted. An archive is usually
 something you downloaded.
 
+Unpacking is a restore rather than a fresh write, so a file's recorded unix
+permissions and modification time come back with it: an archive of shell
+scripts unpacks with its execute bit intact, and a restored tree keeps the
+dates it was packed with. Permissions are a no-op on Windows, which has no
+such bits, and a zip's DOS timestamp has two-second resolution, so an odd
+second is rounded.
+
 ---
 
 ## 3. Looking inside

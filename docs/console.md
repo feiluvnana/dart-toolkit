@@ -50,6 +50,21 @@ system.console.logger.level = LogLevel.none;   // silence everything
 
 `LogLevel` runs `none < error < warn < info < debug`.
 
+### Timestamps and JSON
+
+```dart
+system.console.logger.stamp = true;              // prefix each line with the time
+system.console.logger.format = LogFormat.json;   // one JSON object per line
+```
+
+`LogFormat.plain` (default) draws a badge for a person reading a terminal. `LogFormat.json` writes `{"level":"ok","message":"Done"}` for a machine reading a file — badges become a named `level`, escape codes are stripped, `step` carries `step` and `total` fields, `error` carries `error` and `stack`, and `stamp` adds a `time` field rather than a prefix.
+
+Where the lines go is the writer's business, so a run logs to a file the same way it logs to a screen:
+
+```dart
+system.console.logger.writer = ConsoleWriter(out: File('run.log').openWrite());
+```
+
 ### `task`
 
 Runs an action behind a spinner, resolving to a tick or a cross. The error is rethrown either way:
@@ -91,6 +106,15 @@ final text = table.render();        // or keep the string
 ```
 
 Column widths are measured with `Ansi.width`, so coloured cells still align. `TableStyle.unicode` (default) and `TableStyle.ascii` are available.
+
+A cell may hold newlines, and `width` caps the rendered width — the widest columns are narrowed first, and their cells wrap to fit:
+
+```dart
+final table = Table(headers: ['URL', 'Error'], width: system.console.writer.width)
+  ..add([longUrl, 'Connection reset\nRetried 3 times']);
+```
+
+Wrapping measures terminal columns rather than code units, so a wrapped cell of CJK or emoji still fits the column it was cut for. `Ansi.wrap(text, width)` does the same job on its own.
 
 ---
 
@@ -197,25 +221,48 @@ styled.width;
 
 ## 7. Testable Console Output
 
-`ConsoleWriter` and `ConsoleLogger` accept custom `StringSink` streams for easy testing without polluting stdout/stderr:
+Everything here that writes to the screen writes through a `ConsoleWriter`. Give one a `StringBuffer` and the output becomes a value:
 
 ```dart
-final outBuffer = StringBuffer();
-final errBuffer = StringBuffer();
-final writer = ConsoleWriter(out: outBuffer, err: errBuffer);
-final logger = ConsoleLogger(writer: writer);
+import 'package:dart_toolkit/dart_toolkit.dart';
 
-logger.ok('All tests passed');
-expect(outBuffer.toString(), contains('All tests passed'));
+void main() {
+  final out = StringBuffer();
+  final err = StringBuffer();
+  final writer = ConsoleWriter(out: out, err: err, tty: true, width: 40);
+
+  ConsoleLogger(writer).ok('All tests passed');
+  Progress(total: 2, writer: writer)
+    ..tick()
+    ..done('Finished');
+  Spinner(writer: writer)
+    ..start('Working')
+    ..ok('Worked');
+  Terminal(writer).bell();
+
+  assert(out.toString().contains('All tests passed'));
+  assert(out.toString().contains('Finished'));
+}
 ```
+
+| Constructor argument | What it decides |
+| :--- | :--- |
+| `out`, `err` | Where the two streams go. Default `stdout` and `stderr`. |
+| `tty` | Whether anything screen-only — escape codes, a repainting bar, a spinner frame — is written at all. Defaults to whether **stdout** is a terminal for a writer using stdout, and to `false` for one given a sink of its own. |
+| `width`, `height` | Override the terminal's size, so a table or a rule renders at a size a test can predict. |
+
+`tty` is the switch that keeps a redirected run clean: a piped script carries no escape codes, no repainted bars and no spinner frames. Pass `tty: true` with a buffer to capture exactly what a terminal would have received.
+
+`Progress`, `Spinner`, `Terminal`, `Cursor` and `ConsoleLogger` all take a `writer`, and `system.console.*` binds them to `system.console.writer`.
 
 ---
 
 ## 8. Terminal & Cursor
 
 ```dart
-system.console.terminal.width;    // columns, or 80
-system.console.terminal.height;   // rows, or 24
+system.console.writer.width;      // columns, or 80
+system.console.writer.height;     // rows, or 24
+
 system.console.terminal.clear();
 system.console.terminal.line();   // erase the current line
 system.console.terminal.bell();
@@ -227,4 +274,4 @@ system.console.cursor.save();
 system.console.cursor.restore();
 ```
 
-Every method is a no-op when stdout is not a terminal.
+Geometry belongs to the writer — the thing that knows where the output is going, and the thing a test can size. Control codes belong to `Terminal` and `Cursor`, and every one of them is a no-op when the writer is not a terminal.

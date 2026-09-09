@@ -2,6 +2,81 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.4.0
+
+Output you can test. `ConsoleWriter` took injectable sinks, but `Progress`,
+`Spinner`, `Terminal` and `Cursor` wrote straight to stdout, so half the
+library's output was unreachable from a test and a logger pointed at a file
+still drew its spinner on the screen. Everything now goes through one writer.
+
+### Added
+
+- **`ConsoleWriter` decides where output goes and how wide it is**, through
+  `tty`, `width` and `height`. `tty` gates everything screen-only — escape
+  codes, a repainting bar, a spinner frame — and defaults to whether stdout is
+  a terminal for a writer using stdout, and to `false` for one given a sink of
+  its own. Pass `tty: true` with a `StringBuffer` to capture exactly what a
+  terminal would have received.
+- **`Progress`, `Spinner`, `Terminal` and `Cursor` all take a `writer`**, and
+  `system.console.*` binds them to `system.console.writer`. A logger's
+  `task` spinner now follows the logger rather than always finding stdout.
+- **`ConsoleLogger.writer` can be replaced**, so a run logs to a file the same
+  way it logs to a screen: `logger.writer = ConsoleWriter(out: sink)`.
+- **`ConsoleLogger.format` and `ConsoleLogger.stamp`.** `LogFormat.json`
+  writes one JSON object per line — the badge becomes a named `level`, escape
+  codes are stripped, `step` carries `step` and `total`, and `error` carries
+  `error` and `stack`. `stamp` adds an ISO-8601 prefix, or a `time` field in
+  JSON.
+- **`Table` takes a `width`** and wraps to fit it, narrowing the widest columns
+  first. A cell may hold newlines and renders as several lines of one row.
+- **`Ansi.wrap(text, width)`** breaks text to a column count, at spaces where
+  it can and inside a word where it cannot, measuring terminal columns rather
+  than code units so a wrapped cell of CJK or emoji still fits.
+- **`io.csv.rows(path)`** streams raw rows, completing a typed set of four
+  readers: `maps` and `matrix` read the whole file, `records` and `rows` yield
+  a row at a time.
+- **`io.csv.format` and `io.csv.write` take a `newline`**, for the `\r\n` that
+  Excel and RFC 4180 expect.
+- **`system.cli.count(name)`** reports how many times a switch was given, so
+  `-vvv` reads as a level.
+- **`flag` takes an `env`**, which only `option` did, so a boolean can be set
+  by the shell as well as on the command line.
+- **`git.fetch` and `git.checkout`**, matching the shape of `push`, `pull` and
+  `clone`.
+
+### Fixed
+
+- **`$('select').value` reads the selected option.** It read the `<select>`'s
+  own `value` attribute, which no select has, so every dropdown reported
+  `null`. A checkbox or radio now reports its value only when `checked`, where
+  it used to report it regardless — an unticked box read as ticked.
+- **`.lines` decodes HTML entities.** It strips the tags but left `&amp;`
+  sitting in what is documented as text.
+- **`zip.unpack` restores permissions and modification times.** An archive of
+  shell scripts unpacked with nothing runnable in it, and a restored tree was
+  stamped with the moment it was restored. The two container families disagree
+  about how the timestamp is stored — a tar counts seconds from the epoch, a
+  zip packs a DOS date — so the format decides how it is read.
+- **Cancelling a `Pool` stream stops launching work.** A task's body starts a
+  turn after it is scheduled, so a cancel landing in between still ran one more
+  item. This was the flake in `pool streaming cancelling the stream stops
+  launching work`.
+
+### Changed
+
+- **The terminal's size is `system.console.writer.width` and `.height`**, not
+  `system.console.terminal.*`. Geometry belongs to the thing that knows where
+  the output is going, and to the thing a test can size; `Terminal` keeps the
+  control codes — `clear`, `line`, `bell`.
+- **`io.csv.read` and `io.csv.stream` are gone**, along with the deprecated
+  `io.csv.table`. All three returned `dynamic` or duplicated a typed method
+  that already existed, against Rule 6 of `NAMESPACE.md`. `read(path)` becomes
+  `maps(path)`, `read(path, headers: false)` becomes `matrix(path)`,
+  `stream(path, headers: true)` becomes `records(path)`, `stream(path)` becomes
+  `rows(path)`, and `table(...)` becomes `format(...)`.
+- **`io.csv.records` is no longer deprecated.** It pointed at
+  `stream(path, headers: true)`, which was the untyped spelling of it.
+
 ## 1.3.0
 
 Fetch less, parse less. A re-run over pages that have not changed used to cost

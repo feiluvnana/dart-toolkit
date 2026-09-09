@@ -25,25 +25,24 @@ void main() async {
 
 ## 1. Reading & Streaming
 
-The core operations offer a simple matrix: `{read, stream, write} × {headers: true|false}`.
+Four readers, one per corner of *keyed or raw* × *all at once or a row at a time*. Each one's return type says which it is, so there is nothing to cast:
 
-| Method | With `headers: true` (default for `read`) | With `headers: false` (default for `stream`) |
+| | Keyed by the header line | Raw cells |
 | :--- | :--- | :--- |
-| `io.csv.read(path, {headers})` | `Future<List<Map<String, String>>>` | `Future<List<List<String>>>` (raw grid) |
-| `io.csv.stream(path, {headers})` | `Stream<Map<String, String>>` | `Stream<List<String>>` (raw rows) |
+| **All at once** | `io.csv.maps(path)` → `Future<List<Map<String, String>>>` | `io.csv.matrix(path)` → `Future<List<List<String>>>` |
+| **A row at a time** | `io.csv.records(path)` → `Stream<Map<String, String>>` | `io.csv.rows(path)` → `Stream<List<String>>` |
 
 ```dart
-// In-memory reads:
-final records = await io.csv.read('people.csv');                  // List<Map<String, String>>
-final grid    = await io.csv.read('people.csv', headers: false);  // List<List<String>>
+final records = await io.csv.maps('people.csv');     // List<Map<String, String>>
+final grid    = await io.csv.matrix('people.csv');   // List<List<String>>
 
-// Streaming reads (memory-efficient for large files):
-await for (final map in io.csv.stream('big.csv', headers: true)) {
+// Streaming, for a file larger than memory:
+await for (final map in io.csv.records('big.csv')) {
   print(map['id']);
 }
 ```
 
-Both return an empty collection when the file does not exist. Blank lines are skipped, and short rows are padded with empty strings when reading maps.
+All four return nothing when the file does not exist. Blank lines are skipped, and short rows are padded with empty strings when reading maps.
 
 ---
 
@@ -80,4 +79,14 @@ final csvText = io.csv.format([
 ```
 
 Quoting is applied automatically to any cell containing the delimiter, a quote, or a newline. Custom delimiters (e.g. `\t` for TSV) are supported via `delimiter: '\t'`.
+
+### Line endings
+
+`format` and `write` end every line with `newline`, which defaults to `\n`. Pass `\r\n` for the ending Excel and RFC 4180 expect:
+
+```dart
+await io.csv.write('out/for-excel.csv', rows, newline: '\r\n');
+```
+
+Reading handles either, so a file written one way reads back the same.
 

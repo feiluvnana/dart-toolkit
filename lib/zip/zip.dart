@@ -13,6 +13,7 @@ import 'package:archive/archive.dart';
 import 'package:path/path.dart' as p;
 
 import '../src/fs.dart';
+import '../src/proc.dart';
 
 // ============================================================================
 // ZIP DOMAIN (zip.*)
@@ -101,15 +102,23 @@ class ZipAccessor {
             .relative(entity.path, from: source)
             .replaceAll(r'\', '/');
         if (entity is File) {
-          archive.add(ArchiveFile.bytes(name, await entity.readAsBytes()));
+          archive.add(
+            _stamp(
+              ArchiveFile.bytes(name, await entity.readAsBytes()),
+              await entity.stat(),
+            ),
+          );
         } else if (entity is Directory) {
-          archive.add(ArchiveFile.directory(name));
+          archive.add(_stamp(ArchiveFile.directory(name), await entity.stat()));
         }
       }
     } else if (type == FileSystemEntityType.file) {
       final file = File(source);
       archive.add(
-        ArchiveFile.bytes(p.basename(source), await file.readAsBytes()),
+        _stamp(
+          ArchiveFile.bytes(p.basename(source), await file.readAsBytes()),
+          await file.stat(),
+        ),
       );
     } else {
       throw FileSystemException('Nothing to pack', source);
@@ -143,17 +152,21 @@ class ZipAccessor {
   /// segment or an absolute path, the "zip slip" attack — are skipped rather
   /// than trusted, since an archive is usually something you downloaded, and
   /// so are symlink entries, which can point anywhere at all.
+  ///
+  /// A file's recorded modification time and unix permissions are restored,
+  /// so an archive of shell scripts unpacks with its execute bit intact and a
+  /// restored tree keeps the dates it was packed with. Permissions are a no-op
+  /// on Windows.
   Future<List<File>> unpack(
     String source,
     String dest, {
     Format? format,
   }) async {
-    final archive = _decode(
-      await File(source).readAsBytes(),
-      format ?? Format.of(source),
-    );
+    final kind = format ?? Format.of(source);
+    final archive = _decode(await File(source).readAsBytes(), kind);
     final root = p.normalize(p.absolute(dest));
     final written = <File>[];
+    final executable = <int, List<String>>{};
 
     for (final entry in archive) {
       final target = p.normalize(p.join(root, entry.name));
@@ -170,9 +183,79 @@ class ZipAccessor {
       final file = File(target);
       await file.writeAsBytes(entry.readBytes() ?? const <int>[]);
       written.add(file);
+
+      final when = _modified(entry, kind);
+      // Unpacking is a restore, not a fresh write: an archive that recorded
+      // when a file was last touched should not hand it back stamped now.
+      if (when != null) await file.setLastModified(when);
+      final permissions = entry.mode & 0x1ff;
+      if (permissions != 0) {
+        executable.putIfAbsent(permissions, () => []).add(target);
+      }
     }
+
+    await _permit(executable);
     return written;
   }
+
+  /// Applies each set of unix permissions to the paths that carry it.
+  ///
+  /// One `chmod` per distinct mode rather than one per file, and none at all
+  /// on Windows, which has no such bits. Without this an archive of shell
+  /// scripts unpacks without its execute bit and nothing in it will run.
+  static Future<void> _permit(Map<int, List<String>> byMode) async {
+    if (Platform.isWindows || byMode.isEmpty) return;
+    for (final entry in byMode.entries) {
+      // Only worth a subprocess where the bits differ from what a fresh write
+      // already produces.
+      if (entry.key == 0x1a4 || entry.key == 0x1b6) continue;
+      await Sys.run('chmod', [
+        entry.key.toRadixString(8).padLeft(3, '0'),
+        ...entry.value,
+      ]);
+    }
+  }
+
+  /// [file] with the mode and modification time [stat] reports.
+  static ArchiveFile _stamp(ArchiveFile file, FileStat stat) =>
+      file
+        ..mode = stat.mode
+        ..lastModTime = stat.modified.millisecondsSinceEpoch ~/ 1000;
+
+  /// When [entry] says it was last modified, or `null` when it does not say.
+  ///
+  /// The two container families disagree about the field: a tar carries
+  /// seconds since the epoch, while a zip carries a packed DOS date and time,
+  /// which is what `lastModDateTime` decodes. Reading one as the other yields
+  /// a date in 1980 or in the far future, so the format decides.
+  static DateTime? _modified(ArchiveFile entry, Format format) {
+    if (entry.lastModTime <= 0) return null;
+    final DateTime when;
+    if (format == Format.zip) {
+      // A zip's DOS fields hold local wall-clock components with no zone, and
+      // are handed back as if they were UTC. Rebuilding them as local time is
+      // what makes the date read back as the one that was packed. DOS time
+      // has two-second resolution, so an odd second is lost either way.
+      final fields = entry.lastModDateTime;
+      when = DateTime(
+        fields.year,
+        fields.month,
+        fields.day,
+        fields.hour,
+        fields.minute,
+        fields.second,
+      );
+    } else {
+      when = DateTime.fromMillisecondsSinceEpoch(entry.lastModTime * 1000);
+    }
+    if (when.year < 1980 || when.isAfter(DateTime.now().add(_slack))) {
+      return null;
+    }
+    return when;
+  }
+
+  // A clock that is a little ahead is normal; a year ahead is a bad field.
+  static const Duration _slack = Duration(days: 1);
 
   /// Lists what the archive at [source] holds, without unpacking it.
   Future<List<Entry>> list(String source, {Format? format}) async {

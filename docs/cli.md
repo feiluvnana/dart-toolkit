@@ -96,7 +96,7 @@ system.cli
 | `def` | The value `get` reports when the argument is absent |
 | `required` | `require` throws when nothing supplies a value |
 | `allowed` | `require` throws when a given value is not in the list |
-| `env` | An environment variable to read when the argument is absent |
+| `env` | An environment variable to read when the argument is absent — on `flag` as well as `option`, so a boolean can come from the shell |
 | `csv` | Splits one comma-separated value into repeats for `all` |
 
 A flag never consumes the token after it, so declaring `verbose` is what keeps
@@ -269,6 +269,24 @@ system.cli.has('force', 'f');    // --force or -f
 ```dart
 system.cli.no('cache');    // --no-cache or --nocache
 ```
+
+### `count(name, [alias])`
+
+How many times a switch was given, which is how a command line spells a level.
+`-vvv` and `--verbose --verbose --verbose` both count three:
+
+```dart
+system.cli.flag('verbose', alias: 'v');
+
+system.console.logger.level = switch (system.cli.count('verbose')) {
+  0 => LogLevel.warn,
+  1 => LogLevel.info,
+  _ => LogLevel.debug,
+};
+```
+
+Zero when the switch was never given, so it reads as `has` with a number
+attached.
 
 ### `all<T>(name, [alias])`
 

@@ -6,9 +6,9 @@ import 'package:test/test.dart';
 
 void main() {
   group('Console & Terminal Namespaces', () {
-    test('terminal reports geometry', () {
-      expect(system.console.terminal.width, greaterThan(0));
-      expect(system.console.terminal.height, greaterThan(0));
+    test('the writer reports geometry', () {
+      expect(system.console.writer.width, greaterThan(0));
+      expect(system.console.writer.height, greaterThan(0));
     });
 
     test('writer renders tables, boxes and rules', () {
@@ -1031,7 +1031,7 @@ void main() async {
     });
 
     test(
-      'io.csv.stream and records read rows without loading all into memory',
+      'io.csv.rows and records read rows without loading all into memory',
       () async {
         final temp = io.temp('csv_stream_');
         try {
@@ -1041,7 +1041,7 @@ void main() async {
             'id,name\n1,"Alpha, 1"\n2,"Beta ""The Second"""\n3,Gamma\n',
           );
 
-          final streamRows = await io.csv.stream(path).toList();
+          final streamRows = await io.csv.rows(path).toList();
           expect(streamRows.length, equals(4));
           expect(streamRows[0], equals(['id', 'name']));
           expect(streamRows[1], equals(['1', 'Alpha, 1']));
@@ -1055,9 +1055,8 @@ void main() async {
           expect(mapRows[1]['name'], equals('Beta "The Second"'));
           expect(mapRows[2]['id'], equals('3'));
 
-          final headerStreamRows =
-              await io.csv.stream(path, headers: true).toList();
-          expect(headerStreamRows, equals(mapRows));
+          // The typed pair: rows() yields cells, records() yields maps.
+          expect(await io.csv.records(path).toList(), equals(mapRows));
         } finally {
           temp.deleteSync(recursive: true);
         }

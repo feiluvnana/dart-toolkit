@@ -254,23 +254,49 @@ class QueryResult with IterableMixin<Element> {
   List<String> attrs(String name) =>
       _elements.map((e) => e.attributes[name]).whereType<String>().toList();
 
-  /// First form value or textarea text, or `null`.
+  /// The value of the first match, as a browser would submit it, or `null`.
+  ///
+  /// What that means depends on the control, which is the point:
+  ///
+  /// - `<textarea>` — its text.
+  /// - `<select>` — the selected `<option>`'s value, or its text when the
+  ///   option carries no `value`. With nothing marked `selected`, the first
+  ///   option, the way a browser does.
+  /// - a checkbox or radio — its value only when `checked`, and `null`
+  ///   otherwise, so an unticked box reads as absent rather than as its label.
+  /// - anything else — its `value` attribute.
   String? get value =>
       _elements.isEmpty ? null : _elementValue(_elements.first);
 
-  /// Form values or textarea text across all matches that have one.
+  /// The value of every match that has one, on the same terms as [value].
   List<String> get values => [
-    for (final el in _elements)
-      if (el.localName == 'textarea')
-        el.text
-      else if (el.attributes.containsKey('value'))
-        el.attributes['value']!,
+    for (final element in _elements)
+      if (_elementValue(element) case final value?) value,
   ];
 
-  static String? _elementValue(Element element) =>
-      element.localName == 'textarea'
-          ? element.text
-          : element.attributes['value'];
+  static String? _elementValue(Element element) {
+    switch (element.localName) {
+      case 'textarea':
+        return element.text;
+      case 'select':
+        final options = element.querySelectorAll('option');
+        if (options.isEmpty) return null;
+        final chosen = options.firstWhere(
+          (option) => option.attributes.containsKey('selected'),
+          // A select with nothing marked selected submits its first option.
+          orElse: () => options.first,
+        );
+        return chosen.attributes['value'] ?? chosen.text;
+      default:
+        final type = element.attributes['type']?.toLowerCase();
+        if (type == 'checkbox' || type == 'radio') {
+          if (!element.attributes.containsKey('checked')) return null;
+          // An unlabelled ticked box submits 'on', as HTML says it does.
+          return element.attributes['value'] ?? 'on';
+        }
+        return element.attributes['value'];
+    }
+  }
 
   /// The `data-[key]` attribute of the first match, falling back to [key].
   String? data(String key) {
@@ -301,14 +327,27 @@ class QueryResult with IterableMixin<Element> {
     }
   }
 
-  /// The text of every match split on `<br>` and newlines, markup stripped.
+  /// The text of every match split on `<br>` and newlines, markup stripped
+  /// and entities decoded.
+  ///
+  /// Stripping the tags leaves the entities behind, so `&amp;` used to survive
+  /// into what is documented as text. They are decoded here the way the parser
+  /// would have decoded them.
   List<String> get lines => [
     for (final element in _elements)
       ...element.innerHtml
           .split(RegExp(r'<br\s*/?>|\r?\n'))
-          .map((s) => s.replaceAll(RegExp(r'<[^>]*>'), '').trim())
+          .map((s) => _decode(s.replaceAll(RegExp(r'<[^>]*>'), '')).trim())
           .where((s) => s.isNotEmpty),
   ];
+
+  /// [markup] with its HTML entities turned back into characters.
+  static String _decode(String markup) {
+    if (!markup.contains('&')) return markup;
+    // Parsed rather than table-driven, so every named and numeric entity the
+    // parser knows is handled rather than the five everyone remembers.
+    return html_parser.parseFragment(markup).text ?? markup;
+  }
 
   QueryResult _collect(Iterable<Element> Function(Element element) expand) {
     final seen = <Element>{};
@@ -1186,8 +1225,11 @@ extension QuerySelectorOnElement on Element {
   /// First `src` attribute, or `null`.
   String? get src => attributes['src'];
 
-  /// Form value or textarea text, or `null`.
-  String? get value => localName == 'textarea' ? text : attributes['value'];
+  /// This element's value as a browser would submit it, or `null`.
+  ///
+  /// Reads a `<textarea>`, a `<select>` and a checkbox the way
+  /// [QueryResult.value] does, because it is the same answer.
+  String? get value => query.value;
 
   /// Attribute [name], or `null`.
   String? attr(String name) => attributes[name];

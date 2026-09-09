@@ -189,6 +189,85 @@ class Ansi {
     return columns;
   }
 
+  /// [input] broken into lines no wider than [width] terminal columns.
+  ///
+  /// Breaks at spaces where it can and inside a word where it cannot, measured
+  /// by [width] rather than by code units, so a wrapped cell of CJK or emoji
+  /// still fits the column it was cut for. Escape codes pass through without
+  /// counting, and existing newlines in [input] are kept as breaks.
+  ///
+  /// ```dart
+  /// Ansi.wrap('the quick brown fox', 9);  // ['the quick', 'brown fox']
+  /// ```
+  static List<String> wrap(String input, int width) {
+    if (width <= 0) return [input];
+    final lines = <String>[];
+    for (final line in input.split('\n')) {
+      if (Ansi.width(line) <= width) {
+        lines.add(line);
+        continue;
+      }
+      var current = '';
+      for (final word in line.split(' ')) {
+        final candidate = current.isEmpty ? word : '$current $word';
+        if (Ansi.width(candidate) <= width) {
+          current = candidate;
+          continue;
+        }
+        if (current.isNotEmpty) {
+          lines.add(current);
+          current = '';
+        }
+        if (Ansi.width(word) <= width) {
+          current = word;
+          continue;
+        }
+        // A word wider than the column has to be cut somewhere.
+        final pieces = _cut(word, width);
+        lines.addAll(pieces.take(pieces.length - 1));
+        current = pieces.last;
+      }
+      if (current.isNotEmpty) lines.add(current);
+    }
+    return lines.isEmpty ? const [''] : lines;
+  }
+
+  /// [text] cut into pieces of at most [width] columns, mid-word if need be.
+  static List<String> _cut(String text, int width) {
+    final pieces = <String>[];
+    final buffer = StringBuffer();
+    final runes = text.runes.toList();
+    var used = 0;
+    var i = 0;
+    while (i < runes.length) {
+      if (runes[i] == 0x1B) {
+        // An escape sequence is carried along whole and costs no columns.
+        final start = i;
+        i++;
+        if (i < runes.length && runes[i] == 0x5B) {
+          i++;
+          while (i < runes.length && (runes[i] < 0x40 || runes[i] > 0x7E)) {
+            i++;
+          }
+          if (i < runes.length) i++;
+        }
+        buffer.write(String.fromCharCodes(runes.getRange(start, i)));
+        continue;
+      }
+      final columns = _runeWidth(runes[i]);
+      if (used + columns > width && used > 0) {
+        pieces.add(buffer.toString());
+        buffer.clear();
+        used = 0;
+      }
+      buffer.writeCharCode(runes[i]);
+      used += columns;
+      i++;
+    }
+    if (buffer.isNotEmpty) pieces.add(buffer.toString());
+    return pieces.isEmpty ? const [''] : pieces;
+  }
+
   /// How many columns one code point occupies.
   static int _runeWidth(int rune) {
     // Combining marks and zero-width joiners hang off the previous character.

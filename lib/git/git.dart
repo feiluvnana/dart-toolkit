@@ -1,7 +1,8 @@
 /// # Git Domain (`git.*`)
 ///
 /// Thin wrappers over the `git` executable for the queries scripts need:
-/// current branch, HEAD hash, working-tree cleanliness.
+/// current branch, HEAD hash, working-tree cleanliness. Anything not here is
+/// [GitAccessor.run] away, which is public for exactly that reason.
 library;
 
 import 'dart:io';
@@ -98,6 +99,32 @@ class GitAccessor {
     if (remote != null) remote,
     if (branch != null) branch,
   ], cwd);
+
+  /// Fetches from [remote], optionally with tags and pruning.
+  ///
+  /// The query half of a pull: it updates the remote-tracking refs and leaves
+  /// the working tree where it is, which is what a release script wants before
+  /// it looks at [tag] or [hash].
+  Future<SysResult> fetch({
+    String? remote,
+    bool tags = false,
+    bool prune = false,
+    String? cwd,
+  }) => run([
+    'fetch',
+    if (tags) '--tags',
+    if (prune) '--prune',
+    if (remote != null) remote,
+  ], cwd);
+
+  /// Checks out [target] — a branch, a tag or a commit.
+  ///
+  /// Set [create] to make a new branch of that name, as `git checkout -b`.
+  Future<SysResult> checkout(
+    String target, {
+    bool create = false,
+    String? cwd,
+  }) => run(['checkout', if (create) '-b', target], cwd);
 
   /// Clones [repo], optionally into [dest].
   Future<SysResult> clone(String repo, {String? dest, String? cwd}) =>

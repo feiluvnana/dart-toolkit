@@ -1,35 +1,29 @@
-/// # Terminal Geometry & Cursor
+/// # Terminal & Cursor Control
 ///
-/// Size queries and raw cursor control. Every method is a no-op when stdout is
-/// not a terminal, so piped and redirected output stays clean.
+/// Screen and cursor control, written through a [ConsoleWriter]. Every method
+/// is a no-op when that writer is not a terminal, so piped and redirected
+/// output stays clean.
 library;
 
-import 'dart:io';
+import 'writer.dart';
 
 // ============================================================================
-// TERMINAL GEOMETRY & CURSOR
+// TERMINAL & CURSOR CONTROL
 // ============================================================================
 
-/// Terminal size and screen control, reachable as `system.console.terminal`.
+/// Screen control, reachable as `system.console.terminal`.
+///
+/// The terminal's size is [ConsoleWriter.width] and [ConsoleWriter.height]:
+/// geometry belongs to the thing that knows where the output is going.
 class Terminal {
-  /// Creates the accessor. Prefer the shared `system.console.terminal` instance.
-  const Terminal();
+  /// The writer control codes are written to.
+  final ConsoleWriter writer;
 
-  /// The terminal width in columns, or `80` when unavailable.
-  int get width {
-    try {
-      if (stdout.hasTerminal) return stdout.terminalColumns;
-    } catch (_) {}
-    return 80;
-  }
-
-  /// The terminal height in rows, or `24` when unavailable.
-  int get height {
-    try {
-      if (stdout.hasTerminal) return stdout.terminalLines;
-    } catch (_) {}
-    return 24;
-  }
+  /// Creates an accessor writing through [writer], or to stdout by default.
+  ///
+  /// Prefer the shared `system.console.terminal`. Pass a writer of your own to
+  /// capture what would have been sent to the screen.
+  Terminal([ConsoleWriter? writer]) : writer = writer ?? ConsoleWriter();
 
   /// Clears the screen and homes the cursor.
   void clear() => _emit('\x1B[2J\x1B[H');
@@ -40,40 +34,49 @@ class Terminal {
   /// Rings the terminal bell.
   void bell() => _emit('\x07');
 
-  static void _emit(String code) {
-    if (stdout.hasTerminal) stdout.write(code);
+  void _emit(String code) {
+    if (writer.tty) writer.write(code);
   }
 }
 
 /// Cursor control, reachable as `system.console.cursor`.
 class Cursor {
-  /// Creates the accessor. Prefer the shared `system.console.cursor` instance.
-  const Cursor();
+  /// The writer control codes are written to.
+  final ConsoleWriter writer;
+
+  /// Creates an accessor writing through [writer], or to stdout by default.
+  ///
+  /// Prefer the shared `system.console.cursor`.
+  Cursor([ConsoleWriter? writer]) : writer = writer ?? ConsoleWriter();
 
   /// Hides the cursor.
-  void hide() => Terminal._emit('\x1B[?25l');
+  void hide() => _emit('\x1B[?25l');
 
   /// Shows the cursor.
-  void show() => Terminal._emit('\x1B[?25h');
+  void show() => _emit('\x1B[?25h');
 
   /// Moves the cursor up [n] rows.
-  void up([int n = 1]) => Terminal._emit('\x1B[${n}A');
+  void up([int n = 1]) => _emit('\x1B[${n}A');
 
   /// Moves the cursor down [n] rows.
-  void down([int n = 1]) => Terminal._emit('\x1B[${n}B');
+  void down([int n = 1]) => _emit('\x1B[${n}B');
 
   /// Moves the cursor right [n] columns.
-  void forward([int n = 1]) => Terminal._emit('\x1B[${n}C');
+  void forward([int n = 1]) => _emit('\x1B[${n}C');
 
   /// Moves the cursor left [n] columns.
-  void back([int n = 1]) => Terminal._emit('\x1B[${n}D');
+  void back([int n = 1]) => _emit('\x1B[${n}D');
 
   /// Homes the cursor to the top-left.
-  void home() => Terminal._emit('\x1B[H');
+  void home() => _emit('\x1B[H');
 
   /// Saves the cursor position.
-  void save() => Terminal._emit('\x1B[s');
+  void save() => _emit('\x1B[s');
 
   /// Restores the saved cursor position.
-  void restore() => Terminal._emit('\x1B[u');
+  void restore() => _emit('\x1B[u');
+
+  void _emit(String code) {
+    if (writer.tty) writer.write(code);
+  }
 }

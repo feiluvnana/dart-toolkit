@@ -209,19 +209,27 @@ void main() {
           {'name': 'Bob', 'role': 'user'},
         ]);
 
-        final maps =
-            (await io.csv.read(path) as List).cast<Map<String, String>>();
+        final maps = await io.csv.maps(path);
         expect(maps.length, equals(2));
         expect(maps[0]['name'], equals('Alice'));
 
-        final grid =
-            (await io.csv.read(path, headers: false) as List)
-                .cast<List<String>>();
+        final grid = await io.csv.matrix(path);
         expect(grid.length, equals(3));
         expect(grid[0], equals(['name', 'role']));
 
-        final streamed = await io.csv.stream(path, headers: true).toList();
+        final streamed = await io.csv.records(path).toList();
         expect(streamed.length, equals(2));
+
+        final cells = await io.csv.rows(path).toList();
+        expect(cells.first, equals(['name', 'role']));
+
+        // Excel and RFC 4180 want CRLF, which format and write both take.
+        expect(
+          io.csv.format([
+            {'a': '1'},
+          ], newline: '\r\n'),
+          equals('a\r\n1\r\n'),
+        );
       } finally {
         temp.deleteSync(recursive: true);
       }

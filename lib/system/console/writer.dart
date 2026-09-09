@@ -122,6 +122,14 @@ class TableStyle {
 ///   ..add(['Crawled', 128]);
 /// print(table.render());
 /// ```
+///
+/// A cell may hold newlines, and with a [width] the table wraps to fit rather
+/// than running off the screen:
+///
+/// ```dart
+/// final table = Table(headers: ['URL', 'Error'], width: 60)
+///   ..add([url, 'Connection reset\nRetried 3 times']);
+/// ```
 class Table {
   /// Column headers, which also fix the column count.
   final List<String> headers;
@@ -131,6 +139,13 @@ class Table {
 
   /// Border characters.
   final TableStyle style;
+
+  /// The widest the rendered table may be, in terminal columns.
+  ///
+  /// Columns are narrowed widest-first until the whole table fits, and their
+  /// cells wrap to the width they end up with. `null` lets the table be as
+  /// wide as its content needs.
+  final int? width;
 
   final List<List<String>> _rows = [];
 
@@ -143,6 +158,7 @@ class Table {
     required this.headers,
     List<ColumnAlign>? alignments,
     this.style = TableStyle.unicode,
+    this.width,
   }) : alignments = [
          for (var i = 0; i < headers.length; i++)
            (alignments != null && i < alignments.length)
@@ -163,15 +179,10 @@ class Table {
   /// Renders the table, including a trailing newline.
   String render() {
     final columns = headers.length;
-    final widths = List<int>.generate(columns, (col) {
-      var max = Ansi.width(headers[col]);
-      for (final row in _rows) {
-        if (col >= row.length) continue;
-        final len = Ansi.width(row[col]);
-        if (len > max) max = len;
-      }
-      return max;
-    });
+    if (columns == 0) return '';
+
+    final header = [for (var i = 0; i < columns; i++) headers[i].bold()];
+    final widths = _widths(columns, header);
 
     String rule(String left, String mid, String right) =>
         [
@@ -181,26 +192,93 @@ class Table {
           right,
         ].join();
 
-    String line(List<String> cells) =>
-        [
-          style.vertical,
-          for (var i = 0; i < columns; i++)
-            ' ${_pad(i < cells.length ? cells[i] : '', widths[i], alignments[i])} '
-                '${style.vertical}',
-        ].join();
+    /// One row, as however many physical lines its tallest cell needs.
+    String row(List<String> cells) {
+      final wrapped = [
+        for (var i = 0; i < columns; i++)
+          Ansi.wrap(i < cells.length ? cells[i] : '', widths[i]),
+      ];
+      final height = wrapped.fold(
+        1,
+        (tallest, cell) => cell.length > tallest ? cell.length : tallest,
+      );
+
+      final buffer = StringBuffer();
+      for (var line = 0; line < height; line++) {
+        buffer
+          ..write(style.vertical)
+          ..writeAll([
+            for (var i = 0; i < columns; i++)
+              ' ${_pad(line < wrapped[i].length ? wrapped[i][line] : '', widths[i], alignments[i])} '
+                  '${style.vertical}',
+          ])
+          ..writeln();
+      }
+      return buffer.toString();
+    }
 
     final buffer =
         StringBuffer()
           ..writeln(rule(style.topleft, style.topdivider, style.topright))
-          ..writeln(line([for (var i = 0; i < columns; i++) headers[i].bold()]))
+          ..write(row(header))
           ..writeln(rule(style.leftdivider, style.cross, style.rightdivider));
-    for (final row in _rows) {
-      buffer.writeln(line(row));
+    for (final cells in _rows) {
+      buffer.write(row(cells));
     }
     buffer.writeln(
       rule(style.bottomleft, style.bottomdivider, style.bottomright),
     );
     return buffer.toString();
+  }
+
+  /// The width of each column: what its widest line needs, narrowed to fit
+  /// [width] when one is set.
+  List<int> _widths(int columns, List<String> header) {
+    final widths = List<int>.generate(columns, (col) {
+      var widest = _widest(header[col]);
+      for (final row in _rows) {
+        if (col >= row.length) continue;
+        final cell = _widest(row[col]);
+        if (cell > widest) widest = cell;
+      }
+      return widest;
+    });
+
+    final cap = width;
+    if (cap == null) return widths;
+
+    // Every column costs its content plus a space either side and a border.
+    // The table opens with one more border, so: 1 + sum(w + 3).
+    final budget = cap - 1 - 3 * columns;
+    if (budget < columns) {
+      // No width worth speaking of. One column apiece is the narrowest a
+      // table can be while still being a table.
+      return List<int>.filled(columns, 1);
+    }
+
+    var total = widths.fold(0, (sum, w) => sum + w);
+    while (total > budget) {
+      // Narrow the widest column first, so a table of one long URL and three
+      // short numbers wraps the URL rather than everything.
+      var widest = 0;
+      for (var i = 1; i < columns; i++) {
+        if (widths[i] > widths[widest]) widest = i;
+      }
+      if (widths[widest] <= 1) break;
+      widths[widest]--;
+      total--;
+    }
+    return widths;
+  }
+
+  /// The widest line in [cell], which may hold newlines of its own.
+  static int _widest(String cell) {
+    var widest = 0;
+    for (final line in cell.split('\n')) {
+      final columns = Ansi.width(line);
+      if (columns > widest) widest = columns;
+    }
+    return widest;
   }
 
   String _pad(String text, int width, ColumnAlign align) {
@@ -233,6 +311,9 @@ enum ProgressUnit {
 /// bar.done('Finished');
 /// ```
 class Progress {
+  /// Where the bar is drawn. Defaults to stdout.
+  final ConsoleWriter writer;
+
   /// The target count, updatable through [update].
   int total;
 
@@ -264,7 +345,9 @@ class Progress {
     this.fill = '█',
     this.empty = '░',
     String message = '',
-  }) : _message = message {
+    ConsoleWriter? writer,
+  }) : _message = message,
+       writer = writer ?? ConsoleWriter() {
     _clock.start();
   }
 
@@ -295,7 +378,7 @@ class Progress {
 
   /// Repaints the bar in place.
   void render() {
-    if (!stdout.hasTerminal) return;
+    if (!writer.tty) return;
     final fraction = total > 0 ? (_current / total).clamp(0.0, 1.0) : 0.0;
     final filled = (width * fraction).round();
     final metrics =
@@ -311,8 +394,8 @@ class Progress {
       ..._rate(),
     ];
 
-    const Terminal().line();
-    stdout.write('\r${parts.join(' ')}');
+    Terminal(writer).line();
+    writer.write('\r${parts.join(' ')}');
   }
 
   /// Rate and ETA, once there is enough elapsed time to be meaningful.
@@ -338,14 +421,14 @@ class Progress {
   void done([String? message]) {
     _clock.stop();
     update(total, message: message);
-    if (stdout.hasTerminal) stdout.writeln();
+    if (writer.tty) writer.writeln();
   }
 
   /// Abandons the bar and reports [message] as a failure.
   void fail([String? message]) {
     _clock.stop();
-    if (stdout.hasTerminal) stdout.writeln();
-    if (message != null) stderr.writeln('${'✖'.brightred()} $message');
+    if (writer.tty) writer.writeln();
+    if (message != null) writer.errorln('${'✖'.brightred()} $message');
   }
 }
 
@@ -371,6 +454,9 @@ class Spinner {
     '⠏',
   ];
 
+  /// Where the spinner is drawn. Defaults to stdout.
+  final ConsoleWriter writer;
+
   /// Animation frames, in order.
   final List<String> frames;
 
@@ -385,7 +471,8 @@ class Spinner {
   Spinner({
     this.frames = braille,
     this.interval = const Duration(milliseconds: 80),
-  });
+    ConsoleWriter? writer,
+  }) : writer = writer ?? ConsoleWriter();
 
   /// Whether the spinner is currently animating.
   bool get spinning => _timer != null;
@@ -395,7 +482,7 @@ class Spinner {
     if (spinning) return;
     _message = message;
     _frame = 0;
-    const Cursor().hide();
+    Cursor(writer).hide();
     _render();
     _timer = Timer.periodic(interval, (_) {
       _frame = (_frame + 1) % frames.length;
@@ -414,33 +501,45 @@ class Spinner {
     if (!spinning) return;
     _timer?.cancel();
     _timer = null;
-    if (stdout.hasTerminal) {
-      const Terminal().line();
-      stdout.write('\r');
+    if (writer.tty) {
+      Terminal(writer).line();
+      writer.write('\r');
     }
-    const Cursor().show();
+    Cursor(writer).show();
   }
 
   /// Stops and reports success, defaulting to the current message.
   void ok([String? message]) {
     stop();
-    stdout.writeln('${'✔'.brightgreen()} ${message ?? _message}');
+    writer.writeln('${'✔'.brightgreen()} ${message ?? _message}');
   }
 
   /// Stops and reports failure to stderr.
   void fail([String? message]) {
     stop();
-    stderr.writeln('${'✖'.brightred()} ${message ?? _message}');
+    writer.errorln('${'✖'.brightred()} ${message ?? _message}');
   }
 
   void _render() {
-    if (!stdout.hasTerminal) return;
-    const Terminal().line();
-    stdout.write('\r${frames[_frame].brightcyan().bold()} $_message');
+    if (!writer.tty) return;
+    Terminal(writer).line();
+    writer.write('\r${frames[_frame].brightcyan().bold()} $_message');
   }
 }
 
 /// Structured terminal output, reachable as `system.console.writer`.
+///
+/// Everything in this library that writes to the screen writes through one of
+/// these — tables, rules, boxes, the logger, progress bars, spinners, and the
+/// cursor and screen control in [Terminal] and [Cursor]. Give it a
+/// [StringBuffer] and the output is a value a test can assert on:
+///
+/// ```dart
+/// final buffer = StringBuffer();
+/// final writer = ConsoleWriter(out: buffer, tty: true, width: 40);
+/// Progress(total: 2, writer: writer)..tick()..done('Finished');
+/// expect(buffer.toString(), contains('Finished'));
+/// ```
 class ConsoleWriter {
   /// Standard output sink.
   final StringSink out;
@@ -448,10 +547,63 @@ class ConsoleWriter {
   /// Standard error sink.
   final StringSink err;
 
+  final bool _tty;
+  final int? _width;
+  final int? _height;
+
   /// Creates a console writer. Defaults to [stdout] and [stderr].
-  ConsoleWriter({StringSink? out, StringSink? err})
-    : out = out ?? stdout,
-      err = err ?? stderr;
+  ///
+  /// [tty] decides whether anything that only makes sense on a screen —
+  /// escape codes, a repainting progress bar, a spinner — is written at all.
+  /// It defaults to whether **stdout** is a terminal for a writer that uses
+  /// stdout, and to `false` for one given a sink of its own, since a
+  /// [StringBuffer] or a file wants text rather than control codes. Pass it
+  /// explicitly to capture what a terminal would have received.
+  ///
+  /// [width] and [height] override the terminal's size, which is what lets a
+  /// test render a table or a rule at a size it can predict.
+  ConsoleWriter({
+    StringSink? out,
+    StringSink? err,
+    bool? tty,
+    int? width,
+    int? height,
+  }) : out = out ?? stdout,
+       err = err ?? stderr,
+       _width = width,
+       _height = height,
+       _tty = tty ?? (out == null && _stdoutIsTerminal());
+
+  static bool _stdoutIsTerminal() {
+    try {
+      return stdout.hasTerminal;
+    } catch (_) {
+      // Querying a detached or redirected stdout can throw on some platforms.
+      return false;
+    }
+  }
+
+  /// Whether output is going to a terminal.
+  ///
+  /// False for a redirected run, so a script's piped output carries no escape
+  /// codes, no repainted bars and no spinner frames.
+  bool get tty => _tty;
+
+  /// The width in columns: the override given to the constructor, the
+  /// terminal's own width, or `80` when there is no terminal to ask.
+  int get width => _width ?? _terminalSize(true, 80);
+
+  /// The height in rows, on the same terms as [width], defaulting to `24`.
+  int get height => _height ?? _terminalSize(false, 24);
+
+  int _terminalSize(bool columns, int fallback) {
+    try {
+      if (stdout.hasTerminal) {
+        return columns ? stdout.terminalColumns : stdout.terminalLines;
+      }
+    } catch (_) {}
+    return fallback;
+  }
 
   /// Writes [message] with no trailing newline.
   void write(String message) => out.write(message);
@@ -470,7 +622,7 @@ class ConsoleWriter {
 
   /// Writes a full-width horizontal rule, optionally captioned with [title].
   void rule([String title = '']) {
-    final width = const Terminal().width;
+    final width = this.width;
     if (title.isEmpty) {
       out.writeln('─' * width);
       return;

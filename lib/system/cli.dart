@@ -28,7 +28,7 @@ import 'dart:async';
 import 'dart:io';
 
 import '../src/shared.dart';
-import 'console/terminal.dart';
+import 'console/writer.dart';
 
 // ============================================================================
 // CLI ARGUMENT PARSER (system.cli.*)
@@ -76,12 +76,24 @@ mixin _Spec<T> {
   /// A flag never consumes the token after it, so `--verbose main.dart` leaves
   /// `main.dart` a positional argument. [def] is the value [Cli.get] reports
   /// when the flag is absent; leave it unset to fall back to the call site.
-  T flag(String name, {String? alias, String desc = '', bool? def}) {
+  ///
+  /// [env] names an environment variable to read when the flag is absent, so
+  /// a boolean can be set by the shell as well as on the command line —
+  /// `CI=true`, `FORCE=1`. It resolves the same way an option's does: the
+  /// command line, then [env], then [def], then the call site's fallback.
+  T flag(
+    String name, {
+    String? alias,
+    String desc = '',
+    bool? def,
+    String? env,
+  }) {
     _declarations[Cli._clean(name)] = _Decl(
       alias: alias == null ? null : Cli._clean(alias),
       desc: desc,
       def: def,
       flag: true,
+      env: env,
     );
     _changed();
     return _self;
@@ -245,6 +257,9 @@ class CliAccessor with _Spec<CliAccessor> {
   /// Whether [name] (or its short [alias]) was given as a flag or an option.
   bool has(String name, [String? alias]) => _parsed.has(name, alias);
 
+  /// How many times [name] (or its short [alias]) was given. See [Cli.count].
+  int count(String name, [String? alias]) => _parsed.count(name, alias);
+
   /// Reads [name] as [T], falling back to [fallback].
   T get<T>(String name, T fallback, [String? alias]) =>
       _parsed.get<T>(name, fallback, alias);
@@ -303,6 +318,9 @@ class Cli with _Spec<Cli> {
   final Map<String, String> _options = {};
   final Map<String, List<String>> _repeated = {};
   final Set<String> _flags = {};
+  // How many times each switch was given, which the set alone cannot say. A
+  // repeated flag is how a CLI spells a level: -v, -vv, -vvv.
+  final Map<String, int> _tally = {};
   final List<String> _rest = [];
   final List<int> _restAt = [];
 
@@ -321,6 +339,7 @@ class Cli with _Spec<Cli> {
     _options.clear();
     _repeated.clear();
     _flags.clear();
+    _tally.clear();
     _rest.clear();
     _restAt.clear();
 
@@ -362,7 +381,7 @@ class Cli with _Spec<Cli> {
 
       // If declared as a flag, do not consume the next token as a value.
       if (decl != null && decl.flag) {
-        _flags.add(cleanKey);
+        _mark(cleanKey);
         continue;
       }
 
@@ -372,7 +391,7 @@ class Cli with _Spec<Cli> {
         i++;
         continue;
       }
-      _flags.add(cleanKey);
+      _mark(cleanKey);
     }
   }
 
@@ -393,7 +412,7 @@ class Cli with _Spec<Cli> {
       final short = token[c];
       final decl = _decl(short);
       if (decl == null || decl.flag) {
-        _flags.add(short);
+        _mark(short);
         continue;
       }
       final inline = token.substring(c + 1);
@@ -405,7 +424,7 @@ class Cli with _Spec<Cli> {
         _option(short, raw[at + 1]);
         return 1;
       }
-      _flags.add(short);
+      _mark(short);
       return 0;
     }
     return 0;
@@ -425,7 +444,7 @@ class Cli with _Spec<Cli> {
             : [value];
     _options[cleanKey] = values.isEmpty ? value : values.last;
     _repeated.putIfAbsent(cleanKey, () => []).addAll(values);
-    _flags.add(cleanKey);
+    _mark(cleanKey);
   }
 
   static String _clean(String name) => name.replaceFirst(RegExp(r'^-+'), '');
@@ -437,6 +456,34 @@ class Cli with _Spec<Cli> {
   String? _alias(String name, String? explicit) {
     if (explicit != null) return _clean(explicit);
     return _decl(_clean(name))?.alias;
+  }
+
+  /// Records that switch [name] was given, and how many times.
+  void _mark(String name) {
+    _flags.add(name);
+    _tally[name] = (_tally[name] ?? 0) + 1;
+  }
+
+  /// How many times [name] (or its short [alias]) was given.
+  ///
+  /// A repeated switch is how a command line spells a level, so `-vvv` and
+  /// `--verbose --verbose --verbose` both count three:
+  ///
+  /// ```dart
+  /// final cli = Cli(args)..flag('verbose', alias: 'v');
+  /// final level = switch (cli.count('verbose')) {
+  ///   0 => LogLevel.warn,
+  ///   1 => LogLevel.info,
+  ///   _ => LogLevel.debug,
+  /// };
+  /// ```
+  ///
+  /// Zero when the switch was not given at all, so this reads as [has] with a
+  /// number attached.
+  int count(String name, [String? alias]) {
+    final short = _alias(name, alias);
+    return (_tally[_clean(name)] ?? 0) +
+        (short != null ? (_tally[short] ?? 0) : 0);
   }
 
   /// Whether [name] (or its short [alias]) was given.
@@ -930,7 +977,7 @@ String _usage({
   }
 
   final buffer = StringBuffer();
-  final width = const Terminal().width.clamp(40, 100);
+  final width = ConsoleWriter().width.clamp(40, 100);
   if (desc != null && desc.isNotEmpty) buffer.writeln('$desc\n');
   if (syntax != null && syntax.isNotEmpty) buffer.writeln('Usage: $syntax\n');
 

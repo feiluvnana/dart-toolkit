@@ -94,14 +94,19 @@ class CsvAccessor {
   /// When [rows] contains maps, columns come from [headers], or from the union
   /// of every row's keys in the order they are first seen.
   /// When [rows] contains cell lists, rows are prefixed with [headers] if supplied.
+  ///
+  /// [newline] ends every line. The default is `\n`; pass `\r\n` for the
+  /// line ending Excel and RFC 4180 expect.
   String format(
     Iterable<dynamic> rows, {
     List<String>? headers,
     String delimiter = ',',
+    String newline = '\n',
   }) {
     if (rows.isEmpty) {
       if (headers != null && headers.isNotEmpty) {
-        return '${headers.map((h) => _escape(h, delimiter)).join(delimiter)}\n';
+        return '${headers.map((h) => _escape(h, delimiter)).join(delimiter)}'
+            '$newline';
       }
       return '';
     }
@@ -117,15 +122,17 @@ class CsvAccessor {
           <String>{
             for (final row in list) ...row.keys.map((k) => k.toString()),
           }.toList();
-      final buffer =
-          StringBuffer()
-            ..writeln(keys.map((k) => _escape(k, delimiter)).join(delimiter));
+      final buffer = StringBuffer()
+        ..write(keys.map((k) => _escape(k, delimiter)).join(delimiter))
+        ..write(newline);
       for (final row in list) {
-        buffer.writeln(
-          keys
-              .map((k) => _escape(row[k]?.toString() ?? '', delimiter))
-              .join(delimiter),
-        );
+        buffer
+          ..write(
+            keys
+                .map((k) => _escape(row[k]?.toString() ?? '', delimiter))
+                .join(delimiter),
+          )
+          ..write(newline);
       }
       return buffer.toString();
     }
@@ -133,43 +140,22 @@ class CsvAccessor {
     // Rows of cells
     final buffer = StringBuffer();
     if (headers != null && headers.isNotEmpty) {
-      buffer.writeln(headers.map((h) => _escape(h, delimiter)).join(delimiter));
+      buffer
+        ..write(headers.map((h) => _escape(h, delimiter)).join(delimiter))
+        ..write(newline);
     }
     for (final row in rows) {
       if (row is Iterable) {
-        buffer.writeln(
-          row
-              .map((cell) => _escape(cell?.toString() ?? '', delimiter))
-              .join(delimiter),
-        );
+        buffer
+          ..write(
+            row
+                .map((cell) => _escape(cell?.toString() ?? '', delimiter))
+                .join(delimiter),
+          )
+          ..write(newline);
       }
     }
     return buffer.toString();
-  }
-
-  /// Renders [rows] of cells as CSV, optionally prefixed by [headers].
-  ///
-  /// Deprecated: prefer [format].
-  String table(
-    Iterable<Iterable<Object?>> rows, {
-    List<String>? headers,
-    String delimiter = ',',
-  }) => format(rows, headers: headers, delimiter: delimiter);
-
-  /// Reads [path] as CSV records.
-  ///
-  /// If [headers] is `true` (default), returns `List<Map<String, String>>`.
-  /// If [headers] is `false`, returns raw `List<List<String>>` rows.
-  Future<dynamic> read(
-    String path, {
-    bool headers = true,
-    String delimiter = ',',
-  }) async {
-    if (headers) {
-      return maps(path, delimiter: delimiter);
-    } else {
-      return matrix(path, delimiter: delimiter);
-    }
   }
 
   /// Reads [path] as records keyed by the header line.
@@ -180,7 +166,7 @@ class CsvAccessor {
     String path, {
     String delimiter = ',',
   }) async {
-    final rows = await _rows(path, delimiter);
+    final rows = await _all(path, delimiter);
     if (rows.isEmpty) return [];
     final keys = rows.first;
     return [
@@ -197,26 +183,14 @@ class CsvAccessor {
   ///
   /// Returns an empty list when the file does not exist.
   Future<List<List<String>>> matrix(String path, {String delimiter = ','}) =>
-      _rows(path, delimiter);
+      _all(path, delimiter);
 
-  /// Streams [path] as CSV records.
+  /// Streams [path] as raw rows of cells, header line included.
   ///
-  /// When [headers] is `true`, yields `Map<String, String>` keyed by the first
-  /// row. When [headers] is `false` (default), yields raw `List<String>` rows.
-  /// Unlike [read], does not load the entire file into memory at once.
-  Stream<dynamic> stream(
-    String path, {
-    bool headers = false,
-    String delimiter = ',',
-    Encoding encoding = utf8,
-  }) {
-    if (headers) {
-      return records(path, delimiter: delimiter, encoding: encoding);
-    }
-    return _streamRows(path, delimiter: delimiter, encoding: encoding);
-  }
-
-  Stream<List<String>> _streamRows(
+  /// Where [matrix] reads the whole file, this yields a row at a time, so a
+  /// file larger than memory can still be walked. Yields nothing when the file
+  /// does not exist.
+  Stream<List<String>> rows(
     String path, {
     String delimiter = ',',
     Encoding encoding = utf8,
@@ -313,15 +287,16 @@ class CsvAccessor {
 
   /// Streams [path] as records keyed by the header line.
   ///
-  /// Deprecated: prefer `stream(path, headers: true)`.
-  @Deprecated('Use stream(path, headers: true) instead')
+  /// Where [maps] reads the whole file, this yields a record at a time. Blank
+  /// lines are skipped and short rows are padded with empty strings, as in
+  /// [maps].
   Stream<Map<String, String>> records(
     String path, {
     String delimiter = ',',
     Encoding encoding = utf8,
   }) async* {
     List<String>? headers;
-    await for (final row in _streamRows(
+    await for (final row in rows(
       path,
       delimiter: delimiter,
       encoding: encoding,
@@ -340,19 +315,22 @@ class CsvAccessor {
   }
 
   /// Writes [rows] (maps or rows of cells) to [path] atomically.
+  ///
+  /// [newline] ends every line, as in [format].
   Future<File> write(
     String path,
     Iterable<dynamic> rows, {
     List<String>? headers,
     String delimiter = ',',
+    String newline = '\n',
     String part = '.part',
   }) => Fs.write(
     path,
-    format(rows, headers: headers, delimiter: delimiter),
+    format(rows, headers: headers, delimiter: delimiter, newline: newline),
     part: part,
   );
 
-  Future<List<List<String>>> _rows(String path, String delimiter) async {
+  Future<List<List<String>>> _all(String path, String delimiter) async {
     final file = File(path);
     if (!file.existsSync()) return [];
     return parse(await file.readAsString(), delimiter: delimiter);

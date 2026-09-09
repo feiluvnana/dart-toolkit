@@ -343,6 +343,10 @@ class Pool<I> {
         late final Future<void> task;
 
         task = Future<void>(() async {
+          // Checked again here, not only before scheduling: this body starts a
+          // turn later, so a cancel that lands in between would otherwise
+          // still launch one more item's work.
+          if (cancelled || controller.isClosed) return;
           try {
             final res = await worker(item);
             if (!cancelled && !controller.isClosed) {
