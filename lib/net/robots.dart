@@ -151,8 +151,20 @@ class Robots {
 
   /// Fetches `/robots.txt` from the host in [url] and parses it.
   ///
-  /// If the request fails or returns a 4xx/5xx status code, returns an empty
-  /// [Robots] instance that allows all paths.
+  /// The answer to a robots.txt that is not there is not the same as the
+  /// answer to one that could not be fetched, and RFC 9309 section 2.3.1 says
+  /// so:
+  ///
+  /// - **2xx** — the rules in the body apply.
+  /// - **4xx** (2.3.1.3) — the host has no rules, so everything is allowed.
+  /// - **5xx** (2.3.1.4) — the rules are unreachable, not absent. Crawling is
+  ///   disallowed outright rather than assumed free, so a server having a bad
+  ///   day is not read as an invitation.
+  ///
+  /// A transport error — DNS, a refused connection, a timeout — is treated as
+  /// 4xx rather than 5xx. That is a deliberate departure: the RFC's
+  /// "unreachable" case is about a server that answered badly, and stopping a
+  /// whole crawl over one failed lookup costs more than it protects.
   static Future<Robots> load(Uri url, {HttpClient? client}) async {
     final robotsUrl = Uri(
       scheme: url.scheme.isNotEmpty ? url.scheme : 'https',
@@ -168,11 +180,20 @@ class Robots {
       if (res.ok) {
         return Robots.parse(res.body);
       }
+      if (res.status >= 500) return _closed;
     } catch (_) {
       // Ignore network errors, fall back to allow-all.
     }
     return Robots();
   }
+
+  /// The document a host that could not answer is read as having: nothing is
+  /// allowed. See [load].
+  static final Robots _closed = Robots(
+    rules: {
+      '*': [RobotsRule('/', allow: false)],
+    },
+  );
 
   /// The rule group that applies to [agent], per RFC 9309 section 2.2.1.
   ///

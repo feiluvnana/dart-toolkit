@@ -9,7 +9,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:io' as dart_io;
-import 'dart:math';
 
 import 'package:html/dom.dart';
 import 'package:html/parser.dart' as html_parser;
@@ -18,6 +17,8 @@ import 'package:http/io_client.dart';
 import 'package:path/path.dart' as p;
 
 import '../concurrent/concurrent.dart';
+import '../util/rand.dart';
+import 'cache.dart';
 import '../src/fs.dart';
 import 'selector.dart';
 
@@ -218,6 +219,13 @@ class HttpResponse {
   /// The raw response body.
   final List<int> bytes;
 
+  /// Whether this response came from an [HttpCache] rather than the network.
+  ///
+  /// True both for a stored response still inside its `max-age` and for one
+  /// the server confirmed with a `304`, so a handler that only wants pages
+  /// that actually changed can say `if (res.cached) return;`.
+  final bool cached;
+
   final Encoding? _encodingOverride;
 
   String? _body;
@@ -233,6 +241,7 @@ class HttpResponse {
     required this.headers,
     required this.bytes,
     Encoding? encoding,
+    this.cached = false,
   }) : requested = requested ?? url,
        _encodingOverride = encoding;
 
@@ -669,6 +678,12 @@ class HttpClient with PathResolver {
   /// Proxy server string (e.g. '127.0.0.1:8888').
   final String? proxy;
 
+  /// Responses kept between runs, or `null` to always fetch.
+  ///
+  /// Only `GET` responses with status 200 are stored, and only when the server
+  /// did not say `no-store`. See [HttpCache].
+  final HttpCache? cache;
+
   /// Largest response body accepted, in bytes, or `null` for no limit.
   ///
   /// A crawl that meets an unexpectedly large URL would otherwise hold the
@@ -698,6 +713,7 @@ class HttpClient with PathResolver {
     CookieJar? jar,
     this.proxy,
     this.cap,
+    this.cache,
   }) : jar = jar ?? (session ? CookieJar() : null),
        _ownsClient = pool == null,
        _client = pool ?? _createClient(proxy),
@@ -737,7 +753,21 @@ class HttpClient with PathResolver {
     Encoding? encoding,
     int? retries,
   }) async {
-    final merged = {...this.headers, ...?headers};
+    final store = cache;
+    CacheEntry? entry;
+    if (store != null && method == HttpMethod.get) {
+      entry = await store.read(url);
+      // Still inside its max-age: the server said not to ask yet, so don't.
+      if (entry != null && entry.fresh) return entry.response;
+    }
+
+    final merged = {
+      ...this.headers,
+      // Caller-supplied validators win: an explicit If-None-Match is a
+      // question the caller is asking, not one the cache is.
+      ...?entry?.validators,
+      ...?headers,
+    };
     final deadline = timeout ?? this.timeout;
     final effRetries = retries ?? this.retries;
     final allowRetry =
@@ -805,7 +835,16 @@ class HttpClient with PathResolver {
             break;
           }
 
-          return HttpResponse(
+          if (response.statusCode == 304 && entry != null) {
+            // Unchanged. The body never crossed the wire; serve the one held,
+            // and restart its clock from what the server just said about
+            // freshness.
+            final confirmed = _confirm(entry, response.headers);
+            if (store != null) await store.write(url, confirmed);
+            return confirmed;
+          }
+
+          final result = HttpResponse(
             url: currentUrl,
             requested: url,
             status: response.statusCode,
@@ -813,6 +852,10 @@ class HttpClient with PathResolver {
             bytes: response.bodyBytes,
             encoding: encoding ?? this.encoding,
           );
+          if (store != null && _storable(method, result)) {
+            await store.write(url, result);
+          }
+          return result;
         } catch (error) {
           // A body over the cap, or a redirect loop, is the server's settled
           // answer: replaying it only re-downloads the same refusal.
@@ -871,6 +914,33 @@ class HttpClient with PathResolver {
     return read().timeout(deadline);
   }
 
+  /// Whether [response] is worth keeping between runs.
+  ///
+  /// A cache of anything but a plain successful `GET` would hand back answers
+  /// to questions nobody asked again.
+  static bool _storable(HttpMethod method, HttpResponse response) {
+    if (method != HttpMethod.get || response.status != 200) return false;
+    final control = response.headers['cache-control']?.toLowerCase();
+    return control == null || !control.contains('no-store');
+  }
+
+  /// [entry]'s response, restamped with the freshness headers a `304` carried.
+  static HttpResponse _confirm(CacheEntry entry, Map<String, String> headers) {
+    const refreshed = ['cache-control', 'expires', 'date', 'etag'];
+    return HttpResponse(
+      url: entry.response.url,
+      requested: entry.response.requested,
+      status: entry.response.status,
+      headers: {
+        ...entry.response.headers,
+        for (final name in refreshed)
+          if (headers[name] != null) name: headers[name]!,
+      },
+      bytes: entry.response.bytes,
+      cached: true,
+    );
+  }
+
   static bool _isRedirect(int statusCode) =>
       statusCode == 301 ||
       statusCode == 302 ||
@@ -878,12 +948,12 @@ class HttpClient with PathResolver {
       statusCode == 307 ||
       statusCode == 308;
 
-  static final Random _rng = Random();
+  // The one generator in the library, so `util.rand.seed` makes a retry's
+  // timing as repeatable as a crawl's order. Two generators doing this job is
+  // one too many.
+  static const RandAccessor _rand = RandAccessor();
 
-  static Duration _backoffWithJitter(Duration base) {
-    final jitterMs = (base.inMilliseconds * 0.25 * _rng.nextDouble()).toInt();
-    return base + Duration(milliseconds: jitterMs);
-  }
+  static Duration _backoffWithJitter(Duration base) => _rand.jitter(base);
 
   static bool _retryable(int status) => status >= 500 || status == 429;
 

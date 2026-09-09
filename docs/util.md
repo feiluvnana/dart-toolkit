@@ -160,6 +160,7 @@ util.rand.between(1, 10);            // 1..9
 util.rand.id();                      // 12 URL-safe characters
 util.rand.jitter(2.s);               // 2.0s..2.5s
 util.rand.chance(0.1);               // true one time in ten
+util.rand.seed(42);                  // make all of the above repeat
 ```
 
 Pairing `jitter` with a crawl delay stops a pool of workers from
@@ -168,6 +169,31 @@ resynchronising onto the same instant:
 ```dart
 net.crawl<String>(seed).delay(util.rand.jitter(1.s));
 ```
+
+### Reproducibility
+
+Everything here runs off one generator, and `seed` fixes it. That is what makes
+a test of anything random — the order a crawl picks its user agents in, the
+jitter on an HTTP retry — repeat exactly:
+
+```dart
+import 'package:dart_toolkit/dart_toolkit.dart';
+
+void main() {
+  util.rand.seed(42);
+  final first = util.rand.shuffle(['a', 'b', 'c']);
+
+  util.rand.seed(42);
+  final again = util.rand.shuffle(['a', 'b', 'c']);
+
+  assert(first.join() == again.join());
+
+  util.rand.seed();   // back to unpredictable
+}
+```
+
+It is process-wide, and it is not for anything that has to be unguessable: a
+seeded generator is reproducible by design.
 
 ---
 

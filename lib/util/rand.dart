@@ -20,9 +20,30 @@ class RandAccessor {
   /// Creates the accessor. Prefer the shared `util.rand` instance.
   const RandAccessor();
 
-  static final Random _rng = Random();
+  static Random _rng = Random();
   static const _alphabet =
       'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+
+  /// Fixes the generator behind every method here to [seed], or restores an
+  /// unseeded one when [seed] is omitted.
+  ///
+  /// Every random choice this library makes runs through one generator —
+  /// `pick`, `shuffle`, `id`, `chance`, the crawl order they decide, and the
+  /// jitter on an HTTP retry — so seeding it makes a run repeat exactly. That
+  /// is what a test of any of them needs:
+  ///
+  /// ```dart
+  /// util.rand.seed(42);
+  /// expect(util.rand.pick(agents), util.rand.pick(agents)); // no
+  /// util.rand.seed(42);
+  /// final first = util.rand.id();
+  /// util.rand.seed(42);
+  /// expect(util.rand.id(), first);                          // yes
+  /// ```
+  ///
+  /// Process-wide, and not for anything that must be unguessable: a seeded
+  /// generator is reproducible by design.
+  void seed([int? seed]) => _rng = seed == null ? Random() : Random(seed);
 
   /// One item chosen uniformly from [items].
   ///

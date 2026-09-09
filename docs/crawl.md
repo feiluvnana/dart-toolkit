@@ -79,6 +79,9 @@ net.crawl<String>(url)
     .headers({'User-Agent': 'CustomBot'}) // custom headers for every request
     .timeout(10.seconds)                 // per-request timeout
     .resume('crawl.state')               // save the position, and carry on from it
+    .accept(['text/html'])               // only handle these content types
+    .cap(util.size.parse('5mb'))         // refuse a body larger than this
+    .cache('.cache')                     // reuse unchanged pages between runs
 ```
 
 ### Crawl Scope & Politeness
@@ -87,8 +90,25 @@ net.crawl<String>(url)
 - **`depth(depth)`**: Restricts recursion depth. Seeds have depth 0; links discovered via `res.follow` have `request.depth + 1`.
 - **`allow(pattern)`** and **`deny(pattern)`**: Filter URLs before scheduling.
 - **`samehost([enabled = true])`**: Prevents following external links.
-- **`robots([enabled = true, agent = '*'])`**: Fetches and respects `robots.txt` disallow paths and crawl delays.
+- **`robots([enabled = true, agent = '*'])`**: Fetches and respects `robots.txt` disallow paths and crawl delays. A host whose `robots.txt` answers 4xx has no rules and is crawled freely; one that answers 5xx has rules that could not be read, and RFC 9309 §2.3.1.4 says to stay out entirely rather than assume the best. A transport error — DNS, a refused connection — is treated as the 4xx case, since stopping a whole crawl over one failed lookup costs more than it protects.
 - **`perhost([enabled = true])`**: When delays are configured, rate-limits per domain host instead of stalling all concurrent workers globally.
+
+### What Comes Back
+
+- **`accept(types)`**: Sends the types as the `Accept` header, and drops a response that arrives as something else anyway before a handler sees it — counted in `stats.skipped`. Without it a PDF or an image is handed to the HTML parser like any other page. Entries take a `/*` wildcard on the subtype, and a response carrying no `Content-Type` matches nothing.
+- **`cap(bytes)`**: Abandons a transfer whose body is larger, as soon as `Content-Length` or the arriving bytes say so.
+- **`cache(dir)`**: Keeps responses between runs. A re-run revalidates with `ETag`/`If-Modified-Since` and reuses what has not changed; anything still inside its `max-age` is not even asked about. Both arrive with `res.cached` set, so a handler can return early on the pages that did not move. See [`http.md`](http.md#7-caching-httpcache).
+
+```dart
+await net.crawl<String>('https://example.com')
+    .accept(['text/html'])
+    .cap(util.size.parse('5mb'))
+    .cache('.cache')
+    .run((res) {
+      if (res.cached) return;   // unchanged since the last run
+      ...
+    });
+```
 
 ---
 
@@ -196,6 +216,19 @@ final stats = await net.crawl<String>('https://music.example.com/album')
     });
 ```
 
+`res.follow` takes a `method` and `body` too, so a form is followed the same way a link is:
+
+```dart
+res.follow(
+  res.$('form.search').attr('action')!,
+  method: HttpMethod.post,
+  body: Body.form({'q': 'widgets', 'page': '2'}),
+  tag: 'results',
+);
+```
+
+De-duplication reads the body, so two posts to one URL with different fields are two requests rather than one.
+
 - `tag(name, handler)` routes pages queued with that tag.
 - `route(pattern, handler)` routes by URL pattern.
 - The function passed to `run`/`collect`/`stream` handles anything unmatched.
@@ -293,6 +326,23 @@ final titles = await net.crawl<String>('https://site.test')
     }))
     .collect((res) => res.emit(res.$('h1').text));
 ```
+
+Keys are matched most specific first — `'POST https://host/login'`, then `'POST /login'`, then `'https://host/login'`, then `'/login'` — so one URL can answer differently to a `GET` and a `POST`, which is what a multi-step form crawl needs:
+
+```dart
+final downloader = MapDownloader<String>({
+  '/login': '<form action="/login" method="post"></form>',
+  'POST /login': '<p class="welcome">Signed in</p>',
+});
+
+await net.crawl<String>('https://site.test/login')
+    .downloader(downloader)
+    .run(handler);
+
+expect(downloader.requests.last.method, HttpMethod.post);
+```
+
+`downloader.requests` holds every request served, in order, so a test can assert on the method, headers and body the pipeline actually sent.
 
 For custom fixture resolution, subclass `Downloader`:
 

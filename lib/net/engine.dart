@@ -42,7 +42,8 @@ class Stats {
   /// Requests retried during fetch.
   int retried = 0;
 
-  /// Requests dropped before fetching because `robots.txt` disallowed them.
+  /// Requests dropped without being handled: `robots.txt` disallowed them, or
+  /// their content type was not among the ones the crawl accepts.
   int skipped = 0;
 
   /// Items discarded because they were emitted before anything listened and
@@ -411,6 +412,13 @@ class Engine<T> {
   /// Denied URL patterns. URLs matching any are dropped.
   final List<Pattern> deny;
 
+  /// Accepted content types. When not empty, a response whose type is not
+  /// listed is dropped without being handled.
+  ///
+  /// Entries are MIME types, optionally with a `/*` wildcard on the subtype:
+  /// `'text/html'`, `'text/*'`.
+  final List<String> accept;
+
   /// Whether to restrict crawling to the host of the initial seed URL.
   final bool samehost;
 
@@ -468,6 +476,7 @@ class Engine<T> {
     this.depth,
     Iterable<Pattern>? allow,
     Iterable<Pattern>? deny,
+    Iterable<String>? accept,
     this.samehost = false,
     this.obey = false,
     this.agent = '*',
@@ -482,6 +491,9 @@ class Engine<T> {
        deduplicator = deduplicator ?? Deduplicator(),
        allow = allow?.toList() ?? const [],
        deny = deny?.toList() ?? const [],
+       accept = [
+         for (final type in accept ?? const <String>[]) type.toLowerCase(),
+       ],
        _process = process {
     this.downloader.attach(this);
     _items = StreamController<T>.broadcast(
@@ -660,6 +672,13 @@ class Engine<T> {
     _stats.bytes += response.bytes.length;
     response.engine = this;
 
+    if (accept.isNotEmpty && !_accepts(response.type)) {
+      // A PDF, an image, a zip: fetched, but not something to hand to an HTML
+      // parser. Dropped here rather than in every handler.
+      skip(response.request);
+      return;
+    }
+
     final routed = router.isNotEmpty && await router.handle(response);
     if (!routed) await _process?.call(response);
 
@@ -675,6 +694,22 @@ class Engine<T> {
     if (limit != null && _stats.completed >= limit!) {
       stop('Limit of $limit pages reached');
     }
+  }
+
+  /// Whether [type] is one of the [accept] entries.
+  ///
+  /// A response with no `Content-Type` at all matches nothing: a crawl that
+  /// named the types it wants did not ask for whatever this is.
+  bool _accepts(String? type) {
+    if (type == null) return false;
+    for (final wanted in accept) {
+      if (wanted == type) return true;
+      if (wanted.endsWith('/*') &&
+          type.startsWith(wanted.substring(0, wanted.length - 1))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /// Records a request dropped before fetching. Called by the [Downloader].

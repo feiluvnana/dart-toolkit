@@ -193,6 +193,7 @@ class Response<T> extends HttpResponse {
     super.headers = const {},
     super.bytes = const [],
     super.encoding,
+    super.cached,
     this.engine,
   }) : super(url: url ?? request.url, requested: requested ?? request.url);
 
@@ -216,9 +217,27 @@ class Response<T> extends HttpResponse {
   /// Relative URLs resolve against [Response.url], and duplicates are dropped
   /// by the engine's [Deduplicator].
   ///
+  /// Pass [method] and [body] to follow a form rather than a link — a search
+  /// that posts its query, a paginator behind a POST — instead of reaching for
+  /// `engine.add` by hand:
+  ///
+  /// ```dart
+  /// res.follow(
+  ///   res.$('form.search').attr('action')!,
+  ///   method: HttpMethod.post,
+  ///   body: Body.form({'q': 'widgets', 'page': '2'}),
+  ///   tag: 'results',
+  /// );
+  /// ```
+  ///
+  /// De-duplication accounts for the body, so two posts to one URL with
+  /// different fields are two requests rather than one.
+  ///
   /// Throws [StateError] when the response has no engine.
   void follow(
     String url, {
+    HttpMethod method = HttpMethod.get,
+    Body? body,
     String? tag,
     Map<String, Object?>? meta,
     Map<String, String>? headers,
@@ -227,6 +246,8 @@ class Response<T> extends HttpResponse {
   }) => _engine.add(
     Request<T>(
       coerce(url, base: this.url),
+      method: method,
+      body: body,
       headers: {'Referer': this.url.toString(), ...?headers},
       tag: tag,
       meta: meta,

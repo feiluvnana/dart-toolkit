@@ -201,9 +201,55 @@ await net.http.sync({
 
 ---
 
-## 7. Your Own Client
+## 7. Caching (`HttpCache`)
 
-Construct an `HttpClient` for custom headers, a custom timeout, proxy, session cookies, or a `base` directory that relative download paths resolve against. **The caller must close it.**
+Re-running a scrape over pages that have not changed is the normal case while an extractor is being written. Give a client a cache and the second run stops paying for it:
+
+```dart
+import 'package:dart_toolkit/dart_toolkit.dart';
+
+void main() async {
+  final client = HttpClient(cache: HttpCache('.cache'));
+
+  final res = await client.get('https://example.com/article'.url);
+  if (res.cached) {
+    print('unchanged since last run');
+  }
+
+  await client.close();
+}
+```
+
+| Situation | What happens |
+| :--- | :--- |
+| Nothing stored | Fetched normally, then stored |
+| Stored, still inside its `max-age` or `Expires` | Served from disk, **no request at all** |
+| Stored, with an `ETag` or `Last-Modified` | Revalidated with `If-None-Match` / `If-Modified-Since`; a `304` serves the stored body and no body crosses the wire |
+| Stored, but the page changed | Refetched and re-stored |
+
+`res.cached` is true in the second and third rows — a stored response served without a fresh download — and false in the first and fourth.
+
+Only `GET` responses with status 200 are stored, and only when the server did not say `no-store`. There is no eviction: `cache.clear()` empties the directory and returns how many entries went.
+
+`HttpCache` is usable on its own — `read`, `write`, `remove`, `clear` — and a `CacheEntry` reports `fresh`, `lifetime` and the `validators` it would revalidate with.
+
+Crawls take the same thing as a directory: `net.crawl(url).cache('.cache')`.
+
+---
+
+## 8. Size Limits
+
+`cap` refuses a body larger than the given number of bytes, throwing `FatalHttpException` — which is not retried, because a server's answer being too big is settled rather than transient. The transfer is abandoned as soon as `Content-Length` says so, or as soon as the arriving bytes do:
+
+```dart
+final client = HttpClient(cap: util.size.parse('5mb'));
+```
+
+---
+
+## 9. Your Own Client
+
+Construct an `HttpClient` for custom headers, a custom timeout, proxy, session cookies, a `cache`, a `cap`, or a `base` directory that relative download paths resolve against. **The caller must close it.**
 
 ```dart
 final client = HttpClient(

@@ -11,6 +11,7 @@ import 'dart:io';
 
 import '../src/fs.dart';
 import '../src/proc.dart';
+import 'cache.dart';
 import 'downloader.dart';
 import 'engine.dart';
 import 'pipeline.dart';
@@ -109,6 +110,9 @@ class CrawlBuilder<T> {
   Duration? _timeout;
   String? _resumePath;
   Duration _resumeEvery = const Duration(seconds: 5);
+  final List<String> _accept = [];
+  int? _cap;
+  HttpCache? _cache;
 
   final List<({Pattern pattern, Process<T> handler})> _routes = [];
   final List<({String name, Process<T> handler})> _tags = [];
@@ -233,6 +237,61 @@ class CrawlBuilder<T> {
     return this;
   }
 
+  /// Restricts the crawl to responses of these content [types].
+  ///
+  /// Two things at once, both of which a crawl wants: the types are sent as
+  /// the `Accept` header, and a response that arrives as something else anyway
+  /// is dropped before a handler sees it, counting in [Stats.skipped]. Without
+  /// this a PDF or an image is handed to the HTML parser like any other page.
+  ///
+  /// Entries are MIME types, optionally with a `/*` wildcard on the subtype:
+  ///
+  /// ```dart
+  /// net.crawl<String>(url).accept(['text/html', 'application/xhtml+xml'])
+  /// ```
+  ///
+  /// A response carrying no `Content-Type` matches nothing.
+  CrawlBuilder<T> accept(Iterable<String> types) {
+    _accept.addAll(types);
+    return this;
+  }
+
+  /// Refuses any response body larger than [bytes].
+  ///
+  /// The transfer is abandoned as soon as the size is known — from
+  /// `Content-Length`, or from the bytes as they arrive — rather than after a
+  /// few hundred megabytes are already in memory.
+  ///
+  /// ```dart
+  /// net.crawl<String>(url).cap(util.size.parse('5mb'))
+  /// ```
+  CrawlBuilder<T> cap(int bytes) {
+    _cap = bytes > 0 ? bytes : null;
+    return this;
+  }
+
+  /// Keeps responses in [dir] between runs, and serves them when they are
+  /// still good.
+  ///
+  /// A re-run then asks each server whether anything changed — an `ETag` or
+  /// `If-Modified-Since` exchange that carries no body — and reuses what it
+  /// has when the answer is no. A response still inside its `max-age` is not
+  /// asked about at all. Both arrive with [HttpResponse.cached] set, so a
+  /// handler can skip the pages that did not move:
+  ///
+  /// ```dart
+  /// net.crawl<String>(url).cache('.cache').run((res) {
+  ///   if (res.cached) return;
+  ///   ...
+  /// });
+  /// ```
+  ///
+  /// See [HttpCache]. Ignored when a [downloader] of your own is supplied.
+  CrawlBuilder<T> cache(String dir) {
+    _cache = HttpCache(dir);
+    return this;
+  }
+
   /// Saves the crawl's position to [path], and picks it up again from there.
   ///
   /// An interrupted crawl otherwise starts over: the visited set can be handed
@@ -301,8 +360,10 @@ class CrawlBuilder<T> {
     } else {
       owns = true;
       dl = HttpDownloader<T>(
-        headers: _headers,
+        headers: _acceptHeaders(),
         timeout: _timeout,
+        cap: _cap,
+        cache: _cache,
         concurrency: _concurrency ?? 4,
         delay: _delay ?? Duration.zero,
         perhost: _perHost ?? false,
@@ -321,6 +382,7 @@ class CrawlBuilder<T> {
       depth: _depth,
       allow: _allow,
       deny: _deny,
+      accept: _accept,
       samehost: _sameHost,
       obey: _robots,
       agent: _robotsUserAgent,
@@ -436,6 +498,17 @@ class CrawlBuilder<T> {
     return _resumeWrites = _resumeWrites.then(
       (_) => Fs.dump(path, snapshot, pretty: false),
     );
+  }
+
+  /// The crawl's headers, with an `Accept` built from [accept] when one was
+  /// asked for and the caller did not set the header themselves.
+  Map<String, String>? _acceptHeaders() {
+    if (_accept.isEmpty) return _headers;
+    final headers = {...?_headers};
+    if (headers.keys.every((key) => key.toLowerCase() != 'accept')) {
+      headers['Accept'] = _accept.join(', ');
+    }
+    return headers;
   }
 
   Future<List<String>> _resolveUrls() async {

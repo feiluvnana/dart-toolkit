@@ -187,9 +187,25 @@ abstract class Downloader<T> with PathResolver {
   static Duration _max(Duration a, Duration b) => a > b ? a : b;
 }
 
-/// A test/fixture downloader backed by an in-memory map of URLs to HTML responses.
+/// A test/fixture downloader backed by an in-memory map of URLs to responses.
+///
+/// Keys are matched most specific first: `'POST https://host/login'`, then
+/// `'POST /login'`, then `'https://host/login'`, then `'/login'`. Prefixing a
+/// key with a method is what lets a multi-step form crawl be fixtured — the
+/// same URL can answer differently to a `GET` and a `POST`:
+///
+/// ```dart
+/// final downloader = MapDownloader<String>({
+///   '/login': '<form action="/login" method="post">...</form>',
+///   'POST /login': '<p class="welcome">Signed in</p>',
+/// });
+/// ```
+///
+/// Everything it served is recorded in [requests], so a test can assert on the
+/// method, headers and body a pipeline actually sent.
 class MapDownloader<T> extends Downloader<T> {
-  /// The response body map, keyed by URL string or URL path.
+  /// The response body map, keyed by URL string or URL path, either optionally
+  /// prefixed with an HTTP method and a space.
   final Map<String, String> responses;
 
   /// Default HTTP status to return for matching responses. Defaults to 200.
@@ -197,6 +213,9 @@ class MapDownloader<T> extends Downloader<T> {
 
   /// Default headers to return with responses.
   final Map<String, String> headers;
+
+  /// Every request served, in the order it was served.
+  final List<Request<T>> requests = [];
 
   /// Creates a fixture-backed downloader.
   MapDownloader(
@@ -210,20 +229,27 @@ class MapDownloader<T> extends Downloader<T> {
     super.retries = 0,
   });
 
+  /// The most specific key [request] matches, or `null` when none do.
+  String? _key(Request<T> request) {
+    final wire = request.method.wire;
+    final url = request.url.toString();
+    final path = request.url.path;
+    for (final key in ['$wire $url', '$wire $path', url, path]) {
+      if (responses.containsKey(key)) return key;
+    }
+    return null;
+  }
+
   @override
   Future<Response<T>> download(Request<T> request) async {
-    final key = request.url.toString();
-    final pathKey = request.url.path;
-    final matched =
-        responses.containsKey(key) || responses.containsKey(pathKey);
-    final bodyStr = responses[key] ?? responses[pathKey] ?? '';
-    final bytes = utf8.encode(bodyStr);
+    requests.add(request);
+    final key = _key(request);
     return Response<T>(
       request: request,
       url: request.url,
-      status: matched ? status : 404,
+      status: key != null ? status : 404,
       headers: headers,
-      bytes: bytes,
+      bytes: utf8.encode(responses[key] ?? ''),
       engine: engine,
     );
   }
@@ -245,6 +271,8 @@ class HttpDownloader<T> extends Downloader<T> {
     http.Client? pool,
     Map<String, String>? headers,
     Duration? timeout,
+    int? cap,
+    HttpCache? cache,
     super.retries = 2,
     Duration backoff = const Duration(milliseconds: 500),
     super.concurrency = 4,
@@ -255,10 +283,18 @@ class HttpDownloader<T> extends Downloader<T> {
        // caller, and the process-wide net.http, both outlive this downloader.
        _ownsClient =
            client == null &&
-           (pool != null || headers != null || timeout != null),
+           (pool != null ||
+               headers != null ||
+               timeout != null ||
+               cap != null ||
+               cache != null),
        _client =
            client ??
-           ((pool != null || headers != null || timeout != null)
+           ((pool != null ||
+                   headers != null ||
+                   timeout != null ||
+                   cap != null ||
+                   cache != null)
                ? HttpClient(
                  pool: pool,
                  headers: headers ?? net.http.headers,
@@ -266,6 +302,8 @@ class HttpDownloader<T> extends Downloader<T> {
                  retries: retries,
                  backoff: backoff,
                  base: base,
+                 cap: cap,
+                 cache: cache,
                )
                : net.http);
 
@@ -280,6 +318,12 @@ class HttpDownloader<T> extends Downloader<T> {
 
   /// Base delay for retry backoff.
   Duration get backoff => _client.backoff;
+
+  /// Largest response body accepted, in bytes, or `null` for no limit.
+  int? get cap => _client.cap;
+
+  /// Responses kept between runs, or `null` to always fetch.
+  HttpCache? get cache => _client.cache;
 
   @override
   Future<Response<T>> download(Request<T> request) async {

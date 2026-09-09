@@ -2,6 +2,59 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.3.0
+
+Fetch less, parse less. A re-run over pages that have not changed used to cost
+exactly as much as the first run, and anything a server sent — a PDF, a video,
+half a gigabyte of it — was handed to the HTML parser like any other page.
+
+### Added
+
+- **`HttpClient(cache: HttpCache(dir))` and `net.crawl(...).cache(dir)` keep
+  responses between runs.** A second run revalidates with `If-None-Match` and
+  `If-Modified-Since`, so a `304` serves the stored body without one byte of it
+  crossing the wire; a response still inside its `max-age` or `Expires` is not
+  even asked about. Only `GET` responses with status 200 are stored, and only
+  when the server did not say `no-store`. `HttpCache` is usable on its own —
+  `read`, `write`, `remove`, `clear` — and a `CacheEntry` reports `fresh`,
+  `lifetime` and the `validators` it would revalidate with.
+- **`HttpResponse.cached`** says a response was served from the cache rather
+  than downloaded, so a handler can return early on the pages that did not
+  move.
+- **`net.crawl(...).accept(types)`** sends the types as the `Accept` header and
+  drops a response that arrives as something else anyway before a handler sees
+  it, counting it in `Stats.skipped`. Entries take a `/*` wildcard on the
+  subtype.
+- **`net.crawl(...).cap(bytes)`** reaches the client's existing body limit from
+  the builder, so a crawl can refuse a body too large to hold rather than
+  discovering it in memory.
+- **`Response.follow` takes a `method` and a `body`.** A form is now followed
+  the way a link is, instead of reaching past the response for `engine.add`.
+  De-duplication reads the body, so two posts to one URL with different fields
+  are two requests.
+- **`MapDownloader` matches a method-prefixed key** — `'POST /login'` before
+  `'/login'` — so one URL can answer differently to a `GET` and a `POST`, and
+  records every request it served in `requests`. A POST pipeline can now be
+  fixtured and asserted on.
+- **`util.rand.seed([seed])`** fixes the generator behind every random choice
+  the library makes, which is what a test of a crawl's order or a retry's
+  timing needs. Calling it with nothing restores an unseeded generator.
+
+### Fixed
+
+- **A `robots.txt` that answers 5xx disallows the host** (RFC 9309 section
+  2.3.1.4). Rules that could not be read are not the same as rules that are not
+  there, and the crawler was reading both as permission. A 4xx still allows
+  everything, per 2.3.1.3. A transport error is treated as the 4xx case — a
+  deliberate departure, since stopping a whole crawl over one failed DNS lookup
+  costs more than it protects.
+
+### Changed
+
+- **`HttpClient`'s retry jitter runs through `util.rand.jitter`** instead of a
+  private `Random` of its own. Two generators doing one job left half the
+  library's randomness outside the reach of `util.rand.seed`.
+
 ## 1.2.0
 
 A crawl you can interrupt. The frontier — the queue of pages a run has found

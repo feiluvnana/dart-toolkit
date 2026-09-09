@@ -16,6 +16,7 @@ import 'selector.dart' as selector_impl;
 import 'selector.dart';
 import 'sitemap.dart';
 
+export 'cache.dart';
 export 'crawl.dart';
 export 'downloader.dart';
 export 'engine.dart';
