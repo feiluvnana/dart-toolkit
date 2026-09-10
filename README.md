@@ -153,10 +153,10 @@ await net.http.get('https://example.com'.url);   // .url parses the string
 
 ```dart
 await util.time.wait(250.ms);
-net.crawl<String>(url).delay(2.seconds);
+net.crawl<String>(url).delay(2.s);
 ```
 
-`.ms`, `.seconds` and `.minutes` produce ordinary `Duration` values, usable anywhere one is accepted.
+`.ms`, `.s` and `.m` produce ordinary `Duration` values, usable anywhere one is accepted.
 
 ---
 
@@ -384,11 +384,11 @@ See [docs/util.md](docs/util.md).
 
 ## Testing Your Pipelines
 
-Subclass `Downloader` to serve fixtures instead of reaching the network:
+Hand the crawl a `MapDownloader` of fixtures instead of reaching the network:
 
 ```dart
 final titles = await net.crawl<String>('https://site.test')
-    .downloader(MockDownloader({'https://site.test': '<h1>Hi</h1>'}))
+    .downloader(MapDownloader({'https://site.test': '<h1>Hi</h1>'}))
     .collect((res) => res.emit(res.$('h1').text));
 ```
 
@@ -423,7 +423,9 @@ See [docs/crawl.md](docs/crawl.md#8-testing-a-pipeline).
 | Archives | [docs/zip.md](docs/zip.md) |
 | Namespace & naming rules | [NAMESPACE.md](NAMESPACE.md) |
 
-A runnable tour lives in [example/example.dart](example/example.dart).
+A short runnable script per use case lives in [`example/`](example/), with
+[example/example.dart](example/example.dart) putting them together as one
+pipeline.
 
 ---
 

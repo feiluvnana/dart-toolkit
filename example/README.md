@@ -1,49 +1,53 @@
 # Examples
 
-Four runnable programs. All of them work offline — the crawls are served from
-in-memory fixtures, and the networked parts are behind a flag.
+One short script per kind of use case, and one that puts them together.
 
-| File | Shows |
+| File | Use case |
 | :--- | :--- |
-| [`example.dart`](example.dart) | A tour of all seven domains, end to end |
-| [`crawler.dart`](crawler.dart) | A multi-stage crawl: routes, tags, `meta`, scope, robots |
-| [`scrape.dart`](scrape.dart) | One-off requests: selectors, extraction, forms, sessions, downloads |
-| [`tool.dart`](tool.dart) | A small CLI: declared commands, prompts, progress, cleanup |
+| [`scrape.dart`](scrape.dart) | Pull data out of one page — selectors, the string shorthand, typed `Field`s |
+| [`crawl.dart`](crawl.dart) | Walk a site in stages — routes, tags, `meta`, scope and politeness |
+| [`form.dart`](form.dart) | Sign in and submit the form a page came with, standalone and inside a crawl |
+| [`http.dart`](http.dart) | Talk to a server — sessions, sealed bodies, JSON, downloads with progress |
+| [`parallel.dart`](parallel.dart) | Do many things at once — bounded pools, `settle`, retries, locks |
+| [`files.dart`](files.dart) | Put results on disk — atomic writes, JSON, CSV, state between runs |
+| [`console.dart`](console.dart) | Say what the script is doing — logs, spinners, bars, tables, boxes |
+| [`cli.dart`](cli.dart) | Present a command line — declared flags, commands, `--help`, exit codes |
+| [`shell.dart`](shell.dart) | Drive the machine — `.env`, subprocesses, archives, git, shutdown |
+| [`example.dart`](example.dart) | **The pipeline**: crawl → enrich → write → archive → report, in one script |
+
+Every one runs offline and finishes in a second or two:
 
 ```sh
 dart run example/example.dart
 dart run example/example.dart --concurrency 8 --force
 
-dart run example/crawler.dart -o tracks.jsonl
-dart run example/crawler.dart --live          # against the real site
-
-dart run example/scrape.dart
-LIVE=1 dart run example/scrape.dart           # includes the networked half
-
-dart run example/tool.dart --help
-dart run example/tool.dart build --token x -o dist
-dart run example/tool.dart report --token x -o dist
-dart run example/tool.dart clean --token x --yes
+dart run example/crawl.dart
+dart run example/cli.dart --help
+dart run example/cli.dart build --token x -o dist --mode release
 ```
 
-## What to read first
+The network is stood in for rather than avoided. A crawl takes a
+`MapDownloader` of fixtures, a `Reply.text(...)` behaves exactly like a
+response off the wire, and `http.dart` starts a throwaway server on a free
+port — so in each case the lines that matter are the ones you would write
+against a live site.
 
-**`example.dart`** if you want the shape of a whole script: arguments, a crawl,
-bounded concurrency, atomic writes, an archive, and a summary table.
+## Where to start
 
-**`crawler.dart`** if you are here for the crawler. It is the flagship case —
+**`example.dart`** for the shape of a whole script: arguments, a crawl,
+bounded concurrency, atomic writes, an archive and a summary table, in the
+order a real run does them.
+
+**`crawl.dart`** if you are here for the crawler. It is the flagship case —
 one handler per stage, `meta` carrying context between them, and scope rules
-(`depth`, `limit`, `samehost`, `allow`/`deny`, `robots`) keeping the run
-bounded. Note `.downloader(MapDownloader(...))`: swapping the downloader is how
-you test a pipeline without the network, and it is the only line that differs
-between the fixture and live runs.
+(`depth`, `limit`, `samehost`, `allow`/`deny`) keeping the run bounded. Note
+`.downloader(MapDownloader(...))`: swapping the downloader is how a pipeline
+is tested without the network, and it is the only line that differs between
+the fixture and live runs.
 
-**`scrape.dart`** if you only need to pull data out of a page, or put
-something back into one. No engine, no frontier — just `net.http`, the
-selector API with the loose string schema and the typed `Field` form side by
-side, and `res.form(...)` for the `<form>` a page carries.
+**`scrape.dart`** if you only need to read one page, and **`form.dart`** if you
+need to put something back into it.
 
-**`tool.dart`** if you are writing a command-line program. Commands and their
-arguments are declared once, and `cli.run` handles `--help`, validation,
-dispatch and the exit code; `system.on.exit` plus `system.shutdown()` make the
-script safe to Ctrl-C.
+**`cli.dart`** if you are writing a command-line program: the interface is
+declared once, and `cli.run` handles `--help`, validation, dispatch and the
+exit code.

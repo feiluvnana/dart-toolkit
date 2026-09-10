@@ -1,36 +1,42 @@
-// A tour of every domain, end to end.
+// The pipeline: every domain, doing one job together.
 //
 //   dart run example/example.dart
 //   dart run example/example.dart --concurrency 8 --force
 //
-// The crawl is served from an in-memory fixture, so this runs offline and
-// finishes in a second. Swap the downloader for the real thing and the rest of
-// the pipeline is unchanged — that is the point of `.downloader(...)`.
+// A catalogue is crawled, each product enriched in parallel, the results
+// written as JSON and CSV, archived, and reported — with the run's own state
+// carried between invocations. The crawl is served from a fixture, so this
+// runs offline in a second; delete the `.downloader(...)` line and the rest of
+// the pipeline is unchanged. That is the point of it.
 //
-// For focused examples see the other files in this folder:
-//   crawler.dart — a multi-stage crawl with routes, tags and depth limits
-//   scrape.dart  — one-off requests, sessions, selectors, typed extraction
-//   tool.dart    — a small CLI: declared flags, prompts, spinners, cleanup
+// Each piece has a short example of its own next door:
+//
+//   scrape.dart    pull data out of one page
+//   crawl.dart     walk a site in stages
+//   form.dart      sign in and submit a form
+//   http.dart      sessions, bodies, JSON, downloads
+//   parallel.dart  bounded concurrency, retries, failures
+//   files.dart     text, JSON, CSV, and state between runs
+//   console.dart   logs, tables, bars, boxes
+//   cli.dart       the command line a script presents
+//   shell.dart     environment, subprocesses, archives, git
 
 import 'package:dart_toolkit/dart_toolkit.dart';
 
-/// A product the crawl emits. Handlers are typed on this, so `collect` hands
-/// back a `List<Product>` rather than a list of loose maps.
-class Product {
-  final String name;
-  final num price;
-  final String url;
+/// What the crawl emits. Handlers are typed on it, so `collect` hands back a
+/// `List<Product>` rather than a list of loose maps.
+typedef Product = ({String name, num price, String url});
 
-  const Product(this.name, this.price, this.url);
+/// The price the listing page showed, read back on the detail page without
+/// parsing it twice.
+const listed = Slot<num>('listed');
 
-  Map<String, Object?> toJson() => {'name': name, 'price': price, 'url': url};
-}
+/// What the run remembers between invocations.
+const runs = Slot<int>('runs');
+const last = Slot<String>('last');
 
 void main(List<String> args) async {
-  // ---------------------------------------------------------------- system
-  // Declare the command line up front and `--help` writes itself. Each
-  // declaration hands back the handle that reads it, so the type and the
-  // default are settled here rather than at every call site.
+  // ------------------------------------------------------------------- cli
   final force = cli.flag(
     'force',
     alias: 'f',
@@ -46,29 +52,30 @@ void main(List<String> args) async {
   cli.parse(args);
 
   if (help()) {
-    cli.help(syntax: 'example.dart [options]', desc: 'Domain tour.');
+    cli.help(
+      syntax: 'example.dart [options]',
+      desc: 'The pipeline, end to end.',
+    );
     return;
   }
 
-  // `.env` fills in what the shell did not set; nothing here fails if absent.
   system.env.load();
   final label = system.env.get('RUN_LABEL', 'demo');
 
   final log = system.console.logger;
   final out = system.console.writer;
   final clock = util.time.clock();
+  final dir = io.join('output', 'pipeline');
 
   // Tracked partial files are removed if the run is interrupted. Registering a
   // hook starts the SIGINT watcher, which holds the process open — so a script
-  // that registers one finishes with `system.shutdown()`, as this does below.
+  // that registers one finishes with `system.shutdown()`, as this does.
   system.on.exit(() => log.debug('Cleaning up...'));
 
-  out.rule('dart-toolkit tour ($label)');
+  out.rule('dart-toolkit ($label)');
 
-  // ------------------------------------------------------------------- net
-  // A fixture downloader stands in for the network. Every other line of this
-  // crawl is what you would write against a live site.
-  log.step(1, 6, 'Crawling the catalogue...');
+  // -------------------------------------------------------------- 1. crawl
+  log.step(1, 5, 'Crawling the catalogue...');
 
   final products =
       await net
@@ -76,18 +83,19 @@ void main(List<String> args) async {
           .downloader(MapDownloader<Product>(_fixtures))
           .concurrent(size())
           .delay(util.rand.jitter(20.ms))
+          .samehost()
           .depth(2)
           .limit(20)
-          .samehost()
           .route(RegExp(r'/catalogue'), _catalogue)
           .tag('product', _product)
+          .on
+          .error((f) => log.warn('${f.fetch?.url ?? 'crawl'}: ${f.error}'))
           .collect();
 
   log.ok('Collected ${products.length} products.');
 
-  // --------------------------------------------------------------- concurrent
-  // Bounded concurrency: at most `size` in flight, results in input order.
-  log.step(2, 6, 'Enriching...');
+  // --------------------------------------------------------- 2. concurrency
+  log.step(2, 5, 'Enriching...');
 
   final bar = Progress(total: products.length, message: 'Enriching');
   final enriched = await concurrent.run(products, (product) async {
@@ -99,40 +107,33 @@ void main(List<String> args) async {
       key: util.hash.short(product.url),
     );
   }, size: size());
-  bar.done('Enriched ${enriched.length} products.');
+  bar.done();
+  log.ok('Enriched ${enriched.length} products.');
 
-  // -------------------------------------------------------------------- io
-  log.step(3, 6, 'Writing output...');
+  // ----------------------------------------------------------------- 3. io
+  log.step(3, 5, 'Writing output...');
 
-  final dir = 'output';
   final summary = io.join(dir, 'summary.txt');
-
   if (!force() && io.has(summary)) {
     log.warn('$summary exists; pass --force to overwrite.');
   } else {
-    // Blocking writes on `io`, non-blocking on `io.async` — same names.
     io.write(
       summary,
       [for (final e in enriched) '${e.slug} ${e.key}'].join('\n'),
     );
     io.dump(io.join(dir, 'products.json'), [
-      for (final e in enriched) e.product,
+      for (final e in enriched)
+        {'name': e.product.name, 'price': e.product.price, 'slug': e.slug},
     ]);
-
     await io.csv.write(io.join(dir, 'products.csv'), [
       for (final e in enriched)
-        {'name': e.product.name, 'price': '${e.product.price}', 'slug': e.slug},
+        {'name': e.product.name, 'price': e.product.price, 'slug': e.slug},
     ]);
-
-    await io.async.write(
-      io.join(dir, 'run.log'),
-      'finished ${util.time.iso()}',
-    );
-    log.ok('Wrote 4 files to $dir/');
+    log.ok('Wrote 3 files to $dir/.');
   }
 
-  // A tiny JSON store keeps state between runs: cursors, "last seen" markers.
-  // Its keys are slots, so `runs` is an int on the way in and on the way out.
+  // The state that outlives the run: a counter and a timestamp, under typed
+  // keys so neither is a string on one side and an int on the other.
   final db = io.store.open(io.join(dir, 'state.json'));
   final count = (db.get(runs) ?? 0) + 1;
   db
@@ -140,30 +141,22 @@ void main(List<String> args) async {
     ..set(last, util.time.iso());
   await db.save();
 
-  // ------------------------------------------------------------------- zip
-  log.step(4, 6, 'Archiving...');
+  // --------------------------------------------------------------- 4. tool
+  log.step(4, 5, 'Archiving...');
 
-  final archive = io.join(dir, 'catalogue-${util.time.stamp()}.tar.gz');
+  final archive = io.join('output', 'catalogue-${util.time.stamp()}.tar.gz');
   await tool.zip.pack(io.join(dir, 'products.json'), archive);
-  final entries = await tool.zip.list(archive);
-  log.ok(
-    'Packed ${entries.length} entries, ${util.size.format(io.stat(archive).size)}.',
-  );
-
-  // ------------------------------------------------------------------- git
-  log.step(5, 6, 'Checking the repository...');
+  log.ok('Packed ${util.size.format(io.stat(archive).size)} into $archive.');
 
   final branch = await tool.git.branch();
   if (branch.isEmpty) {
     log.debug('Not a git repository.');
-  } else if (await tool.git.dirty()) {
-    log.warn('On $branch with uncommitted changes.');
   } else {
-    log.ok('On $branch, clean at ${await tool.git.hash()}.');
+    log.info('On $branch${await tool.git.dirty() ? ' (dirty)' : ', clean'}.');
   }
 
-  // --------------------------------------------------------------- console
-  log.step(6, 6, 'Summary');
+  // ------------------------------------------------------------ 5. console
+  log.step(5, 5, 'Summary');
 
   final cheapest = [...products]..sort((a, b) => a.price.compareTo(b.price));
   out.table(
@@ -178,7 +171,7 @@ void main(List<String> args) async {
 
   out.box(
     [
-      'Run       $runs',
+      'Run       $count',
       'Products  ${products.length}',
       'Cheapest  ${cheapest.first.name} at \$${cheapest.first.price}',
       'Elapsed   ${util.time.format(clock.elapsed)}',
@@ -190,25 +183,10 @@ void main(List<String> args) async {
   await system.shutdown();
 }
 
-// ---------------------------------------------------------------------------
-// Handlers. A crawl is a set of these: each receives a response, emits items
-// and queues more work. `route` matches the URL, `tag` matches what queued it.
-// ---------------------------------------------------------------------------
-
-// One typed key, declared once. The listing writes it and the detail page
-// reads it back as a `num?` — no cast, and no chance of the two spelling
-// the key differently.
-const listed = Slot<num>('listed');
-
-// What the run remembers between invocations.
-const runs = Slot<int>('runs');
-const last = Slot<String>('last');
-
-/// The listing page: queue every product, then follow pagination.
+/// The listing: queue every product, then follow pagination. `meta` survives
+/// the round trip, so the detail handler knows the price the listing showed.
 void _catalogue(Page<Product> res) {
   for (final card in res.$('.product')) {
-    // `meta` survives the round trip, so the detail handler knows the price
-    // the listing showed without parsing it twice.
     res.follow(
       card.query.find('a').href ?? '',
       tag: 'product',
@@ -223,16 +201,14 @@ void _catalogue(Page<Product> res) {
   if (next != null) res.follow(next);
 }
 
-/// A product page. `pick` keeps the field's type; `extract` is the shorthand.
+/// A product page.
 void _product(Page<Product> res) {
   final name = res.pick(Field.text('h1'));
   final price = util.text.number(res.pick(Field.text('.price')) ?? '');
   if (name == null || price == null) return;
 
-  res.emit(Product(name, price, res.url.toString()));
+  res.emit((name: name, price: price, url: res.url.toString()));
 }
-
-// ---------------------------------------------------------------------------
 
 const _fixtures = <String, String>{
   'https://shop.test/catalogue': r'''

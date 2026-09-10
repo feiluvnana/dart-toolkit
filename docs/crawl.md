@@ -77,7 +77,7 @@ net.crawl<String>(url)
     .robots(true, 'MyBot')               // obey robots.txt rules before requests
     .sitemap('https://example.com/sitemap.xml'.url) // seed with all sitemap URLs
     .headers({'User-Agent': 'CustomBot'}) // custom headers for every request
-    .timeout(10.seconds)                 // per-request timeout
+    .timeout(10.s)                       // per-request timeout
     .resume('crawl.state')               // save the position, and carry on from it
     .accept(['text/html'])               // only handle these content types
     .cap(util.size.parse('5mb'))         // refuse a body larger than this

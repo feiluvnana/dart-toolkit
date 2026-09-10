@@ -34,16 +34,16 @@ Delays are always a `Duration`. The `int` extensions keep that short:
 
 ```dart
 await util.time.wait(250.ms);
-await util.time.wait(2.seconds);
-await util.time.wait(5.minutes);
+await util.time.wait(2.s);
+await util.time.wait(5.m);
 await util.time.wait(const Duration(hours: 1));
 ```
 
-`250.ms`, `2.seconds` and `5.minutes` are plain `Duration` values, usable anywhere one is accepted:
+`250.ms`, `2.s` and `5.m` are plain `Duration` values, usable anywhere one is accepted:
 
 ```dart
 net.crawl<String>(url).delay(500.ms);
-Fetcher(timeout: 10.seconds);
+Fetcher(timeout: 10.s);
 ```
 
 ### Measuring
