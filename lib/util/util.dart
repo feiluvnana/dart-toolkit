@@ -5,8 +5,8 @@
 /// (`util.text`), hashing (`util.hash`) and randomness (`util.rand`).
 ///
 /// The rule: anything that touches the disk lives in `io`, anything that
-/// touches the OS or the user lives in `system`. Archives are [zip], Git is
-/// [git], and the terminal is `system.console`.
+/// touches the OS or the user lives in `system`. Archives are `tool.zip`, Git
+/// is `tool.git`, and the terminal is `system.console`.
 library;
 
 import 'hash.dart';

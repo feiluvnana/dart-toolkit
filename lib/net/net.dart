@@ -1,7 +1,8 @@
 /// # Net Domain (`net.*`)
 ///
 /// HTTP requests and downloads (`net.http`), the crawler engine
-/// (`net.crawl`), and jQuery-like CSS selectors (the top-level [$]).
+/// (`net.crawl`), the forms a page carries ([Form]), and jQuery-like CSS
+/// selectors (the top-level [$]).
 ///
 /// URLs are always [Uri] values, matching `package:http`; the [UrlString.url]
 /// extension keeps call sites short.
@@ -20,6 +21,7 @@ export 'cache.dart';
 export 'crawl.dart';
 export 'downloader.dart';
 export 'engine.dart';
+export 'form.dart';
 export 'http.dart';
 export 'pipeline.dart';
 export 'robots.dart';

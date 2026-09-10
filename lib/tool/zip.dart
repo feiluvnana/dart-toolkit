@@ -129,7 +129,7 @@ class ZipAccessor {
   /// For building an archive from data that never touched the disk.
   ///
   /// ```dart
-  /// await zip.bundle('out.zip', {'notes.txt': utf8.encode('hi')});
+  /// await tool.zip.bundle('out.zip', {'notes.txt': utf8.encode('hi')});
   /// ```
   Future<File> bundle(
     String dest,

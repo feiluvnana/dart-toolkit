@@ -171,6 +171,55 @@ void main() {
       sem.release();
     });
 
+    test('form.md samples read a form as documented', () {
+      final page = HttpResponse.text('''
+        <div id="panel">
+          <form id="login" action="/session" method="post">
+            <input type="hidden" name="csrf" value="tok-123">
+            <input type="text" name="user">
+            <input type="checkbox" name="remember" value="yes" checked>
+            <select name="lang">
+              <option value="en">English</option>
+              <option value="fr" selected>French</option>
+            </select>
+            <button type="submit" name="do" value="login">Log in</button>
+          </form>
+        </div>
+        <form class="search" action="/search?stale=1">
+          <input name="q" value="dart">
+        </form>
+      ''', requested: 'https://example.com/login'.url);
+
+      // The table of what a form collects.
+      expect(page.form('#login')!.fields, {
+        'csrf': 'tok-123',
+        'user': '',
+        'remember': 'yes',
+        'lang': 'fr',
+        'do': 'login',
+      });
+
+      // A wrapper's id finds the form inside it.
+      expect(page.form('#panel')!.element.attributes['id'], equals('login'));
+      expect(page.form('form:has(input[type=hidden])'), isNotNull);
+
+      // Filling returns the form, and keeps what the page carried.
+      final form = page.form('#login')!.fill({'user': 'me'});
+      expect(form.fields['user'], equals('me'));
+      expect(form.fields['csrf'], equals('tok-123'));
+      expect(form.method, equals(HttpMethod.post));
+      expect(form.action, equals(Uri.parse('https://example.com/session')));
+
+      // A GET carries its fields in the query, replacing the action's own.
+      expect(
+        page.form('form.search')!.fill({'q': 'widgets'}).url,
+        equals(Uri.parse('https://example.com/search?q=widgets')),
+      );
+
+      // A page with no form says so.
+      expect(HttpResponse.text('<p>none</p>').form(), isNull);
+    });
+
     test('cli.md features parse as documented', () {
       final cli = Cli([
         '--force',

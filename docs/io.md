@@ -127,6 +127,9 @@ io.sanitize('Key: "Box" / 20th?', full: true); // 'Key：”Box” ／ 20th？'
 ```dart
 io.mkdir('out/nested');       // creates parents
 io.parent('out/nested/file.txt');   // creates the parent directory only
+
+await io.async.mkdir('out/nested');
+await io.async.parent('out/nested/file.txt');
 final temp = io.temp('job_');       // a fresh temporary directory
 
 // Copy and move work on both files and directories:

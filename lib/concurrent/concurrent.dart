@@ -8,7 +8,8 @@ library;
 import 'dart:async';
 import 'dart:collection';
 import 'dart:isolate';
-import 'dart:math';
+
+import '../util/rand.dart';
 
 // ============================================================================
 // CONCURRENT & WORKER POOL (concurrent.* / Pool)
@@ -493,16 +494,15 @@ Future<T> concurrentRetry<T>(
   }
 }
 
-final Random _jitter = Random();
+// The library's one generator, the same one `net.http`'s retries draw from,
+// so `util.rand.seed` makes a retrying pool as repeatable as a crawl's order.
+// A second Random in here quietly made that promise false for this half.
+const RandAccessor _rand = RandAccessor();
 
 Duration _backoffFor(int attempt, Duration base, Duration cap) {
   final scaled = base * attempt;
   final bounded = scaled > cap ? cap : scaled;
-  return bounded +
-      Duration(
-        milliseconds:
-            (bounded.inMilliseconds * 0.25 * _jitter.nextDouble()).toInt(),
-      );
+  return _rand.jitter(bounded);
 }
 
 /// The result of a settled task in [Pool.settle].

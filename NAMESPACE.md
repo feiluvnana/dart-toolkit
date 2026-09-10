@@ -11,7 +11,7 @@ following it is what keeps the surface small enough to hold in your head.
 | Domain | Holds | Sub-namespaces |
 | :--- | :--- | :--- |
 | `io` | The filesystem: paths, atomic writes, reads | `io.csv`, `io.store`, `io.async` |
-| `net` | The network: requests, downloads, crawling, parsing what comes back | `net.http`, `net.crawl` |
+| `net` | The network: requests, downloads, crawling, parsing what comes back and filling in what it carries | `net.http`, `net.crawl` |
 | `system` | This program and the machine running it | `system.env`, `system.console`, `system.on` |
 | `concurrent` | Bounded async work on one isolate | — |
 | `util` | Pure computation | `util.time`, `util.size`, `util.text`, `util.hash`, `util.rand` |
@@ -234,6 +234,43 @@ mechanical — write `import 'dart:io'; import 'package:crypto/crypto.dart';`
 next to the library import and see whether the analyzer complains. It is how
 `Digest` and `Process<T>` were caught.
 
+The analyzer only complains where a name is *used*, though, which is why
+running the test on two names found two names. Running it on all 102 exported
+types found three more.
+
+### Known collisions
+
+| Name | Collides with | What happens |
+| :--- | :--- | :--- |
+| `HttpClient` | `dart:io` | The package import wins, silently |
+| `HttpResponse` | `dart:io` | The package import wins, silently |
+| `Cookie` | `dart:io` | The package import wins, silently |
+| `Request` | `package:http` | `ambiguous_import`, on use |
+| `Response` | `package:http` | `ambiguous_import`, on use |
+
+All five fail Rule 6 as written, and the first three fail it the way
+`Process<T>` did — no diagnostic at all. They are recorded here rather than
+renamed because the fix is a rename of the library's most-used vocabulary, and
+1.7.0 is not the release to spend that in. It is owed at 2.0.0.
+
+Until then the collision is survivable in both directions: `dart:io`'s three
+are reachable by hiding this library's, and `package:http` is normally
+imported prefixed anyway.
+
+```dart
+import 'dart:io' hide HttpClient, HttpResponse, Cookie;
+import 'package:dart_toolkit/dart_toolkit.dart';
+```
+
+The pin is in `test/regression_test.dart`, which imports `dart:io` both
+unprefixed and as `dart_io` and names all three, so the 2.0.0 rename has
+something to break.
+
+New names still have to pass the rule outright. The sweep is a script, not a
+judgement: list every exported `class`, `enum`, `typedef` and `extension`, and
+look each one up in `dart:core`, `dart:io`, `dart:async`, `dart:convert` and
+every package in `pubspec.yaml`.
+
 ---
 
 ## Adding something new
@@ -269,4 +306,6 @@ next to the library import and see whether the analyzer complains. It is how
 | A crawl's position | `Snapshot` + `Engine.snapshot`/`restore`, `crawl.resume(path)` | The type is the noun, the engine pair is the operation, and `resume` is the two of them wired to a file. `save` was taken by "write items to", and Rule 5 forbids a second meaning for it |
 | A request that failed | `Failure`, passed to `on.error` | A count without the pages is not an answer. Widening the handler's argument list would have fixed one question and left the next one — an attempt number, a response — needing another break, so the argument is a type |
 | Streaming CSV out | `io.csv.pipe`, beside `write` | Different behaviour, not an alias: `write` takes a collection, `pipe` takes a `Stream` and holds one row. A `CsvWriter` you open and close would have been a new noun and a lifecycle to get wrong |
+| A page's forms | `Form`, reached by `res.form(selector)` | Rule 2's first test passes — filling, addressing and submitting is a vocabulary — but its second fails: a form is read out of a response and submitted through the same client or engine, so it is entangled with `net` and lives there as a type rather than a domain. No accessor, because there is nothing to reach it from but the page it is on |
+| Submitting one in a crawl | `res.submit(form)`, beside `res.follow` | `follow` already takes a `method` and a `body`; this is the same operation with the three details read off the form instead of typed out, so it sits next to it rather than inside `Form`, which knows nothing about an engine |
 | Terminal geometry | `ConsoleWriter.width` / `.height`, moved off `Terminal` | Geometry belongs to the thing that knows where the output is going — and to the thing a test can size. `Terminal` keeps what it is named for: the control codes |

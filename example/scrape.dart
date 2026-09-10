@@ -5,6 +5,8 @@
 // Nothing here needs the crawler engine. `net.http` is a plain client whose
 // responses know how to query their own HTML.
 
+import 'dart:convert';
+
 import 'package:dart_toolkit/dart_toolkit.dart';
 
 void main() async {
@@ -68,6 +70,25 @@ void main() async {
 
   // Prices arrive as '$89.00'; util.text pulls the number out.
   log.ok('Numeric price: ${util.text.number(res.$('.price').text)}');
+
+  // ------------------------------------------------------------------- forms
+  // A page's forms come back filled in as a browser would submit them: the
+  // hidden inputs, the ticked boxes, the option already selected. Override the
+  // fields you care about and leave the rest alone — that is what carries a
+  // CSRF token through a login without hand-copying it.
+  final order = res.form('#order')!;
+  log.info('Form fields: ${order.fields}');
+
+  order.fill({'qty': '2'});
+  log.info('${order.method.wire} ${order.url}');
+  log.info('Body: ${utf8.decode(order.body!.bytes())}');
+
+  // A GET form puts its fields in the query instead.
+  final search = res.form('form.search')!..fill({'q': 'keyboard'});
+  log.ok('Search URL: ${search.url}');
+
+  // `send()` submits it — hand it a session client and the login cookies go
+  // along — and inside a crawl `res.submit(form)` queues it on the engine.
 
   // ------------------------------------------------------------- live requests
   // Everything below reaches the network, so it is guarded. Run with a real
@@ -146,6 +167,19 @@ const _page = '''
         <span class="name">White</span><span class="stock">Backorder</span>
       </div>
       <a href="/p/2">Related</a>
+      <form id="order" action="/cart" method="post">
+        <input type="hidden" name="csrf" value="tok-7f3a">
+        <input type="hidden" name="sku" value="KB-1-BLK">
+        <input type="number" name="qty" value="1">
+        <input type="checkbox" name="gift" value="yes">
+        <input type="checkbox" name="insure" value="yes" checked>
+        <select name="ship">
+          <option value="std">Standard</option>
+          <option value="exp" selected>Express</option>
+        </select>
+        <button type="submit" name="do" value="add">Add to cart</button>
+      </form>
+      <form class="search" action="/search"><input name="q"></form>
     </div>
   </body>
 </html>

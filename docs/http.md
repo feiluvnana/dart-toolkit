@@ -48,6 +48,8 @@ Bodies are a sealed type, so each shape is explicit rather than inferred from a 
 
 Per-call `headers` and `timeout` override the client's defaults.
 
+A `<form>` on a page builds its own `Body.form` — see [docs/form.md](form.md).
+
 ---
 
 ## 2. Responses (`HttpResponse`)
@@ -117,6 +119,21 @@ final int reviews = res.pick(Field.fn((el) => el.querySelectorAll('.review').len
 The cases are `Field.text`, `Field.attr`, `Field.texts`, `Field.attrs`,
 `Field.map`, `Field.list` and `Field.fn`. They mix freely with the string
 shorthand inside one `extract` schema.
+
+---
+
+### Forms
+
+A response knows the forms it carries. `res.form(selector)` collects their controls — hidden inputs, a CSRF token, the options already selected — so a script overrides the two fields it cares about and sends the rest back unchanged:
+
+```dart
+final page = await session.get('https://example.com/login'.url);
+final home = await page.form('#login')!
+    .fill({'user': user, 'pass': pass})
+    .send(client: session);
+```
+
+See [docs/form.md](form.md).
 
 ---
 

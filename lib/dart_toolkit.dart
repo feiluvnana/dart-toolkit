@@ -8,7 +8,8 @@
 ///
 /// - [io]: files, atomic writes, paths, CSV (`io.csv`), a JSON store
 ///   (`io.store`), and a non-blocking mirror of the lot (`io.async`).
-/// - [net]: HTTP (`net.http`), the crawler engine (`net.crawl`), selectors (`$`).
+/// - [net]: HTTP (`net.http`), the crawler engine (`net.crawl`), the forms a
+///   page carries ([Form]), selectors (`$`).
 /// - [system]: subprocesses, environment (`system.env`), the terminal
 ///   (`system.console`), shutdown (`system.on`).
 /// - [concurrent]: bounded async task pools.

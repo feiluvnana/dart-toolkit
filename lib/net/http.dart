@@ -246,6 +246,10 @@ class HttpResponse {
        _encodingOverride = encoding;
 
   /// Creates an [HttpResponse] from a [text] string.
+  ///
+  /// With only [requested] given, that is also the [url]: a fixture that says
+  /// where it came from should resolve its own links from there rather than
+  /// from `localhost`.
   factory HttpResponse.text(
     String text, {
     Uri? url,
@@ -253,7 +257,7 @@ class HttpResponse {
     Map<String, String>? headers,
     Uri? requested,
   }) => HttpResponse(
-    url: url ?? Uri.parse('http://localhost'),
+    url: url ?? requested ?? Uri.parse('http://localhost'),
     requested: requested,
     status: status,
     headers: headers ?? const {'content-type': 'text/html; charset=utf-8'},
@@ -562,7 +566,10 @@ final class AttrsField extends Field<List<String>> {
     final elements =
         selector.isEmpty ? [root] : root.querySelectorAll(selector);
     if (attribute == 'text') {
-      return [for (final el in elements) el.text.trim()];
+      // Through [QueryResult.readable], like every other text read here: the
+      // plural form used to hand back the page's own indentation while the
+      // singular one collapsed it.
+      return [for (final el in elements) QueryResult.readable(el)];
     }
     return [
       for (final el in elements)
@@ -602,7 +609,7 @@ final class ListField extends Field<List<Map<String, Object?>>> {
   ];
 }
 
-/// An arbitrary typed read. See [Field.call].
+/// An arbitrary typed read. See [Field.fn].
 final class CallField<T> extends Field<T> {
   final T Function(Element element) _read;
 
@@ -746,6 +753,10 @@ class HttpClient with PathResolver {
   /// Retries up to [retries] times on a transport error, a 5xx, or a 429. A
   /// `Retry-After` header is honoured when present, otherwise the delay is
   /// [backoff] multiplied by the attempt number with jitter.
+  ///
+  /// [onretry] is called with the URL and the attempt number just before each
+  /// wait, which is how a caller counts retries that happen in here — a crawl
+  /// reports them as [Stats.retried].
   Future<HttpResponse> send(
     HttpMethod method,
     Uri url, {
@@ -757,6 +768,7 @@ class HttpClient with PathResolver {
     bool? retry,
     Encoding? encoding,
     int? retries,
+    void Function(Uri url, int attempt)? onretry,
   }) async {
     final store = cache;
     CacheEntry? entry;
@@ -810,6 +822,7 @@ class HttpClient with PathResolver {
           if (allowRetry &&
               _retryable(response.statusCode) &&
               attempt < maxAttempts) {
+            onretry?.call(currentUrl, attempt);
             await Future<void>.delayed(
               _retryAfter(response.headers) ??
                   _backoffWithJitter(backoff * attempt),
@@ -866,6 +879,7 @@ class HttpClient with PathResolver {
           // answer: replaying it only re-downloads the same refusal.
           if (error is FatalHttpException) rethrow;
           if (!allowRetry || attempt >= maxAttempts) rethrow;
+          onretry?.call(currentUrl, attempt);
           await Future<void>.delayed(_backoffWithJitter(backoff * attempt));
         }
       }
@@ -1193,7 +1207,19 @@ class Cookie {
   /// Whether access is restricted to HTTP (no scripts).
   final bool httponly;
 
+  /// Whether this cookie goes back only to the exact host that set it.
+  ///
+  /// A `Set-Cookie` carrying no `Domain` attribute is host-only, per RFC 6265
+  /// section 5.3: the host it came from is the only one it is sent to. A
+  /// cookie that *did* name a domain it is entitled to widens to that
+  /// domain's subtree instead, which is what [domain] then holds.
+  final bool host;
+
   /// Creates a cookie.
+  ///
+  /// Set [host] for a cookie bound to [domain] exactly rather than to it and
+  /// everything under it. [Cookie.parse] sets it for a `Set-Cookie` that
+  /// named no `Domain` of its own.
   Cookie(
     this.name,
     this.value, {
@@ -1202,6 +1228,7 @@ class Cookie {
     this.expires,
     this.secure = false,
     this.httponly = false,
+    this.host = false,
   });
 
   /// Splits a `Set-Cookie` header value into one entry per cookie.
@@ -1293,12 +1320,15 @@ class Cookie {
       }
     }
 
+    // A Domain the request host does not belong to is ignored, falling back
+    // to a host-only cookie — and so is a Set-Cookie that named no Domain at
+    // all, which is host-only by definition. See [_acceptDomain].
+    final widened = _acceptDomain(domain, uri?.host);
     return Cookie(
       name,
       value,
-      // A Domain the request host does not belong to is ignored, falling back
-      // to a host-only cookie. See [_acceptDomain].
-      domain: _acceptDomain(domain, uri?.host) ?? uri?.host,
+      domain: widened ?? uri?.host,
+      host: widened == null,
       // Max-Age wins over Expires per RFC 6265 section 5.3.
       path: (path != null && path.startsWith('/')) ? path : _defaultPath(uri),
       expires:
@@ -1332,13 +1362,20 @@ class Cookie {
   }
 
   /// Whether this cookie should be sent with a request to [url].
+  ///
+  /// A [host]-only cookie needs the host to match exactly; one that named a
+  /// `Domain` also reaches that domain's subdomains. RFC 6265 section 5.4.
   bool matches(Uri url) {
     if (expires != null && DateTime.now().isAfter(expires!)) return false;
     if (secure && url.scheme != 'https') return false;
     if (domain != null && domain!.isNotEmpty) {
-      final host = url.host.toLowerCase();
+      final target = url.host.toLowerCase();
       final dom = domain!.toLowerCase();
-      if (host != dom && !host.endsWith('.$dom')) return false;
+      if (host) {
+        if (target != dom) return false;
+      } else if (target != dom && !target.endsWith('.$dom')) {
+        return false;
+      }
     }
     return _pathMatches(url.path.isEmpty ? '/' : url.path);
   }

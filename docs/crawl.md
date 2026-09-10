@@ -119,7 +119,7 @@ await net.crawl<String>('https://example.com')
 | `run([process])` | `Future<Stats>` |
 | `collect([process])` | `Future<List<T>>` of everything emitted |
 | `stream([process])` | `Stream<T>`, yielding items as they are emitted |
-| `save(sinkOrPath, [process])` | `Future<Stats>`, writing items to file path or `IOSink` |
+| `save(sinkOrPath, [process])` | `Future<Stats>`, writing items to a file path or an `IOSink` |
 | `engine([process])` | The configured `Engine`, unrun |
 
 Prefer `stream` or `save` over `collect` for large crawls — they do not hold every item in memory:
@@ -133,6 +133,8 @@ await for (final title in net.crawl<String>(url).stream(handler)) {
 // Or stream directly to a file (Maps/Lists formatted as JSON lines):
 final stats = await net.crawl<Map<String, Object?>>(url).save('out/results.jsonl', handler);
 ```
+
+A path is written the way every other write in this library is: items go to a `.part` staging file, its folder is created if it is missing, and it is renamed into place once the run finishes. A crawl that fails part way leaves whatever was already at the destination. An `IOSink` is yours: it is written to and flushed, never closed.
 
 ---
 
@@ -229,6 +231,17 @@ res.follow(
 
 De-duplication reads the body, so two posts to one URL with different fields are two requests rather than one.
 
+`res.submit` does the same thing from the form itself, which is what a page with hidden inputs and a CSRF token needs — the fields already on the page are carried, and only the ones you name are changed:
+
+```dart
+res.submit(
+  res.form('form.search')!..fill({'q': 'widgets', 'page': '2'}),
+  tag: 'results',
+);
+```
+
+See [docs/form.md](form.md).
+
 - `tag(name, handler)` routes pages queued with that tag.
 - `route(pattern, handler)` routes by URL pattern.
 - The function passed to `run`/`collect`/`stream` handles anything unmatched.
@@ -314,7 +327,7 @@ await net.crawl<String>(url)
 
 > Without an `on.error` handler, a failing page is skipped silently so one bad URL cannot end the run. Register it while developing.
 
-`Stats` carries `scheduled`, `completed`, `failed`, `retried`, `emitted`, `bytes`, `elapsed` and `reason`.
+`Stats` carries `scheduled`, `completed`, `failed`, `retried`, `emitted`, `bytes`, `elapsed` and `reason`. `retried` counts the attempts the client made again after a transport error, a 5xx or a 429 — the retries `retry(n)` bought.
 
 ### The pages that did not make it
 

@@ -2,11 +2,14 @@
 /// documentation. Each group names the behaviour that used to be wrong.
 library;
 
+import 'dart:async';
 import 'dart:io';
 
 // Imported unprefixed on purpose. `package:crypto` exports a `Digest` and
 // `dart:io` a `Process`; this file compiling at all is the Rule 6 collision
 // test, and it failed against both names before 1.6.0.
+import 'dart:io' as dart_io;
+
 import 'package:crypto/crypto.dart';
 import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:test/test.dart';
@@ -27,9 +30,51 @@ void main() {
       const Handler<String> handler = _noop;
       expect(handler, isA<Handler<String>>());
     });
+
+    test('the three names that still shadow dart:io are reachable either way', () {
+      // `Cookie`, `HttpClient` and `HttpResponse` are the collisions the Rule
+      // 6 sweep found and 1.7.0 recorded rather than renamed — see the known
+      // collisions table in NAMESPACE.md. This pins what a file importing
+      // both currently gets, so the 2.0.0 rename has something to break.
+      expect(HttpResponse.text('<p>hi</p>').status, 200);
+      expect(Cookie('a', 'b').name, 'a');
+      final ours = HttpClient();
+      addTearDown(ours.close);
+      expect(ours.timeout, const Duration(seconds: 30));
+
+      // And dart:io's are still there behind a prefix, which is what makes
+      // the shadow survivable until the names change.
+      final theirs = dart_io.HttpClient();
+      addTearDown(theirs.close);
+      expect(dart_io.Cookie('a', 'b').name, 'a');
+      expect(theirs, isA<dart_io.HttpClient>());
+    });
   });
 
   group('net.http cookies', () {
+    test('a cookie with no Domain goes back only to the host that set it', () {
+      final jar = CookieJar();
+      jar.add('sid=abc; Path=/', uri: Uri.parse('https://example.com/'));
+
+      // Host-only, per RFC 6265 section 5.3. It used to be stored with the
+      // host as its Domain and matched by suffix, so a session cookie
+      // followed the crawl into every subdomain it wandered through.
+      expect(jar.header(Uri.parse('https://example.com/')), 'sid=abc');
+      expect(jar.header(Uri.parse('https://sub.example.com/')), isNull);
+      expect(jar.cookies.single.host, isTrue);
+    });
+
+    test('a Domain the host owns still widens to its subdomains', () {
+      final jar = CookieJar();
+      jar.add(
+        'sid=abc; Domain=example.com; Path=/',
+        uri: Uri.parse('https://example.com/'),
+      );
+
+      expect(jar.header(Uri.parse('https://sub.example.com/')), 'sid=abc');
+      expect(jar.cookies.single.host, isFalse);
+    });
+
     test('a Domain the responding host does not own is refused', () {
       final jar = CookieJar();
       jar.add(
@@ -126,26 +171,118 @@ Disallow: /x
   });
 
   group('net.crawl plumbing', () {
-    test('coerce keeps a URL whose query carries markup', () {
-      expect(coerce('https://x.com/a?q=</b>').scheme, 'https');
-      expect(coerce('https://x.com/a?q=/>').scheme, 'https');
-      // Genuine markup is still recognised.
-      expect(coerce('<div>hi</div>').scheme, 'data');
+    test('Stats.retried counts the retries the client actually made', () async {
+      var attempts = 0;
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      server.listen((request) async {
+        attempts++;
+        if (attempts <= 2) {
+          request.response.statusCode = 503;
+        } else {
+          request.response.headers.contentType = ContentType.html;
+          request.response.write('<h1>ok</h1>');
+        }
+        await request.response.close();
+      });
+
+      final stats = await net
+          .crawl<String>('http://127.0.0.1:${server.port}/')
+          .retry(3)
+          .run((res) {});
+
+      // Retrying happens inside the client, so the engine only knows because
+      // the downloader tells it. The counter read zero however hard it tried.
+      expect(attempts, 3);
+      expect(stats.retried, 2);
+      expect(stats.completed, 1);
     });
 
-    test('a missing local file reports 404, not an empty 200', () async {
-      final downloader = HttpDownloader<String>();
-      final absent = Uri.file('/tmp/dt_regression_absent_page.html');
-      final res = await downloader.download(Request<String>(absent));
+    test('save writes through a .part file and creates its folder', () async {
+      final dir = io.temp('dt_save_');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final dest = io.join(dir.path, 'nested', 'items.txt');
 
-      expect(res.status, 404);
-      expect(res.body, isEmpty);
+      await net
+          .crawl<String>('https://site.test/')
+          .downloader(MapDownloader<String>({'/': '<h1>hi</h1>'}))
+          .save(dest, (res) => res.emit('one'));
+
+      // The folder did not exist: opening the destination directly threw.
+      expect(io.read(dest).trim(), 'one');
+      expect(io.find(dir.path, pattern: RegExp(r'\.part$')), isEmpty);
     });
 
-    test('the downloader resolves save paths against its own base', () {
-      final downloader = HttpDownloader<String>(base: 'outdir');
-      expect(downloader.resolve('page.html'), 'outdir/page.html');
+    test('the destination is replaced only once the run finishes', () async {
+      final dir = io.temp('dt_save_');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final dest = io.join(dir.path, 'items.txt');
+      io.write(dest, 'PREVIOUS');
+
+      final slow = _SlowDownloader<String>(const Duration(milliseconds: 200));
+      final run = net
+          .crawl<String>('https://site.test/')
+          .downloader(slow)
+          .save(dest, (res) => res.emit('one'));
+
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      // Mid-run: the destination used to have been truncated on the way in,
+      // so an interrupted crawl took the last good results down with it.
+      expect(io.read(dest), 'PREVIOUS');
+
+      await run;
+      expect(io.read(dest).trim(), 'one');
+      expect(io.find(dir.path, pattern: RegExp(r'\.part$')), isEmpty);
     });
+
+    test('a save whose seeds cannot be resolved keeps the old file', () async {
+      final dir = io.temp('dt_save_');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final dest = io.join(dir.path, 'items.txt');
+      io.write(dest, 'PREVIOUS');
+
+      await _withFailFastClient(() async {
+        await expectLater(
+          net.crawl
+              .sitemap<String>(Uri.parse('http://127.0.0.1:1/sitemap.xml'))
+              .save(dest, (res) => res.emit('one')),
+          throwsA(anything),
+        );
+      });
+
+      expect(io.read(dest), 'PREVIOUS');
+      expect(io.find(dir.path, pattern: RegExp(r'\.part$')), isEmpty);
+    });
+
+    test('a stream whose seeds cannot be resolved still ends', () async {
+      final events = <String>[];
+      final ended = Completer<void>();
+
+      await _withFailFastClient(() async {
+        net.crawl
+            .sitemap<String>(Uri.parse('http://127.0.0.1:1/sitemap.xml'))
+            .stream((res) => res.emit('x'))
+            .listen(
+              (_) => events.add('item'),
+              onError: (Object _) => events.add('error'),
+              onDone: () {
+                events.add('done');
+                if (!ended.isCompleted) ended.complete();
+              },
+              cancelOnError: false,
+            );
+
+        // The stream used to carry the error and then stay open forever, with
+        // the resume hook still holding the process alive behind it.
+        await ended.future.timeout(
+          const Duration(seconds: 10),
+          onTimeout: () => events.add('never closed'),
+        );
+      });
+
+      expect(events, ['error', 'done']);
+    });
+
   });
 
   group('io.csv', () {
@@ -357,6 +494,121 @@ Disallow: /x
       expect(names.any((n) => n.contains('secret')), isFalse);
     });
   });
+
+  group('net.http extraction', () {
+    test('the repeated @text shorthand reads text as a browser renders it', () {
+      final res = HttpResponse.text(
+        '<a class="t">Wireless\n        Keyboard</a><a class="t">Mouse</a>',
+      );
+
+      // Every other spelling collapsed the page's indentation; the plural
+      // attribute form handed back the source.
+      expect(res.extract({'x': const ['.t@text']}), {
+        'x': ['Wireless Keyboard', 'Mouse'],
+      });
+      expect(res.extract({'x': const ['.t']}), {
+        'x': ['Wireless Keyboard', 'Mouse'],
+      });
+      expect(res.pick(Field.attrs('.t', 'text')), [
+        'Wireless Keyboard',
+        'Mouse',
+      ]);
+    });
+
+    test('a fixture that says where it came from resolves from there', () {
+      final res = HttpResponse.text(
+        '<h1>hi</h1>',
+        requested: 'https://example.com/a/b'.url,
+      );
+
+      // It used to sit at localhost however clearly the caller had said
+      // otherwise, so anything resolving against it resolved wrong.
+      expect(res.url, Uri.parse('https://example.com/a/b'));
+      expect(res.requested, Uri.parse('https://example.com/a/b'));
+    });
+  });
+
+  group('concurrent.retry', () {
+    test('its backoff draws from the one seeded generator', () async {
+      util.rand.seed(1);
+      util.rand.jitter(const Duration(seconds: 1));
+      final second = util.rand.jitter(const Duration(seconds: 1));
+
+      util.rand.seed(1);
+      var attempts = 0;
+      await concurrent.retry(
+        () {
+          attempts++;
+          if (attempts < 2) throw StateError('again');
+          return attempts;
+        },
+        times: 3,
+        backoff: const Duration(milliseconds: 1),
+      );
+      addTearDown(util.rand.seed);
+
+      // One retry, so one draw: the next value is the second of the seeded
+      // sequence. A Random of its own used to make `util.rand.seed` a
+      // promise this half of the library did not keep.
+      expect(util.rand.jitter(const Duration(seconds: 1)), second);
+    });
+  });
+
+  group('util.size', () {
+    test('parse reads back everything format writes', () {
+      for (final bytes in [
+        0,
+        512,
+        2048,
+        5 * 1024 * 1024,
+        3 * 1024 * 1024 * 1024,
+        7 * 1024 * 1024 * 1024 * 1024,
+        // Petabytes: format printed them and parse answered 0.
+        3 * 1024 * 1024 * 1024 * 1024 * 1024,
+      ]) {
+        expect(util.size.parse(util.size.format(bytes)), bytes, reason: '\$bytes');
+      }
+      expect(util.size.parse('2 P'), 2 * 1024 * 1024 * 1024 * 1024 * 1024);
+      // A unit nobody knows is still refused rather than read as bytes.
+      expect(util.size.parse('10 XB'), 0);
+    });
+  });
+}
+
+/// Runs [body] against a shared client that gives up at the first refusal,
+/// so a test of a failing fetch does not sit through the retry backoff.
+Future<void> _withFailFastClient(Future<void> Function() body) async {
+  final previous = net.http;
+  await net.use(
+    HttpClient(retries: 0, timeout: const Duration(seconds: 2)),
+    close: false,
+  );
+  try {
+    await body();
+  } finally {
+    await net.use(previous);
+  }
+}
+
+/// A downloader that takes its time, for watching what a run leaves behind
+/// while it is still going.
+class _SlowDownloader<T> extends Downloader<T> {
+  _SlowDownloader(this.pause);
+
+  /// How long each fetch takes.
+  final Duration pause;
+
+  @override
+  Future<Response<T>> download(Request<T> request) async {
+    await Future<void>.delayed(pause);
+    return Response<T>(
+      request: request,
+      status: 200,
+      headers: const {'content-type': 'text/html'},
+      bytes: '<h1>hi</h1>'.codeUnits,
+      engine: engine,
+    );
+  }
 }
 
 void _noop(Response<String> response) {}

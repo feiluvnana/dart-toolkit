@@ -265,7 +265,7 @@ class HttpDownloader<T> extends Downloader<T> {
   /// Pass [client] to share an [HttpClient] you own: this downloader then uses
   /// it without taking ownership, so [close] leaves it open. With [pool],
   /// [headers] or [timeout] a client is built here and closed on [close].
-  /// With none of them the shared [net.http] client is used, and left open.
+  /// With none of them the shared `net.http` client is used, and left open.
   HttpDownloader({
     HttpClient? client,
     http.Client? pool,
@@ -383,6 +383,7 @@ class HttpDownloader<T> extends Downloader<T> {
         body: request.body,
         retries: retries,
         retry: request.method == HttpMethod.get ? null : true,
+        onretry: (url, attempt) => engine?.retry(),
       );
       return Response<T>(
         request: request,

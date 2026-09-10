@@ -329,6 +329,9 @@ class IoAsyncAccessor {
   /// Creates the directory at [path], including parents.
   Future<Directory> mkdir(String path) => Fs.mkdir(path);
 
+  /// Creates the parent directory of [path] if it is missing.
+  Future<void> parent(String path) => Fs.parentAsync(path);
+
   /// Copies [source] to [destination], creating parent directories.
   Future<FileSystemEntity> copy(String source, String destination) =>
       Fs.copyAsync(source, destination);

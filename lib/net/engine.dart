@@ -757,6 +757,13 @@ class Engine<T> {
     if (idle) _signal();
   }
 
+  /// Records a fetch that was tried again. Called by the [Downloader].
+  ///
+  /// Retrying happens inside the client, below the engine, so [Stats.retried]
+  /// only counts what the downloader passes back up. Without this it counted
+  /// nothing at all while reporting a number.
+  void retry() => _stats.retried++;
+
   /// Reports [error] to the [EngineEvents.error] handlers.
   ///
   /// Called by the [Downloader]'s workers when a fetch or handler throws.

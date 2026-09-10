@@ -290,6 +290,12 @@ class Fs {
     return false;
   }
 
+  /// Creates the parent directory of [path] if it is missing, without blocking.
+  static Future<void> parentAsync(String path) async {
+    final dir = Directory(p.dirname(path));
+    if (!await dir.exists()) await dir.create(recursive: true);
+  }
+
   /// Lists files under [dir] without blocking, optionally filtered by [pattern].
   static Future<List<File>> findAsync(
     String dir, {

@@ -568,24 +568,37 @@ class CrawlBuilder<T> {
   /// Accepts a file path string or an [IOSink]. Maps and Lists are written as
   /// JSON lines. Nothing is held in memory, so this is what a long crawl wants
   /// where [collect] would not fit.
+  ///
+  /// A path is written the way every other write in this library is: items go
+  /// to a `.part` staging file, its folder is created if it is missing, and
+  /// it is renamed into place only once the run finishes. A crawl that fails
+  /// part way therefore leaves whatever was already at [sinkOrPath] intact,
+  /// where opening the destination directly had truncated it before the first
+  /// page was even fetched. An [IOSink] is the caller's own: it is written to
+  /// and flushed, never closed.
   Future<Stats> save(Object sinkOrPath, [Handler<T>? process]) async {
-    final IOSink sink;
-    final bool ownsSink;
     if (sinkOrPath is String) {
-      final file = File(sinkOrPath);
-      sink = file.openWrite();
-      ownsSink = true;
-    } else if (sinkOrPath is IOSink) {
-      sink = sinkOrPath;
-      ownsSink = false;
-    } else {
-      throw ArgumentError.value(
-        sinkOrPath,
-        'sinkOrPath',
-        'Must be a String path or IOSink',
-      );
+      late Stats stats;
+      await Fs.atomic(sinkOrPath, (staging) async {
+        final sink = staging.openWrite();
+        try {
+          stats = await _pour(sink, process);
+        } finally {
+          await sink.close();
+        }
+      });
+      return stats;
     }
+    if (sinkOrPath is IOSink) return _pour(sinkOrPath, process);
+    throw ArgumentError.value(
+      sinkOrPath,
+      'sinkOrPath',
+      'Must be a String path or IOSink',
+    );
+  }
 
+  /// Runs the crawl, writing every emitted item to [sink] as a line.
+  Future<Stats> _pour(IOSink sink, Handler<T>? process) async {
     final engine = this.engine(process);
     engine.on.item((item) {
       if (item is Map || item is List) {
@@ -602,7 +615,6 @@ class CrawlBuilder<T> {
       return stats;
     } finally {
       await _disarm(engine);
-      if (ownsSink) await sink.close();
     }
   }
 
@@ -620,16 +632,24 @@ class CrawlBuilder<T> {
     );
     final subscription = engine.items.listen(controller.add);
     _arm(engine);
-    _resolveUrls().then((urls) {
-      engine
-          .run(urls)
-          .then((_) => null, onError: controller.addError)
-          .whenComplete(() async {
-            await _disarm(engine);
-            await subscription.cancel();
-            if (!controller.isClosed) await controller.close();
-          });
-    }, onError: controller.addError);
+
+    // One ending for both outcomes. Seeds that cannot be resolved — a sitemap
+    // whose host is down — used to take the other path: the error reached the
+    // stream, and then nothing closed it, nothing cancelled the subscription
+    // and nothing unhooked the resume timer. An `await for` over that waited
+    // for a crawl that was never going to run.
+    Future<void> finish() async {
+      await _disarm(engine);
+      await subscription.cancel();
+      if (!controller.isClosed) await controller.close();
+    }
+
+    _resolveUrls()
+        .then<void>(
+          (urls) => engine.run(urls).then((_) {}, onError: controller.addError),
+          onError: controller.addError,
+        )
+        .whenComplete(finish);
     return controller.stream;
   }
 }

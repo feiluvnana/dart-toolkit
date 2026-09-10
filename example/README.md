@@ -7,7 +7,7 @@ in-memory fixtures, and the networked parts are behind a flag.
 | :--- | :--- |
 | [`example.dart`](example.dart) | A tour of all seven domains, end to end |
 | [`crawler.dart`](crawler.dart) | A multi-stage crawl: routes, tags, `meta`, scope, robots |
-| [`scrape.dart`](scrape.dart) | One-off requests: selectors, extraction, sessions, downloads |
+| [`scrape.dart`](scrape.dart) | One-off requests: selectors, extraction, forms, sessions, downloads |
 | [`tool.dart`](tool.dart) | A small CLI: declared commands, prompts, progress, cleanup |
 
 ```sh
@@ -38,9 +38,10 @@ bounded. Note `.downloader(MapDownloader(...))`: swapping the downloader is how
 you test a pipeline without the network, and it is the only line that differs
 between the fixture and live runs.
 
-**`scrape.dart`** if you only need to pull data out of a page. No engine, no
-frontier — just `net.http` and the selector API, with the loose string schema
-and the typed `Field` form side by side.
+**`scrape.dart`** if you only need to pull data out of a page, or put
+something back into one. No engine, no frontier — just `net.http`, the
+selector API with the loose string schema and the typed `Field` form side by
+side, and `res.form(...)` for the `<form>` a page carries.
 
 **`tool.dart`** if you are writing a command-line program. Commands and their
 arguments are declared once, and `cli.run` handles `--help`, validation,

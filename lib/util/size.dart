@@ -47,6 +47,9 @@ class SizeAccessor {
   /// unit this does not know — reading `'10 XB'` as ten bytes would be a
   /// wrong answer dressed as a right one. Both `KB` and `K` style units are
   /// accepted, and a bare number is treated as bytes.
+  ///
+  /// Every unit [format] writes reads back, so `parse(format(n))` is `n`
+  /// rounded to the digits it printed.
   int parse(String text) {
     final match = RegExp(r'^([\d.]+)\s*([A-Za-z]+)?$').firstMatch(text.trim());
     if (match == null) return 0;
@@ -62,6 +65,10 @@ class SizeAccessor {
       'GB': 1024 * 1024 * 1024,
       'T': 1024 * 1024 * 1024 * 1024,
       'TB': 1024 * 1024 * 1024 * 1024,
+      // Petabytes are here because [format] can write them: a table that
+      // stopped at TB made `parse(format(n))` answer 0 for a large enough n.
+      'P': 1024 * 1024 * 1024 * 1024 * 1024,
+      'PB': 1024 * 1024 * 1024 * 1024 * 1024,
     };
     final scale = scales[unit];
     if (scale == null) return 0;

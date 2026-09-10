@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:test/test.dart';
@@ -281,6 +282,24 @@ Disallow: /
   });
 
   group('io.async mirrors io', () {
+    test('parent has an async twin, like every other disk operation', () async {
+      final dir = io.temp('dt_parent_');
+      try {
+        final blocking = io.join(dir.path, 'a', 'b', 'file.txt');
+        final future = io.join(dir.path, 'c', 'd', 'file.txt');
+        io.parent(blocking);
+        // It was the one name on `io` that touches the disk and had no twin
+        // here, which is exactly what Rule 3 says a mirror may not do.
+        await io.async.parent(future);
+
+        expect(io.has(io.dir(blocking)), isFalse, reason: 'a folder, not a file');
+        expect(Directory(io.dir(blocking)).existsSync(), isTrue);
+        expect(Directory(io.dir(future)).existsSync(), isTrue);
+      } finally {
+        dir.deleteSync(recursive: true);
+      }
+    });
+
     test('both write atomically to the same place', () async {
       final dir = io.temp('dt_io_');
       try {

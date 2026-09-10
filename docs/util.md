@@ -89,7 +89,7 @@ util.size.parse('2.5 MB');            // 2621440
 util.size.parse('10KB');              // 10240
 ```
 
-`format` renders zero and negative inputs as `'0 B'`. `parse` accepts both `KB` and `K` style units, treats a bare number as bytes, and returns `0` for anything it cannot read.
+`format` renders zero and negative inputs as `'0 B'`. `parse` accepts both `KB` and `K` style units, treats a bare number as bytes, and returns `0` for anything it cannot read — a unit nobody knows is refused rather than read as bytes. Every unit `format` writes, up to `PB`, reads back, so `parse(format(n))` is `n` rounded to the digits it printed.
 
 ```dart
 system.console.logger.info('Wrote ${util.size.format(io.stat(path).size)}');

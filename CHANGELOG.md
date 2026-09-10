@@ -2,6 +2,125 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.7.0
+
+Filling in the form, and ten things that were quietly wrong. `res.$('select').value`
+has read a control the way a browser submits it since 1.4.0, and there was
+nothing to do with the answer: a login was still a hand-copied CSRF token and
+three guesses at the field names. Meanwhile a counter counted nothing, a
+cookie went where it should not, a saved crawl truncated last night's results
+before it fetched a page, and a stream whose seeds were unreachable waited
+forever for a crawl that was never going to start.
+
+### Added
+
+- **`Form`, and `res.form(selector)` to find one.** A page's form comes back
+  filled in the way a browser would submit it — the hidden inputs, the CSRF
+  token, the ticked boxes, the option already selected — so a script overrides
+  the two fields it knows about and sends the rest back untouched. `fill`
+  returns the form, so filling and sending are one expression:
+
+  ```dart
+  final home = await page.form('#login')!
+      .fill({'user': user, 'pass': pass})
+      .send(client: session);
+  ```
+
+  Values come from the same reader as `QueryResult.value`, so what a form
+  submits and what `res.$('select').value` reports cannot drift apart. It
+  collects what HTML calls the successful controls and skips what a browser
+  skips: a file input, a reset button, anything disabled or unnamed, an
+  unticked box, and every submit button but the first. `action` resolves
+  against the page, an empty one posting back to it; `method` reads the
+  attribute; a `GET` puts its fields in the query and replaces whatever query
+  the action had, which is also what a browser does. A form declaring
+  `multipart/form-data` throws from `body` rather than sending url-encoded
+  fields the server cannot parse.
+- **`res.submit(form)`**, beside `res.follow`. Inside a crawl the submission
+  is scheduled on the engine instead of fetched on the spot, so the answer
+  reaches a tagged handler like any other page. Everything `follow` does still
+  applies — the `Referer`, the depth, and de-duplication that reads the body,
+  so one search form submitted with two terms is two pages.
+- **`docs/form.md`**, and the `<form>` half of `example/scrape.dart`.
+- **`io.async.parent`.** Rule 3 says `io.async` mirrors `io` exactly, one name
+  for one name; `parent` was the one operation that touches the disk and had
+  no twin there.
+
+### Fixed
+
+- **`Stats.retried` counted nothing.** It is documented in `docs/crawl.md`,
+  printed by `Stats.toString`, restored from a resume file — and never once
+  incremented, because retrying happens inside the client, below the engine
+  that reports it. `HttpClient.send` now takes an `onretry` callback and the
+  downloader passes each one up. A crawl that retried twice said `retried: 0`.
+- **A cookie with no `Domain` followed the crawl into every subdomain.** RFC
+  6265 section 5.3 makes such a cookie *host-only*: it goes back to the host
+  that set it and to no other. This stored the request host as the cookie's
+  domain and then matched by suffix, so a session cookie set by `example.com`
+  was sent to `sub.example.com` — the same leak 1.2.0 closed for a `Domain`
+  the host does not own, left open on the path where no `Domain` is named at
+  all. `Cookie.host` now says which kind it is, and `matches` asks for an
+  exact host when it is set.
+- **`crawl.save(path)` destroyed the last good results to write the next.** It
+  opened the destination directly, which truncated it before the first page
+  was fetched and failed outright when the folder did not exist yet — in a
+  library whose first promise is that every write is atomic. It now stages
+  through a `.part` file like `io.csv.pipe`: the folder is created, the file
+  is renamed into place once the run finishes, and a run that fails leaves
+  whatever was already there. An `IOSink` is still the caller's own.
+- **A crawl whose seeds could not be resolved hung.** `stream()` sent the
+  error on and then left the stream open, the subscription live and the resume
+  hook registered — so `await for` waited on a crawl that had already failed,
+  and the hook held the process open behind it. Both endings now run the same
+  cleanup.
+- **`concurrent.retry`'s backoff drew from a second generator.**
+  `util.rand.seed` documents that every random choice in the library runs
+  through one generator, and `net.http`'s retry jitter carries a comment
+  saying two would be one too many. The retry helper had a `Random` of its
+  own, so seeding a run made the crawl repeatable and the pool not.
+- **`['sel@text']` handed back the page's indentation.** 1.5.0 made every text
+  read collapse source whitespace the way a browser does, through one reader,
+  so `extract` and `res.$` could not disagree. The repeated attribute
+  shorthand was the one path that still called `.text.trim()`, so
+  `['h1@text']` and `['h1']` answered differently for the same element.
+- **`util.size.parse` could not read what `util.size.format` writes.**
+  `format` reaches `PB`; the parse table stopped at `TB`, and an unknown unit
+  is refused outright — correctly — so `parse(format(n))` answered `0` above a
+  petabyte.
+- **`HttpResponse.text(requested: ...)` still sat at `localhost`.** A fixture
+  that says where it came from now resolves its own links from there, which is
+  what a form action or a followed link needs.
+- **Four documentation references pointed at nothing**, two of them `dart doc`
+  warnings: `[Field.call]` for a method named `fn`, `[net.http]`, `[now]` for
+  what became `shutdown`, and `[zip]`/`[git]` for what became `tool.zip` and
+  `tool.git` in 1.6.0.
+
+### Known
+
+- **Five exported type names collide, and stay for now.** Running Rule 6's
+  mechanical test over all 102 exported types rather than the two that
+  happened to error found three more: `HttpClient`, `HttpResponse` and
+  `Cookie` are `dart:io`'s names too, and Dart resolves the package import
+  first without a diagnostic — the `Process<T>` case again. `Request` and
+  `Response` are `package:http`'s, which at least errors on use. All five fail
+  the rule; renaming the library's most-used vocabulary is a 2.0.0 change, not
+  a point release. `NAMESPACE.md` records them with the escape hatch
+  (`import 'dart:io' hide HttpClient, HttpResponse, Cookie;`), and
+  `test/regression_test.dart` pins the current behaviour so the rename has
+  something to break.
+
+### Migration
+
+Nothing to change. Every name from 1.6.0 still means what it meant; the
+additions are new names, and the fixes are behaviour that already claimed to
+work this way.
+
+Two of them are behaviour changes worth knowing about. A host-only cookie is
+no longer sent to subdomains — if a crawl relied on that, the server was
+relying on it too and should set `Domain`. And `crawl.save(path)` no longer
+creates the file until the run finishes, so anything watching the destination
+mid-crawl sees the previous file rather than a growing one.
+
 ## 1.6.0
 
 The namespace, sorted. `system` had become the drawer everything went into when

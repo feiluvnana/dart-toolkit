@@ -65,6 +65,17 @@ One import gives you every domain:
 import 'package:dart_toolkit/dart_toolkit.dart';
 ```
 
+Three of the type names it brings — `HttpClient`, `HttpResponse` and `Cookie`
+— are also `dart:io`'s. Dart resolves the package import first and says
+nothing, so in a file importing both they mean this library's. That is usually
+what you want; when it is not, say which you mean:
+
+```dart
+import 'dart:io' hide HttpClient, HttpResponse, Cookie;
+```
+
+The full list is in [NAMESPACE.md](NAMESPACE.md#known-collisions).
+
 ---
 
 ## Quickstart
@@ -246,6 +257,26 @@ await net.crawl<String>(seed)
 
 See [docs/crawl.md](docs/crawl.md).
 
+### `Form` — the forms a page carries
+
+Reading a page is half of it. `res.form(...)` collects a form's controls the
+way a browser would submit them — the hidden inputs, the CSRF token, the
+options already selected — so a script overrides the two fields it knows about
+and sends the rest back untouched:
+
+```dart
+final session = HttpClient(session: true);
+final page = await session.get('https://example.com/login'.url);
+
+final home = await page.form('#login')!
+    .fill({'user': user, 'pass': pass})
+    .send(client: session);
+```
+
+Inside a crawl, `res.submit(form)` schedules it on the engine instead, so the
+answer reaches a tagged handler like any other page. See
+[docs/form.md](docs/form.md).
+
 ### `$()` — selectors
 
 ```dart
@@ -371,6 +402,7 @@ See [docs/crawl.md](docs/crawl.md#8-testing-a-pipeline).
 | Key-value store | [docs/store.md](docs/store.md) |
 | HTTP & downloads | [docs/http.md](docs/http.md) |
 | Crawler engine | [docs/crawl.md](docs/crawl.md) |
+| Forms | [docs/form.md](docs/form.md) |
 | Selectors | [docs/selector.md](docs/selector.md) |
 | Subprocesses & shutdown | [docs/system.md](docs/system.md) |
 | CLI arguments | [docs/cli.md](docs/cli.md) |

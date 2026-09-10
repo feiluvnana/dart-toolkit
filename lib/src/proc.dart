@@ -320,7 +320,7 @@ class Exit {
   /// Registers [fn] to run during graceful shutdown.
   ///
   /// Note that a registered hook keeps the `SIGINT` watcher alive, and so keeps
-  /// the process alive, until [now] runs the hooks.
+  /// the process alive, until [shutdown] runs the hooks.
   static void hook(FutureOr<void> Function() fn) {
     watch();
     _hooks.add(fn);
