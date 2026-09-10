@@ -18,7 +18,7 @@ void main() {
     });
 
     test('a comma inside an Expires date does not split the cookie', () {
-      final cookies = Cookie.split(
+      final cookies = Morsel.split(
         'sid=1; expires=Wed, 21 Oct 2099 07:28:00 GMT; Path=/, other=2',
       );
       expect(cookies, hasLength(2));
@@ -26,7 +26,7 @@ void main() {
       expect(cookies.last.trim(), equals('other=2'));
     });
 
-    test('default-path is the request directory, not the request path', () {
+    test('default-path is the fetch directory, not the fetch path', () {
       final jar = CookieJar();
       jar.add('sid=abc', uri: Uri.parse('https://x.com/login'));
       expect(jar.header(Uri.parse('https://x.com/dashboard')), 'sid=abc');
@@ -93,7 +93,7 @@ Disallow: /
 
   group('downloader', () {
     test('a caller-supplied client survives close()', () async {
-      final mine = HttpClient();
+      final mine = Fetcher();
       final downloader = HttpDownloader<String>(client: mine);
       await downloader.close();
       // Reaching the socket layer proves the client was not closed.
@@ -228,7 +228,7 @@ Disallow: /
   });
 
   group('typed extraction', () {
-    final res = HttpResponse.text('''
+    final res = Reply.text('''
       <h1>Title</h1>
       <ul><li class="t">a</li><li class="t">b</li></ul>
       <div class="row"><span class="n">one</span><a href="/1">x</a></div>
@@ -292,7 +292,11 @@ Disallow: /
         // here, which is exactly what Rule 3 says a mirror may not do.
         await io.async.parent(future);
 
-        expect(io.has(io.dir(blocking)), isFalse, reason: 'a folder, not a file');
+        expect(
+          io.has(io.dir(blocking)),
+          isFalse,
+          reason: 'a folder, not a file',
+        );
         expect(Directory(io.dir(blocking)).existsSync(), isTrue);
         expect(Directory(io.dir(future)).existsSync(), isTrue);
       } finally {

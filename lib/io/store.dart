@@ -8,6 +8,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../src/fs.dart';
+import '../util/slot.dart';
 
 // ============================================================================
 // LIGHTWEIGHT KEY-VALUE STORAGE (Store)
@@ -15,13 +16,18 @@ import '../src/fs.dart';
 
 /// A JSON-backed key-value map.
 ///
-/// Values must be JSON-encodable. Reads are typed through [get]; a value of
-/// the wrong type yields the fallback rather than throwing:
+/// Keys are [Slot]s, so a value goes in and comes back with its type and
+/// neither end casts. A value the document no longer holds in that shape reads
+/// as `null` rather than throwing:
 ///
 /// ```dart
+/// const cursor = Slot<int>('cursor');
+///
 /// final db = io.store.open('cache.json');
-/// db.set('cursor', 120);
+/// db.set(cursor, 120);
 /// await db.save();
+///
+/// final int at = db.get(cursor) ?? 0;
 /// ```
 class Store {
   String? _path;
@@ -47,20 +53,17 @@ class Store {
   /// The file backing this store, or `null` when it is in-memory only.
   String? get path => _path;
 
-  /// Reads [key] as [T], returning [fallback] when absent or mistyped.
-  T? get<T>(String key, [T? fallback]) {
-    final value = _data[key];
-    return value is T ? value : fallback;
-  }
+  /// The value [slot] names, or `null` when it is absent or the wrong shape.
+  T? get<T>(Slot<T> slot) => slot.read(_data[slot.name]);
 
-  /// Stores [value] under [key]. [value] must be JSON-encodable.
-  void set(String key, Object? value) => _data[key] = value;
+  /// Stores [value] under [slot]. It must survive `jsonEncode`.
+  void set<T>(Slot<T> slot, T value) => _data[slot.name] = slot.write(value);
 
-  /// Whether [key] is present.
-  bool has(String key) => _data.containsKey(key);
+  /// Whether [slot] is present.
+  bool has(Slot<Object?> slot) => _data.containsKey(slot.name);
 
-  /// Removes [key].
-  void delete(String key) => _data.remove(key);
+  /// Removes [slot].
+  void delete(Slot<Object?> slot) => _data.remove(slot.name);
 
   /// Removes every entry.
   void clear() => _data.clear();

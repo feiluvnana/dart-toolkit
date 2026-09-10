@@ -26,7 +26,7 @@ void main() async {
 
 ## 1. Requests
 
-`net.http` is a shared `HttpClient`. Every verb takes a `Uri`:
+`net.http` is a shared `Fetcher`. Every verb takes a `Uri`:
 
 ```dart
 await net.http.get(url);
@@ -52,7 +52,7 @@ A `<form>` on a page builds its own `Body.form` — see [docs/form.md](form.md).
 
 ---
 
-## 2. Responses (`HttpResponse`)
+## 2. Responses (`Reply`)
 
 ```dart
 res.ok;             // status in 200..299
@@ -83,31 +83,43 @@ await res.save('out/page.html'); // saves response bytes atomically
 
 ### Charset Detection
 
-`HttpResponse.body` automatically detects character encoding from:
+`Reply.body` automatically detects character encoding from:
 1. The `Content-Type` header (e.g. `charset=windows-1252`).
 2. HTML `<meta charset="...">` or `<meta http-equiv="Content-Type">` tags in the payload.
 3. Falls back gracefully to UTF-8 / Latin1.
 
-### Declarative Extraction (`extract`)
+### Typed Extraction (records)
 
-Extract structured data declaratively using CSS selectors and property targets (`@attr` or `@text`):
+The way to get data off a page with its type intact is a Dart record. `all`
+builds one per match, scoped to that match, and `one` does the same for a
+section a page has at most one of:
 
 ```dart
-final product = res.extract({
-  'title': 'h1.title',
-  'price': '.price@text',
-  'canonical': 'link[rel="canonical"]@href',
-  'categories': ['ul.breadcrumbs > li'],
-  'reviews': ['.review', {
-    'user': '.author',
-    'rating': '.stars@data-rating',
-    'comment': '.body',
-  }],
-});
+final product = (
+  title: res.$('h1.title').text,
+  price: res.pick(Field.text('.price').when(util.text.number)),
+  categories: res.$('ul.breadcrumbs > li').texts,
+  reviews: res.$.all('.review', (row) => (
+    user: row('.author').text,
+    rating: row.pick(Field.attr('.stars', 'data-rating').when(int.tryParse)),
+    comment: row('.body').text,
+  )),
+);
+
+product.reviews.first.rating;   // int?, no cast anywhere
 ```
 
-Values come back as `Object?`. Where you want the type, name the field with a
-`Field` and read it with `pick`:
+Nothing here is `Object?`. `all` hands each match its own `QueryResult`, so a
+nested read cannot accidentally match the whole page — the mistake that made
+repeated sub-objects worth having a helper for.
+
+- `all(selector, build)` — one record per match, `List<R>`.
+- `one(selector, build)` — the first match, or `null`.
+- `pick(field)` — a single typed `Field`, at any depth.
+
+### Fields
+
+A `Field<T>` is one typed read, usable off a page or inside `all`:
 
 ```dart
 final String? title = res.pick(Field.text('h1.title'));
@@ -117,8 +129,40 @@ final int reviews = res.pick(Field.fn((el) => el.querySelectorAll('.review').len
 ```
 
 The cases are `Field.text`, `Field.attr`, `Field.texts`, `Field.attrs`,
-`Field.map`, `Field.list` and `Field.fn`. They mix freely with the string
-shorthand inside one `extract` schema.
+`Field.nest`, `Field.list` and `Field.fn`.
+
+Two combinators adjust a field that already works, so `Field.fn` is rarely
+needed:
+
+```dart
+Field.text('.price').when(util.text.number);   // Field<num?> — skips a null
+Field.text('.stock').map((t) => t ?? 'unknown');   // Field<String> — sees it
+Field.texts('.row').map((rows) => rows.length);    // Field<int>
+```
+
+`when` is the one you usually want: most readers are nullable, and a converter
+like `int.tryParse` takes a `String`, not a `String?`. `map` is the
+unconditional form, for a converter that has something to say about an absent
+value.
+
+### The String Shorthand (`extract`)
+
+For a first look at an unfamiliar page, `extract` takes a schema of strings and
+hands back `Map<String, Object?>`:
+
+```dart
+final data = res.extract({
+  'title': 'h1.title',
+  'price': '.price@text',
+  'canonical': 'link[rel="canonical"]@href',
+  'categories': ['ul.breadcrumbs > li'],
+  'reviews': ['.review', {'user': '.author', 'comment': '.body'}],
+});
+```
+
+Every value is `Object?` and every read is a cast, which is why it is the tool
+for exploring rather than the one for a pipeline you are going to keep.
+`Field`s mix freely into the same schema.
 
 ---
 
@@ -144,13 +188,13 @@ Failed requests retry up to `retries` times (default 2) on a transport error, a 
 Set `cap` to refuse oversized bodies, which a broad crawl needs so one unexpected URL cannot exhaust memory:
 
 ```dart
-final client = HttpClient(cap: 10 * 1024 * 1024); // 10 MB
+final client = Fetcher(cap: 10 * 1024 * 1024); // 10 MB
 ```
 
 Redirects are followed automatically by default (up to `redirects: 10`). Access `res.url` for the final landing destination:
 
 ```dart
-final client = HttpClient(
+final client = Fetcher(
   redirect: true,
   redirects: 5,
 );
@@ -166,7 +210,7 @@ Create a stateful session that preserves cookies across requests:
 
 ```dart
 // Ephemeral session client:
-final session = HttpClient(session: true);
+final session = Fetcher(session: true);
 await session.post('https://example.com/login'.url, body: const Body.form({
   'user': 'alice',
   'pass': 'secret',
@@ -175,7 +219,7 @@ final dashboard = await session.get('https://example.com/dashboard'.url);
 
 // Or bring your own jar, to share or inspect it:
 final jar = CookieJar();
-final client = HttpClient(jar: jar);
+final client = Fetcher(jar: jar);
 await client.get('https://example.com/'.url);
 print(jar['session_id']);
 ```
@@ -192,7 +236,7 @@ default path is the directory of the request, not the request itself.
 Configure an HTTP or HTTPS proxy:
 
 ```dart
-final client = HttpClient(
+final client = Fetcher(
   proxy: 'http://127.0.0.1:8080',
 );
 ```
@@ -226,7 +270,7 @@ Re-running a scrape over pages that have not changed is the normal case while an
 import 'package:dart_toolkit/dart_toolkit.dart';
 
 void main() async {
-  final client = HttpClient(cache: HttpCache('.cache'));
+  final client = Fetcher(cache: HttpCache('.cache'));
 
   final res = await client.get('https://example.com/article'.url);
   if (res.cached) {
@@ -259,17 +303,17 @@ Crawls take the same thing as a directory: `net.crawl(url).cache('.cache')`.
 `cap` refuses a body larger than the given number of bytes, throwing `FatalHttpException` — which is not retried, because a server's answer being too big is settled rather than transient. The transfer is abandoned as soon as `Content-Length` says so, or as soon as the arriving bytes do:
 
 ```dart
-final client = HttpClient(cap: util.size.parse('5mb'));
+final client = Fetcher(cap: util.size.parse('5mb'));
 ```
 
 ---
 
 ## 9. Your Own Client
 
-Construct an `HttpClient` for custom headers, a custom timeout, proxy, session cookies, a `cache`, a `cap`, or a `base` directory that relative download paths resolve against. **The caller must close it.**
+Construct an `Fetcher` for custom headers, a custom timeout, proxy, session cookies, a `cache`, a `cap`, or a `base` directory that relative download paths resolve against. **The caller must close it.**
 
 ```dart
-final client = HttpClient(
+final client = Fetcher(
   headers: {'Authorization': 'Bearer $token'},
   timeout: const Duration(seconds: 10),
   retries: 5,
@@ -284,7 +328,7 @@ await client.close();
 To apply one client process-wide — including in tests — hand it to `net.use`, which closes the previous one:
 
 ```dart
-await net.use(HttpClient(headers: {'Authorization': 'Bearer $token'}));
+await net.use(Fetcher(headers: {'Authorization': 'Bearer $token'}));
 ```
 
 ---

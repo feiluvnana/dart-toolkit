@@ -4,6 +4,22 @@ import 'dart:io';
 import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:test/test.dart';
 
+const _theme = Slot<String>('theme');
+const _counter = Slot<int>('counter');
+const _missing = Slot<String>('missing');
+const _userId = Slot<String>('user_id');
+const _visits = Slot<int>('visits');
+const _k = Slot<String>('k');
+const _since = Slot<DateTime>.coded(
+  'since',
+  read: _readTime,
+  write: _writeTime,
+);
+
+DateTime? _readTime(Object? raw) =>
+    raw is String ? DateTime.tryParse(raw) : null;
+Object? _writeTime(DateTime value) => value.toIso8601String();
+
 void main() {
   group('Console & Terminal Namespaces', () {
     test('the writer reports geometry', () {
@@ -343,12 +359,27 @@ void main() async {
       });
 
       expect(outcomes.length, equals(3));
-      expect(outcomes[0].isSuccess, isTrue);
-      expect(outcomes[0].value, equals(10));
-      expect(outcomes[1].isSuccess, isFalse);
-      expect(outcomes[1].error.toString(), contains('fail on 2'));
-      expect(outcomes[2].isSuccess, isTrue);
+      // Matching is the point: `value` is non-nullable inside Done, and the
+      // error only exists inside Broke.
+      expect(outcomes[0], isA<Done<int>>());
+      expect((outcomes[0] as Done<int>).value, equals(10));
+      expect(outcomes[1], isA<Broke<int>>());
+      expect(
+        (outcomes[1] as Broke<int>).error.toString(),
+        contains('fail on 2'),
+      );
+      expect((outcomes[1] as Broke<int>).stack, isNotNull);
+      expect(outcomes[2].ok, isTrue);
       expect(outcomes[2].value, equals(30));
+
+      final saved = [
+        for (final outcome in outcomes)
+          switch (outcome) {
+            Done(:final value) => 'ok:$value',
+            Broke(:final error) => 'bad:${error is Exception}',
+          },
+      ];
+      expect(saved, ['ok:10', 'bad:true', 'ok:30']);
     });
 
     test(
@@ -363,7 +394,7 @@ void main() async {
             return n * 10;
           });
           fail('Should have thrown PoolFailure');
-        } on PoolFailure<int> catch (e) {
+        } on PoolFailure<int, int> catch (e) {
           expect(e.results.length, equals(3));
           expect(e.results[0], equals(10));
           expect(e.results[1], isNull);
@@ -458,54 +489,53 @@ void main() async {
 
   group('cli Sub-namespace', () {
     test('parse reads flags, options and positionals', () {
+      final force = cli.flag('force');
+      final port = cli.number('p');
+      final name = cli.option('name');
       cli.parse(['--force', '-p', '8', '--name=test', 'file1', 'file2']);
 
-      expect(cli.has('force'), isTrue);
-      expect(cli.has('p'), isTrue);
-      expect(cli.get('p', 0), equals(8));
-      expect(cli.get('name', ''), equals('test'));
-      expect(cli.list(), equals(['file1', 'file2']));
+      expect(force(), isTrue);
+      expect(port(), equals(8));
+      expect(name(), equals('test'));
+      expect(cli.args, equals(['file1', 'file2']));
     });
 
-    test('all collects repeats and no reads negative flags', () {
-      cli.parse([
-        '--tag',
-        'a',
-        '--tag',
-        'b',
-        '--no-compress',
-        '--cache',
-      ]);
+    test('list collects repeats and a flag reads its negative form', () {
+      final tags = cli.list('tag');
+      final compress = cli.flag('compress', def: true);
+      final cache = cli.flag('cache');
+      cli.parse(['--tag', 'a', '--tag', 'b', '--no-compress', '--cache']);
 
-      expect(cli.all<String>('tag'), equals(['a', 'b']));
-      expect(cli.no('compress'), isTrue);
+      expect(tags(), equals(['a', 'b']));
+      expect(compress.negated(), isTrue);
       // --no-compress must not report the positive flag as present.
-      expect(cli.has('compress'), isFalse);
-      expect(cli.get<bool>('compress', true), isFalse);
-      expect(cli.get<bool>('cache', false), isTrue);
+      expect(compress.given(), isFalse);
+      expect(compress(), isFalse);
+      expect(cache(), isTrue);
     });
 
     test(
       'handles negative values, bare -- separator, and consecutive flags',
       () {
         final cli = Cli(['--offset', '-5', '--', 'file.txt']);
-        expect(cli.get('offset', 0), equals(-5));
-        expect(cli.list(), equals(['file.txt']));
-        expect(cli.has('5'), isFalse);
+        expect(cli.number('offset')(), equals(-5));
+        expect(cli.args, equals(['file.txt']));
+        // The negative number was the option's value, not a switch of its own.
+        expect(cli.switches.keys, ['offset']);
 
         final flags = Cli(['--flag', '--other']);
-        expect(flags.has('flag'), isTrue);
-        expect(flags.has('other'), isTrue);
-        expect(flags.list(), isEmpty);
+        expect(flags.flag('flag')(), isTrue);
+        expect(flags.flag('other')(), isTrue);
+        expect(flags.args, isEmpty);
       },
     );
 
     test('subcommands and rest', () {
-      final cli = Cli(['build', '--prod', 'main.dart', 'output.bin'])
-        ..flag('prod');
+      final cli = Cli(['build', '--prod', 'main.dart', 'output.bin']);
+      final prod = cli.flag('prod');
       expect(cli.command, equals('build'));
       expect(cli.rest, equals(['main.dart', 'output.bin']));
-      expect(cli.has('prod'), isTrue);
+      expect(prod(), isTrue);
 
       var executed = false;
       final matched = cli.subcommand('build', (subCli) {
@@ -532,7 +562,7 @@ void main() async {
               desc: 'Output directory',
               required: true,
             )
-            ..option(
+            ..number(
               'port',
               alias: 'p',
               desc: 'Server port',
@@ -566,7 +596,7 @@ void main() async {
               desc: 'Output directory',
               required: true,
             )
-            ..option(
+            ..number(
               'port',
               alias: 'p',
               desc: 'Server port',
@@ -641,38 +671,35 @@ void main() async {
   });
 
   group('net.http Namespace', () {
-    test(
-      'HttpResponse exposes ok, body, json, DOM querying and save',
-      () async {
-        final res = HttpResponse(
-          url: 'https://example.com/item/1'.url,
-          status: 200,
-          headers: const {'content-type': 'text/html; charset=utf-8'},
-          bytes: utf8.encode('''
+    test('Reply exposes ok, body, json, DOM querying and save', () async {
+      final res = Reply(
+        url: 'https://example.com/item/1'.url,
+        status: 200,
+        headers: const {'content-type': 'text/html; charset=utf-8'},
+        bytes: utf8.encode('''
           <html><body>
             <h1>Welcome</h1>
             <a href="/sub/page">Link</a>
             <img src="/images/pic.png" />
           </body></html>
         '''),
-        );
+      );
 
-        expect(res.ok, isTrue);
-        expect(res.body, contains('Welcome'));
-        expect(res.$('h1').text, equals('Welcome'));
-        expect(res.$('a').href, equals('/sub/page'));
-        expect(res.$('img').src, equals('/images/pic.png'));
-        expect(res.$.lines, contains('Welcome'));
+      expect(res.ok, isTrue);
+      expect(res.body, contains('Welcome'));
+      expect(res.$('h1').text, equals('Welcome'));
+      expect(res.$('a').href, equals('/sub/page'));
+      expect(res.$('img').src, equals('/images/pic.png'));
+      expect(res.$.lines, contains('Welcome'));
 
-        final temp = io.temp('http_test_');
-        try {
-          final saved = await res.save(io.join(temp.path, 'page.html'));
-          expect(saved.readAsStringSync(), contains('Welcome'));
-        } finally {
-          temp.deleteSync(recursive: true);
-        }
-      },
-    );
+      final temp = io.temp('http_test_');
+      try {
+        final saved = await res.save(io.join(temp.path, 'page.html'));
+        expect(saved.readAsStringSync(), contains('Welcome'));
+      } finally {
+        temp.deleteSync(recursive: true);
+      }
+    });
 
     test('net.http talks to a local server', () async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -715,7 +742,7 @@ void main() async {
         );
         expect(form.body, equals('Echo: a=1'));
 
-        final client = HttpClient(timeout: const Duration(seconds: 5));
+        final client = Fetcher(timeout: const Duration(seconds: 5));
         expect((await client.get('$root/hello'.url)).ok, isTrue);
         await client.close();
       } finally {
@@ -723,89 +750,81 @@ void main() async {
       }
     });
 
-    test(
-      'HttpResponse detects charset and handles decode and redirects',
-      () async {
-        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-        server.listen((req) async {
-          switch (req.uri.path) {
-            case '/latin1':
-              req.response.headers.set(
-                'content-type',
-                'text/html; charset=iso-8859-1',
-              );
-              req.response.add(latin1.encode('<p>café</p>'));
-              break;
-            case '/meta-sniff':
-              req.response.headers.set('content-type', 'text/html');
-              req.response.add(
-                latin1.encode(
-                  '<html><head><meta charset="iso-8859-1"></head><body><p>résumé</p></body></html>',
-                ),
-              );
-              break;
-            case '/not-json':
-              req.response.headers.set('content-type', 'text/plain');
-              req.response.write('plain text not json');
-              break;
-            case '/redirect-src':
-              req.response.redirect(
-                Uri.parse(
-                  'http://${server.address.host}:${server.port}/redirect-dst',
-                ),
-              );
-              return;
-            case '/redirect-dst':
-              req.response.write('arrived at dest');
-              break;
-            default:
-              req.response.statusCode = 404;
-          }
-          await req.response.close();
-        });
-
-        final root = 'http://${server.address.host}:${server.port}';
-        try {
-          // Charset from header
-          final latin1Res = await net.http.get('$root/latin1'.url);
-          expect(latin1Res.type, equals('text/html'));
-          expect(latin1Res.charset, equals('iso-8859-1'));
-          expect(latin1Res.body, contains('café'));
-
-          // Meta sniff
-          final metaRes = await net.http.get('$root/meta-sniff'.url);
-          expect(metaRes.charset, equals('iso-8859-1'));
-          expect(metaRes.body, contains('résumé'));
-
-          // decode fallback
-          final notJsonRes = await net.http.get('$root/not-json'.url);
-          expect(
-            notJsonRes.decode({'fallback': true}),
-            equals({'fallback': true}),
-          );
-
-          // Redirect URL tracking
-          final redirectRes = await net.http.get('$root/redirect-src'.url);
-          expect(
-            redirectRes.requested.toString(),
-            equals('$root/redirect-src'),
-          );
-          expect(redirectRes.url.toString(), equals('$root/redirect-dst'));
-          expect(redirectRes.body, equals('arrived at dest'));
-        } finally {
-          await server.close(force: true);
+    test('Reply detects charset and handles decode and redirects', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      server.listen((req) async {
+        switch (req.uri.path) {
+          case '/latin1':
+            req.response.headers.set(
+              'content-type',
+              'text/html; charset=iso-8859-1',
+            );
+            req.response.add(latin1.encode('<p>café</p>'));
+            break;
+          case '/meta-sniff':
+            req.response.headers.set('content-type', 'text/html');
+            req.response.add(
+              latin1.encode(
+                '<html><head><meta charset="iso-8859-1"></head><body><p>résumé</p></body></html>',
+              ),
+            );
+            break;
+          case '/not-json':
+            req.response.headers.set('content-type', 'text/plain');
+            req.response.write('plain text not json');
+            break;
+          case '/redirect-src':
+            req.response.redirect(
+              Uri.parse(
+                'http://${server.address.host}:${server.port}/redirect-dst',
+              ),
+            );
+            return;
+          case '/redirect-dst':
+            req.response.write('arrived at dest');
+            break;
+          default:
+            req.response.statusCode = 404;
         }
-      },
-    );
+        await req.response.close();
+      });
 
-    test(
-      'HttpResponse.extract extracts structured data declaratively',
-      () async {
-        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-        server.listen((req) async {
-          req.response
-            ..headers.contentType = ContentType.html
-            ..write('''
+      final root = 'http://${server.address.host}:${server.port}';
+      try {
+        // Charset from header
+        final latin1Res = await net.http.get('$root/latin1'.url);
+        expect(latin1Res.type, equals('text/html'));
+        expect(latin1Res.charset, equals('iso-8859-1'));
+        expect(latin1Res.body, contains('café'));
+
+        // Meta sniff
+        final metaRes = await net.http.get('$root/meta-sniff'.url);
+        expect(metaRes.charset, equals('iso-8859-1'));
+        expect(metaRes.body, contains('résumé'));
+
+        // decode fallback
+        final notJsonRes = await net.http.get('$root/not-json'.url);
+        expect(
+          notJsonRes.decode({'fallback': true}),
+          equals({'fallback': true}),
+        );
+
+        // Redirect URL tracking
+        final redirectRes = await net.http.get('$root/redirect-src'.url);
+        expect(redirectRes.requested.toString(), equals('$root/redirect-src'));
+        expect(redirectRes.url.toString(), equals('$root/redirect-dst'));
+        expect(redirectRes.body, equals('arrived at dest'));
+      } finally {
+        await server.close(force: true);
+      }
+    });
+
+    test('Reply.extract extracts structured data declaratively', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      server.listen((req) async {
+        req.response
+          ..headers.contentType = ContentType.html
+          ..write('''
             <html>
               <body>
                 <h1>Product Catalog</h1>
@@ -827,44 +846,40 @@ void main() async {
               </body>
             </html>
           ''');
-          await req.response.close();
+        await req.response.close();
+      });
+
+      try {
+        final res = await net.http.get(
+          'http://${server.address.host}:${server.port}'.url,
+        );
+        final extracted = res.extract({
+          'title': 'h1',
+          'canonical': 'a.canonical@href',
+          'categories': ['ul.categories > li'],
+          'items': [
+            '.product',
+            {'name': '.name', 'price': '.price', 'url': 'a@href'},
+          ],
         });
 
-        try {
-          final res = await net.http.get(
-            'http://${server.address.host}:${server.port}'.url,
-          );
-          final extracted = res.extract({
-            'title': 'h1',
-            'canonical': 'a.canonical@href',
-            'categories': ['ul.categories > li'],
-            'items': [
-              '.product',
-              {'name': '.name', 'price': '.price', 'url': 'a@href'},
-            ],
-          });
-
-          expect(extracted['title'], equals('Product Catalog'));
-          expect(
-            extracted['canonical'],
-            equals('https://example.com/products'),
-          );
-          expect(extracted['categories'], equals(['Electronics', 'Books']));
-          expect(
-            extracted['items'],
-            equals([
-              {'name': 'Laptop', 'price': '\$999', 'url': '/items/1'},
-              {'name': 'Phone', 'price': '\$499', 'url': '/items/2'},
-            ]),
-          );
-        } finally {
-          await server.close(force: true);
-        }
-      },
-    );
+        expect(extracted['title'], equals('Product Catalog'));
+        expect(extracted['canonical'], equals('https://example.com/products'));
+        expect(extracted['categories'], equals(['Electronics', 'Books']));
+        expect(
+          extracted['items'],
+          equals([
+            {'name': 'Laptop', 'price': '\$999', 'url': '/items/1'},
+            {'name': 'Phone', 'price': '\$499', 'url': '/items/2'},
+          ]),
+        );
+      } finally {
+        await server.close(force: true);
+      }
+    });
 
     test(
-      'HttpClient session persistence manages cookies across requests',
+      'Fetcher session persistence manages cookies across fetches',
       () async {
         final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
         server.listen((req) async {
@@ -882,7 +897,7 @@ void main() async {
         });
 
         final root = 'http://${server.address.host}:${server.port}';
-        final client = HttpClient(session: true);
+        final client = Fetcher(session: true);
         try {
           final loginRes = await client.get('$root/login'.url);
           expect(loginRes.body, equals('logged in'));
@@ -899,8 +914,8 @@ void main() async {
       },
     );
 
-    test('HttpClient supports proxy configuration', () {
-      final client = HttpClient(proxy: '127.0.0.1:8888');
+    test('Fetcher supports proxy configuration', () {
+      final client = Fetcher(proxy: '127.0.0.1:8888');
       expect(client.proxy, equals('127.0.0.1:8888'));
       client.close();
     });
@@ -944,7 +959,7 @@ void main() async {
 
         final root = 'http://${server.address.host}:${server.port}';
         final temp = io.temp('download_fail_');
-        final client = HttpClient(retries: 0);
+        final client = Fetcher(retries: 0);
         try {
           await expectLater(
             client.download('$root/missing'.url, io.join(temp.path, 'x.txt')),
@@ -1005,17 +1020,19 @@ void main() async {
       },
     );
 
-    test('dump writes rows of cells', () async {
+    test('cells renders a grid, and io.write puts it on disk', () async {
       final temp = io.temp('csv_dump_');
       try {
         final path = io.join(temp.path, 'grid.csv');
-        await io.csv.write(
+        io.write(
           path,
-          [
-            [1, 'a'],
-            [2, 'b'],
-          ],
-          headers: ['n', 'letter'],
+          io.csv.cells(
+            [
+              [1, 'a'],
+              [2, 'b'],
+            ],
+            headers: ['n', 'letter'],
+          ),
         );
         expect(
           await io.csv.matrix(path),
@@ -1065,21 +1082,42 @@ void main() async {
   });
 
   group('io.store Sub-namespace', () {
-    test('the shared store reads and writes through one typed getter', () {
+    test('the shared store reads and writes through typed slots', () {
       io.store.clear();
-      io.store.set('theme', 'dark');
-      io.store.set('counter', 42);
+      io.store.set(_theme, 'dark');
+      io.store.set(_counter, 42);
 
-      expect(io.store.has('theme'), isTrue);
-      expect(io.store.get<String>('theme'), equals('dark'));
-      expect(io.store.get<int>('counter'), equals(42));
-      expect(io.store.get('missing', 'default'), equals('default'));
-      // A mistyped read falls back rather than throwing.
-      expect(io.store.get<int>('theme', -1), equals(-1));
+      expect(io.store.has(_theme), isTrue);
+      expect(io.store.get(_theme), equals('dark'));
+      expect(io.store.get(_counter), equals(42));
+      expect(io.store.get(_missing), isNull);
+      // A slot whose value is not the shape it names reads as null, so a
+      // document that moved on does not throw from a getter.
+      expect(io.store.get(const Slot<int>('theme')), isNull);
 
-      io.store.delete('theme');
-      expect(io.store.has('theme'), isFalse);
+      io.store.delete(_theme);
+      expect(io.store.has(_theme), isFalse);
       io.store.clear();
+    });
+
+    test('a slot can carry a type JSON does not', () async {
+      final temp = io.temp('store_coded_');
+      try {
+        final path = io.join(temp.path, 'coded.json');
+        final db = io.store.open(path)..set(_since, DateTime.utc(2026, 3, 1));
+        await db.save();
+
+        expect(
+          io.json<Map<String, Object?>>(path)['since'],
+          equals('2026-03-01T00:00:00.000Z'),
+        );
+        expect(
+          io.store.open(path).get(_since),
+          equals(DateTime.utc(2026, 3, 1)),
+        );
+      } finally {
+        temp.deleteSync(recursive: true);
+      }
     });
 
     test('an unattached shared store explains why it cannot save', () {
@@ -1101,14 +1139,14 @@ void main() async {
         final path = io.join(temp.path, 'cache.json');
         final db =
             io.store.open(path)
-              ..set('user_id', 'user_101')
-              ..set('visits', 5);
+              ..set(_userId, 'user_101')
+              ..set(_visits, 5);
         await db.save();
         expect(io.has(path), isTrue);
 
         final reopened = io.store.open(path);
-        expect(reopened.get<String>('user_id'), equals('user_101'));
-        expect(reopened.get<int>('visits'), equals(5));
+        expect(reopened.get(_userId), equals('user_101'));
+        expect(reopened.get(_visits), equals(5));
         expect(reopened.length, equals(2));
 
         reopened.clear();
@@ -1123,9 +1161,9 @@ void main() async {
       try {
         final path = io.join(temp.path, 'shared.json');
         io.store.attach(path);
-        io.store.set('k', 'v');
+        io.store.set(_k, 'v');
         await io.store.save();
-        expect(io.store.open(path).get<String>('k'), equals('v'));
+        expect(io.store.open(path).get(_k), equals('v'));
       } finally {
         temp.deleteSync(recursive: true);
       }
@@ -1284,7 +1322,7 @@ void main() async {
     });
 
     test('net exposes http and crawl', () {
-      expect(net.http, isA<HttpClient>());
+      expect(net.http, isA<Fetcher>());
       expect(net.crawl, isA<Crawl>());
       // Selectors live on the top-level $, not on net. Like jQuery, find()
       // searches descendants, so a root-level match is read directly.

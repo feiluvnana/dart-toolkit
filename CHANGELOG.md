@@ -2,6 +2,161 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.0.0
+
+The names, and the `Object?`s. Two debts were written down in 1.7.0 and both
+are paid here: five exported type names that collided with `dart:io` and
+`package:http` — three of them with no diagnostic at all — and the public
+signatures that said `Object?` while meaning something specific. A `Map` used
+as a struct is now a typed key. A `T ==` switch is now a declaration that
+returns its own reader. Four fields where two were always null are now a sealed
+type with two cases. Nothing is deprecated, and every change below carries the
+before and after. [PLAN-2.0.0.md](PLAN-2.0.0.md) has why each one is shaped the
+way it is.
+
+### Changed — the vocabulary
+
+- **`HttpClient` is `Fetcher`, `HttpResponse` is `Reply`, `Cookie` is
+  `Morsel`, `Request<T>` is `Fetch<T>`, `Response<T>` is `Page<T>`.** The first
+  three shadowed `dart:io`'s silently — a file importing both got this
+  library's and was never told, the way `Process<T>` failed before 1.6.0. The
+  other two produced an `ambiguous_import` against `package:http` on use.
+  `NAMESPACE.md` recorded all five in 1.7.0 rather than renaming them, and said
+  it was owed at 2.0.0. `CookieJar` keeps its name; `Morsel` is what
+  `http.cookies` calls the thing a jar holds. The members followed:
+  `Page.fetch`, `Failure.fetch`, `Downloader.fetches`.
+
+  The `hide` clause is gone with them:
+
+  ```dart
+  import 'dart:io';                                  // HttpClient is dart:io's
+  import 'package:dart_toolkit/dart_toolkit.dart';   // Fetcher is this one's
+  ```
+
+  `test/regression_test.dart` now pins the opposite of what it used to: that
+  the unprefixed names resolve to `dart:io`'s.
+
+- **A standalone fetch cannot `emit`.** `net.http.get` returns a `Reply`, which
+  has no `emit`, `follow` or `stop`; only a crawl's `Page<T>` does. The
+  `StateError` that said "this response has no engine attached" is a compile
+  error for the case that caused it.
+
+### Changed — the `Object?`s
+
+- **`Slot<T>`, and `Meta`.** `Fetch.meta` and `io.store` were the same problem
+  twice: a `Map<String, Object?>` that has to stay JSON-encodable but is used
+  as a struct. A slot is a typed key — declared `const` once, checked at both
+  ends, and the map underneath is untouched, so a resume file and a store on
+  disk both still read.
+
+  ```dart
+  const name = Slot<String>('name');
+
+  page.follow(href, tag: 'song', meta: [name(a.text)]);
+  final String? title = page.meta.get(name);   // no cast, no fallback
+  ```
+
+  `Slot.coded` carries a type JSON does not. `Meta.raw` and `Store.all()` stay
+  as the plain map underneath.
+
+- **Records instead of `Map<String, Object?>`.** `QueryResult.all` builds one
+  typed record per match, scoped to that match; `one` is the singular; `pick`
+  reads a `Field` at any depth. Nothing in the result is `Object?`:
+
+  ```dart
+  final product = (
+    title: page.$('h1').text,
+    variants: page.$.all('.variant', (row) => (
+      name: row('.name').text,
+      sku: row.attr('data-sku'),
+    )),
+  );
+  product.variants.first.sku;   // String?
+  ```
+
+  `extract` stays — Rule 6 blesses a shorthand alongside the typed form, and it
+  is still the fastest way to look at an unfamiliar page. It is no longer the
+  only way to get data out with the type intact.
+
+- **`Field.when` and `Field.map`.** `when` applies a converter only when the
+  field found something, which is what a nullable reader and a
+  `String`-taking converter actually need; `map` is the unconditional form.
+  Between them they delete most calls to `Field.fn`.
+
+  ```dart
+  Field.text('.price').when(util.text.number);   // Field<num?>
+  ```
+
+  The `Field` hierarchy moved into the selector library, where it reads
+  elements rather than responses. `Field.map(schema)` — the static that built a
+  nested object — is now `Field.nest(schema)`, and `MapField` is `NestField`.
+
+- **`Opt<T>`: the CLI stops guessing.** `cli.get<T>(name, fallback)` switched on
+  `T == int` and `T == double` at runtime and fell through to a cast. A
+  declaration now returns the handle that reads it, so the type and the default
+  are settled in one place:
+
+  ```dart
+  final force = cli.flag('force', alias: 'f');       // Opt<bool>
+  final size = cli.number('concurrency', def: 4);    // Opt<int>
+  cli.parse(args);
+
+  if (force()) rebuild(concurrency: size());
+  ```
+
+  Six declarations — `flag`, `option`, `number`, `decimal`, `list`, `choice` —
+  and `choice` reads an enum, so the accepted spellings, the usage block and
+  the validation all come from the type. `Opt.given`, `Opt.count` and
+  `Opt.negated` replace `cli.has`, `cli.count` and `cli.no`. `cli.list` now
+  declares a repeated option, so the positionals moved to `cli.args`.
+  `cli.switches` is the parser's own answer for an argument list nobody
+  declared. A command handler returns `FutureOr<int>`.
+
+- **`Settled<R>`, sealed.** `Pool.settle` returned
+  `({R? value, Object? error, StackTrace? stack, bool isSuccess})` — four
+  fields where two were always null and a boolean said which two. It is now
+  `Done<R>` and `Broke<R>`, so the branch that has a value is the branch where
+  it is not nullable, and the switch is exhaustive. `PoolFailure<I>` became
+  `PoolFailure<I, R>` with `List<R?> results` instead of `List<dynamic>`.
+
+- **The three methods that took an `Object` and threw for the wrong shape.**
+  `crawl.save(sinkOrPath)` is `save(String path)` and `sink(IOSink)`.
+  `io.csv.format`, `write` and `pipe` take records; the cell-shaped twin is
+  `io.csv.cells`, which renders text `io.write` puts on disk — mirroring the
+  reads, which always split into `maps` and `matrix`. `io.json` gained an
+  optional parser, so a document can become a real type instead of a cast that
+  throws later.
+
+- **`Engine<dynamic>` is `Engine<T>`** on `Fetch`, `Page` and `Downloader`,
+  which all knew `T` already. Three casts came out with it.
+
+- **The jQuery selector engine is private.** `JQuerySelector.select` took an
+  `Object? root` and was hidden from the barrel export, but anything under
+  `lib/` is importable directly — so `package:dart_toolkit/net/selector.dart`
+  still exposed it. It is `_JQuery` now; use `$`, `res.$` or `QueryResult`.
+
+### Added
+
+- **`crawl.gather(map)`**, the single-stage terminal. The item type is inferred
+  from what the mapper returns rather than from an `emit` buried in a closure,
+  and returning nothing for a page filters it out:
+
+  ```dart
+  final titles = await net.crawl<Never>(seed)
+      .gather((page) => page.$('.title').texts);
+  // Future<List<String>>
+  ```
+
+- **`PLAN-2.0.0.md`**, the design record for this release.
+- **`test/typed_api_test.dart`**, which pins each thing that used to be
+  untyped against what it is now.
+
+### Note
+
+Declare a CLI interface inside `main`, not in a top-level `final`. A top-level
+`final` in Dart is lazy, so a declaration hidden in one does not exist when
+`run` builds `--help`. `example/tool.dart` shows the shape.
+
 ## 1.7.0
 
 Filling in the form, and ten things that were quietly wrong. `res.$('select').value`

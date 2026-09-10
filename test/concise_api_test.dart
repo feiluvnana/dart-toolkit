@@ -12,127 +12,154 @@ void main() {
         'extra1',
         'extra2',
       ]);
+      final force = cli.flag('force-compress', alias: 'f');
+      final size = cli.number('concurrency', def: 4);
+      final name = cli.option('name', def: 'default');
+      final missing = cli.number('missing', def: 42);
 
-      expect(cli.has('force-compress', 'f'), isTrue);
-      expect(cli.has('f'), isTrue);
-      expect(cli.has('no-compress', 'nc'), isFalse);
+      expect(force(), isTrue);
+      expect(size(), equals(8));
+      expect(name(), equals('Toolkit'));
+      expect(missing(), equals(42));
 
-      expect(cli.get('concurrency', 4), equals(8));
-      expect(cli.get('name', 'default'), equals('Toolkit'));
-      expect(cli.get('missing', 42), equals(42));
-
-      expect(cli.list(), equals(['extra1', 'extra2']));
+      expect(cli.args, equals(['extra1', 'extra2']));
     });
 
-    test('--no-x does not make has(x) true', () {
+    test('--no-x reads false and is not the same as being given', () {
       final cli = Cli(['--no-force']);
-      expect(cli.no('force'), isTrue);
-      expect(cli.has('force'), isFalse);
-      expect(cli.get<bool>('force', true), isFalse);
+      final force = cli.flag('force', def: true);
+
+      expect(force.negated(), isTrue);
+      expect(force.given(), isFalse);
+      expect(force(), isFalse);
     });
 
     test('an unparsed command line is empty, not the VM arguments', () {
       expect(Cli(const []).raw, isEmpty);
-      expect(Cli(const []).list(), isEmpty);
-      expect(Cli(const []).has('anything'), isFalse);
+      expect(Cli(const []).args, isEmpty);
+      expect(Cli(const []).switches, isEmpty);
     });
 
     test('short switches cluster, unless a declaration claims the token', () {
-      final bundle = Cli(['-abc', 'file.txt']);
-      expect(bundle.has('a'), isTrue);
-      expect(bundle.has('b'), isTrue);
-      expect(bundle.has('c'), isTrue);
-      expect(bundle.has('abc'), isFalse);
-      expect(bundle.list(), equals(['file.txt']));
+      // `switches` is the parser's own answer, before any declaration, which
+      // is the only way to watch a token that is deliberately undeclared.
+      expect(Cli(['-abc', 'file.txt']).switches.keys, ['a', 'b', 'c']);
+      expect(Cli(['-abc', 'file.txt']).args, equals(['file.txt']));
 
       // A cluster member declared with a value ends the cluster and takes one.
-      final valued =
-          Cli(['-vo', 'dist', 'target'])
-            ..flag('v')
-            ..option('o');
-      expect(valued.has('v'), isTrue);
-      expect(valued.get('o', ''), equals('dist'));
-      expect(valued.list(), equals(['target']));
+      final valued = Cli(['-vo', 'dist', 'target']);
+      final v = valued.flag('v');
+      final o = valued.option('o');
+      expect(v(), isTrue);
+      expect(o(), equals('dist'));
+      expect(valued.args, equals(['target']));
 
       // ...or the rest of the cluster itself.
-      final inline =
-          Cli(['-vodist'])
-            ..flag('v')
-            ..option('o');
-      expect(inline.get('o', ''), equals('dist'));
+      final inline = Cli(['-vodist']);
+      inline.flag('v');
+      expect(inline.option('o')(), equals('dist'));
 
       // A declared multi-letter short name is never split.
-      final whole = Cli(['-rf'])..flag('rf');
-      expect(whole.has('rf'), isTrue);
-      expect(whole.has('r'), isFalse);
+      final whole = Cli(['-rf']);
+      expect(whole.flag('rf')(), isTrue);
+      expect(whole.switches.keys, ['rf']);
 
       // Only all-letter tokens cluster.
-      expect(Cli(['-p8']).has('p8'), isTrue);
+      expect(Cli(['-p8']).switches.keys, ['p8']);
     });
 
     test('a declared flag does not swallow the next token', () {
       // Named `parsed`, not `cli`: the domain accessor is `cli` now, and this
       // test needs both it and a standalone `Cli` in one scope.
-      final parsed = Cli(['build', '--verbose', 'main.dart'])..flag('verbose');
+      final parsed = Cli(['build', '--verbose', 'main.dart']);
+      final verbose = parsed.flag('verbose');
       expect(parsed.command, equals('build'));
       expect(parsed.rest, equals(['main.dart']));
-      expect(parsed.has('verbose'), isTrue);
+      expect(verbose(), isTrue);
 
       // The same has to hold for declarations made before `parse`.
-      cli
-        ..flag('verbose', alias: 'v')
-        ..parse(['build', '--verbose', 'main.dart']);
+      final shared = cli.flag('verbose', alias: 'v');
+      cli.parse(['build', '--verbose', 'main.dart']);
       expect(cli.command, equals('build'));
       expect(cli.rest, equals(['main.dart']));
+      expect(shared(), isTrue);
+    });
+
+    test('an option resolves the command line, then env, then its default', () {
+      final cli = Cli(const <String>[]);
+      expect(cli.option('out', def: 'dist')(), equals('dist'));
+      expect(cli.number('workers', def: 4)(), equals(4));
+      expect(cli.decimal('rate', def: 1.5)(), closeTo(1.5, 0.001));
+      expect(cli.flag('cache', def: true)(), isTrue);
+
+      // The command line outranks the default.
+      expect(
+        (Cli(['--out', 'build']).option('out', def: 'dist'))(),
+        equals('build'),
+      );
+
+      system.env.set('OUT_DIR', 'from-env');
+      final env = Cli(const <String>[]);
+      final out = env.option('out', env: 'OUT_DIR', def: 'dist');
+      expect(out(), equals('from-env'));
+      // ...but the command line still wins over the environment.
+      final given = Cli(['--out', 'cli']).option('out', env: 'OUT_DIR');
+      expect(given(), equals('cli'));
+      // Reaching a value through env is not the same as it being given.
+      expect(out.given(), isFalse);
+      system.env.clear();
     });
 
     test(
-      'get resolves the command line, then env, then the declared default',
+      'a number that is not a number is reported, not silently defaulted',
       () {
-        final cli =
-            Cli(const <String>[])
-              ..option('out', def: 'dist')
-              ..option('workers', def: 4)
-              ..option('rate', def: 1.5)
-              ..flag('cache', def: true);
-        expect(cli.get('out', ''), equals('dist'));
-        expect(cli.get('workers', 0), equals(4));
-        expect(cli.get('rate', 0.0), closeTo(1.5, 0.001));
-        expect(cli.get('cache', false), isTrue);
+        // This is what `get('concurrency', 4)` used to do: hand back 4 and let
+        // the script run on a number nobody asked for.
+        final cli = Cli(['--concurrency=fast']);
+        final size = cli.number('concurrency', def: 4);
 
-        // A default declared as text still converts.
-        expect((Cli(const <String>[])..option('n', def: '8')).get('n', 0), 8);
-
-        // The command line outranks the default.
+        expect(size(), equals(4));
         expect(
-          (Cli(['--out', 'build'])..option('out', def: 'dist')).get('out', ''),
-          equals('build'),
+          () => cli.require(),
+          throwsA(
+            isA<ArgumentError>().having(
+              (e) => e.message.toString(),
+              'message',
+              allOf(contains('--concurrency'), contains('fast')),
+            ),
+          ),
         );
-
-        system.env.set('OUT_DIR', 'from-env');
-        final env = Cli(const <String>[])
-          ..option('out', env: 'OUT_DIR', def: 'dist');
-        expect(env.get('out', ''), equals('from-env'));
-        // ...but the command line still wins over the environment.
-        final given = Cli(['--out', 'cli'])..option('out', env: 'OUT_DIR');
-        expect(given.get('out', ''), equals('cli'));
-        // Reaching a value through env is not the same as it being given.
-        expect(env.has('out'), isFalse);
-        system.env.clear();
       },
     );
+
+    test('choice reads an enum, and refuses a name the enum does not have', () {
+      final ok = Cli(['--level=warn']);
+      final level = ok.choice('level', LogLevel.values, def: LogLevel.info);
+      expect(level(), LogLevel.warn);
+      expect(() => ok.require(), returnsNormally);
+
+      final absent = Cli(const <String>[]);
+      expect(
+        absent.choice('level', LogLevel.values, def: LogLevel.info)(),
+        LogLevel.info,
+      );
+
+      final bad = Cli(['--level=shout']);
+      bad.choice('level', LogLevel.values, def: LogLevel.info);
+      expect(() => bad.require(), throwsA(isA<ArgumentError>()));
+    });
 
     test('require accepts a default or an env variable as supplied', () {
       final withDef = Cli(const <String>[])
         ..option('out', def: 'dist', required: true);
       expect(() => withDef.require(), returnsNormally);
 
-      final withEnv = Cli(const <String>[])
-        ..option('token', env: 'API_TOKEN', required: true);
+      final withEnv = Cli(const <String>[]);
+      final token = withEnv.option('token', env: 'API_TOKEN', required: true);
       expect(() => withEnv.require(), throwsA(isA<ArgumentError>()));
       system.env.set('API_TOKEN', 'secret');
       expect(() => withEnv.require(), returnsNormally);
-      expect(withEnv.get('token', ''), equals('secret'));
+      expect(token(), equals('secret'));
       system.env.clear();
     });
 
@@ -155,13 +182,15 @@ void main() {
       expect(() => good.require(), returnsNormally);
     });
 
-    test('csv splits one value into repeats', () {
-      final cli = Cli(['--tag=a, b ,c', '--tag', 'd'])
-        ..option('tag', csv: true);
-      expect(cli.all<String>('tag'), equals(['a', 'b', 'c', 'd']));
+    test('list collects every occurrence, and csv splits one', () {
+      final cli = Cli(['--tag=a, b ,c', '--tag', 'd']);
+      expect(cli.list('tag', csv: true)(), equals(['a', 'b', 'c', 'd']));
 
       // Without csv the comma is just part of the value.
-      expect(Cli(['--tag=a,b']).all<String>('tag'), equals(['a,b']));
+      expect(Cli(['--tag=a,b']).list('tag')(), equals(['a,b']));
+
+      // Nothing given reads the declared default.
+      expect(Cli(const <String>[]).list('tag', def: const ['x'])(), ['x']);
     });
 
     test('strict names switches no declaration covers', () {
@@ -192,15 +221,21 @@ void main() {
       'run dispatches, scopes arguments and returns the exit code',
       () async {
         String? seen;
-        final cli = Cli(['build', 'main.dart', '--out', 'build', '-r'])
-          ..option('out', alias: 'o', def: 'dist', desc: 'Output directory');
-        cli
-            .handle('build', (sub) {
-              seen =
-                  '${sub.get('out', '')}|${sub.list()}|${sub.has('release')}';
-              return 0;
-            }, desc: 'Build the project')
-            .flag('release', alias: 'r', desc: 'Optimise');
+        final cli = Cli(['build', 'main.dart', '--out', 'build', '-r']);
+        final out = cli.option(
+          'out',
+          alias: 'o',
+          def: 'dist',
+          desc: 'Output directory',
+        );
+        late final Opt<bool> release;
+        final build = cli.handle('build', (sub) {
+          // A command's own option and a global one both read from the scope
+          // the handler was given, with no argument passed to either.
+          seen = '${out()}|${sub.args}|${release()}';
+          return 0;
+        }, desc: 'Build the project');
+        release = build.flag('release', alias: 'r', desc: 'Optimise');
 
         expect(await cli.run(syntax: 'tool'), equals(0));
         // The command name is gone from the positionals, and the global option
@@ -209,29 +244,47 @@ void main() {
       },
     );
 
+    test('a command option read outside its run says so', () {
+      final cli = Cli(const <String>[]);
+      final build = cli.handle('build', (_) => 0);
+      final out = build.option('out', def: 'dist');
+
+      expect(
+        out.call,
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('is not running'),
+          ),
+        ),
+      );
+      // ...and reads fine against a Cli handed to it directly.
+      expect(out(Cli(['--out', 'x'])..option('out')), equals('x'));
+    });
+
     test('run resolves nested commands under a group', () async {
       var ran = '';
       final cli = Cli(['remote', 'add', 'origin', '--url=git@example.com']);
       final remote = cli.group('remote', desc: 'Manage remotes');
-      remote
-          .handle('add', (sub) {
-            ran = '${sub.get('url', '')}|${sub.list()}';
-            return 0;
-          }, desc: 'Add a remote')
-          .option('url', required: true);
+      late final Opt<String> url;
+      final add = remote.handle('add', (sub) {
+        ran = '${url()}|${sub.args}';
+        return 0;
+      }, desc: 'Add a remote');
+      url = add.option('url', required: true);
       remote.handle('rm', (_) => 0, desc: 'Remove a remote');
 
       expect(await cli.run(syntax: 'tool'), equals(0));
       expect(ran, equals('git@example.com|[origin]'));
     });
 
-    test('a handler result becomes the exit code', () async {
-      Future<int> run(Object? result) =>
+    test('a handler returns the exit code', () async {
+      Future<int> run(int result) =>
           (Cli(['go'])..handle('go', (_) => result)).run(syntax: 'tool');
 
-      expect(await run(null), equals(0));
-      expect(await run(true), equals(0));
-      expect(await run(false), equals(1));
+      expect(await run(0), equals(0));
+      expect(await run(1), equals(1));
       expect(await run(3), equals(3));
     });
 
@@ -275,12 +328,13 @@ void main() {
 
     test('run falls back to body when no command matches', () async {
       var seen = '';
-      final cli = Cli(['--out', 'x'])..option('out', desc: 'Output');
+      final cli = Cli(['--out', 'x']);
+      final out = cli.option('out', desc: 'Output');
       final code = await cli.run(
         syntax: 'tool',
         body: (sub) {
-          seen = sub.get('out', '');
-          return null;
+          seen = out();
+          return 0;
         },
       );
       expect(code, equals(0));
@@ -374,7 +428,7 @@ void main() {
             if (i.isEven) throw StateError('even $i');
             return i;
           }),
-          throwsA(isA<PoolFailure<int>>()),
+          throwsA(isA<PoolFailure<int, int>>()),
         );
         // Every item was attempted, not just the ones before the first failure.
         expect(seen, equals([2, 4]));
@@ -382,7 +436,7 @@ void main() {
     );
   });
 
-  group('Selector & Response extensions', () {
+  group('Selector & Page extensions', () {
     const html = '''
       <div class="box active">
         <a href="/track/1.mp3">Track 1</a>
@@ -424,9 +478,9 @@ void main() {
       expect(q.find('a').matching(r'[href$=".mp3"]').length, equals(1));
     });
 
-    test('Response provides QueryResult via \$ and \$xpath', () {
-      final res = Response<void>(
-        request: Request<void>(Uri.parse('https://example.com/sub/index.html')),
+    test('Page provides QueryResult via \$ and \$xpath', () {
+      final res = Page<void>(
+        fetch: Fetch<void>(Uri.parse('https://example.com/sub/index.html')),
         bytes: html.codeUnits,
       );
 
@@ -436,9 +490,7 @@ void main() {
     });
 
     test('emit without an engine explains itself', () {
-      final res = Response<String>(
-        request: Request<String>('https://example.com'.url),
-      );
+      final res = Page<String>(fetch: Fetch<String>('https://example.com'.url));
       expect(
         () => res.emit('x'),
         throwsA(
@@ -508,8 +560,8 @@ void main() {
       expect(engine.running, isFalse);
     });
 
-    test('an independent HttpClient carries its own settings', () async {
-      final client = HttpClient(base: 'output', retries: 5);
+    test('an independent Fetcher carries its own settings', () async {
+      final client = Fetcher(base: 'output', retries: 5);
       expect(client.base, equals('output'));
       expect(client.retries, equals(5));
       await client.close();

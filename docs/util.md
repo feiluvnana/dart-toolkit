@@ -43,7 +43,7 @@ await util.time.wait(const Duration(hours: 1));
 
 ```dart
 net.crawl<String>(url).delay(500.ms);
-HttpClient(timeout: 10.seconds);
+Fetcher(timeout: 10.seconds);
 ```
 
 ### Measuring

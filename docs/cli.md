@@ -4,6 +4,9 @@ A dependency-free command line parser: flags, options, clustered short
 switches, subcommands, defaults, environment fallbacks, automatic help and
 strict validation.
 
+Declaring an option hands back an `Opt<T>`. Calling it reads the value. The
+type and the default are settled at the declaration and nowhere else.
+
 ---
 
 ## Quick Overview
@@ -14,43 +17,48 @@ Two ways in. Declare an interface and read it yourself:
 import 'package:dart_toolkit/dart_toolkit.dart';
 
 void main(List<String> args) {
-  cli
-    ..flag('force', alias: 'f', desc: 'Overwrite existing files')
-    ..option('concurrency', alias: 'c', desc: 'Worker count', def: 4)
-    ..parse(args);
+  final force = cli.flag('force', alias: 'f', desc: 'Overwrite existing files');
+  final size = cli.number('concurrency', alias: 'c', desc: 'Worker count', def: 4);
+  cli.parse(args);
 
-  final force = cli.has('force');
-  final size = cli.get('concurrency', 0); // 4 unless given
-  print('force: $force, workers: $size, files: ${cli.list()}');
+  print('force: ${force()}, workers: ${size()}, files: ${cli.args}');
 }
 ```
 
 Or declare commands and let `run` do the rest — parse, print `--help`,
-validate, pick the handler and turn what it returns into an exit code:
+validate, pick the handler and return its exit code:
 
 ```dart
 import 'package:dart_toolkit/dart_toolkit.dart';
 
+late final Opt<String> out;
+late final Opt<int> workers;
+
 Future<int> build(Cli cli) async {
-  print('building ${cli.get('out', '')} with ${cli.get('workers', 0)}');
+  print('building ${out()} with ${workers()}');
   return 0;
 }
 
 void main(List<String> args) async {
-  cli.option('out', alias: 'o', desc: 'Output directory', def: 'dist');
-
-  cli.handle('build', build, desc: 'Build the project')
-    ..option('workers', alias: 'w', desc: 'Parallel workers', def: 4);
+  out = cli.option('out', alias: 'o', desc: 'Output directory', def: 'dist');
+  final command = cli.handle('build', build, desc: 'Build the project');
+  workers = command.number('workers', alias: 'w', desc: 'Parallel workers', def: 4);
 
   await system.shutdown(await cli.run(args, version: '1.1.0'));
 }
 ```
 
-Call `parse` before reading arguments; `run` calls it for you. Declarations
-(`flag`, `option`, `handle`, `group`) can be registered in any order, but they
-must exist before parsing — declaring is what tells the parser that
-`--verbose main.dart` is a flag plus a positional rather than an option and its
-value.
+Call `parse` before reading arguments; `run` calls it for you. Declarations can
+be registered in any order, but they must exist before parsing — declaring is
+what tells the parser that `--verbose main.dart` is a flag plus a positional
+rather than an option and its value.
+
+> **Declare inside `main`.** A top-level `final` in Dart is lazy: it runs its
+> initialiser the first time something reads it. A declaration hidden in one
+> would not exist when `run` builds `--help`, so the option would be missing
+> from the usage block and from `strict` and `require`. Declare in `main` (or a
+> function it calls) and keep the handles in `late final` top-level variables,
+> as above.
 
 ---
 
@@ -78,44 +86,67 @@ multi-letter short name is never split once you declare it: declare
 
 ---
 
-## 2. Declaring Flags and Options
+## 2. Declaring
+
+Six declarations, one per shape a value can have. Each returns the `Opt<T>`
+that reads it.
 
 ```dart
-cli
-  ..flag('verbose', alias: 'v', desc: 'Enable debug output')
-  ..option('output', alias: 'o', desc: 'Destination directory', def: 'dist')
-  ..option('mode', desc: 'Build mode', allowed: ['debug', 'release'])
-  ..option('token', desc: 'API token', env: 'API_TOKEN', required: true)
-  ..option('tag', desc: 'Repeatable tag', csv: true);
+final verbose = cli.flag('verbose', alias: 'v', desc: 'Enable debug output');
+final out = cli.option('output', alias: 'o', desc: 'Destination', def: 'dist');
+final size = cli.number('concurrency', alias: 'c', desc: 'Workers', def: 4);
+final rate = cli.decimal('rate', desc: 'Requests per second', def: 1.5);
+final tags = cli.list('tag', desc: 'Repeatable tag', csv: true);
+final mode = cli.choice('mode', Mode.values, def: Mode.debug, desc: 'Build mode');
 ```
+
+| Declaration | Reads |
+| :--- | :--- |
+| `flag` | `Opt<bool>` |
+| `option` | `Opt<String>` |
+| `number` | `Opt<int>` |
+| `decimal` | `Opt<double>` |
+| `list` | `Opt<List<String>>` |
+| `choice` | `Opt<E>` for an enum `E` |
 
 | Parameter | Effect |
 | :--- | :--- |
-| `alias` | A short name, honoured by every later `get`, `has` and `all` |
+| `alias` | A short name, honoured wherever the option is read |
 | `desc` | The description printed in the usage block |
-| `def` | The value `get` reports when the argument is absent |
+| `def` | What the option reads when nothing supplied a value |
 | `required` | `require` throws when nothing supplies a value |
 | `allowed` | `require` throws when a given value is not in the list |
-| `env` | An environment variable to read when the argument is absent — on `flag` as well as `option`, so a boolean can come from the shell |
-| `csv` | Splits one comma-separated value into repeats for `all` |
+| `env` | An environment variable to read when the argument is absent — on `flag` as well, so a boolean can come from the shell |
+| `csv` | On `list`: splits one comma-separated value into repeats |
 
 A flag never consumes the token after it, so declaring `verbose` is what keeps
 `main.dart` a positional in `--verbose main.dart`.
 
+`choice` takes the enum's own values, so the accepted spellings, the usage
+block and the validation all come from the type rather than a second list that
+can drift from it.
+
 ### Value Resolution
 
-`get` tries each source in turn — the command line, then `env`, then `def`,
-then the fallback at the call site:
+Calling an `Opt` tries each source in turn — the command line, then `env`, then
+the declared `def`:
 
 ```dart
-cli.option('out', def: 'dist', env: 'OUT_DIR');
+final out = cli.option('out', def: 'dist', env: 'OUT_DIR');
 
-cli.get('out', '');  // 'dist', or $OUT_DIR, or whatever --out gave
+out();          // whatever --out gave, else $OUT_DIR, else 'dist'
+out.given();    // did the *command line* carry it?
+out.count();    // how many times
 ```
 
 Because the default lives in the declaration, it is written once instead of at
-every call site. `has` stays literal: it asks only what the *command line*
+every call site. `given` stays literal: it asks only what the command line
 carried, so a value that arrived through `env` or `def` does not make it true.
+
+An option declared on a `Command` reads from the scope that command was run
+with, so a handler calls it with no argument. Outside its run there is nothing
+to read and it throws `StateError` — pass a `Cli` explicitly if you need one:
+`out(someCli)`.
 
 ---
 
@@ -124,22 +155,27 @@ carried, so a value that arrived through `env` or `def` does not make it true.
 ### `require([names])`
 
 Checks that every option declared `required: true` — or just `names` — resolved
-to a value, and that every value given is within its `allowed` list. A `def`,
-or an `env` variable that is set, counts as supplied. Throws `ArgumentError`
-naming everything that failed.
+to a value, that every value given is within its `allowed` list, and that every
+value given for a `number` or `decimal` is actually one. A `def`, or an `env`
+variable that is set, counts as supplied. Throws `ArgumentError` naming
+everything that failed.
 
 ```dart
 cli
   ..option('output', required: true)
   ..option('mode', allowed: ['debug', 'release'])
+  ..number('concurrency', def: 4)
   ..parse(args);
 
 try {
   cli.require();
 } on ArgumentError catch (error) {
-  print(error.message);   // missing --output, --mode must be one of debug, ...
+  print(error.message);   // missing --output, --concurrency must be a number...
 }
 ```
+
+That last check is the one worth having: `--concurrency=fast` used to read back
+as the default and run on four workers without a word.
 
 ### `strict()` and `unknown()`
 
@@ -164,21 +200,25 @@ cli.strict();           // throws ArgumentError
 uses are declared right there. Nest with `group`.
 
 ```dart
-Future<int> add(Cli cli) async => 0;
+late final Opt<bool> verbose;
+late final Opt<bool> release;
+late final Opt<String> url;
 
 void main(List<String> args) async {
-  cli.flag('verbose', alias: 'v', desc: 'Log every step');
+  verbose = cli.flag('verbose', alias: 'v', desc: 'Log every step');
 
-  cli.handle('build', (cli) async => 0, desc: 'Build the project')
-    ..flag('release', desc: 'Optimise the output')
-    ..option('out', alias: 'o', def: 'dist');
+  final build = cli.handle('build', _build, desc: 'Build the project');
+  release = build.flag('release', desc: 'Optimise the output');
 
   final remote = cli.group('remote', desc: 'Manage remotes');
-  remote.handle('add', add, desc: 'Add a remote')
-    ..option('url', required: true);
+  final add = remote.handle('add', _add, desc: 'Add a remote');
+  url = add.option('url', required: true);
 
   await system.shutdown(await cli.run(args));
 }
+
+Future<int> _build(Cli cli) async => release() && verbose() ? 0 : 1;
+Future<int> _add(Cli cli) async => url().isEmpty ? 1 : 0;
 ```
 
 `tool remote add origin --url git@host -v` resolves `remote add`, hands the
@@ -206,7 +246,7 @@ In order, `run`:
    the global ones,
 3. prints `--help` or `--version` if asked and returns `0`,
 4. applies `strict` and `require`,
-5. awaits the handler and converts its result to an exit code.
+5. awaits the handler and returns what it returned.
 
 `--help`, `-h` and `--version` are declared automatically unless you declare
 them yourself. `body` is what lets a script with no commands at all still get
@@ -214,16 +254,11 @@ automatic help and validation.
 
 ### Exit Codes
 
-| Return | Exit code |
-| :--- | :--- |
-| `null` or `true` | `0` |
-| `false` | `1` |
-| `int` | as given |
-| a command line `run` could not understand | `Cli.usageExit` (`64`) |
-
-`run` prints the reason and the usage block to stderr before returning
-`Cli.usageExit`. Only `ArgumentError` is caught, so a genuine failure inside a
-handler still reaches the caller with its stack trace intact.
+A handler returns `FutureOr<int>`, and that number is the exit code. A command
+line `run` could not understand returns `Cli.usageExit` (`64`) after printing
+the reason and the usage block to stderr. Only `ArgumentError` is caught, so a
+genuine failure inside a handler still reaches the caller with its stack trace
+intact.
 
 ### `subcommand`
 
@@ -238,77 +273,54 @@ cli.subcommand('commit', (sub) => print(sub.rest));
 
 ---
 
-## 5. Reading Values
+## 5. Reading
 
-### `get<T>(name, fallback, [alias])`
-
-`T` is inferred from `fallback`, which is required — so the result is never
-null and never needs an explicit type argument:
+Everything declared is read through its `Opt`:
 
 ```dart
-cli.get('concurrency', 4);      // int
-cli.get('name', '');            // String
-cli.get('rate', 1.5);           // double
-cli.get('cache', true);         // bool
+final verbose = cli.flag('verbose', alias: 'v');
+final size = cli.number('concurrency', def: 4);
+final tags = cli.list('tag', csv: true);
+
+verbose();          // bool
+size();             // int
+tags();             // List<String>
+
+verbose.count();    // how many times: -vvv counts three
+verbose.given();    // was it on the command line at all
+verbose.negated();  // was --no-verbose given
 ```
 
-For `bool`, `--no-x` yields `false`, a bare `--x` yields `true`, and
-`--x=true|1` is honoured.
-
-### `has(name, [alias])`
+`count` is how a command line spells a level:
 
 ```dart
-cli.has('force', 'f');    // --force or -f
-```
-
-> `--no-force` does **not** make `has('force')` true. Test for the negative
-> form with `no('force')`, or read the boolean with `get('force', true)`.
-
-### `no(name)`
-
-```dart
-cli.no('cache');    // --no-cache or --nocache
-```
-
-### `count(name, [alias])`
-
-How many times a switch was given, which is how a command line spells a level.
-`-vvv` and `--verbose --verbose --verbose` both count three:
-
-```dart
-cli.flag('verbose', alias: 'v');
-
-system.console.logger.level = switch (cli.count('verbose')) {
+system.console.logger.level = switch (verbose.count()) {
   0 => LogLevel.warn,
   1 => LogLevel.info,
   _ => LogLevel.debug,
 };
 ```
 
-Zero when the switch was never given, so it reads as `has` with a number
-attached.
-
-### `all<T>(name, [alias])`
-
-Every value of a repeated option. An option declared `csv: true` contributes
-each comma-separated part, so `--tag a,b` and `--tag a --tag b` read the same:
+### Positionals and the raw line
 
 ```dart
-// --tag a --tag b
-cli.all<String>('tag');   // ['a', 'b']
-// --id 1 --id 2
-cli.all<int>('id');       // [1, 2]
+cli.args;   // positional arguments, in order
+cli.rest;   // positionals after the subcommand name
+cli.raw;    // the argument list exactly as parsed
 ```
 
-### `list()` and `raw`
+### `switches`
+
+The parser's own answer, before any declaration is consulted — names without
+dashes, in the order they were first seen, each with the value it was given:
 
 ```dart
-cli.list();   // positional arguments, in order
-cli.raw;      // the argument list exactly as parsed
+Cli(['-abc', 'x']).switches.keys;   // ('a', 'b', 'c')
+Cli(['--out=dist']).switches;       // {'out': 'dist'}
 ```
 
-Leading dashes are optional: `has('--force')` and `has('force')` are identical
-queries.
+This is for inspecting an argument list you did not declare. Reading a declared
+option is `Opt`'s job, and keeps the type.
 
 ---
 
@@ -368,13 +380,13 @@ tree is testable without touching the global accessor or the process exit code:
 ```dart
 Future<void> main() async {
   final cli = Cli(['--mode=release', '-v', 'target.dart']);
-  assert(cli.get('mode', '') == 'release');
-  assert(cli.list().contains('target.dart'));
+  assert(cli.option('mode')() == 'release');
+  assert(cli.args.contains('target.dart'));
 
   var built = '';
   final app = Cli(['build', 'main.dart']);
   app.handle('build', (sub) {
-    built = sub.list().join();
+    built = sub.args.join();
     return 0;
   });
   assert(await app.run() == 0);

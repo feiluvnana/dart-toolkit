@@ -395,8 +395,13 @@ class Fs {
   }
 
   /// Reads and decodes the JSON document at [path] as [T] without blocking.
-  static Future<T> jsonAsync<T>(String path) async =>
-      jsonDecode(await File(path).readAsString()) as T;
+  static Future<T> jsonAsync<T>(
+    String path, [
+    T Function(Object? raw)? parse,
+  ]) async {
+    final decoded = jsonDecode(await File(path).readAsString());
+    return parse != null ? parse(decoded) : decoded as T;
+  }
 
   /// Streams [url] to [path] atomically via a `.part` staging file.
   ///
@@ -486,8 +491,10 @@ class Fs {
   }
 
   /// Reads and decodes the JSON document at [path] as [T].
-  static T json<T>(String path) =>
-      jsonDecode(File(path).readAsStringSync()) as T;
+  static T json<T>(String path, [T Function(Object? raw)? parse]) {
+    final decoded = jsonDecode(File(path).readAsStringSync());
+    return parse != null ? parse(decoded) : decoded as T;
+  }
 
   /// Streams [path] as decoded lines, without loading the whole file.
   static Stream<String> lines(String path, {Encoding encoding = utf8}) => File(

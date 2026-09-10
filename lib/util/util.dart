@@ -18,6 +18,7 @@ import 'time.dart';
 export 'extensions.dart';
 export 'hash.dart';
 export 'rand.dart';
+export 'slot.dart';
 export 'size.dart';
 export 'text.dart';
 export 'time.dart';

@@ -14,7 +14,7 @@ following it is what keeps the surface small enough to hold in your head.
 | `net` | The network: requests, downloads, crawling, parsing what comes back and filling in what it carries | `net.http`, `net.crawl` |
 | `system` | This program and the machine running it | `system.env`, `system.console`, `system.on` |
 | `concurrent` | Bounded async work on one isolate | — |
-| `util` | Pure computation | `util.time`, `util.size`, `util.text`, `util.hash`, `util.rand` |
+| `util` | Pure computation, and the typed keys (`Slot`, `Meta`) that carry values through a JSON map | `util.time`, `util.size`, `util.text`, `util.hash`, `util.rand` |
 | `cli` | The command line your script presents to whoever runs it | — |
 | `tool` | One wrapped executable or file format per name | `tool.git`, `tool.zip` |
 | `$` / `$xpath` | Selectors, opt-in via `package:dart_toolkit/selector.dart` | — |
@@ -182,12 +182,12 @@ Three names are exempt, because they are contracts rather than choices:
   `isNotEmpty`, `iterator`, `length`, `noSuchMethod`, `toJson`.
 - Third-party members you are calling, not declaring — `element.outerHtml`,
   `request.followRedirects`.
-- Type names, which stay `UpperCamelCase` as Dart requires: `HttpResponse`,
+- Type names, which stay `UpperCamelCase` as Dart requires: `Reply`,
   `CookieJar`, `QueryResult`.
 
 Anything that cannot follow the rule and is not one of those three should be
-private instead. `HttpResponse.extractFromElement` became `_extractFrom`;
-`Cookie.parseAll` and `Cookie.defaultPath` became private; the tuning constants
+private instead. `Reply.extractFromElement` became `Field.readAll` when the extraction types moved to the selector library;
+`Morsel.parseAll` and `Morsel.defaultPath` became private; the tuning constants
 behind the bounded caches are `_emitBufferLimit` and friends. If a name is not
 worth spelling well, it is not worth exporting.
 
@@ -221,6 +221,27 @@ algorithms and extraction fields are sealed types and enums — `Body`, `Algo`,
 runtime. No `Object` or `dynamic` in a public signature unless the value really
 is arbitrary JSON.
 
+### The exemptions that stand
+
+Four public signatures still say `Object?`, and each is the case the rule
+exempts — a value that really is arbitrary. They are listed here so the next
+sweep does not re-litigate them:
+
+| Signature | Why |
+| :--- | :--- |
+| `Body.json(Object? data)` | Anything `jsonEncode` accepts. A type here would be a JSON type, which Dart does not have. |
+| `io.dump(path, Object? data)` | The same, on the way to a file. |
+| `Table.add(List<Object?> row)` | Cells are rendered with `toString`; that *is* the contract. |
+| `logger.info(msg, fields: {...})` | Structured log fields, encoded straight to JSON. |
+| `Meta.raw`, `Store.all()` | The escape hatch under a typed API, deliberately shaped like the JSON it holds. |
+| `res.extract(schema)`, `Field.of`, `NestField`, `ListField` | The string shorthand, which this rule blesses *alongside* the typed form. Its whole job is to accept a loose spec; `all`/`one`/`pick` are the typed twin. |
+
+Everything else that used to claim the exemption was closed in 2.0.0 — see
+`PLAN-2.0.0.md`. `Fetch.meta` and `io.store` became `Slot` keys, `res.extract`
+gained a typed twin in records and `Field`, `cli.get<T>` became `Opt`,
+`Pool.settle` became a sealed `Settled`, and the methods that took an `Object`
+and threw `ArgumentError` for the wrong shape were split in two.
+
 Where a shorthand is genuinely more ergonomic, it goes *alongside* the typed
 form rather than replacing it: `res.extract` takes the string schema,
 `res.pick(Field.text(...))` takes the typed one, and they mix in one call.
@@ -238,33 +259,38 @@ The analyzer only complains where a name is *used*, though, which is why
 running the test on two names found two names. Running it on all 102 exported
 types found three more.
 
-### Known collisions
+### Resolved in 2.0.0
 
-| Name | Collides with | What happens |
-| :--- | :--- | :--- |
-| `HttpClient` | `dart:io` | The package import wins, silently |
-| `HttpResponse` | `dart:io` | The package import wins, silently |
-| `Cookie` | `dart:io` | The package import wins, silently |
-| `Request` | `package:http` | `ambiguous_import`, on use |
-| `Response` | `package:http` | `ambiguous_import`, on use |
+1.7.0 recorded five exported type names that failed this rule and renamed none
+of them, because the fix was a rename of the library's most-used vocabulary.
+2.0.0 spent it.
 
-All five fail Rule 6 as written, and the first three fail it the way
-`Process<T>` did — no diagnostic at all. They are recorded here rather than
-renamed because the fix is a rename of the library's most-used vocabulary, and
-1.7.0 is not the release to spend that in. It is owed at 2.0.0.
+| 1.x name | Collided with | What used to happen | 2.0.0 name |
+| :--- | :--- | :--- | :--- |
+| `HttpClient` | `dart:io` | The package import won, silently | `Fetcher` |
+| `HttpResponse` | `dart:io` | The package import won, silently | `Reply` |
+| `Cookie` | `dart:io` | The package import won, silently | `Morsel` |
+| `Request<T>` | `package:http` | `ambiguous_import`, on use | `Fetch<T>` |
+| `Response<T>` | `package:http` | `ambiguous_import`, on use | `Page<T>` |
 
-Until then the collision is survivable in both directions: `dart:io`'s three
-are reachable by hiding this library's, and `package:http` is normally
-imported prefixed anyway.
+The first three were the dangerous ones: no diagnostic at all, the way
+`Process<T>` failed before 1.6.0. A file importing `dart:io` and this library
+together got this library's `HttpClient` and was never told.
+
+`CookieJar` keeps its name — it collides with nothing, and it says what it
+holds. The jar/morsel pairing is `http.cookies`', which is where `Morsel`
+comes from.
+
+So the `hide` clause 1.7.0 needed is gone:
 
 ```dart
-import 'dart:io' hide HttpClient, HttpResponse, Cookie;
-import 'package:dart_toolkit/dart_toolkit.dart';
+import 'dart:io';                                  // HttpClient is dart:io's
+import 'package:dart_toolkit/dart_toolkit.dart';   // Fetcher is this one's
 ```
 
 The pin is in `test/regression_test.dart`, which imports `dart:io` both
-unprefixed and as `dart_io` and names all three, so the 2.0.0 rename has
-something to break.
+unprefixed and as `dart_io` and asserts that the unprefixed names now resolve
+to `dart:io`'s.
 
 New names still have to pass the rule outright. The sweep is a script, not a
 judgement: list every exported `class`, `enum`, `typedef` and `extension`, and
@@ -302,7 +328,7 @@ every package in `pubspec.yaml`.
 | `Fs`, `Sys`, `Exit` | Unexported, `lib/src/` | Implementation behind `io` and `system`; never a public name |
 | Hash algorithm enum | `Digest` became `Algo` | `Digest` was an `ambiguous_import` error against `package:crypto`, whose `Digest` is a hash *result* where this one selects an *algorithm*. `lib/src/fs.dart` was already writing `crypto.Digest` to name the other one |
 | A pipeline's page handler | `Process<T>` became `Handler<T>` | Dart resolves a package import over a `dart:` one silently, so exporting `Process` meant `Process` stopped meaning `dart:io`'s for every user of the library — while `system.adopt(Process)` still meant that one. A shadow with no error is worse than a collision with one |
-| HTTP caching | `HttpCache` type, `HttpClient(cache:)`, `crawl.cache(dir)` | A whole tool by Rule 2's first test, but entangled with `net.http` by its second: the client is what decides to revalidate. So a type in `net` and an option on the two things that fetch, not a domain and not a namespace |
+| HTTP caching | `HttpCache` type, `Fetcher(cache:)`, `crawl.cache(dir)` | A whole tool by Rule 2's first test, but entangled with `net.http` by its second: the client is what decides to revalidate. So a type in `net` and an option on the two things that fetch, not a domain and not a namespace |
 | A crawl's position | `Snapshot` + `Engine.snapshot`/`restore`, `crawl.resume(path)` | The type is the noun, the engine pair is the operation, and `resume` is the two of them wired to a file. `save` was taken by "write items to", and Rule 5 forbids a second meaning for it |
 | A request that failed | `Failure`, passed to `on.error` | A count without the pages is not an answer. Widening the handler's argument list would have fixed one question and left the next one — an attempt number, a response — needing another break, so the argument is a type |
 | Streaming CSV out | `io.csv.pipe`, beside `write` | Different behaviour, not an alias: `write` takes a collection, `pipe` takes a `Stream` and holds one row. A `CsvWriter` you open and close would have been a new noun and a lifecycle to get wrong |

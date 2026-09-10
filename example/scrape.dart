@@ -14,7 +14,7 @@ void main() async {
 
   // A response parsed from a string behaves exactly like one off the wire, so
   // the rest of this file runs offline.
-  final res = HttpResponse.text(_page, url: 'https://shop.test/p/1'.url);
+  final res = Reply.text(_page, url: 'https://shop.test/p/1'.url);
 
   // --------------------------------------------------------------- selectors
   // `res.$` is a jQuery-like selector over the parsed body. It returns a
@@ -100,7 +100,7 @@ void main() async {
 
   // A client of your own: headers, timeout, retries, a body-size cap, and a
   // cookie jar that makes it a session. Close it when done.
-  final client = HttpClient(
+  final client = Fetcher(
     headers: {'User-Agent': 'ExampleBot/1.0'},
     timeout: 15.s,
     retries: 3,

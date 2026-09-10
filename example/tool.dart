@@ -11,32 +11,66 @@
 import 'package:dart_toolkit/dart_toolkit.dart';
 
 final log = system.console.logger;
-final out = system.console.writer;
+final writer = system.console.writer;
+
+// The interface this script presents. Declaring an option hands back an
+// `Opt<T>`; calling it reads the value. Nothing downstream repeats the type or
+// the default, and nothing downstream can ask for the wrong one.
+//
+// The declarations sit in `_declare`, called first thing in `main`, rather
+// than in the initialisers of these variables: a top-level `final` in Dart is
+// lazy, so nothing would be declared until something read it — and `--help`
+// would print an empty list of options.
+late final Opt<bool> verbose;
+late final Opt<bool> yes;
+late final Opt<String> dest;
+late final Opt<String> token;
+late final Opt<int> workers;
+late final Opt<Mode> mode;
+
+void _declare() {
+  verbose = cli.flag('verbose', alias: 'v', desc: 'Log every step');
+  yes = cli.flag('yes', alias: 'y', desc: 'Skip confirmation prompts');
+  dest = cli.option('out', alias: 'o', desc: 'Output directory', def: 'dist');
+  token = cli.option(
+    'token',
+    desc: 'API token',
+    env: 'API_TOKEN',
+    required: true,
+  );
+
+  // A command's own options are declared on it, and read from the scope its
+  // handler is given.
+  final build = cli.handle('build', _build, desc: 'Build every target');
+  workers = build.number(
+    'concurrency',
+    alias: 'c',
+    desc: 'Parallel workers',
+    def: 4,
+  );
+  mode = build.choice('mode', Mode.values, def: Mode.debug, desc: 'Build mode');
+
+  cli.handle('clean', _clean, desc: 'Remove the output directory');
+  cli.handle('report', _report, desc: 'Summarise what was built');
+}
+
+/// How a build is compiled.
+enum Mode {
+  /// Unoptimised, with assertions on.
+  debug,
+
+  /// Optimised.
+  release,
+}
 
 void main(List<String> args) async {
   // `.env` fills in what the shell did not, so `--token` stays required in the
   // declaration while `API_TOKEN` satisfies it in practice.
   system.env.load();
 
-  // Declare once. `--help`, `--version` and validation all read these, and an
-  // alias given here is honoured by every later `get` and `has`.
-  cli
-    ..flag('verbose', alias: 'v', desc: 'Log every step')
-    ..flag('yes', alias: 'y', desc: 'Skip confirmation prompts')
-    ..option('out', alias: 'o', desc: 'Output directory', def: 'dist')
-    ..option('token', desc: 'API token', env: 'API_TOKEN', required: true);
-
-  // Each command carries the arguments only it uses.
-  cli.handle('build', _build, desc: 'Build every target')
-    ..option('concurrency', alias: 'c', desc: 'Parallel workers', def: 4)
-    ..option(
-      'mode',
-      desc: 'Build mode',
-      allowed: ['debug', 'release'],
-      def: 'debug',
-    );
-  cli.handle('clean', _clean, desc: 'Remove the output directory');
-  cli.handle('report', _report, desc: 'Summarise what was built');
+  // Declare the whole interface before anything reads it: `--help`,
+  // `--version`, `strict` and `require` all work off these declarations.
+  _declare();
 
   // Anything tracked here is cleaned up on Ctrl-C as well as on a normal exit.
   system.on.exit(() async {
@@ -59,16 +93,15 @@ void main(List<String> args) async {
 
 // ---------------------------------------------------------------------------
 
-Future<bool> _build(Cli cli) async {
-  if (cli.has('verbose')) log.level = LogLevel.debug;
+Future<int> _build(Cli cli) async {
+  if (verbose()) log.level = LogLevel.debug;
 
-  // Defaults live in the declaration, so reading one takes no second copy.
-  final dest = cli.get('out', '');
-  final size = cli.get('concurrency', 0);
-  final targets =
-      cli.list().isEmpty ? const ['app', 'worker', 'cli'] : cli.list();
+  // No fallback, no type argument, no cast: the declaration said all of it.
+  final into = dest();
+  final size = workers();
+  final targets = cli.args.isEmpty ? const ['app', 'worker', 'cli'] : cli.args;
 
-  out.rule('build (${cli.get('mode', '')})');
+  writer.rule('build (${mode().name})');
 
   // A spinner for work with no measurable total.
   final spinner = system.console.spinner()..start('Resolving dependencies');
@@ -86,73 +119,81 @@ Future<bool> _build(Cli cli) async {
     if (target == 'worker' && util.rand.chance(0.3)) {
       throw StateError('$target failed to link');
     }
-    io.write(io.join(dest, '$target.txt'), 'built ${util.time.iso()}');
+    io.write(io.join(into, '$target.txt'), 'built ${util.time.iso()}');
     return target;
   });
   bar.done('Build finished.');
 
   final failed = results.where((r) => !r.ok).toList();
-  out.table(
+  writer.table(
     Table(headers: ['Target', 'Result'])..addAll([
-      for (final (i, r) in results.indexed)
-        [targets[i], r.ok ? 'ok' : '${r.error}'],
+      for (final (i, result) in results.indexed)
+        [
+          targets[i],
+          switch (result) {
+            Done() => 'ok',
+            Broke(:final error) => '$error',
+          },
+        ],
     ]),
   );
 
   if (failed.isEmpty) {
-    log.ok('Built ${targets.length} targets into $dest/');
-    return true;
+    log.ok(
+      'Built ${targets.length} targets into $into/ with ${token().isEmpty ? 'no' : 'an'} API token',
+    );
+    return 0;
   }
   log.error('${failed.length} of ${targets.length} targets failed.');
-  return false;
+  return 1;
 }
 
-Future<bool> _clean(Cli cli) async {
-  final dest = cli.get('out', '');
-  if (!io.has(io.join(dest, 'app.txt')) && io.find(dest).isEmpty) {
+Future<int> _clean(Cli cli) async {
+  final into = dest();
+  if (!io.has(io.join(into, 'app.txt')) && io.find(into).isEmpty) {
     log.info('Nothing to clean.');
-    return true;
+    return 0;
   }
 
   // Prompt unless --yes. Interactive input lives on the console reader.
-  if (!cli.has('yes')) {
-    final go = await system.console.reader.confirm('Delete $dest/?');
+  if (!yes()) {
+    final go = await system.console.reader.confirm('Delete $into/?');
     await system.console.reader.close();
     if (!go) {
       log.warn('Cancelled.');
-      return true;
+      return 0;
     }
   }
 
-  final removed = await io.async.delete(dest, recursive: true);
+  final removed = await io.async.delete(into, recursive: true);
   log.ok('Removed $removed files.');
-  return true;
+  return 0;
 }
 
-Future<bool> _report(Cli cli) async {
-  final dest = cli.get('out', '');
-  final files = await io.async.find(dest);
+Future<int> _report(Cli cli) async {
+  final into = dest();
+  final files = await io.async.find(into);
   if (files.isEmpty) {
-    log.warn('No build output in $dest/. Run `build` first.');
-    return false;
+    log.warn('No build output in $into/. Run `build` first.');
+    return 1;
   }
 
   var total = 0;
   final rows = <List<Object?>>[];
   for (final file in files) {
-    final size = (await io.async.stat(file.path)).size;
-    total += size;
+    final bytes = (await io.async.stat(file.path)).size;
+    total += bytes;
     rows.add([
       io.base(file.path),
-      util.size.format(size),
+      util.size.format(bytes),
       util.hash.short(await io.async.read(file.path)),
     ]);
   }
 
-  out.table(Table(headers: ['File', 'Size', 'Algo'])..addAll(rows));
-  out.box(
+  writer.table(Table(headers: ['File', 'Size', 'Algo'])..addAll(rows));
+  writer.box(
     'Files  ${files.length}\nTotal  ${util.size.format(total)}',
     title: 'report',
   );
-  return true;
+  return 0;
 }

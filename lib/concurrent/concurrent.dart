@@ -58,7 +58,7 @@ class ConcurrentAccessor {
   /// Retries [fn] if it throws.
   ///
   /// [times] is the total number of attempts; [retries] is the number of extra
-  /// attempts after the first, matching [HttpClient.retries]. Pass one or the
+  /// attempts after the first, matching [Fetcher.retries]. Pass one or the
   /// other — `times: 3` and `retries: 2` both mean three attempts.
   Future<T> retry<T>(
     FutureOr<T> Function() fn, {
@@ -115,12 +115,14 @@ class PoolEvents<I> {
 ///
 /// Fail-fast is the default; this only appears once [PoolEvents.error] is set,
 /// so failures are reported rather than silently dropped.
-class PoolFailure<I> implements Exception {
+class PoolFailure<I, R> implements Exception {
   /// Each failed item together with the error and stack it produced.
   final List<({I item, Object error, StackTrace stack})> failures;
 
-  /// Results for tasks that completed successfully, matching input positions.
-  final List<dynamic> results;
+  /// What each task returned, matching input positions.
+  ///
+  /// `null` at the positions that failed, which [failures] names.
+  final List<R?> results;
 
   /// Creates a failure summary.
   const PoolFailure(this.failures, [this.results = const []]);
@@ -223,24 +225,34 @@ class Pool<I> {
       Error.throwWithStackTrace(failed.error, failed.stack);
     }
     if (failures.isNotEmpty) {
-      throw PoolFailure<I>(failures, List.unmodifiable(results));
+      throw PoolFailure<I, R>(failures, List<R?>.unmodifiable(results));
     }
     return List<R>.generate(list.length, (i) => results[i] as R);
   }
 
-  /// Maps [worker] over all [items] to completion, never throwing on worker error.
+  /// Maps [worker] over all [items] to completion, never throwing on worker
+  /// error.
   ///
-  /// Returns per-item outcomes in input order.
-  Future<List<({R? value, Object? error, StackTrace? stack, bool isSuccess})>>
-  settle<R>(Iterable<I> items, FutureOr<R> Function(I item) worker) async {
+  /// Returns one [Settled] per item, in input order:
+  ///
+  /// ```dart
+  /// for (final result in await pool.settle(urls, fetch)) {
+  ///   switch (result) {
+  ///     case Done(:final value): save(value);
+  ///     case Broke(:final error): log.warn('$error');
+  ///   }
+  /// }
+  /// ```
+  Future<List<Settled<R>>> settle<R>(
+    Iterable<I> items,
+    FutureOr<R> Function(I item) worker,
+  ) async {
     for (final h in on._startHandlers) {
       h();
     }
 
     final list = items.toList();
-    final outcomes = List<
-      ({R? value, Object? error, StackTrace? stack, bool isSuccess})?
-    >.filled(list.length, null);
+    final outcomes = List<Settled<R>?>.filled(list.length, null);
     final active = <Future<void>>{};
     final limit = size > 0 ? size : 1;
 
@@ -251,23 +263,12 @@ class Pool<I> {
 
       task = Future<void>(() async {
         try {
-          final value = await worker(item);
-          outcomes[index] = (
-            value: value,
-            error: null,
-            stack: null,
-            isSuccess: true,
-          );
+          outcomes[index] = Done<R>(await worker(item));
           for (final h in on._progressHandlers) {
             h(item);
           }
         } catch (error, stack) {
-          outcomes[index] = (
-            value: null,
-            error: error,
-            stack: stack,
-            isSuccess: false,
-          );
+          outcomes[index] = Broke<R>(error, stack);
           for (final h in on._errorHandlers) {
             h(error, stack, item);
           }
@@ -505,12 +506,61 @@ Duration _backoffFor(int attempt, Duration base, Duration cap) {
   return _rand.jitter(bounded);
 }
 
-/// The result of a settled task in [Pool.settle].
-typedef SettledResult<R> =
-    ({R? value, Object? error, StackTrace? stack, bool isSuccess});
+/// What became of one task in [Pool.settle].
+///
+/// Sealed, with the value on [Done] and the error on [Broke], so the branch
+/// that has a value is the branch where it is non-nullable:
+///
+/// ```dart
+/// for (final result in await pool.settle(urls, fetch)) {
+///   switch (result) {
+///     case Done(:final value): save(value);
+///     case Broke(:final error): log.warn('$error');
+///   }
+///}
+/// ```
+///
+/// This was a record of four fields — `value`, `error`, `stack` and
+/// `isSuccess` — where two were always null and a boolean said which two.
+sealed class Settled<R> {
+  const Settled();
 
-/// Convenience getters on [SettledResult].
-extension SettledResultExtension<R> on SettledResult<R> {
-  /// Whether the task succeeded without throwing.
-  bool get ok => isSuccess;
+  /// Whether the task finished without throwing.
+  ///
+  /// For a filter or a count. To *use* the value, match on [Done] instead:
+  /// that is the branch where it is not null.
+  bool get ok => this is Done<R>;
+
+  /// The value, or `null` when the task threw.
+  R? get value => switch (this) {
+    Done<R>(:final value) => value,
+    Broke<R>() => null,
+  };
+}
+
+/// A task that finished, carrying what it returned.
+final class Done<R> extends Settled<R> {
+  @override
+  final R value;
+
+  /// Creates a successful outcome.
+  const Done(this.value);
+
+  @override
+  String toString() => 'Done($value)';
+}
+
+/// A task that threw, carrying the error and where it came from.
+final class Broke<R> extends Settled<R> {
+  /// What was thrown.
+  final Object error;
+
+  /// Where it was thrown.
+  final StackTrace stack;
+
+  /// Creates a failed outcome.
+  const Broke(this.error, this.stack);
+
+  @override
+  String toString() => 'Broke($error)';
 }

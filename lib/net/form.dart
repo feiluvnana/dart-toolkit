@@ -138,7 +138,7 @@ final class Form {
   /// the form go back with it:
   ///
   /// ```dart
-  /// final session = HttpClient(session: true);
+  /// final session = Fetcher(session: true);
   /// final page = await session.get(url);
   /// final home = await page.form('#login')!
   ///     .fill({'user': user, 'pass': pass})
@@ -147,8 +147,8 @@ final class Form {
   ///
   /// Inside a crawl use [FormSubmission.submit], which schedules the request
   /// on the engine rather than fetching it here and now.
-  Future<HttpResponse> send({
-    HttpClient? client,
+  Future<Reply> send({
+    Fetcher? client,
     Map<String, String>? headers,
     Duration? timeout,
   }) => (client ?? net.http).send(
@@ -221,7 +221,7 @@ final class Form {
 }
 
 /// Finding a form on a page.
-extension FormOnPage on HttpResponse {
+extension FormOnPage on Reply {
   /// The first form [selector] matches, or `null` when the page has none.
   ///
   /// [selector] is a full jQuery selector, so a form is namable by whatever
@@ -247,8 +247,8 @@ extension FormOnPage on HttpResponse {
 }
 
 /// Submitting a form from inside a crawl.
-extension FormSubmission<T> on Response<T> {
-  /// Schedules [form]'s submission on the engine, like [Response.follow].
+extension FormSubmission<T> on Page<T> {
+  /// Schedules [form]'s submission on the engine, like [Page.follow].
   ///
   /// The method, the URL and the body all come from the form, so a stage that
   /// has to log in or search is one call rather than three details to get
@@ -264,7 +264,7 @@ extension FormSubmission<T> on Response<T> {
   void submit(
     Form form, {
     String? tag,
-    Map<String, Object?>? meta,
+    Iterable<MapEntry<String, Object?>>? meta,
     Map<String, String>? headers,
     int priority = 0,
     bool dedupe = true,

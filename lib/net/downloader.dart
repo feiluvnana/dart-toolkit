@@ -42,7 +42,7 @@ class DownloaderEvents {
 /// pipeline streams binaries to disk.
 abstract class Downloader<T> with PathResolver {
   /// The engine being served, set by [attach].
-  Engine<dynamic>? engine;
+  Engine<T>? engine;
 
   /// Base directory that relative destinations resolve against.
   @override
@@ -101,10 +101,10 @@ abstract class Downloader<T> with PathResolver {
   });
 
   /// Binds this downloader to [engine].
-  void attach(Engine<dynamic> engine) => this.engine = engine;
+  void attach(Engine<T> engine) => this.engine = engine;
 
-  /// Fetches [request] and returns its response.
-  Future<Response<T>> download(Request<T> request);
+  /// Fetches [fetch] and returns its response.
+  Future<Page<T>> download(Fetch<T> fetch);
 
   /// Streams [source] to [path], resolved against [base].
   ///
@@ -126,7 +126,7 @@ abstract class Downloader<T> with PathResolver {
   Future<void> close() async {}
 
   /// Runs [concurrency] workers until the engine's frontier drains.
-  Future<void> work(Engine<dynamic> engine) async {
+  Future<void> work(Engine<T> engine) async {
     final workers = [
       for (var i = 0; i < (concurrency > 0 ? concurrency : 1); i++)
         _worker(engine),
@@ -138,10 +138,10 @@ abstract class Downloader<T> with PathResolver {
   ///
   /// Waits on [Engine.waiting] rather than polling, so an idle worker costs
   /// nothing while a sibling is still discovering links.
-  Future<void> _worker(Engine<dynamic> engine) async {
+  Future<void> _worker(Engine<T> engine) async {
     while (!engine.stopped) {
-      final request = engine.serve();
-      if (request == null) {
+      final fetch = engine.serve();
+      if (fetch == null) {
         // Nothing queued: either the run is finished, or a busy sibling may
         // still schedule more work.
         if (engine.idle) break;
@@ -151,11 +151,11 @@ abstract class Downloader<T> with PathResolver {
 
       var robotsDelay = Duration.zero;
       if (engine.obey &&
-          request.url.hasScheme &&
-          (request.url.scheme == 'http' || request.url.scheme == 'https')) {
-        final r = await engine.robots(request.url);
-        if (!r.allowed(request.url, agent: engine.agent)) {
-          engine.skip(request);
+          fetch.url.hasScheme &&
+          (fetch.url.scheme == 'http' || fetch.url.scheme == 'https')) {
+        final r = await engine.robots(fetch.url);
+        if (!r.allowed(fetch.url, agent: engine.agent)) {
+          engine.skip(fetch);
           continue;
         }
         robotsDelay = r.delay(agent: engine.agent) ?? Duration.zero;
@@ -165,15 +165,15 @@ abstract class Downloader<T> with PathResolver {
       // perhost pacing was requested; it is a floor, not a replacement.
       final hostGap = _max(perhost ? delay : Duration.zero, robotsDelay);
       if (hostGap > Duration.zero && !engine.stopped) {
-        await _throttleHost(request.url.host, hostGap);
+        await _throttleHost(fetch.url.host, hostGap);
       }
 
       engine.enter();
       try {
-        final response = await download(request as Request<T>);
+        final response = await download(fetch);
         if (!engine.stopped) await engine.process(response);
       } catch (error, stack) {
-        engine.fail(error, stack, request);
+        engine.fail(error, stack, fetch);
       } finally {
         engine.leave();
       }
@@ -201,7 +201,7 @@ abstract class Downloader<T> with PathResolver {
 /// });
 /// ```
 ///
-/// Everything it served is recorded in [requests], so a test can assert on the
+/// Everything it served is recorded in [fetches], so a test can assert on the
 /// method, headers and body a pipeline actually sent.
 class MapDownloader<T> extends Downloader<T> {
   /// The response body map, keyed by URL string or URL path, either optionally
@@ -215,7 +215,7 @@ class MapDownloader<T> extends Downloader<T> {
   final Map<String, String> headers;
 
   /// Every request served, in the order it was served.
-  final List<Request<T>> requests = [];
+  final List<Fetch<T>> fetches = [];
 
   /// Creates a fixture-backed downloader.
   MapDownloader(
@@ -229,11 +229,11 @@ class MapDownloader<T> extends Downloader<T> {
     super.retries = 0,
   });
 
-  /// The most specific key [request] matches, or `null` when none do.
-  String? _key(Request<T> request) {
-    final wire = request.method.wire;
-    final url = request.url.toString();
-    final path = request.url.path;
+  /// The most specific key [fetch] matches, or `null` when none do.
+  String? _key(Fetch<T> fetch) {
+    final wire = fetch.method.wire;
+    final url = fetch.url.toString();
+    final path = fetch.url.path;
     for (final key in ['$wire $url', '$wire $path', url, path]) {
       if (responses.containsKey(key)) return key;
     }
@@ -241,12 +241,12 @@ class MapDownloader<T> extends Downloader<T> {
   }
 
   @override
-  Future<Response<T>> download(Request<T> request) async {
-    requests.add(request);
-    final key = _key(request);
-    return Response<T>(
-      request: request,
-      url: request.url,
+  Future<Page<T>> download(Fetch<T> fetch) async {
+    fetches.add(fetch);
+    final key = _key(fetch);
+    return Page<T>(
+      fetch: fetch,
+      url: fetch.url,
       status: key != null ? status : 404,
       headers: headers,
       bytes: utf8.encode(responses[key] ?? ''),
@@ -255,19 +255,19 @@ class MapDownloader<T> extends Downloader<T> {
   }
 }
 
-/// Fetches requests over HTTP, backed by an [HttpClient].
+/// Fetches requests over HTTP, backed by a [Fetcher].
 class HttpDownloader<T> extends Downloader<T> {
-  final HttpClient _client;
+  final Fetcher _client;
   final bool _ownsClient;
 
-  /// Creates a downloader over an [HttpClient].
+  /// Creates a downloader over a [Fetcher].
   ///
-  /// Pass [client] to share an [HttpClient] you own: this downloader then uses
+  /// Pass [client] to share a [Fetcher] you own: this downloader then uses
   /// it without taking ownership, so [close] leaves it open. With [pool],
   /// [headers] or [timeout] a client is built here and closed on [close].
   /// With none of them the shared `net.http` client is used, and left open.
   HttpDownloader({
-    HttpClient? client,
+    Fetcher? client,
     http.Client? pool,
     Map<String, String>? headers,
     Duration? timeout,
@@ -295,7 +295,7 @@ class HttpDownloader<T> extends Downloader<T> {
                    timeout != null ||
                    cap != null ||
                    cache != null)
-               ? HttpClient(
+               ? Fetcher(
                  pool: pool,
                  headers: headers ?? net.http.headers,
                  timeout: timeout ?? net.http.timeout,
@@ -308,7 +308,7 @@ class HttpDownloader<T> extends Downloader<T> {
                : net.http);
 
   /// The underlying HTTP client.
-  HttpClient get client => _client;
+  Fetcher get client => _client;
 
   /// Headers sent with every request.
   Map<String, String> get headers => _client.headers;
@@ -326,14 +326,14 @@ class HttpDownloader<T> extends Downloader<T> {
   HttpCache? get cache => _client.cache;
 
   @override
-  Future<Response<T>> download(Request<T> request) async {
-    final uri = request.url;
+  Future<Page<T>> download(Fetch<T> fetch) async {
+    final uri = fetch.url;
     if (uri.scheme == 'data') {
       final bytes =
           uri.data?.contentAsBytes() ??
           utf8.encode(uri.data?.contentAsString() ?? '');
-      return Response<T>(
-        request: request,
+      return Page<T>(
+        fetch: fetch,
         status: 200,
         headers: {'content-type': uri.data?.mimeType ?? 'text/html'},
         bytes: bytes,
@@ -344,8 +344,8 @@ class HttpDownloader<T> extends Downloader<T> {
       final file = File(uri.toFilePath());
       if (await file.exists()) {
         final bytes = await file.readAsBytes();
-        return Response<T>(
-          request: request,
+        return Page<T>(
+          fetch: fetch,
           status: 200,
           headers: {'content-type': 'text/html'},
           bytes: bytes,
@@ -354,8 +354,8 @@ class HttpDownloader<T> extends Downloader<T> {
       }
       // A path that is not there is a miss, not a page whose body is its own
       // URL: report it the way a 404 from the network would arrive.
-      return Response<T>(
-        request: request,
+      return Page<T>(
+        fetch: fetch,
         status: 404,
         headers: const {'content-type': 'text/plain'},
         bytes: const [],
@@ -367,8 +367,8 @@ class HttpDownloader<T> extends Downloader<T> {
           uri.scheme == 'string'
               ? Uri.decodeComponent(uri.path)
               : (uri.hasScheme ? uri.toString() : uri.path);
-      return Response<T>(
-        request: request,
+      return Page<T>(
+        fetch: fetch,
         status: 200,
         headers: {'content-type': 'text/plain'},
         bytes: utf8.encode(content),
@@ -377,16 +377,16 @@ class HttpDownloader<T> extends Downloader<T> {
     }
     try {
       final res = await _client.send(
-        request.method,
-        request.url,
-        headers: request.headers.isEmpty ? null : request.headers,
-        body: request.body,
+        fetch.method,
+        fetch.url,
+        headers: fetch.headers.isEmpty ? null : fetch.headers,
+        body: fetch.body,
         retries: retries,
-        retry: request.method == HttpMethod.get ? null : true,
+        retry: fetch.method == HttpMethod.get ? null : true,
         onretry: (url, attempt) => engine?.retry(),
       );
-      return Response<T>(
-        request: request,
+      return Page<T>(
+        fetch: fetch,
         url: res.url,
         requested: res.requested,
         status: res.status,
@@ -396,7 +396,7 @@ class HttpDownloader<T> extends Downloader<T> {
         engine: engine,
       );
     } catch (error) {
-      on._error?.call(error, request.url);
+      on._error?.call(error, fetch.url);
       rethrow;
     }
   }

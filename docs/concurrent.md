@@ -72,7 +72,7 @@ await for (final result in stream) {
 
 ## 3. `Pool.settle` (Partial Results Without Throwing)
 
-`settle` executes tasks across items and returns every outcome as a `SettledResult<R>`, whether it succeeded or failed:
+`settle` executes tasks across items and returns one `Settled<R>` per item, in input order, whether it succeeded or failed. It is a sealed type with two cases, so the branch that has a value is the branch where the value is not null:
 
 ```dart
 final pool = Pool<int>(size: 2);
@@ -81,13 +81,20 @@ final outcomes = await pool.settle([1, 0, 2], (n) async {
   return 10 ~/ n;
 });
 
-for (final res in outcomes) {
-  if (res.ok) {
-    print('Value: ${res.value}');
-  } else {
-    print('Failed: ${res.error}');
+for (final outcome in outcomes) {
+  switch (outcome) {
+    case Done(:final value):
+      print('Value: $value');       // int, not int?
+    case Broke(:final error, :final stack):
+      print('Failed: $error');
   }
 }
+```
+
+`Done<R>` carries `value`; `Broke<R>` carries `error` and `stack`. The switch is exhaustive, so a third case cannot be forgotten. For a count or a filter there is also `outcome.ok`, and `outcome.value` reads `null` for a failure:
+
+```dart
+final built = outcomes.where((o) => o.ok).length;
 ```
 
 ---
@@ -112,10 +119,10 @@ pool.on.error((error, stack, item) => log.warn('$item failed: $error'));
 
 try {
   await pool.run(urls, fetch);
-} on PoolFailure<String> catch (e) {
+} on PoolFailure<String, String> catch (e) {
   log.error('${e.failures.length} of ${urls.length} failed');
   for (final f in e.failures) log.debug('${f.item}: ${f.error}');
-  print('Successful results: ${e.results.whereType<String>().length}');
+  print('Successful results: ${e.results.nonNulls.length}');
 }
 ```
 

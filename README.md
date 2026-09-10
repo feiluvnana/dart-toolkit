@@ -65,16 +65,18 @@ One import gives you every domain:
 import 'package:dart_toolkit/dart_toolkit.dart';
 ```
 
-Three of the type names it brings — `HttpClient`, `HttpResponse` and `Cookie`
-— are also `dart:io`'s. Dart resolves the package import first and says
-nothing, so in a file importing both they mean this library's. That is usually
-what you want; when it is not, say which you mean:
+Every type name it brings is its own. Through 1.7.0 three of them —
+`HttpClient`, `HttpResponse` and `Cookie` — were also `dart:io`'s, and Dart
+resolved the package import first without saying anything; two more fought
+`package:http` for `Request` and `Response`. 2.0.0 renamed all five, so a file
+can import both libraries plainly:
 
 ```dart
-import 'dart:io' hide HttpClient, HttpResponse, Cookie;
+import 'dart:io';                                  // HttpClient is dart:io's
+import 'package:dart_toolkit/dart_toolkit.dart';   // Fetcher is this one's
 ```
 
-The full list is in [NAMESPACE.md](NAMESPACE.md#known-collisions).
+The rename table is in [NAMESPACE.md](NAMESPACE.md#resolved-in-200).
 
 ---
 
@@ -85,9 +87,9 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 
 void main(List<String> args) async {
   // 1. Arguments
+  final size = cli.number('concurrency', def: 4);
+  final force = cli.flag('force', alias: 'f');
   cli.parse(args);
-  final size = cli.get('concurrency', 4);
-  final force = cli.has('force', 'f');
 
   final log = system.console.logger;
   final clock = util.time.clock();
@@ -95,7 +97,7 @@ void main(List<String> args) async {
   // 2. Crawl and collect
   log.step(1, 3, 'Crawling headlines...');
   final titles = await net.crawl<String>('https://news.ycombinator.com')
-      .concurrent(size)
+      .concurrent(size())
       .delay(250.ms)
       .limit(50)
       .collect((res) {
@@ -112,7 +114,7 @@ void main(List<String> args) async {
   final processed = await concurrent.run(batch, (title) async {
     bar.tick(1, title);
     return title.toUpperCase();
-  }, size: size);
+  }, size: size());
   bar.done('Done.');
 
   // 4. Report and save atomically
@@ -126,7 +128,7 @@ void main(List<String> args) async {
   );
 
   final dest = io.join('output', 'summary.txt');
-  if (force || !io.has(dest)) {
+  if (force() || !io.has(dest)) {
     io.write(dest, processed.join('\n'));
     log.ok('Saved to $dest');
   }
@@ -201,19 +203,22 @@ res.$('h1').text;      // text of first h1
 res.$('a').hrefs;      // all hrefs
 res.json;              // decoded and cached
 
-// Declarative extraction:
-final item = res.extract({
-  'title': 'h1.title',
-  'price': '.price@text',
-  'links': ['a.link@href'],
-});
+// Typed extraction: a record, with every field's type intact.
+final item = (
+  title: res.$('h1.title').text,
+  price: res.pick(Field.text('.price').when(util.text.number)),
+  variants: res.$.all('.variant', (row) => (
+    name: row('.name').text,
+    sku: row.attr('data-sku'),
+  )),
+);
+item.variants.first.sku;   // String?, no cast
 
-// The same, keeping the type:
-final String? title = res.pick(Field.text('h1.title'));
-final List<String> links = res.pick(Field.attrs('a.link', 'href'));
+// The string shorthand, for a first look at an unfamiliar page:
+final loose = res.extract({'title': 'h1.title', 'links': ['a.link@href']});
 
 // Stateful session with cookies:
-final session = HttpClient(session: true);
+final session = Fetcher(session: true);
 
 await net.http.post(url, body: const Body.json({'id': 1}));
 await net.http.download(url, 'out/file.zip');
@@ -224,19 +229,21 @@ Retries cover transport errors, 5xx and 429, honouring `Retry-After`. See [docs/
 ### `net.crawl` — multi-stage pipelines
 
 ```dart
+const name = Slot<String>('name');
+
 await net.crawl<String>('https://music.example.com/album')
     .concurrent(4)
     .limit(50)
     .depth(2)
     .tag('song', (res) {
-      print('${res.meta['name']} -> ${res.$('a').href}');
+      print('${res.meta.get(name)} -> ${res.$('a').href}');
     })
     .run((res) {
       for (final a in res.$('#songlist a')) {
         res.follow(
           a.href!,
           tag: 'song',
-          meta: {'name': a.text},
+          meta: [name(a.text)],
         );
       }
     });
@@ -251,7 +258,7 @@ await net.crawl<String>(seed)
     .resume('crawl.state')      // carry on where an interrupted run stopped
     .cache('.cache')            // reuse pages that have not changed
     .accept(['text/html'])      // never hand a PDF to the HTML parser
-    .on.error((f) => log.warn('${f.request?.url}: ${f.error}'))
+    .on.error((f) => log.warn('${f.fetch?.url}: ${f.error}'))
     .run(handler);
 ```
 
@@ -265,7 +272,7 @@ options already selected — so a script overrides the two fields it knows about
 and sends the rest back untouched:
 
 ```dart
-final session = HttpClient(session: true);
+final session = Fetcher(session: true);
 final page = await session.get('https://example.com/login'.url);
 
 final home = await page.form('#login')!
@@ -303,20 +310,22 @@ See [docs/system.md](docs/system.md), [docs/env.md](docs/env.md).
 ### `cli` — the command line your script presents
 
 ```dart
-cli
-  ..flag('force', alias: 'f')
-  ..option('concurrency', def: 4)
-  ..parse(args);
+final force = cli.flag('force', alias: 'f');
+final size = cli.number('concurrency', def: 4);
+cli.parse(args);
 
-cli.get('concurrency', 4);
+if (force()) rebuild(concurrency: size());
 ```
+
+Declaring returns the handle that reads it, so the type and the default live in
+one place and `--concurrency=fast` is a parse error rather than a silent 4.
 
 Or declare commands and `cli.run` parses, prints `--help`, validates and
 dispatches, returning an exit code:
 
 ```dart
-cli.handle('build', _build, desc: 'Build the project')
-  ..option('out', alias: 'o', def: 'dist', desc: 'Output directory');
+final build = cli.handle('build', _build, desc: 'Build the project');
+final out = build.option('out', alias: 'o', def: 'dist', desc: 'Output directory');
 
 await system.shutdown(await cli.run(args));
 ```
@@ -333,7 +342,7 @@ final bodies = await concurrent.run(
 );
 ```
 
-Results keep input order. The first failure propagates with its own error and stack; register `Pool.on.error` to collect failures and continue instead. See [docs/concurrent.md](docs/concurrent.md).
+Results keep input order. The first failure propagates with its own error and stack; register `Pool.on.error` to collect failures and continue instead, or use `Pool.settle`, which returns a sealed `Done`/`Broke` per item and never throws. See [docs/concurrent.md](docs/concurrent.md).
 
 ### `tool.git` — repository automation
 
@@ -386,7 +395,7 @@ final titles = await net.crawl<String>('https://site.test')
 To swap the shared HTTP client process-wide, hand `net.use` your own:
 
 ```dart
-await net.use(HttpClient(headers: {'Authorization': 'Bearer $token'}));
+await net.use(Fetcher(headers: {'Authorization': 'Bearer $token'}));
 ```
 
 See [docs/crawl.md](docs/crawl.md#8-testing-a-pipeline).

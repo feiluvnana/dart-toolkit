@@ -25,24 +25,24 @@ export 'form.dart';
 export 'http.dart';
 export 'pipeline.dart';
 export 'robots.dart';
-export 'selector.dart' hide $, $xpath, JQuerySelector;
+export 'selector.dart' hide $, $xpath;
 export 'sitemap.dart';
 
 // ============================================================================
 // NET DOMAIN (net.*) - HTTP, Crawler Engine & Selectors
 // ============================================================================
 
-HttpClient _shared = HttpClient();
+Fetcher _shared = Fetcher();
 
 /// The `net` domain: HTTP, crawling and selectors.
 const NetAccessor net = NetAccessor();
 
 /// Entry point for networking and scraping.
 ///
-/// Requests go through [http], a shared [HttpClient]; crawls through [crawl].
+/// Requests go through [http], a shared [Fetcher]; crawls through [crawl].
 /// Selectors can be run via [net.$] or [net.$xpath], on response bodies with
 /// `res.$`, or by importing `package:dart_toolkit/selector.dart`.
-/// For a client of your own, construct an [HttpClient] and hand it to [use].
+/// For a client of your own, construct a [Fetcher] and hand it to [use].
 ///
 /// ```dart
 /// final res = await net.http.get('https://example.com'.url);
@@ -52,8 +52,8 @@ class NetAccessor {
   /// Creates the accessor. Prefer the shared [net] instance.
   const NetAccessor();
 
-  /// The shared HTTP client: requests, downloads and [HttpClient.sync].
-  HttpClient get http => _shared;
+  /// The shared HTTP client: requests, downloads and [Fetcher.sync].
+  Fetcher get http => _shared;
 
   /// The crawler entry point. See [Crawl].
   Crawl get crawl => const Crawl();
@@ -76,7 +76,7 @@ class NetAccessor {
   ///
   /// Useful in tests, and for applying one set of headers process-wide. Pass
   /// `close: false` to keep the old client open.
-  Future<void> use(HttpClient client, {bool close = true}) async {
+  Future<void> use(Fetcher client, {bool close = true}) async {
     final previous = _shared;
     _shared = client;
     if (close && !identical(previous, client)) await previous.close();

@@ -72,13 +72,18 @@ await io.async.write('out/notes.txt', 'hello');
 | `io.async.read(path)` | `Future<String>` (async) |
 | `io.bytes(path)` | `List<int>` (sync) |
 | `io.async.bytes(path)` | `Future<List<int>>` (async) |
-| `io.json<T>(path)` | `T`, decoded from JSON (sync) |
-| `io.async.json<T>(path)` | `Future<T>`, decoded from JSON (async) |
+| `io.json<T>(path, [parse])` | `T`, decoded from JSON (sync) |
+| `io.async.json<T>(path, [parse])` | `Future<T>`, decoded from JSON (async) |
 | `io.lines(path)` | `Stream<String>`, without loading the file |
 
 ```dart
 final data = io.json<Map<String, Object?>>('out/data.json');
 final asyncData = await io.async.json<Map<String, Object?>>('out/data.json');
+
+// Pass a parser to build a real type, rather than casting the decoded maps
+// and lists at every read. Without one, the decoded value is cast to T —
+// which throws when the document is not the shape the call site claimed.
+final config = io.json('config.json', Config.fromJson);
 
 await for (final line in io.lines('big.log')) {
   if (line.contains('ERROR')) print(line);

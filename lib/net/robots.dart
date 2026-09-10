@@ -165,7 +165,7 @@ class Robots {
   /// 4xx rather than 5xx. That is a deliberate departure: the RFC's
   /// "unreachable" case is about a server that answered badly, and stopping a
   /// whole crawl over one failed lookup costs more than it protects.
-  static Future<Robots> load(Uri url, {HttpClient? client}) async {
+  static Future<Robots> load(Uri url, {Fetcher? client}) async {
     final robotsUrl = Uri(
       scheme: url.scheme.isNotEmpty ? url.scheme : 'https',
       userInfo: url.userInfo,

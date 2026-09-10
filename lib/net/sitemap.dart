@@ -65,7 +65,7 @@ class Sitemap {
   /// stops at [maxDepth] regardless.
   static Future<List<Uri>> load(
     Uri url, {
-    HttpClient? client,
+    Fetcher? client,
     bool recursive = true,
     int maxDepth = maxDepth,
   }) => _load(
@@ -78,7 +78,7 @@ class Sitemap {
 
   static Future<List<Uri>> _load(
     Uri url,
-    HttpClient client, {
+    Fetcher client, {
     required bool recursive,
     required int remaining,
     required Set<String> visited,

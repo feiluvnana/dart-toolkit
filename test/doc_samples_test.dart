@@ -20,7 +20,7 @@ void main() {
       );
       expect(html.$('.bonus').data('id'), equals('2'));
 
-      final res = HttpResponse.text('''
+      final res = Reply.text('''
           <div class="main">
             <h1>Breaking News</h1>
             <p class="desc">A story</p>
@@ -77,7 +77,7 @@ void main() {
     });
 
     test('http.md declarative extract and features work as documented', () {
-      final res = HttpResponse.text('''
+      final res = Reply.text('''
           <html>
             <head><link rel="canonical" href="https://example.com/product/1"></head>
             <body>
@@ -172,7 +172,7 @@ void main() {
     });
 
     test('form.md samples read a form as documented', () {
-      final page = HttpResponse.text('''
+      final page = Reply.text('''
         <div id="panel">
           <form id="login" action="/session" method="post">
             <input type="hidden" name="csrf" value="tok-123">
@@ -217,7 +217,7 @@ void main() {
       );
 
       // A page with no form says so.
-      expect(HttpResponse.text('<p>none</p>').form(), isNull);
+      expect(Reply.text('<p>none</p>').form(), isNull);
     });
 
     test('cli.md features parse as documented', () {
@@ -232,17 +232,22 @@ void main() {
         'file.txt',
       ]);
 
-      cli
-        ..flag('force', alias: 'f', desc: 'Overwrite')
-        ..option('concurrency', alias: 'c', desc: 'Workers', def: '4')
-        ..option('offset', desc: 'Offset')
-        ..flag('cache', desc: 'Cache');
+      final force = cli.flag('force', alias: 'f', desc: 'Overwrite');
+      final size = cli.number(
+        'concurrency',
+        alias: 'c',
+        desc: 'Workers',
+        def: 4,
+      );
+      final offset = cli.number('offset', desc: 'Offset');
+      final cache = cli.flag('cache', desc: 'Cache', def: true);
 
-      expect(cli.has('force'), isTrue);
-      expect(cli.get('concurrency', 0), equals(8));
-      expect(cli.get('offset', 0), equals(-5));
-      expect(cli.no('cache'), isTrue);
-      expect(cli.list(), equals(['file.txt']));
+      expect(force(), isTrue);
+      expect(size(), equals(8));
+      expect(offset(), equals(-5));
+      expect(cache.negated(), isTrue);
+      expect(cache(), isFalse);
+      expect(cli.args, equals(['file.txt']));
 
       final help = cli.usage(syntax: 'tool [options]');
       expect(help, contains('tool [options]'));
@@ -316,7 +321,8 @@ void main() {
 
               var code = snippet;
               if (!code.contains('package:dart_toolkit/')) {
-                code = "import 'package:dart_toolkit/dart_toolkit.dart';\n$code";
+                code =
+                    "import 'package:dart_toolkit/dart_toolkit.dart';\n$code";
               }
               final file = dart_io.File(
                 '${tempDir.path}/${doc}_snippet_${written.length + 1}.dart',

@@ -246,10 +246,7 @@ void main() {
 
   group('Ansi.wrap', () {
     test('breaks at spaces', () {
-      expect(Ansi.wrap('the quick brown fox', 9), [
-        'the quick',
-        'brown fox',
-      ]);
+      expect(Ansi.wrap('the quick brown fox', 9), ['the quick', 'brown fox']);
     });
 
     test('breaks inside a word too long to fit', () {
@@ -290,10 +287,8 @@ void main() {
     });
 
     test('a width cap narrows the widest column and wraps it', () {
-      final table = Table(
-        headers: ['URL', 'N'],
-        width: 30,
-      )..add(['https://example.com/a/very/long/path', 1]);
+      final table = Table(headers: ['URL', 'N'], width: 30)
+        ..add(['https://example.com/a/very/long/path', 1]);
 
       final lines = table.render().trimRight().split('\n');
       for (final line in lines) {
@@ -318,8 +313,7 @@ void main() {
     });
 
     test('wide characters still line up when wrapped', () {
-      final table = Table(headers: ['名前'], width: 12)
-        ..add(['日本語のテキスト']);
+      final table = Table(headers: ['名前'], width: 12)..add(['日本語のテキスト']);
       final lines = table.render().trimRight().split('\n');
       expect(lines.map(Ansi.width).toSet(), hasLength(1));
     });
@@ -389,13 +383,15 @@ void main() {
     });
 
     test('a select with nothing selected reports its first option', () {
-      const html = '<form><select><option value="a">A</option>'
+      const html =
+          '<form><select><option value="a">A</option>'
           '<option value="b">B</option></select></form>';
       expect($(html).find('select').value, 'a');
     });
 
     test('an option with no value reports its text', () {
-      const html = '<form><select><option selected>Plain</option>'
+      const html =
+          '<form><select><option selected>Plain</option>'
           '</select></form>';
       expect($(html).find('select').value, 'Plain');
     });
@@ -453,20 +449,23 @@ void main() {
 
   group('cli', () {
     test('count reads a repeated switch as a level', () {
-      final cli = Cli(const ['-vvv'])..flag('verbose', alias: 'v');
-      expect(cli.count('verbose'), 3);
-      expect(cli.has('verbose'), isTrue);
+      final verbose = Cli(const ['-vvv']).flag('verbose', alias: 'v');
+      expect(verbose.count(), 3);
+      expect(verbose.given(), isTrue);
     });
 
     test('the long and short forms add up', () {
-      final cli = Cli(const ['--verbose', '-v'])
-        ..flag('verbose', alias: 'v');
-      expect(cli.count('verbose'), 2);
+      final verbose = Cli(const [
+        '--verbose',
+        '-v',
+      ]).flag('verbose', alias: 'v');
+      expect(verbose.count(), 2);
     });
 
     test('a switch never given counts zero', () {
-      final cli = Cli(const [])..flag('verbose', alias: 'v');
-      expect(cli.count('verbose'), 0);
+      final verbose = Cli(const []).flag('verbose', alias: 'v');
+      expect(verbose.count(), 0);
+      expect(verbose.given(), isFalse);
     });
 
     test('a flag reads its declared env variable', () {
@@ -475,59 +474,62 @@ void main() {
 
       // Only option() took an env before, so a boolean could not be set by
       // the shell.
-      final cli = Cli(const [])..flag('force', env: 'DT_CONSOLE_FORCE');
-      expect(cli.get('force', false), isTrue);
+      final force = Cli(const []).flag('force', env: 'DT_CONSOLE_FORCE');
+      expect(force(), isTrue);
     });
 
     test('the command line still beats the flag env', () {
       system.env.set('DT_CONSOLE_FORCE', 'true');
       addTearDown(() => system.env.delete('DT_CONSOLE_FORCE'));
 
-      final cli = Cli(const ['--no-force'])
-        ..flag('force', env: 'DT_CONSOLE_FORCE');
-      expect(cli.get('force', true), isFalse);
+      final force = Cli(const [
+        '--no-force',
+      ]).flag('force', def: true, env: 'DT_CONSOLE_FORCE');
+      expect(force(), isFalse);
     });
   });
 
   group('zip', () {
-    test('unpacking restores the execute bit and the modification time',
-        () async {
-      final root = Directory.systemTemp.createTempSync('dt_zip_mode_');
-      addTearDown(() => root.deleteSync(recursive: true));
+    test(
+      'unpacking restores the execute bit and the modification time',
+      () async {
+        final root = Directory.systemTemp.createTempSync('dt_zip_mode_');
+        addTearDown(() => root.deleteSync(recursive: true));
 
-      final script = File('${root.path}/src/run.sh')
-        ..createSync(recursive: true)
-        ..writeAsStringSync('#!/bin/sh\necho hi\n');
-      await system.run('chmod', ['755', script.path]);
-      final when = DateTime(2021, 3, 4, 5, 6, 8);
-      script.setLastModifiedSync(when);
+        final script =
+            File('${root.path}/src/run.sh')
+              ..createSync(recursive: true)
+              ..writeAsStringSync('#!/bin/sh\necho hi\n');
+        await system.run('chmod', ['755', script.path]);
+        final when = DateTime(2021, 3, 4, 5, 6, 8);
+        script.setLastModifiedSync(when);
 
-      for (final name in ['out.zip', 'out.tar', 'out.tar.gz']) {
-        final archive = '${root.path}/$name';
-        await tool.zip.pack('${root.path}/src', archive);
-        final dest = '${root.path}/back_$name';
-        await tool.zip.unpack(archive, dest);
+        for (final name in ['out.zip', 'out.tar', 'out.tar.gz']) {
+          final archive = '${root.path}/$name';
+          await tool.zip.pack('${root.path}/src', archive);
+          final dest = '${root.path}/back_$name';
+          await tool.zip.unpack(archive, dest);
 
-        final restored = File('$dest/run.sh');
-        expect(restored.existsSync(), isTrue, reason: name);
-        if (!Platform.isWindows) {
-          // An archive of shell scripts used to unpack unrunnable.
-          expect(
-            restored.statSync().mode & 0x1ff,
-            0x1ed,
-            reason: '$name permissions',
-          );
+          final restored = File('$dest/run.sh');
+          expect(restored.existsSync(), isTrue, reason: name);
+          if (!Platform.isWindows) {
+            // An archive of shell scripts used to unpack unrunnable.
+            expect(
+              restored.statSync().mode & 0x1ff,
+              0x1ed,
+              reason: '$name permissions',
+            );
+          }
+          expect(restored.lastModifiedSync(), when, reason: '$name mtime');
         }
-        expect(restored.lastModifiedSync(), when, reason: '$name mtime');
-      }
-    });
+      },
+    );
 
     test('a plain file keeps its own mode', () async {
       final root = Directory.systemTemp.createTempSync('dt_zip_one_');
       addTearDown(() => root.deleteSync(recursive: true));
 
-      final file = File('${root.path}/notes.txt')
-        ..writeAsStringSync('hello');
+      final file = File('${root.path}/notes.txt')..writeAsStringSync('hello');
       await system.run('chmod', ['600', file.path]);
 
       await tool.zip.pack(file.path, '${root.path}/one.zip');

@@ -84,7 +84,7 @@ class QueryResult with IterableMixin<Element> {
     if (_isXPath) return xpath(selectorOrQuery);
     if (_document != null) {
       return QueryResult(
-        JQuerySelector.select(_document, selectorOrQuery),
+        _JQuery.select(_document, selectorOrQuery),
         false,
         _document,
       );
@@ -163,8 +163,63 @@ class QueryResult with IterableMixin<Element> {
 
   /// Every descendant of the current set matching [selector] (supporting full jQuery syntax).
   QueryResult find(String selector) {
-    return QueryResult(JQuerySelector.select(_elements, selector), false);
+    return QueryResult(_JQuery.select(_elements, selector), false);
   }
+
+  /// One [R] per match of [selector], each built from its own scope.
+  ///
+  /// This is how a repeated sub-object comes back typed. [build] receives the
+  /// matched element as a [QueryResult] of its own, so the same readers work
+  /// one level down and a Dart record carries the shape without a class:
+  ///
+  /// ```dart
+  /// final variants = page.$.all('.variant', (row) => (
+  ///   name: row('.name').text,
+  ///   sku: row.attr('data-sku'),
+  ///   price: row.pick(Field.text('.price').map(util.text.number)),
+  /// ));
+  /// // List<({String name, String? sku, num? price})>
+  /// ```
+  ///
+  /// Where `extract` hands back `Map<String, Object?>` and leaves every value
+  /// to be cast, this keeps the type of each field all the way out.
+  List<R> all<R>(String selector, R Function(QueryResult row) build) => [
+    // Through `call`, not `find`: on a document-rooted set — which is what
+    // `page.$` is — `_elements` holds the body's children, and `find` looks
+    // only at their descendants. A match sitting at the top level of the body
+    // was invisible.
+    for (final element in call(selector)._elements)
+      build(QueryResult([element], false)),
+  ];
+
+  /// The first match of [selector], built from its own scope, or `null`.
+  ///
+  /// The singular of [all], for a section a page has at most one of.
+  ///
+  /// ```dart
+  /// final seller = page.$.one('.seller', (s) => (
+  ///   name: s('.name').text,
+  ///   rating: s.pick(Field.text('.rating').map(util.text.number)),
+  /// ));
+  /// ```
+  R? one<R>(String selector, R Function(QueryResult row) build) {
+    final match = call(selector)._elements.firstOrNull;
+    return match == null ? null : build(QueryResult([match], false));
+  }
+
+  /// Reads a typed [field] from the first element of this set.
+  ///
+  /// The scoped form of `Reply.pick`, so a [Field] works at any depth — inside
+  /// [all], inside [one], or straight off a page.
+  T pick<T>(Field<T> field) => field.read(
+    // The document's root when there is one, so this reads the same page
+    // `Reply.pick` does. `_elements.first` is the body's *first child* on a
+    // document-rooted set, which made the answer depend on page structure.
+    _document?.documentElement ??
+        _document?.body ??
+        _elements.firstOrNull ??
+        Element.tag('html'),
+  );
 
   /// The elements satisfying [test].
   QueryResult filter(bool Function(Element element) test) =>
@@ -224,10 +279,9 @@ class QueryResult with IterableMixin<Element> {
   ///
   /// Read as a browser renders it: runs of whitespace collapse to one space.
   /// See [readable].
-  String get text =>
-      [for (final e in _elements) readable(e)]
-          .where((s) => s.isNotEmpty)
-          .join(' ');
+  String get text => [
+    for (final e in _elements) readable(e),
+  ].where((s) => s.isNotEmpty).join(' ');
 
   /// The text of each match, one entry per element, read as [text] reads it.
   List<String> get texts => [for (final e in _elements) readable(e)];
@@ -405,7 +459,7 @@ class QueryResult with IterableMixin<Element> {
   });
 
   static bool _matches(Element element, String selector) =>
-      JQuerySelector.matches(element, selector);
+      _JQuery.matches(element, selector);
 
   @override
   String toString() =>
@@ -420,7 +474,7 @@ class QueryResult with IterableMixin<Element> {
 /// Evaluates jQuery-compatible selectors including `:contains`, `:has`, `:eq`,
 /// `:first`, `:last`, `:even`, `:odd`, `:gt`, `:lt`, `:header`, `:input`, and
 /// `[attr!=val]`.
-class JQuerySelector {
+class _JQuery {
   static final _hasJQueryPseudos = RegExp(
     r':(contains|icontains|has|eq|gt|lt|first|last|even|odd|header|input|button|checkbox|radio|text|password|submit|reset|empty|parent|selected|visible|hidden)\b|!=',
   );
@@ -1002,13 +1056,11 @@ class JQuerySelector {
         break;
       case 'has':
         final subSel = _unquote(arg ?? '');
-        elementFilters.add(
-          (el) => JQuerySelector.select(el, subSel).isNotEmpty,
-        );
+        elementFilters.add((el) => _JQuery.select(el, subSel).isNotEmpty);
         break;
       case 'not':
         final subSel = _unquote(arg ?? '');
-        elementFilters.add((el) => !JQuerySelector.matches(el, subSel));
+        elementFilters.add((el) => !_JQuery.matches(el, subSel));
         break;
       case 'header':
         elementFilters.add((el) => _headerTag.hasMatch(el.localName ?? ''));
@@ -1304,4 +1356,274 @@ extension QuerySelectorOnHtmlString on String {
 
   /// XPath selector accessor for this markup string.
   QueryResult get $xpath => QueryResult.html(this, isXPath: true);
+}
+
+// ============================================================================
+// TYPED EXTRACTION (Field)
+// ============================================================================
+
+/// One typed value to read out of a parsed page.
+///
+/// [Reply.extract] accepts these alongside the string shorthand, and
+/// [Reply.pick] reads one without losing its type. Sealed, so every
+/// extraction shape is a case the compiler knows about rather than a runtime
+/// type test on `dynamic`.
+///
+/// ```dart
+/// final title = res.pick(Field.text('h1'));            // String?
+/// final links = res.pick(Field.attrs('a', 'href'));    // List<String>
+/// ```
+sealed class Field<T> {
+  const Field();
+
+  /// The trimmed text of the first match of [selector], or `null`.
+  static TextField text(String selector) => TextField(selector);
+
+  /// Attribute [attribute] on the first match of [selector], or `null`.
+  ///
+  /// An empty [selector] reads the attribute off the root element itself.
+  static AttrField attr(String selector, String attribute) =>
+      AttrField(selector, attribute);
+
+  /// The trimmed text of every match of [selector].
+  static TextsField texts(String selector) => TextsField(selector);
+
+  /// Attribute [attribute] across every match of [selector] that carries it.
+  static AttrsField attrs(String selector, String attribute) =>
+      AttrsField(selector, attribute);
+
+  /// A nested object read from the same root.
+  ///
+  /// Named `nest` and not `map`, because [Field.map] is the combinator every
+  /// other Dart type spells that way.
+  static NestField nest(Map<String, Object?> schema) => NestField(schema);
+
+  /// One object per match of [selector], each read with [schema].
+  static ListField list(String selector, Map<String, Object?> schema) =>
+      ListField(selector, schema);
+
+  /// An arbitrary read, for anything the other cases do not cover.
+  static CallField<R> fn<R>(R Function(Element element) read) =>
+      CallField<R>(read);
+
+  /// Reads this field out of [root].
+  T read(Element root);
+
+  /// This field with [convert] applied to whatever it read.
+  ///
+  /// Where [Field.fn] takes an element and does everything by hand, this takes
+  /// a field that already works and adjusts its answer:
+  ///
+  /// ```dart
+  /// final price = Field.text('.price').map(util.text.number);   // Field<num?>
+  /// final count = Field.texts('.row').map((rows) => rows.length);
+  /// ```
+  Field<R> map<R>(R Function(T value) convert) =>
+      CallField<R>((root) => convert(read(root)));
+
+  /// Reads [schema] out of [root], expanding the string shorthand.
+  ///
+  /// This is what `Reply.extract` runs, and what [NestField] and [ListField]
+  /// use for their nested schemas.
+  static Map<String, Object?> readAll(
+    Element? root,
+    Map<String, Object?> schema,
+  ) {
+    final result = <String, Object?>{};
+    if (root == null) return result;
+    for (final entry in schema.entries) {
+      result[entry.key] = Field.of(entry.value).read(root);
+    }
+    return result;
+  }
+
+  /// The [Field] a schema entry describes, expanding the string shorthand.
+  ///
+  /// `'h1'`, `'a@href'`, `['li']`, `['li@href']`, `['.row', {...}]` and a
+  /// nested schema map all have a [Field] equivalent; anything else reads as
+  /// `null`.
+  static Field<Object?> of(Object? spec) {
+    switch (spec) {
+      case Field<Object?> field:
+        return field;
+      case String css:
+        final at = css.indexOf('@');
+        if (at == -1) return TextField(css);
+        return AttrField(
+          css.substring(0, at).trim(),
+          css.substring(at + 1).trim(),
+        );
+      case Map<String, Object?> schema:
+        return NestField(schema);
+      case List<Object?> spec when spec.length == 1:
+        final first = spec.first;
+        if (first is! String) return const _NullField();
+        final at = first.indexOf('@');
+        if (at == -1) return TextsField(first);
+        return AttrsField(
+          first.substring(0, at).trim(),
+          first.substring(at + 1).trim(),
+        );
+      case List<Object?> spec
+          when spec.length == 2 &&
+              spec[0] is String &&
+              spec[1] is Map<String, Object?>:
+        return ListField(spec[0]! as String, spec[1]! as Map<String, Object?>);
+      default:
+        return const _NullField();
+    }
+  }
+}
+
+/// The text of the first match, read as a browser renders it. See
+/// [Field.text].
+final class TextField extends Field<String?> {
+  /// The CSS selector to read.
+  final String selector;
+
+  /// Creates a text field.
+  const TextField(this.selector);
+
+  @override
+  String? read(Element root) {
+    final target = selector.isEmpty ? root : root.querySelector(selector);
+    // The one text reader, so extract and res.$ never disagree about what
+    // the text of an element is.
+    return target == null ? null : QueryResult.readable(target);
+  }
+}
+
+/// An attribute of the first match. See [Field.attr].
+final class AttrField extends Field<String?> {
+  /// The CSS selector to read; empty means the root element itself.
+  final String selector;
+
+  /// The attribute name, or `text` for the element's text.
+  final String attribute;
+
+  /// Creates an attribute field.
+  const AttrField(this.selector, this.attribute);
+
+  @override
+  String? read(Element root) {
+    final target = selector.isEmpty ? root : root.querySelector(selector);
+    if (target == null) return null;
+    return attribute == 'text'
+        ? QueryResult.readable(target)
+        : target.attributes[attribute];
+  }
+}
+
+/// The text of every match, read as a browser renders it. See [Field.texts].
+final class TextsField extends Field<List<String>> {
+  /// The CSS selector to read.
+  final String selector;
+
+  /// Creates a repeated text field.
+  const TextsField(this.selector);
+
+  @override
+  List<String> read(Element root) => [
+    for (final el in root.querySelectorAll(selector)) QueryResult.readable(el),
+  ];
+}
+
+/// An attribute across every match. See [Field.attrs].
+final class AttrsField extends Field<List<String>> {
+  /// The CSS selector to read; empty means the root element itself.
+  final String selector;
+
+  /// The attribute name, or `text` for each element's text.
+  final String attribute;
+
+  /// Creates a repeated attribute field.
+  const AttrsField(this.selector, this.attribute);
+
+  @override
+  List<String> read(Element root) {
+    final elements =
+        selector.isEmpty ? [root] : root.querySelectorAll(selector);
+    if (attribute == 'text') {
+      // Through [QueryResult.readable], like every other text read here: the
+      // plural form used to hand back the page's own indentation while the
+      // singular one collapsed it.
+      return [for (final el in elements) QueryResult.readable(el)];
+    }
+    return [
+      for (final el in elements)
+        if (el.attributes[attribute] case final value?) value,
+    ];
+  }
+}
+
+/// A nested object read from the same root. See [Field.nest].
+final class NestField extends Field<Map<String, Object?>> {
+  /// The schema of the nested object.
+  final Map<String, Object?> schema;
+
+  /// Creates a nested object field.
+  const NestField(this.schema);
+
+  @override
+  Map<String, Object?> read(Element root) => Field.readAll(root, schema);
+}
+
+/// One object per match. See [Field.list].
+final class ListField extends Field<List<Map<String, Object?>>> {
+  /// The CSS selector matching each container element.
+  final String selector;
+
+  /// The schema applied to every container.
+  final Map<String, Object?> schema;
+
+  /// Creates a repeated object field.
+  const ListField(this.selector, this.schema);
+
+  @override
+  List<Map<String, Object?>> read(Element root) => [
+    for (final el in root.querySelectorAll(selector)) Field.readAll(el, schema),
+  ];
+}
+
+/// An arbitrary typed read. See [Field.fn].
+final class CallField<T> extends Field<T> {
+  final T Function(Element element) _read;
+
+  /// Creates a field backed by [read].
+  const CallField(this._read);
+
+  @override
+  T read(Element root) => _read(root);
+}
+
+final class _NullField extends Field<Object?> {
+  const _NullField();
+
+  @override
+  Object? read(Element root) => null;
+}
+
+/// [Field.when], for the fields that may not find anything.
+///
+/// Most readers are nullable — [Field.text] and [Field.attr] both hand back
+/// `null` for a selector that matched nothing — so the converter a caller
+/// actually has is one that takes a value, not a `null`.
+extension NullableField<T extends Object> on Field<T?> {
+  /// [convert] applied to what this field read, only when it read something.
+  ///
+  /// ```dart
+  /// final price = Field.text('.price').when(util.text.number);   // Field<num?>
+  /// final qty = Field.text('.qty').when(int.tryParse);           // Field<int?>
+  /// ```
+  ///
+  /// [Field.map] is the unconditional form, for a converter that has something
+  /// to say about an absent value:
+  ///
+  /// ```dart
+  /// final stock = Field.text('.stock').map((t) => t ?? 'unknown');
+  /// ```
+  Field<R?> when<R>(R? Function(T value) convert) => CallField<R?>((root) {
+    final value = read(root);
+    return value == null ? null : convert(value);
+  });
 }

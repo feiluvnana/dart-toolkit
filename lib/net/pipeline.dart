@@ -1,7 +1,7 @@
-/// # Pipeline Request, Response & Router
+/// # Pipeline Fetch, Page & Router
 ///
-/// The units a crawl moves through: a [Request] the engine schedules, the
-/// [Response] a handler receives, and the [Router] that decides which handler
+/// The units a crawl moves through: a [Fetch] the engine schedules, the
+/// [Page] a handler receives, and the [Router] that decides which handler
 /// runs.
 library;
 
@@ -10,6 +10,7 @@ import 'dart:convert';
 
 import 'package:path/path.dart' as p;
 
+import '../util/slot.dart';
 import 'engine.dart';
 import 'http.dart';
 
@@ -69,7 +70,7 @@ Uri coerce(String target, {Uri? base}) {
 /// // later, in the 'song' handler:
 /// final name = res.meta['name'] as String;
 /// ```
-class Request<T> {
+class Fetch<T> {
   /// The absolute URL to fetch.
   final Uri url;
 
@@ -89,8 +90,11 @@ class Request<T> {
   /// A label used to route the response. See [Router.tag].
   final String? tag;
 
-  /// Arbitrary context carried to the response, untouched by the engine.
-  final Map<String, Object?> meta;
+  /// Context carried to the page, untouched by the engine.
+  ///
+  /// Read and written through [Slot]s, so what a handler stored comes back
+  /// with its type. See [Meta].
+  final Meta meta;
 
   /// Whether to de-duplicate this request. Defaults to true.
   final bool dedupe;
@@ -99,22 +103,22 @@ class Request<T> {
   final int depth;
 
   /// The engine that scheduled this request, set on [Engine.add].
-  Engine<dynamic>? engine;
+  Engine<T>? engine;
 
   /// Creates a request for [url].
-  Request(
+  Fetch(
     this.url, {
     this.method = HttpMethod.get,
     Map<String, String>? headers,
     this.body,
     this.priority = 0,
     this.tag,
-    Map<String, Object?>? meta,
+    Iterable<MapEntry<String, Object?>>? meta,
     this.engine,
     this.dedupe = true,
     this.depth = 0,
   }) : headers = headers ?? {},
-       meta = meta ?? {};
+       meta = Meta(meta ?? const []);
 
   /// Restores a request from the map [toJson] produced.
   ///
@@ -122,14 +126,14 @@ class Request<T> {
   /// to whichever engine schedules it next.
   ///
   /// Throws [FormatException] when [json] carries no usable `url`.
-  factory Request.fromJson(Map<String, Object?> json) {
+  factory Fetch.fromJson(Map<String, Object?> json) {
     final url = Uri.tryParse(json['url'] as String? ?? '');
     if (url == null) {
-      throw FormatException('Request has no usable url: ${json['url']}');
+      throw FormatException('Fetch has no usable url: ${json['url']}');
     }
     final wire = (json['method'] as String? ?? 'GET').toUpperCase();
     final body = json['body'];
-    return Request<T>(
+    return Fetch<T>(
       url,
       method: HttpMethod.values.firstWhere(
         (m) => m.wire == wire,
@@ -139,13 +143,10 @@ class Request<T> {
         for (final entry in (json['headers'] as Map? ?? const {}).entries)
           entry.key.toString(): entry.value.toString(),
       },
-      body:
-          body is Map
-              ? Body.fromJson(body.cast<String, Object?>())
-              : null,
+      body: body is Map ? Body.fromJson(body.cast<String, Object?>()) : null,
       priority: (json['priority'] as num? ?? 0).toInt(),
       tag: json['tag'] as String?,
-      meta: (json['meta'] as Map? ?? const {}).cast<String, Object?>(),
+      meta: (json['meta'] as Map? ?? const {}).cast<String, Object?>().entries,
       dedupe: json['dedupe'] as bool? ?? true,
       depth: (json['depth'] as num? ?? 0).toInt(),
     );
@@ -164,7 +165,7 @@ class Request<T> {
     if (body != null) 'body': body!.toJson(),
     if (priority != 0) 'priority': priority,
     if (tag != null) 'tag': tag,
-    if (meta.isNotEmpty) 'meta': meta,
+    if (meta.isNotEmpty) 'meta': meta.raw,
     if (!dedupe) 'dedupe': false,
     if (depth != 0) 'depth': depth,
   };
@@ -173,20 +174,21 @@ class Request<T> {
   String toString() => '${method.wire} $url';
 }
 
-/// A fetched response, with the pipeline controls a handler needs.
+/// A fetched page, with the pipeline controls a handler needs.
 ///
-/// Extends [HttpResponse], so [HttpResponse.$], [HttpResponse.$xpath] and
-/// [HttpResponse.body] are all available.
-class Response<T> extends HttpResponse {
-  /// The request that produced this response.
-  final Request<T> request;
+/// Extends [Reply], so [Reply.$], [Reply.$xpath] and [Reply.body] are all
+/// available. A one-off `net.http.get` hands back a plain [Reply] instead:
+/// [emit], [follow] and [stop] only exist where there is an engine to reach.
+class Page<T> extends Reply {
+  /// The fetch that produced this page.
+  final Fetch<T> fetch;
 
   /// The engine running this pipeline, or `null` for a standalone fetch.
-  Engine<dynamic>? engine;
+  Engine<T>? engine;
 
-  /// Creates a response. Normally produced by a [Downloader].
-  Response({
-    required this.request,
+  /// Creates a page. Normally produced by a [Downloader].
+  Page({
+    required this.fetch,
     Uri? url,
     Uri? requested,
     super.status = 200,
@@ -195,16 +197,16 @@ class Response<T> extends HttpResponse {
     super.encoding,
     super.cached,
     this.engine,
-  }) : super(url: url ?? request.url, requested: requested ?? request.url);
+  }) : super(url: url ?? fetch.url, requested: requested ?? fetch.url);
 
-  /// Crawl depth of the request that produced this response.
-  int get depth => request.depth;
+  /// Crawl depth of the fetch that produced this page.
+  int get depth => fetch.depth;
 
-  /// The context [Request.meta] this response's request carried.
-  Map<String, Object?> get meta => request.meta;
+  /// The context [Fetch.meta] this page's fetch carried.
+  Meta get meta => fetch.meta;
 
-  /// The [Request.tag] this response's request carried.
-  String? get tag => request.tag;
+  /// The [Fetch.tag] this page's fetch carried.
+  String? get tag => fetch.tag;
 
   /// Emits [item] as a pipeline result. See [Engine.emit].
   ///
@@ -214,7 +216,7 @@ class Response<T> extends HttpResponse {
   /// Schedules [url], resolved against this page, with a `Referer` header.
   ///
   /// This is how a crawl advances: a handler follows the links it finds.
-  /// Relative URLs resolve against [Response.url], and duplicates are dropped
+  /// Relative URLs resolve against [Page.url], and duplicates are dropped
   /// by the engine's [Deduplicator].
   ///
   /// Pass [method] and [body] to follow a form rather than a link — a search
@@ -239,12 +241,12 @@ class Response<T> extends HttpResponse {
     HttpMethod method = HttpMethod.get,
     Body? body,
     String? tag,
-    Map<String, Object?>? meta,
+    Iterable<MapEntry<String, Object?>>? meta,
     Map<String, String>? headers,
     int priority = 0,
     bool dedupe = true,
   }) => _engine.add(
-    Request<T>(
+    Fetch<T>(
       coerce(url, base: this.url),
       method: method,
       body: body,
@@ -253,14 +255,14 @@ class Response<T> extends HttpResponse {
       meta: meta,
       priority: priority,
       dedupe: dedupe,
-      depth: request.depth + 1,
+      depth: fetch.depth + 1,
     ),
   );
 
   /// Stops the pipeline after in-flight work settles. See [Engine.stop].
   void stop([String reason = 'Stopped']) => _engine.stop(reason);
 
-  Engine<dynamic> get _engine {
+  Engine<T> get _engine {
     final engine = this.engine;
     if (engine == null) {
       throw StateError(
@@ -275,16 +277,16 @@ class Response<T> extends HttpResponse {
   String toString() => '$status $url (${bytes.length} bytes)';
 }
 
-/// Handles one [Response] in a pipeline.
+/// Handles one [Page] in a pipeline.
 ///
-/// The engine is reachable as [Response.engine], so it is not passed
+/// The engine is reachable as [Page.engine], so it is not passed
 /// separately.
 ///
 /// Named `Handler` and not `Process`: Dart resolves a package import over a
 /// `dart:` one without complaining, so exporting `Process` quietly stopped
 /// `Process` meaning `dart:io`'s for every user of this library — while
 /// `system.adopt(Process)` still meant that one.
-typedef Handler<T> = FutureOr<void> Function(Response<T> response);
+typedef Handler<T> = FutureOr<void> Function(Page<T> response);
 
 /// Dispatches responses to the first matching handler.
 ///
@@ -314,7 +316,7 @@ class Router<T> {
   Router<T> on(Pattern pattern, Handler<T> handler) =>
       _add((res) => pattern.allMatches(res.url.toString()).isNotEmpty, handler);
 
-  /// Routes responses whose request carried [Request.tag] equal to [name].
+  /// Routes responses whose request carried [Fetch.tag] equal to [name].
   Router<T> tag(String name, Handler<T> handler) =>
       _add((res) => res.tag == name, handler);
 
@@ -329,7 +331,7 @@ class Router<T> {
   }
 
   /// Runs the first matching handler; returns whether one ran.
-  Future<bool> handle(Response<T> response) async {
+  Future<bool> handle(Page<T> response) async {
     for (final rule in _rules) {
       if (!rule.test(response)) continue;
       await rule.handler(response);
@@ -341,14 +343,14 @@ class Router<T> {
     return true;
   }
 
-  Router<T> _add(bool Function(Response<T> res) test, Handler<T> handler) {
+  Router<T> _add(bool Function(Page<T> res) test, Handler<T> handler) {
     _rules.add(_Rule<T>(test, handler));
     return this;
   }
 }
 
 class _Rule<T> {
-  final bool Function(Response<T> res) test;
+  final bool Function(Page<T> res) test;
   final Handler<T> handler;
 
   const _Rule(this.test, this.handler);

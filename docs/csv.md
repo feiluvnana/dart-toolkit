@@ -48,21 +48,25 @@ All four return nothing when the file does not exist. Blank lines are skipped, a
 
 ## 2. Writing
 
-`io.csv.write` accepts both maps and rows of cells, writing to disk atomically through a `.part` staging file:
+`io.csv.write` takes records and writes them atomically through a `.part` staging file. Columns come from `headers`, or from the union of every row's keys in first-seen order:
 
 ```dart
-// Write maps (keys determine headers):
 await io.csv.write('out/people.csv', [
   {'name': 'Alice', 'role': 'admin'},
   {'name': 'Bob', 'role': 'user'},
 ]);
+```
 
-// Write rows of cells with explicit headers:
-await io.csv.write('out/grid.csv', [
+For data that is already a grid, `cells` renders it and `io.write` puts it on disk — also atomically:
+
+```dart
+io.write('out/grid.csv', io.csv.cells([
   [1, 'a'],
   [2, 'b'],
-], headers: ['n', 'letter']);
+], headers: ['n', 'letter']));
 ```
+
+The two used to be one method taking `Iterable<dynamic>`, which decided at runtime which shape it had been handed. Reading has always split the same way: `maps` for records, `matrix` for cells.
 
 ---
 
@@ -82,7 +86,7 @@ Quoting is applied automatically to any cell containing the delimiter, a quote, 
 
 ### Line endings
 
-`format` and `write` end every line with `newline`, which defaults to `\n`. Pass `\r\n` for the ending Excel and RFC 4180 expect:
+`format`, `cells` and `write` end every line with `newline`, which defaults to `\n`. Pass `\r\n` for the ending Excel and RFC 4180 expect:
 
 ```dart
 await io.csv.write('out/for-excel.csv', rows, newline: '\r\n');
@@ -92,7 +96,7 @@ Reading handles either, so a file written one way reads back the same.
 
 ### Streaming out
 
-`write` takes a collection already in memory. `pipe` takes a `Stream` and never holds more than one row, which is what turns a crawl of any size into a spreadsheet in one call:
+`write` takes a collection already in memory. `pipe` takes a `Stream` of records and never holds more than one row, which is what turns a crawl of any size into a spreadsheet in one call:
 
 ```dart
 import 'package:dart_toolkit/dart_toolkit.dart';

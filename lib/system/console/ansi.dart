@@ -77,54 +77,75 @@ class Ansi {
   // Foreground Colors
   /// Black foreground.
   static const String black = '\x1B[30m';
+
   /// Red foreground.
   static const String red = '\x1B[31m';
+
   /// Green foreground.
   static const String green = '\x1B[32m';
+
   /// Yellow foreground.
   static const String yellow = '\x1B[33m';
+
   /// Blue foreground.
   static const String blue = '\x1B[34m';
+
   /// Magenta foreground.
   static const String magenta = '\x1B[35m';
+
   /// Cyan foreground.
   static const String cyan = '\x1B[36m';
+
   /// White foreground.
   static const String white = '\x1B[37m';
+
   /// Gray foreground.
   static const String gray = '\x1B[90m';
 
   // Bright Foreground Colors
   /// Bright red foreground.
   static const String brightred = '\x1B[91m';
+
   /// Bright green foreground.
   static const String brightgreen = '\x1B[92m';
+
   /// Bright yellow foreground.
   static const String brightyellow = '\x1B[93m';
+
   /// Bright blue foreground.
   static const String brightblue = '\x1B[94m';
+
   /// Bright magenta foreground.
   static const String brightmagenta = '\x1B[95m';
+
   /// Bright cyan foreground.
   static const String brightcyan = '\x1B[96m';
+
   /// Bright white foreground.
   static const String brightwhite = '\x1B[97m';
 
   // Background Colors
   /// Black background.
   static const String bgblack = '\x1B[40m';
+
   /// Red background.
   static const String bgred = '\x1B[41m';
+
   /// Green background.
   static const String bggreen = '\x1B[42m';
+
   /// Yellow background.
   static const String bgyellow = '\x1B[43m';
+
   /// Blue background.
   static const String bgblue = '\x1B[44m';
+
   /// Magenta background.
   static const String bgmagenta = '\x1B[45m';
+
   /// Cyan background.
   static const String bgcyan = '\x1B[46m';
+
   /// White background.
   static const String bgwhite = '\x1B[47m';
 

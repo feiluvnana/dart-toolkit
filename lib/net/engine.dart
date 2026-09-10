@@ -1,7 +1,7 @@
 /// # Crawler Engine
 ///
-/// The [Engine] owns the frontier: it schedules [Request]s, de-duplicates
-/// them, hands them to a [Downloader], and routes each [Response] to a
+/// The [Engine] owns the frontier: it schedules [Fetch]s, de-duplicates
+/// them, hands them to a [Downloader], and routes each [Page] to a
 /// handler that may schedule more.
 library;
 
@@ -121,7 +121,7 @@ class Deduplicator {
     : _seen = seen != null ? seen.toSet() : <String>{};
 
   /// Restores a deduplicator from serialized keys.
-  factory Deduplicator.fromJson(List<dynamic> json) =>
+  factory Deduplicator.fromJson(List<Object?> json) =>
       Deduplicator(json.cast<String>());
 
   /// Serializes recorded keys to a JSON-compatible list.
@@ -152,24 +152,24 @@ class Deduplicator {
     List<int>? body,
   }) => _seen.add(_norm(url, method: method, tag: tag, body: body));
 
-  /// Records [request]; returns `false` when it was already present.
-  /// Always returns `true` if [Request.dedupe] is `false`.
-  bool track(Request<dynamic> request) {
-    if (!request.dedupe) return true;
+  /// Records [fetch]; returns `false` when it was already present.
+  /// Always returns `true` if [Fetch.dedupe] is `false`.
+  bool track(Fetch<Object?> fetch) {
+    if (!fetch.dedupe) return true;
     return add(
-      request.url,
-      method: request.method,
-      tag: request.tag,
-      body: request.body?.bytes(),
+      fetch.url,
+      method: fetch.method,
+      tag: fetch.tag,
+      body: fetch.body?.bytes(),
     );
   }
 
-  /// Whether [request] has already been seen.
-  bool tracked(Request<dynamic> request) => seen(
-    request.url,
-    method: request.method,
-    tag: request.tag,
-    body: request.body?.bytes(),
+  /// Whether [fetch] has already been seen.
+  bool tracked(Fetch<Object?> fetch) => seen(
+    fetch.url,
+    method: fetch.method,
+    tag: fetch.tag,
+    body: fetch.body?.bytes(),
   );
 
   /// Forgets every recorded entry.
@@ -232,14 +232,14 @@ class Failure<T> {
   final StackTrace stack;
 
   /// The request being served, or `null` when the failure was not tied to one.
-  final Request<T>? request;
+  final Fetch<T>? fetch;
 
   /// Creates a failure.
-  const Failure(this.error, this.stack, [this.request]);
+  const Failure(this.error, this.stack, [this.fetch]);
 
   @override
   String toString() =>
-      request == null ? 'Failure($error)' : 'Failure(${request!.url}: $error)';
+      fetch == null ? 'Failure($error)' : 'Failure(${fetch!.url}: $error)';
 }
 
 /// The saved position of a crawl: its frontier, its visited set and its
@@ -265,7 +265,7 @@ class Snapshot<T> {
   ///
   /// A request that was mid-fetch is pending rather than done, so a resumed
   /// crawl fetches it again instead of losing the page.
-  final List<Request<T>> pending;
+  final List<Fetch<T>> pending;
 
   /// The visited set as it stood.
   final Deduplicator deduplicator;
@@ -275,10 +275,10 @@ class Snapshot<T> {
 
   /// Creates a snapshot.
   Snapshot({
-    Iterable<Request<T>>? pending,
+    Iterable<Fetch<T>>? pending,
     Deduplicator? deduplicator,
     Stats? stats,
-  }) : pending = pending?.toList() ?? <Request<T>>[],
+  }) : pending = pending?.toList() ?? <Fetch<T>>[],
        deduplicator = deduplicator ?? Deduplicator(),
        stats = stats ?? Stats();
 
@@ -296,7 +296,7 @@ class Snapshot<T> {
     return Snapshot<T>(
       pending: [
         for (final entry in (json['pending'] as List? ?? const []))
-          Request<T>.fromJson((entry as Map).cast<String, Object?>()),
+          Fetch<T>.fromJson((entry as Map).cast<String, Object?>()),
       ],
       deduplicator: Deduplicator.fromJson(json['seen'] as List? ?? const []),
       stats: Stats.fromJson(
@@ -308,7 +308,7 @@ class Snapshot<T> {
   /// Serializes this snapshot to a JSON-compatible map.
   Map<String, Object?> toJson() => {
     'version': version,
-    'pending': [for (final request in pending) request.toJson()],
+    'pending': [for (final fetch in pending) fetch.toJson()],
     'seen': deduplicator.toJson(),
     'stats': stats.toJson(),
   };
@@ -344,7 +344,7 @@ class EngineEvents<T> {
   final List<void Function()> _startHandlers = [];
   final List<void Function(Stats stats)> _doneHandlers = [];
   final List<void Function(T item)> _itemHandlers = [];
-  final List<void Function(Response<T> response)> _progressHandlers = [];
+  final List<void Function(Page<T> response)> _progressHandlers = [];
   final List<void Function(Failure<T> failure)> _errorHandlers = [];
 
   /// Called once before the first request is served.
@@ -357,7 +357,7 @@ class EngineEvents<T> {
   void item(void Function(T item) handler) => _itemHandlers.add(handler);
 
   /// Called after each response is processed.
-  void progress(void Function(Response<T> response) handler) =>
+  void progress(void Function(Page<T> response) handler) =>
       _progressHandlers.add(handler);
 
   /// Called when a request or its handler throws, with the [Failure] that
@@ -371,28 +371,28 @@ class EngineEvents<T> {
 
 /// A bucketed FIFO priority frontier.
 ///
-/// Requests are held in one queue per [Request.priority], kept in descending
+/// Requests are held in one queue per [Fetch.priority], kept in descending
 /// priority order, so serving is O(log buckets) and ties keep the order they
 /// were scheduled in.
 class _Frontier<T> {
-  final SplayTreeMap<int, ListQueue<Request<T>>> _buckets =
-      SplayTreeMap<int, ListQueue<Request<T>>>((a, b) => b.compareTo(a));
+  final SplayTreeMap<int, ListQueue<Fetch<T>>> _buckets =
+      SplayTreeMap<int, ListQueue<Fetch<T>>>((a, b) => b.compareTo(a));
   int _count = 0;
 
   int get length => _count;
   bool get isEmpty => _count == 0;
   bool get isNotEmpty => _count > 0;
 
-  void add(Request<T> request) {
+  void add(Fetch<T> fetch) {
     final queue = _buckets.putIfAbsent(
-      request.priority,
-      () => ListQueue<Request<T>>(),
+      fetch.priority,
+      () => ListQueue<Fetch<T>>(),
     );
-    queue.add(request);
+    queue.add(fetch);
     _count++;
   }
 
-  Request<T>? serve() {
+  Fetch<T>? serve() {
     while (_buckets.isNotEmpty) {
       final key = _buckets.firstKey();
       if (key == null) return null;
@@ -412,9 +412,7 @@ class _Frontier<T> {
   }
 
   /// Everything waiting, in the order [serve] would hand it out.
-  Iterable<Request<T>> get all => [
-    for (final queue in _buckets.values) ...queue,
-  ];
+  Iterable<Fetch<T>> get all => [for (final queue in _buckets.values) ...queue];
 }
 
 /// The crawling engine.
@@ -469,7 +467,7 @@ class Engine<T> {
   final _Frontier<T> _queue = _Frontier<T>();
   // Served but not yet settled. A snapshot counts these as pending, so a crawl
   // killed mid-fetch refetches the page instead of dropping it.
-  final Set<Request<T>> _inflight = <Request<T>>{};
+  final Set<Fetch<T>> _inflight = <Fetch<T>>{};
   final Map<String, Future<Robots>> _robotsCache = {};
   final ListQueue<T> _bufferedItems = ListQueue<T>();
   bool _hasItemListener = false;
@@ -592,37 +590,37 @@ class Engine<T> {
   /// Whether nothing is queued and nothing is in flight.
   bool get idle => _active == 0 && _queue.isEmpty;
 
-  /// Pushes [request] into the frontier.
+  /// Pushes [fetch] into the frontier.
   ///
   /// Silently drops the request when [dedupe] is enabled and this URL was
   /// already queued or completed, or if the request violates scope rules
   /// ([depth], [allow], [deny], [samehost]).
-  void add(Request<T> request) {
+  void add(Fetch<T> fetch) {
     if (_stopped) return;
 
     if (limit != null && _stats.scheduled >= limit!) return;
 
-    if (_seedHost == null && request.url.host.isNotEmpty) {
-      _seedHost = request.url.host.toLowerCase();
+    if (_seedHost == null && fetch.url.host.isNotEmpty) {
+      _seedHost = fetch.url.host.toLowerCase();
     }
 
-    if (depth != null && request.depth > depth!) return;
+    if (depth != null && fetch.depth > depth!) return;
 
-    if (samehost && _seedHost != null && request.url.host.isNotEmpty) {
-      if (request.url.host.toLowerCase() != _seedHost) return;
+    if (samehost && _seedHost != null && fetch.url.host.isNotEmpty) {
+      if (fetch.url.host.toLowerCase() != _seedHost) return;
     }
 
-    final urlStr = request.url.toString();
+    final urlStr = fetch.url.toString();
     if (deny.any((p) => p.allMatches(urlStr).isNotEmpty)) return;
     if (allow.isNotEmpty &&
         !allow.any((p) => p.allMatches(urlStr).isNotEmpty)) {
       return;
     }
 
-    if (dedupe && !deduplicator.track(request)) return;
-    request.engine = this;
+    if (dedupe && !deduplicator.track(fetch)) return;
+    fetch.engine = this;
 
-    _queue.add(request);
+    _queue.add(fetch);
     _stats.scheduled++;
     _signal();
   }
@@ -633,10 +631,10 @@ class Engine<T> {
   /// settled, so [snapshot] can count it as unfinished work.
   ///
   /// Called by the [Downloader]'s workers.
-  Request<T>? serve() {
-    final request = _queue.serve();
-    if (request != null) _inflight.add(request);
-    return request;
+  Fetch<T>? serve() {
+    final fetch = _queue.serve();
+    if (fetch != null) _inflight.add(fetch);
+    return fetch;
   }
 
   /// Marks a request as in flight. Called by the [Downloader]'s workers.
@@ -703,14 +701,14 @@ class Engine<T> {
   /// Processes [response] through [router], then the constructor's process.
   ///
   /// Called by the [Downloader]'s workers.
-  Future<void> process(Response<T> response) async {
+  Future<void> process(Page<T> response) async {
     _stats.bytes += response.bytes.length;
     response.engine = this;
 
     if (accept.isNotEmpty && !_accepts(response.type)) {
       // A PDF, an image, a zip: fetched, but not something to hand to an HTML
       // parser. Dropped here rather than in every handler.
-      skip(response.request);
+      skip(response.fetch);
       return;
     }
 
@@ -720,7 +718,7 @@ class Engine<T> {
     // Done only now, once the handler has run. A handler that threw has not
     // emitted what the page held, so the request stays pending for a resume
     // rather than counting as completed work.
-    _inflight.remove(response.request);
+    _inflight.remove(response.fetch);
     _stats.completed++;
     for (final h in on._progressHandlers) {
       h(response);
@@ -749,10 +747,10 @@ class Engine<T> {
 
   /// Records a request dropped before fetching. Called by the [Downloader].
   ///
-  /// Pass the [request] that was dropped so it is not held as in flight — a
+  /// Pass the [fetch] that was dropped so it is not held as in flight — a
   /// page `robots.txt` refuses is settled, not pending.
-  void skip([Request<dynamic>? request]) {
-    if (request != null) _inflight.remove(request);
+  void skip([Fetch<T>? fetch]) {
+    if (fetch != null) _inflight.remove(fetch);
     _stats.skipped++;
     if (idle) _signal();
   }
@@ -767,11 +765,11 @@ class Engine<T> {
   /// Reports [error] to the [EngineEvents.error] handlers.
   ///
   /// Called by the [Downloader]'s workers when a fetch or handler throws.
-  /// Pass the [request] being served: a count of failures without the pages
+  /// Pass the [fetch] being served: a count of failures without the pages
   /// they happened on leaves nothing to retry or report.
-  void fail(Object error, StackTrace stack, [Request<dynamic>? request]) {
+  void fail(Object error, StackTrace stack, [Fetch<T>? fetch]) {
     _stats.failed++;
-    final failure = Failure<T>(error, stack, request as Request<T>?);
+    final failure = Failure<T>(error, stack, fetch);
     for (final h in on._errorHandlers) {
       h(failure);
     }
@@ -813,9 +811,9 @@ class Engine<T> {
       ..skipped = counters.skipped
       ..dropped = counters.dropped;
 
-    for (final request in snapshot.pending) {
-      request.engine = this;
-      _queue.add(request);
+    for (final fetch in snapshot.pending) {
+      fetch.engine = this;
+      _queue.add(fetch);
     }
   }
 
@@ -842,7 +840,7 @@ class Engine<T> {
 
     downloader.attach(this);
     for (final url in urls) {
-      add(Request<T>(coerce(url)));
+      add(Fetch<T>(coerce(url)));
     }
 
     for (final h in on._startHandlers) {

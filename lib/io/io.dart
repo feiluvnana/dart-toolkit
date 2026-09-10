@@ -112,7 +112,18 @@ class IoAccessor {
   /// io.dump('data.json', {'count': 42});
   /// final data = io.json<Map<String, Object?>>('data.json');
   /// ```
-  T json<T>(String path) => Fs.json<T>(path);
+  ///
+  /// Pass [parse] to build a real type out of the document rather than casting
+  /// the decoded maps and lists at every read:
+  ///
+  /// ```dart
+  /// final config = io.json('config.json', Config.fromJson);
+  /// ```
+  ///
+  /// Without it the decoded value is cast to [T], which throws when the
+  /// document is not the shape the call site claimed.
+  T json<T>(String path, [T Function(Object? raw)? parse]) =>
+      Fs.json<T>(path, parse);
 
   /// Streams [path] as decoded lines.
   Stream<String> lines(String path, {Encoding encoding = utf8}) =>
@@ -277,7 +288,8 @@ class IoAsyncAccessor {
   Future<List<int>> bytes(String path) => File(path).readAsBytes();
 
   /// Reads and decodes the JSON document at [path] as [T].
-  Future<T> json<T>(String path) => Fs.jsonAsync<T>(path);
+  Future<T> json<T>(String path, [T Function(Object? raw)? parse]) =>
+      Fs.jsonAsync<T>(path, parse);
 
   /// Streams [path] as decoded lines.
   Stream<String> lines(String path, {Encoding encoding = utf8}) =>

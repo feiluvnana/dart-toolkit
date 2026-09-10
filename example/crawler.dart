@@ -13,13 +13,19 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 typedef Track = ({String artist, String album, String title, int number});
 
 void main(List<String> args) async {
-  cli
-    ..flag('live', desc: 'Fetch the real site instead of fixtures')
-    ..option('out', alias: 'o', desc: 'JSON Lines output', def: 'tracks.jsonl')
-    ..parse(args);
+  final live = cli.flag(
+    'live',
+    desc: 'Fetch the real site instead of fixtures',
+  );
+  final out = cli.option(
+    'out',
+    alias: 'o',
+    desc: 'JSON Lines output',
+    def: 'tracks.jsonl',
+  );
+  cli.parse(args);
 
   final log = system.console.logger;
-  final live = cli.has('live');
 
   final crawl = net
       .crawl<Track>('https://music.test/artists')
@@ -43,14 +49,14 @@ void main(List<String> args) async {
       .tag('artist', _artist)
       .tag('album', _album);
 
-  if (!live) crawl.downloader(MapDownloader<Track>(_fixtures));
+  if (!live()) crawl.downloader(MapDownloader<Track>(_fixtures));
 
   // Report progress and surface errors — without an error handler a crawl
   // swallows them so one bad page cannot end the run.
   crawl.on
     ..start(() => log.info('Starting...'))
     ..progress((res) => log.debug('${res.status} ${res.url}'))
-    ..error((f) => log.warn('${f.request?.url ?? 'crawl'}: ${f.error}'))
+    ..error((f) => log.warn('${f.fetch?.url ?? 'crawl'}: ${f.error}'))
     ..done((stats) {
       log.ok(
         '${stats.completed} pages, ${stats.emitted} tracks, '
@@ -61,19 +67,24 @@ void main(List<String> args) async {
 
   // `to` streams each item to disk as it arrives, so a long crawl never holds
   // its results in memory. `collect` returns a list; `stream` yields them.
-  final out = cli.get('out', 'tracks.jsonl');
-  await crawl.save(out);
+  await crawl.save(out());
 
-  log.ok('Wrote $out');
+  log.ok('Wrote ${out()}');
 }
 
+// The context each stage passes to the next. Declared once, checked at both
+// ends: `artist('Nick Drake')` will not compile with a number in it, and
+// `res.meta.get(artist)` hands back a String? without a cast.
+const artist = Slot<String>('artist');
+const album = Slot<String>('album');
+
 /// Stage 1 — the index. Queue every artist, tagged so stage 2 picks them up.
-void _artists(Response<Track> res) {
+void _artists(Page<Track> res) {
   for (final link in res.$('.artist a')) {
     res.follow(
       link.attributes['href'] ?? '',
       tag: 'artist',
-      meta: {'artist': util.text.clean(link.text)},
+      meta: [artist(util.text.clean(link.text))],
       // Artists are cheap and unlock everything else, so serve them first.
       priority: 10,
     );
@@ -81,30 +92,29 @@ void _artists(Response<Track> res) {
 }
 
 /// Stage 2 — an artist. Queue their albums, passing the artist name down.
-void _artist(Response<Track> res) {
-  final artist = res.meta['artist'] as String? ?? res.pick(Field.text('h1'));
+void _artist(Page<Track> res) {
+  final name = res.meta.get(artist) ?? res.pick(Field.text('h1'));
 
   for (final link in res.$('.album a')) {
     res.follow(
       link.attributes['href'] ?? '',
       tag: 'album',
-      meta: {'artist': artist, 'album': util.text.clean(link.text)},
+      meta: [if (name != null) artist(name), album(util.text.clean(link.text))],
     );
   }
 }
 
 /// Stage 3 — an album. Emit one item per track.
-void _album(Response<Track> res) {
-  final artist = res.meta['artist'] as String? ?? '';
-  final album =
-      res.meta['album'] as String? ?? res.pick(Field.text('h1')) ?? '';
+void _album(Page<Track> res) {
+  final by = res.meta.get(artist) ?? '';
+  final on = res.meta.get(album) ?? res.pick(Field.text('h1')) ?? '';
 
   var number = 0;
   for (final row in res.$('.track')) {
     number++;
     final title = util.text.clean(row.query.find('.title').text);
     if (title.isEmpty) continue;
-    res.emit((artist: artist, album: album, title: title, number: number));
+    res.emit((artist: by, album: on, title: title, number: number));
   }
 
   // Stop early once a run has seen enough, from inside a handler.

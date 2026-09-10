@@ -12,7 +12,7 @@ That difference matters because of what a real form carries: a CSRF token, a ses
 import 'package:dart_toolkit/dart_toolkit.dart';
 
 void main() async {
-  final session = HttpClient(session: true);
+  final session = Fetcher(session: true);
   final page = await session.get('https://example.com/login'.url);
 
   final home = await page.form('#login')!
@@ -127,7 +127,7 @@ Two ways, because there are two situations.
 **Standalone**, with `send`. Pass the client that fetched the page when it holds a session, so the cookies that came with the form go back with it:
 
 ```dart
-final session = HttpClient(session: true);
+final session = Fetcher(session: true);
 final page = await session.get(loginUrl);
 final home = await page.form('#login')!
     .fill({'user': user, 'pass': pass})

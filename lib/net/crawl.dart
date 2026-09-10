@@ -36,7 +36,7 @@ class Crawl {
 
   /// Starts a crawl seeded with a single [target] string (e.g. URL, raw HTML, or task string).
   ///
-  /// [T] is the type of item handlers [Response.emit]. Pass a [process]
+  /// [T] is the type of item handlers [Page.emit]. Pass a [process]
   /// function here, or hand one to [CrawlBuilder.run] at the end.
   CrawlBuilder<T> call<T>(String target, [Handler<T>? process]) =>
       CrawlBuilder<T>([target], process);
@@ -52,13 +52,13 @@ class Crawl {
       mimeType: 'text/html',
       encoding: utf8,
     );
-    return seed<T>([Request<T>(uri)], process);
+    return seed<T>([Fetch<T>(uri)], process);
   }
 
   /// Starts a crawl seeded with a local file [path].
   CrawlBuilder<T> file<T>(String path, [Handler<T>? process]) {
     final uri = Uri.file(File(path).absolute.path);
-    return seed<T>([Request<T>(uri)], process);
+    return seed<T>([Fetch<T>(uri)], process);
   }
 
   /// Starts a crawl seeded with all URLs discovered in [sitemapUrl].
@@ -68,15 +68,12 @@ class Crawl {
     return builder;
   }
 
-  /// Starts a crawl seeded with fully-formed [requests].
+  /// Starts a crawl seeded with fully-formed [fetches].
   ///
   /// Use this when seeds need their own headers, tags, priority or method.
-  CrawlBuilder<T> seed<T>(
-    Iterable<Request<T>> requests, [
-    Handler<T>? process,
-  ]) {
+  CrawlBuilder<T> seed<T>(Iterable<Fetch<T>> fetches, [Handler<T>? process]) {
     final builder = CrawlBuilder<T>(const [], process);
-    builder._seeds.addAll(requests);
+    builder._seeds.addAll(fetches);
     return builder;
   }
 }
@@ -87,7 +84,7 @@ class Crawl {
 /// Nothing runs until [run], [collect] or [stream] is called.
 class CrawlBuilder<T> {
   final List<String> _urls;
-  final List<Request<T>> _seeds = [];
+  final List<Fetch<T>> _seeds = [];
   final Handler<T>? _process;
 
   int? _concurrency;
@@ -120,7 +117,7 @@ class CrawlBuilder<T> {
   final List<void Function()> _startHandlers = [];
   final List<void Function(Stats stats)> _doneHandlers = [];
   final List<void Function(T item)> _itemHandlers = [];
-  final List<void Function(Response<T> response)> _progressHandlers = [];
+  final List<void Function(Page<T> response)> _progressHandlers = [];
   final List<void Function(Failure<T> failure)> _errorHandlers = [];
 
   /// Creates a builder seeded with [urls] and an optional [_process].
@@ -276,7 +273,7 @@ class CrawlBuilder<T> {
   /// A re-run then asks each server whether anything changed — an `ETag` or
   /// `If-Modified-Since` exchange that carries no body — and reuses what it
   /// has when the answer is no. A response still inside its `max-age` is not
-  /// asked about at all. Both arrive with [HttpResponse.cached] set, so a
+  /// asked about at all. Both arrive with [Reply.cached] set, so a
   /// handler can skip the pages that did not move:
   ///
   /// ```dart
@@ -311,7 +308,7 @@ class CrawlBuilder<T> {
   ///     .collect((res) => res.emit(res.url.toString()));
   /// ```
   ///
-  /// Requests carry [Request.meta] through the file, so anything a handler
+  /// Requests carry [Fetch.meta] through the file, so anything a handler
   /// stores there has to be JSON-encodable. Supplying a [deduplicator] as well
   /// loses to the restored one, which is the authority for a resumed run.
   CrawlBuilder<T> resume(
@@ -497,9 +494,9 @@ class CrawlBuilder<T> {
 
   /// Writes [engine]'s position to [path], one write at a time.
   Future<void> _write(String path, Engine<T> engine) =>
-      // Captured now, so a snapshot queued behind an in-flight write still
-      // records the frontier as it stood when the save was asked for.
-      _save(path, engine.snapshot());
+  // Captured now, so a snapshot queued behind an in-flight write still
+  // records the frontier as it stood when the save was asked for.
+  _save(path, engine.snapshot());
 
   /// Writes [position] to [path], behind any write already in flight.
   Future<void> _save(String path, Snapshot<T> position) {
@@ -563,39 +560,80 @@ class CrawlBuilder<T> {
     return items;
   }
 
-  /// Runs the crawl and writes emitted items to [sinkOrPath] as they arrive.
+  /// Runs the crawl, collecting what [map] returns for each page.
   ///
-  /// Accepts a file path string or an [IOSink]. Maps and Lists are written as
-  /// JSON lines. Nothing is held in memory, so this is what a long crawl wants
+  /// The single-stage form. [R] is inferred from what [map] returns, where
+  /// [collect] can only learn `T` from an `emit` buried inside a closure — so
+  /// the result type is right without being written down, and there is no
+  /// engine to reach for.
+  ///
+  /// The crawl itself emits nothing, which is what `Never` says:
+  ///
+  /// ```dart
+  /// final titles = await net.crawl<Never>(seed)
+  ///     .gather((p) => p.$('.title').texts);
+  /// // Future<List<String>>
+  /// ```
+  ///
+  /// Returning nothing for a page is returning an empty iterable, so a handler
+  /// that filters reads as one:
+  ///
+  /// ```dart
+  /// final prices = await net.crawl<Never>(seed).gather((p) => [
+  ///   if (p.pick(Field.text('.price').when(util.text.number)) case final n?) n,
+  /// ]);
+  /// ```
+  ///
+  /// Everything else the builder configures still applies, including [route]
+  /// and [tag] — but a handler registered there emits through [Response.emit]
+  /// rather than returning, so a multi-stage crawl wants [collect].
+  Future<List<R>> gather<R>(Iterable<R> Function(Page<T> page) map) async {
+    final items = <R>[];
+    await run((page) => items.addAll(map(page)));
+    return items;
+  }
+
+  /// Runs the crawl and writes emitted items to [path] as they arrive.
+  ///
+  /// Maps and lists are written as JSON lines; anything else as its
+  /// `toString`. Nothing is held in memory, so this is what a long crawl wants
   /// where [collect] would not fit.
   ///
-  /// A path is written the way every other write in this library is: items go
-  /// to a `.part` staging file, its folder is created if it is missing, and
-  /// it is renamed into place only once the run finishes. A crawl that fails
-  /// part way therefore leaves whatever was already at [sinkOrPath] intact,
-  /// where opening the destination directly had truncated it before the first
-  /// page was even fetched. An [IOSink] is the caller's own: it is written to
-  /// and flushed, never closed.
-  Future<Stats> save(Object sinkOrPath, [Handler<T>? process]) async {
-    if (sinkOrPath is String) {
-      late Stats stats;
-      await Fs.atomic(sinkOrPath, (staging) async {
-        final sink = staging.openWrite();
-        try {
-          stats = await _pour(sink, process);
-        } finally {
-          await sink.close();
-        }
-      });
-      return stats;
-    }
-    if (sinkOrPath is IOSink) return _pour(sinkOrPath, process);
-    throw ArgumentError.value(
-      sinkOrPath,
-      'sinkOrPath',
-      'Must be a String path or IOSink',
-    );
+  /// The write is atomic, like every other write in this library: items go to
+  /// a `.part` staging file, its folder is created if it is missing, and it is
+  /// renamed into place only once the run finishes. A crawl that fails part
+  /// way therefore leaves whatever was already at [path] intact, where opening
+  /// the destination directly had truncated it before the first page was even
+  /// fetched.
+  ///
+  /// ```dart
+  /// await net.crawl<String>(seed).save('titles.txt');
+  /// ```
+  ///
+  /// To write somewhere that is not a file, see [sink].
+  Future<Stats> save(String path, [Handler<T>? process]) async {
+    late Stats stats;
+    await Fs.atomic(path, (staging) async {
+      final out = staging.openWrite();
+      try {
+        stats = await _pour(out, process);
+      } finally {
+        await out.close();
+      }
+    });
+    return stats;
   }
+
+  /// Runs the crawl and writes emitted items to [destination] as they arrive.
+  ///
+  /// The sink is the caller's own: it is written to and flushed, never closed.
+  /// [save] is the same thing pointed at a file, and stages its write.
+  ///
+  /// ```dart
+  /// await net.crawl<String>(seed).sink(stdout);
+  /// ```
+  Future<Stats> sink(IOSink destination, [Handler<T>? process]) =>
+      _pour(destination, process);
 
   /// Runs the crawl, writing every emitted item to [sink] as a line.
   Future<Stats> _pour(IOSink sink, Handler<T>? process) async {
@@ -691,7 +729,7 @@ class CrawlEvents<T> {
   }
 
   /// Called after each response is processed.
-  CrawlBuilder<T> progress(void Function(Response<T> response) handler) {
+  CrawlBuilder<T> progress(void Function(Page<T> response) handler) {
     _builder._progressHandlers.add(handler);
     return _builder;
   }

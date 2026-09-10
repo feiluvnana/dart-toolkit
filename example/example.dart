@@ -28,20 +28,27 @@ class Product {
 
 void main(List<String> args) async {
   // ---------------------------------------------------------------- system
-  // Declare the command line up front and `--help` writes itself.
-  cli
-    ..flag('force', alias: 'f', desc: 'Overwrite existing output')
-    ..flag('help', alias: 'h', desc: 'Show this message')
-    ..option('concurrency', alias: 'c', desc: 'Parallel fetches', def: 4)
-    ..parse(args);
+  // Declare the command line up front and `--help` writes itself. Each
+  // declaration hands back the handle that reads it, so the type and the
+  // default are settled here rather than at every call site.
+  final force = cli.flag(
+    'force',
+    alias: 'f',
+    desc: 'Overwrite existing output',
+  );
+  final help = cli.flag('help', alias: 'h', desc: 'Show this message');
+  final size = cli.number(
+    'concurrency',
+    alias: 'c',
+    desc: 'Parallel fetches',
+    def: 4,
+  );
+  cli.parse(args);
 
-  if (cli.has('help')) {
+  if (help()) {
     cli.help(syntax: 'example.dart [options]', desc: 'Domain tour.');
     return;
   }
-
-  final size = cli.get('concurrency', 4);
-  final force = cli.has('force');
 
   // `.env` fills in what the shell did not set; nothing here fails if absent.
   system.env.load();
@@ -67,7 +74,7 @@ void main(List<String> args) async {
       await net
           .crawl<Product>('https://shop.test/catalogue')
           .downloader(MapDownloader<Product>(_fixtures))
-          .concurrent(size)
+          .concurrent(size())
           .delay(util.rand.jitter(20.ms))
           .depth(2)
           .limit(20)
@@ -91,7 +98,7 @@ void main(List<String> args) async {
       slug: util.text.slug(product.name),
       key: util.hash.short(product.url),
     );
-  }, size: size);
+  }, size: size());
   bar.done('Enriched ${enriched.length} products.');
 
   // -------------------------------------------------------------------- io
@@ -100,7 +107,7 @@ void main(List<String> args) async {
   final dir = 'output';
   final summary = io.join(dir, 'summary.txt');
 
-  if (!force && io.has(summary)) {
+  if (!force() && io.has(summary)) {
     log.warn('$summary exists; pass --force to overwrite.');
   } else {
     // Blocking writes on `io`, non-blocking on `io.async` — same names.
@@ -125,11 +132,12 @@ void main(List<String> args) async {
   }
 
   // A tiny JSON store keeps state between runs: cursors, "last seen" markers.
+  // Its keys are slots, so `runs` is an int on the way in and on the way out.
   final db = io.store.open(io.join(dir, 'state.json'));
-  final runs = (db.get<int>('runs', 0) ?? 0) + 1;
+  final count = (db.get(runs) ?? 0) + 1;
   db
-    ..set('runs', runs)
-    ..set('last', util.time.iso());
+    ..set(runs, count)
+    ..set(last, util.time.iso());
   await db.save();
 
   // ------------------------------------------------------------------- zip
@@ -187,15 +195,27 @@ void main(List<String> args) async {
 // and queues more work. `route` matches the URL, `tag` matches what queued it.
 // ---------------------------------------------------------------------------
 
+// One typed key, declared once. The listing writes it and the detail page
+// reads it back as a `num?` — no cast, and no chance of the two spelling
+// the key differently.
+const listed = Slot<num>('listed');
+
+// What the run remembers between invocations.
+const runs = Slot<int>('runs');
+const last = Slot<String>('last');
+
 /// The listing page: queue every product, then follow pagination.
-void _catalogue(Response<Product> res) {
+void _catalogue(Page<Product> res) {
   for (final card in res.$('.product')) {
     // `meta` survives the round trip, so the detail handler knows the price
     // the listing showed without parsing it twice.
     res.follow(
       card.query.find('a').href ?? '',
       tag: 'product',
-      meta: {'listed': util.text.number(card.query.find('.price').text)},
+      meta: [
+        if (util.text.number(card.query.find('.price').text) case final p?)
+          listed(p),
+      ],
     );
   }
 
@@ -204,7 +224,7 @@ void _catalogue(Response<Product> res) {
 }
 
 /// A product page. `pick` keeps the field's type; `extract` is the shorthand.
-void _product(Response<Product> res) {
+void _product(Page<Product> res) {
   final name = res.pick(Field.text('h1'));
   final price = util.text.number(res.pick(Field.text('.price')) ?? '');
   if (name == null || price == null) return;

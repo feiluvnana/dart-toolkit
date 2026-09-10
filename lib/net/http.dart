@@ -1,7 +1,7 @@
 /// # HTTP Networking (`net.*`)
 ///
 /// A retrying HTTP client over `package:http` whose responses provide DOM
-/// querying via [HttpResponse.$] and [HttpResponse.$xpath].
+/// querying via [Reply.$] and [Reply.$xpath].
 library;
 
 import 'dart:async';
@@ -23,21 +23,21 @@ import '../src/fs.dart';
 import 'selector.dart';
 
 // ============================================================================
-// HTTP NETWORKING (HttpClient / HttpResponse)
+// HTTP NETWORKING (Fetcher / Reply)
 // ============================================================================
 
 /// An HTTP failure that retrying cannot fix.
 ///
-/// Thrown for a body larger than [HttpClient.cap] and for a redirect chain
+/// Thrown for a body larger than [Fetcher.cap] and for a redirect chain
 /// past its limit: both are settled answers from the server, so
-/// [HttpClient.send] rethrows them instead of spending its retry budget
+/// [Fetcher.send] rethrows them instead of spending its retry budget
 /// re-downloading the same refusal.
 final class FatalHttpException extends HttpException {
   /// Creates a non-retryable HTTP exception.
   const FatalHttpException(super.message, {super.uri});
 }
 
-/// HTTP verbs supported by [HttpClient.send].
+/// HTTP verbs supported by [Fetcher.send].
 enum HttpMethod {
   /// Retrieve a resource.
   get,
@@ -83,7 +83,7 @@ sealed class Body {
   /// Restores a body from the map [toJson] produced.
   ///
   /// This is what lets a queued request survive being written to disk and read
-  /// back — see `Request.fromJson`.
+  /// back — see `Fetch.fromJson`.
   ///
   /// Throws [FormatException] when [json] names no known body shape.
   factory Body.fromJson(Map<String, Object?> json) {
@@ -197,7 +197,7 @@ final class JsonBody extends Body {
 }
 
 /// An HTTP response, with helpers for scraping its body.
-class HttpResponse {
+class Reply {
   static final _charsetParam = RegExp(r'charset=([^;]+)', caseSensitive: false);
   static final _charsetMeta = RegExp(
     r'''<meta[^>]+(?:charset=["']?([a-zA-Z0-9_\-]+)|content=["'][^"']*charset=([a-zA-Z0-9_\-]+))''',
@@ -213,7 +213,7 @@ class HttpResponse {
   /// The HTTP status code.
   final int status;
 
-  /// Response headers, lower-cased by `package:http`.
+  /// Page headers, lower-cased by `package:http`.
   final Map<String, String> headers;
 
   /// The raw response body.
@@ -233,8 +233,8 @@ class HttpResponse {
   Object? _json;
   bool _decoded = false;
 
-  /// Creates a response. Normally produced by [HttpClient.send].
-  HttpResponse({
+  /// Creates a response. Normally produced by [Fetcher.send].
+  Reply({
     required this.url,
     Uri? requested,
     required this.status,
@@ -245,18 +245,18 @@ class HttpResponse {
   }) : requested = requested ?? url,
        _encodingOverride = encoding;
 
-  /// Creates an [HttpResponse] from a [text] string.
+  /// Creates a [Reply] from a [text] string.
   ///
   /// With only [requested] given, that is also the [url]: a fixture that says
   /// where it came from should resolve its own links from there rather than
   /// from `localhost`.
-  factory HttpResponse.text(
+  factory Reply.text(
     String text, {
     Uri? url,
     int status = 200,
     Map<String, String>? headers,
     Uri? requested,
-  }) => HttpResponse(
+  }) => Reply(
     url: url ?? requested ?? Uri.parse('http://localhost'),
     requested: requested,
     status: status,
@@ -385,7 +385,7 @@ class HttpResponse {
   /// });
   /// ```
   Map<String, Object?> extract(Map<String, Object?> schema) =>
-      _extractFrom(doc.documentElement ?? doc.body, schema);
+      Field.readAll(doc.documentElement ?? doc.body, schema);
 
   /// Reads a single typed [field] from the document.
   ///
@@ -398,238 +398,13 @@ class HttpResponse {
   T pick<T>(Field<T> field) =>
       field.read(doc.documentElement ?? doc.body ?? Element.tag('html'));
 
-  /// Reads [schema] out of [root]. Shared with the [Field] cases.
-  static Map<String, Object?> _extractFrom(
-    Element? root,
-    Map<String, Object?> schema,
-  ) {
-    final result = <String, Object?>{};
-    if (root == null) return result;
-    for (final entry in schema.entries) {
-      result[entry.key] = Field.of(entry.value).read(root);
-    }
-    return result;
-  }
-
   @override
   String toString() => '$status $url (${bytes.length} bytes)';
 }
 
-/// One typed value to read out of a parsed page.
-///
-/// [HttpResponse.extract] accepts these alongside the string shorthand, and
-/// [HttpResponse.pick] reads one without losing its type. Sealed, so every
-/// extraction shape is a case the compiler knows about rather than a runtime
-/// type test on `dynamic`.
-///
-/// ```dart
-/// final title = res.pick(Field.text('h1'));            // String?
-/// final links = res.pick(Field.attrs('a', 'href'));    // List<String>
-/// ```
-sealed class Field<T> {
-  const Field();
-
-  /// The trimmed text of the first match of [selector], or `null`.
-  static TextField text(String selector) => TextField(selector);
-
-  /// Attribute [attribute] on the first match of [selector], or `null`.
-  ///
-  /// An empty [selector] reads the attribute off the root element itself.
-  static AttrField attr(String selector, String attribute) =>
-      AttrField(selector, attribute);
-
-  /// The trimmed text of every match of [selector].
-  static TextsField texts(String selector) => TextsField(selector);
-
-  /// Attribute [attribute] across every match of [selector] that carries it.
-  static AttrsField attrs(String selector, String attribute) =>
-      AttrsField(selector, attribute);
-
-  /// A nested object read from the same root.
-  static MapField map(Map<String, Object?> schema) => MapField(schema);
-
-  /// One object per match of [selector], each read with [schema].
-  static ListField list(String selector, Map<String, Object?> schema) =>
-      ListField(selector, schema);
-
-  /// An arbitrary read, for anything the other cases do not cover.
-  static CallField<R> fn<R>(R Function(Element element) read) =>
-      CallField<R>(read);
-
-  /// Reads this field out of [root].
-  T read(Element root);
-
-  /// The [Field] a schema entry describes, expanding the string shorthand.
-  ///
-  /// `'h1'`, `'a@href'`, `['li']`, `['li@href']`, `['.row', {...}]` and a
-  /// nested schema map all have a [Field] equivalent; anything else reads as
-  /// `null`.
-  static Field<Object?> of(Object? spec) {
-    switch (spec) {
-      case Field<Object?> field:
-        return field;
-      case String css:
-        final at = css.indexOf('@');
-        if (at == -1) return TextField(css);
-        return AttrField(
-          css.substring(0, at).trim(),
-          css.substring(at + 1).trim(),
-        );
-      case Map<String, Object?> schema:
-        return MapField(schema);
-      case List<Object?> spec when spec.length == 1:
-        final first = spec.first;
-        if (first is! String) return const _NullField();
-        final at = first.indexOf('@');
-        if (at == -1) return TextsField(first);
-        return AttrsField(
-          first.substring(0, at).trim(),
-          first.substring(at + 1).trim(),
-        );
-      case List<Object?> spec
-          when spec.length == 2 &&
-              spec[0] is String &&
-              spec[1] is Map<String, Object?>:
-        return ListField(spec[0]! as String, spec[1]! as Map<String, Object?>);
-      default:
-        return const _NullField();
-    }
-  }
-}
-
-/// The text of the first match, read as a browser renders it. See
-/// [Field.text].
-final class TextField extends Field<String?> {
-  /// The CSS selector to read.
-  final String selector;
-
-  /// Creates a text field.
-  const TextField(this.selector);
-
-  @override
-  String? read(Element root) {
-    final target = selector.isEmpty ? root : root.querySelector(selector);
-    // The one text reader, so extract and res.$ never disagree about what
-    // the text of an element is.
-    return target == null ? null : QueryResult.readable(target);
-  }
-}
-
-/// An attribute of the first match. See [Field.attr].
-final class AttrField extends Field<String?> {
-  /// The CSS selector to read; empty means the root element itself.
-  final String selector;
-
-  /// The attribute name, or `text` for the element's text.
-  final String attribute;
-
-  /// Creates an attribute field.
-  const AttrField(this.selector, this.attribute);
-
-  @override
-  String? read(Element root) {
-    final target = selector.isEmpty ? root : root.querySelector(selector);
-    if (target == null) return null;
-    return attribute == 'text'
-        ? QueryResult.readable(target)
-        : target.attributes[attribute];
-  }
-}
-
-/// The text of every match, read as a browser renders it. See [Field.texts].
-final class TextsField extends Field<List<String>> {
-  /// The CSS selector to read.
-  final String selector;
-
-  /// Creates a repeated text field.
-  const TextsField(this.selector);
-
-  @override
-  List<String> read(Element root) => [
-    for (final el in root.querySelectorAll(selector)) QueryResult.readable(el),
-  ];
-}
-
-/// An attribute across every match. See [Field.attrs].
-final class AttrsField extends Field<List<String>> {
-  /// The CSS selector to read; empty means the root element itself.
-  final String selector;
-
-  /// The attribute name, or `text` for each element's text.
-  final String attribute;
-
-  /// Creates a repeated attribute field.
-  const AttrsField(this.selector, this.attribute);
-
-  @override
-  List<String> read(Element root) {
-    final elements =
-        selector.isEmpty ? [root] : root.querySelectorAll(selector);
-    if (attribute == 'text') {
-      // Through [QueryResult.readable], like every other text read here: the
-      // plural form used to hand back the page's own indentation while the
-      // singular one collapsed it.
-      return [for (final el in elements) QueryResult.readable(el)];
-    }
-    return [
-      for (final el in elements)
-        if (el.attributes[attribute] case final value?) value,
-    ];
-  }
-}
-
-/// A nested object read from the same root. See [Field.map].
-final class MapField extends Field<Map<String, Object?>> {
-  /// The schema of the nested object.
-  final Map<String, Object?> schema;
-
-  /// Creates a nested object field.
-  const MapField(this.schema);
-
-  @override
-  Map<String, Object?> read(Element root) =>
-      HttpResponse._extractFrom(root, schema);
-}
-
-/// One object per match. See [Field.list].
-final class ListField extends Field<List<Map<String, Object?>>> {
-  /// The CSS selector matching each container element.
-  final String selector;
-
-  /// The schema applied to every container.
-  final Map<String, Object?> schema;
-
-  /// Creates a repeated object field.
-  const ListField(this.selector, this.schema);
-
-  @override
-  List<Map<String, Object?>> read(Element root) => [
-    for (final el in root.querySelectorAll(selector))
-      HttpResponse._extractFrom(el, schema),
-  ];
-}
-
-/// An arbitrary typed read. See [Field.fn].
-final class CallField<T> extends Field<T> {
-  final T Function(Element element) _read;
-
-  /// Creates a field backed by [read].
-  const CallField(this._read);
-
-  @override
-  T read(Element root) => _read(root);
-}
-
-final class _NullField extends Field<Object?> {
-  const _NullField();
-
-  @override
-  Object? read(Element root) => null;
-}
-
 /// Resolves destination paths against an optional base directory.
 ///
-/// Shared by [HttpClient] and every [Downloader], which both accept a `base`
+/// Shared by [Fetcher] and every [Downloader], which both accept a `base`
 /// folder that relative destinations hang off.
 mixin PathResolver {
   /// The base directory prepended to relative destinations, if any.
@@ -651,11 +426,11 @@ mixin PathResolver {
 /// need your own headers, timeout or base directory — and close it when done.
 ///
 /// ```dart
-/// final client = HttpClient(headers: {'Cookie': session});
+/// final client = Fetcher(headers: {'Cookie': session});
 /// final res = await client.get('https://example.com/page'.url);
 /// await client.close();
 /// ```
-class HttpClient with PathResolver {
+class Fetcher with PathResolver {
   final http.Client _client;
   final bool _ownsClient;
 
@@ -712,7 +487,7 @@ class HttpClient with PathResolver {
   /// caller keeps ownership and [close] leaves it open. Without [headers] a desktop browser
   /// User-Agent and HTML `Accept` header are sent, which is what most scraping
   /// targets expect.
-  HttpClient({
+  Fetcher({
     http.Client? pool,
     Map<String, String>? headers,
     this.timeout = const Duration(seconds: 30),
@@ -757,7 +532,7 @@ class HttpClient with PathResolver {
   /// [onretry] is called with the URL and the attempt number just before each
   /// wait, which is how a caller counts retries that happen in here — a crawl
   /// reports them as [Stats.retried].
-  Future<HttpResponse> send(
+  Future<Reply> send(
     HttpMethod method,
     Uri url, {
     Map<String, String>? headers,
@@ -862,7 +637,7 @@ class HttpClient with PathResolver {
             return confirmed;
           }
 
-          final result = HttpResponse(
+          final result = Reply(
             url: currentUrl,
             requested: url,
             status: response.statusCode,
@@ -904,7 +679,7 @@ class HttpClient with PathResolver {
       if (declared != null && declared > limit) {
         await streamed.stream.drain<void>();
         throw FatalHttpException(
-          'Response of $declared bytes exceeds the cap of $limit',
+          'Page of $declared bytes exceeds the cap of $limit',
           uri: url,
         );
       }
@@ -913,10 +688,7 @@ class HttpClient with PathResolver {
       await for (final chunk in streamed.stream) {
         builder.add(chunk);
         if (builder.length > limit) {
-          throw FatalHttpException(
-            'Response exceeds the cap of $limit',
-            uri: url,
-          );
+          throw FatalHttpException('Page exceeds the cap of $limit', uri: url);
         }
       }
       return http.Response.bytes(
@@ -937,16 +709,16 @@ class HttpClient with PathResolver {
   ///
   /// A cache of anything but a plain successful `GET` would hand back answers
   /// to questions nobody asked again.
-  static bool _storable(HttpMethod method, HttpResponse response) {
+  static bool _storable(HttpMethod method, Reply response) {
     if (method != HttpMethod.get || response.status != 200) return false;
     final control = response.headers['cache-control']?.toLowerCase();
     return control == null || !control.contains('no-store');
   }
 
   /// [entry]'s response, restamped with the freshness headers a `304` carried.
-  static HttpResponse _confirm(CacheEntry entry, Map<String, String> headers) {
+  static Reply _confirm(CacheEntry entry, Map<String, String> headers) {
     const refreshed = ['cache-control', 'expires', 'date', 'etag'];
-    return HttpResponse(
+    return Reply(
       url: entry.response.url,
       requested: entry.response.requested,
       status: entry.response.status,
@@ -993,7 +765,7 @@ class HttpClient with PathResolver {
   }
 
   /// Sends a `GET` to [url].
-  Future<HttpResponse> get(
+  Future<Reply> get(
     Uri url, {
     Map<String, String>? headers,
     Duration? timeout,
@@ -1013,7 +785,7 @@ class HttpClient with PathResolver {
   );
 
   /// Sends a `POST` to [url].
-  Future<HttpResponse> post(
+  Future<Reply> post(
     Uri url, {
     Body? body,
     Map<String, String>? headers,
@@ -1035,7 +807,7 @@ class HttpClient with PathResolver {
   );
 
   /// Sends a `PUT` to [url].
-  Future<HttpResponse> put(
+  Future<Reply> put(
     Uri url, {
     Body? body,
     Map<String, String>? headers,
@@ -1057,7 +829,7 @@ class HttpClient with PathResolver {
   );
 
   /// Sends a `DELETE` to [url].
-  Future<HttpResponse> delete(
+  Future<Reply> delete(
     Uri url, {
     Map<String, String>? headers,
     Duration? timeout,
@@ -1077,7 +849,7 @@ class HttpClient with PathResolver {
   );
 
   /// Sends a `PATCH` to [url].
-  Future<HttpResponse> patch(
+  Future<Reply> patch(
     Uri url, {
     Body? body,
     Map<String, String>? headers,
@@ -1099,7 +871,7 @@ class HttpClient with PathResolver {
   );
 
   /// Sends a `HEAD` to [url].
-  Future<HttpResponse> head(
+  Future<Reply> head(
     Uri url, {
     Map<String, String>? headers,
     Duration? timeout,
@@ -1185,7 +957,7 @@ class HttpClient with PathResolver {
 // ============================================================================
 
 /// Represents an HTTP cookie.
-class Cookie {
+class Morsel {
   /// Name of the cookie.
   final String name;
 
@@ -1218,9 +990,9 @@ class Cookie {
   /// Creates a cookie.
   ///
   /// Set [host] for a cookie bound to [domain] exactly rather than to it and
-  /// everything under it. [Cookie.parse] sets it for a `Set-Cookie` that
+  /// everything under it. [Morsel.parse] sets it for a `Set-Cookie` that
   /// named no `Domain` of its own.
-  Cookie(
+  Morsel(
     this.name,
     this.value, {
     this.domain,
@@ -1267,8 +1039,8 @@ class Cookie {
   }
 
   /// Parses every cookie in a possibly comma-joined `Set-Cookie` header.
-  static List<Cookie> _parseAll(String setCookieHeader, {Uri? uri}) => [
-    for (final piece in split(setCookieHeader)) Cookie.parse(piece, uri: uri),
+  static List<Morsel> _parseAll(String setCookieHeader, {Uri? uri}) => [
+    for (final piece in split(setCookieHeader)) Morsel.parse(piece, uri: uri),
   ];
 
   /// The RFC 6265 default-path for a cookie set from [uri]: the
@@ -1285,7 +1057,7 @@ class Cookie {
   ///
   /// For a header that may carry several cookies use [CookieJar.add], which
   /// splits the comma-joined form with [split] first.
-  factory Cookie.parse(String setCookieHeader, {Uri? uri}) {
+  factory Morsel.parse(String setCookieHeader, {Uri? uri}) {
     final parts = setCookieHeader.split(';');
     final nameValue = parts.first.split('=');
     final name = nameValue.first.trim();
@@ -1324,7 +1096,7 @@ class Cookie {
     // to a host-only cookie — and so is a Set-Cookie that named no Domain at
     // all, which is host-only by definition. See [_acceptDomain].
     final widened = _acceptDomain(domain, uri?.host);
-    return Cookie(
+    return Morsel(
       name,
       value,
       domain: widened ?? uri?.host,
@@ -1394,10 +1166,10 @@ class Cookie {
 
 /// In-memory storage for cookies with domain and path matching.
 class CookieJar {
-  final Map<String, Cookie> _cookies = {};
+  final Map<String, Morsel> _cookies = {};
 
   /// Stores a single [cookie], replacing any with the same name, domain and path.
-  void set(Cookie cookie) {
+  void set(Morsel cookie) {
     _cookies['${cookie.domain ?? ""}:${cookie.path ?? ""}:${cookie.name}'] =
         cookie;
   }
@@ -1407,9 +1179,9 @@ class CookieJar {
   /// Handles the comma-joined form `package:http` produces for a response that
   /// sent several `Set-Cookie` headers. A cookie with a past expiry deletes the
   /// entry it names, as a server clearing a session does. A `Domain` the
-  /// responding host does not belong to is ignored — see [Cookie.parse].
+  /// responding host does not belong to is ignored — see [Morsel.parse].
   void add(String headerValue, {Uri? uri}) {
-    for (final cookie in Cookie._parseAll(headerValue, uri: uri)) {
+    for (final cookie in Morsel._parseAll(headerValue, uri: uri)) {
       if (cookie.name.isEmpty) continue;
       final expires = cookie.expires;
       if (expires != null && DateTime.now().isAfter(expires)) {
@@ -1435,7 +1207,7 @@ class CookieJar {
   }
 
   /// All stored cookies.
-  List<Cookie> get cookies => _cookies.values.toList();
+  List<Morsel> get cookies => _cookies.values.toList();
 
   /// The value of the stored cookie named [name], or `null`.
   String? operator [](String name) {

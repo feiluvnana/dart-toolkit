@@ -39,8 +39,8 @@ const _login = '''
 </body></html>
 ''';
 
-HttpResponse _page([String markup = _login]) =>
-    HttpResponse.text(markup, requested: 'https://example.com/login'.url);
+Reply _page([String markup = _login]) =>
+    Reply.text(markup, requested: 'https://example.com/login'.url);
 
 void main() {
   group('Form.fields', () {
@@ -66,7 +66,11 @@ void main() {
       expect(fields.containsKey('avatar'), isFalse, reason: 'a file input');
       expect(fields.containsKey('ignored'), isFalse, reason: 'disabled');
       expect(fields.containsKey('clear'), isFalse, reason: 'a reset button');
-      expect(fields.containsKey('cancel'), isFalse, reason: 'the second submit');
+      expect(
+        fields.containsKey('cancel'),
+        isFalse,
+        reason: 'the second submit',
+      );
       expect(fields.values, isNot(contains('unnamed')));
     });
 
@@ -99,10 +103,7 @@ void main() {
       expect(form.action, Uri.parse('https://example.com/session'));
       expect(form.url, Uri.parse('https://example.com/session'));
       expect(form.body, isA<FormBody>());
-      expect(
-        utf8.decode(form.body!.bytes()),
-        contains('csrf=tok-123'),
-      );
+      expect(utf8.decode(form.body!.bytes()), contains('csrf=tok-123'));
     });
 
     test('a GET form carries its fields in the query, replacing it', () {
@@ -117,9 +118,11 @@ void main() {
     });
 
     test('an empty action submits back to the page', () {
-      final form = _page('<form method="post"><input name="a" value="1">'
-              '</form>')
-          .form()!;
+      final form =
+          _page(
+            '<form method="post"><input name="a" value="1">'
+            '</form>',
+          ).form()!;
       expect(form.action, Uri.parse('https://example.com/login'));
     });
 
@@ -167,12 +170,12 @@ void main() {
       seen.clear();
       server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       base = 'http://127.0.0.1:${server.port}';
-      server.listen((request) async {
-        final body = await utf8.decoder.bind(request).join();
-        seen.add('${request.method} ${request.uri} $body');
-        request.response.headers.contentType = ContentType.html;
-        if (request.uri.path == '/login') {
-          request.response
+      server.listen((fetch) async {
+        final body = await utf8.decoder.bind(fetch).join();
+        seen.add('${fetch.method} ${fetch.uri} $body');
+        fetch.response.headers.contentType = ContentType.html;
+        if (fetch.uri.path == '/login') {
+          fetch.response
             // Set through the header: this library exports a `Cookie` of its
             // own, which shadows `dart:io`'s for any file importing both.
             ..headers.add('set-cookie', 'sid=session-1; Path=/')
@@ -184,19 +187,19 @@ void main() {
             ''');
         } else {
           final fields = Uri.splitQueryString(body);
-          request.response.write(
+          fetch.response.write(
             '<h1>${fields['user']} in with ${fields['csrf']}</h1>'
-            '<p>${request.headers.value('cookie')}</p>',
+            '<p>${fetch.headers.value('cookie')}</p>',
           );
         }
-        await request.response.close();
+        await fetch.response.close();
       });
     });
 
     tearDown(() => server.close(force: true));
 
     test('send posts it and carries a session along', () async {
-      final session = HttpClient(session: true);
+      final session = Fetcher(session: true);
       addTearDown(session.close);
 
       final page = await session.get('$base/login'.url);
@@ -221,7 +224,7 @@ void main() {
             (res) => res.submit(
               res.form('#login')!..fill({'user': 'crawler'}),
               tag: 'home',
-              meta: {'from': 'login'},
+              meta: [Slot<String>('from')('login')],
             ),
           );
 
@@ -230,19 +233,16 @@ void main() {
       expect(seen.last, contains('user=crawler'));
     });
 
-    test('two submissions of one form are two requests, not one', () async {
+    test('two submissions of one form are two fetches, not one', () async {
       final searches = <String>[];
 
       await net
           .crawl<String>('$base/login')
-          .tag('result', (res) => searches.add(res.request.url.toString()))
+          .tag('result', (res) => searches.add(res.fetch.url.toString()))
           .run((res) {
             final form = res.form('#login')!;
             res.submit(form..fill({'user': 'a'}), tag: 'result');
-            res.submit(
-              res.form('#login')!..fill({'user': 'b'}),
-              tag: 'result',
-            );
+            res.submit(res.form('#login')!..fill({'user': 'b'}), tag: 'result');
           });
 
       // De-duplication accounts for the body, so the same URL twice with

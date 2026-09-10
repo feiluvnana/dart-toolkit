@@ -38,8 +38,8 @@ There is exactly one clean way to reach each shape:
 | `net.$xpath(markup, [query])` | `dart_toolkit.dart` | Top-level XPath via `net` singleton |
 | `markup.$(selector)` | `String` extension | Parse HTML string and query it |
 | `markup.$xpath(query)` | `String` extension | Parse HTML string and query via XPath |
-| `response.$(selector)` | `HttpResponse` / `Response` | Query parsed HTML response body |
-| `response.$xpath(query)` | `HttpResponse` / `Response` | Query response body via XPath |
+| `response.$(selector)` | `Reply` / `Page` | Query parsed HTML response body |
+| `response.$xpath(query)` | `Reply` / `Page` | Query response body via XPath |
 | `element.$(selector)` | `Element` extension | Query within an existing element |
 | `result.find(selector)` | `QueryResult` | Query descendants of current matches |
 | `result(selector)` | `QueryResult` | Callable shorthand for `.find(...)` |
@@ -138,6 +138,45 @@ final list = $('<div>01. First<br>02. Tom &amp; Jerry</div>').lines;
 // ['01. First', '02. Tom & Jerry']
 ```
 
+### Typed records (`all`, `one`, `pick`)
+
+Every reader above hands back a `String` or a `List<String>`. To get a *shape*
+out of a page with each field's type intact, build a record: `all` gives each
+match its own scoped `QueryResult`, `one` does the same for a section a page
+has at most one of, and `pick` reads a `Field` at any depth.
+
+```dart
+final variants = res.$.all('.variant', (row) => (
+  name: row('.name').text,
+  sku: row.attr('data-sku'),
+  qty: row.pick(Field.text('.qty').when(int.tryParse)),
+));
+// List<({String name, String? sku, int? qty})>
+
+final seller = res.$.one('.seller', (s) => (
+  name: s('.name').text,
+  rating: s.pick(Field.text('.rating').when(util.text.number)),
+));
+// ({String name, num? rating})?
+```
+
+The scoping is the point: `row('.name')` searches inside that row, so a nested
+read cannot quietly match every `.name` on the page. Nest `all` inside `all`
+for a sub-object of a sub-object.
+
+A whole page is the same idea with no wrapper:
+
+```dart
+final product = (
+  title: res.$('h1').text,
+  price: res.pick(Field.text('.price').when(util.text.number)),
+  variants: res.$.all('.variant', (row) => (sku: row.attr('data-sku'))),
+);
+```
+
+See [http.md](http.md#typed-extraction-records) for how this sits beside the
+`extract` shorthand.
+
 ### Whitespace
 
 Text comes back the way a browser draws it: runs of spaces and newlines collapse to one space. Pages are indented, so the markup for one heading usually holds both:
@@ -174,7 +213,7 @@ final size = form.find('select[name=size]').value;   // 'm'
 final ticked = form.find('input[type=checkbox]').values;  // only the checked ones
 ```
 
-> `QueryResult.links()` returns **raw** attribute strings. To get absolute URLs, use `HttpResponse.links()`, which resolves against the response URL.
+> `QueryResult.links()` returns **raw** attribute strings. To get absolute URLs, use `Reply.links()`, which resolves against the response URL.
 
 ---
 

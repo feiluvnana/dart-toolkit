@@ -16,8 +16,8 @@ import 'package:test/test.dart';
 /// A downloader that fails every request, for testing what a crawl reports.
 class _Broken<T> extends Downloader<T> {
   @override
-  Future<Response<T>> download(Request<T> request) async =>
-      throw StateError('boom for ${request.url}');
+  Future<Page<T>> download(Fetch<T> fetch) async =>
+      throw StateError('boom for ${fetch.url}');
 }
 
 Directory _temp(String prefix) {
@@ -49,14 +49,14 @@ void main() {
     ''';
 
     test('a selector collapses the page indentation', () {
-      final res = HttpResponse.text(page);
+      final res = Reply.text(page);
       expect(res.$('.name').text, 'Wireless Keyboard');
       expect(res.$('.price').text, r'$49.99');
       expect(res.$('.tags li').texts, ['usb', 'bluetooth']);
     });
 
     test('extract and pick read it the same way', () {
-      final res = HttpResponse.text(page);
+      final res = Reply.text(page);
       // One text reader behind all three, so they cannot drift apart.
       expect(res.extract({'name': '.name'})['name'], 'Wireless Keyboard');
       expect(res.pick(Field.text('.name')), 'Wireless Keyboard');
@@ -65,7 +65,7 @@ void main() {
     });
 
     test('a repeated sub-object reads it the same way too', () {
-      final res = HttpResponse.text(page);
+      final res = Reply.text(page);
       final data = res.extract({
         'items': [
           '.product',
@@ -76,7 +76,7 @@ void main() {
     });
 
     test('inside a pre the whitespace is the content, and is kept', () {
-      final res = HttpResponse.text(page);
+      final res = Reply.text(page);
       // What <pre> means. Collapsing it would destroy scraped code samples.
       expect(res.$('.code').text, 'line one\n  indented two');
       expect(res.pick(Field.text('.code')), 'line one\n  indented two');
@@ -99,18 +99,19 @@ void main() {
   });
 
   group('which pages failed', () {
-    test('a failure names the request it happened on', () async {
+    test('a failure names the fetch it happened on', () async {
       final lost = <Failure<String>>[];
 
       final stats = await net
           .crawl<String>('https://example.com/a')
           .downloader(_Broken<String>())
-          .on.error(lost.add)
+          .on
+          .error(lost.add)
           .run((res) {});
 
       expect(stats.failed, 1);
       // The count alone left nothing to retry or report.
-      expect(lost.single.request?.url.toString(), 'https://example.com/a');
+      expect(lost.single.fetch?.url.toString(), 'https://example.com/a');
       expect(lost.single.error, isA<StateError>());
       expect(lost.single.stack, isNotNull);
     });
@@ -121,25 +122,27 @@ void main() {
       await net
           .crawl<String>('https://example.com/page')
           .downloader(MapDownloader<String>({'/page': '<h1>hi</h1>'}))
-          .on.error(lost.add)
+          .on
+          .error(lost.add)
           .run((res) => throw StateError('handler blew up'));
 
-      expect(lost.single.request?.url.path, '/page');
+      expect(lost.single.fetch?.url.path, '/page');
     });
 
-    test('the failed requests can be queued again as they were', () async {
+    test('the failed fetches can be queued again as they were', () async {
       final lost = <Failure<String>>[];
       await net
           .crawl<String>('https://example.com/a')
           .downloader(_Broken<String>())
-          .on.error(lost.add)
+          .on
+          .error(lost.add)
           .run((res) {});
 
       final served = <String>[];
       await net.crawl
           .seed<String>([
             for (final failure in lost)
-              if (failure.request case final request?) request,
+              if (failure.fetch case final fetch?) fetch,
           ])
           .downloader(MapDownloader<String>({'/a': '<h1>second try</h1>'}))
           .run((res) => served.add(res.$('h1').text));
@@ -160,17 +163,16 @@ void main() {
       // Nothing was handled, so there is a position left to resume from.
       expect(File(path).existsSync(), isTrue);
       final saved = jsonDecode(File(path).readAsStringSync()) as Map;
-      expect(
-        (saved['pending'] as List).map((r) => (r as Map)['url']),
-        ['https://example.com/a'],
-      );
+      expect((saved['pending'] as List).map((r) => (r as Map)['url']), [
+        'https://example.com/a',
+      ]);
     });
 
     test('toString says which page and why', () {
       final failure = Failure<String>(
         StateError('nope'),
         StackTrace.empty,
-        Request<String>(Uri.parse('https://example.com/x')),
+        Fetch<String>(Uri.parse('https://example.com/x')),
       );
       expect(failure.toString(), contains('https://example.com/x'));
       expect(failure.toString(), contains('nope'));
@@ -184,10 +186,14 @@ void main() {
       final stats = await net
           .crawl<String>('https://example.com/a')
           .concurrent(1)
-          .on.start(() => seen.add('start'))
-          .on.progress((res) => seen.add('progress'))
-          .on.item((item) => seen.add('item'))
-          .on.done((stats) => seen.add('done'))
+          .on
+          .start(() => seen.add('start'))
+          .on
+          .progress((res) => seen.add('progress'))
+          .on
+          .item((item) => seen.add('item'))
+          .on
+          .done((stats) => seen.add('done'))
           .limit(1)
           .downloader(MapDownloader<String>({'/a': '<h1>hi</h1>'}))
           .collect((res) => res.emit(res.$('h1').text));
@@ -210,7 +216,10 @@ void main() {
         ]),
       );
 
-      expect(File(path).readAsStringSync(), 'name,role\nAlice,admin\nBob,user\n');
+      expect(
+        File(path).readAsStringSync(),
+        'name,role\nAlice,admin\nBob,user\n',
+      );
     });
 
     test('takes its columns from the headers it was given', () async {
@@ -235,8 +244,8 @@ void main() {
       await io.csv.pipe(
         path,
         Stream.fromIterable([
-          [1, 'a'],
-          [2, 'b'],
+          {'n': 1, 'letter': 'a'},
+          {'n': 2, 'letter': 'b'},
         ]),
         headers: ['n', 'letter'],
       );
@@ -263,15 +272,17 @@ void main() {
       ]);
     });
 
-    test('an empty stream with declared headers writes an empty table',
-        () async {
-      final dir = _temp('dt_pipe_');
-      final path = '${dir.path}/out.csv';
+    test(
+      'an empty stream with declared headers writes an empty table',
+      () async {
+        final dir = _temp('dt_pipe_');
+        final path = '${dir.path}/out.csv';
 
-      await io.csv.pipe(path, const Stream.empty(), headers: ['a', 'b']);
+        await io.csv.pipe(path, const Stream.empty(), headers: ['a', 'b']);
 
-      expect(File(path).readAsStringSync(), 'a,b\n');
-    });
+        expect(File(path).readAsStringSync(), 'a,b\n');
+      },
+    );
 
     test('a stream that fails leaves no half-written file', () async {
       final dir = _temp('dt_pipe_');

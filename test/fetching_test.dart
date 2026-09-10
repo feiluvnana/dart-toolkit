@@ -44,7 +44,7 @@ void main() {
   group('HttpCache freshness', () {
     test('a response inside its max-age is fresh', () {
       final entry = CacheEntry(
-        response: HttpResponse(
+        response: Reply(
           url: Uri.parse('https://example.com/'),
           status: 200,
           headers: const {'cache-control': 'max-age=600'},
@@ -59,7 +59,7 @@ void main() {
 
     test('a response past its max-age is not', () {
       final entry = CacheEntry(
-        response: HttpResponse(
+        response: Reply(
           url: Uri.parse('https://example.com/'),
           status: 200,
           headers: const {'cache-control': 'max-age=1'},
@@ -73,7 +73,7 @@ void main() {
 
     test('no-cache means ask every time, however recent', () {
       final entry = CacheEntry(
-        response: HttpResponse(
+        response: Reply(
           url: Uri.parse('https://example.com/'),
           status: 200,
           headers: const {'cache-control': 'no-cache, max-age=600'},
@@ -89,7 +89,7 @@ void main() {
     test('Expires is read against Date, not against the clock', () {
       final sent = DateTime.utc(2030);
       final entry = CacheEntry(
-        response: HttpResponse(
+        response: Reply(
           url: Uri.parse('https://example.com/'),
           status: 200,
           headers: {
@@ -106,7 +106,7 @@ void main() {
 
     test('a server that promised nothing is never fresh', () {
       final entry = CacheEntry(
-        response: HttpResponse(
+        response: Reply(
           url: Uri.parse('https://example.com/'),
           status: 200,
           headers: const {},
@@ -120,7 +120,7 @@ void main() {
     });
 
     test('validators are whatever the response gave us to ask with', () {
-      HttpResponse with_(Map<String, String> headers) => HttpResponse(
+      Reply with_(Map<String, String> headers) => Reply(
         url: Uri.parse('https://example.com/'),
         status: 200,
         headers: headers,
@@ -136,13 +136,18 @@ void main() {
       );
       expect(
         CacheEntry(
-          response: with_(const {'last-modified': 'Wed, 21 Oct 2015 07:28:00 GMT'}),
+          response: with_(const {
+            'last-modified': 'Wed, 21 Oct 2015 07:28:00 GMT',
+          }),
           stored: DateTime.now(),
         ).validators,
         {'If-Modified-Since': 'Wed, 21 Oct 2015 07:28:00 GMT'},
       );
       expect(
-        CacheEntry(response: with_(const {}), stored: DateTime.now()).validators,
+        CacheEntry(
+          response: with_(const {}),
+          stored: DateTime.now(),
+        ).validators,
         isEmpty,
       );
     });
@@ -157,7 +162,7 @@ void main() {
 
       await cache.write(
         url,
-        HttpResponse(
+        Reply(
           url: url,
           status: 200,
           headers: const {'content-type': 'text/html', 'etag': '"abc"'},
@@ -182,7 +187,7 @@ void main() {
 
       await cache.write(
         url,
-        HttpResponse(
+        Reply(
           url: url,
           status: 200,
           headers: const {'content-type': 'image/png'},
@@ -215,7 +220,7 @@ void main() {
       for (final path in ['/a', '/b']) {
         await cache.write(
           Uri.parse('https://example.com$path'),
-          HttpResponse(
+          Reply(
             url: Uri.parse('https://example.com$path'),
             status: 200,
             headers: const {},
@@ -229,9 +234,8 @@ void main() {
     });
   });
 
-  group('HttpClient with a cache', () {
-    test('a 304 serves the stored body, and no bytes cross the wire',
-        () async {
+  group('Fetcher with a cache', () {
+    test('a 304 serves the stored body, and no bytes cross the wire', () async {
       final origin = await _Origin.start((req, origin) async {
         if (req.headers.value('if-none-match') == '"v1"') {
           req.response.statusCode = 304;
@@ -248,7 +252,7 @@ void main() {
 
       final dir = _tempDir();
       addTearDown(() => Directory(dir).deleteSync(recursive: true));
-      final client = HttpClient(cache: HttpCache(dir));
+      final client = Fetcher(cache: HttpCache(dir));
       addTearDown(client.close);
 
       final first = await client.get('${origin.root}/page'.url);
@@ -274,7 +278,7 @@ void main() {
 
       final dir = _tempDir();
       addTearDown(() => Directory(dir).deleteSync(recursive: true));
-      final client = HttpClient(cache: HttpCache(dir));
+      final client = Fetcher(cache: HttpCache(dir));
       addTearDown(client.close);
 
       await client.get('${origin.root}/page'.url);
@@ -302,7 +306,7 @@ void main() {
 
       final dir = _tempDir();
       addTearDown(() => Directory(dir).deleteSync(recursive: true));
-      final client = HttpClient(cache: HttpCache(dir));
+      final client = Fetcher(cache: HttpCache(dir));
       addTearDown(client.close);
 
       expect((await client.get('${origin.root}/p'.url)).body, 'version 1');
@@ -325,7 +329,7 @@ void main() {
 
       final dir = _tempDir();
       addTearDown(() => Directory(dir).deleteSync(recursive: true));
-      final client = HttpClient(cache: HttpCache(dir));
+      final client = Fetcher(cache: HttpCache(dir));
       addTearDown(client.close);
 
       await client.post('${origin.root}/submit'.url, body: Body.text('a'));
@@ -347,7 +351,7 @@ void main() {
       final dir = _tempDir();
       addTearDown(() => Directory(dir).deleteSync(recursive: true));
       final cache = HttpCache(dir);
-      final client = HttpClient(cache: cache);
+      final client = Fetcher(cache: cache);
       addTearDown(client.close);
 
       await client.get('${origin.root}/p'.url);
@@ -362,9 +366,10 @@ void main() {
           .crawl<String>('https://example.com/page')
           .accept(['text/html'])
           .downloader(
-            MapDownloader<String>({
-              '/page': '%PDF-1.7',
-            }, headers: const {'content-type': 'application/pdf'}),
+            MapDownloader<String>(
+              {'/page': '%PDF-1.7'},
+              headers: const {'content-type': 'application/pdf'},
+            ),
           )
           .run((res) => handled.add(res.url.path));
 
@@ -427,7 +432,7 @@ void main() {
       });
       addTearDown(origin.stop);
 
-      final client = HttpClient(cap: 100, retries: 0);
+      final client = Fetcher(cap: 100, retries: 0);
       addTearDown(client.close);
 
       await expectLater(
@@ -437,7 +442,7 @@ void main() {
     });
   });
 
-  group('Response.follow', () {
+  group('Page.follow', () {
     test('can post a form instead of following a link', () async {
       final downloader = MapDownloader<String>({
         '/login': '<form action="/login" method="post"></form>',
@@ -461,40 +466,43 @@ void main() {
           });
 
       expect(seen, ['Signed in']);
-      expect(downloader.requests.map((r) => r.method), [
+      expect(downloader.fetches.map((r) => r.method), [
         HttpMethod.get,
         HttpMethod.post,
       ]);
-      expect(
-        (downloader.requests.last.body! as FormBody).fields,
-        {'user': 'ada'},
-      );
+      expect((downloader.fetches.last.body! as FormBody).fields, {
+        'user': 'ada',
+      });
     });
 
-    test('two posts to one URL with different fields are two requests',
-        () async {
-      final downloader = MapDownloader<String>({'POST /search': '<p>hits</p>'});
+    test(
+      'two posts to one URL with different fields are two fetches',
+      () async {
+        final downloader = MapDownloader<String>({
+          'POST /search': '<p>hits</p>',
+        });
 
-      await net
-          .crawl<String>('https://example.com/search')
-          .downloader(downloader)
-          .run((res) {
-            if (res.depth > 0) return;
-            for (final page in ['1', '2', '2']) {
-              res.follow(
-                '/search',
-                method: HttpMethod.post,
-                body: Body.form({'page': page}),
-              );
-            }
-          });
+        await net
+            .crawl<String>('https://example.com/search')
+            .downloader(downloader)
+            .run((res) {
+              if (res.depth > 0) return;
+              for (final page in ['1', '2', '2']) {
+                res.follow(
+                  '/search',
+                  method: HttpMethod.post,
+                  body: Body.form({'page': page}),
+                );
+              }
+            });
 
-      // Page 2 asked for twice, fetched once: de-duplication reads the body.
-      final posts = downloader.requests.where(
-        (r) => r.method == HttpMethod.post,
-      );
-      expect(posts, hasLength(2));
-    });
+        // Page 2 asked for twice, fetched once: de-duplication reads the body.
+        final posts = downloader.fetches.where(
+          (r) => r.method == HttpMethod.post,
+        );
+        expect(posts, hasLength(2));
+      },
+    );
   });
 
   group('MapDownloader', () {
@@ -505,10 +513,10 @@ void main() {
       });
 
       final get = await downloader.download(
-        Request<String>(Uri.parse('https://example.com/thing')),
+        Fetch<String>(Uri.parse('https://example.com/thing')),
       );
       final post = await downloader.download(
-        Request<String>(
+        Fetch<String>(
           Uri.parse('https://example.com/thing'),
           method: HttpMethod.post,
         ),
@@ -521,7 +529,7 @@ void main() {
     test('a method with no key of its own still falls back', () async {
       final downloader = MapDownloader<String>({'/thing': 'shared'});
       final res = await downloader.download(
-        Request<String>(
+        Fetch<String>(
           Uri.parse('https://example.com/thing'),
           method: HttpMethod.put,
         ),
@@ -534,7 +542,7 @@ void main() {
     test('an unknown path is still a 404', () async {
       final downloader = MapDownloader<String>({'/thing': 'x'});
       final res = await downloader.download(
-        Request<String>(Uri.parse('https://example.com/other')),
+        Fetch<String>(Uri.parse('https://example.com/other')),
       );
 
       expect(res.status, 404);
@@ -547,8 +555,8 @@ void main() {
           .downloader(downloader)
           .run((res) => res.follow('/b', headers: {'X-Stage': 'two'}));
 
-      expect(downloader.requests.last.headers['X-Stage'], 'two');
-      expect(downloader.requests.last.headers['Referer'], contains('/a'));
+      expect(downloader.fetches.last.headers['X-Stage'], 'two');
+      expect(downloader.fetches.last.headers['Referer'], contains('/a'));
     });
   });
 
@@ -585,8 +593,10 @@ void main() {
       });
       addTearDown(origin.stop);
 
-      final stats =
-          await net.crawl<String>('${origin.root}/page').robots().run((res) {});
+      final stats = await net
+          .crawl<String>('${origin.root}/page')
+          .robots()
+          .run((res) {});
 
       expect(stats.skipped, 1);
       expect(origin.served, isEmpty);

@@ -19,14 +19,14 @@ class _HalfwayDownloader extends Downloader<String> {
   int served = 0;
 
   @override
-  Future<Response<String>> download(Request<String> request) async {
+  Future<Page<String>> download(Fetch<String> fetch) async {
     served++;
     if (served > after) engine?.stop('halfway');
-    return Response<String>(
-      request: request,
+    return Page<String>(
+      fetch: fetch,
       status: 200,
       headers: const {'content-type': 'text/html'},
-      bytes: utf8.encode(pages[request.url.toString()] ?? ''),
+      bytes: utf8.encode(pages[fetch.url.toString()] ?? ''),
       engine: engine,
     );
   }
@@ -35,39 +35,46 @@ class _HalfwayDownloader extends Downloader<String> {
 String _tempPath(String name) =>
     '${Directory.systemTemp.createTempSync('dt_resume_').path}/$name';
 
+const _widget = Slot<String>('name');
+const _index = Slot<int>('index');
+
 void main() {
-  group('Request serialization', () {
+  group('Fetch serialization', () {
     test('every field routing depends on round-trips', () {
-      final request = Request<String>(
+      final fetch = Fetch<String>(
         Uri.parse('https://example.com/search?q=a'),
         method: HttpMethod.post,
         headers: {'X-Token': 'abc'},
         body: Body.form({'page': '2'}),
         priority: 7,
         tag: 'detail',
-        meta: {'name': 'Widget', 'index': 3},
+        meta: [_widget('Widget'), _index(3)],
         dedupe: false,
         depth: 2,
       );
 
-      final copy = Request<String>.fromJson(
-        jsonDecode(jsonEncode(request.toJson())) as Map<String, Object?>,
+      final copy = Fetch<String>.fromJson(
+        jsonDecode(jsonEncode(fetch.toJson())) as Map<String, Object?>,
       );
 
-      expect(copy.url, request.url);
+      expect(copy.url, fetch.url);
       expect(copy.method, HttpMethod.post);
       expect(copy.headers, {'X-Token': 'abc'});
       expect(copy.body, isA<FormBody>());
       expect((copy.body! as FormBody).fields, {'page': '2'});
       expect(copy.priority, 7);
       expect(copy.tag, 'detail');
-      expect(copy.meta, {'name': 'Widget', 'index': 3});
+      // Through the slots, which is the point: the values come back typed
+      // rather than as Object? out of a map.
+      expect(copy.meta.get(_widget), 'Widget');
+      expect(copy.meta.get(_index), 3);
+      expect(copy.meta.raw, {'name': 'Widget', 'index': 3});
       expect(copy.dedupe, isFalse);
       expect(copy.depth, 2);
     });
 
     test('a GET with nothing set serializes to just its url', () {
-      final json = Request<String>(Uri.parse('https://example.com/')).toJson();
+      final json = Fetch<String>(Uri.parse('https://example.com/')).toJson();
       expect(json.keys, ['url']);
     });
 
@@ -84,10 +91,7 @@ void main() {
     });
 
     test('an unknown body kind is refused, not guessed at', () {
-      expect(
-        () => Body.fromJson({'kind': 'protobuf'}),
-        throwsFormatException,
-      );
+      expect(() => Body.fromJson({'kind': 'protobuf'}), throwsFormatException);
     });
   });
 
@@ -95,8 +99,8 @@ void main() {
     test('holds the queue, the visited set and the counters', () {
       final engine = Engine<String>(downloader: MapDownloader<String>({}));
       engine
-        ..add(Request<String>(Uri.parse('https://example.com/a')))
-        ..add(Request<String>(Uri.parse('https://example.com/b')));
+        ..add(Fetch<String>(Uri.parse('https://example.com/a')))
+        ..add(Fetch<String>(Uri.parse('https://example.com/b')));
 
       final snapshot = engine.snapshot();
 
@@ -105,9 +109,9 @@ void main() {
       expect(snapshot.stats.scheduled, 2);
     });
 
-    test('a request in flight counts as pending, not as done', () async {
+    test('a fetch in flight counts as pending, not as done', () async {
       final engine = Engine<String>(downloader: MapDownloader<String>({}));
-      engine.add(Request<String>(Uri.parse('https://example.com/a')));
+      engine.add(Fetch<String>(Uri.parse('https://example.com/a')));
 
       // Served, but never handled: the shape of a crawl killed mid-fetch.
       final served = engine.serve();
@@ -123,13 +127,13 @@ void main() {
       engine.leave();
       expect(engine.snapshot().pending, hasLength(1));
 
-      await engine.process(Response<String>(request: served!, engine: engine));
+      await engine.process(Page<String>(fetch: served!, engine: engine));
       expect(engine.snapshot().pending, isEmpty);
     });
 
     test('a page robots.txt refused is settled, not left pending', () {
       final engine = Engine<String>(downloader: MapDownloader<String>({}));
-      engine.add(Request<String>(Uri.parse('https://example.com/a')));
+      engine.add(Fetch<String>(Uri.parse('https://example.com/a')));
       final served = engine.serve();
 
       engine.skip(served);
@@ -139,10 +143,10 @@ void main() {
 
     test('the snapshot is a copy, so a later fetch cannot rewrite it', () {
       final engine = Engine<String>(downloader: MapDownloader<String>({}));
-      engine.add(Request<String>(Uri.parse('https://example.com/a')));
+      engine.add(Fetch<String>(Uri.parse('https://example.com/a')));
       final snapshot = engine.snapshot();
 
-      engine.add(Request<String>(Uri.parse('https://example.com/b')));
+      engine.add(Fetch<String>(Uri.parse('https://example.com/b')));
 
       expect(snapshot.pending, hasLength(1));
       expect(snapshot.deduplicator.length, 1);
@@ -152,7 +156,7 @@ void main() {
     test('round-trips through JSON', () {
       final engine = Engine<String>(downloader: MapDownloader<String>({}));
       engine.add(
-        Request<String>(Uri.parse('https://example.com/a'), tag: 'listing'),
+        Fetch<String>(Uri.parse('https://example.com/a'), tag: 'listing'),
       );
 
       final copy = Snapshot<String>.fromJson(
@@ -178,7 +182,7 @@ void main() {
       final url = Uri.parse('https://example.com/a');
       final dedupe = Deduplicator()..add(url);
       final snapshot = Snapshot<String>(
-        pending: [Request<String>(url)],
+        pending: [Fetch<String>(url)],
         deduplicator: dedupe,
       );
 
@@ -192,9 +196,10 @@ void main() {
 
     test('brings the counters back so limit still spans the whole crawl', () {
       final snapshot = Snapshot<String>(
-        stats: Stats()
-          ..scheduled = 40
-          ..completed = 40,
+        stats:
+            Stats()
+              ..scheduled = 40
+              ..completed = 40,
       );
 
       final engine = Engine<String>(downloader: MapDownloader<String>({}));
@@ -207,11 +212,9 @@ void main() {
     test('a seed already visited is dropped rather than fetched twice', () {
       final url = Uri.parse('https://example.com/a');
       final engine = Engine<String>(downloader: MapDownloader<String>({}));
-      engine.restore(
-        Snapshot<String>(deduplicator: Deduplicator()..add(url)),
-      );
+      engine.restore(Snapshot<String>(deduplicator: Deduplicator()..add(url)));
 
-      engine.add(Request<String>(url));
+      engine.add(Fetch<String>(url));
       expect(engine.queue.isEmpty, isTrue);
     });
 
@@ -354,20 +357,22 @@ void main() {
       );
     });
 
-    test('a finished crawl leaves no watcher holding the process open',
-        () async {
-      final path = _tempPath('crawl.state');
-      addTearDown(() => Directory(io.dir(path)).deleteSync(recursive: true));
+    test(
+      'a finished crawl leaves no watcher holding the process open',
+      () async {
+        final path = _tempPath('crawl.state');
+        addTearDown(() => Directory(io.dir(path)).deleteSync(recursive: true));
 
-      await net
-          .crawl<String>('https://example.com/1')
-          .downloader(MapDownloader<String>({'/1': '<p>one</p>'}))
-          .resume(path)
-          .run((res) {});
+        await net
+            .crawl<String>('https://example.com/1')
+            .downloader(MapDownloader<String>({'/1': '<p>one</p>'}))
+            .resume(path)
+            .run((res) {});
 
-      // The exit hook that flushes the snapshot has to come off again: it
-      // keeps the signal watcher, and so the isolate, alive.
-      expect(File(path).existsSync(), isFalse);
-    });
+        // The exit hook that flushes the snapshot has to come off again: it
+        // keeps the signal watcher, and so the isolate, alive.
+        expect(File(path).existsSync(), isFalse);
+      },
+    );
   });
 }

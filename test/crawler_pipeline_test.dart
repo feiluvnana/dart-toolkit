@@ -14,22 +14,22 @@ class MockDownloader<T> extends Downloader<T> {
   MockDownloader(this.pages, {super.concurrency = 1});
 
   @override
-  Future<Response<T>> download(Request<T> request) async {
-    if (request.url.scheme == 'data') {
+  Future<Page<T>> download(Fetch<T> fetch) async {
+    if (fetch.url.scheme == 'data') {
       final bytes =
-          request.url.data?.contentAsBytes() ??
-          utf8.encode(request.url.data?.contentAsString() ?? '');
-      return Response<T>(
-        request: request,
+          fetch.url.data?.contentAsBytes() ??
+          utf8.encode(fetch.url.data?.contentAsString() ?? '');
+      return Page<T>(
+        fetch: fetch,
         status: 200,
         headers: {'content-type': 'text/html; charset=utf-8'},
         bytes: bytes,
         engine: engine,
       );
     }
-    final body = pages[request.url.toString()];
-    return Response<T>(
-      request: request,
+    final body = pages[fetch.url.toString()];
+    return Page<T>(
+      fetch: fetch,
       status: body == null ? 404 : 200,
       headers: const {'content-type': 'text/html; charset=utf-8'},
       bytes: utf8.encode(body ?? '<html><body>404 Not Found</body></html>'),
@@ -45,10 +45,12 @@ class MockDownloader<T> extends Downloader<T> {
     String part = '.part',
     bool match = false,
   }) async {
-    final response = await download(Request<T>(source));
+    final response = await download(Fetch<T>(source));
     return response.save(resolve(path), part: part);
   }
 }
+
+const _name = Slot<String>('name');
 
 void main() {
   group('Deduplicator & Queue', () {
@@ -71,9 +73,9 @@ void main() {
     test('Engine queues, deduplicates and serves', () {
       final engine = Engine<String>();
 
-      engine.add(Request('https://example.com/page1'.url));
-      engine.add(Request('https://example.com/page2'.url));
-      engine.add(Request('https://example.com/page1#section'.url));
+      engine.add(Fetch('https://example.com/page1'.url));
+      engine.add(Fetch('https://example.com/page2'.url));
+      engine.add(Fetch('https://example.com/page1#section'.url));
 
       expect(engine.queue.length, equals(2));
       expect(engine.queue.isNotEmpty, isTrue);
@@ -87,10 +89,10 @@ void main() {
     test('higher priority is served first, ties stay FIFO', () {
       final engine = Engine<String>();
 
-      engine.add(Request('https://example.com/low'.url));
-      engine.add(Request('https://example.com/high'.url, priority: 100));
-      engine.add(Request('https://example.com/mid'.url, priority: 50));
-      engine.add(Request('https://example.com/high2'.url, priority: 100));
+      engine.add(Fetch('https://example.com/low'.url));
+      engine.add(Fetch('https://example.com/high'.url, priority: 100));
+      engine.add(Fetch('https://example.com/mid'.url, priority: 50));
+      engine.add(Fetch('https://example.com/high2'.url, priority: 100));
 
       expect([
         for (var r = engine.serve(); r != null; r = engine.serve()) r.url.path,
@@ -145,7 +147,7 @@ void main() {
       final emitted = <Map<String, Object?>>[];
       engine.items.listen(emitted.add);
 
-      engine.add(Request('https://example.com/album'.url));
+      engine.add(Fetch('https://example.com/album'.url));
       final stats = await engine.run();
 
       expect(stats.completed, equals(3));
@@ -179,7 +181,7 @@ void main() {
       engine.items.listen(items.add);
 
       for (final url in pages.keys) {
-        engine.add(Request(url.url));
+        engine.add(Fetch(url.url));
       }
       final stats = await engine.run();
 
@@ -225,11 +227,11 @@ void main() {
           .crawl<String>('https://music.example.com/album')
           .downloader(MockDownloader<String>(pages))
           .tag('song', (res) {
-            visited.add('${res.meta['name']}: ${res.$('a').href}');
+            visited.add('${res.meta.get(_name)}: ${res.$('a').href}');
           })
           .run((res) {
             for (final a in res.$('#songlist a')) {
-              res.follow(a.attr('href')!, tag: 'song', meta: {'name': a.text});
+              res.follow(a.attr('href')!, tag: 'song', meta: [_name(a.text)]);
             }
           });
 
@@ -330,12 +332,12 @@ void main() {
       expect(stats.completed, equals(2));
     });
 
-    test('seed() takes fully-formed requests', () async {
+    test('seed() takes fully-formed fetches', () async {
       final tags = <String?>[];
       await net.crawl
           .seed<String>([
-            Request('https://site.example.com/a'.url, tag: 'first'),
-            Request('https://site.example.com/b'.url, tag: 'second'),
+            Fetch('https://site.example.com/a'.url, tag: 'first'),
+            Fetch('https://site.example.com/b'.url, tag: 'second'),
           ])
           .downloader(
             MockDownloader<String>({
@@ -456,7 +458,7 @@ void main() {
 
         // Downloader was external, so it should still be open
         final res = await downloader.download(
-          Request('https://example.com/1'.url),
+          Fetch('https://example.com/1'.url),
         );
         expect(res.status, equals(200));
       },
@@ -493,11 +495,11 @@ void main() {
         expect(dedupe.add('https://example.com/page?a=1&b=2'.url), isFalse);
 
         // Distinct tags do not collide
-        final reqList = Request<void>(
+        final reqList = Fetch<void>(
           'https://example.com/items'.url,
           tag: 'list',
         );
-        final reqDetail = Request<void>(
+        final reqDetail = Fetch<void>(
           'https://example.com/items'.url,
           tag: 'detail',
         );
@@ -507,16 +509,16 @@ void main() {
         expect(dedupe.tracked(reqDetail), isTrue);
 
         // Distinct methods do not collide
-        final reqGet = Request<void>(
+        final reqGet = Fetch<void>(
           'https://example.com/api'.url,
           method: HttpMethod.get,
         );
-        final reqPost1 = Request<void>(
+        final reqPost1 = Fetch<void>(
           'https://example.com/api'.url,
           method: HttpMethod.post,
           body: const Body.text('body1'),
         );
-        final reqPost2 = Request<void>(
+        final reqPost2 = Fetch<void>(
           'https://example.com/api'.url,
           method: HttpMethod.post,
           body: const Body.text('body2'),
@@ -526,11 +528,11 @@ void main() {
         expect(dedupe.track(reqPost2), isTrue);
 
         // Dedupe escape hatch
-        final reqNoDedupe1 = Request<void>(
+        final reqNoDedupe1 = Fetch<void>(
           'https://example.com/fresh'.url,
           dedupe: false,
         );
-        final reqNoDedupe2 = Request<void>(
+        final reqNoDedupe2 = Fetch<void>(
           'https://example.com/fresh'.url,
           dedupe: false,
         );
@@ -545,10 +547,8 @@ void main() {
       },
     );
 
-    test('Response.stop() throws StateError when response has no engine', () {
-      final standalone = Response<String>(
-        request: Request('https://example.com'.url),
-      );
+    test('Page.stop() throws StateError when response has no engine', () {
+      final standalone = Page<String>(fetch: Fetch('https://example.com'.url));
       expect(() => standalone.stop(), throwsStateError);
       expect(() => standalone.emit('item'), throwsStateError);
       expect(
@@ -738,16 +738,16 @@ https://example.com/item2
     });
 
     test(
-      'Engine Frontier prioritizes higher priority requests while preserving FIFO order',
+      'Engine Frontier prioritizes higher priority fetches while preserving FIFO order',
       () {
         final downloader = MapDownloader<void>({});
         final engine = Engine<void>(downloader: downloader);
 
-        engine.add(Request('https://example.com/low1'.url, priority: 1));
-        engine.add(Request('https://example.com/high1'.url, priority: 10));
-        engine.add(Request('https://example.com/low2'.url, priority: 1));
-        engine.add(Request('https://example.com/high2'.url, priority: 10));
-        engine.add(Request('https://example.com/medium'.url, priority: 5));
+        engine.add(Fetch('https://example.com/low1'.url, priority: 1));
+        engine.add(Fetch('https://example.com/high1'.url, priority: 10));
+        engine.add(Fetch('https://example.com/low2'.url, priority: 1));
+        engine.add(Fetch('https://example.com/high2'.url, priority: 10));
+        engine.add(Fetch('https://example.com/medium'.url, priority: 5));
 
         expect(
           engine.serve()?.url.toString(),

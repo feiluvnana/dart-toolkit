@@ -42,7 +42,78 @@ import '../system/console/writer.dart';
 /// parse.
 final CliAccessor cli = CliAccessor();
 
-/// One declared flag or option.
+/// One declared flag or option, and the way to read it.
+///
+/// A declaration hands one back, so the type is settled once — at the
+/// declaration — rather than guessed at every call site:
+///
+/// ```dart
+/// final force = cli.flag('force', alias: 'f');             // Opt<bool>
+/// final size = cli.number('concurrency', def: 4);          // Opt<int>
+/// final out = cli.option('out', alias: 'o', def: 'dist');  // Opt<String>
+///
+/// cli.parse(args);
+///
+/// if (force()) rebuild(out(), concurrency: size());
+/// ```
+///
+/// Calling the option reads it. Sources resolve in the usual order — the
+/// command line, then the `env` variable the declaration names, then [def] —
+/// and the answer is a [T], never text that still has to be parsed.
+final class Opt<T> {
+  /// The long name, without dashes.
+  final String name;
+
+  /// The short alias, without dashes, or `null`.
+  final String? alias;
+
+  /// What this option reads when nothing supplied a value.
+  final T def;
+
+  final _Spec _owner;
+  final T Function(Cli cli, Opt<T> self) _resolver;
+
+  const Opt._(this.name, this.alias, this.def, this._owner, this._resolver);
+
+  /// The resolved value.
+  ///
+  /// Reads from [from], or from whichever command line the declaring object
+  /// last parsed — the shared `cli`, a [Cli] itself, or, for an option
+  /// declared on a [Command], the scope that command was run with.
+  T call([Cli? from]) => _resolver(from ?? _owner._reader, this);
+
+  /// Whether the command line itself carried this option.
+  ///
+  /// False for a value that came from `env` or [def], which is how a script
+  /// tells "not given" from "given the same as the default".
+  bool given([Cli? from]) => (from ?? _owner._reader)._given(this);
+
+  /// How many times the command line carried it.
+  ///
+  /// A repeated switch is how a command line spells a level, so `-vvv` and
+  /// `--verbose --verbose --verbose` both count three:
+  ///
+  /// ```dart
+  /// final verbose = cli.flag('verbose', alias: 'v');
+  /// final level = switch (verbose.count()) {
+  ///   0 => LogLevel.warn,
+  ///   1 => LogLevel.info,
+  ///   _ => LogLevel.debug,
+  /// };
+  /// ```
+  int count([Cli? from]) => (from ?? _owner._reader)._count(this);
+
+  /// Whether `--no-[name]` was given.
+  bool negated([Cli? from]) => (from ?? _owner._reader)._negated(this);
+
+  @override
+  String toString() => 'Opt<$T>($name)';
+}
+
+/// What an option is parsed as, for validation and the usage block.
+enum _Shape { text, number, decimal, list }
+
+/// The declaration behind an [Opt].
 class _Decl {
   const _Decl({
     this.alias,
@@ -53,105 +124,262 @@ class _Decl {
     this.allowed,
     this.env,
     this.csv = false,
+    this.shape = _Shape.text,
   });
 
   final String? alias;
   final String desc;
+
+  /// The declared default, kept to print it in the usage block and to satisfy
+  /// [Cli.require]. The value an [Opt] reads is its own typed [Opt.def].
   final Object? def;
   final bool flag;
   final bool required;
   final List<String>? allowed;
   final String? env;
   final bool csv;
+  final _Shape shape;
 }
 
 /// Declaring an interface: the half of the API shared by [Cli], [Command] and
 /// [CliAccessor].
 ///
-/// [T] is the implementing type, so every declaration returns the receiver and
-/// cascades read the same on all three.
-mixin _Spec<T> {
+/// Every declaration returns the [Opt] that reads it, so the three read the
+/// same way and the type of a value is fixed where it is declared.
+mixin _Spec {
   final Map<String, _Decl> _declarations = {};
   final Map<String, Command> _children = {};
 
-  T get _self;
+  /// The command line an [Opt] declared here reads from.
+  Cli get _reader;
 
   /// Called after a declaration changes, so [Cli] can re-read its arguments.
   void _changed() {}
 
+  String? _short(String? alias) => alias == null ? null : Cli._clean(alias);
+
+  Opt<V> _declare<V>(
+    String name,
+    String? alias,
+    V def,
+    _Decl decl,
+    V Function(Cli cli, Opt<V> self) resolver,
+  ) {
+    _declarations[Cli._clean(name)] = decl;
+    _changed();
+    return Opt<V>._(Cli._clean(name), _short(alias), def, this, resolver);
+  }
+
   /// Declares a boolean flag.
   ///
   /// A flag never consumes the token after it, so `--verbose main.dart` leaves
-  /// `main.dart` a positional argument. [def] is the value [Cli.get] reports
-  /// when the flag is absent; leave it unset to fall back to the call site.
+  /// `main.dart` a positional argument. [def] is what the returned [Opt] reads
+  /// when neither the command line nor [env] said otherwise.
   ///
-  /// [env] names an environment variable to read when the flag is absent, so
-  /// a boolean can be set by the shell as well as on the command line —
-  /// `CI=true`, `FORCE=1`. It resolves the same way an option's does: the
-  /// command line, then [env], then [def], then the call site's fallback.
-  T flag(
+  /// [env] names an environment variable to read when the flag is absent, so a
+  /// boolean can be set by the shell as well as on the command line —
+  /// `CI=true`, `FORCE=1`.
+  ///
+  /// ```dart
+  /// final force = cli.flag('force', alias: 'f');
+  /// if (force()) ...
+  /// ```
+  Opt<bool> flag(
     String name, {
     String? alias,
     String desc = '',
-    bool? def,
+    bool def = false,
     String? env,
-  }) {
-    _declarations[Cli._clean(name)] = _Decl(
-      alias: alias == null ? null : Cli._clean(alias),
-      desc: desc,
-      def: def,
-      flag: true,
-      env: env,
-    );
-    _changed();
-    return _self;
-  }
+  }) => _declare<bool>(
+    name,
+    alias,
+    def,
+    _Decl(alias: _short(alias), desc: desc, def: def, flag: true, env: env),
+    (cli, self) => cli._readFlag(self),
+  );
 
-  /// Declares an option with a value.
+  /// Declares an option carrying text.
   ///
-  /// [def] is used by [Cli.get] and satisfies [Cli.require], so a default is
-  /// written once here instead of at every call site. [env] names an
-  /// environment variable to read when the option is absent, which also
-  /// satisfies [Cli.require]. [allowed] limits the accepted values, and [csv]
-  /// splits one comma-separated value into repeated ones for [Cli.all].
+  /// [def] is what the option reads when nothing supplied a value, and it
+  /// satisfies [Cli.require] — so a default is written once, here, rather than
+  /// at every call site. [env] names an environment variable to fall back to,
+  /// which also satisfies `require`. [allowed] limits the accepted values.
   ///
-  /// Values resolve in that order: the command line, then [env], then [def].
-  T option(
+  /// ```dart
+  /// final out = cli.option('out', alias: 'o', def: 'dist');
+  /// ```
+  Opt<String> option(
     String name, {
     String? alias,
     String desc = '',
-    Object? def,
+    String def = '',
     bool required = false,
     List<String>? allowed,
     String? env,
-    bool csv = false,
-  }) {
-    _declarations[Cli._clean(name)] = _Decl(
-      alias: alias == null ? null : Cli._clean(alias),
+  }) => _declare<String>(
+    name,
+    alias,
+    def,
+    _Decl(
+      alias: _short(alias),
+      desc: desc,
+      def: def.isEmpty ? null : def,
+      required: required,
+      allowed: allowed,
+      env: env,
+    ),
+    (cli, self) => cli._readText(self) ?? self.def,
+  );
+
+  /// Declares an option carrying a whole number.
+  ///
+  /// ```dart
+  /// final size = cli.number('concurrency', def: 4);
+  /// ```
+  ///
+  /// A value that is not a number reads as [def], and [Cli.require] reports it
+  /// rather than letting the script run on a number nobody asked for.
+  Opt<int> number(
+    String name, {
+    String? alias,
+    String desc = '',
+    int def = 0,
+    bool required = false,
+    String? env,
+  }) => _declare<int>(
+    name,
+    alias,
+    def,
+    _Decl(
+      alias: _short(alias),
       desc: desc,
       def: def,
+      required: required,
+      env: env,
+      shape: _Shape.number,
+    ),
+    (cli, self) {
+      final text = cli._readText(self);
+      return text == null ? self.def : int.tryParse(text.trim()) ?? self.def;
+    },
+  );
+
+  /// Declares an option carrying a decimal number.
+  Opt<double> decimal(
+    String name, {
+    String? alias,
+    String desc = '',
+    double def = 0,
+    bool required = false,
+    String? env,
+  }) => _declare<double>(
+    name,
+    alias,
+    def,
+    _Decl(
+      alias: _short(alias),
+      desc: desc,
+      def: def,
+      required: required,
+      env: env,
+      shape: _Shape.decimal,
+    ),
+    (cli, self) {
+      final text = cli._readText(self);
+      return text == null ? self.def : double.tryParse(text.trim()) ?? self.def;
+    },
+  );
+
+  /// Declares an option that may be given more than once.
+  ///
+  /// Every occurrence contributes a value. With [csv] set, one comma-separated
+  /// value contributes each part, so `--tag a,b` and `--tag a --tag b` read
+  /// the same.
+  ///
+  /// ```dart
+  /// final tags = cli.list('tag', csv: true);
+  /// for (final tag in tags()) ...
+  /// ```
+  Opt<List<String>> list(
+    String name, {
+    String? alias,
+    String desc = '',
+    List<String> def = const [],
+    bool required = false,
+    List<String>? allowed,
+    bool csv = false,
+    String? env,
+  }) => _declare<List<String>>(
+    name,
+    alias,
+    def,
+    _Decl(
+      alias: _short(alias),
+      desc: desc,
       required: required,
       allowed: allowed,
       env: env,
       csv: csv,
-    );
-    _changed();
-    return _self;
-  }
+      shape: _Shape.list,
+    ),
+    (cli, self) {
+      final values = cli._readAll(self);
+      return values.isEmpty ? self.def : values;
+    },
+  );
+
+  /// Declares an option whose value is one of an enum's.
+  ///
+  /// The accepted spellings are the enum's own names, so the usage block and
+  /// the validation both come from the type rather than a second list that can
+  /// drift away from it.
+  ///
+  /// ```dart
+  /// final level = cli.choice('level', LogLevel.values, def: LogLevel.info);
+  /// logger.level = level();
+  /// ```
+  Opt<E> choice<E extends Enum>(
+    String name,
+    List<E> values, {
+    required E def,
+    String? alias,
+    String desc = '',
+    bool required = false,
+    String? env,
+  }) => _declare<E>(
+    name,
+    alias,
+    def,
+    _Decl(
+      alias: _short(alias),
+      desc: desc,
+      def: def.name,
+      required: required,
+      allowed: [for (final value in values) value.name],
+      env: env,
+    ),
+    (cli, self) {
+      final text = cli._readText(self)?.trim().toLowerCase();
+      if (text == null) return self.def;
+      for (final value in values) {
+        if (value.name.toLowerCase() == text) return value;
+      }
+      return self.def;
+    },
+  );
 
   /// Registers [name] as a subcommand run by [handler], returning it so that
   /// its own flags and options can be declared on the spot.
   ///
   /// ```dart
-  /// cli.handle('build', _build, desc: 'Build the project')
-  ///   ..flag('release', desc: 'Optimise the output')
-  ///   ..option('out', alias: 'o', def: 'dist');
+  /// final build = cli.handle('build', _build, desc: 'Build the project');
+  /// final out = build.option('out', alias: 'o', def: 'dist');
   /// ```
   ///
-  /// The handler's return value becomes the exit code — see [Cli.run].
+  /// The handler's return value is the exit code — see [Cli.run].
   Command handle(
     String name,
-    FutureOr<Object?> Function(Cli cli) handler, {
+    FutureOr<int> Function(Cli cli) handler, {
     String desc = '',
   }) => _register(name, desc, handler);
 
@@ -169,7 +397,7 @@ mixin _Spec<T> {
   Command _register(
     String name,
     String desc,
-    FutureOr<Object?> Function(Cli cli)? handler,
+    FutureOr<int> Function(Cli cli)? handler,
   ) {
     final child = _children[name] = Command._(name, desc, handler);
     _changed();
@@ -194,14 +422,14 @@ mixin _Spec<T> {
 ///   final size = cli.get('concurrency', 4);
 /// }
 /// ```
-class CliAccessor with _Spec<CliAccessor> {
+class CliAccessor with _Spec {
   Cli _parsed = Cli(const []);
 
   /// Creates the accessor. Prefer the shared [cli] instance.
   CliAccessor();
 
   @override
-  CliAccessor get _self => this;
+  Cli get _reader => _parsed._reader;
 
   @override
   void _changed() {
@@ -231,7 +459,7 @@ class CliAccessor with _Spec<CliAccessor> {
     String? desc,
     String? version,
     bool strict = false,
-    FutureOr<Object?> Function(Cli cli)? body,
+    FutureOr<int> Function(Cli cli)? body,
   }) {
     parse(args);
     return _parsed.run(
@@ -262,24 +490,8 @@ class CliAccessor with _Spec<CliAccessor> {
   bool subcommand(String name, void Function(Cli cli) handler) =>
       _parsed.subcommand(name, handler);
 
-  /// Whether [name] (or its short [alias]) was given as a flag or an option.
-  bool has(String name, [String? alias]) => _parsed.has(name, alias);
-
-  /// How many times [name] (or its short [alias]) was given. See [Cli.count].
-  int count(String name, [String? alias]) => _parsed.count(name, alias);
-
-  /// Reads [name] as [T], falling back to [fallback].
-  T get<T>(String name, T fallback, [String? alias]) =>
-      _parsed.get<T>(name, fallback, alias);
-
-  /// Every value given for a repeated option.
-  List<T> all<T>(String name, [String? alias]) => _parsed.all<T>(name, alias);
-
-  /// Whether `--no-[name]` was given.
-  bool no(String name) => _parsed.no(name);
-
   /// Positional arguments, in order.
-  List<String> list() => _parsed.list();
+  List<String> get args => _parsed.args;
 
   /// The raw argument list as parsed.
   List<String> get raw => _parsed.raw;
@@ -313,7 +525,7 @@ class CliAccessor with _Spec<CliAccessor> {
 /// positional — from `--out dist`, an option and its value; an *undeclared*
 /// switch followed by a bare word takes that word as its value. [strict]
 /// rejects switches that no declaration covers.
-class Cli with _Spec<Cli> {
+class Cli with _Spec {
   /// The exit code for a command line that could not be understood.
   ///
   /// The conventional `EX_USAGE`: an unknown switch, a missing required
@@ -337,8 +549,15 @@ class Cli with _Spec<Cli> {
     _parse();
   }
 
+  /// The scope [run] built for the command it dispatched to, if any.
+  ///
+  /// An option declared globally is read from the same re-parse the handler
+  /// gets, so a command's own declarations cannot change how a global one
+  /// parses without the global reader noticing.
+  Cli? _scopeInUse;
+
   @override
-  Cli get _self => this;
+  Cli get _reader => _scopeInUse ?? this;
 
   @override
   void _changed() => _parse();
@@ -472,118 +691,83 @@ class Cli with _Spec<Cli> {
     _tally[name] = (_tally[name] ?? 0) + 1;
   }
 
-  /// How many times [name] (or its short [alias]) was given.
+  /// How many times the command line carried [opt]. See [Opt.count].
+  int _count(Opt<Object?> opt) =>
+      (_tally[opt.name] ?? 0) +
+      (opt.alias != null ? (_tally[opt.alias!] ?? 0) : 0);
+
+  /// Whether the command line carried [opt] at all. See [Opt.given].
+  bool _given(Opt<Object?> opt) =>
+      _flags.contains(opt.name) ||
+      (opt.alias != null && _flags.contains(opt.alias!));
+
+  /// Whether `--no-[name]` was given for [opt]. See [Opt.negated].
+  bool _negated(Opt<Object?> opt) =>
+      _no(opt.name) || (opt.alias != null && _no(opt.alias!));
+
+  /// Whether `--no-[clean]` (or `--no[clean]`) was given.
+  bool _no(String clean) =>
+      _flags.contains('no-$clean') || _flags.contains('no$clean');
+
+  /// The value of a boolean [opt], from every source in order.
   ///
-  /// A repeated switch is how a command line spells a level, so `-vvv` and
-  /// `--verbose --verbose --verbose` both count three:
-  ///
-  /// ```dart
-  /// final cli = Cli(args)..flag('verbose', alias: 'v');
-  /// final level = switch (cli.count('verbose')) {
-  ///   0 => LogLevel.warn,
-  ///   1 => LogLevel.info,
-  ///   _ => LogLevel.debug,
-  /// };
-  /// ```
-  ///
-  /// Zero when the switch was not given at all, so this reads as [has] with a
-  /// number attached.
-  int count(String name, [String? alias]) {
-    final short = _alias(name, alias);
-    return (_tally[_clean(name)] ?? 0) +
-        (short != null ? (_tally[short] ?? 0) : 0);
+  /// An explicit `--no-[name]` wins, then `--[name]=true|1`, then the bare
+  /// switch, then `env`, then the declared default. An environment variable
+  /// arrives as text, so it is read as a flag word rather than type-tested —
+  /// without that, `env: 'FORCE'` could never satisfy a boolean.
+  bool _readFlag(Opt<bool> opt) {
+    if (_negated(opt)) return false;
+    final given = _value(opt);
+    if (given != null) return _truthy(given);
+    if (_given(opt)) return true;
+    final fromEnv = _fromEnv(_decl(opt.name));
+    if (fromEnv != null) return _truthy(fromEnv);
+    return opt.def;
   }
 
-  /// Whether [name] (or its short [alias]) was given.
+  /// The text [opt] resolved to, or `null` when nothing supplied one.
   ///
-  /// [alias] defaults to the one declared with [flag] or [option].
-  ///
-  /// This asks only what the command line carried: a value reached through
-  /// `env` or `def` does not make it true, though either satisfies [require].
-  ///
-  /// `--no-force` does *not* make `has('force')` true; test for it with [no],
-  /// or read a tri-state value with `get<bool>`.
-  bool has(String name, [String? alias]) {
-    final short = _alias(name, alias);
-    return _flags.contains(_clean(name)) ||
-        (short != null && _flags.contains(short));
-  }
+  /// The command line first, then the environment variable the declaration
+  /// names. The declared default is [Opt.def]'s job, so it stays typed.
+  String? _readText(Opt<Object?> opt) =>
+      _value(opt) ?? _fromEnv(_decl(opt.name));
 
-  /// Whether `--no-[name]` (or `--no[name]`) was given.
-  bool no(String name) {
-    final clean = _clean(name);
-    return _flags.contains('no-$clean') || _flags.contains('no$clean');
-  }
-
-  /// Every value given for a repeated option, parsed as [T].
-  ///
-  /// [T] may be `String`, `int` or `double`. Unparseable values are skipped.
-  /// An option declared with `csv: true` contributes each comma-separated
-  /// part, so `--tag a,b` and `--tag a --tag b` read the same.
-  List<T> all<T>(String name, [String? alias]) {
-    final short = _alias(name, alias);
+  /// Every value given for a repeated [opt], in order.
+  List<String> _readAll(Opt<Object?> opt) {
     final values = [
-      ...?_repeated[_clean(name)],
-      if (short != null) ...?_repeated[short],
+      ...?_repeated[opt.name],
+      if (opt.alias != null) ...?_repeated[opt.alias!],
     ];
-    return switch (T) {
-      const (int) => values.map(int.tryParse).whereType<T>().toList(),
-      const (double) => values.map(double.tryParse).whereType<T>().toList(),
-      _ => values.cast<T>(),
-    };
+    if (values.isNotEmpty) return values;
+    final fromEnv = _fromEnv(_decl(opt.name));
+    if (fromEnv == null) return const [];
+    if (!(_decl(opt.name)?.csv ?? false)) return [fromEnv];
+    return fromEnv
+        .split(',')
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)
+        .toList();
   }
 
-  /// Reads [name] (or its short [alias]) as [T], falling back to [fallback].
+  /// Every switch the command line carried, with the value each was given.
   ///
-  /// Sources are tried in order: the command line, the `env` variable named in
-  /// the declaration, the declared `def`, then [fallback] — which is required,
-  /// so the result is never null and never needs an explicit type argument.
-  ///
-  /// For `bool`, an explicit `--no-[name]` yields `false`, a bare `--[name]`
-  /// yields `true`, and `--[name]=true|1` is honoured.
+  /// The parser's own answer, before any declaration is consulted: keys are
+  /// names without dashes, in the order they were first seen, and a value is
+  /// `null` for a switch given without one. This is what [unknown] reads, and
+  /// what a script inspecting an argument list it did not declare wants —
+  /// reading a *declared* option is [Opt]'s job, and keeps the type.
   ///
   /// ```dart
-  /// cli.get('concurrency', 4); // int
-  /// cli.get('name', '');       // String
+  /// Cli(['-abc', 'x']).switches.keys;   // ('a', 'b', 'c')
+  /// Cli(['--out=dist']).switches;       // {'out': 'dist'}
   /// ```
-  T get<T>(String name, T fallback, [String? alias]) {
-    final clean = _clean(name);
-    final cleanAlias = _alias(name, alias);
-    final given =
-        _options[clean] ?? (cleanAlias == null ? null : _options[cleanAlias]);
-    final decl = _decl(clean);
+  Map<String, String?> get switches => {
+    for (final name in _flags) name: _options[name],
+  };
 
-    if (T == bool || fallback is bool) {
-      if (no(clean) || (cleanAlias != null && no(cleanAlias))) {
-        return false as T;
-      }
-      if (given != null) return _truthy(given) as T;
-      if (_flags.contains(clean) ||
-          (cleanAlias != null && _flags.contains(cleanAlias))) {
-        return true as T;
-      }
-      // Same precedence as every other type: env before def. An environment
-      // variable arrives as text, so it is read as a flag word rather than
-      // type-tested against bool — without that, `env: 'FORCE'` could never
-      // satisfy a boolean option.
-      final fromEnv = _fromEnv(decl);
-      if (fromEnv != null) return (_truthy(fromEnv) as T);
-      final def = decl?.def;
-      if (def is T) return def;
-      if (def is String) return _truthy(def) as T;
-      return fallback;
-    }
-
-    final raw = given ?? _fromEnv(decl) ?? decl?.def;
-    if (raw == null) return fallback;
-    if (raw is T) return raw as T;
-    final text = raw.toString();
-    return switch (T) {
-      const (int) => (int.tryParse(text) ?? fallback) as T,
-      const (double) => (double.tryParse(text) ?? fallback) as T,
-      _ => text as T,
-    };
-  }
+  /// The value the command line carried for [opt], under its name or alias.
+  String? _value(Opt<Object?> opt) =>
+      _options[opt.name] ?? (opt.alias == null ? null : _options[opt.alias!]);
 
   /// Whether [value] spells a true boolean.
   ///
@@ -628,33 +812,55 @@ class Cli with _Spec<Cli> {
   /// Whether [name] resolved to a value from any source.
   ///
   /// For an option this means a *value*: `--out` with nothing after it parses
-  /// as a bare switch, and satisfying `required` with it would leave [get]
-  /// handing back the call site's fallback for an argument the script was
-  /// told it had. A flag is satisfied by its presence alone.
+  /// as a bare switch, and satisfying `required` with it would leave the
+  /// option reading its default for an argument the script was told it had. A
+  /// flag is satisfied by its presence alone.
   bool _supplied(String name) {
     final clean = _clean(name);
     final decl = _decl(clean);
-    if (decl?.flag ?? false) return has(name, decl?.alias);
-    if (decl?.def != null || _fromEnv(decl) != null) return true;
     final alias = _alias(name, null);
+    final present =
+        _flags.contains(clean) || (alias != null && _flags.contains(alias));
+    if (decl?.flag ?? false) return present;
+    if (decl?.def != null || _fromEnv(decl) != null) return true;
     if (_options.containsKey(clean)) return true;
     if (alias != null && _options.containsKey(alias)) return true;
     // Undeclared names have no shape to enforce; presence is all there is.
-    return decl == null && has(name, alias);
+    return decl == null && present;
   }
 
-  /// Descriptions of every given value that its declaration disallows.
+  /// Descriptions of every given value its declaration disallows, and every
+  /// one that is not the number its declaration says it is.
+  ///
+  /// A number that does not parse used to reach the script as the default,
+  /// which is worse than refusing it: `--concurrency=fast` ran on four
+  /// workers and said nothing.
   List<String> _offending() {
     final problems = <String>[];
     for (final entry in _declarations.entries) {
-      final allowed = entry.value.allowed;
-      if (allowed == null) continue;
-      for (final value in all<String>(entry.key)) {
-        if (allowed.contains(value)) continue;
-        problems.add(
-          '--${entry.key} must be one of ${allowed.join(', ')} '
-          '(got "$value")',
-        );
+      final decl = entry.value;
+      if (decl.flag) continue;
+      final given = [
+        ...?_repeated[entry.key],
+        if (decl.alias != null) ...?_repeated[decl.alias!],
+      ];
+      for (final value in given) {
+        final allowed = decl.allowed;
+        if (allowed != null && !allowed.contains(value)) {
+          problems.add(
+            '--${entry.key} must be one of ${allowed.join(', ')} '
+            '(got "$value")',
+          );
+          continue;
+        }
+        final bad = switch (decl.shape) {
+          _Shape.number => int.tryParse(value.trim()) == null,
+          _Shape.decimal => double.tryParse(value.trim()) == null,
+          _Shape.text || _Shape.list => false,
+        };
+        if (bad) {
+          problems.add('--${entry.key} must be a number (got "$value")');
+        }
       }
     }
     return problems;
@@ -719,7 +925,10 @@ class Cli with _Spec<Cli> {
   }
 
   /// Positional arguments, in order.
-  List<String> list() => List.unmodifiable(_rest);
+  ///
+  /// Named `args` and not `list`, because [Cli.list] declares a repeated
+  /// option and one name cannot mean both.
+  List<String> get args => List.unmodifiable(_rest);
 
   // --------------------------------------------------------------------------
   // DISPATCH
@@ -754,14 +963,30 @@ class Cli with _Spec<Cli> {
     String? desc,
     String? version,
     bool strict = false,
-    FutureOr<Object?> Function(Cli cli)? body,
+    FutureOr<int> Function(Cli cli)? body,
   }) async {
-    if (!_declarations.containsKey('help')) {
-      flag('help', alias: 'h', desc: 'Show this message');
-    }
-    if (version != null && !_declarations.containsKey('version')) {
-      flag('version', desc: 'Show the version and exit');
-    }
+    final help =
+        _declarations.containsKey('help')
+            ? Opt<bool>._(
+              'help',
+              'h',
+              false,
+              this,
+              (cli, self) => cli._readFlag(self),
+            )
+            : flag('help', alias: 'h', desc: 'Show this message');
+    final showVersion =
+        version == null
+            ? null
+            : (_declarations.containsKey('version')
+                ? Opt<bool>._(
+                  'version',
+                  null,
+                  false,
+                  this,
+                  (cli, self) => cli._readFlag(self),
+                )
+                : flag('version', desc: 'Show the version and exit'));
 
     final path = _resolve();
     final target = path.isEmpty ? null : path.last;
@@ -783,18 +1008,18 @@ class Cli with _Spec<Cli> {
       children: (target?._children ?? _children),
     );
 
-    if (scoped.get('help', false)) {
+    if (help(scoped)) {
       stdout.writeln(text());
       return 0;
     }
-    if (version != null && scoped.get('version', false)) {
-      stdout.writeln(version);
+    if (showVersion != null && showVersion(scoped)) {
+      stdout.writeln(version!);
       return 0;
     }
 
     // A positional the command tree did not claim is a typo, not an argument,
     // whenever the command it would have run does not exist.
-    final extra = scoped.list();
+    final extra = scoped.args;
     if (target == null && _children.isNotEmpty && extra.isNotEmpty) {
       return _reject('unknown command: ${extra.first}', text());
     }
@@ -819,10 +1044,21 @@ class Cli with _Spec<Cli> {
       return 0;
     }
 
+    // Options declared on this object, or on any command along the path, read
+    // from the same scope the handler gets.
+    _scopeInUse = scoped;
+    for (final node in path) {
+      node._scopeInUse = scoped;
+    }
     try {
-      return _code(await handler(scoped));
+      return await handler(scoped);
     } on ArgumentError catch (error) {
       return _reject(error.message.toString(), text());
+    } finally {
+      _scopeInUse = null;
+      for (final node in path) {
+        node._scopeInUse = null;
+      }
     }
   }
 
@@ -834,13 +1070,6 @@ class Cli with _Spec<Cli> {
       ..writeln(usage);
     return usageExit;
   }
-
-  static int _code(Object? result) => switch (result) {
-    null => 0,
-    final int code => code,
-    final bool ok => ok ? 0 : 1,
-    _ => 0,
-  };
 
   /// The deepest chain of registered commands the positionals spell out.
   List<Command> _resolve() {
@@ -931,7 +1160,7 @@ class Cli with _Spec<Cli> {
 ///   ..option('out', alias: 'o', def: 'dist', desc: 'Output directory')
 ///   ..flag('release', desc: 'Optimise the output');
 /// ```
-class Command with _Spec<Command> {
+class Command with _Spec {
   Command._(this.name, this.desc, this.handler);
 
   /// The word that selects this command.
@@ -941,10 +1170,23 @@ class Command with _Spec<Command> {
   final String desc;
 
   /// What runs when this command is selected, or `null` for a [group].
-  final FutureOr<Object?> Function(Cli cli)? handler;
+  final FutureOr<int> Function(Cli cli)? handler;
+
+  /// The scope [Cli.run] built for this command, while it is running.
+  Cli? _scopeInUse;
 
   @override
-  Command get _self => this;
+  Cli get _reader {
+    final scope = _scopeInUse;
+    if (scope == null) {
+      throw StateError(
+        'The command "$name" is not running, so its options have nothing to '
+        'read. Read them inside its handler, or pass the Cli the handler was '
+        'given: out(cli).',
+      );
+    }
+    return scope;
+  }
 }
 
 // ============================================================================

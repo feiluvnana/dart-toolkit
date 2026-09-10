@@ -40,7 +40,7 @@ void main() async {
 | `net.crawl.html<T>(String markup)` | Explicit raw HTML markup |
 | `net.crawl.file<T>(String path)` | Explicit local file path |
 | `net.crawl.sitemap<T>(Uri sitemapUrl)` | Seeds discovered by parsing XML/text sitemap |
-| `net.crawl.seed<T>(requests)` | Fully-formed `Request` objects |
+| `net.crawl.seed<T>(requests)` | Fully-formed `Fetch` objects |
 
 > Seeds and `res.follow(String url)` accept plain **`String`** inputs — they do not need to be `Uri` objects. You can pass raw HTML markup (`'<article>...</article>'`), local file paths, or custom task identifiers directly.
 
@@ -48,8 +48,8 @@ Use `seed` when the starting pages need their own headers, tag, priority, depth,
 
 ```dart
 await net.crawl.seed<String>([
-  Request('https://example.com/a', tag: 'listing', priority: 10),
-  Request('https://example.com/b', headers: {'Cookie': 'session=abc'}),
+  Fetch('https://example.com/a', tag: 'listing', priority: 10),
+  Fetch('https://example.com/b', headers: {'Cookie': 'session=abc'}),
 ]).run((res) { ... });
 ```
 
@@ -119,7 +119,9 @@ await net.crawl<String>('https://example.com')
 | `run([process])` | `Future<Stats>` |
 | `collect([process])` | `Future<List<T>>` of everything emitted |
 | `stream([process])` | `Stream<T>`, yielding items as they are emitted |
-| `save(sinkOrPath, [process])` | `Future<Stats>`, writing items to a file path or an `IOSink` |
+| `gather(map)` | `Future<List<R>>`, collecting what `map` returned per page |
+| `save(path, [process])` | `Future<Stats>`, writing items to a file |
+| `sink(destination, [process])` | `Future<Stats>`, writing items to an `IOSink` you own |
 | `engine([process])` | The configured `Engine`, unrun |
 
 Prefer `stream` or `save` over `collect` for large crawls — they do not hold every item in memory:
@@ -134,7 +136,23 @@ await for (final title in net.crawl<String>(url).stream(handler)) {
 final stats = await net.crawl<Map<String, Object?>>(url).save('out/results.jsonl', handler);
 ```
 
-A path is written the way every other write in this library is: items go to a `.part` staging file, its folder is created if it is missing, and it is renamed into place once the run finishes. A crawl that fails part way leaves whatever was already at the destination. An `IOSink` is yours: it is written to and flushed, never closed.
+`gather` is the single-stage form, and the one to reach for first. The item
+type comes from what the mapper returns rather than from an `emit` buried in a
+closure, so it is inferred, and returning nothing for a page filters it out:
+
+```dart
+final titles = await net.crawl<Never>(seed)
+    .gather((page) => page.$('.title').texts);
+// Future<List<String>>
+```
+
+`Never` is the crawl's own item type: `gather` emits nothing, so there is
+nothing for it to be. A crawl that follows links into tagged stages emits, and
+wants `collect`.
+
+`save` writes the way every other write in this library does: items go to a `.part` staging file, its folder is created if it is missing, and it is renamed into place once the run finishes. A crawl that fails part way leaves whatever was already at the destination. `sink` writes to an `IOSink` you own — it is written to and flushed, never closed.
+
+They used to be one method taking `Object`, which threw `ArgumentError` for anything that was neither.
 
 ---
 
@@ -166,7 +184,7 @@ Run it, stop it with Ctrl-C, run it again: the second run picks up the frontier 
 | **While running** | The file is rewritten every `every` (5 seconds by default), and once more when the run stops. |
 | **On the way out** | A crawl that drained on its own deletes the file, having nothing left to resume. One that stopped early — `limit`, `res.stop`, a signal — keeps it. |
 
-A page that was mid-fetch when the run stopped counts as pending, not as done, so it is fetched again rather than silently skipped. `Request.meta` travels through the file, so anything a handler stores there has to be JSON-encodable. A file that exists but cannot be read throws rather than starting the crawl over.
+A page that was mid-fetch when the run stopped counts as pending, not as done, so it is fetched again rather than silently skipped. `Fetch.meta` travels through the file, so anything a handler stores there has to be JSON-encodable. A file that exists but cannot be read throws rather than starting the crawl over.
 
 ### Driving it yourself
 
@@ -180,13 +198,15 @@ void main() async {
     for (final href in res.$('a').hrefs) res.follow(href);
   });
 
+  const position = Slot<Map<String, Object?>>('position');
+
   final store = io.store.open('crawl.json');
-  final saved = store.get<Map<String, Object?>>('position');
+  final saved = store.get(position);
   if (saved != null) engine.restore(Snapshot<String>.fromJson(saved));
 
   await engine.run(['https://example.com']);
 
-  store.set('position', engine.snapshot().toJson());
+  store.set(position, engine.snapshot().toJson());
   await store.save();
 }
 ```
@@ -202,17 +222,18 @@ A handler advances the crawl with `res.follow(...)`. Relative URLs resolve again
 Tags keep the stages apart:
 
 ```dart
+const name = Slot<String>('name');
+
 final stats = await net.crawl<String>('https://music.example.com/album')
     .tag('song', (res) {
-      final name = res.meta['name'] as String;
-      print('$name -> ${res.$('a').href}');
+      print('${res.meta.get(name)} -> ${res.$('a').href}');
     })
     .run((res) {
       for (final a in res.$('#songlist a')) {
         res.follow(
           a.href!,
           tag: 'song',
-          meta: {'name': a.text},
+          meta: [name(a.text)],
         );
       }
     });
@@ -246,7 +267,32 @@ See [docs/form.md](form.md).
 - `route(pattern, handler)` routes by URL pattern.
 - The function passed to `run`/`collect`/`stream` handles anything unmatched.
 
-`meta` is carried untouched from request to response, which is how a handler recovers the context it queued a page with.
+---
+
+## 5b. Carrying Context Between Stages
+
+`meta` is carried untouched from fetch to page, which is how a handler recovers the context it queued a page with. It is keyed by `Slot`s — the same typed keys `io.store` uses, see [store.md](store.md#1-slots):
+
+```dart
+const artist = Slot<String>('artist');
+const track = Slot<int>('track');
+
+res.follow(href, tag: 'song', meta: [artist('Nick Drake'), track(4)]);
+
+// in the 'song' handler:
+final String? by = res.meta.get(artist);   // no cast
+final int? no = res.meta.get(track);
+```
+
+Writing is checked against the slot's type, and a value that is not the shape the slot names reads back as `null` rather than throwing.
+
+To pass one page's context on to the next, spread its entries:
+
+```dart
+res.follow(href, tag: 'detail', meta: [...res.meta.entries, track(4)]);
+```
+
+Whatever a slot writes has to survive `jsonEncode`, because `meta` travels through the [resume file](#4-surviving-interruption). `Slot.coded` covers a type JSON does not carry. `res.meta.raw` is the map underneath, for a key another library owns.
 
 ---
 
@@ -257,9 +303,9 @@ res.emit(item);                    // yield a result
 res.follow(url, tag: ..., meta: ..., priority: ...);
 res.stop('reason');                // wind down after in-flight work
 res.tag;                           // the tag this page was queued with
-res.meta;                          // the context it was queued with
+res.meta.get(slot);                // the context it was queued with
 res.engine;                        // the running Engine
-res.request;                       // the scheduled Request
+res.fetch;                         // the scheduled Fetch
 res.depth;                         // current hop depth (seed is 0)
 ```
 
@@ -283,7 +329,7 @@ final article = res.extract({
 For a typed read, `res.pick(Field.text('h1'))` returns a `String?` rather than
 an `Object?` — see [`http.md`](http.md#declarative-extraction-extract).
 
-Everything from [`HttpResponse`](http.md) is available too — `res.$('...')`, `res.$xpath('...')`, `res.body`, `res.json`, `res.save(...)`.
+Everything from [`Reply`](http.md) is available too — `res.$('...')`, `res.$xpath('...')`, `res.body`, `res.json`, `res.save(...)`.
 
 ---
 
@@ -320,7 +366,7 @@ await net.crawl<String>(url)
     .on.start(() => log.info('starting'))
     .on.item((item) => bar.tick())
     .on.progress((res) => log.debug('${res.status} ${res.url}'))
-    .on.error((f) => log.error('${f.request?.url} failed', f.error, f.stack))
+    .on.error((f) => log.error('${f.fetch?.url} failed', f.error, f.stack))
     .on.done((stats) => log.ok('${stats.completed} pages'))
     .run(handler);
 ```
@@ -345,13 +391,13 @@ void main() async {
 
   system.console.logger.warn('${stats.failed} failed');
   for (final failure in lost) {
-    system.console.logger.warn('${failure.request?.url}: ${failure.error}');
+    system.console.logger.warn('${failure.fetch?.url}: ${failure.error}');
   }
 
   // Retry just those, on their own.
   await net.crawl.seed<String>([
     for (final failure in lost)
-      if (failure.request case final request?) request,
+      if (failure.fetch case final request?) request,
   ]).run((res) {});
 }
 ```
@@ -384,10 +430,10 @@ await net.crawl<String>('https://site.test/login')
     .downloader(downloader)
     .run(handler);
 
-expect(downloader.requests.last.method, HttpMethod.post);
+expect(downloader.fetches.last.method, HttpMethod.post);
 ```
 
-`downloader.requests` holds every request served, in order, so a test can assert on the method, headers and body the pipeline actually sent.
+`downloader.fetches` holds every fetch served, in order, so a test can assert on the method, headers and body the pipeline actually sent.
 
 For custom fixture resolution, subclass `Downloader`:
 
@@ -397,7 +443,7 @@ class MockDownloader<T> extends Downloader<T> {
   MockDownloader(this.pages);
 
   @override
-  Future<Response<T>> download(Request<T> request) async => Response<T>(
+  Future<Page<T>> download(Fetch<T> request) async => Page<T>(
         request: request,
         status: pages.containsKey('${request.url}') ? 200 : 404,
         bytes: utf8.encode(pages['${request.url}'] ?? ''),

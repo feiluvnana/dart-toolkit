@@ -26,7 +26,7 @@ const HashAccessor _hash = HashAccessor();
 /// [validators] are the headers that ask cheaply when it cannot.
 class CacheEntry {
   /// The stored response.
-  final HttpResponse response;
+  final Reply response;
 
   /// When it was stored.
   final DateTime stored;
@@ -45,7 +45,7 @@ class CacheEntry {
     }
     return CacheEntry(
       stored: stored,
-      response: HttpResponse(
+      response: Reply(
         url: url,
         status: (json['status'] as num? ?? 200).toInt(),
         headers: {
@@ -127,7 +127,7 @@ class CacheEntry {
 }
 
 /// Responses kept on disk between runs, reachable through
-/// `HttpClient(cache: ...)` and `net.crawl(...).cache(...)`.
+/// `Fetcher(cache: ...)` and `net.crawl(...).cache(...)`.
 ///
 /// Re-running a scrape over pages that have not changed is the common case
 /// while an extractor is being written. With a cache the second run asks each
@@ -136,7 +136,7 @@ class CacheEntry {
 /// no. A response still inside its `max-age` is served without asking at all.
 ///
 /// ```dart
-/// final client = HttpClient(cache: HttpCache('.cache'));
+/// final client = Fetcher(cache: HttpCache('.cache'));
 /// final res = await client.get('https://example.com'.url);
 /// if (res.cached) print('served from disk');
 /// ```
@@ -178,7 +178,7 @@ class HttpCache {
   }
 
   /// Stores [response] under [url], replacing anything already there.
-  Future<File> write(Uri url, HttpResponse response) async {
+  Future<File> write(Uri url, Reply response) async {
     await Fs.mkdir(dir);
     final entry = CacheEntry(response: response, stored: DateTime.now());
     return Fs.dump(path(url), entry.toJson(), pretty: false);

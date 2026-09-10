@@ -31,23 +31,28 @@ void main() {
       expect(handler, isA<Handler<String>>());
     });
 
-    test('the three names that still shadow dart:io are reachable either way', () {
-      // `Cookie`, `HttpClient` and `HttpResponse` are the collisions the Rule
-      // 6 sweep found and 1.7.0 recorded rather than renamed — see the known
-      // collisions table in NAMESPACE.md. This pins what a file importing
-      // both currently gets, so the 2.0.0 rename has something to break.
-      expect(HttpResponse.text('<p>hi</p>').status, 200);
-      expect(Cookie('a', 'b').name, 'a');
-      final ours = HttpClient();
+    test('no exported name shadows dart:io any more', () {
+      // The Rule 6 collisions 1.7.0 recorded and 2.0.0 paid off. `HttpClient`,
+      // `HttpResponse` and `Cookie` used to be this library's — the package
+      // import beat the `dart:` one with no diagnostic at all. Unprefixed,
+      // they now resolve to dart:io's, which is what this pins.
+      final theirs = HttpClient();
+      addTearDown(theirs.close);
+      expect(theirs, isA<dart_io.HttpClient>());
+      expect(Cookie('a', 'b'), isA<dart_io.Cookie>());
+      expect(HttpResponse, isNot(equals(Reply)));
+
+      // And the toolkit's carry their own names, which collide with nothing.
+      expect(Reply.text('<p>hi</p>').status, 200);
+      expect(Morsel('a', 'b').name, 'a');
+      final ours = Fetcher();
       addTearDown(ours.close);
       expect(ours.timeout, const Duration(seconds: 30));
 
-      // And dart:io's are still there behind a prefix, which is what makes
-      // the shadow survivable until the names change.
-      final theirs = dart_io.HttpClient();
-      addTearDown(theirs.close);
-      expect(dart_io.Cookie('a', 'b').name, 'a');
-      expect(theirs, isA<dart_io.HttpClient>());
+      // `Fetch` and `Page` were the two that fought `package:http` for a name
+      // and produced an ambiguous_import on use. Nothing to hide now.
+      expect(Fetch<String>(Uri.parse('https://a.test')).url.host, 'a.test');
+      expect(Page<String>, isNotNull);
     });
   });
 
@@ -100,30 +105,32 @@ void main() {
   });
 
   group('cli', () {
-    test('get<bool> reads the declared env variable', () {
+    test('a flag reads the declared env variable', () {
       system.env.set('DT_REGRESSION_FLAG', 'true');
       addTearDown(() => system.env.delete('DT_REGRESSION_FLAG'));
 
-      final cli = Cli(const [])..option('force', env: 'DT_REGRESSION_FLAG');
-      expect(cli.get('force', false), isTrue);
+      final force = Cli(const []).flag('force', env: 'DT_REGRESSION_FLAG');
+      expect(force(), isTrue);
     });
 
     test('env beats def for bool, matching every other type', () {
       system.env.set('DT_REGRESSION_MODE', 'off');
       addTearDown(() => system.env.delete('DT_REGRESSION_MODE'));
 
-      final cli = Cli(const [])
-        ..option('colour', env: 'DT_REGRESSION_MODE', def: true);
-      expect(cli.get('colour', false), isFalse);
+      final colour = Cli(
+        const [],
+      ).flag('colour', env: 'DT_REGRESSION_MODE', def: true);
+      expect(colour(), isFalse);
     });
 
     test('the command line still beats env', () {
       system.env.set('DT_REGRESSION_FLAG', 'false');
       addTearDown(() => system.env.delete('DT_REGRESSION_FLAG'));
 
-      final cli = Cli(const ['--force'])
-        ..option('force', env: 'DT_REGRESSION_FLAG');
-      expect(cli.get('force', false), isTrue);
+      final force = Cli(const [
+        '--force',
+      ]).flag('force', env: 'DT_REGRESSION_FLAG');
+      expect(force(), isTrue);
     });
 
     test('a required option needs a value, not just the switch', () {
@@ -175,15 +182,15 @@ Disallow: /x
       var attempts = 0;
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       addTearDown(() => server.close(force: true));
-      server.listen((request) async {
+      server.listen((fetch) async {
         attempts++;
         if (attempts <= 2) {
-          request.response.statusCode = 503;
+          fetch.response.statusCode = 503;
         } else {
-          request.response.headers.contentType = ContentType.html;
-          request.response.write('<h1>ok</h1>');
+          fetch.response.headers.contentType = ContentType.html;
+          fetch.response.write('<h1>ok</h1>');
         }
-        await request.response.close();
+        await fetch.response.close();
       });
 
       final stats = await net
@@ -282,7 +289,6 @@ Disallow: /x
 
       expect(events, ['error', 'done']);
     });
-
   });
 
   group('io.csv', () {
@@ -408,7 +414,10 @@ Disallow: /x
     });
 
     test('PoolFailure describes itself with no failures', () {
-      expect(const PoolFailure<String>([]).toString(), contains('no failures'));
+      expect(
+        const PoolFailure<String, int>([]).toString(),
+        contains('no failures'),
+      );
     });
   });
 
@@ -436,14 +445,8 @@ Disallow: /x
     });
 
     test('the two progress constructors agree on their glyphs', () {
-      expect(
-        system.console.progress(total: 1).fill,
-        Progress(total: 1).fill,
-      );
-      expect(
-        system.console.progress(total: 1).empty,
-        Progress(total: 1).empty,
-      );
+      expect(system.console.progress(total: 1).fill, Progress(total: 1).fill);
+      expect(system.console.progress(total: 1).empty, Progress(total: 1).empty);
     });
 
     test('logger.task stays silent below info', () async {
@@ -497,18 +500,28 @@ Disallow: /x
 
   group('net.http extraction', () {
     test('the repeated @text shorthand reads text as a browser renders it', () {
-      final res = HttpResponse.text(
+      final res = Reply.text(
         '<a class="t">Wireless\n        Keyboard</a><a class="t">Mouse</a>',
       );
 
       // Every other spelling collapsed the page's indentation; the plural
       // attribute form handed back the source.
-      expect(res.extract({'x': const ['.t@text']}), {
-        'x': ['Wireless Keyboard', 'Mouse'],
-      });
-      expect(res.extract({'x': const ['.t']}), {
-        'x': ['Wireless Keyboard', 'Mouse'],
-      });
+      expect(
+        res.extract({
+          'x': const ['.t@text'],
+        }),
+        {
+          'x': ['Wireless Keyboard', 'Mouse'],
+        },
+      );
+      expect(
+        res.extract({
+          'x': const ['.t'],
+        }),
+        {
+          'x': ['Wireless Keyboard', 'Mouse'],
+        },
+      );
       expect(res.pick(Field.attrs('.t', 'text')), [
         'Wireless Keyboard',
         'Mouse',
@@ -516,7 +529,7 @@ Disallow: /x
     });
 
     test('a fixture that says where it came from resolves from there', () {
-      final res = HttpResponse.text(
+      final res = Reply.text(
         '<h1>hi</h1>',
         requested: 'https://example.com/a/b'.url,
       );
@@ -566,7 +579,11 @@ Disallow: /x
         // Petabytes: format printed them and parse answered 0.
         3 * 1024 * 1024 * 1024 * 1024 * 1024,
       ]) {
-        expect(util.size.parse(util.size.format(bytes)), bytes, reason: '\$bytes');
+        expect(
+          util.size.parse(util.size.format(bytes)),
+          bytes,
+          reason: '\$bytes',
+        );
       }
       expect(util.size.parse('2 P'), 2 * 1024 * 1024 * 1024 * 1024 * 1024);
       // A unit nobody knows is still refused rather than read as bytes.
@@ -580,7 +597,7 @@ Disallow: /x
 Future<void> _withFailFastClient(Future<void> Function() body) async {
   final previous = net.http;
   await net.use(
-    HttpClient(retries: 0, timeout: const Duration(seconds: 2)),
+    Fetcher(retries: 0, timeout: const Duration(seconds: 2)),
     close: false,
   );
   try {
@@ -599,10 +616,10 @@ class _SlowDownloader<T> extends Downloader<T> {
   final Duration pause;
 
   @override
-  Future<Response<T>> download(Request<T> request) async {
+  Future<Page<T>> download(Fetch<T> fetch) async {
     await Future<void>.delayed(pause);
-    return Response<T>(
-      request: request,
+    return Page<T>(
+      fetch: fetch,
       status: 200,
       headers: const {'content-type': 'text/html'},
       bytes: '<h1>hi</h1>'.codeUnits,
@@ -611,4 +628,4 @@ class _SlowDownloader<T> extends Downloader<T> {
   }
 }
 
-void _noop(Response<String> response) {}
+void _noop(Page<String> response) {}

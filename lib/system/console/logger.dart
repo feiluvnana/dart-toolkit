@@ -138,8 +138,7 @@ class ConsoleLogger {
   /// its output to a file or a buffer takes its spinner along.
   Future<T> task<T>(String message, Future<T> Function() action) async {
     final show = level.index >= LogLevel.info.index;
-    final spinner =
-        show ? (Spinner(writer: writer)..start(message)) : null;
+    final spinner = show ? (Spinner(writer: writer)..start(message)) : null;
     try {
       final result = await action();
       spinner?.ok(message);

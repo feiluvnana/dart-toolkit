@@ -89,55 +89,71 @@ class CsvAccessor {
     return rows;
   }
 
-  /// Renders [rows] (maps or rows of cells) as CSV text.
+  /// Renders [rows] as CSV text, one record per line.
   ///
-  /// When [rows] contains maps, columns come from [headers], or from the union
-  /// of every row's keys in the order they are first seen.
-  /// When [rows] contains cell lists, rows are prefixed with [headers] if supplied.
+  /// Columns come from [headers], or from the union of every row's keys in the
+  /// order they are first seen — so a field only later records carry still
+  /// gets a column instead of being silently dropped.
   ///
-  /// [newline] ends every line. The default is `\n`; pass `\r\n` for the
-  /// line ending Excel and RFC 4180 expect.
+  /// [newline] ends every line. The default is `\n`; pass `\r\n` for the line
+  /// ending Excel and RFC 4180 expect.
+  ///
+  /// ```dart
+  /// io.csv.format([
+  ///   {'name': 'Ada', 'born': 1815},
+  ///   {'name': 'Alan', 'born': 1912},
+  /// ]);
+  /// ```
+  ///
+  /// For rows that are already lists of cells, see [cells].
   String format(
-    Iterable<dynamic> rows, {
+    Iterable<Map<String, Object?>> rows, {
     List<String>? headers,
     String delimiter = ',',
     String newline = '\n',
   }) {
-    if (rows.isEmpty) {
-      if (headers != null && headers.isNotEmpty) {
-        return '${headers.map((h) => _escape(h, delimiter)).join(delimiter)}'
-            '$newline';
-      }
-      return '';
-    }
+    final list = rows.toList();
+    final keys =
+        headers ?? <String>{for (final row in list) ...row.keys}.toList();
+    if (list.isEmpty && keys.isEmpty) return '';
 
-    final first = rows.first;
-    if (first is Map) {
-      final list = rows.cast<Map<dynamic, dynamic>>().toList();
-      // Every key any row carries becomes a column, in first-seen order.
-      // Taking them from the first row alone would silently drop a field that
-      // only later records have.
-      final keys =
-          headers ??
-          <String>{
-            for (final row in list) ...row.keys.map((k) => k.toString()),
-          }.toList();
-      final buffer = StringBuffer()
-        ..write(keys.map((k) => _escape(k, delimiter)).join(delimiter))
-        ..write(newline);
-      for (final row in list) {
-        buffer
-          ..write(
-            keys
-                .map((k) => _escape(row[k]?.toString() ?? '', delimiter))
-                .join(delimiter),
-          )
+    final buffer =
+        StringBuffer()
+          ..write(keys.map((k) => _escape(k, delimiter)).join(delimiter))
           ..write(newline);
-      }
-      return buffer.toString();
+    for (final row in list) {
+      buffer
+        ..write(
+          keys
+              .map((k) => _escape(row[k]?.toString() ?? '', delimiter))
+              .join(delimiter),
+        )
+        ..write(newline);
     }
+    return buffer.toString();
+  }
 
-    // Rows of cells
+  /// Renders [rows] of cells as CSV text, one row per line.
+  ///
+  /// The twin of [format] for data that is already a grid — what [matrix]
+  /// reads back. [headers] is written as a first line when given.
+  ///
+  /// ```dart
+  /// io.write('out.csv', io.csv.cells([
+  ///   ['Ada', 1815],
+  ///   ['Alan', 1912],
+  /// ], headers: ['name', 'born']));
+  /// ```
+  ///
+  /// Writing it goes through [io.write] rather than a second name here. The
+  /// two used to be one method taking `Iterable<dynamic>` and deciding at
+  /// runtime which shape it had been handed.
+  String cells(
+    Iterable<List<Object?>> rows, {
+    List<String>? headers,
+    String delimiter = ',',
+    String newline = '\n',
+  }) {
     final buffer = StringBuffer();
     if (headers != null && headers.isNotEmpty) {
       buffer
@@ -145,15 +161,13 @@ class CsvAccessor {
         ..write(newline);
     }
     for (final row in rows) {
-      if (row is Iterable) {
-        buffer
-          ..write(
-            row
-                .map((cell) => _escape(cell?.toString() ?? '', delimiter))
-                .join(delimiter),
-          )
-          ..write(newline);
-      }
+      buffer
+        ..write(
+          row
+              .map((cell) => _escape(cell?.toString() ?? '', delimiter))
+              .join(delimiter),
+        )
+        ..write(newline);
     }
     return buffer.toString();
   }
@@ -314,12 +328,13 @@ class CsvAccessor {
     }
   }
 
-  /// Writes [rows] (maps or rows of cells) to [path] atomically.
+  /// Writes [rows] to [path] atomically, one record per line.
   ///
-  /// [newline] ends every line, as in [format].
+  /// [newline] ends every line, as in [format]. For a grid of cells, render it
+  /// with [cells] and write it with `io.write`.
   Future<File> write(
     String path,
-    Iterable<dynamic> rows, {
+    Iterable<Map<String, Object?>> rows, {
     List<String>? headers,
     String delimiter = ',',
     String newline = '\n',
@@ -345,8 +360,8 @@ class CsvAccessor {
   /// );
   /// ```
   ///
-  /// Rows are maps or lists of cells, as in [format]. A stream cannot be read
-  /// twice, so the columns have to be settled before the first row is written:
+  /// A stream cannot be read twice, so the columns have to be settled before
+  /// the first row is written:
   /// [headers] names them, and without it they are taken from the first row's
   /// keys. A later key the header line does not carry is dropped — pass
   /// [headers] when the rows are not all the same shape.
@@ -356,7 +371,7 @@ class CsvAccessor {
   /// discarded if it fails.
   Future<File> pipe(
     String path,
-    Stream<dynamic> rows, {
+    Stream<Map<String, Object?>> rows, {
     List<String>? headers,
     String delimiter = ',',
     String newline = '\n',
@@ -381,14 +396,9 @@ class CsvAccessor {
 
     try {
       await for (final row in rows) {
-        if (row is Map) {
-          columns ??= [for (final key in row.keys) key.toString()];
-          header();
-          line([for (final key in columns) row[key]?.toString() ?? '']);
-        } else if (row is Iterable) {
-          header();
-          line([for (final cell in row) cell?.toString() ?? '']);
-        }
+        columns ??= row.keys.toList();
+        header();
+        line([for (final key in columns) row[key]?.toString() ?? '']);
       }
       // A stream that closed without yielding still writes the header it was
       // given, so an empty result reads as an empty table, not an empty file.

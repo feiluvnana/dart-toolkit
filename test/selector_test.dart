@@ -284,9 +284,7 @@ void main() {
       ).find('div:has(p:contains(hi))');
       expect(nested.length, equals(1));
 
-      final quotedParen = $(
-        '<div><p>a)b</p></div>',
-      ).find('p:contains("a)b")');
+      final quotedParen = $('<div><p>a)b</p></div>').find('p:contains("a)b")');
       expect(quotedParen.length, equals(1));
 
       final escapedQuote = $(
