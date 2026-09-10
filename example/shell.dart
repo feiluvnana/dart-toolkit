@@ -1,10 +1,10 @@
-// Drive the machine: environment, subprocesses, archives, git, shutdown.
+// Drive the machine: environment, subprocesses, archives, shutdown.
 //
 //   dart run example/shell.dart
 //
 // `system` is the OS half — what the shell did, what the user typed, what
-// happens on Ctrl-C. `tool` is the small set of outside things worth wrapping:
-// `tool.git` and `tool.zip`.
+// happens on Ctrl-C. `tool` is file formats, and only formats: an executable
+// is `system.run` plus arguments, which is what the git section below uses.
 
 import 'package:dart_toolkit/dart_toolkit.dart';
 
@@ -40,29 +40,36 @@ void main() async {
   // The format comes from the destination's extension: .zip, .tar.gz, .tgz,
   // .tar.bz2. `unpack` skips entries that would escape the destination.
   final archive = io.join('output', 'shell-${util.time.stamp()}.tar.gz');
-  await tool.zip.pack(dir, archive);
-  final entries = await tool.zip.list(archive);
+  await format.zip.pack(dir, archive);
+  final entries = await format.zip.list(archive);
   log.ok(
-    'Packed ${entries.length} entries, '
+    'Packed ${entries.count()} entries, '
     '${util.size.format(io.stat(archive).size)}.',
   );
 
   // A single entry, read without unpacking the rest. Entry names are relative
   // to what was packed, which `list` is the way to check.
-  log.info('Entries: ${[for (final e in entries) e.name]}');
-  final notes = await tool.zip.read(archive, 'notes.txt');
+  log.info('Entries: ${[for (final e in entries.list) e.name]}');
+  final notes = await format.zip.read(archive, 'notes.txt');
   log.info(
     'notes.txt is ${notes?.length ?? 0} bytes, unpacked from the archive',
   );
 
-  // -------------------------------------------------------------------- git
-  final branch = await tool.git.branch();
-  if (branch.isEmpty) {
+  // ------------------------------------------------------------ executables
+  // `tool` holds formats, never binaries: a wrapper only ever has the five
+  // subcommands somebody thought to add, where `system.run` has all of git.
+  final head = await system.run('git', ['rev-parse', '--abbrev-ref', 'HEAD']);
+  if (!head.ok) {
     log.debug('Not a git repository.');
-  } else if (await tool.git.dirty()) {
-    log.warn('On $branch with uncommitted changes.');
   } else {
-    log.ok('On $branch, clean at ${await tool.git.hash()}.');
+    final branch = head.out.trim();
+    final dirty = (await system.run('git', ['status', '--porcelain'])).out;
+    if (dirty.trim().isNotEmpty) {
+      log.warn('On $branch with uncommitted changes.');
+    } else {
+      final hash = await system.run('git', ['rev-parse', '--short', 'HEAD']);
+      log.ok('On $branch, clean at ${hash.out.trim()}.');
+    }
   }
 
   // ---------------------------------------------------------------- shutdown

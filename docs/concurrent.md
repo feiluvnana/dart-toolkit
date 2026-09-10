@@ -14,7 +14,7 @@ void main() async {
 
   final bodies = await concurrent.run(
     urls,
-    (url) async => (await net.http.get(url)).json,
+    (url) async => (await net.http.get(url)).parse(format.json).raw,
     size: 2,
   );
 
@@ -158,7 +158,7 @@ final data = await concurrent.retry(
 
 ## 7. Synchronization Primitives (`Semaphore` & `Mutex`)
 
-Control access to shared resources or rate-limit critical sections:
+Control access to shared resources, or serialise a critical section:
 
 ```dart
 // Mutex: strictly one caller at a time
@@ -176,6 +176,57 @@ try {
   sem.release();
 }
 ```
+
+### How often, not how many (`concurrent.rate`)
+
+`Semaphore` and `Mutex` bound **how many at once**. A published API limit bounds
+**how often** — *5000 requests per hour*, *10 per second*, *60 per minute* — and
+a `Semaphore(4)` satisfies none of them: four instant requests then four more is
+eight in a second, so the script works until the day the network is fast.
+
+```dart
+final limit = concurrent.rate(10, per: 1.s);       // a Limiter
+
+await limit.take();                                 // waits for a token
+await limit.guard(() => net.http.get(url));         // the wrapped form
+```
+
+`guard` mirrors `Semaphore.withPermit` and `Mutex.protect` — every limiter here
+has a bare pair and a wrapping form, and the wrapping form is the one callers
+should use. The reason it lives in this domain is that it composes with the
+bound that was already here:
+
+```dart
+await concurrent.run(urls, (u) => limit.guard(() => net.http.get(u)), size: 8);
+// 8 in flight, never more than 10 per second — two limits, one line
+```
+
+The bucket **refills smoothly**, one token every `per / count`, rather than in a
+lump at the end of each window. Smooth is what servers actually measure, and it
+means a burst of ten at second zero does not lock out second one entirely. A
+limiter starts full, so the first `count` calls do not wait, and waiters are
+served in the order they arrived.
+
+| Member | Gives |
+| :--- | :--- |
+| `take()` | waits for one token and takes it |
+| `guard(action)` | takes a token, then runs the action |
+| `available` | how many tokens there are, fractionally |
+| `waiting` | how many callers are queued |
+| `close()` | stops the refill timer and releases anyone queued |
+
+A `Fetcher` can carry one, which is where a rate belongs when it is the server's
+rather than the script's:
+
+```dart
+final api = Fetcher(limiter: concurrent.rate(10, per: 1.s));
+await concurrent.run(urls, api.get, size: 8);
+```
+
+Every attempt takes a token, retries included, because the server counts those
+too. The dependency points that way round on purpose: `concurrent` knows nothing
+about responses, so a limiter that read `Retry-After` off one would tangle the
+two domains — retry pacing already honours that header.
 
 ---
 

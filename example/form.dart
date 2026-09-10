@@ -17,7 +17,11 @@ void main() async {
 
   // ------------------------------------------------------------ reading one
   final page = Reply.text(_login, url: 'https://shop.test/login'.url);
-  final form = page.form('#login')!;
+
+  // `net` fetched it; `format.html` reads it. `at` hands the form the URL the
+  // markup came from, which is what a relative action resolves against.
+  final markup = page.parse(format.html);
+  final form = markup.form('#login')!.at(page.url);
 
   // Everything the page already carried, without asking for it.
   log.info('Fields: ${form.fields}');
@@ -27,14 +31,17 @@ void main() async {
   log.ok('Body:   ${utf8.decode(form.body!.bytes())}');
 
   // A GET form puts its fields in the query instead of a body.
-  final search = page.form('form.search')!..fill({'q': 'keyboard'});
+  final search = markup.form('form.search')!.at(page.url)
+    ..fill({'q': 'keyboard'});
   log.ok('Search: ${search.url}');
 
   // Off a live page this is the whole login: hand `send` the client that
   // fetched the form and its session cookies go back with it.
   //
   //   final session = Fetcher(session: true);
-  //   final home = await (await session.get(url)).form('#login')!
+  //   final res = await session.get(url);
+  //   final home = await res.parse(format.html).form('#login')!
+  //       .at(res.url)
   //       .fill({'user': user, 'pass': pass})
   //       .send(client: session);
 
@@ -47,16 +54,20 @@ void main() async {
           .crawl<String>('https://shop.test/login')
           .downloader(MapDownloader<String>(_fixtures))
           .route(RegExp(r'/login$'), (res) {
-            final login = res.form('#login')!.fill({
+            // No `at` here: `submit` hands the form the page's own URL.
+            final login = res.parse(format.html).form('#login')!.fill({
               'user': 'alice',
               'pass': 'hunter2',
             });
             res.submit(login, tag: 'home');
           })
-          .tag('home', (res) => res.emit(res.$('.welcome').text))
+          .tag(
+            'home',
+            (res) => res.emit(res.parse(format.html)('.welcome').text),
+          )
           .collect();
 
-  log.ok('Signed in: ${greeting.single}');
+  log.ok('Signed in: ${greeting.sole}');
 }
 
 const _login = '''

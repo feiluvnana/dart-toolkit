@@ -214,6 +214,77 @@ void main() {
       expect(clean.unknown(), isEmpty);
       expect(() => clean.strict(), returnsNormally);
     });
+
+    test('duration is the sixth option kind', () {
+      final parser = Cli(['--timeout', '1h30m']);
+      final timeout = parser.duration('timeout', def: 30.s);
+      expect(timeout(), equals(90.m));
+
+      final bare = Cli(['--timeout', '45']);
+      expect(bare.duration('timeout', def: 30.s)(), equals(45.s));
+
+      final missing = Cli(<String>[]);
+      expect(missing.duration('timeout', def: 30.s)(), equals(30.s));
+
+      final bad = Cli(['--timeout', 'soon']);
+      final fallback = bad.duration('timeout', def: 30.s);
+      expect(fallback(), equals(30.s), reason: 'a bad value reads as def');
+      expect(
+        () => bad.require(),
+        throwsA(
+          isA<ArgumentError>().having(
+            (e) => e.message.toString(),
+            'message',
+            contains('must be a duration'),
+          ),
+        ),
+      );
+    });
+
+    test('date reads null when nothing was given', () {
+      final parser = Cli(['--since', '2024-03-09']);
+      expect(parser.date('since')(), equals(DateTime(2024, 3, 9)));
+
+      final loose = Cli(['--since', '09/03/2024']);
+      expect(loose.date('since')(), equals(DateTime(2024, 3, 9)));
+
+      final absent = Cli(<String>[]);
+      expect(
+        absent.date('since')(),
+        isNull,
+        reason: '--since exists so a script can tell "not given" apart',
+      );
+
+      final defaulted = Cli(<String>[]);
+      expect(
+        defaulted.date('since', def: DateTime(2020))(),
+        equals(DateTime(2020)),
+      );
+
+      final bad = Cli(['--since', 'whenever']);
+      expect(bad.date('since')(), isNull);
+      expect(
+        () => bad.require(),
+        throwsA(
+          isA<ArgumentError>().having(
+            (e) => e.message.toString(),
+            'message',
+            contains('must be a date'),
+          ),
+        ),
+      );
+    });
+
+    test('both kinds show their default in the usage block', () {
+      final parser =
+          Cli(<String>[])
+            ..duration('timeout', def: 90.m, desc: 'Give up after')
+            ..date('since', def: DateTime.utc(2024, 3, 9), desc: 'Only after');
+      final usage = parser.usage();
+      expect(usage, contains('--timeout'));
+      expect(usage, contains('1h30m'));
+      expect(usage, contains('--since'));
+    });
   });
 
   group('Cli Commands', () {
@@ -450,7 +521,7 @@ void main() {
       </div>
     ''';
 
-    test('QueryResult href, hrefs, src, srcs, lines, has', () {
+    test('Markup href, hrefs, src, srcs, lines, has', () {
       final q = html.$;
       expect(q.has('active'), isTrue);
       expect(q.has('missing'), isFalse);
@@ -474,19 +545,19 @@ void main() {
         equals(['01. First Song', '02. Second Song', '03. Third Song']),
       );
 
-      expect(q.find('a').toList().length, equals(2));
-      expect(q.find('a').matching(r'[href$=".mp3"]').length, equals(1));
+      expect(q.find('a').elements.list.length, equals(2));
+      expect(q.find('a').matching(r'[href$=".mp3"]').count, equals(1));
     });
 
-    test('Page provides QueryResult via \$ and \$xpath', () {
+    test('Page provides Markup via \$ and \$xpath', () {
       final res = Page<void>(
         fetch: Fetch<void>(Uri.parse('https://example.com/sub/index.html')),
         bytes: html.codeUnits,
       );
 
-      expect(res.$('a').href, equals('/track/1.mp3'));
-      expect(res.$('img').src, equals('album.jpg'));
-      expect(res.$xpath('//a').href, equals('/track/1.mp3'));
+      expect(res.parse(format.html)('a').href, equals('/track/1.mp3'));
+      expect(res.parse(format.html)('img').src, equals('album.jpg'));
+      expect(res.parse(format.html).xpath('//a').href, equals('/track/1.mp3'));
     });
 
     test('emit without an engine explains itself', () {

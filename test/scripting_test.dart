@@ -10,7 +10,7 @@ import 'dart:io';
 import 'dart:io' as dart_io;
 
 import 'package:dart_toolkit/dart_toolkit.dart';
-import 'package:dart_toolkit/selector.dart';
+import 'package:dart_toolkit/html.dart';
 import 'package:test/test.dart';
 
 /// A downloader that fails every request, for testing what a crawl reports.
@@ -50,23 +50,35 @@ void main() {
 
     test('a selector collapses the page indentation', () {
       final res = Reply.text(page);
-      expect(res.$('.name').text, 'Wireless Keyboard');
-      expect(res.$('.price').text, r'$49.99');
-      expect(res.$('.tags li').texts, ['usb', 'bluetooth']);
+      expect(res.parse(format.html)('.name').text, 'Wireless Keyboard');
+      expect(res.parse(format.html)('.price').text, r'$49.99');
+      expect(res.parse(format.html)('.tags li').texts, ['usb', 'bluetooth']);
     });
 
     test('extract and pick read it the same way', () {
       final res = Reply.text(page);
       // One text reader behind all three, so they cannot drift apart.
-      expect(res.extract({'name': '.name'})['name'], 'Wireless Keyboard');
-      expect(res.pick(Field.text('.name')), 'Wireless Keyboard');
-      expect(res.pick(Field.texts('.tags li')), ['usb', 'bluetooth']);
-      expect(res.extract({'name': '.name@text'})['name'], 'Wireless Keyboard');
+      expect(
+        res.parse(format.html).extract({'name': '.name'})['name'],
+        'Wireless Keyboard',
+      );
+      expect(
+        res.parse(format.html).pick(Field.text('.name')),
+        'Wireless Keyboard',
+      );
+      expect(res.parse(format.html).pick(Field.texts('.tags li')), [
+        'usb',
+        'bluetooth',
+      ]);
+      expect(
+        res.parse(format.html).extract({'name': '.name@text'})['name'],
+        'Wireless Keyboard',
+      );
     });
 
     test('a repeated sub-object reads it the same way too', () {
       final res = Reply.text(page);
-      final data = res.extract({
+      final data = res.parse(format.html).extract({
         'items': [
           '.product',
           {'name': '.name'},
@@ -78,8 +90,11 @@ void main() {
     test('inside a pre the whitespace is the content, and is kept', () {
       final res = Reply.text(page);
       // What <pre> means. Collapsing it would destroy scraped code samples.
-      expect(res.$('.code').text, 'line one\n  indented two');
-      expect(res.pick(Field.text('.code')), 'line one\n  indented two');
+      expect(res.parse(format.html)('.code').text, 'line one\n  indented two');
+      expect(
+        res.parse(format.html).pick(Field.text('.code')),
+        'line one\n  indented two',
+      );
     });
 
     test('a textarea keeps its whitespace as well', () {
@@ -145,7 +160,7 @@ void main() {
               if (failure.fetch case final fetch?) fetch,
           ])
           .downloader(MapDownloader<String>({'/a': '<h1>second try</h1>'}))
-          .run((res) => served.add(res.$('h1').text));
+          .run((res) => served.add(res.parse(format.html)('h1').text));
 
       expect(served, ['second try']);
     });
@@ -196,10 +211,10 @@ void main() {
           .done((stats) => seen.add('done'))
           .limit(1)
           .downloader(MapDownloader<String>({'/a': '<h1>hi</h1>'}))
-          .collect((res) => res.emit(res.$('h1').text));
+          .collect((res) => res.emit(res.parse(format.html)('h1').text));
 
       expect(seen, ['start', 'item', 'progress', 'done']);
-      expect(stats, ['hi']);
+      expect(stats.list, ['hi']);
     });
   });
 
@@ -267,7 +282,7 @@ void main() {
 
       expect(File(path).readAsStringSync(), 'name\r\n"Alice, Chief"\r\n');
       // And it reads back as one row.
-      expect(await io.csv.maps(path), [
+      expect((await io.csv.maps(path)).list, [
         {'name': 'Alice, Chief'},
       ]);
     });
@@ -319,7 +334,7 @@ void main() {
               }),
             )
             .stream((res) {
-              for (final card in res.$('.p')) {
+              for (final card in res.parse(format.html)('.p').elements.list) {
                 res.emit({
                   'name': card.query.find('h2').text,
                   'price': card.query.find('.c').text,
@@ -329,7 +344,7 @@ void main() {
         headers: ['name', 'price'],
       );
 
-      expect(await io.csv.maps(path), [
+      expect((await io.csv.maps(path)).list, [
         {'name': 'Wireless Keyboard', 'price': '49.99'},
         {'name': 'Mouse', 'price': '19.99'},
       ]);

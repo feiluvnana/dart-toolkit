@@ -12,25 +12,25 @@ Five of them are **axes** — a way of touching the machine:
 
 | Domain | Sub-namespaces | Focus |
 | :--- | :--- | :--- |
-| **`io.*`** | `io.csv.*`, `io.store.*`, `io.async.*` | Atomic file writes, paths, CSV tables, JSON key-value store |
-| **`net.*`** | `net.http.*`, `net.crawl` | HTTP requests, streaming downloads, the crawler engine |
-| **`system.*`** | `system.env.*`, `system.console.*`, `system.on.*` | Subprocesses, environment, terminal IO, shutdown |
-| **`concurrent.*`** | `concurrent.run(...)` | Bounded async task pools |
-| **`util.*`** | `util.time.*`, `util.size.*`, `util.text.*`, `util.hash.*`, `util.rand.*` | Pure helpers: delays, byte sizes, text, digests, randomness |
+| **`io.*`** | `io.csv.*`, `io.store.*`, `io.async.*` | Atomic file writes, paths, CSV tables, JSON key-value store, watching, locking |
+| **`net.*`** | `net.http.*`, `net.crawl`, `net.serve` | HTTP requests, streaming downloads, the crawler engine, a server that listens — it fetches bytes and parses none of them |
+| **`system.*`** | `system.env.*`, `system.console.*`, `system.on.*` | Subprocesses, environment, terminal IO, shutdown, `system.os` |
+| **`concurrent.*`** | `concurrent.run(...)`, `concurrent.rate(...)` | Bounded async task pools, and rate limiting |
+| **`util.*`** | `util.time.*`, `util.size.*`, `util.text.*`, `util.hash.*`, `util.rand.*` | Pure helpers: delays, byte sizes, text, digests, randomness — plus `Sequence`, and the `Json` and `Markup` document cursors |
 
 Two are **subjects** — knowledge that came from outside Dart:
 
 | Domain | Sub-namespaces | Focus |
 | :--- | :--- | :--- |
 | **`cli.*`** | — | Flags, options, subcommands, usage text |
-| **`tool.*`** | `tool.git.*`, `tool.zip.*` | Wrapped executables and file formats |
-| **`$()`** | — | jQuery-like CSS selectors |
+| **`format.*`** | `format.html.*`, `format.json.*`, `format.yaml.*`, `format.toml.*`, `format.zip.*` | File formats — never executables; that is `system.run` |
+| **`$()`** | — | The jQuery spelling of `format.html.parse`, opt-in |
 
 **Where things live.** `util` holds only pure computation — nothing there touches
 the disk or the operating system. Anything that reads or writes files is `io`;
 anything that talks to the OS or the user is `system`. Argument parsing is
 `cli` and not `system.cli`, because reading a `List<String>` touches nothing at
-all. `git` and `zip` share `tool` rather than taking a name each, because a top
+all. `git` and `zip` share `format` rather than taking a name each, because a top
 level that grows a name per wrapped binary is not a top level.
 
 [NAMESPACE.md](NAMESPACE.md) is the full rule set: which domain something
@@ -45,6 +45,7 @@ belongs to, when it earns a top-level name, and how to name it.
 3. **Real types at every boundary.** URLs are `Uri`, delays are `Duration`, paths are `String`, bodies and hash algorithms are sealed types and enums. No `Object` or `dynamic` parameters, so the analyzer catches mistakes at the call site.
 4. **Atomic by default.** Every write stages through a `.part` file and is renamed into place only after a successful flush. Interrupted runs never leave truncated files, and Ctrl-C cleans up.
 5. **Engine-driven pipelines.** Multi-stage crawlers use declarative URL routing, tag-based stages, and automatic relative-URL resolution.
+6. **One vocabulary for sequences.** Everything this library hands back for you to *shape* is a [`Sequence`](docs/util.md#sequence) — `group`, `chunks`, `sum`, `best`, `tally`, `sift` — and it is deliberately not an `Iterable`, so Dart's names and these are never both in scope at one call site. `.list` is the one word at the boundary; `.seq` brings an outside collection in.
 
 ---
 
@@ -101,27 +102,27 @@ void main(List<String> args) async {
       .delay(250.ms)
       .limit(50)
       .collect((res) {
-        for (final title in res.$('.titleline > a').texts) {
+        for (final title in res.parse(format.html)('.titleline > a').texts) {
           res.emit(title);
         }
       });
-  log.ok('Found ${titles.length} headlines.');
+  log.ok('Found ${titles.count()} headlines.');
 
   // 3. Process concurrently, with a progress bar
   log.step(2, 3, 'Processing...');
-  final batch = titles.take(10).toList();
+  final batch = titles.head(10).list;
   final bar = Progress(total: batch.length, message: 'Processing');
   final processed = await concurrent.run(batch, (title) async {
     bar.tick(1, title);
     return title.toUpperCase();
-  }, size: size());
+  }, size: system.os.cpus);
   bar.done('Done.');
 
   // 4. Report and save atomically
   log.step(3, 3, 'Saving...');
   system.console.writer.table(
     Table(headers: ['Metric', 'Value'])..addAll([
-      ['Crawled', titles.length],
+      ['Crawled', titles.count()],
       ['Processed', processed.length],
       ['Elapsed', util.time.format(clock.elapsed)],
     ]),
@@ -167,8 +168,8 @@ net.crawl<String>(url).delay(2.s);
 ```dart
 io.write('out/notes.txt', 'hello');        // text
 io.save('out/blob.bin', [1, 2, 3]);        // bytes
-io.dump('out/data.json', {'count': 42});   // JSON
-final data = io.json<Map<String, Object?>>('out/data.json');
+io.dump('out/data.json', {'count': 42});   // JSON, atomically
+final data = await format.json.read('out/data.json');   // -> Json cursor
 
 io.has(path);                                    // exists and non-empty
 io.join('a', 'b', 'c.txt');
@@ -194,20 +195,24 @@ await io.csv.pipe('products.csv', crawl.stream(handler), headers: ['name', 'pric
 
 See [docs/io.md](docs/io.md), [docs/csv.md](docs/csv.md), [docs/store.md](docs/store.md).
 
-### `net.http` — requests that scrape themselves
+### `net.http` — requests, and the codec seam
 
 ```dart
 final res = await net.http.get('https://example.com'.url);
 
-res.$('h1').text;      // text of first h1
-res.$('a').hrefs;      // all hrefs
-res.json;              // decoded and cached
+// `net` fetches bytes; `format` reads them. One member, and it names no
+// format, which is what lets one crawl handle more than one.
+final page = res.parse(format.html);
+page.find('h1').text;                    // text of first h1
+page.find('a').hrefs;                    // all hrefs
+
+res.parse(format.json).at('data.total').number();   // the other format
 
 // Typed extraction: a record, with every field's type intact.
 final item = (
-  title: res.$('h1.title').text,
-  price: res.pick(Field.text('.price').when(util.text.number)),
-  variants: res.$.all('.variant', (row) => (
+  title: page.find('h1.title').text,
+  price: page.pick(Field.text('.price').when(util.text.number)),
+  variants: page.all('.variant', (row) => (
     name: row('.name').text,
     sku: row.attr('data-sku'),
   )),
@@ -215,7 +220,7 @@ final item = (
 item.variants.first.sku;   // String?, no cast
 
 // The string shorthand, for a first look at an unfamiliar page:
-final loose = res.extract({'title': 'h1.title', 'links': ['a.link@href']});
+final loose = page.extract({'title': 'h1.title', 'links': ['a.link@href']});
 
 // Stateful session with cookies:
 final session = Fetcher(session: true);
@@ -236,10 +241,10 @@ await net.crawl<String>('https://music.example.com/album')
     .limit(50)
     .depth(2)
     .tag('song', (res) {
-      print('${res.meta.get(name)} -> ${res.$('a').href}');
+      print('${res.meta.get(name)} -> ${res.parse(format.html)('a').href}');
     })
     .run((res) {
-      for (final a in res.$('#songlist a')) {
+      for (final a in res.parse(format.html)('#songlist a')) {
         res.follow(
           a.href!,
           tag: 'song',
@@ -266,33 +271,42 @@ See [docs/crawl.md](docs/crawl.md).
 
 ### `Form` — the forms a page carries
 
-Reading a page is half of it. `res.form(...)` collects a form's controls the
+Reading a page is half of it. `Markup.form(...)` collects a form's controls the
 way a browser would submit them — the hidden inputs, the CSRF token, the
 options already selected — so a script overrides the two fields it knows about
 and sends the rest back untouched:
 
 ```dart
 final session = Fetcher(session: true);
-final page = await session.get('https://example.com/login'.url);
+final res = await session.get('https://example.com/login'.url);
 
-final home = await page.form('#login')!
+final home = await res.parse(format.html).form('#login')!
+    .at(res.url)
     .fill({'user': user, 'pass': pass})
     .send(client: session);
 ```
+
+Finding a form is reading a page, so it hangs off the cursor; sending it is a
+socket, so that stays in `net`. `at` tells the form which URL its markup came
+from, which a cursor cannot know — inside a crawl, `res.submit(form)` does it
+for you.
 
 Inside a crawl, `res.submit(form)` schedules it on the engine instead, so the
 answer reaches a tagged handler like any other page. See
 [docs/form.md](docs/form.md).
 
-### `$()` — selectors
+### `format.html` — selectors
 
 ```dart
+format.html.parse(markup).find('.track a').texts;
+res.parse(format.html).find('.title').at(0).text;
+
+// The jQuery spelling, opt-in via package:dart_toolkit/html.dart:
 $(markup).find('.track a').texts;
 markup.$('.track').attrs('data-id');
-res.$('.title').at(0).text;
 ```
 
-See [docs/selector.md](docs/selector.md).
+See [docs/html.md](docs/html.md).
 
 ### `system` — subprocesses and shutdown
 
@@ -337,30 +351,50 @@ See [docs/cli.md](docs/cli.md).
 ```dart
 final bodies = await concurrent.run(
   urls,
-  (url) async => (await net.http.get(url)).json,
+  (url) async => (await net.http.get(url)).parse(format.json),
   size: 8,
 );
 ```
 
 Results keep input order. The first failure propagates with its own error and stack; register `Pool.on.error` to collect failures and continue instead, or use `Pool.settle`, which returns a sealed `Done`/`Broke` per item and never throws. See [docs/concurrent.md](docs/concurrent.md).
 
-### `tool.git` — repository automation
+### `format.*` — one name per format
+
+Every codec is spelled identically — `parse`, `read`, `format` — and every one
+implements `Codec`, which is what `res.parse(...)` takes:
 
 ```dart
-await tool.git.branch();                // 'master'
-if (await tool.git.dirty()) return;     // uncommitted changes
-await tool.git.mark('v1.0.0');          // creates a tag; `tag()` reads one
+final pubspec = await format.yaml.read('pubspec.yaml');
+pubspec.text('version');                          // no cast
+pubspec.jsonpath(r'$..sdk').sift((n) => n.text());
+
+format.json.parse(res.body).at('data.items').all((i) => i.text('sku'));
+format.html.parse(res.body).find('h1').text;      // the same three members
+io.write('out.yaml', format.yaml.format({'name': 'x'}));
 ```
 
-See [docs/git.md](docs/git.md).
+`format.json`, `format.yaml` and `format.toml` all hand back a `Json` cursor,
+because they decode to the same maps, lists and scalars; `format.html` hands
+back a `Markup` cursor. See [docs/json.md](docs/json.md),
+[docs/yaml.md](docs/yaml.md) and [docs/html.md](docs/html.md).
 
-### `tool.zip` — archives
+**`format` holds formats, never binaries.** `tool.git`, `tool.gh` and
+`tool.docker` were all tried and all removed: a wrapper only ever has the
+handful of subcommands somebody thought to add, where `system.run` has the
+whole executable and already returns a `SysResult` rather than throwing.
 
 ```dart
-await tool.zip.pack('site', 'site.zip');          // or site.tar.gz, .tgz, .tar.bz2
-await tool.zip.unpack('site.zip', 'restored');    // skips zip-slip entries
-await tool.zip.list('site.zip');                  // without unpacking
-await tool.zip.read('site.zip', 'index.html');
+final head = await system.run('git', ['rev-parse', '--short', 'HEAD']);
+if (head.ok) print(head.out.trim());
+```
+
+### `format.zip` — archives
+
+```dart
+await format.zip.pack('site', 'site.zip');          // or site.tar.gz, .tgz, .tar.bz2
+await format.zip.unpack('site.zip', 'restored');    // skips zip-slip entries
+await format.zip.list('site.zip');                  // without unpacking
+await format.zip.read('site.zip', 'index.html');
 ```
 
 See [docs/zip.md](docs/zip.md).
@@ -389,7 +423,7 @@ Hand the crawl a `MapDownloader` of fixtures instead of reaching the network:
 ```dart
 final titles = await net.crawl<String>('https://site.test')
     .downloader(MapDownloader({'https://site.test': '<h1>Hi</h1>'}))
-    .collect((res) => res.emit(res.$('h1').text));
+    .collect((res) => res.emit(res.parse(format.html)('h1').text));
 ```
 
 To swap the shared HTTP client process-wide, hand `net.use` your own:
@@ -412,14 +446,16 @@ See [docs/crawl.md](docs/crawl.md#8-testing-a-pipeline).
 | HTTP & downloads | [docs/http.md](docs/http.md) |
 | Crawler engine | [docs/crawl.md](docs/crawl.md) |
 | Forms | [docs/form.md](docs/form.md) |
-| Selectors | [docs/selector.md](docs/selector.md) |
+| HTML & selectors | [docs/html.md](docs/html.md) |
 | Subprocesses & shutdown | [docs/system.md](docs/system.md) |
 | CLI arguments | [docs/cli.md](docs/cli.md) |
 | Environment & `.env` | [docs/env.md](docs/env.md) |
 | Concurrency | [docs/concurrent.md](docs/concurrent.md) |
 | Terminal IO | [docs/console.md](docs/console.md) |
-| Time, sizes, text, hashing, randomness | [docs/util.md](docs/util.md) |
-| Git automation | [docs/git.md](docs/git.md) |
+| Time, sizes, text, hashing, randomness, `Sequence` | [docs/util.md](docs/util.md) |
+| JSON & JSONPath | [docs/json.md](docs/json.md) |
+| YAML & TOML | [docs/yaml.md](docs/yaml.md) |
+| Serving (`net.serve`) | [docs/serve.md](docs/serve.md) |
 | Archives | [docs/zip.md](docs/zip.md) |
 | Namespace & naming rules | [NAMESPACE.md](NAMESPACE.md) |
 

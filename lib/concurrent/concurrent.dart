@@ -1,8 +1,10 @@
 /// # Concurrent Domain (`concurrent.*`)
 ///
-/// A bounded pool for async work. This is concurrency, not parallelism: tasks
-/// interleave on one isolate, so it speeds up IO-bound work (requests, file
-/// reads) and does nothing for CPU-bound work.
+/// A bounded pool for async work, and the two kinds of limit a script needs:
+/// [Semaphore] and [Mutex] bound **how many at once**, [Limiter] bounds **how
+/// often**. This is concurrency, not parallelism: tasks interleave on one
+/// isolate, so it speeds up IO-bound work (requests, file reads) and does
+/// nothing for CPU-bound work.
 library;
 
 import 'dart:async';
@@ -82,6 +84,30 @@ class ConcurrentAccessor {
 
   /// Creates a mutual exclusion lock.
   Mutex mutex() => Mutex();
+
+  /// Creates a rate limiter allowing [count] operations [per] window.
+  ///
+  /// [Semaphore] bounds how many run at once and this bounds how often they
+  /// start, which are different limits — and the second is the one every
+  /// public API enforces. `Semaphore(4)` satisfies none of *5000 requests per
+  /// hour*, *10 per second* or *60 per minute*: four instant requests then
+  /// four more is eight in a second, so the script works until the day the
+  /// network is fast.
+  ///
+  /// ```dart
+  /// final limit = concurrent.rate(10, per: 1.s);
+  /// await limit.guard(() => net.http.get(url));
+  /// ```
+  ///
+  /// It composes with the bound that is already here, which is the argument
+  /// for it living in this domain:
+  ///
+  /// ```dart
+  /// await concurrent.run(urls, (u) => limit.guard(() => net.http.get(u)),
+  ///     size: 8);          // 8 in flight, never more than 10 per second
+  /// ```
+  Limiter rate(int count, {Duration per = const Duration(seconds: 1)}) =>
+      Limiter(count, per: per);
 }
 
 /// Lifecycle handlers for a [Pool], reachable as `pool.on`.
@@ -447,6 +473,138 @@ class Semaphore {
       release();
     }
   }
+}
+
+/// A token bucket that bounds how often something may happen.
+///
+/// [Semaphore] answers *how many at once*; this answers *how often*, which is
+/// the limit a public API publishes. Every limiter in this domain has a bare
+/// pair and a wrapping form, and the wrapping form is the one to use:
+///
+/// ```dart
+/// final limit = concurrent.rate(10, per: 1.s);
+///
+/// await limit.take();                            // waits for a token
+/// await limit.guard(() => net.http.get(url));    // the wrapped form
+/// ```
+///
+/// **The bucket refills smoothly**, one token every `per / count`, rather than
+/// in a lump at the end of each window. Smooth is what servers actually
+/// measure, and it also means a burst of ten at second zero does not lock out
+/// second one entirely. Waiters are served in the order they arrived.
+class Limiter {
+  /// How many operations are allowed per [per].
+  ///
+  /// Also the burst ceiling: an idle limiter accumulates at most this many
+  /// tokens, so a script that waited a minute does not get a minute's worth of
+  /// requests to fire at once.
+  final int count;
+
+  /// The window [count] is measured over.
+  final Duration per;
+
+  final Queue<Completer<void>> _waiters = Queue<Completer<void>>();
+  // A monotonic clock, so a limiter is not confused by the system clock being
+  // set backwards while a script is waiting on it.
+  final Stopwatch _clock = Stopwatch()..start();
+  double _tokens;
+  int _last = 0;
+  Timer? _pump;
+
+  /// Creates a limiter allowing [count] operations per [per].
+  ///
+  /// Starts full, so the first [count] operations do not wait.
+  Limiter(this.count, {this.per = const Duration(seconds: 1)})
+    : _tokens = count.toDouble() {
+    if (count <= 0) {
+      throw ArgumentError.value(count, 'count', 'Must be greater than 0');
+    }
+    if (per <= Duration.zero) {
+      throw ArgumentError.value(per, 'per', 'Must be a positive duration');
+    }
+  }
+
+  double get _perMicrosecond => count / per.inMicroseconds;
+
+  /// How many tokens are available right now.
+  ///
+  /// Fractional, because the bucket refills continuously. For a check rather
+  /// than a wait — taking a token is [take].
+  double get available {
+    _refill();
+    return _tokens;
+  }
+
+  /// How many callers are waiting for a token.
+  int get waiting => _waiters.length;
+
+  /// Waits until a token is free, then takes it.
+  ///
+  /// Callers are served in arrival order, so a queue behind a busy limiter
+  /// does not starve its oldest waiter.
+  Future<void> take() {
+    _refill();
+    if (_waiters.isEmpty && _tokens >= 1) {
+      _tokens -= 1;
+      return Future<void>.value();
+    }
+    final waiter = Completer<void>();
+    _waiters.add(waiter);
+    _schedule();
+    return waiter.future;
+  }
+
+  /// Takes a token, then runs [action].
+  ///
+  /// Mirrors [Semaphore.withPermit] and [Mutex.protect]. The token is spent on
+  /// starting, not on finishing, because a rate is about how often something
+  /// begins.
+  Future<R> guard<R>(FutureOr<R> Function() action) async {
+    await take();
+    return action();
+  }
+
+  /// Stops the refill timer, so a script holding a limiter can exit.
+  ///
+  /// Every waiter still queued completes, since refusing them would turn a
+  /// rate limit into a failure. Only needed when a limiter is discarded with
+  /// callers still on it.
+  void close() {
+    _pump?.cancel();
+    _pump = null;
+    while (_waiters.isNotEmpty) {
+      _waiters.removeFirst().complete();
+    }
+  }
+
+  void _refill() {
+    final now = _clock.elapsedMicroseconds;
+    final elapsed = now - _last;
+    if (elapsed <= 0) return;
+    _last = now;
+    final grown = _tokens + elapsed * _perMicrosecond;
+    _tokens = grown > count ? count.toDouble() : grown;
+  }
+
+  void _schedule() {
+    if (_pump != null) return;
+    final needed = 1 - _tokens;
+    final micros = needed <= 0 ? 1 : (needed / _perMicrosecond).ceil();
+    _pump = Timer(Duration(microseconds: micros < 1 ? 1 : micros), _drain);
+  }
+
+  void _drain() {
+    _pump = null;
+    _refill();
+    while (_waiters.isNotEmpty && _tokens >= 1) {
+      _tokens -= 1;
+      _waiters.removeFirst().complete();
+    }
+    if (_waiters.isNotEmpty) _schedule();
+  }
+
+  @override
+  String toString() => 'Limiter($count per ${per.inMilliseconds}ms)';
 }
 
 /// A mutual exclusion lock.

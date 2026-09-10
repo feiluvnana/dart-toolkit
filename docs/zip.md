@@ -1,4 +1,4 @@
-# Archives (`tool.zip.*`)
+# Archives (`format.zip.*`)
 
 Pack a folder, unpack an archive, look inside one without unpacking it, and
 squeeze bytes. The format comes from the file name, so one pair of calls covers
@@ -18,9 +18,9 @@ Pass `format:` to override the guess.
 ## 1. Packing
 
 ```dart
-await tool.zip.pack('site', 'site.zip');        // a whole folder
-await tool.zip.pack('notes.txt', 'notes.zip');  // a single file
-await tool.zip.pack('site', 'site.tar.gz');     // format from the name
+await format.zip.pack('site', 'site.zip');        // a whole folder
+await format.zip.pack('notes.txt', 'notes.zip');  // a single file
+await format.zip.pack('site', 'site.tar.gz');     // format from the name
 ```
 
 Paths inside the archive are relative to the source, so unpacking recreates the
@@ -30,7 +30,7 @@ write in this library.
 To build an archive from data that never touched the disk:
 
 ```dart
-await tool.zip.bundle('out.zip', {
+await format.zip.bundle('out.zip', {
   'notes.txt': utf8.encode('hello'),
   'data/rows.csv': csvBytes,
 });
@@ -41,7 +41,7 @@ await tool.zip.bundle('out.zip', {
 ## 2. Unpacking
 
 ```dart
-final files = await tool.zip.unpack('site.zip', 'restored');
+final files = await format.zip.unpack('site.zip', 'restored');
 print('wrote ${files.length} files');
 ```
 
@@ -61,11 +61,11 @@ second is rounded.
 ## 3. Looking inside
 
 ```dart
-for (final entry in await tool.zip.list('site.zip')) {
+for (final entry in await format.zip.list('site.zip')) {
   print('${entry.name} ${entry.size} ${entry.folder}');
 }
 
-final bytes = await tool.zip.read('site.zip', 'index.html');  // null when absent
+final bytes = await format.zip.read('site.zip', 'index.html');  // null when absent
 ```
 
 ---
@@ -73,14 +73,14 @@ final bytes = await tool.zip.read('site.zip', 'index.html');  // null when absen
 ## 4. Raw compression
 
 ```dart
-final packed = tool.zip.deflate(bytes);   // gzip
-final raw = tool.zip.inflate(packed);
+final packed = format.zip.deflate(bytes);   // gzip
+final raw = format.zip.inflate(packed);
 ```
 
 ---
 
 ## See Also
 
-- [`tool.git.*`](git.md) — the other wrapped tool
+- [`format.json.*`](json.md) — the configuration formats, spelled the same way
 - [`io.*`](io.md) — reading and writing the files you pack
-- [`util.size.*`](util.md) — rendering the sizes `tool.zip.list` reports
+- [`util.size.*`](util.md) — rendering the sizes `format.zip.list` reports

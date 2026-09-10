@@ -12,9 +12,125 @@ import 'dart:io' as dart_io;
 
 import 'package:crypto/crypto.dart';
 import 'package:dart_toolkit/dart_toolkit.dart';
+import 'package:dart_toolkit/html.dart';
 import 'package:test/test.dart';
 
 void main() {
+  group('3.0.0 — the sequence API replaces Dart\'s', () {
+    // Adding `implements Iterable<T>` to Sequence for convenience would carry
+    // map, where, expand, fold, firstWhere and thirty more names back into
+    // scope beside this library's, and nothing else would notice. This is the
+    // property the whole stage rests on.
+    test('a Sequence is deliberately not an Iterable', () {
+      expect(const Sequence<int>([]), isNot(isA<Iterable<int>>()));
+      expect([1, 2].seq, isNot(isA<Iterable<Object?>>()));
+    });
+
+    test('a Markup holds one rather than being one', () {
+      final page = $('<p>a</p><p>b</p>');
+      expect(page, isNot(isA<Iterable<Object?>>()));
+      expect(page('p').count, equals(2));
+      expect(page('p').elements.to((e) => e.text).list, equals(['a', 'b']));
+    });
+
+    test('the flipped signatures stayed flipped', () {
+      expect(util.text.words('a b'), isA<Sequence<String>>());
+      expect(util.text.numbers('1 2'), isA<Sequence<num>>());
+      expect(net.sitemap(''), isA<Sequence<Uri>>());
+      expect(util.rand.shuffle(<int>[1]), isA<Sequence<int>>());
+      expect(format.json.parse('{}'), isA<Json>());
+    });
+
+    test('every reader that can come up empty says so in its type', () {
+      final empty = const Sequence<int>([]);
+      expect(empty.first, isNull);
+      expect(empty.last, isNull);
+      expect(empty.sole, isNull);
+      expect(empty.at(0), isNull);
+      expect(empty.find((_) => true), isNull);
+      expect(empty.best((n) => n), isNull);
+      expect(empty.worst((n) => n), isNull);
+      expect(empty.index((_) => true), isNull);
+      expect(empty.avg((n) => n), isNull);
+      expect(Json.none.text('a'), isNull);
+      expect(util.time.parse('nope'), isNull);
+      expect(util.time.span('nope'), isNull);
+    });
+
+    test('no complement pair exists where ! does the job', () {
+      // Law 2: `empty` with no `notEmpty`, `any` with no `none`.
+      expect([1].seq.empty, isFalse);
+      expect($('<p>a</p>').empty, isFalse);
+      expect(Json.none.empty, isTrue);
+    });
+  });
+
+  group('4.0.0 — the formats left net', () {
+    // The one-line statement of the release: `net` fetches bytes and parses
+    // none of them. `form.dart` holds a `<form>` element it was handed, which
+    // is the tree type and not the parser — a form is a request the page
+    // describes, and its output is an HttpMethod, a Uri and a Body.
+    test('no HTML parser under lib/net/', () {
+      final offenders = <String>[];
+      for (final entity in Directory('lib/net').listSync(recursive: true)) {
+        if (entity is! File || !entity.path.endsWith('.dart')) continue;
+        final source = entity.readAsStringSync();
+        for (final banned in const [
+          "package:html/parser.dart",
+          "package:xpath_selector",
+        ]) {
+          if (source.contains("import '$banned")) {
+            offenders.add('${entity.path}: $banned');
+          }
+        }
+      }
+      expect(offenders, isEmpty, reason: 'net must not parse markup');
+    });
+
+    test('Reply carries no member that names a format', () {
+      final res = Reply.text('<h1>T</h1>');
+      // Every one of these used to be on Reply. The seam is `parse(codec)`.
+      expect(res.parse(format.html).find('h1').text, 'T');
+      expect(
+        res.parse(format.json).raw,
+        isNull,
+        reason: 'not JSON, not a throw',
+      );
+      expect(res.parse(format.yaml), isA<Json>());
+    });
+
+    test('parse memoises per codec, so one page is parsed once', () {
+      final res = Reply.text('<h1>T</h1><p>x</p>');
+      expect(
+        identical(res.parse(format.html), res.parse(format.html)),
+        isTrue,
+        reason: 'a handler reading a page five times must parse it once',
+      );
+      expect(
+        identical(res.parse(format.html), res.parse(format.json)),
+        isFalse,
+      );
+    });
+
+    test(
+      'every format accessor is a Codec, so the seam cannot be bypassed',
+      () {
+        expect(format.html, isA<Codec<Markup>>());
+        expect(format.json, isA<Codec<Json>>());
+        expect(format.yaml, isA<Codec<Json>>());
+        expect(format.toml, isA<Codec<Json>>());
+      },
+    );
+
+    test(
+      'the codecs are const, which is what makes memoising by them work',
+      () {
+        expect(identical(format.html, format.html), isTrue);
+        expect(identical(format.json, format.json), isTrue);
+      },
+    );
+  });
+
   group('exported type names', () {
     test('the library imports beside dart:io and crypto without collision', () {
       // `Digest` resolves to crypto's, because the toolkit's algorithm enum is
@@ -66,7 +182,7 @@ void main() {
       // followed the crawl into every subdomain it wandered through.
       expect(jar.header(Uri.parse('https://example.com/')), 'sid=abc');
       expect(jar.header(Uri.parse('https://sub.example.com/')), isNull);
-      expect(jar.cookies.single.host, isTrue);
+      expect(jar.cookies.sole!.host, isTrue);
     });
 
     test('a Domain the host owns still widens to its subdomains', () {
@@ -77,7 +193,7 @@ void main() {
       );
 
       expect(jar.header(Uri.parse('https://sub.example.com/')), 'sid=abc');
-      expect(jar.cookies.single.host, isFalse);
+      expect(jar.cookies.sole!.host, isFalse);
     });
 
     test('a Domain the responding host does not own is refused', () {
@@ -217,7 +333,7 @@ Disallow: /x
 
       // The folder did not exist: opening the destination directly threw.
       expect(io.read(dest).trim(), 'one');
-      expect(io.find(dir.path, pattern: RegExp(r'\.part$')), isEmpty);
+      expect(io.find(dir.path, pattern: RegExp(r'\.part$')).empty, isTrue);
     });
 
     test('the destination is replaced only once the run finishes', () async {
@@ -239,7 +355,7 @@ Disallow: /x
 
       await run;
       expect(io.read(dest).trim(), 'one');
-      expect(io.find(dir.path, pattern: RegExp(r'\.part$')), isEmpty);
+      expect(io.find(dir.path, pattern: RegExp(r'\.part$')).empty, isTrue);
     });
 
     test('a save whose seeds cannot be resolved keeps the old file', () async {
@@ -258,7 +374,7 @@ Disallow: /x
       });
 
       expect(io.read(dest), 'PREVIOUS');
-      expect(io.find(dir.path, pattern: RegExp(r'\.part$')), isEmpty);
+      expect(io.find(dir.path, pattern: RegExp(r'\.part$')).empty, isTrue);
     });
 
     test('a stream whose seeds cannot be resolved still ends', () async {
@@ -352,10 +468,10 @@ Disallow: /x
   group('util.text', () {
     test('a space groups digits only in threes', () {
       expect(util.text.number('12 34'), 12);
-      expect(util.text.numbers('1 2 3'), [1, 2, 3]);
+      expect(util.text.numbers('1 2 3').list, [1, 2, 3]);
       expect(util.text.number('1 234 567'), 1234567);
       expect(util.text.number(r'$1,234.50'), 1234.5);
-      expect(util.text.numbers('3 of 7'), [3, 7]);
+      expect(util.text.numbers('3 of 7').list, [3, 7]);
     });
 
     test('slug keeps letters of other scripts', () {
@@ -466,12 +582,23 @@ Disallow: /x
     });
   });
 
-  group('git', () {
-    test('a missing executable fails softly', () async {
-      // Query methods promise an empty answer rather than an exception.
-      expect(await tool.git.branch(), isA<String>());
-      expect(await tool.git.status(), isA<String>());
+  group('system.run', () {
+    test('which answers "is it installed", run answers "what did it say"', () {
+      // The pairing that replaced `tool.git`'s soft-failure contract:
+      // `system.run` throws `ProcessException` for a binary that is not there,
+      // and `system.which` is the question to ask first.
+      expect(system.which('dt-definitely-not-an-executable'), isNull);
+      expect(system.which('dart'), isNotNull);
     });
+
+    test(
+      'a binary that exists but fails reports rather than throwing',
+      () async {
+        final res = await system.run('git', ['checkout', 'no-such-branch-xyz']);
+        expect(res.ok, isFalse);
+        expect(res.code, isNot(0));
+      },
+    );
   });
 
   group('zip', () {
@@ -491,8 +618,8 @@ Disallow: /x
         if (file.existsSync()) file.deleteSync();
       });
 
-      await tool.zip.pack(root.path, archive);
-      final names = (await tool.zip.list(archive)).map((e) => e.name).toList();
+      await format.zip.pack(root.path, archive);
+      final names = (await format.zip.list(archive)).to((e) => e.name).list;
       expect(names, contains('kept.txt'));
       expect(names.any((n) => n.contains('secret')), isFalse);
     });
@@ -507,7 +634,7 @@ Disallow: /x
       // Every other spelling collapsed the page's indentation; the plural
       // attribute form handed back the source.
       expect(
-        res.extract({
+        res.parse(format.html).extract({
           'x': const ['.t@text'],
         }),
         {
@@ -515,14 +642,14 @@ Disallow: /x
         },
       );
       expect(
-        res.extract({
+        res.parse(format.html).extract({
           'x': const ['.t'],
         }),
         {
           'x': ['Wireless Keyboard', 'Mouse'],
         },
       );
-      expect(res.pick(Field.attrs('.t', 'text')), [
+      expect(res.parse(format.html).pick(Field.attrs('.t', 'text')), [
         'Wireless Keyboard',
         'Mouse',
       ]);

@@ -6,6 +6,8 @@ library;
 
 import 'dart:math';
 
+import 'sequence.dart';
+
 // ============================================================================
 // RANDOMNESS (util.rand.*)
 // ============================================================================
@@ -58,13 +60,14 @@ class RandAccessor {
   /// [count] distinct items chosen from [items], in random order.
   ///
   /// Returns everything, shuffled, when [count] exceeds the list length.
-  List<T> some<T>(List<T> items, int count) {
-    final pool = shuffle(items);
-    return pool.take(count.clamp(0, pool.length)).toList();
-  }
+  Sequence<T> some<T>(List<T> items, int count) =>
+      shuffle(items).head(count < 0 ? 0 : count);
 
   /// A shuffled copy of [items], leaving the original untouched.
-  List<T> shuffle<T>(List<T> items) => [...items]..shuffle(_rng);
+  ///
+  /// Randomness lives here rather than on [Sequence], so a sequence gets it by
+  /// exiting: `util.rand.shuffle(rows.list)`.
+  Sequence<T> shuffle<T>(List<T> items) => Sequence([...items]..shuffle(_rng));
 
   /// A whole number in `[min, max)`.
   ///

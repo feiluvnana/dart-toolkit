@@ -3,6 +3,11 @@
 /// Filesystem access, path manipulation, CSV tables (`io.csv`) and a JSON
 /// key-value store (`io.store`). Every write is atomic — see [Fs].
 ///
+/// Reading a JSON *document* is `tool.json.read`, beside `tool.yaml` and
+/// `tool.toml`: a format is knowledge from outside Dart, so all three live in
+/// one family rather than one of them here. `io.dump` still writes one,
+/// because staging through a `.part` file is this domain's job.
+///
 /// `io.*` blocks; `io.async.*` is the same set of names without blocking the
 /// event loop. Inside a crawl, or anywhere else with work in flight, reach for
 /// `io.async`.
@@ -17,10 +22,14 @@ import 'package:path/path.dart' as p;
 
 import 'csv.dart';
 import '../src/fs.dart';
+import '../src/lock.dart';
+import '../src/watch.dart';
+import '../util/sequence.dart';
 import 'store.dart';
 
 export 'csv.dart';
 export '../src/fs.dart' show Algo;
+export '../src/lock.dart' show LockedError;
 export 'store.dart';
 
 // ============================================================================
@@ -82,6 +91,56 @@ class IoAccessor {
   /// The directory portion of [path].
   String dir(String path) => p.dirname(path);
 
+  /// [path] made absolute against the current directory.
+  String abs(String path) => p.absolute(path);
+
+  /// [path] made relative to [from], or to the current directory.
+  String rel(String path, {String? from}) => p.relative(path, from: from);
+
+  /// The current working directory.
+  String get cwd => Directory.current.path;
+
+  /// The current user's home directory.
+  ///
+  /// `$HOME` on POSIX and `%USERPROFILE%` on Windows, falling back to
+  /// `%HOMEDRIVE%%HOMEPATH%` and finally to [cwd], so this never returns
+  /// `null` for a script to handle.
+  String get home {
+    final env = Platform.environment;
+    final named =
+        Platform.isWindows
+            ? env['USERPROFILE'] ??
+                ((env['HOMEDRIVE'] ?? '') + (env['HOMEPATH'] ?? ''))
+            : env['HOME'];
+    return named == null || named.isEmpty ? cwd : named;
+  }
+
+  /// [path] with a leading `~` and any `$VAR` references resolved.
+  ///
+  /// `~` expands to [home] only at the start of the path, which is the only
+  /// place a shell expands it either. `$VAR` and `${VAR}` read from the
+  /// process environment, and a name that is not set expands to nothing —
+  /// the same as a shell, and the reason this is not `env.read`'s job.
+  ///
+  /// ```dart
+  /// io.expand('~/.config/mytool/config.json');
+  /// io.expand(r'$XDG_CACHE_HOME/mytool');
+  /// ```
+  String expand(String path) {
+    var out = path;
+    if (out == '~') {
+      out = home;
+    } else if (out.startsWith('~/') || out.startsWith('~\\')) {
+      out = p.join(home, out.substring(2));
+    }
+    return out.replaceAllMapped(
+      _variable,
+      (m) => Platform.environment[m.group(1) ?? m.group(2)!] ?? '',
+    );
+  }
+
+  static final _variable = RegExp(r'\$\{(\w+)\}|\$(\w+)');
+
   // --- Existence ---
 
   /// Whether [path] exists and holds at least one byte.
@@ -104,27 +163,6 @@ class IoAccessor {
   /// Reads [path] as raw bytes.
   List<int> bytes(String path) => File(path).readAsBytesSync();
 
-  /// Reads and decodes the JSON document at [path] as [T].
-  ///
-  /// Write JSON with [dump]:
-  ///
-  /// ```dart
-  /// io.dump('data.json', {'count': 42});
-  /// final data = io.json<Map<String, Object?>>('data.json');
-  /// ```
-  ///
-  /// Pass [parse] to build a real type out of the document rather than casting
-  /// the decoded maps and lists at every read:
-  ///
-  /// ```dart
-  /// final config = io.json('config.json', Config.fromJson);
-  /// ```
-  ///
-  /// Without it the decoded value is cast to [T], which throws when the
-  /// document is not the shape the call site claimed.
-  T json<T>(String path, [T Function(Object? raw)? parse]) =>
-      Fs.json<T>(path, parse);
-
   /// Streams [path] as decoded lines.
   Stream<String> lines(String path, {Encoding encoding = utf8}) =>
       Fs.lines(path, encoding: encoding);
@@ -145,7 +183,9 @@ class IoAccessor {
 
   /// Encodes [data] as JSON and writes it to [path] atomically.
   ///
-  /// [data] accepts any value `jsonEncode` understands.
+  /// [data] accepts any value `jsonEncode` understands. Reading one back is
+  /// `tool.json.read`; the write stays here because staging through a `.part`
+  /// file is this domain's job, not the format's.
   File dump(
     String path,
     Object? data, {
@@ -233,9 +273,89 @@ class IoAccessor {
   Directory temp([String prefix = 'tmp_']) =>
       Directory.systemTemp.createTempSync(prefix);
 
+  /// Runs [action] with the lock file [path] held, and returns what it gave.
+  ///
+  /// The moment a script is good enough to put on a schedule, two copies of it
+  /// eventually run at once — a slow run overlapping the next tick, or a human
+  /// running it by hand while cron does. Atomic writes make the *file* safe;
+  /// they do not stop the *result* from being whichever process finished last.
+  ///
+  /// ```dart
+  /// await io.lock('.crawl.lock', () async {
+  ///   // exactly one process in here
+  ///   await net.crawl<Row>(seed).save('out.csv');
+  /// });
+  /// ```
+  ///
+  /// A second process throws [LockedError] straight away, or waits up to
+  /// [wait] for its turn when one is given. The lock is released on a normal
+  /// return, on a throw, **and on Ctrl-C** — a lock file that outlives an
+  /// interrupt is worse than no lock at all, because the next run refuses to
+  /// start.
+  ///
+  /// The file holds the pid and a timestamp, so a stale lock is diagnosable.
+  /// A lock whose recorded process is gone is taken rather than obeyed; there
+  /// is deliberately no age cut-off, because "older than an hour is stale"
+  /// breaks the one run that legitimately took ninety minutes.
+  Future<R> lock<R>(
+    String path,
+    FutureOr<R> Function() action, {
+    Duration? wait,
+  }) => Lock.hold(path, action, wait: wait);
+
+  /// Whether the lock file at [path] is held by a live process.
+  ///
+  /// For a status line, not for deciding whether to take it — between the
+  /// check and the take, another process can win. [lock] is the answer that
+  /// cannot race.
+  bool locked(String path) => Lock.held(path);
+
   /// Lists files under [dir], optionally filtered by [pattern].
-  List<File> find(String dir, {Pattern? pattern, bool recursive = true}) =>
-      Fs.find(dir, pattern: pattern, recursive: recursive);
+  Sequence<File> find(String dir, {Pattern? pattern, bool recursive = true}) =>
+      Sequence(Fs.find(dir, pattern: pattern, recursive: recursive));
+
+  /// Calls [onchange] when a file at or under [path] changes.
+  ///
+  /// Returns the function that stops watching — hold onto it, because a live
+  /// watcher keeps the process alive:
+  ///
+  /// ```dart
+  /// final stop = io.observe(
+  ///   'lib',
+  ///   (changed) => log.info('changed: $changed'),
+  ///   pattern: RegExp(r'\.dart$'),
+  /// );
+  /// // ... later
+  /// await stop();
+  /// ```
+  ///
+  /// [settle] coalesces a burst of events for one path into a single call,
+  /// which is the part everyone hand-rolls wrong: an editor writes a file two
+  /// or three times per save, so the naive version fires three builds. Pass
+  /// `Duration.zero` for every raw event.
+  ///
+  /// Only files are reported, filtered by [pattern] when one is given. Set
+  /// [recursive] to `false` to watch just the one directory. A directory
+  /// created later is picked up either way — Linux watches one directory at a
+  /// time, so a recursive watch there is a subscription per directory, and
+  /// hiding that asymmetry is most of why this member exists.
+  ///
+  /// The name is `observe` rather than `watch` because `system.watch` already
+  /// means *watch for Ctrl-C*, and two `watch`es meaning two unrelated things
+  /// is exactly what Rule 5 is for.
+  Future<void> Function() observe(
+    String path,
+    void Function(String path) onchange, {
+    Pattern? pattern,
+    Duration settle = const Duration(milliseconds: 200),
+    bool recursive = true,
+  }) => Watch.start(
+    path,
+    onchange,
+    pattern: pattern,
+    settle: settle,
+    recursive: recursive,
+  );
 
   /// Deletes files under [dir] matching [pattern] and returns the count.
   int delete(String dir, {Pattern? pattern, bool recursive = false}) =>
@@ -286,10 +406,6 @@ class IoAsyncAccessor {
 
   /// Reads [path] as raw bytes.
   Future<List<int>> bytes(String path) => File(path).readAsBytes();
-
-  /// Reads and decodes the JSON document at [path] as [T].
-  Future<T> json<T>(String path, [T Function(Object? raw)? parse]) =>
-      Fs.jsonAsync<T>(path, parse);
 
   /// Streams [path] as decoded lines.
   Stream<String> lines(String path, {Encoding encoding = utf8}) =>
@@ -360,11 +476,12 @@ class IoAsyncAccessor {
       Directory.systemTemp.createTemp(prefix);
 
   /// Lists files under [dir], optionally filtered by [pattern].
-  Future<List<File>> find(
+  Future<Sequence<File>> find(
     String dir, {
     Pattern? pattern,
     bool recursive = true,
-  }) => Fs.findAsync(dir, pattern: pattern, recursive: recursive);
+  }) async =>
+      Sequence(await Fs.findAsync(dir, pattern: pattern, recursive: recursive));
 
   /// Deletes files under [dir] matching [pattern] and returns the count.
   Future<int> delete(String dir, {Pattern? pattern, bool recursive = false}) =>

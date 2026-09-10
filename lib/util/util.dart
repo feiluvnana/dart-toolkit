@@ -2,11 +2,19 @@
 ///
 /// Pure helpers, with no filesystem and no operating system behind them:
 /// time and delays (`util.time`), byte sizes (`util.size`), text handling
-/// (`util.text`), hashing (`util.hash`) and randomness (`util.rand`).
+/// (`util.text`), hashing (`util.hash`) and randomness (`util.rand`) — plus
+/// [Sequence], the sequence API this library returns in place of Dart's, and
+/// the two document cursors — [Json] for a tree of maps and scalars, [Markup]
+/// for a tree of elements — that `format` builds and `net` hands back through
+/// [Codec].
+///
+/// The cursors live here and their codecs live in `format` for the same
+/// reason: a cursor is a pure value that more than one domain returns, and a
+/// format is knowledge from outside Dart.
 ///
 /// The rule: anything that touches the disk lives in `io`, anything that
-/// touches the OS or the user lives in `system`. Archives are `tool.zip`, Git
-/// is `tool.git`, and the terminal is `system.console`.
+/// touches the OS or the user lives in `system`. Archives are `format.zip`,
+/// and the terminal is `system.console`.
 library;
 
 import 'hash.dart';
@@ -15,9 +23,13 @@ import 'size.dart';
 import 'text.dart';
 import 'time.dart';
 
+export 'codec.dart';
 export 'extensions.dart';
 export 'hash.dart';
+export 'json.dart';
+export 'markup.dart';
 export 'rand.dart';
+export 'sequence.dart';
 export 'slot.dart';
 export 'size.dart';
 export 'text.dart';
@@ -41,7 +53,7 @@ class UtilAccessor {
   /// Human-readable byte sizes.
   SizeAccessor get size => const SizeAccessor();
 
-  /// Slugs, cleaning, truncation and pulling values out of raw text.
+  /// Slugs, cleaning, truncation, templates and pulling values out of raw text.
   TextAccessor get text => const TextAccessor();
 
   /// Digests, signatures and base64.

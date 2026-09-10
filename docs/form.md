@@ -1,6 +1,6 @@
 # Forms (`Form`)
 
-The other half of reading a page. `res.$('input').value` already reads a control the way a browser would submit it; `Form` collects every control on a `<form>`, lets a script override the two it cares about, and works out where the result goes.
+The other half of reading a page. `res.parse(format.html)('input').value` already reads a control the way a browser would submit it; `Form` collects every control on a `<form>`, lets a script override the two it cares about, and works out where the result goes.
 
 That difference matters because of what a real form carries: a CSRF token, a session id, a dozen hidden inputs, the options already selected. Rebuilding those by hand is what makes a login script break every time the page changes.
 
@@ -15,11 +15,12 @@ void main() async {
   final session = Fetcher(session: true);
   final page = await session.get('https://example.com/login'.url);
 
-  final home = await page.form('#login')!
+  final home = await page.parse(format.html).form('#login')!
+      .at(page.url)
       .fill({'user': 'me', 'pass': 'secret'})
       .send(client: session);
 
-  print(home.$('h1').text);
+  print(home.parse(format.html)('h1').text);
 }
 ```
 
@@ -27,14 +28,28 @@ void main() async {
 
 ## 1. Finding one
 
-`res.form(selector)` returns the first form the selector matches, or `null` when the page has none:
+Finding a form is reading a page, so it hangs off the cursor rather than off
+the response — `net` does not parse. `Markup.form(selector)` returns the first
+form the selector matches, or `null` when the page has none:
 
 ```dart
-res.form();                                   // the first form on the page
-res.form('#login');                           // by id
-res.form('form[action\$="/search"]');          // by action
-res.form('form:has(input[type=password])');   // by what it contains
+final page = res.parse(format.html);
+
+page.form();                                   // the first form on the page
+page.form('#login');                           // by id
+page.form('form[action\$="/search"]');          // by action
+page.form('form:has(input[type=password])');   // by what it contains
 ```
+
+A cursor has no idea what URL its markup came from, so a form that submits to a
+relative `action` needs `at` before it is sent — and says so, loudly, rather
+than resolving against `localhost`:
+
+```dart
+page.form('#login')!.at(res.url).fill({'user': 'me'}).send();
+```
+
+Inside a crawl, `res.submit(form)` calls `at` for you.
 
 The selector is a full jQuery selector, so a form is namable by whatever distinguishes it. When it names something that is *not* a form — an id on a wrapping `<div>`, say — the first form inside it is used, so both of these find the same form:
 
@@ -43,11 +58,11 @@ The selector is a full jQuery selector, so a form is namable by whatever disting
 ```
 
 ```dart
-res.form('#panel');   // the form inside it
-res.form('#login');   // the form itself
+page.form('#panel');   // the form inside it
+page.form('#login');   // the form itself
 ```
 
-A page with no form reports `null` rather than throwing, so `res.form('#login')?.fill(...)` is a safe thing to write against a page that may have logged you in already.
+A page with no form reports `null` rather than throwing, so `page.form('#login')?.fill(...)` is a safe thing to write against a page that may have logged you in already.
 
 ---
 
@@ -56,7 +71,7 @@ A page with no form reports `null` rather than throwing, so `res.form('#login')?
 `fields` holds the *successful controls*, as HTML calls them — what a browser would send if you pressed Enter:
 
 ```dart
-final form = res.form('#login')!;
+final form = page.form('#login')!;
 form.fields;
 // {csrf: tok-123, user: , remember: yes, plan: pro, lang: fr, do: login}
 ```
@@ -73,7 +88,7 @@ form.fields;
 | `<input type=reset\|button\|image>` | nothing |
 | anything `disabled`, or with no `name` | nothing |
 
-Values come from the same reader as `QueryResult.value`, so what a form submits and what `res.$('select').value` reports can never drift apart.
+Values come from the same reader as `Markup.value`, so what a form submits and what `res.parse(format.html)('select').value` reports can never drift apart.
 
 Two controls sharing one name — a checkbox group — keep the last, as `Body.form` does.
 
@@ -84,7 +99,8 @@ Two controls sharing one name — a checkbox group — keep the last, as `Body.f
 `fill` overrides the names you pass and leaves the rest of the page's own values alone. It returns the form, so filling and sending are one expression:
 
 ```dart
-res.form('#login')!
+page.form('#login')!
+    .at(res.url)
     .fill({'user': user, 'pass': pass})
     .send();
 ```
@@ -102,7 +118,7 @@ form.fill({'redirect': '/dashboard'});
 ## 4. Where it goes
 
 ```dart
-form.action;   // the form's action, resolved against the page it came from
+form.action;   // the form's action, resolved against the page `at` named
 form.method;   // HttpMethod.post for method="post", else HttpMethod.get
 form.url;      // where the request goes, fields included for a GET
 form.body;     // Body.form(fields), or null for a GET
@@ -112,7 +128,7 @@ An empty or missing `action` submits back to the page itself. A `GET` carries it
 
 ```dart
 // <form class="search" action="/search?stale=1">
-res.form('form.search')!.fill({'q': 'widgets'}).url;
+page.form('form.search')!.at(res.url).fill({'q': 'widgets'}).url;
 // https://example.com/search?q=widgets
 ```
 
@@ -128,23 +144,27 @@ Two ways, because there are two situations.
 
 ```dart
 final session = Fetcher(session: true);
-final page = await session.get(loginUrl);
-final home = await page.form('#login')!
+final res = await session.get(loginUrl);
+final home = await res.parse(format.html).form('#login')!
+    .at(res.url)
     .fill({'user': user, 'pass': pass})
     .send(client: session);
 ```
 
-Without `client` the shared `net.http` sends it. `headers` and `timeout` work as they do on any request; a `Referer` naming the page is set for you.
+Without `client` the shared `net.http` sends it. `headers` and `timeout` work as they do on any request; a `Referer` naming the page `at` was given is set for you.
 
 **Inside a crawl**, with `submit`, which schedules the request on the engine instead of fetching it here and now:
 
 ```dart
 await net.crawl<String>('https://example.com/login')
     .tag('home', (res) {
-      for (final row in res.$('.item').texts) res.emit(row);
+      for (final row in res.parse(format.html).find('.item').texts) {
+        res.emit(row);
+      }
     })
     .run((res) => res.submit(
-          res.form('#login')!..fill({'user': user, 'pass': pass}),
+          res.parse(format.html).form('#login')!
+            ..fill({'user': user, 'pass': pass}),
           tag: 'home',
         ));
 ```
@@ -160,7 +180,7 @@ Everything `follow` does still applies: the `Referer` is set, `depth` grows by o
 `Form` can be built directly from any parsed `<form>` element. Pass `page`, or a relative `action` has nothing to resolve against:
 
 ```dart
-final element = $(markup).find('form').first;
+final element = format.html.parse(markup).find('form').elements.first!;
 final form = Form(element, page: 'https://example.com/login'.url);
 ```
 
@@ -173,15 +193,17 @@ Because `submit` goes through the engine, a paginated POST is a stage that queue
 ```dart
 await net.crawl<Map<String, Object?>>(searchUrl)
     .tag('page', (res) {
-      for (final row in res.$('.result')) {
+      final page = res.parse(format.html);
+      for (final row in page.find('.result').elements.list) {
         res.emit({'title': row.query.find('h3').text});
       }
-      final next = res.form('form.pager');
-      if (next != null && res.$('.next').isNotEmpty) {
+      final next = page.form('form.pager');
+      if (next != null && !page.find('.next').empty) {
         res.submit(next..fill({'page': '${res.depth + 2}'}), tag: 'page');
       }
     })
-    .run((res) => res.submit(res.form('form.search')!..fill({'q': term}),
+    .run((res) => res.submit(
+        res.parse(format.html).form('form.search')!..fill({'q': term}),
         tag: 'page'));
 ```
 
@@ -191,4 +213,4 @@ await net.crawl<Map<String, Object?>>(searchUrl)
 
 - [docs/http.md](http.md) — the client, sessions and cookies
 - [docs/crawl.md](crawl.md) — `follow`, tags and the engine
-- [docs/selector.md](selector.md) — `value`, `values` and the rest of the reading side
+- [docs/html.md](html.md) — `value`, `values` and the rest of the reading side

@@ -120,7 +120,7 @@ final seen = (db.get(done) ?? const []).cast<String>().toSet();
 
 await net.crawl<String>('https://example.com/index')
     .run((res) {
-      for (final link in res.$('a').hrefs) {
+      for (final link in res.parse(format.html)('a').hrefs) {
         if (seen.contains(link)) continue;
         res.follow(link);
       }

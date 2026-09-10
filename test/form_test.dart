@@ -42,6 +42,15 @@ const _login = '''
 Reply _page([String markup = _login]) =>
     Reply.text(markup, requested: 'https://example.com/login'.url);
 
+/// What `Reply.form` used to be, now that `net` does not parse.
+///
+/// Three lines in user space, which is the point: the convenience is cheap to
+/// write and does not have to be a member of [Reply] that names a format.
+extension _FormOnReply on Reply {
+  Form? form([String selector = 'form']) =>
+      parse(format.html).form(selector)?.at(url);
+}
+
 void main() {
   group('Form.fields', () {
     test('collects the successful controls the way a browser would', () {
@@ -208,9 +217,9 @@ void main() {
           .fill({'user': 'me'})
           .send(client: session);
 
-      expect(home.$('h1').text, 'me in with tok-123');
+      expect(home.parse(format.html)('h1').text, 'me in with tok-123');
       // The cookie the login page set came back with the submission.
-      expect(home.$('p').text, contains('sid=session-1'));
+      expect(home.parse(format.html)('p').text, contains('sid=session-1'));
       expect(seen.last, startsWith('POST /session'));
     });
 
@@ -219,7 +228,7 @@ void main() {
 
       final stats = await net
           .crawl<String>('$base/login')
-          .tag('home', (res) => landed.add(res.$('h1').text))
+          .tag('home', (res) => landed.add(res.parse(format.html)('h1').text))
           .run(
             (res) => res.submit(
               res.form('#login')!..fill({'user': 'crawler'}),

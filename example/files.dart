@@ -34,13 +34,15 @@ void main() async {
   io.dump(io.join(dir, 'products.json'), rows);
   io.save(io.join(dir, 'blob.bin'), [1, 2, 3]);
 
-  final back = io.json<List<Object?>>(io.join(dir, 'products.json'));
-  log.ok('Wrote and re-read ${back.length} products.');
+  final back = await format.json.read(io.join(dir, 'products.json'));
+  log.ok('Wrote and re-read ${back.count} products.');
+  log.info('First name: ${back.text('0.name')}');
+  log.info('Every name: ${back.jsonpath(r'$[*].name').sift((n) => n.text())}');
 
   // ---------------------------------------------------------------------- CSV
   await io.csv.write(io.join(dir, 'products.csv'), rows);
   final records = await io.csv.maps(io.join(dir, 'products.csv'));
-  log.ok('CSV columns: ${records.first.keys.join(', ')}');
+  log.ok('CSV columns: ${records.first!.keys.join(', ')}');
 
   // `records` streams rather than loading the file, and `pipe` is its twin for
   // writing: it turns a crawl of any size into a spreadsheet without the rows
@@ -65,13 +67,30 @@ void main() async {
   log.info('sha    ${io.hash(io.join(dir, 'products.json')).substring(0, 12)}');
 
   final found = io.find(dir, pattern: RegExp(r'\.(json|csv)$'));
-  log.ok('Found ${found.length}: ${[for (final f in found) io.base(f.path)]}');
+  log.ok(
+    'Found ${found.count()}: ${[for (final f in found.list) io.base(f.path)]}',
+  );
 
   // ------------------------------------------------------------- non-blocking
   await io.async.write(io.join(dir, 'run.log'), 'finished ${util.time.iso()}');
   log.info(
     'Async read: ${(await io.async.read(io.join(dir, 'run.log'))).trim()}',
   );
+
+  // ------------------------------------------------------------------- lock
+  // The moment a script goes on a schedule, two copies of it eventually run at
+  // once. Atomic writes make the file safe; they do not stop the result from
+  // being whichever process finished last. Released on return, on a throw, and
+  // on Ctrl-C.
+  await io.lock(io.join(dir, '.files.lock'), () async {
+    log.ok('Holding the lock; a second copy would get a LockedError.');
+    // A second attempt while we hold it, to show the contract.
+    try {
+      await io.lock(io.join(dir, '.files.lock'), () async {});
+    } on LockedError catch (error) {
+      log.info('$error');
+    }
+  });
 
   // ------------------------------------------------------------------- store
   // A tiny JSON document for what a run has to remember: cursors, "last seen"

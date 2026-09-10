@@ -11,6 +11,7 @@ import 'dart:io';
 
 import '../src/fs.dart';
 import '../src/proc.dart';
+import '../util/sequence.dart';
 import 'cache.dart';
 import 'downloader.dart';
 import 'engine.dart';
@@ -521,7 +522,7 @@ class CrawlBuilder<T> {
     final urls = List<String>.from(_urls);
     if (_sitemapUrl != null) {
       final sitemapUrls = await Sitemap.load(_sitemapUrl!);
-      urls.addAll(sitemapUrls.map((u) => u.toString()));
+      urls.addAll(sitemapUrls.to((u) => u.toString()).list);
     }
     return urls;
   }
@@ -543,9 +544,15 @@ class CrawlBuilder<T> {
 
   /// Runs the crawl and collects everything handlers emitted.
   ///
-  /// Items arrive in emission order. For a large crawl prefer [stream], which
-  /// does not hold every item in memory.
-  Future<List<T>> collect([Handler<T>? process]) async {
+  /// Items arrive in emission order, as a [Sequence] — so grouping, batching
+  /// or summing them is the next call rather than an import. For a large crawl
+  /// prefer [stream], which does not hold every item in memory.
+  ///
+  /// ```dart
+  /// final rows = await net.crawl<Row>(seed).collect();
+  /// rows.group((r) => r.host).seq.each(print);
+  /// ```
+  Future<Sequence<T>> collect([Handler<T>? process]) async {
     final items = <T>[];
     final engine = this.engine(process);
     final subscription = engine.items.listen(items.add);
@@ -557,7 +564,7 @@ class CrawlBuilder<T> {
       await _disarm(engine);
       await subscription.cancel();
     }
-    return items;
+    return Sequence(items);
   }
 
   /// Runs the crawl, collecting what [map] returns for each page.
@@ -572,7 +579,7 @@ class CrawlBuilder<T> {
   /// ```dart
   /// final titles = await net.crawl<Never>(seed)
   ///     .gather((p) => p.$('.title').texts);
-  /// // Future<List<String>>
+  /// // Future<Sequence<String>>
   /// ```
   ///
   /// Returning nothing for a page is returning an empty iterable, so a handler
@@ -587,10 +594,10 @@ class CrawlBuilder<T> {
   /// Everything else the builder configures still applies, including [route]
   /// and [tag] — but a handler registered there emits through [Response.emit]
   /// rather than returning, so a multi-stage crawl wants [collect].
-  Future<List<R>> gather<R>(Iterable<R> Function(Page<T> page) map) async {
+  Future<Sequence<R>> gather<R>(Iterable<R> Function(Page<T> page) map) async {
     final items = <R>[];
     await run((page) => items.addAll(map(page)));
-    return items;
+    return Sequence(items);
   }
 
   /// Runs the crawl and writes emitted items to [path] as they arrive.

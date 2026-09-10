@@ -92,13 +92,13 @@ void main(List<String> args) async {
           .error((f) => log.warn('${f.fetch?.url ?? 'crawl'}: ${f.error}'))
           .collect();
 
-  log.ok('Collected ${products.length} products.');
+  log.ok('Collected ${products.count()} products.');
 
   // --------------------------------------------------------- 2. concurrency
   log.step(2, 5, 'Enriching...');
 
-  final bar = Progress(total: products.length, message: 'Enriching');
-  final enriched = await concurrent.run(products, (product) async {
+  final bar = Progress(total: products.count(), message: 'Enriching');
+  final enriched = await concurrent.run(products.list, (product) async {
     await util.time.wait(util.rand.jitter(30.ms));
     bar.tick(1, product.name);
     return (
@@ -145,20 +145,23 @@ void main(List<String> args) async {
   log.step(4, 5, 'Archiving...');
 
   final archive = io.join('output', 'catalogue-${util.time.stamp()}.tar.gz');
-  await tool.zip.pack(io.join(dir, 'products.json'), archive);
+  await format.zip.pack(io.join(dir, 'products.json'), archive);
   log.ok('Packed ${util.size.format(io.stat(archive).size)} into $archive.');
 
-  final branch = await tool.git.branch();
-  if (branch.isEmpty) {
+  // An executable is `system.run`, not a wrapper: `tool` holds formats only.
+  final head = await system.run('git', ['rev-parse', '--abbrev-ref', 'HEAD']);
+  if (!head.ok) {
     log.debug('Not a git repository.');
   } else {
-    log.info('On $branch${await tool.git.dirty() ? ' (dirty)' : ', clean'}.');
+    final dirty = await system.run('git', ['status', '--porcelain']);
+    final state = dirty.out.trim().isEmpty ? ', clean' : ' (dirty)';
+    log.info('On ${head.out.trim()}$state.');
   }
 
   // ------------------------------------------------------------ 5. console
   log.step(5, 5, 'Summary');
 
-  final cheapest = [...products]..sort((a, b) => a.price.compareTo(b.price));
+  final cheapest = products.sort((p) => p.price);
   out.table(
     Table(
       headers: ['Product', 'Price', 'Slug'],
@@ -172,8 +175,8 @@ void main(List<String> args) async {
   out.box(
     [
       'Run       $count',
-      'Products  ${products.length}',
-      'Cheapest  ${cheapest.first.name} at \$${cheapest.first.price}',
+      'Products  ${products.count()}',
+      'Cheapest  ${cheapest.first?.name} at \$${cheapest.first?.price}',
       'Elapsed   ${util.time.format(clock.elapsed)}',
     ].join('\n'),
     title: 'Result',
@@ -186,7 +189,7 @@ void main(List<String> args) async {
 /// The listing: queue every product, then follow pagination. `meta` survives
 /// the round trip, so the detail handler knows the price the listing showed.
 void _catalogue(Page<Product> res) {
-  for (final card in res.$('.product')) {
+  for (final card in res.parse(format.html)('.product').elements.list) {
     res.follow(
       card.query.find('a').href ?? '',
       tag: 'product',
@@ -197,14 +200,16 @@ void _catalogue(Page<Product> res) {
     );
   }
 
-  final next = res.$('a.next').href;
+  final next = res.parse(format.html)('a.next').href;
   if (next != null) res.follow(next);
 }
 
 /// A product page.
 void _product(Page<Product> res) {
-  final name = res.pick(Field.text('h1'));
-  final price = util.text.number(res.pick(Field.text('.price')) ?? '');
+  final name = res.parse(format.html).pick(Field.text('h1'));
+  final price = util.text.number(
+    res.parse(format.html).pick(Field.text('.price')) ?? '',
+  );
   if (name == null || price == null) return;
 
   res.emit((name: name, price: price, url: res.url.toString()));

@@ -29,6 +29,7 @@ import 'dart:io';
 
 import '../src/shared.dart';
 import '../system/console/writer.dart';
+import '../util/time.dart';
 
 // ============================================================================
 // CLI DOMAIN (cli.*) - Argument Parsing
@@ -111,7 +112,7 @@ final class Opt<T> {
 }
 
 /// What an option is parsed as, for validation and the usage block.
-enum _Shape { text, number, decimal, list }
+enum _Shape { text, number, decimal, list, duration, date }
 
 /// The declaration behind an [Opt].
 class _Decl {
@@ -367,6 +368,102 @@ mixin _Spec {
       return self.def;
     },
   );
+
+  /// Declares an option carrying a length of time.
+  ///
+  /// The value is read by `util.time.span`, so `--timeout 30s`,
+  /// `--timeout 1h30m` and a bare `--timeout 30` (seconds) all work. A value
+  /// that is not a duration reads as [def], and [Cli.require] reports it.
+  ///
+  /// ```dart
+  /// final timeout = cli.duration('timeout', def: 30.s);
+  /// await net.http.get(url, timeout: timeout());
+  /// ```
+  Opt<Duration> duration(
+    String name, {
+    String? alias,
+    String desc = '',
+    Duration def = Duration.zero,
+    bool required = false,
+    String? env,
+  }) => _declare<Duration>(
+    name,
+    alias,
+    def,
+    _Decl(
+      alias: _short(alias),
+      desc: desc,
+      def: _spanText(def),
+      required: required,
+      env: env,
+      shape: _Shape.duration,
+    ),
+    (cli, self) {
+      final text = cli._readText(self);
+      return text == null
+          ? self.def
+          : const TimeAccessor().span(text) ?? self.def;
+    },
+  );
+
+  /// Declares an option carrying a date.
+  ///
+  /// The value is read by `util.time.parse`, so ISO-8601 and the loose forms
+  /// it accepts all work. There is no sensible default date, so the [Opt]
+  /// reads `null` when nothing was given — the option `--since` exists
+  /// precisely so a script can tell "not given" from "the beginning of time".
+  ///
+  /// ```dart
+  /// final since = cli.date('since');
+  /// rows.keep((r) => since() == null || r.at.isAfter(since()!));
+  /// ```
+  Opt<DateTime?> date(
+    String name, {
+    String? alias,
+    String desc = '',
+    DateTime? def,
+    bool required = false,
+    String? env,
+  }) => _declare<DateTime?>(
+    name,
+    alias,
+    def,
+    _Decl(
+      alias: _short(alias),
+      desc: desc,
+      def: def == null ? null : const TimeAccessor().iso(def),
+      required: required,
+      env: env,
+      shape: _Shape.date,
+    ),
+    (cli, self) {
+      final text = cli._readText(self);
+      return text == null
+          ? self.def
+          : const TimeAccessor().parse(text) ?? self.def;
+    },
+  );
+
+  /// [span] in the compact form `duration` reads back, for the usage block.
+  static String _spanText(Duration span) {
+    if (span == Duration.zero) return '0s';
+    final parts = StringBuffer();
+    var micros = span.inMicroseconds;
+    for (final (label, unit) in const [
+      ('d', Duration.microsecondsPerDay),
+      ('h', Duration.microsecondsPerHour),
+      ('m', Duration.microsecondsPerMinute),
+      ('s', Duration.microsecondsPerSecond),
+      ('ms', Duration.microsecondsPerMillisecond),
+    ]) {
+      final whole = micros ~/ unit;
+      if (whole != 0) {
+        parts.write('$whole$label');
+        micros -= whole * unit;
+      }
+    }
+    return parts.isEmpty ? '0s' : parts.toString();
+  }
 
   /// Registers [name] as a subcommand run by [handler], returning it so that
   /// its own flags and options can be declared on the spot.
@@ -853,13 +950,18 @@ class Cli with _Spec {
           );
           continue;
         }
-        final bad = switch (decl.shape) {
-          _Shape.number => int.tryParse(value.trim()) == null,
-          _Shape.decimal => double.tryParse(value.trim()) == null,
-          _Shape.text || _Shape.list => false,
+        final wanted = switch (decl.shape) {
+          _Shape.number when int.tryParse(value.trim()) == null => 'a number',
+          _Shape.decimal when double.tryParse(value.trim()) == null =>
+            'a number',
+          _Shape.duration when const TimeAccessor().span(value) == null =>
+            'a duration such as 30s, 5m or 1h30m',
+          _Shape.date when const TimeAccessor().parse(value) == null =>
+            'a date such as 2024-03-09',
+          _ => null,
         };
-        if (bad) {
-          problems.add('--${entry.key} must be a number (got "$value")');
+        if (wanted != null) {
+          problems.add('--${entry.key} must be $wanted (got "$value")');
         }
       }
     }

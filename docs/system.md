@@ -74,11 +74,36 @@ system.which('7z', paths: [r'C:\Program Files\7-Zip\7z.exe']);
 
 ## 3. Platform
 
+The question a script usually asks is a boolean:
+
 ```dart
 system.windows;   // Windows
-system.macos;   // macOS
-system.linux;   // Linux
+system.macos;     // macOS
+system.linux;     // Linux
 ```
+
+`system.os` is the rest of it — one record rather than five loose members,
+because it is one struct's worth of facts and reading two of them should not
+mean two accessors:
+
+```dart
+final machine = system.os;
+
+machine.name;    // 'macos', 'linux', 'windows', 'android', 'ios', 'fuchsia'
+machine.cpus;    // the core count
+machine.host;    // the hostname, '' when the platform will not say
+machine.user;    // $USER / %USERNAME%, '' when unset
+```
+
+`cpus` is the honest default for a pool size, where examples otherwise hardcode
+four:
+
+```dart
+await concurrent.run(urls, fetch, size: system.os.cpus);
+```
+
+The paths half — `io.home`, `io.cwd`, `io.expand` — is in
+[`io`](io.md#4-paths), because a path is a filesystem fact.
 
 ---
 
@@ -120,4 +145,5 @@ The one exception is `system.on.exit`: a registered hook stays pending, and so k
 
 - [`cli.*`](cli.md) — argument parsing
 - [`system.env.*`](env.md) — environment variables
-- [`tool.git.*`](git.md) — git commands, built on `system.run`
+- [`format.*`](json.md) — file formats; an executable is `system.run`, not a wrapper
+- [`io.*`](io.md#4-paths) — `io.home`, `io.cwd` and `io.expand`

@@ -88,7 +88,7 @@ multi-letter short name is never split once you declare it: declare
 
 ## 2. Declaring
 
-Six declarations, one per shape a value can have. Each returns the `Opt<T>`
+Eight declarations, one per shape a value can have. Each returns the `Opt<T>`
 that reads it.
 
 ```dart
@@ -98,6 +98,8 @@ final size = cli.number('concurrency', alias: 'c', desc: 'Workers', def: 4);
 final rate = cli.decimal('rate', desc: 'Requests per second', def: 1.5);
 final tags = cli.list('tag', desc: 'Repeatable tag', csv: true);
 final mode = cli.choice('mode', Mode.values, def: Mode.debug, desc: 'Build mode');
+final timeout = cli.duration('timeout', desc: 'Give up after', def: 30.s);
+final since = cli.date('since', desc: 'Only rows after this date');
 ```
 
 | Declaration | Reads |
@@ -108,6 +110,8 @@ final mode = cli.choice('mode', Mode.values, def: Mode.debug, desc: 'Build mode'
 | `decimal` | `Opt<double>` |
 | `list` | `Opt<List<String>>` |
 | `choice` | `Opt<E>` for an enum `E` |
+| `duration` | `Opt<Duration>` |
+| `date` | `Opt<DateTime?>` |
 
 | Parameter | Effect |
 | :--- | :--- |
@@ -125,6 +129,24 @@ A flag never consumes the token after it, so declaring `verbose` is what keeps
 `choice` takes the enum's own values, so the accepted spellings, the usage
 block and the validation all come from the type rather than a second list that
 can drift from it.
+
+`duration` and `date` read their values through
+[`util.time.span`](util.md#reading-the-other-direction) and `util.time.parse`,
+so every spelling those accept works on the command line:
+
+```dart
+// --timeout 30s   --timeout 1h30m   --timeout 30   (bare means seconds)
+// --since 2024-03-09   --since 09/03/2024   --since '9 Mar 2024'
+```
+
+A value that is not a duration or a date reads as `def`, and `require` reports
+it rather than letting the script run on a timeout nobody asked for. `date` has
+no sensible default, so it reads `null` when nothing was given — `--since`
+exists precisely so a script can tell *not given* from *the beginning of time*:
+
+```dart
+rows.keep((r) => since() == null || r.at.isAfter(since()!));
+```
 
 ### Value Resolution
 

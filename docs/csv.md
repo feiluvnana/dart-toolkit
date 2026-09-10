@@ -11,13 +11,14 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 
 void main() async {
   // Read records keyed by the header line:
-  final rows = await io.csv.maps('people.csv'); // List<Map<String, String>>
-  for (final row in rows) {
-    print('${row['name']} — ${row['role']}');
-  }
+  final rows = await io.csv.maps('people.csv'); // Sequence<Map<String, String>>
+  rows.each((row) => print('${row['name']} — ${row['role']}'));
+
+  // Shaping is the next call, not an import:
+  print(rows.tally((row) => row['role'] ?? ''));
 
   // Write records atomically:
-  await io.csv.write('out/people.csv', rows);
+  await io.csv.write('out/people.csv', rows.list);
 }
 ```
 
@@ -29,12 +30,12 @@ Four readers, one per corner of *keyed or raw* × *all at once or a row at a tim
 
 | | Keyed by the header line | Raw cells |
 | :--- | :--- | :--- |
-| **All at once** | `io.csv.maps(path)` → `Future<List<Map<String, String>>>` | `io.csv.matrix(path)` → `Future<List<List<String>>>` |
+| **All at once** | `io.csv.maps(path)` → `Future<Sequence<Map<String, String>>>` | `io.csv.matrix(path)` → `Future<Sequence<List<String>>>` |
 | **A row at a time** | `io.csv.records(path)` → `Stream<Map<String, String>>` | `io.csv.rows(path)` → `Stream<List<String>>` |
 
 ```dart
-final records = await io.csv.maps('people.csv');     // List<Map<String, String>>
-final grid    = await io.csv.matrix('people.csv');   // List<List<String>>
+final records = await io.csv.maps('people.csv');     // Sequence<Map<String, String>>
+final grid    = await io.csv.matrix('people.csv');   // Sequence<List<String>>
 
 // Streaming, for a file larger than memory:
 await for (final map in io.csv.records('big.csv')) {
@@ -43,6 +44,17 @@ await for (final map in io.csv.records('big.csv')) {
 ```
 
 All four return nothing when the file does not exist. Blank lines are skipped, and short rows are padded with empty strings when reading maps.
+
+The two eager readers hand back a [`Sequence`](util.md#sequence), so the report a script came for is the next call rather than an import:
+
+```dart
+final rows = await io.csv.maps('sales.csv');
+
+rows.group((r) => r['region']!)
+    .seq.to((e) => (region: e.$1, total: e.$2.sum((r) => util.text.number(r['amount']!) ?? 0)))
+    .sort((e) => e.region)
+    .each((e) => print('${e.region}  ${e.total}'));
+```
 
 ---
 
@@ -106,7 +118,7 @@ void main() async {
     'products.csv',
     net.crawl<Map<String, Object?>>('https://shop.example.com/products')
         .stream((res) {
-          for (final row in res.extract({
+          for (final row in res.parse(format.html).extract({
             'items': ['.product', {'name': '.name', 'price': '.price'}],
           })['items']! as List<Map<String, Object?>>) {
             res.emit(row);

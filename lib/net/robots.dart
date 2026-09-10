@@ -7,6 +7,7 @@ library;
 
 import 'dart:async';
 
+import '../util/sequence.dart';
 import 'net.dart';
 
 /// A single Allow or Disallow rule in a `robots.txt` file.
@@ -69,7 +70,7 @@ class Robots {
        _delays = delays;
 
   /// All user agents explicitly declared in the robots file.
-  List<String> get agents => _rules.keys.toList();
+  Sequence<String> get agents => Sequence(_rules.keys.toList());
 
   /// Parses [content] of a `robots.txt` file.
   factory Robots.parse(String content) {

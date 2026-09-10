@@ -14,23 +14,29 @@ void main() {
 
   // `res.$` is a jQuery-like selector over the parsed body: a chainable set
   // whose extraction helpers are getters.
-  log.info('Title:  ${res.$('h1').text}');
-  log.info('Price:  ${res.$('.price').text}');
-  log.info('Tags:   ${res.$('.tag').texts}');
-  log.info('Links:  ${res.$('a').hrefs}');
-  log.info('Data:   ${res.$('#product').dataset}');
+  log.info('Title:  ${res.parse(format.html)('h1').text}');
+  log.info('Price:  ${res.parse(format.html)('.price').text}');
+  log.info('Tags:   ${res.parse(format.html)('.tag').texts}');
+  log.info('Links:  ${res.parse(format.html)('a').hrefs}');
+  log.info('Data:   ${res.parse(format.html)('#product').dataset}');
 
   // Beyond CSS: :contains, :has, :eq, :first, :last, :even, :odd, :gt, :lt,
   // and [attr!=value]. Traversal mirrors jQuery too.
-  log.info('In stock:  ${res.$('.variant:contains("In stock")').texts}');
-  log.info('Non-sale:  ${res.$('.variant[data-sale!=yes]').length}');
-  log.info('Siblings:  ${res.$('.price').siblings().length}');
-  log.info('XPath:     ${res.$xpath('//span[@class="price"]').text}');
+  log.info(
+    'In stock:  ${res.parse(format.html)('.variant:contains("In stock")').texts}',
+  );
+  log.info(
+    'Non-sale:  ${res.parse(format.html)('.variant[data-sale!=yes]').count}',
+  );
+  log.info('Siblings:  ${res.parse(format.html)('.price').siblings().count}');
+  log.info(
+    'XPath:     ${res.parse(format.html).xpath('//span[@class="price"]').text}',
+  );
 
   // The string shorthand, for a first look at an unfamiliar page: 'sel' is
   // text, 'sel@attr' an attribute, ['sel'] every match, and ['sel', {...}] a
   // repeated sub-object. Everything comes back as Object?.
-  final loose = res.extract({
+  final loose = res.parse(format.html).extract({
     'title': 'h1',
     'canonical': 'link[rel="canonical"]@href',
     'tags': ['.tag'],
@@ -46,18 +52,24 @@ void main() {
 
   // Where the type matters, name the field: `pick` keeps it. `map` converts,
   // so a price arrives as a number rather than '$89.00'.
-  final String? title = res.pick(Field.text('h1'));
-  final List<String> skus = res.pick(Field.attrs('.variant', 'data-sku'));
-  final num? price = res.pick(Field.text('.price').map(_price));
+  final String? title = res.parse(format.html).pick(Field.text('h1'));
+  final List<String> skus = res
+      .parse(format.html)
+      .pick(Field.attrs('.variant', 'data-sku'));
+  final num? price = res
+      .parse(format.html)
+      .pick(Field.text('.price').map(_price));
 
   // Or build a record, every field's type intact and no cast anywhere.
   final item = (
     title: title,
     price: price,
-    variants: res.$.all(
-      '.variant',
-      (row) => (name: row('.name').text, sku: row.attr('data-sku')),
-    ),
+    variants: res
+        .parse(format.html)
+        .all(
+          '.variant',
+          (row) => (name: row('.name').text, sku: row.attr('data-sku')),
+        ),
   );
 
   log.ok('$title — $price, skus $skus');

@@ -123,6 +123,42 @@ class SystemAccessor {
   /// first.
   Never exit([int code = 0]) => io.exit(code);
 
+  /// What this program is running on: platform, cores, host and user.
+  ///
+  /// A record rather than five loose members, because it is one struct's worth
+  /// of facts and reading two of them should not mean two accessors:
+  ///
+  /// ```dart
+  /// final machine = system.os;
+  /// await concurrent.run(urls, fetch, size: machine.cpus);
+  /// log.info('${machine.user}@${machine.host} on ${machine.name}');
+  /// ```
+  ///
+  /// [name] is Dart's own `'macos'`, `'linux'`, `'windows'`, `'android'`,
+  /// `'ios'` or `'fuchsia'` — [windows], [macos] and [linux] stay for the
+  /// question a script usually asks. [host] and [user] are `''` when the
+  /// platform will not say.
+  ({String name, int cpus, String host, String user}) get os => (
+    name: Platform.operatingSystem,
+    cpus: Platform.numberOfProcessors,
+    host: _host(),
+    user: _user(),
+  );
+
+  static String _host() {
+    try {
+      return Platform.localHostname;
+    } on Object {
+      // Unavailable in a sandbox, and a hostname is never worth a crash.
+      return '';
+    }
+  }
+
+  static String _user() {
+    final env = Platform.environment;
+    return env['USER'] ?? env['USERNAME'] ?? env['LOGNAME'] ?? '';
+  }
+
   /// Whether the host is Windows.
   bool get windows => Platform.isWindows;
 

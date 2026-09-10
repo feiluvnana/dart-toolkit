@@ -61,14 +61,14 @@ void main() async {
   // `collect` returns a List<Track>. `stream` yields them as they arrive and
   // `save(path)` writes each to disk, so a long crawl never holds its results
   // in memory.
-  for (final track in tracks) {
+  for (final track in tracks.list) {
     log.info('${track.artist} — ${track.album} — ${track.title}');
   }
 }
 
 /// Stage 1, the index: queue every artist, tagged so stage 2 picks them up.
 void _index(Page<Track> res) {
-  for (final link in res.$('.artist a')) {
+  for (final link in res.parse(format.html)('.artist a').elements.list) {
     res.follow(
       link.attributes['href'] ?? '',
       tag: 'artist',
@@ -81,8 +81,9 @@ void _index(Page<Track> res) {
 
 /// Stage 2, an artist: queue their albums, passing the name down.
 void _artist(Page<Track> res) {
-  final name = res.meta.get(artist) ?? res.pick(Field.text('h1'));
-  for (final link in res.$('.album a')) {
+  final name =
+      res.meta.get(artist) ?? res.parse(format.html).pick(Field.text('h1'));
+  for (final link in res.parse(format.html)('.album a').elements.list) {
     res.follow(
       link.attributes['href'] ?? '',
       tag: 'album',
@@ -94,9 +95,12 @@ void _artist(Page<Track> res) {
 /// Stage 3, an album: emit one item per track.
 void _album(Page<Track> res) {
   final by = res.meta.get(artist) ?? '';
-  final on = res.meta.get(album) ?? res.pick(Field.text('h1')) ?? '';
+  final on =
+      res.meta.get(album) ??
+      res.parse(format.html).pick(Field.text('h1')) ??
+      '';
 
-  for (final row in res.$('.track')) {
+  for (final row in res.parse(format.html)('.track').elements.list) {
     final title = util.text.clean(row.query.find('.title').text);
     if (title.isNotEmpty) res.emit((artist: by, album: on, title: title));
   }

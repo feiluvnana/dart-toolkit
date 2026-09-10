@@ -83,6 +83,42 @@ void main() {
   });
 
   group('io Domain', () {
+    test('the path members complete the set', () {
+      expect(io.cwd, isNotEmpty);
+      expect(io.abs('x.txt'), equals(io.join(io.cwd, 'x.txt')));
+      expect(
+        io.rel(io.join(io.cwd, 'a', 'b.txt')),
+        equals(io.join('a', 'b.txt')),
+      );
+      expect(
+        io.rel('/tmp/one/two.txt', from: '/tmp'),
+        equals(io.join('one', 'two.txt')),
+      );
+    });
+
+    test('io.home and io.expand resolve what a shell would', () {
+      expect(io.home, isNotEmpty);
+      expect(io.expand('~'), equals(io.home));
+      expect(
+        io.expand(io.join('~', '.config', 'x')),
+        equals(io.join(io.home, '.config', 'x')),
+      );
+      expect(
+        io.expand('nested/~/x'),
+        equals('nested/~/x'),
+        reason: 'only a leading ~ expands, as in a shell',
+      );
+
+      final name = Platform.isWindows ? 'USERPROFILE' : 'HOME';
+      expect(io.expand('\$$name/x'), equals('${io.home}/x'));
+      expect(io.expand('\${$name}/x'), equals('${io.home}/x'));
+      expect(
+        io.expand('\$DT_DEFINITELY_NOT_SET/x'),
+        equals('/x'),
+        reason: 'an unset name expands to nothing, as in a shell',
+      );
+    });
+
     test('io.sanitize removes or replaces illegal characters', () {
       const raw = 'Key: "Box" / 20th * Edition? <Special> | Path\\';
 
@@ -156,7 +192,7 @@ void main() {
       expect(io.dir(path).replaceAll(r'\', '/'), equals('parent/sub'));
     });
 
-    test('io.dump writes JSON and io.json reads it back', () async {
+    test('io.dump writes JSON and format.json reads it back', () async {
       final temp = io.temp('toolkit_json_');
       try {
         final path = io.join(temp.path, 'data.json');
@@ -165,9 +201,9 @@ void main() {
         final file = io.dump(path, {'hello': 'world', 'count': 42});
         expect(file.existsSync(), isTrue);
 
-        final data = io.json<Map<String, Object?>>(path);
-        expect(data['hello'], equals('world'));
-        expect(data['count'], equals(42));
+        final data = await format.json.read(path);
+        expect(data.text('hello'), equals('world'));
+        expect(data.number('count'), equals(42));
 
         final compact = io.join(temp.path, 'compact.json');
         io.dump(compact, {'a': 1}, pretty: false);
@@ -199,9 +235,9 @@ void main() {
         expect(io.hash(path, Algo.md5).length, equals(32));
         expect(io.stat(path).size, greaterThan(0));
 
-        expect(io.find(temp.path).length, equals(1));
+        expect(io.find(temp.path).count(), equals(1));
         expect(
-          io.find(temp.path, pattern: RegExp(r'\.txt$')).length,
+          io.find(temp.path, pattern: RegExp(r'\.txt$')).count(),
           equals(1),
         );
         expect(io.delete(temp.path, pattern: RegExp(r'\.txt$')), equals(1));
@@ -226,8 +262,8 @@ void main() {
 
         final jsonPath = io.join(temp.path, 'data.json');
         io.dump(jsonPath, {'key': 'val'});
-        final decoded = await io.async.json<Map<String, dynamic>>(jsonPath);
-        expect(decoded['key'], equals('val'));
+        final decoded = await format.json.read(jsonPath);
+        expect(decoded.text('key'), equals('val'));
       } finally {
         temp.deleteSync(recursive: true);
       }
@@ -267,6 +303,18 @@ void main() {
   });
 
   group('system Domain', () {
+    test('system.os is one record of facts, not five members', () {
+      final machine = system.os;
+      expect(machine.name, equals(Platform.operatingSystem));
+      expect(machine.cpus, greaterThan(0));
+      expect(machine.host, isNotNull);
+      expect(machine.user, isNotNull);
+      expect(
+        [system.windows, system.macos, system.linux].where((f) => f).length,
+        lessThanOrEqualTo(1),
+      );
+    });
+
     test('system.which finds dart', () {
       final dart = system.which('dart');
       expect(dart, isNotNull);
@@ -687,10 +735,10 @@ void main() async {
 
       expect(res.ok, isTrue);
       expect(res.body, contains('Welcome'));
-      expect(res.$('h1').text, equals('Welcome'));
-      expect(res.$('a').href, equals('/sub/page'));
-      expect(res.$('img').src, equals('/images/pic.png'));
-      expect(res.$.lines, contains('Welcome'));
+      expect(res.parse(format.html)('h1').text, equals('Welcome'));
+      expect(res.parse(format.html)('a').href, equals('/sub/page'));
+      expect(res.parse(format.html)('img').src, equals('/images/pic.png'));
+      expect(res.parse(format.html).lines, contains('Welcome'));
 
       final temp = io.temp('http_test_');
       try {
@@ -725,9 +773,12 @@ void main() async {
       try {
         final res = await net.http.get('$root/hello'.url);
         expect(res.ok, isTrue);
-        expect((res.json as Map<String, Object?>)['message'], 'hello world');
+        expect(
+          (res.parse(format.json).raw as Map<String, Object?>)['message'],
+          'hello world',
+        );
         // json is cached, so a second read is free and consistent.
-        expect(res.json, same(res.json));
+        expect(res.parse(format.json).raw, same(res.parse(format.json).raw));
 
         final posted = await net.http.post(
           '$root/echo'.url,
@@ -805,7 +856,7 @@ void main() async {
         // decode fallback
         final notJsonRes = await net.http.get('$root/not-json'.url);
         expect(
-          notJsonRes.decode({'fallback': true}),
+          notJsonRes.parse(format.json).raw ?? ({'fallback': true}),
           equals({'fallback': true}),
         );
 
@@ -853,7 +904,7 @@ void main() async {
         final res = await net.http.get(
           'http://${server.address.host}:${server.port}'.url,
         );
-        final extracted = res.extract({
+        final extracted = res.parse(format.html).extract({
           'title': 'h1',
           'canonical': 'a.canonical@href',
           'categories': ['ul.categories > li'],
@@ -901,8 +952,8 @@ void main() async {
         try {
           final loginRes = await client.get('$root/login'.url);
           expect(loginRes.body, equals('logged in'));
-          expect(client.jar?.cookies.length, equals(1));
-          expect(client.jar?.cookies.first.name, equals('session_id'));
+          expect(client.jar?.cookies.count(), equals(1));
+          expect(client.jar?.cookies.first!.name, equals('session_id'));
 
           // Next request sends cookie
           final profileRes = await client.get('$root/profile'.url);
@@ -1006,14 +1057,17 @@ void main() async {
           ]);
 
           final rows = await io.csv.maps(path);
-          expect(rows.length, equals(2));
-          expect(rows[0]['fruit'], equals('Apple'));
-          expect(rows[0]['price'], equals('1.50'));
+          expect(rows.count(), equals(2));
+          expect(rows.first?['fruit'], equals('Apple'));
+          expect(rows.first?['price'], equals('1.50'));
 
           final grid = await io.csv.matrix(path);
-          expect(grid.length, equals(3)); // header plus two data rows
+          expect(grid.count(), equals(3)); // header plus two data rows
 
-          expect(await io.csv.maps(io.join(temp.path, 'missing.csv')), isEmpty);
+          expect(
+            (await io.csv.maps(io.join(temp.path, 'missing.csv'))).empty,
+            isTrue,
+          );
         } finally {
           temp.deleteSync(recursive: true);
         }
@@ -1035,7 +1089,7 @@ void main() async {
           ),
         );
         expect(
-          await io.csv.matrix(path),
+          (await io.csv.matrix(path)).list,
           equals([
             ['n', 'letter'],
             ['1', 'a'],
@@ -1108,7 +1162,7 @@ void main() async {
         await db.save();
 
         expect(
-          io.json<Map<String, Object?>>(path)['since'],
+          (await format.json.read(path)).text('since'),
           equals('2026-03-01T00:00:00.000Z'),
         );
         expect(
@@ -1223,13 +1277,20 @@ void main() async {
       expect(util.size.parse('nonsense'), equals(0));
     });
 
-    test('git inspects the repository', () async {
-      expect(await tool.git.branch(), isNotEmpty);
-      final hash = await tool.git.hash();
-      expect(hash.length, greaterThanOrEqualTo(7));
-      expect(await tool.git.hash(full: true), startsWith(hash));
-      expect(await tool.git.dirty(), isA<bool>());
-      expect(await tool.git.status(), isA<String>());
+    test('an executable is system.run, not a wrapper', () async {
+      // `tool.git` was tried and removed: a wrapper only ever has the five
+      // subcommands somebody thought to add, where `system.run` has all of
+      // git. This is what the migration looks like.
+      final branch = await system.run('git', [
+        'rev-parse',
+        '--abbrev-ref',
+        'HEAD',
+      ]);
+      expect(branch.ok, isTrue);
+      expect(branch.out.trim(), isNotEmpty);
+
+      final hash = await system.run('git', ['rev-parse', '--short', 'HEAD']);
+      expect(hash.out.trim().length, greaterThanOrEqualTo(7));
     });
 
     test('extensions build Durations and Uris', () {
@@ -1286,29 +1347,22 @@ void main() async {
       },
     );
 
-    test('git mutating methods return SysResult', () async {
-      // In a throwaway repo, never this one. These calls used to run in the
-      // project directory on the assumption that nothing would be staged, so
-      // a developer with staged work got it committed by the test suite.
+    test('a failing subprocess reports rather than throwing', () async {
+      // In a throwaway repo, never this one.
       final repo = Directory.systemTemp.createTempSync('dt_git_');
       final cwd = repo.path;
       try {
-        await tool.git.run(['init', '-q'], cwd);
-        await tool.git.run(['config', 'user.email', 'test@example.com'], cwd);
-        await tool.git.run(['config', 'user.name', 'Test'], cwd);
+        await system.run('git', ['init', '-q'], cwd: cwd);
 
         // Nothing staged, so the commit fails and says why.
-        final result = await tool.git.commit('test empty commit', cwd: cwd);
+        final result = await system.run('git', [
+          'commit',
+          '-m',
+          'test empty commit',
+        ], cwd: cwd);
         expect(result, isA<SysResult>());
         expect(result.ok, isFalse);
         expect(result.out.isNotEmpty || result.err.isNotEmpty, isTrue);
-
-        final addResult = await tool.git.add('non_existent_file_xyz.txt', cwd);
-        expect(addResult, isA<SysResult>());
-
-        final markResult = await tool.git.mark('--invalid-flag-fails', cwd);
-        expect(markResult, isA<SysResult>());
-        expect(markResult.ok, isFalse);
       } finally {
         repo.deleteSync(recursive: true);
       }
@@ -1327,12 +1381,12 @@ void main() async {
       // Selectors live on the top-level $, not on net. Like jQuery, find()
       // searches descendants, so a root-level match is read directly.
       expect(
-        net.$('<h1 class="title">Domain Test</h1>').text,
+        format.html.parse('<h1 class="title">Domain Test</h1>').text,
         equals('Domain Test'),
       );
       expect(
-        net
-            .$('<div><h1 class="title">Domain Test</h1></div>')
+        format.html
+            .parse('<div><h1 class="title">Domain Test</h1></div>')
             .find('.title')
             .text,
         equals('Domain Test'),
@@ -1353,15 +1407,18 @@ void main() async {
       expect(cli, isA<CliAccessor>());
     });
 
-    test('tool exposes git and zip', () {
-      expect(tool.git, isA<GitAccessor>());
-      expect(tool.zip, isA<ZipAccessor>());
+    test('tool holds the formats, and only the formats', () {
+      expect(format.zip, isA<ZipAccessor>());
+      expect(format.json, isA<JsonAccessor>());
+      expect(format.yaml, isA<YamlAccessor>());
+      expect(format.toml, isA<TomlAccessor>());
     });
 
-    test('util exposes time, size, text, hash and rand', () {
+    test('util exposes time, size, text, json, hash and rand', () {
       expect(util.time, isA<TimeAccessor>());
       expect(util.size, isA<SizeAccessor>());
       expect(util.text, isA<TextAccessor>());
+      expect(format.json, isA<JsonAccessor>());
       expect(util.hash, isA<HashAccessor>());
       expect(util.rand, isA<RandAccessor>());
     });

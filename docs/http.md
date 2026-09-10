@@ -1,6 +1,8 @@
 # HTTP Networking (`net.http.*`)
 
-A retrying HTTP client whose responses know how to query their own HTML, decode JSON safely, handle sessions and cookies, and resolve their own relative links.
+A retrying HTTP client that handles sessions, cookies, redirects, caching and retries, and resolves its own relative links.
+
+**It parses nothing.** A crawler fetches JSON, sitemaps, archives and images as readily as it fetches pages, so a `Reply` carries the bytes, the text and the headers, and reading them is `res.parse(codec)` with a codec from [`format`](html.md).
 
 URLs are always `Uri` values, matching `package:http`. The `.url` extension keeps call sites short.
 
@@ -15,7 +17,7 @@ void main() async {
   final res = await net.http.get('https://news.ycombinator.com'.url);
 
   if (res.ok) {
-    for (final title in res.$('.titleline > a').texts) {
+    for (final title in res.parse(format.html)('.titleline > a').texts) {
       print(title);
     }
   }
@@ -58,21 +60,18 @@ A `<form>` on a page builds its own `Body.form` — see [docs/form.md](form.md).
 res.ok;             // status in 200..299
 res.status;         // HTTP status code (e.g. 200, 404)
 res.headers;        // response headers map
+res.type;           // MIME type from Content-Type, e.g. 'text/html'
 res.body;           // decoded text with charset auto-detection, cached
-res.json;           // decoded JSON, cached (throws on invalid JSON)
-res.decode(null);   // safely decodes JSON or returns fallback
+res.bytes;          // the raw body
 res.charset;        // detected encoding (e.g. 'utf-8', 'iso-8859-1')
 res.url;            // final URL after following redirects
-res.requestedUrl;   // initial requested URL
-res.doc;            // parsed HTML document, cached
+res.requested;      // initial requested URL
+res.cached;         // whether it came from an HttpCache rather than the network
 
-// DOM & XPath Selection:
-res.$('h1').text;               // text of first h1 match
-res.$('a').hrefs;               // all href attributes
-res.$('a').href;                // first href attribute
-res.$('img').srcs;              // all src attributes
-res.$('div').lines;             // text split on <br> and newlines
-res.$xpath('//h1').texts;       // XPath query text list
+// Reading the body — one member, and it names no format:
+res.parse(format.html);         // Markup
+res.parse(format.json);         // Json
+res.parse(format.yaml);         // Json
 
 // Resolved absolute URIs:
 res.links();                    // List<Uri> resolved against res.url
@@ -80,6 +79,70 @@ res.srcs();                     // List<Uri> for images/scripts resolved against
 
 await res.save('out/page.html'); // saves response bytes atomically
 ```
+
+### Reading a body (`Reply.parse`)
+
+`parse` takes a `Codec` — every accessor under `format` is one — and hands back
+that format's cursor. It is the only door from a response to a document, which
+is what lets one crawl handle more than one format:
+
+```dart
+final items = switch (res.type) {
+  'application/json' => res.parse(format.json).at('items').all(Item.from),
+  _                  => res.parse(format.html).find('.item').all(Item.from),
+};
+```
+
+Results are memoised per codec, so a handler that reads one page five times
+parses it once. Nothing throws: a body that is not the format asked for is the
+empty cursor, the same as a missing path.
+
+**Migrating from 3.x.** `Reply` used to carry the formats itself — five HTML
+members and three JSON ones, on a class that is about HTTP:
+
+| 3.x | 4.0.0 |
+| :--- | :--- |
+| `res.$('h1').text` | `res.parse(format.html)('h1').text` |
+| `res.$xpath('//h1')` | `res.parse(format.html).xpath('//h1')` |
+| `res.doc` | `res.parse(format.html).document` |
+| `res.extract({...})` | `res.parse(format.html).extract({...})` |
+| `res.pick(field)` | `res.parse(format.html).pick(field)` |
+| `res.json` | `res.parse(format.json).raw` |
+| `res.decode(fallback)` | `res.parse(format.json).raw ?? fallback` |
+| `res.at('data.items')` | `res.parse(format.json).at('data.items')` |
+| `res.form('#login')` | `res.parse(format.html).form('#login')!.at(res.url)` |
+
+A handler that reads a page more than once names the cursor:
+
+```dart
+final page = res.parse(format.html);
+page.find('h1').text;
+page.find('a').hrefs;
+```
+
+### Typed JSON
+
+`res.parse(format.json).raw` is `Object?`, so every read off it is a cast. The
+[`Json`](json.md) cursor is the typed door, where nothing is cast and a path
+that is not there reads empty:
+
+```dart
+final doc = (await net.http.get('https://api.example.com/products'.url))
+    .parse(format.json);
+
+doc.number('data.total');                      // num?
+doc.text('meta.cursor');
+
+final items = doc.at('data.items').all((item) => (
+  sku: item.text('sku'),
+  price: item.number('price.amount'),
+));                                            // Sequence<({...})>
+
+doc.jsonpath(r'$..price').sift((p) => p.number());
+```
+
+A body that is not JSON at all is the empty cursor too, so this never needs a
+`try`.
 
 ### Charset Detection
 
@@ -96,10 +159,10 @@ section a page has at most one of:
 
 ```dart
 final product = (
-  title: res.$('h1.title').text,
-  price: res.pick(Field.text('.price').when(util.text.number)),
-  categories: res.$('ul.breadcrumbs > li').texts,
-  reviews: res.$.all('.review', (row) => (
+  title: res.parse(format.html)('h1.title').text,
+  price: res.parse(format.html).pick(Field.text('.price').when(util.text.number)),
+  categories: res.parse(format.html)('ul.breadcrumbs > li').texts,
+  reviews: res.parse(format.html).all('.review', (row) => (
     user: row('.author').text,
     rating: row.pick(Field.attr('.stars', 'data-rating').when(int.tryParse)),
     comment: row('.body').text,
@@ -109,7 +172,7 @@ final product = (
 product.reviews.first.rating;   // int?, no cast anywhere
 ```
 
-Nothing here is `Object?`. `all` hands each match its own `QueryResult`, so a
+Nothing here is `Object?`. `all` hands each match its own `Markup`, so a
 nested read cannot accidentally match the whole page — the mistake that made
 repeated sub-objects worth having a helper for.
 
@@ -122,10 +185,10 @@ repeated sub-objects worth having a helper for.
 A `Field<T>` is one typed read, usable off a page or inside `all`:
 
 ```dart
-final String? title = res.pick(Field.text('h1.title'));
-final List<String> tags = res.pick(Field.texts('ul.tags > li'));
-final List<String> hrefs = res.pick(Field.attrs('a', 'href'));
-final int reviews = res.pick(Field.fn((el) => el.querySelectorAll('.review').length));
+final String? title = res.parse(format.html).pick(Field.text('h1.title'));
+final List<String> tags = res.parse(format.html).pick(Field.texts('ul.tags > li'));
+final List<String> hrefs = res.parse(format.html).pick(Field.attrs('a', 'href'));
+final int reviews = res.parse(format.html).pick(Field.fn((el) => el.querySelectorAll('.review').length));
 ```
 
 The cases are `Field.text`, `Field.attr`, `Field.texts`, `Field.attrs`,
@@ -151,7 +214,7 @@ For a first look at an unfamiliar page, `extract` takes a schema of strings and
 hands back `Map<String, Object?>`:
 
 ```dart
-final data = res.extract({
+final data = res.parse(format.html).extract({
   'title': 'h1.title',
   'price': '.price@text',
   'canonical': 'link[rel="canonical"]@href',
@@ -165,6 +228,19 @@ for exploring rather than the one for a pipeline you are going to keep.
 `Field`s mix freely into the same schema.
 
 ---
+
+### Rate limits
+
+A `Fetcher` can carry a [`Limiter`](concurrent.md#how-often-not-how-many-concurrentrate),
+which is where a rate belongs when it is the server's rather than the script's:
+
+```dart
+final api = Fetcher(limiter: concurrent.rate(10, per: 1.s));
+await concurrent.run(urls, api.get, size: 8);   // 8 in flight, 10 per second
+```
+
+Every attempt takes a token, retries included, because the server counts those
+too.
 
 ### Forms
 
@@ -319,6 +395,7 @@ final client = Fetcher(
   retries: 5,
   base: 'downloads',
   proxy: 'http://proxy.internal:3128',
+  limiter: concurrent.rate(10, per: 1.s),
 );
 
 await client.download(url, 'album/track.mp3'); // -> downloads/album/track.mp3
@@ -336,5 +413,7 @@ await net.use(Fetcher(headers: {'Authorization': 'Bearer $token'}));
 ## See Also
 
 - [`net.crawl`](crawl.md) — multi-page pipelines
-- [`$()`](selector.md) — the selector API used by `res.$`
+- [`net.serve`](serve.md) — the other direction: something that listens
+- [`format.html`](html.md) — the `Markup` cursor `res.parse(format.html)` hands back
+- [`format.json`](json.md) — the cursor `res.at` returns
 

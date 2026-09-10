@@ -7,6 +7,7 @@ library;
 
 import 'dart:async';
 
+import '../util/sequence.dart';
 import 'net.dart';
 
 /// Sitemap parser and fetcher.
@@ -19,10 +20,10 @@ class Sitemap {
   /// Whether [content] represents a sitemap index rather than a leaf sitemap.
   static bool nested(String content) => content.contains('<sitemapindex');
 
-  /// Parses [content] into a list of [Uri]s.
+  /// Parses [content] into the [Uri]s it names.
   ///
   /// Supports XML `<urlset>`, `<sitemapindex>`, and newline-delimited plain text.
-  static List<Uri> parse(String content) {
+  static Sequence<Uri> parse(String content) {
     final matches = _locRegex.allMatches(content);
     if (matches.isNotEmpty) {
       final uris = <Uri>[];
@@ -35,7 +36,7 @@ class Sitemap {
           }
         }
       }
-      return List.unmodifiable(uris);
+      return Sequence(List<Uri>.unmodifiable(uris));
     }
 
     // Plain-text sitemap: one URL per line
@@ -50,7 +51,7 @@ class Sitemap {
         uris.add(uri);
       }
     }
-    return List.unmodifiable(uris);
+    return Sequence(List<Uri>.unmodifiable(uris));
   }
 
   /// The deepest chain of sitemap indices [load] will follow.
@@ -63,7 +64,7 @@ class Sitemap {
   /// points back at itself, or at another index that points back to it, is
   /// followed only once: every fetched URL is remembered, and the descent
   /// stops at [maxDepth] regardless.
-  static Future<List<Uri>> load(
+  static Future<Sequence<Uri>> load(
     Uri url, {
     Fetcher? client,
     bool recursive = true,
@@ -76,35 +77,37 @@ class Sitemap {
     visited: <String>{},
   );
 
-  static Future<List<Uri>> _load(
+  static Future<Sequence<Uri>> _load(
     Uri url,
     Fetcher client, {
     required bool recursive,
     required int remaining,
     required Set<String> visited,
   }) async {
-    if (!visited.add(url.removeFragment().toString())) return const [];
+    if (!visited.add(url.removeFragment().toString())) {
+      return const Sequence<Uri>([]);
+    }
 
     final res = await client.get(url);
-    if (!res.ok) return const [];
+    if (!res.ok) return const Sequence<Uri>([]);
 
     final isIdx = nested(res.body);
     final uris = parse(res.body);
 
     if (isIdx && recursive && remaining > 0) {
       final results = <Uri>[];
-      for (final childUrl in uris) {
+      for (final childUrl in uris.list) {
         results.addAll(
-          await _load(
+          (await _load(
             childUrl,
             client,
             recursive: true,
             remaining: remaining - 1,
             visited: visited,
-          ),
+          )).list,
         );
       }
-      return List.unmodifiable(results);
+      return Sequence(List<Uri>.unmodifiable(results));
     }
 
     return uris;

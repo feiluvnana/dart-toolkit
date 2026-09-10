@@ -1,48 +1,90 @@
-# jQuery-like Selectors (`$()`)
+# HTML (`format.html`)
 
-A chainable wrapper over `package:html`. `$()` parses markup into a queryable `QueryResult`.
+The format codec for HTML, spelled like `format.json`, `format.yaml` and
+`format.toml`: `parse`, `read`, `format`. It hands back a `Markup` cursor —
+a chainable set of matched elements over `package:html`.
+
+Before 4.0.0 this lived in `net` as a `$` bolted to the side of a response,
+which is why a crawler could only really read one format. Now `net` fetches
+bytes and `format` reads them:
+
+```dart
+final res  = await net.http.get(url);
+final page = res.parse(format.html);
+
+page.find('h1').text;
+page.find('a').hrefs;
+```
 
 ---
 
 ## Quick Overview
 
-Top-level `$` and `$xpath` can be imported from `package:dart_toolkit/selector.dart`, or accessed via `net.$` / `net.$xpath`, or called directly on HTML strings (`markup.$('...')`) and HTTP responses (`res.$('...')`).
-
 ```dart
-import 'package:dart_toolkit/selector.dart';
+import 'package:dart_toolkit/dart_toolkit.dart';
 
 void main() {
-  const html = '''
+  const markup = '''
     <ul class="tracks">
       <li class="track" data-id="1"><a href="/t/1">Track One</a></li>
       <li class="track bonus" data-id="2"><a href="/t/2">Track Two</a></li>
     </ul>
   ''';
 
-  print($(html, '.track a').texts);   // [Track One, Track Two]
-  print($(html, '.bonus').data('id'));      // 2
+  final page = format.html.parse(markup);
+
+  print(page.find('.track a').texts);   // [Track One, Track Two]
+  print(page.find('.bonus').data('id'));      // 2
 }
+```
+
+The jQuery `$` is the same thing under its own name, kept off the default
+surface because `$` in every script's global scope is a cost not every script
+wants to pay:
+
+```dart
+import 'package:dart_toolkit/dart_toolkit.dart';
+import 'package:dart_toolkit/html.dart';
+
+print($(markup, '.track a').texts);
+print(markup.$('.bonus').data('id'));
 ```
 
 ---
 
 ## 1. Entry Points
 
-There is exactly one clean way to reach each shape:
-
 | Expression | Import / Receiver | Meaning |
 | :--- | :--- | :--- |
-| `$(markup, [selector])` | `package:dart_toolkit/selector.dart` | Parse markup into a `QueryResult` |
-| `$xpath(markup, [query])` | `package:dart_toolkit/selector.dart` | Parse markup into an XPath `QueryResult` |
-| `net.$(markup, [selector])` | `dart_toolkit.dart` | Top-level selector via `net` singleton |
-| `net.$xpath(markup, [query])` | `dart_toolkit.dart` | Top-level XPath via `net` singleton |
-| `markup.$(selector)` | `String` extension | Parse HTML string and query it |
-| `markup.$xpath(query)` | `String` extension | Parse HTML string and query via XPath |
-| `response.$(selector)` | `Reply` / `Page` | Query parsed HTML response body |
-| `response.$xpath(query)` | `Reply` / `Page` | Query response body via XPath |
+| `format.html.parse(text)` | `dart_toolkit.dart` | Parse markup into a `Markup` |
+| `format.html.query(text)` | `dart_toolkit.dart` | Parse markup into an XPath `Markup` |
+| `format.html.fragment(text)` | `dart_toolkit.dart` | Parse a piece of a page, unwrapped |
+| `format.html.read(path)` | `dart_toolkit.dart` | Read and parse a file |
+| `format.html.format(markup)` | `dart_toolkit.dart` | Render a cursor back to HTML text |
+| `res.parse(format.html)` | `Reply` / `Page` | The response body, parsed once and memoised |
+| `$(markup, [selector])` | `package:dart_toolkit/html.dart` | The jQuery spelling of `parse` |
+| `$xpath(markup, [query])` | `package:dart_toolkit/html.dart` | The jQuery spelling of `query` |
+| `markup.$(selector)` | `String` extension | Parse an HTML string and query it |
+| `markup.$xpath(query)` | `String` extension | The same, for XPath |
 | `element.$(selector)` | `Element` extension | Query within an existing element |
-| `result.find(selector)` | `QueryResult` | Query descendants of current matches |
-| `result(selector)` | `QueryResult` | Callable shorthand for `.find(...)` |
+| `page.find(selector)` | `Markup` | Search the page, or the current set |
+| `page(selector)` | `Markup` | Callable shorthand for `find` |
+
+### One search, two spellings
+
+`find` and the callable are the same operation. On a cursor rooted on a
+document — what `format.html.parse` and `res.parse(format.html)` give back —
+both search the whole page. On a scoped cursor both search the descendants of
+the current set, so chaining means what it reads as:
+
+```dart
+page.find('.row').find('.name').texts;   // names inside rows, only
+```
+
+Before 4.0.0 these were two different searches, and on a page cursor
+`find('h1')` missed an `<h1>` at the top level of the body while `('h1')`
+found it. `matching(selector)` is how you ask whether the set *itself*
+qualifies.
 
 ### Full jQuery Selectors
 
@@ -57,11 +99,11 @@ The `$` selection supports full jQuery selector syntax, not just standard CSS:
 - **Attribute inequality**: `[attr!="val"]`
 
 ```dart
-res.$('a:contains("More")');       // First link containing "More"
-res.$('div:has(p.desc)');          // Divs containing a p.desc
-res.$('ul > li:even');             // Even list items (0, 2, ...)
-res.$(':header');                  // All headers (h1..h6)
-res.$xpath('//a[@class="link"]');  // XPath selection
+res.parse(format.html)('a:contains("More")');       // First link containing "More"
+res.parse(format.html)('div:has(p.desc)');          // Divs containing a p.desc
+res.parse(format.html)('ul > li:even');             // Even list items (0, 2, ...)
+res.parse(format.html)(':header');                  // All headers (h1..h6)
+res.parse(format.html).xpath('//a[@class="link"]');  // XPath selection
 ```
 
 ---
@@ -69,7 +111,7 @@ res.$xpath('//a[@class="link"]');  // XPath selection
 ## 2. Traversal
 
 ```dart
-final result = res.$('.main');
+final result = res.parse(format.html)('.main');
 
 result.find('.child');       // descendants matching selector
 result.children();           // direct children
@@ -80,8 +122,8 @@ result.siblings();           // sibling elements
 result.prev();               // previous sibling
 result.next();               // next sibling
 
-result.at(0);                // single-element QueryResult
-result.at(-1);               // last element; out-of-range yields an empty QueryResult
+result.at(0);                // single-element Markup
+result.at(-1);               // last element; out-of-range yields an empty Markup
 result[0];                   // Element?, or null if out of range
 ```
 
@@ -122,13 +164,13 @@ All plural property extractors are getters returning `List<String>` across all m
 Extracting attributes from a query result:
 
 ```dart
-final firstHref = res.$('a.morelink').href;          // single href (String?)
-final allHrefs  = res.$('a.morelink').hrefs;         // all hrefs (List<String>)
-final firstSrc  = res.$('img.thumb').src;            // single src (String?)
-final allSrcs   = res.$('img.thumb').srcs;           // all srcs (List<String>)
-final titleText = res.$('h1.title').text;            // text of h1 (String)
-final allTitles = res.$('.titleline > a').texts;     // all texts (List<String>)
-final xpathText = res.$xpath('//h2').texts;          // XPath text list
+final firstHref = res.parse(format.html)('a.morelink').href;          // single href (String?)
+final allHrefs  = res.parse(format.html)('a.morelink').hrefs;         // all hrefs (List<String>)
+final firstSrc  = res.parse(format.html)('img.thumb').src;            // single src (String?)
+final allSrcs   = res.parse(format.html)('img.thumb').srcs;           // all srcs (List<String>)
+final titleText = res.parse(format.html)('h1.title').text;            // text of h1 (String)
+final allTitles = res.parse(format.html)('.titleline > a').texts;     // all texts (List<String>)
+final xpathText = res.parse(format.html).xpath('//h2').texts;          // XPath text list
 ```
 
 `lines` is built for `<br>`-separated blocks like tracklists, and decodes entities on the way out:
@@ -142,18 +184,18 @@ final list = $('<div>01. First<br>02. Tom &amp; Jerry</div>').lines;
 
 Every reader above hands back a `String` or a `List<String>`. To get a *shape*
 out of a page with each field's type intact, build a record: `all` gives each
-match its own scoped `QueryResult`, `one` does the same for a section a page
+match its own scoped `Markup`, `one` does the same for a section a page
 has at most one of, and `pick` reads a `Field` at any depth.
 
 ```dart
-final variants = res.$.all('.variant', (row) => (
+final variants = res.parse(format.html).all('.variant', (row) => (
   name: row('.name').text,
   sku: row.attr('data-sku'),
   qty: row.pick(Field.text('.qty').when(int.tryParse)),
 ));
 // List<({String name, String? sku, int? qty})>
 
-final seller = res.$.one('.seller', (s) => (
+final seller = res.parse(format.html).one('.seller', (s) => (
   name: s('.name').text,
   rating: s.pick(Field.text('.rating').when(util.text.number)),
 ));
@@ -168,9 +210,9 @@ A whole page is the same idea with no wrapper:
 
 ```dart
 final product = (
-  title: res.$('h1').text,
-  price: res.pick(Field.text('.price').when(util.text.number)),
-  variants: res.$.all('.variant', (row) => (sku: row.attr('data-sku'))),
+  title: res.parse(format.html)('h1').text,
+  price: res.parse(format.html).pick(Field.text('.price').when(util.text.number)),
+  variants: res.parse(format.html).all('.variant', (row) => (sku: row.attr('data-sku'))),
 );
 ```
 
@@ -189,9 +231,9 @@ Text comes back the way a browser draws it: runs of spaces and newlines collapse
 ```
 
 ```dart
-res.$('.name').text;                  // 'Wireless Keyboard'
-res.extract({'name': '.name'});       // {'name': 'Wireless Keyboard'}
-res.pick(Field.text('.name'));        // 'Wireless Keyboard'
+res.parse(format.html)('.name').text;                  // 'Wireless Keyboard'
+res.parse(format.html).extract({'name': '.name'});       // {'name': 'Wireless Keyboard'}
+res.parse(format.html).pick(Field.text('.name'));        // 'Wireless Keyboard'
 ```
 
 Inside a `<pre>` or a `<textarea>` the whitespace *is* the content, so there it is kept and only trimmed — a scraped code sample survives intact. `util.text.clean` does the same job to a plain string.
@@ -208,31 +250,39 @@ Inside a `<pre>` or a `<textarea>` the whitespace *is* the content, so there it 
 | anything else | Its `value` attribute |
 
 ```dart
-final form = res.$('form');
+final form = res.parse(format.html)('form');
 final size = form.find('select[name=size]').value;   // 'm'
 final ticked = form.find('input[type=checkbox]').values;  // only the checked ones
 ```
 
-> `QueryResult.links()` returns **raw** attribute strings. To get absolute URLs, use `Reply.links()`, which resolves against the response URL.
+> `Markup.links()` returns **raw** attribute strings. To get absolute URLs, use `Reply.links()`, which resolves against the response URL.
 
 ---
 
-## 4. It Is a Real Iterable
+## 4. It Holds a `Sequence`
 
-`QueryResult` mixes in `Iterable<Element>`, so the standard library works directly:
+Through 2.0.0 `Markup` mixed in `Iterable<Element>`, which put Dart's whole
+collection vocabulary next to this library's on every selector result — and is
+how `every` came to mean `Iterable.every` here. It now **holds** a
+[`Sequence`](util.md#6-sequences-sequencet) instead of being an `Iterable`, so
+the element-level work has one spelling:
 
 ```dart
-for (final el in $(html).find('.track')) {
-  print(el.attr('data-id'));
-}
+final tracks = $(html).find('.track');
 
-$(html).find('.track').map((e) => e.text).toList();
-$(html).find('.track').where((e) => e.classes.contains('bonus'));
-$(html).find('.track').length;
-$(html).find('.track').firstOrNull;
+tracks.count;                                   // how many matched
+tracks.empty;                                   // and no complement
+tracks.elements.each((el) => print(el.attr('data-id')));
+tracks.elements.to((e) => e.text).list;
+tracks.elements.keep((e) => e.classes.contains('bonus')).count();
+tracks.elements.first;                          // Element? — nullable, never throws
 ```
 
-`each` is available when you want the element and its index:
+`elements` is the sequence of matched `Element`s; everything else on
+`Markup` — `find`, `at`, `filter`, `children`, `texts`, `all`, `one` — is
+unchanged and still returns markup-shaped answers rather than raw elements.
+
+`each` on the `Markup` itself still gives you the element and its index:
 
 ```dart
 $(html).find('.track').each((el, i) => print('$i: ${el.text}'));

@@ -1,6 +1,6 @@
 # File System & Paths (`io.*`)
 
-The `io` domain provides atomic file writes, zero-dependency path manipulation, streaming downloads and recursive searches.
+The `io` domain provides atomic file writes, zero-dependency path manipulation, streaming downloads, recursive searches, filesystem watching and inter-process locking.
 
 Paths are plain strings throughout. Given a `File`, pass its `.path`.
 
@@ -72,23 +72,29 @@ await io.async.write('out/notes.txt', 'hello');
 | `io.async.read(path)` | `Future<String>` (async) |
 | `io.bytes(path)` | `List<int>` (sync) |
 | `io.async.bytes(path)` | `Future<List<int>>` (async) |
-| `io.json<T>(path, [parse])` | `T`, decoded from JSON (sync) |
-| `io.async.json<T>(path, [parse])` | `Future<T>`, decoded from JSON (async) |
 | `io.lines(path)` | `Stream<String>`, without loading the file |
 
 ```dart
-final data = io.json<Map<String, Object?>>('out/data.json');
-final asyncData = await io.async.json<Map<String, Object?>>('out/data.json');
-
-// Pass a parser to build a real type, rather than casting the decoded maps
-// and lists at every read. Without one, the decoded value is cast to T —
-// which throws when the document is not the shape the call site claimed.
-final config = io.json('config.json', Config.fromJson);
-
 await for (final line in io.lines('big.log')) {
   if (line.contains('ERROR')) print(line);
 }
 ```
+
+Reading a JSON *document* is [`format.json.read`](json.md), beside `format.yaml` and
+`format.toml`: a format is knowledge from outside Dart, so all three live in one
+family rather than one of them here.
+
+```dart
+io.dump('out/data.json', {'count': 42, 'hosts': ['a', 'b']});
+
+final doc = await format.json.read('out/data.json');
+doc.number('count');                    // 42
+doc.at('hosts').texts();                // Sequence<String>
+doc.jsonpath(r'$.hosts[*]');            // Sequence<Json>
+```
+
+`io.dump` stays here, because staging a write through a `.part` file is this
+domain's job rather than the format's.
 
 ---
 
@@ -114,7 +120,25 @@ io.base(p);  // 'file.mp3'
 io.name(p);  // 'file'
 io.ext(p);   // '.mp3'
 io.dir(p);   // 'parent/sub'
+io.abs(p);   // absolute against the current directory
+io.rel(p);   // relative to the current directory
+io.rel(p, from: '/srv');
 ```
+
+The facts about where a script is running, and the `~` nothing in `dart:io`
+resolves:
+
+```dart
+io.cwd;                                  // the current working directory
+io.home;                                 // $HOME, %USERPROFILE% on Windows
+io.expand('~/.config/mytool/cfg.json');  // ~ only at the start, as a shell does
+io.expand(r'$XDG_CACHE_HOME/mytool');    // $VAR and ${VAR}; unset expands to ''
+```
+
+These are one line of `package:path` or `Platform` each, which is the point:
+they were absent, not hard, and their absence is what sent a script back to
+`dart:io` for the least interesting reason available. The rest of the machine
+is [`system.os`](system.md).
 
 `io.sanitize` strips characters that are illegal in filenames:
 
@@ -156,6 +180,84 @@ await io.async.hash(path);           // sha256 (async)
 io.stat(path).size;
 await io.async.stat(path);
 ```
+
+`io.find` hands back a [`Sequence`](util.md#6-sequences-sequencet), so
+filtering and grouping the result is the next call:
+
+```dart
+final logs = io.find('var/log', pattern: RegExp(r'\.log$'));
+logs.count();
+logs.best((f) => io.stat(f.path).size)?.path;      // the biggest one
+logs.group((f) => io.ext(f.path));
+```
+
+---
+
+## 6. Watching (`io.observe`)
+
+Rebuild-on-change, re-run-on-save, reload-the-config. Returns the function that
+stops it — hold onto it, because a live watcher keeps the process alive:
+
+```dart
+final stop = io.observe(
+  'lib',
+  (changed) => system.console.logger.info('changed: $changed'),
+  pattern: RegExp(r'\.dart$'),
+  settle: 200.ms,
+);
+
+// ... later
+await stop();
+```
+
+`settle` coalesces a burst of events for one path into a single call, which is
+the part everyone hand-rolls wrong: an editor writes a file two or three times
+per save, so the naive version fires three builds. Pass `Duration.zero` for
+every raw event.
+
+Only files are reported, filtered by `pattern` when one is given. A directory
+created later is picked up either way — Linux watches one directory at a time,
+so a recursive watch there is a subscription per directory, and hiding that
+asymmetry is most of why this member exists.
+
+The name is `observe` rather than `watch` because `system.watch` already means
+*watch for Ctrl-C*, and two `watch`es meaning two unrelated things is exactly
+what Rule 5 is for.
+
+---
+
+## 7. Locking (`io.lock`)
+
+The moment a script is good enough to put on a schedule, two copies of it
+eventually run at once — a slow run overlapping the next tick, or a human
+running it by hand while cron does. Atomic writes make the *file* safe; they do
+not stop the *result* from being whichever process finished last.
+
+```dart
+await io.lock('.crawl.lock', () async {
+  // exactly one process in here
+  await net.crawl<Row>(seed).save('out.csv');
+});
+```
+
+| Call | Behaviour |
+| :--- | :--- |
+| `io.lock(path, action)` | throws `LockedError` straight away if it is held |
+| `io.lock(path, action, wait: 30.s)` | waits up to that long for its turn |
+| `io.locked(path)` | whether a live process holds it — for a status line only |
+
+The lock is released on a normal return, on a throw, **and on Ctrl-C**: a lock
+file that outlives an interrupt is worse than no lock at all, because the next
+run refuses to start. It rides the same registry that removes a half-written
+`.part` file.
+
+The file holds the pid and a timestamp, so a stale lock is diagnosable — and a
+lock whose recorded process is gone is taken rather than obeyed. There is
+deliberately no age cut-off: "older than an hour is stale" breaks the one run
+that legitimately took ninety minutes.
+
+`io.locked` is for reporting, not for deciding: between the check and the take,
+another process can win. `io.lock` is the answer that cannot race.
 
 ---
 

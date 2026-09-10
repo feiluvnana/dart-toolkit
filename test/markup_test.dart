@@ -1,5 +1,5 @@
 import 'package:dart_toolkit/dart_toolkit.dart';
-import 'package:dart_toolkit/selector.dart';
+import 'package:dart_toolkit/html.dart';
 import 'package:html/dom.dart';
 import 'package:test/test.dart';
 
@@ -31,17 +31,17 @@ void main() {
     </div>
     ''';
 
-    test('parses HTML markup directly into QueryResult', () {
+    test('parses HTML markup directly into Markup', () {
       final query = $(sampleHtml);
-      expect(query.isNotEmpty, isTrue);
+      expect(query.empty, isFalse);
       expect(query.find('.title').text, equals('Album Title'));
     });
 
     test('String.\$ selects straight out of markup', () {
       final tracks = sampleHtml.$('.track');
-      expect(tracks.length, equals(3));
-      expect(tracks.first.$('.num').text, equals('01.'));
-      expect(tracks.last.$('.num').text, equals('03.'));
+      expect(tracks.count, equals(3));
+      expect(tracks.elements.first!.$('.num').text, equals('01.'));
+      expect(tracks.elements.last!.$('.num').text, equals('03.'));
     });
 
     test('text, texts, and html extraction', () {
@@ -73,32 +73,32 @@ void main() {
         doc.find('.track').at(-1).find('.link').text,
         equals('Bonus Track'),
       );
-      expect(doc.find('.track').at(9).isEmpty, isTrue);
+      expect(doc.find('.track').at(9).empty, isTrue);
 
       final bonus = doc
           .find('.track')
           .filter((Element el) => el.classes.contains('bonus'));
-      expect(bonus.length, equals(1));
+      expect(bonus.count, equals(1));
       expect(bonus.find('.link').text, equals('Bonus Track'));
 
       // Selector-based filtering is a separate, typed method.
-      expect(doc.find('.track').matching('.bonus').length, equals(1));
-      expect(doc.find('.track').not('.bonus').length, equals(2));
+      expect(doc.find('.track').matching('.bonus').count, equals(1));
+      expect(doc.find('.track').not('.bonus').count, equals(2));
 
       expect(bonus.has('bonus'), isTrue);
       expect(bonus.has('non-existent'), isFalse);
 
-      expect(doc.find('.track-list').children().length, equals(3));
+      expect(doc.find('.track-list').children().count, equals(3));
       expect(doc.find('.track').parent().has('track-list'), isTrue);
-      expect(doc.find('.num').closest('.track').length, equals(3));
-      expect(doc.find('.track').at(0).siblings().length, equals(2));
+      expect(doc.find('.num').closest('.track').count, equals(3));
+      expect(doc.find('.track').at(0).siblings().count, equals(2));
     });
 
     test('extensions on String and Element', () {
       final q = sampleHtml.$('.title');
       expect(q.text, equals('Album Title'));
 
-      final elem = q.firstOrNull;
+      final elem = q.elements.first;
       expect(elem, isNotNull);
       expect(elem!.query.text, equals('Album Title'));
       expect(elem.attr('class'), equals('title'));
@@ -110,23 +110,23 @@ void main() {
       expect(track.dataset, equals({'id': '1'}));
     });
 
-    test('QueryResult is a real Iterable', () {
+    test('Markup is a real Iterable', () {
       final texts = $(
         sampleHtml,
-      ).find('.num').map((Element e) => e.text.trim());
-      expect(texts.toList(), equals(['01.', '02.', '03.']));
+      ).find('.num').elements.to((Element e) => e.text.trim());
+      expect(texts.list, equals(['01.', '02.', '03.']));
     });
 
     test('firstOrNull and find() / call() API', () {
       final q = $(sampleHtml);
-      final firstTrack = q.find('.track').firstOrNull;
+      final firstTrack = q.find('.track').elements.first;
       expect(firstTrack, isNotNull);
       expect(firstTrack?.attr('data-id'), equals('1'));
-      expect(q.find('.missing').firstOrNull, isNull);
+      expect(q.find('.missing').elements.first, isNull);
 
       final allTracks = q('.track');
-      expect(allTracks.length, equals(3));
-      expect(allTracks.first.attr('data-id'), equals('1'));
+      expect(allTracks.count, equals(3));
+      expect(allTracks.elements.first!.attr('data-id'), equals('1'));
     });
 
     test(
@@ -163,7 +163,7 @@ void main() {
 
         // :has
         final boxWithLink = doc.find('.box:has(a.btn)');
-        expect(boxWithLink.length, equals(1));
+        expect(boxWithLink.count, equals(1));
         expect(boxWithLink.has('with-link'), isTrue);
 
         // :header
@@ -185,8 +185,8 @@ void main() {
         expect(doc.find('ul li:eq(-1)').text, equals('Row 3'));
 
         // :input
-        expect(doc.find(':input').length, equals(2));
-        expect(doc.find(':checkbox').length, equals(1));
+        expect(doc.find(':input').count, equals(2));
+        expect(doc.find(':checkbox').count, equals(1));
         expect(doc.find(':text').attr('value'), equals('Alice'));
 
         // :empty
@@ -198,13 +198,13 @@ void main() {
       final xp = $xpath(sampleHtml);
 
       // firstOrNull on xpath result
-      final firstA = xp('//a').firstOrNull;
+      final firstA = xp('//a').elements.first;
       expect(firstA, isNotNull);
       expect(firstA?.text.trim(), equals('Track One'));
 
-      // xpath returns QueryResult
+      // xpath returns Markup
       final allA = xp('//a');
-      expect(allA.length, equals(3));
+      expect(allA.count, equals(3));
       expect(allA.texts, equals(['Track One', 'Track Two', 'Bonus Track']));
 
       // XPath values (text nodes and attributes)
@@ -240,7 +240,7 @@ void main() {
 
         final selector = mediaHtml.$;
 
-        // Chainable QueryResult attribute helpers
+        // Chainable Markup attribute helpers
         expect(selector('a').href, equals('/target1'));
         expect(selector('a').hrefs, equals(['/target1', '/target2']));
         expect(selector('img').src, equals('/img/1.png'));
@@ -255,7 +255,7 @@ void main() {
         expect(selector('form').attr('action'), equals('/submit-form'));
         expect(selector('input').value, equals('test@example.com'));
 
-        // QueryResult getters
+        // Markup getters
         final q = $(mediaHtml);
         expect(q.find('a').href, equals('/target1'));
         expect(q.find('a').hrefs, equals(['/target1', '/target2']));
@@ -270,7 +270,7 @@ void main() {
         expect(q.find('input').value, equals('test@example.com'));
 
         // Element extension getters
-        final firstImg = q.find('img').firstOrNull;
+        final firstImg = q.find('img').elements.first;
         expect(firstImg?.src, equals('/img/1.png'));
         expect(firstImg?.attr('alt'), equals('Image 1'));
       },
@@ -282,34 +282,45 @@ void main() {
       final nested = $(
         '<section><div><p><b>hi</b></p></div></section>',
       ).find('div:has(p:contains(hi))');
-      expect(nested.length, equals(1));
+      expect(nested.count, equals(1));
 
       final quotedParen = $('<div><p>a)b</p></div>').find('p:contains("a)b")');
-      expect(quotedParen.length, equals(1));
+      expect(quotedParen.count, equals(1));
 
       final escapedQuote = $(
         '<div><p>a"b</p></div>',
       ).find(r'p:contains("a\"b")');
-      expect(escapedQuote.length, equals(1));
+      expect(escapedQuote.count, equals(1));
     });
 
-    test('find searches descendants for CSS and jQuery selectors alike', () {
+    test('find and the callable are one search, whichever selector', () {
+      // 4.0.0: `find` used to mean strict descendants of the current set while
+      // the callable searched the whole parsed document, so on a page cursor —
+      // whose elements are the body's *children* — `find('h1')` missed an h1
+      // sitting at the top level and `('h1')` did not. One page, two answers,
+      // depending on which spelling you reached for. They are the same search
+      // now, and `matching` is how you ask whether the set itself qualifies.
+      final fragment = $('<div class="x">hello</div>');
+      expect(fragment.find('div').count, equals(1));
+      expect(fragment.find('div:contains(hello)').count, equals(1));
+      expect(fragment.find('.x:first').count, equals(1));
+      expect(fragment('div:contains(hello)').count, equals(1));
+      expect(fragment.matching('div:contains(hello)').count, equals(1));
+
       // An extended selector used to match the context element itself while
       // the plain-CSS fast path did not, so the same query answered
       // differently depending on whether it happened to carry a pseudo.
-      final fragment = $('<div class="x">hello</div>');
-      expect(fragment.find('div'), isEmpty);
-      expect(fragment.find('div:contains(hello)'), isEmpty);
-      expect(fragment.find('.x:first'), isEmpty);
-
-      // matching() is how you ask whether the set itself qualifies, and the
-      // callable shorthand still searches the whole parsed document.
-      expect(fragment.matching('div:contains(hello)').length, equals(1));
-      expect(fragment('div:contains(hello)').length, equals(1));
-
-      // A document root can still match itself, as querySelectorAll does.
       final page = $('<html><body><p>x</p></body></html>');
-      expect(page('body:has(p)').length, equals(1));
+      expect(page('body:has(p)').count, equals(1));
+      expect(page.find('body:has(p)').count, equals(1));
+
+      // Scoped, though: the result of a search is not rooted on the document,
+      // so a chained find cannot quietly search the page again.
+      final rows = $(
+        '<div class="row"><b class="name">in</b></div><b class="name">out</b>',
+      );
+      expect(rows.find('.name').count, equals(2));
+      expect(rows.find('.row').find('.name').texts, equals(['in']));
     });
 
     test('value and values agree on textarea text and input value', () {
@@ -322,7 +333,7 @@ void main() {
       ''';
       final form = $(formHtml);
       final fields = form.find('input, textarea');
-      expect(fields.first.value, equals('alice'));
+      expect(fields.elements.first!.value, equals('alice'));
       expect(fields.at(1).value, equals('Software developer'));
       expect(fields.values, equals(['alice', 'Software developer', 'admin']));
     });
@@ -338,7 +349,7 @@ void main() {
         final card = containerHtml.$('.card');
         // The card container itself has no href attribute:
         expect(card.href, isNull);
-        expect(card.firstOrNull?.href, isNull);
+        expect(card.elements.first?.href, isNull);
         expect(card.hrefs, isEmpty);
 
         // Descendant links are reached when queried explicitly:

@@ -244,7 +244,7 @@ void main() {
           )
           .resume(path)
           .run((res) {
-            for (final href in res.$('a').hrefs) {
+            for (final href in res.parse(format.html)('a').hrefs) {
               res.follow(href);
             }
           });
@@ -281,12 +281,12 @@ void main() {
           .resume(path)
           .collect((res) {
             res.emit(res.url.toString());
-            for (final href in res.$('a').hrefs) {
+            for (final href in res.parse(format.html)('a').hrefs) {
               res.follow(href);
             }
           });
 
-      expect(first, ['https://example.com/1']);
+      expect(first.list, ['https://example.com/1']);
 
       final second = await net
           .crawl<String>('https://example.com/1')
@@ -294,7 +294,7 @@ void main() {
           .resume(path)
           .collect((res) {
             res.emit(res.url.toString());
-            for (final href in res.$('a').hrefs) {
+            for (final href in res.parse(format.html)('a').hrefs) {
               res.follow(href);
             }
           });
@@ -302,7 +302,7 @@ void main() {
       // The seed is not fetched again, and the pages the first leg queued but
       // never reached are.
       expect(
-        second,
+        second.list,
         unorderedEquals(<String>[
           'https://example.com/2',
           'https://example.com/3',
@@ -329,7 +329,7 @@ void main() {
           .resume(path)
           .limit(2)
           .run((res) {
-            for (final href in res.$('a').hrefs) {
+            for (final href in res.parse(format.html)('a').hrefs) {
               res.follow(href);
             }
           });

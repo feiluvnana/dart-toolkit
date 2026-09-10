@@ -92,7 +92,7 @@ Future<int> _build(Cli cli) async {
 }
 
 Future<int> _clean(Cli cli) async {
-  if (io.find(dest()).isEmpty) {
+  if (io.find(dest()).empty) {
     log.info('Nothing to clean.');
     return 0;
   }

@@ -8,7 +8,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:dart_toolkit/dart_toolkit.dart';
-import 'package:dart_toolkit/selector.dart';
+import 'package:dart_toolkit/html.dart';
 import 'package:test/test.dart';
 
 /// A writer over buffers, standing in for a terminal.
@@ -346,7 +346,7 @@ void main() {
 
       expect(File(path).readAsStringSync(), 'a\r\n1\r\n');
       // And it reads back as one row, not two.
-      expect(await io.csv.maps(path), [
+      expect((await io.csv.maps(path)).list, [
         {'a': '1'},
       ]);
     });
@@ -357,14 +357,14 @@ void main() {
       final path = '${temp.path}/in.csv';
       File(path).writeAsStringSync('a,b\n1,2\n');
 
-      final List<Map<String, String>> maps = await io.csv.maps(path);
-      final List<List<String>> matrix = await io.csv.matrix(path);
+      final Sequence<Map<String, String>> maps = await io.csv.maps(path);
+      final Sequence<List<String>> matrix = await io.csv.matrix(path);
       final List<Map<String, String>> records =
           await io.csv.records(path).toList();
       final List<List<String>> rows = await io.csv.rows(path).toList();
 
-      expect(maps, records);
-      expect(matrix, rows);
+      expect(maps.list, records);
+      expect(matrix.list, rows);
     });
   });
 
@@ -506,9 +506,9 @@ void main() {
 
         for (final name in ['out.zip', 'out.tar', 'out.tar.gz']) {
           final archive = '${root.path}/$name';
-          await tool.zip.pack('${root.path}/src', archive);
+          await format.zip.pack('${root.path}/src', archive);
           final dest = '${root.path}/back_$name';
-          await tool.zip.unpack(archive, dest);
+          await format.zip.unpack(archive, dest);
 
           final restored = File('$dest/run.sh');
           expect(restored.existsSync(), isTrue, reason: name);
@@ -532,8 +532,8 @@ void main() {
       final file = File('${root.path}/notes.txt')..writeAsStringSync('hello');
       await system.run('chmod', ['600', file.path]);
 
-      await tool.zip.pack(file.path, '${root.path}/one.zip');
-      await tool.zip.unpack('${root.path}/one.zip', '${root.path}/back');
+      await format.zip.pack(file.path, '${root.path}/one.zip');
+      await format.zip.unpack('${root.path}/one.zip', '${root.path}/back');
 
       if (!Platform.isWindows) {
         expect(
@@ -544,12 +544,14 @@ void main() {
     });
   });
 
-  group('git', () {
-    test('fetch and checkout keep the soft-failure contract', () async {
-      // Query methods promise a result rather than an exception, even with no
-      // git and no repository.
-      expect((await tool.git.fetch(remote: 'origin')).code, isA<int>());
-      expect((await tool.git.checkout('nonexistent-branch-xyz')).ok, isFalse);
+  group('system.run', () {
+    test('a subprocess keeps the soft-failure contract', () async {
+      // `tool.git` used to wrap this. `system.run` already promises a result
+      // rather than an exception, which was the whole of what the wrapper
+      // added.
+      final res = await system.run('git', ['checkout', 'no-such-branch-xyz']);
+      expect(res.code, isA<int>());
+      expect(res.ok, isFalse);
     });
   });
 

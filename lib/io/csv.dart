@@ -8,6 +8,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../src/fs.dart';
+import '../util/sequence.dart';
 
 // ============================================================================
 // CSV SERIALIZATION & PARSING (io.csv.*)
@@ -174,30 +175,38 @@ class CsvAccessor {
 
   /// Reads [path] as records keyed by the header line.
   ///
-  /// Returns an empty list when the file does not exist. Blank lines are
-  /// skipped, and short rows are padded with empty strings.
-  Future<List<Map<String, String>>> maps(
+  /// Empty when the file does not exist. Blank lines are skipped, and short
+  /// rows are padded with empty strings. A [Sequence], so the report is the
+  /// next call:
+  ///
+  /// ```dart
+  /// final rows = await io.csv.maps('sales.csv');
+  /// rows.tally((r) => r['region']!).seq.each(print);
+  /// ```
+  Future<Sequence<Map<String, String>>> maps(
     String path, {
     String delimiter = ',',
   }) async {
     final rows = await _all(path, delimiter);
-    if (rows.isEmpty) return [];
+    if (rows.isEmpty) return const Sequence([]);
     final keys = rows.first;
-    return [
+    return Sequence([
       for (final row in rows.skip(1))
         if (!_blank(row))
           {
             for (var i = 0; i < keys.length; i++)
               keys[i]: i < row.length ? row[i] : '',
           },
-    ];
+    ]);
   }
 
   /// Reads [path] as raw rows of cells, header line included.
   ///
-  /// Returns an empty list when the file does not exist.
-  Future<List<List<String>>> matrix(String path, {String delimiter = ','}) =>
-      _all(path, delimiter);
+  /// Empty when the file does not exist.
+  Future<Sequence<List<String>>> matrix(
+    String path, {
+    String delimiter = ',',
+  }) async => Sequence(await _all(path, delimiter));
 
   /// Streams [path] as raw rows of cells, header line included.
   ///

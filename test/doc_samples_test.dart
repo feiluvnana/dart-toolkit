@@ -1,7 +1,7 @@
 import 'dart:io' as dart_io;
 
 import 'package:dart_toolkit/dart_toolkit.dart';
-import 'package:dart_toolkit/selector.dart';
+import 'package:dart_toolkit/html.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -33,16 +33,28 @@ void main() {
           </div>
         ''', requested: 'https://example.com'.url);
 
-      expect(res.$('a:contains("More")').length, equals(1));
-      expect(res.$('div:has(p.desc)').length, equals(1));
-      expect(res.$('ul > li:even').texts, equals(['0', '2']));
-      expect(res.$(':header').texts, equals(['Breaking News']));
-      expect(res.$xpath('//a[@class="morelink"]').texts, equals(['More']));
+      expect(res.parse(format.html)('a:contains("More")').count, equals(1));
+      expect(res.parse(format.html)('div:has(p.desc)').count, equals(1));
+      expect(res.parse(format.html)('ul > li:even').texts, equals(['0', '2']));
+      expect(
+        res.parse(format.html)(':header').texts,
+        equals(['Breaking News']),
+      );
+      expect(
+        res.parse(format.html).xpath('//a[@class="morelink"]').texts,
+        equals(['More']),
+      );
 
-      expect(res.$('a.morelink').href, equals('https://example.com/next'));
-      expect(res.$('a.morelink').hrefs, equals(['https://example.com/next']));
-      expect(res.$('h1').text, equals('Breaking News'));
-      expect(res.$('h1').texts, equals(['Breaking News']));
+      expect(
+        res.parse(format.html)('a.morelink').href,
+        equals('https://example.com/next'),
+      );
+      expect(
+        res.parse(format.html)('a.morelink').hrefs,
+        equals(['https://example.com/next']),
+      );
+      expect(res.parse(format.html)('h1').text, equals('Breaking News'));
+      expect(res.parse(format.html)('h1').texts, equals(['Breaking News']));
 
       final brHtml = '<div>01. First<br>02. Second</div>';
       expect($(brHtml).lines, equals(['01. First', '02. Second']));
@@ -68,12 +80,12 @@ void main() {
             }),
           )
           .collect((res) {
-            for (final title in res.$('.titleline').texts) {
+            for (final title in res.parse(format.html)('.titleline').texts) {
               res.emit(title);
             }
           });
 
-      expect(titles, equals(['Title 1']));
+      expect(titles.list, equals(['Title 1']));
     });
 
     test('http.md declarative extract and features work as documented', () {
@@ -96,7 +108,7 @@ void main() {
           </html>
         ''', requested: 'https://example.com/product/1'.url);
 
-      final product = res.extract({
+      final product = res.parse(format.html).extract({
         'title': 'h1.title',
         'price': '.price@text',
         'canonical': 'link[rel="canonical"]@href',
@@ -190,8 +202,10 @@ void main() {
         </form>
       ''', requested: 'https://example.com/login'.url);
 
+      final markup = page.parse(format.html);
+
       // The table of what a form collects.
-      expect(page.form('#login')!.fields, {
+      expect(markup.form('#login')!.fields, {
         'csrf': 'tok-123',
         'user': '',
         'remember': 'yes',
@@ -200,11 +214,12 @@ void main() {
       });
 
       // A wrapper's id finds the form inside it.
-      expect(page.form('#panel')!.element.attributes['id'], equals('login'));
-      expect(page.form('form:has(input[type=hidden])'), isNotNull);
+      expect(markup.form('#panel')!.element.attributes['id'], equals('login'));
+      expect(markup.form('form:has(input[type=hidden])'), isNotNull);
 
-      // Filling returns the form, and keeps what the page carried.
-      final form = page.form('#login')!.fill({'user': 'me'});
+      // Filling returns the form, and keeps what the page carried. `at` tells
+      // it where the markup came from, which a cursor cannot know.
+      final form = markup.form('#login')!.at(page.url).fill({'user': 'me'});
       expect(form.fields['user'], equals('me'));
       expect(form.fields['csrf'], equals('tok-123'));
       expect(form.method, equals(HttpMethod.post));
@@ -212,12 +227,12 @@ void main() {
 
       // A GET carries its fields in the query, replacing the action's own.
       expect(
-        page.form('form.search')!.fill({'q': 'widgets'}).url,
+        markup.form('form.search')!.at(page.url).fill({'q': 'widgets'}).url,
         equals(Uri.parse('https://example.com/search?q=widgets')),
       );
 
       // A page with no form says so.
-      expect(Reply.text('<p>none</p>').form(), isNull);
+      expect(format.html.parse('<p>none</p>').form(), isNull);
     });
 
     test('cli.md features parse as documented', () {
@@ -264,12 +279,12 @@ void main() {
         ]);
 
         final maps = await io.csv.maps(path);
-        expect(maps.length, equals(2));
-        expect(maps[0]['name'], equals('Alice'));
+        expect(maps.count(), equals(2));
+        expect(maps.first?['name'], equals('Alice'));
 
         final grid = await io.csv.matrix(path);
-        expect(grid.length, equals(3));
-        expect(grid[0], equals(['name', 'role']));
+        expect(grid.count(), equals(3));
+        expect(grid.first, equals(['name', 'role']));
 
         final streamed = await io.csv.records(path).toList();
         expect(streamed.length, equals(2));

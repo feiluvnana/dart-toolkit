@@ -129,13 +129,15 @@ Disallow: /
 
   group('selectors', () {
     test('matches tests an element without scanning its parent', () {
-      final q = net.$('<ul><li class="a">1</li><li class="b">2</li></ul>');
+      final q = format.html.parse(
+        '<ul><li class="a">1</li><li class="b">2</li></ul>',
+      );
       expect(q('li').matching('.a').texts, equals(['1']));
       expect(q('li').not('.a').texts, equals(['2']));
     });
 
     test('combinators are honoured by a single-element match', () {
-      final q = net.$(
+      final q = format.html.parse(
         '<div class="w"><p>a</p><span>b</span><span>c</span></div>',
       );
       expect(q('span').matching('p + span').texts, equals(['b']));
@@ -144,18 +146,18 @@ Disallow: /
     });
 
     test('closest walks ancestors', () {
-      final q = net.$(
+      final q = format.html.parse(
         '<div class="outer"><div class="inner"><b>x</b></div></div>',
       );
-      expect(q('b').closest('.outer').length, equals(1));
-      expect(q('b').closest('.missing').length, equals(0));
+      expect(q('b').closest('.outer').count, equals(1));
+      expect(q('b').closest('.missing').count, equals(0));
     });
 
     test('a large child-combinator query stays linear', () {
       final rows = List.generate(2000, (i) => '<li class="i">$i</li>').join();
-      final q = net.$('<ul id="l">$rows</ul>');
+      final q = format.html.parse('<ul id="l">$rows</ul>');
       final watch = Stopwatch()..start();
-      expect(q('#l > li.i').length, equals(2000));
+      expect(q('#l > li.i').count, equals(2000));
       watch.stop();
       // The quadratic form took several hundred milliseconds at this size.
       expect(watch.elapsedMilliseconds, lessThan(500));
@@ -236,23 +238,25 @@ Disallow: /
     ''');
 
     test('pick keeps the field type', () {
-      final String? title = res.pick(Field.text('h1'));
-      final List<String> tags = res.pick(Field.texts('.t'));
-      final List<String> hrefs = res.pick(Field.attrs('.row a', 'href'));
+      final String? title = res.parse(format.html).pick(Field.text('h1'));
+      final List<String> tags = res.parse(format.html).pick(Field.texts('.t'));
+      final List<String> hrefs = res
+          .parse(format.html)
+          .pick(Field.attrs('.row a', 'href'));
       expect(title, equals('Title'));
       expect(tags, equals(['a', 'b']));
       expect(hrefs, equals(['/1', '/2']));
     });
 
     test('a custom read is typed too', () {
-      final int count = res.pick(
-        Field.fn((el) => el.querySelectorAll('.row').length),
-      );
+      final int count = res
+          .parse(format.html)
+          .pick(Field.fn((el) => el.querySelectorAll('.row').length));
       expect(count, equals(2));
     });
 
     test('the string shorthand still works', () {
-      final data = res.extract({
+      final data = res.parse(format.html).extract({
         'title': 'h1',
         'tags': ['.t'],
         'rows': [
@@ -272,7 +276,7 @@ Disallow: /
     });
 
     test('Fields and shorthand mix in one schema', () {
-      final data = res.extract({
+      final data = res.parse(format.html).extract({
         'title': Field.text('h1'),
         'tags': ['.t'],
       });
@@ -315,7 +319,7 @@ Disallow: /
         expect(await io.async.read(b), equals('two'));
         expect(io.has(a), isTrue);
         expect(await io.async.has(b), isTrue);
-        expect(await io.async.find(dir.path), hasLength(2));
+        expect((await io.async.find(dir.path)).list, hasLength(2));
         expect(await io.async.remove(b), isTrue);
         expect(await io.async.has(b), isFalse);
       } finally {
@@ -328,10 +332,10 @@ Disallow: /
       try {
         final path = io.join(dir.path, 'd.json');
         io.dump(path, {'n': 1});
-        expect(io.json<Map<String, Object?>>(path)['n'], equals(1));
+        expect((await format.json.read(path)).number('n'), equals(1));
         await io.async.dump(path, {'n': 2});
-        final read = await io.async.json<Map<String, Object?>>(path);
-        expect(read['n'], equals(2));
+        final read = await format.json.read(path);
+        expect(read.number('n'), equals(2));
       } finally {
         dir.deleteSync(recursive: true);
       }

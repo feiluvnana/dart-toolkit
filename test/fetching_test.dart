@@ -454,18 +454,18 @@ void main() {
           .downloader(downloader)
           .collect((res) {
             if (res.tag == 'result') {
-              res.emit(res.$('.welcome').text);
+              res.emit(res.parse(format.html)('.welcome').text);
               return;
             }
             res.follow(
-              res.$('form').attr('action')!,
+              res.parse(format.html)('form').attr('action')!,
               method: HttpMethod.post,
               body: Body.form({'user': 'ada'}),
               tag: 'result',
             );
           });
 
-      expect(seen, ['Signed in']);
+      expect(seen.list, ['Signed in']);
       expect(downloader.fetches.map((r) => r.method), [
         HttpMethod.get,
         HttpMethod.post,
@@ -623,7 +623,7 @@ void main() {
       final first = util.rand.shuffle(agents);
       util.rand.seed(7);
 
-      expect(util.rand.shuffle(agents), first);
+      expect(util.rand.shuffle(agents).list, first.list);
     });
 
     test('seeding again with nothing goes back to being unpredictable', () {

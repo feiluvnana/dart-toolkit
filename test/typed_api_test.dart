@@ -118,7 +118,7 @@ void main() {
           )
           .tag('song', (res) => seen.add(res.meta.get(_name)))
           .run((res) {
-            for (final a in res.$('a')) {
+            for (final a in res.parse(format.html)('a').elements.list) {
               res.follow(a.href!, tag: 'song', meta: [_name(a.text)]);
             }
           });
@@ -160,14 +160,16 @@ void main() {
     ''');
 
     test('all builds one typed record per match', () {
-      final variants = page.$.all(
-        '.variant',
-        (row) => (
-          name: row('.name').text,
-          sku: row.attr('data-sku'),
-          qty: row.pick(Field.text('.qty').when(int.tryParse)),
-        ),
-      );
+      final variants = page
+          .parse(format.html)
+          .all(
+            '.variant',
+            (row) => (
+              name: row('.name').text,
+              sku: row.attr('data-sku'),
+              qty: row.pick(Field.text('.qty').when(int.tryParse)),
+            ),
+          );
 
       // The static type is the point: no cast reaches any of these fields.
       expect(variants, hasLength(2));
@@ -178,27 +180,36 @@ void main() {
     });
 
     test('one builds a record for a section a page has at most one of', () {
-      final seller = page.$.one(
-        '.seller',
-        (s) => (
-          name: s('.name').text,
-          rating: s.pick(Field.text('.rating').when(util.text.number)),
-        ),
-      );
+      final seller = page
+          .parse(format.html)
+          .one(
+            '.seller',
+            (s) => (
+              name: s('.name').text,
+              rating: s.pick(Field.text('.rating').when(util.text.number)),
+            ),
+          );
 
       expect(seller?.name, 'Acme');
       expect(seller?.rating, 4.5);
-      expect(page.$.one('.missing', (s) => s('x').text), isNull);
+      expect(
+        page.parse(format.html).one('.missing', (s) => s('x').text),
+        isNull,
+      );
     });
 
     test('a whole page reads as one nested record', () {
       final product = (
-        title: page.$('h1').text,
-        price: page.pick(Field.text('.price').when(util.text.number)),
-        variants: page.$.all(
-          '.variant',
-          (row) => (name: row('.name').text, sku: row.attr('data-sku')),
-        ),
+        title: page.parse(format.html)('h1').text,
+        price: page
+            .parse(format.html)
+            .pick(Field.text('.price').when(util.text.number)),
+        variants: page
+            .parse(format.html)
+            .all(
+              '.variant',
+              (row) => (name: row('.name').text, sku: row.attr('data-sku')),
+            ),
       );
 
       expect(product.title, 'Wool Coat');
@@ -217,20 +228,32 @@ void main() {
         '<div class="variant" data-sku="A2"><span class="name">L</span></div>',
       );
 
-      expect(flat.$.all('.variant', (row) => row.attr('data-sku')), [
-        'A1',
-        'A2',
-      ]);
-      expect(flat.$.one('.variant', (row) => row('.name').text)?.trim(), 'S');
-      // And pick reads the document root, the same page Reply.pick reads.
-      expect(flat.$.pick(Field.text('h1')), 'T');
-      expect(flat.$.pick(Field.text('h1')), flat.pick(Field.text('h1')));
+      expect(
+        flat.parse(format.html).all('.variant', (row) => row.attr('data-sku')),
+        ['A1', 'A2'],
+      );
+      expect(
+        flat
+            .parse(format.html)
+            .one('.variant', (row) => row('.name').text)
+            ?.trim(),
+        'S',
+      );
+      // And pick reads the document root, so a page cursor and the same markup
+      // parsed straight from a string agree.
+      expect(flat.parse(format.html).pick(Field.text('h1')), 'T');
+      expect(
+        format.html.parse(flat.body).pick(Field.text('h1')),
+        flat.parse(format.html).pick(Field.text('h1')),
+      );
     });
 
     test('all scopes to the row, not the document', () {
       // The bug this shape exists to prevent: a nested read that quietly
       // matched every `.name` on the page instead of the row's own.
-      final names = page.$.all('.variant', (row) => row('.name').texts);
+      final names = page
+          .parse(format.html)
+          .all('.variant', (row) => row('.name').texts);
       expect(names, [
         ['Small'],
         ['Large'],
@@ -244,19 +267,38 @@ void main() {
         '<span class="price">\$1,234.50</span><b>a</b><b>b</b>',
       );
 
-      expect(page.pick(Field.text('.price').when(util.text.number)), 1234.5);
-      expect(page.pick(Field.texts('b').map((rows) => rows.length)), 2);
+      expect(
+        page
+            .parse(format.html)
+            .pick(Field.text('.price').when(util.text.number)),
+        1234.5,
+      );
+      expect(
+        page
+            .parse(format.html)
+            .pick(Field.texts('b').map((rows) => rows.length)),
+        2,
+      );
       // `map` sees the null; `when` is not called at all for one.
       expect(
-        page.pick(Field.text('.gone').map((t) => t ?? 'unknown')),
+        page
+            .parse(format.html)
+            .pick(Field.text('.gone').map((t) => t ?? 'unknown')),
         'unknown',
       );
-      expect(page.pick(Field.text('.gone').when(util.text.number)), isNull);
+      expect(
+        page
+            .parse(format.html)
+            .pick(Field.text('.gone').when(util.text.number)),
+        isNull,
+      );
       // Chains, because the result is a Field like any other.
       expect(
-        page.pick(
-          Field.text('.price').when(util.text.number).map((n) => n! * 2),
-        ),
+        page
+            .parse(format.html)
+            .pick(
+              Field.text('.price').when(util.text.number).map((n) => n! * 2),
+            ),
         2469.0,
       );
     });
@@ -320,19 +362,22 @@ void main() {
       final titles = await net
           .crawl<Never>('https://site.test')
           .downloader(MapDownloader(pages))
-          .gather((page) => page.$('h1').texts);
+          .gather((page) => page.parse(format.html)('h1').texts);
 
-      expect(titles, isA<List<String>>());
-      expect(titles, ['One', 'Two']);
+      expect(titles, isA<Sequence<String>>());
+      expect(titles.list, ['One', 'Two']);
     });
 
     test('returning nothing for a page filters it out', () async {
       final long = await net
           .crawl<Never>('https://site.test')
           .downloader(MapDownloader(pages))
-          .gather((page) => page.$('h1').texts.where((t) => t.length > 3));
+          .gather(
+            (page) =>
+                page.parse(format.html)('h1').texts.where((t) => t.length > 3),
+          );
 
-      expect(long, isEmpty);
+      expect(long.empty, isTrue);
     });
 
     test('a record per page reads as one expression', () async {
@@ -340,10 +385,12 @@ void main() {
           .crawl<Never>('https://site.test')
           .downloader(MapDownloader(pages))
           .gather(
-            (page) => [(url: page.url.path, titles: page.$('h1').length)],
+            (page) => [
+              (url: page.url.path, titles: page.parse(format.html)('h1').count),
+            ],
           );
 
-      expect(rows.single.titles, 2);
+      expect(rows.sole!.titles, 2);
     });
   });
 }

@@ -75,6 +75,23 @@ void main() async {
   final gate = concurrent.semaphore(2);
   await Future.wait([for (var i = 0; i < 4; i++) gate.withPermit(_measure)]);
   log.ok('Semaphore let 4 tasks through 2 permits.');
+
+  // ------------------------------------------------------------- the rate
+  // Those bound *how many at once*. A published API limit bounds *how often*,
+  // which a concurrency cap does not satisfy: four instant requests then four
+  // more is eight in a second. A limiter composes with the cap.
+  final limit = concurrent.rate(4, per: 100.ms);
+  final clock = util.time.clock();
+  await concurrent.run(
+    List<int>.generate(12, (i) => i),
+    (n) => limit.guard(() async => n),
+    size: 8,
+  );
+  log.ok(
+    '12 tasks at 4 per 100ms took ${clock.elapsedMilliseconds}ms '
+    '(8 in flight, never more than 40 per second).',
+  );
+  limit.close();
 }
 
 int _sum(int a, int b) => a + b;

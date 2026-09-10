@@ -14,6 +14,7 @@ import 'package:path/path.dart' as p;
 
 import '../src/fs.dart';
 import '../src/proc.dart';
+import '../util/sequence.dart';
 
 // ============================================================================
 // ZIP TOOL (tool.zip.*)
@@ -69,7 +70,7 @@ class Entry {
 ///
 /// ```dart
 /// await tool.zip.pack('site', 'site.zip');
-/// for (final e in await tool.zip.list('site.zip')) print(e.name);
+/// (await tool.zip.list('site.zip')).each((e) => print(e.name));
 /// await tool.zip.unpack('site.zip', 'restored');
 /// ```
 class ZipAccessor {
@@ -255,15 +256,15 @@ class ZipAccessor {
   static const Duration _slack = Duration(days: 1);
 
   /// Lists what the archive at [source] holds, without unpacking it.
-  Future<List<Entry>> list(String source, {Format? format}) async {
+  Future<Sequence<Entry>> list(String source, {Format? format}) async {
     final archive = _decode(
       await File(source).readAsBytes(),
       format ?? Format.of(source),
     );
-    return [
+    return Sequence([
       for (final entry in archive)
         Entry(entry.name, entry.size, folder: !entry.isFile),
-    ];
+    ]);
   }
 
   /// Reads one entry's bytes out of the archive at [source].

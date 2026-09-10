@@ -2,8 +2,11 @@
 ///
 /// The string handling a scraper actually needs: turning a heading into a
 /// filename, collapsing the whitespace a page is full of, pulling a number out
-/// of `'$1,234.50'`, and stripping tags off a fragment.
+/// of `'$1,234.50'`, stripping tags off a fragment — and, in the other
+/// direction, filling a template ([TextAccessor.render]).
 library;
+
+import 'sequence.dart';
 
 // ============================================================================
 // TEXT (util.text.*)
@@ -117,12 +120,12 @@ class TextAccessor {
   }
 
   /// Every number in [text], in order.
-  List<num> numbers(String text) => [
+  Sequence<num> numbers(String text) => Sequence([
     for (final match in _digits.allMatches(text))
       if (num.tryParse(match.group(0)!.replaceAll(_grouping, ''))
           case final value?)
         value,
-  ];
+  ]);
 
   /// [text] with the first letter of each word capitalised.
   String title(String text) => text.replaceAllMapped(
@@ -137,8 +140,8 @@ class TextAccessor {
       text.isEmpty ? text : text[0].toUpperCase() + text.substring(1);
 
   /// The words in [text].
-  List<String> words(String text) =>
-      _wordish.allMatches(text).map((m) => m.group(0)!).toList();
+  Sequence<String> words(String text) =>
+      _wordish.allMatches(text).map((m) => m.group(0)!).seq;
 
   /// Whether [text] holds nothing but whitespace, or is empty.
   bool blank(String text) => text.trim().isEmpty;
@@ -160,8 +163,34 @@ class TextAccessor {
     return text.substring(head, to);
   }
 
+  static final _slots = RegExp(r'\{(\w+)\}');
+
+  /// [template] with every `{key}` replaced by [values].
+  ///
+  /// The only member here that *produces* text: scripts generate it constantly
+  /// — a commit message, a PR body, an HTML index over what was just scraped,
+  /// a config file for the next stage — and a template that came from a file
+  /// is otherwise `replaceAll` in a loop.
+  ///
+  /// ```dart
+  /// util.text.render('Hello {name}, {count} new', {'name': 'x', 'count': 3});
+  /// // 'Hello x, 3 new'
+  ///
+  /// util.text.render(io.read('template.md'), vars);
+  /// ```
+  ///
+  /// A missing key renders empty — the same contract `Slot.read`, `Field.text`
+  /// and `Json.text` keep, now four deep.
+  ///
+  /// **Deliberately dumb.** `{key}` substitution and nothing else: no
+  /// conditionals, no loops, no filters, no partials. Each of those is one step
+  /// towards a template engine, and the moment a script needs a template engine
+  /// it should have one rather than this.
+  String render(String template, Map<String, Object?> values) => template
+      .replaceAllMapped(_slots, (m) => values[m.group(1)]?.toString() ?? '');
+
   /// Every occurrence of the text between [start] and [end].
-  List<String> betweens(String text, String start, String end) {
+  Sequence<String> betweens(String text, String start, String end) {
     final results = <String>[];
     var cursor = 0;
     while (true) {
@@ -173,6 +202,6 @@ class TextAccessor {
       results.add(text.substring(head, to));
       cursor = to + end.length;
     }
-    return results;
+    return Sequence(results);
   }
 }

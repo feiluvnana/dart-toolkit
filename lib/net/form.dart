@@ -1,13 +1,19 @@
 /// # HTML Forms (`Form`)
 ///
 /// The other half of reading a page: a `<form>` a script can fill in and
-/// send. [QueryResult.value] already reads a control the way a browser would
+/// send. [Markup.value] already reads a control the way a browser would
 /// submit it; this collects every control on a form, lets a script override
 /// the few it cares about, and works out where the result goes.
+///
+/// A form is found through the [FormOnMarkup] extension on a [Markup] cursor
+/// rather than on a response, because finding one is reading a page and `net`
+/// no longer knows how to do that. Sending it stays here: that is a socket,
+/// and resolving a relative `action` needs the URL the page came from.
 library;
 
 import 'package:html/dom.dart';
 
+import '../util/markup.dart';
 import 'net.dart';
 
 // ============================================================================
@@ -48,8 +54,7 @@ final class Form {
   /// The `<form>` element this reads.
   final Element element;
 
-  /// The page the form was found on, which relative actions resolve against.
-  final Uri page;
+  Uri? _page;
 
   final Map<String, String> _fields;
 
@@ -59,14 +64,45 @@ final class Form {
   /// URL for you. Construct one directly only for a form parsed out of markup
   /// that did not arrive as a response — and pass [page], or a relative
   /// `action` has nothing to resolve against.
-  Form(this.element, {Uri? page})
-    : page = page ?? Uri.parse('http://localhost'),
-      _fields = _controls(element);
+  Form(this.element, {Uri? page}) : _page = page, _fields = _controls(element);
+
+  /// The page this form was found on, which relative actions resolve against.
+  ///
+  /// Set by [at], or by the constructor. A form read out of loose markup has
+  /// no page, and asking for one throws rather than quietly resolving against
+  /// `localhost` — a request to the wrong host is worse than an error.
+  Uri get page =>
+      _page ??
+      (throw StateError(
+        'This form has no page to resolve its action against. It was read '
+        'from markup rather than from a response, so tell it where that '
+        'markup came from: form.at(res.url).',
+      ));
+
+  /// This form, resolving relative actions against [page].
+  ///
+  /// Reading a page is `format.html` and no longer knows what URL it came
+  /// from, so the response hands that over here:
+  ///
+  /// ```dart
+  /// final res = await net.http.get(url);
+  /// await res.parse(format.html).form('#login')!
+  ///     .at(res.url)
+  ///     .fill({'user': u, 'pass': p})
+  ///     .send();
+  /// ```
+  ///
+  /// Chainable, like [fill]. Inside a crawl, [FormSubmission.submit] calls
+  /// this for you.
+  Form at(Uri page) {
+    _page = page;
+    return this;
+  }
 
   /// The values this form would submit, in document order.
   ///
   /// The *successful controls*, as HTML calls them: every named control that
-  /// is not disabled, with the value [QueryResult.value] reads — a select's
+  /// is not disabled, with the value [Markup.value] reads — a select's
   /// chosen option, a textarea's text, a checkbox or radio only when it is
   /// ticked. A file input is skipped, having nothing on the page to read, and
   /// so are reset and plain buttons. The first submit button that carries a
@@ -140,7 +176,8 @@ final class Form {
   /// ```dart
   /// final session = Fetcher(session: true);
   /// final page = await session.get(url);
-  /// final home = await page.form('#login')!
+  /// final home = await page.parse(format.html).form('#login')!
+  ///     .at(page.url)
   ///     .fill({'user': user, 'pass': pass})
   ///     .send(client: session);
   /// ```
@@ -160,10 +197,13 @@ final class Form {
   );
 
   /// A `Referer` naming the page, when that page is one a server would accept.
-  Map<String, String> _referer() =>
-      page.scheme == 'http' || page.scheme == 'https'
-          ? {'Referer': page.toString()}
-          : const {};
+  Map<String, String> _referer() {
+    final from = _page;
+    if (from == null) return const {};
+    return from.scheme == 'http' || from.scheme == 'https'
+        ? {'Referer': from.toString()}
+        : const {};
+  }
 
   /// The successful controls of [form], keyed by name, in document order.
   static Map<String, String> _controls(Element form) {
@@ -220,8 +260,8 @@ final class Form {
   String toString() => 'Form(${method.wire} $action, ${_fields.length} fields)';
 }
 
-/// Finding a form on a page.
-extension FormOnPage on Reply {
+/// Finding a form on a parsed page.
+extension FormOnMarkup on Markup {
   /// The first form [selector] matches, or `null` when the page has none.
   ///
   /// [selector] is a full jQuery selector, so a form is namable by whatever
@@ -230,17 +270,19 @@ extension FormOnPage on Reply {
   /// a form, the first form inside it is used, so an id on a wrapper works
   /// as well as one on the form.
   ///
+  /// A cursor has no idea what URL its markup came from, so a form that
+  /// submits to a relative `action` needs [Form.at] before it is sent:
+  ///
   /// ```dart
-  /// final search = res.form('form.search');
-  /// if (search != null) await search.fill({'q': 'widgets'}).send();
+  /// final res = await net.http.get(url);
+  /// final search = res.parse(format.html).form('form.search');
+  /// if (search != null) await search.at(res.url).fill({'q': 'widgets'}).send();
   /// ```
   Form? form([String selector = 'form']) {
-    for (final element in $(selector)) {
-      if (element.localName?.toLowerCase() == 'form') {
-        return Form(element, page: url);
-      }
+    for (final element in find(selector).elements.list) {
+      if (element.localName?.toLowerCase() == 'form') return Form(element);
       final inner = element.querySelector('form');
-      if (inner != null) return Form(inner, page: url);
+      if (inner != null) return Form(inner);
     }
     return null;
   }
@@ -252,12 +294,15 @@ extension FormSubmission<T> on Page<T> {
   ///
   /// The method, the URL and the body all come from the form, so a stage that
   /// has to log in or search is one call rather than three details to get
-  /// right. Everything [follow] does still applies: the `Referer` is set,
+  /// right. The page's own URL is handed to [Form.at], so a form found on a
+  /// crawled page needs no base of its own. Everything [follow] does still
+  /// applies: the `Referer` is set,
   /// [depth] grows by one, and de-duplication accounts for the body, so two
   /// searches for different terms are two requests.
   ///
   /// ```dart
-  /// res.submit(res.form('#login')!.fill({'user': u, 'pass': p}), tag: 'home');
+  /// final login = res.parse(format.html).form('#login')!;
+  /// res.submit(login.fill({'user': u, 'pass': p}), tag: 'home');
   /// ```
   ///
   /// Throws [StateError] when the response has no engine.
@@ -269,7 +314,7 @@ extension FormSubmission<T> on Page<T> {
     int priority = 0,
     bool dedupe = true,
   }) => follow(
-    form.url.toString(),
+    form.at(url).url.toString(),
     method: form.method,
     body: form.body,
     tag: tag,

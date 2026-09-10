@@ -15,15 +15,15 @@ void main() async {
       .delay(250.ms)
       .limit(50)
       .collect((res) {
-        for (final title in res.$('.titleline > a').texts) {
+        for (final title in res.parse(format.html)('.titleline > a').texts) {
           res.emit(title);
         }
-        for (final next in res.$('a.morelink').hrefs) {
+        for (final next in res.parse(format.html)('a.morelink').hrefs) {
           res.follow(next);
         }
       });
 
-  system.console.logger.ok('Collected ${titles.length} titles.');
+  system.console.logger.ok('Collected ${titles.count()} titles.');
 }
 ```
 
@@ -117,9 +117,9 @@ await net.crawl<String>('https://example.com')
 | Method | Returns |
 | :--- | :--- |
 | `run([process])` | `Future<Stats>` |
-| `collect([process])` | `Future<List<T>>` of everything emitted |
+| `collect([process])` | `Future<Sequence<T>>` of everything emitted |
 | `stream([process])` | `Stream<T>`, yielding items as they are emitted |
-| `gather(map)` | `Future<List<R>>`, collecting what `map` returned per page |
+| `gather(map)` | `Future<Sequence<R>>`, collecting what `map` returned per page |
 | `save(path, [process])` | `Future<Stats>`, writing items to a file |
 | `sink(destination, [process])` | `Future<Stats>`, writing items to an `IOSink` you own |
 | `engine([process])` | The configured `Engine`, unrun |
@@ -142,13 +142,28 @@ closure, so it is inferred, and returning nothing for a page filters it out:
 
 ```dart
 final titles = await net.crawl<Never>(seed)
-    .gather((page) => page.$('.title').texts);
-// Future<List<String>>
+    .gather((page) => page.parse(format.html)('.title').texts);
+// Future<Sequence<String>>
 ```
 
 `Never` is the crawl's own item type: `gather` emits nothing, so there is
 nothing for it to be. A crawl that follows links into tagged stages emits, and
 wants `collect`.
+
+Both hand back a [`Sequence`](util.md#6-sequences-sequencet), so the shaping a
+script came for is the next call rather than an import — and `.list` is the one
+word at the boundary to anything outside this library:
+
+```dart
+final rows = await net.crawl<Row>(seed).collect(handler);
+
+rows.group((r) => r.host)
+    .seq.to((e) => (host: e.$1, spend: e.$2.sum((r) => r.cost)))
+    .sort((e) => e.host)
+    .each(print);
+
+await concurrent.run(rows.list, enrich, size: system.os.cpus);
+```
 
 `save` writes the way every other write in this library does: items go to a `.part` staging file, its folder is created if it is missing, and it is renamed into place once the run finishes. A crawl that fails part way leaves whatever was already at the destination. `sink` writes to an `IOSink` you own — it is written to and flushed, never closed.
 
@@ -169,7 +184,7 @@ void main() async {
       .concurrent(4)
       .limit(5000)
       .run((res) {
-        for (final href in res.$('a').hrefs) res.follow(href);
+        for (final href in res.parse(format.html)('a').hrefs) res.follow(href);
       });
 
   system.console.logger.ok('Crawled ${stats.completed} pages');
@@ -195,7 +210,7 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 
 void main() async {
   final engine = net.crawl<String>('https://example.com').engine((res) {
-    for (final href in res.$('a').hrefs) res.follow(href);
+    for (final href in res.parse(format.html)('a').hrefs) res.follow(href);
   });
 
   const position = Slot<Map<String, Object?>>('position');
@@ -226,10 +241,10 @@ const name = Slot<String>('name');
 
 final stats = await net.crawl<String>('https://music.example.com/album')
     .tag('song', (res) {
-      print('${res.meta.get(name)} -> ${res.$('a').href}');
+      print('${res.meta.get(name)} -> ${res.parse(format.html)('a').href}');
     })
     .run((res) {
-      for (final a in res.$('#songlist a')) {
+      for (final a in res.parse(format.html)('#songlist a')) {
         res.follow(
           a.href!,
           tag: 'song',
@@ -243,7 +258,7 @@ final stats = await net.crawl<String>('https://music.example.com/album')
 
 ```dart
 res.follow(
-  res.$('form.search').attr('action')!,
+  res.parse(format.html)('form.search').attr('action')!,
   method: HttpMethod.post,
   body: Body.form({'q': 'widgets', 'page': '2'}),
   tag: 'results',
@@ -314,7 +329,7 @@ res.depth;                         // current hop depth (seed is 0)
 Extract structured data declaratively using CSS selectors and property targets (`@attr` or `@text`):
 
 ```dart
-final article = res.extract({
+final article = res.parse(format.html).extract({
   'title': 'h1.headline',
   'author': '.byline > a',
   'link': 'link[rel="canonical"]@href',
@@ -326,10 +341,10 @@ final article = res.extract({
 });
 ```
 
-For a typed read, `res.pick(Field.text('h1'))` returns a `String?` rather than
+For a typed read, `res.parse(format.html).pick(Field.text('h1'))` returns a `String?` rather than
 an `Object?` — see [`http.md`](http.md#declarative-extraction-extract).
 
-Everything from [`Reply`](http.md) is available too — `res.$('...')`, `res.$xpath('...')`, `res.body`, `res.json`, `res.save(...)`.
+Everything from [`Reply`](http.md) is available too — `res.parse(format.html)('...')`, `res.parse(format.html).xpath('...')`, `res.body`, `res.parse(format.json).raw`, `res.save(...)`.
 
 ---
 
@@ -350,7 +365,9 @@ final jsonState = dedup.toJson();
 io.dump('cache/seen.json', jsonState);
 
 // Later:
-final restored = Deduplicator.fromJson(io.json<Map<String, Object?>>('cache/seen.json')!);
+final restored = Deduplicator.fromJson(
+  (await format.json.read('cache/seen.json')).raw as Map<String, Object?>,
+);
 await net.crawl<String>(url).deduplicator(restored).run(handler);
 ```
 
@@ -415,7 +432,7 @@ final titles = await net.crawl<String>('https://site.test')
     .downloader(MapDownloader<String>({
       'https://site.test': '<html><body><h1>Hi</h1></body></html>',
     }))
-    .collect((res) => res.emit(res.$('h1').text));
+    .collect((res) => res.emit(res.parse(format.html)('h1').text));
 ```
 
 Keys are matched most specific first — `'POST https://host/login'`, then `'POST /login'`, then `'https://host/login'`, then `'/login'` — so one URL can answer differently to a `GET` and a `POST`, which is what a multi-step form crawl needs:
@@ -461,7 +478,7 @@ For full control, build the engine and use its router:
 ```dart
 final engine = Engine<String>(
   downloader: HttpDownloader(concurrency: 4),
-  process: (res) => res.emit(res.$('h1').text),
+  process: (res) => res.emit(res.parse(format.html)('h1').text),
 );
 
 engine.router

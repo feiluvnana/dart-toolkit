@@ -1,7 +1,10 @@
 /// # HTTP Networking (`net.*`)
 ///
-/// A retrying HTTP client over `package:http` whose responses provide DOM
-/// querying via [Reply.$] and [Reply.$xpath].
+/// A retrying HTTP client over `package:http`. A [Reply] carries the bytes,
+/// the text and the headers, and nothing about what the bytes *are*: reading
+/// them is [Reply.parse] plus a codec from `format`, because a crawler
+/// fetches JSON, sitemaps, archives and images as readily as it fetches
+/// pages.
 library;
 
 import 'dart:async';
@@ -10,17 +13,16 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'dart:io' as dart_io;
 
-import 'package:html/dom.dart';
-import 'package:html/parser.dart' as html_parser;
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 import 'package:path/path.dart' as p;
 
 import '../concurrent/concurrent.dart';
-import '../util/rand.dart';
-import 'cache.dart';
 import '../src/fs.dart';
-import 'selector.dart';
+import '../util/codec.dart';
+import '../util/rand.dart';
+import '../util/sequence.dart';
+import 'cache.dart';
 
 // ============================================================================
 // HTTP NETWORKING (Fetcher / Reply)
@@ -229,9 +231,12 @@ class Reply {
   final Encoding? _encodingOverride;
 
   String? _body;
-  Document? _doc;
-  Object? _json;
-  bool _decoded = false;
+
+  // Keyed by codec, and every accessor under `format` is a const instance, so
+  // reading a page through `format.html` five times parses it once. This is
+  // what the old `_doc` and `_json` caches did, for every format instead of
+  // two.
+  final Map<Codec<Object?>, Object?> _parsed = {};
 
   /// Creates a response. Normally produced by [Fetcher.send].
   Reply({
@@ -323,24 +328,31 @@ class Reply {
     return _body!;
   }
 
-  /// The body decoded as JSON. Cached, so repeat reads are free.
-  Object? get json {
-    if (!_decoded) {
-      _json = jsonDecode(body);
-      _decoded = true;
-    }
-    return _json;
-  }
-
-  /// The body decoded as JSON, or [fallback] when it is not valid JSON.
+  /// The body read through [codec].
   ///
-  /// Where [json] throws on a bad body, this hands back [fallback] instead.
-  Object? decode([Object? fallback]) {
-    try {
-      return json;
-    } catch (_) {
-      return fallback;
-    }
+  /// The only door from a response to a document, and it names no format:
+  /// `net` fetches bytes and is handed something that reads them, which is why
+  /// a crawl over an API and a crawl over pages are written the same way.
+  ///
+  /// ```dart
+  /// res.parse(format.html).find('h1').text;
+  /// res.parse(format.json).at('data.items');
+  /// res.parse(format.yaml).text('version');
+  ///
+  /// switch (res.type) {
+  ///   case 'application/json': res.parse(format.json).at('items');
+  ///   default:                 res.parse(format.html).find('.item');
+  /// }
+  /// ```
+  ///
+  /// Memoised per codec, so a handler that reads one page five times parses it
+  /// once. Nothing here throws: a body that is not the format asked for is the
+  /// empty cursor, the same as a missing path.
+  T parse<T>(Codec<T> codec) {
+    if (_parsed.containsKey(codec)) return _parsed[codec] as T;
+    final value = codec.parse(body);
+    _parsed[codec] = value;
+    return value;
   }
 
   String? _header(String name) {
@@ -353,50 +365,9 @@ class Reply {
     return null;
   }
 
-  /// The body parsed as HTML. Cached.
-  Document get doc => _doc ??= html_parser.parse(body);
-
-  /// jQuery-style selector accessor for the parsed HTML body.
-  QueryResult get $ => doc.$;
-
-  /// XPath selector accessor for the parsed HTML body.
-  QueryResult get $xpath => doc.$xpath;
-
   /// Writes the response body to [path] atomically.
   Future<File> save(String path, {String part = '.part'}) =>
       Fs.save(path, bytes, part: part);
-
-  /// Extracts data declaratively according to [schema].
-  ///
-  /// Values are either the string shorthand — `'h1'` for text, `'a@href'` for
-  /// an attribute, `['li']` for every match, `['.row', {...}]` for a repeated
-  /// sub-object — or a [Field], which says the same thing with a static type.
-  ///
-  /// ```dart
-  /// final data = res.extract({
-  ///   'title': 'h1',
-  ///   'price': '.price',
-  ///   'link': 'a@href',
-  ///   'tags': ['ul.tags > li'],
-  ///   'items': ['.product', {
-  ///     'name': '.name',
-  ///     'url': 'a@href',
-  ///   }],
-  /// });
-  /// ```
-  Map<String, Object?> extract(Map<String, Object?> schema) =>
-      Field.readAll(doc.documentElement ?? doc.body, schema);
-
-  /// Reads a single typed [field] from the document.
-  ///
-  /// Where [extract] hands back `Object?` values, this keeps the field's type:
-  ///
-  /// ```dart
-  /// final String? title = res.pick(Field.text('h1'));
-  /// final List<String> tags = res.pick(Field.texts('.tag'));
-  /// ```
-  T pick<T>(Field<T> field) =>
-      field.read(doc.documentElement ?? doc.body ?? Element.tag('html'));
 
   @override
   String toString() => '$status $url (${bytes.length} bytes)';
@@ -478,6 +449,24 @@ class Fetcher with PathResolver {
   /// [HttpException] is thrown instead.
   final int? cap;
 
+  /// How often this client may send, or `null` for as fast as it can.
+  ///
+  /// The published limit an API enforces — *10 per second*, *5000 per hour* —
+  /// which a concurrency bound does not satisfy: four instant requests then
+  /// four more is eight in a second. Every attempt takes a token, retries
+  /// included, because the server counts those too.
+  ///
+  /// ```dart
+  /// final api = Fetcher(limiter: concurrent.rate(10, per: 1.s));
+  /// await concurrent.run(urls, api.get, size: 8);
+  /// ```
+  ///
+  /// The dependency points this way round on purpose: `concurrent` knows
+  /// nothing about responses, so a limiter that read `Retry-After` off one
+  /// would tangle the two domains. Retry pacing already honours that header —
+  /// see [Fetcher.retries].
+  final Limiter? limiter;
+
   /// Number of files successfully downloaded through this client.
   int count = 0;
 
@@ -501,6 +490,7 @@ class Fetcher with PathResolver {
     this.proxy,
     this.cap,
     this.cache,
+    this.limiter,
   }) : jar = jar ?? (session ? CookieJar() : null),
        _ownsClient = pool == null,
        _client = pool ?? _createClient(proxy),
@@ -573,6 +563,9 @@ class Fetcher with PathResolver {
 
     while (true) {
       for (var attempt = 1; ; attempt++) {
+        // Before the request, not around the whole call: a rate is about how
+        // often something starts, and a retry is another start.
+        await limiter?.take();
         final currentMerged = Map<String, String>.from(merged);
         if (jar != null) {
           final cookieHeader = jar!.header(currentUrl);
@@ -1207,7 +1200,7 @@ class CookieJar {
   }
 
   /// All stored cookies.
-  List<Morsel> get cookies => _cookies.values.toList();
+  Sequence<Morsel> get cookies => _cookies.values.seq;
 
   /// The value of the stored cookie named [name], or `null`.
   String? operator [](String name) {

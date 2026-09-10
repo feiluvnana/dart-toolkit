@@ -2,6 +2,658 @@
 
 All notable changes to this project will be documented in this file.
 
+## 4.0.0
+
+`net` stops knowing what HTML is.
+
+A crawler fetches JSON, sitemaps, archives, feeds and images as readily as it
+fetches pages, but `Reply` parsed everything as HTML and carried nine members
+to prove it — five about HTML, three about JSON, none about HTTP. That is a
+format table living in a class about the network, and it only ever held two
+rows.
+
+The formats now live where the library's own rules said they should. `tool`
+becomes `format`, HTML joins the family it always belonged to, and the seam
+between fetching and reading is one interface with one method.
+
+### Changed — `tool` is `format`
+
+`tool` was chosen when the domain held one archiver, and it invited exactly the
+thing its own doc comment spent a paragraph forbidding: three executable
+wrappers were added under it in 3.1.0 and removed in 3.2.0. `format.zip` cannot
+be misread as a wrapper around the `zip` binary.
+
+```dart
+format.yaml.read('config.yaml');     // was tool.yaml.read
+format.json.parse(text);             // was tool.json.parse
+format.zip.pack('site', 'site.zip'); // was tool.zip.pack
+```
+
+Rule 4 says say the call site out loud. `format.yaml.read(...)` says what it
+does; `tool.yaml.read(...)` said where it happened to live.
+
+### Added — `Codec<T>`, the seam
+
+One interface, in `util`, because both `net` and `format` need it and Rule 2
+forbids either depending on the other:
+
+```dart
+abstract interface class Codec<T> {
+  T parse(String text);
+}
+```
+
+Every accessor under `format` already had that method and now declares it. So
+`net` gains one member, and it names no format:
+
+```dart
+res.parse(format.html).find('h1').text;
+res.parse(format.json).at('data.items');
+res.parse(format.yaml).text('version');
+```
+
+Which is what makes a mixed crawl one expression instead of two APIs:
+
+```dart
+final items = switch (res.type) {
+  'application/json' => res.parse(format.json).at('items').all(Item.from),
+  _                  => res.parse(format.html).find('.item').all(Item.from),
+};
+```
+
+Results are memoised per codec — the accessors are `const`, so `format.html` is
+one canonical instance — which is the old `_doc` and `_json` caching, for every
+format instead of two. Nothing throws: a body that is not the format asked for
+is the empty cursor, the same as a missing path.
+
+`Codec` also collapses four copies of `read`: it is `io` plus `parse`, written
+once as `FileCodec` and mixed into all five. `format.html.read('page.html')` is
+new and cost nothing.
+
+### Added — `format.html`
+
+The format codec HTML never had, spelled like its three siblings — `parse`,
+`read`, `format` — plus `query` for an XPath cursor and `fragment` for a piece
+of a page that should not be wrapped in `<html><body>`.
+
+```dart
+final page = format.html.parse(res.body);
+final cached = await format.html.read('fixtures/product.html');
+io.write('out.html', format.html.format(page.find('.card')));
+```
+
+`$` and `$xpath` survive as the jQuery spelling, opt-in from
+`package:dart_toolkit/html.dart` (was `selector.dart`). They are off the
+default surface, so they are not a second spelling anyone trips over — but
+`net.$` and `net.$xpath`, which were on it, are gone.
+
+### Changed — `QueryResult` is `Markup`, and it lives in `util`
+
+A result type named after the operation that produced it, the way
+`HttpResponse` was named before 2.0.0. Its sibling is `Json`: a cursor, named
+for what it is over. The same split too — the cursor is a pure value in `util`,
+the codec is a subject in `format` — and for the same reason: a type `net`
+hands back cannot live in a domain `net` must not depend on.
+
+The 800-line jQuery evaluator behind it moved to `lib/src/jquery.dart`, so
+`util/markup.dart` reads as the vocabulary rather than the machinery.
+
+`Markup` also gains `extract`, `document` and `form`, which `Reply` used to
+own.
+
+### Changed — `find` and the callable are one search
+
+`find` meant strict descendants of the current set while `page(selector)`
+searched the whole parsed document. On a page cursor — whose elements are the
+body's *children* — `find('h1')` missed an `<h1>` at the top level and `('h1')`
+did not. One page, two answers, depending on which spelling you reached for.
+
+They are the same search now. A result is always scoped, so a chained `find`
+cannot quietly search the page again:
+
+```dart
+page.find('.row').find('.name').texts;   // names inside rows, only
+```
+
+`matching(selector)` is still how you ask whether the set *itself* qualifies.
+
+### Changed — finding a form is reading a page
+
+`res.form('#login')` needed `net` to parse, which is the thing this release
+removes. Finding a form hangs off the cursor; sending one stays in `net`,
+because its output is an `HttpMethod`, a `Uri` and a `Body`.
+
+A cursor cannot know what URL its markup came from, so `Form.at(url)` carries
+it — and a form asked to resolve a relative action without one throws saying so
+rather than quietly resolving against `localhost`:
+
+```dart
+final res = await net.http.get(loginUrl);
+await res.parse(format.html).form('#login')!
+    .at(res.url)
+    .fill({'user': user, 'pass': pass})
+    .send(client: session);
+```
+
+Inside a crawl, `res.submit(form)` calls `at` for you.
+
+### Removed — every `Reply` member that named a format
+
+No deprecation shims. Rule 5 settles it: a migration is one edit; two spellings
+is forever.
+
+| Was | Is |
+| :--- | :--- |
+| `res.$('h1')` | `res.parse(format.html)('h1')` |
+| `res.$xpath('//h1')` | `res.parse(format.html).xpath('//h1')` |
+| `res.doc` | `res.parse(format.html).document` |
+| `res.extract({...})` | `res.parse(format.html).extract({...})` |
+| `res.pick(field)` | `res.parse(format.html).pick(field)` |
+| `res.json` | `res.parse(format.json).raw` |
+| `res.decode(fallback)` | `res.parse(format.json).raw ?? fallback` |
+| `res.at('data.items')` | `res.parse(format.json).at('data.items')` |
+| `res.form('#login')` | `res.parse(format.html).form('#login')!.at(res.url)` |
+| `net.$(markup)` | `format.html.parse(markup)` |
+| `net.$xpath(markup)` | `format.html.query(markup)` |
+| `QueryResult` | `Markup` |
+| `tool.*` | `format.*` |
+| `package:dart_toolkit/selector.dart` | `package:dart_toolkit/html.dart` |
+
+A handler that reads a page more than once names the cursor, which most already
+should:
+
+```dart
+final page = res.parse(format.html);
+page.find('h1').text;
+page.find('a').hrefs;
+```
+
+### Pinned
+
+Four assertions in `test/regression_test.dart`, so this cannot rot:
+
+- **No HTML parser under `lib/net/`.** A source scan, and the one-line
+  statement of the release. `net/form.dart` still imports `package:html/dom.dart`
+  for the element type it is handed — a form is a request the page describes —
+  but nothing in `net` turns text into a tree.
+- **`Reply` carries no member that names a format.**
+- **`parse` memoises per codec**, so one page is parsed once.
+- **Every `format` accessor is a `Codec`**, so the next format cannot arrive
+  with a differently-spelled entry point.
+
+### Not in this release
+
+**`format.xml`.** It was planned, and it is deferred rather than dropped.
+`xpath_selector_xml_parser` — the binding that would let `Markup.xpath` serve
+XML with no second implementation — could not be resolved here, and the two
+remaining routes each break something this release just established: adding
+`package:xml` with a cursor of its own creates the second cursor `Markup` was
+named to avoid, and mapping XML onto `Json` gives it a query language that is
+not XPath. `Sitemap` keeps its `<loc>` regex until there is somewhere better
+for it to go. Being additive, it costs nothing to ship later.
+
+**`format.csv`.** `io.csv` holds two things: `pipe` and the streaming writers,
+which are a file API and correctly in `io`, and whole-file parse and format,
+which are a codec. Splitting it is right by the same rule that moved HTML, and
+it creates a real risk of two spellings for "read a CSV file" — the failure
+Rule 5 exists to prevent. It needs its own decision and its own release.
+
+## 3.2.0
+
+The small things a script that can be *left running* needs, and the last of the
+namespace debts. `concurrent` learns the limit it was missing — **how often**,
+not how many. `io` learns to hold a lock so two copies of a scheduled script do
+not fight over one output file. `util.text` learns to produce text as well as
+read it. And `tool` becomes what it should always have been: file formats, and
+nothing else.
+
+### Added
+
+- **`concurrent.rate(count, per:)` → `Limiter`.** `Semaphore` and `Mutex` bound
+  how many run at once; nothing bounded how often they start, and that is the
+  limit every public API publishes. `Semaphore(4)` satisfies none of *5000 per
+  hour*, *10 per second* or *60 per minute*: four instant requests then four
+  more is eight in a second, so the script works until the day the network is
+  fast.
+
+  ```dart
+  final limit = concurrent.rate(10, per: 1.s);
+
+  await limit.take();                                  // waits for a token
+  await limit.guard(() => net.http.get(url));          // the wrapping form
+
+  await concurrent.run(urls, (u) => limit.guard(() => net.http.get(u)),
+      size: 8);          // 8 in flight, never more than 10 per second
+  ```
+
+  `guard` mirrors `Semaphore.withPermit` and `Mutex.protect`. The bucket
+  refills **smoothly**, one token every `per / count`, rather than in a lump per
+  window — smooth is what servers measure, and it stops a burst at second zero
+  from locking out second one. It starts full, so the first `count` calls do not
+  wait, and waiters are served in arrival order. `available`, `waiting` and
+  `close()` round it out.
+
+- **`Fetcher(limiter:)`.** Where a rate belongs when it is the server's rather
+  than the script's. Every attempt takes a token, retries included, because the
+  server counts those too. The dependency points this way on purpose:
+  `concurrent` stays ignorant of responses, so there is no `Limiter.absorb`
+  reading `Retry-After` and tangling the two domains.
+
+- **`io.lock(path, action, {wait})` and `io.locked(path)`.** Atomic writes made
+  the *file* safe; they never stopped the *result* from being whichever process
+  finished last. A slow run overlapping the next cron tick, or a human running
+  the script by hand while cron does, now blocks.
+
+  ```dart
+  await io.lock('.crawl.lock', () async {
+    await net.crawl<Row>(seed).save('out.csv');   // exactly one process here
+  });
+  ```
+
+  Without `wait` a second process throws `LockedError` straight away; with it,
+  it queues. The lock is released on a normal return, on a throw, **and on
+  Ctrl-C** — it rides the same registry that removes a half-written `.part`
+  file, because a lock file that outlives an interrupt is worse than no lock at
+  all: the next run refuses to start. The file holds the pid and a timestamp, so
+  a stale lock is diagnosable, and one whose process is gone is taken rather
+  than obeyed. There is deliberately no age cut-off; "older than an hour is
+  stale" breaks the one run that legitimately took ninety minutes.
+
+- **`util.text.render(template, values)`.** The one member of `util.text` that
+  *produces* text. `{key}` substitution and nothing else — a missing key renders
+  empty, the fourth reader to keep that contract after `Slot.read`, `Field.text`
+  and `Json.text`.
+
+  ```dart
+  util.text.render('Hello {name}, {count} new', {'name': 'Ada', 'count': 3});
+  util.text.render(io.read('template.md'), vars);
+  ```
+
+  No conditionals, no loops, no filters, no partials. Each is one step towards a
+  template engine, and a script that needs one should have one.
+
+- **`tool.json`.** The third format codec, spelled exactly like `tool.yaml` and
+  `tool.toml`: `parse`, `read`, `format`.
+
+### Changed — `tool` holds formats, and only formats
+
+- **`util.json` is `tool.json`.** A *format* is a subject in Rule 1's sense —
+  the sentence that admitted `tool.zip` says so outright — and JSON sitting in
+  `util` while YAML and TOML sat in `tool` left a reader asking where formats
+  live. All three are now one family with one spelling.
+
+  ```dart
+  util.json.parse(text)     ->  tool.json.parse(text)
+  util.json.format(value)   ->  tool.json.format(value)
+  ```
+
+  The `Json` **type** did not move: `net` hands one back from `Reply.at` and
+  `Asked.json`, and a type `net` needs cannot live under `tool` without making
+  `tool` something `net` depends on — Rule 2's second test. It stays a pure
+  value in `util`, beside `Slot` and `Sequence`, and `lib/src/jsontext.dart` is
+  the codec both domains sit on, the way `Fs` backs `io`.
+
+- **`io.json(path)` is `tool.json.read(path)`.** One file door per format
+  rather than JSON's in `io` and the other two in `tool`. `io.dump` stays where
+  it is, because staging a write through a `.part` file is `io`'s job and not
+  the format's. `io.async.json` went with it.
+
+  ```dart
+  io.json(path)                 ->  await tool.json.read(path)
+  io.json<T>(path, Parse.from)  ->  T.from((await tool.json.read(path)).raw)
+  ```
+
+- **`tool.git`, `tool.gh` and `tool.docker` are gone.** Wrapping an executable
+  is `system.run` plus arguments, and a wrapper only ever carries the handful of
+  subcommands somebody thought to add — where `system.run` carries the whole
+  binary and already returns a `SysResult` rather than throwing on a non-zero
+  exit. `tool.gh` and `tool.docker` shipped in 3.1.0 and are removed in the same
+  breath; `tool.git` had been there since 1.5.0.
+
+  ```dart
+  await tool.git.branch();
+  // ->
+  final head = await system.run('git', ['rev-parse', '--abbrev-ref', 'HEAD']);
+  if (head.ok) print(head.out.trim());
+  ```
+
+  Pair it with `system.which('git')` for "is it installed" — that is the one
+  thing the wrappers added over `system.run`, and it was already a member.
+  `Container`, `GitAccessor`, `GhAccessor` and `DockerAccessor` are gone with
+  them. Rule 1 now reads: an executable is not a subject; the thing it knows is.
+
+### Docs
+
+`docs/json.md` is new. `docs/concurrent.md` gains the limiter, `docs/io.md`
+gains locking, `docs/util.md` gains `render`, and `docs/git.md` and
+`docs/gh.md` are deleted. `example/shape.dart` is new and `example/parallel.dart`
+and `example/files.dart` grew the rate limiter and the lock.
+
+### Fixed
+
+- **`Server.port` after `close()`.** The underlying socket throws once it is
+  unbound, so a script logging where it *had* been listening crashed. The port
+  and host are now read at bind and kept.
+
+### Deliberately not in this release
+
+The **async `Sequence`** — `seq.pool(8).to(fetch)`, a bounded-concurrency map
+that reads like the sync one. It is the one real design question left, it needs
+a complete mirror of thirty members to be allowed at all (`io`/`io.async` is the
+precedent and `NAMESPACE.md` is explicit that a partial mirror is not), and it
+should be decided by counting the `.list`/`.seq` seams in a few real scripts
+rather than in advance of them. If they cluster around the slow step, it is
+worth its cost; if they scatter, `Sequence` was the wrong boundary and this
+would double the wrong thing.
+
+---
+
+## 3.1.0
+
+The errands. Four whole jobs a normal script hands to something outside this
+library — three by shelling out, one by importing `dart:io`. Every stage is
+additive, and none spends a top-level name.
+
+### Added
+
+- **`net.serve(port, handler)` and `net.once(port, handler)`.** `net` was
+  entirely client-side; nothing listened. Three ordinary script jobs need
+  something that does — an OAuth callback, a webhook receiver, and a preview of
+  what was just scraped — and all three meant `dart:io`'s `HttpServer` and a
+  hand-rolled request switch.
+
+  ```dart
+  final server = await net.serve(8080, (req) async {
+    return switch (req.path) {
+      '/callback' => Served.text(req.query['code'] ?? ''),
+      '/health' => Served.json({'ok': true}),
+      _ => Served.status(404),
+    };
+  });
+  await server.close();
+  ```
+
+  The client half reads a URL and returns a `Reply`; the server half takes an
+  `Asked` and returns a `Served`. `Asked` carries `path`, `query`, `headers`,
+  `method` and the body three ways — `text()`, `bytes()` and `json()`, which
+  gives a `Json` cursor. `Served` has `text`, `json`, `bytes`, `file`, `status`
+  and `redirect`. `Server` reports its `port` — pass `0` to let the OS pick one
+  — and closes.
+
+  `net.once` is the one-shot case, because an OAuth callback is not a server: it
+  is a single answer a script waits for, and writing it as a server means
+  writing the shutdown too.
+
+  ```dart
+  final code = await net.once(8080, (req) => req.query['code'], timeout: 2.m);
+  ```
+
+  It serves until the handler returns non-null, replies, waits for that reply to
+  actually flush, then closes — closing on the handler's return raced the write
+  and the browser saw a refused connection.
+
+  `Served` and `Asked` rather than `Response` and `Request`: 2.0.0 spent those
+  names once and renamed out of them. Routing with path parameters, middleware,
+  static directories, HTTPS and WebSockets are all deliberately absent — each is
+  the first step towards a web framework, and this is a scraping toolkit that
+  needs to catch a redirect. No new dependency; `HttpServer` never reaches a
+  public signature.
+
+- **`io.observe(path, onchange, {pattern, settle, recursive})`.**
+  Rebuild-on-change, re-run-on-save, reload-the-config. Returns the function
+  that stops it.
+
+  ```dart
+  final stop = io.observe('lib', (changed) => rebuild(changed),
+      pattern: RegExp(r'\.dart$'), settle: 200.ms);
+  await stop();
+  ```
+
+  `settle` is the part everyone hand-rolls wrong: an editor writes a file two or
+  three times per save, so the naive version fires three builds. A burst for one
+  path coalesces into one call. `FileSystemEntity.watch` recurses on macOS and
+  Windows but not on Linux, so a recursive watch there is a subscription per
+  directory — including directories created later — and hiding that asymmetry is
+  most of why the member exists.
+
+  It is `observe` and not `watch` because `system.watch()` already means *watch
+  for Ctrl-C*, with `track`/`untrack` beside it. Two `watch`es meaning two
+  unrelated things on two accessors is precisely what Rule 5 is for.
+
+- **`tool.yaml` and `tool.toml`.** Every tool a script coordinates with is
+  configured in one of these — `pubspec.yaml` first, then CI, then Docker
+  Compose, then Kubernetes; `Cargo.toml` and `pyproject.toml` for the other
+  half. `io.store` covered the format this library *writes*; neither covered
+  what everything else *reads*.
+
+  ```dart
+  final pubspec = await tool.yaml.read('pubspec.yaml');
+  pubspec.text('version');
+  pubspec.jsonpath(r'$..sdk').sift((n) => n.text());
+  ```
+
+  Reading returns the `Json` cursor rather than a type of its own: YAML, TOML
+  and JSON decode to the same maps, lists and scalars, so a second cursor would
+  be two spellings of one operation. That is the stage's best property. `format`
+  writes block-style YAML, quoting any scalar that would read back as a number,
+  a boolean or a null.
+
+  Two dependencies: `package:yaml` (maintained by the SDK team — YAML's subset
+  boundary is exactly where the bugs live) and `package:toml`. Neither type
+  reaches a public signature.
+
+- **`tool.gh` and `tool.docker`.** *Removed again in 3.2.0 — see above.* Rule
+  2's fifth test had named both as the reason `git` did not take a top level, so
+  the slot was pre-paid; what the release found was that the slot should not have
+  existed for an executable at all.
+
+---
+
+## 3.0.0
+
+The standard library a script actually uses. `import 'package:dart_toolkit/dart_toolkit.dart';`
+was already the only import a normal script needed for the *edges* — fetching,
+parsing, arguments, the terminal, files. It was not true for the *middle*: a
+script that crawled a site and wrote a CSV still reached past this library three
+times in between, to `dart:convert` for JSON, to `package:collection` for
+grouping, and to `dart:core` for the collection API itself.
+
+This closes the middle. It is a major release for one reason: the library's own
+signatures flipped to the new sequence type.
+
+### Added — `Sequence<T>`
+
+Everything a script does *between* fetching and writing — grouping rows,
+batching them for a pool, deduplicating, summing, taking the best of each group
+— was Dart's `Iterable` plus `package:collection`, and the second half of that
+is a dependency this library was written to avoid needing. So the middle of
+every real script was three loops of nothing:
+
+```dart
+final byHost = <String, List<Row>>{};                 // groupBy, by hand
+for (final r in rows) (byHost[r.host] ??= []).add(r);
+
+final batches = <List<Row>>[];                        // chunking, by hand
+for (var i = 0; i < rows.length; i += 100) {
+  batches.add(rows.sublist(i, math.min(i + 100, rows.length)));
+}
+```
+
+`Sequence<T>` is about 45 members covering Kotlin's hundred. Shaping — `to`,
+`sift`, `nonnull`, `keep`, `omit`, `only`, `flat`, `unique`, `sort`, `order`,
+`flip`, `head`, `tail`, `skip`, `trim`, `until`, `after`, `chunks`, `windows`,
+`zip`, `pairs`, `scan`, `also`, `plus`, `minus`, `union`, `common`, `or`,
+`cast` — is lazy. Reducing — `count`, `empty`, `has`, `first`, `last`, `sole`,
+`at`, `find`, `findlast`, `index`, `any`, `all`, `fold`, `sum`, `avg`, `best`,
+`worst`, `group`, `keyed`, `tally`, `split`, `unzip`, `join`, `each`, `list`,
+`set` — is eager.
+
+```dart
+rows.group((r) => util.time.day(r.at))
+    .seq.to((e) => (day: e.$1, spend: e.$2.sum((r) => r.cost)))
+    .sort((e) => e.day)
+    .each((e) => log.info('${util.time.stamp(e.day)}  ${e.spend}'));
+```
+
+**It deliberately does not implement `Iterable<T>`,** and that is the whole
+design. An extension member never overrides an instance member — declare `map`
+on `Iterable` and `dart:core`'s wins silently, which is the `HttpClient` bug
+again — so an extension could only *add* names beside Dart's, and `keep` next
+to `where` forever is what Rule 5 forbids. Replacing a vocabulary means
+replacing the static type.
+
+The cost, measured rather than guessed:
+
+| Lost | Replacement |
+| :--- | :--- |
+| `for (final x in seq)` | `seq.each((x) { ... })` |
+| `[...seq]`, `seq.toList()` | `seq.list` |
+| passing to a `List<T>` parameter | `seq.list` |
+| passing to this library's own APIs | nothing — they take a `Sequence` |
+
+`.seq` on any `Iterable` is the way in, and `Map.seq` gives
+`Sequence<(K, V)>` — records, because `MapEntry` is a noun nobody wants.
+
+Four naming laws kept the vocabulary from doubling, and two of them are now
+general rules in `NAMESPACE.md`: keep Dart's word where Dart's word is right
+(`fold`, `cast`, `join`, `skip`, `zip`, `any`, `all`, `count` are unchanged);
+no complement pair where `!` does the job (`empty` with no `notEmpty`, `any`
+with no `none`); a nullable return deletes a whole family (five readers, not
+ten, and `?? x` instead of `getOrElse`); a record replaces a variant (`pairs`
+instead of `withIndex`/`mapIndexed`/`forEachIndexed`).
+
+### Changed — the library returns `Sequence`
+
+The breaking half. Roughly fifteen of the 102 collection-typed positions
+flipped: the ones a caller *shapes*.
+
+| Was | Is |
+| :--- | :--- |
+| `crawl.collect`, `crawl.gather` | `Future<Sequence<T>>` |
+| `io.csv.maps`, `io.csv.matrix` | `Future<Sequence<...>>` |
+| `io.find`, `io.async.find` | `Sequence<File>` |
+| `util.text.words`, `numbers`, `betweens` | `Sequence<...>` |
+| `net.sitemap`, `Sitemap.parse`, `Sitemap.load` | `Sequence<Uri>` |
+| `Robots.agents`, `CookieJar.cookies` | `Sequence<...>` |
+| `util.rand.shuffle`, `util.rand.some` | `Sequence<T>` |
+| `tool.zip.list` | `Sequence<Entry>` |
+
+Every `List<int>` stayed: bytes are a buffer, not a sequence. Every parameter
+typed `Iterable<T>` stayed, and `Map` returns stayed maps with `.seq` a call
+away.
+
+- **`QueryResult` holds a `Sequence` rather than being an `Iterable`.** It
+  mixed in `IterableMixin<Element>`, which is how `every` came to mean
+  `Iterable.every` here and left Dart's whole collection vocabulary live in the
+  selector API. `length` is `count`, `isEmpty` is `empty`, `isNotEmpty` is gone
+  (`!empty`), and `elements` is the `Sequence<Element>`. Everything
+  markup-shaped — `find`, `at`, `filter`, `children`, `texts`, `all`, `one` — is
+  unchanged.
+
+  ```dart
+  page.$('tr').length                ->  page.$('tr').count
+  page.$('tr').firstOrNull           ->  page.$('tr').elements.first
+  for (final e in page.$('tr'))      ->  page.$('tr').elements.each(...)
+  ```
+
+`test/regression_test.dart` pins the `Sequence`-is-not-an-`Iterable` property,
+because a future `implements Iterable<T>` added for convenience would quietly
+undo the whole stage and nothing else would notice.
+
+### Added — `Json`
+
+`Reply.json` was `Object?` and so was `io.json`'s raw form, so every read was a
+cast — and a script that got JSON from anywhere but a response had no typed
+path at all and called `jsonDecode` directly. `Json` is the cursor the HTML
+side already had:
+
+| `QueryResult` (HTML) | `Json` |
+| :--- | :--- |
+| `q('sel')` | `j.at('a.b')` — dotted path, `[0]` or `.0` for an index |
+| `q.text` / `q.texts` | `j.text(key)` / `j.texts()` |
+| — | `j.number(key)`, `j.flag(key)` |
+| `q.all(sel, build)` | `j.all(build)` |
+| `q.one(sel, build)` | `j.one(build)` |
+| `q.count`, `q.empty` | `j.count`, `j.empty` |
+| `q.xpath(query)` | `j.jsonpath(expr)` |
+| — | `j.raw` |
+
+```dart
+final items = res.at('data.items').all((item) => (
+  sku: item.text('sku'),
+  price: item.number('price.amount'),
+));                                              // Sequence<({...})>
+```
+
+A missing path is empty, not an exception — the same contract `Slot.read` and
+`Field.text` keep — and a body that is not JSON at all is the empty cursor too,
+so `at` never needs the `try` that `json` does. No `Slot`s here: a slot exists
+so a writer and a reader in different places can agree on a key, and reading a
+document is one place.
+
+**`jsonpath`** runs a query where `at` walks one path, and returns
+`Sequence<Json>` — the JSON side of `QueryResult.xpath`, named after its
+language for the same reason. `$`, `.name`, `['a','b']`, `.*`, `..name`, `[0]`,
+`[-1]`, `[0,2]`, `[1:4]`, `[::2]`, `[::-1]`, `[?(@.field)]`,
+`[?(@.price < 10)]` and `[?(@.name =~ /^wid/)]`. Script expressions and
+arithmetic are absent: each is a language rather than a query, and a filter that
+needs one is a `keep` on the sequence. An expression it cannot parse selects
+nothing.
+
+Three doors produce the same cursor — `Reply.at`, `tool.json.parse` and
+`tool.json.read` (`util.json.parse` and `io.json` at the time; see 3.2.0).
+
+### Added — `util.time` learns to read
+
+`stamp`, `iso`, `ago` and `format` all went `DateTime` → `String`; nothing came
+back, so a script reading a date out of a CSV column was on `DateTime.parse`
+and a `try`.
+
+```dart
+util.time.parse('2024-03-09T10:15:00Z');   // ISO first
+util.time.parse('20240309_101500');        // what `stamp` writes
+util.time.parse('09/03/2024');             // day first, stated rather than guessed
+util.time.parse('9 Mar 2024');             // English month names
+util.time.span('1h30m');                   // 90.m
+util.time.day(row.at);                     // the grouping primitive
+```
+
+Both readers are nullable, so a bad cell is a `null` to handle rather than a
+`try` to write. `parse` also refuses a date `DateTime.parse` would silently roll
+over: `2024-13-01` is `null`, not January 2025.
+
+- **`cli.duration` and `cli.date`.** The sixth and seventh option kinds, read
+  through `util.time.span` and `util.time.parse`, so `--timeout 1h30m` and
+  `--since 09/03/2024` work and `require` reports a value that is neither.
+  `date` reads `null` when nothing was given, because `--since` exists
+  precisely so a script can tell *not given* from *the beginning of time*.
+
+- **`int.h` and `int.d`,** the two missing rungs beside `.ms`, `.s` and `.m`.
+
+### Added — the OS facts
+
+Nothing in `io` resolved `~`, nothing reported the platform, and nothing gave
+the CPU count — which is the honest default for a pool size and was hardcoded
+to 4 in every example.
+
+```dart
+io.home;                                 // $HOME, %USERPROFILE% on Windows
+io.cwd;
+io.expand('~/.config/x');                // ~ at the start, $VAR and ${VAR}
+io.abs(path);  io.rel(path, from: dir);
+system.os;    // ({String name, int cpus, String host, String user})
+```
+
+Each is one line of `package:path` or `Platform`, which is the point: they were
+absent, not hard, and their absence is what sent a script back to `dart:io` for
+the least interesting reason available. `system.os` is a record rather than five
+loose members, per 2.0.0's rule that a struct is a record.
+
+### Removed
+
+No deprecation shims, per Rule 5: a migration is one edit, and two spellings is
+forever. Every rename above is analyzer-caught, never silent.
+
 ## 2.0.0
 
 The names, and the `Object?`s. Two debts were written down in 1.7.0 and both
@@ -11,8 +663,7 @@ signatures that said `Object?` while meaning something specific. A `Map` used
 as a struct is now a typed key. A `T ==` switch is now a declaration that
 returns its own reader. Four fields where two were always null are now a sealed
 type with two cases. Nothing is deprecated, and every change below carries the
-before and after. [PLAN-2.0.0.md](PLAN-2.0.0.md) has why each one is shaped the
-way it is.
+before and after.
 
 ### Changed — the vocabulary
 
@@ -144,10 +795,9 @@ way it is.
   ```dart
   final titles = await net.crawl<Never>(seed)
       .gather((page) => page.$('.title').texts);
-  // Future<List<String>>
+  // Future<List<String>>   (a Sequence since 3.0.0)
   ```
 
-- **`PLAN-2.0.0.md`**, the design record for this release.
 - **`test/typed_api_test.dart`**, which pins each thing that used to be
   untyped against what it is now.
 

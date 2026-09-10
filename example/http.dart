@@ -34,7 +34,9 @@ void main() async {
   try {
     // A response knows how to query its own HTML.
     final page = await client.get('$origin/'.url);
-    log.ok('GET ${page.status} ${page.type} — ${page.$('h1').text}');
+    log.ok(
+      'GET ${page.status} ${page.type} — ${page.parse(format.html)('h1').text}',
+    );
 
     // Bodies are sealed, so the encoding is explicit at the call site:
     // Body.json, Body.form, Body.text, Body.bytes.
@@ -42,9 +44,11 @@ void main() async {
       '$origin/echo'.url,
       body: const Body.json({'id': 1, 'name': 'keyboard'}),
     );
-    // `json` throws on a body that will not parse; `decode` takes a fallback.
-    log.ok('POST ${echo.status} — ${echo.json}');
-    log.info('Fallback on junk: ${Reply.text('<nope>').decode(const {})}');
+    // Reading a body is a codec, whichever format it is. Nothing throws: a
+    // body that is not JSON is the empty cursor, so the fallback is a `??`.
+    log.ok('POST ${echo.status} — ${echo.parse(format.json).raw}');
+    final junk = Reply.text('<nope>').parse(format.json);
+    log.info('Fallback on junk: ${junk.raw ?? const {}}');
 
     // Cookies set anywhere in the session are sent everywhere they apply.
     await client.get('$origin/signin'.url);

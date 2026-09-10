@@ -28,7 +28,8 @@ extension UrlString on String {
 ///
 /// ```dart
 /// await util.time.wait(250.ms);
-/// net.crawl('https://example.com').delay(2.seconds);
+/// net.crawl('https://example.com').delay(2.s);
+/// final overnight = 8.h;
 /// ```
 extension DurationInt on int {
   /// This many milliseconds.
@@ -39,4 +40,10 @@ extension DurationInt on int {
 
   /// This many minutes.
   Duration get m => Duration(minutes: this);
+
+  /// This many hours.
+  Duration get h => Duration(hours: this);
+
+  /// This many days.
+  Duration get d => Duration(days: this);
 }
