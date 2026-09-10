@@ -40,15 +40,15 @@ void main() {
     test('String.\$ selects straight out of markup', () {
       final tracks = sampleHtml.$('.track');
       expect(tracks.count, equals(3));
-      expect(tracks.elements.first!.$('.num').text, equals('01.'));
-      expect(tracks.elements.last!.$('.num').text, equals('03.'));
+      expect(tracks.elements.first!.query.find('.num').text, equals('01.'));
+      expect(tracks.elements.last!.query.find('.num').text, equals('03.'));
     });
 
     test('text, texts, and html extraction', () {
       final doc = $(sampleHtml);
       expect(doc.find('h1').text, equals('Album Title'));
       expect(
-        doc.find('.track a').texts,
+        doc.find('.track a').texts.list,
         equals(['Track One', 'Track Two', 'Bonus Track']),
       );
       expect(doc.find('.footer p').text, equals('Copyright 2026'));
@@ -58,9 +58,9 @@ void main() {
     test('attributes extraction with attr and attrs', () {
       final doc = $(sampleHtml);
       expect(doc.find('.track').attr('data-id'), equals('1'));
-      expect(doc.find('.track').attrs('data-id'), equals(['1', '2', '3']));
+      expect(doc.find('.track').attrs('data-id').list, equals(['1', '2', '3']));
       expect(
-        doc.find('.track a').attrs('href'),
+        doc.find('.track a').attrs('href').list,
         equals(['/track/1', '/track/2', 'https://example.com/bonus']),
       );
     });
@@ -124,7 +124,7 @@ void main() {
       expect(firstTrack?.attr('data-id'), equals('1'));
       expect(q.find('.missing').elements.first, isNull);
 
-      final allTracks = q('.track');
+      final allTracks = q.find('.track');
       expect(allTracks.count, equals(3));
       expect(allTracks.elements.first!.attr('data-id'), equals('1'));
     });
@@ -168,7 +168,7 @@ void main() {
 
         // :header
         expect(
-          doc.find(':header').texts,
+          doc.find(':header').texts.list,
           equals(['Main Header', 'Sub Header']),
         );
 
@@ -177,8 +177,8 @@ void main() {
         expect(doc.find('ul li:last').text, equals('Row 3'));
 
         // :even and :odd
-        expect(doc.find('ul li:even').texts, equals(['Row 0', 'Row 2']));
-        expect(doc.find('ul li:odd').texts, equals(['Row 1', 'Row 3']));
+        expect(doc.find('ul li:even').texts.list, equals(['Row 0', 'Row 2']));
+        expect(doc.find('ul li:odd').texts.list, equals(['Row 1', 'Row 3']));
 
         // :eq with positive and negative index
         expect(doc.find('ul li:eq(1)').text, equals('Row 1'));
@@ -198,27 +198,30 @@ void main() {
       final xp = $xpath(sampleHtml);
 
       // firstOrNull on xpath result
-      final firstA = xp('//a').elements.first;
+      final firstA = xp.xpath('//a').elements.first;
       expect(firstA, isNotNull);
       expect(firstA?.text.trim(), equals('Track One'));
 
       // xpath returns Markup
-      final allA = xp('//a');
+      final allA = xp.xpath('//a');
       expect(allA.count, equals(3));
-      expect(allA.texts, equals(['Track One', 'Track Two', 'Bonus Track']));
+      expect(
+        allA.texts.list,
+        equals(['Track One', 'Track Two', 'Bonus Track']),
+      );
 
       // XPath values (text nodes and attributes)
       expect(
-        xp.xpathvalues('//a/text()'),
+        xp.xpathvalues('//a/text()').list,
         equals(['Track One', 'Track Two', 'Bonus Track']),
       );
       expect(
-        xp.xpathvalues('//a/@href'),
+        xp.xpathvalues('//a/@href').list,
         equals(['/track/1', '/track/2', 'https://example.com/bonus']),
       );
-      expect(xp('//a').href, equals('/track/1'));
+      expect(xp.xpath('//a').attr('href'), equals('/track/1'));
       expect(
-        xp('//a').hrefs,
+        xp.xpath('//a').attrs('href').list,
         equals(['/track/1', '/track/2', 'https://example.com/bonus']),
       );
     });
@@ -238,40 +241,52 @@ void main() {
         </div>
       ''';
 
-        final selector = mediaHtml.$;
+        final selector = mediaHtml.$();
 
         // Chainable Markup attribute helpers
-        expect(selector('a').href, equals('/target1'));
-        expect(selector('a').hrefs, equals(['/target1', '/target2']));
-        expect(selector('img').src, equals('/img/1.png'));
-        expect(selector('img').srcs, equals(['/img/1.png', '/img/2.png']));
-        expect(selector('a').attr('title'), equals('Link Title 1'));
+        expect(selector.find('a').attr('href'), equals('/target1'));
         expect(
-          selector('a').attrs('title'),
+          selector.find('a').attrs('href').list,
+          equals(['/target1', '/target2']),
+        );
+        expect(selector.find('img').attr('src'), equals('/img/1.png'));
+        expect(
+          selector.find('img').attrs('src').list,
+          equals(['/img/1.png', '/img/2.png']),
+        );
+        expect(selector.find('a').attr('title'), equals('Link Title 1'));
+        expect(
+          selector.find('a').attrs('title').list,
           equals(['Link Title 1', 'Link Title 2']),
         );
-        expect(selector('img').attr('alt'), equals('Image 1'));
-        expect(selector('img').attrs('alt'), equals(['Image 1', 'Image 2']));
-        expect(selector('form').attr('action'), equals('/submit-form'));
-        expect(selector('input').value, equals('test@example.com'));
+        expect(selector.find('img').attr('alt'), equals('Image 1'));
+        expect(
+          selector.find('img').attrs('alt').list,
+          equals(['Image 1', 'Image 2']),
+        );
+        expect(selector.find('form').attr('action'), equals('/submit-form'));
+        expect(selector.find('input').value, equals('test@example.com'));
 
         // Markup getters
         final q = $(mediaHtml);
-        expect(q.find('a').href, equals('/target1'));
-        expect(q.find('a').hrefs, equals(['/target1', '/target2']));
+        expect(q.find('a').attr('href'), equals('/target1'));
+        expect(
+          q.find('a').attrs('href').list,
+          equals(['/target1', '/target2']),
+        );
         expect(q.find('a').attr('title'), equals('Link Title 1'));
         expect(
-          q.find('a').attrs('title'),
+          q.find('a').attrs('title').list,
           equals(['Link Title 1', 'Link Title 2']),
         );
         expect(q.find('img').attr('alt'), equals('Image 1'));
-        expect(q.find('img').attrs('alt'), equals(['Image 1', 'Image 2']));
+        expect(q.find('img').attrs('alt').list, equals(['Image 1', 'Image 2']));
         expect(q.find('form').attr('action'), equals('/submit-form'));
         expect(q.find('input').value, equals('test@example.com'));
 
         // Element extension getters
         final firstImg = q.find('img').elements.first;
-        expect(firstImg?.src, equals('/img/1.png'));
+        expect(firstImg?.attr('src'), equals('/img/1.png'));
         expect(firstImg?.attr('alt'), equals('Image 1'));
       },
     );
@@ -304,14 +319,14 @@ void main() {
       expect(fragment.find('div').count, equals(1));
       expect(fragment.find('div:contains(hello)').count, equals(1));
       expect(fragment.find('.x:first').count, equals(1));
-      expect(fragment('div:contains(hello)').count, equals(1));
+      expect(fragment.find('div:contains(hello)').count, equals(1));
       expect(fragment.matching('div:contains(hello)').count, equals(1));
 
       // An extended selector used to match the context element itself while
       // the plain-CSS fast path did not, so the same query answered
       // differently depending on whether it happened to carry a pseudo.
       final page = $('<html><body><p>x</p></body></html>');
-      expect(page('body:has(p)').count, equals(1));
+      expect(page.find('body:has(p)').count, equals(1));
       expect(page.find('body:has(p)').count, equals(1));
 
       // Scoped, though: the result of a search is not rooted on the document,
@@ -320,7 +335,7 @@ void main() {
         '<div class="row"><b class="name">in</b></div><b class="name">out</b>',
       );
       expect(rows.find('.name').count, equals(2));
-      expect(rows.find('.row').find('.name').texts, equals(['in']));
+      expect(rows.find('.row').find('.name').texts.list, equals(['in']));
     });
 
     test('value and values agree on textarea text and input value', () {
@@ -335,7 +350,10 @@ void main() {
       final fields = form.find('input, textarea');
       expect(fields.elements.first!.value, equals('alice'));
       expect(fields.at(1).value, equals('Software developer'));
-      expect(fields.values, equals(['alice', 'Software developer', 'admin']));
+      expect(
+        fields.values.list,
+        equals(['alice', 'Software developer', 'admin']),
+      );
     });
 
     test(
@@ -348,13 +366,13 @@ void main() {
       ''';
         final card = containerHtml.$('.card');
         // The card container itself has no href attribute:
-        expect(card.href, isNull);
-        expect(card.elements.first?.href, isNull);
-        expect(card.hrefs, isEmpty);
+        expect(card.attr('href'), isNull);
+        expect(card.elements.first?.attr('href'), isNull);
+        expect(card.attrs('href').list, isEmpty);
 
         // Descendant links are reached when queried explicitly:
-        expect(card.find('a').href, equals('/card/1'));
-        expect(card.find('a').hrefs, equals(['/card/1']));
+        expect(card.find('a').attr('href'), equals('/card/1'));
+        expect(card.find('a').attrs('href').list, equals(['/card/1']));
       },
     );
 
@@ -372,5 +390,176 @@ void main() {
 
       expect(system.console.spinner().spinning, isFalse);
     });
+  });
+
+  group('structural pseudo-classes', () {
+    const html =
+        '<html><body>'
+        '<ul><li>1</li><li>2</li><li>3</li><li>4</li><li>5</li></ul>'
+        '<div class="box">'
+        '<p>pa</p><span>s1</span><p>pb</p><span>s2</span><p>pc</p>'
+        '</div>'
+        '<section><h2>only</h2></section>'
+        '</body></html>';
+
+    Markup page() => format.html.parse(html);
+
+    // csslib evaluates :first-child and :last-child and then stops.
+    // `:nth-child(2)` matched nothing at all — a scraper written against it
+    // collected nothing and reported success — and `:nth-of-type(2)` threw
+    // UnimplementedError out of the middle of a match.
+    test('nth-child counts every sibling', () {
+      expect(page().find('li:nth-child(2)').texts.list, equals(['2']));
+      expect(page().find('li:nth-child(1)').texts.list, equals(['1']));
+      expect(page().find('li:nth-child(5)').texts.list, equals(['5']));
+      expect(page().find('li:nth-child(6)').texts.list, isEmpty);
+    });
+
+    test('nth-child takes an+b, odd and even', () {
+      expect(
+        page().find('li:nth-child(odd)').texts.list,
+        equals(['1', '3', '5']),
+      );
+      expect(page().find('li:nth-child(even)').texts.list, equals(['2', '4']));
+      expect(
+        page().find('li:nth-child(2n+1)').texts.list,
+        equals(['1', '3', '5']),
+      );
+      expect(page().find('li:nth-child(3n)').texts.list, equals(['3']));
+      expect(page().find('li:nth-child(-n+2)').texts.list, equals(['1', '2']));
+      expect(
+        page().find('li:nth-child(n)').texts.list,
+        equals(['1', '2', '3', '4', '5']),
+      );
+    });
+
+    test('nth-of-type counts only siblings of the same tag', () {
+      expect(page().find('.box p:nth-of-type(2)').texts.list, equals(['pb']));
+      expect(
+        page().find('.box span:nth-of-type(2)').texts.list,
+        equals(['s2']),
+      );
+      expect(page().find('.box p:first-of-type').texts.list, equals(['pa']));
+      expect(page().find('.box p:last-of-type').texts.list, equals(['pc']));
+      expect(
+        page().find('.box span:nth-last-of-type(1)').texts.list,
+        equals(['s2']),
+      );
+    });
+
+    test('the -last- pair counts from the end', () {
+      expect(page().find('li:nth-last-child(1)').texts.list, equals(['5']));
+      expect(page().find('li:nth-last-child(2)').texts.list, equals(['4']));
+      expect(
+        page().find('li:nth-last-child(odd)').texts.list,
+        equals(['1', '3', '5']),
+      );
+    });
+
+    test('only-child and only-of-type', () {
+      expect(page().find('h2:only-child').texts.list, equals(['only']));
+      expect(page().find('h2:only-of-type').texts.list, equals(['only']));
+      expect(page().find('li:only-child').texts.list, isEmpty);
+      expect(page().find('.box p:only-of-type').texts.list, isEmpty);
+    });
+
+    test('matching uses the same evaluation as find', () {
+      final second = page().find('li').at(1);
+      expect(second.matching('li:nth-child(2)').count, equals(1));
+      expect(second.matching('li:nth-child(3)').count, equals(0));
+    });
+
+    test('is and where match any of their branches', () {
+      expect(page().find('.box :is(span)').texts.list, equals(['s1', 's2']));
+      expect(page().find(':where(h2)').texts.list, equals(['only']));
+    });
+
+    test('a selector this cannot evaluate is a FormatException', () {
+      // csslib raised UnimplementedError — an Error, not an Exception — from
+      // inside a match, in a cursor documented to give the empty result. A
+      // selector it cannot read is a problem with the selector.
+      expect(() => page().find('p:hover'), throwsFormatException);
+      expect(() => page().find(':target'), throwsFormatException);
+      expect(() => page().find('::marker'), throwsFormatException);
+      expect(() => page().find('li:nth-child(banana)'), throwsFormatException);
+    });
+  });
+
+  group('the simple-compound fast path', () {
+    // `matching`, `not` and `closest` used to walk to the document root and
+    // run `querySelectorAll` over the whole tree once per element, so testing
+    // 500 rows against `.row` was 500 scans of a 500-row page — 156µs a call.
+    // A compound with no combinator is answered off the element instead, which
+    // is 97x faster and has to agree with csslib exactly.
+    const html =
+        '<html><body>'
+        '<div id="main" class="wrap box" data-id="1" lang="en-GB">'
+        '<p class="lead">A</p>'
+        '<p class="lead active">B</p>'
+        '<a href="/x.mp3" title="a b c" rel="next">m</a>'
+        '<a href="/y.pdf">n</a>'
+        '<input name="q" value="v" disabled>'
+        '<SPAN class="Upper">U</SPAN>'
+        '</div>'
+        '<div class="wrap"><p>C</p></div>'
+        '</body></html>';
+
+    test('agrees with find for every shape it claims', () {
+      final page = format.html.parse(html);
+      final every = page.find('*').elements.list;
+      const selectors = [
+        'p',
+        'div',
+        'a',
+        '*',
+        'P',
+        'span',
+        '.lead',
+        '.active',
+        '.wrap',
+        '.lead.active',
+        '.box.wrap',
+        '#main',
+        'div#main',
+        'div#main.wrap',
+        '[data-id]',
+        '[data-id="1"]',
+        '[href^="/x"]',
+        r'[href$=".pdf"]',
+        '[href*="y"]',
+        '[title~="b"]',
+        '[lang|="en"]',
+        '[disabled]',
+        'a[rel="next"]',
+        'input[name="q"][value="v"]',
+        '.nope',
+        '#nope',
+        '[nope]',
+        '[data-id="2"]',
+      ];
+      for (final selector in selectors) {
+        final viaFind = page.find(selector).elements.list.toSet();
+        final viaMatching =
+            every.where((e) => e.query.matching(selector).count == 1).toSet();
+        expect(
+          viaMatching,
+          equals(viaFind),
+          reason: 'find and matching disagree on "$selector"',
+        );
+      }
+    });
+
+    test(
+      'anything with a combinator or a pseudo still takes the slow path',
+      () {
+        final page = format.html.parse(html);
+        final b = page.find('.active').elements.first!;
+        expect(b.query.matching('div p').count, equals(1));
+        expect(b.query.matching('div > p.active').count, equals(1));
+        expect(b.query.matching('p:nth-child(2)').count, equals(1));
+        expect(b.query.matching('p:first-child').count, equals(0));
+        expect(b.query.matching('.lead, .nope').count, equals(1));
+      },
+    );
   });
 }

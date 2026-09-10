@@ -23,7 +23,7 @@ void main() async {
   }, size: 4);
   bar.done();
   log.ok(
-    'Fetched ${sizes.length}, ${util.size.format(sizes.reduce(_sum))} total',
+    'Fetched ${sizes.count()}, ${util.size.format(sizes.list.reduce(_sum))} total',
   );
 
   // `concurrent.stream` yields each result as it lands, for work whose output
@@ -42,10 +42,10 @@ void main() async {
 
   // `settle` never throws: every item comes back as a sealed Done or Broke.
   final results = await pool.settle(ids, _flaky);
-  final ok = results.whereType<Done<String>>().length;
-  log.ok('$ok of ${results.length} succeeded.');
+  final ok = results.only<Done<String>>().count();
+  log.ok('$ok of ${results.count()} succeeded.');
 
-  for (final (i, result) in results.indexed.take(4)) {
+  for (final (i, result) in results.pairs.head(4).list) {
     log.info(switch (result) {
       Done(:final value) => '${ids[i].padRight(7)} $value',
       Broke(:final error) => '${ids[i].padRight(7)} failed — $error',
@@ -62,7 +62,7 @@ void main() async {
       if (attempts < 3) throw StateError('not ready');
       return 'ready on attempt $attempts';
     },
-    times: 5,
+    retries: 4,
     backoff: 10.ms,
     when: (e) => e is StateError,
     onretry: (e, n) => log.debug('attempt $n: $e'),
@@ -73,7 +73,7 @@ void main() async {
   // For sharing something that is not a task list: a semaphore bounds access,
   // a mutex serialises it.
   final gate = concurrent.semaphore(2);
-  await Future.wait([for (var i = 0; i < 4; i++) gate.withPermit(_measure)]);
+  await Future.wait([for (var i = 0; i < 4; i++) gate.guard(_measure)]);
   log.ok('Semaphore let 4 tasks through 2 permits.');
 
   // ------------------------------------------------------------- the rate

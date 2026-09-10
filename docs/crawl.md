@@ -10,15 +10,15 @@ A declarative multi-stage crawler. You describe how to handle each kind of page;
 import 'package:dart_toolkit/dart_toolkit.dart';
 
 void main() async {
-  final titles = await net.crawl<String>('https://news.ycombinator.com')
+  final titles = await net.crawl<String>('https://news.ycombinator.com'.url)
       .concurrent(4)
       .delay(250.ms)
       .limit(50)
       .collect((res) {
-        for (final title in res.parse(format.html)('.titleline > a').texts) {
+        for (final title in res.parse(format.html).find('.titleline > a').texts.list) {
           res.emit(title);
         }
-        for (final next in res.parse(format.html)('a.morelink').hrefs) {
+        for (final next in res.parse(format.html).find('a.morelink').attrs('href').list) {
           res.follow(next);
         }
       });
@@ -46,7 +46,7 @@ void main() async {
 
 Use `seed` when the starting pages need their own headers, tag, priority, depth, or HTTP method:
 
-```dart
+```dart no-compile
 await net.crawl.seed<String>([
   Fetch('https://example.com/a', tag: 'listing', priority: 10),
   Fetch('https://example.com/b', headers: {'Cookie': 'session=abc'}),
@@ -80,8 +80,9 @@ net.crawl<String>(url)
     .timeout(10.s)                       // per-request timeout
     .resume('crawl.state')               // save the position, and carry on from it
     .accept(['text/html'])               // only handle these content types
-    .cap(util.size.parse('5mb'))         // refuse a body larger than this
+    .cap(util.size.parse('5MiB')!)         // refuse a body larger than this
     .cache('.cache')                     // reuse unchanged pages between runs
+    .run(handler);
 ```
 
 ### Crawl Scope & Politeness
@@ -99,10 +100,10 @@ net.crawl<String>(url)
 - **`cap(bytes)`**: Abandons a transfer whose body is larger, as soon as `Content-Length` or the arriving bytes say so.
 - **`cache(dir)`**: Keeps responses between runs. A re-run revalidates with `ETag`/`If-Modified-Since` and reuses what has not changed; anything still inside its `max-age` is not even asked about. Both arrive with `res.cached` set, so a handler can return early on the pages that did not move. See [`http.md`](http.md#7-caching-httpcache).
 
-```dart
-await net.crawl<String>('https://example.com')
+```dart no-compile
+await net.crawl<String>('https://example.com'.url)
     .accept(['text/html'])
-    .cap(util.size.parse('5mb'))
+    .cap(util.size.parse('5MiB')!)
     .cache('.cache')
     .run((res) {
       if (res.cached) return;   // unchanged since the last run
@@ -129,11 +130,12 @@ Prefer `stream` or `save` over `collect` for large crawls — they do not hold e
 ```dart
 // Stream items to an async consumer:
 await for (final title in net.crawl<String>(url).stream(handler)) {
-  await sink.write(title);
+  sink.write(title);
 }
 
 // Or stream directly to a file (Maps/Lists formatted as JSON lines):
-final stats = await net.crawl<Map<String, Object?>>(url).save('out/results.jsonl', handler);
+final stats = await net.crawl<Map<String, Object?>>(url)
+    .save('out/results.jsonl');
 ```
 
 `gather` is the single-stage form, and the one to reach for first. The item
@@ -142,7 +144,7 @@ closure, so it is inferred, and returning nothing for a page filters it out:
 
 ```dart
 final titles = await net.crawl<Never>(seed)
-    .gather((page) => page.parse(format.html)('.title').texts);
+    .gather((page) => page.parse(format.html).find('.title').texts.list);
 // Future<Sequence<String>>
 ```
 
@@ -155,7 +157,8 @@ script came for is the next call rather than an import — and `.list` is the on
 word at the boundary to anything outside this library:
 
 ```dart
-final rows = await net.crawl<Row>(seed).collect(handler);
+// setup: Future<void> rowHandler(Page<Row> p) async {}
+final rows = await net.crawl<Row>(seed).collect(rowHandler);
 
 rows.group((r) => r.host)
     .seq.to((e) => (host: e.$1, spend: e.$2.sum((r) => r.cost)))
@@ -179,12 +182,12 @@ A crawl that dies partway through has two things worth keeping: the pages it alr
 import 'package:dart_toolkit/dart_toolkit.dart';
 
 void main() async {
-  final stats = await net.crawl<String>('https://example.com')
+  final stats = await net.crawl<String>('https://example.com'.url)
       .resume('crawl.state')
       .concurrent(4)
       .limit(5000)
       .run((res) {
-        for (final href in res.parse(format.html)('a').hrefs) res.follow(href);
+        for (final href in res.parse(format.html).find('a').attrs('href').list) res.follow(href);
       });
 
   system.console.logger.ok('Crawled ${stats.completed} pages');
@@ -209,8 +212,8 @@ A page that was mid-fetch when the run stopped counts as pending, not as done, s
 import 'package:dart_toolkit/dart_toolkit.dart';
 
 void main() async {
-  final engine = net.crawl<String>('https://example.com').engine((res) {
-    for (final href in res.parse(format.html)('a').hrefs) res.follow(href);
+  final engine = net.crawl<String>('https://example.com'.url).engine((res) {
+    for (final href in res.parse(format.html).find('a').attrs('href').list) res.follow(href);
   });
 
   const position = Slot<Map<String, Object?>>('position');
@@ -239,14 +242,14 @@ Tags keep the stages apart:
 ```dart
 const name = Slot<String>('name');
 
-final stats = await net.crawl<String>('https://music.example.com/album')
+final stats = await net.crawl<String>('https://music.example.com/album'.url)
     .tag('song', (res) {
-      print('${res.meta.get(name)} -> ${res.parse(format.html)('a').href}');
+      print('${res.meta.get(name)} -> ${res.parse(format.html).find('a').attr('href')}');
     })
     .run((res) {
-      for (final a in res.parse(format.html)('#songlist a')) {
+      for (final a in res.parse(format.html).find('#songlist a').elements.list) {
         res.follow(
-          a.href!,
+          a.attr('href')!,
           tag: 'song',
           meta: [name(a.text)],
         );
@@ -258,7 +261,7 @@ final stats = await net.crawl<String>('https://music.example.com/album')
 
 ```dart
 res.follow(
-  res.parse(format.html)('form.search').attr('action')!,
+  res.parse(format.html).find('form.search').attr('action')!,
   method: HttpMethod.post,
   body: Body.form({'q': 'widgets', 'page': '2'}),
   tag: 'results',
@@ -271,7 +274,8 @@ De-duplication reads the body, so two posts to one URL with different fields are
 
 ```dart
 res.submit(
-  res.form('form.search')!..fill({'q': 'widgets', 'page': '2'}),
+  res.parse(format.html).form('form.search')!
+    ..fill({'q': 'widgets', 'page': '2'}),
   tag: 'results',
 );
 ```
@@ -313,7 +317,7 @@ Whatever a slot writes has to survive `jsonEncode`, because `meta` travels throu
 
 ## 6. Inside a Handler
 
-```dart
+```dart no-compile
 res.emit(item);                    // yield a result
 res.follow(url, tag: ..., meta: ..., priority: ...);
 res.stop('reason');                // wind down after in-flight work
@@ -344,7 +348,7 @@ final article = res.parse(format.html).extract({
 For a typed read, `res.parse(format.html).pick(Field.text('h1'))` returns a `String?` rather than
 an `Object?` — see [`http.md`](http.md#declarative-extraction-extract).
 
-Everything from [`Reply`](http.md) is available too — `res.parse(format.html)('...')`, `res.parse(format.html).xpath('...')`, `res.body`, `res.parse(format.json).raw`, `res.save(...)`.
+Everything from [`Reply`](http.md) is available too — `res.parse(format.html).find('...')`, `res.parse(format.html).xpath('...')`, `res.body`, `res.parse(format.json).raw`, `res.save(...)`.
 
 ---
 
@@ -353,7 +357,7 @@ Everything from [`Reply`](http.md) is available too — `res.parse(format.html)(
 Higher `priority` is served first; ties keep insertion order. Useful for draining detail pages before discovering more listings:
 
 ```dart
-res.follow(detailUrl, tag: 'detail', priority: 10);
+res.follow(href, tag: 'detail', priority: 10);
 ```
 
 `Deduplicator` normalizes trailing slashes, folds host case, and keys on HTTP method, URL, and tag. It can be persisted and restored:
@@ -366,7 +370,7 @@ io.dump('cache/seen.json', jsonState);
 
 // Later:
 final restored = Deduplicator.fromJson(
-  (await format.json.read('cache/seen.json')).raw as Map<String, Object?>,
+  ((await format.json.read('cache/seen.json')).raw as List).cast<Object?>(),
 );
 await net.crawl<String>(url).deduplicator(restored).run(handler);
 ```
@@ -402,7 +406,7 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 void main() async {
   final lost = <Failure<String>>[];
 
-  final stats = await net.crawl<String>('https://example.com')
+  final stats = await net.crawl<String>('https://example.com'.url)
       .on.error(lost.add)
       .run((res) {});
 
@@ -428,11 +432,11 @@ A failed request is unfinished work, so a crawl using [`resume`](#4-resuming-an-
 Use `MapDownloader` to serve fixture responses from an in-memory map without network access:
 
 ```dart
-final titles = await net.crawl<String>('https://site.test')
+final titles = await net.crawl<String>('https://site.test'.url)
     .downloader(MapDownloader<String>({
       'https://site.test': '<html><body><h1>Hi</h1></body></html>',
     }))
-    .collect((res) => res.emit(res.parse(format.html)('h1').text));
+    .collect((res) => res.emit(res.parse(format.html).find('h1').text));
 ```
 
 Keys are matched most specific first — `'POST https://host/login'`, then `'POST /login'`, then `'https://host/login'`, then `'/login'` — so one URL can answer differently to a `GET` and a `POST`, which is what a multi-step form crawl needs:
@@ -443,7 +447,7 @@ final downloader = MapDownloader<String>({
   'POST /login': '<p class="welcome">Signed in</p>',
 });
 
-await net.crawl<String>('https://site.test/login')
+await net.crawl<String>('https://site.test/login'.url)
     .downloader(downloader)
     .run(handler);
 
@@ -460,11 +464,10 @@ class MockDownloader<T> extends Downloader<T> {
   MockDownloader(this.pages);
 
   @override
-  Future<Page<T>> download(Fetch<T> request) async => Page<T>(
-        request: request,
-        status: pages.containsKey('${request.url}') ? 200 : 404,
-        bytes: utf8.encode(pages['${request.url}'] ?? ''),
-        engine: engine,
+  Future<Page<T>> download(Fetch<T> fetch) async => Page<T>(
+        fetch: fetch,
+        status: pages.containsKey('${fetch.url}') ? 200 : 404,
+        bytes: utf8.encode(pages['${fetch.url}'] ?? ''),
       );
 }
 ```
@@ -475,10 +478,10 @@ class MockDownloader<T> extends Downloader<T> {
 
 For full control, build the engine and use its router:
 
-```dart
+```dart no-compile
 final engine = Engine<String>(
   downloader: HttpDownloader(concurrency: 4),
-  process: (res) => res.emit(res.parse(format.html)('h1').text),
+  process: (res) => res.emit(res.parse(format.html).find('h1').text),
 );
 
 engine.router

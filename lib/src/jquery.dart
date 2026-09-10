@@ -21,11 +21,45 @@ import 'package:html/dom.dart';
 /// `[attr!=val]`.
 class JQuery {
   static final _hasJQueryPseudos = RegExp(
-    r':(contains|icontains|has|eq|gt|lt|first|last|even|odd|header|input|button|checkbox|radio|text|password|submit|reset|empty|parent|selected|visible|hidden)\b|!=',
+    r':(contains|icontains|has|eq|gt|lt|first|last|even|odd|header|input|button'
+    r'|checkbox|radio|text|password|submit|reset|empty|parent|selected|visible'
+    // The structural pseudo-classes are evaluated here rather than handed to
+    // csslib, which matched `:nth-child(n)` against nothing and threw
+    // UnimplementedError for `:nth-of-type`.
+    r'|hidden|nth-child|nth-last-child|nth-of-type|nth-last-of-type'
+    r'|first-of-type|last-of-type|only-of-type|only-child|is|where)\b|!=',
   );
 
   static final _headerTag = RegExp(r'^h[1-6]$', caseSensitive: false);
   static const _inputTags = {'input', 'select', 'textarea', 'button'};
+
+  /// [element]'s 1-based position among its siblings.
+  ///
+  /// [ofType] counts only siblings sharing its tag, which is the difference
+  /// between `:nth-child` and `:nth-of-type`; [fromEnd] counts backwards, for
+  /// the `-last-` pair. An element with no parent is the only child there is.
+  static int _position(
+    Element element, {
+    required bool ofType,
+    bool fromEnd = false,
+  }) {
+    final parent = element.parent;
+    if (parent == null) return 1;
+    final tag = element.localName;
+    var index = 0;
+    final siblings = parent.children;
+    for (
+      var i = fromEnd ? siblings.length - 1 : 0;
+      fromEnd ? i >= 0 : i < siblings.length;
+      fromEnd ? i-- : i++
+    ) {
+      final sibling = siblings[i];
+      if (ofType && sibling.localName != tag) continue;
+      index++;
+      if (identical(sibling, element)) return index;
+    }
+    return index;
+  }
 
   // A crawl runs the same selector across every page, so each distinct
   // selector string is parsed once rather than on every call.
@@ -407,11 +441,31 @@ class JQuery {
     return filtered;
   }
 
+  /// The elements under [root] matching the plain-CSS part of a compound.
+  ///
+  /// `package:csslib` raises [UnimplementedError] for the selectors it does
+  /// not evaluate — `:is`, `:hover`, `:target`, `::marker` and the rest of the
+  /// interactive and pseudo-element families. That reached the caller from the
+  /// middle of a match, as an [Error] rather than an [Exception], out of a
+  /// cursor documented to give the empty result instead. A selector this
+  /// cannot evaluate is a problem with the selector, so it is a
+  /// [FormatException] naming the part that could not be read.
   static List<Element> _queryBase(Element root, String baseCss) {
-    if (baseCss == '*' || baseCss.isEmpty) {
-      return root.querySelectorAll('*');
+    final css = (baseCss == '*' || baseCss.isEmpty) ? '*' : baseCss;
+    try {
+      return root.querySelectorAll(css);
+    } on UnimplementedError catch (error) {
+      throw FormatException(_unsupported(error, css), css);
     }
-    return root.querySelectorAll(baseCss);
+  }
+
+  /// csslib's complaint, restated as a sentence about the selector.
+  static String _unsupported(UnimplementedError error, String css) {
+    final detail = error.message ?? '';
+    final token = RegExp(r"'([^']+)'").firstMatch(detail)?.group(1);
+    return token == null
+        ? 'this selector is not supported: $css'
+        : "'$token' is not a selector this supports";
   }
 
   static bool _matchesBase(Element el, String baseCss) =>
@@ -468,6 +522,20 @@ class JQuery {
       'odd',
       'gt',
       'lt',
+      // Structural, an+b. csslib supports :first-child and :last-child and
+      // then stops: `:nth-child(2)` matched nothing at all and
+      // `:nth-of-type(2)` threw UnimplementedError out of the middle of a
+      // match, from a cursor documented to give the empty result instead.
+      'is',
+      'where',
+      'nth-child',
+      'nth-last-child',
+      'nth-of-type',
+      'nth-last-of-type',
+      'first-of-type',
+      'last-of-type',
+      'only-of-type',
+      'only-child',
     };
 
     final baseBuffer = StringBuffer();
@@ -606,6 +674,57 @@ class JQuery {
       case 'not':
         final subSel = _unquote(arg ?? '');
         elementFilters.add((el) => !JQuery.matches(el, subSel));
+        break;
+      case 'nth-child':
+        final step = _Nth.parse(arg);
+        elementFilters.add((el) => step.holds(_position(el, ofType: false)));
+        break;
+      case 'nth-last-child':
+        final step = _Nth.parse(arg);
+        elementFilters.add(
+          (el) => step.holds(_position(el, ofType: false, fromEnd: true)),
+        );
+        break;
+      case 'nth-of-type':
+        final step = _Nth.parse(arg);
+        elementFilters.add((el) => step.holds(_position(el, ofType: true)));
+        break;
+      case 'nth-last-of-type':
+        final step = _Nth.parse(arg);
+        elementFilters.add(
+          (el) => step.holds(_position(el, ofType: true, fromEnd: true)),
+        );
+        break;
+      case 'first-of-type':
+        elementFilters.add((el) => _position(el, ofType: true) == 1);
+        break;
+      case 'last-of-type':
+        elementFilters.add(
+          (el) => _position(el, ofType: true, fromEnd: true) == 1,
+        );
+        break;
+      case 'only-of-type':
+        elementFilters.add(
+          (el) =>
+              _position(el, ofType: true) == 1 &&
+              _position(el, ofType: true, fromEnd: true) == 1,
+        );
+        break;
+      case 'only-child':
+        elementFilters.add(
+          (el) =>
+              _position(el, ofType: false) == 1 &&
+              _position(el, ofType: false, fromEnd: true) == 1,
+        );
+        break;
+      // `:is(a, b)` and `:where(a, b)` differ only in specificity, which
+      // matters to a stylesheet and not to a match. csslib evaluates neither.
+      case 'is':
+      case 'where':
+        final branches = _branches(_unquote(arg ?? ''));
+        elementFilters.add(
+          (el) => branches.any((branch) => JQuery.matches(el, branch)),
+        );
         break;
       case 'header':
         elementFilters.add((el) => _headerTag.hasMatch(el.localName ?? ''));
@@ -798,6 +917,16 @@ class _MatchCache {
 
   bool matches(Element element, String css) {
     if (css.isEmpty || css == '*') return true;
+
+    // The overwhelmingly common shape — a tag, some classes, an id, some
+    // attribute tests, and no combinator — is answered from the element
+    // itself. The general path walks to the document root and runs
+    // `querySelectorAll` over the whole tree, which made `matching`, `not`
+    // and `closest` cost a full document scan *per element*: testing 500 rows
+    // against `.row` was 500 scans of a 500-row page.
+    final simple = _Simple.of(css);
+    if (simple != null) return simple.matches(element);
+
     var root = element;
     for (var up = element.parent; up != null; up = up.parent) {
       root = up;
@@ -823,6 +952,162 @@ class _MatchCache {
         })
         .contains(element);
   }
+}
+
+/// A compound selector with no combinator: a tag, classes, an id, attributes.
+///
+/// Parsed once per selector string and then answered directly off the
+/// element, which is what keeps [JQuery.matches] from being a document scan.
+/// Anything more — a descendant, a pseudo-class, a selector list — returns
+/// `null` from [of] and takes the general path.
+class _Simple {
+  const _Simple(this.tag, this.classes, this.id, this.attributes);
+
+  /// The tag name, lower-cased, or `null` for `*`.
+  final String? tag;
+
+  /// Every class the element must carry.
+  final List<String> classes;
+
+  /// The required `id`, if the selector named one.
+  final String? id;
+
+  /// Attribute tests, as (name, operator, value); the operator is `''` for a
+  /// bare presence test.
+  final List<(String, String, String)> attributes;
+
+  static final _cache = _Memo<_Simple?>();
+
+  /// A tag name, `.class`, `#id` or `[attr...]`, and nothing else.
+  static final _token = RegExp(
+    r'^(?:([*]|[A-Za-z][\w-]*)'
+    r'|\.([\w-]+)'
+    r'|#([\w-]+)'
+    r'|\[\s*([\w-]+)\s*(?:([~^$*|]?=)\s*'
+    r"""(?:"([^"]*)"|'([^']*)'|([^\]]*?))\s*)?\])""",
+  );
+
+  /// [css] as a simple compound, or `null` when it is anything more.
+  static _Simple? of(String css) => _cache.of(css, () => _parse(css));
+
+  static _Simple? _parse(String css) {
+    final text = css.trim();
+    if (text.isEmpty) return null;
+    String? tag;
+    String? id;
+    final classes = <String>[];
+    final attributes = <(String, String, String)>[];
+
+    var at = 0;
+    var first = true;
+    while (at < text.length) {
+      final m = _token.firstMatch(text.substring(at));
+      if (m == null) return null;
+      if (m.group(1) case final name?) {
+        // A tag name is only a tag name in the leading position; anywhere
+        // else it is a descendant, which this does not handle.
+        if (!first) return null;
+        if (name != '*') tag = name.toLowerCase();
+      } else if (m.group(2) case final cls?) {
+        classes.add(cls);
+      } else if (m.group(3) case final ident?) {
+        id = ident;
+      } else if (m.group(4) case final attr?) {
+        final op = m.group(5) ?? '';
+        final value = m.group(6) ?? m.group(7) ?? m.group(8) ?? '';
+        attributes.add((attr.toLowerCase(), op, value));
+      }
+      at += m.end;
+      first = false;
+    }
+    return _Simple(tag, classes, id, attributes);
+  }
+
+  /// Whether [element] satisfies every part of this compound.
+  bool matches(Element element) {
+    if (tag != null && element.localName?.toLowerCase() != tag) return false;
+    if (id != null && element.id != id) return false;
+    for (final cls in classes) {
+      if (!element.classes.contains(cls)) return false;
+    }
+    for (final (name, op, want) in attributes) {
+      final have = element.attributes[name];
+      if (have == null) return false;
+      final ok = switch (op) {
+        '' => true,
+        '=' => have == want,
+        '^=' => want.isNotEmpty && have.startsWith(want),
+        r'$=' => want.isNotEmpty && have.endsWith(want),
+        '*=' => want.isNotEmpty && have.contains(want),
+        '~=' => want.isNotEmpty && have.split(RegExp(r'\s+')).contains(want),
+        '|=' => have == want || have.startsWith('$want-'),
+        _ => false,
+      };
+      if (!ok) return false;
+    }
+    return true;
+  }
+}
+
+/// One `an+b` step, as `:nth-child` and its three siblings are written.
+///
+/// `2n+1`, `odd`, `even`, `3`, `-n+3` and a bare `n` all parse. An argument
+/// that is not an `an+b` expression is a [FormatException] naming it, raised
+/// while the selector is being parsed — the position a selector error belongs
+/// in, rather than an `UnimplementedError` from the middle of a match.
+class _Nth {
+  /// The coefficient of `n`.
+  final int a;
+
+  /// The constant offset.
+  final int b;
+
+  const _Nth(this.a, this.b);
+
+  static final _pattern = RegExp(
+    // The coefficient may be a bare sign — '-n+3' is a = -1 — so the digits
+    // are optional inside the group as well as the group being optional.
+    r'^([+-]?\d*)n\s*(?:([+-])\s*(\d+))?$|^([+-]?\d+)$',
+  );
+
+  static _Nth parse(String? arg) {
+    final text = (arg ?? '').trim().toLowerCase().replaceAll(' ', '');
+    if (text == 'odd') return const _Nth(2, 1);
+    if (text == 'even') return const _Nth(2, 0);
+
+    final match = _pattern.firstMatch(text);
+    if (match == null) {
+      throw FormatException(
+        "'$arg' is not an an+b expression; write a number, 'odd', 'even', "
+        "or a form like '2n+1'",
+        arg,
+      );
+    }
+    // The fourth group is the bare-number branch: ':nth-child(3)' is 0n+3.
+    if (match.group(4) case final only?) return _Nth(0, int.parse(only));
+
+    final coefficient = match.group(1);
+    final a = switch (coefficient) {
+      null || '' || '+' => 1,
+      '-' => -1,
+      _ => int.parse(coefficient),
+    };
+    final sign = match.group(2) == '-' ? -1 : 1;
+    final b = int.parse(match.group(3) ?? '0') * sign;
+    return _Nth(a, b);
+  }
+
+  /// Whether the 1-based [position] satisfies this step.
+  bool holds(int position) {
+    if (position < 1) return false;
+    if (a == 0) return position == b;
+    final offset = position - b;
+    // n counts from zero, so the offset has to be a non-negative multiple.
+    return offset % a == 0 && offset ~/ a >= 0;
+  }
+
+  @override
+  String toString() => '${a}n${b >= 0 ? '+' : ''}$b';
 }
 
 class _Step {

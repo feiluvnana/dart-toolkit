@@ -8,8 +8,10 @@
 /// import 'package:dart_toolkit/dart_toolkit.dart';
 /// import 'package:dart_toolkit/html.dart';
 ///
-/// final page = $('<div>...</div>');
-/// final rows = markup.$('table tr');
+/// const markup = '<table><tr><td>one</td></tr></table>';
+/// final rows = $(markup, 'tr');       // parse and query in one call
+/// final cells = markup.$('td');       // the same, from the string
+
 /// ```
 library;
 

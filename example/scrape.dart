@@ -14,21 +14,23 @@ void main() {
 
   // `res.$` is a jQuery-like selector over the parsed body: a chainable set
   // whose extraction helpers are getters.
-  log.info('Title:  ${res.parse(format.html)('h1').text}');
-  log.info('Price:  ${res.parse(format.html)('.price').text}');
-  log.info('Tags:   ${res.parse(format.html)('.tag').texts}');
-  log.info('Links:  ${res.parse(format.html)('a').hrefs}');
-  log.info('Data:   ${res.parse(format.html)('#product').dataset}');
+  log.info('Title:  ${res.parse(format.html).find('h1').text}');
+  log.info('Price:  ${res.parse(format.html).find('.price').text}');
+  log.info('Tags:   ${res.parse(format.html).find('.tag').texts}');
+  log.info('Links:  ${res.parse(format.html).find('a').attrs('href')}');
+  log.info('Data:   ${res.parse(format.html).find('#product').dataset}');
 
   // Beyond CSS: :contains, :has, :eq, :first, :last, :even, :odd, :gt, :lt,
   // and [attr!=value]. Traversal mirrors jQuery too.
   log.info(
-    'In stock:  ${res.parse(format.html)('.variant:contains("In stock")').texts}',
+    'In stock:  ${res.parse(format.html).find('.variant:contains("In stock")').texts}',
   );
   log.info(
-    'Non-sale:  ${res.parse(format.html)('.variant[data-sale!=yes]').count}',
+    'Non-sale:  ${res.parse(format.html).find('.variant[data-sale!=yes]').count}',
   );
-  log.info('Siblings:  ${res.parse(format.html)('.price').siblings().count}');
+  log.info(
+    'Siblings:  ${res.parse(format.html).find('.price').siblings().count}',
+  );
   log.info(
     'XPath:     ${res.parse(format.html).xpath('//span[@class="price"]').text}',
   );
@@ -68,13 +70,13 @@ void main() {
         .parse(format.html)
         .all(
           '.variant',
-          (row) => (name: row('.name').text, sku: row.attr('data-sku')),
+          (row) => (name: row.find('.name').text, sku: row.attr('data-sku')),
         ),
   );
 
   log.ok('$title — $price, skus $skus');
   log.ok(
-    'First variant: ${item.variants.first.name} (${item.variants.first.sku})',
+    'First variant: ${item.variants.first?.name} (${item.variants.first?.sku})',
   );
 }
 

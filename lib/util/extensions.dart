@@ -12,7 +12,7 @@ library;
 /// `package:http`. This keeps call sites short:
 ///
 /// ```dart
-/// final res = await net.get('https://example.com'.url);
+/// final res = await net.http.get('https://example.com'.url);
 /// ```
 extension UrlString on String {
   /// Parses this string as a [Uri].
@@ -28,7 +28,7 @@ extension UrlString on String {
 ///
 /// ```dart
 /// await util.time.wait(250.ms);
-/// net.crawl('https://example.com').delay(2.s);
+/// net.crawl('https://example.com'.url).delay(2.s);
 /// final overnight = 8.h;
 /// ```
 extension DurationInt on int {

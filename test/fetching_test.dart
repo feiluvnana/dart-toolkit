@@ -363,7 +363,7 @@ void main() {
     test('a response of the wrong type never reaches a handler', () async {
       final handled = <String>[];
       final stats = await net
-          .crawl<String>('https://example.com/page')
+          .crawl<String>('https://example.com/page'.url)
           .accept(['text/html'])
           .downloader(
             MapDownloader<String>(
@@ -381,7 +381,7 @@ void main() {
     test('a subtype wildcard matches', () async {
       final handled = <String>[];
       await net
-          .crawl<String>('https://example.com/page')
+          .crawl<String>('https://example.com/page'.url)
           .accept(['text/*'])
           .downloader(MapDownloader<String>({'/page': '<h1>hi</h1>'}))
           .run((res) => handled.add(res.url.path));
@@ -392,7 +392,7 @@ void main() {
     test('the types asked for are sent as the Accept header', () {
       final downloader =
           net
-                  .crawl<String>('https://example.com')
+                  .crawl<String>('https://example.com'.url)
                   .accept(['text/html', 'application/xhtml+xml'])
                   .engine()
                   .downloader
@@ -404,7 +404,7 @@ void main() {
     test('an Accept the caller set themselves is left alone', () {
       final downloader =
           net
-                  .crawl<String>('https://example.com')
+                  .crawl<String>('https://example.com'.url)
                   .accept(['text/html'])
                   .headers({'Accept': 'text/plain'})
                   .engine()
@@ -418,7 +418,11 @@ void main() {
   group('net.crawl().cap', () {
     test('reaches the client that enforces it', () {
       final downloader =
-          net.crawl<String>('https://example.com').cap(2048).engine().downloader
+          net
+                  .crawl<String>('https://example.com'.url)
+                  .cap(2048)
+                  .engine()
+                  .downloader
               as HttpDownloader<String>;
 
       expect(downloader.cap, 2048);
@@ -450,15 +454,15 @@ void main() {
       });
 
       final seen = await net
-          .crawl<String>('https://example.com/login')
+          .crawl<String>('https://example.com/login'.url)
           .downloader(downloader)
           .collect((res) {
             if (res.tag == 'result') {
-              res.emit(res.parse(format.html)('.welcome').text);
+              res.emit(res.parse(format.html).find('.welcome').text);
               return;
             }
             res.follow(
-              res.parse(format.html)('form').attr('action')!,
+              res.parse(format.html).find('form').attr('action')!,
               method: HttpMethod.post,
               body: Body.form({'user': 'ada'}),
               tag: 'result',
@@ -483,7 +487,7 @@ void main() {
         });
 
         await net
-            .crawl<String>('https://example.com/search')
+            .crawl<String>('https://example.com/search'.url)
             .downloader(downloader)
             .run((res) {
               if (res.depth > 0) return;
@@ -551,7 +555,7 @@ void main() {
     test('records the headers a pipeline sent', () async {
       final downloader = MapDownloader<String>({'/a': '<a href="/b">b</a>'});
       await net
-          .crawl<String>('https://example.com/a')
+          .crawl<String>('https://example.com/a'.url)
           .downloader(downloader)
           .run((res) => res.follow('/b', headers: {'X-Stage': 'two'}));
 
@@ -594,7 +598,7 @@ void main() {
       addTearDown(origin.stop);
 
       final stats = await net
-          .crawl<String>('${origin.root}/page')
+          .crawl<String>('${origin.root}/page'.url)
           .robots()
           .run((res) {});
 

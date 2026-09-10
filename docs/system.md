@@ -25,7 +25,7 @@ void main() async {
 
 ## 1. Running Commands
 
-```dart
+```dart no-compile
 Future<SysResult> system.run(
   String executable,
   List<String> arguments, {
@@ -114,17 +114,25 @@ Every atomic write registers its `.part` staging file, so Ctrl-C removes half-wr
 You rarely need to touch this, but the controls are there:
 
 ```dart
-system.track(file);      // delete this file if interrupted
-system.untrack(file);
-system.adopt(process);    // kill this process if interrupted
-system.disown(process);
-
-system.on.exit(() async => await db.save()); // run during shutdown
+system.on.track(file);        // delete this file if interrupted
+system.on.untrack(file);
+system.on.adopt(process);     // kill this process if interrupted
+system.on.disown(process);
+system.on.signals();          // start listening for SIGINT/SIGTERM
+system.on.stop();             // and stop
+system.on.exit(() async => await db.save());   // run during shutdown
 
 await system.shutdown();      // run cleanup now
 await system.shutdown(1);     // run cleanup, then exit with a code
-system.exit(1);          // exit immediately, skipping cleanup
+system.exit(1);               // exit immediately, skipping cleanup
 ```
+
+Six of those seven sat flat on `system` through 4.0.0 — `system.track`,
+`system.watch`, and the rest — while `system.on` held only `exit`. Rule 3 says
+a sub-namespace is for a cohesive vocabulary with its own nouns, and *what
+happens to your resources when the program is interrupted* is that vocabulary;
+the structure was inverted. Moving them in also freed the word `watch`, which
+[`io.watch`](io.md#6-watching-iowatch) had been going without.
 
 ### Why your script exits
 
@@ -137,7 +145,7 @@ void main() async {
 }
 ```
 
-The one exception is `system.on.exit`: a registered hook stays pending, and so keeps the process alive, until `system.shutdown()` runs it. Either call `system.shutdown()` at the end, or use `system.unwatch()` to drop the watcher.
+The one exception is `system.on.exit`: a registered hook stays pending, and so keeps the process alive, until `system.shutdown()` runs it. Either call `system.shutdown()` at the end, or use `system.on.stop()` to drop the watcher.
 
 ---
 

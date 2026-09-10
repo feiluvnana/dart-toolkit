@@ -10,9 +10,9 @@ following it is what keeps the surface small enough to hold in your head.
 
 | Domain | Holds | Sub-namespaces |
 | :--- | :--- | :--- |
-| `io` | The filesystem: paths, atomic writes, reads, watching, locking | `io.csv`, `io.store`, `io.async` |
+| `io` | The filesystem: paths, atomic writes, reads, watching (`io.watch`), locking | `io.csv`, `io.store`, `io.async` |
 | `net` | The network: requests, downloads, crawling — and, in the other direction, listening. It parses nothing | `net.http`, `net.crawl` |
-| `system` | This program and the machine running it | `system.env`, `system.console`, `system.on` |
+| `system` | This program and the machine running it, and what happens to its resources when it is interrupted (`system.on`) | `system.env`, `system.console`, `system.on` |
 | `concurrent` | Bounded async work on one isolate: how many at once, and how often | — |
 | `util` | Pure computation, the sequence API (`Sequence`), the two document cursors (`Json`, `Markup`) and the codec seam (`Codec`) that carries them across domains, and the typed keys (`Slot`, `Meta`) | `util.time`, `util.size`, `util.text`, `util.hash`, `util.rand` |
 | `cli` | The command line your script presents to whoever runs it | — |
@@ -21,7 +21,8 @@ following it is what keeps the surface small enough to hold in your head.
 `$` and `$xpath` had a row of their own here through 3.2.0. They are the jQuery
 spelling of `format.html.parse`, still opt-in via
 `package:dart_toolkit/html.dart`, and no longer a domain — see Rule 2's fifth
-test.
+test. 5.0.0 made them methods, and removed the copies that had been sitting on
+`Element` and `Document` on the *default* surface all along.
 
 The first five are **axes**; the rest are **subjects**. Rule 1 is about telling
 them apart, because they are sorted by different questions.
@@ -161,7 +162,7 @@ one.
 
 **Lowercase. One word if one word will do.**
 
-```dart
+```dart no-compile
 res.parse(format.html).pick(Field.text('h1'));       // pick, text
 robots.allowed(url);              // allowed
 robots.delay(agent: 'MyBot');     // delay
@@ -174,7 +175,7 @@ cli.flag('force');                // flag
 When one word genuinely will not do, join the words and stay lowercase. Never
 camelCase:
 
-```dart
+```dart no-compile
 .perhost()      // not perHost
 .samehost()     // not sameHost
 cookie.httponly // not httpOnly
@@ -262,11 +263,33 @@ left nothing behind when it became `format.*`, and `Reply.$`, `Reply.json`,
 4.0.0 rather than forwarded to `res.parse(codec)`. A migration is one edit; two
 spellings is forever.
 
+5.0.0 was the first release to run this rule against the library rather than
+against the next thing added to it, and it found nine more:
+
+| Deleted | Was |
+| :--- | :--- |
+| `Markup.href` / `hrefs` / `src` / `srcs`, `Element.href` / `src` | `attr`/`attrs` with a literal — six members for two attribute names |
+| `Markup.call`, so `page(sel)` | `find`, and on an XPath cursor silently `xpath` instead |
+| `Mutex`, `concurrent.mutex()` | `Semaphore(1)` — a whole exported type for one argument |
+| `concurrent.compute` | `Isolate.run`, one line |
+| `Sequence.union`, `Sequence.findlast` | `plus().unique()`, `flip.find()` |
+| `cli.rest`, `cli.subcommand` | `args` minus its first element; an `if` with a callback |
+| `concurrent.retry`'s `times:` | `retries:`, documented as *pass one or the other* |
+| `Semaphore.acquire` / `withPermit` | a second dialect of `Limiter.take` / `guard` — and the library's one camelCase member |
+| `$` / `$xpath` on `Element` and `Document` | `element.query`, and on the *default* surface, which is what the survivor below is explicitly not |
+
+The pattern in most of them is a member that reads *better* than what it wraps.
+`page.find('a').href` is nicer than `attr('href')`, which is exactly the
+argument this rule exists to refuse — and it never covered anything, because
+the next attribute a script wants is `data-id`.
+
 The one survivor is deliberate and is not a second spelling of anything on the
 default surface: `$` and `$xpath` stay as an opt-in import, because jQuery's
 `$` is the exact thing Rule 1 means by a subject arriving with its own
 vocabulary, and a script that does not want an identifier called `$` never
-sees one.
+sees one. 5.0.0 made them methods rather than getters, so the opt-in spelling
+carries its own selector argument instead of leaning on a `Markup.call` sitting
+on the surface it opted out of.
 
 The rule also settles collisions in the other direction. `io.hash(path)` hashes
 a file and `util.hash.sha(value)` hashes a value — different inputs, different
@@ -310,6 +333,15 @@ sweep does not re-litigate them:
 | `logger.info(msg, fields: {...})` | Structured log fields, encoded straight to JSON. |
 | `Meta.raw`, `Store.all()` | The escape hatch under a typed API, deliberately shaped like the JSON it holds. |
 | `res.parse(format.html).extract(schema)`, `Field.of`, `NestField`, `ListField` | The string shorthand, which this rule blesses *alongside* the typed form. Its whole job is to accept a loose spec; `all`/`one`/`pick` are the typed twin. |
+
+5.0.0 closed the last two places where a URL was not a `Uri`:
+`net.crawl(target)` took a `String`, one line from `net.crawl.sitemap(Uri)` and
+one call from `net.http.get(Uri)`, and it doubled as a raw-HTML seed depending
+on what the string looked like — the untyped overload this rule is for.
+`Served.redirect(location)` took one too. `net.crawl.html(markup)` and
+`net.crawl.file(path)` keep their `String`, because markup is not a URL and
+neither is a path, and `Page.follow` keeps one because a relative reference is
+what it is handed and resolving it is the method's job.
 
 Everything else that used to claim the exemption was closed in 2.0.0.
 `Fetch.meta` and `io.store` became `Slot` keys, `res.extract` gained a typed
@@ -402,8 +434,24 @@ every package in `pubspec.yaml`.
 5. Check Rule 5. Does this behaviour already exist somewhere?
 6. Check Rule 6. Are the parameters and the return real types — and does the
    type name survive being imported next to `dart:io`?
-7. Document it, and add the sample to `docs/`. `test/doc_samples_test.dart`
-   compiles every snippet in `docs/`, so a stale example fails the build.
+7. Document it, and add the sample to `docs/`. `test/docs_test.dart` compiles
+   **every** `dart` block in `docs/`, `README.md`, this file, `example/README.md`
+   and every `///` comment under `lib/` — 385 of them, against a set of shared
+   fixtures, so a stale example fails the build.
+
+   That claim used to be here and used to be false: the old harness filtered
+   to whole programs (`if (!snippet.contains('void main(')) continue;`), which
+   was 27 of 244 markdown blocks and none of the 152 in doc comments.
+   Everything else rotted unchecked, and 5.0.0's rewrite found doc comments
+   still using `tool.json`, `res.$`, `res.form`, `res.pick`, `io.async.json`,
+   `cli.has`, `cli.get`, `Failure.request`, `Page(request:)` and
+   `meta: {'name': ...}` — API removed as far back as 2.0.0.
+
+   A block that genuinely cannot compile — a signature listing, a naming
+   table, a member index — opts out with ` ```dart no-compile `. There are 16,
+   and that number is the debt: every one is a line somebody has to justify.
+   A fragment that needs a name the fixtures do not carry declares it with a
+   `// setup:` comment line.
 8. No deprecation shim. Rule 5 settles it: a migration is one edit, and two
    spellings is forever. When a name moves, the old one goes — which is why
    `io.json`, `tool.git`, `tool.gh` and `tool.docker` are gone rather than
@@ -426,7 +474,8 @@ every package in `pubspec.yaml`.
 | The `Markup` cursor type | `util`, beside `Json` | The same split, one release later, and named the same way: for what it is over rather than for the operation that produced it. `QueryResult` was a result type named after a query. The 800-line jQuery evaluator behind it went to `lib/src/jquery.dart`, so `util/markup.dart` reads as the vocabulary rather than the machinery |
 | The domain's own name | `format`, not `tool` | `tool` was chosen when the domain held one archiver, and it invited precisely the thing its own doc comment spent a paragraph forbidding — three executable wrappers were added under it in 3.1.0 and removed in 3.2.0. `format.zip` cannot be misread as a wrapper around the `zip` binary. Rule 4 says say the call site out loud: `format.yaml.read('config.yaml')` says what it does and `tool.yaml.read(...)` says where it happens to live |
 | The sequence API | `Sequence<T>`, a type in `util` | Rule 2 spends no top-level name: you reach it from the data you already hold, the same argument that put `Form` in `net` with no `net.form`. Not a sub-namespace either — `util.list.group(...)` would be a namespace standing where a receiver belongs |
-| A filesystem watcher | `io.observe`, not `io.watch` | `system.watch()` already means *watch for Ctrl-C*, with `track`/`untrack` beside it. Two `watch`es meaning two unrelated things on two accessors is precisely what Rule 5 is for. `observe` is free, honest, and slightly less good than `watch` |
+| A filesystem watcher | `io.watch` — after 5.0.0 moved the other one | It was `io.observe` through 4.0.0, because `system.watch()` meant *watch for Ctrl-C* and two `watch`es meaning two unrelated things on two accessors is precisely what Rule 5 is for. That entry ended *`observe` is free, honest, and slightly less good than `watch`* — a worse name taken because a better one was occupied by something that had not earned it. Signal watching is `system.on.signals()` now, beside `track`, `adopt` and `exit`, which is the cohesive vocabulary Rule 3 describes; `io` took the name back. A compromise written down is a compromise that can be revisited |
+| The interrupt vocabulary | `system.on.*`, not flat on `system` | `watch`, `unwatch`, `track`, `untrack`, `adopt` and `disown` sat directly on `system` through 4.0.0 while `system.on` held exactly one member, `exit`. Rule 3 says a sub-namespace is for a cohesive vocabulary with its own nouns, and *what happens to your resources when the program is interrupted* is that vocabulary — the structure was inverted, with the namespace on the single function and the family flat beside it |
 | A rate limiter | `concurrent.rate` → `Limiter` | Pure coordination over time, so Rule 1 would file it under `util` — but `Semaphore` and `Mutex` set the precedent and a limiter has nothing to say to `util`. It bounds *how often* where they bound *how many*, and it composes with `concurrent.run`. `RateLimiter` is camelCase where this library uses domain nouns, and `Rate` alone reads like a number |
 | Reading `Retry-After` into a limiter | `Fetcher(limiter:)`, not `Limiter.absorb` | The obvious shape entangles `concurrent` with `net`, which Rule 2's second test dislikes. Pointing the dependency the other way leaves `concurrent` ignorant of responses |
 | A server | `net.serve` / `net.once` | Rule 2's second test fails deliberately: a server shares `HttpMethod`, headers, bodies and (via `Served.file`) `io` with the rest of `net`, so it is a member of that domain rather than a peer. `HttpCache` is the precedent and it landed the same way. `Served` and `Asked` rather than `Response` and `Request`, per Rule 6 |
@@ -438,11 +487,14 @@ every package in `pubspec.yaml`.
 | Non-blocking IO | `io.async` | A complete mirror of `io`, so it is a prefix rather than new names |
 | `Fs`, `Sys`, `Exit` | Unexported, `lib/src/` | Implementation behind `io` and `system`; never a public name |
 | Hash algorithm enum | `Digest` became `Algo` | `Digest` was an `ambiguous_import` error against `package:crypto`, whose `Digest` is a hash *result* where this one selects an *algorithm*. `lib/src/fs.dart` was already writing `crypto.Digest` to name the other one |
-| A pipeline's page handler | `Process<T>` became `Handler<T>` | Dart resolves a package import over a `dart:` one silently, so exporting `Process` meant `Process` stopped meaning `dart:io`'s for every user of the library — while `system.adopt(Process)` still meant that one. A shadow with no error is worse than a collision with one |
+| A pipeline's page handler | `Process<T>` became `Handler<T>` | Dart resolves a package import over a `dart:` one silently, so exporting `Process` meant `Process` stopped meaning `dart:io`'s for every user of the library — while `system.on.adopt(Process)` still meant that one. A shadow with no error is worse than a collision with one |
 | HTTP caching | `HttpCache` type, `Fetcher(cache:)`, `crawl.cache(dir)` | A whole tool by Rule 2's first test, but entangled with `net.http` by its second: the client is what decides to revalidate. So a type in `net` and an option on the two things that fetch, not a domain and not a namespace |
 | A crawl's position | `Snapshot` + `Engine.snapshot`/`restore`, `crawl.resume(path)` | The type is the noun, the engine pair is the operation, and `resume` is the two of them wired to a file. `save` was taken by "write items to", and Rule 5 forbids a second meaning for it |
 | A request that failed | `Failure`, passed to `on.error` | A count without the pages is not an answer. Widening the handler's argument list would have fixed one question and left the next one — an attempt number, a response — needing another break, so the argument is a type |
 | Streaming CSV out | `io.csv.pipe`, beside `write` | Different behaviour, not an alias: `write` takes a collection, `pipe` takes a `Stream` and holds one row. A `CsvWriter` you open and close would have been a new noun and a lifecycle to get wrong |
 | A page's forms | `Form`, reached by `res.form(selector)` | Rule 2's first test passes — filling, addressing and submitting is a vocabulary — but its second fails: a form is read out of a response and submitted through the same client or engine, so it is entangled with `net` and lives there as a type rather than a domain. No accessor, because there is nothing to reach it from but the page it is on |
 | Submitting one in a crawl | `res.submit(form)`, beside `res.follow` | `follow` already takes a `method` and a `body`; this is the same operation with the three details read off the form instead of typed out, so it sits next to it rather than inside `Form`, which knows nothing about an engine |
+| A cursor's two selector languages | `find` and `xpath`, and no callable | `page(sel)` was a second spelling of `find` — and *which language it spoke depended on hidden state*: XPath on a cursor from `format.html.query`, CSS on one from `format.html.parse`, with nothing at the call site to say which. Rule 5 would have deleted it anyway; the hidden state is why it was not worth arguing about. `find` and `xpath` each name their language |
+| The sequence's evaluation | Eager, a snapshot | `Sequence` held an `Iterable` and re-walked the chain on every terminal call, so three reads of a three-element sequence ran the predicate seven times and a `.to(expensiveParse)` over a crawl's results paid once per read. Nothing in the vocabulary was lazy on purpose and every source the library hands one is already a list. The trade — `head(10)` after a `to` shapes the whole source — is stated in the doc rather than discovered |
+| Positional arguments | `command` and `args`, no `rest` | `rest` was `args` without its first element, and neither name said which. The deciding fact is that inside a handler `cli.run` dispatched to, the command names are already off, so `args` is the arguments to *that command* and `rest` would drop one more. `rest` existed to serve `subcommand`; both went |
 | Terminal geometry | `ConsoleWriter.width` / `.height`, moved off `Terminal` | Geometry belongs to the thing that knows where the output is going — and to the thing a test can size. `Terminal` keeps what it is named for: the control codes |

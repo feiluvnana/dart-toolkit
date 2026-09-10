@@ -13,7 +13,7 @@ final res  = await net.http.get(url);
 final page = res.parse(format.html);
 
 page.find('h1').text;
-page.find('a').hrefs;
+page.find('a').attrs('href');
 ```
 
 ---
@@ -46,7 +46,9 @@ wants to pay:
 import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:dart_toolkit/html.dart';
 
-print($(markup, '.track a').texts);
+// setup: const markup = '<ul><li class="track bonus" data-id="2">'
+// setup:     '<a href="/t/2">Track Two</a></li></ul>';
+print($(markup, '.track a').texts.list);
 print(markup.$('.bonus').data('id'));
 ```
 
@@ -66,29 +68,38 @@ print(markup.$('.bonus').data('id'));
 | `$xpath(markup, [query])` | `package:dart_toolkit/html.dart` | The jQuery spelling of `query` |
 | `markup.$(selector)` | `String` extension | Parse an HTML string and query it |
 | `markup.$xpath(query)` | `String` extension | The same, for XPath |
-| `element.$(selector)` | `Element` extension | Query within an existing element |
+| `element.query` | `Element` extension | A `package:html` element as a cursor |
 | `page.find(selector)` | `Markup` | Search the page, or the current set |
-| `page(selector)` | `Markup` | Callable shorthand for `find` |
+| `page.xpath(query)` | `Markup` | The same, in XPath |
 
-### One search, two spellings
+### One search, one spelling
 
-`find` and the callable are the same operation. On a cursor rooted on a
-document — what `format.html.parse` and `res.parse(format.html)` give back —
-both search the whole page. On a scoped cursor both search the descendants of
-the current set, so chaining means what it reads as:
+`page(selector)` was a callable shorthand for `find` through 4.0.0 — the
+release that made the two *one search* and then kept both names for it. It is
+gone in 5.0.0, and the reason is not only Rule 5: which selector **language**
+the callable spoke depended on how the cursor had been built, so
+`page('//h1')` was XPath on a cursor from `format.html.query` and a failed CSS
+selector on one from `format.html.parse`, with nothing at the call site saying
+which. `find` and `xpath` each say so in their names.
+
+`$` and `$xpath` on `Element` and `Document` are gone with it. They sat on the
+*default* surface, which contradicted the opt-in rule the `String` extension
+follows, and they were `element.query` under a second name.
+
+On a cursor rooted on a document — what `format.html.parse` and
+`res.parse(format.html)` give back — `find` searches the whole page. On a
+scoped cursor it searches the descendants of the current set, so chaining
+means what it reads as:
 
 ```dart
 page.find('.row').find('.name').texts;   // names inside rows, only
 ```
 
-Before 4.0.0 these were two different searches, and on a page cursor
-`find('h1')` missed an `<h1>` at the top level of the body while `('h1')`
-found it. `matching(selector)` is how you ask whether the set *itself*
-qualifies.
+`matching(selector)` is how you ask whether the set *itself* qualifies.
 
 ### Full jQuery Selectors
 
-The `$` selection supports full jQuery selector syntax, not just standard CSS:
+`find` supports full jQuery selector syntax, not just standard CSS:
 
 - **Text search**: `:contains("text")`, `:icontains("text")` (case-insensitive)
 - **Descendant test**: `:has(selector)` (e.g. `div:has(a.active)`)
@@ -97,12 +108,19 @@ The `$` selection supports full jQuery selector syntax, not just standard CSS:
 - **Tag groups**: `:header` (`h1..h6`), `:input` (`input, textarea, select, button`), `:button`, `:checkbox`, `:radio`, `:text`, `:password`, `:submit`, `:reset`
 - **Content state**: `:empty`, `:parent`, `:selected`, `:checked`, `:disabled`, `:enabled`, `:visible`, `:hidden`
 - **Attribute inequality**: `[attr!="val"]`
+- **Structural**: `:nth-child(an+b)`, `:nth-last-child`, `:nth-of-type`,
+  `:nth-last-of-type`, `:first-of-type`, `:last-of-type`, `:only-of-type`,
+  `:only-child` — plus `:is(...)` and `:where(...)`. These are evaluated here
+  rather than by `package:csslib`, which matched `:nth-child(2)` against
+  nothing at all and threw `UnimplementedError` for `:nth-of-type`. A selector
+  this cannot evaluate is now a `FormatException` naming the part it could not
+  read.
 
-```dart
-res.parse(format.html)('a:contains("More")');       // First link containing "More"
-res.parse(format.html)('div:has(p.desc)');          // Divs containing a p.desc
-res.parse(format.html)('ul > li:even');             // Even list items (0, 2, ...)
-res.parse(format.html)(':header');                  // All headers (h1..h6)
+```dart no-compile
+res.parse(format.html).find('a:contains("More")');       // First link containing "More"
+res.parse(format.html).find('div:has(p.desc)');          // Divs containing a p.desc
+res.parse(format.html).find('ul > li:even');             // Even list items (0, 2, ...)
+res.parse(format.html).find(':header');                  // All headers (h1..h6)
 res.parse(format.html).xpath('//a[@class="link"]');  // XPath selection
 ```
 
@@ -111,7 +129,7 @@ res.parse(format.html).xpath('//a[@class="link"]');  // XPath selection
 ## 2. Traversal
 
 ```dart
-final result = res.parse(format.html)('.main');
+final result = res.parse(format.html).find('.main');
 
 result.find('.child');       // descendants matching selector
 result.children();           // direct children
@@ -130,6 +148,7 @@ result[0];                   // Element?, or null if out of range
 Filtering is split by type, so nothing takes an untyped argument:
 
 ```dart
+// setup: final result = page.find('.row');
 result.filter((el) => el.classes.contains('bonus')); // by predicate
 result.matching('.bonus');                            // by selector
 result.not('.bonus');                                 // by selector, negated
@@ -164,12 +183,12 @@ All plural property extractors are getters returning `List<String>` across all m
 Extracting attributes from a query result:
 
 ```dart
-final firstHref = res.parse(format.html)('a.morelink').href;          // single href (String?)
-final allHrefs  = res.parse(format.html)('a.morelink').hrefs;         // all hrefs (List<String>)
-final firstSrc  = res.parse(format.html)('img.thumb').src;            // single src (String?)
-final allSrcs   = res.parse(format.html)('img.thumb').srcs;           // all srcs (List<String>)
-final titleText = res.parse(format.html)('h1.title').text;            // text of h1 (String)
-final allTitles = res.parse(format.html)('.titleline > a').texts;     // all texts (List<String>)
+final firstHref = res.parse(format.html).find('a.morelink').attr('href');          // single href (String?)
+final allHrefs  = res.parse(format.html).find('a.morelink').attrs('href');         // all hrefs (List<String>)
+final firstSrc  = res.parse(format.html).find('img.thumb').attr('src');            // single src (String?)
+final allSrcs   = res.parse(format.html).find('img.thumb').attrs('src');           // all srcs (List<String>)
+final titleText = res.parse(format.html).find('h1.title').text;            // text of h1 (String)
+final allTitles = res.parse(format.html).find('.titleline > a').texts;     // all texts (List<String>)
 final xpathText = res.parse(format.html).xpath('//h2').texts;          // XPath text list
 ```
 
@@ -189,14 +208,14 @@ has at most one of, and `pick` reads a `Field` at any depth.
 
 ```dart
 final variants = res.parse(format.html).all('.variant', (row) => (
-  name: row('.name').text,
+  name: row.find('.name').text,
   sku: row.attr('data-sku'),
   qty: row.pick(Field.text('.qty').when(int.tryParse)),
 ));
-// List<({String name, String? sku, int? qty})>
+// Sequence<({String name, String? sku, int? qty})>
 
 final seller = res.parse(format.html).one('.seller', (s) => (
-  name: s('.name').text,
+  name: s.find('.name').text,
   rating: s.pick(Field.text('.rating').when(util.text.number)),
 ));
 // ({String name, num? rating})?
@@ -210,7 +229,7 @@ A whole page is the same idea with no wrapper:
 
 ```dart
 final product = (
-  title: res.parse(format.html)('h1').text,
+  title: res.parse(format.html).find('h1').text,
   price: res.parse(format.html).pick(Field.text('.price').when(util.text.number)),
   variants: res.parse(format.html).all('.variant', (row) => (sku: row.attr('data-sku'))),
 );
@@ -231,7 +250,7 @@ Text comes back the way a browser draws it: runs of spaces and newlines collapse
 ```
 
 ```dart
-res.parse(format.html)('.name').text;                  // 'Wireless Keyboard'
+res.parse(format.html).find('.name').text;                  // 'Wireless Keyboard'
 res.parse(format.html).extract({'name': '.name'});       // {'name': 'Wireless Keyboard'}
 res.parse(format.html).pick(Field.text('.name'));        // 'Wireless Keyboard'
 ```
@@ -250,7 +269,7 @@ Inside a `<pre>` or a `<textarea>` the whitespace *is* the content, so there it 
 | anything else | Its `value` attribute |
 
 ```dart
-final form = res.parse(format.html)('form');
+final form = res.parse(format.html).find('form');
 final size = form.find('select[name=size]').value;   // 'm'
 final ticked = form.find('input[type=checkbox]').values;  // only the checked ones
 ```

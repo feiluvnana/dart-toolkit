@@ -121,7 +121,7 @@ primitive a reporting script reaches for, and `dart:core` has no one-liner for
 it:
 
 ```dart
-rows.group((r) => util.time.day(r.at));   // Map<DateTime, Sequence<Row>>
+rows.group((r) => util.time.day(r.seen));   // Map<DateTime, Sequence<Row>>
 ```
 
 The `int` extensions cover the whole ladder: `250.ms`, `30.s`, `5.m`, `2.h`,
@@ -132,13 +132,19 @@ The `int` extensions cover the whole ladder: `250.ms`, `30.s`, `5.m`, `2.h`,
 ## 2. Byte Sizes (`util.size`)
 
 ```dart
-util.size.format(5242880);            // '5.0 MB'
-util.size.format(1024, decimals: 2);  // '1.00 KB'
-util.size.parse('2.5 MB');            // 2621440
-util.size.parse('10KB');              // 10240
+util.size.format(5242880);            // '5.0 MiB'
+util.size.format(1023);               // '1023 B'
+util.size.format(1024, decimals: 2);  // '1.00 KiB'
+util.size.format(-2048);              // '-2.0 KiB'
+util.size.parse('2.5 MiB');           // 2621440
+util.size.parse('2.5 MB');            // 2500000
+util.size.parse('10K');               // 10240
+util.size.parse('10 XB');             // null
 ```
 
-`format` renders zero and negative inputs as `'0 B'`. `parse` accepts both `KB` and `K` style units, treats a bare number as bytes, and returns `0` for anything it cannot read — a unit nobody knows is refused rather than read as bytes. Every unit `format` writes, up to `PB`, reads back, so `parse(format(n))` is `n` rounded to the digits it printed.
+**Binary units, spelled as binary units.** The arithmetic here has always been 1024-based and the labels said `KB`, `MB`, `GB` — so a terabyte of disk printed as `'931.3 GB'` and `parse('5MB')` answered 5,242,880, which is five *mebibytes* under a name that means five million. 5.0.0 keeps the arithmetic and fixes the labels: `format` writes `KiB`/`MiB`/`GiB`, and `parse` accepts both families and gives each the scale its name carries — `KiB` and the bare `K` are 1024, `KB` is 1000.
+
+`format` shows a plain byte count with no fraction, and carries a negative through rather than clamping it to `'0 B'`. `parse` returns **`int?`**: `null` for text that is not a size, for a unit nobody knows, and for a unit with no number. It used to return `0` for all three, which is a value a caller cannot tell apart from an empty file. Every unit `format` writes, up to `PiB`, reads back, so `parse(format(n))` is `n` rounded to the digits it printed.
 
 ```dart
 system.console.logger.info('Wrote ${util.size.format(io.stat(path).size)}');
@@ -158,7 +164,7 @@ util.text.clean('  a   b\n c ');        // 'a b c'
 util.text.strip('<p>Hi <b>there</b>');  // 'Hi there'
 util.text.clip('a long sentence', 10);  // 'a long se…'
 util.text.title('hELLO there');         // 'Hello There'
-util.text.upper('hello');               // 'Hello'
+util.text.upper('hello');            // 'Hello'
 util.text.words('one two-three');       // Sequence('one', 'two', 'three')
 util.text.blank('  \n ');               // true
 util.text.fold('déjà');                 // 'deja'
@@ -209,7 +215,7 @@ util.hash.md5('abc');            // 32 hex characters
 util.hash.short(url);            // the first 8 — a cache key
 util.hash.sign(body, secret);    // HMAC-SHA256, hex
 util.hash.encode('hello');       // base64
-util.hash.decode(encoded);       // List<int>
+util.hash.decode(util.hash.encode('hello'));   // List<int>
 ```
 
 ---
@@ -219,8 +225,8 @@ util.hash.decode(encoded);       // List<int>
 The small random choices a crawler makes to look less like a machine.
 
 ```dart
-util.rand.pick(agents);              // one item
-util.rand.some(proxies, 3);          // three distinct items
+util.rand.pick(agents.list);         // one item
+util.rand.some(agents.list, 3);      // three distinct items
 util.rand.shuffle(urls);             // a shuffled copy
 util.rand.between(1, 10);            // 1..9
 util.rand.id();                      // 12 URL-safe characters
@@ -303,10 +309,10 @@ another package:
 
 ```dart
 [1, 2, 3].seq.sum((n) => n);           // 6
-{'a': 1}.seq.to((e) => e.$1).list;     // ['a'] — records, not MapEntry
+({'a': 1}).seq.to((e) => e.$1).list;     // ['a'] — records, not MapEntry
 ```
 
-### Shaping — lazy, returns a `Sequence`
+### Shaping — returns a `Sequence`
 
 | Member | Does |
 | :--- | :--- |
@@ -323,25 +329,57 @@ another package:
 | `skip(n)` / `trim(n)` | all but the first n / all but the last n |
 | `until(t)` / `after(t)` | leading elements a test accepts / from the first it rejects |
 | `chunks(n)` | consecutive groups of n, the last one short |
-| `windows(n, {step, partial})` | sliding windows; `windows(2)` is `zipWithNext` |
 | `zip(other)` | paired elementwise, as `(A, B)` records |
 | `pairs` | each element with its index, as `(int, T)` |
-| `scan(init, f)` | the running results of a fold |
-| `also(f)` | a peek that stays in the chain |
-| `plus` / `minus` / `union` / `common` | concatenate / subtract / merge / intersect |
+| `plus` / `minus` / `common` | concatenate / subtract / intersect |
 | `or(fallback)` | this, or the fallback when empty |
-| `cast<R>()` | viewed as another element type |
-
-Laziness is the contract, not an optimisation: `rows.to(parse).keep(live).head(10)`
-parses eleven rows, not all of them.
+| `cast<R>()` | viewed as another element type, throwing on a bad one |
 
 ```dart
-final top = rows.to(parse).keep((r) => r.live).sort((r) => r.score).flip.head(10);
+// setup: final lines = Sequence(const ['a']);
+final top =
+    lines.to(parse).keep((r) => r.live).sort((r) => r.score).flip.head(10);
 ```
 
-Everything that needs the whole sequence by definition — `sort`, `order`,
-`unique`, `flip`, `tail`, `trim` and every reducing member — is eager, and says
-so in its doc comment.
+#### A snapshot, not a view
+
+Every member is eager. A `Sequence` holds a `List<T>` taken when it was built,
+and each link in a chain builds the next one, so **a callback runs exactly once
+per element per link** however often you read the result:
+
+```dart
+var n = 0;
+final s = [1, 2, 3].seq.keep((x) { n++; return true; });
+s.count(); s.list; s.first;
+// n == 7 through 4.0.0, and 3 now
+```
+
+It was a lazy view through 4.0.0, re-walking the whole chain on every terminal
+call — so three reads cost three passes, a `.to(expensiveParse)` over a crawl's
+results paid for the parse once per read, and a sequence built over a
+single-subscription source was a `StateError` waiting for its second reader.
+Nothing in the vocabulary was lazy on purpose, and every source the library
+hands you is already a materialised list.
+
+The trade is stated rather than hidden: `head(10)` after a `to` maps the whole
+source rather than stopping at the eleventh element. Where the source is large
+enough for that to matter the answer is a `Stream` — `crawl.stream` rather than
+`crawl.collect` — which was already the advice.
+
+#### Gone in 5.0.0
+
+| Was | Is |
+| :--- | :--- |
+| `union(other)` | `plus(other).unique()` |
+| `findlast(t)` | `flip.find(t)` |
+| `also(f)` | `each(f)` on a value you already hold |
+| `scan(init, f)` | nothing — a running fold no source here produced |
+| `windows(n, {step, partial})` | nothing — three parameters, no caller |
+
+The first two are Rule 5: one behaviour, two entry points. `also` was a tap
+that only made sense while the chain was lazy. The last two had no use in the
+library, in the docs, or in any example — a replacement vocabulary larger than
+the one it replaces has stopped being a simplification.
 
 ### Reducing — eager, leaves the `Sequence`
 
@@ -351,7 +389,7 @@ so in its doc comment.
 | `empty` | whether it holds nothing (no complement: `!empty`) |
 | `has(x)` | whether `x` is one of the elements |
 | `first` / `last` / `sole` | `T?` — nullable, never throwing |
-| `at(i)` / `find(t)` / `findlast(t)` | `T?` |
+| `at(i)` / `find(t)` | `T?` |
 | `index(t)` | `int?` |
 | `any(t)` / `all(t)` | booleans (no `none`: `!any`) |
 | `fold(init, f)` | Dart's word, kept |
@@ -389,7 +427,7 @@ with `util.rand.shuffle(rows.list)`.
 
 Anything this library hands back for you to *shape*:
 
-```dart
+```dart no-compile
 await net.crawl<T>(seed).collect();     await net.crawl<Never>(seed).gather(f);
 await io.csv.maps(path);                await io.csv.matrix(path);
 io.find(dir);                           net.sitemap(text);
@@ -397,7 +435,7 @@ util.text.words(t);                     util.text.numbers(t);
 util.text.betweens(t, a, b);            util.rand.shuffle(list);
 util.rand.some(list, n);                robots.agents;
 jar.cookies;                            await format.zip.list(archive);
-page.parse(format.html)('sel').elements;                 doc.at(path).all(build);
+page.parse(format.html).find('sel').elements;                 doc.at(path).all(build);
 doc.jsonpath(expr);
 ```
 

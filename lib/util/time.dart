@@ -30,14 +30,22 @@ class TimeAccessor {
   Stopwatch clock() => Stopwatch()..start();
 
   /// Formats [duration] as `mm:ss`, or `hh:mm:ss` past an hour.
+  ///
+  /// A negative duration formats its magnitude behind a `-`, so
+  /// `format(-5.s)` is `'-00:05'`. Through 4.0.0 the sign reached the
+  /// remainders instead and the result was `'00:-5'` — a script that
+  /// subtracted two timestamps in the order it happened to have them printed
+  /// something that was not a time at all.
   String format(Duration duration) {
-    final hours = duration.inHours;
-    final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
+    final sign = duration.isNegative ? '-' : '';
+    final total = duration.abs();
+    final hours = total.inHours;
+    final minutes = total.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final seconds = total.inSeconds.remainder(60).toString().padLeft(2, '0');
     if (hours > 0) {
-      return '${hours.toString().padLeft(2, '0')}:$minutes:$seconds';
+      return '$sign${hours.toString().padLeft(2, '0')}:$minutes:$seconds';
     }
-    return '$minutes:$seconds';
+    return '$sign$minutes:$seconds';
   }
 
   /// A filename-safe timestamp, `yyyyMMdd_HHmmss`.
@@ -80,6 +88,7 @@ class TimeAccessor {
   // --- Reading, the other direction ---
 
   static final _isoDate = RegExp(r'^\d{4}-(\d{2})-(\d{2})');
+  static final _bareDigits = RegExp(r'^\d+$');
   static final _stamp = RegExp(
     r'^(\d{4})(\d{2})(\d{2})(?:[_T]?(\d{2})(\d{2})(\d{2}))?$',
   );
@@ -129,11 +138,18 @@ class TimeAccessor {
   /// than a `try` to write:
   ///
   /// ```dart
+  /// // setup: final row = const {'date': '2026-01-01'};
   /// final since = util.time.parse(row['date'] ?? '') ?? DateTime(2000);
   /// ```
   DateTime? parse(String text) {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return null;
+
+    // `DateTime.parse` reads a run of digits as ISO 8601 basic format, so a
+    // Unix timestamp came back as a date: '1700000000' was year 170000 with a
+    // zero month and day, rolled back to 169999-11-30. Eight digits is the
+    // longest a bare date can be (`yyyyMMdd`); anything longer is not one.
+    if (_bareDigits.hasMatch(trimmed) && trimmed.length != 8) return null;
 
     final iso = DateTime.tryParse(trimmed);
     // `DateTime.parse` rolls an out-of-range field forward, so '2024-13-01'
@@ -219,7 +235,8 @@ class TimeAccessor {
   /// `--timeout 30` works.
   ///
   /// ```dart
-  /// final wait = util.time.span(row['retry_after']) ?? 30.s;
+  /// // setup: final row = const {'retry_after': '30s'};
+  /// final wait = util.time.span(row['retry_after'] ?? '') ?? 30.s;
   /// ```
   Duration? span(String text) {
     final trimmed = text.trim().toLowerCase();
@@ -255,7 +272,7 @@ class TimeAccessor {
   /// no one-liner for it.
   ///
   /// ```dart
-  /// rows.group((r) => util.time.day(r.at));
+  /// rows.group((r) => util.time.day(r.seen));
   /// ```
   DateTime day(DateTime date) =>
       date.isUtc

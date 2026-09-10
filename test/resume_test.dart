@@ -235,7 +235,7 @@ void main() {
       addTearDown(() => Directory(io.dir(path)).deleteSync(recursive: true));
 
       final stats = await net
-          .crawl<String>('https://example.com/1')
+          .crawl<String>('https://example.com/1'.url)
           .downloader(
             _HalfwayDownloader({
               'https://example.com/1':
@@ -244,7 +244,8 @@ void main() {
           )
           .resume(path)
           .run((res) {
-            for (final href in res.parse(format.html)('a').hrefs) {
+            for (final href
+                in res.parse(format.html).find('a').attrs('href').list) {
               res.follow(href);
             }
           });
@@ -276,12 +277,13 @@ void main() {
       };
 
       final first = await net
-          .crawl<String>('https://example.com/1')
+          .crawl<String>('https://example.com/1'.url)
           .downloader(_HalfwayDownloader(pages, 1))
           .resume(path)
           .collect((res) {
             res.emit(res.url.toString());
-            for (final href in res.parse(format.html)('a').hrefs) {
+            for (final href
+                in res.parse(format.html).find('a').attrs('href').list) {
               res.follow(href);
             }
           });
@@ -289,12 +291,13 @@ void main() {
       expect(first.list, ['https://example.com/1']);
 
       final second = await net
-          .crawl<String>('https://example.com/1')
+          .crawl<String>('https://example.com/1'.url)
           .downloader(MapDownloader<String>(pages))
           .resume(path)
           .collect((res) {
             res.emit(res.url.toString());
-            for (final href in res.parse(format.html)('a').hrefs) {
+            for (final href
+                in res.parse(format.html).find('a').attrs('href').list) {
               res.follow(href);
             }
           });
@@ -324,12 +327,13 @@ void main() {
       };
 
       Future<Stats> leg(Downloader<String> downloader) => net
-          .crawl<String>('https://example.com/1')
+          .crawl<String>('https://example.com/1'.url)
           .downloader(downloader)
           .resume(path)
           .limit(2)
           .run((res) {
-            for (final href in res.parse(format.html)('a').hrefs) {
+            for (final href
+                in res.parse(format.html).find('a').attrs('href').list) {
               res.follow(href);
             }
           });
@@ -349,7 +353,7 @@ void main() {
 
       expect(
         () => net
-            .crawl<String>('https://example.com/1')
+            .crawl<String>('https://example.com/1'.url)
             .downloader(MapDownloader<String>({}))
             .resume(path)
             .run((res) {}),
@@ -364,7 +368,7 @@ void main() {
         addTearDown(() => Directory(io.dir(path)).deleteSync(recursive: true));
 
         await net
-            .crawl<String>('https://example.com/1')
+            .crawl<String>('https://example.com/1'.url)
             .downloader(MapDownloader<String>({'/1': '<p>one</p>'}))
             .resume(path)
             .run((res) {});

@@ -224,7 +224,7 @@ void main() {
       }
     });
 
-    test('io.lines, io.hash, io.stat, io.find, io.delete', () async {
+    test('io.lines, io.hash, io.stat, io.find, io.sweep', () async {
       final temp = io.temp('toolkit_meta_');
       try {
         final path = io.join(temp.path, 'lines.txt');
@@ -240,7 +240,7 @@ void main() {
           io.find(temp.path, pattern: RegExp(r'\.txt$')).count(),
           equals(1),
         );
-        expect(io.delete(temp.path, pattern: RegExp(r'\.txt$')), equals(1));
+        expect(io.sweep(temp.path, pattern: RegExp(r'\.txt$')), equals(1));
         expect(io.has(path), isFalse);
       } finally {
         temp.deleteSync(recursive: true);
@@ -385,7 +385,7 @@ void main() async {
         await util.time.wait(10.ms);
         return n * 10;
       }, size: 2);
-      expect(processed, containsAll([10, 20, 30, 40, 50]));
+      expect(processed.list, containsAll([10, 20, 30, 40, 50]));
     });
 
     test(
@@ -395,7 +395,10 @@ void main() async {
           await util.time.wait(n.ms);
           return 'item-$n';
         }, size: 4);
-        expect(results, equals(['item-30', 'item-10', 'item-20', 'item-5']));
+        expect(
+          results.list,
+          equals(['item-30', 'item-10', 'item-20', 'item-5']),
+        );
       },
     );
 
@@ -406,22 +409,22 @@ void main() async {
         return n * 10;
       });
 
-      expect(outcomes.length, equals(3));
+      expect(outcomes.count(), equals(3));
       // Matching is the point: `value` is non-nullable inside Done, and the
       // error only exists inside Broke.
-      expect(outcomes[0], isA<Done<int>>());
-      expect((outcomes[0] as Done<int>).value, equals(10));
-      expect(outcomes[1], isA<Broke<int>>());
+      expect(outcomes.list[0], isA<Done<int>>());
+      expect((outcomes.list[0] as Done<int>).value, equals(10));
+      expect(outcomes.list[1], isA<Broke<int>>());
       expect(
-        (outcomes[1] as Broke<int>).error.toString(),
+        (outcomes.list[1] as Broke<int>).error.toString(),
         contains('fail on 2'),
       );
-      expect((outcomes[1] as Broke<int>).stack, isNotNull);
-      expect(outcomes[2].ok, isTrue);
-      expect(outcomes[2].value, equals(30));
+      expect((outcomes.list[1] as Broke<int>).stack, isNotNull);
+      expect(outcomes.list[2].ok, isTrue);
+      expect(outcomes.list[2].value, equals(30));
 
       final saved = [
-        for (final outcome in outcomes)
+        for (final outcome in outcomes.list)
           switch (outcome) {
             Done(:final value) => 'ok:$value',
             Broke(:final error) => 'bad:${error is Exception}',
@@ -463,14 +466,14 @@ void main() async {
       expect(streamed, equals(['done-10', 'done-50']));
     });
 
-    test('Semaphore and Mutex control concurrent execution', () async {
+    test('Semaphore bounds how many run at once', () async {
       final sem = concurrent.semaphore(2);
       var running = 0;
       var maxRunning = 0;
 
       await Future.wait([
         for (var i = 0; i < 5; i++)
-          sem.withPermit(() async {
+          sem.guard(() async {
             running++;
             if (running > maxRunning) maxRunning = running;
             await util.time.wait(10.ms);
@@ -480,11 +483,12 @@ void main() async {
 
       expect(maxRunning, lessThanOrEqualTo(2));
 
-      final mutex = concurrent.mutex();
+      // `concurrent.mutex()` was a whole exported type for Semaphore(1).
+      final lock = concurrent.semaphore(1);
       var count = 0;
       await Future.wait([
         for (var i = 0; i < 5; i++)
-          mutex.protect(() async {
+          lock.guard(() async {
             final cur = count;
             await util.time.wait(5.ms);
             count = cur + 1;
@@ -501,7 +505,7 @@ void main() async {
           if (attempts < 3) throw StateError('fail $attempts');
           return 'success';
         },
-        times: 3,
+        retries: 2,
         backoff: 5.ms,
       );
 
@@ -515,24 +519,13 @@ void main() async {
             failAttempts++;
             throw Exception('always fail');
           },
-          times: 2,
+          retries: 1,
           backoff: 2.ms,
         ),
         throwsException,
       );
       expect(failAttempts, equals(2));
     });
-
-    test(
-      'concurrent.compute executes CPU-bound work on separate isolate',
-      () async {
-        final fib = await concurrent.compute((int n) {
-          int calc(int x) => x <= 1 ? x : calc(x - 1) + calc(x - 2);
-          return calc(n);
-        }, 10);
-        expect(fib, equals(55));
-      },
-    );
   });
 
   group('cli Sub-namespace', () {
@@ -578,26 +571,26 @@ void main() async {
       },
     );
 
-    test('subcommands and rest', () {
+    // `rest` was `args` without its first element and `subcommand` was the
+    // only caller that wanted that; `command` plus `args` covers branching by
+    // hand, and inside a handler `cli.run` dispatched to, `args` already has
+    // the command names taken off.
+    test('command reads the first positional, args holds them all', () {
       final cli = Cli(['build', '--prod', 'main.dart', 'output.bin']);
       final prod = cli.flag('prod');
       expect(cli.command, equals('build'));
-      expect(cli.rest, equals(['main.dart', 'output.bin']));
+      expect(cli.args, equals(['build', 'main.dart', 'output.bin']));
       expect(prod(), isTrue);
 
+      // Branching by hand is an `if`, which is what `subcommand` wrapped.
       var executed = false;
-      final matched = cli.subcommand('build', (subCli) {
-        executed = true;
-        expect(subCli.rest, equals(['main.dart', 'output.bin']));
-      });
-      expect(matched, isTrue);
+      if (cli.command == 'build') executed = true;
       expect(executed, isTrue);
-
-      expect(cli.subcommand('test', (_) {}), isFalse);
+      expect(cli.command == 'test', isFalse);
 
       final noCmd = Cli(['--flag']);
       expect(noCmd.command, isNull);
-      expect(noCmd.rest, isEmpty);
+      expect(noCmd.args, isEmpty);
     });
 
     test('declarations, require validation, and usage', () {
@@ -735,10 +728,16 @@ void main() async {
 
       expect(res.ok, isTrue);
       expect(res.body, contains('Welcome'));
-      expect(res.parse(format.html)('h1').text, equals('Welcome'));
-      expect(res.parse(format.html)('a').href, equals('/sub/page'));
-      expect(res.parse(format.html)('img').src, equals('/images/pic.png'));
-      expect(res.parse(format.html).lines, contains('Welcome'));
+      expect(res.parse(format.html).find('h1').text, equals('Welcome'));
+      expect(
+        res.parse(format.html).find('a').attr('href'),
+        equals('/sub/page'),
+      );
+      expect(
+        res.parse(format.html).find('img').attr('src'),
+        equals('/images/pic.png'),
+      );
+      expect(res.parse(format.html).lines.list, contains('Welcome'));
 
       final temp = io.temp('http_test_');
       try {
@@ -1032,10 +1031,10 @@ void main() async {
           'id,name,role\n1,"Alice, Chief",admin\n2,"Bob ""The Builder""",user';
       final matrix = io.csv.parse(input);
 
-      expect(matrix.length, equals(3));
-      expect(matrix[0], equals(['id', 'name', 'role']));
-      expect(matrix[1][1], equals('Alice, Chief'));
-      expect(matrix[2][1], equals('Bob "The Builder"'));
+      expect(matrix.count(), equals(3));
+      expect(matrix.list[0], equals(['id', 'name', 'role']));
+      expect(matrix.list[1][1], equals('Alice, Chief'));
+      expect(matrix.list[2][1], equals('Bob "The Builder"'));
 
       final formatted = io.csv.format([
         {'id': 1, 'name': 'Alice'},
@@ -1266,15 +1265,40 @@ void main() async {
 
     test('util.size formats and parses byte counts', () {
       expect(util.size.format(0), equals('0 B'));
-      expect(util.size.format(1024), equals('1.0 KB'));
-      expect(util.size.format(1024 * 1024 * 5), equals('5.0 MB'));
-      expect(util.size.format(1024 * 1024 * 1024 * 2), equals('2.0 GB'));
+      // Bytes have no fraction to show, and a kibibyte is where one starts.
+      expect(util.size.format(1023), equals('1023 B'));
+      expect(util.size.format(1024), equals('1.0 KiB'));
+      expect(util.size.format(1024 * 1024 * 5), equals('5.0 MiB'));
+      expect(util.size.format(1024 * 1024 * 1024 * 2), equals('2.0 GiB'));
+      // A negative count keeps its sign rather than clamping to '0 B'.
+      expect(util.size.format(-2048), equals('-2.0 KiB'));
 
       expect(util.size.parse('500 B'), equals(500));
-      expect(util.size.parse('10 KB'), equals(10 * 1024));
-      expect(util.size.parse('2.5 MB'), equals((2.5 * 1024 * 1024).round()));
-      expect(util.size.parse('1 GB'), equals(1024 * 1024 * 1024));
-      expect(util.size.parse('nonsense'), equals(0));
+      expect(util.size.parse('10 KiB'), equals(10 * 1024));
+      expect(util.size.parse('10 K'), equals(10 * 1024));
+      expect(util.size.parse('2.5 MiB'), equals((2.5 * 1024 * 1024).round()));
+      expect(util.size.parse('1 GiB'), equals(1024 * 1024 * 1024));
+      expect(util.size.parse('512'), equals(512));
+      expect(util.size.parse('-2 KiB'), equals(-2048));
+
+      // Both families are accepted and each means what its name says: the
+      // arithmetic was always 1024-based while the labels said KB and MB.
+      expect(util.size.parse('10 KB'), equals(10000));
+      expect(util.size.parse('5 MB'), equals(5000000));
+
+      // Not a size, a unit nobody knows, and a unit with no number: all three
+      // used to answer 0, which a caller cannot tell from an empty file.
+      expect(util.size.parse('nonsense'), isNull);
+      expect(util.size.parse('10 XB'), isNull);
+      expect(util.size.parse('MB'), isNull);
+
+      // Every unit format writes reads back, to the digits it printed.
+      for (final n in [512, 4096, 5242880, 1234567890, 1 << 50]) {
+        expect(
+          util.size.parse(util.size.format(n, decimals: 6)),
+          closeTo(n, n * 1e-6 + 2),
+        );
+      }
     });
 
     test('an executable is system.run, not a wrapper', () async {

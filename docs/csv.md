@@ -101,7 +101,7 @@ Quoting is applied automatically to any cell containing the delimiter, a quote, 
 `format`, `cells` and `write` end every line with `newline`, which defaults to `\n`. Pass `\r\n` for the ending Excel and RFC 4180 expect:
 
 ```dart
-await io.csv.write('out/for-excel.csv', rows, newline: '\r\n');
+await io.csv.write('out/for-excel.csv', records.list, newline: '\r\n');
 ```
 
 Reading handles either, so a file written one way reads back the same.
@@ -116,7 +116,7 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 void main() async {
   await io.csv.pipe(
     'products.csv',
-    net.crawl<Map<String, Object?>>('https://shop.example.com/products')
+    net.crawl<Map<String, Object?>>('https://shop.example.com/products'.url)
         .stream((res) {
           for (final row in res.parse(format.html).extract({
             'items': ['.product', {'name': '.name', 'price': '.price'}],

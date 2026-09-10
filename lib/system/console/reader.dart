@@ -10,6 +10,7 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 
+import '../../util/sequence.dart';
 import 'ansi.dart';
 
 // ============================================================================
@@ -49,7 +50,7 @@ class ConsoleReader {
   ///
   /// ```dart
   /// await for (final url in system.console.reader.lines) {
-  ///   await fetch(url.trim());
+  ///   await fetch(url.trim().url);
   /// }
   /// ```
   ///
@@ -182,7 +183,7 @@ class ConsoleReader {
   ///
   /// Accepts a comma- or space-separated list, `all` for everything, or an
   /// empty answer for nothing. Throws [StateError] at end of input.
-  Future<List<O>> picks<O>(
+  Future<Sequence<O>> picks<O>(
     String question, {
     required List<O> options,
     String Function(O item)? label,
@@ -193,8 +194,8 @@ class ConsoleReader {
       final read = await line();
       if (read == null) throw _exhausted('picks');
       final answer = read.trim().toLowerCase();
-      if (answer.isEmpty) return [];
-      if (answer == 'all' || answer == '*') return List.of(options);
+      if (answer.isEmpty) return const Sequence.empty();
+      if (answer == 'all' || answer == '*') return Sequence(options);
 
       final indices = <int>{};
       var valid = true;
@@ -208,7 +209,7 @@ class ConsoleReader {
         indices.add(n - 1);
       }
       if (valid && indices.isNotEmpty) {
-        return indices.map((i) => options[i]).toList();
+        return Sequence(indices.map((i) => options[i]));
       }
       stderr.writeln(
         '${'✖'.brightred()} Please enter numbers between 1 and '

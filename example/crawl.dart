@@ -25,7 +25,7 @@ void main() async {
 
   final tracks =
       await net
-          .crawl<Track>('https://music.test/artists')
+          .crawl<Track>('https://music.test/artists'.url)
           .downloader(MapDownloader<Track>(_fixtures))
           // Politeness and scope. Without these a crawl wanders off the site it
           // started on; `perhost` paces each host separately once seeds span more
@@ -68,7 +68,7 @@ void main() async {
 
 /// Stage 1, the index: queue every artist, tagged so stage 2 picks them up.
 void _index(Page<Track> res) {
-  for (final link in res.parse(format.html)('.artist a').elements.list) {
+  for (final link in res.parse(format.html).find('.artist a').elements.list) {
     res.follow(
       link.attributes['href'] ?? '',
       tag: 'artist',
@@ -83,7 +83,7 @@ void _index(Page<Track> res) {
 void _artist(Page<Track> res) {
   final name =
       res.meta.get(artist) ?? res.parse(format.html).pick(Field.text('h1'));
-  for (final link in res.parse(format.html)('.album a').elements.list) {
+  for (final link in res.parse(format.html).find('.album a').elements.list) {
     res.follow(
       link.attributes['href'] ?? '',
       tag: 'album',
@@ -100,7 +100,7 @@ void _album(Page<Track> res) {
       res.parse(format.html).pick(Field.text('h1')) ??
       '';
 
-  for (final row in res.parse(format.html)('.track').elements.list) {
+  for (final row in res.parse(format.html).find('.track').elements.list) {
     final title = util.text.clean(row.query.find('.title').text);
     if (title.isNotEmpty) res.emit((artist: by, album: on, title: title));
   }

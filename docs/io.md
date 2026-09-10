@@ -31,8 +31,8 @@ futures. One isolate runs every task in a crawl or a `Pool`, so a blocking read
 inside a handler stalls every request in flight — reach for `io.async` there.
 
 ```dart
-final text = io.read('notes.txt');              // blocks
-final text = await io.async.read('notes.txt');  // does not
+final blocking = io.read('notes.txt');            // blocks
+final async = await io.async.read('notes.txt');   // does not
 ```
 
 ---
@@ -169,7 +169,8 @@ await io.move(src, dest);
 io.remove('out/temp.txt');
 
 io.find('out', pattern: RegExp(r'\.mp3$'));   // List<File>
-io.delete('out', pattern: RegExp(r'\.part$')); // returns the count deleted
+io.remove('out/report.pdf');                    // one file or directory
+io.sweep('out', pattern: RegExp(r'\.part$'));   // every match; returns the count
 
 // Hashes (sync and async):
 io.hash(path);                      // sha256 hex digest (sync)
@@ -193,13 +194,13 @@ logs.group((f) => io.ext(f.path));
 
 ---
 
-## 6. Watching (`io.observe`)
+## 6. Watching (`io.watch`)
 
 Rebuild-on-change, re-run-on-save, reload-the-config. Returns the function that
 stops it — hold onto it, because a live watcher keeps the process alive:
 
 ```dart
-final stop = io.observe(
+final stop = io.watch(
   'lib',
   (changed) => system.console.logger.info('changed: $changed'),
   pattern: RegExp(r'\.dart$'),
@@ -220,9 +221,12 @@ created later is picked up either way — Linux watches one directory at a time,
 so a recursive watch there is a subscription per directory, and hiding that
 asymmetry is most of why this member exists.
 
-The name is `observe` rather than `watch` because `system.watch` already means
-*watch for Ctrl-C*, and two `watch`es meaning two unrelated things is exactly
-what Rule 5 is for.
+Called `io.observe` through 4.0.0, because `system.watch()` meant *watch for
+Ctrl-C* and two `watch`es meaning two unrelated things is exactly what Rule 5
+is for. NAMESPACE.md recorded the compromise in as many words — *`observe` is
+free, honest, and slightly less good than `watch`*. 5.0.0 moved signal watching
+to `system.on.signals()`, where Rule 3 says it belongs, and took the better
+name back.
 
 ---
 

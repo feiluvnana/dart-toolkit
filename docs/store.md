@@ -92,7 +92,7 @@ The accessor forwards to one process-wide `Store`, which is convenient for value
 ```dart
 const runId = Slot<String>('runId');
 
-io.store.set(runId, util.time.stamp());
+io.store.set(const Slot<String>('runId'), util.time.stamp());
 io.store.get(runId);
 ```
 
@@ -100,7 +100,7 @@ That shared store is **in-memory only** until you give it a file. `attach` does 
 
 ```dart
 io.store.attach('.cache/shared.json');
-io.store.set(runId, util.time.stamp());
+io.store.set(const Slot<String>('runId'), util.time.stamp());
 await io.store.save();
 ```
 
@@ -118,9 +118,9 @@ const done = Slot<List<Object?>>('done');
 final db = io.store.open('.cache/crawl.json');
 final seen = (db.get(done) ?? const []).cast<String>().toSet();
 
-await net.crawl<String>('https://example.com/index')
+await net.crawl<String>('https://example.com/index'.url)
     .run((res) {
-      for (final link in res.parse(format.html)('a').hrefs) {
+      for (final link in res.parse(format.html).find('a').attrs('href').list) {
         if (seen.contains(link)) continue;
         res.follow(link);
       }

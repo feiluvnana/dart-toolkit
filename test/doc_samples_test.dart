@@ -1,3 +1,12 @@
+/// Hand-written checks that the documented samples *behave* as documented.
+///
+/// Compiling them is `test/docs_test.dart`, which extracts and analyzes every
+/// `dart` block in `docs/`, `README.md`, `NAMESPACE.md` and every `///`
+/// comment under `lib/`. This file is the other half: a sample that compiles
+/// can still return the wrong answer, so the ones whose *output* the docs
+/// state are asserted here.
+library;
+
 import 'dart:io' as dart_io;
 
 import 'package:dart_toolkit/dart_toolkit.dart';
@@ -6,7 +15,7 @@ import 'package:test/test.dart';
 
 void main() {
   group('Documentation Samples Verification', () {
-    test('selector.md samples work as documented', () {
+    test('html.md samples work as documented', () {
       const html = '''
         <ul class="tracks">
           <li class="track" data-id="1"><a href="/t/1">Track One</a></li>
@@ -15,7 +24,7 @@ void main() {
       ''';
 
       expect(
-        $(html).find('.track a').texts,
+        $(html).find('.track a').texts.list,
         equals(['Track One', 'Track Two']),
       );
       expect(html.$('.bonus').data('id'), equals('2'));
@@ -33,36 +42,45 @@ void main() {
           </div>
         ''', requested: 'https://example.com'.url);
 
-      expect(res.parse(format.html)('a:contains("More")').count, equals(1));
-      expect(res.parse(format.html)('div:has(p.desc)').count, equals(1));
-      expect(res.parse(format.html)('ul > li:even').texts, equals(['0', '2']));
       expect(
-        res.parse(format.html)(':header').texts,
+        res.parse(format.html).find('a:contains("More")').count,
+        equals(1),
+      );
+      expect(res.parse(format.html).find('div:has(p.desc)').count, equals(1));
+      expect(
+        res.parse(format.html).find('ul > li:even').texts.list,
+        equals(['0', '2']),
+      );
+      expect(
+        res.parse(format.html).find(':header').texts.list,
         equals(['Breaking News']),
       );
       expect(
-        res.parse(format.html).xpath('//a[@class="morelink"]').texts,
+        res.parse(format.html).xpath('//a[@class="morelink"]').texts.list,
         equals(['More']),
       );
 
       expect(
-        res.parse(format.html)('a.morelink').href,
+        res.parse(format.html).find('a.morelink').attr('href'),
         equals('https://example.com/next'),
       );
       expect(
-        res.parse(format.html)('a.morelink').hrefs,
+        res.parse(format.html).find('a.morelink').attrs('href').list,
         equals(['https://example.com/next']),
       );
-      expect(res.parse(format.html)('h1').text, equals('Breaking News'));
-      expect(res.parse(format.html)('h1').texts, equals(['Breaking News']));
+      expect(res.parse(format.html).find('h1').text, equals('Breaking News'));
+      expect(
+        res.parse(format.html).find('h1').texts.list,
+        equals(['Breaking News']),
+      );
 
       final brHtml = '<div>01. First<br>02. Second</div>';
-      expect($(brHtml).lines, equals(['01. First', '02. Second']));
+      expect($(brHtml).lines.list, equals(['01. First', '02. Second']));
     });
 
     test('crawl.md samples and builder options compile and execute', () async {
       final titles = await net
-          .crawl<String>('https://news.ycombinator.com')
+          .crawl<String>('https://news.ycombinator.com'.url)
           .concurrent(4)
           .delay(250.ms, perhost: true)
           .perhost(true)
@@ -80,7 +98,8 @@ void main() {
             }),
           )
           .collect((res) {
-            for (final title in res.parse(format.html)('.titleline').texts) {
+            for (final title
+                in res.parse(format.html).find('.titleline').texts.list) {
               res.emit(title);
             }
           });
@@ -149,18 +168,11 @@ void main() {
         if (n == 0) throw Exception('zero');
         return 10 ~/ n;
       });
-      expect(settled[0].ok, isTrue);
-      expect(settled[0].value, equals(5));
-      expect(settled[1].ok, isFalse);
+      expect(settled.list[0].ok, isTrue);
+      expect(settled.list[0].value, equals(5));
+      expect(settled.list[1].ok, isFalse);
 
-      // 3. compute
-      final compResult = await concurrent.compute(
-        (msg) => msg.toUpperCase(),
-        'hello',
-      );
-      expect(compResult, equals('HELLO'));
-
-      // 4. retry
+      // 3. retry
       var attempts = 0;
       final retried = await concurrent.retry(
         () async {
@@ -174,13 +186,12 @@ void main() {
       expect(retried, equals('success'));
       expect(attempts, equals(2));
 
-      // 5. Mutex & Semaphore
-      final mutex = Mutex();
-      await mutex.protect(() async {});
-
+      // 4. Semaphore — `concurrent.mutex()` was Semaphore(1) under a second
+      // name, so one argument covers both.
       final sem = Semaphore(2);
-      await sem.acquire();
+      await sem.take();
       sem.release();
+      await concurrent.semaphore(1).guard(() async {});
     });
 
     test('form.md samples read a form as documented', () {
@@ -303,74 +314,5 @@ void main() {
         temp.deleteSync(recursive: true);
       }
     });
-
-    test(
-      'All markdown code snippets with main() compile cleanly under dart analyze',
-      () async {
-        final docsDir = dart_io.Directory('docs');
-        final mdFiles =
-            docsDir.listSync().whereType<dart_io.File>().toList()
-              ..add(dart_io.File('README.md'));
-
-        final tempDir = dart_io.Directory('.dart_tool/doc_snippets');
-        if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
-        tempDir.createSync(recursive: true);
-
-        try {
-          // Every snippet is written out first and analyzed in one pass. One
-          // `dart analyze` per snippet spent most of a minute starting the
-          // analyzer over and over, which is what put this test over its
-          // timeout as the docs grew.
-          final written = <String, dart_io.File>{};
-          for (final mdFile in mdFiles) {
-            final doc = mdFile.uri.pathSegments.last.replaceAll('.md', '');
-            final matches = RegExp(
-              r'```dart(.*?)```',
-              dotAll: true,
-            ).allMatches(mdFile.readAsStringSync());
-
-            for (final match in matches) {
-              final snippet = match.group(1)!.trim();
-              // Only snippets that are whole programs can be analyzed.
-              if (!snippet.contains('void main(')) continue;
-
-              var code = snippet;
-              if (!code.contains('package:dart_toolkit/')) {
-                code =
-                    "import 'package:dart_toolkit/dart_toolkit.dart';\n$code";
-              }
-              final file = dart_io.File(
-                '${tempDir.path}/${doc}_snippet_${written.length + 1}.dart',
-              )..writeAsStringSync(code);
-              written['$doc #${written.length + 1}'] = file;
-            }
-          }
-
-          expect(
-            written,
-            hasLength(greaterThanOrEqualTo(10)),
-            reason: 'Should have found at least 10 main() programs in the docs',
-          );
-
-          final result = await dart_io.Process.run('dart', [
-            'analyze',
-            ...written.values.map((file) => file.path),
-          ], workingDirectory: dart_io.Directory.current.path);
-
-          expect(
-            result.exitCode,
-            equals(0),
-            reason:
-                'A documentation snippet does not analyze cleanly.\n'
-                'Snippets: ${written.keys.join(', ')}\n'
-                'Files are kept in ${tempDir.path} for inspection.\n'
-                '${result.stdout}\n${result.stderr}',
-          );
-        } finally {
-          if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
-        }
-      },
-      timeout: const Timeout(Duration(minutes: 3)),
-    );
   });
 }

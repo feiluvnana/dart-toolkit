@@ -18,7 +18,7 @@ void main() async {
     size: 2,
   );
 
-  system.console.logger.ok('Fetched ${bodies.length} records.');
+  system.console.logger.ok('Fetched ${bodies.count()} records.');
 }
 ```
 
@@ -26,8 +26,8 @@ void main() async {
 
 ## 1. `concurrent.run` (Preserves Input Order)
 
-```dart
-Future<List<R>> concurrent.run<I, R>(
+```dart no-compile
+Future<Sequence<R>> concurrent.run<I, R>(
   Iterable<I> items,
   FutureOr<R> Function(I item) worker, {
   int size = 4,
@@ -81,7 +81,7 @@ final outcomes = await pool.settle([1, 0, 2], (n) async {
   return 10 ~/ n;
 });
 
-for (final outcome in outcomes) {
+for (final outcome in outcomes.list) {
   switch (outcome) {
     case Done(:final value):
       print('Value: $value');       // int, not int?
@@ -94,7 +94,8 @@ for (final outcome in outcomes) {
 `Done<R>` carries `value`; `Broke<R>` carries `error` and `stack`. The switch is exhaustive, so a third case cannot be forgotten. For a count or a filter there is also `outcome.ok`, and `outcome.value` reads `null` for a failure:
 
 ```dart
-final built = outcomes.where((o) => o.ok).length;
+// setup: final outcomes = await Pool<int>().settle<int>([1], (n) async => n);
+final built = outcomes.keep((o) => o.ok).count();
 ```
 
 ---
@@ -105,7 +106,7 @@ By default `concurrent.run` is **fail-fast**: the first error stops new tasks fr
 
 ```dart
 try {
-  await concurrent.run(items, (i) => mayThrow(i));
+  await concurrent.run(items.list, (i) => mayThrow());
 } on StateError catch (e) {
   // your worker's own error, with its original stack trace
 }
@@ -114,7 +115,7 @@ try {
 Registering `on.error` switches the pool to **collect-and-continue**: every item is attempted, and `run` throws `PoolFailure` at the end listing what failed, while keeping partial results reachable via `e.results`:
 
 ```dart
-final pool = Pool<String>(size: 4);
+final pool = Pool<Uri>(size: 4);
 pool.on.error((error, stack, item) => log.warn('$item failed: $error'));
 
 try {
@@ -128,22 +129,13 @@ try {
 
 ---
 
-## 5. CPU Offloading (`concurrent.compute`)
+## 5. Retries (`concurrent.retry`)
 
-Dart's async pool interleaves tasks on the main isolate, which is ideal for IO-bound work. For CPU-bound tasks (hashing large files, image processing, complex parsing), offload to a background isolate with `concurrent.compute`:
-
-```dart
-final hash = await concurrent.compute((data) {
-  // Runs in a background isolate via Isolate.run
-  return heavyComputation(data);
-}, inputData);
-```
-
----
-
-## 6. Retries (`concurrent.retry`)
-
-Retries an asynchronous operation on failure with exponential backoff:
+Retries an asynchronous operation on failure with exponential backoff.
+`retries` is the number of **extra** attempts after the first, which is what
+`Fetcher.retries` already means — so `retries: 3` runs the body up to four
+times. A `times:` stood beside it through 4.0.0, documented as *pass one or the
+other*; passing both took the smaller silently, and it went in 5.0.0.
 
 ```dart
 final data = await concurrent.retry(
@@ -156,30 +148,41 @@ final data = await concurrent.retry(
 
 ---
 
-## 7. Synchronization Primitives (`Semaphore` & `Mutex`)
+## 6. Bounding access (`Semaphore`)
 
 Control access to shared resources, or serialise a critical section:
 
 ```dart
-// Mutex: strictly one caller at a time
-final mutex = Mutex();
-await mutex.protect(() async {
-  // critical section
+// Up to N simultaneous holders
+final sem = concurrent.semaphore(3);
+await sem.guard(() async {
+  // up to 3 concurrent tasks
 });
 
-// Semaphore: allow up to N simultaneous holders
-final sem = Semaphore(3);
-await sem.acquire();
+// Or take and release by hand
+await sem.take();
 try {
-  // up to 3 concurrent tasks
+  // ...
 } finally {
   sem.release();
 }
+
+// A mutex is one permit. `Mutex` and `concurrent.mutex()` were a whole
+// exported type for `Semaphore(1)` and went in 5.0.0.
+final lock = concurrent.semaphore(1);
+await lock.guard(() async {
+  // critical section
+});
 ```
+
+`Semaphore` and `Limiter` are spelled the same — `take` and `guard` — because
+they are the same shape with different bounds. Through 4.0.0 the semaphore said
+`acquire`/`withPermit`, which was two dialects for one idea and the library's
+one camelCase member.
 
 ### How often, not how many (`concurrent.rate`)
 
-`Semaphore` and `Mutex` bound **how many at once**. A published API limit bounds
+`Semaphore` bounds **how many at once**. A published API limit bounds
 **how often** — *5000 requests per hour*, *10 per second*, *60 per minute* — and
 a `Semaphore(4)` satisfies none of them: four instant requests then four more is
 eight in a second, so the script works until the day the network is fast.
@@ -191,9 +194,9 @@ await limit.take();                                 // waits for a token
 await limit.guard(() => net.http.get(url));         // the wrapped form
 ```
 
-`guard` mirrors `Semaphore.withPermit` and `Mutex.protect` — every limiter here
-has a bare pair and a wrapping form, and the wrapping form is the one callers
-should use. The reason it lives in this domain is that it composes with the
+`guard` is spelled the same on `Semaphore` — every limiter here has a bare
+`take`/`release` pair and a wrapping `guard`, and the wrapping form is the one
+callers should use. The reason it lives in this domain is that it composes with the
 bound that was already here:
 
 ```dart
@@ -230,16 +233,16 @@ two domains — retry pacing already honours that header.
 
 ---
 
-## 8. A Reusable Pool
+## 7. A Reusable Pool
 
 Construct a `Pool<I>` when you want lifecycle hooks:
 
 ```dart
-final pool = Pool<String>(size: 4, delay: 100.ms);
+final pool = Pool<Uri>(size: 4, delay: 100.ms);
 final bar = Progress(total: urls.length, message: 'Fetching');
 
 pool.on.start(() => log.info('pool started'));
-pool.on.progress((url) => bar.tick(1, url));   // url is typed as String
+pool.on.progress((url) => bar.tick(1, '$url'));   // url is typed as Uri
 pool.on.done(() => bar.done('complete'));
 
 final pages = await pool.run(urls, fetch);

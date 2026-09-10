@@ -30,13 +30,18 @@ class TextAccessor {
   // a CJK or Cyrillic title with an empty slug, and an empty filename with it.
   static final _notSlug = RegExp(r'[^\p{L}\p{N}]+', unicode: true);
   static final _edges = RegExp(r'^-+|-+$');
-  // A space only groups digits when it separates full groups of three, so
+  // A separator only groups digits when it separates full groups of three, so
   // '1 234 567' reads as one number while '12 34' stays two. Treating any
-  // space as grouping merged distinct numbers into one.
-  static final _digits = RegExp(
-    r'-?\d{1,3}(?:[ \u00A0\u202F]\d{3})+(?:\.\d+)?'
-    r'|-?\d[\d,_]*(?:\.\d+)?',
-  );
+  // space as grouping merged distinct numbers into one — and the same
+  // reasoning had never been applied to the comma, which is how '1,2' read as
+  // twelve.
+  static const _magnitude =
+      r'\d{1,3}(?:[,_ \u00A0\u202F]\d{3})+(?:\.\d+)?'
+      r'|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?';
+  // A parenthesised number is an accounting negative — '(1,234.50)' is
+  // -1234.50, which is how a financial table writes it and which used to come
+  // back positive.
+  static final _digits = RegExp('\\((?:$_magnitude)\\)|-?(?:$_magnitude)');
   static final _grouping = RegExp(r'[,_ \u00A0\u202F]');
   static final _wordish = RegExp(r"[\w']+");
 
@@ -53,22 +58,101 @@ class TextAccessor {
         : hyphenated.replaceAll('-', separator);
   }
 
-  /// [text] with accented Latin letters replaced by their plain form.
-  String fold(String text) {
-    const from =
-        'àáâãäåāăąçćĉċčèéêëēĕėęěìíîïĩīĭįıñńņňòóôõöøōŏőùúûüũūŭůűų'
-        'ýÿŷñšśŝşžźżđłþðæœ';
-    const to =
-        'aaaaaaaaacccccceeeeeeeeeiiiiiiiiinnnnooooooooouuuuuuuuuu'
-        'yyynsssszzzdlpdao';
-    final buffer = StringBuffer();
-    for (final rune in text.runes) {
-      final ch = String.fromCharCode(rune);
-      final index = from.indexOf(ch.toLowerCase());
-      buffer.write(index == -1 ? ch : to[index]);
+  /// What [fold] replaces, keyed by the accented letter.
+  ///
+  /// A map rather than the two parallel string constants this used to be. Those
+  /// were indexed against each other, so one extra `c` in the replacements —
+  /// six of them for five `ç` variants — shifted every group after it by one
+  /// and folded 14 letters to the previous group's letter: `è` to `c`, `ñ` to
+  /// `i`, and `util.text.slug('Señor Muñoz')` to `'seior-muioz'`.
+  ///
+  /// A map cannot go out of step with itself, a duplicate key is a compile
+  /// error rather than a silently unreachable entry — `ñ` was listed twice —
+  /// and a replacement may be longer than one letter, which is what `ß`, `æ`
+  /// and `œ` need and indexing a [String] could not express.
+  static const _folds = <String, String>{
+    'à': 'a', 'á': 'a', 'â': 'a', 'ã': 'a', 'ä': 'a', 'å': 'a', 'ā': 'a',
+    'ă': 'a', 'ą': 'a',
+    'ç': 'c', 'ć': 'c', 'ĉ': 'c', 'ċ': 'c', 'č': 'c',
+    'đ': 'd', 'ď': 'd', 'ð': 'd',
+    'è': 'e', 'é': 'e', 'ê': 'e', 'ë': 'e', 'ē': 'e', 'ĕ': 'e', 'ė': 'e',
+    'ę': 'e', 'ě': 'e',
+    'ğ': 'g', 'ĝ': 'g', 'ġ': 'g', 'ģ': 'g',
+    'ĥ': 'h', 'ħ': 'h',
+    'ì': 'i', 'í': 'i', 'î': 'i', 'ï': 'i', 'ĩ': 'i', 'ī': 'i', 'ĭ': 'i',
+    'į': 'i', 'ı': 'i',
+    'ĵ': 'j',
+    'ķ': 'k',
+    'ĺ': 'l', 'ļ': 'l', 'ľ': 'l', 'ł': 'l',
+    'ñ': 'n', 'ń': 'n', 'ņ': 'n', 'ň': 'n',
+    'ò': 'o', 'ó': 'o', 'ô': 'o', 'õ': 'o', 'ö': 'o', 'ø': 'o', 'ō': 'o',
+    'ŏ': 'o', 'ő': 'o',
+    'ŕ': 'r', 'ŗ': 'r', 'ř': 'r',
+    'ś': 's', 'ŝ': 's', 'ş': 's', 'š': 's',
+    'ţ': 't', 'ť': 't', 'ŧ': 't',
+    'ù': 'u', 'ú': 'u', 'û': 'u', 'ü': 'u', 'ũ': 'u', 'ū': 'u', 'ŭ': 'u',
+    'ů': 'u', 'ű': 'u', 'ų': 'u',
+    'ŵ': 'w',
+    'ý': 'y', 'ÿ': 'y', 'ŷ': 'y',
+    'ź': 'z', 'ż': 'z', 'ž': 'z',
+    // The ligatures and the sharp s, which are two letters where they are
+    // spelled out and which is why this is a map of strings.
+    'ß': 'ss', 'æ': 'ae', 'œ': 'oe', 'ĳ': 'ij', 'þ': 'th',
+  };
+
+  /// [_folds], keyed by code point, with the upper-case forms folded in.
+  ///
+  /// Built once. Walking [_folds] per character meant a `String.fromCharCode`
+  /// and a `toLowerCase` allocation for every rune of every input, which is
+  /// most of what [fold] used to cost.
+  static final Map<int, String> _byRune = () {
+    final map = <int, String>{};
+    for (final entry in _folds.entries) {
+      map[entry.key.runes.first] = entry.value;
+      final upper = entry.key.toUpperCase();
+      // 'ß'.toUpperCase() is 'SS' in Dart — two runes, and no upper-case
+      // form to key on, so there is nothing to add for it.
+      if (upper.runes.length == 1 && upper != entry.key) {
+        map[upper.runes.first] = _titled(entry.value);
+      }
     }
+    return map;
+  }();
+
+  /// [text] with accented Latin letters replaced by their plain form.
+  ///
+  /// `ß`, `æ`, `œ`, `ĳ` and `þ` fold to the two letters they are spelled with;
+  /// everything else folds to one. A letter no entry covers is left alone, so
+  /// other scripts pass through untouched.
+  String fold(String text) {
+    // One pass, and no allocation at all when nothing folds — which is the
+    // common case, since nothing here is ASCII and most scraped text is. The
+    // runs between replacements are copied in bulk rather than a character at
+    // a time.
+    StringBuffer? buffer;
+    var start = 0;
+    var at = 0;
+    for (final rune in text.runes) {
+      final width = rune > 0xFFFF ? 2 : 1;
+      final plain = rune > 0x7F ? _byRune[rune] : null;
+      if (plain != null) {
+        buffer ??= StringBuffer();
+        buffer
+          ..write(text.substring(start, at))
+          ..write(plain);
+        start = at + width;
+      }
+      at += width;
+    }
+    if (buffer == null) return text;
+    buffer.write(text.substring(start));
     return buffer.toString();
   }
+
+  static String _titled(String plain) =>
+      plain.length == 1
+          ? plain.toUpperCase()
+          : plain[0].toUpperCase() + plain.substring(1);
 
   /// [text] with runs of whitespace collapsed to one space, trimmed.
   ///
@@ -106,26 +190,43 @@ class TextAccessor {
     return text.substring(0, end);
   }
 
-  /// The first number in [text], ignoring currency symbols and separators.
+  /// The first decimal number in [text], ignoring currency and separators.
   ///
-  /// Returns `null` when there is no number. Commas and underscores inside the
-  /// digits are grouping and dropped; a space counts as grouping only when it
-  /// separates whole groups of three, so `'1 234'` is one number and
-  /// `'12 34'` is two.
+  /// Returns `null` when there is no number.
+  ///
+  /// ```dart
+  /// util.text.number(r'$1,234.50');   // 1234.5
+  /// util.text.number('(1,234.50)');   // -1234.5  — accounting negative
+  /// util.text.number('1.5e3');        // 1500.0
+  /// util.text.number('12 34');        // 12       — two numbers, not 1234
+  /// ```
+  ///
+  /// A comma, underscore or space between digits is grouping and dropped, but
+  /// only where it separates whole groups of three: `'1 234 567'` is one
+  /// number and `'12 34'` is two. A number wrapped in parentheses is negative,
+  /// which is how a financial table writes it. An exponent is read.
+  ///
+  /// Decimal only — the first *numeral* is what it finds, so `'0x10'` is `0`
+  /// rather than 16.
   num? number(String text) {
     final match = _digits.firstMatch(text);
-    if (match == null) return null;
-    final digits = match.group(0)!.replaceAll(_grouping, '');
-    return num.tryParse(digits);
+    return match == null ? null : _read(match.group(0)!);
   }
 
-  /// Every number in [text], in order.
+  /// Every number in [text], in order, read the same way as [number].
   Sequence<num> numbers(String text) => Sequence([
     for (final match in _digits.allMatches(text))
-      if (num.tryParse(match.group(0)!.replaceAll(_grouping, ''))
-          case final value?)
-        value,
+      if (_read(match.group(0)!) case final value?) value,
   ]);
+
+  /// One matched token as a number, applying the parenthesised negative.
+  static num? _read(String token) {
+    final parenthesised = token.startsWith('(');
+    final body = parenthesised ? token.substring(1, token.length - 1) : token;
+    final value = num.tryParse(body.replaceAll(_grouping, ''));
+    if (value == null) return null;
+    return parenthesised ? -value : value;
+  }
 
   /// [text] with the first letter of each word capitalised.
   String title(String text) => text.replaceAllMapped(
@@ -135,7 +236,14 @@ class TextAccessor {
         m.group(0)!.substring(1).toLowerCase(),
   );
 
-  /// [text] with its first letter capitalised and the rest untouched.
+  /// [text] with its first letter upper-cased and the rest untouched.
+  ///
+  /// ```dart
+  /// util.text.upper('crème brûlée');   // 'Crème brûlée'
+  /// ```
+  ///
+  /// The first letter only — [title] is the one that does every word, and
+  /// upper-casing a whole string is `toUpperCase`, which `dart:core` owns.
   String upper(String text) =>
       text.isEmpty ? text : text[0].toUpperCase() + text.substring(1);
 

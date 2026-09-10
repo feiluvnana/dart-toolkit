@@ -1,6 +1,6 @@
 # Forms (`Form`)
 
-The other half of reading a page. `res.parse(format.html)('input').value` already reads a control the way a browser would submit it; `Form` collects every control on a `<form>`, lets a script override the two it cares about, and works out where the result goes.
+The other half of reading a page. `res.parse(format.html).find('input').value` already reads a control the way a browser would submit it; `Form` collects every control on a `<form>`, lets a script override the two it cares about, and works out where the result goes.
 
 That difference matters because of what a real form carries: a CSRF token, a session id, a dozen hidden inputs, the options already selected. Rebuilding those by hand is what makes a login script break every time the page changes.
 
@@ -20,7 +20,7 @@ void main() async {
       .fill({'user': 'me', 'pass': 'secret'})
       .send(client: session);
 
-  print(home.parse(format.html)('h1').text);
+  print(home.parse(format.html).find('h1').text);
 }
 ```
 
@@ -88,7 +88,7 @@ form.fields;
 | `<input type=reset\|button\|image>` | nothing |
 | anything `disabled`, or with no `name` | nothing |
 
-Values come from the same reader as `Markup.value`, so what a form submits and what `res.parse(format.html)('select').value` reports can never drift apart.
+Values come from the same reader as `Markup.value`, so what a form submits and what `res.parse(format.html).find('select').value` reports can never drift apart.
 
 Two controls sharing one name — a checkbox group — keep the last, as `Body.form` does.
 
@@ -144,7 +144,7 @@ Two ways, because there are two situations.
 
 ```dart
 final session = Fetcher(session: true);
-final res = await session.get(loginUrl);
+final res = await session.get('https://example.com/login'.url);
 final home = await res.parse(format.html).form('#login')!
     .at(res.url)
     .fill({'user': user, 'pass': pass})
@@ -156,9 +156,9 @@ Without `client` the shared `net.http` sends it. `headers` and `timeout` work as
 **Inside a crawl**, with `submit`, which schedules the request on the engine instead of fetching it here and now:
 
 ```dart
-await net.crawl<String>('https://example.com/login')
+await net.crawl<String>('https://example.com/login'.url)
     .tag('home', (res) {
-      for (final row in res.parse(format.html).find('.item').texts) {
+      for (final row in res.parse(format.html).find('.item').texts.list) {
         res.emit(row);
       }
     })
@@ -180,6 +180,7 @@ Everything `follow` does still applies: the `Referer` is set, `depth` grows by o
 `Form` can be built directly from any parsed `<form>` element. Pass `page`, or a relative `action` has nothing to resolve against:
 
 ```dart
+// setup: const markup = '<form action="/session" method="post"></form>';
 final element = format.html.parse(markup).find('form').elements.first!;
 final form = Form(element, page: 'https://example.com/login'.url);
 ```
@@ -203,7 +204,7 @@ await net.crawl<Map<String, Object?>>(searchUrl)
       }
     })
     .run((res) => res.submit(
-        res.parse(format.html).form('form.search')!..fill({'q': term}),
+        res.parse(format.html).form('form.search')!..fill({'q': 'widgets'}),
         tag: 'page'));
 ```
 

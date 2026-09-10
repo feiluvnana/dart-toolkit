@@ -35,7 +35,7 @@ void main() async {
     // A response knows how to query its own HTML.
     final page = await client.get('$origin/'.url);
     log.ok(
-      'GET ${page.status} ${page.type} — ${page.parse(format.html)('h1').text}',
+      'GET ${page.status} ${page.type} — ${page.parse(format.html).find('h1').text}',
     );
 
     // Bodies are sealed, so the encoding is explicit at the call site:
@@ -81,7 +81,7 @@ void main() async {
       (url) => client.get(url.url),
       size: 2,
     );
-    log.ok('Fetched ${pages.length}: ${[for (final p in pages) p.status]}');
+    log.ok('Fetched ${pages.count()}: ${pages.to((p) => p.status).list}');
   } finally {
     await client.close();
     await server.close();

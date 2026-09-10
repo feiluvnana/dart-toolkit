@@ -201,7 +201,9 @@ class Robots {
   /// A declared `User-agent` matches when it is a case-insensitive prefix of
   /// the crawler's product token, so a `MyBot` group governs a crawler calling
   /// itself `MyBot/1.0`. The longest such group wins, falling back to `*`.
-  List<RobotsRule> group(String agent) {
+  Sequence<RobotsRule> group(String agent) => Sequence(_group(agent));
+
+  List<RobotsRule> _group(String agent) {
     final full = agent.toLowerCase().trim();
     final exact = _rules[full];
     if (exact != null) return exact;
@@ -231,7 +233,7 @@ class Robots {
     final targetPath = url.hasQuery ? '${url.path}?${url.query}' : url.path;
     final path = targetPath.isEmpty ? '/' : targetPath;
 
-    final candidateRules = group(agent);
+    final candidateRules = _group(agent);
 
     RobotsRule? bestMatch;
 

@@ -145,7 +145,7 @@ no sensible default, so it reads `null` when nothing was given — `--since`
 exists precisely so a script can tell *not given* from *the beginning of time*:
 
 ```dart
-rows.keep((r) => since() == null || r.at.isAfter(since()!));
+rows.keep((r) => since() == null || r.seen.isAfter(since()!));
 ```
 
 ### Value Resolution
@@ -282,16 +282,20 @@ the reason and the usage block to stderr. Only `ArgumentError` is caught, so a
 genuine failure inside a handler still reaches the caller with its stack trace
 intact.
 
-### `subcommand`
+### Branching by hand
 
-The low-level primitive, for scripts that would rather branch by hand:
+`cli.command` is the first positional read as a name, for a script that would
+rather branch itself than register handlers:
 
 ```dart
-final cli = Cli(args);
-final command = cli.command;   // e.g. 'commit'
-final rest = cli.rest;         // e.g. ['-m', 'message']
-cli.subcommand('commit', (sub) => print(sub.rest));
+cli.parse(args);
+if (cli.command == 'commit') commit(cli.args);
 ```
+
+`cli.subcommand(name, handler)` wrapped that `if` through 4.0.0 and went in
+5.0.0. Its own doc comment listed four things `run` did that it did not —
+nesting, per-command options, `--help`, exit codes — which left it as an `if`
+with a callback.
 
 ---
 
@@ -326,10 +330,17 @@ system.console.logger.level = switch (verbose.count()) {
 ### Positionals and the raw line
 
 ```dart
-cli.args;   // positional arguments, in order
-cli.rest;   // positionals after the subcommand name
-cli.raw;    // the argument list exactly as parsed
+cli.command;  // the first positional, read as a subcommand name, or null
+cli.args;     // positional arguments, in order
+cli.raw;      // the argument list exactly as parsed
 ```
+
+Inside a handler `run` dispatched to, the command names have already been taken
+off, so `args` is the arguments **to that command**.
+
+`cli.rest` — `args` without its first element — stood beside these through
+4.0.0, with nothing in either name saying which was which. It existed to serve
+`subcommand`; both are gone.
 
 ### `switches`
 

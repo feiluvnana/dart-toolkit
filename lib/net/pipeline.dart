@@ -66,9 +66,11 @@ Uri coerce(String target, {Uri? base}) {
 /// can recognise the response and recover the context it queued it with:
 ///
 /// ```dart
-/// res.follow(href, tag: 'song', meta: {'name': a.text});
+/// const title = Slot<String>('title');
+///
+/// res.follow(href, tag: 'song', meta: [title('Hey Jude')]);
 /// // later, in the 'song' handler:
-/// final name = res.meta['name'] as String;
+/// final String? name = res.meta.get(title);
 /// ```
 class Fetch<T> {
   /// The absolute URL to fetch.
@@ -225,7 +227,7 @@ class Page<T> extends Reply {
   ///
   /// ```dart
   /// res.follow(
-  ///   res.$('form.search').attr('action')!,
+  ///   res.parse(format.html).find('form.search').attr('action')!,
   ///   method: HttpMethod.post,
   ///   body: Body.form({'q': 'widgets', 'page': '2'}),
   ///   tag: 'results',
@@ -285,7 +287,7 @@ class Page<T> extends Reply {
 /// Named `Handler` and not `Process`: Dart resolves a package import over a
 /// `dart:` one without complaining, so exporting `Process` quietly stopped
 /// `Process` meaning `dart:io`'s for every user of this library — while
-/// `system.adopt(Process)` still meant that one.
+/// `system.on.adopt(Process)` still meant that one.
 typedef Handler<T> = FutureOr<void> Function(Page<T> response);
 
 /// Dispatches responses to the first matching handler.
@@ -293,7 +295,7 @@ typedef Handler<T> = FutureOr<void> Function(Page<T> response);
 /// Reachable as [Engine.router]. Rules are tested in registration order, and
 /// [fallback] catches anything unmatched.
 ///
-/// ```dart
+/// ```dart no-compile
 /// engine.router
 ///   ..on(RegExp(r'/album$'), (res) { ... })
 ///   ..tag('disc', (res) { ... })

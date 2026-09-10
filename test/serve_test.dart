@@ -3,7 +3,7 @@ import 'package:test/test.dart';
 
 /// Fetches [url], retrying while nothing is listening yet.
 Future<Reply> _reach(Uri url) =>
-    concurrent.retry(() => net.http.get(url), times: 40, backoff: 25.ms);
+    concurrent.retry(() => net.http.get(url), retries: 39, backoff: 25.ms);
 
 void main() {
   group('net.serve', () {
@@ -15,7 +15,7 @@ void main() {
           '/callback' => Served.text(req.query['code'] ?? ''),
           '/health' => Served.json({'ok': true}),
           '/bytes' => Served.bytes([1, 2, 3]),
-          '/away' => Served.redirect('/health'),
+          '/away' => Served.redirect('/health'.url),
           '/echo' => Served.json((await req.json()).raw),
           '/body' => Served.text(await req.text()),
           '/method' => Served.text(req.method.wire),

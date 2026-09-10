@@ -3,8 +3,8 @@
 /// Filesystem access, path manipulation, CSV tables (`io.csv`) and a JSON
 /// key-value store (`io.store`). Every write is atomic — see [Fs].
 ///
-/// Reading a JSON *document* is `tool.json.read`, beside `tool.yaml` and
-/// `tool.toml`: a format is knowledge from outside Dart, so all three live in
+/// Reading a JSON *document* is `format.json.read`, beside `format.yaml` and
+/// `format.toml`: a format is knowledge from outside Dart, so all three live in
 /// one family rather than one of them here. `io.dump` still writes one,
 /// because staging through a `.part` file is this domain's job.
 ///
@@ -184,7 +184,7 @@ class IoAccessor {
   /// Encodes [data] as JSON and writes it to [path] atomically.
   ///
   /// [data] accepts any value `jsonEncode` understands. Reading one back is
-  /// `tool.json.read`; the write stays here because staging through a `.part`
+  /// `format.json.read`; the write stays here because staging through a `.part`
   /// file is this domain's job, not the format's.
   File dump(
     String path,
@@ -320,7 +320,7 @@ class IoAccessor {
   /// watcher keeps the process alive:
   ///
   /// ```dart
-  /// final stop = io.observe(
+  /// final stop = io.watch(
   ///   'lib',
   ///   (changed) => log.info('changed: $changed'),
   ///   pattern: RegExp(r'\.dart$'),
@@ -340,10 +340,13 @@ class IoAccessor {
   /// time, so a recursive watch there is a subscription per directory, and
   /// hiding that asymmetry is most of why this member exists.
   ///
-  /// The name is `observe` rather than `watch` because `system.watch` already
-  /// means *watch for Ctrl-C*, and two `watch`es meaning two unrelated things
-  /// is exactly what Rule 5 is for.
-  Future<void> Function() observe(
+  /// Called `observe` through 4.0.0, because `system.on.signals()` meant *watch
+  /// for Ctrl-C* and two `watch`es meaning two unrelated things is exactly
+  /// what Rule 5 is for. NAMESPACE.md recorded the compromise in as many
+  /// words — *`observe` is free, honest, and slightly less good than
+  /// `watch`*. 5.0.0 moved signal watching to `system.on.signals()`, where it
+  /// belongs by Rule 3, and took the better name back.
+  Future<void> Function() watch(
     String path,
     void Function(String path) onchange, {
     Pattern? pattern,
@@ -357,8 +360,18 @@ class IoAccessor {
     recursive: recursive,
   );
 
-  /// Deletes files under [dir] matching [pattern] and returns the count.
-  int delete(String dir, {Pattern? pattern, bool recursive = false}) =>
+  /// Deletes every file under [dir] matching [pattern], and returns how many.
+  ///
+  /// The sweep, where [remove] is the single entity. Both were called `delete`
+  /// and `remove` through 4.0.0 — synonyms, so neither name said which was
+  /// which, and `io.delete(path)` read like it would remove that one file and
+  /// instead swept a directory.
+  ///
+  /// ```dart
+  /// io.remove('out/report.pdf');                      // one entity
+  /// io.sweep('out', pattern: RegExp(r'\.part$'));     // everything matching
+  /// ```
+  int sweep(String dir, {Pattern? pattern, bool recursive = false}) =>
       Fs.delete(dir, pattern: pattern, recursive: recursive);
 
   /// Returns the hex digest of [path] using [algorithm].
@@ -483,8 +496,10 @@ class IoAsyncAccessor {
   }) async =>
       Sequence(await Fs.findAsync(dir, pattern: pattern, recursive: recursive));
 
-  /// Deletes files under [dir] matching [pattern] and returns the count.
-  Future<int> delete(String dir, {Pattern? pattern, bool recursive = false}) =>
+  /// Deletes every file under [dir] matching [pattern], and returns how many.
+  ///
+  /// The sweep, where [IoAsyncAccessor.remove] is the single entity.
+  Future<int> sweep(String dir, {Pattern? pattern, bool recursive = false}) =>
       Fs.deleteAsync(dir, pattern: pattern, recursive: recursive);
 
   /// Returns the hex digest of [path] using [algorithm].

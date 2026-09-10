@@ -95,7 +95,7 @@ void main() {
         writer: probe.writer,
       ).update(1024);
 
-      expect(Ansi.strip(probe.out.toString()), contains('1.0 KB / 2.0 KB'));
+      expect(Ansi.strip(probe.out.toString()), contains('1.0 KiB / 2.0 KiB'));
     });
   });
 
@@ -406,7 +406,7 @@ void main() {
       final boxes = $(html).find('input');
       expect(boxes.value, 'yes');
       // An unticked box submits nothing, so it reads as absent.
-      expect(boxes.values, ['yes']);
+      expect(boxes.values.list, ['yes']);
     });
 
     test('a ticked box with no value reports on, as HTML says', () {
@@ -423,7 +423,7 @@ void main() {
           <input type="radio" name="r" value="2" checked>
         </form>
       ''';
-      expect($(html).find('input').values, ['2']);
+      expect($(html).find('input').values.list, ['2']);
     });
 
     test('a textarea and a plain input are unchanged', () {
@@ -439,11 +439,11 @@ void main() {
           '<main><div>Tom &amp; Jerry<br>caf&eacute;<br>&#65;&#66;</div></main>';
       // Stripping the tags left the entities behind in what is documented as
       // text.
-      expect($(html, 'div').lines, ['Tom & Jerry', 'café', 'AB']);
+      expect($(html, 'div').lines.list, ['Tom & Jerry', 'café', 'AB']);
     });
 
     test('lines without entities are untouched', () {
-      expect($('<main><div>a<br>b</div></main>', 'div').lines, ['a', 'b']);
+      expect($('<main><div>a<br>b</div></main>', 'div').lines.list, ['a', 'b']);
     });
   });
 

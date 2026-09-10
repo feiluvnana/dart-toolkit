@@ -42,27 +42,48 @@ library;
 /// | passing to a `List<T>` parameter | [list] |
 /// | passing to this library's own APIs | nothing — they take a [Sequence] |
 ///
-/// ## Laziness
+/// ## A snapshot, not a view
 ///
-/// Every shaping member ([to], [keep], [head], …) is lazy, so
-/// `rows.to(parse).keep(live).head(10)` parses eleven rows rather than all of
-/// them. Everything that needs the whole sequence by definition — [sort],
-/// [order], [unique], [group], [keyed], [tally], [split], [flip], [tail],
-/// [trim] and every reducing member — is eager, and says so.
+/// Every member is eager: a sequence holds a `List<T>` taken when it was
+/// built, and each link in a chain builds the next one. So a callback runs
+/// exactly once per element per link, whatever you do with the result
+/// afterwards, and nothing underneath can change while you hold it.
 ///
-/// A sequence is a **view, not a snapshot**: it does not copy, and it does not
-/// promise the iterable underneath will not change. [list] is where you get
-/// something that will not move under you. Unlike Kotlin's `Sequence` this one
-/// may be walked as many times as you like — walking it twice re-runs whatever
-/// the shaping callbacks do.
+/// It was a lazy view through 4.0.0, wrapping an `Iterable` and re-walking the
+/// whole chain on every terminal call:
+///
+/// ```dart
+/// var n = 0;
+/// final s = [1, 2, 3].seq.keep((x) { n++; return true; });
+/// s.count(); s.list; s.first;
+/// // n == 7 through 4.0.0, and 3 now
+/// ```
+///
+/// Three terminal calls, three walks — and a `.to(expensiveParse)` over a
+/// crawl's results paid for the parse once per call. Worse, a sequence built
+/// over a single-subscription source was a `StateError` waiting for its second
+/// reader. Nothing in this vocabulary was lazy on purpose; every source the
+/// library hands one is already a materialised list, and the copy per link is
+/// the trade every caller assumed they were getting.
+///
+/// The cost is real and small: `head(10)` over a large source shapes the whole
+/// source first. Where that matters the answer is a `Stream` — `crawl.stream`
+/// rather than `crawl.collect` — which is the same advice as before.
 final class Sequence<T> {
-  final Iterable<T> _items;
+  final List<T> _items;
 
-  /// Wraps [items] without copying.
+  /// Holds [items], copied now.
   ///
   /// Reach for `items.seq` at a call site; this is the form for when a getter
   /// reads badly.
-  const Sequence(this._items);
+  Sequence(Iterable<T> items) : _items = List<T>.of(items);
+
+  /// The empty sequence, as a `const`.
+  ///
+  /// The one case worth a second constructor: an empty result is returned from
+  /// enough places that allocating for it is silly, and `const Sequence([])`
+  /// stopped compiling when the field became a `List` the constructor copies.
+  const Sequence.empty() : _items = const [];
 
   // --------------------------------------------------------------------------
   // Shaping — lazy, and returns a Sequence
@@ -84,7 +105,8 @@ final class Sequence<T> {
   /// parse-and-keep-what-parsed step is one call rather than two.
   ///
   /// ```dart
-  /// cells.sift(util.text.number);  // Sequence<num>
+  /// // setup: final texts = Sequence(const ['1', 'x', '3']);
+  /// texts.sift(util.text.number);   // Sequence<num> — [1, 3]
   /// ```
   Sequence<R> sift<R>(R? Function(T item) each) =>
       Sequence(_items.map(each).whereType<R>());
@@ -106,6 +128,9 @@ final class Sequence<T> {
   /// ```dart
   /// items.only<Row>();
   /// ```
+  ///
+  /// The pair with [cast], which throws on an element of the wrong type where
+  /// this drops it.
   Sequence<R> only<R>() => Sequence(_items.whereType<R>());
 
   /// Flattens, or expands each element into many.
@@ -116,7 +141,9 @@ final class Sequence<T> {
   /// element type inside them:
   ///
   /// ```dart
-  /// pages.flat((p) => p.links);      // Sequence<Uri>
+  /// // setup: final pages = Sequence(const [<Uri>[]]);
+  /// // setup: final groups = Sequence(const [<Row>[]]);
+  /// pages.flat((p) => p);            // Sequence<Uri>
   /// groups.flat<Row>();              // Sequence<Row>, from Sequence<List<Row>>
   /// ```
   ///
@@ -181,7 +208,7 @@ final class Sequence<T> {
 
   /// The last [n] elements, or all of them when there are fewer. Eager.
   Sequence<T> tail(int n) {
-    if (n <= 0) return const Sequence([]);
+    if (n <= 0) return const Sequence.empty();
     final all = _items.toList();
     return Sequence(all.length <= n ? all : all.sublist(all.length - n));
   }
@@ -230,40 +257,6 @@ final class Sequence<T> {
     if (batch.isNotEmpty) yield Sequence(batch);
   }
 
-  /// Sliding windows of [size] elements, advancing by [step].
-  ///
-  /// `windows(2)` is Kotlin's `zipWithNext` — consecutive pairs, for deltas
-  /// and moving averages. Set [partial] to also yield the short windows at the
-  /// end rather than stopping when a full one no longer fits.
-  Sequence<Sequence<T>> windows(
-    int size, {
-    int step = 1,
-    bool partial = false,
-  }) => Sequence(_windowed(size, step, partial));
-
-  Iterable<Sequence<T>> _windowed(int size, int step, bool partial) sync* {
-    if (size <= 0 || step <= 0) return;
-    final buffer = <T>[];
-    var skipping = 0;
-    for (final item in _items) {
-      if (skipping > 0) {
-        skipping--;
-        continue;
-      }
-      buffer.add(item);
-      if (buffer.length == size) {
-        yield Sequence(List<T>.of(buffer));
-        if (step >= size) {
-          skipping = step - size;
-          buffer.clear();
-        } else {
-          buffer.removeRange(0, step);
-        }
-      }
-    }
-    if (partial && buffer.isNotEmpty) yield Sequence(buffer);
-  }
-
   /// This sequence paired elementwise with [other], stopping at the shorter.
   ///
   /// A record, not a `Pair` type.
@@ -283,37 +276,11 @@ final class Sequence<T> {
   /// `pairs.to(...)`, `pairs.each(...)` and `pairs.fold(...)` do the rest.
   Sequence<(int, T)> get pairs => Sequence(_items.indexed);
 
-  /// The running results of folding [each] over the sequence from [initial].
-  ///
-  /// Kotlin's `runningFold`. The first element yielded is [initial], so a
-  /// sequence of *n* elements gives *n + 1* results.
-  Sequence<R> scan<R>(R initial, R Function(R total, T item) each) =>
-      Sequence(_scanned(initial, each));
-
-  Iterable<R> _scanned<R>(R initial, R Function(R total, T item) each) sync* {
-    var total = initial;
-    yield total;
-    for (final item in _items) {
-      total = each(total, item);
-      yield total;
-    }
-  }
-
-  /// The same elements, with [each] called on them as they pass.
-  ///
-  /// A peek that stays in the chain — Kotlin's `onEach`:
-  ///
-  /// ```dart
-  /// rows.also(print).keep((r) => r.live);
-  /// ```
-  Sequence<T> also(void Function(T item) each) => Sequence(
-    _items.map((item) {
-      each(item);
-      return item;
-    }),
-  );
-
   /// This sequence followed by [other].
+  ///
+  /// `union` stood beside this through 4.0.0 and was `plus(other).unique()`
+  /// — the same behaviour reachable two ways, which Rule 5 calls a bug in the
+  /// API rather than a convenience.
   Sequence<T> plus(Sequence<T> other) =>
       Sequence(_items.followedBy(other._items));
 
@@ -324,16 +291,6 @@ final class Sequence<T> {
     final drop = other._items.toSet();
     for (final item in _items) {
       if (!drop.contains(item)) yield item;
-    }
-  }
-
-  /// Every element of this sequence then of [other], duplicates removed.
-  Sequence<T> union(Sequence<T> other) => Sequence(_unioned(other));
-
-  Iterable<T> _unioned(Sequence<T> other) sync* {
-    final seen = <T>{};
-    for (final item in _items.followedBy(other._items)) {
-      if (seen.add(item)) yield item;
     }
   }
 
@@ -362,8 +319,12 @@ final class Sequence<T> {
     if (!any) yield* fallback._items;
   }
 
-  /// This sequence viewed as a `Sequence<R>`, throwing on an element that is
-  /// not one.
+  /// This sequence as a `Sequence<R>`, throwing on an element that is not one.
+  ///
+  /// The pair with [only], and the difference is what happens to an element of
+  /// the wrong type: [only] drops it, this throws. Reach for [only] when the
+  /// sequence is mixed on purpose and for this when a wrong element is a bug
+  /// you want to hear about.
   Sequence<R> cast<R>() => Sequence(_items.cast<R>());
 
   // --------------------------------------------------------------------------
@@ -431,21 +392,13 @@ final class Sequence<T> {
   /// The first element [test] accepts, or `null`.
   ///
   /// Non-throwing, so there is no `orElse:` to write — `firstWhere(orElse:)`
-  /// is the most-typed apology in Dart.
+  /// is the most-typed apology in Dart. `findlast` stood beside this through
+  /// 4.0.0 and was `flip.find(test)`.
   T? find(bool Function(T item) test) {
     for (final item in _items) {
       if (test(item)) return item;
     }
     return null;
-  }
-
-  /// The last element [test] accepts, or `null`.
-  T? findlast(bool Function(T item) test) {
-    T? found;
-    for (final item in _items) {
-      if (test(item)) found = item;
-    }
-    return found;
   }
 
   /// The position of the first element [test] accepts, or `null`.
@@ -527,7 +480,7 @@ final class Sequence<T> {
   /// The elements grouped by [by], each group in encounter order.
   ///
   /// ```dart
-  /// rows.group((r) => util.time.day(r.at));   // Map<DateTime, Sequence<Row>>
+  /// rows.group((r) => util.time.day(r.seen));  // Map<DateTime, Sequence<Row>>
   /// ```
   Map<K, Sequence<T>> group<K>(K Function(T item) by) {
     final buckets = <K, List<T>>{};

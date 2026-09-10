@@ -33,7 +33,7 @@
 /// res.parse(format.html).find('h1').text;    // through the codec seam
 ///
 /// // an executable is system.run, not a wrapper:
-/// final res = await system.run('git', ['rev-parse', '--short', 'HEAD']);
+/// final head = await system.run('git', ['rev-parse', '--short', 'HEAD']);
 /// ```
 library;
 

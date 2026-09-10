@@ -18,10 +18,10 @@ import '../util/json.dart';
 import 'format.dart';
 
 // ============================================================================
-// JSON (tool.json.*)
+// JSON (format.json.*)
 // ============================================================================
 
-/// Entry point for JSON, reachable as `tool.json`.
+/// Entry point for JSON, reachable as `format.json`.
 ///
 /// ```dart
 /// final doc = format.json.parse(res.body);

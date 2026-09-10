@@ -107,7 +107,7 @@ void main() {
       final seen = <String?>[];
 
       await net
-          .crawl<String>('https://music.test/album')
+          .crawl<String>('https://music.test/album'.url)
           .downloader(
             MapDownloader<String>({
               'https://music.test/album':
@@ -118,8 +118,8 @@ void main() {
           )
           .tag('song', (res) => seen.add(res.meta.get(_name)))
           .run((res) {
-            for (final a in res.parse(format.html)('a').elements.list) {
-              res.follow(a.href!, tag: 'song', meta: [_name(a.text)]);
+            for (final a in res.parse(format.html).find('a').elements.list) {
+              res.follow(a.attr('href')!, tag: 'song', meta: [_name(a.text)]);
             }
           });
 
@@ -165,18 +165,18 @@ void main() {
           .all(
             '.variant',
             (row) => (
-              name: row('.name').text,
+              name: row.find('.name').text,
               sku: row.attr('data-sku'),
               qty: row.pick(Field.text('.qty').when(int.tryParse)),
             ),
           );
 
       // The static type is the point: no cast reaches any of these fields.
-      expect(variants, hasLength(2));
-      expect(variants.first.name, 'Small');
-      expect(variants.first.sku, 'A1');
-      expect(variants.first.qty, 3);
-      expect(variants.last.qty, 7);
+      expect(variants.count(), 2);
+      expect(variants.first!.name, 'Small');
+      expect(variants.first!.sku, 'A1');
+      expect(variants.first!.qty, 3);
+      expect(variants.last!.qty, 7);
     });
 
     test('one builds a record for a section a page has at most one of', () {
@@ -185,7 +185,7 @@ void main() {
           .one(
             '.seller',
             (s) => (
-              name: s('.name').text,
+              name: s.find('.name').text,
               rating: s.pick(Field.text('.rating').when(util.text.number)),
             ),
           );
@@ -193,14 +193,14 @@ void main() {
       expect(seller?.name, 'Acme');
       expect(seller?.rating, 4.5);
       expect(
-        page.parse(format.html).one('.missing', (s) => s('x').text),
+        page.parse(format.html).one('.missing', (s) => s.find('x').text),
         isNull,
       );
     });
 
     test('a whole page reads as one nested record', () {
       final product = (
-        title: page.parse(format.html)('h1').text,
+        title: page.parse(format.html).find('h1').text,
         price: page
             .parse(format.html)
             .pick(Field.text('.price').when(util.text.number)),
@@ -208,13 +208,16 @@ void main() {
             .parse(format.html)
             .all(
               '.variant',
-              (row) => (name: row('.name').text, sku: row.attr('data-sku')),
+              (row) => (
+                name: row.find('.name').text,
+                sku: row.attr('data-sku'),
+              ),
             ),
       );
 
       expect(product.title, 'Wool Coat');
       expect(product.price, 89.0);
-      expect(product.variants.map((v) => v.sku), ['A1', 'A2']);
+      expect(product.variants.to((v) => v.sku).list, ['A1', 'A2']);
     });
 
     test('all and pick see matches at the top level of the body', () {
@@ -229,13 +232,16 @@ void main() {
       );
 
       expect(
-        flat.parse(format.html).all('.variant', (row) => row.attr('data-sku')),
+        flat
+            .parse(format.html)
+            .all('.variant', (row) => row.attr('data-sku'))
+            .list,
         ['A1', 'A2'],
       );
       expect(
         flat
             .parse(format.html)
-            .one('.variant', (row) => row('.name').text)
+            .one('.variant', (row) => row.find('.name').text)
             ?.trim(),
         'S',
       );
@@ -253,8 +259,8 @@ void main() {
       // matched every `.name` on the page instead of the row's own.
       final names = page
           .parse(format.html)
-          .all('.variant', (row) => row('.name').texts);
-      expect(names, [
+          .all('.variant', (row) => row.find('.name').texts.list);
+      expect(names.list, [
         ['Small'],
         ['Large'],
       ]);
@@ -315,7 +321,7 @@ void main() {
         });
 
         final read = [
-          for (final outcome in outcomes)
+          for (final outcome in outcomes.list)
             switch (outcome) {
               // `value` is `int` here, not `int?`: that is the whole point.
               Done(:final int value) => 'ok:$value',
@@ -324,9 +330,9 @@ void main() {
         ];
 
         expect(read, ['ok:10', 'bad:division by zero', 'ok:5']);
-        expect(outcomes.map((o) => o.ok), [true, false, true]);
-        expect(outcomes[1].value, isNull);
-        expect((outcomes[1] as Broke<int>).stack, isNotNull);
+        expect(outcomes.to((o) => o.ok).list, [true, false, true]);
+        expect(outcomes.list[1].value, isNull);
+        expect((outcomes.list[1] as Broke<int>).stack, isNotNull);
       },
     );
 
@@ -360,9 +366,9 @@ void main() {
       // the mapper, where collect can only learn T from an emit buried inside
       // a closure.
       final titles = await net
-          .crawl<Never>('https://site.test')
+          .crawl<Never>('https://site.test'.url)
           .downloader(MapDownloader(pages))
-          .gather((page) => page.parse(format.html)('h1').texts);
+          .gather((page) => page.parse(format.html).find('h1').texts.list);
 
       expect(titles, isA<Sequence<String>>());
       expect(titles.list, ['One', 'Two']);
@@ -370,11 +376,16 @@ void main() {
 
     test('returning nothing for a page filters it out', () async {
       final long = await net
-          .crawl<Never>('https://site.test')
+          .crawl<Never>('https://site.test'.url)
           .downloader(MapDownloader(pages))
           .gather(
             (page) =>
-                page.parse(format.html)('h1').texts.where((t) => t.length > 3),
+                page
+                    .parse(format.html)
+                    .find('h1')
+                    .texts
+                    .keep((t) => t.length > 3)
+                    .list,
           );
 
       expect(long.empty, isTrue);
@@ -382,11 +393,14 @@ void main() {
 
     test('a record per page reads as one expression', () async {
       final rows = await net
-          .crawl<Never>('https://site.test')
+          .crawl<Never>('https://site.test'.url)
           .downloader(MapDownloader(pages))
           .gather(
             (page) => [
-              (url: page.url.path, titles: page.parse(format.html)('h1').count),
+              (
+                url: page.url.path,
+                titles: page.parse(format.html).find('h1').count,
+              ),
             ],
           );
 

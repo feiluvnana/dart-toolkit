@@ -110,7 +110,7 @@ final class Asked {
 /// Served.json({'ok': true});
 /// Served.file('output/report.html');
 /// Served.status(404);
-/// Served.redirect('/done');
+/// Served.redirect('/done'.url);
 /// ```
 final class Served {
   /// The HTTP status code.
@@ -189,12 +189,17 @@ final class Served {
 
   /// A redirect to [location].
   ///
-  /// `302` by default; pass `status: 301` for a permanent one.
+  /// `302` by default; pass `status: 301` for a permanent one. A relative
+  /// reference is as valid a `Location` as an absolute one, so
+  /// `Served.redirect('/done'.url)` is the ordinary case.
+  ///
+  /// Took a `String` through 4.0.0, which Rule 6 opens by forbidding: URLs are
+  /// `Uri`, and `.url` exists so that costs six characters.
   Served.redirect(
-    String location, {
+    Uri location, {
     int status = 302,
     Map<String, String> headers = const {},
-  }) : this._(status: status, headers: {'location': location, ...headers});
+  }) : this._(status: status, headers: {'location': '$location', ...headers});
 
   static const _types = {
     '.html': 'text/html; charset=utf-8',

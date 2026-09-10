@@ -56,7 +56,7 @@ const NetAccessor net = NetAccessor();
 ///
 /// ```dart
 /// final res = await net.http.get('https://example.com'.url);
-/// for (final title in res.parse(format.html).find('h2.title').texts) {
+/// for (final title in res.parse(format.html).find('h2.title').texts.list) {
 ///   print(title);
 /// }
 /// ```

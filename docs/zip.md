@@ -32,7 +32,7 @@ To build an archive from data that never touched the disk:
 ```dart
 await format.zip.bundle('out.zip', {
   'notes.txt': utf8.encode('hello'),
-  'data/rows.csv': csvBytes,
+  'data/rows.csv': utf8.encode('a,b\n1,2\n'),
 });
 ```
 
@@ -42,7 +42,7 @@ await format.zip.bundle('out.zip', {
 
 ```dart
 final files = await format.zip.unpack('site.zip', 'restored');
-print('wrote ${files.length} files');
+print('wrote ${files.count()} files');
 ```
 
 Entries that would escape the destination — a `..` segment or an absolute path,
@@ -61,7 +61,7 @@ second is rounded.
 ## 3. Looking inside
 
 ```dart
-for (final entry in await format.zip.list('site.zip')) {
+for (final entry in (await format.zip.list('site.zip')).list) {
   print('${entry.name} ${entry.size} ${entry.folder}');
 }
 

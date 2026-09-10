@@ -85,11 +85,11 @@ class Sitemap {
     required Set<String> visited,
   }) async {
     if (!visited.add(url.removeFragment().toString())) {
-      return const Sequence<Uri>([]);
+      return const Sequence<Uri>.empty();
     }
 
     final res = await client.get(url);
-    if (!res.ok) return const Sequence<Uri>([]);
+    if (!res.ok) return const Sequence<Uri>.empty();
 
     final isIdx = nested(res.body);
     final uris = parse(res.body);

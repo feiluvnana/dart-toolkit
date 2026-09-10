@@ -306,8 +306,8 @@ enum ProgressUnit {
 /// Renders only to a terminal, so piped output stays clean.
 ///
 /// ```dart
-/// final bar = Progress(total: files.length, message: 'Downloading');
-/// for (final f in files) { await fetch(f); bar.tick(); }
+/// final bar = Progress(total: files.count(), message: 'Downloading');
+/// for (final f in files.list) { await io.async.read(f.path); bar.tick(); }
 /// bar.done('Finished');
 /// ```
 class Progress {

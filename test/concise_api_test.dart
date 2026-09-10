@@ -74,14 +74,14 @@ void main() {
       final parsed = Cli(['build', '--verbose', 'main.dart']);
       final verbose = parsed.flag('verbose');
       expect(parsed.command, equals('build'));
-      expect(parsed.rest, equals(['main.dart']));
+      expect(parsed.args, equals(['build', 'main.dart']));
       expect(verbose(), isTrue);
 
       // The same has to hold for declarations made before `parse`.
       final shared = cli.flag('verbose', alias: 'v');
       cli.parse(['build', '--verbose', 'main.dart']);
       expect(cli.command, equals('build'));
-      expect(cli.rest, equals(['main.dart']));
+      expect(cli.args, equals(['build', 'main.dart']));
       expect(shared(), isTrue);
     });
 
@@ -460,7 +460,7 @@ void main() {
       expect(started, isTrue);
       expect(completed, isTrue);
       expect(progressed.length, equals(4));
-      expect(results, equals([10, 20, 30, 40]));
+      expect(results.list, equals([10, 20, 30, 40]));
     });
 
     test('concurrent.run helper executes tasks', () async {
@@ -469,7 +469,7 @@ void main() {
         (s) async => s.toUpperCase(),
         size: 3,
       );
-      expect(results, equals(['A', 'B', 'C']));
+      expect(results.list, equals(['A', 'B', 'C']));
     });
 
     test(
@@ -522,26 +522,26 @@ void main() {
     ''';
 
     test('Markup href, hrefs, src, srcs, lines, has', () {
-      final q = html.$;
+      final q = html.$();
       expect(q.has('active'), isTrue);
       expect(q.has('missing'), isFalse);
 
       expect(
-        q.find('a').matching(r'[href$=".mp3"]').href,
+        q.find('a').matching(r'[href$=".mp3"]').attr('href'),
         equals('/track/1.mp3'),
       );
       expect(
-        q.find('a').matching(r'[href$=".flac"]').href,
+        q.find('a').matching(r'[href$=".flac"]').attr('href'),
         equals('https://example.com/2.flac'),
       );
-      expect(q.find('a').hrefs.length, equals(2));
+      expect(q.find('a').attrs('href').count(), equals(2));
 
-      expect(q.find('img').src, equals('album.jpg'));
-      expect(q.find('img').srcs.length, equals(1));
+      expect(q.find('img').attr('src'), equals('album.jpg'));
+      expect(q.find('img').attrs('src').count(), equals(1));
 
       final lines = q.find('.disc_lines').lines;
       expect(
-        lines,
+        lines.list,
         equals(['01. First Song', '02. Second Song', '03. Third Song']),
       );
 
@@ -555,9 +555,18 @@ void main() {
         bytes: html.codeUnits,
       );
 
-      expect(res.parse(format.html)('a').href, equals('/track/1.mp3'));
-      expect(res.parse(format.html)('img').src, equals('album.jpg'));
-      expect(res.parse(format.html).xpath('//a').href, equals('/track/1.mp3'));
+      expect(
+        res.parse(format.html).find('a').attr('href'),
+        equals('/track/1.mp3'),
+      );
+      expect(
+        res.parse(format.html).find('img').attr('src'),
+        equals('album.jpg'),
+      );
+      expect(
+        res.parse(format.html).xpath('//a').attr('href'),
+        equals('/track/1.mp3'),
+      );
     });
 
     test('emit without an engine explains itself', () {
@@ -626,7 +635,7 @@ void main() {
   group('Crawl entry points', () {
     test('net.crawl builds a configured engine without running it', () {
       final engine =
-          net.crawl<String>('https://example.com').concurrent(3).engine();
+          net.crawl<String>('https://example.com'.url).concurrent(3).engine();
       expect(engine.downloader.concurrency, equals(3));
       expect(engine.running, isFalse);
     });

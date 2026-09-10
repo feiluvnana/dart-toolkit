@@ -50,9 +50,12 @@ void main() {
 
     test('a selector collapses the page indentation', () {
       final res = Reply.text(page);
-      expect(res.parse(format.html)('.name').text, 'Wireless Keyboard');
-      expect(res.parse(format.html)('.price').text, r'$49.99');
-      expect(res.parse(format.html)('.tags li').texts, ['usb', 'bluetooth']);
+      expect(res.parse(format.html).find('.name').text, 'Wireless Keyboard');
+      expect(res.parse(format.html).find('.price').text, r'$49.99');
+      expect(res.parse(format.html).find('.tags li').texts.list, [
+        'usb',
+        'bluetooth',
+      ]);
     });
 
     test('extract and pick read it the same way', () {
@@ -90,7 +93,10 @@ void main() {
     test('inside a pre the whitespace is the content, and is kept', () {
       final res = Reply.text(page);
       // What <pre> means. Collapsing it would destroy scraped code samples.
-      expect(res.parse(format.html)('.code').text, 'line one\n  indented two');
+      expect(
+        res.parse(format.html).find('.code').text,
+        'line one\n  indented two',
+      );
       expect(
         res.parse(format.html).pick(Field.text('.code')),
         'line one\n  indented two',
@@ -118,7 +124,7 @@ void main() {
       final lost = <Failure<String>>[];
 
       final stats = await net
-          .crawl<String>('https://example.com/a')
+          .crawl<String>('https://example.com/a'.url)
           .downloader(_Broken<String>())
           .on
           .error(lost.add)
@@ -135,7 +141,7 @@ void main() {
       final lost = <Failure<String>>[];
 
       await net
-          .crawl<String>('https://example.com/page')
+          .crawl<String>('https://example.com/page'.url)
           .downloader(MapDownloader<String>({'/page': '<h1>hi</h1>'}))
           .on
           .error(lost.add)
@@ -147,7 +153,7 @@ void main() {
     test('the failed fetches can be queued again as they were', () async {
       final lost = <Failure<String>>[];
       await net
-          .crawl<String>('https://example.com/a')
+          .crawl<String>('https://example.com/a'.url)
           .downloader(_Broken<String>())
           .on
           .error(lost.add)
@@ -160,7 +166,7 @@ void main() {
               if (failure.fetch case final fetch?) fetch,
           ])
           .downloader(MapDownloader<String>({'/a': '<h1>second try</h1>'}))
-          .run((res) => served.add(res.parse(format.html)('h1').text));
+          .run((res) => served.add(res.parse(format.html).find('h1').text));
 
       expect(served, ['second try']);
     });
@@ -170,7 +176,7 @@ void main() {
       final path = '${dir.path}/crawl.state';
 
       await net
-          .crawl<String>('https://example.com/a')
+          .crawl<String>('https://example.com/a'.url)
           .downloader(_Broken<String>())
           .resume(path)
           .run((res) {});
@@ -199,7 +205,7 @@ void main() {
       final seen = <String>[];
 
       final stats = await net
-          .crawl<String>('https://example.com/a')
+          .crawl<String>('https://example.com/a'.url)
           .concurrent(1)
           .on
           .start(() => seen.add('start'))
@@ -211,7 +217,7 @@ void main() {
           .done((stats) => seen.add('done'))
           .limit(1)
           .downloader(MapDownloader<String>({'/a': '<h1>hi</h1>'}))
-          .collect((res) => res.emit(res.parse(format.html)('h1').text));
+          .collect((res) => res.emit(res.parse(format.html).find('h1').text));
 
       expect(seen, ['start', 'item', 'progress', 'done']);
       expect(stats.list, ['hi']);
@@ -323,7 +329,7 @@ void main() {
       await io.csv.pipe(
         path,
         net
-            .crawl<Map<String, Object?>>('https://shop.test/list')
+            .crawl<Map<String, Object?>>('https://shop.test/list'.url)
             .downloader(
               MapDownloader<Map<String, Object?>>({
                 '/list':
@@ -334,7 +340,8 @@ void main() {
               }),
             )
             .stream((res) {
-              for (final card in res.parse(format.html)('.p').elements.list) {
+              for (final card
+                  in res.parse(format.html).find('.p').elements.list) {
                 res.emit({
                   'name': card.query.find('h2').text,
                   'price': card.query.find('.c').text,

@@ -25,25 +25,37 @@ import 'sitemap.dart';
 /// Entry point for crawling, reachable as `net.crawl`.
 ///
 /// ```dart
-/// final titles = await net.crawl<String>('https://news.example.com')
+/// final titles = await net.crawl<String>('https://news.example.com'.url)
 ///     .concurrent(4)
 ///     .collect((res) {
-///       for (final t in res.$('.title').texts) res.emit(t);
+///       for (final t in res.parse(format.html).find('.title').texts.list) {
+///         res.emit(t);
+///       }
 ///     });
 /// ```
 class Crawl {
   /// Creates the accessor. Prefer the shared `net.crawl` instance.
   const Crawl();
 
-  /// Starts a crawl seeded with a single [target] string (e.g. URL, raw HTML, or task string).
+  /// Starts a crawl seeded with a single [target].
   ///
   /// [T] is the type of item handlers [Page.emit]. Pass a [process]
   /// function here, or hand one to [CrawlBuilder.run] at the end.
-  CrawlBuilder<T> call<T>(String target, [Handler<T>? process]) =>
+  ///
+  /// ```dart
+  /// await net.crawl<String>('https://example.com'.url).collect(handler);
+  /// ```
+  ///
+  /// Took a `String` through 4.0.0, sitting one line away from
+  /// `net.crawl.sitemap(Uri)` and one call away from `net.http.get(Uri)` —
+  /// Rule 6's first sentence is *URLs are `Uri`*, and `.url` exists so that
+  /// costs six characters. [html] and [file] keep their `String`, because
+  /// markup is not a URL and neither is a path.
+  CrawlBuilder<T> call<T>(Uri target, [Handler<T>? process]) =>
       CrawlBuilder<T>([target], process);
 
-  /// Starts a crawl seeded with several [targets] strings.
-  CrawlBuilder<T> all<T>(Iterable<String> targets, [Handler<T>? process]) =>
+  /// Starts a crawl seeded with several [targets].
+  CrawlBuilder<T> all<T>(Iterable<Uri> targets, [Handler<T>? process]) =>
       CrawlBuilder<T>(targets, process);
 
   /// Starts a crawl seeded with raw HTML [markup].
@@ -84,7 +96,7 @@ class Crawl {
 /// Every setter returns the builder, so configuration reads as one expression.
 /// Nothing runs until [run], [collect] or [stream] is called.
 class CrawlBuilder<T> {
-  final List<String> _urls;
+  final List<Uri> _urls;
   final List<Fetch<T>> _seeds = [];
   final Handler<T>? _process;
 
@@ -124,7 +136,7 @@ class CrawlBuilder<T> {
   /// Creates a builder seeded with [urls] and an optional [_process].
   ///
   /// Prefer `net.crawl(...)` over calling this directly.
-  CrawlBuilder(Iterable<String> urls, [this._process]) : _urls = urls.toList();
+  CrawlBuilder(Iterable<Uri> urls, [this._process]) : _urls = urls.toList();
 
   /// Sets the maximum number of concurrent fetches. Minimum one.
   CrawlBuilder<T> concurrent(int count) {
@@ -245,7 +257,7 @@ class CrawlBuilder<T> {
   /// Entries are MIME types, optionally with a `/*` wildcard on the subtype:
   ///
   /// ```dart
-  /// net.crawl<String>(url).accept(['text/html', 'application/xhtml+xml'])
+  /// net.crawl<String>(url).accept(['text/html', 'application/xhtml+xml']);
   /// ```
   ///
   /// A response carrying no `Content-Type` matches nothing.
@@ -261,7 +273,7 @@ class CrawlBuilder<T> {
   /// few hundred megabytes are already in memory.
   ///
   /// ```dart
-  /// net.crawl<String>(url).cap(util.size.parse('5mb'))
+  /// net.crawl<String>(url).cap(util.size.parse('5MiB')!);
   /// ```
   CrawlBuilder<T> cap(int bytes) {
     _cap = bytes > 0 ? bytes : null;
@@ -277,7 +289,7 @@ class CrawlBuilder<T> {
   /// asked about at all. Both arrive with [Reply.cached] set, so a
   /// handler can skip the pages that did not move:
   ///
-  /// ```dart
+  /// ```dart no-compile
   /// net.crawl<String>(url).cache('.cache').run((res) {
   ///   if (res.cached) return;
   ///   ...
@@ -304,7 +316,7 @@ class CrawlBuilder<T> {
   /// that finishes on its own deletes it, having nothing left to resume.
   ///
   /// ```dart
-  /// await net.crawl<String>('https://example.com')
+  /// await net.crawl<String>('https://example.com'.url)
   ///     .resume('crawl.state')
   ///     .collect((res) => res.emit(res.url.toString()));
   /// ```
@@ -519,7 +531,7 @@ class CrawlBuilder<T> {
   }
 
   Future<List<String>> _resolveUrls() async {
-    final urls = List<String>.from(_urls);
+    final urls = _urls.map((u) => u.toString()).toList();
     if (_sitemapUrl != null) {
       final sitemapUrls = await Sitemap.load(_sitemapUrl!);
       urls.addAll(sitemapUrls.to((u) => u.toString()).list);
@@ -578,7 +590,7 @@ class CrawlBuilder<T> {
   ///
   /// ```dart
   /// final titles = await net.crawl<Never>(seed)
-  ///     .gather((p) => p.$('.title').texts);
+  ///     .gather((p) => p.parse(format.html).find('.title').texts.list);
   /// // Future<Sequence<String>>
   /// ```
   ///
@@ -587,12 +599,15 @@ class CrawlBuilder<T> {
   ///
   /// ```dart
   /// final prices = await net.crawl<Never>(seed).gather((p) => [
-  ///   if (p.pick(Field.text('.price').when(util.text.number)) case final n?) n,
+  ///   if (p.parse(format.html).pick(
+  ///     Field.text('.price').when(util.text.number),
+  ///   ) case final n?)
+  ///     n,
   /// ]);
   /// ```
   ///
   /// Everything else the builder configures still applies, including [route]
-  /// and [tag] — but a handler registered there emits through [Response.emit]
+  /// and [tag] — but a handler registered there emits through [Page.emit]
   /// rather than returning, so a multi-stage crawl wants [collect].
   Future<Sequence<R>> gather<R>(Iterable<R> Function(Page<T> page) map) async {
     final items = <R>[];
@@ -707,7 +722,7 @@ class CrawlBuilder<T> {
 /// ```dart
 /// await net.crawl<String>(seed)
 ///     .concurrent(4)
-///     .on.error((f) => log.warn('${f.request?.url}: ${f.error}'))
+///     .on.error((f) => log.warn('${f.fetch?.url}: ${f.error}'))
 ///     .on.done((stats) => log.ok('${stats.completed} pages'))
 ///     .run(handler);
 /// ```

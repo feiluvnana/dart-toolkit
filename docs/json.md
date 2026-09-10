@@ -26,11 +26,11 @@ The `Json` *type* is exported from `util`, because it is a pure value three
 domains hand back and a type `net` needs cannot live under `format`:
 
 ```dart
-res.parse(format.json).at('data.items')                   // a response      — see http.md
-format.json.parse(text)                  // a string
-await format.json.read('config.json')    // a file
-await format.yaml.read('config.yaml')    // and YAML, and TOML
-(await req.json())                     // a request body  — see serve.md
+res.parse(format.json).at('data.items');   // a response      — see http.md
+format.json.parse(text);                   // a string
+await format.json.read('config.json');     // a file
+await format.yaml.read('config.yaml');     // and YAML, and TOML
+await req!.json();                         // a request body  — see serve.md
 ```
 
 Writing a document straight to disk stays `io.dump`, which stages through a
@@ -52,7 +52,7 @@ half, for when the text is going somewhere that is not a file.
 | — | `j.raw`, the decoded `Object?` underneath |
 | `q.xpath(query)` | `j.jsonpath(expr)` |
 
-```dart
+```dart no-compile
 final doc = format.json.parse(res.body);
 
 doc.text('data.user.name');                    // String?

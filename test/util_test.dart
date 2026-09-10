@@ -21,7 +21,7 @@ void main() {
       expect(io.has(at('site.zip')), isTrue);
 
       final files = await format.zip.unpack(at('site.zip'), at('out'));
-      expect(files, hasLength(2));
+      expect(files.count(), equals(2));
       expect(io.read(at('out/index.html')), equals('<h1>Home</h1>'));
       expect(io.read(at('out/css/app.css')), equals('body{}'));
     });
@@ -76,9 +76,35 @@ void main() {
         'safe.txt': utf8.encode('yes'),
       });
       final written = await format.zip.unpack(at('evil.zip'), at('dest'));
-      expect(written, hasLength(1));
+      expect(written.count(), equals(1));
       expect(io.has(at('escaped.txt')), isFalse);
       expect(io.read(at('dest/safe.txt')), equals('yes'));
+    });
+
+    test('an archive that is not there is empty, not a throw', () async {
+      // Every other missing-path read in the library is empty: io.find,
+      // io.csv.rows, format.json.read. This was the one that raised
+      // PathNotFoundException.
+      final missing = at('absent.zip');
+      expect((await format.zip.list(missing)).count(), equals(0));
+      expect(await format.zip.read(missing, 'a.txt'), isNull);
+      expect((await format.zip.unpack(missing, at('nowhere'))).count(), 0);
+    });
+
+    test('an extension no format covers is refused', () async {
+      // `pack('site', 'site.rar')` used to write a zip, name it .rar and
+      // report success, because Format.of fell back to zip for everything.
+      io.write(at('one/a.txt'), 'x');
+      expect(() => Format.of('site.rar'), throwsArgumentError);
+      expect(
+        () => format.zip.pack(at('one'), at('one.rar')),
+        throwsArgumentError,
+      );
+      // A name with no extension has nothing to disagree with.
+      expect(Format.of('archive'), equals(Format.zip));
+      // And an explicit format still overrides the name.
+      await format.zip.pack(at('one'), at('one.rar'), format: Format.zip);
+      expect(io.has(at('one.rar')), isTrue);
     });
 
     test('deflate and inflate round-trip', () {
@@ -113,6 +139,25 @@ void main() {
       expect(util.text.number('no digits'), isNull);
       expect(util.text.number('-42 items'), equals(-42));
       expect(util.text.numbers('3 of 7 at 2.5').list, equals([3, 7, 2.5]));
+
+      // A parenthesised number is an accounting negative. This used to come
+      // back positive, so a scraped financial table read the wrong way round.
+      expect(util.text.number('(5)'), equals(-5));
+      expect(util.text.number('(1,234.50)'), equals(-1234.5));
+      expect(util.text.numbers('(3) and 4').list, equals([-3, 4]));
+
+      // An exponent is part of the number. '1e3' used to be 1.
+      expect(util.text.number('1e3'), equals(1000));
+      expect(util.text.number('1.5e3'), equals(1500.0));
+      expect(util.text.number('2E-2'), equals(0.02));
+
+      // A separator groups digits only in whole threes, which is the rule the
+      // space already followed and the comma did not: '1,2' used to be 12.
+      expect(util.text.number('1,2'), equals(1));
+      expect(util.text.numbers('1,2').list, equals([1, 2]));
+      expect(util.text.number('1 234 567'), equals(1234567));
+      expect(util.text.number('12 34'), equals(12));
+      expect(util.text.number('1_000'), equals(1000));
     });
 
     test('render fills a template and leaves a missing key empty', () {
@@ -127,6 +172,83 @@ void main() {
       expect(util.text.render('no slots', {'a': 1}), equals('no slots'));
       expect(util.text.render('{ a }', {'a': 1}), equals('{ a }'));
       expect(util.text.render('{a}{a}', {'a': 'x'}), equals('xx'));
+    });
+
+    // The two parallel string constants this table used to be were indexed
+    // against each other, and one extra `c` among the replacements shifted
+    // every group after it by one: `è` folded to `c`, `ñ` to `i`, and
+    // `slug('Señor Muñoz')` to `'seior-muioz'`. 14 of 71 letters were wrong
+    // and nothing noticed, so every letter is named here explicitly. A
+    // spot-check cannot catch a shift; a full table can.
+    test('fold maps every accented letter to its own plain form', () {
+      const groups = <String, String>{
+        'a': 'àáâãäåāăą',
+        'c': 'çćĉċč',
+        'd': 'đďð',
+        'e': 'èéêëēĕėęě',
+        'g': 'ğĝġģ',
+        'h': 'ĥħ',
+        'i': 'ìíîïĩīĭįı',
+        'j': 'ĵ',
+        'k': 'ķ',
+        'l': 'ĺļľł',
+        'n': 'ñńņň',
+        'o': 'òóôõöøōŏő',
+        'r': 'ŕŗř',
+        's': 'śŝşš',
+        't': 'ţťŧ',
+        'u': 'ùúûüũūŭůűų',
+        'w': 'ŵ',
+        'y': 'ýÿŷ',
+        'z': 'źżž',
+      };
+      var checked = 0;
+      groups.forEach((plain, accented) {
+        for (final letter in accented.split('')) {
+          checked++;
+          expect(util.text.fold(letter), equals(plain), reason: letter);
+          // An upper-case input keeps its case.
+          expect(
+            util.text.fold(letter.toUpperCase()),
+            equals(plain.toUpperCase()),
+            reason: letter.toUpperCase(),
+          );
+        }
+      });
+
+      // The ligatures and the sharp s are two letters where they are spelled
+      // out, which is why the table is a map of strings and not a string.
+      const spelled = <String, String>{
+        'ß': 'ss',
+        'æ': 'ae',
+        'œ': 'oe',
+        'ĳ': 'ij',
+        'þ': 'th',
+      };
+      spelled.forEach((letter, plain) {
+        checked++;
+        expect(util.text.fold(letter), equals(plain), reason: letter);
+        // `ß`.toUpperCase() is `ß` in Dart, so there is no upper-case form to
+        // check for it; the ligatures do have one and it keeps its case.
+        if (letter.toUpperCase() != letter) {
+          expect(
+            util.text.fold(letter.toUpperCase()),
+            equals(plain[0].toUpperCase() + plain.substring(1)),
+            reason: letter.toUpperCase(),
+          );
+        }
+      });
+
+      expect(checked, equals(92));
+
+      // A script this does not cover passes through untouched.
+      expect(util.text.fold('日本語'), equals('日本語'));
+      expect(util.text.fold('Заголовок'), equals('Заголовок'));
+
+      // What the shift actually broke.
+      expect(util.text.slug('Crème Brûlée'), equals('creme-brulee'));
+      expect(util.text.slug('Señor Muñoz'), equals('senor-munoz'));
+      expect(util.text.slug('Straße'), equals('strasse'));
     });
 
     test('title, upper, words, blank', () {
@@ -209,6 +331,24 @@ void main() {
       expect(util.time.parse('tomorrow'), isNull);
       expect(util.time.parse('31/02/2024'), isNull, reason: 'no such day');
       expect(util.time.parse('2024-13-01'), isNull);
+      // `DateTime.parse` reads a run of digits as ISO 8601 basic format, so a
+      // Unix timestamp came back as year 170000 rolled to 169999-11-30.
+      expect(util.time.parse('1700000000'), isNull);
+      expect(util.time.parse('20240102'), equals(DateTime(2024, 1, 2)));
+    });
+
+    test('format carries the sign of a negative duration', () {
+      // The sign used to reach the remainders: '00:-5' is not a time.
+      expect(util.time.format(const Duration(seconds: -5)), equals('-00:05'));
+      expect(
+        util.time.format(const Duration(seconds: -3725)),
+        equals('-01:02:05'),
+      );
+      expect(
+        util.time.format(const Duration(seconds: 3725)),
+        equals('01:02:05'),
+      );
+      expect(util.time.format(Duration.zero), equals('00:00'));
     });
 
     test('span reads the units a timeout is written in', () {

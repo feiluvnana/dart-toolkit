@@ -51,7 +51,7 @@ void main() async {
   // and the body all come from the form.
   final greeting =
       await net
-          .crawl<String>('https://shop.test/login')
+          .crawl<String>('https://shop.test/login'.url)
           .downloader(MapDownloader<String>(_fixtures))
           .route(RegExp(r'/login$'), (res) {
             // No `at` here: `submit` hands the form the page's own URL.
@@ -63,7 +63,7 @@ void main() async {
           })
           .tag(
             'home',
-            (res) => res.emit(res.parse(format.html)('.welcome').text),
+            (res) => res.emit(res.parse(format.html).find('.welcome').text),
           )
           .collect();
 

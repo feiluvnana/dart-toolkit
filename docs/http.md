@@ -17,7 +17,7 @@ void main() async {
   final res = await net.http.get('https://news.ycombinator.com'.url);
 
   if (res.ok) {
-    for (final title in res.parse(format.html)('.titleline > a').texts) {
+    for (final title in res.parse(format.html).find('.titleline > a').texts.list) {
       print(title);
     }
   }
@@ -73,9 +73,10 @@ res.parse(format.html);         // Markup
 res.parse(format.json);         // Json
 res.parse(format.yaml);         // Json
 
-// Resolved absolute URIs:
-res.links();                    // List<Uri> resolved against res.url
-res.srcs();                     // List<Uri> for images/scripts resolved against res.url
+// Resolving a relative reference against the URL the body came from:
+res.url.resolve('/next');                         // an absolute Uri
+res.parse(format.html).find('a').attrs('href')
+    .to(res.url.resolve);                         // every link, absolute
 
 await res.save('out/page.html'); // saves response bytes atomically
 ```
@@ -88,8 +89,9 @@ is what lets one crawl handle more than one format:
 
 ```dart
 final items = switch (res.type) {
-  'application/json' => res.parse(format.json).at('items').all(Item.from),
-  _                  => res.parse(format.html).find('.item').all(Item.from),
+  'application/json' =>
+    res.parse(format.json).at('items').all((i) => Item(i.text('sku') ?? '')),
+  _                  => res.parse(format.html).all('.item', Item.from),
 };
 ```
 
@@ -102,7 +104,7 @@ members and three JSON ones, on a class that is about HTTP:
 
 | 3.x | 4.0.0 |
 | :--- | :--- |
-| `res.$('h1').text` | `res.parse(format.html)('h1').text` |
+| `res.$('h1').text` | `res.parse(format.html).find('h1').text` |
 | `res.$xpath('//h1')` | `res.parse(format.html).xpath('//h1')` |
 | `res.doc` | `res.parse(format.html).document` |
 | `res.extract({...})` | `res.parse(format.html).extract({...})` |
@@ -117,7 +119,7 @@ A handler that reads a page more than once names the cursor:
 ```dart
 final page = res.parse(format.html);
 page.find('h1').text;
-page.find('a').hrefs;
+page.find('a').attrs('href');
 ```
 
 ### Typed JSON
@@ -126,7 +128,7 @@ page.find('a').hrefs;
 [`Json`](json.md) cursor is the typed door, where nothing is cast and a path
 that is not there reads empty:
 
-```dart
+```dart no-compile
 final doc = (await net.http.get('https://api.example.com/products'.url))
     .parse(format.json);
 
@@ -159,17 +161,17 @@ section a page has at most one of:
 
 ```dart
 final product = (
-  title: res.parse(format.html)('h1.title').text,
+  title: res.parse(format.html).find('h1.title').text,
   price: res.parse(format.html).pick(Field.text('.price').when(util.text.number)),
-  categories: res.parse(format.html)('ul.breadcrumbs > li').texts,
+  categories: res.parse(format.html).find('ul.breadcrumbs > li').texts,
   reviews: res.parse(format.html).all('.review', (row) => (
-    user: row('.author').text,
+    user: row.find('.author').text,
     rating: row.pick(Field.attr('.stars', 'data-rating').when(int.tryParse)),
-    comment: row('.body').text,
+    comment: row.find('.body').text,
   )),
 );
 
-product.reviews.first.rating;   // int?, no cast anywhere
+product.reviews.first?.rating;   // int?, no cast anywhere
 ```
 
 Nothing here is `Object?`. `all` hands each match its own `Markup`, so a
@@ -247,8 +249,9 @@ too.
 A response knows the forms it carries. `res.form(selector)` collects their controls — hidden inputs, a CSRF token, the options already selected — so a script overrides the two fields it cares about and sends the rest back unchanged:
 
 ```dart
-final page = await session.get('https://example.com/login'.url);
-final home = await page.form('#login')!
+final login = await session.get('https://example.com/login'.url);
+final home = await login.parse(format.html).form('#login')!
+    .at(login.url)
     .fill({'user': user, 'pass': pass})
     .send(client: session);
 ```
@@ -270,11 +273,11 @@ final client = Fetcher(cap: 10 * 1024 * 1024); // 10 MB
 Redirects are followed automatically by default (up to `redirects: 10`). Access `res.url` for the final landing destination:
 
 ```dart
-final client = Fetcher(
-  redirect: true,
-  redirects: 5,
+final res = await net.http.get(
+  'http://bit.ly/example'.url,
+  redirect: true,   // follow them, which is the default
+  redirects: 5,     // at most this many hops
 );
-final res = await client.get('http://bit.ly/example'.url);
 print('Landed on: ${res.url}');
 ```
 
@@ -379,7 +382,7 @@ Crawls take the same thing as a directory: `net.crawl(url).cache('.cache')`.
 `cap` refuses a body larger than the given number of bytes, throwing `FatalHttpException` — which is not retried, because a server's answer being too big is settled rather than transient. The transfer is abandoned as soon as `Content-Length` says so, or as soon as the arriving bytes do:
 
 ```dart
-final client = Fetcher(cap: util.size.parse('5mb'));
+final client = Fetcher(cap: util.size.parse('5MiB')!);
 ```
 
 ---

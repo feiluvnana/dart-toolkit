@@ -397,7 +397,7 @@ mixin PathResolver {
 /// need your own headers, timeout or base directory — and close it when done.
 ///
 /// ```dart
-/// final client = Fetcher(headers: {'Cookie': session});
+/// final client = Fetcher(headers: {'Cookie': 'session=abc'});
 /// final res = await client.get('https://example.com/page'.url);
 /// await client.close();
 /// ```

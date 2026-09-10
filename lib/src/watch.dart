@@ -1,6 +1,6 @@
 /// # Filesystem Watching (internal)
 ///
-/// The machinery behind `io.observe`: one subscription per watched directory,
+/// The machinery behind `io.watch`: one subscription per watched directory,
 /// a debounce per path, and the platform asymmetry hidden.
 library;
 

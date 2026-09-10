@@ -12,6 +12,8 @@
 /// `format.json` sits beside this rather than in `util`.
 library;
 
+import 'dart:convert';
+
 import 'package:yaml/yaml.dart' as yaml;
 
 import '../util/codec.dart';
@@ -19,10 +21,10 @@ import '../util/json.dart';
 import 'format.dart';
 
 // ============================================================================
-// YAML (tool.yaml.*)
+// YAML (format.yaml.*)
 // ============================================================================
 
-/// Entry point for YAML, reachable as `tool.yaml`.
+/// Entry point for YAML, reachable as `format.yaml`.
 ///
 /// Three members, spelled exactly like [JsonAccessor] and [TomlAccessor], so
 /// the format namespaces are learnable from each other:
@@ -138,13 +140,22 @@ class YamlAccessor with FileCodec<Json> implements Codec<Json> {
     '~',
   };
 
+  /// [text] as a scalar that reads back as exactly [text].
+  ///
+  /// Anything not spellable bare is emitted as a JSON string literal. YAML is
+  /// a superset of JSON, so a double-quoted literal with JSON's escapes is
+  /// valid YAML and round-trips exactly — where the single quotes this used to
+  /// write could not escape a newline at all. `{'multi': 'line1\nline2'}`
+  /// was written as a single-quoted scalar broken across two lines, which YAML
+  /// folds back to one: the newline was silently lost, and so was a trailing
+  /// space.
   static String _scalar(String text) {
     if (text.isEmpty) return "''";
-    if (_reserved.contains(text.toLowerCase())) return "'$text'";
-    if (num.tryParse(text) != null) return "'$text'";
-    if (!_bare.hasMatch(text)) {
-      return "'${text.replaceAll("'", "''")}'";
-    }
+    if (_reserved.contains(text.toLowerCase())) return jsonEncode(text);
+    if (num.tryParse(text) != null) return jsonEncode(text);
+    if (!_bare.hasMatch(text)) return jsonEncode(text);
+    // A bare scalar cannot end in a space: YAML strips it on the way back.
+    if (text != text.trimRight()) return jsonEncode(text);
     return text;
   }
 }

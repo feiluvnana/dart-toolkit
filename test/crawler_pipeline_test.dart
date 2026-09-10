@@ -132,19 +132,22 @@ void main() {
         ..on(RegExp(r'/album$'), (res) {
           expect(res.ok, isTrue);
           expect(res.engine, equals(engine));
-          for (final href in res
-              .parse(format.html)('a.disc-link')
-              .attrs('href')) {
+          for (final href
+              in res
+                  .parse(format.html)
+                  .find('a.disc-link')
+                  .attrs('href')
+                  .list) {
             res.follow(href, tag: 'disc');
           }
         })
         ..tag('disc', (res) {
           res.emit({
             'disc': int.parse(
-              res.parse(format.html)('.disc').attr('data-num') ?? '0',
+              res.parse(format.html).find('.disc').attr('data-num') ?? '0',
             ),
-            'title': res.parse(format.html)('.disc-title').text,
-            'firstTrack': res.parse(format.html)('.track').text,
+            'title': res.parse(format.html).find('.disc-title').text,
+            'firstTrack': res.parse(format.html).find('.track').text,
           });
         });
 
@@ -175,7 +178,7 @@ void main() {
       final engine = Engine<String>(
         downloader: MockDownloader<String>(pages),
         process: (res) {
-          final text = res.parse(format.html)('div').text;
+          final text = res.parse(format.html).find('div').text;
           res.emit(text);
           if (text.contains('Abort')) res.stop('Found abort keyword');
         },
@@ -228,16 +231,16 @@ void main() {
 
       final visited = <String>[];
       final stats = await net
-          .crawl<String>('https://music.example.com/album')
+          .crawl<String>('https://music.example.com/album'.url)
           .downloader(MockDownloader<String>(pages))
           .tag('song', (res) {
             visited.add(
-              '${res.meta.get(_name)}: ${res.parse(format.html)('a').href}',
+              '${res.meta.get(_name)}: ${res.parse(format.html).find('a').attr('href')}',
             );
           })
           .run((res) {
             for (final a
-                in res.parse(format.html)('#songlist a').elements.list) {
+                in res.parse(format.html).find('#songlist a').elements.list) {
               res.follow(a.attr('href')!, tag: 'song', meta: [_name(a.text)]);
             }
           });
@@ -251,7 +254,7 @@ void main() {
 
     test('collect gathers every emitted item', () async {
       final titles = await net
-          .crawl<String>('https://news.example.com')
+          .crawl<String>('https://news.example.com'.url)
           .concurrent(2)
           .downloader(
             MockDownloader<String>({
@@ -265,7 +268,7 @@ void main() {
             }),
           )
           .collect((res) {
-            for (final t in res.parse(format.html)('.title').texts) {
+            for (final t in res.parse(format.html).find('.title').texts.list) {
               res.emit(t);
             }
           });
@@ -279,7 +282,7 @@ void main() {
     test('stream yields items as they are emitted', () async {
       final items =
           await net
-              .crawl<String>('https://site.example.com')
+              .crawl<String>('https://site.example.com'.url)
               .downloader(
                 MockDownloader<String>({
                   'https://site.example.com':
@@ -287,7 +290,8 @@ void main() {
                 }),
               )
               .stream((res) {
-                for (final t in res.parse(format.html)('span').texts) {
+                for (final t
+                    in res.parse(format.html).find('span').texts.list) {
                   res.emit(t);
                 }
               })
@@ -305,15 +309,15 @@ void main() {
       final titles = <String>[];
 
       final stats = await net
-          .crawl<String>('https://site.example.com')
+          .crawl<String>('https://site.example.com'.url)
           .concurrent(2)
           .delay(10.ms)
           .downloader(MockDownloader<String>(pages))
           .run((res) {
             if (res.url.path == '/sub') {
-              titles.add(res.parse(format.html)('h2').text);
+              titles.add(res.parse(format.html).find('h2').text);
             } else {
-              titles.add(res.parse(format.html)('h1').text);
+              titles.add(res.parse(format.html).find('h1').text);
               res.follow('/sub');
             }
           });
@@ -325,8 +329,8 @@ void main() {
     test('all() seeds several URLs at once', () async {
       final stats = await net.crawl
           .all<String>([
-            'https://site.example.com/a',
-            'https://site.example.com/b',
+            'https://site.example.com/a'.url,
+            'https://site.example.com/b'.url,
           ])
           .downloader(
             MockDownloader<String>({
@@ -361,7 +365,7 @@ void main() {
       // Guards the worker wake-up path: idle workers must notice the run is
       // over instead of waiting on a completer nobody completes.
       final stats = await net
-          .crawl<String>('https://site.example.com/1')
+          .crawl<String>('https://site.example.com/1'.url)
           .concurrent(8)
           .downloader(
             MockDownloader<String>({
@@ -381,9 +385,9 @@ void main() {
         </div>
       ''';
 
-      final headlines = await net.crawl<String>(htmlString).collect((res) {
+      final headlines = await net.crawl.html<String>(htmlString).collect((res) {
         // Test res.$ and emit
-        final title = res.parse(format.html)('.headline').text;
+        final title = res.parse(format.html).find('.headline').text;
         if (title.isNotEmpty) res.emit(title);
       });
 
@@ -393,7 +397,7 @@ void main() {
     test('net.crawl.html explicitly parses markup without sniffing', () async {
       const markup = '<article><h2>Explicit HTML</h2></article>';
       final results = await net.crawl.html<String>(markup).collect((res) {
-        res.emit(res.parse(format.html)('h2').text);
+        res.emit(res.parse(format.html).find('h2').text);
       });
       expect(results.list, equals(['Explicit HTML']));
     });
@@ -405,7 +409,7 @@ void main() {
         final results = await net.crawl.file<String>(tmpFile.path).collect((
           res,
         ) {
-          res.emit(res.parse(format.html)('p').text);
+          res.emit(res.parse(format.html).find('p').text);
         });
         expect(results.list, equals(['File Content']));
       } finally {
@@ -415,8 +419,8 @@ void main() {
 
     test('res.follow accepts plain string, not necessary a Uri', () async {
       final items = <String>[];
-      await net
-          .crawl<String>('''
+      await net.crawl
+          .html<String>('''
         <div>
           <a href="https://example.com/step2">Next</a>
           <p>Step 1</p>
@@ -428,8 +432,9 @@ void main() {
             }),
           )
           .collect((res) {
-            items.add(res.parse(format.html)('p').text);
-            for (final next in res.parse(format.html)('a').hrefs) {
+            items.add(res.parse(format.html).find('p').text);
+            for (final next
+                in res.parse(format.html).find('a').attrs('href').list) {
               // follow takes a String directly without needing .url
               res.follow(next);
             }
@@ -440,7 +445,7 @@ void main() {
 
     test('flow accepts arbitrary string tasks', () async {
       final seen = <String>[];
-      await net.crawl<String>('task:seed-alpha').collect((res) {
+      await net.crawl<String>('task:seed-alpha'.url).collect((res) {
         seen.add(res.body);
         if (res.body == 'task:seed-alpha') {
           res.follow('task:seed-beta');
@@ -476,7 +481,7 @@ void main() {
       () {
         final downloader = MapDownloader<String>({});
         net
-            .crawl<String>('https://example.com')
+            .crawl<String>('https://example.com'.url)
             .downloader(downloader)
             .concurrent(8)
             .delay(const Duration(seconds: 9))
@@ -571,7 +576,7 @@ void main() {
       });
 
       final builder = net
-          .crawl<String>('https://example.com')
+          .crawl<String>('https://example.com'.url)
           .downloader(downloader);
       builder.on.item((item) => log.add('item1:$item'));
       builder.on.item((item) => log.add('item2:$item'));
@@ -615,13 +620,14 @@ void main() {
       // Depth limit = 1: root is 0, child1 is 1, child2 (depth 2) is dropped
       final visited = <String>[];
       await net
-          .crawl<String>('https://example.com/root')
+          .crawl<String>('https://example.com/root'.url)
           .downloader(MapDownloader<String>(pages))
           .samehost()
           .depth(1)
           .collect((res) {
             visited.add(res.url.path);
-            for (final href in res.parse(format.html)('a').hrefs) {
+            for (final href
+                in res.parse(format.html).find('a').attrs('href').list) {
               res.follow(href);
             }
           });
@@ -639,11 +645,12 @@ void main() {
       };
 
       final stats = await net
-          .crawl<String>('https://example.com/1')
+          .crawl<String>('https://example.com/1'.url)
           .downloader(MapDownloader<String>(pages))
           .limit(2)
           .run((res) {
-            for (final href in res.parse(format.html)('a').hrefs) {
+            for (final href
+                in res.parse(format.html).find('a').attrs('href').list) {
               res.follow(href);
             }
           });
@@ -799,7 +806,7 @@ https://example.com/item2
         final order = <String>[];
 
         await net
-            .crawl<String>('https://host-a.com/1')
+            .crawl<String>('https://host-a.com/1'.url)
             .downloader(downloader)
             .perhost()
             .delay(const Duration(milliseconds: 60))

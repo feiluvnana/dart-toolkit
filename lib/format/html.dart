@@ -16,6 +16,7 @@
 /// import 'package:dart_toolkit/dart_toolkit.dart';
 /// import 'package:dart_toolkit/html.dart';
 ///
+/// // setup: const markup = '<li class="track">One</li>';
 /// $(markup).find('.track').texts;
 /// markup.$('.track').texts;
 /// ```
@@ -36,7 +37,7 @@ import 'format.dart';
 /// ```dart
 /// final page = format.html.parse(res.body);
 /// final cached = await format.html.read('fixtures/product.html');
-/// io.write('out.html', format.html.format(page));
+/// io.write('out.html', format.html.format(page.find('.card')));
 /// ```
 ///
 /// Writing a document straight to disk is `io.write`; [format] is the string
@@ -55,9 +56,10 @@ class HtmlAccessor with FileCodec<Markup> implements Codec<Markup> {
 
   /// Parses [text] into a [Markup] cursor ready for [Markup.xpath].
   ///
-  /// The same document; the difference is which query language the callable
-  /// shorthand runs. A cursor from [parse] answers [Markup.xpath] too, so
-  /// this only matters for `page('//h1')`.
+  /// The same document as [parse], which answers [Markup.xpath] just as
+  /// readily; the difference is only which language `markup.$xpath(...)` runs.
+  /// Through 4.0.0 it also decided what the callable shorthand meant, which is
+  /// the hidden state that shorthand was deleted for.
   Markup query(String text) =>
       Markup.of(html_parser.parse(text), isXPath: true);
 
@@ -75,7 +77,7 @@ class HtmlAccessor with FileCodec<Markup> implements Codec<Markup> {
   /// The outer HTML of every element in the cursor, concatenated — so a round
   /// trip through [parse] and back is the document, and a round trip through
   /// `find` and back is the matches.
-  String format(Markup markup) => markup.outers.join();
+  String format(Markup markup) => markup.outers.join('');
 }
 
 /// Parses [markup] into a queryable [Markup] cursor.
@@ -85,6 +87,7 @@ class HtmlAccessor with FileCodec<Markup> implements Codec<Markup> {
 /// scope is a cost the default surface should not charge.
 ///
 /// ```dart
+/// // setup: const markup = '<li class="track">One</li>';
 /// $(markup).find('.track').texts;
 /// markup.$('.track').texts;
 /// ```
@@ -102,10 +105,27 @@ Markup $xpath(String markup, [String? query]) {
 }
 
 /// Query helpers on a raw HTML string.
+///
+/// Methods rather than getters, so `markup.$('.track')` is one call. They were
+/// getters through 4.0.0 and leaned on `Markup.call` for the selector, which
+/// meant the opt-in jQuery spelling was propped up by a second spelling of
+/// `find` sitting on the default surface. It carries its own now.
 extension QuerySelectorOnHtmlString on String {
   /// jQuery selector accessor for this markup string.
-  Markup get $ => const HtmlAccessor().parse(this);
+  ///
+  /// ```dart
+  /// // setup: const markup = '<li class="track">One</li>';
+  /// markup.$('.track').texts;   // parse, then find
+  /// markup.$().count;           // just parse
+  /// ```
+  Markup $([String? selector]) {
+    final cursor = const HtmlAccessor().parse(this);
+    return selector == null ? cursor : cursor.find(selector);
+  }
 
   /// XPath selector accessor for this markup string.
-  Markup get $xpath => const HtmlAccessor().query(this);
+  Markup $xpath([String? query]) {
+    final cursor = const HtmlAccessor().query(this);
+    return query == null ? cursor : cursor.xpath(query);
+  }
 }

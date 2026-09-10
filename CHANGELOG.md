@@ -2,6 +2,439 @@
 
 All notable changes to this project will be documented in this file.
 
+## 5.0.0
+
+The rule set, run against the library instead of against the next thing added
+to it.
+
+4.0.0 finished the structural work — the formats live in `format`, `net` parses
+nothing, and the seam between them is one interface with one method. The shape
+was right. What was wrong was inside it: 122 exported types and about a thousand
+public members behind a README that opens by saying the point is to keep the
+surface small enough to hold in your head; nine functions that returned a
+plausible value that was not the right value; and a documentation harness that
+NAMESPACE.md said compiled every snippet in `docs/` and that actually compiled
+27 of 244.
+
+Three parts, in the order they landed: the wrong answers, the surface, and the
+net that catches both. Then a fourth on speed.
+
+---
+
+### Fixed — nine wrong answers
+
+None of these threw. Each returned something that looked like an answer, which
+is why 515 passing tests and a clean `dart analyze` never mentioned them.
+
+**`util.text.fold` folded 14 of 71 letters to the wrong letter.** It mapped
+accented Latin letters by index into two parallel string constants. `from` was
+72 characters and `to` was 73 — six `c`s for five `ç` variants — so every group
+boundary after that shifted by one and the *first* letter of each remaining
+group folded to the previous group's letter:
+
+```dart
+util.text.fold('Crème Brûlée');   // was 'Crcme Brulee'
+util.text.slug('Señor Muñoz');    // was 'seior-muioz'
+```
+
+`è`→`c`, `ì`→`e`, `ñ`→`i`, `ò`→`n`, `ù`→`o`, `ý`→`u`, `š`→`n`, `ž`→`s`,
+`đ`→`z`, `ł`→`d`, `þ`→`l`, `ð`→`p`, `æ`→`d`, `œ`→`a`. And `ñ` was listed twice,
+so the second entry was unreachable; `ß` was missing; `æ` and `œ` lost a letter
+because indexing a `String` cannot express a two-character replacement.
+
+The table is a `Map<String, String>` now — a duplicate key is a compile error
+rather than a silent dead entry, a replacement may be two letters (`ß` → `ss`,
+`æ` → `ae`, `œ` → `oe`, `ĳ` → `ij`, `þ` → `th`), and there is no second thing to
+go out of step with. All 71 letters and both cases are named explicitly in
+`test/util_test.dart`, because a spot-check cannot catch a shift.
+
+**`util.time.format` emitted malformed strings for a negative duration.**
+The sign reached the remainders: `format(-5.s)` was `'00:-5'` and
+`format(-3725.s)` was `'-2:-5'`. It formats the magnitude behind a `-` now.
+A duration is negative whenever a script subtracted two timestamps in the order
+it happened to have them.
+
+**`util.time.parse` read a Unix timestamp as a year.** `DateTime.parse` accepts
+a run of digits as ISO 8601 basic format, so `parse('1700000000')` came back as
+year 170000 with a zero month and day, rolled back to `169999-11-30`. Eight
+digits is the longest a bare date can be; anything longer is `null`.
+
+**`util.size` labelled binary units as decimal ones.** The arithmetic was
+1024-based and every label said `KB`, `MB`, `GB`, so a terabyte of disk printed
+as `'931.3 GB'` and `parse('5MB')` answered 5,242,880 — five *mebibytes* under a
+name that means five million. `format` writes `KiB`/`MiB`/`GiB` now, and `parse`
+accepts both families and gives each the scale its name carries:
+
+```dart
+util.size.format(5 * 1024 * 1024);   // '5.0 MiB'  (was '5.0 MB')
+util.size.parse('2.5 MiB');          // 2621440
+util.size.parse('2.5 MB');           // 2500000    (was 2621440)
+util.size.parse('10 XB');            // null       (was 0)
+util.size.format(-2048);             // '-2.0 KiB' (was '0 B')
+util.size.format(1023);              // '1023 B'   (was '1023.0 B')
+```
+
+`parse` returns **`int?`**. It used to answer `0` for text that was not a size,
+for a unit nobody knows, and for a unit with no number — a value a caller
+cannot tell apart from an empty file, and the exact failure Rule 4 names.
+
+**`util.text.number` returned confident wrong answers.**
+
+| Input | Was | Is |
+| :--- | :--- | :--- |
+| `'(5)'` | `5` | `-5` — an accounting negative |
+| `'(1,234.50)'` | `1234.5` | `-1234.5` |
+| `'1e3'` | `1` | `1000` |
+| `'1,2'` | `12` | `1` — a comma groups only in whole threes |
+
+`(5)` is the one that mattered: a scraped financial table read the wrong way
+round. The grouping fix applies to the comma the reasoning the space already
+followed, which the comment above `_digits` had spelled out and never acted on.
+
+**The four format writers had four failure modes for one bad input.**
+`format.json.format` threw, `format.toml.format` returned `''`, and
+`format.yaml.format` returned text that read back *different*. One rule now,
+stated once: **reading never throws and gives the empty cursor; writing never
+returns text that is wrong or absent.**
+
+- `format.toml.format` throws `ArgumentError` naming what it was handed.
+  Returning `''` meant `io.write(path, format.toml.format(rows))` wrote a blank
+  file and reported success — a caller can check for a throw and cannot check
+  for a file that is silently empty.
+- `format.yaml.format` emits anything not spellable bare as a JSON string
+  literal. YAML is a superset of JSON, so that is valid YAML and round-trips
+  exactly, where the single quotes it used to write could not escape a newline
+  at all: `{'multi': 'line1\nline2'}` came back as `'line1 line2'`. A trailing
+  space was lost the same way. Both are lossless now.
+
+**`format.zip` was the one read in the library that threw for a missing file.**
+`list`, `read` and `unpack` are empty for an archive that is not there, like
+`io.find`, `io.csv.rows` and `format.json.read`. And `Format.of` throws
+`ArgumentError` for an extension none of the four covers, instead of falling
+back to `zip` — `pack('site', 'site.rar')` used to write a zip, name it `.rar`
+and report success.
+
+**`:nth-child(n)` matched nothing and `:nth-of-type` threw.** `package:csslib`
+evaluates `:first-child` and `:last-child` and then stops, so
+`page.find('li:nth-child(2)')` was silently empty — a scraper written against
+it collected nothing and reported success — and `:nth-of-type(2)` raised
+`UnimplementedError` from the middle of a match, out of a cursor documented to
+give the empty result instead.
+
+`nth-child`, `nth-last-child`, `nth-of-type`, `nth-last-of-type`,
+`first-of-type`, `last-of-type`, `only-of-type`, `only-child`, `:is` and
+`:where` are evaluated here now, with a full `an+b` parser. Anything the
+evaluator does not implement — `:hover`, `:target`, `::marker` — is a
+`FormatException` naming the part it could not read, which is an `Exception`
+about a selector rather than an `Error` from inside a match.
+
+**`cli.usage` wrapped by code units.** A `desc:` holding CJK wrapped at half
+the columns it asked for. It goes through `Ansi.width` now, like every other
+box this library draws.
+
+#### Checked and found correct
+
+Recorded because "I looked and it was already right" is worth as much to the
+next sweep as a bug is. `ConsoleWriter.table` was reported to measure ANSI
+escapes as width; it does not — `Table._widest` and `Table._pad` both use
+`Ansi.width`, and a table mixing colour, CJK and emoji measures exactly 22
+columns on every line. `box` and `rule` likewise. `cli.date` returning
+`Opt<DateTime?>` where its six siblings return a non-nullable `Opt<T>` is
+deliberate and its doc comment already says so: there is no sensible default
+date, and `--since` exists precisely so a script can tell "not given" from "the
+beginning of time".
+
+---
+
+### Changed — the surface
+
+Rule 5 says every name appears exactly once, and that *two entry points to the
+same behaviour is always a bug in the API, not a convenience*.
+
+#### Deleted: names that were one call's argument
+
+| Was | Is | Because |
+| :--- | :--- | :--- |
+| `Markup.href` / `.hrefs` | `attr('href')` / `attrs('href')` | the same call with a literal |
+| `Markup.src` / `.srcs` | `attr('src')` / `attrs('src')` | the same |
+| `Element.href` / `.src` | `element.attributes[...]` | the same, again |
+| `Mutex`, `concurrent.mutex()` | `concurrent.semaphore(1)` | a whole exported type for one argument |
+| `concurrent.compute` | `Isolate.run` | one line, and the domain's own doc says *bounded async work on **one isolate*** |
+| `Sequence.union(o)` | `plus(o).unique()` | |
+| `Sequence.findlast(t)` | `flip.find(t)` | |
+| `cli.rest` | `cli.args` | see below |
+| `cli.subcommand(n, f)` | `if (cli.command == n)` | its own doc listed four things `run` did that it did not |
+
+`href` and `src` are the instructive set: six members for two attribute names,
+each of them `attr` with a literal, and they read *better* than `attr('href')`
+— which is exactly the argument Rule 5 exists to refuse. They also never
+covered anything, since the next attribute a script wants is `data-id`.
+
+`Semaphore` keeps its distinction from `Limiter` — one bounds how many run at
+once and the other how often they start — but not its second dialect:
+`acquire`/`withPermit` are now `take`/`guard`, spelled like `Limiter`'s. That
+also removes the library's one camelCase member, which Rule 4 forbids outright.
+
+`io.delete(dir, pattern:)` is **`io.sweep`**. It and `io.remove` were synonyms,
+so neither name said which was the single entity and which was the sweep, and
+`io.delete(path)` read like it would remove that one file.
+
+#### `find` and `()` were one search, so they are one spelling
+
+4.0.0's changelog entry is titled *"`find` and the callable are one search"*,
+and it kept both names for it. `Markup.call` is gone.
+
+Rule 5 is only half the reason. The other half:
+
+```dart
+Markup call([String? selectorOrQuery]) =>
+    selectorOrQuery == null
+        ? this
+        : (_isXPath ? xpath(selectorOrQuery) : find(selectorOrQuery));
+```
+
+**Which selector *language* `page('...')` spoke depended on hidden state.** On a
+cursor from `format.html.query` it ran the string as XPath; on one from
+`format.html.parse` the same call was a CSS selector, and nothing at the call
+site said which. `find` and `xpath` each say so in their names.
+
+```dart
+page.find('h1').text;        // was page('h1').text
+page.xpath('//h1').text;     // was page('//h1').text, on a query cursor
+```
+
+`$` and `$xpath` on `Element` and `Document` went with it. They sat on the
+**default** surface, contradicting both `lib/html.dart`'s own doc comment and
+Rule 5's "the one survivor is an opt-in import", and they were `element.query`
+under a second name. The `String` extension stays where the rule put it, now as
+methods rather than getters — `markup.$('.track')` is one call, and the opt-in
+jQuery spelling no longer leans on a second spelling of `find` sitting on the
+default surface.
+
+#### `retries` and `times` were one parameter
+
+```dart
+/// [times] is the total number of attempts; [retries] is the number of extra
+/// attempts after the first. Pass one or the other.
+```
+
+Two parameters for one number, documented as such, in the library whose Rule 5
+records the CLI's `def`/`defaultValue` pair going for exactly this. And the
+resolution was silent: `retries` was read first, so
+`concurrent.retry(fn, times: 5, retries: 1)` ran **two** attempts and ignored
+the five. `times` is gone; `retries` means what `Fetcher.retries` means.
+
+#### `Sequence` or `List`, one of them
+
+Design Philosophy 6 says *everything this library hands back for you to shape is
+a `Sequence`*. It was **53 public members returning `List`/`Map`/`Set` against
+30 returning a `Sequence`** — and `page.find('a').elements` and
+`page.find('a').texts` were the same cursor one call apart in two vocabularies.
+
+Converted: `Markup.texts`, `htmls`, `outers`, `attrs`, `values`, `lines`,
+`xpathvalues`, `all`; `io.csv.parse`; `concurrent.run`, `Pool.run`,
+`Pool.settle`; `format.zip.unpack`; `Robots.group`; `ConsoleReader.picks`. The
+count is now 38 to 39, and what is left is `List<int>` byte buffers, `toJson`
+maps and the `Map`s `group`/`keyed`/`tally` return on purpose.
+
+**And `Sequence` is a snapshot now, not a lazy view.** It held an `Iterable` and
+re-walked the whole chain on every terminal call:
+
+```dart
+var n = 0;
+final s = [1, 2, 3].seq.keep((x) { n++; return true; });
+s.count(); s.list; s.first;
+// n == 7 before, and 3 now
+```
+
+Three reads, three passes — and a `.to(expensiveParse)` over a crawl's results
+paid for the parse once per read, while a sequence built over a
+single-subscription source was a `StateError` waiting for its second reader.
+Nothing in the vocabulary was lazy on purpose and every source the library hands
+you is already a materialised list. `Sequence.empty()` is the `const` for the
+empty case.
+
+The trade is stated rather than hidden: `head(10)` after a `to` maps the whole
+source rather than stopping at the eleventh element. Where that matters the
+answer is a `Stream` — `crawl.stream` rather than `crawl.collect` — which was
+already the advice.
+
+`also`, `scan` and `windows` went with the laziness: `also` was a tap that only
+made sense while the chain was lazy, and the other two had no caller in the
+library, the docs or any example. `Sequence` is 58 members, down from 65 — a
+replacement vocabulary larger than the one it replaces has stopped being a
+simplification.
+
+#### `cli` said the same thing three ways
+
+`args`, `rest` and `raw` were one list at three offsets, and nothing in `args`
+or `rest` said which included the first positional. `rest` is gone, and the
+reason is the opposite of what it looks like: **inside a handler `cli.run`
+dispatched to, the command names have already been taken off**, so `args` is
+already the arguments to that command and `rest` would drop one more. `rest`
+existed only to serve `subcommand`; both went together. `command` stays, for a
+script that branches by hand.
+
+#### `system.watch` gave `io` its name back
+
+NAMESPACE.md, in *Where past decisions landed*:
+
+> **A filesystem watcher** → `io.observe`, not `io.watch` — `system.watch()`
+> already means *watch for Ctrl-C* […] `observe` is free, honest, and **slightly
+> less good than `watch`**.
+
+A worse name taken because a better one was occupied by something that had not
+earned it. Meanwhile `system.on` was a sub-namespace with **one** member,
+`exit`, while the cohesive vocabulary that would justify it sat flat on `system`
+beside it: `watch`, `unwatch`, `track`, `untrack`, `adopt`, `disown` — six
+members about one thing, which is what happens to your resources when the
+program is interrupted. The structure was inverted.
+
+```dart
+system.on.signals();   // was system.watch()
+system.on.stop();      // was system.unwatch()
+system.on.track(file); system.on.untrack(file);
+system.on.adopt(proc); system.on.disown(proc);
+system.on.exit(cb);    // unchanged
+
+final stop = io.watch('src', rebuild);   // was io.observe
+```
+
+#### Two URLs that were `String`
+
+Rule 6 opens with *URLs are `Uri`*. `net.crawl(...)` took a `String`, sitting
+one line from `net.crawl.sitemap(Uri)` and one call from `net.http.get(Uri)`;
+`Served.redirect` took one too.
+
+```dart
+await net.crawl<String>('https://example.com'.url).collect(handler);
+return Served.redirect('/done'.url);
+```
+
+`net.crawl.html(markup)` and `net.crawl.file(path)` keep their `String`, because
+markup is not a URL and neither is a path — and a seed that could be *either* a
+URL or raw HTML depending on what it looked like was the untyped overload Rule 6
+objects to. `Page.follow` also stays a `String`: it takes a relative reference
+out of a document and resolving it is the method's job.
+
+---
+
+### Added — the harness that catches all of it
+
+NAMESPACE.md step 7, since 1.x:
+
+> `test/doc_samples_test.dart` compiles every snippet in `docs/`, so a stale
+> example fails the build.
+
+It did not. Its snippet pass filtered to whole programs —
+`if (!snippet.contains('void main(')) continue;` — which was **27 of 244**
+markdown blocks and **none of the 152** in `///` comments under `lib/`.
+
+`test/docs_test.dart` compiles **385** `dart` blocks: `docs/`, `README.md`,
+`NAMESPACE.md`, `example/README.md` and every doc comment in `lib/`. Fragments
+are wrapped in a `main` with a shared fixture set in scope as top-level getters,
+which a snippet's own `final res = ...` shadows without complaint; a fragment
+needing something else declares it in a `// setup:` line; and a block that
+genuinely cannot compile — a signature listing, a naming table, a member index —
+opts out with ` ```dart no-compile `. There are 17 of those, and that number is
+the debt.
+
+**What it found, on the first run.** Documentation still using API removed as
+far back as 2.0.0:
+
+| Stale reference | Removed in | Found in |
+| :--- | :--- | :--- |
+| `tool.json`, `tool.yaml`, `tool.zip` | 4.0.0 | 28 doc comments, 8 files |
+| `res.$`, `res.form`, `res.pick`, `res.at` | 4.0.0 | `crawl.dart`, `form.dart`, `pipeline.dart`, `docs/crawl.md`, `docs/http.md` |
+| `QueryResult`, `Response.emit` | 4.0.0, 2.0.0 | `util/json.dart`, `net/crawl.dart` |
+| `io.async.json` | 3.0.0 | `net/engine.dart` |
+| `Failure.request` | 2.0.0 | `net/crawl.dart`, `net/engine.dart` |
+| `Page(request:)` | 2.0.0 | `docs/crawl.md` |
+| `meta: {'name': ...}`, `res.meta['name']` | 2.0.0 | `net/pipeline.dart` |
+| `cli.has`, `cli.get` | 2.0.0 | `cli/cli.dart` |
+| `Markup.all(build)` with one argument | never valid | `docs/http.md` |
+| `res.links()`, `res.srcs()` | never existed | `docs/http.md` |
+| `Fetcher(redirect:, redirects:)` | never existed | `docs/http.md` |
+
+`docs/crawl.md` used `res.form(...)` in the same file whose migration table
+records its removal. `dart doc` had been publishing all of it.
+
+---
+
+### Performance
+
+Measured on a 500-row page, a 20,000-row CSV export and 50,000 characters of
+accented text.
+
+| | Before | After | |
+| :--- | ---: | ---: | ---: |
+| `Markup.matching` (2,500 calls) | 390 ms | **4 ms** | 97× |
+| `util.text.fold` (50 × 50k chars) | 59 ms | **26 ms** | 2.3× |
+| `io.csv.parse` (5 × 20k rows) | 50 ms | **31 ms** | 1.6× |
+
+**`matching`, `not` and `closest` were a document scan per element.** They went
+through a match cache keyed on the document root, so testing 500 rows against
+`.row` walked to the root and ran `querySelectorAll` over the whole tree 500
+times — 156µs a call. A compound selector with no combinator (a tag, classes, an
+id, attribute tests) is now parsed once and answered directly off the element.
+Anything more — a descendant, a pseudo-class, a selector list — still takes the
+general path, and `test/markup_test.dart` pins the two against each other
+across 28 selector shapes, because a fast path that disagreed with the slow one
+would be a nasty bug.
+
+**`util.text.fold` allocated two objects per character.** A
+`String.fromCharCode` and a `toLowerCase()` for every rune of every input. The
+table is keyed by code point with the upper-case forms folded in, the walk is
+one pass, the runs between replacements are copied in bulk, and a string with
+nothing to fold — which is most scraped text, since nothing here is ASCII — is
+handed straight back without allocating at all.
+
+**`io.csv.parse` indexed with `text[i]`.** That allocates a one-character
+`String` per character, so a 20,000-row export made about a million throwaway
+objects. It reads code units and copies runs with `substring` now.
+
+Also fixed while there: **`io.csv.parse` was the one CSV entry point that kept a
+UTF-8 BOM**, gluing it to the first header, where `row['name']` answered `null`
+for a file that plainly had a `name` column. Excel writes one. The streaming
+reader behind `io.csv.rows` had always dropped it; the two agree on all 15
+awkward inputs now.
+
+---
+
+### Counting the result
+
+| | 4.0.0 | 5.0.0 |
+| :--- | ---: | ---: |
+| Exported types | 122 | 121 |
+| Public members | ~1,021 | ~1,010 |
+| `Sequence` members | 65 | 58 |
+| `Markup` members | 57 | 52 |
+| Collection returns that are a `Sequence` | 30 of 83 | 39 of 77 |
+| Doc snippets compiled | 27 of 396 | **385 of 402** |
+| Tests | 515 | 530 |
+
+The type and member counts barely move, and they should not: this was not a
+purge. The number that moves by an order of magnitude is the second-to-last row,
+and that is the one that stops the others drifting back.
+
+### Not in this release
+
+**`format.csv`.** Unchanged from 4.0.0, and the reasoning holds. `io.csv` still
+offers nine ways in and out — `parse`, `format`, `cells`, `maps`, `matrix`,
+`rows`, `records`, `write`, `pipe` — across two shapes and three deliveries, on
+two independent parser implementations. They now agree on every input tested,
+which is the precondition for merging them rather than a substitute for it.
+
+**`format.xml`.** Unchanged: `xpath_selector_xml_parser` could not be resolved,
+and the two remaining routes each break something 4.0.0 established. Additive,
+so it costs nothing to ship later.
+
+**Splitting the accessor layer.** `Engine` has 40 public members and
+`CrawlBuilder` 31, six of them terminal — `run`, `collect`, `gather`, `save`,
+`sink`, `stream`. `sink` is `save` pointed at an `IOSink` and is probably one
+member too many, but the six are a coherent set of endings and picking them
+apart means deciding what a pipeline's result type is.
+
 ## 4.0.0
 
 `net` stops knowing what HTML is.

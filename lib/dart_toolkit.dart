@@ -7,7 +7,7 @@
 /// Five of them are *axes* — a way of touching the machine:
 ///
 /// - [io]: files, atomic writes, paths, CSV (`io.csv`), a JSON store
-///   (`io.store`), watching (`io.observe`), locking (`io.lock`), and a
+///   (`io.store`), watching (`io.watch`), locking (`io.lock`), and a
 ///   non-blocking mirror of the lot (`io.async`).
 /// - [net]: HTTP (`net.http`), the crawler engine (`net.crawl`), the forms a
 ///   page carries ([Form]) — and, in the other direction, a server that
@@ -42,10 +42,10 @@
 ///
 /// void main(List<String> args) async {
 ///   cli.parse(args);
-///   final titles = await net.crawl<String>('https://news.ycombinator.com')
+///   final titles = await net.crawl<String>('https://news.ycombinator.com'.url)
 ///       .concurrent(system.os.cpus)
 ///       .gather((page) => page.parse(format.html)
-///           .find('.titleline > a').texts);
+///           .find('.titleline > a').texts.list);
 ///
 ///   io.write('titles.txt', titles.unique().join('\n'));
 /// }

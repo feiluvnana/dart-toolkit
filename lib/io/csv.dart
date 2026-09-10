@@ -22,7 +22,7 @@ import '../util/sequence.dart';
 ///
 /// ```dart
 /// final rows = await io.csv.maps('people.csv');
-/// await io.csv.write('out.csv', rows);
+/// await io.csv.write('out.csv', rows.list);
 /// ```
 class CsvAccessor {
   /// Creates the accessor. Prefer the shared `io.csv` instance.
@@ -33,7 +33,13 @@ class CsvAccessor {
   /// Handles quoted fields containing [delimiter], newlines, and `""` escaped
   /// quotes. [delimiter] may be more than one character. Blank lines produce
   /// no row, so a trailing newline does not add an empty one.
-  List<List<String>> parse(String text, {String delimiter = ','}) {
+  Sequence<List<String>> parse(String text, {String delimiter = ','}) {
+    // Excel writes a UTF-8 BOM, and the streaming decoder behind [rows] drops
+    // it — so this was the one CSV entry point that kept it, and it kept it
+    // glued to the first header, where it made `row['name']` answer null for
+    // a file that plainly had a `name` column.
+    if (text.startsWith('\uFEFF')) text = text.substring(1);
+
     final rows = <List<String>>[];
     final field = StringBuffer();
     final row = <String>[];
@@ -53,41 +59,62 @@ class CsvAccessor {
       row.clear();
     }
 
-    for (var i = 0; i < text.length; i++) {
-      final char = text[i];
+    // Code units, not `text[i]`: indexing a String allocates a one-character
+    // String for every character of the file, which on a 20,000-row export is
+    // a million throwaway objects. The runs between separators are copied in
+    // bulk with `substring` for the same reason.
+    const quote = 0x22; // "
+    const cr = 0x0D;
+    const lf = 0x0A;
+    final sepFirst = sep.codeUnitAt(0);
+    final simpleSep = sep.length == 1;
+    final length = text.length;
+    var run = 0; // start of the plain run not yet copied into `field`
+
+    void take(int end) {
+      if (end > run) field.write(text.substring(run, end));
+    }
+
+    for (var i = 0; i < length; i++) {
+      final unit = text.codeUnitAt(i);
       if (quoted) {
-        if (char != '"') {
-          field.write(char);
-        } else if (i + 1 < text.length && text[i + 1] == '"') {
+        if (unit != quote) continue;
+        take(i);
+        if (i + 1 < length && text.codeUnitAt(i + 1) == quote) {
           field.write('"');
           i++;
         } else {
           quoted = false;
         }
+        run = i + 1;
         continue;
       }
-      if (char == '"') {
+      if (unit == quote) {
+        take(i);
         quoted = true;
+        run = i + 1;
         continue;
       }
-      if (char == '\r') {
-        if (i + 1 < text.length && text[i + 1] == '\n') i++;
+      if (unit == cr || unit == lf) {
+        take(i);
+        run = i + 1;
+        if (unit == cr && i + 1 < length && text.codeUnitAt(i + 1) == lf) {
+          i++;
+          run = i + 1;
+        }
         endRow();
         continue;
       }
-      if (char == '\n') {
-        endRow();
-        continue;
-      }
-      if (text.startsWith(sep, i)) {
-        endField();
+      if (unit == sepFirst && (simpleSep || text.startsWith(sep, i))) {
+        take(i);
         i += sep.length - 1;
-        continue;
+        run = i + 1;
+        endField();
       }
-      field.write(char);
     }
+    take(length);
     if (field.isNotEmpty || row.isNotEmpty) endRow();
-    return rows;
+    return Sequence(rows);
   }
 
   /// Renders [rows] as CSV text, one record per line.
@@ -188,7 +215,7 @@ class CsvAccessor {
     String delimiter = ',',
   }) async {
     final rows = await _all(path, delimiter);
-    if (rows.isEmpty) return const Sequence([]);
+    if (rows.isEmpty) return const Sequence.empty();
     final keys = rows.first;
     return Sequence([
       for (final row in rows.skip(1))
@@ -364,7 +391,7 @@ class CsvAccessor {
   /// ```dart
   /// await io.csv.pipe(
   ///   'products.csv',
-  ///   net.crawl<Map<String, Object?>>(seed).stream(handler),
+  ///   net.crawl<Map<String, Object?>>(seed).stream(),
   ///   headers: ['name', 'price', 'url'],
   /// );
   /// ```
@@ -421,7 +448,7 @@ class CsvAccessor {
   Future<List<List<String>>> _all(String path, String delimiter) async {
     final file = File(path);
     if (!file.existsSync()) return [];
-    return parse(await file.readAsString(), delimiter: delimiter);
+    return parse(await file.readAsString(), delimiter: delimiter).list;
   }
 
   static bool _blank(List<String> row) =>

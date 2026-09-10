@@ -13,9 +13,9 @@
 /// Three doors produce the same cursor:
 ///
 /// ```dart
-/// res.parse(format.html)                  // a response
-/// format.html.parse(markup)               // a string
-/// await format.html.read('page.html')     // a file
+/// res.parse(format.html);                 // a response
+/// format.html.parse(body);                // a string
+/// await format.html.read('page.html');    // a file
 /// ```
 ///
 /// Navigation comes in two spellings, for the two questions: [Markup.find]
@@ -49,12 +49,12 @@ const TextAccessor _text = TextAccessor();
 /// final page = res.parse(format.html);
 ///
 /// page.find('h1').text;                          // String
-/// page.find('a').hrefs;                          // List<String>
-/// page.xpath('//table//td[2]').texts;            // List<String>
+/// page.find('a').attrs('href');                 // Sequence<String>
+/// page.xpath('//table//td[2]').texts;            // Sequence<String>
 /// page.all('.product', (row) => (
-///   name: row('.name').text,
+///   name: row.find('.name').text,
 ///   price: row.pick(Field.text('.price').when(util.text.number)),
-/// ));                                            // List<({String name, num? price})>
+/// ));                                   // Sequence<({String name, num? price})>
 /// ```
 class Markup {
   final List<Element> _elements;
@@ -96,17 +96,6 @@ class Markup {
   /// The escape hatch, the way [Json.raw] is: for the one call `package:html`
   /// can answer and this cannot.
   Document? get document => _document;
-
-  /// Callable shorthand: runs a CSS selector, or an XPath query on a cursor
-  /// from `format.html.query`.
-  ///
-  /// ```dart
-  /// page('h1').text;          // the same as page.find('h1').text
-  /// ```
-  Markup call([String? selectorOrQuery]) =>
-      selectorOrQuery == null
-          ? this
-          : (_isXPath ? xpath(selectorOrQuery) : find(selectorOrQuery));
 
   /// The matched elements, as a [Sequence].
   ///
@@ -153,7 +142,7 @@ class Markup {
   }
 
   /// All string values (attributes or text nodes) matching the XPath [query].
-  List<String> xpathvalues(String query) {
+  Sequence<String> xpathvalues(String query) {
     final results = <String>[];
     final nodes = _document != null ? [_document] : _elements;
     for (final node in nodes) {
@@ -173,7 +162,7 @@ class Markup {
         }
       } catch (_) {}
     }
-    return results;
+    return Sequence(results);
   }
 
   /// A single-element result at [index]; empty when out of range.
@@ -199,6 +188,14 @@ class Markup {
   ///
   /// The result is scoped even when this cursor was not, so the second call
   /// above cannot quietly search the page again.
+  ///
+  /// `page(selector)` was a second spelling of this through 4.0.0 — the
+  /// release that made them one search kept both names for it. Worse, which
+  /// selector *language* the callable spoke depended on hidden state: on a
+  /// cursor from `format.html.query` it ran the string as XPath instead, so
+  /// nothing at the call site said which of the two it was. [find] and
+  /// [xpath] each say so in their names. The jQuery spelling survives where
+  /// Rule 5 already put it, behind `package:dart_toolkit/html.dart`.
   Markup find(String selector) =>
       Markup(JQuery.select(_document ?? _elements, selector), false);
 
@@ -210,19 +207,20 @@ class Markup {
   ///
   /// ```dart
   /// final variants = page.all('.variant', (row) => (
-  ///   name: row('.name').text,
+  ///   name: row.find('.name').text,
   ///   sku: row.attr('data-sku'),
-  ///   price: row.pick(Field.text('.price').map(util.text.number)),
+  ///   price: row.pick(Field.text('.price').when(util.text.number)),
   /// ));
-  /// // List<({String name, String? sku, num? price})>
+  /// // Sequence<({String name, String? sku, num? price})>
   /// ```
   ///
   /// Where `extract` hands back `Map<String, Object?>` and leaves every value
   /// to be cast, this keeps the type of each field all the way out.
-  List<R> all<R>(String selector, R Function(Markup row) build) => [
-    for (final element in find(selector)._elements)
-      build(Markup([element], false)),
-  ];
+  Sequence<R> all<R>(String selector, R Function(Markup row) build) =>
+      Sequence([
+        for (final element in find(selector)._elements)
+          build(Markup([element], false)),
+      ]);
 
   /// The first match of [selector], built from its own scope, or `null`.
   ///
@@ -230,8 +228,8 @@ class Markup {
   ///
   /// ```dart
   /// final seller = page.one('.seller', (s) => (
-  ///   name: s('.name').text,
-  ///   rating: s.pick(Field.text('.rating').map(util.text.number)),
+  ///   name: s.find('.name').text,
+  ///   rating: s.pick(Field.text('.rating').when(util.text.number)),
   /// ));
   /// ```
   R? one<R>(String selector, R Function(Markup row) build) {
@@ -342,7 +340,8 @@ class Markup {
   ].where((s) => s.isNotEmpty).join(' ');
 
   /// The text of each match, one entry per element, read as [text] reads it.
-  List<String> get texts => [for (final e in _elements) readable(e)];
+  Sequence<String> get texts =>
+      Sequence([for (final e in _elements) readable(e)]);
 
   /// [element]'s text as a reader sees it rather than as the source spells it.
   ///
@@ -369,36 +368,37 @@ class Markup {
     return false;
   }
 
-  /// The `href` attribute of the first match, or `null`.
-  String? get href => _elements.firstOrNull?.attributes['href'];
-
-  /// Every `href` attribute across matches that have one.
-  List<String> get hrefs => attrs('href');
-
-  /// The `src` attribute of the first match, or `null`.
-  String? get src => _elements.firstOrNull?.attributes['src'];
-
-  /// Every `src` attribute across matches that have one.
-  List<String> get srcs => attrs('src');
-
   /// The inner HTML of the first match, or `''` when empty.
   String get html => _elements.isEmpty ? '' : _elements.first.innerHtml;
 
   /// Inner HTML of every match.
-  List<String> get htmls => _elements.map((e) => e.innerHtml).toList();
+  Sequence<String> get htmls => Sequence(_elements.map((e) => e.innerHtml));
 
   /// The outer HTML of the first match, or `''` when empty.
   String get outer => _elements.isEmpty ? '' : _elements.first.outerHtml;
 
   /// Outer HTML of every match.
-  List<String> get outers => _elements.map((e) => e.outerHtml).toList();
+  Sequence<String> get outers => Sequence(_elements.map((e) => e.outerHtml));
 
   /// Attribute [name] on the first match, or `null`.
+  ///
+  /// `href` and `src` had members of their own through 4.0.0 — four of them
+  /// with the plurals, and two more on the [Element] extension. Each was this
+  /// call with a literal, which Rule 5 calls a bug in the API rather than a
+  /// convenience: `page.find('a').attr('href')`. They also multiplied without
+  /// covering anything, since the next attribute a script wants is
+  /// `data-id` and there was never going to be a member for that.
   String? attr(String name) => _elements.firstOrNull?.attributes[name];
 
   /// Attribute [name] across every match, skipping elements without it.
-  List<String> attrs(String name) =>
-      _elements.map((e) => e.attributes[name]).whereType<String>().toList();
+  ///
+  /// Shorter than the match count when some matches do not carry [name], so
+  /// this cannot be zipped against [texts] — [all] is how a row's fields are
+  /// read together.
+  Sequence<String> attrs(String name) => Sequence([
+    for (final element in _elements)
+      if (element.attributes[name] case final value?) value,
+  ]);
 
   /// The value of the first match, as a browser would submit it, or `null`.
   ///
@@ -415,10 +415,10 @@ class Markup {
       _elements.isEmpty ? null : _elementValue(_elements.first);
 
   /// The value of every match that has one, on the same terms as [value].
-  List<String> get values => [
+  Sequence<String> get values => Sequence([
     for (final element in _elements)
       if (_elementValue(element) case final value?) value,
-  ];
+  ]);
 
   static String? _elementValue(Element element) {
     switch (element.localName) {
@@ -479,13 +479,13 @@ class Markup {
   /// Stripping the tags leaves the entities behind, so `&amp;` used to survive
   /// into what is documented as text. They are decoded here the way the parser
   /// would have decoded them.
-  List<String> get lines => [
+  Sequence<String> get lines => Sequence([
     for (final element in _elements)
       ...element.innerHtml
           .split(RegExp(r'<br\s*/?>|\r?\n'))
           .map((s) => _decode(s.replaceAll(RegExp(r'<[^>]*>'), '')).trim())
           .where((s) => s.isNotEmpty),
-  ];
+  ]);
 
   /// [markup] with its HTML entities turned back into characters.
   static String _decode(String markup) {
@@ -522,26 +522,23 @@ class Markup {
   @override
   String toString() =>
       'Markup(count: $count, texts: '
-      '[${texts.take(3).join(', ')}${count > 3 ? '...' : ''}])';
+      '[${texts.head(3).join(', ')}${count > 3 ? '...' : ''}])';
 }
 // ============================================================================
 // EXTENSIONS
 // ============================================================================
 
 /// Query helpers on a single [Element].
+/// Bridges a `package:html` [Element] into this library's cursor.
+///
+/// For the one case that hands you an element rather than a [Markup] —
+/// [Markup.document], or a library that parsed the page itself. `$` and
+/// `$xpath` stood here too through 4.0.0, on the *default* surface, which
+/// contradicted both `lib/html.dart`'s own doc comment and Rule 5's "the one
+/// survivor is an opt-in import". They were also `query` under a second name:
+/// with the callable shorthand gone, [Markup.xpath] answers on any cursor, so
+/// there was nothing an XPath-flavoured one did differently.
 extension QuerySelectorOnElement on Element {
-  /// jQuery selector accessor for this element.
-  Markup get $ => Markup([this]);
-
-  /// XPath selector accessor for this element.
-  Markup get $xpath => Markup([this], true);
-
-  /// First `href` attribute, or `null`.
-  String? get href => attributes['href'];
-
-  /// First `src` attribute, or `null`.
-  String? get src => attributes['src'];
-
   /// This element's value as a browser would submit it, or `null`.
   ///
   /// Reads a `<textarea>`, a `<select>` and a checkbox the way
@@ -556,23 +553,11 @@ extension QuerySelectorOnElement on Element {
 }
 
 /// Query helpers on a parsed [Document].
+/// Bridges a `package:html` [Document] into this library's cursor.
+///
+/// The same story as [QuerySelectorOnElement]: `$` and `$xpath` were here on
+/// the default surface and are gone.
 extension QuerySelectorOnDocument on Document {
-  /// jQuery selector accessor for this document.
-  Markup get $ => Markup(
-    body?.children.toList() ??
-        (documentElement != null ? [documentElement!] : const []),
-    false,
-    this,
-  );
-
-  /// XPath selector accessor for this document.
-  Markup get $xpath => Markup(
-    body?.children.toList() ??
-        (documentElement != null ? [documentElement!] : const []),
-    true,
-    this,
-  );
-
   /// This document's root as a single-match [Markup].
   Markup get query {
     final root = documentElement ?? body;
@@ -637,7 +622,7 @@ sealed class Field<T> {
   /// a field that already works and adjusts its answer:
   ///
   /// ```dart
-  /// final price = Field.text('.price').map(util.text.number);   // Field<num?>
+  /// final stock = Field.text('.stock').map((t) => t ?? 'unknown');
   /// final count = Field.texts('.row').map((rows) => rows.length);
   /// ```
   Field<R> map<R>(R Function(T value) convert) =>

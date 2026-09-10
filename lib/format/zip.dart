@@ -1,4 +1,4 @@
-/// # Zip Tool (`tool.zip.*`)
+/// # Zip Tool (`format.zip.*`)
 ///
 /// Pack a folder, unpack an archive, look inside one without unpacking it, and
 /// squeeze bytes. The format comes from the file name — `.zip`, `.tar`,
@@ -17,7 +17,7 @@ import '../src/proc.dart';
 import '../util/sequence.dart';
 
 // ============================================================================
-// ZIP TOOL (tool.zip.*)
+// ZIP TOOL (format.zip.*)
 // ============================================================================
 
 /// The archive formats [ZipAccessor] reads and writes.
@@ -34,17 +34,36 @@ enum Format {
   /// A bzip2-compressed tar, `.tar.bz2` or `.tbz`.
   bz2;
 
-  /// The format [path]'s name implies, defaulting to [Format.zip].
+  /// The format [path]'s name implies.
   ///
   /// ```dart
   /// Format.of('backup.tar.gz'); // Format.gz
+  /// Format.of('site.zip');      // Format.zip
+  /// Format.of('archive');       // Format.zip — no extension to go on
+  /// Format.of('site.rar');      // throws ArgumentError
   /// ```
+  ///
+  /// A name carrying an extension none of these four covers throws
+  /// [ArgumentError] rather than falling back to [Format.zip]. That fallback
+  /// meant `format.zip.pack('site', 'site.rar')` wrote a zip, named it `.rar`
+  /// and reported success — and on the way back in, read a genuine `.rar` as a
+  /// zip and failed somewhere further down. A name with no extension at all
+  /// has nothing to disagree with and stays [Format.zip].
   static Format of(String path) {
-    final name = path.toLowerCase();
+    final name = p.basename(path).toLowerCase();
     if (name.endsWith('.tar.gz') || name.endsWith('.tgz')) return Format.gz;
     if (name.endsWith('.tar.bz2') || name.endsWith('.tbz')) return Format.bz2;
     if (name.endsWith('.tar')) return Format.tar;
-    return Format.zip;
+    if (name.endsWith('.zip')) return Format.zip;
+    final dot = name.lastIndexOf('.');
+    if (dot <= 0 || dot == name.length - 1) return Format.zip;
+    throw ArgumentError.value(
+      path,
+      'path',
+      "'${name.substring(dot)}' is not an archive this reads or writes; "
+          'pass `format:` explicitly, or use .zip, .tar, .tar.gz/.tgz '
+          'or .tar.bz2/.tbz',
+    );
   }
 }
 
@@ -66,15 +85,15 @@ class Entry {
   String toString() => folder ? '$name/' : '$name ($size bytes)';
 }
 
-/// Entry point for archives, reachable as `tool.zip`.
+/// Entry point for archives, reachable as `format.zip`.
 ///
 /// ```dart
-/// await tool.zip.pack('site', 'site.zip');
-/// (await tool.zip.list('site.zip')).each((e) => print(e.name));
-/// await tool.zip.unpack('site.zip', 'restored');
+/// await format.zip.pack('site', 'site.zip');
+/// (await format.zip.list('site.zip')).each((e) => print(e.name));
+/// await format.zip.unpack('site.zip', 'restored');
 /// ```
 class ZipAccessor {
-  /// Creates the accessor. Prefer the shared `tool.zip` instance.
+  /// Creates the accessor. Prefer the shared `format.zip` instance.
   const ZipAccessor();
 
   /// Packs [source] — a file or a whole folder — into the archive at [dest].
@@ -130,7 +149,7 @@ class ZipAccessor {
   /// For building an archive from data that never touched the disk.
   ///
   /// ```dart
-  /// await tool.zip.bundle('out.zip', {'notes.txt': utf8.encode('hi')});
+  /// await format.zip.bundle('out.zip', {'notes.txt': utf8.encode('hi')});
   /// ```
   Future<File> bundle(
     String dest,
@@ -146,7 +165,8 @@ class ZipAccessor {
 
   /// Unpacks the archive at [source] into the folder [dest].
   ///
-  /// Returns the files written. Entries that would escape [dest] — a `..`
+  /// Returns the files written, as a [Sequence]. An archive that is not there
+  /// writes nothing rather than throwing. Entries that would escape [dest] — a `..`
   /// segment or an absolute path, the "zip slip" attack — are skipped rather
   /// than trusted, since an archive is usually something you downloaded, and
   /// so are symlink entries, which can point anywhere at all.
@@ -155,13 +175,14 @@ class ZipAccessor {
   /// so an archive of shell scripts unpacks with its execute bit intact and a
   /// restored tree keeps the dates it was packed with. Permissions are a no-op
   /// on Windows.
-  Future<List<File>> unpack(
+  Future<Sequence<File>> unpack(
     String source,
     String dest, {
     Format? format,
   }) async {
     final kind = format ?? Format.of(source);
-    final archive = _decode(await File(source).readAsBytes(), kind);
+    final archive = await _open(source, kind);
+    if (archive == null) return const Sequence.empty();
     final root = p.normalize(p.absolute(dest));
     final written = <File>[];
     final executable = <int, List<String>>{};
@@ -193,7 +214,7 @@ class ZipAccessor {
     }
 
     await _permit(executable);
-    return written;
+    return Sequence(written);
   }
 
   /// Applies each set of unix permissions to the paths that carry it.
@@ -256,11 +277,14 @@ class ZipAccessor {
   static const Duration _slack = Duration(days: 1);
 
   /// Lists what the archive at [source] holds, without unpacking it.
+  ///
+  /// An archive that is not there is empty, not a throw — the same answer
+  /// `io.find`, `io.csv.rows` and `format.json.read` give for a missing path.
+  /// Through 4.0.0 this was the one read in the library that raised
+  /// `PathNotFoundException`.
   Future<Sequence<Entry>> list(String source, {Format? format}) async {
-    final archive = _decode(
-      await File(source).readAsBytes(),
-      format ?? Format.of(source),
-    );
+    final archive = await _open(source, format);
+    if (archive == null) return const Sequence.empty();
     return Sequence([
       for (final entry in archive)
         Entry(entry.name, entry.size, folder: !entry.isFile),
@@ -269,13 +293,22 @@ class ZipAccessor {
 
   /// Reads one entry's bytes out of the archive at [source].
   ///
-  /// Returns `null` when [name] is not in the archive.
+  /// Returns `null` when [name] is not in the archive, and when the archive
+  /// itself is not there.
   Future<List<int>?> read(String source, String name, {Format? format}) async {
-    final archive = _decode(
-      await File(source).readAsBytes(),
-      format ?? Format.of(source),
-    );
-    return archive.find(name)?.readBytes();
+    final archive = await _open(source, format);
+    return archive?.find(name)?.readBytes();
+  }
+
+  /// The archive at [source], or `null` when there is no file there.
+  ///
+  /// One read and one decode per call, shared by [list], [read] and [unpack]
+  /// so the three of them agree about a missing file and about which format a
+  /// name implies.
+  static Future<Archive?> _open(String source, Format? format) async {
+    final file = File(source);
+    if (!await file.exists()) return null;
+    return _decode(await file.readAsBytes(), format ?? Format.of(source));
   }
 
   /// Gzip-compresses [bytes].

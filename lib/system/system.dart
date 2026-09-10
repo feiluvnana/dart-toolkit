@@ -2,7 +2,12 @@
 ///
 /// Everything between this program and the machine running it: subprocesses,
 /// environment variables (`system.env`), the terminal (`system.console`) and
-/// crash-safe shutdown.
+/// crash-safe shutdown — which is `system.on`, holding the whole vocabulary
+/// for what happens to your files and child processes when the program is
+/// interrupted: `signals`, `track`, `untrack`, `adopt`, `disown` and `exit`.
+/// Six of those sat flat on `system` through 4.0.0 while `system.on` held only
+/// `exit`, which had the namespace on the single function and the family
+/// beside it — and cost `io` the name `watch`, which it now has back.
 ///
 /// Argument parsing is not here. It reads a `List<String>` and touches nothing,
 /// so it is the `cli` domain.
@@ -46,7 +51,15 @@ class SystemAccessor {
   /// Terminal output and input.
   ConsoleAccessor get console => const ConsoleAccessor();
 
-  /// Shutdown events. See [SysEvents.exit].
+  /// What happens to your resources when the program is interrupted:
+  /// signals, tracked files, adopted processes and exit hooks.
+  ///
+  /// Six of these seven members sat flat on `system` through 4.0.0 —
+  /// `watch`, `unwatch`, `track`, `untrack`, `adopt`, `disown` — while
+  /// `system.on` held one, `exit`. Rule 3 says a sub-namespace is for a
+  /// cohesive vocabulary with its own nouns, and this is that vocabulary: the
+  /// structure was inverted. Moving them in also frees the word `watch`, which
+  /// `io.observe` had to go without.
   SysEvents get on => const SysEvents();
 
   /// Runs [executable] with [arguments] and waits for it to exit.
@@ -80,29 +93,6 @@ class SystemAccessor {
   /// `.bat` extensions are tried for each candidate.
   String? which(String exe, {List<String>? paths}) =>
       Sys.which(exe, paths: paths);
-
-  /// Starts watching for `SIGINT` and `SIGTERM` so tracked resources are
-  /// cleaned up on Ctrl-C and on `kill`.
-  ///
-  /// Writes call this for you. Note that a live watcher keeps the process
-  /// alive, so calling it directly pairs with [unwatch].
-  void watch() => Sys.watch();
-
-  /// Stops watching for signals and releases the subscriptions.
-  void unwatch() => Sys.unwatch();
-
-  /// Registers [file] for deletion if the program is interrupted.
-  void track(File file) => Sys.track(file);
-
-  /// Stops tracking [file].
-  void untrack(File file) => Sys.untrack(file);
-
-  /// Takes responsibility for [process]: it is killed if the program is
-  /// interrupted before [disown] is called.
-  void adopt(Process process) => Sys.adopt(process);
-
-  /// Gives up responsibility for [process], once it has exited.
-  void disown(Process process) => Sys.disown(process);
 
   /// Shuts down in order: kills adopted children, deletes tracked partial
   /// files, runs the [SysEvents.exit] hooks, then exits with [code] when it is
@@ -180,4 +170,33 @@ class SysEvents {
   /// files are deleted. A registered hook keeps the signal watcher — and so
   /// the process — alive until [SystemAccessor.shutdown] runs it.
   void exit(FutureOr<void> Function() callback) => Sys.hook(callback);
+
+  /// Starts watching for `SIGINT` and `SIGTERM` so tracked resources are
+  /// cleaned up on Ctrl-C and on `kill`.
+  ///
+  /// Writes call this for you. Note that a live watcher keeps the process
+  /// alive, so calling it directly pairs with [stop].
+  ///
+  /// Was `system.on.signals()`, which is the name `io` wanted for a filesystem
+  /// watcher and had to settle for `io.observe` instead. `signals` says what
+  /// it listens to; `io.watch` is now the one that watches files.
+  void signals() => Sys.watch();
+
+  /// Stops watching for signals and releases the subscriptions.
+  ///
+  /// Was `system.on.stop()`.
+  void stop() => Sys.unwatch();
+
+  /// Registers [file] for deletion if the program is interrupted.
+  void track(File file) => Sys.track(file);
+
+  /// Stops tracking [file].
+  void untrack(File file) => Sys.untrack(file);
+
+  /// Takes responsibility for [process]: it is killed if the program is
+  /// interrupted before [disown] is called.
+  void adopt(Process process) => Sys.adopt(process);
+
+  /// Gives up responsibility for [process], once it has exited.
+  void disown(Process process) => Sys.disown(process);
 }

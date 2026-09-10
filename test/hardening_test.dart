@@ -119,7 +119,7 @@ Disallow: /
     test('a crawl builder applies retry() to a supplied downloader', () {
       final downloader = MapDownloader<String>(const {});
       net
-          .crawl<String>('https://example.com')
+          .crawl<String>('https://example.com'.url)
           .retry(7)
           .downloader(downloader)
           .engine();
@@ -132,32 +132,38 @@ Disallow: /
       final q = format.html.parse(
         '<ul><li class="a">1</li><li class="b">2</li></ul>',
       );
-      expect(q('li').matching('.a').texts, equals(['1']));
-      expect(q('li').not('.a').texts, equals(['2']));
+      expect(q.find('li').matching('.a').texts.list, equals(['1']));
+      expect(q.find('li').not('.a').texts.list, equals(['2']));
     });
 
     test('combinators are honoured by a single-element match', () {
       final q = format.html.parse(
         '<div class="w"><p>a</p><span>b</span><span>c</span></div>',
       );
-      expect(q('span').matching('p + span').texts, equals(['b']));
-      expect(q('span').matching('.w > span').texts, equals(['b', 'c']));
-      expect(q('span').matching('p ~ span').texts, equals(['b', 'c']));
+      expect(q.find('span').matching('p + span').texts.list, equals(['b']));
+      expect(
+        q.find('span').matching('.w > span').texts.list,
+        equals(['b', 'c']),
+      );
+      expect(
+        q.find('span').matching('p ~ span').texts.list,
+        equals(['b', 'c']),
+      );
     });
 
     test('closest walks ancestors', () {
       final q = format.html.parse(
         '<div class="outer"><div class="inner"><b>x</b></div></div>',
       );
-      expect(q('b').closest('.outer').count, equals(1));
-      expect(q('b').closest('.missing').count, equals(0));
+      expect(q.find('b').closest('.outer').count, equals(1));
+      expect(q.find('b').closest('.missing').count, equals(0));
     });
 
     test('a large child-combinator query stays linear', () {
       final rows = List.generate(2000, (i) => '<li class="i">$i</li>').join();
       final q = format.html.parse('<ul id="l">$rows</ul>');
       final watch = Stopwatch()..start();
-      expect(q('#l > li.i').count, equals(2000));
+      expect(q.find('#l > li.i').count, equals(2000));
       watch.stop();
       // The quadratic form took several hundred milliseconds at this size.
       expect(watch.elapsedMilliseconds, lessThan(500));
@@ -220,7 +226,7 @@ Disallow: /
             calls++;
             throw StateError('nope');
           },
-          times: 2,
+          retries: 1,
           backoff: const Duration(milliseconds: 1),
         ),
         throwsStateError,

@@ -28,8 +28,9 @@ import 'net.dart';
 /// difference between a login that works and one that does not:
 ///
 /// ```dart
-/// final page = await net.http.get('https://example.com/login'.url);
-/// final res = await page.form('#login')!
+/// final login = await net.http.get('https://example.com/login'.url);
+/// final sent = await login.parse(format.html).form('#login')!
+///     .at(login.url)
 ///     .fill({'user': 'me', 'pass': secret})
 ///     .send();
 /// ```
@@ -37,11 +38,12 @@ import 'net.dart';
 /// Inside a crawl, [FormSubmission.submit] schedules it through the engine
 /// instead, so the response reaches a handler like any other page:
 ///
-/// ```dart
+/// ```dart no-compile
 /// await net.crawl<String>(seed)
 ///     .tag('results', (res) { ... })
 ///     .run((res) => res.submit(
-///           res.form('form.search')!..fill({'q': 'widgets'}),
+///           res.parse(format.html).form('form.search')!
+///             ..fill({'q': 'widgets'}),
 ///           tag: 'results',
 ///         ));
 /// ```
@@ -88,7 +90,7 @@ final class Form {
   /// final res = await net.http.get(url);
   /// await res.parse(format.html).form('#login')!
   ///     .at(res.url)
-  ///     .fill({'user': u, 'pass': p})
+  ///     .fill({'user': user, 'pass': pass})
   ///     .send();
   /// ```
   ///
@@ -175,9 +177,9 @@ final class Form {
   ///
   /// ```dart
   /// final session = Fetcher(session: true);
-  /// final page = await session.get(url);
-  /// final home = await page.parse(format.html).form('#login')!
-  ///     .at(page.url)
+  /// final login = await session.get(url);
+  /// final home = await login.parse(format.html).form('#login')!
+  ///     .at(login.url)
   ///     .fill({'user': user, 'pass': pass})
   ///     .send(client: session);
   /// ```
@@ -302,7 +304,7 @@ extension FormSubmission<T> on Page<T> {
   ///
   /// ```dart
   /// final login = res.parse(format.html).form('#login')!;
-  /// res.submit(login.fill({'user': u, 'pass': p}), tag: 'home');
+  /// res.submit(login.fill({'user': user, 'pass': pass}), tag: 'home');
   /// ```
   ///
   /// Throws [StateError] when the response has no engine.

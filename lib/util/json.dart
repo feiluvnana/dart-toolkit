@@ -1,21 +1,21 @@
 /// # JSON Cursors (`Json`)
 ///
 /// A read cursor over a decoded JSON document. The HTML side of this library
-/// hands back a [QueryResult] and nobody casts; this is the same idea for the
+/// hands back a [Markup] and nobody casts; this is the same idea for the
 /// other format a script meets constantly.
 ///
 /// The type lives here, in `util`, because it is a pure value that three
-/// domains hand back — `net` from a response, `tool` from a document, `io`
+/// domains hand back — `net` from a response, `format` from a document, `io`
 /// through neither — the same reason [Slot] and [Meta] live here. The
-/// *codecs* are `tool.json`, beside `tool.yaml` and `tool.toml`, because a
+/// *codecs* are `format.json`, beside `format.yaml` and `format.toml`, because a
 /// format is knowledge from outside Dart.
 ///
 /// Three doors produce the same cursor:
 ///
 /// ```dart
-/// res.at('data.items')            // a response
-/// tool.json.parse(text)           // a string
-/// await tool.json.read('config.json')   // a file
+/// res.parse(format.json).at('data.items');   // a response
+/// format.json.parse(text);                   // a string
+/// await format.json.read('config.json');     // a file
 /// ```
 ///
 /// Navigation comes in two spellings, for the two questions: [Json.at] walks a
@@ -39,7 +39,7 @@ import 'sequence.dart';
 /// caller asked for a value and the honest answer is that there is not one.
 ///
 /// ```dart
-/// final doc = tool.json.parse(body);
+/// final doc = format.json.parse(body);
 ///
 /// doc.text('data.user.name');                   // String?
 /// doc.number('data.total');                     // num?
@@ -58,13 +58,13 @@ final class Json {
   /// of the whole document starts:
   ///
   /// ```dart
-  /// final config = Config.fromJson((await tool.json.read(path)).raw);
+  /// final config = Config.fromJson((await format.json.read(path)).raw);
   /// ```
   final Object? raw;
 
   /// Wraps an already-decoded [raw] value.
   ///
-  /// Reach for `tool.json.parse`, `tool.json.read` or `Reply.at` instead; this
+  /// Reach for `format.json.parse`, `format.json.read` or `Reply.at` instead; this
   /// is for a document that arrived decoded from somewhere else.
   const Json(this.raw);
 
@@ -106,11 +106,11 @@ final class Json {
   /// Every value a JSONPath [expression] selects.
   ///
   /// Where [at] walks one dotted path to one node, this runs a query and hands
-  /// back all of the matches — the JSON side of `QueryResult.xpath`, and named
+  /// back all of the matches — the JSON side of `Markup.xpath`, and named
   /// after its language for the same reason:
   ///
   /// ```dart
-  /// final doc = tool.json.parse(body);
+  /// final doc = format.json.parse(body);
   ///
   /// doc.jsonpath(r'$.store.book[*].author');        // every author
   /// doc.jsonpath(r'$..price').sift((p) => p.number());
@@ -192,10 +192,10 @@ final class Json {
   /// One [R] per element of this node, each built from its own cursor.
   ///
   /// This is how a repeated sub-object comes back typed, and it is the JSON
-  /// half of `QueryResult.all`:
+  /// half of `Markup.all`:
   ///
   /// ```dart
-  /// final items = res.at('data.items').all((item) => (
+  /// final items = res.parse(format.json).at('data.items').all((item) => (
   ///   sku: item.text('sku'),
   ///   price: item.number('price.amount'),
   /// ));

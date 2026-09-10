@@ -79,7 +79,7 @@ void main(List<String> args) async {
 
   final products =
       await net
-          .crawl<Product>('https://shop.test/catalogue')
+          .crawl<Product>('https://shop.test/catalogue'.url)
           .downloader(MapDownloader<Product>(_fixtures))
           .concurrent(size())
           .delay(util.rand.jitter(20.ms))
@@ -108,7 +108,7 @@ void main(List<String> args) async {
     );
   }, size: size());
   bar.done();
-  log.ok('Enriched ${enriched.length} products.');
+  log.ok('Enriched ${enriched.count()} products.');
 
   // ----------------------------------------------------------------- 3. io
   log.step(3, 5, 'Writing output...');
@@ -117,16 +117,13 @@ void main(List<String> args) async {
   if (!force() && io.has(summary)) {
     log.warn('$summary exists; pass --force to overwrite.');
   } else {
-    io.write(
-      summary,
-      [for (final e in enriched) '${e.slug} ${e.key}'].join('\n'),
-    );
+    io.write(summary, enriched.to((e) => '${e.slug} ${e.key}').join('\n'));
     io.dump(io.join(dir, 'products.json'), [
-      for (final e in enriched)
+      for (final e in enriched.list)
         {'name': e.product.name, 'price': e.product.price, 'slug': e.slug},
     ]);
     await io.csv.write(io.join(dir, 'products.csv'), [
-      for (final e in enriched)
+      for (final e in enriched.list)
         {'name': e.product.name, 'price': e.product.price, 'slug': e.slug},
     ]);
     log.ok('Wrote 3 files to $dir/.');
@@ -167,7 +164,7 @@ void main(List<String> args) async {
       headers: ['Product', 'Price', 'Slug'],
       alignments: [ColumnAlign.left, ColumnAlign.right, ColumnAlign.left],
     )..addAll([
-      for (final e in enriched.take(5))
+      for (final e in enriched.head(5).list)
         [e.product.name, '\$${e.product.price}', e.slug],
     ]),
   );
@@ -189,9 +186,9 @@ void main(List<String> args) async {
 /// The listing: queue every product, then follow pagination. `meta` survives
 /// the round trip, so the detail handler knows the price the listing showed.
 void _catalogue(Page<Product> res) {
-  for (final card in res.parse(format.html)('.product').elements.list) {
+  for (final card in res.parse(format.html).find('.product').elements.list) {
     res.follow(
-      card.query.find('a').href ?? '',
+      card.query.find('a').attr('href') ?? '',
       tag: 'product',
       meta: [
         if (util.text.number(card.query.find('.price').text) case final p?)
@@ -200,7 +197,7 @@ void _catalogue(Page<Product> res) {
     );
   }
 
-  final next = res.parse(format.html)('a.next').href;
+  final next = res.parse(format.html).find('a.next').attr('href');
   if (next != null) res.follow(next);
 }
 

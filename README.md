@@ -14,7 +14,7 @@ Five of them are **axes** — a way of touching the machine:
 | :--- | :--- | :--- |
 | **`io.*`** | `io.csv.*`, `io.store.*`, `io.async.*` | Atomic file writes, paths, CSV tables, JSON key-value store, watching, locking |
 | **`net.*`** | `net.http.*`, `net.crawl`, `net.serve` | HTTP requests, streaming downloads, the crawler engine, a server that listens — it fetches bytes and parses none of them |
-| **`system.*`** | `system.env.*`, `system.console.*`, `system.on.*` | Subprocesses, environment, terminal IO, shutdown, `system.os` |
+| **`system.*`** | `system.env.*`, `system.console.*`, `system.on.*` | Subprocesses, environment, terminal IO, `system.os` — and `system.on.*`, which is what happens to your files and child processes when the program is interrupted |
 | **`concurrent.*`** | `concurrent.run(...)`, `concurrent.rate(...)` | Bounded async task pools, and rate limiting |
 | **`util.*`** | `util.time.*`, `util.size.*`, `util.text.*`, `util.hash.*`, `util.rand.*` | Pure helpers: delays, byte sizes, text, digests, randomness — plus `Sequence`, and the `Json` and `Markup` document cursors |
 
@@ -30,8 +30,9 @@ Two are **subjects** — knowledge that came from outside Dart:
 the disk or the operating system. Anything that reads or writes files is `io`;
 anything that talks to the OS or the user is `system`. Argument parsing is
 `cli` and not `system.cli`, because reading a `List<String>` touches nothing at
-all. `git` and `zip` share `format` rather than taking a name each, because a top
-level that grows a name per wrapped binary is not a top level.
+all. `zip`, `json`, `yaml`, `toml` and `html` share `format` rather than taking a
+name each, because a top level that grows a name per file format is not a top
+level.
 
 [NAMESPACE.md](NAMESPACE.md) is the full rule set: which domain something
 belongs to, when it earns a top-level name, and how to name it.
@@ -45,7 +46,7 @@ belongs to, when it earns a top-level name, and how to name it.
 3. **Real types at every boundary.** URLs are `Uri`, delays are `Duration`, paths are `String`, bodies and hash algorithms are sealed types and enums. No `Object` or `dynamic` parameters, so the analyzer catches mistakes at the call site.
 4. **Atomic by default.** Every write stages through a `.part` file and is renamed into place only after a successful flush. Interrupted runs never leave truncated files, and Ctrl-C cleans up.
 5. **Engine-driven pipelines.** Multi-stage crawlers use declarative URL routing, tag-based stages, and automatic relative-URL resolution.
-6. **One vocabulary for sequences.** Everything this library hands back for you to *shape* is a [`Sequence`](docs/util.md#sequence) — `group`, `chunks`, `sum`, `best`, `tally`, `sift` — and it is deliberately not an `Iterable`, so Dart's names and these are never both in scope at one call site. `.list` is the one word at the boundary; `.seq` brings an outside collection in.
+6. **One vocabulary for sequences.** Everything this library hands back for you to *shape* is a [`Sequence`](docs/util.md#sequence) — `group`, `chunks`, `sum`, `best`, `tally`, `sift` — and it is deliberately not an `Iterable`, so Dart's names and these are never both in scope at one call site. `.list` is the one word at the boundary; `.seq` brings an outside collection in. Through 4.0.0 that claim was only half true: 53 public members handed back a `List`, `Map` or `Set` against 30 that handed back a `Sequence`, and `page.find('a').elements` and `page.find('a').texts` were the same cursor one call apart in two vocabularies. 5.0.0 converted them.
 
 ---
 
@@ -97,12 +98,12 @@ void main(List<String> args) async {
 
   // 2. Crawl and collect
   log.step(1, 3, 'Crawling headlines...');
-  final titles = await net.crawl<String>('https://news.ycombinator.com')
+  final titles = await net.crawl<String>('https://news.ycombinator.com'.url)
       .concurrent(size())
       .delay(250.ms)
       .limit(50)
       .collect((res) {
-        for (final title in res.parse(format.html)('.titleline > a').texts) {
+        for (final title in res.parse(format.html).find('.titleline > a').texts.list) {
           res.emit(title);
         }
       });
@@ -123,7 +124,7 @@ void main(List<String> args) async {
   system.console.writer.table(
     Table(headers: ['Metric', 'Value'])..addAll([
       ['Crawled', titles.count()],
-      ['Processed', processed.length],
+      ['Processed', processed.count()],
       ['Elapsed', util.time.format(clock.elapsed)],
     ]),
   );
@@ -137,6 +138,16 @@ void main(List<String> args) async {
 ```
 
 This script exits on its own when it finishes — no manual cleanup call is needed.
+
+**Coming from 4.x?** 5.0.0 fixed nine functions that returned a plausible wrong
+answer — `util.text.fold` mapped 14 of 71 accented letters to the wrong letter,
+`util.size` labelled 1024-based units `MB`, `:nth-child(2)` matched nothing —
+and deleted the names that were a second spelling of another name: `page(sel)`
+(use `find` or `xpath`), `Markup.href`/`src`, `Mutex`, `concurrent.compute`,
+`cli.rest`, `cli.subcommand`, `Sequence.union`, and `retry`'s `times:`.
+`io.observe` is `io.watch`, signal handling moved to `system.on.*`, and
+`Sequence` is a snapshot rather than a lazy view. The full list, with before and
+after for every one, is in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -190,7 +201,11 @@ await io.async.download(url, 'out/file.zip');
 A crawl reaches a spreadsheet without passing through memory:
 
 ```dart
-await io.csv.pipe('products.csv', crawl.stream(handler), headers: ['name', 'price']);
+await io.csv.pipe(
+  'products.csv',
+  net.crawl<Map<String, Object?>>(seed).stream(),
+  headers: ['name', 'price'],
+);
 ```
 
 See [docs/io.md](docs/io.md), [docs/csv.md](docs/csv.md), [docs/store.md](docs/store.md).
@@ -204,7 +219,7 @@ final res = await net.http.get('https://example.com'.url);
 // format, which is what lets one crawl handle more than one.
 final page = res.parse(format.html);
 page.find('h1').text;                    // text of first h1
-page.find('a').hrefs;                    // all hrefs
+page.find('a').attrs('href');                    // all hrefs
 
 res.parse(format.json).at('data.total').number();   // the other format
 
@@ -213,11 +228,11 @@ final item = (
   title: page.find('h1.title').text,
   price: page.pick(Field.text('.price').when(util.text.number)),
   variants: page.all('.variant', (row) => (
-    name: row('.name').text,
+    name: row.find('.name').text,
     sku: row.attr('data-sku'),
   )),
 );
-item.variants.first.sku;   // String?, no cast
+item.variants.first?.sku;   // String?, no cast
 
 // The string shorthand, for a first look at an unfamiliar page:
 final loose = page.extract({'title': 'h1.title', 'links': ['a.link@href']});
@@ -236,17 +251,17 @@ Retries cover transport errors, 5xx and 429, honouring `Retry-After`. See [docs/
 ```dart
 const name = Slot<String>('name');
 
-await net.crawl<String>('https://music.example.com/album')
+await net.crawl<String>('https://music.example.com/album'.url)
     .concurrent(4)
     .limit(50)
     .depth(2)
     .tag('song', (res) {
-      print('${res.meta.get(name)} -> ${res.parse(format.html)('a').href}');
+      print('${res.meta.get(name)} -> ${res.parse(format.html).find('a').attr('href')}');
     })
     .run((res) {
-      for (final a in res.parse(format.html)('#songlist a')) {
+      for (final a in res.parse(format.html).find('#songlist a').elements.list) {
         res.follow(
-          a.href!,
+          a.attr('href')!,
           tag: 'song',
           meta: [name(a.text)],
         );
@@ -298,6 +313,8 @@ answer reaches a tagged handler like any other page. See
 ### `format.html` — selectors
 
 ```dart
+// setup: const markup = '<ul><li class="track" data-id="1">'
+// setup:     '<a href="/t/1">Track One</a></li></ul>';
 format.html.parse(markup).find('.track a').texts;
 res.parse(format.html).find('.title').at(0).text;
 
@@ -316,6 +333,7 @@ if (res.ok) print(res.out);
 
 system.which('ffmpeg');
 system.env.get('PORT', 8080);
+system.on.exit(() async => db.save());    // and track, adopt, signals
 await system.shutdown();
 ```
 
@@ -326,9 +344,10 @@ See [docs/system.md](docs/system.md), [docs/env.md](docs/env.md).
 ```dart
 final force = cli.flag('force', alias: 'f');
 final size = cli.number('concurrency', def: 4);
+final out = cli.option('out', alias: 'o', def: 'dist');
 cli.parse(args);
 
-if (force()) rebuild(concurrency: size());
+if (force()) rebuild(out(), size());
 ```
 
 Declaring returns the handle that reads it, so the type and the default live in
@@ -404,8 +423,9 @@ See [docs/zip.md](docs/zip.md).
 Nothing here touches the disk or the OS; that is what keeps it small.
 
 ```dart
+// setup: final clock = util.time.clock();
 util.time.format(clock.elapsed);      // '02:15'
-util.size.format(5242880);            // '5.0 MB'
+util.size.format(5242880);            // '5.0 MiB'
 util.text.slug('Hello, World!');      // 'hello-world'
 util.text.number(r'$1,234.50');       // 1234.5
 util.hash.short(url);                 // an 8-character cache key
@@ -421,9 +441,9 @@ See [docs/util.md](docs/util.md).
 Hand the crawl a `MapDownloader` of fixtures instead of reaching the network:
 
 ```dart
-final titles = await net.crawl<String>('https://site.test')
+final titles = await net.crawl<String>('https://site.test'.url)
     .downloader(MapDownloader({'https://site.test': '<h1>Hi</h1>'}))
-    .collect((res) => res.emit(res.parse(format.html)('h1').text));
+    .collect((res) => res.emit(res.parse(format.html).find('h1').text));
 ```
 
 To swap the shared HTTP client process-wide, hand `net.use` your own:

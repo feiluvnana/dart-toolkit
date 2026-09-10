@@ -46,7 +46,7 @@ void main() {
         (n) => limit.guard(() async => n * 2),
         size: 3,
       );
-      expect(results, equals([0, 2, 4, 6, 8, 10, 12, 14]));
+      expect(results.list, equals([0, 2, 4, 6, 8, 10, 12, 14]));
       limit.close();
     });
 
@@ -147,13 +147,13 @@ void main() {
     });
   });
 
-  group('io.observe', () {
+  group('io.watch', () {
     test('reports a change, coalescing the burst of a save', () async {
       final dir = io.temp('dt_watch_');
       final seen = <String>[];
       Future<void> Function()? stop;
       try {
-        stop = io.observe(
+        stop = io.watch(
           dir.path,
           seen.add,
           pattern: RegExp(r'\.txt$'),
@@ -186,7 +186,7 @@ void main() {
       final dir = io.temp('dt_watch_stop_');
       final seen = <String>[];
       try {
-        final stop = io.observe(dir.path, seen.add, settle: Duration.zero);
+        final stop = io.watch(dir.path, seen.add, settle: Duration.zero);
         await stop();
         await stop();
         io.write(io.join(dir.path, 'after.txt'), 'x');
@@ -198,7 +198,7 @@ void main() {
     });
 
     test('watching a path that does not exist is not an error', () async {
-      final stop = io.observe(
+      final stop = io.watch(
         io.join(dart_io.Directory.systemTemp.path, 'dt_absent_dir'),
         (_) {},
       );

@@ -104,6 +104,6 @@ Future<int> _clean(Cli cli) async {
       return 0;
     }
   }
-  log.ok('Removed ${await io.async.delete(dest(), recursive: true)} files.');
+  log.ok('Removed ${await io.async.sweep(dest(), recursive: true)} files.');
   return 0;
 }

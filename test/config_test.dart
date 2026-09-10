@@ -132,12 +132,12 @@ void main() {
       expect(text, contains('name: widget'));
       expect(
         text,
-        contains("version: '1.0'"),
+        contains('version: "1.0"'),
         reason: 'would read as a number',
       );
       expect(
         text,
-        contains("'on': 'yes'"),
+        contains('"on": "yes"'),
         reason: 'both halves would read as booleans unquoted',
       );
       expect(text, contains("blank: ''"));
@@ -197,7 +197,15 @@ void main() {
         'package': {'name': 'widget', 'version': '1.0.0'},
       });
       expect(format.toml.parse(text).text('package.name'), equals('widget'));
-      expect(format.toml.format(['not', 'a', 'map']), isEmpty);
+      // A non-map used to come back as an empty string, so
+      // `io.write(path, format.toml.format(rows))` wrote a blank file and
+      // reported success. Reading gives the empty cursor; writing throws.
+      expect(
+        () => format.toml.format(['not', 'a', 'map']),
+        throwsArgumentError,
+      );
+      expect(() => format.toml.format('scalar'), throwsArgumentError);
+      expect(() => format.toml.format(null), throwsArgumentError);
     });
 
     test('read is the file door, and a missing file is empty', () async {

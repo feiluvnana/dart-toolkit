@@ -111,7 +111,7 @@ A cell may hold newlines, and `width` caps the rendered width — the widest col
 
 ```dart
 final table = Table(headers: ['URL', 'Error'], width: system.console.writer.width)
-  ..add([longUrl, 'Connection reset\nRetried 3 times']);
+  ..add(['$url', 'Connection reset\nRetried 3 times']);
 ```
 
 Wrapping measures terminal columns rather than code units, so a wrapped cell of CJK or emoji still fits the column it was cut for. `Ansi.wrap(text, width)` does the same job on its own.
@@ -121,10 +121,10 @@ Wrapping measures terminal columns rather than code units, so a wrapped cell of 
 ## 3. Progress Bars
 
 ```dart
-final bar = Progress(total: files.length, message: 'Downloading');
-for (final f in files) {
-  await fetch(f);
-  bar.tick(1, f.name);
+final bar = Progress(total: files.count(), message: 'Downloading');
+for (final f in files.list) {
+  await io.async.read(f.path);
+  bar.tick(1, f.path);
 }
 bar.done('Complete');
 ```
@@ -138,7 +138,7 @@ bar.current;
 Set `unit: ProgressUnit.bytes` to render byte totals and a transfer rate:
 
 ```dart
-final bar = Progress(total: contentLength, unit: ProgressUnit.bytes);
+final bar = Progress(total: 1024, unit: ProgressUnit.bytes);
 await net.http.download(url, dest, onProgress: (got, total) => bar.update(got));
 bar.done();
 ```
@@ -173,8 +173,8 @@ final env = await system.console.reader.pick(
 
 final targets = await system.console.reader.picks(
   'Platforms',
-  options: platforms,
-  label: (p) => p.displayName,
+  options: const ['macos', 'linux', 'windows'],
+  label: (p) => p.toUpperCase(),
 );
 ```
 
@@ -235,8 +235,9 @@ Advanced palette and truecolor:
 ```
 
 ```dart
-Ansi.strip(styled);           // remove every escape sequence
-Ansi.width(styled);   // length ignoring escapes
+// setup: final styled = Ansi.red + 'red' + Ansi.reset;
+Ansi.strip(styled);       // remove every escape sequence
+Ansi.width(styled);       // width in terminal columns, escapes ignored
 styled.plain;             // extension forms
 styled.width;
 ```

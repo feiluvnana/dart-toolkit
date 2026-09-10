@@ -12,10 +12,10 @@ import '../util/json.dart';
 import 'format.dart';
 
 // ============================================================================
-// TOML (tool.toml.*)
+// TOML (format.toml.*)
 // ============================================================================
 
-/// Entry point for TOML, reachable as `tool.toml`.
+/// Entry point for TOML, reachable as `format.toml`.
 ///
 /// ```dart
 /// final cargo = await format.toml.read('Cargo.toml');
@@ -43,14 +43,28 @@ class TomlAccessor with FileCodec<Json> implements Codec<Json> {
   /// Renders [value] as TOML text.
   ///
   /// [value] has to be a map — TOML has no way to write a bare list or scalar
-  /// as a whole document — and anything TOML cannot carry gives an empty
-  /// string rather than throwing.
+  /// as a whole document — and throws [ArgumentError] naming what it was
+  /// handed when it cannot carry it.
+  ///
+  /// Through 4.0.0 both cases returned an empty string, so
+  /// `io.write(path, format.toml.format(rows))` wrote an empty file and
+  /// reported success. Reading never throws and gives the empty cursor;
+  /// writing never returns text that is wrong or absent. A caller can check
+  /// for a throw and cannot check for a file that is silently blank.
   String format(Object? value) {
-    if (value is! Map) return '';
+    if (value is! Map) {
+      throw ArgumentError.value(
+        value,
+        'value',
+        'TOML has no representation for a bare '
+            '${value == null ? 'null' : value.runtimeType} document; '
+            'a whole TOML document is a map',
+      );
+    }
     try {
       return toml.TomlDocument.fromMap(value).toString();
-    } on Exception {
-      return '';
+    } on Exception catch (error) {
+      throw ArgumentError.value(value, 'value', 'not writable as TOML: $error');
     }
   }
 }

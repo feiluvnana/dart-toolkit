@@ -16,6 +16,7 @@ library;
 /// hands one back, and neither site casts.
 ///
 /// ```dart
+/// // setup: final page = res;
 /// const name  = Slot<String>('name');
 /// const track = Slot<int>('track');
 ///
@@ -65,6 +66,8 @@ final class Slot<T> {
   /// is checked against [T]:
   ///
   /// ```dart
+  /// // setup: final page = res;
+  /// // setup: const name = Slot<String>('name');
   /// page.follow(href, meta: [name('Hey Jude'), track(4)]);
   /// ```
   MapEntry<String, Object?> call(T value) => MapEntry(name, write(value));
@@ -106,9 +109,10 @@ final class Slot<T> {
 /// anybody casting it back.
 ///
 /// ```dart
+/// // setup: final page = res;
 /// const name = Slot<String>('name');
 ///
-/// page.follow(href, tag: 'song', meta: [name(a.text)]);
+/// page.follow(href, tag: 'song', meta: [name(page.parse(format.html).text)]);
 /// // later, in the 'song' handler:
 /// final String? title = page.meta.get(name);
 /// ```
@@ -122,6 +126,7 @@ final class Meta {
   /// Creates a bag holding [entries].
   ///
   /// ```dart
+  /// // setup: const name = Slot<String>('name');
   /// Meta([name('Hey Jude'), track(4)]);
   /// ```
   Meta([Iterable<MapEntry<String, Object?>> entries = const []])
@@ -145,7 +150,8 @@ final class Meta {
   /// Every entry, for forwarding one bag into another.
   ///
   /// ```dart
-  /// page.follow(href, meta: [...page.meta.entries, disc(2)]);
+  /// // setup: final page = res;
+  /// page.follow(href, meta: [...page.meta.entries, track(2)]);
   /// ```
   Iterable<MapEntry<String, Object?>> get entries => raw.entries;
 

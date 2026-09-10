@@ -16,8 +16,10 @@
 /// `--help` and pick the handler:
 ///
 /// ```dart
+/// Future<int> build(Cli cli) async => 0;
+///
 /// void main(List<String> args) async {
-///   cli.handle('build', _build, desc: 'Build the project')
+///   cli.handle('build', build, desc: 'Build the project')
 ///     ..option('out', alias: 'o', def: 'dist', desc: 'Output directory');
 ///   await system.shutdown(await cli.run(args));
 /// }
@@ -28,6 +30,7 @@ import 'dart:async';
 import 'dart:io';
 
 import '../src/shared.dart';
+import '../system/console/ansi.dart';
 import '../system/console/writer.dart';
 import '../util/time.dart';
 
@@ -55,7 +58,7 @@ final CliAccessor cli = CliAccessor();
 ///
 /// cli.parse(args);
 ///
-/// if (force()) rebuild(out(), concurrency: size());
+/// if (force()) rebuild(out(), size());
 /// ```
 ///
 /// Calling the option reads it. Sources resolve in the usual order — the
@@ -183,7 +186,7 @@ mixin _Spec {
   ///
   /// ```dart
   /// final force = cli.flag('force', alias: 'f');
-  /// if (force()) ...
+  /// if (force()) rebuild();
   /// ```
   Opt<bool> flag(
     String name, {
@@ -299,7 +302,7 @@ mixin _Spec {
   ///
   /// ```dart
   /// final tags = cli.list('tag', csv: true);
-  /// for (final tag in tags()) ...
+  /// for (final tag in tags()) print(tag);
   /// ```
   Opt<List<String>> list(
     String name, {
@@ -337,7 +340,7 @@ mixin _Spec {
   ///
   /// ```dart
   /// final level = cli.choice('level', LogLevel.values, def: LogLevel.info);
-  /// logger.level = level();
+  /// system.console.logger.level = level();
   /// ```
   Opt<E> choice<E extends Enum>(
     String name,
@@ -415,7 +418,7 @@ mixin _Spec {
   ///
   /// ```dart
   /// final since = cli.date('since');
-  /// rows.keep((r) => since() == null || r.at.isAfter(since()!));
+  /// rows.keep((r) => since() == null || r.seen.isAfter(since()!));
   /// ```
   Opt<DateTime?> date(
     String name, {
@@ -469,8 +472,8 @@ mixin _Spec {
   /// its own flags and options can be declared on the spot.
   ///
   /// ```dart
-  /// final build = cli.handle('build', _build, desc: 'Build the project');
-  /// final out = build.option('out', alias: 'o', def: 'dist');
+  /// final cmd = cli.handle('build', build, desc: 'Build the project');
+  /// final out = cmd.option('out', alias: 'o', def: 'dist');
   /// ```
   ///
   /// The handler's return value is the exit code — see [Cli.run].
@@ -486,8 +489,8 @@ mixin _Spec {
   ///
   /// ```dart
   /// final remote = cli.group('remote', desc: 'Manage remotes');
-  /// remote.handle('add', _add, desc: 'Add a remote');
-  /// remote.handle('rm', _remove, desc: 'Remove a remote');
+  /// remote.handle('add', build, desc: 'Add a remote');
+  /// remote.handle('rm', build, desc: 'Remove a remote');
   /// ```
   Command group(String name, {String desc = ''}) => _register(name, desc, null);
 
@@ -514,9 +517,11 @@ mixin _Spec {
 ///
 /// ```dart
 /// void main(List<String> args) {
+///   final force = cli.flag('force', alias: 'f');
+///   final size = cli.number('concurrency', def: 4);
 ///   cli.parse(args);
-///   final force = cli.has('force', 'f');
-///   final size = cli.get('concurrency', 4);
+///
+///   if (force()) print('forcing, ${size()} at a time');
 /// }
 /// ```
 class CliAccessor with _Spec {
@@ -580,14 +585,7 @@ class CliAccessor with _Spec {
   /// First positional argument as a subcommand name, or `null`.
   String? get command => _parsed.command;
 
-  /// Positional arguments following the subcommand.
-  List<String> get rest => _parsed.rest;
-
-  /// Dispatches execution to [handler] if [command] equals [name].
-  bool subcommand(String name, void Function(Cli cli) handler) =>
-      _parsed.subcommand(name, handler);
-
-  /// Positional arguments, in order.
+  /// Positional arguments, in order. See [Cli.args].
   List<String> get args => _parsed.args;
 
   /// The raw argument list as parsed.
@@ -1010,26 +1008,18 @@ class Cli with _Spec {
   /// First positional argument as a subcommand name, or `null`.
   String? get command => _rest.firstOrNull;
 
-  /// Positional arguments following the subcommand.
-  List<String> get rest =>
-      _rest.length > 1 ? List.unmodifiable(_rest.sublist(1)) : const [];
-
-  /// Dispatches execution to [handler] if [command] equals [name].
-  ///
-  /// The primitive behind [run], for scripts that would rather branch by hand.
-  /// [run] adds nesting, per-command options, `--help` and exit codes.
-  bool subcommand(String name, void Function(Cli cli) handler) {
-    if (command == name) {
-      handler(this);
-      return true;
-    }
-    return false;
-  }
-
   /// Positional arguments, in order.
   ///
   /// Named `args` and not `list`, because [Cli.list] declares a repeated
   /// option and one name cannot mean both.
+  ///
+  /// Inside a handler [run] dispatched to, the command names have already
+  /// been taken off, so this is the arguments *to that command* — which is
+  /// what a `rest` would have meant and is why there is no longer one. `rest`
+  /// stood beside this through 4.0.0 as `args` minus its first element, with
+  /// nothing in either name saying which was which; it existed to serve
+  /// `subcommand`, and that went with it. See [command] for reading the first
+  /// positional as a name.
   List<String> get args => List.unmodifiable(_rest);
 
   // --------------------------------------------------------------------------
@@ -1055,8 +1045,10 @@ class Cli with _Spec {
   /// still reaches the caller with its stack trace intact.
   ///
   /// ```dart
+  /// Future<int> build(Cli cli) async => 0;
+  ///
   /// void main(List<String> args) async {
-  ///   cli.handle('build', _build, desc: 'Build the project');
+  ///   cli.handle('build', build, desc: 'Build the project');
   ///   await system.shutdown(await cli.run(args, version: '1.1.0'));
   /// }
   /// ```
@@ -1258,7 +1250,7 @@ class Cli with _Spec {
 /// ones when the command runs.
 ///
 /// ```dart
-/// cli.handle('build', _build, desc: 'Build the project')
+/// cli.handle('build', build, desc: 'Build the project')
 ///   ..option('out', alias: 'o', def: 'dist', desc: 'Output directory')
 ///   ..flag('release', desc: 'Optimise the output');
 /// ```
@@ -1342,7 +1334,7 @@ String _usage({
       labels.isEmpty
           ? 24
           : labels
-              .map((l) => l.length)
+              .map(Ansi.width)
               .reduce((a, b) => a > b ? a : b)
               .clamp(12, 34);
 
@@ -1365,20 +1357,30 @@ String _usage({
   return buffer.toString().trimRight();
 }
 
-/// Splits [text] into lines of at most [width] characters, breaking on spaces.
+/// Splits [text] into lines of at most [width] columns, breaking on spaces.
+///
+/// Measured with [Ansi.width] rather than by code units, the way every other
+/// box this library draws is: a CJK ideograph is one code unit and two
+/// columns, an emoji is two code units and two columns, and a `desc:` holding
+/// either wrapped past the edge of the terminal it was being wrapped for.
 List<String> _wrap(String text, int width) {
   if (text.isEmpty) return const [''];
   if (width < 8) return [text];
   final lines = <String>[];
   var line = '';
+  var columns = 0;
   for (final word in text.split(' ')) {
+    final wordWidth = Ansi.width(word);
     if (line.isEmpty) {
       line = word;
-    } else if (line.length + 1 + word.length <= width) {
+      columns = wordWidth;
+    } else if (columns + 1 + wordWidth <= width) {
       line = '$line $word';
+      columns += 1 + wordWidth;
     } else {
       lines.add(line);
       line = word;
+      columns = wordWidth;
     }
   }
   if (line.isNotEmpty) lines.add(line);

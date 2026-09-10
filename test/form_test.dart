@@ -217,9 +217,9 @@ void main() {
           .fill({'user': 'me'})
           .send(client: session);
 
-      expect(home.parse(format.html)('h1').text, 'me in with tok-123');
+      expect(home.parse(format.html).find('h1').text, 'me in with tok-123');
       // The cookie the login page set came back with the submission.
-      expect(home.parse(format.html)('p').text, contains('sid=session-1'));
+      expect(home.parse(format.html).find('p').text, contains('sid=session-1'));
       expect(seen.last, startsWith('POST /session'));
     });
 
@@ -227,8 +227,11 @@ void main() {
       final landed = <String>[];
 
       final stats = await net
-          .crawl<String>('$base/login')
-          .tag('home', (res) => landed.add(res.parse(format.html)('h1').text))
+          .crawl<String>('$base/login'.url)
+          .tag(
+            'home',
+            (res) => landed.add(res.parse(format.html).find('h1').text),
+          )
           .run(
             (res) => res.submit(
               res.form('#login')!..fill({'user': 'crawler'}),
@@ -246,7 +249,7 @@ void main() {
       final searches = <String>[];
 
       await net
-          .crawl<String>('$base/login')
+          .crawl<String>('$base/login'.url)
           .tag('result', (res) => searches.add(res.fetch.url.toString()))
           .run((res) {
             final form = res.form('#login')!;

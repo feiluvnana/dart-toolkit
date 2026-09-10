@@ -218,7 +218,7 @@ class Deduplicator {
 /// final lost = <Failure<String>>[];
 /// await net.crawl<String>(seed).on.error(lost.add).run(handler);
 /// for (final failure in lost) {
-///   system.console.logger.warn('${failure.request.url}: ${failure.error}');
+///   system.console.logger.warn('${failure.fetch?.url}: ${failure.error}');
 /// }
 /// ```
 ///
@@ -253,7 +253,9 @@ class Failure<T> {
 /// final saved = engine.snapshot();
 /// await io.async.dump('crawl.state', saved);
 /// // ... later, in another process ...
-/// final restored = Snapshot<String>.fromJson(await io.async.json('crawl.state'));
+/// final restored = Snapshot<String>.fromJson(
+///   (await format.json.read('crawl.state')).raw! as Map<String, Object?>,
+/// );
 /// engine.restore(restored);
 /// ```
 class Snapshot<T> {

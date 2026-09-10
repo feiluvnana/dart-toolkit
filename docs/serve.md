@@ -39,7 +39,7 @@ void main() async {
 
 ## 1. `net.serve`
 
-```dart
+```dart no-compile
 Future<Server> serve(int port, FutureOr<Served> Function(Asked req) handler,
     {String host = 'localhost'});
 ```
@@ -115,7 +115,7 @@ Served.json({'ok': true});
 Served.bytes(await io.async.bytes('logo.png'), type: 'image/png');
 Served.file('output/report.html');       // content type from the extension
 Served.status(404);                      // the standard reason phrase as the body
-Served.redirect('/done');                // 302; pass status: 301 for permanent
+Served.redirect('/done'.url);                // 302; pass status: 301 for permanent
 ```
 
 Every one takes `status` and extra `headers`. `Served.file` streams the file and

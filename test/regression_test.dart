@@ -22,15 +22,18 @@ void main() {
     // scope beside this library's, and nothing else would notice. This is the
     // property the whole stage rests on.
     test('a Sequence is deliberately not an Iterable', () {
-      expect(const Sequence<int>([]), isNot(isA<Iterable<int>>()));
+      expect(const Sequence<int>.empty(), isNot(isA<Iterable<int>>()));
       expect([1, 2].seq, isNot(isA<Iterable<Object?>>()));
     });
 
     test('a Markup holds one rather than being one', () {
       final page = $('<p>a</p><p>b</p>');
       expect(page, isNot(isA<Iterable<Object?>>()));
-      expect(page('p').count, equals(2));
-      expect(page('p').elements.to((e) => e.text).list, equals(['a', 'b']));
+      expect(page.find('p').count, equals(2));
+      expect(
+        page.find('p').elements.to((e) => e.text).list,
+        equals(['a', 'b']),
+      );
     });
 
     test('the flipped signatures stayed flipped', () {
@@ -42,7 +45,7 @@ void main() {
     });
 
     test('every reader that can come up empty says so in its type', () {
-      final empty = const Sequence<int>([]);
+      final empty = const Sequence<int>.empty();
       expect(empty.first, isNull);
       expect(empty.last, isNull);
       expect(empty.sole, isNull);
@@ -310,7 +313,7 @@ Disallow: /x
       });
 
       final stats = await net
-          .crawl<String>('http://127.0.0.1:${server.port}/')
+          .crawl<String>('http://127.0.0.1:${server.port}/'.url)
           .retry(3)
           .run((res) {});
 
@@ -327,7 +330,7 @@ Disallow: /x
       final dest = io.join(dir.path, 'nested', 'items.txt');
 
       await net
-          .crawl<String>('https://site.test/')
+          .crawl<String>('https://site.test/'.url)
           .downloader(MapDownloader<String>({'/': '<h1>hi</h1>'}))
           .save(dest, (res) => res.emit('one'));
 
@@ -344,7 +347,7 @@ Disallow: /x
 
       final slow = _SlowDownloader<String>(const Duration(milliseconds: 200));
       final run = net
-          .crawl<String>('https://site.test/')
+          .crawl<String>('https://site.test/'.url)
           .downloader(slow)
           .save(dest, (res) => res.emit('one'));
 
@@ -419,22 +422,22 @@ Disallow: /x
     });
 
     test('a trailing newline does not add an empty row', () {
-      expect(io.csv.parse('a,b\n'), [
+      expect(io.csv.parse('a,b\n').list, [
         ['a', 'b'],
       ]);
-      expect(io.csv.parse('a,b\n\n'), [
+      expect(io.csv.parse('a,b\n\n').list, [
         ['a', 'b'],
       ]);
     });
 
     test('a multi-character delimiter splits', () {
-      expect(io.csv.parse('a||b||c', delimiter: '||'), [
+      expect(io.csv.parse('a||b||c', delimiter: '||').list, [
         ['a', 'b', 'c'],
       ]);
     });
 
     test('quoted fields still survive', () {
-      expect(io.csv.parse('"a,b",c'), [
+      expect(io.csv.parse('"a,b",c').list, [
         ['a,b', 'c'],
       ]);
     });
@@ -489,15 +492,28 @@ Disallow: /x
 
   group('util.size', () {
     test('rounding does not overflow the unit', () {
-      expect(util.size.format(1048575), '1.0 MB');
-      expect(util.size.format(1023), '1023.0 B');
-      expect(util.size.format(5 * 1024 * 1024), '5.0 MB');
+      expect(util.size.format(1048575), '1.0 MiB');
+      // Bytes have no fraction to show; a kibibyte is where one starts.
+      expect(util.size.format(1023), '1023 B');
+      expect(util.size.format(5 * 1024 * 1024), '5.0 MiB');
     });
 
-    test('an unknown unit parses as zero', () {
-      expect(util.size.parse('10 XB'), 0);
-      expect(util.size.parse('2.5 MB'), 2621440);
-      expect(util.size.parse('10KB'), 10240);
+    test('a size that cannot be read is null, not zero', () {
+      // Zero is a value a caller cannot tell apart from an empty file.
+      expect(util.size.parse('10 XB'), isNull);
+      expect(util.size.parse('nonsense'), isNull);
+      expect(util.size.parse('MB'), isNull);
+    });
+
+    test('the labels mean what they say', () {
+      // The arithmetic was always 1024-based and the labels said KB and MB, so
+      // parse('5MB') answered five mebibytes under a name that means five
+      // million. Both families are accepted; each carries its own scale.
+      expect(util.size.parse('2.5 MiB'), 2621440);
+      expect(util.size.parse('10KiB'), 10240);
+      expect(util.size.parse('10K'), 10240);
+      expect(util.size.parse('2.5 MB'), 2500000);
+      expect(util.size.parse('10KB'), 10000);
     });
   });
 
@@ -522,7 +538,7 @@ Disallow: /x
   group('concurrent', () {
     test('a stray release does not raise the permit ceiling', () async {
       final semaphore = Semaphore(1);
-      await semaphore.acquire();
+      await semaphore.take();
       semaphore.release();
       semaphore.release();
       semaphore.release();
@@ -574,10 +590,10 @@ Disallow: /x
   group('system tracking', () {
     test('untrack matches by path, not by File identity', () {
       final path = '${Directory.systemTemp.path}/dt_track_probe.part';
-      system.track(File(path));
+      system.on.track(File(path));
       // A different instance naming the same file must still release it, or
       // the SIGINT watcher keeps the process alive.
-      system.untrack(File(path));
+      system.on.untrack(File(path));
       expect(system.which('dart'), isNotNull);
     });
   });
@@ -682,7 +698,7 @@ Disallow: /x
           if (attempts < 2) throw StateError('again');
           return attempts;
         },
-        times: 3,
+        retries: 2,
         backoff: const Duration(milliseconds: 1),
       );
       addTearDown(util.rand.seed);
@@ -713,8 +729,9 @@ Disallow: /x
         );
       }
       expect(util.size.parse('2 P'), 2 * 1024 * 1024 * 1024 * 1024 * 1024);
+      expect(util.size.parse('2 PiB'), 2 * 1024 * 1024 * 1024 * 1024 * 1024);
       // A unit nobody knows is still refused rather than read as bytes.
-      expect(util.size.parse('10 XB'), 0);
+      expect(util.size.parse('10 XB'), isNull);
     });
   });
 }

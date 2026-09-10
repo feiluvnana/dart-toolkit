@@ -96,31 +96,6 @@ void main() {
       expect([1].seq.chunks(0).list, isEmpty);
     });
 
-    test('windows slides, and windows(2) is zipWithNext', () {
-      expect(
-        [1, 2, 3, 4].seq.windows(2).to((w) => w.list).list,
-        equals([
-          [1, 2],
-          [2, 3],
-          [3, 4],
-        ]),
-      );
-      expect(
-        [1, 2, 3, 4, 5].seq.windows(2, step: 2).to((w) => w.list).list,
-        equals([
-          [1, 2],
-          [3, 4],
-        ]),
-      );
-      expect(
-        [1, 2, 3].seq.windows(2, step: 2, partial: true).to((w) => w.list).list,
-        equals([
-          [1, 2],
-          [3],
-        ]),
-      );
-    });
-
     test('zip and unzip go through records', () {
       final zipped = [1, 2, 3].seq.zip(['a', 'b'].seq);
       expect(zipped.list, equals([(1, 'a'), (2, 'b')]));
@@ -136,28 +111,60 @@ void main() {
       );
     });
 
-    test('scan runs the fold, also peeks without leaving the chain', () {
-      expect(
-        [1, 2, 3].seq.scan(0, (total, n) => total + n).list,
-        equals([0, 1, 3, 6]),
-      );
-      final seen = <int>[];
-      expect([1, 2].seq.also(seen.add).list, equals([1, 2]));
-      expect(seen, equals([1, 2]));
+    // A Sequence was a lazy view through 4.0.0, so every terminal call
+    // re-walked the whole chain: three calls on a three-element sequence ran
+    // the predicate seven times, and a `.to(expensiveParse)` over a crawl's
+    // results paid for the parse once per call. It is a snapshot now.
+    test(
+      'a shaping callback runs once per element, however often it is read',
+      () {
+        var calls = 0;
+        final shaped = [1, 2, 3].seq.to((n) {
+          calls++;
+          return n * 2;
+        });
+        expect(calls, equals(3));
+
+        shaped.count();
+        shaped.list;
+        shaped.first;
+        shaped.each((_) {});
+        expect(calls, equals(3), reason: 'four reads, still one pass');
+      },
+    );
+
+    test('a sequence does not move when its source does', () {
+      final source = [1, 2, 3];
+      final held = source.seq;
+      source.add(4);
+      expect(held.count(), equals(3));
+      expect(held.list, equals([1, 2, 3]));
     });
 
-    test('plus, minus, union, common and or', () {
+    test('the empty sequence is a const', () {
+      expect(const Sequence<int>.empty().empty, isTrue);
+      expect(const Sequence<int>.empty().count(), isZero);
+    });
+
+    test('plus, minus, common and or', () {
       final a = [1, 2, 3].seq;
       final b = [3, 4].seq;
       expect(a.plus(b).list, equals([1, 2, 3, 3, 4]));
       expect(a.minus(b).list, equals([1, 2]));
-      expect(a.union(b).list, equals([1, 2, 3, 4]));
+      expect(a.plus(b).unique().list, equals([1, 2, 3, 4]));
       expect(a.common(b).list, equals([3]));
-      expect(const Sequence<int>([]).or(b).list, equals([3, 4]));
+      expect(const Sequence<int>.empty().or(b).list, equals([3, 4]));
       expect(a.or(b).list, equals([1, 2, 3]));
     });
 
-    test('shaping is lazy: only what is asked for is computed', () {
+    // The trade the eager rewrite makes, stated so it is a decision and not a
+    // surprise: shaping runs over the whole source, so `head(2)` after a `to`
+    // maps every element rather than stopping at the third. What it buys is
+    // that the callback runs exactly once per element however often the result
+    // is read — see the pin in `Sequence reducing`. Where the source is large
+    // enough for the difference to matter the answer is a Stream:
+    // `crawl.stream` rather than `crawl.collect`.
+    test('shaping is eager: one pass over the source, at build time', () {
       var calls = 0;
       final head = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].seq
           .to((n) {
@@ -166,9 +173,9 @@ void main() {
           })
           .keep((n) => n.isOdd)
           .head(2);
-      expect(calls, isZero, reason: 'nothing runs until the chain is walked');
+      expect(calls, equals(11), reason: 'the whole source, once');
       expect(head.list, equals([1, 3]));
-      expect(calls, equals(3), reason: 'stops as soon as two survive');
+      expect(calls, equals(11), reason: 'and not again when it is read');
     });
   });
 
@@ -176,14 +183,14 @@ void main() {
     test('count, empty and has', () {
       expect(rows.count(), equals(4));
       expect(rows.count((r) => r.host == 'a.com'), equals(2));
-      expect(const Sequence<int>([]).empty, isTrue);
+      expect(const Sequence<int>.empty().empty, isTrue);
       expect([1].seq.empty, isFalse);
       expect([1, 2].seq.has(2), isTrue);
       expect([1, 2].seq.has(9), isFalse);
     });
 
     test('the five readers are nullable rather than throwing', () {
-      final empty = const Sequence<int>([]);
+      final empty = const Sequence<int>.empty();
       expect(empty.first, isNull);
       expect(empty.last, isNull);
       expect(empty.sole, isNull);
@@ -196,10 +203,11 @@ void main() {
       expect([1, 2, 3].seq.at(9) ?? 0, isZero, reason: '?? replaces getOrElse');
     });
 
-    test('find, findlast and index', () {
+    test('find and index', () {
       final n = [1, 2, 3, 4].seq;
       expect(n.find((v) => v.isEven), equals(2));
-      expect(n.findlast((v) => v.isEven), equals(4));
+      // `findlast` was `flip.find` under a second name.
+      expect(n.flip.find((v) => v.isEven), equals(4));
       expect(n.index((v) => v.isEven), equals(1));
       expect(n.index((v) => v > 99), isNull);
     });
@@ -208,22 +216,22 @@ void main() {
       expect([1, 2].seq.any((n) => n.isEven), isTrue);
       expect([1, 3].seq.any((n) => n.isEven), isFalse);
       expect([2, 4].seq.all((n) => n.isEven), isTrue);
-      expect(const Sequence<int>([]).all((n) => false), isTrue);
+      expect(const Sequence<int>.empty().all((n) => false), isTrue);
     });
 
     test('fold, sum and avg', () {
       expect([1, 2, 3].seq.fold(0, (t, n) => t + n), equals(6));
       expect(rows.sum((r) => r.cost), equals(8.5));
       expect(rows.avg((r) => r.score), closeTo(4.5, 1e-9));
-      expect(const Sequence<int>([]).avg((n) => n), isNull);
-      expect(const Sequence<int>([]).sum((n) => n), isZero);
+      expect(const Sequence<int>.empty().avg((n) => n), isNull);
+      expect(const Sequence<int>.empty().sum((n) => n), isZero);
       expect([1, 2].seq.sum((n) => n), equals(3), reason: 'selector required');
     });
 
     test('best and worst', () {
       expect(rows.best((r) => r.score)?.score, equals(9));
       expect(rows.worst((r) => r.score)?.score, equals(1));
-      expect(const Sequence<Row>([]).best((r) => r.score), isNull);
+      expect(const Sequence<Row>.empty().best((r) => r.score), isNull);
     });
 
     test('group, keyed, tally and split', () {

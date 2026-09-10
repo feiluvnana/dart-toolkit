@@ -9,9 +9,9 @@ library;
 
 import 'dart:async';
 import 'dart:collection';
-import 'dart:isolate';
 
 import '../util/rand.dart';
+import '../util/sequence.dart';
 
 // ============================================================================
 // CONCURRENT & WORKER POOL (concurrent.* / Pool)
@@ -23,7 +23,7 @@ const ConcurrentAccessor concurrent = ConcurrentAccessor();
 /// Entry point for bounded concurrency.
 ///
 /// ```dart
-/// final bodies = await concurrent.run(urls, (url) => net.get(url), size: 8);
+/// final replies = await concurrent.run(urls, net.http.get, size: 8);
 /// ```
 class ConcurrentAccessor {
   /// Creates the accessor. Prefer the shared [concurrent] instance.
@@ -35,7 +35,7 @@ class ConcurrentAccessor {
   /// first task to throw aborts the run and its error propagates — construct
   /// a [Pool] and register [PoolEvents.error] instead if you would rather
   /// collect failures and continue.
-  Future<List<R>> run<I, R>(
+  Future<Sequence<R>> run<I, R>(
     Iterable<I> items,
     FutureOr<R> Function(I item) worker, {
     int size = 4,
@@ -53,26 +53,36 @@ class ConcurrentAccessor {
     Duration delay = Duration.zero,
   }) => Pool<I>(size: size, delay: delay).stream(items, worker);
 
-  /// Runs [fn] with [message] on a separate isolate using [Isolate.run].
-  Future<R> compute<M, R>(FutureOr<R> Function(M message) fn, M message) =>
-      Isolate.run(() => fn(message));
-
-  /// Retries [fn] if it throws.
+  /// Retries [fn] if it throws, backing off between attempts.
   ///
-  /// [times] is the total number of attempts; [retries] is the number of extra
-  /// attempts after the first, matching [Fetcher.retries]. Pass one or the
-  /// other — `times: 3` and `retries: 2` both mean three attempts.
+  /// [retries] is the number of *extra* attempts after the first, which is
+  /// what `Fetcher.retries` already means — so `retries: 2` runs [fn] up to
+  /// three times.
+  ///
+  /// ```dart
+  /// await concurrent.retry(
+  ///   () => net.http.get(url),
+  ///   retries: 3,
+  ///   backoff: 500.ms,
+  ///   onretry: (error, attempt) => log.warn('attempt $attempt: $error'),
+  /// );
+  /// ```
+  ///
+  /// A `times:` stood beside this through 4.0.0, documented as *pass one or
+  /// the other* — two parameters for one number, which is the failure Rule 5
+  /// records the CLI's `def`/`defaultValue` pair going for. It also resolved
+  /// silently: `retries` was read first, so `retry(fn, times: 5, retries: 1)`
+  /// ran two attempts and ignored the five.
   Future<T> retry<T>(
     FutureOr<T> Function() fn, {
-    int times = 3,
-    int? retries,
+    int retries = 2,
     Duration backoff = const Duration(milliseconds: 100),
     Duration cap = const Duration(seconds: 30),
     bool Function(Object error)? when,
     void Function(Object error, int attempt)? onretry,
   }) => concurrentRetry(
     fn,
-    times: retries != null ? retries + 1 : times,
+    times: retries + 1,
     backoff: backoff,
     cap: cap,
     when: when,
@@ -80,10 +90,11 @@ class ConcurrentAccessor {
   );
 
   /// Creates a counting semaphore bounding concurrent access to [permits].
+  ///
+  /// `concurrent.mutex()` stood beside this through 4.0.0 and was
+  /// `Semaphore(1)` under a second name — a whole exported type for a value of
+  /// one argument. `concurrent.semaphore(1)` is the mutex.
   Semaphore semaphore(int permits) => Semaphore(permits);
-
-  /// Creates a mutual exclusion lock.
-  Mutex mutex() => Mutex();
 
   /// Creates a rate limiter allowing [count] operations [per] window.
   ///
@@ -164,7 +175,7 @@ class PoolFailure<I, R> implements Exception {
 /// A bounded pool that runs at most [size] tasks concurrently.
 ///
 /// ```dart
-/// final pool = Pool<String>(size: 4);
+/// final pool = Pool<Uri>(size: 4);
 /// pool.on.progress((url) => bar.tick());
 /// final pages = await pool.run(urls, fetch);
 /// ```
@@ -188,7 +199,7 @@ class Pool<I> {
   /// tasks from launching and propagates once the in-flight ones settle; if
   /// [PoolEvents.error] is registered every item is attempted and a
   /// [PoolFailure] is thrown at the end instead.
-  Future<List<R>> run<R>(
+  Future<Sequence<R>> run<R>(
     Iterable<I> items,
     FutureOr<R> Function(I item) worker,
   ) async {
@@ -253,7 +264,7 @@ class Pool<I> {
     if (failures.isNotEmpty) {
       throw PoolFailure<I, R>(failures, List<R?>.unmodifiable(results));
     }
-    return List<R>.generate(list.length, (i) => results[i] as R);
+    return Sequence(List<R>.generate(list.length, (i) => results[i] as R));
   }
 
   /// Maps [worker] over all [items] to completion, never throwing on worker
@@ -262,14 +273,14 @@ class Pool<I> {
   /// Returns one [Settled] per item, in input order:
   ///
   /// ```dart
-  /// for (final result in await pool.settle(urls, fetch)) {
+  /// for (final result in (await pool.settle(urls, fetch)).list) {
   ///   switch (result) {
   ///     case Done(:final value): save(value);
   ///     case Broke(:final error): log.warn('$error');
   ///   }
   /// }
   /// ```
-  Future<List<Settled<R>>> settle<R>(
+  Future<Sequence<Settled<R>>> settle<R>(
     Iterable<I> items,
     FutureOr<R> Function(I item) worker,
   ) async {
@@ -315,7 +326,7 @@ class Pool<I> {
       h();
     }
 
-    return List.generate(list.length, (i) => outcomes[i]!);
+    return Sequence(List.generate(list.length, (i) => outcomes[i]!));
   }
 
   /// Streams results of mapping [worker] over [items] in completion order.
@@ -440,8 +451,14 @@ class Semaphore {
   /// Number of currently available permits.
   int get available => _availablePermits;
 
-  /// Acquires a permit, suspending if none are available.
-  Future<void> acquire() {
+  /// Takes a permit, suspending if none are available.
+  ///
+  /// Spelled like [Limiter.take], because the two are the same shape: one
+  /// bounds how many run at once and the other how often they start. They used
+  /// to say `acquire`/`withPermit` and `take`/`guard`, which is two dialects
+  /// for one idea — and `withPermit` was the library's one camelCase member,
+  /// which Rule 4 forbids outright.
+  Future<void> take() {
     if (_availablePermits > 0) {
       _availablePermits--;
       return Future.value();
@@ -464,9 +481,11 @@ class Semaphore {
     if (_availablePermits < permits) _availablePermits++;
   }
 
-  /// Acquires a permit, runs [action], and releases the permit upon completion.
-  Future<R> withPermit<R>(FutureOr<R> Function() action) async {
-    await acquire();
+  /// Takes a permit, runs [action], and releases it however [action] ends.
+  ///
+  /// Spelled like [Limiter.guard].
+  Future<R> guard<R>(FutureOr<R> Function() action) async {
+    await take();
     try {
       return await action();
     } finally {
@@ -607,21 +626,6 @@ class Limiter {
   String toString() => 'Limiter($count per ${per.inMilliseconds}ms)';
 }
 
-/// A mutual exclusion lock.
-class Mutex {
-  final Semaphore _semaphore = Semaphore(1);
-
-  /// Acquires the lock, suspending until available.
-  Future<void> acquire() => _semaphore.acquire();
-
-  /// Releases the lock.
-  void release() => _semaphore.release();
-
-  /// Runs [action] exclusively with the lock held.
-  Future<R> protect<R>(FutureOr<R> Function() action) =>
-      _semaphore.withPermit(action);
-}
-
 /// Retries [fn] if it throws.
 ///
 /// [times] is the total number of attempts; [retries] is the number of extra
@@ -670,7 +674,7 @@ Duration _backoffFor(int attempt, Duration base, Duration cap) {
 /// that has a value is the branch where it is non-nullable:
 ///
 /// ```dart
-/// for (final result in await pool.settle(urls, fetch)) {
+/// for (final result in (await pool.settle(urls, fetch)).list) {
 ///   switch (result) {
 ///     case Done(:final value): save(value);
 ///     case Broke(:final error): log.warn('$error');

@@ -27,7 +27,7 @@ void main() async {
       '/health' => Served.json({'ok': true, 'at': util.time.iso()}),
       '/report' => Served.file(preview),
       '/hook' => await _hook(req),
-      '/away' => Served.redirect('/health'),
+      '/away' => Served.redirect('/health'.url),
       _ => Served.status(404),
     };
   });

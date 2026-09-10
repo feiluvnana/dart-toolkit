@@ -15,7 +15,7 @@ import 'sequence.dart';
 /// Entry point for randomness, reachable as `util.rand`.
 ///
 /// ```dart
-/// final agent = util.rand.pick(agents);
+/// final agent = util.rand.pick(agents.list);
 /// await util.time.wait(util.rand.jitter(2.s));
 /// ```
 class RandAccessor {
@@ -36,7 +36,7 @@ class RandAccessor {
   ///
   /// ```dart
   /// util.rand.seed(42);
-  /// expect(util.rand.pick(agents), util.rand.pick(agents)); // no
+  /// expect(util.rand.pick(agents.list), util.rand.pick(agents.list)); // no
   /// util.rand.seed(42);
   /// final first = util.rand.id();
   /// util.rand.seed(42);
