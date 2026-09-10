@@ -141,7 +141,7 @@ io.delete('out', pattern: RegExp(r'\.part$')); // returns the count deleted
 
 // Hashes (sync and async):
 io.hash(path);                      // sha256 hex digest (sync)
-io.hash(path, Digest.md5);          // md5 (sync)
+io.hash(path, Algo.md5);          // md5 (sync)
 await io.async.hash(path);           // sha256 (async)
 
 // File metadata (sync and async):

@@ -13,13 +13,13 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 typedef Track = ({String artist, String album, String title, int number});
 
 void main(List<String> args) async {
-  system.cli
+  cli
     ..flag('live', desc: 'Fetch the real site instead of fixtures')
     ..option('out', alias: 'o', desc: 'JSON Lines output', def: 'tracks.jsonl')
     ..parse(args);
 
   final log = system.console.logger;
-  final live = system.cli.has('live');
+  final live = cli.has('live');
 
   final crawl = net
       .crawl<Track>('https://music.test/artists')
@@ -61,7 +61,7 @@ void main(List<String> args) async {
 
   // `to` streams each item to disk as it arrives, so a long crawl never holds
   // its results in memory. `collect` returns a list; `stream` yields them.
-  final out = system.cli.get('out', 'tracks.jsonl');
+  final out = cli.get('out', 'tracks.jsonl');
   await crawl.save(out);
 
   log.ok('Wrote $out');

@@ -23,7 +23,12 @@ import 'proc.dart';
 // ============================================================================
 
 /// Hash algorithms accepted by [Fs.hash].
-enum Digest {
+///
+/// Named `Algo` and not `Digest` because `package:crypto` exports a `Digest`
+/// of its own — a hash *result*, where this one selects an *algorithm* — and
+/// two libraries exporting one name is an `ambiguous_import` error for anyone
+/// importing both.
+enum Algo {
   /// SHA-256, producing a 64-character hex digest.
   sha256,
 
@@ -486,15 +491,15 @@ class Fs {
   /// How much of a file is read at a time when hashing it.
   static const int _hashChunk = 64 * 1024;
 
-  static crypto.Hash _digest(Digest algorithm) => switch (algorithm) {
-    Digest.md5 => crypto.md5,
-    Digest.sha256 => crypto.sha256,
+  static crypto.Hash _digest(Algo algorithm) => switch (algorithm) {
+    Algo.md5 => crypto.md5,
+    Algo.sha256 => crypto.sha256,
   };
 
   /// Returns the hex digest of [path] using [algorithm].
   ///
   /// Reads the file in chunks, so hashing a file larger than memory works.
-  static String hash(String path, [Digest algorithm = Digest.sha256]) {
+  static String hash(String path, [Algo algorithm = Algo.sha256]) {
     final handle = File(path).openSync();
     try {
       final sink = _CollectingSink();
@@ -519,7 +524,7 @@ class Fs {
   /// Streams the file rather than holding it in memory.
   static Future<String> hashAsync(
     String path, [
-    Digest algorithm = Digest.sha256,
+    Algo algorithm = Algo.sha256,
   ]) async {
     final sink = _CollectingSink();
     final input = _digest(algorithm).startChunkedConversion(sink);

@@ -20,7 +20,7 @@ import '../src/fs.dart';
 import 'store.dart';
 
 export 'csv.dart';
-export '../src/fs.dart' show Digest;
+export '../src/fs.dart' show Algo;
 export 'store.dart';
 
 // ============================================================================
@@ -231,7 +231,7 @@ class IoAccessor {
       Fs.delete(dir, pattern: pattern, recursive: recursive);
 
   /// Returns the hex digest of [path] using [algorithm].
-  String hash(String path, [Digest algorithm = Digest.sha256]) =>
+  String hash(String path, [Algo algorithm = Algo.sha256]) =>
       Fs.hash(path, algorithm);
 
   /// Returns filesystem metadata for [path].
@@ -356,7 +356,7 @@ class IoAsyncAccessor {
       Fs.deleteAsync(dir, pattern: pattern, recursive: recursive);
 
   /// Returns the hex digest of [path] using [algorithm].
-  Future<String> hash(String path, [Digest algorithm = Digest.sha256]) =>
+  Future<String> hash(String path, [Algo algorithm = Algo.sha256]) =>
       Fs.hashAsync(path, algorithm);
 
   /// Returns filesystem metadata for [path].

@@ -29,19 +29,19 @@ class Product {
 void main(List<String> args) async {
   // ---------------------------------------------------------------- system
   // Declare the command line up front and `--help` writes itself.
-  system.cli
+  cli
     ..flag('force', alias: 'f', desc: 'Overwrite existing output')
     ..flag('help', alias: 'h', desc: 'Show this message')
     ..option('concurrency', alias: 'c', desc: 'Parallel fetches', def: 4)
     ..parse(args);
 
-  if (system.cli.has('help')) {
-    system.cli.help(syntax: 'example.dart [options]', desc: 'Domain tour.');
+  if (cli.has('help')) {
+    cli.help(syntax: 'example.dart [options]', desc: 'Domain tour.');
     return;
   }
 
-  final size = system.cli.get('concurrency', 4);
-  final force = system.cli.has('force');
+  final size = cli.get('concurrency', 4);
+  final force = cli.has('force');
 
   // `.env` fills in what the shell did not set; nothing here fails if absent.
   system.env.load();
@@ -136,8 +136,8 @@ void main(List<String> args) async {
   log.step(4, 6, 'Archiving...');
 
   final archive = io.join(dir, 'catalogue-${util.time.stamp()}.tar.gz');
-  await zip.pack(io.join(dir, 'products.json'), archive);
-  final entries = await zip.list(archive);
+  await tool.zip.pack(io.join(dir, 'products.json'), archive);
+  final entries = await tool.zip.list(archive);
   log.ok(
     'Packed ${entries.length} entries, ${util.size.format(io.stat(archive).size)}.',
   );
@@ -145,13 +145,13 @@ void main(List<String> args) async {
   // ------------------------------------------------------------------- git
   log.step(5, 6, 'Checking the repository...');
 
-  final branch = await git.branch();
+  final branch = await tool.git.branch();
   if (branch.isEmpty) {
     log.debug('Not a git repository.');
-  } else if (await git.dirty()) {
+  } else if (await tool.git.dirty()) {
     log.warn('On $branch with uncommitted changes.');
   } else {
-    log.ok('On $branch, clean at ${await git.hash()}.');
+    log.ok('On $branch, clean at ${await tool.git.hash()}.');
   }
 
   // --------------------------------------------------------------- console

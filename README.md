@@ -8,22 +8,30 @@ A cohesive automation and web-scraping toolkit for Dart, developed by **feiluvna
 
 ### Domains
 
+Five of them are **axes** — a way of touching the machine:
+
 | Domain | Sub-namespaces | Focus |
 | :--- | :--- | :--- |
 | **`io.*`** | `io.csv.*`, `io.store.*`, `io.async.*` | Atomic file writes, paths, CSV tables, JSON key-value store |
 | **`net.*`** | `net.http.*`, `net.crawl` | HTTP requests, streaming downloads, the crawler engine |
-| **`system.*`** | `system.env.*`, `system.cli.*`, `system.console.*`, `system.on.*` | Subprocesses, environment, CLI args, terminal IO, shutdown |
+| **`system.*`** | `system.env.*`, `system.console.*`, `system.on.*` | Subprocesses, environment, terminal IO, shutdown |
 | **`concurrent.*`** | `concurrent.run(...)` | Bounded async task pools |
-| **`git.*`** | — | Repository queries and commands |
-| **`zip.*`** | — | Packing, unpacking and inspecting archives |
 | **`util.*`** | `util.time.*`, `util.size.*`, `util.text.*`, `util.hash.*`, `util.rand.*` | Pure helpers: delays, byte sizes, text, digests, randomness |
+
+Two are **subjects** — knowledge that came from outside Dart:
+
+| Domain | Sub-namespaces | Focus |
+| :--- | :--- | :--- |
+| **`cli.*`** | — | Flags, options, subcommands, usage text |
+| **`tool.*`** | `tool.git.*`, `tool.zip.*` | Wrapped executables and file formats |
 | **`$()`** | — | jQuery-like CSS selectors |
 
 **Where things live.** `util` holds only pure computation — nothing there touches
 the disk or the operating system. Anything that reads or writes files is `io`;
-anything that talks to the OS or the user is `system`. `git` and `zip` stand on
-their own because they are self-contained tools with their own vocabulary, and
-their names are distinctive enough not to crowd yours.
+anything that talks to the OS or the user is `system`. Argument parsing is
+`cli` and not `system.cli`, because reading a `List<String>` touches nothing at
+all. `git` and `zip` share `tool` rather than taking a name each, because a top
+level that grows a name per wrapped binary is not a top level.
 
 [NAMESPACE.md](NAMESPACE.md) is the full rule set: which domain something
 belongs to, when it earns a top-level name, and how to name it.
@@ -66,9 +74,9 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 
 void main(List<String> args) async {
   // 1. Arguments
-  system.cli.parse(args);
-  final size = system.cli.get('concurrency', 4);
-  final force = system.cli.has('force', 'f');
+  cli.parse(args);
+  final size = cli.get('concurrency', 4);
+  final force = cli.has('force', 'f');
 
   final log = system.console.logger;
   final clock = util.time.clock();
@@ -151,7 +159,7 @@ final data = io.json<Map<String, Object?>>('out/data.json');
 
 io.has(path);                                    // exists and non-empty
 io.join('a', 'b', 'c.txt');
-io.hash(path, Digest.md5);
+io.hash(path, Algo.md5);
 io.find('out', pattern: RegExp(r'\.mp3$'));
 ```
 
@@ -248,28 +256,41 @@ res.$('.title').at(0).text;
 
 See [docs/selector.md](docs/selector.md).
 
-### `system` — subprocesses and arguments
+### `system` — subprocesses and shutdown
 
 ```dart
 final res = await system.run('git', ['status', '--short']);
 if (res.ok) print(res.out);
 
 system.which('ffmpeg');
-system.cli.get('concurrency', 4);
 system.env.get('PORT', 8080);
+await system.shutdown();
 ```
 
-Declare commands and `system.cli.run` parses, prints `--help`, validates and
+See [docs/system.md](docs/system.md), [docs/env.md](docs/env.md).
+
+### `cli` — the command line your script presents
+
+```dart
+cli
+  ..flag('force', alias: 'f')
+  ..option('concurrency', def: 4)
+  ..parse(args);
+
+cli.get('concurrency', 4);
+```
+
+Or declare commands and `cli.run` parses, prints `--help`, validates and
 dispatches, returning an exit code:
 
 ```dart
-system.cli.handle('build', _build, desc: 'Build the project')
+cli.handle('build', _build, desc: 'Build the project')
   ..option('out', alias: 'o', def: 'dist', desc: 'Output directory');
 
-await system.shutdown(await system.cli.run(args));
+await system.shutdown(await cli.run(args));
 ```
 
-See [docs/system.md](docs/system.md), [docs/cli.md](docs/cli.md), [docs/env.md](docs/env.md).
+See [docs/cli.md](docs/cli.md).
 
 ### `concurrent` — bounded async work
 
@@ -283,23 +304,23 @@ final bodies = await concurrent.run(
 
 Results keep input order. The first failure propagates with its own error and stack; register `Pool.on.error` to collect failures and continue instead. See [docs/concurrent.md](docs/concurrent.md).
 
-### `git` — repository automation
+### `tool.git` — repository automation
 
 ```dart
-await git.branch();                // 'master'
-if (await git.dirty()) return;     // uncommitted changes
-await git.tag('v1.0.0');
+await tool.git.branch();                // 'master'
+if (await tool.git.dirty()) return;     // uncommitted changes
+await tool.git.mark('v1.0.0');          // creates a tag; `tag()` reads one
 ```
 
 See [docs/git.md](docs/git.md).
 
-### `zip` — archives
+### `tool.zip` — archives
 
 ```dart
-await zip.pack('site', 'site.zip');          // or site.tar.gz, .tgz, .tar.bz2
-await zip.unpack('site.zip', 'restored');    // skips zip-slip entries
-await zip.list('site.zip');                  // without unpacking
-await zip.read('site.zip', 'index.html');
+await tool.zip.pack('site', 'site.zip');          // or site.tar.gz, .tgz, .tar.bz2
+await tool.zip.unpack('site.zip', 'restored');    // skips zip-slip entries
+await tool.zip.list('site.zip');                  // without unpacking
+await tool.zip.read('site.zip', 'index.html');
 ```
 
 See [docs/zip.md](docs/zip.md).

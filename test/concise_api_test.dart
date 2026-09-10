@@ -71,17 +71,19 @@ void main() {
     });
 
     test('a declared flag does not swallow the next token', () {
-      final cli = Cli(['build', '--verbose', 'main.dart'])..flag('verbose');
-      expect(cli.command, equals('build'));
-      expect(cli.rest, equals(['main.dart']));
-      expect(cli.has('verbose'), isTrue);
+      // Named `parsed`, not `cli`: the domain accessor is `cli` now, and this
+      // test needs both it and a standalone `Cli` in one scope.
+      final parsed = Cli(['build', '--verbose', 'main.dart'])..flag('verbose');
+      expect(parsed.command, equals('build'));
+      expect(parsed.rest, equals(['main.dart']));
+      expect(parsed.has('verbose'), isTrue);
 
       // The same has to hold for declarations made before `parse`.
-      system.cli
+      cli
         ..flag('verbose', alias: 'v')
         ..parse(['build', '--verbose', 'main.dart']);
-      expect(system.cli.command, equals('build'));
-      expect(system.cli.rest, equals(['main.dart']));
+      expect(cli.command, equals('build'));
+      expect(cli.rest, equals(['main.dart']));
     });
 
     test(

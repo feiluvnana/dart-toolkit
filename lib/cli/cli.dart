@@ -1,4 +1,4 @@
-/// # CLI Arguments (`system.cli.*`)
+/// # CLI Domain (`cli.*`)
 ///
 /// A dependency-free parser for the flag shapes scripts actually use:
 /// `--flag`, `--key=value`, `--key value`, `-k value`, `-abc`, `--no-key`,
@@ -7,7 +7,7 @@
 /// Two ways in. Declare an interface and read it yourself:
 ///
 /// ```dart
-/// system.cli
+/// cli
 ///   ..flag('force', alias: 'f')
 ///   ..parse(args);
 /// ```
@@ -17,9 +17,9 @@
 ///
 /// ```dart
 /// void main(List<String> args) async {
-///   system.cli.handle('build', _build, desc: 'Build the project')
+///   cli.handle('build', _build, desc: 'Build the project')
 ///     ..option('out', alias: 'o', def: 'dist', desc: 'Output directory');
-///   await system.shutdown(await system.cli.run(args));
+///   await system.shutdown(await cli.run(args));
 /// }
 /// ```
 library;
@@ -28,11 +28,19 @@ import 'dart:async';
 import 'dart:io';
 
 import '../src/shared.dart';
-import 'console/writer.dart';
+import '../system/console/writer.dart';
 
 // ============================================================================
-// CLI ARGUMENT PARSER (system.cli.*)
+// CLI DOMAIN (cli.*) - Argument Parsing
 // ============================================================================
+
+/// The `cli` domain: flags, options, subcommands and usage text.
+///
+/// Parsing arguments touches nothing — no process, no environment, no
+/// terminal — so it is a domain of its own rather than a corner of
+/// `system`. Not `const`: the accessor holds the declarations and the last
+/// parse.
+final CliAccessor cli = CliAccessor();
 
 /// One declared flag or option.
 class _Decl {
@@ -135,7 +143,7 @@ mixin _Spec<T> {
   /// its own flags and options can be declared on the spot.
   ///
   /// ```dart
-  /// system.cli.handle('build', _build, desc: 'Build the project')
+  /// cli.handle('build', _build, desc: 'Build the project')
   ///   ..flag('release', desc: 'Optimise the output')
   ///   ..option('out', alias: 'o', def: 'dist');
   /// ```
@@ -152,7 +160,7 @@ mixin _Spec<T> {
   /// Naming a group without one of its subcommands prints its usage block.
   ///
   /// ```dart
-  /// final remote = system.cli.group('remote', desc: 'Manage remotes');
+  /// final remote = cli.group('remote', desc: 'Manage remotes');
   /// remote.handle('add', _add, desc: 'Add a remote');
   /// remote.handle('rm', _remove, desc: 'Remove a remote');
   /// ```
@@ -174,22 +182,22 @@ mixin _Spec<T> {
       _declarations.values.where((d) => d.alias == cleanKey).firstOrNull;
 }
 
-/// Entry point for command-line arguments, reachable as `system.cli`.
+/// Entry point for command-line arguments, reachable as `cli`.
 ///
 /// Declare the interface, then either [parse] it and read the values yourself
 /// or hand [run] the arguments and let it dispatch.
 ///
 /// ```dart
 /// void main(List<String> args) {
-///   system.cli.parse(args);
-///   final force = system.cli.has('force', 'f');
-///   final size = system.cli.get('concurrency', 4);
+///   cli.parse(args);
+///   final force = cli.has('force', 'f');
+///   final size = cli.get('concurrency', 4);
 /// }
 /// ```
 class CliAccessor with _Spec<CliAccessor> {
   Cli _parsed = Cli(const []);
 
-  /// Creates the accessor. Prefer the shared `system.cli` instance.
+  /// Creates the accessor. Prefer the shared [cli] instance.
   CliAccessor();
 
   @override
@@ -297,7 +305,7 @@ class CliAccessor with _Spec<CliAccessor> {
 
 /// A parsed command line.
 ///
-/// Normally reached through `system.cli`; construct one directly to parse an
+/// Normally reached through `cli`; construct one directly to parse an
 /// argument list other than the program's own.
 ///
 /// Declare the interface with [flag] and [option] before reading it. Declaring
@@ -535,8 +543,8 @@ class Cli with _Spec<Cli> {
   /// yields `true`, and `--[name]=true|1` is honoured.
   ///
   /// ```dart
-  /// system.cli.get('concurrency', 4); // int
-  /// system.cli.get('name', '');       // String
+  /// cli.get('concurrency', 4); // int
+  /// cli.get('name', '');       // String
   /// ```
   T get<T>(String name, T fallback, [String? alias]) {
     final clean = _clean(name);
@@ -737,8 +745,8 @@ class Cli with _Spec<Cli> {
   ///
   /// ```dart
   /// void main(List<String> args) async {
-  ///   system.cli.handle('build', _build, desc: 'Build the project');
-  ///   await system.shutdown(await system.cli.run(args, version: '1.1.0'));
+  ///   cli.handle('build', _build, desc: 'Build the project');
+  ///   await system.shutdown(await cli.run(args, version: '1.1.0'));
   /// }
   /// ```
   Future<int> run({
@@ -919,7 +927,7 @@ class Cli with _Spec<Cli> {
 /// ones when the command runs.
 ///
 /// ```dart
-/// system.cli.handle('build', _build, desc: 'Build the project')
+/// cli.handle('build', _build, desc: 'Build the project')
 ///   ..option('out', alias: 'o', def: 'dist', desc: 'Output directory')
 ///   ..flag('release', desc: 'Optimise the output');
 /// ```

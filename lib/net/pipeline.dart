@@ -279,7 +279,12 @@ class Response<T> extends HttpResponse {
 ///
 /// The engine is reachable as [Response.engine], so it is not passed
 /// separately.
-typedef Process<T> = FutureOr<void> Function(Response<T> response);
+///
+/// Named `Handler` and not `Process`: Dart resolves a package import over a
+/// `dart:` one without complaining, so exporting `Process` quietly stopped
+/// `Process` meaning `dart:io`'s for every user of this library — while
+/// `system.adopt(Process)` still meant that one.
+typedef Handler<T> = FutureOr<void> Function(Response<T> response);
 
 /// Dispatches responses to the first matching handler.
 ///
@@ -294,7 +299,7 @@ typedef Process<T> = FutureOr<void> Function(Response<T> response);
 /// ```
 class Router<T> {
   final List<_Rule<T>> _rules = [];
-  Process<T>? _fallback;
+  Handler<T>? _fallback;
 
   /// Whether any rule or fallback is registered.
   bool get isNotEmpty => _rules.isNotEmpty || _fallback != null;
@@ -306,19 +311,19 @@ class Router<T> {
   int get length => _rules.length;
 
   /// Routes responses whose URL matches [pattern].
-  Router<T> on(Pattern pattern, Process<T> handler) =>
+  Router<T> on(Pattern pattern, Handler<T> handler) =>
       _add((res) => pattern.allMatches(res.url.toString()).isNotEmpty, handler);
 
   /// Routes responses whose request carried [Request.tag] equal to [name].
-  Router<T> tag(String name, Process<T> handler) =>
+  Router<T> tag(String name, Handler<T> handler) =>
       _add((res) => res.tag == name, handler);
 
   /// Routes responses with HTTP status [code].
-  Router<T> status(int code, Process<T> handler) =>
+  Router<T> status(int code, Handler<T> handler) =>
       _add((res) => res.status == code, handler);
 
   /// Handles anything no rule matched.
-  Router<T> fallback(Process<T> handler) {
+  Router<T> fallback(Handler<T> handler) {
     _fallback = handler;
     return this;
   }
@@ -336,7 +341,7 @@ class Router<T> {
     return true;
   }
 
-  Router<T> _add(bool Function(Response<T> res) test, Process<T> handler) {
+  Router<T> _add(bool Function(Response<T> res) test, Handler<T> handler) {
     _rules.add(_Rule<T>(test, handler));
     return this;
   }
@@ -344,7 +349,7 @@ class Router<T> {
 
 class _Rule<T> {
   final bool Function(Response<T> res) test;
-  final Process<T> handler;
+  final Handler<T> handler;
 
   const _Rule(this.test, this.handler);
 }

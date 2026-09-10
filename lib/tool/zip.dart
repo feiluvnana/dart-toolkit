@@ -1,4 +1,4 @@
-/// # Zip Domain (`zip.*`)
+/// # Zip Tool (`tool.zip.*`)
 ///
 /// Pack a folder, unpack an archive, look inside one without unpacking it, and
 /// squeeze bytes. The format comes from the file name — `.zip`, `.tar`,
@@ -16,7 +16,7 @@ import '../src/fs.dart';
 import '../src/proc.dart';
 
 // ============================================================================
-// ZIP DOMAIN (zip.*)
+// ZIP TOOL (tool.zip.*)
 // ============================================================================
 
 /// The archive formats [ZipAccessor] reads and writes.
@@ -65,18 +65,15 @@ class Entry {
   String toString() => folder ? '$name/' : '$name ($size bytes)';
 }
 
-/// The `zip` domain: packing, unpacking and inspecting archives.
-const ZipAccessor zip = ZipAccessor();
-
-/// Entry point for archives, reachable as [zip].
+/// Entry point for archives, reachable as `tool.zip`.
 ///
 /// ```dart
-/// await zip.pack('site', 'site.zip');
-/// for (final entry in await zip.list('site.zip')) print(entry.name);
-/// await zip.unpack('site.zip', 'restored');
+/// await tool.zip.pack('site', 'site.zip');
+/// for (final e in await tool.zip.list('site.zip')) print(e.name);
+/// await tool.zip.unpack('site.zip', 'restored');
 /// ```
 class ZipAccessor {
-  /// Creates the accessor. Prefer the shared [zip] instance.
+  /// Creates the accessor. Prefer the shared `tool.zip` instance.
   const ZipAccessor();
 
   /// Packs [source] — a file or a whole folder — into the archive at [dest].

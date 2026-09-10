@@ -465,7 +465,7 @@ class Engine<T> {
 
   String? _seedHost;
 
-  final Process<T>? _process;
+  final Handler<T>? _process;
   final _Frontier<T> _queue = _Frontier<T>();
   // Served but not yet settled. A snapshot counts these as pending, so a crawl
   // killed mid-fetch refetches the page instead of dropping it.
@@ -502,7 +502,7 @@ class Engine<T> {
     Downloader<T>? downloader,
     bool? owns,
     Deduplicator? deduplicator,
-    Process<T>? process,
+    Handler<T>? process,
     int concurrency = 1,
     Duration delay = Duration.zero,
     String? base,

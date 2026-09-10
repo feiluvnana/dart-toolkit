@@ -4,8 +4,8 @@ Delays and timestamps (`util.time`), byte sizes (`util.size`), text handling
 (`util.text`), hashing (`util.hash`) and randomness (`util.rand`).
 
 Nothing here touches the disk or the operating system — that is the rule that
-decides what belongs. Archives are [`zip`](zip.md), Git is [`git`](git.md), and
-the terminal is [`system.console`](console.md).
+decides what belongs. Archives are [`tool.zip`](zip.md), Git is
+[`tool.git`](git.md), and the terminal is [`system.console`](console.md).
 
 ---
 
@@ -199,7 +199,7 @@ seeded generator is reproducible by design.
 
 ## See Also
 
-- [`git`](git.md) — repository automation
-- [`zip`](zip.md) — archives
+- [`tool.git`](git.md) — repository automation
+- [`tool.zip`](zip.md) — archives
 - [`system.console.*`](console.md) — terminal output and prompts
 - [`io.*`](io.md) — files, and `io.hash` for a file's digest

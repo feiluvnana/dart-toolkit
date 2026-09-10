@@ -180,7 +180,7 @@ void main() {
 
         expect(await io.lines(path).toList(), equals(['one', 'two', 'three']));
         expect(io.hash(path).length, equals(64));
-        expect(io.hash(path, Digest.md5).length, equals(32));
+        expect(io.hash(path, Algo.md5).length, equals(32));
         expect(io.stat(path).size, greaterThan(0));
 
         expect(io.find(temp.path).length, equals(1));
@@ -456,19 +456,19 @@ void main() async {
     );
   });
 
-  group('system.cli Sub-namespace', () {
+  group('cli Sub-namespace', () {
     test('parse reads flags, options and positionals', () {
-      system.cli.parse(['--force', '-p', '8', '--name=test', 'file1', 'file2']);
+      cli.parse(['--force', '-p', '8', '--name=test', 'file1', 'file2']);
 
-      expect(system.cli.has('force'), isTrue);
-      expect(system.cli.has('p'), isTrue);
-      expect(system.cli.get('p', 0), equals(8));
-      expect(system.cli.get('name', ''), equals('test'));
-      expect(system.cli.list(), equals(['file1', 'file2']));
+      expect(cli.has('force'), isTrue);
+      expect(cli.has('p'), isTrue);
+      expect(cli.get('p', 0), equals(8));
+      expect(cli.get('name', ''), equals('test'));
+      expect(cli.list(), equals(['file1', 'file2']));
     });
 
     test('all collects repeats and no reads negative flags', () {
-      system.cli.parse([
+      cli.parse([
         '--tag',
         'a',
         '--tag',
@@ -477,12 +477,12 @@ void main() async {
         '--cache',
       ]);
 
-      expect(system.cli.all<String>('tag'), equals(['a', 'b']));
-      expect(system.cli.no('compress'), isTrue);
+      expect(cli.all<String>('tag'), equals(['a', 'b']));
+      expect(cli.no('compress'), isTrue);
       // --no-compress must not report the positive flag as present.
-      expect(system.cli.has('compress'), isFalse);
-      expect(system.cli.get<bool>('compress', true), isFalse);
-      expect(system.cli.get<bool>('cache', false), isTrue);
+      expect(cli.has('compress'), isFalse);
+      expect(cli.get<bool>('compress', true), isFalse);
+      expect(cli.get<bool>('cache', false), isTrue);
     });
 
     test(
@@ -1186,12 +1186,12 @@ void main() async {
     });
 
     test('git inspects the repository', () async {
-      expect(await git.branch(), isNotEmpty);
-      final hash = await git.hash();
+      expect(await tool.git.branch(), isNotEmpty);
+      final hash = await tool.git.hash();
       expect(hash.length, greaterThanOrEqualTo(7));
-      expect(await git.hash(full: true), startsWith(hash));
-      expect(await git.dirty(), isA<bool>());
-      expect(await git.status(), isA<String>());
+      expect(await tool.git.hash(full: true), startsWith(hash));
+      expect(await tool.git.dirty(), isA<bool>());
+      expect(await tool.git.status(), isA<String>());
     });
 
     test('extensions build Durations and Uris', () {
@@ -1249,18 +1249,31 @@ void main() async {
     );
 
     test('git mutating methods return SysResult', () async {
-      // In a repo with nothing staged, commit fails and returns SysResult with exit code and output
-      final result = await git.commit('test empty commit');
-      expect(result, isA<SysResult>());
-      expect(result.ok, isFalse);
-      expect(result.out.isNotEmpty || result.err.isNotEmpty, isTrue);
+      // In a throwaway repo, never this one. These calls used to run in the
+      // project directory on the assumption that nothing would be staged, so
+      // a developer with staged work got it committed by the test suite.
+      final repo = Directory.systemTemp.createTempSync('dt_git_');
+      final cwd = repo.path;
+      try {
+        await tool.git.run(['init', '-q'], cwd);
+        await tool.git.run(['config', 'user.email', 'test@example.com'], cwd);
+        await tool.git.run(['config', 'user.name', 'Test'], cwd);
 
-      final addResult = await git.add('non_existent_file_xyz.txt');
-      expect(addResult, isA<SysResult>());
+        // Nothing staged, so the commit fails and says why.
+        final result = await tool.git.commit('test empty commit', cwd: cwd);
+        expect(result, isA<SysResult>());
+        expect(result.ok, isFalse);
+        expect(result.out.isNotEmpty || result.err.isNotEmpty, isTrue);
 
-      final markResult = await git.mark('--invalid-flag-fails');
-      expect(markResult, isA<SysResult>());
-      expect(markResult.ok, isFalse);
+        final addResult = await tool.git.add('non_existent_file_xyz.txt', cwd);
+        expect(addResult, isA<SysResult>());
+
+        final markResult = await tool.git.mark('--invalid-flag-fails', cwd);
+        expect(markResult, isA<SysResult>());
+        expect(markResult.ok, isFalse);
+      } finally {
+        repo.deleteSync(recursive: true);
+      }
     });
   });
 
@@ -1292,17 +1305,27 @@ void main() async {
       );
     });
 
-    test('system exposes env, cli and on', () {
+    test('system exposes env, console and on', () {
       expect(system.env, isA<EnvAccessor>());
-      expect(system.cli, isA<CliAccessor>());
+      expect(system.console, isA<ConsoleAccessor>());
       expect(system.on, isA<SysEvents>());
     });
 
-    test('util exposes time, size, git and console', () {
+    test('cli is a domain of its own, not a corner of system', () {
+      expect(cli, isA<CliAccessor>());
+    });
+
+    test('tool exposes git and zip', () {
+      expect(tool.git, isA<GitAccessor>());
+      expect(tool.zip, isA<ZipAccessor>());
+    });
+
+    test('util exposes time, size, text, hash and rand', () {
       expect(util.time, isA<TimeAccessor>());
       expect(util.size, isA<SizeAccessor>());
-      expect(git, isA<GitAccessor>());
-      expect(system.console, isA<ConsoleAccessor>());
+      expect(util.text, isA<TextAccessor>());
+      expect(util.hash, isA<HashAccessor>());
+      expect(util.rand, isA<RandAccessor>());
     });
   });
 }

@@ -2,6 +2,98 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.6.0
+
+The namespace, sorted. `system` had become the drawer everything went into when
+it was not obviously files or sockets — argument parsing sat beside subprocess
+spawning, and `NAMESPACE.md`'s own Rule 1 said it should not have. Meanwhile
+`git` and `zip` each held a top-level name, and the next wrapped binary would
+have taken a third. Two exported type names collided with the packages any user
+of this one imports, and one of those collisions was silent.
+
+Nothing here changes behaviour. Everything here changes where a name lives.
+
+### Changed
+
+- **Argument parsing is `cli`, not `system.cli`.** Rule 1 sorts a domain by
+  what it touches, and parsing a `List<String>` touches nothing — no process,
+  no environment, no terminal. The axis test would have filed it under `util`,
+  beside `slug` and `bytes`, which is just as wrong. It is a *subject*: flags,
+  options and subcommands are forty years of Unix convention, not a way of
+  reaching the machine. `cli.parse(args)`, `cli.flag('force')`,
+  `cli.run(args)`. It still resolves an `env:` fallback through `system.env`
+  and still wraps its usage text to the terminal's width; those are
+  one-directional, and nothing in `system` needs `cli` back.
+- **`git` and `zip` are `tool.git` and `tool.zip`.** Both passed every test for
+  a top-level name — whole tool, entangled with nothing, distinctive jargon,
+  better flat. So would `docker`, `ssh`, `gh` and `ffmpeg`, and a top level
+  that grows a name per wrapped binary is not a top level. Rule 2 gained a
+  fifth test for exactly this: a name that arrives with siblings does not take
+  the top level, the family does. `tool.docker` now costs nothing.
+- **`Digest` is `Algo`.** `package:crypto` exports a `Digest` of its own, so a
+  file importing both it and this library did not compile — `ambiguous_import`,
+  on a name neither library will give up. The two meant different things
+  anyway: crypto's is a hash *result*, this one selects an *algorithm*.
+  `io.hash(path, Algo.md5)`. `lib/src/fs.dart` had been writing
+  `crypto.Digest` to name the other one for as long as both existed.
+- **`Process<T>` is `Handler<T>`.** Dart resolves a package import over a
+  `dart:` one *without an error*, so exporting `Process` quietly stopped
+  `Process` meaning `dart:io`'s for everyone who imported this library — while
+  `system.adopt(Process)`, in the same package, still meant that one. A shadow
+  with no diagnostic is worse than a collision with one. The typedef is a
+  pipeline's page handler, so `Handler` is also the better name.
+- **`system.which`'s parameter is `exe`, not `tool`.** It shadowed the new
+  domain, which is the smell Rule 3 warns about. Positional, so no call site
+  changes.
+
+### Added
+
+- **`NAMESPACE.md` distinguishes axes from subjects.** An *axis* is a way of
+  touching the machine — `io`, `net`, `system`, `concurrent`, `util` — and what
+  it touches is what it is about. A *subject* is knowledge that came from
+  outside Dart: a command-line convention, an executable, a file format, a
+  selector language. Ask which kind you have first, because the two tests
+  disagree, and the old single ladder is what produced `system.cli`. A subject
+  still has to pass Rule 2; `net.crawl` and `system.console` are the cases that
+  do not, and the document now says why each stays where it is.
+- **Rule 6 covers type names.** A type is global no matter how deep its
+  accessor: `tool.zip.pack` is three levels down and the `Format` it returns is
+  still in every user's scope. The rule now carries the mechanical test —
+  import the library next to `dart:io` and `package:crypto` and see whether the
+  analyzer complains — which is how both renames above were found.
+- **A regression test for that.** `test/regression_test.dart` imports
+  `package:crypto` unprefixed alongside `dart:io`, so the file compiling at all
+  is the collision check. It failed against both names before this release.
+
+### Fixed
+
+- **The test suite no longer commits your staged work.** `git mutating methods
+  return SysResult` ran `git commit` in the project directory on the assumption
+  that nothing would ever be staged, and asserted that it failed. Run it with
+  work staged and the assertion was wrong in the worst possible way: the commit
+  succeeded, and the suite had committed it. It now runs against a throwaway
+  repository under the system temp directory, which also makes the "nothing to
+  commit" failure deterministic rather than dependent on the developer's
+  working tree.
+- **`README.md` called `tool.git.tag('v1.0.0')` a way to create a tag.** `tag()`
+  *reads* the most recent one and takes an optional `cwd`, so the argument bound
+  to the working directory and the call silently did something else. Creating a
+  tag is `mark`.
+
+### Migration
+
+| 1.5.0 | 1.6.0 |
+| :--- | :--- |
+| `system.cli.parse(args)` | `cli.parse(args)` |
+| `git.branch()` | `tool.git.branch()` |
+| `zip.pack(src, dest)` | `tool.zip.pack(src, dest)` |
+| `Digest.sha256` | `Algo.sha256` |
+| `Process<T>` | `Handler<T>` |
+
+Rule 5 forbids two spellings of one operation, so the old names are gone rather
+than deprecated. Each row is a find-and-replace; the analyzer finds every call
+site for you.
+
 ## 1.5.0
 
 The parts a real script needs and had to hand-roll. Scraped text arrived with

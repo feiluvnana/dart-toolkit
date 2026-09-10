@@ -1,8 +1,11 @@
 /// # System Domain (`system.*`)
 ///
 /// Everything between this program and the machine running it: subprocesses,
-/// environment variables (`system.env`), CLI arguments (`system.cli`), the
-/// terminal (`system.console`) and crash-safe shutdown.
+/// environment variables (`system.env`), the terminal (`system.console`) and
+/// crash-safe shutdown.
+///
+/// Argument parsing is not here. It reads a `List<String>` and touches nothing,
+/// so it is the `cli` domain.
 library;
 
 import 'dart:async';
@@ -11,23 +14,20 @@ import 'dart:io' as io show exit;
 
 import '../src/proc.dart';
 import '../src/shared.dart';
-import 'cli.dart';
 import 'console/console.dart';
 import 'env.dart';
 
 export '../src/proc.dart' show SysResult;
-export 'cli.dart';
 export 'console/console.dart';
 export 'env.dart';
 
 // ============================================================================
-// SYSTEM DOMAIN (system.*) - Processes, Environment, CLI & Signals
+// SYSTEM DOMAIN (system.*) - Processes, Environment, Terminal & Signals
 // ============================================================================
 
 final EnvAccessor _env = sharedEnv;
-final CliAccessor _cli = CliAccessor();
 
-/// The `system` domain: processes, environment, CLI arguments and signals.
+/// The `system` domain: processes, environment, the terminal and signals.
 const SystemAccessor system = SystemAccessor();
 
 /// Entry point for subprocess execution and OS integration.
@@ -42,9 +42,6 @@ class SystemAccessor {
 
   /// Environment variables and `.env` loading.
   EnvAccessor get env => _env;
-
-  /// Command-line argument parsing.
-  CliAccessor get cli => _cli;
 
   /// Terminal output and input.
   ConsoleAccessor get console => const ConsoleAccessor();
@@ -77,12 +74,12 @@ class SystemAccessor {
     err: err,
   );
 
-  /// Resolves [tool] to an absolute executable path, or `null` if not found.
+  /// Resolves [exe] to an absolute executable path, or `null` if not found.
   ///
   /// Searches [paths] first, then `PATH`. On Windows the `.exe`, `.cmd` and
   /// `.bat` extensions are tried for each candidate.
-  String? which(String tool, {List<String>? paths}) =>
-      Sys.which(tool, paths: paths);
+  String? which(String exe, {List<String>? paths}) =>
+      Sys.which(exe, paths: paths);
 
   /// Starts watching for `SIGINT` and `SIGTERM` so tracked resources are
   /// cleaned up on Ctrl-C and on `kill`.

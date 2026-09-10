@@ -451,7 +451,7 @@ void main() {
     });
   });
 
-  group('system.cli', () {
+  group('cli', () {
     test('count reads a repeated switch as a level', () {
       final cli = Cli(const ['-vvv'])..flag('verbose', alias: 'v');
       expect(cli.count('verbose'), 3);
@@ -504,9 +504,9 @@ void main() {
 
       for (final name in ['out.zip', 'out.tar', 'out.tar.gz']) {
         final archive = '${root.path}/$name';
-        await zip.pack('${root.path}/src', archive);
+        await tool.zip.pack('${root.path}/src', archive);
         final dest = '${root.path}/back_$name';
-        await zip.unpack(archive, dest);
+        await tool.zip.unpack(archive, dest);
 
         final restored = File('$dest/run.sh');
         expect(restored.existsSync(), isTrue, reason: name);
@@ -530,8 +530,8 @@ void main() {
         ..writeAsStringSync('hello');
       await system.run('chmod', ['600', file.path]);
 
-      await zip.pack(file.path, '${root.path}/one.zip');
-      await zip.unpack('${root.path}/one.zip', '${root.path}/back');
+      await tool.zip.pack(file.path, '${root.path}/one.zip');
+      await tool.zip.unpack('${root.path}/one.zip', '${root.path}/back');
 
       if (!Platform.isWindows) {
         expect(
@@ -546,8 +546,8 @@ void main() {
     test('fetch and checkout keep the soft-failure contract', () async {
       // Query methods promise a result rather than an exception, even with no
       // git and no repository.
-      expect((await git.fetch(remote: 'origin')).code, isA<int>());
-      expect((await git.checkout('nonexistent-branch-xyz')).ok, isFalse);
+      expect((await tool.git.fetch(remote: 'origin')).code, isA<int>());
+      expect((await tool.git.checkout('nonexistent-branch-xyz')).ok, isFalse);
     });
   });
 

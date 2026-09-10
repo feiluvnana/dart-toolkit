@@ -38,15 +38,15 @@ class Crawl {
   ///
   /// [T] is the type of item handlers [Response.emit]. Pass a [process]
   /// function here, or hand one to [CrawlBuilder.run] at the end.
-  CrawlBuilder<T> call<T>(String target, [Process<T>? process]) =>
+  CrawlBuilder<T> call<T>(String target, [Handler<T>? process]) =>
       CrawlBuilder<T>([target], process);
 
   /// Starts a crawl seeded with several [targets] strings.
-  CrawlBuilder<T> all<T>(Iterable<String> targets, [Process<T>? process]) =>
+  CrawlBuilder<T> all<T>(Iterable<String> targets, [Handler<T>? process]) =>
       CrawlBuilder<T>(targets, process);
 
   /// Starts a crawl seeded with raw HTML [markup].
-  CrawlBuilder<T> html<T>(String markup, [Process<T>? process]) {
+  CrawlBuilder<T> html<T>(String markup, [Handler<T>? process]) {
     final uri = Uri.dataFromString(
       markup,
       mimeType: 'text/html',
@@ -56,13 +56,13 @@ class Crawl {
   }
 
   /// Starts a crawl seeded with a local file [path].
-  CrawlBuilder<T> file<T>(String path, [Process<T>? process]) {
+  CrawlBuilder<T> file<T>(String path, [Handler<T>? process]) {
     final uri = Uri.file(File(path).absolute.path);
     return seed<T>([Request<T>(uri)], process);
   }
 
   /// Starts a crawl seeded with all URLs discovered in [sitemapUrl].
-  CrawlBuilder<T> sitemap<T>(Uri sitemapUrl, [Process<T>? process]) {
+  CrawlBuilder<T> sitemap<T>(Uri sitemapUrl, [Handler<T>? process]) {
     final builder = CrawlBuilder<T>(const [], process);
     builder.sitemap(sitemapUrl);
     return builder;
@@ -73,7 +73,7 @@ class Crawl {
   /// Use this when seeds need their own headers, tags, priority or method.
   CrawlBuilder<T> seed<T>(
     Iterable<Request<T>> requests, [
-    Process<T>? process,
+    Handler<T>? process,
   ]) {
     final builder = CrawlBuilder<T>(const [], process);
     builder._seeds.addAll(requests);
@@ -88,7 +88,7 @@ class Crawl {
 class CrawlBuilder<T> {
   final List<String> _urls;
   final List<Request<T>> _seeds = [];
-  final Process<T>? _process;
+  final Handler<T>? _process;
 
   int? _concurrency;
   Duration? _delay;
@@ -114,8 +114,8 @@ class CrawlBuilder<T> {
   int? _cap;
   HttpCache? _cache;
 
-  final List<({Pattern pattern, Process<T> handler})> _routes = [];
-  final List<({String name, Process<T> handler})> _tags = [];
+  final List<({Pattern pattern, Handler<T> handler})> _routes = [];
+  final List<({String name, Handler<T> handler})> _tags = [];
 
   final List<void Function()> _startHandlers = [];
   final List<void Function(Stats stats)> _doneHandlers = [];
@@ -324,7 +324,7 @@ class CrawlBuilder<T> {
   }
 
   /// Routes responses whose URL matches [pattern] to [handler].
-  CrawlBuilder<T> route(Pattern pattern, Process<T> handler) {
+  CrawlBuilder<T> route(Pattern pattern, Handler<T> handler) {
     _routes.add((pattern: pattern, handler: handler));
     return this;
   }
@@ -333,7 +333,7 @@ class CrawlBuilder<T> {
   ///
   /// Tags are how a multi-stage crawl keeps its stages apart:
   /// `res.follow(href, tag: 'detail')` sends that page to `tag('detail', ...)`.
-  CrawlBuilder<T> tag(String name, Process<T> handler) {
+  CrawlBuilder<T> tag(String name, Handler<T> handler) {
     _tags.add((name: name, handler: handler));
     return this;
   }
@@ -345,7 +345,7 @@ class CrawlBuilder<T> {
   ///
   /// Useful when you want to inspect [Engine.stats] or drive the engine
   /// yourself; [run] and [collect] call this for you.
-  Engine<T> engine([Process<T>? process]) {
+  Engine<T> engine([Handler<T>? process]) {
     final Downloader<T> dl;
     final bool owns;
 
@@ -533,7 +533,7 @@ class CrawlBuilder<T> {
   ///
   /// [process] handles responses no [route] or [tag] matched, overriding any
   /// function given to `net.crawl(...)`.
-  Future<Stats> run([Process<T>? process]) async {
+  Future<Stats> run([Handler<T>? process]) async {
     final urls = await _resolveUrls();
     final engine = this.engine(process);
     _arm(engine);
@@ -548,7 +548,7 @@ class CrawlBuilder<T> {
   ///
   /// Items arrive in emission order. For a large crawl prefer [stream], which
   /// does not hold every item in memory.
-  Future<List<T>> collect([Process<T>? process]) async {
+  Future<List<T>> collect([Handler<T>? process]) async {
     final items = <T>[];
     final engine = this.engine(process);
     final subscription = engine.items.listen(items.add);
@@ -568,7 +568,7 @@ class CrawlBuilder<T> {
   /// Accepts a file path string or an [IOSink]. Maps and Lists are written as
   /// JSON lines. Nothing is held in memory, so this is what a long crawl wants
   /// where [collect] would not fit.
-  Future<Stats> save(Object sinkOrPath, [Process<T>? process]) async {
+  Future<Stats> save(Object sinkOrPath, [Handler<T>? process]) async {
     final IOSink sink;
     final bool ownsSink;
     if (sinkOrPath is String) {
@@ -610,7 +610,7 @@ class CrawlBuilder<T> {
   ///
   /// The stream closes when the crawl finishes. Use this instead of [collect]
   /// when the result set is large or you want to process items as they arrive.
-  Stream<T> stream([Process<T>? process]) {
+  Stream<T> stream([Handler<T>? process]) {
     final engine = this.engine(process);
     late final StreamController<T> controller;
     controller = StreamController<T>(

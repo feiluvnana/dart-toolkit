@@ -43,6 +43,6 @@ frontier — just `net.http` and the selector API, with the loose string schema
 and the typed `Field` form side by side.
 
 **`tool.dart`** if you are writing a command-line program. Commands and their
-arguments are declared once, and `system.cli.run` handles `--help`, validation,
+arguments are declared once, and `cli.run` handles `--help`, validation,
 dispatch and the exit code; `system.on.exit` plus `system.shutdown()` make the
 script safe to Ctrl-C.

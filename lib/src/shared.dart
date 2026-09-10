@@ -1,8 +1,9 @@
-/// Shared accessor instances used across the `system` domain.
+/// Shared accessor instances used across domains.
 ///
-/// These live here, outside the domain files, so that sub-namespaces can reach
-/// one another's state without importing each other: `system.cli` resolves
-/// option defaults through the same [EnvAccessor] that `system.env` mutates.
+/// The [EnvAccessor] lives here, outside the domain files, so that `cli` can
+/// read it without importing `system` and `system` can expose it without
+/// importing `cli`: `cli` resolves an option's `env:` fallback through the same
+/// accessor that `system.env` mutates.
 library;
 
 import '../system/env.dart';

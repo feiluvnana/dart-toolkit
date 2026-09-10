@@ -1,4 +1,4 @@
-# CLI Arguments (`system.cli.*`)
+# CLI Arguments (`cli.*`)
 
 A dependency-free command line parser: flags, options, clustered short
 switches, subcommands, defaults, environment fallbacks, automatic help and
@@ -14,14 +14,14 @@ Two ways in. Declare an interface and read it yourself:
 import 'package:dart_toolkit/dart_toolkit.dart';
 
 void main(List<String> args) {
-  system.cli
+  cli
     ..flag('force', alias: 'f', desc: 'Overwrite existing files')
     ..option('concurrency', alias: 'c', desc: 'Worker count', def: 4)
     ..parse(args);
 
-  final force = system.cli.has('force');
-  final size = system.cli.get('concurrency', 0); // 4 unless given
-  print('force: $force, workers: $size, files: ${system.cli.list()}');
+  final force = cli.has('force');
+  final size = cli.get('concurrency', 0); // 4 unless given
+  print('force: $force, workers: $size, files: ${cli.list()}');
 }
 ```
 
@@ -37,12 +37,12 @@ Future<int> build(Cli cli) async {
 }
 
 void main(List<String> args) async {
-  system.cli.option('out', alias: 'o', desc: 'Output directory', def: 'dist');
+  cli.option('out', alias: 'o', desc: 'Output directory', def: 'dist');
 
-  system.cli.handle('build', build, desc: 'Build the project')
+  cli.handle('build', build, desc: 'Build the project')
     ..option('workers', alias: 'w', desc: 'Parallel workers', def: 4);
 
-  await system.shutdown(await system.cli.run(args, version: '1.1.0'));
+  await system.shutdown(await cli.run(args, version: '1.1.0'));
 }
 ```
 
@@ -81,7 +81,7 @@ multi-letter short name is never split once you declare it: declare
 ## 2. Declaring Flags and Options
 
 ```dart
-system.cli
+cli
   ..flag('verbose', alias: 'v', desc: 'Enable debug output')
   ..option('output', alias: 'o', desc: 'Destination directory', def: 'dist')
   ..option('mode', desc: 'Build mode', allowed: ['debug', 'release'])
@@ -108,9 +108,9 @@ A flag never consumes the token after it, so declaring `verbose` is what keeps
 then the fallback at the call site:
 
 ```dart
-system.cli.option('out', def: 'dist', env: 'OUT_DIR');
+cli.option('out', def: 'dist', env: 'OUT_DIR');
 
-system.cli.get('out', '');  // 'dist', or $OUT_DIR, or whatever --out gave
+cli.get('out', '');  // 'dist', or $OUT_DIR, or whatever --out gave
 ```
 
 Because the default lives in the declaration, it is written once instead of at
@@ -129,13 +129,13 @@ or an `env` variable that is set, counts as supplied. Throws `ArgumentError`
 naming everything that failed.
 
 ```dart
-system.cli
+cli
   ..option('output', required: true)
   ..option('mode', allowed: ['debug', 'release'])
   ..parse(args);
 
 try {
-  system.cli.require();
+  cli.require();
 } on ArgumentError catch (error) {
   print(error.message);   // missing --output, --mode must be one of debug, ...
 }
@@ -167,17 +167,17 @@ uses are declared right there. Nest with `group`.
 Future<int> add(Cli cli) async => 0;
 
 void main(List<String> args) async {
-  system.cli.flag('verbose', alias: 'v', desc: 'Log every step');
+  cli.flag('verbose', alias: 'v', desc: 'Log every step');
 
-  system.cli.handle('build', (cli) async => 0, desc: 'Build the project')
+  cli.handle('build', (cli) async => 0, desc: 'Build the project')
     ..flag('release', desc: 'Optimise the output')
     ..option('out', alias: 'o', def: 'dist');
 
-  final remote = system.cli.group('remote', desc: 'Manage remotes');
+  final remote = cli.group('remote', desc: 'Manage remotes');
   remote.handle('add', add, desc: 'Add a remote')
     ..option('url', required: true);
 
-  await system.shutdown(await system.cli.run(args));
+  await system.shutdown(await cli.run(args));
 }
 ```
 
@@ -189,7 +189,7 @@ its own prints that group's usage block.
 ### `run`
 
 ```dart
-await system.cli.run(
+await cli.run(
   args,
   syntax: 'tool <command> [options]',  // the Usage: line
   desc: 'What this program does.',     // shown above it
@@ -246,10 +246,10 @@ cli.subcommand('commit', (sub) => print(sub.rest));
 null and never needs an explicit type argument:
 
 ```dart
-system.cli.get('concurrency', 4);      // int
-system.cli.get('name', '');            // String
-system.cli.get('rate', 1.5);           // double
-system.cli.get('cache', true);         // bool
+cli.get('concurrency', 4);      // int
+cli.get('name', '');            // String
+cli.get('rate', 1.5);           // double
+cli.get('cache', true);         // bool
 ```
 
 For `bool`, `--no-x` yields `false`, a bare `--x` yields `true`, and
@@ -258,7 +258,7 @@ For `bool`, `--no-x` yields `false`, a bare `--x` yields `true`, and
 ### `has(name, [alias])`
 
 ```dart
-system.cli.has('force', 'f');    // --force or -f
+cli.has('force', 'f');    // --force or -f
 ```
 
 > `--no-force` does **not** make `has('force')` true. Test for the negative
@@ -267,7 +267,7 @@ system.cli.has('force', 'f');    // --force or -f
 ### `no(name)`
 
 ```dart
-system.cli.no('cache');    // --no-cache or --nocache
+cli.no('cache');    // --no-cache or --nocache
 ```
 
 ### `count(name, [alias])`
@@ -276,9 +276,9 @@ How many times a switch was given, which is how a command line spells a level.
 `-vvv` and `--verbose --verbose --verbose` both count three:
 
 ```dart
-system.cli.flag('verbose', alias: 'v');
+cli.flag('verbose', alias: 'v');
 
-system.console.logger.level = switch (system.cli.count('verbose')) {
+system.console.logger.level = switch (cli.count('verbose')) {
   0 => LogLevel.warn,
   1 => LogLevel.info,
   _ => LogLevel.debug,
@@ -295,16 +295,16 @@ each comma-separated part, so `--tag a,b` and `--tag a --tag b` read the same:
 
 ```dart
 // --tag a --tag b
-system.cli.all<String>('tag');   // ['a', 'b']
+cli.all<String>('tag');   // ['a', 'b']
 // --id 1 --id 2
-system.cli.all<int>('id');       // [1, 2]
+cli.all<int>('id');       // [1, 2]
 ```
 
 ### `list()` and `raw`
 
 ```dart
-system.cli.list();   // positional arguments, in order
-system.cli.raw;      // the argument list exactly as parsed
+cli.list();   // positional arguments, in order
+cli.raw;      // the argument list exactly as parsed
 ```
 
 Leading dashes are optional: `has('--force')` and `has('force')` are identical
@@ -349,7 +349,7 @@ Options:
 Pass `flags:` or `options:` to write the sections by hand instead:
 
 ```dart
-system.cli.help(
+cli.help(
   syntax: 'dart run tool.dart [options] <files...>',
   desc: 'Processes files concurrently.',
   flags: {'-f, --force': 'Overwrite existing output'},

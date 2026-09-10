@@ -1,4 +1,4 @@
-/// # Git Domain (`git.*`)
+/// # Git Tool (`tool.git.*`)
 ///
 /// Thin wrappers over the `git` executable for the queries scripts need:
 /// current branch, HEAD hash, working-tree cleanliness. Anything not here is
@@ -10,23 +10,20 @@ import 'dart:io';
 import '../src/proc.dart';
 
 // ============================================================================
-// GIT DOMAIN (git.*)
+// GIT TOOL (tool.git.*)
 // ============================================================================
 
-/// The `git` domain: repository queries and commands.
-const GitAccessor git = GitAccessor();
-
-/// Entry point for git commands, reachable as [git].
+/// Entry point for git commands, reachable as `tool.git`.
 ///
 /// Query methods return an empty string or status when the command fails, so
 /// they are safe to call outside a repository. Mutating methods return
 /// [SysResult] with the exit code and output; check [SysResult.ok] for success.
 ///
 /// ```dart
-/// if (await git.dirty()) print('uncommitted changes');
+/// if (await tool.git.dirty()) print('uncommitted changes');
 /// ```
 class GitAccessor {
-  /// Creates the accessor. Prefer the shared [git] instance.
+  /// Creates the accessor. Prefer the shared `tool.git` instance.
   const GitAccessor();
 
   /// The exit code reported when `git` itself cannot be run.

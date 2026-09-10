@@ -20,14 +20,14 @@ void main(List<String> args) async {
 
   // Declare once. `--help`, `--version` and validation all read these, and an
   // alias given here is honoured by every later `get` and `has`.
-  system.cli
+  cli
     ..flag('verbose', alias: 'v', desc: 'Log every step')
     ..flag('yes', alias: 'y', desc: 'Skip confirmation prompts')
     ..option('out', alias: 'o', desc: 'Output directory', def: 'dist')
     ..option('token', desc: 'API token', env: 'API_TOKEN', required: true);
 
   // Each command carries the arguments only it uses.
-  system.cli.handle('build', _build, desc: 'Build every target')
+  cli.handle('build', _build, desc: 'Build every target')
     ..option('concurrency', alias: 'c', desc: 'Parallel workers', def: 4)
     ..option(
       'mode',
@@ -35,8 +35,8 @@ void main(List<String> args) async {
       allowed: ['debug', 'release'],
       def: 'debug',
     );
-  system.cli.handle('clean', _clean, desc: 'Remove the output directory');
-  system.cli.handle('report', _report, desc: 'Summarise what was built');
+  cli.handle('clean', _clean, desc: 'Remove the output directory');
+  cli.handle('report', _report, desc: 'Summarise what was built');
 
   // Anything tracked here is cleaned up on Ctrl-C as well as on a normal exit.
   system.on.exit(() async {
@@ -47,7 +47,7 @@ void main(List<String> args) async {
   // `run` returns the exit code: whatever the handler returned, or 64 for a
   // command line it could not make sense of.
   await system.shutdown(
-    await system.cli.run(
+    await cli.run(
       args,
       syntax: 'tool.dart <command> [options]',
       desc: 'A worked example of the CLI, console and concurrency domains.',
@@ -149,7 +149,7 @@ Future<bool> _report(Cli cli) async {
     ]);
   }
 
-  out.table(Table(headers: ['File', 'Size', 'Digest'])..addAll(rows));
+  out.table(Table(headers: ['File', 'Size', 'Algo'])..addAll(rows));
   out.box(
     'Files  ${files.length}\nTotal  ${util.size.format(total)}',
     title: 'report',

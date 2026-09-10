@@ -17,10 +17,10 @@ void main() {
       io.write(at('site/index.html'), '<h1>Home</h1>');
       io.write(at('site/css/app.css'), 'body{}');
 
-      await zip.pack(at('site'), at('site.zip'));
+      await tool.zip.pack(at('site'), at('site.zip'));
       expect(io.has(at('site.zip')), isTrue);
 
-      final files = await zip.unpack(at('site.zip'), at('out'));
+      final files = await tool.zip.unpack(at('site.zip'), at('out'));
       expect(files, hasLength(2));
       expect(io.read(at('out/index.html')), equals('<h1>Home</h1>'));
       expect(io.read(at('out/css/app.css')), equals('body{}'));
@@ -29,34 +29,34 @@ void main() {
     test('lists and reads entries without unpacking', () async {
       io.write(at('src/a.txt'), 'alpha');
       io.write(at('src/b.txt'), 'beta');
-      await zip.pack(at('src'), at('src.zip'));
+      await tool.zip.pack(at('src'), at('src.zip'));
 
       final names =
-          (await zip.list(
+          (await tool.zip.list(
               at('src.zip'),
             )).where((e) => !e.folder).map((e) => e.name).toList()
             ..sort();
       expect(names, equals(['a.txt', 'b.txt']));
 
-      final bytes = await zip.read(at('src.zip'), 'b.txt');
+      final bytes = await tool.zip.read(at('src.zip'), 'b.txt');
       expect(utf8.decode(bytes!), equals('beta'));
-      expect(await zip.read(at('src.zip'), 'missing.txt'), isNull);
+      expect(await tool.zip.read(at('src.zip'), 'missing.txt'), isNull);
     });
 
     test('bundles in-memory data', () async {
-      await zip.bundle(at('mem.zip'), {
+      await tool.zip.bundle(at('mem.zip'), {
         'notes.txt': utf8.encode('from memory'),
       });
-      final bytes = await zip.read(at('mem.zip'), 'notes.txt');
+      final bytes = await tool.zip.read(at('mem.zip'), 'notes.txt');
       expect(utf8.decode(bytes!), equals('from memory'));
     });
 
     test('round-trips through tar and tar.gz', () async {
       io.write(at('d/one.txt'), 'one');
       for (final name in ['d.tar', 'd.tar.gz', 'd.tgz']) {
-        await zip.pack(at('d'), at(name));
+        await tool.zip.pack(at('d'), at(name));
         final out = at('un_${util.text.slug(name)}');
-        await zip.unpack(at(name), out);
+        await tool.zip.unpack(at(name), out);
         expect(io.read(io.join(out, 'one.txt')), equals('one'), reason: name);
       }
     });
@@ -71,11 +71,11 @@ void main() {
     });
 
     test('an entry that escapes the destination is skipped', () async {
-      await zip.bundle(at('evil.zip'), {
+      await tool.zip.bundle(at('evil.zip'), {
         '../escaped.txt': utf8.encode('nope'),
         'safe.txt': utf8.encode('yes'),
       });
-      final written = await zip.unpack(at('evil.zip'), at('dest'));
+      final written = await tool.zip.unpack(at('evil.zip'), at('dest'));
       expect(written, hasLength(1));
       expect(io.has(at('escaped.txt')), isFalse);
       expect(io.read(at('dest/safe.txt')), equals('yes'));
@@ -83,9 +83,9 @@ void main() {
 
     test('deflate and inflate round-trip', () {
       final raw = utf8.encode('compress me' * 50);
-      final packed = zip.deflate(raw);
+      final packed = tool.zip.deflate(raw);
       expect(packed.length, lessThan(raw.length));
-      expect(zip.inflate(packed), equals(raw));
+      expect(tool.zip.inflate(packed), equals(raw));
     });
   });
 

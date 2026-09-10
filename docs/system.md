@@ -118,6 +118,6 @@ The one exception is `system.on.exit`: a registered hook stays pending, and so k
 
 ## See Also
 
-- [`system.cli.*`](cli.md) — argument parsing
+- [`cli.*`](cli.md) — argument parsing
 - [`system.env.*`](env.md) — environment variables
-- [`git.*`](git.md) — git commands, built on `system.run`
+- [`tool.git.*`](git.md) — git commands, built on `system.run`

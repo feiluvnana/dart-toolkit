@@ -4,10 +4,31 @@ library;
 
 import 'dart:io';
 
+// Imported unprefixed on purpose. `package:crypto` exports a `Digest` and
+// `dart:io` a `Process`; this file compiling at all is the Rule 6 collision
+// test, and it failed against both names before 1.6.0.
+import 'package:crypto/crypto.dart';
 import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:test/test.dart';
 
 void main() {
+  group('exported type names', () {
+    test('the library imports beside dart:io and crypto without collision', () {
+      // `Digest` resolves to crypto's, because the toolkit's algorithm enum is
+      // `Algo`. Before, this was an ambiguous_import error.
+      final Digest sum = sha256.convert(const [1, 2, 3]);
+      expect(sum.bytes, hasLength(32));
+      expect(Algo.values, contains(Algo.sha256));
+
+      // `Process` resolves to dart:io's, because the pipeline's page handler is
+      // `Handler`. Before, the toolkit's typedef won silently — a package
+      // import beats a `dart:` one without an error.
+      expect(Process.run, isA<Function>());
+      const Handler<String> handler = _noop;
+      expect(handler, isA<Handler<String>>());
+    });
+  });
+
   group('net.http cookies', () {
     test('a Domain the responding host does not own is refused', () {
       final jar = CookieJar();
@@ -33,7 +54,7 @@ void main() {
     });
   });
 
-  group('system.cli', () {
+  group('cli', () {
     test('get<bool> reads the declared env variable', () {
       system.env.set('DT_REGRESSION_FLAG', 'true');
       addTearDown(() => system.env.delete('DT_REGRESSION_FLAG'));
@@ -181,7 +202,7 @@ Disallow: /x
       final async = await io.async.hash(file.path);
       expect(sync, async);
       expect(sync, hasLength(64));
-      expect(io.hash(file.path, Digest.md5), hasLength(32));
+      expect(io.hash(file.path, Algo.md5), hasLength(32));
     });
   });
 
@@ -308,8 +329,8 @@ Disallow: /x
   group('git', () {
     test('a missing executable fails softly', () async {
       // Query methods promise an empty answer rather than an exception.
-      expect(await git.branch(), isA<String>());
-      expect(await git.status(), isA<String>());
+      expect(await tool.git.branch(), isA<String>());
+      expect(await tool.git.status(), isA<String>());
     });
   });
 
@@ -330,10 +351,12 @@ Disallow: /x
         if (file.existsSync()) file.deleteSync();
       });
 
-      await zip.pack(root.path, archive);
-      final names = (await zip.list(archive)).map((e) => e.name).toList();
+      await tool.zip.pack(root.path, archive);
+      final names = (await tool.zip.list(archive)).map((e) => e.name).toList();
       expect(names, contains('kept.txt'));
       expect(names.any((n) => n.contains('secret')), isFalse);
     });
   });
 }
+
+void _noop(Response<String> response) {}
