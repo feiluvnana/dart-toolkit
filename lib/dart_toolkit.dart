@@ -52,7 +52,7 @@
 ///   final titles = await net.crawl<String>('https://news.ycombinator.com'.url)
 ///       .concurrent(system.os.cpus)
 ///       .gather((page) => page.parse(format.html)
-///           .find('.titleline > a').texts.collect(.list()));
+///           .find('.titleline > a').texts);
 ///
 ///   io.write('titles.txt', titles.transform(.unique()).collect(.join('\n')));
 /// }
@@ -67,3 +67,13 @@ export 'io/io.dart';
 export 'net/net.dart';
 export 'system/system.dart';
 export 'util/util.dart';
+
+// The types and extensions no single domain owns: the two document cursors
+// every `parse` hands back, the CSV cursor, the [Codec] seam they arrive
+// through, and `.url`/`.ms`/`.s`. They lived under `lib/util/` through 5.4.0
+// and were never reachable as `util.` anything — see the `util` library doc.
+export 'src/codec.dart';
+export 'src/csv.dart';
+export 'src/extensions.dart';
+export 'src/json.dart';
+export 'src/markup.dart';

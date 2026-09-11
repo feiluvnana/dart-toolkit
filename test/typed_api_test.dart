@@ -388,9 +388,7 @@ void main() {
       final titles = await net
           .crawl<Never>('https://site.test'.url)
           .downloader(MapDownloader(pages))
-          .gather(
-            (page) => page.parse(format.html).find('h1').texts.collect(.list()),
-          );
+          .gather((page) => page.parse(format.html).find('h1').texts);
 
       expect(titles, isA<Sequence<String>>());
       expect(titles.collect(.list()), ['One', 'Two']);
@@ -405,8 +403,7 @@ void main() {
                 .parse(format.html)
                 .find('h1')
                 .texts
-                .transform(.where((t) => t.length > 3))
-                .collect(.list()),
+                .transform(.where((t) => t.length > 3)),
           );
 
       expect(long.collect(.empty()), isTrue);
@@ -422,7 +419,7 @@ void main() {
                 url: page.url.path,
                 titles: page.parse(format.html).find('h1').count,
               ),
-            ],
+            ].seq,
           );
 
       expect(rows.collect(.single())!.titles, 2);

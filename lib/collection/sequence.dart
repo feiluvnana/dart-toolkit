@@ -4,7 +4,8 @@
 ///
 /// Two members shape it — [Sequence.transform] takes a [Transformer] and
 /// [Sequence.collect] takes a [Collector] — and the vocabulary itself lives in
-/// those two namespaces rather than on this class. That is what lets every
+/// those two namespaces rather than on this class. [Flow] has the matching
+/// pair, [Flow.pipe] and [Flow.pour], over its own two operation types. That is what lets every
 /// operation take its ordinary name back: `map`, `where`, `take.first`,
 /// `group.by`, `max.by`, `count.by`, none of which could be a member here.
 ///
@@ -26,11 +27,11 @@ import 'transformer.dart';
 /// An ordered collection, carrying this library's vocabulary.
 ///
 /// ```dart
-/// final rows = await net.crawl<Row>(seed).collect();
+/// final rows = await net.crawl<Row>(seed).items();
 ///
 /// rows.collect(.group.into((r) => r.host, .sum((r) => r.cost)))
 ///     .pairs
-///     .collect(.sort.by((e) => e.$1))
+///     .transform(.sort.by((e) => e.$1))
 ///     .collect(.foreach(print));
 /// ```
 ///
@@ -140,7 +141,7 @@ final class Sequence<T> {
   ///
   /// ```dart
   /// rows.transform(.where((r) => r.live));
-  /// rows.collect(.sort.by((r) => r.cost)).transform(.take.first(10));
+  /// rows.transform(.sort.by((r) => r.cost)).transform(.take.first(10));
   /// ```
   ///
   /// A chain of three pays for `transform` three times, which is the price of
@@ -218,8 +219,11 @@ extension FlowedSequence<T> on Sequence<T> {
   /// These elements as a [Flow], walked only once the flow is collected.
   ///
   /// `.seq` for the ordered collection, `.dict` for the keyed one, `.flow`
-  /// for the one over time. The way back is `await flow.collect(.seq())`.
-  Flow<T> get flow => Flow<T>(Stream<T>.fromIterable(_items));
+  /// for the one over time. The way back is `await flow.pour(.seq())`.
+  ///
+  /// Re-derivable — see [Flow.of] — because a sequence can be walked again,
+  /// so the flow it becomes can be consumed again too.
+  Flow<T> get flow => Flow<T>.of(() => Stream<T>.fromIterable(_items));
 }
 
 /// Splitting a sequence of pairs back into two.

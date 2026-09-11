@@ -4,11 +4,13 @@
 /// hands back a [Markup] and nobody casts; this is the same idea for the
 /// other format a script meets constantly.
 ///
-/// The type lives here, in `util`, because it is a pure value that three
-/// domains hand back — `net` from a response, `format` from a document, `io`
-/// through neither — the same reason the cursors live here. The
-/// *codecs* are `format.json`, beside `format.yaml` and `format.toml`, because a
-/// format is knowledge from outside Dart.
+/// The type lives here, in `lib/src/`, because it belongs to no single
+/// domain: `net` hands one back from a response, `format` from a document.
+/// It sat under `lib/util/` through 5.4.0 and was never reachable as `util.`
+/// anything — a directory named after an accessor should hold that
+/// accessor's members. It is exported from the package root exactly as
+/// before. The *codecs* are `format.json`, beside `format.yaml` and
+/// `format.toml`, because a format is knowledge from outside Dart.
 ///
 /// Three doors produce the same cursor:
 ///

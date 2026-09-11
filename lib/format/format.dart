@@ -39,7 +39,7 @@ library;
 
 import 'dart:io';
 
-import '../util/codec.dart';
+import '../src/codec.dart';
 import 'csv.dart';
 import 'html.dart';
 import 'json.dart';

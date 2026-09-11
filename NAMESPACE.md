@@ -14,8 +14,8 @@ following it is what keeps the surface small enough to hold in your head.
 | `net` | The network: requests, downloads, crawling — and, in the other direction, listening. It parses nothing | `net.http`, `net.crawl` |
 | `system` | This program and the machine running it, and what happens to its resources when it is interrupted (`system.on`) | `system.env`, `system.console`, `system.on` |
 | `concurrent` | Bounded async work on one isolate: how many at once, and how often | — |
-| `util` | Pure computation, the two document cursors (`Json`, `Markup`) and the codec seam (`Codec`) that carries them across domains | `util.time`, `util.size`, `util.text`, `util.hash`, `util.rand` |
-| `collection` | The three collections this library returns in place of Dart's (`Sequence`, `Dictionary`, `Flow`), the two operation types that shape them (`Transformer`, `Collector`) and the typed keys (`Slot`). No accessor — a library, not a `collection.something` you call | — |
+| `util` | Pure computation, and nothing else | `util.time`, `util.size`, `util.text`, `util.hash`, `util.rand` |
+| `collection` | The three collections this library returns in place of Dart's (`Sequence`, `Dictionary`, `Flow`), the four operation types that shape them (`Transformer`/`Collector` for a sequence, `Pipe`/`Pour` for a flow) and the typed keys (`Slot`). No accessor — a library, not a `collection.something` you call | — |
 | `cli` | The command line your script presents to whoever runs it | — |
 | `format` | One file format per name — never an executable | `format.html`, `format.json`, `format.yaml`, `format.toml`, `format.csv`, `format.zip` |
 
@@ -36,8 +36,15 @@ two unrelated things — functions you call (`time`, `size`, `text`, `hash`,
 second kind and it grew two more types and a dozen namespaces, which is
 Rule 3's test for a sub-namespace (*a cohesive vocabulary with its own nouns*)
 described exactly. It is not a sub-namespace of `util` because nothing in
-`util` reaches it; it is a peer. `Json` and `Markup` stayed: they are cursors
-over documents, not collections.
+`util` reaches it; it is a peer.
+
+`Json`, `Markup`, `Csv`, `Codec` and the `.url`/`.ms` extensions stayed behind
+in `lib/util/` at the time, and 5.5.0 finished the job by moving them to
+`lib/src/`. They are types and extensions several domains return; none of them
+was ever reachable as `util.` anything, and a directory named after an
+accessor should hold that accessor's members and no strays. They are exported
+from the package root exactly as before, so nothing a caller writes changed —
+`lib/util/` is now five files and five accessors.
 
 ---
 
@@ -170,9 +177,34 @@ mattering. `Transformer.take` and `Collector.count` are namespace objects
 holding two members and three — `take.first`, `take.when`, and `count()`,
 `count.where`, `count.by` — and they exist for the reason `io.csv` does: the
 second word has somewhere to go. See Rule 4's splitting rule. A namespace can
-span two types where the operations differ in kind: `take.first` is a
-`Transformer` and `take.last` a `Collector`, because only one of them can emit
-before its source ends.
+span two types where the operations differ in kind: on a flow `take.first` is
+a `Pipe` and `take.last` a `Pour`, because only one of them can emit before
+its source ends.
+
+**And the same name can span two *containers*.** There are four operation
+types, one pair per collection: `Transformer`/`Collector` shape and end a
+`Sequence`, `Pipe`/`Pour` a `Flow`. Every operation keeps one spelling across
+all four — `.where(live)` is `.where(live)` wherever it is written, because a
+dot shorthand resolves against the context type — so the vocabulary a reader
+learns is one vocabulary, declared twice. What differs is the member it is
+handed to: `seq.transform`/`seq.collect` against `flow.pipe`/`flow.pour`.
+
+That is Rule 5 read carefully rather than broken. Two *names* for one
+operation is what the rule forbids; here there is one name per operation and
+one member per container, and the member is what tells you which container
+the next call is on. One pair served both through 5.4.0, with the streaming
+half of every operation an optional field on the value, and the cost fell on
+both sides: an operation whose element step is asynchronous had no `Iterable`
+form, so it could not join the vocabulary at all and lived in `concurrent` as
+`flow.run`; and an operation a *flow* could not stream was demoted to a
+terminal on the *sequence* too, so `sort` changed container for nothing.
+
+Which half an operation lives on is a rule: **a shaping step can emit before
+its source ends, a terminal needs the end.** On a flow that is a real
+constraint, so `sort`, `flip`, `take.last` and `skip.last` are `Pour`s
+returning a `Sequence` — the answer cannot exist until the source ends, and
+the type says so. On a sequence the same law is bookkeeping, so they are
+`Transformer`s and a chain never changes container.
 
 Everything else is a plain member of the domain. `io.hash(path)` is one
 operation about a file, so it sits directly on `io` — it does not need an
@@ -208,6 +240,23 @@ things are outside that, and each is a category rather than an oversight:
   case* through 5.3.0, because with `Stream` on the async side there was no
   general rule to state: `io.async.lines` left the library's vocabulary and did
   not come back. A rule a reader learns once needed `Flow` to exist.
+
+  There was a fourth entry on this list through 5.4.0, and it was an
+  embarrassment rather than a category: **`io.csv`**, every member of which
+  was already a `Flow` or a `Future` — reached through `io`, whose doc
+  promises that everything there blocks. It was the one corner where the
+  prefix did not tell you what you got. 5.5.0 split it: `rows`, `records` and
+  `write` sit on both accessors under the same three names, differing exactly
+  as the rule above specifies, and `io.csv.pipe` went with it — a second name
+  *and* a second implementation of what `write` already was.
+
+  **One property is not parity, and the docs say so.** A `Flow` is consumed
+  once where a `Sequence` can be walked again. `Flow.of` is the answer: a
+  source that can honestly be re-derived — a directory walk, a file's lines, a
+  CSV — rebuilds on each terminal, so `io.async.dir.walk(d)` can now be read
+  twice exactly as `io.dir.walk(d)` can. Through 5.4.0 the two sides were
+  documented as *the same four words, differing only in the `await`*, which
+  was true of one terminal and false of anything that read the listing twice.
 
 `test/regression_test.dart` pins this, the way 4.0.0 pinned *no HTML parser
 under `lib/net/`*: it reads both accessors out of the source and asserts the
@@ -404,9 +453,15 @@ domains, no overlap. But two entry points to the *same* behaviour is always a
 bug in the API, not a convenience.
 
 The narrow carve-out is a shorthand **defined as** the general form, in one
-line, where the shorthand is what a script actually writes: `io.csv.pipe`
-beside `write`, and `Collector.count.by(f)` beside `group.into(f, .count())`.
-One implementation, two spellings of a *call* — not two implementations.
+line, where the shorthand is what a script actually writes:
+`Collector.count.by(f)` beside `group.into(f, .count())`. One implementation,
+two spellings of a *call* — not two implementations.
+
+`io.csv.pipe` sat here as the other example through 5.4.0 and did not
+qualify: it was forty lines of its own implementation beside `write`, which
+is two implementations of one operation, and `pipe` was the weaker name.
+5.5.0 deleted it — the streaming form is `io.async.csv.write`, which is the
+mirror rule doing the work instead.
 
 **It is also why `Sequence` is a type rather than an extension**, and why
 `Dictionary` is not a `Map`. An extension member never overrides an instance
@@ -546,14 +601,25 @@ every package in `pubspec.yaml`.
 5. Check Rule 5. Does this behaviour already exist somewhere?
 6. Check Rule 6. Are the parameters and the return real types — and does the
    type name survive being imported next to `dart:io`?
-7. Document it, and add the sample to `docs/`. `test/docs_test.dart` compiles
-   **every** `dart` block in `docs/`, `README.md`, this file, `example/README.md`
-   and every `///` comment under `lib/` — 385 of them, against a set of shared
-   fixtures, so a stale example fails the build.
+7. Document it **in the `///` comment above it**, with a `dart` sample.
+   `test/docs_test.dart` compiles **every** `dart` block in every `///`
+   comment under `lib/`, plus the ones in `README.md`, this file and
+   `example/README.md`, against a set of shared fixtures — so a stale example
+   fails the build.
 
-   That claim used to be here and used to be false: the old harness filtered
-   to whole programs (`if (!snippet.contains('void main(')) continue;`), which
-   was 27 of 244 markdown blocks and none of the 152 in doc comments.
+   There was a `docs/` folder of seventeen prose files through 5.4.0, and
+   5.5.0 retired it. Every sentence in it had a twin in a doc comment, which
+   is Rule 5 applied to prose: two places saying one thing, and the one
+   further from the code is the one that goes stale. The comments are also
+   the copy the reader actually meets — in dartdoc, and on hover in an
+   editor — and they cannot drift from the signature they sit above. What
+   the folder carried that a comment cannot is a *narrative* across members;
+   that lives in the library-level `///` doc at the top of each file, which
+   is where `# IO Domain (io.*)` and `# Pipes and Pours` already were.
+
+   The compile claim used to be here and used to be false: the old harness
+   filtered to whole programs (`if (!snippet.contains('void main(')) continue;`),
+   which was 27 of 244 markdown blocks and none of the 152 in doc comments.
    Everything else rotted unchecked, and 5.0.0's rewrite found doc comments
    still using `tool.json`, `res.$`, `res.form`, `res.pick`, `io.async.json`,
    `cli.has`, `cli.get`, `Failure.request`, `Page(request:)` and
@@ -583,13 +649,13 @@ every package in `pubspec.yaml`.
 | Finding a form | `Markup.form`, sending stays in `net` | `res.form('#login')` needed `net` to parse a page, which is the thing 4.0.0 removed. Finding a form is reading markup, so it hangs off the cursor. Sending one is a socket and its output is an `HttpMethod`, a `Uri` and a `Body` — all `net` types — so `Form` stays in `net`, entangled with `net.http` by Rule 2's second test exactly as `net.crawl` is. `Form.at(url)` carries the one thing a cursor cannot know |
 | JSON | `format.json`, beside `yaml` and `toml` | It was `util.json` through 3.1.0, on the grounds that decoding is pure. But a format is a *subject*, which is the sentence that admitted `format.zip`, and JSON in one place with YAML in another left a reader asking where formats live. The three codecs are now spelled identically — `parse`, `read`, `format` |
 | The `Json` cursor type | `util`, exported bare | The accessor moved; the type could not. `net` hands one back through `Codec`, and a type `net` needs cannot live under `format` without making `format` something `net` depends on — Rule 2's second test. It is a pure value, so `util` is its home. `lib/src/jsontext.dart` is the codec both domains sit on, the way `Fs` backs `io` |
-| The `Markup` cursor type | `util`, beside `Json` | The same split, one release later, and named the same way: for what it is over rather than for the operation that produced it. `QueryResult` was a result type named after a query. The 800-line jQuery evaluator behind it went to `lib/src/jquery.dart`, so `util/markup.dart` reads as the vocabulary rather than the machinery |
+| The `Markup` cursor type | `util`, beside `Json` | The same split, one release later, and named the same way: for what it is over rather than for the operation that produced it. `QueryResult` was a result type named after a query. The 800-line jQuery evaluator behind it went to `lib/src/jquery.dart`, so `src/markup.dart` reads as the vocabulary rather than the machinery |
 | The domain's own name | `format`, not `tool` | `tool` was chosen when the domain held one archiver, and it invited precisely the thing its own doc comment spent a paragraph forbidding — three executable wrappers were added under it in 3.1.0 and removed in 3.2.0. `format.zip` cannot be misread as a wrapper around the `zip` binary. Rule 4 says say the call site out loud: `format.yaml.read('config.yaml')` says what it does and `tool.yaml.read(...)` says where it happens to live |
 | The sequence API | `Sequence<T>`, a type in `collection` | Rule 2 spends no top-level name: you reach it from the data you already hold, the same argument that put `Form` in `net` with no `net.form`. Not a sub-namespace either — `util.list.group(...)` would be a namespace standing where a receiver belongs. It sat in `util` through 5.0.0; 5.1.0 moved it out, because `util` was holding both functions you call and types you receive, and the collections are the largest of the second kind |
 | The sequence *vocabulary* | `Transformer` and `Collector`, not methods on `Sequence` | Fifty-eight members, a third of them words invented for an operation everybody already knew, and eight of those forced by nothing but the camelCase ban. A namespace has no `Map` to collide with and no compound to forbid, so `map`, `where`, `take.first` and `count.by` all became sayable. Java's `Collectors` is the same design, twenty years old and uncontroversial; the part Java leaves as methods — the intermediates — went behind `transform` here anyway, because keeping `take` and `skip` as methods would mean building the namespace objects twice and keeping them in step forever |
 | A keyed collection | `Dictionary<K, V>`, beside `Sequence` | Design Philosophy 6 promised that everything handed back to shape is a `Sequence`, and that held right up to the moment you grouped. `Meta` and `Store` were then the same nine members written twice, in two domains, because the library had no name for *a map with typed keys*. One type and one extension replaced two types and twenty-two members, and typed keys started working on every dictionary in the program |
 | A collection over time | `Flow<T>`, beside `Sequence` and `Dictionary` | `Stream` is Dart's third collection, and nine public signatures handed one back — the *large-data* members of four domains, the ones a script reaches for precisely when a good vocabulary matters most. Twenty-six of `Stream`'s thirty-seven members already had a name here, twelve of them camelCase compounds Rule 4 forbids in this library's own code, so a script that switched from `crawl.collect` to `crawl.stream` rewrote its whole pipeline for no reason but which container arrived. One type, the same two doors, and no new factory anywhere: `Transformer` and `Collector` grew a second function each rather than a second vocabulary |
-| Bounded work over a flow | `extension Bounded on Flow`, declared in `lib/concurrent/` | The same direction `Dumpable` goes, for the same reason: `concurrent` already depends on `collection`, so an extension declared on that side adds no edge, where a member on `Flow` would make a cycle. It is also the capability the library did not have — every bounded-work member took an `Iterable`, so *four at a time over a stream* meant `await …toList()` first, which is the materialisation the streaming member existed to avoid |
+| Bounded work over a flow | `Pipe.map.async(worker, size: n)` | It was `extension Bounded on Flow`, declared in `lib/concurrent/`, through 5.4.0 — placed there because `collection` may not depend on `concurrent` and a member on `Flow` would have made a cycle. That was the right answer to the wrong question: the reason it could not be a member of the vocabulary is that one operation type had a required `Iterable` half, and an asynchronous element step has none. Separating the vocabularies removed the constraint, so it is an ordinary factory now, and the machinery moved to `lib/src/bounded.dart` where both callers can reach it without either domain depending on the other |
 | Writing a collection to disk | `extension Dumpable on Sequence`, declared in `lib/io/` | Rule 1 says anything that writes a file is `io`, and Rule 2's second test forbids `collection` needing `io` back. `io` already depends on `collection` — `io.find` returns a `Sequence` — so the extension adds no edge in the wrong direction, and `collection` still knows nothing about the disk. One export means the caller sees `rows.dump(path)` with no extra import |
 | A filesystem watcher | `io.watch` — after 5.0.0 moved the other one | It was `io.observe` through 4.0.0, because `system.watch()` meant *watch for Ctrl-C* and two `watch`es meaning two unrelated things on two accessors is precisely what Rule 5 is for. That entry ended *`observe` is free, honest, and slightly less good than `watch`* — a worse name taken because a better one was occupied by something that had not earned it. Signal watching is `system.on.signals()` now, beside `track`, `adopt` and `exit`, which is the cohesive vocabulary Rule 3 describes; `io` took the name back. A compromise written down is a compromise that can be revisited |
 | The interrupt vocabulary | `system.on.*`, not flat on `system` | `watch`, `unwatch`, `track`, `untrack`, `adopt` and `disown` sat directly on `system` through 4.0.0 while `system.on` held exactly one member, `exit`. Rule 3 says a sub-namespace is for a cohesive vocabulary with its own nouns, and *what happens to your resources when the program is interrupted* is that vocabulary — the structure was inverted, with the namespace on the single function and the family flat beside it |
@@ -610,19 +676,25 @@ every package in `pubspec.yaml`.
 | The door out of it | `FileSystemEntry.entity`, exactly one | `Json.raw`, `Markup.document` and `Meta.raw` are the precedent: a typed surface with a single documented way to the thing underneath, so that needing it is a visible choice rather than the default |
 | An open file handle | Deliberately absent | Every other standard library has one and it is the obvious next thought after `FileSystemEntry`. It is also a lifecycle to get wrong, and `io`'s whole shape is that a path is a `String` and every call is complete in itself. The line: **if a member would need a matching `close`, it does not belong here.** `io.lock` proves the alternative — it takes the action as a callback rather than handing out something to release |
 | Listing versus walking | `io.dir.list` and `io.dir.walk` | The split Python (`iterdir`/`walk`), Node and Go all make. This library made neither: `io.find` carried both on one member with a `recursive:` flag *and* dropped every directory it walked past, so listing a folder was impossible, and so was knowing whether an entry was a link before following it |
-| `io.find` | Kept, narrowed | *Give me the mp3s* is a real question that should not become two calls. It is `walk` filtered to files now, and its signature did not move |
-| CSV | `format.csv` for the codec, `io.csv` for the streams | Rule 1 says a file format is a subject — the sentence that admitted `format.zip`, then the other four. CSV was the last one filed under the axis that happened to read the bytes. 4.0.0 and 5.0.0 both deferred the move fearing two spellings for *read a CSV file*; the `Codec` seam 4.0.0 built is what answers it, since `read` comes from `FileCodec` exactly as it does for the other five. What stayed in `io` is `rows`, `records`, `write` and `pipe`, which are about a file larger than memory rather than about CSV |
-| The CSV cursor | `Csv`, in `util` | `Table` is taken by `system.console`, so it is named for what it is over, the way `Json` and `Markup` are — and it lives in `util` for their reason too: `net` hands it back through `Codec`, and a type `net` needs cannot live under `format` |
+| `io.dir.find` | Deleted in 5.5.0 | *Give me the mp3s* is a real question, and 5.2.0 kept a member for it — `walk` filtered to files, with its old `Pattern` signature intact. Keeping the signature is what made it a mistake: `walk` matched a **glob** and `find` a `Pattern`, `walk` took `depth: int?` and `find` a `recursive: bool`, so `io.dir` spoke two matcher languages and two depth axes on sibling members, and `find`'s own doc said it gave *the same set* as `walk(only: .file, match: …)`. That is Rule 5 exactly. One matcher, one depth axis, one member per question; a `RegExp` filter is the collection vocabulary's job, one `transform` further on |
+| CSV | `format.csv` for the codec, `io.csv` for the streams | Rule 1 says a file format is a subject — the sentence that admitted `format.zip`, then the other four. CSV was the last one filed under the axis that happened to read the bytes. 4.0.0 and 5.0.0 both deferred the move fearing two spellings for *read a CSV file*; the `Codec` seam 4.0.0 built is what answers it, since `read` comes from `FileCodec` exactly as it does for the other five. What stayed in `io` is `rows`, `records` and `write` — about a file larger than memory rather than about CSV — and 5.5.0 made them a real mirror across `io` and `io.async` instead of three futures hanging off the blocking accessor |
+| The CSV cursor | `Csv`, in `lib/src/` | `Table` is taken by `system.console`, so it is named for what it is over, the way `Json` and `Markup` are — and it sits beside them for their reason too: `net` hands it back through `Codec`, and a type `net` needs cannot live under `format`. It was under `lib/util/` through 5.4.0, which was never right: nothing reached it as `util.` anything, and a directory named after an accessor should hold that accessor's members |
 | `Fs`, `Sys`, `Exit` | Unexported, `lib/src/` | Implementation behind `io` and `system`; never a public name |
 | Hash algorithm enum | `Digest` became `Algo` | `Digest` was an `ambiguous_import` error against `package:crypto`, whose `Digest` is a hash *result* where this one selects an *algorithm*. `lib/src/fs.dart` was already writing `crypto.Digest` to name the other one |
 | A pipeline's page handler | `Process<T>` became `Handler<T>` | Dart resolves a package import over a `dart:` one silently, so exporting `Process` meant `Process` stopped meaning `dart:io`'s for every user of the library — while `system.on.adopt(Process)` still meant that one. A shadow with no error is worse than a collision with one |
 | HTTP caching | `HttpCache` type, `Fetcher(cache:)`, `crawl.cache(dir)` | A whole tool by Rule 2's first test, but entangled with `net.http` by its second: the client is what decides to revalidate. So a type in `net` and an option on the two things that fetch, not a domain and not a namespace |
 | A crawl's position | `Snapshot` + `Engine.snapshot`/`restore`, `crawl.resume(path)` | The type is the noun, the engine pair is the operation, and `resume` is the two of them wired to a file. `save` was taken by "write items to", and Rule 5 forbids a second meaning for it |
 | A request that failed | `Failure`, passed to `on.error` | A count without the pages is not an answer. Widening the handler's argument list would have fixed one question and left the next one — an attempt number, a response — needing another break, so the argument is a type |
-| Streaming CSV out | `io.csv.pipe`, beside `write` | Different behaviour, not an alias: `write` takes a collection already in memory, `pipe` takes a `Flow` and holds one row. A `CsvWriter` you open and close would have been a new noun and a lifecycle to get wrong |
+| Streaming CSV out | `io.async.csv.write`, the mirror of `io.csv.write` | It was `io.csv.pipe` beside `write` through 5.4.0, defended as *different behaviour, not an alias*. That was true and beside the point: the difference is exactly the one the `io` mirror already encodes — a `Sequence` on the blocking accessor and a `Flow` on the async one — so the two need one name, not two. A `CsvWriter` you open and close would still have been a new noun and a lifecycle to get wrong |
 | A page's forms | `Form`, reached by `res.form(selector)` | Rule 2's first test passes — filling, addressing and submitting is a vocabulary — but its second fails: a form is read out of a response and submitted through the same client or engine, so it is entangled with `net` and lives there as a type rather than a domain. No accessor, because there is nothing to reach it from but the page it is on |
 | Submitting one in a crawl | `res.submit(form)`, beside `res.follow` | `follow` already takes a `method` and a `body`; this is the same operation with the three details read off the form instead of typed out, so it sits next to it rather than inside `Form`, which knows nothing about an engine |
 | A cursor's two selector languages | `find` and `xpath`, and no callable | `page(sel)` was a second spelling of `find` — and *which language it spoke depended on hidden state*: XPath on a cursor from `format.html.query`, CSS on one from `format.html.parse`, with nothing at the call site to say which. Rule 5 would have deleted it anyway; the hidden state is why it was not worth arguing about. `find` and `xpath` each name their language |
 | The sequence's evaluation | Eager, a snapshot | `Sequence` held an `Iterable` and re-walked the chain on every terminal call, so three reads of a three-element sequence ran the predicate seven times and a `.to(expensiveParse)` over a crawl's results paid once per read. Nothing in the vocabulary was lazy on purpose and every source the library hands one is already a list. The trade — `head(10)` after a `to` shapes the whole source — is stated in the doc rather than discovered |
 | Positional arguments | `command` and `args`, no `rest` | `rest` was `args` without its first element, and neither name said which. The deciding fact is that inside a handler `cli.run` dispatched to, the command names are already off, so `args` is the arguments to *that command* and `rest` would drop one more. `rest` existed to serve `subcommand`; both went |
 | Terminal geometry | `ConsoleWriter.width` / `.height`, moved off `Terminal` | Geometry belongs to the thing that knows where the output is going — and to the thing a test can size. `Terminal` keeps what it is named for: the control codes |
+| One vocabulary or two | Two: `Transformer`/`Collector` and `Pipe`/`Pour` | One pair served both containers through 5.4.0, with the streaming half an optional field. It cost both sides. A flow-native operation has no `Iterable` form, so it could not join at all — `asyncMap` was `flow.run`, an extension in `concurrent`, and `debounce`, `throttle`, `merge`, `asyncExpand` and an async predicate had no spelling anywhere. And an operation a *flow* could not stream was billed to the *sequence* too, so `sort` was a `Collector` on both and the commonest chain in the library's own examples changed container twice for nothing. The price is that the vocabulary is declared twice and a named pipeline is no longer portable; `Pipe.of` is the one-way adapter, kept as a conversion rather than a second spelling, and it says out loud that it buffers where the old design did that silently |
+| The two names for the flow's doors | `flow.pipe` and `flow.pour` | They were `transform` and `collect`, the same two words a `Sequence` uses. With one pair of operation types that was honest; with two it is not — a member named the same on both containers reads as though one pipeline value fits either, which is exactly what the library claimed and could not deliver. The operations keep their spelling, because a dot shorthand resolves against the context type; the *member* is what now says which container you are on. `pour` is this library's own word for *the same operation over a stream*, which is what it meant as a field before it was a type |
+| Where the bounded-work machinery lives | `lib/src/bounded.dart` | `Pipe.map.async` needs it and so does `concurrent`, and neither domain may depend on the other — `collection` is the bottom of the stack by Rule 2. `src` is for exactly this: implementation more than one domain reaches |
+| A crawl's collected items | `crawl.items()` | It was `crawl.collect()`, which is the collection vocabulary's own word in the collection vocabulary's own receiver position meaning something else: `rows.collect(.count())` takes a `Collector` and reduces, `crawl.collect(handler)` took a page handler and ran a crawl. Rule 5 forbids that outright, and the engine already called them items |
+| Writing a crawl to a file | `io.async.lines.write(path, crawl.flow())` | `crawl.save(path)` and `crawl.sink(out)` were private versions of a member the library did not have: *write this collection to a file, one element per line, atomically*. Rule 1 says anything that writes a file is `io`, and a crawl is not a special case of it. The general form covers a crawl, a log, a piped stdin and a directory walk with one name, and `Flow.dump` is its JSON twin |
+| An open file handle, reconsidered | `io.append.open` → `Appender` | The row above says **if a member would need a matching `close`, it does not belong here** — and this one does. It is the deliberate exception, and the reason is that `io.append` reopens, writes and closes on *every call*, which is right for the log line a script writes twice and wrong for the loop that writes ten thousand. The exception is narrow on purpose: one member, one namespace, `open` in its name so the lifecycle is visible at the call site, and `close` idempotent so a `finally` after an early close is not an error |

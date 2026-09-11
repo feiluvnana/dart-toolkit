@@ -238,12 +238,15 @@ void main() {
         expect(io.hash(path, Algo.md5).length, equals(32));
         expect(io.size(path)!, greaterThan(0));
 
-        expect(io.dir.find(temp.path).collect(.count()), equals(1));
         expect(
-          io.dir.find(temp.path, pattern: RegExp(r'\.txt$')).collect(.count()),
+          io.dir.walk(temp.path, only: .file).collect(.count()),
           equals(1),
         );
-        expect(io.dir.sweep(temp.path, pattern: RegExp(r'\.txt$')), equals(1));
+        expect(
+          io.dir.walk(temp.path, only: .file, match: '*.txt').collect(.count()),
+          equals(1),
+        );
+        expect(io.dir.sweep(temp.path, match: '*.txt'), equals(1));
         expect(io.has(path), isFalse);
       } finally {
         io.remove(temp.path);
@@ -467,47 +470,53 @@ void main() async {
       // 50ms task vs 10ms task: 10ms task completes first
       final items = [50, 10];
       final streamed = await items.flow
-          .run(
-            (delay) async {
-              await util.time.wait(delay.ms);
-              return 'done-$delay';
-            },
-            size: 2,
-            ordered: false,
+          .pipe(
+            .map.async(
+              (delay) async {
+                await util.time.wait(delay.ms);
+                return 'done-$delay';
+              },
+              size: 2,
+              ordered: false,
+            ),
           )
-          .collect(.list());
+          .pour(.list());
 
       expect(streamed, equals(['done-10', 'done-50']));
     });
 
-    test('flow.run yields in input order by default', () async {
+    test('map.async yields in input order by default', () async {
       final streamed = await [50, 10].flow
-          .run((delay) async {
-            await util.time.wait(delay.ms);
-            return 'done-$delay';
-          }, size: 2)
-          .collect(.list());
+          .pipe(
+            .map.async((delay) async {
+              await util.time.wait(delay.ms);
+              return 'done-$delay';
+            }, size: 2),
+          )
+          .pour(.list());
 
       expect(streamed, equals(['done-50', 'done-10']));
     });
 
-    test('flow.run bounds how many workers are in flight', () async {
+    test('map.async bounds how many workers are in flight', () async {
       var live = 0;
       var peak = 0;
       await List.generate(12, (i) => i).flow
-          .run((i) async {
-            live++;
-            if (live > peak) peak = live;
-            await util.time.wait(5.ms);
-            live--;
-            return i;
-          }, size: 3)
-          .collect(.count());
+          .pipe(
+            .map.async((i) async {
+              live++;
+              if (live > peak) peak = live;
+              await util.time.wait(5.ms);
+              live--;
+              return i;
+            }, size: 3),
+          )
+          .pour(.count());
 
       expect(peak, equals(3));
     });
 
-    test('flow.run takes a source it never has to hold', () async {
+    test('map.async takes a source it never has to hold', () async {
       var produced = 0;
       Stream<int> endless() async* {
         var next = 0;
@@ -518,22 +527,24 @@ void main() async {
       }
 
       final first = await endless().flow
-          .run((n) async => n, size: 2)
-          .collect(.first());
+          .pipe(.map.async((n) async => n, size: 2))
+          .pour(.first());
 
       expect(first, isZero);
       // Two in flight, and then the terminal cancelled the source.
       expect(produced, lessThan(5));
     });
 
-    test('flow.run propagates the first failure', () async {
+    test('map.async propagates the first failure', () async {
       await expectLater(
         [1, 2, 3].flow
-            .run((n) async {
-              if (n == 2) throw StateError('boom');
-              return n;
-            }, size: 2)
-            .collect(.list()),
+            .pipe(
+              .map.async((n) async {
+                if (n == 2) throw StateError('boom');
+                return n;
+              }, size: 2),
+            )
+            .pour(.list()),
         throwsStateError,
       );
     });
@@ -1126,10 +1137,13 @@ void main() async {
       final temp = io.dir.temp('csv_test_');
       try {
         final path = io.path.join(temp.path, 'test.csv');
-        await io.csv.write(path, [
-          {'fruit': 'Apple', 'price': '1.50'},
-          {'fruit': 'Banana', 'price': '0.75'},
-        ]);
+        io.csv.write(
+          path,
+          [
+            {'fruit': 'Apple', 'price': '1.50'},
+            {'fruit': 'Banana', 'price': '0.75'},
+          ].seq,
+        );
 
         final sheet = await format.csv.read(path);
         expect(sheet.maps.collect(.count()), equals(2));
@@ -1194,14 +1208,14 @@ void main() async {
             'id,name\n1,"Alpha, 1"\n2,"Beta ""The Second"""\n3,Gamma\n',
           );
 
-          final streamRows = await io.csv.rows(path).collect(.list());
+          final streamRows = await io.async.csv.rows(path).pour(.list());
           expect(streamRows.length, equals(4));
           expect(streamRows[0], equals(['id', 'name']));
           expect(streamRows[1], equals(['1', 'Alpha, 1']));
           expect(streamRows[2], equals(['2', 'Beta "The Second"']));
           expect(streamRows[3], equals(['3', 'Gamma']));
 
-          final mapRows = await io.csv.records(path).collect(.list());
+          final mapRows = await io.async.csv.records(path).pour(.list());
           expect(mapRows.length, equals(3));
           expect(mapRows[0]['id'], equals('1'));
           expect(mapRows[0]['name'], equals('Alpha, 1'));
@@ -1209,7 +1223,10 @@ void main() async {
           expect(mapRows[2]['id'], equals('3'));
 
           // The typed pair: rows() yields cells, records() yields maps.
-          expect(await io.csv.records(path).collect(.list()), equals(mapRows));
+          expect(
+            await io.async.csv.records(path).pour(.list()),
+            equals(mapRows),
+          );
         } finally {
           io.remove(temp.path);
         }

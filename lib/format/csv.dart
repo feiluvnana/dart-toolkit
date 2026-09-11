@@ -31,8 +31,8 @@
 library;
 
 import '../src/csvtext.dart';
-import '../util/codec.dart';
-import '../util/csv.dart';
+import '../src/codec.dart';
+import '../src/csv.dart';
 import 'format.dart';
 
 // ============================================================================
@@ -41,9 +41,9 @@ import 'format.dart';
 
 /// Entry point for CSV, reachable as `format.csv`.
 ///
-/// Reading a file too large to hold is `io.csv.rows` and `io.csv.records`;
-/// writing one a row at a time is `io.csv.pipe`. Those are about files, and
-/// they stayed where files live.
+/// Reading a file too large to hold is `io.csv.rows` and `io.csv.records`,
+/// and writing one a row at a time is `io.async.csv.write`. Those are about
+/// files, and they stayed where files live.
 class CsvAccessor with FileCodec<Csv> implements Codec<Csv> {
   /// Creates the accessor. Prefer the shared `format.csv` instance.
   const CsvAccessor();

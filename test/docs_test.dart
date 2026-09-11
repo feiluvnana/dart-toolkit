@@ -1,14 +1,18 @@
 /// Compiles every `dart` snippet in the documentation.
 ///
-/// NAMESPACE.md step 7 has said since 1.x that `test/doc_samples_test.dart`
-/// "compiles every snippet in `docs/`, so a stale example fails the build".
-/// It did not. Its snippet pass filtered to whole programs —
-/// `if (!snippet.contains('void main(')) continue;` — which was **27 of 244**
-/// blocks in `docs/`, `README.md` and `NAMESPACE.md`, and none of the 152 in
-/// `///` comments under `lib/`. Everything else was unchecked, and the drift
-/// was already there: 35 doc comments across 12 files named API that 4.0.0
-/// deleted, and `docs/crawl.md` used `res.form(...)` in the same file whose
-/// migration table records its removal.
+/// NAMESPACE.md step 7 has said since 1.x that a stale example fails the
+/// build, and for a long time nothing checked one. The pass filtered to whole
+/// programs — `if (!snippet.contains('void main(')) continue;` — which was a
+/// tenth of the blocks and none of the ones in `///` comments under `lib/`.
+/// Everything else was unchecked, and the drift was already there: 35 doc
+/// comments across 12 files named API that 4.0.0 had deleted.
+///
+/// 5.5.0 retired the `docs/` folder. The `///` comments under `lib/` are the
+/// documentation now — they are where the reasoning already lived, they
+/// reach the reader through dartdoc and through the editor, and they cannot
+/// drift from the signature they sit above. This harness compiles every
+/// snippet in them, plus the ones in `README.md`, `NAMESPACE.md` and
+/// `example/README.md`.
 ///
 /// Most documentation snippets are fragments that assume a `res`, a `page`, a
 /// `seed`. That is the right way to write a doc, so the harness supplies the
@@ -36,9 +40,6 @@ const _outDir = '.dart_tool/doc_snippets';
 
 /// Files whose `dart` blocks are compiled.
 List<File> _markdown() => [
-  ...Directory(
-    'docs',
-  ).listSync().whereType<File>().where((f) => f.path.endsWith('.md')),
   File('README.md'),
   File('NAMESPACE.md'),
   File('example/README.md'),
@@ -150,7 +151,7 @@ Robots get robots => Robots.parse('User-agent: *\nDisallow: /private');
 Pool<Uri> get pool => Pool<Uri>(size: 4);
 Limiter get limit => concurrent.rate(10, per: const Duration(seconds: 1));
 Semaphore get gate => concurrent.semaphore(2);
-Sequence<FileSystemEntry> get files => io.dir.find('out');
+Sequence<FileSystemEntry> get files => io.dir.walk('out', only: .file);
 Sequence<String> get agents => Sequence(const ['MyBot']);
 Csv get csvsheet => format.csv.parse('a,b\n1,2\n');
 Deduplicator get restored => Deduplicator();
@@ -447,7 +448,7 @@ int _delta(String line) {
 void main() {
   group('documentation', () {
     test(
-      'every dart snippet in docs, README, NAMESPACE and lib/// compiles',
+      'every dart snippet in lib///, README and NAMESPACE compiles',
       () async {
         final snippets = <_Snippet>[];
         var skipped = 0;
@@ -480,9 +481,13 @@ void main() {
 
         // The point of the whole exercise: if this number collapses, the
         // harness has stopped looking rather than the docs having shrunk.
+        // 5.5.0 retired `docs/`, so the floor moved with it: 255 snippets
+        // in `///` comments, README, NAMESPACE and example/README, where
+        // the folder used to carry another hundred and thirty saying the
+        // same things one directory further from the code.
         expect(
           snippets.length,
-          greaterThanOrEqualTo(300),
+          greaterThanOrEqualTo(240),
           reason: 'far fewer snippets than the documentation carries',
         );
 

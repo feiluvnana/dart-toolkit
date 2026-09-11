@@ -214,7 +214,7 @@ void main() {
           .done((stats) => seen.add('done'))
           .limit(1)
           .downloader(MapDownloader<String>({'/a': '<h1>hi</h1>'}))
-          .collect((res) => res.emit(res.parse(format.html).find('h1').text));
+          .items((res) => res.emit(res.parse(format.html).find('h1').text));
 
       expect(seen, ['start', 'item', 'progress', 'done']);
       expect(stats.collect(.list()), ['hi']);
@@ -226,7 +226,7 @@ void main() {
       final dir = _temp('dt_pipe_');
       final path = '${dir.path}/out.csv';
 
-      await io.csv.pipe(
+      await io.async.csv.write(
         path,
         [
           {'name': 'Alice', 'role': 'admin'},
@@ -244,7 +244,7 @@ void main() {
       final dir = _temp('dt_pipe_');
       final path = '${dir.path}/out.csv';
 
-      await io.csv.pipe(
+      await io.async.csv.write(
         path,
         [
           {'b': '2', 'a': '1'},
@@ -259,7 +259,7 @@ void main() {
       final dir = _temp('dt_pipe_');
       final path = '${dir.path}/out.csv';
 
-      await io.csv.pipe(
+      await io.async.csv.write(
         path,
         [
           {'n': 1, 'letter': 'a'},
@@ -275,7 +275,7 @@ void main() {
       final dir = _temp('dt_pipe_');
       final path = '${dir.path}/out.csv';
 
-      await io.csv.pipe(
+      await io.async.csv.write(
         path,
         [
           {'name': 'Alice, Chief'},
@@ -294,7 +294,7 @@ void main() {
       final dir = _temp('dt_pipe_');
       final path = '${dir.path}/out.csv';
 
-      await io.csv.pipe(path, Flow.empty(), headers: ['a', 'b']);
+      await io.async.csv.write(path, Flow.empty(), headers: ['a', 'b']);
 
       expect(File(path).readAsStringSync(), 'a,b\n');
     });
@@ -304,7 +304,7 @@ void main() {
       final path = '${dir.path}/out.csv';
 
       await expectLater(
-        io.csv.pipe(
+        io.async.csv.write(
           path,
           // Through the boundary, deliberately: a source that fails is
           // somebody else's stream, so there is no `Flow.error`.
@@ -322,7 +322,7 @@ void main() {
       final dir = _temp('dt_pipe_');
       final path = '${dir.path}/products.csv';
 
-      await io.csv.pipe(
+      await io.async.csv.write(
         path,
         net
             .crawl<Map<String, Object?>>('https://shop.test/list'.url)
@@ -376,7 +376,7 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 void main() async {
   print('piped=\${system.console.reader.piped}');
   await system.console.reader.lines
-      .collect(.foreach((line) => print('got \${line.trim()}')));
+      .pour(.foreach((line) => print('got \${line.trim()}')));
   print('done');
   await system.console.reader.close();
 }

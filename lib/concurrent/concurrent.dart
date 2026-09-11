@@ -37,12 +37,13 @@ class ConcurrentAccessor {
   /// a [Pool] and register [PoolEvents.error] instead if you would rather
   /// collect failures and continue.
   ///
-  /// The short form, over items you already hold. `Flow.run` is the general
-  /// one, over a source you do not: it takes a stream rather than an
-  /// `Iterable`, so a crawl or a CSV too large for memory can be fed through
-  /// a bounded pool without materialising first. This keeps [delay] and
-  /// [Pool]'s error semantics, which that one does not carry, so the two are
-  /// not spellings of each other.
+  /// The form over items you already hold. `Pipe.map.async(worker, size: n)`
+  /// is the one over a source you do not — a crawl, a CSV too large for
+  /// memory, a piped stdin — and it is part of the flow vocabulary rather
+  /// than a member here, which is where it belongs and where 5.5.0 moved it
+  /// from (`flow.run`, an extension declared in this library). This keeps
+  /// [delay] and [Pool]'s error semantics, which that one does not carry, so
+  /// the two are not spellings of each other.
   Future<Sequence<R>> run<I, R>(
     Iterable<I> items,
     FutureOr<R> Function(I item) worker, {
@@ -426,154 +427,6 @@ class Pool<I> {
     }();
 
     return Flow<R>(controller.stream);
-  }
-}
-
-// ============================================================================
-// BOUNDED WORK OVER A FLOW (flow.run)
-// ============================================================================
-
-/// Bounded async work over a [Flow].
-///
-/// An extension declared here rather than a member over in `collection`, and
-/// the direction matters: `concurrent` already depends on `collection` —
-/// [ConcurrentAccessor.run] returns a [Sequence] — so this adds no new edge,
-/// where a member on [Flow] would point the dependency back and make a cycle.
-/// It is the same shape `io.dictionary` and `dump` already use, and the
-/// package has a single export, so a script writes `flow.run(fetch, size: 8)`
-/// with no extra import.
-extension Bounded<T> on Flow<T> {
-  /// Each element through [worker], at most [size] at a time.
-  ///
-  /// The capability the library did not have: every other bounded-work member
-  /// here takes an `Iterable`, so work over a crawl, a large CSV or a piped
-  /// stdin meant `await …toList()` first — the materialisation the streaming
-  /// member existed to avoid.
-  ///
-  /// ```dart
-  /// // setup: Future<String> fetch(String u) async => u; void save(String s) {}
-  /// await system.console.reader.lines
-  ///     .transform(.map((line) => line.trim()))
-  ///     .transform(.where((line) => line.isNotEmpty))
-  ///     .run(fetch, size: 4)
-  ///     .collect(.foreach(save));
-  /// ```
-  ///
-  /// `size: 1` is `Stream.asyncMap`. [ordered] `true` — the default — yields
-  /// in the order the elements arrived however the work finishes, which is
-  /// what [ConcurrentAccessor.run] already means by *results come back in the
-  /// order of items*; `false` yields in completion order.
-  ///
-  /// Honours its subscription, the way [Pool.flow] does: pausing stops new
-  /// tasks launching and cancelling stops the run. The first worker to throw
-  /// propagates out of the terminal `collect` and no further element is
-  /// started — [Pool.settle] is where collect-and-continue lives.
-  ///
-  /// `asyncExpand` is this and one more step: `flow.run(f).transform(.flat())`.
-  Flow<R> run<R>(
-    FutureOr<R> Function(T item) worker, {
-    int size = 1,
-    bool ordered = true,
-  }) {
-    final limit = size > 0 ? size : 1;
-    final source = stream;
-    return Flow<R>(
-      ordered
-          ? _inorder(source, worker, limit)
-          : _asdone(source, worker, limit),
-    );
-  }
-}
-
-/// One task's outcome, never thrown, so an abandoned sibling of a failed task
-/// cannot become an unhandled async error.
-Future<Settled<R>> _attempt<T, R>(
-  FutureOr<R> Function(T item) worker,
-  T item,
-) async {
-  try {
-    return Done<R>(await worker(item));
-  } catch (error, stack) {
-    return Broke<R>(error, stack);
-  }
-}
-
-Never _rethrow(Broke<Object?> broke) =>
-    Error.throwWithStackTrace(broke.error, broke.stack);
-
-/// At most [size] workers in flight, yielding in the order elements arrived.
-Stream<R> _inorder<T, R>(
-  Stream<T> source,
-  FutureOr<R> Function(T item) worker,
-  int size,
-) async* {
-  final cursor = StreamIterator<T>(source);
-  final pending = Queue<Future<Settled<R>>>();
-  try {
-    var more = true;
-    while (true) {
-      while (more && pending.length < size) {
-        more = await cursor.moveNext();
-        if (!more) break;
-        pending.add(_attempt(worker, cursor.current));
-      }
-      if (pending.isEmpty) break;
-      switch (await pending.removeFirst()) {
-        case Done<R>(:final value):
-          yield value;
-        case final Broke<R> broke:
-          _rethrow(broke);
-      }
-    }
-  } finally {
-    await cursor.cancel();
-  }
-}
-
-/// At most [size] workers in flight, yielding as they finish.
-Stream<R> _asdone<T, R>(
-  Stream<T> source,
-  FutureOr<R> Function(T item) worker,
-  int size,
-) async* {
-  final cursor = StreamIterator<T>(source);
-  final active = <Future<void>>{};
-  final ready = Queue<Settled<R>>();
-  Completer<void>? waiter;
-
-  void arrive(Settled<R> outcome) {
-    ready.add(outcome);
-    final woken = waiter;
-    waiter = null;
-    if (woken != null && !woken.isCompleted) woken.complete();
-  }
-
-  try {
-    var more = true;
-    while (true) {
-      while (more && active.length < size) {
-        more = await cursor.moveNext();
-        if (!more) break;
-        late final Future<void> task;
-        task = _attempt(worker, cursor.current).then((outcome) {
-          active.remove(task);
-          arrive(outcome);
-        });
-        active.add(task);
-      }
-      while (ready.isEmpty && active.isNotEmpty) {
-        await (waiter ??= Completer<void>()).future;
-      }
-      if (ready.isEmpty) break;
-      switch (ready.removeFirst()) {
-        case Done<R>(:final value):
-          yield value;
-        case final Broke<R> broke:
-          _rethrow(broke);
-      }
-    }
-  } finally {
-    await cursor.cancel();
   }
 }
 

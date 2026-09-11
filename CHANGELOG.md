@@ -2,6 +2,478 @@
 
 All notable changes to this project will be documented in this file.
 
+## 5.5.0
+
+Two vocabularies, and the filesystem overhauled. An API review read the
+library against its own documentation and came back with two findings that
+were really one: **`Sequence` and `Flow` were being served by one pair of
+operation types, and both were paying for it**, and **`io` had grown three
+ways to filter a tree, four silent bugs and a corner where the prefix did not
+tell you what you got.**
+
+The first is the release. `Transformer` stored the synchronous form as a
+required field and the streaming form as an optional one, and three
+complaints fell out of that single asymmetry.
+
+**A flow-native operation could not join the vocabulary at all.** An
+operation whose element step is asynchronous has no `Iterable` half to
+supply, so it could not be a `Transformer` — which is why `asyncMap` was
+`flow.run(worker, size: n)`, an extension declared over in `concurrent`,
+reached past the two members a flow was documented to have. The same
+constraint is why `flow.stream` carried eight `Stream` members with "no
+spelling here", and why `debounce`, `throttle`, `merge`, `asyncExpand` and an
+async predicate had no spelling anywhere.
+
+**`Flow`'s constraints were billed to `Sequence`.** An operation a flow
+cannot stream was demoted to a `Collector` on *both* sides. On a flow that is
+right. On a sequence it meant the commonest shape in the library's own
+examples changed container twice for nothing:
+
+```dart
+rows.collect(.sort.by((r) => r.cost)).transform(.take.first(10)).collect(.list())
+```
+
+Three calls and two container types for Kotlin's `sortedBy(cost).take(10)`.
+
+**And the operation types spoke Dart's vocabulary in public.** `Sequence`
+exists so `Iterable` is not in scope, and then `Transformer.run` handed one
+back as a public field.
+
+### 1. Four operation types, one per job per container
+
+| Container | Shaping step | Terminal |
+| :--- | :--- | :--- |
+| `Sequence<T>` | `Transformer<A, B>` — `Iterable<B> Function(Iterable<A>)` | `Collector<A, R>` — `R Function(Iterable<A>)` |
+| `Flow<T>` | `Pipe<A, B>` — `Stream<B> Function(Stream<A>)` | `Pour<A, R>` — `Future<R> Function(Stream<A>)` |
+
+`Transformer` and `Collector` lose `pour`. `Pipe` and `Pour` have no
+synchronous fallback, so the *"streaming is a promise rather than a proof"*
+caveat on `fn` is gone — there is nothing left to silently buffer.
+
+**The operations keep their spelling.** A dot shorthand resolves its name
+against the context type, so `.where(live)` reads the same on either
+container and picks the factory that fits. `pour` was this library's word for
+*the same operation over a stream* as a field; it is a type now, which is the
+same idea said properly.
+
+### 2. `flow.pipe` and `flow.pour`
+
+A `Flow`'s two members were `transform` and `collect` — the same two words a
+`Sequence` uses. With one pair of operation types that was honest. With two
+it is not: a member named the same on both containers reads as though one
+pipeline value fits either, which is exactly what the library claimed and
+could not deliver.
+
+```dart
+rows.transform(.where(live));   // Transformer -> Sequence
+rows.collect(.count());         // Collector   -> int
+flow.pipe(.where(live));        // Pipe        -> Flow
+await flow.pour(.count());      // Pour        -> Future<int>
+```
+
+Four members and four operation types, paired by name. What the member tells
+you is which container the next call is on — the one thing that used to be
+invisible.
+
+### 3. What moved back to the sequence side
+
+These were `Collector`s only because a flow cannot stream them. On a sequence
+the law is bookkeeping — the source has an end, and reading all of it is what
+the operation *is* — so they are `Transformer`s and a chain never changes
+container:
+
+| Operation | 5.4.0 | 5.5.0 on a `Sequence` | 5.5.0 on a `Flow` |
+| :--- | :--- | :--- | :--- |
+| `sort()` / `.by` / `.using` | `Collector<A, Sequence<A>>` | `Transformer<A, A>` | `Pour<A, Sequence<A>>` |
+| `flip()` | `Collector<A, Sequence<A>>` | `Transformer<A, A>` | `Pour<A, Sequence<A>>` |
+| `take.last(n)` | `Collector<A, Sequence<A>>` | `Transformer<A, A>` | `Pour<A, Sequence<A>>` |
+| `skip.last(n)` | `Collector<A, Sequence<A>>` | `Transformer<A, A>` | `Pour<A, Sequence<A>>` |
+
+```dart
+rows.transform(.sort.by((r) => r.cost)).transform(.take.first(10)).collect(.list())
+```
+
+5.4.0's *"`sort` is not a transformer"* inverts into **"`sort` is not a
+pipe"**, which is the sharper statement: on a flow the answer genuinely
+cannot exist until the source ends, and `Pour.sort` hands back a `Sequence`
+to say so. Sorting inside a bucket keeps the spelling 5.3.0 gave it, because
+`group.into` takes a `Collector` and `Transformer.into` makes one:
+`group.into(f, Transformer.sort<T>().into(.seq()))`.
+
+### 4. What the flow side gains
+
+None of these had a spelling anywhere through 5.4.0:
+
+| Name | Replaces / adds |
+| :--- | :--- |
+| `map.async(each, {size, ordered})` | `flow.run` — moves out of `concurrent` into the vocabulary |
+| `where.async(test, {size})` | nothing; had no spelling |
+| `flat.async(each)` | `asyncExpand` |
+| `chunk.time(d)` | nothing; the batch a clock closes |
+| `debounce(d)` / `throttle(d)` | nothing |
+| `timeout(d)` | `flow.stream.timeout(d).flow` |
+| `handle(onError)` | `flow.stream.handleError(…).flow` |
+| `merge(other)` | nothing |
+| `tap(each)` | a `map` that returns its input |
+| `Pour.foreach(FutureOr<void> Function(A))` | the async terminal the library did not have |
+
+`flow.stream` stays as the door and now carries only what is genuinely
+foreign — `listen`, `pipe`, `drain`, `asBroadcastStream` — rather than five
+operations the vocabulary could not express.
+
+**`Pour.foreach` awaits, and that fixes a silent bug.**
+`Collector.foreach` takes a `void Function(A)`, and Dart assigns a
+`Future`-returning closure to that type without a word. So this compiled,
+started every write and awaited none:
+
+```dart
+await flow.collect(.foreach((n) async {
+  await io.async.write('out/$n.txt', 'x');   // never awaited
+}));
+```
+
+The most likely mistake in a streaming script, because `foreach` is the
+natural terminal and the docs send you to `io.async` inside concurrent work.
+`Pour.foreach` takes a `FutureOr<void>` and awaits each call before the next.
+`Collector.foreach` stays synchronous — a sequence is walked synchronously
+and there is nothing there that *could* await — and its doc now names the
+trap and the two answers: `seq.flow.pour(.foreach(f))`, or `concurrent.run`.
+
+### 5. A binary operand takes the right container
+
+`zip`, `plus`, `minus`, `common` and `or` took a `Sequence` on the one
+operation type, so `[1].flow.pipe(.zip([2].flow))` did not compile — two
+flows could not be zipped, concatenated, differenced or intersected, and
+there was no door, because `flow.stream` reaches `Stream`, which has no `zip`
+either.
+
+```dart
+Transformer.zip<A, R>(Sequence<R> other)   // walked per walk
+Pipe.zip<A, R>(Flow<R> other)              // consumed once, as its contract says
+```
+
+Zipping two files line by line is expressible, and no sealed `Source<T>`
+union was needed.
+
+### 6. `flat`, retyped
+
+`Transformer.flat<B>()` was a `Transformer<Never, B>` — a trick that made it
+type-check against *any* receiver, infer nothing, and throw `StateError` at
+runtime on an element that was not iterable:
+
+```dart
+[1, 2].seq.transform(.flat<int>()).collect(.list());
+// StateError: flat() needs sequence or iterable elements; found int
+```
+
+It has the static type it always had:
+
+```dart
+Transformer.flat<B>()  ->  Transformer<Sequence<B>, B>
+Pipe.flat<B>()         ->  Pipe<Sequence<B>, B>
+Pipe.flat.async(each)  ->  each returns a Flow<B>
+```
+
+`B` infers from the receiver, so `.flat()` works where `.flat<Row>()` was
+required, and the `StateError` branch and its runtime type-sniffing are
+deleted. A sequence of something else nested is one `map` away:
+`transform(.map((l) => l.seq)).transform(.flat())`.
+
+### 7. One rule for what a callback owes
+
+`flat.map` took a `Sequence` and `crawl.gather` took an `Iterable`, so a
+caller could not predict which container a callback owed. One rule now, and
+it is directional:
+
+> **What a callback hands the library back is a `Sequence`** — `flat.map`,
+> `Pipe.flat.map`, `crawl.gather`. What a caller hands *in* stays an
+> `Iterable`, because that is what `.seq` is the seam for.
+
+`Transformer.run`, `Collector.run` and `fn` keep `Iterable` on both sides:
+they are the raw function form of an operation, not a collection API, and
+that is the honest boundary of an operation *value*.
+
+### 8. `chunk(0)` throws
+
+It yielded nothing, which is a chunking of no rows into no batches and is
+nobody's intention. A size that came out zero is an arithmetic bug upstream,
+and silence let it reach the output. `ArgumentError`, on both `chunk` and
+`Pipe.chunk`.
+
+### 9. `Flow` gap-fill
+
+- **`Flow<T?>.nonnull`** — the twin `Sequence` always had. Asking for it was
+  an `undefined_getter`.
+- **`Flow.dump(path)`** — a streaming JSON array through a staging file,
+  declared in `io` as an extension the way `Sequence.dump` is, so
+  `collection` still knows nothing about the disk.
+- **`Flow.of(() => stream)`** — a flow that **rebuilds its source** on every
+  terminal, so a source that can honestly be read again can be consumed as
+  many times as a `Sequence` can be walked. A shaping step carries the
+  property forward. `.seq.flow`, `.flow` on an `Iterable` and every listing
+  and reader on `io.async` are these now, which is what makes the `io` mirror
+  a real one — see §13.
+
+---
+
+## The `io` overhaul
+
+Eight bugs, four consolidations and seven members that were missing.
+
+### 10. The bugs
+
+**`io.async.dir.sweep` deleted under a live walk.** The blocking twin takes
+its whole listing first and says why: *deleting under a walk in progress is
+the one thing a lazy listing cannot be asked to survive.* The 5.3.0 flow
+rewrite made the async twin do exactly that, over a lazy recursive listing.
+It collects first now.
+
+**`io.copy` of a directory was lossy about symlinks.** It walked with
+`Directory.list(recursive: true)` and branched on `is Directory` / `is File`,
+so a link to a file was **dereferenced into a second copy of the content**
+and a link to a directory matched neither branch and was **dropped without a
+word**. It routes through `Entries.walk(follow: false)` now — the three kinds
+and the cycle guard the listing already had — and recreates a link as a link,
+pointing where it pointed. `io.copy` of a single link is kind-preserving too.
+
+**`io.move` of a directory onto an existing directory merged the two trees.**
+`rename` refuses that; the blanket `on FileSystemException` caught the
+refusal, fell back to copy-and-delete, and left the two trees merged with the
+source gone. It throws now. The fallback is also for a cross-device error
+(`EXDEV`) and nothing else — every other failure is rethrown as itself rather
+than becoming a half-finished copy.
+
+**Concurrent atomic writes to one path collided.** The staging path was
+`'$path$part'` with no disambiguator, and `atomic` deleted an existing
+staging file before writing, so two `io.async.write` calls to one path took
+each other's file out and the loser failed with an internal `.part` path in
+the error message — platform-dependently, since Windows throws on the delete
+instead. This is the exact concurrency the docs encourage. The staging name
+carries the pid and a per-process counter now, so writers race only on the
+final rename, which POSIX makes atomic. The suffix is still `part`, so
+`io.dir.sweep(out, match: '*.part')` still finds an abandoned one.
+
+**`FileSystemEntry.empty` did blocking disk IO inside a getter** —
+`Directory(path).listSync(followLinks: false).isEmpty` — reached from
+`io.async.empty`, so the non-blocking accessor blocked on every directory it
+was asked about. It also broke the type's own promise of *one stat, four
+answers*. It is `!isdir && size == 0` now and touches nothing. Counting what
+is in a directory is a second listing, so it is a second call that says which
+accessor it is on: **`io.dir.empty(path)`**, with an async twin.
+`io.empty(path)` still answers for either kind, by asking the right one.
+
+**The async write path made sync syscalls.** `Fs.atomic` used
+`existsSync`/`renameSync` and `download` used `lengthSync`, from the accessor
+whose whole promise is not blocking. All three are awaited now.
+
+**Ninety lines of dead duplicate implementation** — `Fs.find`, `Fs.findAsync`,
+`Fs.delete`, `Fs.deleteAsync` — re-implemented listing and sweeping with
+*different* semantics from `Entries`: basename-only matching, `followLinks`
+defaulted on, no cycle guard. Two implementations of one operation, one
+unreachable. Deleted. `Fs.parent`/`Fs.parentAsync` were the same thing as
+`Fs.mkparentSync`/`Fs.mkparent` and went with them.
+
+**`io.lines` was eager inside a type documented as lazy.** It wrapped
+`readAsLinesSync`, so the whole file was a `List` before the `Sequence`
+existed — where `Sequence`'s class doc promises *a view, not a snapshot* and
+warns about double walks. It is a generator over the decoded text now:
+nothing is read until something walks it, a walk that stops early stops
+reading, and a second walk re-reads the file.
+
+### 11. `io.dir` — one matcher, one depth axis
+
+There were three vocabularies for *filter a tree*: `walk`'s glob, `find`'s
+`Pattern` with a `recursive:` bool, and `glob`'s pattern-as-the-argument.
+`find`'s own doc said it gave *the same set* as `walk(only: .file, match: …)`.
+
+| After | Before |
+| :--- | :--- |
+| `io.dir.list(dir, {only, match})` | unchanged |
+| `io.dir.walk(dir, {only, match, depth, follow})` | unchanged |
+| `io.dir.glob(pattern)` | unchanged |
+| `io.dir.sweep(dir, {only, match, depth})` | `sweep(dir, {pattern, recursive})` |
+| — | **`io.dir.find` deleted** |
+
+- **`match:` is the only matcher**, and it is a glob. A `RegExp` filter is the
+  collection vocabulary's job: `walk(d).transform(.where((e) => re.hasMatch(e.name)))`.
+- **`depth:` is the only depth axis.** `recursive: false` is `depth: 1`, which
+  the docs already defined as equal to `list`. No member keeps a bool.
+- **`sweep` defaults to the whole tree**, matching the member it is built from
+  rather than contradicting it. This is a behaviour change. It also leaves
+  directories alone unless `only: .directory` asks for them, and deletes
+  deepest-first so nothing is counted twice.
+
+New: **`io.dir.size(dir)`** (the recursive byte total, where `io.size` on a
+directory is `0` by design; links count as nothing so a tree is not counted
+twice), **`io.dir.empty(path)`**, and **`io.dir.link(path, target)`** /
+**`io.dir.target(path)`** — `io.islink` could read a link and nothing could
+make or resolve one. All four have async twins.
+
+### 12. `io.csv` is a mirror
+
+`io.csv.records` and `rows` returned a `Flow` and `write`/`pipe` a `Future`,
+all reached through `io`, whose doc promises *everything here blocks*. It was
+the one corner where the prefix did not tell you what you got, and the reason
+the mirror rule needed a carve-out for it.
+
+| | `io.csv` | `io.async.csv` |
+| :--- | :--- | :--- |
+| `rows` | `Sequence<List<String>>` | `Flow<List<String>>` |
+| `records` | `Sequence<Map<String, String>>` | `Flow<Map<String, String>>` |
+| `write` | takes a `Sequence` | takes a `Flow` |
+
+The blocking reads are lazy views — a row at a time, walkable twice, stoppable
+early — so a file larger than memory still works from either accessor.
+
+**`io.csv.pipe` is deleted.** Rule 5 allows a shorthand *defined as* the
+general form in one line; `pipe` was forty lines of its own implementation
+beside `write`, which is two implementations of one operation, and it was the
+weaker name. The streaming form is `io.async.csv.write`.
+
+### 13. The mirror is now parity, and says where it is not
+
+Every member whose shape differs follows one rule with no exceptions: a
+`Sequence` on `io`, a `Flow` on `io.async`. That covers `lines`, `chunks`,
+`io.dir`'s listings and the whole of `io.csv`.
+
+The one property that is not parity is stated rather than glossed: **a `Flow`
+is consumed once where a `Sequence` can be walked again.** `io.async.dir.walk(d)`
+threw `StateError` on the second terminal while `io.dir.walk(d)` simply
+re-read the disk, and the docs called the two sides *the same four words,
+differing only in the `await`* — true of one terminal and false of anything
+that reused the listing. Every listing and reader on `io.async` is a
+`Flow.of` now: re-derivable, so a second terminal reads the disk again,
+exactly as a second walk does.
+
+### 14. The members that were missing
+
+| New | Shape | Covers |
+| :--- | :--- | :--- |
+| `io.chunks(path, {size})` / `io.async.chunks` | `Sequence<List<int>>` / `Flow<List<int>>` | streaming byte read — `io.bytes` reads the whole file |
+| `io.lines.write(path, seq)` / `io.async.lines.write(path, flow)` | atomic, one element per line | writing a collection to a file |
+| `Flow.dump(path)` | streaming JSON array, atomic | `dump` existed for `Sequence` and `Dictionary` only |
+| `io.temp([prefix])` | `FileSystemEntry` | a temp *file*, beside `io.dir.temp` for the directory |
+| `io.append.open(path)` | an `Appender`, closed by the caller | repeated appends without reopening per call |
+| `io.dir.link` / `io.dir.target` | create and resolve | symlinks |
+| `io.dir.size` / `io.dir.empty` | `int` / `bool` | a tree's size, and the directory question |
+
+`io.lines` and `io.append` are callable namespaces now, the way
+`Transformer.map` and `Collector.count` are: `io.lines(path)` reads and
+`io.lines.write(path, seq)` writes; `io.append(path, text)` opens, writes and
+closes and `io.append.open(path)` hands back a handle that stays open.
+Nothing a caller already wrote changed.
+
+**`Appender` is the deliberate exception to "no open handles in `io`."** That
+rule exists because a lifecycle is a thing to get wrong, and it still holds
+for everything else; the exception is narrow on purpose — one member, `open`
+in its name so the lifecycle is visible at the call site, and `close`
+idempotent so a `finally` after an early close is not an error.
+
+---
+
+## The follow-ons the separation unblocked
+
+### 15. `crawl.flow` is lazy
+
+`net.crawl<T>(seed).flow(handler)` armed the engine **in the method body**, so
+building a flow and never collecting it still fetched a page. `Pool.flow` has
+guarded this with `onListen` since 5.3.0. `Flow`'s *nothing runs until
+something collects* is a property of the operations; a source has to keep it
+for itself.
+
+### 16. `crawl.collect` is `crawl.items`
+
+Same name, same receiver position, unrelated meaning: `rows.collect(.count())`
+takes a `Collector` and reduces a collection, `crawl.collect(handler)` took a
+page handler and ran a crawl. Rule 5 forbids exactly that, and the engine
+already called them items.
+
+### 17. `crawl.save` and `crawl.sink` are retired
+
+They were private versions of a member the library did not have: *write this
+collection to a file, one element per line, atomically*.
+
+```dart
+await io.async.lines.write('titles.txt', net.crawl<String>(seed).flow());
+```
+
+One name covers a crawl, a log, a piped stdin and a directory walk, and
+`Flow.dump` is its JSON twin. A crawl that wants a sink that is not a file
+writes `flow().pour(.foreach(out.writeln))`.
+
+### 18. `crawl.gather` takes a `Sequence`
+
+See §7. A literal or a `split(',')` crosses with `.seq`; everything this
+library returns is one already.
+
+---
+
+## Housekeeping
+
+### 19. `lib/util/` holds five accessors and no strays
+
+`Json`, `Markup`, `Csv`, `Codec` and the `.url`/`.ms`/`.s` extensions sat
+under `lib/util/` and were **never reachable as `util.` anything**. They are
+types and extensions several domains return; a directory named after an
+accessor should hold that accessor's members. They moved to `lib/src/`, where
+the rest of the cross-domain machinery already lives, and they are exported
+from `package:dart_toolkit/dart_toolkit.dart` exactly as before — **nothing a
+caller writes changed.** `lib/util/` is five files and five accessors:
+`time`, `size`, `text`, `hash`, `rand`.
+
+The bounded-work machinery behind `Pipe.map.async` moved to
+`lib/src/bounded.dart` for the same reason: `collection` and `concurrent`
+both need it and neither may depend on the other.
+
+### 20. The `docs/` folder is gone
+
+Seventeen prose files, every sentence of which had a twin in a `///` comment.
+That is Rule 5 applied to prose: two places saying one thing, and the one
+further from the code is the one that goes stale. The comments are also the
+copy the reader actually meets — in dartdoc, and on hover in an editor — and
+they cannot drift from the signature they sit above. The narrative a folder
+carried that a comment cannot lives in the library-level `///` at the top of
+each file, which is where `# IO Domain (io.*)` already was.
+`test/docs_test.dart` still compiles every `dart` block in every `///`
+comment under `lib/`, plus `README.md`, `NAMESPACE.md` and
+`example/README.md`.
+
+---
+
+## Migration
+
+| 5.4.0 | 5.5.0 |
+| :--- | :--- |
+| `flow.transform(step)` | `flow.pipe(step)` |
+| `flow.collect(step)` | `flow.pour(step)` |
+| `rows.collect(.sort.by(f))` | `rows.transform(.sort.by(f))` |
+| `rows.collect(.flip())` | `rows.transform(.flip())` |
+| `rows.collect(.take.last(n))` | `rows.transform(.take.last(n))` |
+| `rows.collect(.skip.last(n))` | `rows.transform(.skip.last(n))` |
+| `group.into(f, .sort.by(g))` | `group.into(f, Transformer.sort.by(g).into(.seq()))` |
+| `flow.run(worker, size: n)` | `flow.pipe(.map.async(worker, size: n))` |
+| a `Transformer` on a flow | `flow.pipe(Pipe.of(transformer))` |
+| `.flat<Row>()` | `.flat()`, over `Sequence` elements |
+| `Transformer.fn(run, pour: p)` | `Transformer.fn(run)` and `Pipe.fn(p)` |
+| `chunk(0)` | throws `ArgumentError` |
+| `io.dir.find(d, pattern: re)` | `io.dir.walk(d, only: .file).transform(.where((e) => re.hasMatch(e.name)))` |
+| `io.dir.find(d, pattern: '*.mp3')` | `io.dir.walk(d, only: .file, match: '*.mp3')` |
+| `io.dir.sweep(d, pattern: re, recursive: r)` | `io.dir.sweep(d, match: glob, depth: r ? null : 1)` |
+| `io.dir.sweep(d)` | now sweeps the whole tree, not one level |
+| `io.csv.records(p)` / `io.csv.rows(p)` (a `Flow`) | `io.async.csv.records(p)` / `.rows(p)` |
+| `io.csv.pipe(p, flow)` | `io.async.csv.write(p, flow)` |
+| `io.csv.write(p, Iterable<Map>)` | `io.csv.write(p, Sequence<Map>)` — `.seq` on a literal |
+| `entry.empty` on a directory | `io.dir.empty(path)` |
+| `io.move(dir, existingDir)` | throws instead of merging |
+| `crawl.collect([handler])` | `crawl.items([handler])` |
+| `crawl.save(path)` | `io.async.lines.write(path, crawl.flow())` |
+| `crawl.sink(out)` | `crawl.flow().pour(.foreach(out.writeln))` |
+| `crawl.gather((p) => Iterable<R>)` | `crawl.gather((p) => Sequence<R>)` |
+| `docs/*.md` | the `///` comments under `lib/` |
+
+Imports are unchanged: everything still comes from
+`package:dart_toolkit/dart_toolkit.dart`.
+
 ## 5.4.0
 
 `Flow`, and the rule that sorts the vocabulary. Two complaints: *add flow to

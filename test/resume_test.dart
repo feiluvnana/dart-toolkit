@@ -287,7 +287,7 @@ void main() {
           .crawl<String>('https://example.com/1'.url)
           .downloader(_HalfwayDownloader(pages, 1))
           .resume(path)
-          .collect((res) {
+          .items((res) {
             res.emit(res.url.toString());
             for (final href
                 in res
@@ -305,7 +305,7 @@ void main() {
           .crawl<String>('https://example.com/1'.url)
           .downloader(MapDownloader<String>(pages))
           .resume(path)
-          .collect((res) {
+          .items((res) {
             res.emit(res.url.toString());
             for (final href
                 in res

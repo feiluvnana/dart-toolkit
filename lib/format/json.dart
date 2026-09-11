@@ -13,8 +13,8 @@
 library;
 
 import '../src/jsontext.dart';
-import '../util/codec.dart';
-import '../util/json.dart';
+import '../src/codec.dart';
+import '../src/json.dart';
 import 'format.dart';
 
 // ============================================================================

@@ -7,8 +7,8 @@ library;
 
 import 'package:toml/toml.dart' as toml;
 
-import '../util/codec.dart';
-import '../util/json.dart';
+import '../src/codec.dart';
+import '../src/json.dart';
 import 'format.dart';
 
 // ============================================================================

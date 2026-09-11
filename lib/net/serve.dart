@@ -29,7 +29,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import '../src/jsontext.dart';
-import '../util/json.dart';
+import '../src/json.dart';
 import 'http.dart';
 
 // ============================================================================

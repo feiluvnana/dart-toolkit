@@ -89,7 +89,7 @@ void main(List<String> args) async {
       .tag('product', _product)
       .on
       .error((f) => log.warn('${f.fetch?.url ?? 'crawl'}: ${f.error}'))
-      .collect();
+      .items();
 
   log.ok('Collected ${products.collect(.count())} products.');
 
@@ -128,10 +128,13 @@ void main(List<String> args) async {
       for (final e in enriched.collect(.list()))
         {'name': e.product.name, 'price': e.product.price, 'slug': e.slug},
     ]);
-    await io.csv.write(io.path.join(dir, 'products.csv'), [
-      for (final e in enriched.collect(.list()))
-        {'name': e.product.name, 'price': e.product.price, 'slug': e.slug},
-    ]);
+    io.csv.write(
+      io.path.join(dir, 'products.csv'),
+      [
+        for (final e in enriched.collect(.list()))
+          {'name': e.product.name, 'price': e.product.price, 'slug': e.slug},
+      ].seq,
+    );
     log.ok('Wrote 3 files to $dir/.');
   }
 
@@ -168,7 +171,7 @@ void main(List<String> args) async {
   // ------------------------------------------------------------ 5. console
   log.step(5, 5, 'Summary');
 
-  final cheapest = products.collect(.sort.by((p) => p.price));
+  final cheapest = products.transform(.sort.by((p) => p.price));
   out.table(
     Table(
       headers: ['Product', 'Price', 'Slug'],

@@ -15,7 +15,9 @@
 library;
 
 import '../collection/dictionary.dart';
+import '../collection/flow.dart';
 import '../collection/sequence.dart';
+import '../src/fs.dart';
 import 'io.dart';
 
 // ============================================================================
@@ -55,4 +57,29 @@ extension DictionaryDumpable<K, V> on Dictionary<K, V> {
     bool pretty = true,
     String part = '.part',
   }) => io.dump(path, map, pretty: pretty, part: part);
+}
+
+/// Writing a [Flow] to a JSON file, as it arrives.
+extension FlowDumpable<T> on Flow<T> {
+  /// Writes these elements to [path] as a JSON array, atomically.
+  ///
+  /// The streaming twin of [Dumpable.dump]. The brackets and commas are
+  /// written around the elements as they arrive rather than the array being
+  /// built first, so a crawl or a walk of any size becomes a JSON file
+  /// without ever being a `List`:
+  ///
+  /// ```dart
+  /// await net.crawl<Row>(seed).flow().dump('out/rows.json');
+  /// ```
+  ///
+  /// Every element has to survive `jsonEncode`, which for a type of your own
+  /// means a `toJson`. Reading one back is `format.json.read`. Claims the
+  /// flow, the way every other terminal does.
+  Future<FileSystemEntry> dump(
+    String path, {
+    bool pretty = true,
+    String part = '.part',
+  }) async => Fs.entryFor(
+    (await Fs.pourJson(path, stream, pretty: pretty, part: part)).path,
+  );
 }

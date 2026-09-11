@@ -6,12 +6,12 @@
 /// `Collectors` is twenty years old and uncontroversial — and the half where
 /// the old surface sprawled worst: twenty-three members that shared no shape
 /// with each other and were reached for once per pipeline.
+///
+/// The streaming half is [Pour]; see the [Transformer] class doc for why
+/// there are four operation types and not two.
 library;
 
-import 'dart:async';
-
 import 'dictionary.dart';
-import 'flow.dart';
 import 'sequence.dart';
 
 // ============================================================================
@@ -59,54 +59,21 @@ import 'sequence.dart';
 /// [fold] at all, which is exactly why Java ships `summingInt` beside
 /// `reducing`.
 class Collector<A, R> {
-  /// Creates a collector that applies [run] to the whole sequence, and [pour]
-  /// to a stream of one.
+  /// Creates a collector that applies [run] to the whole sequence.
   ///
   /// The generative constructor a subclass calls. Reach for [fn] at a call
   /// site; this is the form for when a subclass needs a `super` call.
-  ///
-  /// Without a [pour] the operation still reaches a [Flow] — see [pour] for
-  /// what it costs.
-  const Collector(this.run, {Future<R> Function(Stream<A> items)? pour})
-    : _pour = pour;
+  const Collector(this.run);
 
   /// This operation, as the plain function it is.
   ///
   /// ```dart
   /// Collector.count<int>().run(const [1, 2, 3]);    // 3
   /// ```
+  ///
+  /// An `Iterable` in, for the reason [Transformer.run] takes one: this is
+  /// the function an operation *is*, not a collection API.
   final R Function(Iterable<A> items) run;
-
-  final Future<R> Function(Stream<A> items)? _pour;
-
-  /// The same operation over a stream — what [Flow.collect] applies.
-  ///
-  /// ```dart
-  /// // setup: final src = Stream.fromIterable(const [1, 2, 3]);
-  /// await Collector.count<int>().pour(src);    // 3
-  /// ```
-  ///
-  /// A function rather than a method, for the reason [run] is a field, and
-  /// with the same default: hold the stream, apply [run], hand back what came
-  /// back. So every collector works on a [Flow] the day it is written,
-  /// including one a caller subclassed three releases ago.
-  ///
-  /// Thirty-one of the named collectors supply their own, eleven of those
-  /// stopping the source early — `first()` over a crawl cancels the
-  /// subscription at the first item, which stops the crawl. The rest hold the
-  /// source because that is what the operation *is*: [sort], [flip],
-  /// `take.last`, `skip.last` and [seq] cannot answer from less than all of
-  /// it. [fn] is the door.
-  Future<R> Function(Stream<A> items) get pour => _pour ?? _buffer<A, R>(run);
-
-  /// The default [pour]: hold the source, apply [run], hand the result back.
-  ///
-  /// Declared over `Stream<Object?>` so a `Collector<Never, R>` is handed a
-  /// stream it will accept, the same way [Transformer]'s default is.
-  static Future<R> Function(Stream<A> items) _buffer<A, R>(
-    R Function(Iterable<A> items) run,
-  ) =>
-      (Stream<Object?> items) async => run(await items.cast<A>().toList());
 
   // --------------------------------------------------------------------------
   // Composing
@@ -128,10 +95,8 @@ class Collector<A, R> {
   /// as above, or write `Collector.count<Row>()` out. Inline composition is
   /// what a downstream collector is for — `group.into(f, .count())` — and that
   /// one infers cleanly.
-  Collector<A, R2> then<R2>(R2 Function(R result) end) => Collector(
-    (items) => end(run(items)),
-    pour: (items) async => end(await pour(items)),
-  );
+  Collector<A, R2> then<R2>(R2 Function(R result) end) =>
+      Collector((items) => end(run(items)));
 
   // --------------------------------------------------------------------------
   // Counting and asking
@@ -154,26 +119,21 @@ class Collector<A, R> {
   ///
   /// There is no complement: `!seq.collect(.empty())` already says the other
   /// thing.
-  static Collector<A, bool> empty<A>() =>
-      Collector((items) => items.isEmpty, pour: (items) => items.isEmpty);
+  static Collector<A, bool> empty<A>() => Collector((items) => items.isEmpty);
 
   /// Whether [value] is one of the elements.
-  static Collector<A, bool> has<A>(A value) => Collector(
-    (items) => items.contains(value),
-    pour: (items) => items.contains(value),
-  );
+  static Collector<A, bool> has<A>(A value) =>
+      Collector((items) => items.contains(value));
 
   /// Whether [test] accepts at least one element.
   ///
   /// There is no `none`: `!seq.collect(.any(test))` *is* `none`.
   static Collector<A, bool> any<A>(bool Function(A item) test) =>
-      Collector((items) => items.any(test), pour: (items) => items.any(test));
+      Collector((items) => items.any(test));
 
   /// Whether [test] accepts every element — vacuously true when empty.
-  static Collector<A, bool> all<A>(bool Function(A item) test) => Collector(
-    (items) => items.every(test),
-    pour: (items) => items.every(test),
-  );
+  static Collector<A, bool> all<A>(bool Function(A item) test) =>
+      Collector((items) => items.every(test));
 
   // --------------------------------------------------------------------------
   // Picking one
@@ -203,24 +163,14 @@ class Collector<A, R> {
   static const single = _Single();
 
   /// The element at [index], or `null` when the sequence is shorter.
-  static Collector<A, A?> at<A>(int index) => Collector(
-    (items) {
-      if (index < 0) return null;
-      var i = 0;
-      for (final item in items) {
-        if (i++ == index) return item;
-      }
-      return null;
-    },
-    pour: (items) async {
-      if (index < 0) return null;
-      var i = 0;
-      await for (final item in items) {
-        if (i++ == index) return item;
-      }
-      return null;
-    },
-  );
+  static Collector<A, A?> at<A>(int index) => Collector((items) {
+    if (index < 0) return null;
+    var i = 0;
+    for (final item in items) {
+      if (i++ == index) return item;
+    }
+    return null;
+  });
 
   /// Where an element is — Dart's `indexOf` and `indexWhere`.
   ///
@@ -254,66 +204,39 @@ class Collector<A, R> {
   static Collector<A, R> fold<A, R>(
     R initial,
     R Function(R total, A item) each,
-  ) => Collector(
-    (items) {
-      var total = initial;
-      for (final item in items) {
-        total = each(total, item);
-      }
-      return total;
-    },
-    pour: (items) async {
-      var total = initial;
-      await for (final item in items) {
-        total = each(total, item);
-      }
-      return total;
-    },
-  );
+  ) => Collector((items) {
+    var total = initial;
+    for (final item in items) {
+      total = each(total, item);
+    }
+    return total;
+  });
 
   /// The total of [of] across the sequence; `0` when empty.
   ///
   /// The selector is always required, including on a sequence that is already
   /// numbers (`.sum((n) => n)`), because one spelling of an operation is worth
   /// five characters in the rarer case.
-  static Collector<A, num> sum<A>(num Function(A item) of) => Collector(
-    (items) {
-      num total = 0;
-      for (final item in items) {
-        total += of(item);
-      }
-      return total;
-    },
-    pour: (items) async {
-      num total = 0;
-      await for (final item in items) {
-        total += of(item);
-      }
-      return total;
-    },
-  );
+  static Collector<A, num> sum<A>(num Function(A item) of) =>
+      Collector((items) {
+        num total = 0;
+        for (final item in items) {
+          total += of(item);
+        }
+        return total;
+      });
 
   /// The mean of [of] across the sequence, or `null` when empty.
-  static Collector<A, double?> avg<A>(num Function(A item) of) => Collector(
-    (items) {
-      num total = 0;
-      var seen = 0;
-      for (final item in items) {
-        total += of(item);
-        seen++;
-      }
-      return seen == 0 ? null : total / seen;
-    },
-    pour: (items) async {
-      num total = 0;
-      var seen = 0;
-      await for (final item in items) {
-        total += of(item);
-        seen++;
-      }
-      return seen == 0 ? null : total / seen;
-    },
-  );
+  static Collector<A, double?> avg<A>(num Function(A item) of) =>
+      Collector((items) {
+        num total = 0;
+        var seen = 0;
+        for (final item in items) {
+          total += of(item);
+          seen++;
+        }
+        return seen == 0 ? null : total / seen;
+      });
 
   /// The elements as text, joined by [separator].
   ///
@@ -332,101 +255,34 @@ class Collector<A, R> {
     String suffix = '',
     int? limit,
     String Function(A item)? of,
-  }) => Collector(
-    (items) {
-      final buffer = StringBuffer(prefix);
-      var shown = 0;
-      var more = false;
-      for (final item in items) {
-        if (limit != null && shown >= limit) {
-          more = true;
-          break;
-        }
-        if (shown > 0) buffer.write(separator);
-        buffer.write(of == null ? '$item' : of(item));
-        shown++;
+  }) => Collector((items) {
+    final buffer = StringBuffer(prefix);
+    var shown = 0;
+    var more = false;
+    for (final item in items) {
+      if (limit != null && shown >= limit) {
+        more = true;
+        break;
       }
-      if (more) {
-        buffer
-          ..write(separator)
-          ..write('…');
-      }
-      return (buffer..write(suffix)).toString();
-    },
-    pour: (items) async {
-      final buffer = StringBuffer(prefix);
-      var shown = 0;
-      var more = false;
-      await for (final item in items) {
-        if (limit != null && shown >= limit) {
-          more = true;
-          break;
-        }
-        if (shown > 0) buffer.write(separator);
-        buffer.write(of == null ? '$item' : of(item));
-        shown++;
-      }
-      if (more) {
-        buffer
-          ..write(separator)
-          ..write('…');
-      }
-      return (buffer..write(suffix)).toString();
-    },
-  );
+      if (shown > 0) buffer.write(separator);
+      buffer.write(of == null ? '$item' : of(item));
+      shown++;
+    }
+    if (more) {
+      buffer
+        ..write(separator)
+        ..write('…');
+    }
+    return (buffer..write(suffix)).toString();
+  });
 
   // --------------------------------------------------------------------------
-  // Reordering, which needs the end
+  // Reordering moved out
   // --------------------------------------------------------------------------
-
-  /// The elements in ascending order, as a [Sequence].
-  ///
-  /// `sort()` needs [Comparable] elements, `sort.by(key)` orders by a key, and
-  /// `sort.using(compare)` takes a comparator — Kotlin's `sorted`, `sortedBy`
-  /// and `sortedWith`. Never mutates the source, which `List.sort` does.
-  ///
-  /// ```dart
-  /// titles.collect(.sort());
-  /// rows.collect(.sort.by((r) => r.cost));
-  /// rows.collect(.sort.using((a, b) => a.host.compareTo(b.host)));
-  /// ```
-  ///
-  /// A collector rather than a [Transformer], because no element of a sorted
-  /// result is known before the last element of the source has arrived — the
-  /// law under Rule 3. It was a transformer through 5.3.0, which read as
-  /// though sorting were free and was the one shape that could not be a
-  /// downstream collector. Now it can:
-  ///
-  /// ```dart
-  /// rows.collect(.group.into((r) => r.host, .sort.by((r) => r.cost)));
-  /// // Dictionary<String, Sequence<Row>> — every bucket sorted, in one pass
-  /// ```
-  static const sort = _Sort();
-
-  /// The elements back to front, as a [Sequence].
-  ///
-  /// Here rather than on [Transformer] for [sort]'s reason: the first element
-  /// of a reversed sequence is the last of the source.
-  static Collector<A, Sequence<A>> flip<A>() =>
-      Collector((items) => Sequence(items.toList().reversed));
-
-  /// The trailing elements — `take.last(n)`.
-  ///
-  /// The other half of `Transformer.take`, and the half that needs the end:
-  /// `take.first(n)` can yield before the source does, `take.last(n)` cannot.
-  ///
-  /// ```dart
-  /// rows.collect(.take.last(10));      // Sequence<Row>
-  /// ```
-  ///
-  /// [last] beside it is the last *element*, which is the relationship
-  /// [first] and `Transformer.take.first` already have.
-  static const take = _Take();
-
-  /// Everything but the trailing elements — `skip.last(n)`.
-  ///
-  /// The exact opposite of [take]`.last`, and here for the same reason.
-  static const skip = _Skip();
+  //
+  // `sort`, `flip`, `take.last` and `skip.last` were collectors through
+  // 5.4.0, because a flow cannot stream them. They are `Transformer`s now:
+  // that constraint belonged to the flow, and `Pour` is where it is billed.
 
   // --------------------------------------------------------------------------
   // Splitting into the other collection
@@ -478,10 +334,8 @@ class Collector<A, R> {
   /// The way back into the keyed collection from anything that produced
   /// pairs, and the twin of `Dictionary.pairs`. The last record to claim a key
   /// wins.
-  static Collector<(K, V), Dictionary<K, V>> dict<K, V>() => Collector(
-    (pairs) => Dictionary.of(pairs),
-    pour: (pairs) async => Dictionary.of(await pairs.toList()),
-  );
+  static Collector<(K, V), Dictionary<K, V>> dict<K, V>() =>
+      Collector((pairs) => Dictionary.of(pairs));
 
   /// The elements [test] accepts and the elements it rejects.
   ///
@@ -492,24 +346,14 @@ class Collector<A, R> {
   /// ```
   static Collector<A, (Sequence<A>, Sequence<A>)> split<A>(
     bool Function(A item) test,
-  ) => Collector(
-    (items) {
-      final yes = <A>[];
-      final no = <A>[];
-      for (final item in items) {
-        (test(item) ? yes : no).add(item);
-      }
-      return (Sequence(yes), Sequence(no));
-    },
-    pour: (items) async {
-      final yes = <A>[];
-      final no = <A>[];
-      await for (final item in items) {
-        (test(item) ? yes : no).add(item);
-      }
-      return (Sequence(yes), Sequence(no));
-    },
-  );
+  ) => Collector((items) {
+    final yes = <A>[];
+    final no = <A>[];
+    for (final item in items) {
+      (test(item) ? yes : no).add(item);
+    }
+    return (Sequence(yes), Sequence(no));
+  });
 
   // --------------------------------------------------------------------------
   // Leaving
@@ -520,12 +364,26 @@ class Collector<A, R> {
   ///
   /// `each` is what this library calls the *callback* in [fold] and `map`, so
   /// the operation gets the other half of the name.
+  ///
+  /// **[each] is synchronous, and Dart will not stop you passing one that is
+  /// not.** A `Future`-returning closure is assignable to a `void` function
+  /// type, so `collect(.foreach((r) async { await … }))` compiles, starts
+  /// every call and awaits none of them. A sequence is walked synchronously
+  /// and there is nothing here that could await; the answer is the container
+  /// whose elements arrive over time, where [Pour.foreach] takes a
+  /// `FutureOr<void>` and awaits it:
+  ///
+  /// ```dart
+  /// // setup: Future<void> save(Row r) async {}
+  /// await rows.flow.pour(.foreach(save));
+  /// await concurrent.run(rows.collect(.list()), save, size: 4);
+  /// ```
   static Collector<A, void> foreach<A>(void Function(A item) each) =>
       Collector((items) {
         for (final item in items) {
           each(item);
         }
-      }, pour: (items) => items.forEach(each));
+      });
 
   /// The elements as a list — the walk, and the result of it.
   ///
@@ -534,11 +392,11 @@ class Collector<A, R> {
   /// and the walk happens here, once. It is a downstream collector too,
   /// where there is no receiver to say it on: `group.into(f, .list())`.
   static Collector<A, List<A>> list<A>() =>
-      Collector((items) => items.toList(), pour: (items) => items.toList());
+      Collector((items) => List<A>.of(items));
 
   /// The distinct elements as a set.
   static Collector<A, Set<A>> set<A>() =>
-      Collector((items) => items.toSet(), pour: (items) => items.toSet());
+      Collector((items) => Set<A>.of(items));
 
   /// The elements as a [Sequence] — the identity collector.
   ///
@@ -558,14 +416,11 @@ class Collector<A, R> {
   /// pipelines, or one worth a test of its own, subclass [Collector] instead —
   /// which is why this class is not `final`.
   ///
-  /// **This is the one place the streaming rule is a promise rather than a
-  /// proof**, the same way [Transformer.fn] is: [run] takes a closure over an
-  /// `Iterable`, so without a [pour] this holds the whole source on a [Flow].
-  /// Supply both where that matters.
-  static Collector<A, R> fn<A, R>(
-    R Function(Iterable<A> items) run, {
-    Future<R> Function(Stream<A> items)? pour,
-  }) => Collector(run, pour: pour);
+  /// There is no streaming caveat on this any more, the same way there is
+  /// none on [Transformer.fn]: a collector reduces a sequence and nothing
+  /// else. [Pour.fn] is the streaming door.
+  static Collector<A, R> fn<A, R>(R Function(Iterable<A> items) run) =>
+      Collector(run);
 
   @override
   String toString() => 'Collector<$A, $R>';
@@ -580,14 +435,11 @@ class _Count {
   const _Count();
 
   /// How many elements there are.
-  Collector<A, int> call<A>() =>
-      Collector((items) => items.length, pour: (items) => items.length);
+  Collector<A, int> call<A>() => Collector((items) => items.length);
 
   /// How many elements [test] accepts.
-  Collector<A, int> where<A>(bool Function(A item) test) => Collector(
-    (items) => items.where(test).length,
-    pour: (items) => items.where(test).length,
-  );
+  Collector<A, int> where<A>(bool Function(A item) test) =>
+      Collector((items) => items.where(test).length);
 
   /// How many elements fall under each [key] — Kotlin's `countBy`.
   ///
@@ -606,20 +458,12 @@ class _First {
   Collector<A, A?> call<A>() => where((_) => true);
 
   /// The first element [test] accepts, or `null`.
-  Collector<A, A?> where<A>(bool Function(A item) test) => Collector(
-    (items) {
-      for (final item in items) {
-        if (test(item)) return item;
-      }
-      return null;
-    },
-    pour: (items) async {
-      await for (final item in items) {
-        if (test(item)) return item;
-      }
-      return null;
-    },
-  );
+  Collector<A, A?> where<A>(bool Function(A item) test) => Collector((items) {
+    for (final item in items) {
+      if (test(item)) return item;
+    }
+    return null;
+  });
 }
 
 /// The namespace behind [Collector.last].
@@ -630,22 +474,13 @@ class _Last {
   Collector<A, A?> call<A>() => where((_) => true);
 
   /// The last element [test] accepts, or `null`.
-  Collector<A, A?> where<A>(bool Function(A item) test) => Collector(
-    (items) {
-      A? found;
-      for (final item in items) {
-        if (test(item)) found = item;
-      }
-      return found;
-    },
-    pour: (items) async {
-      A? found;
-      await for (final item in items) {
-        if (test(item)) found = item;
-      }
-      return found;
-    },
-  );
+  Collector<A, A?> where<A>(bool Function(A item) test) => Collector((items) {
+    A? found;
+    for (final item in items) {
+      if (test(item)) found = item;
+    }
+    return found;
+  });
 }
 
 /// The namespace behind [Collector.single].
@@ -656,28 +491,16 @@ class _Single {
   Collector<A, A?> call<A>() => where((_) => true);
 
   /// The only element [test] accepts, or `null` when it is not exactly one.
-  Collector<A, A?> where<A>(bool Function(A item) test) => Collector(
-    (items) {
-      A? found;
-      var seen = 0;
-      for (final item in items) {
-        if (!test(item)) continue;
-        if (++seen > 1) return null;
-        found = item;
-      }
-      return seen == 1 ? found : null;
-    },
-    pour: (items) async {
-      A? found;
-      var seen = 0;
-      await for (final item in items) {
-        if (!test(item)) continue;
-        if (++seen > 1) return null;
-        found = item;
-      }
-      return seen == 1 ? found : null;
-    },
-  );
+  Collector<A, A?> where<A>(bool Function(A item) test) => Collector((items) {
+    A? found;
+    var seen = 0;
+    for (final item in items) {
+      if (!test(item)) continue;
+      if (++seen > 1) return null;
+      found = item;
+    }
+    return seen == 1 ? found : null;
+  });
 }
 
 /// The namespace behind [Collector.index].
@@ -688,24 +511,14 @@ class _Index {
   Collector<A, int?> of<A>(A value) => where((item) => item == value);
 
   /// The position of the first element [test] accepts, or `null`.
-  Collector<A, int?> where<A>(bool Function(A item) test) => Collector(
-    (items) {
-      var i = 0;
-      for (final item in items) {
-        if (test(item)) return i;
-        i++;
-      }
-      return null;
-    },
-    pour: (items) async {
-      var i = 0;
-      await for (final item in items) {
-        if (test(item)) return i;
-        i++;
-      }
-      return null;
-    },
-  );
+  Collector<A, int?> where<A>(bool Function(A item) test) => Collector((items) {
+    var i = 0;
+    for (final item in items) {
+      if (test(item)) return i;
+      i++;
+    }
+    return null;
+  });
 }
 
 /// The namespace behind [Collector.max].
@@ -713,10 +526,8 @@ class _Max {
   const _Max();
 
   /// The element with the largest [key], or `null` when empty.
-  Collector<A, A?> by<A>(Comparable<Object?> Function(A item) key) => Collector(
-    (items) => _extreme(items, key, 1),
-    pour: (items) => _extremepour(items, key, 1),
-  );
+  Collector<A, A?> by<A>(Comparable<Object?> Function(A item) key) =>
+      Collector((items) => _extreme(items, key, 1));
 }
 
 /// The namespace behind [Collector.min].
@@ -724,10 +535,8 @@ class _Min {
   const _Min();
 
   /// The element with the smallest [key], or `null` when empty.
-  Collector<A, A?> by<A>(Comparable<Object?> Function(A item) key) => Collector(
-    (items) => _extreme(items, key, -1),
-    pour: (items) => _extremepour(items, key, -1),
-  );
+  Collector<A, A?> by<A>(Comparable<Object?> Function(A item) key) =>
+      Collector((items) => _extreme(items, key, -1));
 }
 
 A? _extreme<A>(
@@ -747,66 +556,6 @@ A? _extreme<A>(
   return found;
 }
 
-Future<A?> _extremepour<A>(
-  Stream<A> items,
-  Comparable<Object?> Function(A item) key,
-  int sign,
-) async {
-  A? found;
-  Comparable<Object?>? mark;
-  await for (final item in items) {
-    final value = key(item);
-    if (mark == null || value.compareTo(mark) * sign > 0) {
-      mark = value;
-      found = item;
-    }
-  }
-  return found;
-}
-
-/// The namespace behind [Collector.sort].
-class _Sort {
-  const _Sort();
-
-  /// The elements in ascending order, which needs them [Comparable].
-  Collector<A, Sequence<A>> call<A>() =>
-      using((a, b) => (a as Comparable<Object?>).compareTo(b));
-
-  /// The elements in ascending order of [key].
-  Collector<A, Sequence<A>> by<A>(Comparable<Object?> Function(A item) key) =>
-      using((a, b) => key(a).compareTo(key(b)));
-
-  /// The elements ordered by [compare] — Kotlin's `sortedWith`.
-  Collector<A, Sequence<A>> using<A>(int Function(A a, A b) compare) =>
-      Collector((items) => Sequence(items.toList()..sort(compare)));
-}
-
-/// The namespace behind [Collector.take].
-class _Take {
-  const _Take();
-
-  /// The trailing [n] elements, or all of them when there are fewer.
-  Collector<A, Sequence<A>> last<A>(int n) => Collector((items) {
-    if (n <= 0) return const Sequence([]);
-    final all = items.toList();
-    return Sequence(all.length <= n ? all : all.sublist(all.length - n));
-  });
-}
-
-/// The namespace behind [Collector.skip].
-class _Skip {
-  const _Skip();
-
-  /// Everything but the trailing [n] elements — Kotlin's `dropLast`.
-  Collector<A, Sequence<A>> last<A>(int n) => Collector((items) {
-    if (n <= 0) return Sequence(items);
-    final all = items.toList();
-    return Sequence(
-      all.length <= n ? const [] : all.sublist(0, all.length - n),
-    );
-  });
-}
-
 /// The namespace behind [Collector.group].
 class _Group {
   const _Group();
@@ -821,26 +570,15 @@ class _Group {
   Collector<A, Dictionary<K, R>> into<A, K, R>(
     K Function(A item) key,
     Collector<A, R> down,
-  ) => Collector(
-    (items) {
-      final buckets = <K, List<A>>{};
-      for (final item in items) {
-        (buckets[key(item)] ??= <A>[]).add(item);
-      }
-      return Dictionary({
-        for (final entry in buckets.entries) entry.key: down.run(entry.value),
-      });
-    },
-    pour: (items) async {
-      final buckets = <K, List<A>>{};
-      await for (final item in items) {
-        (buckets[key(item)] ??= <A>[]).add(item);
-      }
-      return Dictionary({
-        for (final entry in buckets.entries) entry.key: down.run(entry.value),
-      });
-    },
-  );
+  ) => Collector((items) {
+    final buckets = <K, List<A>>{};
+    for (final item in items) {
+      (buckets[key(item)] ??= <A>[]).add(item);
+    }
+    return Dictionary({
+      for (final entry in buckets.entries) entry.key: down.run(entry.value),
+    });
+  });
 }
 
 /// The namespace behind [Collector.associate].
@@ -853,12 +591,5 @@ class _Associate {
   /// .last())` says the long way.
   Collector<A, Dictionary<K, A>> by<A, K>(K Function(A item) key) => Collector(
     (items) => Dictionary({for (final item in items) key(item): item}),
-    pour: (items) async {
-      final table = <K, A>{};
-      await for (final item in items) {
-        table[key(item)] = item;
-      }
-      return Dictionary(table);
-    },
   );
 }

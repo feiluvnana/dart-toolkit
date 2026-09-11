@@ -5,8 +5,11 @@
 /// never learns which format that something is. `format` has five readers and
 /// no idea where the text came from.
 ///
-/// It lives in `util` for the reason [Json] does: it is a pure value both
-/// `net` and `format` need, and neither may depend on the other.
+/// It lives in `lib/src/` for the reason [Json] does: it is a pure value
+/// both `net` and `format` need, and neither may depend on the other, so it
+/// belongs to no domain. It sat under `lib/util/` through 5.4.0 without ever
+/// being reachable as `util.` anything; it is exported from the package root
+/// either way.
 ///
 /// ```dart
 /// res.parse(format.html).find('h1').text;

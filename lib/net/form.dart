@@ -13,7 +13,7 @@ library;
 
 import 'package:html/dom.dart';
 
-import '../util/markup.dart';
+import '../src/markup.dart';
 import 'net.dart';
 
 // ============================================================================

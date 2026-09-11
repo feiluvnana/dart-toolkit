@@ -405,7 +405,7 @@ void main() {
       expect(three.collect(.set()), hasLength(3));
       expect(util.rand.some(pool, 99).collect(.list()), hasLength(10));
       final shuffled = util.rand.shuffle(pool);
-      expect(shuffled.collect(.sort()).collect(.list()), equals(pool));
+      expect(shuffled.transform(.sort()).collect(.list()), equals(pool));
       expect(() => util.rand.pick(<int>[]), throwsStateError);
     });
 

@@ -287,7 +287,7 @@ class ZipAccessor {
   /// Lists what the archive at [source] holds, without unpacking it.
   ///
   /// An archive that is not there is empty, not a throw — the same answer
-  /// `io.find`, `io.csv.rows` and `format.json.read` give for a missing path.
+  /// `io.dir.walk`, `io.csv.rows` and `format.json.read` give for a missing path.
   /// Through 4.0.0 this was the one read in the library that raised
   /// `PathNotFoundException`.
   Future<Sequence<Entry>> list(String source, {Format? format}) async {

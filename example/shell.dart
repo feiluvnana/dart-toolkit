@@ -77,7 +77,7 @@ void main() async {
   // same cleanup a normal finish does. The watcher holds the process open,
   // which is why a script that registers one ends with `system.shutdown()`.
   system.on.exit(() async {
-    await io.async.dir.sweep(dir, recursive: true);
+    await io.async.dir.sweep(dir);
     log.debug('Removed $dir/.');
   });
 

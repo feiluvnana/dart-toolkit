@@ -456,7 +456,7 @@ void main() {
       final seen = await net
           .crawl<String>('https://example.com/login'.url)
           .downloader(downloader)
-          .collect((res) {
+          .items((res) {
             if (res.tag == 'result') {
               res.emit(res.parse(format.html).find('.welcome').text);
               return;

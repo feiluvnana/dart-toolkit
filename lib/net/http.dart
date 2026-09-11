@@ -20,7 +20,7 @@ import 'package:path/path.dart' as p;
 import '../concurrent/concurrent.dart';
 import '../io/entry.dart';
 import '../src/fs.dart';
-import '../util/codec.dart';
+import '../src/codec.dart';
 import '../util/rand.dart';
 import '../collection/sequence.dart';
 import 'cache.dart';

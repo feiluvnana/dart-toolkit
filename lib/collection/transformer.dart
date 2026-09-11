@@ -6,12 +6,12 @@
 /// is a `static` factory here rather than a method over there — which is what
 /// lets each of them take its ordinary name back. `map` cannot be a method on
 /// a collection beside `Map` the type; `Transformer.map` can.
+///
+/// The streaming half is [Pipe], and the two are separate types on purpose;
+/// see the [Transformer] class doc for what that bought and what it cost.
 library;
 
-import 'dart:async';
-
 import 'collector.dart';
-import 'flow.dart';
 import 'sequence.dart';
 
 // ============================================================================
@@ -22,8 +22,8 @@ import 'sequence.dart';
 ///
 /// ```dart
 /// rows.transform(.where((r) => r.live))
-///     .transform(.take.first(10))
-///     .collect(.sort.by((r) => r.cost));
+///     .transform(.sort.by((r) => r.cost))
+///     .transform(.take.first(10));
 /// ```
 ///
 /// ## The dot is the point
@@ -62,28 +62,58 @@ import 'sequence.dart';
 /// left-hand side out, which is the shape a named pipeline wants anyway.
 /// [Collector] has one more limit of its own; see its doc.
 ///
-/// ## One operation, two containers
+/// ## This shapes a sequence. [Pipe] shapes a flow
 ///
-/// [run] is the operation over an `Iterable` and [pour] the same operation
-/// over a `Stream`, so one transformer shapes a [Sequence] or a [Flow] with
-/// no second factory and no second type. Every operation named here supplies
-/// both and streams on either.
+/// One operation type served both containers through 5.4.0: [run] was the
+/// required half and a `pour` over a `Stream` the optional one. That is gone.
+/// A sequence has [Transformer] and [Collector], reached by
+/// [Sequence.transform] and [Sequence.collect]; a flow has [Pipe] and [Pour],
+/// reached by [Flow.pipe] and [Flow.pour].
+///
+/// **The operations keep their spelling.** A dot shorthand resolves its name
+/// against the context type, so `.where(live)` reads the same on either
+/// container and picks the factory that fits. What differs is the member you
+/// hand it to, and that is deliberate: `flow.pipe(…)` says which vocabulary
+/// is in scope where `flow.transform(…)` said only that something was being
+/// transformed.
+///
+/// What the split bought, on each side:
+///
+/// | | before | after |
+/// | :--- | :--- | :--- |
+/// | `sort`, `flip`, `take.last`, `skip.last` on a sequence | a [Collector], so the chain changed container twice | a transformer, here |
+/// | an async element step on a flow | `flow.run(f, size: n)`, off in `concurrent` | `Pipe.map.async(f, size: n)` |
+/// | `debounce`, `throttle`, `merge`, `timeout`, `handle` | no spelling at all | [Pipe] |
+/// | `zip`, `plus`, `minus`, `common`, `or` between two flows | did not compile | [Pipe], taking a `Flow` |
+///
+/// And what it cost. The vocabulary is declared twice — roughly forty-five
+/// factories here and fifty over there, against fifty-nine when it was one —
+/// and **a named pipeline is no longer portable**. `Transformer.where<Row>(live)`
+/// works on sequences only; `Pipe.of` adapts one across, as a conversion
+/// rather than a second spelling:
+///
+/// ```dart
+/// // setup: bool live(Row r) => r.live; final flow = Flow<Row>.empty();
+/// final cleanup = Transformer.where<Row>(live);
+/// rows.transform(cleanup);            // Sequence<Row>
+/// flow.pipe(Pipe.of(cleanup));        // Flow<Row>
+/// ```
+///
+/// [Pipe.of] buffers nothing for a filter or a map, and holds the whole
+/// source for one that cannot answer before the end. The old design made
+/// that same trade *silently*, for every transformer without a `pour`; now
+/// it is a call somebody wrote.
 ///
 /// ## Anything not here
 ///
 /// [fn] takes the transformation directly, and a subclass takes it further —
 /// see [fn].
 class Transformer<A, B> {
-  /// Creates a transformer that applies [run] to the whole sequence, and
-  /// [pour] to a stream of one.
+  /// Creates a transformer that applies [run] to the whole sequence.
   ///
   /// The generative constructor a subclass calls. Reach for [fn] at a call
   /// site; this is the form for when a subclass needs a `super` call.
-  ///
-  /// Without a [pour] the operation still reaches a [Flow] — see [pour] for
-  /// what it costs.
-  const Transformer(this.run, {Stream<B> Function(Stream<A> items)? pour})
-    : _pour = pour;
+  const Transformer(this.run);
 
   /// This operation, as the plain function it is.
   ///
@@ -93,40 +123,15 @@ class Transformer<A, B> {
   /// ```dart
   /// Transformer.map<int, String>((n) => '$n').run(const [1, 2]);   // ('1', '2')
   /// ```
+  ///
+  /// An `Iterable` in and an `Iterable` out, where every other signature in
+  /// the library speaks [Sequence]. That is deliberate and it is the honest
+  /// boundary of an operation *value*: this is the function, not a collection
+  /// API, and the two `Transformer<Never, B>` factories — [cast] and
+  /// `where.type` — need a field rather than a method so an iterable of
+  /// something wider than `Never` is not rejected at the call. [flat] was a
+  /// third until 5.5.0 gave it the static type it always had.
   final Iterable<B> Function(Iterable<A> items) run;
-
-  final Stream<B> Function(Stream<A> items)? _pour;
-
-  /// The same operation over a stream — what [Flow.transform] applies.
-  ///
-  /// ```dart
-  /// // setup: final src = Stream.fromIterable(const [1, 2]);
-  /// Transformer.map<int, String>((n) => '$n').pour(src);   // Stream<String>
-  /// ```
-  ///
-  /// A function rather than a method, for the reason [run] is a field: the
-  /// three `Transformer<Never, B>` factories — [cast], `where.type` and
-  /// [flat] — are handed a stream of something wider than `Never`, and a
-  /// method parameter would check that at the call and throw.
-  ///
-  /// **Its default is correct rather than fast**: collect the stream, apply
-  /// [run], emit the result. So every transformer works on a [Flow] the day
-  /// it is written, including one a caller subclassed three releases ago —
-  /// it just holds the whole source while it does. Every operation named in
-  /// this class supplies its own and streams; [fn] is the door, and the one
-  /// place the default is what runs.
-  Stream<B> Function(Stream<A> items) get pour => _pour ?? _buffer<A, B>(run);
-
-  /// The default [pour]: hold the source, apply [run], emit what came back.
-  ///
-  /// Declared over `Stream<Object?>` so it also works for the `Never`-sourced
-  /// factories, where a `Stream<A>` parameter would reify as `Stream<Never>`
-  /// and reject every stream handed to it.
-  static Stream<B> Function(Stream<A> items) _buffer<A, B>(
-    Iterable<B> Function(Iterable<A> items) run,
-  ) => (Stream<Object?> items) async* {
-    yield* Stream<B>.fromIterable(run(await items.cast<A>().toList()));
-  };
 
   // --------------------------------------------------------------------------
   // Composing
@@ -143,10 +148,8 @@ class Transformer<A, B> {
   /// A dot shorthand cannot be the receiver of this — `.where(live).then(…)`
   /// has nothing to resolve `.where` against — so the left-hand side is
   /// written out. That is the shape a named pipeline wants anyway.
-  Transformer<A, C> then<C>(Transformer<B, C> next) => Transformer(
-    (items) => next.run(run(items)),
-    pour: (items) => next.pour(pour(items)),
-  );
+  Transformer<A, C> then<C>(Transformer<B, C> next) =>
+      Transformer((items) => next.run(run(items)));
 
   /// This transformer with an ending, which makes it a [Collector].
   ///
@@ -159,10 +162,8 @@ class Transformer<A, B> {
   ///
   /// rows.collect(hosts);          // List<String>
   /// ```
-  Collector<A, R> into<R>(Collector<B, R> end) => Collector(
-    (items) => end.run(run(items)),
-    pour: (items) => end.pour(pour(items)),
-  );
+  Collector<A, R> into<R>(Collector<B, R> end) =>
+      Collector((items) => end.run(run(items)));
 
   // --------------------------------------------------------------------------
   // Shaping
@@ -176,6 +177,10 @@ class Transformer<A, B> {
   /// rows.transform(.map((r) => r.name));                 // Sequence<String>
   /// items.transform(.map.nonnull(util.text.number));     // Sequence<num>
   /// ```
+  ///
+  /// There is no `map.async` here: awaiting is a thing that happens over
+  /// time, so it is `Pipe.map.async` on the container whose elements arrive
+  /// over time. A sequence of futures is `concurrent.run`.
   static const map = _Map();
 
   /// The elements [test] accepts — Kotlin's `filter`, Dart's word.
@@ -195,18 +200,25 @@ class Transformer<A, B> {
 
   /// Flattens, or expands each element into many.
   ///
-  /// `flat()` concatenates elements that are already iterables — Kotlin's
-  /// `flatten` — and `flat.map(each)` turns each element into an iterable
+  /// `flat()` concatenates elements that are themselves sequences — Kotlin's
+  /// `flatten` — and `flat.map(each)` turns each element into a sequence
   /// first, which is `flatMap` split at the capital.
   ///
   /// ```dart
-  /// // setup: final groups = Sequence(const [<Row>[]]);
-  /// groups.transform(.flat<Row>());
-  /// rows.transform(.flat.map((r) => [r, r]));
+  /// // setup: final groups = Sequence([Sequence(const <Row>[])]);
+  /// groups.transform(.flat());
+  /// rows.transform(.flat.map((r) => [r, r].seq));
   /// ```
   ///
-  /// `flat()` throws [StateError] on an element that is not an iterable, which
-  /// the analyzer cannot catch because the element type is only a promise.
+  /// `flat()` is a `Transformer<Sequence<B>, B>`, so the analyzer checks the
+  /// receiver and infers `B` from it. It was a `Transformer<Never, B>`
+  /// through 5.4.0 — which type-checked against *any* sequence and threw
+  /// [StateError] at runtime on one whose elements were not iterable, and
+  /// which could infer nothing, so every call site wrote `.flat<Row>()` even
+  /// where the answer was unambiguous.
+  ///
+  /// A sequence of something else nested — a `Sequence<List<Row>>` — is one
+  /// `map` away: `transform(.map((l) => l.seq)).transform(.flat())`.
   static const flat = _Flat();
 
   /// The elements with duplicates removed, keeping the first of each.
@@ -220,27 +232,69 @@ class Transformer<A, B> {
   /// ```
   static const unique = _Unique();
 
-  /// The leading elements, by count or by test.
+  /// The leading or trailing elements, by count or by test.
   ///
-  /// `take.first(n)` and `take.when(test)` — Dart's `take` and `takeWhile`.
-  /// `while` is a reserved word, so the test form is `when`.
+  /// `take.first(n)` and `take.when(test)` — Dart's `take` and `takeWhile` —
+  /// and `take.last(n)` for the other end. `while` is a reserved word, so the
+  /// test form is `when`.
   ///
   /// ```dart
   /// rows.transform(.take.first(10));
   /// rows.transform(.take.when((r) => r.live));
+  /// rows.transform(.take.last(10));
   /// ```
   ///
-  /// The trailing [n] elements are `Collector.take.last(n)`, on the other
-  /// type because they cannot be known before the source ends.
+  /// `take.last` was a [Collector] through 5.4.0, and on a [Flow] it still
+  /// is — see [take] over there. On a sequence it never needed to be: the
+  /// source has an end, and holding it to find the end is what the operation
+  /// *is* rather than a change of container.
   static const take = _Take();
 
   /// Everything but some elements, by count or by test.
   ///
-  /// `skip.first(n)` and `skip.when(test)` — the exact opposites of [take],
-  /// and they read as opposites, which `head`/`skip` and `tail`/`trim` never
-  /// did. `skip.last(n)` is `Collector.skip.last(n)`, for the same reason
-  /// `take.last` is.
+  /// `skip.first(n)`, `skip.when(test)` and `skip.last(n)` — the exact
+  /// opposites of [take], and they read as opposites, which `head`/`skip` and
+  /// `tail`/`trim` never did.
   static const skip = _Skip();
+
+  /// The elements in ascending order.
+  ///
+  /// `sort()` needs [Comparable] elements, `sort.by(key)` orders by a key, and
+  /// `sort.using(compare)` takes a comparator — Kotlin's `sorted`, `sortedBy`
+  /// and `sortedWith`. Never mutates the source, which `List.sort` does.
+  ///
+  /// ```dart
+  /// titles.transform(.sort());
+  /// rows.transform(.sort.by((r) => r.cost)).transform(.take.first(10));
+  /// ```
+  ///
+  /// A transformer, and it took two moves to get here. It was one through
+  /// 5.2.0, became a [Collector] in 5.3.0 under the law that no element of a
+  /// sorted result is known before the last element of the source, and is one
+  /// again now that the law has the container it was really about. **`sort`
+  /// is not a [Pipe]** — that is the sharp statement — but on a sequence it
+  /// only ever meant *this reads the whole source*, which `collect(.list())`
+  /// says already and a change of container said far too loudly:
+  ///
+  /// ```dart no-compile
+  /// // 5.4.0 — three calls and two container types
+  /// rows.collect(.sort.by((r) => r.cost)).transform(.take.first(10)).collect(.list());
+  /// // now
+  /// rows.transform(.sort.by((r) => r.cost)).transform(.take.first(10)).collect(.list());
+  /// ```
+  ///
+  /// Sorting inside a bucket keeps the spelling it gained in 5.3.0, because
+  /// [Collector.group]`.into` takes a collector and [into] makes one out of
+  /// this: `group.into(f, .sort.by(g).into(.seq()))`.
+  static const sort = _Sort();
+
+  /// The elements back to front.
+  ///
+  /// Here rather than on [Collector] for [sort]'s reason, and `Pour.flip` is
+  /// the flow's form: the first element of a reversed sequence is the last of
+  /// the source.
+  static Transformer<A, A> flip<A>() =>
+      Transformer((items) => items.toList().reversed);
 
   /// Each element paired with its position — Python's word.
   ///
@@ -251,13 +305,7 @@ class Transformer<A, B> {
   /// ```dart
   /// titles.transform(.enumerate()).transform(.map((p) => '${p.$1}. ${p.$2}'));
   /// ```
-  static Transformer<A, (int, A)> enumerate<A>() => Transformer(
-    _numbered,
-    pour: (items) {
-      var next = 0;
-      return items.map((item) => (next++, item));
-    },
-  );
+  static Transformer<A, (int, A)> enumerate<A>() => Transformer(_numbered);
 
   static Iterable<(int, A)> _numbered<A>(Iterable<A> items) sync* {
     var next = 0;
@@ -273,26 +321,17 @@ class Transformer<A, B> {
   ///   await concurrent.run(batch.collect(.list()), print, size: 4);
   /// }
   /// ```
-  static Transformer<A, Sequence<A>> chunk<A>(int size) => Transformer(
-    (items) => _chunked(items, size),
-    pour: (items) => _chunkedpour(items, size),
-  );
-
-  static Stream<Sequence<A>> _chunkedpour<A>(Stream<A> items, int size) async* {
-    if (size <= 0) return;
-    var batch = <A>[];
-    await for (final item in items) {
-      batch.add(item);
-      if (batch.length == size) {
-        yield Sequence(batch);
-        batch = <A>[];
-      }
-    }
-    if (batch.isNotEmpty) yield Sequence(batch);
+  ///
+  /// Throws [ArgumentError] on a [size] below one. It yielded nothing
+  /// through 5.4.0, which is a chunking of no rows into no batches and is
+  /// nobody's intention — `chunk(n)` with an `n` that came out zero is an
+  /// arithmetic bug upstream, and silence let it reach the output.
+  static Transformer<A, Sequence<A>> chunk<A>(int size) {
+    _positive(size);
+    return Transformer((items) => _chunked(items, size));
   }
 
   static Iterable<Sequence<A>> _chunked<A>(Iterable<A> items, int size) sync* {
-    if (size <= 0) return;
     var batch = <A>[];
     for (final item in items) {
       batch.add(item);
@@ -306,22 +345,10 @@ class Transformer<A, B> {
 
   /// The elements paired elementwise with [other], stopping at the shorter.
   ///
-  /// A record, not a `Pair` type.
-  static Transformer<A, (A, R)> zip<A, R>(Sequence<R> other) => Transformer(
-    (items) => _zipped(items, other.collect(.list())),
-    pour: (items) => _zippedpour(items, other.collect(.list())),
-  );
-
-  static Stream<(A, R)> _zippedpour<A, R>(
-    Stream<A> items,
-    Iterable<R> other,
-  ) async* {
-    final right = other.iterator;
-    await for (final left in items) {
-      if (!right.moveNext()) return;
-      yield (left, right.current);
-    }
-  }
+  /// A record, not a `Pair` type. [other] is read on every walk, which is
+  /// what keeps the chain lazy — see [Sequence]'s note on walking twice.
+  static Transformer<A, (A, R)> zip<A, R>(Sequence<R> other) =>
+      Transformer((items) => _zipped(items, other.collect(.list())));
 
   static Iterable<(A, R)> _zipped<A, R>(
     Iterable<A> items,
@@ -335,22 +362,12 @@ class Transformer<A, B> {
   }
 
   /// The elements followed by [other]'s.
-  static Transformer<A, A> plus<A>(Sequence<A> other) => Transformer(
-    (items) => items.followedBy(other.collect(.list())),
-    pour: (items) async* {
-      yield* items;
-      yield* Stream<A>.fromIterable(other.collect(.list()));
-    },
-  );
+  static Transformer<A, A> plus<A>(Sequence<A> other) =>
+      Transformer((items) => items.followedBy(other.collect(.list())));
 
   /// The elements [other] does not hold.
-  static Transformer<A, A> minus<A>(Sequence<A> other) => Transformer(
-    (items) => _without(items, other.collect(.set())),
-    pour: (items) {
-      final drop = other.collect(.set());
-      return items.where((item) => !drop.contains(item));
-    },
-  );
+  static Transformer<A, A> minus<A>(Sequence<A> other) =>
+      Transformer((items) => _without(items, other.collect(.set())));
 
   static Iterable<A> _without<A>(Iterable<A> items, Set<A> drop) sync* {
     for (final item in items) {
@@ -361,14 +378,8 @@ class Transformer<A, B> {
   /// The elements [other] also holds, duplicates removed.
   ///
   /// `intersect` is not a word people reach for; `common` is.
-  static Transformer<A, A> common<A>(Sequence<A> other) => Transformer(
-    (items) => _shared(items, other.collect(.set())),
-    pour: (items) {
-      final keep = other.collect(.set());
-      final seen = <A>{};
-      return items.where((item) => keep.contains(item) && seen.add(item));
-    },
-  );
+  static Transformer<A, A> common<A>(Sequence<A> other) =>
+      Transformer((items) => _shared(items, other.collect(.set())));
 
   static Iterable<A> _shared<A>(Iterable<A> items, Set<A> keep) sync* {
     final seen = <A>{};
@@ -382,10 +393,8 @@ class Transformer<A, B> {
   /// ```dart
   /// titles.transform(.or(Sequence(const ['none'])));
   /// ```
-  static Transformer<A, A> or<A>(Sequence<A> fallback) => Transformer(
-    (items) => _orelse(items, fallback),
-    pour: (items) => _orelsepour(items, fallback),
-  );
+  static Transformer<A, A> or<A>(Sequence<A> fallback) =>
+      Transformer((items) => _orelse(items, fallback));
 
   static Iterable<A> _orelse<A>(Iterable<A> items, Sequence<A> fallback) sync* {
     var any = false;
@@ -396,28 +405,14 @@ class Transformer<A, B> {
     if (!any) yield* fallback.collect(.list());
   }
 
-  static Stream<A> _orelsepour<A>(
-    Stream<A> items,
-    Sequence<A> fallback,
-  ) async* {
-    var any = false;
-    await for (final item in items) {
-      any = true;
-      yield item;
-    }
-    if (!any) yield* Stream<A>.fromIterable(fallback.collect(.list()));
-  }
-
   /// The elements as [R]s, throwing on one that is not.
   ///
   /// The pair with `where.type`, and the difference is what happens to an
   /// element of the wrong type: that drops it, this throws. Reach for
   /// `where.type` when the sequence is mixed on purpose and for this when a
   /// wrong element is a bug you want to hear about.
-  static Transformer<Never, R> cast<R>() => Transformer<Never, R>(
-    (Iterable<Object?> items) => items.cast<R>(),
-    pour: (Stream<Object?> items) => items.cast<R>(),
-  );
+  static Transformer<Never, R> cast<R>() =>
+      Transformer<Never, R>((Iterable<Object?> items) => items.cast<R>());
 
   /// An arbitrary transformation, for anything the named ones do not cover.
   ///
@@ -441,26 +436,24 @@ class Transformer<A, B> {
   /// A subclass composes with the built-ins on equal footing, registers
   /// nothing, and is why this class is not `final`.
   ///
-  /// **This is the one place the streaming rule is a promise rather than a
-  /// proof.** [run] takes a closure over an `Iterable`, so without a [pour]
-  /// this holds the whole source on a [Flow]. Supply both where that matters,
-  /// which the caller can, having written the closure:
-  ///
-  /// ```dart
-  /// Transformer.fn<int, int>(
-  ///   (xs) => xs.map((n) => n * 2),
-  ///   pour: (xs) => xs.map((n) => n * 2),
-  /// );
-  /// ```
-  ///
-  /// A subclass calling `super(run)` is the same case, with the same answer.
+  /// There is no streaming caveat on this any more. It took a closure over an
+  /// `Iterable` and an optional `pour` through 5.4.0, and without the second
+  /// one it quietly held the whole source on a [Flow]. A transformer shapes a
+  /// sequence and nothing else now; [Pipe.fn] is the streaming door, and it
+  /// takes a stream because that is the only thing it can take.
   static Transformer<A, B> fn<A, B>(
-    Iterable<B> Function(Iterable<A> items) run, {
-    Stream<B> Function(Stream<A> items)? pour,
-  }) => Transformer(run, pour: pour);
+    Iterable<B> Function(Iterable<A> items) run,
+  ) => Transformer(run);
 
   @override
   String toString() => 'Transformer<$A, $B>';
+}
+
+/// Rejects a batch size that cannot produce a batch.
+void _positive(int size) {
+  if (size < 1) {
+    throw ArgumentError.value(size, 'size', 'must be at least 1');
+  }
 }
 
 // ============================================================================
@@ -473,18 +466,14 @@ class _Map {
 
   /// Each element replaced by [each] of it.
   Transformer<A, B> call<A, B>(B Function(A item) each) =>
-      Transformer((items) => items.map(each), pour: (items) => items.map(each));
+      Transformer((items) => items.map(each));
 
   /// Each element replaced by [each] of it, dropping the nulls.
   ///
   /// Kotlin's `mapNotNull`, spelled with the word this library already uses
   /// for dropping nulls — see `Sequence.nonnull`, its argument-free twin.
   Transformer<A, B> nonnull<A, B extends Object>(B? Function(A item) each) =>
-      Transformer(
-        (items) => items.map(each).whereType<B>(),
-        pour: (items) =>
-            items.map(each).where((value) => value != null).cast<B>(),
-      );
+      Transformer((items) => items.map(each).whereType<B>());
 }
 
 /// The namespace behind [Transformer.where].
@@ -492,44 +481,28 @@ class _Where {
   const _Where();
 
   /// The elements [test] accepts.
-  Transformer<A, A> call<A>(bool Function(A item) test) => Transformer(
-    (items) => items.where(test),
-    pour: (items) => items.where(test),
-  );
+  Transformer<A, A> call<A>(bool Function(A item) test) =>
+      Transformer((items) => items.where(test));
 
   /// Only the elements that are a [R] — Kotlin's `filterIsInstance`.
-  Transformer<Never, R> type<R>() => Transformer<Never, R>(
-    (Iterable<Object?> items) => items.whereType<R>(),
-    pour: (Stream<Object?> items) => items.where((item) => item is R).cast<R>(),
-  );
+  Transformer<Never, R> type<R>() =>
+      Transformer<Never, R>((Iterable<Object?> items) => items.whereType<R>());
 }
 
 /// The namespace behind [Transformer.flat].
 class _Flat {
   const _Flat();
 
-  /// The elements concatenated, each of them already an iterable.
+  /// The elements concatenated, each of them a [Sequence].
   ///
-  /// The element type is a promise the analyzer cannot check, which is why
-  /// this throws where `flat.map` cannot.
-  Transformer<Never, B> call<B>() => Transformer<Never, B>(
-    (Iterable<Object?> items) => items.expand(_asIterable<B>),
-    pour: (Stream<Object?> items) => items.expand(_asIterable<B>),
-  );
+  /// [B] infers from the receiver, so `.flat()` is the whole call.
+  Transformer<Sequence<B>, B> call<B>() =>
+      Transformer((items) => items.expand((item) => item.collect(.list())));
 
   /// Each element expanded into many by [each], and the lot concatenated.
-  Transformer<A, B> map<A, B>(Iterable<B> Function(A item) each) => Transformer(
-    (items) => items.expand(each),
-    pour: (items) => items.expand(each),
+  Transformer<A, B> map<A, B>(Sequence<B> Function(A item) each) => Transformer(
+    (items) => items.expand((item) => each(item).collect(.list())),
   );
-
-  static Iterable<B> _asIterable<B>(Object? item) {
-    if (item is Iterable<B>) return item;
-    if (item is Iterable) return item.cast<B>();
-    throw StateError(
-      'flat() needs iterable elements; found ${item.runtimeType}',
-    );
-  }
 }
 
 /// The namespace behind [Transformer.unique].
@@ -540,13 +513,8 @@ class _Unique {
   Transformer<A, A> call<A>() => by<A, A>((item) => item);
 
   /// The elements, keeping the first of each distinct [key].
-  Transformer<A, A> by<A, K>(K Function(A item) key) => Transformer(
-    (items) => _distinct(items, key),
-    pour: (items) {
-      final seen = <K>{};
-      return items.where((item) => seen.add(key(item)));
-    },
-  );
+  Transformer<A, A> by<A, K>(K Function(A item) key) =>
+      Transformer((items) => _distinct(items, key));
 
   static Iterable<A> _distinct<A, K>(
     Iterable<A> items,
@@ -564,16 +532,24 @@ class _Take {
   const _Take();
 
   /// The leading [n] elements, or all of them when there are fewer.
-  Transformer<A, A> first<A>(int n) => Transformer(
-    (items) => items.take(n < 0 ? 0 : n),
-    pour: (items) => items.take(n < 0 ? 0 : n),
-  );
+  Transformer<A, A> first<A>(int n) =>
+      Transformer((items) => items.take(n < 0 ? 0 : n));
 
   /// The leading elements [test] accepts, stopping at the first it does not.
-  Transformer<A, A> when<A>(bool Function(A item) test) => Transformer(
-    (items) => items.takeWhile(test),
-    pour: (items) => items.takeWhile(test),
-  );
+  Transformer<A, A> when<A>(bool Function(A item) test) =>
+      Transformer((items) => items.takeWhile(test));
+
+  /// The trailing [n] elements, or all of them when there are fewer.
+  ///
+  /// The half that needs the end: `take.first(n)` can yield before the source
+  /// is exhausted, `take.last(n)` cannot. `Collector.last` beside it is the
+  /// last *element*, which is the relationship `Collector.first` and
+  /// [Transformer.take]`.first` already have.
+  Transformer<A, A> last<A>(int n) => Transformer((items) {
+    if (n <= 0) return const [];
+    final all = items.toList();
+    return all.length <= n ? all : all.sublist(all.length - n);
+  });
 }
 
 /// The namespace behind [Transformer.skip].
@@ -581,14 +557,34 @@ class _Skip {
   const _Skip();
 
   /// Everything but the leading [n] elements — Kotlin's `drop`.
-  Transformer<A, A> first<A>(int n) => Transformer(
-    (items) => items.skip(n < 0 ? 0 : n),
-    pour: (items) => items.skip(n < 0 ? 0 : n),
-  );
+  Transformer<A, A> first<A>(int n) =>
+      Transformer((items) => items.skip(n < 0 ? 0 : n));
 
   /// Everything from the first element [test] rejects onwards.
-  Transformer<A, A> when<A>(bool Function(A item) test) => Transformer(
-    (items) => items.skipWhile(test),
-    pour: (items) => items.skipWhile(test),
-  );
+  Transformer<A, A> when<A>(bool Function(A item) test) =>
+      Transformer((items) => items.skipWhile(test));
+
+  /// Everything but the trailing [n] elements — Kotlin's `dropLast`.
+  Transformer<A, A> last<A>(int n) => Transformer((items) {
+    if (n <= 0) return items;
+    final all = items.toList();
+    return all.length <= n ? const [] : all.sublist(0, all.length - n);
+  });
+}
+
+/// The namespace behind [Transformer.sort].
+class _Sort {
+  const _Sort();
+
+  /// The elements in ascending order, which needs them [Comparable].
+  Transformer<A, A> call<A>() =>
+      using((a, b) => (a as Comparable<Object?>).compareTo(b));
+
+  /// The elements in ascending order of [key].
+  Transformer<A, A> by<A>(Comparable<Object?> Function(A item) key) =>
+      using((a, b) => key(a).compareTo(key(b)));
+
+  /// The elements ordered by [compare] — Kotlin's `sortedWith`.
+  Transformer<A, A> using<A>(int Function(A a, A b) compare) =>
+      Transformer((items) => items.toList()..sort(compare));
 }

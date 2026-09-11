@@ -42,18 +42,18 @@ void main() async {
   );
 
   // ---------------------------------------------------------------------- CSV
-  await io.csv.write(io.path.join(dir, 'products.csv'), rows);
+  io.csv.write(io.path.join(dir, 'products.csv'), rows.seq);
   final sheet = await format.csv.read(io.path.join(dir, 'products.csv'));
   log.ok('CSV columns: ${sheet.headers.collect(.join(', '))}');
 
-  // `records` streams rather than loading the file, and `pipe` is its twin for
-  // writing: it turns a crawl of any size into a spreadsheet without the rows
-  // ever meeting in memory.
+  // `records` streams rather than loading the file, and `io.async.csv.write`
+  // is its twin for writing: it turns a crawl of any size into a spreadsheet
+  // without the rows ever meeting in memory.
   //
-  //   await io.csv.pipe('out.csv', crawl.flow(handler), headers: [...]);
-  await io.csv
+  //   await io.async.csv.write('out.csv', crawl.flow(handler), headers: [...]);
+  await io.async.csv
       .records(io.path.join(dir, 'products.csv'))
-      .collect(
+      .pour(
         .foreach(
           (record) => log.debug('${record['name']} at ${record['price']}'),
         ),
@@ -76,7 +76,7 @@ void main() async {
     'sha    ${io.hash(io.path.join(dir, 'products.json')).substring(0, 12)}',
   );
 
-  final found = io.dir.find(dir, pattern: RegExp(r'\.(json|csv)$'));
+  final found = io.dir.walk(dir, only: .file, match: '*.{json,csv}');
   log.ok(
     'Found ${found.collect(.count())}: ${[for (final f in found.collect(.list())) io.path.filename(f.path)]}',
   );

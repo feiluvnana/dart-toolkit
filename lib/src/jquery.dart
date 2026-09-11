@@ -7,7 +7,7 @@
 ///
 /// Private to the package. It lives in `src` and not beside the cursor
 /// because it is 800 lines of parser that nobody calls directly, and because
-/// `util/markup.dart` should read as the vocabulary, not the machinery.
+/// `src/markup.dart` should read as the vocabulary, not the machinery.
 library;
 
 import 'package:html/dom.dart';

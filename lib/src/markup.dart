@@ -4,11 +4,12 @@
 /// [Json] belongs to: one cursor for documents made of maps and scalars, one
 /// for documents made of elements.
 ///
-/// It lives here, in `util`, for the reason [Json] does — it is a pure value
-/// that more than one domain hands back, and it computes rather than touches
-/// anything. The *codec* that builds one is `format.html`, beside
-/// `format.json`, `format.yaml` and `format.toml`, because a format is
-/// knowledge from outside Dart.
+/// It lives in `lib/src/` for the reason [Json] does — it is a pure value
+/// that more than one domain hands back, belonging to none of them, and it
+/// computes rather than touches anything. It was under `lib/util/` through
+/// 5.4.0 without ever being reachable as `util.` anything. The *codec* that
+/// builds one is `format.html`, beside `format.json`, `format.yaml` and
+/// `format.toml`, because a format is knowledge from outside Dart.
 ///
 /// Three doors produce the same cursor:
 ///
@@ -30,7 +31,7 @@ import 'package:xpath_selector_html_parser/xpath_selector_html_parser.dart';
 
 import '../src/jquery.dart';
 import '../collection/sequence.dart';
-import 'text.dart';
+import '../util/text.dart';
 
 const TextAccessor _text = TextAccessor();
 

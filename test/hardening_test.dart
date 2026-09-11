@@ -198,25 +198,31 @@ Disallow: /
 
     test('results still arrive in completion order', () async {
       final out = await [30, 10, 20].flow
-          .run(
-            (int ms) async {
-              await Future<void>.delayed(Duration(milliseconds: ms));
-              return ms;
-            },
-            size: 3,
-            ordered: false,
+          .pipe(
+            .map.async(
+              (int ms) async {
+                await Future<void>.delayed(Duration(milliseconds: ms));
+                return ms;
+              },
+              size: 3,
+              ordered: false,
+            ),
           )
-          .collect(.list());
+          .pour(.list());
       expect(out, equals([10, 20, 30]));
     });
 
     test('cancelling a flow.run stops launching work', () async {
       var started = 0;
-      final stream = List.generate(50, (int i) => i).flow.run((i) async {
-        started++;
-        await Future<void>.delayed(const Duration(milliseconds: 1));
-        return i;
-      }, size: 1).stream;
+      final stream = List.generate(50, (int i) => i).flow
+          .pipe(
+            .map.async((i) async {
+              started++;
+              await Future<void>.delayed(const Duration(milliseconds: 1));
+              return i;
+            }, size: 1),
+          )
+          .stream;
 
       final seen = <int>[];
       final subscription = stream.listen(seen.add);
@@ -355,7 +361,7 @@ Disallow: /
         expect(io.has(a), isTrue);
         expect(await io.async.has(b), isTrue);
         expect(
-          (await io.async.dir.find(dir.path)).collect(.list()),
+          await io.async.dir.walk(dir.path, only: .file).pour(.list()),
           hasLength(2),
         );
         expect(await io.async.remove(b), isTrue);

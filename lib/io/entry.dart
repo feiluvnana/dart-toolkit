@@ -105,17 +105,20 @@ final class FileSystemEntry {
   /// Whether this is a symbolic link.
   bool get islink => kind == FileSystemEntryKind.link;
 
-  /// Whether there is nothing in it.
+  /// Whether this entry holds nothing — zero bytes, for a file or a link.
   ///
-  /// Zero bytes for a file, and no entries for a directory — which is the
-  /// question somebody asking about a directory means, where `size == 0` is
-  /// true of every directory and therefore an answer to nothing.
-  bool get empty {
-    if (!isdir) return size == 0;
-    final directory = Directory(path);
-    if (!directory.existsSync()) return true;
-    return directory.listSync(followLinks: false).isEmpty;
-  }
+  /// **Always `false` for a directory**, and reading the disk is why. This
+  /// answered the directory question through 5.4.0 by calling `listSync`
+  /// inside the getter, which broke the type's own promise — a snapshot of
+  /// one stat, not a handle — and made `io.async.empty` block on every
+  /// directory it was asked about, from the accessor whose whole point is
+  /// that it does not.
+  ///
+  /// Counting what is in a directory is a second listing, so it is a second
+  /// call and says which accessor it is on: `io.dir.empty(path)` blocks and
+  /// `io.async.dir.empty(path)` does not. `io.empty(path)` still answers for
+  /// either kind, by asking the right one.
+  bool get empty => !isdir && size == 0;
 
   /// The `dart:io` handle, for the call this does not cover.
   ///

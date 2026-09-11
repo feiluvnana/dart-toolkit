@@ -271,7 +271,7 @@ void main() {
               ''',
             }),
           )
-          .collect((res) {
+          .items((res) {
             for (final t
                 in res
                     .parse(format.html)
@@ -302,7 +302,7 @@ void main() {
               res.emit(t);
             }
           })
-          .collect(.list());
+          .pour(.list());
 
       expect(items, equals(['Alpha', 'Beta']));
     });
@@ -392,7 +392,7 @@ void main() {
         </div>
       ''';
 
-      final headlines = await net.crawl.html<String>(htmlString).collect((res) {
+      final headlines = await net.crawl.html<String>(htmlString).items((res) {
         // Test res.$ and emit
         final title = res.parse(format.html).find('.headline').text;
         if (title.isNotEmpty) res.emit(title);
@@ -403,7 +403,7 @@ void main() {
 
     test('net.crawl.html explicitly parses markup without sniffing', () async {
       const markup = '<article><h2>Explicit HTML</h2></article>';
-      final results = await net.crawl.html<String>(markup).collect((res) {
+      final results = await net.crawl.html<String>(markup).items((res) {
         res.emit(res.parse(format.html).find('h2').text);
       });
       expect(results.collect(.list()), equals(['Explicit HTML']));
@@ -413,9 +413,7 @@ void main() {
       final tmpFile = File('${Directory.systemTemp.path}/test_crawl_file.html');
       await tmpFile.writeAsString('<section><p>File Content</p></section>');
       try {
-        final results = await net.crawl.file<String>(tmpFile.path).collect((
-          res,
-        ) {
+        final results = await net.crawl.file<String>(tmpFile.path).items((res) {
           res.emit(res.parse(format.html).find('p').text);
         });
         expect(results.collect(.list()), equals(['File Content']));
@@ -438,7 +436,7 @@ void main() {
               'https://example.com/step2': '<p>Step 2 Finished</p>',
             }),
           )
-          .collect((res) {
+          .items((res) {
             items.add(res.parse(format.html).find('p').text);
             for (final next
                 in res
@@ -456,7 +454,7 @@ void main() {
 
     test('flow accepts arbitrary string tasks', () async {
       final seen = <String>[];
-      await net.crawl<String>('task:seed-alpha'.url).collect((res) {
+      await net.crawl<String>('task:seed-alpha'.url).items((res) {
         seen.add(res.body);
         if (res.body == 'task:seed-alpha') {
           res.follow('task:seed-beta');
@@ -594,7 +592,7 @@ void main() {
       builder.on.start(() => log.add('start1'));
       builder.on.start(() => log.add('start2'));
 
-      await builder.collect((res) => res.emit('hello'));
+      await builder.items((res) => res.emit('hello'));
 
       expect(
         log,
@@ -635,7 +633,7 @@ void main() {
           .downloader(MapDownloader<String>(pages))
           .samehost()
           .depth(1)
-          .collect((res) {
+          .items((res) {
             visited.add(res.url.path);
             for (final href
                 in res
@@ -832,7 +830,7 @@ https://example.com/item2
             .downloader(downloader)
             .perhost()
             .delay(const Duration(milliseconds: 60))
-            .collect((res) {
+            .items((res) {
               order.add(res.url.toString());
               if (res.url.toString() == 'https://host-a.com/1') {
                 res.follow('https://host-b.com/1');

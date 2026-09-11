@@ -155,7 +155,16 @@ class IoAccessor {
   /// Zero bytes for a file, and no entries for a directory. `false` when
   /// there is nothing at [path] at all — *absent* and *empty* are two
   /// different answers, which is exactly what [has] could not tell you.
-  bool empty(String path) => stat(path)?.empty ?? false;
+  ///
+  /// The two halves are two questions and cost differently: a file answers
+  /// from the stat this already did, a directory needs a second listing. Ask
+  /// for the one you mean and the cost is visible — [FileSystemEntry.empty]
+  /// for the file, `io.dir.empty` for the directory.
+  bool empty(String path) => switch (Entries.kind(path)) {
+    null => false,
+    FileSystemEntryKind.directory => Entries.empty(path),
+    _ => stat(path)?.empty ?? false,
+  };
 
   /// Whether [path] exists and holds at least one byte.
   ///
@@ -198,20 +207,39 @@ class IoAccessor {
   /// Reads [path] as raw bytes.
   List<int> bytes(String path) => File(path).readAsBytesSync();
 
-  /// Reads [path] as decoded lines.
+  /// Reads [path] as decoded lines, and writes a collection back as them.
+  ///
+  /// Callable, and a namespace: `lines(path)` reads and
+  /// `lines.write(path, seq)` writes one element per line.
   ///
   /// ```dart
   /// io.lines('access.log')
   ///     .transform(.where((l) => l.contains(' 500 ')))
   ///     .collect(.count());
+  ///
+  /// io.lines.write('out/hosts.txt', hosts.keys);
   /// ```
   ///
-  /// This returned a `Stream<String>` through 5.1.0 — from the accessor whose
-  /// whole promise is that it blocks. `io.async.lines` is the [Stream], which
-  /// is the one shape difference the mirror allows and the reason it is
-  /// allowed: each side is honest about which accessor it is on.
-  Sequence<String> lines(String path, {Encoding encoding = utf8}) =>
-      Sequence(Fs.linesSync(path, encoding: encoding));
+  /// Reading returned a `Stream<String>` through 5.1.0 — from the accessor
+  /// whose whole promise is that it blocks. `io.async.lines` is the [Flow],
+  /// which is the shape difference the mirror specifies: each side is honest
+  /// about which accessor it is on.
+  LinesAccessor get lines => const LinesAccessor();
+
+  /// Reads [path] in byte chunks, without holding the whole file.
+  ///
+  /// The streaming half of [bytes], which reads all of it. A lazy view, so
+  /// nothing is read until the sequence is walked and a reader that stops
+  /// early stops reading:
+  ///
+  /// ```dart
+  /// io.chunks('big.bin').collect(.count());          // how many chunks
+  /// io.chunks('big.bin', size: 4096).collect(.first());
+  /// ```
+  ///
+  /// [size] is the most bytes a chunk carries; the last one is short.
+  Sequence<List<int>> chunks(String path, {int size = 64 * 1024}) =>
+      Sequence(Fs.chunksSync(path, size: size));
 
   // --- Writing (always atomic, via a `.part` staging file) ---
 
@@ -244,7 +272,11 @@ class IoAccessor {
     String part = '.part',
   }) => Fs.entryFor(Fs.dumpSync(path, data, pretty: pretty, part: part).path);
 
-  /// Appends [content] to the end of [path], creating it if it is missing.
+  /// Appends to the end of [path], creating it if it is missing.
+  ///
+  /// Callable, and a namespace: `append(path, text)` opens, writes and closes
+  /// in one call, and `append.open(path)` hands back a handle that stays open
+  /// for a loop that writes many times.
   ///
   /// ```dart
   /// io.append('out/run.log', '${util.time.stamp()} finished\n');
@@ -253,12 +285,9 @@ class IoAccessor {
   /// **The one write here that is not atomic**, and it cannot be: appending
   /// adds to what is already on disk, so there is no staged copy to swap into
   /// place. An interrupted append can leave a partial line. When a file has
-  /// to appear whole or not at all, build it and [write] it.
-  FileSystemEntry append(
-    String path,
-    String content, {
-    Encoding encoding = utf8,
-  }) => Fs.appendSync(path, content, encoding: encoding);
+  /// to appear whole or not at all, build it and [write] it — or hand the
+  /// elements to `io.lines.write`, which stages.
+  AppendAccessor get append => const AppendAccessor();
 
   /// Creates [path] empty, or updates its modification time if it is there.
   ///
@@ -266,6 +295,19 @@ class IoAccessor {
   /// make an empty file without `io.write(path, '')` — which reads like it
   /// meant to write something.
   FileSystemEntry touch(String path) => Fs.touchSync(path);
+
+  /// Creates a new empty temporary file named after [prefix].
+  ///
+  /// The file beside `io.dir.temp`'s directory. It is made inside a fresh
+  /// temporary directory of its own, so two callers with one prefix cannot
+  /// collide, and removing [FileSystemEntry.dirname] removes the lot.
+  ///
+  /// ```dart
+  /// final scratch = io.temp('render_');
+  /// io.write(scratch.path, 'working');
+  /// io.remove(scratch.dirname);
+  /// ```
+  FileSystemEntry temp([String prefix = 'tmp_']) => Fs.tempfileSync(prefix);
 
   // --- Moving and removing ---
 
@@ -301,9 +343,10 @@ class IoAccessor {
   /// they do not stop the *result* from being whichever process finished last.
   ///
   /// ```dart
+  /// // setup: final seed = 'https://example.com'.url;
   /// await io.lock('.crawl.lock', () async {
   ///   // exactly one process in here
-  ///   await net.crawl<Row>(seed).save('out.csv');
+  ///   await net.crawl<Row>(seed).flow().dump('out.json');
   /// });
   /// ```
   ///
@@ -392,7 +435,7 @@ class IoAccessor {
 /// this inside handlers and pool workers.
 ///
 /// ```dart
-/// await net.crawl<String>(seed).collect((res) async {
+/// await net.crawl<String>(seed).items((res) async {
 ///   await io.async.write('pages/${res.depth}.html', res.body);
 /// });
 /// ```
@@ -403,19 +446,34 @@ class IoAccessor {
 /// - [IoAccessor.lock], [IoAccessor.locked] and [IoAccessor.watch] — already
 ///   asynchronous on `io`, because holding a lock and watching for a change
 ///   have no blocking form to mirror.
-/// - `io.csv` — every member of it is already a `Stream` or a `Future`.
+/// - [DirAccessor.cwd] and [DirAccessor.home] — neither reads anything.
 ///
-/// [lines] is the one member whose *shape* differs: a [Stream] here, a
-/// `Sequence` on `io`. That is the mirror working rather than failing —
-/// blocking means the lines are already read. `test/regression_test.dart`
-/// pins this exception set, so a member added to one side and forgotten on
-/// the other fails the build.
+/// `io.csv` used to be a third entry on that list, because every member of it
+/// was already a `Stream` or a `Future` from the accessor that promises to
+/// block. It is a real mirror now; see the `io.csv` library doc.
+///
+/// Members whose *shape* differs follow one rule with no exceptions: a
+/// [Sequence] on `io`, a [Flow] on `io.async`. That covers [lines] and
+/// [chunks], `io.dir`'s [DirAccessor.list], [DirAccessor.walk] and
+/// [DirAccessor.glob], and `io.csv`'s [CsvFileAccessor.rows],
+/// [CsvFileAccessor.records] and [CsvFileAccessor.write]. That is the mirror
+/// working rather than failing — blocking means the elements are already
+/// read. `test/regression_test.dart` pins the set, so a member added to one
+/// side and forgotten on the other fails the build.
+///
+/// **One property is not parity.** A [Flow] from here is consumed once; the
+/// [Sequence] from `io` can be walked again, re-reading the disk. Where a
+/// listing has to be read twice, `Flow.of` is the re-derivable form and
+/// `collect(.seq())` is the held one.
 class IoAsyncAccessor {
   /// Creates the accessor. Prefer the shared `io.async` instance.
   const IoAsyncAccessor();
 
   /// Directories, without blocking. See [DirAsyncAccessor].
   DirAsyncAccessor get dir => const DirAsyncAccessor();
+
+  /// CSV files, streaming. See [CsvFileAsyncAccessor].
+  CsvFileAsyncAccessor get csv => const CsvFileAsyncAccessor();
 
   /// The JSON object at [path] as a [Dictionary]. See [IoAccessor.dictionary].
   Future<Dictionary<String, Object?>> dictionary(String path) async {
@@ -445,8 +503,13 @@ class IoAsyncAccessor {
   /// How many bytes are at [path], or `null` when there is nothing there.
   Future<int?> size(String path) async => (await stat(path))?.size;
 
-  /// Whether [path] exists and has nothing in it.
-  Future<bool> empty(String path) async => (await stat(path))?.empty ?? false;
+  /// Whether [path] exists and has nothing in it. See [IoAccessor.empty].
+  Future<bool> empty(String path) async =>
+      switch (await Entries.kindAsync(path)) {
+        null => false,
+        FileSystemEntryKind.directory => await Entries.emptyAsync(path),
+        _ => (await stat(path))?.empty ?? false,
+      };
 
   /// Whether [path] exists and holds at least one byte.
   Future<bool> has(String path, {bool match = false}) =>
@@ -467,19 +530,28 @@ class IoAsyncAccessor {
   /// Reads [path] as raw bytes.
   Future<List<int>> bytes(String path) => File(path).readAsBytes();
 
-  /// Reads [path] as decoded lines, without loading the whole file.
+  /// Reads [path] as decoded lines, and writes a flow back as them.
   ///
-  /// The shape `io.lines` used to have on both accessors. It belongs on this
-  /// one: a [Flow] is what *not blocking* looks like, where the blocking
-  /// mirror hands back a [Sequence].
+  /// Callable, and a namespace, exactly as [IoAccessor.lines] is — the shape
+  /// is what differs: a [Flow] where the blocking mirror hands back a
+  /// [Sequence], on both the reading and the writing side.
   ///
   /// ```dart
   /// await io.async.lines('big.log')
-  ///     .transform(.where((line) => line.contains('ERROR')))
-  ///     .collect(.foreach(print));
+  ///     .pipe(.where((line) => line.contains('ERROR')))
+  ///     .pour(.foreach(print));
+  ///
+  /// await io.async.lines.write(
+  ///   'out/errors.log',
+  ///   io.async.lines('big.log').pipe(.where((l) => l.contains('ERROR'))),
+  /// );
   /// ```
-  Flow<String> lines(String path, {Encoding encoding = utf8}) =>
-      Flow(Fs.lines(path, encoding: encoding));
+  LinesAsyncAccessor get lines => const LinesAsyncAccessor();
+
+  /// Reads [path] in byte chunks as they arrive.
+  /// See [IoAccessor.chunks].
+  Flow<List<int>> chunks(String path, {int size = 64 * 1024}) =>
+      Flow.of(() => Fs.chunks(path, size: size));
 
   // --- Writing (always atomic, via a `.part` staging file) ---
 
@@ -509,15 +581,15 @@ class IoAsyncAccessor {
   }) async =>
       Fs.entryFor((await Fs.dump(path, data, pretty: pretty, part: part)).path);
 
-  /// Appends [content] to the end of [path]. See [IoAccessor.append].
-  Future<FileSystemEntry> append(
-    String path,
-    String content, {
-    Encoding encoding = utf8,
-  }) => Fs.append(path, content, encoding: encoding);
+  /// Appends to the end of [path]. See [IoAccessor.append].
+  AppendAsyncAccessor get append => const AppendAsyncAccessor();
 
   /// Creates [path] empty, or updates its modification time.
   Future<FileSystemEntry> touch(String path) => Fs.touch(path);
+
+  /// Creates a new empty temporary file named after [prefix].
+  /// See [IoAccessor.temp].
+  Future<FileSystemEntry> temp([String prefix = 'tmp_']) => Fs.tempfile(prefix);
 
   // --- Moving and removing ---
 
@@ -550,4 +622,172 @@ Dictionary<String, Object?> _dictionary(String path, String text) {
   return Dictionary({
     for (final entry in decoded.entries) entry.key.toString(): entry.value,
   });
+}
+
+// ============================================================================
+// THE NAMESPACES
+// ============================================================================
+
+/// The namespace behind [IoAccessor.lines].
+class LinesAccessor {
+  /// Creates the accessor. Prefer the shared `io.lines` instance.
+  const LinesAccessor();
+
+  /// Reads [path] as decoded lines — on the first walk, not before.
+  Sequence<String> call(String path, {Encoding encoding = utf8}) =>
+      Sequence(Fs.linesSync(path, encoding: encoding));
+
+  /// Writes [lines] to [path] atomically, one element per line.
+  ///
+  /// The general form that `net.crawl(...).save(path)` and `io.csv.pipe` were
+  /// each a private version of through 5.4.0. [newline] ends every line,
+  /// including the last.
+  FileSystemEntry write(
+    String path,
+    Sequence<String> lines, {
+    String newline = '\n',
+    Encoding encoding = utf8,
+    String part = '.part',
+  }) => Fs.entryFor(
+    Fs.writeLinesSync(
+      path,
+      lines.collect(.list()),
+      newline: newline,
+      encoding: encoding,
+      part: part,
+    ).path,
+  );
+}
+
+/// The namespace behind [IoAsyncAccessor.lines].
+class LinesAsyncAccessor {
+  /// Creates the accessor. Prefer the shared `io.async.lines` instance.
+  const LinesAsyncAccessor();
+
+  /// Reads [path] as decoded lines, without loading the whole file.
+  Flow<String> call(String path, {Encoding encoding = utf8}) =>
+      Flow.of(() => Fs.lines(path, encoding: encoding));
+
+  /// Writes [lines] to [path] atomically as they arrive, one per line.
+  ///
+  /// Never holds more than the line it is writing, so a crawl, a large log or
+  /// a piped stdin becomes a file in one call:
+  ///
+  /// ```dart
+  /// await io.async.lines.write('titles.txt', net.crawl<String>(seed).flow());
+  /// ```
+  ///
+  /// The file appears whole or not at all: lines go to a staging file that is
+  /// renamed into place once the flow ends, and discarded if it fails.
+  Future<FileSystemEntry> write(
+    String path,
+    Flow<String> lines, {
+    String newline = '\n',
+    Encoding encoding = utf8,
+    String part = '.part',
+  }) async => Fs.entryFor(
+    (await Fs.pourLines(
+      path,
+      lines.stream,
+      newline: newline,
+      encoding: encoding,
+      part: part,
+    )).path,
+  );
+}
+
+/// The namespace behind [IoAccessor.append].
+class AppendAccessor {
+  /// Creates the accessor. Prefer the shared `io.append` instance.
+  const AppendAccessor();
+
+  /// Appends [content] to the end of [path], creating it if it is missing.
+  FileSystemEntry call(
+    String path,
+    String content, {
+    Encoding encoding = utf8,
+  }) => Fs.appendSync(path, content, encoding: encoding);
+
+  /// A handle on [path] that stays open until it is closed.
+  ///
+  /// `io.append(path, line)` opens, writes and closes every time it is
+  /// called, which is right for the log line a script writes twice and wrong
+  /// for the loop that writes ten thousand:
+  ///
+  /// ```dart
+  /// final log = io.append.open('out/run.log');
+  /// try {
+  ///   for (final row in rows.collect(.list())) {
+  ///     log.line(row.host);
+  ///   }
+  /// } finally {
+  ///   await log.close();
+  /// }
+  /// ```
+  ///
+  /// The caller closes it — this is the one thing in `io` that is a handle
+  /// rather than a snapshot, and [Appender.close] is what flushes.
+  Appender open(String path, {Encoding encoding = utf8}) {
+    Fs.mkparentSync(path);
+    return Appender._(path, encoding);
+  }
+}
+
+/// The namespace behind [IoAsyncAccessor.append].
+class AppendAsyncAccessor {
+  /// Creates the accessor. Prefer the shared `io.async.append` instance.
+  const AppendAsyncAccessor();
+
+  /// Appends [content] to the end of [path]. See [AppendAccessor.call].
+  Future<FileSystemEntry> call(
+    String path,
+    String content, {
+    Encoding encoding = utf8,
+  }) => Fs.append(path, content, encoding: encoding);
+
+  /// A handle on [path] that stays open. See [AppendAccessor.open].
+  Future<Appender> open(String path, {Encoding encoding = utf8}) async {
+    await Fs.mkparent(path);
+    return Appender._(path, encoding);
+  }
+}
+
+/// An open file, held for a run of appends.
+///
+/// The one value in `io` that owns an operating-system resource. Everything
+/// else here is a snapshot with nothing to close, which is what lets it be
+/// handed around freely; this is not, so [close] is the caller's job and a
+/// `try`/`finally` is the shape.
+final class Appender {
+  Appender._(this.path, Encoding encoding)
+    : _sink = File(path).openWrite(mode: FileMode.append, encoding: encoding);
+
+  /// The file being appended to.
+  final String path;
+
+  final IOSink _sink;
+  var _closed = false;
+
+  /// Appends [content] exactly as given.
+  void write(String content) {
+    if (_closed) throw StateError('This appender is closed.');
+    _sink.write(content);
+  }
+
+  /// Appends [content] and a newline — the shape a log wants.
+  void line(String content) => write('$content\n');
+
+  /// Flushes what is buffered and releases the descriptor.
+  ///
+  /// Idempotent, so a `finally` that runs after an early `close` is not an
+  /// error. Nothing written is guaranteed to be on disk until this returns.
+  Future<void> close() async {
+    if (_closed) return;
+    _closed = true;
+    await _sink.flush();
+    await _sink.close();
+  }
+
+  @override
+  String toString() => 'Appender($path${_closed ? ', closed' : ''})';
 }

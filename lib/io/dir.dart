@@ -15,14 +15,33 @@
 /// io.dir.walk('out', match: '*.csv');       // the whole tree, a glob
 /// io.dir.walk('out', depth: 2);
 /// io.dir.glob('out/**/*.json');
+/// io.dir.sweep('out', match: '*.part');
 /// ```
 ///
-/// [list] is one level and returns everything; [walk] is recursive. That is
-/// the split Python (`iterdir`/`walk`), Node (`readdir`/`readdir {recursive}`)
-/// and Go (`ReadDir`/`WalkDir`) all make, and through 5.1.0 this library made
+/// [DirAccessor.list] is one level and returns everything;
+/// [DirAccessor.walk] is recursive. That is the split Python
+/// (`iterdir`/`walk`), Node (`readdir`/`readdir {recursive}`) and Go
+/// (`ReadDir`/`WalkDir`) all make, and through 5.1.0 this library made
 /// neither: `io.find` carried both on one member with a `recursive:` flag
 /// while also silently dropping every directory it walked past, so listing a
 /// folder was not possible at all.
+///
+/// ## One matcher, one depth axis
+///
+/// Every member that looks at more than one entry takes the same three
+/// filters — `only:` for the kind, `match:` for a **glob**, `depth:` for how
+/// far down — and nothing else. Through 5.4.0 there were three vocabularies
+/// for *filter a tree*: `walk`'s glob, `find`'s `Pattern` with a
+/// `recursive:` bool, and `glob`'s pattern-as-the-whole-argument. `find` is
+/// gone, because its own doc said it was `walk(only: .file, match: …)`; a
+/// [RegExp] filter is the collection vocabulary's job now, one
+/// `transform` further on:
+///
+/// ```dart
+/// // setup: final re = RegExp(r'\.mp3$');
+/// io.dir.walk('music', only: .file, match: '*.mp3');
+/// io.dir.walk('music').transform(.where((e) => re.hasMatch(e.name)));
+/// ```
 ///
 /// The name `io.dir` was a path function through 5.1.0 — it returned the
 /// parent of a path and created nothing, which is precisely backwards. That
@@ -30,6 +49,7 @@
 /// touch a directory.
 library;
 
+import '../collection/flow.dart';
 import '../collection/sequence.dart';
 import '../src/entries.dart';
 import '../src/fs.dart';
@@ -41,8 +61,8 @@ import 'entry.dart';
 
 /// Entry point for directories, reachable as `io.dir`.
 ///
-/// Everything here blocks; `io.async.dir` is the same set of names as
-/// futures.
+/// Everything here blocks; `io.async.dir` is the same set of names,
+/// returning futures or flows.
 class DirAccessor {
   /// Creates the accessor. Prefer the shared `io.dir` instance.
   const DirAccessor();
@@ -128,30 +148,6 @@ class DirAccessor {
     Entries.walk(dir, only: only, match: match, depth: depth, follow: follow),
   );
 
-  /// Files under [dir] matching [pattern], directories and links dropped.
-  ///
-  /// The narrow question — *give me the mp3s* — where [walk] is the general
-  /// one. [pattern] is a [Pattern] tested against the file's name, so a
-  /// [RegExp] works; [walk]'s `match:` is the glob.
-  ///
-  /// ```dart
-  /// io.dir.find('music', pattern: RegExp(r'\.mp3$'));
-  /// io.dir.walk('music', match: '*.mp3', only: .file);   // the same set
-  /// ```
-  Sequence<FileSystemEntry> find(
-    String dir, {
-    Pattern? pattern,
-    bool recursive = true,
-  }) => Sequence(
-    Entries.walk(
-      dir,
-      only: FileSystemEntryKind.file,
-      depth: recursive ? null : 1,
-    ).where(
-      (entry) => pattern == null || pattern.allMatches(entry.name).isNotEmpty,
-    ),
-  );
-
   /// Every entry matching the shell-style [pattern], from the current
   /// directory.
   ///
@@ -168,41 +164,111 @@ class DirAccessor {
   Sequence<FileSystemEntry> glob(String pattern) =>
       Sequence(Entries.expand(pattern));
 
-  /// Deletes every file under [dir] matching [pattern], and returns how many.
+  /// Deletes entries under [dir], and returns how many went.
   ///
-  /// The sweep, where [io.remove] is the single entity. Both were called
-  /// `delete` and `remove` through 4.0.0 — synonyms, so neither name said
-  /// which was which.
+  /// The sweep, where [IoAccessor.remove] is the single entity. Both were
+  /// called `delete` and `remove` through 4.0.0 — synonyms, so neither name
+  /// said which was which.
   ///
   /// ```dart
-  /// io.remove('out/report.pdf');                          // one entity
-  /// io.dir.sweep('out', pattern: RegExp(r'\.part$'));     // everything
+  /// io.remove('out/report.pdf');              // one entity
+  /// io.dir.sweep('out', match: '*.part');     // everything matching
+  /// io.dir.sweep('out', match: '*.tmp', depth: 1);
   /// ```
+  ///
+  /// [only], [match] and [depth] filter exactly as they do on [walk] —
+  /// one matcher language and one depth axis across the whole namespace.
+  /// Through 5.4.0 this took a `Pattern` and a `recursive:` bool while its
+  /// siblings took a glob and a `depth:`, and defaulted to one level while
+  /// the member it was built from defaulted to the whole tree.
+  ///
+  /// **Directories are left alone** unless [only] asks for them by name: a
+  /// sweep that also removed the directories it walked is [IoAccessor.remove]
+  /// under another name. When it does ask, the deepest paths go first, so a
+  /// directory is emptied before it is removed and nothing is counted twice.
   ///
   /// The listing is taken in full before the first delete: a walk reads the
   /// disk as it goes, and deleting under a walk in progress is the one thing
   /// a lazy listing cannot be asked to survive.
-  int sweep(String dir, {Pattern? pattern, bool recursive = false}) {
+  int sweep(
+    String dir, {
+    FileSystemEntryKind? only,
+    String? match,
+    int? depth,
+  }) {
     var count = 0;
-    for (final entry in find(
-      dir,
-      pattern: pattern,
-      recursive: recursive,
-    ).collect(.list())) {
+    for (final entry in _sweepable(
+      walk(dir, only: only, match: match, depth: depth).collect(.list()),
+      only,
+    )) {
       try {
-        entry.entity.deleteSync();
+        entry.entity.deleteSync(recursive: entry.isdir);
         count++;
       } catch (_) {}
     }
     return count;
   }
+
+  /// How much the tree under [dir] holds, in bytes.
+  ///
+  /// Every regular file under [dir], added up. `io.size(dir)` is `0` by
+  /// design — a directory's own on-disk size answers nothing anybody asks —
+  /// so this is the member that answers *how big is this folder*.
+  ///
+  /// Links are counted as nothing rather than as their target, so a tree
+  /// that links to itself, or twice to one large file, is not counted twice.
+  int size(String dir) => walk(
+    dir,
+    only: FileSystemEntryKind.file,
+  ).collect(.sum((entry) => entry.size)).toInt();
+
+  /// Whether the directory at [path] holds no entries.
+  ///
+  /// The directory half of `io.empty`, which is a second listing and so a
+  /// second call — see [FileSystemEntry.empty], which stopped answering it.
+  /// A path that is not there reads as empty, so a listing loop needs no
+  /// [IoAccessor.exists] in front of it.
+  bool empty(String path) => Entries.empty(path);
+
+  /// Creates a symbolic link at [path] pointing at [target].
+  ///
+  /// [target] is written into the link exactly as given, so a relative target
+  /// resolves against the link's own directory — which is what makes a
+  /// `latest` pointer survive its parent being moved:
+  ///
+  /// ```dart
+  /// io.dir.link('out/latest', 'run-2026-09-11');
+  /// io.dir.target('out/latest');     // 'run-2026-09-11'
+  /// ```
+  ///
+  /// Here rather than on `io` because a link is a kind of entry rather than a
+  /// file, and [target] would have collided with nothing useful on `io`
+  /// anyway. Replaces whatever link is already at [path]; throws when
+  /// something that is not a link is.
+  FileSystemEntry link(String path, String target) => Fs.linkSync(path, target);
+
+  /// What the link at [path] points at, or `null` when [path] is not a link.
+  ///
+  /// The raw target, not the resolved one: a relative link reads back
+  /// relative. `io.path.join(io.path.dirname(path), target)` is the absolute
+  /// form when that is what you wanted.
+  String? target(String path) => Fs.targetSync(path);
 }
 
 /// The non-blocking mirror of [DirAccessor], reachable as `io.async.dir`.
 ///
 /// Every member that touches the disk appears here under the same name and
-/// arguments, returning a future. [DirAccessor.cwd] and [DirAccessor.home]
-/// do not, since neither reads anything.
+/// arguments: single operations return futures, and listing operations
+/// return a [Flow] so large trees are walked as they arrive.
+/// [DirAccessor.cwd] and [DirAccessor.home] do not appear here, since neither
+/// reads anything.
+///
+/// The listings are [Flow.of] flows — **re-derivable**, so a second terminal
+/// walks the disk again rather than throwing, which is exactly what a second
+/// walk of the blocking [Sequence] does. Through 5.4.0 the two sides were
+/// documented as *the same four words, differing only in the `await`*, and
+/// that was true of one terminal and false of anything that read the listing
+/// twice.
 class DirAsyncAccessor {
   /// Creates the accessor. Prefer the shared `io.async.dir` instance.
   const DirAsyncAccessor();
@@ -217,23 +283,22 @@ class DirAsyncAccessor {
   Future<FileSystemEntry> temp([String prefix = 'tmp_']) => Fs.temp(prefix);
 
   /// Everything directly under [dir]: files, directories and links.
-  Future<Sequence<FileSystemEntry>> list(
+  Flow<FileSystemEntry> list(
     String dir, {
     FileSystemEntryKind? only,
     String? match,
-  }) async => Sequence(
-    await Entries.walkAsync(dir, only: only, match: match, depth: 1),
-  );
+  }) =>
+      Flow.of(() => Entries.walkAsync(dir, only: only, match: match, depth: 1));
 
   /// Everything under [dir], however deep. See [DirAccessor.walk].
-  Future<Sequence<FileSystemEntry>> walk(
+  Flow<FileSystemEntry> walk(
     String dir, {
     FileSystemEntryKind? only,
     String? match,
     int? depth,
     bool follow = true,
-  }) async => Sequence(
-    await Entries.walkAsync(
+  }) => Flow.of(
+    () => Entries.walkAsync(
       dir,
       only: only,
       match: match,
@@ -242,42 +307,67 @@ class DirAsyncAccessor {
     ),
   );
 
-  /// Files under [dir] matching [pattern]. See [DirAccessor.find].
-  Future<Sequence<FileSystemEntry>> find(
-    String dir, {
-    Pattern? pattern,
-    bool recursive = true,
-  }) async => Sequence(
-    (await Entries.walkAsync(
-      dir,
-      only: FileSystemEntryKind.file,
-      depth: recursive ? null : 1,
-    )).where(
-      (entry) => pattern == null || pattern.allMatches(entry.name).isNotEmpty,
-    ),
-  );
-
   /// Every entry matching the shell-style [pattern]. See [DirAccessor.glob].
-  Future<Sequence<FileSystemEntry>> glob(String pattern) async =>
-      Sequence(await Entries.expandAsync(pattern));
+  Flow<FileSystemEntry> glob(String pattern) =>
+      Flow.of(() => Entries.expandAsync(pattern));
 
-  /// Deletes every file under [dir] matching [pattern], and returns how many.
+  /// Deletes entries under [dir], and returns how many went.
+  /// See [DirAccessor.sweep].
+  ///
+  /// The listing is taken in full before the first delete. Through 5.4.0 the
+  /// flow rewrite made this twin delete *under a live walk* — the one thing
+  /// the blocking twin's own doc says a lazy listing cannot survive.
   Future<int> sweep(
     String dir, {
-    Pattern? pattern,
-    bool recursive = false,
+    FileSystemEntryKind? only,
+    String? match,
+    int? depth,
   }) async {
     var count = 0;
-    for (final entry in (await find(
+    final listing = await walk(
       dir,
-      pattern: pattern,
-      recursive: recursive,
-    )).collect(.list())) {
+      only: only,
+      match: match,
+      depth: depth,
+    ).pour(.list());
+    for (final entry in _sweepable(listing, only)) {
       try {
-        await entry.entity.delete();
+        await entry.entity.delete(recursive: entry.isdir);
         count++;
       } catch (_) {}
     }
     return count;
   }
+
+  /// How much the tree under [dir] holds, in bytes. See [DirAccessor.size].
+  Future<int> size(String dir) async => (await walk(
+    dir,
+    only: FileSystemEntryKind.file,
+  ).pour(.sum((entry) => entry.size))).toInt();
+
+  /// Whether the directory at [path] holds no entries. See [DirAccessor.empty].
+  Future<bool> empty(String path) => Entries.emptyAsync(path);
+
+  /// Creates a symbolic link at [path] pointing at [target].
+  /// See [DirAccessor.link].
+  Future<FileSystemEntry> link(String path, String target) =>
+      Fs.link(path, target);
+
+  /// What the link at [path] points at, or `null`. See [DirAccessor.target].
+  Future<String?> target(String path) => Fs.target(path);
+}
+
+/// The entries a sweep may remove, deepest first.
+///
+/// A directory is only swept when [only] named it, and then children come
+/// before parents so an entry a recursive delete would have taken anyway is
+/// counted once rather than twice.
+List<FileSystemEntry> _sweepable(
+  List<FileSystemEntry> found,
+  FileSystemEntryKind? only,
+) {
+  final wanted = only == FileSystemEntryKind.directory
+      ? found
+      : found.where((entry) => !entry.isdir).toList();
+  return wanted..sort((a, b) => b.path.length.compareTo(a.path.length));
 }

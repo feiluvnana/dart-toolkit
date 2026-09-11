@@ -24,8 +24,8 @@ library;
 
 import 'package:html/parser.dart' as html_parser;
 
-import '../util/codec.dart';
-import '../util/markup.dart';
+import '../src/codec.dart';
+import '../src/markup.dart';
 import 'format.dart';
 
 // ============================================================================

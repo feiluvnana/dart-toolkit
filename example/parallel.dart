@@ -26,12 +26,13 @@ void main() async {
     'Fetched ${sizes.collect(.count())}, ${util.size.format(sizes.collect(.sum((size) => size)).toInt())} total',
   );
 
-  // `flow.run` is the bounded pool over a source rather than a collection:
+  // `map.async` is the bounded pool over a source rather than a collection:
   // `ordered: false` yields each result as it lands, for work whose output
-  // should not wait on the slowest item.
+  // should not wait on the slowest item. It is part of the flow vocabulary
+  // now; it was `flow.run`, an extension declared over here, through 5.4.0.
   final seen = await ids.flow
-      .run(_measure, size: 4, ordered: false)
-      .collect(.count());
+      .pipe(.map.async(_measure, size: 4, ordered: false))
+      .pour(.count());
   log.info('Streamed $seen results.');
 
   // ------------------------------------------------------------- when one fails

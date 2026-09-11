@@ -1,8 +1,11 @@
 /// # Crawler Builder (`net.crawl`)
 ///
 /// The declarative front end to [Engine]. `net.crawl(url)` returns a
-/// [CrawlBuilder] you configure by chaining, then finish with [CrawlBuilder.run],
-/// [CrawlBuilder.collect] or [CrawlBuilder.stream].
+/// [CrawlBuilder] you configure by chaining, then finish with one of four
+/// terminals: [CrawlBuilder.run] for the [Stats] alone,
+/// [CrawlBuilder.items] for everything handlers emitted,
+/// [CrawlBuilder.gather] for what a per-page function returns, and
+/// [CrawlBuilder.flow] for the items as they arrive.
 library;
 
 import 'dart:async';
@@ -28,7 +31,7 @@ import 'sitemap.dart';
 /// ```dart
 /// final titles = await net.crawl<String>('https://news.example.com'.url)
 ///     .concurrent(4)
-///     .collect((res) {
+///     .items((res) {
 ///       res.parse(format.html).find('.title').texts.collect(.foreach((t) {
 ///         res.emit(t);
 ///       }));
@@ -44,7 +47,7 @@ class Crawl {
   /// function here, or hand one to [CrawlBuilder.run] at the end.
   ///
   /// ```dart
-  /// await net.crawl<String>('https://example.com'.url).collect(handler);
+  /// await net.crawl<String>('https://example.com'.url).items(handler);
   /// ```
   ///
   /// Took a `String` through 4.0.0, sitting one line away from
@@ -319,7 +322,7 @@ class CrawlBuilder<T> {
   /// ```dart
   /// await net.crawl<String>('https://example.com'.url)
   ///     .resume('crawl.state')
-  ///     .collect((res) => res.emit(res.url.toString()));
+  ///     .items((res) => res.emit(res.url.toString()));
   /// ```
   ///
   /// Requests carry [Fetch.meta] through the file, so anything a handler
@@ -560,14 +563,20 @@ class CrawlBuilder<T> {
   /// Runs the crawl and collects everything handlers emitted.
   ///
   /// Items arrive in emission order, as a [Sequence] — so grouping, batching
-  /// or summing them is the next call rather than an import. For a large crawl
-  /// prefer [stream], which does not hold every item in memory.
+  /// or summing them is the next call rather than an import. For a large
+  /// crawl prefer [flow], which does not hold every item in memory.
   ///
   /// ```dart
-  /// final rows = await net.crawl<Row>(seed).collect();
+  /// final rows = await net.crawl<Row>(seed).items();
   /// rows.collect(.group.by((r) => r.host)).pairs.collect(.foreach(print));
   /// ```
-  Future<Sequence<T>> collect([Handler<T>? process]) async {
+  ///
+  /// This was `collect` through 5.4.0 — the vocabulary's own word, in the
+  /// vocabulary's own receiver position, meaning something else entirely.
+  /// `rows.collect(.count())` takes a [Collector] and reduces a collection;
+  /// `crawl.collect(handler)` took a page handler and ran a crawl. Rule 5
+  /// forbids exactly that, and the engine already called these *items*.
+  Future<Sequence<T>> items([Handler<T>? process]) async {
     final items = <T>[];
     final engine = this.engine(process);
     final subscription = engine.items.listen(items.add);
@@ -585,7 +594,7 @@ class CrawlBuilder<T> {
   /// Runs the crawl, collecting what [map] returns for each page.
   ///
   /// The single-stage form. [R] is inferred from what [map] returns, where
-  /// [collect] can only learn `T` from an `emit` buried inside a closure — so
+  /// [items] can only learn `T` from an `emit` buried inside a closure — so
   /// the result type is right without being written down, and there is no
   /// engine to reach for.
   ///
@@ -593,12 +602,12 @@ class CrawlBuilder<T> {
   ///
   /// ```dart
   /// final titles = await net.crawl<Never>(seed)
-  ///     .gather((p) => p.parse(format.html).find('.title').texts.collect(.list()));
+  ///     .gather((p) => p.parse(format.html).find('.title').texts);
   /// // Future<Sequence<String>>
   /// ```
   ///
-  /// Returning nothing for a page is returning an empty iterable, so a handler
-  /// that filters reads as one:
+  /// Returning nothing for a page is returning an empty sequence, so a
+  /// handler that filters reads as one:
   ///
   /// ```dart
   /// final prices = await net.crawl<Never>(seed).gather((p) => [
@@ -606,128 +615,95 @@ class CrawlBuilder<T> {
   ///     Field.text('.price').when(util.text.number),
   ///   ) case final n?)
   ///     n,
-  /// ]);
+  /// ].seq);
   /// ```
+  ///
+  /// [map] hands back a [Sequence], which is the one rule for a callback
+  /// anywhere in this library: **what a callback gives the library back is a
+  /// `Sequence`** — here, in `Transformer.flat.map` and in `Pipe.flat.map`.
+  /// It took an `Iterable` through 5.4.0 while `flat.map` took a `Sequence`,
+  /// so a caller could not predict which container a callback owed. A
+  /// literal or a `split(',')` crosses with `.seq`; everything this library
+  /// returns is one already.
   ///
   /// Everything else the builder configures still applies, including [route]
   /// and [tag] — but a handler registered there emits through [Page.emit]
-  /// rather than returning, so a multi-stage crawl wants [collect].
-  Future<Sequence<R>> gather<R>(Iterable<R> Function(Page<T> page) map) async {
+  /// rather than returning, so a multi-stage crawl wants [items].
+  Future<Sequence<R>> gather<R>(Sequence<R> Function(Page<T> page) map) async {
     final items = <R>[];
-    await run((page) => items.addAll(map(page)));
+    await run((page) => items.addAll(map(page).collect(.list())));
     return Sequence(items);
-  }
-
-  /// Runs the crawl and writes emitted items to [path] as they arrive.
-  ///
-  /// Maps and lists are written as JSON lines; anything else as its
-  /// `toString`. Nothing is held in memory, so this is what a long crawl wants
-  /// where [collect] would not fit.
-  ///
-  /// The write is atomic, like every other write in this library: items go to
-  /// a `.part` staging file, its folder is created if it is missing, and it is
-  /// renamed into place only once the run finishes. A crawl that fails part
-  /// way therefore leaves whatever was already at [path] intact, where opening
-  /// the destination directly had truncated it before the first page was even
-  /// fetched.
-  ///
-  /// ```dart
-  /// await net.crawl<String>(seed).save('titles.txt');
-  /// ```
-  ///
-  /// To write somewhere that is not a file, see [sink].
-  Future<Stats> save(String path, [Handler<T>? process]) async {
-    late Stats stats;
-    await Fs.atomic(path, (staging) async {
-      final out = staging.openWrite();
-      try {
-        stats = await _pour(out, process);
-      } finally {
-        await out.close();
-      }
-    });
-    return stats;
-  }
-
-  /// Runs the crawl and writes emitted items to [destination] as they arrive.
-  ///
-  /// The sink is the caller's own: it is written to and flushed, never closed.
-  /// [save] is the same thing pointed at a file, and stages its write.
-  ///
-  /// ```dart
-  /// await net.crawl<String>(seed).sink(stdout);
-  /// ```
-  Future<Stats> sink(IOSink destination, [Handler<T>? process]) =>
-      _pour(destination, process);
-
-  /// Runs the crawl, writing every emitted item to [sink] as a line.
-  Future<Stats> _pour(IOSink sink, Handler<T>? process) async {
-    final engine = this.engine(process);
-    engine.on.item((item) {
-      if (item is Map || item is List) {
-        sink.writeln(jsonEncode(item));
-      } else {
-        sink.writeln(item.toString());
-      }
-    });
-
-    _arm(engine);
-    try {
-      final stats = await engine.run(await _resolveUrls());
-      await sink.flush();
-      return stats;
-    } finally {
-      await _disarm(engine);
-    }
   }
 
   /// Runs the crawl and yields items as handlers emit them, as a [Flow].
   ///
-  /// The flow ends when the crawl finishes. Use this instead of [collect]
+  /// The flow ends when the crawl finishes. Use this instead of [items]
   /// when the result set is large: the vocabulary is the same either way, so
   /// the choice is only about holding every item in memory.
   ///
   /// ```dart
   /// await net.crawl<String>(seed)
   ///     .flow(handler)
-  ///     .collect(.foreach(print));
+  ///     .pour(.foreach(print));
   /// ```
   ///
   /// A terminal that stops early ends the crawl: the flow cancels its
-  /// subscription and that stops the engine, so `collect(.first())` over a
+  /// subscription and that stops the engine, so `pour(.first())` over a
   /// crawl fetches one page.
+  ///
+  /// **Nothing is fetched until something collects.** The engine is armed in
+  /// the controller's `onListen`, the way [Pool.flow] arms its workers — a
+  /// flow built and thrown away costs nothing, where through 5.4.0 the
+  /// method body started the crawl and a `net.crawl(seed).flow(handler)` that
+  /// was never collected still fetched a page. `Flow`'s *nothing runs until
+  /// something collects* is a property of the operations; a source has to
+  /// keep it for itself.
+  ///
+  /// Writing the items straight to a file is `io.async.lines.write`, which
+  /// is what `save` and `sink` were private versions of:
+  ///
+  /// ```dart
+  /// await io.async.lines.write('titles.txt', net.crawl<String>(seed).flow());
+  /// ```
   ///
   /// Was `stream`, returning a `Stream<T>`, through 5.3.0 — renamed rather
   /// than retyped, because a member called `stream` that hands back a [Flow]
   /// no longer says what the call does.
   Flow<T> flow([Handler<T>? process]) {
-    final engine = this.engine(process);
     late final StreamController<T> controller;
-    controller = StreamController<T>(
+    var started = false;
+
+    void begin() {
+      if (started) return;
+      started = true;
+      final engine = this.engine(process);
       // A consumer that stops listening ends the crawl instead of leaving it
       // fetching pages nothing will read.
-      onCancel: () => engine.stop('Stream cancelled'),
-    );
-    final subscription = engine.items.listen(controller.add);
-    _arm(engine);
+      controller.onCancel = () => engine.stop('Stream cancelled');
+      final subscription = engine.items.listen(controller.add);
+      _arm(engine);
 
-    // One ending for both outcomes. Seeds that cannot be resolved — a sitemap
-    // whose host is down — used to take the other path: the error reached the
-    // stream, and then nothing closed it, nothing cancelled the subscription
-    // and nothing unhooked the resume timer. An `await for` over that waited
-    // for a crawl that was never going to run.
-    Future<void> finish() async {
-      await _disarm(engine);
-      await subscription.cancel();
-      if (!controller.isClosed) await controller.close();
+      // One ending for both outcomes. Seeds that cannot be resolved — a
+      // sitemap whose host is down — used to take the other path: the error
+      // reached the stream, and then nothing closed it, nothing cancelled the
+      // subscription and nothing unhooked the resume timer. An `await for`
+      // over that waited for a crawl that was never going to run.
+      Future<void> finish() async {
+        await _disarm(engine);
+        await subscription.cancel();
+        if (!controller.isClosed) await controller.close();
+      }
+
+      _resolveUrls()
+          .then<void>(
+            (urls) =>
+                engine.run(urls).then((_) {}, onError: controller.addError),
+            onError: controller.addError,
+          )
+          .whenComplete(finish);
     }
 
-    _resolveUrls()
-        .then<void>(
-          (urls) => engine.run(urls).then((_) {}, onError: controller.addError),
-          onError: controller.addError,
-        )
-        .whenComplete(finish);
+    controller = StreamController<T>(onListen: begin);
     return Flow<T>(controller.stream);
   }
 }

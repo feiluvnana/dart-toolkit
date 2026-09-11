@@ -52,8 +52,12 @@ belongs to, when it earns a top-level name, and how to name it.
 3. **Real types at every boundary.** URLs are `Uri`, delays are `Duration`, paths are `String`, bodies and hash algorithms are sealed types and enums. No `Object` or `dynamic` parameters, so the analyzer catches mistakes at the call site.
 4. **Atomic by default.** Every write stages through a `.part` file and is renamed into place only after a successful flush. Interrupted runs never leave truncated files, and Ctrl-C cleans up.
 5. **Engine-driven pipelines.** Multi-stage crawlers use declarative URL routing, tag-based stages, and automatic relative-URL resolution.
-6. **One vocabulary for collections.** Everything this library hands back for you to *shape* is a [`Sequence`](docs/collection.md), a [`Dictionary`](docs/collection.md#7-dictionaryk-v-the-keyed-collection) or a [`Flow`](docs/collection.md#6-flowt--the-collection-over-time), deliberately not an `Iterable`, a `Map` or a `Stream`, so Dart's names and these are never both in scope at one call site. `collect(.list())`, `.map` and `.stream` are the ways out at the boundary; `.seq`, `.dict` and `.flow` bring an outside collection in. A `Sequence` hands back no `Iterable` of its own — leaving is a call, not a getter, because a getter would put Dart's vocabulary one dot from every sequence in the library. Through 4.0.0 that claim was only half true — 53 public members handed back a `List`, `Map` or `Set` against 30 that handed back a `Sequence` — and 5.0.0 converted them.
-7. **A pipeline is a value.** A `Sequence` has two members: `transform` takes a [`Transformer`](docs/collection.md#3-transformer--the-shaping-operations) and `collect` takes a [`Collector`](docs/collection.md#4-collector--the-ending-operations). Everything else is a static factory on one of those, which is what lets each of them take its ordinary name back — `map`, `where`, `take.first`, `group.by`, `max.by`. A namespace has no `Map` to collide with and no camelCase to forbid, so a compound operation splits at the capital instead of inventing a word. It also makes a chain storable, passable, supplyable by a caller, testable against a plain list — and runnable over a `Flow` as well as a `Sequence`, because the same two types carry both. Which half an operation lives on is a rule rather than a list: **a `Transformer` can emit before its source ends, a `Collector` needs the end**, which is why `sort` and `take.last` are collectors and `take.first` is not.
+6. **One vocabulary for collections.** Everything this library hands back for you to *shape* is a [`Sequence`](lib/collection/collection.dart), a [`Dictionary`](lib/collection/collection.dart) or a [`Flow`](lib/collection/collection.dart), deliberately not an `Iterable`, a `Map` or a `Stream`, so Dart's names and these are never both in scope at one call site. `collect(.list())`, `.map` and `.stream` are the ways out at the boundary; `.seq`, `.dict` and `.flow` bring an outside collection in. A `Sequence` hands back no `Iterable` of its own — leaving is a call, not a getter, because a getter would put Dart's vocabulary one dot from every sequence in the library. Through 4.0.0 that claim was only half true — 53 public members handed back a `List`, `Map` or `Set` against 30 that handed back a `Sequence` — and 5.0.0 converted them.
+7. **A pipeline is a value.** A `Sequence` has two members: `transform` takes a [`Transformer`](lib/collection/collection.dart) and `collect` takes a [`Collector`](lib/collection/collection.dart). A `Flow` has the matching pair, `pipe` and `pour`, over a [`Pipe`](lib/collection/pipe.dart) and a [`Pour`](lib/collection/pipe.dart). Everything else is a static factory on one of those four, which is what lets each operation take its ordinary name back — `map`, `where`, `take.first`, `group.by`, `max.by`. A namespace has no `Map` to collide with and no camelCase to forbid, so a compound operation splits at the capital instead of inventing a word. It also makes a chain storable, passable, supplyable by a caller and testable against a plain list.
+
+   Which half an operation lives on is a rule rather than a list: **a shaping step can emit before its source ends, a terminal needs the end.** That is why `take.first` is a `Pipe` and `sort` is a `Pour`. On a `Sequence` the same law is only bookkeeping — the source has an end, and reading all of it is what the operation *is* — so `sort`, `flip`, `take.last` and `skip.last` are `Transformer`s there and a chain never changes container.
+
+   One pair served both containers through 5.4.0, with the streaming half of every operation an optional field, and both sides paid: a flow-native step could not join the vocabulary at all (`asyncMap` lived in `concurrent` as `flow.run`), and a step a *flow* could not stream was demoted to a terminal on the *sequence* too. The operations keep their spelling across the split, because a dot shorthand resolves against the context type; what tells you which container you are on is the member.
 
 ---
 
@@ -109,7 +113,7 @@ void main(List<String> args) async {
       .concurrent(size())
       .delay(250.ms)
       .limit(50)
-      .collect((res) {
+      .items((res) {
         res.parse(format.html).find('.titleline > a').texts.collect(.foreach((title) {
           res.emit(title);
         }));
@@ -199,14 +203,31 @@ io.size(path);    io.empty(path);   io.stat(path);   // -> FileSystemEntry?
 io.has(path);                                        // exists and non-empty
 io.hash(path, Algo.md5);
 
+io.lines(path);                            // a lazy Sequence<String>
+io.lines.write('out/hosts.txt', hosts.keys);   // one per line, atomically
+io.chunks(path, size: 4096);               // Sequence<List<int>>, lazily
+io.temp('render_');                        // a temporary *file*
+final log = io.append.open('out/run.log'); // one descriptor for many appends
+
 io.path.join('a', 'b', 'c.txt');
 io.path.dirname(path);  io.path.filename(path);  io.path.stem(path);
 
 io.dir.make('out/reports');
 io.dir.list('out');                        // one level -> Sequence<FileSystemEntry>
 io.dir.walk('src', match: '**/*.dart');    // the whole tree, a glob
-io.dir.find('out', pattern: RegExp(r'\.mp3$'));
+io.dir.walk('out', only: .file, match: '*.mp3');
+io.dir.sweep('out', match: '*.part');      // and how many went
+io.dir.size('out');                        // the recursive byte total
+io.dir.empty('out');                       // the directory question
+io.dir.link('out/latest', 'run-2026-09-11');
 ```
+
+**One matcher, one depth axis.** Every member that looks at more than one
+entry takes the same three filters — `only:` for the kind, `match:` for a
+glob, `depth:` for how far down. There were three vocabularies for *filter a
+tree* through 5.4.0; `io.dir.find` is gone, because its own doc said it was
+`walk(only: .file, match: …)`, and a `RegExp` filter is the collection
+vocabulary's job one `transform` further on.
 
 Everything that reads or writes a file hands back a `FileSystemEntry` — path,
 kind, size, mtime and the name parts — instead of a `dart:io` handle:
@@ -230,17 +251,25 @@ await io.async.dir.walk('out');
 
 Downloading is `net.http.download`, because a socket is `net`'s.
 
+Where the shape has to differ it differs by one rule and no exceptions: a
+`Sequence` on `io`, a `Flow` on `io.async`. That covers `lines`, `chunks`,
+`io.dir`'s listings and the whole of `io.csv`, which needed a carve-out
+through 5.4.0 because every member of it was already a future from the
+accessor that promises to block. The listings are re-derivable flows, so a
+second terminal reads the disk again rather than throwing — which is what
+makes the mirror a real one.
+
 A crawl reaches a spreadsheet without passing through memory:
 
 ```dart
-await io.csv.pipe(
+await io.async.csv.write(
   'products.csv',
   net.crawl<Map<String, Object?>>(seed).flow(),
   headers: ['name', 'price'],
 );
 ```
 
-See [docs/io.md](docs/io.md), [docs/csv.md](docs/csv.md), [docs/collection.md](docs/collection.md#9-on-disk).
+See [lib/io/io.dart](lib/io/io.dart), [lib/io/csv.dart](lib/io/csv.dart), [lib/collection/collection.dart](lib/collection/collection.dart).
 
 ### `net.http` — requests, and the codec seam
 
@@ -276,7 +305,7 @@ await net.http.post(url, body: const Body.json({'id': 1}));
 await net.http.download(url, 'out/file.zip');
 ```
 
-Retries cover transport errors, 5xx and 429, honouring `Retry-After`. See [docs/http.md](docs/http.md).
+Retries cover transport errors, 5xx and 429, honouring `Retry-After`. See [lib/net/http.dart](lib/net/http.dart).
 
 ### `net.crawl` — multi-stage pipelines
 
@@ -314,7 +343,7 @@ await net.crawl<String>(seed)
     .run(handler);
 ```
 
-See [docs/crawl.md](docs/crawl.md).
+See [lib/net/crawl.dart](lib/net/crawl.dart).
 
 ### `Form` — the forms a page carries
 
@@ -340,7 +369,7 @@ for you.
 
 Inside a crawl, `res.submit(form)` schedules it on the engine instead, so the
 answer reaches a tagged handler like any other page. See
-[docs/form.md](docs/form.md).
+[lib/net/form.dart](lib/net/form.dart).
 
 ### `format.html` — selectors
 
@@ -355,7 +384,7 @@ $(markup).find('.track a').texts;
 markup.$('.track').attrs('data-id');
 ```
 
-See [docs/html.md](docs/html.md).
+See [lib/src/markup.dart](lib/src/markup.dart).
 
 ### `system` — subprocesses and shutdown
 
@@ -369,7 +398,7 @@ system.on.exit(() => db.dump('out/state.json'));    // and track, adopt, signals
 await system.shutdown();
 ```
 
-See [docs/system.md](docs/system.md), [docs/env.md](docs/env.md).
+See [lib/system/system.dart](lib/system/system.dart), [lib/system/env.dart](lib/system/env.dart).
 
 ### `cli` — the command line your script presents
 
@@ -395,7 +424,7 @@ final out = build.option('out', alias: 'o', def: 'dist', desc: 'Output directory
 await system.shutdown(await cli.run(args));
 ```
 
-See [docs/cli.md](docs/cli.md).
+See [lib/cli/cli.dart](lib/cli/cli.dart).
 
 ### `concurrent` — bounded async work
 
@@ -407,7 +436,7 @@ final bodies = await concurrent.run(
 );
 ```
 
-Results keep input order. The first failure propagates with its own error and stack; register `Pool.on.error` to collect failures and continue instead, or use `Pool.settle`, which returns a sealed `Done`/`Broke` per item and never throws. See [docs/concurrent.md](docs/concurrent.md).
+Results keep input order. The first failure propagates with its own error and stack; register `Pool.on.error` to collect failures and continue instead, or use `Pool.settle`, which returns a sealed `Done`/`Broke` per item and never throws. See [lib/concurrent/concurrent.dart](lib/concurrent/concurrent.dart).
 
 ### `format.*` — one name per format
 
@@ -427,8 +456,8 @@ io.write('out.yaml', format.yaml.format({'name': 'x'}));
 
 `format.json`, `format.yaml` and `format.toml` all hand back a `Json` cursor,
 because they decode to the same maps, lists and scalars; `format.html` hands
-back a `Markup` cursor. See [docs/json.md](docs/json.md),
-[docs/yaml.md](docs/yaml.md) and [docs/html.md](docs/html.md).
+back a `Markup` cursor. See [lib/format/json.dart](lib/format/json.dart),
+[lib/format/yaml.dart](lib/format/yaml.dart) and [lib/src/markup.dart](lib/src/markup.dart).
 
 **`format` holds formats, never binaries.** `tool.git`, `tool.gh` and
 `tool.docker` were all tried and all removed: a wrapper only ever has the
@@ -449,34 +478,36 @@ await format.zip.list('site.zip');                  // without unpacking
 await format.zip.read('site.zip', 'index.html');
 ```
 
-See [docs/zip.md](docs/zip.md).
+See [lib/format/zip.dart](lib/format/zip.dart).
 
-### `collection` — `Sequence`, `Dictionary`, and the two operation types
+### `collection` — `Sequence`, `Dictionary`, `Flow`, and four operation types
 
 ```dart
 rows.transform(.where((r) => r.live))
     .transform(.take.first(10))
-    .collect(.sort.by((r) => r.cost));
+    .transform(.sort.by((r) => r.cost));
 
 rows.collect(.group.into((r) => r.host, .sum((r) => r.cost)));  // one pass
 rows.collect(.count.by((r) => r.host));                         // Dictionary<String, int>
 rows.collect(.max.by((r) => r.score))?.url;                     // nullable, never throws
 ```
 
-The same vocabulary over a source that arrives a piece at a time — a `Flow` is what this library returns in place of a `Stream`:
+The same vocabulary over a source that arrives a piece at a time — a `Flow` is what this library returns in place of a `Stream`. Its two members are named after what they take, so the container is visible at every step:
 
 ```dart
-await io.csv.records('big.csv')
-    .transform(.where((r) => r['live'] == 'yes'))
-    .transform(.take.first(1000))
-    .collect(.count.by((r) => r['host']));
+await io.async.csv.records('big.csv')
+    .pipe(.where((r) => r['live'] == 'yes'))
+    .pipe(.take.first(1000))
+    .pour(.count.by((r) => r['host']));
 
 // bounded async work over a source too large to hold, which
 // `concurrent.run` cannot take
 await io.async.lines('urls.txt')
-    .run((line) => net.http.get(line.trim().url), size: 8)
-    .collect(.count());
+    .pipe(.map.async((line) => net.http.get(line.trim().url), size: 8))
+    .pour(.count());
 ```
+
+A `Pipe` also carries what only makes sense over time, none of which had a spelling before: `map.async`, `where.async`, `flat.async`, `chunk.time`, `debounce`, `throttle`, `merge`, `timeout`, `handle`, `tap` — and a binary operand that is itself a `Flow`, so two files zip line by line.
 
 A chain is a value, so it can be named once and used twice:
 
@@ -488,7 +519,9 @@ rows.transform(cleanup).transform(.take.first(10));
 rows.transform(cleanup).collect(.count());
 ```
 
-See [docs/collection.md](docs/collection.md).
+A named pipeline belongs to one container. `Pipe.of(transformer)` crosses it, as a conversion rather than a second spelling — and it says out loud that it buffers, which the old design did silently for every transformer that supplied no streaming half.
+
+See [lib/collection/collection.dart](lib/collection/collection.dart).
 
 ### `util` — pure helpers
 
@@ -504,7 +537,7 @@ util.hash.short(url);                 // an 8-character cache key
 util.rand.jitter(1.s);                // 1.0s..1.25s
 ```
 
-See [docs/util.md](docs/util.md).
+See [lib/util/util.dart](lib/util/util.dart).
 
 ---
 
@@ -515,7 +548,7 @@ Hand the crawl a `MapDownloader` of fixtures instead of reaching the network:
 ```dart
 final titles = await net.crawl<String>('https://site.test'.url)
     .downloader(MapDownloader({'https://site.test': '<h1>Hi</h1>'}))
-    .collect((res) => res.emit(res.parse(format.html).find('h1').text));
+    .items((res) => res.emit(res.parse(format.html).find('h1').text));
 ```
 
 To swap the shared HTTP client process-wide, hand `net.use` your own:
@@ -524,31 +557,37 @@ To swap the shared HTTP client process-wide, hand `net.use` your own:
 await net.use(Fetcher(headers: {'Authorization': 'Bearer $token'}));
 ```
 
-See [docs/crawl.md](docs/crawl.md#8-testing-a-pipeline).
+See [lib/net/crawl.dart](lib/net/crawl.dart).
 
 ---
 
 ## Documentation
 
+The documentation is the `///` comments under `lib/`, read through dartdoc or
+on hover in an editor. Each file opens with a library-level comment that is
+the narrative for its domain — what the vocabulary is, why it is shaped that
+way, and what it cost. There was a `docs/` folder beside them through 5.4.0;
+5.5.0 retired it rather than keep two copies of every sentence.
+
 | Domain | Reference |
 | :--- | :--- |
-| Files & paths | [docs/io.md](docs/io.md) |
-| CSV tables | [docs/csv.md](docs/csv.md) |
-| Sequences, dictionaries, typed keys | [docs/collection.md](docs/collection.md) |
-| HTTP & downloads | [docs/http.md](docs/http.md) |
-| Crawler engine | [docs/crawl.md](docs/crawl.md) |
-| Forms | [docs/form.md](docs/form.md) |
-| HTML & selectors | [docs/html.md](docs/html.md) |
-| Subprocesses & shutdown | [docs/system.md](docs/system.md) |
-| CLI arguments | [docs/cli.md](docs/cli.md) |
-| Environment & `.env` | [docs/env.md](docs/env.md) |
-| Concurrency | [docs/concurrent.md](docs/concurrent.md) |
-| Terminal IO | [docs/console.md](docs/console.md) |
-| Time, sizes, text, hashing, randomness | [docs/util.md](docs/util.md) |
-| JSON & JSONPath | [docs/json.md](docs/json.md) |
-| YAML & TOML | [docs/yaml.md](docs/yaml.md) |
-| Serving (`net.serve`) | [docs/serve.md](docs/serve.md) |
-| Archives | [docs/zip.md](docs/zip.md) |
+| Files & paths | [lib/io/io.dart](lib/io/io.dart) |
+| CSV tables | [lib/io/csv.dart](lib/io/csv.dart) |
+| Sequences, dictionaries, typed keys | [lib/collection/collection.dart](lib/collection/collection.dart) |
+| HTTP & downloads | [lib/net/http.dart](lib/net/http.dart) |
+| Crawler engine | [lib/net/crawl.dart](lib/net/crawl.dart) |
+| Forms | [lib/net/form.dart](lib/net/form.dart) |
+| HTML & selectors | [lib/src/markup.dart](lib/src/markup.dart) |
+| Subprocesses & shutdown | [lib/system/system.dart](lib/system/system.dart) |
+| CLI arguments | [lib/cli/cli.dart](lib/cli/cli.dart) |
+| Environment & `.env` | [lib/system/env.dart](lib/system/env.dart) |
+| Concurrency | [lib/concurrent/concurrent.dart](lib/concurrent/concurrent.dart) |
+| Terminal IO | [lib/system/console/console.dart](lib/system/console/console.dart) |
+| Time, sizes, text, hashing, randomness | [lib/util/util.dart](lib/util/util.dart) |
+| JSON & JSONPath | [lib/format/json.dart](lib/format/json.dart) |
+| YAML & TOML | [lib/format/yaml.dart](lib/format/yaml.dart) |
+| Serving (`net.serve`) | [lib/net/serve.dart](lib/net/serve.dart) |
+| Archives | [lib/format/zip.dart](lib/format/zip.dart) |
 | Namespace & naming rules | [NAMESPACE.md](NAMESPACE.md) |
 
 A short runnable script per use case lives in [`example/`](example/), with

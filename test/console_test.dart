@@ -340,9 +340,13 @@ void main() {
       addTearDown(() => io.remove(temp.path));
       final path = '${temp.path}/out.csv';
 
-      await io.csv.write(path, [
-        {'a': '1'},
-      ], newline: '\r\n');
+      io.csv.write(
+        path,
+        [
+          {'a': '1'},
+        ].seq,
+        newline: '\r\n',
+      );
 
       expect(File(path).readAsStringSync(), 'a\r\n1\r\n');
       // And it reads back as one row, not two.
@@ -361,7 +365,9 @@ void main() {
       final List<Map<String, String>> records = await io.csv
           .records(path)
           .collect(.list());
-      final List<List<String>> rows = await io.csv.rows(path).collect(.list());
+      final List<List<String>> rows = await io.async.csv
+          .rows(path)
+          .pour(.list());
 
       expect(sheet.maps.collect(.list()), records);
       // The cursor keeps the header out of the rows; the flow does not, so

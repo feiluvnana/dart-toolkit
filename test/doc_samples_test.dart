@@ -1,7 +1,7 @@
 /// Hand-written checks that the documented samples *behave* as documented.
 ///
 /// Compiling them is `test/docs_test.dart`, which extracts and analyzes every
-/// `dart` block in `docs/`, `README.md`, `NAMESPACE.md` and every `///`
+/// `dart` block in `README.md`, `NAMESPACE.md` and every `///`
 /// comment under `lib/`. This file is the other half: a sample that compiles
 /// can still return the wrong answer, so the ones whose *output* the docs
 /// state are asserted here.
@@ -108,7 +108,7 @@ void main() {
                   '<html><body><a class="titleline" href="/item">Title 1</a></body></html>',
             }),
           )
-          .collect((res) {
+          .items((res) {
             for (final title
                 in res
                     .parse(format.html)
@@ -171,15 +171,17 @@ void main() {
     test('concurrent.md features run as documented', () async {
       // 1. flow.run
       final streamResults = await [20, 10].flow
-          .run(
-            (int ms) async {
-              await util.time.wait(ms.ms);
-              return 'done-$ms';
-            },
-            size: 2,
-            ordered: false,
+          .pipe(
+            .map.async(
+              (int ms) async {
+                await util.time.wait(ms.ms);
+                return 'done-$ms';
+              },
+              size: 2,
+              ordered: false,
+            ),
           )
-          .collect(.list());
+          .pour(.list());
       expect(streamResults, containsAll(['done-20', 'done-10']));
 
       // 2. settle
@@ -304,10 +306,13 @@ void main() {
       final temp = dart_io.Directory.systemTemp.createTempSync('doc_csv_');
       try {
         final path = dart_io.File('${temp.path}/people.csv').path;
-        await io.csv.write(path, [
-          {'name': 'Alice', 'role': 'admin'},
-          {'name': 'Bob', 'role': 'user'},
-        ]);
+        io.csv.write(
+          path,
+          [
+            {'name': 'Alice', 'role': 'admin'},
+            {'name': 'Bob', 'role': 'user'},
+          ].seq,
+        );
 
         final sheet = await format.csv.read(path);
         expect(sheet.maps.collect(.count()), equals(2));
@@ -321,10 +326,10 @@ void main() {
           equals(['Alice', 'admin']),
         );
 
-        final streamed = await io.csv.records(path).collect(.list());
+        final streamed = await io.async.csv.records(path).pour(.list());
         expect(streamed.length, equals(2));
 
-        final cells = await io.csv.rows(path).collect(.list());
+        final cells = await io.async.csv.rows(path).pour(.list());
         expect(cells.first, equals(['name', 'role']));
 
         // Excel and RFC 4180 want CRLF, which format and write both take.

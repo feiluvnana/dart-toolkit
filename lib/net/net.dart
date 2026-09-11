@@ -107,8 +107,8 @@ class NetAccessor {
   /// up and returns `null` rather than waiting for a redirect that is never
   /// coming.
   ///
-  /// `once` beside [serve] is the same pairing as `io.csv.pipe` beside
-  /// `write`: different behaviour, not an alias.
+  /// `once` beside [serve] is the same pairing as `io.async.csv.write` beside
+  /// `io.csv.write`: different behaviour, not an alias.
   Future<R?> once<R extends Object>(
     int port,
     FutureOr<R?> Function(Asked req) handler, {

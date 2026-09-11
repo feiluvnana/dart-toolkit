@@ -90,7 +90,7 @@ class Lock {
 
   static bool _take(File file) {
     try {
-      Fs.parent(file.path);
+      Fs.mkparentSync(file.path);
       // `exclusive` is the whole mechanism: the create fails rather than
       // truncating a lock somebody else is holding.
       file.createSync(exclusive: true);

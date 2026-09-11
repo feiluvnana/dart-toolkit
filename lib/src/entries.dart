@@ -1,7 +1,7 @@
 /// # Listing, Walking & Globbing (internal)
 ///
-/// Implementation behind `io.dir.list`, `io.dir.walk`, `io.dir.find`,
-/// `io.dir.glob` and `io.stat`. Every one of them hands back a
+/// Implementation behind `io.dir.list`, `io.dir.walk`, `io.dir.glob`,
+/// `io.dir.sweep` and `io.stat`. Every one of them hands back a
 /// [FileSystemEntry], which is what took the `dart:io` types back out of the
 /// public signatures.
 ///
@@ -83,6 +83,24 @@ class Entries {
       size: directory || stat.size < 0 ? 0 : stat.size,
       modified: stat.modified,
     );
+  }
+
+  /// Whether the directory at [dir] holds no entries.
+  ///
+  /// `true` when there is nothing there at all, and `false` when [dir] is not
+  /// a directory — the two answers `io.exists` and `io.isdir` already give,
+  /// so this one is only about what is inside.
+  static bool empty(String dir) {
+    final directory = Directory(dir);
+    if (!directory.existsSync()) return true;
+    return directory.listSync(followLinks: false).isEmpty;
+  }
+
+  /// The non-blocking twin of [empty].
+  static Future<bool> emptyAsync(String dir) async {
+    final directory = Directory(dir);
+    if (!await directory.exists()) return true;
+    return directory.list(followLinks: false).isEmpty;
   }
 
   /// Everything directly under [dir], read as it is walked.
@@ -188,53 +206,85 @@ class Entries {
     }
   }
 
-  /// The non-blocking twin of [walk].
-  static Future<List<FileSystemEntry>> walkAsync(
+  /// The non-blocking twin of [walk], yielding entries as they are found.
+  static Stream<FileSystemEntry> walkAsync(
     String dir, {
     FileSystemEntryKind? only,
     String? match,
     int? depth,
     bool follow = true,
-  }) async {
-    final out = <FileSystemEntry>[];
-    final matcher = match == null ? null : glob(match);
-    final rooted = match != null && match.contains('/');
-    final seen = <String>{};
+  }) => _stepAsync(
+    dir,
+    1,
+    root: dir,
+    only: only,
+    matcher: match == null ? null : glob(match),
+    rooted: match != null && match.contains('/'),
+    depth: depth,
+    follow: follow,
+    seen: <String>{},
+  );
 
-    Future<void> step(String current, int level) async {
-      if (depth != null && level > depth) return;
-      final children = <FileSystemEntity>[];
-      try {
-        await for (final child in Directory(current).list(followLinks: false)) {
-          children.add(child);
-        }
-      } on FileSystemException {
-        return;
+  static Stream<FileSystemEntry> _stepAsync(
+    String current,
+    int level, {
+    required String root,
+    required FileSystemEntryKind? only,
+    required RegExp? matcher,
+    required bool rooted,
+    required int? depth,
+    required bool follow,
+    required Set<String> seen,
+  }) async* {
+    if (depth != null && level > depth) return;
+    final children = <FileSystemEntity>[];
+    try {
+      await for (final child in Directory(current).list(followLinks: false)) {
+        children.add(child);
       }
-      children.sort((a, b) => a.path.compareTo(b.path));
-      for (final child in children) {
-        final entry = await atAsync(child.path);
-        if (entry == null) continue;
-        if (_keeps(entry, only, matcher, rooted, dir)) out.add(entry);
-        if (depth != null && level >= depth) continue;
-        if (entry.isdir) {
-          await step(child.path, level + 1);
-        } else if (entry.islink && follow) {
-          if (!await FileSystemEntity.isDirectory(child.path)) continue;
-          final String real;
-          try {
-            real = await Directory(child.path).resolveSymbolicLinks();
-          } on FileSystemException {
-            continue;
-          }
-          if (!seen.add(real)) continue;
-          await step(child.path, level + 1);
+    } on FileSystemException {
+      return;
+    }
+    children.sort((a, b) => a.path.compareTo(b.path));
+    for (final child in children) {
+      final entry = await atAsync(child.path);
+      if (entry == null) continue;
+      if (_keeps(entry, only, matcher, rooted, root)) yield entry;
+      if (depth != null && level >= depth) continue;
+      if (entry.isdir) {
+        yield* _stepAsync(
+          child.path,
+          level + 1,
+          root: root,
+          only: only,
+          matcher: matcher,
+          rooted: rooted,
+          depth: depth,
+          follow: follow,
+          seen: seen,
+        );
+      } else if (entry.islink && follow) {
+        if (!await FileSystemEntity.isDirectory(child.path)) continue;
+        final String real;
+        try {
+          real = await Directory(child.path).resolveSymbolicLinks();
+        } on FileSystemException {
+          continue;
         }
+        if (!seen.add(real)) continue;
+        yield* _stepAsync(
+          child.path,
+          level + 1,
+          root: root,
+          only: only,
+          matcher: matcher,
+          rooted: rooted,
+          depth: depth,
+          follow: follow,
+          seen: seen,
+        );
       }
     }
-
-    await step(dir, 1);
-    return out;
   }
 
   static bool _keeps(
@@ -275,24 +325,23 @@ class Entries {
     }
   }
 
-  /// The non-blocking twin of [expand].
-  static Future<List<FileSystemEntry>> expandAsync(String pattern) async {
+  /// The non-blocking twin of [expand], streaming matches as they are found.
+  static Stream<FileSystemEntry> expandAsync(String pattern) async* {
     final (base, rest) = _split(pattern);
     if (rest.isEmpty) {
       final single = await atAsync(p.normalize(base));
-      return single == null ? const [] : [single];
+      if (single != null) yield single;
+      return;
     }
     final recursive = rest.contains('**');
     final matcher = glob(rest);
-    final out = <FileSystemEntry>[];
-    for (final entry in await walkAsync(
+    await for (final entry in walkAsync(
       base,
       depth: recursive ? null : p.split(rest).length,
     )) {
       final relative = p.relative(entry.path, from: base).replaceAll(r'\', '/');
-      if (matcher.hasMatch(relative)) out.add(entry);
+      if (matcher.hasMatch(relative)) yield entry;
     }
-    return out;
   }
 
   /// Splits [pattern] into the literal directory to start from and the glob.

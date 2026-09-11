@@ -3,9 +3,10 @@
 /// What `format.csv.parse` and `format.csv.read` hand back: a table, with its
 /// header line separated from its rows.
 ///
-/// It lives in `util` for the reason [Json] and [Markup] do — it is a pure
-/// value that both `format` and `net` hand back, through [Codec], and a type
-/// `net` needs cannot live under `format`.
+/// It lives in `lib/src/` for the reason [Json] and [Markup] do — it is a
+/// pure value that both `format` and `net` hand back, through [Codec], and a
+/// type `net` needs cannot live under `format`. It was under `lib/util/`
+/// through 5.4.0 and was never reachable as `util.` anything.
 ///
 /// ```dart
 /// final sheet = await format.csv.read('sales.csv');

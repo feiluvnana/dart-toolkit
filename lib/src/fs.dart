@@ -130,6 +130,114 @@ class Fs {
   static FileSystemEntry mkparentSync(String path) =>
       mkdirSync(p.dirname(path));
 
+  /// Creates a symbolic link at [path] pointing at [target], blocking.
+  ///
+  /// Replaces a link already at [path]; anything else there is left alone and
+  /// the create throws, because silently unlinking a real file to put a
+  /// pointer in its place is not a thing a caller asked for.
+  static FileSystemEntry linkSync(String path, String target) {
+    mkparentSync(path);
+    final link = Link(path);
+    if (Entries.kind(path) == FileSystemEntryKind.link) link.deleteSync();
+    link.createSync(target);
+    return entryFor(path);
+  }
+
+  /// The non-blocking twin of [linkSync].
+  static Future<FileSystemEntry> link(String path, String target) async {
+    await mkparent(path);
+    final link = Link(path);
+    if (await Entries.kindAsync(path) == FileSystemEntryKind.link) {
+      await link.delete();
+    }
+    await link.create(target);
+    return entryFor(path);
+  }
+
+  /// What the link at [path] points at, or `null` when it is not a link.
+  static String? targetSync(String path) {
+    if (Entries.kind(path) != FileSystemEntryKind.link) return null;
+    try {
+      return Link(path).targetSync();
+    } on FileSystemException {
+      return null;
+    }
+  }
+
+  /// The non-blocking twin of [targetSync].
+  static Future<String?> target(String path) async {
+    if (await Entries.kindAsync(path) != FileSystemEntryKind.link) return null;
+    try {
+      return await Link(path).target();
+    } on FileSystemException {
+      return null;
+    }
+  }
+
+  /// Creates a new empty temporary file with the given name [prefix].
+  ///
+  /// The file half of [tempSync]: a unique directory is made and the file
+  /// put inside it, so two callers with one prefix cannot collide and
+  /// removing the directory removes the file.
+  static FileSystemEntry tempfileSync([String prefix = 'tmp_']) {
+    final dir = Directory.systemTemp.createTempSync(prefix);
+    final file = File(p.join(dir.path, '$prefix${_staged++}'))..createSync();
+    return entryFor(file.path);
+  }
+
+  /// The non-blocking twin of [tempfileSync].
+  static Future<FileSystemEntry> tempfile([String prefix = 'tmp_']) async {
+    final dir = await Directory.systemTemp.createTemp(prefix);
+    final file = File(p.join(dir.path, '$prefix${_staged++}'));
+    await file.create();
+    return entryFor(file.path);
+  }
+
+  /// Reads [path] in byte chunks of at most [size], blocking per chunk.
+  ///
+  /// A generator, so nothing opens until the first walk and a reader that
+  /// stops early stops reading.
+  static Iterable<List<int>> chunksSync(
+    String path, {
+    int size = 64 * 1024,
+  }) sync* {
+    if (size <= 0) throw ArgumentError.value(size, 'size', 'must be positive');
+    final handle = File(path).openSync();
+    try {
+      while (true) {
+        final chunk = handle.readSync(size);
+        if (chunk.isEmpty) return;
+        yield chunk;
+      }
+    } finally {
+      handle.closeSync();
+    }
+  }
+
+  /// Streams [path] in byte chunks of at most [size].
+  static Stream<List<int>> chunks(String path, {int size = 64 * 1024}) {
+    if (size <= 0) throw ArgumentError.value(size, 'size', 'must be positive');
+    return File(path).openRead().transform(_rechunk(size));
+  }
+
+  /// Regroups a byte stream into chunks of exactly [size], the last short.
+  static StreamTransformer<List<int>, List<int>> _rechunk(int size) {
+    var held = <int>[];
+    return StreamTransformer<List<int>, List<int>>.fromHandlers(
+      handleData: (chunk, sink) {
+        held.addAll(chunk);
+        while (held.length >= size) {
+          sink.add(held.sublist(0, size));
+          held = held.sublist(size);
+        }
+      },
+      handleDone: (sink) {
+        if (held.isNotEmpty) sink.add(held);
+        sink.close();
+      },
+    );
+  }
+
   /// Creates a new temporary directory with the given name [prefix].
   static Future<FileSystemEntry> temp([String prefix = 'tmp_']) async =>
       entryFor((await Directory.systemTemp.createTemp(prefix)).path);
@@ -137,12 +245,6 @@ class Fs {
   /// Creates a new temporary directory with the given name [prefix], blocking.
   static FileSystemEntry tempSync([String prefix = 'tmp_']) =>
       entryFor(Directory.systemTemp.createTempSync(prefix).path);
-
-  /// Creates the parent directory of [path] if it is missing.
-  static void parent(String path) {
-    final dir = Directory(p.dirname(path));
-    if (!dir.existsSync()) dir.createSync(recursive: true);
-  }
 
   /// Whether [path] exists and holds at least one byte.
   ///
@@ -229,16 +331,15 @@ class Fs {
     String part = '.part',
   }) async {
     final file = File(path);
-    parent(path);
-    final staging = File('$path$part');
-    if (staging.existsSync()) staging.deleteSync();
+    await mkparent(path);
+    final staging = File(_staging(path, part));
     Exit.track(staging);
     try {
       await fill(staging);
-      _swap(staging, file);
+      await _swapAsync(staging, file);
       return file;
     } catch (_) {
-      _discard(staging);
+      await _discardAsync(staging);
       rethrow;
     } finally {
       Exit.untrack(staging);
@@ -254,9 +355,8 @@ class Fs {
     String part = '.part',
   }) {
     final file = File(path);
-    parent(path);
-    final staging = File('$path$part');
-    if (staging.existsSync()) staging.deleteSync();
+    mkparentSync(path);
+    final staging = File(_staging(path, part));
     Exit.track(staging);
     try {
       fill(staging);
@@ -335,51 +435,6 @@ class Fs {
     return false;
   }
 
-  /// Creates the parent directory of [path] if it is missing, without blocking.
-  static Future<void> parentAsync(String path) async {
-    final dir = Directory(p.dirname(path));
-    if (!await dir.exists()) await dir.create(recursive: true);
-  }
-
-  /// Lists files under [dir] without blocking, optionally filtered by [pattern].
-  static Future<List<File>> findAsync(
-    String dir, {
-    Pattern? pattern,
-    bool recursive = true,
-  }) async {
-    final directory = Directory(dir);
-    if (!await directory.exists()) return [];
-    final files = <File>[];
-    await for (final entity in directory.list(recursive: recursive)) {
-      if (entity is! File) continue;
-      if (pattern == null ||
-          pattern.allMatches(p.basename(entity.path)).isNotEmpty) {
-        files.add(entity);
-      }
-    }
-    return files;
-  }
-
-  /// Deletes files under [dir] matching [pattern] without blocking.
-  static Future<int> deleteAsync(
-    String dir, {
-    Pattern? pattern,
-    bool recursive = false,
-  }) async {
-    var count = 0;
-    for (final file in await findAsync(
-      dir,
-      pattern: pattern,
-      recursive: recursive,
-    )) {
-      try {
-        await file.delete();
-        count++;
-      } catch (_) {}
-    }
-    return count;
-  }
-
   /// Removes the file, link or directory at [path] without blocking.
   static Future<bool> removeAsync(String path) async {
     final type = await FileSystemEntity.type(path);
@@ -396,90 +451,197 @@ class Fs {
   }
 
   /// Copies [source] to [destination] without blocking, directories included.
+  ///
+  /// The non-blocking twin of [copySync], with the same kind-preserving rule.
   static Future<FileSystemEntry> copyAsync(
     String source,
     String destination,
   ) async {
-    if (await FileSystemEntity.type(source) == FileSystemEntityType.directory) {
-      await Directory(destination).create(recursive: true);
-      await for (final entity in Directory(source).list(recursive: true)) {
-        final target = p.join(
-          destination,
-          p.relative(entity.path, from: source),
-        );
-        if (entity is Directory) {
-          await Directory(target).create(recursive: true);
-        } else if (entity is File) {
-          await Directory(p.dirname(target)).create(recursive: true);
-          await entity.copy(target);
-        }
-      }
+    final kind = await Entries.kindAsync(source);
+    if (kind == null) {
+      throw FileSystemException('Cannot copy, no entry at source', source);
+    }
+    if (kind != FileSystemEntryKind.directory) {
+      await mkparent(destination);
+      await _cloneAsync(source, destination, kind);
       return entryFor(destination);
     }
-    await Directory(p.dirname(destination)).create(recursive: true);
-    await File(source).copy(destination);
+    await Directory(destination).create(recursive: true);
+    await for (final entry in Entries.walkAsync(source, follow: false)) {
+      final target = p.join(destination, p.relative(entry.path, from: source));
+      if (entry.isdir) {
+        await Directory(target).create(recursive: true);
+        continue;
+      }
+      await mkparent(target);
+      await _cloneAsync(entry.path, target, entry.kind);
+    }
     return entryFor(destination);
   }
 
+  /// Reproduces the one entry at [source] as [destination], kind and all.
+  static Future<void> _cloneAsync(
+    String source,
+    String destination,
+    FileSystemEntryKind kind,
+  ) async {
+    if (kind == FileSystemEntryKind.link) {
+      await Link(destination).create(await Link(source).target());
+      return;
+    }
+    await File(source).copy(destination);
+  }
+
   /// Moves [source] to [destination] without blocking, crossing filesystems.
+  ///
+  /// The non-blocking twin of [moveSync], with the same two rules.
   static Future<FileSystemEntry> moveAsync(
     String source,
     String destination,
   ) async {
-    await Directory(p.dirname(destination)).create(recursive: true);
+    final kind = await Entries.kindAsync(source);
+    if (kind == null) {
+      throw FileSystemException('Cannot move, no entry at source', source);
+    }
+    _refuseMerge(kind, await Entries.kindAsync(destination), destination);
+    await mkparent(destination);
     try {
-      if (await FileSystemEntity.type(source) ==
-          FileSystemEntityType.directory) {
-        await Directory(source).rename(destination);
-      } else {
-        await File(source).rename(destination);
-      }
+      await _renameAsync(source, destination, kind);
       return entryFor(destination);
-    } on FileSystemException {
+    } on FileSystemException catch (error) {
+      if (!_crossdevice(error)) rethrow;
       final copied = await copyAsync(source, destination);
       await removeAsync(source);
       return copied;
     }
   }
 
+  static Future<void> _renameAsync(
+    String source,
+    String destination,
+    FileSystemEntryKind kind,
+  ) async {
+    switch (kind) {
+      case FileSystemEntryKind.directory:
+        await Directory(source).rename(destination);
+      case FileSystemEntryKind.link:
+        await Link(source).rename(destination);
+      case FileSystemEntryKind.file:
+        await File(source).rename(destination);
+    }
+  }
+
   /// Copies [source] to [destination], blocking, directories included.
+  ///
+  /// **Kind-preserving**: a symlink is copied as a symlink, pointing where it
+  /// pointed. Through 5.4.0 this walked with `Directory.list(recursive: true)`
+  /// and branched on `is Directory` / `is File`, so a link to a file was
+  /// dereferenced into a second copy of the content and a link to a directory
+  /// matched neither branch and was dropped without a word. The walk is
+  /// [Entries.walk] now, which has the three kinds and the cycle guard, and
+  /// does not follow links out of the tree it was asked to copy.
   static FileSystemEntry copySync(String source, String destination) {
-    if (FileSystemEntity.typeSync(source) == FileSystemEntityType.directory) {
-      Directory(destination).createSync(recursive: true);
-      for (final entity in Directory(source).listSync(recursive: true)) {
-        final target = p.join(
-          destination,
-          p.relative(entity.path, from: source),
-        );
-        if (entity is Directory) {
-          Directory(target).createSync(recursive: true);
-        } else if (entity is File) {
-          parent(target);
-          entity.copySync(target);
-        }
-      }
+    final kind = Entries.kind(source);
+    if (kind == null) {
+      throw FileSystemException('Cannot copy, no entry at source', source);
+    }
+    if (kind != FileSystemEntryKind.directory) {
+      mkparentSync(destination);
+      _clone(source, destination, kind);
       return entryFor(destination);
     }
-    parent(destination);
-    File(source).copySync(destination);
+    Directory(destination).createSync(recursive: true);
+    for (final entry in Entries.walk(source, follow: false)) {
+      final target = p.join(destination, p.relative(entry.path, from: source));
+      if (entry.isdir) {
+        Directory(target).createSync(recursive: true);
+        continue;
+      }
+      mkparentSync(target);
+      _clone(entry.path, target, entry.kind);
+    }
     return entryFor(destination);
   }
 
+  /// Reproduces the one entry at [source] as [destination], kind and all.
+  static void _clone(
+    String source,
+    String destination,
+    FileSystemEntryKind kind,
+  ) {
+    if (kind == FileSystemEntryKind.link) {
+      Link(destination).createSync(Link(source).targetSync());
+      return;
+    }
+    File(source).copySync(destination);
+  }
+
   /// Moves [source] to [destination], blocking, crossing filesystems.
+  ///
+  /// Two rules that were not there through 5.4.0.
+  ///
+  /// **A directory is never merged into an existing directory.** `rename`
+  /// refuses that, and the old blanket `on FileSystemException` caught the
+  /// refusal and fell back to copy-and-delete — which merged the two trees
+  /// and deleted the source, silently, where the caller had asked for a move.
+  ///
+  /// **The fallback is for a cross-device move and nothing else.** Every
+  /// other failure — a permission, a read-only target, a vanished source —
+  /// is rethrown as itself rather than becoming a half-finished copy.
   static FileSystemEntry moveSync(String source, String destination) {
-    parent(destination);
+    final kind = Entries.kind(source);
+    if (kind == null) {
+      throw FileSystemException('Cannot move, no entry at source', source);
+    }
+    _refuseMerge(kind, Entries.kind(destination), destination);
+    mkparentSync(destination);
     try {
-      if (FileSystemEntity.typeSync(source) == FileSystemEntityType.directory) {
-        Directory(source).renameSync(destination);
-      } else {
-        File(source).renameSync(destination);
-      }
+      _rename(source, destination, kind);
       return entryFor(destination);
-    } on FileSystemException {
+    } on FileSystemException catch (error) {
+      if (!_crossdevice(error)) rethrow;
       final copied = copySync(source, destination);
       removeSync(source);
       return copied;
     }
+  }
+
+  static void _rename(
+    String source,
+    String destination,
+    FileSystemEntryKind kind,
+  ) {
+    switch (kind) {
+      case FileSystemEntryKind.directory:
+        Directory(source).renameSync(destination);
+      case FileSystemEntryKind.link:
+        Link(source).renameSync(destination);
+      case FileSystemEntryKind.file:
+        File(source).renameSync(destination);
+    }
+  }
+
+  /// Throws rather than let a directory move turn into a merge.
+  static void _refuseMerge(
+    FileSystemEntryKind source,
+    FileSystemEntryKind? destination,
+    String path,
+  ) {
+    if (source != FileSystemEntryKind.directory) return;
+    if (destination != FileSystemEntryKind.directory) return;
+    throw FileSystemException(
+      'Cannot move a directory onto an existing directory',
+      path,
+    );
+  }
+
+  /// Whether [error] is the kernel saying *the two paths are on different
+  /// filesystems* — `EXDEV`, and the one failure a copy-and-delete answers.
+  static bool _crossdevice(FileSystemException error) {
+    final code = error.osError?.errorCode;
+    if (code == null) return false;
+    // ERROR_NOT_SAME_DEVICE on Windows; EXDEV everywhere else.
+    return code == (Platform.isWindows ? 17 : 18);
   }
 
   /// Removes the file, link or directory at [path]; `false` when absent.
@@ -507,7 +669,7 @@ class Fs {
     String content, {
     Encoding encoding = utf8,
   }) {
-    parent(path);
+    mkparentSync(path);
     File(path).writeAsStringSync(
       content,
       mode: FileMode.append,
@@ -523,7 +685,7 @@ class Fs {
     String content, {
     Encoding encoding = utf8,
   }) async {
-    await parentAsync(path);
+    await mkparent(path);
     await File(path).writeAsString(
       content,
       mode: FileMode.append,
@@ -540,7 +702,7 @@ class Fs {
     if (file.existsSync()) {
       file.setLastModifiedSync(DateTime.now());
     } else {
-      parent(path);
+      mkparentSync(path);
       file.createSync();
     }
     return entryFor(path);
@@ -552,11 +714,94 @@ class Fs {
     if (await file.exists()) {
       await file.setLastModified(DateTime.now());
     } else {
-      await parentAsync(path);
+      await mkparent(path);
       await file.create();
     }
     return entryFor(path);
   }
+
+  /// Writes [lines] to [path] atomically, one element per line.
+  ///
+  /// The blocking twin of [pourLines]. The whole sequence is walked while the
+  /// staging file is open, so nothing is held but the line being written.
+  static File writeLinesSync(
+    String path,
+    Iterable<String> lines, {
+    String newline = '\n',
+    Encoding encoding = utf8,
+    String part = '.part',
+  }) => atomicSync(path, part: part, (staging) {
+    // A `RandomAccessFile` rather than an `IOSink`: a sink is asynchronous,
+    // so `close()` hands back a future and the rename would happen before
+    // anything reached the disk. This is the blocking path.
+    final handle = staging.openSync(mode: FileMode.writeOnly);
+    try {
+      for (final line in lines) {
+        handle.writeFromSync(encoding.encode('$line$newline'));
+      }
+      handle.flushSync();
+    } finally {
+      handle.closeSync();
+    }
+  });
+
+  /// Writes [lines] to [path] atomically as they arrive, one per line.
+  ///
+  /// The file appears whole or not at all: lines go to a staging file that is
+  /// renamed into place once the stream closes, and discarded if it fails.
+  static Future<File> pourLines(
+    String path,
+    Stream<String> lines, {
+    String newline = '\n',
+    Encoding encoding = utf8,
+    String part = '.part',
+  }) => atomic(path, part: part, (staging) async {
+    final sink = staging.openWrite(encoding: encoding);
+    try {
+      await for (final line in lines) {
+        sink
+          ..write(line)
+          ..write(newline);
+      }
+      await sink.flush();
+    } finally {
+      await sink.close();
+    }
+  });
+
+  /// Writes [items] to [path] atomically as a JSON array, as they arrive.
+  ///
+  /// The brackets and commas are written around the elements rather than the
+  /// whole array being built first, so a flow of any size becomes a JSON file
+  /// without ever being a `List`.
+  static Future<File> pourJson(
+    String path,
+    Stream<Object?> items, {
+    bool pretty = true,
+    Encoding encoding = utf8,
+    String part = '.part',
+  }) => atomic(path, part: part, (staging) async {
+    final sink = staging.openWrite(encoding: encoding);
+    final encoder = pretty
+        ? const JsonEncoder.withIndent('  ')
+        : const JsonEncoder();
+    try {
+      var first = true;
+      sink.write(pretty ? '[\n' : '[');
+      await for (final item in items) {
+        if (!first) sink.write(pretty ? ',\n' : ',');
+        first = false;
+        final text = encoder.convert(item);
+        sink.write(
+          pretty ? text.split('\n').map((l) => '  $l').join('\n') : text,
+        );
+      }
+      sink.write(pretty ? (first ? ']' : '\n]') : ']');
+      await sink.flush();
+    } finally {
+      await sink.close();
+    }
+  });
 
   /// Streams [url] to [path] atomically via a `.part` staging file.
   ///
@@ -601,7 +846,7 @@ class Fs {
           await sink.close();
         }
 
-        if (total != -1 && staging.lengthSync() != total) {
+        if (total != -1 && await staging.length() != total) {
           throw HttpException('Incomplete download', uri: url);
         }
       } finally {
@@ -610,49 +855,23 @@ class Fs {
     });
   }
 
-  /// Lists files under [dir], optionally filtered by [pattern] on the basename.
-  ///
-  /// Returns an empty list when [dir] does not exist.
-  static List<File> find(
-    String dir, {
-    Pattern? pattern,
-    bool recursive = true,
-  }) {
-    final directory = Directory(dir);
-    if (!directory.existsSync()) return [];
-    return directory
-        .listSync(recursive: recursive)
-        .whereType<File>()
-        .where(
-          (f) =>
-              pattern == null ||
-              pattern.allMatches(p.basename(f.path)).isNotEmpty,
-        )
-        .toList();
-  }
-
-  /// Deletes files under [dir] matching [pattern] and returns the count.
-  ///
-  /// Files that cannot be deleted are skipped rather than aborting the sweep.
-  static int delete(String dir, {Pattern? pattern, bool recursive = false}) {
-    var count = 0;
-    for (final file in find(dir, pattern: pattern, recursive: recursive)) {
-      try {
-        file.deleteSync();
-        count++;
-      } catch (_) {}
-    }
-    return count;
-  }
-
   /// Streams [path] as decoded lines, without loading the whole file.
   static Stream<String> lines(String path, {Encoding encoding = utf8}) => File(
     path,
   ).openRead().transform(encoding.decoder).transform(const LineSplitter());
 
-  /// Reads [path] as decoded lines, blocking.
-  static List<String> linesSync(String path, {Encoding encoding = utf8}) =>
-      File(path).readAsLinesSync(encoding: encoding);
+  /// Reads [path] as decoded lines, blocking — on the first walk, not before.
+  ///
+  /// A generator rather than `readAsLinesSync`, so `io.lines(path)` is the
+  /// lazy view a [Sequence] promises: nothing is read until something walks
+  /// it, a walk that stops early stops reading, and a second walk re-reads
+  /// the file rather than replaying a snapshot of it.
+  static Iterable<String> linesSync(
+    String path, {
+    Encoding encoding = utf8,
+  }) sync* {
+    yield* LineSplitter.split(File(path).readAsStringSync(encoding: encoding));
+  }
 
   /// How much of a file is read at a time when hashing it.
   static const int _hashChunk = 64 * 1024;
@@ -711,6 +930,23 @@ class Fs {
   static Future<FileSystemEntry?> statAsync(String path) =>
       Entries.atAsync(path);
 
+  /// How many staging files this process has opened, so far.
+  static int _staged = 0;
+
+  /// The staging path a write to [path] gets, unique to this call.
+  ///
+  /// `'$path$part'` through 5.4.0, which meant two writes to one path shared
+  /// one staging file: the second `atomic` deleted the first's file out from
+  /// under it, and the first's rename then failed with an internal `.part`
+  /// path in the message. The pid and a per-process counter make the staging
+  /// file private to the call, so concurrent writers race only on the final
+  /// rename — which POSIX makes atomic, so the last writer wins cleanly.
+  ///
+  /// [part] stays the suffix, so `io.dir.sweep(out, match: '*.part')` still
+  /// finds an abandoned one.
+  static String _staging(String path, String part) =>
+      '$path.${pid.toRadixString(36)}${(_staged++).toRadixString(36)}$part';
+
   /// Moves [staging] over [destination] without exposing a gap.
   ///
   /// POSIX `rename` replaces the destination atomically, so a reader either
@@ -724,11 +960,28 @@ class Fs {
     staging.renameSync(destination.path);
   }
 
+  /// The non-blocking twin of [_swap], for the write path that promises not
+  /// to block.
+  static Future<void> _swapAsync(File staging, File destination) async {
+    if (Platform.isWindows && await destination.exists()) {
+      await destination.delete();
+    }
+    await staging.rename(destination.path);
+  }
+
   /// Removes a staging file, ignoring failures during error unwinding.
   static void _discard(File staging) {
     if (!staging.existsSync()) return;
     try {
       staging.deleteSync();
+    } catch (_) {}
+  }
+
+  /// The non-blocking twin of [_discard].
+  static Future<void> _discardAsync(File staging) async {
+    if (!await staging.exists()) return;
+    try {
+      await staging.delete();
     } catch (_) {}
   }
 }

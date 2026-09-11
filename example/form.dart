@@ -64,7 +64,7 @@ void main() async {
         'home',
         (res) => res.emit(res.parse(format.html).find('.welcome').text),
       )
-      .collect();
+      .items();
 
   log.ok('Signed in: ${greeting.collect(.single())}');
 }

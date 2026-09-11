@@ -54,19 +54,36 @@ void main() {
 
     test('flat flattens and flat.map expands', () {
       expect(
-        [1, 2].seq.transform(.flat.map((n) => [n, n * 10])).collect(.list()),
+        [
+          1,
+          2,
+        ].seq.transform(.flat.map((n) => [n, n * 10].seq)).collect(.list()),
         equals([1, 10, 2, 20]),
       );
       expect(
         [
-          [1, 2],
-          [3],
-        ].seq.transform(.flat<int>()).collect(.list()),
-        equals([1, 2, 3]),
+          'a b',
+          'c d',
+        ].seq.transform(.flat.map(util.text.words)).collect(.list()),
+        equals(['a', 'b', 'c', 'd']),
       );
       expect(
-        () => [1].seq.transform(.flat<int>()).collect(.list()),
-        throwsStateError,
+        [
+          [1, 2].seq,
+          [3].seq,
+        ].seq.transform(.flat()).collect(.list()),
+        equals([1, 2, 3]),
+      );
+      // `flat()` infers its element type from the receiver now, and a
+      // receiver whose elements are not sequences does not compile — where
+      // through 5.4.0 it was `Transformer<Never, B>`, took a type argument
+      // nothing could infer, and threw `StateError` at runtime instead.
+      expect(
+        [
+          [1, 2],
+          [3],
+        ].seq.transform(.map((l) => l.seq)).transform(.flat()).collect(.list()),
+        equals([1, 2, 3]),
       );
     });
 
@@ -88,18 +105,19 @@ void main() {
       'sort never mutates the source, and sort.using takes a comparator',
       () {
         final source = [3, 1, 2];
-        expect(source.seq.collect(.sort()).collect(.list()), equals([1, 2, 3]));
+        expect(
+          source.seq.transform(.sort()).collect(.list()),
+          equals([1, 2, 3]),
+        );
         expect(source, equals([3, 1, 2]), reason: 'sort must copy');
         expect(
-          rows.collect(.sort.by((r) => r.score)).collect(.first())?.score,
+          rows.transform(.sort.by((r) => r.score)).collect(.first())?.score,
           equals(1),
         );
         expect(
-          [
-            3,
-            1,
-            2,
-          ].seq.collect(.sort.using((a, b) => b.compareTo(a))).collect(.list()),
+          [3, 1, 2].seq
+              .transform(.sort.using((a, b) => b.compareTo(a)))
+              .collect(.list()),
           equals([3, 2, 1]),
         );
       },
@@ -108,16 +126,16 @@ void main() {
     test('take, skip and flip read as opposites', () {
       final n = [1, 2, 3, 4, 5].seq;
       expect(n.transform(.take.first(2)).collect(.list()), equals([1, 2]));
-      expect(n.collect(.take.last(2)).collect(.list()), equals([4, 5]));
+      expect(n.transform(.take.last(2)).collect(.list()), equals([4, 5]));
       expect(n.transform(.skip.first(3)).collect(.list()), equals([4, 5]));
-      expect(n.collect(.skip.last(3)).collect(.list()), equals([1, 2]));
-      expect(n.collect(.flip()).collect(.list()), equals([5, 4, 3, 2, 1]));
+      expect(n.transform(.skip.last(3)).collect(.list()), equals([1, 2]));
+      expect(n.transform(.flip()).collect(.list()), equals([5, 4, 3, 2, 1]));
       expect(n.transform(.take.first(0)).collect(.list()), isEmpty);
       expect(
-        n.collect(.take.last(99)).collect(.list()),
+        n.transform(.take.last(99)).collect(.list()),
         equals([1, 2, 3, 4, 5]),
       );
-      expect(n.collect(.skip.last(99)).collect(.list()), isEmpty);
+      expect(n.transform(.skip.last(99)).collect(.list()), isEmpty);
     });
 
     test('take.when and skip.when split on a predicate', () {
@@ -144,7 +162,11 @@ void main() {
           [5],
         ]),
       );
-      expect([1].seq.transform(.chunk(0)).collect(.list()), isEmpty);
+      // A size that came out zero is an arithmetic bug upstream. It yielded
+      // nothing through 5.4.0, which is a chunking of no rows into no
+      // batches and let the bug reach the output.
+      expect(() => [1].seq.transform(.chunk(0)), throwsArgumentError);
+      expect(() => Pipe.chunk<int>(0), throwsArgumentError);
     });
 
     test('zip and unzip go through records', () {
@@ -302,7 +324,7 @@ void main() {
       expect(n.collect(.first.where((v) => v.isEven)), equals(2));
       // `findlast` was `flip.find` under a second name.
       expect(
-        n.collect(.flip()).collect(.first.where((v) => v.isEven)),
+        n.transform(.flip()).collect(.first.where((v) => v.isEven)),
         equals(4),
       );
       expect(n.collect(.index.where((v) => v.isEven)), equals(1));
@@ -418,7 +440,7 @@ void main() {
           .collect(.group.into((r) => r.host, .sum((r) => r.cost)))
           .pairs
           .transform(.map((e) => (host: e.$1, spend: e.$2)))
-          .collect(.sort.by((e) => e.host));
+          .transform(.sort.by((e) => e.host));
       expect(
         spend.transform(.map((e) => e.host)).collect(.list()),
         equals(['a.com', 'b.com', 'c.com']),
@@ -463,14 +485,14 @@ void main() {
     test('then joins two transformers into one', () {
       final cleanup = Transformer.where<Row>((r) => r.score > 1)
           .then(Transformer.unique.by((r) => r.host))
-          .into(Collector.sort.by((r) => r.host));
+          .then(Transformer.sort.by((r) => r.host));
 
       // One definition, two uses — the thing a method chain cannot offer.
       expect(
-        rows.collect(cleanup).transform(.map((r) => r.host)).collect(.list()),
+        rows.transform(cleanup).transform(.map((r) => r.host)).collect(.list()),
         equals(['a.com', 'b.com']),
       );
-      expect(rows.collect(cleanup).collect(.count()), equals(2));
+      expect(rows.transform(cleanup).collect(.count()), equals(2));
     });
 
     test('into gives a transformer an ending, making it a collector', () {
@@ -531,7 +553,7 @@ void main() {
       );
       expect(
         rows
-            .collect(Dearer(2).into(Collector.sort.by((r) => r.cost)))
+            .transform(Dearer(2).then(Transformer.sort.by((r) => r.cost)))
             .collect(.list()),
         equals([_row('a.com', 5, 2.5), _row('b.com', 9, 4.0)]),
       );
@@ -553,35 +575,33 @@ void main() {
         2,
         3,
         4,
-      ].flow.transform(.where((n) => n.isEven)).transform(.map((n) => n * 10));
+      ].flow.pipe(.where((n) => n.isEven)).pipe(.map((n) => n * 10));
 
       expect(flow, isA<Flow<int>>());
-      expect(await flow.collect(.list()), equals([20, 40]));
+      expect(await flow.pour(.list()), equals([20, 40]));
     });
 
     test('collect gives a Future where a sequence gives the value', () async {
-      expect([1, 2, 3].flow.collect(.count()), isA<Future<int>>());
-      expect(await [1, 2, 3].flow.collect(.count()), equals(3));
-      expect(await [1, 2, 3].flow.collect(.first()), equals(1));
-      expect(await <int>[].flow.collect(.first()), isNull);
-      expect(await Flow<int>.empty().collect(.count()), isZero);
+      expect([1, 2, 3].flow.pour(.count()), isA<Future<int>>());
+      expect(await [1, 2, 3].flow.pour(.count()), equals(3));
+      expect(await [1, 2, 3].flow.pour(.first()), equals(1));
+      expect(await <int>[].flow.pour(.first()), isNull);
+      expect(await Flow<int>.empty().pour(.count()), isZero);
     });
 
     test('.flow is the seam, from all three sides', () async {
       expect([1, 2].flow, isA<Flow<int>>());
       expect([1, 2].seq.flow, isA<Flow<int>>());
       expect(Stream<int>.fromIterable([1, 2]).flow, isA<Flow<int>>());
-      expect(await [1, 2].seq.flow.collect(.list()), equals([1, 2]));
+      expect(await [1, 2].seq.flow.pour(.list()), equals([1, 2]));
     });
 
     test('a sequence crosses to a flow and back', () async {
-      final held = await rows.flow
-          .transform(.where((r) => r.cost > 1))
-          .collect(.seq());
+      final held = await rows.flow.pipe(.where((r) => r.cost > 1)).pour(.seq());
 
       expect(held, isA<Sequence<Row>>());
       expect(held.collect(.count()), equals(3));
-      expect(await held.flow.collect(.count()), equals(3));
+      expect(await held.flow.pour(.count()), equals(3));
     });
 
     test('.seq stays lazy at the seam', () async {
@@ -593,9 +613,9 @@ void main() {
         }),
       );
 
-      final flow = source.flow.transform(.take.first(1));
+      final flow = source.flow.pipe(.take.first(1));
       expect(walked, isZero, reason: 'nothing walked at the seam');
-      expect(await flow.collect(.list()), equals([1]));
+      expect(await flow.pour(.list()), equals([1]));
       expect(walked, equals(1));
     });
 
@@ -604,109 +624,156 @@ void main() {
         1,
         2,
         3,
-      ].flow.stream.where((n) => n.isOdd).flow.collect(.list());
+      ].flow.stream.where((n) => n.isOdd).flow.pour(.list());
 
       expect(out, equals([1, 3]));
     });
 
     test('an error in the source comes out of the collect', () {
       expect(
-        Stream<int>.error(StateError('bad')).flow.collect(.list()),
+        Stream<int>.error(StateError('bad')).flow.pour(.list()),
         throwsStateError,
       );
     });
 
-    test('every named collector answers the same on both', () async {
+    test('every terminal answers the same on both vocabularies', () async {
       final n = [3, 1, 4, 1, 5];
-      Future<void> same<R>(String name, Collector<int, R> step) async {
+      Future<void> same<R>(
+        String name,
+        Collector<int, R> held,
+        Pour<int, R> over,
+      ) async {
         expect(
-          await n.flow.collect(step),
-          equals(n.seq.collect(step)),
+          await n.flow.pour(over),
+          equals(n.seq.collect(held)),
           reason: name,
         );
       }
 
-      await same('count', Collector.count<int>());
-      await same('count.where', Collector.count.where((int v) => v.isOdd));
-      await same('empty', Collector.empty<int>());
-      await same('has', Collector.has(4));
-      await same('any', Collector.any((int v) => v > 4));
-      await same('all', Collector.all((int v) => v > 0));
-      await same('first', Collector.first<int>());
-      await same('last', Collector.last<int>());
-      await same('single.where', Collector.single.where((int v) => v == 4));
-      await same('at', Collector.at<int>(2));
-      await same('index.of', Collector.index.of(1));
-      await same('max.by', Collector.max.by((int v) => v));
-      await same('min.by', Collector.min.by((int v) => v));
-      await same('fold', Collector.fold<int, int>(0, (t, v) => t + v));
-      await same('sum', Collector.sum((int v) => v));
-      await same('avg', Collector.avg((int v) => v));
-      await same('join', Collector.join<int>(', ', limit: 3));
-      await same('list', Collector.list<int>());
-      await same('set', Collector.set<int>());
-      await same('foreach', Collector.foreach((int _) {}));
+      await same('count', Collector.count<int>(), Pour.count<int>());
+      await same(
+        'count.where',
+        Collector.count.where((int v) => v.isOdd),
+        Pour.count.where((int v) => v.isOdd),
+      );
+      await same('empty', Collector.empty<int>(), Pour.empty<int>());
+      await same('has', Collector.has(4), Pour.has(4));
+      await same(
+        'any',
+        Collector.any((int v) => v > 4),
+        Pour.any((int v) => v > 4),
+      );
+      await same(
+        'all',
+        Collector.all((int v) => v > 0),
+        Pour.all((int v) => v > 0),
+      );
+      await same('first', Collector.first<int>(), Pour.first<int>());
+      await same('last', Collector.last<int>(), Pour.last<int>());
+      await same(
+        'single.where',
+        Collector.single.where((int v) => v == 4),
+        Pour.single.where((int v) => v == 4),
+      );
+      await same('at', Collector.at<int>(2), Pour.at<int>(2));
+      await same('index.of', Collector.index.of(1), Pour.index.of(1));
+      await same(
+        'max.by',
+        Collector.max.by((int v) => v),
+        Pour.max.by((int v) => v),
+      );
+      await same(
+        'min.by',
+        Collector.min.by((int v) => v),
+        Pour.min.by((int v) => v),
+      );
+      await same(
+        'fold',
+        Collector.fold<int, int>(0, (t, v) => t + v),
+        Pour.fold<int, int>(0, (t, v) => t + v),
+      );
+      await same('sum', Collector.sum((int v) => v), Pour.sum((int v) => v));
+      await same('avg', Collector.avg((int v) => v), Pour.avg((int v) => v));
+      await same(
+        'join',
+        Collector.join<int>(', ', limit: 3),
+        Pour.join<int>(', ', limit: 3),
+      );
+      await same('list', Collector.list<int>(), Pour.list<int>());
+      await same('set', Collector.set<int>(), Pour.set<int>());
+      await same(
+        'foreach',
+        Collector.foreach((int _) {}),
+        Pour.foreach((int _) {}),
+      );
 
       // The ones whose result is a collection compare through their contents.
       expect(
-        (await n.flow.collect(.group.by((v) => v.isEven))).keys.collect(.set()),
+        (await n.flow.pour(.group.by((v) => v.isEven))).keys.collect(.set()),
         equals(n.seq.collect(.group.by((v) => v.isEven)).keys.collect(.set())),
       );
       expect(
-        (await n.flow.collect(.associate.by((v) => v))).map,
+        (await n.flow.pour(.associate.by((v) => v))).map,
         equals(n.seq.collect(.associate.by((v) => v)).map),
       );
       expect(
-        (await n.flow.collect(.split((v) => v.isOdd))).$1.collect(.list()),
+        (await n.flow.pour(.split((v) => v.isOdd))).$1.collect(.list()),
         equals(n.seq.collect(.split((v) => v.isOdd)).$1.collect(.list())),
       );
+      // `sort` is a transformer on a sequence and a pour on a flow, which is
+      // the whole of what separating the vocabularies decided.
       expect(
-        (await n.flow.collect(.sort())).collect(.list()),
-        equals(n.seq.collect(.sort()).collect(.list())),
+        (await n.flow.pour(.sort())).collect(.list()),
+        equals(n.seq.transform(.sort()).collect(.list())),
       );
     });
 
-    test('a named pipeline runs on a sequence, a flow, or neither', () async {
+    test('a named pipeline crosses with Pipe.of, and only that way', () async {
       final cleanup = Transformer.where<Row>(
         (r) => r.cost > 1,
       ).then(Transformer.unique.by((r) => r.host));
 
       expect(rows.transform(cleanup).collect(.count()), equals(2));
-      expect(await rows.flow.transform(cleanup).collect(.count()), equals(2));
       expect(cleanup.run(rows.collect(.list())).length, equals(2));
+
+      // A transformer is a sequence-side value now, so a flow takes it only
+      // through the adapter — which says out loud that it buffers.
+      expect(await rows.flow.pipe(Pipe.of(cleanup)).pour(.count()), equals(2));
       expect(
-        await cleanup.pour(Stream.fromIterable(rows.collect(.list()))).length,
+        await Pipe.of(
+          cleanup,
+        ).run(Stream.fromIterable(rows.collect(.list()))).length,
         equals(2),
       );
     });
 
-    test('into composes both halves, ending in a collector', () async {
+    test('into composes both halves, ending in a terminal', () async {
       final top = Transformer.where<Row>(
         (r) => r.cost > 1,
-      ).into(Collector.sort.by((r) => r.cost));
+      ).then(Transformer.sort.by((r) => r.cost)).into(Collector.seq());
 
       expect(rows.collect(top).collect(.first())?.host, equals('a.com'));
+
+      final overtime = Pipe.where<Row>(
+        (r) => r.cost > 1,
+      ).into(Pour.sort.by((r) => r.cost));
+
       expect(
-        (await rows.flow.collect(top)).collect(.first())?.host,
+        (await rows.flow.pour(overtime)).collect(.first())?.host,
         equals('a.com'),
       );
     });
 
-    test('then on a collector composes both halves too', () async {
+    test('then on a terminal composes both halves too', () async {
       final summary = Collector.count<int>().then((n) => '$n rows');
+      final overtime = Pour.count<int>().then((n) => '$n rows');
 
       expect([1, 2].seq.collect(summary), equals('2 rows'));
-      expect(await [1, 2].flow.collect(summary), equals('2 rows'));
+      expect(await [1, 2].flow.pour(overtime), equals('2 rows'));
     });
 
     test('chunk is the bulk shape, a batch at a time', () async {
-      final batches = await [
-        1,
-        2,
-        3,
-        4,
-        5,
-      ].flow.transform(.chunk(2)).collect(.list());
+      final batches = await [1, 2, 3, 4, 5].flow.pipe(.chunk(2)).pour(.list());
 
       expect(batches.length, equals(3));
       expect(batches.first.collect(.list()), equals([1, 2]));
@@ -714,10 +781,22 @@ void main() {
     });
 
     test('toString does not consume', () {
-      final flow = [1, 2].flow;
+      final flow = Flow<int>(Stream<int>.fromIterable(const [1, 2]));
       expect(flow.toString(), equals('Flow<int>'));
       flow.stream;
       expect(flow.toString(), contains('consumed'));
+    });
+
+    test('a flow over something re-walkable can be consumed twice', () async {
+      // `.flow` on a sequence or an iterable is a `Flow.of`: the source can
+      // honestly be read again, so a second terminal reads it again rather
+      // than throwing. The `io.async` listings are the same, which is what
+      // makes the mirror with `io` a real one.
+      final flow = [1, 2, 3].flow;
+      expect(flow.toString(), contains('rebuildable'));
+      expect(await flow.pour(.count()), equals(3));
+      expect(await flow.pour(.list()), equals([1, 2, 3]));
+      expect(await flow.pipe(.map((n) => n * 2)).pour(.list()), [2, 4, 6]);
     });
   });
 

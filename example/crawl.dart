@@ -54,7 +54,7 @@ void main() async {
       .done(
         (s) => log.ok('${s.completed} pages in ${s.elapsed.inMilliseconds}ms'),
       )
-      .collect();
+      .items();
 
   // `collect` returns a List<Track>. `stream` yields them as they arrive and
   // `save(path)` writes each to disk, so a long crawl never holds its results

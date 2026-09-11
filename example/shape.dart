@@ -58,8 +58,8 @@ void main() async {
   // `sort` and `flip` are collectors: neither can name a first element before
   // the source has ended, which is the line between the two types.
   final top = sales
-      .collect(.sort.by((s) => s.amount))
-      .collect(.flip())
+      .transform(.sort.by((s) => s.amount))
+      .transform(.flip())
       .transform(.take.first(3));
   log.info('top three: ${top.collect(.join(', ', of: (s) => s.product))}');
 
@@ -90,7 +90,7 @@ void main() async {
                   ),
                 ),
               )
-              .collect(.sort.by((e) => e.region))
+              .transform(.sort.by((e) => e.region))
               .collect(.list()))
         [row.region, row.orders, row.revenue.toStringAsFixed(2), row.best],
     ]),
@@ -119,14 +119,14 @@ void main() async {
   // twice. This is the thing a method chain cannot offer at any price.
   final cleanup = Transformer.where<Sale>((s) => s.amount > 0)
       .then(Transformer.unique.by((s) => s.product))
-      .into(Collector.sort.by((s) => s.product));
+      .then(Transformer.sort.by((s) => s.product));
 
   log.info(
-    'cleaned:    ${sales.collect(cleanup).collect(.count())} of '
+    'cleaned:    ${sales.transform(cleanup).collect(.count())} of '
     '${sales.collect(.count())}',
   );
   log.info(
-    'top two:    ${sales.collect(cleanup).transform(.take.first(2)).collect(.join(', ', of: (s) => s.product))}',
+    'top two:    ${sales.transform(cleanup).transform(.take.first(2)).collect(.join(', ', of: (s) => s.product))}',
   );
 
   // `.list` is the one word at the boundary to anything outside this library —
@@ -151,7 +151,7 @@ void main() async {
       'regions': sales
           .transform(.map((s) => s.region))
           .transform(.unique())
-          .collect(.sort())
+          .transform(.sort())
           .collect(.list()),
       'limits': {'rows': sales.collect(.count()), 'currency': 'USD'},
     }),

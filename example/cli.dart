@@ -92,7 +92,7 @@ Future<int> _build(Cli cli) async {
 }
 
 Future<int> _clean(Cli cli) async {
-  if (io.dir.find(dest()).collect(.empty())) {
+  if (io.dir.walk(dest(), only: .file).collect(.empty())) {
     log.info('Nothing to clean.');
     return 0;
   }
@@ -104,6 +104,6 @@ Future<int> _clean(Cli cli) async {
       return 0;
     }
   }
-  log.ok('Removed ${await io.async.dir.sweep(dest(), recursive: true)} files.');
+  log.ok('Removed ${await io.async.dir.sweep(dest())} files.');
   return 0;
 }
