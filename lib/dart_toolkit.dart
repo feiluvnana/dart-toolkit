@@ -50,7 +50,7 @@
 /// void main(List<String> args) async {
 ///   cli.parse(args);
 ///   final titles = await (net
-///           .crawl([Fetch('https://news.ycombinator.com'.url)])
+///           .crawl([Fetch('https://news.ycombinator.com'.url)].seq)
 ///         ..concurrent(system.os.cpus))
 ///       .flow
 ///       .transform(.flat.map((res) =>

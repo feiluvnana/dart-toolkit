@@ -376,7 +376,7 @@ class Collector<A, R> {
   /// ```dart
   /// // setup: Future<void> save(Row r) async {}
   /// await rows.flow.collect(.foreach(save));
-  /// await concurrent.run(rows.collect(.list()), save, size: 4);
+  /// await concurrent.run(rows, save, size: 4);
   /// ```
   static Collector<A, void> foreach<A>(void Function(A item) each) =>
       Collector((items) {

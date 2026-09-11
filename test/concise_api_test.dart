@@ -433,7 +433,7 @@ void main() {
       pool.on.progress(progressed.add);
       pool.on.done(() => completed = true);
 
-      final results = await pool.run([1, 2, 3, 4], (item) async {
+      final results = await pool.run([1, 2, 3, 4].seq, (item) async {
         await Future<void>.delayed(const Duration(milliseconds: 10));
         return item * 10;
       });
@@ -446,7 +446,7 @@ void main() {
 
     test('concurrent.run helper executes tasks', () async {
       final results = await concurrent.run(
-        ['a', 'b', 'c'],
+        ['a', 'b', 'c'].seq,
         (s) async => s.toUpperCase(),
         size: 3,
       );
@@ -457,7 +457,7 @@ void main() {
       'a failing worker propagates its own error, not a null cast',
       () async {
         await expectLater(
-          concurrent.run([1, 2, 3], (int i) async {
+          concurrent.run([1, 2, 3].seq, (int i) async {
             if (i == 2) throw StateError('boom');
             return i * 10;
           }),
@@ -476,7 +476,7 @@ void main() {
         pool.on.error((error, stack, item) => seen.add(item));
 
         await expectLater(
-          pool.run([1, 2, 3, 4], (i) async {
+          pool.run([1, 2, 3, 4].seq, (i) async {
             if (i.isEven) throw StateError('even $i');
             return i;
           }),
@@ -568,7 +568,7 @@ void main() {
     test(
       'a flow that nobody collects fetches nothing, and stats is a record',
       () async {
-        final crawl = net.crawl([Fetch('https://example.com/'.url)])
+        final crawl = net.crawl([Fetch('https://example.com/'.url)].seq)
           ..using((fetch) async => Reply.text('ok', fetch: fetch));
 
         // Built and thrown away: the workers start in the flow's `onListen`.
@@ -609,7 +609,7 @@ void main() {
 
   group('Crawl entry points', () {
     test('net.crawl configures without running', () {
-      final crawl = net.crawl([Fetch('https://example.com'.url)])
+      final crawl = net.crawl([Fetch('https://example.com'.url)].seq)
         ..concurrent(3);
       expect(crawl, isA<Crawl>());
       expect(crawl.stats.fetched, isZero);

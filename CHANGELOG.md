@@ -2,6 +2,102 @@
 
 All notable changes to this project will be documented in this file.
 
+## 6.3.0
+
+**The seam.** `Sequence` is deliberately not an `Iterable` — that is what
+keeps one collection vocabulary in scope at a call site, and it has been the
+design since 5.0.0. What was never checked is the consequence: if the library
+*returns* a `Sequence` and *takes* an `Iterable`, the two halves do not meet.
+
+They did not. Eleven crossings in the library's own surface could not be
+written without `collect(.list())` — leaving the vocabulary in order to
+re-enter it one call later — and three of them were codecs that could not
+round-trip their own output:
+
+```dart
+format.csv.format(sheet.maps)               // Sequence in, Iterable wanted
+format.csv.cells(sheet.rows)                // and again
+format.sitemap.format(format.sitemap.parse(xml))
+concurrent.run(rows, work)                  // fed from any read in the library
+net.crawl(seeds)                            // seeded from what `next` returns
+table.add.all(sheet.rows)
+reader.pick('which', options: found)        // `picks` returned what it could not take
+```
+
+Every one of those is now a compile. **Rule 7** is the rule they were failing
+and NAMESPACE.md carries it: *a collection this library hands back fits every
+collection parameter it declares.* `Sequence` is the side that wins, because
+the bridge is asymmetric — a literal joins with `.seq`, four characters, where
+a `Sequence` leaves through `collect(.list())`, seventeen and a documented
+exit from the type system the library exists to provide.
+
+### What changed at a call site
+
+| Was | Is |
+| :--- | :--- |
+| `format.csv.format(rows.collect(.list()))` | `format.csv.format(rows)` |
+| `concurrent.run(items.collect(.list()), work)` | `concurrent.run(items, work)` |
+| `net.crawl([Fetch(seed)], next)` | `net.crawl([Fetch(seed)].seq, next)` |
+| `table..add.all([[1, 2]])` | `table..add.all([[1, 2]].seq)` |
+| `reader.pick('x', options: ['a', 'b'])` | `reader.pick('x', options: ['a', 'b'].seq)` |
+| `crawl.accept(const ['text/html'])` | `crawl.accept(const Sequence(['text/html']))` |
+
+Nothing was renamed and nothing was deleted. A list literal in a call that
+takes a collection adds `.seq`; everything the library reads now goes in
+untouched.
+
+### A row is a `List`, not a nested sequence
+
+`format.csv.parse(text).rows` was a `Sequence<Sequence<String>>` and is a
+`Sequence<List<String>>` — which is what `io.csv.rows` returned all along, so
+the two CSV doors now spell the same grid the same way. The cells of one
+record are a fixed tuple read by position, so the question asked of them is
+`row[2]`, and `row.collect(.at(2))` was that question wearing the
+vocabulary's clothes. This is Rule 7's first test: *is it a fixed record read
+by position?*
+
+```dart
+sheet.rows.collect(.at(0))!.collect(.at(1))    →    sheet.rows.collect(.at(0))![1]
+```
+
+### Two halves of a pair that only had one half
+
+- **`Transformer.tap`.** `Pipe.tap` has existed since flows split from
+  sequences in 5.5.0, filed under *what only makes sense over time*. Watching
+  an element go past is not particular to time; it was the half that got
+  written. A counter or a progress tick now sits mid-chain on a sequence,
+  lazily like every other step.
+- **`concurrent.settle`.** `concurrent.run` — the half that throws on the
+  first failure — was reachable without naming a type, and `settle` — the
+  half that hands back a sealed `Done`/`Broke` per item and never throws —
+  cost a `Pool`. The failure-tolerant form was the more expensive one to
+  write.
+
+### `util.size.format` takes a `num`
+
+`collect(.sum(...))` returns a `num`, so totalling the sizes in a directory
+and printing the total was `util.size.format(total.toInt())` — a cast written
+only to satisfy a signature. A fractional count floors to the byte it names.
+
+### The trap under a widened `Sequence` parameter
+
+Found while closing the seam, and older than it: a `Sequence<T>` parameter
+declared as a **supertype** compiled and then threw.
+
+```dart
+int howMany(Sequence<Object?> items) => items.collect(.count());
+howMany(['a', 'b'].seq);   // throws: Collector<Object?, int> is not Collector<String, int>
+```
+
+`collect` takes a `Collector<T, R>`, and Dart checks that argument against the
+receiver's *reified* `T`. The rule is therefore to name the element type
+exactly or be generic in it, and where the wider type is the right signature
+anyway — `format.csv.format` takes `Sequence<Map<String, Object?>>` so a
+parsed sheet and a literal both fit — to widen the receiver first with
+`transform(.cast<...>())`, the one step that survives the crossing because it
+is a `Transformer<Never, R>`. Every widening site in the library does this,
+and `Sequence`'s class doc and Rule 7 both say so.
+
 ## 6.2.0
 
 **The helper sweep.** Rule 5 has been run against members, against a

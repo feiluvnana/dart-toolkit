@@ -48,10 +48,12 @@ void main() {
               headers: ['Left', 'Right'],
               alignments: [ColumnAlign.left, ColumnAlign.right],
             )
-            ..add.all([
-              ['a', '1'],
-              ['bbb', '22'],
-            ]);
+            ..add.all(
+              [
+                ['a', '1'],
+                ['bbb', '22'],
+              ].seq,
+            );
       final lines = table.render().split('\n');
       // Every rendered row is the same visible width.
       final widths = lines
@@ -400,7 +402,7 @@ void main() async {
 
   group('concurrent Domain', () {
     test('concurrent.run executes tasks concurrently', () async {
-      final processed = await concurrent.run([1, 2, 3, 4, 5], (n) async {
+      final processed = await concurrent.run([1, 2, 3, 4, 5].seq, (n) async {
         await util.time.wait(10.ms);
         return n * 10;
       }, size: 2);
@@ -410,7 +412,7 @@ void main() async {
     test(
       'concurrent.run preserves input order despite varying durations',
       () async {
-        final results = await concurrent.run([30, 10, 20, 5], (n) async {
+        final results = await concurrent.run([30, 10, 20, 5].seq, (n) async {
           await util.time.wait(n.ms);
           return 'item-$n';
         }, size: 4);
@@ -423,7 +425,7 @@ void main() async {
 
     test('Pool.settle returns per-item results without throwing', () async {
       final pool = Pool<int>(size: 2);
-      final outcomes = await pool.settle([1, 2, 3], (n) async {
+      final outcomes = await pool.settle([1, 2, 3].seq, (n) async {
         if (n == 2) throw Exception('fail on 2');
         return n * 10;
       });
@@ -459,7 +461,7 @@ void main() async {
         pool.on.error((err, stack, item) {}); // enables collecting mode
 
         try {
-          await pool.run([1, 2, 3], (n) async {
+          await pool.run([1, 2, 3].seq, (n) async {
             if (n == 2) throw Exception('fail on 2');
             return n * 10;
           });
@@ -1132,19 +1134,15 @@ void main() async {
 
       expect(sheet.headers.collect(.list()), equals(['id', 'name', 'role']));
       expect(sheet.count, equals(2));
-      expect(
-        sheet.rows.collect(.at(0))!.collect(.at(1))!,
-        equals('Alice, Chief'),
-      );
-      expect(
-        sheet.rows.collect(.at(1))!.collect(.at(1))!,
-        equals('Bob "The Builder"'),
-      );
+      expect(sheet.rows.collect(.at(0))![1], equals('Alice, Chief'));
+      expect(sheet.rows.collect(.at(1))![1], equals('Bob "The Builder"'));
 
-      final formatted = format.csv.format([
-        {'id': 1, 'name': 'Alice'},
-        {'id': 2, 'name': 'Bob'},
-      ]);
+      final formatted = format.csv.format(
+        [
+          {'id': 1, 'name': 'Alice'},
+          {'id': 2, 'name': 'Bob'},
+        ].seq,
+      );
       expect(formatted, contains('id,name'));
       expect(formatted, contains('1,Alice'));
     });
@@ -1195,14 +1193,14 @@ void main() async {
             [
               [1, 'a'],
               [2, 'b'],
-            ],
+            ].seq,
             headers: ['n', 'letter'],
           ),
         );
         final sheet = await format.csv.read(path);
         expect(sheet.headers.collect(.list()), equals(['n', 'letter']));
         expect(
-          [for (final row in sheet.rows.collect(.list())) row.collect(.list())],
+          sheet.rows.collect(.list()),
           equals([
             ['1', 'a'],
             ['2', 'b'],
@@ -1534,7 +1532,7 @@ void main() async {
 
     test('net exposes http and crawl', () {
       expect(net.http, isA<Fetcher>());
-      expect(net.crawl(const []), isA<Crawl>());
+      expect(net.crawl(const Sequence<Fetch>([])), isA<Crawl>());
       // Selectors live on the top-level $, not on net. Like jQuery, find()
       // searches descendants, so a root-level match is read directly.
       expect(

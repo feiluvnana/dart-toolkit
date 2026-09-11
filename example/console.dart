@@ -60,11 +60,13 @@ void main() async {
             headers: ['Target', 'Size', 'Result'],
             alignments: [ColumnAlign.left, ColumnAlign.right, ColumnAlign.left],
           )
-          ..add.all([
-            ['app', util.size.format(1481012), 'ok'],
-            ['worker', util.size.format(233472), 'ok'],
-            ['cli', util.size.format(98304), 'failed'],
-          ]))
+          ..add.all(
+            [
+              ['app', util.size.format(1481012), 'ok'],
+              ['worker', util.size.format(233472), 'ok'],
+              ['cli', util.size.format(98304), 'failed'],
+            ].seq,
+          ))
         .render(),
   );
 

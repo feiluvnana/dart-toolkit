@@ -78,7 +78,7 @@ void main() async {
 
     // Many URLs at once, bounded, results in input order.
     final pages = await concurrent.run(
-      ['$origin/', '$origin/whoami'],
+      ['$origin/', '$origin/whoami'].seq,
       (url) => client.send(.get, url.url),
       size: 2,
     );

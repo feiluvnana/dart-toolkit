@@ -114,10 +114,12 @@ void main() {
 
   group('Crawl.position', () {
     test('holds the frontier, the visited set and the counters', () async {
-      final crawl = net.crawl([
-        Fetch(Uri.parse('https://example.com/a')),
-        Fetch(Uri.parse('https://example.com/b')),
-      ])..using(serve(const {}));
+      final crawl = net.crawl(
+        [
+          Fetch(Uri.parse('https://example.com/a')),
+          Fetch(Uri.parse('https://example.com/b')),
+        ].seq,
+      )..using(serve(const {}));
 
       await crawl.run();
       final position = crawl.position;
@@ -135,7 +137,7 @@ void main() {
       );
 
       late Crawl crawl;
-      crawl = net.crawl([Fetch('https://example.com/1'.url)], links)
+      crawl = net.crawl([Fetch('https://example.com/1'.url)].seq, links)
         ..concurrent(1)
         ..resume(path)
         ..using(
@@ -167,7 +169,7 @@ void main() {
 
     test('restore queues pending work past the visited set that saw it', () {
       const url = 'https://example.com/a';
-      final crawl = net.crawl(const [])
+      final crawl = net.crawl(const Sequence<Fetch>([]))
         ..restore({
           'version': Crawl.version,
           'pending': [
@@ -183,7 +185,7 @@ void main() {
     });
 
     test('restore brings the counters back', () {
-      final crawl = net.crawl(const [])
+      final crawl = net.crawl(const Sequence<Fetch>([]))
         ..restore({
           'stats': {'fetched': 40, 'scheduled': 40},
         });
@@ -192,13 +194,15 @@ void main() {
 
     test('a position from a newer version is refused', () {
       expect(
-        () => net.crawl(const []).restore({'version': Crawl.version + 1}),
+        () => net.crawl(const Sequence<Fetch>([])).restore({
+          'version': Crawl.version + 1,
+        }),
         throwsFormatException,
       );
     });
 
     test('a started crawl refuses to be restored', () async {
-      final crawl = net.crawl([Fetch('https://example.com/a'.url)])
+      final crawl = net.crawl([Fetch('https://example.com/a'.url)].seq)
         ..using(serve(const {'https://example.com/a': '<h1>a</h1>'}));
       await crawl.run();
       expect(() => crawl.restore(const {}), throwsStateError);
@@ -213,7 +217,7 @@ void main() {
       );
 
       late Crawl crawl;
-      crawl = net.crawl([Fetch('https://example.com/1'.url)], links)
+      crawl = net.crawl([Fetch('https://example.com/1'.url)].seq, links)
         ..concurrent(1)
         ..resume(path)
         ..using(
@@ -258,7 +262,7 @@ void main() {
       };
 
       late Crawl one;
-      one = net.crawl([Fetch('https://example.com/1'.url)], links)
+      one = net.crawl([Fetch('https://example.com/1'.url)].seq, links)
         ..concurrent(1)
         ..resume(path)
         ..using(halfway(pages, 1, () => one));
@@ -268,7 +272,7 @@ void main() {
           .collect(.list());
       expect(first, ['https://example.com/1']);
 
-      final two = net.crawl([Fetch('https://example.com/1'.url)], links)
+      final two = net.crawl([Fetch('https://example.com/1'.url)].seq, links)
         ..resume(path)
         ..using(serve(pages));
 
@@ -303,7 +307,7 @@ void main() {
       };
 
       late Crawl one;
-      one = net.crawl([Fetch('https://example.com/1'.url)], links)
+      one = net.crawl([Fetch('https://example.com/1'.url)].seq, links)
         ..concurrent(1)
         ..resume(path)
         ..limit(2)
@@ -311,7 +315,7 @@ void main() {
       final first = await one.run();
       expect(first.fetched, 1);
 
-      final two = net.crawl([Fetch('https://example.com/1'.url)], links)
+      final two = net.crawl([Fetch('https://example.com/1'.url)].seq, links)
         ..concurrent(1)
         ..resume(path)
         ..limit(2)
@@ -328,7 +332,7 @@ void main() {
       );
       File(path).writeAsStringSync('{not json');
 
-      final crawl = net.crawl([Fetch('https://example.com/1'.url)])
+      final crawl = net.crawl([Fetch('https://example.com/1'.url)].seq)
         ..resume(path)
         ..using(serve(const {}));
 
@@ -343,7 +347,7 @@ void main() {
           () => Directory(io.path.dirname(path)).deleteSync(recursive: true),
         );
 
-        await (net.crawl([Fetch('https://example.com/1'.url)])
+        await (net.crawl([Fetch('https://example.com/1'.url)].seq)
               ..resume(path)
               ..using(serve(const {'https://example.com/1': '<p>one</p>'})))
             .run();

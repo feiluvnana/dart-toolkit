@@ -53,7 +53,7 @@ void main() async {
   // and the compiler checks the switch is exhaustive.
   final greeting = await net
       .crawl(
-        [Fetch('https://shop.test/login'.url)],
+        [Fetch('https://shop.test/login'.url)].seq,
         (res) => switch (res.fetch.tag) {
           null => [
             res

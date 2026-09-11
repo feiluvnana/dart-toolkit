@@ -23,7 +23,7 @@ const album = Slot<String>('album');
 void main() async {
   final log = system.console.logger;
 
-  final crawl = net.crawl([Fetch('https://music.test/artists'.url)], _next)
+  final crawl = net.crawl([Fetch('https://music.test/artists'.url)].seq, _next)
     // A transport is a `Send` — `Future<Reply> Function(Fetch)`. A fixture is
     // a closure over a map; a headless browser is a closure over a page.
     ..using(_fixture)

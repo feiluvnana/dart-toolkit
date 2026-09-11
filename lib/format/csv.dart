@@ -20,7 +20,7 @@
 /// ```dart
 /// final parsed = format.csv.parse('a,b\n1,2\n');    // Csv
 /// final sheet = await format.csv.read('a.csv');    // free, from FileCodec
-/// io.write('out.csv', format.csv.format(sheet.maps.collect(.list())));
+/// io.write('out.csv', format.csv.format(sheet.maps));
 ///
 /// final fetched = res.parse(format.csv);          // and this now works
 /// ```
@@ -30,6 +30,7 @@
 /// same call as `res.parse(format.json)`.
 library;
 
+import '../collection/collection.dart';
 import '../src/csvtext.dart';
 import '../src/codec.dart';
 import '../src/csv.dart';
@@ -45,7 +46,7 @@ import 'format.dart';
 /// and writing one a row at a time is `io.async.csv.write`. Those are about
 /// files, and they stayed where files live.
 class CsvAccessor
-    with FileCodec<Csv, Iterable<Map<String, Object?>>>
+    with FileCodec<Csv, Sequence<Map<String, Object?>>>
     implements Codec<Csv> {
   /// Creates the accessor. Prefer the shared `format.csv` instance.
   const CsvAccessor();
@@ -76,20 +77,23 @@ class CsvAccessor
   /// format.csv.format([
   ///   {'name': 'Ada', 'born': 1815},
   ///   {'name': 'Alan', 'born': 1912},
-  /// ]);
+  /// ].seq);
   /// ```
+  ///
+  /// A [Sequence], so what [Csv.maps] and `io.csv.records` read comes
+  /// straight back here; `.seq` turns a literal into one.
   ///
   /// For rows that are already lists of cells, see [cells]. They are two
   /// methods and not one taking `Iterable<dynamic>`, because deciding which
   /// shape you were handed at runtime is how a typo becomes an empty file.
   @override
   String format(
-    Iterable<Map<String, Object?>> rows, {
+    Sequence<Map<String, Object?>> rows, {
     List<String>? headers,
     String delimiter = ',',
     String newline = '\n',
   }) => CsvText.records(
-    rows,
+    rows.transform(.cast<Map<String, Object?>>()).collect(.list()),
     headers: headers,
     delimiter: delimiter,
     newline: newline,
@@ -104,17 +108,17 @@ class CsvAccessor
   /// io.write('out.csv', format.csv.cells([
   ///   ['Ada', 1815],
   ///   ['Alan', 1912],
-  /// ], headers: ['name', 'born']));
+  /// ].seq, headers: ['name', 'born']));
   /// ```
   ///
   /// Writing it goes through `io.write` rather than a second name here.
   String cells(
-    Iterable<List<Object?>> rows, {
+    Sequence<List<Object?>> rows, {
     List<String>? headers,
     String delimiter = ',',
     String newline = '\n',
   }) => CsvText.cells(
-    rows,
+    rows.transform(.cast<List<Object?>>()).collect(.list()),
     headers: headers,
     delimiter: delimiter,
     newline: newline,

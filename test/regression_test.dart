@@ -334,7 +334,7 @@ void main() {
     test('a crawl that is asked for one item fetches one page', () async {
       var fetched = 0;
       final first =
-          await (net.crawl([Fetch('https://site.test/'.url)])
+          await (net.crawl([Fetch('https://site.test/'.url)].seq)
                 ..concurrent(1)
                 ..using(
                   _pages(const {
@@ -934,8 +934,9 @@ Disallow: /x
 
       final client = Fetcher(retries: 3, backoff: 1.ms);
       addTearDown(client.close);
-      final crawl = net.crawl([Fetch('http://127.0.0.1:${server.port}/'.url)])
-        ..using(client.call);
+      final crawl = net.crawl(
+        [Fetch('http://127.0.0.1:${server.port}/'.url)].seq,
+      )..using(client.call);
       final stats = await crawl.run();
 
       // Retrying happens inside the client, below any scheduler, so the
@@ -954,7 +955,7 @@ Disallow: /x
 
       await io.async.lines.write(
         dest,
-        (net.crawl([Fetch('https://site.test/'.url)])
+        (net.crawl([Fetch('https://site.test/'.url)].seq)
               ..using(_pages(const {'/': '<h1>hi</h1>'})))
             .flow
             .transform(.map((res) => 'one')),
@@ -973,7 +974,7 @@ Disallow: /x
 
       final run = io.async.lines.write(
         dest,
-        (net.crawl([Fetch('https://site.test/'.url)])
+        (net.crawl([Fetch('https://site.test/'.url)].seq)
               ..using(_slow(const Duration(milliseconds: 200))))
             .flow
             .transform(.map((res) => 'one')),
@@ -1000,7 +1001,7 @@ Disallow: /x
       await expectLater(
         io.async.lines.write(
           dest,
-          (net.crawl([Fetch('https://site.test/'.url)])
+          (net.crawl([Fetch('https://site.test/'.url)].seq)
                 ..resume(state)
                 ..using(_pages(const {'/': '<h1>hi</h1>'})))
               .flow
@@ -1022,7 +1023,7 @@ Disallow: /x
       final events = <String>[];
       final ended = Completer<void>();
 
-      (net.crawl([Fetch('https://site.test/'.url)])
+      (net.crawl([Fetch('https://site.test/'.url)].seq)
             ..resume(state)
             ..using(_pages(const {'/': '<h1>hi</h1>'})))
           .flow
@@ -1052,18 +1053,16 @@ Disallow: /x
     // The cursor keeps the header line out of `rows`; `Csv.raw` is the shape
     // the old `io.csv.parse` had, and the one these parser cases are about.
     List<List<String>> grid(String text, {String delimiter = ','}) => [
-      for (final row in Csv.raw(
-        text,
-        delimiter: delimiter,
-      ).rows.collect(.list()))
-        row.collect(.list()),
+      ...Csv.raw(text, delimiter: delimiter).rows.collect(.list()),
     ];
 
     test('format keeps columns only later rows carry', () {
-      final csv = format.csv.format([
-        {'a': 1},
-        {'a': 2, 'b': 3},
-      ]);
+      final csv = format.csv.format(
+        [
+          {'a': 1},
+          {'a': 2, 'b': 3},
+        ].seq,
+      );
 
       expect(csv.trim().split('\n').first, 'a,b');
       expect(csv, contains('2,3'));
@@ -2081,7 +2080,7 @@ Disallow: /x
   group('6.0.0 — the crawl terminals', () {
     test('a flow that nobody collects fetches nothing', () async {
       var fetched = 0;
-      (net.crawl([Fetch('https://site.test/'.url)])..using(
+      (net.crawl([Fetch('https://site.test/'.url)].seq)..using(
             _pages(const {
               'https://site.test/': '<h1>x</h1>',
             }, tick: () => fetched++),
@@ -2098,7 +2097,7 @@ Disallow: /x
     test('collecting the flow is what starts the crawl', () async {
       var fetched = 0;
       final out =
-          await (net.crawl([Fetch('https://site.test/'.url)])..using(
+          await (net.crawl([Fetch('https://site.test/'.url)].seq)..using(
                 _pages(const {
                   'https://site.test/': '<h1>x</h1>',
                 }, tick: () => fetched++),
@@ -2114,7 +2113,7 @@ Disallow: /x
     test(
       'the flow is the vocabulary, so items and gather are steps on it',
       () async {
-        final crawl = net.crawl([Fetch('https://site.test/'.url)])
+        final crawl = net.crawl([Fetch('https://site.test/'.url)].seq)
           ..using(_pages(const {'/': '<h1>One</h1><h1>Two</h1>'}));
 
         // `items()` was `.collect(.list())`; `gather(map)` was
@@ -2379,10 +2378,12 @@ Disallow: /x
     test('add is one row or many, and neither has a capital in it', () {
       final table = Table(headers: ['a', 'b'])
         ..add(['1', '2'])
-        ..add.all([
-          ['3', '4'],
-          ['5', '6'],
-        ]);
+        ..add.all(
+          [
+            ['3', '4'],
+            ['5', '6'],
+          ].seq,
+        );
       final drawn = table.render();
       for (final cell in ['1', '3', '5']) {
         expect(drawn, contains(cell));
@@ -2519,7 +2520,126 @@ Disallow: /x
       expect(offenders, isEmpty);
     });
   });
+
+  group('6.3.0 — the seam', () {
+    // Every read in this library hands back a `Sequence`, and through 6.2.0
+    // every writer took an `Iterable` or a `List`. Since `Sequence` is
+    // deliberately not an `Iterable`, nothing the library read could be
+    // handed to anything the library wrote without leaving the vocabulary
+    // through `collect(.list())` — including a codec's own round trip.
+
+    test('format.csv round-trips its own cursor', () {
+      final sheet = format.csv.parse('a,b\n1,2\n3,4\n');
+      expect(format.csv.format(sheet.maps), 'a,b\n1,2\n3,4\n');
+      expect(format.csv.cells(sheet.rows), '1,2\n3,4\n');
+    });
+
+    test('format.sitemap round-trips its own parse', () {
+      final urls = format.sitemap.parse(
+        '<urlset><url><loc>https://a.test/</loc></url></urlset>',
+      );
+      expect(format.sitemap.format(urls), contains('https://a.test/'));
+      expect(
+        format.sitemap.parse(format.sitemap.format(urls)).collect(.list()),
+        urls.collect(.list()),
+      );
+    });
+
+    test('Csv.rows spells a row the way io.csv.rows always did', () {
+      final sheet = format.csv.parse('a,b\n1,2\n');
+      final row = sheet.rows.collect(.first())!;
+      // A List, so a cell is read by position rather than collected out.
+      expect(row[1], '2');
+      expect(sheet.rows.collect(.list()), [
+        ['1', '2'],
+      ]);
+    });
+
+    test(
+      'a pool takes what a read hands back, and settles without a Pool',
+      () async {
+        final sheet = format.csv.parse('a,b\n1,2\n');
+        expect(
+          (await concurrent.run(
+            sheet.headers,
+            (h) async => h.toUpperCase(),
+          )).collect(.list()),
+          ['A', 'B'],
+        );
+        final settled = await concurrent.settle(
+          sheet.headers,
+          (h) async => h == 'a' ? throw StateError('no') : h,
+        );
+        expect(settled.collect(.count()), 2);
+        expect(settled.collect(.first()), isA<Broke<String>>());
+        expect(settled.collect(.last()), isA<Done<String>>());
+      },
+    );
+
+    test('a crawl is seeded by what a crawl produces', () async {
+      final seeds = [
+        'https://a.test/',
+        'https://b.test/',
+      ].seq.transform(.map((u) => Fetch(u.url)));
+      final crawl = net.crawl(seeds, _noNext)
+        ..using(_pages({'https://a.test/': 'A', 'https://b.test/': 'B'}));
+      expect((await crawl.flow.collect(.count())), 2);
+      // `accept` takes the same shape, so a parsed column of types fits.
+      expect(
+        net.crawl(seeds, _noNext).accept(const Sequence(['text/html'])),
+        isA<Crawl>(),
+      );
+    });
+
+    test('a table is built from a parsed grid', () {
+      final sheet = format.csv.parse('a,b\n1,2\n');
+      final table = Table(headers: sheet.headers.collect(.list()))
+        ..add.all(sheet.rows);
+      expect(table.render(), contains('1'));
+    });
+
+    test('util.size.format takes the num that collect(.sum) returns', () {
+      final sizes = [1024, 1024].seq;
+      expect(util.size.format(sizes.collect(.sum((n) => n))), '2.0 KiB');
+      expect(util.size.format(1536.9), '1.5 KiB');
+      expect(util.size.format(0.4), '0 B');
+    });
+
+    test('tap watches a sequence go past, as it always did a flow', () {
+      final seen = <int>[];
+      final kept = [1, 2, 3].seq
+          .transform(.tap(seen.add))
+          .transform(.where((n) => n.isOdd))
+          .collect(.list());
+      expect(kept, [1, 3]);
+      expect(seen, [1, 2, 3]);
+      // Lazy, like every other step: nothing ran before the terminal did.
+      final untouched = <int>[];
+      [1, 2].seq.transform(.tap(untouched.add));
+      expect(untouched, isEmpty);
+    });
+
+    test('a Sequence parameter typed as a supertype still works', () {
+      // `collect` takes a `Collector<T, R>`, and Dart checks that parameter
+      // against the *reified* T — so a `Sequence<String>` reaching a
+      // `Sequence<Object?>` parameter threw at runtime from code that
+      // compiled. Every widening site in the library goes through
+      // `.cast()` first, which is a `Transformer<Never, R>` and passes.
+      expect(_howMany(['a', 'b'].seq), 2);
+      expect(
+        format.csv.cells(
+          [
+            ['x'],
+          ].seq,
+        ),
+        'x\n',
+      );
+    });
+  });
 }
+
+int _howMany(Sequence<Object?> items) =>
+    items.transform(.cast<Object?>()).collect(.count());
 
 /// A crawl that follows nothing, for the pin that `Handler` is gone.
 Sequence<Fetch> _noNext(Reply res) => const Sequence<Fetch>([]);

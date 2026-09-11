@@ -69,7 +69,7 @@ extension FlowDumpable<T> on Flow<T> {
   /// without ever being a `List`:
   ///
   /// ```dart
-  /// await net.crawl([Fetch(seed)]).flow.dump('out/rows.json');
+  /// await net.crawl([Fetch(seed)].seq).flow.dump('out/rows.json');
   /// ```
   ///
   /// Every element has to survive `jsonEncode`, which for a type of your own

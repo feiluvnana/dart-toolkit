@@ -38,7 +38,7 @@ void main() {
       'a crawl follows links and dedupes what it has already seen',
       () async {
         final sent = <Fetch>[];
-        final crawl = net.crawl([Fetch('https://a.test/'.url)], links)
+        final crawl = net.crawl([Fetch('https://a.test/'.url)].seq, links)
           ..using(
             fixture({
               'https://a.test/': '<a href="/b">b</a><a href="/c">c</a>',
@@ -66,13 +66,15 @@ void main() {
       'dedupe normalises fragment, trailing slash, host case and query order',
       () async {
         final sent = <Fetch>[];
-        final crawl = net.crawl([
-          Fetch('https://EXAMPLE.com/page?b=2&a=1'.url),
-          Fetch('https://example.com/page?a=1&b=2'.url),
-          Fetch('https://example.com/other'.url),
-          Fetch('https://example.com/other#section'.url),
-          Fetch('https://example.com/other/'.url),
-        ])..using(fixture(const {}, sent: sent));
+        final crawl = net.crawl(
+          [
+            Fetch('https://EXAMPLE.com/page?b=2&a=1'.url),
+            Fetch('https://example.com/page?a=1&b=2'.url),
+            Fetch('https://example.com/other'.url),
+            Fetch('https://example.com/other#section'.url),
+            Fetch('https://example.com/other/'.url),
+          ].seq,
+        )..using(fixture(const {}, sent: sent));
 
         await crawl.run();
         expect(sent.length, equals(2));
@@ -82,35 +84,41 @@ void main() {
     test('method, tag and body are part of the key', () async {
       final sent = <Fetch>[];
       final url = 'https://example.com/api'.url;
-      await (net.crawl([
-        Fetch(url),
-        Fetch(url, tag: 'list'),
-        Fetch(url, tag: 'detail'),
-        Fetch(url, method: HttpMethod.post, body: const Body.text('one')),
-        Fetch(url, method: HttpMethod.post, body: const Body.text('two')),
-      ])..using(fixture(const {}, sent: sent))).run();
+      await (net.crawl(
+        [
+          Fetch(url),
+          Fetch(url, tag: 'list'),
+          Fetch(url, tag: 'detail'),
+          Fetch(url, method: HttpMethod.post, body: const Body.text('one')),
+          Fetch(url, method: HttpMethod.post, body: const Body.text('two')),
+        ].seq,
+      )..using(fixture(const {}, sent: sent))).run();
 
       expect(sent.length, equals(5));
     });
 
     test('dedupe: false is the escape hatch, per request', () async {
       final sent = <Fetch>[];
-      await (net.crawl([
-        Fetch('https://example.com/fresh'.url, dedupe: false),
-        Fetch('https://example.com/fresh'.url, dedupe: false),
-      ])..using(fixture(const {}, sent: sent))).run();
+      await (net.crawl(
+        [
+          Fetch('https://example.com/fresh'.url, dedupe: false),
+          Fetch('https://example.com/fresh'.url, dedupe: false),
+        ].seq,
+      )..using(fixture(const {}, sent: sent))).run();
 
       expect(sent.length, equals(2));
     });
 
     test('higher priority is served first, ties stay FIFO', () async {
       final sent = <Fetch>[];
-      await (net.crawl([
-              Fetch('https://example.com/low'.url),
-              Fetch('https://example.com/high'.url, priority: 100),
-              Fetch('https://example.com/mid'.url, priority: 50),
-              Fetch('https://example.com/high2'.url, priority: 100),
-            ])
+      await (net.crawl(
+              [
+                Fetch('https://example.com/low'.url),
+                Fetch('https://example.com/high'.url, priority: 100),
+                Fetch('https://example.com/mid'.url, priority: 50),
+                Fetch('https://example.com/high2'.url, priority: 100),
+              ].seq,
+            )
             ..concurrent(1)
             ..using(fixture(const {}, sent: sent)))
           .run();
@@ -124,7 +132,7 @@ void main() {
     test('concurrent workers terminate once the frontier drains', () async {
       // Guards the worker wake-up path: an idle worker must notice the run is
       // over instead of parking on a completer nobody completes.
-      final crawl = net.crawl([Fetch('https://site.test/1'.url)])
+      final crawl = net.crawl([Fetch('https://site.test/1'.url)].seq)
         ..concurrent(8)
         ..using(fixture(const {'https://site.test/1': '<p>only page</p>'}));
 
@@ -151,7 +159,7 @@ void main() {
         };
 
         final crawl = net.crawl(
-          [Fetch('https://music.test/album'.url)],
+          [Fetch('https://music.test/album'.url)].seq,
           (res) => switch (res.fetch.tag) {
             null =>
               res
@@ -210,14 +218,17 @@ void main() {
     test(
       'follow takes a plain string and resolves it against the reply',
       () async {
-        final crawl = net.crawl([Fetch('https://example.com/step1'.url)], links)
-          ..using(
-            fixture(const {
-              'https://example.com/step1':
-                  '<p>Step 1</p><a href="https://example.com/step2">Next</a>',
-              'https://example.com/step2': '<p>Step 2 Finished</p>',
-            }),
-          );
+        final crawl =
+            net.crawl(
+              [Fetch('https://example.com/step1'.url)].seq,
+              links,
+            )..using(
+              fixture(const {
+                'https://example.com/step1':
+                    '<p>Step 1</p><a href="https://example.com/step2">Next</a>',
+                'https://example.com/step2': '<p>Step 2 Finished</p>',
+              }),
+            );
 
         final texts = await crawl.flow
             .transform(.map((res) => res.parse(format.html).$('p').text))
@@ -231,7 +242,7 @@ void main() {
   group('the terminals', () {
     test('nothing is fetched until something collects', () async {
       final sent = <Fetch>[];
-      net.crawl([Fetch('https://a.test/'.url)])
+      net.crawl([Fetch('https://a.test/'.url)].seq)
         ..using(fixture(const {'https://a.test/': 'x'}, sent: sent))
         ..flow;
 
@@ -241,7 +252,7 @@ void main() {
 
     test('a terminal that stops early stops the crawl', () async {
       final sent = <Fetch>[];
-      final crawl = net.crawl([Fetch('https://a.test/'.url)], links)
+      final crawl = net.crawl([Fetch('https://a.test/'.url)].seq, links)
         ..using(
           fixture(const {
             'https://a.test/': '<a href="/b">b</a><a href="/c">c</a>',
@@ -259,11 +270,13 @@ void main() {
 
     test('take.when is what res.stop was', () async {
       final crawl =
-          net.crawl([
-              Fetch('https://example.com/item/1'.url),
-              Fetch('https://example.com/item/2'.url),
-              Fetch('https://example.com/item/3'.url),
-            ])
+          net.crawl(
+              [
+                Fetch('https://example.com/item/1'.url),
+                Fetch('https://example.com/item/2'.url),
+                Fetch('https://example.com/item/3'.url),
+              ].seq,
+            )
             ..concurrent(1)
             ..using(
               fixture(const {
@@ -293,10 +306,12 @@ void main() {
       }
 
       final outcomes =
-          await (net.crawl([
-                  Fetch('https://a.test/good'.url),
-                  Fetch('https://a.test/bad'.url),
-                ])
+          await (net.crawl(
+                  [
+                    Fetch('https://a.test/good'.url),
+                    Fetch('https://a.test/bad'.url),
+                  ].seq,
+                )
                 ..concurrent(1)
                 ..using(flaky))
               .settle
@@ -312,10 +327,12 @@ void main() {
       );
 
       final crawl =
-          net.crawl([
-              Fetch('https://a.test/good'.url),
-              Fetch('https://a.test/bad'.url),
-            ])
+          net.crawl(
+              [
+                Fetch('https://a.test/good'.url),
+                Fetch('https://a.test/bad'.url),
+              ].seq,
+            )
             ..concurrent(1)
             ..using(flaky);
       final replies = await crawl.flow.collect(.list());
@@ -324,7 +341,7 @@ void main() {
     });
 
     test('run drains and reports; stats is a record', () async {
-      final crawl = net.crawl([Fetch('https://a.test/'.url)], links)
+      final crawl = net.crawl([Fetch('https://a.test/'.url)].seq, links)
         ..using(
           fixture(const {
             'https://a.test/': '<a href="/b">b</a>',
@@ -341,7 +358,7 @@ void main() {
     });
 
     test('gather is flat.map on the flow', () async {
-      final crawl = net.crawl([Fetch('https://news.test/'.url)])
+      final crawl = net.crawl([Fetch('https://news.test/'.url)].seq)
         ..using(
           fixture(const {
             'https://news.test/': '''
@@ -367,7 +384,7 @@ void main() {
 
   group('scope', () {
     test('depth and samehost bound the walk', () async {
-      final crawl = net.crawl([Fetch('https://example.com/root'.url)], links)
+      final crawl = net.crawl([Fetch('https://example.com/root'.url)].seq, links)
         ..using(
           fixture(const {
             'https://example.com/root':
@@ -388,7 +405,7 @@ void main() {
     });
 
     test('allow and deny filter by pattern', () async {
-      final crawl = net.crawl([Fetch('https://example.com/a'.url)], links)
+      final crawl = net.crawl([Fetch('https://example.com/a'.url)].seq, links)
         ..using(
           fixture(const {
             'https://example.com/a':
@@ -406,7 +423,7 @@ void main() {
     });
 
     test('limit stops the crawl at the maximum', () async {
-      final crawl = net.crawl([Fetch('https://example.com/1'.url)], links)
+      final crawl = net.crawl([Fetch('https://example.com/1'.url)].seq, links)
         ..using(
           fixture(const {
             'https://example.com/1': '<a href="/2">2</a>',
@@ -427,10 +444,12 @@ void main() {
       () async {
         final sent = <Fetch>[];
         final crawl =
-            net.crawl([
-                Fetch('https://example.com/page'.url),
-                Fetch('https://example.com/doc.pdf'.url),
-              ])
+            net.crawl(
+                [
+                  Fetch('https://example.com/page'.url),
+                  Fetch('https://example.com/doc.pdf'.url),
+                ].seq,
+              )
               ..using((fetch) async {
                 sent.add(fetch);
                 return Reply.text(
@@ -441,7 +460,7 @@ void main() {
                       : const {'content-type': 'text/html; charset=utf-8'},
                 );
               })
-              ..accept(const ['text/html']);
+              ..accept(const ['text/html'].seq);
 
         final urls = await crawl.flow
             .transform(.map((res) => res.url.path))
@@ -457,7 +476,7 @@ void main() {
       final order = <String>[];
       final crawl =
           net.crawl(
-              [Fetch('https://host-a.test/1'.url)],
+              [Fetch('https://host-a.test/1'.url)].seq,
               (res) => res.url.path == '/1'
                   ? [
                       res.follow('https://host-b.test/1'),
@@ -494,7 +513,7 @@ void main() {
             [
               'https://site.test/a'.url,
               'https://site.test/b'.url,
-            ].map(Fetch.new),
+            ].map(Fetch.new).seq,
           )..using(
             fixture(const {
               'https://site.test/a': '<p>A</p>',
@@ -507,10 +526,12 @@ void main() {
 
     test('fully-formed fetches carry their tags', () async {
       final crawl =
-          net.crawl([
-              Fetch('https://site.test/a'.url, tag: 'first'),
-              Fetch('https://site.test/b'.url, tag: 'second'),
-            ])
+          net.crawl(
+              [
+                Fetch('https://site.test/a'.url, tag: 'first'),
+                Fetch('https://site.test/b'.url, tag: 'second'),
+              ].seq,
+            )
             ..concurrent(1)
             ..using(
               fixture(const {
@@ -527,7 +548,7 @@ void main() {
 
     test('raw markup, through coerce and the default transport', () async {
       const markup = '<article><h2>Explicit HTML</h2></article>';
-      final crawl = net.crawl([Fetch(coerce(markup))]);
+      final crawl = net.crawl([Fetch(coerce(markup))].seq);
 
       final titles = await crawl.flow
           .transform(.map((res) => res.parse(format.html).$('h2').text))
@@ -539,7 +560,7 @@ void main() {
       final file = File('${Directory.systemTemp.path}/test_crawl_file.html');
       await file.writeAsString('<section><p>File Content</p></section>');
       try {
-        final crawl = net.crawl([Fetch(Uri.file(file.path))]);
+        final crawl = net.crawl([Fetch(Uri.file(file.path))].seq);
         final texts = await crawl.flow
             .transform(.map((res) => res.parse(format.html).$('p').text))
             .collect(.list());
@@ -551,7 +572,7 @@ void main() {
 
     test('an arbitrary string task', () async {
       final crawl = net.crawl(
-        [Fetch(coerce('task:seed-alpha'))],
+        [Fetch(coerce('task:seed-alpha'))].seq,
         (res) => res.body == 'task:seed-alpha'
             ? [res.follow('task:seed-beta')].seq
             : const Sequence<Fetch>([]),
@@ -573,9 +594,9 @@ void main() {
         return res;
       };
 
-      await (net.crawl([
-        Fetch('https://a.test/'.url),
-      ])..using(logged(fixture(const {'https://a.test/': 'ok'})))).run();
+      await (net.crawl(
+        [Fetch('https://a.test/'.url)].seq,
+      )..using(logged(fixture(const {'https://a.test/': 'ok'})))).run();
 
       expect(log, equals(['200 https://a.test/']));
     });
@@ -588,10 +609,12 @@ void main() {
     test('obey reads robots.txt through the crawl own transport', () async {
       final sent = <Fetch>[];
       final crawl =
-          net.crawl([
-              Fetch('https://a.test/admin/secret'.url),
-              Fetch('https://a.test/public'.url),
-            ])
+          net.crawl(
+              [
+                Fetch('https://a.test/admin/secret'.url),
+                Fetch('https://a.test/public'.url),
+              ].seq,
+            )
             ..concurrent(1)
             ..using(
               fixture(const {
@@ -712,7 +735,7 @@ https://example.com/item2
       () async {
         final crawl =
             net.crawl(
-                [Fetch('https://x.test/sitemap.xml'.url)],
+                [Fetch('https://x.test/sitemap.xml'.url)].seq,
                 (res) =>
                     res.parse(format.sitemap).transform(.map((u) => Fetch(u))),
               )

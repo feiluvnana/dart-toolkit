@@ -94,9 +94,9 @@ Disallow: /
   group('the transport seam', () {
     test('a crawl does not close the client it was handed', () async {
       final mine = Fetcher();
-      await (net.crawl([
-        Fetch('https://example.test/'.url),
-      ])..using(mine.call)).run();
+      await (net.crawl(
+        [Fetch('https://example.test/'.url)].seq,
+      )..using(mine.call)).run();
 
       // Reaching the socket layer proves the client was not closed. A `Send`
       // is a function and owns nothing, so there is nothing for the crawl to
@@ -121,7 +121,10 @@ Disallow: /
       // each, and `Crawl` has no member for any of them.
       final client = Fetcher(retries: 9);
       expect(client.retries, equals(9));
-      expect(net.crawl(const []).using(client.call), isA<Crawl>());
+      expect(
+        net.crawl(const Sequence<Fetch>([])).using(client.call),
+        isA<Crawl>(),
+      );
     });
   });
 
@@ -180,7 +183,7 @@ Disallow: /
       final pool = Pool<int>(size: 1);
       // `.stream` on purpose: cancelling a subscription is outside the
       // vocabulary, and the one word at the boundary says so.
-      final stream = pool.flow(List.generate(50, (int i) => i), (i) async {
+      final stream = pool.flow(List.generate(50, (int i) => i).seq, (i) async {
         started++;
         await Future<void>.delayed(const Duration(milliseconds: 1));
         return i;

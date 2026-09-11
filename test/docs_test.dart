@@ -113,7 +113,7 @@ ConsoleWriter get writer => system.console.writer;
 Fetcher get client => Fetcher();
 Fetcher get session => Fetcher(session: true);
 Dictionary<String, Object?> get db => io.dictionary('out/state.json');
-List<Uri> get urls => [seed];
+Sequence<Uri> get urls => [seed].seq;
 Sequence<Row> get rows => Sequence(const [Row('a.com', 1, 1)]);
 Sequence<String> get titles => Sequence(const ['One']);
 List<String> get paths => const ['a.txt'];
@@ -196,7 +196,7 @@ class Config {
 enum Mode { fast, slow, debug }
 
 Form get form => page.form('#login')!.at(seed);
-Crawl get crawl => net.crawl([Fetch(seed)])..using(mock);
+Crawl get crawl => net.crawl([Fetch(seed)].seq)..using(mock);
 Asked? get req => null;
 Process get process => throw UnimplementedError();
 

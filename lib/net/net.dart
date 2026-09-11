@@ -92,16 +92,16 @@ class NetAccessor {
   /// a [Fetch] and a [Fetch] takes any URL the library can answer:
   ///
   /// ```dart no-compile
-  /// net.crawl([Fetch(url)], next);                     // was crawl(uri)
+  /// net.crawl([Fetch(url)].seq, next);                     // was crawl(uri)
   /// net.crawl(urls.map(Fetch.new), next);              // was .all(uris)
-  /// net.crawl([Fetch(coerce(markup))], next);          // was .html(markup)
-  /// net.crawl([Fetch(Uri.file(path))], next);          // was .file(path)
+  /// net.crawl([Fetch(coerce(markup))].seq, next);          // was .html(markup)
+  /// net.crawl([Fetch(Uri.file(path))].seq, next);          // was .file(path)
   /// ```
   ///
   /// A sitemap is a crawl of its own, which is what deleted `Sitemap.load`
   /// and its hand-rolled depth limit — see the `format.sitemap` library doc.
   Crawl crawl(
-    Iterable<Fetch> seeds, [
+    Sequence<Fetch> seeds, [
     Sequence<Fetch> Function(Reply res)? next,
   ]) => Crawl(seeds, next);
 

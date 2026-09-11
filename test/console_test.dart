@@ -324,13 +324,17 @@ void main() {
       final rows = [
         {'a': '1', 'b': '2'},
       ];
-      expect(format.csv.format(rows), 'a,b\n1,2\n');
-      expect(format.csv.format(rows, newline: '\r\n'), 'a,b\r\n1,2\r\n');
+      expect(format.csv.format(rows.seq), 'a,b\n1,2\n');
+      expect(format.csv.format(rows.seq, newline: '\r\n'), 'a,b\r\n1,2\r\n');
     });
 
     test('a header-only render honours it too', () {
       expect(
-        format.csv.format(const [], headers: ['a', 'b'], newline: '\r\n'),
+        format.csv.format(
+          const Sequence<Map<String, Object?>>([]),
+          headers: ['a', 'b'],
+          newline: '\r\n',
+        ),
         'a,b\r\n',
       );
     });
@@ -373,9 +377,7 @@ void main() {
       // The cursor keeps the header out of the rows; the flow does not, so
       // it is the header line plus what the cursor calls a row.
       expect(sheet.headers.collect(.list()), rows.first);
-      expect([
-        for (final row in sheet.rows.collect(.list())) row.collect(.list()),
-      ], rows.skip(1).toList());
+      expect(sheet.rows.collect(.list()), rows.skip(1).toList());
     });
   });
 
@@ -588,7 +590,7 @@ void main() {
       final pool = Pool<int>(size: 1);
       // `.stream` on purpose: a test reaching for `listen` and `cancel` has
       // left the vocabulary, and the one word at the boundary says so.
-      final stream = pool.flow(List.generate(50, (int i) => i), (i) async {
+      final stream = pool.flow(List.generate(50, (int i) => i).seq, (i) async {
         started++;
         await Future<void>.delayed(const Duration(milliseconds: 1));
         return i;

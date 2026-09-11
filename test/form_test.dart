@@ -225,7 +225,7 @@ void main() {
 
     test('a crawl submits it by returning the request it describes', () async {
       final crawl = net.crawl(
-        [Fetch('$base/login'.url)],
+        [Fetch('$base/login'.url)].seq,
         (res) => switch (res.fetch.tag) {
           null => [
             res
@@ -250,7 +250,7 @@ void main() {
 
     test('two submissions of one form are two fetches, not one', () async {
       final crawl = net.crawl(
-        [Fetch('$base/login'.url)],
+        [Fetch('$base/login'.url)].seq,
         (res) => switch (res.fetch.tag) {
           null => [
             res

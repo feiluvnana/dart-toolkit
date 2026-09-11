@@ -669,7 +669,7 @@ sweep does not re-litigate them:
 one call from `net.http.send(.get, Uri)`, and it doubled as a raw-HTML seed depending
 on what the string looked like — the untyped overload this rule is for.
 `Served.redirect(location)` took one too. 6.0.0 went further and made a seed a
-`Fetch`, which carries a `Uri`: `net.crawl([Fetch(url)], next)` is the one
+`Fetch`, which carries a `Uri`: `net.crawl([Fetch(url)].seq, next)` is the one
 entry point where `crawl`, `all`, `seed`, `html`, `file` and `sitemap` were
 six. `coerce(markup)` and `Uri.file(path)` are how the two `String` seeds get
 in, spelled at the call site rather than as two more members.
@@ -758,6 +758,55 @@ every package in `pubspec.yaml`.
 
 ---
 
+## Rule 7 — What the library returns, the library takes
+
+**A collection this library hands back fits every collection parameter it
+declares.** A read composes with a write, a crawl seeds a crawl, a parse feeds
+its own `format`, with nothing spelled between them.
+
+The rule exists because `Sequence` is deliberately not an `Iterable`, which
+makes the two directions incompatible unless somebody chooses. Through 6.2.0
+nobody had: every reader returned a `Sequence` and every writer took an
+`Iterable`, so eleven crossings in the library's own surface could not be
+made without `collect(.list())` — including three codecs that could not
+round-trip their own output, and `concurrent.run`, which could not be fed from
+anything this library reads. `Sequence`'s class doc had claimed the opposite
+since 5.1.0.
+
+`Sequence` is the side that wins, because the bridge is asymmetric: a literal
+becomes one with `.seq`, four characters, while a `Sequence` leaves the
+vocabulary through `collect(.list())` — seventeen, and a documented exit from
+the type system the library exists to provide.
+
+### What stays a Dart type
+
+Not every parameter holding several things is a collection this rule covers.
+Take the first match:
+
+1. **Is it a fixed record read by position?** → `List`. The cells of one CSV
+   row (`Table.add`, `Csv.rows`' element), the bytes of a file — `row[2]` is
+   the question asked of them, and `collect(.at(2))` is that question in a
+   costume. 6.3.0 flattened `Csv.rows` from `Sequence<Sequence<String>>` to
+   `Sequence<List<String>>` on this test, which is what `io.csv.rows` had
+   always returned.
+2. **Is it argv?** → `List<String>`, from `main` through `cli.parse` to
+   `system.run`. Dart names that shape and the whole path agrees with it.
+3. **Otherwise** → `Sequence`.
+
+### Declaring one
+
+Name the element type exactly, or be generic in it. A `Sequence<T>` parameter
+typed as a *supertype* compiles and then throws: `Sequence.collect` takes a
+`Collector<T, R>`, and Dart checks that argument against the receiver's
+reified `T`, so `Collector<Object?, int>` arriving at a `Sequence<String>` is
+a runtime error from code the analyzer passed. Where the wider type is the
+right signature anyway — `format.csv.format` takes
+`Sequence<Map<String, Object?>>` so that both a parsed sheet and a literal
+fit — widen the receiver first with `transform(.cast<...>())`, the one step
+that survives the crossing because it is a `Transformer<Never, R>`.
+
+---
+
 ## Adding something new
 
 1. Apply Rule 1. Axis or subject — and then, which one?
@@ -767,7 +816,9 @@ every package in `pubspec.yaml`.
 5. Check Rule 5. Does this behaviour already exist somewhere?
 6. Check Rule 6. Are the parameters and the return real types — and does the
    type name survive being imported next to `dart:io`?
-7. Document it **in the `///` comment above it**, with a `dart` sample.
+7. Check Rule 7. If it takes a collection, does what this library returns fit
+   it — and is the element type named exactly?
+8. Document it **in the `///` comment above it**, with a `dart` sample.
    `test/docs_test.dart` compiles **every** `dart` block in every `///`
    comment under `lib/`, plus the ones in `README.md`, this file and
    `example/README.md`, against a set of shared fixtures — so a stale example
@@ -796,7 +847,7 @@ every package in `pubspec.yaml`.
    and that number is the debt: every one is a line somebody has to justify.
    A fragment that needs a name the fixtures do not carry declares it with a
    `// setup:` comment line.
-8. No deprecation shim. Rule 5 settles it: a migration is one edit, and two
+9. No deprecation shim. Rule 5 settles it: a migration is one edit, and two
    spellings is forever. When a name moves, the old one goes — which is why
    `io.json`, `tool.git`, `tool.gh` and `tool.docker` are gone rather than
    forwarding.

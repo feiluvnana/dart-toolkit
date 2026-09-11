@@ -372,8 +372,8 @@ void main() {
 
   group('net.crawl().accept', () {
     test('a response of the wrong type never reaches a handler', () async {
-      final crawl = net.crawl([Fetch('https://example.com/page'.url)])
-        ..accept(const ['text/html'])
+      final crawl = net.crawl([Fetch('https://example.com/page'.url)].seq)
+        ..accept(const ['text/html'].seq)
         ..using(
           (fetch) async => Reply.text(
             '%PDF-1.7',
@@ -392,8 +392,8 @@ void main() {
     });
 
     test('a subtype wildcard matches', () async {
-      final crawl = net.crawl([Fetch('https://example.com/page'.url)])
-        ..accept(const ['text/*'])
+      final crawl = net.crawl([Fetch('https://example.com/page'.url)].seq)
+        ..accept(const ['text/*'].seq)
         ..using((fetch) async => Reply.text('<h1>hi</h1>', fetch: fetch));
 
       final handled = await crawl.flow
@@ -407,8 +407,8 @@ void main() {
       // `accept` does two things on purpose — the header and the filter — and
       // they are two halves of one intent, so they are set in one place.
       final sent = <Fetch>[];
-      await (net.crawl([Fetch('https://example.com/'.url)])
-            ..accept(const ['text/html', 'application/xhtml+xml'])
+      await (net.crawl([Fetch('https://example.com/'.url)].seq)
+            ..accept(const ['text/html', 'application/xhtml+xml'].seq)
             ..using((fetch) async {
               sent.add(fetch);
               return Reply.text('<h1>hi</h1>', fetch: fetch);
@@ -464,7 +464,7 @@ void main() {
       }
 
       final crawl = net.crawl(
-        [Fetch('https://example.com/login'.url)],
+        [Fetch('https://example.com/login'.url)].seq,
         (res) => switch (res.fetch.tag) {
           null => [
             res.follow(
@@ -496,7 +496,7 @@ void main() {
       () async {
         final sent = <Fetch>[];
         await (net.crawl(
-              [Fetch('https://example.com/search'.url)],
+              [Fetch('https://example.com/search'.url)].seq,
               (res) => res.fetch.depth > 0
                   ? const Sequence<Fetch>([])
                   : ['1', '2', '2']
@@ -524,7 +524,7 @@ void main() {
       () async {
         final sent = <Fetch>[];
         await (net.crawl(
-              [Fetch('https://example.com/a'.url)],
+              [Fetch('https://example.com/a'.url)].seq,
               (res) => res.fetch.depth > 0
                   ? const Sequence<Fetch>([])
                   : [
@@ -549,7 +549,8 @@ void main() {
       });
       addTearDown(origin.stop);
 
-      final crawl = net.crawl([Fetch('${origin.root}/anything'.url)])..obey();
+      final crawl = net.crawl([Fetch('${origin.root}/anything'.url)].seq)
+        ..obey();
       await crawl.run();
 
       // Unreachable rules are not absent rules: the crawl stays out.
@@ -567,7 +568,8 @@ void main() {
       });
       addTearDown(origin.stop);
 
-      final crawl = net.crawl([Fetch('${origin.root}/anything'.url)])..obey();
+      final crawl = net.crawl([Fetch('${origin.root}/anything'.url)].seq)
+        ..obey();
       await crawl.run();
 
       expect(crawl.stats.fetched, 1);
@@ -585,7 +587,7 @@ void main() {
       });
       addTearDown(origin.stop);
 
-      final crawl = net.crawl([Fetch('${origin.root}/page'.url)])..obey();
+      final crawl = net.crawl([Fetch('${origin.root}/page'.url)].seq)..obey();
       await crawl.run();
 
       expect(crawl.stats.skipped, 1);

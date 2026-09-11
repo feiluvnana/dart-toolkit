@@ -64,7 +64,14 @@ final class Csv {
   ///
   /// `io.csv.matrix` included the header line in what it returned; it is
   /// [headers] here, so [rows] and [maps] describe the same records.
-  Sequence<Sequence<String>> get rows => Sequence(_rows.map(Sequence.new));
+  ///
+  /// A row is a `List<String>`, not a nested [Sequence]: the cells of one
+  /// record are a fixed tuple read by position, so `row[2]` is the question
+  /// asked of them and `collect(.at(2))` was the only way to ask it through
+  /// 6.2.0. It is also what `io.csv.rows` has always returned — the same
+  /// grid, read from a file instead of a string, and the two doors now spell
+  /// it the same way.
+  Sequence<List<String>> get rows => Sequence(_rows);
 
   /// The data rows keyed by [headers].
   ///

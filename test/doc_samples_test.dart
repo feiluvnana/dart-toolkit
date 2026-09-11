@@ -85,7 +85,7 @@ void main() {
     test('crawl.md samples and crawl options compile and execute', () async {
       // Every knob the crawl owns is a scheduler knob; everything about the
       // client is on the client, set once where it is declared.
-      final crawl = net.crawl([Fetch('https://news.ycombinator.com'.url)])
+      final crawl = net.crawl([Fetch('https://news.ycombinator.com'.url)].seq)
         ..using(
           Fetcher(headers: const {'User-Agent': 'TestBot'}, timeout: 5.s).call,
         )
@@ -178,7 +178,7 @@ void main() {
 
       // 2. settle
       final pool = Pool<int>(size: 2);
-      final settled = await pool.settle([2, 0], (n) async {
+      final settled = await pool.settle([2, 0].seq, (n) async {
         if (n == 0) throw Exception('zero');
         return 10 ~/ n;
       });
@@ -313,10 +313,7 @@ void main() {
 
         expect(sheet.headers.collect(.list()), equals(['name', 'role']));
         expect(sheet.count, equals(2));
-        expect(
-          sheet.rows.collect(.first())?.collect(.list()),
-          equals(['Alice', 'admin']),
-        );
+        expect(sheet.rows.collect(.first()), equals(['Alice', 'admin']));
 
         final streamed = await io.async.csv.records(path).collect(.list());
         expect(streamed.length, equals(2));
@@ -326,9 +323,12 @@ void main() {
 
         // Excel and RFC 4180 want CRLF, which format and write both take.
         expect(
-          format.csv.format([
-            {'a': '1'},
-          ], newline: '\r\n'),
+          format.csv.format(
+            [
+              {'a': '1'},
+            ].seq,
+            newline: '\r\n',
+          ),
           equals('a\r\n1\r\n'),
         );
       } finally {

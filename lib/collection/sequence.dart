@@ -28,7 +28,7 @@ import 'transformer.dart';
 /// An ordered collection, carrying this library's vocabulary.
 ///
 /// ```dart
-/// final rows = await net.crawl([Fetch(seed)]).flow
+/// final rows = await net.crawl([Fetch(seed)].seq).flow
 ///     .transform(.map((res) => parse(res.body)))
 ///     .collect(.seq());
 ///
@@ -74,6 +74,33 @@ import 'transformer.dart';
 /// | `[...seq]`, `seq.toList()` | `collect(.list())` |
 /// | passing to a `List<T>` or `Iterable<T>` parameter | `collect(.list())` |
 /// | passing to this library's own APIs | nothing — they take a [Sequence] |
+///
+/// That last row was a promise rather than a fact until 6.3.0. Every reader
+/// here handed back a [Sequence] and every writer took an `Iterable`, so a
+/// CSV could not be written from the cursor that read it and a pool could not
+/// be fed from a crawl — eleven crossings, each paying `collect(.list())` to
+/// leave the vocabulary and nothing to show for it. The rule now holds in
+/// both directions: **a collection this library returns fits every collection
+/// parameter it declares**, and `.seq` is what a literal spends to join.
+///
+/// ## Declaring a [Sequence] parameter
+///
+/// Name the element type exactly, or be generic in it — never a supertype:
+///
+/// ```dart
+/// // setup: void use(Object? x) {}
+/// int howMany<T>(Sequence<T> items) => items.collect(.count());   // yes
+/// ```
+///
+/// [collect] takes a `Collector<T, R>`, and Dart checks that argument against
+/// the *reified* `T` of the receiver. A `Sequence<String>` arriving at a
+/// `Sequence<Object?>` parameter therefore throws from code that compiled
+/// cleanly, because `Collector<Object?, int>` is not a `Collector<String,
+/// int>`. Where a supertype is genuinely wanted — `format.csv.format` is
+/// declared over `Object?` cells and is handed a sheet of `String` ones —
+/// widen first: `items.transform(.cast<Object?>())` rebuilds the sequence at
+/// the wider type, and [Transformer.cast] is the one step that survives the
+/// crossing, being declared from `Never`.
 ///
 /// There is deliberately no `iterable` getter beside `collect(.list())`.
 /// A getter that hands the `Iterable` back would put Dart's vocabulary one

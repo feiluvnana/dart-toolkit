@@ -20,7 +20,7 @@
 ///
 /// ```dart
 /// final crawl = net.crawl(
-///   [Fetch('https://example.test'.url)],
+///   [Fetch('https://example.test'.url)].seq,
 ///   (res) => res.parse(format.html).$('a').attrs('href')
 ///       .transform(.map(res.follow)),
 /// )..concurrent(4)..samehost()..depth(3)..limit(500);
@@ -111,7 +111,7 @@ final class Crawl {
   /// router than three public members:
   ///
   /// ```dart no-compile
-  /// net.crawl([Fetch(seed)], (res) => switch (res.fetch.tag) {
+  /// net.crawl([Fetch(seed)].seq, (res) => switch (res.fetch.tag) {
   ///   null     => res.parse(format.html).$('.artist a').attrs('href')
   ///                  .transform(.map((h) => res.follow(h, tag: 'artist'))),
   ///   'artist' => res.parse(format.html).$('.album a').attrs('href')
@@ -129,7 +129,8 @@ final class Crawl {
   ///
   /// Omitting [next] crawls exactly the seeds, which is what `net.http.sync`
   /// is for when there is no politeness or dedupe to want.
-  Crawl(Iterable<Fetch> seeds, [this._next]) : _seeds = seeds.toList();
+  Crawl(Sequence<Fetch> seeds, [this._next])
+    : _seeds = seeds.transform(.cast<Fetch>()).collect(.list());
 
   final List<Fetch> _seeds;
   final Sequence<Fetch> Function(Reply res)? _next;
@@ -262,8 +263,13 @@ final class Crawl {
   ///
   /// Entries are MIME types, optionally with a `/*` wildcard on the subtype.
   /// A reply carrying no `Content-Type` matches nothing.
-  Crawl accept(Iterable<String> types) {
-    _accept.addAll(types.map((type) => type.toLowerCase()));
+  Crawl accept(Sequence<String> types) {
+    _accept.addAll(
+      types
+          .transform(.cast<String>())
+          .transform(.map((type) => type.toLowerCase()))
+          .collect(.list()),
+    );
     return this;
   }
 

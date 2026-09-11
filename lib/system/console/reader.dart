@@ -23,7 +23,8 @@ import 'ansi.dart';
 /// ```dart
 /// final name = await system.console.reader.ask('Project name');
 /// final go = await system.console.reader.confirm('Continue?');
-/// final env = await system.console.reader.pick('Target', options: ['dev', 'prod']);
+/// final env =
+///     await system.console.reader.pick('Target', options: ['dev', 'prod'].seq);
 /// ```
 class ConsoleReader {
   StreamSubscription<String>? _subscription;
@@ -170,19 +171,20 @@ class ConsoleReader {
   /// would otherwise re-prompt forever.
   Future<O> pick<O>(
     String question, {
-    required List<O> options,
+    required Sequence<O> options,
     String Function(O item)? label,
   }) async {
-    _menu(question, options, label);
+    final choices = options.transform(.cast<O>()).collect(.list());
+    _menu(question, choices, label);
     while (true) {
-      stdout.write('Select (1-${options.length}): ');
+      stdout.write('Select (1-${choices.length}): ');
       final read = await line();
       if (read == null) throw _exhausted('pick');
       final choice = int.tryParse(read.trim());
-      if (choice != null && choice >= 1 && choice <= options.length) {
-        return options[choice - 1];
+      if (choice != null && choice >= 1 && choice <= choices.length) {
+        return choices[choice - 1];
       }
-      stderr.writeln('${'✖'.brightred()} Please enter 1-${options.length}.');
+      stderr.writeln('${'✖'.brightred()} Please enter 1-${choices.length}.');
     }
   }
 
@@ -192,35 +194,36 @@ class ConsoleReader {
   /// empty answer for nothing. Throws [StateError] at end of input.
   Future<Sequence<O>> picks<O>(
     String question, {
-    required List<O> options,
+    required Sequence<O> options,
     String Function(O item)? label,
   }) async {
-    _menu(question, options, label);
+    final choices = options.transform(.cast<O>()).collect(.list());
+    _menu(question, choices, label);
     while (true) {
       stdout.write('Select (e.g. 1, 3 or all): ');
       final read = await line();
       if (read == null) throw _exhausted('picks');
       final answer = read.trim().toLowerCase();
       if (answer.isEmpty) return const Sequence([]);
-      if (answer == 'all' || answer == '*') return Sequence(options);
+      if (answer == 'all' || answer == '*') return Sequence(choices);
 
       final indices = <int>{};
       var valid = true;
       for (final token in answer.split(RegExp(r'[\s,]+'))) {
         if (token.isEmpty) continue;
         final n = int.tryParse(token);
-        if (n == null || n < 1 || n > options.length) {
+        if (n == null || n < 1 || n > choices.length) {
           valid = false;
           break;
         }
         indices.add(n - 1);
       }
       if (valid && indices.isNotEmpty) {
-        return Sequence(indices.map((i) => options[i]));
+        return Sequence(indices.map((i) => choices[i]));
       }
       stderr.writeln(
         '${'✖'.brightred()} Please enter numbers between 1 and '
-        '${options.length}.',
+        '${choices.length}.',
       );
     }
   }

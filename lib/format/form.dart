@@ -40,7 +40,7 @@ import '../src/method.dart';
 /// `next`, so the reply reaches the crawl like any other page:
 ///
 /// ```dart no-compile
-/// net.crawl([Fetch(seed)], (res) => switch (res.fetch.tag) {
+/// net.crawl([Fetch(seed)].seq, (res) => switch (res.fetch.tag) {
 ///   null => [
 ///     res.parse(format.html).form('form.search')!
 ///         .at(res.url)

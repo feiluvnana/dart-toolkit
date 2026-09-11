@@ -49,11 +49,36 @@ class ConcurrentAccessor {
   /// [delay] and [Pool]'s error semantics, which that one does not carry, so
   /// the two are not spellings of each other.
   Future<Sequence<R>> run<I, R>(
-    Iterable<I> items,
+    Sequence<I> items,
     FutureOr<R> Function(I item) worker, {
     int size = 4,
     Duration delay = Duration.zero,
   }) => Pool<I>(size: size, delay: delay).run(items, worker);
+
+  /// Maps [worker] over [items] with at most [size] in flight, and never
+  /// throws.
+  ///
+  /// One [Settled] per item, in the order of [items], so a failure is a value
+  /// the caller reads rather than an exception that ends the run:
+  ///
+  /// ```dart
+  /// final results = await concurrent.settle(urls, fetch);
+  /// results.collect(.foreach((result) => switch (result) {
+  ///   Done(:final value) => save(value),
+  ///   Broke(:final error) => log.warn('$error'),
+  /// }));
+  /// ```
+  ///
+  /// [run]'s twin, and the shorter half of the pair `Pool` has always
+  /// carried: [run] was reachable here without naming a [Pool] and this was
+  /// not, so the failure-tolerant form — the one a script reaching for a pool
+  /// usually wants — cost a type name the safe default does not.
+  Future<Sequence<Settled<R>>> settle<I, R>(
+    Sequence<I> items,
+    FutureOr<R> Function(I item) worker, {
+    int size = 4,
+    Duration delay = Duration.zero,
+  }) => Pool<I>(size: size, delay: delay).settle(items, worker);
 
   /// Retries [fn] if it throws, backing off between attempts.
   ///
@@ -243,14 +268,14 @@ class Pool<I> {
   /// [PoolEvents.error] is registered every item is attempted and a
   /// [PoolFailure] is thrown at the end instead.
   Future<Sequence<R>> run<R>(
-    Iterable<I> items,
+    Sequence<I> items,
     FutureOr<R> Function(I item) worker,
   ) async {
     for (final h in on._startHandlers) {
       h();
     }
 
-    final list = items.toList();
+    final list = items.transform(.cast<I>()).collect(.list());
     final results = List<R?>.filled(list.length, null);
     final outcomes = List<Settled<R>?>.filled(list.length, null);
     var failed = 0;
@@ -337,14 +362,14 @@ class Pool<I> {
   /// }));
   /// ```
   Future<Sequence<Settled<R>>> settle<R>(
-    Iterable<I> items,
+    Sequence<I> items,
     FutureOr<R> Function(I item) worker,
   ) async {
     for (final h in on._startHandlers) {
       h();
     }
 
-    final list = items.toList();
+    final list = items.transform(.cast<I>()).collect(.list());
     final outcomes = List<Settled<R>?>.filled(list.length, null);
     final active = <Future<void>>{};
     final limit = size > 0 ? size : 1;
@@ -404,8 +429,8 @@ class Pool<I> {
   /// registered before the flow exists, which the pipeline step cannot be.
   ///
   /// Was `stream`, returning a `Stream<R>`, through 5.3.0.
-  Flow<R> flow<R>(Iterable<I> items, FutureOr<R> Function(I item) worker) {
-    final list = items.toList();
+  Flow<R> flow<R>(Sequence<I> items, FutureOr<R> Function(I item) worker) {
+    final list = items.transform(.cast<I>()).collect(.list());
     final active = <Future<void>>{};
     final limit = size > 0 ? size : 1;
     final collecting = on._errorHandlers.isNotEmpty;

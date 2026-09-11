@@ -79,7 +79,7 @@ void main(List<String> args) async {
   // -------------------------------------------------------------- 1. crawl
   log.step(1, 5, 'Crawling the catalogue...');
 
-  final crawl = net.crawl([Fetch('https://shop.test/catalogue'.url)], _next)
+  final crawl = net.crawl([Fetch('https://shop.test/catalogue'.url)].seq, _next)
     ..using(_fixture)
     ..concurrent(size())
     ..delay(util.rand.jitter(20.ms))
@@ -107,9 +107,7 @@ void main(List<String> args) async {
   log.step(2, 5, 'Enriching...');
 
   final bar = Progress(total: products.collect(.count()), message: 'Enriching');
-  final enriched = await concurrent.run(products.collect(.list()), (
-    product,
-  ) async {
+  final enriched = await concurrent.run(products, (product) async {
     await util.time.wait(util.rand.jitter(30.ms));
     bar.tick(1, product.name);
     return (
@@ -187,10 +185,13 @@ void main(List<String> args) async {
             headers: ['Product', 'Price', 'Slug'],
             alignments: [ColumnAlign.left, ColumnAlign.right, ColumnAlign.left],
           )
-          ..add.all([
-            for (final e in enriched.transform(.take.first(5)).collect(.list()))
-              [e.product.name, '\$${e.product.price}', e.slug],
-          ]))
+          ..add.all(
+            [
+              for (final e
+                  in enriched.transform(.take.first(5)).collect(.list()))
+                [e.product.name, '\$${e.product.price}', e.slug],
+            ].seq,
+          ))
         .render(),
   );
 

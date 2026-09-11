@@ -12,7 +12,7 @@
 /// ```dart
 /// // setup: final index = 'https://x.test/sitemap.xml'.url;
 /// final urls = await net
-///     .crawl([Fetch(index)], (r) => r.parse(format.sitemap).transform(
+///     .crawl([Fetch(index)].seq, (r) => r.parse(format.sitemap).transform(
 ///           .map(Fetch.new),
 ///         ))
 ///     .depth(8)
@@ -45,7 +45,7 @@ final RegExp _loc = RegExp(
 /// text alike, because all three are what a `Sitemap:` line points at and
 /// which one arrived is not the caller's question.
 class SitemapAccessor
-    with FileCodec<Sequence<Uri>, Iterable<Uri>>
+    with FileCodec<Sequence<Uri>, Sequence<Uri>>
     implements Codec<Sequence<Uri>> {
   /// Creates the accessor. Prefer the shared `format.sitemap` instance.
   const SitemapAccessor();
@@ -88,12 +88,17 @@ class SitemapAccessor
   bool nested(String text) => text.contains('<sitemapindex');
 
   /// Renders [value] as a `<urlset>` document.
+  ///
+  /// The same [Sequence] [parse] hands back, so a sitemap read, filtered and
+  /// written again is three calls and no conversion between them. It took an
+  /// `Iterable` through 6.2.0, which made a codec's own round trip the one
+  /// thing it could not do.
   @override
-  String format(Iterable<Uri> value) {
+  String format(Sequence<Uri> value) {
     final out = StringBuffer()
       ..writeln('<?xml version="1.0" encoding="UTF-8"?>')
       ..writeln('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">');
-    for (final url in value) {
+    for (final url in value.transform(.cast<Uri>()).collect(.list())) {
       out.writeln('  <url><loc>$url</loc></url>');
     }
     out.writeln('</urlset>');

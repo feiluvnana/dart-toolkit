@@ -129,7 +129,7 @@ void main() {
 
       await net
           .crawl(
-            [Fetch('https://music.test/album'.url)],
+            [Fetch('https://music.test/album'.url)].seq,
             (res) => switch (res.fetch.tag) {
               null =>
                 res
@@ -353,7 +353,7 @@ void main() {
       'Done carries a non-nullable value, Broke carries the error',
       () async {
         final pool = Pool<int>(size: 2);
-        final outcomes = await pool.settle([1, 0, 2], (n) async {
+        final outcomes = await pool.settle([1, 0, 2].seq, (n) async {
           if (n == 0) throw StateError('division by zero');
           return 10 ~/ n;
         });
@@ -383,7 +383,7 @@ void main() {
       pool.on.error((_, _, _) {});
 
       try {
-        await pool.run([1, 2, 3], (n) async {
+        await pool.run([1, 2, 3].seq, (n) async {
           if (n == 2) throw StateError('no');
           return n * 10;
         });
@@ -409,7 +409,7 @@ void main() {
       'https://site.test/b': '<h1>Three</h1>',
     };
 
-    Crawl crawl() => net.crawl([Fetch('https://site.test'.url)])
+    Crawl crawl() => net.crawl([Fetch('https://site.test'.url)].seq)
       ..using(
         (fetch) async => Reply.text(pages['${fetch.url}'] ?? '', fetch: fetch),
       );

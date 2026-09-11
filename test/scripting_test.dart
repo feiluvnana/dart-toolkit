@@ -127,7 +127,7 @@ void main() {
 
   group('which pages failed', () {
     test('settle names the reply it happened on', () async {
-      final crawl = net.crawl([Fetch('https://example.com/a'.url)])
+      final crawl = net.crawl([Fetch('https://example.com/a'.url)].seq)
         ..using(broken);
 
       final outcomes = await crawl.settle.collect(.seq());
@@ -144,7 +144,7 @@ void main() {
 
     test('a next that throws is reported the same way', () async {
       final crawl = net.crawl(
-        [Fetch('https://example.com/page'.url)],
+        [Fetch('https://example.com/page'.url)].seq,
         (res) => throw StateError('next blew up'),
       )..using(serve(const {'/page': '<h1>hi</h1>'}));
 
@@ -159,7 +159,7 @@ void main() {
       // `Settled` does not carry the item — the caller already holds it —
       // and a crawl's position does: a request that failed is unfinished
       // work, so it is still pending.
-      final crawl = net.crawl([Fetch('https://example.com/a'.url)])
+      final crawl = net.crawl([Fetch('https://example.com/a'.url)].seq)
         ..using(broken);
       await crawl.run();
 
@@ -169,7 +169,7 @@ void main() {
           .toList();
       expect(pending.single.url.toString(), 'https://example.com/a');
 
-      final again = net.crawl(pending)
+      final again = net.crawl(pending.seq)
         ..using(serve(const {'/a': '<h1>second try</h1>'}));
       final served = await again.flow
           .transform(.map((res) => res.parse(format.html).$('h1').text))
@@ -182,7 +182,7 @@ void main() {
       final dir = _temp('dt_fail_');
       final path = '${dir.path}/crawl.state';
 
-      await (net.crawl([Fetch('https://example.com/a'.url)])
+      await (net.crawl([Fetch('https://example.com/a'.url)].seq)
             ..using(broken)
             ..resume(path))
           .run();
@@ -202,7 +202,7 @@ void main() {
       () async {
         final seen = <String>[];
 
-        final crawl = net.crawl([Fetch('https://example.com/a'.url)])
+        final crawl = net.crawl([Fetch('https://example.com/a'.url)].seq)
           ..concurrent(1)
           ..limit(1)
           ..using(serve(const {'/a': '<h1>hi</h1>'}));
@@ -324,7 +324,7 @@ void main() {
 
       await io.async.csv.write(
         path,
-        (net.crawl([Fetch('https://shop.test/list'.url)])..using(
+        (net.crawl([Fetch('https://shop.test/list'.url)].seq)..using(
               serve(const {
                 '/list':
                     '<div class="p"><h2>\n  Wireless\n  Keyboard\n</h2>'

@@ -76,32 +76,36 @@ void main() async {
               ColumnAlign.left,
             ],
           )
-          ..add.all([
-            for (final row
-                in sales
-                    .collect(.group.by((s) => s.region))
-                    .pairs
-                    .transform(
-                      .map(
-                        (e) => (
-                          region: e.$1,
-                          orders: e.$2.collect(.count()),
-                          revenue: e.$2.collect(.sum((s) => s.amount)),
-                          best:
-                              e.$2.collect(.max.by((s) => s.amount))?.product ??
-                              '',
+          ..add.all(
+            [
+              for (final row
+                  in sales
+                      .collect(.group.by((s) => s.region))
+                      .pairs
+                      .transform(
+                        .map(
+                          (e) => (
+                            region: e.$1,
+                            orders: e.$2.collect(.count()),
+                            revenue: e.$2.collect(.sum((s) => s.amount)),
+                            best:
+                                e.$2
+                                    .collect(.max.by((s) => s.amount))
+                                    ?.product ??
+                                '',
+                          ),
                         ),
-                      ),
-                    )
-                    .transform(.sort.by((e) => e.region))
-                    .collect(.list()))
-              [
-                row.region,
-                row.orders,
-                row.revenue.toStringAsFixed(2),
-                row.best,
-              ],
-          ]))
+                      )
+                      .transform(.sort.by((e) => e.region))
+                      .collect(.list()))
+                [
+                  row.region,
+                  row.orders,
+                  row.revenue.toStringAsFixed(2),
+                  row.best,
+                ],
+            ].seq,
+          ))
         .render(),
   );
 
@@ -120,7 +124,7 @@ void main() async {
 
   // `chunk` pairs directly with a bounded pool: batch, then send.
   for (final batch in sales.transform(.chunk(2)).collect(.list())) {
-    await concurrent.run(batch.collect(.list()), _send, size: 2);
+    await concurrent.run(batch, _send, size: 2);
   }
   log.ok('Sent ${sales.collect(.count())} rows in batches of two.');
 

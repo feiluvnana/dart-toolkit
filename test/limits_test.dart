@@ -42,7 +42,7 @@ void main() {
     test('composes with concurrent.run', () async {
       final limit = concurrent.rate(4, per: 40.ms);
       final results = await concurrent.run(
-        List<int>.generate(8, (i) => i),
+        List<int>.generate(8, (i) => i).seq,
         (n) => limit.guard(() async => n * 2),
         size: 3,
       );

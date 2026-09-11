@@ -38,10 +38,17 @@ class SizeAccessor {
   /// A negative count keeps its sign — `format(-2048)` is `'-2.0 KiB'` —
   /// because a script that subtracted two sizes in the order it had them
   /// should see which way round they were rather than `'0 B'`.
-  String format(int bytes, {int decimals = 1}) {
+  ///
+  /// [bytes] is a `num` because `collect(.sum(...))` returns one: totalling
+  /// the sizes of a directory and printing the total was
+  /// `util.size.format(total.toInt())` through 6.2.0, a cast the caller made
+  /// only to satisfy this signature. A fractional count is floored, which is
+  /// the byte it names.
+  String format(num bytes, {int decimals = 1}) {
     if (bytes == 0) return '0 B';
     final sign = bytes < 0 ? '-' : '';
-    final magnitude = bytes.abs();
+    final magnitude = bytes.abs().floor();
+    if (magnitude == 0) return '0 B';
     if (magnitude < 1024) return '$sign$magnitude B';
 
     var i = (math.log(magnitude) / math.log(1024)).floor().clamp(

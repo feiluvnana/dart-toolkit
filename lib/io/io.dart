@@ -350,7 +350,7 @@ class IoAccessor {
   /// // setup: final seed = 'https://example.com'.url;
   /// await io.lock('.crawl.lock', () async {
   ///   // exactly one process in here
-  ///   await net.crawl([Fetch(seed)]).flow.dump('out.json');
+  ///   await net.crawl([Fetch(seed)].seq).flow.dump('out.json');
   /// });
   /// ```
   ///
@@ -439,7 +439,7 @@ class IoAccessor {
 /// this inside handlers and pool workers.
 ///
 /// ```dart
-/// await net.crawl([Fetch(seed)]).flow.collect(.foreach((res) async {
+/// await net.crawl([Fetch(seed)].seq).flow.collect(.foreach((res) async {
 ///   await io.async.write('pages/${res.fetch.depth}.html', res.body);
 /// }));
 /// ```
@@ -728,7 +728,7 @@ class LinesAsyncAccessor {
   /// ```dart
   /// await io.async.lines.write(
   ///   'titles.txt',
-  ///   net.crawl([Fetch(seed)]).flow.transform(.map((res) => res.url.toString())),
+  ///   net.crawl([Fetch(seed)].seq).flow.transform(.map((res) => res.url.toString())),
   /// );
   /// ```
   ///

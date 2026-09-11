@@ -31,7 +31,7 @@ extension Sending on Form {
   /// to get right. Inside a crawl this is what `next` returns:
   ///
   /// ```dart no-compile
-  /// net.crawl([Fetch(seed)], (res) => switch (res.fetch.tag) {
+  /// net.crawl([Fetch(seed)].seq, (res) => switch (res.fetch.tag) {
   ///   null => [
   ///     res.parse(format.html).form('#login')!
   ///         .at(res.url)

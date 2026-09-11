@@ -1067,7 +1067,7 @@ class Fetcher with _PathResolver {
     bool match = false,
   }) async {
     await Pool<MapEntry<String, Uri>>(size: size).run(
-      tasks.entries,
+      tasks.entries.seq,
       (task) => download(task.value, task.key, match: match),
     );
   }

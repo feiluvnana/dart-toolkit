@@ -297,6 +297,29 @@ class Transformer<A, B> {
   static Transformer<A, A> flip<A>() =>
       Transformer((items) => items.toList().reversed);
 
+  /// Every element passed to [each] and then let through unchanged.
+  ///
+  /// The one for a `print` in the middle of a chain, or a counter. A [map]
+  /// that returns its input says the same thing and reads like it meant to
+  /// change something.
+  ///
+  /// ```dart
+  /// rows.transform(.where((r) => r.live))
+  ///     .transform(.tap((r) => bar.tick(1, r.sku)))
+  ///     .collect(.list());
+  /// ```
+  ///
+  /// `Pipe.tap` has existed since flows split from sequences in 5.5.0, and
+  /// nothing about watching an element go past is particular to time — it was
+  /// simply the half that got written. Lazily, like every step here: [each]
+  /// runs when the terminal walks, once per walk.
+  static Transformer<A, A> tap<A>(void Function(A item) each) => Transformer(
+    (items) => items.map((item) {
+      each(item);
+      return item;
+    }),
+  );
+
   /// Each element paired with its position — Python's word.
   ///
   /// The one index-aware primitive: `mapIndexed`, `filterIndexed` and
@@ -319,7 +342,7 @@ class Transformer<A, B> {
   ///
   /// ```dart
   /// for (final batch in rows.transform(.chunk(100)).collect(.list())) {
-  ///   await concurrent.run(batch.collect(.list()), print, size: 4);
+  ///   await concurrent.run(batch, print, size: 4);
   /// }
   /// ```
   ///

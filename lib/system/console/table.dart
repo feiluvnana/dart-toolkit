@@ -8,6 +8,7 @@
 /// which one was a writer. Nothing about the API moved.
 library;
 
+import '../../collection/collection.dart';
 import 'ansi.dart';
 import 'writer.dart';
 
@@ -305,5 +306,11 @@ class TableAdd {
       _table._rows.add([for (final cell in row) cell?.toString() ?? '']);
 
   /// Appends every row of [rows].
-  void all(Iterable<List<Object?>> rows) => rows.forEach(call);
+  ///
+  /// A [Sequence] of rows, so what `format.csv.parse(...).rows` and
+  /// `io.csv.rows` read goes straight into a table; `.seq` turns a literal
+  /// grid into one. Each row stays a `List`, because its cells are a tuple
+  /// read by position and not a collection to be shaped.
+  void all(Sequence<List<Object?>> rows) =>
+      rows.transform(.cast<List<Object?>>()).collect(.foreach(call));
 }
