@@ -9,7 +9,7 @@ One short script per kind of use case, and one that puts them together.
 | [`form.dart`](form.dart) | Sign in and submit the form a page came with, standalone and inside a crawl |
 | [`http.dart`](http.dart) | Talk to a server — sessions, sealed bodies, JSON, downloads with progress |
 | [`serve.dart`](serve.dart) | Listen instead — an OAuth callback, a webhook, a preview |
-| [`shape.dart`](shape.dart) | Shape what came back — `Sequence`, the `Json` cursor, JSONPath, YAML |
+| [`shape.dart`](shape.dart) | Shape what came back — `Sequence`, `Dictionary`, `Transformer`/`Collector`, the `Json` cursor, JSONPath, YAML |
 | [`parallel.dart`](parallel.dart) | Do many things at once — bounded pools, `settle`, retries, locks, rate limits |
 | [`files.dart`](files.dart) | Put results on disk — atomic writes, JSON, CSV, locking, state between runs |
 | [`console.dart`](console.dart) | Say what the script is doing — logs, spinners, bars, tables, boxes |
@@ -54,7 +54,8 @@ need to put something back into it.
 
 **`shape.dart`** for the middle of a script — the grouping, batching, summing
 and JSON reading that used to mean reaching past this library. It is the one to
-read for `Sequence`, which everything here hands back.
+read for `Sequence` and `Dictionary`, which everything here hands back, and for
+the two members that shape them: `transform` and `collect`.
 
 **`cli.dart`** if you are writing a command-line program: the interface is
 declared once, and `cli.run` handles `--help`, validation, dispatch and the

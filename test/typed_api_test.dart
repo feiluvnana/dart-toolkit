@@ -51,54 +51,68 @@ void main() {
       expect(_since.read(17), isNull);
     });
 
-    test('calling a slot builds the entry it writes', () {
-      final entry = _name('Hey Jude');
-      expect(entry.key, 'name');
-      expect(entry.value, 'Hey Jude');
-      expect(_since(DateTime.utc(2026)).value, '2026-01-01T00:00:00.000Z');
+    test('calling a slot builds the pair it writes', () {
+      final (key, value) = _name('Hey Jude');
+      expect(key, 'name');
+      expect(value, 'Hey Jude');
+      expect(_since(DateTime.utc(2026)).$2, '2026-01-01T00:00:00.000Z');
     });
   });
 
-  group('Meta', () {
+  group('Slotted', () {
     test('round-trips values through their slots', () {
-      final meta = Meta([_name('Hey Jude'), _track(4)]);
+      final meta = Dictionary<String, Object?>.of([
+        _name('Hey Jude'),
+        _track(4),
+      ]);
 
-      expect(meta.get(_name), 'Hey Jude');
-      expect(meta.get(_track), 4);
-      expect(meta.has(_name), isTrue);
-      expect(meta.length, 2);
+      expect(meta.read(_name), 'Hey Jude');
+      expect(meta.read(_track), 4);
+      expect(meta.holds(_name), isTrue);
+      expect(meta.count, 2);
 
-      meta.delete(_name);
-      expect(meta.get(_name), isNull);
-      expect(meta.has(_name), isFalse);
+      meta.drop(_name);
+      expect(meta.read(_name), isNull);
+      expect(meta.holds(_name), isFalse);
+    });
+
+    test('write goes through the slot, set does not', () {
+      final meta = Dictionary<String, Object?>();
+      meta.write(_since, DateTime.utc(2026));
+
+      expect(meta.get('since'), '2026-01-01T00:00:00.000Z');
+      expect(meta.read(_since), DateTime.utc(2026));
     });
 
     test('a slot reading a key another slot wrote gets null, not a crash', () {
-      final meta = Meta([_name('Hey Jude')]);
-      expect(meta.get(const Slot<int>('name')), isNull);
+      final meta = Dictionary<String, Object?>.of([_name('Hey Jude')]);
+      expect(meta.read(const Slot<int>('name')), isNull);
     });
 
-    test('raw is the map underneath, and survives jsonEncode', () {
-      final meta = Meta([
+    test('map is what goes to disk, and survives jsonEncode', () {
+      final meta = Dictionary<String, Object?>.of([
         _name('Hey Jude'),
         _track(4),
         _since(DateTime.utc(2026)),
       ]);
-      final restored = Meta.of(
-        (jsonDecode(jsonEncode(meta.raw)) as Map).cast<String, Object?>(),
+      final restored = Dictionary<String, Object?>(
+        (jsonDecode(jsonEncode(meta.map)) as Map).cast<String, Object?>(),
       );
 
-      expect(restored.get(_name), 'Hey Jude');
-      expect(restored.get(_track), 4);
-      expect(restored.get(_since), DateTime.utc(2026));
+      expect(restored.read(_name), 'Hey Jude');
+      expect(restored.read(_track), 4);
+      expect(restored.read(_since), DateTime.utc(2026));
     });
 
-    test('entries spread one bag into another', () {
-      final first = Meta([_name('Hey Jude')]);
-      final second = Meta([...first.entries, _track(4)]);
+    test('pairs spread one bag into another', () {
+      final first = Dictionary<String, Object?>.of([_name('Hey Jude')]);
+      final second = Dictionary<String, Object?>.of([
+        ...first.pairs.list,
+        _track(4),
+      ]);
 
-      expect(second.get(_name), 'Hey Jude');
-      expect(second.get(_track), 4);
+      expect(second.read(_name), 'Hey Jude');
+      expect(second.read(_track), 4);
     });
   });
 
@@ -116,7 +130,7 @@ void main() {
               'https://music.test/song/2': '<h1>Two</h1>',
             }),
           )
-          .tag('song', (res) => seen.add(res.meta.get(_name)))
+          .tag('song', (res) => seen.add(res.meta.read(_name)))
           .run((res) {
             for (final a in res.parse(format.html).find('a').elements.list) {
               res.follow(a.attr('href')!, tag: 'song', meta: [_name(a.text)]);
@@ -137,8 +151,8 @@ void main() {
         jsonDecode(jsonEncode(fetch.toJson())) as Map<String, Object?>,
       );
 
-      expect(copy.meta.get(_name), 'Widget');
-      expect(copy.meta.get(_track), 3);
+      expect(copy.meta.read(_name), 'Widget');
+      expect(copy.meta.read(_track), 3);
     });
   });
 
@@ -172,11 +186,11 @@ void main() {
           );
 
       // The static type is the point: no cast reaches any of these fields.
-      expect(variants.count(), 2);
-      expect(variants.first!.name, 'Small');
-      expect(variants.first!.sku, 'A1');
-      expect(variants.first!.qty, 3);
-      expect(variants.last!.qty, 7);
+      expect(variants.collect(.count()), 2);
+      expect(variants.collect(.first())!.name, 'Small');
+      expect(variants.collect(.first())!.sku, 'A1');
+      expect(variants.collect(.first())!.qty, 3);
+      expect(variants.collect(.last())!.qty, 7);
     });
 
     test('one builds a record for a section a page has at most one of', () {
@@ -208,16 +222,14 @@ void main() {
             .parse(format.html)
             .all(
               '.variant',
-              (row) => (
-                name: row.find('.name').text,
-                sku: row.attr('data-sku'),
-              ),
+              (row) =>
+                  (name: row.find('.name').text, sku: row.attr('data-sku')),
             ),
       );
 
       expect(product.title, 'Wool Coat');
       expect(product.price, 89.0);
-      expect(product.variants.to((v) => v.sku).list, ['A1', 'A2']);
+      expect(product.variants.transform(.map((v) => v.sku)).list, ['A1', 'A2']);
     });
 
     test('all and pick see matches at the top level of the body', () {
@@ -330,7 +342,7 @@ void main() {
         ];
 
         expect(read, ['ok:10', 'bad:division by zero', 'ok:5']);
-        expect(outcomes.to((o) => o.ok).list, [true, false, true]);
+        expect(outcomes.transform(.map((o) => o.ok)).list, [true, false, true]);
         expect(outcomes.list[1].value, isNull);
         expect((outcomes.list[1] as Broke<int>).stack, isNotNull);
       },
@@ -379,16 +391,15 @@ void main() {
           .crawl<Never>('https://site.test'.url)
           .downloader(MapDownloader(pages))
           .gather(
-            (page) =>
-                page
-                    .parse(format.html)
-                    .find('h1')
-                    .texts
-                    .keep((t) => t.length > 3)
-                    .list,
+            (page) => page
+                .parse(format.html)
+                .find('h1')
+                .texts
+                .transform(.where((t) => t.length > 3))
+                .list,
           );
 
-      expect(long.empty, isTrue);
+      expect(long.collect(.empty()), isTrue);
     });
 
     test('a record per page reads as one expression', () async {
@@ -404,7 +415,7 @@ void main() {
             ],
           );
 
-      expect(rows.sole!.titles, 2);
+      expect(rows.collect(.single())!.titles, 2);
     });
   });
 }

@@ -182,14 +182,14 @@ io.stat(path).size;
 await io.async.stat(path);
 ```
 
-`io.find` hands back a [`Sequence`](util.md#6-sequences-sequencet), so
+`io.find` hands back a [`Sequence`](collection.md), so
 filtering and grouping the result is the next call:
 
 ```dart
 final logs = io.find('var/log', pattern: RegExp(r'\.log$'));
-logs.count();
-logs.best((f) => io.stat(f.path).size)?.path;      // the biggest one
-logs.group((f) => io.ext(f.path));
+logs.collect(.count());
+logs.collect(.max.by((f) => io.stat(f.path).size))?.path;      // the biggest one
+logs.collect(.group.by((f) => io.ext(f.path)));
 ```
 
 ---
@@ -268,5 +268,5 @@ another process can win. `io.lock` is the answer that cannot race.
 ## See Also
 
 - [`io.csv.*`](csv.md) — CSV tables
-- [`io.store.*`](store.md) — JSON key-value storage
+- [`Sequence` and `Dictionary`](collection.md) — the collections, and `dump`/`io.dictionary`
 - [`util.size.*`](util.md) — human-readable byte sizes

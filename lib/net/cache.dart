@@ -103,10 +103,7 @@ class CacheEntry {
   Map<String, String> get validators {
     final etag = response.headers['etag'];
     final modified = response.headers['last-modified'];
-    return {
-      if (etag != null) 'If-None-Match': etag,
-      if (modified != null) 'If-Modified-Since': modified,
-    };
+    return {'If-None-Match': ?etag, 'If-Modified-Since': ?modified};
   }
 
   /// Serializes this entry to a JSON-compatible map.

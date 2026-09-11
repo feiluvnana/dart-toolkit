@@ -77,27 +77,26 @@ void main(List<String> args) async {
   // -------------------------------------------------------------- 1. crawl
   log.step(1, 5, 'Crawling the catalogue...');
 
-  final products =
-      await net
-          .crawl<Product>('https://shop.test/catalogue'.url)
-          .downloader(MapDownloader<Product>(_fixtures))
-          .concurrent(size())
-          .delay(util.rand.jitter(20.ms))
-          .samehost()
-          .depth(2)
-          .limit(20)
-          .route(RegExp(r'/catalogue'), _catalogue)
-          .tag('product', _product)
-          .on
-          .error((f) => log.warn('${f.fetch?.url ?? 'crawl'}: ${f.error}'))
-          .collect();
+  final products = await net
+      .crawl<Product>('https://shop.test/catalogue'.url)
+      .downloader(MapDownloader<Product>(_fixtures))
+      .concurrent(size())
+      .delay(util.rand.jitter(20.ms))
+      .samehost()
+      .depth(2)
+      .limit(20)
+      .route(RegExp(r'/catalogue'), _catalogue)
+      .tag('product', _product)
+      .on
+      .error((f) => log.warn('${f.fetch?.url ?? 'crawl'}: ${f.error}'))
+      .collect();
 
-  log.ok('Collected ${products.count()} products.');
+  log.ok('Collected ${products.collect(.count())} products.');
 
   // --------------------------------------------------------- 2. concurrency
   log.step(2, 5, 'Enriching...');
 
-  final bar = Progress(total: products.count(), message: 'Enriching');
+  final bar = Progress(total: products.collect(.count()), message: 'Enriching');
   final enriched = await concurrent.run(products.list, (product) async {
     await util.time.wait(util.rand.jitter(30.ms));
     bar.tick(1, product.name);
@@ -108,7 +107,7 @@ void main(List<String> args) async {
     );
   }, size: size());
   bar.done();
-  log.ok('Enriched ${enriched.count()} products.');
+  log.ok('Enriched ${enriched.collect(.count())} products.');
 
   // ----------------------------------------------------------------- 3. io
   log.step(3, 5, 'Writing output...');
@@ -117,7 +116,12 @@ void main(List<String> args) async {
   if (!force() && io.has(summary)) {
     log.warn('$summary exists; pass --force to overwrite.');
   } else {
-    io.write(summary, enriched.to((e) => '${e.slug} ${e.key}').join('\n'));
+    io.write(
+      summary,
+      enriched
+          .transform(.map((e) => '${e.slug} ${e.key}'))
+          .collect(.join('\n')),
+    );
     io.dump(io.join(dir, 'products.json'), [
       for (final e in enriched.list)
         {'name': e.product.name, 'price': e.product.price, 'slug': e.slug},
@@ -131,12 +135,13 @@ void main(List<String> args) async {
 
   // The state that outlives the run: a counter and a timestamp, under typed
   // keys so neither is a string on one side and an int on the other.
-  final db = io.store.open(io.join(dir, 'state.json'));
-  final count = (db.get(runs) ?? 0) + 1;
+  final statePath = io.join(dir, 'state.json');
+  final db = io.dictionary(statePath);
+  final count = (db.read(runs) ?? 0) + 1;
   db
-    ..set(runs, count)
-    ..set(last, util.time.iso());
-  await db.save();
+    ..write(runs, count)
+    ..write(last, util.time.iso())
+    ..dump(statePath);
 
   // --------------------------------------------------------------- 4. tool
   log.step(4, 5, 'Archiving...');
@@ -158,13 +163,13 @@ void main(List<String> args) async {
   // ------------------------------------------------------------ 5. console
   log.step(5, 5, 'Summary');
 
-  final cheapest = products.sort((p) => p.price);
+  final cheapest = products.transform(.sort.by((p) => p.price));
   out.table(
     Table(
       headers: ['Product', 'Price', 'Slug'],
       alignments: [ColumnAlign.left, ColumnAlign.right, ColumnAlign.left],
     )..addAll([
-      for (final e in enriched.head(5).list)
+      for (final e in enriched.transform(.take.first(5)).list)
         [e.product.name, '\$${e.product.price}', e.slug],
     ]),
   );
@@ -172,8 +177,8 @@ void main(List<String> args) async {
   out.box(
     [
       'Run       $count',
-      'Products  ${products.count()}',
-      'Cheapest  ${cheapest.first?.name} at \$${cheapest.first?.price}',
+      'Products  ${products.collect(.count())}',
+      'Cheapest  ${cheapest.collect(.first())?.name} at \$${cheapest.collect(.first())?.price}',
       'Elapsed   ${util.time.format(clock.elapsed)}',
     ].join('\n'),
     title: 'Result',

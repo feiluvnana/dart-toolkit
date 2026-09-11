@@ -127,11 +127,10 @@ void main() {
     });
 
     test('an empty action submits back to the page', () {
-      final form =
-          _page(
-            '<form method="post"><input name="a" value="1">'
-            '</form>',
-          ).form()!;
+      final form = _page(
+        '<form method="post"><input name="a" value="1">'
+        '</form>',
+      ).form()!;
       expect(form.action, Uri.parse('https://example.com/login'));
     });
 

@@ -81,7 +81,9 @@ void main() async {
       (url) => client.get(url.url),
       size: 2,
     );
-    log.ok('Fetched ${pages.count()}: ${pages.to((p) => p.status).list}');
+    log.ok(
+      'Fetched ${pages.collect(.count())}: ${pages.transform(.map((p) => p.status)).list}',
+    );
   } finally {
     await client.close();
     await server.close();

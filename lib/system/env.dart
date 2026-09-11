@@ -91,10 +91,9 @@ class EnvAccessor {
       const (int) => (int.tryParse(raw) ?? fallback) as T,
       const (double) => (double.tryParse(raw) ?? fallback) as T,
       const (bool) => (_flag(raw) ?? fallback) as T,
-      _ =>
-        throw ArgumentError(
-          'system.env.get does not support $T; use String, int, double or bool.',
-        ),
+      _ => throw ArgumentError(
+        'system.env.get does not support $T; use String, int, double or bool.',
+      ),
     };
   }
 

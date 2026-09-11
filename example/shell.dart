@@ -43,7 +43,7 @@ void main() async {
   await format.zip.pack(dir, archive);
   final entries = await format.zip.list(archive);
   log.ok(
-    'Packed ${entries.count()} entries, '
+    'Packed ${entries.collect(.count())} entries, '
     '${util.size.format(io.stat(archive).size)}.',
   );
 

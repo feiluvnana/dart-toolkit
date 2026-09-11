@@ -11,7 +11,7 @@ import 'dart:async';
 import 'dart:collection';
 
 import '../util/rand.dart';
-import '../util/sequence.dart';
+import '../collection/sequence.dart';
 
 // ============================================================================
 // CONCURRENT & WORKER POOL (concurrent.* / Pool)

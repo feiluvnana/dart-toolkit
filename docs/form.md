@@ -181,7 +181,7 @@ Everything `follow` does still applies: the `Referer` is set, `depth` grows by o
 
 ```dart
 // setup: const markup = '<form action="/session" method="post"></form>';
-final element = format.html.parse(markup).find('form').elements.first!;
+final element = format.html.parse(markup).find('form').elements.collect(.first())!;
 final form = Form(element, page: 'https://example.com/login'.url);
 ```
 

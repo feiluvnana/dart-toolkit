@@ -21,7 +21,7 @@ void main() {
       expect(io.has(at('site.zip')), isTrue);
 
       final files = await format.zip.unpack(at('site.zip'), at('out'));
-      expect(files.count(), equals(2));
+      expect(files.collect(.count()), equals(2));
       expect(io.read(at('out/index.html')), equals('<h1>Home</h1>'));
       expect(io.read(at('out/css/app.css')), equals('body{}'));
     });
@@ -32,9 +32,10 @@ void main() {
       await format.zip.pack(at('src'), at('src.zip'));
 
       final names =
-          (await format.zip.list(
-              at('src.zip'),
-            )).keep((e) => !e.folder).to((e) => e.name).list
+          (await format.zip.list(at('src.zip')))
+              .transform(.where((e) => !e.folder))
+              .transform(.map((e) => e.name))
+              .list
             ..sort();
       expect(names, equals(['a.txt', 'b.txt']));
 
@@ -76,7 +77,7 @@ void main() {
         'safe.txt': utf8.encode('yes'),
       });
       final written = await format.zip.unpack(at('evil.zip'), at('dest'));
-      expect(written.count(), equals(1));
+      expect(written.collect(.count()), equals(1));
       expect(io.has(at('escaped.txt')), isFalse);
       expect(io.read(at('dest/safe.txt')), equals('yes'));
     });
@@ -86,9 +87,12 @@ void main() {
       // io.csv.rows, format.json.read. This was the one that raised
       // PathNotFoundException.
       final missing = at('absent.zip');
-      expect((await format.zip.list(missing)).count(), equals(0));
+      expect((await format.zip.list(missing)).collect(.count()), equals(0));
       expect(await format.zip.read(missing, 'a.txt'), isNull);
-      expect((await format.zip.unpack(missing, at('nowhere'))).count(), 0);
+      expect(
+        (await format.zip.unpack(missing, at('nowhere'))).collect(.count()),
+        0,
+      );
     });
 
     test('an extension no format covers is refused', () async {
@@ -372,13 +376,12 @@ void main() {
       expect(util.time.day(noon), equals(DateTime(2024, 3, 9)));
       expect(util.time.day(noon.toUtc()).isUtc, isTrue);
 
-      final stamps =
-          [
-            DateTime(2024, 3, 9, 1),
-            DateTime(2024, 3, 9, 23),
-            DateTime(2024, 3, 10, 5),
-          ].seq;
-      expect(stamps.tally(util.time.day).length, equals(2));
+      final stamps = [
+        DateTime(2024, 3, 9, 1),
+        DateTime(2024, 3, 9, 23),
+        DateTime(2024, 3, 10, 5),
+      ].seq;
+      expect(stamps.collect(.count.by(util.time.day)).count, equals(2));
     });
 
     test('int gained the two missing rungs', () {
@@ -393,10 +396,10 @@ void main() {
       expect(pool, contains(util.rand.pick(pool)));
       final three = util.rand.some(pool, 3);
       expect(three.list, hasLength(3));
-      expect(three.set, hasLength(3));
+      expect(three.collect(.set()), hasLength(3));
       expect(util.rand.some(pool, 99).list, hasLength(10));
       final shuffled = util.rand.shuffle(pool);
-      expect(shuffled.sort().list, equals(pool));
+      expect(shuffled.transform(.sort()).list, equals(pool));
       expect(() => util.rand.pick(<int>[]), throwsStateError);
     });
 

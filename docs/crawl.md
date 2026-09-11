@@ -23,7 +23,7 @@ void main() async {
         }
       });
 
-  system.console.logger.ok('Collected ${titles.count()} titles.');
+  system.console.logger.ok('Collected ${titles.collect(.count())} titles.');
 }
 ```
 
@@ -152,7 +152,7 @@ final titles = await net.crawl<Never>(seed)
 nothing for it to be. A crawl that follows links into tagged stages emits, and
 wants `collect`.
 
-Both hand back a [`Sequence`](util.md#6-sequences-sequencet), so the shaping a
+Both hand back a [`Sequence`](collection.md), so the shaping a
 script came for is the next call rather than an import — and `.list` is the one
 word at the boundary to anything outside this library:
 
@@ -160,10 +160,10 @@ word at the boundary to anything outside this library:
 // setup: Future<void> rowHandler(Page<Row> p) async {}
 final rows = await net.crawl<Row>(seed).collect(rowHandler);
 
-rows.group((r) => r.host)
-    .seq.to((e) => (host: e.$1, spend: e.$2.sum((r) => r.cost)))
-    .sort((e) => e.host)
-    .each(print);
+rows.collect(.group.into((r) => r.host, .sum((r) => r.cost)))
+    .pairs
+    .transform(.sort.by((e) => e.$1))
+    .collect(.foreach(print));
 
 await concurrent.run(rows.list, enrich, size: system.os.cpus);
 ```
@@ -206,7 +206,7 @@ A page that was mid-fetch when the run stopped counts as pending, not as done, s
 
 ### Driving it yourself
 
-`resume` is `Engine.snapshot` and `Engine.restore` wired to a file. Both are public, so a crawl can keep its position anywhere — a database row, a key-value store, `io.store`:
+`resume` is `Engine.snapshot` and `Engine.restore` wired to a file. Both are public, so a crawl can keep its position anywhere — a database row, a key-value store, a `Dictionary` on disk:
 
 ```dart
 import 'package:dart_toolkit/dart_toolkit.dart';
@@ -218,14 +218,14 @@ void main() async {
 
   const position = Slot<Map<String, Object?>>('position');
 
-  final store = io.store.open('crawl.json');
-  final saved = store.get(position);
+  final state = io.dictionary('crawl.json');
+  final saved = state.read(position);
   if (saved != null) engine.restore(Snapshot<String>.fromJson(saved));
 
   await engine.run(['https://example.com']);
 
-  store.set(position, engine.snapshot().toJson());
-  await store.save();
+  state.write(position, engine.snapshot().toJson());
+  state.dump('crawl.json');
 }
 ```
 
@@ -244,7 +244,7 @@ const name = Slot<String>('name');
 
 final stats = await net.crawl<String>('https://music.example.com/album'.url)
     .tag('song', (res) {
-      print('${res.meta.get(name)} -> ${res.parse(format.html).find('a').attr('href')}');
+      print('${res.meta.read(name)} -> ${res.parse(format.html).find('a').attr('href')}');
     })
     .run((res) {
       for (final a in res.parse(format.html).find('#songlist a').elements.list) {
@@ -290,7 +290,7 @@ See [docs/form.md](form.md).
 
 ## 5b. Carrying Context Between Stages
 
-`meta` is carried untouched from fetch to page, which is how a handler recovers the context it queued a page with. It is keyed by `Slot`s — the same typed keys `io.store` uses, see [store.md](store.md#1-slots):
+`meta` is carried untouched from fetch to page, which is how a handler recovers the context it queued a page with. It is a `Dictionary<String, Object?>` keyed by `Slot`s — see [collection.md](collection.md#7-typed-keys-slot):
 
 ```dart
 const artist = Slot<String>('artist');
@@ -299,8 +299,8 @@ const track = Slot<int>('track');
 res.follow(href, tag: 'song', meta: [artist('Nick Drake'), track(4)]);
 
 // in the 'song' handler:
-final String? by = res.meta.get(artist);   // no cast
-final int? no = res.meta.get(track);
+final String? by = res.meta.read(artist);   // no cast
+final int? no = res.meta.read(track);
 ```
 
 Writing is checked against the slot's type, and a value that is not the shape the slot names reads back as `null` rather than throwing.
@@ -308,10 +308,10 @@ Writing is checked against the slot's type, and a value that is not the shape th
 To pass one page's context on to the next, spread its entries:
 
 ```dart
-res.follow(href, tag: 'detail', meta: [...res.meta.entries, track(4)]);
+res.follow(href, tag: 'detail', meta: [...res.meta.pairs.list, track(4)]);
 ```
 
-Whatever a slot writes has to survive `jsonEncode`, because `meta` travels through the [resume file](#4-surviving-interruption). `Slot.coded` covers a type JSON does not carry. `res.meta.raw` is the map underneath, for a key another library owns.
+Whatever a slot writes has to survive `jsonEncode`, because `meta` travels through the [resume file](#4-surviving-interruption). `Slot.coded` covers a type JSON does not carry. `res.meta.map` is the map underneath, for a key another library owns.
 
 ---
 
@@ -322,7 +322,7 @@ res.emit(item);                    // yield a result
 res.follow(url, tag: ..., meta: ..., priority: ...);
 res.stop('reason');                // wind down after in-flight work
 res.tag;                           // the tag this page was queued with
-res.meta.get(slot);                // the context it was queued with
+res.meta.read(slot);                // the context it was queued with
 res.engine;                        // the running Engine
 res.fetch;                         // the scheduled Fetch
 res.depth;                         // current hop depth (seed is 0)

@@ -7,7 +7,7 @@ library;
 
 import 'dart:async';
 
-import '../util/sequence.dart';
+import '../collection/sequence.dart';
 import 'net.dart';
 
 /// A single Allow or Disallow rule in a `robots.txt` file.

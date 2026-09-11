@@ -11,7 +11,7 @@ import 'dart:io';
 
 import '../src/fs.dart';
 import '../src/proc.dart';
-import '../util/sequence.dart';
+import '../collection/sequence.dart';
 import 'cache.dart';
 import 'downloader.dart';
 import 'engine.dart';
@@ -507,9 +507,9 @@ class CrawlBuilder<T> {
 
   /// Writes [engine]'s position to [path], one write at a time.
   Future<void> _write(String path, Engine<T> engine) =>
-  // Captured now, so a snapshot queued behind an in-flight write still
-  // records the frontier as it stood when the save was asked for.
-  _save(path, engine.snapshot());
+      // Captured now, so a snapshot queued behind an in-flight write still
+      // records the frontier as it stood when the save was asked for.
+      _save(path, engine.snapshot());
 
   /// Writes [position] to [path], behind any write already in flight.
   Future<void> _save(String path, Snapshot<T> position) {
@@ -534,7 +534,7 @@ class CrawlBuilder<T> {
     final urls = _urls.map((u) => u.toString()).toList();
     if (_sitemapUrl != null) {
       final sitemapUrls = await Sitemap.load(_sitemapUrl!);
-      urls.addAll(sitemapUrls.to((u) => u.toString()).list);
+      urls.addAll(sitemapUrls.transform(.map((u) => u.toString())).list);
     }
     return urls;
   }
@@ -562,7 +562,7 @@ class CrawlBuilder<T> {
   ///
   /// ```dart
   /// final rows = await net.crawl<Row>(seed).collect();
-  /// rows.group((r) => r.host).seq.each(print);
+  /// rows.collect(.group.by((r) => r.host)).pairs.collect(.foreach(print));
   /// ```
   Future<Sequence<T>> collect([Handler<T>? process]) async {
     final items = <T>[];

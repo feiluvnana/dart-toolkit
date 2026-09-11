@@ -6,7 +6,7 @@ library;
 
 import 'dart:math';
 
-import 'sequence.dart';
+import '../collection/sequence.dart';
 
 // ============================================================================
 // RANDOMNESS (util.rand.*)
@@ -61,7 +61,7 @@ class RandAccessor {
   ///
   /// Returns everything, shuffled, when [count] exceeds the list length.
   Sequence<T> some<T>(List<T> items, int count) =>
-      shuffle(items).head(count < 0 ? 0 : count);
+      shuffle(items).transform(.take.first(count < 0 ? 0 : count));
 
   /// A shuffled copy of [items], leaving the original untouched.
   ///

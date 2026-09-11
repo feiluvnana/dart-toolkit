@@ -10,7 +10,8 @@ import 'dart:convert';
 
 import 'package:path/path.dart' as p;
 
-import '../util/slot.dart';
+import '../collection/dictionary.dart';
+import '../collection/slot.dart';
 import 'engine.dart';
 import 'http.dart';
 
@@ -70,7 +71,7 @@ Uri coerce(String target, {Uri? base}) {
 ///
 /// res.follow(href, tag: 'song', meta: [title('Hey Jude')]);
 /// // later, in the 'song' handler:
-/// final String? name = res.meta.get(title);
+/// final String? name = res.meta.read(title);
 /// ```
 class Fetch<T> {
   /// The absolute URL to fetch.
@@ -95,8 +96,8 @@ class Fetch<T> {
   /// Context carried to the page, untouched by the engine.
   ///
   /// Read and written through [Slot]s, so what a handler stored comes back
-  /// with its type. See [Meta].
-  final Meta meta;
+  /// with its type — see the `Slotted` extension on [Dictionary].
+  final Dictionary<String, Object?> meta;
 
   /// Whether to de-duplicate this request. Defaults to true.
   final bool dedupe;
@@ -115,12 +116,12 @@ class Fetch<T> {
     this.body,
     this.priority = 0,
     this.tag,
-    Iterable<MapEntry<String, Object?>>? meta,
+    Iterable<(String, Object?)>? meta,
     this.engine,
     this.dedupe = true,
     this.depth = 0,
   }) : headers = headers ?? {},
-       meta = Meta(meta ?? const []);
+       meta = Dictionary.of(meta ?? const []);
 
   /// Restores a request from the map [toJson] produced.
   ///
@@ -148,7 +149,9 @@ class Fetch<T> {
       body: body is Map ? Body.fromJson(body.cast<String, Object?>()) : null,
       priority: (json['priority'] as num? ?? 0).toInt(),
       tag: json['tag'] as String?,
-      meta: (json['meta'] as Map? ?? const {}).cast<String, Object?>().entries,
+      meta: (json['meta'] as Map? ?? const {}).entries.map(
+        (entry) => (entry.key.toString(), entry.value),
+      ),
       dedupe: json['dedupe'] as bool? ?? true,
       depth: (json['depth'] as num? ?? 0).toInt(),
     );
@@ -167,7 +170,7 @@ class Fetch<T> {
     if (body != null) 'body': body!.toJson(),
     if (priority != 0) 'priority': priority,
     if (tag != null) 'tag': tag,
-    if (meta.isNotEmpty) 'meta': meta.raw,
+    if (!meta.empty) 'meta': meta.map,
     if (!dedupe) 'dedupe': false,
     if (depth != 0) 'depth': depth,
   };
@@ -205,7 +208,7 @@ class Page<T> extends Reply {
   int get depth => fetch.depth;
 
   /// The context [Fetch.meta] this page's fetch carried.
-  Meta get meta => fetch.meta;
+  Dictionary<String, Object?> get meta => fetch.meta;
 
   /// The [Fetch.tag] this page's fetch carried.
   String? get tag => fetch.tag;
@@ -243,7 +246,7 @@ class Page<T> extends Reply {
     HttpMethod method = HttpMethod.get,
     Body? body,
     String? tag,
-    Iterable<MapEntry<String, Object?>>? meta,
+    Iterable<(String, Object?)>? meta,
     Map<String, String>? headers,
     int priority = 0,
     bool dedupe = true,

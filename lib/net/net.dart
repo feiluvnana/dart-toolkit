@@ -20,7 +20,7 @@ library;
 
 import 'dart:async';
 
-import '../util/sequence.dart';
+import '../collection/sequence.dart';
 import 'crawl.dart';
 import 'http.dart';
 import 'robots.dart';

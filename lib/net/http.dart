@@ -21,7 +21,7 @@ import '../concurrent/concurrent.dart';
 import '../src/fs.dart';
 import '../util/codec.dart';
 import '../util/rand.dart';
-import '../util/sequence.dart';
+import '../collection/sequence.dart';
 import 'cache.dart';
 
 // ============================================================================
@@ -507,8 +507,9 @@ class Fetcher with PathResolver {
   static http.Client _createClient(String? proxy) {
     if (proxy == null) return http.Client();
     final inner = dart_io.HttpClient();
-    final cleanProxy =
-        proxy.toUpperCase().startsWith('PROXY ') ? proxy : 'PROXY $proxy';
+    final cleanProxy = proxy.toUpperCase().startsWith('PROXY ')
+        ? proxy
+        : 'PROXY $proxy';
     inner.findProxy = (uri) => cleanProxy;
     return IOClient(inner);
   }
@@ -570,10 +571,9 @@ class Fetcher with PathResolver {
         if (jar != null) {
           final cookieHeader = jar!.header(currentUrl);
           if (cookieHeader != null) {
-            currentMerged['Cookie'] =
-                currentMerged.containsKey('Cookie')
-                    ? '${currentMerged['Cookie']}; $cookieHeader'
-                    : cookieHeader;
+            currentMerged['Cookie'] = currentMerged.containsKey('Cookie')
+                ? '${currentMerged['Cookie']}; $cookieHeader'
+                : cookieHeader;
           }
         }
         final request = http.Request(currentMethod.wire, currentUrl)
@@ -1054,8 +1054,9 @@ class Morsel {
     final parts = setCookieHeader.split(';');
     final nameValue = parts.first.split('=');
     final name = nameValue.first.trim();
-    final value =
-        nameValue.length > 1 ? nameValue.sublist(1).join('=').trim() : '';
+    final value = nameValue.length > 1
+        ? nameValue.sublist(1).join('=').trim()
+        : '';
     String? domain;
     String? path;
     DateTime? expires;
@@ -1096,10 +1097,9 @@ class Morsel {
       host: widened == null,
       // Max-Age wins over Expires per RFC 6265 section 5.3.
       path: (path != null && path.startsWith('/')) ? path : _defaultPath(uri),
-      expires:
-          maxAge != null
-              ? DateTime.now().add(Duration(seconds: maxAge))
-              : expires,
+      expires: maxAge != null
+          ? DateTime.now().add(Duration(seconds: maxAge))
+          : expires,
       secure: secure,
       httponly: httponly,
     );

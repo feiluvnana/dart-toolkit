@@ -1,14 +1,14 @@
 /// # Dart Script Toolkit (`dart-toolkit`)
 ///
 /// A lightweight automation and web-scraping toolkit developed by
-/// **feiluvnana**, organised into seven domain namespaces with lowercase,
+/// **feiluvnana**, organised into eight domain namespaces with lowercase,
 /// preferably one-word methods.
 ///
 /// Five of them are *axes* — a way of touching the machine:
 ///
-/// - [io]: files, atomic writes, paths, CSV (`io.csv`), a JSON store
-///   (`io.store`), watching (`io.watch`), locking (`io.lock`), and a
-///   non-blocking mirror of the lot (`io.async`).
+/// - [io]: files, atomic writes, paths, CSV (`io.csv`), the collections on
+///   disk (`io.dictionary`, `dump`), watching (`io.watch`), locking
+///   (`io.lock`), and a non-blocking mirror of the lot (`io.async`).
 /// - [net]: HTTP (`net.http`), the crawler engine (`net.crawl`), the forms a
 ///   page carries ([Form]) — and, in the other direction, a server that
 ///   listens (`net.serve`, `net.once`). It fetches bytes and parses none of
@@ -18,10 +18,17 @@
 /// - [concurrent]: bounded async task pools, and rate limiting
 ///   (`concurrent.rate`).
 /// - [util]: pure helpers — time (`util.time`), sizes (`util.size`), text
-///   (`util.text`), hashing (`util.hash`), randomness (`util.rand`) — plus
-///   [Sequence], the sequence API this library returns in place of Dart's, and
-///   the two read cursors every document door hands back: [Json] for maps and
+///   (`util.text`), hashing (`util.hash`), randomness (`util.rand`) — plus the
+///   two read cursors every document door hands back: [Json] for maps and
 ///   scalars, [Markup] for elements.
+///
+/// One is neither, because it is a vocabulary rather than a way in:
+///
+/// - `collection`: [Sequence] and [Dictionary], the two collections this
+///   library returns in place of Dart's, and the two operation types that
+///   shape them — [Transformer] and [Collector]. A library, not an accessor:
+///   Rule 2 spends no top-level name, and you reach every one of these from
+///   the data you already hold.
 ///
 /// Two are *subjects* — knowledge that came from outside Dart:
 ///
@@ -47,12 +54,13 @@
 ///       .gather((page) => page.parse(format.html)
 ///           .find('.titleline > a').texts.list);
 ///
-///   io.write('titles.txt', titles.unique().join('\n'));
+///   io.write('titles.txt', titles.transform(.unique()).collect(.join('\n')));
 /// }
 /// ```
 library;
 
 export 'cli/cli.dart';
+export 'collection/collection.dart';
 export 'concurrent/concurrent.dart';
 export 'format/format.dart';
 export 'io/io.dart';

@@ -40,8 +40,14 @@ void main() {
     test('String.\$ selects straight out of markup', () {
       final tracks = sampleHtml.$('.track');
       expect(tracks.count, equals(3));
-      expect(tracks.elements.first!.query.find('.num').text, equals('01.'));
-      expect(tracks.elements.last!.query.find('.num').text, equals('03.'));
+      expect(
+        tracks.elements.collect(.first())!.query.find('.num').text,
+        equals('01.'),
+      );
+      expect(
+        tracks.elements.collect(.last())!.query.find('.num').text,
+        equals('03.'),
+      );
     });
 
     test('text, texts, and html extraction', () {
@@ -98,7 +104,7 @@ void main() {
       final q = sampleHtml.$('.title');
       expect(q.text, equals('Album Title'));
 
-      final elem = q.elements.first;
+      final elem = q.elements.collect(.first());
       expect(elem, isNotNull);
       expect(elem!.query.text, equals('Album Title'));
       expect(elem.attr('class'), equals('title'));
@@ -113,20 +119,23 @@ void main() {
     test('Markup is a real Iterable', () {
       final texts = $(
         sampleHtml,
-      ).find('.num').elements.to((Element e) => e.text.trim());
+      ).find('.num').elements.transform(.map((Element e) => e.text.trim()));
       expect(texts.list, equals(['01.', '02.', '03.']));
     });
 
     test('firstOrNull and find() / call() API', () {
       final q = $(sampleHtml);
-      final firstTrack = q.find('.track').elements.first;
+      final firstTrack = q.find('.track').elements.collect(.first());
       expect(firstTrack, isNotNull);
       expect(firstTrack?.attr('data-id'), equals('1'));
-      expect(q.find('.missing').elements.first, isNull);
+      expect(q.find('.missing').elements.collect(.first()), isNull);
 
       final allTracks = q.find('.track');
       expect(allTracks.count, equals(3));
-      expect(allTracks.elements.first!.attr('data-id'), equals('1'));
+      expect(
+        allTracks.elements.collect(.first())!.attr('data-id'),
+        equals('1'),
+      );
     });
 
     test(
@@ -198,7 +207,7 @@ void main() {
       final xp = $xpath(sampleHtml);
 
       // firstOrNull on xpath result
-      final firstA = xp.xpath('//a').elements.first;
+      final firstA = xp.xpath('//a').elements.collect(.first());
       expect(firstA, isNotNull);
       expect(firstA?.text.trim(), equals('Track One'));
 
@@ -285,7 +294,7 @@ void main() {
         expect(q.find('input').value, equals('test@example.com'));
 
         // Element extension getters
-        final firstImg = q.find('img').elements.first;
+        final firstImg = q.find('img').elements.collect(.first());
         expect(firstImg?.attr('src'), equals('/img/1.png'));
         expect(firstImg?.attr('alt'), equals('Image 1'));
       },
@@ -348,7 +357,7 @@ void main() {
       ''';
       final form = $(formHtml);
       final fields = form.find('input, textarea');
-      expect(fields.elements.first!.value, equals('alice'));
+      expect(fields.elements.collect(.first())!.value, equals('alice'));
       expect(fields.at(1).value, equals('Software developer'));
       expect(
         fields.values.list,
@@ -367,7 +376,7 @@ void main() {
         final card = containerHtml.$('.card');
         // The card container itself has no href attribute:
         expect(card.attr('href'), isNull);
-        expect(card.elements.first?.attr('href'), isNull);
+        expect(card.elements.collect(.first())?.attr('href'), isNull);
         expect(card.attrs('href').list, isEmpty);
 
         // Descendant links are reached when queried explicitly:
@@ -539,8 +548,9 @@ void main() {
       ];
       for (final selector in selectors) {
         final viaFind = page.find(selector).elements.list.toSet();
-        final viaMatching =
-            every.where((e) => e.query.matching(selector).count == 1).toSet();
+        final viaMatching = every
+            .where((e) => e.query.matching(selector).count == 1)
+            .toSet();
         expect(
           viaMatching,
           equals(viaFind),
@@ -553,7 +563,7 @@ void main() {
       'anything with a combinator or a pseudo still takes the slow path',
       () {
         final page = format.html.parse(html);
-        final b = page.find('.active').elements.first!;
+        final b = page.find('.active').elements.collect(.first())!;
         expect(b.query.matching('div p').count, equals(1));
         expect(b.query.matching('div > p.active').count, equals(1));
         expect(b.query.matching('p:nth-child(2)').count, equals(1));

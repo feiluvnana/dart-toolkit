@@ -105,7 +105,11 @@ void main() {
 
     test('jsonpath works over a YAML document too', () {
       expect(
-        format.yaml.parse(_yaml).jsonpath(r'$..sdk').sift((n) => n.text()).list,
+        format.yaml
+            .parse(_yaml)
+            .jsonpath(r'$..sdk')
+            .transform(.map.nonnull((n) => n.text()))
+            .list,
         equals(['^3.7.0']),
       );
     });

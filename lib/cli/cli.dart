@@ -418,7 +418,7 @@ mixin _Spec {
   ///
   /// ```dart
   /// final since = cli.date('since');
-  /// rows.keep((r) => since() == null || r.seen.isAfter(since()!));
+  /// rows.transform(.where((r) => since() == null || r.seen.isAfter(since()!)));
   /// ```
   Opt<DateTime?> date(
     String name, {
@@ -760,10 +760,9 @@ class Cli with _Spec {
 
   void _option(String key, String value) {
     final cleanKey = _clean(key);
-    final values =
-        (_decl(cleanKey)?.csv ?? false)
-            ? value.split(',').map((v) => v.trim()).where((v) => v.isNotEmpty)
-            : [value];
+    final values = (_decl(cleanKey)?.csv ?? false)
+        ? value.split(',').map((v) => v.trim()).where((v) => v.isNotEmpty)
+        : [value];
     _options[cleanKey] = values.isEmpty ? value : values.last;
     _repeated.putIfAbsent(cleanKey, () => []).addAll(values);
     _mark(cleanKey);
@@ -1059,44 +1058,40 @@ class Cli with _Spec {
     bool strict = false,
     FutureOr<int> Function(Cli cli)? body,
   }) async {
-    final help =
-        _declarations.containsKey('help')
-            ? Opt<bool>._(
-              'help',
-              'h',
-              false,
-              this,
-              (cli, self) => cli._readFlag(self),
-            )
-            : flag('help', alias: 'h', desc: 'Show this message');
-    final showVersion =
-        version == null
-            ? null
-            : (_declarations.containsKey('version')
-                ? Opt<bool>._(
+    final help = _declarations.containsKey('help')
+        ? Opt<bool>._(
+            'help',
+            'h',
+            false,
+            this,
+            (cli, self) => cli._readFlag(self),
+          )
+        : flag('help', alias: 'h', desc: 'Show this message');
+    final showVersion = version == null
+        ? null
+        : (_declarations.containsKey('version')
+              ? Opt<bool>._(
                   'version',
                   null,
                   false,
                   this,
                   (cli, self) => cli._readFlag(self),
                 )
-                : flag('version', desc: 'Show the version and exit'));
+              : flag('version', desc: 'Show the version and exit'));
 
     final path = _resolve();
     final target = path.isEmpty ? null : path.last;
     final scoped = _scope(path);
     final program = _program(syntax);
     final line = [program, ...path.map((c) => c.name)].join(' ');
-    final trailing =
-        (target?._children.isNotEmpty ?? false)
-            ? '<command> [options]'
-            : '[options]';
+    final trailing = (target?._children.isNotEmpty ?? false)
+        ? '<command> [options]'
+        : '[options]';
 
     String text() => _usage(
-      syntax:
-          path.isEmpty
-              ? (syntax ?? '$program <command> [options]')
-              : '$line $trailing',
+      syntax: path.isEmpty
+          ? (syntax ?? '$program <command> [options]')
+          : '$line $trailing',
       desc: path.isEmpty ? desc : (target!.desc.isEmpty ? null : target.desc),
       declarations: scoped._declarations,
       children: (target?._children ?? _children),
@@ -1330,13 +1325,9 @@ String _usage({
     ...flagEntries.keys,
     ...optionEntries.keys,
   ];
-  final column =
-      labels.isEmpty
-          ? 24
-          : labels
-              .map(Ansi.width)
-              .reduce((a, b) => a > b ? a : b)
-              .clamp(12, 34);
+  final column = labels.isEmpty
+      ? 24
+      : labels.map(Ansi.width).reduce((a, b) => a > b ? a : b).clamp(12, 34);
 
   void section(String title, Map<String, String> entries) {
     if (entries.isEmpty) return;

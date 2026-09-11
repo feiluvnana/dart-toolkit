@@ -136,8 +136,8 @@ final class Form {
   /// and [HttpMethod.get] for anything else, which is what HTML allows.
   HttpMethod get method =>
       element.attributes['method']?.trim().toLowerCase() == 'post'
-          ? HttpMethod.post
-          : HttpMethod.get;
+      ? HttpMethod.post
+      : HttpMethod.get;
 
   /// The URL this submits to, [fields] included when the method is `GET`.
   ///
@@ -311,7 +311,7 @@ extension FormSubmission<T> on Page<T> {
   void submit(
     Form form, {
     String? tag,
-    Iterable<MapEntry<String, Object?>>? meta,
+    Iterable<(String, Object?)>? meta,
     Map<String, String>? headers,
     int priority = 0,
     bool dedupe = true,

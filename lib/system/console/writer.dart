@@ -184,13 +184,13 @@ class Table {
     final header = [for (var i = 0; i < columns; i++) headers[i].bold()];
     final widths = _widths(columns, header);
 
-    String rule(String left, String mid, String right) =>
-        [
-          left,
-          [for (var i = 0; i < columns; i++) style.horizontal * (widths[i] + 2)]
-              .join(mid),
-          right,
-        ].join();
+    String rule(String left, String mid, String right) => [
+      left,
+      [
+        for (var i = 0; i < columns; i++) style.horizontal * (widths[i] + 2),
+      ].join(mid),
+      right,
+    ].join();
 
     /// One row, as however many physical lines its tallest cell needs.
     String row(List<String> cells) {
@@ -217,11 +217,10 @@ class Table {
       return buffer.toString();
     }
 
-    final buffer =
-        StringBuffer()
-          ..writeln(rule(style.topleft, style.topdivider, style.topright))
-          ..write(row(header))
-          ..writeln(rule(style.leftdivider, style.cross, style.rightdivider));
+    final buffer = StringBuffer()
+      ..writeln(rule(style.topleft, style.topdivider, style.topright))
+      ..write(row(header))
+      ..writeln(rule(style.leftdivider, style.cross, style.rightdivider));
     for (final cells in _rows) {
       buffer.write(row(cells));
     }
@@ -306,7 +305,7 @@ enum ProgressUnit {
 /// Renders only to a terminal, so piped output stays clean.
 ///
 /// ```dart
-/// final bar = Progress(total: files.count(), message: 'Downloading');
+/// final bar = Progress(total: files.collect(.count()), message: 'Downloading');
 /// for (final f in files.list) { await io.async.read(f.path); bar.tick(); }
 /// bar.done('Finished');
 /// ```
@@ -381,10 +380,9 @@ class Progress {
     if (!writer.tty) return;
     final fraction = total > 0 ? (_current / total).clamp(0.0, 1.0) : 0.0;
     final filled = (width * fraction).round();
-    final metrics =
-        unit == ProgressUnit.bytes
-            ? '${_size.format(_current)} / ${_size.format(total)}'
-            : '$_current / $total';
+    final metrics = unit == ProgressUnit.bytes
+        ? '${_size.format(_current)} / ${_size.format(total)}'
+        : '$_current / $total';
 
     final parts = [
       if (_message.isNotEmpty) _message.brightcyan(),
@@ -403,10 +401,9 @@ class Progress {
     final elapsed = _clock.elapsed;
     if (elapsed.inMilliseconds <= 300 || _current <= 0) return const [];
     final perSecond = _current / (elapsed.inMilliseconds / 1000);
-    final rate =
-        unit == ProgressUnit.bytes
-            ? '${_size.format(perSecond.round())}/s'
-            : '${perSecond.toStringAsFixed(1)} items/s';
+    final rate = unit == ProgressUnit.bytes
+        ? '${_size.format(perSecond.round())}/s'
+        : '${perSecond.toStringAsFixed(1)} items/s';
     if (total <= _current || perSecond <= 0) return [rate.dim()];
     final remaining = Duration(
       seconds: ((total - _current) / perSecond).round(),

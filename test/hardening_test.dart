@@ -192,11 +192,10 @@ Disallow: /
     });
 
     test('results still arrive in completion order', () async {
-      final out =
-          await concurrent.stream([30, 10, 20], (ms) async {
-            await Future<void>.delayed(Duration(milliseconds: ms));
-            return ms;
-          }, size: 3).toList();
+      final out = await concurrent.stream([30, 10, 20], (ms) async {
+        await Future<void>.delayed(Duration(milliseconds: ms));
+        return ms;
+      }, size: 3).toList();
       expect(out, equals([10, 20, 30]));
     });
   });

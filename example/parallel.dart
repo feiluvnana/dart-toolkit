@@ -23,7 +23,7 @@ void main() async {
   }, size: 4);
   bar.done();
   log.ok(
-    'Fetched ${sizes.count()}, ${util.size.format(sizes.list.reduce(_sum))} total',
+    'Fetched ${sizes.collect(.count())}, ${util.size.format(sizes.list.reduce(_sum))} total',
   );
 
   // `concurrent.stream` yields each result as it lands, for work whose output
@@ -42,10 +42,11 @@ void main() async {
 
   // `settle` never throws: every item comes back as a sealed Done or Broke.
   final results = await pool.settle(ids, _flaky);
-  final ok = results.only<Done<String>>().count();
-  log.ok('$ok of ${results.count()} succeeded.');
+  final ok = results.transform(.where.type<Done<String>>()).collect(.count());
+  log.ok('$ok of ${results.collect(.count())} succeeded.');
 
-  for (final (i, result) in results.pairs.head(4).list) {
+  for (final (i, result)
+      in results.transform(.enumerate()).transform(.take.first(4)).list) {
     log.info(switch (result) {
       Done(:final value) => '${ids[i].padRight(7)} $value',
       Broke(:final error) => '${ids[i].padRight(7)} failed — $error',

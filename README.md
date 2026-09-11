@@ -1,7 +1,7 @@
 # Dart Script Toolkit (`dart-toolkit`)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Dart](https://img.shields.io/badge/Dart-3.7%2B-blue.svg)](https://dart.dev)
+[![Dart](https://img.shields.io/badge/Dart-3.10%2B-blue.svg)](https://dart.dev)
 [![GitHub](https://img.shields.io/badge/GitHub-feiluvnana%2Fdart--toolkit-brightgreen.svg)](https://github.com/feiluvnana/dart-toolkit)
 
 A cohesive automation and web-scraping toolkit for Dart, developed by **feiluvnana**. Built for writing clean command-line scripts, with **lowercase, preferably one-word methods** and **hierarchical domain namespaces**.
@@ -12,11 +12,17 @@ Five of them are **axes** — a way of touching the machine:
 
 | Domain | Sub-namespaces | Focus |
 | :--- | :--- | :--- |
-| **`io.*`** | `io.csv.*`, `io.store.*`, `io.async.*` | Atomic file writes, paths, CSV tables, JSON key-value store, watching, locking |
+| **`io.*`** | `io.csv.*`, `io.async.*` | Atomic file writes, paths, CSV tables, collections on disk, watching, locking |
 | **`net.*`** | `net.http.*`, `net.crawl`, `net.serve` | HTTP requests, streaming downloads, the crawler engine, a server that listens — it fetches bytes and parses none of them |
 | **`system.*`** | `system.env.*`, `system.console.*`, `system.on.*` | Subprocesses, environment, terminal IO, `system.os` — and `system.on.*`, which is what happens to your files and child processes when the program is interrupted |
 | **`concurrent.*`** | `concurrent.run(...)`, `concurrent.rate(...)` | Bounded async task pools, and rate limiting |
-| **`util.*`** | `util.time.*`, `util.size.*`, `util.text.*`, `util.hash.*`, `util.rand.*` | Pure helpers: delays, byte sizes, text, digests, randomness — plus `Sequence`, and the `Json` and `Markup` document cursors |
+| **`util.*`** | `util.time.*`, `util.size.*`, `util.text.*`, `util.hash.*`, `util.rand.*` | Pure helpers: delays, byte sizes, text, digests, randomness — plus the `Json` and `Markup` document cursors |
+
+One is neither, because it is a vocabulary rather than a way in:
+
+| Domain | Holds | Focus |
+| :--- | :--- | :--- |
+| `collection` | `Sequence`, `Dictionary`, `Transformer`, `Collector`, `Slot` | The two collections this library returns in place of Dart's, and the two operation types that shape them. A library, not an accessor — you reach all of it from the data you already hold |
 
 Two are **subjects** — knowledge that came from outside Dart:
 
@@ -46,13 +52,14 @@ belongs to, when it earns a top-level name, and how to name it.
 3. **Real types at every boundary.** URLs are `Uri`, delays are `Duration`, paths are `String`, bodies and hash algorithms are sealed types and enums. No `Object` or `dynamic` parameters, so the analyzer catches mistakes at the call site.
 4. **Atomic by default.** Every write stages through a `.part` file and is renamed into place only after a successful flush. Interrupted runs never leave truncated files, and Ctrl-C cleans up.
 5. **Engine-driven pipelines.** Multi-stage crawlers use declarative URL routing, tag-based stages, and automatic relative-URL resolution.
-6. **One vocabulary for sequences.** Everything this library hands back for you to *shape* is a [`Sequence`](docs/util.md#sequence) — `group`, `chunks`, `sum`, `best`, `tally`, `sift` — and it is deliberately not an `Iterable`, so Dart's names and these are never both in scope at one call site. `.list` is the one word at the boundary; `.seq` brings an outside collection in. Through 4.0.0 that claim was only half true: 53 public members handed back a `List`, `Map` or `Set` against 30 that handed back a `Sequence`, and `page.find('a').elements` and `page.find('a').texts` were the same cursor one call apart in two vocabularies. 5.0.0 converted them.
+6. **One vocabulary for collections.** Everything this library hands back for you to *shape* is a [`Sequence`](docs/collection.md) or a [`Dictionary`](docs/collection.md#6-dictionaryk-v-the-keyed-collection), deliberately not an `Iterable` or a `Map`, so Dart's names and these are never both in scope at one call site. `.list` and `.map` are the words at the boundary; `.seq` and `.dict` bring an outside collection in. Through 4.0.0 that claim was only half true — 53 public members handed back a `List`, `Map` or `Set` against 30 that handed back a `Sequence` — and 5.0.0 converted them.
+7. **A pipeline is a value.** A `Sequence` has two members: `transform` takes a [`Transformer`](docs/collection.md#3-transformer--the-shaping-operations) and `collect` takes a [`Collector`](docs/collection.md#4-collector--the-ending-operations). Everything else is a static factory on one of those, which is what lets each of them take its ordinary name back — `map`, `where`, `take.first`, `group.by`, `max.by`. A namespace has no `Map` to collide with and no camelCase to forbid, so a compound operation splits at the capital instead of inventing a word. It also makes a chain storable, passable, supplyable by a caller, and testable against a plain list.
 
 ---
 
 ## Installation
 
-Requires Dart 3.7 or newer.
+Requires Dart 3.10 or newer — the dot-shorthand syntax `rows.transform(.map(f))` leans on is a 3.10 feature.
 
 ```yaml
 dependencies:
@@ -107,11 +114,11 @@ void main(List<String> args) async {
           res.emit(title);
         }
       });
-  log.ok('Found ${titles.count()} headlines.');
+  log.ok('Found ${titles.collect(.count())} headlines.');
 
   // 3. Process concurrently, with a progress bar
   log.step(2, 3, 'Processing...');
-  final batch = titles.head(10).list;
+  final batch = titles.transform(.take.first(10)).list;
   final bar = Progress(total: batch.length, message: 'Processing');
   final processed = await concurrent.run(batch, (title) async {
     bar.tick(1, title);
@@ -123,15 +130,15 @@ void main(List<String> args) async {
   log.step(3, 3, 'Saving...');
   system.console.writer.table(
     Table(headers: ['Metric', 'Value'])..addAll([
-      ['Crawled', titles.count()],
-      ['Processed', processed.count()],
+      ['Crawled', titles.collect(.count())],
+      ['Processed', processed.collect(.count())],
       ['Elapsed', util.time.format(clock.elapsed)],
     ]),
   );
 
   final dest = io.join('output', 'summary.txt');
   if (force() || !io.has(dest)) {
-    io.write(dest, processed.join('\n'));
+    io.write(dest, processed.collect(.join('\n')));
     log.ok('Saved to $dest');
   }
 }
@@ -139,15 +146,15 @@ void main(List<String> args) async {
 
 This script exits on its own when it finishes — no manual cleanup call is needed.
 
-**Coming from 4.x?** 5.0.0 fixed nine functions that returned a plausible wrong
-answer — `util.text.fold` mapped 14 of 71 accented letters to the wrong letter,
-`util.size` labelled 1024-based units `MB`, `:nth-child(2)` matched nothing —
-and deleted the names that were a second spelling of another name: `page(sel)`
-(use `find` or `xpath`), `Markup.href`/`src`, `Mutex`, `concurrent.compute`,
-`cli.rest`, `cli.subcommand`, `Sequence.union`, and `retry`'s `times:`.
-`io.observe` is `io.watch`, signal handling moved to `system.on.*`, and
-`Sequence` is a snapshot rather than a lazy view. The full list, with before and
-after for every one, is in [CHANGELOG.md](CHANGELOG.md).
+**Coming from 5.0?** 5.1.0 replaced `Sequence`'s fifty-eight methods with two —
+`transform(Transformer)` and `collect(Collector)` — and a third of the old names
+were words this library had invented for an operation everybody already knew.
+`to` is `map`, `keep` is `where`, `sift` is `map.nonnull`, `head` is
+`take.first`, `best` is `max.by`, `tally` is `count.by`. `Sequence` and `Slot`
+moved to a `collection` domain, `Dictionary` joined them and absorbed `Meta`,
+`Store` and the three members that handed back a raw `Map`, and the minimum SDK
+is 3.10. Every deleted member is a compile error at every call site, and the
+full mapping is in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -208,7 +215,7 @@ await io.csv.pipe(
 );
 ```
 
-See [docs/io.md](docs/io.md), [docs/csv.md](docs/csv.md), [docs/store.md](docs/store.md).
+See [docs/io.md](docs/io.md), [docs/csv.md](docs/csv.md), [docs/collection.md](docs/collection.md#8-on-disk).
 
 ### `net.http` — requests, and the codec seam
 
@@ -232,7 +239,7 @@ final item = (
     sku: row.attr('data-sku'),
   )),
 );
-item.variants.first?.sku;   // String?, no cast
+item.variants.collect(.first())?.sku;   // String?, no cast
 
 // The string shorthand, for a first look at an unfamiliar page:
 final loose = page.extract({'title': 'h1.title', 'links': ['a.link@href']});
@@ -256,7 +263,7 @@ await net.crawl<String>('https://music.example.com/album'.url)
     .limit(50)
     .depth(2)
     .tag('song', (res) {
-      print('${res.meta.get(name)} -> ${res.parse(format.html).find('a').attr('href')}');
+      print('${res.meta.read(name)} -> ${res.parse(format.html).find('a').attr('href')}');
     })
     .run((res) {
       for (final a in res.parse(format.html).find('#songlist a').elements.list) {
@@ -333,7 +340,7 @@ if (res.ok) print(res.out);
 
 system.which('ffmpeg');
 system.env.get('PORT', 8080);
-system.on.exit(() async => db.save());    // and track, adopt, signals
+system.on.exit(() => db.dump('out/state.json'));    // and track, adopt, signals
 await system.shutdown();
 ```
 
@@ -385,7 +392,7 @@ implements `Codec`, which is what `res.parse(...)` takes:
 ```dart
 final pubspec = await format.yaml.read('pubspec.yaml');
 pubspec.text('version');                          // no cast
-pubspec.jsonpath(r'$..sdk').sift((n) => n.text());
+pubspec.jsonpath(r'$..sdk').transform(.map.nonnull((n) => n.text()));
 
 format.json.parse(res.body).at('data.items').all((i) => i.text('sku'));
 format.html.parse(res.body).find('h1').text;      // the same three members
@@ -417,6 +424,31 @@ await format.zip.read('site.zip', 'index.html');
 ```
 
 See [docs/zip.md](docs/zip.md).
+
+### `collection` — `Sequence`, `Dictionary`, and the two operation types
+
+```dart
+rows.transform(.where((r) => r.live))
+    .transform(.sort.by((r) => r.cost))
+    .transform(.take.first(10))
+    .collect(.list());
+
+rows.collect(.group.into((r) => r.host, .sum((r) => r.cost)));  // one pass
+rows.collect(.count.by((r) => r.host));                         // Dictionary<String, int>
+rows.collect(.max.by((r) => r.score))?.url;                     // nullable, never throws
+```
+
+A chain is a value, so it can be named once and used twice:
+
+```dart
+// setup: bool live(Row r) => r.live; String sku(Row r) => r.sku;
+final cleanup = Transformer.where<Row>(live).then(Transformer.unique.by(sku));
+
+rows.transform(cleanup).transform(.take.first(10));
+rows.transform(cleanup).collect(.count());
+```
+
+See [docs/collection.md](docs/collection.md).
 
 ### `util` — pure helpers
 
@@ -462,7 +494,7 @@ See [docs/crawl.md](docs/crawl.md#8-testing-a-pipeline).
 | :--- | :--- |
 | Files & paths | [docs/io.md](docs/io.md) |
 | CSV tables | [docs/csv.md](docs/csv.md) |
-| Key-value store | [docs/store.md](docs/store.md) |
+| Sequences, dictionaries, typed keys | [docs/collection.md](docs/collection.md) |
 | HTTP & downloads | [docs/http.md](docs/http.md) |
 | Crawler engine | [docs/crawl.md](docs/crawl.md) |
 | Forms | [docs/form.md](docs/form.md) |
@@ -472,7 +504,7 @@ See [docs/crawl.md](docs/crawl.md#8-testing-a-pipeline).
 | Environment & `.env` | [docs/env.md](docs/env.md) |
 | Concurrency | [docs/concurrent.md](docs/concurrent.md) |
 | Terminal IO | [docs/console.md](docs/console.md) |
-| Time, sizes, text, hashing, randomness, `Sequence` | [docs/util.md](docs/util.md) |
+| Time, sizes, text, hashing, randomness | [docs/util.md](docs/util.md) |
 | JSON & JSONPath | [docs/json.md](docs/json.md) |
 | YAML & TOML | [docs/yaml.md](docs/yaml.md) |
 | Serving (`net.serve`) | [docs/serve.md](docs/serve.md) |

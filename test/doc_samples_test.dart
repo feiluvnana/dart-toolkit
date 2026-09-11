@@ -155,11 +155,12 @@ void main() {
 
     test('concurrent.md features run as documented', () async {
       // 1. stream
-      final streamResults =
-          await concurrent.stream<int, String>([20, 10], (ms) async {
-            await util.time.wait(ms.ms);
-            return 'done-$ms';
-          }, size: 2).toList();
+      final streamResults = await concurrent.stream<int, String>([20, 10], (
+        ms,
+      ) async {
+        await util.time.wait(ms.ms);
+        return 'done-$ms';
+      }, size: 2).toList();
       expect(streamResults, containsAll(['done-20', 'done-10']));
 
       // 2. settle
@@ -290,12 +291,12 @@ void main() {
         ]);
 
         final maps = await io.csv.maps(path);
-        expect(maps.count(), equals(2));
-        expect(maps.first?['name'], equals('Alice'));
+        expect(maps.collect(.count()), equals(2));
+        expect(maps.collect(.first())?['name'], equals('Alice'));
 
         final grid = await io.csv.matrix(path);
-        expect(grid.count(), equals(3));
-        expect(grid.first, equals(['name', 'role']));
+        expect(grid.collect(.count()), equals(3));
+        expect(grid.collect(.first()), equals(['name', 'role']));
 
         final streamed = await io.csv.records(path).toList();
         expect(streamed.length, equals(2));

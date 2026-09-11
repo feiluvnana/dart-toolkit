@@ -233,7 +233,7 @@ final class Served {
         (file == null
             ? 'text/plain; charset=utf-8'
             : _types[p.extension(file).toLowerCase()] ??
-                'application/octet-stream');
+                  'application/octet-stream');
     out.headers.set(HttpHeaders.contentTypeHeader, type);
     for (final entry in headers.entries) {
       out.headers.set(entry.key, entry.value);

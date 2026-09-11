@@ -359,8 +359,9 @@ void main() {
 
       final Sequence<Map<String, String>> maps = await io.csv.maps(path);
       final Sequence<List<String>> matrix = await io.csv.matrix(path);
-      final List<Map<String, String>> records =
-          await io.csv.records(path).toList();
+      final List<Map<String, String>> records = await io.csv
+          .records(path)
+          .toList();
       final List<List<String>> rows = await io.csv.rows(path).toList();
 
       expect(maps.list, records);
@@ -496,10 +497,9 @@ void main() {
         final root = Directory.systemTemp.createTempSync('dt_zip_mode_');
         addTearDown(() => root.deleteSync(recursive: true));
 
-        final script =
-            File('${root.path}/src/run.sh')
-              ..createSync(recursive: true)
-              ..writeAsStringSync('#!/bin/sh\necho hi\n');
+        final script = File('${root.path}/src/run.sh')
+          ..createSync(recursive: true)
+          ..writeAsStringSync('#!/bin/sh\necho hi\n');
         await system.run('chmod', ['755', script.path]);
         final when = DateTime(2021, 3, 4, 5, 6, 8);
         script.setLastModifiedSync(when);

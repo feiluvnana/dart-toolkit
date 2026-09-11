@@ -75,7 +75,7 @@ break a reader.
 
 There are no `Slot`s here. A slot exists so a *writer* and a *reader* in
 different places can agree on a key; reading a document is one place.
-[`io.store`](store.md) is the two-places case and keeps `Slot`.
+[`Slot`](collection.md#7-typed-keys-slot) is the two-places case, and keeps its own typed keys.
 
 A whole-document typed build goes through `raw`:
 
@@ -93,8 +93,8 @@ after its language for the same reason:
 
 ```dart
 doc.jsonpath(r'$.store.book[*].author');
-doc.jsonpath(r'$..price').sift((p) => p.number());
-doc.jsonpath(r'$.store.book[?(@.price < 10)]').sift((b) => b.text('title'));
+doc.jsonpath(r'$..price').transform(.map.nonnull((p) => p.number()));
+doc.jsonpath(r'$.store.book[?(@.price < 10)]').transform(.map.nonnull((b) => b.text('title')));
 ```
 
 | Form | Selects |
@@ -122,8 +122,8 @@ The same cursor reads YAML and TOML — see [`format.yaml`](yaml.md).
 ## See Also
 
 - [`format.yaml.*`](yaml.md) — the other two format codecs, spelled identically
-- [`util.*`](util.md#6-sequences-sequencet) — the `Sequence` that `all`, `texts` and `jsonpath` return
+- [`Sequence`](collection.md) — what `all`, `texts` and `jsonpath` hand back
 - [`net.http.*`](http.md#typed-json-replyat) — `Reply.at`, the response door
 - [`net.serve`](serve.md) — `Asked.json`, the request door
-- [`io.store.*`](store.md) — the two-places case, which keeps `Slot`
+- [`Slot`](collection.md#7-typed-keys-slot) — the two-places case, which keeps typed keys
 ---

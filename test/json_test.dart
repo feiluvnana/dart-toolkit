@@ -68,8 +68,11 @@ void main() {
           .at('store.book')
           .all((b) => (title: b.text('title'), price: b.number('price')));
       expect(books, isA<Sequence<Object?>>());
-      expect(books.count(), equals(3));
-      expect(books.best((b) => b.price ?? 0)?.title, equals('Sword'));
+      expect(books.collect(.count()), equals(3));
+      expect(
+        books.collect(.max.by((b) => b.price ?? 0))?.title,
+        equals('Sword'),
+      );
       expect(
         doc.at('store.book').one((b) => b.text('title')),
         equals('Sayings'),
@@ -98,30 +101,39 @@ void main() {
   group('Json.jsonpath', () {
     test('child, wildcard and recursive descent', () {
       expect(
-        doc.jsonpath(r'$.store.book[*].author').sift((n) => n.text()).list,
+        doc
+            .jsonpath(r'$.store.book[*].author')
+            .transform(.map.nonnull((n) => n.text()))
+            .list,
         equals(['Nigel Rees', 'Evelyn Waugh', 'Herman Melville']),
       );
       expect(
-        doc.jsonpath(r'$..price').sift((n) => n.number()).list,
+        doc
+            .jsonpath(r'$..price')
+            .transform(.map.nonnull((n) => n.number()))
+            .list,
         equals([8.95, 12.99, 8.99, 19.95]),
       );
-      expect(doc.jsonpath(r'store.book[*]').count(), equals(3));
-      expect(doc.jsonpath(r'$.store.*').count(), equals(2));
+      expect(doc.jsonpath(r'store.book[*]').collect(.count()), equals(3));
+      expect(doc.jsonpath(r'$.store.*').collect(.count()), equals(2));
     });
 
     test('indices, negatives, unions and slices', () {
       expect(
-        doc.jsonpath(r'$.store.book[-1].title').sift((n) => n.text()).list,
+        doc
+            .jsonpath(r'$.store.book[-1].title')
+            .transform(.map.nonnull((n) => n.text()))
+            .list,
         equals(['Moby Dick']),
       );
-      expect(doc.jsonpath(r'$.store.book[0,2]').count(), equals(2));
-      expect(doc.jsonpath(r'$.store.book[0:2]').count(), equals(2));
-      expect(doc.jsonpath(r'$.store.book[:2]').count(), equals(2));
+      expect(doc.jsonpath(r'$.store.book[0,2]').collect(.count()), equals(2));
+      expect(doc.jsonpath(r'$.store.book[0:2]').collect(.count()), equals(2));
+      expect(doc.jsonpath(r'$.store.book[:2]').collect(.count()), equals(2));
       expect(
         format.json
             .parse('[1,2,3,4,5]')
             .jsonpath(r'$[::2]')
-            .sift((n) => n.number())
+            .transform(.map.nonnull((n) => n.number()))
             .list,
         equals([1, 3, 5]),
       );
@@ -129,7 +141,7 @@ void main() {
         format.json
             .parse('[1,2,3]')
             .jsonpath(r'$[::-1]')
-            .sift((n) => n.number())
+            .transform(.map.nonnull((n) => n.number()))
             .list,
         equals([3, 2, 1]),
       );
@@ -139,12 +151,12 @@ void main() {
       expect(
         doc
             .jsonpath(r"$['store']['bicycle']['colour']")
-            .sift((n) => n.text())
+            .transform(.map.nonnull((n) => n.text()))
             .list,
         equals(['red']),
       );
       expect(
-        doc.jsonpath(r"$.store.bicycle['colour','price']").count(),
+        doc.jsonpath(r"$.store.bicycle['colour','price']").collect(.count()),
         equals(2),
       );
     });
@@ -153,44 +165,55 @@ void main() {
       expect(
         doc
             .jsonpath(r'$.store.book[?(@.isbn)]')
-            .sift((b) => b.text('title'))
+            .transform(.map.nonnull((b) => b.text('title')))
             .list,
         equals(['Moby Dick']),
       );
       expect(
         doc
             .jsonpath(r'$.store.book[?(@.price < 10)]')
-            .sift((b) => b.text('title'))
+            .transform(.map.nonnull((b) => b.text('title')))
             .list,
         equals(['Sayings', 'Moby Dick']),
       );
       expect(
-        doc.jsonpath(r'$.store.book[?(@.author == "Evelyn Waugh")]').count(),
+        doc
+            .jsonpath(r'$.store.book[?(@.author == "Evelyn Waugh")]')
+            .collect(.count()),
         equals(1),
       );
       expect(
-        doc.jsonpath(r'$.store.book[?(@.author != "Evelyn Waugh")]').count(),
+        doc
+            .jsonpath(r'$.store.book[?(@.author != "Evelyn Waugh")]')
+            .collect(.count()),
         equals(2),
       );
       expect(
         doc
             .jsonpath(r'$.store.book[?(@.title =~ /^Mob/)]')
-            .sift((b) => b.text('title'))
+            .transform(.map.nonnull((b) => b.text('title')))
             .list,
         equals(['Moby Dick']),
       );
     });
 
     test('an expression it cannot read selects nothing', () {
-      expect(doc.jsonpath(r'$.store.book[').empty, isTrue);
-      expect(doc.jsonpath(r'$[?(broken)]').empty, isTrue);
-      expect(doc.jsonpath(r'$.store.book[a:b:c]').empty, isTrue);
-      expect(doc.jsonpath('').count(), equals(1), reason: 'the root itself');
+      expect(doc.jsonpath(r'$.store.book[').collect(.empty()), isTrue);
+      expect(doc.jsonpath(r'$[?(broken)]').collect(.empty()), isTrue);
+      expect(doc.jsonpath(r'$.store.book[a:b:c]').collect(.empty()), isTrue);
+      expect(
+        doc.jsonpath('').collect(.count()),
+        equals(1),
+        reason: 'the root itself',
+      );
     });
 
     test('the same expression is only parsed once', () {
       const query = r'$..price';
-      expect(doc.jsonpath(query).count(), equals(doc.jsonpath(query).count()));
+      expect(
+        doc.jsonpath(query).collect(.count()),
+        equals(doc.jsonpath(query).collect(.count())),
+      );
     });
   });
 

@@ -235,7 +235,7 @@ void main() {
           .downloader(MockDownloader<String>(pages))
           .tag('song', (res) {
             visited.add(
-              '${res.meta.get(_name)}: ${res.parse(format.html).find('a').attr('href')}',
+              '${res.meta.read(_name)}: ${res.parse(format.html).find('a').attr('href')}',
             );
           })
           .run((res) {
@@ -280,22 +280,19 @@ void main() {
     });
 
     test('stream yields items as they are emitted', () async {
-      final items =
-          await net
-              .crawl<String>('https://site.example.com'.url)
-              .downloader(
-                MockDownloader<String>({
-                  'https://site.example.com':
-                      '<span>Alpha</span><span>Beta</span>',
-                }),
-              )
-              .stream((res) {
-                for (final t
-                    in res.parse(format.html).find('span').texts.list) {
-                  res.emit(t);
-                }
-              })
-              .toList();
+      final items = await net
+          .crawl<String>('https://site.example.com'.url)
+          .downloader(
+            MockDownloader<String>({
+              'https://site.example.com': '<span>Alpha</span><span>Beta</span>',
+            }),
+          )
+          .stream((res) {
+            for (final t in res.parse(format.html).find('span').texts.list) {
+              res.emit(t);
+            }
+          })
+          .toList();
 
       expect(items, equals(['Alpha', 'Beta']));
     });

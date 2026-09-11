@@ -14,7 +14,7 @@ import 'package:path/path.dart' as p;
 
 import '../src/fs.dart';
 import '../src/proc.dart';
-import '../util/sequence.dart';
+import '../collection/sequence.dart';
 
 // ============================================================================
 // ZIP TOOL (format.zip.*)
@@ -89,7 +89,7 @@ class Entry {
 ///
 /// ```dart
 /// await format.zip.pack('site', 'site.zip');
-/// (await format.zip.list('site.zip')).each((e) => print(e.name));
+/// (await format.zip.list('site.zip')).collect(.foreach((e) => print(e.name)));
 /// await format.zip.unpack('site.zip', 'restored');
 /// ```
 class ZipAccessor {
@@ -236,10 +236,9 @@ class ZipAccessor {
   }
 
   /// [file] with the mode and modification time [stat] reports.
-  static ArchiveFile _stamp(ArchiveFile file, FileStat stat) =>
-      file
-        ..mode = stat.mode
-        ..lastModTime = stat.modified.millisecondsSinceEpoch ~/ 1000;
+  static ArchiveFile _stamp(ArchiveFile file, FileStat stat) => file
+    ..mode = stat.mode
+    ..lastModTime = stat.modified.millisecondsSinceEpoch ~/ 1000;
 
   /// When [entry] says it was last modified, or `null` when it does not say.
   ///

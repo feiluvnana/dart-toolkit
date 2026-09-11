@@ -121,7 +121,7 @@ Wrapping measures terminal columns rather than code units, so a wrapped cell of 
 ## 3. Progress Bars
 
 ```dart
-final bar = Progress(total: files.count(), message: 'Downloading');
+final bar = Progress(total: files.collect(.count()), message: 'Downloading');
 for (final f in files.list) {
   await io.async.read(f.path);
   bar.tick(1, f.path);

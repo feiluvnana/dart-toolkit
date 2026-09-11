@@ -2,6 +2,404 @@
 
 All notable changes to this project will be documented in this file.
 
+## 5.1.0
+
+The vocabulary. `Sequence` had fifty-eight methods, and the complaint was not
+that there were too many — `Iterable` has about the same and nobody minds. It
+was that **roughly a third of them were words this library invented for an
+operation every reader already knows under a different name.** `to` was `map`,
+`keep` was `where`, `sift` was `mapNotNull`, `only` was `whereType`, `head` was
+`take`, `sole` was `single`, `best` was `maxBy`, `tally` was `countBy`. Learning
+`Sequence` meant learning a private dialect for a public idea.
+
+Each rename was defensible on its own, and the set was exhausting. Two things
+forced them, and neither was about meaning:
+
+- **A collision at the top level of a class.** `map` is also the noun for the
+  other collection. `where` is one autocomplete away from `Iterable.where`.
+- **Rule 4 forbids camelCase.** Eight of the thirteen renames say exactly that
+  and nothing else. `takeWhile` could not be a member, so it became `until`.
+  `maxBy` became `best`. `associateBy` became `keyed`.
+
+A namespace dissolves both. Inside `Transformer` there is no `Map` to collide
+with, and a compound operation has somewhere to put its second word.
+
+```dart
+rows.transform(.where((r) => r.live))
+    .transform(.sort.by((r) => r.cost))
+    .transform(.take.first(10))
+    .collect(.group.into((r) => r.host, .sum((r) => r.cost)));
+```
+
+So `Sequence` has **two** members now — `transform(Transformer)` and
+`collect(Collector)` — plus `list` and `toString`. Everything else is a static
+factory on one of the two operation types, and the operation types are values:
+a pipeline can be named, stored, passed, supplied by a caller, and tested
+against a plain list with no `Sequence` in the test at all.
+
+This is Java's `Collectors`, which is twenty years old and uncontroversial —
+with the part Java leaves as methods moved behind `transform` as well, because
+keeping `take` and `skip` on `Sequence` would mean building the `take` and
+`skip` namespace objects twice and keeping them in step forever.
+
+**The minimum SDK is now 3.10.0**, for the dot-shorthand syntax the leading
+`.map` above is. Every form has a longer spelling that needs nothing —
+`rows.transform(Transformer.map(f))` — so a toolchain problem degrades to
+verbosity rather than to nothing.
+
+---
+
+### The splitting rule
+
+Rule 4 gained the rule that paid for the rest of this release. **Where Dart or
+Kotlin spells an operation as a camelCase compound, split it at the capital
+rather than renaming it.**
+
+| Everyone spells it | Was | Is |
+| :--- | :--- | :--- |
+| `takeWhile(t)` / `skipWhile(t)` | `until(t)` / `after(t)` | `take.when(t)` / `skip.when(t)` |
+| `firstWhere(t)` | `find(t)` | `first.where(t)` |
+| `lastWhere(t)` | — | `last.where(t)` |
+| `singleWhere(t)` | — | `single.where(t)` |
+| `whereType<R>()` | `only<R>()` | `where.type<R>()` |
+| `flatMap(f)` | `flat(f)` | `flat.map(f)` |
+| `mapNotNull(f)` | `sift(f)` | `map.nonnull(f)` |
+| `groupBy(f)` | `group(f)` | `group.by(f)` |
+| `countBy(f)` | `tally(f)` | `count.by(f)` |
+| `associateBy(f)` | `keyed(f)` | `associate.by(f)` |
+| `distinctBy(f)` | `unique(f)` | `unique.by(f)` |
+| `maxBy(f)` / `minBy(f)` | `best(f)` / `worst(f)` | `max.by(f)` / `min.by(f)` |
+| `sortBy(f)` / `sortedWith(c)` | `sort(f)` / `order(c)` | `sort.by(f)` / `sort.using(c)` |
+| `indexWhere(t)` | `index(t)` | `index.where(t)` |
+| `forEach(f)` | `each(f)` | `foreach(f)` |
+
+Nothing is invented. Every name on the right is the name on the left with the
+capital turned into a dot, which is a rule a reader learns once and then never
+looks anything up again. Two words are not available because Dart reserves
+them: `while`, so `takeWhile` is `take.when`; and `for`, so `forEach` is
+`foreach` rather than `for.each`.
+
+The same rule absorbs the pairs that had to invent a word for their second half:
+
+| Was | Is | |
+| :--- | :--- | :--- |
+| `head(n)` / `tail(n)` | `take.first(n)` / `take.last(n)` | Dart has no name for the second |
+| `skip(n)` / `trim(n)` | `skip.first(n)` / `skip.last(n)` | `trim` also read as `String.trim` |
+
+Six members, four of them invented, became two namespaces of three that read as
+opposites — which `head`/`skip` and `tail`/`trim` never did. `take.first(10)` is
+eight characters longer than `head(10)`, and nobody has to remember which of the
+four dropped from which end, which was the actual complaint.
+
+---
+
+### `Sequence` — the whole mapping
+
+**Shaping — `transform(...)`:**
+
+| Was | Is |
+| :--- | :--- |
+| `to(f)` | `.map(f)` |
+| `sift(f)` | `.map.nonnull(f)` |
+| `keep(t)` | `.where(t)` |
+| `omit(t)` | `.where((x) => !t(x))` — **deleted**; see below |
+| `only<R>()` | `.where.type<R>()` |
+| `flat(f)` / `flat<R>()` | `.flat.map(f)` / `.flat<R>()` |
+| `unique()` / `unique(f)` | `.unique()` / `.unique.by(f)` |
+| `sort()` / `sort(f)` | `.sort()` / `.sort.by(f)` |
+| `order(c)` | `.sort.using(c)` — **deleted** as a name |
+| `flip` | `.flip()` |
+| `head(n)` / `tail(n)` | `.take.first(n)` / `.take.last(n)` |
+| `skip(n)` / `trim(n)` | `.skip.first(n)` / `.skip.last(n)` |
+| `until(t)` / `after(t)` | `.take.when(t)` / `.skip.when(t)` |
+| `pairs` | `.enumerate()` |
+| `chunks(n)` | `.chunk(n)` |
+| `zip(o)`, `plus`, `minus`, `common`, `or`, `cast<R>()` | the same names |
+
+**Reducing — `collect(...)`:**
+
+| Was | Is |
+| :--- | :--- |
+| `count()` / `count(t)` | `.count()` / `.count.where(t)` |
+| `empty`, `has(v)`, `at(i)`, `any(t)`, `all(t)`, `fold`, `sum`, `avg`, `join`, `set` | the same names, as calls |
+| `first` / `last` / `sole` | `.first()` / `.last()` / `.single()` |
+| `find(t)` | `.first.where(t)` |
+| `index(t)` | `.index.where(t)` — and `.index.of(v)` is new |
+| `best(f)` / `worst(f)` | `.max.by(f)` / `.min.by(f)` |
+| `group(f)` | `.group.by(f)` |
+| `keyed(f)` | `.associate.by(f)` |
+| `keyed(f, v)` | `.transform(.map((x) => (f(x), v(x)))).collect(.dict())` |
+| `tally(f)` | `.count.by(f)` |
+| `split(t)` | `.split(t)` |
+| `each(f)` | `.foreach(f)` |
+| `list` | `list` — still a member, and still the boundary word |
+
+`list` stays on `Sequence` as well as being a collector, and `map` is the same
+word on `Dictionary`. They are what the README promises — *`.list` is the one
+word at the boundary* — `list` appears 306 times across the repo, and
+`seq.collect(.list())` to hand a `List` to a `dart:io` call would be a tax on
+the one operation that exists to pay a tax. `Collector.list()` is there for
+where there is no receiver to say it on: a downstream collector.
+
+**Deleted outright:**
+
+- **`omit(t)`.** It stood through 5.0.0 on the grounds that `!keep(t)` reads as
+  nonsense, and that was true only because `keep` was not a filter's ordinary
+  name. `where((r) => !r.live)` is the other side, so Rule 4's `!` test finally
+  applies to a filter.
+- **`order(c)`.** Folded into `sort.using(c)`; a comparator is not a different
+  operation from a key.
+- **`tally(f)` and `keyed(f)`** as names. They are `count.by(f)` and
+  `associate.by(f)`, which is what they always were.
+- **`extension MapSequenced on Map`**, the `.seq` that existed only to climb
+  back out of the raw `Map` grouping handed back. Grouping hands back a
+  `Dictionary` now.
+
+---
+
+### `Transformer` and `Collector`
+
+Two value types, each a thin wrapper over one function, each with a family of
+`static` factories and a public `run` — which is what makes an operation
+testable with no collection in sight:
+
+```dart
+Transformer.map<int, String>((n) => '$n').run(const [1, 2]);   // ('1', '2')
+```
+
+**A pipeline is a value.** `Transformer.then` joins two transformers, so a chain
+can be named once and used twice — the capability the method form cannot offer
+at any price:
+
+```dart
+final cleanup = Transformer.where<Row>(live)
+    .then(Transformer.unique.by(sku))
+    .then(Transformer.sort.by(price));
+
+rows.transform(cleanup).transform(.take.first(10));
+archive.transform(cleanup).collect(.count());
+```
+
+`Transformer.into` gives a transformer an ending, which makes it a `Collector` —
+Java's `Collectors.mapping(f, downstream)` generalised to any transformer with
+any collector. `Collector.then` is `collectingAndThen`, for a *named* collector
+rather than for inline chaining: it changes the result type, which leaves
+inference nothing to pin the element type to.
+
+**Downstream collectors** are the one Java idea that changes what you can
+express rather than how it reads. `group.into(key, down)` reduces every bucket
+in the same pass:
+
+```dart
+rows.collect(.group.into((r) => r.host, .sum((r) => r.cost)));
+// Dictionary<String, num> — not a dictionary of sequences and then a map over it
+```
+
+`group.by(f)` and `group.into(f, down)` are two members rather than one with an
+optional argument, because an omitted downstream collector leaves its result
+type with nothing to be inferred from and every bucket arrives as `dynamic`.
+`count.by(f)` is `group.into(f, .count())` and is defined as it, in one line:
+one implementation, two spellings of a call, which is the carve-out Rule 5's
+`io.csv.pipe`-beside-`write` note already describes.
+
+**`fn` is the door in a closed set**, the same one `Field.fn` has been in
+`util/markup.dart` for three releases:
+
+```dart
+rows.transform(.fn((xs) => xs.toList()..shuffle()));
+rows.collect(.fn((xs) => xs.fold(0, (t, r) => t + r.qty)));
+```
+
+And for an operation with options, one used in six pipelines, or one worth a
+test of its own, **subclass**. `Transformer` and `Collector` are plain `class`
+with a public generative constructor rather than `final class`, deliberately:
+
+```dart
+final class Dearer extends Transformer<Row, Row> {
+  Dearer(num floor) : super((rows) => rows.where((r) => r.cost > floor));
+}
+
+rows.transform(Dearer(0.05)).transform(.take.first(10));
+```
+
+A user-defined transformer composes with the built-ins on equal footing, needs
+no registration, and is testable against a plain list.
+
+**Where inference stops.** `Collector.fold` takes its result type from a *value*
+and `Collector.then` changes it after the fact, so neither survives a dot
+shorthand. One rule covers both, and it is in both class doc comments: **when
+the result type comes from anywhere but a lambda's return, name it** — with a
+context type or explicit type arguments. `sum`, `avg`, `count` and `join` exist
+so the common folds never reach for `fold` at all, which is why Java ships
+`summingInt` beside `reducing`.
+
+---
+
+### `Dictionary<K, V>` — the keyed collection
+
+Design Philosophy 6 promised that everything handed back to shape is a
+`Sequence`. It held right up to the moment you grouped, and then handed back a
+raw `Map` with an extension to climb back in. The absence of a keyed collection
+showed up in three places that turned out to be the same place:
+
+1. **`group`, `keyed` and `tally` returned a raw `Map`**, and
+   `extension MapSequenced on Map` existed solely to undo that.
+2. **`Meta` and `Store` were the same class, written twice.** Nine identical
+   members — `get`, `set`, `has`, `delete`, `length`, `isEmpty`, `isNotEmpty`
+   and the map underneath — in two files, in two domains. One was what a crawl
+   carried on a `Fetch`; the other was what a script kept in a JSON file.
+   Neither was about crawling or about files. Both were *a map with typed keys*,
+   and the duplication is what happens when the library has no name for that.
+3. **`Markup.dataset`, `Cli.switches` and `system.env.map`** hand back raw
+   maps for want of anything else to return. They still do: converting them is
+   a separate change to three domains that have nothing else in this release,
+   and `system.env.map()` would want a new name once it stopped returning a
+   `Map`. The type they were missing exists now.
+
+`Dictionary` is the keyed collection, as `Sequence` is the ordered one. It is
+not a `Map` for the reason `Sequence` is not an `Iterable`: an extension member
+never overrides an instance member, so `get` beside `[]` and `count` beside
+`length` would be two spellings of one operation forever.
+
+```dart
+spend.get('a.com');      spend.has('a.com');     spend.count;   spend.empty;
+spend.set(k, v);         spend.delete(k);        spend.clear();
+spend.ensure(k, make);   spend.update(k, change);  spend.merge(other);
+spend.keys;              spend.values;           spend.pairs;
+spend.invert();          spend.map;              // the boundary word
+```
+
+`transform` and `collect` run over `(K, V)` records, so the whole `Transformer`
+and `Collector` vocabulary reaches a dictionary without a second set of
+factories. `.dict` on a `Map` is the way in, as `.seq` is for an iterable.
+
+**Typed keys go on an extension**, because `Slot` needs `K == String` and
+`V == Object?`, which the generic class cannot promise — the same place
+`NullableSequence` already lives:
+
+```dart
+extension Slotted on Dictionary<String, Object?> {
+  T? read<T>(Slot<T> slot);
+  void write<T>(Slot<T> slot, T value);
+  bool holds(Slot<Object?> slot);
+  void drop(Slot<Object?> slot);
+}
+```
+
+They are `read`/`write` rather than `get`/`set` so they do not collide with the
+untyped members on the class — and because that pair says the value is going
+through a codec, which is exactly what a `Slot` is.
+
+**`Meta` is deleted** and `Fetch.meta` is a `Dictionary<String, Object?>`.
+**`Store`, `StoreAccessor` and `io.store` are deleted** and replaced by
+`io.dictionary(path)` and `dump(path)`. Two types and twenty-two members became
+one type and one extension, and typed keys started working on every dictionary
+in the program rather than only inside the two classes that happened to
+implement them.
+
+`Slot.call` gives a `(String, Object?)` record rather than a `MapEntry`, so it
+goes straight into a dictionary and comes straight back out of
+`Dictionary.pairs`:
+
+```dart
+res.follow(href, tag: 'song', meta: [name('Hey Jude'), track(4)]);
+res.follow(href, meta: [...res.meta.pairs.list, track(2)]);   // was .entries
+final String? title = res.meta.read(name);                    // was .get
+```
+
+---
+
+### Persistence: the path is named, not held
+
+```dart
+rows.dump('out/rows.json');              // a JSON array
+spend.dump('out/by-host.json');          // a JSON object
+final db = io.dictionary('out/cache.json');
+```
+
+`dump` is an extension declared in `lib/io/collections.dart`, **not** a member of
+`Sequence` or `Dictionary`. The direction is the point: Rule 1 says anything
+that writes a file is `io`, and Rule 2's second test forbids `collection`
+needing `io` back. `io` already depends on `collection` — `io.find` returns a
+`Sequence` — so this adds no new edge, and a collection still knows nothing
+about the disk, which is what keeps it testable. The package has one export, so
+a caller sees `rows.dump(path)` with no extra import at all.
+
+`Store`'s `path`, `open`, `attach`, `load` and `save` do not come across. They
+are what made `Store` a file rather than a collection, and they carried a
+process-wide mutable singleton (`io.store` was a `StoreAccessor extends Store`)
+plus a `load` that swallowed a missing file, unparseable JSON and a non-map
+document into the same silent empty — so a half-written snapshot read as a fresh
+start and the next save overwrote it.
+
+`io.dictionary` splits those apart. An **absent** file is an empty dictionary,
+because a first run has nothing to read. A file that is there and is not a JSON
+object **throws `FormatException`**, because that is a broken file rather than a
+missing one.
+
+```dart
+final db = io.dictionary('cache.json');   // reads, or empty if absent
+db.write(cursor, 120);
+db.dump('cache.json');                    // writes, atomically
+```
+
+The path is named twice instead of held. That is the trade for a collection that
+does not secretly own a file, and it is the same trade `format.json.read(path)`
+already makes.
+
+---
+
+### Moved — `Sequence` and `Slot` left `util`
+
+`lib/util/sequence.dart` and `lib/util/slot.dart` became:
+
+```
+lib/collection/sequence.dart     Sequence, the .seq extensions
+lib/collection/dictionary.dart   Dictionary, .dict, the Slotted extension
+lib/collection/transformer.dart  Transformer and its namespaces
+lib/collection/collector.dart    Collector and its namespaces
+lib/collection/slot.dart         Slot
+lib/io/collections.dart          the dump extensions
+```
+
+`util` was holding two unrelated things: functions you call — `time`, `size`,
+`text`, `hash`, `rand` — and types you receive. The collections are the largest
+of the second kind, they grew two more types and a dozen namespaces here, and
+Rule 3's test for a sub-namespace (*a cohesive vocabulary with its own nouns*)
+describes them exactly. Not a sub-namespace of `util`, because nothing in `util`
+reaches them; a peer.
+
+**There is no `collection` accessor.** It is a library, not a
+`collection.something` you call — the shape `Json` and `Markup` already have,
+and for the reason NAMESPACE.md records: *Rule 2 spends no top-level name; you
+reach it from the data you already hold.* It also sidesteps
+`package:collection`, which every Dart project imports and whose prefix a
+top-level `collection` identifier would sit next to uncomfortably.
+
+The types were exported bare before and are exported bare now, so nothing
+outside the package changes. `Json`, `Markup` and `Codec` stay in `util`: the
+first two are cursors over documents rather than collections, and `Codec` has to
+stay where both `net` and `format` can see it.
+
+---
+
+### Also
+
+- **`dart:core` lints.** The SDK bump turned on `use_null_aware_elements`; six
+  collection-`if` null checks in `net/cache.dart`, `util/markup.dart` and
+  `util/text.dart` became `?x`.
+- **Formatting churn.** `dart format` lays out a conditional expression
+  differently under a 3.10 language version, so five files that this release
+  otherwise does not touch were reflowed.
+- **`docs/store.md` is `docs/collection.md`**, and now covers the whole
+  vocabulary rather than just the typed keys. `docs/util.md`'s sequence section
+  points at it.
+- **`example/shape.dart`** is the showcase for the new vocabulary, and
+  `test/sequence_test.dart` grew groups for operations-as-values, `Dictionary`
+  and `Slotted`.
+
+---
+
 ## 5.0.0
 
 The rule set, run against the library instead of against the next thing added

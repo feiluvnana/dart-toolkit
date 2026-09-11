@@ -12,10 +12,10 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 void main() async {
   // Read records keyed by the header line:
   final rows = await io.csv.maps('people.csv'); // Sequence<Map<String, String>>
-  rows.each((row) => print('${row['name']} — ${row['role']}'));
+  rows.collect(.foreach((row) => print('${row['name']} — ${row['role']}')));
 
   // Shaping is the next call, not an import:
-  print(rows.tally((row) => row['role'] ?? ''));
+  print(rows.collect(.count.by((row) => row['role'] ?? '')));
 
   // Write records atomically:
   await io.csv.write('out/people.csv', rows.list);
@@ -45,15 +45,18 @@ await for (final map in io.csv.records('big.csv')) {
 
 All four return nothing when the file does not exist. Blank lines are skipped, and short rows are padded with empty strings when reading maps.
 
-The two eager readers hand back a [`Sequence`](util.md#sequence), so the report a script came for is the next call rather than an import:
+The two eager readers hand back a [`Sequence`](collection.md), so the report a script came for is the next call rather than an import:
 
 ```dart
 final rows = await io.csv.maps('sales.csv');
 
-rows.group((r) => r['region']!)
-    .seq.to((e) => (region: e.$1, total: e.$2.sum((r) => util.text.number(r['amount']!) ?? 0)))
-    .sort((e) => e.region)
-    .each((e) => print('${e.region}  ${e.total}'));
+rows.collect(.group.into(
+      (r) => r['region']!,
+      .sum((r) => util.text.number(r['amount']!) ?? 0),
+    ))
+    .pairs
+    .transform(.sort.by((e) => e.$1))
+    .collect(.foreach((e) => print('${e.$1}  ${e.$2}')));
 ```
 
 ---

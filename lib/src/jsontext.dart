@@ -32,10 +32,9 @@ class JsonText {
   /// [value] encoded as JSON text, indented by [indent] spaces.
   ///
   /// `indent: 0` gives the compact single-line form.
-  static String encode(Object? value, {int indent = 2}) =>
-      indent <= 0
-          ? jsonEncode(value)
-          : JsonEncoder.withIndent(' ' * indent).convert(value);
+  static String encode(Object? value, {int indent = 2}) => indent <= 0
+      ? jsonEncode(value)
+      : JsonEncoder.withIndent(' ' * indent).convert(value);
 
   /// [value] encoded, or its `toString` when it holds something JSON cannot
   /// carry.

@@ -145,7 +145,7 @@ no sensible default, so it reads `null` when nothing was given — `--since`
 exists precisely so a script can tell *not given* from *the beginning of time*:
 
 ```dart
-rows.keep((r) => since() == null || r.seen.isAfter(since()!));
+rows.transform(.where((r) => since() == null || r.seen.isAfter(since()!)));
 ```
 
 ### Value Resolution

@@ -66,8 +66,9 @@ abstract class Downloader<T> with PathResolver {
     if (gap <= Duration.zero) return;
     final now = DateTime.now();
     final scheduled = _nextHostAccess.remove(host);
-    final targetTime =
-        (scheduled != null && scheduled.isAfter(now)) ? scheduled : now;
+    final targetTime = (scheduled != null && scheduled.isAfter(now))
+        ? scheduled
+        : now;
     if (scheduled == null && _nextHostAccess.length >= _hostTableLimit) {
       // A broad crawl meets more hosts than it needs to remember. Removing and
       // reinserting above makes this map least-recently-used, so the entry
@@ -296,15 +297,15 @@ class HttpDownloader<T> extends Downloader<T> {
                    cap != null ||
                    cache != null)
                ? Fetcher(
-                 pool: pool,
-                 headers: headers ?? net.http.headers,
-                 timeout: timeout ?? net.http.timeout,
-                 retries: retries,
-                 backoff: backoff,
-                 base: base,
-                 cap: cap,
-                 cache: cache,
-               )
+                   pool: pool,
+                   headers: headers ?? net.http.headers,
+                   timeout: timeout ?? net.http.timeout,
+                   retries: retries,
+                   backoff: backoff,
+                   base: base,
+                   cap: cap,
+                   cache: cache,
+                 )
                : net.http);
 
   /// The underlying HTTP client.
@@ -363,10 +364,9 @@ class HttpDownloader<T> extends Downloader<T> {
       );
     }
     if (uri.scheme != 'http' && uri.scheme != 'https') {
-      final content =
-          uri.scheme == 'string'
-              ? Uri.decodeComponent(uri.path)
-              : (uri.hasScheme ? uri.toString() : uri.path);
+      final content = uri.scheme == 'string'
+          ? Uri.decodeComponent(uri.path)
+          : (uri.hasScheme ? uri.toString() : uri.path);
       return Page<T>(
         fetch: fetch,
         status: 200,

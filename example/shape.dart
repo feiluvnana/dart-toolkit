@@ -1,4 +1,4 @@
-// Shape the data between fetching and writing: Sequence, Json, YAML.
+// Shape the data between fetching and writing: Sequence, Dictionary, Json, YAML.
 //
 //   dart run example/shape.dart
 //
@@ -40,25 +40,30 @@ void main() async {
           at: util.time.parse(row.text('at') ?? '') ?? DateTime(2000),
         ),
       );
-  log.ok('Read ${sales.count()} sales.');
+  log.ok('Read ${sales.collect(.count())} sales.');
 
   // JSONPath is the other navigator: `at` walks one path to one node, this
   // runs a query and hands back every match.
   final cheap = doc
       .at('')
       .jsonpath(r'$.data.sales[?(@.amount < 100)]')
-      .sift((s) => s.text('product'));
-  log.info('under 100: ${cheap.join(', ')}');
-  log.info('every region: ${doc.jsonpath(r'$..region').count()}');
+      .transform(.map.nonnull((s) => s.text('product')));
+  log.info('under 100: ${cheap.collect(.join(', '))}');
+  log.info('every region: ${doc.jsonpath(r'$..region').collect(.count())}');
 
   // ---------------------------------------------------------------- shaping
-  // Lazy: the chain below reads three rows, not all of them.
-  final top = sales.sort((s) => s.amount).flip.head(3);
-  log.info('top three: ${top.join(', ', of: (s) => s.product)}');
+  // Two members: `transform` takes a Transformer, `collect` takes a Collector.
+  // Every operation is a factory on one of those, which is what lets each of
+  // them keep its ordinary name — `map`, `where`, `sort.by`, `take.first`.
+  final top = sales
+      .transform(.sort.by((s) => s.amount))
+      .transform(.flip())
+      .transform(.take.first(3));
+  log.info('top three: ${top.collect(.join(', ', of: (s) => s.product))}');
 
-  // The daily-report shape, in one expression. `group` gives a
-  // Map<K, Sequence<T>>, `.seq` turns a map back into records, and `sum`,
-  // `avg`, `best` and `tally` finish it.
+  // The daily-report shape, in one expression. `group.by` gives a
+  // Dictionary<K, Sequence<T>>, `.pairs` turns it back into records, and
+  // `sum`, `avg`, `max.by` and `count.by` finish it.
   out.table(
     Table(
       headers: ['Region', 'Orders', 'Revenue', 'Best'],
@@ -71,43 +76,63 @@ void main() async {
     )..addAll([
       for (final row
           in sales
-              .group((s) => s.region)
-              .seq
-              .to(
-                (e) => (
-                  region: e.$1,
-                  orders: e.$2.count(),
-                  revenue: e.$2.sum((s) => s.amount),
-                  best: e.$2.best((s) => s.amount)?.product ?? '',
+              .collect(.group.by((s) => s.region))
+              .pairs
+              .transform(
+                .map(
+                  (e) => (
+                    region: e.$1,
+                    orders: e.$2.collect(.count()),
+                    revenue: e.$2.collect(.sum((s) => s.amount)),
+                    best: e.$2.collect(.max.by((s) => s.amount))?.product ?? '',
+                  ),
                 ),
               )
-              .sort((e) => e.region)
+              .transform(.sort.by((e) => e.region))
               .list)
         [row.region, row.orders, row.revenue.toStringAsFixed(2), row.best],
     ]),
   );
 
-  // `tally` is a counted report in one call; `util.time.day` is the grouping
-  // primitive `dart:core` has no one-liner for.
+  // `count.by` is a counted report in one call; `util.time.day` is the
+  // grouping primitive `dart:core` has no one-liner for.
   log.info(
-    'per day:    ${sales.tally((s) => util.time.day(s.at)).length} days',
+    'per day:    ${sales.collect(.count.by((s) => util.time.day(s.at))).count} days',
   );
-  log.info('mean order: ${sales.avg((s) => s.amount)?.toStringAsFixed(2)}');
+  log.info(
+    'mean order: ${sales.collect(.avg((s) => s.amount))?.toStringAsFixed(2)}',
+  );
 
   // `split` and `unzip` come back as records, never a Pair type.
-  final (big, small) = sales.split((s) => s.amount >= 100);
-  log.info('${big.count()} large, ${small.count()} small');
+  final (big, small) = sales.collect(.split((s) => s.amount >= 100));
+  log.info('${big.collect(.count())} large, ${small.collect(.count())} small');
 
-  // `chunks` pairs directly with a bounded pool: batch, then send.
-  for (final batch in sales.chunks(2).list) {
+  // `chunk` pairs directly with a bounded pool: batch, then send.
+  for (final batch in sales.transform(.chunk(2)).list) {
     await concurrent.run(batch.list, _send, size: 2);
   }
-  log.ok('Sent ${sales.count()} rows in batches of two.');
+  log.ok('Sent ${sales.collect(.count())} rows in batches of two.');
+
+  // A chain is a value, so the standard cleanup is written once and used
+  // twice. This is the thing a method chain cannot offer at any price.
+  final cleanup = Transformer.where<Sale>((s) => s.amount > 0)
+      .then(Transformer.unique.by((s) => s.product))
+      .then(Transformer.sort.by((s) => s.product));
+
+  log.info(
+    'cleaned:    ${sales.transform(cleanup).collect(.count())} of '
+    '${sales.collect(.count())}',
+  );
+  log.info(
+    'top two:    ${sales.transform(cleanup).transform(.take.first(2)).collect(.join(', ', of: (s) => s.product))}',
+  );
 
   // `.list` is the one word at the boundary to anything outside this library —
   // a `List` parameter, a spread, `expect`. Inside the boundary there is one
   // vocabulary, which is why Sequence is deliberately not an Iterable.
-  final names = <String>[...sales.to((s) => s.product).unique().list];
+  final names = <String>[
+    ...sales.transform(.map((s) => s.product)).transform(.unique()).list,
+  ];
   log.info('distinct products: ${names.length}');
 
   // ---------------------------------------------------- the other two formats
@@ -118,14 +143,18 @@ void main() async {
     config,
     format.yaml.format({
       'title': 'Regional sales',
-      'regions': sales.to((s) => s.region).unique().sort().list,
-      'limits': {'rows': sales.count(), 'currency': 'USD'},
+      'regions': sales
+          .transform(.map((s) => s.region))
+          .transform(.unique())
+          .transform(.sort())
+          .list,
+      'limits': {'rows': sales.collect(.count()), 'currency': 'USD'},
     }),
   );
 
   final back = await format.yaml.read(config);
   log.ok('Wrote and re-read ${io.base(config)}: ${back.text('title')}');
-  log.info('regions:    ${back.at('regions').texts().join(', ')}');
+  log.info('regions:    ${back.at('regions').texts().collect(.join(', '))}');
   log.info('rows:       ${back.number('limits.rows')}');
 
   // And a template, for the text a script generates rather than reads.

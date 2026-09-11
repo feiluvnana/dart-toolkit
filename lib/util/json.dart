@@ -6,7 +6,7 @@
 ///
 /// The type lives here, in `util`, because it is a pure value that three
 /// domains hand back — `net` from a response, `format` from a document, `io`
-/// through neither — the same reason [Slot] and [Meta] live here. The
+/// through neither — the same reason the cursors live here. The
 /// *codecs* are `format.json`, beside `format.yaml` and `format.toml`, because a
 /// format is knowledge from outside Dart.
 ///
@@ -25,7 +25,7 @@ library;
 
 import '../src/jsonpath.dart';
 import '../src/jsontext.dart';
-import 'sequence.dart';
+import '../collection/sequence.dart';
 
 // ============================================================================
 // JSON CURSORS (Json)
@@ -52,7 +52,7 @@ import 'sequence.dart';
 ///
 /// There are no [Slot]s here. A slot exists so a *writer* and a *reader* in
 /// different places can agree on a key; reading a document is one place.
-/// `io.store` is the two-places case and keeps `Slot`.
+/// `Slot` is the two-places case, and keeps its own typed keys.
 final class Json {
   /// The decoded value underneath — the escape hatch, and where a typed build
   /// of the whole document starts:
@@ -88,10 +88,9 @@ final class Json {
           node = map[step];
         case List<Object?> list:
           final index = int.tryParse(step);
-          node =
-              index != null && index >= 0 && index < list.length
-                  ? list[index]
-                  : null;
+          node = index != null && index >= 0 && index < list.length
+              ? list[index]
+              : null;
         default:
           return none;
       }
@@ -113,9 +112,9 @@ final class Json {
   /// final doc = format.json.parse(body);
   ///
   /// doc.jsonpath(r'$.store.book[*].author');        // every author
-  /// doc.jsonpath(r'$..price').sift((p) => p.number());
+  /// doc.jsonpath(r'$..price').transform(.map.nonnull((p) => p.number()));
   /// doc.jsonpath(r'$.store.book[?(@.price < 10)]')  // the cheap ones
-  ///    .sift((b) => b.text('title'));
+  ///    .transform(.map.nonnull((b) => b.text('title')));
   /// ```
   ///
   /// The supported syntax:
@@ -187,7 +186,8 @@ final class Json {
   ///
   /// The plural of [text], for the array of strings a document is full of.
   /// Elements that are maps or lists are skipped rather than rendered.
-  Sequence<String> texts() => Sequence(_elements()).sift((item) => item.text());
+  Sequence<String> texts() =>
+      Sequence(_elements()).transform(.map.nonnull((item) => item.text()));
 
   /// One [R] per element of this node, each built from its own cursor.
   ///
@@ -204,7 +204,7 @@ final class Json {
   /// A node that is not an array counts as one element, and the empty cursor
   /// as none.
   Sequence<R> all<R>(R Function(Json item) build) =>
-      Sequence(_elements()).to(build);
+      Sequence(_elements()).transform(.map(build));
 
   /// The first element of this node, built by [build], or `null`.
   ///

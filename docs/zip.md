@@ -42,7 +42,7 @@ await format.zip.bundle('out.zip', {
 
 ```dart
 final files = await format.zip.unpack('site.zip', 'restored');
-print('wrote ${files.count()} files');
+print('wrote ${files.collect(.count())} files');
 ```
 
 Entries that would escape the destination — a `..` segment or an absolute path,

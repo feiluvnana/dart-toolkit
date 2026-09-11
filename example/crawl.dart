@@ -15,7 +15,7 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 typedef Track = ({String artist, String album, String title});
 
 // Typed keys, declared once and checked at both ends: `artist('Nujabes')` will
-// not compile with a number in it, and `res.meta.get(artist)` hands back a
+// not compile with a number in it, and `res.meta.read(artist)` hands back a
 // String? without a cast.
 const artist = Slot<String>('artist');
 const album = Slot<String>('album');
@@ -23,40 +23,38 @@ const album = Slot<String>('album');
 void main() async {
   final log = system.console.logger;
 
-  final tracks =
-      await net
-          .crawl<Track>('https://music.test/artists'.url)
-          .downloader(MapDownloader<Track>(_fixtures))
-          // Politeness and scope. Without these a crawl wanders off the site it
-          // started on; `perhost` paces each host separately once seeds span more
-          // than one.
-          .concurrent(4)
-          .delay(20.ms)
-          .samehost()
-          .depth(3)
-          .limit(500)
-          .allow(RegExp(r'music\.test/(artists|albums)'))
-          .deny(RegExp(r'\?(sort|filter)='))
-          .headers({'User-Agent': 'ExampleBot/1.0 (+https://example.com/bot)'})
-          // A crawl that has to survive the real world adds four more:
-          //   .robots(true, 'ExampleBot/1.0')  obey robots.txt, Crawl-delay included
-          //   .cache('.cache')                 reuse pages that have not changed
-          //   .resume('crawl.state')           carry on where an interrupt stopped
-          //   .accept(['text/html'])           never hand a PDF to the HTML parser
-          // The stages.
-          .route(RegExp(r'/artists$'), _index)
-          .tag('artist', _artist)
-          .tag('album', _album)
-          // Without an error handler a crawl swallows failures so one bad page
-          // cannot end the run.
-          .on
-          .error((f) => log.warn('${f.fetch?.url ?? 'crawl'}: ${f.error}'))
-          .on
-          .done(
-            (s) =>
-                log.ok('${s.completed} pages in ${s.elapsed.inMilliseconds}ms'),
-          )
-          .collect();
+  final tracks = await net
+      .crawl<Track>('https://music.test/artists'.url)
+      .downloader(MapDownloader<Track>(_fixtures))
+      // Politeness and scope. Without these a crawl wanders off the site it
+      // started on; `perhost` paces each host separately once seeds span more
+      // than one.
+      .concurrent(4)
+      .delay(20.ms)
+      .samehost()
+      .depth(3)
+      .limit(500)
+      .allow(RegExp(r'music\.test/(artists|albums)'))
+      .deny(RegExp(r'\?(sort|filter)='))
+      .headers({'User-Agent': 'ExampleBot/1.0 (+https://example.com/bot)'})
+      // A crawl that has to survive the real world adds four more:
+      //   .robots(true, 'ExampleBot/1.0')  obey robots.txt, Crawl-delay included
+      //   .cache('.cache')                 reuse pages that have not changed
+      //   .resume('crawl.state')           carry on where an interrupt stopped
+      //   .accept(['text/html'])           never hand a PDF to the HTML parser
+      // The stages.
+      .route(RegExp(r'/artists$'), _index)
+      .tag('artist', _artist)
+      .tag('album', _album)
+      // Without an error handler a crawl swallows failures so one bad page
+      // cannot end the run.
+      .on
+      .error((f) => log.warn('${f.fetch?.url ?? 'crawl'}: ${f.error}'))
+      .on
+      .done(
+        (s) => log.ok('${s.completed} pages in ${s.elapsed.inMilliseconds}ms'),
+      )
+      .collect();
 
   // `collect` returns a List<Track>. `stream` yields them as they arrive and
   // `save(path)` writes each to disk, so a long crawl never holds its results
@@ -82,7 +80,7 @@ void _index(Page<Track> res) {
 /// Stage 2, an artist: queue their albums, passing the name down.
 void _artist(Page<Track> res) {
   final name =
-      res.meta.get(artist) ?? res.parse(format.html).pick(Field.text('h1'));
+      res.meta.read(artist) ?? res.parse(format.html).pick(Field.text('h1'));
   for (final link in res.parse(format.html).find('.album a').elements.list) {
     res.follow(
       link.attributes['href'] ?? '',
@@ -94,9 +92,9 @@ void _artist(Page<Track> res) {
 
 /// Stage 3, an album: emit one item per track.
 void _album(Page<Track> res) {
-  final by = res.meta.get(artist) ?? '';
+  final by = res.meta.read(artist) ?? '';
   final on =
-      res.meta.get(album) ??
+      res.meta.read(album) ??
       res.parse(format.html).pick(Field.text('h1')) ??
       '';
 

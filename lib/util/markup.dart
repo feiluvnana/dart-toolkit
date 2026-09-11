@@ -29,7 +29,7 @@ import 'package:html/parser.dart' as html_parser;
 import 'package:xpath_selector_html_parser/xpath_selector_html_parser.dart';
 
 import '../src/jquery.dart';
-import 'sequence.dart';
+import '../collection/sequence.dart';
 import 'text.dart';
 
 const TextAccessor _text = TextAccessor();
@@ -105,7 +105,7 @@ class Markup {
   /// element-level work has one spelling:
   ///
   /// ```dart
-  /// page.find('tr').elements.keep((e) => e.classes.contains('live')).count();
+  /// page.find('tr').elements.transform(.where((e) => e.classes.contains('live'))).collect(.count());
   /// ```
   Sequence<Element> get elements => Sequence(_elements);
 
@@ -395,10 +395,8 @@ class Markup {
   /// Shorter than the match count when some matches do not carry [name], so
   /// this cannot be zipped against [texts] — [all] is how a row's fields are
   /// read together.
-  Sequence<String> attrs(String name) => Sequence([
-    for (final element in _elements)
-      if (element.attributes[name] case final value?) value,
-  ]);
+  Sequence<String> attrs(String name) =>
+      Sequence([for (final element in _elements) ?element.attributes[name]]);
 
   /// The value of the first match, as a browser would submit it, or `null`.
   ///
@@ -415,10 +413,8 @@ class Markup {
       _elements.isEmpty ? null : _elementValue(_elements.first);
 
   /// The value of every match that has one, on the same terms as [value].
-  Sequence<String> get values => Sequence([
-    for (final element in _elements)
-      if (_elementValue(element) case final value?) value,
-  ]);
+  Sequence<String> get values =>
+      Sequence([for (final element in _elements) ?_elementValue(element)]);
 
   static String? _elementValue(Element element) {
     switch (element.localName) {
@@ -522,7 +518,8 @@ class Markup {
   @override
   String toString() =>
       'Markup(count: $count, texts: '
-      '[${texts.head(3).join(', ')}${count > 3 ? '...' : ''}])';
+      '[${texts.transform(.take.first(3)).collect(.join(', '))}'
+      '${count > 3 ? '...' : ''}])';
 }
 // ============================================================================
 // EXTENSIONS
@@ -748,18 +745,16 @@ final class AttrsField extends Field<List<String>> {
 
   @override
   List<String> read(Element root) {
-    final elements =
-        selector.isEmpty ? [root] : root.querySelectorAll(selector);
+    final elements = selector.isEmpty
+        ? [root]
+        : root.querySelectorAll(selector);
     if (attribute == 'text') {
       // Through [Markup.readable], like every other text read here: the
       // plural form used to hand back the page's own indentation while the
       // singular one collapsed it.
       return [for (final el in elements) Markup.readable(el)];
     }
-    return [
-      for (final el in elements)
-        if (el.attributes[attribute] case final value?) value,
-    ];
+    return [for (final el in elements) ?el.attributes[attribute]];
   }
 }
 

@@ -1,13 +1,17 @@
-/// # Typed Keys (`Slot`, `Meta`)
+/// # Typed Keys (`Slot`)
 ///
-/// A typed key into a JSON-backed map, and the bag it opens. Used by a
-/// crawl's `meta`, which rides through a resume file, and by `io.store`, which
-/// *is* a JSON file — both need the map underneath to stay JSON, and neither
+/// A typed key into a JSON-backed [Dictionary]. Used by a crawl's `meta`,
+/// which rides through a resume file, and by whatever a script keeps on disk
+/// between runs — both need the map underneath to stay JSON, and neither
 /// should make the reader cast it back.
+///
+/// The bag a slot opens is a `Dictionary<String, Object?>`, through the
+/// `Slotted` extension. It used to be two private classes, `Meta` and `Store`,
+/// nine identical members apiece.
 library;
 
 // ============================================================================
-// TYPED KEYS (Slot, Meta)
+// TYPED KEYS (Slot)
 // ============================================================================
 
 /// A typed key into a JSON-backed map.
@@ -22,13 +26,13 @@ library;
 ///
 /// page.follow(href, tag: 'song', meta: [name('Hey Jude'), track(4)]);
 ///
-/// final String? title = page.meta.get(name);
+/// final String? title = page.meta.read(name);
 /// ```
 ///
 /// The value has to survive `jsonEncode`, because a crawl's `meta` is written
-/// to the resume file and a store is written to disk. For a type JSON does not
-/// carry — a [Duration], an enum, a value class — use [Slot.coded] and say how
-/// it converts.
+/// to the resume file and a dictionary is written to disk. For a type JSON
+/// does not carry — a [Duration], an enum, a value class — use [Slot.coded]
+/// and say how it converts.
 final class Slot<T> {
   /// The key this slot reads and writes in the underlying map.
   final String name;
@@ -60,7 +64,7 @@ final class Slot<T> {
   }) : _read = read,
        _write = write;
 
-  /// The entry this slot writes for [value].
+  /// The `(key, value)` pair this slot writes for [value].
   ///
   /// Calling the slot is how a value reaches a `meta` list, so the write site
   /// is checked against [T]:
@@ -68,9 +72,19 @@ final class Slot<T> {
   /// ```dart
   /// // setup: final page = res;
   /// // setup: const name = Slot<String>('name');
+  /// // setup: const track = Slot<int>('track');
   /// page.follow(href, meta: [name('Hey Jude'), track(4)]);
   /// ```
-  MapEntry<String, Object?> call(T value) => MapEntry(name, write(value));
+  ///
+  /// A record rather than a `MapEntry`, so it goes straight into a
+  /// [Dictionary] and comes straight back out of `Dictionary.pairs`:
+  ///
+  /// ```dart
+  /// // setup: final page = res;
+  /// // setup: const track = Slot<int>('track');
+  /// page.follow(href, meta: [...page.meta.pairs.list, track(2)]);
+  /// ```
+  (String, Object?) call(T value) => (name, write(value));
 
   /// Reads [raw] as [T], or `null` when it is absent or the wrong shape.
   ///
@@ -100,73 +114,4 @@ final class Slot<T> {
 
   @override
   String toString() => 'Slot<$T>($name)';
-}
-
-/// A JSON-backed bag of values, read and written through [Slot]s.
-///
-/// This is what a crawl carries as `Fetch.meta`: whatever a handler put in
-/// survives the round trip to the response, and the resume file, without
-/// anybody casting it back.
-///
-/// ```dart
-/// // setup: final page = res;
-/// const name = Slot<String>('name');
-///
-/// page.follow(href, tag: 'song', meta: [name(page.parse(format.html).text)]);
-/// // later, in the 'song' handler:
-/// final String? title = page.meta.get(name);
-/// ```
-final class Meta {
-  /// The map underneath, as it is written to JSON.
-  ///
-  /// The escape hatch for keys another library owns, and for handing the whole
-  /// bag to something that wants a plain map.
-  final Map<String, Object?> raw;
-
-  /// Creates a bag holding [entries].
-  ///
-  /// ```dart
-  /// // setup: const name = Slot<String>('name');
-  /// Meta([name('Hey Jude'), track(4)]);
-  /// ```
-  Meta([Iterable<MapEntry<String, Object?>> entries = const []])
-    : raw = Map<String, Object?>.fromEntries(entries);
-
-  /// Wraps [raw] directly, sharing it rather than copying.
-  Meta.of(this.raw);
-
-  /// The value [slot] names, or `null` when it is absent or the wrong shape.
-  T? get<T>(Slot<T> slot) => slot.read(raw[slot.name]);
-
-  /// Stores [value] under [slot].
-  void set<T>(Slot<T> slot, T value) => raw[slot.name] = slot.write(value);
-
-  /// Whether [slot] is present.
-  bool has(Slot<Object?> slot) => raw.containsKey(slot.name);
-
-  /// Removes [slot].
-  void delete(Slot<Object?> slot) => raw.remove(slot.name);
-
-  /// Every entry, for forwarding one bag into another.
-  ///
-  /// ```dart
-  /// // setup: final page = res;
-  /// page.follow(href, meta: [...page.meta.entries, track(2)]);
-  /// ```
-  Iterable<MapEntry<String, Object?>> get entries => raw.entries;
-
-  /// The number of entries.
-  int get length => raw.length;
-
-  /// Whether the bag holds nothing.
-  bool get isEmpty => raw.isEmpty;
-
-  /// Whether the bag holds at least one entry.
-  bool get isNotEmpty => raw.isNotEmpty;
-
-  /// The map underneath. See [raw].
-  Map<String, Object?> toJson() => raw;
-
-  @override
-  String toString() => 'Meta($raw)';
 }

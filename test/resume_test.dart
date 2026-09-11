@@ -66,9 +66,9 @@ void main() {
       expect(copy.tag, 'detail');
       // Through the slots, which is the point: the values come back typed
       // rather than as Object? out of a map.
-      expect(copy.meta.get(_widget), 'Widget');
-      expect(copy.meta.get(_index), 3);
-      expect(copy.meta.raw, {'name': 'Widget', 'index': 3});
+      expect(copy.meta.read(_widget), 'Widget');
+      expect(copy.meta.read(_index), 3);
+      expect(copy.meta.map, {'name': 'Widget', 'index': 3});
       expect(copy.dedupe, isFalse);
       expect(copy.depth, 2);
     });
@@ -196,10 +196,9 @@ void main() {
 
     test('brings the counters back so limit still spans the whole crawl', () {
       final snapshot = Snapshot<String>(
-        stats:
-            Stats()
-              ..scheduled = 40
-              ..completed = 40,
+        stats: Stats()
+          ..scheduled = 40
+          ..completed = 40,
       );
 
       final engine = Engine<String>(downloader: MapDownloader<String>({}));

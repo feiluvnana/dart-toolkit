@@ -18,7 +18,7 @@ void main() async {
     size: 2,
   );
 
-  system.console.logger.ok('Fetched ${bodies.count()} records.');
+  system.console.logger.ok('Fetched ${bodies.collect(.count())} records.');
 }
 ```
 
@@ -95,7 +95,7 @@ for (final outcome in outcomes.list) {
 
 ```dart
 // setup: final outcomes = await Pool<int>().settle<int>([1], (n) async => n);
-final built = outcomes.keep((o) => o.ok).count();
+final built = outcomes.transform(.where((o) => o.ok)).collect(.count());
 ```
 
 ---

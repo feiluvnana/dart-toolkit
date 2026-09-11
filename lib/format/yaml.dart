@@ -2,7 +2,7 @@
 ///
 /// Reading and writing the format everything else a script coordinates with is
 /// configured in — `pubspec.yaml` first, then CI, then Docker Compose, then
-/// Kubernetes. `io.store` covers the format this library *writes*; this is the
+/// Kubernetes. `io.dump` covers the format this library *writes*; this is the
 /// one everything else *reads*, and it is spelled member for member like
 /// [JsonAccessor].
 ///

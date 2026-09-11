@@ -77,7 +77,7 @@ class HtmlAccessor with FileCodec<Markup> implements Codec<Markup> {
   /// The outer HTML of every element in the cursor, concatenated — so a round
   /// trip through [parse] and back is the document, and a round trip through
   /// `find` and back is the matches.
-  String format(Markup markup) => markup.outers.join('');
+  String format(Markup markup) => markup.outers.collect(.join(''));
 }
 
 /// Parses [markup] into a queryable [Markup] cursor.

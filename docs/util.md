@@ -2,13 +2,13 @@
 
 Delays and timestamps (`util.time`), byte sizes (`util.size`), text handling
 (`util.text`), hashing (`util.hash`) and randomness (`util.rand`) — plus
-[`Sequence`](#6-sequences-sequencet), the sequence API this library returns in
-place of Dart's, and [`Json`](json.md), the cursor `format.json`, `format.yaml` and
-`Reply.at` all hand back.
+[`Json`](json.md), the cursor `format.json`, `format.yaml` and `Reply.at` all
+hand back.
 
 Nothing here touches the disk or the operating system — that is the rule that
-decides what belongs. Archives are [`format.zip`](zip.md), Git is
-[`format.zip`](zip.md), and the terminal is [`system.console`](console.md).
+decides what belongs. Archives are [`format.zip`](zip.md), the collections are
+[`collection.md`](collection.md), and the terminal is
+[`system.console`](console.md).
 
 ---
 
@@ -121,7 +121,7 @@ primitive a reporting script reaches for, and `dart:core` has no one-liner for
 it:
 
 ```dart
-rows.group((r) => util.time.day(r.seen));   // Map<DateTime, Sequence<Row>>
+rows.collect(.group.by((r) => util.time.day(r.seen)));   // Map<DateTime, Sequence<Row>>
 ```
 
 The `int` extensions cover the whole ladder: `250.ms`, `30.s`, `5.m`, `2.h`,
@@ -258,7 +258,7 @@ void main() {
   util.rand.seed(42);
   final again = util.rand.shuffle(['a', 'b', 'c']);
 
-  assert(first.join('-') == again.join('-'));
+  assert(first.collect(.join('-')) == again.collect(.join('-')));
 
   util.rand.seed();   // back to unpredictable
 }
@@ -269,186 +269,32 @@ seeded generator is reproducible by design.
 
 ---
 
-## 6. Sequences (`Sequence<T>`)
+## 6. Collections
 
-The sequence API this library **returns**, in place of Dart's. Grouping,
-chunking, deduplicating, summing and taking the best of each group are what a
-script does between fetching and writing, and Dart's `Iterable` needs
-`package:collection` for most of them:
+`Sequence` and `Dictionary` used to live here. They are their own domain now —
+they grew two operation types and a dozen namespaces, and Rule 3's test for a
+sub-namespace (*a cohesive vocabulary with its own nouns*) describes them
+exactly. `util` holds functions you call; a collection is a type you receive.
 
-```dart
-final rows = await net.crawl<Row>(seed).collect();     // Sequence<Row>
-
-rows.group((r) => r.host)
-    .seq.to((e) => (host: e.$1, spend: e.$2.sum((r) => r.cost)))
-    .sort((e) => e.host)
-    .each((e) => print('${e.host}  ${e.spend}'));
-```
-
-### Why it is not an `Iterable`
-
-An extension member never overrides an instance member, so extending
-`Iterable` could only *add* names beside Dart's — `keep` next to `where`, two
-spellings for one operation, which Rule 5 forbids. Replacing the vocabulary
-therefore means replacing the static type: if the receiver is not an
-`Iterable`, `Iterable`'s members are not in scope, and this library's
-vocabulary is the only one there.
-
-What that costs, measured rather than guessed:
-
-| Lost | Replacement |
-| :--- | :--- |
-| `for (final x in seq)` | `seq.each((x) { ... })` |
-| `[...seq]`, `seq.toList()` | `seq.list` |
-| passing to a `List<T>` or `Iterable<T>` parameter | `seq.list` |
-| passing to this library's own APIs | nothing — they take a `Sequence` |
-
-One word at the boundary; inside the boundary, a vocabulary with no duplicates
-in it. `.seq` is the way in from the other side — a literal, a `dart:io` call,
-another package:
+See [collection.md](collection.md) for the whole vocabulary. The short version:
 
 ```dart
-[1, 2, 3].seq.sum((n) => n);           // 6
-({'a': 1}).seq.to((e) => e.$1).list;     // ['a'] — records, not MapEntry
+rows.transform(.where((r) => r.live))         // a Transformer
+    .transform(.sort.by((r) => r.cost))
+    .collect(.group.into((r) => r.host, .sum((r) => r.cost)));   // a Collector
 ```
 
-### Shaping — returns a `Sequence`
-
-| Member | Does |
-| :--- | :--- |
-| `to(f)` | each element replaced by `f` of it (`map`) |
-| `sift(f)` | `to` then drop the nulls (`mapNotNull`) |
-| `nonnull` | on a `Sequence<T?>`, the non-null elements |
-| `keep(t)` / `omit(t)` | the elements a test accepts / rejects |
-| `only<R>()` | only the elements that are an `R` |
-| `flat(f)` / `flat<R>()` | expand each into many / flatten nested iterables |
-| `unique([by])` | duplicates removed, first of each kept |
-| `sort([by])` / `order(cmp)` | ascending by key / by comparator — never in place |
-| `flip` | back to front |
-| `head(n)` / `tail(n)` | the first n / the last n |
-| `skip(n)` / `trim(n)` | all but the first n / all but the last n |
-| `until(t)` / `after(t)` | leading elements a test accepts / from the first it rejects |
-| `chunks(n)` | consecutive groups of n, the last one short |
-| `zip(other)` | paired elementwise, as `(A, B)` records |
-| `pairs` | each element with its index, as `(int, T)` |
-| `plus` / `minus` / `common` | concatenate / subtract / intersect |
-| `or(fallback)` | this, or the fallback when empty |
-| `cast<R>()` | viewed as another element type, throwing on a bad one |
-
-```dart
-// setup: final lines = Sequence(const ['a']);
-final top =
-    lines.to(parse).keep((r) => r.live).sort((r) => r.score).flip.head(10);
-```
-
-#### A snapshot, not a view
-
-Every member is eager. A `Sequence` holds a `List<T>` taken when it was built,
-and each link in a chain builds the next one, so **a callback runs exactly once
-per element per link** however often you read the result:
-
-```dart
-var n = 0;
-final s = [1, 2, 3].seq.keep((x) { n++; return true; });
-s.count(); s.list; s.first;
-// n == 7 through 4.0.0, and 3 now
-```
-
-It was a lazy view through 4.0.0, re-walking the whole chain on every terminal
-call — so three reads cost three passes, a `.to(expensiveParse)` over a crawl's
-results paid for the parse once per read, and a sequence built over a
-single-subscription source was a `StateError` waiting for its second reader.
-Nothing in the vocabulary was lazy on purpose, and every source the library
-hands you is already a materialised list.
-
-The trade is stated rather than hidden: `head(10)` after a `to` maps the whole
-source rather than stopping at the eleventh element. Where the source is large
-enough for that to matter the answer is a `Stream` — `crawl.stream` rather than
-`crawl.collect` — which was already the advice.
-
-#### Gone in 5.0.0
-
-| Was | Is |
-| :--- | :--- |
-| `union(other)` | `plus(other).unique()` |
-| `findlast(t)` | `flip.find(t)` |
-| `also(f)` | `each(f)` on a value you already hold |
-| `scan(init, f)` | nothing — a running fold no source here produced |
-| `windows(n, {step, partial})` | nothing — three parameters, no caller |
-
-The first two are Rule 5: one behaviour, two entry points. `also` was a tap
-that only made sense while the chain was lazy. The last two had no use in the
-library, in the docs, or in any example — a replacement vocabulary larger than
-the one it replaces has stopped being a simplification.
-
-### Reducing — eager, leaves the `Sequence`
-
-| Member | Gives |
-| :--- | :--- |
-| `count([t])` | how many, or how many pass a test |
-| `empty` | whether it holds nothing (no complement: `!empty`) |
-| `has(x)` | whether `x` is one of the elements |
-| `first` / `last` / `sole` | `T?` — nullable, never throwing |
-| `at(i)` / `find(t)` | `T?` |
-| `index(t)` | `int?` |
-| `any(t)` / `all(t)` | booleans (no `none`: `!any`) |
-| `fold(init, f)` | Dart's word, kept |
-| `sum(of)` / `avg(of)` | `num` / `double?` |
-| `best(by)` / `worst(by)` | `T?` — largest / smallest by key |
-| `group(by)` | `Map<K, Sequence<T>>` |
-| `keyed(by, [value])` | `Map<K, V>` — the lookup table; last wins |
-| `tally(by)` | `Map<K, int>` — a counted report in one call |
-| `split(t)` | `(Sequence<T>, Sequence<T>)` — a record, not a `Pair` |
-| `unzip` | on a `Sequence<(A, B)>`, two sequences |
-| `join(sep, {prefix, suffix, limit, of})` | a summary printer, not just a join |
-| `each(f)` | the `for`-in replacement |
-| `list` / `set` | the conversions, as getters |
-
-Five readers instead of ten: everything that can come up empty returns `T?`, so
-there is no `firstOrNull` beside `first` and no `orElse:` to write. `?? x`
-replaces Kotlin's `getOrElse`, and is shorter.
-
-```dart
-rows.first?.name ?? 'none';
-rows.best((r) => r.score)?.url;
-rows.tally((r) => r.host);              // {'a.com': 12, 'b.com': 3}
-rows.chunks(100).each((batch) => send(batch.list));
-rows.join(', ', limit: 3, of: (r) => r.name);   // 'Ada, Alan, Grace, …'
-```
-
-`sum` and `avg` always take the selector, including on a sequence that is
-already numbers — `prices.sum((n) => n)`. Five characters of noise in the rarer
-case buys exactly one spelling of the operation.
-
-Randomness is not here: `util.rand` owns it, and a sequence gets it by exiting
-with `util.rand.shuffle(rows.list)`.
-
-### What returns one
-
-Anything this library hands back for you to *shape*:
-
-```dart no-compile
-await net.crawl<T>(seed).collect();     await net.crawl<Never>(seed).gather(f);
-await io.csv.maps(path);                await io.csv.matrix(path);
-io.find(dir);                           net.sitemap(text);
-util.text.words(t);                     util.text.numbers(t);
-util.text.betweens(t, a, b);            util.rand.shuffle(list);
-util.rand.some(list, n);                robots.agents;
-jar.cookies;                            await format.zip.list(archive);
-page.parse(format.html).find('sel').elements;                 doc.at(path).all(build);
-doc.jsonpath(expr);
-```
-
-Bytes stay `List<int>` — a buffer is not a sequence — and `Map` returns stay
-maps, with `.seq` a call away.
+Randomness stays here rather than on a sequence, so a sequence gets it by
+exiting: `util.rand.shuffle(rows.list)`. `util.text.words`, `util.text.numbers`
+and `util.text.betweens` all hand one back.
 
 ---
 
 ## See Also
 
+- [`Sequence` and `Dictionary`](collection.md) — the collections and their vocabulary
 - [`Json`](json.md) — the read cursor, and `format.json`
 - [`format.yaml`](yaml.md) — the same cursor over YAML and TOML
-- [`format.zip`](zip.md) — archives
 - [`format.zip`](zip.md) — archives
 - [`system.console.*`](console.md) — terminal output and prompts
 - [`io.*`](io.md) — files, and `io.hash` for a file's digest

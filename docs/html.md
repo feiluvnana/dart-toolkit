@@ -283,7 +283,7 @@ final ticked = form.find('input[type=checkbox]').values;  // only the checked on
 Through 2.0.0 `Markup` mixed in `Iterable<Element>`, which put Dart's whole
 collection vocabulary next to this library's on every selector result — and is
 how `every` came to mean `Iterable.every` here. It now **holds** a
-[`Sequence`](util.md#6-sequences-sequencet) instead of being an `Iterable`, so
+[`Sequence`](collection.md) instead of being an `Iterable`, so
 the element-level work has one spelling:
 
 ```dart
@@ -291,10 +291,10 @@ final tracks = $(html).find('.track');
 
 tracks.count;                                   // how many matched
 tracks.empty;                                   // and no complement
-tracks.elements.each((el) => print(el.attr('data-id')));
-tracks.elements.to((e) => e.text).list;
-tracks.elements.keep((e) => e.classes.contains('bonus')).count();
-tracks.elements.first;                          // Element? — nullable, never throws
+tracks.elements.collect(.foreach((el) => print(el.attr('data-id'))));
+tracks.elements.transform(.map((e) => e.text)).list;
+tracks.elements.transform(.where((e) => e.classes.contains('bonus'))).collect(.count());
+tracks.elements.collect(.first());                          // Element? — nullable, never throws
 ```
 
 `elements` is the sequence of matched `Element`s; everything else on

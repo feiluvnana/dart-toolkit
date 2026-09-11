@@ -6,7 +6,7 @@
 /// direction, filling a template ([TextAccessor.render]).
 library;
 
-import 'sequence.dart';
+import '../collection/sequence.dart';
 
 // ============================================================================
 // TEXT (util.text.*)
@@ -149,10 +149,9 @@ class TextAccessor {
     return buffer.toString();
   }
 
-  static String _titled(String plain) =>
-      plain.length == 1
-          ? plain.toUpperCase()
-          : plain[0].toUpperCase() + plain.substring(1);
+  static String _titled(String plain) => plain.length == 1
+      ? plain.toUpperCase()
+      : plain[0].toUpperCase() + plain.substring(1);
 
   /// [text] with runs of whitespace collapsed to one space, trimmed.
   ///
@@ -215,8 +214,7 @@ class TextAccessor {
 
   /// Every number in [text], in order, read the same way as [number].
   Sequence<num> numbers(String text) => Sequence([
-    for (final match in _digits.allMatches(text))
-      if (_read(match.group(0)!) case final value?) value,
+    for (final match in _digits.allMatches(text)) ?_read(match.group(0)!),
   ]);
 
   /// One matched token as a number, applying the parenthesised negative.

@@ -10,7 +10,7 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 
-import '../../util/sequence.dart';
+import '../../collection/sequence.dart';
 import 'ansi.dart';
 
 // ============================================================================

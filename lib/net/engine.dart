@@ -60,10 +60,9 @@ class Stats {
   String? reason;
 
   /// Wall-clock duration so far, or of the whole run once finished.
-  Duration get elapsed =>
-      start == null
-          ? Duration.zero
-          : (end ?? DateTime.now()).difference(start!);
+  Duration get elapsed => start == null
+      ? Duration.zero
+      : (end ?? DateTime.now()).difference(start!);
 
   /// Restores counters from the map [toJson] produced.
   factory Stats.fromJson(Map<String, Object?> json) {
@@ -187,23 +186,21 @@ class Deduplicator {
     if (path.length > 1 && path.endsWith('/')) {
       path = path.substring(0, path.length - 1);
     }
-    final sortedEntries =
-        bare.queryParametersAll.entries.toList()
-          ..sort((a, b) => a.key.compareTo(b.key));
+    final sortedEntries = bare.queryParametersAll.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
     final queryParams = Map.fromEntries(sortedEntries);
-    final normUrl =
-        bare
-            .replace(
-              host: host.isNotEmpty ? host : null,
-              path: path,
-              queryParameters: queryParams.isEmpty ? null : queryParams,
-            )
-            .toString();
+    final normUrl = bare
+        .replace(
+          host: host.isNotEmpty ? host : null,
+          path: path,
+          queryParameters: queryParams.isEmpty ? null : queryParams,
+        )
+        .toString();
 
     final bodyHash =
         (method != HttpMethod.get && body != null && body.isNotEmpty)
-            ? md5.convert(body).toString()
-            : '';
+        ? md5.convert(body).toString()
+        : '';
     return '${method.wire}|$normUrl|${tag ?? ''}|$bodyHash';
   }
 }

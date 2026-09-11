@@ -257,10 +257,9 @@ class Fs {
     Encoding encoding = utf8,
   }) => writeSync(path, _encode(data, pretty), part: part, encoding: encoding);
 
-  static String _encode(Object? data, bool pretty) =>
-      pretty
-          ? const JsonEncoder.withIndent('  ').convert(data)
-          : jsonEncode(data);
+  static String _encode(Object? data, bool pretty) => pretty
+      ? const JsonEncoder.withIndent('  ').convert(data)
+      : jsonEncode(data);
 
   // --- Non-blocking counterparts, reached through `io.async.*` -------------
 

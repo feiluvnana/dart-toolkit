@@ -120,7 +120,7 @@ system.on.adopt(process);     // kill this process if interrupted
 system.on.disown(process);
 system.on.signals();          // start listening for SIGINT/SIGTERM
 system.on.stop();             // and stop
-system.on.exit(() async => await db.save());   // run during shutdown
+system.on.exit(() async => db.dump('out/state.json'));   // run during shutdown
 
 await system.shutdown();      // run cleanup now
 await system.shutdown(1);     // run cleanup, then exit with a code

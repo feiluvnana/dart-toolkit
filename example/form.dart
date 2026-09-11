@@ -49,25 +49,24 @@ void main() async {
   // `res.submit(form)` schedules the submission on the engine instead, so the
   // answer reaches a tagged handler like any other page: the method, the URL
   // and the body all come from the form.
-  final greeting =
-      await net
-          .crawl<String>('https://shop.test/login'.url)
-          .downloader(MapDownloader<String>(_fixtures))
-          .route(RegExp(r'/login$'), (res) {
-            // No `at` here: `submit` hands the form the page's own URL.
-            final login = res.parse(format.html).form('#login')!.fill({
-              'user': 'alice',
-              'pass': 'hunter2',
-            });
-            res.submit(login, tag: 'home');
-          })
-          .tag(
-            'home',
-            (res) => res.emit(res.parse(format.html).find('.welcome').text),
-          )
-          .collect();
+  final greeting = await net
+      .crawl<String>('https://shop.test/login'.url)
+      .downloader(MapDownloader<String>(_fixtures))
+      .route(RegExp(r'/login$'), (res) {
+        // No `at` here: `submit` hands the form the page's own URL.
+        final login = res.parse(format.html).form('#login')!.fill({
+          'user': 'alice',
+          'pass': 'hunter2',
+        });
+        res.submit(login, tag: 'home');
+      })
+      .tag(
+        'home',
+        (res) => res.emit(res.parse(format.html).find('.welcome').text),
+      )
+      .collect();
 
-  log.ok('Signed in: ${greeting.sole}');
+  log.ok('Signed in: ${greeting.collect(.single())}');
 }
 
 const _login = '''

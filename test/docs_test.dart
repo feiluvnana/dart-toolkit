@@ -45,12 +45,11 @@ List<File> _markdown() => [
 ];
 
 /// Dart sources whose `///` comments hold snippets.
-List<File> _sources() =>
-    Directory('lib')
-        .listSync(recursive: true)
-        .whereType<File>()
-        .where((f) => f.path.endsWith('.dart'))
-        .toList();
+List<File> _sources() => Directory('lib')
+    .listSync(recursive: true)
+    .whereType<File>()
+    .where((f) => f.path.endsWith('.dart'))
+    .toList();
 
 /// The context every fragment is compiled against.
 ///
@@ -110,7 +109,7 @@ ConsoleLogger get log => system.console.logger;
 ConsoleWriter get writer => system.console.writer;
 Fetcher get client => Fetcher();
 Fetcher get session => Fetcher(session: true);
-Store get db => io.store.open('out/state.json');
+Dictionary<String, Object?> get db => io.dictionary('out/state.json');
 List<Uri> get urls => [seed];
 Sequence<Row> get rows => Sequence(const [Row('a.com', 1, 1)]);
 Sequence<String> get titles => Sequence(const ['One']);
@@ -118,6 +117,9 @@ List<String> get paths => const ['a.txt'];
 Sequence<String> get items => titles;
 Sequence<Map<String, String>> get records =>
     Sequence(const [{'name': 'Ada', 'amount': '1'}]);
+Dictionary<String, num> get spend => Dictionary(const {'a.com': 1});
+Dictionary<String, Sequence<Row>> get hosts =>
+    rows.collect(.group.by((r) => r.host));
 Map<String, Object?> get vars => const {'name': 'widget'};
 Map<String, Object?> get data => vars;
 List<String> get args => const ['--force'];
@@ -461,10 +463,9 @@ void main() {
               skipped++;
               continue;
             }
-            final code =
-                _isProgram(fence.body)
-                    ? _program(fence.body)
-                    : _wrap(fence.body);
+            final code = _isProgram(fence.body)
+                ? _program(fence.body)
+                : _wrap(fence.body);
             snippets.add(_Snippet('$origin block $n', code));
           }
         }

@@ -76,7 +76,7 @@ void main() {
 
   log.ok('$title — $price, skus $skus');
   log.ok(
-    'First variant: ${item.variants.first?.name} (${item.variants.first?.sku})',
+    'First variant: ${item.variants.collect(.first())?.name} (${item.variants.collect(.first())?.sku})',
   );
 }
 

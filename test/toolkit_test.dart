@@ -9,7 +9,6 @@ const _counter = Slot<int>('counter');
 const _missing = Slot<String>('missing');
 const _userId = Slot<String>('user_id');
 const _visits = Slot<int>('visits');
-const _k = Slot<String>('k');
 const _since = Slot<DateTime>.coded(
   'since',
   read: _readTime,
@@ -41,13 +40,14 @@ void main() {
     });
 
     test('table alignments pad by visible width', () {
-      final table = Table(
-        headers: ['Left', 'Right'],
-        alignments: [ColumnAlign.left, ColumnAlign.right],
-      )..addAll([
-        ['a', '1'],
-        ['bbb', '22'],
-      ]);
+      final table =
+          Table(
+            headers: ['Left', 'Right'],
+            alignments: [ColumnAlign.left, ColumnAlign.right],
+          )..addAll([
+            ['a', '1'],
+            ['bbb', '22'],
+          ]);
       final lines = table.render().split('\n');
       // Every rendered row is the same visible width.
       final widths = lines.where((l) => l.isNotEmpty).map(Ansi.width).toSet();
@@ -235,9 +235,9 @@ void main() {
         expect(io.hash(path, Algo.md5).length, equals(32));
         expect(io.stat(path).size, greaterThan(0));
 
-        expect(io.find(temp.path).count(), equals(1));
+        expect(io.find(temp.path).collect(.count()), equals(1));
         expect(
-          io.find(temp.path, pattern: RegExp(r'\.txt$')).count(),
+          io.find(temp.path, pattern: RegExp(r'\.txt$')).collect(.count()),
           equals(1),
         );
         expect(io.sweep(temp.path, pattern: RegExp(r'\.txt$')), equals(1));
@@ -409,7 +409,7 @@ void main() async {
         return n * 10;
       });
 
-      expect(outcomes.count(), equals(3));
+      expect(outcomes.collect(.count()), equals(3));
       // Matching is the point: `value` is non-nullable inside Done, and the
       // error only exists inside Broke.
       expect(outcomes.list[0], isA<Done<int>>());
@@ -457,11 +457,10 @@ void main() async {
     test('concurrent.stream yields results in completion order', () async {
       // 50ms task vs 10ms task: 10ms task completes first
       final items = [50, 10];
-      final streamed =
-          await concurrent.stream(items, (delay) async {
-            await util.time.wait(delay.ms);
-            return 'done-$delay';
-          }, size: 2).toList();
+      final streamed = await concurrent.stream(items, (delay) async {
+        await util.time.wait(delay.ms);
+        return 'done-$delay';
+      }, size: 2).toList();
 
       expect(streamed, equals(['done-10', 'done-50']));
     });
@@ -594,22 +593,16 @@ void main() async {
     });
 
     test('declarations, require validation, and usage', () {
-      final cli =
-          Cli(['--output', 'dist'])
-            ..flag('verbose', alias: 'v', desc: 'Enable verbose logging')
-            ..option(
-              'output',
-              alias: 'o',
-              desc: 'Output directory',
-              required: true,
-            )
-            ..number(
-              'port',
-              alias: 'p',
-              desc: 'Server port',
-              def: 8080,
-              required: true,
-            );
+      final cli = Cli(['--output', 'dist'])
+        ..flag('verbose', alias: 'v', desc: 'Enable verbose logging')
+        ..option('output', alias: 'o', desc: 'Output directory', required: true)
+        ..number(
+          'port',
+          alias: 'p',
+          desc: 'Server port',
+          def: 8080,
+          required: true,
+        );
 
       // 'port' is required but declares a default, which supplies it.
       expect(() => cli.require(), returnsNormally);
@@ -629,21 +622,15 @@ void main() async {
         ),
       );
 
-      final validCli =
-          Cli(['--output', 'dist', '-p', '3000'])
-            ..option(
-              'output',
-              alias: 'o',
-              desc: 'Output directory',
-              required: true,
-            )
-            ..number(
-              'port',
-              alias: 'p',
-              desc: 'Server port',
-              def: 8080,
-              required: true,
-            );
+      final validCli = Cli(['--output', 'dist', '-p', '3000'])
+        ..option('output', alias: 'o', desc: 'Output directory', required: true)
+        ..number(
+          'port',
+          alias: 'p',
+          desc: 'Server port',
+          def: 8080,
+          required: true,
+        );
       expect(() => validCli.require(), returnsNormally);
 
       final help = validCli.usage(
@@ -951,8 +938,11 @@ void main() async {
         try {
           final loginRes = await client.get('$root/login'.url);
           expect(loginRes.body, equals('logged in'));
-          expect(client.jar?.cookies.count(), equals(1));
-          expect(client.jar?.cookies.first!.name, equals('session_id'));
+          expect(client.jar?.cookies.collect(.count()), equals(1));
+          expect(
+            client.jar?.cookies.collect(.first())!.name,
+            equals('session_id'),
+          );
 
           // Next request sends cookie
           final profileRes = await client.get('$root/profile'.url);
@@ -1031,7 +1021,7 @@ void main() async {
           'id,name,role\n1,"Alice, Chief",admin\n2,"Bob ""The Builder""",user';
       final matrix = io.csv.parse(input);
 
-      expect(matrix.count(), equals(3));
+      expect(matrix.collect(.count()), equals(3));
       expect(matrix.list[0], equals(['id', 'name', 'role']));
       expect(matrix.list[1][1], equals('Alice, Chief'));
       expect(matrix.list[2][1], equals('Bob "The Builder"'));
@@ -1056,15 +1046,20 @@ void main() async {
           ]);
 
           final rows = await io.csv.maps(path);
-          expect(rows.count(), equals(2));
-          expect(rows.first?['fruit'], equals('Apple'));
-          expect(rows.first?['price'], equals('1.50'));
+          expect(rows.collect(.count()), equals(2));
+          expect(rows.collect(.first())?['fruit'], equals('Apple'));
+          expect(rows.collect(.first())?['price'], equals('1.50'));
 
           final grid = await io.csv.matrix(path);
-          expect(grid.count(), equals(3)); // header plus two data rows
+          expect(
+            grid.collect(.count()),
+            equals(3),
+          ); // header plus two data rows
 
           expect(
-            (await io.csv.maps(io.join(temp.path, 'missing.csv'))).empty,
+            (await io.csv.maps(
+              io.join(temp.path, 'missing.csv'),
+            )).collect(.empty()),
             isTrue,
           );
         } finally {
@@ -1134,38 +1129,49 @@ void main() async {
     );
   });
 
-  group('io.store Sub-namespace', () {
-    test('the shared store reads and writes through typed slots', () {
-      io.store.clear();
-      io.store.set(_theme, 'dark');
-      io.store.set(_counter, 42);
+  group('io.dictionary', () {
+    test('an absent file reads as an empty dictionary', () {
+      final temp = io.temp('dict_absent_');
+      try {
+        final db = io.dictionary(io.join(temp.path, 'nothing.json'));
+        expect(db.empty, isTrue);
+        expect(db.count, equals(0));
+      } finally {
+        temp.deleteSync(recursive: true);
+      }
+    });
 
-      expect(io.store.has(_theme), isTrue);
-      expect(io.store.get(_theme), equals('dark'));
-      expect(io.store.get(_counter), equals(42));
-      expect(io.store.get(_missing), isNull);
+    test('reads and writes through typed slots', () {
+      final db = Dictionary<String, Object?>();
+      db.write(_theme, 'dark');
+      db.write(_counter, 42);
+
+      expect(db.holds(_theme), isTrue);
+      expect(db.read(_theme), equals('dark'));
+      expect(db.read(_counter), equals(42));
+      expect(db.read(_missing), isNull);
       // A slot whose value is not the shape it names reads as null, so a
       // document that moved on does not throw from a getter.
-      expect(io.store.get(const Slot<int>('theme')), isNull);
+      expect(db.read(const Slot<int>('theme')), isNull);
 
-      io.store.delete(_theme);
-      expect(io.store.has(_theme), isFalse);
-      io.store.clear();
+      db.drop(_theme);
+      expect(db.holds(_theme), isFalse);
     });
 
     test('a slot can carry a type JSON does not', () async {
-      final temp = io.temp('store_coded_');
+      final temp = io.temp('dict_coded_');
       try {
         final path = io.join(temp.path, 'coded.json');
-        final db = io.store.open(path)..set(_since, DateTime.utc(2026, 3, 1));
-        await db.save();
+        io.dictionary(path)
+          ..write(_since, DateTime.utc(2026, 3, 1))
+          ..dump(path);
 
         expect(
           (await format.json.read(path)).text('since'),
           equals('2026-03-01T00:00:00.000Z'),
         );
         expect(
-          io.store.open(path).get(_since),
+          io.dictionary(path).read(_since),
           equals(DateTime.utc(2026, 3, 1)),
         );
       } finally {
@@ -1173,54 +1179,56 @@ void main() async {
       }
     });
 
-    test('an unattached shared store explains why it cannot save', () {
-      expect(
-        io.store.save,
-        throwsA(
-          isA<StateError>().having(
-            (e) => e.message,
-            'message',
-            contains('no file to save to'),
-          ),
-        ),
-      );
-    });
-
-    test('open persists and reloads JSON', () async {
-      final temp = io.temp('store_test_');
+    test('dump persists and io.dictionary reloads', () {
+      final temp = io.temp('dict_test_');
       try {
         final path = io.join(temp.path, 'cache.json');
-        final db =
-            io.store.open(path)
-              ..set(_userId, 'user_101')
-              ..set(_visits, 5);
-        await db.save();
+        Dictionary<String, Object?>()
+          ..write(_userId, 'user_101')
+          ..write(_visits, 5)
+          ..dump(path);
         expect(io.has(path), isTrue);
 
-        final reopened = io.store.open(path);
-        expect(reopened.get(_userId), equals('user_101'));
-        expect(reopened.get(_visits), equals(5));
-        expect(reopened.length, equals(2));
+        final reopened = io.dictionary(path);
+        expect(reopened.read(_userId), equals('user_101'));
+        expect(reopened.read(_visits), equals(5));
+        expect(reopened.count, equals(2));
 
         reopened.clear();
-        expect(reopened.isEmpty, isTrue);
+        expect(reopened.empty, isTrue);
       } finally {
         temp.deleteSync(recursive: true);
       }
     });
 
-    test('attach gives the shared store a file', () async {
-      final temp = io.temp('store_attach_');
+    test('dump writes a sequence as a JSON array', () async {
+      final temp = io.temp('dict_dump_');
       try {
-        final path = io.join(temp.path, 'shared.json');
-        io.store.attach(path);
-        io.store.set(_k, 'v');
-        await io.store.save();
-        expect(io.store.open(path).get(_k), equals('v'));
+        final path = io.join(temp.path, 'rows.json');
+        [1, 2, 3].seq.dump(path);
+        expect((await format.json.read(path)).raw, equals([1, 2, 3]));
+
+        final objects = io.join(temp.path, 'by-host.json');
+        Dictionary<String, int>(const {'a.com': 2}).dump(objects);
+        expect((await format.json.read(objects)).raw, equals({'a.com': 2}));
       } finally {
         temp.deleteSync(recursive: true);
       }
     });
+
+    test(
+      'a file that is not a JSON object is a broken file, not an empty one',
+      () {
+        final temp = io.temp('dict_broken_');
+        try {
+          final path = io.join(temp.path, 'broken.json');
+          io.write(path, '[1, 2, 3]');
+          expect(() => io.dictionary(path), throwsFormatException);
+        } finally {
+          temp.deleteSync(recursive: true);
+        }
+      },
+    );
   });
 
   group('util Domain', () {
@@ -1394,9 +1402,8 @@ void main() async {
   });
 
   group('Domain namespaces', () {
-    test('io exposes csv and store', () {
+    test('io exposes csv', () {
       expect(io.csv, isA<CsvAccessor>());
-      expect(io.store, isA<StoreAccessor>());
     });
 
     test('net exposes http and crawl', () {

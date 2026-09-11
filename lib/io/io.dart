@@ -1,7 +1,8 @@
 /// # IO Domain (`io.*`)
 ///
-/// Filesystem access, path manipulation, CSV tables (`io.csv`) and a JSON
-/// key-value store (`io.store`). Every write is atomic — see [Fs].
+/// Filesystem access, path manipulation, CSV tables (`io.csv`) and the two
+/// collections on disk (`io.dictionary`, `dump`). Every write is atomic — see
+/// [Fs].
 ///
 /// Reading a JSON *document* is `format.json.read`, beside `format.yaml` and
 /// `format.toml`: a format is knowledge from outside Dart, so all three live in
@@ -24,21 +25,19 @@ import 'csv.dart';
 import '../src/fs.dart';
 import '../src/lock.dart';
 import '../src/watch.dart';
-import '../util/sequence.dart';
-import 'store.dart';
+import '../collection/dictionary.dart';
+import '../collection/sequence.dart';
 
+export 'collections.dart';
 export 'csv.dart';
 export '../src/fs.dart' show Algo;
 export '../src/lock.dart' show LockedError;
-export 'store.dart';
 
 // ============================================================================
-// IO DOMAIN (io.*) - File System, Paths, CSV & Store
+// IO DOMAIN (io.*) - File System, Paths, CSV & Collections
 // ============================================================================
 
-final StoreAccessor _store = StoreAccessor();
-
-/// The `io` domain: files, paths, CSV and the key-value store.
+/// The `io` domain: files, paths, CSV and the collections on disk.
 const IoAccessor io = IoAccessor();
 
 /// Entry point for filesystem and path operations.
@@ -59,8 +58,41 @@ class IoAccessor {
   /// CSV parsing, formatting and file access.
   CsvAccessor get csv => const CsvAccessor();
 
-  /// Persistent JSON key-value storage.
-  StoreAccessor get store => _store;
+  /// The JSON object at [path] as a [Dictionary], or an empty one when the
+  /// file is not there.
+  ///
+  /// The state a script keeps between runs, with [Slot]s for keys:
+  ///
+  /// ```dart
+  /// // setup: const cursor = Slot<int>('cursor');
+  /// final db = io.dictionary('out/cache.json');
+  /// db.write(cursor, (db.read(cursor) ?? 0) + 1);
+  /// db.dump('out/cache.json');
+  /// ```
+  ///
+  /// The path is named twice rather than held, which is the trade for a
+  /// collection that does not secretly own a file — the same one
+  /// `format.json.read` already makes. `Store` held it, and held a
+  /// process-wide mutable singleton with it.
+  ///
+  /// An absent file is an empty dictionary, because a first run has nothing to
+  /// read. A file that is there and is not a JSON object throws
+  /// [FormatException], because that is a broken file rather than a missing
+  /// one and silence is how a half-written snapshot becomes a silent data
+  /// loss.
+  Dictionary<String, Object?> dictionary(String path) {
+    final file = File(path);
+    if (!file.existsSync()) return Dictionary<String, Object?>();
+    final decoded = jsonDecode(file.readAsStringSync());
+    if (decoded is! Map) {
+      throw FormatException(
+        '$path holds a ${decoded.runtimeType}, not a JSON object',
+      );
+    }
+    return Dictionary({
+      for (final entry in decoded.entries) entry.key.toString(): entry.value,
+    });
+  }
 
   /// The non-blocking mirror of this domain. See [IoAsyncAccessor].
   IoAsyncAccessor get async => const IoAsyncAccessor();
@@ -107,11 +139,10 @@ class IoAccessor {
   /// `null` for a script to handle.
   String get home {
     final env = Platform.environment;
-    final named =
-        Platform.isWindows
-            ? env['USERPROFILE'] ??
-                ((env['HOMEDRIVE'] ?? '') + (env['HOMEPATH'] ?? ''))
-            : env['HOME'];
+    final named = Platform.isWindows
+        ? env['USERPROFILE'] ??
+              ((env['HOMEDRIVE'] ?? '') + (env['HOMEPATH'] ?? ''))
+        : env['HOME'];
     return named == null || named.isEmpty ? cwd : named;
   }
 

@@ -161,10 +161,7 @@ void main() {
 
       final served = <String>[];
       await net.crawl
-          .seed<String>([
-            for (final failure in lost)
-              if (failure.fetch case final fetch?) fetch,
-          ])
+          .seed<String>([for (final failure in lost) ?failure.fetch])
           .downloader(MapDownloader<String>({'/a': '<h1>second try</h1>'}))
           .run((res) => served.add(res.parse(format.html).find('h1').text));
 

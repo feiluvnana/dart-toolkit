@@ -272,10 +272,9 @@ class TimeAccessor {
   /// no one-liner for it.
   ///
   /// ```dart
-  /// rows.group((r) => util.time.day(r.seen));
+  /// rows.collect(.group.by((r) => util.time.day(r.seen)));
   /// ```
-  DateTime day(DateTime date) =>
-      date.isUtc
-          ? DateTime.utc(date.year, date.month, date.day)
-          : DateTime(date.year, date.month, date.day);
+  DateTime day(DateTime date) => date.isUtc
+      ? DateTime.utc(date.year, date.month, date.day)
+      : DateTime(date.year, date.month, date.day);
 }

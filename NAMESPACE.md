@@ -10,11 +10,12 @@ following it is what keeps the surface small enough to hold in your head.
 
 | Domain | Holds | Sub-namespaces |
 | :--- | :--- | :--- |
-| `io` | The filesystem: paths, atomic writes, reads, watching (`io.watch`), locking | `io.csv`, `io.store`, `io.async` |
+| `io` | The filesystem: paths, atomic writes, reads, watching (`io.watch`), locking, the collections on disk (`io.dictionary`, `dump`) | `io.csv`, `io.async` |
 | `net` | The network: requests, downloads, crawling — and, in the other direction, listening. It parses nothing | `net.http`, `net.crawl` |
 | `system` | This program and the machine running it, and what happens to its resources when it is interrupted (`system.on`) | `system.env`, `system.console`, `system.on` |
 | `concurrent` | Bounded async work on one isolate: how many at once, and how often | — |
-| `util` | Pure computation, the sequence API (`Sequence`), the two document cursors (`Json`, `Markup`) and the codec seam (`Codec`) that carries them across domains, and the typed keys (`Slot`, `Meta`) | `util.time`, `util.size`, `util.text`, `util.hash`, `util.rand` |
+| `util` | Pure computation, the two document cursors (`Json`, `Markup`) and the codec seam (`Codec`) that carries them across domains | `util.time`, `util.size`, `util.text`, `util.hash`, `util.rand` |
+| `collection` | The two collections this library returns in place of Dart's (`Sequence`, `Dictionary`), the two operation types that shape them (`Transformer`, `Collector`) and the typed keys (`Slot`). No accessor — a library, not a `collection.something` you call | — |
 | `cli` | The command line your script presents to whoever runs it | — |
 | `format` | One file format per name — never an executable | `format.html`, `format.json`, `format.yaml`, `format.toml`, `format.zip` |
 
@@ -24,8 +25,19 @@ spelling of `format.html.parse`, still opt-in via
 test. 5.0.0 made them methods, and removed the copies that had been sitting on
 `Element` and `Document` on the *default* surface all along.
 
-The first five are **axes**; the rest are **subjects**. Rule 1 is about telling
-them apart, because they are sorted by different questions.
+The first five are **axes**; `cli` and `format` are **subjects**. Rule 1 is
+about telling them apart, because they are sorted by different questions.
+
+`collection` is neither, and that is why it has no accessor. It is a
+vocabulary, not a way of touching anything: every name in it is reached from a
+value you already hold. 5.1.0 moved it out of `util`, which had been holding
+two unrelated things — functions you call (`time`, `size`, `text`, `hash`,
+`rand`) and types you receive. The sequence vocabulary was the largest of the
+second kind and it grew two more types and a dozen namespaces, which is
+Rule 3's test for a sub-namespace (*a cohesive vocabulary with its own nouns*)
+described exactly. It is not a sub-namespace of `util` because nothing in
+`util` reaches it; it is a peer. `Json` and `Markup` stayed: they are cursors
+over documents, not collections.
 
 ---
 
@@ -109,9 +121,11 @@ scope. It has to buy that back. All five must hold:
    disqualifies a candidate is a domain needing it *back*; then it is a
    sub-namespace of that domain, not a peer.
 3. **Its name is distinctive.** `cli` and `zip` are jargon; almost nobody has
-   a local variable called either. `text`, `hash`, `size`, `time`, `rand`,
-   `store` and `json` are words people use constantly, so they keep a prefix.
-   If you would hesitate to shadow it, prefix it.
+   a local variable called either. `text`, `hash`, `size`, `time`, `rand` and
+   `json` are words people use constantly, so they keep a prefix. If you would
+   hesitate to shadow it, prefix it. `collection` fails this outright — every
+   Dart project imports `package:collection` — which is one of the reasons it
+   is a library with no accessor rather than a name in your global scope.
 4. **Flattening reads better.** `cli.flag('force')` beats
    `system.cli.flag('force')`, and `util.text.slug(...)` is worth the third
    level because `text.slug(...)` at top level would be a collision waiting to
@@ -141,9 +155,14 @@ the first four makes it a sub-namespace or a plain member.
 ## Rule 3 — Sub-namespace or plain member?
 
 A sub-namespace is for a **cohesive vocabulary with its own nouns**: `io.csv`
-has rows, delimiters and headers; `io.store` has keys and a backing file;
-`system.console` has a writer, a reader and a cursor. Each would be a domain if
-Rule 2 let it.
+has rows, delimiters and headers; `system.console` has a writer, a reader and a
+cursor. Each would be a domain if Rule 2 let it.
+
+The same test decides a *type*'s namespace, and 5.1.0 is where that started
+mattering. `Transformer.take` and `Collector.count` are namespace objects
+holding three members and three members — `take.first`, `take.last`,
+`take.when` — and they exist for the reason `io.csv` does: the second word has
+somewhere to go. See Rule 4's splitting rule.
 
 Everything else is a plain member of the domain. `io.hash(path)` is one
 operation about a file, so it sits directly on `io` — it does not need an
@@ -189,6 +208,40 @@ became `usage`), the noun instead of the phrase (`maxPermits` became
 because it is already on a robots API), or splitting the concept
 (`Engine.robots` the flag became `obey`, freeing `robots(url)` for the lookup).
 
+### The splitting rule
+
+**Where Dart or Kotlin spells an operation as a camelCase compound, split it at
+the capital rather than renaming it.**
+
+```dart no-compile
+take.when(t)      // takeWhile
+first.where(t)    // firstWhere
+where.type<R>()   // whereType
+flat.map(f)       // flatMap
+group.by(f)       // groupBy
+count.by(f)       // countBy
+max.by(f)         // maxBy
+sort.by(f)        // sortBy
+index.of(v)       // indexOf
+```
+
+This is the rule 5.1.0 added, and it is the one that paid for the rest of that
+release. Banning camelCase and leaving the surface flat is what produced most
+of `Sequence`'s private dialect: `takeWhile` could not be a member, so it became
+`until`; `mapNotNull` became `sift`; `maxBy` became `best`; `countBy` became
+`tally`; `associateBy` became `keyed`. Every one of those renames was forced by
+a *spelling*, not by a meaning, and every one cost a reader a lookup.
+
+Nothing is invented by splitting. The name on the right is the name on the left
+with the capital turned into a dot, which is a rule a reader learns once. Two
+words are not available, because Dart reserves them: `while`, so `takeWhile` is
+`take.when`; and `for`, so `forEach` is `foreach` rather than `for.each`.
+
+A namespace is also what lets an operation take back a name that collided.
+`map` was renamed to `to` because `Map` is a type in every file, and `where` to
+`keep` because `Iterable.where` is one autocomplete away. Neither collision
+exists inside `Transformer`, so both names came back.
+
 **Prefer the word that makes the call site read as English.** `res.parse(format.json).raw ?? ({})`
 over `res.jsonOr({})`; `dedupe.tracked(request)` over `hasRequest(request)`;
 `writer.error(msg)` over `writeErr(msg)`. The name is read far more often than
@@ -197,25 +250,29 @@ it is written.
 **The name has to say what the call does.** A name that only says *when* or
 *where* is not a name: `system.now()` became `system.shutdown()` because what
 it does is shut down, `crawl.to(path)` became `crawl.save(path)`, and
-`Store.map()` became `Store.all()` because it was never `Iterable.map`. If you
+`Store.map()` became `Store.all()` because it was never `Iterable.map` — a name
+the class outlived, since `Dictionary.map` *is* the boundary word now. If you
 cannot tell what a call does from its name alone, it is the wrong name.
 
 **Keep the existing word when the existing word is the right one.** A
-replacement vocabulary is not a rename spree. `Sequence` took Dart's `fold`,
-`cast`, `join`, `skip`, `zip`, `any`, `all` and `count` unchanged, because they
-are already the best available names and re-spelling them would cost every
-reader for nothing. A name changes only where a better one exists: `map` became
-`to` because `map` is also the noun for the other collection, and `where` became
-`keep` because it says which side survives and `where` says neither.
+replacement vocabulary is not a rename spree, and the burden is on the rename.
+`Collector` took Dart's `fold`, `cast`, `join`, `zip`, `any`, `all` and `count`
+unchanged; `Transformer` took `map`, `where`, `take`, `skip` and `sort`. Where
+5.0.0 had a word of its own for one of these, 5.1.0 gave it back — and the
+lesson it recorded is that **a rename forced by a spelling is not a rename, it
+is a workaround**. Thirteen of `Sequence`'s fifty-eight members were one, and
+eight of the thirteen were forced by the camelCase ban alone.
 
 **No complement pair where `!` does the job.** If putting `!` in front of the
 call gives the other meaning, there is one member, not two. So `empty` exists
-and `notEmpty` does not — `!seq.empty` is already the answer — and `any(t)`
-exists while `none(t)` does not, because `!seq.any(t)` *is* `none`. The line is
-exactly where `!` stops working: `keep(t)` and `omit(t)` both stand, because
-`!seq.keep(t)` is not a sequence and negating the filter means rewriting the
-lambda rather than the call. Likewise `best`/`worst`, since negating a maximum
-does not give a minimum.
+and `notEmpty` does not — `!dict.empty` is already the answer — and `any(t)`
+exists while `none(t)` does not, because `!any(t)` *is* `none`. `keep(t)` and
+`omit(t)` both stood through 5.0.0 on the grounds that negating the filter meant
+rewriting the lambda rather than the call — but that was only true because
+`keep` was not a filter's ordinary name. `where((r) => !r.live)` reads as the
+other side, so `omit` went with the rename. The line is where `!` genuinely
+stops working: `max.by`/`min.by` both stand, since negating a maximum does not
+give a minimum.
 
 **A nullable return deletes a whole family.** Kotlin needs `first` and
 `firstOrNull`, `single` and `singleOrNull`, `maxBy` and `maxByOrNull`,
@@ -227,8 +284,9 @@ reason is unchanged: the caller asked for a value and the honest answer is that
 there is not one.
 
 **A record replaces a variant.** `withIndex`, `mapIndexed` and `forEachIndexed`
-are three names for one idea; `pairs` gives `Sequence<(int, T)>` and `to`/`each`
-handle the rest. `split` and `unzip` return records rather than a `Pair` type,
+are three names for one idea; `enumerate()` gives `Sequence<(int, T)>` and
+`map`/`foreach` handle the rest. `split` and `unzip` return records rather than
+a `Pair` type, `Slot.call` gives `(String, Object?)` rather than a `MapEntry`,
 and `system.os` is one record rather than five loose members.
 
 Three names are exempt, because they are contracts rather than choices:
@@ -291,16 +349,31 @@ sees one. 5.0.0 made them methods rather than getters, so the opt-in spelling
 carries its own selector argument instead of leaning on a `Markup.call` sitting
 on the surface it opted out of.
 
+5.1.0 ran it again, over a vocabulary rather than over a surface, and deleted
+four more:
+
+| Deleted | Was |
+| :--- | :--- |
+| `Meta`, `Store`, `StoreAccessor`, `io.store` | `Dictionary<String, Object?>` and the `Slotted` extension — two classes, nine identical members apiece, because the library had no name for "a map with typed keys" |
+| `extension MapSequenced on Map` | the escape hatch out of the raw `Map` that `group`, `keyed` and `tally` handed back; they hand back a `Dictionary` now, so nothing needs to climb back in |
+| `Sequence.omit`, `Sequence.order`, `Sequence.tally`, `Sequence.keyed` | `where((x) => !t(x))`, `sort.using(cmp)`, `count.by(f)`, `associate.by(f)` |
+| `Store.load` / `save` / `attach` / `path` / `open` | `io.dictionary(path)` and `dump(path)` — the pair that made a collection secretly own a file, and a process-wide mutable singleton with it |
+
 The rule also settles collisions in the other direction. `io.hash(path)` hashes
 a file and `util.hash.sha(value)` hashes a value — different inputs, different
 domains, no overlap. But two entry points to the *same* behaviour is always a
 bug in the API, not a convenience.
 
-**It is also why `Sequence` is a type rather than an extension.** An extension
-member never overrides an instance member: declare `map` on `Iterable` and
-`dart:core`'s wins, silently, with no diagnostic — the `HttpClient` shape of
-bug again. So an extension could only *add* names beside Dart's, and `keep`
-sitting next to `where` forever is exactly what this rule forbids. Replacing a
+The narrow carve-out is a shorthand **defined as** the general form, in one
+line, where the shorthand is what a script actually writes: `io.csv.pipe`
+beside `write`, and `Collector.count.by(f)` beside `group.into(f, .count())`.
+One implementation, two spellings of a *call* — not two implementations.
+
+**It is also why `Sequence` is a type rather than an extension**, and why
+`Dictionary` is not a `Map`. An extension member never overrides an instance
+member: declare `map` on `Iterable` and `dart:core`'s wins, silently, with no
+diagnostic — the `HttpClient` shape of bug again. So an extension could only
+*add* names beside Dart's, which is exactly what this rule forbids. Replacing a
 vocabulary means replacing the static type, which is the whole reason
 `Sequence<T>` does not implement `Iterable<T>` and why `Markup` stopped
 mixing it in. `test/regression_test.dart` pins that property, because a future
@@ -331,7 +404,7 @@ sweep does not re-litigate them:
 | `util.text.render(template, Map<String, Object?>)` | Template values, rendered with `toString`; that *is* the contract. |
 | `Table.add(List<Object?> row)` | Cells are rendered with `toString`; that *is* the contract. |
 | `logger.info(msg, fields: {...})` | Structured log fields, encoded straight to JSON. |
-| `Meta.raw`, `Store.all()` | The escape hatch under a typed API, deliberately shaped like the JSON it holds. |
+| `Dictionary<String, Object?>` under `Slot` | The escape hatch under a typed API, deliberately shaped like the JSON it holds. `read`/`write` are the typed twin. |
 | `res.parse(format.html).extract(schema)`, `Field.of`, `NestField`, `ListField` | The string shorthand, which this rule blesses *alongside* the typed form. Its whole job is to accept a loose spec; `all`/`one`/`pick` are the typed twin. |
 
 5.0.0 closed the last two places where a URL was not a `Uri`:
@@ -344,15 +417,15 @@ neither is a path, and `Page.follow` keeps one because a relative reference is
 what it is handed and resolving it is the method's job.
 
 Everything else that used to claim the exemption was closed in 2.0.0.
-`Fetch.meta` and `io.store` became `Slot` keys, `res.extract` gained a typed
+`Fetch.meta` and the key-value store became `Slot` keys, `res.extract` gained a typed
 twin in records and `Field`, `cli.get<T>` became `Opt`, `Pool.settle` became a
 sealed `Settled`, and the methods that took an `Object` and threw
 `ArgumentError` for the wrong shape were split in two.
 
 3.0.0 closed the last two: `Reply.json` and `io.json` were both `Object?`, and
 both now have a typed door in `Reply.at` and `format.json.read`, which return the
-[`Json`] cursor. `Reply.json` stays as the raw escape hatch, the way `Meta.raw`
-does.
+[`Json`] cursor. `Reply.json` stays as the raw escape hatch, the way
+`Dictionary.map` does under a `Slot`.
 
 Where a shorthand is genuinely more ergonomic, it goes *alongside* the typed
 form rather than replacing it: `res.extract` takes the string schema,
@@ -470,10 +543,13 @@ every package in `pubspec.yaml`.
 | The seam between them | `Codec<T>`, a one-method interface in `util` | `net` needs to read bodies and `format` needs to read text, and Rule 2's second test forbids either depending on the other. One interface both implement is the whole of it: `net` is handed something that reads bytes and never learns which format it is, which is what makes `res.parse(format.json)` and `res.parse(format.html)` the same call. `read` from a file comes free with it, written once instead of five times |
 | Finding a form | `Markup.form`, sending stays in `net` | `res.form('#login')` needed `net` to parse a page, which is the thing 4.0.0 removed. Finding a form is reading markup, so it hangs off the cursor. Sending one is a socket and its output is an `HttpMethod`, a `Uri` and a `Body` — all `net` types — so `Form` stays in `net`, entangled with `net.http` by Rule 2's second test exactly as `net.crawl` is. `Form.at(url)` carries the one thing a cursor cannot know |
 | JSON | `format.json`, beside `yaml` and `toml` | It was `util.json` through 3.1.0, on the grounds that decoding is pure. But a format is a *subject*, which is the sentence that admitted `format.zip`, and JSON in one place with YAML in another left a reader asking where formats live. The three codecs are now spelled identically — `parse`, `read`, `format` |
-| The `Json` cursor type | `util`, exported bare | The accessor moved; the type could not. `net` hands one back through `Codec`, and a type `net` needs cannot live under `format` without making `format` something `net` depends on — Rule 2's second test. It is a pure value, like `Slot` and `Meta`, so `util` is its home. `lib/src/jsontext.dart` is the codec both domains sit on, the way `Fs` backs `io` |
+| The `Json` cursor type | `util`, exported bare | The accessor moved; the type could not. `net` hands one back through `Codec`, and a type `net` needs cannot live under `format` without making `format` something `net` depends on — Rule 2's second test. It is a pure value, so `util` is its home. `lib/src/jsontext.dart` is the codec both domains sit on, the way `Fs` backs `io` |
 | The `Markup` cursor type | `util`, beside `Json` | The same split, one release later, and named the same way: for what it is over rather than for the operation that produced it. `QueryResult` was a result type named after a query. The 800-line jQuery evaluator behind it went to `lib/src/jquery.dart`, so `util/markup.dart` reads as the vocabulary rather than the machinery |
 | The domain's own name | `format`, not `tool` | `tool` was chosen when the domain held one archiver, and it invited precisely the thing its own doc comment spent a paragraph forbidding — three executable wrappers were added under it in 3.1.0 and removed in 3.2.0. `format.zip` cannot be misread as a wrapper around the `zip` binary. Rule 4 says say the call site out loud: `format.yaml.read('config.yaml')` says what it does and `tool.yaml.read(...)` says where it happens to live |
-| The sequence API | `Sequence<T>`, a type in `util` | Rule 2 spends no top-level name: you reach it from the data you already hold, the same argument that put `Form` in `net` with no `net.form`. Not a sub-namespace either — `util.list.group(...)` would be a namespace standing where a receiver belongs |
+| The sequence API | `Sequence<T>`, a type in `collection` | Rule 2 spends no top-level name: you reach it from the data you already hold, the same argument that put `Form` in `net` with no `net.form`. Not a sub-namespace either — `util.list.group(...)` would be a namespace standing where a receiver belongs. It sat in `util` through 5.0.0; 5.1.0 moved it out, because `util` was holding both functions you call and types you receive, and the collections are the largest of the second kind |
+| The sequence *vocabulary* | `Transformer` and `Collector`, not methods on `Sequence` | Fifty-eight members, a third of them words invented for an operation everybody already knew, and eight of those forced by nothing but the camelCase ban. A namespace has no `Map` to collide with and no compound to forbid, so `map`, `where`, `take.first` and `count.by` all became sayable. Java's `Collectors` is the same design, twenty years old and uncontroversial; the part Java leaves as methods — the intermediates — went behind `transform` here anyway, because keeping `take` and `skip` as methods would mean building the namespace objects twice and keeping them in step forever |
+| A keyed collection | `Dictionary<K, V>`, beside `Sequence` | Design Philosophy 6 promised that everything handed back to shape is a `Sequence`, and that held right up to the moment you grouped. `Meta` and `Store` were then the same nine members written twice, in two domains, because the library had no name for *a map with typed keys*. One type and one extension replaced two types and twenty-two members, and typed keys started working on every dictionary in the program |
+| Writing a collection to disk | `extension Dumpable on Sequence`, declared in `lib/io/` | Rule 1 says anything that writes a file is `io`, and Rule 2's second test forbids `collection` needing `io` back. `io` already depends on `collection` — `io.find` returns a `Sequence` — so the extension adds no edge in the wrong direction, and `collection` still knows nothing about the disk. One export means the caller sees `rows.dump(path)` with no extra import |
 | A filesystem watcher | `io.watch` — after 5.0.0 moved the other one | It was `io.observe` through 4.0.0, because `system.watch()` meant *watch for Ctrl-C* and two `watch`es meaning two unrelated things on two accessors is precisely what Rule 5 is for. That entry ended *`observe` is free, honest, and slightly less good than `watch`* — a worse name taken because a better one was occupied by something that had not earned it. Signal watching is `system.on.signals()` now, beside `track`, `adopt` and `exit`, which is the cohesive vocabulary Rule 3 describes; `io` took the name back. A compromise written down is a compromise that can be revisited |
 | The interrupt vocabulary | `system.on.*`, not flat on `system` | `watch`, `unwatch`, `track`, `untrack`, `adopt` and `disown` sat directly on `system` through 4.0.0 while `system.on` held exactly one member, `exit`. Rule 3 says a sub-namespace is for a cohesive vocabulary with its own nouns, and *what happens to your resources when the program is interrupted* is that vocabulary — the structure was inverted, with the namespace on the single function and the family flat beside it |
 | A rate limiter | `concurrent.rate` → `Limiter` | Pure coordination over time, so Rule 1 would file it under `util` — but `Semaphore` and `Mutex` set the precedent and a limiter has nothing to say to `util`. It bounds *how often* where they bound *how many*, and it composes with `concurrent.run`. `RateLimiter` is camelCase where this library uses domain nouns, and `Rate` alone reads like a number |

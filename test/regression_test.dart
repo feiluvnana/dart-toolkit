@@ -31,7 +31,7 @@ void main() {
       expect(page, isNot(isA<Iterable<Object?>>()));
       expect(page.find('p').count, equals(2));
       expect(
-        page.find('p').elements.to((e) => e.text).list,
+        page.find('p').elements.transform(.map((e) => e.text)).list,
         equals(['a', 'b']),
       );
     });
@@ -46,15 +46,15 @@ void main() {
 
     test('every reader that can come up empty says so in its type', () {
       final empty = const Sequence<int>.empty();
-      expect(empty.first, isNull);
-      expect(empty.last, isNull);
-      expect(empty.sole, isNull);
-      expect(empty.at(0), isNull);
-      expect(empty.find((_) => true), isNull);
-      expect(empty.best((n) => n), isNull);
-      expect(empty.worst((n) => n), isNull);
-      expect(empty.index((_) => true), isNull);
-      expect(empty.avg((n) => n), isNull);
+      expect(empty.collect(.first()), isNull);
+      expect(empty.collect(.last()), isNull);
+      expect(empty.collect(.single()), isNull);
+      expect(empty.collect(.at(0)), isNull);
+      expect(empty.collect(.first.where((_) => true)), isNull);
+      expect(empty.collect(.max.by((n) => n)), isNull);
+      expect(empty.collect(.min.by((n) => n)), isNull);
+      expect(empty.collect(.index.where((_) => true)), isNull);
+      expect(empty.collect(.avg((n) => n)), isNull);
       expect(Json.none.text('a'), isNull);
       expect(util.time.parse('nope'), isNull);
       expect(util.time.span('nope'), isNull);
@@ -62,7 +62,7 @@ void main() {
 
     test('no complement pair exists where ! does the job', () {
       // Law 2: `empty` with no `notEmpty`, `any` with no `none`.
-      expect([1].seq.empty, isFalse);
+      expect([1].seq.collect(.empty()), isFalse);
       expect($('<p>a</p>').empty, isFalse);
       expect(Json.none.empty, isTrue);
     });
@@ -185,7 +185,7 @@ void main() {
       // followed the crawl into every subdomain it wandered through.
       expect(jar.header(Uri.parse('https://example.com/')), 'sid=abc');
       expect(jar.header(Uri.parse('https://sub.example.com/')), isNull);
-      expect(jar.cookies.sole!.host, isTrue);
+      expect(jar.cookies.collect(.single())!.host, isTrue);
     });
 
     test('a Domain the host owns still widens to its subdomains', () {
@@ -196,7 +196,7 @@ void main() {
       );
 
       expect(jar.header(Uri.parse('https://sub.example.com/')), 'sid=abc');
-      expect(jar.cookies.sole!.host, isFalse);
+      expect(jar.cookies.collect(.single())!.host, isFalse);
     });
 
     test('a Domain the responding host does not own is refused', () {
@@ -336,7 +336,10 @@ Disallow: /x
 
       // The folder did not exist: opening the destination directly threw.
       expect(io.read(dest).trim(), 'one');
-      expect(io.find(dir.path, pattern: RegExp(r'\.part$')).empty, isTrue);
+      expect(
+        io.find(dir.path, pattern: RegExp(r'\.part$')).collect(.empty()),
+        isTrue,
+      );
     });
 
     test('the destination is replaced only once the run finishes', () async {
@@ -358,7 +361,10 @@ Disallow: /x
 
       await run;
       expect(io.read(dest).trim(), 'one');
-      expect(io.find(dir.path, pattern: RegExp(r'\.part$')).empty, isTrue);
+      expect(
+        io.find(dir.path, pattern: RegExp(r'\.part$')).collect(.empty()),
+        isTrue,
+      );
     });
 
     test('a save whose seeds cannot be resolved keeps the old file', () async {
@@ -377,7 +383,10 @@ Disallow: /x
       });
 
       expect(io.read(dest), 'PREVIOUS');
-      expect(io.find(dir.path, pattern: RegExp(r'\.part$')).empty, isTrue);
+      expect(
+        io.find(dir.path, pattern: RegExp(r'\.part$')).collect(.empty()),
+        isTrue,
+      );
     });
 
     test('a stream whose seeds cannot be resolved still ends', () async {
@@ -443,14 +452,17 @@ Disallow: /x
     });
   });
 
-  group('io.store', () {
-    test('a malformed file leaves the store empty instead of throwing', () {
+  group('io.dictionary', () {
+    test('a malformed file throws rather than reading as empty', () {
       final file = File('${Directory.systemTemp.path}/dt_bad_store.json')
         ..writeAsStringSync('{not json');
       addTearDown(() => file.deleteSync());
 
-      final store = io.store.open(file.path);
-      expect(store.isEmpty, isTrue);
+      // `Store.load` swallowed a missing file, unparseable JSON and a non-map
+      // document into the same silent empty, so a half-written snapshot read
+      // as a fresh start and the next save overwrote it.
+      expect(() => io.dictionary(file.path), throwsFormatException);
+      expect(io.dictionary('${file.path}.absent').empty, isTrue);
     });
   });
 
@@ -635,7 +647,9 @@ Disallow: /x
       });
 
       await format.zip.pack(root.path, archive);
-      final names = (await format.zip.list(archive)).to((e) => e.name).list;
+      final names = (await format.zip.list(
+        archive,
+      )).transform(.map((e) => e.name)).list;
       expect(names, contains('kept.txt'));
       expect(names.any((n) => n.contains('secret')), isFalse);
     });

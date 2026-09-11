@@ -3,10 +3,13 @@
 /// Pure helpers, with no filesystem and no operating system behind them:
 /// time and delays (`util.time`), byte sizes (`util.size`), text handling
 /// (`util.text`), hashing (`util.hash`) and randomness (`util.rand`) — plus
-/// [Sequence], the sequence API this library returns in place of Dart's, and
-/// the two document cursors — [Json] for a tree of maps and scalars, [Markup]
-/// for a tree of elements — that `format` builds and `net` hands back through
-/// [Codec].
+/// the two document cursors, [Json] for a tree of maps and scalars and
+/// [Markup] for a tree of elements, that `format` builds and `net` hands back
+/// through [Codec].
+///
+/// `Sequence` and `Dictionary` used to be here and are their own domain now —
+/// see `lib/collection/`. This holds functions you call; a collection is a
+/// type you receive.
 ///
 /// The cursors live here and their codecs live in `format` for the same
 /// reason: a cursor is a pure value that more than one domain returns, and a
@@ -29,8 +32,6 @@ export 'hash.dart';
 export 'json.dart';
 export 'markup.dart';
 export 'rand.dart';
-export 'sequence.dart';
-export 'slot.dart';
 export 'size.dart';
 export 'text.dart';
 export 'time.dart';

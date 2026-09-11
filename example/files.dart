@@ -37,12 +37,14 @@ void main() async {
   final back = await format.json.read(io.join(dir, 'products.json'));
   log.ok('Wrote and re-read ${back.count} products.');
   log.info('First name: ${back.text('0.name')}');
-  log.info('Every name: ${back.jsonpath(r'$[*].name').sift((n) => n.text())}');
+  log.info(
+    'Every name: ${back.jsonpath(r'$[*].name').transform(.map.nonnull((n) => n.text()))}',
+  );
 
   // ---------------------------------------------------------------------- CSV
   await io.csv.write(io.join(dir, 'products.csv'), rows);
   final records = await io.csv.maps(io.join(dir, 'products.csv'));
-  log.ok('CSV columns: ${records.first!.keys.join(', ')}');
+  log.ok('CSV columns: ${records.collect(.first())!.keys.join(', ')}');
 
   // `records` streams rather than loading the file, and `pipe` is its twin for
   // writing: it turns a crawl of any size into a spreadsheet without the rows
@@ -68,7 +70,7 @@ void main() async {
 
   final found = io.find(dir, pattern: RegExp(r'\.(json|csv)$'));
   log.ok(
-    'Found ${found.count()}: ${[for (final f in found.list) io.base(f.path)]}',
+    'Found ${found.collect(.count())}: ${[for (final f in found.list) io.base(f.path)]}',
   );
 
   // ------------------------------------------------------------- non-blocking
@@ -95,11 +97,12 @@ void main() async {
   // ------------------------------------------------------------------- store
   // A tiny JSON document for what a run has to remember: cursors, "last seen"
   // markers, a resume point.
-  final db = io.store.open(io.join(dir, 'state.json'));
-  final count = (db.get(runs) ?? 0) + 1;
+  final statePath = io.join(dir, 'state.json');
+  final db = io.dictionary(statePath);
+  final count = (db.read(runs) ?? 0) + 1;
   db
-    ..set(runs, count)
-    ..set(last, util.time.iso());
-  await db.save();
-  log.ok('Run #$count (last ${db.get(last)}).');
+    ..write(runs, count)
+    ..write(last, util.time.iso())
+    ..dump(statePath);
+  log.ok('Run #$count (last ${db.read(last)}).');
 }

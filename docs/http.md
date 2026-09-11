@@ -76,7 +76,7 @@ res.parse(format.yaml);         // Json
 // Resolving a relative reference against the URL the body came from:
 res.url.resolve('/next');                         // an absolute Uri
 res.parse(format.html).find('a').attrs('href')
-    .to(res.url.resolve);                         // every link, absolute
+    .transform(.map(res.url.resolve));                         // every link, absolute
 
 await res.save('out/page.html'); // saves response bytes atomically
 ```
@@ -171,7 +171,7 @@ final product = (
   )),
 );
 
-product.reviews.first?.rating;   // int?, no cast anywhere
+product.reviews.collect(.first())?.rating;   // int?, no cast anywhere
 ```
 
 Nothing here is `Object?`. `all` hands each match its own `Markup`, so a

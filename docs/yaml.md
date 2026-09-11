@@ -4,7 +4,7 @@ The configuration formats everything else a script coordinates with is written
 in — `pubspec.yaml` first, then CI, then Docker Compose, then Kubernetes; and
 `Cargo.toml`, `pyproject.toml` for the other half.
 
-[`io.store`](store.md) covers the format this library *writes*. These are the
+[`io.dump`](io.md) covers the format this library *writes*. These are the
 ones everything else *reads*, and they are spelled member for member like
 [`format.json`](json.md).
 
@@ -63,7 +63,7 @@ cfg.text('database.host');                       // String?
 cfg.number('database.port');                     // num?
 cfg.flag('features.strict');                     // bool?
 cfg.at('hosts').texts();                         // Sequence<String>
-cfg.jsonpath(r'$..sdk').sift((n) => n.text());   // every sdk constraint
+cfg.jsonpath(r'$..sdk').transform(.map.nonnull((n) => n.text()));   // every sdk constraint
 
 final cargo = await format.toml.read('Cargo.toml');
 cargo.text('package.version');
@@ -129,6 +129,6 @@ these two accessors: no caller names a `YamlMap` or a `TomlDocument`.
 ## See Also
 
 - [`format.json`](json.md) — the cursor these return
-- [`io.store.*`](store.md) — the format this library writes
+- [`io.*`](io.md) — `io.dump`, the format this library writes
 - [`format.json.*`](json.md) — the third codec, and the `Json` cursor
 - [`format.zip.*`](zip.md) — the archive format

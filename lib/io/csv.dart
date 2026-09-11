@@ -8,7 +8,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../src/fs.dart';
-import '../util/sequence.dart';
+import '../collection/sequence.dart';
 
 // ============================================================================
 // CSV SERIALIZATION & PARSING (io.csv.*)
@@ -145,10 +145,9 @@ class CsvAccessor {
         headers ?? <String>{for (final row in list) ...row.keys}.toList();
     if (list.isEmpty && keys.isEmpty) return '';
 
-    final buffer =
-        StringBuffer()
-          ..write(keys.map((k) => _escape(k, delimiter)).join(delimiter))
-          ..write(newline);
+    final buffer = StringBuffer()
+      ..write(keys.map((k) => _escape(k, delimiter)).join(delimiter))
+      ..write(newline);
     for (final row in list) {
       buffer
         ..write(
@@ -208,7 +207,7 @@ class CsvAccessor {
   ///
   /// ```dart
   /// final rows = await io.csv.maps('sales.csv');
-  /// rows.tally((r) => r['region']!).seq.each(print);
+  /// rows.collect(.count.by((r) => r['region']!)).pairs.collect(.foreach(print));
   /// ```
   Future<Sequence<Map<String, String>>> maps(
     String path, {
@@ -264,8 +263,9 @@ class CsvAccessor {
       // A multi-character delimiter can straddle a chunk boundary, so hold
       // back the tail that might be the start of one.
       final chunk = carry + raw;
-      final safe =
-          sep.length > 1 ? chunk.length - (sep.length - 1) : chunk.length;
+      final safe = sep.length > 1
+          ? chunk.length - (sep.length - 1)
+          : chunk.length;
       var i = 0;
       for (; i < chunk.length; i++) {
         if (i >= safe && !pendingQuote && !quoted) break;
@@ -456,9 +456,9 @@ class CsvAccessor {
 
   static String _escape(String field, String delimiter) =>
       field.contains(delimiter) ||
-              field.contains('"') ||
-              field.contains('\n') ||
-              field.contains('\r')
-          ? '"${field.replaceAll('"', '""')}"'
-          : field;
+          field.contains('"') ||
+          field.contains('\n') ||
+          field.contains('\r')
+      ? '"${field.replaceAll('"', '""')}"'
+      : field;
 }

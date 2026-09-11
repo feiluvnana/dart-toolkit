@@ -194,10 +194,9 @@ void main() {
     });
 
     test('strict names switches no declaration covers', () {
-      final cli =
-          Cli(['--verbose', '--verbse', '--no-cache', '-f'])
-            ..flag('verbose', alias: 'f')
-            ..flag('cache');
+      final cli = Cli(['--verbose', '--verbse', '--no-cache', '-f'])
+        ..flag('verbose', alias: 'f')
+        ..flag('cache');
       expect(cli.unknown(), equals(['verbse']));
       expect(
         () => cli.strict(),
@@ -276,10 +275,9 @@ void main() {
     });
 
     test('both kinds show their default in the usage block', () {
-      final parser =
-          Cli(<String>[])
-            ..duration('timeout', def: 90.m, desc: 'Give up after')
-            ..date('since', def: DateTime.utc(2024, 3, 9), desc: 'Only after');
+      final parser = Cli(<String>[])
+        ..duration('timeout', def: 90.m, desc: 'Give up after')
+        ..date('since', def: DateTime.utc(2024, 3, 9), desc: 'Only after');
       final usage = parser.usage();
       expect(usage, contains('--timeout'));
       expect(usage, contains('1h30m'));
@@ -413,17 +411,11 @@ void main() {
     });
 
     test('usage lists commands, defaults, env and allowed values', () {
-      final cli =
-          Cli(const <String>[])
-            ..flag('verbose', alias: 'v', desc: 'Log every step')
-            ..option('out', alias: 'o', def: 'dist', desc: 'Output directory')
-            ..option('mode', desc: 'Build mode', allowed: ['debug', 'release'])
-            ..option(
-              'token',
-              desc: 'API token',
-              env: 'API_TOKEN',
-              required: true,
-            );
+      final cli = Cli(const <String>[])
+        ..flag('verbose', alias: 'v', desc: 'Log every step')
+        ..option('out', alias: 'o', def: 'dist', desc: 'Output directory')
+        ..option('mode', desc: 'Build mode', allowed: ['debug', 'release'])
+        ..option('token', desc: 'API token', env: 'API_TOKEN', required: true);
       cli.handle('build', (_) => 0, desc: 'Build the project');
 
       final help = cli.usage(syntax: 'tool <command>', desc: 'An example.');
@@ -534,10 +526,10 @@ void main() {
         q.find('a').matching(r'[href$=".flac"]').attr('href'),
         equals('https://example.com/2.flac'),
       );
-      expect(q.find('a').attrs('href').count(), equals(2));
+      expect(q.find('a').attrs('href').collect(.count()), equals(2));
 
       expect(q.find('img').attr('src'), equals('album.jpg'));
-      expect(q.find('img').attrs('src').count(), equals(1));
+      expect(q.find('img').attrs('src').collect(.count()), equals(1));
 
       final lines = q.find('.disc_lines').lines;
       expect(
@@ -634,8 +626,10 @@ void main() {
 
   group('Crawl entry points', () {
     test('net.crawl builds a configured engine without running it', () {
-      final engine =
-          net.crawl<String>('https://example.com'.url).concurrent(3).engine();
+      final engine = net
+          .crawl<String>('https://example.com'.url)
+          .concurrent(3)
+          .engine();
       expect(engine.downloader.concurrency, equals(3));
       expect(engine.running, isFalse);
     });
