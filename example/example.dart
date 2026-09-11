@@ -65,7 +65,7 @@ void main(List<String> args) async {
   final log = system.console.logger;
   final out = system.console.writer;
   final clock = util.time.clock();
-  final dir = io.join('output', 'pipeline');
+  final dir = io.path.join('output', 'pipeline');
 
   // Tracked partial files are removed if the run is interrupted. Registering a
   // hook starts the SIGINT watcher, which holds the process open — so a script
@@ -97,7 +97,7 @@ void main(List<String> args) async {
   log.step(2, 5, 'Enriching...');
 
   final bar = Progress(total: products.collect(.count()), message: 'Enriching');
-  final enriched = await concurrent.run(products.list, (product) async {
+  final enriched = await concurrent.run(products.iterable, (product) async {
     await util.time.wait(util.rand.jitter(30.ms));
     bar.tick(1, product.name);
     return (
@@ -112,7 +112,7 @@ void main(List<String> args) async {
   // ----------------------------------------------------------------- 3. io
   log.step(3, 5, 'Writing output...');
 
-  final summary = io.join(dir, 'summary.txt');
+  final summary = io.path.join(dir, 'summary.txt');
   if (!force() && io.has(summary)) {
     log.warn('$summary exists; pass --force to overwrite.');
   } else {
@@ -122,12 +122,12 @@ void main(List<String> args) async {
           .transform(.map((e) => '${e.slug} ${e.key}'))
           .collect(.join('\n')),
     );
-    io.dump(io.join(dir, 'products.json'), [
-      for (final e in enriched.list)
+    io.dump(io.path.join(dir, 'products.json'), [
+      for (final e in enriched.iterable)
         {'name': e.product.name, 'price': e.product.price, 'slug': e.slug},
     ]);
-    await io.csv.write(io.join(dir, 'products.csv'), [
-      for (final e in enriched.list)
+    await io.csv.write(io.path.join(dir, 'products.csv'), [
+      for (final e in enriched.iterable)
         {'name': e.product.name, 'price': e.product.price, 'slug': e.slug},
     ]);
     log.ok('Wrote 3 files to $dir/.');
@@ -135,7 +135,7 @@ void main(List<String> args) async {
 
   // The state that outlives the run: a counter and a timestamp, under typed
   // keys so neither is a string on one side and an int on the other.
-  final statePath = io.join(dir, 'state.json');
+  final statePath = io.path.join(dir, 'state.json');
   final db = io.dictionary(statePath);
   final count = (db.read(runs) ?? 0) + 1;
   db
@@ -146,9 +146,12 @@ void main(List<String> args) async {
   // --------------------------------------------------------------- 4. tool
   log.step(4, 5, 'Archiving...');
 
-  final archive = io.join('output', 'catalogue-${util.time.stamp()}.tar.gz');
-  await format.zip.pack(io.join(dir, 'products.json'), archive);
-  log.ok('Packed ${util.size.format(io.stat(archive).size)} into $archive.');
+  final archive = io.path.join(
+    'output',
+    'catalogue-${util.time.stamp()}.tar.gz',
+  );
+  await format.zip.pack(io.path.join(dir, 'products.json'), archive);
+  log.ok('Packed ${util.size.format(io.size(archive)!)} into $archive.');
 
   // An executable is `system.run`, not a wrapper: `tool` holds formats only.
   final head = await system.run('git', ['rev-parse', '--abbrev-ref', 'HEAD']);
@@ -169,7 +172,7 @@ void main(List<String> args) async {
       headers: ['Product', 'Price', 'Slug'],
       alignments: [ColumnAlign.left, ColumnAlign.right, ColumnAlign.left],
     )..addAll([
-      for (final e in enriched.transform(.take.first(5)).list)
+      for (final e in enriched.transform(.take.first(5)).iterable)
         [e.product.name, '\$${e.product.price}', e.slug],
     ]),
   );
@@ -191,7 +194,8 @@ void main(List<String> args) async {
 /// The listing: queue every product, then follow pagination. `meta` survives
 /// the round trip, so the detail handler knows the price the listing showed.
 void _catalogue(Page<Product> res) {
-  for (final card in res.parse(format.html).find('.product').elements.list) {
+  for (final card
+      in res.parse(format.html).find('.product').elements.iterable) {
     res.follow(
       card.query.find('a').attr('href') ?? '',
       tag: 'product',

@@ -10,7 +10,7 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 
 void main() async {
   final log = system.console.logger;
-  final dir = io.join('output', 'shell');
+  final dir = io.path.join('output', 'shell');
 
   // ------------------------------------------------------------- environment
   // `.env` fills in what the shell did not set; nothing fails if it is absent.
@@ -34,22 +34,22 @@ void main() async {
   if (!bad.ok) log.warn('ls exited ${bad.code}: ${util.text.clean(bad.err)}');
 
   // ---------------------------------------------------------------- archives
-  io.write(io.join(dir, 'notes.txt'), 'built ${util.time.iso()}');
-  io.dump(io.join(dir, 'data.json'), {'ok': true});
+  io.write(io.path.join(dir, 'notes.txt'), 'built ${util.time.iso()}');
+  io.dump(io.path.join(dir, 'data.json'), {'ok': true});
 
   // The format comes from the destination's extension: .zip, .tar.gz, .tgz,
   // .tar.bz2. `unpack` skips entries that would escape the destination.
-  final archive = io.join('output', 'shell-${util.time.stamp()}.tar.gz');
+  final archive = io.path.join('output', 'shell-${util.time.stamp()}.tar.gz');
   await format.zip.pack(dir, archive);
   final entries = await format.zip.list(archive);
   log.ok(
     'Packed ${entries.collect(.count())} entries, '
-    '${util.size.format(io.stat(archive).size)}.',
+    '${util.size.format(io.size(archive)!)}.',
   );
 
   // A single entry, read without unpacking the rest. Entry names are relative
   // to what was packed, which `list` is the way to check.
-  log.info('Entries: ${[for (final e in entries.list) e.name]}');
+  log.info('Entries: ${[for (final e in entries.iterable) e.name]}');
   final notes = await format.zip.read(archive, 'notes.txt');
   log.info(
     'notes.txt is ${notes?.length ?? 0} bytes, unpacked from the archive',
@@ -77,7 +77,7 @@ void main() async {
   // same cleanup a normal finish does. The watcher holds the process open,
   // which is why a script that registers one ends with `system.shutdown()`.
   system.on.exit(() async {
-    await io.async.sweep(dir, recursive: true);
+    await io.async.dir.sweep(dir, recursive: true);
     log.debug('Removed $dir/.');
   });
 

@@ -79,7 +79,7 @@ void main() {
       );
       expect(doc.at('nope').one((b) => b.text('x')), isNull);
       expect(
-        doc.at('store.bicycle').all((b) => b.text('colour')).list,
+        doc.at('store.bicycle').all((b) => b.text('colour')).iterable,
         equals(['red']),
         reason: 'a non-array node counts as one element',
       );
@@ -87,7 +87,7 @@ void main() {
 
     test('texts renders an array of scalars', () {
       expect(
-        format.json.parse('["a", 2, true, {"x":1}]').texts().list,
+        format.json.parse('["a", 2, true, {"x":1}]').texts().iterable,
         equals(['a', '2', 'true']),
       );
     });
@@ -104,14 +104,14 @@ void main() {
         doc
             .jsonpath(r'$.store.book[*].author')
             .transform(.map.nonnull((n) => n.text()))
-            .list,
+            .iterable,
         equals(['Nigel Rees', 'Evelyn Waugh', 'Herman Melville']),
       );
       expect(
         doc
             .jsonpath(r'$..price')
             .transform(.map.nonnull((n) => n.number()))
-            .list,
+            .iterable,
         equals([8.95, 12.99, 8.99, 19.95]),
       );
       expect(doc.jsonpath(r'store.book[*]').collect(.count()), equals(3));
@@ -123,7 +123,7 @@ void main() {
         doc
             .jsonpath(r'$.store.book[-1].title')
             .transform(.map.nonnull((n) => n.text()))
-            .list,
+            .iterable,
         equals(['Moby Dick']),
       );
       expect(doc.jsonpath(r'$.store.book[0,2]').collect(.count()), equals(2));
@@ -134,7 +134,7 @@ void main() {
             .parse('[1,2,3,4,5]')
             .jsonpath(r'$[::2]')
             .transform(.map.nonnull((n) => n.number()))
-            .list,
+            .iterable,
         equals([1, 3, 5]),
       );
       expect(
@@ -142,7 +142,7 @@ void main() {
             .parse('[1,2,3]')
             .jsonpath(r'$[::-1]')
             .transform(.map.nonnull((n) => n.number()))
-            .list,
+            .iterable,
         equals([3, 2, 1]),
       );
     });
@@ -152,7 +152,7 @@ void main() {
         doc
             .jsonpath(r"$['store']['bicycle']['colour']")
             .transform(.map.nonnull((n) => n.text()))
-            .list,
+            .iterable,
         equals(['red']),
       );
       expect(
@@ -166,14 +166,14 @@ void main() {
         doc
             .jsonpath(r'$.store.book[?(@.isbn)]')
             .transform(.map.nonnull((b) => b.text('title')))
-            .list,
+            .iterable,
         equals(['Moby Dick']),
       );
       expect(
         doc
             .jsonpath(r'$.store.book[?(@.price < 10)]')
             .transform(.map.nonnull((b) => b.text('title')))
-            .list,
+            .iterable,
         equals(['Sayings', 'Moby Dick']),
       );
       expect(
@@ -192,7 +192,7 @@ void main() {
         doc
             .jsonpath(r'$.store.book[?(@.title =~ /^Mob/)]')
             .transform(.map.nonnull((b) => b.text('title')))
-            .list,
+            .iterable,
         equals(['Moby Dick']),
       );
     });
@@ -225,7 +225,11 @@ void main() {
       );
       expect(res.parse(format.json).at('data.items').count, equals(2));
       expect(
-        res.parse(format.json).at('data.items').all((i) => i.text('sku')).list,
+        res
+            .parse(format.json)
+            .at('data.items')
+            .all((i) => i.text('sku'))
+            .iterable,
         equals(['a', 'b']),
       );
       expect(res.parse(format.json).at('').raw, isA<Map<String, Object?>>());
@@ -238,19 +242,19 @@ void main() {
         reason: 'a body that is not JSON never throws here',
       );
 
-      final dir = io.temp('dt_json_door_');
+      final dir = io.dir.temp('dt_json_door_');
       try {
-        final path = io.join(dir.path, 'c.json');
+        final path = io.path.join(dir.path, 'c.json');
         io.dump(path, {
           'hosts': ['a', 'b'],
         });
         expect(
-          (await format.json.read(path)).at('hosts').texts().list,
+          (await format.json.read(path)).at('hosts').texts().iterable,
           equals(['a', 'b']),
         );
         expect((await format.json.read(path)).count, equals(1));
       } finally {
-        dir.deleteSync(recursive: true);
+        io.remove(dir.path);
       }
     });
   });

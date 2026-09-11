@@ -72,7 +72,7 @@ void main() async {
     // A bar draws nothing off a terminal, so the summary is a log line.
     bar.done();
     log.ok(
-      'Downloaded ${util.size.format(io.stat(file.path).size)} to ${file.path}',
+      'Downloaded ${util.size.format(io.size(file.path)!)} to ${file.path}',
     );
 
     // Many URLs at once, bounded, results in input order.
@@ -82,7 +82,7 @@ void main() async {
       size: 2,
     );
     log.ok(
-      'Fetched ${pages.collect(.count())}: ${pages.transform(.map((p) => p.status)).list}',
+      'Fetched ${pages.collect(.count())}: ${pages.transform(.map((p) => p.status)).iterable}',
     );
   } finally {
     await client.close();

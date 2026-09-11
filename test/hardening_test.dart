@@ -132,21 +132,21 @@ Disallow: /
       final q = format.html.parse(
         '<ul><li class="a">1</li><li class="b">2</li></ul>',
       );
-      expect(q.find('li').matching('.a').texts.list, equals(['1']));
-      expect(q.find('li').not('.a').texts.list, equals(['2']));
+      expect(q.find('li').matching('.a').texts.iterable, equals(['1']));
+      expect(q.find('li').not('.a').texts.iterable, equals(['2']));
     });
 
     test('combinators are honoured by a single-element match', () {
       final q = format.html.parse(
         '<div class="w"><p>a</p><span>b</span><span>c</span></div>',
       );
-      expect(q.find('span').matching('p + span').texts.list, equals(['b']));
+      expect(q.find('span').matching('p + span').texts.iterable, equals(['b']));
       expect(
-        q.find('span').matching('.w > span').texts.list,
+        q.find('span').matching('.w > span').texts.iterable,
         equals(['b', 'c']),
       );
       expect(
-        q.find('span').matching('p ~ span').texts.list,
+        q.find('span').matching('p ~ span').texts.iterable,
         equals(['b', 'c']),
       );
     });
@@ -292,57 +292,57 @@ Disallow: /
 
   group('io.async mirrors io', () {
     test('parent has an async twin, like every other disk operation', () async {
-      final dir = io.temp('dt_parent_');
+      final dir = io.dir.temp('dt_parent_');
       try {
-        final blocking = io.join(dir.path, 'a', 'b', 'file.txt');
-        final future = io.join(dir.path, 'c', 'd', 'file.txt');
-        io.parent(blocking);
+        final blocking = io.path.join(dir.path, 'a', 'b', 'file.txt');
+        final future = io.path.join(dir.path, 'c', 'd', 'file.txt');
+        io.dir.makeparent(blocking);
         // It was the one name on `io` that touches the disk and had no twin
         // here, which is exactly what Rule 3 says a mirror may not do.
-        await io.async.parent(future);
+        await io.async.dir.makeparent(future);
 
         expect(
-          io.has(io.dir(blocking)),
+          io.has(io.path.dirname(blocking)),
           isFalse,
           reason: 'a folder, not a file',
         );
-        expect(Directory(io.dir(blocking)).existsSync(), isTrue);
-        expect(Directory(io.dir(future)).existsSync(), isTrue);
+        expect(Directory(io.path.dirname(blocking)).existsSync(), isTrue);
+        expect(Directory(io.path.dirname(future)).existsSync(), isTrue);
       } finally {
-        dir.deleteSync(recursive: true);
+        io.remove(dir.path);
       }
     });
 
     test('both write atomically to the same place', () async {
-      final dir = io.temp('dt_io_');
+      final dir = io.dir.temp('dt_io_');
       try {
-        final a = io.join(dir.path, 'sync.txt');
-        final b = io.join(dir.path, 'async.txt');
+        final a = io.path.join(dir.path, 'sync.txt');
+        final b = io.path.join(dir.path, 'async.txt');
         io.write(a, 'one');
         await io.async.write(b, 'two');
         expect(io.read(a), equals('one'));
         expect(await io.async.read(b), equals('two'));
         expect(io.has(a), isTrue);
         expect(await io.async.has(b), isTrue);
-        expect((await io.async.find(dir.path)).list, hasLength(2));
+        expect((await io.async.dir.find(dir.path)).iterable, hasLength(2));
         expect(await io.async.remove(b), isTrue);
         expect(await io.async.has(b), isFalse);
       } finally {
-        dir.deleteSync(recursive: true);
+        io.remove(dir.path);
       }
     });
 
     test('json round-trips through both', () async {
-      final dir = io.temp('dt_json_');
+      final dir = io.dir.temp('dt_json_');
       try {
-        final path = io.join(dir.path, 'd.json');
+        final path = io.path.join(dir.path, 'd.json');
         io.dump(path, {'n': 1});
         expect((await format.json.read(path)).number('n'), equals(1));
         await io.async.dump(path, {'n': 2});
         final read = await format.json.read(path);
         expect(read.number('n'), equals(2));
       } finally {
-        dir.deleteSync(recursive: true);
+        io.remove(dir.path);
       }
     });
   });

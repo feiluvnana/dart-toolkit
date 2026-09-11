@@ -1,17 +1,16 @@
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:test/test.dart';
 
 void main() {
   group('zip', () {
-    late Directory work;
+    late FileSystemEntry work;
 
-    setUp(() => work = io.temp('dt_zip_'));
-    tearDown(() => work.deleteSync(recursive: true));
+    setUp(() => work = io.dir.temp('dt_zip_'));
+    tearDown(() => io.remove(work.path));
 
-    String at(String name) => io.join(work.path, name);
+    String at(String name) => io.path.join(work.path, name);
 
     test('packs a folder and unpacks it back', () async {
       io.write(at('site/index.html'), '<h1>Home</h1>');
@@ -35,7 +34,7 @@ void main() {
           (await format.zip.list(at('src.zip')))
               .transform(.where((e) => !e.folder))
               .transform(.map((e) => e.name))
-              .list
+              .collect(.list())
             ..sort();
       expect(names, equals(['a.txt', 'b.txt']));
 
@@ -58,7 +57,11 @@ void main() {
         await format.zip.pack(at('d'), at(name));
         final out = at('un_${util.text.slug(name)}');
         await format.zip.unpack(at(name), out);
-        expect(io.read(io.join(out, 'one.txt')), equals('one'), reason: name);
+        expect(
+          io.read(io.path.join(out, 'one.txt')),
+          equals('one'),
+          reason: name,
+        );
       }
     });
 
@@ -142,13 +145,13 @@ void main() {
       expect(util.text.number(r'$1,234.50'), equals(1234.5));
       expect(util.text.number('no digits'), isNull);
       expect(util.text.number('-42 items'), equals(-42));
-      expect(util.text.numbers('3 of 7 at 2.5').list, equals([3, 7, 2.5]));
+      expect(util.text.numbers('3 of 7 at 2.5').iterable, equals([3, 7, 2.5]));
 
       // A parenthesised number is an accounting negative. This used to come
       // back positive, so a scraped financial table read the wrong way round.
       expect(util.text.number('(5)'), equals(-5));
       expect(util.text.number('(1,234.50)'), equals(-1234.5));
-      expect(util.text.numbers('(3) and 4').list, equals([-3, 4]));
+      expect(util.text.numbers('(3) and 4').iterable, equals([-3, 4]));
 
       // An exponent is part of the number. '1e3' used to be 1.
       expect(util.text.number('1e3'), equals(1000));
@@ -158,7 +161,7 @@ void main() {
       // A separator groups digits only in whole threes, which is the rule the
       // space already followed and the comma did not: '1,2' used to be 12.
       expect(util.text.number('1,2'), equals(1));
-      expect(util.text.numbers('1,2').list, equals([1, 2]));
+      expect(util.text.numbers('1,2').iterable, equals([1, 2]));
       expect(util.text.number('1 234 567'), equals(1234567));
       expect(util.text.number('12 34'), equals(12));
       expect(util.text.number('1_000'), equals(1000));
@@ -259,7 +262,7 @@ void main() {
       expect(util.text.title('hELLO there'), equals('Hello There'));
       expect(util.text.upper('hello'), equals('Hello'));
       expect(
-        util.text.words('one two-three').list,
+        util.text.words('one two-three').iterable,
         equals(['one', 'two', 'three']),
       );
       expect(util.text.blank('   \n '), isTrue);
@@ -270,7 +273,7 @@ void main() {
       const body = 'a "id":"one" b "id":"two" c';
       expect(util.text.between(body, '"id":"', '"'), equals('one'));
       expect(
-        util.text.betweens(body, '"id":"', '"').list,
+        util.text.betweens(body, '"id":"', '"').iterable,
         equals(['one', 'two']),
       );
       expect(util.text.between(body, 'missing', '"'), isNull);
@@ -395,11 +398,11 @@ void main() {
       final pool = List.generate(10, (i) => i);
       expect(pool, contains(util.rand.pick(pool)));
       final three = util.rand.some(pool, 3);
-      expect(three.list, hasLength(3));
+      expect(three.iterable, hasLength(3));
       expect(three.collect(.set()), hasLength(3));
-      expect(util.rand.some(pool, 99).list, hasLength(10));
+      expect(util.rand.some(pool, 99).iterable, hasLength(10));
       final shuffled = util.rand.shuffle(pool);
-      expect(shuffled.transform(.sort()).list, equals(pool));
+      expect(shuffled.transform(.sort()).iterable, equals(pool));
       expect(() => util.rand.pick(<int>[]), throwsStateError);
     });
 

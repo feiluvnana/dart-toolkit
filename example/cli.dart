@@ -85,14 +85,14 @@ Future<int> _build(Cli cli) async {
   log.debug('Token ${token().isEmpty ? 'missing' : 'present'}.');
 
   for (final target in targets) {
-    io.write(io.join(dest(), '$target.txt'), 'built ${util.time.iso()}');
+    io.write(io.path.join(dest(), '$target.txt'), 'built ${util.time.iso()}');
   }
   log.ok('Built ${targets.join(', ')}.');
   return 0;
 }
 
 Future<int> _clean(Cli cli) async {
-  if (io.find(dest()).collect(.empty())) {
+  if (io.dir.find(dest()).collect(.empty())) {
     log.info('Nothing to clean.');
     return 0;
   }
@@ -104,6 +104,6 @@ Future<int> _clean(Cli cli) async {
       return 0;
     }
   }
-  log.ok('Removed ${await io.async.sweep(dest(), recursive: true)} files.');
+  log.ok('Removed ${await io.async.dir.sweep(dest(), recursive: true)} files.');
   return 0;
 }

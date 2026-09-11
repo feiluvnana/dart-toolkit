@@ -38,7 +38,7 @@ class MockDownloader<T> extends Downloader<T> {
   }
 
   @override
-  Future<File> save(
+  Future<FileSystemEntry> save(
     Uri source,
     String path, {
     void Function(int received, int total)? onProgress,
@@ -137,7 +137,7 @@ void main() {
                   .parse(format.html)
                   .find('a.disc-link')
                   .attrs('href')
-                  .list) {
+                  .iterable) {
             res.follow(href, tag: 'disc');
           }
         })
@@ -240,7 +240,11 @@ void main() {
           })
           .run((res) {
             for (final a
-                in res.parse(format.html).find('#songlist a').elements.list) {
+                in res
+                    .parse(format.html)
+                    .find('#songlist a')
+                    .elements
+                    .iterable) {
               res.follow(a.attr('href')!, tag: 'song', meta: [_name(a.text)]);
             }
           });
@@ -268,13 +272,14 @@ void main() {
             }),
           )
           .collect((res) {
-            for (final t in res.parse(format.html).find('.title').texts.list) {
+            for (final t
+                in res.parse(format.html).find('.title').texts.iterable) {
               res.emit(t);
             }
           });
 
       expect(
-        titles.list,
+        titles.iterable,
         equals(['Article Alpha', 'Article Beta', 'Article Gamma']),
       );
     });
@@ -288,7 +293,8 @@ void main() {
             }),
           )
           .stream((res) {
-            for (final t in res.parse(format.html).find('span').texts.list) {
+            for (final t
+                in res.parse(format.html).find('span').texts.iterable) {
               res.emit(t);
             }
           })
@@ -388,7 +394,7 @@ void main() {
         if (title.isNotEmpty) res.emit(title);
       });
 
-      expect(headlines.list, equals(['Breaking News']));
+      expect(headlines.iterable, equals(['Breaking News']));
     });
 
     test('net.crawl.html explicitly parses markup without sniffing', () async {
@@ -396,7 +402,7 @@ void main() {
       final results = await net.crawl.html<String>(markup).collect((res) {
         res.emit(res.parse(format.html).find('h2').text);
       });
-      expect(results.list, equals(['Explicit HTML']));
+      expect(results.iterable, equals(['Explicit HTML']));
     });
 
     test('net.crawl.file explicitly parses file path', () async {
@@ -408,7 +414,7 @@ void main() {
         ) {
           res.emit(res.parse(format.html).find('p').text);
         });
-        expect(results.list, equals(['File Content']));
+        expect(results.iterable, equals(['File Content']));
       } finally {
         if (await tmpFile.exists()) await tmpFile.delete();
       }
@@ -431,7 +437,7 @@ void main() {
           .collect((res) {
             items.add(res.parse(format.html).find('p').text);
             for (final next
-                in res.parse(format.html).find('a').attrs('href').list) {
+                in res.parse(format.html).find('a').attrs('href').iterable) {
               // follow takes a String directly without needing .url
               res.follow(next);
             }
@@ -624,7 +630,7 @@ void main() {
           .collect((res) {
             visited.add(res.url.path);
             for (final href
-                in res.parse(format.html).find('a').attrs('href').list) {
+                in res.parse(format.html).find('a').attrs('href').iterable) {
               res.follow(href);
             }
           });
@@ -647,7 +653,7 @@ void main() {
           .limit(2)
           .run((res) {
             for (final href
-                in res.parse(format.html).find('a').attrs('href').list) {
+                in res.parse(format.html).find('a').attrs('href').iterable) {
               res.follow(href);
             }
           });
@@ -717,7 +723,7 @@ Crawl-delay: 0.5
 
       final urls1 = Sitemap.parse(xmlSitemap);
       expect(
-        urls1.list,
+        urls1.iterable,
         equals(['https://example.com/'.url, 'https://example.com/page2'.url]),
       );
       expect(Sitemap.nested(xmlSitemap), isFalse);
@@ -730,7 +736,10 @@ Crawl-delay: 0.5
 </sitemapindex>''';
 
       final urls2 = Sitemap.parse(xmlIndex);
-      expect(urls2.list, equals(['https://example.com/sub-sitemap.xml'.url]));
+      expect(
+        urls2.iterable,
+        equals(['https://example.com/sub-sitemap.xml'.url]),
+      );
       expect(Sitemap.nested(xmlIndex), isTrue);
 
       const textSitemap = '''
@@ -740,7 +749,7 @@ https://example.com/item2
 ''';
       final urls3 = Sitemap.parse(textSitemap);
       expect(
-        urls3.list,
+        urls3.iterable,
         equals([
           'https://example.com/item1'.url,
           'https://example.com/item2'.url,

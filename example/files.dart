@@ -17,7 +17,7 @@ const last = Slot<String>('last');
 
 void main() async {
   final log = system.console.logger;
-  final dir = io.join('output', 'files');
+  final dir = io.path.join('output', 'files');
 
   final rows = [
     {'name': 'Mechanical Keyboard', 'price': 89.0},
@@ -28,13 +28,13 @@ void main() async {
   // -------------------------------------------------------------- text & JSON
   // Parent directories are created as needed.
   io.write(
-    io.join(dir, 'names.txt'),
+    io.path.join(dir, 'names.txt'),
     [for (final row in rows) util.text.slug('${row['name']}')].join('\n'),
   );
-  io.dump(io.join(dir, 'products.json'), rows);
-  io.save(io.join(dir, 'blob.bin'), [1, 2, 3]);
+  io.dump(io.path.join(dir, 'products.json'), rows);
+  io.save(io.path.join(dir, 'blob.bin'), [1, 2, 3]);
 
-  final back = await format.json.read(io.join(dir, 'products.json'));
+  final back = await format.json.read(io.path.join(dir, 'products.json'));
   log.ok('Wrote and re-read ${back.count} products.');
   log.info('First name: ${back.text('0.name')}');
   log.info(
@@ -42,41 +42,50 @@ void main() async {
   );
 
   // ---------------------------------------------------------------------- CSV
-  await io.csv.write(io.join(dir, 'products.csv'), rows);
-  final records = await io.csv.maps(io.join(dir, 'products.csv'));
-  log.ok('CSV columns: ${records.collect(.first())!.keys.join(', ')}');
+  await io.csv.write(io.path.join(dir, 'products.csv'), rows);
+  final sheet = await format.csv.read(io.path.join(dir, 'products.csv'));
+  log.ok('CSV columns: ${sheet.headers.collect(.join(', '))}');
 
   // `records` streams rather than loading the file, and `pipe` is its twin for
   // writing: it turns a crawl of any size into a spreadsheet without the rows
   // ever meeting in memory.
   //
   //   await io.csv.pipe('out.csv', crawl.stream(handler), headers: [...]);
-  await for (final record in io.csv.records(io.join(dir, 'products.csv'))) {
+  await for (final record in io.csv.records(
+    io.path.join(dir, 'products.csv'),
+  )) {
     log.debug('${record['name']} at ${record['price']}');
   }
 
   // ------------------------------------------------------------------- paths
-  log.info('join   ${io.join(dir, 'a', 'b.txt')}');
-  log.info('base   ${io.base('a/b/c.tar.gz')}  ext ${io.ext('a/b/c.tar.gz')}');
-  log.info('clean  ${io.sanitize('Report: Q3/Q4 <final>.txt')}');
+  log.info('join   ${io.path.join(dir, 'a', 'b.txt')}');
+  log.info(
+    'base   ${io.path.filename('a/b/c.tar.gz')}  ext ${io.path.ext('a/b/c.tar.gz')}',
+  );
+  log.info('clean  ${io.path.sanitize('Report: Q3/Q4 <final>.txt')}');
 
   // `has` is "exists and is non-empty", which is the question a resumable
   // script actually asks.
-  log.info('has    ${io.has(io.join(dir, 'products.json'))}');
+  log.info('has    ${io.has(io.path.join(dir, 'products.json'))}');
   log.info(
-    'size   ${util.size.format(io.stat(io.join(dir, 'products.json')).size)}',
+    'size   ${util.size.format(io.size(io.path.join(dir, 'products.json'))!)}',
   );
-  log.info('sha    ${io.hash(io.join(dir, 'products.json')).substring(0, 12)}');
+  log.info(
+    'sha    ${io.hash(io.path.join(dir, 'products.json')).substring(0, 12)}',
+  );
 
-  final found = io.find(dir, pattern: RegExp(r'\.(json|csv)$'));
+  final found = io.dir.find(dir, pattern: RegExp(r'\.(json|csv)$'));
   log.ok(
-    'Found ${found.collect(.count())}: ${[for (final f in found.list) io.base(f.path)]}',
+    'Found ${found.collect(.count())}: ${[for (final f in found.iterable) io.path.filename(f.path)]}',
   );
 
   // ------------------------------------------------------------- non-blocking
-  await io.async.write(io.join(dir, 'run.log'), 'finished ${util.time.iso()}');
+  await io.async.write(
+    io.path.join(dir, 'run.log'),
+    'finished ${util.time.iso()}',
+  );
   log.info(
-    'Async read: ${(await io.async.read(io.join(dir, 'run.log'))).trim()}',
+    'Async read: ${(await io.async.read(io.path.join(dir, 'run.log'))).trim()}',
   );
 
   // ------------------------------------------------------------------- lock
@@ -84,11 +93,11 @@ void main() async {
   // once. Atomic writes make the file safe; they do not stop the result from
   // being whichever process finished last. Released on return, on a throw, and
   // on Ctrl-C.
-  await io.lock(io.join(dir, '.files.lock'), () async {
+  await io.lock(io.path.join(dir, '.files.lock'), () async {
     log.ok('Holding the lock; a second copy would get a LockedError.');
     // A second attempt while we hold it, to show the contract.
     try {
-      await io.lock(io.join(dir, '.files.lock'), () async {});
+      await io.lock(io.path.join(dir, '.files.lock'), () async {});
     } on LockedError catch (error) {
       log.info('$error');
     }
@@ -97,7 +106,7 @@ void main() async {
   // ------------------------------------------------------------------- store
   // A tiny JSON document for what a run has to remember: cursors, "last seen"
   // markers, a resume point.
-  final statePath = io.join(dir, 'state.json');
+  final statePath = io.path.join(dir, 'state.json');
   final db = io.dictionary(statePath);
   final count = (db.read(runs) ?? 0) + 1;
   db

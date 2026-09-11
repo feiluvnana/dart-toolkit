@@ -89,7 +89,7 @@ void main() async {
                 ),
               )
               .transform(.sort.by((e) => e.region))
-              .list)
+              .iterable)
         [row.region, row.orders, row.revenue.toStringAsFixed(2), row.best],
     ]),
   );
@@ -108,8 +108,8 @@ void main() async {
   log.info('${big.collect(.count())} large, ${small.collect(.count())} small');
 
   // `chunk` pairs directly with a bounded pool: batch, then send.
-  for (final batch in sales.transform(.chunk(2)).list) {
-    await concurrent.run(batch.list, _send, size: 2);
+  for (final batch in sales.transform(.chunk(2)).iterable) {
+    await concurrent.run(batch.iterable, _send, size: 2);
   }
   log.ok('Sent ${sales.collect(.count())} rows in batches of two.');
 
@@ -131,14 +131,14 @@ void main() async {
   // a `List` parameter, a spread, `expect`. Inside the boundary there is one
   // vocabulary, which is why Sequence is deliberately not an Iterable.
   final names = <String>[
-    ...sales.transform(.map((s) => s.product)).transform(.unique()).list,
+    ...sales.transform(.map((s) => s.product)).transform(.unique()).iterable,
   ];
   log.info('distinct products: ${names.length}');
 
   // ---------------------------------------------------- the other two formats
   // Same cursor, same three members: parse, read, format.
-  final dir = io.mkdir(io.join('output', 'shape')).path;
-  final config = io.join(dir, 'report.yaml');
+  final dir = io.dir.make(io.path.join('output', 'shape')).path;
+  final config = io.path.join(dir, 'report.yaml');
   io.write(
     config,
     format.yaml.format({
@@ -147,13 +147,15 @@ void main() async {
           .transform(.map((s) => s.region))
           .transform(.unique())
           .transform(.sort())
-          .list,
+          .iterable,
       'limits': {'rows': sales.collect(.count()), 'currency': 'USD'},
     }),
   );
 
   final back = await format.yaml.read(config);
-  log.ok('Wrote and re-read ${io.base(config)}: ${back.text('title')}');
+  log.ok(
+    'Wrote and re-read ${io.path.filename(config)}: ${back.text('title')}',
+  );
   log.info('regions:    ${back.at('regions').texts().collect(.join(', '))}');
   log.info('rows:       ${back.number('limits.rows')}');
 

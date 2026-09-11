@@ -41,27 +41,33 @@ void main() {
     });
 
     test('all three read a file, and a missing one is empty', () async {
-      final dir = io.temp('dt_formats_');
+      final dir = io.dir.temp('dt_formats_');
       try {
-        io.write(io.join(dir.path, 'a.json'), '{"n": 1}');
-        io.write(io.join(dir.path, 'a.yaml'), 'n: 1');
-        io.write(io.join(dir.path, 'a.toml'), 'n = 1');
+        io.write(io.path.join(dir.path, 'a.json'), '{"n": 1}');
+        io.write(io.path.join(dir.path, 'a.yaml'), 'n: 1');
+        io.write(io.path.join(dir.path, 'a.toml'), 'n = 1');
 
         expect(
-          (await format.json.read(io.join(dir.path, 'a.json'))).number('n'),
+          (await format.json.read(
+            io.path.join(dir.path, 'a.json'),
+          )).number('n'),
           1,
         );
         expect(
-          (await format.yaml.read(io.join(dir.path, 'a.yaml'))).number('n'),
+          (await format.yaml.read(
+            io.path.join(dir.path, 'a.yaml'),
+          )).number('n'),
           1,
         );
         expect(
-          (await format.toml.read(io.join(dir.path, 'a.toml'))).number('n'),
+          (await format.toml.read(
+            io.path.join(dir.path, 'a.toml'),
+          )).number('n'),
           1,
         );
 
         for (final ext in const ['json', 'yaml', 'toml']) {
-          final missing = io.join(dir.path, 'absent.$ext');
+          final missing = io.path.join(dir.path, 'absent.$ext');
           final doc = switch (ext) {
             'json' => await format.json.read(missing),
             'yaml' => await format.yaml.read(missing),
@@ -70,7 +76,7 @@ void main() {
           expect(doc.empty, isTrue, reason: ext);
         }
       } finally {
-        dir.deleteSync(recursive: true);
+        io.remove(dir.path);
       }
     });
 
@@ -91,7 +97,7 @@ void main() {
       expect(doc.text('name'), equals('dart_toolkit'));
       expect(doc.text('version'), equals('3.2.0'));
       expect(doc.text('environment.sdk'), equals('^3.7.0'));
-      expect(doc.at('dependencies').texts().list, equals(['html', 'http']));
+      expect(doc.at('dependencies').texts().iterable, equals(['html', 'http']));
       expect(doc.flag('flags.strict'), isTrue);
       expect(doc.number('flags.retries'), equals(3));
       expect(doc.at('notes').empty, isTrue);
@@ -109,7 +115,7 @@ void main() {
             .parse(_yaml)
             .jsonpath(r'$..sdk')
             .transform(.map.nonnull((n) => n.text()))
-            .list,
+            .iterable,
         equals(['^3.7.0']),
       );
     });
@@ -159,20 +165,20 @@ void main() {
     });
 
     test('read is the file door, and a missing file is empty', () async {
-      final dir = io.temp('dt_yaml_');
+      final dir = io.dir.temp('dt_yaml_');
       try {
-        final path = io.join(dir.path, 'c.yaml');
+        final path = io.path.join(dir.path, 'c.yaml');
         io.write(path, _yaml);
         expect(
           (await format.yaml.read(path)).text('name'),
           equals('dart_toolkit'),
         );
         expect(
-          (await format.yaml.read(io.join(dir.path, 'absent.yaml'))).empty,
+          (await format.yaml.read(io.path.join(dir.path, 'absent.yaml'))).empty,
           isTrue,
         );
       } finally {
-        dir.deleteSync(recursive: true);
+        io.remove(dir.path);
       }
     });
 
@@ -213,20 +219,20 @@ void main() {
     });
 
     test('read is the file door, and a missing file is empty', () async {
-      final dir = io.temp('dt_toml_');
+      final dir = io.dir.temp('dt_toml_');
       try {
-        final path = io.join(dir.path, 'Cargo.toml');
+        final path = io.path.join(dir.path, 'Cargo.toml');
         io.write(path, _toml);
         expect(
           (await format.toml.read(path)).text('package.name'),
           equals('widget'),
         );
         expect(
-          (await format.toml.read(io.join(dir.path, 'absent.toml'))).empty,
+          (await format.toml.read(io.path.join(dir.path, 'absent.toml'))).empty,
           isTrue,
         );
       } finally {
-        dir.deleteSync(recursive: true);
+        io.remove(dir.path);
       }
     });
   });

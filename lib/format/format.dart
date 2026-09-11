@@ -2,9 +2,9 @@
 ///
 /// File formats: knowledge Dart does not have about how a document is shaped.
 /// One name per format — `format.html`, `format.json`, `format.yaml`,
-/// `format.toml`, `format.zip` — because each would pass every other test for
-/// a top-level name and they arrive with siblings. See Rule 2 in
-/// `NAMESPACE.md`.
+/// `format.toml`, `format.csv`, `format.zip` — because each would pass every
+/// other test for a top-level name and they arrive with siblings. See Rule 2
+/// in `NAMESPACE.md`.
 ///
 /// The domain is called what it is. It was `tool` for four releases, which was
 /// a word chosen before there was anything in it but an archiver, and which
@@ -40,12 +40,14 @@ library;
 import 'dart:io';
 
 import '../util/codec.dart';
+import 'csv.dart';
 import 'html.dart';
 import 'json.dart';
 import 'toml.dart';
 import 'yaml.dart';
 import 'zip.dart';
 
+export 'csv.dart';
 export 'html.dart' hide $, $xpath;
 export 'json.dart';
 export 'toml.dart';
@@ -86,6 +88,12 @@ class FormatAccessor {
 
   /// TOML: the same three members again.
   TomlAccessor get toml => const TomlAccessor();
+
+  /// CSV: reading a table as a [Csv] cursor, and writing one back.
+  ///
+  /// It was `io.csv` through 5.1.0. A format is a subject by Rule 1, and this
+  /// was the only one filed under the axis that happened to read the bytes.
+  CsvAccessor get csv => const CsvAccessor();
 }
 
 /// Reading a document off the disk, for the codecs that all do it the same

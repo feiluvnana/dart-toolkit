@@ -12,7 +12,7 @@ Five of them are **axes** — a way of touching the machine:
 
 | Domain | Sub-namespaces | Focus |
 | :--- | :--- | :--- |
-| **`io.*`** | `io.csv.*`, `io.async.*` | Atomic file writes, paths, CSV tables, collections on disk, watching, locking |
+| **`io.*`** | `io.path.*`, `io.dir.*`, `io.csv.*`, `io.async.*` | One file: reading it, writing it atomically, asking what is at a path. Paths are `io.path`, directories are `io.dir`, watching and locking sit flat |
 | **`net.*`** | `net.http.*`, `net.crawl`, `net.serve` | HTTP requests, streaming downloads, the crawler engine, a server that listens — it fetches bytes and parses none of them |
 | **`system.*`** | `system.env.*`, `system.console.*`, `system.on.*` | Subprocesses, environment, terminal IO, `system.os` — and `system.on.*`, which is what happens to your files and child processes when the program is interrupted |
 | **`concurrent.*`** | `concurrent.run(...)`, `concurrent.rate(...)` | Bounded async task pools, and rate limiting |
@@ -52,7 +52,7 @@ belongs to, when it earns a top-level name, and how to name it.
 3. **Real types at every boundary.** URLs are `Uri`, delays are `Duration`, paths are `String`, bodies and hash algorithms are sealed types and enums. No `Object` or `dynamic` parameters, so the analyzer catches mistakes at the call site.
 4. **Atomic by default.** Every write stages through a `.part` file and is renamed into place only after a successful flush. Interrupted runs never leave truncated files, and Ctrl-C cleans up.
 5. **Engine-driven pipelines.** Multi-stage crawlers use declarative URL routing, tag-based stages, and automatic relative-URL resolution.
-6. **One vocabulary for collections.** Everything this library hands back for you to *shape* is a [`Sequence`](docs/collection.md) or a [`Dictionary`](docs/collection.md#6-dictionaryk-v-the-keyed-collection), deliberately not an `Iterable` or a `Map`, so Dart's names and these are never both in scope at one call site. `.list` and `.map` are the words at the boundary; `.seq` and `.dict` bring an outside collection in. Through 4.0.0 that claim was only half true — 53 public members handed back a `List`, `Map` or `Set` against 30 that handed back a `Sequence` — and 5.0.0 converted them.
+6. **One vocabulary for collections.** Everything this library hands back for you to *shape* is a [`Sequence`](docs/collection.md) or a [`Dictionary`](docs/collection.md#6-dictionaryk-v-the-keyed-collection), deliberately not an `Iterable` or a `Map`, so Dart's names and these are never both in scope at one call site. `.iterable` and `.map` are the words at the boundary; `.seq` and `.dict` bring an outside collection in. Through 4.0.0 that claim was only half true — 53 public members handed back a `List`, `Map` or `Set` against 30 that handed back a `Sequence` — and 5.0.0 converted them.
 7. **A pipeline is a value.** A `Sequence` has two members: `transform` takes a [`Transformer`](docs/collection.md#3-transformer--the-shaping-operations) and `collect` takes a [`Collector`](docs/collection.md#4-collector--the-ending-operations). Everything else is a static factory on one of those, which is what lets each of them take its ordinary name back — `map`, `where`, `take.first`, `group.by`, `max.by`. A namespace has no `Map` to collide with and no camelCase to forbid, so a compound operation splits at the capital instead of inventing a word. It also makes a chain storable, passable, supplyable by a caller, and testable against a plain list.
 
 ---
@@ -110,7 +110,7 @@ void main(List<String> args) async {
       .delay(250.ms)
       .limit(50)
       .collect((res) {
-        for (final title in res.parse(format.html).find('.titleline > a').texts.list) {
+        for (final title in res.parse(format.html).find('.titleline > a').texts.iterable) {
           res.emit(title);
         }
       });
@@ -118,7 +118,7 @@ void main(List<String> args) async {
 
   // 3. Process concurrently, with a progress bar
   log.step(2, 3, 'Processing...');
-  final batch = titles.transform(.take.first(10)).list;
+  final batch = titles.transform(.take.first(10)).iterable;
   final bar = Progress(total: batch.length, message: 'Processing');
   final processed = await concurrent.run(batch, (title) async {
     bar.tick(1, title);
@@ -136,7 +136,7 @@ void main(List<String> args) async {
     ]),
   );
 
-  final dest = io.join('output', 'summary.txt');
+  final dest = io.path.join('output', 'summary.txt');
   if (force() || !io.has(dest)) {
     io.write(dest, processed.collect(.join('\n')));
     log.ok('Saved to $dest');
@@ -183,16 +183,39 @@ net.crawl<String>(url).delay(2.s);
 
 ### `io` — files, atomically
 
+`io` itself is about **one file**. Paths are `io.path`, directories are
+`io.dir`, and each is a vocabulary of its own rather than a dozen more names on
+one accessor.
+
 ```dart
 io.write('out/notes.txt', 'hello');        // text
 io.save('out/blob.bin', [1, 2, 3]);        // bytes
 io.dump('out/data.json', {'count': 42});   // JSON, atomically
+io.append('out/run.log', 'done\n');        // the one write that is not atomic
 final data = await format.json.read('out/data.json');   // -> Json cursor
 
-io.has(path);                                    // exists and non-empty
-io.join('a', 'b', 'c.txt');
+io.exists(path);  io.isfile(path);  io.isdir(path);  io.islink(path);
+io.size(path);    io.empty(path);   io.stat(path);   // -> FileSystemEntry?
+io.has(path);                                        // exists and non-empty
 io.hash(path, Algo.md5);
-io.find('out', pattern: RegExp(r'\.mp3$'));
+
+io.path.join('a', 'b', 'c.txt');
+io.path.dirname(path);  io.path.filename(path);  io.path.stem(path);
+
+io.dir.make('out/reports');
+io.dir.list('out');                        // one level -> Sequence<FileSystemEntry>
+io.dir.walk('src', match: '**/*.dart');    // the whole tree, a glob
+io.dir.find('out', pattern: RegExp(r'\.mp3$'));
+```
+
+Everything that reads or writes a file hands back a `FileSystemEntry` — path,
+kind, size, mtime and the name parts — instead of a `dart:io` handle:
+
+```dart
+for (final entry in io.dir.list('out').iterable) {
+  if (entry.isdir) continue;
+  if (entry.ext == '.part') io.remove(entry.path);
+}
 ```
 
 `io.*` blocks. `io.async.*` carries the same names as futures, which is what a
@@ -202,8 +225,10 @@ flight:
 ```dart
 await io.async.write('out/notes.txt', 'hello');
 final text = await io.async.read('out/notes.txt');
-await io.async.download(url, 'out/file.zip');
+await io.async.dir.walk('out');
 ```
+
+Downloading is `net.http.download`, because a socket is `net`'s.
 
 A crawl reaches a spreadsheet without passing through memory:
 
@@ -266,7 +291,7 @@ await net.crawl<String>('https://music.example.com/album'.url)
       print('${res.meta.read(name)} -> ${res.parse(format.html).find('a').attr('href')}');
     })
     .run((res) {
-      for (final a in res.parse(format.html).find('#songlist a').elements.list) {
+      for (final a in res.parse(format.html).find('#songlist a').elements.iterable) {
         res.follow(
           a.attr('href')!,
           tag: 'song',
@@ -396,6 +421,7 @@ pubspec.jsonpath(r'$..sdk').transform(.map.nonnull((n) => n.text()));
 
 format.json.parse(res.body).at('data.items').all((i) => i.text('sku'));
 format.html.parse(res.body).find('h1').text;      // the same three members
+format.csv.parse(res.body).column('sku');         // and CSV, since 5.2.0
 io.write('out.yaml', format.yaml.format({'name': 'x'}));
 ```
 

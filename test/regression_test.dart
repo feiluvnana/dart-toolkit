@@ -31,7 +31,7 @@ void main() {
       expect(page, isNot(isA<Iterable<Object?>>()));
       expect(page.find('p').count, equals(2));
       expect(
-        page.find('p').elements.transform(.map((e) => e.text)).list,
+        page.find('p').elements.transform(.map((e) => e.text)).iterable,
         equals(['a', 'b']),
       );
     });
@@ -65,6 +65,242 @@ void main() {
       expect([1].seq.collect(.empty()), isFalse);
       expect($('<p>a</p>').empty, isFalse);
       expect(Json.none.empty, isTrue);
+    });
+  });
+
+  group('5.2.0 — the io mirror, pinned', () {
+    // NAMESPACE.md Rule 3 said `io.async` "mirrors `io` exactly", and it did
+    // not: `download` existed only on the async side, `lock`/`locked`/`watch`
+    // only on the blocking one, and `lines` returned a `Stream` from both —
+    // including from the accessor whose whole promise is that it blocks.
+    //
+    // The rule now says what a complete mirror can actually mean: every
+    // member that has both forms appears on both sides under one name. This
+    // test is what stops that from drifting again, by reading the two
+    // accessors out of the source and asserting the difference is exactly the
+    // known set.
+    /// The public member names declared directly on [type] in `lib/io/$file`.
+    ///
+    /// Source text rather than reflection, because `dart:mirrors` is not
+    /// available to a compiled test — and because reading the declarations is
+    /// what catches a member added to one accessor and forgotten on the other.
+    Set<String> membersOf(String file, String type) {
+      final source = File('lib/io/$file').readAsStringSync();
+      final names = <String>{};
+      var inside = false;
+
+      for (final line in source.split('\n')) {
+        if (line.startsWith('class $type ') ||
+            line.startsWith('class $type {')) {
+          inside = true;
+          continue;
+        }
+        if (!inside) continue;
+        // A `}` in column zero closes the class; anything after it is another
+        // declaration, and `io.dart` ends with a top-level function.
+        if (line == '}' || line.startsWith('class ')) break;
+
+        // Members sit at exactly two spaces; parameters sit at four.
+        if (!line.startsWith('  ') || line.startsWith('   ')) continue;
+        final trimmed = line.trimLeft();
+        if (trimmed.isEmpty) continue;
+        if (RegExp(r'^(//|@|\}|\)|=>|\.\.|;)').hasMatch(trimmed)) continue;
+
+        final getter = RegExp(r'\bget (\w+)').firstMatch(trimmed);
+        if (getter != null) {
+          names.add(getter.group(1)!);
+          continue;
+        }
+
+        // `Future<void> Function() watch(` — a function *type* in the return
+        // brings a `(` of its own, ahead of the parameter list.
+        final line2 = trimmed.replaceAll(
+          RegExp(r'Function\s*\([^()]*\)'),
+          'Function',
+        );
+        final open = line2.indexOf('(');
+        if (open <= 0) continue;
+        // Everything left of the parameter list, with generics dropped, ends
+        // in the member's own name.
+        final head = line2
+            .substring(0, open)
+            .replaceAll(RegExp(r'<[^<>]*>'), '');
+        final name = RegExp(r'(\w+)\s*$').firstMatch(head);
+        if (name != null) names.add(name.group(1)!);
+      }
+
+      names.removeWhere((n) => n == type || n.startsWith('_'));
+      expect(names, isNotEmpty, reason: 'read no members off $type');
+      return names;
+    }
+
+    test('io and io.async differ by exactly the known set', () {
+      final blocking = membersOf('io.dart', 'IoAccessor');
+      final async = membersOf('io.dart', 'IoAsyncAccessor');
+
+      expect(
+        blocking.difference(async),
+        // `lock`, `locked` and `watch` are inherently asynchronous and have no
+        // blocking form to mirror; `path` is pure string arithmetic with
+        // nothing to wait for; `csv` is already every-member-a-future.
+        {'path', 'csv', 'async', 'lock', 'locked', 'watch'},
+        reason: 'a blocking member gained no async twin',
+      );
+      expect(
+        async.difference(blocking),
+        isEmpty,
+        reason:
+            'an async member with no blocking twin — download was the one, '
+            'and it went to net.http.download where a socket belongs',
+      );
+    });
+
+    test('io.dir and io.async.dir differ by exactly the known set', () {
+      final blocking = membersOf('dir.dart', 'DirAccessor');
+      final async = membersOf('dir.dart', 'DirAsyncAccessor');
+
+      // `cwd` and `home` read nothing off the disk.
+      expect(blocking.difference(async), {'cwd', 'home'});
+      expect(async.difference(blocking), isEmpty);
+    });
+
+    test('lines is the one member whose shape differs, on purpose', () {
+      final temp = io.dir.temp('dt_mirror_');
+      addTearDown(() => io.remove(temp.path));
+      final path = io.path.join(temp.path, 'a.txt');
+      io.write(path, 'one\ntwo\n');
+
+      // Blocking means the lines are already read.
+      expect(io.lines(path), isA<Sequence<String>>());
+      expect(io.async.lines(path), isA<Stream<String>>());
+      expect(io.lines(path).iterable, ['one', 'two']);
+    });
+
+    test('no io signature names a dart:io type', () {
+      // Seventeen of them did through 5.1.0 — File, Directory,
+      // FileSystemEntity and FileStat — to buy exactly one `.path` across the
+      // whole repository. FileSystemEntry.entity is the one door, and it is
+      // in entry.dart rather than here.
+      final banned = RegExp(
+        r'^  (?!///|//).*\b(File|Directory|FileSystemEntity|FileStat)\b'
+        r'(?!SystemEntry)[<\s?]',
+        multiLine: true,
+      );
+      final offenders = <String>[];
+      for (final file in const [
+        'io.dart',
+        'dir.dart',
+        'path.dart',
+        'csv.dart',
+      ]) {
+        final source = File('lib/io/$file').readAsStringSync();
+        for (final line in source.split('\n')) {
+          if (line.startsWith('  ') &&
+              !line.trimLeft().startsWith('//') &&
+              banned.hasMatch(line)) {
+            offenders.add('$file: ${line.trim()}');
+          }
+        }
+      }
+      expect(offenders, isEmpty);
+    });
+
+    test('the filesystem questions are each answerable on their own', () {
+      final temp = io.dir.temp('dt_ask_');
+      addTearDown(() => io.remove(temp.path));
+
+      final full = io.path.join(temp.path, 'full.txt');
+      final blank = io.path.join(temp.path, 'blank.txt');
+      final folder = io.path.join(temp.path, 'folder');
+      final missing = io.path.join(temp.path, 'missing.txt');
+      io.write(full, 'x');
+      io.touch(blank);
+      io.dir.make(folder);
+
+      // The four answers io.has fused into one `false`.
+      expect(
+        [
+          io.exists(full),
+          io.exists(blank),
+          io.exists(folder),
+          io.exists(missing),
+        ],
+        [true, true, true, false],
+      );
+
+      expect(io.isfile(full), isTrue);
+      expect(io.isdir(folder), isTrue);
+      expect(io.isfile(folder), isFalse);
+      expect(io.islink(full), isFalse);
+
+      expect(io.size(full), 1);
+      expect(io.size(blank), 0);
+      expect(io.size(missing), isNull);
+
+      // Empty and absent are different answers.
+      expect(io.empty(blank), isTrue);
+      expect(io.empty(full), isFalse);
+      expect(
+        io.empty(folder),
+        isTrue,
+        reason: 'a directory with nothing in it',
+      );
+      expect(io.empty(missing), isFalse, reason: 'absent is not empty');
+
+      // And io.has keeps meaning what it always meant.
+      expect(io.has(full), isTrue);
+      expect(io.has(blank), isFalse);
+      expect(io.has(folder), isFalse);
+    });
+
+    test('list returns directories, which find dropped', () {
+      final temp = io.dir.temp('dt_list_');
+      addTearDown(() => io.remove(temp.path));
+
+      io.write(io.path.join(temp.path, 'a.txt'), 'a');
+      io.dir.make(io.path.join(temp.path, 'sub'));
+      io.write(io.path.join(temp.path, 'sub', 'b.csv'), 'b');
+
+      final listed = io.dir.list(temp.path).iterable.toList();
+      expect(listed.map((e) => e.name), ['a.txt', 'sub']);
+      expect(listed.map((e) => e.kind), [
+        FileSystemEntryKind.file,
+        FileSystemEntryKind.directory,
+      ]);
+
+      // One level, versus the whole tree.
+      expect(io.dir.list(temp.path).collect(.count()), 2);
+      expect(io.dir.walk(temp.path).collect(.count()), 3);
+      expect(io.dir.list(temp.path, only: .directory).collect(.count()), 1);
+
+      // A glob, not a RegExp.
+      expect(io.dir.walk(temp.path, match: '*.csv').collect(.count()), 1);
+      expect(io.dir.walk(temp.path, match: '**/*.csv').collect(.count()), 1);
+      expect(io.dir.walk(temp.path, depth: 1).collect(.count()), 2);
+
+      // find is the narrow question, and still drops directories.
+      expect(io.dir.find(temp.path).collect(.count()), 2);
+      expect(io.dir.find(temp.path, recursive: false).collect(.count()), 1);
+    });
+
+    test('a walk that follows links does not loop forever', () {
+      final temp = io.dir.temp('dt_loop_');
+      addTearDown(() => io.remove(temp.path));
+
+      final inner = io.path.join(temp.path, 'inner');
+      io.dir.make(inner);
+      io.write(io.path.join(inner, 'a.txt'), 'a');
+      Link(io.path.join(inner, 'up')).createSync(temp.path);
+
+      expect(io.islink(io.path.join(inner, 'up')), isTrue);
+      expect(io.isdir(io.path.join(inner, 'up')), isFalse);
+
+      // Without the visited set this never returns.
+      expect(io.dir.walk(temp.path).collect(.count()), greaterThan(0));
+      expect(
+        io.dir.walk(temp.path, follow: false).collect(.count()),
+        greaterThan(0),
+      );
     });
   });
 
@@ -325,9 +561,9 @@ Disallow: /x
     });
 
     test('save writes through a .part file and creates its folder', () async {
-      final dir = io.temp('dt_save_');
-      addTearDown(() => dir.deleteSync(recursive: true));
-      final dest = io.join(dir.path, 'nested', 'items.txt');
+      final dir = io.dir.temp('dt_save_');
+      addTearDown(() => io.remove(dir.path));
+      final dest = io.path.join(dir.path, 'nested', 'items.txt');
 
       await net
           .crawl<String>('https://site.test/'.url)
@@ -337,15 +573,15 @@ Disallow: /x
       // The folder did not exist: opening the destination directly threw.
       expect(io.read(dest).trim(), 'one');
       expect(
-        io.find(dir.path, pattern: RegExp(r'\.part$')).collect(.empty()),
+        io.dir.find(dir.path, pattern: RegExp(r'\.part$')).collect(.empty()),
         isTrue,
       );
     });
 
     test('the destination is replaced only once the run finishes', () async {
-      final dir = io.temp('dt_save_');
-      addTearDown(() => dir.deleteSync(recursive: true));
-      final dest = io.join(dir.path, 'items.txt');
+      final dir = io.dir.temp('dt_save_');
+      addTearDown(() => io.remove(dir.path));
+      final dest = io.path.join(dir.path, 'items.txt');
       io.write(dest, 'PREVIOUS');
 
       final slow = _SlowDownloader<String>(const Duration(milliseconds: 200));
@@ -362,15 +598,15 @@ Disallow: /x
       await run;
       expect(io.read(dest).trim(), 'one');
       expect(
-        io.find(dir.path, pattern: RegExp(r'\.part$')).collect(.empty()),
+        io.dir.find(dir.path, pattern: RegExp(r'\.part$')).collect(.empty()),
         isTrue,
       );
     });
 
     test('a save whose seeds cannot be resolved keeps the old file', () async {
-      final dir = io.temp('dt_save_');
-      addTearDown(() => dir.deleteSync(recursive: true));
-      final dest = io.join(dir.path, 'items.txt');
+      final dir = io.dir.temp('dt_save_');
+      addTearDown(() => io.remove(dir.path));
+      final dest = io.path.join(dir.path, 'items.txt');
       io.write(dest, 'PREVIOUS');
 
       await _withFailFastClient(() async {
@@ -384,7 +620,7 @@ Disallow: /x
 
       expect(io.read(dest), 'PREVIOUS');
       expect(
-        io.find(dir.path, pattern: RegExp(r'\.part$')).collect(.empty()),
+        io.dir.find(dir.path, pattern: RegExp(r'\.part$')).collect(.empty()),
         isTrue,
       );
     });
@@ -419,9 +655,19 @@ Disallow: /x
     });
   });
 
-  group('io.csv', () {
+  group('format.csv', () {
+    // The cursor keeps the header line out of `rows`; `Csv.raw` is the shape
+    // the old `io.csv.parse` had, and the one these parser cases are about.
+    List<List<String>> grid(String text, {String delimiter = ','}) => [
+      for (final row in Csv.raw(
+        text,
+        delimiter: delimiter,
+      ).rows.collect(.list()))
+        row.collect(.list()),
+    ];
+
     test('format keeps columns only later rows carry', () {
-      final csv = io.csv.format([
+      final csv = format.csv.format([
         {'a': 1},
         {'a': 2, 'b': 3},
       ]);
@@ -431,24 +677,61 @@ Disallow: /x
     });
 
     test('a trailing newline does not add an empty row', () {
-      expect(io.csv.parse('a,b\n').list, [
+      expect(grid('a,b\n'), [
         ['a', 'b'],
       ]);
-      expect(io.csv.parse('a,b\n\n').list, [
+      expect(grid('a,b\n\n'), [
         ['a', 'b'],
       ]);
     });
 
     test('a multi-character delimiter splits', () {
-      expect(io.csv.parse('a||b||c', delimiter: '||').list, [
+      expect(grid('a||b||c', delimiter: '||'), [
         ['a', 'b', 'c'],
       ]);
     });
 
     test('quoted fields still survive', () {
-      expect(io.csv.parse('"a,b",c').list, [
+      expect(grid('"a,b",c'), [
         ['a,b', 'c'],
       ]);
+    });
+
+    test('the cursor splits the header line off the rows', () {
+      final sheet = format.csv.parse('a,b\n1,2\n3,4\n');
+
+      expect(sheet.headers.iterable, ['a', 'b']);
+      expect(sheet.count, 2);
+      expect(sheet.column('b').iterable, ['2', '4']);
+      expect(sheet.maps.iterable, [
+        {'a': '1', 'b': '2'},
+        {'a': '3', 'b': '4'},
+      ]);
+    });
+
+    test('text that is not CSV parses to the empty cursor', () {
+      expect(format.csv.parse('').empty, isTrue);
+      expect(format.csv.parse('').headers.collect(.empty()), isTrue);
+    });
+
+    test('one state machine backs the whole-file and chunked readers', () async {
+      final temp = io.dir.temp('dt_csv_machine_');
+      addTearDown(() => io.remove(temp.path));
+
+      // The awkward inputs 5.0.0 used to prove the two parsers agreed. They
+      // are one parser now, so this pins that the chunked driver still reaches
+      // the same answer across every boundary the whole-string one never sees.
+      const awkward =
+          'a,b,c\n'
+          '"x,1","y\n2","z""3"\n'
+          ',,\n'
+          '"",unquoted,"trailing "\n'
+          'last,row,here\n';
+
+      final path = io.path.join(temp.path, 'awkward.csv');
+      io.write(path, awkward);
+
+      expect(await io.csv.rows(path).toList(), grid(awkward));
     });
   });
 
@@ -483,10 +766,10 @@ Disallow: /x
   group('util.text', () {
     test('a space groups digits only in threes', () {
       expect(util.text.number('12 34'), 12);
-      expect(util.text.numbers('1 2 3').list, [1, 2, 3]);
+      expect(util.text.numbers('1 2 3').iterable, [1, 2, 3]);
       expect(util.text.number('1 234 567'), 1234567);
       expect(util.text.number(r'$1,234.50'), 1234.5);
-      expect(util.text.numbers('3 of 7').list, [3, 7]);
+      expect(util.text.numbers('3 of 7').iterable, [3, 7]);
     });
 
     test('slug keeps letters of other scripts', () {
@@ -632,9 +915,9 @@ Disallow: /x
   group('zip', () {
     test('packing does not follow a symlink out of the tree', () async {
       final root = Directory.systemTemp.createTempSync('dt_zip_');
-      addTearDown(() => root.deleteSync(recursive: true));
+      addTearDown(() => io.remove(root.path));
       final outside = Directory.systemTemp.createTempSync('dt_zip_outside_');
-      addTearDown(() => outside.deleteSync(recursive: true));
+      addTearDown(() => io.remove(outside.path));
 
       File('${outside.path}/secret.txt').writeAsStringSync('do not pack me');
       File('${root.path}/kept.txt').writeAsStringSync('pack me');
@@ -649,7 +932,7 @@ Disallow: /x
       await format.zip.pack(root.path, archive);
       final names = (await format.zip.list(
         archive,
-      )).transform(.map((e) => e.name)).list;
+      )).transform(.map((e) => e.name)).iterable;
       expect(names, contains('kept.txt'));
       expect(names.any((n) => n.contains('secret')), isFalse);
     });

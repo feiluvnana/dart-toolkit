@@ -17,7 +17,7 @@ void main() async {
   // `port: 0` asks the OS for a free port, which is what a test wants and what
   // a callback on a machine with something already on 8080 wants too.
   // `host` defaults to localhost, so nothing is exposed off the machine.
-  final preview = io.join('output', 'serve', 'index.html');
+  final preview = io.path.join('output', 'serve', 'index.html');
   io.write(preview, '<h1>Scraped 3 pages</h1>');
 
   final server = await net.serve(0, (req) async {

@@ -18,6 +18,7 @@ import 'package:http/io_client.dart';
 import 'package:path/path.dart' as p;
 
 import '../concurrent/concurrent.dart';
+import '../io/entry.dart';
 import '../src/fs.dart';
 import '../util/codec.dart';
 import '../util/rand.dart';
@@ -366,8 +367,8 @@ class Reply {
   }
 
   /// Writes the response body to [path] atomically.
-  Future<File> save(String path, {String part = '.part'}) =>
-      Fs.save(path, bytes, part: part);
+  Future<FileSystemEntry> save(String path, {String part = '.part'}) async =>
+      Fs.entryFor((await Fs.save(path, bytes, part: part)).path);
 
   @override
   String toString() => '$status $url (${bytes.length} bytes)';
@@ -888,7 +889,7 @@ class Fetcher with PathResolver {
   /// Skips the download when the destination already holds bytes. Set [match]
   /// to also skip on a loosely-named sibling — see [Fs.similar] for why that
   /// is off by default. Retries on failure like [send] does.
-  Future<File> download(
+  Future<FileSystemEntry> download(
     Uri url,
     String path, {
     Map<String, String>? headers,
@@ -897,7 +898,7 @@ class Fetcher with PathResolver {
     bool match = false,
   }) async {
     final dest = resolve(path);
-    if (Fs.has(dest, match: match)) return File(dest);
+    if (Fs.has(dest, match: match)) return Fs.entryFor(dest);
 
     final merged = {...this.headers, ...?headers};
     final maxAttempts = retries > 0 ? retries + 1 : 1;
@@ -912,7 +913,7 @@ class Fetcher with PathResolver {
           part: part,
         );
         count++;
-        return file;
+        return Fs.entryFor(file.path);
       } catch (_) {
         if (attempt >= maxAttempts) rethrow;
         await Future<void>.delayed(backoff * attempt);

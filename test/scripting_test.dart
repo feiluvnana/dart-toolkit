@@ -23,7 +23,7 @@ class _Broken<T> extends Downloader<T> {
 Directory _temp(String prefix) {
   final dir = Directory.systemTemp.createTempSync(prefix);
   addTearDown(() {
-    if (dir.existsSync()) dir.deleteSync(recursive: true);
+    if (dir.existsSync()) io.remove(dir.path);
   });
   return dir;
 }
@@ -52,7 +52,7 @@ void main() {
       final res = Reply.text(page);
       expect(res.parse(format.html).find('.name').text, 'Wireless Keyboard');
       expect(res.parse(format.html).find('.price').text, r'$49.99');
-      expect(res.parse(format.html).find('.tags li').texts.list, [
+      expect(res.parse(format.html).find('.tags li').texts.iterable, [
         'usb',
         'bluetooth',
       ]);
@@ -217,7 +217,7 @@ void main() {
           .collect((res) => res.emit(res.parse(format.html).find('h1').text));
 
       expect(seen, ['start', 'item', 'progress', 'done']);
-      expect(stats.list, ['hi']);
+      expect(stats.iterable, ['hi']);
     });
   });
 
@@ -285,7 +285,7 @@ void main() {
 
       expect(File(path).readAsStringSync(), 'name\r\n"Alice, Chief"\r\n');
       // And it reads back as one row.
-      expect((await io.csv.maps(path)).list, [
+      expect((await format.csv.read(path)).maps.iterable, [
         {'name': 'Alice, Chief'},
       ]);
     });
@@ -338,7 +338,7 @@ void main() {
             )
             .stream((res) {
               for (final card
-                  in res.parse(format.html).find('.p').elements.list) {
+                  in res.parse(format.html).find('.p').elements.iterable) {
                 res.emit({
                   'name': card.query.find('h2').text,
                   'price': card.query.find('.c').text,
@@ -348,7 +348,7 @@ void main() {
         headers: ['name', 'price'],
       );
 
-      expect((await io.csv.maps(path)).list, [
+      expect((await format.csv.read(path)).maps.iterable, [
         {'name': 'Wireless Keyboard', 'price': '49.99'},
         {'name': 'Mouse', 'price': '19.99'},
       ]);
@@ -364,7 +364,7 @@ void main() {
     test('lines reads what was piped into a script', () async {
       final dir = Directory('output/stdin_test');
       dir.createSync(recursive: true);
-      addTearDown(() => dir.deleteSync(recursive: true));
+      addTearDown(() => io.remove(dir.path));
 
       // Run a real script with real piped input: that is the use case.
       File('${dir.path}/tool.dart').writeAsStringSync('''

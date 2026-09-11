@@ -10,14 +10,14 @@ following it is what keeps the surface small enough to hold in your head.
 
 | Domain | Holds | Sub-namespaces |
 | :--- | :--- | :--- |
-| `io` | The filesystem: paths, atomic writes, reads, watching (`io.watch`), locking, the collections on disk (`io.dictionary`, `dump`) | `io.csv`, `io.async` |
+| `io` | One file: what is at a path, reading it, writing it atomically, moving it — plus watching (`io.watch`), locking (`io.lock`) and the collections on disk (`io.dictionary`, `dump`) | `io.path`, `io.dir`, `io.csv`, `io.async` |
 | `net` | The network: requests, downloads, crawling — and, in the other direction, listening. It parses nothing | `net.http`, `net.crawl` |
 | `system` | This program and the machine running it, and what happens to its resources when it is interrupted (`system.on`) | `system.env`, `system.console`, `system.on` |
 | `concurrent` | Bounded async work on one isolate: how many at once, and how often | — |
 | `util` | Pure computation, the two document cursors (`Json`, `Markup`) and the codec seam (`Codec`) that carries them across domains | `util.time`, `util.size`, `util.text`, `util.hash`, `util.rand` |
 | `collection` | The two collections this library returns in place of Dart's (`Sequence`, `Dictionary`), the two operation types that shape them (`Transformer`, `Collector`) and the typed keys (`Slot`). No accessor — a library, not a `collection.something` you call | — |
 | `cli` | The command line your script presents to whoever runs it | — |
-| `format` | One file format per name — never an executable | `format.html`, `format.json`, `format.yaml`, `format.toml`, `format.zip` |
+| `format` | One file format per name — never an executable | `format.html`, `format.json`, `format.yaml`, `format.toml`, `format.csv`, `format.zip` |
 
 `$` and `$xpath` had a row of their own here through 3.2.0. They are the jQuery
 spelling of `format.html.parse`, still opt-in via
@@ -154,9 +154,16 @@ the first four makes it a sub-namespace or a plain member.
 
 ## Rule 3 — Sub-namespace or plain member?
 
-A sub-namespace is for a **cohesive vocabulary with its own nouns**: `io.csv`
-has rows, delimiters and headers; `system.console` has a writer, a reader and a
-cursor. Each would be a domain if Rule 2 let it.
+A sub-namespace is for a **cohesive vocabulary with its own nouns**: `io.dir`
+has entries, depth and links to follow; `system.console` has a writer, a reader
+and a cursor. Each would be a domain if Rule 2 let it.
+
+5.2.0 split two out of `io` on exactly this test. Making a directory is not
+what `io` is mainly for, and neither is listing one — *entries, depth, links to
+follow or not* is a vocabulary, so it is `io.dir`. And `io.path` is the one
+corner of the domain where nothing is read, written or created, which is a
+cohesion of its own and the reason it needs no `io.async` twin. What is left on
+`io` is one file at a time, which is what the domain is actually about.
 
 The same test decides a *type*'s namespace, and 5.1.0 is where that started
 mattering. `Transformer.take` and `Collector.count` are namespace objects
@@ -170,10 +177,35 @@ operation about a file, so it sits directly on `io` — it does not need an
 on `cli` for the same reason: flags and options are the domain's whole subject,
 not a corner of it.
 
-`io.async` is the one structural sub-namespace: it mirrors `io` exactly, one
-name for one name, so the blocking and non-blocking forms never differ except
-in the prefix. Use that shape only for a complete mirror, never for a partial
-one.
+`io.async` is the one structural sub-namespace: it mirrors `io`, one name for
+one name, so the blocking and non-blocking forms never differ except in the
+prefix. Use that shape only for a complete mirror, never for a partial one.
+
+**What "complete" can mean.** This rule said *exactly* through 5.1.0, and the
+mirror did not meet it in either direction — so either the rule was wrong or
+the members were, and it was some of each. A complete mirror is now defined as:
+**every member that has both forms appears on both sides under one name.** Three
+things are outside that, and each is a category rather than an oversight:
+
+- **Members with no blocking form.** `io.lock`, `io.locked` and `io.watch` are
+  inherently asynchronous — holding a lock and waiting for a change have no
+  blocking twin to write — so they sit on `io` and not on `io.async`. So does
+  `io.path`, where there is nothing to wait for.
+- **Members with no async form.** There are none, and there is no longer a
+  temptation. `io.async.download` was the one, and the blocking twin it wanted
+  could not be written at all: Dart has no synchronous HTTP and no way to block
+  on a `Future`. It was also a second spelling of `net.http.download`, which
+  Rule 5 forbids, so 5.2.0 deleted it rather than inventing a twin. A socket is
+  `net`'s.
+- **One member whose *shape* differs.** `io.lines` returns a `Sequence<String>`
+  and `io.async.lines` a `Stream<String>`. That is the mirror working: blocking
+  means the lines are already read. It returned a `Stream` from *both* through
+  5.1.0, from the accessor whose whole promise is that it blocks.
+
+`test/regression_test.dart` pins this, the way 4.0.0 pinned *no HTML parser
+under `lib/net/`*: it reads both accessors out of the source and asserts the
+difference is exactly the set above. A member added to one side and forgotten
+on the other fails the build.
 
 ---
 
@@ -560,7 +592,18 @@ every package in `pubspec.yaml`.
 | Locking | `io.lock` | It makes a file, so `io`. One operation with no vocabulary of its own, so a plain member. `lock` is one lowercase word and unclaimed |
 | Digests | `util.hash` | Pure; `io.hash` stays separate because it streams a file |
 | Randomness | `util.rand` | Pure; `rand` alone is too collision-prone |
-| Non-blocking IO | `io.async` | A complete mirror of `io`, so it is a prefix rather than new names |
+| Non-blocking IO | `io.async` | A complete mirror of `io`, so it is a prefix rather than new names. "Complete" is defined in Rule 3 and pinned by a test, because it was asserted and untrue for four releases |
+| Directories | `io.dir.*` | *Entries, depth, links to follow or not* is a vocabulary with its own nouns, which is Rule 3's test — and creating a directory is not what `io` is mainly for. It also freed the name: `io.dir(path)` was a **path reader** that returned the parent and created nothing, which is precisely backwards |
+| Path arithmetic | `io.path.*` | The one corner of `io` where nothing is read, written or created. That is a cohesion, and it is also why it is the one sub-namespace with no `io.async` twin. The cost is `io.path.join`, which is the library's most-used member; taken deliberately, because an exception to the rule is worse than three extra characters |
+| Creating the parent of a path | `io.dir.makeparent`, not `io.parent` | `parent` reads like it *returns* the parent and instead creates it, and `dir` read like it *made* a directory and instead returned a string. Renaming them in place was checked and rejected: a call in statement position discards its result, so every `io.parent(...)` would have kept compiling and quietly stopped creating the directory it was there to create. Moving both to different namespaces makes every old call site fail to compile, which is the only acceptable shape for a rename that changes what a name means |
+| `base` and `name` | `io.path.filename` and `io.path.stem` | They differed only in whether the extension survived, and neither word said which. `stem` is Python's word and one lowercase syllable |
+| One thing on the filesystem | `FileSystemEntry`, returned everywhere | Seventeen `io` signatures named `File`, `Directory`, `FileSystemEntity` or `FileStat` — four types this library does not control, does not document and cannot change — and across the whole repository **one** call chained off a returned handle and **zero** assigned one to a typed variable. Rule 6 asks for real types at the boundary; it had only ever been applied to parameters. It sits one letter from `dart:io`'s `FileSystemEntity`, which was close enough to run the Rule 6 collision check rather than assume: a file declaring both, beside imports of `dart:io`, `dart:async`, `dart:convert`, `package:archive`, `package:http` and `package:path`, analyzes clean |
+| The door out of it | `FileSystemEntry.entity`, exactly one | `Json.raw`, `Markup.document` and `Meta.raw` are the precedent: a typed surface with a single documented way to the thing underneath, so that needing it is a visible choice rather than the default |
+| An open file handle | Deliberately absent | Every other standard library has one and it is the obvious next thought after `FileSystemEntry`. It is also a lifecycle to get wrong, and `io`'s whole shape is that a path is a `String` and every call is complete in itself. The line: **if a member would need a matching `close`, it does not belong here.** `io.lock` proves the alternative — it takes the action as a callback rather than handing out something to release |
+| Listing versus walking | `io.dir.list` and `io.dir.walk` | The split Python (`iterdir`/`walk`), Node and Go all make. This library made neither: `io.find` carried both on one member with a `recursive:` flag *and* dropped every directory it walked past, so listing a folder was impossible, and so was knowing whether an entry was a link before following it |
+| `io.find` | Kept, narrowed | *Give me the mp3s* is a real question that should not become two calls. It is `walk` filtered to files now, and its signature did not move |
+| CSV | `format.csv` for the codec, `io.csv` for the streams | Rule 1 says a file format is a subject — the sentence that admitted `format.zip`, then the other four. CSV was the last one filed under the axis that happened to read the bytes. 4.0.0 and 5.0.0 both deferred the move fearing two spellings for *read a CSV file*; the `Codec` seam 4.0.0 built is what answers it, since `read` comes from `FileCodec` exactly as it does for the other five. What stayed in `io` is `rows`, `records`, `write` and `pipe`, which are about a file larger than memory rather than about CSV |
+| The CSV cursor | `Csv`, in `util` | `Table` is taken by `system.console`, so it is named for what it is over, the way `Json` and `Markup` are — and it lives in `util` for their reason too: `net` hands it back through `Codec`, and a type `net` needs cannot live under `format` |
 | `Fs`, `Sys`, `Exit` | Unexported, `lib/src/` | Implementation behind `io` and `system`; never a public name |
 | Hash algorithm enum | `Digest` became `Algo` | `Digest` was an `ambiguous_import` error against `package:crypto`, whose `Digest` is a hash *result* where this one selects an *algorithm*. `lib/src/fs.dart` was already writing `crypto.Digest` to name the other one |
 | A pipeline's page handler | `Process<T>` became `Handler<T>` | Dart resolves a package import over a `dart:` one silently, so exporting `Process` meant `Process` stopped meaning `dart:io`'s for every user of the library — while `system.on.adopt(Process)` still meant that one. A shadow with no error is worse than a collision with one |

@@ -24,7 +24,7 @@ void main() {
       ''';
 
       expect(
-        $(html).find('.track a').texts.list,
+        $(html).find('.track a').texts.iterable,
         equals(['Track One', 'Track Two']),
       );
       expect(html.$('.bonus').data('id'), equals('2'));
@@ -48,15 +48,15 @@ void main() {
       );
       expect(res.parse(format.html).find('div:has(p.desc)').count, equals(1));
       expect(
-        res.parse(format.html).find('ul > li:even').texts.list,
+        res.parse(format.html).find('ul > li:even').texts.iterable,
         equals(['0', '2']),
       );
       expect(
-        res.parse(format.html).find(':header').texts.list,
+        res.parse(format.html).find(':header').texts.iterable,
         equals(['Breaking News']),
       );
       expect(
-        res.parse(format.html).xpath('//a[@class="morelink"]').texts.list,
+        res.parse(format.html).xpath('//a[@class="morelink"]').texts.iterable,
         equals(['More']),
       );
 
@@ -65,17 +65,17 @@ void main() {
         equals('https://example.com/next'),
       );
       expect(
-        res.parse(format.html).find('a.morelink').attrs('href').list,
+        res.parse(format.html).find('a.morelink').attrs('href').iterable,
         equals(['https://example.com/next']),
       );
       expect(res.parse(format.html).find('h1').text, equals('Breaking News'));
       expect(
-        res.parse(format.html).find('h1').texts.list,
+        res.parse(format.html).find('h1').texts.iterable,
         equals(['Breaking News']),
       );
 
       final brHtml = '<div>01. First<br>02. Second</div>';
-      expect($(brHtml).lines.list, equals(['01. First', '02. Second']));
+      expect($(brHtml).lines.iterable, equals(['01. First', '02. Second']));
     });
 
     test('crawl.md samples and builder options compile and execute', () async {
@@ -99,12 +99,12 @@ void main() {
           )
           .collect((res) {
             for (final title
-                in res.parse(format.html).find('.titleline').texts.list) {
+                in res.parse(format.html).find('.titleline').texts.iterable) {
               res.emit(title);
             }
           });
 
-      expect(titles.list, equals(['Title 1']));
+      expect(titles.iterable, equals(['Title 1']));
     });
 
     test('http.md declarative extract and features work as documented', () {
@@ -169,9 +169,9 @@ void main() {
         if (n == 0) throw Exception('zero');
         return 10 ~/ n;
       });
-      expect(settled.list[0].ok, isTrue);
-      expect(settled.list[0].value, equals(5));
-      expect(settled.list[1].ok, isFalse);
+      expect(settled.collect(.list())[0].ok, isTrue);
+      expect(settled.collect(.list())[0].value, equals(5));
+      expect(settled.collect(.list())[1].ok, isFalse);
 
       // 3. retry
       var attempts = 0;
@@ -290,13 +290,17 @@ void main() {
           {'name': 'Bob', 'role': 'user'},
         ]);
 
-        final maps = await io.csv.maps(path);
-        expect(maps.collect(.count()), equals(2));
-        expect(maps.collect(.first())?['name'], equals('Alice'));
+        final sheet = await format.csv.read(path);
+        expect(sheet.maps.collect(.count()), equals(2));
+        expect(sheet.maps.collect(.first())?['name'], equals('Alice'));
+        expect(sheet.column('name').iterable, equals(['Alice', 'Bob']));
 
-        final grid = await io.csv.matrix(path);
-        expect(grid.collect(.count()), equals(3));
-        expect(grid.collect(.first()), equals(['name', 'role']));
+        expect(sheet.headers.iterable, equals(['name', 'role']));
+        expect(sheet.count, equals(2));
+        expect(
+          sheet.rows.collect(.first())?.iterable,
+          equals(['Alice', 'admin']),
+        );
 
         final streamed = await io.csv.records(path).toList();
         expect(streamed.length, equals(2));
@@ -306,13 +310,13 @@ void main() {
 
         // Excel and RFC 4180 want CRLF, which format and write both take.
         expect(
-          io.csv.format([
+          format.csv.format([
             {'a': '1'},
           ], newline: '\r\n'),
           equals('a\r\n1\r\n'),
         );
       } finally {
-        temp.deleteSync(recursive: true);
+        io.remove(temp.path);
       }
     });
   });

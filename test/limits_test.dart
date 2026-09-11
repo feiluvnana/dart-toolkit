@@ -46,7 +46,7 @@ void main() {
         (n) => limit.guard(() async => n * 2),
         size: 3,
       );
-      expect(results.list, equals([0, 2, 4, 6, 8, 10, 12, 14]));
+      expect(results.iterable, equals([0, 2, 4, 6, 8, 10, 12, 14]));
       limit.close();
     });
 
@@ -76,9 +76,9 @@ void main() {
 
   group('io.lock', () {
     test('runs the action and releases on the way out', () async {
-      final dir = io.temp('dt_lock_');
+      final dir = io.dir.temp('dt_lock_');
       try {
-        final path = io.join(dir.path, '.run.lock');
+        final path = io.path.join(dir.path, '.run.lock');
         expect(io.locked(path), isFalse);
         final answer = await io.lock(path, () async {
           expect(io.locked(path), isTrue);
@@ -88,28 +88,28 @@ void main() {
         expect(io.has(path), isFalse, reason: 'released on normal return');
         expect(io.locked(path), isFalse);
       } finally {
-        dir.deleteSync(recursive: true);
+        io.remove(dir.path);
       }
     });
 
     test('releases when the action throws', () async {
-      final dir = io.temp('dt_lock_throw_');
+      final dir = io.dir.temp('dt_lock_throw_');
       try {
-        final path = io.join(dir.path, '.run.lock');
+        final path = io.path.join(dir.path, '.run.lock');
         await expectLater(
           io.lock(path, () => throw StateError('boom')),
           throwsStateError,
         );
         expect(io.locked(path), isFalse);
       } finally {
-        dir.deleteSync(recursive: true);
+        io.remove(dir.path);
       }
     });
 
     test('a lock a live process holds is refused, or waited for', () async {
-      final dir = io.temp('dt_lock_busy_');
+      final dir = io.dir.temp('dt_lock_busy_');
       try {
-        final path = io.join(dir.path, '.run.lock');
+        final path = io.path.join(dir.path, '.run.lock');
         final held = io.lock(path, () => util.time.wait(400.ms));
 
         // Long enough for the outer lock to be taken.
@@ -123,20 +123,20 @@ void main() {
         await held;
         expect(await queued, equals('second'));
       } finally {
-        dir.deleteSync(recursive: true);
+        io.remove(dir.path);
       }
     });
 
     test('a stale lock is taken, not obeyed', () async {
-      final dir = io.temp('dt_lock_stale_');
+      final dir = io.dir.temp('dt_lock_stale_');
       try {
-        final path = io.join(dir.path, '.run.lock');
+        final path = io.path.join(dir.path, '.run.lock');
         // A pid no live process can have, written the way a real lock is.
         io.write(path, '{"pid": 999999998, "since": "2020-01-01T00:00:00Z"}');
         expect(io.locked(path), isFalse);
         expect(await io.lock(path, () async => 'taken'), equals('taken'));
       } finally {
-        dir.deleteSync(recursive: true);
+        io.remove(dir.path);
       }
     });
 
@@ -149,7 +149,7 @@ void main() {
 
   group('io.watch', () {
     test('reports a change, coalescing the burst of a save', () async {
-      final dir = io.temp('dt_watch_');
+      final dir = io.dir.temp('dt_watch_');
       final seen = <String>[];
       Future<void> Function()? stop;
       try {
@@ -162,12 +162,12 @@ void main() {
         await util.time.wait(150.ms);
 
         // Three writes, as an editor does per save.
-        final path = io.join(dir.path, 'note.txt');
+        final path = io.path.join(dir.path, 'note.txt');
         for (var i = 0; i < 3; i++) {
           io.write(path, 'v$i');
           await util.time.wait(20.ms);
         }
-        io.write(io.join(dir.path, 'skipped.md'), 'ignored');
+        io.write(io.path.join(dir.path, 'skipped.md'), 'ignored');
 
         await util.time.wait(900.ms);
         expect(
@@ -178,28 +178,28 @@ void main() {
         expect(seen.any((p) => p.endsWith('.md')), isFalse);
       } finally {
         await stop?.call();
-        dir.deleteSync(recursive: true);
+        io.remove(dir.path);
       }
     }, onPlatform: const {'windows': Skip('filesystem events differ')});
 
     test('stopping is idempotent and silences later changes', () async {
-      final dir = io.temp('dt_watch_stop_');
+      final dir = io.dir.temp('dt_watch_stop_');
       final seen = <String>[];
       try {
         final stop = io.watch(dir.path, seen.add, settle: Duration.zero);
         await stop();
         await stop();
-        io.write(io.join(dir.path, 'after.txt'), 'x');
+        io.write(io.path.join(dir.path, 'after.txt'), 'x');
         await util.time.wait(300.ms);
         expect(seen, isEmpty);
       } finally {
-        dir.deleteSync(recursive: true);
+        io.remove(dir.path);
       }
     });
 
     test('watching a path that does not exist is not an error', () async {
       final stop = io.watch(
-        io.join(dart_io.Directory.systemTemp.path, 'dt_absent_dir'),
+        io.path.join(dart_io.Directory.systemTemp.path, 'dt_absent_dir'),
         (_) {},
       );
       await stop();

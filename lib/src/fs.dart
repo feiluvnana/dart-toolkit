@@ -16,6 +16,8 @@ import 'package:crypto/crypto.dart' as crypto;
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 
+import '../io/entry.dart';
+import 'entries.dart';
 import 'proc.dart';
 
 // ============================================================================
@@ -79,18 +81,62 @@ class Fs {
     return s.isEmpty ? 'unnamed' : s;
   }
 
-  /// Creates the directory at [path], including parents.
-  ///
-  /// Set [sync] to block instead of awaiting, for use in synchronous paths.
-  static Future<Directory> mkdir(String path, {bool sync = false}) async {
-    final dir = Directory(path);
-    if (sync) {
-      if (!dir.existsSync()) dir.createSync(recursive: true);
-      return dir;
-    }
-    if (!await dir.exists()) await dir.create(recursive: true);
-    return dir;
+  /// The current working directory.
+  static String get cwd => Directory.current.path;
+
+  /// The current user's home directory, never null.
+  static String get home {
+    final env = Platform.environment;
+    final named = Platform.isWindows
+        ? env['USERPROFILE'] ??
+              ((env['HOMEDRIVE'] ?? '') + (env['HOMEPATH'] ?? ''))
+        : env['HOME'];
+    return named == null || named.isEmpty ? cwd : named;
   }
+
+  /// The entry at [path] after an operation that guarantees it exists.
+  ///
+  /// A caller that has just written or created [path] cannot get `null` back
+  /// except by losing a race with something that deleted it, so the fallback
+  /// describes an empty file rather than making every write return a nullable.
+  static FileSystemEntry entryFor(String path) =>
+      Entries.at(path) ??
+      FileSystemEntry(
+        path: path,
+        kind: FileSystemEntryKind.file,
+        size: 0,
+        modified: DateTime.fromMillisecondsSinceEpoch(0),
+      );
+
+  /// Creates the directory at [path], including parents.
+  static Future<FileSystemEntry> mkdir(String path) async {
+    final dir = Directory(path);
+    if (!await dir.exists()) await dir.create(recursive: true);
+    return entryFor(path);
+  }
+
+  /// Creates the directory at [path], including parents, blocking.
+  static FileSystemEntry mkdirSync(String path) {
+    final dir = Directory(path);
+    if (!dir.existsSync()) dir.createSync(recursive: true);
+    return entryFor(path);
+  }
+
+  /// Creates the directory holding [path], and returns it.
+  static Future<FileSystemEntry> mkparent(String path) =>
+      mkdir(p.dirname(path));
+
+  /// Creates the directory holding [path], blocking, and returns it.
+  static FileSystemEntry mkparentSync(String path) =>
+      mkdirSync(p.dirname(path));
+
+  /// Creates a new temporary directory with the given name [prefix].
+  static Future<FileSystemEntry> temp([String prefix = 'tmp_']) async =>
+      entryFor((await Directory.systemTemp.createTemp(prefix)).path);
+
+  /// Creates a new temporary directory with the given name [prefix], blocking.
+  static FileSystemEntry tempSync([String prefix = 'tmp_']) =>
+      entryFor(Directory.systemTemp.createTempSync(prefix).path);
 
   /// Creates the parent directory of [path] if it is missing.
   static void parent(String path) {
@@ -350,12 +396,12 @@ class Fs {
   }
 
   /// Copies [source] to [destination] without blocking, directories included.
-  static Future<FileSystemEntity> copyAsync(
+  static Future<FileSystemEntry> copyAsync(
     String source,
     String destination,
   ) async {
     if (await FileSystemEntity.type(source) == FileSystemEntityType.directory) {
-      final destDir = await Directory(destination).create(recursive: true);
+      await Directory(destination).create(recursive: true);
       await for (final entity in Directory(source).list(recursive: true)) {
         final target = p.join(
           destination,
@@ -368,14 +414,15 @@ class Fs {
           await entity.copy(target);
         }
       }
-      return destDir;
+      return entryFor(destination);
     }
     await Directory(p.dirname(destination)).create(recursive: true);
-    return File(source).copy(destination);
+    await File(source).copy(destination);
+    return entryFor(destination);
   }
 
   /// Moves [source] to [destination] without blocking, crossing filesystems.
-  static Future<FileSystemEntity> moveAsync(
+  static Future<FileSystemEntry> moveAsync(
     String source,
     String destination,
   ) async {
@@ -383,14 +430,132 @@ class Fs {
     try {
       if (await FileSystemEntity.type(source) ==
           FileSystemEntityType.directory) {
-        return await Directory(source).rename(destination);
+        await Directory(source).rename(destination);
+      } else {
+        await File(source).rename(destination);
       }
-      return await File(source).rename(destination);
+      return entryFor(destination);
     } on FileSystemException {
       final copied = await copyAsync(source, destination);
       await removeAsync(source);
       return copied;
     }
+  }
+
+  /// Copies [source] to [destination], blocking, directories included.
+  static FileSystemEntry copySync(String source, String destination) {
+    if (FileSystemEntity.typeSync(source) == FileSystemEntityType.directory) {
+      Directory(destination).createSync(recursive: true);
+      for (final entity in Directory(source).listSync(recursive: true)) {
+        final target = p.join(
+          destination,
+          p.relative(entity.path, from: source),
+        );
+        if (entity is Directory) {
+          Directory(target).createSync(recursive: true);
+        } else if (entity is File) {
+          parent(target);
+          entity.copySync(target);
+        }
+      }
+      return entryFor(destination);
+    }
+    parent(destination);
+    File(source).copySync(destination);
+    return entryFor(destination);
+  }
+
+  /// Moves [source] to [destination], blocking, crossing filesystems.
+  static FileSystemEntry moveSync(String source, String destination) {
+    parent(destination);
+    try {
+      if (FileSystemEntity.typeSync(source) == FileSystemEntityType.directory) {
+        Directory(source).renameSync(destination);
+      } else {
+        File(source).renameSync(destination);
+      }
+      return entryFor(destination);
+    } on FileSystemException {
+      final copied = copySync(source, destination);
+      removeSync(source);
+      return copied;
+    }
+  }
+
+  /// Removes the file, link or directory at [path]; `false` when absent.
+  static bool removeSync(String path) {
+    final type = FileSystemEntity.typeSync(path);
+    if (type == FileSystemEntityType.file ||
+        type == FileSystemEntityType.link) {
+      File(path).deleteSync();
+      return true;
+    }
+    if (type == FileSystemEntityType.directory) {
+      Directory(path).deleteSync(recursive: true);
+      return true;
+    }
+    return false;
+  }
+
+  /// Appends [content] to [path], creating the file and its parents.
+  ///
+  /// The one write in this library that does not stage through a `.part`
+  /// file: appending adds to what is already there, so there is nothing to
+  /// swap into place. An interrupted append can leave a partial line.
+  static FileSystemEntry appendSync(
+    String path,
+    String content, {
+    Encoding encoding = utf8,
+  }) {
+    parent(path);
+    File(path).writeAsStringSync(
+      content,
+      mode: FileMode.append,
+      encoding: encoding,
+      flush: true,
+    );
+    return entryFor(path);
+  }
+
+  /// Appends [content] to [path] without blocking. See [appendSync].
+  static Future<FileSystemEntry> append(
+    String path,
+    String content, {
+    Encoding encoding = utf8,
+  }) async {
+    await parentAsync(path);
+    await File(path).writeAsString(
+      content,
+      mode: FileMode.append,
+      encoding: encoding,
+      flush: true,
+    );
+    return entryFor(path);
+  }
+
+  /// Creates [path] empty when it is missing, or bumps its mtime when it is
+  /// not.
+  static FileSystemEntry touchSync(String path) {
+    final file = File(path);
+    if (file.existsSync()) {
+      file.setLastModifiedSync(DateTime.now());
+    } else {
+      parent(path);
+      file.createSync();
+    }
+    return entryFor(path);
+  }
+
+  /// The non-blocking twin of [touchSync].
+  static Future<FileSystemEntry> touch(String path) async {
+    final file = File(path);
+    if (await file.exists()) {
+      await file.setLastModified(DateTime.now());
+    } else {
+      await parentAsync(path);
+      await file.create();
+    }
+    return entryFor(path);
   }
 
   /// Streams [url] to [path] atomically via a `.part` staging file.
@@ -485,6 +650,10 @@ class Fs {
     path,
   ).openRead().transform(encoding.decoder).transform(const LineSplitter());
 
+  /// Reads [path] as decoded lines, blocking.
+  static List<String> linesSync(String path, {Encoding encoding = utf8}) =>
+      File(path).readAsLinesSync(encoding: encoding);
+
   /// How much of a file is read at a time when hashing it.
   static const int _hashChunk = 64 * 1024;
 
@@ -535,8 +704,12 @@ class Fs {
     return sink.value.toString();
   }
 
-  /// Returns filesystem metadata for [path].
-  static FileStat stat(String path) => File(path).statSync();
+  /// The entry at [path], or `null` when there is nothing there.
+  static FileSystemEntry? stat(String path) => Entries.at(path);
+
+  /// The entry at [path] without blocking, or `null` when nothing is there.
+  static Future<FileSystemEntry?> statAsync(String path) =>
+      Entries.atAsync(path);
 
   /// Moves [staging] over [destination] without exposing a gap.
   ///

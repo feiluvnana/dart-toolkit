@@ -10,6 +10,7 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import '../io/entry.dart';
 import '../src/fs.dart';
 import '../util/hash.dart';
 import 'http.dart';
@@ -175,10 +176,12 @@ class HttpCache {
   }
 
   /// Stores [response] under [url], replacing anything already there.
-  Future<File> write(Uri url, Reply response) async {
+  Future<FileSystemEntry> write(Uri url, Reply response) async {
     await Fs.mkdir(dir);
     final entry = CacheEntry(response: response, stored: DateTime.now());
-    return Fs.dump(path(url), entry.toJson(), pretty: false);
+    return Fs.entryFor(
+      (await Fs.dump(path(url), entry.toJson(), pretty: false)).path,
+    );
   }
 
   /// Forgets [url]. Returns whether anything was stored.

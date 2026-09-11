@@ -1,244 +1,52 @@
-/// # CSV Tables (`io.csv.*`)
+/// # CSV Files (`io.csv.*`)
 ///
-/// An RFC 4180-style reader and writer with no external dependency: quoted
-/// fields, escaped quotes, and `\r\n` or `\n` line endings.
+/// The two CSV operations that are about a **file larger than memory**:
+/// reading one a row at a time, and writing one a row at a time.
+///
+/// Parsing and formatting CSV *text* is `format.csv`, beside the other five
+/// formats. The split is not arbitrary — it is the same one `format.zip.pack`
+/// and `io.write` already make. A codec turns bytes into a document; these
+/// four exist because the document does not fit.
+///
+/// ```dart no-compile
+/// await for (final row in io.csv.records('huge.csv')) { ... }  // read
+/// await io.csv.pipe('out.csv', rows);                         // write
+///
+/// final sheet = await format.csv.read('small.csv');           // whole file
+/// ```
 library;
 
 import 'dart:convert';
 import 'dart:io';
 
+import '../src/csvtext.dart';
 import '../src/fs.dart';
-import '../collection/sequence.dart';
+import 'entry.dart';
 
 // ============================================================================
-// CSV SERIALIZATION & PARSING (io.csv.*)
+// CSV FILES (io.csv.*)
 // ============================================================================
 
-/// Entry point for CSV parsing and formatting, reachable as `io.csv`.
+/// Entry point for streaming CSV file access, reachable as `io.csv`.
 ///
-/// Reads come in two shapes, chosen by the method rather than a type argument:
-/// [maps] treats the first line as a header and yields one map per row, while
-/// [matrix] yields every line as a list of cells.
+/// Reads come in two shapes, chosen by the method rather than a type
+/// argument: [records] treats the first line as a header and yields one map
+/// per row, while [rows] yields every line as a list of cells.
 ///
 /// ```dart
-/// final rows = await io.csv.maps('people.csv');
-/// await io.csv.write('out.csv', rows.list);
+/// await for (final person in io.csv.records('people.csv')) {
+///   print(person['name']);
+/// }
 /// ```
-class CsvAccessor {
+class CsvFileAccessor {
   /// Creates the accessor. Prefer the shared `io.csv` instance.
-  const CsvAccessor();
-
-  /// Parses CSV [text] into rows of cells.
-  ///
-  /// Handles quoted fields containing [delimiter], newlines, and `""` escaped
-  /// quotes. [delimiter] may be more than one character. Blank lines produce
-  /// no row, so a trailing newline does not add an empty one.
-  Sequence<List<String>> parse(String text, {String delimiter = ','}) {
-    // Excel writes a UTF-8 BOM, and the streaming decoder behind [rows] drops
-    // it — so this was the one CSV entry point that kept it, and it kept it
-    // glued to the first header, where it made `row['name']` answer null for
-    // a file that plainly had a `name` column.
-    if (text.startsWith('\uFEFF')) text = text.substring(1);
-
-    final rows = <List<String>>[];
-    final field = StringBuffer();
-    final row = <String>[];
-    final sep = delimiter.isEmpty ? ',' : delimiter;
-    var quoted = false;
-
-    void endField() {
-      row.add(field.toString());
-      field.clear();
-    }
-
-    void endRow() {
-      // A line with nothing on it at all is separation, not an empty record.
-      if (field.isEmpty && row.isEmpty) return;
-      endField();
-      rows.add(List<String>.of(row));
-      row.clear();
-    }
-
-    // Code units, not `text[i]`: indexing a String allocates a one-character
-    // String for every character of the file, which on a 20,000-row export is
-    // a million throwaway objects. The runs between separators are copied in
-    // bulk with `substring` for the same reason.
-    const quote = 0x22; // "
-    const cr = 0x0D;
-    const lf = 0x0A;
-    final sepFirst = sep.codeUnitAt(0);
-    final simpleSep = sep.length == 1;
-    final length = text.length;
-    var run = 0; // start of the plain run not yet copied into `field`
-
-    void take(int end) {
-      if (end > run) field.write(text.substring(run, end));
-    }
-
-    for (var i = 0; i < length; i++) {
-      final unit = text.codeUnitAt(i);
-      if (quoted) {
-        if (unit != quote) continue;
-        take(i);
-        if (i + 1 < length && text.codeUnitAt(i + 1) == quote) {
-          field.write('"');
-          i++;
-        } else {
-          quoted = false;
-        }
-        run = i + 1;
-        continue;
-      }
-      if (unit == quote) {
-        take(i);
-        quoted = true;
-        run = i + 1;
-        continue;
-      }
-      if (unit == cr || unit == lf) {
-        take(i);
-        run = i + 1;
-        if (unit == cr && i + 1 < length && text.codeUnitAt(i + 1) == lf) {
-          i++;
-          run = i + 1;
-        }
-        endRow();
-        continue;
-      }
-      if (unit == sepFirst && (simpleSep || text.startsWith(sep, i))) {
-        take(i);
-        i += sep.length - 1;
-        run = i + 1;
-        endField();
-      }
-    }
-    take(length);
-    if (field.isNotEmpty || row.isNotEmpty) endRow();
-    return Sequence(rows);
-  }
-
-  /// Renders [rows] as CSV text, one record per line.
-  ///
-  /// Columns come from [headers], or from the union of every row's keys in the
-  /// order they are first seen — so a field only later records carry still
-  /// gets a column instead of being silently dropped.
-  ///
-  /// [newline] ends every line. The default is `\n`; pass `\r\n` for the line
-  /// ending Excel and RFC 4180 expect.
-  ///
-  /// ```dart
-  /// io.csv.format([
-  ///   {'name': 'Ada', 'born': 1815},
-  ///   {'name': 'Alan', 'born': 1912},
-  /// ]);
-  /// ```
-  ///
-  /// For rows that are already lists of cells, see [cells].
-  String format(
-    Iterable<Map<String, Object?>> rows, {
-    List<String>? headers,
-    String delimiter = ',',
-    String newline = '\n',
-  }) {
-    final list = rows.toList();
-    final keys =
-        headers ?? <String>{for (final row in list) ...row.keys}.toList();
-    if (list.isEmpty && keys.isEmpty) return '';
-
-    final buffer = StringBuffer()
-      ..write(keys.map((k) => _escape(k, delimiter)).join(delimiter))
-      ..write(newline);
-    for (final row in list) {
-      buffer
-        ..write(
-          keys
-              .map((k) => _escape(row[k]?.toString() ?? '', delimiter))
-              .join(delimiter),
-        )
-        ..write(newline);
-    }
-    return buffer.toString();
-  }
-
-  /// Renders [rows] of cells as CSV text, one row per line.
-  ///
-  /// The twin of [format] for data that is already a grid — what [matrix]
-  /// reads back. [headers] is written as a first line when given.
-  ///
-  /// ```dart
-  /// io.write('out.csv', io.csv.cells([
-  ///   ['Ada', 1815],
-  ///   ['Alan', 1912],
-  /// ], headers: ['name', 'born']));
-  /// ```
-  ///
-  /// Writing it goes through [io.write] rather than a second name here. The
-  /// two used to be one method taking `Iterable<dynamic>` and deciding at
-  /// runtime which shape it had been handed.
-  String cells(
-    Iterable<List<Object?>> rows, {
-    List<String>? headers,
-    String delimiter = ',',
-    String newline = '\n',
-  }) {
-    final buffer = StringBuffer();
-    if (headers != null && headers.isNotEmpty) {
-      buffer
-        ..write(headers.map((h) => _escape(h, delimiter)).join(delimiter))
-        ..write(newline);
-    }
-    for (final row in rows) {
-      buffer
-        ..write(
-          row
-              .map((cell) => _escape(cell?.toString() ?? '', delimiter))
-              .join(delimiter),
-        )
-        ..write(newline);
-    }
-    return buffer.toString();
-  }
-
-  /// Reads [path] as records keyed by the header line.
-  ///
-  /// Empty when the file does not exist. Blank lines are skipped, and short
-  /// rows are padded with empty strings. A [Sequence], so the report is the
-  /// next call:
-  ///
-  /// ```dart
-  /// final rows = await io.csv.maps('sales.csv');
-  /// rows.collect(.count.by((r) => r['region']!)).pairs.collect(.foreach(print));
-  /// ```
-  Future<Sequence<Map<String, String>>> maps(
-    String path, {
-    String delimiter = ',',
-  }) async {
-    final rows = await _all(path, delimiter);
-    if (rows.isEmpty) return const Sequence.empty();
-    final keys = rows.first;
-    return Sequence([
-      for (final row in rows.skip(1))
-        if (!_blank(row))
-          {
-            for (var i = 0; i < keys.length; i++)
-              keys[i]: i < row.length ? row[i] : '',
-          },
-    ]);
-  }
-
-  /// Reads [path] as raw rows of cells, header line included.
-  ///
-  /// Empty when the file does not exist.
-  Future<Sequence<List<String>>> matrix(
-    String path, {
-    String delimiter = ',',
-  }) async => Sequence(await _all(path, delimiter));
+  const CsvFileAccessor();
 
   /// Streams [path] as raw rows of cells, header line included.
   ///
-  /// Where [matrix] reads the whole file, this yields a row at a time, so a
-  /// file larger than memory can still be walked. Yields nothing when the file
-  /// does not exist.
+  /// Where `format.csv.read` reads the whole file, this yields a row at a
+  /// time, so a file larger than memory can still be walked. Yields nothing
+  /// when the file does not exist.
   Stream<List<String>> rows(
     String path, {
     String delimiter = ',',
@@ -247,99 +55,26 @@ class CsvAccessor {
     final file = File(path);
     if (!await file.exists()) return;
 
-    final field = StringBuffer();
-    final row = <String>[];
-    final sep = delimiter.isEmpty ? ',' : delimiter;
-    var quoted = false;
-    var pendingQuote = false;
-    var carry = '';
-
-    void endField() {
-      row.add(field.toString());
-      field.clear();
-    }
-
-    await for (final raw in file.openRead().transform(encoding.decoder)) {
-      // A multi-character delimiter can straddle a chunk boundary, so hold
-      // back the tail that might be the start of one.
-      final chunk = carry + raw;
-      final safe = sep.length > 1
-          ? chunk.length - (sep.length - 1)
-          : chunk.length;
-      var i = 0;
-      for (; i < chunk.length; i++) {
-        if (i >= safe && !pendingQuote && !quoted) break;
-        final char = chunk[i];
-
-        if (pendingQuote) {
-          pendingQuote = false;
-          if (char == '"') {
-            field.write('"');
-            continue;
-          }
-          quoted = false;
-        }
-
-        if (quoted) {
-          if (char == '"') {
-            pendingQuote = true;
-          } else {
-            field.write(char);
-          }
-          continue;
-        }
-
-        if (char == '"') {
-          quoted = true;
-          continue;
-        }
-        if (char == '\r') {
-          if (i + 1 < chunk.length && chunk[i + 1] == '\n') i++;
-          if (field.isNotEmpty || row.isNotEmpty) {
-            endField();
-            yield List<String>.of(row);
-            row.clear();
-          }
-          continue;
-        }
-        if (char == '\n') {
-          if (field.isNotEmpty || row.isNotEmpty) {
-            endField();
-            yield List<String>.of(row);
-            row.clear();
-          }
-          continue;
-        }
-        if (chunk.startsWith(sep, i)) {
-          endField();
-          i += sep.length - 1;
-          continue;
-        }
-        field.write(char);
+    final pending = <List<String>>[];
+    final scanner = CsvScanner(pending.add, delimiter: delimiter);
+    await for (final chunk in file.openRead().transform(encoding.decoder)) {
+      scanner.add(chunk);
+      for (final row in pending) {
+        yield row;
       }
-      carry = chunk.substring(i);
+      pending.clear();
     }
-    for (var i = 0; i < carry.length; i++) {
-      final char = carry[i];
-      if (char == '\r' || char == '\n') continue;
-      if (carry.startsWith(sep, i)) {
-        endField();
-        i += sep.length - 1;
-        continue;
-      }
-      field.write(char);
-    }
-    if (field.isNotEmpty || row.isNotEmpty) {
-      endField();
-      yield List<String>.of(row);
+    scanner.close();
+    for (final row in pending) {
+      yield row;
     }
   }
 
   /// Streams [path] as records keyed by the header line.
   ///
-  /// Where [maps] reads the whole file, this yields a record at a time. Blank
-  /// lines are skipped and short rows are padded with empty strings, as in
-  /// [maps].
+  /// Where `format.csv.read(path)` then `.maps` reads the whole file, this
+  /// yields a record at a time. Blank lines are skipped and short rows are
+  /// padded with empty strings.
   Stream<Map<String, String>> records(
     String path, {
     String delimiter = ',',
@@ -355,7 +90,7 @@ class CsvAccessor {
         headers = row;
         continue;
       }
-      if (!_blank(row)) {
+      if (!CsvText.blank(row)) {
         yield {
           for (var i = 0; i < headers.length; i++)
             headers[i]: i < row.length ? row[i] : '',
@@ -366,19 +101,26 @@ class CsvAccessor {
 
   /// Writes [rows] to [path] atomically, one record per line.
   ///
-  /// [newline] ends every line, as in [format]. For a grid of cells, render it
-  /// with [cells] and write it with `io.write`.
-  Future<File> write(
+  /// [newline] ends every line, as in `format.csv.format`. For a grid of
+  /// cells, render it with `format.csv.cells` and write it with `io.write`.
+  Future<FileSystemEntry> write(
     String path,
     Iterable<Map<String, Object?>> rows, {
     List<String>? headers,
     String delimiter = ',',
     String newline = '\n',
     String part = '.part',
-  }) => Fs.write(
-    path,
-    format(rows, headers: headers, delimiter: delimiter, newline: newline),
-    part: part,
+  }) async => Fs.entryFor(
+    (await Fs.write(
+      path,
+      CsvText.records(
+        rows,
+        headers: headers,
+        delimiter: delimiter,
+        newline: newline,
+      ),
+      part: part,
+    )).path,
   );
 
   /// Writes [rows] to [path] as they arrive, atomically.
@@ -405,7 +147,7 @@ class CsvAccessor {
   /// The file appears complete or not at all: rows are written to a `.part`
   /// staging file that is renamed into place once the stream closes, and
   /// discarded if it fails.
-  Future<File> pipe(
+  Future<FileSystemEntry> pipe(
     String path,
     Stream<Map<String, Object?>> rows, {
     List<String>? headers,
@@ -413,52 +155,37 @@ class CsvAccessor {
     String newline = '\n',
     String part = '.part',
     Encoding encoding = utf8,
-  }) => Fs.atomic(path, (staging) async {
-    final sink = staging.openWrite(encoding: encoding);
-    var columns = headers;
-    var headed = false;
+  }) async => Fs.entryFor(
+    (await Fs.atomic(path, (staging) async {
+      final sink = staging.openWrite(encoding: encoding);
+      var columns = headers;
+      var headed = false;
 
-    void line(Iterable<String> cells) => sink.write(
-      '${cells.map((cell) => _escape(cell, delimiter)).join(delimiter)}'
-      '$newline',
-    );
+      void line(Iterable<String> cells) => sink.write(
+        '${cells.map((cell) => CsvText.escape(cell, delimiter)).join(delimiter)}'
+        '$newline',
+      );
 
-    void header() {
-      final names = columns;
-      if (headed || names == null) return;
-      line(names);
-      headed = true;
-    }
-
-    try {
-      await for (final row in rows) {
-        columns ??= row.keys.toList();
-        header();
-        line([for (final key in columns) row[key]?.toString() ?? '']);
+      void header() {
+        final names = columns;
+        if (headed || names == null) return;
+        line(names);
+        headed = true;
       }
-      // A stream that closed without yielding still writes the header it was
-      // given, so an empty result reads as an empty table, not an empty file.
-      header();
-      await sink.flush();
-    } finally {
-      await sink.close();
-    }
-  }, part: part);
 
-  Future<List<List<String>>> _all(String path, String delimiter) async {
-    final file = File(path);
-    if (!file.existsSync()) return [];
-    return parse(await file.readAsString(), delimiter: delimiter).list;
-  }
-
-  static bool _blank(List<String> row) =>
-      row.isEmpty || (row.length == 1 && row.first.trim().isEmpty);
-
-  static String _escape(String field, String delimiter) =>
-      field.contains(delimiter) ||
-          field.contains('"') ||
-          field.contains('\n') ||
-          field.contains('\r')
-      ? '"${field.replaceAll('"', '""')}"'
-      : field;
+      try {
+        await for (final row in rows) {
+          columns ??= row.keys.toList();
+          header();
+          line([for (final key in columns) row[key]?.toString() ?? '']);
+        }
+        // A stream that closed without yielding still writes the header it was
+        // given, so an empty result reads as an empty table, not an empty file.
+        header();
+        await sink.flush();
+      } finally {
+        await sink.close();
+      }
+    }, part: part)).path,
+  );
 }

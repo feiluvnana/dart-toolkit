@@ -217,7 +217,7 @@ void main() {
 
     test('a file is just another sink', () async {
       final temp = Directory.systemTemp.createTempSync('dt_log_');
-      addTearDown(() => temp.deleteSync(recursive: true));
+      addTearDown(() => io.remove(temp.path));
       final path = '${temp.path}/run.log';
       final sink = File(path).openWrite();
 
@@ -324,20 +324,20 @@ void main() {
       final rows = [
         {'a': '1', 'b': '2'},
       ];
-      expect(io.csv.format(rows), 'a,b\n1,2\n');
-      expect(io.csv.format(rows, newline: '\r\n'), 'a,b\r\n1,2\r\n');
+      expect(format.csv.format(rows), 'a,b\n1,2\n');
+      expect(format.csv.format(rows, newline: '\r\n'), 'a,b\r\n1,2\r\n');
     });
 
     test('a header-only render honours it too', () {
       expect(
-        io.csv.format(const [], headers: ['a', 'b'], newline: '\r\n'),
+        format.csv.format(const [], headers: ['a', 'b'], newline: '\r\n'),
         'a,b\r\n',
       );
     });
 
     test('write puts CRLF on disk', () async {
       final temp = Directory.systemTemp.createTempSync('dt_csv_');
-      addTearDown(() => temp.deleteSync(recursive: true));
+      addTearDown(() => io.remove(temp.path));
       final path = '${temp.path}/out.csv';
 
       await io.csv.write(path, [
@@ -346,26 +346,30 @@ void main() {
 
       expect(File(path).readAsStringSync(), 'a\r\n1\r\n');
       // And it reads back as one row, not two.
-      expect((await io.csv.maps(path)).list, [
+      expect((await format.csv.read(path)).maps.iterable, [
         {'a': '1'},
       ]);
     });
 
-    test('the four readers are typed, two eager and two streaming', () async {
+    test('the eager cursor and the two streams agree', () async {
       final temp = Directory.systemTemp.createTempSync('dt_csv_');
-      addTearDown(() => temp.deleteSync(recursive: true));
+      addTearDown(() => io.remove(temp.path));
       final path = '${temp.path}/in.csv';
       File(path).writeAsStringSync('a,b\n1,2\n');
 
-      final Sequence<Map<String, String>> maps = await io.csv.maps(path);
-      final Sequence<List<String>> matrix = await io.csv.matrix(path);
+      final Csv sheet = await format.csv.read(path);
       final List<Map<String, String>> records = await io.csv
           .records(path)
           .toList();
       final List<List<String>> rows = await io.csv.rows(path).toList();
 
-      expect(maps.list, records);
-      expect(matrix.list, rows);
+      expect(sheet.maps.iterable, records);
+      // The cursor keeps the header out of the rows; the stream does not, so
+      // it is the header line plus what the cursor calls a row.
+      expect(sheet.headers.iterable, rows.first);
+      expect([
+        for (final row in sheet.rows.iterable) row.iterable,
+      ], rows.skip(1).toList());
     });
   });
 
@@ -407,7 +411,7 @@ void main() {
       final boxes = $(html).find('input');
       expect(boxes.value, 'yes');
       // An unticked box submits nothing, so it reads as absent.
-      expect(boxes.values.list, ['yes']);
+      expect(boxes.values.iterable, ['yes']);
     });
 
     test('a ticked box with no value reports on, as HTML says', () {
@@ -424,7 +428,7 @@ void main() {
           <input type="radio" name="r" value="2" checked>
         </form>
       ''';
-      expect($(html).find('input').values.list, ['2']);
+      expect($(html).find('input').values.iterable, ['2']);
     });
 
     test('a textarea and a plain input are unchanged', () {
@@ -440,11 +444,14 @@ void main() {
           '<main><div>Tom &amp; Jerry<br>caf&eacute;<br>&#65;&#66;</div></main>';
       // Stripping the tags left the entities behind in what is documented as
       // text.
-      expect($(html, 'div').lines.list, ['Tom & Jerry', 'café', 'AB']);
+      expect($(html, 'div').lines.iterable, ['Tom & Jerry', 'café', 'AB']);
     });
 
     test('lines without entities are untouched', () {
-      expect($('<main><div>a<br>b</div></main>', 'div').lines.list, ['a', 'b']);
+      expect($('<main><div>a<br>b</div></main>', 'div').lines.iterable, [
+        'a',
+        'b',
+      ]);
     });
   });
 
@@ -495,7 +502,7 @@ void main() {
       'unpacking restores the execute bit and the modification time',
       () async {
         final root = Directory.systemTemp.createTempSync('dt_zip_mode_');
-        addTearDown(() => root.deleteSync(recursive: true));
+        addTearDown(() => io.remove(root.path));
 
         final script = File('${root.path}/src/run.sh')
           ..createSync(recursive: true)
@@ -527,7 +534,7 @@ void main() {
 
     test('a plain file keeps its own mode', () async {
       final root = Directory.systemTemp.createTempSync('dt_zip_one_');
-      addTearDown(() => root.deleteSync(recursive: true));
+      addTearDown(() => io.remove(root.path));
 
       final file = File('${root.path}/notes.txt')..writeAsStringSync('hello');
       await system.run('chmod', ['600', file.path]);

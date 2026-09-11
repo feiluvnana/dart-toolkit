@@ -84,36 +84,36 @@ void main() {
 
   group('io Domain', () {
     test('the path members complete the set', () {
-      expect(io.cwd, isNotEmpty);
-      expect(io.abs('x.txt'), equals(io.join(io.cwd, 'x.txt')));
+      expect(io.dir.cwd, isNotEmpty);
+      expect(io.path.abs('x.txt'), equals(io.path.join(io.dir.cwd, 'x.txt')));
       expect(
-        io.rel(io.join(io.cwd, 'a', 'b.txt')),
-        equals(io.join('a', 'b.txt')),
+        io.path.rel(io.path.join(io.dir.cwd, 'a', 'b.txt')),
+        equals(io.path.join('a', 'b.txt')),
       );
       expect(
-        io.rel('/tmp/one/two.txt', from: '/tmp'),
-        equals(io.join('one', 'two.txt')),
+        io.path.rel('/tmp/one/two.txt', from: '/tmp'),
+        equals(io.path.join('one', 'two.txt')),
       );
     });
 
-    test('io.home and io.expand resolve what a shell would', () {
-      expect(io.home, isNotEmpty);
-      expect(io.expand('~'), equals(io.home));
+    test('io.dir.home and io.expand resolve what a shell would', () {
+      expect(io.dir.home, isNotEmpty);
+      expect(io.path.expand('~'), equals(io.dir.home));
       expect(
-        io.expand(io.join('~', '.config', 'x')),
-        equals(io.join(io.home, '.config', 'x')),
+        io.path.expand(io.path.join('~', '.config', 'x')),
+        equals(io.path.join(io.dir.home, '.config', 'x')),
       );
       expect(
-        io.expand('nested/~/x'),
+        io.path.expand('nested/~/x'),
         equals('nested/~/x'),
         reason: 'only a leading ~ expands, as in a shell',
       );
 
       final name = Platform.isWindows ? 'USERPROFILE' : 'HOME';
-      expect(io.expand('\$$name/x'), equals('${io.home}/x'));
-      expect(io.expand('\${$name}/x'), equals('${io.home}/x'));
+      expect(io.path.expand('\$$name/x'), equals('${io.dir.home}/x'));
+      expect(io.path.expand('\${$name}/x'), equals('${io.dir.home}/x'));
       expect(
-        io.expand('\$DT_DEFINITELY_NOT_SET/x'),
+        io.path.expand('\$DT_DEFINITELY_NOT_SET/x'),
         equals('/x'),
         reason: 'an unset name expands to nothing, as in a shell',
       );
@@ -122,21 +122,21 @@ void main() {
     test('io.sanitize removes or replaces illegal characters', () {
       const raw = 'Key: "Box" / 20th * Edition? <Special> | Path\\';
 
-      final ascii = io.sanitize(raw);
+      final ascii = io.path.sanitize(raw);
       for (final illegal in [':', '"', '/', r'\', '*', '?', '<', '>', '|']) {
         expect(ascii.contains(illegal), isFalse, reason: 'kept $illegal');
       }
 
-      final wide = io.sanitize(raw, full: true);
+      final wide = io.path.sanitize(raw, full: true);
       for (final replacement in ['：', '”', '／', '＼', '＊', '？', '＜', '＞', '｜']) {
         expect(wide, contains(replacement));
       }
     });
 
     test('io.write, io.has, io.read, io.copy, io.move are atomic', () async {
-      final temp = io.temp('toolkit_test_');
+      final temp = io.dir.temp('toolkit_test_');
       try {
-        final path = io.join(temp.path, 'sub', 'test.txt');
+        final path = io.path.join(temp.path, 'sub', 'test.txt');
         io.write(path, 'Hello Dart Toolkit!');
 
         expect(io.has(path), isTrue);
@@ -144,113 +144,113 @@ void main() {
         // The staging file is renamed into place, never left behind.
         expect(File('$path.part').existsSync(), isFalse);
 
-        final copied = io.join(temp.path, 'sub', 'copy.txt');
+        final copied = io.path.join(temp.path, 'sub', 'copy.txt');
         io.copy(path, copied);
         expect(io.read(copied), equals('Hello Dart Toolkit!'));
 
-        final moved = io.join(temp.path, 'sub2', 'moved.txt');
+        final moved = io.path.join(temp.path, 'sub2', 'moved.txt');
         io.move(copied, moved);
         expect(io.has(copied), isFalse);
         expect(io.has(moved), isTrue);
       } finally {
-        temp.deleteSync(recursive: true);
+        io.remove(temp.path);
       }
     });
 
     test('io.has treats a zero-length file as absent', () async {
-      final temp = io.temp('toolkit_empty_');
+      final temp = io.dir.temp('toolkit_empty_');
       try {
-        final path = io.join(temp.path, 'empty.txt');
+        final path = io.path.join(temp.path, 'empty.txt');
         File(path).writeAsStringSync('');
         expect(io.has(path), isFalse);
       } finally {
-        temp.deleteSync(recursive: true);
+        io.remove(temp.path);
       }
     });
 
     test('io.similar is opt-in and matches loosely-named siblings', () async {
-      final temp = io.temp('toolkit_similar_');
+      final temp = io.dir.temp('toolkit_similar_');
       try {
-        io.write(io.join(temp.path, 'thumb_cover.jpg'), 'x');
-        final wanted = io.join(temp.path, 'cover.jpg');
+        io.write(io.path.join(temp.path, 'thumb_cover.jpg'), 'x');
+        final wanted = io.path.join(temp.path, 'cover.jpg');
 
         // Off by default, so a download is not silently skipped.
         expect(io.has(wanted), isFalse);
         expect(io.similar(wanted), isTrue);
         expect(io.has(wanted, match: true), isTrue);
       } finally {
-        temp.deleteSync(recursive: true);
+        io.remove(temp.path);
       }
     });
 
     test('io path helpers join, base, name, ext, dir', () {
-      final path = io.join('parent', 'sub', 'file.mp3');
+      final path = io.path.join('parent', 'sub', 'file.mp3');
       expect(path.replaceAll(r'\', '/'), equals('parent/sub/file.mp3'));
-      expect(io.base(path), equals('file.mp3'));
-      expect(io.name(path), equals('file'));
-      expect(io.ext(path), equals('.mp3'));
-      expect(io.dir(path).replaceAll(r'\', '/'), equals('parent/sub'));
+      expect(io.path.filename(path), equals('file.mp3'));
+      expect(io.path.stem(path), equals('file'));
+      expect(io.path.ext(path), equals('.mp3'));
+      expect(io.path.dirname(path).replaceAll(r'\', '/'), equals('parent/sub'));
     });
 
     test('io.dump writes JSON and format.json reads it back', () async {
-      final temp = io.temp('toolkit_json_');
+      final temp = io.dir.temp('toolkit_json_');
       try {
-        final path = io.join(temp.path, 'data.json');
+        final path = io.path.join(temp.path, 'data.json');
         // dump returns a Future<File> that must be awaited, so the bytes are
         // on disk before the next read.
         final file = io.dump(path, {'hello': 'world', 'count': 42});
-        expect(file.existsSync(), isTrue);
+        expect(io.exists(file.path), isTrue);
 
         final data = await format.json.read(path);
         expect(data.text('hello'), equals('world'));
         expect(data.number('count'), equals(42));
 
-        final compact = io.join(temp.path, 'compact.json');
+        final compact = io.path.join(temp.path, 'compact.json');
         io.dump(compact, {'a': 1}, pretty: false);
         expect(io.read(compact), equals('{"a":1}'));
       } finally {
-        temp.deleteSync(recursive: true);
+        io.remove(temp.path);
       }
     });
 
     test('io.save writes bytes, io.bytes reads them', () async {
-      final temp = io.temp('toolkit_bytes_');
+      final temp = io.dir.temp('toolkit_bytes_');
       try {
-        final path = io.join(temp.path, 'blob.bin');
+        final path = io.path.join(temp.path, 'blob.bin');
         io.save(path, [1, 2, 3, 4]);
         expect(io.bytes(path), equals([1, 2, 3, 4]));
       } finally {
-        temp.deleteSync(recursive: true);
+        io.remove(temp.path);
       }
     });
 
     test('io.lines, io.hash, io.stat, io.find, io.sweep', () async {
-      final temp = io.temp('toolkit_meta_');
+      final temp = io.dir.temp('toolkit_meta_');
       try {
-        final path = io.join(temp.path, 'lines.txt');
+        final path = io.path.join(temp.path, 'lines.txt');
         io.write(path, 'one\ntwo\nthree');
 
-        expect(await io.lines(path).toList(), equals(['one', 'two', 'three']));
+        expect(io.lines(path).iterable, equals(['one', 'two', 'three']));
         expect(io.hash(path).length, equals(64));
         expect(io.hash(path, Algo.md5).length, equals(32));
-        expect(io.stat(path).size, greaterThan(0));
+        expect(io.size(path)!, greaterThan(0));
 
-        expect(io.find(temp.path).collect(.count()), equals(1));
+        expect(io.dir.find(temp.path).collect(.count()), equals(1));
         expect(
-          io.find(temp.path, pattern: RegExp(r'\.txt$')).collect(.count()),
+          io.dir.find(temp.path, pattern: RegExp(r'\.txt$')).collect(.count()),
           equals(1),
         );
-        expect(io.sweep(temp.path, pattern: RegExp(r'\.txt$')), equals(1));
+        expect(io.dir.sweep(temp.path, pattern: RegExp(r'\.txt$')), equals(1));
         expect(io.has(path), isFalse);
       } finally {
-        temp.deleteSync(recursive: true);
+        io.remove(temp.path);
       }
     });
 
     test('io.async mirrors io: read, bytes, json, hash, stat', () async {
-      final temp = io.temp('toolkit_async_');
+      final temp = io.dir.temp('toolkit_async_');
       try {
-        final txtPath = io.join(temp.path, 'sample.txt');
+        final txtPath = io.path.join(temp.path, 'sample.txt');
         io.write(txtPath, 'async content');
         expect(await io.async.read(txtPath), equals('async content'));
         expect(
@@ -258,46 +258,52 @@ void main() {
           equals(utf8.encode('async content')),
         );
         expect((await io.async.hash(txtPath)).length, equals(64));
-        expect((await io.async.stat(txtPath)).size, greaterThan(0));
+        expect((await io.async.size(txtPath))!, greaterThan(0));
 
-        final jsonPath = io.join(temp.path, 'data.json');
+        final jsonPath = io.path.join(temp.path, 'data.json');
         io.dump(jsonPath, {'key': 'val'});
         final decoded = await format.json.read(jsonPath);
         expect(decoded.text('key'), equals('val'));
       } finally {
-        temp.deleteSync(recursive: true);
+        io.remove(temp.path);
       }
     });
 
     test('io directory copy, move, and single-file remove', () async {
-      final temp = io.temp('toolkit_dir_ops_');
+      final temp = io.dir.temp('toolkit_dir_ops_');
       try {
-        final srcDir = io.join(temp.path, 'src');
-        final f1 = io.join(srcDir, 'a.txt');
-        final f2 = io.join(srcDir, 'nested', 'b.txt');
+        final srcDir = io.path.join(temp.path, 'src');
+        final f1 = io.path.join(srcDir, 'a.txt');
+        final f2 = io.path.join(srcDir, 'nested', 'b.txt');
         io.write(f1, 'file 1');
         io.write(f2, 'file 2');
 
         // Directory copy
-        final destDir = io.join(temp.path, 'dest');
+        final destDir = io.path.join(temp.path, 'dest');
         io.copy(srcDir, destDir);
-        expect(io.read(io.join(destDir, 'a.txt')), equals('file 1'));
-        expect(io.read(io.join(destDir, 'nested', 'b.txt')), equals('file 2'));
+        expect(io.read(io.path.join(destDir, 'a.txt')), equals('file 1'));
+        expect(
+          io.read(io.path.join(destDir, 'nested', 'b.txt')),
+          equals('file 2'),
+        );
 
         // Directory move
-        final movedDir = io.join(temp.path, 'moved');
+        final movedDir = io.path.join(temp.path, 'moved');
         io.move(destDir, movedDir);
         expect(Directory(destDir).existsSync(), isFalse);
-        expect(io.read(io.join(movedDir, 'a.txt')), equals('file 1'));
+        expect(io.read(io.path.join(movedDir, 'a.txt')), equals('file 1'));
 
         // Single entity remove
-        expect(io.remove(io.join(movedDir, 'a.txt')), isTrue);
-        expect(io.has(io.join(movedDir, 'a.txt')), isFalse);
-        expect(io.remove(io.join(movedDir, 'a.txt')), isFalse); // already gone
+        expect(io.remove(io.path.join(movedDir, 'a.txt')), isTrue);
+        expect(io.has(io.path.join(movedDir, 'a.txt')), isFalse);
+        expect(
+          io.remove(io.path.join(movedDir, 'a.txt')),
+          isFalse,
+        ); // already gone
         expect(io.remove(movedDir), isTrue); // directory removal
         expect(Directory(movedDir).existsSync(), isFalse);
       } finally {
-        temp.deleteSync(recursive: true);
+        io.remove(temp.path);
       }
     });
   });
@@ -352,8 +358,8 @@ void main() {
       final dir = Directory('.dart_tool/toolkit_exit_test')
         ..createSync(recursive: true);
       try {
-        final script = io.join(dir.path, 'writer.dart');
-        final output = io.join(dir.path, 'out.txt');
+        final script = io.path.join(dir.path, 'writer.dart');
+        final output = io.path.join(dir.path, 'out.txt');
         io.write(script, '''
 import 'package:dart_toolkit/dart_toolkit.dart';
 void main() async {
@@ -374,7 +380,7 @@ void main() async {
         expect(result.out, contains('wrote'));
         expect(io.read(output), equals('hi'));
       } finally {
-        dir.deleteSync(recursive: true);
+        io.remove(dir.path);
       }
     }, timeout: const Timeout(Duration(seconds: 90)));
   });
@@ -385,7 +391,7 @@ void main() async {
         await util.time.wait(10.ms);
         return n * 10;
       }, size: 2);
-      expect(processed.list, containsAll([10, 20, 30, 40, 50]));
+      expect(processed.iterable, containsAll([10, 20, 30, 40, 50]));
     });
 
     test(
@@ -396,7 +402,7 @@ void main() async {
           return 'item-$n';
         }, size: 4);
         expect(
-          results.list,
+          results.iterable,
           equals(['item-30', 'item-10', 'item-20', 'item-5']),
         );
       },
@@ -412,19 +418,19 @@ void main() async {
       expect(outcomes.collect(.count()), equals(3));
       // Matching is the point: `value` is non-nullable inside Done, and the
       // error only exists inside Broke.
-      expect(outcomes.list[0], isA<Done<int>>());
-      expect((outcomes.list[0] as Done<int>).value, equals(10));
-      expect(outcomes.list[1], isA<Broke<int>>());
+      expect(outcomes.collect(.list())[0], isA<Done<int>>());
+      expect((outcomes.collect(.list())[0] as Done<int>).value, equals(10));
+      expect(outcomes.collect(.list())[1], isA<Broke<int>>());
       expect(
-        (outcomes.list[1] as Broke<int>).error.toString(),
+        (outcomes.collect(.list())[1] as Broke<int>).error.toString(),
         contains('fail on 2'),
       );
-      expect((outcomes.list[1] as Broke<int>).stack, isNotNull);
-      expect(outcomes.list[2].ok, isTrue);
-      expect(outcomes.list[2].value, equals(30));
+      expect((outcomes.collect(.list())[1] as Broke<int>).stack, isNotNull);
+      expect(outcomes.collect(.list())[2].ok, isTrue);
+      expect(outcomes.collect(.list())[2].value, equals(30));
 
       final saved = [
-        for (final outcome in outcomes.list)
+        for (final outcome in outcomes.iterable)
           switch (outcome) {
             Done(:final value) => 'ok:$value',
             Broke(:final error) => 'bad:${error is Exception}',
@@ -670,9 +676,9 @@ void main() async {
     });
 
     test('env.load reads a .env file with comments and quotes', () async {
-      final temp = io.temp('env_test_');
+      final temp = io.dir.temp('env_test_');
       try {
-        final path = io.join(temp.path, '.env');
+        final path = io.path.join(temp.path, '.env');
         io.write(path, '''
           # This is a comment
           export DB_HOST=localhost
@@ -684,7 +690,10 @@ void main() async {
 
         system.env.clear();
         expect(system.env.load(path), isTrue);
-        expect(system.env.load(io.join(temp.path, 'missing.env')), isFalse);
+        expect(
+          system.env.load(io.path.join(temp.path, 'missing.env')),
+          isFalse,
+        );
 
         expect(system.env.get('DB_HOST', ''), equals('localhost'));
         expect(system.env.get('DB_PORT', 0), equals(5432));
@@ -692,7 +701,7 @@ void main() async {
         expect(system.env.get('DB_SSL', true), isFalse);
         expect(system.env.get('API_KEY', ''), equals('secret_123'));
       } finally {
-        temp.deleteSync(recursive: true);
+        io.remove(temp.path);
         system.env.clear();
       }
     });
@@ -724,14 +733,14 @@ void main() async {
         res.parse(format.html).find('img').attr('src'),
         equals('/images/pic.png'),
       );
-      expect(res.parse(format.html).lines.list, contains('Welcome'));
+      expect(res.parse(format.html).lines.iterable, contains('Welcome'));
 
-      final temp = io.temp('http_test_');
+      final temp = io.dir.temp('http_test_');
       try {
-        final saved = await res.save(io.join(temp.path, 'page.html'));
-        expect(saved.readAsStringSync(), contains('Welcome'));
+        final saved = await res.save(io.path.join(temp.path, 'page.html'));
+        expect(io.read(saved.path), contains('Welcome'));
       } finally {
-        temp.deleteSync(recursive: true);
+        io.remove(temp.path);
       }
     });
 
@@ -970,20 +979,20 @@ void main() async {
       });
 
       final root = 'http://${server.address.host}:${server.port}';
-      final temp = io.temp('download_test_');
+      final temp = io.dir.temp('download_test_');
       try {
-        final one = io.join(temp.path, 'one.txt');
+        final one = io.path.join(temp.path, 'one.txt');
         await net.http.download('$root/one'.url, one);
         expect(io.read(one), equals('body of /one'));
 
         await net.http.sync({
-          io.join(temp.path, 'a.txt'): '$root/a'.url,
-          io.join(temp.path, 'b.txt'): '$root/b'.url,
+          io.path.join(temp.path, 'a.txt'): '$root/a'.url,
+          io.path.join(temp.path, 'b.txt'): '$root/b'.url,
         });
-        expect(io.read(io.join(temp.path, 'a.txt')), equals('body of /a'));
-        expect(io.read(io.join(temp.path, 'b.txt')), equals('body of /b'));
+        expect(io.read(io.path.join(temp.path, 'a.txt')), equals('body of /a'));
+        expect(io.read(io.path.join(temp.path, 'b.txt')), equals('body of /b'));
       } finally {
-        temp.deleteSync(recursive: true);
+        io.remove(temp.path);
         await server.close(force: true);
       }
     });
@@ -998,35 +1007,44 @@ void main() async {
         });
 
         final root = 'http://${server.address.host}:${server.port}';
-        final temp = io.temp('download_fail_');
+        final temp = io.dir.temp('download_fail_');
         final client = Fetcher(retries: 0);
         try {
           await expectLater(
-            client.download('$root/missing'.url, io.join(temp.path, 'x.txt')),
+            client.download(
+              '$root/missing'.url,
+              io.path.join(temp.path, 'x.txt'),
+            ),
             throwsA(isA<HttpException>()),
           );
-          expect(io.has(io.join(temp.path, 'x.txt')), isFalse);
+          expect(io.has(io.path.join(temp.path, 'x.txt')), isFalse);
         } finally {
           await client.close();
-          temp.deleteSync(recursive: true);
+          io.remove(temp.path);
           await server.close(force: true);
         }
       },
     );
   });
 
-  group('io.csv Sub-namespace', () {
+  group('format.csv and io.csv', () {
     test('parse and format handle quotes and delimiters', () {
       const input =
           'id,name,role\n1,"Alice, Chief",admin\n2,"Bob ""The Builder""",user';
-      final matrix = io.csv.parse(input);
+      final sheet = format.csv.parse(input);
 
-      expect(matrix.collect(.count()), equals(3));
-      expect(matrix.list[0], equals(['id', 'name', 'role']));
-      expect(matrix.list[1][1], equals('Alice, Chief'));
-      expect(matrix.list[2][1], equals('Bob "The Builder"'));
+      expect(sheet.headers.iterable, equals(['id', 'name', 'role']));
+      expect(sheet.count, equals(2));
+      expect(
+        sheet.rows.collect(.list())[0].collect(.list())[1],
+        equals('Alice, Chief'),
+      );
+      expect(
+        sheet.rows.collect(.list())[1].collect(.list())[1],
+        equals('Bob "The Builder"'),
+      );
 
-      final formatted = io.csv.format([
+      final formatted = format.csv.format([
         {'id': 1, 'name': 'Alice'},
         {'id': 2, 'name': 'Bob'},
       ]);
@@ -1034,47 +1052,43 @@ void main() async {
       expect(formatted, contains('1,Alice'));
     });
 
-    test(
-      'maps and matrix read the two shapes, without a type argument',
-      () async {
-        final temp = io.temp('csv_test_');
-        try {
-          final path = io.join(temp.path, 'test.csv');
-          await io.csv.write(path, [
-            {'fruit': 'Apple', 'price': '1.50'},
-            {'fruit': 'Banana', 'price': '0.75'},
-          ]);
+    test('one cursor carries both shapes, and read comes free', () async {
+      final temp = io.dir.temp('csv_test_');
+      try {
+        final path = io.path.join(temp.path, 'test.csv');
+        await io.csv.write(path, [
+          {'fruit': 'Apple', 'price': '1.50'},
+          {'fruit': 'Banana', 'price': '0.75'},
+        ]);
 
-          final rows = await io.csv.maps(path);
-          expect(rows.collect(.count()), equals(2));
-          expect(rows.collect(.first())?['fruit'], equals('Apple'));
-          expect(rows.collect(.first())?['price'], equals('1.50'));
+        final sheet = await format.csv.read(path);
+        expect(sheet.maps.collect(.count()), equals(2));
+        expect(sheet.maps.collect(.first())?['fruit'], equals('Apple'));
+        expect(sheet.maps.collect(.first())?['price'], equals('1.50'));
 
-          final grid = await io.csv.matrix(path);
-          expect(
-            grid.collect(.count()),
-            equals(3),
-          ); // header plus two data rows
+        expect(sheet.headers.iterable, equals(['fruit', 'price']));
+        expect(sheet.rows.collect(.count()), equals(2));
+        expect(sheet.column('fruit').iterable, equals(['Apple', 'Banana']));
+        expect(sheet.column('nope').collect(.empty()), isTrue);
 
-          expect(
-            (await io.csv.maps(
-              io.join(temp.path, 'missing.csv'),
-            )).collect(.empty()),
-            isTrue,
-          );
-        } finally {
-          temp.deleteSync(recursive: true);
-        }
-      },
-    );
+        // A file that is not there reads as the empty cursor, like every
+        // other codec's read.
+        final missing = await format.csv.read(
+          io.path.join(temp.path, 'missing.csv'),
+        );
+        expect(missing.empty, isTrue);
+      } finally {
+        io.remove(temp.path);
+      }
+    });
 
     test('cells renders a grid, and io.write puts it on disk', () async {
-      final temp = io.temp('csv_dump_');
+      final temp = io.dir.temp('csv_dump_');
       try {
-        final path = io.join(temp.path, 'grid.csv');
+        final path = io.path.join(temp.path, 'grid.csv');
         io.write(
           path,
-          io.csv.cells(
+          format.csv.cells(
             [
               [1, 'a'],
               [2, 'b'],
@@ -1082,25 +1096,26 @@ void main() async {
             headers: ['n', 'letter'],
           ),
         );
+        final sheet = await format.csv.read(path);
+        expect(sheet.headers.iterable, equals(['n', 'letter']));
         expect(
-          (await io.csv.matrix(path)).list,
+          [for (final row in sheet.rows.iterable) row.iterable],
           equals([
-            ['n', 'letter'],
             ['1', 'a'],
             ['2', 'b'],
           ]),
         );
       } finally {
-        temp.deleteSync(recursive: true);
+        io.remove(temp.path);
       }
     });
 
     test(
       'io.csv.rows and records read rows without loading all into memory',
       () async {
-        final temp = io.temp('csv_stream_');
+        final temp = io.dir.temp('csv_stream_');
         try {
-          final path = io.join(temp.path, 'stream.csv');
+          final path = io.path.join(temp.path, 'stream.csv');
           io.write(
             path,
             'id,name\n1,"Alpha, 1"\n2,"Beta ""The Second"""\n3,Gamma\n',
@@ -1123,7 +1138,7 @@ void main() async {
           // The typed pair: rows() yields cells, records() yields maps.
           expect(await io.csv.records(path).toList(), equals(mapRows));
         } finally {
-          temp.deleteSync(recursive: true);
+          io.remove(temp.path);
         }
       },
     );
@@ -1131,13 +1146,13 @@ void main() async {
 
   group('io.dictionary', () {
     test('an absent file reads as an empty dictionary', () {
-      final temp = io.temp('dict_absent_');
+      final temp = io.dir.temp('dict_absent_');
       try {
-        final db = io.dictionary(io.join(temp.path, 'nothing.json'));
+        final db = io.dictionary(io.path.join(temp.path, 'nothing.json'));
         expect(db.empty, isTrue);
         expect(db.count, equals(0));
       } finally {
-        temp.deleteSync(recursive: true);
+        io.remove(temp.path);
       }
     });
 
@@ -1159,9 +1174,9 @@ void main() async {
     });
 
     test('a slot can carry a type JSON does not', () async {
-      final temp = io.temp('dict_coded_');
+      final temp = io.dir.temp('dict_coded_');
       try {
-        final path = io.join(temp.path, 'coded.json');
+        final path = io.path.join(temp.path, 'coded.json');
         io.dictionary(path)
           ..write(_since, DateTime.utc(2026, 3, 1))
           ..dump(path);
@@ -1175,14 +1190,14 @@ void main() async {
           equals(DateTime.utc(2026, 3, 1)),
         );
       } finally {
-        temp.deleteSync(recursive: true);
+        io.remove(temp.path);
       }
     });
 
     test('dump persists and io.dictionary reloads', () {
-      final temp = io.temp('dict_test_');
+      final temp = io.dir.temp('dict_test_');
       try {
-        final path = io.join(temp.path, 'cache.json');
+        final path = io.path.join(temp.path, 'cache.json');
         Dictionary<String, Object?>()
           ..write(_userId, 'user_101')
           ..write(_visits, 5)
@@ -1197,35 +1212,35 @@ void main() async {
         reopened.clear();
         expect(reopened.empty, isTrue);
       } finally {
-        temp.deleteSync(recursive: true);
+        io.remove(temp.path);
       }
     });
 
     test('dump writes a sequence as a JSON array', () async {
-      final temp = io.temp('dict_dump_');
+      final temp = io.dir.temp('dict_dump_');
       try {
-        final path = io.join(temp.path, 'rows.json');
+        final path = io.path.join(temp.path, 'rows.json');
         [1, 2, 3].seq.dump(path);
         expect((await format.json.read(path)).raw, equals([1, 2, 3]));
 
-        final objects = io.join(temp.path, 'by-host.json');
+        final objects = io.path.join(temp.path, 'by-host.json');
         Dictionary<String, int>(const {'a.com': 2}).dump(objects);
         expect((await format.json.read(objects)).raw, equals({'a.com': 2}));
       } finally {
-        temp.deleteSync(recursive: true);
+        io.remove(temp.path);
       }
     });
 
     test(
       'a file that is not a JSON object is a broken file, not an empty one',
       () {
-        final temp = io.temp('dict_broken_');
+        final temp = io.dir.temp('dict_broken_');
         try {
-          final path = io.join(temp.path, 'broken.json');
+          final path = io.path.join(temp.path, 'broken.json');
           io.write(path, '[1, 2, 3]');
           expect(() => io.dictionary(path), throwsFormatException);
         } finally {
-          temp.deleteSync(recursive: true);
+          io.remove(temp.path);
         }
       },
     );
@@ -1396,14 +1411,19 @@ void main() async {
         expect(result.ok, isFalse);
         expect(result.out.isNotEmpty || result.err.isNotEmpty, isTrue);
       } finally {
-        repo.deleteSync(recursive: true);
+        io.remove(repo.path);
       }
     });
   });
 
   group('Domain namespaces', () {
-    test('io exposes csv', () {
-      expect(io.csv, isA<CsvAccessor>());
+    test('io exposes path, dir and csv; format exposes the codec', () {
+      expect(io.path, isA<PathAccessor>());
+      expect(io.dir, isA<DirAccessor>());
+      expect(io.async.dir, isA<DirAsyncAccessor>());
+      expect(io.csv, isA<CsvFileAccessor>());
+      expect(format.csv, isA<CsvAccessor>());
+      expect(format.csv, isA<Codec<Csv>>());
     });
 
     test('net exposes http and crawl', () {

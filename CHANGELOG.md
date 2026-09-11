@@ -2,6 +2,220 @@
 
 All notable changes to this project will be documented in this file.
 
+## 5.2.0
+
+The filesystem. The complaint was three things at once — *the naming is not
+unified, it lacks features like listing a folder, and it is hard to use* — and
+all three checked out. `io` was 55 members across two accessors documented as
+mirrors that were not; **the single most common filesystem question, does this
+path exist, had no answer in the API**; and listing a directory was impossible,
+because the one member that walked the disk silently dropped every directory it
+found.
+
+There was a fourth thing, which is not about names or holes: **two of `io`'s
+sub-namespaces did not belong to `io`, and two more needed to exist.**
+
+### Six moves
+
+**1. One question per member.** `io.has` meant *a file exists and holds at
+least one byte* — a useful question, and three questions fused into one whose
+ingredients were not available separately:
+
+```dart
+io.has('a.txt');      // true   — a file with content
+io.has('empty.txt');  // false  — a file that exists, with zero bytes
+io.has('emptydir');   // false  — a directory that exists
+io.has('nope.txt');   // false  — nothing there
+```
+
+Three of those `false`s mean different things and a caller could not tell them
+apart. A script writing `if (!io.has(dir)) io.mkdir(dir)` was correct by
+accident; one writing `if (io.has(out)) skip()` silently reprocessed every
+zero-byte file forever.
+
+```dart
+io.exists(path);   // anything at all: file, directory or link
+io.isfile(path);   io.isdir(path);   io.islink(path);
+io.size(path);     // int?, null when there is nothing there
+io.empty(path);    // exists and has nothing in it
+```
+
+`io.has` **keeps its name and its meaning**, because that composite is
+genuinely what a resumable script asks and it had 29 call sites.
+
+**2. Listing, walking, and an entry that knows what it is.** `io.find` returned
+`Sequence<File>`: directories dropped, symlinks returned as if they were files,
+no way to ask what kind of thing an entry was. Listing a folder, finding
+subdirectories, walking a tree yourself and spotting a link before following it
+were all impossible.
+
+```dart
+io.dir.list('out');                      // one level, everything
+io.dir.list('out', only: .directory);
+io.dir.walk('src', match: '**/*.dart');  // a glob, not RegExp(r'\.dart$')
+io.dir.walk('src', depth: 2);
+io.dir.walk('src', follow: false);
+io.dir.glob('out/report-{2024,2025}.json');
+```
+
+`list` is one level and returns everything; `walk` is recursive. That is the
+split Python (`iterdir`/`walk`), Node and Go all make, and `io.find` carried
+both on one member with a `recursive:` flag while also filtering to files.
+`io.find` **stays**, narrowed to what its name says.
+
+**`FileSystemEntry` is what took the API back.** Seventeen `io` signatures
+returned `File`, `Directory`, `FileSystemEntity` or `FileStat` — four
+`dart:io` types whose API this library does not control, does not document and
+cannot change. Counted across `lib`, `test`, `example`, `docs` and the root
+documents: **one** call chained off a returned handle, and **zero** assigned
+one to a typed variable. Seventeen signatures leaked a dependency to buy one
+`.path`.
+
+```dart
+for (final entry in io.dir.list('out').iterable) {
+  if (entry.isdir) continue;
+  if (entry.ext == '.part') io.remove(entry.path);
+  log.info('${entry.name}  ${util.size.format(entry.size)}');
+}
+```
+
+Every one of those lines used to be a separate `io.stat` or a `p.extension`.
+It is a **snapshot**, not a handle — no descriptor, nothing to close, so every
+`io` call stays complete in itself. `FileSystemEntry.entity` is the one
+deliberate door out, the way `Json.raw` and `Markup.document` are.
+
+The sweep went past `io`: `net.http.download`, `Reply.save`, `Downloader.save`,
+`HttpCache.write`, `format.zip.pack` and `format.zip.bundle` return one too, so
+**no public signature in the library names a `dart:io` type**.
+
+**3. Two sub-namespaces out of `io`, and the names that follow.** Creating a
+directory is not what `io` is mainly for, and neither is listing one. Rule 3
+says a cohesive vocabulary with its own nouns gets its own name:
+
+| Through 5.1.0 | Now | |
+| :--- | :--- | :--- |
+| `io.join`, `io.abs`, `io.rel`, `io.expand`, `io.sanitize`, `io.ext` | `io.path.*` | nothing here touches the disk |
+| `io.dir(path)` | `io.path.dirname(path)` | it returned the parent and read like it made one |
+| `io.base(path)` | `io.path.filename(path)` | keeps the extension |
+| `io.name(path)` | `io.path.stem(path)` | drops it |
+| `io.mkdir`, `io.temp`, `io.find`, `io.sweep` | `io.dir.make`, `io.dir.temp`, `io.dir.find`, `io.dir.sweep` | addressed by a directory |
+| `io.parent(path)` | `io.dir.makeparent(path)` | it *creates*; it read like it returns |
+| `io.cwd`, `io.home` | `io.dir.cwd`, `io.dir.home` | they are directories |
+
+`base` and `name` differed only in whether the extension survived, which
+neither word said. And the `dir`/`parent` swap was checked rather than assumed:
+renaming `parent` to *read* while `dir` meant *create* would have left every
+existing `io.parent(...)` call compiling, because a call in statement position
+discards its result — so four call sites would have quietly stopped creating
+the directory they were there to create, with no test and no analyzer to catch
+it. Moving both to different namespaces makes every old call site fail to
+compile, which is the only acceptable shape for a rename that changes what a
+name means.
+
+`io.path.join` cost 118 call sites. Taken deliberately: an exception to the
+rule is worse than three extra characters.
+
+**4. The missing members, and the mirror made true.**
+
+```dart
+io.append(path, text);      // and io.async.append — the one non-atomic write
+io.touch(path);             // create empty, or update mtime
+io.path.normalize(path);
+io.path.parts(path);        // Sequence<String>
+io.lines(path);             // now truly blocking: Sequence<String>
+io.async.lines(path);       // stays Stream<String>
+```
+
+NAMESPACE.md Rule 3 said `io.async` *"mirrors `io` exactly"*, and it did not:
+`download` existed only on the async side, `lock`/`locked`/`watch` only on the
+blocking one, and `lines` returned a `Stream` from both — including from the
+accessor whose whole promise is that it blocks.
+
+**`io.async.download` is gone**, and not replaced. A blocking twin cannot be
+written — Dart has no synchronous HTTP and no way to block on a `Future` — and
+it was a second spelling of `net.http.download`, which Rule 5 forbids. A socket
+is `net`'s.
+
+Rule 3 now says what a complete mirror can actually mean: every member that has
+both forms appears on both sides under one name, with `lock`, `locked`, `watch`
+and `io.path` outside it because they have no second form. `io.lines` is the
+one member whose *shape* differs, and that is the mirror working rather than
+failing. `test/regression_test.dart` pins the exception set the way 4.0.0
+pinned *no HTML parser under `lib/net/`*.
+
+**5. CSV becomes a format.** Rule 1 is explicit that a file format is a
+*subject* — the sentence that admitted `format.zip`, then `format.json`,
+`yaml`, `toml` and `html`. CSV was the only one left outside, for a historical
+reason rather than a rule. 4.0.0 and 5.0.0 both deferred it fearing two
+spellings for *read a CSV file*; the `Codec` seam 4.0.0 built is what answers
+that, since `read` comes from `FileCodec` exactly as it does for the other five.
+
+```dart
+final sheet = format.csv.parse(text);          // Csv
+final sheet = await format.csv.read('a.csv');  // free, from FileCodec
+io.write('out.csv', format.csv.format(rows));
+
+final sheet = res.parse(format.csv);           // and this now works
+```
+
+That last line is the unlock: a crawl that fetches a CSV export had no way to
+read it through the seam every other format goes through.
+
+`Csv` is the cursor, in `util` beside `Json` and `Markup` — `Table` is taken by
+`system.console`, so it is named for what it is over. `io.csv.maps` and
+`io.csv.matrix` were two methods for two shapes, so you chose before you had
+seen the file; they are `sheet.maps` and `sheet.rows` off one parse now, plus
+`headers`, `column(name)`, `count` and `empty`.
+
+`io.csv` keeps `rows`, `records`, `write` and `pipe` — the four that are about
+a file larger than memory rather than about CSV.
+
+**And the two independent parsers became one.** 5.0.0 proved they agreed on all
+fifteen awkward inputs it tested, which was the precondition for merging them
+rather than a substitute for it: two parsers that agree today are two parsers
+that drift at the next bug fix. One state machine now, driven two ways — a
+whole string, or a chunk at a time.
+
+**6. `io.dir.sweep`, `io.dir.find`.** See move 3.
+
+### The surface
+
+| | 5.1.0 | 5.2.0 |
+| :--- | ---: | ---: |
+| `io` itself | 35 | 24 |
+| `io.path` | — | 11 |
+| `io.dir` | — | 10 |
+| `io.async` | 20 | 21 (+ `io.async.dir`) |
+| `io.csv` | 9 | 4 (+ 4 in `format.csv`) |
+| Signatures naming a `dart:io` type | 17 | 0 (+1 door) |
+| Questions with no answer | 6 | 0 |
+
+The filesystem half grew and the rest shrank. 5.0.0 and 5.1.0 shrank things
+because they were duplicates; the six members that close the
+`exists`/`isdir`/`size` gap are absences, and an API that cannot say whether a
+path exists is not small, it is incomplete.
+
+### Migration
+
+| Through 5.1.0 | 5.2.0 |
+| :--- | :--- |
+| `io.join`, `io.abs`, `io.rel`, `io.ext`, `io.expand`, `io.sanitize` | `io.path.*`, same names |
+| `io.dir(path)` | `io.path.dirname(path)` |
+| `io.base(path)` / `io.name(path)` | `io.path.filename(path)` / `io.path.stem(path)` |
+| `io.mkdir` / `io.parent` / `io.temp` | `io.dir.make` / `io.dir.makeparent` / `io.dir.temp` |
+| `io.find` / `io.sweep` | `io.dir.find` / `io.dir.sweep` |
+| `io.cwd` / `io.home` | `io.dir.cwd` / `io.dir.home` |
+| `io.stat(path).size` | `io.size(path)` — nullable, since the path may not be there |
+| `io.lines(path)` as a `Stream` | `io.async.lines(path)` |
+| `io.async.download(url, path)` | `net.http.download(url, path)` |
+| `io.csv.parse` / `format` / `cells` | `format.csv.parse` / `format` / `cells` |
+| `io.csv.maps(path)` | `(await format.csv.read(path)).maps` |
+| `io.csv.matrix(path)` | `(await format.csv.read(path)).rows` — without the header line, which is `.headers` |
+| a returned `File` / `Directory` / `FileStat` | `FileSystemEntry`; `.entity` for the `dart:io` handle |
+
+Every one of these fails to compile rather than changing behaviour quietly,
+which was the constraint the `dir`/`parent` swap was designed around.
+
 ## 5.1.0
 
 The vocabulary. `Sequence` had fifty-eight methods, and the complaint was not

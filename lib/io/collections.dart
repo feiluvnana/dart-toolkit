@@ -14,8 +14,7 @@
 /// extra import at all.
 library;
 
-import 'dart:io';
-
+import '../collection/collector.dart';
 import '../collection/dictionary.dart';
 import '../collection/sequence.dart';
 import 'io.dart';
@@ -34,8 +33,11 @@ extension Dumpable<T> on Sequence<T> {
   ///
   /// Every element has to survive `jsonEncode`, which for a type of your own
   /// means a `toJson`. Reading one back is `format.json.read`.
-  File dump(String path, {bool pretty = true, String part = '.part'}) =>
-      io.dump(path, list, pretty: pretty, part: part);
+  FileSystemEntry dump(
+    String path, {
+    bool pretty = true,
+    String part = '.part',
+  }) => io.dump(path, collect(Collector.list()), pretty: pretty, part: part);
 }
 
 /// Writing a [Dictionary] to a JSON file, and reading one back.
@@ -49,6 +51,9 @@ extension DictionaryDumpable<K, V> on Dictionary<K, V> {
   ///
   /// `io.dictionary` reads one back. The keys are written as JSON object keys,
   /// so a non-string [K] arrives back as its `toString`.
-  File dump(String path, {bool pretty = true, String part = '.part'}) =>
-      io.dump(path, map, pretty: pretty, part: part);
+  FileSystemEntry dump(
+    String path, {
+    bool pretty = true,
+    String part = '.part',
+  }) => io.dump(path, map, pretty: pretty, part: part);
 }

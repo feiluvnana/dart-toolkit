@@ -231,7 +231,9 @@ void main() {
   group('net.crawl().resume', () {
     test('an interrupted crawl leaves its unfetched queue on disk', () async {
       final path = _tempPath('crawl.state');
-      addTearDown(() => Directory(io.dir(path)).deleteSync(recursive: true));
+      addTearDown(
+        () => Directory(io.path.dirname(path)).deleteSync(recursive: true),
+      );
 
       final stats = await net
           .crawl<String>('https://example.com/1'.url)
@@ -244,7 +246,7 @@ void main() {
           .resume(path)
           .run((res) {
             for (final href
-                in res.parse(format.html).find('a').attrs('href').list) {
+                in res.parse(format.html).find('a').attrs('href').iterable) {
               res.follow(href);
             }
           });
@@ -267,7 +269,9 @@ void main() {
 
     test('a second run fetches what the first one did not', () async {
       final path = _tempPath('crawl.state');
-      addTearDown(() => Directory(io.dir(path)).deleteSync(recursive: true));
+      addTearDown(
+        () => Directory(io.path.dirname(path)).deleteSync(recursive: true),
+      );
 
       const pages = {
         'https://example.com/1': '<a href="/2">2</a><a href="/3">3</a>',
@@ -282,12 +286,12 @@ void main() {
           .collect((res) {
             res.emit(res.url.toString());
             for (final href
-                in res.parse(format.html).find('a').attrs('href').list) {
+                in res.parse(format.html).find('a').attrs('href').iterable) {
               res.follow(href);
             }
           });
 
-      expect(first.list, ['https://example.com/1']);
+      expect(first.iterable, ['https://example.com/1']);
 
       final second = await net
           .crawl<String>('https://example.com/1'.url)
@@ -296,7 +300,7 @@ void main() {
           .collect((res) {
             res.emit(res.url.toString());
             for (final href
-                in res.parse(format.html).find('a').attrs('href').list) {
+                in res.parse(format.html).find('a').attrs('href').iterable) {
               res.follow(href);
             }
           });
@@ -304,7 +308,7 @@ void main() {
       // The seed is not fetched again, and the pages the first leg queued but
       // never reached are.
       expect(
-        second.list,
+        second.iterable,
         unorderedEquals(<String>[
           'https://example.com/2',
           'https://example.com/3',
@@ -316,7 +320,9 @@ void main() {
 
     test('limit counts the whole crawl, not each leg of it', () async {
       final path = _tempPath('crawl.state');
-      addTearDown(() => Directory(io.dir(path)).deleteSync(recursive: true));
+      addTearDown(
+        () => Directory(io.path.dirname(path)).deleteSync(recursive: true),
+      );
 
       const pages = {
         'https://example.com/1': '<a href="/2">2</a><a href="/3">3</a>',
@@ -332,7 +338,7 @@ void main() {
           .limit(2)
           .run((res) {
             for (final href
-                in res.parse(format.html).find('a').attrs('href').list) {
+                in res.parse(format.html).find('a').attrs('href').iterable) {
               res.follow(href);
             }
           });
@@ -347,7 +353,9 @@ void main() {
 
     test('a corrupt resume file throws instead of starting over', () async {
       final path = _tempPath('crawl.state');
-      addTearDown(() => Directory(io.dir(path)).deleteSync(recursive: true));
+      addTearDown(
+        () => Directory(io.path.dirname(path)).deleteSync(recursive: true),
+      );
       File(path).writeAsStringSync('{not json');
 
       expect(
@@ -364,7 +372,9 @@ void main() {
       'a finished crawl leaves no watcher holding the process open',
       () async {
         final path = _tempPath('crawl.state');
-        addTearDown(() => Directory(io.dir(path)).deleteSync(recursive: true));
+        addTearDown(
+          () => Directory(io.path.dirname(path)).deleteSync(recursive: true),
+        );
 
         await net
             .crawl<String>('https://example.com/1'.url)

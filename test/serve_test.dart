@@ -72,9 +72,9 @@ void main() {
     });
 
     test('a file reply streams, and a missing one is a 404', () async {
-      final dir = io.temp('dt_serve_');
+      final dir = io.dir.temp('dt_serve_');
       try {
-        final page = io.join(dir.path, 'index.html');
+        final page = io.path.join(dir.path, 'index.html');
         io.write(page, '<h1>hi</h1>');
         final one = await net.serve(0, (req) async => Served.file(page));
         try {
@@ -89,7 +89,7 @@ void main() {
 
         final gone = await net.serve(
           0,
-          (req) async => Served.file(io.join(dir.path, 'absent.html')),
+          (req) async => Served.file(io.path.join(dir.path, 'absent.html')),
         );
         try {
           expect(
@@ -102,7 +102,7 @@ void main() {
           await gone.close(force: true);
         }
       } finally {
-        dir.deleteSync(recursive: true);
+        io.remove(dir.path);
       }
     });
 

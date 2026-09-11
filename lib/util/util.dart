@@ -27,6 +27,7 @@ import 'text.dart';
 import 'time.dart';
 
 export 'codec.dart';
+export 'csv.dart';
 export 'extensions.dart';
 export 'hash.dart';
 export 'json.dart';

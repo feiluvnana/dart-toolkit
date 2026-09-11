@@ -11,6 +11,7 @@ import 'dart:io' hide HttpClient;
 
 import 'package:http/http.dart' as http;
 
+import '../io/entry.dart';
 import '../src/fs.dart';
 import 'net.dart';
 
@@ -111,7 +112,7 @@ abstract class Downloader<T> with PathResolver {
   ///
   /// Implementations should skip work when the destination already exists and
   /// let failures propagate.
-  Future<File> save(
+  Future<FileSystemEntry> save(
     Uri source,
     String path, {
     void Function(int received, int total)? onProgress,
@@ -402,7 +403,7 @@ class HttpDownloader<T> extends Downloader<T> {
   }
 
   @override
-  Future<File> save(
+  Future<FileSystemEntry> save(
     Uri source,
     String path, {
     void Function(int received, int total)? onProgress,
@@ -415,20 +416,20 @@ class HttpDownloader<T> extends Downloader<T> {
           utf8.encode(source.data?.contentAsString() ?? '');
       final file = await Fs.save(resolve(path), bytes, part: part);
       count++;
-      return file;
+      return Fs.entryFor(file.path);
     }
     if (source.scheme == 'string') {
       final bytes = utf8.encode(Uri.decodeComponent(source.path));
       final file = await Fs.save(resolve(path), bytes, part: part);
       count++;
-      return file;
+      return Fs.entryFor(file.path);
     }
     if (source.scheme == 'file') {
       final srcFile = File(source.toFilePath());
       final bytes = await srcFile.readAsBytes();
       final file = await Fs.save(resolve(path), bytes, part: part);
       count++;
-      return file;
+      return Fs.entryFor(file.path);
     }
     try {
       // Resolve here: the client has a base of its own (often none, when the

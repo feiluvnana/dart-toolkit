@@ -12,6 +12,7 @@ import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:path/path.dart' as p;
 
+import '../io/entry.dart';
 import '../src/fs.dart';
 import '../src/proc.dart';
 import '../collection/sequence.dart';
@@ -102,7 +103,11 @@ class ZipAccessor {
   /// inside the archive are relative to [source], so unpacking recreates the
   /// tree without the leading directories. Existing archives are replaced, and
   /// the write is atomic.
-  Future<File> pack(String source, String dest, {Format? format}) async {
+  Future<FileSystemEntry> pack(
+    String source,
+    String dest, {
+    Format? format,
+  }) async {
     final archive = Archive();
     final type = FileSystemEntity.typeSync(source);
 
@@ -141,7 +146,9 @@ class ZipAccessor {
       throw FileSystemException('Nothing to pack', source);
     }
 
-    return Fs.save(dest, _encode(archive, format ?? Format.of(dest)));
+    return Fs.entryFor(
+      (await Fs.save(dest, _encode(archive, format ?? Format.of(dest)))).path,
+    );
   }
 
   /// Packs [files] — a map of archive path to contents — into [dest].
@@ -151,7 +158,7 @@ class ZipAccessor {
   /// ```dart
   /// await format.zip.bundle('out.zip', {'notes.txt': utf8.encode('hi')});
   /// ```
-  Future<File> bundle(
+  Future<FileSystemEntry> bundle(
     String dest,
     Map<String, List<int>> files, {
     Format? format,
@@ -160,7 +167,9 @@ class ZipAccessor {
     for (final entry in files.entries) {
       archive.add(ArchiveFile.bytes(entry.key, entry.value));
     }
-    return Fs.save(dest, _encode(archive, format ?? Format.of(dest)));
+    return Fs.entryFor(
+      (await Fs.save(dest, _encode(archive, format ?? Format.of(dest)))).path,
+    );
   }
 
   /// Unpacks the archive at [source] into the folder [dest].
