@@ -38,16 +38,16 @@ void main() {
             ..sort();
       expect(names, equals(['a.txt', 'b.txt']));
 
-      final bytes = await format.zip.read(at('src.zip'), 'b.txt');
+      final bytes = await format.zip.extract(at('src.zip'), 'b.txt');
       expect(utf8.decode(bytes!), equals('beta'));
-      expect(await format.zip.read(at('src.zip'), 'missing.txt'), isNull);
+      expect(await format.zip.extract(at('src.zip'), 'missing.txt'), isNull);
     });
 
     test('bundles in-memory data', () async {
       await format.zip.bundle(at('mem.zip'), {
         'notes.txt': utf8.encode('from memory'),
       });
-      final bytes = await format.zip.read(at('mem.zip'), 'notes.txt');
+      final bytes = await format.zip.extract(at('mem.zip'), 'notes.txt');
       expect(utf8.decode(bytes!), equals('from memory'));
     });
 
@@ -91,7 +91,7 @@ void main() {
       // PathNotFoundException.
       final missing = at('absent.zip');
       expect((await format.zip.list(missing)).collect(.count()), equals(0));
-      expect(await format.zip.read(missing, 'a.txt'), isNull);
+      expect(await format.zip.extract(missing, 'a.txt'), isNull);
       expect(
         (await format.zip.unpack(missing, at('nowhere'))).collect(.count()),
         0,
@@ -131,7 +131,7 @@ void main() {
 
     test('clean and strip', () {
       expect(util.text.clean('  a   b\n c '), equals('a b c'));
-      expect(util.text.strip('<p>Hi <b>there</b></p>'), equals('Hi there'));
+      expect(util.text.tags('<p>Hi <b>there</b></p>'), equals('Hi there'));
       expect(util.text.clean('a​b'), equals('ab'));
     });
 
@@ -303,8 +303,8 @@ void main() {
     });
 
     test('base64 round-trips', () {
-      final encoded = util.hash.encode('hello');
-      expect(utf8.decode(util.hash.decode(encoded)), equals('hello'));
+      final encoded = util.text.base64('hello');
+      expect(utf8.decode(util.text.unbase64(encoded)), equals('hello'));
     });
   });
 

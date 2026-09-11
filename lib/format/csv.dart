@@ -44,7 +44,9 @@ import 'format.dart';
 /// Reading a file too large to hold is `io.csv.rows` and `io.csv.records`,
 /// and writing one a row at a time is `io.async.csv.write`. Those are about
 /// files, and they stayed where files live.
-class CsvAccessor with FileCodec<Csv> implements Codec<Csv> {
+class CsvAccessor
+    with FileCodec<Csv, Iterable<Map<String, Object?>>>
+    implements Codec<Csv> {
   /// Creates the accessor. Prefer the shared `format.csv` instance.
   const CsvAccessor();
 
@@ -80,6 +82,7 @@ class CsvAccessor with FileCodec<Csv> implements Codec<Csv> {
   /// For rows that are already lists of cells, see [cells]. They are two
   /// methods and not one taking `Iterable<dynamic>`, because deciding which
   /// shape you were handed at runtime is how a typo becomes an empty file.
+  @override
   String format(
     Iterable<Map<String, Object?>> rows, {
     List<String>? headers,

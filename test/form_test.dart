@@ -40,7 +40,7 @@ const _login = '''
 ''';
 
 Reply _page([String markup = _login]) =>
-    Reply.text(markup, requested: 'https://example.com/login'.url);
+    Reply.text(markup, fetch: Fetch('https://example.com/login'.url));
 
 /// What `Reply.form` used to be, now that `net` does not parse.
 ///
@@ -111,14 +111,15 @@ void main() {
       expect(form.method, HttpMethod.post);
       expect(form.action, Uri.parse('https://example.com/session'));
       expect(form.url, Uri.parse('https://example.com/session'));
-      expect(form.body, isA<FormBody>());
-      expect(utf8.decode(form.body!.bytes()), contains('csrf=tok-123'));
+      // The request the form would send: `fetch` is the whole of it.
+      expect(form.fetch().method, HttpMethod.post);
+      expect(utf8.decode(form.fetch().body!.bytes()), contains('csrf=tok-123'));
     });
 
     test('a GET form carries its fields in the query, replacing it', () {
       final form = _page().form('form.search')!;
       expect(form.method, HttpMethod.get);
-      expect(form.body, isNull);
+      expect(form.fetch().body, isNull);
       // The action's own `stale=1` goes, as it does in a browser.
       expect(form.url, Uri.parse('https://example.com/search?q=dart'));
 
@@ -136,7 +137,7 @@ void main() {
 
     test('a multipart form refuses rather than sending the wrong encoding', () {
       expect(
-        () => _page().form('form.upload')!.body,
+        () => _page().form('form.upload')!.fetch(),
         throwsA(
           isA<UnsupportedError>().having(
             (e) => e.message,
@@ -214,7 +215,7 @@ void main() {
       final home = await page
           .form('#login')!
           .fill({'user': 'me'})
-          .send(client: session);
+          .send(using: session.call);
 
       expect(home.parse(format.html).find('h1').text, 'me in with tok-123');
       // The cookie the login page set came back with the submission.
@@ -222,39 +223,55 @@ void main() {
       expect(seen.last, startsWith('POST /session'));
     });
 
-    test('submit schedules it on the crawl that found it', () async {
-      final landed = <String>[];
+    test('a crawl submits it by returning the request it describes', () async {
+      final crawl = net.crawl(
+        [Fetch('$base/login'.url)],
+        (res) => switch (res.fetch.tag) {
+          null => [
+            res
+                .form('#login')!
+                .at(res.url)
+                .fill({'user': 'crawler'})
+                .fetch(tag: 'home', meta: [Slot<String>('from')('login')]),
+          ].seq,
+          _ => const Sequence<Fetch>([]),
+        },
+      );
 
-      final stats = await net
-          .crawl<String>('$base/login'.url)
-          .tag(
-            'home',
-            (res) => landed.add(res.parse(format.html).find('h1').text),
-          )
-          .run(
-            (res) => res.submit(
-              res.form('#login')!..fill({'user': 'crawler'}),
-              tag: 'home',
-              meta: [Slot<String>('from')('login')],
-            ),
-          );
+      final landed = await crawl.flow
+          .transform(.where((res) => res.fetch.tag == 'home'))
+          .transform(.map((res) => res.parse(format.html).find('h1').text))
+          .collect(.list());
 
       expect(landed, ['crawler in with tok-123']);
-      expect(stats.completed, 2);
+      expect(crawl.stats.fetched, 2);
       expect(seen.last, contains('user=crawler'));
     });
 
     test('two submissions of one form are two fetches, not one', () async {
-      final searches = <String>[];
+      final crawl = net.crawl(
+        [Fetch('$base/login'.url)],
+        (res) => switch (res.fetch.tag) {
+          null => [
+            res
+                .form('#login')!
+                .at(res.url)
+                .fill({'user': 'a'})
+                .fetch(tag: 'result'),
+            res
+                .form('#login')!
+                .at(res.url)
+                .fill({'user': 'b'})
+                .fetch(tag: 'result'),
+          ].seq,
+          _ => const Sequence<Fetch>([]),
+        },
+      );
 
-      await net
-          .crawl<String>('$base/login'.url)
-          .tag('result', (res) => searches.add(res.fetch.url.toString()))
-          .run((res) {
-            final form = res.form('#login')!;
-            res.submit(form..fill({'user': 'a'}), tag: 'result');
-            res.submit(res.form('#login')!..fill({'user': 'b'}), tag: 'result');
-          });
+      final searches = await crawl.flow
+          .transform(.where((res) => res.fetch.tag == 'result'))
+          .transform(.map((res) => res.fetch.url.toString()))
+          .collect(.list());
 
       // De-duplication accounts for the body, so the same URL twice with
       // different fields is two pages.

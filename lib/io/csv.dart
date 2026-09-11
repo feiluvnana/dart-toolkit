@@ -231,7 +231,9 @@ class CsvFileAsyncAccessor {
   /// ```dart
   /// await io.async.csv.write(
   ///   'products.csv',
-  ///   net.crawl<Map<String, Object?>>(seed).flow(),
+  ///   net.crawl([Fetch(seed)]).flow.transform(
+  ///     .map((res) => <String, Object?>{'name': res.url.path}),
+  ///   ),
   ///   headers: ['name', 'price', 'url'],
   /// );
   /// ```

@@ -3,11 +3,11 @@
 /// The collection whose elements arrive over time, in place of Dart's
 /// `Stream`.
 ///
-/// Two members, the same shape [Sequence] has and named after what they take:
-/// [Flow.pipe] takes a [Pipe] and [Flow.pour] takes a [Pour]. So a script
-/// that moves from a collected crawl to a streaming one keeps its vocabulary
-/// instead of rewriting twenty-six operations into `asyncMap`, `takeWhile`
-/// and `toList`.
+/// Two members, spelled exactly as [Sequence]'s are: [Flow.transform] shapes
+/// and [Flow.collect] finishes. So a script that moves from a collected crawl
+/// to a streaming one keeps its vocabulary instead of rewriting twenty-six
+/// operations into `asyncMap`, `takeWhile` and `toList` — and keeps its
+/// receiver too.
 library;
 
 import 'dart:async';
@@ -23,37 +23,41 @@ import 'sequence.dart';
 ///
 /// ```dart
 /// final spend = await io.async.csv.records('big.csv')
-///     .pipe(.where((r) => r['live'] == 'yes'))
-///     .pipe(.take.first(1000))
-///     .pour(.count.by((r) => r['host']));
+///     .transform(.where((r) => r['live'] == 'yes'))
+///     .transform(.take.first(1000))
+///     .collect(.count.by((r) => r['host']));
 /// ```
 ///
-/// ## Two doors, named after what they take
+/// ## Two doors, spelled the same on all three containers
 ///
-/// [pipe] takes a [Pipe] and hands back another flow; [pour] takes a [Pour]
-/// and hands back a `Future`. A sequence's two doors are [Sequence.transform]
-/// and [Sequence.collect], taking a [Transformer] and a [Collector].
+/// [transform] takes a [Pipe] and hands back another flow; [collect] takes a
+/// [Pour] and hands back a `Future`. A sequence's two doors are
+/// [Sequence.transform] and [Sequence.collect], taking a [Transformer] and a
+/// [Collector]. **One rule for a reader: shape with `transform`, finish with
+/// `collect`, on a sequence, a dictionary or a flow.**
 ///
-/// **Four members and four operation types, paired by name.** The operations
-/// keep their own names on both sides — `.where(live)` is `.where(live)`
-/// wherever you write it, because a dot shorthand resolves against the
-/// context type — so what the member name tells you is which container you
-/// are on, which is the one thing that used to be invisible:
+/// **Four operation types, two member names.** The operations keep their own
+/// names on both sides — `.where(live)` is `.where(live)` wherever you write
+/// it, because a dot shorthand resolves against the context type — and now
+/// the receiver does too. What tells you which container you are on is the
+/// `await`, which is more reliable than a member name because you cannot
+/// leave it out:
 ///
 /// ```dart
 /// // setup: final flow = Flow<Row>.empty();
-/// rows.transform(.where((r) => r.live));   // Sequence in, Sequence out
-/// flow.pipe(.where((r) => r.live));        // Flow in, Flow out
-/// rows.collect(.count());                  // int
-/// await flow.pour(.count());               // Future<int>
+/// rows.transform(.where((r) => r.live));       // Sequence in, Sequence out
+/// flow.transform(.where((r) => r.live));       // Flow in, Flow out
+/// rows.collect(.count());                      // int
+/// await flow.collect(.count());                // Future<int>
 /// ```
 ///
-/// It was `transform` and `collect` on both through 5.4.0, over one pair of
-/// operation types, and the cost was paid on both sides: a flow-native
-/// operation could not join the vocabulary at all — `asyncMap` was
-/// `flow.run`, an extension over in `concurrent` — and an operation a flow
-/// could not stream was demoted to a terminal on the *sequence* too, so
-/// `sort` changed container for no reason. See the [Pipe] class doc for the
+/// They were `pipe` and `pour` in 5.5.0, when splitting the vocabulary into
+/// four operation types briefly took the member names with it. The types
+/// were the point and they survive — a flow-native operation could not join
+/// the old single vocabulary at all, and an operation a flow could not
+/// stream dragged the *sequence* side with it, so `sort` changed container
+/// for no reason. The rename was the part that was not needed: a rename
+/// forced by a spelling is not a rename. See the [Pipe] class doc for the
 /// whole ledger, and [Transformer] for what it cost.
 ///
 /// [stream] is still the way out, for what is genuinely foreign — `listen`,
@@ -71,10 +75,10 @@ import 'sequence.dart';
 ///
 /// ## Lazy, the same way a sequence is
 ///
-/// [pipe] builds a pipeline and nothing runs until something pours — and
-/// then only as much of the source as that pour asks for. Three elements out
-/// of a `take.first(3)` behind a `where` costs five produced, and
-/// `pour(.first())` costs one. Over a crawl that means the crawl
+/// [transform] builds a pipeline and nothing runs until something collects —
+/// and then only as much of the source as that terminal asks for. Three
+/// elements out of a `take.first(3)` behind a `where` costs five produced,
+/// and `collect(.first())` costs one. Over a crawl that means the crawl
 /// stops, because the terminal cancels its subscription and `net.crawl`'s
 /// flow ends the engine when it is cancelled.
 ///
@@ -86,8 +90,8 @@ import 'sequence.dart';
 /// file, and silence from `Stream.fromIterable`, which simply starts over —
 /// and which one you get is not in the type.
 ///
-/// So [pipe], [pour] and [stream] each claim the source, and a second claim
-/// throws one message for all three:
+/// So [transform], [collect] and [stream] each claim the source, and a
+/// second claim throws one message for all three:
 ///
 /// ```dart no-compile
 /// StateError: This flow has already been consumed.
@@ -103,13 +107,21 @@ import 'sequence.dart';
 /// A shaping step carries the property forward, because a pipeline over a
 /// re-derivable source is re-derivable too.
 ///
-/// Crossing between the two is one call each way, both already spelled:
+/// ## Crossing to a sequence, and why there is no `Flow.seq`
+///
+/// One call each way, and only one of them is a getter:
 ///
 /// ```dart
 /// // setup: final flow = Flow<Row>.empty();
-/// final Sequence<Row> held = await flow.pour(.seq());   // materialise
-/// final Flow<Row> back = held.flow;                     // and back
+/// final Sequence<Row> held = await flow.collect(.seq());   // materialise
+/// final Flow<Row> back = held.flow;                        // and back
 /// ```
+///
+/// [Sequence.flow] is a getter because holding a collection and describing it
+/// as arriving over time costs nothing. The other direction costs waiting for
+/// all of it, and the `await` is what says so. A `flow.seq` getter would hide
+/// exactly that, which is why the asymmetry is deliberate rather than an
+/// omission.
 final class Flow<T> {
   /// Holds [source] as given, and does not listen to it.
   ///
@@ -121,19 +133,20 @@ final class Flow<T> {
   /// A flow that rebuilds its source every time it is consumed.
   ///
   /// For a source that can honestly be read again — a file, a directory
-  /// listing, a query. [build] is called once per [pipe], [pour] or [stream],
+  /// listing, a query. [build] is called once per [transform], [collect] or
+  /// [stream],
   /// so two terminals read the disk twice, which is exactly what walking a
   /// [Sequence] twice already does:
   ///
   /// ```dart
   /// final walk = Flow.of(() => Stream.fromIterable(const [1, 2, 3]));
-  /// await walk.pour(.count());   // 3
-  /// await walk.pour(.list());    // [1, 2, 3] — and no StateError
+  /// await walk.collect(.count());   // 3
+  /// await walk.collect(.list());    // [1, 2, 3] — and no StateError
   /// ```
   ///
   /// Everything true of a sequence walked twice is true here: every callback
   /// in the pipeline runs again, and a source that changed underneath shows
-  /// the change. Where that is not free, `pour(.seq())` once and work from
+  /// the change. Where that is not free, `collect(.seq())` once and work from
   /// the sequence.
   Flow.of(Stream<T> Function() build) : _source = null, _build = build;
 
@@ -165,7 +178,7 @@ final class Flow<T> {
   ///
   /// ```dart
   /// // setup: final flow = Flow<Row>.empty();
-  /// flow.pipe(.where((r) => r.live)).pipe(.take.first(10));
+  /// flow.transform(.where((r) => r.live)).transform(.take.first(10));
   /// ```
   ///
   /// [Sequence.transform] is the same door on the other container. The names
@@ -177,7 +190,7 @@ final class Flow<T> {
   /// Claims this flow: the one it hands back is the only one that can be
   /// consumed from here — unless this flow came from [Flow.of], in which case
   /// the one it hands back is re-derivable too.
-  Flow<R> pipe<R>(Pipe<T, R> step) {
+  Flow<R> transform<R>(Pipe<T, R> step) {
     final build = _build;
     if (build != null) return Flow<R>.of(() => step.run(build()));
     return Flow<R>(step.run(_claim()));
@@ -187,14 +200,14 @@ final class Flow<T> {
   ///
   /// ```dart
   /// // setup: final flow = Flow<Row>.empty();
-  /// await flow.pour(.count());
-  /// await flow.pour(.group.by((r) => r.host));
+  /// await flow.collect(.count());
+  /// await flow.collect(.group.by((r) => r.host));
   /// ```
   ///
   /// A `Future<R>` where [Sequence.collect] gives an `R`. An error in the
   /// source comes out of this future; `Pipe.handle` is where a pipeline that
   /// would rather carry on puts its answer.
-  Future<R> pour<R>(Pour<T, R> step) => step.run(_claim());
+  Future<R> collect<R>(Pour<T, R> step) => step.run(_claim());
 
   /// The stream underneath — the one word at the boundary.
   ///
@@ -243,5 +256,5 @@ extension NullableFlow<T extends Object> on Flow<T?> {
   ///
   /// The twin of `Sequence.nonnull`, which a flow simply did not have
   /// through 5.4.0: asking for it was an `undefined_getter`.
-  Flow<T> get nonnull => pipe(Pipe.where.type<T>());
+  Flow<T> get nonnull => transform(Pipe.where.type<T>());
 }

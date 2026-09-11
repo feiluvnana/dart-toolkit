@@ -13,12 +13,18 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:dart_toolkit/html.dart';
 import 'package:test/test.dart';
 
-/// A downloader that fails every request, for testing what a crawl reports.
-class _Broken<T> extends Downloader<T> {
-  @override
-  Future<Page<T>> download(Fetch<T> fetch) async =>
-      throw StateError('boom for ${fetch.url}');
-}
+/// A transport that fails every request, for testing what a crawl reports.
+///
+/// A function, not a subclass: `Downloader` was four public classes for this.
+Future<Reply> broken(Fetch fetch) async =>
+    throw StateError('boom for ${fetch.url}');
+
+/// A transport over a map of path to body.
+Send serve(Map<String, String> pages) =>
+    (fetch) async => Reply.text(
+      pages[fetch.url.path] ?? pages['${fetch.url}'] ?? '',
+      fetch: fetch,
+    );
 
 Directory _temp(String prefix) {
   final dir = Directory.systemTemp.createTempSync(prefix);
@@ -120,63 +126,66 @@ void main() {
   });
 
   group('which pages failed', () {
-    test('a failure names the fetch it happened on', () async {
-      final lost = <Failure<String>>[];
+    test('settle names the reply it happened on', () async {
+      final crawl = net.crawl([Fetch('https://example.com/a'.url)])
+        ..using(broken);
 
-      final stats = await net
-          .crawl<String>('https://example.com/a'.url)
-          .downloader(_Broken<String>())
-          .on
-          .error(lost.add)
-          .run((res) {});
+      final outcomes = await crawl.settle.collect(.seq());
 
-      expect(stats.failed, 1);
-      // The count alone left nothing to retry or report.
-      expect(lost.single.fetch?.url.toString(), 'https://example.com/a');
-      expect(lost.single.error, isA<StateError>());
-      expect(lost.single.stack, isNotNull);
+      expect(crawl.stats.failed, 1);
+      // `flow` leaves failures out; `settle` puts them in band, which is what
+      // `on.error` and the `Failure` type were for.
+      final broke = outcomes
+          .transform(.where.type<Broke<Reply>>())
+          .collect(.single());
+      expect(broke!.error, isA<StateError>());
+      expect(broke.stack, isNotNull);
     });
 
-    test('a handler that throws names the page it was handling', () async {
-      final lost = <Failure<String>>[];
+    test('a next that throws is reported the same way', () async {
+      final crawl = net.crawl(
+        [Fetch('https://example.com/page'.url)],
+        (res) => throw StateError('next blew up'),
+      )..using(serve(const {'/page': '<h1>hi</h1>'}));
 
-      await net
-          .crawl<String>('https://example.com/page'.url)
-          .downloader(MapDownloader<String>({'/page': '<h1>hi</h1>'}))
-          .on
-          .error(lost.add)
-          .run((res) => throw StateError('handler blew up'));
-
-      expect(lost.single.fetch?.url.path, '/page');
+      final outcomes = await crawl.settle.collect(.seq());
+      expect(
+        outcomes.transform(.where.type<Broke<Reply>>()).collect(.count()),
+        1,
+      );
     });
 
-    test('the failed fetches can be queued again as they were', () async {
-      final lost = <Failure<String>>[];
-      await net
-          .crawl<String>('https://example.com/a'.url)
-          .downloader(_Broken<String>())
-          .on
-          .error(lost.add)
-          .run((res) {});
+    test('the failed requests can be queued again as they were', () async {
+      // `Settled` does not carry the item — the caller already holds it —
+      // and a crawl's position does: a request that failed is unfinished
+      // work, so it is still pending.
+      final crawl = net.crawl([Fetch('https://example.com/a'.url)])
+        ..using(broken);
+      await crawl.run();
 
-      final served = <String>[];
-      await net.crawl
-          .seed<String>([for (final failure in lost) ?failure.fetch])
-          .downloader(MapDownloader<String>({'/a': '<h1>second try</h1>'}))
-          .run((res) => served.add(res.parse(format.html).find('h1').text));
+      final pending = (crawl.position['pending'] as List)
+          .cast<Map<String, Object?>>()
+          .map(Fetch.fromJson)
+          .toList();
+      expect(pending.single.url.toString(), 'https://example.com/a');
+
+      final again = net.crawl(pending)
+        ..using(serve(const {'/a': '<h1>second try</h1>'}));
+      final served = await again.flow
+          .transform(.map((res) => res.parse(format.html).find('h1').text))
+          .collect(.list());
 
       expect(served, ['second try']);
     });
 
-    test('a failure is unfinished work, so a snapshot keeps it', () async {
+    test('a failure is unfinished work, so the resume file keeps it', () async {
       final dir = _temp('dt_fail_');
       final path = '${dir.path}/crawl.state';
 
-      await net
-          .crawl<String>('https://example.com/a'.url)
-          .downloader(_Broken<String>())
-          .resume(path)
-          .run((res) {});
+      await (net.crawl([Fetch('https://example.com/a'.url)])
+            ..using(broken)
+            ..resume(path))
+          .run();
 
       // Nothing was handled, so there is a position left to resume from.
       expect(File(path).existsSync(), isTrue);
@@ -185,40 +194,31 @@ void main() {
         'https://example.com/a',
       ]);
     });
-
-    test('toString says which page and why', () {
-      final failure = Failure<String>(
-        StateError('nope'),
-        StackTrace.empty,
-        Fetch<String>(Uri.parse('https://example.com/x')),
-      );
-      expect(failure.toString(), contains('https://example.com/x'));
-      expect(failure.toString(), contains('nope'));
-    });
   });
 
-  group('crawl events chain', () {
-    test('every handler hands the builder back', () async {
-      final seen = <String>[];
+  group('the crawl terminals replace the event bag', () {
+    test(
+      'tap is on.progress; the lines around it are start and done',
+      () async {
+        final seen = <String>[];
 
-      final stats = await net
-          .crawl<String>('https://example.com/a'.url)
-          .concurrent(1)
-          .on
-          .start(() => seen.add('start'))
-          .on
-          .progress((res) => seen.add('progress'))
-          .on
-          .item((item) => seen.add('item'))
-          .on
-          .done((stats) => seen.add('done'))
-          .limit(1)
-          .downloader(MapDownloader<String>({'/a': '<h1>hi</h1>'}))
-          .items((res) => res.emit(res.parse(format.html).find('h1').text));
+        final crawl = net.crawl([Fetch('https://example.com/a'.url)])
+          ..concurrent(1)
+          ..limit(1)
+          ..using(serve(const {'/a': '<h1>hi</h1>'}));
 
-      expect(seen, ['start', 'item', 'progress', 'done']);
-      expect(stats.collect(.list()), ['hi']);
-    });
+        seen.add('start');
+        final titles = await crawl.flow
+            .transform(.tap((res) => seen.add('progress')))
+            .transform(.map((res) => res.parse(format.html).find('h1').text))
+            .collect(.list());
+        seen.add('done');
+
+        expect(seen, ['start', 'progress', 'done']);
+        expect(titles, ['hi']);
+        expect(crawl.stats.fetched, 1);
+      },
+    );
   });
 
   group('io.csv.pipe', () {
@@ -324,30 +324,32 @@ void main() {
 
       await io.async.csv.write(
         path,
-        net
-            .crawl<Map<String, Object?>>('https://shop.test/list'.url)
-            .downloader(
-              MapDownloader<Map<String, Object?>>({
+        (net.crawl([Fetch('https://shop.test/list'.url)])..using(
+              serve(const {
                 '/list':
                     '<div class="p"><h2>\n  Wireless\n  Keyboard\n</h2>'
                     '<span class="c">49.99</span></div>'
                     '<div class="p"><h2>Mouse</h2>'
                     '<span class="c">19.99</span></div>',
               }),
-            )
-            .flow((res) {
-              for (final card
-                  in res
-                      .parse(format.html)
-                      .find('.p')
-                      .elements
-                      .collect(.list())) {
-                res.emit({
-                  'name': card.query.find('h2').text,
-                  'price': card.query.find('.c').text,
-                });
-              }
-            }),
+            ))
+            .flow
+            .transform(
+              .flat.map(
+                (res) => res
+                    .parse(format.html)
+                    .find('.p')
+                    .elements
+                    .transform(
+                      .map(
+                        (card) => <String, Object?>{
+                          'name': card.query.find('h2').text,
+                          'price': card.query.find('.c').text,
+                        },
+                      ),
+                    ),
+              ),
+            ),
         headers: ['name', 'price'],
       );
 
@@ -376,7 +378,7 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 void main() async {
   print('piped=\${system.console.reader.piped}');
   await system.console.reader.lines
-      .pour(.foreach((line) => print('got \${line.trim()}')));
+      .collect(.foreach((line) => print('got \${line.trim()}')));
   print('done');
   await system.console.reader.close();
 }

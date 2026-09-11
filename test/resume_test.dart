@@ -1,6 +1,10 @@
 /// Tests for a crawl that survives being interrupted. Each group names the
 /// behaviour that used to be impossible: the frontier was in memory only, so
 /// anything a run had not yet fetched died with the process.
+///
+/// In 6.0.0 `Snapshot`, `Stats` and `Deduplicator` are gone as public types —
+/// the saved position is JSON off [Crawl.position], and the counters are a
+/// record.
 library;
 
 import 'dart:convert';
@@ -9,30 +13,24 @@ import 'dart:io';
 import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:test/test.dart';
 
-/// A downloader that serves fixtures and stops the run partway, so a test can
-/// see what a half-finished crawl leaves behind.
-class _HalfwayDownloader extends Downloader<String> {
-  _HalfwayDownloader(this.pages, this.after) : super(concurrency: 1);
-
-  final Map<String, String> pages;
-  final int after;
-  int served = 0;
-
-  @override
-  Future<Page<String>> download(Fetch<String> fetch) async {
+/// A transport that serves fixtures and stops the crawl partway, so a test
+/// can see what a half-finished run leaves behind.
+Send halfway(Map<String, String> pages, int after, Crawl Function() crawl) {
+  var served = 0;
+  return (fetch) async {
     served++;
-    if (served > after) engine?.stop('halfway');
-    return Page<String>(
-      fetch: fetch,
-      status: 200,
-      headers: const {'content-type': 'text/html'},
-      bytes: utf8.encode(pages[fetch.url.toString()] ?? ''),
-      engine: engine,
-    );
-  }
+    if (served > after) crawl().stop('halfway');
+    return Reply.text(pages['${fetch.url}'] ?? '', fetch: fetch);
+  };
 }
 
-String _tempPath(String name) =>
+Send serve(Map<String, String> pages) =>
+    (fetch) async => Reply.text(pages['${fetch.url}'] ?? '', fetch: fetch);
+
+Sequence<Fetch> links(Reply res) =>
+    res.parse(format.html).find('a').attrs('href').transform(.map(res.follow));
+
+String tempPath(String name) =>
     '${Directory.systemTemp.createTempSync('dt_resume_').path}/$name';
 
 const _widget = Slot<String>('name');
@@ -40,8 +38,8 @@ const _index = Slot<int>('index');
 
 void main() {
   group('Fetch serialization', () {
-    test('every field routing depends on round-trips', () {
-      final fetch = Fetch<String>(
+    test('every field scheduling depends on round-trips', () {
+      final fetch = Fetch(
         Uri.parse('https://example.com/search?q=a'),
         method: HttpMethod.post,
         headers: {'X-Token': 'abc'},
@@ -53,15 +51,17 @@ void main() {
         depth: 2,
       );
 
-      final copy = Fetch<String>.fromJson(
+      final copy = Fetch.fromJson(
         jsonDecode(jsonEncode(fetch.toJson())) as Map<String, Object?>,
       );
 
       expect(copy.url, fetch.url);
       expect(copy.method, HttpMethod.post);
       expect(copy.headers, {'X-Token': 'abc'});
-      expect(copy.body, isA<FormBody>());
-      expect((copy.body! as FormBody).fields, {'page': '2'});
+      expect(copy.body!.toJson(), {
+        'kind': 'form',
+        'fields': {'page': '2'},
+      });
       expect(copy.priority, 7);
       expect(copy.tag, 'detail');
       // Through the slots, which is the point: the values come back typed
@@ -74,20 +74,37 @@ void main() {
     });
 
     test('a GET with nothing set serializes to just its url', () {
-      final json = Fetch<String>(Uri.parse('https://example.com/')).toJson();
+      final json = Fetch(Uri.parse('https://example.com/')).toJson();
       expect(json.keys, ['url']);
     });
 
     test('every body shape survives the trip', () {
-      Body round(Body body) => Body.fromJson(
+      // The four shapes are private now — `Body.text`, `.bytes`, `.form` and
+      // `.json` are the whole surface — so the round trip is asserted on the
+      // wire form rather than on a class nobody can name.
+      Map<String, Object?> round(Body body) => Body.fromJson(
         jsonDecode(jsonEncode(body.toJson())) as Map<String, Object?>,
-      );
+      ).toJson();
 
-      expect((round(Body.text('hi')) as TextBody).text, 'hi');
+      expect(round(Body.text('hi')), {'kind': 'text', 'text': 'hi'});
       // Base64, so bytes that are not valid UTF-8 come back intact.
-      expect((round(Body.bytes([0, 255, 12])) as BytesBody).data, [0, 255, 12]);
-      expect((round(Body.form({'a': 'b'})) as FormBody).fields, {'a': 'b'});
-      expect((round(Body.json({'n': 1})) as JsonBody).data, {'n': 1});
+      expect(
+        round(Body.bytes([0, 255, 12]))['data'],
+        base64Encode([0, 255, 12]),
+      );
+      expect(Body.fromJson(round(Body.bytes([0, 255, 12]))).bytes(), [
+        0,
+        255,
+        12,
+      ]);
+      expect(round(Body.form({'a': 'b'})), {
+        'kind': 'form',
+        'fields': {'a': 'b'},
+      });
+      expect(round(Body.json({'n': 1})), {
+        'kind': 'json',
+        'data': {'n': 1},
+      });
     });
 
     test('an unknown body kind is refused, not guessed at', () {
@@ -95,165 +112,122 @@ void main() {
     });
   });
 
-  group('Engine.snapshot', () {
-    test('holds the queue, the visited set and the counters', () {
-      final engine = Engine<String>(downloader: MapDownloader<String>({}));
-      engine
-        ..add(Fetch<String>(Uri.parse('https://example.com/a')))
-        ..add(Fetch<String>(Uri.parse('https://example.com/b')));
+  group('Crawl.position', () {
+    test('holds the frontier, the visited set and the counters', () async {
+      final crawl = net.crawl([
+        Fetch(Uri.parse('https://example.com/a')),
+        Fetch(Uri.parse('https://example.com/b')),
+      ])..using(serve(const {}));
 
-      final snapshot = engine.snapshot();
+      await crawl.run();
+      final position = crawl.position;
 
-      expect(snapshot.pending, hasLength(2));
-      expect(snapshot.deduplicator.length, 2);
-      expect(snapshot.stats.scheduled, 2);
+      expect(position['version'], Crawl.version);
+      expect(position['pending'], isEmpty);
+      expect((position['seen'] as List), hasLength(2));
+      expect((position['stats'] as Map)['fetched'], 2);
     });
 
-    test('a fetch in flight counts as pending, not as done', () async {
-      final engine = Engine<String>(downloader: MapDownloader<String>({}));
-      engine.add(Fetch<String>(Uri.parse('https://example.com/a')));
-
-      // Served, but never handled: the shape of a crawl killed mid-fetch.
-      final served = engine.serve();
-      expect(served, isNotNull);
-      expect(engine.queue.isEmpty, isTrue);
-
-      // It used to vanish here, so a resumed crawl silently skipped the page.
-      expect(engine.snapshot().pending, hasLength(1));
-
-      // Settling the worker is not finishing the page. Only a handled
-      // response is done, which is what keeps a fetch that arrived after the
-      // run stopped from being counted as crawled.
-      engine.leave();
-      expect(engine.snapshot().pending, hasLength(1));
-
-      await engine.process(Page<String>(fetch: served!, engine: engine));
-      expect(engine.snapshot().pending, isEmpty);
-    });
-
-    test('a page robots.txt refused is settled, not left pending', () {
-      final engine = Engine<String>(downloader: MapDownloader<String>({}));
-      engine.add(Fetch<String>(Uri.parse('https://example.com/a')));
-      final served = engine.serve();
-
-      engine.skip(served);
-      expect(engine.snapshot().pending, isEmpty);
-      expect(engine.stats.skipped, 1);
-    });
-
-    test('the snapshot is a copy, so a later fetch cannot rewrite it', () {
-      final engine = Engine<String>(downloader: MapDownloader<String>({}));
-      engine.add(Fetch<String>(Uri.parse('https://example.com/a')));
-      final snapshot = engine.snapshot();
-
-      engine.add(Fetch<String>(Uri.parse('https://example.com/b')));
-
-      expect(snapshot.pending, hasLength(1));
-      expect(snapshot.deduplicator.length, 1);
-      expect(snapshot.stats.scheduled, 1);
-    });
-
-    test('round-trips through JSON', () {
-      final engine = Engine<String>(downloader: MapDownloader<String>({}));
-      engine.add(
-        Fetch<String>(Uri.parse('https://example.com/a'), tag: 'listing'),
+    test('a request that was never handled stays pending', () async {
+      final path = tempPath('crawl.state');
+      addTearDown(
+        () => Directory(io.path.dirname(path)).deleteSync(recursive: true),
       );
 
-      final copy = Snapshot<String>.fromJson(
-        jsonDecode(jsonEncode(engine.snapshot().toJson()))
-            as Map<String, Object?>,
-      );
+      late Crawl crawl;
+      crawl = net.crawl([Fetch('https://example.com/1'.url)], links)
+        ..concurrent(1)
+        ..resume(path)
+        ..using(
+          halfway(
+            const {
+              'https://example.com/1':
+                  '<a href="/2">2</a><a href="/3">3</a><a href="/4">4</a>',
+            },
+            1,
+            () => crawl,
+          ),
+        );
 
-      expect(copy.pending.single.tag, 'listing');
-      expect(copy.pending.single.url.path, '/a');
-      expect(copy.deduplicator.length, 1);
-    });
+      await crawl.run();
 
-    test('a snapshot from a newer version is refused', () {
+      // Pending is what the run had not finished, which is exactly what a
+      // resumed crawl has to pick up.
+      final pending = (crawl.position['pending'] as List)
+          .cast<Map<String, Object?>>();
       expect(
-        () => Snapshot<String>.fromJson({'version': Snapshot.version + 1}),
+        pending.map((r) => r['url']),
+        containsAll(<String>[
+          'https://example.com/2',
+          'https://example.com/3',
+          'https://example.com/4',
+        ]),
+      );
+    });
+
+    test('restore queues pending work past the visited set that saw it', () {
+      const url = 'https://example.com/a';
+      final crawl = net.crawl(const [])
+        ..restore({
+          'version': Crawl.version,
+          'pending': [
+            {'url': url},
+          ],
+          'seen': ['GET|$url||'],
+        });
+
+      // Routing it through the scope checks would have dropped it as a
+      // duplicate, which is exactly the request the last run had not
+      // finished.
+      expect((crawl.position['pending'] as List), hasLength(1));
+    });
+
+    test('restore brings the counters back', () {
+      final crawl = net.crawl(const [])
+        ..restore({
+          'stats': {'fetched': 40, 'scheduled': 40},
+        });
+      expect(crawl.stats.fetched, 40);
+    });
+
+    test('a position from a newer version is refused', () {
+      expect(
+        () => net.crawl(const []).restore({'version': Crawl.version + 1}),
         throwsFormatException,
       );
     });
-  });
 
-  group('Engine.restore', () {
-    test('queues pending work past the deduplicator that already saw it', () {
-      final url = Uri.parse('https://example.com/a');
-      final dedupe = Deduplicator()..add(url);
-      final snapshot = Snapshot<String>(
-        pending: [Fetch<String>(url)],
-        deduplicator: dedupe,
-      );
-
-      final engine = Engine<String>(downloader: MapDownloader<String>({}));
-      engine.restore(snapshot);
-
-      // Routing it through add() would have dropped it as a duplicate, which
-      // is exactly the request the last run had not finished.
-      expect(engine.queue.length, 1);
-    });
-
-    test('brings the counters back so limit still spans the whole crawl', () {
-      final snapshot = Snapshot<String>(
-        stats: Stats()
-          ..scheduled = 40
-          ..completed = 40,
-      );
-
-      final engine = Engine<String>(downloader: MapDownloader<String>({}));
-      engine.restore(snapshot);
-
-      expect(engine.stats.completed, 40);
-      expect(engine.stats.scheduled, 40);
-    });
-
-    test('a seed already visited is dropped rather than fetched twice', () {
-      final url = Uri.parse('https://example.com/a');
-      final engine = Engine<String>(downloader: MapDownloader<String>({}));
-      engine.restore(Snapshot<String>(deduplicator: Deduplicator()..add(url)));
-
-      engine.add(Fetch<String>(url));
-      expect(engine.queue.isEmpty, isTrue);
-    });
-
-    test('a running engine refuses to be restored', () async {
-      final engine = Engine<String>(
-        downloader: MapDownloader<String>({'/a': '<h1>a</h1>'}),
-      );
-      final run = engine.run(['https://example.com/a']);
-      expect(() => engine.restore(Snapshot<String>()), throwsStateError);
-      await run;
-      expect(() => engine.restore(Snapshot<String>()), throwsStateError);
+    test('a started crawl refuses to be restored', () async {
+      final crawl = net.crawl([Fetch('https://example.com/a'.url)])
+        ..using(serve(const {'https://example.com/a': '<h1>a</h1>'}));
+      await crawl.run();
+      expect(() => crawl.restore(const {}), throwsStateError);
     });
   });
 
   group('net.crawl().resume', () {
     test('an interrupted crawl leaves its unfetched queue on disk', () async {
-      final path = _tempPath('crawl.state');
+      final path = tempPath('crawl.state');
       addTearDown(
         () => Directory(io.path.dirname(path)).deleteSync(recursive: true),
       );
 
-      final stats = await net
-          .crawl<String>('https://example.com/1'.url)
-          .downloader(
-            _HalfwayDownloader({
+      late Crawl crawl;
+      crawl = net.crawl([Fetch('https://example.com/1'.url)], links)
+        ..concurrent(1)
+        ..resume(path)
+        ..using(
+          halfway(
+            const {
               'https://example.com/1':
                   '<a href="/2">2</a><a href="/3">3</a><a href="/4">4</a>',
-            }, 1),
-          )
-          .resume(path)
-          .run((res) {
-            for (final href
-                in res
-                    .parse(format.html)
-                    .find('a')
-                    .attrs('href')
-                    .collect(.list())) {
-              res.follow(href);
-            }
-          });
+            },
+            1,
+            () => crawl,
+          ),
+        );
+
+      final stats = await crawl.run();
 
       expect(stats.reason, 'halfway');
       expect(File(path).existsSync(), isTrue);
@@ -272,7 +246,7 @@ void main() {
     });
 
     test('a second run fetches what the first one did not', () async {
-      final path = _tempPath('crawl.state');
+      final path = tempPath('crawl.state');
       addTearDown(
         () => Directory(io.path.dirname(path)).deleteSync(recursive: true),
       );
@@ -283,44 +257,29 @@ void main() {
         'https://example.com/3': '<p>three</p>',
       };
 
-      final first = await net
-          .crawl<String>('https://example.com/1'.url)
-          .downloader(_HalfwayDownloader(pages, 1))
-          .resume(path)
-          .items((res) {
-            res.emit(res.url.toString());
-            for (final href
-                in res
-                    .parse(format.html)
-                    .find('a')
-                    .attrs('href')
-                    .collect(.list())) {
-              res.follow(href);
-            }
-          });
+      late Crawl one;
+      one = net.crawl([Fetch('https://example.com/1'.url)], links)
+        ..concurrent(1)
+        ..resume(path)
+        ..using(halfway(pages, 1, () => one));
 
-      expect(first.collect(.list()), ['https://example.com/1']);
+      final first = await one.flow
+          .transform(.map((res) => res.url.toString()))
+          .collect(.list());
+      expect(first, ['https://example.com/1']);
 
-      final second = await net
-          .crawl<String>('https://example.com/1'.url)
-          .downloader(MapDownloader<String>(pages))
-          .resume(path)
-          .items((res) {
-            res.emit(res.url.toString());
-            for (final href
-                in res
-                    .parse(format.html)
-                    .find('a')
-                    .attrs('href')
-                    .collect(.list())) {
-              res.follow(href);
-            }
-          });
+      final two = net.crawl([Fetch('https://example.com/1'.url)], links)
+        ..resume(path)
+        ..using(serve(pages));
+
+      final second = await two.flow
+          .transform(.map((res) => res.url.toString()))
+          .collect(.list());
 
       // The seed is not fetched again, and the pages the first leg queued but
       // never reached are.
       expect(
-        second.collect(.list()),
+        second,
         unorderedEquals(<String>[
           'https://example.com/2',
           'https://example.com/3',
@@ -331,7 +290,7 @@ void main() {
     });
 
     test('limit counts the whole crawl, not each leg of it', () async {
-      final path = _tempPath('crawl.state');
+      final path = tempPath('crawl.state');
       addTearDown(
         () => Directory(io.path.dirname(path)).deleteSync(recursive: true),
       );
@@ -343,62 +302,53 @@ void main() {
         'https://example.com/4': '<p>four</p>',
       };
 
-      Future<Stats> leg(Downloader<String> downloader) => net
-          .crawl<String>('https://example.com/1'.url)
-          .downloader(downloader)
-          .resume(path)
-          .limit(2)
-          .run((res) {
-            for (final href
-                in res
-                    .parse(format.html)
-                    .find('a')
-                    .attrs('href')
-                    .collect(.list())) {
-              res.follow(href);
-            }
-          });
+      late Crawl one;
+      one = net.crawl([Fetch('https://example.com/1'.url)], links)
+        ..concurrent(1)
+        ..resume(path)
+        ..limit(2)
+        ..using(halfway(pages, 1, () => one));
+      final first = await one.run();
+      expect(first.fetched, 1);
 
-      final first = await leg(_HalfwayDownloader(pages, 1));
-      expect(first.completed, 1);
-
-      final second = await leg(MapDownloader<String>(pages));
+      final two = net.crawl([Fetch('https://example.com/1'.url)], links)
+        ..concurrent(1)
+        ..resume(path)
+        ..limit(2)
+        ..using(serve(pages));
+      final second = await two.run();
       // Two pages across both runs, not two more.
-      expect(second.completed, 2);
+      expect(second.fetched, 2);
     });
 
     test('a corrupt resume file throws instead of starting over', () async {
-      final path = _tempPath('crawl.state');
+      final path = tempPath('crawl.state');
       addTearDown(
         () => Directory(io.path.dirname(path)).deleteSync(recursive: true),
       );
       File(path).writeAsStringSync('{not json');
 
-      expect(
-        () => net
-            .crawl<String>('https://example.com/1'.url)
-            .downloader(MapDownloader<String>({}))
-            .resume(path)
-            .run((res) {}),
-        throwsFormatException,
-      );
+      final crawl = net.crawl([Fetch('https://example.com/1'.url)])
+        ..resume(path)
+        ..using(serve(const {}));
+
+      expect(crawl.run(), throwsFormatException);
     });
 
     test(
       'a finished crawl leaves no watcher holding the process open',
       () async {
-        final path = _tempPath('crawl.state');
+        final path = tempPath('crawl.state');
         addTearDown(
           () => Directory(io.path.dirname(path)).deleteSync(recursive: true),
         );
 
-        await net
-            .crawl<String>('https://example.com/1'.url)
-            .downloader(MapDownloader<String>({'/1': '<p>one</p>'}))
-            .resume(path)
-            .run((res) {});
+        await (net.crawl([Fetch('https://example.com/1'.url)])
+              ..resume(path)
+              ..using(serve(const {'https://example.com/1': '<p>one</p>'})))
+            .run();
 
-        // The exit hook that flushes the snapshot has to come off again: it
+        // The exit hook that flushes the position has to come off again: it
         // keeps the signal watcher, and so the isolate, alive.
         expect(File(path).existsSync(), isFalse);
       },

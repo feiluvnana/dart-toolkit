@@ -32,7 +32,7 @@ void main() async {
     [for (final row in rows) util.text.slug('${row['name']}')].join('\n'),
   );
   io.dump(io.path.join(dir, 'products.json'), rows);
-  io.save(io.path.join(dir, 'blob.bin'), [1, 2, 3]);
+  io.bytes.write(io.path.join(dir, 'blob.bin'), [1, 2, 3]);
 
   final back = await format.json.read(io.path.join(dir, 'products.json'));
   log.ok('Wrote and re-read ${back.count} products.');
@@ -53,7 +53,7 @@ void main() async {
   //   await io.async.csv.write('out.csv', crawl.flow(handler), headers: [...]);
   await io.async.csv
       .records(io.path.join(dir, 'products.csv'))
-      .pour(
+      .collect(
         .foreach(
           (record) => log.debug('${record['name']} at ${record['price']}'),
         ),

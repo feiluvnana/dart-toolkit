@@ -9,7 +9,7 @@
 /// - [io]: files, atomic writes, paths, CSV (`io.csv`), the collections on
 ///   disk (`io.dictionary`, `dump`), watching (`io.watch`), locking
 ///   (`io.lock`), and a non-blocking mirror of the lot (`io.async`).
-/// - [net]: HTTP (`net.http`), the crawler engine (`net.crawl`), the forms a
+/// - [net]: HTTP (`net.http`), the frontier that crawls (`net.crawl`), the
 ///   page carries ([Form]) — and, in the other direction, a server that
 ///   listens (`net.serve`, `net.once`). It fetches bytes and parses none of
 ///   them.
@@ -49,12 +49,16 @@
 ///
 /// void main(List<String> args) async {
 ///   cli.parse(args);
-///   final titles = await net.crawl<String>('https://news.ycombinator.com'.url)
-///       .concurrent(system.os.cpus)
-///       .gather((page) => page.parse(format.html)
-///           .find('.titleline > a').texts);
+///   final titles = await (net
+///           .crawl([Fetch('https://news.ycombinator.com'.url)])
+///         ..concurrent(system.os.cpus))
+///       .flow
+///       .transform(.flat.map((res) =>
+///           res.parse(format.html).find('.titleline > a').texts))
+///       .transform(.unique())
+///       .collect(.join('\n'));
 ///
-///   io.write('titles.txt', titles.transform(.unique()).collect(.join('\n')));
+///   io.write('titles.txt', titles);
 /// }
 /// ```
 library;
@@ -76,4 +80,5 @@ export 'src/codec.dart';
 export 'src/csv.dart';
 export 'src/extensions.dart';
 export 'src/json.dart';
+export 'src/method.dart';
 export 'src/markup.dart';

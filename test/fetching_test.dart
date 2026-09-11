@@ -361,71 +361,64 @@ void main() {
 
   group('net.crawl().accept', () {
     test('a response of the wrong type never reaches a handler', () async {
-      final handled = <String>[];
-      final stats = await net
-          .crawl<String>('https://example.com/page'.url)
-          .accept(['text/html'])
-          .downloader(
-            MapDownloader<String>(
-              {'/page': '%PDF-1.7'},
-              headers: const {'content-type': 'application/pdf'},
-            ),
-          )
-          .run((res) => handled.add(res.url.path));
+      final crawl = net.crawl([Fetch('https://example.com/page'.url)])
+        ..accept(const ['text/html'])
+        ..using(
+          (fetch) async => Reply.text(
+            '%PDF-1.7',
+            fetch: fetch,
+            headers: const {'content-type': 'application/pdf'},
+          ),
+        );
+
+      final handled = await crawl.flow
+          .transform(.map((res) => res.url.path))
+          .collect(.list());
 
       expect(handled, isEmpty);
-      expect(stats.skipped, 1);
-      expect(stats.completed, 0);
+      expect(crawl.stats.skipped, 1);
+      expect(crawl.stats.fetched, 0);
     });
 
     test('a subtype wildcard matches', () async {
-      final handled = <String>[];
-      await net
-          .crawl<String>('https://example.com/page'.url)
-          .accept(['text/*'])
-          .downloader(MapDownloader<String>({'/page': '<h1>hi</h1>'}))
-          .run((res) => handled.add(res.url.path));
+      final crawl = net.crawl([Fetch('https://example.com/page'.url)])
+        ..accept(const ['text/*'])
+        ..using((fetch) async => Reply.text('<h1>hi</h1>', fetch: fetch));
+
+      final handled = await crawl.flow
+          .transform(.map((res) => res.url.path))
+          .collect(.list());
 
       expect(handled, ['/page']);
     });
 
-    test('the types asked for are sent as the Accept header', () {
-      final downloader =
-          net
-                  .crawl<String>('https://example.com'.url)
-                  .accept(['text/html', 'application/xhtml+xml'])
-                  .engine()
-                  .downloader
-              as HttpDownloader<String>;
+    test('the types asked for are sent as the Accept header', () async {
+      // `accept` does two things on purpose — the header and the filter — and
+      // they are two halves of one intent, so they are set in one place.
+      final sent = <Fetch>[];
+      await (net.crawl([Fetch('https://example.com/'.url)])
+            ..accept(const ['text/html', 'application/xhtml+xml'])
+            ..using((fetch) async {
+              sent.add(fetch);
+              return Reply.text('<h1>hi</h1>', fetch: fetch);
+            }))
+          .run();
 
-      expect(downloader.headers['Accept'], 'text/html, application/xhtml+xml');
+      expect(sent.single.headers['Accept'], 'text/html, application/xhtml+xml');
     });
 
-    test('an Accept the caller set themselves is left alone', () {
-      final downloader =
-          net
-                  .crawl<String>('https://example.com'.url)
-                  .accept(['text/html'])
-                  .headers({'Accept': 'text/plain'})
-                  .engine()
-                  .downloader
-              as HttpDownloader<String>;
-
-      expect(downloader.headers['Accept'], 'text/plain');
+    test('a header the client already carries wins', () {
+      // Everything about the client is the client's: a crawl has no
+      // `.headers` to disagree with it.
+      final client = Fetcher(headers: const {'Accept': 'text/plain'});
+      expect(client.headers['Accept'], 'text/plain');
     });
   });
 
-  group('net.crawl().cap', () {
-    test('reaches the client that enforces it', () {
-      final downloader =
-          net
-                  .crawl<String>('https://example.com'.url)
-                  .cap(2048)
-                  .engine()
-                  .downloader
-              as HttpDownloader<String>;
-
-      expect(downloader.cap, 2048);
+  group('the client knobs live on the client', () {
+    test('cap is a Fetcher field, declared once', () {
+      final client = Fetcher(cap: 2048);
+      expect(client.cap, 2048);
     });
 
     test('a body over the cap is refused rather than held', () async {
@@ -446,144 +439,130 @@ void main() {
     });
   });
 
-  group('Page.follow', () {
+  group('Reply.follow', () {
     test('can post a form instead of following a link', () async {
-      final downloader = MapDownloader<String>({
-        '/login': '<form action="/login" method="post"></form>',
-        'POST /login': '<p class="welcome">Signed in</p>',
-      });
+      final sent = <Fetch>[];
+      Future<Reply> transport(Fetch fetch) async {
+        sent.add(fetch);
+        return Reply.text(
+          fetch.method == HttpMethod.post
+              ? '<p class="welcome">Signed in</p>'
+              : '<form action="/login" method="post"></form>',
+          fetch: fetch,
+        );
+      }
 
-      final seen = await net
-          .crawl<String>('https://example.com/login'.url)
-          .downloader(downloader)
-          .items((res) {
-            if (res.tag == 'result') {
-              res.emit(res.parse(format.html).find('.welcome').text);
-              return;
-            }
+      final crawl = net.crawl(
+        [Fetch('https://example.com/login'.url)],
+        (res) => switch (res.fetch.tag) {
+          null => [
             res.follow(
               res.parse(format.html).find('form').attr('action')!,
               method: HttpMethod.post,
               body: Body.form({'user': 'ada'}),
               tag: 'result',
-            );
-          });
+            ),
+          ].seq,
+          _ => const Sequence<Fetch>([]),
+        },
+      )..using(transport);
 
-      expect(seen.collect(.list()), ['Signed in']);
-      expect(downloader.fetches.map((r) => r.method), [
-        HttpMethod.get,
-        HttpMethod.post,
-      ]);
-      expect((downloader.fetches.last.body! as FormBody).fields, {
-        'user': 'ada',
+      final seen = await crawl.flow
+          .transform(.where((res) => res.fetch.tag == 'result'))
+          .transform(
+            .map((res) => res.parse(format.html).find('.welcome').text),
+          )
+          .collect(.list());
+
+      expect(seen, ['Signed in']);
+      expect(sent.map((r) => r.method), [HttpMethod.get, HttpMethod.post]);
+      expect(sent.last.body!.toJson(), {
+        'kind': 'form',
+        'fields': {'user': 'ada'},
       });
     });
 
     test(
       'two posts to one URL with different fields are two fetches',
       () async {
-        final downloader = MapDownloader<String>({
-          'POST /search': '<p>hits</p>',
-        });
-
-        await net
-            .crawl<String>('https://example.com/search'.url)
-            .downloader(downloader)
-            .run((res) {
-              if (res.depth > 0) return;
-              for (final page in ['1', '2', '2']) {
-                res.follow(
-                  '/search',
-                  method: HttpMethod.post,
-                  body: Body.form({'page': page}),
-                );
-              }
-            });
+        final sent = <Fetch>[];
+        await (net.crawl(
+              [Fetch('https://example.com/search'.url)],
+              (res) => res.fetch.depth > 0
+                  ? const Sequence<Fetch>([])
+                  : ['1', '2', '2']
+                        .map(
+                          (page) => res.follow(
+                            '/search',
+                            method: HttpMethod.post,
+                            body: Body.form({'page': page}),
+                          ),
+                        )
+                        .seq,
+            )..using((fetch) async {
+              sent.add(fetch);
+              return Reply.text('<p>hits</p>', fetch: fetch);
+            }))
+            .run();
 
         // Page 2 asked for twice, fetched once: de-duplication reads the body.
-        final posts = downloader.fetches.where(
-          (r) => r.method == HttpMethod.post,
-        );
-        expect(posts, hasLength(2));
+        expect(sent.where((r) => r.method == HttpMethod.post), hasLength(2));
+      },
+    );
+
+    test(
+      'a followed request carries the Referer and the caller headers',
+      () async {
+        final sent = <Fetch>[];
+        await (net.crawl(
+              [Fetch('https://example.com/a'.url)],
+              (res) => res.fetch.depth > 0
+                  ? const Sequence<Fetch>([])
+                  : [
+                      res.follow('/b', headers: {'X-Stage': 'two'}),
+                    ].seq,
+            )..using((fetch) async {
+              sent.add(fetch);
+              return Reply.text('<a href="/b">b</a>', fetch: fetch);
+            }))
+            .run();
+
+        expect(sent.last.headers['X-Stage'], 'two');
+        expect(sent.last.headers['Referer'], contains('/a'));
       },
     );
   });
 
-  group('MapDownloader', () {
-    test('a method-prefixed key beats the bare one', () async {
-      final downloader = MapDownloader<String>({
-        '/thing': 'get body',
-        'POST /thing': 'post body',
-      });
-
-      final get = await downloader.download(
-        Fetch<String>(Uri.parse('https://example.com/thing')),
-      );
-      final post = await downloader.download(
-        Fetch<String>(
-          Uri.parse('https://example.com/thing'),
-          method: HttpMethod.post,
-        ),
-      );
-
-      expect(get.body, 'get body');
-      expect(post.body, 'post body');
-    });
-
-    test('a method with no key of its own still falls back', () async {
-      final downloader = MapDownloader<String>({'/thing': 'shared'});
-      final res = await downloader.download(
-        Fetch<String>(
-          Uri.parse('https://example.com/thing'),
-          method: HttpMethod.put,
-        ),
-      );
-
-      expect(res.body, 'shared');
-      expect(res.status, 200);
-    });
-
-    test('an unknown path is still a 404', () async {
-      final downloader = MapDownloader<String>({'/thing': 'x'});
-      final res = await downloader.download(
-        Fetch<String>(Uri.parse('https://example.com/other')),
-      );
-
-      expect(res.status, 404);
-    });
-
-    test('records the headers a pipeline sent', () async {
-      final downloader = MapDownloader<String>({'/a': '<a href="/b">b</a>'});
-      await net
-          .crawl<String>('https://example.com/a'.url)
-          .downloader(downloader)
-          .run((res) => res.follow('/b', headers: {'X-Stage': 'two'}));
-
-      expect(downloader.fetches.last.headers['X-Stage'], 'two');
-      expect(downloader.fetches.last.headers['Referer'], contains('/a'));
-    });
-  });
-
-  group('Robots.load', () {
+  group('robots, over the crawl own transport', () {
     test('a 5xx disallows everything, per RFC 9309 2.3.1.4', () async {
       final origin = await _Origin.start((req, origin) async {
         req.response.statusCode = 503;
       });
       addTearDown(origin.stop);
 
-      final robots = await Robots.load(origin.root.url);
+      final crawl = net.crawl([Fetch('${origin.root}/anything'.url)])..obey();
+      await crawl.run();
+
       // Unreachable rules are not absent rules: the crawl stays out.
-      expect(robots.allowed('${origin.root}/anything'.url), isFalse);
+      expect(crawl.stats.skipped, 1);
+      expect(crawl.stats.fetched, 0);
     });
 
     test('a 404 still allows everything, per 2.3.1.3', () async {
       final origin = await _Origin.start((req, origin) async {
-        req.response.statusCode = 404;
+        if (req.uri.path == '/robots.txt') {
+          req.response.statusCode = 404;
+          return;
+        }
+        req.response.write('<h1>page</h1>');
       });
       addTearDown(origin.stop);
 
-      final robots = await Robots.load(origin.root.url);
-      expect(robots.allowed('${origin.root}/anything'.url), isTrue);
+      final crawl = net.crawl([Fetch('${origin.root}/anything'.url)])..obey();
+      await crawl.run();
+
+      expect(crawl.stats.fetched, 1);
+      expect(crawl.stats.skipped, 0);
     });
 
     test('a crawl obeying robots skips a host whose rules 500', () async {
@@ -597,12 +576,10 @@ void main() {
       });
       addTearDown(origin.stop);
 
-      final stats = await net
-          .crawl<String>('${origin.root}/page'.url)
-          .robots()
-          .run((res) {});
+      final crawl = net.crawl([Fetch('${origin.root}/page'.url)])..obey();
+      await crawl.run();
 
-      expect(stats.skipped, 1);
+      expect(crawl.stats.skipped, 1);
       expect(origin.served, isEmpty);
     });
   });

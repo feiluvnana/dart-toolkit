@@ -29,10 +29,11 @@ import 'format.dart';
 /// io.write('out.json', format.json.format(doc.raw));
 /// ```
 ///
-/// Writing a document straight to disk is `io.dump`, which stages through a
-/// `.part` file like every other write in this library; [format] is the string
+/// `format.json.write(path, value)` writes one to disk, staged through a
+/// `.part` file like every other write in this library; `io.dump` is the same
+/// call under the shorter name a script reaches for. [format] is the string
 /// half, for when the text is going somewhere that is not a file.
-class JsonAccessor with FileCodec<Json> implements Codec<Json> {
+class JsonAccessor with FileCodec<Json, Object?> implements Codec<Json> {
   /// Creates the accessor. Prefer the shared `format.json` instance.
   const JsonAccessor();
 
@@ -47,6 +48,10 @@ class JsonAccessor with FileCodec<Json> implements Codec<Json> {
   /// Encodes [value] as JSON text, indented by [indent] spaces.
   ///
   /// Pass `indent: 0` for the compact single-line form.
+  ///
+  /// `format.json.write(path, value)` is this plus an atomic write, and
+  /// `io.dump(path, value)` is that under a shorter name.
+  @override
   String format(Object? value, {int indent = 2}) =>
       JsonText.encode(value, indent: indent);
 }

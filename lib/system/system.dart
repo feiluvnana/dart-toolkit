@@ -5,6 +5,9 @@
 /// crash-safe shutdown — which is `system.on`, holding the whole vocabulary
 /// for what happens to your files and child processes when the program is
 /// interrupted: `signals`, `track`, `untrack`, `adopt`, `disown` and `exit`.
+///
+/// **`system.shutdown` is the only way out of the process.** It runs those
+/// hooks; `system.exit` did not, and was deleted for it.
 /// Six of those sat flat on `system` through 4.0.0 while `system.on` held only
 /// `exit`, which had the namespace on the single function and the family
 /// beside it — and cost `io` the name `watch`, which it now has back.
@@ -14,8 +17,7 @@
 library;
 
 import 'dart:async';
-import 'dart:io' hide exit;
-import 'dart:io' as io show exit;
+import 'dart:io';
 
 import '../src/proc.dart';
 import '../src/shared.dart';
@@ -95,23 +97,29 @@ class SystemAccessor {
       Sys.which(exe, paths: paths);
 
   /// Shuts down in order: kills adopted children, deletes tracked partial
-  /// files, runs the [SysEvents.exit] hooks, then exits with [code] when it is
-  /// non-zero.
+  /// files, runs the [SysEvents.exit] hooks, then exits with [code].
   ///
-  /// A script that registered an exit hook or watched for signals finishes
-  /// with this — the watcher holds the process open until it runs.
+  /// **The one door out of the process.** A script that registered an exit
+  /// hook or watched for signals finishes with this — the watcher holds the
+  /// process open until it runs.
   ///
   /// ```dart
   /// await system.shutdown();     // clean finish
   /// await system.shutdown(1);    // clean finish, non-zero status
   /// ```
-  Future<void> shutdown([int code = 0]) => Sys.shutdown(code);
-
-  /// Terminates the process immediately with [code], skipping cleanup.
   ///
-  /// Prefer [shutdown], which removes partial files and kills child processes
-  /// first.
-  Never exit([int code = 0]) => io.exit(code);
+  /// `system.exit` was the other door through 5.5.0 — `dart:io`'s `exit`
+  /// under this domain's name, skipping every hook `system.on` exists to
+  /// guarantee, including the tracked `.part` files. The only reason to reach
+  /// for it over this was not knowing the difference, which is the definition
+  /// of a footgun, and neither name said which was which. A script that
+  /// genuinely means to skip its own cleanup imports `dart:io` and calls
+  /// `exit`, and has written down that it meant to.
+  ///
+  /// Returning `Never` is the other half of the fix: through 5.5.0 this
+  /// returned `Future<void>` and left a reachable statement after
+  /// `await system.shutdown(1)` that never ran.
+  Future<Never> shutdown([int code = 0]) => Sys.shutdown(code);
 
   /// What this program is running on: platform, cores, host and user.
   ///
@@ -125,9 +133,11 @@ class SystemAccessor {
   /// ```
   ///
   /// [name] is Dart's own `'macos'`, `'linux'`, `'windows'`, `'android'`,
-  /// `'ios'` or `'fuchsia'` — [windows], [macos] and [linux] stay for the
-  /// question a script usually asks. [host] and [user] are `''` when the
-  /// platform will not say.
+  /// `'ios'` or `'fuchsia'`. [windows], [macos] and [linux] stay for the
+  /// question a script usually asks, and they are **one line off this
+  /// record** — through 5.5.0 they read `Platform.is*` directly, so the
+  /// record and the three booleans were two independent readings of one
+  /// fact. [host] and [user] are `''` when the platform will not say.
   ({String name, int cpus, String host, String user}) get os => (
     name: Platform.operatingSystem,
     cpus: Platform.numberOfProcessors,
@@ -149,14 +159,14 @@ class SystemAccessor {
     return env['USER'] ?? env['USERNAME'] ?? env['LOGNAME'] ?? '';
   }
 
-  /// Whether the host is Windows.
-  bool get windows => Platform.isWindows;
+  /// Whether the host is Windows. One line off [os].
+  bool get windows => os.name == 'windows';
 
-  /// Whether the host is macOS.
-  bool get macos => Platform.isMacOS;
+  /// Whether the host is macOS. One line off [os].
+  bool get macos => os.name == 'macos';
 
-  /// Whether the host is Linux.
-  bool get linux => Platform.isLinux;
+  /// Whether the host is Linux. One line off [os].
+  bool get linux => os.name == 'linux';
 }
 
 /// Shutdown events, reachable as `system.on`.

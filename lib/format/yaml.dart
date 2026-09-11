@@ -39,7 +39,7 @@ import 'format.dart';
 /// Reading gives a [Json] cursor rather than a type of its own: YAML and JSON
 /// decode to the same maps, lists and scalars, so a second cursor would be two
 /// spellings of one operation.
-class YamlAccessor with FileCodec<Json> implements Codec<Json> {
+class YamlAccessor with FileCodec<Json, Object?> implements Codec<Json> {
   /// Creates the accessor. Prefer the shared `format.yaml` instance.
   const YamlAccessor();
 
@@ -63,6 +63,7 @@ class YamlAccessor with FileCodec<Json> implements Codec<Json> {
   /// Block style throughout — the shape the files in the wild are written in.
   /// Maps, lists, strings, numbers, booleans and `null` are what a document
   /// can hold; anything else is rendered as its `toString`.
+  @override
   String format(Object? value, {int indent = 2}) {
     final buffer = StringBuffer();
     _write(buffer, value, 0, indent <= 0 ? 2 : indent);

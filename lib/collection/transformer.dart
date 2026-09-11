@@ -68,14 +68,15 @@ import 'sequence.dart';
 /// required half and a `pour` over a `Stream` the optional one. That is gone.
 /// A sequence has [Transformer] and [Collector], reached by
 /// [Sequence.transform] and [Sequence.collect]; a flow has [Pipe] and [Pour],
-/// reached by [Flow.pipe] and [Flow.pour].
+/// reached by [Flow.transform] and [Flow.collect].
 ///
-/// **The operations keep their spelling.** A dot shorthand resolves its name
-/// against the context type, so `.where(live)` reads the same on either
-/// container and picks the factory that fits. What differs is the member you
-/// hand it to, and that is deliberate: `flow.pipe(…)` says which vocabulary
-/// is in scope where `flow.transform(…)` said only that something was being
-/// transformed.
+/// **Nothing about the split reaches a call site.** A dot shorthand resolves
+/// its name against the context type, so `.where(live)` reads the same on
+/// either container and picks the factory that fits; and both containers
+/// spell the members `transform` and `collect`. The four operation types are
+/// what the split bought, and they are invisible where the work is written.
+/// 5.5.0 briefly renamed the flow's members to `pipe` and `pour` to advertise
+/// the split, which charged every call site for a change in the types.
 ///
 /// What the split bought, on each side:
 ///
@@ -95,8 +96,8 @@ import 'sequence.dart';
 /// ```dart
 /// // setup: bool live(Row r) => r.live; final flow = Flow<Row>.empty();
 /// final cleanup = Transformer.where<Row>(live);
-/// rows.transform(cleanup);            // Sequence<Row>
-/// flow.pipe(Pipe.of(cleanup));        // Flow<Row>
+/// rows.transform(cleanup);              // Sequence<Row>
+/// flow.transform(Pipe.of(cleanup));     // Flow<Row>
 /// ```
 ///
 /// [Pipe.of] buffers nothing for a filter or a map, and holds the whole

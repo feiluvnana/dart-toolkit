@@ -27,7 +27,6 @@ import 'package:path/path.dart' as p;
 
 import '../collection/sequence.dart';
 import '../src/fs.dart';
-import 'dir.dart';
 
 // ============================================================================
 // PATHS (io.path.*)
@@ -40,6 +39,21 @@ import 'dir.dart';
 class PathAccessor {
   /// Creates the accessor. Prefer the shared `io.path` instance.
   const PathAccessor();
+
+  /// The current working directory.
+  ///
+  /// It was `io.dir.cwd` through 5.5.0. A directory, yes — but this domain is
+  /// defined as the one corner where nothing is read, written or created, and
+  /// asking the process where it is standing reads no disk. Moving it deleted
+  /// the only exception `io.dir`'s mirror test had to carry.
+  String get cwd => Fs.cwd;
+
+  /// The current user's home directory.
+  ///
+  /// `$HOME` on POSIX and `%USERPROFILE%` on Windows, falling back to
+  /// `%HOMEDRIVE%%HOMEPATH%` and finally to [cwd], so this never returns
+  /// `null` for a script to handle.
+  String get home => Fs.home;
 
   /// Joins path segments using the platform separator.
   String join(
@@ -110,7 +124,7 @@ class PathAccessor {
 
   /// [path] with a leading `~` and any `$VAR` references resolved.
   ///
-  /// `~` expands to `io.dir.home` only at the start of the path, which is the
+  /// `~` expands to [home] only at the start of the path, which is the
   /// only place a shell expands it either. `$VAR` and `${VAR}` read from the
   /// process environment, and a name that is not set expands to nothing —
   /// the same as a shell, and the reason this is not `env.read`'s job.
@@ -122,9 +136,9 @@ class PathAccessor {
   String expand(String path) {
     var out = path;
     if (out == '~') {
-      out = const DirAccessor().home;
+      out = home;
     } else if (out.startsWith('~/') || out.startsWith('~\\')) {
-      out = p.join(const DirAccessor().home, out.substring(2));
+      out = p.join(home, out.substring(2));
     }
     return out.replaceAllMapped(
       _variable,

@@ -6,13 +6,19 @@
 library;
 
 import 'logger.dart';
+import 'progress.dart';
 import 'reader.dart';
+import 'spinner.dart';
+import 'table.dart';
 import 'terminal.dart';
 import 'writer.dart';
 
 export 'ansi.dart';
 export 'logger.dart';
+export 'progress.dart';
 export 'reader.dart';
+export 'spinner.dart';
+export 'table.dart';
 export 'terminal.dart';
 export 'writer.dart';
 
@@ -53,9 +59,14 @@ class ConsoleAccessor {
   /// Cursor positioning and visibility.
   Cursor get cursor => Cursor(_writer);
 
-  /// Creates a [Table] with [headers].
+  /// Creates a [Table] with [headers], bound to this console's writer.
   ///
   /// Pass [width] to cap the rendered width; cells then wrap to fit.
+  ///
+  /// **This and `Table(...)` are not the same call.** The accessor binds the
+  /// shared writer, so the output interleaves correctly with
+  /// `system.console.logger` and the rest of the domain. The constructor
+  /// takes a writer of its own — for a second output stream, or a test.
   Table table({
     required List<String> headers,
     List<ColumnAlign>? alignments,
@@ -68,7 +79,11 @@ class ConsoleAccessor {
     width: width,
   );
 
-  /// Creates a [Progress] bar counting up to [total].
+  /// Creates a [Progress] bar counting up to [total], bound to this
+  /// console's writer.
+  ///
+  /// `Progress(...)` is the constructor, and takes a writer of its own — see
+  /// [table] for why the pair is two calls rather than two spellings.
   Progress progress({
     required int total,
     int width = 25,
@@ -86,7 +101,10 @@ class ConsoleAccessor {
     writer: _writer,
   );
 
-  /// Creates a [Spinner].
+  /// Creates a [Spinner] bound to this console's writer.
+  ///
+  /// `Spinner(...)` is the constructor, and takes a writer of its own — see
+  /// [table] for why the pair is two calls rather than two spellings.
   Spinner spinner({
     List<String> frames = Spinner.braille,
     Duration interval = const Duration(milliseconds: 80),

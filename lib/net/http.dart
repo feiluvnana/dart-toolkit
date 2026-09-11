@@ -21,9 +21,11 @@ import '../concurrent/concurrent.dart';
 import '../io/entry.dart';
 import '../src/fs.dart';
 import '../src/codec.dart';
+import '../src/method.dart';
 import '../util/rand.dart';
 import '../collection/sequence.dart';
 import 'cache.dart';
+import 'fetch.dart';
 
 // ============================================================================
 // HTTP NETWORKING (Fetcher / Reply)
@@ -40,48 +42,29 @@ final class FatalHttpException extends HttpException {
   const FatalHttpException(super.message, {super.uri});
 }
 
-/// HTTP verbs supported by [Fetcher.send].
-enum HttpMethod {
-  /// Retrieve a resource.
-  get,
-
-  /// Submit a body to a resource.
-  post,
-
-  /// Replace a resource.
-  put,
-
-  /// Remove a resource.
-  delete,
-
-  /// Partially update a resource.
-  patch,
-
-  /// Retrieve only the headers of a resource.
-  head;
-
-  /// The uppercase wire representation, e.g. `'GET'`.
-  String get wire => name.toUpperCase();
-}
-
 /// A request body, resolved onto an outgoing [http.Request].
 ///
 /// Sealed so every supported body shape is explicit at the call site rather
-/// than inferred from a runtime type test.
+/// than inferred from a runtime type test. **The four shapes are private**:
+/// `Body.text`, `Body.bytes`, `Body.form` and `Body.json` are the whole
+/// surface, and the classes behind them were four more exported names that
+/// nothing could usefully do anything with — a `switch` over them was never
+/// the point, because the sealing exists so `apply` can be exhaustive
+/// *inside* this library.
 sealed class Body {
   const Body();
 
   /// A `text/plain` style body carrying [text] verbatim.
-  const factory Body.text(String text) = TextBody;
+  const factory Body.text(String text) = _TextBody;
 
   /// A raw byte body.
-  const factory Body.bytes(List<int> data) = BytesBody;
+  const factory Body.bytes(List<int> data) = _BytesBody;
 
   /// A form-encoded body built from [fields].
-  const factory Body.form(Map<String, String> fields) = FormBody;
+  const factory Body.form(Map<String, String> fields) = _FormBody;
 
   /// A JSON body; [data] accepts any value `jsonEncode` understands.
-  const factory Body.json(Object? data) = JsonBody;
+  const factory Body.json(Object? data) = _JsonBody;
 
   /// Restores a body from the map [toJson] produced.
   ///
@@ -92,13 +75,13 @@ sealed class Body {
   factory Body.fromJson(Map<String, Object?> json) {
     final kind = json['kind'];
     return switch (kind) {
-      'text' => TextBody(json['text'] as String? ?? ''),
-      'bytes' => BytesBody(base64Decode(json['data'] as String? ?? '')),
-      'form' => FormBody({
+      'text' => _TextBody(json['text'] as String? ?? ''),
+      'bytes' => _BytesBody(base64Decode(json['data'] as String? ?? '')),
+      'form' => _FormBody({
         for (final entry in (json['fields'] as Map? ?? const {}).entries)
           entry.key.toString(): entry.value.toString(),
       }),
-      'json' => JsonBody(json['data']),
+      'json' => _JsonBody(json['data']),
       _ => throw FormatException('Unknown body kind: $kind'),
     };
   }
@@ -114,12 +97,12 @@ sealed class Body {
 }
 
 /// A body carrying text verbatim.
-final class TextBody extends Body {
+final class _TextBody extends Body {
   /// The body text.
   final String text;
 
   /// Creates a text body.
-  const TextBody(this.text);
+  const _TextBody(this.text);
 
   @override
   void apply(http.Request request) => request.body = text;
@@ -132,12 +115,12 @@ final class TextBody extends Body {
 }
 
 /// A body carrying raw bytes.
-final class BytesBody extends Body {
+final class _BytesBody extends Body {
   /// The body bytes.
   final List<int> data;
 
   /// Creates a byte body.
-  const BytesBody(this.data);
+  const _BytesBody(this.data);
 
   @override
   void apply(http.Request request) => request.bodyBytes = data;
@@ -154,12 +137,12 @@ final class BytesBody extends Body {
 }
 
 /// A form-encoded body.
-final class FormBody extends Body {
+final class _FormBody extends Body {
   /// The form fields.
   final Map<String, String> fields;
 
   /// Creates a form body.
-  const FormBody(this.fields);
+  const _FormBody(this.fields);
 
   @override
   void apply(http.Request request) => request.bodyFields = fields;
@@ -179,12 +162,12 @@ final class FormBody extends Body {
 }
 
 /// A JSON body, sent with a `application/json` content type.
-final class JsonBody extends Body {
+final class _JsonBody extends Body {
   /// The value to encode.
   final Object? data;
 
   /// Creates a JSON body.
-  const JsonBody(this.data);
+  const _JsonBody(this.data);
 
   @override
   void apply(http.Request request) {
@@ -199,7 +182,26 @@ final class JsonBody extends Body {
   Map<String, Object?> toJson() => {'kind': 'json', 'data': data};
 }
 
-/// An HTTP response, with helpers for scraping its body.
+/// An HTTP response: what came back, and the request it came back from.
+///
+/// **`Page<T>` folded into this in 6.0.0.** Everything `Page` added was
+/// either the request it came from — [fetch], and [Fetch.tag], [Fetch.meta]
+/// and [Fetch.depth] through it — or a call on an engine. The engine calls
+/// are gone: `emit` because a crawl is a `Flow<Reply>` and the caller decides
+/// what to do with each reply, `stop` because cancelling that flow stops the
+/// crawl, and [follow] because it now *returns* the next request instead of
+/// queueing one.
+///
+/// That last change is the whole migration for a handler:
+///
+/// ```dart no-compile
+/// // before — a closure with a side effect, needing an engine behind it
+/// res.parse(format.html).find('a').attrs('href')
+///    .collect(.foreach((h) => res.follow(h)));
+///
+/// // after — a pure function from a reply to the next requests
+/// res.parse(format.html).find('a').attrs('href').transform(.map(res.follow))
+/// ```
 class Reply {
   static final _charsetParam = RegExp(r'charset=([^;]+)', caseSensitive: false);
   static final _charsetMeta = RegExp(
@@ -210,8 +212,12 @@ class Reply {
   /// The final URL after any redirects.
   final Uri url;
 
-  /// The URL originally asked for, before any redirects.
-  final Uri requested;
+  /// The request that produced this reply.
+  ///
+  /// `res.requested` was a second name for `res.fetch.url` through 5.5.0,
+  /// and `Page.tag`, `Page.meta` and `Page.depth` were three more for the
+  /// fields beside it.
+  final Fetch fetch;
 
   /// The HTTP status code.
   final int status;
@@ -242,18 +248,26 @@ class Reply {
   /// Creates a response. Normally produced by [Fetcher.send].
   Reply({
     required this.url,
-    Uri? requested,
+    Fetch? fetch,
     required this.status,
     required this.headers,
     required this.bytes,
     Encoding? encoding,
     this.cached = false,
-  }) : requested = requested ?? url,
+  }) : fetch = fetch ?? Fetch(url),
        _encodingOverride = encoding;
 
   /// Creates a [Reply] from a [text] string.
   ///
-  /// With only [requested] given, that is also the [url]: a fixture that says
+  /// The fixture a [Send] hands back, and the reason a crawl's `next` is
+  /// testable with no network and no engine:
+  ///
+  /// ```dart
+  /// Future<Reply> fixture(Fetch f) async =>
+  ///     Reply.text('<h1>hi</h1>', fetch: f);
+  /// ```
+  ///
+  /// With only [fetch] given, its URL is also the [url]: a fixture that says
   /// where it came from should resolve its own links from there rather than
   /// from `localhost`.
   factory Reply.text(
@@ -261,13 +275,31 @@ class Reply {
     Uri? url,
     int status = 200,
     Map<String, String>? headers,
-    Uri? requested,
+    Fetch? fetch,
   }) => Reply(
-    url: url ?? requested ?? Uri.parse('http://localhost'),
-    requested: requested,
+    url: url ?? fetch?.url ?? Uri.parse('http://localhost'),
+    fetch: fetch,
     status: status,
     headers: headers ?? const {'content-type': 'text/html; charset=utf-8'},
     bytes: utf8.encode(text),
+  );
+
+  /// Creates a [Reply] carrying raw [data].
+  ///
+  /// The byte twin of [Reply.text], for a [Send] serving an image, an archive
+  /// or anything else a fixture is not text.
+  factory Reply.bytes(
+    List<int> data, {
+    Uri? url,
+    int status = 200,
+    Map<String, String>? headers,
+    Fetch? fetch,
+  }) => Reply(
+    url: url ?? fetch?.url ?? Uri.parse('http://localhost'),
+    fetch: fetch,
+    status: status,
+    headers: headers ?? const {'content-type': 'application/octet-stream'},
+    bytes: data,
   );
 
   /// Whether [status] is in the 2xx range.
@@ -366,7 +398,48 @@ class Reply {
     return null;
   }
 
+  /// The next request, resolved against this reply's URL.
+  ///
+  /// **Returns a [Fetch]; it does not queue one.** A crawl's `next` is a pure
+  /// function from a reply to the requests that follow it, so this composes
+  /// with the collection vocabulary and needs no engine behind it:
+  ///
+  /// ```dart no-compile
+  /// res.parse(format.html).find('a').attrs('href').transform(.map(res.follow))
+  /// ```
+  ///
+  /// It tears off cleanly because the href comes first and everything else is
+  /// named. A `Referer` naming this page is set for you, [depth] grows by
+  /// one, and relative URLs resolve against [url].
+  ///
+  /// Pass [method] and [body] to follow a form rather than a link — though a
+  /// `<form>` on the page is better spelled `form.at(res.url).fetch()`, which
+  /// reads the method, the action and the fields off the form itself.
+  Fetch follow(
+    String url, {
+    HttpMethod method = HttpMethod.get,
+    Body? body,
+    String? tag,
+    Iterable<(String, Object?)>? meta,
+    Map<String, String>? headers,
+    int priority = 0,
+    bool dedupe = true,
+  }) => Fetch(
+    coerce(url, base: this.url),
+    method: method,
+    body: body,
+    headers: {'Referer': this.url.toString(), ...?headers},
+    tag: tag,
+    meta: meta,
+    priority: priority,
+    dedupe: dedupe,
+    depth: fetch.depth + 1,
+  );
+
   /// Writes the response body to [path] atomically.
+  ///
+  /// One line over `io.async.bytes.write(path, res.bytes)`, kept because it
+  /// is written constantly.
   Future<FileSystemEntry> save(String path, {String part = '.part'}) async =>
       Fs.entryFor((await Fs.save(path, bytes, part: part)).path);
 
@@ -376,9 +449,11 @@ class Reply {
 
 /// Resolves destination paths against an optional base directory.
 ///
-/// Shared by [Fetcher] and every [Downloader], which both accept a `base`
-/// folder that relative destinations hang off.
-mixin PathResolver {
+/// Private since 6.0.0: it was a public mixin so that `Downloader` could
+/// share it with [Fetcher], and `Downloader` no longer exists — a transport
+/// is a [Send], and a `Send` has nowhere to put a base directory because it
+/// does not write files.
+mixin _PathResolver {
   /// The base directory prepended to relative destinations, if any.
   String? get base;
 
@@ -402,7 +477,7 @@ mixin PathResolver {
 /// final res = await client.get('https://example.com/page'.url);
 /// await client.close();
 /// ```
-class Fetcher with PathResolver {
+class Fetcher with _PathResolver {
   final http.Client _client;
   final bool _ownsClient;
 
@@ -462,14 +537,27 @@ class Fetcher with PathResolver {
   /// await concurrent.run(urls, api.get, size: 8);
   /// ```
   ///
+  /// Typed [Waiting], so a [Semaphore] paces this client as readily as a
+  /// [Limiter] — *at most three of my requests in flight anywhere in this
+  /// program* is as reasonable a rule as *ten per second*, and only the
+  /// second one compiled through 5.5.0.
+  ///
   /// The dependency points this way round on purpose: `concurrent` knows
   /// nothing about responses, so a limiter that read `Retry-After` off one
   /// would tangle the two domains. Retry pacing already honours that header —
   /// see [Fetcher.retries].
-  final Limiter? limiter;
+  final Waiting? limiter;
 
   /// Number of files successfully downloaded through this client.
   int count = 0;
+
+  /// Number of requests this client tried again.
+  ///
+  /// Retrying happens here, below any scheduler, so this is where the number
+  /// lives. A crawl reported it as `Stats.retried` through 5.5.0, and only
+  /// because the downloader that retried also owned the worker loop; a
+  /// [Send] is a function and has nothing to report through.
+  int retried = 0;
 
   /// Creates a client.
   ///
@@ -523,7 +611,12 @@ class Fetcher with PathResolver {
   ///
   /// [onretry] is called with the URL and the attempt number just before each
   /// wait, which is how a caller counts retries that happen in here — a crawl
-  /// reports them as [Stats.retried].
+  /// reports them as `stats.retried`.
+  ///
+  /// [fetch] is the request the reply should report as its own
+  /// [Reply.fetch], carrying the `tag`, `meta` and `depth` a crawl put on it.
+  /// [call] passes it; a direct `get` has nothing to pass and the reply
+  /// describes itself.
   Future<Reply> send(
     HttpMethod method,
     Uri url, {
@@ -536,6 +629,7 @@ class Fetcher with PathResolver {
     Encoding? encoding,
     int? retries,
     void Function(Uri url, int attempt)? onretry,
+    Fetch? fetch,
   }) async {
     final store = cache;
     CacheEntry? entry;
@@ -591,6 +685,7 @@ class Fetcher with PathResolver {
           if (allowRetry &&
               _retryable(response.statusCode) &&
               attempt < maxAttempts) {
+            retried++;
             onretry?.call(currentUrl, attempt);
             await Future<void>.delayed(
               _retryAfter(response.headers) ??
@@ -633,7 +728,7 @@ class Fetcher with PathResolver {
 
           final result = Reply(
             url: currentUrl,
-            requested: url,
+            fetch: fetch ?? Fetch(url, method: method),
             status: response.statusCode,
             headers: response.headers,
             bytes: response.bodyBytes,
@@ -648,6 +743,7 @@ class Fetcher with PathResolver {
           // answer: replaying it only re-downloads the same refusal.
           if (error is FatalHttpException) rethrow;
           if (!allowRetry || attempt >= maxAttempts) rethrow;
+          retried++;
           onretry?.call(currentUrl, attempt);
           await Future<void>.delayed(_backoffWithJitter(backoff * attempt));
         }
@@ -714,7 +810,7 @@ class Fetcher with PathResolver {
     const refreshed = ['cache-control', 'expires', 'date', 'etag'];
     return Reply(
       url: entry.response.url,
-      requested: entry.response.requested,
+      fetch: entry.response.fetch,
       status: entry.response.status,
       headers: {
         ...entry.response.headers,
@@ -898,7 +994,7 @@ class Fetcher with PathResolver {
     bool match = false,
   }) async {
     final dest = resolve(path);
-    if (Fs.has(dest, match: match)) return Fs.entryFor(dest);
+    if (match ? Fs.similar(dest) : Fs.has(dest)) return Fs.entryFor(dest);
 
     final merged = {...this.headers, ...?headers};
     final maxAttempts = retries > 0 ? retries + 1 : 1;
@@ -921,9 +1017,76 @@ class Fetcher with PathResolver {
     }
   }
 
+  /// Answers [fetch] — **this client, as a [Send]**.
+  ///
+  /// What makes `Fetcher` the default transport of a crawl without a class
+  /// hierarchy in between: `Crawl.using` takes a `Send`, a `Fetcher` is one,
+  /// and so is any closure.
+  ///
+  /// Schemes other than `http` and `https` are answered here rather than on
+  /// the wire, which is what lets a crawl be seeded with a `file:` path, a
+  /// `data:` document or raw markup: `Fetch(Uri.file(path))`,
+  /// `Fetch(coerce(markup))`. `HttpDownloader` did this through 5.5.0 and was
+  /// a class for it.
+  Future<Reply> call(Fetch fetch) async {
+    final uri = fetch.url;
+    switch (uri.scheme) {
+      case 'http':
+      case 'https':
+        return send(
+          fetch.method,
+          uri,
+          headers: fetch.headers.isEmpty ? null : fetch.headers,
+          body: fetch.body,
+          retry: fetch.method == HttpMethod.get ? null : true,
+          fetch: fetch,
+        );
+      case 'data':
+        return Reply(
+          url: uri,
+          fetch: fetch,
+          status: 200,
+          headers: {'content-type': uri.data?.mimeType ?? 'text/html'},
+          bytes:
+              uri.data?.contentAsBytes() ??
+              utf8.encode(uri.data?.contentAsString() ?? ''),
+        );
+      case 'file':
+        final file = dart_io.File(uri.toFilePath());
+        if (!await file.exists()) {
+          // A path that is not there is a miss, not a page whose body is its
+          // own URL: report it the way a 404 from the network would arrive.
+          return Reply(
+            url: uri,
+            fetch: fetch,
+            status: 404,
+            headers: const {'content-type': 'text/plain'},
+            bytes: const [],
+          );
+        }
+        return Reply(
+          url: uri,
+          fetch: fetch,
+          status: 200,
+          headers: const {'content-type': 'text/html'},
+          bytes: await file.readAsBytes(),
+        );
+      default:
+        final content = uri.scheme == 'string'
+            ? Uri.decodeComponent(uri.path)
+            : (uri.hasScheme ? uri.toString() : uri.path);
+        return Reply(
+          url: uri,
+          fetch: fetch,
+          status: 200,
+          headers: const {'content-type': 'text/plain'},
+          bytes: utf8.encode(content),
+        );
+    }
+  }
+
   /// Whether [path], resolved against [base], already holds bytes.
-  bool has(String path, {bool match = false}) =>
-      Fs.has(resolve(path), match: match);
+  bool has(String path) => Fs.has(resolve(path));
 
   /// Downloads every entry of [tasks], mapping destination path to source URL.
   ///

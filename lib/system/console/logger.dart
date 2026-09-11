@@ -9,6 +9,7 @@ import 'dart:convert';
 
 import '../../util/time.dart';
 import 'ansi.dart';
+import 'spinner.dart';
 import 'writer.dart';
 
 // ============================================================================
@@ -175,7 +176,7 @@ class ConsoleLogger {
         if (stamp) 'time': _time.iso(),
         'level': level,
         // Escape codes are for a screen. A log file keeps the words.
-        'message': Ansi.strip(message),
+        'message': message.plain,
         ...fields,
       });
 }

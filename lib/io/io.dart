@@ -16,6 +16,21 @@
 /// Plus `io.csv` for the two CSV operations that are about a file larger than
 /// memory, and `io.async` for the whole thing again without blocking.
 ///
+/// **The read and write halves are spelled the same.** The name says the
+/// shape, and `.write` is how it goes back: `io.read`/`io.write` for text,
+/// `io.bytes`/`io.bytes.write`, `io.lines`/`io.lines.write`,
+/// `io.chunks`/`io.chunks.write`, `io.csv.rows`/`io.csv.write`. A reader who
+/// learns one has learned all five. `io.save` was the exception through
+/// 5.5.0 — bytes, under a name that is the same English word as `write` and
+/// says nothing about which of the two takes them.
+///
+/// **One type here owns a resource.** Everything else is a value or an
+/// accessor, and every other member is complete when it returns.
+/// [Appender] — from `io.append.open(path)` — holds a descriptor open until
+/// `close()`, because a loop that appends ten thousand lines should not
+/// reopen the file ten thousand times. It is the one thing in `io` that needs
+/// a `finally`.
+///
 /// Reading a JSON, YAML or TOML *document* is `format.*`: a format is
 /// knowledge from outside Dart, so all of them live in one family rather than
 /// one of them here. [dump] still writes one, because staging through a
@@ -175,13 +190,19 @@ class IoAccessor {
   /// The three ingredients are [exists], [isfile] and [empty] now, so a
   /// caller who wanted one of them no longer has to take all three.
   ///
-  /// Set [match] to also accept a loosely-named sibling — see [Fs.similar],
-  /// which is fuzzy enough to produce false positives.
-  bool has(String path, {bool match = false}) => Fs.has(path, match: match);
+  /// A loosely-named sibling counts for [similar], not for this. It was a
+  /// `match:` flag here through 5.5.0, and `io.has(p, match: true)` was
+  /// provably `io.similar(p)` for every input — [similar] opens by calling
+  /// [has] — so it was two spellings of one answer, one of them a boolean
+  /// that turned this member into a different one.
+  bool has(String path) => Fs.has(path);
 
-  /// Whether a loosely similarly-named file sits beside [path].
+  /// Whether [path] holds bytes, or a loosely similarly-named file beside it
+  /// does.
   ///
-  /// See [Fs.similar] for the matching rules and their caveats.
+  /// [has], widened. See [Fs.similar] for the matching rules and their
+  /// caveats — it is fuzzy enough to produce false positives, which is why
+  /// this is the member you have to ask for by name.
   bool similar(String path) => Fs.similar(path);
 
   /// The entry at [path], or `null` when there is nothing there.
@@ -204,8 +225,22 @@ class IoAccessor {
   String read(String path, {Encoding encoding = utf8}) =>
       File(path).readAsStringSync(encoding: encoding);
 
-  /// Reads [path] as raw bytes.
-  List<int> bytes(String path) => File(path).readAsBytesSync();
+  /// Reads [path] as raw bytes, and writes bytes back.
+  ///
+  /// Callable, and a namespace, exactly as [lines] and [append] are:
+  /// `bytes(path)` reads and `bytes.write(path, data)` writes.
+  ///
+  /// ```dart
+  /// final data = io.bytes('cover.jpg');
+  /// io.bytes.write('out/cover.jpg', data);
+  /// ```
+  ///
+  /// The write was `io.save` through 5.5.0, which is the same English word as
+  /// [write] and said nothing about which of the two took bytes. The rule for
+  /// the whole domain now: **the name says the shape, and `.write` is how it
+  /// goes back.** A reader who learns [lines] has learned this and [chunks]
+  /// for free.
+  BytesAccessor get bytes => const BytesAccessor();
 
   /// Reads [path] as decoded lines, and writes a collection back as them.
   ///
@@ -228,7 +263,8 @@ class IoAccessor {
 
   /// Reads [path] in byte chunks, without holding the whole file.
   ///
-  /// The streaming half of [bytes], which reads all of it. A lazy view, so
+  /// The streaming half of [bytes], which reads all of it at once. A lazy
+  /// view, so
   /// nothing is read until the sequence is walked and a reader that stops
   /// early stops reading:
   ///
@@ -238,8 +274,9 @@ class IoAccessor {
   /// ```
   ///
   /// [size] is the most bytes a chunk carries; the last one is short.
-  Sequence<List<int>> chunks(String path, {int size = 64 * 1024}) =>
-      Sequence(Fs.chunksSync(path, size: size));
+  /// `chunks.write(path, seq)` is the other direction, which writes the
+  /// chunks through without ever holding the file.
+  ChunksAccessor get chunks => const ChunksAccessor();
 
   // --- Writing (always atomic, via a `.part` staging file) ---
 
@@ -253,18 +290,15 @@ class IoAccessor {
     Fs.writeSync(path, content, part: part, encoding: encoding).path,
   );
 
-  /// Writes raw [content] bytes to [path] atomically. See [Fs.saveSync].
-  FileSystemEntry save(
-    String path,
-    List<int> content, {
-    String part = '.part',
-  }) => Fs.entryFor(Fs.saveSync(path, content, part: part).path);
-
   /// Encodes [data] as JSON and writes it to [path] atomically.
   ///
   /// [data] accepts any value `jsonEncode` understands. Reading one back is
-  /// `format.json.read`; the write stays here because staging through a `.part`
-  /// file is this domain's job, not the format's.
+  /// `format.json.read`, and the general form of this is
+  /// `format.json.write(path, data)` — this is that under the shorter name a
+  /// script reaches for, for the one format everybody has.
+  ///
+  /// Its three relatives write JSON *of a collection*, with the receiver
+  /// first: `seq.dump(path)`, `dict.dump(path)`, `await flow.dump(path)`.
   FileSystemEntry dump(
     String path,
     Object? data, {
@@ -300,12 +334,12 @@ class IoAccessor {
   ///
   /// The file beside `io.dir.temp`'s directory. It is made inside a fresh
   /// temporary directory of its own, so two callers with one prefix cannot
-  /// collide, and removing [FileSystemEntry.dirname] removes the lot.
+  /// collide, and removing `io.path.dirname(entry.path)` removes the lot.
   ///
   /// ```dart
   /// final scratch = io.temp('render_');
   /// io.write(scratch.path, 'working');
-  /// io.remove(scratch.dirname);
+  /// io.remove(io.path.dirname(scratch.path));
   /// ```
   FileSystemEntry temp([String prefix = 'tmp_']) => Fs.tempfileSync(prefix);
 
@@ -346,7 +380,7 @@ class IoAccessor {
   /// // setup: final seed = 'https://example.com'.url;
   /// await io.lock('.crawl.lock', () async {
   ///   // exactly one process in here
-  ///   await net.crawl<Row>(seed).flow().dump('out.json');
+  ///   await net.crawl([Fetch(seed)]).flow.dump('out.json');
   /// });
   /// ```
   ///
@@ -435,9 +469,9 @@ class IoAccessor {
 /// this inside handlers and pool workers.
 ///
 /// ```dart
-/// await net.crawl<String>(seed).items((res) async {
-///   await io.async.write('pages/${res.depth}.html', res.body);
-/// });
+/// await net.crawl([Fetch(seed)]).flow.collect(.foreach((res) async {
+///   await io.async.write('pages/${res.fetch.depth}.html', res.body);
+/// }));
 /// ```
 ///
 /// **What is deliberately not here**, and why the mirror is still complete:
@@ -512,8 +546,7 @@ class IoAsyncAccessor {
       };
 
   /// Whether [path] exists and holds at least one byte.
-  Future<bool> has(String path, {bool match = false}) =>
-      Fs.hasAsync(path, match: match);
+  Future<bool> has(String path) => Fs.hasAsync(path);
 
   /// Whether a loosely similarly-named file sits beside [path]. See [Fs.similar].
   Future<bool> similar(String path) => Fs.similarAsync(path);
@@ -527,8 +560,8 @@ class IoAsyncAccessor {
   Future<String> read(String path, {Encoding encoding = utf8}) =>
       File(path).readAsString(encoding: encoding);
 
-  /// Reads [path] as raw bytes.
-  Future<List<int>> bytes(String path) => File(path).readAsBytes();
+  /// Reads [path] as raw bytes, and writes bytes back. See [IoAccessor.bytes].
+  BytesAsyncAccessor get bytes => const BytesAsyncAccessor();
 
   /// Reads [path] as decoded lines, and writes a flow back as them.
   ///
@@ -538,20 +571,19 @@ class IoAsyncAccessor {
   ///
   /// ```dart
   /// await io.async.lines('big.log')
-  ///     .pipe(.where((line) => line.contains('ERROR')))
-  ///     .pour(.foreach(print));
+  ///     .transform(.where((line) => line.contains('ERROR')))
+  ///     .collect(.foreach(print));
   ///
   /// await io.async.lines.write(
   ///   'out/errors.log',
-  ///   io.async.lines('big.log').pipe(.where((l) => l.contains('ERROR'))),
+  ///   io.async.lines('big.log').transform(.where((l) => l.contains('ERROR'))),
   /// );
   /// ```
   LinesAsyncAccessor get lines => const LinesAsyncAccessor();
 
-  /// Reads [path] in byte chunks as they arrive.
-  /// See [IoAccessor.chunks].
-  Flow<List<int>> chunks(String path, {int size = 64 * 1024}) =>
-      Flow.of(() => Fs.chunks(path, size: size));
+  /// Reads [path] in byte chunks as they arrive, and writes a flow of them
+  /// back. See [IoAccessor.chunks].
+  ChunksAsyncAccessor get chunks => const ChunksAsyncAccessor();
 
   // --- Writing (always atomic, via a `.part` staging file) ---
 
@@ -564,13 +596,6 @@ class IoAsyncAccessor {
   }) async => Fs.entryFor(
     (await Fs.write(path, content, part: part, encoding: encoding)).path,
   );
-
-  /// Writes raw [content] bytes to [path] atomically. See [Fs.save].
-  Future<FileSystemEntry> save(
-    String path,
-    List<int> content, {
-    String part = '.part',
-  }) async => Fs.entryFor((await Fs.save(path, content, part: part)).path);
 
   /// Encodes [data] as JSON and writes it to [path] atomically.
   Future<FileSystemEntry> dump(
@@ -628,6 +653,86 @@ Dictionary<String, Object?> _dictionary(String path, String text) {
 // THE NAMESPACES
 // ============================================================================
 
+/// The namespace behind [IoAccessor.bytes].
+class BytesAccessor {
+  /// Creates the accessor. Prefer the shared `io.bytes` instance.
+  const BytesAccessor();
+
+  /// Reads [path] as raw bytes.
+  List<int> call(String path) => File(path).readAsBytesSync();
+
+  /// Writes [content] to [path] atomically. See [Fs.saveSync].
+  FileSystemEntry write(
+    String path,
+    List<int> content, {
+    String part = '.part',
+  }) => Fs.entryFor(Fs.saveSync(path, content, part: part).path);
+}
+
+/// The namespace behind [IoAsyncAccessor.bytes].
+class BytesAsyncAccessor {
+  /// Creates the accessor. Prefer the shared `io.async.bytes` instance.
+  const BytesAsyncAccessor();
+
+  /// Reads [path] as raw bytes.
+  Future<List<int>> call(String path) => File(path).readAsBytes();
+
+  /// Writes [content] to [path] atomically. See [Fs.save].
+  Future<FileSystemEntry> write(
+    String path,
+    List<int> content, {
+    String part = '.part',
+  }) async => Fs.entryFor((await Fs.save(path, content, part: part)).path);
+}
+
+/// The namespace behind [IoAccessor.chunks].
+class ChunksAccessor {
+  /// Creates the accessor. Prefer the shared `io.chunks` instance.
+  const ChunksAccessor();
+
+  /// Reads [path] in byte chunks of at most [size] — on the walk, not before.
+  Sequence<List<int>> call(String path, {int size = 64 * 1024}) =>
+      Sequence(Fs.chunksSync(path, size: size));
+
+  /// Writes [chunks] to [path] atomically, one after another.
+  ///
+  /// The whole sequence is walked while the staging file is open, so nothing
+  /// is held but the chunk being written — which is what makes copying a file
+  /// larger than memory one line.
+  FileSystemEntry write(
+    String path,
+    Sequence<List<int>> chunks, {
+    String part = '.part',
+  }) => Fs.entryFor(
+    Fs.writeChunksSync(path, chunks.collect(.list()), part: part).path,
+  );
+}
+
+/// The namespace behind [IoAsyncAccessor.chunks].
+class ChunksAsyncAccessor {
+  /// Creates the accessor. Prefer the shared `io.async.chunks` instance.
+  const ChunksAsyncAccessor();
+
+  /// Reads [path] in byte chunks of at most [size] as they arrive.
+  Flow<List<int>> call(String path, {int size = 64 * 1024}) =>
+      Flow.of(() => Fs.chunks(path, size: size));
+
+  /// Writes [chunks] to [path] atomically as they arrive.
+  ///
+  /// ```dart
+  /// await io.async.chunks.write('copy.bin', io.async.chunks('big.bin'));
+  /// ```
+  ///
+  /// The file appears whole or not at all: bytes go to a staging file that is
+  /// renamed into place once the flow ends, and discarded if it fails.
+  Future<FileSystemEntry> write(
+    String path,
+    Flow<List<int>> chunks, {
+    String part = '.part',
+  }) async =>
+      Fs.entryFor((await Fs.pourChunks(path, chunks.stream, part: part)).path);
+}
+
 /// The namespace behind [IoAccessor.lines].
 class LinesAccessor {
   /// Creates the accessor. Prefer the shared `io.lines` instance.
@@ -639,8 +744,8 @@ class LinesAccessor {
 
   /// Writes [lines] to [path] atomically, one element per line.
   ///
-  /// The general form that `net.crawl(...).save(path)` and `io.csv.pipe` were
-  /// each a private version of through 5.4.0. [newline] ends every line,
+  /// The general form that a crawl's `save(path)` and `io.csv.pipe` were each
+  /// a private version of through 5.4.0. [newline] ends every line,
   /// including the last.
   FileSystemEntry write(
     String path,
@@ -674,7 +779,10 @@ class LinesAsyncAccessor {
   /// a piped stdin becomes a file in one call:
   ///
   /// ```dart
-  /// await io.async.lines.write('titles.txt', net.crawl<String>(seed).flow());
+  /// await io.async.lines.write(
+  ///   'titles.txt',
+  ///   net.crawl([Fetch(seed)]).flow.transform(.map((res) => res.url.toString())),
+  /// );
   /// ```
   ///
   /// The file appears whole or not at all: lines go to a staging file that is
@@ -754,10 +862,26 @@ class AppendAsyncAccessor {
 
 /// An open file, held for a run of appends.
 ///
-/// The one value in `io` that owns an operating-system resource. Everything
-/// else here is a snapshot with nothing to close, which is what lets it be
-/// handed around freely; this is not, so [close] is the caller's job and a
-/// `try`/`finally` is the shape.
+/// **The one type in `io` with a lifecycle.** Every other member of the
+/// domain is complete when it returns, and every other value here — a
+/// [FileSystemEntry], a [Dictionary] — is a snapshot that owns nothing and
+/// can be handed around freely. This holds a descriptor from
+/// `io.append.open(path)` until [close], so closing it is the caller's job
+/// and a `try`/`finally` is the shape:
+///
+/// ```dart
+/// // setup: const lines = ['first', 'second'];
+/// final log = await io.append.open('out/run.log');
+/// try {
+///   for (final line in lines) log.line(line);
+/// } finally {
+///   await log.close();
+/// }
+/// ```
+///
+/// It exists because the alternative for a loop is `io.append(path, text)` per
+/// line, which opens and closes the file every time. Like every append, it is
+/// **not atomic** — see [IoAccessor.append].
 final class Appender {
   Appender._(this.path, Encoding encoding)
     : _sink = File(path).openWrite(mode: FileMode.append, encoding: encoding);

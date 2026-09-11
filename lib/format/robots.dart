@@ -1,14 +1,55 @@
-/// # Robots.txt Parser & Matcher
+/// # robots.txt (`format.robots.*`)
 ///
-/// Parses `robots.txt` files according to RFC 9309 (Robots Exclusion Protocol).
-/// Supports User-agent matching, Allow and Disallow directives with wildcards (`*`)
-/// and end-of-pattern anchors (`$`), Crawl-delay, and Sitemap directives.
+/// The format codec, spelled exactly like [JsonAccessor] and the rest:
+/// `parse`, `read`, `write`, `format`. A `robots.txt` arrives from outside
+/// Dart with its own words — `User-agent`, `Disallow`, `Crawl-delay` — which
+/// is Rule 1's definition of a subject, and Rule 2's fifth test puts a
+/// subject with siblings in the family its siblings are in.
+///
+/// It was `net.robots(content)` through 5.5.0, in the domain whose own
+/// library doc opens *this domain does not parse anything*.
+///
+/// ```dart
+/// final rules = (await net.http.get('https://x.test/robots.txt'.url))
+///     .parse(format.robots);
+/// rules.allowed('https://x.test/admin'.url, agent: 'MyBot');
+/// ```
+///
+/// Fetching one is the crawl's job: `Crawl.obey()` reads `/robots.txt`
+/// through the same [Send] the crawl uses, so politeness works against a
+/// fixture transport — which `Robots.load` could not do, because it reached
+/// for the shared client itself.
 library;
 
-import 'dart:async';
-
 import '../collection/sequence.dart';
-import 'net.dart';
+import '../src/codec.dart';
+import 'format.dart';
+
+// ============================================================================
+// ROBOTS.TXT (format.robots.*)
+// ============================================================================
+
+/// Entry point for `robots.txt`, reachable as `format.robots`.
+class RobotsAccessor with FileCodec<Robots, Robots> implements Codec<Robots> {
+  /// Creates the accessor. Prefer the shared `format.robots` instance.
+  const RobotsAccessor();
+
+  /// Parses [text] into a [Robots] evaluator.
+  ///
+  /// Text that is not `robots.txt` gives the empty document, which allows
+  /// everything — the contract every reader in this library keeps.
+  @override
+  Robots parse(String text) => Robots.parse(text);
+
+  /// Renders [value] back to `robots.txt` text.
+  ///
+  /// One group per user-agent, in the order they were parsed, with the
+  /// `Sitemap` lines last. A round trip through [parse] and back gives a
+  /// document with the same rules — not the same bytes, since comments and
+  /// blank lines are not a robots.txt's content.
+  @override
+  String format(Robots value) => value.render();
+}
 
 /// A single Allow or Disallow rule in a `robots.txt` file.
 class RobotsRule {
@@ -150,52 +191,6 @@ class Robots {
     );
   }
 
-  /// Fetches `/robots.txt` from the host in [url] and parses it.
-  ///
-  /// The answer to a robots.txt that is not there is not the same as the
-  /// answer to one that could not be fetched, and RFC 9309 section 2.3.1 says
-  /// so:
-  ///
-  /// - **2xx** — the rules in the body apply.
-  /// - **4xx** (2.3.1.3) — the host has no rules, so everything is allowed.
-  /// - **5xx** (2.3.1.4) — the rules are unreachable, not absent. Crawling is
-  ///   disallowed outright rather than assumed free, so a server having a bad
-  ///   day is not read as an invitation.
-  ///
-  /// A transport error — DNS, a refused connection, a timeout — is treated as
-  /// 4xx rather than 5xx. That is a deliberate departure: the RFC's
-  /// "unreachable" case is about a server that answered badly, and stopping a
-  /// whole crawl over one failed lookup costs more than it protects.
-  static Future<Robots> load(Uri url, {Fetcher? client}) async {
-    final robotsUrl = Uri(
-      scheme: url.scheme.isNotEmpty ? url.scheme : 'https',
-      userInfo: url.userInfo,
-      host: url.host,
-      port: url.hasPort ? url.port : null,
-      path: '/robots.txt',
-    );
-
-    try {
-      final c = client ?? net.http;
-      final res = await c.get(robotsUrl);
-      if (res.ok) {
-        return Robots.parse(res.body);
-      }
-      if (res.status >= 500) return _closed;
-    } catch (_) {
-      // Ignore network errors, fall back to allow-all.
-    }
-    return Robots();
-  }
-
-  /// The document a host that could not answer is read as having: nothing is
-  /// allowed. See [load].
-  static final Robots _closed = Robots(
-    rules: {
-      '*': [RobotsRule('/', allow: false)],
-    },
-  );
-
   /// The rule group that applies to [agent], per RFC 9309 section 2.2.1.
   ///
   /// A declared `User-agent` matches when it is a case-insensitive prefix of
@@ -256,10 +251,43 @@ class Robots {
     return true;
   }
 
+  /// Renders this document back to `robots.txt` text. See
+  /// [RobotsAccessor.format].
+  String render() {
+    final out = StringBuffer();
+    for (final entry in _rules.entries) {
+      out.writeln('User-agent: ${entry.key}');
+      final gap = _delays[entry.key];
+      if (gap != null) {
+        out.writeln('Crawl-delay: ${gap.inMilliseconds / 1000}');
+      }
+      for (final rule in entry.value) {
+        out.writeln('${rule.allow ? 'Allow' : 'Disallow'}: ${rule.pattern}');
+      }
+      out.writeln();
+    }
+    for (final map in sitemaps) {
+      out.writeln('Sitemap: $map');
+    }
+    return out.toString();
+  }
+
+  /// The document a host that could not answer is read as having: nothing is
+  /// allowed.
+  ///
+  /// RFC 9309 section 2.3.1.4 — a 5xx means the rules are unreachable, not
+  /// absent, so crawling is disallowed outright rather than assumed free. A
+  /// crawl reaches this through `Crawl.obey`.
+  static final Robots closed = Robots(
+    rules: {
+      '*': [RobotsRule('/', allow: false)],
+    },
+  );
+
   /// The declared crawl delay for [agent], if any.
   ///
   /// Matched by the same product-token rules as [group]. A crawl started
-  /// with `.robots()` waits at least this long between requests to the host.
+  /// with `Crawl.obey` waits at least this long between requests to the host.
   Duration? delay({String agent = '*'}) {
     final full = agent.toLowerCase().trim();
     final exact = _delays[full];

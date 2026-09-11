@@ -10,6 +10,11 @@
 /// it is a pure value and a type `net` hands back through [Codec] cannot live
 /// under `format`.
 ///
+/// `Form` and [FormOnMarkup.form] live in `format/form.dart` and are part of
+/// this accessor's family: finding a `<form>` and reading its controls is
+/// reading HTML. Sending one is a socket, so the `Sending` extension is in
+/// `net`.
+///
 /// The jQuery `$` survives as an opt-in import, for scripts that want it:
 ///
 /// ```dart
@@ -40,9 +45,16 @@ import 'format.dart';
 /// io.write('out.html', format.html.format(page.find('.card')));
 /// ```
 ///
-/// Writing a document straight to disk is `io.write`; [format] is the string
-/// half, for when the markup is going somewhere that is not a file.
-class HtmlAccessor with FileCodec<Markup> implements Codec<Markup> {
+/// `format.html.write(path, markup)` writes one to disk atomically; [format]
+/// is the string half, for when the markup is going somewhere that is not a
+/// file.
+///
+/// `parse(t).text` is the *correct* way to get a page's text: it is right
+/// about entities, `<script>` bodies and malformed nesting, and it costs a
+/// document. `util.text.tags(t)` is a regex over the string and costs nothing;
+/// it is the one for a snippet, and the one to reach for when there are ten
+/// thousand of them.
+class HtmlAccessor with FileCodec<Markup, Markup> implements Codec<Markup> {
   /// Creates the accessor. Prefer the shared `format.html` instance.
   const HtmlAccessor();
 
@@ -53,15 +65,6 @@ class HtmlAccessor with FileCodec<Markup> implements Codec<Markup> {
   /// than a failure, matching how a missing path reads for the other codecs.
   @override
   Markup parse(String text) => Markup.of(html_parser.parse(text));
-
-  /// Parses [text] into a [Markup] cursor ready for [Markup.xpath].
-  ///
-  /// The same document as [parse], which answers [Markup.xpath] just as
-  /// readily; the difference is only which language `markup.$xpath(...)` runs.
-  /// Through 4.0.0 it also decided what the callable shorthand meant, which is
-  /// the hidden state that shorthand was deleted for.
-  Markup query(String text) =>
-      Markup.of(html_parser.parse(text), isXPath: true);
 
   /// Parses [text] as a document fragment, without the `<html><body>` wrapper
   /// the parser otherwise adds.
@@ -77,6 +80,7 @@ class HtmlAccessor with FileCodec<Markup> implements Codec<Markup> {
   /// The outer HTML of every element in the cursor, concatenated — so a round
   /// trip through [parse] and back is the document, and a round trip through
   /// `find` and back is the matches.
+  @override
   String format(Markup markup) => markup.outers.collect(.join(''));
 }
 
@@ -98,9 +102,13 @@ Markup $(String markup, [String? selector]) {
 
 /// Parses [markup] into a [Markup] cursor for XPath queries.
 ///
-/// An alias of `format.html.query`, on the same opt-in terms as [$].
+/// The XPath twin of [$], on the same opt-in terms. It sets the flag itself,
+/// because the flag only ever decided which language `$xpath` runs and there
+/// was no way to observe it from the default surface — `format.html.query`
+/// was a public member configuring one that is not public, and 6.0.0 deleted
+/// it.
 Markup $xpath(String markup, [String? query]) {
-  final q = const HtmlAccessor().query(markup);
+  final q = Markup.of(html_parser.parse(markup), isXPath: true);
   return query != null ? q.xpath(query) : q;
 }
 
@@ -125,7 +133,7 @@ extension QuerySelectorOnHtmlString on String {
 
   /// XPath selector accessor for this markup string.
   Markup $xpath([String? query]) {
-    final cursor = const HtmlAccessor().query(this);
+    final cursor = Markup.of(html_parser.parse(this), isXPath: true);
     return query == null ? cursor : cursor.xpath(query);
   }
 }

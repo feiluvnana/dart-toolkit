@@ -1,683 +1,622 @@
-import 'dart:convert';
+/// The crawl, rebuilt in 6.0.0 around three seams: a transport is a [Send], a
+/// document is a `Codec`, and a crawl is a `Flow<Reply>`.
+///
+/// The fixtures here are what `MapDownloader` used to be an exported class
+/// for — a closure over a map, and a list it captures to record what was
+/// sent.
+library;
+
 import 'dart:io';
 
 import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:test/test.dart';
 
-/// In-memory downloader for deterministic pipeline tests.
-///
-/// This is the intended way to test a crawl: subclass [Downloader] and serve
-/// fixtures instead of reaching the network.
-class MockDownloader<T> extends Downloader<T> {
-  final Map<String, String> pages;
-
-  MockDownloader(this.pages, {super.concurrency = 1});
-
-  @override
-  Future<Page<T>> download(Fetch<T> fetch) async {
-    if (fetch.url.scheme == 'data') {
-      final bytes =
-          fetch.url.data?.contentAsBytes() ??
-          utf8.encode(fetch.url.data?.contentAsString() ?? '');
-      return Page<T>(
-        fetch: fetch,
-        status: 200,
-        headers: {'content-type': 'text/html; charset=utf-8'},
-        bytes: bytes,
-        engine: engine,
-      );
-    }
-    final body = pages[fetch.url.toString()];
-    return Page<T>(
-      fetch: fetch,
-      status: body == null ? 404 : 200,
-      headers: const {'content-type': 'text/html; charset=utf-8'},
-      bytes: utf8.encode(body ?? '<html><body>404 Not Found</body></html>'),
-      engine: engine,
-    );
-  }
-
-  @override
-  Future<FileSystemEntry> save(
-    Uri source,
-    String path, {
-    void Function(int received, int total)? onProgress,
-    String part = '.part',
-    bool match = false,
-  }) async {
-    final response = await download(Fetch<T>(source));
-    return response.save(resolve(path), part: part);
-  }
-}
-
 const _name = Slot<String>('name');
 
+/// A transport over a map of URL to body. **This is the way to test a crawl**:
+/// a function, not a subclass.
+Send fixture(Map<String, String> pages, {List<Fetch>? sent}) => (fetch) async {
+  sent?.add(fetch);
+  if (fetch.url.scheme == 'data') {
+    return Reply.text(fetch.url.data?.contentAsString() ?? '', fetch: fetch);
+  }
+  final body = pages['${fetch.url}'] ?? pages[fetch.url.path];
+  return Reply.text(
+    body ?? '<html><body>404 Not Found</body></html>',
+    fetch: fetch,
+    status: body == null ? 404 : 200,
+  );
+};
+
+/// Every `href` on the page, as the next requests.
+Sequence<Fetch> links(Reply res) =>
+    res.parse(format.html).find('a').attrs('href').transform(.map(res.follow));
+
 void main() {
-  group('Deduplicator & Queue', () {
-    test('Deduplicator normalises fragments and trailing slashes', () {
-      final dedupe = Deduplicator();
+  group('the frontier', () {
+    test(
+      'a crawl follows links and dedupes what it has already seen',
+      () async {
+        final sent = <Fetch>[];
+        final crawl = net.crawl([Fetch('https://a.test/'.url)], links)
+          ..using(
+            fixture({
+              'https://a.test/': '<a href="/b">b</a><a href="/c">c</a>',
+              'https://a.test/b': '<a href="/c">c again</a>',
+              'https://a.test/c': '<p>leaf</p>',
+            }, sent: sent),
+          );
 
-      expect(dedupe.add('https://example.com/page1'.url), isTrue);
-      expect(dedupe.add('https://example.com/page2'.url), isTrue);
-      expect(dedupe.add('https://example.com/page1#section'.url), isFalse);
-      expect(dedupe.add('https://example.com/page1/'.url), isFalse);
+        final urls = await crawl.flow
+            .transform(.map((res) => res.url.path))
+            .collect(.list());
 
-      expect(dedupe.seen('https://example.com/page1'.url), isTrue);
-      expect(dedupe.seen('https://example.com/page3'.url), isFalse);
-      expect(dedupe.length, equals(2));
+        expect(urls, equals(['/', '/b', '/c']));
+        expect(
+          sent.length,
+          equals(3),
+          reason: '/c was queued twice, fetched once',
+        );
+        expect(crawl.stats.fetched, equals(3));
+        expect(crawl.stats.failed, isZero);
+      },
+    );
 
-      dedupe.clear();
-      expect(dedupe.isEmpty, isTrue);
+    test(
+      'dedupe normalises fragment, trailing slash, host case and query order',
+      () async {
+        final sent = <Fetch>[];
+        final crawl = net.crawl([
+          Fetch('https://EXAMPLE.com/page?b=2&a=1'.url),
+          Fetch('https://example.com/page?a=1&b=2'.url),
+          Fetch('https://example.com/other'.url),
+          Fetch('https://example.com/other#section'.url),
+          Fetch('https://example.com/other/'.url),
+        ])..using(fixture(const {}, sent: sent));
+
+        await crawl.run();
+        expect(sent.length, equals(2));
+      },
+    );
+
+    test('method, tag and body are part of the key', () async {
+      final sent = <Fetch>[];
+      final url = 'https://example.com/api'.url;
+      await (net.crawl([
+        Fetch(url),
+        Fetch(url, tag: 'list'),
+        Fetch(url, tag: 'detail'),
+        Fetch(url, method: HttpMethod.post, body: const Body.text('one')),
+        Fetch(url, method: HttpMethod.post, body: const Body.text('two')),
+      ])..using(fixture(const {}, sent: sent))).run();
+
+      expect(sent.length, equals(5));
     });
 
-    test('Engine queues, deduplicates and serves', () {
-      final engine = Engine<String>();
+    test('dedupe: false is the escape hatch, per request', () async {
+      final sent = <Fetch>[];
+      await (net.crawl([
+        Fetch('https://example.com/fresh'.url, dedupe: false),
+        Fetch('https://example.com/fresh'.url, dedupe: false),
+      ])..using(fixture(const {}, sent: sent))).run();
 
-      engine.add(Fetch('https://example.com/page1'.url));
-      engine.add(Fetch('https://example.com/page2'.url));
-      engine.add(Fetch('https://example.com/page1#section'.url));
-
-      expect(engine.queue.length, equals(2));
-      expect(engine.queue.isNotEmpty, isTrue);
-
-      expect(engine.serve()?.url.path, equals('/page1'));
-      expect(engine.serve()?.url.path, equals('/page2'));
-      expect(engine.serve(), isNull);
-      expect(engine.queue.isEmpty, isTrue);
+      expect(sent.length, equals(2));
     });
 
-    test('higher priority is served first, ties stay FIFO', () {
-      final engine = Engine<String>();
+    test('higher priority is served first, ties stay FIFO', () async {
+      final sent = <Fetch>[];
+      await (net.crawl([
+              Fetch('https://example.com/low'.url),
+              Fetch('https://example.com/high'.url, priority: 100),
+              Fetch('https://example.com/mid'.url, priority: 50),
+              Fetch('https://example.com/high2'.url, priority: 100),
+            ])
+            ..concurrent(1)
+            ..using(fixture(const {}, sent: sent)))
+          .run();
 
-      engine.add(Fetch('https://example.com/low'.url));
-      engine.add(Fetch('https://example.com/high'.url, priority: 100));
-      engine.add(Fetch('https://example.com/mid'.url, priority: 50));
-      engine.add(Fetch('https://example.com/high2'.url, priority: 100));
-
-      expect([
-        for (var r = engine.serve(); r != null; r = engine.serve()) r.url.path,
-      ], equals(['/high', '/high2', '/mid', '/low']));
+      expect(
+        sent.map((f) => f.url.path).toList(),
+        equals(['/high', '/high2', '/mid', '/low']),
+      );
     });
+
+    test('concurrent workers terminate once the frontier drains', () async {
+      // Guards the worker wake-up path: an idle worker must notice the run is
+      // over instead of parking on a completer nobody completes.
+      final crawl = net.crawl([Fetch('https://site.test/1'.url)])
+        ..concurrent(8)
+        ..using(fixture(const {'https://site.test/1': '<p>only page</p>'}));
+
+      await crawl.run();
+      expect(crawl.stats.fetched, equals(1));
+    }, timeout: const Timeout(Duration(seconds: 10)));
   });
 
-  group('Engine pipeline & routing', () {
-    test('router follows links across stages by tag', () async {
-      final pages = {
-        'https://example.com/album': '''
-          <div class="album">
-            <h1>Sample Album</h1>
-            <a href="/disc/1" class="disc-link">Disc 1</a>
-            <a href="/disc/2" class="disc-link">Disc 2</a>
-          </div>
-        ''',
-        'https://example.com/disc/1': '''
-          <div class="disc" data-num="1">
-            <span class="disc-title">Key+Lia Best 2001</span>
-            <div class="track">01. Natukage</div>
-          </div>
-        ''',
-        'https://example.com/disc/2': '''
-          <div class="disc" data-num="2">
-            <span class="disc-title">Kanon Original Soundtrack</span>
-            <div class="track">01. Morning Shadows</div>
-          </div>
-        ''',
-      };
-
-      final engine = Engine<Map<String, Object?>>(
-        downloader: MockDownloader<Map<String, Object?>>(pages),
-      );
-
-      engine.router
-        ..on(RegExp(r'/album$'), (res) {
-          expect(res.ok, isTrue);
-          expect(res.engine, equals(engine));
-          for (final href
-              in res
-                  .parse(format.html)
-                  .find('a.disc-link')
-                  .attrs('href')
-                  .collect(.list())) {
-            res.follow(href, tag: 'disc');
-          }
-        })
-        ..tag('disc', (res) {
-          res.emit({
-            'disc': int.parse(
-              res.parse(format.html).find('.disc').attr('data-num') ?? '0',
-            ),
-            'title': res.parse(format.html).find('.disc-title').text,
-            'firstTrack': res.parse(format.html).find('.track').text,
-          });
-        });
-
-      final emitted = <Map<String, Object?>>[];
-      engine.items.listen(emitted.add);
-
-      engine.add(Fetch('https://example.com/album'.url));
-      final stats = await engine.run();
-
-      expect(stats.completed, equals(3));
-      expect(stats.emitted, equals(2));
-      expect(emitted.length, equals(2));
-
-      expect(emitted[0]['disc'], equals(1));
-      expect(emitted[0]['title'], equals('Key+Lia Best 2001'));
-      expect(emitted[0]['firstTrack'], equals('01. Natukage'));
-      expect(emitted[1]['disc'], equals(2));
-      expect(emitted[1]['title'], equals('Kanon Original Soundtrack'));
-    });
-
-    test('a handler can stop the pipeline early', () async {
-      final pages = {
-        'https://example.com/item/1': '<div>Page 1</div>',
-        'https://example.com/item/2': '<div>Page 2 (Abort)</div>',
-        'https://example.com/item/3': '<div>Page 3</div>',
-      };
-
-      final engine = Engine<String>(
-        downloader: MockDownloader<String>(pages),
-        process: (res) {
-          final text = res.parse(format.html).find('div').text;
-          res.emit(text);
-          if (text.contains('Abort')) res.stop('Found abort keyword');
-        },
-      );
-
-      final items = <String>[];
-      engine.items.listen(items.add);
-
-      for (final url in pages.keys) {
-        engine.add(Fetch(url.url));
-      }
-      final stats = await engine.run();
-
-      expect(engine.stopped, isTrue);
-      expect(stats.reason, equals('Found abort keyword'));
-      expect(items, contains('Page 1'));
-      expect(items, contains('Page 2 (Abort)'));
-      expect(items, isNot(contains('Page 3')));
-    });
-
-    test('engine.on.error surfaces a throwing handler', () async {
-      final errors = <Object>[];
-      final engine = Engine<String>(
-        downloader: MockDownloader<String>({
-          'https://example.com/': '<div>ok</div>',
-        }),
-        process: (res) => throw StateError('handler blew up'),
-      );
-      engine.on.error((failure) => errors.add(failure.error));
-
-      await engine.run(['https://example.com/']);
-      expect(errors.single, isA<StateError>());
-    });
-  });
-
-  group('net.crawl builder', () {
-    test('multi-step follow carries tags and meta', () async {
-      final pages = {
-        'https://music.example.com/album': '''
+  group('next is the router', () {
+    test(
+      'a switch on the tag carries stages, with meta between them',
+      () async {
+        final pages = {
+          'https://music.test/album': '''
           <table id="songlist">
             <tr><td><a href="/song/1">Track 1</a></td></tr>
             <tr><td><a href="/song/2">Track 2</a></td></tr>
           </table>
         ''',
-        'https://music.example.com/song/1':
-            '<div><a href="/audio/t1.mp3">Download MP3</a></div>',
-        'https://music.example.com/song/2':
-            '<div><a href="/audio/t2.mp3">Download MP3</a></div>',
-      };
+          'https://music.test/song/1':
+              '<div><a href="/audio/t1.mp3">Download MP3</a></div>',
+          'https://music.test/song/2':
+              '<div><a href="/audio/t2.mp3">Download MP3</a></div>',
+        };
 
-      final visited = <String>[];
-      final stats = await net
-          .crawl<String>('https://music.example.com/album'.url)
-          .downloader(MockDownloader<String>(pages))
-          .tag('song', (res) {
-            visited.add(
-              '${res.meta.read(_name)}: ${res.parse(format.html).find('a').attr('href')}',
-            );
-          })
-          .run((res) {
-            for (final a
-                in res
-                    .parse(format.html)
-                    .find('#songlist a')
-                    .elements
-                    .collect(.list())) {
-              res.follow(a.attr('href')!, tag: 'song', meta: [_name(a.text)]);
-            }
-          });
+        final crawl = net.crawl(
+          [Fetch('https://music.test/album'.url)],
+          (res) => switch (res.fetch.tag) {
+            null =>
+              res
+                  .parse(format.html)
+                  .find('#songlist a')
+                  .elements
+                  .transform(
+                    .map(
+                      (a) => res.follow(
+                        a.attr('href')!,
+                        tag: 'song',
+                        meta: [_name(a.text)],
+                      ),
+                    ),
+                  ),
+            _ => const Sequence<Fetch>([]),
+          },
+        )..using(fixture(pages));
 
-      expect(stats.completed, equals(3));
+        final visited = await crawl.flow
+            .transform(.where((res) => res.fetch.tag == 'song'))
+            .transform(
+              .map(
+                (res) =>
+                    '${res.fetch.meta.read(_name)}: '
+                    '${res.parse(format.html).find('a').attr('href')}',
+              ),
+            )
+            .collect(.list());
+
+        expect(crawl.stats.fetched, equals(3));
+        expect(
+          visited,
+          equals(['Track 1: /audio/t1.mp3', 'Track 2: /audio/t2.mp3']),
+        );
+      },
+    );
+
+    test('next is a pure function, testable with no crawl at all', () {
+      final res = Reply.text(
+        '<a href="/b">b</a><a href="/c">c</a>',
+        fetch: Fetch('https://a.test/'.url),
+      );
+
       expect(
-        visited,
-        equals(['Track 1: /audio/t1.mp3', 'Track 2: /audio/t2.mp3']),
+        links(res).transform(.map((f) => f.url.toString())).collect(.list()),
+        equals(['https://a.test/b', 'https://a.test/c']),
+      );
+      expect(links(res).collect(.first())?.depth, equals(1));
+      expect(
+        links(res).collect(.first())?.headers['Referer'],
+        equals('https://a.test/'),
       );
     });
 
-    test('collect gathers every emitted item', () async {
-      final titles = await net
-          .crawl<String>('https://news.example.com'.url)
-          .concurrent(2)
-          .downloader(
-            MockDownloader<String>({
-              'https://news.example.com': '''
-                <div class="articles">
-                  <h2 class="title">Article Alpha</h2>
-                  <h2 class="title">Article Beta</h2>
-                  <h2 class="title">Article Gamma</h2>
-                </div>
-              ''',
+    test(
+      'follow takes a plain string and resolves it against the reply',
+      () async {
+        final crawl = net.crawl([Fetch('https://example.com/step1'.url)], links)
+          ..using(
+            fixture(const {
+              'https://example.com/step1':
+                  '<p>Step 1</p><a href="https://example.com/step2">Next</a>',
+              'https://example.com/step2': '<p>Step 2 Finished</p>',
             }),
+          );
+
+        final texts = await crawl.flow
+            .transform(.map((res) => res.parse(format.html).find('p').text))
+            .collect(.list());
+
+        expect(texts, equals(['Step 1', 'Step 2 Finished']));
+      },
+    );
+  });
+
+  group('the terminals', () {
+    test('nothing is fetched until something collects', () async {
+      final sent = <Fetch>[];
+      net.crawl([Fetch('https://a.test/'.url)])
+        ..using(fixture(const {'https://a.test/': 'x'}, sent: sent))
+        ..flow;
+
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(sent, isEmpty);
+    });
+
+    test('a terminal that stops early stops the crawl', () async {
+      final sent = <Fetch>[];
+      final crawl = net.crawl([Fetch('https://a.test/'.url)], links)
+        ..using(
+          fixture(const {
+            'https://a.test/': '<a href="/b">b</a><a href="/c">c</a>',
+            'https://a.test/b': '<p>b</p>',
+            'https://a.test/c': '<p>c</p>',
+          }, sent: sent),
+        )
+        ..concurrent(1);
+
+      final first = await crawl.flow.collect(.first());
+      expect(first?.url.path, equals('/'));
+      expect(sent.length, equals(1));
+      expect(crawl.stats.reason, equals('Flow cancelled'));
+    });
+
+    test('take.when is what res.stop was', () async {
+      final crawl =
+          net.crawl([
+              Fetch('https://example.com/item/1'.url),
+              Fetch('https://example.com/item/2'.url),
+              Fetch('https://example.com/item/3'.url),
+            ])
+            ..concurrent(1)
+            ..using(
+              fixture(const {
+                'https://example.com/item/1': '<div>Page 1</div>',
+                'https://example.com/item/2': '<div>Page 2 (Abort)</div>',
+                'https://example.com/item/3': '<div>Page 3</div>',
+              }),
+            );
+
+      final texts = await crawl.flow
+          .transform(.map((res) => res.parse(format.html).find('div').text))
+          .transform(.take.when((text) => !text.contains('Abort')))
+          .collect(.list());
+
+      // `take.when` stops *at* the element it rejects, which is what
+      // `res.stop(reason)` meant minus the page that triggered it. Page 3 is
+      // never fetched: cancelling the flow stops the crawl.
+      expect(texts, equals(['Page 1']));
+      expect(crawl.stats.fetched, lessThan(3));
+      expect(crawl.stats.reason, equals('Flow cancelled'));
+    });
+
+    test('settle puts the failures in band; flow leaves them out', () async {
+      Future<Reply> flaky(Fetch fetch) async {
+        if (fetch.url.path == '/bad') throw StateError('handler blew up');
+        return Reply.text('<p>ok</p>', fetch: fetch);
+      }
+
+      final outcomes =
+          await (net.crawl([
+                  Fetch('https://a.test/good'.url),
+                  Fetch('https://a.test/bad'.url),
+                ])
+                ..concurrent(1)
+                ..using(flaky))
+              .settle
+              .collect(.seq());
+
+      expect(outcomes.collect(.count()), equals(2));
+      expect(
+        outcomes
+            .transform(.where.type<Broke<Reply>>())
+            .collect(.single())
+            ?.error,
+        isA<StateError>(),
+      );
+
+      final crawl =
+          net.crawl([
+              Fetch('https://a.test/good'.url),
+              Fetch('https://a.test/bad'.url),
+            ])
+            ..concurrent(1)
+            ..using(flaky);
+      final replies = await crawl.flow.collect(.list());
+      expect(replies.length, equals(1));
+      expect(crawl.stats.failed, equals(1));
+    });
+
+    test('run drains and reports; stats is a record', () async {
+      final crawl = net.crawl([Fetch('https://a.test/'.url)], links)
+        ..using(
+          fixture(const {
+            'https://a.test/': '<a href="/b">b</a>',
+            'https://a.test/b': '<p>b</p>',
+          }),
+        );
+
+      final Stats stats = await crawl.run();
+      expect(stats.fetched, equals(2));
+      expect(stats.failed, isZero);
+      expect(stats.skipped, isZero);
+      expect(stats.bytes, greaterThan(0));
+      expect(stats.reason, isNull);
+    });
+
+    test('gather is flat.map on the flow', () async {
+      final crawl = net.crawl([Fetch('https://news.test/'.url)])
+        ..using(
+          fixture(const {
+            'https://news.test/': '''
+              <h2 class="title">Article Alpha</h2>
+              <h2 class="title">Article Beta</h2>
+              <h2 class="title">Article Gamma</h2>
+            ''',
+          }),
+        );
+
+      final titles = await crawl.flow
+          .transform(
+            .flat.map((res) => res.parse(format.html).find('.title').texts),
           )
-          .items((res) {
-            for (final t
-                in res
-                    .parse(format.html)
-                    .find('.title')
-                    .texts
-                    .collect(.list())) {
-              res.emit(t);
-            }
-          });
+          .collect(.list());
 
       expect(
-        titles.collect(.list()),
+        titles,
         equals(['Article Alpha', 'Article Beta', 'Article Gamma']),
       );
     });
+  });
 
-    test('flow yields items as they are emitted', () async {
-      final items = await net
-          .crawl<String>('https://site.example.com'.url)
-          .downloader(
-            MockDownloader<String>({
-              'https://site.example.com': '<span>Alpha</span><span>Beta</span>',
-            }),
-          )
-          .flow((res) {
-            for (final t
-                in res.parse(format.html).find('span').texts.collect(.list())) {
-              res.emit(t);
-            }
-          })
-          .pour(.list());
+  group('scope', () {
+    test('depth and samehost bound the walk', () async {
+      final crawl = net.crawl([Fetch('https://example.com/root'.url)], links)
+        ..using(
+          fixture(const {
+            'https://example.com/root':
+                '<a href="/child1">1</a><a href="https://other.com/ext">ext</a>',
+            'https://example.com/child1': '<a href="/child2">2</a>',
+            'https://example.com/child2': '<p>deep</p>',
+            'https://other.com/ext': '<p>ext</p>',
+          }),
+        )
+        ..samehost()
+        ..depth(1);
 
-      expect(items, equals(['Alpha', 'Beta']));
-    });
-
-    test('builder follows links discovered mid-crawl', () async {
-      final pages = {
-        'https://site.example.com':
-            '<h1>Hello World</h1><a href="/sub">Sub</a>',
-        'https://site.example.com/sub': '<h2>Subpage</h2>',
-      };
-      final titles = <String>[];
-
-      final stats = await net
-          .crawl<String>('https://site.example.com'.url)
-          .concurrent(2)
-          .delay(10.ms)
-          .downloader(MockDownloader<String>(pages))
-          .run((res) {
-            if (res.url.path == '/sub') {
-              titles.add(res.parse(format.html).find('h2').text);
-            } else {
-              titles.add(res.parse(format.html).find('h1').text);
-              res.follow('/sub');
-            }
-          });
-
-      expect(stats.completed, equals(2));
-      expect(titles, equals(['Hello World', 'Subpage']));
-    });
-
-    test('all() seeds several URLs at once', () async {
-      final stats = await net.crawl
-          .all<String>([
-            'https://site.example.com/a'.url,
-            'https://site.example.com/b'.url,
-          ])
-          .downloader(
-            MockDownloader<String>({
-              'https://site.example.com/a': '<p>A</p>',
-              'https://site.example.com/b': '<p>B</p>',
-            }),
-          )
-          .run((res) {});
-
-      expect(stats.completed, equals(2));
-    });
-
-    test('seed() takes fully-formed fetches', () async {
-      final tags = <String?>[];
-      await net.crawl
-          .seed<String>([
-            Fetch('https://site.example.com/a'.url, tag: 'first'),
-            Fetch('https://site.example.com/b'.url, tag: 'second'),
-          ])
-          .downloader(
-            MockDownloader<String>({
-              'https://site.example.com/a': '<p>A</p>',
-              'https://site.example.com/b': '<p>B</p>',
-            }),
-          )
-          .run((res) => tags.add(res.tag));
-
-      expect(tags, equals(['first', 'second']));
-    });
-
-    test('concurrent workers terminate once the frontier drains', () async {
-      // Guards the worker wake-up path: idle workers must notice the run is
-      // over instead of waiting on a completer nobody completes.
-      final stats = await net
-          .crawl<String>('https://site.example.com/1'.url)
-          .concurrent(8)
-          .downloader(
-            MockDownloader<String>({
-              'https://site.example.com/1': '<p>only page</p>',
-            }),
-          )
-          .run((res) {});
-
-      expect(stats.completed, equals(1));
-    }, timeout: const Timeout(Duration(seconds: 10)));
-
-    test('flow accepts HTML strings directly without URL', () async {
-      const htmlString = '''
-        <div class="container">
-          <a href="/subpage">Subpage Link</a>
-          <h1 class="headline">Breaking News</h1>
-        </div>
-      ''';
-
-      final headlines = await net.crawl.html<String>(htmlString).items((res) {
-        // Test res.$ and emit
-        final title = res.parse(format.html).find('.headline').text;
-        if (title.isNotEmpty) res.emit(title);
-      });
-
-      expect(headlines.collect(.list()), equals(['Breaking News']));
-    });
-
-    test('net.crawl.html explicitly parses markup without sniffing', () async {
-      const markup = '<article><h2>Explicit HTML</h2></article>';
-      final results = await net.crawl.html<String>(markup).items((res) {
-        res.emit(res.parse(format.html).find('h2').text);
-      });
-      expect(results.collect(.list()), equals(['Explicit HTML']));
-    });
-
-    test('net.crawl.file explicitly parses file path', () async {
-      final tmpFile = File('${Directory.systemTemp.path}/test_crawl_file.html');
-      await tmpFile.writeAsString('<section><p>File Content</p></section>');
-      try {
-        final results = await net.crawl.file<String>(tmpFile.path).items((res) {
-          res.emit(res.parse(format.html).find('p').text);
-        });
-        expect(results.collect(.list()), equals(['File Content']));
-      } finally {
-        if (await tmpFile.exists()) await tmpFile.delete();
-      }
-    });
-
-    test('res.follow accepts plain string, not necessary a Uri', () async {
-      final items = <String>[];
-      await net.crawl
-          .html<String>('''
-        <div>
-          <a href="https://example.com/step2">Next</a>
-          <p>Step 1</p>
-        </div>
-      ''')
-          .downloader(
-            MockDownloader<String>({
-              'https://example.com/step2': '<p>Step 2 Finished</p>',
-            }),
-          )
-          .items((res) {
-            items.add(res.parse(format.html).find('p').text);
-            for (final next
-                in res
-                    .parse(format.html)
-                    .find('a')
-                    .attrs('href')
-                    .collect(.list())) {
-              // follow takes a String directly without needing .url
-              res.follow(next);
-            }
-          });
-
-      expect(items, equals(['Step 1', 'Step 2 Finished']));
-    });
-
-    test('flow accepts arbitrary string tasks', () async {
-      final seen = <String>[];
-      await net.crawl<String>('task:seed-alpha'.url).items((res) {
-        seen.add(res.body);
-        if (res.body == 'task:seed-alpha') {
-          res.follow('task:seed-beta');
-        }
-      });
-
-      expect(seen, equals(['task:seed-alpha', 'task:seed-beta']));
-    });
-
-    test(
-      'Engine.run() throws StateError on second run and keeps external downloader open',
-      () async {
-        final downloader = MapDownloader<String>({
-          'https://example.com/1': 'page1',
-        });
-        final engine = Engine<String>(downloader: downloader);
-
-        final stats1 = await engine.run(['https://example.com/1']);
-        expect(stats1.completed, equals(1));
-
-        expect(() => engine.run(['https://example.com/1']), throwsStateError);
-
-        // Downloader was external, so it should still be open
-        final res = await downloader.download(
-          Fetch('https://example.com/1'.url),
-        );
-        expect(res.status, equals(200));
-      },
-    );
-
-    test(
-      'CrawlBuilder applies concurrency, delay, base, retries to supplied downloader',
-      () {
-        final downloader = MapDownloader<String>({});
-        net
-            .crawl<String>('https://example.com'.url)
-            .downloader(downloader)
-            .concurrent(8)
-            .delay(const Duration(seconds: 9))
-            .retry(7)
-            .base('out')
-            .engine();
-
-        expect(downloader.concurrency, equals(8));
-        expect(downloader.delay, equals(const Duration(seconds: 9)));
-        expect(downloader.retries, equals(7));
-        expect(downloader.base, equals('out'));
-      },
-    );
-
-    test(
-      'Deduplicator keys on method, url, tag, body hash, normalizes host & query params, and resumes',
-      () {
-        final dedupe = Deduplicator();
-
-        // Normalization: host case & query parameter order
-        expect(dedupe.add('https://EXAMPLE.COM/page?b=2&a=1'.url), isTrue);
-        expect(dedupe.seen('https://example.com/page?a=1&b=2'.url), isTrue);
-        expect(dedupe.add('https://example.com/page?a=1&b=2'.url), isFalse);
-
-        // Distinct tags do not collide
-        final reqList = Fetch<void>(
-          'https://example.com/items'.url,
-          tag: 'list',
-        );
-        final reqDetail = Fetch<void>(
-          'https://example.com/items'.url,
-          tag: 'detail',
-        );
-        expect(dedupe.track(reqList), isTrue);
-        expect(dedupe.track(reqDetail), isTrue);
-        expect(dedupe.tracked(reqList), isTrue);
-        expect(dedupe.tracked(reqDetail), isTrue);
-
-        // Distinct methods do not collide
-        final reqGet = Fetch<void>(
-          'https://example.com/api'.url,
-          method: HttpMethod.get,
-        );
-        final reqPost1 = Fetch<void>(
-          'https://example.com/api'.url,
-          method: HttpMethod.post,
-          body: const Body.text('body1'),
-        );
-        final reqPost2 = Fetch<void>(
-          'https://example.com/api'.url,
-          method: HttpMethod.post,
-          body: const Body.text('body2'),
-        );
-        expect(dedupe.track(reqGet), isTrue);
-        expect(dedupe.track(reqPost1), isTrue);
-        expect(dedupe.track(reqPost2), isTrue);
-
-        // Dedupe escape hatch
-        final reqNoDedupe1 = Fetch<void>(
-          'https://example.com/fresh'.url,
-          dedupe: false,
-        );
-        final reqNoDedupe2 = Fetch<void>(
-          'https://example.com/fresh'.url,
-          dedupe: false,
-        );
-        expect(dedupe.track(reqNoDedupe1), isTrue);
-        expect(dedupe.track(reqNoDedupe2), isTrue);
-
-        // Serialization / resume
-        final json = dedupe.toJson();
-        final restored = Deduplicator.fromJson(json);
-        expect(restored.seen('https://example.com/page?a=1&b=2'.url), isTrue);
-        expect(restored.tracked(reqList), isTrue);
-      },
-    );
-
-    test('Page.stop() throws StateError when response has no engine', () {
-      final standalone = Page<String>(fetch: Fetch('https://example.com'.url));
-      expect(() => standalone.stop(), throwsStateError);
-      expect(() => standalone.emit('item'), throwsStateError);
-      expect(
-        () => standalone.follow('https://example.com/next'),
-        throwsStateError,
-      );
-    });
-
-    test('CrawlEvents and EngineEvents are additive', () async {
-      final log = <String>[];
-      final downloader = MapDownloader<String>({
-        'https://example.com': 'content',
-      });
-
-      final builder = net
-          .crawl<String>('https://example.com'.url)
-          .downloader(downloader);
-      builder.on.item((item) => log.add('item1:$item'));
-      builder.on.item((item) => log.add('item2:$item'));
-      builder.on.start(() => log.add('start1'));
-      builder.on.start(() => log.add('start2'));
-
-      await builder.items((res) => res.emit('hello'));
-
-      expect(
-        log,
-        containsAllInOrder(['start1', 'start2', 'item1:hello', 'item2:hello']),
-      );
-    });
-
-    test('Engine buffers items emitted before first listener', () async {
-      final engine = Engine<String>(
-        downloader: MapDownloader<String>({'https://example.com': 'ok'}),
-        process: (res) {
-          res.emit('buffered-1');
-          res.emit('buffered-2');
-        },
-      );
-
-      // Run without listening to items yet
-      await engine.run(['https://example.com']);
-
-      // First listener receives buffered items
-      final collected = await engine.items.toList();
-      expect(collected, equals(['buffered-1', 'buffered-2']));
-    });
-
-    test('CrawlBuilder limit, depth, and scope rules', () async {
-      final pages = {
-        'https://example.com/root':
-            '<a href="/child1">1</a><a href="https://other.com/ext">ext</a>',
-        'https://example.com/child1': '<a href="/child2">2</a>',
-        'https://example.com/child2': '<p>deep</p>',
-        'https://other.com/ext': '<p>ext</p>',
-      };
-
-      // Depth limit = 1: root is 0, child1 is 1, child2 (depth 2) is dropped
-      final visited = <String>[];
-      await net
-          .crawl<String>('https://example.com/root'.url)
-          .downloader(MapDownloader<String>(pages))
-          .samehost()
-          .depth(1)
-          .items((res) {
-            visited.add(res.url.path);
-            for (final href
-                in res
-                    .parse(format.html)
-                    .find('a')
-                    .attrs('href')
-                    .collect(.list())) {
-              res.follow(href);
-            }
-          });
+      final visited = await crawl.flow
+          .transform(.map((res) => res.url.path))
+          .collect(.list());
 
       expect(visited, equals(['/root', '/child1']));
-      expect(visited.contains('/child2'), isFalse);
-      expect(visited.contains('https://other.com/ext'), isFalse);
     });
 
-    test('CrawlBuilder limit stops crawl at maximum pages', () async {
-      final pages = {
-        'https://example.com/1': '<a href="/2">2</a>',
-        'https://example.com/2': '<a href="/3">3</a>',
-        'https://example.com/3': '<a href="/4">4</a>',
-      };
+    test('allow and deny filter by pattern', () async {
+      final crawl = net.crawl([Fetch('https://example.com/a'.url)], links)
+        ..using(
+          fixture(const {
+            'https://example.com/a':
+                '<a href="/keep/1">k</a><a href="/drop/1">d</a>',
+            'https://example.com/keep/1': '<p>keep</p>',
+            'https://example.com/drop/1': '<p>drop</p>',
+          }),
+        )
+        ..deny(RegExp(r'/drop/'));
 
-      final stats = await net
-          .crawl<String>('https://example.com/1'.url)
-          .downloader(MapDownloader<String>(pages))
-          .limit(2)
-          .run((res) {
-            for (final href
-                in res
-                    .parse(format.html)
-                    .find('a')
-                    .attrs('href')
-                    .collect(.list())) {
-              res.follow(href);
-            }
-          });
+      final visited = await crawl.flow
+          .transform(.map((res) => res.url.path))
+          .collect(.list());
+      expect(visited, equals(['/a', '/keep/1']));
+    });
 
-      expect(stats.completed, equals(2));
+    test('limit stops the crawl at the maximum', () async {
+      final crawl = net.crawl([Fetch('https://example.com/1'.url)], links)
+        ..using(
+          fixture(const {
+            'https://example.com/1': '<a href="/2">2</a>',
+            'https://example.com/2': '<a href="/3">3</a>',
+            'https://example.com/3': '<a href="/4">4</a>',
+          }),
+        )
+        ..concurrent(1)
+        ..limit(2);
+
+      final stats = await crawl.run();
+      expect(stats.fetched, equals(2));
       expect(stats.reason, contains('Limit of 2 pages reached'));
     });
 
-    test('Robots parses RFC 9309 rules, delays, sitemaps, and tests paths', () {
-      const robotsTxt = '''
+    test(
+      'accept sets the header and drops what arrives as something else',
+      () async {
+        final sent = <Fetch>[];
+        final crawl =
+            net.crawl([
+                Fetch('https://example.com/page'.url),
+                Fetch('https://example.com/doc.pdf'.url),
+              ])
+              ..using((fetch) async {
+                sent.add(fetch);
+                return Reply.text(
+                  'body',
+                  fetch: fetch,
+                  headers: fetch.url.path.endsWith('.pdf')
+                      ? const {'content-type': 'application/pdf'}
+                      : const {'content-type': 'text/html; charset=utf-8'},
+                );
+              })
+              ..accept(const ['text/html']);
+
+        final urls = await crawl.flow
+            .transform(.map((res) => res.url.path))
+            .collect(.list());
+
+        expect(sent.length, equals(2), reason: 'both are fetched');
+        expect(urls, equals(['/page']), reason: 'only one is handled');
+        expect(crawl.stats.skipped, equals(1));
+      },
+    );
+
+    test('perhost paces each host separately', () async {
+      final order = <String>[];
+      final crawl =
+          net.crawl(
+              [Fetch('https://host-a.test/1'.url)],
+              (res) => res.url.path == '/1'
+                  ? [
+                      res.follow('https://host-b.test/1'),
+                      res.follow('https://host-a.test/2'),
+                    ].seq
+                  : const Sequence<Fetch>([]),
+            )
+            ..using(
+              fixture(const {
+                'https://host-a.test/1': '<h1>A1</h1>',
+                'https://host-a.test/2': '<h1>A2</h1>',
+                'https://host-b.test/1': '<h1>B1</h1>',
+              }),
+            )
+            ..concurrent(3)
+            ..delay(const Duration(milliseconds: 60), perhost: true);
+
+      await crawl.flow.collect(
+        .foreach((res) => order.add(res.url.toString())),
+      );
+
+      // host-b does not wait out host-a's delay.
+      expect(
+        order.indexOf('https://host-b.test/1'),
+        lessThan(order.indexOf('https://host-a.test/2')),
+      );
+    });
+  });
+
+  group('seeds are just requests', () {
+    test('several URLs at once', () async {
+      final crawl =
+          net.crawl(
+            [
+              'https://site.test/a'.url,
+              'https://site.test/b'.url,
+            ].map(Fetch.new),
+          )..using(
+            fixture(const {
+              'https://site.test/a': '<p>A</p>',
+              'https://site.test/b': '<p>B</p>',
+            }),
+          );
+
+      expect((await crawl.run()).fetched, equals(2));
+    });
+
+    test('fully-formed fetches carry their tags', () async {
+      final crawl =
+          net.crawl([
+              Fetch('https://site.test/a'.url, tag: 'first'),
+              Fetch('https://site.test/b'.url, tag: 'second'),
+            ])
+            ..concurrent(1)
+            ..using(
+              fixture(const {
+                'https://site.test/a': '<p>A</p>',
+                'https://site.test/b': '<p>B</p>',
+              }),
+            );
+
+      final tags = await crawl.flow
+          .transform(.map((res) => res.fetch.tag))
+          .collect(.list());
+      expect(tags, equals(['first', 'second']));
+    });
+
+    test('raw markup, through coerce and the default transport', () async {
+      const markup = '<article><h2>Explicit HTML</h2></article>';
+      final crawl = net.crawl([Fetch(coerce(markup))]);
+
+      final titles = await crawl.flow
+          .transform(.map((res) => res.parse(format.html).find('h2').text))
+          .collect(.list());
+      expect(titles, equals(['Explicit HTML']));
+    });
+
+    test('a local file, through the default transport', () async {
+      final file = File('${Directory.systemTemp.path}/test_crawl_file.html');
+      await file.writeAsString('<section><p>File Content</p></section>');
+      try {
+        final crawl = net.crawl([Fetch(Uri.file(file.path))]);
+        final texts = await crawl.flow
+            .transform(.map((res) => res.parse(format.html).find('p').text))
+            .collect(.list());
+        expect(texts, equals(['File Content']));
+      } finally {
+        if (await file.exists()) await file.delete();
+      }
+    });
+
+    test('an arbitrary string task', () async {
+      final crawl = net.crawl(
+        [Fetch(coerce('task:seed-alpha'))],
+        (res) => res.body == 'task:seed-alpha'
+            ? [res.follow('task:seed-beta')].seq
+            : const Sequence<Fetch>([]),
+      );
+
+      final seen = await crawl.flow
+          .transform(.map((res) => res.body))
+          .collect(.list());
+      expect(seen, equals(['task:seed-alpha', 'task:seed-beta']));
+    });
+  });
+
+  group('a transport is a function', () {
+    test('middleware wraps one, which had no spelling before', () async {
+      final log = <String>[];
+      Send logged(Send inner) => (fetch) async {
+        final res = await inner(fetch);
+        log.add('${res.status} ${fetch.url}');
+        return res;
+      };
+
+      await (net.crawl([
+        Fetch('https://a.test/'.url),
+      ])..using(logged(fixture(const {'https://a.test/': 'ok'})))).run();
+
+      expect(log, equals(['200 https://a.test/']));
+    });
+
+    test('a Fetcher is a Send', () {
+      final Send send = Fetcher().call;
+      expect(send, isNotNull);
+    });
+
+    test('obey reads robots.txt through the crawl own transport', () async {
+      final sent = <Fetch>[];
+      final crawl =
+          net.crawl([
+              Fetch('https://a.test/admin/secret'.url),
+              Fetch('https://a.test/public'.url),
+            ])
+            ..concurrent(1)
+            ..using(
+              fixture(const {
+                'https://a.test/robots.txt':
+                    'User-agent: *\nDisallow: /admin\n',
+                'https://a.test/public': '<p>public</p>',
+                'https://a.test/admin/secret': '<p>secret</p>',
+              }, sent: sent),
+            )
+            ..obey();
+
+      final urls = await crawl.flow
+          .transform(.map((res) => res.url.path))
+          .collect(.list());
+
+      expect(urls, equals(['/public']));
+      expect(crawl.stats.skipped, equals(1));
+      // Fetched once, through the fixture, and cached per origin.
+      expect(sent.where((f) => f.url.path == '/robots.txt').length, equals(1));
+    });
+  });
+
+  group('robots and sitemaps are formats', () {
+    test('format.robots parses RFC 9309 rules, delays and sitemaps', () {
+      const text = '''
 User-agent: *
 Disallow: /admin
 Disallow: /private/
@@ -691,7 +630,7 @@ Allow: /
 Crawl-delay: 0.5
 ''';
 
-      final robots = Robots.parse(robotsTxt);
+      final robots = format.robots.parse(text);
       expect(robots.sitemaps, equals(['https://example.com/sitemap.xml'.url]));
       expect(
         robots.delay(agent: 'Googlebot'),
@@ -702,7 +641,6 @@ Crawl-delay: 0.5
         equals(const Duration(milliseconds: 2500)),
       );
 
-      // Googlebot rules
       expect(
         robots.allowed('https://example.com/admin'.url, agent: 'Googlebot'),
         isTrue,
@@ -715,55 +653,53 @@ Crawl-delay: 0.5
         isFalse,
       );
 
-      // Default (*) rules
       expect(robots.allowed('https://example.com/blog'.url), isTrue);
       expect(robots.allowed('https://example.com/admin'.url), isFalse);
       expect(robots.allowed('https://example.com/admin/users'.url), isFalse);
       expect(robots.allowed('https://example.com/private/secret'.url), isFalse);
-      // Specificity: Allow /private/public is longer than Disallow /private/, so Allow wins
+      // Allow /private/public is longer than Disallow /private/, so it wins.
       expect(robots.allowed('https://example.com/private/public'.url), isTrue);
     });
 
-    test('Sitemap parses XML urlset, sitemapindex, and plain text', () {
-      const xmlSitemap = '''<?xml version="1.0" encoding="UTF-8"?>
+    test('format.robots round-trips through format and parse', () {
+      const text = 'User-agent: *\nDisallow: /admin\nCrawl-delay: 1.0\n';
+      final once = format.robots.parse(text);
+      final twice = format.robots.parse(format.robots.format(once));
+      expect(twice.allowed('https://x.test/admin'.url), isFalse);
+      expect(twice.delay(), equals(const Duration(seconds: 1)));
+    });
+
+    test('format.sitemap reads urlset, sitemapindex and plain text', () {
+      const urlset = '''<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url>
-    <loc>https://example.com/</loc>
-  </url>
-  <url>
-    <loc><![CDATA[https://example.com/page2]]></loc>
-  </url>
+  <url><loc>https://example.com/</loc></url>
+  <url><loc><![CDATA[https://example.com/page2]]></loc></url>
 </urlset>''';
 
-      final urls1 = Sitemap.parse(xmlSitemap);
       expect(
-        urls1.collect(.list()),
+        format.sitemap.parse(urlset).collect(.list()),
         equals(['https://example.com/'.url, 'https://example.com/page2'.url]),
       );
-      expect(Sitemap.nested(xmlSitemap), isFalse);
+      expect(format.sitemap.nested(urlset), isFalse);
 
-      const xmlIndex = '''<?xml version="1.0" encoding="UTF-8"?>
+      const index = '''<?xml version="1.0" encoding="UTF-8"?>
 <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <sitemap>
-    <loc>https://example.com/sub-sitemap.xml</loc>
-  </sitemap>
+  <sitemap><loc>https://example.com/sub-sitemap.xml</loc></sitemap>
 </sitemapindex>''';
 
-      final urls2 = Sitemap.parse(xmlIndex);
       expect(
-        urls2.collect(.list()),
+        format.sitemap.parse(index).collect(.list()),
         equals(['https://example.com/sub-sitemap.xml'.url]),
       );
-      expect(Sitemap.nested(xmlIndex), isTrue);
+      expect(format.sitemap.nested(index), isTrue);
 
-      const textSitemap = '''
+      const text = '''
 # Comment
 https://example.com/item1
 https://example.com/item2
 ''';
-      final urls3 = Sitemap.parse(textSitemap);
       expect(
-        urls3.collect(.list()),
+        format.sitemap.parse(text).collect(.list()),
         equals([
           'https://example.com/item1'.url,
           'https://example.com/item2'.url,
@@ -772,79 +708,31 @@ https://example.com/item2
     });
 
     test(
-      'Engine Frontier prioritizes higher priority fetches while preserving FIFO order',
-      () {
-        final downloader = MapDownloader<void>({});
-        final engine = Engine<void>(downloader: downloader);
-
-        engine.add(Fetch('https://example.com/low1'.url, priority: 1));
-        engine.add(Fetch('https://example.com/high1'.url, priority: 10));
-        engine.add(Fetch('https://example.com/low2'.url, priority: 1));
-        engine.add(Fetch('https://example.com/high2'.url, priority: 10));
-        engine.add(Fetch('https://example.com/medium'.url, priority: 5));
-
-        expect(
-          engine.serve()?.url.toString(),
-          equals('https://example.com/high1'),
-        );
-        expect(
-          engine.serve()?.url.toString(),
-          equals('https://example.com/high2'),
-        );
-        expect(
-          engine.serve()?.url.toString(),
-          equals('https://example.com/medium'),
-        );
-        expect(
-          engine.serve()?.url.toString(),
-          equals('https://example.com/low1'),
-        );
-        expect(
-          engine.serve()?.url.toString(),
-          equals('https://example.com/low2'),
-        );
-        expect(engine.serve(), isNull);
-      },
-    );
-
-    test(
-      'Downloader perhost politeness rate limits per-host independently',
+      'a sitemap index is a crawl, with depth and dedupe for free',
       () async {
-        final responses = {
-          'https://host-a.com/1': '<h1>A1</h1>',
-          'https://host-a.com/2': '<h1>A2</h1>',
-          'https://host-b.com/1': '<h1>B1</h1>',
-        };
+        final crawl =
+            net.crawl(
+                [Fetch('https://x.test/sitemap.xml'.url)],
+                (res) =>
+                    res.parse(format.sitemap).transform(.map((u) => Fetch(u))),
+              )
+              ..using(
+                fixture(const {
+                  'https://x.test/sitemap.xml': '''
+<sitemapindex><sitemap><loc>https://x.test/one.xml</loc></sitemap></sitemapindex>
+''',
+                  'https://x.test/one.xml': '''
+<urlset><url><loc>https://x.test/a</loc></url></urlset>
+''',
+                  'https://x.test/a': '<p>a</p>',
+                }),
+              )
+              ..depth(8);
 
-        final downloader = MapDownloader<String>(
-          responses,
-          concurrency: 3,
-          delay: const Duration(milliseconds: 60),
-          perhost: true,
-        );
-
-        final order = <String>[];
-
-        await net
-            .crawl<String>('https://host-a.com/1'.url)
-            .downloader(downloader)
-            .perhost()
-            .delay(const Duration(milliseconds: 60))
-            .items((res) {
-              order.add(res.url.toString());
-              if (res.url.toString() == 'https://host-a.com/1') {
-                res.follow('https://host-b.com/1');
-                res.follow('https://host-a.com/2');
-              }
-            });
-
-        // host-b.com/1 does not wait for host-a.com/1's delay, so host-b.com/1 finishes before host-a.com/2
-        expect(order, contains('https://host-b.com/1'));
-        expect(order, contains('https://host-a.com/2'));
-        expect(
-          order.indexOf('https://host-b.com/1'),
-          lessThan(order.indexOf('https://host-a.com/2')),
-        );
+        final urls = await crawl.flow
+            .transform(.map((res) => res.url.path))
+            .collect(.list());
+        expect(urls, equals(['/sitemap.xml', '/one.xml', '/a']));
       },
     );
   });

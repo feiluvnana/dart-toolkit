@@ -4,8 +4,9 @@
 ///
 /// Two members shape it — [Sequence.transform] takes a [Transformer] and
 /// [Sequence.collect] takes a [Collector] — and the vocabulary itself lives in
-/// those two namespaces rather than on this class. [Flow] has the matching
-/// pair, [Flow.pipe] and [Flow.pour], over its own two operation types. That is what lets every
+/// those two namespaces rather than on this class. [Flow] and `Dictionary`
+/// spell the same two members over their own operation types, so one rule
+/// covers all three containers. That is what lets every
 /// operation take its ordinary name back: `map`, `where`, `take.first`,
 /// `group.by`, `max.by`, `count.by`, none of which could be a member here.
 ///
@@ -27,7 +28,9 @@ import 'transformer.dart';
 /// An ordered collection, carrying this library's vocabulary.
 ///
 /// ```dart
-/// final rows = await net.crawl<Row>(seed).items();
+/// final rows = await net.crawl([Fetch(seed)]).flow
+///     .transform(.map((res) => parse(res.body)))
+///     .collect(.seq());
 ///
 /// rows.collect(.group.into((r) => r.host, .sum((r) => r.cost)))
 ///     .pairs
@@ -219,7 +222,9 @@ extension FlowedSequence<T> on Sequence<T> {
   /// These elements as a [Flow], walked only once the flow is collected.
   ///
   /// `.seq` for the ordered collection, `.dict` for the keyed one, `.flow`
-  /// for the one over time. The way back is `await flow.pour(.seq())`.
+  /// for the one over time. The way back is `await flow.collect(.seq())` —
+  /// a call and not a getter, because it costs waiting for all of it and the
+  /// `await` is the only honest way to say so.
   ///
   /// Re-derivable — see [Flow.of] — because a sequence can be walked again,
   /// so the flow it becomes can be consumed again too.

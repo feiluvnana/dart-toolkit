@@ -19,15 +19,22 @@
 /// both tried and both removed for that reason, and the rename closes the
 /// question.
 ///
-/// Every codec is spelled identically — `parse`, `read`, `format` — so they
-/// are learnable from each other, and every one implements [Codec], which is
-/// what lets a response be read through any of them without `net` learning
-/// which:
+/// Seven of the eight are codecs, spelled identically — `parse`, `read`,
+/// `write`, `format` — and every one implements [Codec], which is what lets a
+/// response be read through any of them without `net` learning which.
+///
+/// `format.zip` is the eighth and is **not** one: an archive is a container of
+/// files, not a document with a shape, so there is no cursor to hand back and
+/// `parse(String)` is the wrong signature for bytes. It has `pack`, `bundle`,
+/// `unpack`, `extract` and `list` instead. It is in this domain because a
+/// `.zip` is a file format; it is not a codec because there is nothing to
+/// parse into.
 ///
 /// ```dart
 /// final cfg  = await format.yaml.read('config.yaml');
 /// final pkg  = await format.json.read('package.json');
 /// final page = format.html.parse(res.body);
+/// await format.yaml.write('config.yaml', cfg.raw);
 /// await format.zip.pack('site', 'site.zip');
 ///
 /// res.parse(format.html).find('h1').text;    // through the codec seam
@@ -39,17 +46,24 @@ library;
 
 import 'dart:io';
 
+import '../io/entry.dart';
 import '../src/codec.dart';
+import '../src/fs.dart';
 import 'csv.dart';
 import 'html.dart';
 import 'json.dart';
+import 'robots.dart';
+import 'sitemap.dart';
 import 'toml.dart';
 import 'yaml.dart';
 import 'zip.dart';
 
 export 'csv.dart';
+export 'form.dart';
 export 'html.dart' hide $, $xpath;
 export 'json.dart';
+export 'robots.dart';
+export 'sitemap.dart';
 export 'toml.dart';
 export 'yaml.dart';
 export 'zip.dart';
@@ -89,6 +103,18 @@ class FormatAccessor {
   /// TOML: the same three members again.
   TomlAccessor get toml => const TomlAccessor();
 
+  /// `robots.txt`: reading one into the evaluator a crawl obeys.
+  ///
+  /// It was `net.robots(content)` through 5.5.0, in the domain whose own
+  /// doc says it parses nothing.
+  RobotsAccessor get robots => const RobotsAccessor();
+
+  /// Sitemaps: XML `<urlset>`, XML `<sitemapindex>` and plain text alike.
+  ///
+  /// It was `net.sitemap(content)` through 5.5.0, beside `Sitemap.load`,
+  /// which is a crawl and is written as one now.
+  SitemapAccessor get sitemap => const SitemapAccessor();
+
   /// CSV: reading a table as a [Csv] cursor, and writing one back.
   ///
   /// It was `io.csv` through 5.1.0. A format is a subject by Rule 1, and this
@@ -96,18 +122,41 @@ class FormatAccessor {
   CsvAccessor get csv => const CsvAccessor();
 }
 
-/// Reading a document off the disk, for the codecs that all do it the same
-/// way.
+/// Reading a document off the disk and writing one back, for the codecs that
+/// all do it the same way.
 ///
-/// Every `read` in this domain is `io` plus [Codec.parse], so it is written
-/// once here rather than four times. A file that is not there parses as the
-/// empty string, which every codec already reads as the empty cursor — so a
-/// missing optional config needs no `io.has` in front of it.
-mixin FileCodec<T> implements Codec<T> {
+/// Every `read` in this domain is `io` plus [Codec.parse], and every [write]
+/// is [format] plus an atomic `io` write, so both are written once here rather
+/// than five times each. A file that is not there parses as the empty string,
+/// which every codec already reads as the empty cursor — so a missing optional
+/// config needs no `io.has` in front of it.
+///
+/// ```dart
+/// final cfg = await format.yaml.read('config.yaml');
+/// await format.yaml.write('config.yaml', cfg.raw);
+/// ```
+///
+/// `io.dump(path, data)` is JSON's shorthand over [write] — the same call with
+/// a shorter name for the format everyone uses, and the same `.part` staging.
+mixin FileCodec<T, V> implements Codec<T> {
   /// Reads the document at [path] through [Codec.parse].
   Future<T> read(String path) async {
     final file = File(path);
     if (!await file.exists()) return parse('');
     return parse(await file.readAsString());
   }
+
+  /// Renders [value] as this format's text.
+  ///
+  /// `V` is what the format actually takes — raw data for `json`, `yaml` and
+  /// `toml`, a [Markup] cursor for `html`, rows for `csv`. This declaration is
+  /// what lets [write] reach it without knowing which.
+  String format(V value);
+
+  /// Writes [value] to [path] atomically, staged through a `.part` file.
+  ///
+  /// The inverse of [read], and one line over [format]: the file appears whole
+  /// or not at all, which is this library's rule for every write.
+  Future<FileSystemEntry> write(String path, V value) async =>
+      Fs.entryFor((await Fs.write(path, format(value))).path);
 }

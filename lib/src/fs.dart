@@ -18,6 +18,7 @@ import 'package:path/path.dart' as p;
 
 import '../io/entry.dart';
 import 'entries.dart';
+import 'jsontext.dart';
 import 'proc.dart';
 
 // ============================================================================
@@ -249,12 +250,11 @@ class Fs {
   /// Whether [path] exists and holds at least one byte.
   ///
   /// Zero-length files count as absent, since an interrupted write can leave
-  /// one behind. Pass [match] to also accept a loosely-named sibling — see
-  /// [similar] for the caveats before enabling it.
-  static bool has(String path, {bool match = false}) {
+  /// one behind. [similar] is the widened question, and it opens by calling
+  /// this one.
+  static bool has(String path) {
     final file = File(path);
-    if (file.existsSync() && file.lengthSync() > 0) return true;
-    return match && similar(path);
+    return file.existsSync() && file.lengthSync() > 0;
   }
 
   /// Whether a *loosely* similarly-named non-empty file sits beside [path].
@@ -403,17 +403,20 @@ class Fs {
     Encoding encoding = utf8,
   }) => writeSync(path, _encode(data, pretty), part: part, encoding: encoding);
 
-  static String _encode(Object? data, bool pretty) => pretty
-      ? const JsonEncoder.withIndent('  ').convert(data)
-      : jsonEncode(data);
+  /// The one JSON encoder in the library.
+  ///
+  /// `io.dump`, `seq.dump`, `dict.dump` and `format.json.format` all reach
+  /// this, so the four of them cannot disagree about indentation or about
+  /// what a type without a `toJson` does.
+  static String _encode(Object? data, bool pretty) =>
+      JsonText.encode(data, indent: pretty ? 2 : 0);
 
   // --- Non-blocking counterparts, reached through `io.async.*` -------------
 
   /// Whether [path] exists and holds at least one byte, without blocking.
-  static Future<bool> hasAsync(String path, {bool match = false}) async {
+  static Future<bool> hasAsync(String path) async {
     final file = File(path);
-    if (await file.exists() && await file.length() > 0) return true;
-    return match && await similarAsync(path);
+    return await file.exists() && await file.length() > 0;
   }
 
   /// Whether a loosely similarly-named non-empty file sits beside [path].
@@ -766,6 +769,43 @@ class Fs {
       await sink.flush();
     } finally {
       await sink.close();
+    }
+  });
+
+  /// Writes [chunks] to [path] atomically as they arrive.
+  ///
+  /// The byte twin of [pourLines], and the write half `io.chunks` had no
+  /// spelling for through 5.5.0. Nothing is held but the chunk being written.
+  static Future<File> pourChunks(
+    String path,
+    Stream<List<int>> chunks, {
+    String part = '.part',
+  }) => atomic(path, part: part, (staging) async {
+    final sink = staging.openWrite();
+    try {
+      await for (final chunk in chunks) {
+        sink.add(chunk);
+      }
+      await sink.flush();
+    } finally {
+      await sink.close();
+    }
+  });
+
+  /// The blocking twin of [pourChunks].
+  static File writeChunksSync(
+    String path,
+    Iterable<List<int>> chunks, {
+    String part = '.part',
+  }) => atomicSync(path, part: part, (staging) {
+    final handle = staging.openSync(mode: FileMode.writeOnly);
+    try {
+      for (final chunk in chunks) {
+        handle.writeFromSync(chunk);
+      }
+      handle.flushSync();
+    } finally {
+      handle.closeSync();
     }
   });
 

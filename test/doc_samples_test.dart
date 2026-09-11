@@ -40,7 +40,7 @@ void main() {
               <li>2</li>
             </ul>
           </div>
-        ''', requested: 'https://example.com'.url);
+        ''', fetch: Fetch('https://example.com'.url));
 
       expect(
         res.parse(format.html).find('a:contains("More")').count,
@@ -89,37 +89,36 @@ void main() {
       );
     });
 
-    test('crawl.md samples and builder options compile and execute', () async {
-      final titles = await net
-          .crawl<String>('https://news.ycombinator.com'.url)
-          .concurrent(4)
-          .delay(250.ms, perhost: true)
-          .perhost(true)
-          .limit(1)
-          .depth(1)
-          .allow(RegExp(r'.*'))
-          .deny(RegExp(r'\.pdf$'))
-          .samehost(false)
-          .headers({'User-Agent': 'TestBot'})
-          .timeout(5.s)
-          .downloader(
-            MapDownloader<String>({
-              'https://news.ycombinator.com':
-                  '<html><body><a class="titleline" href="/item">Title 1</a></body></html>',
-            }),
-          )
-          .items((res) {
-            for (final title
-                in res
-                    .parse(format.html)
-                    .find('.titleline')
-                    .texts
-                    .collect(.list())) {
-              res.emit(title);
-            }
-          });
+    test('crawl.md samples and crawl options compile and execute', () async {
+      // Every knob the crawl owns is a scheduler knob; everything about the
+      // client is on the client, set once where it is declared.
+      final crawl = net.crawl([Fetch('https://news.ycombinator.com'.url)])
+        ..using(
+          Fetcher(headers: const {'User-Agent': 'TestBot'}, timeout: 5.s).call,
+        )
+        ..concurrent(4)
+        ..delay(250.ms, perhost: true)
+        ..limit(1)
+        ..depth(1)
+        ..allow(RegExp(r'.*'))
+        ..deny(RegExp(r'\.pdf\$'))
+        ..samehost(false);
 
-      expect(titles.collect(.list()), equals(['Title 1']));
+      crawl.using(
+        (fetch) async => Reply.text(
+          '<html><body><a class="titleline" href="/item">Title 1</a>'
+          '</body></html>',
+          fetch: fetch,
+        ),
+      );
+
+      final titles = await crawl.flow
+          .transform(
+            .flat.map((res) => res.parse(format.html).find('.titleline').texts),
+          )
+          .collect(.list());
+
+      expect(titles, equals(['Title 1']));
     });
 
     test('http.md declarative extract and features work as documented', () {
@@ -140,7 +139,7 @@ void main() {
               </div>
             </body>
           </html>
-        ''', requested: 'https://example.com/product/1'.url);
+        ''', fetch: Fetch('https://example.com/product/1'.url));
 
       final product = res.parse(format.html).extract({
         'title': 'h1.title',
@@ -171,7 +170,7 @@ void main() {
     test('concurrent.md features run as documented', () async {
       // 1. flow.run
       final streamResults = await [20, 10].flow
-          .pipe(
+          .transform(
             .map.async(
               (int ms) async {
                 await util.time.wait(ms.ms);
@@ -181,7 +180,7 @@ void main() {
               ordered: false,
             ),
           )
-          .pour(.list());
+          .collect(.list());
       expect(streamResults, containsAll(['done-20', 'done-10']));
 
       // 2. settle
@@ -233,7 +232,7 @@ void main() {
         <form class="search" action="/search?stale=1">
           <input name="q" value="dart">
         </form>
-      ''', requested: 'https://example.com/login'.url);
+      ''', fetch: Fetch('https://example.com/login'.url));
 
       final markup = page.parse(format.html);
 
@@ -326,10 +325,10 @@ void main() {
           equals(['Alice', 'admin']),
         );
 
-        final streamed = await io.async.csv.records(path).pour(.list());
+        final streamed = await io.async.csv.records(path).collect(.list());
         expect(streamed.length, equals(2));
 
-        final cells = await io.async.csv.rows(path).pour(.list());
+        final cells = await io.async.csv.rows(path).collect(.list());
         expect(cells.first, equals(['name', 'role']));
 
         // Excel and RFC 4180 want CRLF, which format and write both take.

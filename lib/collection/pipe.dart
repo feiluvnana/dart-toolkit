@@ -32,9 +32,9 @@ import 'transformer.dart';
 ///
 /// ```dart
 /// // setup: final flow = Flow<Row>.empty(); Future<Row> price(Row r) async => r;
-/// flow.pipe(.where((r) => r.live))
-///     .pipe(.map.async(price, size: 8))
-///     .pipe(.take.first(10));
+/// flow.transform(.where((r) => r.live))
+///     .transform(.map.async(price, size: 8))
+///     .transform(.take.first(10));
 /// ```
 ///
 /// ## What a flow can do that a sequence cannot
@@ -106,7 +106,7 @@ class Pipe<A, B> {
   /// // setup: bool live(Row r) => r.live; final flow = Flow<Row>.empty();
   /// final cleanup = Transformer.where<Row>(live);
   /// rows.transform(cleanup);
-  /// flow.pipe(Pipe.of(cleanup));
+  /// flow.transform(Pipe.of(cleanup));
   /// ```
   ///
   /// **It holds the whole source**, because a [Transformer] takes an
@@ -151,8 +151,8 @@ class Pipe<A, B> {
   /// ```dart
   /// // setup: final flow = Flow<Row>.empty();
   /// // setup: Future<Row> price(Row r) async => r;
-  /// flow.pipe(.map((r) => r.name));
-  /// flow.pipe(.map.async(price, size: 8));
+  /// flow.transform(.map((r) => r.name));
+  /// flow.transform(.map.async(price, size: 8));
   /// ```
   static const map = _Map();
 
@@ -171,7 +171,7 @@ class Pipe<A, B> {
   ///
   /// ```dart
   /// // setup: final pages = Flow<Sequence<Row>>.empty();
-  /// pages.pipe(.flat());
+  /// pages.transform(.flat());
   /// ```
   static const flat = _Flat();
 
@@ -206,8 +206,8 @@ class Pipe<A, B> {
   ///
   /// ```dart
   /// // setup: final flow = Flow<Row>.empty(); Future<void> send(Sequence<Row> b) async {}
-  /// await flow.pipe(.chunk(100)).pour(.foreach(send));
-  /// await flow.pipe(.chunk.time(5.s)).pour(.foreach(send));
+  /// await flow.transform(.chunk(100)).collect(.foreach(send));
+  /// await flow.transform(.chunk.time(5.s)).collect(.foreach(send));
   /// ```
   static const chunk = _Chunk();
 
@@ -215,7 +215,7 @@ class Pipe<A, B> {
   ///
   /// ```dart
   /// // setup: final left = Flow<String>.empty();
-  /// left.pipe(.zip(io.async.lines('b.txt')));
+  /// left.transform(.zip(io.async.lines('b.txt')));
   /// ```
   static Pipe<A, (A, R)> zip<A, R>(Flow<R> other) =>
       Pipe((items) => _zipped(items, other));
@@ -243,13 +243,13 @@ class Pipe<A, B> {
   /// [other] is read in full before the first element passes, because that is
   /// what *does not hold* needs to know.
   static Pipe<A, A> minus<A>(Flow<A> other) => Pipe((items) async* {
-    final drop = await other.pour(.set());
+    final drop = await other.collect(.set());
     yield* items.where((item) => !drop.contains(item));
   });
 
   /// The elements [other] also holds, duplicates removed.
   static Pipe<A, A> common<A>(Flow<A> other) => Pipe((items) async* {
-    final keep = await other.pour(.set());
+    final keep = await other.collect(.set());
     final seen = <A>{};
     yield* items.where((item) => keep.contains(item) && seen.add(item));
   });
@@ -397,7 +397,7 @@ class Pipe<A, B> {
   ///
   /// ```dart
   /// // setup: final flow = Flow<int>.empty();
-  /// flow.pipe(.fn((xs) => xs.map((n) => n * 2)));
+  /// flow.transform(.fn((xs) => xs.map((n) => n * 2)));
   /// ```
   ///
   /// For an operation with options, one used in six pipelines, or one worth a
@@ -418,8 +418,8 @@ class Pipe<A, B> {
 ///
 /// ```dart
 /// // setup: final flow = Flow<Row>.empty();
-/// await flow.pour(.count());
-/// await flow.pour(.group.into((r) => r.host, .sum((r) => r.cost)));
+/// await flow.collect(.count());
+/// await flow.collect(.group.into((r) => r.host, .sum((r) => r.cost)));
 /// ```
 ///
 /// The [Collector] of the streaming side, with the same names, the same
@@ -654,14 +654,14 @@ class Pour<A, R> {
   /// every write and awaited none:
   ///
   /// ```dart no-compile
-  /// await flow.pour(.foreach((n) async {
+  /// await flow.collect(.foreach((n) async {
   ///   await io.async.write('out/$n.txt', 'x');   // never awaited
   /// }));
   /// ```
   ///
   /// One at a time, in order. For [each] calls that should overlap, the
   /// bound goes on the work rather than on the terminal:
-  /// `pipe(.map.async(each, size: 8)).pour(.foreach((_) {}))`.
+  /// `pipe(.map.async(each, size: 8)).collect(.foreach((_) {}))`.
   static Pour<A, void> foreach<A>(FutureOr<void> Function(A item) each) =>
       Pour((items) async {
         await for (final item in items) {
@@ -719,10 +719,10 @@ class _Map {
   /// ```dart
   /// // setup: Future<String> fetch(String u) async => u; void save(String s) {}
   /// await system.console.reader.lines
-  ///     .pipe(.map((line) => line.trim()))
-  ///     .pipe(.where((line) => line.isNotEmpty))
-  ///     .pipe(.map.async(fetch, size: 4))
-  ///     .pour(.foreach(save));
+  ///     .transform(.map((line) => line.trim()))
+  ///     .transform(.where((line) => line.isNotEmpty))
+  ///     .transform(.map.async(fetch, size: 4))
+  ///     .collect(.foreach(save));
   /// ```
   ///
   /// `size: 1` is `Stream.asyncMap`. [ordered] `true` — the default — yields

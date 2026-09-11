@@ -42,7 +42,7 @@ void main() {
     test('an overridden width is what a rule measures', () {
       final probe = _capture(width: 20);
       probe.writer.rule();
-      expect(Ansi.width(probe.out.toString().trim()), 20);
+      expect((probe.out.toString().trim()).width, 20);
     });
 
     test('out and err stay apart', () {
@@ -63,7 +63,7 @@ void main() {
         ..tick()
         ..done('Fetched');
 
-      final text = Ansi.strip(probe.out.toString());
+      final text = (probe.out.toString()).plain;
       expect(text, contains('Fetched'));
       expect(text, contains('2 / 2'));
       expect(text, contains('100.0%'));
@@ -83,7 +83,7 @@ void main() {
       final probe = _capture();
       Progress(total: 2, writer: probe.writer).fail('Aborted');
 
-      expect(Ansi.strip(probe.err.toString()), contains('Aborted'));
+      expect((probe.err.toString()).plain, contains('Aborted'));
       expect(probe.out.toString(), isNot(contains('Aborted')));
     });
 
@@ -95,7 +95,7 @@ void main() {
         writer: probe.writer,
       ).update(1024);
 
-      expect(Ansi.strip(probe.out.toString()), contains('1.0 KiB / 2.0 KiB'));
+      expect((probe.out.toString()).plain, contains('1.0 KiB / 2.0 KiB'));
     });
   });
 
@@ -106,7 +106,7 @@ void main() {
         ..start('Resolving')
         ..ok('Resolved');
 
-      expect(Ansi.strip(probe.out.toString()), contains('Resolved'));
+      expect((probe.out.toString()).plain, contains('Resolved'));
     });
 
     test('a failure goes to the error sink', () {
@@ -115,7 +115,7 @@ void main() {
         ..start('Resolving')
         ..fail('Gave up');
 
-      expect(Ansi.strip(probe.err.toString()), contains('Gave up'));
+      expect((probe.err.toString()).plain, contains('Gave up'));
     });
 
     test('logger.task takes the logger writer along', () async {
@@ -124,7 +124,7 @@ void main() {
 
       expect(await logger.task('Working', () async => 7), 7);
       // The spinner used to write to stdout however the logger was built.
-      expect(Ansi.strip(probe.out.toString()), contains('Working'));
+      expect((probe.out.toString()).plain, contains('Working'));
     });
   });
 
@@ -156,9 +156,9 @@ void main() {
       logger.writer = second.writer;
       logger.ok('two');
 
-      expect(Ansi.strip(first.out.toString()), contains('one'));
-      expect(Ansi.strip(first.out.toString()), isNot(contains('two')));
-      expect(Ansi.strip(second.out.toString()), contains('two'));
+      expect((first.out.toString()).plain, contains('one'));
+      expect((first.out.toString()).plain, isNot(contains('two')));
+      expect((second.out.toString()).plain, contains('two'));
     });
 
     test('json writes one object per line, badges named not drawn', () {
@@ -200,7 +200,7 @@ void main() {
         ..stamp = true
         ..ok('Done');
       expect(
-        Ansi.strip(plain.out.toString()),
+        (plain.out.toString()).plain,
         matches(RegExp(r'^\[\d{4}-\d{2}-\d{2}T')),
       );
 
@@ -283,7 +283,7 @@ void main() {
       expect(lines[3], contains('Connection reset'));
       expect(lines[4], contains('Retried 3 times'));
       // And it is still square.
-      expect(lines.map(Ansi.width).toSet(), hasLength(1));
+      expect(lines.map((line) => line.width).toSet(), hasLength(1));
     });
 
     test('a width cap narrows the widest column and wraps it', () {
@@ -292,9 +292,9 @@ void main() {
 
       final lines = table.render().trimRight().split('\n');
       for (final line in lines) {
-        expect(Ansi.width(line), lessThanOrEqualTo(30));
+        expect(line.width, lessThanOrEqualTo(30));
       }
-      expect(lines.map(Ansi.width).toSet(), hasLength(1));
+      expect(lines.map((line) => line.width).toSet(), hasLength(1));
       // The long cell is still there, in pieces.
       expect(table.render(), contains('https:'));
       expect(table.render(), contains('path'));
@@ -315,7 +315,7 @@ void main() {
     test('wide characters still line up when wrapped', () {
       final table = Table(headers: ['名前'], width: 12)..add(['日本語のテキスト']);
       final lines = table.render().trimRight().split('\n');
-      expect(lines.map(Ansi.width).toSet(), hasLength(1));
+      expect(lines.map((line) => line.width).toSet(), hasLength(1));
     });
   });
 
@@ -367,7 +367,7 @@ void main() {
           .collect(.list());
       final List<List<String>> rows = await io.async.csv
           .rows(path)
-          .pour(.list());
+          .collect(.list());
 
       expect(sheet.maps.collect(.list()), records);
       // The cursor keeps the header out of the rows; the flow does not, so

@@ -22,6 +22,7 @@
 /// that needs to catch a redirect.
 library;
 
+import '../src/method.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -30,7 +31,6 @@ import 'package:path/path.dart' as p;
 
 import '../src/jsontext.dart';
 import '../src/json.dart';
-import 'http.dart';
 
 // ============================================================================
 // SERVING (net.serve / net.once)

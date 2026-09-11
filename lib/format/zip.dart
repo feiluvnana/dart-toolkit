@@ -69,7 +69,12 @@ enum Format {
 }
 
 /// One entry inside an archive.
-class Entry {
+///
+/// Named for the archive it is in, because `Entry` alone lands at top level
+/// beside [FileSystemEntry] — two types describing "a thing with a name and a
+/// size that might be a directory" — and nothing in the shorter name says
+/// which is which.
+class ArchiveEntry {
   /// The entry's path within the archive, using forward slashes.
   final String name;
 
@@ -80,7 +85,7 @@ class Entry {
   final bool folder;
 
   /// Creates an entry description.
-  const Entry(this.name, this.size, {this.folder = false});
+  const ArchiveEntry(this.name, this.size, {this.folder = false});
 
   @override
   String toString() => folder ? '$name/' : '$name ($size bytes)';
@@ -290,28 +295,38 @@ class ZipAccessor {
   /// `io.dir.walk`, `io.csv.rows` and `format.json.read` give for a missing path.
   /// Through 4.0.0 this was the one read in the library that raised
   /// `PathNotFoundException`.
-  Future<Sequence<Entry>> list(String source, {Format? format}) async {
+  Future<Sequence<ArchiveEntry>> list(String source, {Format? format}) async {
     final archive = await _open(source, format);
     if (archive == null) return const Sequence([]);
     return Sequence(
       archive.map(
-        (entry) => Entry(entry.name, entry.size, folder: !entry.isFile),
+        (entry) => ArchiveEntry(entry.name, entry.size, folder: !entry.isFile),
       ),
     );
   }
 
-  /// Reads one entry's bytes out of the archive at [source].
+  /// Takes one entry's bytes out of the archive at [source].
+  ///
+  /// The pair of [unpack]: that one writes everything to disk, this one hands
+  /// back a single member in memory, and neither is a spelling of the other.
+  /// It was `read` through 5.5.0, which collided with [FileCodec.read] — the
+  /// same name for *parse the document at this path* — in a domain where the
+  /// other five share that meaning.
   ///
   /// Returns `null` when [name] is not in the archive, and when the archive
   /// itself is not there.
-  Future<List<int>?> read(String source, String name, {Format? format}) async {
+  Future<List<int>?> extract(
+    String source,
+    String name, {
+    Format? format,
+  }) async {
     final archive = await _open(source, format);
     return archive?.find(name)?.readBytes();
   }
 
   /// The archive at [source], or `null` when there is no file there.
   ///
-  /// One read and one decode per call, shared by [list], [read] and [unpack]
+  /// One read and one decode per call, shared by [list], [extract] and [unpack]
   /// so the three of them agree about a missing file and about which format a
   /// name implies.
   static Future<Archive?> _open(String source, Format? format) async {

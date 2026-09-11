@@ -2,6 +2,10 @@
 ///
 /// Reads process environment variables with an overlay of values loaded from
 /// a `.env` file or set at runtime.
+///
+/// [EnvAccessor.parse] is the one parser in this domain, and it is documented
+/// as a deliberate exception rather than left to look like an oversight — see
+/// its own doc.
 library;
 
 import 'dart:io';
@@ -43,6 +47,14 @@ class EnvAccessor {
   }
 
   /// Parses `.env`-style [content] into a map, without applying it.
+  ///
+  /// **The documented seam of this accessor**, and a deliberate exception: it
+  /// is a pure text parser, which by Rule 1 is a subject and belongs in
+  /// `format`. It stays because [load] cannot move — it mutates this
+  /// process's view of the environment, which is a touch — and moving `parse`
+  /// alone would make `format.env` a domain of one function, which Rule 2
+  /// forbids. So it is here, named as the seam, rather than in a family of
+  /// one next door.
   Map<String, String> parse(String content) {
     final result = <String, String>{};
     for (var line in content.split(RegExp(r'\r?\n'))) {

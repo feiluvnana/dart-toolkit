@@ -221,7 +221,7 @@ void main() {
     test('a response, a string and a file give the same cursor', () async {
       final res = Reply.text(
         '{"data":{"items":[{"sku":"a"},{"sku":"b"}]}}',
-        requested: 'https://example.com'.url,
+        fetch: Fetch('https://example.com'.url),
       );
       expect(res.parse(format.json).at('data.items').count, equals(2));
       expect(
@@ -236,7 +236,7 @@ void main() {
       expect(
         Reply.text(
           '<html>',
-          requested: 'https://example.com'.url,
+          fetch: Fetch('https://example.com'.url),
         ).parse(format.json).at('a').empty,
         isTrue,
         reason: 'a body that is not JSON never throws here',

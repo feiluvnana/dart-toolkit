@@ -1,9 +1,22 @@
 /// # ANSI Colours & Styling
 ///
-/// Escape sequences, the detection that decides whether to emit them, and the
-/// [AnsiStringExtension] helpers that wrap a string in one. [Ansi.width]
-/// measures what a terminal will actually render, which is what every box in
-/// `system.console` lines its columns up with.
+/// **The extension is the surface; [Ansi] is the mechanism.** `'ok'.green()`
+/// is what a script writes, and `Ansi.format('ok', Ansi.green)` reads worse
+/// in every way — so [AnsiStringExtension] carries one member per code and
+/// [Ansi] carries the codes, the detection and the builders those members are
+/// defined over.
+///
+/// Through 5.5.0 both were sold as the API, and it cost exactly what two
+/// spellings always cost: `Ansi.strip` and `String.plain` were one answer
+/// under two words, `Ansi.width` and `String.width` likewise, and four codes
+/// — `black`, `bgblack`, `bgmagenta`, `bgwhite` — had a constant and no
+/// extension member, so `'x'.red()` worked and `'x'.black()` did not, with
+/// nothing to say why. The mirror is complete now and a regression test pins
+/// it: **every `static const String` code on [Ansi] has a member of the same
+/// name on the extension.**
+///
+/// `String.width` measures what a terminal will actually render, which is
+/// what every box in `system.console` lines its columns up with.
 library;
 
 import 'dart:io';
@@ -24,7 +37,7 @@ class Ansi {
   /// - otherwise falls back to `stdout.hasTerminal`.
   static bool get enabled {
     if (_overrideEnabled != null) return _overrideEnabled!;
-    return detect();
+    return _detect();
   }
 
   static set enabled(bool value) {
@@ -32,12 +45,16 @@ class Ansi {
   }
 
   /// Resets the override, returning to dynamic environment detection.
+  ///
+  /// The public door to re-reading the environment. The detection itself is
+  /// private — it was `Ansi.detect()` through 5.5.0, a third member for one
+  /// boolean and its recomputation.
   static void refresh() {
     _overrideEnabled = null;
   }
 
   /// Dynamically detects whether the current environment supports ANSI colors.
-  static bool detect() {
+  static bool _detect() {
     try {
       final env = Platform.environment;
       final forceColor = env['FORCE_COLOR'];
@@ -191,20 +208,26 @@ class Ansi {
   }
 
   /// Removes all ANSI escape codes from [input].
-  static String strip(String input) {
+  ///
+  /// Private, because `input.plain` is the spelling — see
+  /// [AnsiStringExtension.plain]. It was also `Ansi.strip` through 5.5.0, and
+  /// `plain` is not short for `strip`: it is a second word for it.
+  static String _strip(String input) {
     return input.replaceAll(RegExp(r'\x1B\[[0-?]*[ -/]*[@-~]'), '');
   }
 
   /// The number of terminal columns [input] occupies, ANSI codes excluded.
+  ///
+  /// Private, for the reason [_strip] is: `input.width` is the spelling.
   ///
   /// Counting code units would be wrong in both directions: an emoji is two
   /// code units but two columns, a CJK ideograph is one code unit but two
   /// columns, and a combining accent is one code unit but no width at all.
   /// Every box drawn from this — tables, rules, progress bars — depends on
   /// the count matching what the terminal actually renders.
-  static int width(String input) {
+  static int _width(String input) {
     var columns = 0;
-    for (final rune in strip(input).runes) {
+    for (final rune in _strip(input).runes) {
       columns += _runeWidth(rune);
     }
     return columns;
@@ -213,7 +236,8 @@ class Ansi {
   /// [input] broken into lines no wider than [width] terminal columns.
   ///
   /// Breaks at spaces where it can and inside a word where it cannot, measured
-  /// by [width] rather than by code units, so a wrapped cell of CJK or emoji
+  /// in terminal columns rather than code units, so a wrapped cell of CJK or
+  /// emoji
   /// still fits the column it was cut for. Escape codes pass through without
   /// counting, and existing newlines in [input] are kept as breaks.
   ///
@@ -224,14 +248,14 @@ class Ansi {
     if (width <= 0) return [input];
     final lines = <String>[];
     for (final line in input.split('\n')) {
-      if (Ansi.width(line) <= width) {
+      if (Ansi._width(line) <= width) {
         lines.add(line);
         continue;
       }
       var current = '';
       for (final word in line.split(' ')) {
         final candidate = current.isEmpty ? word : '$current $word';
-        if (Ansi.width(candidate) <= width) {
+        if (Ansi._width(candidate) <= width) {
           current = candidate;
           continue;
         }
@@ -239,7 +263,7 @@ class Ansi {
           lines.add(current);
           current = '';
         }
-        if (Ansi.width(word) <= width) {
+        if (Ansi._width(word) <= width) {
           current = word;
           continue;
         }
@@ -329,7 +353,16 @@ class Ansi {
       (rune >= 0x20000 && rune <= 0x3FFFD); // CJK extensions B+
 }
 
-/// Convenience extensions for applying ANSI styles and colors directly to strings.
+/// Applying ANSI styles and colours to a string — **the colour surface**.
+///
+/// One member per code on [Ansi], with no holes: a regression test asserts
+/// that every `static const String` there has a member of the same name here,
+/// the same way the `io` / `io.async` mirror is pinned. Adding a colour is two
+/// edits and forgetting one fails the build, which is how `black`, `bgblack`,
+/// `bgmagenta` and `bgwhite` came to be missing in the first place.
+///
+/// [plain] and [width] are the only two members with no code behind them, and
+/// they are the only spelling of what they do.
 extension AnsiStringExtension on String {
   /// Formats the string with bold styling.
   String bold() => Ansi.format(this, Ansi.bold);
@@ -345,6 +378,9 @@ extension AnsiStringExtension on String {
 
   /// Formats the string with inverted foreground/background styling.
   String inverse() => Ansi.format(this, Ansi.inverse);
+
+  /// Formats the string with standard black color.
+  String black() => Ansi.format(this, Ansi.black);
 
   /// Formats the string with standard red color.
   String red() => Ansi.format(this, Ansi.red);
@@ -391,6 +427,9 @@ extension AnsiStringExtension on String {
   /// Formats the string with high-intensity bright white color.
   String brightwhite() => Ansi.format(this, Ansi.brightwhite);
 
+  /// Sets background color to black.
+  String bgblack() => Ansi.format(this, Ansi.bgblack);
+
   /// Sets background color to red.
   String bgred() => Ansi.format(this, Ansi.bgred);
 
@@ -403,8 +442,14 @@ extension AnsiStringExtension on String {
   /// Sets background color to blue.
   String bgblue() => Ansi.format(this, Ansi.bgblue);
 
+  /// Sets background color to magenta.
+  String bgmagenta() => Ansi.format(this, Ansi.bgmagenta);
+
   /// Sets background color to cyan.
   String bgcyan() => Ansi.format(this, Ansi.bgcyan);
+
+  /// Sets background color to white.
+  String bgwhite() => Ansi.format(this, Ansi.bgwhite);
 
   /// Formats the string with 256-color foreground.
   String color256(int code) => Ansi.format(this, Ansi.color256(code));
@@ -424,9 +469,16 @@ extension AnsiStringExtension on String {
   /// Formats the string with hex color background (e.g. `#1B2631`).
   String bghex(String code) => Ansi.format(this, Ansi.bghex(code));
 
-  /// Returns the printable visible length of the string, excluding ANSI codes.
-  int get width => Ansi.width(this);
+  /// The terminal columns this string occupies, ANSI codes excluded.
+  ///
+  /// The one spelling of the measurement. Counting code units would be wrong
+  /// in both directions: an emoji is two code units but two columns, a CJK
+  /// ideograph is one code unit but two, and a combining accent is one code
+  /// unit and no width at all.
+  int get width => Ansi._width(this);
 
-  /// Returns a clean copy of the string with all ANSI escape codes stripped.
-  String get plain => Ansi.strip(this);
+  /// This string with every ANSI escape code removed.
+  ///
+  /// The one spelling of the removal.
+  String get plain => Ansi._strip(this);
 }

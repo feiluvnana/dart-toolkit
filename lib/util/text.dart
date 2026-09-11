@@ -6,6 +6,8 @@
 /// direction, filling a template ([TextAccessor.render]).
 library;
 
+import 'dart:convert' as convert;
+
 import '../collection/sequence.dart';
 
 // ============================================================================
@@ -161,7 +163,35 @@ class TextAccessor {
       text.replaceAll(_invisible, '').replaceAll(_spaces, ' ').trim();
 
   /// [text] with any HTML tags removed and its whitespace cleaned.
-  String strip(String text) => clean(text.replaceAll(_tags, ' '));
+  ///
+  /// It was `strip` through 5.5.0, which said *remove something* without
+  /// saying what, and the something is a whole markup language.
+  ///
+  /// This is a regex and costs nothing, so it is the one for a snippet and for
+  /// the ten thousandth of them. `format.html.parse(t).text` builds a document
+  /// and is right about entities, `<script>` bodies and malformed nesting; it
+  /// is the one for a page.
+  String tags(String text) => clean(text.replaceAll(_tags, ' '));
+
+  /// [input] encoded as base64 text.
+  ///
+  /// [input] is a `String` or a `List<int>`. It lived on `util.hash` through
+  /// 5.5.0 as `encode`, which put a reversible transport encoding among four
+  /// one-way digests and named it after the direction rather than the
+  /// operation — so `util.hash.encode(secret)` read as the thing it is not.
+  String base64(Object input) => convert.base64.encode(_bytes(input));
+
+  /// Reverses [base64], returning the decoded bytes.
+  ///
+  /// The name is ugly and unambiguous, which is the trade: `decode` on its own
+  /// says nothing, and one function is never a sub-namespace.
+  List<int> unbase64(String input) => convert.base64.decode(input);
+
+  static List<int> _bytes(Object input) => switch (input) {
+    String text => convert.utf8.encode(text),
+    List<int> bytes => bytes,
+    _ => convert.utf8.encode(input.toString()),
+  };
 
   /// [text] shortened to at most [length] characters, ending with [ellipsis].
   ///
@@ -242,6 +272,10 @@ class TextAccessor {
   ///
   /// The first letter only — [title] is the one that does every word, and
   /// upper-casing a whole string is `toUpperCase`, which `dart:core` owns.
+  ///
+  /// There is deliberately no `lower`: `toLowerCase()` needs no help, and
+  /// this exists only because title-casing an all-caps string wants the
+  /// locale-independent first letter.
   String upper(String text) =>
       text.isEmpty ? text : text[0].toUpperCase() + text.substring(1);
 

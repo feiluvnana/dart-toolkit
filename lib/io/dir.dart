@@ -67,16 +67,6 @@ class DirAccessor {
   /// Creates the accessor. Prefer the shared `io.dir` instance.
   const DirAccessor();
 
-  /// The current working directory.
-  String get cwd => Fs.cwd;
-
-  /// The current user's home directory.
-  ///
-  /// `$HOME` on POSIX and `%USERPROFILE%` on Windows, falling back to
-  /// `%HOMEDRIVE%%HOMEPATH%` and finally to [cwd], so this never returns
-  /// `null` for a script to handle.
-  String get home => Fs.home;
-
   // --- Making ---
 
   /// Creates the directory at [path], including any missing parents.
@@ -260,8 +250,9 @@ class DirAccessor {
 /// Every member that touches the disk appears here under the same name and
 /// arguments: single operations return futures, and listing operations
 /// return a [Flow] so large trees are walked as they arrive.
-/// [DirAccessor.cwd] and [DirAccessor.home] do not appear here, since neither
-/// reads anything.
+/// Every member of [DirAccessor] appears here, with no exceptions — `cwd` and
+/// `home` were the two, and they are `io.path.cwd` and `io.path.home` now,
+/// because they read nothing and that is `io.path`'s whole membership rule.
 ///
 /// The listings are [Flow.of] flows — **re-derivable**, so a second terminal
 /// walks the disk again rather than throwing, which is exactly what a second
@@ -329,7 +320,7 @@ class DirAsyncAccessor {
       only: only,
       match: match,
       depth: depth,
-    ).pour(.list());
+    ).collect(.list());
     for (final entry in _sweepable(listing, only)) {
       try {
         await entry.entity.delete(recursive: entry.isdir);
@@ -343,7 +334,7 @@ class DirAsyncAccessor {
   Future<int> size(String dir) async => (await walk(
     dir,
     only: FileSystemEntryKind.file,
-  ).pour(.sum((entry) => entry.size))).toInt();
+  ).collect(.sum((entry) => entry.size))).toInt();
 
   /// Whether the directory at [path] holds no entries. See [DirAccessor.empty].
   Future<bool> empty(String path) => Entries.emptyAsync(path);

@@ -223,7 +223,7 @@ class Sys {
 
   /// Kills tracked children, deletes tracked partials, runs the exit hooks,
   /// then exits with [code] when it is non-zero.
-  static Future<void> shutdown([int code = 0]) => Exit.shutdown(code);
+  static Future<Never> shutdown([int code = 0]) => Exit.shutdown(code);
 }
 
 /// Crash-safe cleanup registry for partial files, child processes and hooks.
@@ -337,12 +337,19 @@ class Exit {
     _idle();
   }
 
-  /// Kills tracked processes, deletes tracked files and runs hooks.
+  /// Kills tracked processes, deletes tracked files, runs hooks, then exits.
   ///
-  /// Exits the process with [code] when it is non-zero. Re-entrant calls are
-  /// ignored so a second Ctrl-C cannot interleave with cleanup.
-  static Future<void> shutdown([int code = 0]) async {
-    if (_stopping) return;
+  /// Always exits, with [code]. Re-entrant calls wait rather than interleave,
+  /// so a second Ctrl-C cannot run the hooks twice.
+  static Future<Never> shutdown([int code = 0]) async {
+    if (_stopping) {
+      // A second caller — a Ctrl-C arriving mid-cleanup — waits for the
+      // first to finish rather than racing it, and never returns either.
+      while (_stopping) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      exit(code);
+    }
     _stopping = true;
 
     for (final proc in _procs) {
@@ -368,6 +375,6 @@ class Exit {
 
     unwatch();
     _stopping = false;
-    if (code != 0) exit(code);
+    exit(code);
   }
 }

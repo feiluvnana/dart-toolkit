@@ -193,25 +193,14 @@ void main() {
       expect(Cli(const <String>[]).list('tag', def: const ['x'])(), ['x']);
     });
 
-    test('strict names switches no declaration covers', () {
+    test('unknown names switches no declaration covers', () {
       final cli = Cli(['--verbose', '--verbse', '--no-cache', '-f'])
         ..flag('verbose', alias: 'f')
         ..flag('cache');
       expect(cli.unknown(), equals(['verbse']));
-      expect(
-        () => cli.strict(),
-        throwsA(
-          isA<ArgumentError>().having(
-            (e) => e.message.toString(),
-            'message',
-            contains('--verbse'),
-          ),
-        ),
-      );
 
       final clean = Cli(['--verbose'])..flag('verbose');
       expect(clean.unknown(), isEmpty);
-      expect(() => clean.strict(), returnsNormally);
     });
 
     test('duration is the sixth option kind', () {
@@ -541,9 +530,11 @@ void main() {
       expect(q.find('a').matching(r'[href$=".mp3"]').count, equals(1));
     });
 
-    test('Page provides Markup via \$ and \$xpath', () {
-      final res = Page<void>(
-        fetch: Fetch<void>(Uri.parse('https://example.com/sub/index.html')),
+    test('Reply provides Markup via \$ and \$xpath', () {
+      final res = Reply(
+        url: Uri.parse('https://example.com/sub/index.html'),
+        status: 200,
+        headers: const {},
         bytes: html.codeUnits,
       );
 
@@ -561,41 +552,37 @@ void main() {
       );
     });
 
-    test('emit without an engine explains itself', () {
-      final res = Page<String>(fetch: Fetch<String>('https://example.com'.url));
-      expect(
-        () => res.emit('x'),
-        throwsA(
-          isA<StateError>().having(
-            (e) => e.message,
-            'message',
-            contains('no engine attached'),
-          ),
-        ),
+    test('follow returns the next request rather than queueing one', () {
+      final res = Reply.text(
+        '<a href="/next">n</a>',
+        fetch: Fetch('https://example.com/'.url),
       );
+
+      // No engine, no side effect, no StateError: `next` is a pure function
+      // and every piece of it is testable on its own.
+      final Fetch next = res.follow('/next', tag: 'detail');
+      expect(next.url, Uri.parse('https://example.com/next'));
+      expect(next.tag, equals('detail'));
+      expect(next.depth, equals(1));
     });
   });
 
-  group('Engine events and one-word methods', () {
-    test('Engine on.start, on.item, on.done', () async {
-      var started = false;
-      var finished = false;
-      final items = <String>[];
+  group('the crawl terminals', () {
+    test(
+      'a flow that nobody collects fetches nothing, and stats is a record',
+      () async {
+        final crawl = net.crawl([Fetch('https://example.com/'.url)])
+          ..using((fetch) async => Reply.text('ok', fetch: fetch));
 
-      final engine = Engine<String>(
-        downloader: HttpDownloader<String>(),
-        process: (res) => res.emit('Emitted: ${res.url.path}'),
-      );
-      engine.on.start(() => started = true);
-      engine.on.item(items.add);
-      engine.on.done((stats) => finished = true);
+        // Built and thrown away: the workers start in the flow's `onListen`.
+        crawl.flow;
+        expect(crawl.stats.fetched, isZero);
 
-      final stats = await engine.run();
-      expect(started, isTrue);
-      expect(finished, isTrue);
-      expect(stats.completed, equals(0));
-      expect(items, isEmpty);
-    });
+        final Stats stats = await crawl.run();
+        expect(stats.fetched, equals(1));
+        expect(stats.reason, isNull);
+      },
+    );
   });
 
   group('Console namespaces', () {
@@ -625,13 +612,11 @@ void main() {
   });
 
   group('Crawl entry points', () {
-    test('net.crawl builds a configured engine without running it', () {
-      final engine = net
-          .crawl<String>('https://example.com'.url)
-          .concurrent(3)
-          .engine();
-      expect(engine.downloader.concurrency, equals(3));
-      expect(engine.running, isFalse);
+    test('net.crawl configures without running', () {
+      final crawl = net.crawl([Fetch('https://example.com'.url)])
+        ..concurrent(3);
+      expect(crawl, isA<Crawl>());
+      expect(crawl.stats.fetched, isZero);
     });
 
     test('an independent Fetcher carries its own settings', () async {

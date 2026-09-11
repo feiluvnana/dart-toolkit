@@ -2,6 +2,10 @@
 ///
 /// Digests of strings and bytes. For a file's digest use `io.hash`, which
 /// streams it rather than holding it in memory.
+///
+/// Five members, all of them one-way. Base64 was here through 5.5.0 as
+/// `encode`/`decode`; it is reversible, so it was the one thing in a hashing
+/// namespace that was not a hash, and it is `util.text.base64` now.
 library;
 
 import 'dart:convert';
@@ -37,12 +41,6 @@ class HashAccessor {
   /// An HMAC-SHA256 of [input] under [key], as hex — for signing a request.
   String sign(Object input, Object key) =>
       crypto.Hmac(crypto.sha256, _bytes(key)).convert(_bytes(input)).toString();
-
-  /// [input] encoded as base64.
-  String encode(Object input) => base64.encode(_bytes(input));
-
-  /// Reverses [encode], returning the decoded bytes.
-  List<int> decode(String input) => base64.decode(input);
 
   static List<int> _bytes(Object input) => switch (input) {
     String text => utf8.encode(text),

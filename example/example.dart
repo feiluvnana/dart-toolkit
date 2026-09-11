@@ -77,19 +77,27 @@ void main(List<String> args) async {
   // -------------------------------------------------------------- 1. crawl
   log.step(1, 5, 'Crawling the catalogue...');
 
-  final products = await net
-      .crawl<Product>('https://shop.test/catalogue'.url)
-      .downloader(MapDownloader<Product>(_fixtures))
-      .concurrent(size())
-      .delay(util.rand.jitter(20.ms))
-      .samehost()
-      .depth(2)
-      .limit(20)
-      .route(RegExp(r'/catalogue'), _catalogue)
-      .tag('product', _product)
-      .on
-      .error((f) => log.warn('${f.fetch?.url ?? 'crawl'}: ${f.error}'))
-      .items();
+  final crawl = net.crawl([Fetch('https://shop.test/catalogue'.url)], _next)
+    ..using(_fixture)
+    ..concurrent(size())
+    ..delay(util.rand.jitter(20.ms))
+    ..samehost()
+    ..depth(2)
+    ..limit(20);
+
+  // `settle` puts the failures in band, so one bad page is reported rather
+  // than swallowed and the good ones still arrive.
+  final products = await crawl.settle
+      .transform(
+        .tap((outcome) {
+          if (outcome case Broke(:final error)) log.warn('crawl: $error');
+        }),
+      )
+      .transform(.where.type<Done<Reply>>())
+      .transform(.map((outcome) => outcome.value))
+      .transform(.where((res) => res.fetch.tag == 'product'))
+      .transform(.flat.map(_product))
+      .collect(.seq());
 
   log.ok('Collected ${products.collect(.count())} products.');
 
@@ -196,34 +204,56 @@ void main(List<String> args) async {
   await system.shutdown();
 }
 
-/// The listing: queue every product, then follow pagination. `meta` survives
-/// the round trip, so the detail handler knows the price the listing showed.
-void _catalogue(Page<Product> res) {
-  for (final card
-      in res.parse(format.html).find('.product').elements.collect(.list())) {
-    res.follow(
-      card.query.find('a').attr('href') ?? '',
-      tag: 'product',
-      meta: [
-        if (util.text.number(card.query.find('.price').text) case final p?)
-          listed(p),
-      ],
-    );
-  }
+/// The whole router: reply in, next requests out.
+///
+/// On the listing, queue every product and follow pagination — `meta` survives
+/// the round trip, so the product stage knows the price the listing showed. A
+/// product page is a leaf.
+Sequence<Fetch> _next(Reply res) => switch (res.fetch.tag) {
+  null =>
+    res
+        .parse(format.html)
+        .find('.product')
+        .elements
+        .transform(
+          .map(
+            (card) => res.follow(
+              card.query.find('a').attr('href') ?? '',
+              tag: 'product',
+              meta: [
+                if (util.text.number(card.query.find('.price').text)
+                    case final p?)
+                  listed(p),
+              ],
+            ),
+          ),
+        )
+        .transform(
+          .plus(
+            [
+              if (res.parse(format.html).find('a.next').attr('href')
+                  case final next?)
+                res.follow(next),
+            ].seq,
+          ),
+        ),
+  _ => const Sequence<Fetch>([]),
+};
 
-  final next = res.parse(format.html).find('a.next').attr('href');
-  if (next != null) res.follow(next);
-}
-
-/// A product page.
-void _product(Page<Product> res) {
+/// A product page, as zero or one product.
+Sequence<Product> _product(Reply res) {
   final name = res.parse(format.html).pick(Field.text('h1'));
   final price = util.text.number(
     res.parse(format.html).pick(Field.text('.price')) ?? '',
   );
-  if (name == null || price == null) return;
+  if (name == null || price == null) return const Sequence<Product>([]);
+  return Sequence([(name: name, price: price, url: res.url.toString())]);
+}
 
-  res.emit((name: name, price: price, url: res.url.toString()));
+/// The fixture transport, which is a closure over a map.
+Future<Reply> _fixture(Fetch fetch) async {
+  final body = _fixtures['${fetch.url}'];
+  return Reply.text(body ?? '', fetch: fetch, status: body == null ? 404 : 200);
 }
 
 const _fixtures = <String, String>{

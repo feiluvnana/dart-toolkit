@@ -2,109 +2,138 @@
 //
 //   dart run example/crawl.dart
 //
-// A listing page queues detail pages, each detail page queues its own, and
-// every stage has its own handler. `route` dispatches on the URL, `tag` on
-// whatever queued the request, and `meta` carries context between the two so
-// a handler never re-parses what its parent already knew.
+// A listing page queues detail pages, each detail page queues its own. The
+// whole router is a `switch` on the tag the request carried, which the
+// compiler checks; `meta` carries context between stages so a later one never
+// re-parses what its parent already knew.
 //
-// The fixture downloader stands in for the network; drop the `.downloader(...)`
-// line and the same crawl runs against the real site.
+// The transport is a function. Drop the `.using(...)` line and the same crawl
+// runs against the real site through `net.http`.
 
 import 'package:dart_toolkit/dart_toolkit.dart';
 
 typedef Track = ({String artist, String album, String title});
 
 // Typed keys, declared once and checked at both ends: `artist('Nujabes')` will
-// not compile with a number in it, and `res.meta.read(artist)` hands back a
-// String? without a cast.
+// not compile with a number in it, and `res.fetch.meta.read(artist)` hands
+// back a String? without a cast.
 const artist = Slot<String>('artist');
 const album = Slot<String>('album');
 
 void main() async {
   final log = system.console.logger;
 
-  final tracks = await net
-      .crawl<Track>('https://music.test/artists'.url)
-      .downloader(MapDownloader<Track>(_fixtures))
-      // Politeness and scope. Without these a crawl wanders off the site it
-      // started on; `perhost` paces each host separately once seeds span more
-      // than one.
-      .concurrent(4)
-      .delay(20.ms)
-      .samehost()
-      .depth(3)
-      .limit(500)
-      .allow(RegExp(r'music\.test/(artists|albums)'))
-      .deny(RegExp(r'\?(sort|filter)='))
-      .headers({'User-Agent': 'ExampleBot/1.0 (+https://example.com/bot)'})
-      // A crawl that has to survive the real world adds four more:
-      //   .robots(true, 'ExampleBot/1.0')  obey robots.txt, Crawl-delay included
-      //   .cache('.cache')                 reuse pages that have not changed
-      //   .resume('crawl.state')           carry on where an interrupt stopped
-      //   .accept(['text/html'])           never hand a PDF to the HTML parser
-      // The stages.
-      .route(RegExp(r'/artists$'), _index)
-      .tag('artist', _artist)
-      .tag('album', _album)
-      // Without an error handler a crawl swallows failures so one bad page
-      // cannot end the run.
-      .on
-      .error((f) => log.warn('${f.fetch?.url ?? 'crawl'}: ${f.error}'))
-      .on
-      .done(
-        (s) => log.ok('${s.completed} pages in ${s.elapsed.inMilliseconds}ms'),
-      )
-      .items();
+  final crawl = net.crawl([Fetch('https://music.test/artists'.url)], _next)
+    // A transport is a `Send` — `Future<Reply> Function(Fetch)`. A fixture is
+    // a closure over a map; a headless browser is a closure over a page.
+    ..using(_fixture)
+    // Politeness and scope. Without these a crawl wanders off the site it
+    // started on; `perhost` paces each host separately once seeds span more
+    // than one.
+    ..concurrent(4)
+    ..delay(20.ms)
+    ..samehost()
+    ..depth(3)
+    ..limit(500)
+    ..allow(RegExp(r'music\.test/(artists|albums)'))
+    ..deny(RegExp(r'\?(sort|filter)='));
+  // A crawl that has to survive the real world adds three more:
+  //   ..obey('ExampleBot/1.0')      robots.txt, Crawl-delay included
+  //   ..resume('crawl.state')       carry on where an interrupt stopped
+  //   ..accept(['text/html'])       never hand a PDF to the HTML parser
+  // Everything about the *client* — headers, timeout, retries, cap, cache,
+  // rate — is set once on the Fetcher handed to `using`.
 
-  // `collect` returns a List<Track>. `stream` yields them as they arrive and
-  // `save(path)` writes each to disk, so a long crawl never holds its results
-  // in memory.
-  for (final track in tracks.collect(.list())) {
+  // Extraction is downstream, on the flow: the crawl produces replies and the
+  // collection vocabulary turns them into whatever this script wanted.
+  final tracks = await crawl.flow
+      .transform(.where((res) => res.fetch.tag == 'album'))
+      .transform(.flat.map(_tracks))
+      .collect(.list());
+
+  log.ok(
+    '${crawl.stats.fetched} pages, ${crawl.stats.failed} failed, '
+    'in ${crawl.stats.elapsed.inMilliseconds}ms',
+  );
+
+  for (final track in tracks) {
     log.info('${track.artist} — ${track.album} — ${track.title}');
   }
 }
 
-/// Stage 1, the index: queue every artist, tagged so stage 2 picks them up.
-void _index(Page<Track> res) {
-  for (final link
-      in res.parse(format.html).find('.artist a').elements.collect(.list())) {
-    res.follow(
-      link.attributes['href'] ?? '',
-      tag: 'artist',
-      meta: [artist(util.text.clean(link.text))],
-      // Artists are cheap and unlock everything else, so serve them first.
-      priority: 10,
-    );
-  }
-}
+/// The whole router: reply in, next requests out. A pure function, so it is
+/// testable with a `Reply.text` fixture and no crawl at all.
+Sequence<Fetch> _next(Reply res) => switch (res.fetch.tag) {
+  // The index: queue every artist, tagged so the next stage picks them up.
+  null =>
+    res
+        .parse(format.html)
+        .find('.artist a')
+        .elements
+        .transform(
+          .map(
+            (link) => res.follow(
+              link.attributes['href'] ?? '',
+              tag: 'artist',
+              meta: [artist(util.text.clean(link.text))],
+              // Artists are cheap and unlock everything else, so serve them first.
+              priority: 10,
+            ),
+          ),
+        ),
+  // An artist: queue their albums, passing the name down.
+  'artist' =>
+    res
+        .parse(format.html)
+        .find('.album a')
+        .elements
+        .transform(
+          .map(
+            (link) => res.follow(
+              link.attributes['href'] ?? '',
+              tag: 'album',
+              meta: [
+                if (res.fetch.meta.read(artist) ??
+                        res.parse(format.html).pick(Field.text('h1'))
+                    case final name?)
+                  artist(name),
+                album(util.text.clean(link.text)),
+              ],
+            ),
+          ),
+        ),
+  // An album is a leaf: nothing further to fetch.
+  _ => const Sequence<Fetch>([]),
+};
 
-/// Stage 2, an artist: queue their albums, passing the name down.
-void _artist(Page<Track> res) {
-  final name =
-      res.meta.read(artist) ?? res.parse(format.html).pick(Field.text('h1'));
-  for (final link
-      in res.parse(format.html).find('.album a').elements.collect(.list())) {
-    res.follow(
-      link.attributes['href'] ?? '',
-      tag: 'album',
-      meta: [if (name != null) artist(name), album(util.text.clean(link.text))],
-    );
-  }
-}
-
-/// Stage 3, an album: emit one item per track.
-void _album(Page<Track> res) {
-  final by = res.meta.read(artist) ?? '';
+/// One track per row of an album page.
+Sequence<Track> _tracks(Reply res) {
+  final by = res.fetch.meta.read(artist) ?? '';
   final on =
-      res.meta.read(album) ??
+      res.fetch.meta.read(album) ??
       res.parse(format.html).pick(Field.text('h1')) ??
       '';
+  return res
+      .parse(format.html)
+      .find('.track')
+      .elements
+      .transform(
+        .map(
+          (row) => (
+            artist: by,
+            album: on,
+            title: util.text.clean(row.query.find('.title').text),
+          ),
+        ),
+      )
+      .transform(.where((track) => track.title.isNotEmpty));
+}
 
-  for (final row
-      in res.parse(format.html).find('.track').elements.collect(.list())) {
-    final title = util.text.clean(row.query.find('.title').text);
-    if (title.isNotEmpty) res.emit((artist: by, album: on, title: title));
-  }
+/// The fixture transport: a closure over a map, which is what `MapDownloader`
+/// was an exported class for.
+Future<Reply> _fixture(Fetch fetch) async {
+  final body = _fixtures['${fetch.url}'];
+  return Reply.text(body ?? '', fetch: fetch, status: body == null ? 404 : 200);
 }
 
 const _fixtures = <String, String>{

@@ -31,6 +31,10 @@ class TimeAccessor {
 
   /// Formats [duration] as `mm:ss`, or `hh:mm:ss` past an hour.
   ///
+  /// [format] renders a **`Duration`**; [stamp] and [iso] render a
+  /// **`DateTime`**. The argument type is the whole difference between the
+  /// three, and it is why they are three names rather than one with a flag.
+  ///
   /// A negative duration formats its magnitude behind a `-`, so
   /// `format(-5.s)` is `'-00:05'`. Through 4.0.0 the sign reached the
   /// remainders instead and the result was `'00:-5'` — a script that
@@ -50,7 +54,8 @@ class TimeAccessor {
 
   /// A filename-safe timestamp, `yyyyMMdd_HHmmss`.
   ///
-  /// Uses [date], or the current local time.
+  /// Uses [date], or the current local time. The `DateTime` renderer for a
+  /// path; [iso] is the one for a wire, and [format] takes a `Duration`.
   String stamp([DateTime? date]) {
     final d = date ?? DateTime.now();
     String pad(int value, [int width = 2]) =>

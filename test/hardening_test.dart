@@ -91,12 +91,17 @@ Disallow: /
     });
   });
 
-  group('downloader', () {
-    test('a caller-supplied client survives close()', () async {
+  group('the transport seam', () {
+    test('a crawl does not close the client it was handed', () async {
       final mine = Fetcher();
-      final downloader = HttpDownloader<String>(client: mine);
-      await downloader.close();
-      // Reaching the socket layer proves the client was not closed.
+      await (net.crawl([
+        Fetch('https://example.test/'.url),
+      ])..using(mine.call)).run();
+
+      // Reaching the socket layer proves the client was not closed. A `Send`
+      // is a function and owns nothing, so there is nothing for the crawl to
+      // close on its way out — which is what `Downloader.close` and its
+      // `_ownsClient` flag existed to get right.
       await expectLater(
         mine.get(Uri.parse('http://127.0.0.1:1/'), retry: false),
         throwsA(
@@ -110,20 +115,13 @@ Disallow: /
       await mine.close();
     });
 
-    test('retries is writable, so .retry(n) reaches the downloader', () {
-      final downloader = HttpDownloader<String>(retries: 2);
-      downloader.retries = 9;
-      expect(downloader.retries, equals(9));
-    });
-
-    test('a crawl builder applies retry() to a supplied downloader', () {
-      final downloader = MapDownloader<String>(const {});
-      net
-          .crawl<String>('https://example.com'.url)
-          .retry(7)
-          .downloader(downloader)
-          .engine();
-      expect(downloader.retries, equals(7));
+    test('retries is the client\'s knob, declared in one place', () {
+      // Ten knobs at four levels through 5.5.0 — and a caller-supplied
+      // downloader silently dropped five of them. Now there is one place for
+      // each, and `Crawl` has no member for any of them.
+      final client = Fetcher(retries: 9);
+      expect(client.retries, equals(9));
+      expect(net.crawl(const []).using(client.call), isA<Crawl>());
     });
   });
 
@@ -198,7 +196,7 @@ Disallow: /
 
     test('results still arrive in completion order', () async {
       final out = await [30, 10, 20].flow
-          .pipe(
+          .transform(
             .map.async(
               (int ms) async {
                 await Future<void>.delayed(Duration(milliseconds: ms));
@@ -208,14 +206,14 @@ Disallow: /
               ordered: false,
             ),
           )
-          .pour(.list());
+          .collect(.list());
       expect(out, equals([10, 20, 30]));
     });
 
     test('cancelling a flow.run stops launching work', () async {
       var started = 0;
       final stream = List.generate(50, (int i) => i).flow
-          .pipe(
+          .transform(
             .map.async((i) async {
               started++;
               await Future<void>.delayed(const Duration(milliseconds: 1));
@@ -361,7 +359,7 @@ Disallow: /
         expect(io.has(a), isTrue);
         expect(await io.async.has(b), isTrue);
         expect(
-          await io.async.dir.walk(dir.path, only: .file).pour(.list()),
+          await io.async.dir.walk(dir.path, only: .file).collect(.list()),
           hasLength(2),
         );
         expect(await io.async.remove(b), isTrue);

@@ -90,12 +90,20 @@ final class Dictionary<K, V> {
   bool has(K key) => _entries.containsKey(key);
 
   /// How many entries there are.
-  int get count => _entries.length;
+  ///
+  /// A shorthand **defined as** the terminal, so there is one implementation
+  /// of the question and the two spellings cannot disagree. [Sequence] has no
+  /// such member and should not gain one: a sequence is always shaped before
+  /// it is asked anything, and a dictionary is usually asked directly.
+  int get count => collect(Collector.count());
 
   /// Whether the dictionary holds nothing.
   ///
-  /// There is no complement: `!dict.empty` already says the other thing.
-  bool get empty => _entries.isEmpty;
+  /// The same carve-out as [count] — `if (dict.empty)` is written constantly,
+  /// and `if (dict.collect(.empty()))` is worse in a way the guardrail exists
+  /// to refuse. There is no complement: `!dict.empty` already says the other
+  /// thing.
+  bool get empty => collect(Collector.empty());
 
   // --------------------------------------------------------------------------
   // Writing

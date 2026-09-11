@@ -18,7 +18,7 @@ library;
 
 import 'dart:io';
 
-import 'package:path/path.dart' as p;
+import 'path.dart';
 
 // ============================================================================
 // FILESYSTEM ENTRIES (FileSystemEntry)
@@ -50,7 +50,7 @@ enum FileSystemEntryKind {
 /// ```dart
 /// for (final entry in io.dir.list('out').collect(.list())) {
 ///   if (entry.isdir) continue;
-///   if (entry.ext == '.part') io.remove(entry.path);
+///   if (io.path.ext(entry.path) == '.part') io.remove(entry.path);
 /// }
 /// ```
 ///
@@ -85,18 +85,24 @@ final class FileSystemEntry {
   final DateTime modified;
 
   /// The last segment of [path], extension included.
-  String get name => p.basename(path);
-
-  /// The last segment of [path] without its extension.
-  String get stem => p.basenameWithoutExtension(path);
-
-  /// The extension of [path], including the leading dot.
-  String get ext => p.extension(path);
-
-  /// The directory holding this entry.
-  String get dirname => p.dirname(path);
+  ///
+  /// The one piece of path arithmetic this type keeps, defined as the
+  /// `io.path` call so there is one implementation of it. It survives because
+  /// `e.name` is in nearly every listing loop and
+  /// `io.path.filename(e.path)` inside a `where` is genuinely worse.
+  ///
+  /// `stem`, `ext` and `dirname` were here through 5.5.0 and are not: they
+  /// were `io.path.stem(e.path)`, `io.path.ext(e.path)` and
+  /// `io.path.dirname(e.path)` under four other names, on the same input, and
+  /// `io.path` is the domain that owns string arithmetic on a path.
+  String get name => const PathAccessor().filename(path);
 
   /// Whether this is a regular file.
+  ///
+  /// [isfile], [isdir] and [islink] read [kind], which the one stat this
+  /// snapshot came from already answered. `io.isfile(path)` costs a syscall
+  /// for the same question, so these are not a second spelling of it — they
+  /// are the cheap question about a value you are holding.
   bool get isfile => kind == FileSystemEntryKind.file;
 
   /// Whether this is a directory.

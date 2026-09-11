@@ -24,7 +24,7 @@ import 'format.dart';
 ///
 /// Spelled member for member like [JsonAccessor] and [YamlAccessor], because
 /// the format namespaces should be learnable from each other.
-class TomlAccessor with FileCodec<Json> implements Codec<Json> {
+class TomlAccessor with FileCodec<Json, Object?> implements Codec<Json> {
   /// Creates the accessor. Prefer the shared `format.toml` instance.
   const TomlAccessor();
 
@@ -51,6 +51,7 @@ class TomlAccessor with FileCodec<Json> implements Codec<Json> {
   /// reported success. Reading never throws and gives the empty cursor;
   /// writing never returns text that is wrong or absent. A caller can check
   /// for a throw and cannot check for a file that is silently blank.
+  @override
   String format(Object? value) {
     if (value is! Map) {
       throw ArgumentError.value(

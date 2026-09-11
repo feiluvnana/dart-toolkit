@@ -31,8 +31,8 @@ void main() async {
   // should not wait on the slowest item. It is part of the flow vocabulary
   // now; it was `flow.run`, an extension declared over here, through 5.4.0.
   final seen = await ids.flow
-      .pipe(.map.async(_measure, size: 4, ordered: false))
-      .pour(.count());
+      .transform(.map.async(_measure, size: 4, ordered: false))
+      .collect(.count());
   log.info('Streamed $seen results.');
 
   // ------------------------------------------------------------- when one fails

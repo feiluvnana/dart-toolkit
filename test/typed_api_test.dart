@@ -120,35 +120,53 @@ void main() {
     test('carries typed context through a crawl and its resume file', () async {
       final seen = <String?>[];
 
+      const pages = {
+        'https://music.test/album':
+            '<a href="/song/1">One</a><a href="/song/2">Two</a>',
+        'https://music.test/song/1': '<h1>One</h1>',
+        'https://music.test/song/2': '<h1>Two</h1>',
+      };
+
       await net
-          .crawl<String>('https://music.test/album'.url)
-          .downloader(
-            MapDownloader<String>({
-              'https://music.test/album':
-                  '<a href="/song/1">One</a><a href="/song/2">Two</a>',
-              'https://music.test/song/1': '<h1>One</h1>',
-              'https://music.test/song/2': '<h1>Two</h1>',
-            }),
+          .crawl(
+            [Fetch('https://music.test/album'.url)],
+            (res) => switch (res.fetch.tag) {
+              null =>
+                res
+                    .parse(format.html)
+                    .find('a')
+                    .elements
+                    .transform(
+                      .map(
+                        (a) => res.follow(
+                          a.attr('href')!,
+                          tag: 'song',
+                          meta: [_name(a.text)],
+                        ),
+                      ),
+                    ),
+              _ => const Sequence<Fetch>([]),
+            },
           )
-          .tag('song', (res) => seen.add(res.meta.read(_name)))
-          .run((res) {
-            for (final a
-                in res.parse(format.html).find('a').elements.collect(.list())) {
-              res.follow(a.attr('href')!, tag: 'song', meta: [_name(a.text)]);
-            }
-          });
+          .using(
+            (fetch) async =>
+                Reply.text(pages['${fetch.url}'] ?? '', fetch: fetch),
+          )
+          .flow
+          .transform(.where((res) => res.fetch.tag == 'song'))
+          .collect(.foreach((res) => seen.add(res.fetch.meta.read(_name))));
 
       expect(seen, ['One', 'Two']);
     });
 
     test('survives the JSON round trip a resume file makes it take', () {
-      final fetch = Fetch<String>(
+      final fetch = Fetch(
         Uri.parse('https://example.com/'),
         tag: 'detail',
         meta: [_name('Widget'), _track(3)],
       );
 
-      final copy = Fetch<String>.fromJson(
+      final copy = Fetch.fromJson(
         jsonDecode(jsonEncode(fetch.toJson())) as Map<String, Object?>,
       );
 
@@ -367,60 +385,72 @@ void main() {
         });
         fail('expected PoolFailure');
       } on PoolFailure<int, int> catch (failure) {
-        // `List<int?>`, not `List<dynamic>` — this used to need a cast.
-        final List<int?> results = failure.results;
-        expect(results, [10, null, 30]);
-        expect(failure.failures.single.item, 2);
+        // One outcome type across `run`, `settle` and `on.error`.
+        final Sequence<Settled<int>> outcomes = failure.outcomes;
+        expect(outcomes.collect(.list()).map((o) => o.value), [10, null, 30]);
+
+        // Which item broke is the alignment with `items`, not a field on
+        // `Broke` — the caller already holds the item.
+        final broken = outcomes
+            .collect(.list())
+            .indexWhere((o) => o is Broke<int>);
+        expect(failure.items.collect(.list())[broken], 2);
       }
     });
   });
 
-  group('gather', () {
-    final pages = {
+  group('extraction is downstream, on the flow', () {
+    const pages = {
       'https://site.test': '<h1>One</h1><h1>Two</h1><a href="/b">next</a>',
       'https://site.test/b': '<h1>Three</h1>',
     };
 
-    test('infers the item type from what the mapper returns', () async {
-      // `Never` because this crawl emits nothing; `R` is String, taken from
-      // the mapper, where collect can only learn T from an emit buried inside
-      // a closure.
-      final titles = await net
-          .crawl<Never>('https://site.test'.url)
-          .downloader(MapDownloader(pages))
-          .gather((page) => page.parse(format.html).find('h1').texts);
+    Crawl crawl() => net.crawl([Fetch('https://site.test'.url)])
+      ..using(
+        (fetch) async => Reply.text(pages['${fetch.url}'] ?? '', fetch: fetch),
+      );
+
+    test('the item type comes from the pipeline, not from the crawl', () async {
+      // `gather` existed because `items` could only learn `T` from an emit
+      // buried inside a closure. There is no `T` any more: the crawl produces
+      // replies, and what a script does with them is its own business.
+      final titles = await crawl().flow
+          .transform(
+            .flat.map((res) => res.parse(format.html).find('h1').texts),
+          )
+          .collect(.seq());
 
       expect(titles, isA<Sequence<String>>());
       expect(titles.collect(.list()), ['One', 'Two']);
     });
 
     test('returning nothing for a page filters it out', () async {
-      final long = await net
-          .crawl<Never>('https://site.test'.url)
-          .downloader(MapDownloader(pages))
-          .gather(
-            (page) => page
-                .parse(format.html)
-                .find('h1')
-                .texts
-                .transform(.where((t) => t.length > 3)),
-          );
+      final long = await crawl().flow
+          .transform(
+            .flat.map(
+              (res) => res
+                  .parse(format.html)
+                  .find('h1')
+                  .texts
+                  .transform(.where((t) => t.length > 3)),
+            ),
+          )
+          .collect(.seq());
 
       expect(long.collect(.empty()), isTrue);
     });
 
     test('a record per page reads as one expression', () async {
-      final rows = await net
-          .crawl<Never>('https://site.test'.url)
-          .downloader(MapDownloader(pages))
-          .gather(
-            (page) => [
-              (
-                url: page.url.path,
-                titles: page.parse(format.html).find('h1').count,
+      final rows = await crawl().flow
+          .transform(
+            .map(
+              (res) => (
+                url: res.url.path,
+                titles: res.parse(format.html).find('h1').count,
               ),
-            ].seq,
-          );
+            ),
+          )
+          .collect(.seq());
 
       expect(rows.collect(.single())!.titles, 2);
     });

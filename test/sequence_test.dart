@@ -458,10 +458,16 @@ void main() {
       expect(util.text.words('one two'), isA<Sequence<String>>());
       expect(util.text.numbers('1 2'), isA<Sequence<num>>());
       expect(util.text.betweens('[a][b]', '[', ']'), isA<Sequence<String>>());
-      expect(net.sitemap('https://example.com/a'), isA<Sequence<Uri>>());
+      expect(
+        format.sitemap.parse('https://example.com/a'),
+        isA<Sequence<Uri>>(),
+      );
       expect(util.rand.shuffle([1, 2]), isA<Sequence<int>>());
       expect(util.rand.some([1, 2], 1), isA<Sequence<int>>());
-      expect(net.robots('User-agent: *').agents, isA<Sequence<String>>());
+      expect(
+        format.robots.parse('User-agent: *').agents,
+        isA<Sequence<String>>(),
+      );
     });
 
     test('a Markup holds a Sequence rather than being an Iterable', () {
@@ -575,33 +581,35 @@ void main() {
         2,
         3,
         4,
-      ].flow.pipe(.where((n) => n.isEven)).pipe(.map((n) => n * 10));
+      ].flow.transform(.where((n) => n.isEven)).transform(.map((n) => n * 10));
 
       expect(flow, isA<Flow<int>>());
-      expect(await flow.pour(.list()), equals([20, 40]));
+      expect(await flow.collect(.list()), equals([20, 40]));
     });
 
     test('collect gives a Future where a sequence gives the value', () async {
-      expect([1, 2, 3].flow.pour(.count()), isA<Future<int>>());
-      expect(await [1, 2, 3].flow.pour(.count()), equals(3));
-      expect(await [1, 2, 3].flow.pour(.first()), equals(1));
-      expect(await <int>[].flow.pour(.first()), isNull);
-      expect(await Flow<int>.empty().pour(.count()), isZero);
+      expect([1, 2, 3].flow.collect(.count()), isA<Future<int>>());
+      expect(await [1, 2, 3].flow.collect(.count()), equals(3));
+      expect(await [1, 2, 3].flow.collect(.first()), equals(1));
+      expect(await <int>[].flow.collect(.first()), isNull);
+      expect(await Flow<int>.empty().collect(.count()), isZero);
     });
 
     test('.flow is the seam, from all three sides', () async {
       expect([1, 2].flow, isA<Flow<int>>());
       expect([1, 2].seq.flow, isA<Flow<int>>());
       expect(Stream<int>.fromIterable([1, 2]).flow, isA<Flow<int>>());
-      expect(await [1, 2].seq.flow.pour(.list()), equals([1, 2]));
+      expect(await [1, 2].seq.flow.collect(.list()), equals([1, 2]));
     });
 
     test('a sequence crosses to a flow and back', () async {
-      final held = await rows.flow.pipe(.where((r) => r.cost > 1)).pour(.seq());
+      final held = await rows.flow
+          .transform(.where((r) => r.cost > 1))
+          .collect(.seq());
 
       expect(held, isA<Sequence<Row>>());
       expect(held.collect(.count()), equals(3));
-      expect(await held.flow.pour(.count()), equals(3));
+      expect(await held.flow.collect(.count()), equals(3));
     });
 
     test('.seq stays lazy at the seam', () async {
@@ -613,9 +621,9 @@ void main() {
         }),
       );
 
-      final flow = source.flow.pipe(.take.first(1));
+      final flow = source.flow.transform(.take.first(1));
       expect(walked, isZero, reason: 'nothing walked at the seam');
-      expect(await flow.pour(.list()), equals([1]));
+      expect(await flow.collect(.list()), equals([1]));
       expect(walked, equals(1));
     });
 
@@ -624,14 +632,14 @@ void main() {
         1,
         2,
         3,
-      ].flow.stream.where((n) => n.isOdd).flow.pour(.list());
+      ].flow.stream.where((n) => n.isOdd).flow.collect(.list());
 
       expect(out, equals([1, 3]));
     });
 
     test('an error in the source comes out of the collect', () {
       expect(
-        Stream<int>.error(StateError('bad')).flow.pour(.list()),
+        Stream<int>.error(StateError('bad')).flow.collect(.list()),
         throwsStateError,
       );
     });
@@ -644,7 +652,7 @@ void main() {
         Pour<int, R> over,
       ) async {
         expect(
-          await n.flow.pour(over),
+          await n.flow.collect(over),
           equals(n.seq.collect(held)),
           reason: name,
         );
@@ -709,21 +717,21 @@ void main() {
 
       // The ones whose result is a collection compare through their contents.
       expect(
-        (await n.flow.pour(.group.by((v) => v.isEven))).keys.collect(.set()),
+        (await n.flow.collect(.group.by((v) => v.isEven))).keys.collect(.set()),
         equals(n.seq.collect(.group.by((v) => v.isEven)).keys.collect(.set())),
       );
       expect(
-        (await n.flow.pour(.associate.by((v) => v))).map,
+        (await n.flow.collect(.associate.by((v) => v))).map,
         equals(n.seq.collect(.associate.by((v) => v)).map),
       );
       expect(
-        (await n.flow.pour(.split((v) => v.isOdd))).$1.collect(.list()),
+        (await n.flow.collect(.split((v) => v.isOdd))).$1.collect(.list()),
         equals(n.seq.collect(.split((v) => v.isOdd)).$1.collect(.list())),
       );
       // `sort` is a transformer on a sequence and a pour on a flow, which is
       // the whole of what separating the vocabularies decided.
       expect(
-        (await n.flow.pour(.sort())).collect(.list()),
+        (await n.flow.collect(.sort())).collect(.list()),
         equals(n.seq.transform(.sort()).collect(.list())),
       );
     });
@@ -738,7 +746,10 @@ void main() {
 
       // A transformer is a sequence-side value now, so a flow takes it only
       // through the adapter — which says out loud that it buffers.
-      expect(await rows.flow.pipe(Pipe.of(cleanup)).pour(.count()), equals(2));
+      expect(
+        await rows.flow.transform(Pipe.of(cleanup)).collect(.count()),
+        equals(2),
+      );
       expect(
         await Pipe.of(
           cleanup,
@@ -759,7 +770,7 @@ void main() {
       ).into(Pour.sort.by((r) => r.cost));
 
       expect(
-        (await rows.flow.pour(overtime)).collect(.first())?.host,
+        (await rows.flow.collect(overtime)).collect(.first())?.host,
         equals('a.com'),
       );
     });
@@ -769,11 +780,17 @@ void main() {
       final overtime = Pour.count<int>().then((n) => '$n rows');
 
       expect([1, 2].seq.collect(summary), equals('2 rows'));
-      expect(await [1, 2].flow.pour(overtime), equals('2 rows'));
+      expect(await [1, 2].flow.collect(overtime), equals('2 rows'));
     });
 
     test('chunk is the bulk shape, a batch at a time', () async {
-      final batches = await [1, 2, 3, 4, 5].flow.pipe(.chunk(2)).pour(.list());
+      final batches = await [
+        1,
+        2,
+        3,
+        4,
+        5,
+      ].flow.transform(.chunk(2)).collect(.list());
 
       expect(batches.length, equals(3));
       expect(batches.first.collect(.list()), equals([1, 2]));
@@ -794,9 +811,13 @@ void main() {
       // makes the mirror with `io` a real one.
       final flow = [1, 2, 3].flow;
       expect(flow.toString(), contains('rebuildable'));
-      expect(await flow.pour(.count()), equals(3));
-      expect(await flow.pour(.list()), equals([1, 2, 3]));
-      expect(await flow.pipe(.map((n) => n * 2)).pour(.list()), [2, 4, 6]);
+      expect(await flow.collect(.count()), equals(3));
+      expect(await flow.collect(.list()), equals([1, 2, 3]));
+      expect(await flow.transform(.map((n) => n * 2)).collect(.list()), [
+        2,
+        4,
+        6,
+      ]);
     });
   });
 

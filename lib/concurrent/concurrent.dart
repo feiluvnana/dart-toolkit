@@ -117,6 +117,16 @@ class ConcurrentAccessor {
   /// ```
   Limiter rate(int count, {Duration per = const Duration(seconds: 1)}) =>
       Limiter(count, per: per);
+
+  /// A [Pool] running at most [size] tasks at once, [delay] apart.
+  ///
+  /// The third factory, so the domain stops being inconsistent about which of
+  /// its types has one: [semaphore] and [rate] had theirs and `Pool` did not.
+  /// Each is one line over the constructor, kept because
+  /// `concurrent.rate(10, per: 1.s)` is how the domain documents itself and
+  /// reads better inside a `Fetcher(...)` than `Limiter(10, per: 1.s)`.
+  Pool<I> pool<I>({int size = 4, Duration delay = Duration.zero}) =>
+      Pool<I>(size: size, delay: delay);
 }
 
 /// Lifecycle handlers for a [Pool], reachable as `pool.on`.
@@ -150,23 +160,47 @@ class PoolEvents<I> {
 ///
 /// Fail-fast is the default; this only appears once [PoolEvents.error] is set,
 /// so failures are reported rather than silently dropped.
+///
+/// **One outcome type across all three terminals.** [Pool.run] throws this,
+/// [Pool.settle] returns the same [Settled] sequence, and [PoolEvents.error]
+/// reports one at a time. Through 5.5.0 this was a third shape — a list of
+/// `(item, error, stack)` records beside a `List<R?>` — so *a task threw* had
+/// three spellings in one class.
+///
+/// [outcomes] and [items] are the same length and the same order, so the two
+/// together say which item produced which failure:
+///
+/// ```dart
+/// // setup: final e = PoolFailure<Uri, String>(const Sequence([]), const Sequence([]));
+/// final broken = e.outcomes.transform(.where.type<Broke<String>>());
+/// ```
 class PoolFailure<I, R> implements Exception {
-  /// Each failed item together with the error and stack it produced.
-  final List<({I item, Object error, StackTrace stack})> failures;
-
-  /// What each task returned, matching input positions.
+  /// One outcome per item, in the order of [items].
   ///
-  /// `null` at the positions that failed, which [failures] names.
-  final List<R?> results;
+  /// `failures` was the 5.5.0 spelling and named only the broken ones;
+  /// `outcomes.transform(.where.type<Broke<R>>())` is that list, in the
+  /// vocabulary the rest of the library already uses for the question.
+  final Sequence<Settled<R>> outcomes;
+
+  /// The items the pool was given, aligned with [outcomes].
+  ///
+  /// [Broke] deliberately does not carry the item — the caller already holds
+  /// it — so this is where the pairing lives.
+  final Sequence<I> items;
 
   /// Creates a failure summary.
-  const PoolFailure(this.failures, [this.results = const []]);
+  const PoolFailure(this.outcomes, this.items);
+
+  /// How many of the pool's tasks threw.
+  int get broken =>
+      outcomes.collect(.count.where((Settled<R> o) => o is Broke<R>));
 
   @override
   String toString() {
-    if (failures.isEmpty) return 'PoolFailure: no failures recorded';
-    return 'PoolFailure: ${failures.length} of the pool\'s tasks failed '
-        '(first: ${failures.first.error})';
+    final first = outcomes.collect(.first.where((o) => o is Broke<R>));
+    if (first == null) return 'PoolFailure: no failures recorded';
+    return 'PoolFailure: $broken of the pool\'s tasks failed '
+        '(first: ${(first as Broke<R>).error})';
   }
 }
 
@@ -207,7 +241,8 @@ class Pool<I> {
 
     final list = items.toList();
     final results = List<R?>.filled(list.length, null);
-    final failures = <({I item, Object error, StackTrace stack})>[];
+    final outcomes = List<Settled<R>?>.filled(list.length, null);
+    var failed = 0;
     final active = <Future<void>>{};
     final limit = size > 0 ? size : 1;
     final collecting = on._errorHandlers.isNotEmpty;
@@ -224,7 +259,9 @@ class Pool<I> {
       // an unhandled async error while its siblings are still in flight.
       task = Future<void>(() async {
         try {
-          results[index] = await worker(item);
+          final value = await worker(item);
+          results[index] = value;
+          outcomes[index] = Done<R>(value);
           for (final h in on._progressHandlers) {
             h(item);
           }
@@ -233,7 +270,8 @@ class Pool<I> {
             for (final h in on._errorHandlers) {
               h(error, stack, item);
             }
-            failures.add((item: item, error: error, stack: stack));
+            outcomes[index] = Broke<R>(error, stack);
+            failed++;
           } else {
             abort ??= (error: error, stack: stack);
           }
@@ -259,8 +297,11 @@ class Pool<I> {
       // a null-cast from the unfilled result slot.
       Error.throwWithStackTrace(failed.error, failed.stack);
     }
-    if (failures.isNotEmpty) {
-      throw PoolFailure<I, R>(failures, List<R?>.unmodifiable(results));
+    if (failed > 0) {
+      throw PoolFailure<I, R>(
+        Sequence(List<Settled<R>>.generate(list.length, (i) => outcomes[i]!)),
+        Sequence(list),
+      );
     }
     return Sequence(List<R>.generate(list.length, (i) => results[i] as R));
   }
@@ -268,7 +309,13 @@ class Pool<I> {
   /// Maps [worker] over all [items] to completion, never throwing on worker
   /// error.
   ///
-  /// Returns one [Settled] per item, in input order:
+  /// **Returns one outcome per item, in the order of [items]**, so
+  /// `items.zip(outcomes)` recovers which is which. [Broke] deliberately does
+  /// not carry the item: the caller already holds it, and putting it on the
+  /// outcome would cost every use site a second type argument for a value it
+  /// has. The same alignment is what makes [PoolFailure.items] legible.
+  ///
+  /// One outcome per item, in input order:
   ///
   /// ```dart
   /// (await pool.settle(urls, fetch)).collect(.foreach((result) {
@@ -335,8 +382,17 @@ class Pool<I> {
   /// rather than leaving the remaining items to work through an audience that
   /// has left.
   ///
-  /// Was `stream`, returning a `Stream<R>`, through 5.3.0. `Flow.run` is the
-  /// same capability over a source that is not already a collection.
+  /// The form over items you already hold, in completion order.
+  /// `Pipe.map.async(worker, size: n, ordered: false)` is the one over a
+  /// source you do not. This keeps [delay] and [Pool]'s error semantics,
+  /// which that one does not carry, so the two are not spellings of each
+  /// other.
+  ///
+  /// `pool.on.progress(fn)` on this terminal is a second spelling of
+  /// `.transform(.tap(fn))`. It is kept because the pool's events are
+  /// registered before the flow exists, which the pipeline step cannot be.
+  ///
+  /// Was `stream`, returning a `Stream<R>`, through 5.3.0.
   Flow<R> flow<R>(Iterable<I> items, FutureOr<R> Function(I item) worker) {
     final list = items.toList();
     final active = <Future<void>>{};
@@ -434,8 +490,30 @@ class Pool<I> {
 // SYNCHRONIZATION PRIMITIVES & HELPERS
 // ============================================================================
 
+/// Something you wait on before doing work.
+///
+/// [Semaphore] is *how many at once*; [Limiter] is *how often*. Two axes, and
+/// through 5.5.0 they wore the same three member names — `take`, `guard`,
+/// `available` — with no type saying so, which meant a function accepting
+/// "something you wait on" had to pick one or take `dynamic`.
+///
+/// `available` stays off this interface: it is an `int` on one and a `double`
+/// on the other, and widening it to `num` makes both worse.
+///
+/// ```dart
+/// // setup: Future<void> work() async {}
+/// Future<void> paced(Waiting gate) => gate.guard(work);
+/// ```
+abstract interface class Waiting {
+  /// Waits until this permits one unit of work.
+  Future<void> take();
+
+  /// Runs [action] with one unit taken, releasing it however [action] ends.
+  Future<R> guard<R>(FutureOr<R> Function() action);
+}
+
 /// A counting semaphore for bounding concurrent access to a resource.
-class Semaphore {
+class Semaphore implements Waiting {
   /// The maximum number of permits that can be acquired simultaneously.
   final int permits;
   int _availablePermits;
@@ -460,6 +538,7 @@ class Semaphore {
   /// to say `acquire`/`withPermit` and `take`/`guard`, which is two dialects
   /// for one idea — and `withPermit` was the library's one camelCase member,
   /// which Rule 4 forbids outright.
+  @override
   Future<void> take() {
     if (_availablePermits > 0) {
       _availablePermits--;
@@ -486,6 +565,7 @@ class Semaphore {
   /// Takes a permit, runs [action], and releases it however [action] ends.
   ///
   /// Spelled like [Limiter.guard].
+  @override
   Future<R> guard<R>(FutureOr<R> Function() action) async {
     await take();
     try {
@@ -513,7 +593,7 @@ class Semaphore {
 /// in a lump at the end of each window. Smooth is what servers actually
 /// measure, and it also means a burst of ten at second zero does not lock out
 /// second one entirely. Waiters are served in the order they arrived.
-class Limiter {
+class Limiter implements Waiting {
   /// How many operations are allowed per [per].
   ///
   /// Also the burst ceiling: an idle limiter accumulates at most this many
@@ -563,6 +643,7 @@ class Limiter {
   ///
   /// Callers are served in arrival order, so a queue behind a busy limiter
   /// does not starve its oldest waiter.
+  @override
   Future<void> take() {
     _refill();
     if (_waiters.isEmpty && _tokens >= 1) {
@@ -580,6 +661,7 @@ class Limiter {
   /// Mirrors [Semaphore.withPermit] and [Mutex.protect]. The token is spent on
   /// starting, not on finishing, because a rate is about how often something
   /// begins.
+  @override
   Future<R> guard<R>(FutureOr<R> Function() action) async {
     await take();
     return action();

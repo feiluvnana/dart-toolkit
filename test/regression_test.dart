@@ -3,7 +3,6 @@
 library;
 
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
 // Imported unprefixed on purpose. `package:crypto` exports a `Digest` and
@@ -40,7 +39,7 @@ void main() {
     test('the flipped signatures stayed flipped', () {
       expect(util.text.words('a b'), isA<Sequence<String>>());
       expect(util.text.numbers('1 2'), isA<Sequence<num>>());
-      expect(net.sitemap(''), isA<Sequence<Uri>>());
+      expect(format.sitemap.parse(''), isA<Sequence<Uri>>());
       expect(util.rand.shuffle(<int>[1]), isA<Sequence<int>>());
       expect(format.json.parse('{}'), isA<Json>());
     });
@@ -121,7 +120,7 @@ void main() {
         final first = await counting(
           1000,
           () => produced++,
-        ).flow.pipe(make()).pour(.first());
+        ).flow.transform(make()).collect(.first());
 
         expect(first, isNotNull, reason: '$name produced nothing');
         expect(
@@ -135,7 +134,7 @@ void main() {
     test('the six that need the end are transformers on a sequence', () {
       // On a Sequence each of these is a Transformer<int, int>, so a chain
       // never changes container. On a Flow they are Pours, handing back a
-      // Sequence — `flow.pipe(.sort.by(f))` does not compile, which is the
+      // Sequence — `flow.transform(.sort.by(f))` does not compile, which is the
       // refusal, and the next test is the other half of the pin.
       final source = [3, 1, 2].seq;
       expect(source.transform(.sort()).collect(.list()), equals([1, 2, 3]));
@@ -157,29 +156,29 @@ void main() {
     test('the same six are pours on a flow, handing back a sequence', () async {
       Flow<int> source() => const [3, 1, 2].flow;
       expect(
-        (await source().pour(.sort())).collect(.list()),
+        (await source().collect(.sort())).collect(.list()),
         equals([1, 2, 3]),
       );
       expect(
-        (await source().pour(.sort.by((n) => -n))).collect(.list()),
+        (await source().collect(.sort.by((n) => -n))).collect(.list()),
         equals([3, 2, 1]),
       );
       expect(
-        (await source().pour(
+        (await source().collect(
           .sort.using((a, b) => b.compareTo(a)),
         )).collect(.list()),
         equals([3, 2, 1]),
       );
       expect(
-        (await source().pour(.flip())).collect(.list()),
+        (await source().collect(.flip())).collect(.list()),
         equals([2, 1, 3]),
       );
       expect(
-        (await source().pour(.take.last(2))).collect(.list()),
+        (await source().collect(.take.last(2))).collect(.list()),
         equals([1, 2]),
       );
       expect(
-        (await source().pour(.skip.last(2))).collect(.list()),
+        (await source().collect(.skip.last(2))).collect(.list()),
         equals([3]),
       );
     });
@@ -198,28 +197,28 @@ void main() {
           .then(Transformer.sort.using((a, b) => b.compareTo(a)));
 
       expect([3, 1, 2, 3].seq.transform(cleanup).collect(.list()), [3, 2]);
-      expect(await [3, 1, 2, 3].flow.pipe(Pipe.of(cleanup)).pour(.list()), [
-        3,
-        2,
-      ]);
+      expect(
+        await [3, 1, 2, 3].flow.transform(Pipe.of(cleanup)).collect(.list()),
+        [3, 2],
+      );
     });
 
     test('a sequence and a flow answer identically', () async {
       final source = [3, 1, 2, 1, 5];
       expect(
-        await source.flow.pipe(.unique()).pour(.list()),
+        await source.flow.transform(.unique()).collect(.list()),
         equals(source.seq.transform(.unique()).collect(.list())),
       );
       expect(
-        await source.flow.pipe(.enumerate()).pour(.list()),
+        await source.flow.transform(.enumerate()).collect(.list()),
         equals(source.seq.transform(.enumerate()).collect(.list())),
       );
       expect(
-        (await source.flow.pour(.count.by((n) => n.isEven))).map,
+        (await source.flow.collect(.count.by((n) => n.isEven))).map,
         equals(source.seq.collect(.count.by((n) => n.isEven)).map),
       );
       expect(
-        await <int>[].flow.pipe(.or(const [9].flow)).pour(.list()),
+        await <int>[].flow.transform(.or(const [9].flow)).collect(.list()),
         equals(
           <int>[].seq.transform(.or(const Sequence([9]))).collect(.list()),
         ),
@@ -243,7 +242,7 @@ void main() {
 
       for (final MapEntry(key: name, value: step) in stoppers.entries) {
         var produced = 0;
-        await counting(1000, () => produced++).flow.pour(step);
+        await counting(1000, () => produced++).flow.collect(step);
         expect(
           produced,
           lessThan(1000),
@@ -266,10 +265,10 @@ void main() {
             'This flow has already been consumed.',
           );
 
-          final shaped = make()..pipe(Pipe.map<T, T>((x) => x));
+          final shaped = make()..transform(Pipe.map<T, T>((x) => x));
           expect(
             () {
-              shaped.pour(Pour.count<T>());
+              shaped.collect(Pour.count<T>());
             },
             throwsA(claimed),
             reason: kind,
@@ -280,7 +279,7 @@ void main() {
           left.stream;
           expect(
             () {
-              left.pipe(Pipe.map<T, T>((x) => x));
+              left.transform(Pipe.map<T, T>((x) => x));
             },
             throwsA(claimed),
             reason: kind,
@@ -305,10 +304,10 @@ void main() {
         // `await`, and that was true of one terminal and false of two.
         Future<void> twice<T>(String kind, Flow<T> Function() make) async {
           final flow = make();
-          expect(await flow.pour(.count()), isNonZero, reason: kind);
-          expect(await flow.pour(.count()), isNonZero, reason: kind);
+          expect(await flow.collect(.count()), isNonZero, reason: kind);
+          expect(await flow.collect(.count()), isNonZero, reason: kind);
           expect(
-            await flow.pipe(.take.first(1)).pour(.count()),
+            await flow.transform(.take.first(1)).collect(.count()),
             equals(1),
             reason: kind,
           );
@@ -323,10 +322,10 @@ void main() {
 
     test('a flow stops the source it no longer needs', () async {
       var produced = 0;
-      final three = await counting(
-        1000,
-        () => produced++,
-      ).flow.pipe(.where((n) => n.isEven)).pipe(.take.first(3)).pour(.list());
+      final three = await counting(1000, () => produced++).flow
+          .transform(.where((n) => n.isEven))
+          .transform(.take.first(3))
+          .collect(.list());
 
       expect(three, equals([0, 2, 4]));
       expect(produced, equals(5));
@@ -334,21 +333,19 @@ void main() {
 
     test('a crawl that is asked for one item fetches one page', () async {
       var fetched = 0;
-      final first = await net
-          .crawl<String>('https://site.example.com'.url)
-          .downloader(
-            _Pages<String>({
-              'https://site.example.com': '<span>Alpha</span><span>Beta</span>',
-            }),
-          )
-          .flow((res) {
-            fetched++;
-            for (final t
-                in res.parse(format.html).find('span').texts.collect(.list())) {
-              res.emit(t);
-            }
-          })
-          .pour(.first());
+      final first =
+          await (net.crawl([Fetch('https://site.test/'.url)])
+                ..concurrent(1)
+                ..using(
+                  _pages(const {
+                    'https://site.test/': '<span>Alpha</span><span>Beta</span>',
+                  }, tick: () => fetched++),
+                ))
+              .flow
+              .transform(
+                .flat.map((res) => res.parse(format.html).find('span').texts),
+              )
+              .collect(.first());
 
       expect(first, equals('Alpha'));
       expect(fetched, equals(1));
@@ -365,7 +362,7 @@ void main() {
         await counting(
           10,
           () => produced++,
-        ).flow.pipe(.fn((xs) => xs.map((n) => n))).pour(.first());
+        ).flow.transform(.fn((xs) => xs.map((n) => n))).collect(.first());
         expect(produced, equals(1));
       },
     );
@@ -374,7 +371,7 @@ void main() {
       'a transformer reaches a flow through Pipe.of, and it buffers',
       () async {
         expect(
-          await [1, 2, 3].flow.pipe(Pipe.of(_Doubled())).pour(.list()),
+          await [1, 2, 3].flow.transform(Pipe.of(_Doubled())).collect(.list()),
           equals([2, 4, 6]),
         );
 
@@ -384,7 +381,7 @@ void main() {
         await counting(
           10,
           () => produced++,
-        ).flow.pipe(Pipe.of(_Doubled())).pour(.first());
+        ).flow.transform(Pipe.of(_Doubled())).collect(.first());
         expect(produced, equals(10));
       },
     );
@@ -479,12 +476,14 @@ void main() {
       );
     });
 
-    test('io.dir and io.async.dir differ by exactly the known set', () {
+    test('io.dir and io.async.dir are a mirror with no exceptions', () {
       final blocking = membersOf('dir.dart', 'DirAccessor');
       final async = membersOf('dir.dart', 'DirAsyncAccessor');
 
-      // `cwd` and `home` read nothing off the disk.
-      expect(blocking.difference(async), {'cwd', 'home'});
+      // `cwd` and `home` were the two exceptions through 5.5.0, and they
+      // read nothing off the disk — which is `io.path`'s whole membership
+      // rule, so 6.0.0 moved them and the exception list is empty.
+      expect(blocking.difference(async), isEmpty);
       expect(async.difference(blocking), isEmpty);
     });
 
@@ -510,7 +509,7 @@ void main() {
         expect(io.lines(path), isA<Sequence<String>>());
         expect(io.async.lines(path), isA<Flow<String>>());
         expect(io.lines(path).collect(.list()), ['one', 'two']);
-        expect(await io.async.lines(path).pour(.list()), ['one', 'two']);
+        expect(await io.async.lines(path).collect(.list()), ['one', 'two']);
 
         expect(io.dir.list(temp.path), isA<Sequence<FileSystemEntry>>());
         expect(io.async.dir.list(temp.path), isA<Flow<FileSystemEntry>>());
@@ -523,7 +522,9 @@ void main() {
         );
 
         expect(
-          (await io.async.dir.list(temp.path).pour(.list())).map((e) => e.name),
+          (await io.async.dir.list(temp.path).collect(.list())).map(
+            (e) => e.name,
+          ),
           ['a.txt'],
         );
       },
@@ -757,12 +758,13 @@ void main() {
       expect(sum.bytes, hasLength(32));
       expect(Algo.values, contains(Algo.sha256));
 
-      // `Process` resolves to dart:io's, because the pipeline's page handler is
-      // `Handler`. Before, the toolkit's typedef won silently — a package
-      // import beats a `dart:` one without an error.
+      // `Process` resolves to dart:io's. The toolkit's `Handler` typedef —
+      // which used to fight it — is gone with the router: a crawl's `next`
+      // is a plain function type, written where it is used.
       expect(Process.run, isA<Function>());
-      const Handler<String> handler = _noop;
-      expect(handler, isA<Handler<String>>());
+      const Sequence<Fetch> Function(Reply) next = _noNext;
+      expect(next, isA<Sequence<Fetch> Function(Reply)>());
+      expect(next(Reply.text('x')).collect(.empty()), isTrue);
     });
 
     test('no exported name shadows dart:io any more', () {
@@ -783,10 +785,12 @@ void main() {
       addTearDown(ours.close);
       expect(ours.timeout, const Duration(seconds: 30));
 
-      // `Fetch` and `Page` were the two that fought `package:http` for a name
-      // and produced an ambiguous_import on use. Nothing to hide now.
-      expect(Fetch<String>(Uri.parse('https://a.test')).url.host, 'a.test');
-      expect(Page<String>, isNotNull);
+      // `Fetch` fought `package:http` for a name and produced an
+      // ambiguous_import on use. `Page` is gone entirely — it folded into
+      // `Reply` in 6.0.0, because everything it added was the request it
+      // came from or a call on an engine.
+      expect(Fetch(Uri.parse('https://a.test')).url.host, 'a.test');
+      expect(Reply.text('x').fetch, isA<Fetch>());
     });
   });
 
@@ -881,9 +885,9 @@ void main() {
     });
   });
 
-  group('net.robots', () {
+  group('format.robots', () {
     test('a crawl-delay-only group does not absorb the next group', () {
-      final robots = Robots.parse('''
+      final robots = format.robots.parse('''
 User-agent: SlowBot
 Crawl-delay: 10
 
@@ -899,7 +903,7 @@ Disallow: /secret
     });
 
     test('consecutive user-agent lines still share one group', () {
-      final robots = Robots.parse('''
+      final robots = format.robots.parse('''
 User-agent: A
 User-agent: B
 Disallow: /x
@@ -912,7 +916,7 @@ Disallow: /x
   });
 
   group('net.crawl plumbing', () {
-    test('Stats.retried counts the retries the client actually made', () async {
+    test('the client counts the retries it actually made', () async {
       var attempts = 0;
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       addTearDown(() => server.close(force: true));
@@ -927,16 +931,18 @@ Disallow: /x
         await fetch.response.close();
       });
 
-      final stats = await net
-          .crawl<String>('http://127.0.0.1:${server.port}/'.url)
-          .retry(3)
-          .run((res) {});
+      final client = Fetcher(retries: 3, backoff: 1.ms);
+      addTearDown(client.close);
+      final crawl = net.crawl([Fetch('http://127.0.0.1:${server.port}/'.url)])
+        ..using(client.call);
+      final stats = await crawl.run();
 
-      // Retrying happens inside the client, so the engine only knows because
-      // the downloader tells it. The counter read zero however hard it tried.
+      // Retrying happens inside the client, below any scheduler, so the
+      // count lives on the client. `Stats.retried` read zero however hard
+      // the downloader tried, because nothing told the engine.
       expect(attempts, 3);
-      expect(stats.retried, 2);
-      expect(stats.completed, 1);
+      expect(client.retried, 2);
+      expect(stats.fetched, 1);
     });
 
     test('pouring a crawl writes through a staging file and creates its '
@@ -947,10 +953,10 @@ Disallow: /x
 
       await io.async.lines.write(
         dest,
-        net
-            .crawl<String>('https://site.test/'.url)
-            .downloader(MapDownloader<String>({'/': '<h1>hi</h1>'}))
-            .flow((res) => res.emit('one')),
+        (net.crawl([Fetch('https://site.test/'.url)])
+              ..using(_pages(const {'/': '<h1>hi</h1>'})))
+            .flow
+            .transform(.map((res) => 'one')),
       );
 
       // The folder did not exist: opening the destination directly threw.
@@ -964,13 +970,12 @@ Disallow: /x
       final dest = io.path.join(dir.path, 'items.txt');
       io.write(dest, 'PREVIOUS');
 
-      final slow = _SlowDownloader<String>(const Duration(milliseconds: 200));
       final run = io.async.lines.write(
         dest,
-        net
-            .crawl<String>('https://site.test/'.url)
-            .downloader(slow)
-            .flow((res) => res.emit('one')),
+        (net.crawl([Fetch('https://site.test/'.url)])
+              ..using(_slow(const Duration(milliseconds: 200))))
+            .flow
+            .transform(.map((res) => 'one')),
       );
 
       await Future<void>.delayed(const Duration(milliseconds: 60));
@@ -983,54 +988,60 @@ Disallow: /x
       expect(io.dir.walk(dir.path, match: '*.part*').collect(.empty()), isTrue);
     });
 
-    test('a pour whose seeds cannot be resolved keeps the old file', () async {
+    test('a pour whose setup fails keeps the old file', () async {
       final dir = io.dir.temp('dt_save_');
       addTearDown(() => io.remove(dir.path));
       final dest = io.path.join(dir.path, 'items.txt');
       io.write(dest, 'PREVIOUS');
+      final state = io.path.join(dir.path, 'crawl.state');
+      io.write(state, '{not json');
 
-      await _withFailFastClient(() async {
-        await expectLater(
-          io.async.lines.write(
-            dest,
-            net.crawl
-                .sitemap<String>(Uri.parse('http://127.0.0.1:1/sitemap.xml'))
-                .flow((res) => res.emit('one')),
-          ),
-          throwsA(anything),
-        );
-      });
+      await expectLater(
+        io.async.lines.write(
+          dest,
+          (net.crawl([Fetch('https://site.test/'.url)])
+                ..resume(state)
+                ..using(_pages(const {'/': '<h1>hi</h1>'})))
+              .flow
+              .transform(.map((res) => 'one')),
+        ),
+        throwsA(anything),
+      );
 
       expect(io.read(dest), 'PREVIOUS');
       expect(io.dir.walk(dir.path, match: '*.part*').collect(.empty()), isTrue);
     });
 
-    test('a flow whose seeds cannot be resolved still ends', () async {
+    test('a flow whose setup fails still ends', () async {
+      final dir = io.dir.temp('dt_save_');
+      addTearDown(() => io.remove(dir.path));
+      final state = io.path.join(dir.path, 'crawl.state');
+      io.write(state, '{not json');
+
       final events = <String>[];
       final ended = Completer<void>();
 
-      await _withFailFastClient(() async {
-        net.crawl
-            .sitemap<String>(Uri.parse('http://127.0.0.1:1/sitemap.xml'))
-            .flow((res) => res.emit('x'))
-            .stream
-            .listen(
-              (_) => events.add('item'),
-              onError: (Object _) => events.add('error'),
-              onDone: () {
-                events.add('done');
-                if (!ended.isCompleted) ended.complete();
-              },
-              cancelOnError: false,
-            );
+      (net.crawl([Fetch('https://site.test/'.url)])
+            ..resume(state)
+            ..using(_pages(const {'/': '<h1>hi</h1>'})))
+          .flow
+          .stream
+          .listen(
+            (_) => events.add('item'),
+            onError: (Object _) => events.add('error'),
+            onDone: () {
+              events.add('done');
+              if (!ended.isCompleted) ended.complete();
+            },
+            cancelOnError: false,
+          );
 
-        // The flow used to carry the error and then stay open forever, with
-        // the resume hook still holding the process alive behind it.
-        await ended.future.timeout(
-          const Duration(seconds: 10),
-          onTimeout: () => events.add('never closed'),
-        );
-      });
+      // The flow used to carry the error and then stay open forever, with
+      // the resume hook still holding the process alive behind it.
+      await ended.future.timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => events.add('never closed'),
+      );
 
       expect(events, ['error', 'done']);
     });
@@ -1112,7 +1123,7 @@ Disallow: /x
       final path = io.path.join(temp.path, 'awkward.csv');
       io.write(path, awkward);
 
-      expect(await io.async.csv.rows(path).pour(.list()), grid(awkward));
+      expect(await io.async.csv.rows(path).collect(.list()), grid(awkward));
     });
   });
 
@@ -1223,7 +1234,10 @@ Disallow: /x
 
     test('PoolFailure describes itself with no failures', () {
       expect(
-        const PoolFailure<String, int>([]).toString(),
+        const PoolFailure<String, int>(
+          Sequence<Settled<int>>([]),
+          Sequence<String>([]),
+        ).toString(),
         contains('no failures'),
       );
     });
@@ -1231,17 +1245,17 @@ Disallow: /x
 
   group('system.console', () {
     test('width counts terminal columns, not code units', () {
-      expect(Ansi.width('日本語'), 6);
-      expect(Ansi.width('abc'), 3);
-      expect(Ansi.width('👍'), 2);
-      expect(Ansi.width('é'), 1);
-      expect(Ansi.width('${Ansi.red}hi${Ansi.reset}'), 2);
+      expect('日本語'.width, 6);
+      expect('abc'.width, 3);
+      expect('👍'.width, 2);
+      expect('é'.width, 1);
+      expect('${Ansi.red}hi${Ansi.reset}'.width, 2);
     });
 
     test('a wide-character table keeps its columns square', () {
       final table = Table(headers: ['名前', 'n'])..add(['あ', 1]);
       final lines = table.render().trim().split('\n');
-      final widths = lines.map(Ansi.width).toSet();
+      final widths = lines.map((line) => line.width).toSet();
       expect(widths, hasLength(1));
     });
 
@@ -1352,13 +1366,13 @@ Disallow: /x
     test('a fixture that says where it came from resolves from there', () {
       final res = Reply.text(
         '<h1>hi</h1>',
-        requested: 'https://example.com/a/b'.url,
+        fetch: Fetch('https://example.com/a/b'.url),
       );
 
       // It used to sit at localhost however clearly the caller had said
       // otherwise, so anything resolving against it resolved wrong.
       expect(res.url, Uri.parse('https://example.com/a/b'));
-      expect(res.requested, Uri.parse('https://example.com/a/b'));
+      expect(res.fetch.url, Uri.parse('https://example.com/a/b'));
     });
   });
 
@@ -1571,7 +1585,7 @@ Disallow: /x
       'io.chunks reads a file in pieces, lazily, on both accessors',
       () async {
         final path = at('blob.bin');
-        io.save(path, List<int>.generate(1000, (i) => i % 256));
+        io.bytes.write(path, List<int>.generate(1000, (i) => i % 256));
 
         expect(io.chunks(path, size: 256).collect(.count()), equals(4));
         expect(
@@ -1583,7 +1597,7 @@ Disallow: /x
           equals(1000),
         );
         expect(
-          await io.async.chunks(path, size: 256).pour(.count()),
+          await io.async.chunks(path, size: 256).collect(.count()),
           equals(4),
         );
         expect(() => io.chunks(path, size: 0), throwsArgumentError);
@@ -1621,7 +1635,7 @@ Disallow: /x
 
     test('io.temp is the file beside io.dir.temp', () {
       final scratch = io.temp('dt_scratch_');
-      addTearDown(() => io.remove(scratch.dirname));
+      addTearDown(() => io.remove(io.path.dirname(scratch.path)));
 
       expect(io.isfile(scratch.path), isTrue);
       expect(io.empty(scratch.path), isTrue);
@@ -1686,8 +1700,8 @@ Disallow: /x
       expect(io.csv.records(path).collect(.count()), equals(2));
       expect(io.csv.records(path).collect(.first())?['name'], equals('Ada'));
 
-      expect(await io.async.csv.rows(path).pour(.count()), equals(3));
-      expect(await io.async.csv.records(path).pour(.count()), equals(2));
+      expect(await io.async.csv.rows(path).collect(.count()), equals(3));
+      expect(await io.async.csv.records(path).collect(.count()), equals(2));
 
       final streamed = at('streamed.csv');
       await io.async.csv.write(
@@ -1723,11 +1737,15 @@ Disallow: /x
     test('a pipe has the operations a transformer never could', () async {
       // Every one of these had no spelling at all through 5.4.0.
       expect(
-        await [1, 2, 3].flow.pipe(.tap((_) {})).pour(.list()),
+        await [1, 2, 3].flow.transform(.tap((_) {})).collect(.list()),
         equals([1, 2, 3]),
       );
       expect(
-        await [1, 2, 3].flow.pipe(.map.async((n) async => n * 2)).pour(.list()),
+        await [
+          1,
+          2,
+          3,
+        ].flow.transform(.map.async((n) async => n * 2)).collect(.list()),
         equals([2, 4, 6]),
       );
       expect(
@@ -1736,41 +1754,51 @@ Disallow: /x
           2,
           3,
           4,
-        ].flow.pipe(.where.async((n) async => n.isEven)).pour(.list()),
+        ].flow.transform(.where.async((n) async => n.isEven)).collect(.list()),
         equals([2, 4]),
       );
       expect(
-        await [1, 2].flow.pipe(.flat.async((n) => [n, n].flow)).pour(.list()),
+        await [
+          1,
+          2,
+        ].flow.transform(.flat.async((n) => [n, n].flow)).collect(.list()),
         equals([1, 1, 2, 2]),
       );
       expect(
         await Stream<int>.error(
           StateError('x'),
-        ).flow.pipe(.handle((e, s) {})).pour(.list()),
+        ).flow.transform(.handle((e, s) {})).collect(.list()),
         isEmpty,
       );
     });
 
     test('a pipe takes a flow as its operand, which nothing could', () async {
       expect(
-        await [1, 2, 3].flow.pipe(.zip(['a', 'b'].flow)).pour(.list()),
+        await [1, 2, 3].flow.transform(.zip(['a', 'b'].flow)).collect(.list()),
         equals([(1, 'a'), (2, 'b')]),
       );
       expect(
-        await [1, 2].flow.pipe(.plus([3].flow)).pour(.list()),
+        await [1, 2].flow.transform(.plus([3].flow)).collect(.list()),
         equals([1, 2, 3]),
       );
       expect(
-        await [1, 2, 3].flow.pipe(.minus([2].flow)).pour(.list()),
+        await [1, 2, 3].flow.transform(.minus([2].flow)).collect(.list()),
         equals([1, 3]),
       );
       expect(
-        await [1, 2, 3].flow.pipe(.common([2, 3, 4].flow)).pour(.list()),
+        await [
+          1,
+          2,
+          3,
+        ].flow.transform(.common([2, 3, 4].flow)).collect(.list()),
         equals([2, 3]),
       );
-      expect(await <int>[].flow.pipe(.or([9].flow)).pour(.list()), equals([9]));
       expect(
-        (await [1, 3].flow.pipe(.merge([2].flow)).pour(.set())),
+        await <int>[].flow.transform(.or([9].flow)).collect(.list()),
+        equals([9]),
+      );
+      expect(
+        (await [1, 3].flow.transform(.merge([2].flow)).collect(.set())),
         equals({1, 2, 3}),
       );
     });
@@ -1778,8 +1806,8 @@ Disallow: /x
     test('chunk.time closes a batch on the clock', () async {
       final controller = StreamController<int>();
       final batches = controller.stream.flow
-          .pipe(.chunk.time(40.ms))
-          .pour(.list());
+          .transform(.chunk.time(40.ms))
+          .collect(.list());
 
       controller
         ..add(1)
@@ -1798,7 +1826,9 @@ Disallow: /x
 
     test('debounce keeps the last of a burst, throttle the first', () async {
       final controller = StreamController<int>();
-      final quiet = controller.stream.flow.pipe(.debounce(50.ms)).pour(.list());
+      final quiet = controller.stream.flow
+          .transform(.debounce(50.ms))
+          .collect(.list());
 
       controller
         ..add(1)
@@ -1811,7 +1841,9 @@ Disallow: /x
       expect(await quiet, equals([3, 4]));
 
       final fast = StreamController<int>();
-      final capped = fast.stream.flow.pipe(.throttle(50.ms)).pour(.list());
+      final capped = fast.stream.flow
+          .transform(.throttle(50.ms))
+          .collect(.list());
       fast
         ..add(1)
         ..add(2);
@@ -1823,7 +1855,9 @@ Disallow: /x
 
     test('timeout fails a flow that goes quiet', () async {
       final controller = StreamController<int>();
-      final out = controller.stream.flow.pipe(.timeout(30.ms)).pour(.list());
+      final out = controller.stream.flow
+          .transform(.timeout(30.ms))
+          .collect(.list());
       controller.add(1);
       await expectLater(out, throwsA(isA<TimeoutException>()));
       await controller.close();
@@ -1834,7 +1868,7 @@ Disallow: /x
       // `Future`-returning closure is assignable to a `void` function type,
       // so `foreach` compiled, started every call and awaited none.
       final done = <int>[];
-      await [1, 2, 3].flow.pour(
+      await [1, 2, 3].flow.collect(
         .foreach((n) async {
           await util.time.wait(1.ms);
           done.add(n);
@@ -1845,7 +1879,7 @@ Disallow: /x
 
     test('Flow.nonnull is the twin Sequence always had', () async {
       final flow = <int?>[1, null, 2].flow;
-      expect(await flow.nonnull.pour(.list()), equals([1, 2]));
+      expect(await flow.nonnull.collect(.list()), equals([1, 2]));
     });
 
     test('flat infers its element type from the receiver', () {
@@ -1862,17 +1896,191 @@ Disallow: /x
     });
   });
 
-  group('5.5.0 — the crawl terminals', () {
+  group('6.0.0 — the mirrors, pinned', () {
+    /// The public member names declared directly on [type] in [path].
+    ///
+    /// Source text rather than reflection, because `dart:mirrors` is not
+    /// available to a compiled test — and because reading the declarations is
+    /// what catches a member added to one side and forgotten on the other.
+    Set<String> membersOf(String path, String type) {
+      final source = File(path).readAsStringSync();
+      final names = <String>{};
+      var inside = false;
+
+      for (final line in source.split('\n')) {
+        if (RegExp('^(final |abstract )?class $type[ {<]').hasMatch(line)) {
+          inside = true;
+          continue;
+        }
+        if (!inside) continue;
+        if (line == '}' ||
+            RegExp(r'^(final |abstract )?class ').hasMatch(line)) {
+          break;
+        }
+        if (!line.startsWith('  ') || line.startsWith('   ')) continue;
+        final trimmed = line.trimLeft();
+        if (trimmed.isEmpty) continue;
+        if (RegExp(
+          r'^(//|@|\}|\)|=>|\.\.|;|static |const )',
+        ).hasMatch(trimmed)) {
+          continue;
+        }
+
+        final getter = RegExp(r'\bget (\w+)').firstMatch(trimmed);
+        if (getter != null) {
+          names.add(getter.group(1)!);
+          continue;
+        }
+        // `final List<String> raw;` — a field is a member too.
+        final field = RegExp(r'^final [\w<>,?\s]+ (\w+);').firstMatch(trimmed);
+        if (field != null) {
+          names.add(field.group(1)!);
+          continue;
+        }
+        // A constructor is not a member of the vocabulary.
+        if (trimmed.startsWith('$type(') || trimmed.startsWith('$type.')) {
+          continue;
+        }
+        final open = trimmed.indexOf('(');
+        if (open <= 0) continue;
+        // `Cli _parsed = Cli(const []);` — an initialiser, not a signature.
+        if (trimmed.substring(0, open).contains('=')) continue;
+        final head = trimmed
+            .substring(0, open)
+            .replaceAll(RegExp(r'<[^<>]*>'), '');
+        final name = RegExp(r'(\w+)\s*$').firstMatch(head);
+        if (name != null) names.add(name.group(1)!);
+      }
+
+      names.removeWhere((n) => n == type || n.startsWith('_'));
+      expect(names, isNotEmpty, reason: 'read no members off $type');
+      return names;
+    }
+
+    test('Cli and CliAccessor are a mirror with two named exceptions', () {
+      final reader = membersOf('lib/cli/parse.dart', 'Cli');
+      final accessor = membersOf('lib/cli/cli.dart', 'CliAccessor');
+
+      // A handler's parameter is *called* `cli`, so the vocabulary has to
+      // read the same inside a handler and outside one. Nine forwarders are
+      // a mirror rather than nine flat shortcuts — once a test says so.
+      //
+      // `switches` was on `Cli` only through 5.5.0, which sent a script
+      // outside a handler through `cli.parsed.switches`: a third spelling of
+      // a member that has one.
+      expect(
+        reader.difference(accessor),
+        isEmpty,
+        reason: 'a member of Cli with no twin on CliAccessor',
+      );
+      expect(
+        accessor.difference(reader),
+        // A `Cli` cannot parse itself into existence, so these two have no
+        // twin by construction. Rule 3 calls them *members with no twin*.
+        {'parse', 'parsed'},
+        reason: 'an accessor member with no twin on Cli',
+      );
+    });
+
+    test('every Ansi code has an extension member of the same name', () {
+      final source = File('lib/system/console/ansi.dart').readAsStringSync();
+
+      final codes = <String>{
+        for (final m in RegExp(
+          r'static const String (\w+) =',
+        ).allMatches(source))
+          m.group(1)!,
+      }..remove('reset');
+
+      final start = source.indexOf('extension AnsiStringExtension on String {');
+      final members = <String>{
+        for (final m in RegExp(
+          r'^  String (\w+)\(\) =>',
+          multiLine: true,
+        ).allMatches(source.substring(start)))
+          m.group(1)!,
+      };
+
+      // 76 names with three duplicate spellings and four holes through 5.5.0:
+      // `black`, `bgblack`, `bgmagenta` and `bgwhite` had a constant and no
+      // member, so `'x'.red()` worked and `'x'.black()` did not, with nothing
+      // to say why. Adding a colour is two edits, and forgetting one fails
+      // the build now.
+      expect(codes, isNotEmpty);
+      expect(
+        codes.difference(members),
+        isEmpty,
+        reason: 'a code with no extension member',
+      );
+      expect(
+        members.difference(codes),
+        isEmpty,
+        reason: 'an extension member with no code',
+      );
+    });
+
+    test('no doc comment names a member that no longer exists', () {
+      // The second time a rename left a dangling reference: `Pool.flow`'s doc
+      // pointed at `Flow.run` for two releases after `Pipe.map.async`
+      // replaced it. Cheap to pin.
+      const gone = [
+        'Flow.run',
+        'Downloader',
+        'HttpDownloader',
+        'MapDownloader',
+        'DownloaderEvents',
+        'Deduplicator',
+        'Snapshot',
+        'CrawlBuilder',
+        'CrawlEvents',
+        'EngineEvents',
+        'QueueAccess',
+        'PathResolver',
+        'Ansi.strip',
+        'Ansi.width',
+        'system.exit',
+        'io.save',
+        'io.dir.cwd',
+        'io.dir.home',
+        'util.hash.encode',
+        'format.zip.read',
+        'format.html.query',
+      ];
+
+      final offenders = <String>[];
+      for (final file
+          in Directory('lib')
+              .listSync(recursive: true)
+              .whereType<File>()
+              .where((f) => f.path.endsWith('.dart'))) {
+        var line = 0;
+        for (final text in file.readAsStringSync().split('\n')) {
+          line++;
+          final trimmed = text.trimLeft();
+          if (!trimmed.startsWith('///')) continue;
+          for (final name in gone) {
+            // A bracket reference or a code span — a sentence that merely
+            // says the old name was deleted is the point of this sweep.
+            if (trimmed.contains('[$name]')) {
+              offenders.add('${file.path}:$line names [$name]');
+            }
+          }
+        }
+      }
+
+      expect(offenders, isEmpty);
+    });
+  });
+
+  group('6.0.0 — the crawl terminals', () {
     test('a flow that nobody collects fetches nothing', () async {
       var fetched = 0;
-      final downloader = _Counting<String>({
-        'https://site.test/': '<h1>x</h1>',
-      }, () => fetched++);
-
-      net
-          .crawl<String>('https://site.test/'.url)
-          .downloader(downloader)
-          .flow((res) => res.emit('one'));
+      (net.crawl([Fetch('https://site.test/'.url)])..using(
+            _pages(const {
+              'https://site.test/': '<h1>x</h1>',
+            }, tick: () => fetched++),
+          ))
+          .flow;
 
       // The engine used to be armed in the method body, so building a flow
       // and dropping it still fetched a page. `Pool.flow` had guarded this
@@ -1883,78 +2091,64 @@ Disallow: /x
 
     test('collecting the flow is what starts the crawl', () async {
       var fetched = 0;
-      final downloader = _Counting<String>({
-        'https://site.test/': '<h1>x</h1>',
-      }, () => fetched++);
+      final out =
+          await (net.crawl([Fetch('https://site.test/'.url)])..using(
+                _pages(const {
+                  'https://site.test/': '<h1>x</h1>',
+                }, tick: () => fetched++),
+              ))
+              .flow
+              .transform(.map((res) => res.parse(format.html).find('h1').text))
+              .collect(.list());
 
-      final out = await net
-          .crawl<String>('https://site.test/'.url)
-          .downloader(downloader)
-          .flow((res) => res.emit('one'))
-          .pour(.list());
-
-      expect(out, equals(['one']));
+      expect(out, equals(['x']));
       expect(fetched, equals(1));
     });
 
-    test('items is what collect was, off the vocabulary\'s word', () async {
-      final out = await net
-          .crawl<String>('https://site.test/'.url)
-          .downloader(MapDownloader<String>({'/': '<h1>x</h1>'}))
-          .items((res) => res.emit('one'));
+    test(
+      'the flow is the vocabulary, so items and gather are steps on it',
+      () async {
+        final crawl = net.crawl([Fetch('https://site.test/'.url)])
+          ..using(_pages(const {'/': '<h1>One</h1><h1>Two</h1>'}));
 
-      expect(out, isA<Sequence<String>>());
-      expect(out.collect(.list()), equals(['one']));
-    });
+        // `items()` was `.collect(.list())`; `gather(map)` was
+        // `.transform(.flat.map(map)).collect(.seq())`, and neither needs a
+        // member of its own.
+        final out = await crawl.flow
+            .transform(
+              .flat.map((res) => res.parse(format.html).find('h1').texts),
+            )
+            .collect(.seq());
 
-    test('gather takes a Sequence, the one rule for a callback', () async {
-      final out = await net
-          .crawl<Never>('https://site.test/'.url)
-          .downloader(MapDownloader<Never>({'/': '<h1>One</h1><h1>Two</h1>'}))
-          .gather((page) => page.parse(format.html).find('h1').texts);
+        expect(out, isA<Sequence<String>>());
+        expect(out.collect(.list()), equals(['One', 'Two']));
+      },
+    );
 
-      expect(out.collect(.list()), equals(['One', 'Two']));
+    test('next hands back a Sequence, the one rule for a callback', () {
+      final res = Reply.text(
+        '<a href="/b">b</a>',
+        fetch: Fetch('https://s.test/'.url),
+      );
+      final Sequence<Fetch> next = res
+          .parse(format.html)
+          .find('a')
+          .attrs('href')
+          .transform(.map(res.follow));
+      expect(next.collect(.count()), 1);
     });
   });
 }
 
-/// Runs [body] against a shared client that gives up at the first refusal,
-/// so a test of a failing fetch does not sit through the retry backoff.
-Future<void> _withFailFastClient(Future<void> Function() body) async {
-  final previous = net.http;
-  await net.use(
-    Fetcher(retries: 0, timeout: const Duration(seconds: 2)),
-    close: false,
-  );
-  try {
-    await body();
-  } finally {
-    await net.use(previous);
-  }
-}
+/// A crawl that follows nothing, for the pin that `Handler` is gone.
+Sequence<Fetch> _noNext(Reply res) => const Sequence<Fetch>([]);
 
-/// A downloader that takes its time, for watching what a run leaves behind
+/// A transport that takes its time, for watching what a run leaves behind
 /// while it is still going.
-class _SlowDownloader<T> extends Downloader<T> {
-  _SlowDownloader(this.pause);
-
-  /// How long each fetch takes.
-  final Duration pause;
-
-  @override
-  Future<Page<T>> download(Fetch<T> fetch) async {
-    await Future<void>.delayed(pause);
-    return Page<T>(
-      fetch: fetch,
-      status: 200,
-      headers: const {'content-type': 'text/html'},
-      bytes: '<h1>hi</h1>'.codeUnits,
-      engine: engine,
-    );
-  }
-}
-
-void _noop(Page<String> response) {}
+Send _slow(Duration pause) => (fetch) async {
+  await Future<void>.delayed(pause);
+  return Reply.text('<h1>hi</h1>', fetch: fetch);
+};
 
 /// A transformer that supplies only `run`, the way one written before 5.4.0
 /// would — the default `pour` is what carries it onto a flow.
@@ -1964,43 +2158,17 @@ final class _Doubled extends Transformer<int, int> {
   static Iterable<int> _twice(Iterable<int> items) => items.map((n) => n * 2);
 }
 
-/// An in-memory downloader that counts the fetches it serves, for the pin
-/// that building a crawl's flow and never collecting it fetches nothing.
-final class _Counting<T> extends Downloader<T> {
-  _Counting(this.bodies, this.tick) : super(concurrency: 1);
-
-  final Map<String, String> bodies;
-  final void Function() tick;
-
-  @override
-  Future<Page<T>> download(Fetch<T> fetch) async {
-    tick();
-    final body = bodies[fetch.url.toString()];
-    return Page<T>(
-      fetch: fetch,
-      status: body == null ? 404 : 200,
-      headers: const {'content-type': 'text/html; charset=utf-8'},
-      bytes: utf8.encode(body ?? '404'),
-      engine: engine,
-    );
-  }
-}
-
-/// An in-memory downloader, so a crawl in this file never reaches a socket.
-final class _Pages<T> extends Downloader<T> {
-  _Pages(this.bodies) : super(concurrency: 1);
-
-  final Map<String, String> bodies;
-
-  @override
-  Future<Page<T>> download(Fetch<T> fetch) async {
-    final body = bodies[fetch.url.toString()];
-    return Page<T>(
-      fetch: fetch,
-      status: body == null ? 404 : 200,
-      headers: const {'content-type': 'text/html; charset=utf-8'},
-      bytes: utf8.encode(body ?? '404'),
-      engine: engine,
-    );
-  }
-}
+/// An in-memory transport, so a crawl in this file never reaches a socket.
+///
+/// A closure over a map, and a counter it captures — which is what
+/// `MapDownloader` was an exported class for.
+Send _pages(Map<String, String> bodies, {void Function()? tick}) =>
+    (fetch) async {
+      tick?.call();
+      final body = bodies['${fetch.url}'] ?? bodies[fetch.url.path];
+      return Reply.text(
+        body ?? '404',
+        fetch: fetch,
+        status: body == null ? 404 : 200,
+      );
+    };

@@ -18,7 +18,7 @@ void main() async {
   // -------------------------------------------------------------------- JSON
   // One cursor, three doors: a response, a string, a file. Nothing is cast,
   // and a path that is not there reads empty rather than throwing.
-  final res = Reply.text(_payload, requested: 'https://api.example.com'.url);
+  final res = Reply.text(_payload, fetch: Fetch('https://api.example.com'.url));
 
   log.info('total    ${res.parse(format.json).at('data.total').number()}');
   log.info('cursor   ${res.parse(format.json).at('data').text('cursor')}');

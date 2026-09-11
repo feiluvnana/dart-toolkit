@@ -50,7 +50,10 @@ void main() {
           ]);
       final lines = table.render().split('\n');
       // Every rendered row is the same visible width.
-      final widths = lines.where((l) => l.isNotEmpty).map(Ansi.width).toSet();
+      final widths = lines
+          .where((l) => l.isNotEmpty)
+          .map((line) => line.width)
+          .toSet();
       expect(widths, hasLength(1));
     });
 
@@ -75,8 +78,8 @@ void main() {
     test('strip removes ANSI sequences', () {
       Ansi.enabled = true;
       final styled = 'Hello'.red().bold();
-      expect(Ansi.strip(styled), equals('Hello'));
-      expect(Ansi.width(styled), equals(5));
+      expect(styled.plain, equals('Hello'));
+      expect(styled.width, equals(5));
       expect(styled.plain, equals('Hello'));
       expect(styled.width, equals(5));
     });
@@ -84,10 +87,10 @@ void main() {
 
   group('io Domain', () {
     test('the path members complete the set', () {
-      expect(io.dir.cwd, isNotEmpty);
-      expect(io.path.abs('x.txt'), equals(io.path.join(io.dir.cwd, 'x.txt')));
+      expect(io.path.cwd, isNotEmpty);
+      expect(io.path.abs('x.txt'), equals(io.path.join(io.path.cwd, 'x.txt')));
       expect(
-        io.path.rel(io.path.join(io.dir.cwd, 'a', 'b.txt')),
+        io.path.rel(io.path.join(io.path.cwd, 'a', 'b.txt')),
         equals(io.path.join('a', 'b.txt')),
       );
       expect(
@@ -96,12 +99,12 @@ void main() {
       );
     });
 
-    test('io.dir.home and io.expand resolve what a shell would', () {
-      expect(io.dir.home, isNotEmpty);
-      expect(io.path.expand('~'), equals(io.dir.home));
+    test('io.path.home and io.expand resolve what a shell would', () {
+      expect(io.path.home, isNotEmpty);
+      expect(io.path.expand('~'), equals(io.path.home));
       expect(
         io.path.expand(io.path.join('~', '.config', 'x')),
-        equals(io.path.join(io.dir.home, '.config', 'x')),
+        equals(io.path.join(io.path.home, '.config', 'x')),
       );
       expect(
         io.path.expand('nested/~/x'),
@@ -110,8 +113,8 @@ void main() {
       );
 
       final name = Platform.isWindows ? 'USERPROFILE' : 'HOME';
-      expect(io.path.expand('\$$name/x'), equals('${io.dir.home}/x'));
-      expect(io.path.expand('\${$name}/x'), equals('${io.dir.home}/x'));
+      expect(io.path.expand('\$$name/x'), equals('${io.path.home}/x'));
+      expect(io.path.expand('\${$name}/x'), equals('${io.path.home}/x'));
       expect(
         io.path.expand('\$DT_DEFINITELY_NOT_SET/x'),
         equals('/x'),
@@ -174,10 +177,10 @@ void main() {
         io.write(io.path.join(temp.path, 'thumb_cover.jpg'), 'x');
         final wanted = io.path.join(temp.path, 'cover.jpg');
 
-        // Off by default, so a download is not silently skipped.
+        // `has` is the strict question; `similar` is the widened one, and
+        // it is a separate member so a download is never silently skipped.
         expect(io.has(wanted), isFalse);
         expect(io.similar(wanted), isTrue);
-        expect(io.has(wanted, match: true), isTrue);
       } finally {
         io.remove(temp.path);
       }
@@ -217,7 +220,7 @@ void main() {
       final temp = io.dir.temp('toolkit_bytes_');
       try {
         final path = io.path.join(temp.path, 'blob.bin');
-        io.save(path, [1, 2, 3, 4]);
+        io.bytes.write(path, [1, 2, 3, 4]);
         expect(io.bytes(path), equals([1, 2, 3, 4]));
       } finally {
         io.remove(temp.path);
@@ -458,10 +461,15 @@ void main() async {
           });
           fail('Should have thrown PoolFailure');
         } on PoolFailure<int, int> catch (e) {
-          expect(e.results.length, equals(3));
-          expect(e.results[0], equals(10));
-          expect(e.results[1], isNull);
-          expect(e.results[2], equals(30));
+          // One outcome per item, aligned with `items`.
+          final outcomes = e.outcomes.collect(.list());
+          expect(outcomes.length, equals(3));
+          expect(outcomes[0], isA<Done<int>>());
+          expect(outcomes[1], isA<Broke<int>>());
+          expect(outcomes[2], isA<Done<int>>());
+          expect(outcomes.map((o) => o.value), [10, null, 30]);
+          expect(e.items.collect(.list()), [1, 2, 3]);
+          expect(e.broken, 1);
         }
       },
     );
@@ -470,7 +478,7 @@ void main() async {
       // 50ms task vs 10ms task: 10ms task completes first
       final items = [50, 10];
       final streamed = await items.flow
-          .pipe(
+          .transform(
             .map.async(
               (delay) async {
                 await util.time.wait(delay.ms);
@@ -480,20 +488,20 @@ void main() async {
               ordered: false,
             ),
           )
-          .pour(.list());
+          .collect(.list());
 
       expect(streamed, equals(['done-10', 'done-50']));
     });
 
     test('map.async yields in input order by default', () async {
       final streamed = await [50, 10].flow
-          .pipe(
+          .transform(
             .map.async((delay) async {
               await util.time.wait(delay.ms);
               return 'done-$delay';
             }, size: 2),
           )
-          .pour(.list());
+          .collect(.list());
 
       expect(streamed, equals(['done-50', 'done-10']));
     });
@@ -502,7 +510,7 @@ void main() async {
       var live = 0;
       var peak = 0;
       await List.generate(12, (i) => i).flow
-          .pipe(
+          .transform(
             .map.async((i) async {
               live++;
               if (live > peak) peak = live;
@@ -511,7 +519,7 @@ void main() async {
               return i;
             }, size: 3),
           )
-          .pour(.count());
+          .collect(.count());
 
       expect(peak, equals(3));
     });
@@ -527,8 +535,8 @@ void main() async {
       }
 
       final first = await endless().flow
-          .pipe(.map.async((n) async => n, size: 2))
-          .pour(.first());
+          .transform(.map.async((n) async => n, size: 2))
+          .collect(.first());
 
       expect(first, isZero);
       // Two in flight, and then the terminal cancelled the source.
@@ -538,13 +546,13 @@ void main() async {
     test('map.async propagates the first failure', () async {
       await expectLater(
         [1, 2, 3].flow
-            .pipe(
+            .transform(
               .map.async((n) async {
                 if (n == 2) throw StateError('boom');
                 return n;
               }, size: 2),
             )
-            .pour(.list()),
+            .collect(.list()),
         throwsStateError,
       );
     });
@@ -938,7 +946,7 @@ void main() async {
 
         // Redirect URL tracking
         final redirectRes = await net.http.get('$root/redirect-src'.url);
-        expect(redirectRes.requested.toString(), equals('$root/redirect-src'));
+        expect(redirectRes.fetch.url.toString(), equals('$root/redirect-src'));
         expect(redirectRes.url.toString(), equals('$root/redirect-dst'));
         expect(redirectRes.body, equals('arrived at dest'));
       } finally {
@@ -1208,14 +1216,14 @@ void main() async {
             'id,name\n1,"Alpha, 1"\n2,"Beta ""The Second"""\n3,Gamma\n',
           );
 
-          final streamRows = await io.async.csv.rows(path).pour(.list());
+          final streamRows = await io.async.csv.rows(path).collect(.list());
           expect(streamRows.length, equals(4));
           expect(streamRows[0], equals(['id', 'name']));
           expect(streamRows[1], equals(['1', 'Alpha, 1']));
           expect(streamRows[2], equals(['2', 'Beta "The Second"']));
           expect(streamRows[3], equals(['3', 'Gamma']));
 
-          final mapRows = await io.async.csv.records(path).pour(.list());
+          final mapRows = await io.async.csv.records(path).collect(.list());
           expect(mapRows.length, equals(3));
           expect(mapRows[0]['id'], equals('1'));
           expect(mapRows[0]['name'], equals('Alpha, 1'));
@@ -1224,7 +1232,7 @@ void main() async {
 
           // The typed pair: rows() yields cells, records() yields maps.
           expect(
-            await io.async.csv.records(path).pour(.list()),
+            await io.async.csv.records(path).collect(.list()),
             equals(mapRows),
           );
         } finally {
@@ -1518,7 +1526,7 @@ void main() async {
 
     test('net exposes http and crawl', () {
       expect(net.http, isA<Fetcher>());
-      expect(net.crawl, isA<Crawl>());
+      expect(net.crawl(const []), isA<Crawl>());
       // Selectors live on the top-level $, not on net. Like jQuery, find()
       // searches descendants, so a root-level match is read directly.
       expect(

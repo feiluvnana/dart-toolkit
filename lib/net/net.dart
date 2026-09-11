@@ -1,18 +1,39 @@
 /// # Net Domain (`net.*`)
 ///
-/// HTTP requests and downloads (`net.http`), the crawler engine
-/// (`net.crawl`), the forms a page carries ([Form]) — and the other
-/// direction, a server that listens (`net.serve`, `net.once`).
+/// HTTP requests and downloads (`net.http`), the frontier that crawls
+/// (`net.crawl`) — and the other direction, a server that listens
+/// (`net.serve`, `net.once`).
 ///
-/// **This domain does not parse anything.** A crawler fetches JSON, sitemaps,
-/// archives and images as readily as it fetches pages, so a [Reply] carries
-/// the bytes, the text and the headers, and reading them is [Reply.parse]
-/// plus a codec from `format`:
+/// **This domain does not parse anything**, and since 6.0.0 that is true. A
+/// crawler fetches JSON, sitemaps, archives and images as readily as it
+/// fetches pages, so a [Reply] carries the bytes, the text and the headers,
+/// and reading them is [Reply.parse] plus a codec from `format`:
 ///
 /// ```dart
 /// res.parse(format.html).find('h1').text;
 /// res.parse(format.json).at('data.items');
+/// res.parse(format.robots).allowed(url);
+/// res.parse(format.sitemap);
 /// ```
+///
+/// `net.robots(text)` and `net.sitemap(text)` were two parsers declared here
+/// through 5.5.0, one paragraph under the sentence above; they are
+/// `format.robots` and `format.sitemap` now. Reading a `<form>` went the same
+/// way, and `net` keeps only the half that sends one — see `Sending`.
+///
+/// ## The three seams
+///
+/// The domain is built on seams the library already has, rather than classes
+/// of its own:
+///
+/// | Seam | Was | Is |
+/// | :--- | :--- | :--- |
+/// | transport | `Downloader` / `HttpDownloader` / `MapDownloader` / `DownloaderEvents` | [Send], a `typedef` |
+/// | document | `net.robots`, `net.sitemap`, `Reply.parse` | `Codec`, through [Reply.parse] |
+/// | results | `run` / `items` / `gather` / `flow` / `save` / `sink` / `emit` / `on.*` | `Flow<Reply>` and the collection vocabulary |
+///
+/// Forty-one public types became fourteen, and three of the ones that went
+/// moved to `format` rather than disappearing.
 ///
 /// URLs are always [Uri] values, matching `package:http`; the [UrlString.url]
 /// extension keeps call sites short.
@@ -21,26 +42,22 @@ library;
 import 'dart:async';
 
 import '../collection/sequence.dart';
+
 import 'crawl.dart';
+import 'fetch.dart';
 import 'http.dart';
-import 'robots.dart';
 import 'serve.dart';
 import 'serve.dart' as serve_impl;
-import 'sitemap.dart';
 
 export 'cache.dart';
 export 'crawl.dart';
-export 'downloader.dart';
-export 'engine.dart';
+export 'fetch.dart';
 export 'form.dart';
 export 'http.dart';
-export 'pipeline.dart';
-export 'robots.dart';
 export 'serve.dart' hide onceOn, serveOn;
-export 'sitemap.dart';
 
 // ============================================================================
-// NET DOMAIN (net.*) - HTTP, Crawler Engine & Selectors
+// NET DOMAIN (net.*) - HTTP, Crawling & Listening
 // ============================================================================
 
 Fetcher _shared = Fetcher();
@@ -51,24 +68,42 @@ const NetAccessor net = NetAccessor();
 /// Entry point for networking and scraping.
 ///
 /// Requests go through [http], a shared [Fetcher]; crawls through [crawl].
-/// Reading what comes back is `format`, through [Reply.parse]. For a client of
-/// your own, construct a [Fetcher] and hand it to [use].
+/// Reading what comes back is `format`, through [Reply.parse]. For a client
+/// of your own, construct a [Fetcher] and hand it to [use] — or to
+/// [Crawl.using], which needs no singleton at all.
 ///
 /// ```dart
 /// final res = await net.http.get('https://example.com'.url);
-/// res.parse(format.html).find('h2.title').texts.collect(.foreach((title) {
-///   print(title);
-/// }));
+/// res.parse(format.html).find('h2.title').texts.collect(.foreach(print));
 /// ```
 class NetAccessor {
   /// Creates the accessor. Prefer the shared [net] instance.
   const NetAccessor();
 
   /// The shared HTTP client: requests, downloads and [Fetcher.sync].
+  ///
+  /// A [Send], so it is also the default transport of every [Crawl].
   Fetcher get http => _shared;
 
-  /// The crawler entry point. See [Crawl].
-  Crawl get crawl => const Crawl();
+  /// A crawl over [seeds], following whatever [next] returns.
+  ///
+  /// See [Crawl]. The five entry points of 5.5.0 — `crawl(uri)`, `.all`,
+  /// `.seed`, `.html`, `.file`, `.sitemap` — are this one, because a seed is
+  /// a [Fetch] and a [Fetch] takes any URL the library can answer:
+  ///
+  /// ```dart no-compile
+  /// net.crawl([Fetch(url)], next);                     // was crawl(uri)
+  /// net.crawl(urls.map(Fetch.new), next);              // was .all(uris)
+  /// net.crawl([Fetch(coerce(markup))], next);          // was .html(markup)
+  /// net.crawl([Fetch(Uri.file(path))], next);          // was .file(path)
+  /// ```
+  ///
+  /// A sitemap is a crawl of its own, which is what deleted `Sitemap.load`
+  /// and its hand-rolled depth limit — see the `format.sitemap` library doc.
+  Crawl crawl(
+    Iterable<Fetch> seeds, [
+    Sequence<Fetch> Function(Reply res)? next,
+  ]) => Crawl(seeds, next);
 
   /// Binds [port] and answers every request with [handler].
   ///
@@ -84,9 +119,9 @@ class NetAccessor {
   /// await server.close();
   /// ```
   ///
-  /// Pass `port: 0` to let the OS pick a free one and read [Server.port] back.
-  /// [host] defaults to `localhost`, so nothing is exposed off the machine
-  /// until a script asks for it — pass `'0.0.0.0'` when it should be.
+  /// Pass `port: 0` to let the OS pick a free one and read [Server.port]
+  /// back. [host] defaults to `localhost`, so nothing is exposed off the
+  /// machine until a script asks for it — pass `'0.0.0.0'` when it should be.
   Future<Server> serve(
     int port,
     FutureOr<Served> Function(Asked req) handler, {
@@ -123,16 +158,17 @@ class NetAccessor {
     timeout: timeout,
   );
 
-  /// Parses robots.txt content into a [Robots] evaluator.
-  Robots robots(String content) => Robots.parse(content);
-
-  /// Parses a sitemap XML or text content into the [Uri]s it names.
-  Sequence<Uri> sitemap(String content) => Sitemap.parse(content);
-
   /// Replaces the client returned by [http], closing the previous one.
   ///
-  /// Useful in tests, and for applying one set of headers process-wide. Pass
-  /// `close: false` to keep the old client open.
+  /// **The one process-wide mutable singleton in the library**, kept
+  /// deliberately and against the reasoning that deleted `io.store` in 5.1.0.
+  /// One set of auth headers process-wide is a real thing scripts do, and
+  /// threading a [Fetcher] through every call is worse for them. Everything
+  /// else has a way not to need it: [Crawl.using] takes a [Send], `Fetcher`
+  /// is one, and `Sending.send` takes one too — so a program that would
+  /// rather be explicit never has to touch this.
+  ///
+  /// Pass `close: false` to keep the old client open.
   Future<void> use(Fetcher client, {bool close = true}) async {
     final previous = _shared;
     _shared = client;

@@ -73,15 +73,17 @@ const _html = '<html><body><h1 class="title">Title</h1>'
 Uri get seed => Uri.parse('https://example.com');
 Uri get url => seed;
 Uri get sitemapUrl => Uri.parse('https://example.com/sitemap.xml');
-// A `Page`, not a plain `Reply`: `Page<T> extends Reply`, so one fixture
-// answers both the `net.http` snippets that read a response and the
-// `net.crawl` ones that call `follow`, `emit` and `meta` on it.
-Page<String> get res => Page<String>(
-  fetch: Fetch<String>(seed),
+// One fixture answers both the `net.http` snippets that read a response and
+// the `net.crawl` ones that call `follow` or read `fetch.meta` on it —
+// `Page<T>` folded into `Reply` in 6.0.0.
+Reply get res => Reply(
+  url: seed,
+  fetch: Fetch(seed),
+  status: 200,
   bytes: utf8.encode(_html),
   headers: const {'content-type': 'text/html'},
 );
-Page<String> get reply => res;
+Reply get reply => res;
 Markup get page => format.html.parse(_html);
 Markup get markup => page;
 Markup get card => page.find('.row');
@@ -147,15 +149,15 @@ class Row {
 Progress get bar => Progress(total: 10, message: 'Working');
 Spinner get spin => Spinner();
 Table get table => Table(headers: const ['a', 'b']);
-Robots get robots => Robots.parse('User-agent: *\nDisallow: /private');
+Robots get robots =>
+    format.robots.parse('User-agent: *\nDisallow: /private');
 Pool<Uri> get pool => Pool<Uri>(size: 4);
 Limiter get limit => concurrent.rate(10, per: const Duration(seconds: 1));
 Semaphore get gate => concurrent.semaphore(2);
 Sequence<FileSystemEntry> get files => io.dir.walk('out', only: .file);
 Sequence<String> get agents => Sequence(const ['MyBot']);
 Csv get csvsheet => format.csv.parse('a,b\n1,2\n');
-Deduplicator get restored => Deduplicator();
-Downloader<String> get mock => MapDownloader<String>({'\$seed': _html});
+Send get mock => (f) async => Reply.text(_html, fetch: f);
 Opt<bool> get force => cli.flag('force');
 Opt<bool> get verbose => cli.flag('verbose');
 Opt<int> get concurrency => cli.number('concurrency', def: 4);
@@ -194,7 +196,7 @@ class Config {
 enum Mode { fast, slow, debug }
 
 Form get form => page.form('#login')!.at(seed);
-Engine<String> get engine => Engine<String>(downloader: HttpDownloader());
+Crawl get crawl => net.crawl([Fetch(seed)])..using(mock);
 Asked? get req => null;
 Process get process => throw UnimplementedError();
 
@@ -206,7 +208,7 @@ Future<void> enrich(Row row) async {}
 Future<Object?> worker(String input) async => input;
 Future<Reply> fetch(Uri u) => Fetcher().get(u);
 Future<void> rebuild([String? out, int concurrency = 1]) async {}
-Future<void> handler(Page<String> p) async {}
+Sequence<Fetch> next(Reply res) => const Sequence<Fetch>([]);
 Object? heavyComputation(Object? input) => input;
 Future<Object?> fetchFromFlakyService() async => null;
 Future<Object?> mayThrow() async => null;

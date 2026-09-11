@@ -2,6 +2,372 @@
 
 All notable changes to this project will be documented in this file.
 
+## 6.0.0
+
+**The sweep.** An API review read every namespace against the same guardrail —
+*smaller is not the goal; not saying the same thing twice is* — and came back
+with eight files. Seven were proofreads. One was a rebuild.
+
+A name was deleted only when it was **dead**, was **the same operation under a
+second name**, was **declared in more than one place** so the copies could
+disagree, or was **in the wrong domain** while the right one already existed.
+A name that is merely *short for something* stayed, and three of the eight
+reviews recommended making a surface *larger*.
+
+---
+
+### `net` — rebuilt on three seams
+
+41 public types → 14, and three of the ones that went moved to `format` rather
+than disappearing. `net/serve.dart` was the control: the same domain, written
+once with a fixed idea of how small it should be, and its library doc lists
+what is deliberately absent. Nothing else in `net` had that paragraph.
+
+#### A transport is a function
+
+```dart
+typedef Send = Future<Reply> Function(Fetch fetch);
+```
+
+`Downloader`, `DownloaderEvents`, `HttpDownloader` and `MapDownloader` are
+**deleted**. A subclass inherited an engine back-pointer, six mutable
+scheduling fields, a worker loop with a per-host throttle table, and a
+`save()` hook that threw `UnsupportedError` and had **zero callers in `lib/`**
+— to plug in a headless browser. A `Fetcher` implements `Send`, so `net.http`
+is the default; everything else is a closure:
+
+```dart
+// A fixture, and the recorder MapDownloader existed for.
+Send fixture(Map<String, String> pages, List<Fetch> sent) => (f) async {
+  sent.add(f);
+  return Reply.text(pages['${f.url}'] ?? '', fetch: f);
+};
+
+// Middleware, which had no spelling at all before.
+Send logged(Send inner) => (f) async {
+  final res = await inner(f);
+  log.debug('${res.status} ${f.url}');
+  return res;
+};
+```
+
+`crawl.downloader(d)` → `crawl.using(send)`.
+
+#### `Page<T>` folded into `Reply`, and `follow` returns
+
+Everything `Page` added was either the request it came from or a call on an
+engine:
+
+| Was | Is |
+| :--- | :--- |
+| `res.requested` | `res.fetch.url` |
+| `res.tag`, `res.meta`, `res.depth` | `res.fetch.tag`, `res.fetch.meta`, `res.fetch.depth` |
+| `res.emit(item)` | what the caller does with the reply |
+| `res.stop(reason)` | cancelling the flow |
+| `res.follow(href, …)` | **returns a `Fetch`** instead of queueing one |
+| `res.submit(form)` | `form.at(res.url).fetch()` |
+
+That last change is the whole migration for a handler:
+
+```dart
+// before — a closure with a side effect, needing an engine behind it
+res.parse(format.html).find('a').attrs('href')
+   .collect(.foreach((h) => res.follow(h)));
+
+// after — a pure function from a reply to the next requests
+res.parse(format.html).find('a').attrs('href').transform(.map(res.follow))
+```
+
+`Fetch` loses its type parameter. It carried one — the *item* type a handler
+emitted — used in exactly one place: a back-pointer to the engine that owned
+it. Thirteen public types were generic for that reason and none is now.
+
+#### One `Crawl`, and a `Flow<Reply>`
+
+`Engine`, `EngineEvents`, `QueueAccess`, `CrawlBuilder`, `CrawlEvents`,
+`Router`, `Handler`, `Snapshot`, `Stats` (the class), `Failure` and
+`Deduplicator` are **deleted**. What replaces them is one type with twenty
+members, where `CrawlBuilder` alone had 45:
+
+```dart
+final crawl = net.crawl([Fetch(seed)], (res) => switch (res.fetch.tag) {
+  null     => res.parse(format.html).find('.artist a').attrs('href')
+                 .transform(.map((h) => res.follow(h, tag: 'artist'))),
+  'artist' => res.parse(format.html).find('.album a').attrs('href')
+                 .transform(.map((h) => res.follow(h, tag: 'album'))),
+  _        => const Sequence<Fetch>([]),
+})
+  ..using(Fetcher(headers: headers, timeout: 10.s, retries: 3).call)
+  ..concurrent(4)
+  ..delay(250.ms, perhost: true)
+  ..samehost()
+  ..obey('ExampleBot/1.0');
+
+final tracks = await crawl.flow
+    .transform(.where((r) => r.fetch.tag == 'album'))
+    .transform(.flat.map(_tracks))
+    .collect(.list());
+
+log.ok('${crawl.stats.fetched} pages, ${crawl.stats.failed} failed');
+```
+
+`Router`, `route()` and `tag()` go because Dart's `switch` is a better router
+and the compiler checks it. `next` is a pure function — reply in, requests out
+— so it is testable with a `Reply.text` fixture and no crawl at all, which the
+old `Handler` was not.
+
+The terminals are `flow`, `settle` and `run()`:
+
+| Was | Is |
+| :--- | :--- |
+| `on.start(fn)` | the line before the terminal |
+| `on.progress(fn)` | `.transform(.tap(fn))` |
+| `on.item(fn)` | the flow itself |
+| `on.done(fn)` | the line after; `crawl.stats` |
+| `on.error(fn)` | `.settle`, giving `Done`/`Broke` |
+| `crawl.items()` | `.collect(.list())` |
+| `crawl.gather(map)` | `.transform(.flat.map(map)).collect(.seq())` |
+| `crawl.run(handler)` | `run()`, no argument |
+| `crawl.save(path)` | `io.async.lines.write(path, …)` |
+
+`Stats` is a record — `(fetched, failed, skipped, bytes, elapsed, reason)` —
+and its JSON encoding moved to `Crawl.position`, which is the only thing that
+needed it. `retried` left it entirely: retrying happens inside the client, so
+the number is `Fetcher.retried`.
+
+`crawl.engine()` is gone — `Crawl` *is* the engine — and the five entry points
+are one, because a seed is a `Fetch` and a `Fetch` takes any URL the library
+can answer:
+
+```dart
+net.crawl([Fetch(url)], next);             // was crawl(uri)
+net.crawl(urls.map(Fetch.new), next);      // was .all(uris)
+net.crawl(fetches, next);                  // was .seed(fetches)
+net.crawl([Fetch(coerce(markup))], next);  // was .html(markup)
+net.crawl([Fetch(Uri.file(path))], next);  // was .file(path)
+```
+
+#### One knob, one place
+
+Ten knobs were declared at four levels — builder, engine, downloader, client —
+**thirty-two declarations in all**, and `CrawlBuilder.engine()` copied exactly
+five of them onto a caller-supplied downloader and dropped `cap`, `cache`,
+`timeout`, `headers` and `accept` without a word. A crawl now owns the knobs a
+*scheduler* owns; everything about the client is set once on the `Fetcher`:
+
+```dart
+crawl.headers(m)  →  Fetcher(headers: m)
+crawl.timeout(d)  →  Fetcher(timeout: d)
+crawl.retry(n)    →  Fetcher(retries: n)
+crawl.cap(n)      →  Fetcher(cap: n)
+crawl.cache(dir)  →  Fetcher(cache: HttpCache(dir))
+crawl.base(dir)   →  Fetcher(base: dir)
+```
+
+`crawl.robots(bool, agent)` → `crawl.obey([agent])`, per Rule 4's *the flag is
+not the lookup*. `crawl.perhost(b)` → the `perhost:` argument on `delay`.
+`crawl.deduplicator(d)` → `crawl.restore(position)`.
+
+**Nothing is fetched until something collects.** The workers start in the
+flow's `onListen` and stop when it is cancelled, so `crawl.flow` built and
+thrown away costs nothing, and `crawl.flow.collect(.first())` fetches one page.
+
+#### `net` stops parsing
+
+Its library doc opens with *this domain does not parse anything*, and then
+declared three parsers.
+
+- `net.robots(text)` → **`format.robots`**, a `Codec<Robots>` with `parse`,
+  `read`, `write` and `format`.
+- `net.sitemap(text)` → **`format.sitemap`**, a `Codec<Sequence<Uri>>`.
+- `Form` and `Markup.form` → **`format.html`**. Reading a `<form>` is HTML;
+  sending one is `net`, which keeps the `Sending` extension — the same shape
+  as `io` declaring `Sequence.dump` on a `collection` type. `HttpMethod` moved
+  to `lib/src/` for the reason `Codec` is there.
+
+`Robots.load` and `Sitemap.load` are deleted. `.obey()` reads `/robots.txt`
+through the crawl's own `Send`, so politeness works against a fixture
+transport — which `Robots.load` could not do, because it reached for the
+shared client itself. A sitemap index is a crawl, and gets depth, dedupe and
+politeness for free:
+
+```dart
+final urls = await net
+    .crawl([Fetch(index)], (r) => r.parse(format.sitemap).transform(.map(Fetch.new)))
+    .depth(8)
+    .flow.transform(.map((r) => r.url)).collect(.list());
+```
+
+Nine lines against ninety, and it cannot loop.
+
+`TextBody`, `BytesBody`, `FormBody` and `JsonBody` are **private**.
+`Body.text`, `.bytes`, `.form` and `.json` are the whole surface.
+`PathResolver` is private, having existed only so `Downloader` could share it.
+`net.use(client)` **stays**, documented as the one exception it is.
+
+---
+
+### `format` — the domain doc made true
+
+- **`FileCodec.write`**, on all five codecs: `format.yaml.write(path, value)`
+  is the inverse of `read`, atomic, one line over `format`. `io.dump` stays as
+  JSON's shorthand over it, and the four `dump`s share one encoder now.
+- **`format.zip.read` → `format.zip.extract`.** It took two arguments and
+  returned `List<int>?` — *take one entry out* — sharing a name with five
+  siblings' *parse the document at this path*. `unpack` and `extract` are the
+  pair.
+- **`Entry` → `ArchiveEntry`.** It landed at top level beside
+  `FileSystemEntry`, two types describing "a thing with a name and a size that
+  might be a directory", with nothing in the shorter name to say which.
+- **`format.html.query` deleted.** It was `parse` plus a flag configuring
+  `$xpath`, which is not on the default surface — so nothing there could
+  observe the difference. `lib/html.dart`'s `$xpath` sets the flag itself.
+- The domain doc now names `format.zip` as the one member that is **not** a
+  codec, and says why: an archive is a container of files, not a document with
+  a shape.
+
+---
+
+### `io` — the read and write halves spelled the same
+
+- **`io.save` → `io.bytes.write`.** `write` and `save` are the same English
+  word for this, and nothing said which took bytes. The rule for the whole
+  domain: **the name says the shape, and `.write` is how it goes back.**
+  `io.bytes` and `io.chunks` became namespace objects with a `call`, which is
+  the shape `io.lines` and `io.append` already had.
+- **`io.chunks.write` added**, on both accessors, so copying a file larger
+  than memory is one line.
+- **`io.has(path, match: true)` deleted.** It was provably `io.similar(path)`
+  for every input — `similar` opens by calling `has`.
+- **`FileSystemEntry.stem`, `.ext` and `.dirname` deleted.** They were
+  `io.path.stem(e.path)` and friends on the same input. `name` stays,
+  redefined as the one-liner; `isfile`/`isdir`/`islink`/`empty` stay because
+  they read the `kind` the snapshot already holds.
+- **`io.dir.cwd` and `io.dir.home` → `io.path.cwd` and `io.path.home`.** They
+  read nothing, which is `io.path`'s whole membership rule — and the move
+  empties `io.dir`'s mirror exception list.
+- `Appender`'s lifecycle is named in the domain doc: it is the one type in
+  `io` that owns a resource.
+
+---
+
+### `collection` — one rule for three containers
+
+- **`flow.pipe` → `flow.transform`, `flow.pour` → `flow.collect`.** The four
+  operation types 5.5.0 introduced were the point and they survive; the
+  *member* rename was forced by a spelling, which Rule 4 calls a workaround.
+  Shape with `transform`, finish with `collect`, on a `Sequence`, a
+  `Dictionary` or a `Flow`. The `await` in front of a flow's terminal says
+  which container you are on more reliably than a member name.
+- **`Dictionary.count` and `.empty` kept, redefined** as `collect(.count())`
+  and `collect(.empty())` — one implementation, and `if (dict.empty)` keeps
+  reading like English. This is the one place in the sweep where the
+  recommendation went against the smaller surface, deliberately.
+- The docs now say why there is no `Flow.seq`: `await flow.collect(.seq())`
+  costs waiting for all of it, and the `await` is the only honest way to say
+  so.
+
+---
+
+### `system` — 76 colour names with three duplicate spellings and four holes → 77 with neither
+
+- **`Ansi.strip` and `Ansi.width` deleted.** `s.plain` and `s.width` are the
+  names. `plain` is not short for `strip`; it is a different word for it.
+- **`Ansi.detect()` private.** `refresh()` is the door.
+- **Four missing colours added** — `black`, `bgblack`, `bgmagenta`, `bgwhite`
+  — and a regression test pins the mirror: every `static const String` code on
+  `Ansi` has a member of the same name on the extension. The extension is the
+  surface; the constants are the mechanism.
+- **`system.exit` deleted, and `system.shutdown` returns `Never`.** They
+  differed in whether the `system.on.exit` hooks ran, which is the whole point
+  of `system.on` existing, and neither name said so. A script that genuinely
+  means to skip its own cleanup imports `dart:io`.
+- `system.windows`, `.macos` and `.linux` are one line off `system.os`
+  instead of a second independent reading of the platform.
+- `writer.dart`'s seven public types are four files: `table.dart`,
+  `progress.dart`, `spinner.dart`, `writer.dart`. No name moved.
+
+---
+
+### `concurrent` — the one domain that got bigger
+
+9 public types → 10.
+
+- **`Waiting`**, implemented by `Semaphore` and `Limiter`. Two axes — *how
+  many at once*, *how often* — wore the same three member names with no type
+  saying so. `Fetcher(limiter:)` takes it, so a client paced by a semaphore
+  compiles where only a rate did.
+- **`PoolFailure` carries `Sequence<Settled<R>>` and `Sequence<I>`.** There
+  were three shapes for *a task threw*: `PoolFailure.failures`,
+  `PoolEvents.error`'s triple, and `Broke`. One outcome type across all three
+  terminals now. `e.failures` → `e.outcomes.transform(.where.type<Broke<R>>())`.
+- **`concurrent.pool(size:, delay:)` added**, so all three types have a
+  factory.
+- `Pool.flow`'s doc pointed at `Flow.run`, deleted two releases ago;
+  `settle`'s positional-alignment guarantee is written down. A regression test
+  now sweeps `lib/` for doc references to members that do not exist.
+
+---
+
+### `cli` — the mirror pinned
+
+- **`CliAccessor.switches` added.** It was on `Cli` only, so a script outside
+  a handler wrote `cli.parsed.switches` — a third spelling of a member that
+  has one. A regression test now asserts every `Cli` member appears on
+  `CliAccessor`, with `parse` and `parsed` the two named exceptions.
+- **`Cli.strict()` and `CliAccessor.strict()` deleted.** One word, two failure
+  modes: `strict()` threw an `ArgumentError` out of wherever it was called,
+  while `run(strict: true)` turned the same condition into a usage block and
+  exit code 64. `unknown()` is the question; the caller picks the consequence.
+- `cli.dart`'s 1,379 lines are five files, as `part`s. No name moved.
+- `Opt`'s four readers get the paragraph that stops a reader reaching for
+  `call() != def`.
+
+---
+
+### `util` — a proofread
+
+- **`util.hash.encode`/`decode` → `util.text.base64`/`unbase64`.** Base64 is
+  reversible, in a namespace of four one-way digests, named after the
+  direction rather than the operation — so `util.hash.encode(secret)` read as
+  exactly the thing it is not.
+- **`util.text.strip` → `util.text.tags`.** *Remove something*, where the
+  something is a whole markup language. Both docs now name the other: this is
+  a regex and costs nothing, `format.html.parse(t).text` builds a document and
+  is right about entities and malformed nesting.
+
+---
+
+### Migration
+
+| 5.5.0 | 6.0.0 |
+| :--- | :--- |
+| `net.crawl<T>(uri)` | `net.crawl([Fetch(uri)], next)` |
+| `.downloader(MapDownloader(m))` | `.using(fixture)` — a closure |
+| `.run(handler)` / `.items(handler)` | `next`, plus `flow`/`settle`/`run()` |
+| `.gather(map)` | `.flow.transform(.flat.map(map)).collect(.seq())` |
+| `res.emit(x)` | what the caller does with the reply |
+| `res.follow(h)` | `res.follow(h)` — now **returns** a `Fetch` |
+| `res.submit(form)` | `form.at(res.url).fetch()` |
+| `res.tag` / `.meta` / `.depth` / `.requested` | `res.fetch.*` |
+| `crawl.headers/timeout/retry/cap/cache/base` | `Fetcher(...)` + `.using` |
+| `crawl.robots(true, a)` | `crawl.obey(a)` |
+| `net.robots(t)` / `net.sitemap(t)` | `format.robots.parse(t)` / `format.sitemap.parse(t)` |
+| `flow.pipe(...)` / `flow.pour(...)` | `flow.transform(...)` / `flow.collect(...)` |
+| `io.save(p, d)` | `io.bytes.write(p, d)` |
+| `io.has(p, match: true)` | `io.similar(p)` |
+| `e.stem` / `e.ext` / `e.dirname` | `io.path.stem(e.path)`, … |
+| `io.dir.cwd` / `io.dir.home` | `io.path.cwd` / `io.path.home` |
+| `format.zip.read(a, n)` | `format.zip.extract(a, n)` |
+| `Entry` | `ArchiveEntry` |
+| `format.html.query(t)` | `format.html.parse(t)` |
+| `Ansi.strip(s)` / `Ansi.width(s)` | `s.plain` / `s.width` |
+| `system.exit(n)` | `system.shutdown(n)` — and it runs your hooks |
+| `cli.strict()` | `if (cli.unknown().isNotEmpty) { cli.help(); await system.shutdown(64); }` |
+| `util.hash.encode(x)` / `decode(s)` | `util.text.base64(x)` / `unbase64(s)` |
+| `util.text.strip(t)` | `util.text.tags(t)` |
+| `e.failures` | `e.outcomes.transform(.where.type<Broke<R>>())` |
+
 ## 5.5.0
 
 Two vocabularies, and the filesystem overhauled. An API review read the

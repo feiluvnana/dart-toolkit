@@ -54,9 +54,9 @@ class ConsoleReader {
   /// ```dart
   /// // setup: Future<void> fetch(Uri u) async {}
   /// await system.console.reader.lines
-  ///     .pipe(.map((line) => line.trim()))
-  ///     .pipe(.map.async((line) => fetch(line.url), size: 4))
-  ///     .pour(.count());
+  ///     .transform(.map((line) => line.trim()))
+  ///     .transform(.map.async((line) => fetch(line.url), size: 4))
+  ///     .collect(.count());
   /// ```
   ///
   /// Shares one stdin subscription with [line] and the prompts, so a tool can
@@ -81,7 +81,7 @@ class ConsoleReader {
   /// ```dart
   /// final urls =
   ///     system.console.reader.piped
-  ///         ? await system.console.reader.lines.pour(.list())
+  ///         ? await system.console.reader.lines.collect(.list())
   ///         : [await system.console.reader.ask('URL')];
   /// ```
   bool get piped {

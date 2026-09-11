@@ -2,8 +2,8 @@
 //
 //   dart run example/form.dart
 //
-// `res.form(...)` collects a form's controls the way a browser would submit
-// them: the hidden inputs, the CSRF token, the ticked boxes, the option
+// `markup.form(...)` collects a form's controls the way a browser would
+// submit them: the hidden inputs, the CSRF token, the ticked boxes, the option
 // already selected. A script overrides the two fields it knows about and
 // sends the rest back untouched — which is what carries a token through a
 // login without hand-copying it.
@@ -28,7 +28,9 @@ void main() async {
   log.info('Sends:  ${form.method.wire} ${form.action}');
 
   form.fill({'user': 'alice', 'pass': 'hunter2'});
-  log.ok('Body:   ${utf8.decode(form.body!.bytes())}');
+  // `fetch` is the request the form would send — method, URL and body, all
+  // read off the form. `send` is that request, sent.
+  log.ok('Body:   ${utf8.decode(form.fetch().body!.bytes())}');
 
   // A GET form puts its fields in the query instead of a body.
   final search = markup.form('form.search')!.at(page.url)
@@ -43,30 +45,34 @@ void main() async {
   //   final home = await res.parse(format.html).form('#login')!
   //       .at(res.url)
   //       .fill({'user': user, 'pass': pass})
-  //       .send(client: session);
+  //       .send(using: session);
 
   // ---------------------------------------------------------- inside a crawl
-  // `res.submit(form)` schedules the submission on the engine instead, so the
-  // answer reaches a tagged handler like any other page: the method, the URL
-  // and the body all come from the form.
+  // A crawl's `next` returns requests, so submitting a form is returning the
+  // one the form describes. The tag tells the next turn which stage it is on,
+  // and the compiler checks the switch is exhaustive.
   final greeting = await net
-      .crawl<String>('https://shop.test/login'.url)
-      .downloader(MapDownloader<String>(_fixtures))
-      .route(RegExp(r'/login$'), (res) {
-        // No `at` here: `submit` hands the form the page's own URL.
-        final login = res.parse(format.html).form('#login')!.fill({
-          'user': 'alice',
-          'pass': 'hunter2',
-        });
-        res.submit(login, tag: 'home');
-      })
-      .tag(
-        'home',
-        (res) => res.emit(res.parse(format.html).find('.welcome').text),
+      .crawl(
+        [Fetch('https://shop.test/login'.url)],
+        (res) => switch (res.fetch.tag) {
+          null => [
+            res
+                .parse(format.html)
+                .form('#login')!
+                .at(res.url)
+                .fill({'user': 'alice', 'pass': 'hunter2'})
+                .fetch(tag: 'home'),
+          ].seq,
+          _ => const Sequence<Fetch>([]),
+        },
       )
-      .items();
+      .using(_fixture)
+      .flow
+      .transform(.where((res) => res.fetch.tag == 'home'))
+      .transform(.map((res) => res.parse(format.html).find('.welcome').text))
+      .collect(.single());
 
-  log.ok('Signed in: ${greeting.collect(.single())}');
+  log.ok('Signed in: $greeting');
 }
 
 const _login = '''
@@ -84,8 +90,14 @@ const _login = '''
 <form class="search" action="/search"><input name="q"></form>
 ''';
 
-// `MapDownloader` keys take an optional method, so the GET that serves the
-// form and the POST that answers it are two different fixtures.
+// A transport is a function, so the fixture keys on whatever the test cares
+// about — here the method as well as the path, since the GET that serves the
+// form and the POST that answers it are the same URL.
+Future<Reply> _fixture(Fetch fetch) async {
+  final body = _fixtures['${fetch.method.wire} ${fetch.url.path}'];
+  return Reply.text(body ?? '', fetch: fetch, status: body == null ? 404 : 200);
+}
+
 const _fixtures = <String, String>{
   'GET /login': _login,
   'POST /session': '<p class="welcome">Welcome back, alice.</p>',
