@@ -134,12 +134,12 @@ void main() {
               null =>
                 res
                     .parse(format.html)
-                    .find('a')
+                    .$('a')
                     .elements
                     .transform(
                       .map(
                         (a) => res.follow(
-                          a.attr('href')!,
+                          a.attributes['href']!,
                           tag: 'song',
                           meta: [_name(a.text)],
                         ),
@@ -198,7 +198,7 @@ void main() {
           .all(
             '.variant',
             (row) => (
-              name: row.find('.name').text,
+              name: row.$('.name').text,
               sku: row.attr('data-sku'),
               qty: row.pick(Field.text('.qty').when(int.tryParse)),
             ),
@@ -212,28 +212,32 @@ void main() {
       expect(variants.collect(.last())!.qty, 7);
     });
 
-    test('one builds a record for a section a page has at most one of', () {
+    test('all plus first builds the record a page has at most one of', () {
       final seller = page
           .parse(format.html)
-          .one(
+          .all(
             '.seller',
             (s) => (
-              name: s.find('.name').text,
+              name: s.$('.name').text,
               rating: s.pick(Field.text('.rating').when(util.text.number)),
             ),
-          );
+          )
+          .collect(.first());
 
       expect(seller?.name, 'Acme');
       expect(seller?.rating, 4.5);
       expect(
-        page.parse(format.html).one('.missing', (s) => s.find('x').text),
+        page
+            .parse(format.html)
+            .all('.missing', (s) => s.$('x').text)
+            .collect(.first()),
         isNull,
       );
     });
 
     test('a whole page reads as one nested record', () {
       final product = (
-        title: page.parse(format.html).find('h1').text,
+        title: page.parse(format.html).$('h1').text,
         price: page
             .parse(format.html)
             .pick(Field.text('.price').when(util.text.number)),
@@ -241,8 +245,7 @@ void main() {
             .parse(format.html)
             .all(
               '.variant',
-              (row) =>
-                  (name: row.find('.name').text, sku: row.attr('data-sku')),
+              (row) => (name: row.$('.name').text, sku: row.attr('data-sku')),
             ),
       );
 
@@ -275,7 +278,8 @@ void main() {
       expect(
         flat
             .parse(format.html)
-            .one('.variant', (row) => row.find('.name').text)
+            .all('.variant', (row) => row.$('.name').text)
+            .collect(.first())
             ?.trim(),
         'S',
       );
@@ -293,7 +297,7 @@ void main() {
       // matched every `.name` on the page instead of the row's own.
       final names = page
           .parse(format.html)
-          .all('.variant', (row) => row.find('.name').texts.collect(.list()));
+          .all('.variant', (row) => row.$('.name').texts.collect(.list()));
       expect(names.collect(.list()), [
         ['Small'],
         ['Large'],
@@ -415,9 +419,7 @@ void main() {
       // buried inside a closure. There is no `T` any more: the crawl produces
       // replies, and what a script does with them is its own business.
       final titles = await crawl().flow
-          .transform(
-            .flat.map((res) => res.parse(format.html).find('h1').texts),
-          )
+          .transform(.flat.map((res) => res.parse(format.html).$('h1').texts))
           .collect(.seq());
 
       expect(titles, isA<Sequence<String>>());
@@ -430,7 +432,7 @@ void main() {
             .flat.map(
               (res) => res
                   .parse(format.html)
-                  .find('h1')
+                  .$('h1')
                   .texts
                   .transform(.where((t) => t.length > 3)),
             ),
@@ -446,7 +448,7 @@ void main() {
             .map(
               (res) => (
                 url: res.url.path,
-                titles: res.parse(format.html).find('h1').count,
+                titles: res.parse(format.html).$('h1').count,
               ),
             ),
           )

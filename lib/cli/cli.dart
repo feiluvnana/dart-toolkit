@@ -144,13 +144,4 @@ class CliAccessor with _Spec {
     Map<String, String>? options,
   }) =>
       _parsed.usage(syntax: syntax, desc: desc, flags: flags, options: options);
-
-  /// Prints a usage block to stdout. See [Cli.help].
-  void help({
-    String? syntax,
-    String? desc,
-    Map<String, String>? flags,
-    Map<String, String>? options,
-  }) =>
-      _parsed.help(syntax: syntax, desc: desc, flags: flags, options: options);
 }

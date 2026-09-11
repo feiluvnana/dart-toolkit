@@ -21,12 +21,12 @@
 /// ```dart
 /// final crawl = net.crawl(
 ///   [Fetch('https://example.test'.url)],
-///   (res) => res.parse(format.html).find('a').attrs('href')
+///   (res) => res.parse(format.html).$('a').attrs('href')
 ///       .transform(.map(res.follow)),
 /// )..concurrent(4)..samehost()..depth(3)..limit(500);
 ///
 /// final titles = await crawl.flow
-///     .transform(.map((r) => r.parse(format.html).find('h1').text))
+///     .transform(.map((r) => r.parse(format.html).$('h1').text))
 ///     .collect(.list());
 /// ```
 library;
@@ -112,9 +112,9 @@ final class Crawl {
   ///
   /// ```dart no-compile
   /// net.crawl([Fetch(seed)], (res) => switch (res.fetch.tag) {
-  ///   null     => res.parse(format.html).find('.artist a').attrs('href')
+  ///   null     => res.parse(format.html).$('.artist a').attrs('href')
   ///                  .transform(.map((h) => res.follow(h, tag: 'artist'))),
-  ///   'artist' => res.parse(format.html).find('.album a').attrs('href')
+  ///   'artist' => res.parse(format.html).$('.album a').attrs('href')
   ///                  .transform(.map((h) => res.follow(h, tag: 'album'))),
   ///   _        => const Sequence<Fetch>([]),
   /// });
@@ -188,7 +188,7 @@ final class Crawl {
   ///    .using(Fetcher(
   ///      headers: {'User-Agent': 'ExampleBot/1.0'},
   ///      timeout: 10.s,
-  ///      retries: 3,
+  ///      retries: 3,   // a crawl over the default client does not retry
   ///      cap: util.size.parse('5MiB')!,
   ///      cache: HttpCache('.cache'),
   ///      limiter: concurrent.rate(10, per: 1.s),

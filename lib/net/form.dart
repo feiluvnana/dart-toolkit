@@ -59,7 +59,7 @@ extension Sending on Form {
     if (multipart) {
       throw UnsupportedError(
         'This form is multipart/form-data, which Form does not encode. Build '
-        'the request yourself with net.http.post(url, body: ...).',
+        'the request yourself with net.http.send(.post, url, body: ...).',
       );
     }
     return Fetch(
@@ -83,7 +83,7 @@ extension Sending on Form {
   ///
   /// ```dart
   /// final session = Fetcher(session: true);
-  /// final login = await session.get('https://example.test/login'.url);
+  /// final login = await session.send(.get, 'https://example.test/login'.url);
   /// final home = await login.parse(format.html).form('#login')!
   ///     .at(login.url)
   ///     .fill({'user': 'me', 'pass': 'secret'})

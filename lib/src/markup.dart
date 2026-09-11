@@ -19,8 +19,8 @@
 /// await format.html.read('page.html');    // a file
 /// ```
 ///
-/// Navigation comes in two spellings, for the two questions: [Markup.find]
-/// runs a jQuery selector across the tree, and [Markup.xpath] runs an XPath
+/// Navigation comes in two spellings, for the two questions: [Markup.$]
+/// runs a CSS selector across the tree, and [Markup.$xpath] runs an XPath
 /// query. [Field] is the typed form of a single read, for the values a
 /// scraper wants out with their types intact.
 library;
@@ -49,13 +49,13 @@ const TextAccessor _text = TextAccessor();
 /// ```dart
 /// final page = res.parse(format.html);
 ///
-/// page.find('h1').text;                          // String
-/// page.find('a').attrs('href');                 // Sequence<String>
-/// page.xpath('//table//td[2]').texts;            // Sequence<String>
+/// page.$('h1').text;                     // String
+/// page.$('a').attrs('href');             // Sequence<String>
+/// page.$xpath('//table//td[2]').texts;   // Sequence<String>
 /// page.all('.product', (row) => (
-///   name: row.find('.name').text,
+///   name: row.$('.name').text,
 ///   price: row.pick(Field.text('.price').when(util.text.number)),
-/// ));                                   // Sequence<({String name, num? price})>
+/// ));                                    // Sequence<({String name, num? price})>
 /// ```
 class Markup {
   final List<Element> _elements;
@@ -66,12 +66,6 @@ class Markup {
   Markup([List<Element>? elements, bool isXPath = false, Document? document])
     : _elements = elements ?? const [],
       _isXPath = isXPath,
-      _document = document;
-
-  /// Creates a [Markup] for XPath evaluation.
-  Markup.xpath([List<Element>? elements, Document? document])
-    : _elements = elements ?? const [],
-      _isXPath = true,
       _document = document;
 
   /// Roots a cursor on an already-parsed [document].
@@ -106,7 +100,9 @@ class Markup {
   /// element-level work has one spelling:
   ///
   /// ```dart
-  /// page.find('tr').elements.transform(.where((e) => e.classes.contains('live'))).collect(.count());
+  /// page.$('tr').elements
+  ///     .transform(.where((e) => e.classes.contains('live')))
+  ///     .collect(.count());
   /// ```
   Sequence<Element> get elements => Sequence(_elements);
 
@@ -118,12 +114,11 @@ class Markup {
   /// No complement: `!q.empty` already says the other thing.
   bool get empty => _elements.isEmpty;
 
-  /// The element at [index], or `null` when out of range.
-  Element? operator [](int index) =>
-      index >= 0 && index < _elements.length ? _elements[index] : null;
-
   /// Runs an XPath query across the current elements or document.
-  Markup xpath(String query) {
+  ///
+  /// The XPath twin of [$], named for the language it speaks. It was `xpath`
+  /// through 6.0.0; see [$] for why both took the jQuery spelling.
+  Markup $xpath(String query) {
     final elements = <Element>[];
     final seen = <Element>{};
     final nodes = _document != null ? [_document] : _elements;
@@ -140,30 +135,6 @@ class Markup {
       } catch (_) {}
     }
     return Markup(elements, true, _document);
-  }
-
-  /// All string values (attributes or text nodes) matching the XPath [query].
-  Sequence<String> xpathvalues(String query) {
-    final results = <String>[];
-    final nodes = _document != null ? [_document] : _elements;
-    for (final node in nodes) {
-      try {
-        final xp = HtmlXPath.node(node);
-        final result = xp.query(query);
-        if (result.attrs.isNotEmpty) {
-          for (final a in result.attrs) {
-            if (a != null && a.isNotEmpty) results.add(a);
-          }
-        } else {
-          for (final xNode in result.nodes) {
-            final domNode = xNode.node;
-            final t = domNode.text?.trim();
-            if (t != null && t.isNotEmpty) results.add(t);
-          }
-        }
-      } catch (_) {}
-    }
-    return Sequence(results);
   }
 
   /// A single-element result at [index]; empty when out of range.
@@ -184,7 +155,7 @@ class Markup {
   /// chained form mean what it reads as:
   ///
   /// ```dart
-  /// page.find('.row').find('.name').texts;   // names inside rows, only
+  /// page.$('.row').$('.name').texts;   // names inside rows, only
   /// ```
   ///
   /// The result is scoped even when this cursor was not, so the second call
@@ -194,10 +165,17 @@ class Markup {
   /// release that made them one search kept both names for it. Worse, which
   /// selector *language* the callable spoke depended on hidden state: on a
   /// cursor from `format.html.query` it ran the string as XPath instead, so
-  /// nothing at the call site said which of the two it was. [find] and
-  /// [xpath] each say so in their names. The jQuery spelling survives where
-  /// Rule 5 already put it, behind `package:dart_toolkit/html.dart`.
-  Markup find(String selector) =>
+  /// nothing at the call site said which of the two it was. This one is CSS
+  /// and [$xpath] is XPath, and the two names say which.
+  ///
+  /// It was `find` through 6.0.0, with `$` an opt-in extension on `String`
+  /// beside it. jQuery's `$` is what Rule 1 means by a subject arriving with
+  /// its own vocabulary, and a *method* named `$` puts nothing in a script's
+  /// global scope — which was the whole objection to the spelling. So the
+  /// subject's own name won, and `find` went rather than standing beside it.
+  /// The top-level `$(markup, selector)` is still opt-in, because that one
+  /// really is a global.
+  Markup $(String selector) =>
       Markup(JQuery.select(_document ?? _elements, selector), false);
 
   /// One [R] per match of [selector], each built from its own scope.
@@ -208,7 +186,7 @@ class Markup {
   ///
   /// ```dart
   /// final variants = page.all('.variant', (row) => (
-  ///   name: row.find('.name').text,
+  ///   name: row.$('.name').text,
   ///   sku: row.attr('data-sku'),
   ///   price: row.pick(Field.text('.price').when(util.text.number)),
   /// ));
@@ -218,23 +196,8 @@ class Markup {
   /// Where `extract` hands back `Map<String, Object?>` and leaves every value
   /// to be cast, this keeps the type of each field all the way out.
   Sequence<R> all<R>(String selector, R Function(Markup row) build) => Sequence(
-    find(selector)._elements.map((element) => build(Markup([element], false))),
+    $(selector)._elements.map((element) => build(Markup([element], false))),
   );
-
-  /// The first match of [selector], built from its own scope, or `null`.
-  ///
-  /// The singular of [all], for a section a page has at most one of.
-  ///
-  /// ```dart
-  /// final seller = page.one('.seller', (s) => (
-  ///   name: s.find('.name').text,
-  ///   rating: s.pick(Field.text('.rating').when(util.text.number)),
-  /// ));
-  /// ```
-  R? one<R>(String selector, R Function(Markup row) build) {
-    final match = find(selector)._elements.firstOrNull;
-    return match == null ? null : build(Markup([match], false));
-  }
 
   /// Reads a typed [field] from the first element of this set.
   ///
@@ -265,7 +228,7 @@ class Markup {
   /// Every value comes back `Object?`. [pick] is the typed form, one field at
   /// a time.
   Map<String, Object?> extract(Map<String, Object?> schema) =>
-      Field.readAll(_root, schema);
+      Field._readAll(_root, schema);
 
   // The document's root when there is one, so a scoped read sees the same page
   // an unscoped one does. `_elements.first` is the body's *first child* on a
@@ -282,9 +245,6 @@ class Markup {
 
   /// The elements that themselves match [selector].
   Markup matching(String selector) => filter((e) => _matches(e, selector));
-
-  /// The elements that do *not* match [selector].
-  Markup not(String selector) => filter((e) => !_matches(e, selector));
 
   /// The direct children of the current set, optionally matching [selector].
   Markup children([String? selector]) => _collect(
@@ -369,21 +329,15 @@ class Markup {
   /// The inner HTML of the first match, or `''` when empty.
   String get html => _elements.isEmpty ? '' : _elements.first.innerHtml;
 
-  /// Inner HTML of every match.
-  Sequence<String> get htmls => Sequence(_elements.map((e) => e.innerHtml));
-
   /// The outer HTML of the first match, or `''` when empty.
   String get outer => _elements.isEmpty ? '' : _elements.first.outerHtml;
-
-  /// Outer HTML of every match.
-  Sequence<String> get outers => Sequence(_elements.map((e) => e.outerHtml));
 
   /// Attribute [name] on the first match, or `null`.
   ///
   /// `href` and `src` had members of their own through 4.0.0 — four of them
   /// with the plurals, and two more on the [Element] extension. Each was this
   /// call with a literal, which Rule 5 calls a bug in the API rather than a
-  /// convenience: `page.find('a').attr('href')`. They also multiplied without
+  /// convenience: `page.$('a').attr('href')`. They also multiplied without
   /// covering anything, since the next attribute a script wants is
   /// `data-id` and there was never going to be a member for that.
   String? attr(String name) => _elements.firstOrNull?.attributes[name];
@@ -399,74 +353,11 @@ class Markup {
 
   /// The value of the first match, as a browser would submit it, or `null`.
   ///
-  /// What that means depends on the control, which is the point:
-  ///
-  /// - `<textarea>` — its text.
-  /// - `<select>` — the selected `<option>`'s value, or its text when the
-  ///   option carries no `value`. With nothing marked `selected`, the first
-  ///   option, the way a browser does.
-  /// - a checkbox or radio — its value only when `checked`, and `null`
-  ///   otherwise, so an unticked box reads as absent rather than as its label.
-  /// - anything else — its `value` attribute.
-  String? get value =>
-      _elements.isEmpty ? null : _elementValue(_elements.first);
-
-  /// The value of every match that has one, on the same terms as [value].
-  Sequence<String> get values =>
-      Sequence(_elements.map(_elementValue).whereType<String>());
-
-  static String? _elementValue(Element element) {
-    switch (element.localName) {
-      case 'textarea':
-        return element.text;
-      case 'select':
-        final options = element.querySelectorAll('option');
-        if (options.isEmpty) return null;
-        final chosen = options.firstWhere(
-          (option) => option.attributes.containsKey('selected'),
-          // A select with nothing marked selected submits its first option.
-          orElse: () => options.first,
-        );
-        return chosen.attributes['value'] ?? chosen.text;
-      default:
-        final type = element.attributes['type']?.toLowerCase();
-        if (type == 'checkbox' || type == 'radio') {
-          if (!element.attributes.containsKey('checked')) return null;
-          // An unlabelled ticked box submits 'on', as HTML says it does.
-          return element.attributes['value'] ?? 'on';
-        }
-        return element.attributes['value'];
-    }
-  }
-
-  /// The `data-[key]` attribute of the first match, falling back to [key].
-  String? data(String key) {
-    final element = _elements.firstOrNull;
-    if (element == null) return null;
-    return element.attributes['data-$key'] ?? element.attributes[key];
-  }
-
-  /// Every `data-*` attribute of the first match, keyed without the prefix.
-  Map<String, String> get dataset {
-    final element = _elements.firstOrNull;
-    if (element == null) return const {};
-    return {
-      for (final entry in element.attributes.entries)
-        if (entry.key.toString().startsWith('data-'))
-          entry.key.toString().substring(5): entry.value,
-    };
-  }
-
-  /// Whether any match carries [className].
-  bool has(String className) =>
-      _elements.any((e) => e.classes.contains(className));
-
-  /// Calls [fn] for each match with its index.
-  void each(void Function(Element element, int index) fn) {
-    for (var i = 0; i < _elements.length; i++) {
-      fn(_elements[i], i);
-    }
-  }
+  /// Defined as [QuerySelectorOnElement.value] on the first match, which is
+  /// where the rules a control follows are written down. The plural was
+  /// `values` through 6.1.0 and is `elements` with a `map`, like every other
+  /// per-element read.
+  String? get value => _elements.firstOrNull?.value;
 
   /// The text of every match split on `<br>` and newlines, markup stripped
   /// and entities decoded.
@@ -533,17 +424,47 @@ class Markup {
 /// `$xpath` stood here too through 4.0.0, on the *default* surface, which
 /// contradicted both `lib/html.dart`'s own doc comment and Rule 5's "the one
 /// survivor is an opt-in import". They were also `query` under a second name:
-/// with the callable shorthand gone, [Markup.xpath] answers on any cursor, so
+/// with the callable shorthand gone, [Markup.\$xpath] answers on any cursor, so
 /// there was nothing an XPath-flavoured one did differently.
 extension QuerySelectorOnElement on Element {
   /// This element's value as a browser would submit it, or `null`.
   ///
-  /// Reads a `<textarea>`, a `<select>` and a checkbox the way
-  /// [Markup.value] does, because it is the same answer.
-  String? get value => query.value;
-
-  /// Attribute [name], or `null`.
-  String? attr(String name) => attributes[name];
+  /// What that means depends on the control, which is the point:
+  ///
+  /// - `<textarea>` — its text.
+  /// - `<select>` — the selected `<option>`'s value, or its text when the
+  ///   option carries no `value`. With nothing marked `selected`, the first
+  ///   option, the way a browser does.
+  /// - a checkbox or radio — its value only when `checked`, and `null`
+  ///   otherwise, so an unticked box reads as absent rather than as its label.
+  /// - anything else — its `value` attribute.
+  ///
+  /// This is the element-level rule and [Markup.value] is the cursor reading
+  /// it off the first match. It was the other way round through 6.1.0, with
+  /// the rule on the cursor and this a second spelling of it.
+  String? get value {
+    switch (localName) {
+      case 'textarea':
+        return text;
+      case 'select':
+        final options = querySelectorAll('option');
+        if (options.isEmpty) return null;
+        final chosen = options.firstWhere(
+          (option) => option.attributes.containsKey('selected'),
+          // A select with nothing marked selected submits its first option.
+          orElse: () => options.first,
+        );
+        return chosen.attributes['value'] ?? chosen.text;
+      default:
+        final type = attributes['type']?.toLowerCase();
+        if (type == 'checkbox' || type == 'radio') {
+          if (!attributes.containsKey('checked')) return null;
+          // An unlabelled ticked box submits 'on', as HTML says it does.
+          return attributes['value'] ?? 'on';
+        }
+        return attributes['value'];
+    }
+  }
 
   /// This element as a single-match [Markup].
   Markup get query => Markup([this]);
@@ -629,7 +550,7 @@ sealed class Field<T> {
   ///
   /// This is what [Markup.extract] runs, and what [NestField] and [ListField]
   /// use for their nested schemas.
-  static Map<String, Object?> readAll(
+  static Map<String, Object?> _readAll(
     Element? root,
     Map<String, Object?> schema,
   ) {
@@ -767,7 +688,7 @@ final class NestField extends Field<Map<String, Object?>> {
   const NestField(this.schema);
 
   @override
-  Map<String, Object?> read(Element root) => Field.readAll(root, schema);
+  Map<String, Object?> read(Element root) => Field._readAll(root, schema);
 }
 
 /// One object per match. See [Field.list].
@@ -783,7 +704,8 @@ final class ListField extends Field<List<Map<String, Object?>>> {
 
   @override
   List<Map<String, Object?>> read(Element root) => [
-    for (final el in root.querySelectorAll(selector)) Field.readAll(el, schema),
+    for (final el in root.querySelectorAll(selector))
+      Field._readAll(el, schema),
   ];
 }
 

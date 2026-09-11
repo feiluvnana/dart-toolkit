@@ -19,9 +19,11 @@ import 'package:crypto/crypto.dart' as crypto;
 /// Entry point for hashing, reachable as `util.hash`.
 ///
 /// ```dart
-/// util.hash.sha('https://example.com/a');   // 64 hex characters
-/// util.hash.short('https://example.com/a'); // the first 8 of them
+/// util.hash.sha('https://example.com/a');               // 64 hex characters
+/// util.hash.sha('https://example.com/a').substring(0, 8); // a cache key
 /// ```
+///
+/// `short` was that second line as a member through 6.1.0.
 class HashAccessor {
   /// Creates the accessor. Prefer the shared `util.hash` instance.
   const HashAccessor();
@@ -33,10 +35,6 @@ class HashAccessor {
 
   /// The MD5 digest of [input], as 32 lowercase hex characters.
   String md5(Object input) => crypto.md5.convert(_bytes(input)).toString();
-
-  /// The first [length] characters of [sha], for cache keys and filenames.
-  String short(Object input, [int length = 8]) =>
-      sha(input).substring(0, length.clamp(1, 64));
 
   /// An HMAC-SHA256 of [input] under [key], as hex — for signing a request.
   String sign(Object input, Object key) =>

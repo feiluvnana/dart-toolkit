@@ -348,20 +348,20 @@ void main() {
 
     test('run reports a command line it cannot understand', () async {
       final typo = Cli(['buidl'])..handle('build', (_) => 0, desc: 'Build');
-      expect(await typo.run(syntax: 'tool'), equals(Cli.usageExit));
+      expect(await typo.run(syntax: 'tool'), equals(Cli.misuse));
 
       final unknownFlag = Cli(['build', '--verbse'])
         ..handle('build', (_) => 0, desc: 'Build');
       expect(
         await unknownFlag.run(syntax: 'tool', strict: true),
-        equals(Cli.usageExit),
+        equals(Cli.misuse),
       );
 
       final missing = Cli(['build']);
       missing
           .handle('build', (_) => 0, desc: 'Build')
           .option('url', required: true);
-      expect(await missing.run(syntax: 'tool'), equals(Cli.usageExit));
+      expect(await missing.run(syntax: 'tool'), equals(Cli.misuse));
     });
 
     test('run answers --help and --version without running anything', () async {
@@ -502,32 +502,32 @@ void main() {
       </div>
     ''';
 
-    test('Markup href, hrefs, src, srcs, lines, has', () {
-      final q = html.$();
-      expect(q.has('active'), isTrue);
-      expect(q.has('missing'), isFalse);
+    test('Markup href, hrefs, src, srcs, lines', () {
+      final q = format.html.parse(html);
+      expect(q.matching('.active').empty, isFalse);
+      expect(q.matching('.missing').empty, isTrue);
 
       expect(
-        q.find('a').matching(r'[href$=".mp3"]').attr('href'),
+        q.$('a').matching(r'[href$=".mp3"]').attr('href'),
         equals('/track/1.mp3'),
       );
       expect(
-        q.find('a').matching(r'[href$=".flac"]').attr('href'),
+        q.$('a').matching(r'[href$=".flac"]').attr('href'),
         equals('https://example.com/2.flac'),
       );
-      expect(q.find('a').attrs('href').collect(.count()), equals(2));
+      expect(q.$('a').attrs('href').collect(.count()), equals(2));
 
-      expect(q.find('img').attr('src'), equals('album.jpg'));
-      expect(q.find('img').attrs('src').collect(.count()), equals(1));
+      expect(q.$('img').attr('src'), equals('album.jpg'));
+      expect(q.$('img').attrs('src').collect(.count()), equals(1));
 
-      final lines = q.find('.disc_lines').lines;
+      final lines = q.$('.disc_lines').lines;
       expect(
         lines.collect(.list()),
         equals(['01. First Song', '02. Second Song', '03. Third Song']),
       );
 
-      expect(q.find('a').elements.collect(.count()), equals(2));
-      expect(q.find('a').matching(r'[href$=".mp3"]').count, equals(1));
+      expect(q.$('a').elements.collect(.count()), equals(2));
+      expect(q.$('a').matching(r'[href$=".mp3"]').count, equals(1));
     });
 
     test('Reply provides Markup via \$ and \$xpath', () {
@@ -539,15 +539,12 @@ void main() {
       );
 
       expect(
-        res.parse(format.html).find('a').attr('href'),
+        res.parse(format.html).$('a').attr('href'),
         equals('/track/1.mp3'),
       );
+      expect(res.parse(format.html).$('img').attr('src'), equals('album.jpg'));
       expect(
-        res.parse(format.html).find('img').attr('src'),
-        equals('album.jpg'),
-      );
-      expect(
-        res.parse(format.html).xpath('//a').attr('href'),
+        res.parse(format.html).$xpath('//a').attr('href'),
         equals('/track/1.mp3'),
       );
     });
@@ -588,7 +585,6 @@ void main() {
   group('Console namespaces', () {
     test('writer renders a table without printing it', () {
       final table = Table(headers: ['Col 1', 'Col 2'])..add(['Val 1', 'Val 2']);
-      expect(table.length, equals(1));
       expect(table.render(), contains('Col 1'));
       expect(table.render(), contains('Val 1'));
     });

@@ -390,21 +390,21 @@ void main() {
         </form>
       ''';
       // It used to read the select's own value attribute, which is never there.
-      expect($(html).find('select').value, 'm');
+      expect($(html).$('select').value, 'm');
     });
 
     test('a select with nothing selected reports its first option', () {
       const html =
           '<form><select><option value="a">A</option>'
           '<option value="b">B</option></select></form>';
-      expect($(html).find('select').value, 'a');
+      expect($(html).$('select').value, 'a');
     });
 
     test('an option with no value reports its text', () {
       const html =
           '<form><select><option selected>Plain</option>'
           '</select></form>';
-      expect($(html).find('select').value, 'Plain');
+      expect($(html).$('select').value, 'Plain');
     });
 
     test('a checkbox reports its value only when checked', () {
@@ -414,15 +414,18 @@ void main() {
           <input type="checkbox" name="b" value="no">
         </form>
       ''';
-      final boxes = $(html).find('input');
+      final boxes = $(html).$('input');
       expect(boxes.value, 'yes');
       // An unticked box submits nothing, so it reads as absent.
-      expect(boxes.values.collect(.list()), ['yes']);
+      expect(
+        boxes.elements.transform(.map.nonnull((e) => e.value)).collect(.list()),
+        ['yes'],
+      );
     });
 
     test('a ticked box with no value reports on, as HTML says', () {
       expect(
-        $('<form><input type="checkbox" checked></form>').find('input').value,
+        $('<form><input type="checkbox" checked></form>').$('input').value,
         'on',
       );
     });
@@ -434,15 +437,22 @@ void main() {
           <input type="radio" name="r" value="2" checked>
         </form>
       ''';
-      expect($(html).find('input').values.collect(.list()), ['2']);
+      expect(
+        $(html)
+            .$('input')
+            .elements
+            .transform(.map.nonnull((e) => e.value))
+            .collect(.list()),
+        ['2'],
+      );
     });
 
     test('a textarea and a plain input are unchanged', () {
       expect(
-        $('<form><textarea>hello</textarea></form>').find('textarea').value,
+        $('<form><textarea>hello</textarea></form>').$('textarea').value,
         'hello',
       );
-      expect($('<form><input value="x"></form>').find('input').value, 'x');
+      expect($('<form><input value="x"></form>').$('input').value, 'x');
     });
 
     test('lines decode entities', () {

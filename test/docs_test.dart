@@ -86,7 +86,7 @@ Reply get res => Reply(
 Reply get reply => res;
 Markup get page => format.html.parse(_html);
 Markup get markup => page;
-Markup get card => page.find('.row');
+Markup get card => page.$('.row');
 Markup get row => card;
 Json get doc => format.json.parse('{"data":{"items":[{"sku":"a"}],"total":1}}');
 Json get config => doc;
@@ -206,7 +206,7 @@ Future<int> build(Cli cli) async => 0;
 Future<void> commit(List<String> paths) async {}
 Future<void> enrich(Row row) async {}
 Future<Object?> worker(String input) async => input;
-Future<Reply> fetch(Uri u) => Fetcher().get(u);
+Future<Reply> fetch(Uri u) => Fetcher().send(.get, u);
 Future<void> rebuild([String? out, int concurrency = 1]) async {}
 Sequence<Fetch> next(Reply res) => const Sequence<Fetch>([]);
 Object? heavyComputation(Object? input) => input;

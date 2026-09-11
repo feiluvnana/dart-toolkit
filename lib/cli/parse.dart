@@ -20,8 +20,11 @@ class Cli with _Spec {
   /// The exit code for a command line that could not be understood.
   ///
   /// The conventional `EX_USAGE`: an unknown switch, a missing required
-  /// option, a value outside `allowed`, or an unrecognised command.
-  static const int usageExit = 64;
+  /// option, a value outside `allowed`, or an unrecognised command. It was
+  /// `usageExit` through 6.1.0, which Rule 4 does not allow and no splitting
+  /// fixes, because the compound is this library's own rather than Dart's —
+  /// so it takes the one word that says what happened.
+  static const int misuse = 64;
 
   /// The raw arguments this instance parsed.
   final List<String> raw;
@@ -377,8 +380,8 @@ class Cli with _Spec {
   /// ```dart
   /// // setup: final cli = Cli(const []);
   /// if (cli.unknown().isNotEmpty) {
-  ///   cli.help();
-  ///   await system.shutdown(64);
+  ///   print(cli.usage());
+  ///   await system.shutdown(Cli.misuse);
   /// }
   /// ```
   List<String> unknown() {
@@ -432,7 +435,7 @@ class Cli with _Spec {
   ///
   /// The handler's return value becomes the exit code: `null` and `true` mean
   /// success, `false` means failure, and an `int` is used as given. A command
-  /// line that could not be understood returns [usageExit] after printing the
+  /// line that could not be understood returns [misuse] after printing the
   /// reason and the usage block. [body] runs when no subcommand matches, which
   /// is how a script with no commands at all still gets `--help` and
   /// validation.
@@ -555,13 +558,13 @@ class Cli with _Spec {
     }
   }
 
-  /// Prints [reason] and [usage] to stderr and returns [usageExit].
+  /// Prints [reason] and [usage] to stderr and returns [misuse].
   int _reject(String reason, String usage) {
     stderr
       ..writeln('error: $reason')
       ..writeln()
       ..writeln(usage);
-    return usageExit;
+    return misuse;
   }
 
   /// The deepest chain of registered commands the positionals spell out.
@@ -629,22 +632,6 @@ class Cli with _Spec {
     flags: flags,
     options: options,
   );
-
-  /// Prints [usage] to stdout.
-  ///
-  /// Rule 5's carve-out: one line, defined as the general form, and what a
-  /// script actually writes. [usage] is the one to reach for when the block
-  /// is going somewhere that is not stdout.
-  void help({
-    String? syntax,
-    String? desc,
-    Map<String, String>? flags,
-    Map<String, String>? options,
-  }) {
-    stdout.writeln(
-      usage(syntax: syntax, desc: desc, flags: flags, options: options),
-    );
-  }
 }
 
 /// One subcommand in a command tree, created by [Cli.handle].

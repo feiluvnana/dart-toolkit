@@ -34,7 +34,10 @@ void main() async {
   if (!bad.ok) log.warn('ls exited ${bad.code}: ${util.text.clean(bad.err)}');
 
   // ---------------------------------------------------------------- archives
-  io.write(io.path.join(dir, 'notes.txt'), 'built ${util.time.iso()}');
+  io.write(
+    io.path.join(dir, 'notes.txt'),
+    'built ${DateTime.now().toUtc().toIso8601String()}',
+  );
   io.dump(io.path.join(dir, 'data.json'), {'ok': true});
 
   // The format comes from the destination's extension: .zip, .tar.gz, .tgz,
@@ -44,7 +47,7 @@ void main() async {
   final entries = await format.zip.list(archive);
   log.ok(
     'Packed ${entries.collect(.count())} entries, '
-    '${util.size.format(io.size(archive)!)}.',
+    '${util.size.format(io.stat(archive)!.size)}.',
   );
 
   // A single entry, read without unpacking the rest. Entry names are relative

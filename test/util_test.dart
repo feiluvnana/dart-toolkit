@@ -274,12 +274,18 @@ void main() {
 
     test('between and betweens', () {
       const body = 'a "id":"one" b "id":"two" c';
-      expect(util.text.between(body, '"id":"', '"'), equals('one'));
+      expect(
+        util.text.betweens(body, '"id":"', '"').collect(.first()),
+        equals('one'),
+      );
       expect(
         util.text.betweens(body, '"id":"', '"').collect(.list()),
         equals(['one', 'two']),
       );
-      expect(util.text.between(body, 'missing', '"'), isNull);
+      expect(
+        util.text.betweens(body, 'missing', '"').collect(.first()),
+        isNull,
+      );
     });
   });
 
@@ -288,7 +294,7 @@ void main() {
       expect(util.hash.sha('abc').length, equals(64));
       expect(util.hash.md5('abc').length, equals(32));
       expect(
-        util.hash.short('abc'),
+        util.hash.sha('abc').substring(0, 8),
         equals(util.hash.sha('abc').substring(0, 8)),
       );
       expect(util.hash.sha('abc'), equals(util.hash.sha(utf8.encode('abc'))));
@@ -331,7 +337,7 @@ void main() {
       final when = DateTime(2024, 3, 9, 10, 15, 30);
       expect(util.time.parse(util.time.stamp(when)), equals(when));
       expect(
-        util.time.parse(util.time.iso(when))?.toUtc(),
+        util.time.parse(when.toUtc().toIso8601String())?.toUtc(),
         equals(when.toUtc()),
       );
     });
@@ -400,10 +406,13 @@ void main() {
     test('pick, some and shuffle stay inside the pool', () {
       final pool = List.generate(10, (i) => i);
       expect(pool, contains(util.rand.pick(pool)));
-      final three = util.rand.some(pool, 3);
+      final three = util.rand.shuffle(pool).transform(.take.first(3));
       expect(three.collect(.list()), hasLength(3));
       expect(three.collect(.set()), hasLength(3));
-      expect(util.rand.some(pool, 99).collect(.list()), hasLength(10));
+      expect(
+        util.rand.shuffle(pool).transform(.take.first(99)).collect(.list()),
+        hasLength(10),
+      );
       final shuffled = util.rand.shuffle(pool);
       expect(shuffled.transform(.sort()).collect(.list()), equals(pool));
       expect(() => util.rand.pick(<int>[]), throwsStateError);

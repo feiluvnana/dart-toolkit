@@ -10,7 +10,7 @@
 /// and reading them is [Reply.parse] plus a codec from `format`:
 ///
 /// ```dart
-/// res.parse(format.html).find('h1').text;
+/// res.parse(format.html).$('h1').text;
 /// res.parse(format.json).at('data.items');
 /// res.parse(format.robots).allowed(url);
 /// res.parse(format.sitemap);
@@ -73,8 +73,8 @@ const NetAccessor net = NetAccessor();
 /// [Crawl.using], which needs no singleton at all.
 ///
 /// ```dart
-/// final res = await net.http.get('https://example.com'.url);
-/// res.parse(format.html).find('h2.title').texts.collect(.foreach(print));
+/// final res = await net.http.send(.get, 'https://example.com'.url);
+/// res.parse(format.html).$('h2.title').texts.collect(.foreach(print));
 /// ```
 class NetAccessor {
   /// Creates the accessor. Prefer the shared [net] instance.

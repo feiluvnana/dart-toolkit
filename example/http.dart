@@ -33,14 +33,15 @@ void main() async {
 
   try {
     // A response knows how to query its own HTML.
-    final page = await client.get('$origin/'.url);
+    final page = await client.send(.get, '$origin/'.url);
     log.ok(
-      'GET ${page.status} ${page.type} — ${page.parse(format.html).find('h1').text}',
+      'GET ${page.status} ${page.type} — ${page.parse(format.html).$('h1').text}',
     );
 
     // Bodies are sealed, so the encoding is explicit at the call site:
     // Body.json, Body.form, Body.text, Body.bytes.
-    final echo = await client.post(
+    final echo = await client.send(
+      .post,
       '$origin/echo'.url,
       body: const Body.json({'id': 1, 'name': 'keyboard'}),
     );
@@ -51,10 +52,10 @@ void main() async {
     log.info('Fallback on junk: ${junk.raw ?? const {}}');
 
     // Cookies set anywhere in the session are sent everywhere they apply.
-    await client.get('$origin/signin'.url);
-    final who = await client.get('$origin/whoami'.url);
+    await client.send(.get, '$origin/signin'.url);
+    final who = await client.send(.get, '$origin/whoami'.url);
     log.ok(
-      'Session: ${who.body.trim()} (jar holds ${client.jar?.length} cookies)',
+      'Session: ${who.body.trim()} (jar holds ${client.jar?.cookies.collect(.count())} cookies)',
     );
 
     // A streamed download, written atomically through a `.part` file so an
@@ -65,20 +66,20 @@ void main() async {
     final file = await client.download(
       '$origin/blob'.url,
       'output/blob.bin',
-      onProgress: (got, total) {
+      onprogress: (got, total) {
         if (total > 0) bar.update(got, total: total);
       },
     );
     // A bar draws nothing off a terminal, so the summary is a log line.
     bar.done();
     log.ok(
-      'Downloaded ${util.size.format(io.size(file.path)!)} to ${file.path}',
+      'Downloaded ${util.size.format(io.stat(file.path)!.size)} to ${file.path}',
     );
 
     // Many URLs at once, bounded, results in input order.
     final pages = await concurrent.run(
       ['$origin/', '$origin/whoami'],
-      (url) => client.get(url.url),
+      (url) => client.send(.get, url.url),
       size: 2,
     );
     log.ok(

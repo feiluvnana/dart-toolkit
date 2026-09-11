@@ -68,7 +68,7 @@ Sequence<Fetch> _next(Reply res) => switch (res.fetch.tag) {
   null =>
     res
         .parse(format.html)
-        .find('.artist a')
+        .$('.artist a')
         .elements
         .transform(
           .map(
@@ -85,7 +85,7 @@ Sequence<Fetch> _next(Reply res) => switch (res.fetch.tag) {
   'artist' =>
     res
         .parse(format.html)
-        .find('.album a')
+        .$('.album a')
         .elements
         .transform(
           .map(
@@ -115,14 +115,14 @@ Sequence<Track> _tracks(Reply res) {
       '';
   return res
       .parse(format.html)
-      .find('.track')
+      .$('.track')
       .elements
       .transform(
         .map(
           (row) => (
             artist: by,
             album: on,
-            title: util.text.clean(row.query.find('.title').text),
+            title: util.text.clean(row.query.$('.title').text),
           ),
         ),
       )

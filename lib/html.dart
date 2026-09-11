@@ -10,9 +10,12 @@
 ///
 /// const markup = '<table><tr><td>one</td></tr></table>';
 /// final rows = $(markup, 'tr');       // parse and query in one call
-/// final cells = markup.$('td');       // the same, from the string
-
+/// final cells = $(markup).$('td');    // the same, spelled in two steps
 /// ```
+///
+/// `$` is the selector *method* on a cursor too — `page.$('td')`, on the
+/// default surface, because a method named `$` is not a global. This import
+/// adds only the two top-level functions, which are.
 library;
 
-export 'format/html.dart' show $, $xpath, QuerySelectorOnHtmlString;
+export 'format/html.dart' show $, $xpath;

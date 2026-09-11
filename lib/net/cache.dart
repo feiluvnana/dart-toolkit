@@ -135,7 +135,7 @@ class CacheEntry {
 ///
 /// ```dart
 /// final client = Fetcher(cache: HttpCache('.cache'));
-/// final res = await client.get('https://example.com'.url);
+/// final res = await client.send(.get, 'https://example.com'.url);
 /// if (res.cached) print('served from disk');
 /// ```
 ///

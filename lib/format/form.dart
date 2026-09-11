@@ -29,7 +29,7 @@ import '../src/method.dart';
 /// difference between a login that works and one that does not:
 ///
 /// ```dart
-/// final login = await net.http.get('https://example.com/login'.url);
+/// final login = await net.http.send(.get, 'https://example.com/login'.url);
 /// final sent = await login.parse(format.html).form('#login')!
 ///     .at(login.url)
 ///     .fill({'user': 'me', 'pass': secret})
@@ -90,7 +90,7 @@ final class Form {
   /// from, so the response hands that over here:
   ///
   /// ```dart
-  /// final res = await net.http.get(url);
+  /// final res = await net.http.send(.get, url);
   /// await res.parse(format.html).form('#login')!
   ///     .at(res.url)
   ///     .fill({'user': user, 'pass': pass})
@@ -233,12 +233,12 @@ extension FormOnMarkup on Markup {
   /// submits to a relative `action` needs [Form.at] before it is sent:
   ///
   /// ```dart
-  /// final res = await net.http.get(url);
+  /// final res = await net.http.send(.get, url);
   /// final search = res.parse(format.html).form('form.search');
   /// if (search != null) await search.at(res.url).fill({'q': 'widgets'}).send();
   /// ```
   Form? form([String selector = 'form']) {
-    for (final element in find(selector).elements.collect(.list())) {
+    for (final element in $(selector).elements.collect(.list())) {
       if (element.localName?.toLowerCase() == 'form') return Form(element);
       final inner = element.querySelector('form');
       if (inner != null) return Form(inner);

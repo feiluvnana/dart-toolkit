@@ -255,11 +255,11 @@ void main() {
       final client = Fetcher(cache: HttpCache(dir));
       addTearDown(client.close);
 
-      final first = await client.get('${origin.root}/page'.url);
+      final first = await client.send(.get, '${origin.root}/page'.url);
       expect(first.body, '<h1>Original</h1>');
       expect(first.cached, isFalse);
 
-      final second = await client.get('${origin.root}/page'.url);
+      final second = await client.send(.get, '${origin.root}/page'.url);
       expect(second.body, '<h1>Original</h1>');
       expect(second.cached, isTrue);
       // Served once, asked about twice.
@@ -281,8 +281,8 @@ void main() {
       final client = Fetcher(cache: HttpCache(dir));
       addTearDown(client.close);
 
-      await client.get('${origin.root}/page'.url);
-      final second = await client.get('${origin.root}/page'.url);
+      await client.send(.get, '${origin.root}/page'.url);
+      final second = await client.send(.get, '${origin.root}/page'.url);
 
       expect(second.cached, isTrue);
       expect(second.body, 'fresh');
@@ -309,9 +309,12 @@ void main() {
       final client = Fetcher(cache: HttpCache(dir));
       addTearDown(client.close);
 
-      expect((await client.get('${origin.root}/p'.url)).body, 'version 1');
+      expect(
+        (await client.send(.get, '${origin.root}/p'.url)).body,
+        'version 1',
+      );
       version = 2;
-      final second = await client.get('${origin.root}/p'.url);
+      final second = await client.send(.get, '${origin.root}/p'.url);
 
       expect(second.body, 'version 2');
       expect(second.cached, isFalse);
@@ -332,8 +335,16 @@ void main() {
       final client = Fetcher(cache: HttpCache(dir));
       addTearDown(client.close);
 
-      await client.post('${origin.root}/submit'.url, body: Body.text('a'));
-      await client.post('${origin.root}/submit'.url, body: Body.text('a'));
+      await client.send(
+        .post,
+        '${origin.root}/submit'.url,
+        body: Body.text('a'),
+      );
+      await client.send(
+        .post,
+        '${origin.root}/submit'.url,
+        body: Body.text('a'),
+      );
 
       expect(origin.served, ['POST', 'POST']);
     });
@@ -354,7 +365,7 @@ void main() {
       final client = Fetcher(cache: cache);
       addTearDown(client.close);
 
-      await client.get('${origin.root}/p'.url);
+      await client.send(.get, '${origin.root}/p'.url);
       expect(await cache.read('${origin.root}/p'.url), isNull);
     });
   });
@@ -433,7 +444,7 @@ void main() {
       addTearDown(client.close);
 
       await expectLater(
-        client.get('${origin.root}/big'.url),
+        client.send(.get, '${origin.root}/big'.url),
         throwsA(isA<FatalHttpException>()),
       );
     });
@@ -457,7 +468,7 @@ void main() {
         (res) => switch (res.fetch.tag) {
           null => [
             res.follow(
-              res.parse(format.html).find('form').attr('action')!,
+              res.parse(format.html).$('form').attr('action')!,
               method: HttpMethod.post,
               body: Body.form({'user': 'ada'}),
               tag: 'result',
@@ -469,9 +480,7 @@ void main() {
 
       final seen = await crawl.flow
           .transform(.where((res) => res.fetch.tag == 'result'))
-          .transform(
-            .map((res) => res.parse(format.html).find('.welcome').text),
-          )
+          .transform(.map((res) => res.parse(format.html).$('.welcome').text))
           .collect(.list());
 
       expect(seen, ['Signed in']);

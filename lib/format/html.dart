@@ -22,9 +22,14 @@
 /// import 'package:dart_toolkit/html.dart';
 ///
 /// // setup: const markup = '<li class="track">One</li>';
-/// $(markup).find('.track').texts;
-/// markup.$('.track').texts;
+/// $(markup, '.track').texts;
+/// $(markup).$('.track').texts;   // the same, spelled in two steps
 /// ```
+///
+/// `markup.$('.track')` was an extension on `String` beside this through
+/// 6.0.0 — a third door onto one operation, and the one that had to be an
+/// extension because `String` is not ours. `format.html.$(markup, selector)`
+/// is the member form and this is the global one; the extension went.
 library;
 
 import 'package:html/parser.dart' as html_parser;
@@ -42,7 +47,7 @@ import 'format.dart';
 /// ```dart
 /// final page = format.html.parse(res.body);
 /// final cached = await format.html.read('fixtures/product.html');
-/// io.write('out.html', format.html.format(page.find('.card')));
+/// io.write('out.html', format.html.format(page.$('.card')));
 /// ```
 ///
 /// `format.html.write(path, markup)` writes one to disk atomically; [format]
@@ -75,13 +80,37 @@ class HtmlAccessor with FileCodec<Markup, Markup> implements Codec<Markup> {
   Markup fragment(String text) =>
       Markup(html_parser.parseFragment(text).children.toList());
 
+  /// Parses [text] and runs the CSS [selector] over it, in one call.
+  ///
+  /// The two-step form is [parse] then [Markup.$]; this is the step a script
+  /// actually writes, and it carries the jQuery name because that is the name
+  /// for it:
+  ///
+  /// ```dart
+  /// // setup: const markup = '<li class="track">One</li>';
+  /// format.html.$(markup, '.track').texts;
+  /// ```
+  ///
+  /// [selector] is required, which is what keeps this from being a second
+  /// spelling of [parse]: one parses, the other parses *and* selects. The
+  /// opt-in top-level `$(markup, [selector])` takes it optionally, because
+  /// `$(html)` is idiomatic jQuery and that function is the jQuery door.
+  Markup $(String text, String selector) => parse(text).$(selector);
+
+  /// Parses [text] and runs the XPath [query] over it, in one call.
+  ///
+  /// The XPath twin of [$], on the same terms — see [Markup.$xpath].
+  Markup $xpath(String text, String query) =>
+      Markup.of(html_parser.parse(text), isXPath: true).$xpath(query);
+
   /// Renders [markup] back to HTML text.
   ///
   /// The outer HTML of every element in the cursor, concatenated — so a round
   /// trip through [parse] and back is the document, and a round trip through
-  /// `find` and back is the matches.
+  /// [Markup.$] and back is the matches.
   @override
-  String format(Markup markup) => markup.outers.collect(.join(''));
+  String format(Markup markup) =>
+      markup.elements.transform(.map((e) => e.outerHtml)).collect(.join(''));
 }
 
 /// Parses [markup] into a queryable [Markup] cursor.
@@ -92,12 +121,17 @@ class HtmlAccessor with FileCodec<Markup, Markup> implements Codec<Markup> {
 ///
 /// ```dart
 /// // setup: const markup = '<li class="track">One</li>';
-/// $(markup).find('.track').texts;
-/// markup.$('.track').texts;
+/// $(markup, '.track').texts;
+/// $(markup).$('.track').texts;   // the same, spelled in two steps
 /// ```
+///
+/// `markup.$('.track')` was an extension on `String` beside this through
+/// 6.0.0 — a third door onto one operation, and the one that had to be an
+/// extension because `String` is not ours. `format.html.$(markup, selector)`
+/// is the member form and this is the global one; the extension went.
 Markup $(String markup, [String? selector]) {
   final q = const HtmlAccessor().parse(markup);
-  return selector != null ? q.find(selector) : q;
+  return selector != null ? q.$(selector) : q;
 }
 
 /// Parses [markup] into a [Markup] cursor for XPath queries.
@@ -109,31 +143,5 @@ Markup $(String markup, [String? selector]) {
 /// it.
 Markup $xpath(String markup, [String? query]) {
   final q = Markup.of(html_parser.parse(markup), isXPath: true);
-  return query != null ? q.xpath(query) : q;
-}
-
-/// Query helpers on a raw HTML string.
-///
-/// Methods rather than getters, so `markup.$('.track')` is one call. They were
-/// getters through 4.0.0 and leaned on `Markup.call` for the selector, which
-/// meant the opt-in jQuery spelling was propped up by a second spelling of
-/// `find` sitting on the default surface. It carries its own now.
-extension QuerySelectorOnHtmlString on String {
-  /// jQuery selector accessor for this markup string.
-  ///
-  /// ```dart
-  /// // setup: const markup = '<li class="track">One</li>';
-  /// markup.$('.track').texts;   // parse, then find
-  /// markup.$().count;           // just parse
-  /// ```
-  Markup $([String? selector]) {
-    final cursor = const HtmlAccessor().parse(this);
-    return selector == null ? cursor : cursor.find(selector);
-  }
-
-  /// XPath selector accessor for this markup string.
-  Markup $xpath([String? query]) {
-    final cursor = Markup.of(html_parser.parse(this), isXPath: true);
-    return query == null ? cursor : cursor.xpath(query);
-  }
+  return query != null ? q.$xpath(query) : q;
 }

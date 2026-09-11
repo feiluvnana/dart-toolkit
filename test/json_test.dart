@@ -74,10 +74,10 @@ void main() {
         equals('Sword'),
       );
       expect(
-        doc.at('store.book').one((b) => b.text('title')),
+        doc.at('store.book').all((b) => b.text('title')).collect(.first()),
         equals('Sayings'),
       );
-      expect(doc.at('nope').one((b) => b.text('x')), isNull);
+      expect(doc.at('nope').all((b) => b.text('x')).collect(.first()), isNull);
       expect(
         doc.at('store.bicycle').all((b) => b.text('colour')).collect(.list()),
         equals(['red']),
@@ -85,9 +85,13 @@ void main() {
       );
     });
 
-    test('texts renders an array of scalars', () {
+    test('an array of scalars reads as text through all', () {
       expect(
-        format.json.parse('["a", 2, true, {"x":1}]').texts().collect(.list()),
+        format.json
+            .parse('["a", 2, true, {"x":1}]')
+            .all((item) => item.text())
+            .nonnull
+            .collect(.list()),
         equals(['a', '2', 'true']),
       );
     });
@@ -249,7 +253,9 @@ void main() {
           'hosts': ['a', 'b'],
         });
         expect(
-          (await format.json.read(path)).at('hosts').texts().collect(.list()),
+          (await format.json.read(
+            path,
+          )).at('hosts').all((h) => h.text()).nonnull.collect(.list()),
           equals(['a', 'b']),
         );
         expect((await format.json.read(path)).count, equals(1));

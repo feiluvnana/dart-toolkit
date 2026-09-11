@@ -105,7 +105,7 @@ void main(List<String> args) async {
   cli.parse(args);
 
   final log = system.console.logger;
-  final clock = util.time.clock();
+  final clock = Stopwatch()..start();
 
   // 2. Crawl and collect
   log.step(1, 3, 'Crawling headlines...');
@@ -116,7 +116,7 @@ void main(List<String> args) async {
 
   final titles = await crawl.flow
       .transform(.flat.map((res) =>
-          res.parse(format.html).find('.titleline > a').texts))
+          res.parse(format.html).$('.titleline > a').texts))
       .collect(.seq());
   log.ok('Found ${titles.collect(.count())} headlines.');
 
@@ -132,12 +132,12 @@ void main(List<String> args) async {
 
   // 4. Report and save atomically
   log.step(3, 3, 'Saving...');
-  system.console.writer.table(
-    Table(headers: ['Metric', 'Value'])..addAll([
+  system.console.writer.write(
+    (Table(headers: ['Metric', 'Value'])..add.all([
       ['Crawled', titles.collect(.count())],
       ['Processed', processed.collect(.count())],
       ['Elapsed', util.time.format(clock.elapsed)],
-    ]),
+    ])).render(),
   );
 
   final dest = io.path.join('output', 'summary.txt');
@@ -183,7 +183,7 @@ Two small extensions keep the strongly-typed signatures short at the call site.
 **URLs are `Uri`**, matching `package:http`:
 
 ```dart
-await net.http.get('https://example.com'.url);   // .url parses the string
+await net.http.send(.get, 'https://example.com'.url);  // .url parses the string
 ```
 
 **Delays are `Duration`**:
@@ -212,9 +212,10 @@ io.dump('out/data.json', {'count': 42});       // JSON, atomically
 io.append('out/run.log', 'done\n');        // the one write that is not atomic
 final data = await format.json.read('out/data.json');   // -> Json cursor
 
-io.exists(path);  io.isfile(path);  io.isdir(path);  io.islink(path);
-io.size(path);    io.empty(path);   io.stat(path);   // -> FileSystemEntry?
-io.has(path);                                        // exists and non-empty
+io.exists(path);                       // anything at all, of any kind
+io.stat(path);                         // -> FileSystemEntry?, one syscall
+io.stat(path)?.isfile;                 // and .isdir, .islink, .size, .empty
+io.has(path);                          // exists and non-empty
 io.hash(path, Algo.md5);
 
 io.lines(path);                            // a lazy Sequence<String>
@@ -303,22 +304,22 @@ See [lib/io/io.dart](lib/io/io.dart), [lib/io/csv.dart](lib/io/csv.dart), [lib/c
 ### `net.http` — requests, and the codec seam
 
 ```dart
-final res = await net.http.get('https://example.com'.url);
+final res = await net.http.send(.get, 'https://example.com'.url);
 
 // `net` fetches bytes; `format` reads them. One member, and it names no
 // format, which is what lets one crawl handle more than one.
 final page = res.parse(format.html);
-page.find('h1').text;                    // text of first h1
-page.find('a').attrs('href');                    // all hrefs
+page.$('h1').text;                    // text of first h1
+page.$('a').attrs('href');            // all hrefs
 
 res.parse(format.json).at('data.total').number();   // the other format
 
 // Typed extraction: a record, with every field's type intact.
 final item = (
-  title: page.find('h1.title').text,
+  title: page.$('h1.title').text,
   price: page.pick(Field.text('.price').when(util.text.number)),
   variants: page.all('.variant', (row) => (
-    name: row.find('.name').text,
+    name: row.$('.name').text,
     sku: row.attr('data-sku'),
   )),
 );
@@ -330,11 +331,38 @@ final loose = page.extract({'title': 'h1.title', 'links': ['a.link@href']});
 // Stateful session with cookies:
 final session = Fetcher(session: true);
 
-await net.http.post(url, body: const Body.json({'id': 1}));
+await net.http.send(.post, url, body: const Body.json({'id': 1}));
 await net.http.download(url, 'out/file.zip');
 ```
 
-Retries cover transport errors, 5xx and 429, honouring `Retry-After`. See [lib/net/http.dart](lib/net/http.dart).
+**A `Fetcher` does what it was asked to do and nothing more.** Retries,
+redirect-following, caching, cookies, rate limiting and a browser
+`User-Agent` are all parameters, and a parameter nobody filled in stays
+switched off:
+
+```dart
+// setup: final url = 'https://example.com'.url;
+await net.http.send(.get, url);       // one request, no retry; a 302 comes
+                                      // back as a 302
+
+final api = Fetcher(retries: 3, redirects: 5);
+await api.send(.get, url);            // retried, followed
+await api.send(.post, url, body: const Body.json({'id': 1}), retries: 0);
+
+final scraper = Fetcher.browser();    // the Chrome UA and HTML Accept header
+```
+
+**One verb, and the method is an argument.** `get`, `post`, `put`, `delete`,
+`patch` and `head` were six members through 6.1.0, each restating eight
+parameters to fill in one enum. A dot shorthand fills it in at the call site
+instead, so `send(.get, url)` is the whole vocabulary — and a tear-off is a
+lambda: `concurrent.run(urls, (u) => net.http.send(.get, u))`.
+
+Retries cover transport errors, 5xx and 429, honouring `Retry-After`; the
+count is the whole of the decision, so `retries: 3` retries a `POST` as
+readily as a `GET`. `redirects` is the hop budget: `0` hands back the `3xx`,
+and a chain longer than a positive limit throws. See
+[lib/net/http.dart](lib/net/http.dart).
 
 ### `net.crawl` — the frontier, and nothing else
 
@@ -344,7 +372,9 @@ single-stage crawl needs none of it and never did:
 
 ```dart
 // setup: final urls = <Uri>[];
-await urls.flow.transform(.map.async(net.http.get, size: 4)).collect(.list());
+await urls.flow
+    .transform(.map.async((u) => net.http.send(.get, u), size: 4))
+    .collect(.list());
 ```
 
 What `net.crawl` adds over that line is the frontier:
@@ -357,8 +387,9 @@ final crawl = net.crawl(
   // checks, where `Router`, `route()` and `tag()` were three public members
   // that it did not.
   (res) => switch (res.fetch.tag) {
-    null => res.parse(format.html).find('#songlist a').elements.transform(
-      .map((a) => res.follow(a.attr('href')!, tag: 'song', meta: [name(a.text)])),
+    null => res.parse(format.html).$('#songlist a').elements.transform(
+      .map((a) =>
+          res.follow(a.attributes['href']!, tag: 'song', meta: [name(a.text)])),
     ),
     _ => const Sequence<Fetch>([]),
   },
@@ -369,7 +400,7 @@ await crawl.flow
     .transform(.where((res) => res.fetch.tag == 'song'))
     .collect(.foreach((res) => print(
       '${res.fetch.meta.read(name)} -> '
-      '${res.parse(format.html).find('a').attr('href')}',
+      '${res.parse(format.html).$('a').attr('href')}',
     )));
 ```
 
@@ -449,7 +480,7 @@ and sends the rest back untouched:
 
 ```dart
 final session = Fetcher(session: true);
-final res = await session.get('https://example.com/login'.url);
+final res = await session.send(.get, 'https://example.com/login'.url);
 
 final home = await res.parse(format.html).form('#login')!
     .at(res.url)
@@ -471,13 +502,20 @@ returning it from `next` is how it gets submitted. See
 ```dart
 // setup: const markup = '<ul><li class="track" data-id="1">'
 // setup:     '<a href="/t/1">Track One</a></li></ul>';
-format.html.parse(markup).find('.track a').texts;
-res.parse(format.html).find('.title').at(0).text;
+format.html.$(markup, '.track a').texts;      // parse and select in one call
+format.html.parse(markup).$('.track a').texts;  // the same, in two steps
+res.parse(format.html).$('.title').at(0).text;
 
-// The jQuery spelling, opt-in via package:dart_toolkit/html.dart:
-$(markup).find('.track a').texts;
-markup.$('.track').attrs('data-id');
+// The top-level function, opt-in via package:dart_toolkit/html.dart:
+$(markup, '.track a').texts;
+$(markup).$('.track').attrs('data-id');
 ```
+
+`$` is the selector on a cursor and `$xpath` its XPath twin — the jQuery
+spelling all the way down, because a *method* named `$` puts nothing in a
+script's global scope. Only the two top-level functions do, and those stay
+behind the opt-in import. `find` and `xpath` were the method names through
+6.0.0, with `$` an extension on `String` beside them.
 
 See [lib/src/markup.dart](lib/src/markup.dart).
 
@@ -530,7 +568,7 @@ See [lib/cli/cli.dart](lib/cli/cli.dart).
 ```dart
 final bodies = await concurrent.run(
   urls,
-  (url) async => (await net.http.get(url)).parse(format.json),
+  (url) async => (await net.http.send(.get, url)).parse(format.json),
   size: 8,
 );
 ```
@@ -550,7 +588,7 @@ pubspec.text('version');                          // no cast
 pubspec.jsonpath(r'$..sdk').transform(.map.nonnull((n) => n.text()));
 
 format.json.parse(res.body).at('data.items').all((i) => i.text('sku'));
-format.html.parse(res.body).find('h1').text;      // the same three members
+format.html.parse(res.body).$('h1').text;      // the same three members
 format.csv.parse(res.body).column('sku');         // and CSV, since 5.2.0
 await format.yaml.write('out.yaml', {'name': 'x'});   // the inverse of read
 
@@ -616,7 +654,7 @@ await io.async.csv.records('big.csv')
 // bounded async work over a source too large to hold, which
 // `concurrent.run` cannot take
 await io.async.lines('urls.txt')
-    .transform(.map.async((line) => net.http.get(line.trim().url), size: 8))
+    .transform(.map.async((line) => net.http.send(.get, line.trim().url), size: 8))
     .collect(.count());
 ```
 
@@ -641,12 +679,12 @@ See [lib/collection/collection.dart](lib/collection/collection.dart).
 Nothing here touches the disk or the OS; that is what keeps it small.
 
 ```dart
-// setup: final clock = util.time.clock();
+// setup: final clock = Stopwatch()..start();
 util.time.format(clock.elapsed);      // '02:15'
 util.size.format(5242880);            // '5.0 MiB'
 util.text.slug('Hello, World!');      // 'hello-world'
 util.text.number(r'$1,234.50');       // 1234.5
-util.hash.short(url);                 // an 8-character cache key
+util.hash.sha(url).substring(0, 8);   // an 8-character cache key
 util.rand.jitter(1.s);                // 1.0s..1.25s
 ```
 
@@ -662,7 +700,7 @@ A transport is a function, so a fixture is a closure over a map:
 final titles = await (net.crawl([Fetch('https://site.test'.url)])
       ..using((f) async => Reply.text('<h1>Hi</h1>', fetch: f)))
     .flow
-    .transform(.map((res) => res.parse(format.html).find('h1').text))
+    .transform(.map((res) => res.parse(format.html).$('h1').text))
     .collect(.list());
 ```
 

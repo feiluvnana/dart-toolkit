@@ -286,23 +286,6 @@ class TextAccessor {
   /// Whether [text] holds nothing but whitespace, or is empty.
   bool blank(String text) => text.trim().isEmpty;
 
-  /// [text] between [start] and [end], or `null` when either is missing.
-  ///
-  /// The quickest way to pull a value out of markup no selector reaches, such
-  /// as a string embedded in a `<script>` block.
-  ///
-  /// ```dart
-  /// util.text.between(body, '"videoId":"', '"');
-  /// ```
-  String? between(String text, String start, String end) {
-    final from = text.indexOf(start);
-    if (from == -1) return null;
-    final head = from + start.length;
-    final to = text.indexOf(end, head);
-    if (to == -1) return null;
-    return text.substring(head, to);
-  }
-
   static final _slots = RegExp(r'\{(\w+)\}');
 
   /// [template] with every `{key}` replaced by [values].
@@ -330,6 +313,15 @@ class TextAccessor {
       .replaceAllMapped(_slots, (m) => values[m.group(1)]?.toString() ?? '');
 
   /// Every occurrence of the text between [start] and [end].
+  ///
+  /// The quickest way to pull a value out of markup no selector reaches, such
+  /// as a string embedded in a `<script>` block. The singular was `between`
+  /// through 6.1.0 — a second scan of the same string for the first hit,
+  /// which `.collect(.first())` already asks for:
+  ///
+  /// ```dart
+  /// util.text.betweens(body, '"videoId":"', '"').collect(.first());
+  /// ```
   Sequence<String> betweens(String text, String start, String end) {
     final results = <String>[];
     var cursor = 0;

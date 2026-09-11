@@ -22,7 +22,7 @@ import 'transformer.dart';
 /// ```dart
 /// final spend = rows.collect(.group.into((r) => r.host, .sum((r) => r.cost)));
 ///
-/// spend.get('a.com');                       // num?
+/// spend.get('a.com');                              // num?
 /// spend.pairs.transform(.sort.by((e) => e.$1));
 /// ```
 ///
@@ -180,11 +180,6 @@ final class Dictionary<K, V> {
   List<(K, V)> get _records => [
     for (final entry in _entries.entries) (entry.key, entry.value),
   ];
-
-  /// The keys and values swapped, the last entry to claim a value winning.
-  Dictionary<V, K> invert() => Dictionary({
-    for (final entry in _entries.entries) entry.value: entry.key,
-  });
 
   /// The entries as a map — a real snapshot, and the hand-off to anything
   /// typed `Map<K, V>`.

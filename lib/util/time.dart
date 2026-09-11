@@ -15,19 +15,22 @@ import 'dart:async';
 /// Entry point for time helpers, reachable as `util.time`.
 ///
 /// ```dart
-/// final clock = util.time.clock();
+/// final clock = Stopwatch()..start();
 /// await util.time.wait(250.ms);
 /// print(util.time.format(clock.elapsed)); // '00:00'
 /// ```
+///
+/// The stopwatch is `dart:core`'s, started at the call site. `util.time.clock`
+/// was this line under this domain's name through 6.1.0, and so were `iso`
+/// and `epoch` — `date.toUtc().toIso8601String()` and
+/// `date.millisecondsSinceEpoch`. A member that only renames a `dart:core`
+/// one-liner is the shape `system.exit` was deleted for.
 class TimeAccessor {
   /// Creates the accessor. Prefer the shared `util.time` instance.
   const TimeAccessor();
 
   /// Waits for [duration] without blocking the isolate.
   Future<void> wait(Duration duration) => Future<void>.delayed(duration);
-
-  /// A started [Stopwatch], for measuring elapsed work.
-  Stopwatch clock() => Stopwatch()..start();
 
   /// Formats [duration] as `mm:ss`, or `hh:mm:ss` past an hour.
   ///
@@ -64,10 +67,6 @@ class TimeAccessor {
         '_${pad(d.hour)}${pad(d.minute)}${pad(d.second)}';
   }
 
-  /// An ISO-8601 UTC timestamp for [date], or now.
-  String iso([DateTime? date]) =>
-      (date ?? DateTime.now()).toUtc().toIso8601String();
-
   /// A coarse human description of how long ago [past] was.
   ///
   /// Compares against [relativeTo], or now. Future instants report
@@ -85,10 +84,6 @@ class TimeAccessor {
       Duration(inDays: final d) => '${d ~/ 365}y ago',
     };
   }
-
-  /// Milliseconds since the Unix epoch for [date], or now.
-  int epoch([DateTime? date]) =>
-      (date ?? DateTime.now()).millisecondsSinceEpoch;
 
   // --- Reading, the other direction ---
 

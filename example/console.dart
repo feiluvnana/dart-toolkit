@@ -55,15 +55,17 @@ void main() async {
   // ----------------------------------------------------------------- results
   log.step(3, 3, 'Summary');
 
-  out.table(
-    Table(
-      headers: ['Target', 'Size', 'Result'],
-      alignments: [ColumnAlign.left, ColumnAlign.right, ColumnAlign.left],
-    )..addAll([
-      ['app', util.size.format(1481012), 'ok'],
-      ['worker', util.size.format(233472), 'ok'],
-      ['cli', util.size.format(98304), 'failed'],
-    ]),
+  out.write(
+    (Table(
+            headers: ['Target', 'Size', 'Result'],
+            alignments: [ColumnAlign.left, ColumnAlign.right, ColumnAlign.left],
+          )
+          ..add.all([
+            ['app', util.size.format(1481012), 'ok'],
+            ['worker', util.size.format(233472), 'ok'],
+            ['cli', util.size.format(98304), 'failed'],
+          ]))
+        .render(),
   );
 
   out.box(

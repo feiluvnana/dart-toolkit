@@ -1,6 +1,6 @@
 /// # jQuery Selector Engine (internal)
 ///
-/// The evaluator behind [Markup.find] and [Markup.matching]: everything CSS
+/// The evaluator behind [Markup.\$] and [Markup.matching]: everything CSS
 /// does, plus the jQuery pseudo-classes a scraper actually reaches for —
 /// `:contains`, `:has`, `:eq`, `:first`, `:last`, `:even`, `:odd`, `:gt`,
 /// `:lt`, `:header`, `:input` — and `[attr!=val]`.

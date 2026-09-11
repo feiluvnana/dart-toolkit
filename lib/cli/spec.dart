@@ -246,7 +246,7 @@ mixin _Spec {
   ///
   /// ```dart
   /// final timeout = cli.duration('timeout', def: 30.s);
-  /// await net.http.get(url, timeout: timeout());
+  /// await net.http.send(.get, url, timeout: timeout());
   /// ```
   Opt<Duration> duration(
     String name, {
@@ -300,7 +300,7 @@ mixin _Spec {
     _Decl(
       alias: _short(alias),
       desc: desc,
-      def: def == null ? null : const TimeAccessor().iso(def),
+      def: def?.toUtc().toIso8601String(),
       required: required,
       env: env,
       shape: _Shape.date,

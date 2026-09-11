@@ -85,7 +85,10 @@ Future<int> _build(Cli cli) async {
   log.debug('Token ${token().isEmpty ? 'missing' : 'present'}.');
 
   for (final target in targets) {
-    io.write(io.path.join(dest(), '$target.txt'), 'built ${util.time.iso()}');
+    io.write(
+      io.path.join(dest(), '$target.txt'),
+      'built ${DateTime.now().toUtc().toIso8601String()}',
+    );
   }
   log.ok('Built ${targets.join(', ')}.');
   return 0;

@@ -463,7 +463,10 @@ void main() {
         isA<Sequence<Uri>>(),
       );
       expect(util.rand.shuffle([1, 2]), isA<Sequence<int>>());
-      expect(util.rand.some([1, 2], 1), isA<Sequence<int>>());
+      expect(
+        util.rand.shuffle([1, 2]).transform(.take.first(1)),
+        isA<Sequence<int>>(),
+      );
       expect(
         format.robots.parse('User-agent: *').agents,
         isA<Sequence<String>>(),
@@ -472,16 +475,12 @@ void main() {
 
     test('a Markup holds a Sequence rather than being an Iterable', () {
       final page = $('<ul><li>a</li><li>b</li></ul>');
-      expect(page.find('li').count, equals(2));
-      expect(page.find('li').empty, isFalse);
-      expect(page.find('x').empty, isTrue);
-      expect(page.find('li').elements.collect(.count()), equals(2));
+      expect(page.$('li').count, equals(2));
+      expect(page.$('li').empty, isFalse);
+      expect(page.$('x').empty, isTrue);
+      expect(page.$('li').elements.collect(.count()), equals(2));
       expect(
-        page
-            .find('li')
-            .elements
-            .transform(.map((e) => e.text))
-            .collect(.list()),
+        page.$('li').elements.transform(.map((e) => e.text)).collect(.list()),
         equals(['a', 'b']),
       );
     });
@@ -875,7 +874,10 @@ void main() {
       expect(d.keys.collect(.list()), equals(['a', 'b']));
       expect(d.values.collect(.list()), equals([1, 2]));
       expect(d.pairs.collect(.list()), equals([('a', 1), ('b', 2)]));
-      expect(d.invert().map, equals({1: 'a', 2: 'b'}));
+      expect(
+        d.transform<int, String>(.map((p) => (p.$2, p.$1))).map,
+        equals({1: 'a', 2: 'b'}),
+      );
     });
 
     test('transform and collect run the same vocabulary over records', () {

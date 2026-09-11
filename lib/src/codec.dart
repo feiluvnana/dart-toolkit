@@ -12,7 +12,7 @@
 /// either way.
 ///
 /// ```dart
-/// res.parse(format.html).find('h1').text;
+/// res.parse(format.html).$('h1').text;
 /// res.parse(format.json).at('data.items');
 /// res.parse(format.yaml).text('version');
 /// ```

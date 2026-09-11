@@ -2,6 +2,204 @@
 
 All notable changes to this project will be documented in this file.
 
+## 6.2.0
+
+**The helper sweep.** Rule 5 has been run against members, against a
+vocabulary, against parameters and across all eight domains. It had never
+been run against *helpers* — the member that is one call plus a literal, or a
+first element, or a `map` over something the cursor already hands back. Read
+that way, `Markup` alone had eleven, and the library had forty-four.
+
+All forty-four are **deleted**. Each row below is the survivor, and every one
+of them already existed:
+
+```dart
+net.http.get(url)              →  net.http.send(.get, url)
+page.$('a').htmls              →  page.$('a').elements.transform(.map((e) => e.innerHtml))
+page.$('.row').one(f)          →  page.$('.row').all(f).collect(.first())
+page.$('li').data('id')        →  page.$('li').attr('data-id')
+page.$('li').has('live')       →  !page.$('li').matching('.live').empty
+page.$('li').not('.live')      →  page.$('li').matching(':not(.live)')
+io.isfile(path)                →  io.stat(path)?.isfile
+io.size(path)                  →  io.stat(path)?.size
+io.empty(path)                 →  io.stat(path)!.empty  /  io.dir.empty(path)
+cli.help()                     →  print(cli.usage())
+util.time.iso()                →  DateTime.now().toUtc().toIso8601String()
+util.hash.short(url)           →  util.hash.sha(url).substring(0, 8)
+util.text.between(t, a, b)     →  util.text.betweens(t, a, b).collect(.first())
+```
+
+### One verb, and the method is an argument
+
+`get`, `post`, `put`, `delete`, `patch` and `head` were six forwarders onto
+`send`, each restating eight parameters to fill in one enum. Dart's dot
+shorthand fills it in at the call site:
+
+```dart
+await net.http.send(.get, url);
+await net.http.send(.post, url, body: const Body.json({'id': 1}));
+await api.send(.delete, url, retries: 2);
+```
+
+The tear-off goes with them, and it is the one call site that gets longer:
+`concurrent.run(urls, net.http.get)` is
+`concurrent.run(urls, (u) => net.http.send(.get, u))`.
+
+### The cursor reads the first match; `elements` reads the rest
+
+A `Markup` has *held* a `Sequence<Element>` since 5.0.0, so that the
+element-level work has one spelling. The plurals that were not that spelling
+are gone — `htmls`, `outers`, `values` — and `texts` and `attrs` stay,
+because those two are what a scraper writes. So do `at`, `filter`,
+`matching`, `children`, `parent`, `closest`, `siblings`, `prev`, `next`,
+`text`, `html`, `outer`, `attr`, `value`, `lines`, `all`, `pick` and
+`extract`.
+
+`Markup.value` is now defined as `Element.value`, rather than the other way
+round: the rules a control follows — a `<select>`'s chosen option, an
+unticked box reading as absent — live on the element, and the cursor reads
+them off its first match.
+
+### Three names with a capital in the middle
+
+Rule 4 bans camelCase and three public members still had it.
+
+| Was | Is | Why that one |
+| :--- | :--- | :--- |
+| `Table.addAll(rows)` | `Table.add.all(rows)` | Dart spells it `addAll`, so the splitting rule applies: split at the capital. `add` is a callable namespace, the shape `count()` / `count.by` has had since 5.1.0 |
+| `Cli.usageExit` | `Cli.misuse` | Nothing to split — the compound is ours, not Dart's — so one word does it, and it says what happened rather than what the number is for |
+| `Field.readAll` | private | No caller outside its own file. A name not worth spelling well is not worth exporting |
+
+### What survived the sweep, and why
+
+Four candidates were read and kept, because each is a *different
+implementation* rather than a second spelling — which is the line Rule 5's
+carve-out actually draws:
+
+- **`Collector.has`** is `Iterable.contains`: a `Set` answers it in constant
+  time where `any` cannot.
+- **`logger.step`** carries its own badge and its own `step`/`total` fields
+  into the JSON line, so `info('[2/5] …')` is a different record.
+- **`Markup.extract`** is the loose-spec door Rule 6 blesses beside `pick`.
+- **`Table.add.all`** is one line over `add`, and a script with its rows
+  already in hand writes it constantly.
+
+### Migrating
+
+The analyzer names every call site; there are no silent behaviour changes and
+nothing was renamed except the three above. Two rewrites are worth doing by
+hand rather than mechanically:
+
+- `io.empty(path)` fused two questions with two costs. A file answers from
+  the stat you already paid for (`io.stat(p)!.empty`); a directory needs a
+  listing (`io.dir.empty(p)`). Pick the one you mean.
+- `net.http.get` as a *value* — passed to `concurrent.run` or `.map.async` —
+  becomes a lambda.
+
+`test/regression_test.dart` pins the release: one sweep asserts no exported
+member is camelCase, another that no doc comment still names a deleted one.
+
+## 6.1.0
+
+**Nothing unasked.** A two-line script compared `package:http`'s `get` with
+`net.http.get` against a host that was dropping ~40% of its TLS handshakes.
+The bare call returned the `HandshakeException` in 300ms. `net.http` took
+eleven seconds and usually succeeded — because it retried twice, unasked,
+and each failed handshake costs five seconds to surface. The toolkit looked
+slower than the package it wraps while doing strictly more work to hide the
+one fact the caller needed.
+
+So the rule, applied to every default in the library: **a feature nobody
+asked for is off.** A `Fetcher` now retries nothing, follows nothing and
+sends no headers until a parameter says otherwise.
+
+```dart
+Fetcher()                  // retries: 0, redirects: 0, headers: {}
+Fetcher(retries: 3)        // retried, POST included
+Fetcher.browser()          // the Chrome UA and HTML Accept header, by name
+```
+
+| Was | Is |
+| :--- | :--- |
+| `retries: 2` | `retries: 0` |
+| a Chrome `User-Agent` + `Accept: text/html` on every `Fetcher()` | `Fetcher.browser()`, or `headers:` |
+| `redirects: 5`, followed | `redirects: 0`, handed back |
+
+A `3xx` is an answer the server gave, and the client reports it: `res.status`
+is `302` and `res.headers['location']` is where it points. `5` was a hop
+budget no caller had chosen.
+
+### One parameter per question
+
+The same review read the *parameters* against Rule 5, which had only ever
+been run against members. Three pairs said one thing twice, each a `bool`
+deciding whether a number applied:
+
+```dart
+get(url, redirect: false)      →  get(url)                  // or redirects: 0
+get(url, retry: false)         →  get(url)                  // or retries: 0
+concurrentRetry(fn, times: 3)  →  concurrentRetry(fn, retries: 2)
+```
+
+`Fetcher.unsafe` is **deleted** — the shape one step on, a `bool` deciding
+*which methods* the int applied to. It existed to stop a default of `2`
+replaying a `POST`; with the default `0`, `retries: 3` on a `post` is a
+caller saying what they meant, and `retries: 0` on the call opts back out.
+
+`concurrent.retry`'s `retries:` is **required**. It is the one number the
+library will not invent and cannot default to zero: `retry(fn, retries: 0)`
+is `fn()` under a name that promises otherwise.
+
+Per-call `retries:` and `redirects:` are `int?`, and the `null` is
+load-bearing — *no override given, use the client's*. `Fetcher(retries: 3)`
+would be unreachable through `get` and `post` if theirs defaulted to `0`.
+
+`download`'s `onProgress:` → `onprogress:`, the library's last camelCase
+parameter, now spelled like the `onretry:` and `onchange:` it sits beside.
+It also takes `retries:`, which every sibling already did.
+
+**Migrating.** A crawl over the default client no longer retries; pass
+`Crawl.using(Fetcher(retries: n))`. A scrape that leaned on the implicit
+browser headers wants `Fetcher.browser()`. Anything reading a redirect chain
+wants an explicit `redirects:`.
+
+### `$` is the selector
+
+`Markup.find` → **`Markup.$`**, `Markup.xpath` → **`Markup.$xpath`**, and
+`format.html` gains `$(text, selector)` and `$xpath(text, query)` — parse and
+select in one call, with the selector required so neither is a second
+spelling of `parse`.
+
+```dart
+page.$('.row').$('.name').texts       // was page.find('.row').find('.name')
+page.$xpath('//a').attr('href')       // was page.xpath('//a')
+format.html.$(markup, '.track')       // new: one call instead of two
+```
+
+`$` was the one survivor of Rule 5 for four releases, behind an opt-in import,
+on the reasoning that a script should not be forced to see an identifier
+called `$`. That argument proves something narrower than the design built on
+it: **the objection is to a global named `$`, and a method named `$` is not a
+global.** `page.$('a')` adds nothing to any scope. So the subject's own name
+won outright, and `find`/`xpath` went rather than standing beside it.
+
+The two top-level functions really are globals and stay behind
+`package:dart_toolkit/html.dart`, unchanged. `extension
+QuerySelectorOnHtmlString on String` is **deleted** — a third door onto one
+operation, and the only one that had to be an extension because `String` is
+not ours:
+
+```dart
+markup.$('.track')       →  format.html.$(markup, '.track')
+                         →  $(markup, '.track')          // with the opt-in import
+```
+
+`Markup.xpath`, a named *constructor* with zero callers, is deleted with it.
+It had been dead since 6.0.0 and was invisible while a method of the same
+name sat beside it.
+
+258 call sites moved; the analyzer named every one.
+
 ## 6.0.0
 
 **The sweep.** An API review read every namespace against the same guardrail —

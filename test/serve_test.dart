@@ -2,8 +2,11 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:test/test.dart';
 
 /// Fetches [url], retrying while nothing is listening yet.
-Future<Reply> _reach(Uri url) =>
-    concurrent.retry(() => net.http.get(url), retries: 39, backoff: 25.ms);
+Future<Reply> _reach(Uri url) => concurrent.retry(
+  () => net.http.send(.get, url),
+  retries: 39,
+  backoff: 25.ms,
+);
 
 void main() {
   group('net.serve', () {
@@ -16,7 +19,7 @@ void main() {
           '/health' => Served.json({'ok': true}),
           '/bytes' => Served.bytes([1, 2, 3]),
           '/away' => Served.redirect('/health'.url),
-          '/echo' => Served.json((await req.json()).raw),
+          '/echo' => Served.json(format.json.parse(await req.text()).raw),
           '/body' => Served.text(await req.text()),
           '/method' => Served.text(req.method.wire),
           '/head' => Served.text(req.headers['x-token'] ?? ''),
@@ -44,30 +47,36 @@ void main() {
     });
 
     test('a text reply carries the body and the type', () async {
-      final res = await net.http.get(at('/callback?code=abc123'));
+      final res = await net.http.send(.get, at('/callback?code=abc123'));
       expect(res.status, equals(200));
       expect(res.body, equals('abc123'));
       expect(res.headers['content-type'], contains('text/plain'));
     });
 
     test('a json reply comes back through the cursor', () async {
-      final res = await net.http.get(at('/health'));
+      final res = await net.http.send(.get, at('/health'));
       expect(res.parse(format.json).at('ok').flag(), isTrue);
       expect(res.headers['content-type'], contains('application/json'));
     });
 
     test('bytes, status and redirect', () async {
-      expect((await net.http.get(at('/bytes'))).bytes, equals([1, 2, 3]));
-      expect((await net.http.get(at('/nope'))).status, equals(404));
-      expect((await net.http.get(at('/nope'))).body, equals('Not Found'));
-      final followed = await net.http.get(at('/away'));
+      expect(
+        (await net.http.send(.get, at('/bytes'))).bytes,
+        equals([1, 2, 3]),
+      );
+      expect((await net.http.send(.get, at('/nope'))).status, equals(404));
+      expect(
+        (await net.http.send(.get, at('/nope'))).body,
+        equals('Not Found'),
+      );
+      final followed = await net.http.send(.get, at('/away'), redirects: 3);
       expect(
         followed.parse(format.json).at('ok').flag(),
         isTrue,
-        reason: 'redirect followed',
+        reason: 'redirect followed when asked for',
       );
-      final raw = await net.http.get(at('/away'), redirect: false);
-      expect(raw.status, equals(302));
+      final raw = await net.http.send(.get, at('/away'));
+      expect(raw.status, equals(302), reason: 'not followed by default');
       expect(raw.headers['location'], equals('/health'));
     });
 
@@ -78,7 +87,8 @@ void main() {
         io.write(page, '<h1>hi</h1>');
         final one = await net.serve(0, (req) async => Served.file(page));
         try {
-          final res = await net.http.get(
+          final res = await net.http.send(
+            .get,
             Uri.parse('http://localhost:${one.port}/'),
           );
           expect(res.body, equals('<h1>hi</h1>'));
@@ -93,7 +103,8 @@ void main() {
         );
         try {
           expect(
-            (await net.http.get(
+            (await net.http.send(
+              .get,
               Uri.parse('http://localhost:${gone.port}/'),
             )).status,
             equals(404),
@@ -107,16 +118,25 @@ void main() {
     });
 
     test('a request exposes its method, headers and body three ways', () async {
-      expect((await net.http.post(at('/method'))).body, equals('POST'));
+      expect((await net.http.send(.post, at('/method'))).body, equals('POST'));
       expect(
-        (await net.http.get(at('/head'), headers: {'X-Token': 'k'})).body,
+        (await net.http.send(
+          .get,
+          at('/head'),
+          headers: {'X-Token': 'k'},
+        )).body,
         equals('k'),
       );
       expect(
-        (await net.http.post(at('/body'), body: Body.text('hello'))).body,
+        (await net.http.send(
+          .post,
+          at('/body'),
+          body: Body.text('hello'),
+        )).body,
         equals('hello'),
       );
-      final echoed = await net.http.post(
+      final echoed = await net.http.send(
+        .post,
         at('/echo'),
         body: Body.json({'n': 1}),
       );
@@ -124,9 +144,9 @@ void main() {
     });
 
     test('a handler that throws is a 500, not a dead socket', () async {
-      expect((await net.http.get(at('/boom'))).status, equals(500));
+      expect((await net.http.send(.get, at('/boom'))).status, equals(500));
       expect(
-        (await net.http.get(at('/health'))).status,
+        (await net.http.send(.get, at('/health'))).status,
         equals(200),
         reason: 'the server is still listening',
       );

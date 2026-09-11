@@ -110,8 +110,9 @@ class TableStyle {
 
 /// A bordered text table.
 ///
-/// Build it, then [render] it to a string — printing is [ConsoleWriter.table]'s
-/// job:
+/// Build it, then [render] it to a string — printing it is
+/// `system.console.writer.write(table.render())`, which is what
+/// `ConsoleWriter.table` was a second spelling of:
 ///
 /// ```dart
 /// final table = Table(headers: ['Metric', 'Value'])
@@ -162,15 +163,18 @@ class Table {
                : ColumnAlign.left,
        ];
 
-  /// Appends one [row]. Cells are rendered with `toString`.
-  void add(List<Object?> row) =>
-      _rows.add(row.map((cell) => cell?.toString() ?? '').toList());
-
-  /// Appends every row of [rows].
-  void addAll(Iterable<List<Object?>> rows) => rows.forEach(add);
-
-  /// The number of appended rows.
-  int get length => _rows.length;
+  /// Appends a row, or every row of an iterable.
+  ///
+  /// ```dart no-compile
+  /// table.add(['app', '1.4 MB', 'ok']);   // one
+  /// table.add.all(rows);                  // many
+  /// ```
+  ///
+  /// Two members under one name, the way `count()` and `count.by` are: the
+  /// plural was `addAll` through 6.1.0, the library's last camelCase member
+  /// on a type it declares, and Rule 4 splits a compound at the capital
+  /// rather than joining it. Cells are rendered with `toString`.
+  late final TableAdd add = TableAdd._(this);
 
   /// Renders the table, including a trailing newline.
   String render() {
@@ -285,4 +289,21 @@ class Table {
       ColumnAlign.center => '${' ' * (pad ~/ 2)}$text${' ' * (pad - pad ~/ 2)}',
     };
   }
+}
+
+/// The namespace behind [Table.add].
+///
+/// Callable, so `table.add(row)` is the singular and `table.add.all(rows)`
+/// the plural — one word each, no capital in the middle.
+class TableAdd {
+  const TableAdd._(this._table);
+
+  final Table _table;
+
+  /// Appends one [row].
+  void call(List<Object?> row) =>
+      _table._rows.add([for (final cell in row) cell?.toString() ?? '']);
+
+  /// Appends every row of [rows].
+  void all(Iterable<List<Object?>> rows) => rows.forEach(call);
 }

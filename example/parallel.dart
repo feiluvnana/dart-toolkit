@@ -86,7 +86,7 @@ void main() async {
   // which a concurrency cap does not satisfy: four instant requests then four
   // more is eight in a second. A limiter composes with the cap.
   final limit = concurrent.rate(4, per: 100.ms);
-  final clock = util.time.clock();
+  final clock = (Stopwatch()..start());
   await concurrent.run(
     List<int>.generate(12, (i) => i),
     (n) => limit.guard(() async => n),

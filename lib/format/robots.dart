@@ -10,7 +10,7 @@
 /// library doc opens *this domain does not parse anything*.
 ///
 /// ```dart
-/// final rules = (await net.http.get('https://x.test/robots.txt'.url))
+/// final rules = (await net.http.send(.get, 'https://x.test/robots.txt'.url))
 ///     .parse(format.robots);
 /// rules.allowed('https://x.test/admin'.url, agent: 'MyBot');
 /// ```

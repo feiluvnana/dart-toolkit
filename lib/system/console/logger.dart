@@ -7,7 +7,6 @@ library;
 import 'dart:async';
 import 'dart:convert';
 
-import '../../util/time.dart';
 import 'ansi.dart';
 import 'spinner.dart';
 import 'writer.dart';
@@ -15,8 +14,6 @@ import 'writer.dart';
 // ============================================================================
 // CONSOLE LOGGER (system.console.logger.*)
 // ============================================================================
-
-const TimeAccessor _time = TimeAccessor();
 
 /// Severity threshold for [ConsoleLogger], in increasing verbosity.
 enum LogLevel {
@@ -166,14 +163,17 @@ class ConsoleLogger {
     writer.writeln('${_prefix()}$badge $message');
   }
 
+  /// The moment a stamped line is written, ISO-8601 in UTC.
+  static String _now() => DateTime.now().toUtc().toIso8601String();
+
   /// The timestamp a plain line opens with, or nothing when [stamp] is off.
-  String _prefix() => stamp ? '${'[${_time.iso()}]'.dim()} ' : '';
+  String _prefix() => stamp ? '${'[${_now()}]'.dim()} ' : '';
 
   /// One JSON line. The message is carried as text, never as a badge: a
   /// machine reading this wants the level named, not drawn.
   String _json(String level, String message, Map<String, Object?> fields) =>
       jsonEncode({
-        if (stamp) 'time': _time.iso(),
+        if (stamp) 'time': _now(),
         'level': level,
         // Escape codes are for a screen. A log file keeps the words.
         'message': message.plain,

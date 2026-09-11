@@ -143,43 +143,13 @@ class IoAccessor {
   /// `if (!io.has(dir)) io.dir.make(dir)` was correct by accident.
   ///
   /// A symlink counts as existing even when it dangles, because something is
-  /// there — [islink] is true and [isfile] is false, which is the whole point
-  /// of splitting them.
+  /// there, and `io.stat(path)?.islink` is how you tell it from a file.
+  ///
+  /// The kind questions were three members here — `isfile`, `isdir`,
+  /// `islink` — through 6.1.0, on both accessors. Each was a second reading
+  /// of the stat [stat] already returns, and the entry it hands back spells
+  /// all three: `io.stat(p)?.isfile`.
   bool exists(String path) => Entries.kind(path) != null;
-
-  /// Whether [path] is a regular file.
-  ///
-  /// The three kind questions are exclusive: a symlink is [islink], never
-  /// [isfile], whatever it points at.
-  bool isfile(String path) => Entries.kind(path) == FileSystemEntryKind.file;
-
-  /// Whether [path] is a directory. See [isfile] on symlinks.
-  bool isdir(String path) =>
-      Entries.kind(path) == FileSystemEntryKind.directory;
-
-  /// Whether [path] is a symbolic link, whatever it resolves to.
-  bool islink(String path) => Entries.kind(path) == FileSystemEntryKind.link;
-
-  /// How many bytes are at [path], or `null` when there is nothing there.
-  ///
-  /// A directory is `0`; what is *in* it is `io.dir.list(path)`.
-  int? size(String path) => stat(path)?.size;
-
-  /// Whether [path] exists and has nothing in it.
-  ///
-  /// Zero bytes for a file, and no entries for a directory. `false` when
-  /// there is nothing at [path] at all — *absent* and *empty* are two
-  /// different answers, which is exactly what [has] could not tell you.
-  ///
-  /// The two halves are two questions and cost differently: a file answers
-  /// from the stat this already did, a directory needs a second listing. Ask
-  /// for the one you mean and the cost is visible — [FileSystemEntry.empty]
-  /// for the file, `io.dir.empty` for the directory.
-  bool empty(String path) => switch (Entries.kind(path)) {
-    null => false,
-    FileSystemEntryKind.directory => Entries.empty(path),
-    _ => stat(path)?.empty ?? false,
-  };
 
   /// Whether [path] exists and holds at least one byte.
   ///
@@ -187,8 +157,8 @@ class IoAccessor {
   /// script asks: *is there a finished file here, or do I have to make one?*
   /// A zero-byte file reads as absent, since an interrupted write leaves one.
   ///
-  /// The three ingredients are [exists], [isfile] and [empty] now, so a
-  /// caller who wanted one of them no longer has to take all three.
+  /// The ingredients are [exists] and the entry from [stat] now, so a caller
+  /// who wanted one of them no longer has to take all three.
   ///
   /// A loosely-named sibling counts for [similar], not for this. It was a
   /// `match:` flag here through 5.5.0, and `io.has(p, match: true)` was
@@ -522,29 +492,6 @@ class IoAsyncAccessor {
   Future<bool> exists(String path) async =>
       await Entries.kindAsync(path) != null;
 
-  /// Whether [path] is a regular file.
-  Future<bool> isfile(String path) async =>
-      await Entries.kindAsync(path) == FileSystemEntryKind.file;
-
-  /// Whether [path] is a directory.
-  Future<bool> isdir(String path) async =>
-      await Entries.kindAsync(path) == FileSystemEntryKind.directory;
-
-  /// Whether [path] is a symbolic link.
-  Future<bool> islink(String path) async =>
-      await Entries.kindAsync(path) == FileSystemEntryKind.link;
-
-  /// How many bytes are at [path], or `null` when there is nothing there.
-  Future<int?> size(String path) async => (await stat(path))?.size;
-
-  /// Whether [path] exists and has nothing in it. See [IoAccessor.empty].
-  Future<bool> empty(String path) async =>
-      switch (await Entries.kindAsync(path)) {
-        null => false,
-        FileSystemEntryKind.directory => await Entries.emptyAsync(path),
-        _ => (await stat(path))?.empty ?? false,
-      };
-
   /// Whether [path] exists and holds at least one byte.
   Future<bool> has(String path) => Fs.hasAsync(path);
 
@@ -826,7 +773,7 @@ class AppendAccessor {
   /// final log = io.append.open('out/run.log');
   /// try {
   ///   for (final row in rows.collect(.list())) {
-  ///     log.line(row.host);
+  ///     log.write('${row.host}\n');
   ///   }
   /// } finally {
   ///   await log.close();
@@ -873,7 +820,7 @@ class AppendAsyncAccessor {
 /// // setup: const lines = ['first', 'second'];
 /// final log = await io.append.open('out/run.log');
 /// try {
-///   for (final line in lines) log.line(line);
+///   for (final line in lines) log.write('$line\n');
 /// } finally {
 ///   await log.close();
 /// }
@@ -897,9 +844,6 @@ final class Appender {
     if (_closed) throw StateError('This appender is closed.');
     _sink.write(content);
   }
-
-  /// Appends [content] and a newline — the shape a log wants.
-  void line(String content) => write('$content\n');
 
   /// Flushes what is buffered and releases the descriptor.
   ///

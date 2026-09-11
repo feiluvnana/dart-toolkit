@@ -107,7 +107,7 @@ final class Json {
   /// Every value a JSONPath [expression] selects.
   ///
   /// Where [at] walks one dotted path to one node, this runs a query and hands
-  /// back all of the matches — the JSON side of `Markup.xpath`, and named
+  /// back all of the matches — the JSON side of `Markup.\$xpath`, and named
   /// after its language for the same reason:
   ///
   /// ```dart
@@ -184,13 +184,6 @@ final class Json {
     };
   }
 
-  /// Every element of this node as text.
-  ///
-  /// The plural of [text], for the array of strings a document is full of.
-  /// Elements that are maps or lists are skipped rather than rendered.
-  Sequence<String> texts() =>
-      Sequence(_elements()).transform(.map.nonnull((item) => item.text()));
-
   /// One [R] per element of this node, each built from its own cursor.
   ///
   /// This is how a repeated sub-object comes back typed, and it is the JSON
@@ -207,16 +200,6 @@ final class Json {
   /// as none.
   Sequence<R> all<R>(R Function(Json item) build) =>
       Sequence(_elements()).transform(.map(build));
-
-  /// The first element of this node, built by [build], or `null`.
-  ///
-  /// The singular of [all], for a section a document has at most one of.
-  R? one<R>(R Function(Json item) build) {
-    for (final item in _elements()) {
-      return build(item);
-    }
-    return null;
-  }
 
   /// How many elements or keys this node holds.
   ///

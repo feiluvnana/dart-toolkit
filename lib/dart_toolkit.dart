@@ -54,7 +54,7 @@
 ///         ..concurrent(system.os.cpus))
 ///       .flow
 ///       .transform(.flat.map((res) =>
-///           res.parse(format.html).find('.titleline > a').texts))
+///           res.parse(format.html).$('.titleline > a').texts))
 ///       .transform(.unique())
 ///       .collect(.join('\n'));
 ///

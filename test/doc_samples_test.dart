@@ -24,10 +24,10 @@ void main() {
       ''';
 
       expect(
-        $(html).find('.track a').texts.collect(.list()),
+        $(html).$('.track a').texts.collect(.list()),
         equals(['Track One', 'Track Two']),
       );
-      expect(html.$('.bonus').data('id'), equals('2'));
+      expect($(html, '.bonus').attr('data-id'), equals('2'));
 
       final res = Reply.text('''
           <div class="main">
@@ -42,43 +42,36 @@ void main() {
           </div>
         ''', fetch: Fetch('https://example.com'.url));
 
+      expect(res.parse(format.html).$('a:contains("More")').count, equals(1));
+      expect(res.parse(format.html).$('div:has(p.desc)').count, equals(1));
       expect(
-        res.parse(format.html).find('a:contains("More")').count,
-        equals(1),
-      );
-      expect(res.parse(format.html).find('div:has(p.desc)').count, equals(1));
-      expect(
-        res.parse(format.html).find('ul > li:even').texts.collect(.list()),
+        res.parse(format.html).$('ul > li:even').texts.collect(.list()),
         equals(['0', '2']),
       );
       expect(
-        res.parse(format.html).find(':header').texts.collect(.list()),
+        res.parse(format.html).$(':header').texts.collect(.list()),
         equals(['Breaking News']),
       );
       expect(
         res
             .parse(format.html)
-            .xpath('//a[@class="morelink"]')
+            .$xpath('//a[@class="morelink"]')
             .texts
             .collect(.list()),
         equals(['More']),
       );
 
       expect(
-        res.parse(format.html).find('a.morelink').attr('href'),
+        res.parse(format.html).$('a.morelink').attr('href'),
         equals('https://example.com/next'),
       );
       expect(
-        res
-            .parse(format.html)
-            .find('a.morelink')
-            .attrs('href')
-            .collect(.list()),
+        res.parse(format.html).$('a.morelink').attrs('href').collect(.list()),
         equals(['https://example.com/next']),
       );
-      expect(res.parse(format.html).find('h1').text, equals('Breaking News'));
+      expect(res.parse(format.html).$('h1').text, equals('Breaking News'));
       expect(
-        res.parse(format.html).find('h1').texts.collect(.list()),
+        res.parse(format.html).$('h1').texts.collect(.list()),
         equals(['Breaking News']),
       );
 
@@ -114,7 +107,7 @@ void main() {
 
       final titles = await crawl.flow
           .transform(
-            .flat.map((res) => res.parse(format.html).find('.titleline').texts),
+            .flat.map((res) => res.parse(format.html).$('.titleline').texts),
           )
           .collect(.list());
 

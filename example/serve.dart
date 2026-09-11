@@ -24,7 +24,10 @@ void main() async {
     return switch (req.path) {
       // A switch on the path *is* the router. Path parameters, middleware and
       // static directories are all one step towards a web framework.
-      '/health' => Served.json({'ok': true, 'at': util.time.iso()}),
+      '/health' => Served.json({
+        'ok': true,
+        'at': DateTime.now().toUtc().toIso8601String(),
+      }),
       '/report' => Served.file(preview),
       '/hook' => await _hook(req),
       '/away' => Served.redirect('/health'.url),
@@ -35,25 +38,35 @@ void main() async {
   log.ok('Listening on $origin');
 
   // A JSON reply comes back through the same cursor a scraped API does.
-  final health = (await net.http.get('$origin/health'.url)).parse(format.json);
+  final health = (await net.http.send(
+    .get,
+    '$origin/health'.url,
+  )).parse(format.json);
   log.info("health   ${health.at('ok').flag()} at ${health.at('at').text()}");
 
   // A file reply streams, with its content type read off the extension.
-  final page = await net.http.get('$origin/report'.url);
+  final page = await net.http.send(.get, '$origin/report'.url);
   log.info('report   ${page.headers['content-type']} — ${page.body.trim()}');
 
   // Anything the switch does not name is a 404 with its reason phrase.
-  log.info('missing  ${(await net.http.get('$origin/nope'.url)).status}');
+  log.info(
+    'missing  ${(await net.http.send(.get, '$origin/nope'.url)).status}',
+  );
 
   // A webhook receiver: read the body as JSON, and answer with a status when
   // it is not the shape you expected rather than throwing.
-  final good = await net.http.post(
+  final good = await net.http.send(
+    .post,
     '$origin/hook'.url,
     body: Body.json({'event': 'crawl.done', 'pages': 3}),
   );
   log.info('hook     ${good.status} ${good.body}');
 
-  final bad = await net.http.post('$origin/hook'.url, body: Body.text('nope'));
+  final bad = await net.http.send(
+    .post,
+    '$origin/hook'.url,
+    body: Body.text('nope'),
+  );
   log.warn('hook     ${bad.status} ${bad.body}');
 
   final port = server.port;
@@ -74,8 +87,11 @@ void main() async {
 
   // Standing in for the browser the provider would redirect.
   await util.time.wait(100.ms);
-  await net.http.get('http://localhost:$port/callback'.url); // no code: 404
-  await net.http.get('http://localhost:$port/callback?code=abc123'.url);
+  await net.http.send(
+    .get,
+    'http://localhost:$port/callback'.url,
+  ); // no code: 404
+  await net.http.send(.get, 'http://localhost:$port/callback?code=abc123'.url);
 
   log.ok('Callback delivered code ${await waiting}');
 
@@ -99,7 +115,7 @@ Future<Served> _hook(Asked req) async {
 
   // A body that is not JSON reads as the empty cursor rather than throwing,
   // which is what a receiver wants: a malformed POST is a 400 to return.
-  final event = await req.json();
+  final event = format.json.parse(await req.text());
   final name = event.text('event');
   if (name == null) return Served.status(400);
 

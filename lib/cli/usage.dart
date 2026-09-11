@@ -28,9 +28,9 @@ String _usage({
   Map<String, String>? flags,
   Map<String, String>? options,
 }) {
-  final flagEntries = <String, String>{...?flags};
-  final optionEntries = <String, String>{...?options};
-  final commandEntries = <String, String>{};
+  final allflags = <String, String>{...?flags};
+  final alloptions = <String, String>{...?options};
+  final allcommands = <String, String>{};
 
   for (final entry in declarations.entries) {
     final name = entry.key;
@@ -38,7 +38,7 @@ String _usage({
     final label = '${decl.alias != null ? '-${decl.alias}, ' : '    '}--$name';
     if (decl.flag) {
       final def = decl.def == true ? ' [default: true]' : '';
-      flagEntries[label] = '${decl.desc}$def';
+      allflags[label] = '${decl.desc}$def';
       continue;
     }
     // `required` is only worth printing when nothing else can supply a value.
@@ -46,10 +46,10 @@ String _usage({
     final def = decl.def != null ? ' [default: ${decl.def}]' : '';
     final env = decl.env != null ? ' [env: ${decl.env}]' : '';
     final allowed = decl.allowed != null ? ' (${decl.allowed!.join('|')})' : '';
-    optionEntries['$label <value>'] = '${decl.desc}$allowed$required$env$def';
+    alloptions['$label <value>'] = '${decl.desc}$allowed$required$env$def';
   }
   for (final child in children.values) {
-    commandEntries[child.name] = child.desc;
+    allcommands[child.name] = child.desc;
   }
 
   final buffer = StringBuffer();
@@ -57,11 +57,7 @@ String _usage({
   if (desc != null && desc.isNotEmpty) buffer.writeln('$desc\n');
   if (syntax != null && syntax.isNotEmpty) buffer.writeln('Usage: $syntax\n');
 
-  final labels = [
-    ...commandEntries.keys,
-    ...flagEntries.keys,
-    ...optionEntries.keys,
-  ];
+  final labels = [...allcommands.keys, ...allflags.keys, ...alloptions.keys];
   final column = labels.isEmpty
       ? 24
       : labels
@@ -82,9 +78,9 @@ String _usage({
     buffer.writeln();
   }
 
-  section('Commands', commandEntries);
-  section('Flags', flagEntries);
-  section('Options', optionEntries);
+  section('Commands', allcommands);
+  section('Flags', allflags);
+  section('Options', alloptions);
   return buffer.toString().trimRight();
 }
 

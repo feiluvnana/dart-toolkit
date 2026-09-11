@@ -111,9 +111,6 @@ class ConsoleWriter {
   /// Writes [message] followed by a newline to the error sink.
   void errorln([String message = '']) => err.writeln(message);
 
-  /// Renders [table] to [out].
-  void table(Table table) => out.write(table.render());
-
   /// Writes a full-width horizontal rule, optionally captioned with [title].
   void rule([String title = '']) {
     final width = this.width;

@@ -211,15 +211,15 @@ void main() {
       final session = Fetcher(session: true);
       addTearDown(session.close);
 
-      final page = await session.get('$base/login'.url);
+      final page = await session.send(.get, '$base/login'.url);
       final home = await page
           .form('#login')!
           .fill({'user': 'me'})
           .send(using: session.call);
 
-      expect(home.parse(format.html).find('h1').text, 'me in with tok-123');
+      expect(home.parse(format.html).$('h1').text, 'me in with tok-123');
       // The cookie the login page set came back with the submission.
-      expect(home.parse(format.html).find('p').text, contains('sid=session-1'));
+      expect(home.parse(format.html).$('p').text, contains('sid=session-1'));
       expect(seen.last, startsWith('POST /session'));
     });
 
@@ -240,7 +240,7 @@ void main() {
 
       final landed = await crawl.flow
           .transform(.where((res) => res.fetch.tag == 'home'))
-          .transform(.map((res) => res.parse(format.html).find('h1').text))
+          .transform(.map((res) => res.parse(format.html).$('h1').text))
           .collect(.list());
 
       expect(landed, ['crawler in with tok-123']);

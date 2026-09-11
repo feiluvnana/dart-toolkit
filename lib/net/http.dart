@@ -1,6 +1,7 @@
 /// # HTTP Networking (`net.*`)
 ///
-/// A retrying HTTP client over `package:http`. A [Reply] carries the bytes,
+/// A client over `package:http` that retries, follows and caches only when a
+/// parameter said to — see [Fetcher]. A [Reply] carries the bytes,
 /// the text and the headers, and nothing about what the bytes *are*: reading
 /// them is [Reply.parse] plus a codec from `format`, because a crawler
 /// fetches JSON, sitemaps, archives and images as readily as it fetches
@@ -196,11 +197,11 @@ final class _JsonBody extends Body {
 ///
 /// ```dart no-compile
 /// // before — a closure with a side effect, needing an engine behind it
-/// res.parse(format.html).find('a').attrs('href')
+/// res.parse(format.html).$('a').attrs('href')
 ///    .collect(.foreach((h) => res.follow(h)));
 ///
 /// // after — a pure function from a reply to the next requests
-/// res.parse(format.html).find('a').attrs('href').transform(.map(res.follow))
+/// res.parse(format.html).$('a').attrs('href').transform(.map(res.follow))
 /// ```
 class Reply {
   static final _charsetParam = RegExp(r'charset=([^;]+)', caseSensitive: false);
@@ -368,13 +369,13 @@ class Reply {
   /// a crawl over an API and a crawl over pages are written the same way.
   ///
   /// ```dart
-  /// res.parse(format.html).find('h1').text;
+  /// res.parse(format.html).$('h1').text;
   /// res.parse(format.json).at('data.items');
   /// res.parse(format.yaml).text('version');
   ///
   /// switch (res.type) {
   ///   case 'application/json': res.parse(format.json).at('items');
-  ///   default:                 res.parse(format.html).find('.item');
+  ///   default:                 res.parse(format.html).$('.item');
   /// }
   /// ```
   ///
@@ -405,7 +406,7 @@ class Reply {
   /// with the collection vocabulary and needs no engine behind it:
   ///
   /// ```dart no-compile
-  /// res.parse(format.html).find('a').attrs('href').transform(.map(res.follow))
+  /// res.parse(format.html).$('a').attrs('href').transform(.map(res.follow))
   /// ```
   ///
   /// It tears off cleanly because the href comes first and everything else is
@@ -467,15 +468,27 @@ mixin _PathResolver {
   }
 }
 
-/// A retrying HTTP client whose responses can query their own HTML.
+/// An HTTP client that does what it was asked to do.
 ///
 /// Reachable as `net.http`, a shared instance. Construct one directly when you
 /// need your own headers, timeout or base directory — and close it when done.
 ///
 /// ```dart
 /// final client = Fetcher(headers: {'Cookie': 'session=abc'});
-/// final res = await client.get('https://example.com/page'.url);
+/// final res = await client.send(.get, 'https://example.com/page'.url);
 /// await client.close();
+/// ```
+///
+/// It *can* retry, cache, carry cookies, obey a rate limit and pretend to be
+/// Chrome, and it does none of them until asked — [retries] is `0`, [cache]
+/// and [limiter] and [jar] are `null`, and [headers] is empty. Through 6.0.0
+/// the first and the last were on by default, which is how a two-line script
+/// against a host dropping TLS handshakes read as *the toolkit is slower than
+/// `package:http`*: `package:http` returned the failure, this retried it
+/// twice. Opt in, one parameter at a time:
+///
+/// ```dart
+/// final scraper = Fetcher.browser(retries: 3, limiter: concurrent.rate(10, per: 1.s));
 /// ```
 class Fetcher with _PathResolver {
   final http.Client _client;
@@ -487,11 +500,34 @@ class Fetcher with _PathResolver {
   /// Per-request timeout.
   final Duration timeout;
 
-  /// Number of retries after the initial attempt.
+  /// Number of retries after the initial attempt, `0` for none.
+  ///
+  /// **Zero by default**, and every method is treated alike: `retries: 3`
+  /// retries a `POST` as readily as a `GET`, because nothing is retried
+  /// unless a caller asked for it. An `unsafe` flag gated this through
+  /// 6.0.0, when the default was `2` and something had to stop that default
+  /// replaying a side effect the server had already applied.
+  ///
+  /// A retry is the one *bonus* the client used to perform unasked, and it
+  /// hid exactly what it was meant to smooth over: a host dropping TLS
+  /// handshakes turned into three slow attempts and one late failure, where
+  /// `package:http` returned the error at once.
   final int retries;
 
   /// Base delay for retry backoff, multiplied by the attempt number.
   final Duration backoff;
+
+  /// Redirect hops to follow, `0` for none.
+  ///
+  /// **Zero by default**, like [retries]: a `3xx` is an answer the server
+  /// gave, and handing it back is this client reporting what happened rather
+  /// than quietly asking a second question. `res.status` is `302` and
+  /// `res.headers['location']` is where it points; `redirects: n` follows up
+  /// to `n` hops, and a longer chain throws [FatalHttpException].
+  ///
+  /// A per-call `redirect: bool` and a `redirects: int = 5` said this in two
+  /// types through 6.0.0, and `5` was a number nobody chose.
+  final int redirects;
 
   /// Base directory that relative download destinations resolve against.
   @override
@@ -499,12 +535,6 @@ class Fetcher with _PathResolver {
 
   /// Default encoding for decoding response bodies.
   final Encoding? encoding;
-
-  /// Whether to retry the unsafe methods too — POST, PUT and PATCH.
-  ///
-  /// Off by default: replaying one of these can duplicate a side effect the
-  /// server already applied.
-  final bool unsafe;
 
   /// Cookie storage, shared across every request this client sends.
   final CookieJar? jar;
@@ -534,7 +564,7 @@ class Fetcher with _PathResolver {
   ///
   /// ```dart
   /// final api = Fetcher(limiter: concurrent.rate(10, per: 1.s));
-  /// await concurrent.run(urls, api.get, size: 8);
+  /// await concurrent.run(urls, (u) => api.send(.get, u), size: 8);
   /// ```
   ///
   /// Typed [Waiting], so a [Semaphore] paces this client as readily as a
@@ -559,21 +589,26 @@ class Fetcher with _PathResolver {
   /// [Send] is a function and has nothing to report through.
   int retried = 0;
 
-  /// Creates a client.
+  /// Creates a client that sends what it was asked to send, and nothing else.
   ///
-  /// Pass [pool] to share an existing `package:http` connection pool; the
-  /// caller keeps ownership and [close] leaves it open. Without [headers] a desktop browser
-  /// User-Agent and HTML `Accept` header are sent, which is what most scraping
-  /// targets expect.
+  /// No headers, no retries, no cache, no cookie jar and no limiter: every
+  /// one of those is a parameter, and a parameter no caller filled in stays
+  /// switched off. Pass [pool] to share an existing `package:http` connection
+  /// pool; the caller keeps ownership and [close] leaves it open.
+  ///
+  /// A desktop-browser `User-Agent` and an HTML `Accept` header went out with
+  /// every request through 6.0.0 — useful against a scraping target, and a
+  /// lie told to a JSON API on a caller's behalf. [Fetcher.browser] sends
+  /// them now, by name and on request.
   Fetcher({
     http.Client? pool,
     Map<String, String>? headers,
     this.timeout = const Duration(seconds: 30),
-    this.retries = 2,
+    this.retries = 0,
     this.backoff = const Duration(milliseconds: 500),
+    this.redirects = 0,
     this.base,
     this.encoding,
-    this.unsafe = false,
     bool session = false,
     CookieJar? jar,
     this.proxy,
@@ -583,15 +618,56 @@ class Fetcher with _PathResolver {
   }) : jar = jar ?? (session ? CookieJar() : null),
        _ownsClient = pool == null,
        _client = pool ?? _createClient(proxy),
-       headers =
-           headers ??
-           const {
-             'User-Agent':
-                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-                 '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-             'Accept':
-                 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-           };
+       headers = headers ?? const {};
+
+  /// Creates a client that presents itself as a desktop browser.
+  ///
+  /// The defaults [Fetcher] sent unasked through 6.0.0: a Chrome
+  /// `User-Agent` and an HTML `Accept` header, which is what most scraping
+  /// targets expect. [headers] is merged over them, so one entry can be
+  /// replaced without restating the pair.
+  ///
+  /// ```dart
+  /// final scraper = Fetcher.browser(retries: 3);
+  /// ```
+  factory Fetcher.browser({
+    http.Client? pool,
+    Map<String, String>? headers,
+    Duration timeout = const Duration(seconds: 30),
+    int retries = 0,
+    Duration backoff = const Duration(milliseconds: 500),
+    int redirects = 0,
+    String? base,
+    Encoding? encoding,
+    bool session = false,
+    CookieJar? jar,
+    String? proxy,
+    int? cap,
+    HttpCache? cache,
+    Waiting? limiter,
+  }) => Fetcher(
+    pool: pool,
+    headers: {..._browserHeaders, ...?headers},
+    timeout: timeout,
+    retries: retries,
+    backoff: backoff,
+    redirects: redirects,
+    base: base,
+    encoding: encoding,
+    session: session,
+    jar: jar,
+    proxy: proxy,
+    cap: cap,
+    cache: cache,
+    limiter: limiter,
+  );
+
+  static const Map<String, String> _browserHeaders = {
+    'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+        '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  };
 
   static http.Client _createClient(String? proxy) {
     if (proxy == null) return http.Client();
@@ -605,9 +681,23 @@ class Fetcher with _PathResolver {
 
   /// Sends [method] to [url] and returns the response.
   ///
-  /// Retries up to [retries] times on a transport error, a 5xx, or a 429. A
-  /// `Retry-After` header is honoured when present, otherwise the delay is
-  /// [backoff] multiplied by the attempt number with jitter.
+  /// [retries] overrides the client's own for this call, and is the whole of
+  /// the retry decision: `0` sends once, `n` allows `n` more attempts on a
+  /// transport error, a 5xx or a 429. A `Retry-After` header is honoured when
+  /// present, otherwise the delay is [backoff] multiplied by the attempt
+  /// number with jitter. A `retry: bool` stood beside it through 6.0.0 — a
+  /// flag deciding whether a number applied, which is the `times:`/`retries:`
+  /// pair Rule 5 deleted from `concurrent.retry` wearing a second hat.
+  ///
+  /// [redirects] overrides the client's the same way, and reads the same:
+  /// `0` returns the `3xx` itself, headers and all, and a chain longer than a
+  /// positive limit throws [FatalHttpException]. This too was two parameters
+  /// — `redirect: false` and `redirects: 0` said one thing in two types, and
+  /// the `5` beside them was a limit no caller had asked for.
+  ///
+  /// Both are `int?`, and the `null` is load-bearing: *no override given,
+  /// use the client's*. `Fetcher(retries: 3)` would be unreachable through
+  /// [get] and [post] if their parameters defaulted to `0` instead.
   ///
   /// [onretry] is called with the URL and the attempt number just before each
   /// wait, which is how a caller counts retries that happen in here — a crawl
@@ -623,11 +713,9 @@ class Fetcher with _PathResolver {
     Map<String, String>? headers,
     Body? body,
     Duration? timeout,
-    bool redirect = true,
-    int redirects = 5,
-    bool? retry,
-    Encoding? encoding,
+    int? redirects,
     int? retries,
+    Encoding? encoding,
     void Function(Uri url, int attempt)? onretry,
     Fetch? fetch,
   }) async {
@@ -648,10 +736,9 @@ class Fetcher with _PathResolver {
     };
     final deadline = timeout ?? this.timeout;
     final effRetries = retries ?? this.retries;
-    final allowRetry =
-        retry ??
-        (unsafe || method == HttpMethod.get || method == HttpMethod.head);
-    final maxAttempts = (allowRetry && effRetries > 0) ? effRetries + 1 : 1;
+    final effRedirects = redirects ?? this.redirects;
+    final allowRetry = effRetries > 0;
+    final maxAttempts = allowRetry ? effRetries + 1 : 1;
     var currentUrl = url;
     var currentMethod = method;
     var currentBody = body;
@@ -673,8 +760,10 @@ class Fetcher with _PathResolver {
         }
         final request = http.Request(currentMethod.wire, currentUrl)
           ..headers.addAll(currentMerged);
+        // Followed here, not by the client: a hop has to re-read the cookie
+        // jar and re-apply the method rules below. `maxRedirects` on the
+        // request would be dead weight beside that.
         request.followRedirects = false;
-        request.maxRedirects = redirects;
         currentBody?.apply(request);
         try {
           final streamed = await _client.send(request).timeout(deadline);
@@ -694,12 +783,12 @@ class Fetcher with _PathResolver {
             continue;
           }
 
-          if (redirect &&
+          if (effRedirects > 0 &&
               _isRedirect(response.statusCode) &&
               response.headers.containsKey('location')) {
-            if (redirectCount >= redirects) {
+            if (redirectCount >= effRedirects) {
               throw FatalHttpException(
-                'Redirect limit of $redirects exceeded',
+                'Redirect limit of $effRedirects exceeded',
                 uri: currentUrl,
               );
             }
@@ -854,150 +943,31 @@ class Fetcher with _PathResolver {
     }
   }
 
-  /// Sends a `GET` to [url].
-  Future<Reply> get(
-    Uri url, {
-    Map<String, String>? headers,
-    Duration? timeout,
-    bool redirect = true,
-    int redirects = 5,
-    bool? retry,
-    Encoding? encoding,
-  }) => send(
-    HttpMethod.get,
-    url,
-    headers: headers,
-    timeout: timeout,
-    redirect: redirect,
-    redirects: redirects,
-    retry: retry,
-    encoding: encoding,
-  );
-
-  /// Sends a `POST` to [url].
-  Future<Reply> post(
-    Uri url, {
-    Body? body,
-    Map<String, String>? headers,
-    Duration? timeout,
-    bool redirect = true,
-    int redirects = 5,
-    bool? retry,
-    Encoding? encoding,
-  }) => send(
-    HttpMethod.post,
-    url,
-    body: body,
-    headers: headers,
-    timeout: timeout,
-    redirect: redirect,
-    redirects: redirects,
-    retry: retry,
-    encoding: encoding,
-  );
-
-  /// Sends a `PUT` to [url].
-  Future<Reply> put(
-    Uri url, {
-    Body? body,
-    Map<String, String>? headers,
-    Duration? timeout,
-    bool redirect = true,
-    int redirects = 5,
-    bool? retry,
-    Encoding? encoding,
-  }) => send(
-    HttpMethod.put,
-    url,
-    body: body,
-    headers: headers,
-    timeout: timeout,
-    redirect: redirect,
-    redirects: redirects,
-    retry: retry,
-    encoding: encoding,
-  );
-
-  /// Sends a `DELETE` to [url].
-  Future<Reply> delete(
-    Uri url, {
-    Map<String, String>? headers,
-    Duration? timeout,
-    bool redirect = true,
-    int redirects = 5,
-    bool? retry,
-    Encoding? encoding,
-  }) => send(
-    HttpMethod.delete,
-    url,
-    headers: headers,
-    timeout: timeout,
-    redirect: redirect,
-    redirects: redirects,
-    retry: retry,
-    encoding: encoding,
-  );
-
-  /// Sends a `PATCH` to [url].
-  Future<Reply> patch(
-    Uri url, {
-    Body? body,
-    Map<String, String>? headers,
-    Duration? timeout,
-    bool redirect = true,
-    int redirects = 5,
-    bool? retry,
-    Encoding? encoding,
-  }) => send(
-    HttpMethod.patch,
-    url,
-    body: body,
-    headers: headers,
-    timeout: timeout,
-    redirect: redirect,
-    redirects: redirects,
-    retry: retry,
-    encoding: encoding,
-  );
-
-  /// Sends a `HEAD` to [url].
-  Future<Reply> head(
-    Uri url, {
-    Map<String, String>? headers,
-    Duration? timeout,
-    bool redirect = true,
-    int redirects = 5,
-    bool? retry,
-    Encoding? encoding,
-  }) => send(
-    HttpMethod.head,
-    url,
-    headers: headers,
-    timeout: timeout,
-    redirect: redirect,
-    redirects: redirects,
-    retry: retry,
-    encoding: encoding,
-  );
-
   /// Streams [url] to [path], resolved against [base].
   ///
   /// Skips the download when the destination already holds bytes. Set [match]
   /// to also skip on a loosely-named sibling — see [Fs.similar] for why that
-  /// is off by default. Retries on failure like [send] does.
+  /// is off by default.
+  ///
+  /// [retries] overrides the client's own, exactly as it does on [send], and
+  /// is `0` by default for the same reason. [onprogress] is spelled the way
+  /// [send]'s `onretry` and `io.watch`'s `onchange` are; it was `onProgress`
+  /// through 6.0.0, the library's one camelCase parameter.
   Future<FileSystemEntry> download(
     Uri url,
     String path, {
     Map<String, String>? headers,
-    void Function(int received, int total)? onProgress,
+    void Function(int received, int total)? onprogress,
     String part = '.part',
     bool match = false,
+    int? retries,
   }) async {
     final dest = resolve(path);
     if (match ? Fs.similar(dest) : Fs.has(dest)) return Fs.entryFor(dest);
 
     final merged = {...this.headers, ...?headers};
-    final maxAttempts = retries > 0 ? retries + 1 : 1;
+    final effRetries = retries ?? this.retries;
+    final maxAttempts = effRetries > 0 ? effRetries + 1 : 1;
     for (var attempt = 1; ; attempt++) {
       try {
         final file = await Fs.download(
@@ -1005,7 +975,7 @@ class Fetcher with _PathResolver {
           dest,
           pool: _client,
           headers: merged,
-          onProgress: onProgress,
+          onprogress: onprogress,
           part: part,
         );
         count++;
@@ -1038,7 +1008,6 @@ class Fetcher with _PathResolver {
           uri,
           headers: fetch.headers.isEmpty ? null : fetch.headers,
           body: fetch.body,
-          retry: fetch.method == HttpMethod.get ? null : true,
           fetch: fetch,
         );
       case 'data':
@@ -1384,7 +1353,4 @@ class CookieJar {
       (_, c) => c.expires != null && now.isAfter(c.expires!),
     );
   }
-
-  /// The number of stored cookies.
-  int get length => _cookies.length;
 }

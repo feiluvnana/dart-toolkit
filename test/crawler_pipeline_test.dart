@@ -30,7 +30,7 @@ Send fixture(Map<String, String> pages, {List<Fetch>? sent}) => (fetch) async {
 
 /// Every `href` on the page, as the next requests.
 Sequence<Fetch> links(Reply res) =>
-    res.parse(format.html).find('a').attrs('href').transform(.map(res.follow));
+    res.parse(format.html).$('a').attrs('href').transform(.map(res.follow));
 
 void main() {
   group('the frontier', () {
@@ -156,12 +156,12 @@ void main() {
             null =>
               res
                   .parse(format.html)
-                  .find('#songlist a')
+                  .$('#songlist a')
                   .elements
                   .transform(
                     .map(
                       (a) => res.follow(
-                        a.attr('href')!,
+                        a.attributes['href']!,
                         tag: 'song',
                         meta: [_name(a.text)],
                       ),
@@ -177,7 +177,7 @@ void main() {
               .map(
                 (res) =>
                     '${res.fetch.meta.read(_name)}: '
-                    '${res.parse(format.html).find('a').attr('href')}',
+                    '${res.parse(format.html).$('a').attr('href')}',
               ),
             )
             .collect(.list());
@@ -220,7 +220,7 @@ void main() {
           );
 
         final texts = await crawl.flow
-            .transform(.map((res) => res.parse(format.html).find('p').text))
+            .transform(.map((res) => res.parse(format.html).$('p').text))
             .collect(.list());
 
         expect(texts, equals(['Step 1', 'Step 2 Finished']));
@@ -274,7 +274,7 @@ void main() {
             );
 
       final texts = await crawl.flow
-          .transform(.map((res) => res.parse(format.html).find('div').text))
+          .transform(.map((res) => res.parse(format.html).$('div').text))
           .transform(.take.when((text) => !text.contains('Abort')))
           .collect(.list());
 
@@ -354,7 +354,7 @@ void main() {
 
       final titles = await crawl.flow
           .transform(
-            .flat.map((res) => res.parse(format.html).find('.title').texts),
+            .flat.map((res) => res.parse(format.html).$('.title').texts),
           )
           .collect(.list());
 
@@ -530,7 +530,7 @@ void main() {
       final crawl = net.crawl([Fetch(coerce(markup))]);
 
       final titles = await crawl.flow
-          .transform(.map((res) => res.parse(format.html).find('h2').text))
+          .transform(.map((res) => res.parse(format.html).$('h2').text))
           .collect(.list());
       expect(titles, equals(['Explicit HTML']));
     });
@@ -541,7 +541,7 @@ void main() {
       try {
         final crawl = net.crawl([Fetch(Uri.file(file.path))]);
         final texts = await crawl.flow
-            .transform(.map((res) => res.parse(format.html).find('p').text))
+            .transform(.map((res) => res.parse(format.html).$('p').text))
             .collect(.list());
         expect(texts, equals(['File Content']));
       } finally {

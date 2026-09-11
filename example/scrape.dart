@@ -4,7 +4,7 @@
 //
 // A response parsed from a string behaves exactly like one off the wire, so
 // this runs offline. Swap `Reply.text(_page, ...)` for
-// `await net.http.get(url)` and nothing below it changes.
+// `await net.http.send(.get, url)` and nothing below it changes.
 
 import 'package:dart_toolkit/dart_toolkit.dart';
 
@@ -14,25 +14,23 @@ void main() {
 
   // `res.$` is a jQuery-like selector over the parsed body: a chainable set
   // whose extraction helpers are getters.
-  log.info('Title:  ${res.parse(format.html).find('h1').text}');
-  log.info('Price:  ${res.parse(format.html).find('.price').text}');
-  log.info('Tags:   ${res.parse(format.html).find('.tag').texts}');
-  log.info('Links:  ${res.parse(format.html).find('a').attrs('href')}');
-  log.info('Data:   ${res.parse(format.html).find('#product').dataset}');
+  log.info('Title:  ${res.parse(format.html).$('h1').text}');
+  log.info('Price:  ${res.parse(format.html).$('.price').text}');
+  log.info('Tags:   ${res.parse(format.html).$('.tag').texts}');
+  log.info('Links:  ${res.parse(format.html).$('a').attrs('href')}');
+  log.info('Data:   ${res.parse(format.html).$('#product').attr('data-id')}');
 
   // Beyond CSS: :contains, :has, :eq, :first, :last, :even, :odd, :gt, :lt,
   // and [attr!=value]. Traversal mirrors jQuery too.
   log.info(
-    'In stock:  ${res.parse(format.html).find('.variant:contains("In stock")').texts}',
+    'In stock:  ${res.parse(format.html).$('.variant:contains("In stock")').texts}',
   );
   log.info(
-    'Non-sale:  ${res.parse(format.html).find('.variant[data-sale!=yes]').count}',
+    'Non-sale:  ${res.parse(format.html).$('.variant[data-sale!=yes]').count}',
   );
+  log.info('Siblings:  ${res.parse(format.html).$('.price').siblings().count}');
   log.info(
-    'Siblings:  ${res.parse(format.html).find('.price').siblings().count}',
-  );
-  log.info(
-    'XPath:     ${res.parse(format.html).xpath('//span[@class="price"]').text}',
+    'XPath:     ${res.parse(format.html).$xpath('//span[@class="price"]').text}',
   );
 
   // The string shorthand, for a first look at an unfamiliar page: 'sel' is
@@ -70,7 +68,7 @@ void main() {
         .parse(format.html)
         .all(
           '.variant',
-          (row) => (name: row.find('.name').text, sku: row.attr('data-sku')),
+          (row) => (name: row.$('.name').text, sku: row.attr('data-sku')),
         ),
   );
 

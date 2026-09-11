@@ -30,7 +30,6 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import '../src/jsontext.dart';
-import '../src/json.dart';
 
 // ============================================================================
 // SERVING (net.serve / net.once)
@@ -88,13 +87,6 @@ final class Asked {
   /// The request body decoded as UTF-8 text.
   Future<String> text() async =>
       utf8.decode(await bytes(), allowMalformed: true);
-
-  /// The request body as a [Json] cursor.
-  ///
-  /// A body that is not JSON reads as the empty cursor rather than throwing,
-  /// which is what a webhook receiver wants: a malformed POST is a `400` to
-  /// return, not an exception to catch.
-  Future<Json> json() async => Json(JsonText.decode(await text()));
 
   @override
   String toString() => 'Asked(${method.wire} $path)';

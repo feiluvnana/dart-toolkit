@@ -12,7 +12,7 @@ void main() {
         'a=1; Path=/, b=2; Path=/',
         uri: Uri.parse('https://x.com/login'),
       );
-      expect(jar.length, equals(2));
+      expect(jar.cookies.collect(.count()), equals(2));
       expect(jar['a'], equals('1'));
       expect(jar['b'], equals('2'));
     });
@@ -103,7 +103,7 @@ Disallow: /
       // close on its way out — which is what `Downloader.close` and its
       // `_ownsClient` flag existed to get right.
       await expectLater(
-        mine.get(Uri.parse('http://127.0.0.1:1/'), retry: false),
+        mine.send(.get, Uri.parse('http://127.0.0.1:1/'), retries: 0),
         throwsA(
           isA<Object>().having(
             (e) => e.toString(),
@@ -130,8 +130,11 @@ Disallow: /
       final q = format.html.parse(
         '<ul><li class="a">1</li><li class="b">2</li></ul>',
       );
-      expect(q.find('li').matching('.a').texts.collect(.list()), equals(['1']));
-      expect(q.find('li').not('.a').texts.collect(.list()), equals(['2']));
+      expect(q.$('li').matching('.a').texts.collect(.list()), equals(['1']));
+      expect(
+        q.$('li').matching(':not(.a)').texts.collect(.list()),
+        equals(['2']),
+      );
     });
 
     test('combinators are honoured by a single-element match', () {
@@ -139,15 +142,15 @@ Disallow: /
         '<div class="w"><p>a</p><span>b</span><span>c</span></div>',
       );
       expect(
-        q.find('span').matching('p + span').texts.collect(.list()),
+        q.$('span').matching('p + span').texts.collect(.list()),
         equals(['b']),
       );
       expect(
-        q.find('span').matching('.w > span').texts.collect(.list()),
+        q.$('span').matching('.w > span').texts.collect(.list()),
         equals(['b', 'c']),
       );
       expect(
-        q.find('span').matching('p ~ span').texts.collect(.list()),
+        q.$('span').matching('p ~ span').texts.collect(.list()),
         equals(['b', 'c']),
       );
     });
@@ -156,15 +159,15 @@ Disallow: /
       final q = format.html.parse(
         '<div class="outer"><div class="inner"><b>x</b></div></div>',
       );
-      expect(q.find('b').closest('.outer').count, equals(1));
-      expect(q.find('b').closest('.missing').count, equals(0));
+      expect(q.$('b').closest('.outer').count, equals(1));
+      expect(q.$('b').closest('.missing').count, equals(0));
     });
 
     test('a large child-combinator query stays linear', () {
       final rows = List.generate(2000, (i) => '<li class="i">$i</li>').join();
       final q = format.html.parse('<ul id="l">$rows</ul>');
       final watch = Stopwatch()..start();
-      expect(q.find('#l > li.i').count, equals(2000));
+      expect(q.$('#l > li.i').count, equals(2000));
       watch.stop();
       // The quadratic form took several hundred milliseconds at this size.
       expect(watch.elapsedMilliseconds, lessThan(500));

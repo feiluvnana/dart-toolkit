@@ -29,9 +29,9 @@ void main() {
     test('a Markup holds one rather than being one', () {
       final page = $('<p>a</p><p>b</p>');
       expect(page, isNot(isA<Iterable<Object?>>()));
-      expect(page.find('p').count, equals(2));
+      expect(page.$('p').count, equals(2));
       expect(
-        page.find('p').elements.transform(.map((e) => e.text)).collect(.list()),
+        page.$('p').elements.transform(.map((e) => e.text)).collect(.list()),
         equals(['a', 'b']),
       );
     });
@@ -343,7 +343,7 @@ void main() {
                 ))
               .flow
               .transform(
-                .flat.map((res) => res.parse(format.html).find('span').texts),
+                .flat.map((res) => res.parse(format.html).$('span').texts),
               )
               .collect(.first());
 
@@ -582,24 +582,25 @@ void main() {
         [true, true, true, false],
       );
 
-      expect(io.isfile(full), isTrue);
-      expect(io.isdir(folder), isTrue);
-      expect(io.isfile(folder), isFalse);
-      expect(io.islink(full), isFalse);
+      expect((io.stat(full)?.isfile ?? false), isTrue);
+      expect((io.stat(folder)?.isdir ?? false), isTrue);
+      expect((io.stat(folder)?.isfile ?? false), isFalse);
+      expect((io.stat(full)?.islink ?? false), isFalse);
 
-      expect(io.size(full), 1);
-      expect(io.size(blank), 0);
-      expect(io.size(missing), isNull);
+      expect(io.stat(full)?.size, 1);
+      expect(io.stat(blank)?.size, 0);
+      expect(io.stat(missing)?.size, isNull);
 
-      // Empty and absent are different answers.
-      expect(io.empty(blank), isTrue);
-      expect(io.empty(full), isFalse);
+      // Empty and absent are different answers, and each kind is asked the
+      // member that costs what it costs — `io.empty` fused the two.
+      expect(io.stat(blank)!.empty, isTrue);
+      expect(io.stat(full)!.empty, isFalse);
       expect(
-        io.empty(folder),
+        io.dir.empty(folder),
         isTrue,
         reason: 'a directory with nothing in it',
       );
-      expect(io.empty(missing), isFalse, reason: 'absent is not empty');
+      expect(io.stat(missing), isNull, reason: 'absent is not empty');
 
       // And io.has keeps meaning what it always meant.
       expect(io.has(full), isTrue);
@@ -672,8 +673,8 @@ void main() {
       io.write(io.path.join(inner, 'a.txt'), 'a');
       Link(io.path.join(inner, 'up')).createSync(temp.path);
 
-      expect(io.islink(io.path.join(inner, 'up')), isTrue);
-      expect(io.isdir(io.path.join(inner, 'up')), isFalse);
+      expect((io.stat(io.path.join(inner, 'up'))?.islink ?? false), isTrue);
+      expect((io.stat(io.path.join(inner, 'up'))?.isdir ?? false), isFalse);
 
       // Without the visited set this never returns.
       expect(io.dir.walk(temp.path).collect(.count()), greaterThan(0));
@@ -709,7 +710,7 @@ void main() {
     test('Reply carries no member that names a format', () {
       final res = Reply.text('<h1>T</h1>');
       // Every one of these used to be on Reply. The seam is `parse(codec)`.
-      expect(res.parse(format.html).find('h1').text, 'T');
+      expect(res.parse(format.html).$('h1').text, 'T');
       expect(
         res.parse(format.json).raw,
         isNull,
@@ -1451,9 +1452,15 @@ Disallow: /x
 
       expect(io.read(io.path.join(copy, 'a.txt')), equals('A'));
       expect(io.read(io.path.join(copy, 'sub', 'b.txt')), equals('B'));
-      expect(io.islink(io.path.join(copy, 'link.txt')), isTrue);
+      expect(
+        (io.stat(io.path.join(copy, 'link.txt'))?.islink ?? false),
+        isTrue,
+      );
       expect(io.dir.target(io.path.join(copy, 'link.txt')), equals('a.txt'));
-      expect(io.islink(io.path.join(copy, 'sub', 'loop')), isTrue);
+      expect(
+        (io.stat(io.path.join(copy, 'sub', 'loop'))?.islink ?? false),
+        isTrue,
+      );
       expect(io.dir.target(io.path.join(copy, 'sub', 'loop')), equals('..'));
     });
 
@@ -1515,19 +1522,17 @@ Disallow: /x
 
       io.touch(io.path.join(dir.path, 'x'));
       expect(io.dir.empty(dir.path), isFalse);
-      // `io.empty` still answers for either kind, by asking the right one.
-      expect(io.empty(file), isTrue);
-      expect(io.empty(dir.path), isFalse);
-      expect(io.empty(at('nothing')), isFalse);
+      // Each kind is asked its own member, which is what the cost is.
+      expect(io.stat(file)!.empty, isTrue);
+      expect(io.dir.empty(dir.path), isFalse);
+      expect(io.stat(at('nothing')), isNull);
     });
 
     test('io.async.dir.empty does not block', () async {
       final dir = io.dir.make(at('d'));
       expect(await io.async.dir.empty(dir.path), isTrue);
-      expect(await io.async.empty(dir.path), isTrue);
       io.touch(io.path.join(dir.path, 'x'));
       expect(await io.async.dir.empty(dir.path), isFalse);
-      expect(await io.async.empty(dir.path), isFalse);
     });
 
     test(
@@ -1561,7 +1566,7 @@ Disallow: /x
       io.dir.make(at('p/two'));
 
       expect(io.dir.sweep(at('p')), equals(1));
-      expect(io.isdir(at('p/one')), isTrue);
+      expect((io.stat(at('p/one'))?.isdir ?? false), isTrue);
       // Deepest first, so a directory is emptied before it goes and nothing
       // is counted twice.
       expect(io.dir.sweep(at('p'), only: .directory), equals(2));
@@ -1637,8 +1642,8 @@ Disallow: /x
       final scratch = io.temp('dt_scratch_');
       addTearDown(() => io.remove(io.path.dirname(scratch.path)));
 
-      expect(io.isfile(scratch.path), isTrue);
-      expect(io.empty(scratch.path), isTrue);
+      expect((io.stat(scratch.path)?.isfile ?? false), isTrue);
+      expect(io.stat(scratch.path)!.empty, isTrue);
       expect(io.temp('dt_scratch_').path, isNot(equals(scratch.path)));
     });
 
@@ -1646,7 +1651,7 @@ Disallow: /x
       final path = at('run.log');
       final log = io.append.open(path);
       for (var i = 0; i < 500; i++) {
-        log.line('line $i');
+        log.write('line $i\n');
       }
       await log.close();
 
@@ -1662,7 +1667,7 @@ Disallow: /x
       io.write(real, 'hello');
 
       io.dir.link(at('latest'), 'real.txt');
-      expect(io.islink(at('latest')), isTrue);
+      expect((io.stat(at('latest'))?.islink ?? false), isTrue);
       expect(io.dir.target(at('latest')), equals('real.txt'));
       expect(io.read(at('latest')), equals('hello'));
       // The raw target, not the resolved one, and null for anything else.
@@ -1679,7 +1684,7 @@ Disallow: /x
       io.write(at('s/deep/b.txt'), '123');
       io.dir.link(at('s/link.txt'), 'a.txt');
 
-      expect(io.size(at('s')), isZero, reason: 'a directory has no size');
+      expect(io.stat(at('s'))?.size, isZero, reason: 'a directory has no size');
       // Links count as nothing, so a tree that links twice to one file is
       // not counted twice.
       expect(io.dir.size(at('s')), equals(8));
@@ -1962,8 +1967,9 @@ Disallow: /x
       final accessor = membersOf('lib/cli/cli.dart', 'CliAccessor');
 
       // A handler's parameter is *called* `cli`, so the vocabulary has to
-      // read the same inside a handler and outside one. Nine forwarders are
-      // a mirror rather than nine flat shortcuts — once a test says so.
+      // read the same inside a handler and outside one. Eight forwarders are
+      // a mirror rather than eight flat shortcuts — once a test says so.
+      // It was nine until 6.2.0 deleted `help` from both sides.
       //
       // `switches` was on `Cli` only through 5.5.0, which sent a script
       // outside a handler through `cli.parsed.switches`: a third spelling of
@@ -2098,7 +2104,7 @@ Disallow: /x
                 }, tick: () => fetched++),
               ))
               .flow
-              .transform(.map((res) => res.parse(format.html).find('h1').text))
+              .transform(.map((res) => res.parse(format.html).$('h1').text))
               .collect(.list());
 
       expect(out, equals(['x']));
@@ -2115,9 +2121,7 @@ Disallow: /x
         // `.transform(.flat.map(map)).collect(.seq())`, and neither needs a
         // member of its own.
         final out = await crawl.flow
-            .transform(
-              .flat.map((res) => res.parse(format.html).find('h1').texts),
-            )
+            .transform(.flat.map((res) => res.parse(format.html).$('h1').texts))
             .collect(.seq());
 
         expect(out, isA<Sequence<String>>());
@@ -2132,10 +2136,387 @@ Disallow: /x
       );
       final Sequence<Fetch> next = res
           .parse(format.html)
-          .find('a')
+          .$('a')
           .attrs('href')
           .transform(.map(res.follow));
       expect(next.collect(.count()), 1);
+    });
+  });
+
+  group('6.1.0 — nothing unasked, and one knob per question', () {
+    // `Fetcher()` retried twice and sent a Chrome User-Agent, neither asked
+    // for. Against a host dropping TLS handshakes that read as the library
+    // being slower than `package:http`: one returned the failure, the other
+    // spent 11 seconds hiding it.
+    test('a fresh client retries nothing and sends no headers', () {
+      final bare = Fetcher();
+      expect(bare.retries, 0);
+      expect(bare.redirects, 0);
+      expect(bare.headers, isEmpty);
+      expect(bare.cache, isNull);
+      expect(bare.limiter, isNull);
+      expect(bare.jar, isNull);
+    });
+
+    test('the browser headers have a name now', () {
+      final scraper = Fetcher.browser();
+      expect(scraper.headers['User-Agent'], contains('Chrome/'));
+      expect(scraper.headers['Accept'], contains('text/html'));
+      expect(scraper.retries, 0, reason: 'a name, not a bundle of defaults');
+      expect(
+        Fetcher.browser(
+          headers: const {'Accept': 'application/json'},
+        ).headers['Accept'],
+        'application/json',
+        reason: 'merged over, not replacing the pair',
+      );
+    });
+
+    // `retry: bool` decided whether `retries: int` applied, and
+    // `redirect: bool` whether `redirects: int` did — the `times:`/`retries:`
+    // pair Rule 5 deleted from `concurrent.retry`, twice over and in two
+    // types. Both bools are gone; the int answers on its own.
+    test('one parameter per question, and the null means inherit', () {
+      final client = Fetcher(retries: 3, redirects: 4);
+      expect(client.retries, 3);
+      expect(client.redirects, 4);
+      // The surviving spellings, named rather than called: the analyzer is
+      // the assertion, and a returning `retry:` or `redirect:` breaks it.
+      Future<Reply> override() => client.send(
+        .get,
+        'https://example.invalid/'.url,
+        redirects: 2,
+        retries: 1,
+      );
+      expect(override, isA<Function>());
+    });
+
+    // A 302 handed back is this client reporting what the server said. The
+    // limit of 5 that used to follow it was a number nobody chose.
+    test('a redirect is an answer until a caller asks for the hop', () async {
+      final server = await net.serve(
+        0,
+        (req) async => switch (req.path) {
+          '/from' => Served.redirect('/to'.url),
+          _ => const Served.text('arrived'),
+        },
+      );
+      try {
+        final url = 'http://localhost:${server.port}/from'.url;
+        final held = await net.http.send(.get, url);
+        expect(held.status, 302);
+        expect(held.headers['location'], '/to');
+
+        final hopped = await net.http.send(.get, url, redirects: 1);
+        expect(hopped.status, 200);
+        expect(hopped.body, 'arrived');
+
+        await expectLater(
+          net.http.send(.get, url, redirects: 0).then((res) => res.status),
+          completion(302),
+          reason: 'zero hops is the default spelled out, not an error',
+        );
+      } finally {
+        await server.close(force: true);
+      }
+    });
+
+    // `concurrent.retry(fn, retries: 0)` is `fn()` under a name that promises
+    // otherwise, so this is the one number the library will not invent.
+    test('concurrent.retry requires the number it counts in', () async {
+      var calls = 0;
+      await expectLater(
+        concurrent.retry(
+          () {
+            calls++;
+            if (calls < 3) throw StateError('not yet');
+            return calls;
+          },
+          retries: 2,
+          backoff: 1.ms,
+        ),
+        completion(3),
+      );
+      // `times:` stood beside `retries:` on the function under the accessor
+      // until now, holding the same number one larger, and resolved silently
+      // in favour of whichever was read first.
+      calls = 0;
+      await expectLater(
+        concurrentRetry(
+          () {
+            calls++;
+            throw StateError('never');
+          },
+          retries: 1,
+          backoff: 1.ms,
+        ),
+        throwsStateError,
+      );
+      expect(calls, 2, reason: 'retries: 1 is two attempts');
+    });
+
+    // `onProgress` was the library's one camelCase parameter, beside
+    // `onretry` and `onchange` in the same signature's neighbourhood.
+    // `find`/`xpath` were the methods and `$` an opt-in extension on `String`,
+    // on the reasoning that a script should not be forced to see an
+    // identifier called `$`. That argument only ever covered the global: a
+    // method named `$` adds nothing to any scope.
+    test('\$ is the selector, and find is gone', () {
+      final page = format.html.parse(
+        '<ul><li class="track" data-id="1"><a href="/t/1">One</a></li></ul>',
+      );
+      expect(page.$('.track a').text, 'One');
+      expect(page.$('.track').attr('data-id'), '1');
+      expect(page.$('.track').$('a').attrs('href').collect(.list()), ['/t/1']);
+      expect(page.$xpath('//a').attr('href'), '/t/1');
+    });
+
+    test('format.html parses and selects in one call', () {
+      const markup = '<li class="track">One</li>';
+      expect(format.html.$(markup, '.track').text, 'One');
+      expect(format.html.$xpath(markup, '//li').text, 'One');
+      // The selector is required, which is what keeps it from being a second
+      // spelling of `parse`: one parses, the other parses and selects.
+      expect(format.html.parse(markup).$('.track').text, 'One');
+    });
+
+    test('the top-level functions stay opt-in, and carry the same names', () {
+      const markup = '<li class="track">One</li>';
+      expect($(markup, '.track').text, 'One');
+      expect($(markup).$('.track').text, 'One');
+      expect($xpath(markup, '//li').text, 'One');
+    });
+
+    test('download names its callback the way the others do', () {
+      Future<FileSystemEntry> call(String to) => net.http.download(
+        'https://example.invalid/x'.url,
+        to,
+        onprogress: (received, total) {},
+        retries: 0,
+      );
+      expect(call, isA<Function>());
+    });
+  });
+
+  group('6.2.0 — the helper sweep', () {
+    // Forty-odd members that were a second reading of something the library
+    // already answered. Each test below is the survivor answering it.
+
+    test('one verb, and the method is an argument', () async {
+      final server = await net.serve(
+        0,
+        (req) async => Served.text('${req.method.wire} ${req.path}'),
+      );
+      try {
+        final base = 'http://localhost:${server.port}';
+        expect((await net.http.send(.get, '$base/a'.url)).body, 'GET /a');
+        expect((await net.http.send(.head, '$base/a'.url)).status, 200);
+        expect(
+          (await net.http.send(
+            .post,
+            '$base/b'.url,
+            body: Body.json({'x': 1}),
+          )).body,
+          'POST /b',
+        );
+      } finally {
+        await server.close(force: true);
+      }
+    });
+
+    test('the kind questions are the entry stat already returns', () {
+      final dir = io.dir.temp('dt_kind_');
+      addTearDown(() => io.remove(dir.path));
+      final file = io.path.join(dir.path, 'a.txt');
+      io.write(file, 'x');
+
+      expect(io.stat(file)?.isfile, isTrue);
+      expect(io.stat(file)?.isdir, isFalse);
+      expect(io.stat(file)?.islink, isFalse);
+      expect(io.stat(file)?.size, 1);
+      expect(io.stat(file)?.empty, isFalse);
+      expect(io.stat(io.path.join(dir.path, 'nope')), isNull);
+      // `io.exists` stays: it is the one question the entry cannot answer,
+      // because there is no entry.
+      expect(io.exists(file), isTrue);
+    });
+
+    test('a cursor reads the first match, and elements reads the rest', () {
+      final page = format.html.parse(
+        '<ul><li class="a" data-id="1">one</li><li class="b">two</li></ul>',
+      );
+      expect(page.$('li').text, 'one two');
+      expect(page.$('li').attr('data-id'), '1');
+      // The plurals that stayed, because a scraper writes them.
+      expect(page.$('li').texts.collect(.list()), ['one', 'two']);
+      expect(page.$('li').attrs('data-id').collect(.list()), ['1']);
+      // The ones that went, spelled as the map they always were.
+      expect(
+        page
+            .$('li')
+            .elements
+            .transform(.map((e) => e.innerHtml))
+            .collect(.list()),
+        ['one', 'two'],
+      );
+      // `not`, `has` and `data` were a selector, a selector and a prefix.
+      expect(page.$('li').matching(':not(.a)').text, 'two');
+      expect(page.$('li').matching('.a').empty, isFalse);
+      expect(page.$('li').attr('data-id'), '1');
+    });
+
+    test('the singular of a plural is first, on both cursors', () {
+      final page = format.html.parse('<p class="r">a</p><p class="r">b</p>');
+      expect(page.all('.r', (row) => row.text).collect(.first()), 'a');
+      final doc = format.json.parse('[{"n": 1}, {"n": 2}]');
+      expect(doc.all((item) => item.number('n')).collect(.first()), 1);
+      expect(doc.all((item) => item.text('n')).nonnull.collect(.list()), [
+        '1',
+        '2',
+      ]);
+    });
+
+    test('add is one row or many, and neither has a capital in it', () {
+      final table = Table(headers: ['a', 'b'])
+        ..add(['1', '2'])
+        ..add.all([
+          ['3', '4'],
+          ['5', '6'],
+        ]);
+      final drawn = table.render();
+      for (final cell in ['1', '3', '5']) {
+        expect(drawn, contains(cell));
+      }
+    });
+
+    test('no public member of this library is camelCase', () {
+      // `Table.addAll`, `Cli.usageExit` and `Field.readAll` were the last
+      // three. `lib/src` internals are exempt: they are not exported.
+      final exported = <String>[
+        'lib/cli',
+        'lib/collection',
+        'lib/concurrent',
+        'lib/format',
+        'lib/io',
+        'lib/net',
+        'lib/system',
+        'lib/util',
+        'lib/src/codec.dart',
+        'lib/src/csv.dart',
+        'lib/src/extensions.dart',
+        'lib/src/json.dart',
+        'lib/src/method.dart',
+        'lib/src/markup.dart',
+      ];
+      // dart:core interface members and third-party members being called.
+      const exempt = {
+        'toString',
+        'hashCode',
+        'isEmpty',
+        'isNotEmpty',
+        'iterator',
+        'noSuchMethod',
+        'toJson',
+      };
+      final member = RegExp(
+        r'^  (?:static\s+)?(?:const\s+|final\s+|late\s+)?'
+        r'[A-Za-z_][\w<>,?\[\] .]*\s+(?:get\s+)?([a-z]+[A-Z]\w*)\s*[({=;]',
+      );
+
+      final offenders = <String>[];
+      for (final path in exported) {
+        final entity = FileSystemEntity.isDirectorySync(path)
+            ? Directory(path).listSync(recursive: true).whereType<File>()
+            : [File(path)];
+        for (final file in entity) {
+          if (!file.path.endsWith('.dart')) continue;
+          var line = 0;
+          for (final text in file.readAsStringSync().split('\n')) {
+            line++;
+            final match = member.firstMatch(text);
+            final name = match?.group(1);
+            if (name == null || exempt.contains(name)) continue;
+            offenders.add('${file.path}:$line declares $name');
+          }
+        }
+      }
+
+      expect(offenders, isEmpty);
+    });
+
+    test('the util one-liners are dart:core, spelled as dart:core', () {
+      final when = DateTime.utc(2024, 3, 1, 12);
+      expect(when.toUtc().toIso8601String(), startsWith('2024-03-01T12:00'));
+      expect(when.millisecondsSinceEpoch, greaterThan(0));
+      expect((Stopwatch()..start()).isRunning, isTrue);
+      expect(util.hash.sha('abc').substring(0, 8).length, 8);
+      expect(
+        util.rand
+            .shuffle([1, 2, 3])
+            .transform(.take.first(2))
+            .collect(.count()),
+        2,
+      );
+      expect(util.text.betweens('a=1;a=2;', 'a=', ';').collect(.first()), '1');
+    });
+
+    test('the deleted names are gone from every doc comment', () {
+      const gone = [
+        'Markup.one',
+        'Markup.values',
+        'Markup.htmls',
+        'Markup.outers',
+        'Markup.data',
+        'Markup.dataset',
+        'Markup.has',
+        'Markup.each',
+        'Markup.not',
+        'Markup.xpathvalues',
+        'Json.one',
+        'Json.texts',
+        'io.size',
+        'io.empty',
+        'io.isfile',
+        'io.isdir',
+        'io.islink',
+        'Appender.line',
+        'Dictionary.invert',
+        'Table.addAll',
+        'Table.length',
+        'Cli.help',
+        'Cli.usageExit',
+        'Field.readAll',
+        'Asked.json',
+        'CookieJar.length',
+        'ConsoleWriter.table',
+        'util.hash.short',
+        'util.rand.some',
+        'util.time.iso',
+        'util.time.epoch',
+        'util.time.clock',
+        'util.text.between',
+      ];
+
+      final offenders = <String>[];
+      for (final file
+          in Directory('lib')
+              .listSync(recursive: true)
+              .whereType<File>()
+              .where((f) => f.path.endsWith('.dart'))) {
+        var line = 0;
+        for (final text in file.readAsStringSync().split('\n')) {
+          line++;
+          final trimmed = text.trimLeft();
+          if (!trimmed.startsWith('///')) continue;
+          for (final name in gone) {
+            if (trimmed.contains('[$name]')) {
+              offenders.add('${file.path}:$line names [$name]');
+            }
+          }
+        }
+      }
+
+      expect(offenders, isEmpty);
     });
   });
 }

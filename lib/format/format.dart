@@ -37,7 +37,7 @@
 /// await format.yaml.write('config.yaml', cfg.raw);
 /// await format.zip.pack('site', 'site.zip');
 ///
-/// res.parse(format.html).find('h1').text;    // through the codec seam
+/// res.parse(format.html).$('h1').text;    // through the codec seam
 ///
 /// // an executable is system.run, not a wrapper:
 /// final head = await system.run('git', ['rev-parse', '--short', 'HEAD']);

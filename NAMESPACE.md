@@ -278,15 +278,16 @@ on the other fails the build.
 a complete mirror, never a partial one* was asserted in two more places and
 untrue in both:
 
-- **`Cli` and `CliAccessor`** share nine terminals — `args`, `command`, `raw`,
-  `require`, `run`, `unknown`, `usage`, `help`, `switches` — and that is
-  deliberate rather than nine flat shortcuts: a handler's parameter is
+- **`Cli` and `CliAccessor`** share eight terminals — `args`, `command`,
+  `raw`, `require`, `run`, `unknown`, `usage`, `switches` — and that is
+  deliberate rather than eight flat shortcuts: a handler's parameter is
   *called* `cli`, so the vocabulary has to read the same inside one and
   outside one. `switches` was missing from the accessor, which sent a script
   outside a handler through `cli.parsed.switches`, a third spelling of a
   member that has one. `parse` and `parsed` are the two exceptions, and they
   are Rule 3's *members with no twin*: a `Cli` cannot parse itself into
-  existence.
+  existence. It was nine through 6.1.0: `help` was `print(usage())` on both
+  sides, and 6.2.0's sweep found it claiming a carve-out it did not hold.
 - **`Ansi`'s codes and `AnsiStringExtension`'s members.** Every
   `static const String` code has a member of the same name, and four did not:
   `black`, `bgblack`, `bgmagenta` and `bgwhite`, so `'x'.red()` worked and
@@ -430,7 +431,7 @@ Three names are exempt, because they are contracts rather than choices:
   `CookieJar`, `Markup`.
 
 Anything that cannot follow the rule and is not one of those three should be
-private instead. `Reply.extractFromElement` became `Field.readAll` when the extraction types moved to the markup library;
+private instead. `Reply.extractFromElement` became `Field.readAll` when the extraction types moved to the markup library, and 6.2.0 made it `Field._readAll` when it turned out to have no caller outside its own file;
 `Morsel.parseAll` and `Morsel.defaultPath` became private; the tuning constants
 behind the bounded caches are `_emitBufferLimit` and friends. If a name is not
 worth spelling well, it is not worth exporting.
@@ -458,27 +459,111 @@ against the next thing added to it, and it found nine more:
 | Deleted | Was |
 | :--- | :--- |
 | `Markup.href` / `hrefs` / `src` / `srcs`, `Element.href` / `src` | `attr`/`attrs` with a literal — six members for two attribute names |
-| `Markup.call`, so `page(sel)` | `find`, and on an XPath cursor silently `xpath` instead |
+| `Markup.call`, so `page(sel)` | `find`, and on an XPath cursor silently `xpath` instead — both are `$` and `$xpath` since 6.1.0 |
 | `Mutex`, `concurrent.mutex()` | `Semaphore(1)` — a whole exported type for one argument |
 | `concurrent.compute` | `Isolate.run`, one line |
-| `Sequence.union`, `Sequence.findlast` | `plus().unique()`, `flip.find()` |
+| `Sequence.union`, `Sequence.findlast` | `plus().unique()`, `flip.$()` |
 | `cli.rest`, `cli.subcommand` | `args` minus its first element; an `if` with a callback |
 | `concurrent.retry`'s `times:` | `retries:`, documented as *pass one or the other* |
 | `Semaphore.acquire` / `withPermit` | a second dialect of `Limiter.take` / `guard` — and the library's one camelCase member |
 | `$` / `$xpath` on `Element` and `Document` | `element.query`, and on the *default* surface, which is what the survivor below is explicitly not |
 
+6.1.0 ran it against *parameters* rather than members, and found three more —
+all of them a `bool` deciding whether a number applied:
+
+| Deleted | Was |
+| :--- | :--- |
+| `Fetcher.send`'s `retry:` | `retries: 0` — a flag gating an int, in a second type |
+| `Fetcher.send`'s `redirect:` | `redirects: 0`, which said the same thing already |
+| `concurrentRetry`'s `times:` | `retries:` — 5.0.0 deleted this from the accessor and left it on the function underneath, where it resolved just as silently |
+
+The same sweep deleted `Fetcher.unsafe`, which is the shape one step on: not a
+second spelling of `retries` but a `bool` deciding *which methods* the int
+applied to. It existed to stop a default of `2` replaying a `POST`; with the
+default `0` there is no unasked retry left for it to guard, and a caller who
+writes `retries: 3` on a `post` has said what they meant.
+
 The pattern in most of them is a member that reads *better* than what it wraps.
-`page.find('a').href` is nicer than `attr('href')`, which is exactly the
+`page.$('a').href` is nicer than `attr('href')`, which is exactly the
 argument this rule exists to refuse — and it never covered anything, because
 the next attribute a script wants is `data-id`.
 
-The one survivor is deliberate and is not a second spelling of anything on the
-default surface: `$` and `$xpath` stay as an opt-in import, because jQuery's
-`$` is the exact thing Rule 1 means by a subject arriving with its own
-vocabulary, and a script that does not want an identifier called `$` never
-sees one. 5.0.0 made them methods rather than getters, so the opt-in spelling
-carries its own selector argument instead of leaning on a `Markup.call` sitting
-on the surface it opted out of.
+6.2.0 ran it against *helpers* — the members that are one call plus a literal,
+a first element, or a `map` over something the cursor already hands back. It
+is the widest sweep the rule has had, and the one that most needed the
+carve-out below to be read strictly rather than generously:
+
+| Deleted | Was |
+| :--- | :--- |
+| `Fetcher.get` / `post` / `put` / `delete` / `patch` / `head` | `send(.get, url)`. Six forwarders that restated eight parameters apiece to fill in one enum, and a dot shorthand fills it in at the call site. The tear-off goes with them: `concurrent.run(urls, net.http.get)` is `concurrent.run(urls, (u) => net.http.send(.get, u))` |
+| `Markup.one` and `Json.one` | `all(...).collect(.first())` — the nullable singular of a plural, which is the family Rule 4 says a `T?` return already covers |
+| `Markup.htmls` / `outers` / `values` | `elements` with a `map`. The cursor *holds* a sequence since 5.0.0 precisely so the per-element read has one spelling, and `texts` / `attrs` stay because a scraper writes those two |
+| `Markup.data` / `dataset` | `attr('data-$key')` — `attr` with a literal prefix, which is the `href`/`src` deletion of 5.0.0 arriving a release late |
+| `Markup.has` | `!m.matching('.live').empty` — a member for one selector form |
+| `Markup.not` | `matching(':not(.live))` — CSS has the word, and the cursor already speaks CSS |
+| `Markup.each` | `elements.transform(.enumerate()).collect(.foreach(...))`. `forEachIndexed` under another name, which Rule 4's *a record replaces a variant* covers |
+| `Markup.xpathvalues` | `$xpath('//a').texts` and `$xpath('//a').attrs('href')` — a third reader, spelled as a compound, for what the two cursors' own readers answer |
+| `Markup.operator []` | `at(i)` returns a cursor and `elements.collect(.at(i))` an element; the operator was a third way to index |
+| `Element.attr` | `element.attributes[name]` — `package:html`'s own map, under our name |
+| `Json.texts` | `all((item) => item.text()).nonnull` |
+| `io.isfile` / `isdir` / `islink`, on both accessors | `io.stat(p)?.isfile`. Six members re-reading the entry [stat] returns, in the one domain that charges a syscall for asking twice |
+| `io.size` / `io.empty`, on both accessors | `io.stat(p)?.size`; and `empty` fused two questions with two costs — `io.stat(p)!.empty` for a file, `io.dir.empty(p)` for a directory, so the listing is asked for by name |
+| `Appender.line` | `write('$content\n')` |
+| `Dictionary.invert` | `transform(.map((p) => (p.$2, p.$1)))` |
+| `Table.length` | nothing writes it; a table is built and rendered |
+| `ConsoleWriter.table` | `write(table.render())`. The fourth member of the family 5.0.0 deleted `createTable`, `progress` and `spinner` from |
+| `Cli.help`, on both mirrors | `print(cli.usage())`. It claimed the carve-out below and did not hold it: the general form is one word longer, not four |
+| `Asked.json` | `format.json.parse(await req.text())` — `Reply.json` was deleted in 4.0.0 and its twin on the request side was missed |
+| `CookieJar.length` | `jar.cookies.collect(.count())`, and `length` is not the word this library counts with |
+| `util.hash.short` | `sha(x).substring(0, 8)` |
+| `util.rand.some` | `shuffle(items).transform(.take.first(n))` |
+| `util.time.iso` / `epoch` / `clock` | `date.toUtc().toIso8601String()`, `date.millisecondsSinceEpoch`, `Stopwatch()..start()` — three `dart:core` one-liners under this domain's name, which is what `system.exit` was deleted for |
+| `util.text.between` | `betweens(...).collect(.first())`, and it was a second scan rather than a second spelling |
+
+**Four candidates failed the sweep, and the reasons are the rule.**
+`Collector.has` is `Iterable.contains`, which a `Set` answers in constant time
+where `any` cannot — a different implementation, not a second spelling.
+`logger.step` carries its own badge and its own `step`/`total` fields into the
+JSON line, so `info('[2/5] …')` is a different record. `Markup.extract` is the
+loose-spec door Rule 6 blesses beside `pick`. And `Table.add.all` is one line
+over `add`, which a script with its rows already in hand writes constantly.
+
+The same release closed the camelCase hole for good. Three public members
+still had a capital in the middle — `Table.addAll`, `Cli.usageExit` and
+`Field.readAll` — and each took a different exit:
+
+- **`Table.addAll` is `Table.add.all`.** Dart spells it `addAll`, so the
+  splitting rule applies unchanged: split at the capital rather than joining
+  or renaming. `add` is a callable namespace holding `call` and `all`, the
+  shape `count()` / `count.by` has had since 5.1.0.
+- **`Cli.usageExit` is `Cli.misuse`.** Nothing to split — the compound is this
+  library's own, not Dart's — so Rule 4's first line applies and one word does
+  it. `run` returns it, and `Cli.misuse` says what happened rather than what
+  the number is for.
+- **`Field.readAll` is private.** It had no caller outside
+  `lib/src/markup.dart`, and Rule 4's last line is that a name not worth
+  spelling well is not worth exporting.
+
+`test/regression_test.dart` pins the absence: one sweep asserts no exported
+member is camelCase, another that no doc comment still names one of the
+deleted members.
+
+`$` was the one survivor of this rule for four releases — an opt-in import,
+because jQuery's `$` is the exact thing Rule 1 means by a subject arriving
+with its own vocabulary, and a script that does not want an identifier called
+`$` should never see one. 6.1.0 read that argument again and found it proved
+something narrower than the design built on it: **the objection is to a global
+named `$`, and a method named `$` is not a global.** `page.$('a')` adds no
+identifier to any scope.
+
+So the subject's own name won outright. `$` and `$xpath` are the selector
+methods on `Markup` and the parse-and-select members of `format.html`, on the
+default surface; `find` and `xpath` are gone rather than standing beside them,
+which is this rule applied in the direction it always pointed. The two
+top-level functions really are globals and stay behind
+`package:dart_toolkit/html.dart`. `extension QuerySelectorOnHtmlString on
+String` went with the rename — a third door onto one operation, and the only
+one that had to be an extension because `String` is not ours.
 
 5.1.0 ran it again, over a vocabulary rather than over a surface, and deleted
 four more:
@@ -577,11 +662,11 @@ sweep does not re-litigate them:
 | `Table.add(List<Object?> row)` | Cells are rendered with `toString`; that *is* the contract. |
 | `logger.info(msg, fields: {...})` | Structured log fields, encoded straight to JSON. |
 | `Dictionary<String, Object?>` under `Slot` | The escape hatch under a typed API, deliberately shaped like the JSON it holds. `read`/`write` are the typed twin. |
-| `res.parse(format.html).extract(schema)`, `Field.of`, `NestField`, `ListField` | The string shorthand, which this rule blesses *alongside* the typed form. Its whole job is to accept a loose spec; `all`/`one`/`pick` are the typed twin. |
+| `res.parse(format.html).extract(schema)`, `Field.of`, `NestField`, `ListField` | The string shorthand, which this rule blesses *alongside* the typed form. Its whole job is to accept a loose spec; `all` and `pick` are the typed twin. |
 
 5.0.0 closed the last two places where a URL was not a `Uri`:
 `net.crawl(target)` took a `String`, one line from `net.crawl.sitemap(Uri)` and
-one call from `net.http.get(Uri)`, and it doubled as a raw-HTML seed depending
+one call from `net.http.send(.get, Uri)`, and it doubled as a raw-HTML seed depending
 on what the string looked like — the untyped overload this rule is for.
 `Served.redirect(location)` took one too. 6.0.0 went further and made a seed a
 `Fetch`, which carries a `Uri`: `net.crawl([Fetch(url)], next)` is the one

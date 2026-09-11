@@ -58,12 +58,6 @@ class RandAccessor {
     return items[_rng.nextInt(items.length)];
   }
 
-  /// [count] distinct items chosen from [items], in random order.
-  ///
-  /// Returns everything, shuffled, when [count] exceeds the list length.
-  Sequence<T> some<T>(List<T> items, int count) =>
-      shuffle(items).transform(.take.first(count < 0 ? 0 : count));
-
   /// A shuffled copy of [items], leaving the original untouched.
   ///
   /// Randomness lives here rather than on [Sequence], so a sequence gets it by

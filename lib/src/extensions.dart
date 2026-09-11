@@ -12,7 +12,7 @@ library;
 /// `package:http`. This keeps call sites short:
 ///
 /// ```dart
-/// final res = await net.http.get('https://example.com'.url);
+/// final res = await net.http.send(.get, 'https://example.com'.url);
 /// ```
 extension UrlString on String {
   /// Parses this string as a [Uri].

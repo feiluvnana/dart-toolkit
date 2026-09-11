@@ -98,7 +98,7 @@ void main() {
       expect(doc.text('version'), equals('3.2.0'));
       expect(doc.text('environment.sdk'), equals('^3.7.0'));
       expect(
-        doc.at('dependencies').texts().collect(.list()),
+        doc.at('dependencies').all((d) => d.text()).nonnull.collect(.list()),
         equals(['html', 'http']),
       );
       expect(doc.flag('flags.strict'), isTrue);

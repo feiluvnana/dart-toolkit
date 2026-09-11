@@ -70,7 +70,7 @@ void main() async {
   // script actually asks.
   log.info('has    ${io.has(io.path.join(dir, 'products.json'))}');
   log.info(
-    'size   ${util.size.format(io.size(io.path.join(dir, 'products.json'))!)}',
+    'size   ${util.size.format(io.stat(io.path.join(dir, 'products.json'))!.size)}',
   );
   log.info(
     'sha    ${io.hash(io.path.join(dir, 'products.json')).substring(0, 12)}',
@@ -84,7 +84,7 @@ void main() async {
   // ------------------------------------------------------------- non-blocking
   await io.async.write(
     io.path.join(dir, 'run.log'),
-    'finished ${util.time.iso()}',
+    'finished ${DateTime.now().toUtc().toIso8601String()}',
   );
   log.info(
     'Async read: ${(await io.async.read(io.path.join(dir, 'run.log'))).trim()}',
@@ -113,7 +113,7 @@ void main() async {
   final count = (db.read(runs) ?? 0) + 1;
   db
     ..write(runs, count)
-    ..write(last, util.time.iso())
+    ..write(last, DateTime.now().toUtc().toIso8601String())
     ..dump(statePath);
   log.ok('Run #$count (last ${db.read(last)}).');
 }

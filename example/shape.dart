@@ -66,34 +66,43 @@ void main() async {
   // The daily-report shape, in one expression. `group.by` gives a
   // Dictionary<K, Sequence<T>>, `.pairs` turns it back into records, and
   // `sum`, `avg`, `max.by` and `count.by` finish it.
-  out.table(
-    Table(
-      headers: ['Region', 'Orders', 'Revenue', 'Best'],
-      alignments: [
-        ColumnAlign.left,
-        ColumnAlign.right,
-        ColumnAlign.right,
-        ColumnAlign.left,
-      ],
-    )..addAll([
-      for (final row
-          in sales
-              .collect(.group.by((s) => s.region))
-              .pairs
-              .transform(
-                .map(
-                  (e) => (
-                    region: e.$1,
-                    orders: e.$2.collect(.count()),
-                    revenue: e.$2.collect(.sum((s) => s.amount)),
-                    best: e.$2.collect(.max.by((s) => s.amount))?.product ?? '',
-                  ),
-                ),
-              )
-              .transform(.sort.by((e) => e.region))
-              .collect(.list()))
-        [row.region, row.orders, row.revenue.toStringAsFixed(2), row.best],
-    ]),
+  out.write(
+    (Table(
+            headers: ['Region', 'Orders', 'Revenue', 'Best'],
+            alignments: [
+              ColumnAlign.left,
+              ColumnAlign.right,
+              ColumnAlign.right,
+              ColumnAlign.left,
+            ],
+          )
+          ..add.all([
+            for (final row
+                in sales
+                    .collect(.group.by((s) => s.region))
+                    .pairs
+                    .transform(
+                      .map(
+                        (e) => (
+                          region: e.$1,
+                          orders: e.$2.collect(.count()),
+                          revenue: e.$2.collect(.sum((s) => s.amount)),
+                          best:
+                              e.$2.collect(.max.by((s) => s.amount))?.product ??
+                              '',
+                        ),
+                      ),
+                    )
+                    .transform(.sort.by((e) => e.region))
+                    .collect(.list()))
+              [
+                row.region,
+                row.orders,
+                row.revenue.toStringAsFixed(2),
+                row.best,
+              ],
+          ]))
+        .render(),
   );
 
   // `count.by` is a counted report in one call; `util.time.day` is the
@@ -161,7 +170,10 @@ void main() async {
   log.ok(
     'Wrote and re-read ${io.path.filename(config)}: ${back.text('title')}',
   );
-  log.info('regions:    ${back.at('regions').texts().collect(.join(', '))}');
+  log.info(
+    'regions:    '
+    '${back.at('regions').all((r) => r.text()).nonnull.collect(.join(', '))}',
+  );
   log.info('rows:       ${back.number('limits.rows')}');
 
   // And a template, for the text a script generates rather than reads.

@@ -7,7 +7,7 @@ void main() {
   group('concurrent.rate', () {
     test('starts full, so the first burst does not wait', () async {
       final limit = concurrent.rate(3, per: 10.s);
-      final clock = util.time.clock();
+      final clock = (Stopwatch()..start());
       await limit.take();
       await limit.take();
       await limit.take();
@@ -20,7 +20,7 @@ void main() {
       // 20 per second is a token every 50ms; five of them from empty is ~200ms.
       final limit = concurrent.rate(1, per: 50.ms);
       await limit.take(); // spends the one token it started with
-      final clock = util.time.clock();
+      final clock = (Stopwatch()..start());
       for (var i = 0; i < 4; i++) {
         await limit.take();
       }

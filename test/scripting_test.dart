@@ -56,9 +56,9 @@ void main() {
 
     test('a selector collapses the page indentation', () {
       final res = Reply.text(page);
-      expect(res.parse(format.html).find('.name').text, 'Wireless Keyboard');
-      expect(res.parse(format.html).find('.price').text, r'$49.99');
-      expect(res.parse(format.html).find('.tags li').texts.collect(.list()), [
+      expect(res.parse(format.html).$('.name').text, 'Wireless Keyboard');
+      expect(res.parse(format.html).$('.price').text, r'$49.99');
+      expect(res.parse(format.html).$('.tags li').texts.collect(.list()), [
         'usb',
         'bluetooth',
       ]);
@@ -100,7 +100,7 @@ void main() {
       final res = Reply.text(page);
       // What <pre> means. Collapsing it would destroy scraped code samples.
       expect(
-        res.parse(format.html).find('.code').text,
+        res.parse(format.html).$('.code').text,
         'line one\n  indented two',
       );
       expect(
@@ -111,7 +111,7 @@ void main() {
 
     test('a textarea keeps its whitespace as well', () {
       const html = '<form><textarea>  keep\n  me  </textarea></form>';
-      expect($(html).find('textarea').text, 'keep\n  me');
+      expect($(html).$('textarea').text, 'keep\n  me');
     });
 
     test('an element nested inside a pre is still preformatted', () {
@@ -172,7 +172,7 @@ void main() {
       final again = net.crawl(pending)
         ..using(serve(const {'/a': '<h1>second try</h1>'}));
       final served = await again.flow
-          .transform(.map((res) => res.parse(format.html).find('h1').text))
+          .transform(.map((res) => res.parse(format.html).$('h1').text))
           .collect(.list());
 
       expect(served, ['second try']);
@@ -210,7 +210,7 @@ void main() {
         seen.add('start');
         final titles = await crawl.flow
             .transform(.tap((res) => seen.add('progress')))
-            .transform(.map((res) => res.parse(format.html).find('h1').text))
+            .transform(.map((res) => res.parse(format.html).$('h1').text))
             .collect(.list());
         seen.add('done');
 
@@ -338,13 +338,13 @@ void main() {
               .flat.map(
                 (res) => res
                     .parse(format.html)
-                    .find('.p')
+                    .$('.p')
                     .elements
                     .transform(
                       .map(
                         (card) => <String, Object?>{
-                          'name': card.query.find('h2').text,
-                          'price': card.query.find('.c').text,
+                          'name': card.query.$('h2').text,
+                          'price': card.query.$('.c').text,
                         },
                       ),
                     ),

@@ -845,7 +845,7 @@ class Fs {
 
   /// Streams [url] to [path] atomically via a `.part` staging file.
   ///
-  /// [onProgress] receives `(received, total)` as bytes arrive; `total` is `-1`
+  /// [onprogress] receives `(received, total)` as bytes arrive; `total` is `-1`
   /// when the server sends no `Content-Length`. A short read against a known
   /// length fails rather than renaming a truncated file into place. Pass
   /// [client] to reuse an existing connection pool.
@@ -854,7 +854,7 @@ class Fs {
     String path, {
     http.Client? pool,
     Map<String, String>? headers,
-    void Function(int received, int total)? onProgress,
+    void Function(int received, int total)? onprogress,
     String part = '.part',
   }) {
     final httpClient = pool ?? http.Client();
@@ -876,7 +876,7 @@ class Fs {
           await response.stream.listen((chunk) {
             sink.add(chunk);
             received += chunk.length;
-            onProgress?.call(received, total);
+            onprogress?.call(received, total);
           }).asFuture<void>();
           await sink.flush();
         } finally {

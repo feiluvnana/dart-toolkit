@@ -69,7 +69,7 @@ void main() async {
       .using(_fixture)
       .flow
       .transform(.where((res) => res.fetch.tag == 'home'))
-      .transform(.map((res) => res.parse(format.html).find('.welcome').text))
+      .transform(.map((res) => res.parse(format.html).$('.welcome').text))
       .collect(.single());
 
   log.ok('Signed in: $greeting');

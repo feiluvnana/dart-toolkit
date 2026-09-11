@@ -31,7 +31,10 @@ void main() {
       expect(table.render(), contains('A'));
       expect(table.render(), contains('1'));
 
-      expect(() => system.console.writer.table(table), returnsNormally);
+      expect(
+        () => system.console.writer.write(table.render()),
+        returnsNormally,
+      );
       expect(
         () => system.console.writer.box('Hello World\nLine 2', title: 'Box'),
         returnsNormally,
@@ -42,12 +45,13 @@ void main() {
     test('table alignments pad by visible width', () {
       final table =
           Table(
-            headers: ['Left', 'Right'],
-            alignments: [ColumnAlign.left, ColumnAlign.right],
-          )..addAll([
-            ['a', '1'],
-            ['bbb', '22'],
-          ]);
+              headers: ['Left', 'Right'],
+              alignments: [ColumnAlign.left, ColumnAlign.right],
+            )
+            ..add.all([
+              ['a', '1'],
+              ['bbb', '22'],
+            ]);
       final lines = table.render().split('\n');
       // Every rendered row is the same visible width.
       final widths = lines
@@ -239,7 +243,7 @@ void main() {
         );
         expect(io.hash(path).length, equals(64));
         expect(io.hash(path, Algo.md5).length, equals(32));
-        expect(io.size(path)!, greaterThan(0));
+        expect(io.stat(path)!.size, greaterThan(0));
 
         expect(
           io.dir.walk(temp.path, only: .file).collect(.count()),
@@ -267,7 +271,7 @@ void main() {
           equals(utf8.encode('async content')),
         );
         expect((await io.async.hash(txtPath)).length, equals(64));
-        expect((await io.async.size(txtPath))!, greaterThan(0));
+        expect((await io.async.stat(txtPath))!.size, greaterThan(0));
 
         final jsonPath = io.path.join(temp.path, 'data.json');
         io.dump(jsonPath, {'key': 'val'});
@@ -810,13 +814,10 @@ void main() async {
 
       expect(res.ok, isTrue);
       expect(res.body, contains('Welcome'));
-      expect(res.parse(format.html).find('h1').text, equals('Welcome'));
+      expect(res.parse(format.html).$('h1').text, equals('Welcome'));
+      expect(res.parse(format.html).$('a').attr('href'), equals('/sub/page'));
       expect(
-        res.parse(format.html).find('a').attr('href'),
-        equals('/sub/page'),
-      );
-      expect(
-        res.parse(format.html).find('img').attr('src'),
+        res.parse(format.html).$('img').attr('src'),
         equals('/images/pic.png'),
       );
       expect(
@@ -855,7 +856,7 @@ void main() async {
 
       final root = 'http://${server.address.host}:${server.port}';
       try {
-        final res = await net.http.get('$root/hello'.url);
+        final res = await net.http.send(.get, '$root/hello'.url);
         expect(res.ok, isTrue);
         expect(
           (res.parse(format.json).raw as Map<String, Object?>)['message'],
@@ -864,21 +865,23 @@ void main() async {
         // json is cached, so a second read is free and consistent.
         expect(res.parse(format.json).raw, same(res.parse(format.json).raw));
 
-        final posted = await net.http.post(
+        final posted = await net.http.send(
+          .post,
           '$root/echo'.url,
           body: const Body.text('toolkit'),
         );
         expect(posted.status, equals(201));
         expect(posted.body, equals('Echo: toolkit'));
 
-        final form = await net.http.post(
+        final form = await net.http.send(
+          .post,
           '$root/echo'.url,
           body: const Body.form({'a': '1'}),
         );
         expect(form.body, equals('Echo: a=1'));
 
         final client = Fetcher(timeout: const Duration(seconds: 5));
-        expect((await client.get('$root/hello'.url)).ok, isTrue);
+        expect((await client.send(.get, '$root/hello'.url)).ok, isTrue);
         await client.close();
       } finally {
         await server.close(force: true);
@@ -927,25 +930,29 @@ void main() async {
       final root = 'http://${server.address.host}:${server.port}';
       try {
         // Charset from header
-        final latin1Res = await net.http.get('$root/latin1'.url);
+        final latin1Res = await net.http.send(.get, '$root/latin1'.url);
         expect(latin1Res.type, equals('text/html'));
         expect(latin1Res.charset, equals('iso-8859-1'));
         expect(latin1Res.body, contains('café'));
 
         // Meta sniff
-        final metaRes = await net.http.get('$root/meta-sniff'.url);
+        final metaRes = await net.http.send(.get, '$root/meta-sniff'.url);
         expect(metaRes.charset, equals('iso-8859-1'));
         expect(metaRes.body, contains('résumé'));
 
         // decode fallback
-        final notJsonRes = await net.http.get('$root/not-json'.url);
+        final notJsonRes = await net.http.send(.get, '$root/not-json'.url);
         expect(
           notJsonRes.parse(format.json).raw ?? ({'fallback': true}),
           equals({'fallback': true}),
         );
 
         // Redirect URL tracking
-        final redirectRes = await net.http.get('$root/redirect-src'.url);
+        final redirectRes = await net.http.send(
+          .get,
+          '$root/redirect-src'.url,
+          redirects: 3,
+        );
         expect(redirectRes.fetch.url.toString(), equals('$root/redirect-src'));
         expect(redirectRes.url.toString(), equals('$root/redirect-dst'));
         expect(redirectRes.body, equals('arrived at dest'));
@@ -985,7 +992,8 @@ void main() async {
       });
 
       try {
-        final res = await net.http.get(
+        final res = await net.http.send(
+          .get,
           'http://${server.address.host}:${server.port}'.url,
         );
         final extracted = res.parse(format.html).extract({
@@ -1034,7 +1042,7 @@ void main() async {
         final root = 'http://${server.address.host}:${server.port}';
         final client = Fetcher(session: true);
         try {
-          final loginRes = await client.get('$root/login'.url);
+          final loginRes = await client.send(.get, '$root/login'.url);
           expect(loginRes.body, equals('logged in'));
           expect(client.jar?.cookies.collect(.count()), equals(1));
           expect(
@@ -1043,7 +1051,7 @@ void main() async {
           );
 
           // Next request sends cookie
-          final profileRes = await client.get('$root/profile'.url);
+          final profileRes = await client.send(.get, '$root/profile'.url);
           expect(profileRes.body, contains('session_id=secret123'));
         } finally {
           await client.close();
@@ -1346,15 +1354,15 @@ void main() async {
 
   group('util Domain', () {
     test('util.time waits, stamps and formats', () async {
-      final clock = util.time.clock();
+      final clock = (Stopwatch()..start());
       await util.time.wait(20.ms);
       clock.stop();
       expect(clock.elapsedMilliseconds, greaterThanOrEqualTo(10));
 
       expect(RegExp(r'^\d{8}_\d{6}$').hasMatch(util.time.stamp()), isTrue);
-      expect(util.time.iso(), contains('T'));
-      expect(util.time.iso(), endsWith('Z'));
-      expect(util.time.epoch(), greaterThan(0));
+      expect(DateTime.now().toUtc().toIso8601String(), contains('T'));
+      expect(DateTime.now().toUtc().toIso8601String(), endsWith('Z'));
+      expect(DateTime.now().millisecondsSinceEpoch, greaterThan(0));
 
       expect(util.time.format(45.s), equals('00:45'));
       expect(
@@ -1536,12 +1544,12 @@ void main() async {
       expect(
         format.html
             .parse('<div><h1 class="title">Domain Test</h1></div>')
-            .find('.title')
+            .$('.title')
             .text,
         equals('Domain Test'),
       );
       expect(
-        '<h1 class="title">Domain Test</h1>'.$('.title').text,
+        format.html.$('<h1 class="title">Domain Test</h1>', '.title').text,
         equals('Domain Test'),
       );
     });

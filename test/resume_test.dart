@@ -28,7 +28,7 @@ Send serve(Map<String, String> pages) =>
     (fetch) async => Reply.text(pages['${fetch.url}'] ?? '', fetch: fetch);
 
 Sequence<Fetch> links(Reply res) =>
-    res.parse(format.html).find('a').attrs('href').transform(.map(res.follow));
+    res.parse(format.html).$('a').attrs('href').transform(.map(res.follow));
 
 String tempPath(String name) =>
     '${Directory.systemTemp.createTempSync('dt_resume_').path}/$name';

@@ -52,9 +52,11 @@ void main(List<String> args) async {
   cli.parse(args);
 
   if (help()) {
-    cli.help(
-      syntax: 'example.dart [options]',
-      desc: 'The pipeline, end to end.',
+    print(
+      cli.usage(
+        syntax: 'example.dart [options]',
+        desc: 'The pipeline, end to end.',
+      ),
     );
     return;
   }
@@ -64,7 +66,7 @@ void main(List<String> args) async {
 
   final log = system.console.logger;
   final out = system.console.writer;
-  final clock = util.time.clock();
+  final clock = (Stopwatch()..start());
   final dir = io.path.join('output', 'pipeline');
 
   // Tracked partial files are removed if the run is interrupted. Registering a
@@ -113,7 +115,7 @@ void main(List<String> args) async {
     return (
       product: product,
       slug: util.text.slug(product.name),
-      key: util.hash.short(product.url),
+      key: util.hash.sha(product.url).substring(0, 8),
     );
   }, size: size());
   bar.done();
@@ -153,7 +155,7 @@ void main(List<String> args) async {
   final count = (db.read(runs) ?? 0) + 1;
   db
     ..write(runs, count)
-    ..write(last, util.time.iso())
+    ..write(last, DateTime.now().toUtc().toIso8601String())
     ..dump(statePath);
 
   // --------------------------------------------------------------- 4. tool
@@ -164,7 +166,7 @@ void main(List<String> args) async {
     'catalogue-${util.time.stamp()}.tar.gz',
   );
   await format.zip.pack(io.path.join(dir, 'products.json'), archive);
-  log.ok('Packed ${util.size.format(io.size(archive)!)} into $archive.');
+  log.ok('Packed ${util.size.format(io.stat(archive)!.size)} into $archive.');
 
   // An executable is `system.run`, not a wrapper: `tool` holds formats only.
   final head = await system.run('git', ['rev-parse', '--abbrev-ref', 'HEAD']);
@@ -180,14 +182,16 @@ void main(List<String> args) async {
   log.step(5, 5, 'Summary');
 
   final cheapest = products.transform(.sort.by((p) => p.price));
-  out.table(
-    Table(
-      headers: ['Product', 'Price', 'Slug'],
-      alignments: [ColumnAlign.left, ColumnAlign.right, ColumnAlign.left],
-    )..addAll([
-      for (final e in enriched.transform(.take.first(5)).collect(.list()))
-        [e.product.name, '\$${e.product.price}', e.slug],
-    ]),
+  out.write(
+    (Table(
+            headers: ['Product', 'Price', 'Slug'],
+            alignments: [ColumnAlign.left, ColumnAlign.right, ColumnAlign.left],
+          )
+          ..add.all([
+            for (final e in enriched.transform(.take.first(5)).collect(.list()))
+              [e.product.name, '\$${e.product.price}', e.slug],
+          ]))
+        .render(),
   );
 
   out.box(
@@ -213,16 +217,15 @@ Sequence<Fetch> _next(Reply res) => switch (res.fetch.tag) {
   null =>
     res
         .parse(format.html)
-        .find('.product')
+        .$('.product')
         .elements
         .transform(
           .map(
             (card) => res.follow(
-              card.query.find('a').attr('href') ?? '',
+              card.query.$('a').attr('href') ?? '',
               tag: 'product',
               meta: [
-                if (util.text.number(card.query.find('.price').text)
-                    case final p?)
+                if (util.text.number(card.query.$('.price').text) case final p?)
                   listed(p),
               ],
             ),
@@ -231,7 +234,7 @@ Sequence<Fetch> _next(Reply res) => switch (res.fetch.tag) {
         .transform(
           .plus(
             [
-              if (res.parse(format.html).find('a.next').attr('href')
+              if (res.parse(format.html).$('a.next').attr('href')
                   case final next?)
                 res.follow(next),
             ].seq,

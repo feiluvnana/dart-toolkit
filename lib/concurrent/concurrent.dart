@@ -24,7 +24,11 @@ const ConcurrentAccessor concurrent = ConcurrentAccessor();
 /// Entry point for bounded concurrency.
 ///
 /// ```dart
-/// final replies = await concurrent.run(urls, net.http.get, size: 8);
+/// final replies = await concurrent.run(
+///   urls,
+///   (u) => net.http.send(.get, u),
+///   size: 8,
+/// );
 /// ```
 class ConcurrentAccessor {
   /// Creates the accessor. Prefer the shared [concurrent] instance.
@@ -57,9 +61,15 @@ class ConcurrentAccessor {
   /// what `Fetcher.retries` already means — so `retries: 2` runs [fn] up to
   /// three times.
   ///
+  /// **Required**, because this is the one place in the library where `0`
+  /// could not be the default: everything else switched off is a client that
+  /// still fetches, and `retry(fn, retries: 0)` is `fn()` under a name that
+  /// promises otherwise. A number nobody chose was the other option, and `2`
+  /// is what that looked like.
+  ///
   /// ```dart
   /// await concurrent.retry(
-  ///   () => net.http.get(url),
+  ///   () => net.http.send(.get, url),
   ///   retries: 3,
   ///   backoff: 500.ms,
   ///   onretry: (error, attempt) => log.warn('attempt $attempt: $error'),
@@ -70,17 +80,18 @@ class ConcurrentAccessor {
   /// the other* — two parameters for one number, which is the failure Rule 5
   /// records the CLI's `def`/`defaultValue` pair going for. It also resolved
   /// silently: `retries` was read first, so `retry(fn, times: 5, retries: 1)`
-  /// ran two attempts and ignored the five.
+  /// ran two attempts and ignored the five. [concurrentRetry], the function
+  /// under this one, kept its copy until 6.1.0.
   Future<T> retry<T>(
     FutureOr<T> Function() fn, {
-    int retries = 2,
+    required int retries,
     Duration backoff = const Duration(milliseconds: 100),
     Duration cap = const Duration(seconds: 30),
     bool Function(Object error)? when,
     void Function(Object error, int attempt)? onretry,
   }) => concurrentRetry(
     fn,
-    times: retries + 1,
+    retries: retries,
     backoff: backoff,
     cap: cap,
     when: when,
@@ -105,14 +116,14 @@ class ConcurrentAccessor {
   ///
   /// ```dart
   /// final limit = concurrent.rate(10, per: 1.s);
-  /// await limit.guard(() => net.http.get(url));
+  /// await limit.guard(() => net.http.send(.get, url));
   /// ```
   ///
   /// It composes with the bound that is already here, which is the argument
   /// for it living in this domain:
   ///
   /// ```dart
-  /// await concurrent.run(urls, (u) => limit.guard(() => net.http.get(u)),
+  /// await concurrent.run(urls, (u) => limit.guard(() => net.http.send(.get, u)),
   ///     size: 8);          // 8 in flight, never more than 10 per second
   /// ```
   Limiter rate(int count, {Duration per = const Duration(seconds: 1)}) =>
@@ -586,7 +597,7 @@ class Semaphore implements Waiting {
 /// final limit = concurrent.rate(10, per: 1.s);
 ///
 /// await limit.take();                            // waits for a token
-/// await limit.guard(() => net.http.get(url));    // the wrapped form
+/// await limit.guard(() => net.http.send(.get, url));    // the wrapped form
 /// ```
 ///
 /// **The bucket refills smoothly**, one token every `per / count`, rather than
@@ -712,20 +723,27 @@ class Limiter implements Waiting {
 
 /// Retries [fn] if it throws.
 ///
-/// [times] is the total number of attempts; [retries] is the number of extra
-/// attempts after the first. The delay grows linearly from [backoff], is
-/// capped at [cap], and carries up to 25% jitter so a pool of retrying
-/// tasks does not resynchronise onto the same instant.
+/// [retries] is the number of *extra* attempts after the first, the one
+/// number every retry in this library counts in — `concurrent.retry`,
+/// `Fetcher.retries`, `Fetcher.send` — and it is required here for the
+/// reason `concurrent.retry` gives. The delay grows linearly from
+/// [backoff], is capped at [cap], and carries up to 25% jitter so a pool of
+/// retrying tasks does not resynchronise onto the same instant.
+///
+/// A `times:` stood beside [retries] here until 6.1.0, holding the same
+/// number one larger. 5.0.0 deleted it from `concurrent.retry` under Rule 5
+/// and left it on the function that one calls, where it resolved just as
+/// silently: `retries` was read first, so a call passing both ignored
+/// `times` without a word.
 Future<T> concurrentRetry<T>(
   FutureOr<T> Function() fn, {
-  int times = 3,
-  int? retries,
+  required int retries,
   Duration backoff = const Duration(milliseconds: 100),
   Duration cap = const Duration(seconds: 30),
   bool Function(Object error)? when,
   void Function(Object error, int attempt)? onretry,
 }) async {
-  final count = retries != null ? retries + 1 : times;
+  final count = retries + 1;
   var attempt = 0;
   while (true) {
     attempt++;
