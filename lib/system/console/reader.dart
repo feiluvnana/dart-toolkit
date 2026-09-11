@@ -10,6 +10,7 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 
+import '../../collection/flow.dart';
 import '../../collection/sequence.dart';
 import 'ansi.dart';
 
@@ -46,19 +47,25 @@ class ConsoleReader {
   /// Every remaining line of stdin, until end of input.
   ///
   /// This is how a tool reads what was piped into it — `cat urls.txt | mytool`
-  /// — without a hand-rolled loop around [line]:
+  /// — without a hand-rolled loop around [line], and a [Flow] rather than a
+  /// `Stream` so the piped input is shapeable and can be worked through a
+  /// bounded pool:
   ///
   /// ```dart
-  /// await for (final url in system.console.reader.lines) {
-  ///   await fetch(url.trim().url);
-  /// }
+  /// // setup: Future<void> fetch(Uri u) async {}
+  /// await system.console.reader.lines
+  ///     .transform(.map((line) => line.trim()))
+  ///     .run((line) => fetch(line.url), size: 4)
+  ///     .collect(.count());
   /// ```
   ///
   /// Shares one stdin subscription with [line] and the prompts, so a tool can
   /// read a pipe and still ask a question. Ends when stdin closes; against a
   /// terminal that means it waits for the reader to end the input themselves,
   /// so guard it with [piped] where both modes are supported.
-  Stream<String> get lines async* {
+  Flow<String> get lines => Flow(_lines());
+
+  Stream<String> _lines() async* {
     while (true) {
       final next = await line();
       if (next == null) return;
@@ -74,7 +81,7 @@ class ConsoleReader {
   /// ```dart
   /// final urls =
   ///     system.console.reader.piped
-  ///         ? await system.console.reader.lines.toList()
+  ///         ? await system.console.reader.lines.collect(.list())
   ///         : [await system.console.reader.ask('URL')];
   /// ```
   bool get piped {

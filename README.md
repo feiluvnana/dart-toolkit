@@ -22,7 +22,7 @@ One is neither, because it is a vocabulary rather than a way in:
 
 | Domain | Holds | Focus |
 | :--- | :--- | :--- |
-| `collection` | `Sequence`, `Dictionary`, `Transformer`, `Collector`, `Slot` | The two collections this library returns in place of Dart's, and the two operation types that shape them. A library, not an accessor — you reach all of it from the data you already hold |
+| `collection` | `Sequence`, `Dictionary`, `Flow`, `Transformer`, `Collector`, `Slot` | The three collections this library returns in place of Dart's — ordered, keyed, and over time — and the two operation types that shape all three. A library, not an accessor — you reach all of it from the data you already hold |
 
 Two are **subjects** — knowledge that came from outside Dart:
 
@@ -52,8 +52,8 @@ belongs to, when it earns a top-level name, and how to name it.
 3. **Real types at every boundary.** URLs are `Uri`, delays are `Duration`, paths are `String`, bodies and hash algorithms are sealed types and enums. No `Object` or `dynamic` parameters, so the analyzer catches mistakes at the call site.
 4. **Atomic by default.** Every write stages through a `.part` file and is renamed into place only after a successful flush. Interrupted runs never leave truncated files, and Ctrl-C cleans up.
 5. **Engine-driven pipelines.** Multi-stage crawlers use declarative URL routing, tag-based stages, and automatic relative-URL resolution.
-6. **One vocabulary for collections.** Everything this library hands back for you to *shape* is a [`Sequence`](docs/collection.md) or a [`Dictionary`](docs/collection.md#6-dictionaryk-v-the-keyed-collection), deliberately not an `Iterable` or a `Map`, so Dart's names and these are never both in scope at one call site. `collect(.list())` and `.map` are the ways out at the boundary; `.seq` and `.dict` bring an outside collection in. A `Sequence` hands back no `Iterable` of its own — leaving is a call, not a getter, because a getter would put Dart's vocabulary one dot from every sequence in the library. Through 4.0.0 that claim was only half true — 53 public members handed back a `List`, `Map` or `Set` against 30 that handed back a `Sequence` — and 5.0.0 converted them.
-7. **A pipeline is a value.** A `Sequence` has two members: `transform` takes a [`Transformer`](docs/collection.md#3-transformer--the-shaping-operations) and `collect` takes a [`Collector`](docs/collection.md#4-collector--the-ending-operations). Everything else is a static factory on one of those, which is what lets each of them take its ordinary name back — `map`, `where`, `take.first`, `group.by`, `max.by`. A namespace has no `Map` to collide with and no camelCase to forbid, so a compound operation splits at the capital instead of inventing a word. It also makes a chain storable, passable, supplyable by a caller, and testable against a plain list.
+6. **One vocabulary for collections.** Everything this library hands back for you to *shape* is a [`Sequence`](docs/collection.md), a [`Dictionary`](docs/collection.md#7-dictionaryk-v-the-keyed-collection) or a [`Flow`](docs/collection.md#6-flowt--the-collection-over-time), deliberately not an `Iterable`, a `Map` or a `Stream`, so Dart's names and these are never both in scope at one call site. `collect(.list())`, `.map` and `.stream` are the ways out at the boundary; `.seq`, `.dict` and `.flow` bring an outside collection in. A `Sequence` hands back no `Iterable` of its own — leaving is a call, not a getter, because a getter would put Dart's vocabulary one dot from every sequence in the library. Through 4.0.0 that claim was only half true — 53 public members handed back a `List`, `Map` or `Set` against 30 that handed back a `Sequence` — and 5.0.0 converted them.
+7. **A pipeline is a value.** A `Sequence` has two members: `transform` takes a [`Transformer`](docs/collection.md#3-transformer--the-shaping-operations) and `collect` takes a [`Collector`](docs/collection.md#4-collector--the-ending-operations). Everything else is a static factory on one of those, which is what lets each of them take its ordinary name back — `map`, `where`, `take.first`, `group.by`, `max.by`. A namespace has no `Map` to collide with and no camelCase to forbid, so a compound operation splits at the capital instead of inventing a word. It also makes a chain storable, passable, supplyable by a caller, testable against a plain list — and runnable over a `Flow` as well as a `Sequence`, because the same two types carry both. Which half an operation lives on is a rule rather than a list: **a `Transformer` can emit before its source ends, a `Collector` needs the end**, which is why `sort` and `take.last` are collectors and `take.first` is not.
 
 ---
 
@@ -235,12 +235,12 @@ A crawl reaches a spreadsheet without passing through memory:
 ```dart
 await io.csv.pipe(
   'products.csv',
-  net.crawl<Map<String, Object?>>(seed).stream(),
+  net.crawl<Map<String, Object?>>(seed).flow(),
   headers: ['name', 'price'],
 );
 ```
 
-See [docs/io.md](docs/io.md), [docs/csv.md](docs/csv.md), [docs/collection.md](docs/collection.md#8-on-disk).
+See [docs/io.md](docs/io.md), [docs/csv.md](docs/csv.md), [docs/collection.md](docs/collection.md#9-on-disk).
 
 ### `net.http` — requests, and the codec seam
 
@@ -455,13 +455,27 @@ See [docs/zip.md](docs/zip.md).
 
 ```dart
 rows.transform(.where((r) => r.live))
-    .transform(.sort.by((r) => r.cost))
     .transform(.take.first(10))
-    .collect(.list());
+    .collect(.sort.by((r) => r.cost));
 
 rows.collect(.group.into((r) => r.host, .sum((r) => r.cost)));  // one pass
 rows.collect(.count.by((r) => r.host));                         // Dictionary<String, int>
 rows.collect(.max.by((r) => r.score))?.url;                     // nullable, never throws
+```
+
+The same vocabulary over a source that arrives a piece at a time — a `Flow` is what this library returns in place of a `Stream`:
+
+```dart
+await io.csv.records('big.csv')
+    .transform(.where((r) => r['live'] == 'yes'))
+    .transform(.take.first(1000))
+    .collect(.count.by((r) => r['host']));
+
+// bounded async work over a source too large to hold, which
+// `concurrent.run` cannot take
+await io.async.lines('urls.txt')
+    .run((line) => net.http.get(line.trim().url), size: 8)
+    .collect(.count());
 ```
 
 A chain is a value, so it can be named once and used twice:

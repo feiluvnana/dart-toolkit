@@ -13,7 +13,10 @@
 /// the reasoning and the cost.
 library;
 
+import 'dart:async';
+
 import 'collector.dart';
+import 'flow.dart';
 import 'transformer.dart';
 
 // ============================================================================
@@ -27,7 +30,7 @@ import 'transformer.dart';
 ///
 /// rows.collect(.group.into((r) => r.host, .sum((r) => r.cost)))
 ///     .pairs
-///     .transform(.sort.by((e) => e.$1))
+///     .collect(.sort.by((e) => e.$1))
 ///     .collect(.foreach(print));
 /// ```
 ///
@@ -137,7 +140,7 @@ final class Sequence<T> {
   ///
   /// ```dart
   /// rows.transform(.where((r) => r.live));
-  /// rows.transform(.sort.by((r) => r.cost)).transform(.take.first(10));
+  /// rows.collect(.sort.by((r) => r.cost)).transform(.take.first(10));
   /// ```
   ///
   /// A chain of three pays for `transform` three times, which is the price of
@@ -167,9 +170,10 @@ final class Sequence<T> {
 /// The iterable a [Sequence.transform] hands forward: it calls [_build] once
 /// per walk, and never before the first one.
 ///
-/// Without it a [Transformer] that does its work up front — `sort`, `unique`,
-/// `take.last` — would do that work when the chain was written rather than
-/// when it was walked, which is the one thing this class exists to prevent.
+/// Without it a [Transformer] that does its work up front — `zip`, `plus`,
+/// `minus`, `common`, which all read their other side eagerly — would do that
+/// work when the chain was written rather than when it was walked, which is
+/// the one thing this class exists to prevent.
 class _Deferred<T> extends Iterable<T> {
   const _Deferred(this._build);
 
@@ -202,6 +206,20 @@ extension NullableSequence<T extends Object> on Sequence<T?> {
   /// one step; this is the argument-free half, and lowercase compound as
   /// `perhost` and `httponly` are.
   Sequence<T> get nonnull => Sequence(_items.whereType<T>());
+}
+
+/// The way from the ordered collection to the one over time.
+///
+/// Declared here rather than in `flow.dart` because it needs the private
+/// [Iterable] to stay lazy: `Stream.fromIterable` only calls `.iterator` on
+/// listen, so nothing is walked until the flow is collected, where going
+/// through `collect(.list())` would materialise at the seam.
+extension FlowedSequence<T> on Sequence<T> {
+  /// These elements as a [Flow], walked only once the flow is collected.
+  ///
+  /// `.seq` for the ordered collection, `.dict` for the keyed one, `.flow`
+  /// for the one over time. The way back is `await flow.collect(.seq())`.
+  Flow<T> get flow => Flow<T>(Stream<T>.fromIterable(_items));
 }
 
 /// Splitting a sequence of pairs back into two.

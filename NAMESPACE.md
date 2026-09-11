@@ -15,7 +15,7 @@ following it is what keeps the surface small enough to hold in your head.
 | `system` | This program and the machine running it, and what happens to its resources when it is interrupted (`system.on`) | `system.env`, `system.console`, `system.on` |
 | `concurrent` | Bounded async work on one isolate: how many at once, and how often | — |
 | `util` | Pure computation, the two document cursors (`Json`, `Markup`) and the codec seam (`Codec`) that carries them across domains | `util.time`, `util.size`, `util.text`, `util.hash`, `util.rand` |
-| `collection` | The two collections this library returns in place of Dart's (`Sequence`, `Dictionary`), the two operation types that shape them (`Transformer`, `Collector`) and the typed keys (`Slot`). No accessor — a library, not a `collection.something` you call | — |
+| `collection` | The three collections this library returns in place of Dart's (`Sequence`, `Dictionary`, `Flow`), the two operation types that shape them (`Transformer`, `Collector`) and the typed keys (`Slot`). No accessor — a library, not a `collection.something` you call | — |
 | `cli` | The command line your script presents to whoever runs it | — |
 | `format` | One file format per name — never an executable | `format.html`, `format.json`, `format.yaml`, `format.toml`, `format.csv`, `format.zip` |
 
@@ -167,9 +167,12 @@ cohesion of its own and the reason it needs no `io.async` twin. What is left on
 
 The same test decides a *type*'s namespace, and 5.1.0 is where that started
 mattering. `Transformer.take` and `Collector.count` are namespace objects
-holding three members and three members — `take.first`, `take.last`,
-`take.when` — and they exist for the reason `io.csv` does: the second word has
-somewhere to go. See Rule 4's splitting rule.
+holding two members and three — `take.first`, `take.when`, and `count()`,
+`count.where`, `count.by` — and they exist for the reason `io.csv` does: the
+second word has somewhere to go. See Rule 4's splitting rule. A namespace can
+span two types where the operations differ in kind: `take.first` is a
+`Transformer` and `take.last` a `Collector`, because only one of them can emit
+before its source ends.
 
 Everything else is a plain member of the domain. `io.hash(path)` is one
 operation about a file, so it sits directly on `io` — it does not need an
@@ -197,10 +200,14 @@ things are outside that, and each is a category rather than an oversight:
   on a `Future`. It was also a second spelling of `net.http.download`, which
   Rule 5 forbids, so 5.2.0 deleted it rather than inventing a twin. A socket is
   `net`'s.
-- **One member whose *shape* differs.** `io.lines` returns a `Sequence<String>`
-  and `io.async.lines` a `Stream<String>`. That is the mirror working: blocking
-  means the lines are already read. It returned a `Stream` from *both* through
-  5.1.0, from the accessor whose whole promise is that it blocks.
+- **Members whose *shape* differs, under one rule.** Every mirrored member has
+  the same name on both accessors; the blocking one returns `T` or a
+  `Sequence<T>` and the async one `Future<T>` or a `Flow<T>`. So `io.lines`
+  gives a `Sequence<String>` and `io.async.lines` a `Flow<String>` — the same
+  four words at a call site, differing only in the `await`. This was a *special
+  case* through 5.3.0, because with `Stream` on the async side there was no
+  general rule to state: `io.async.lines` left the library's vocabulary and did
+  not come back. A rule a reader learns once needed `Flow` to exist.
 
 `test/regression_test.dart` pins this, the way 4.0.0 pinned *no HTML parser
 under `lib/net/`*: it reads both accessors out of the source and asserts the
@@ -288,8 +295,8 @@ cannot tell what a call does from its name alone, it is the wrong name.
 
 **Keep the existing word when the existing word is the right one.** A
 replacement vocabulary is not a rename spree, and the burden is on the rename.
-`Collector` took Dart's `fold`, `cast`, `join`, `zip`, `any`, `all` and `count`
-unchanged; `Transformer` took `map`, `where`, `take`, `skip` and `sort`. Where
+`Collector` took Dart's `fold`, `cast`, `join`, `zip`, `any`, `all`, `count`
+and `sort` unchanged; `Transformer` took `map`, `where`, `take` and `skip`. Where
 5.0.0 had a word of its own for one of these, 5.1.0 gave it back — and the
 lesson it recorded is that **a rename forced by a spelling is not a rename, it
 is a workaround**. Thirteen of `Sequence`'s fifty-eight members were one, and
@@ -581,6 +588,8 @@ every package in `pubspec.yaml`.
 | The sequence API | `Sequence<T>`, a type in `collection` | Rule 2 spends no top-level name: you reach it from the data you already hold, the same argument that put `Form` in `net` with no `net.form`. Not a sub-namespace either — `util.list.group(...)` would be a namespace standing where a receiver belongs. It sat in `util` through 5.0.0; 5.1.0 moved it out, because `util` was holding both functions you call and types you receive, and the collections are the largest of the second kind |
 | The sequence *vocabulary* | `Transformer` and `Collector`, not methods on `Sequence` | Fifty-eight members, a third of them words invented for an operation everybody already knew, and eight of those forced by nothing but the camelCase ban. A namespace has no `Map` to collide with and no compound to forbid, so `map`, `where`, `take.first` and `count.by` all became sayable. Java's `Collectors` is the same design, twenty years old and uncontroversial; the part Java leaves as methods — the intermediates — went behind `transform` here anyway, because keeping `take` and `skip` as methods would mean building the namespace objects twice and keeping them in step forever |
 | A keyed collection | `Dictionary<K, V>`, beside `Sequence` | Design Philosophy 6 promised that everything handed back to shape is a `Sequence`, and that held right up to the moment you grouped. `Meta` and `Store` were then the same nine members written twice, in two domains, because the library had no name for *a map with typed keys*. One type and one extension replaced two types and twenty-two members, and typed keys started working on every dictionary in the program |
+| A collection over time | `Flow<T>`, beside `Sequence` and `Dictionary` | `Stream` is Dart's third collection, and nine public signatures handed one back — the *large-data* members of four domains, the ones a script reaches for precisely when a good vocabulary matters most. Twenty-six of `Stream`'s thirty-seven members already had a name here, twelve of them camelCase compounds Rule 4 forbids in this library's own code, so a script that switched from `crawl.collect` to `crawl.stream` rewrote its whole pipeline for no reason but which container arrived. One type, the same two doors, and no new factory anywhere: `Transformer` and `Collector` grew a second function each rather than a second vocabulary |
+| Bounded work over a flow | `extension Bounded on Flow`, declared in `lib/concurrent/` | The same direction `Dumpable` goes, for the same reason: `concurrent` already depends on `collection`, so an extension declared on that side adds no edge, where a member on `Flow` would make a cycle. It is also the capability the library did not have — every bounded-work member took an `Iterable`, so *four at a time over a stream* meant `await …toList()` first, which is the materialisation the streaming member existed to avoid |
 | Writing a collection to disk | `extension Dumpable on Sequence`, declared in `lib/io/` | Rule 1 says anything that writes a file is `io`, and Rule 2's second test forbids `collection` needing `io` back. `io` already depends on `collection` — `io.find` returns a `Sequence` — so the extension adds no edge in the wrong direction, and `collection` still knows nothing about the disk. One export means the caller sees `rows.dump(path)` with no extra import |
 | A filesystem watcher | `io.watch` — after 5.0.0 moved the other one | It was `io.observe` through 4.0.0, because `system.watch()` meant *watch for Ctrl-C* and two `watch`es meaning two unrelated things on two accessors is precisely what Rule 5 is for. That entry ended *`observe` is free, honest, and slightly less good than `watch`* — a worse name taken because a better one was occupied by something that had not earned it. Signal watching is `system.on.signals()` now, beside `track`, `adopt` and `exit`, which is the cohesive vocabulary Rule 3 describes; `io` took the name back. A compromise written down is a compromise that can be revisited |
 | The interrupt vocabulary | `system.on.*`, not flat on `system` | `watch`, `unwatch`, `track`, `untrack`, `adopt` and `disown` sat directly on `system` through 4.0.0 while `system.on` held exactly one member, `exit`. Rule 3 says a sub-namespace is for a cohesive vocabulary with its own nouns, and *what happens to your resources when the program is interrupted* is that vocabulary — the structure was inverted, with the namespace on the single function and the family flat beside it |
@@ -610,7 +619,7 @@ every package in `pubspec.yaml`.
 | HTTP caching | `HttpCache` type, `Fetcher(cache:)`, `crawl.cache(dir)` | A whole tool by Rule 2's first test, but entangled with `net.http` by its second: the client is what decides to revalidate. So a type in `net` and an option on the two things that fetch, not a domain and not a namespace |
 | A crawl's position | `Snapshot` + `Engine.snapshot`/`restore`, `crawl.resume(path)` | The type is the noun, the engine pair is the operation, and `resume` is the two of them wired to a file. `save` was taken by "write items to", and Rule 5 forbids a second meaning for it |
 | A request that failed | `Failure`, passed to `on.error` | A count without the pages is not an answer. Widening the handler's argument list would have fixed one question and left the next one — an attempt number, a response — needing another break, so the argument is a type |
-| Streaming CSV out | `io.csv.pipe`, beside `write` | Different behaviour, not an alias: `write` takes a collection, `pipe` takes a `Stream` and holds one row. A `CsvWriter` you open and close would have been a new noun and a lifecycle to get wrong |
+| Streaming CSV out | `io.csv.pipe`, beside `write` | Different behaviour, not an alias: `write` takes a collection already in memory, `pipe` takes a `Flow` and holds one row. A `CsvWriter` you open and close would have been a new noun and a lifecycle to get wrong |
 | A page's forms | `Form`, reached by `res.form(selector)` | Rule 2's first test passes — filling, addressing and submitting is a vocabulary — but its second fails: a form is read out of a response and submitted through the same client or engine, so it is entangled with `net` and lives there as a type rather than a domain. No accessor, because there is nothing to reach it from but the page it is on |
 | Submitting one in a crawl | `res.submit(form)`, beside `res.follow` | `follow` already takes a `method` and a `body`; this is the same operation with the three details read off the form instead of typed out, so it sits next to it rather than inside `Form`, which knows nothing about an engine |
 | A cursor's two selector languages | `find` and `xpath`, and no callable | `page(sel)` was a second spelling of `find` — and *which language it spoke depended on hidden state*: XPath on a cursor from `format.html.query`, CSS on one from `format.html.parse`, with nothing at the call site to say which. Rule 5 would have deleted it anyway; the hidden state is why it was not worth arguing about. `find` and `xpath` each name their language |

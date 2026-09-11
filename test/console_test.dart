@@ -360,11 +360,11 @@ void main() {
       final Csv sheet = await format.csv.read(path);
       final List<Map<String, String>> records = await io.csv
           .records(path)
-          .toList();
-      final List<List<String>> rows = await io.csv.rows(path).toList();
+          .collect(.list());
+      final List<List<String>> rows = await io.csv.rows(path).collect(.list());
 
       expect(sheet.maps.collect(.list()), records);
-      // The cursor keeps the header out of the rows; the stream does not, so
+      // The cursor keeps the header out of the rows; the flow does not, so
       // it is the header line plus what the cursor calls a row.
       expect(sheet.headers.collect(.list()), rows.first);
       expect([
@@ -567,14 +567,16 @@ void main() {
   });
 
   group('concurrent', () {
-    test('cancelling a pool stream launches nothing more', () async {
+    test('cancelling a pool flow launches nothing more', () async {
       var started = 0;
       final pool = Pool<int>(size: 1);
-      final stream = pool.stream(List.generate(50, (i) => i), (i) async {
+      // `.stream` on purpose: a test reaching for `listen` and `cancel` has
+      // left the vocabulary, and the one word at the boundary says so.
+      final stream = pool.flow(List.generate(50, (int i) => i), (i) async {
         started++;
         await Future<void>.delayed(const Duration(milliseconds: 1));
         return i;
-      });
+      }).stream;
 
       final subscription = stream.listen((_) {});
       await Future<void>.delayed(const Duration(milliseconds: 20));

@@ -198,7 +198,7 @@ void main() async {
 
   final urls =
       reader.piped
-          ? await reader.lines.toList()
+          ? await reader.lines.collect(.list())
           : [await reader.ask('URL')];
 
   for (final url in urls) {

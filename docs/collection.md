@@ -1,8 +1,8 @@
-# Collections (`Sequence`, `Dictionary`, `Transformer`, `Collector`)
+# Collections (`Sequence`, `Dictionary`, `Flow`, `Transformer`, `Collector`)
 
-The two collections this library **returns**, in place of Dart's, and the two operation types that shape them.
+The three collections this library **returns**, in place of Dart's, and the two operation types that shape them.
 
-`Sequence<T>` is the ordered collection; `Dictionary<K, V>` is the keyed one. Neither implements its `dart:core` counterpart, so there is exactly one vocabulary in scope at any call site. Neither carries the vocabulary as methods either: `Sequence` has **two** — `transform` takes a `Transformer`, `collect` takes a `Collector` — and every operation is a static factory on one of those.
+`Sequence<T>` is the ordered collection, `Dictionary<K, V>` the keyed one, and `Flow<T>` the one whose elements arrive over time — `Iterable`, `Map` and `Stream` respectively. None implements its `dart:core` counterpart, so there is exactly one vocabulary in scope at any call site. None carries the vocabulary as methods either: `Sequence` has **two** — `transform` takes a `Transformer`, `collect` takes a `Collector` — and every operation is a static factory on one of those. `Flow` has the same two, and one more word at the boundary.
 
 That indirection is not overhead bolted onto the same names. It is what pays for better ones.
 
@@ -20,7 +20,7 @@ Future<void> main() async {
 
   rows.collect(.group.into((r) => r.host, .sum((r) => r.cost)))
       .pairs
-      .transform(.sort.by((e) => e.$1))
+      .collect(.sort.by((e) => e.$1))
       .collect(.foreach((e) => print('${e.$1}  ${e.$2}')));
 }
 ```
@@ -71,8 +71,8 @@ The pairs that had to invent a word for their second half collapse into namespac
 
 | Was | Is | |
 | :--- | :--- | :--- |
-| `head(n)` / `tail(n)` | `take.first(n)` / `take.last(n)` | Dart has no name for the second |
-| `skip(n)` / `trim(n)` | `skip.first(n)` / `skip.last(n)` | `trim` also read as `String.trim` |
+| `head(n)` / `tail(n)` | `take.first(n)` / `Collector.take.last(n)` | Dart has no name for the second |
+| `skip(n)` / `trim(n)` | `skip.first(n)` / `Collector.skip.last(n)` | `trim` also read as `String.trim` |
 | `until(t)` / `after(t)` | `take.when(t)` / `skip.when(t)` | |
 
 Six members, four of them invented, become two namespaces that read as opposites — which `head`/`skip` and `tail`/`trim` never did. Nobody has to remember which of the four dropped from which end.
@@ -85,9 +85,8 @@ At a call site the context type resolves the name, so the leading dot is the spe
 
 ```dart
 rows.transform(.where((r) => r.live))
-    .transform(.sort.by((r) => r.cost))
     .transform(.take.first(10))
-    .collect(.list());
+    .collect(.sort.by((r) => r.cost));
 ```
 
 Dot shorthands landed in Dart 3.10, which is this package's minimum SDK. The explicit form always works and means the same thing — it is what a named pipeline uses:
@@ -126,10 +125,8 @@ own type and leaves the collector's result type free just the same.
 | `where.type<R>()` | only the elements that are an `R` |
 | `flat<R>()` / `flat.map(f)` | flatten nested iterables / expand each into many |
 | `unique()` / `unique.by(f)` | duplicates removed, first of each kept |
-| `sort()` / `sort.by(f)` / `sort.using(c)` | ascending — never in place |
-| `flip()` | back to front |
-| `take.first(n)` / `take.last(n)` / `take.when(t)` | the leading n / trailing n / while a test holds |
-| `skip.first(n)` / `skip.last(n)` / `skip.when(t)` | the exact opposites |
+| `take.first(n)` / `take.when(t)` | the leading n / while a test holds |
+| `skip.first(n)` / `skip.when(t)` | the exact opposites |
 | `enumerate()` | each element with its position, as `(int, T)` |
 | `chunk(n)` | consecutive groups of n, the last one short |
 | `zip(other)` | paired elementwise, as `(A, B)` records |
@@ -208,6 +205,9 @@ There was a `Sequence.empty()` through 5.2.0. The constructor is `const` again n
 | `fold(init, f)` | Dart's word, kept |
 | `sum(of)` / `avg(of)` | `num` / `double?` |
 | `max.by(f)` / `min.by(f)` | `A?` — largest / smallest by key |
+| `sort()` / `sort.by(f)` / `sort.using(c)` | `Sequence<A>` — ascending, never in place |
+| `flip()` | `Sequence<A>` — back to front |
+| `take.last(n)` / `skip.last(n)` | `Sequence<A>` — the trailing n / everything but |
 | `group.by(f)` | `Dictionary<K, Sequence<A>>` |
 | `group.into(f, down)` | `Dictionary<K, R>` — every bucket reduced in one pass |
 | `associate.by(f)` | `Dictionary<K, A>` — the lookup table; last wins |
@@ -233,6 +233,42 @@ rows.collect(.join(', ', limit: 3, of: (r) => r.name));   // 'Ada, Alan, Grace, 
 `each` became `foreach` because `each` is what this library calls the *callback* in `fold` and `map`; the operation gets the other half of the name. Rule 4 exempts `dart:core` interface members from the lowercase rule, but `Sequence` does not implement `Iterable`, so it is not declaring one and the exemption does not reach it.
 
 Randomness is not here: `util.rand` owns it, and a sequence gets it by exiting with `util.rand.shuffle(rows.collect(.list()))`.
+
+### Why `sort` is here and `take.first` is not
+
+> **A `Transformer` can emit before its source ends. A `Collector` needs the end.**
+
+That is the whole rule, and it is why one type hands back a collection and the other hands back a value. `count`, `max.by`, `group.by` and `join` were always collectors for exactly this reason: none can answer until the last element has arrived. Six operations were on the wrong side of it through 5.3.0 — `sort`, `sort.by`, `sort.using`, `flip`, `take.last` and `skip.last` — and nobody noticed, because with one container both sides end in the same call.
+
+`Flow` is what makes the rule observable, and enforcing it is what the refusal falls out of:
+
+```dart
+// setup: final flow = Flow<Row>.empty(); bool live(Row r) => r.live; num cost(Row r) => r.cost;
+flow.transform(.where(live));      // fine
+// flow.transform(.sort.by(cost)); // does not compile — sort is not a transformer
+flow.collect(.sort.by(cost));      // Future<Sequence<Row>>, and it says so
+```
+
+No marker type and no second vocabulary: the prevention is putting each operation in the half it belongs to. `take.first`, `take.when`, `skip.first` and `skip.when` stay on `Transformer`, because they stream, and the split across the two types is the teaching device — the verb at the call site tells you what the operation costs.
+
+| | `Transformer` | `Collector` |
+| :--- | :--- | :--- |
+| `take` | `first(n)`, `when(t)` | `last(n)` |
+| `skip` | `first(n)`, `when(t)` | `last(n)` |
+
+What it costs is that the common shape gains a `collect`:
+
+```dart
+// setup: final spend = Dictionary<String, num>({'a.com': 1});
+spend.pairs.collect(.sort.by((e) => e.$1)).collect(.foreach(print));
+```
+
+Two `collect`s in a row reads oddly the first time and is exactly accurate: reduce to a sorted sequence, then reduce that to a side effect. What it buys is that `sort` becomes usable where it never could be — as a downstream collector:
+
+```dart
+rows.collect(.group.into((r) => r.host, .sort.by((r) => r.cost)));
+// Dictionary<String, Sequence<Row>> — every bucket sorted, in one pass
+```
 
 ### Downstream collectors
 
@@ -260,10 +296,10 @@ This is the part that is not a rename. Because an operation is a value, a *chain
 // setup: bool live(Row r) => r.live; String sku(Row r) => r.sku; num price(Row r) => r.price;
 final cleanup = Transformer.where<Row>(live)
     .then(Transformer.unique.by(sku))
-    .then(Transformer.sort.by(price));
+    .into(Collector.sort.by(price));
 
-final top = rows.transform(cleanup).transform(.take.first(10)).collect(.list());
-final all = rows.transform(cleanup).collect(.count());
+final top = rows.collect(cleanup).transform(.take.first(10)).collect(.list());
+final all = rows.collect(cleanup).collect(.count());
 ```
 
 One definition, two uses. As a method chain that is a copy-paste, or a helper that has to re-type the whole thing.
@@ -320,7 +356,106 @@ rows.transform(Dearer(0.05)).transform(.take.first(10)).collect(.list());
 
 ---
 
-## 6. `Dictionary<K, V>` — the keyed collection
+## 6. `Flow<T>` — the collection over time
+
+`Stream` is Dart's third collection, and through 5.3.0 it was still Dart's: nine public signatures handed one back, and the moment a script touched one it left this vocabulary and did not come back. Those were not edge cases — they were the *large-data* members of four domains, the ones a script reaches for precisely when the data is too big to hold, which is when a good vocabulary matters most.
+
+Twenty-six of `Stream`'s thirty-seven members already had a name here. Twelve of the ones they replaced are camelCase compounds that **Rule 4 forbids in this library's own code**, exempted only because they belonged to somebody else:
+
+| `Stream` | Here |
+| :--- | :--- |
+| `map` `where` `expand` `cast` | `.map` `.where` `.flat.map` `.cast` |
+| `takeWhile` `skipWhile` | `.take.when` `.skip.when` |
+| `toList` `toSet` `forEach` `join` | `.collect(.list())` `.set()` `.foreach(f)` `.join(sep)` |
+| `firstWhere` `lastWhere` `singleWhere` | `.first.where(t)` `.last.where(t)` `.single.where(t)` |
+| `reduce` `fold` | `.collect(.fold(init, f))` |
+| `asyncMap` | `.run(f)` — and with a bound, which `asyncMap` has no way to express |
+
+`Flow` has the same two doors, and `collect` gives a `Future<R>` where `Sequence.collect` gives an `R`. **That is the only difference in shape between the two types**:
+
+```dart
+// setup: Future<void> save(Map<String, String> r) async {}
+final spend = await io.csv.records('big.csv')
+    .transform(.where((r) => r['live'] == 'yes'))
+    .transform(.take.first(1000))
+    .collect(.count.by((r) => r['host']));
+```
+
+No new factory anywhere. `Transformer` and `Collector` each grew a second *function* — `pour`, the same operation over a stream — so every one of the fifty-nine named operations reaches a flow, and a named pipeline is written once and used on both:
+
+```dart
+// setup: bool live(Row r) => r.live; String sku(Row r) => r.sku;
+final cleanup = Transformer.where<Row>(live).then(Transformer.unique.by(sku));
+
+rows.transform(cleanup);                     // Sequence<Row>
+rows.flow.transform(cleanup);                // Flow<Row>, streaming
+```
+
+`pour` is optional and its default is correct rather than fast — hold the source, run the synchronous form, emit the result — so a transformer a caller subclassed three releases ago works on a flow with no change. Every built-in supplies its own; `fn` is the door, and `fn(run, pour: …)` closes it.
+
+### Lazy, and it stops
+
+`transform` builds a pipeline and nothing runs until something collects — and then only as much of the source as that collect asks for. Eleven collectors stop early, which is the difference between a program that finishes and one that does not:
+
+```dart
+// setup: final flow = Flow<Row>.empty();
+await flow.collect(.first());   // over a crawl, this fetches one page
+```
+
+Over a crawl that means the crawl *stops*: the terminal cancels its subscription, and `net.crawl(...).flow` ends the engine when it is cancelled.
+
+### Consumed once, in one voice
+
+A sequence walked twice walks its source twice. A flow cannot — a subscription is not a walk — and Dart gives three different answers to a second listen:
+
+```
+controller, second listen: StateError: Bad state: Stream has already been listened to.
+file, second listen:       FileSystemException: File closed, path = 'pubspec.yaml'
+Stream.fromIterable:       2, 2  <- re-listenable, silently
+```
+
+One of them is silent, and which one you get is not in the type. So `transform`, `collect` and `stream` each claim the source, and a second claim throws one message for all three, when the second pipeline is **built** rather than when it is listened to:
+
+```
+StateError: This flow has already been consumed.
+```
+
+The whole cost of the guard is that `Flow.empty()` cannot be `const`, where `const Sequence([])` can.
+
+### The seams
+
+| | |
+| :--- | :--- |
+| `stream.flow`, `items.flow`, `seq.flow` | in — the same one-word seam `.seq` and `.dict` are |
+| `await flow.collect(.seq())` | out, into the ordered collection |
+| `flow.stream` | out, into Dart's — the one word at the boundary |
+
+`flow.stream` is the honest answer for the eight `Stream` members with no spelling here — `listen`, `pipe`, `transform`, `drain`, `handleError`, `timeout`, `asBroadcastStream`, `isBroadcast`:
+
+```dart
+// setup: final flow = Flow<Row>.empty();
+final safe = flow.stream.handleError((e) => print('$e')).timeout(30.s).flow;
+```
+
+Deliberately not pretty. It is the shape `Json.raw` and `Markup.document` already have: one documented door, visible in review, rather than a partial re-spelling of somebody else's API.
+
+`distinct` is the one `Stream` member that is close and *different*: it drops an element equal to the **previous** one, where `unique()` drops every repeat. Two operations wearing one word, so this library keeps its own.
+
+### Bounded work, over a source you do not hold
+
+`flow.run(worker, size: n)` is the capability the library did not have — see [concurrent.md](concurrent.md). Every other bounded-work member takes an `Iterable`, so *four at a time over a stream* meant `await …toList()` first, which is the materialisation the streaming member existed to avoid.
+
+### What it deliberately is not
+
+- **Not a broadcast.** A flow is consumed once, and the value of the guard is that there is one behaviour instead of three. `flow.stream.asBroadcastStream()` is the door, and a caller who takes it has said out loud that they want fan-out.
+- **Not an error-handling story.** An error in the source propagates out of the `Future` that `collect` returns. There is no `handleError`, no `timeout` and no `onError` — *what should a pipeline do when element 900 throws* is a design of its own, and `Pool.settle`'s sealed `Done`/`Broke` is the shape that would want generalising.
+- **Not folded into `Sequence`.** `Iterator.moveNext` returns a `bool` and `StreamIterator.moveNext` a `Future<bool>`. One type would make every terminal call return a `Future`, taxing every synchronous pipeline in the library for the benefit of the streaming ones. Two types, one vocabulary, is the answer.
+- **No `unzip`.** Two views over one source means two subscriptions, which a flow does not have. Correctly absent rather than refused.
+- **No `Flow.error`.** A flow that fails is a test fixture and a source that fails is somebody else's stream. `Stream.error(e).flow` is the door, and it is one word.
+
+---
+
+## 7. `Dictionary<K, V>` — the keyed collection
 
 `Sequence` is the ordered collection. `Dictionary` is the keyed one, and it is what grouping hands back — so a chain never leaves this vocabulary and has to climb back in.
 
@@ -367,7 +502,7 @@ Typed keys now work on every dictionary in the program rather than only inside t
 
 ---
 
-## 7. Typed keys (`Slot`)
+## 8. Typed keys (`Slot`)
 
 A `Slot<T>` is a typed key. Declare it `const`, once, beside the code that uses it:
 
@@ -416,7 +551,7 @@ Calling a slot gives the `(key, value)` pair it writes, which is how a value rea
 
 ---
 
-## 8. On disk
+## 9. On disk
 
 A collection can write itself, and a dictionary can be read back:
 
@@ -467,7 +602,7 @@ For a crawl that has to survive being interrupted mid-run rather than between ru
 
 ---
 
-## 9. What returns one
+## 10. What returns one
 
 Anything this library hands back for you to *shape*:
 
@@ -484,11 +619,22 @@ doc.jsonpath(expr);                     io.dictionary(path);
 res.meta;                               rows.collect(.group.by(f));
 ```
 
+And anything it hands back that arrives **over time** is a `Flow`:
+
+```dart no-compile
+net.crawl<T>(seed).flow(handler);       io.async.lines(path);
+io.csv.rows(path);                      io.csv.records(path);
+system.console.reader.lines;            pool.flow(items, worker);
+someflow.run(worker, size: n);
+```
+
+Two public signatures still name a `Stream`, and both on purpose: `Flow.stream`, which is the door, and `Engine.items`, which is a broadcast bus rather than a pipeline — `crawl.dart` listens to it internally while a caller may also be listening, and every call site uses it fire-and-forget. `CrawlBuilder` is the thing a script uses and hands back a `Flow`; `Engine` is the plumbing under it.
+
 Bytes stay `List<int>` — a buffer is not a sequence.
 
 ---
 
-## 10. What it cost
+## 11. What it cost
 
 Honestly, measured on this library's own showcase pipeline. Before:
 
@@ -504,7 +650,7 @@ After:
 ```dart
 rows.collect(.group.into((r) => r.host, .sum((r) => r.cost)))
     .pairs
-    .transform(.sort.by((e) => e.$1))
+    .collect(.sort.by((e) => e.$1))
     .collect(.foreach(print));
 ```
 

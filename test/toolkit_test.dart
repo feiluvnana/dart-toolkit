@@ -463,15 +463,79 @@ void main() async {
       },
     );
 
-    test('concurrent.stream yields results in completion order', () async {
+    test('flow.run yields results in completion order', () async {
       // 50ms task vs 10ms task: 10ms task completes first
       final items = [50, 10];
-      final streamed = await concurrent.stream(items, (delay) async {
-        await util.time.wait(delay.ms);
-        return 'done-$delay';
-      }, size: 2).toList();
+      final streamed = await items.flow
+          .run(
+            (delay) async {
+              await util.time.wait(delay.ms);
+              return 'done-$delay';
+            },
+            size: 2,
+            ordered: false,
+          )
+          .collect(.list());
 
       expect(streamed, equals(['done-10', 'done-50']));
+    });
+
+    test('flow.run yields in input order by default', () async {
+      final streamed = await [50, 10].flow
+          .run((delay) async {
+            await util.time.wait(delay.ms);
+            return 'done-$delay';
+          }, size: 2)
+          .collect(.list());
+
+      expect(streamed, equals(['done-50', 'done-10']));
+    });
+
+    test('flow.run bounds how many workers are in flight', () async {
+      var live = 0;
+      var peak = 0;
+      await List.generate(12, (i) => i).flow
+          .run((i) async {
+            live++;
+            if (live > peak) peak = live;
+            await util.time.wait(5.ms);
+            live--;
+            return i;
+          }, size: 3)
+          .collect(.count());
+
+      expect(peak, equals(3));
+    });
+
+    test('flow.run takes a source it never has to hold', () async {
+      var produced = 0;
+      Stream<int> endless() async* {
+        var next = 0;
+        while (true) {
+          produced++;
+          yield next++;
+        }
+      }
+
+      final first = await endless().flow
+          .run((n) async => n, size: 2)
+          .collect(.first());
+
+      expect(first, isZero);
+      // Two in flight, and then the terminal cancelled the source.
+      expect(produced, lessThan(5));
+    });
+
+    test('flow.run propagates the first failure', () async {
+      await expectLater(
+        [1, 2, 3].flow
+            .run((n) async {
+              if (n == 2) throw StateError('boom');
+              return n;
+            }, size: 2)
+            .collect(.list()),
+        throwsStateError,
+      );
     });
 
     test('Semaphore bounds how many run at once', () async {
@@ -1130,14 +1194,14 @@ void main() async {
             'id,name\n1,"Alpha, 1"\n2,"Beta ""The Second"""\n3,Gamma\n',
           );
 
-          final streamRows = await io.csv.rows(path).toList();
+          final streamRows = await io.csv.rows(path).collect(.list());
           expect(streamRows.length, equals(4));
           expect(streamRows[0], equals(['id', 'name']));
           expect(streamRows[1], equals(['1', 'Alpha, 1']));
           expect(streamRows[2], equals(['2', 'Beta "The Second"']));
           expect(streamRows[3], equals(['3', 'Gamma']));
 
-          final mapRows = await io.csv.records(path).toList();
+          final mapRows = await io.csv.records(path).collect(.list());
           expect(mapRows.length, equals(3));
           expect(mapRows[0]['id'], equals('1'));
           expect(mapRows[0]['name'], equals('Alpha, 1'));
@@ -1145,7 +1209,7 @@ void main() async {
           expect(mapRows[2]['id'], equals('3'));
 
           // The typed pair: rows() yields cells, records() yields maps.
-          expect(await io.csv.records(path).toList(), equals(mapRows));
+          expect(await io.csv.records(path).collect(.list()), equals(mapRows));
         } finally {
           io.remove(temp.path);
         }

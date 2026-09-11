@@ -2,6 +2,316 @@
 
 All notable changes to this project will be documented in this file.
 
+## 5.4.0
+
+`Flow`, and the rule that sorts the vocabulary. Two complaints: *add flow to
+collection — flow is just sequence, but async*, and *a method that is not
+invokable on one is used for another; anything to prevent that?* The first is
+right and one sentence long. 5.1.0 replaced `Iterable` with `Sequence` and
+`Map` with `Dictionary`, on the argument that a vocabulary you cannot replace
+is a vocabulary you are stuck with — and then stopped one collection short.
+**`Stream` is Dart's third collection and it was still Dart's.**
+
+Nine public signatures handed one back, and the moment a script touched one it
+left this library's vocabulary and did not come back. Those were not edge
+cases: they were the *large-data* members of four domains, the ones a script
+reaches for precisely when the data is too big to hold, which is when a good
+vocabulary matters most. Twenty-six of `Stream`'s thirty-seven members already
+had a name here, twelve of them camelCase compounds **Rule 4 forbids in this
+library's own code** — exempted only because they belonged to somebody else.
+
+The second complaint is what makes this a rule rather than a list.
+
+### 1. The rule
+
+> **A `Transformer` can emit before its source ends. A `Collector` needs the
+> end.**
+
+That is why one hands back a collection and the other hands back a value, and
+it is the shape the library already had — `count`, `max.by`, `group.by` and
+`join` are collectors precisely because none can answer until the last element
+has arrived. **Six operations were on the wrong side of it**, and nobody
+noticed while there was one container, because on a `Sequence` both sides end
+in the same call.
+
+| Was | Is | Hands back |
+| :--- | :--- | :--- |
+| `Transformer.sort()` / `.by(k)` / `.using(c)` | `Collector.sort()` / `.by(k)` / `.using(c)` | `Sequence<A>` |
+| `Transformer.flip()` | `Collector.flip()` | `Sequence<A>` |
+| `Transformer.take.last(n)` | `Collector.take.last(n)` | `Sequence<A>` |
+| `Transformer.skip.last(n)` | `Collector.skip.last(n)` | `Sequence<A>` |
+
+A second container is what makes the rule observable, and enforcing it is what
+answers the second complaint — with no marker type, no `FlowTransformer` and
+no duplicated factory:
+
+```dart
+flow.transform(.where(live));      // fine
+flow.transform(.sort.by(cost));    // does not compile
+flow.collect(.sort.by(cost));      // Future<Sequence<Row>>, and it says so
+```
+
+`take.first`, `take.when`, `skip.first` and `skip.when` stay where they are.
+They stream, and the split across the two types is the teaching device rather
+than a wart: the verb at the call site tells you what the operation costs.
+
+| | `Transformer` | `Collector` |
+| :--- | :--- | :--- |
+| `take` | `first(n)`, `when(t)` | `last(n)` |
+| `skip` | `first(n)`, `when(t)` | `last(n)` |
+
+**What it buys beyond the refusal**: `sort` becomes usable as a downstream
+collector, which it could not be before.
+
+```dart
+rows.collect(.group.into((r) => r.host, .sort.by((r) => r.cost)));
+// Dictionary<String, Sequence<Row>> — every bucket sorted, in one pass
+```
+
+**What it costs**: the common shape gains a `collect`. Fifty sites paid it.
+
+```dart
+spend.pairs.collect(.sort.by((e) => e.$1)).collect(.foreach(print));
+```
+
+Two `collect`s in a row reads oddly the first time and is exactly accurate:
+reduce to a sorted sequence, then reduce that to a side effect. Composition
+keeps working through the door that already exists — `Transformer.into` takes
+any collector, so `.then(Transformer.sort…)` becomes `.into(Collector.sort…)`.
+
+`test/regression_test.dart` pins the law the way 4.0.0 pinned *no HTML parser
+under `lib/net/`*: every `Transformer` factory, run over a counting source,
+must produce its first element before the source is exhausted.
+
+### 2. `Flow<T>`, three members
+
+```dart
+final class Flow<T> {
+  Flow(Stream<T> source);
+  Flow.empty();
+  Flow<R> transform<R>(Transformer<T, R> step);
+  Future<R> collect<R>(Collector<T, R> step);
+  Stream<T> get stream;
+}
+```
+
+The same two doors `Sequence` has, and the boundary word in a third spelling:
+`Sequence.collect(.list())`, `Dictionary.map`, `Flow.stream`. **`collect`
+gives a `Future<R>` where `Sequence.collect` gives an `R`, and that is the
+only difference in shape between the two types.**
+
+```dart
+final spend = await io.csv.records('big.csv')
+    .transform(.where((r) => r['live'] == 'yes'))
+    .transform(.take.first(1000))
+    .collect(.count.by((r) => r['host']));
+```
+
+**Lazy, the same way a sequence is.** `transform` builds a pipeline and
+nothing runs until something collects — and then only as much of the source as
+that collect asks for. Three elements out of a `take.first(3)` behind a
+`where` costs five produced, and `collect(.first())` costs one. Over a crawl
+that means the crawl stops.
+
+**Consumed once, in one voice.** Dart gives three answers to a second listen —
+a `StateError` from a controller, a `FileSystemException` from a closed file,
+and silence from `Stream.fromIterable`, which starts over — and which one you
+get is not in the type. So `transform`, `collect` and `stream` each claim the
+source, and a second claim throws one message for all three, when the second
+pipeline is *built* rather than when it is listened to:
+
+```
+StateError: This flow has already been consumed.
+```
+
+The whole cost of the guard is that `Flow.empty()` cannot be `const`, where
+`const Sequence([])` can.
+
+`.flow` is the seam on `Stream`, `Iterable` and `Sequence`, beside `.seq` and
+`.dict`. Crossing back is `await flow.collect(.seq())`, or `flow.stream` for
+the eight `Stream` members with no spelling here:
+
+```dart
+final safe = flow.stream.handleError((e) => log.warn('$e')).timeout(30.s).flow;
+```
+
+Deliberately not pretty. It is the shape `Json.raw` and `Markup.document`
+already have: one documented door, visible in review, rather than a partial
+re-spelling of somebody else's API.
+
+### 3. One operation, two consumers
+
+`Transformer.run` is `Iterable<B> Function(Iterable<A>)`, which a flow cannot
+call element by element. So each operation gained a second **function** — not
+a second type, and not a second factory:
+
+```dart
+const Transformer(this.run, {Stream<B> Function(Stream<A> items)? pour});
+const Collector(this.run, {Future<R> Function(Stream<A> items)? pour});
+```
+
+**Its default is correct rather than fast**: collect the stream, run the
+synchronous form, emit the result. So every transformer and collector —
+including one a caller subclassed three releases ago — works on a flow with no
+change and no adapter. All twenty-one transformers and thirty-one of the
+thirty-eight collectors override it and stream; the rest hold the source
+because that is what the operation *is*. `fn` is the door, and
+`fn(run, pour: …)` closes it.
+
+`then` and `into` compose both functions, so a named pipeline runs on either
+container:
+
+```dart
+final cleanup = Transformer.where<Row>(live).then(Transformer.unique.by(sku));
+
+rows.transform(cleanup);          // Sequence<Row>
+flow.transform(cleanup);          // Flow<Row>, streaming
+await cleanup.pour(src).length;   // and neither, for a test
+```
+
+The alternative — one incremental machine per operation, with `run` and `pour`
+derived from it — was built and benchmarked, and it is not viable. Two million
+elements through a `map` and a `where`: **52 ms** today against **764 ms** for
+a `sync*` driver, 14.7× slower. For collectors it is worse, because the
+current `run` inherits Dart's optimised terminals — `count()` is `List.length`
+at 34 µs against 31,583 µs through a sink. Two functions is not a compromise;
+it is what Dart's lack of a unified sync/async iterator forces, and it is the
+same fact that makes `Flow` and `Sequence` two types in the first place.
+
+### 4. Bounded async work over a source you do not hold
+
+Every bounded-work member in the library took an `Iterable`, so a crawl
+emitting ten thousand items, a CSV too large for memory or a directory walk
+could not be fed through a bounded pool without `await …toList()` first —
+which is the materialisation the streaming member existed to avoid.
+
+```dart
+Flow<R> run<R>(FutureOr<R> Function(T item) worker,
+    {int size = 1, bool ordered = true});
+```
+
+`size: 1` is `asyncMap`. `ordered: true` yields in the order elements arrived
+however the work finishes; `false` yields in completion order. It honours its
+subscription, so pausing stops new tasks launching and cancelling stops the
+run. Declared in `lib/concurrent/` rather than `lib/collection/`, because
+`concurrent` already depends on `collection` and a member on `Flow` would make
+a cycle — the same direction `dump` and `io.dictionary` already go.
+
+The argument for the whole release, in five lines — a piped stdin, fetched
+four at a time, which was not expressible at all before:
+
+```dart
+await system.console.reader.lines
+    .transform(.map((line) => line.trim()))
+    .transform(.where((line) => line.isNotEmpty))
+    .run(fetch, size: 4)
+    .collect(.foreach(save));
+```
+
+### 5. Eight signatures, and the one that stays
+
+| Was | Is |
+| :--- | :--- |
+| `net.crawl(…).stream([process])` | `net.crawl(…).flow([process])` → `Flow<T>` |
+| `io.async.lines(path)` | `Flow<String>` |
+| `io.csv.rows(path)` | `Flow<List<String>>` |
+| `io.csv.records(path)` | `Flow<Map<String, String>>` |
+| `io.csv.pipe(path, rows)` | takes a `Flow<Map<String, Object?>>` |
+| `system.console.reader.lines` | `Flow<String>` |
+| `Pool.stream(items, worker)` | `Pool.flow(items, worker)` → `Flow<R>` |
+| `concurrent.stream(items, worker)` | **deleted** — `items.flow.run(worker, ordered: false)` |
+| **`Engine.items`** | **stays a `Stream<T>`** |
+
+`crawl.stream` is **renamed rather than retyped**, because a member called
+`stream` that hands back a `Flow` no longer says what the call does — the
+Rule 4 test `system.now` failed. All eight call sites then fail to compile,
+which is the only acceptable shape for this change.
+
+`Engine.items` is the one that does not move, and reading the call sites is
+what found it: it is a `StreamController.broadcast`, `crawl.dart` listens to
+it internally *while* a caller may also be listening, and every call site uses
+it fire-and-forget. A flow is single-consumption and its terminals return a
+`Future` you are meant to await, which is the opposite on both counts. So the
+split is: **`CrawlBuilder` — the thing a script uses — hands back a `Flow`;
+`Engine` — the plumbing under it, where a broadcast belongs — hands back a
+`Stream`.** `Flow` is a pipeline, and a broadcast bus is not a pipeline.
+
+`concurrent.run` keeps its current implementation rather than becoming
+`items.flow.run(…).collect(.seq())`: it carries a `delay` parameter and
+`Pool`'s error semantics that `flow.run` does not, and dropping either would
+be a breaking change nothing accounts for. The two coexist honestly —
+`flow.run` is the general form over a source you do not hold, `concurrent.run`
+the short one over items you do.
+
+### 6. Four operations 5.3.0's laziness pass missed
+
+`unique`, `unique.by`, `enumerate` and `or` built a `List` or asked `isEmpty`
+before yielding anything, so they walked their whole source for a
+`collect(.first())`. Writing the streaming forms found them; all four are
+`sync*` generators now, and both containers produce identical counts
+everywhere.
+
+| | Was | Is |
+| :--- | ---: | ---: |
+| `unique`, `unique.by`, `enumerate` | 1000 | **1** |
+| `or` | 2 | **1** |
+
+### 7. Rules
+
+- **The domain map.** `collection` holds *the three collections this library
+  returns in place of Dart's* — `Sequence`, `Dictionary`, `Flow`. Rule 2's
+  third test still keeps it a library with no accessor.
+- **A new law, under Rule 3**, pinned in `test/regression_test.dart`: an
+  operation that cannot emit before its source ends is a `Collector`, not a
+  `Transformer`.
+- **Rule 3's `io.async` paragraph** gets a general rule in place of its special
+  case: every mirrored member has the same name on both accessors, the
+  blocking one returning `T` or a `Sequence<T>` and the async one `Future<T>`
+  or a `Flow<T>`. That rule needed `Flow` to exist.
+- **Rule 4's exemption for third-party members** stays as it is, but the reason
+  it was carrying twelve camelCase names on the library's own large-data
+  surface stops applying.
+
+### The surface, after
+
+| | Was | Is |
+| :--- | ---: | ---: |
+| Types in `collection` | 5 | 6 — `Flow` |
+| `Transformer` factories | 27 | 21 — six moved |
+| `Collector` factories | 32 | 38 — six arrived |
+| New factories, net | — | **0** |
+| Transformers that buffer over a flow | 7 | **0**, plus `fn` |
+| Public signatures naming `Stream` | 9 | 2 — `Flow.stream`, `Engine.items` |
+| Bounded async work over a stream | impossible | `flow.run(worker, size: n)` |
+| Members deleted | — | 1 — `concurrent.stream` |
+
+The library gains one type, moves six operations between two it already had,
+and loses one member.
+
+### What this release deliberately does not do
+
+**No broadcast flow.** A flow is consumed once, and the value of the guard is
+that there is one behaviour instead of three.
+`flow.stream.asBroadcastStream()` is the door.
+
+**No error handling.** An error in the source propagates out of the `Future`
+that `collect` returns. There is no `handleError`, no `timeout` and no
+`onError`, because *what should a pipeline do when element 900 throws* is a
+design of its own — `Pool.settle`'s sealed `Done`/`Broke` is the shape that
+would want generalising — and guessing at it now is how `Store.load`'s silent
+empty got written.
+
+**`io.watch` is untouched.** A watch is an endless flow of paths and the fit is
+obvious, but `io.watch` returns a stop function, and that stopper is a
+documented lifecycle a subscription would hide.
+
+**No keyed flow.** There is no async `Dictionary` and nothing has asked for
+one. `flow.collect(.group.by(f))` gives a `Dictionary` at the end, which is
+where a keyed collection is actually wanted.
+
+**No `Flow.unzip`.** Two views over one source means two subscriptions, which
+a flow does not have. Correctly absent rather than refused.
+
 ## 5.3.0
 
 The lazy sequence. 5.1.0 made `Sequence` a snapshot: the constructor copied

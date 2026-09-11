@@ -50,12 +50,14 @@ void main() async {
   // writing: it turns a crawl of any size into a spreadsheet without the rows
   // ever meeting in memory.
   //
-  //   await io.csv.pipe('out.csv', crawl.stream(handler), headers: [...]);
-  await for (final record in io.csv.records(
-    io.path.join(dir, 'products.csv'),
-  )) {
-    log.debug('${record['name']} at ${record['price']}');
-  }
+  //   await io.csv.pipe('out.csv', crawl.flow(handler), headers: [...]);
+  await io.csv
+      .records(io.path.join(dir, 'products.csv'))
+      .collect(
+        .foreach(
+          (record) => log.debug('${record['name']} at ${record['price']}'),
+        ),
+      );
 
   // ------------------------------------------------------------------- paths
   log.info('join   ${io.path.join(dir, 'a', 'b.txt')}');

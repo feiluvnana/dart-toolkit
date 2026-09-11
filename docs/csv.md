@@ -70,7 +70,7 @@ sheet.maps
       .sum((r) => util.text.number(r['amount']!) ?? 0),
     ))
     .pairs
-    .transform(.sort.by((e) => e.$1))
+    .collect(.sort.by((e) => e.$1))
     .collect(.foreach((e) => print('${e.$1}  ${e.$2}')));
 ```
 
@@ -91,14 +91,14 @@ final rows  = res.parse(format.json).at('data');
 
 | | Keyed by the header line | Raw cells |
 | :--- | :--- | :--- |
-| **Reading** | `io.csv.records(path)` → `Stream<Map<String, String>>` | `io.csv.rows(path)` → `Stream<List<String>>` |
-| **Writing** | `io.csv.write(path, rows)` | `io.csv.pipe(path, stream)` |
+| **Reading** | `io.csv.records(path)` → `Flow<Map<String, String>>` | `io.csv.rows(path)` → `Flow<List<String>>` |
+| **Writing** | `io.csv.write(path, rows)` | `io.csv.pipe(path, flow)` |
 
 ```dart
-await for (final map in io.csv.records('big.csv')) {
-  print(map['id']);
-}
+await io.csv.records('big.csv').collect(.foreach((map) => print(map['id'])));
 ```
+
+A `Flow`, not a `Stream`, so the whole `Transformer`/`Collector` vocabulary reaches a file too large to hold — see [collection.md](collection.md).
 
 Both readers yield nothing when the file does not exist. Blank lines are skipped, and short rows are padded with empty strings when reading records.
 
@@ -159,7 +159,7 @@ Reading handles either, so a file written one way reads back the same.
 
 ### Streaming out
 
-`write` takes a collection already in memory. `pipe` takes a `Stream` of records and never holds more than one row, which is what turns a crawl of any size into a spreadsheet in one call:
+`write` takes a collection already in memory. `pipe` takes a `Flow` of records and never holds more than one row, which is what turns a crawl of any size into a spreadsheet in one call:
 
 ```dart
 import 'package:dart_toolkit/dart_toolkit.dart';
@@ -168,7 +168,7 @@ void main() async {
   await io.csv.pipe(
     'products.csv',
     net.crawl<Map<String, Object?>>('https://shop.example.com/products'.url)
-        .stream((res) {
+        .flow((res) {
           for (final row in res.parse(format.html).extract({
             'items': ['.product', {'name': '.name', 'price': '.price'}],
           })['items']! as List<Map<String, Object?>>) {

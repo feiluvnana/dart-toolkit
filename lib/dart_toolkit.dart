@@ -24,11 +24,11 @@
 ///
 /// One is neither, because it is a vocabulary rather than a way in:
 ///
-/// - `collection`: [Sequence] and [Dictionary], the two collections this
-///   library returns in place of Dart's, and the two operation types that
-///   shape them — [Transformer] and [Collector]. A library, not an accessor:
-///   Rule 2 spends no top-level name, and you reach every one of these from
-///   the data you already hold.
+/// - `collection`: [Sequence], [Dictionary] and [Flow], the three collections
+///   this library returns in place of `Iterable`, `Map` and `Stream`, and the
+///   two operation types that shape all three — [Transformer] and
+///   [Collector]. A library, not an accessor: Rule 2 spends no top-level
+///   name, and you reach every one of these from the data you already hold.
 ///
 /// Two are *subjects* — knowledge that came from outside Dart:
 ///

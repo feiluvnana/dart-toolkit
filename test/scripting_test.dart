@@ -222,16 +222,16 @@ void main() {
   });
 
   group('io.csv.pipe', () {
-    test('writes a stream of maps without holding it', () async {
+    test('writes a flow of maps without holding it', () async {
       final dir = _temp('dt_pipe_');
       final path = '${dir.path}/out.csv';
 
       await io.csv.pipe(
         path,
-        Stream.fromIterable([
+        [
           {'name': 'Alice', 'role': 'admin'},
           {'name': 'Bob', 'role': 'user'},
-        ]),
+        ].flow,
       );
 
       expect(
@@ -246,9 +246,9 @@ void main() {
 
       await io.csv.pipe(
         path,
-        Stream.fromIterable([
+        [
           {'b': '2', 'a': '1'},
-        ]),
+        ].flow,
         headers: ['a', 'b'],
       );
 
@@ -261,10 +261,10 @@ void main() {
 
       await io.csv.pipe(
         path,
-        Stream.fromIterable([
+        [
           {'n': 1, 'letter': 'a'},
           {'n': 2, 'letter': 'b'},
-        ]),
+        ].flow,
         headers: ['n', 'letter'],
       );
 
@@ -277,9 +277,9 @@ void main() {
 
       await io.csv.pipe(
         path,
-        Stream.fromIterable([
+        [
           {'name': 'Alice, Chief'},
-        ]),
+        ].flow,
         newline: '\r\n',
       );
 
@@ -290,26 +290,25 @@ void main() {
       ]);
     });
 
-    test(
-      'an empty stream with declared headers writes an empty table',
-      () async {
-        final dir = _temp('dt_pipe_');
-        final path = '${dir.path}/out.csv';
+    test('an empty flow with declared headers writes an empty table', () async {
+      final dir = _temp('dt_pipe_');
+      final path = '${dir.path}/out.csv';
 
-        await io.csv.pipe(path, const Stream.empty(), headers: ['a', 'b']);
+      await io.csv.pipe(path, Flow.empty(), headers: ['a', 'b']);
 
-        expect(File(path).readAsStringSync(), 'a,b\n');
-      },
-    );
+      expect(File(path).readAsStringSync(), 'a,b\n');
+    });
 
-    test('a stream that fails leaves no half-written file', () async {
+    test('a flow that fails leaves no half-written file', () async {
       final dir = _temp('dt_pipe_');
       final path = '${dir.path}/out.csv';
 
       await expectLater(
         io.csv.pipe(
           path,
-          Stream<Map<String, String>>.error(StateError('mid-crawl')),
+          // Through the boundary, deliberately: a source that fails is
+          // somebody else's stream, so there is no `Flow.error`.
+          Stream<Map<String, Object?>>.error(StateError('mid-crawl')).flow,
         ),
         throwsStateError,
       );
@@ -336,7 +335,7 @@ void main() {
                     '<span class="c">19.99</span></div>',
               }),
             )
-            .stream((res) {
+            .flow((res) {
               for (final card
                   in res
                       .parse(format.html)
@@ -376,9 +375,8 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 
 void main() async {
   print('piped=\${system.console.reader.piped}');
-  await for (final line in system.console.reader.lines) {
-    print('got \${line.trim()}');
-  }
+  await system.console.reader.lines
+      .collect(.foreach((line) => print('got \${line.trim()}')));
   print('done');
   await system.console.reader.close();
 }

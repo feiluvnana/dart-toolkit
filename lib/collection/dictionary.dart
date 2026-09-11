@@ -23,7 +23,7 @@ import 'transformer.dart';
 /// final spend = rows.collect(.group.into((r) => r.host, .sum((r) => r.cost)));
 ///
 /// spend.get('a.com');                       // num?
-/// spend.pairs.transform(.sort.by((e) => e.$1));
+/// spend.pairs.collect(.sort.by((e) => e.$1));
 /// ```
 ///
 /// ## The same two doors [Sequence] has

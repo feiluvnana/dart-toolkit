@@ -88,19 +88,19 @@ Downloading is [`net.http.download`](http.md), because a socket is `net`'s. `io.
 | `io.bytes(path)` | `List<int>` (sync) |
 | `io.async.bytes(path)` | `Future<List<int>>` (async) |
 | `io.lines(path)` | `Sequence<String>` |
-| `io.async.lines(path)` | `Stream<String>`, without loading the file |
+| `io.async.lines(path)` | `Flow<String>`, without loading the file |
 
 ```dart
 io.lines('big.log')
     .transform(.where((line) => line.contains('ERROR')))
     .collect(.foreach(print));
 
-await for (final line in io.async.lines('big.log')) {
-  if (line.contains('ERROR')) print(line);
-}
+await io.async.lines('big.log')
+    .transform(.where((line) => line.contains('ERROR')))
+    .collect(.foreach(print));
 ```
 
-`io.lines` returned a `Stream` from **both** accessors through 5.1.0 — including from the one whose whole promise is that it blocks. One name, two shapes, each honest about which accessor it is on, is what the mirror was always supposed to mean.
+One name, two shapes — and with `Flow` on the async side they are the *same* four words, differing only in the `await`. That is the general rule the mirror follows: a mirrored member has the same name on both accessors, the blocking one returning `T` or a `Sequence<T>` and the async one `Future<T>` or a `Flow<T>`. `io.lines` returned a `Stream` from **both** accessors through 5.1.0 — including from the one whose whole promise is that it blocks.
 
 Reading a JSON *document* is [`format.json.read`](json.md), beside `format.yaml` and
 `format.toml`: a format is knowledge from outside Dart, so all three live in one

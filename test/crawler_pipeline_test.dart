@@ -288,7 +288,7 @@ void main() {
       );
     });
 
-    test('stream yields items as they are emitted', () async {
+    test('flow yields items as they are emitted', () async {
       final items = await net
           .crawl<String>('https://site.example.com'.url)
           .downloader(
@@ -296,13 +296,13 @@ void main() {
               'https://site.example.com': '<span>Alpha</span><span>Beta</span>',
             }),
           )
-          .stream((res) {
+          .flow((res) {
             for (final t
                 in res.parse(format.html).find('span').texts.collect(.list())) {
               res.emit(t);
             }
           })
-          .toList();
+          .collect(.list());
 
       expect(items, equals(['Alpha', 'Beta']));
     });

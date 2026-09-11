@@ -9,7 +9,7 @@
 /// four exist because the document does not fit.
 ///
 /// ```dart no-compile
-/// await for (final row in io.csv.records('huge.csv')) { ... }  // read
+/// await io.csv.records('huge.csv').collect(.foreach(use));    // read
 /// await io.csv.pipe('out.csv', rows);                         // write
 ///
 /// final sheet = await format.csv.read('small.csv');           // whole file
@@ -21,6 +21,7 @@ import 'dart:io';
 
 import '../src/csvtext.dart';
 import '../src/fs.dart';
+import '../collection/flow.dart';
 import 'entry.dart';
 
 // ============================================================================
@@ -31,26 +32,33 @@ import 'entry.dart';
 ///
 /// Reads come in two shapes, chosen by the method rather than a type
 /// argument: [records] treats the first line as a header and yields one map
-/// per row, while [rows] yields every line as a list of cells.
+/// per row, while [rows] yields every line as a list of cells. Both hand back
+/// a [Flow], so the whole [Transformer] and [Collector] vocabulary reaches a
+/// file too large to hold.
 ///
 /// ```dart
-/// await for (final person in io.csv.records('people.csv')) {
-///   print(person['name']);
-/// }
+/// await io.csv.records('people.csv')
+///     .collect(.foreach((person) => print(person['name'])));
 /// ```
 class CsvFileAccessor {
   /// Creates the accessor. Prefer the shared `io.csv` instance.
   const CsvFileAccessor();
 
-  /// Streams [path] as raw rows of cells, header line included.
+  /// Reads [path] as raw rows of cells, header line included.
   ///
   /// Where `format.csv.read` reads the whole file, this yields a row at a
   /// time, so a file larger than memory can still be walked. Yields nothing
   /// when the file does not exist.
-  Stream<List<String>> rows(
+  Flow<List<String>> rows(
     String path, {
     String delimiter = ',',
     Encoding encoding = utf8,
+  }) => Flow(_rows(path, delimiter: delimiter, encoding: encoding));
+
+  Stream<List<String>> _rows(
+    String path, {
+    required String delimiter,
+    required Encoding encoding,
   }) async* {
     final file = File(path);
     if (!await file.exists()) return;
@@ -70,18 +78,24 @@ class CsvFileAccessor {
     }
   }
 
-  /// Streams [path] as records keyed by the header line.
+  /// Reads [path] as records keyed by the header line.
   ///
   /// Where `format.csv.read(path)` then `.maps` reads the whole file, this
   /// yields a record at a time. Blank lines are skipped and short rows are
   /// padded with empty strings.
-  Stream<Map<String, String>> records(
+  Flow<Map<String, String>> records(
     String path, {
     String delimiter = ',',
     Encoding encoding = utf8,
+  }) => Flow(_records(path, delimiter: delimiter, encoding: encoding));
+
+  Stream<Map<String, String>> _records(
+    String path, {
+    required String delimiter,
+    required Encoding encoding,
   }) async* {
     List<String>? headers;
-    await for (final row in rows(
+    await for (final row in _rows(
       path,
       delimiter: delimiter,
       encoding: encoding,
@@ -126,19 +140,19 @@ class CsvFileAccessor {
   /// Writes [rows] to [path] as they arrive, atomically.
   ///
   /// The streaming twin of [write]: where that one takes a collection already
-  /// in memory, this takes a [Stream] and never holds more than one row. That
+  /// in memory, this takes a [Flow] and never holds more than one row. That
   /// is what turns a crawl of any size into a spreadsheet in one line —
   /// [write] would need every result collected first:
   ///
   /// ```dart
   /// await io.csv.pipe(
   ///   'products.csv',
-  ///   net.crawl<Map<String, Object?>>(seed).stream(),
+  ///   net.crawl<Map<String, Object?>>(seed).flow(),
   ///   headers: ['name', 'price', 'url'],
   /// );
   /// ```
   ///
-  /// A stream cannot be read twice, so the columns have to be settled before
+  /// A flow is consumed once, so the columns have to be settled before
   /// the first row is written:
   /// [headers] names them, and without it they are taken from the first row's
   /// keys. A later key the header line does not carry is dropped — pass
@@ -149,7 +163,7 @@ class CsvFileAccessor {
   /// discarded if it fails.
   Future<FileSystemEntry> pipe(
     String path,
-    Stream<Map<String, Object?>> rows, {
+    Flow<Map<String, Object?>> rows, {
     List<String>? headers,
     String delimiter = ',',
     String newline = '\n',
@@ -174,12 +188,12 @@ class CsvFileAccessor {
       }
 
       try {
-        await for (final row in rows) {
+        await for (final row in rows.stream) {
           columns ??= row.keys.toList();
           header();
           line([for (final key in columns) row[key]?.toString() ?? '']);
         }
-        // A stream that closed without yielding still writes the header it was
+        // A flow that ended without yielding still writes the header it was
         // given, so an empty result reads as an empty table, not an empty file.
         header();
         await sink.flush();

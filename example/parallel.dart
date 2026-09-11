@@ -26,12 +26,12 @@ void main() async {
     'Fetched ${sizes.collect(.count())}, ${util.size.format(sizes.collect(.sum((size) => size)).toInt())} total',
   );
 
-  // `concurrent.stream` yields each result as it lands, for work whose output
+  // `flow.run` is the bounded pool over a source rather than a collection:
+  // `ordered: false` yields each result as it lands, for work whose output
   // should not wait on the slowest item.
-  var seen = 0;
-  await for (final _ in concurrent.stream(ids, _measure, size: 4)) {
-    seen++;
-  }
+  final seen = await ids.flow
+      .run(_measure, size: 4, ordered: false)
+      .collect(.count());
   log.info('Streamed $seen results.');
 
   // ------------------------------------------------------------- when one fails

@@ -75,7 +75,7 @@ break a reader.
 
 There are no `Slot`s here. A slot exists so a *writer* and a *reader* in
 different places can agree on a key; reading a document is one place.
-[`Slot`](collection.md#7-typed-keys-slot) is the two-places case, and keeps its own typed keys.
+[`Slot`](collection.md#8-typed-keys-slot) is the two-places case, and keeps its own typed keys.
 
 A whole-document typed build goes through `raw`:
 
@@ -125,5 +125,5 @@ The same cursor reads YAML and TOML — see [`format.yaml`](yaml.md).
 - [`Sequence`](collection.md) — what `all`, `texts` and `jsonpath` hand back
 - [`net.http.*`](http.md#typed-json-replyat) — `Reply.at`, the response door
 - [`net.serve`](serve.md) — `Asked.json`, the request door
-- [`Slot`](collection.md#7-typed-keys-slot) — the two-places case, which keeps typed keys
+- [`Slot`](collection.md#8-typed-keys-slot) — the two-places case, which keeps typed keys
 ---

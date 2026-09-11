@@ -168,7 +168,7 @@ void main(List<String> args) async {
   // ------------------------------------------------------------ 5. console
   log.step(5, 5, 'Summary');
 
-  final cheapest = products.transform(.sort.by((p) => p.price));
+  final cheapest = products.collect(.sort.by((p) => p.price));
   out.table(
     Table(
       headers: ['Product', 'Price', 'Slug'],

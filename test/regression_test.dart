@@ -3,6 +3,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 // Imported unprefixed on purpose. `package:crypto` exports a `Digest` and
@@ -65,6 +66,268 @@ void main() {
       expect([1].seq.collect(.empty()), isFalse);
       expect($('<p>a</p>').empty, isFalse);
       expect(Json.none.empty, isTrue);
+    });
+  });
+
+  group('5.4.0 — the rule that sorts the vocabulary', () {
+    // > A Transformer can emit before its source ends. A Collector needs the
+    // > end.
+    //
+    // Six operations were on the wrong side of it through 5.3.0 — sort,
+    // sort.by, sort.using, flip, take.last and skip.last — and nobody
+    // noticed, because with one container both sides end in the same call. A
+    // second container is what makes the rule observable, so this pins it the
+    // way 4.0.0 pinned *no HTML parser under lib/net/*.
+    Stream<int> counting(int n, void Function() tick) async* {
+      for (var i = 0; i < n; i++) {
+        tick();
+        yield i;
+      }
+    }
+
+    test('every transformer emits before its source is exhausted', () async {
+      final others = const Sequence([0, 1, 2]);
+      final steps = <String, Transformer<int, Object?>>{
+        'map': Transformer.map((int n) => n),
+        'map.nonnull': Transformer.map.nonnull((int n) => n),
+        'where': Transformer.where((int n) => true),
+        'where.type': Transformer.where.type<int>(),
+        'flat.map': Transformer.flat.map((int n) => [n]),
+        'cast': Transformer.cast<int>(),
+        'unique': Transformer.unique<int>(),
+        'unique.by': Transformer.unique.by((int n) => n),
+        'take.first': Transformer.take.first<int>(10),
+        'take.when': Transformer.take.when((int n) => true),
+        'skip.first': Transformer.skip.first<int>(1),
+        'skip.when': Transformer.skip.when((int n) => false),
+        'enumerate': Transformer.enumerate<int>(),
+        'chunk': Transformer.chunk<int>(2),
+        'zip': Transformer.zip<int, int>(others),
+        'plus': Transformer.plus<int>(others),
+        'minus': Transformer.minus<int>(const Sequence([-1])),
+        'common': Transformer.common<int>(others),
+        'or': Transformer.or<int>(others),
+      };
+
+      for (final MapEntry(key: name, value: step) in steps.entries) {
+        var produced = 0;
+        final first = await counting(
+          1000,
+          () => produced++,
+        ).flow.transform(step).collect(.first());
+
+        expect(first, isNotNull, reason: '$name produced nothing');
+        expect(
+          produced,
+          lessThan(1000),
+          reason: '$name held its whole source; it belongs on Collector',
+        );
+      }
+    });
+
+    test('the six that need the end are collectors, not transformers', () {
+      // Each of these is a Collector<int, Sequence<int>>. The pin is that
+      // they type-check here and cannot be handed to `transform` at all —
+      // `flow.transform(.sort.by(f))` does not compile, which is the refusal.
+      final source = [3, 1, 2].seq;
+      expect(source.collect(.sort()).collect(.list()), equals([1, 2, 3]));
+      expect(
+        source.collect(.sort.by((n) => -n)).collect(.list()),
+        equals([3, 2, 1]),
+      );
+      expect(
+        source.collect(.sort.using((a, b) => b.compareTo(a))).collect(.list()),
+        equals([3, 2, 1]),
+      );
+      expect(source.collect(.flip()).collect(.list()), equals([2, 1, 3]));
+      expect(source.collect(.take.last(2)).collect(.list()), equals([1, 2]));
+      expect(source.collect(.skip.last(2)).collect(.list()), equals([3]));
+    });
+
+    test('sort is now usable where it never could be — downstream', () {
+      final grouped = [
+        3,
+        1,
+        4,
+        2,
+      ].seq.collect(.group.into((n) => n.isEven, .sort()));
+      expect(grouped.get(true)?.collect(.list()), equals([2, 4]));
+      expect(grouped.get(false)?.collect(.list()), equals([1, 3]));
+    });
+
+    test('one pipeline runs over both containers', () async {
+      final cleanup = Transformer.where<int>((n) => n > 1)
+          .then(Transformer.unique<int>())
+          .into(Collector.sort.using((a, b) => b.compareTo(a)));
+
+      expect([3, 1, 2, 3].seq.collect(cleanup).collect(.list()), [3, 2]);
+      expect(
+        await [
+          3,
+          1,
+          2,
+          3,
+        ].flow.collect(cleanup).then((s) => s.collect(.list())),
+        [3, 2],
+      );
+    });
+
+    test('a sequence and a flow answer identically', () async {
+      final source = [3, 1, 2, 1, 5];
+      expect(
+        await source.flow.transform(.unique()).collect(.list()),
+        equals(source.seq.transform(.unique()).collect(.list())),
+      );
+      expect(
+        await source.flow.transform(.enumerate()).collect(.list()),
+        equals(source.seq.transform(.enumerate()).collect(.list())),
+      );
+      expect(
+        (await source.flow.collect(.count.by((n) => n.isEven))).map,
+        equals(source.seq.collect(.count.by((n) => n.isEven)).map),
+      );
+      expect(
+        await <int>[].flow.transform(.or(const Sequence([9]))).collect(.list()),
+        equals(
+          <int>[].seq.transform(.or(const Sequence([9]))).collect(.list()),
+        ),
+      );
+    });
+
+    test('a collect asks for no more of the source than it needs', () async {
+      final stoppers = <String, Collector<int, Object?>>{
+        'first': Collector.first<int>(),
+        'first.where': Collector.first.where((int n) => n == 0),
+        'single': Collector.single<int>(),
+        'single.where': Collector.single.where((int n) => n < 2),
+        'at': Collector.at<int>(0),
+        'any': Collector.any((int n) => true),
+        'all': Collector.all((int n) => false),
+        'has': Collector.has<int>(0),
+        'index.of': Collector.index.of<int>(0),
+        'index.where': Collector.index.where((int n) => true),
+        'empty': Collector.empty<int>(),
+      };
+
+      for (final MapEntry(key: name, value: step) in stoppers.entries) {
+        var produced = 0;
+        await counting(1000, () => produced++).flow.collect(step);
+        expect(
+          produced,
+          lessThan(1000),
+          reason: '$name walked its whole source',
+        );
+      }
+    });
+
+    test('a flow is consumed once, whichever kind of stream backs it', () {
+      // The three behaviours Dart gives a second listen — a StateError, an
+      // IOException, and silence — become one message, thrown when the second
+      // pipeline is built rather than when it is listened to. Nothing here
+      // ever listens.
+      void once<T>(String kind, Flow<T> Function() make) {
+        final claimed = isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          'This flow has already been consumed.',
+        );
+
+        final shaped = make()..transform(Transformer.map<T, T>((x) => x));
+        expect(
+          () {
+            shaped.collect(Collector.count<T>());
+          },
+          throwsA(claimed),
+          reason: kind,
+        );
+        expect(() => shaped.stream, throwsA(claimed), reason: kind);
+
+        final left = make();
+        left.stream;
+        expect(
+          () {
+            left.transform(Transformer.map<T, T>((x) => x));
+          },
+          throwsA(claimed),
+          reason: kind,
+        );
+      }
+
+      // Never listened to, so it is never closed either: closing an
+      // unlistened single-subscription controller waits for a subscriber.
+      final controller = StreamController<int>();
+      final file = File('${Directory.systemTemp.path}/dt_flow_once.txt')
+        ..writeAsStringSync('a\nb\n');
+      addTearDown(file.deleteSync);
+
+      once('controller', () => controller.stream.flow);
+      once('file', () => io.async.lines(file.path));
+      once('iterable', () => [1, 2].flow);
+      once('empty', Flow<int>.empty);
+    });
+
+    test('a flow stops the source it no longer needs', () async {
+      var produced = 0;
+      final three = await counting(1000, () => produced++).flow
+          .transform(.where((n) => n.isEven))
+          .transform(.take.first(3))
+          .collect(.list());
+
+      expect(three, equals([0, 2, 4]));
+      expect(produced, equals(5));
+    });
+
+    test('a crawl that is asked for one item fetches one page', () async {
+      var fetched = 0;
+      final first = await net
+          .crawl<String>('https://site.example.com'.url)
+          .downloader(
+            _Pages<String>({
+              'https://site.example.com': '<span>Alpha</span><span>Beta</span>',
+            }),
+          )
+          .flow((res) {
+            fetched++;
+            for (final t
+                in res.parse(format.html).find('span').texts.collect(.list())) {
+              res.emit(t);
+            }
+          })
+          .collect(.first());
+
+      expect(first, equals('Alpha'));
+      expect(fetched, equals(1));
+    });
+
+    test('the escape hatch buffers, and says so', () async {
+      var produced = 0;
+      // `fn` takes a closure over an Iterable, so without a `pour:` it has to
+      // hold the source. That is the one documented place the rule is a
+      // promise rather than a proof.
+      await counting(
+        10,
+        () => produced++,
+      ).flow.transform(.fn((xs) => xs.map((n) => n))).collect(.first());
+      expect(produced, equals(10));
+
+      // And supplying one is how a caller opts back in.
+      produced = 0;
+      await counting(10, () => produced++).flow
+          .transform(
+            .fn(
+              (Iterable<int> xs) => xs.map((n) => n),
+              pour: (Stream<int> xs) => xs.map((n) => n),
+            ),
+          )
+          .collect(.first());
+      expect(produced, equals(1));
+    });
+
+    test('a subclass written before Flow existed still reaches one', () async {
+      expect(
+        await [1, 2, 3].flow.transform(_Doubled()).collect(.list()),
+        equals([2, 4, 6]),
+      );
     });
   });
 
@@ -164,16 +427,18 @@ void main() {
       expect(async.difference(blocking), isEmpty);
     });
 
-    test('lines is the one member whose shape differs, on purpose', () {
+    test('lines is the one member whose shape differs, on purpose', () async {
       final temp = io.dir.temp('dt_mirror_');
       addTearDown(() => io.remove(temp.path));
       final path = io.path.join(temp.path, 'a.txt');
       io.write(path, 'one\ntwo\n');
 
-      // Blocking means the lines are already read.
+      // The general rule, not a special case: same name both sides, the
+      // blocking one a Sequence and the async one a Flow.
       expect(io.lines(path), isA<Sequence<String>>());
-      expect(io.async.lines(path), isA<Stream<String>>());
+      expect(io.async.lines(path), isA<Flow<String>>());
       expect(io.lines(path).collect(.list()), ['one', 'two']);
+      expect(await io.async.lines(path).collect(.list()), ['one', 'two']);
     });
 
     test('no io signature names a dart:io type', () {
@@ -648,14 +913,15 @@ Disallow: /x
       );
     });
 
-    test('a stream whose seeds cannot be resolved still ends', () async {
+    test('a flow whose seeds cannot be resolved still ends', () async {
       final events = <String>[];
       final ended = Completer<void>();
 
       await _withFailFastClient(() async {
         net.crawl
             .sitemap<String>(Uri.parse('http://127.0.0.1:1/sitemap.xml'))
-            .stream((res) => res.emit('x'))
+            .flow((res) => res.emit('x'))
+            .stream
             .listen(
               (_) => events.add('item'),
               onError: (Object _) => events.add('error'),
@@ -666,7 +932,7 @@ Disallow: /x
               cancelOnError: false,
             );
 
-        // The stream used to carry the error and then stay open forever, with
+        // The flow used to carry the error and then stay open forever, with
         // the resume hook still holding the process alive behind it.
         await ended.future.timeout(
           const Duration(seconds: 10),
@@ -754,7 +1020,7 @@ Disallow: /x
       final path = io.path.join(temp.path, 'awkward.csv');
       io.write(path, awkward);
 
-      expect(await io.csv.rows(path).toList(), grid(awkward));
+      expect(await io.csv.rows(path).collect(.list()), grid(awkward));
     });
   });
 
@@ -1093,3 +1359,30 @@ class _SlowDownloader<T> extends Downloader<T> {
 }
 
 void _noop(Page<String> response) {}
+
+/// A transformer that supplies only `run`, the way one written before 5.4.0
+/// would — the default `pour` is what carries it onto a flow.
+final class _Doubled extends Transformer<int, int> {
+  _Doubled() : super(_twice);
+
+  static Iterable<int> _twice(Iterable<int> items) => items.map((n) => n * 2);
+}
+
+/// An in-memory downloader, so a crawl in this file never reaches a socket.
+final class _Pages<T> extends Downloader<T> {
+  _Pages(this.bodies) : super(concurrency: 1);
+
+  final Map<String, String> bodies;
+
+  @override
+  Future<Page<T>> download(Fetch<T> fetch) async {
+    final body = bodies[fetch.url.toString()];
+    return Page<T>(
+      fetch: fetch,
+      status: body == null ? 404 : 200,
+      headers: const {'content-type': 'text/html; charset=utf-8'},
+      bytes: utf8.encode(body ?? '404'),
+      engine: engine,
+    );
+  }
+}

@@ -169,13 +169,17 @@ void main() {
     });
 
     test('concurrent.md features run as documented', () async {
-      // 1. stream
-      final streamResults = await concurrent.stream<int, String>([20, 10], (
-        ms,
-      ) async {
-        await util.time.wait(ms.ms);
-        return 'done-$ms';
-      }, size: 2).toList();
+      // 1. flow.run
+      final streamResults = await [20, 10].flow
+          .run(
+            (int ms) async {
+              await util.time.wait(ms.ms);
+              return 'done-$ms';
+            },
+            size: 2,
+            ordered: false,
+          )
+          .collect(.list());
       expect(streamResults, containsAll(['done-20', 'done-10']));
 
       // 2. settle
@@ -317,10 +321,10 @@ void main() {
           equals(['Alice', 'admin']),
         );
 
-        final streamed = await io.csv.records(path).toList();
+        final streamed = await io.csv.records(path).collect(.list());
         expect(streamed.length, equals(2));
 
-        final cells = await io.csv.rows(path).toList();
+        final cells = await io.csv.rows(path).collect(.list());
         expect(cells.first, equals(['name', 'role']));
 
         // Excel and RFC 4180 want CRLF, which format and write both take.

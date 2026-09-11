@@ -280,7 +280,6 @@ See [collection.md](collection.md) for the whole vocabulary. The short version:
 
 ```dart
 rows.transform(.where((r) => r.live))         // a Transformer
-    .transform(.sort.by((r) => r.cost))
     .collect(.group.into((r) => r.host, .sum((r) => r.cost)));   // a Collector
 ```
 

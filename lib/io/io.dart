@@ -40,6 +40,7 @@ import '../src/fs.dart';
 import '../src/lock.dart';
 import '../src/watch.dart';
 import '../collection/dictionary.dart';
+import '../collection/flow.dart';
 import '../collection/sequence.dart';
 
 export 'collections.dart';
@@ -466,12 +467,19 @@ class IoAsyncAccessor {
   /// Reads [path] as raw bytes.
   Future<List<int>> bytes(String path) => File(path).readAsBytes();
 
-  /// Streams [path] as decoded lines, without loading the whole file.
+  /// Reads [path] as decoded lines, without loading the whole file.
   ///
   /// The shape `io.lines` used to have on both accessors. It belongs on this
-  /// one: a stream is what *not blocking* looks like.
-  Stream<String> lines(String path, {Encoding encoding = utf8}) =>
-      Fs.lines(path, encoding: encoding);
+  /// one: a [Flow] is what *not blocking* looks like, where the blocking
+  /// mirror hands back a [Sequence].
+  ///
+  /// ```dart
+  /// await io.async.lines('big.log')
+  ///     .transform(.where((line) => line.contains('ERROR')))
+  ///     .collect(.foreach(print));
+  /// ```
+  Flow<String> lines(String path, {Encoding encoding = utf8}) =>
+      Flow(Fs.lines(path, encoding: encoding));
 
   // --- Writing (always atomic, via a `.part` staging file) ---
 

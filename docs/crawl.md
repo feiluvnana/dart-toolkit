@@ -119,19 +119,17 @@ await net.crawl<String>('https://example.com'.url)
 | :--- | :--- |
 | `run([process])` | `Future<Stats>` |
 | `collect([process])` | `Future<Sequence<T>>` of everything emitted |
-| `stream([process])` | `Stream<T>`, yielding items as they are emitted |
+| `flow([process])` | `Flow<T>`, yielding items as they are emitted |
 | `gather(map)` | `Future<Sequence<R>>`, collecting what `map` returned per page |
 | `save(path, [process])` | `Future<Stats>`, writing items to a file |
 | `sink(destination, [process])` | `Future<Stats>`, writing items to an `IOSink` you own |
 | `engine([process])` | The configured `Engine`, unrun |
 
-Prefer `stream` or `save` over `collect` for large crawls — they do not hold every item in memory:
+`flow` and `collect` are the same vocabulary, so the choice between them is only about holding every item in memory — prefer `flow` or `save` over `collect` for a large crawl:
 
 ```dart
-// Stream items to an async consumer:
-await for (final title in net.crawl<String>(url).stream(handler)) {
-  sink.write(title);
-}
+// A flow of items, shaped with the vocabulary a collected crawl uses:
+await net.crawl<String>(url).flow(handler).collect(.foreach(sink.write));
 
 // Or stream directly to a file (Maps/Lists formatted as JSON lines):
 final stats = await net.crawl<Map<String, Object?>>(url)
@@ -162,7 +160,7 @@ final rows = await net.crawl<Row>(seed).collect(rowHandler);
 
 rows.collect(.group.into((r) => r.host, .sum((r) => r.cost)))
     .pairs
-    .transform(.sort.by((e) => e.$1))
+    .collect(.sort.by((e) => e.$1))
     .collect(.foreach(print));
 
 await concurrent.run(rows.collect(.list()), enrich, size: system.os.cpus);
@@ -290,7 +288,7 @@ See [docs/form.md](form.md).
 
 ## 5b. Carrying Context Between Stages
 
-`meta` is carried untouched from fetch to page, which is how a handler recovers the context it queued a page with. It is a `Dictionary<String, Object?>` keyed by `Slot`s — see [collection.md](collection.md#7-typed-keys-slot):
+`meta` is carried untouched from fetch to page, which is how a handler recovers the context it queued a page with. It is a `Dictionary<String, Object?>` keyed by `Slot`s — see [collection.md](collection.md#8-typed-keys-slot):
 
 ```dart
 const artist = Slot<String>('artist');

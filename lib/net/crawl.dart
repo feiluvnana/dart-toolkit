@@ -11,6 +11,7 @@ import 'dart:io';
 
 import '../src/fs.dart';
 import '../src/proc.dart';
+import '../collection/flow.dart';
 import '../collection/sequence.dart';
 import 'cache.dart';
 import 'downloader.dart';
@@ -680,11 +681,26 @@ class CrawlBuilder<T> {
     }
   }
 
-  /// Runs the crawl and yields items as handlers emit them.
+  /// Runs the crawl and yields items as handlers emit them, as a [Flow].
   ///
-  /// The stream closes when the crawl finishes. Use this instead of [collect]
-  /// when the result set is large or you want to process items as they arrive.
-  Stream<T> stream([Handler<T>? process]) {
+  /// The flow ends when the crawl finishes. Use this instead of [collect]
+  /// when the result set is large: the vocabulary is the same either way, so
+  /// the choice is only about holding every item in memory.
+  ///
+  /// ```dart
+  /// await net.crawl<String>(seed)
+  ///     .flow(handler)
+  ///     .collect(.foreach(print));
+  /// ```
+  ///
+  /// A terminal that stops early ends the crawl: the flow cancels its
+  /// subscription and that stops the engine, so `collect(.first())` over a
+  /// crawl fetches one page.
+  ///
+  /// Was `stream`, returning a `Stream<T>`, through 5.3.0 — renamed rather
+  /// than retyped, because a member called `stream` that hands back a [Flow]
+  /// no longer says what the call does.
+  Flow<T> flow([Handler<T>? process]) {
     final engine = this.engine(process);
     late final StreamController<T> controller;
     controller = StreamController<T>(
@@ -712,7 +728,7 @@ class CrawlBuilder<T> {
           onError: controller.addError,
         )
         .whenComplete(finish);
-    return controller.stream;
+    return Flow<T>(controller.stream);
   }
 }
 

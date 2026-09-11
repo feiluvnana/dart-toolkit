@@ -174,14 +174,16 @@ Disallow: /
   });
 
   group('pool streaming', () {
-    test('cancelling the stream stops launching work', () async {
+    test('cancelling the flow stops launching work', () async {
       var started = 0;
       final pool = Pool<int>(size: 1);
-      final stream = pool.stream(List.generate(50, (i) => i), (i) async {
+      // `.stream` on purpose: cancelling a subscription is outside the
+      // vocabulary, and the one word at the boundary says so.
+      final stream = pool.flow(List.generate(50, (int i) => i), (i) async {
         started++;
         await Future<void>.delayed(const Duration(milliseconds: 1));
         return i;
-      });
+      }).stream;
 
       final seen = <int>[];
       final subscription = stream.listen(seen.add);
@@ -195,11 +197,36 @@ Disallow: /
     });
 
     test('results still arrive in completion order', () async {
-      final out = await concurrent.stream([30, 10, 20], (ms) async {
-        await Future<void>.delayed(Duration(milliseconds: ms));
-        return ms;
-      }, size: 3).toList();
+      final out = await [30, 10, 20].flow
+          .run(
+            (int ms) async {
+              await Future<void>.delayed(Duration(milliseconds: ms));
+              return ms;
+            },
+            size: 3,
+            ordered: false,
+          )
+          .collect(.list());
       expect(out, equals([10, 20, 30]));
+    });
+
+    test('cancelling a flow.run stops launching work', () async {
+      var started = 0;
+      final stream = List.generate(50, (int i) => i).flow.run((i) async {
+        started++;
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+        return i;
+      }, size: 1).stream;
+
+      final seen = <int>[];
+      final subscription = stream.listen(seen.add);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await subscription.cancel();
+      final afterCancel = started;
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+
+      expect(started, equals(afterCancel), reason: 'no work after cancel');
+      expect(started, lessThan(50));
     });
   });
 

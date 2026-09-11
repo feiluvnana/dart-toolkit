@@ -49,24 +49,45 @@ final results = await concurrent.run([30, 10, 20], (n) async {
 
 ---
 
-## 2. `concurrent.stream` (Completion Order)
+## 2. `flow.run` (A Source You Do Not Hold)
 
-When tasks vary in duration and you want to process each result as soon as it is ready, use `concurrent.stream`:
+Every member above takes an `Iterable`, so the whole input has to exist before the first task launches. `flow.run` is the same bounded pool over a [`Flow`](collection.md) — a crawl, a CSV too large for memory, a piped stdin — and it is the only way to write *four at a time, over a stream*:
+
+```dart no-compile
+Flow<R> Flow<T>.run<R>(
+  FutureOr<R> Function(T item) worker, {
+  int size = 1,
+  bool ordered = true,
+})
+```
+
+`size: 1` is `Stream.asyncMap`. `ordered: true` — the default — yields in the order elements arrived however the work finishes; `ordered: false` yields each result as soon as it is ready, for work whose output should not wait on the slowest item:
 
 ```dart
-final stream = concurrent.stream<int, String>(
-  [300, 50, 100],
-  (ms) async {
-    await util.time.wait(ms.ms);
-    return 'done-$ms';
-  },
-  size: 3,
-);
-
-await for (final result in stream) {
-  print(result); // prints 'done-50', 'done-100', 'done-300'
-}
+await [300, 50, 100].flow
+    .run((int ms) async {
+      await util.time.wait(ms.ms);
+      return 'done-$ms';
+    }, size: 3, ordered: false)
+    .collect(.foreach(print));   // prints 'done-50', 'done-100', 'done-300'
 ```
+
+The argument for it is the shape that was not expressible at all before — a piped stdin, fetched four at a time:
+
+```dart
+// setup: Future<String> fetch(Uri u) async => '$u'; void save(String s) {}
+await system.console.reader.lines
+    .transform(.map((line) => line.trim()))
+    .transform(.where((line) => line.isNotEmpty))
+    .run((line) => fetch(line.url), size: 4)
+    .collect(.foreach(save));
+```
+
+It honours its subscription the way `Pool.flow` does: pausing stops new tasks launching, and cancelling stops the run — so `collect(.first())` over a crawl fetches one page.
+
+`concurrent.stream` was a second spelling of this over items you already hold, and 5.4.0 deleted it. `concurrent.run` stays: it carries `delay` and `Pool`'s error semantics, which `flow.run` does not, so the two are not spellings of each other.
+
+Draining a flow for its side effects alone is `collect(.count())`. There is deliberately no `drain`: Dart already owns that word and it means *discard*, and `count()` already drains and hands back something worth having.
 
 ---
 
