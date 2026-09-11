@@ -145,13 +145,16 @@ void main() {
       expect(util.text.number(r'$1,234.50'), equals(1234.5));
       expect(util.text.number('no digits'), isNull);
       expect(util.text.number('-42 items'), equals(-42));
-      expect(util.text.numbers('3 of 7 at 2.5').iterable, equals([3, 7, 2.5]));
+      expect(
+        util.text.numbers('3 of 7 at 2.5').collect(.list()),
+        equals([3, 7, 2.5]),
+      );
 
       // A parenthesised number is an accounting negative. This used to come
       // back positive, so a scraped financial table read the wrong way round.
       expect(util.text.number('(5)'), equals(-5));
       expect(util.text.number('(1,234.50)'), equals(-1234.5));
-      expect(util.text.numbers('(3) and 4').iterable, equals([-3, 4]));
+      expect(util.text.numbers('(3) and 4').collect(.list()), equals([-3, 4]));
 
       // An exponent is part of the number. '1e3' used to be 1.
       expect(util.text.number('1e3'), equals(1000));
@@ -161,7 +164,7 @@ void main() {
       // A separator groups digits only in whole threes, which is the rule the
       // space already followed and the comma did not: '1,2' used to be 12.
       expect(util.text.number('1,2'), equals(1));
-      expect(util.text.numbers('1,2').iterable, equals([1, 2]));
+      expect(util.text.numbers('1,2').collect(.list()), equals([1, 2]));
       expect(util.text.number('1 234 567'), equals(1234567));
       expect(util.text.number('12 34'), equals(12));
       expect(util.text.number('1_000'), equals(1000));
@@ -262,7 +265,7 @@ void main() {
       expect(util.text.title('hELLO there'), equals('Hello There'));
       expect(util.text.upper('hello'), equals('Hello'));
       expect(
-        util.text.words('one two-three').iterable,
+        util.text.words('one two-three').collect(.list()),
         equals(['one', 'two', 'three']),
       );
       expect(util.text.blank('   \n '), isTrue);
@@ -273,7 +276,7 @@ void main() {
       const body = 'a "id":"one" b "id":"two" c';
       expect(util.text.between(body, '"id":"', '"'), equals('one'));
       expect(
-        util.text.betweens(body, '"id":"', '"').iterable,
+        util.text.betweens(body, '"id":"', '"').collect(.list()),
         equals(['one', 'two']),
       );
       expect(util.text.between(body, 'missing', '"'), isNull);
@@ -398,11 +401,11 @@ void main() {
       final pool = List.generate(10, (i) => i);
       expect(pool, contains(util.rand.pick(pool)));
       final three = util.rand.some(pool, 3);
-      expect(three.iterable, hasLength(3));
+      expect(three.collect(.list()), hasLength(3));
       expect(three.collect(.set()), hasLength(3));
-      expect(util.rand.some(pool, 99).iterable, hasLength(10));
+      expect(util.rand.some(pool, 99).collect(.list()), hasLength(10));
       final shuffled = util.rand.shuffle(pool);
-      expect(shuffled.transform(.sort()).iterable, equals(pool));
+      expect(shuffled.transform(.sort()).collect(.list()), equals(pool));
       expect(() => util.rand.pick(<int>[]), throwsStateError);
     });
 

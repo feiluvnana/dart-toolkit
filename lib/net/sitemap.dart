@@ -85,18 +85,18 @@ class Sitemap {
     required Set<String> visited,
   }) async {
     if (!visited.add(url.removeFragment().toString())) {
-      return const Sequence<Uri>.empty();
+      return const Sequence<Uri>([]);
     }
 
     final res = await client.get(url);
-    if (!res.ok) return const Sequence<Uri>.empty();
+    if (!res.ok) return const Sequence<Uri>([]);
 
     final isIdx = nested(res.body);
     final uris = parse(res.body);
 
     if (isIdx && recursive && remaining > 0) {
       final results = <Uri>[];
-      for (final childUrl in uris.list) {
+      for (final childUrl in uris.collect(.list())) {
         results.addAll(
           (await _load(
             childUrl,
@@ -104,7 +104,7 @@ class Sitemap {
             recursive: true,
             remaining: remaining - 1,
             visited: visited,
-          )).list,
+          )).collect(.list()),
         );
       }
       return Sequence(List<Uri>.unmodifiable(results));

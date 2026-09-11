@@ -82,7 +82,7 @@ final class Slot<T> {
   /// ```dart
   /// // setup: final page = res;
   /// // setup: const track = Slot<int>('track');
-  /// page.follow(href, meta: [...page.meta.pairs.list, track(2)]);
+  /// page.follow(href, meta: [...page.meta.pairs.collect(.list()), track(2)]);
   /// ```
   (String, Object?) call(T value) => (name, write(value));
 

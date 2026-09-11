@@ -14,7 +14,6 @@
 /// extra import at all.
 library;
 
-import '../collection/collector.dart';
 import '../collection/dictionary.dart';
 import '../collection/sequence.dart';
 import 'io.dart';
@@ -37,7 +36,7 @@ extension Dumpable<T> on Sequence<T> {
     String path, {
     bool pretty = true,
     String part = '.part',
-  }) => io.dump(path, collect(Collector.list()), pretty: pretty, part: part);
+  }) => io.dump(path, collect(.list()), pretty: pretty, part: part);
 }
 
 /// Writing a [Dictionary] to a JSON file, and reading one back.

@@ -52,7 +52,7 @@ void main() {
       final res = Reply.text(page);
       expect(res.parse(format.html).find('.name').text, 'Wireless Keyboard');
       expect(res.parse(format.html).find('.price').text, r'$49.99');
-      expect(res.parse(format.html).find('.tags li').texts.iterable, [
+      expect(res.parse(format.html).find('.tags li').texts.collect(.list()), [
         'usb',
         'bluetooth',
       ]);
@@ -217,7 +217,7 @@ void main() {
           .collect((res) => res.emit(res.parse(format.html).find('h1').text));
 
       expect(seen, ['start', 'item', 'progress', 'done']);
-      expect(stats.iterable, ['hi']);
+      expect(stats.collect(.list()), ['hi']);
     });
   });
 
@@ -285,7 +285,7 @@ void main() {
 
       expect(File(path).readAsStringSync(), 'name\r\n"Alice, Chief"\r\n');
       // And it reads back as one row.
-      expect((await format.csv.read(path)).maps.iterable, [
+      expect((await format.csv.read(path)).maps.collect(.list()), [
         {'name': 'Alice, Chief'},
       ]);
     });
@@ -338,7 +338,11 @@ void main() {
             )
             .stream((res) {
               for (final card
-                  in res.parse(format.html).find('.p').elements.iterable) {
+                  in res
+                      .parse(format.html)
+                      .find('.p')
+                      .elements
+                      .collect(.list())) {
                 res.emit({
                   'name': card.query.find('h2').text,
                   'price': card.query.find('.c').text,
@@ -348,7 +352,7 @@ void main() {
         headers: ['name', 'price'],
       );
 
-      expect((await format.csv.read(path)).maps.iterable, [
+      expect((await format.csv.read(path)).maps.collect(.list()), [
         {'name': 'Wireless Keyboard', 'price': '49.99'},
         {'name': 'Mouse', 'price': '19.99'},
       ]);

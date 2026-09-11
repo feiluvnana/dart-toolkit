@@ -76,7 +76,7 @@ void main() async {
 
   final found = io.dir.find(dir, pattern: RegExp(r'\.(json|csv)$'));
   log.ok(
-    'Found ${found.collect(.count())}: ${[for (final f in found.iterable) io.path.filename(f.path)]}',
+    'Found ${found.collect(.count())}: ${[for (final f in found.collect(.list())) io.path.filename(f.path)]}',
   );
 
   // ------------------------------------------------------------- non-blocking

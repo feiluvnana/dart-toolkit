@@ -281,7 +281,7 @@ extension FormOnMarkup on Markup {
   /// if (search != null) await search.at(res.url).fill({'q': 'widgets'}).send();
   /// ```
   Form? form([String selector = 'form']) {
-    for (final element in find(selector).elements.list) {
+    for (final element in find(selector).elements.collect(.list())) {
       if (element.localName?.toLowerCase() == 'form') return Form(element);
       final inner = element.querySelector('form');
       if (inner != null) return Form(inner);

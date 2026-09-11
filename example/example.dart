@@ -97,7 +97,9 @@ void main(List<String> args) async {
   log.step(2, 5, 'Enriching...');
 
   final bar = Progress(total: products.collect(.count()), message: 'Enriching');
-  final enriched = await concurrent.run(products.iterable, (product) async {
+  final enriched = await concurrent.run(products.collect(.list()), (
+    product,
+  ) async {
     await util.time.wait(util.rand.jitter(30.ms));
     bar.tick(1, product.name);
     return (
@@ -123,11 +125,11 @@ void main(List<String> args) async {
           .collect(.join('\n')),
     );
     io.dump(io.path.join(dir, 'products.json'), [
-      for (final e in enriched.iterable)
+      for (final e in enriched.collect(.list()))
         {'name': e.product.name, 'price': e.product.price, 'slug': e.slug},
     ]);
     await io.csv.write(io.path.join(dir, 'products.csv'), [
-      for (final e in enriched.iterable)
+      for (final e in enriched.collect(.list()))
         {'name': e.product.name, 'price': e.product.price, 'slug': e.slug},
     ]);
     log.ok('Wrote 3 files to $dir/.');
@@ -172,7 +174,7 @@ void main(List<String> args) async {
       headers: ['Product', 'Price', 'Slug'],
       alignments: [ColumnAlign.left, ColumnAlign.right, ColumnAlign.left],
     )..addAll([
-      for (final e in enriched.transform(.take.first(5)).iterable)
+      for (final e in enriched.transform(.take.first(5)).collect(.list()))
         [e.product.name, '\$${e.product.price}', e.slug],
     ]),
   );
@@ -195,7 +197,7 @@ void main(List<String> args) async {
 /// the round trip, so the detail handler knows the price the listing showed.
 void _catalogue(Page<Product> res) {
   for (final card
-      in res.parse(format.html).find('.product').elements.iterable) {
+      in res.parse(format.html).find('.product').elements.collect(.list())) {
     res.follow(
       card.query.find('a').attr('href') ?? '',
       tag: 'product',

@@ -52,7 +52,7 @@
 ///   final titles = await net.crawl<String>('https://news.ycombinator.com'.url)
 ///       .concurrent(system.os.cpus)
 ///       .gather((page) => page.parse(format.html)
-///           .find('.titleline > a').texts.list);
+///           .find('.titleline > a').texts.collect(.list()));
 ///
 ///   io.write('titles.txt', titles.transform(.unique()).collect(.join('\n')));
 /// }

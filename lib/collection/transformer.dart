@@ -219,8 +219,8 @@ class Transformer<A, B> {
   /// The elements in consecutive groups of [size], the last one short.
   ///
   /// ```dart
-  /// for (final batch in rows.transform(.chunk(100)).list) {
-  ///   await concurrent.run(batch.list, print, size: 4);
+  /// for (final batch in rows.transform(.chunk(100)).collect(.list())) {
+  ///   await concurrent.run(batch.collect(.list()), print, size: 4);
   /// }
   /// ```
   static Transformer<A, Sequence<A>> chunk<A>(int size) =>
@@ -243,11 +243,11 @@ class Transformer<A, B> {
   ///
   /// A record, not a `Pair` type.
   static Transformer<A, (A, R)> zip<A, R>(Sequence<R> other) =>
-      Transformer((items) => _zipped(items, other.list));
+      Transformer((items) => _zipped(items, other.collect(.list())));
 
   static Iterable<(A, R)> _zipped<A, R>(
     Iterable<A> items,
-    List<R> other,
+    Iterable<R> other,
   ) sync* {
     final left = items.iterator;
     final right = other.iterator;
@@ -258,11 +258,11 @@ class Transformer<A, B> {
 
   /// The elements followed by [other]'s.
   static Transformer<A, A> plus<A>(Sequence<A> other) =>
-      Transformer((items) => items.followedBy(other.list));
+      Transformer((items) => items.followedBy(other.collect(.list())));
 
   /// The elements [other] does not hold.
   static Transformer<A, A> minus<A>(Sequence<A> other) =>
-      Transformer((items) => _without(items, other.list.toSet()));
+      Transformer((items) => _without(items, other.collect(.set())));
 
   static Iterable<A> _without<A>(Iterable<A> items, Set<A> drop) sync* {
     for (final item in items) {
@@ -274,7 +274,7 @@ class Transformer<A, B> {
   ///
   /// `intersect` is not a word people reach for; `common` is.
   static Transformer<A, A> common<A>(Sequence<A> other) =>
-      Transformer((items) => _shared(items, other.list.toSet()));
+      Transformer((items) => _shared(items, other.collect(.set())));
 
   static Iterable<A> _shared<A>(Iterable<A> items, Set<A> keep) sync* {
     final seen = <A>{};
@@ -289,7 +289,7 @@ class Transformer<A, B> {
   /// titles.transform(.or(Sequence(const ['none'])));
   /// ```
   static Transformer<A, A> or<A>(Sequence<A> fallback) =>
-      Transformer((items) => items.isEmpty ? fallback.list : items);
+      Transformer((items) => items.isEmpty ? fallback.collect(.list()) : items);
 
   /// The elements as [R]s, throwing on one that is not.
   ///

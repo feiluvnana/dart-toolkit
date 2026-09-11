@@ -142,14 +142,15 @@ class DirAccessor {
     String dir, {
     Pattern? pattern,
     bool recursive = true,
-  }) => Sequence([
-    for (final entry in Entries.walk(
+  }) => Sequence(
+    Entries.walk(
       dir,
       only: FileSystemEntryKind.file,
       depth: recursive ? null : 1,
-    ))
-      if (pattern == null || pattern.allMatches(entry.name).isNotEmpty) entry,
-  ]);
+    ).where(
+      (entry) => pattern == null || pattern.allMatches(entry.name).isNotEmpty,
+    ),
+  );
 
   /// Every entry matching the shell-style [pattern], from the current
   /// directory.
@@ -177,13 +178,17 @@ class DirAccessor {
   /// io.remove('out/report.pdf');                          // one entity
   /// io.dir.sweep('out', pattern: RegExp(r'\.part$'));     // everything
   /// ```
+  ///
+  /// The listing is taken in full before the first delete: a walk reads the
+  /// disk as it goes, and deleting under a walk in progress is the one thing
+  /// a lazy listing cannot be asked to survive.
   int sweep(String dir, {Pattern? pattern, bool recursive = false}) {
     var count = 0;
     for (final entry in find(
       dir,
       pattern: pattern,
       recursive: recursive,
-    ).iterable) {
+    ).collect(.list())) {
       try {
         entry.entity.deleteSync();
         count++;
@@ -242,14 +247,15 @@ class DirAsyncAccessor {
     String dir, {
     Pattern? pattern,
     bool recursive = true,
-  }) async => Sequence([
-    for (final entry in await Entries.walkAsync(
+  }) async => Sequence(
+    (await Entries.walkAsync(
       dir,
       only: FileSystemEntryKind.file,
       depth: recursive ? null : 1,
-    ))
-      if (pattern == null || pattern.allMatches(entry.name).isNotEmpty) entry,
-  ]);
+    )).where(
+      (entry) => pattern == null || pattern.allMatches(entry.name).isNotEmpty,
+    ),
+  );
 
   /// Every entry matching the shell-style [pattern]. See [DirAccessor.glob].
   Future<Sequence<FileSystemEntry>> glob(String pattern) async =>
@@ -266,7 +272,7 @@ class DirAsyncAccessor {
       dir,
       pattern: pattern,
       recursive: recursive,
-    )).iterable) {
+    )).collect(.list())) {
       try {
         await entry.entity.delete();
         count++;

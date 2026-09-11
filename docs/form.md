@@ -158,9 +158,9 @@ Without `client` the shared `net.http` sends it. `headers` and `timeout` work as
 ```dart
 await net.crawl<String>('https://example.com/login'.url)
     .tag('home', (res) {
-      for (final row in res.parse(format.html).find('.item').texts.list) {
+      res.parse(format.html).find('.item').texts.collect(.foreach((row) {
         res.emit(row);
-      }
+      }));
     })
     .run((res) => res.submit(
           res.parse(format.html).form('#login')!
@@ -195,9 +195,9 @@ Because `submit` goes through the engine, a paginated POST is a stage that queue
 await net.crawl<Map<String, Object?>>(searchUrl)
     .tag('page', (res) {
       final page = res.parse(format.html);
-      for (final row in page.find('.result').elements.list) {
+      page.find('.result').elements.collect(.foreach((row) {
         res.emit({'title': row.query.find('h3').text});
-      }
+      }));
       final next = page.form('form.pager');
       if (next != null && !page.find('.next').empty) {
         res.submit(next..fill({'page': '${res.depth + 2}'}), tag: 'page');

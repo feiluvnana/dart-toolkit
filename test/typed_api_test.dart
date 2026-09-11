@@ -107,7 +107,7 @@ void main() {
     test('pairs spread one bag into another', () {
       final first = Dictionary<String, Object?>.of([_name('Hey Jude')]);
       final second = Dictionary<String, Object?>.of([
-        ...first.pairs.list,
+        ...first.pairs.collect(.list()),
         _track(4),
       ]);
 
@@ -132,7 +132,8 @@ void main() {
           )
           .tag('song', (res) => seen.add(res.meta.read(_name)))
           .run((res) {
-            for (final a in res.parse(format.html).find('a').elements.list) {
+            for (final a
+                in res.parse(format.html).find('a').elements.collect(.list())) {
               res.follow(a.attr('href')!, tag: 'song', meta: [_name(a.text)]);
             }
           });
@@ -229,7 +230,10 @@ void main() {
 
       expect(product.title, 'Wool Coat');
       expect(product.price, 89.0);
-      expect(product.variants.transform(.map((v) => v.sku)).list, ['A1', 'A2']);
+      expect(product.variants.transform(.map((v) => v.sku)).collect(.list()), [
+        'A1',
+        'A2',
+      ]);
     });
 
     test('all and pick see matches at the top level of the body', () {
@@ -247,7 +251,7 @@ void main() {
         flat
             .parse(format.html)
             .all('.variant', (row) => row.attr('data-sku'))
-            .list,
+            .collect(.list()),
         ['A1', 'A2'],
       );
       expect(
@@ -271,8 +275,8 @@ void main() {
       // matched every `.name` on the page instead of the row's own.
       final names = page
           .parse(format.html)
-          .all('.variant', (row) => row.find('.name').texts.list);
-      expect(names.list, [
+          .all('.variant', (row) => row.find('.name').texts.collect(.list()));
+      expect(names.collect(.list()), [
         ['Small'],
         ['Large'],
       ]);
@@ -333,7 +337,7 @@ void main() {
         });
 
         final read = [
-          for (final outcome in outcomes.list)
+          for (final outcome in outcomes.collect(.list()))
             switch (outcome) {
               // `value` is `int` here, not `int?`: that is the whole point.
               Done(:final int value) => 'ok:$value',
@@ -342,9 +346,13 @@ void main() {
         ];
 
         expect(read, ['ok:10', 'bad:division by zero', 'ok:5']);
-        expect(outcomes.transform(.map((o) => o.ok)).list, [true, false, true]);
-        expect(outcomes.list[1].value, isNull);
-        expect((outcomes.list[1] as Broke<int>).stack, isNotNull);
+        expect(outcomes.transform(.map((o) => o.ok)).collect(.list()), [
+          true,
+          false,
+          true,
+        ]);
+        expect(outcomes.collect(.at(1))!.value, isNull);
+        expect((outcomes.collect(.at(1))! as Broke<int>).stack, isNotNull);
       },
     );
 
@@ -380,10 +388,12 @@ void main() {
       final titles = await net
           .crawl<Never>('https://site.test'.url)
           .downloader(MapDownloader(pages))
-          .gather((page) => page.parse(format.html).find('h1').texts.list);
+          .gather(
+            (page) => page.parse(format.html).find('h1').texts.collect(.list()),
+          );
 
       expect(titles, isA<Sequence<String>>());
-      expect(titles.list, ['One', 'Two']);
+      expect(titles.collect(.list()), ['One', 'Two']);
     });
 
     test('returning nothing for a page filters it out', () async {
@@ -396,7 +406,7 @@ void main() {
                 .find('h1')
                 .texts
                 .transform(.where((t) => t.length > 3))
-                .list,
+                .collect(.list()),
           );
 
       expect(long.collect(.empty()), isTrue);

@@ -17,9 +17,9 @@ void main() async {
   final res = await net.http.get('https://news.ycombinator.com'.url);
 
   if (res.ok) {
-    for (final title in res.parse(format.html).find('.titleline > a').texts.list) {
+    res.parse(format.html).find('.titleline > a').texts.collect(.foreach((title) {
       print(title);
-    }
+    }));
   }
 }
 ```

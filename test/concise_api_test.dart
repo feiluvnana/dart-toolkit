@@ -452,7 +452,7 @@ void main() {
       expect(started, isTrue);
       expect(completed, isTrue);
       expect(progressed.length, equals(4));
-      expect(results.list, equals([10, 20, 30, 40]));
+      expect(results.collect(.list()), equals([10, 20, 30, 40]));
     });
 
     test('concurrent.run helper executes tasks', () async {
@@ -461,7 +461,7 @@ void main() {
         (s) async => s.toUpperCase(),
         size: 3,
       );
-      expect(results.list, equals(['A', 'B', 'C']));
+      expect(results.collect(.list()), equals(['A', 'B', 'C']));
     });
 
     test(
@@ -533,11 +533,11 @@ void main() {
 
       final lines = q.find('.disc_lines').lines;
       expect(
-        lines.list,
+        lines.collect(.list()),
         equals(['01. First Song', '02. Second Song', '03. Third Song']),
       );
 
-      expect(q.find('a').elements.list.length, equals(2));
+      expect(q.find('a').elements.collect(.count()), equals(2));
       expect(q.find('a').matching(r'[href$=".mp3"]').count, equals(1));
     });
 

@@ -20,7 +20,7 @@
 /// ```dart
 /// final parsed = format.csv.parse('a,b\n1,2\n');    // Csv
 /// final sheet = await format.csv.read('a.csv');    // free, from FileCodec
-/// io.write('out.csv', format.csv.format(sheet.maps.iterable));
+/// io.write('out.csv', format.csv.format(sheet.maps.collect(.list())));
 ///
 /// final fetched = res.parse(format.csv);          // and this now works
 /// ```

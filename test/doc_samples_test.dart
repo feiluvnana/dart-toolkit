@@ -24,7 +24,7 @@ void main() {
       ''';
 
       expect(
-        $(html).find('.track a').texts.iterable,
+        $(html).find('.track a').texts.collect(.list()),
         equals(['Track One', 'Track Two']),
       );
       expect(html.$('.bonus').data('id'), equals('2'));
@@ -48,15 +48,19 @@ void main() {
       );
       expect(res.parse(format.html).find('div:has(p.desc)').count, equals(1));
       expect(
-        res.parse(format.html).find('ul > li:even').texts.iterable,
+        res.parse(format.html).find('ul > li:even').texts.collect(.list()),
         equals(['0', '2']),
       );
       expect(
-        res.parse(format.html).find(':header').texts.iterable,
+        res.parse(format.html).find(':header').texts.collect(.list()),
         equals(['Breaking News']),
       );
       expect(
-        res.parse(format.html).xpath('//a[@class="morelink"]').texts.iterable,
+        res
+            .parse(format.html)
+            .xpath('//a[@class="morelink"]')
+            .texts
+            .collect(.list()),
         equals(['More']),
       );
 
@@ -65,17 +69,24 @@ void main() {
         equals('https://example.com/next'),
       );
       expect(
-        res.parse(format.html).find('a.morelink').attrs('href').iterable,
+        res
+            .parse(format.html)
+            .find('a.morelink')
+            .attrs('href')
+            .collect(.list()),
         equals(['https://example.com/next']),
       );
       expect(res.parse(format.html).find('h1').text, equals('Breaking News'));
       expect(
-        res.parse(format.html).find('h1').texts.iterable,
+        res.parse(format.html).find('h1').texts.collect(.list()),
         equals(['Breaking News']),
       );
 
       final brHtml = '<div>01. First<br>02. Second</div>';
-      expect($(brHtml).lines.iterable, equals(['01. First', '02. Second']));
+      expect(
+        $(brHtml).lines.collect(.list()),
+        equals(['01. First', '02. Second']),
+      );
     });
 
     test('crawl.md samples and builder options compile and execute', () async {
@@ -99,12 +110,16 @@ void main() {
           )
           .collect((res) {
             for (final title
-                in res.parse(format.html).find('.titleline').texts.iterable) {
+                in res
+                    .parse(format.html)
+                    .find('.titleline')
+                    .texts
+                    .collect(.list())) {
               res.emit(title);
             }
           });
 
-      expect(titles.iterable, equals(['Title 1']));
+      expect(titles.collect(.list()), equals(['Title 1']));
     });
 
     test('http.md declarative extract and features work as documented', () {
@@ -169,9 +184,9 @@ void main() {
         if (n == 0) throw Exception('zero');
         return 10 ~/ n;
       });
-      expect(settled.collect(.list())[0].ok, isTrue);
-      expect(settled.collect(.list())[0].value, equals(5));
-      expect(settled.collect(.list())[1].ok, isFalse);
+      expect(settled.collect(.at(0))!.ok, isTrue);
+      expect(settled.collect(.at(0))!.value, equals(5));
+      expect(settled.collect(.at(1))!.ok, isFalse);
 
       // 3. retry
       var attempts = 0;
@@ -293,12 +308,12 @@ void main() {
         final sheet = await format.csv.read(path);
         expect(sheet.maps.collect(.count()), equals(2));
         expect(sheet.maps.collect(.first())?['name'], equals('Alice'));
-        expect(sheet.column('name').iterable, equals(['Alice', 'Bob']));
+        expect(sheet.column('name').collect(.list()), equals(['Alice', 'Bob']));
 
-        expect(sheet.headers.iterable, equals(['name', 'role']));
+        expect(sheet.headers.collect(.list()), equals(['name', 'role']));
         expect(sheet.count, equals(2));
         expect(
-          sheet.rows.collect(.first())?.iterable,
+          sheet.rows.collect(.first())?.collect(.list()),
           equals(['Alice', 'admin']),
         );
 

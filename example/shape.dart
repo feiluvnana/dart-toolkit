@@ -89,7 +89,7 @@ void main() async {
                 ),
               )
               .transform(.sort.by((e) => e.region))
-              .iterable)
+              .collect(.list()))
         [row.region, row.orders, row.revenue.toStringAsFixed(2), row.best],
     ]),
   );
@@ -108,8 +108,8 @@ void main() async {
   log.info('${big.collect(.count())} large, ${small.collect(.count())} small');
 
   // `chunk` pairs directly with a bounded pool: batch, then send.
-  for (final batch in sales.transform(.chunk(2)).iterable) {
-    await concurrent.run(batch.iterable, _send, size: 2);
+  for (final batch in sales.transform(.chunk(2)).collect(.list())) {
+    await concurrent.run(batch.collect(.list()), _send, size: 2);
   }
   log.ok('Sent ${sales.collect(.count())} rows in batches of two.');
 
@@ -131,7 +131,10 @@ void main() async {
   // a `List` parameter, a spread, `expect`. Inside the boundary there is one
   // vocabulary, which is why Sequence is deliberately not an Iterable.
   final names = <String>[
-    ...sales.transform(.map((s) => s.product)).transform(.unique()).iterable,
+    ...sales
+        .transform(.map((s) => s.product))
+        .transform(.unique())
+        .collect(.list()),
   ];
   log.info('distinct products: ${names.length}');
 
@@ -147,7 +150,7 @@ void main() async {
           .transform(.map((s) => s.region))
           .transform(.unique())
           .transform(.sort())
-          .iterable,
+          .collect(.list()),
       'limits': {'rows': sales.collect(.count()), 'currency': 'USD'},
     }),
   );

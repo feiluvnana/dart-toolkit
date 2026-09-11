@@ -132,21 +132,24 @@ Disallow: /
       final q = format.html.parse(
         '<ul><li class="a">1</li><li class="b">2</li></ul>',
       );
-      expect(q.find('li').matching('.a').texts.iterable, equals(['1']));
-      expect(q.find('li').not('.a').texts.iterable, equals(['2']));
+      expect(q.find('li').matching('.a').texts.collect(.list()), equals(['1']));
+      expect(q.find('li').not('.a').texts.collect(.list()), equals(['2']));
     });
 
     test('combinators are honoured by a single-element match', () {
       final q = format.html.parse(
         '<div class="w"><p>a</p><span>b</span><span>c</span></div>',
       );
-      expect(q.find('span').matching('p + span').texts.iterable, equals(['b']));
       expect(
-        q.find('span').matching('.w > span').texts.iterable,
+        q.find('span').matching('p + span').texts.collect(.list()),
+        equals(['b']),
+      );
+      expect(
+        q.find('span').matching('.w > span').texts.collect(.list()),
         equals(['b', 'c']),
       );
       expect(
-        q.find('span').matching('p ~ span').texts.iterable,
+        q.find('span').matching('p ~ span').texts.collect(.list()),
         equals(['b', 'c']),
       );
     });
@@ -324,7 +327,10 @@ Disallow: /
         expect(await io.async.read(b), equals('two'));
         expect(io.has(a), isTrue);
         expect(await io.async.has(b), isTrue);
-        expect((await io.async.dir.find(dir.path)).iterable, hasLength(2));
+        expect(
+          (await io.async.dir.find(dir.path)).collect(.list()),
+          hasLength(2),
+        );
         expect(await io.async.remove(b), isTrue);
         expect(await io.async.has(b), isFalse);
       } finally {

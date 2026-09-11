@@ -216,11 +216,9 @@ class Markup {
   ///
   /// Where `extract` hands back `Map<String, Object?>` and leaves every value
   /// to be cast, this keeps the type of each field all the way out.
-  Sequence<R> all<R>(String selector, R Function(Markup row) build) =>
-      Sequence([
-        for (final element in find(selector)._elements)
-          build(Markup([element], false)),
-      ]);
+  Sequence<R> all<R>(String selector, R Function(Markup row) build) => Sequence(
+    find(selector)._elements.map((element) => build(Markup([element], false))),
+  );
 
   /// The first match of [selector], built from its own scope, or `null`.
   ///
@@ -340,8 +338,7 @@ class Markup {
   ].where((s) => s.isNotEmpty).join(' ');
 
   /// The text of each match, one entry per element, read as [text] reads it.
-  Sequence<String> get texts =>
-      Sequence([for (final e in _elements) readable(e)]);
+  Sequence<String> get texts => Sequence(_elements.map(readable));
 
   /// [element]'s text as a reader sees it rather than as the source spells it.
   ///
@@ -395,8 +392,9 @@ class Markup {
   /// Shorter than the match count when some matches do not carry [name], so
   /// this cannot be zipped against [texts] — [all] is how a row's fields are
   /// read together.
-  Sequence<String> attrs(String name) =>
-      Sequence([for (final element in _elements) ?element.attributes[name]]);
+  Sequence<String> attrs(String name) => Sequence(
+    _elements.map((element) => element.attributes[name]).whereType<String>(),
+  );
 
   /// The value of the first match, as a browser would submit it, or `null`.
   ///
@@ -414,7 +412,7 @@ class Markup {
 
   /// The value of every match that has one, on the same terms as [value].
   Sequence<String> get values =>
-      Sequence([for (final element in _elements) ?_elementValue(element)]);
+      Sequence(_elements.map(_elementValue).whereType<String>());
 
   static String? _elementValue(Element element) {
     switch (element.localName) {
@@ -475,13 +473,14 @@ class Markup {
   /// Stripping the tags leaves the entities behind, so `&amp;` used to survive
   /// into what is documented as text. They are decoded here the way the parser
   /// would have decoded them.
-  Sequence<String> get lines => Sequence([
-    for (final element in _elements)
-      ...element.innerHtml
+  Sequence<String> get lines => Sequence(
+    _elements.expand(
+      (element) => element.innerHtml
           .split(RegExp(r'<br\s*/?>|\r?\n'))
           .map((s) => _decode(s.replaceAll(RegExp(r'<[^>]*>'), '')).trim())
           .where((s) => s.isNotEmpty),
-  ]);
+    ),
+  );
 
   /// [markup] with its HTML entities turned back into characters.
   static String _decode(String markup) {

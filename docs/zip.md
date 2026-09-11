@@ -61,9 +61,9 @@ second is rounded.
 ## 3. Looking inside
 
 ```dart
-for (final entry in (await format.zip.list('site.zip')).list) {
+(await format.zip.list('site.zip')).collect(.foreach((entry) {
   print('${entry.name} ${entry.size} ${entry.folder}');
-}
+}));
 
 final bytes = await format.zip.read('site.zip', 'index.html');  // null when absent
 ```

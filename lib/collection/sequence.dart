@@ -63,54 +63,75 @@ import 'transformer.dart';
 ///
 /// | Lost | Replacement |
 /// | :--- | :--- |
-/// | `for (final x in seq)` | `collect(.foreach(…))` |
-/// | `[...seq]`, `seq.toList()` | [list] |
-/// | passing to a `List<T>` parameter | [list] |
+/// | `for (final x in seq)` | `collect(.foreach(…))`, or a `for` over `collect(.list())` |
+/// | `[...seq]`, `seq.toList()` | `collect(.list())` |
+/// | passing to a `List<T>` or `Iterable<T>` parameter | `collect(.list())` |
 /// | passing to this library's own APIs | nothing — they take a [Sequence] |
 ///
-/// ## A snapshot, not a view
+/// There is deliberately no `iterable` getter beside `collect(.list())`.
+/// A getter that hands the `Iterable` back would put Dart's vocabulary one
+/// dot away from every sequence in the library, which is the thing not
+/// implementing `Iterable` was for; and it would hand out the recipe, so
+/// an `iterable` getter would hand out the recipe, so `seq.iterable.length`
+/// and `seq.iterable.first` would be two walks that read like two field
+/// reads. Leaving is a call — `collect(.list())` — and it says so.
 ///
-/// Every step is eager: a sequence holds a `List<T>` taken when it was built,
-/// and each [transform] builds the next one. So a callback runs exactly once
-/// per element per step, whatever you do with the result afterwards, and
-/// nothing underneath can change while you hold it.
+/// ## A view, not a snapshot
 ///
-/// It was a lazy view through 4.0.0, wrapping an `Iterable` and re-walking the
-/// whole chain on every terminal call:
+/// A sequence holds the [Iterable] it was given and nothing else. [transform]
+/// does not call its [Transformer]; it hands back a sequence that will, so a
+/// chain costs one small object per step and the work happens at the terminal
+/// call — and only as much of it as that call asks for:
+///
+/// ```dart
+/// final firstten = titles
+///     .transform(.map(parse))
+///     .transform(.where((t) => t.live))
+///     .transform(.take.first(10));   // nothing walked yet
+///
+/// firstten.collect(.foreach(print)); // parses until ten have matched
+/// ```
+///
+/// That is what laziness is for: `take.first(10)` over a large source no
+/// longer shapes the whole source first.
+///
+/// What it costs is that a sequence is a recipe, not a result:
+///
+/// | | |
+/// | :--- | :--- |
+/// | two terminal calls | two walks, and every callback runs twice |
+/// | a source that changes underneath | the change shows through |
+/// | a single-subscription source | the second walk throws |
 ///
 /// ```dart
 /// var n = 0;
 /// final s = [1, 2, 3].seq.transform(.where((x) { n++; return true; }));
-/// s.collect(.count()); s.list; s.collect(.first());
-/// // n == 7 through 4.0.0, and 3 now
+/// s.collect(.count()); s.collect(.list()); s.collect(.first());
+/// // n == 7 — three walks, and the last one stops at the first element
 /// ```
 ///
-/// Three terminal calls, three walks — and a `.map(expensiveParse)` over a
-/// crawl's results paid for the parse once per call. Worse, a sequence built
-/// over a single-subscription source was a `StateError` waiting for its second
-/// reader. Nothing in this vocabulary was lazy on purpose; every source the
-/// library hands one is already a materialised list, and the copy per step is
-/// the trade every caller assumed they were getting.
+/// Where a sequence is walked more than once and the walk is not free, spend
+/// one `collect(.list())` and work from the list — `.seq` again if the
+/// vocabulary is wanted on it.
 ///
-/// The cost is real and small: `take.first(10)` over a large source shapes the
-/// whole source first. Where that matters the answer is a `Stream` —
-/// `crawl.stream` rather than `crawl.collect` — which is the same advice as
-/// before.
+/// It was a snapshot through 5.1.0: the constructor copied into a `List` and
+/// every step copied again. That made the three calls above cost three walks
+/// instead of seven, and it made every source pay for it — a `walk` of a tree
+/// was materialised in full before a `where` could look at the first entry.
+/// The double walk is the cheaper problem, and it is the one the caller can
+/// see and fix.
 final class Sequence<T> {
-  final List<T> _items;
+  final Iterable<T> _items;
 
-  /// Holds [items], copied now.
+  /// Holds [items] as given — not copied, and not walked.
   ///
   /// Reach for `items.seq` at a call site; this is the form for when a getter
-  /// reads badly.
-  Sequence(Iterable<T> items) : _items = List<T>.of(items);
-
-  /// The empty sequence, as a `const`.
-  ///
-  /// The one case worth a second constructor: an empty result is returned from
-  /// enough places that allocating for it is silly, and `const Sequence([])`
-  /// stopped compiling when the field became a `List` the constructor copies.
-  const Sequence.empty() : _items = const [];
+  /// reads badly, and `const Sequence([])` is the empty one. There was a
+  /// `Sequence.empty()` beside it through 5.2.0, for the single reason that
+  /// this constructor could not be `const` while it copied into a `List`.
+  /// Now that it can be, the two spellings are one value and Rule 5 keeps
+  /// the shorter.
+  const Sequence(this._items);
 
   /// This sequence shaped by [step] — one [Transformer], applied.
   ///
@@ -124,7 +145,7 @@ final class Sequence<T> {
   /// chain is written more than once, name it instead: `Transformer.then`
   /// joins the steps into one value and this takes that.
   Sequence<R> transform<R>(Transformer<T, R> step) =>
-      Sequence(step.run(_items));
+      Sequence(_Deferred(() => step.run(_items)));
 
   /// This sequence reduced by [step] — one [Collector], applied.
   ///
@@ -135,18 +156,27 @@ final class Sequence<T> {
   /// ```
   R collect<R>(Collector<T, R> step) => step.run(_items);
 
-  /// The elements as a list — a real snapshot, and the hand-off to anything
-  /// typed `List<T>` or `Iterable<T>`.
+  /// The first four elements, which walks that far and no further.
   ///
-  /// The one word at the boundary. `collect(.list())` says the same thing and
-  /// exists for where there is no receiver to say it on — a downstream
-  /// collector — but at a call site this is the spelling.
-  List<T> get list => _items.toList();
+  /// Its own vocabulary, down to the printing: [Collector.join]'s `limit`
+  /// stops the walk at the fifth element and writes the `…` itself.
+  @override
+  String toString() => 'Sequence(${collect(.join(', ', limit: 4))})';
+}
+
+/// The iterable a [Sequence.transform] hands forward: it calls [_build] once
+/// per walk, and never before the first one.
+///
+/// Without it a [Transformer] that does its work up front — `sort`, `unique`,
+/// `take.last` — would do that work when the chain was written rather than
+/// when it was walked, which is the one thing this class exists to prevent.
+class _Deferred<T> extends Iterable<T> {
+  const _Deferred(this._build);
+
+  final Iterable<T> Function() _build;
 
   @override
-  String toString() =>
-      'Sequence(${_items.take(4).join(', ')}'
-      '${_items.length > 4 ? ', …' : ''})';
+  Iterator<T> get iterator => _build().iterator;
 }
 
 // ============================================================================
@@ -159,7 +189,8 @@ final class Sequence<T> {
 /// with one word. This library's own APIs already return a [Sequence], so most
 /// scripts write `.seq` only at their edges.
 extension Sequenced<T> on Iterable<T> {
-  /// This iterable as a [Sequence], copied now.
+  /// This iterable as a [Sequence], wrapped rather than copied — so whatever
+  /// is true of walking this iterable twice is true of the sequence.
   Sequence<T> get seq => Sequence<T>(this);
 }
 
@@ -176,13 +207,9 @@ extension NullableSequence<T extends Object> on Sequence<T?> {
 /// Splitting a sequence of pairs back into two.
 extension PairedSequence<A, B> on Sequence<(A, B)> {
   /// The first and second halves of every pair, as two sequences.
-  (Sequence<A>, Sequence<B>) get unzip {
-    final left = <A>[];
-    final right = <B>[];
-    for (final (a, b) in _items) {
-      left.add(a);
-      right.add(b);
-    }
-    return (Sequence(left), Sequence(right));
-  }
+  ///
+  /// Two views over the one source, so walking both walks it twice. Where
+  /// that is not free, `collect(.list())` first.
+  (Sequence<A>, Sequence<B>) get unzip =>
+      (Sequence(_items.map((p) => p.$1)), Sequence(_items.map((p) => p.$2)));
 }

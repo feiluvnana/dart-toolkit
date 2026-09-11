@@ -54,7 +54,7 @@ void main() {
       final doc = $(sampleHtml);
       expect(doc.find('h1').text, equals('Album Title'));
       expect(
-        doc.find('.track a').texts.list,
+        doc.find('.track a').texts.collect(.list()),
         equals(['Track One', 'Track Two', 'Bonus Track']),
       );
       expect(doc.find('.footer p').text, equals('Copyright 2026'));
@@ -64,9 +64,12 @@ void main() {
     test('attributes extraction with attr and attrs', () {
       final doc = $(sampleHtml);
       expect(doc.find('.track').attr('data-id'), equals('1'));
-      expect(doc.find('.track').attrs('data-id').list, equals(['1', '2', '3']));
       expect(
-        doc.find('.track a').attrs('href').list,
+        doc.find('.track').attrs('data-id').collect(.list()),
+        equals(['1', '2', '3']),
+      );
+      expect(
+        doc.find('.track a').attrs('href').collect(.list()),
         equals(['/track/1', '/track/2', 'https://example.com/bonus']),
       );
     });
@@ -120,7 +123,7 @@ void main() {
       final texts = $(
         sampleHtml,
       ).find('.num').elements.transform(.map((Element e) => e.text.trim()));
-      expect(texts.list, equals(['01.', '02.', '03.']));
+      expect(texts.collect(.list()), equals(['01.', '02.', '03.']));
     });
 
     test('firstOrNull and find() / call() API', () {
@@ -177,7 +180,7 @@ void main() {
 
         // :header
         expect(
-          doc.find(':header').texts.list,
+          doc.find(':header').texts.collect(.list()),
           equals(['Main Header', 'Sub Header']),
         );
 
@@ -186,8 +189,14 @@ void main() {
         expect(doc.find('ul li:last').text, equals('Row 3'));
 
         // :even and :odd
-        expect(doc.find('ul li:even').texts.list, equals(['Row 0', 'Row 2']));
-        expect(doc.find('ul li:odd').texts.list, equals(['Row 1', 'Row 3']));
+        expect(
+          doc.find('ul li:even').texts.collect(.list()),
+          equals(['Row 0', 'Row 2']),
+        );
+        expect(
+          doc.find('ul li:odd').texts.collect(.list()),
+          equals(['Row 1', 'Row 3']),
+        );
 
         // :eq with positive and negative index
         expect(doc.find('ul li:eq(1)').text, equals('Row 1'));
@@ -215,22 +224,22 @@ void main() {
       final allA = xp.xpath('//a');
       expect(allA.count, equals(3));
       expect(
-        allA.texts.list,
+        allA.texts.collect(.list()),
         equals(['Track One', 'Track Two', 'Bonus Track']),
       );
 
       // XPath values (text nodes and attributes)
       expect(
-        xp.xpathvalues('//a/text()').list,
+        xp.xpathvalues('//a/text()').collect(.list()),
         equals(['Track One', 'Track Two', 'Bonus Track']),
       );
       expect(
-        xp.xpathvalues('//a/@href').list,
+        xp.xpathvalues('//a/@href').collect(.list()),
         equals(['/track/1', '/track/2', 'https://example.com/bonus']),
       );
       expect(xp.xpath('//a').attr('href'), equals('/track/1'));
       expect(
-        xp.xpath('//a').attrs('href').list,
+        xp.xpath('//a').attrs('href').collect(.list()),
         equals(['/track/1', '/track/2', 'https://example.com/bonus']),
       );
     });
@@ -255,22 +264,22 @@ void main() {
         // Chainable Markup attribute helpers
         expect(selector.find('a').attr('href'), equals('/target1'));
         expect(
-          selector.find('a').attrs('href').list,
+          selector.find('a').attrs('href').collect(.list()),
           equals(['/target1', '/target2']),
         );
         expect(selector.find('img').attr('src'), equals('/img/1.png'));
         expect(
-          selector.find('img').attrs('src').list,
+          selector.find('img').attrs('src').collect(.list()),
           equals(['/img/1.png', '/img/2.png']),
         );
         expect(selector.find('a').attr('title'), equals('Link Title 1'));
         expect(
-          selector.find('a').attrs('title').list,
+          selector.find('a').attrs('title').collect(.list()),
           equals(['Link Title 1', 'Link Title 2']),
         );
         expect(selector.find('img').attr('alt'), equals('Image 1'));
         expect(
-          selector.find('img').attrs('alt').list,
+          selector.find('img').attrs('alt').collect(.list()),
           equals(['Image 1', 'Image 2']),
         );
         expect(selector.find('form').attr('action'), equals('/submit-form'));
@@ -280,16 +289,19 @@ void main() {
         final q = $(mediaHtml);
         expect(q.find('a').attr('href'), equals('/target1'));
         expect(
-          q.find('a').attrs('href').list,
+          q.find('a').attrs('href').collect(.list()),
           equals(['/target1', '/target2']),
         );
         expect(q.find('a').attr('title'), equals('Link Title 1'));
         expect(
-          q.find('a').attrs('title').list,
+          q.find('a').attrs('title').collect(.list()),
           equals(['Link Title 1', 'Link Title 2']),
         );
         expect(q.find('img').attr('alt'), equals('Image 1'));
-        expect(q.find('img').attrs('alt').list, equals(['Image 1', 'Image 2']));
+        expect(
+          q.find('img').attrs('alt').collect(.list()),
+          equals(['Image 1', 'Image 2']),
+        );
         expect(q.find('form').attr('action'), equals('/submit-form'));
         expect(q.find('input').value, equals('test@example.com'));
 
@@ -344,7 +356,10 @@ void main() {
         '<div class="row"><b class="name">in</b></div><b class="name">out</b>',
       );
       expect(rows.find('.name').count, equals(2));
-      expect(rows.find('.row').find('.name').texts.list, equals(['in']));
+      expect(
+        rows.find('.row').find('.name').texts.collect(.list()),
+        equals(['in']),
+      );
     });
 
     test('value and values agree on textarea text and input value', () {
@@ -360,7 +375,7 @@ void main() {
       expect(fields.elements.collect(.first())!.value, equals('alice'));
       expect(fields.at(1).value, equals('Software developer'));
       expect(
-        fields.values.list,
+        fields.values.collect(.list()),
         equals(['alice', 'Software developer', 'admin']),
       );
     });
@@ -377,11 +392,14 @@ void main() {
         // The card container itself has no href attribute:
         expect(card.attr('href'), isNull);
         expect(card.elements.collect(.first())?.attr('href'), isNull);
-        expect(card.attrs('href').list, isEmpty);
+        expect(card.attrs('href').collect(.list()), isEmpty);
 
         // Descendant links are reached when queried explicitly:
         expect(card.find('a').attr('href'), equals('/card/1'));
-        expect(card.find('a').attrs('href').list, equals(['/card/1']));
+        expect(
+          card.find('a').attrs('href').collect(.list()),
+          equals(['/card/1']),
+        );
       },
     );
 
@@ -418,58 +436,100 @@ void main() {
     // collected nothing and reported success — and `:nth-of-type(2)` threw
     // UnimplementedError out of the middle of a match.
     test('nth-child counts every sibling', () {
-      expect(page().find('li:nth-child(2)').texts.list, equals(['2']));
-      expect(page().find('li:nth-child(1)').texts.list, equals(['1']));
-      expect(page().find('li:nth-child(5)').texts.list, equals(['5']));
-      expect(page().find('li:nth-child(6)').texts.list, isEmpty);
+      expect(
+        page().find('li:nth-child(2)').texts.collect(.list()),
+        equals(['2']),
+      );
+      expect(
+        page().find('li:nth-child(1)').texts.collect(.list()),
+        equals(['1']),
+      );
+      expect(
+        page().find('li:nth-child(5)').texts.collect(.list()),
+        equals(['5']),
+      );
+      expect(page().find('li:nth-child(6)').texts.collect(.list()), isEmpty);
     });
 
     test('nth-child takes an+b, odd and even', () {
       expect(
-        page().find('li:nth-child(odd)').texts.list,
+        page().find('li:nth-child(odd)').texts.collect(.list()),
         equals(['1', '3', '5']),
       );
-      expect(page().find('li:nth-child(even)').texts.list, equals(['2', '4']));
       expect(
-        page().find('li:nth-child(2n+1)').texts.list,
+        page().find('li:nth-child(even)').texts.collect(.list()),
+        equals(['2', '4']),
+      );
+      expect(
+        page().find('li:nth-child(2n+1)').texts.collect(.list()),
         equals(['1', '3', '5']),
       );
-      expect(page().find('li:nth-child(3n)').texts.list, equals(['3']));
-      expect(page().find('li:nth-child(-n+2)').texts.list, equals(['1', '2']));
       expect(
-        page().find('li:nth-child(n)').texts.list,
+        page().find('li:nth-child(3n)').texts.collect(.list()),
+        equals(['3']),
+      );
+      expect(
+        page().find('li:nth-child(-n+2)').texts.collect(.list()),
+        equals(['1', '2']),
+      );
+      expect(
+        page().find('li:nth-child(n)').texts.collect(.list()),
         equals(['1', '2', '3', '4', '5']),
       );
     });
 
     test('nth-of-type counts only siblings of the same tag', () {
-      expect(page().find('.box p:nth-of-type(2)').texts.list, equals(['pb']));
       expect(
-        page().find('.box span:nth-of-type(2)').texts.list,
+        page().find('.box p:nth-of-type(2)').texts.collect(.list()),
+        equals(['pb']),
+      );
+      expect(
+        page().find('.box span:nth-of-type(2)').texts.collect(.list()),
         equals(['s2']),
       );
-      expect(page().find('.box p:first-of-type').texts.list, equals(['pa']));
-      expect(page().find('.box p:last-of-type').texts.list, equals(['pc']));
       expect(
-        page().find('.box span:nth-last-of-type(1)').texts.list,
+        page().find('.box p:first-of-type').texts.collect(.list()),
+        equals(['pa']),
+      );
+      expect(
+        page().find('.box p:last-of-type').texts.collect(.list()),
+        equals(['pc']),
+      );
+      expect(
+        page().find('.box span:nth-last-of-type(1)').texts.collect(.list()),
         equals(['s2']),
       );
     });
 
     test('the -last- pair counts from the end', () {
-      expect(page().find('li:nth-last-child(1)').texts.list, equals(['5']));
-      expect(page().find('li:nth-last-child(2)').texts.list, equals(['4']));
       expect(
-        page().find('li:nth-last-child(odd)').texts.list,
+        page().find('li:nth-last-child(1)').texts.collect(.list()),
+        equals(['5']),
+      );
+      expect(
+        page().find('li:nth-last-child(2)').texts.collect(.list()),
+        equals(['4']),
+      );
+      expect(
+        page().find('li:nth-last-child(odd)').texts.collect(.list()),
         equals(['1', '3', '5']),
       );
     });
 
     test('only-child and only-of-type', () {
-      expect(page().find('h2:only-child').texts.list, equals(['only']));
-      expect(page().find('h2:only-of-type').texts.list, equals(['only']));
-      expect(page().find('li:only-child').texts.list, isEmpty);
-      expect(page().find('.box p:only-of-type').texts.list, isEmpty);
+      expect(
+        page().find('h2:only-child').texts.collect(.list()),
+        equals(['only']),
+      );
+      expect(
+        page().find('h2:only-of-type').texts.collect(.list()),
+        equals(['only']),
+      );
+      expect(page().find('li:only-child').texts.collect(.list()), isEmpty);
+      expect(
+        page().find('.box p:only-of-type').texts.collect(.list()),
+        isEmpty,
+      );
     });
 
     test('matching uses the same evaluation as find', () {
@@ -479,8 +539,14 @@ void main() {
     });
 
     test('is and where match any of their branches', () {
-      expect(page().find('.box :is(span)').texts.list, equals(['s1', 's2']));
-      expect(page().find(':where(h2)').texts.list, equals(['only']));
+      expect(
+        page().find('.box :is(span)').texts.collect(.list()),
+        equals(['s1', 's2']),
+      );
+      expect(
+        page().find(':where(h2)').texts.collect(.list()),
+        equals(['only']),
+      );
     });
 
     test('a selector this cannot evaluate is a FormatException', () {
@@ -515,7 +581,7 @@ void main() {
 
     test('agrees with find for every shape it claims', () {
       final page = format.html.parse(html);
-      final every = page.find('*').elements.list;
+      final every = page.find('*').elements.collect(.list());
       const selectors = [
         'p',
         'div',
@@ -547,7 +613,7 @@ void main() {
         '[data-id="2"]',
       ];
       for (final selector in selectors) {
-        final viaFind = page.find(selector).elements.list.toSet();
+        final viaFind = page.find(selector).elements.collect(.set());
         final viaMatching = every
             .where((e) => e.query.matching(selector).count == 1)
             .toSet();

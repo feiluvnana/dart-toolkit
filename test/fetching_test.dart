@@ -469,7 +469,7 @@ void main() {
             );
           });
 
-      expect(seen.list, ['Signed in']);
+      expect(seen.collect(.list()), ['Signed in']);
       expect(downloader.fetches.map((r) => r.method), [
         HttpMethod.get,
         HttpMethod.post,
@@ -627,7 +627,10 @@ void main() {
       final first = util.rand.shuffle(agents);
       util.rand.seed(7);
 
-      expect(util.rand.shuffle(agents).list, first.list);
+      expect(
+        util.rand.shuffle(agents).collect(.list()),
+        first.collect(.list()),
+      );
     });
 
     test('seeding again with nothing goes back to being unpredictable', () {

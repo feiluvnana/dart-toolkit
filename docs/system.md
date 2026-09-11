@@ -102,7 +102,7 @@ four:
 await concurrent.run(urls, fetch, size: system.os.cpus);
 ```
 
-The paths half — `io.home`, `io.cwd`, `io.expand` — is in
+The paths half — `io.dir.home`, `io.dir.cwd`, `io.expand` — is in
 [`io`](io.md#4-paths), because a path is a filesystem fact.
 
 ---
@@ -154,4 +154,4 @@ The one exception is `system.on.exit`: a registered hook stays pending, and so k
 - [`cli.*`](cli.md) — argument parsing
 - [`system.env.*`](env.md) — environment variables
 - [`format.*`](json.md) — file formats; an executable is `system.run`, not a wrapper
-- [`io.*`](io.md#4-paths) — `io.home`, `io.cwd` and `io.expand`
+- [`io.*`](io.md#4-paths) — `io.dir.home`, `io.dir.cwd` and `io.expand`

@@ -9,7 +9,7 @@
 ///   [PathAccessor.stem], [PathAccessor.parts]. No async twin, because there
 ///   is nothing to wait for.
 /// - `io.dir` — making directories and looking inside them:
-///   [DirAccessor.make], [DirAccessor.iterable], [DirAccessor.walk],
+///   [DirAccessor.make], [DirAccessor.list], [DirAccessor.walk],
 ///   [DirAccessor.glob]. Creating a directory is not what `io` is mainly for,
 ///   and Rule 3 says a vocabulary with its own nouns gets its own name.
 ///

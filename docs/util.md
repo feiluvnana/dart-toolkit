@@ -147,7 +147,7 @@ util.size.parse('10 XB');             // null
 `format` shows a plain byte count with no fraction, and carries a negative through rather than clamping it to `'0 B'`. `parse` returns **`int?`**: `null` for text that is not a size, for a unit nobody knows, and for a unit with no number. It used to return `0` for all three, which is a value a caller cannot tell apart from an empty file. Every unit `format` writes, up to `PiB`, reads back, so `parse(format(n))` is `n` rounded to the digits it printed.
 
 ```dart
-system.console.logger.info('Wrote ${util.size.format(io.stat(path).size)}');
+system.console.logger.info('Wrote ${util.size.format(io.size(path)!)}');
 ```
 
 ---
@@ -225,8 +225,8 @@ util.hash.decode(util.hash.encode('hello'));   // List<int>
 The small random choices a crawler makes to look less like a machine.
 
 ```dart
-util.rand.pick(agents.list);         // one item
-util.rand.some(agents.list, 3);      // three distinct items
+util.rand.pick(agents.collect(.list()));         // one item
+util.rand.some(agents.collect(.list()), 3);      // three distinct items
 util.rand.shuffle(urls);             // a shuffled copy
 util.rand.between(1, 10);            // 1..9
 util.rand.id();                      // 12 URL-safe characters
@@ -285,7 +285,7 @@ rows.transform(.where((r) => r.live))         // a Transformer
 ```
 
 Randomness stays here rather than on a sequence, so a sequence gets it by
-exiting: `util.rand.shuffle(rows.list)`. `util.text.words`, `util.text.numbers`
+exiting: `util.rand.shuffle(rows.collect(.list()))`. `util.text.words`, `util.text.numbers`
 and `util.text.betweens` all hand one back.
 
 ---

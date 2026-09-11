@@ -306,7 +306,7 @@ enum ProgressUnit {
 ///
 /// ```dart
 /// final bar = Progress(total: files.collect(.count()), message: 'Downloading');
-/// for (final f in files.list) { await io.async.read(f.path); bar.tick(); }
+/// for (final f in files.collect(.list())) { await io.async.read(f.path); bar.tick(); }
 /// bar.done('Finished');
 /// ```
 class Progress {

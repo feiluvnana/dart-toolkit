@@ -45,7 +45,8 @@ import 'transformer.dart';
 /// For the reason [Sequence] is not an `Iterable`: an extension member never
 /// overrides an instance member, so `get` beside `[]` and `count` beside
 /// `length` would be two spellings of one operation forever. [map] is the one
-/// word at the boundary, as `Sequence.list` is.
+/// word at the boundary, as `Sequence.collect(.list())` is for the other
+/// collection.
 ///
 /// ## Typed keys
 ///
@@ -57,9 +58,12 @@ final class Dictionary<K, V> {
 
   /// Holds [entries], copied now.
   ///
-  /// A snapshot, like [Sequence] — nothing underneath can change while you
-  /// hold it. Insertion order is kept, so [keys], [values] and [pairs] come
-  /// back in the order they went in.
+  /// A snapshot: nothing underneath can change while you hold it. A
+  /// [Sequence] is the other way about — it holds a view — so [keys],
+  /// [values] and [pairs] copy on the way out rather than handing one over
+  /// this dictionary's own [set] and [delete] could pull apart mid-walk.
+  /// Insertion order is kept, so all three come back in the order they went
+  /// in.
   Dictionary([Map<K, V> entries = const {}]) : _entries = Map<K, V>.of(entries);
 
   /// The empty dictionary, as a `const`.
@@ -137,10 +141,10 @@ final class Dictionary<K, V> {
   // --------------------------------------------------------------------------
 
   /// The keys, in insertion order.
-  Sequence<K> get keys => Sequence(_entries.keys);
+  Sequence<K> get keys => Sequence(_entries.keys.toList());
 
   /// The values, in insertion order.
-  Sequence<V> get values => Sequence(_entries.values);
+  Sequence<V> get values => Sequence(_entries.values.toList());
 
   /// Every entry as a `(key, value)` record, in insertion order.
   ///
@@ -151,8 +155,7 @@ final class Dictionary<K, V> {
   /// // setup: final spend = Dictionary<String, num>({'a.com': 1});
   /// spend.pairs.transform(.map((e) => '${e.$1}: ${e.$2}'));
   /// ```
-  Sequence<(K, V)> get pairs =>
-      Sequence(_entries.entries.map((entry) => (entry.key, entry.value)));
+  Sequence<(K, V)> get pairs => Sequence(_records);
 
   // --------------------------------------------------------------------------
   // The two doors
@@ -160,10 +163,15 @@ final class Dictionary<K, V> {
 
   /// This dictionary shaped by [step], over its `(key, value)` records.
   Dictionary<K2, V2> transform<K2, V2>(Transformer<(K, V), (K2, V2)> step) =>
-      Dictionary.of(step.run(pairs.list));
+      Dictionary.of(step.run(_records));
 
   /// This dictionary reduced by [step], over its `(key, value)` records.
-  R collect<R>(Collector<(K, V), R> step) => step.run(pairs.list);
+  R collect<R>(Collector<(K, V), R> step) => step.run(_records);
+
+  /// The entries as records, which is what both doors run over.
+  List<(K, V)> get _records => [
+    for (final entry in _entries.entries) (entry.key, entry.value),
+  ];
 
   /// The keys and values swapped, the last entry to claim a value winning.
   Dictionary<V, K> invert() => Dictionary({
@@ -173,7 +181,7 @@ final class Dictionary<K, V> {
   /// The entries as a map — a real snapshot, and the hand-off to anything
   /// typed `Map<K, V>`.
   ///
-  /// The one word at the boundary, as `Sequence.list` is.
+  /// The one word at the boundary, as `collect(.list())` is on a [Sequence].
   Map<K, V> get map => Map<K, V>.of(_entries);
 
   /// The map underneath, as it is written to JSON. See [map].
@@ -181,8 +189,10 @@ final class Dictionary<K, V> {
 
   @override
   String toString() {
-    final shown = pairs.list.take(4).map((e) => '${e.$1}: ${e.$2}').join(', ');
-    return 'Dictionary($shown${count > 4 ? ', …' : ''})';
+    final shown = pairs.collect(
+      .join(', ', limit: 4, of: (e) => '${e.$1}: ${e.$2}'),
+    );
+    return 'Dictionary($shown)';
   }
 }
 

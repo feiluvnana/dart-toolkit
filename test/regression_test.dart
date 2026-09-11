@@ -22,7 +22,7 @@ void main() {
     // scope beside this library's, and nothing else would notice. This is the
     // property the whole stage rests on.
     test('a Sequence is deliberately not an Iterable', () {
-      expect(const Sequence<int>.empty(), isNot(isA<Iterable<int>>()));
+      expect(const Sequence<int>([]), isNot(isA<Iterable<int>>()));
       expect([1, 2].seq, isNot(isA<Iterable<Object?>>()));
     });
 
@@ -31,7 +31,7 @@ void main() {
       expect(page, isNot(isA<Iterable<Object?>>()));
       expect(page.find('p').count, equals(2));
       expect(
-        page.find('p').elements.transform(.map((e) => e.text)).iterable,
+        page.find('p').elements.transform(.map((e) => e.text)).collect(.list()),
         equals(['a', 'b']),
       );
     });
@@ -45,7 +45,7 @@ void main() {
     });
 
     test('every reader that can come up empty says so in its type', () {
-      final empty = const Sequence<int>.empty();
+      final empty = const Sequence<int>([]);
       expect(empty.collect(.first()), isNull);
       expect(empty.collect(.last()), isNull);
       expect(empty.collect(.single()), isNull);
@@ -173,7 +173,7 @@ void main() {
       // Blocking means the lines are already read.
       expect(io.lines(path), isA<Sequence<String>>());
       expect(io.async.lines(path), isA<Stream<String>>());
-      expect(io.lines(path).iterable, ['one', 'two']);
+      expect(io.lines(path).collect(.list()), ['one', 'two']);
     });
 
     test('no io signature names a dart:io type', () {
@@ -261,7 +261,7 @@ void main() {
       io.dir.make(io.path.join(temp.path, 'sub'));
       io.write(io.path.join(temp.path, 'sub', 'b.csv'), 'b');
 
-      final listed = io.dir.list(temp.path).iterable.toList();
+      final listed = io.dir.list(temp.path).collect(.list());
       expect(listed.map((e) => e.name), ['a.txt', 'sub']);
       expect(listed.map((e) => e.kind), [
         FileSystemEntryKind.file,
@@ -281,6 +281,29 @@ void main() {
       // find is the narrow question, and still drops directories.
       expect(io.dir.find(temp.path).collect(.count()), 2);
       expect(io.dir.find(temp.path, recursive: false).collect(.count()), 1);
+    });
+
+    test('a walk reads the disk when it is walked, not when it is built', () {
+      final temp = io.dir.temp('dt_lazy_');
+      addTearDown(() => io.remove(temp.path));
+      io.write(io.path.join(temp.path, 'a.txt'), 'a');
+
+      final entries = io.dir.walk(temp.path);
+      io.write(io.path.join(temp.path, 'b.txt'), 'b');
+
+      // Built before b.txt existed, walked after: the listing is the disk as
+      // it is at the terminal call, not as it was at the call that made the
+      // sequence.
+      expect(entries.collect(.count()), 2);
+
+      // And a second walk follows the same links as the first: the set of
+      // resolved directories is rebuilt per walk, not shared between them.
+      final inner = io.path.join(temp.path, 'inner');
+      io.dir.make(inner);
+      io.write(io.path.join(inner, 'c.txt'), 'c');
+      Link(io.path.join(inner, 'up')).createSync(temp.path);
+      final linked = io.dir.walk(temp.path);
+      expect(linked.collect(.count()), linked.collect(.count()));
     });
 
     test('a walk that follows links does not loop forever', () {
@@ -700,10 +723,10 @@ Disallow: /x
     test('the cursor splits the header line off the rows', () {
       final sheet = format.csv.parse('a,b\n1,2\n3,4\n');
 
-      expect(sheet.headers.iterable, ['a', 'b']);
+      expect(sheet.headers.collect(.list()), ['a', 'b']);
       expect(sheet.count, 2);
-      expect(sheet.column('b').iterable, ['2', '4']);
-      expect(sheet.maps.iterable, [
+      expect(sheet.column('b').collect(.list()), ['2', '4']);
+      expect(sheet.maps.collect(.list()), [
         {'a': '1', 'b': '2'},
         {'a': '3', 'b': '4'},
       ]);
@@ -766,10 +789,10 @@ Disallow: /x
   group('util.text', () {
     test('a space groups digits only in threes', () {
       expect(util.text.number('12 34'), 12);
-      expect(util.text.numbers('1 2 3').iterable, [1, 2, 3]);
+      expect(util.text.numbers('1 2 3').collect(.list()), [1, 2, 3]);
       expect(util.text.number('1 234 567'), 1234567);
       expect(util.text.number(r'$1,234.50'), 1234.5);
-      expect(util.text.numbers('3 of 7').iterable, [3, 7]);
+      expect(util.text.numbers('3 of 7').collect(.list()), [3, 7]);
     });
 
     test('slug keeps letters of other scripts', () {
@@ -932,7 +955,7 @@ Disallow: /x
       await format.zip.pack(root.path, archive);
       final names = (await format.zip.list(
         archive,
-      )).transform(.map((e) => e.name)).iterable;
+      )).transform(.map((e) => e.name)).collect(.list());
       expect(names, contains('kept.txt'));
       expect(names.any((n) => n.contains('secret')), isFalse);
     });

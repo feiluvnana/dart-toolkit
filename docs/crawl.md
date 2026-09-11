@@ -15,12 +15,12 @@ void main() async {
       .delay(250.ms)
       .limit(50)
       .collect((res) {
-        for (final title in res.parse(format.html).find('.titleline > a').texts.list) {
+        res.parse(format.html).find('.titleline > a').texts.collect(.foreach((title) {
           res.emit(title);
-        }
-        for (final next in res.parse(format.html).find('a.morelink').attrs('href').list) {
+        }));
+        res.parse(format.html).find('a.morelink').attrs('href').collect(.foreach((next) {
           res.follow(next);
-        }
+        }));
       });
 
   system.console.logger.ok('Collected ${titles.collect(.count())} titles.');
@@ -144,7 +144,7 @@ closure, so it is inferred, and returning nothing for a page filters it out:
 
 ```dart
 final titles = await net.crawl<Never>(seed)
-    .gather((page) => page.parse(format.html).find('.title').texts.list);
+    .gather((page) => page.parse(format.html).find('.title').texts.collect(.list()));
 // Future<Sequence<String>>
 ```
 
@@ -153,8 +153,8 @@ nothing for it to be. A crawl that follows links into tagged stages emits, and
 wants `collect`.
 
 Both hand back a [`Sequence`](collection.md), so the shaping a
-script came for is the next call rather than an import — and `.list` is the one
-word at the boundary to anything outside this library:
+script came for is the next call rather than an import — and `collect(.list())`
+is the way out to anything outside this library:
 
 ```dart
 // setup: Future<void> rowHandler(Page<Row> p) async {}
@@ -165,7 +165,7 @@ rows.collect(.group.into((r) => r.host, .sum((r) => r.cost)))
     .transform(.sort.by((e) => e.$1))
     .collect(.foreach(print));
 
-await concurrent.run(rows.list, enrich, size: system.os.cpus);
+await concurrent.run(rows.collect(.list()), enrich, size: system.os.cpus);
 ```
 
 `save` writes the way every other write in this library does: items go to a `.part` staging file, its folder is created if it is missing, and it is renamed into place once the run finishes. A crawl that fails part way leaves whatever was already at the destination. `sink` writes to an `IOSink` you own — it is written to and flushed, never closed.
@@ -187,7 +187,7 @@ void main() async {
       .concurrent(4)
       .limit(5000)
       .run((res) {
-        for (final href in res.parse(format.html).find('a').attrs('href').list) res.follow(href);
+        res.parse(format.html).find('a').attrs('href').collect(.foreach((href) => res.follow(href)));
       });
 
   system.console.logger.ok('Crawled ${stats.completed} pages');
@@ -213,7 +213,7 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 
 void main() async {
   final engine = net.crawl<String>('https://example.com'.url).engine((res) {
-    for (final href in res.parse(format.html).find('a').attrs('href').list) res.follow(href);
+    res.parse(format.html).find('a').attrs('href').collect(.foreach((href) => res.follow(href)));
   });
 
   const position = Slot<Map<String, Object?>>('position');
@@ -247,13 +247,13 @@ final stats = await net.crawl<String>('https://music.example.com/album'.url)
       print('${res.meta.read(name)} -> ${res.parse(format.html).find('a').attr('href')}');
     })
     .run((res) {
-      for (final a in res.parse(format.html).find('#songlist a').elements.list) {
+      res.parse(format.html).find('#songlist a').elements.collect(.foreach((a) {
         res.follow(
           a.attr('href')!,
           tag: 'song',
           meta: [name(a.text)],
         );
-      }
+      }));
     });
 ```
 
@@ -308,7 +308,7 @@ Writing is checked against the slot's type, and a value that is not the shape th
 To pass one page's context on to the next, spread its entries:
 
 ```dart
-res.follow(href, tag: 'detail', meta: [...res.meta.pairs.list, track(4)]);
+res.follow(href, tag: 'detail', meta: [...res.meta.pairs.collect(.list()), track(4)]);
 ```
 
 Whatever a slot writes has to survive `jsonEncode`, because `meta` travels through the [resume file](#4-surviving-interruption). `Slot.coded` covers a type JSON does not carry. `res.meta.map` is the map underneath, for a key another library owns.

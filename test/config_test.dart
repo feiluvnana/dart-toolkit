@@ -97,7 +97,10 @@ void main() {
       expect(doc.text('name'), equals('dart_toolkit'));
       expect(doc.text('version'), equals('3.2.0'));
       expect(doc.text('environment.sdk'), equals('^3.7.0'));
-      expect(doc.at('dependencies').texts().iterable, equals(['html', 'http']));
+      expect(
+        doc.at('dependencies').texts().collect(.list()),
+        equals(['html', 'http']),
+      );
       expect(doc.flag('flags.strict'), isTrue);
       expect(doc.number('flags.retries'), equals(3));
       expect(doc.at('notes').empty, isTrue);
@@ -115,7 +118,7 @@ void main() {
             .parse(_yaml)
             .jsonpath(r'$..sdk')
             .transform(.map.nonnull((n) => n.text()))
-            .iterable,
+            .collect(.list()),
         equals(['^3.7.0']),
       );
     });

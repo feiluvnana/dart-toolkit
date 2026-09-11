@@ -46,7 +46,7 @@ void main() {
         (n) => limit.guard(() async => n * 2),
         size: 3,
       );
-      expect(results.iterable, equals([0, 2, 4, 6, 8, 10, 12, 14]));
+      expect(results.collect(.list()), equals([0, 2, 4, 6, 8, 10, 12, 14]));
       limit.close();
     });
 

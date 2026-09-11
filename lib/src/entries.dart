@@ -85,8 +85,8 @@ class Entries {
     );
   }
 
-  /// Everything directly under [dir].
-  static List<FileSystemEntry> list(
+  /// Everything directly under [dir], read as it is walked.
+  static Iterable<FileSystemEntry> list(
     String dir, {
     FileSystemEntryKind? only,
     String? match,
@@ -100,53 +100,92 @@ class Entries {
   /// when it does. [follow] descends through symlinked directories, keeping a
   /// set of resolved paths so a link that points at its own ancestor stops
   /// rather than recursing forever.
-  static List<FileSystemEntry> walk(
+  /// A directory is opened when the walk reaches it and not before, so a
+  /// reader that stops early — `take.first(10)`, a `first.where` — costs the
+  /// directories it actually looked in. The set of resolved link targets is
+  /// built inside this body, which runs once per walk, so walking the same
+  /// iterable twice follows the same links both times.
+  static Iterable<FileSystemEntry> walk(
     String dir, {
     FileSystemEntryKind? only,
     String? match,
     int? depth,
     bool follow = true,
-  }) {
-    final out = <FileSystemEntry>[];
-    final matcher = match == null ? null : glob(match);
-    final rooted = match != null && match.contains('/');
-    final seen = <String>{};
+  }) sync* {
+    yield* _step(
+      dir,
+      1,
+      root: dir,
+      only: only,
+      matcher: match == null ? null : glob(match),
+      rooted: match != null && match.contains('/'),
+      depth: depth,
+      follow: follow,
+      seen: <String>{},
+    );
+  }
 
-    void step(String current, int level) {
-      if (depth != null && level > depth) return;
-      final List<FileSystemEntity> children;
-      try {
-        children = Directory(current).listSync(followLinks: false);
-      } on FileSystemException {
-        return;
-      }
-      children.sort((a, b) => a.path.compareTo(b.path));
-      for (final child in children) {
-        final kind = _kind(
-          FileSystemEntity.typeSync(child.path, followLinks: false),
+  static Iterable<FileSystemEntry> _step(
+    String current,
+    int level, {
+    required String root,
+    required FileSystemEntryKind? only,
+    required RegExp? matcher,
+    required bool rooted,
+    required int? depth,
+    required bool follow,
+    required Set<String> seen,
+  }) sync* {
+    if (depth != null && level > depth) return;
+    final List<FileSystemEntity> children;
+    try {
+      children = Directory(current).listSync(followLinks: false);
+    } on FileSystemException {
+      return;
+    }
+    children.sort((a, b) => a.path.compareTo(b.path));
+    for (final child in children) {
+      final kind = _kind(
+        FileSystemEntity.typeSync(child.path, followLinks: false),
+      );
+      if (kind == null) continue;
+      final entry = _fill(child.path, kind);
+      if (_keeps(entry, only, matcher, rooted, root)) yield entry;
+      if (depth != null && level >= depth) continue;
+      if (entry.isdir) {
+        yield* _step(
+          child.path,
+          level + 1,
+          root: root,
+          only: only,
+          matcher: matcher,
+          rooted: rooted,
+          depth: depth,
+          follow: follow,
+          seen: seen,
         );
-        if (kind == null) continue;
-        final entry = _fill(child.path, kind);
-        if (_keeps(entry, only, matcher, rooted, dir)) out.add(entry);
-        if (depth != null && level >= depth) continue;
-        if (entry.isdir) {
-          step(child.path, level + 1);
-        } else if (entry.islink && follow) {
-          if (!FileSystemEntity.isDirectorySync(child.path)) continue;
-          final String real;
-          try {
-            real = Directory(child.path).resolveSymbolicLinksSync();
-          } on FileSystemException {
-            continue;
-          }
-          if (!seen.add(real)) continue;
-          step(child.path, level + 1);
+      } else if (entry.islink && follow) {
+        if (!FileSystemEntity.isDirectorySync(child.path)) continue;
+        final String real;
+        try {
+          real = Directory(child.path).resolveSymbolicLinksSync();
+        } on FileSystemException {
+          continue;
         }
+        if (!seen.add(real)) continue;
+        yield* _step(
+          child.path,
+          level + 1,
+          root: root,
+          only: only,
+          matcher: matcher,
+          rooted: rooted,
+          depth: depth,
+          follow: follow,
+          seen: seen,
+        );
       }
     }
-
-    step(dir, 1);
-    return out;
   }
 
   /// The non-blocking twin of [walk].
@@ -218,23 +257,22 @@ class Entries {
   /// The leading segments that hold no wildcard become the directory to walk
   /// from, so `out/reports/*.csv` opens one directory rather than the whole
   /// tree. A `**` anywhere in the pattern makes the walk recursive.
-  static List<FileSystemEntry> expand(String pattern) {
+  static Iterable<FileSystemEntry> expand(String pattern) sync* {
     final (base, rest) = _split(pattern);
     if (rest.isEmpty) {
       final single = at(p.normalize(base));
-      return single == null ? const [] : [single];
+      if (single != null) yield single;
+      return;
     }
     final recursive = rest.contains('**');
     final matcher = glob(rest);
-    final out = <FileSystemEntry>[];
     for (final entry in walk(
       base,
       depth: recursive ? null : p.split(rest).length,
     )) {
       final relative = p.relative(entry.path, from: base).replaceAll(r'\', '/');
-      if (matcher.hasMatch(relative)) out.add(entry);
+      if (matcher.hasMatch(relative)) yield entry;
     }
-    return out;
   }
 
   /// The non-blocking twin of [expand].

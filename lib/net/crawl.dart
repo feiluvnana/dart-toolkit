@@ -28,9 +28,9 @@ import 'sitemap.dart';
 /// final titles = await net.crawl<String>('https://news.example.com'.url)
 ///     .concurrent(4)
 ///     .collect((res) {
-///       for (final t in res.parse(format.html).find('.title').texts.list) {
+///       res.parse(format.html).find('.title').texts.collect(.foreach((t) {
 ///         res.emit(t);
-///       }
+///       }));
 ///     });
 /// ```
 class Crawl {
@@ -534,7 +534,9 @@ class CrawlBuilder<T> {
     final urls = _urls.map((u) => u.toString()).toList();
     if (_sitemapUrl != null) {
       final sitemapUrls = await Sitemap.load(_sitemapUrl!);
-      urls.addAll(sitemapUrls.transform(.map((u) => u.toString())).list);
+      urls.addAll(
+        sitemapUrls.transform(.map((u) => u.toString())).collect(.list()),
+      );
     }
     return urls;
   }
@@ -590,7 +592,7 @@ class CrawlBuilder<T> {
   ///
   /// ```dart
   /// final titles = await net.crawl<Never>(seed)
-  ///     .gather((p) => p.parse(format.html).find('.title').texts.list);
+  ///     .gather((p) => p.parse(format.html).find('.title').texts.collect(.list()));
   /// // Future<Sequence<String>>
   /// ```
   ///

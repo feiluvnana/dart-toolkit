@@ -79,7 +79,7 @@ void main() {
       );
       expect(doc.at('nope').one((b) => b.text('x')), isNull);
       expect(
-        doc.at('store.bicycle').all((b) => b.text('colour')).iterable,
+        doc.at('store.bicycle').all((b) => b.text('colour')).collect(.list()),
         equals(['red']),
         reason: 'a non-array node counts as one element',
       );
@@ -87,7 +87,7 @@ void main() {
 
     test('texts renders an array of scalars', () {
       expect(
-        format.json.parse('["a", 2, true, {"x":1}]').texts().iterable,
+        format.json.parse('["a", 2, true, {"x":1}]').texts().collect(.list()),
         equals(['a', '2', 'true']),
       );
     });
@@ -104,14 +104,14 @@ void main() {
         doc
             .jsonpath(r'$.store.book[*].author')
             .transform(.map.nonnull((n) => n.text()))
-            .iterable,
+            .collect(.list()),
         equals(['Nigel Rees', 'Evelyn Waugh', 'Herman Melville']),
       );
       expect(
         doc
             .jsonpath(r'$..price')
             .transform(.map.nonnull((n) => n.number()))
-            .iterable,
+            .collect(.list()),
         equals([8.95, 12.99, 8.99, 19.95]),
       );
       expect(doc.jsonpath(r'store.book[*]').collect(.count()), equals(3));
@@ -123,7 +123,7 @@ void main() {
         doc
             .jsonpath(r'$.store.book[-1].title')
             .transform(.map.nonnull((n) => n.text()))
-            .iterable,
+            .collect(.list()),
         equals(['Moby Dick']),
       );
       expect(doc.jsonpath(r'$.store.book[0,2]').collect(.count()), equals(2));
@@ -134,7 +134,7 @@ void main() {
             .parse('[1,2,3,4,5]')
             .jsonpath(r'$[::2]')
             .transform(.map.nonnull((n) => n.number()))
-            .iterable,
+            .collect(.list()),
         equals([1, 3, 5]),
       );
       expect(
@@ -142,7 +142,7 @@ void main() {
             .parse('[1,2,3]')
             .jsonpath(r'$[::-1]')
             .transform(.map.nonnull((n) => n.number()))
-            .iterable,
+            .collect(.list()),
         equals([3, 2, 1]),
       );
     });
@@ -152,7 +152,7 @@ void main() {
         doc
             .jsonpath(r"$['store']['bicycle']['colour']")
             .transform(.map.nonnull((n) => n.text()))
-            .iterable,
+            .collect(.list()),
         equals(['red']),
       );
       expect(
@@ -166,14 +166,14 @@ void main() {
         doc
             .jsonpath(r'$.store.book[?(@.isbn)]')
             .transform(.map.nonnull((b) => b.text('title')))
-            .iterable,
+            .collect(.list()),
         equals(['Moby Dick']),
       );
       expect(
         doc
             .jsonpath(r'$.store.book[?(@.price < 10)]')
             .transform(.map.nonnull((b) => b.text('title')))
-            .iterable,
+            .collect(.list()),
         equals(['Sayings', 'Moby Dick']),
       );
       expect(
@@ -192,7 +192,7 @@ void main() {
         doc
             .jsonpath(r'$.store.book[?(@.title =~ /^Mob/)]')
             .transform(.map.nonnull((b) => b.text('title')))
-            .iterable,
+            .collect(.list()),
         equals(['Moby Dick']),
       );
     });
@@ -229,7 +229,7 @@ void main() {
             .parse(format.json)
             .at('data.items')
             .all((i) => i.text('sku'))
-            .iterable,
+            .collect(.list()),
         equals(['a', 'b']),
       );
       expect(res.parse(format.json).at('').raw, isA<Map<String, Object?>>());
@@ -249,7 +249,7 @@ void main() {
           'hosts': ['a', 'b'],
         });
         expect(
-          (await format.json.read(path)).at('hosts').texts().iterable,
+          (await format.json.read(path)).at('hosts').texts().collect(.list()),
           equals(['a', 'b']),
         );
         expect((await format.json.read(path)).count, equals(1));

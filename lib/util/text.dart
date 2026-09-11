@@ -213,9 +213,9 @@ class TextAccessor {
   }
 
   /// Every number in [text], in order, read the same way as [number].
-  Sequence<num> numbers(String text) => Sequence([
-    for (final match in _digits.allMatches(text)) ?_read(match.group(0)!),
-  ]);
+  Sequence<num> numbers(String text) => Sequence(
+    _digits.allMatches(text).map((match) => _read(match.group(0)!)).whereType(),
+  );
 
   /// One matched token as a number, applying the parenthesised negative.
   static num? _read(String token) {

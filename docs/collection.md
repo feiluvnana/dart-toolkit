@@ -149,18 +149,45 @@ titles.transform(.enumerate()).transform(.where((p) => p.$1.isEven));
 
 A `map.indexed(f)` is deliberately **not** offered: it is `enumerate()` then `map` exactly, and Rule 5 says two entry points to one behaviour is a bug in the API.
 
-### A snapshot, not a view
+### A view, not a snapshot
 
-Every step is eager. A `Sequence` holds a `List<T>` taken when it was built and each `transform` builds the next one, so **a callback runs exactly once per element per step** however often you read the result:
+A `Sequence` holds the `Iterable` it was given and nothing else, and `transform` does not run its `Transformer` — it hands back a sequence that will. Nothing is walked until a `collect` asks, and then only as far as that `collect` needs:
+
+```dart
+final firstten = titles
+    .transform(.map(parse))
+    .transform(.where((t) => t.live))
+    .transform(.take.first(10));   // nothing walked yet
+
+firstten.collect(.foreach(print)); // parses until ten have matched
+```
+
+A source the library hands you is a different matter: `io.dir.walk` has already walked the disk by the time it returns a `Sequence`, so what is deferred there is the shaping, not the listing.
+
+The trade is stated rather than hidden: a sequence is a recipe, so **every terminal call walks again**, a source that changes underneath shows the change, and a single-subscription source throws on the second walk.
 
 ```dart
 var n = 0;
 final s = [1, 2, 3].seq.transform(.where((x) { n++; return true; }));
-s.collect(.count()); s.list; s.collect(.first());
-// n == 7 through 4.0.0, and 3 now
+s.collect(.count()); s.collect(.list()); s.collect(.first());
+// n == 7 — three walks, and the last one stops at the first element
 ```
 
-The trade is stated rather than hidden: `take.first(10)` after a `map` maps the whole source rather than stopping at the eleventh element. Where the source is large enough for that to matter the answer is a `Stream` — `crawl.stream` rather than `crawl.collect`.
+Where a sequence is walked more than once and the walk is not free, spend one `collect(.list())` and work from the list. It was a snapshot through 5.1.0, which made those three calls cost three walks and made every source pay for a full walk however little of it was wanted.
+
+### Leaving is a call
+
+`collect(.list())` is the way out, and the only one — there is no `iterable` getter beside it. A getter would put Dart's vocabulary one dot from every sequence in the library, which is exactly what not implementing `Iterable` was for, and it would hand back the recipe rather than a result, so `seq.iterable.length` and `seq.iterable.first` would be two walks that read like two field reads.
+
+| To | Write |
+| :--- | :--- |
+| loop over it | `collect(.foreach((x) { … }))` |
+| `await` inside the loop | `for (final x in seq.collect(.list()))` |
+| pass it to a `List<T>` or `Iterable<T>` parameter | `collect(.list())` |
+| pass it to a `Set<T>` parameter | `collect(.set())` |
+| pass it to this library | nothing — its APIs take a `Sequence` |
+
+There was a `Sequence.empty()` through 5.2.0. The constructor is `const` again now that it holds the iterable it was given instead of copying it, so `const Sequence([])` is that value and Rule 5 keeps the one spelling.
 
 ---
 
@@ -197,7 +224,7 @@ Five readers instead of ten: everything that can come up empty returns `A?`, so 
 rows.collect(.first())?.name ?? 'none';
 rows.collect(.max.by((r) => r.score))?.url;
 rows.collect(.count.by((r) => r.host));          // Dictionary<String, int>
-rows.transform(.chunk(100)).collect(.foreach((batch) => send(batch.list)));
+rows.transform(.chunk(100)).collect(.foreach((batch) => send(batch.collect(.list()))));
 rows.collect(.join(', ', limit: 3, of: (r) => r.name));   // 'Ada, Alan, Grace, …'
 ```
 
@@ -205,7 +232,7 @@ rows.collect(.join(', ', limit: 3, of: (r) => r.name));   // 'Ada, Alan, Grace, 
 
 `each` became `foreach` because `each` is what this library calls the *callback* in `fold` and `map`; the operation gets the other half of the name. Rule 4 exempts `dart:core` interface members from the lowercase rule, but `Sequence` does not implement `Iterable`, so it is not declaring one and the exemption does not reach it.
 
-Randomness is not here: `util.rand` owns it, and a sequence gets it by exiting with `util.rand.shuffle(rows.list)`.
+Randomness is not here: `util.rand` owns it, and a sequence gets it by exiting with `util.rand.shuffle(rows.collect(.list()))`.
 
 ### Downstream collectors
 
@@ -425,7 +452,7 @@ final seen = (db.read(done) ?? const []).cast<String>().toSet();
 
 await net.crawl<String>('https://example.com/index'.url)
     .run((res) {
-      for (final link in res.parse(format.html).find('a').attrs('href').list) {
+      for (final link in res.parse(format.html).find('a').attrs('href').collect(.list())) {
         if (seen.contains(link)) continue;
         res.follow(link);
       }
@@ -447,7 +474,7 @@ Anything this library hands back for you to *shape*:
 ```dart no-compile
 await net.crawl<T>(seed).collect();     await net.crawl<Never>(seed).gather(f);
 await io.csv.maps(path);                await io.csv.matrix(path);
-io.find(dir);                           net.sitemap(text);
+io.dir.find(dir);                           net.sitemap(text);
 util.text.words(t);                     util.text.numbers(t);
 util.text.betweens(t, a, b);            util.rand.shuffle(list);
 util.rand.some(list, n);                robots.agents;

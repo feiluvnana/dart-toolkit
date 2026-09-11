@@ -346,7 +346,7 @@ void main() {
 
       expect(File(path).readAsStringSync(), 'a\r\n1\r\n');
       // And it reads back as one row, not two.
-      expect((await format.csv.read(path)).maps.iterable, [
+      expect((await format.csv.read(path)).maps.collect(.list()), [
         {'a': '1'},
       ]);
     });
@@ -363,12 +363,12 @@ void main() {
           .toList();
       final List<List<String>> rows = await io.csv.rows(path).toList();
 
-      expect(sheet.maps.iterable, records);
+      expect(sheet.maps.collect(.list()), records);
       // The cursor keeps the header out of the rows; the stream does not, so
       // it is the header line plus what the cursor calls a row.
-      expect(sheet.headers.iterable, rows.first);
+      expect(sheet.headers.collect(.list()), rows.first);
       expect([
-        for (final row in sheet.rows.iterable) row.iterable,
+        for (final row in sheet.rows.collect(.list())) row.collect(.list()),
       ], rows.skip(1).toList());
     });
   });
@@ -411,7 +411,7 @@ void main() {
       final boxes = $(html).find('input');
       expect(boxes.value, 'yes');
       // An unticked box submits nothing, so it reads as absent.
-      expect(boxes.values.iterable, ['yes']);
+      expect(boxes.values.collect(.list()), ['yes']);
     });
 
     test('a ticked box with no value reports on, as HTML says', () {
@@ -428,7 +428,7 @@ void main() {
           <input type="radio" name="r" value="2" checked>
         </form>
       ''';
-      expect($(html).find('input').values.iterable, ['2']);
+      expect($(html).find('input').values.collect(.list()), ['2']);
     });
 
     test('a textarea and a plain input are unchanged', () {
@@ -444,14 +444,18 @@ void main() {
           '<main><div>Tom &amp; Jerry<br>caf&eacute;<br>&#65;&#66;</div></main>';
       // Stripping the tags left the entities behind in what is documented as
       // text.
-      expect($(html, 'div').lines.iterable, ['Tom & Jerry', 'café', 'AB']);
+      expect($(html, 'div').lines.collect(.list()), [
+        'Tom & Jerry',
+        'café',
+        'AB',
+      ]);
     });
 
     test('lines without entities are untouched', () {
-      expect($('<main><div>a<br>b</div></main>', 'div').lines.iterable, [
-        'a',
-        'b',
-      ]);
+      expect(
+        $('<main><div>a<br>b</div></main>', 'div').lines.collect(.list()),
+        ['a', 'b'],
+      );
     });
   });
 

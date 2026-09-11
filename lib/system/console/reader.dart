@@ -194,7 +194,7 @@ class ConsoleReader {
       final read = await line();
       if (read == null) throw _exhausted('picks');
       final answer = read.trim().toLowerCase();
-      if (answer.isEmpty) return const Sequence.empty();
+      if (answer.isEmpty) return const Sequence([]);
       if (answer == 'all' || answer == '*') return Sequence(options);
 
       final indices = <int>{};

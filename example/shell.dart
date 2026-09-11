@@ -49,7 +49,7 @@ void main() async {
 
   // A single entry, read without unpacking the rest. Entry names are relative
   // to what was packed, which `list` is the way to check.
-  log.info('Entries: ${[for (final e in entries.iterable) e.name]}');
+  log.info('Entries: ${[for (final e in entries.collect(.list())) e.name]}');
   final notes = await format.zip.read(archive, 'notes.txt');
   log.info(
     'notes.txt is ${notes?.length ?? 0} bytes, unpacked from the archive',

@@ -23,7 +23,7 @@ void main() async {
   }, size: 4);
   bar.done();
   log.ok(
-    'Fetched ${sizes.collect(.count())}, ${util.size.format(sizes.list.reduce(_sum))} total',
+    'Fetched ${sizes.collect(.count())}, ${util.size.format(sizes.collect(.sum((size) => size)).toInt())} total',
   );
 
   // `concurrent.stream` yields each result as it lands, for work whose output
@@ -46,7 +46,10 @@ void main() async {
   log.ok('$ok of ${results.collect(.count())} succeeded.');
 
   for (final (i, result)
-      in results.transform(.enumerate()).transform(.take.first(4)).list) {
+      in results
+          .transform(.enumerate())
+          .transform(.take.first(4))
+          .collect(.list())) {
     log.info(switch (result) {
       Done(:final value) => '${ids[i].padRight(7)} $value',
       Broke(:final error) => '${ids[i].padRight(7)} failed — $error',
@@ -94,8 +97,6 @@ void main() async {
   );
   limit.close();
 }
-
-int _sum(int a, int b) => a + b;
 
 Future<int> _measure([Object? _]) async {
   await util.time.wait(10.ms);

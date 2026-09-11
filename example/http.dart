@@ -82,7 +82,7 @@ void main() async {
       size: 2,
     );
     log.ok(
-      'Fetched ${pages.collect(.count())}: ${pages.transform(.map((p) => p.status)).iterable}',
+      'Fetched ${pages.collect(.count())}: ${pages.transform(.map((p) => p.status)).collect(.list())}',
     );
   } finally {
     await client.close();

@@ -191,7 +191,7 @@ class ZipAccessor {
   }) async {
     final kind = format ?? Format.of(source);
     final archive = await _open(source, kind);
-    if (archive == null) return const Sequence.empty();
+    if (archive == null) return const Sequence([]);
     final root = p.normalize(p.absolute(dest));
     final written = <File>[];
     final executable = <int, List<String>>{};
@@ -292,11 +292,12 @@ class ZipAccessor {
   /// `PathNotFoundException`.
   Future<Sequence<Entry>> list(String source, {Format? format}) async {
     final archive = await _open(source, format);
-    if (archive == null) return const Sequence.empty();
-    return Sequence([
-      for (final entry in archive)
-        Entry(entry.name, entry.size, folder: !entry.isFile),
-    ]);
+    if (archive == null) return const Sequence([]);
+    return Sequence(
+      archive.map(
+        (entry) => Entry(entry.name, entry.size, folder: !entry.isFile),
+      ),
+    );
   }
 
   /// Reads one entry's bytes out of the archive at [source].

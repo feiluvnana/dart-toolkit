@@ -2,6 +2,103 @@
 
 All notable changes to this project will be documented in this file.
 
+## 5.3.0
+
+The lazy sequence. 5.1.0 made `Sequence` a snapshot: the constructor copied
+into a `List`, every `transform` copied again, and the argument for it was that
+a callback then runs exactly once per element however often the result is read.
+That is true, and it is the smaller of the two problems. **The larger one is
+that every source paid for a full walk however little of it the caller
+wanted** — `take.first(10)` over a crawl mapped the whole crawl, and
+`io.dir.walk` over a tree materialised the tree before a `where` could look at
+the first entry.
+
+```dart
+final Iterable<T> _items;     // was: final List<T> _items, copied in
+```
+
+A sequence now holds the `Iterable` it was given and nothing else, and
+`transform` does not run its `Transformer` — it hands back a sequence that
+will. Nothing is walked until a `collect` asks, and then only as far as that
+`collect` needs.
+
+### Three removals and one rule
+
+**1. `Sequence.list` is gone.** `collect(.list())` is the way out, and the only
+one. There is deliberately no `iterable` getter in its place: a getter would
+put Dart's vocabulary one dot from every sequence in the library, which is
+what not implementing `Iterable` was for in the first place, and it would hand
+back the recipe rather than a result — `seq.iterable.length` and
+`seq.iterable.first` would be two walks that read like two field reads.
+Leaving is a call, and it says so. 302 call sites across `lib`, `test`,
+`example` and the docs; 31 of them were `for`-in loops that became
+`collect(.foreach(…))` and stayed lazy.
+
+| To | Write |
+| :--- | :--- |
+| loop over it | `collect(.foreach((x) { … }))` |
+| `await` inside the loop | `for (final x in seq.collect(.list()))` |
+| pass it to a `List<T>` or `Iterable<T>` parameter | `collect(.list())` |
+| pass it to a `Set<T>` parameter | `collect(.set())` |
+
+**2. `Sequence.empty()` is gone.** It existed for one reason — the generative
+constructor could not be `const` while it copied into a `List`. It can be
+again, so `const Sequence([])` is that value and Rule 5 keeps the one
+spelling.
+
+**3. The library speaks its own vocabulary at its own boundaries.**
+`Sequence.toString` now reads `collect(.join(', ', limit: 4))` rather than
+taking a list and calling Dart's `take`, `map` and `join` on it — the `limit`
+stops the walk at the fifth element and writes the `…` itself. `Dictionary`
+does the same.
+
+### What went lazy behind it
+
+A lazy `Sequence` over an eagerly built `List` defers nothing, so the sources
+moved too:
+
+| | |
+| :--- | :--- |
+| `io.dir.list`, `walk`, `find`, `glob` | a directory is opened when the walk reaches it |
+| `format.zip.list` | one entry built per entry read |
+| `Markup.texts`, `attrs`, `values`, `lines`, `all` | mapped over the matches, not into a list |
+| `Csv.rows`, `maps`, `column` | one row built per row read |
+| `util.text.numbers` | one match read at a time |
+
+```dart
+io.dir.walk('src')
+    .transform(.where((e) => e.name.endsWith('.dart')))
+    .collect(.first());      // opens directories until the first match
+```
+
+The walk keeps its resolved-link set inside the generator body, which runs once
+per walk, so walking the same sequence twice follows the same links both times.
+`io.dir.sweep` takes its whole listing before the first delete: deleting under
+a walk in progress is the one thing a lazy listing cannot be asked to survive.
+
+`Dictionary` is the exception and stays a snapshot. `keys`, `values` and
+`pairs` copy on the way out, because a dictionary has `set`, `delete` and
+`clear`, and a view over those turns an ordinary walk into a
+`ConcurrentModificationError`.
+
+### The cost, stated
+
+A sequence is a recipe, not a result. Every terminal call walks again, a source
+that changes underneath shows the change, and a single-subscription source
+throws on the second walk:
+
+```dart
+var n = 0;
+final s = [1, 2, 3].seq.transform(.where((x) { n++; return true; }));
+s.collect(.count()); s.collect(.list()); s.collect(.first());
+// n == 7 — three walks, and the last one stops at the first element
+```
+
+Where a sequence is walked more than once and the walk is not free, spend one
+`collect(.list())` and work from the list. That is the trade 5.1.0 made for
+every sequence in the library; it is now the caller's to make, at the one call
+site that needs it.
+
 ## 5.2.0
 
 The filesystem. The complaint was three things at once — *the naming is not
@@ -72,7 +169,7 @@ one to a typed variable. Seventeen signatures leaked a dependency to buy one
 `.path`.
 
 ```dart
-for (final entry in io.dir.list('out').iterable) {
+for (final entry in io.dir.list('out').list) {
   if (entry.isdir) continue;
   if (entry.ext == '.part') io.remove(entry.path);
   log.info('${entry.name}  ${util.size.format(entry.size)}');

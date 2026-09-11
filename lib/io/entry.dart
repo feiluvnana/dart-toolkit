@@ -48,7 +48,7 @@ enum FileSystemEntryKind {
 /// that lets every `io` member stay complete in itself:
 ///
 /// ```dart
-/// for (final entry in io.dir.list('out').iterable) {
+/// for (final entry in io.dir.list('out').collect(.list())) {
 ///   if (entry.isdir) continue;
 ///   if (entry.ext == '.part') io.remove(entry.path);
 /// }

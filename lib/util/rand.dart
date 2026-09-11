@@ -15,7 +15,7 @@ import '../collection/sequence.dart';
 /// Entry point for randomness, reachable as `util.rand`.
 ///
 /// ```dart
-/// final agent = util.rand.pick(agents.list);
+/// final agent = util.rand.pick(agents.collect(.list()));
 /// await util.time.wait(util.rand.jitter(2.s));
 /// ```
 class RandAccessor {
@@ -36,7 +36,8 @@ class RandAccessor {
   ///
   /// ```dart
   /// util.rand.seed(42);
-  /// expect(util.rand.pick(agents.list), util.rand.pick(agents.list)); // no
+  /// expect(util.rand.pick(agents.collect(.list())),
+  ///     util.rand.pick(agents.collect(.list()))); // no
   /// util.rand.seed(42);
   /// final first = util.rand.id();
   /// util.rand.seed(42);
@@ -66,7 +67,7 @@ class RandAccessor {
   /// A shuffled copy of [items], leaving the original untouched.
   ///
   /// Randomness lives here rather than on [Sequence], so a sequence gets it by
-  /// exiting: `util.rand.shuffle(rows.list)`.
+  /// exiting: `util.rand.shuffle(rows.collect(.list()))`.
   Sequence<T> shuffle<T>(List<T> items) => Sequence([...items]..shuffle(_rng));
 
   /// A whole number in `[min, max)`.

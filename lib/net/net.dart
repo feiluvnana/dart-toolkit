@@ -56,9 +56,9 @@ const NetAccessor net = NetAccessor();
 ///
 /// ```dart
 /// final res = await net.http.get('https://example.com'.url);
-/// for (final title in res.parse(format.html).find('h2.title').texts.list) {
+/// res.parse(format.html).find('h2.title').texts.collect(.foreach((title) {
 ///   print(title);
-/// }
+/// }));
 /// ```
 class NetAccessor {
   /// Creates the accessor. Prefer the shared [net] instance.

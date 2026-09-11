@@ -242,6 +242,16 @@ io.dir.glob('out/report-{2024,2025}.json');
 
 A symlink pointing at one of its own ancestors would recurse until the stack ran out, so a following walk remembers which real directories it has entered and skips the second visit.
 
+Both open a directory only when the walk reaches it. The `Sequence` they return is a recipe — see [A view, not a snapshot](collection.md) — so a reader that stops early costs only the directories it looked in:
+
+```dart
+io.dir.walk('src')
+    .transform(.where((e) => e.name.endsWith('.dart')))
+    .collect(.first());      // opens directories until the first match
+```
+
+The same property is the reason `sweep` takes its whole listing before the first delete, and the reason a walk you intend to read twice is worth one `collect(.list())`: the disk is read again on the second walk, and anything created in between shows up.
+
 ### Finding and sweeping
 
 ```dart
@@ -287,7 +297,7 @@ Seventeen signatures on `io` named `File`, `Directory`, `FileSystemEntity` or `F
 It is a **snapshot**, not a handle: there is no descriptor and nothing to close, which is the property that lets every `io` call stay complete in itself. `entry.entity` is the one deliberate leak, the way `Json.raw` and `Markup.document` are — one documented door, so reaching for it shows up in review.
 
 ```dart
-for (final entry in io.dir.list('out').iterable) {
+for (final entry in io.dir.list('out').collect(.list())) {
   if (entry.isdir) continue;
   if (entry.ext == '.part') io.remove(entry.path);
   print('${entry.name}  ${util.size.format(entry.size)}  ${util.time.ago(entry.modified)}');

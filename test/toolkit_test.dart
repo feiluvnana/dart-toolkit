@@ -230,7 +230,10 @@ void main() {
         final path = io.path.join(temp.path, 'lines.txt');
         io.write(path, 'one\ntwo\nthree');
 
-        expect(io.lines(path).iterable, equals(['one', 'two', 'three']));
+        expect(
+          io.lines(path).collect(.list()),
+          equals(['one', 'two', 'three']),
+        );
         expect(io.hash(path).length, equals(64));
         expect(io.hash(path, Algo.md5).length, equals(32));
         expect(io.size(path)!, greaterThan(0));
@@ -391,7 +394,7 @@ void main() async {
         await util.time.wait(10.ms);
         return n * 10;
       }, size: 2);
-      expect(processed.iterable, containsAll([10, 20, 30, 40, 50]));
+      expect(processed.collect(.list()), containsAll([10, 20, 30, 40, 50]));
     });
 
     test(
@@ -402,7 +405,7 @@ void main() async {
           return 'item-$n';
         }, size: 4);
         expect(
-          results.iterable,
+          results.collect(.list()),
           equals(['item-30', 'item-10', 'item-20', 'item-5']),
         );
       },
@@ -418,19 +421,19 @@ void main() async {
       expect(outcomes.collect(.count()), equals(3));
       // Matching is the point: `value` is non-nullable inside Done, and the
       // error only exists inside Broke.
-      expect(outcomes.collect(.list())[0], isA<Done<int>>());
-      expect((outcomes.collect(.list())[0] as Done<int>).value, equals(10));
-      expect(outcomes.collect(.list())[1], isA<Broke<int>>());
+      expect(outcomes.collect(.at(0))!, isA<Done<int>>());
+      expect((outcomes.collect(.at(0))! as Done<int>).value, equals(10));
+      expect(outcomes.collect(.at(1))!, isA<Broke<int>>());
       expect(
-        (outcomes.collect(.list())[1] as Broke<int>).error.toString(),
+        (outcomes.collect(.at(1))! as Broke<int>).error.toString(),
         contains('fail on 2'),
       );
-      expect((outcomes.collect(.list())[1] as Broke<int>).stack, isNotNull);
-      expect(outcomes.collect(.list())[2].ok, isTrue);
-      expect(outcomes.collect(.list())[2].value, equals(30));
+      expect((outcomes.collect(.at(1))! as Broke<int>).stack, isNotNull);
+      expect(outcomes.collect(.at(2))!.ok, isTrue);
+      expect(outcomes.collect(.at(2))!.value, equals(30));
 
       final saved = [
-        for (final outcome in outcomes.iterable)
+        for (final outcome in outcomes.collect(.list()))
           switch (outcome) {
             Done(:final value) => 'ok:$value',
             Broke(:final error) => 'bad:${error is Exception}',
@@ -733,7 +736,10 @@ void main() async {
         res.parse(format.html).find('img').attr('src'),
         equals('/images/pic.png'),
       );
-      expect(res.parse(format.html).lines.iterable, contains('Welcome'));
+      expect(
+        res.parse(format.html).lines.collect(.list()),
+        contains('Welcome'),
+      );
 
       final temp = io.dir.temp('http_test_');
       try {
@@ -1033,14 +1039,14 @@ void main() async {
           'id,name,role\n1,"Alice, Chief",admin\n2,"Bob ""The Builder""",user';
       final sheet = format.csv.parse(input);
 
-      expect(sheet.headers.iterable, equals(['id', 'name', 'role']));
+      expect(sheet.headers.collect(.list()), equals(['id', 'name', 'role']));
       expect(sheet.count, equals(2));
       expect(
-        sheet.rows.collect(.list())[0].collect(.list())[1],
+        sheet.rows.collect(.at(0))!.collect(.at(1))!,
         equals('Alice, Chief'),
       );
       expect(
-        sheet.rows.collect(.list())[1].collect(.list())[1],
+        sheet.rows.collect(.at(1))!.collect(.at(1))!,
         equals('Bob "The Builder"'),
       );
 
@@ -1066,9 +1072,12 @@ void main() async {
         expect(sheet.maps.collect(.first())?['fruit'], equals('Apple'));
         expect(sheet.maps.collect(.first())?['price'], equals('1.50'));
 
-        expect(sheet.headers.iterable, equals(['fruit', 'price']));
+        expect(sheet.headers.collect(.list()), equals(['fruit', 'price']));
         expect(sheet.rows.collect(.count()), equals(2));
-        expect(sheet.column('fruit').iterable, equals(['Apple', 'Banana']));
+        expect(
+          sheet.column('fruit').collect(.list()),
+          equals(['Apple', 'Banana']),
+        );
         expect(sheet.column('nope').collect(.empty()), isTrue);
 
         // A file that is not there reads as the empty cursor, like every
@@ -1097,9 +1106,9 @@ void main() async {
           ),
         );
         final sheet = await format.csv.read(path);
-        expect(sheet.headers.iterable, equals(['n', 'letter']));
+        expect(sheet.headers.collect(.list()), equals(['n', 'letter']));
         expect(
-          [for (final row in sheet.rows.iterable) row.iterable],
+          [for (final row in sheet.rows.collect(.list())) row.collect(.list())],
           equals([
             ['1', 'a'],
             ['2', 'b'],

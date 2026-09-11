@@ -48,7 +48,7 @@ import 'package:dart_toolkit/html.dart';
 
 // setup: const markup = '<ul><li class="track bonus" data-id="2">'
 // setup:     '<a href="/t/2">Track Two</a></li></ul>';
-print($(markup, '.track a').texts.list);
+print($(markup, '.track a').texts.collect(.list()));
 print(markup.$('.bonus').data('id'));
 ```
 
@@ -292,7 +292,7 @@ final tracks = $(html).find('.track');
 tracks.count;                                   // how many matched
 tracks.empty;                                   // and no complement
 tracks.elements.collect(.foreach((el) => print(el.attr('data-id'))));
-tracks.elements.transform(.map((e) => e.text)).list;
+tracks.elements.transform(.map((e) => e.text)).collect(.list());
 tracks.elements.transform(.where((e) => e.classes.contains('bonus'))).collect(.count());
 tracks.elements.collect(.first());                          // Element? — nullable, never throws
 ```

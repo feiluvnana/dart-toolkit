@@ -246,7 +246,11 @@ void main() {
           .resume(path)
           .run((res) {
             for (final href
-                in res.parse(format.html).find('a').attrs('href').iterable) {
+                in res
+                    .parse(format.html)
+                    .find('a')
+                    .attrs('href')
+                    .collect(.list())) {
               res.follow(href);
             }
           });
@@ -286,12 +290,16 @@ void main() {
           .collect((res) {
             res.emit(res.url.toString());
             for (final href
-                in res.parse(format.html).find('a').attrs('href').iterable) {
+                in res
+                    .parse(format.html)
+                    .find('a')
+                    .attrs('href')
+                    .collect(.list())) {
               res.follow(href);
             }
           });
 
-      expect(first.iterable, ['https://example.com/1']);
+      expect(first.collect(.list()), ['https://example.com/1']);
 
       final second = await net
           .crawl<String>('https://example.com/1'.url)
@@ -300,7 +308,11 @@ void main() {
           .collect((res) {
             res.emit(res.url.toString());
             for (final href
-                in res.parse(format.html).find('a').attrs('href').iterable) {
+                in res
+                    .parse(format.html)
+                    .find('a')
+                    .attrs('href')
+                    .collect(.list())) {
               res.follow(href);
             }
           });
@@ -308,7 +320,7 @@ void main() {
       // The seed is not fetched again, and the pages the first leg queued but
       // never reached are.
       expect(
-        second.iterable,
+        second.collect(.list()),
         unorderedEquals(<String>[
           'https://example.com/2',
           'https://example.com/3',
@@ -338,7 +350,11 @@ void main() {
           .limit(2)
           .run((res) {
             for (final href
-                in res.parse(format.html).find('a').attrs('href').iterable) {
+                in res
+                    .parse(format.html)
+                    .find('a')
+                    .attrs('href')
+                    .collect(.list())) {
               res.follow(href);
             }
           });

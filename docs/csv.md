@@ -28,7 +28,7 @@ void main() async {
   print(sheet.maps.collect(.count.by((row) => row['role'] ?? '')));
 
   // Write records atomically:
-  await io.csv.write('out/people.csv', sheet.maps.iterable);
+  await io.csv.write('out/people.csv', sheet.maps.collect(.list()));
 }
 ```
 
@@ -50,9 +50,9 @@ void main() async {
 ```dart
 final sheet = await format.csv.read('sales.csv');
 
-sheet.headers.iterable;              // ['region', 'amount']
+sheet.headers.collect(.list());              // ['region', 'amount']
 sheet.count;                     // 2
-sheet.column('region').iterable;     // ['north', 'south']
+sheet.column('region').collect(.list());     // ['north', 'south']
 ```
 
 `io.csv.maps` and `io.csv.matrix` were two methods for these two shapes, so you had to choose which to call before you had seen the file. They are two getters off one parse now — and `matrix` included the header line in what it returned, where `rows` does not, because `headers` is where it went.
@@ -134,8 +134,8 @@ io.write('out/grid.csv', format.csv.cells([
 
 ```dart
 final sheet = format.csv.parse('id,name\n1,"Alice, Chief"');
-sheet.headers.iterable;               // ['id', 'name']
-sheet.maps.iterable;                  // [{'id': '1', 'name': 'Alice, Chief'}]
+sheet.headers.collect(.list());               // ['id', 'name']
+sheet.maps.collect(.list());                  // [{'id': '1', 'name': 'Alice, Chief'}]
 
 final csvText = format.csv.format([
   {'id': 1, 'name': 'Alice'},
@@ -152,7 +152,7 @@ Text that is not CSV parses to the empty cursor rather than throwing — the con
 `format`, `cells` and `write` end every line with `newline`, which defaults to `\n`. Pass `\r\n` for the ending Excel and RFC 4180 expect:
 
 ```dart
-await io.csv.write('out/for-excel.csv', records.iterable, newline: '\r\n');
+await io.csv.write('out/for-excel.csv', records.collect(.list()), newline: '\r\n');
 ```
 
 Reading handles either, so a file written one way reads back the same.

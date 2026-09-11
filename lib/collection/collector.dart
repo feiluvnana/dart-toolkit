@@ -357,11 +357,12 @@ class Collector<A, R> {
         }
       });
 
-  /// The elements as a list.
+  /// The elements as a list — the walk, and the result of it.
   ///
-  /// `Sequence.list` says the same thing in one word and is the spelling to
-  /// reach for. This one exists to be a *downstream* collector, where there is
-  /// no receiver to say it on: `group.into(f, .list())`.
+  /// The way out. A [Sequence] holds a recipe and never hands it over, so
+  /// this is how a sequence becomes something Dart's own APIs will take —
+  /// and the walk happens here, once. It is a downstream collector too,
+  /// where there is no receiver to say it on: `group.into(f, .list())`.
   static Collector<A, List<A>> list<A>() =>
       Collector((items) => items.toList());
 

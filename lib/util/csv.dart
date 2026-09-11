@@ -63,21 +63,22 @@ final class Csv {
   ///
   /// `io.csv.matrix` included the header line in what it returned; it is
   /// [headers] here, so [rows] and [maps] describe the same records.
-  Sequence<Sequence<String>> get rows =>
-      Sequence([for (final row in _rows) Sequence(row)]);
+  Sequence<Sequence<String>> get rows => Sequence(_rows.map(Sequence.new));
 
   /// The data rows keyed by [headers].
   ///
   /// Blank lines are skipped and short rows are padded with empty strings, so
   /// every map carries every column.
-  Sequence<Map<String, String>> get maps => Sequence([
-    for (final row in _rows)
-      if (!CsvText.blank(row))
-        {
-          for (var i = 0; i < _headers.length; i++)
-            _headers[i]: i < row.length ? row[i] : '',
-        },
-  ]);
+  Sequence<Map<String, String>> get maps => Sequence(
+    _rows
+        .where((row) => !CsvText.blank(row))
+        .map(
+          (row) => {
+            for (var i = 0; i < _headers.length; i++)
+              _headers[i]: i < row.length ? row[i] : '',
+          },
+        ),
+  );
 
   /// Every value in the column called [name], in row order.
   ///
@@ -94,11 +95,12 @@ final class Csv {
   /// ```
   Sequence<String> column(String name) {
     final at = _headers.indexOf(name);
-    if (at == -1) return const Sequence.empty();
-    return Sequence([
-      for (final row in _rows)
-        if (!CsvText.blank(row)) at < row.length ? row[at] : '',
-    ]);
+    if (at == -1) return const Sequence([]);
+    return Sequence(
+      _rows
+          .where((row) => !CsvText.blank(row))
+          .map((row) => at < row.length ? row[at] : ''),
+    );
   }
 
   /// How many data rows there are, header line excluded.

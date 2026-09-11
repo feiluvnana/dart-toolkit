@@ -81,14 +81,14 @@ final outcomes = await pool.settle([1, 0, 2], (n) async {
   return 10 ~/ n;
 });
 
-for (final outcome in outcomes.list) {
+outcomes.collect(.foreach((outcome) {
   switch (outcome) {
     case Done(:final value):
       print('Value: $value');       // int, not int?
     case Broke(:final error, :final stack):
       print('Failed: $error');
   }
-}
+}));
 ```
 
 `Done<R>` carries `value`; `Broke<R>` carries `error` and `stack`. The switch is exhaustive, so a third case cannot be forgotten. For a count or a filter there is also `outcome.ok`, and `outcome.value` reads `null` for a failure:
@@ -106,7 +106,7 @@ By default `concurrent.run` is **fail-fast**: the first error stops new tasks fr
 
 ```dart
 try {
-  await concurrent.run(items.list, (i) => mayThrow());
+  await concurrent.run(items.collect(.list()), (i) => mayThrow());
 } on StateError catch (e) {
   // your worker's own error, with its original stack trace
 }

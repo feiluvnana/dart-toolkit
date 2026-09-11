@@ -52,7 +52,7 @@ belongs to, when it earns a top-level name, and how to name it.
 3. **Real types at every boundary.** URLs are `Uri`, delays are `Duration`, paths are `String`, bodies and hash algorithms are sealed types and enums. No `Object` or `dynamic` parameters, so the analyzer catches mistakes at the call site.
 4. **Atomic by default.** Every write stages through a `.part` file and is renamed into place only after a successful flush. Interrupted runs never leave truncated files, and Ctrl-C cleans up.
 5. **Engine-driven pipelines.** Multi-stage crawlers use declarative URL routing, tag-based stages, and automatic relative-URL resolution.
-6. **One vocabulary for collections.** Everything this library hands back for you to *shape* is a [`Sequence`](docs/collection.md) or a [`Dictionary`](docs/collection.md#6-dictionaryk-v-the-keyed-collection), deliberately not an `Iterable` or a `Map`, so Dart's names and these are never both in scope at one call site. `.iterable` and `.map` are the words at the boundary; `.seq` and `.dict` bring an outside collection in. Through 4.0.0 that claim was only half true — 53 public members handed back a `List`, `Map` or `Set` against 30 that handed back a `Sequence` — and 5.0.0 converted them.
+6. **One vocabulary for collections.** Everything this library hands back for you to *shape* is a [`Sequence`](docs/collection.md) or a [`Dictionary`](docs/collection.md#6-dictionaryk-v-the-keyed-collection), deliberately not an `Iterable` or a `Map`, so Dart's names and these are never both in scope at one call site. `collect(.list())` and `.map` are the ways out at the boundary; `.seq` and `.dict` bring an outside collection in. A `Sequence` hands back no `Iterable` of its own — leaving is a call, not a getter, because a getter would put Dart's vocabulary one dot from every sequence in the library. Through 4.0.0 that claim was only half true — 53 public members handed back a `List`, `Map` or `Set` against 30 that handed back a `Sequence` — and 5.0.0 converted them.
 7. **A pipeline is a value.** A `Sequence` has two members: `transform` takes a [`Transformer`](docs/collection.md#3-transformer--the-shaping-operations) and `collect` takes a [`Collector`](docs/collection.md#4-collector--the-ending-operations). Everything else is a static factory on one of those, which is what lets each of them take its ordinary name back — `map`, `where`, `take.first`, `group.by`, `max.by`. A namespace has no `Map` to collide with and no camelCase to forbid, so a compound operation splits at the capital instead of inventing a word. It also makes a chain storable, passable, supplyable by a caller, and testable against a plain list.
 
 ---
@@ -110,15 +110,15 @@ void main(List<String> args) async {
       .delay(250.ms)
       .limit(50)
       .collect((res) {
-        for (final title in res.parse(format.html).find('.titleline > a').texts.iterable) {
+        res.parse(format.html).find('.titleline > a').texts.collect(.foreach((title) {
           res.emit(title);
-        }
+        }));
       });
   log.ok('Found ${titles.collect(.count())} headlines.');
 
   // 3. Process concurrently, with a progress bar
   log.step(2, 3, 'Processing...');
-  final batch = titles.transform(.take.first(10)).iterable;
+  final batch = titles.transform(.take.first(10)).collect(.list());
   final bar = Progress(total: batch.length, message: 'Processing');
   final processed = await concurrent.run(batch, (title) async {
     bar.tick(1, title);
@@ -212,7 +212,7 @@ Everything that reads or writes a file hands back a `FileSystemEntry` — path,
 kind, size, mtime and the name parts — instead of a `dart:io` handle:
 
 ```dart
-for (final entry in io.dir.list('out').iterable) {
+for (final entry in io.dir.list('out').collect(.list())) {
   if (entry.isdir) continue;
   if (entry.ext == '.part') io.remove(entry.path);
 }
@@ -291,13 +291,13 @@ await net.crawl<String>('https://music.example.com/album'.url)
       print('${res.meta.read(name)} -> ${res.parse(format.html).find('a').attr('href')}');
     })
     .run((res) {
-      for (final a in res.parse(format.html).find('#songlist a').elements.iterable) {
+      res.parse(format.html).find('#songlist a').elements.collect(.foreach((a) {
         res.follow(
           a.attr('href')!,
           tag: 'song',
           meta: [name(a.text)],
         );
-      }
+      }));
     });
 ```
 

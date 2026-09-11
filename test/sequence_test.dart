@@ -18,58 +18,68 @@ void main() {
   group('Sequence shaping', () {
     test('map, map.nonnull and nonnull replace map and mapNotNull', () {
       expect(
-        [1, 2, 3].seq.transform(.map((n) => n * 2)).list,
+        [1, 2, 3].seq.transform(.map((n) => n * 2)).collect(.list()),
         equals([2, 4, 6]),
       );
       expect(
-        ['1', 'x', '3'].seq.transform(.map.nonnull(int.tryParse)).list,
+        [
+          '1',
+          'x',
+          '3',
+        ].seq.transform(.map.nonnull(int.tryParse)).collect(.list()),
         equals([1, 3]),
       );
-      expect(<int?>[1, null, 3].seq.nonnull.list, equals([1, 3]));
+      expect(<int?>[1, null, 3].seq.nonnull.collect(.list()), equals([1, 3]));
     });
 
     test('where is both sides, because ! works on a filter', () {
       expect(
-        [1, 2, 3, 4].seq.transform(.where((n) => n.isEven)).list,
+        [1, 2, 3, 4].seq.transform(.where((n) => n.isEven)).collect(.list()),
         equals([2, 4]),
       );
       // `omit` existed because `keep` was not a filter's ordinary name and
       // `!keep(t)` read as nonsense. Rule 4's ! test applies now.
       expect(
-        [1, 2, 3, 4].seq.transform(.where((n) => !n.isEven)).list,
+        [1, 2, 3, 4].seq.transform(.where((n) => !n.isEven)).collect(.list()),
         equals([1, 3]),
       );
     });
 
     test('where.type filters by type', () {
       expect(
-        <Object>[1, 'a', 2].seq.transform(.where.type<int>()).list,
+        <Object>[1, 'a', 2].seq.transform(.where.type<int>()).collect(.list()),
         equals([1, 2]),
       );
     });
 
     test('flat flattens and flat.map expands', () {
       expect(
-        [1, 2].seq.transform(.flat.map((n) => [n, n * 10])).list,
+        [1, 2].seq.transform(.flat.map((n) => [n, n * 10])).collect(.list()),
         equals([1, 10, 2, 20]),
       );
       expect(
         [
           [1, 2],
           [3],
-        ].seq.transform(.flat<int>()).list,
+        ].seq.transform(.flat<int>()).collect(.list()),
         equals([1, 2, 3]),
       );
-      expect(() => [1].seq.transform(.flat<int>()).list, throwsStateError);
+      expect(
+        () => [1].seq.transform(.flat<int>()).collect(.list()),
+        throwsStateError,
+      );
     });
 
     test('unique and unique.by keep the first of each', () {
-      expect([1, 2, 1, 3].seq.transform(.unique()).list, equals([1, 2, 3]));
+      expect(
+        [1, 2, 1, 3].seq.transform(.unique()).collect(.list()),
+        equals([1, 2, 3]),
+      );
       expect(
         rows
             .transform(.unique.by((r) => r.host))
             .transform(.map((r) => r.host))
-            .list,
+            .collect(.list()),
         equals(['a.com', 'b.com', 'c.com']),
       );
     });
@@ -78,14 +88,19 @@ void main() {
       'sort never mutates the source, and sort.using takes a comparator',
       () {
         final source = [3, 1, 2];
-        expect(source.seq.transform(.sort()).list, equals([1, 2, 3]));
+        expect(
+          source.seq.transform(.sort()).collect(.list()),
+          equals([1, 2, 3]),
+        );
         expect(source, equals([3, 1, 2]), reason: 'sort must copy');
         expect(
           rows.transform(.sort.by((r) => r.score)).collect(.first())?.score,
           equals(1),
         );
         expect(
-          [3, 1, 2].seq.transform(.sort.using((a, b) => b.compareTo(a))).list,
+          [3, 1, 2].seq
+              .transform(.sort.using((a, b) => b.compareTo(a)))
+              .collect(.list()),
           equals([3, 2, 1]),
         );
       },
@@ -93,46 +108,52 @@ void main() {
 
     test('take, skip and flip read as opposites', () {
       final n = [1, 2, 3, 4, 5].seq;
-      expect(n.transform(.take.first(2)).list, equals([1, 2]));
-      expect(n.transform(.take.last(2)).list, equals([4, 5]));
-      expect(n.transform(.skip.first(3)).list, equals([4, 5]));
-      expect(n.transform(.skip.last(3)).list, equals([1, 2]));
-      expect(n.transform(.flip()).list, equals([5, 4, 3, 2, 1]));
-      expect(n.transform(.take.first(0)).list, isEmpty);
-      expect(n.transform(.take.last(99)).list, equals([1, 2, 3, 4, 5]));
-      expect(n.transform(.skip.last(99)).list, isEmpty);
+      expect(n.transform(.take.first(2)).collect(.list()), equals([1, 2]));
+      expect(n.transform(.take.last(2)).collect(.list()), equals([4, 5]));
+      expect(n.transform(.skip.first(3)).collect(.list()), equals([4, 5]));
+      expect(n.transform(.skip.last(3)).collect(.list()), equals([1, 2]));
+      expect(n.transform(.flip()).collect(.list()), equals([5, 4, 3, 2, 1]));
+      expect(n.transform(.take.first(0)).collect(.list()), isEmpty);
+      expect(
+        n.transform(.take.last(99)).collect(.list()),
+        equals([1, 2, 3, 4, 5]),
+      );
+      expect(n.transform(.skip.last(99)).collect(.list()), isEmpty);
     });
 
     test('take.when and skip.when split on a predicate', () {
       final n = [1, 2, 3, 1].seq;
-      expect(n.transform(.take.when((v) => v < 3)).list, equals([1, 2]));
-      expect(n.transform(.skip.when((v) => v < 3)).list, equals([3, 1]));
+      expect(
+        n.transform(.take.when((v) => v < 3)).collect(.list()),
+        equals([1, 2]),
+      );
+      expect(
+        n.transform(.skip.when((v) => v < 3)).collect(.list()),
+        equals([3, 1]),
+      );
     });
 
     test('chunk batches, with the last one short', () {
       expect(
-        [
-          1,
-          2,
-          3,
-          4,
-          5,
-        ].seq.transform(.chunk(2)).transform(.map((c) => c.list)).list,
+        [1, 2, 3, 4, 5].seq
+            .transform(.chunk(2))
+            .transform(.map((c) => c.collect(.list())))
+            .collect(.list()),
         equals([
           [1, 2],
           [3, 4],
           [5],
         ]),
       );
-      expect([1].seq.transform(.chunk(0)).list, isEmpty);
+      expect([1].seq.transform(.chunk(0)).collect(.list()), isEmpty);
     });
 
     test('zip and unzip go through records', () {
       final zipped = [1, 2, 3].seq.transform(.zip(['a', 'b'].seq));
-      expect(zipped.list, equals([(1, 'a'), (2, 'b')]));
+      expect(zipped.collect(.list()), equals([(1, 'a'), (2, 'b')]));
       final (numbers, letters) = zipped.unzip;
-      expect(numbers.list, equals([1, 2]));
-      expect(letters.list, equals(['a', 'b']));
+      expect(numbers.collect(.list()), equals([1, 2]));
+      expect(letters.collect(.list()), equals(['a', 'b']));
     });
 
     test('enumerate carries the index', () {
@@ -140,73 +161,79 @@ void main() {
         ['a', 'b'].seq
             .transform(.enumerate())
             .transform(.map((p) => '${p.$1}${p.$2}'))
-            .list,
+            .collect(.list()),
         equals(['0a', '1b']),
       );
     });
 
-    // A Sequence was a lazy view through 4.0.0, so every terminal call
-    // re-walked the whole chain: three calls on a three-element sequence ran
-    // the predicate seven times, and a `.to(expensiveParse)` over a crawl's
-    // results paid for the parse once per call. It is a snapshot now.
-    test(
-      'a shaping callback runs once per element, however often it is read',
-      () {
-        var calls = 0;
-        final shaped = [1, 2, 3].seq.transform(
-          .map((n) {
-            calls++;
-            return n * 2;
-          }),
-        );
-        expect(calls, equals(3));
+    // A sequence is a recipe, not a result: nothing is walked until a
+    // terminal call asks, and a second terminal call asks again. This was a
+    // snapshot in 5.1.0 — the constructor copied, every step copied, and the
+    // three reads below cost three walks rather than seven. What that cost
+    // was every source walked in full, however little of it was wanted.
+    test('a shaping callback does not run until the sequence is walked', () {
+      var calls = 0;
+      final shaped = [1, 2, 3].seq.transform(
+        .map((n) {
+          calls++;
+          return n * 2;
+        }),
+      );
+      expect(calls, isZero, reason: 'built, not walked');
 
-        shaped.collect(.count());
-        shaped.list;
-        shaped.collect(.first());
-        shaped.collect(.foreach((_) {}));
-        expect(calls, equals(3), reason: 'four reads, still one pass');
-      },
-    );
+      expect(shaped.collect(.list()), equals([2, 4, 6]));
+      expect(calls, equals(3));
+    });
 
-    test('a sequence does not move when its source does', () {
+    test('every terminal call walks again', () {
+      var calls = 0;
+      final shaped = [1, 2, 3].seq.transform(
+        .where((n) {
+          calls++;
+          return true;
+        }),
+      );
+
+      shaped.collect(.count());
+      shaped.collect(.list());
+      shaped.collect(.first());
+      expect(calls, equals(7), reason: 'three, three, and one that stops');
+    });
+
+    test('a sequence follows its source', () {
       final source = [1, 2, 3];
       final held = source.seq;
       source.add(4);
-      expect(held.collect(.count()), equals(3));
-      expect(held.list, equals([1, 2, 3]));
+      expect(held.collect(.count()), equals(4));
+      expect(held.collect(.list()), equals([1, 2, 3, 4]));
     });
 
     test('the empty sequence is a const', () {
-      expect(const Sequence<int>.empty().collect(.empty()), isTrue);
-      expect(const Sequence<int>.empty().collect(.count()), isZero);
+      expect(const Sequence<int>([]).collect(.empty()), isTrue);
+      expect(const Sequence<int>([]).collect(.count()), isZero);
     });
 
     test('plus, minus, common and or', () {
       final a = [1, 2, 3].seq;
       final b = [3, 4].seq;
-      expect(a.transform(.plus(b)).list, equals([1, 2, 3, 3, 4]));
-      expect(a.transform(.minus(b)).list, equals([1, 2]));
+      expect(a.transform(.plus(b)).collect(.list()), equals([1, 2, 3, 3, 4]));
+      expect(a.transform(.minus(b)).collect(.list()), equals([1, 2]));
       expect(
-        a.transform(.plus(b)).transform(.unique()).list,
+        a.transform(.plus(b)).transform(.unique()).collect(.list()),
         equals([1, 2, 3, 4]),
       );
-      expect(a.transform(.common(b)).list, equals([3]));
+      expect(a.transform(.common(b)).collect(.list()), equals([3]));
       expect(
-        const Sequence<int>.empty().transform(.or(b)).list,
+        const Sequence<int>([]).transform(.or(b)).collect(.list()),
         equals([3, 4]),
       );
-      expect(a.transform(.or(b)).list, equals([1, 2, 3]));
+      expect(a.transform(.or(b)).collect(.list()), equals([1, 2, 3]));
     });
 
-    // The trade the eager rewrite makes, stated so it is a decision and not a
-    // surprise: shaping runs over the whole source, so `head(2)` after a `to`
-    // maps every element rather than stopping at the third. What it buys is
-    // that the callback runs exactly once per element however often the result
-    // is read — see the pin in `Sequence reducing`. Where the source is large
-    // enough for the difference to matter the answer is a Stream:
-    // `crawl.stream` rather than `crawl.collect`.
-    test('shaping is eager: one pass over the source, at build time', () {
+    // What laziness buys, pinned: a walk goes no further than the reader
+    // does, so `take.first(2)` after a `map` over eleven elements maps three
+    // of them and stops.
+    test('a walk stops where the reader stops', () {
       var calls = 0;
       final head = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].seq
           .transform(
@@ -217,9 +244,24 @@ void main() {
           )
           .transform(.where((n) => n.isOdd))
           .transform(.take.first(2));
-      expect(calls, equals(11), reason: 'the whole source, once');
-      expect(head.list, equals([1, 3]));
-      expect(calls, equals(11), reason: 'and not again when it is read');
+      expect(calls, isZero, reason: 'nothing walked yet');
+      expect(head.collect(.list()), equals([1, 3]));
+      expect(calls, equals(3), reason: 'as far as the second odd one, no more');
+    });
+
+    // A step that cannot be lazy — sort, unique, take.last — still does not
+    // run until the walk does.
+    test('an eager step is still deferred to the walk', () {
+      var compares = 0;
+      final sorted = [3, 1, 2].seq.transform(
+        .sort.using((a, b) {
+          compares++;
+          return a.compareTo(b);
+        }),
+      );
+      expect(compares, isZero);
+      expect(sorted.collect(.list()), equals([1, 2, 3]));
+      expect(compares, greaterThan(0));
     });
   });
 
@@ -227,14 +269,14 @@ void main() {
     test('count, empty and has', () {
       expect(rows.collect(.count()), equals(4));
       expect(rows.collect(.count.where((r) => r.host == 'a.com')), equals(2));
-      expect(const Sequence<int>.empty().collect(.empty()), isTrue);
+      expect(const Sequence<int>([]).collect(.empty()), isTrue);
       expect([1].seq.collect(.empty()), isFalse);
       expect([1, 2].seq.collect(.has(2)), isTrue);
       expect([1, 2].seq.collect(.has(9)), isFalse);
     });
 
     test('the five readers are nullable rather than throwing', () {
-      final empty = const Sequence<int>.empty();
+      final empty = const Sequence<int>([]);
       expect(empty.collect(.first()), isNull);
       expect(empty.collect(.last()), isNull);
       expect(empty.collect(.single()), isNull);
@@ -271,15 +313,15 @@ void main() {
       expect([1, 2].seq.collect(.any((n) => n.isEven)), isTrue);
       expect([1, 3].seq.collect(.any((n) => n.isEven)), isFalse);
       expect([2, 4].seq.collect(.all((n) => n.isEven)), isTrue);
-      expect(const Sequence<int>.empty().collect(.all((n) => false)), isTrue);
+      expect(const Sequence<int>([]).collect(.all((n) => false)), isTrue);
     });
 
     test('fold, sum and avg', () {
       expect([1, 2, 3].seq.collect(.fold(0, (t, n) => t + n)), equals(6));
       expect(rows.collect(.sum((r) => r.cost)), equals(8.5));
       expect(rows.collect(.avg((r) => r.score)), closeTo(4.5, 1e-9));
-      expect(const Sequence<int>.empty().collect(.avg((n) => n)), isNull);
-      expect(const Sequence<int>.empty().collect(.sum((n) => n)), isZero);
+      expect(const Sequence<int>([]).collect(.avg((n) => n)), isNull);
+      expect(const Sequence<int>([]).collect(.sum((n) => n)), isZero);
       expect(
         [1, 2].seq.collect(.sum((n) => n)),
         equals(3),
@@ -290,15 +332,12 @@ void main() {
     test('max.by and min.by', () {
       expect(rows.collect(.max.by((r) => r.score))?.score, equals(9));
       expect(rows.collect(.min.by((r) => r.score))?.score, equals(1));
-      expect(
-        const Sequence<Row>.empty().collect(.max.by((r) => r.score)),
-        isNull,
-      );
+      expect(const Sequence<Row>([]).collect(.max.by((r) => r.score)), isNull);
     });
 
     test('group, associate, count.by and split', () {
       final byHost = rows.collect(.group.by((r) => r.host));
-      expect(byHost.keys.list, equals(['a.com', 'b.com', 'c.com']));
+      expect(byHost.keys.collect(.list()), equals(['a.com', 'b.com', 'c.com']));
       expect(byHost.get('a.com')!.collect(.count()), equals(2));
 
       final Dictionary<String, Row> latest = rows.collect(
@@ -356,19 +395,22 @@ void main() {
       final seen = <int>[];
       [1, 2].seq.collect(.foreach(seen.add));
       expect(seen, equals([1, 2]));
-      expect([1, 2, 2].seq.list, equals([1, 2, 2]));
+      expect([1, 2, 2].seq.collect(.list()), equals([1, 2, 2]));
       expect([1, 2, 2].seq.collect(.set()), equals({1, 2}));
     });
 
     test('cast views the elements as another type', () {
-      expect(<Object>[1, 2].seq.transform(.cast<int>()).list, equals([1, 2]));
+      expect(
+        <Object>[1, 2].seq.transform(.cast<int>()).collect(.list()),
+        equals([1, 2]),
+      );
     });
   });
 
   group('Sequence entry points', () {
     test('.seq brings an iterable in and .dict brings a map in', () {
       expect([1, 2].seq, isA<Sequence<int>>());
-      expect({'a': 1}.dict.pairs.list, equals([('a', 1)]));
+      expect({'a': 1}.dict.pairs.collect(.list()), equals([('a', 1)]));
     });
 
     test('the daily-report shape is one expression', () {
@@ -378,7 +420,7 @@ void main() {
           .transform(.map((e) => (host: e.$1, spend: e.$2)))
           .transform(.sort.by((e) => e.host));
       expect(
-        spend.transform(.map((e) => e.host)).list,
+        spend.transform(.map((e) => e.host)).collect(.list()),
         equals(['a.com', 'b.com', 'c.com']),
       );
       expect(spend.collect(.first())?.spend, equals(4.0));
@@ -407,7 +449,11 @@ void main() {
       expect(page.find('x').empty, isTrue);
       expect(page.find('li').elements.collect(.count()), equals(2));
       expect(
-        page.find('li').elements.transform(.map((e) => e.text)).list,
+        page
+            .find('li')
+            .elements
+            .transform(.map((e) => e.text))
+            .collect(.list()),
         equals(['a', 'b']),
       );
     });
@@ -421,7 +467,7 @@ void main() {
 
       // One definition, two uses — the thing a method chain cannot offer.
       expect(
-        rows.transform(cleanup).transform(.map((r) => r.host)).list,
+        rows.transform(cleanup).transform(.map((r) => r.host)).collect(.list()),
         equals(['a.com', 'b.com']),
       );
       expect(rows.transform(cleanup).collect(.count()), equals(2));
@@ -468,7 +514,11 @@ void main() {
 
     test('fn is the door in a closed set', () {
       expect(
-        [3, 1, 2].seq.transform(.fn((xs) => xs.toList()..sort())).list,
+        [
+          3,
+          1,
+          2,
+        ].seq.transform(.fn((xs) => xs.toList()..sort())).collect(.list()),
         equals([1, 2, 3]),
       );
       expect([1, 2, 3].seq.collect(.fn((xs) => xs.length * 10)), equals(30));
@@ -476,11 +526,13 @@ void main() {
 
     test('a subclass composes with the built-ins on equal footing', () {
       expect(
-        rows.transform(Dearer(2)).transform(.take.first(1)).list,
+        rows.transform(Dearer(2)).transform(.take.first(1)).collect(.list()),
         equals([_row('b.com', 9, 4.0)]),
       );
       expect(
-        rows.transform(Dearer(2).then(Transformer.sort.by((r) => r.cost))).list,
+        rows
+            .transform(Dearer(2).then(Transformer.sort.by((r) => r.cost)))
+            .collect(.list()),
         equals([_row('a.com', 5, 2.5), _row('b.com', 9, 4.0)]),
       );
     });
@@ -545,9 +597,9 @@ void main() {
       final d = Dictionary<String, int>(const {'a': 1, 'b': 2});
 
       expect(d.keys, isA<Sequence<String>>());
-      expect(d.keys.list, equals(['a', 'b']));
-      expect(d.values.list, equals([1, 2]));
-      expect(d.pairs.list, equals([('a', 1), ('b', 2)]));
+      expect(d.keys.collect(.list()), equals(['a', 'b']));
+      expect(d.values.collect(.list()), equals([1, 2]));
+      expect(d.pairs.collect(.list()), equals([('a', 1), ('b', 2)]));
       expect(d.invert().map, equals({1: 'a', 2: 'b'}));
     });
 

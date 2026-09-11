@@ -273,12 +273,12 @@ class Pool<I> {
   /// Returns one [Settled] per item, in input order:
   ///
   /// ```dart
-  /// for (final result in (await pool.settle(urls, fetch)).list) {
+  /// (await pool.settle(urls, fetch)).collect(.foreach((result) {
   ///   switch (result) {
   ///     case Done(:final value): save(value);
   ///     case Broke(:final error): log.warn('$error');
   ///   }
-  /// }
+  /// }));
   /// ```
   Future<Sequence<Settled<R>>> settle<R>(
     Iterable<I> items,
@@ -674,7 +674,7 @@ Duration _backoffFor(int attempt, Duration base, Duration cap) {
 /// that has a value is the branch where it is non-nullable:
 ///
 /// ```dart
-/// for (final result in (await pool.settle(urls, fetch)).list) {
+/// for (final result in (await pool.settle(urls, fetch)).collect(.list())) {
 ///   switch (result) {
 ///     case Done(:final value): save(value);
 ///     case Broke(:final error): log.warn('$error');
