@@ -19,13 +19,16 @@ import '../src/markup.dart';
 /// `package:http`. This keeps call sites short:
 ///
 /// ```dart
-/// final res = await net.http.send(.get, 'https://example.com'.url);
+/// final res = await Http.get('https://example.com'.url);
 /// ```
 extension UrlString on String {
   /// Parses this string as a [Uri].
   ///
   /// Throws [FormatException] if the string is not a valid URI.
   Uri get url => Uri.parse(this);
+
+  /// Parses this string as a [Uri]. Alias for [url].
+  Uri toUri() => Uri.parse(this);
 }
 
 /// Builds a [Duration] from a plain number.
@@ -34,25 +37,40 @@ extension UrlString on String {
 /// them readable:
 ///
 /// ```dart
-/// await util.time.wait(250.ms);
-/// net.crawl([Fetch('https://example.com'.url)].seq).delay(2.s);
-/// final overnight = 8.h;
+/// await delay(250.ms);
+/// final timeout = 5.seconds;
+/// final overnight = 8.hours;
 /// ```
 extension DurationInt on int {
   /// This many milliseconds.
   Duration get ms => Duration(milliseconds: this);
 
+  /// This many milliseconds.
+  Duration get milliseconds => Duration(milliseconds: this);
+
   /// This many seconds.
   Duration get s => Duration(seconds: this);
+
+  /// This many seconds.
+  Duration get seconds => Duration(seconds: this);
 
   /// This many minutes.
   Duration get m => Duration(minutes: this);
 
+  /// This many minutes.
+  Duration get minutes => Duration(minutes: this);
+
   /// This many hours.
   Duration get h => Duration(hours: this);
 
+  /// This many hours.
+  Duration get hours => Duration(hours: this);
+
   /// This many days.
   Duration get d => Duration(days: this);
+
+  /// This many days.
+  Duration get days => Duration(days: this);
 }
 
 /// Fluent HTTP extensions on [Uri].
@@ -65,7 +83,7 @@ extension UriHttpExtensions on Uri {
     int? retries,
     Encoding? encoding,
     Fetch? fetch,
-  }) => net.http.get(
+  }) => httpClient.get(
     this,
     headers: headers,
     timeout: timeout,
@@ -84,7 +102,7 @@ extension UriHttpExtensions on Uri {
     int? retries,
     Encoding? encoding,
     Fetch? fetch,
-  }) => net.http.post(
+  }) => httpClient.post(
     this,
     body: body,
     headers: headers,
@@ -104,7 +122,7 @@ extension UriHttpExtensions on Uri {
     int? retries,
     Encoding? encoding,
     Fetch? fetch,
-  }) => net.http.put(
+  }) => httpClient.put(
     this,
     body: body,
     headers: headers,
@@ -124,7 +142,7 @@ extension UriHttpExtensions on Uri {
     int? retries,
     Encoding? encoding,
     Fetch? fetch,
-  }) => net.http.delete(
+  }) => httpClient.delete(
     this,
     body: body,
     headers: headers,
@@ -144,7 +162,7 @@ extension UriHttpExtensions on Uri {
     int? retries,
     Encoding? encoding,
     Fetch? fetch,
-  }) => net.http.patch(
+  }) => httpClient.patch(
     this,
     body: body,
     headers: headers,
@@ -162,7 +180,7 @@ extension UriHttpExtensions on Uri {
     int? redirects,
     int? retries,
     Fetch? fetch,
-  }) => net.http.head(
+  }) => httpClient.head(
     this,
     headers: headers,
     timeout: timeout,
@@ -175,19 +193,22 @@ extension UriHttpExtensions on Uri {
 /// Quick document parsing extensions on [String].
 extension StringParseExtensions on String {
   /// Parses this string as a JSON document cursor.
-  Json parseJson() => format.json.parse(this);
+  Json parseJson() => const JsonAccessor().parse(this);
 
   /// Parses this string as an HTML markup cursor.
-  Markup parseHtml() => format.html.parse(this);
+  Markup parseHtml() => const HtmlAccessor().parse(this);
 }
 
 /// Direct document and selector extensions on [Reply].
 extension ReplyDocumentExtensions on Reply {
   /// Parsed HTML markup cursor.
-  Markup get html => parse(format.html);
+  Markup get html => parse(const HtmlAccessor());
 
   /// jQuery-style selector shorthand over the parsed HTML document.
   Markup $(String selector) => html.$(selector);
+
+  /// Returns all matching elements in the parsed HTML document as a list of [Markup] cursors.
+  List<Markup> $$(String selector) => html.$$(selector);
 
   /// XPath selector shorthand over the parsed HTML document.
   Markup $xpath(String path) => html.$xpath(path);

@@ -27,6 +27,9 @@ import 'dart:io';
 
 /// Utility class for ANSI escape sequences, color formatting, and visibility calculation.
 class Ansi {
+  /// Creates an Ansi instance.
+  const Ansi();
+
   static bool? _overrideEnabled;
 
   /// Whether ANSI styling is enabled.

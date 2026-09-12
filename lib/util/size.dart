@@ -19,10 +19,64 @@ import 'dart:math' as math;
 /// Reachable as `util.size`:
 ///
 /// ```dart
-/// util.size.format(5 * 1024 * 1024); // '5.0 MiB'
-/// util.size.parse('2.5 MiB');        // 2621440
-/// util.size.parse('2.5 MB');         // 2500000
+/// Size.format(5 * 1024 * 1024); // '5.0 MiB'
+/// Size.parse('2.5 MiB');        // 2621440
+/// Size.parse('2.5 MB');         // 2500000
 /// ```
+const SizeAccessor _sizeInstance = SizeAccessor();
+
+/// Renders [bytes] as a human-readable string, e.g. `'1.0 KiB'`.
+String formatBytes(num bytes, {int decimals = 1}) =>
+    _sizeInstance.format(bytes, decimals: decimals);
+
+/// Parses a human-readable size string (e.g. `'2.5 MiB'`, `'500KB'`) into bytes.
+int? parseBytes(String size) => _sizeInstance.parse(size);
+
+/// Extension on [num] for byte size formatting.
+extension NumSizeExtension on num {
+  /// Formats this number of bytes as a human-readable string (e.g. `'1.5 MiB'`).
+  String formatBytes({int decimals = 1}) =>
+      _sizeInstance.format(this, decimals: decimals);
+
+  /// Formats this number of bytes as a human-readable string.
+  String formatted({int decimals = 1}) =>
+      _sizeInstance.format(this, decimals: decimals);
+
+  /// Number of bytes (self).
+  num get bytes => this;
+
+  /// Kilobytes in bytes (1024).
+  num get kb => this * 1024;
+
+  /// Megabytes in bytes (1024 * 1024).
+  num get mb => this * 1024 * 1024;
+
+  /// Gigabytes in bytes (1024 * 1024 * 1024).
+  num get gb => this * 1024 * 1024 * 1024;
+}
+
+// ============================================================================
+// STATIC HELPER HUB: Size
+// ============================================================================
+
+/// Static helper hub for byte size formatting and parsing.
+///
+/// Easily discoverable via IDE auto-complete:
+/// ```dart
+/// final str = Size.format(5 * 1024 * 1024); // '5.0 MiB'
+/// final bytes = Size.parse('2.5 MiB');       // 2621440
+/// ```
+abstract final class Size {
+  Size._();
+
+  /// Renders [bytes] as a human-readable string, e.g. `'1.0 KiB'`.
+  static String format(num bytes, {int decimals = 1}) =>
+      _sizeInstance.format(bytes, decimals: decimals);
+
+  /// Parses a human-readable size string (e.g. `'2.5 MiB'`, `'500KB'`) into bytes.
+  static int? parse(String size) => _sizeInstance.parse(size);
+}
+
 class SizeAccessor {
   /// Creates the accessor. Prefer the shared `util.size` instance.
   const SizeAccessor();
@@ -75,11 +129,11 @@ class SizeAccessor {
   /// empty file; Rule 4 says the honest answer is that there is not one.
   ///
   /// ```dart
-  /// util.size.parse('10 KiB');   // 10240
-  /// util.size.parse('10 KB');    // 10000
-  /// util.size.parse('10 K');     // 10240 — bare letters are binary
-  /// util.size.parse('512');      // 512   — a bare number is bytes
-  /// util.size.parse('10 XB');    // null
+  /// Size.parse('10 KiB');   // 10240
+  /// Size.parse('10 KB');    // 10000
+  /// Size.parse('10 K');     // 10240 — bare letters are binary
+  /// Size.parse('512');      // 512   — a bare number is bytes
+  /// Size.parse('10 XB');    // null
   /// ```
   ///
   /// Both families are accepted and each means what it says: `KiB`/`MiB` and

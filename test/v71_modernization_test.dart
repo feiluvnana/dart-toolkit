@@ -1,9 +1,8 @@
-import 'dart:io';
 import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:test/test.dart';
 
 void main() {
-  group('v7.1 Modernization Tests', () {
+  group('Modernization Tests', () {
     test('Codec static dot shorthands', () {
       final jsonCodec = Codec.json;
       final htmlCodec = Codec.html;
@@ -11,11 +10,11 @@ void main() {
       final tomlCodec = Codec.toml;
       final csvCodec = Codec.csv;
 
-      expect(jsonCodec, equals(format.json));
-      expect(htmlCodec, equals(format.html));
-      expect(yamlCodec, equals(format.yaml));
-      expect(tomlCodec, equals(format.toml));
-      expect(csvCodec, equals(format.csv));
+      expect(jsonCodec, isA<Codec<Json>>());
+      expect(htmlCodec, isA<Codec<Markup>>());
+      expect(yamlCodec, isA<Codec<Json>>());
+      expect(tomlCodec, isA<Codec<Json>>());
+      expect(csvCodec, isA<Codec<Csv>>());
 
       final jsonDoc = jsonCodec.parse('{"status": "ok"}');
       expect(jsonDoc.text('status'), 'ok');
@@ -42,58 +41,21 @@ void main() {
       expect(decoded['active'], isTrue);
     });
 
-    test('system.run with shell: true', () async {
-      final res = await system.run('echo', ['hello'], shell: true);
+    test('System.run with shell: true', () async {
+      final res = await System.run('echo', ['hello'], shell: true);
       expect(res.stdout.trim(), 'hello');
     });
 
-    test('cli.choose string choices', () {
-      final isolatedCli = CliAccessor.isolated();
-      final fmt = isolatedCli.choose('format', ['mp3', 'flac', 'both'], def: 'mp3');
-      isolatedCli.parse(['--format', 'flac']);
+    test('CliParser choose string choices', () {
+      final parser = CliParser();
+      final fmt = parser.choose('format', ['mp3', 'flac', 'both'], def: 'mp3');
+      parser.parse(['--format', 'flac']);
       expect(fmt(), 'flac');
 
-      final isolatedCliDef = CliAccessor.isolated();
-      final fmtDef = isolatedCliDef.choose('format', ['mp3', 'flac', 'both'], def: 'mp3');
-      isolatedCliDef.parse([]);
+      final parserDef = CliParser();
+      final fmtDef = parserDef.choose('format', ['mp3', 'flac', 'both'], def: 'mp3');
+      parserDef.parse([]);
       expect(fmtDef(), 'mp3');
-    });
-
-    test('io.state DiskState operations', () {
-      final tempDir = Directory.systemTemp.createTempSync('disk_state_test_');
-      try {
-        final statePath = io.path.join(tempDir.path, 'state.json');
-        const countSlot = Slot<int>('count');
-        const nameSlot = Slot<String>('name');
-
-        final state = io.state(statePath);
-        expect(state.holds(countSlot), isFalse);
-        expect(state.read(countSlot), isNull);
-
-        state.write(countSlot, 42);
-        state.write(nameSlot, 'alpha');
-        expect(state.holds(countSlot), isTrue);
-        expect(state.read(countSlot), 42);
-        expect(state.read(nameSlot), 'alpha');
-
-        state.save();
-        expect(File(statePath).existsSync(), isTrue);
-
-        // Reload from disk
-        final reloaded = io.state(statePath);
-        expect(reloaded.read(countSlot), 42);
-        expect(reloaded.read(nameSlot), 'alpha');
-
-        reloaded.drop(countSlot);
-        expect(reloaded.holds(countSlot), isFalse);
-        reloaded.save();
-
-        final afterDrop = io.state(statePath);
-        expect(afterDrop.holds(countSlot), isFalse);
-        expect(afterDrop.read(nameSlot), 'alpha');
-      } finally {
-        tempDir.deleteSync(recursive: true);
-      }
     });
 
     test('IterableTerminals: split, countBy, avg', () {
@@ -112,9 +74,9 @@ void main() {
       expect(byFirstLetter['c'], 1);
     });
 
-    test('concurrent.run with progress indicator', () async {
+    test('Concurrent.map with progress indicator', () async {
       final items = [1, 2, 3, 4];
-      final results = await concurrent.run(
+      final results = await Concurrent.map(
         items,
         (x) async {
           await Future<void>.delayed(const Duration(milliseconds: 10));

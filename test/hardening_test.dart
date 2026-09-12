@@ -12,7 +12,7 @@ void main() {
         'a=1; Path=/, b=2; Path=/',
         uri: Uri.parse('https://x.com/login'),
       );
-      expect(jar.cookies.collect(.count()), equals(2));
+      expect(jar.cookies.length, equals(2));
       expect(jar['a'], equals('1'));
       expect(jar['b'], equals('2'));
     });
@@ -94,8 +94,8 @@ Disallow: /
   group('the transport seam', () {
     test('a crawl does not close the client it was handed', () async {
       final mine = Fetcher();
-      await (net.crawl(
-        [Fetch('https://example.test/'.url)].seq,
+      await (Http.crawl(
+        [Fetch('https://example.test/'.url)],
       )..using(mine.call)).run();
 
       // Reaching the socket layer proves the client was not closed. A `Send`
@@ -103,7 +103,7 @@ Disallow: /
       // close on its way out — which is what `Downloader.close` and its
       // `_ownsClient` flag existed to get right.
       await expectLater(
-        mine.send(.get, Uri.parse('http://127.0.0.1:1/'), retries: 0),
+        mine.send(HttpMethod.get, Uri.parse('http://127.0.0.1:1/'), retries: 0),
         throwsA(
           isA<Object>().having(
             (e) => e.toString(),
@@ -122,7 +122,7 @@ Disallow: /
       final client = Fetcher(retries: 9);
       expect(client.retries, equals(9));
       expect(
-        net.crawl(const <Fetch>[]).using(client.call),
+        Http.crawl(const <Fetch>[]).using(client.call),
         isA<Crawl>(),
       );
     });
@@ -130,36 +130,36 @@ Disallow: /
 
   group('selectors', () {
     test('matches tests an element without scanning its parent', () {
-      final q = format.html.parse(
+      final q = parseHtml(
         '<ul><li class="a">1</li><li class="b">2</li></ul>',
       );
-      expect(q.$('li').matching('.a').texts.collect(.list()), equals(['1']));
+      expect(q.$('li').matching('.a').texts, equals(['1']));
       expect(
-        q.$('li').matching(':not(.a)').texts.collect(.list()),
+        q.$('li').matching(':not(.a)').texts,
         equals(['2']),
       );
     });
 
     test('combinators are honoured by a single-element match', () {
-      final q = format.html.parse(
+      final q = parseHtml(
         '<div class="w"><p>a</p><span>b</span><span>c</span></div>',
       );
       expect(
-        q.$('span').matching('p + span').texts.collect(.list()),
+        q.$('span').matching('p + span').texts,
         equals(['b']),
       );
       expect(
-        q.$('span').matching('.w > span').texts.collect(.list()),
+        q.$('span').matching('.w > span').texts,
         equals(['b', 'c']),
       );
       expect(
-        q.$('span').matching('p ~ span').texts.collect(.list()),
+        q.$('span').matching('p ~ span').texts,
         equals(['b', 'c']),
       );
     });
 
     test('closest walks ancestors', () {
-      final q = format.html.parse(
+      final q = parseHtml(
         '<div class="outer"><div class="inner"><b>x</b></div></div>',
       );
       expect(q.$('b').closest('.outer').count, equals(1));
@@ -168,7 +168,7 @@ Disallow: /
 
     test('a large child-combinator query stays linear', () {
       final rows = List.generate(2000, (i) => '<li class="i">$i</li>').join();
-      final q = format.html.parse('<ul id="l">$rows</ul>');
+      final q = parseHtml('<ul id="l">$rows</ul>');
       final watch = Stopwatch()..start();
       expect(q.$('#l > li.i').count, equals(2000));
       watch.stop();
@@ -181,9 +181,7 @@ Disallow: /
     test('cancelling the flow stops launching work', () async {
       var started = 0;
       final pool = Pool<int>(size: 1);
-      // `.stream` on purpose: cancelling a subscription is outside the
-      // vocabulary, and the one word at the boundary says so.
-      final stream = pool.flow(List.generate(50, (int i) => i).seq, (i) async {
+      final stream = pool.flow(List.generate(50, (int i) => i), (int i) async {
         started++;
         await Future<void>.delayed(const Duration(milliseconds: 1));
         return i;
@@ -201,31 +199,22 @@ Disallow: /
     });
 
     test('results still arrive in completion order', () async {
-      final out = await [30, 10, 20].flow
-          .through(
-            .map.async(
-              (int ms) async {
-                await Future<void>.delayed(Duration(milliseconds: ms));
-                return ms;
-              },
-              size: 3,
-              ordered: false,
-            ),
-          )
-          .collect(.list());
+      final pool = Pool<int>(size: 3);
+      final out = await pool.flow([30, 10, 20], (int ms) async {
+        await Future<void>.delayed(Duration(milliseconds: ms));
+        return ms;
+      }).toList();
       expect(out, equals([10, 20, 30]));
     });
 
     test('cancelling a flow.run stops launching work', () async {
       var started = 0;
-      final stream = List.generate(50, (int i) => i).flow
-          .through(
-            .map.async((i) async {
-              started++;
-              await Future<void>.delayed(const Duration(milliseconds: 1));
-              return i;
-            }, size: 1),
-          );
+      final pool = Pool<int>(size: 1);
+      final stream = pool.flow(List.generate(50, (int i) => i), (int i) async {
+        started++;
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+        return i;
+      });
 
       final seen = <int>[];
       final subscription = stream.listen(seen.add);
@@ -243,7 +232,7 @@ Disallow: /
     test('retries means attempts after the first', () async {
       var calls = 0;
       await expectLater(
-        concurrent.retry(
+        Concurrent.retry(
           () async {
             calls++;
             throw StateError('nope');
@@ -259,7 +248,7 @@ Disallow: /
     test('times means total attempts', () async {
       var calls = 0;
       await expectLater(
-        concurrent.retry(
+        Concurrent.retry(
           () async {
             calls++;
             throw StateError('nope');
@@ -282,10 +271,10 @@ Disallow: /
     ''');
 
     test('pick keeps the field type', () {
-      final String? title = res.parse(format.html).pick(Field.text('h1'));
-      final List<String> tags = res.parse(format.html).pick(Field.texts('.t'));
+      final String? title = res.parse(Codec.html).pick(Field.text('h1'));
+      final List<String> tags = res.parse(Codec.html).pick(Field.texts('.t'));
       final List<String> hrefs = res
-          .parse(format.html)
+          .parse(Codec.html)
           .pick(Field.attrs('.row a', 'href'));
       expect(title, equals('Title'));
       expect(tags, equals(['a', 'b']));
@@ -294,13 +283,13 @@ Disallow: /
 
     test('a custom read is typed too', () {
       final int count = res
-          .parse(format.html)
+          .parse(Codec.html)
           .pick(Field.fn((el) => el.querySelectorAll('.row').length));
       expect(count, equals(2));
     });
 
     test('the string shorthand still works', () {
-      final data = res.parse(format.html).extract({
+      final data = res.parse(Codec.html).extract({
         'title': 'h1',
         'tags': ['.t'],
         'rows': [
@@ -320,7 +309,7 @@ Disallow: /
     });
 
     test('Fields and shorthand mix in one schema', () {
-      final data = res.parse(format.html).extract({
+      final data = res.parse(Codec.html).extract({
         'title': Field.text('h1'),
         'tags': ['.t'],
       });
@@ -329,62 +318,61 @@ Disallow: /
     });
   });
 
-  group('io.async mirrors io', () {
+  group('Files mirrors sync and async operations', () {
     test('parent has an async twin, like every other disk operation', () async {
-      final dir = io.dir.temp('dt_parent_');
+      final dir = Files.tempDirSync('dt_parent_');
       try {
-        final blocking = io.path.join(dir.path, 'a', 'b', 'file.txt');
-        final future = io.path.join(dir.path, 'c', 'd', 'file.txt');
-        io.dir.makeParent(blocking);
-        // It was the one name on `io` that touches the disk and had no twin
-        // here, which is exactly what Rule 3 says a mirror may not do.
-        await io.async.dir.makeParent(future);
+        final blocking = Files.join(dir.path, 'a', 'b', 'file.txt');
+        final future = Files.join(dir.path, 'c', 'd', 'file.txt');
+        Files.makeDirSync(Files.dirname(blocking));
+        await Files.makeDir(Files.dirname(future));
 
         expect(
-          io.has(io.path.dirname(blocking)),
+          Files.isFile(Files.dirname(blocking)),
           isFalse,
           reason: 'a folder, not a file',
         );
-        expect(Directory(io.path.dirname(blocking)).existsSync(), isTrue);
-        expect(Directory(io.path.dirname(future)).existsSync(), isTrue);
+        expect(Directory(Files.dirname(blocking)).existsSync(), isTrue);
+        expect(Directory(Files.dirname(future)).existsSync(), isTrue);
       } finally {
-        io.remove(dir.path);
+        Files.removeSync(dir.path);
       }
     });
 
     test('both write atomically to the same place', () async {
-      final dir = io.dir.temp('dt_io_');
+      final dir = Files.tempDirSync('dt_io_');
       try {
-        final a = io.path.join(dir.path, 'sync.txt');
-        final b = io.path.join(dir.path, 'async.txt');
-        io.write(a, 'one');
-        await io.async.write(b, 'two');
-        expect(io.read(a), equals('one'));
-        expect(await io.async.read(b), equals('two'));
-        expect(io.has(a), isTrue);
-        expect(await io.async.has(b), isTrue);
+        final a = Files.join(dir.path, 'sync.txt');
+        final b = Files.join(dir.path, 'async.txt');
+        Files.writeTextSync(a, 'one');
+        await Files.writeText(b, 'two');
+        expect(Files.readTextSync(a), equals('one'));
+        expect(await Files.readText(b), equals('two'));
+        expect(Files.exists(a), isTrue);
+        expect(Files.exists(b), isTrue);
         expect(
-          await io.async.dir.walk(dir.path, only: .file).collect(.list()),
+          await Files.walk(dir.path),
           hasLength(2),
         );
-        expect(await io.async.remove(b), isTrue);
-        expect(await io.async.has(b), isFalse);
+        expect(await Files.remove(b), isTrue);
+        expect(Files.exists(b), isFalse);
       } finally {
-        io.remove(dir.path);
+        Files.removeSync(dir.path);
       }
     });
 
     test('json round-trips through both', () async {
-      final dir = io.dir.temp('dt_json_');
+      final dir = Files.tempDirSync('dt_json_');
       try {
-        final path = io.path.join(dir.path, 'd.json');
-        io.dump(path, {'n': 1});
-        expect((await format.json.read(path)).number('n'), equals(1));
-        await io.async.dump(path, {'n': 2});
-        final read = await format.json.read(path);
-        expect(read.number('n'), equals(2));
+        final path = Files.join(dir.path, 'd.json');
+        Files.writeJsonSync(path, {'n': 1});
+        final readSync = parseJson(Files.readTextSync(path));
+        expect(readSync.number('n'), equals(1));
+        await Files.writeJson(path, {'n': 2});
+        final readAsync = parseJson(await Files.readText(path));
+        expect(readAsync.number('n'), equals(2));
       } finally {
-        io.remove(dir.path);
+        Files.removeSync(dir.path);
       }
     });
   });

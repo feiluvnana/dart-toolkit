@@ -5,6 +5,7 @@
 /// for prompts, plus [Terminal] and [Cursor] for raw control.
 library;
 
+import 'ansi.dart';
 import 'logger.dart';
 import 'progress.dart';
 import 'reader.dart';
@@ -30,15 +31,23 @@ final ConsoleWriter _writer = ConsoleWriter();
 final ConsoleLogger _logger = ConsoleLogger(_writer);
 final ConsoleReader _reader = ConsoleReader();
 
-/// Entry point for terminal IO, reachable as `system.console`.
-///
-/// Each concern lives in its own sub-namespace:
-///
-/// ```dart
-/// system.console.logger.step(1, 3, 'Fetching');
-/// system.console.writer.rule('Summary');
-/// final go = await system.console.reader.confirm('Continue?');
-/// ```
+/// The shared status logger.
+ConsoleLogger get logger => _logger;
+
+/// The shared terminal console writer.
+ConsoleWriter get consoleWriter => _writer;
+
+/// The shared terminal reader.
+ConsoleReader get consoleReader => _reader;
+
+/// Progress bar for tracking multi-step terminal tasks.
+typedef ProgressBar = Progress;
+
+/// ANSI styling helper.
+const Ansi ansi = Ansi();
+
+/// The legacy `system.console` accessor. Prefer top-level [logger], [consoleWriter], or [ProgressBar].
+@Deprecated('Use top-level logger, consoleWriter, consoleReader, or ProgressBar instead')
 class ConsoleAccessor {
   /// Creates the accessor. Prefer the shared `system.console` instance.
   const ConsoleAccessor();

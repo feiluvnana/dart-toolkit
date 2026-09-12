@@ -268,23 +268,6 @@ void main() {
       expect(map.pairs.toList(), equals([('b', 2), ('a', 3), ('c', 1)]));
       expect(map.invert(), equals({2: ['b'], 3: ['a'], 1: ['c']}));
     });
-
-    test('SlottedMap on Map<String, Object?>', () {
-      const idSlot = Slot<int>('id');
-      const nameSlot = Slot<String>('name');
-
-      final data = <String, Object?>{};
-      data.write(idSlot, 42);
-      data.write(nameSlot, 'Dart');
-
-      expect(data.read(idSlot), equals(42));
-      expect(data.read(nameSlot), equals('Dart'));
-      expect(data.holds(idSlot), isTrue);
-
-      data.drop(idSlot);
-      expect(data.holds(idSlot), isFalse);
-      expect(data.read(idSlot), isNull);
-    });
   });
 
   group('Streams helper & StreamExtensions', () {

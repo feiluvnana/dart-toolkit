@@ -16,8 +16,8 @@ import 'dart:async';
 ///
 /// ```dart
 /// final clock = Stopwatch()..start();
-/// await util.time.wait(250.ms);
-/// print(util.time.format(clock.elapsed)); // '00:00'
+/// await Time.wait(250.ms);
+/// print(Time.format(clock.elapsed)); // '00:00'
 /// ```
 ///
 /// The stopwatch is `dart:core`'s, started at the call site. `util.time.clock`
@@ -25,6 +25,72 @@ import 'dart:async';
 /// and `epoch` — `date.toUtc().toIso8601String()` and
 /// `date.millisecondsSinceEpoch`. A member that only renames a `dart:core`
 /// one-liner is the shape `system.exit` was deleted for.
+const TimeAccessor _timeInstance = TimeAccessor();
+
+/// Formats [duration] as `mm:ss`, or `hh:mm:ss` past an hour.
+String formatDuration(Duration duration) => _timeInstance.format(duration);
+
+/// A filename-safe timestamp, `yyyyMMdd_HHmmss`.
+String timestamp([DateTime? date]) => _timeInstance.stamp(date);
+
+/// A coarse human description of how long ago [past] was (e.g. `'5m ago'`).
+String timeAgo(DateTime past, [DateTime? relativeTo]) =>
+    _timeInstance.ago(past, relativeTo);
+
+/// Parses a date string into [DateTime], or `null` if unparseable.
+DateTime? parseTime(String text) => _timeInstance.parse(text);
+
+/// Extension on [Duration] for formatting.
+extension DurationFormatExtension on Duration {
+  /// Formats this duration as `mm:ss` or `hh:mm:ss`.
+  String format() => _timeInstance.format(this);
+}
+
+// ============================================================================
+// STATIC HELPER HUB: Time
+// ============================================================================
+
+/// Static helper hub for timestamps, duration formatting, and time calculations.
+///
+/// Easily discoverable via IDE auto-complete:
+/// ```dart
+/// final str = Time.format(const Duration(minutes: 2)); // '02:00'
+/// final stamp = Time.stamp();                          // '20260912_220000'
+/// final ago = Time.ago(DateTime.now());                // 'just now'
+/// final date = Time.parse('2026-09-12');
+/// await Time.delay(const Duration(milliseconds: 500));
+/// ```
+abstract final class Time {
+  Time._();
+
+  /// Formats [duration] as `mm:ss`, or `hh:mm:ss` past an hour.
+  static String format(Duration duration) => _timeInstance.format(duration);
+
+  /// A filename-safe timestamp, `yyyyMMdd_HHmmss`.
+  static String stamp([DateTime? date]) => _timeInstance.stamp(date);
+
+  /// A coarse human description of how long ago [past] was (e.g. `'5m ago'`).
+  static String ago(DateTime past, [DateTime? relativeTo]) =>
+      _timeInstance.ago(past, relativeTo);
+
+  /// Parses a date string into [DateTime], or `null` if unparseable.
+  static DateTime? parse(String text) => _timeInstance.parse(text);
+
+  /// Parses [text] into a [Duration], or `null` if unparseable.
+  static Duration? span(String text) => _timeInstance.span(text);
+
+  /// Strips the time component off [date], returning midnight in the same timezone.
+  static DateTime day(DateTime date) => _timeInstance.day(date);
+
+  /// Waits for [duration] without blocking the isolate.
+  static Future<void> delay(Duration duration) =>
+      Future<void>.delayed(duration);
+
+  /// Waits for [duration] without blocking the isolate.
+  static Future<void> wait(Duration duration) =>
+      Future<void>.delayed(duration);
+}
+
 class TimeAccessor {
   /// Creates the accessor. Prefer the shared `util.time` instance.
   const TimeAccessor();
@@ -139,7 +205,7 @@ class TimeAccessor {
   ///
   /// ```dart
   /// // setup: final row = const {'date': '2026-01-01'};
-  /// final since = util.time.parse(row['date'] ?? '') ?? DateTime(2000);
+  /// final since = Time.parse(row['date'] ?? '') ?? DateTime(2000);
   /// ```
   DateTime? parse(String text) {
     final trimmed = text.trim();
@@ -236,7 +302,7 @@ class TimeAccessor {
   ///
   /// ```dart
   /// // setup: final row = const {'retry_after': '30s'};
-  /// final wait = util.time.span(row['retry_after'] ?? '') ?? 30.s;
+  /// final wait = Time.span(row['retry_after'] ?? '') ?? 30.s;
   /// ```
   Duration? span(String text) {
     final trimmed = text.trim().toLowerCase();
@@ -272,7 +338,7 @@ class TimeAccessor {
   /// no one-liner for it.
   ///
   /// ```dart
-  /// rows.collect(.group.by((r) => util.time.day(r.seen)));
+  /// rows.groupBy((r) => Time.day(r.seen));
   /// ```
   DateTime day(DateTime date) => date.isUtc
       ? DateTime.utc(date.year, date.month, date.day)

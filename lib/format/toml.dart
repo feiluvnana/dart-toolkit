@@ -18,8 +18,8 @@ import 'format.dart';
 /// Entry point for TOML, reachable as `format.toml`.
 ///
 /// ```dart
-/// final cargo = await format.toml.read('Cargo.toml');
-/// cargo.text('package.version');
+/// final cargo = Formats.toml('version = "1.0.0"');
+/// cargo.text('version');
 /// ```
 ///
 /// Spelled member for member like [JsonAccessor] and [YamlAccessor], because

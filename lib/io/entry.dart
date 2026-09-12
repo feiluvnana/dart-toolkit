@@ -18,7 +18,7 @@ library;
 
 import 'dart:io';
 
-import 'path.dart';
+import 'package:path/path.dart' as p;
 
 // ============================================================================
 // FILESYSTEM ENTRIES (FileSystemEntry)
@@ -51,9 +51,9 @@ enum FileSystemEntryKind {
 /// that lets every `io` member stay complete in itself:
 ///
 /// ```dart
-/// for (final entry in io.dir.list('out').collect(.list())) {
-///   if (entry.isdir) continue;
-///   if (io.path.ext(entry.path) == '.part') io.remove(entry.path);
+/// for (final entry in Files.listSync('out')) {
+///   if (entry.isDir) continue;
+///   if (fileExtension(entry.path) == '.part') Files.removeSync(entry.path);
 /// }
 /// ```
 ///
@@ -98,7 +98,12 @@ final class FileSystemEntry {
   /// were `io.path.stem(e.path)`, `io.path.ext(e.path)` and
   /// `io.path.dirname(e.path)` under four other names, on the same input, and
   /// `io.path` is the domain that owns string arithmetic on a path.
-  String get name => const PathAccessor().filename(path);
+  String get name => p.basename(path);
+
+  /// Whether this entry currently exists on disk.
+  bool get exists =>
+      FileSystemEntity.typeSync(path, followLinks: false) !=
+      FileSystemEntityType.notFound;
 
   /// Whether this is a regular file.
   ///
@@ -108,11 +113,20 @@ final class FileSystemEntry {
   /// are the cheap question about a value you are holding.
   bool get isfile => kind == FileSystemEntryKind.file;
 
+  /// CamelCase alias for [isfile].
+  bool get isFile => isfile;
+
   /// Whether this is a directory.
   bool get isdir => kind == FileSystemEntryKind.directory;
 
+  /// CamelCase alias for [isdir].
+  bool get isDir => isdir;
+
   /// Whether this is a symbolic link.
   bool get islink => kind == FileSystemEntryKind.link;
+
+  /// CamelCase alias for [islink].
+  bool get isLink => islink;
 
   /// Whether this entry holds nothing — zero bytes, for a file or a link.
   ///

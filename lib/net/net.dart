@@ -10,10 +10,10 @@
 /// and reading them is [Reply.parse] plus a codec from `format`:
 ///
 /// ```dart
-/// res.parse(format.html).$('h1').text;
-/// res.parse(format.json).at('data.items');
-/// res.parse(format.robots).allowed(url);
-/// res.parse(format.sitemap);
+/// res.parse(Codec.html).$('h1').text;
+/// res.parse(Codec.json).at('data.items');
+/// Formats.robots(res.text).allowed(url);
+/// Formats.sitemap(res.text);
 /// ```
 ///
 /// `net.robots(text)` and `net.sitemap(text)` were two parsers declared here
@@ -44,12 +44,15 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as pkg_http;
 
+import '../io/entry.dart';
+import '../src/method.dart';
 import 'crawl.dart';
 import 'fetch.dart';
 import 'http.dart';
 import 'serve.dart';
 import 'serve.dart' as serve_impl;
 
+export '../src/method.dart';
 export 'cache.dart';
 export 'crawl.dart';
 export 'fetch.dart';
@@ -58,38 +61,490 @@ export 'http.dart';
 export 'serve.dart' hide onceOn, serveOn;
 
 // ============================================================================
-// NET DOMAIN (net.*) - HTTP, Crawling & Listening
+// TOP-LEVEL HTTP, CRAWLER & SERVER HELPERS
 // ============================================================================
+
+/// Idiomatic alias for [Reply].
+typedef Response = Reply;
+
+/// Idiomatic alias for [Crawl].
+typedef Crawler = Crawl;
 
 Fetcher _shared = Fetcher();
 
-/// The `net` domain: HTTP, crawling and listening.
-const NetAccessor net = NetAccessor();
+/// The shared HTTP client.
+Fetcher get httpClient => Zone.current[#_netClient] as Fetcher? ?? _shared;
 
-/// Entry point for networking and scraping.
+/// Sends a GET request to [url].
+Future<Response> get(
+  Object url, {
+  Map<String, String>? headers,
+  Duration? timeout,
+  int? redirects,
+  int? retries,
+  Encoding? encoding,
+  Fetch? fetch,
+}) => httpClient.get(
+  url is Uri ? url : coerce(url.toString()),
+  headers: headers,
+  timeout: timeout,
+  redirects: redirects,
+  retries: retries,
+  encoding: encoding,
+  fetch: fetch,
+);
+
+Body? _coerceBody(Object? body) {
+  if (body == null) return null;
+  if (body is Body) return body;
+  if (body is String) return Body.text(body);
+  if (body is List<int>) return Body.bytes(body);
+  if (body is Map<String, String>) return Body.form(body);
+  if (body is Map || body is List) return Body.json(body);
+  return Body.text(body.toString());
+}
+
+/// Sends a POST request to [url].
+Future<Response> post(
+  Object url, {
+  Object? body,
+  Map<String, String>? headers,
+  Duration? timeout,
+  int? redirects,
+  int? retries,
+  Encoding? encoding,
+  Fetch? fetch,
+}) => httpClient.post(
+  url is Uri ? url : coerce(url.toString()),
+  body: _coerceBody(body),
+  headers: headers,
+  timeout: timeout,
+  redirects: redirects,
+  retries: retries,
+  encoding: encoding,
+  fetch: fetch,
+);
+
+/// Sends a PUT request to [url].
+Future<Response> put(
+  Object url, {
+  Object? body,
+  Map<String, String>? headers,
+  Duration? timeout,
+  int? redirects,
+  int? retries,
+  Encoding? encoding,
+  Fetch? fetch,
+}) => httpClient.put(
+  url is Uri ? url : coerce(url.toString()),
+  body: _coerceBody(body),
+  headers: headers,
+  timeout: timeout,
+  redirects: redirects,
+  retries: retries,
+  encoding: encoding,
+  fetch: fetch,
+);
+
+/// Sends a DELETE request to [url].
+Future<Response> delete(
+  Object url, {
+  Object? body,
+  Map<String, String>? headers,
+  Duration? timeout,
+  int? redirects,
+  int? retries,
+  Encoding? encoding,
+  Fetch? fetch,
+}) => httpClient.delete(
+  url is Uri ? url : coerce(url.toString()),
+  body: _coerceBody(body),
+  headers: headers,
+  timeout: timeout,
+  redirects: redirects,
+  retries: retries,
+  encoding: encoding,
+  fetch: fetch,
+);
+
+/// Sends a PATCH request to [url].
+Future<Response> patch(
+  Object url, {
+  Object? body,
+  Map<String, String>? headers,
+  Duration? timeout,
+  int? redirects,
+  int? retries,
+  Encoding? encoding,
+  Fetch? fetch,
+}) => httpClient.patch(
+  url is Uri ? url : coerce(url.toString()),
+  body: _coerceBody(body),
+  headers: headers,
+  timeout: timeout,
+  redirects: redirects,
+  retries: retries,
+  encoding: encoding,
+  fetch: fetch,
+);
+
+/// Sends a HEAD request to [url].
+Future<Response> head(
+  Object url, {
+  Map<String, String>? headers,
+  Duration? timeout,
+  int? redirects,
+  int? retries,
+  Fetch? fetch,
+}) => httpClient.head(
+  url is Uri ? url : coerce(url.toString()),
+  headers: headers,
+  timeout: timeout,
+  redirects: redirects,
+  retries: retries,
+  fetch: fetch,
+);
+
+/// Downloads [url] to [path] atomically.
+Future<FileSystemEntry> download(
+  Object url,
+  String path, {
+  void Function(int received, int total)? onProgress,
+  Map<String, String>? headers,
+  int? retries,
+}) => httpClient.download(
+  url is Uri ? url : coerce(url.toString()),
+  path,
+  onprogress: onProgress,
+  headers: headers,
+  retries: retries,
+);
+
+/// Creates and configures a web crawl from [seeds].
 ///
-/// Requests go through [http], a shared [Fetcher]; crawls through [crawl].
-/// Reading what comes back is `format`, through [Reply.parse]. For a client
-/// of your own, construct a [Fetcher] and hand it to [use] — or to
-/// [Crawl.using], which needs no singleton at all.
+/// Accepts a list of [Uri], [String], or [Fetch] objects.
+Crawl _crawl(
+  Iterable<dynamic> seeds, [
+  Iterable<dynamic> Function(Response res)? next,
+]) {
+  final fetchSeeds = seeds.map(
+    (s) => s is Fetch ? s : Fetch(s is Uri ? s : coerce(s.toString())),
+  );
+  final nextFn =
+      next == null
+          ? null
+          : (Reply res) {
+            final result = next(res);
+            return result.map(
+              (r) =>
+                  r is Fetch ? r : Fetch(r is Uri ? r : coerce(r.toString())),
+            );
+          };
+  return Crawl(fetchSeeds, nextFn);
+}
+
+/// Creates and configures a web crawl from [seeds].
 ///
+/// Accepts a list of [Uri], [String], or [Fetch] objects.
+Crawl crawl(
+  Iterable<dynamic> seeds, [
+  Iterable<dynamic> Function(Response res)? next,
+]) => _crawl(seeds, next);
+
+/// Sends an HTTP request with arbitrary [method] to [url].
+Future<Response> send(
+  HttpMethod method,
+  Object url, {
+  Object? body,
+  Map<String, String>? headers,
+  Duration? timeout,
+  int? redirects,
+  int? retries,
+  Encoding? encoding,
+  Fetch? fetch,
+}) => httpClient.send(
+  method,
+  url is Uri ? url : coerce(url.toString()),
+  body: _coerceBody(body),
+  headers: headers,
+  timeout: timeout,
+  redirects: redirects,
+  retries: retries,
+  encoding: encoding,
+  fetch: fetch,
+);
+
+/// Binds [port] and answers incoming HTTP requests with [handler].
+Future<Server> serve(
+  int port,
+  FutureOr<Served> Function(Asked req) handler, {
+  String host = 'localhost',
+}) => serve_impl.serveOn(port, handler, host: host);
+
+/// Serves [port] until [handler] returns a non-null value, then replies and closes.
+Future<R?> serveOnce<R extends Object>(
+  int port,
+  FutureOr<R?> Function(Asked req) handler, {
+  String host = 'localhost',
+  Served reply = const Served.text('Done. You can close this tab.'),
+  Duration? timeout,
+}) => serve_impl.onceOn(
+  port,
+  handler,
+  host: host,
+  reply: reply,
+  timeout: timeout,
+);
+
+/// Serves [port] until [handler] returns a non-null value, then replies and closes.
+Future<R?> once<R extends Object>(
+  int port,
+  FutureOr<R?> Function(Asked req) handler, {
+  String host = 'localhost',
+  Served reply = const Served.text('Done. You can close this tab.'),
+  Duration? timeout,
+}) => serveOnce(
+  port,
+  handler,
+  host: host,
+  reply: reply,
+  timeout: timeout,
+);
+
+// ============================================================================
+// STATIC HELPER HUB: Http
+// ============================================================================
+
+/// Static helper hub for HTTP requests, downloads, and web servers.
+///
+/// Easily discoverable via IDE auto-complete:
 /// ```dart
-/// final res = await net.http.send(.get, 'https://example.com'.url);
-/// res.parse(format.html).$('h2.title').texts.collect(.foreach(print));
+/// final res = await Http.get('https://api.github.com/users/octocat');
+/// if (res.ok) {
+///   print(res.text);
+/// }
 /// ```
-class NetAccessor {
-  /// Creates the accessor. Prefer the shared [net] instance.
-  const NetAccessor();
+abstract final class Http {
+  Http._();
 
-  /// The shared HTTP client: requests, downloads and [Fetcher.sync].
-  ///
-  /// A [Send], so it is also the default transport of every [Crawl].
-  Fetcher get http => Zone.current[#_netClient] as Fetcher? ?? _shared;
+  /// The shared HTTP client.
+  static Fetcher get client => httpClient;
 
-  /// Runs [action] within an async Zone where [net.http] resolves to [client].
-  ///
-  /// Accepts a [Fetcher] or a `package:http` [pkg_http.Client].
-  Future<R> withClient<R>(Object client, FutureOr<R> Function() action) async {
+  /// Sends a GET request to [url].
+  static Future<Response> get(
+    Object url, {
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Encoding? encoding,
+    Fetch? fetch,
+  }) =>
+      httpClient.get(
+        url is Uri ? url : coerce(url.toString()),
+        headers: headers,
+        timeout: timeout,
+        redirects: redirects,
+        retries: retries,
+        encoding: encoding,
+        fetch: fetch,
+      );
+
+  /// Sends a POST request to [url].
+  static Future<Response> post(
+    Object url, {
+    Object? body,
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Encoding? encoding,
+    Fetch? fetch,
+  }) =>
+      httpClient.post(
+        url is Uri ? url : coerce(url.toString()),
+        body: _coerceBody(body),
+        headers: headers,
+        timeout: timeout,
+        redirects: redirects,
+        retries: retries,
+        encoding: encoding,
+        fetch: fetch,
+      );
+
+  /// Sends a PUT request to [url].
+  static Future<Response> put(
+    Object url, {
+    Object? body,
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Encoding? encoding,
+    Fetch? fetch,
+  }) =>
+      httpClient.put(
+        url is Uri ? url : coerce(url.toString()),
+        body: _coerceBody(body),
+        headers: headers,
+        timeout: timeout,
+        redirects: redirects,
+        retries: retries,
+        encoding: encoding,
+        fetch: fetch,
+      );
+
+  /// Sends a DELETE request to [url].
+  static Future<Response> delete(
+    Object url, {
+    Object? body,
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Encoding? encoding,
+    Fetch? fetch,
+  }) =>
+      httpClient.delete(
+        url is Uri ? url : coerce(url.toString()),
+        body: _coerceBody(body),
+        headers: headers,
+        timeout: timeout,
+        redirects: redirects,
+        retries: retries,
+        encoding: encoding,
+        fetch: fetch,
+      );
+
+  /// Sends a PATCH request to [url].
+  static Future<Response> patch(
+    Object url, {
+    Object? body,
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Encoding? encoding,
+    Fetch? fetch,
+  }) =>
+      httpClient.patch(
+        url is Uri ? url : coerce(url.toString()),
+        body: _coerceBody(body),
+        headers: headers,
+        timeout: timeout,
+        redirects: redirects,
+        retries: retries,
+        encoding: encoding,
+        fetch: fetch,
+      );
+
+  /// Sends a HEAD request to [url].
+  static Future<Response> head(
+    Object url, {
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Fetch? fetch,
+  }) =>
+      httpClient.head(
+        url is Uri ? url : coerce(url.toString()),
+        headers: headers,
+        timeout: timeout,
+        redirects: redirects,
+        retries: retries,
+        fetch: fetch,
+      );
+
+  /// Downloads [url] to [path] atomically.
+  static Future<FileSystemEntry> download(
+    Object url,
+    String path, {
+    void Function(int received, int total)? onProgress,
+    Map<String, String>? headers,
+    int? retries,
+  }) =>
+      httpClient.download(
+        url is Uri ? url : coerce(url.toString()),
+        path,
+        onprogress: onProgress,
+        headers: headers,
+        retries: retries,
+      );
+
+  /// Creates and configures a web crawl from [seeds].
+  static Crawl crawl(
+    Iterable<dynamic> seeds, [
+    Iterable<dynamic> Function(Response res)? next,
+  ]) =>
+      _crawl(seeds, next);
+
+  /// Binds [port] and answers incoming HTTP requests with [handler].
+  static Future<Server> serve(
+    int port,
+    FutureOr<Served> Function(Asked req) handler, {
+    String host = 'localhost',
+  }) =>
+      serve_impl.serveOn(port, handler, host: host);
+
+  /// Sends a request with arbitrary [method] to [url].
+  static Future<Response> send(
+    HttpMethod method,
+    Object url, {
+    Object? body,
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Encoding? encoding,
+    Fetch? fetch,
+  }) =>
+      httpClient.send(
+        method,
+        url is Uri ? url : coerce(url.toString()),
+        body: _coerceBody(body),
+        headers: headers,
+        timeout: timeout,
+        redirects: redirects,
+        retries: retries,
+        encoding: encoding,
+        fetch: fetch,
+      );
+
+  /// Serves [port] until [handler] returns a non-null value, then replies and closes.
+  static Future<R?> serveOnce<R extends Object>(
+    int port,
+    FutureOr<R?> Function(Asked req) handler, {
+    String host = 'localhost',
+    Served reply = const Served.text('Done. You can close this tab.'),
+    Duration? timeout,
+  }) =>
+      serve_impl.onceOn(
+        port,
+        handler,
+        host: host,
+        reply: reply,
+        timeout: timeout,
+      );
+
+  /// Serves [port] until [handler] returns a non-null value, then replies and closes.
+  static Future<R?> once<R extends Object>(
+    int port,
+    FutureOr<R?> Function(Asked req) handler, {
+    String host = 'localhost',
+    Served reply = const Served.text('Done. You can close this tab.'),
+    Duration? timeout,
+  }) =>
+      serveOnce(
+        port,
+        handler,
+        host: host,
+        reply: reply,
+        timeout: timeout,
+      );
+
+  /// Runs [action] within an async Zone where [httpClient] resolves to [client].
+  static Future<R> withClient<R>(Object client, FutureOr<R> Function() action) async {
     final fetcher = client is Fetcher
         ? client
         : client is pkg_http.Client
@@ -100,213 +555,11 @@ class NetAccessor {
     return runZoned(action, zoneValues: {#_netClient: fetcher});
   }
 
-  /// Sends a GET request to [url] using [http].
-  Future<Reply> get(
-    Uri url, {
-    Map<String, String>? headers,
-    Duration? timeout,
-    int? redirects,
-    int? retries,
-    Encoding? encoding,
-    Fetch? fetch,
-  }) => http.get(
-    url,
-    headers: headers,
-    timeout: timeout,
-    redirects: redirects,
-    retries: retries,
-    encoding: encoding,
-    fetch: fetch,
-  );
-
-  /// Sends a POST request to [url] using [http].
-  Future<Reply> post(
-    Uri url, {
-    Body? body,
-    Map<String, String>? headers,
-    Duration? timeout,
-    int? redirects,
-    int? retries,
-    Encoding? encoding,
-    Fetch? fetch,
-  }) => http.post(
-    url,
-    body: body,
-    headers: headers,
-    timeout: timeout,
-    redirects: redirects,
-    retries: retries,
-    encoding: encoding,
-    fetch: fetch,
-  );
-
-  /// Sends a PUT request to [url] using [http].
-  Future<Reply> put(
-    Uri url, {
-    Body? body,
-    Map<String, String>? headers,
-    Duration? timeout,
-    int? redirects,
-    int? retries,
-    Encoding? encoding,
-    Fetch? fetch,
-  }) => http.put(
-    url,
-    body: body,
-    headers: headers,
-    timeout: timeout,
-    redirects: redirects,
-    retries: retries,
-    encoding: encoding,
-    fetch: fetch,
-  );
-
-  /// Sends a DELETE request to [url] using [http].
-  Future<Reply> delete(
-    Uri url, {
-    Body? body,
-    Map<String, String>? headers,
-    Duration? timeout,
-    int? redirects,
-    int? retries,
-    Encoding? encoding,
-    Fetch? fetch,
-  }) => http.delete(
-    url,
-    body: body,
-    headers: headers,
-    timeout: timeout,
-    redirects: redirects,
-    retries: retries,
-    encoding: encoding,
-    fetch: fetch,
-  );
-
-  /// Sends a PATCH request to [url] using [http].
-  Future<Reply> patch(
-    Uri url, {
-    Body? body,
-    Map<String, String>? headers,
-    Duration? timeout,
-    int? redirects,
-    int? retries,
-    Encoding? encoding,
-    Fetch? fetch,
-  }) => http.patch(
-    url,
-    body: body,
-    headers: headers,
-    timeout: timeout,
-    redirects: redirects,
-    retries: retries,
-    encoding: encoding,
-    fetch: fetch,
-  );
-
-  /// Sends a HEAD request to [url] using [http].
-  Future<Reply> head(
-    Uri url, {
-    Map<String, String>? headers,
-    Duration? timeout,
-    int? redirects,
-    int? retries,
-    Fetch? fetch,
-  }) => http.head(
-    url,
-    headers: headers,
-    timeout: timeout,
-    redirects: redirects,
-    retries: retries,
-    fetch: fetch,
-  );
-
-  /// A crawl over [seeds], following whatever [next] returns.
-  ///
-  /// See [Crawl]. The five entry points of 5.5.0 — `crawl(uri)`, `.all`,
-  /// `.seed`, `.html`, `.file`, `.sitemap` — are this one, because a seed is
-  /// a [Fetch] and a [Fetch] takes any URL the library can answer:
-  ///
-  /// ```dart no-compile
-  /// net.crawl([Fetch(url)].seq, next);                     // was crawl(uri)
-  /// net.crawl(urls.map(Fetch.new), next);              // was .all(uris)
-  /// net.crawl([Fetch(coerce(markup))].seq, next);          // was .html(markup)
-  /// net.crawl([Fetch(Uri.file(path))].seq, next);          // was .file(path)
-  /// ```
-  ///
-  /// A sitemap is a crawl of its own, which is what deleted `Sitemap.load`
-  /// and its hand-rolled depth limit — see the `format.sitemap` library doc.
-  Crawl crawl(
-    Iterable<Fetch> seeds, [
-    Iterable<Fetch> Function(Reply res)? next,
-  ]) => Crawl(seeds, next);
-
-  /// Binds [port] and answers every request with [handler].
-  ///
-  /// The mirror of [http]: the client half reads a URL and returns a [Reply],
-  /// so the server half takes an [Asked] and returns a [Served]. Nothing more
-  /// — see the `net/serve.dart` library doc for what is deliberately absent.
-  ///
-  /// ```dart
-  /// final server = await net.serve(8080, (req) async => switch (req.path) {
-  ///   '/health' => Served.json({'ok': true}),
-  ///   _ => Served.status(404),
-  /// });
-  /// await server.close();
-  /// ```
-  ///
-  /// Pass `port: 0` to let the OS pick a free one and read [Server.port]
-  /// back. [host] defaults to `localhost`, so nothing is exposed off the
-  /// machine until a script asks for it — pass `'0.0.0.0'` when it should be.
-  Future<Server> serve(
-    int port,
-    FutureOr<Served> Function(Asked req) handler, {
-    String host = 'localhost',
-  }) => serve_impl.serveOn(port, handler, host: host);
-
-  /// Serves [port] until [handler] returns a value, then replies and closes.
-  ///
-  /// An OAuth callback is not a server, it is a single answer a script waits
-  /// for, and writing it as one means writing the shutdown too:
-  ///
-  /// ```dart
-  /// final code = await net.once(8080, (req) => req.query['code']);
-  /// ```
-  ///
-  /// Requests that hand back `null` are answered `404` and the wait goes on.
-  /// [reply] is what the request that *does* answer sees, and [timeout] gives
-  /// up and returns `null` rather than waiting for a redirect that is never
-  /// coming.
-  ///
-  /// `once` beside [serve] is the same pairing as `io.async.csv.write` beside
-  /// `io.csv.write`: different behaviour, not an alias.
-  Future<R?> once<R extends Object>(
-    int port,
-    FutureOr<R?> Function(Asked req) handler, {
-    String host = 'localhost',
-    Served reply = const Served.text('Done. You can close this tab.'),
-    Duration? timeout,
-  }) => serve_impl.onceOn(
-    port,
-    handler,
-    host: host,
-    reply: reply,
-    timeout: timeout,
-  );
-
-  /// Replaces the client returned by [http], closing the previous one.
-  ///
-  /// **The one process-wide mutable singleton in the library**, kept
-  /// deliberately and against the reasoning that deleted `io.store` in 5.1.0.
-  /// One set of auth headers process-wide is a real thing scripts do, and
-  /// threading a [Fetcher] through every call is worse for them. Everything
-  /// else has a way not to need it: [Crawl.using] takes a [Send], `Fetcher`
-  /// is one, and `Sending.send` takes one too — so a program that would
-  /// rather be explicit never has to touch this.
-  ///
-  /// Pass `close: false` to keep the old client open.
-  Future<void> use(Fetcher client, {bool close = true}) async {
+  /// Replaces the default shared HTTP client.
+  static Future<void> use(Fetcher client, {bool close = true}) async {
     final previous = _shared;
     _shared = client;
     if (close && !identical(previous, client)) await previous.close();
   }
 }
+

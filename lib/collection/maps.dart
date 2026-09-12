@@ -5,6 +5,8 @@ library;
 
 /// Static utility functions for creating and manipulating [Map]s.
 abstract final class Maps {
+  Maps._();
+
   /// Builds a Map from (key, value) record pairs.
   static Map<K, V> fromPairs<K, V>(Iterable<(K, V)> pairs) =>
       {for (final (k, v) in pairs) k: v};

@@ -107,28 +107,19 @@ void main() {
     });
   });
 
-  group('CLI Isolation and Reset', () {
-    test('cli.reset clears declarations and parsed state', () {
-      final debug = cli.flag('debug', alias: 'd');
-      cli.parse(['-d']);
+  group('CLI Isolation', () {
+    test('CliParser creates independent CLI instances', () {
+      final parser1 = CliParser();
+      final debug = parser1.flag('debug', alias: 'd');
+      final parsed1 = parser1.parse(['-d']);
       expect(debug(), isTrue);
-      expect(cli.switches.containsKey('d'), isTrue);
+      expect(parsed1.switches.containsKey('d'), isTrue);
 
-      cli.reset();
-      expect(cli.switches, isEmpty);
-      expect(cli.raw, isEmpty);
-    });
-
-    test('CliAccessor.isolated creates independent CLI instance', () {
-      final isolated = CliAccessor.isolated();
-      final flagOpt = isolated.flag('verbose', alias: 'v');
-      isolated.parse(['-v']);
-
-      expect(flagOpt(), isTrue);
-      expect(isolated.switches.containsKey('v'), isTrue);
-
-      // Global cli instance remains untouched
-      expect(cli.switches, isEmpty);
+      final parser2 = CliParser();
+      final verbose = parser2.flag('verbose', alias: 'v');
+      final parsed2 = parser2.parse([]);
+      expect(verbose(), isFalse);
+      expect(parsed2.switches, isEmpty);
     });
 
     test('Cli.isolated creates independent parser', () {

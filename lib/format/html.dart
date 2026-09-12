@@ -45,9 +45,9 @@ import 'format.dart';
 /// Entry point for HTML, reachable as `format.html`.
 ///
 /// ```dart
-/// final page = format.html.parse(res.body);
-/// final cached = await format.html.read('fixtures/product.html');
-/// io.write('out.html', format.html.format(page.$('.card')));
+/// final page = Formats.html(res.body);
+/// final cached = await const HtmlAccessor().read('fixtures/product.html');
+/// Files.writeTextSync('out.html', const HtmlAccessor().format(page.$('.card')));
 /// ```
 ///
 /// `format.html.write(path, markup)` writes one to disk atomically; [format]
@@ -88,7 +88,7 @@ class HtmlAccessor with FileCodec<Markup, Markup> implements Codec<Markup> {
   ///
   /// ```dart
   /// // setup: const markup = '<li class="track">One</li>';
-  /// format.html.$(markup, '.track').texts;
+  /// const HtmlAccessor().$(markup, '.track').texts;
   /// ```
   ///
   /// [selector] is required, which is what keeps this from being a second

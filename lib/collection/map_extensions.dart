@@ -3,8 +3,6 @@
 /// Fluent, zero-allocation transformations and utilities on [Map].
 library;
 
-import 'slot.dart';
-
 /// Fluent transformations on any [Map].
 extension MapExtensions<K, V> on Map<K, V> {
   /// Filters entries by [test], returning a new Map.
@@ -99,19 +97,4 @@ extension MapExtensions<K, V> on Map<K, V> {
     }
     return result;
   }
-}
-
-/// Native slotted JSON access on standard `Map<String, Object?>`.
-extension SlottedMap on Map<String, Object?> {
-  /// Reads and validates [slot] value from this map.
-  T? read<T>(Slot<T> slot) => slot.read(this[slot.name]);
-
-  /// Writes [value] conforming to [slot] into this map.
-  void write<T>(Slot<T> slot, T value) => this[slot.name] = slot.write(value);
-
-  /// Checks if this map holds an entry for [slot].
-  bool holds(Slot<Object?> slot) => containsKey(slot.name);
-
-  /// Removes [slot] entry from this map.
-  void drop(Slot<Object?> slot) => remove(slot.name);
 }

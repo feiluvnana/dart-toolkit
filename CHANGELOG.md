@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## 8.0.0
+
+**Purge legacy sequence wrappers, discoverable static classes, and unified single example.**
+v8.0.0 is a major breaking release that completely removes legacy sequence/pipeline wrappers (`Sequence`, `Dictionary`, `Flow`, `Transformer`, `Collector`, `Pipe`, `Pour`, `Slot`, `.seq`, `.flow`, `.dict`, `.collect()`, `.through()`, `.transform()`) in favor of idiomatic Dart 3 collections, records, and streams. It introduces discoverable, autocomplete-friendly static hub classes across all domains, and consolidates fragmented examples into a single production-ready full-pipeline example (`example/example.dart`).
+
+### 1. Complete Removal of Legacy Pipeline Wrappers
+- Removed `Sequence`, `Dictionary`, `Flow`, `Transformer`, `Collector`, `Pipe`, `Pour`, `Slot`, and associated extensions (`.seq`, `.flow`, `.dict`, `.collect()`, `.through()`, `.transform()`).
+- All APIs standardise directly on Dart's native `Iterable<T>`, `List<T>`, `Map<K, V>`, `Stream<T>`, and `Future<T>`.
+
+### 2. Discoverable Static Hub Classes
+- **`Files` / `IO`**: Discoverable filesystem helpers (`readText`, `writeText`, `readBytes`, `writeBytes`, `readJson`, `writeJson`, `append`, `list`, `walk`, `sweep`, `dirSize`, `isDirEmpty`, `join`, `dirname`, `stem`, `ext`).
+- **`Http` / `Net`**: Modern HTTP client suite (`get`, `post`, `put`, `delete`, `head`, `patch`, `crawl`, `download`).
+- **`Formats` / `Format`**: Multi-format encoding/decoding hub (`json`, `csv`, `yaml`, `toml`, `html`, `form`, `robots`, `sitemap`).
+- **`System` / `Sys`**: Subprocess, environment variables, shutdown hooks, and hardware queries (`run`, `runStream`, `which`, `cpus`, `env`, `console`, `shutdown`, `onExit`).
+- **`CliParser` / `Cli`**: Command-line interface definitions and execution (`parse`, `flag`, `option`, `choice`, `duration`, `intVal`, `numVal`, `command`).
+- **`Concurrent` / `Async`**: Parallelism, concurrency pools, and tasks (`run`, `settle`, `pool`, `all`, `retry`).
+- **`Time`**: Ergonomic timing utilities (`now`, `today`, `wait`, `span`, `stopwatch`).
+- **`Hash`**: Cryptographic hashing shortcuts (`sha256`, `md5`).
+- **`Rand` / `Randoms`**: Seeded and non-seeded random generators (`integer`, `doubleVal`, `boolean`, `pick`, `shuffle`, `string`).
+- **`Size`**: Data size parsing and formatting (`bytes`, `kb`, `mb`, `gb`).
+- **`Text`**: Text utilities (`slug`, `pad`, `wrap`, `truncate`).
+
+### 3. Consolidated Full Example
+- Consolidated fragmented examples into a single, comprehensive, runnable pipeline in `example/example.dart` covering HTTP crawling, HTML extraction, parallel enrichment, atomic file persistence, zip packaging, process execution, console formatting, and graceful shutdown.
+
 ## 7.1.0
 
 **Modernization & Ergonomics: Strict typing, dot shorthands, unified progress, and legacy sequence retirement.**

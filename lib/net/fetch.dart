@@ -87,10 +87,10 @@ Uri coerce(String target, {Uri? base}) {
 /// request recognises the reply and recovers what it queued it with:
 ///
 /// ```dart
-/// // setup: const title = Slot<String>('title'); final res = Reply.text('');
-/// res.follow('/song/1', tag: 'song', meta: [title('Hey Jude')]);
+/// // setup: final res = Reply.text('');
+/// res.follow('/song/1', tag: 'song', meta: [('title', 'Hey Jude')]);
 /// // later, for the reply to that:
-/// final String? name = res.fetch.meta.read(title);
+/// final name = res.fetch.meta['title'] as String?;
 /// ```
 ///
 /// **No type parameter.** It carried one through 5.5.0 — `Fetch<T>`, where

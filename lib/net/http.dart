@@ -243,7 +243,7 @@ class Reply {
   String get text => body;
 
   /// The response body parsed as a typed JSON document cursor.
-  Json get json => parse(format.json);
+  Json get json => parseJson(body);
 
   /// Decodes the JSON body directly as typed [T] when a raw map or list is required.
   T jsonDecoded<T>() => json.raw as T;
@@ -362,6 +362,9 @@ class Reply {
   /// Whether [status] is in the 2xx range.
   bool get ok => status >= 200 && status < 300;
 
+  /// The HTTP status code. Alias for [status].
+  int get statusCode => status;
+
   /// The MIME type from the `Content-Type` header (e.g. `'text/html'`).
   String? get type {
     final header = _header('content-type');
@@ -425,13 +428,13 @@ class Reply {
   /// a crawl over an API and a crawl over pages are written the same way.
   ///
   /// ```dart
-  /// res.parse(format.html).$('h1').text;
-  /// res.parse(format.json).at('data.items');
-  /// res.parse(format.yaml).text('version');
+  /// res.parse(Codec.html).$('h1').text;
+  /// res.parse(Codec.json).at('data.items');
+  /// res.parse(Codec.yaml).text('version');
   ///
   /// switch (res.type) {
-  ///   case 'application/json': res.parse(format.json).at('items');
-  ///   default:                 res.parse(format.html).$('.item');
+  ///   case 'application/json': res.parse(Codec.json).at('items');
+  ///   default:                 res.parse(Codec.html).$('.item');
   /// }
   /// ```
   ///
@@ -544,7 +547,7 @@ mixin _PathResolver {
 /// twice. Opt in, one parameter at a time:
 ///
 /// ```dart
-/// final scraper = Fetcher.browser(retries: 3, limiter: concurrent.rate(10, per: 1.s));
+/// final scraper = Fetcher.browser(retries: 3, limiter: Concurrent.rate(10, per: 1.s));
 /// ```
 class Fetcher with _PathResolver {
   final http.Client _client;
@@ -619,8 +622,8 @@ class Fetcher with _PathResolver {
   /// included, because the server counts those too.
   ///
   /// ```dart
-  /// final api = Fetcher(limiter: concurrent.rate(10, per: 1.s));
-  /// await concurrent.run(urls, (u) => api.send(.get, u), size: 8);
+  /// final api = Fetcher(limiter: Concurrent.rate(10, per: 1.s));
+  /// await Concurrent.run(urls, (u) => api.send(HttpMethod.get, u), size: 8);
   /// ```
   ///
   /// Typed [Waiting], so a [Semaphore] paces this client as readily as a

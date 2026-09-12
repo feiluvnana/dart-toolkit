@@ -84,11 +84,11 @@ Reply get res => Reply(
   headers: const {'content-type': 'text/html'},
 );
 Reply get reply => res;
-Markup get page => format.html.parse(_html);
+Markup get page => parseHtml(_html);
 Markup get markup => page;
 Markup get card => page.$('.row');
 Markup get row => card;
-Json get doc => format.json.parse('{"data":{"items":[{"sku":"a"}],"total":1}}');
+Json get doc => parseJson('{"data":{"items":[{"sku":"a"}],"total":1}}');
 Json get config => doc;
 Json get pubspec => doc;
 String get path => 'out/file.txt';
@@ -99,8 +99,8 @@ String get body => _html;
 String get template => 'Hello {name}';
 String get user => 'ada';
 String get pass => 'secret';
-const Slot<String> token = Slot<String>('token');
-const Slot<int> visits = Slot<int>('visits');
+String get token => 'token';
+int get visits => 1;
 String get name => 'widget';
 String get selector => '.row';
 String get href => '/next';
@@ -108,12 +108,12 @@ String get src => '/img.png';
 int get size => 4;
 int get port => 8080;
 Duration get timeout => const Duration(seconds: 5);
-ConsoleLogger get log => system.console.logger;
-ConsoleWriter get writer => system.console.writer;
+ConsoleLogger get log => logger;
+ConsoleWriter get writer => consoleWriter;
 Fetcher get client => Fetcher();
 Fetcher get session => Fetcher(session: true);
-Map<String, Object?> get db => io.dictionary('out/state.json');
-Iterable<Uri> get urls => [seed].seq;
+Map<String, Object?> get db => <String, Object?>{};
+Iterable<Uri> get urls => [seed];
 Iterable<Row> get rows => const [Row('a.com', 1, 1)];
 Iterable<String> get titles => const ['One'];
 List<String> get paths => const ['a.txt'];
@@ -122,7 +122,7 @@ Iterable<Map<String, String>> get records =>
     const [{'name': 'Ada', 'amount': '1'}];
 Map<String, num> get spend => const {'a.com': 1};
 Map<String, List<Row>> get hosts =>
-    rows.collect(.group.by((r) => r.host));
+    rows.groupBy((r) => r.host);
 Map<String, Object?> get vars => const {'name': 'widget'};
 Map<String, Object?> get data => vars;
 List<String> get args => const ['--force'];
@@ -150,18 +150,17 @@ Progress get bar => Progress(total: 10, message: 'Working');
 Spinner get spin => Spinner();
 Table get table => Table(headers: const ['a', 'b']);
 Robots get robots =>
-    format.robots.parse('User-agent: *\nDisallow: /private');
+    parseRobots('User-agent: *\nDisallow: /private');
 Pool<Uri> get pool => Pool<Uri>(size: 4);
-Limiter get limit => concurrent.rate(10, per: const Duration(seconds: 1));
-Semaphore get gate => concurrent.semaphore(2);
-Iterable<FileSystemEntry> get files => io.dir.walk('out', only: .file);
+Limiter get limit => Concurrent.rate(10, per: const Duration(seconds: 1));
+Semaphore get gate => Concurrent.semaphore(2);
+Iterable<FileSystemEntry> get files => Files.listSync('out');
 Iterable<String> get agents => const ['MyBot'];
-Csv get csvsheet => format.csv.parse('a,b\n1,2\n');
+Csv get csvsheet => parseCsv('a,b\n1,2\n');
 Send get mock => (f) async => Reply.text(_html, fetch: f);
-Opt<bool> get force => cli.flag('force');
-Opt<bool> get verbose => cli.flag('verbose');
-Opt<int> get concurrency => cli.number('concurrency', def: 4);
-Slot<String> get slot => const Slot<String>('name');
+Opt<bool> get force => Cli(const []).flag('force');
+Opt<bool> get verbose => Cli(const []).flag('verbose');
+Opt<int> get concurrency => Cli(const []).number('concurrency', def: 4);
 IOSink get sink => stdout;
 File get file => File('out/file.txt');
 String get html => _html;
@@ -196,7 +195,7 @@ class Config {
 enum Mode { fast, slow, debug }
 
 Form get form => page.form('#login')!.at(seed);
-Crawl get crawl => net.crawl([Fetch(seed)].seq)..using(mock);
+Crawl get crawl => Http.crawl([Fetch(seed)])..using(mock);
 Asked? get req => null;
 Process get process => throw UnimplementedError();
 
@@ -206,7 +205,7 @@ Future<int> build(Cli cli) async => 0;
 Future<void> commit(List<String> paths) async {}
 Future<void> enrich(Row row) async {}
 Future<Object?> worker(String input) async => input;
-Future<Reply> fetch(Uri u) => Fetcher().send(.get, u);
+Future<Reply> fetch(Uri u) => Fetcher().send(HttpMethod.get, u);
 Future<void> rebuild([String? out, int concurrency = 1]) async {}
 Iterable<Fetch> next(Reply res) => const <Fetch>[];
 Object? heavyComputation(Object? input) => input;
@@ -216,7 +215,7 @@ Future<Object?> expensiveWork() async => null;
 Future<void> work() async {}
 Future<void> save(Object? value) async {}
 Future<void> send(Object? value) async {}
-const Slot<int> track = Slot<int>('track');
+int get track => 1;
 DateTime? since() => null;
 ''';
 
@@ -482,15 +481,11 @@ void main() {
           collect(file.path, _docFences(file.readAsStringSync()));
         }
 
-        // The point of the whole exercise: if this number collapses, the
-        // harness has stopped looking rather than the docs having shrunk.
-        // 5.5.0 retired `docs/`, so the floor moved with it: 255 snippets
-        // in `///` comments, README, NAMESPACE and example/README, where
-        // the folder used to carry another hundred and thirty saying the
-        // same things one directory further from the code.
+        // 8.0.0 purged legacy pipeline wrappers and faux-namespaces, moving the
+        // snippet count to ~154 modern snippets.
         expect(
           snippets.length,
-          greaterThanOrEqualTo(230),
+          greaterThanOrEqualTo(140),
           reason: 'far fewer snippets than the documentation carries',
         );
 

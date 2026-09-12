@@ -17,5 +17,6 @@ bin/
 
 # Example output
 output/
+out/
 tracks.jsonl
 dist/

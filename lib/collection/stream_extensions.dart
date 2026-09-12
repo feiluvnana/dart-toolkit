@@ -9,6 +9,60 @@ import 'streams.dart';
 
 /// Fluent reactive operations on any [Stream].
 extension StreamExtensions<T> on Stream<T> {
+  /// Concurrently maps [worker] over stream events with at most [concurrency] in flight.
+  Stream<R> parallelMap<R>(
+    FutureOr<R> Function(T event) worker, {
+    int concurrency = 4,
+  }) {
+    final controller = StreamController<R>();
+    final active = <Future<void>>{};
+    var isDone = false;
+    StreamSubscription<T>? sub;
+
+    void checkDone() {
+      if (isDone && active.isEmpty && !controller.isClosed) {
+        controller.close();
+      }
+    }
+
+    controller.onListen = () {
+      sub = listen(
+        (event) {
+          if (active.length >= concurrency) {
+            sub?.pause();
+          }
+          late final Future<void> task;
+          task = Future<void>(() async {
+            try {
+              final res = await worker(event);
+              if (!controller.isClosed) controller.add(res);
+            } catch (err, st) {
+              if (!controller.isClosed) controller.addError(err, st);
+            } finally {
+              active.remove(task);
+              if (active.length < concurrency && (sub?.isPaused ?? false)) {
+                sub?.resume();
+              }
+              checkDone();
+            }
+          });
+          active.add(task);
+        },
+        onError: controller.addError,
+        onDone: () {
+          isDone = true;
+          checkDone();
+        },
+      );
+    };
+
+    controller.onCancel = () {
+      return sub?.cancel();
+    };
+
+    return controller.stream;
+  }
+
   /// Idiomatic alias for [where].
   Stream<T> filter(bool Function(T) test) => where(test);
 

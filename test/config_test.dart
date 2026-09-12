@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:dart_toolkit/dart_toolkit.dart';
+import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 const _yaml = '''
@@ -30,75 +33,71 @@ name = "widget"
 void main() {
   group('the format family', () {
     test('the three codecs are spelled identically', () {
-      // The reason JSON moved out of `util`: one family, one spelling.
-      expect(format.json.parse('{"a":1}').number('a'), equals(1));
-      expect(format.yaml.parse('a: 1').number('a'), equals(1));
-      expect(format.toml.parse('a = 1').number('a'), equals(1));
+      expect(Formats.json('{"a":1}').number('a'), equals(1));
+      expect(Formats.yaml('a: 1').number('a'), equals(1));
+      expect(Formats.toml('a = 1').number('a'), equals(1));
 
-      expect(format.json.format({'a': 1}, indent: 0), equals('{"a":1}'));
-      expect(format.yaml.format({'a': 1}).trim(), equals('a: 1'));
-      expect(format.toml.format({'a': 1}).trim(), equals('a = 1'));
+      expect(Formats.toJson({'a': 1}, indent: 0), equals('{"a":1}'));
+      expect(Formats.toYaml({'a': 1}).trim(), equals('a: 1'));
+      expect(Formats.toToml({'a': 1}).trim(), equals('a = 1'));
     });
 
     test('all three read a file, and a missing one is empty', () async {
-      final dir = io.dir.temp('dt_formats_');
+      final dir = Directory.systemTemp.createTempSync('dt_formats_');
       try {
-        io.write(io.path.join(dir.path, 'a.json'), '{"n": 1}');
-        io.write(io.path.join(dir.path, 'a.yaml'), 'n: 1');
-        io.write(io.path.join(dir.path, 'a.toml'), 'n = 1');
+        File(p.join(dir.path, 'a.json')).writeAsStringSync('{"n": 1}');
+        File(p.join(dir.path, 'a.yaml')).writeAsStringSync('n: 1');
+        File(p.join(dir.path, 'a.toml')).writeAsStringSync('n = 1');
 
         expect(
-          (await format.json.read(
-            io.path.join(dir.path, 'a.json'),
+          (await const JsonAccessor().read(
+            p.join(dir.path, 'a.json'),
           )).number('n'),
           1,
         );
         expect(
-          (await format.yaml.read(
-            io.path.join(dir.path, 'a.yaml'),
+          (await const YamlAccessor().read(
+            p.join(dir.path, 'a.yaml'),
           )).number('n'),
           1,
         );
         expect(
-          (await format.toml.read(
-            io.path.join(dir.path, 'a.toml'),
+          (await const TomlAccessor().read(
+            p.join(dir.path, 'a.toml'),
           )).number('n'),
           1,
         );
 
         for (final ext in const ['json', 'yaml', 'toml']) {
-          final missing = io.path.join(dir.path, 'absent.$ext');
+          final missing = p.join(dir.path, 'absent.$ext');
           final doc = switch (ext) {
-            'json' => await format.json.read(missing),
-            'yaml' => await format.yaml.read(missing),
-            _ => await format.toml.read(missing),
+            'json' => await const JsonAccessor().read(missing),
+            'yaml' => await const YamlAccessor().read(missing),
+            _ => await const TomlAccessor().read(missing),
           };
           expect(doc.empty, isTrue, reason: ext);
         }
       } finally {
-        io.remove(dir.path);
+        dir.deleteSync(recursive: true);
       }
     });
 
-    test('tool holds formats only, never an executable', () {
-      // `tool.git`, `tool.gh` and `tool.docker` were all tried and removed:
-      // wrapping a binary is `system.run` plus arguments, and a script that
-      // wants one already has the whole of it there.
-      expect(format.zip, isA<ZipAccessor>());
-      expect(format.json, isA<JsonAccessor>());
-      expect(format.yaml, isA<YamlAccessor>());
-      expect(format.toml, isA<TomlAccessor>());
+    test('accessors hold formats only, never an executable', () {
+      expect(const ZipAccessor(), isA<ZipAccessor>());
+      expect(const JsonAccessor(), isA<JsonAccessor>());
+      expect(const YamlAccessor(), isA<YamlAccessor>());
+      expect(const TomlAccessor(), isA<TomlAccessor>());
     });
   });
 
   group('format.yaml', () {
     test('parse gives the same cursor JSON does', () {
-      final doc = format.yaml.parse(_yaml);
+      final doc = Formats.yaml(_yaml);
       expect(doc.text('name'), equals('dart_toolkit'));
       expect(doc.text('version'), equals('3.2.0'));
       expect(doc.text('environment.sdk'), equals('^3.7.0'));
       expect(
-        doc.at('dependencies').all((d) => d.text()).nonNull.collect(.list()),
+        doc.at('dependencies').all((d) => d.text()).nonNull.toList(),
         equals(['html', 'http']),
       );
       expect(doc.flag('flags.strict'), isTrue);
@@ -107,28 +106,28 @@ void main() {
     });
 
     test('the cursor holds plain maps, so it re-encodes as JSON', () {
-      final doc = format.yaml.parse(_yaml);
+      final doc = Formats.yaml(_yaml);
       expect(doc.raw, isA<Map<String, Object?>>());
-      expect(format.json.format(doc.raw, indent: 0), contains('"name"'));
+      expect(Formats.toJson(doc.raw, indent: 0), contains('"name"'));
     });
 
     test('jsonpath works over a YAML document too', () {
       expect(
-        format.yaml
-            .parse(_yaml)
+        Formats.yaml(_yaml)
             .jsonpath(r'$..sdk')
-            .transform(.map.nonnull((n) => n.text()))
-            .collect(.list()),
+            .map((n) => n.text())
+            .whereType<String>()
+            .toList(),
         equals(['^3.7.0']),
       );
     });
 
     test('text that is not YAML is the empty cursor', () {
-      expect(format.yaml.parse('a:\n b\n  - c: :').empty, isTrue);
+      expect(Formats.yaml('a:\n b\n  - c: :').empty, isTrue);
     });
 
     test('format writes block style, quoting what would read back wrong', () {
-      final text = format.yaml.format({
+      final text = Formats.toYaml({
         'name': 'widget',
         'version': '1.0',
         'on': 'yes',
@@ -161,32 +160,32 @@ void main() {
       expect(text, contains('    x: 1'));
       expect(text, contains('none: {}'));
       // And it round-trips through the reader.
-      final back = format.yaml.parse(text);
+      final back = Formats.yaml(text);
       expect(back.text('version'), equals('1.0'));
       expect(back.text('on'), equals('yes'));
       expect(back.number('nested.deep.x'), equals(1));
     });
 
     test('read is the file door, and a missing file is empty', () async {
-      final dir = io.dir.temp('dt_yaml_');
+      final dir = Directory.systemTemp.createTempSync('dt_yaml_');
       try {
-        final path = io.path.join(dir.path, 'c.yaml');
-        io.write(path, _yaml);
+        final path = p.join(dir.path, 'c.yaml');
+        File(path).writeAsStringSync(_yaml);
         expect(
-          (await format.yaml.read(path)).text('name'),
+          (await const YamlAccessor().read(path)).text('name'),
           equals('dart_toolkit'),
         );
         expect(
-          (await format.yaml.read(io.path.join(dir.path, 'absent.yaml'))).empty,
+          (await const YamlAccessor().read(p.join(dir.path, 'absent.yaml'))).empty,
           isTrue,
         );
       } finally {
-        io.remove(dir.path);
+        dir.deleteSync(recursive: true);
       }
     });
 
     test('it reads this repository own pubspec', () async {
-      final pubspec = await format.yaml.read('pubspec.yaml');
+      final pubspec = await const YamlAccessor().read('pubspec.yaml');
       expect(pubspec.text('name'), equals('dart_toolkit'));
       expect(pubspec.at('dependencies').count, greaterThan(3));
     });
@@ -194,7 +193,7 @@ void main() {
 
   group('format.toml', () {
     test('parse, spelled the same as yaml', () {
-      final doc = format.toml.parse(_toml);
+      final doc = Formats.toml(_toml);
       expect(doc.text('package.name'), equals('widget'));
       expect(doc.text('package.version'), equals('1.4.2'));
       expect(doc.text('dependencies.serde'), equals('1.0'));
@@ -202,40 +201,37 @@ void main() {
     });
 
     test('text that is not TOML is the empty cursor', () {
-      expect(format.toml.parse('[[[not toml').empty, isTrue);
+      expect(Formats.toml('[[[not toml').empty, isTrue);
     });
 
     test('format writes a document back, and refuses a non-map', () {
-      final text = format.toml.format({
+      final text = Formats.toToml({
         'package': {'name': 'widget', 'version': '1.0.0'},
       });
-      expect(format.toml.parse(text).text('package.name'), equals('widget'));
-      // A non-map used to come back as an empty string, so
-      // `io.write(path, format.toml.format(rows))` wrote a blank file and
-      // reported success. Reading gives the empty cursor; writing throws.
+      expect(Formats.toml(text).text('package.name'), equals('widget'));
       expect(
-        () => format.toml.format(['not', 'a', 'map']),
+        () => Formats.toToml(['not', 'a', 'map']),
         throwsArgumentError,
       );
-      expect(() => format.toml.format('scalar'), throwsArgumentError);
-      expect(() => format.toml.format(null), throwsArgumentError);
+      expect(() => Formats.toToml('scalar'), throwsArgumentError);
+      expect(() => Formats.toToml(null), throwsArgumentError);
     });
 
     test('read is the file door, and a missing file is empty', () async {
-      final dir = io.dir.temp('dt_toml_');
+      final dir = Directory.systemTemp.createTempSync('dt_toml_');
       try {
-        final path = io.path.join(dir.path, 'Cargo.toml');
-        io.write(path, _toml);
+        final path = p.join(dir.path, 'Cargo.toml');
+        File(path).writeAsStringSync(_toml);
         expect(
-          (await format.toml.read(path)).text('package.name'),
+          (await const TomlAccessor().read(path)).text('package.name'),
           equals('widget'),
         );
         expect(
-          (await format.toml.read(io.path.join(dir.path, 'absent.toml'))).empty,
+          (await const TomlAccessor().read(p.join(dir.path, 'absent.toml'))).empty,
           isTrue,
         );
       } finally {
-        io.remove(dir.path);
+        dir.deleteSync(recursive: true);
       }
     });
   });

@@ -12,9 +12,9 @@
 /// either way.
 ///
 /// ```dart
-/// res.parse(format.html).$('h1').text;
-/// res.parse(format.json).at('data.items');
-/// res.parse(format.yaml).text('version');
+/// res.parse(Codec.html).$('h1').text;
+/// res.parse(Codec.json).at('data.items');
+/// res.parse(Codec.yaml).text('version');
 /// ```
 ///
 /// Implementing it is the whole contract for a new format: one method, and
@@ -36,8 +36,8 @@ import 'markup.dart';
 /// `Reply.parse` take any of them without naming one:
 ///
 /// ```dart
-/// Codec<Json> reader = format.yaml;
-/// final config = reader.parse(await io.async.read('config.yaml'));
+/// Codec<Json> reader = Codec.yaml;
+/// final config = reader.parse(await File('config.yaml').readAsString());
 /// ```
 ///
 /// [parse] never throws. Text that is not this format gives the empty
@@ -49,17 +49,23 @@ abstract interface class Codec<T> {
   T parse(String text);
 
   /// HTML markup codec.
-  static Codec<Markup> get html => format.html;
+  static Codec<Markup> get html => const HtmlAccessor();
 
   /// JSON document cursor codec.
-  static Codec<Json> get json => format.json;
+  static Codec<Json> get json => const JsonAccessor();
 
   /// YAML document cursor codec.
-  static Codec<Json> get yaml => format.yaml;
+  static Codec<Json> get yaml => const YamlAccessor();
 
   /// TOML document cursor codec.
-  static Codec<Json> get toml => format.toml;
+  static Codec<Json> get toml => const TomlAccessor();
 
   /// CSV cursor codec.
-  static Codec<Csv> get csv => format.csv;
+  static Codec<Csv> get csv => const CsvAccessor();
+
+  /// Robots.txt codec.
+  static Codec<Robots> get robots => const RobotsAccessor();
+
+  /// Sitemap XML codec.
+  static Codec<List<Uri>> get sitemap => const SitemapAccessor();
 }

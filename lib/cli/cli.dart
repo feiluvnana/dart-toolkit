@@ -43,28 +43,206 @@ part 'usage.dart';
 // CLI DOMAIN (cli.*) - Argument Parsing
 // ============================================================================
 
-/// The `cli` domain: flags, options, subcommands and usage text.
-///
-/// Parsing arguments touches nothing — no process, no environment, no
-/// terminal — so it is a domain of its own rather than a corner of
-/// `system`. Not `const`: the accessor holds the declarations and the last
-/// parse.
-final CliAccessor cli = CliAccessor();
+/// A clean, fluent command-line argument parser.
+class CliParser {
+  final CliAccessor _cli;
+  final Map<String, Opt<dynamic>> _options = {};
+
+  /// The syntax line shown in usage help.
+  final String? syntax;
+
+  /// The description shown in usage help.
+  final String? description;
+
+  /// Creates a new argument parser.
+  CliParser({this.syntax, this.description}) : _cli = CliAccessor.isolated();
+
+  /// Declares a boolean flag (e.g. `--force` or `-f`).
+  Opt<bool> flag(
+    String name, {
+    String? abbr,
+    String? alias,
+    String? desc,
+    String? help,
+    bool? def,
+    bool? defaultsTo,
+  }) {
+    final opt = _cli.flag(
+      name,
+      alias: abbr ?? alias,
+      desc: help ?? desc ?? '',
+      def: defaultsTo ?? def ?? false,
+    );
+    _options[name] = opt;
+    if (abbr != null) _options[abbr] = opt;
+    if (alias != null) _options[alias] = opt;
+    return opt;
+  }
+
+  /// Declares a string option (e.g. `--out <value>`).
+  Opt<String> option(
+    String name, {
+    String? abbr,
+    String? alias,
+    String? desc,
+    String? help,
+    String? def,
+    String? defaultsTo,
+  }) {
+    final opt = _cli.option(
+      name,
+      alias: abbr ?? alias,
+      desc: help ?? desc ?? '',
+      def: defaultsTo ?? def ?? '',
+    );
+    _options[name] = opt;
+    if (abbr != null) _options[abbr] = opt;
+    if (alias != null) _options[alias] = opt;
+    return opt;
+  }
+
+  /// Declares a numeric option (e.g. `--concurrency <num>`).
+  Opt<int> number(
+    String name, {
+    String? abbr,
+    String? alias,
+    String? desc,
+    String? help,
+    num? def,
+    num? defaultsTo,
+  }) {
+    final opt = _cli.number(
+      name,
+      alias: abbr ?? alias,
+      desc: help ?? desc ?? '',
+      def: ((defaultsTo ?? def) ?? 0).toInt(),
+    );
+    _options[name] = opt;
+    if (abbr != null) _options[abbr] = opt;
+    if (alias != null) _options[alias] = opt;
+    return opt;
+  }
+
+  /// Declares an option that collects multiple occurrences.
+  Opt<List<String>> list(
+    String name, {
+    String? abbr,
+    String? alias,
+    String? desc,
+    String? help,
+    bool csv = true,
+    bool splitCommas = true,
+  }) {
+    final opt = _cli.list(
+      name,
+      alias: abbr ?? alias,
+      desc: help ?? desc ?? '',
+      csv: csv || splitCommas,
+    );
+    _options[name] = opt;
+    if (abbr != null) _options[abbr] = opt;
+    if (alias != null) _options[alias] = opt;
+    return opt;
+  }
+
+  /// Declares an option restricted to one of [choices].
+  Opt<String> choose(
+    String name,
+    Iterable<String> choices, {
+    String? abbr,
+    String? alias,
+    String? desc,
+    String? help,
+    String? def,
+    String? defaultsTo,
+  }) {
+    final opt = _cli.choose(
+      name,
+      choices.toList(),
+      alias: abbr ?? alias,
+      desc: help ?? desc ?? '',
+      def: defaultsTo ?? def ?? choices.first,
+    );
+    _options[name] = opt;
+    if (abbr != null) _options[abbr] = opt;
+    if (alias != null) _options[alias] = opt;
+    return opt;
+  }
+
+  /// Parses [args] and returns the parsed [ParsedCli] object.
+  ParsedCli parse(List<String> args, {bool autoHelp = false}) {
+    _cli.parse(args, autoHelp: autoHelp, syntax: syntax, desc: description);
+    return ParsedCli(_cli.parsed, Map.unmodifiable(_options));
+  }
+
+  /// Generates usage text for the declared arguments.
+  String usage() => _cli.usage(syntax: syntax, desc: description);
+
+  /// Prints usage help to stdout.
+  void printUsage() {
+    stdout.writeln(usage());
+  }
+}
+
+/// The result of parsing arguments with [CliParser].
+class ParsedCli {
+  final Cli _cli;
+  final Map<String, Opt<dynamic>> _options;
+
+  /// Creates a parsed CLI result wrapper around [_cli].
+  const ParsedCli(this._cli, [this._options = const {}]);
+
+  /// Reads a boolean flag value by [name].
+  bool flag(String name) {
+    final opt = _options[name];
+    if (opt is Opt<bool>) return opt();
+    return _cli.flag(name)();
+  }
+
+  /// Reads a string option value by [name].
+  String option(String name) {
+    final opt = _options[name];
+    if (opt is Opt<String>) return opt();
+    return _cli.option(name)();
+  }
+
+  /// Reads an integer option value by [name].
+  int number(String name) {
+    final opt = _options[name];
+    if (opt is Opt<int>) return opt();
+    return _cli.number(name)();
+  }
+
+  /// Reads a list option value by [name].
+  List<String> list(String name) {
+    final opt = _options[name];
+    if (opt is Opt<List<String>>) return opt();
+    return _cli.list(name)();
+  }
+
+  /// Positional rest arguments.
+  List<String> get rest => _cli.args;
+
+  /// Positional rest arguments.
+  List<String> get args => _cli.args;
+
+  /// Every switch the parser saw, declared or not.
+  Map<String, String?> get switches => _cli.switches;
+
+  /// The first positional argument as a subcommand name, or null.
+  String? get command => _cli.command;
+
+  /// The raw argument list as parsed.
+  List<String> get raw => _cli.raw;
+
+  /// The raw underlying [Cli] instance.
+  Cli get rawCli => _cli;
+}
 
 /// Entry point for command-line arguments, reachable as `cli`.
-///
-/// Declare the interface, then either [parse] it and read the values yourself
-/// or hand [run] the arguments and let it dispatch.
-///
-/// ```dart
-/// void main(List<String> args) {
-///   final force = cli.flag('force', alias: 'f');
-///   final size = cli.number('concurrency', def: 4);
-///   cli.parse(args);
-///
-///   if (force()) print('forcing, ${size()} at a time');
-/// }
-/// ```
+final CliAccessor cli = CliAccessor();
+
+/// Accessor for command-line arguments.
 class CliAccessor with _Spec {
   Cli _parsed = Cli(const []);
 

@@ -29,8 +29,8 @@ import '../src/method.dart';
 /// difference between a login that works and one that does not:
 ///
 /// ```dart
-/// final login = await net.http.send(.get, 'https://example.com/login'.url);
-/// final sent = await login.parse(format.html).form('#login')!
+/// final login = await Http.get('https://example.com/login'.url);
+/// final sent = await login.parse(Codec.html).form('#login')!
 ///     .at(login.url)
 ///     .fill({'user': 'me', 'pass': secret})
 ///     .send();
@@ -90,8 +90,8 @@ final class Form {
   /// from, so the response hands that over here:
   ///
   /// ```dart
-  /// final res = await net.http.send(.get, url);
-  /// await res.parse(format.html).form('#login')!
+  /// final res = await Http.get(url);
+  /// await res.parse(Codec.html).form('#login')!
   ///     .at(res.url)
   ///     .fill({'user': user, 'pass': pass})
   ///     .send();
@@ -233,8 +233,8 @@ extension FormOnMarkup on Markup {
   /// submits to a relative `action` needs [Form.at] before it is sent:
   ///
   /// ```dart
-  /// final res = await net.http.send(.get, url);
-  /// final search = res.parse(format.html).form('form.search');
+  /// final res = await Http.get(url);
+  /// final search = res.parse(Codec.html).form('form.search');
   /// if (search != null) await search.at(res.url).fill({'q': 'widgets'}).send();
   /// ```
   Form? form([String selector = 'form']) {

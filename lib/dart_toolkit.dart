@@ -1,64 +1,37 @@
-/// # Dart Script Toolkit (`dart-toolkit`)
+/// # Dart Script Toolkit (`dart-toolkit` 8.0.0)
 ///
-/// A lightweight automation and web-scraping toolkit developed by
-/// **feiluvnana**, organised into eight domain namespaces with lowercase,
-/// preferably one-word methods.
+/// A lightweight, idiomatic web crawling pipeline and command-line automation
+/// toolkit for Dart.
 ///
-/// Five of them are *axes* — a way of touching the machine:
-///
-/// - [io]: files, atomic writes, paths, CSV (`io.csv`), the collections on
-///   disk (`io.dictionary`, `dump`), watching (`io.watch`), locking
-///   (`io.lock`), and a non-blocking mirror of the lot (`io.async`).
-/// - [net]: HTTP (`net.http`), the frontier that crawls (`net.crawl`), the
-///   page carries ([Form]) — and, in the other direction, a server that
-///   listens (`net.serve`, `net.once`). It fetches bytes and parses none of
-///   them.
-/// - [system]: subprocesses, environment (`system.env`), the terminal
-///   (`system.console`), shutdown (`system.on`), the machine (`system.os`).
-/// - [concurrent]: bounded async task pools, and rate limiting
-///   (`concurrent.rate`).
-/// - [util]: pure helpers — time (`util.time`), sizes (`util.size`), text
-///   (`util.text`), hashing (`util.hash`), randomness (`util.rand`) — plus the
-///   two read cursors every document door hands back: [Json] for maps and
-///   scalars, [Markup] for elements.
-///
-/// One is neither, because it is a vocabulary rather than a way in:
-///
-/// - `collection`: [Sequence], [Dictionary] and [Flow], the three collections
-///   this library returns in place of `Iterable`, `Map` and `Stream`, and the
-///   two operation types that shape all three — [Transformer] and
-///   [Collector]. A library, not an accessor: Rule 2 spends no top-level
-///   name, and you reach every one of these from the data you already hold.
-///
-/// Two are *subjects* — knowledge that came from outside Dart:
-///
-/// - [cli]: flags, options, subcommands and usage text.
-/// - [format]: file formats — `format.html`, `format.json`, `format.yaml`,
-///   `format.toml`, `format.zip`. Never executables: wrapping a binary is
-///   `system.run` plus arguments.
-///
-/// Every name appears exactly once: there are no flat aliases, and each
-/// operation lives in the domain that owns it. Argument parsing is its own
-/// domain because it touches nothing at all, while the formats share one
-/// because a top level that grows a name per format is not a top level. The
-/// generic words behind `util` keep that prefix so they cannot collide with
-/// your own `text`, `hash` or `size`. `NAMESPACE.md` has the rules.
+/// ## Core Capabilities
+/// - **Modern HTTP & Web Crawling**: Top-level [get], [post], [download], [Response] with
+///   built-in [Response.html], `.$()`, `.$$()`, `.$xpath()`, and [Crawler] / [crawl]
+///   emitting a native `Stream<Response>`.
+/// - **Crash-Safe Atomic I/O**: [readText], [writeText], [readJson], [writeJson],
+///   [readLines], [writeLines], [withLock], [watchPath], and [listDir].
+/// - **Subprocesses & Environment**: [run], [runStream], [which], [env], [loadEnv],
+///   and graceful [onExit] hooks.
+/// - **Concurrency**: [parallelMap], [settle], [Pool], [RateLimiter], [Semaphore],
+///   [retry], and [delay].
+/// - **Terminal & CLI**: [CliParser], [logger], [ProgressBar], [Table], and [ansi].
+/// - **Codecs & Formats**: [parseHtml], [parseJson], [parseYaml], [parseToml],
+///   [parseCsv], [zip], and [unzip].
+/// - **Native Dart 3 Extensions**: [sortedBy], [chunk], [window], [distinct],
+///   [groupBy], [parallelMap], `.ms`, `.seconds`, `.toSlug()`, and `.extractNumber()`.
 ///
 /// ```dart
 /// import 'package:dart_toolkit/dart_toolkit.dart';
 ///
 /// void main(List<String> args) async {
+///   final cli = CliParser()..flag('verbose', abbr: 'v');
 ///   cli.parse(args);
-///   final titles = await (net
-///           .crawl([Fetch('https://news.ycombinator.com'.url)].seq)
-///         ..concurrent(system.os.cpus))
-///       .flow
-///       .through(.flat.map((res) =>
-///           res.parse(format.html).$('.titleline > a').texts))
-///       .through(.unique())
-///       .collect(.join('\n'));
 ///
-///   io.write('titles.txt', titles);
+///   final titles = await crawl(['https://news.ycombinator.com'])
+///       .expand((res) => res.$$('.titleline > a').map((el) => el.text))
+///       .distinct()
+///       .join('\n');
+///
+///   await writeText('titles.txt', titles);
 /// }
 /// ```
 library;

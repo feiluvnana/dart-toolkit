@@ -19,10 +19,10 @@ import 'ansi.dart';
 /// Interactive prompts, reachable as `system.console.reader`.
 ///
 /// ```dart
-/// final name = await system.console.reader.ask('Project name');
-/// final go = await system.console.reader.confirm('Continue?');
+/// final name = await consoleReader.ask('Project name');
+/// final go = await consoleReader.confirm('Continue?');
 /// final env =
-///     await system.console.reader.pick('Target', options: ['dev', 'prod'].seq);
+///     await consoleReader.pick('Target', options: ['dev', 'prod']);
 /// ```
 class ConsoleReader {
   StreamSubscription<String>? _subscription;
@@ -52,10 +52,9 @@ class ConsoleReader {
   ///
   /// ```dart
   /// // setup: Future<void> fetch(Uri u) async {}
-  /// await system.console.reader.lines
-  ///     .through(.map((line) => line.trim()))
-  ///     .through(.map.async((line) => fetch(line.url), size: 4))
-  ///     .collect(.count());
+  /// await for (final line in consoleReader.lines) {
+  ///   await fetch(line.trim().url);
+  /// }
   /// ```
   ///
   /// Shares one stdin subscription with [line] and the prompts, so a tool can
@@ -79,9 +78,9 @@ class ConsoleReader {
   ///
   /// ```dart
   /// final urls =
-  ///     system.console.reader.piped
-  ///         ? await system.console.reader.lines.collect(.list())
-  ///         : [await system.console.reader.ask('URL')];
+  ///     consoleReader.piped
+  ///         ? await consoleReader.lines.toList()
+  ///         : [await consoleReader.ask('URL')];
   /// ```
   bool get piped {
     try {

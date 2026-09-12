@@ -45,676 +45,412 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
-import 'csv.dart';
-import 'dir.dart';
+import 'csv.dart' as csv_impl;
 import 'entry.dart';
-import 'path.dart';
-import '../collection/collection.dart';
 import '../src/entries.dart';
 import '../src/fs.dart';
 import '../src/lock.dart';
 import '../src/watch.dart';
 
-export 'collections.dart';
+import 'package:path/path.dart' as p;
+
 export 'csv.dart';
-export 'dir.dart';
 export 'entry.dart';
 export 'io_extensions.dart';
-export 'path.dart';
 export '../src/fs.dart' show Algo;
 export '../src/lock.dart' show LockedError;
 
 // ============================================================================
-// IO DOMAIN (io.*) - Files, Paths, Directories, CSV & Collections
+// TOP-LEVEL ATOMIC I/O & FILESYSTEM HELPERS
 // ============================================================================
 
-/// The `io` domain: files, paths (`io.path`), directories (`io.dir`), CSV and
-/// the collections on disk.
-const IoAccessor io = IoAccessor();
+/// Reads [path] as a UTF-8 (or given [encoding]) string asynchronously.
+Future<String> readText(String path, {Encoding encoding = utf8}) =>
+    File(path).readAsString(encoding: encoding);
 
-/// Entry point for the filesystem.
-///
-/// Paths are plain strings; given a [FileSystemEntry], pass its
-/// [FileSystemEntry.path].
-///
-/// Everything here blocks. Every disk operation also lives on [async] as a
-/// future, which is what a crawl or any other concurrent script should use.
-///
-/// ```dart
-/// io.write(io.path.join('out', 'report.txt'), 'done');   // blocking
-/// await io.async.write('out/report.txt', 'done');        // non-blocking
-/// ```
-class IoAccessor {
-  /// Creates the accessor. Prefer the shared [io] instance.
-  const IoAccessor();
+/// Reads [path] as a UTF-8 (or given [encoding]) string synchronously.
+String readTextSync(String path, {Encoding encoding = utf8}) =>
+    File(path).readAsStringSync(encoding: encoding);
 
-  /// Paths, as strings: joining, splitting, naming. Touches no disk.
-  PathAccessor get path => const PathAccessor();
+/// Reads [path] as raw bytes asynchronously.
+Future<List<int>> readBytes(String path) => File(path).readAsBytes();
 
-  /// Directories: making them, listing them, walking them.
-  DirAccessor get dir => const DirAccessor();
+/// Reads [path] as raw bytes synchronously.
+List<int> readBytesSync(String path) => File(path).readAsBytesSync();
 
-  /// CSV files too large to hold: streaming reads and streaming writes.
-  ///
-  /// Parsing and formatting CSV *text* is `format.csv`, beside the other five
-  /// formats — it is a codec, and 5.2.0 moved it where the codecs live.
-  CsvFileAccessor get csv => const CsvFileAccessor();
+/// Reads [path] as a list of lines asynchronously.
+Future<List<String>> readLines(String path, {Encoding encoding = utf8}) =>
+    File(path).readAsLines(encoding: encoding);
 
-  /// The non-blocking mirror of this domain. See [IoAsyncAccessor].
-  IoAsyncAccessor get async => const IoAsyncAccessor();
+/// Reads [path] as a list of lines synchronously.
+List<String> readLinesSync(String path, {Encoding encoding = utf8}) =>
+    File(path).readAsLinesSync(encoding: encoding);
 
-  /// The JSON object at [path] as a [Map], or an empty one when the
-  /// file is not there.
-  ///
-  /// The state a script keeps between runs, with [Slot]s for keys:
-  ///
-  /// ```dart
-  /// // setup: const cursor = Slot<int>('cursor');
-  /// final db = io.dictionary('out/cache.json');
-  /// db.write(cursor, (db.read(cursor) ?? 0) + 1);
-  /// db.dump('out/cache.json');
-  /// ```
-  ///
-  /// The path is named twice rather than held, which is the trade for a
-  /// collection that does not secretly own a file — the same one
-  /// `format.json.read` already makes. `Store` held it, and held a
-  /// process-wide mutable singleton with it.
-  ///
-  /// An absent file is an empty map, because a first run has nothing to
-  /// read. A file that is there and is not a JSON object throws
-  /// [FormatException], because that is a broken file rather than a missing
-  /// one and silence is how a half-written snapshot becomes a silent data
-  /// loss.
-  Map<String, Object?> dictionary(String path) {
-    final file = File(path);
-    if (!file.existsSync()) return <String, Object?>{};
-    return _dictionary(path, file.readAsStringSync());
-  }
+/// Reads and decodes JSON from [path] asynchronously.
+Future<dynamic> readJson(String path) async {
+  final text = await File(path).readAsString();
+  return jsonDecode(text);
+}
 
-  /// The state a script keeps between runs, bound to [path].
-  DiskState state(String path) => DiskState(path, dictionary(path));
+/// Reads and decodes JSON from [path] synchronously.
+dynamic readJsonSync(String path) {
+  final text = File(path).readAsStringSync();
+  return jsonDecode(text);
+}
 
-  // --- Existence: one question per member ---
+/// Writes [content] to [path] atomically via a temporary staging file.
+Future<FileSystemEntry> writeText(
+  String path,
+  String content, {
+  String part = '.part',
+  Encoding encoding = utf8,
+}) async => Fs.entryFor(
+  (await Fs.write(path, content, part: part, encoding: encoding)).path,
+);
 
-  /// Whether anything at all is at [path] — file, directory or link.
-  bool exists(String path) => Entries.kind(path) != null;
+/// Writes [content] to [path] atomically and synchronously.
+FileSystemEntry writeTextSync(
+  String path,
+  String content, {
+  String part = '.part',
+  Encoding encoding = utf8,
+}) => Fs.entryFor(
+  Fs.writeSync(path, content, part: part, encoding: encoding).path,
+);
 
-  /// Whether [path] points to a regular file.
-  bool isFile(String path) => Entries.kind(path) == FileSystemEntryKind.file;
+/// Writes raw [bytes] to [path] atomically via a temporary staging file.
+Future<FileSystemEntry> writeBytes(
+  String path,
+  List<int> bytes, {
+  String part = '.part',
+}) async => Fs.entryFor((await Fs.save(path, bytes, part: part)).path);
 
-  /// Whether [path] points to a directory.
-  bool isDir(String path) => Entries.kind(path) == FileSystemEntryKind.directory;
+/// Writes raw [bytes] to [path] atomically and synchronously.
+FileSystemEntry writeBytesSync(
+  String path,
+  List<int> bytes, {
+  String part = '.part',
+}) => Fs.entryFor(Fs.saveSync(path, bytes, part: part).path);
 
-  /// Whether [path] points to a symbolic link.
-  bool isLink(String path) => Entries.kind(path) == FileSystemEntryKind.link;
-
-  /// The size of [path] in bytes, or `null` when absent.
-  int? size(String path) => stat(path)?.size;
-
-  /// Whether [path] exists and holds at least one byte.
-  ///
-  /// The composite, kept because it is genuinely the question a resumable
-  /// script asks: *is there a finished file here, or do I have to make one?*
-  /// A zero-byte file reads as absent, since an interrupted write leaves one.
-  ///
-  /// The ingredients are [exists] and the entry from [stat] now, so a caller
-  /// who wanted one of them no longer has to take all three.
-  ///
-  /// A loosely-named sibling counts for [similar], not for this. It was a
-  /// `match:` flag here through 5.5.0, and `io.has(p, match: true)` was
-  /// provably `io.similar(p)` for every input — [similar] opens by calling
-  /// [has] — so it was two spellings of one answer, one of them a boolean
-  /// that turned this member into a different one.
-  bool has(String path) => Fs.has(path);
-
-  /// Whether [path] holds bytes, or a loosely similarly-named file beside it
-  /// does.
-  ///
-  /// [has], widened. See [Fs.similar] for the matching rules and their
-  /// caveats — it is fuzzy enough to produce false positives, which is why
-  /// this is the member you have to ask for by name.
-  bool similar(String path) => Fs.similar(path);
-
-  /// The entry at [path], or `null` when there is nothing there.
-  ///
-  /// One stat, four answers — kind, size, mtime and the name parts — so a
-  /// loop that needs more than one of them pays once:
-  ///
-  /// ```dart
-  /// final entry = io.stat('out/report.csv');
-  /// if (entry != null && entry.size > 1024) log.info(entry.name);
-  /// ```
-  ///
-  /// It returned a `dart:io` [FileStat] through 5.1.0, which could answer
-  /// `size` and `type` and nothing else, and was the only way to ask either.
-  FileSystemEntry? stat(String path) => Fs.stat(path);
-
-  // --- Reading ---
-
-  /// Reads [path] as a string.
-  String read(String path, {Encoding encoding = utf8}) =>
-      File(path).readAsStringSync(encoding: encoding);
-
-  /// Reads [path] as raw bytes, and writes bytes back.
-  ///
-  /// Callable, and a namespace, exactly as [lines] and [append] are:
-  /// `bytes(path)` reads and `bytes.write(path, data)` writes.
-  ///
-  /// ```dart
-  /// final data = io.bytes('cover.jpg');
-  /// io.bytes.write('out/cover.jpg', data);
-  /// ```
-  ///
-  /// The write was `io.save` through 5.5.0, which is the same English word as
-  /// [write] and said nothing about which of the two took bytes. The rule for
-  /// the whole domain now: **the name says the shape, and `.write` is how it
-  /// goes back.** A reader who learns [lines] has learned this and [chunks]
-  /// for free.
-  BytesAccessor get bytes => const BytesAccessor();
-
-  /// Reads [path] as decoded lines, and writes a collection back as them.
-  ///
-  /// Callable, and a namespace: `lines(path)` reads and
-  /// `lines.write(path, seq)` writes one element per line.
-  ///
-  /// ```dart
-  /// io.lines('access.log')
-  ///     .transform(.where((l) => l.contains(' 500 ')))
-  ///     .collect(.count());
-  ///
-  /// io.lines.write('out/hosts.txt', hosts.keys);
-  /// ```
-  ///
-  /// Reading returned a `Stream<String>` through 5.1.0 — from the accessor
-  /// whose whole promise is that it blocks. `io.async.lines` is the [Flow],
-  /// which is the shape difference the mirror specifies: each side is honest
-  /// about which accessor it is on.
-  LinesAccessor get lines => const LinesAccessor();
-
-  /// Reads [path] in byte chunks, without holding the whole file.
-  ///
-  /// The streaming half of [bytes], which reads all of it at once. A lazy
-  /// view, so
-  /// nothing is read until the sequence is walked and a reader that stops
-  /// early stops reading:
-  ///
-  /// ```dart
-  /// io.chunks('big.bin').collect(.count());          // how many chunks
-  /// io.chunks('big.bin', size: 4096).collect(.first());
-  /// ```
-  ///
-  /// [size] is the most bytes a chunk carries; the last one is short.
-  /// `chunks.write(path, seq)` is the other direction, which writes the
-  /// chunks through without ever holding the file.
-  ChunksAccessor get chunks => const ChunksAccessor();
-
-  // --- Writing (always atomic, via a `.part` staging file) ---
-
-  /// Writes text [content] to [path] atomically. See [Fs.writeSync].
-  FileSystemEntry write(
-    String path,
-    String content, {
-    String part = '.part',
-    Encoding encoding = utf8,
-  }) => Fs.entryFor(
-    Fs.writeSync(path, content, part: part, encoding: encoding).path,
-  );
-
-  /// Encodes [data] as JSON and writes it to [path] atomically.
-  ///
-  /// [data] accepts any value `jsonEncode` understands. Reading one back is
-  /// `format.json.read`, and the general form of this is
-  /// `format.json.write(path, data)` — this is that under the shorter name a
-  /// script reaches for, for the one format everybody has.
-  ///
-  /// Its three relatives write JSON *of a collection*, with the receiver
-  /// first: `seq.dump(path)`, `dict.dump(path)`, `await flow.dump(path)`.
-  FileSystemEntry dump(
-    String path,
-    Object? data, {
-    bool pretty = true,
-    String part = '.part',
-  }) => Fs.entryFor(Fs.dumpSync(path, data, pretty: pretty, part: part).path);
-
-  /// Appends to the end of [path], creating it if it is missing.
-  ///
-  /// Callable, and a namespace: `append(path, text)` opens, writes and closes
-  /// in one call, and `append.open(path)` hands back a handle that stays open
-  /// for a loop that writes many times.
-  ///
-  /// ```dart
-  /// io.append('out/run.log', '${util.time.stamp()} finished\n');
-  /// ```
-  ///
-  /// **The one write here that is not atomic**, and it cannot be: appending
-  /// adds to what is already on disk, so there is no staged copy to swap into
-  /// place. An interrupted append can leave a partial line. When a file has
-  /// to appear whole or not at all, build it and [write] it — or hand the
-  /// elements to `io.lines.write`, which stages.
-  AppendAccessor get append => const AppendAccessor();
-
-  /// Creates [path] empty, or updates its modification time if it is there.
-  ///
-  /// The marker file a script leaves to say a step is done, and the way to
-  /// make an empty file without `io.write(path, '')` — which reads like it
-  /// meant to write something.
-  FileSystemEntry touch(String path) => Fs.touchSync(path);
-
-  /// Creates a new empty temporary file named after [prefix].
-  ///
-  /// The file beside `io.dir.temp`'s directory. It is made inside a fresh
-  /// temporary directory of its own, so two callers with one prefix cannot
-  /// collide, and removing `io.path.dirname(entry.path)` removes the lot.
-  ///
-  /// ```dart
-  /// final scratch = io.temp('render_');
-  /// io.write(scratch.path, 'working');
-  /// io.remove(io.path.dirname(scratch.path));
-  /// ```
-  FileSystemEntry temp([String prefix = 'tmp_']) => Fs.tempfileSync(prefix);
-
-  // --- Moving and removing ---
-
-  /// Copies [source] to [destination], creating parent directories.
-  ///
-  /// Recursively copies directories if [source] is a directory.
-  FileSystemEntry copy(String source, String destination) =>
-      Fs.copySync(source, destination);
-
-  /// Moves [source] to [destination], creating parent directories.
-  ///
-  /// Works across filesystems by falling back to copy-and-delete.
-  FileSystemEntry move(String source, String destination) =>
-      Fs.moveSync(source, destination);
-
-  /// Removes a file, link or directory at [path].
-  ///
-  /// Returns `true` if the entity was removed, or `false` if it did not
-  /// exist. The single entity, where `io.dir.sweep` is the sweep.
-  bool remove(String path) => Fs.removeSync(path);
-
-  // --- Metadata, locking and watching ---
-
-  /// Returns the hex digest of [path] using [algorithm].
-  String hash(String path, [Algo algorithm = Algo.sha256]) =>
-      Fs.hash(path, algorithm);
-
-  /// Runs [action] with the lock file [path] held, and returns what it gave.
-  ///
-  /// The moment a script is good enough to put on a schedule, two copies of it
-  /// eventually run at once — a slow run overlapping the next tick, or a human
-  /// running it by hand while cron does. Atomic writes make the *file* safe;
-  /// they do not stop the *result* from being whichever process finished last.
-  ///
-  /// ```dart
-  /// // setup: final seed = 'https://example.com'.url;
-  /// await io.lock('.crawl.lock', () async {
-  ///   // exactly one process in here
-  ///   await net.crawl([Fetch(seed)].seq).flow.dump('out.json');
-  /// });
-  /// ```
-  ///
-  /// A second process throws [LockedError] straight away, or waits up to
-  /// [wait] for its turn when one is given. The lock is released on a normal
-  /// return, on a throw, **and on Ctrl-C** — a lock file that outlives an
-  /// interrupt is worse than no lock at all, because the next run refuses to
-  /// start.
-  ///
-  /// The file holds the pid and a timestamp, so a stale lock is diagnosable.
-  /// A lock whose recorded process is gone is taken rather than obeyed; there
-  /// is deliberately no age cut-off, because "older than an hour is stale"
-  /// breaks the one run that legitimately took ninety minutes.
-  ///
-  /// Holding a lock is inherently asynchronous, so there is no `io.async`
-  /// twin: this *is* the one form it has.
-  Future<R> lock<R>(
-    String path,
-    FutureOr<R> Function() action, {
-    Duration? wait,
-  }) => Lock.hold(path, action, wait: wait);
-
-  /// Whether the lock file at [path] is held by a live process.
-  ///
-  /// For a status line, not for deciding whether to take it — between the
-  /// check and the take, another process can win. [lock] is the answer that
-  /// cannot race.
-  bool locked(String path) => Lock.held(path);
-
-  /// Calls [onchange] when a file at or under [path] changes.
-  ///
-  /// Returns the function that stops watching — hold onto it, because a live
-  /// watcher keeps the process alive:
-  ///
-  /// ```dart
-  /// final stop = io.watch(
-  ///   'lib',
-  ///   (changed) => log.info('changed: $changed'),
-  ///   pattern: RegExp(r'\.dart$'),
-  /// );
-  /// // ... later
-  /// await stop();
-  /// ```
-  ///
-  /// [settle] coalesces a burst of events for one path into a single call,
-  /// which is the part everyone hand-rolls wrong: an editor writes a file two
-  /// or three times per save, so the naive version fires three builds. Pass
-  /// `Duration.zero` for every raw event.
-  ///
-  /// Only files are reported, filtered by [pattern] when one is given. Set
-  /// [recursive] to `false` to watch just the one directory. A directory
-  /// created later is picked up either way — Linux watches one directory at a
-  /// time, so a recursive watch there is a subscription per directory, and
-  /// hiding that asymmetry is most of why this member exists.
-  ///
-  /// Watching is inherently asynchronous, so like [lock] it has no `io.async`
-  /// twin.
-  ///
-  /// Called `observe` through 4.0.0, because `system.on.signals()` meant *watch
-  /// for Ctrl-C* and two `watch`es meaning two unrelated things is exactly
-  /// what Rule 5 is for. NAMESPACE.md recorded the compromise in as many
-  /// words — *`observe` is free, honest, and slightly less good than
-  /// `watch`*. 5.0.0 moved signal watching to `system.on.signals()`, where it
-  /// belongs by Rule 3, and took the better name back.
-  Future<void> Function() watch(
-    String path,
-    void Function(String path) onchange, {
-    Pattern? pattern,
-    Duration settle = const Duration(milliseconds: 200),
-    bool recursive = true,
-  }) => Watch.start(
+/// Writes [lines] to [path] atomically, one per line.
+Future<FileSystemEntry> writeLines(
+  String path,
+  Iterable<String> lines, {
+  String newline = '\n',
+  Encoding encoding = utf8,
+  String part = '.part',
+}) async => Fs.entryFor(
+  (await Fs.pourLines(
     path,
-    onchange,
-    pattern: pattern,
-    settle: settle,
-    recursive: recursive,
+    Stream.fromIterable(lines),
+    newline: newline,
+    encoding: encoding,
+    part: part,
+  )).path,
+);
+
+/// Writes [lines] to [path] atomically and synchronously.
+FileSystemEntry writeLinesSync(
+  String path,
+  Iterable<String> lines, {
+  String newline = '\n',
+  Encoding encoding = utf8,
+  String part = '.part',
+}) => Fs.entryFor(
+  Fs.writeLinesSync(
+    path,
+    lines.toList(),
+    newline: newline,
+    encoding: encoding,
+    part: part,
+  ).path,
+);
+
+/// Serializes [data] as JSON and writes it to [path] atomically.
+Future<FileSystemEntry> writeJson(
+  String path,
+  Object? data, {
+  bool pretty = true,
+  String part = '.part',
+}) async =>
+    Fs.entryFor((await Fs.dump(path, data, pretty: pretty, part: part)).path);
+
+/// Serializes [data] as JSON and writes it to [path] atomically and synchronously.
+FileSystemEntry writeJsonSync(
+  String path,
+  Object? data, {
+  bool pretty = true,
+  String part = '.part',
+}) => Fs.entryFor(Fs.dumpSync(path, data, pretty: pretty, part: part).path);
+
+/// Whether a file or entity exists at [path].
+bool fileExists(String path) => File(path).existsSync();
+
+/// Whether a directory exists at [path].
+bool dirExists(String path) => Directory(path).existsSync();
+
+/// Gets metadata for [path], or `null` if it does not exist.
+FileSystemEntry? fileStat(String path) => Fs.stat(path);
+
+/// Removes a file, link or directory at [path] asynchronously.
+Future<bool> removePath(String path) => Fs.removeAsync(path);
+
+/// Removes a file, link or directory at [path] synchronously.
+bool removePathSync(String path) => Fs.removeSync(path);
+
+/// Copies [source] to [destination] asynchronously, creating parent directories.
+Future<FileSystemEntry> copyPath(String source, String destination) =>
+    Fs.copyAsync(source, destination);
+
+/// Copies [source] to [destination] synchronously, creating parent directories.
+FileSystemEntry copyPathSync(String source, String destination) =>
+    Fs.copySync(source, destination);
+
+/// Moves [source] to [destination] asynchronously, creating parent directories.
+Future<FileSystemEntry> movePath(String source, String destination) =>
+    Fs.moveAsync(source, destination);
+
+/// Moves [source] to [destination] synchronously, creating parent directories.
+FileSystemEntry movePathSync(String source, String destination) =>
+    Fs.moveSync(source, destination);
+
+/// Creates directory [path] asynchronously, creating missing parents.
+Future<FileSystemEntry> makeDir(String path) => Fs.mkdir(path);
+
+/// Creates directory [path] synchronously, creating missing parents.
+FileSystemEntry makeDirSync(String path) => Fs.mkdirSync(path);
+
+/// Lists entries directly under [path] asynchronously.
+Future<List<FileSystemEntry>> listDir(
+  String path, {
+  bool recursive = false,
+  String? match,
+}) => Entries.walkAsync(path, match: match, depth: recursive ? null : 1).toList();
+
+/// Lists entries directly under [path] synchronously.
+List<FileSystemEntry> listDirSync(
+  String path, {
+  bool recursive = false,
+  String? match,
+}) => recursive
+    ? Entries.walk(path, match: match).toList()
+    : Entries.list(path, match: match).toList();
+
+/// Recursively walks [path] asynchronously, yielding entries matching [match].
+Future<List<FileSystemEntry>> walkDir(
+  String path, {
+  String? match,
+  int? depth,
+}) => Entries.walkAsync(path, match: match, depth: depth).toList();
+
+/// Recursively walks [path] synchronously, yielding entries matching [match].
+List<FileSystemEntry> walkDirSync(
+  String path, {
+  String? match,
+  int? depth,
+}) => Entries.walk(path, match: match, depth: depth).toList();
+
+/// Creates a new temporary directory asynchronously.
+Future<FileSystemEntry> tempDir([String prefix = 'tmp_']) => Fs.temp(prefix);
+
+/// Creates a new temporary directory synchronously.
+FileSystemEntry tempDirSync([String prefix = 'tmp_']) => Fs.tempSync(prefix);
+
+/// Creates a new empty temporary file asynchronously.
+Future<FileSystemEntry> tempFile([String prefix = 'tmp_']) =>
+    Fs.tempfile(prefix);
+
+/// Creates a new empty temporary file synchronously.
+FileSystemEntry tempFileSync([String prefix = 'tmp_']) =>
+    Fs.tempfileSync(prefix);
+
+/// Runs [action] with the lock file [path] held, safe across OS processes.
+Future<R> withLock<R>(
+  String path,
+  FutureOr<R> Function() action, {
+  Duration? wait,
+}) => Lock.hold(path, action, wait: wait);
+
+/// Runs [action] synchronously with the lock file [path] held.
+R withLockSync<R>(String path, R Function() action) =>
+    Lock.holdSync(path, action);
+
+/// Whether the lock file at [path] is currently held by a live process.
+bool isLocked(String path) => Lock.held(path);
+
+/// Watches for filesystem changes at [path]. Returns a function that stops watching.
+Future<void> Function() watchPath(
+  String path,
+  void Function(String path) onchange, {
+  Pattern? pattern,
+  Duration settle = const Duration(milliseconds: 200),
+  bool recursive = true,
+}) => Watch.start(
+  path,
+  onchange,
+  pattern: pattern,
+  settle: settle,
+  recursive: recursive,
+);
+
+/// Joins path segments using the platform separator.
+String joinPath(
+  String part1, [
+  String? part2,
+  String? part3,
+  String? part4,
+  String? part5,
+  String? part6,
+  String? part7,
+  String? part8,
+]) => p.join(part1, part2, part3, part4, part5, part6, part7, part8);
+
+/// The directory portion of [path].
+String dirname(String path) => p.dirname(path);
+
+/// The final segment of [path], including extension.
+String filename(String path) => p.basename(path);
+
+/// The final segment of [path] without extension.
+String stemName(String path) => p.basenameWithoutExtension(path);
+
+/// The extension of [path], including the leading dot.
+String fileExtension(String path) => p.extension(path);
+
+/// The current working directory path.
+String get cwd => Fs.cwd;
+
+/// The current user's home directory path.
+String get home => Fs.home;
+
+/// Splits [path] into individual segments.
+List<String> pathParts(String path) => p.split(path);
+
+/// Normalizes [path] by resolving `.` and `..`.
+String normalizePath(String path) => p.normalize(path);
+
+/// Resolves [path] to an absolute path.
+String absolutePath(String path) => p.absolute(path);
+
+/// Returns [path] relative to [from] (or current directory).
+String relativePath(String path, {String? from}) => p.relative(path, from: from);
+
+/// Expands leading `~` and `$VAR` environment variables in [path].
+String expandPath(String path) {
+  var out = path;
+  if (out == '~') {
+    out = Fs.home;
+  } else if (out.startsWith('~/') || out.startsWith('~\\')) {
+    out = p.join(Fs.home, out.substring(2));
+  }
+  return out.replaceAllMapped(
+    RegExp(r'\$\{(\w+)\}|\$(\w+)'),
+    (m) => Platform.environment[m.group(1) ?? m.group(2)!] ?? '',
   );
 }
 
-/// The non-blocking mirror of [IoAccessor], reachable as `io.async`.
+/// Replaces characters that are illegal in filenames.
+String sanitizeFilename(String name, {String replace = '_', bool full = false}) =>
+    Fs.sanitize(name, replace: replace, full: full);
+
+/// Finds entries matching a shell-style glob [pattern] asynchronously.
+Future<List<FileSystemEntry>> glob(String pattern) =>
+    Entries.expandAsync(pattern).toList();
+
+/// Finds entries matching a shell-style glob [pattern] synchronously.
+List<FileSystemEntry> globSync(String pattern) =>
+    Entries.expand(pattern).toList();
+
+/// Static helper hub for all filesystem operations.
 ///
-/// Every operation that touches the disk appears here under the same name and
-/// arguments, returning a future instead of blocking — including the whole of
-/// `io.dir`, as [IoAsyncAccessor.dir]. A crawl runs many requests on one
-/// isolate, so a blocking read stalls every other task in flight; reach for
-/// this inside handlers and pool workers.
-///
+/// Easily discoverable via auto-complete:
 /// ```dart
-/// await net.crawl([Fetch(seed)].seq).flow.collect(.foreach((res) async {
-///   await io.async.write('pages/${res.fetch.depth}.html', res.body);
-/// }));
+/// await Files.writeText('out.txt', 'hello');
+/// final content = await Files.readText('out.txt');
+/// final files = await Files.walk('src', match: '*.dart');
 /// ```
-///
-/// **What is deliberately not here**, and why the mirror is still complete:
-///
-/// - `io.path` — pure string arithmetic, with nothing to wait for.
-/// - [IoAccessor.lock], [IoAccessor.locked] and [IoAccessor.watch] — already
-///   asynchronous on `io`, because holding a lock and watching for a change
-///   have no blocking form to mirror.
-/// - [DirAccessor.cwd] and [DirAccessor.home] — neither reads anything.
-///
-/// `io.csv` used to be a third entry on that list, because every member of it
-/// was already a `Stream` or a `Future` from the accessor that promises to
-/// block. It is a real mirror now; see the `io.csv` library doc.
-///
-/// Members whose *shape* differs follow one rule with no exceptions: a
-/// [Sequence] on `io`, a [Flow] on `io.async`. That covers [lines] and
-/// [chunks], `io.dir`'s [DirAccessor.list], [DirAccessor.walk] and
-/// [DirAccessor.glob], and `io.csv`'s [CsvFileAccessor.rows],
-/// [CsvFileAccessor.records] and [CsvFileAccessor.write]. That is the mirror
-/// working rather than failing — blocking means the elements are already
-/// read. `test/regression_test.dart` pins the set, so a member added to one
-/// side and forgotten on the other fails the build.
-///
-/// **One property is not parity.** A [Flow] from here is consumed once; the
-/// [Sequence] from `io` can be walked again, re-reading the disk. Where a
-/// listing has to be read twice, `Flow.of` is the re-derivable form and
-/// `collect(.seq())` is the held one.
-class IoAsyncAccessor {
-  /// Creates the accessor. Prefer the shared `io.async` instance.
-  const IoAsyncAccessor();
+abstract final class Files {
+  Files._();
 
-  /// Directories, without blocking. See [DirAsyncAccessor].
-  DirAsyncAccessor get dir => const DirAsyncAccessor();
-
-  /// CSV files, streaming. See [CsvFileAsyncAccessor].
-  CsvFileAsyncAccessor get csv => const CsvFileAsyncAccessor();
-
-  /// The JSON object at [path] as a [Map]. See [IoAccessor.dictionary].
-  Future<Map<String, Object?>> dictionary(String path) async {
-    final file = File(path);
-    if (!await file.exists()) return <String, Object?>{};
-    return _dictionary(path, await file.readAsString());
-  }
-
-  /// The state a script keeps between runs, bound to [path].
-  Future<DiskState> state(String path) async =>
-      DiskState(path, await dictionary(path));
-
-  // --- Existence ---
-
-  /// Whether anything at all is at [path] — file, directory or link.
-  Future<bool> exists(String path) async =>
-      await Entries.kindAsync(path) != null;
-
-  /// Whether [path] points to a regular file without blocking.
-  Future<bool> isFile(String path) async =>
-      (await Entries.kindAsync(path)) == FileSystemEntryKind.file;
-
-  /// Whether [path] points to a directory without blocking.
-  Future<bool> isDir(String path) async =>
-      (await Entries.kindAsync(path)) == FileSystemEntryKind.directory;
-
-  /// Whether [path] points to a symbolic link without blocking.
-  Future<bool> isLink(String path) async =>
-      (await Entries.kindAsync(path)) == FileSystemEntryKind.link;
-
-  /// The size of [path] in bytes without blocking, or `null` when absent.
-  Future<int?> size(String path) async => (await stat(path))?.size;
-
-  /// Whether [path] exists and holds at least one byte.
-  Future<bool> has(String path) => Fs.hasAsync(path);
-
-  /// Whether a loosely similarly-named file sits beside [path]. See [Fs.similar].
-  Future<bool> similar(String path) => Fs.similarAsync(path);
-
-  /// The entry at [path], or `null` when there is nothing there.
-  Future<FileSystemEntry?> stat(String path) => Fs.statAsync(path);
-
-  // --- Reading ---
-
-  /// Reads [path] as a string.
-  Future<String> read(String path, {Encoding encoding = utf8}) =>
+  /// Reads [path] as a UTF-8 string asynchronously.
+  static Future<String> readText(String path, {Encoding encoding = utf8}) =>
       File(path).readAsString(encoding: encoding);
 
-  /// Reads [path] as raw bytes, and writes bytes back. See [IoAccessor.bytes].
-  BytesAsyncAccessor get bytes => const BytesAsyncAccessor();
+  /// Reads [path] as a UTF-8 string synchronously.
+  static String readTextSync(String path, {Encoding encoding = utf8}) =>
+      File(path).readAsStringSync(encoding: encoding);
 
-  /// Reads [path] as decoded lines, and writes a flow back as them.
-  ///
-  /// Callable, and a namespace, exactly as [IoAccessor.lines] is — the shape
-  /// is what differs: a [Flow] where the blocking mirror hands back a
-  /// [Sequence], on both the reading and the writing side.
-  ///
-  /// ```dart
-  /// await io.async.lines('big.log')
-  ///     .through(.where((line) => line.contains('ERROR')))
-  ///     .collect(.foreach(print));
-  ///
-  /// await io.async.lines.write(
-  ///   'out/errors.log',
-  ///   io.async.lines('big.log').through(.where((l) => l.contains('ERROR'))),
-  /// );
-  /// ```
-  LinesAsyncAccessor get lines => const LinesAsyncAccessor();
+  /// Reads [path] as a list of lines asynchronously.
+  static Future<List<String>> readLines(
+    String path, {
+    Encoding encoding = utf8,
+  }) => File(path).readAsLines(encoding: encoding);
 
-  /// Reads [path] in byte chunks as they arrive, and writes a flow of them
-  /// back. See [IoAccessor.chunks].
-  ChunksAsyncAccessor get chunks => const ChunksAsyncAccessor();
+  /// Reads [path] as a list of lines synchronously.
+  static List<String> readLinesSync(
+    String path, {
+    Encoding encoding = utf8,
+  }) => File(path).readAsLinesSync(encoding: encoding);
 
-  // --- Writing (always atomic, via a `.part` staging file) ---
+  /// Reads raw bytes from [path] asynchronously.
+  static Future<Uint8List> readBytes(String path) => File(path).readAsBytes();
 
-  /// Writes text [content] to [path] atomically. See [Fs.write].
-  Future<FileSystemEntry> write(
+  /// Reads raw bytes from [path] synchronously.
+  static Uint8List readBytesSync(String path) => File(path).readAsBytesSync();
+
+  /// Reads and decodes JSON from [path] asynchronously.
+  static Future<dynamic> readJson(String path) async {
+    final text = await File(path).readAsString();
+    return jsonDecode(text);
+  }
+
+  /// Reads and decodes JSON from [path] synchronously.
+  static dynamic readJsonSync(String path) {
+    final text = File(path).readAsStringSync();
+    return jsonDecode(text);
+  }
+
+  /// Writes [content] to [path] atomically.
+  static Future<FileSystemEntry> writeText(
     String path,
     String content, {
-    String part = '.part',
     Encoding encoding = utf8,
+    String part = '.part',
   }) async => Fs.entryFor(
     (await Fs.write(path, content, part: part, encoding: encoding)).path,
   );
 
-  /// Encodes [data] as JSON and writes it to [path] atomically.
-  Future<FileSystemEntry> dump(
+  /// Writes [content] to [path] atomically and synchronously.
+  static FileSystemEntry writeTextSync(
     String path,
-    Object? data, {
-    bool pretty = true,
-    String part = '.part',
-  }) async =>
-      Fs.entryFor((await Fs.dump(path, data, pretty: pretty, part: part)).path);
-
-  /// Appends to the end of [path]. See [IoAccessor.append].
-  AppendAsyncAccessor get append => const AppendAsyncAccessor();
-
-  /// Creates [path] empty, or updates its modification time.
-  Future<FileSystemEntry> touch(String path) => Fs.touch(path);
-
-  /// Creates a new empty temporary file named after [prefix].
-  /// See [IoAccessor.temp].
-  Future<FileSystemEntry> temp([String prefix = 'tmp_']) => Fs.tempfile(prefix);
-
-  // --- Moving and removing ---
-
-  /// Copies [source] to [destination], creating parent directories.
-  Future<FileSystemEntry> copy(String source, String destination) =>
-      Fs.copyAsync(source, destination);
-
-  /// Moves [source] to [destination], creating parent directories.
-  Future<FileSystemEntry> move(String source, String destination) =>
-      Fs.moveAsync(source, destination);
-
-  /// Removes a file, link or directory at [path]; `false` when it did not exist.
-  Future<bool> remove(String path) => Fs.removeAsync(path);
-
-  // --- Metadata ---
-
-  /// Returns the hex digest of [path] using [algorithm].
-  Future<String> hash(String path, [Algo algorithm = Algo.sha256]) =>
-      Fs.hashAsync(path, algorithm);
-}
-
-/// Decodes a JSON object read from [path] into a [Map].
-Map<String, Object?> _dictionary(String path, String text) {
-  final decoded = jsonDecode(text);
-  if (decoded is! Map) {
-    throw FormatException(
-      '$path holds a ${decoded.runtimeType}, not a JSON object',
-    );
-  }
-  return {
-    for (final entry in decoded.entries) entry.key.toString(): entry.value,
-  };
-}
-
-// ============================================================================
-// THE NAMESPACES
-// ============================================================================
-
-/// The namespace behind [IoAccessor.bytes].
-class BytesAccessor {
-  /// Creates the accessor. Prefer the shared `io.bytes` instance.
-  const BytesAccessor();
-
-  /// Reads [path] as raw bytes.
-  List<int> call(String path) => File(path).readAsBytesSync();
-
-  /// Writes [content] to [path] atomically. See [Fs.saveSync].
-  FileSystemEntry write(
-    String path,
-    List<int> content, {
-    String part = '.part',
-  }) => Fs.entryFor(Fs.saveSync(path, content, part: part).path);
-}
-
-/// The namespace behind [IoAsyncAccessor.bytes].
-class BytesAsyncAccessor {
-  /// Creates the accessor. Prefer the shared `io.async.bytes` instance.
-  const BytesAsyncAccessor();
-
-  /// Reads [path] as raw bytes.
-  Future<List<int>> call(String path) => File(path).readAsBytes();
-
-  /// Writes [content] to [path] atomically. See [Fs.save].
-  Future<FileSystemEntry> write(
-    String path,
-    List<int> content, {
-    String part = '.part',
-  }) async => Fs.entryFor((await Fs.save(path, content, part: part)).path);
-}
-
-/// The namespace behind [IoAccessor.chunks].
-class ChunksAccessor {
-  /// Creates the accessor. Prefer the shared `io.chunks` instance.
-  const ChunksAccessor();
-
-  /// Reads [path] in byte chunks of at most [size] — on the walk, not before.
-  Iterable<List<int>> call(String path, {int size = 64 * 1024}) =>
-      Fs.chunksSync(path, size: size);
-
-  /// Writes [chunks] to [path] atomically, one after another.
-  ///
-  /// The whole sequence is walked while the staging file is open, so nothing
-  /// is held but the chunk being written — which is what makes copying a file
-  /// larger than memory one line.
-  FileSystemEntry write(
-    String path,
-    Iterable<List<int>> chunks, {
+    String content, {
+    Encoding encoding = utf8,
     String part = '.part',
   }) => Fs.entryFor(
-    Fs.writeChunksSync(path, chunks.toList(), part: part).path,
+    Fs.writeSync(path, content, part: part, encoding: encoding).path,
   );
-}
 
-/// The namespace behind [IoAsyncAccessor.chunks].
-class ChunksAsyncAccessor {
-  /// Creates the accessor. Prefer the shared `io.async.chunks` instance.
-  const ChunksAsyncAccessor();
-
-  /// Reads [path] in byte chunks of at most [size] as they arrive.
-  Stream<List<int>> call(String path, {int size = 64 * 1024}) =>
-      Fs.chunks(path, size: size);
-
-  /// Writes [chunks] to [path] atomically as they arrive.
-  ///
-  /// ```dart
-  /// await io.async.chunks.write('copy.bin', io.async.chunks('big.bin'));
-  /// ```
-  ///
-  /// The file appears whole or not at all: bytes go to a staging file that is
-  /// renamed into place once the flow ends, and discarded if it fails.
-  Future<FileSystemEntry> write(
+  /// Writes [lines] to [path] atomically.
+  static Future<FileSystemEntry> writeLines(
     String path,
-    Stream<List<int>> chunks, {
+    Iterable<String> lines, {
+    String newline = '\n',
+    Encoding encoding = utf8,
     String part = '.part',
-  }) async =>
-      Fs.entryFor((await Fs.pourChunks(path, chunks, part: part)).path);
-}
+  }) async => Fs.entryFor(
+    (await Fs.pourLines(
+      path,
+      Stream.fromIterable(lines),
+      newline: newline,
+      encoding: encoding,
+      part: part,
+    )).path,
+  );
 
-/// The namespace behind [IoAccessor.lines].
-class LinesAccessor {
-  /// Creates the accessor. Prefer the shared `io.lines` instance.
-  const LinesAccessor();
-
-  /// Reads [path] as decoded lines — on the first walk, not before.
-  Iterable<String> call(String path, {Encoding encoding = utf8}) =>
-      Fs.linesSync(path, encoding: encoding);
-
-  /// Writes [lines] to [path] atomically, one element per line.
-  ///
-  /// The general form that a crawl's `save(path)` and `io.csv.pipe` were each
-  /// a private version of through 5.4.0. [newline] ends every line,
-  /// including the last.
-  FileSystemEntry write(
+  /// Writes [lines] to [path] atomically and synchronously.
+  static FileSystemEntry writeLinesSync(
     String path,
     Iterable<String> lines, {
     String newline = '\n',
@@ -729,184 +465,363 @@ class LinesAccessor {
       part: part,
     ).path,
   );
-}
 
-/// The namespace behind [IoAsyncAccessor.lines].
-class LinesAsyncAccessor {
-  /// Creates the accessor. Prefer the shared `io.async.lines` instance.
-  const LinesAsyncAccessor();
-
-  /// Reads [path] as decoded lines, without loading the whole file.
-  Stream<String> call(String path, {Encoding encoding = utf8}) =>
-      Fs.lines(path, encoding: encoding);
-
-  /// Writes [lines] to [path] atomically as they arrive, one per line.
-  ///
-  /// Never holds more than the line it is writing, so a crawl, a large log or
-  /// a piped stdin becomes a file in one call:
-  ///
-  /// ```dart
-  /// await io.async.lines.write(
-  ///   'titles.txt',
-  ///   net.crawl([Fetch(seed)]).stream.map((res) => res.url.toString()),
-  /// );
-  /// ```
-  ///
-  /// The file appears whole or not at all: lines go to a staging file that is
-  /// renamed into place once the flow ends, and discarded if it fails.
-  Future<FileSystemEntry> write(
+  /// Writes raw [bytes] to [path] atomically.
+  static Future<FileSystemEntry> writeBytes(
     String path,
-    Stream<String> lines, {
-    String newline = '\n',
-    Encoding encoding = utf8,
+    List<int> bytes, {
     String part = '.part',
-  }) async => Fs.entryFor(
-    (await Fs.pourLines(
-      path,
-      lines,
-      newline: newline,
-      encoding: encoding,
-      part: part,
-    )).path,
-  );
-}
+  }) async => Fs.entryFor((await Fs.save(path, bytes, part: part)).path);
 
-/// The namespace behind [IoAccessor.append].
-class AppendAccessor {
-  /// Creates the accessor. Prefer the shared `io.append` instance.
-  const AppendAccessor();
-
-  /// Appends [content] to the end of [path], creating it if it is missing.
-  FileSystemEntry call(
+  /// Writes raw [bytes] to [path] atomically and synchronously.
+  static FileSystemEntry writeBytesSync(
     String path,
-    String content, {
-    Encoding encoding = utf8,
-  }) => Fs.appendSync(path, content, encoding: encoding);
+    List<int> bytes, {
+    String part = '.part',
+  }) => Fs.entryFor(Fs.saveSync(path, bytes, part: part).path);
 
-  /// A handle on [path] that stays open until it is closed.
-  ///
-  /// `io.append(path, line)` opens, writes and closes every time it is
-  /// called, which is right for the log line a script writes twice and wrong
-  /// for the loop that writes ten thousand:
-  ///
-  /// ```dart
-  /// final log = io.append.open('out/run.log');
-  /// try {
-  ///   for (final row in rows.collect(.list())) {
-  ///     log.write('${row.host}\n');
-  ///   }
-  /// } finally {
-  ///   await log.close();
-  /// }
-  /// ```
-  ///
-  /// The caller closes it — this is the one thing in `io` that is a handle
-  /// rather than a snapshot, and [Appender.close] is what flushes.
-  Appender open(String path, {Encoding encoding = utf8}) {
-    Fs.mkparentSync(path);
-    return Appender._(path, encoding);
-  }
-}
+  /// Serializes [data] as JSON and writes to [path] atomically.
+  static Future<FileSystemEntry> writeJson(
+    String path,
+    Object? data, {
+    bool pretty = true,
+    String part = '.part',
+  }) async =>
+      Fs.entryFor((await Fs.dump(path, data, pretty: pretty, part: part)).path);
 
-/// The namespace behind [IoAsyncAccessor.append].
-class AppendAsyncAccessor {
-  /// Creates the accessor. Prefer the shared `io.async.append` instance.
-  const AppendAsyncAccessor();
+  /// Serializes [data] as JSON and writes to [path] atomically and synchronously.
+  static FileSystemEntry writeJsonSync(
+    String path,
+    Object? data, {
+    bool pretty = true,
+    String part = '.part',
+  }) => Fs.entryFor(Fs.dumpSync(path, data, pretty: pretty, part: part).path);
 
-  /// Appends [content] to the end of [path]. See [AppendAccessor.call].
-  Future<FileSystemEntry> call(
+  /// Appends [content] to [path] asynchronously.
+  static Future<FileSystemEntry> append(
     String path,
     String content, {
     Encoding encoding = utf8,
   }) => Fs.append(path, content, encoding: encoding);
 
-  /// A handle on [path] that stays open. See [AppendAccessor.open].
-  Future<Appender> open(String path, {Encoding encoding = utf8}) async {
-    await Fs.mkparent(path);
-    return Appender._(path, encoding);
+  /// Appends [content] to [path] synchronously.
+  static FileSystemEntry appendSync(
+    String path,
+    String content, {
+    Encoding encoding = utf8,
+  }) => Fs.appendSync(path, content, encoding: encoding);
+
+  /// Whether a file or directory exists at [path].
+  static bool exists(String path) => fileExists(path) || dirExists(path);
+
+  /// Whether [path] exists and is non-empty.
+  static bool has(String path) => Fs.has(path);
+
+  /// Whether [path] exists and is non-empty asynchronously.
+  static Future<bool> hasAsync(String path) => Fs.hasAsync(path);
+
+  /// Computes the hash digest of [path] synchronously.
+  static String hashSync(String path, [Algo algo = Algo.sha256]) =>
+      Fs.hash(path, algo);
+
+  /// Computes the hash digest of [path] asynchronously.
+  static Future<String> hash(String path, [Algo algo = Algo.sha256]) =>
+      Fs.hashAsync(path, algo);
+
+  /// Whether a file exists at [path].
+  static bool isFile(String path) => fileExists(path);
+
+  /// Whether a directory exists at [path].
+  static bool isDir(String path) => dirExists(path);
+
+  /// Metadata for [path], or `null` if missing.
+  static FileSystemEntry? stat(String path) => fileStat(path);
+
+  /// Metadata for [path] synchronously, or `null` if missing.
+  static FileSystemEntry? statSync(String path) => fileStat(path);
+
+  /// Lists entries directly under [path] asynchronously.
+  static Future<List<FileSystemEntry>> list(
+    String path, {
+    bool recursive = false,
+    String? match,
+  }) => listDir(path, recursive: recursive, match: match);
+
+  /// Lists entries directly under [path] synchronously.
+  static List<FileSystemEntry> listSync(
+    String path, {
+    bool recursive = false,
+    String? match,
+  }) => listDirSync(path, recursive: recursive, match: match);
+
+  /// Recursively walks [path] asynchronously.
+  static Future<List<FileSystemEntry>> walk(
+    String path, {
+    String? match,
+    int? depth,
+  }) => walkDir(path, match: match, depth: depth);
+
+  /// Recursively walks [path] synchronously.
+  static List<FileSystemEntry> walkSync(
+    String path, {
+    String? match,
+    int? depth,
+  }) => walkDirSync(path, match: match, depth: depth);
+
+  /// Deletes files in [dir] matching [match] and returns the count of removed files.
+  static int sweepSync(String dir, {String? match}) {
+    var count = 0;
+    for (final entry in walkSync(dir, match: match)) {
+      if (entry.isfile || entry.islink) {
+        if (removeSync(entry.path)) count++;
+      }
+    }
+    return count;
   }
+
+  /// Deletes files in [dir] matching [match] asynchronously and returns the count of removed files.
+  static Future<int> sweep(String dir, {String? match}) async {
+    var count = 0;
+    for (final entry in await walk(dir, match: match)) {
+      if (entry.isfile || entry.islink) {
+        if (await remove(entry.path)) count++;
+      }
+    }
+    return count;
+  }
+
+  /// Calculates the total recursive size in bytes of [dir] synchronously.
+  static int dirSizeSync(String dir) {
+    var total = 0;
+    for (final entry in walkSync(dir)) {
+      total += entry.size;
+    }
+    return total;
+  }
+
+  /// Calculates the total recursive size in bytes of [dir] asynchronously.
+  static Future<int> dirSize(String dir) async {
+    var total = 0;
+    for (final entry in await walk(dir)) {
+      total += entry.size;
+    }
+    return total;
+  }
+
+  /// Whether directory [dir] is empty synchronously.
+  static bool isDirEmptySync(String dir) => Entries.empty(dir);
+
+  /// Whether directory [dir] is empty asynchronously.
+  static Future<bool> isDirEmpty(String dir) => Entries.emptyAsync(dir);
+
+  /// Creates directory [path] asynchronously.
+  static Future<FileSystemEntry> makeDir(String path) => Fs.mkdir(path);
+
+  /// Creates directory [path] synchronously.
+  static FileSystemEntry makeDirSync(String path) => Fs.mkdirSync(path);
+
+  /// Removes a file, link, or directory at [path] asynchronously.
+  static Future<bool> remove(String path) => removePath(path);
+
+  /// Removes a file, link, or directory at [path] synchronously.
+  static bool removeSync(String path) => removePathSync(path);
+
+  /// Deletes a file, link, or directory at [path] asynchronously.
+  static Future<bool> delete(String path) => remove(path);
+
+  /// Deletes a file, link, or directory at [path] synchronously.
+  static bool deleteSync(String path) => removeSync(path);
+
+  /// Copies [source] to [destination] asynchronously.
+  static Future<FileSystemEntry> copy(String source, String destination) =>
+      copyPath(source, destination);
+
+  /// Copies [source] to [destination] synchronously.
+  static FileSystemEntry copySync(String source, String destination) =>
+      copyPathSync(source, destination);
+
+  /// Moves [source] to [destination] asynchronously.
+  static Future<FileSystemEntry> move(String source, String destination) =>
+      movePath(source, destination);
+
+  /// Moves [source] to [destination] synchronously.
+  static FileSystemEntry moveSync(String source, String destination) =>
+      movePathSync(source, destination);
+
+  /// Creates a temporary directory asynchronously.
+  static Future<FileSystemEntry> tempDir([String prefix = 'tmp_']) =>
+      Fs.temp(prefix);
+
+  /// Creates a temporary directory synchronously.
+  static FileSystemEntry tempDirSync([String prefix = 'tmp_']) =>
+      Fs.tempSync(prefix);
+
+  /// Creates an empty temporary file asynchronously.
+  static Future<FileSystemEntry> tempFile([String prefix = 'tmp_']) =>
+      Fs.tempfile(prefix);
+
+  /// Creates an empty temporary file synchronously.
+  static FileSystemEntry tempFileSync([String prefix = 'tmp_']) =>
+      Fs.tempfileSync(prefix);
+
+  /// Runs [action] with the lock file at [path] held asynchronously.
+  static Future<R> lock<R>(
+    String path,
+    FutureOr<R> Function() action, {
+    Duration? wait,
+  }) => withLock(path, action, wait: wait);
+
+  /// Runs [action] with the lock file at [path] held synchronously.
+  static R lockSync<R>(String path, R Function() action) =>
+      withLockSync(path, action);
+
+  /// Whether the lock file at [path] is currently held by a live process.
+  static bool isLocked(String path) => Lock.held(path);
+
+  /// Watches filesystem changes at [path].
+  static Future<void> Function() watch(
+    String path,
+    void Function(String path) onchange, {
+    Pattern? pattern,
+    Duration settle = const Duration(milliseconds: 200),
+    bool recursive = true,
+  }) => watchPath(path, onchange, pattern: pattern, settle: settle, recursive: recursive);
+
+  /// The current working directory path.
+  static String get cwd => Fs.cwd;
+
+  /// The current user's home directory path.
+  static String get home => Fs.home;
+
+  /// Joins path segments using the platform separator.
+  static String join(
+    String part1, [
+    String? part2,
+    String? part3,
+    String? part4,
+    String? part5,
+    String? part6,
+    String? part7,
+    String? part8,
+  ]) => p.join(part1, part2, part3, part4, part5, part6, part7, part8);
+
+  /// The directory portion of [path].
+  static String dirname(String path) => p.dirname(path);
+
+  /// The final segment of [path], including extension.
+  static String filename(String path) => p.basename(path);
+
+  /// The final segment of [path] without extension.
+  static String stem(String path) => p.basenameWithoutExtension(path);
+
+  /// The extension of [path], including the leading dot.
+  static String ext(String path) => p.extension(path);
+
+  /// Splits [path] into individual segments.
+  static List<String> parts(String path) => p.split(path);
+
+  /// Normalizes [path] by resolving `.` and `..`.
+  static String normalize(String path) => p.normalize(path);
+
+  /// Resolves [path] to an absolute path.
+  static String abs(String path) => p.absolute(path);
+
+  /// Returns [path] relative to [from] (or current directory).
+  static String rel(String path, {String? from}) => p.relative(path, from: from);
+
+  /// Expands leading `~` and `$VAR` environment variables in [path].
+  static String expand(String path) => expandPath(path);
+
+  /// Replaces characters that are illegal in filenames.
+  static String sanitize(String name, {String replace = '_', bool full = false}) =>
+      Fs.sanitize(name, replace: replace, full: full);
+
+  /// Finds entries matching a shell-style glob [pattern] asynchronously.
+  static Future<List<FileSystemEntry>> glob(String pattern) =>
+      Entries.expandAsync(pattern).toList();
+
+  /// Finds entries matching a shell-style glob [pattern] synchronously.
+  static List<FileSystemEntry> globSync(String pattern) =>
+      Entries.expand(pattern).toList();
+
+  /// Creates a symbolic link at [path] pointing to [target] synchronously.
+  static FileSystemEntry linkSync(String path, String target) =>
+      Fs.linkSync(path, target);
+
+  /// Creates a symbolic link at [path] pointing to [target] asynchronously.
+  static Future<FileSystemEntry> link(String path, String target) =>
+      Fs.link(path, target);
+
+  /// Resolves the raw target of a symbolic link at [path] synchronously.
+  static String? symlinkTargetSync(String path) => Fs.targetSync(path);
+
+  /// Resolves the raw target of a symbolic link at [path] asynchronously.
+  static Future<String?> symlinkTarget(String path) => Fs.target(path);
+
+  /// Reads CSV rows from [path] synchronously.
+  static Iterable<List<String>> readCsvRowsSync(
+    String path, {
+    String delimiter = ',',
+    Encoding encoding = utf8,
+  }) => csv_impl.readCsvRowsSync(path, delimiter: delimiter, encoding: encoding);
+
+  /// Reads CSV rows from [path] asynchronously.
+  static Stream<List<String>> readCsvRows(
+    String path, {
+    String delimiter = ',',
+    Encoding encoding = utf8,
+  }) => csv_impl.readCsvRows(path, delimiter: delimiter, encoding: encoding);
+
+  /// Reads CSV records from [path] synchronously.
+  static Iterable<Map<String, String>> readCsvRecordsSync(
+    String path, {
+    String delimiter = ',',
+    Encoding encoding = utf8,
+  }) => csv_impl.readCsvRecordsSync(path, delimiter: delimiter, encoding: encoding);
+
+  /// Reads CSV records from [path] asynchronously.
+  static Stream<Map<String, String>> readCsvRecords(
+    String path, {
+    String delimiter = ',',
+    Encoding encoding = utf8,
+  }) => csv_impl.readCsvRecords(path, delimiter: delimiter, encoding: encoding);
+
+  /// Writes CSV [rows] to [path] atomically and synchronously.
+  static FileSystemEntry writeCsvSync<V>(
+    String path,
+    Iterable<Map<String, V>> rows, {
+    List<String>? headers,
+    String delimiter = ',',
+    String newline = '\n',
+    String part = '.part',
+  }) => csv_impl.writeCsvSync(
+    path,
+    rows,
+    headers: headers,
+    delimiter: delimiter,
+    newline: newline,
+    part: part,
+  );
+
+  /// Writes CSV [rows] to [path] as they arrive, atomically.
+  static Future<FileSystemEntry> writeCsv<V>(
+    String path,
+    Stream<Map<String, V>> rows, {
+    List<String>? headers,
+    String delimiter = ',',
+    String newline = '\n',
+    String part = '.part',
+    Encoding encoding = utf8,
+  }) => csv_impl.writeCsv(
+    path,
+    rows,
+    headers: headers,
+    delimiter: delimiter,
+    newline: newline,
+    part: part,
+    encoding: encoding,
+  );
 }
 
-/// An open file, held for a run of appends.
-///
-/// **The one type in `io` with a lifecycle.** Every other member of the
-/// domain is complete when it returns, and every other value here — a
-/// [FileSystemEntry], a [Dictionary] — is a snapshot that owns nothing and
-/// can be handed around freely. This holds a descriptor from
-/// `io.append.open(path)` until [close], so closing it is the caller's job
-/// and a `try`/`finally` is the shape:
-///
-/// ```dart
-/// // setup: const lines = ['first', 'second'];
-/// final log = await io.append.open('out/run.log');
-/// try {
-///   for (final line in lines) log.write('$line\n');
-/// } finally {
-///   await log.close();
-/// }
-/// ```
-///
-/// It exists because the alternative for a loop is `io.append(path, text)` per
-/// line, which opens and closes the file every time. Like every append, it is
-/// **not atomic** — see [IoAccessor.append].
-final class Appender {
-  Appender._(this.path, Encoding encoding)
-    : _sink = File(path).openWrite(mode: FileMode.append, encoding: encoding);
-
-  /// The file being appended to.
-  final String path;
-
-  final IOSink _sink;
-  var _closed = false;
-
-  /// Appends [content] exactly as given.
-  void write(String content) {
-    if (_closed) throw StateError('This appender is closed.');
-    _sink.write(content);
-  }
-
-  /// Flushes what is buffered and releases the descriptor.
-  ///
-  /// Idempotent, so a `finally` that runs after an early `close` is not an
-  /// error. Nothing written is guaranteed to be on disk until this returns.
-  Future<void> close() async {
-    if (_closed) return;
-    _closed = true;
-    await _sink.flush();
-    await _sink.close();
-  }
-
-  @override
-  String toString() => 'Appender($path${_closed ? ', closed' : ''})';
-}
-
-/// Persistent script state backed by a JSON dictionary on disk.
-class DiskState {
-  /// The file path on disk.
-  final String path;
-  final Map<String, Object?> _data;
-
-  /// Creates a state container bound to [path].
-  DiskState(this.path, this._data);
-
-  /// Reads [slot]'s value from this state.
-  T? read<T>(Slot<T> slot) => _data.read(slot);
-
-  /// Writes [value] to [slot] in this state.
-  void write<T>(Slot<T> slot, T value) => _data.write(slot, value);
-
-  /// Whether [slot] is present in this state.
-  bool holds(Slot<Object?> slot) => _data.holds(slot);
-
-  /// Removes [slot] from this state.
-  void drop(Slot<Object?> slot) => _data.drop(slot);
-
-  /// Flushes this state atomically to disk at [path].
-  void save() => io.dump(path, _data);
-
-  /// Flushes this state atomically to disk at [path] asynchronously.
-  Future<void> saveAsync() => io.async.dump(path, _data);
-
-  /// The underlying map data.
-  Map<String, Object?> get raw => _data;
-}
+/// Shorthand alias for [Files].
+typedef IO = Files;

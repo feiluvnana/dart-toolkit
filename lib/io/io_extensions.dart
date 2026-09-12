@@ -24,10 +24,10 @@ extension ToolkitFileExtensions on File {
       readAsLinesSync(encoding: encoding);
 
   /// Reads and parses this file as a JSON document cursor.
-  Future<Json> readJson() async => format.json.parse(await readAsString());
+  Future<Json> readJson() async => parseJson(await readAsString());
 
   /// Reads and parses this file as a JSON document cursor synchronously.
-  Json readJsonSync() => format.json.parse(readAsStringSync());
+  Json readJsonSync() => parseJson(readAsStringSync());
 
   /// Decodes this file's JSON content directly as typed [T].
   Future<T> readDecoded<T>() async => jsonDecode(await readAsString()) as T;

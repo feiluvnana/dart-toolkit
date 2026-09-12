@@ -12,6 +12,8 @@ import 'dart:core';
 import 'dart:core' as core;
 import 'dart:io';
 
+import '../src/shared.dart';
+
 // ============================================================================
 // ENVIRONMENT & .ENV SUBSYSTEM (system.env.*)
 // ============================================================================
@@ -22,14 +24,20 @@ import 'dart:io';
 /// without mutating the real process environment.
 ///
 /// ```dart
-/// system.env.load();
-/// final port = system.env.get<int>('PORT', 8080);
+/// Env.load();
+/// final port = Env.get<int>('PORT', 8080);
 /// ```
 class EnvAccessor {
   final Map<String, String> _overrides = {};
 
   /// Creates the accessor. Prefer the shared `system.env` instance.
   EnvAccessor();
+
+  /// Reads [key] from the environment (overrides first, then process), or `null`.
+  String? operator [](String key) => _overrides[key] ?? Platform.environment[key];
+
+  /// Sets an override for [key].
+  void operator []=(String key, String value) => set(key, value);
 
   /// Loads `KEY=value` pairs from the file at [path].
   ///
@@ -92,9 +100,9 @@ class EnvAccessor {
   /// `false/0/no/off`, case-insensitively.
   ///
   /// ```dart
-  /// system.env.get('HOST', 'localhost'); // String
-  /// system.env.get('PORT', 8080);        // int
-  /// system.env.get('DEBUG', false);      // bool
+  /// Env.get('HOST', 'localhost'); // String
+  /// Env.get('PORT', 8080);        // int
+  /// Env.get('DEBUG', false);      // bool
   /// ```
   T get<T>(String key, T fallback) {
     final raw = _overrides[key] ?? Platform.environment[key];
@@ -163,4 +171,67 @@ class EnvAccessor {
 
   /// The process environment with overrides applied.
   Map<String, String> map() => {...Platform.environment, ..._overrides};
+}
+
+// ============================================================================
+// STATIC HELPER HUB: Env
+// ============================================================================
+
+/// Static helper hub for environment variables and `.env` loading.
+///
+/// Easily discoverable via IDE auto-complete:
+/// ```dart
+/// Env.load();
+/// final port = Env.get('PORT', 8080);
+/// final key = Env.read('API_KEY');
+/// ```
+abstract final class Env {
+  Env._();
+
+  /// Reads [key] from the environment, or `null`.
+  static String? read(String key) => sharedEnv[key];
+
+  /// Reads [key] as [T], returning [fallback] when absent or unparseable.
+  static T get<T>(String key, T fallback) => sharedEnv.get<T>(key, fallback);
+
+  /// Reads [key] as an integer, returning [defaultValue] if absent or unparseable.
+  static core.int int(String key, {core.int defaultValue = 0}) =>
+      sharedEnv.int(key, defaultValue: defaultValue);
+
+  /// Reads [key] as an integer. Alias for [int].
+  static core.int getInt(String key, {core.int defaultValue = 0}) =>
+      sharedEnv.getInt(key, defaultValue: defaultValue);
+
+  /// Reads [key] as a boolean, returning [defaultValue] if absent or unparseable.
+  static core.bool bool(String key, {core.bool defaultValue = false}) =>
+      sharedEnv.bool(key, defaultValue: defaultValue);
+
+  /// Reads [key] as a boolean. Alias for [bool].
+  static core.bool getBool(String key, {core.bool defaultValue = false}) =>
+      sharedEnv.getBool(key, defaultValue: defaultValue);
+
+  /// Returns the value for [key], throwing [StateError] if missing or empty.
+  static String require(String key) => sharedEnv.require(key);
+
+  /// Whether [key] resolves to a non-empty value.
+  static core.bool has(String key) => sharedEnv.has(key);
+
+  /// Loads `KEY=value` pairs from the file at [path].
+  static core.bool load([String path = '.env', core.bool overwrite = false]) =>
+      sharedEnv.load(path, overwrite);
+
+  /// Parses `.env`-style [content] into a map, without applying it.
+  static Map<String, String> parse(String content) => sharedEnv.parse(content);
+
+  /// Sets an override for [key].
+  static void set(String key, String value) => sharedEnv.set(key, value);
+
+  /// Removes the override for [key], exposing the process value again.
+  static void delete(String key) => sharedEnv.delete(key);
+
+  /// Removes every override.
+  static void clear() => sharedEnv.clear();
+
+  /// The process environment with overrides applied.
+  static Map<String, String> map() => sharedEnv.map();
 }

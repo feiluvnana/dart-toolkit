@@ -206,7 +206,7 @@ mixin _Spec {
   ///
   /// ```dart
   /// final level = cli.choice('level', LogLevel.values, def: LogLevel.info);
-  /// system.console.logger.level = level();
+  /// logger.level = level();
   /// ```
   Opt<E> choice<E extends Enum>(
     String name,
@@ -281,7 +281,7 @@ mixin _Spec {
   ///
   /// ```dart
   /// final timeout = cli.duration('timeout', def: 30.s);
-  /// await net.http.send(.get, url, timeout: timeout());
+  /// await Http.get(url, timeout: timeout());
   /// ```
   Opt<Duration> duration(
     String name, {

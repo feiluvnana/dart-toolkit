@@ -11,14 +11,12 @@
 ///
 /// ```dart
 /// // setup: final index = 'https://x.test/sitemap.xml'.url;
-/// final urls = await net
-///     .crawl([Fetch(index)].seq, (r) => r.parse(format.sitemap).transform(
-///           .map(Fetch.new),
-///         ))
+/// final urls = await Http
+///     .crawl([Fetch(index)], (r) => Formats.sitemap(r.text).map(Fetch.new))
 ///     .depth(8)
 ///     .flow
-///     .through(.map((r) => r.url))
-///     .collect(.list());
+///     .map((r) => r.url)
+///     .toList();
 /// ```
 ///
 /// That is nine lines against ninety, and it cannot loop: `Sitemap.load`

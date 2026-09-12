@@ -48,7 +48,7 @@ Reply _page([String markup = _login]) =>
 /// write and does not have to be a member of [Reply] that names a format.
 extension _FormOnReply on Reply {
   Form? form([String selector = 'form']) =>
-      parse(format.html).form(selector)?.at(url);
+      Formats.html(body).form(selector)?.at(url);
 }
 
 void main() {
@@ -185,8 +185,6 @@ void main() {
         fetch.response.headers.contentType = ContentType.html;
         if (fetch.uri.path == '/login') {
           fetch.response
-            // Set through the header: this library exports a `Cookie` of its
-            // own, which shadows `dart:io`'s for any file importing both.
             ..headers.add('set-cookie', 'sid=session-1; Path=/')
             ..write('''
               <form id="login" action="/session" method="post">
@@ -217,40 +215,40 @@ void main() {
           .fill({'user': 'me'})
           .send(using: session.call);
 
-      expect(home.parse(format.html).$('h1').text, 'me in with tok-123');
+      expect(parseHtml(home.body).$('h1').text, 'me in with tok-123');
       // The cookie the login page set came back with the submission.
-      expect(home.parse(format.html).$('p').text, contains('sid=session-1'));
+      expect(parseHtml(home.body).$('p').text, contains('sid=session-1'));
       expect(seen.last, startsWith('POST /session'));
     });
 
     test('a crawl submits it by returning the request it describes', () async {
-      final crawl = net.crawl(
-        [Fetch('$base/login'.url)].seq,
+      final c = Http.crawl(
+        [Fetch('$base/login'.url)],
         (res) => switch (res.fetch.tag) {
           null => [
             res
                 .form('#login')!
                 .at(res.url)
                 .fill({'user': 'crawler'})
-                .fetch(tag: 'home', meta: [Slot<String>('from')('login')]),
-          ].seq,
+                .fetch(tag: 'home', meta: [('from', 'login')]),
+          ],
           _ => const <Fetch>[],
         },
       );
 
-      final landed = await crawl.flow
-          .through(.where((res) => res.fetch.tag == 'home'))
-          .through(.map((res) => res.parse(format.html).$('h1').text))
-          .collect(.list());
+      final landed = await c
+          .where((res) => res.fetch.tag == 'home')
+          .map((res) => parseHtml(res.body).$('h1').text)
+          .toList();
 
       expect(landed, ['crawler in with tok-123']);
-      expect(crawl.stats.fetched, 2);
+      expect(c.stats.fetched, 2);
       expect(seen.last, contains('user=crawler'));
     });
 
     test('two submissions of one form are two fetches, not one', () async {
-      final crawl = net.crawl(
-        [Fetch('$base/login'.url)].seq,
+      final c = Http.crawl(
+        [Fetch('$base/login'.url)],
         (res) => switch (res.fetch.tag) {
           null => [
             res
@@ -263,15 +261,15 @@ void main() {
                 .at(res.url)
                 .fill({'user': 'b'})
                 .fetch(tag: 'result'),
-          ].seq,
+          ],
           _ => const <Fetch>[],
         },
       );
 
-      final searches = await crawl.flow
-          .through(.where((res) => res.fetch.tag == 'result'))
-          .through(.map((res) => res.fetch.url.toString()))
-          .collect(.list());
+      final searches = await c
+          .where((res) => res.fetch.tag == 'result')
+          .map((res) => res.fetch.url.toString())
+          .toList();
 
       // De-duplication accounts for the body, so the same URL twice with
       // different fields is two pages.

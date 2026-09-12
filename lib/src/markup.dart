@@ -14,9 +14,9 @@
 /// Three doors produce the same cursor:
 ///
 /// ```dart
-/// res.parse(format.html);                 // a response
-/// format.html.parse(body);                // a string
-/// await format.html.read('page.html');    // a file
+/// res.parse(Codec.html);                 // a response
+/// Formats.html(body);                    // a string
+/// await const HtmlAccessor().read('page.html');    // a file
 /// ```
 ///
 /// Navigation comes in two spellings, for the two questions: [Markup.$]
@@ -46,15 +46,15 @@ const TextAccessor _text = TextAccessor();
 /// for a value and the honest answer is that there is not one.
 ///
 /// ```dart
-/// final page = res.parse(format.html);
+/// final page = res.parse(Codec.html);
 ///
 /// page.$('h1').text;                     // String
-/// page.$('a').attrs('href');             // Sequence<String>
-/// page.$xpath('//table//td[2]').texts;   // Sequence<String>
+/// page.$('a').attrs('href');             // Iterable<String>
+/// page.$xpath('//table//td[2]').texts;   // Iterable<String>
 /// page.all('.product', (row) => (
 ///   name: row.$('.name').text,
-///   price: row.pick(Field.text('.price').when(util.text.number)),
-/// ));                                    // Sequence<({String name, num? price})>
+///   price: row.pick(Field.text('.price').when(Text.number)),
+/// ));                                    // List<({String name, num? price})>
 /// ```
 class Markup {
   final List<Element> _elements;
@@ -172,6 +172,10 @@ class Markup {
   Markup $(String selector) =>
       Markup(JQuery.select(_document ?? _elements, selector), false);
 
+  /// Returns all matching elements as a list of scoped [Markup] cursors.
+  List<Markup> $$(String selector) =>
+      $(selector)._elements.map((element) => Markup([element], false)).toList();
+
   /// One [R] per match of [selector], each built from its own scope.
   ///
   /// This is how a repeated sub-object comes back typed. [build] receives the
@@ -182,9 +186,9 @@ class Markup {
   /// final variants = page.all('.variant', (row) => (
   ///   name: row.$('.name').text,
   ///   sku: row.attr('data-sku'),
-  ///   price: row.pick(Field.text('.price').when(util.text.number)),
+  ///   price: row.pick(Field.text('.price').when(Text.number)),
   /// ));
-  /// // Sequence<({String name, String? sku, num? price})>
+  /// // List<({String name, String? sku, num? price})>
   /// ```
   ///
   /// Where `extract` hands back `Map<String, Object?>` and leaves every value
@@ -201,7 +205,7 @@ class Markup {
   /// straight off a page:
   ///
   /// ```dart
-  /// final String? title = res.parse(format.html).pick(Field.text('h1'));
+  /// final String? title = res.parse(Codec.html).pick(Field.text('h1'));
   /// ```
   T pick<T>(Field<T> field) => field.read(_root);
 
@@ -212,7 +216,7 @@ class Markup {
   /// sub-object — or a [Field], which says the same thing with a static type.
   ///
   /// ```dart
-  /// final data = res.parse(format.html).extract({
+  /// final data = res.parse(Codec.html).extract({
   ///   'title': 'h1',
   ///   'price': '.price',
   ///   'link': 'a@href',
@@ -491,7 +495,7 @@ extension QuerySelectorOnDocument on Document {
 /// type test on `dynamic`.
 ///
 /// ```dart
-/// final page = res.parse(format.html);
+/// final page = res.parse(Codec.html);
 /// final title = page.pick(Field.text('h1'));           // String?
 /// final links = page.pick(Field.attrs('a', 'href'));   // List<String>
 /// ```
@@ -733,7 +737,7 @@ extension NullableField<T extends Object> on Field<T?> {
   /// [convert] applied to what this field read, only when it read something.
   ///
   /// ```dart
-  /// final price = Field.text('.price').when(util.text.number);   // Field<num?>
+  /// final price = Field.text('.price').when(Text.number);   // Field<num?>
   /// final qty = Field.text('.qty').when(int.tryParse);           // Field<int?>
   /// ```
   ///

@@ -55,7 +55,7 @@ class SysResult {
       out.isEmpty ? const [] : out.split(RegExp(r'\r?\n')).where((l) => l.isNotEmpty).toList();
 
   /// Parsed JSON document cursor from standard output.
-  Json get json => format.json.parse(out);
+  Json get json => parseJson(out);
 
   /// Decodes standard output JSON directly as typed [T].
   T decodeJson<T>() => jsonDecode(out) as T;

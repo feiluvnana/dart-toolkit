@@ -11,6 +11,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:dart_toolkit/dart_toolkit.dart';
+import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 /// A transport that serves fixtures and stops the crawl partway, so a test
@@ -28,13 +29,10 @@ Send serve(Map<String, String> pages) =>
     (fetch) async => Reply.text(pages['${fetch.url}'] ?? '', fetch: fetch);
 
 Iterable<Fetch> links(Reply res) =>
-    res.parse(format.html).$('a').attrs('href').transform(.map(res.follow));
+    res.parse(Codec.html).$('a').attrs('href').map(res.follow);
 
 String tempPath(String name) =>
     '${Directory.systemTemp.createTempSync('dt_resume_').path}/$name';
-
-const _widget = Slot<String>('name');
-const _index = Slot<int>('index');
 
 void main() {
   group('Fetch serialization', () {
@@ -46,7 +44,7 @@ void main() {
         body: Body.form({'page': '2'}),
         priority: 7,
         tag: 'detail',
-        meta: [_widget('Widget'), _index(3)],
+        meta: [('name', 'Widget'), ('index', 3)],
         dedupe: false,
         depth: 2,
       );
@@ -64,10 +62,8 @@ void main() {
       });
       expect(copy.priority, 7);
       expect(copy.tag, 'detail');
-      // Through the slots, which is the point: the values come back typed
-      // rather than as Object? out of a map.
-      expect(copy.meta.read(_widget), 'Widget');
-      expect(copy.meta.read(_index), 3);
+      expect(copy.meta['name'], 'Widget');
+      expect(copy.meta['index'], 3);
       expect(copy.meta, {'name': 'Widget', 'index': 3});
       expect(copy.dedupe, isFalse);
       expect(copy.depth, 2);
@@ -114,11 +110,11 @@ void main() {
 
   group('Crawl.position', () {
     test('holds the frontier, the visited set and the counters', () async {
-      final crawl = net.crawl(
+      final crawl = Http.crawl(
         [
           Fetch(Uri.parse('https://example.com/a')),
           Fetch(Uri.parse('https://example.com/b')),
-        ].seq,
+        ],
       )..using(serve(const {}));
 
       await crawl.run();
@@ -133,11 +129,11 @@ void main() {
     test('a request that was never handled stays pending', () async {
       final path = tempPath('crawl.state');
       addTearDown(
-        () => Directory(io.path.dirname(path)).deleteSync(recursive: true),
+        () => Directory(p.dirname(path)).deleteSync(recursive: true),
       );
 
       late Crawl crawl;
-      crawl = net.crawl([Fetch('https://example.com/1'.url)].seq, links)
+      crawl = Http.crawl([Fetch('https://example.com/1'.url)], links)
         ..concurrent(1)
         ..resume(path)
         ..using(
@@ -169,7 +165,7 @@ void main() {
 
     test('restore queues pending work past the visited set that saw it', () {
       const url = 'https://example.com/a';
-      final crawl = net.crawl(const <Fetch>[])
+      final crawl = Http.crawl(const <Fetch>[])
         ..restore({
           'version': Crawl.version,
           'pending': [
@@ -185,7 +181,7 @@ void main() {
     });
 
     test('restore brings the counters back', () {
-      final crawl = net.crawl(const <Fetch>[])
+      final crawl = Http.crawl(const <Fetch>[])
         ..restore({
           'stats': {'fetched': 40, 'scheduled': 40},
         });
@@ -194,7 +190,7 @@ void main() {
 
     test('a position from a newer version is refused', () {
       expect(
-        () => net.crawl(const <Fetch>[]).restore({
+        () => Http.crawl(const <Fetch>[]).restore({
           'version': Crawl.version + 1,
         }),
         throwsFormatException,
@@ -202,22 +198,22 @@ void main() {
     });
 
     test('a started crawl refuses to be restored', () async {
-      final crawl = net.crawl([Fetch('https://example.com/a'.url)].seq)
+      final crawl = Http.crawl([Fetch('https://example.com/a'.url)])
         ..using(serve(const {'https://example.com/a': '<h1>a</h1>'}));
       await crawl.run();
-      expect(() => crawl.restore(const {}), throwsStateError);
+      expect(() => crawl.restore(const <String, Object?>{}), throwsStateError);
     });
   });
 
-  group('net.crawl().resume', () {
+  group('Crawl.resume', () {
     test('an interrupted crawl leaves its unfetched queue on disk', () async {
       final path = tempPath('crawl.state');
       addTearDown(
-        () => Directory(io.path.dirname(path)).deleteSync(recursive: true),
+        () => Directory(p.dirname(path)).deleteSync(recursive: true),
       );
 
       late Crawl crawl;
-      crawl = net.crawl([Fetch('https://example.com/1'.url)].seq, links)
+      crawl = Http.crawl([Fetch('https://example.com/1'.url)], links)
         ..concurrent(1)
         ..resume(path)
         ..using(
@@ -252,7 +248,7 @@ void main() {
     test('a second run fetches what the first one did not', () async {
       final path = tempPath('crawl.state');
       addTearDown(
-        () => Directory(io.path.dirname(path)).deleteSync(recursive: true),
+        () => Directory(p.dirname(path)).deleteSync(recursive: true),
       );
 
       const pages = {
@@ -262,23 +258,23 @@ void main() {
       };
 
       late Crawl one;
-      one = net.crawl([Fetch('https://example.com/1'.url)].seq, links)
+      one = Http.crawl([Fetch('https://example.com/1'.url)], links)
         ..concurrent(1)
         ..resume(path)
         ..using(halfway(pages, 1, () => one));
 
-      final first = await one.flow
-          .through(.map((res) => res.url.toString()))
-          .collect(.list());
+      final first = await one
+          .map((Reply res) => res.url.toString())
+          .toList();
       expect(first, ['https://example.com/1']);
 
-      final two = net.crawl([Fetch('https://example.com/1'.url)].seq, links)
+      final two = Http.crawl([Fetch('https://example.com/1'.url)], links)
         ..resume(path)
         ..using(serve(pages));
 
-      final second = await two.flow
-          .through(.map((res) => res.url.toString()))
-          .collect(.list());
+      final second = await two
+          .map((Reply res) => res.url.toString())
+          .toList();
 
       // The seed is not fetched again, and the pages the first leg queued but
       // never reached are.
@@ -296,7 +292,7 @@ void main() {
     test('limit counts the whole crawl, not each leg of it', () async {
       final path = tempPath('crawl.state');
       addTearDown(
-        () => Directory(io.path.dirname(path)).deleteSync(recursive: true),
+        () => Directory(p.dirname(path)).deleteSync(recursive: true),
       );
 
       const pages = {
@@ -307,7 +303,7 @@ void main() {
       };
 
       late Crawl one;
-      one = net.crawl([Fetch('https://example.com/1'.url)].seq, links)
+      one = Http.crawl([Fetch('https://example.com/1'.url)], links)
         ..concurrent(1)
         ..resume(path)
         ..limit(2)
@@ -315,7 +311,7 @@ void main() {
       final first = await one.run();
       expect(first.fetched, 1);
 
-      final two = net.crawl([Fetch('https://example.com/1'.url)].seq, links)
+      final two = Http.crawl([Fetch('https://example.com/1'.url)], links)
         ..concurrent(1)
         ..resume(path)
         ..limit(2)
@@ -328,11 +324,11 @@ void main() {
     test('a corrupt resume file throws instead of starting over', () async {
       final path = tempPath('crawl.state');
       addTearDown(
-        () => Directory(io.path.dirname(path)).deleteSync(recursive: true),
+        () => Directory(p.dirname(path)).deleteSync(recursive: true),
       );
       File(path).writeAsStringSync('{not json');
 
-      final crawl = net.crawl([Fetch('https://example.com/1'.url)].seq)
+      final crawl = Http.crawl([Fetch('https://example.com/1'.url)])
         ..resume(path)
         ..using(serve(const {}));
 
@@ -344,10 +340,10 @@ void main() {
       () async {
         final path = tempPath('crawl.state');
         addTearDown(
-          () => Directory(io.path.dirname(path)).deleteSync(recursive: true),
+          () => Directory(p.dirname(path)).deleteSync(recursive: true),
         );
 
-        await (net.crawl([Fetch('https://example.com/1'.url)].seq)
+        await (Http.crawl([Fetch('https://example.com/1'.url)])
               ..resume(path)
               ..using(serve(const {'https://example.com/1': '<p>one</p>'})))
             .run();

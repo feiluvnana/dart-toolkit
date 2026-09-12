@@ -12,12 +12,127 @@ import 'dart:convert' as convert;
 // TEXT (util.text.*)
 // ============================================================================
 
+const TextAccessor _textInstance = TextAccessor();
+
+/// A lowercase, hyphenated form of [text], safe in a URL or filename.
+String slugify(String text, {String separator = '-'}) =>
+    _textInstance.slug(text, separator: separator);
+
+/// Collapses runs of whitespace in [text] to one space and trims it.
+String cleanText(String text) => _textInstance.clean(text);
+
+/// Removes HTML tags from [text] and collapses whitespace.
+String stripHtmlTags(String text) => _textInstance.tags(text);
+
+/// Shortens [text] to at most [length] characters, ending with [ellipsis].
+String clipText(String text, int length, {String ellipsis = '…'}) =>
+    _textInstance.clip(text, length, ellipsis: ellipsis);
+
+/// Extracts the first decimal number in [text], ignoring symbols and grouping.
+num? extractNumber(String text) => _textInstance.number(text);
+
+/// Fluent string helpers for cleaning, slugs, extraction, and clipping.
+extension StringToolkitExtensions on String {
+  /// A lowercase, hyphenated form of this string, safe in URLs or filenames.
+  String toSlug({String separator = '-'}) =>
+      _textInstance.slug(this, separator: separator);
+
+  /// Collapses runs of whitespace to a single space and trims edges.
+  String cleanWhitespace() => _textInstance.clean(this);
+
+  /// Extracts the first decimal number, ignoring currency symbols and grouping commas.
+  num? extractNumber() => _textInstance.number(this);
+
+  /// Shortens this string to at most [length] characters, ending with [ellipsis].
+  String clip(int length, {String ellipsis = '…'}) =>
+      _textInstance.clip(this, length, ellipsis: ellipsis);
+
+  /// Removes HTML tags and collapses whitespace.
+  String stripTags() => _textInstance.tags(this);
+}
+
+// ============================================================================
+// STATIC HELPER HUB: Text
+// ============================================================================
+
+/// Static helper hub for string manipulation, cleaning, and extraction.
+///
+/// Easily discoverable via IDE auto-complete:
+/// ```dart
+/// final slug = Text.slug('Hello World!');     // 'hello-world'
+/// final clean = Text.clean('  a   b  ');       // 'a b'
+/// final num = Text.extractNumber(r'$1,234.50'); // 1234.5
+/// final clip = Text.clip('Long text...', 10);
+/// ```
+abstract final class Text {
+  Text._();
+
+  /// A lowercase, hyphenated form of [text], safe in a URL or filename.
+  static String slug(String text, {String separator = '-'}) =>
+      _textInstance.slug(text, separator: separator);
+
+  /// Collapses runs of whitespace in [text] to one space and trims it.
+  static String clean(String text) => _textInstance.clean(text);
+
+  /// Removes HTML tags from [text] and collapses whitespace.
+  static String stripTags(String text) => _textInstance.tags(text);
+
+  /// Shortens [text] to at most [length] characters, ending with [ellipsis].
+  static String clip(String text, int length, {String ellipsis = '…'}) =>
+      _textInstance.clip(text, length, ellipsis: ellipsis);
+
+  /// Extracts the first decimal number in [text], ignoring symbols and grouping.
+  static num? extractNumber(String text) => _textInstance.number(text);
+
+  /// Extracts the first decimal number in [text], ignoring symbols and grouping.
+  static num? number(String text) => _textInstance.number(text);
+
+  /// Extracts all numbers in [text].
+  static Iterable<num> numbers(String text) => _textInstance.numbers(text);
+
+  /// Removes HTML tags from [text] and collapses whitespace.
+  static String tags(String text) => _textInstance.tags(text);
+
+  /// Replaces `{key}` placeholders in [template] with [values].
+  static String render(String template, Map<String, Object?> values) =>
+      _textInstance.render(template, values);
+
+  /// Strips accents/diacritics from [text].
+  static String fold(String text) => _textInstance.fold(text);
+
+  /// Converts [text] to Title Case.
+  static String title(String text) => _textInstance.title(text);
+
+  /// Capitalizes the first letter of [text].
+  static String upper(String text) => _textInstance.upper(text);
+
+  /// Extracts words from [text].
+  static Iterable<String> words(String text) => _textInstance.words(text);
+
+  /// Returns true if [text] is empty or whitespace-only.
+  static bool blank(String text) => _textInstance.blank(text);
+
+  /// Extracts the first substring between [start] and [end].
+  static String? between(String text, String start, String end) =>
+      _textInstance.betweens(text, start, end).firstOrNull;
+
+  /// Extracts all substrings between [start] and [end].
+  static Iterable<String> betweens(String text, String start, String end) =>
+      _textInstance.betweens(text, start, end);
+
+  /// Encodes [input] as standard Base64 string.
+  static String base64(Object input) => _textInstance.base64(input);
+
+  /// Decodes a Base64 string into bytes.
+  static List<int> unbase64(String input) => _textInstance.unbase64(input);
+}
+
 /// Entry point for string helpers, reachable as `util.text`.
 ///
 /// ```dart
-/// util.text.slug('Hello, World!');     // 'hello-world'
-/// util.text.clean('  a   b  ');        // 'a b'
-/// util.text.number(r'$1,234.50');      // 1234.5
+/// Text.slug('Hello, World!');     // 'hello-world'
+/// Text.clean('  a   b  ');        // 'a b'
+/// Text.number(r'$1,234.50');      // 1234.5
 /// ```
 class TextAccessor {
   /// Creates the accessor. Prefer the shared `util.text` instance.
@@ -222,10 +337,10 @@ class TextAccessor {
   /// Returns `null` when there is no number.
   ///
   /// ```dart
-  /// util.text.number(r'$1,234.50');   // 1234.5
-  /// util.text.number('(1,234.50)');   // -1234.5  — accounting negative
-  /// util.text.number('1.5e3');        // 1500.0
-  /// util.text.number('12 34');        // 12       — two numbers, not 1234
+  /// Text.number(r'$1,234.50');   // 1234.5
+  /// Text.number('(1,234.50)');   // -1234.5  — accounting negative
+  /// Text.number('1.5e3');        // 1500.0
+  /// Text.number('12 34');        // 12       — two numbers, not 1234
   /// ```
   ///
   /// A comma, underscore or space between digits is grouping and dropped, but
@@ -267,7 +382,7 @@ class TextAccessor {
   /// [text] with its first letter upper-cased and the rest untouched.
   ///
   /// ```dart
-  /// util.text.upper('crème brûlée');   // 'Crème brûlée'
+  /// Text.upper('crème brûlée');   // 'Crème brûlée'
   /// ```
   ///
   /// The first letter only — [title] is the one that does every word, and
@@ -296,10 +411,10 @@ class TextAccessor {
   /// is otherwise `replaceAll` in a loop.
   ///
   /// ```dart
-  /// util.text.render('Hello {name}, {count} new', {'name': 'x', 'count': 3});
+  /// Text.render('Hello {name}, {count} new', {'name': 'x', 'count': 3});
   /// // 'Hello x, 3 new'
   ///
-  /// util.text.render(io.read('template.md'), vars);
+  /// Text.render(Files.readTextSync('template.md'), vars);
   /// ```
   ///
   /// A missing key renders empty — the same contract `Slot.read`, `Field.text`
@@ -320,7 +435,7 @@ class TextAccessor {
   /// which `.collect(.first())` already asks for:
   ///
   /// ```dart
-  /// util.text.betweens(body, '"videoId":"', '"').collect(.first());
+  /// Text.betweens(body, '"videoId":"', '"').firstOrNull;
   /// ```
   List<String> betweens(String text, String start, String end) {
     final results = <String>[];

@@ -43,23 +43,23 @@ enum LogFormat {
   json,
 }
 
-/// Status logging, reachable as `system.console.logger`.
+/// Status logging, reachable as [logger].
 ///
 /// ```dart
-/// system.console.logger.level = LogLevel.warn; // quiet mode
-/// system.console.logger.step(1, 3, 'Crawling');
-/// system.console.logger.ok('Done');
+/// logger.level = LogLevel.warn; // quiet mode
+/// logger.step(1, 3, 'Crawling');
+/// logger.ok('Done');
 /// ```
 ///
 /// Where the lines go is [writer]'s business, so a run can be logged to a file
 /// as easily as to a screen, and a test can read back what was logged:
 ///
 /// ```dart
-/// system.console.logger.writer = ConsoleWriter(
+/// logger.writer = ConsoleWriter(
 ///   out: File('run.log').openWrite(),
 /// );
-/// system.console.logger.format = LogFormat.json;
-/// system.console.logger.stamp = true;
+/// logger.format = LogFormat.json;
+/// logger.stamp = true;
 /// ```
 class ConsoleLogger {
   /// Where lines are written.
@@ -90,6 +90,9 @@ class ConsoleLogger {
   /// Reports success.
   void ok(String message) =>
       _out(LogLevel.info, 'ok', '✔'.brightGreen(), message);
+
+  /// Reports success. Alias for [ok].
+  void success(String message) => ok(message);
 
   /// Reports a recoverable problem.
   void warn(String message) =>

@@ -78,10 +78,11 @@ void main() {
       expect(verbose(), isTrue);
 
       // The same has to hold for declarations made before `parse`.
-      final shared = cli.flag('verbose', alias: 'v');
-      cli.parse(['build', '--verbose', 'main.dart']);
-      expect(cli.command, equals('build'));
-      expect(cli.args, equals(['build', 'main.dart']));
+      final sharedCli = CliParser();
+      final shared = sharedCli.flag('verbose', alias: 'v');
+      final parsedCli = sharedCli.parse(['build', '--verbose', 'main.dart']);
+      expect(parsedCli.command, equals('build'));
+      expect(parsedCli.args, equals(['build', 'main.dart']));
       expect(shared(), isTrue);
     });
 
@@ -98,7 +99,7 @@ void main() {
         equals('build'),
       );
 
-      system.env.set('OUT_DIR', 'from-env');
+      Env.set('OUT_DIR', 'from-env');
       final env = Cli(const <String>[]);
       final out = env.option('out', env: 'OUT_DIR', def: 'dist');
       expect(out(), equals('from-env'));
@@ -107,7 +108,7 @@ void main() {
       expect(given(), equals('cli'));
       // Reaching a value through env is not the same as it being given.
       expect(out.given(), isFalse);
-      system.env.clear();
+      Env.clear();
     });
 
     test(
@@ -157,10 +158,10 @@ void main() {
       final withEnv = Cli(const <String>[]);
       final token = withEnv.option('token', env: 'API_TOKEN', required: true);
       expect(() => withEnv.require(), throwsA(isA<ArgumentError>()));
-      system.env.set('API_TOKEN', 'secret');
+      Env.set('API_TOKEN', 'secret');
       expect(() => withEnv.require(), returnsNormally);
       expect(token(), equals('secret'));
-      system.env.clear();
+      Env.clear();
     });
 
     test('require rejects a value outside allowed', () {
@@ -433,7 +434,7 @@ void main() {
       pool.on.progress(progressed.add);
       pool.on.done(() => completed = true);
 
-      final results = await pool.run([1, 2, 3, 4].seq, (item) async {
+      final results = await pool.run([1, 2, 3, 4], (item) async {
         await Future<void>.delayed(const Duration(milliseconds: 10));
         return item * 10;
       });
@@ -441,23 +442,23 @@ void main() {
       expect(started, isTrue);
       expect(completed, isTrue);
       expect(progressed.length, equals(4));
-      expect(results.collect(.list()), equals([10, 20, 30, 40]));
+      expect(results, equals([10, 20, 30, 40]));
     });
 
-    test('concurrent.run helper executes tasks', () async {
-      final results = await concurrent.run(
-        ['a', 'b', 'c'].seq,
+    test('Concurrent.run helper executes tasks', () async {
+      final results = await Concurrent.run(
+        ['a', 'b', 'c'],
         (s) async => s.toUpperCase(),
         size: 3,
       );
-      expect(results.collect(.list()), equals(['A', 'B', 'C']));
+      expect(results, equals(['A', 'B', 'C']));
     });
 
     test(
       'a failing worker propagates its own error, not a null cast',
       () async {
         await expectLater(
-          concurrent.run([1, 2, 3].seq, (int i) async {
+          Concurrent.run([1, 2, 3], (int i) async {
             if (i == 2) throw StateError('boom');
             return i * 10;
           }),
@@ -476,7 +477,7 @@ void main() {
         pool.on.error((error, stack, item) => seen.add(item));
 
         await expectLater(
-          pool.run([1, 2, 3, 4].seq, (i) async {
+          pool.run([1, 2, 3, 4], (i) async {
             if (i.isEven) throw StateError('even $i');
             return i;
           }),
@@ -503,7 +504,7 @@ void main() {
     ''';
 
     test('Markup href, hrefs, src, srcs, lines', () {
-      final q = format.html.parse(html);
+      final q = parseHtml(html);
       expect(q.matching('.active').empty, isFalse);
       expect(q.matching('.missing').empty, isTrue);
 
@@ -515,18 +516,18 @@ void main() {
         q.$('a').matching(r'[href$=".flac"]').attr('href'),
         equals('https://example.com/2.flac'),
       );
-      expect(q.$('a').attrs('href').collect(.count()), equals(2));
+      expect(q.$('a').attrs('href').length, equals(2));
 
       expect(q.$('img').attr('src'), equals('album.jpg'));
-      expect(q.$('img').attrs('src').collect(.count()), equals(1));
+      expect(q.$('img').attrs('src').length, equals(1));
 
       final lines = q.$('.disc_lines').lines;
       expect(
-        lines.collect(.list()),
+        lines.toList(),
         equals(['01. First Song', '02. Second Song', '03. Third Song']),
       );
 
-      expect(q.$('a').elements.collect(.count()), equals(2));
+      expect(q.$('a').elements.length, equals(2));
       expect(q.$('a').matching(r'[href$=".mp3"]').count, equals(1));
     });
 
@@ -539,12 +540,12 @@ void main() {
       );
 
       expect(
-        res.parse(format.html).$('a').attr('href'),
+        parseHtml(res.body).$('a').attr('href'),
         equals('/track/1.mp3'),
       );
-      expect(res.parse(format.html).$('img').attr('src'), equals('album.jpg'));
+      expect(parseHtml(res.body).$('img').attr('src'), equals('album.jpg'));
       expect(
-        res.parse(format.html).$xpath('//a').attr('href'),
+        parseHtml(res.body).$xpath('//a').attr('href'),
         equals('/track/1.mp3'),
       );
     });
@@ -568,8 +569,8 @@ void main() {
     test(
       'a flow that nobody collects fetches nothing, and stats is a record',
       () async {
-        final crawl = net.crawl([Fetch('https://example.com/'.url)].seq)
-          ..using((fetch) async => Reply.text('ok', fetch: fetch));
+        final crawl = Http.crawl([Fetch('https://example.com/'.url)])
+          ..using((Fetch fetch) async => Reply.text('ok', fetch: fetch));
 
         // Built and thrown away: the workers start in the flow's `onListen`.
         crawl.flow;
@@ -597,19 +598,19 @@ void main() {
     });
 
     test('logger exposes every severity', () {
-      expect(system.console.logger, isA<ConsoleLogger>());
-      expect(() => system.console.logger.info('Info'), returnsNormally);
-      expect(() => system.console.logger.ok('Success'), returnsNormally);
-      expect(() => system.console.logger.warn('Warn'), returnsNormally);
-      expect(() => system.console.logger.error('Error'), returnsNormally);
-      expect(() => system.console.logger.step(1, 1, 'Step'), returnsNormally);
-      expect(() => system.console.logger.debug('Debug'), returnsNormally);
+      expect(System.console.logger, isA<ConsoleLogger>());
+      expect(() => System.console.logger.info('Info'), returnsNormally);
+      expect(() => System.console.logger.ok('Success'), returnsNormally);
+      expect(() => System.console.logger.warn('Warn'), returnsNormally);
+      expect(() => System.console.logger.error('Error'), returnsNormally);
+      expect(() => System.console.logger.step(1, 1, 'Step'), returnsNormally);
+      expect(() => System.console.logger.debug('Debug'), returnsNormally);
     });
   });
 
   group('Crawl entry points', () {
     test('net.crawl configures without running', () {
-      final crawl = net.crawl([Fetch('https://example.com'.url)].seq)
+      final crawl = Http.crawl([Fetch('https://example.com'.url)])
         ..concurrent(3);
       expect(crawl, isA<Crawl>());
       expect(crawl.stats.fetched, isZero);

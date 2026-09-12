@@ -9,10 +9,10 @@
 /// through 5.4.0 and was never reachable as `util.` anything.
 ///
 /// ```dart
-/// final sheet = await format.csv.read('sales.csv');
-/// sheet.headers;                 // Sequence<String>
-/// sheet.maps;                    // Sequence<Map<String, String>>
-/// sheet.column('region');        // Sequence<String>
+/// final sheet = parseCsv('a,b\n1,2');
+/// sheet.headers;                 // List<String>
+/// sheet.maps;                    // Iterable<Map<String, String>>
+/// sheet.column('a');             // Iterable<String>
 /// ```
 ///
 /// `Table` was the obvious name and `system.console` has it, so this is named
@@ -58,6 +58,12 @@ final class Csv {
 
   /// The column names, from the first line.
   List<String> get headers => _headers;
+
+  /// The number of rows in this table.
+  int get length => _rows.length;
+
+  /// Gets the row at [index].
+  List<String> operator [](int index) => _rows[index];
 
   /// The data rows, as raw cells, header line excluded.
   List<List<String>> get rows => _rows;

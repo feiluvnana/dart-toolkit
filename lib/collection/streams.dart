@@ -7,6 +7,8 @@ import 'dart:async';
 
 /// Static utility functions for creating and combining [Stream]s.
 abstract final class Streams {
+  Streams._();
+
   /// Emits values at regular intervals.
   static Stream<T> periodic<T>(
     Duration period, [

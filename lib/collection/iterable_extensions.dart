@@ -3,8 +3,41 @@
 /// Fluent, zero-allocation transformations and terminals on [Iterable].
 library;
 
+import 'dart:async';
+
+import '../concurrent/concurrent.dart' as conc;
+
 /// Fluent transformations on any [Iterable].
 extension IterableExtensions<T> on Iterable<T> {
+  /// Maps [worker] concurrently over elements with at most [concurrency] in flight.
+  Future<List<R>> parallelMap<R>(
+    FutureOr<R> Function(T item) worker, {
+    int concurrency = 4,
+    Duration delay = Duration.zero,
+    String? progress,
+  }) => conc.parallelMap(
+    this,
+    worker,
+    concurrency: concurrency,
+    delay: delay,
+    progress: progress,
+  );
+
+  /// Maps [worker] concurrently over elements with at most [concurrency] in flight,
+  /// collecting both successes ([Done]) and failures ([Broke]) without throwing.
+  Future<List<conc.Settled<R>>> settle<R>(
+    FutureOr<R> Function(T item) worker, {
+    int concurrency = 4,
+    Duration delay = Duration.zero,
+    String? progress,
+  }) => conc.settle(
+    this,
+    worker,
+    concurrency: concurrency,
+    delay: delay,
+    progress: progress,
+  );
+
   /// Idiomatic, Kotlin-style alias for [where].
   Iterable<T> filter(bool Function(T) test) => where(test);
 
@@ -260,4 +293,10 @@ extension IterableTerminals<T> on Iterable<T> {
     }
     return counts;
   }
+}
+
+/// Splitting an iterable of pairs back into two.
+extension PairedIterable<A, B> on Iterable<(A, B)> {
+  /// The first and second halves of every pair, as two iterables.
+  (Iterable<A>, Iterable<B>) get unzip => (map((p) => p.$1), map((p) => p.$2));
 }

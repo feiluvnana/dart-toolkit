@@ -31,16 +31,16 @@
 /// parse into.
 ///
 /// ```dart
-/// final cfg  = await format.yaml.read('config.yaml');
-/// final pkg  = await format.json.read('package.json');
-/// final page = format.html.parse(res.body);
-/// await format.yaml.write('config.yaml', cfg.raw);
-/// await format.zip.pack('site', 'site.zip');
+/// final cfg = await const YamlAccessor().read('config.yaml');
+/// final pkg = await const JsonAccessor().read('package.json');
+/// final page = Formats.html(res.body);
+/// await const YamlAccessor().write('config.yaml', cfg.raw);
+/// await Formats.zip('site', 'site.zip');
 ///
-/// res.parse(format.html).$('h1').text;    // through the codec seam
+/// res.parse(Codec.html).$('h1').text;    // through the codec seam
 ///
-/// // an executable is system.run, not a wrapper:
-/// final head = await system.run('git', ['rev-parse', '--short', 'HEAD']);
+/// // an executable is System.run, not a wrapper:
+/// final head = await System.run('git', ['rev-parse', '--short', 'HEAD']);
 /// ```
 library;
 
@@ -48,7 +48,10 @@ import 'dart:io';
 
 import '../io/entry.dart';
 import '../src/codec.dart';
+import '../src/csv.dart';
 import '../src/fs.dart';
+import '../src/json.dart';
+import '../src/markup.dart';
 import 'csv.dart';
 import 'html.dart';
 import 'json.dart';
@@ -69,58 +72,175 @@ export 'yaml.dart';
 export 'zip.dart';
 
 // ============================================================================
-// FORMAT DOMAIN (format.*) - File Formats
+// TOP-LEVEL FORMAT & CODEC HELPERS
 // ============================================================================
 
-/// The `format` domain: file formats.
-const FormatAccessor format = FormatAccessor();
+/// Parses HTML string into a chainable [Markup] cursor with CSS/XPath selectors.
+Markup parseHtml(String html) => const HtmlAccessor().parse(html);
 
-/// Entry point for the wrapped formats, reachable as [format].
-///
-/// Each format keeps its own vocabulary; this type only holds the names, so
-/// adding one is a getter here and a file beside this one.
-///
-/// ```dart
-/// await format.zip.unpack('release.tar.gz', 'out');
-/// final version = (await format.json.read('package.json')).text('version');
-/// ```
-class FormatAccessor {
-  /// Creates the accessor. Prefer the shared [format] instance.
-  const FormatAccessor();
+/// Parses JSON string into a [Json] document cursor.
+Json parseJson(String json) => const JsonAccessor().parse(json);
 
-  /// Archives: packing, unpacking, inspecting and raw (de)compression.
-  ZipAccessor get zip => const ZipAccessor();
+/// Encodes [data] as JSON string, indented by [indent] spaces.
+String toJsonString(Object? data, {int indent = 2}) =>
+    const JsonAccessor().format(data, indent: indent);
 
-  /// HTML: parsing a page into a [Markup] cursor, and writing one back.
-  HtmlAccessor get html => const HtmlAccessor();
+/// Parses YAML string into a document cursor.
+Json parseYaml(String yaml) => const YamlAccessor().parse(yaml);
 
-  /// JSON: reading a document as a [Json] cursor, and writing one back.
-  JsonAccessor get json => const JsonAccessor();
+/// Formats [data] as YAML string.
+String toYamlString(Object? data) => const YamlAccessor().format(data);
 
-  /// YAML: the same three members as [json], over the same cursor.
-  YamlAccessor get yaml => const YamlAccessor();
+/// Parses TOML string into a document cursor.
+Json parseToml(String toml) => const TomlAccessor().parse(toml);
 
-  /// TOML: the same three members again.
-  TomlAccessor get toml => const TomlAccessor();
+/// Formats [data] as TOML string.
+String toTomlString(Object? data) => const TomlAccessor().format(data);
 
-  /// `robots.txt`: reading one into the evaluator a crawl obeys.
-  ///
-  /// It was `net.robots(content)` through 5.5.0, in the domain whose own
-  /// doc says it parses nothing.
-  RobotsAccessor get robots => const RobotsAccessor();
+/// Parses CSV text into a [Csv] cursor.
+Csv parseCsv(
+  String text, {
+  String delimiter = ',',
+}) => const CsvAccessor().parse(
+  text,
+  delimiter: delimiter,
+);
 
-  /// Sitemaps: XML `<urlset>`, XML `<sitemapindex>` and plain text alike.
-  ///
-  /// It was `net.sitemap(content)` through 5.5.0, beside `Sitemap.load`,
-  /// which is a crawl and is written as one now.
-  SitemapAccessor get sitemap => const SitemapAccessor();
-
-  /// CSV: reading a table as a [Csv] cursor, and writing one back.
-  ///
-  /// It was `io.csv` through 5.1.0. A format is a subject by Rule 1, and this
-  /// was the only one filed under the axis that happened to read the bytes.
-  CsvAccessor get csv => const CsvAccessor();
+/// Formats record rows or a grid of cells as CSV text.
+String toCsvString(
+  Iterable<dynamic> rows, {
+  List<String>? headers,
+  String delimiter = ',',
+  String newline = '\n',
+}) {
+  final first = rows.firstOrNull;
+  if (first is Map) {
+    return const CsvAccessor().format(
+      rows.cast<Map<String, Object?>>(),
+      headers: headers,
+      delimiter: delimiter,
+      newline: newline,
+    );
+  }
+  if (first is Iterable) {
+    return const CsvAccessor().cells(
+      rows.map((r) => (r as Iterable).cast<Object?>().toList()),
+      headers: headers,
+      delimiter: delimiter,
+      newline: newline,
+    );
+  }
+  return const CsvAccessor().format(
+    rows.cast<Map<String, Object?>>(),
+    headers: headers,
+    delimiter: delimiter,
+    newline: newline,
+  );
 }
+
+/// Compresses a file or directory into an archive atomically.
+Future<FileSystemEntry> zip(
+  String source,
+  String destination, {
+  Format? format,
+}) => const ZipAccessor().pack(source, destination, format: format);
+
+/// Extracts a ZIP or tar archive to [destination] directory.
+Future<List<File>> unzip(
+  String archive,
+  String destination, {
+  Format? format,
+}) => const ZipAccessor().unpack(archive, destination, format: format);
+
+/// Parses a `robots.txt` file content into a [Robots] evaluator.
+Robots parseRobots(String content) => const RobotsAccessor().parse(content);
+
+/// Parses a sitemap XML or text content into a list of [Uri]s.
+List<Uri> parseSitemap(String content) =>
+    const SitemapAccessor().parse(content);
+
+// ============================================================================
+// STATIC HELPER HUB: Formats
+// ============================================================================
+
+/// Static helper hub for document formats, serialization, and archives.
+///
+/// Named [Formats] (plural) to avoid collision with [Format] enum.
+///
+/// Easily discoverable via IDE auto-complete:
+/// ```dart
+/// final doc = Formats.json('{"a": 1}');
+/// final html = Formats.html('<h1>Hi</h1>');
+/// final yaml = Formats.yaml('key: val');
+/// final csv = Formats.csv('a,b\n1,2');
+/// await Formats.zip('src', 'out.zip');
+/// ```
+abstract final class Formats {
+  Formats._();
+
+  /// Parses HTML string into a chainable [Markup] cursor with CSS/XPath selectors.
+  static Markup html(String html) => parseHtml(html);
+
+  /// Parses JSON string into a [Json] document cursor.
+  static Json json(String json) => parseJson(json);
+
+  /// Encodes [data] as JSON string, indented by [indent] spaces.
+  static String toJson(Object? data, {int indent = 2}) =>
+      toJsonString(data, indent: indent);
+
+  /// Parses YAML string into a document cursor.
+  static Json yaml(String yaml) => parseYaml(yaml);
+
+  /// Formats [data] as YAML string.
+  static String toYaml(Object? data) => toYamlString(data);
+
+  /// Parses TOML string into a document cursor.
+  static Json toml(String toml) => parseToml(toml);
+
+  /// Formats [data] as TOML string.
+  static String toToml(Object? data) => toTomlString(data);
+
+  /// Parses CSV text into a [Csv] cursor.
+  static Csv csv(String text, {String delimiter = ','}) =>
+      parseCsv(text, delimiter: delimiter);
+
+  /// Formats record rows or a grid of cells as CSV text.
+  static String toCsv(
+    Iterable<dynamic> rows, {
+    List<String>? headers,
+    String delimiter = ',',
+    String newline = '\n',
+  }) =>
+      toCsvString(
+        rows,
+        headers: headers,
+        delimiter: delimiter,
+        newline: newline,
+      );
+
+  /// Compresses a file or directory into an archive atomically.
+  static Future<FileSystemEntry> zip(
+    String source,
+    String destination, {
+    Format? format,
+  }) =>
+      const ZipAccessor().pack(source, destination, format: format);
+
+  /// Extracts a ZIP or tar archive to [destination] directory.
+  static Future<List<File>> unzip(
+    String archive,
+    String destination, {
+    Format? format,
+  }) =>
+      const ZipAccessor().unpack(archive, destination, format: format);
+
+  /// Parses a `robots.txt` file content into a [Robots] evaluator.
+  static Robots robots(String content) => parseRobots(content);
+
+  /// Parses a sitemap XML or text content into a list of [Uri]s.
+  static List<Uri> sitemap(String content) => parseSitemap(content);
+}
+
 
 /// Reading a document off the disk and writing one back, for the codecs that
 /// all do it the same way.
@@ -132,8 +252,8 @@ class FormatAccessor {
 /// config needs no `io.has` in front of it.
 ///
 /// ```dart
-/// final cfg = await format.yaml.read('config.yaml');
-/// await format.yaml.write('config.yaml', cfg.raw);
+/// final cfg = await const YamlAccessor().read('config.yaml');
+/// await const YamlAccessor().write('config.yaml', cfg.raw);
 /// ```
 ///
 /// `io.dump(path, data)` is JSON's shorthand over [write] — the same call with

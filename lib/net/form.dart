@@ -14,7 +14,6 @@ library;
 import 'dart:async';
 
 import '../format/form.dart';
-import '../src/method.dart';
 import 'net.dart';
 
 // ============================================================================
@@ -83,8 +82,8 @@ extension Sending on Form {
   ///
   /// ```dart
   /// final session = Fetcher(session: true);
-  /// final login = await session.send(.get, 'https://example.test/login'.url);
-  /// final home = await login.parse(format.html).form('#login')!
+  /// final login = await session.send(HttpMethod.get, 'https://example.test/login'.url);
+  /// final home = await login.parse(Codec.html).form('#login')!
   ///     .at(login.url)
   ///     .fill({'user': 'me', 'pass': 'secret'})
   ///     .send(using: session);
@@ -93,7 +92,7 @@ extension Sending on Form {
   /// Inside a crawl use [fetch], which hands the request back for the
   /// frontier to schedule rather than sending it here and now.
   Future<Reply> send({Send? using, Map<String, String>? headers}) {
-    final send = using ?? net.http.call;
+    final send = using ?? httpClient.call;
     return send(fetch(headers: headers));
   }
 

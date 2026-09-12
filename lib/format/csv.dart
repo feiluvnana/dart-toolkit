@@ -18,11 +18,11 @@
 /// than memory rather than about CSV.
 ///
 /// ```dart
-/// final parsed = format.csv.parse('a,b\n1,2\n');    // Csv
-/// final sheet = await format.csv.read('a.csv');    // free, from FileCodec
-/// io.write('out.csv', format.csv.format(sheet.maps));
+/// final parsed = Formats.csv('a,b\n1,2\n');    // Csv
+/// final sheet = await const CsvAccessor().read('a.csv');    // free, from FileCodec
+/// Files.writeTextSync('out.csv', Formats.toCsv(sheet.maps));
 ///
-/// final fetched = res.parse(format.csv);          // and this now works
+/// final fetched = res.parse(Codec.csv);          // and this now works
 /// ```
 ///
 /// That last line is the unlock. A crawl that fetches a CSV export had no way
@@ -73,14 +73,14 @@ class CsvAccessor
   /// ending Excel and RFC 4180 expect.
   ///
   /// ```dart
-  /// format.csv.format([
+  /// Formats.toCsv([
   ///   {'name': 'Ada', 'born': 1815},
   ///   {'name': 'Alan', 'born': 1912},
-  /// ].seq);
+  /// ]);
   /// ```
   ///
-  /// A [Sequence], so what [Csv.maps] and `io.csv.records` read comes
-  /// straight back here; `.seq` turns a literal into one.
+  /// A native `Iterable`, so what [Csv.maps] and `readCsvRecords` read comes
+  /// straight back here.
   ///
   /// For rows that are already lists of cells, see [cells]. They are two
   /// methods and not one taking `Iterable<dynamic>`, because deciding which
@@ -106,10 +106,10 @@ class CsvAccessor
   /// reads back. [headers] is written as a first line when given.
   ///
   /// ```dart
-  /// io.write('out.csv', format.csv.cells([
+  /// Files.writeTextSync('out.csv', const CsvAccessor().cells([
   ///   ['Ada', 1815],
   ///   ['Alan', 1912],
-  /// ].seq, headers: ['name', 'born']));
+  /// ], headers: ['name', 'born']));
   /// ```
   ///
   /// Writing it goes through `io.write` rather than a second name here.

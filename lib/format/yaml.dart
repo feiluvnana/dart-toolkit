@@ -30,10 +30,10 @@ import 'format.dart';
 /// the format namespaces are learnable from each other:
 ///
 /// ```dart
-/// final pubspec = await format.yaml.read('pubspec.yaml');
-/// pubspec.text('version');                            // '4.0.0'
+/// final pubspec = Formats.yaml('version: 8.0.0\ndependencies: {}');
+/// pubspec.text('version');                            // '8.0.0'
 /// pubspec.at('dependencies').count;
-/// io.write('out.yaml', format.yaml.format({'name': 'x'}));
+/// await Files.writeText('out.yaml', Formats.toYaml({'name': 'x'}));
 /// ```
 ///
 /// Reading gives a [Json] cursor rather than a type of its own: YAML and JSON

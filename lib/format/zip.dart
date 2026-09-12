@@ -93,9 +93,9 @@ class ArchiveEntry {
 /// Entry point for archives, reachable as `format.zip`.
 ///
 /// ```dart
-/// await format.zip.pack('site', 'site.zip');
-/// (await format.zip.list('site.zip')).collect(.foreach((e) => print(e.name)));
-/// await format.zip.unpack('site.zip', 'restored');
+/// await Formats.zip('site', 'site.zip');
+/// (await const ZipAccessor().list('site.zip')).forEach((e) => print(e.name));
+/// await Formats.unzip('site.zip', 'restored');
 /// ```
 class ZipAccessor {
   /// Creates the accessor. Prefer the shared `format.zip` instance.
@@ -160,7 +160,7 @@ class ZipAccessor {
   /// For building an archive from data that never touched the disk.
   ///
   /// ```dart
-  /// await format.zip.bundle('out.zip', {'notes.txt': utf8.encode('hi')});
+  /// await const ZipAccessor().bundle('out.zip', {'notes.txt': utf8.encode('hi')});
   /// ```
   Future<FileSystemEntry> bundle(
     String dest,

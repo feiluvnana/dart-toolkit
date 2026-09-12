@@ -15,9 +15,9 @@
 /// Three doors produce the same cursor:
 ///
 /// ```dart
-/// res.parse(format.json).at('data.items');   // a response
-/// format.json.parse(text);                   // a string
-/// await format.json.read('config.json');     // a file
+/// res.parse(Codec.json).at('data.items');   // a response
+/// Formats.json(text);                       // a string
+/// await Files.readJson('config.json');      // a file
 /// ```
 ///
 /// Navigation comes in two spellings, for the two questions: [Json.at] walks a
@@ -40,7 +40,7 @@ import '../src/jsontext.dart';
 /// caller asked for a value and the honest answer is that there is not one.
 ///
 /// ```dart
-/// final doc = format.json.parse(body);
+/// final doc = Formats.json(body);
 ///
 /// doc.text('data.user.name');                   // String?
 /// doc.number('data.total');                     // num?
@@ -48,7 +48,7 @@ import '../src/jsontext.dart';
 /// doc.at('data.items').all((item) => (
 ///   id: item.number('id'),
 ///   name: item.text('name'),
-/// ));                                           // Sequence<({num? id, String? name})>
+/// ));                                           // List<({num? id, String? name})>
 /// ```
 ///
 /// There are no [Slot]s here. A slot exists so a *writer* and a *reader* in
@@ -59,7 +59,7 @@ final class Json {
   /// of the whole document starts:
   ///
   /// ```dart
-  /// final config = Config.fromJson((await format.json.read(path)).raw);
+  /// final config = Config.fromJson((await Files.readJson(path)));
   /// ```
   final Object? raw;
 
@@ -71,6 +71,17 @@ final class Json {
 
   /// The empty cursor — what a missing path reads as.
   static const Json none = Json(null);
+
+  /// Accesses a map key or array index directly on the decoded value.
+  dynamic operator [](Object key) {
+    if (raw is Map && key is String) {
+      return (raw as Map)[key];
+    }
+    if (raw is List && key is int) {
+      return (raw as List)[key];
+    }
+    return null;
+  }
 
   /// The value at a dotted [path], as a cursor of its own.
   ///
@@ -110,12 +121,12 @@ final class Json {
   /// after its language for the same reason:
   ///
   /// ```dart
-  /// final doc = format.json.parse(body);
+  /// final doc = Formats.json(body);
   ///
   /// doc.jsonpath(r'$.store.book[*].author');        // every author
-  /// doc.jsonpath(r'$..price').transform(.map.nonnull((p) => p.number()));
+  /// doc.jsonpath(r'$..price').map((p) => p.number()).nonNulls;
   /// doc.jsonpath(r'$.store.book[?(@.price < 10)]')  // the cheap ones
-  ///    .transform(.map.nonnull((b) => b.text('title')));
+  ///    .map((b) => b.text('title')).nonNulls;
   /// ```
   ///
   /// The supported syntax:
@@ -189,7 +200,7 @@ final class Json {
   /// half of `Markup.all`:
   ///
   /// ```dart
-  /// final items = res.parse(format.json).at('data.items').all((item) => (
+  /// final items = res.parse(Codec.json).at('data.items').all((item) => (
   ///   sku: item.text('sku'),
   ///   price: item.number('price.amount'),
   /// ));

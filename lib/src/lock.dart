@@ -82,6 +82,24 @@ class Lock {
     }
   }
 
+  /// Runs [action] synchronously holding the lock at [path].
+  static R holdSync<R>(String path, R Function() action) {
+    final file = File(path);
+    while (!_take(file)) {
+      final holder = _read(file);
+      if (holder != null && !_alive(holder.pid)) {
+        _release(file);
+        continue;
+      }
+      throw LockedError(path, pid: holder?.pid, since: holder?.since);
+    }
+    try {
+      return action();
+    } finally {
+      _release(file);
+    }
+  }
+
   /// Whether the lock at [path] is currently held by a live process.
   static bool held(String path) {
     final holder = _read(File(path));

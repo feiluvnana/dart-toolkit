@@ -1,228 +1,177 @@
-// The pipeline: every domain, doing one job together.
+// The pipeline: end-to-end modern web scraping and data processing.
 //
+// Demonstrates dart-toolkit 8.0.0 conventions:
+// - Direct top-level APIs & discoverable static hubs (Http, Files, Formats, Concurrent, Env, System)
+// - CliParser for declared flags, options, and auto-help
+// - Console status logging, ProgressBar, and Table rendering
+// - Http.crawl with fixtures for instant, offline reproducibility
+// - DOM traversal and typed extraction (.$(), .$$(), .all(), .texts, Field)
+// - Bounded concurrency with parallelMap
+// - Atomic, crash-safe JSON & CSV persistence
+// - Compression and archive creation with Formats.zip
+//
+// Run with:
 //   dart run example/example.dart
 //   dart run example/example.dart --concurrency 8 --force
-//
-// A catalogue is crawled, each product enriched in parallel, the results
-// written as JSON and CSV, archived, and reported — with the run's own state
-// carried between invocations. The crawl is served from a fixture, so this
-// runs offline in a second; delete the `.downloader(...)` line and the rest of
-// the pipeline is unchanged. That is the point of it.
-//
-// Each piece has a short example of its own next door:
-//
-//   scrape.dart    pull data out of one page
-//   crawl.dart     walk a site in stages
-//   form.dart      sign in and submit a form
-//   http.dart      sessions, bodies, JSON, downloads
-//   parallel.dart  bounded concurrency, retries, failures
-//   files.dart     text, JSON, CSV, and state between runs
-//   console.dart   logs, tables, bars, boxes
-//   cli.dart       the command line a script presents
-//   shell.dart     environment, subprocesses, archives, git
+
+import 'dart:io';
 
 import 'package:dart_toolkit/dart_toolkit.dart';
 
-/// What the crawl emits. Handlers are typed on it, so `collect` hands back a
-/// `List<Product>` rather than a list of loose maps.
+/// What the crawl emits: a typed Dart 3 record.
 typedef Product = ({String name, num price, String url});
 
-/// The price the listing page showed, read back on the detail page without
-/// parsing it twice.
-const listed = Slot<num>('listed');
-
-/// What the run remembers between invocations.
-const runs = Slot<int>('runs');
-const last = Slot<String>('last');
-
 void main(List<String> args) async {
-  // ------------------------------------------------------------------- cli
-  final force = cli.flag(
-    'force',
-    alias: 'f',
-    desc: 'Overwrite existing output',
-  );
-  final help = cli.flag('help', alias: 'h', desc: 'Show this message');
-  final size = cli.number(
-    'concurrency',
-    alias: 'c',
-    desc: 'Parallel fetches',
-    def: 4,
-  );
-  cli.parse(args);
+  // 1. Command-line argument parsing
+  final parser = CliParser(
+    syntax: 'dart run example/example.dart [options]',
+    description: 'Complete web crawling and data processing pipeline.',
+  )
+    ..flag('force', abbr: 'f', help: 'Overwrite existing output')
+    ..number('concurrency', abbr: 'c', defaultsTo: 4, help: 'Parallel enrichment tasks')
+    ..option('output', abbr: 'o', defaultsTo: 'output/pipeline', help: 'Output directory');
 
-  if (help()) {
-    print(
-      cli.usage(
-        syntax: 'example.dart [options]',
-        desc: 'The pipeline, end to end.',
-      ),
-    );
-    return;
-  }
+  final cli = parser.parse(args, autoHelp: true);
+  final force = cli.flag('force');
+  final concurrency = cli.number('concurrency');
+  final outDir = cli.option('output');
 
-  system.env.load();
-  final label = system.env.get('RUN_LABEL', 'demo');
+  Env.load();
+  final label = Env.get('RUN_LABEL', 'demo');
 
-  final log = system.console.logger;
-  final out = system.console.writer;
-  final clock = (Stopwatch()..start());
-  final dir = io.path.join('output', 'pipeline');
+  consoleWriter.rule('dart-toolkit ($label)');
 
-  // Tracked partial files are removed if the run is interrupted. Registering a
-  // hook starts the SIGINT watcher, which holds the process open — so a script
-  // that registers one finishes with `system.shutdown()`, as this does.
-  system.on.exit(() => log.debug('Cleaning up...'));
+  // Tracked partial files and hooks
+  System.onExit(() => logger.info('Clean shutdown completed.'));
 
-  out.rule('dart-toolkit ($label)');
+  // -------------------------------------------------------------- 1. Crawl
+  logger.step(1, 5, 'Crawling catalogue from offline fixtures...');
 
-  // -------------------------------------------------------------- 1. crawl
-  log.step(1, 5, 'Crawling the catalogue...');
-
-  final crawl = net.crawl([Fetch('https://shop.test/catalogue'.url)].seq, _next)
+  final crawl = Http.crawl([Fetch('https://shop.test/catalogue'.url)], _next)
     ..using(_fixture)
-    ..concurrent(size())
-    ..delay(util.rand.jitter(20.ms))
+    ..concurrent(concurrency)
+    ..delay(Rand.jitter(const Duration(milliseconds: 20)))
     ..sameHost()
     ..depth(2)
     ..limit(20);
 
-  // `settle` puts the failures in band, so one bad page is reported rather
-  // than swallowed and the good ones still arrive.
-  final products = await crawl.settle
-      .through(
-        .tap((outcome) {
-          if (outcome case Broke(:final error)) log.warn('crawl: $error');
-        }),
-      )
-      .through(.where.type<Done<Reply>>())
-      .through(.map((outcome) => outcome.value))
-      .through(.where((res) => res.fetch.tag == 'product'))
-      .through(.flat.map(_product))
+  final products = await crawl.flow
+      .expand(_extractProducts)
       .toList();
 
-  log.ok('Collected ${products.length} products.');
+  logger.ok('Discovered ${products.length} products.');
 
-  // --------------------------------------------------------- 2. concurrency
-  log.step(2, 5, 'Enriching...');
+  // -------------------------------------------------------- 2. Concurrency
+  logger.step(2, 5, 'Enriching items in parallel (concurrency: $concurrency)...');
 
-  final bar = Progress(total: products.length, message: 'Enriching');
-  final enriched = await concurrent.run(products, (product) async {
-    await util.time.wait(util.rand.jitter(30.ms));
+  final bar = ProgressBar(total: products.length, message: 'Enriching');
+  final enriched = await products.parallelMap((product) async {
+    await Time.wait(Rand.jitter(const Duration(milliseconds: 25)));
     bar.tick(1, product.name);
     return (
       product: product,
-      slug: util.text.slug(product.name),
-      key: util.hash.sha(product.url).substring(0, 8),
+      slug: Text.slug(product.name),
+      sku: Hash.sha256(product.url).substring(0, 8),
     );
-  }, size: size());
+  }, concurrency: concurrency);
   bar.done();
-  log.ok('Enriched ${enriched.length} products.');
+  logger.ok('Enriched ${enriched.length} products.');
 
-  // ----------------------------------------------------------------- 3. io
-  log.step(3, 5, 'Writing output...');
+  // ----------------------------------------------------------------- 3. I/O
+  logger.step(3, 5, 'Writing results atomically to $outDir/...');
 
-  final summary = io.path.join(dir, 'summary.txt');
-  if (!force() && io.has(summary)) {
-    log.warn('$summary exists; pass --force to overwrite.');
+  Directory(outDir).createSync(recursive: true);
+  final jsonPath = Files.join(outDir, 'products.json');
+  final csvPath = Files.join(outDir, 'products.csv');
+  final summaryPath = Files.join(outDir, 'summary.txt');
+
+  if (!force && Files.exists(summaryPath)) {
+    logger.warn('$summaryPath exists; pass --force to overwrite.');
   } else {
-    io.write(
-      summary,
-      enriched.map((e) => '${e.slug} ${e.key}').join('\n'),
+    // 1. Plain text
+    await Files.writeText(
+      summaryPath,
+      enriched.map((e) => '${e.slug} [${e.sku}]').join('\n'),
     );
-    io.dump(io.path.join(dir, 'products.json'), [
-      for (final e in enriched)
-        {'name': e.product.name, 'price': e.product.price, 'slug': e.slug},
-    ]);
-    io.csv.write(
-      io.path.join(dir, 'products.csv'),
+
+    // 2. Atomic JSON
+    await Files.writeJson(
+      jsonPath,
       [
         for (final e in enriched)
-          {'name': e.product.name, 'price': e.product.price, 'slug': e.slug},
+          {'name': e.product.name, 'price': e.product.price, 'slug': e.slug, 'sku': e.sku},
       ],
     );
-    log.ok('Wrote 3 files to $dir/.');
+
+    // 3. Atomic CSV
+    await Files.writeCsv(
+      csvPath,
+      Stream.fromIterable([
+        for (final e in enriched)
+          {'name': e.product.name, 'price': e.product.price, 'slug': e.slug, 'sku': e.sku},
+      ]),
+      headers: ['name', 'price', 'slug', 'sku'],
+    );
+
+    logger.ok('Wrote summary.txt, products.json, and products.csv.');
   }
 
-  // The state that outlives the run: a counter and a timestamp, under typed
-  // keys so neither is a string on one side and an int on the other.
-  final statePath = io.path.join(dir, 'state.json');
-  final db = io.dictionary(statePath);
-  final count = (db.read(runs) ?? 0) + 1;
-  db
-    ..write(runs, count)
-    ..write(last, DateTime.now().toUtc().toIso8601String())
-    ..dump(statePath);
+  // ---------------------------------------------------------- 4. Archiving
+  logger.step(4, 5, 'Compressing archive...');
 
-  // --------------------------------------------------------------- 4. tool
-  log.step(4, 5, 'Archiving...');
+  final archivePath = Files.join('output', 'catalogue-${Time.stamp()}.zip');
+  await Formats.zip(jsonPath, archivePath);
+  final stat = Files.stat(archivePath);
+  logger.ok('Packed ${Size.format(stat?.size ?? 0)} into $archivePath.');
 
-  final archive = io.path.join(
-    'output',
-    'catalogue-${util.time.stamp()}.tar.gz',
-  );
-  await format.zip.pack(io.path.join(dir, 'products.json'), archive);
-  log.ok('Packed ${util.size.format(io.stat(archive)!.size)} into $archive.');
-
-  // An executable is `system.run`, not a wrapper: `tool` holds formats only.
-  final head = await system.run('git', ['rev-parse', '--abbrev-ref', 'HEAD']);
-  if (!head.ok) {
-    log.debug('Not a git repository.');
-  } else {
-    final dirty = await system.run('git', ['status', '--porcelain']);
-    final state = dirty.out.trim().isEmpty ? ', clean' : ' (dirty)';
-    log.info('On ${head.out.trim()}$state.');
+  // Check git if in repo
+  final gitRes = await System.run('git', ['status', '--porcelain']);
+  if (gitRes.ok) {
+    final status = gitRes.out.trim().isEmpty ? 'clean' : 'dirty';
+    logger.info('Workspace git status: $status.');
   }
 
-  // ------------------------------------------------------------ 5. console
-  log.step(5, 5, 'Summary');
+  // ------------------------------------------------------------ 5. Summary
+  logger.step(5, 5, 'Summary table');
 
-  final cheapest = products.sortedBy((p) => p.price);
-  out.write(
+  final cheapest = products.sortedBy((p) => p.price).toList();
+  consoleWriter.write(
     (Table(
       headers: ['Product', 'Price', 'Slug'],
-      alignments: [.left, .right, .left],
-      style: .unicode,
+      alignments: [ColumnAlign.left, ColumnAlign.right, ColumnAlign.left],
+      style: TableStyle.unicode,
     )..addAll([
         for (final e in enriched.take(5))
           [e.product.name, '\$${e.product.price}', e.slug],
       ])).render(),
   );
 
-  out.box(
+  consoleWriter.box(
     [
-      'Run       $count',
       'Products  ${products.length}',
       'Cheapest  ${cheapest.firstOrNull?.name} at \$${cheapest.firstOrNull?.price}',
-      'Elapsed   ${util.time.format(clock.elapsed)}',
+      'Archive   $archivePath',
     ].join('\n'),
     title: 'Result',
   );
 
-  // Runs the exit hooks, kills tracked children, removes tracked partials.
-  await system.shutdown();
+  await System.shutdown();
 }
 
-/// The whole router: reply in, next requests out.
-///
-/// On the listing, queue every product and follow pagination — `meta` survives
-/// the round trip, so the product stage knows the price the listing showed. A
-/// product page is a leaf.
+/// The crawl router: given a reply, emit subsequent URLs to visit.
 Iterable<Fetch> _next(Reply res) {
-  final html = res.html;
+  final html = res.parse(Codec.html);
   return switch (res.fetch.tag) {
     null => [
+      // Follow each product card
       ...html.all(
         '.product',
         (card) => res.follow(
           card.$('a').attr('href') ?? '',
           tag: 'product',
-          meta: [
-            if (util.text.number(card.$('.price').text) case final p?)
-              listed(p),
-          ],
         ),
       ),
+      // Follow pagination
       if (html.$('a.next').attr('href') case final next?)
         res.follow(next),
     ],
@@ -230,16 +179,17 @@ Iterable<Fetch> _next(Reply res) {
   };
 }
 
-/// A product page, as zero or one product.
-List<Product> _product(Reply res) {
-  final html = res.html;
-  final name = html.pick(.text('h1'));
-  final price = util.text.number(html.pick(.text('.price')) ?? '');
+/// Extracts products from product page replies.
+Iterable<Product> _extractProducts(Reply res) {
+  if (res.fetch.tag != 'product') return const [];
+  final html = res.parse(Codec.html);
+  final name = html.pick(Field.text('h1'));
+  final price = Text.number(html.pick(Field.text('.price')) ?? '');
   if (name == null || price == null) return const [];
   return [(name: name, price: price, url: res.url.toString())];
 }
 
-/// The fixture transport, which is a closure over a map.
+/// Offline fixture transport: simulates web server responses offline.
 Future<Reply> _fixture(Fetch fetch) async {
   final body = _fixtures['${fetch.url}'];
   return Reply.text(body ?? '', fetch: fetch, status: body == null ? 404 : 200);

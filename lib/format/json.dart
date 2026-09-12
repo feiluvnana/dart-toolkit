@@ -24,9 +24,9 @@ import 'format.dart';
 /// Entry point for JSON, reachable as `format.json`.
 ///
 /// ```dart
-/// final doc = format.json.parse(res.body);
-/// final cfg = await format.json.read('config.json');
-/// io.write('out.json', format.json.format(doc.raw));
+/// final doc = Formats.json(res.body);
+/// final cfg = await const JsonAccessor().read('config.json');
+/// Files.writeTextSync('out.json', const JsonAccessor().format(doc.raw));
 /// ```
 ///
 /// `format.json.write(path, value)` writes one to disk, staged through a

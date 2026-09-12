@@ -79,87 +79,86 @@ void main() {
     });
   });
 
-  group('v7.0 Restored File System Predicates', () {
+  group('v8.0 File System Predicates & Operations', () {
     late String tempPath;
 
     setUp(() {
-      tempPath = io.dir.temp('dt_pred_').path;
+      tempPath = Files.tempDirSync('dt_pred_').path;
     });
 
     tearDown(() {
       try {
-        io.remove(tempPath);
+        Files.removeSync(tempPath);
       } catch (_) {}
     });
 
-    test('io sync predicates: isFile, isDir, isLink, exists, size', () {
-      final filePath = io.path.join(tempPath, 'sample.txt');
-      expect(io.exists(filePath), isFalse);
-      expect(io.isFile(filePath), isFalse);
-      expect(io.isDir(filePath), isFalse);
-      expect(io.size(filePath), isNull);
+    test('Files sync predicates: isFile, isDir, exists, stat', () {
+      final filePath = Files.join(tempPath, 'sample.txt');
+      expect(Files.exists(filePath), isFalse);
+      expect(Files.isFile(filePath), isFalse);
+      expect(Files.isDir(filePath), isFalse);
+      expect(Files.stat(filePath)?.size, isNull);
 
-      io.write(filePath, 'hello world');
-      expect(io.exists(filePath), isTrue);
-      expect(io.isFile(filePath), isTrue);
-      expect(io.isDir(filePath), isFalse);
-      expect(io.size(filePath), 11);
+      Files.writeTextSync(filePath, 'hello world');
+      expect(Files.exists(filePath), isTrue);
+      expect(Files.isFile(filePath), isTrue);
+      expect(Files.isDir(filePath), isFalse);
+      expect(Files.stat(filePath)?.size, 11);
 
-      expect(io.isDir(tempPath), isTrue);
-      expect(io.isFile(tempPath), isFalse);
+      expect(Files.isDir(tempPath), isTrue);
+      expect(Files.isFile(tempPath), isFalse);
     });
 
-    test('io.async predicates: isFile, isDir, isLink, exists, size', () async {
-      final filePath = io.path.join(tempPath, 'sample_async.txt');
-      expect(await io.async.exists(filePath), isFalse);
-      expect(await io.async.isFile(filePath), isFalse);
-      expect(await io.async.isDir(filePath), isFalse);
-      expect(await io.async.size(filePath), isNull);
+    test('Files async predicates: isFile, isDir, exists, stat', () async {
+      final filePath = Files.join(tempPath, 'sample_async.txt');
+      expect(Files.exists(filePath), isFalse);
+      expect(Files.isFile(filePath), isFalse);
+      expect(Files.isDir(filePath), isFalse);
+      expect(Files.stat(filePath)?.size, isNull);
 
-      await io.async.write(filePath, 'hello async');
-      expect(await io.async.exists(filePath), isTrue);
-      expect(await io.async.isFile(filePath), isTrue);
-      expect(await io.async.isDir(filePath), isFalse);
-      expect(await io.async.size(filePath), 11);
+      await Files.writeText(filePath, 'hello async');
+      expect(Files.exists(filePath), isTrue);
+      expect(Files.isFile(filePath), isTrue);
+      expect(Files.isDir(filePath), isFalse);
+      expect(Files.stat(filePath)?.size, 11);
     });
   });
 
-  group('v7.0 System & Process DX Supercharger', () {
+  group('v8.0 System & Process DX Supercharger', () {
     test('SysResult rich properties: exitCode, isSuccess, stdout, stderr, lines', () async {
-      final res = await system.run('dart', ['--version']);
+      final res = await System.run('dart', ['--version']);
       expect(res.exitCode, 0);
       expect(res.isSuccess, isTrue);
       expect(res.ok, isTrue);
-      // dart --version writes to stderr or stdout depending on platform
       final output = '${res.stdout} ${res.stderr}';
       expect(output, contains(RegExp('Dart', caseSensitive: false)));
     });
 
-    test('system.stream execution', () async {
-      final lines = await system.stream('dart', ['--version'], includeStderr: true).toList();
+    test('System.runStream execution', () async {
+      final lines = await System.runStream('dart', ['--version'], includeStderr: true).toList();
       expect(lines.isNotEmpty, isTrue);
       expect(lines.any((l) => l.toLowerCase().contains('dart')), isTrue);
     });
 
-    test('Typed environment accessors in system.env', () {
-      system.env.set('TEST_PORT', '9090');
-      system.env.set('TEST_VERBOSE', 'true');
-      system.env.set('TEST_SECRET', 'secret_key_123');
+    test('Typed environment accessors in Env and System.env', () {
+      Env.set('TEST_PORT', '9090');
+      Env.set('TEST_VERBOSE', 'true');
+      Env.set('TEST_SECRET', 'secret_key_123');
 
-      expect(system.env.int('TEST_PORT', defaultValue: 3000), 9090);
-      expect(system.env.int('NON_EXISTENT_PORT', defaultValue: 3000), 3000);
-      expect(system.env.getInt('TEST_PORT'), 9090);
+      expect(Env.int('TEST_PORT', defaultValue: 3000), 9090);
+      expect(Env.int('NON_EXISTENT_PORT', defaultValue: 3000), 3000);
+      expect(Env.getInt('TEST_PORT'), 9090);
 
-      expect(system.env.bool('TEST_VERBOSE', defaultValue: false), isTrue);
-      expect(system.env.bool('NON_EXISTENT_FLAG', defaultValue: true), isTrue);
-      expect(system.env.getBool('TEST_VERBOSE'), isTrue);
+      expect(Env.bool('TEST_VERBOSE', defaultValue: false), isTrue);
+      expect(Env.bool('NON_EXISTENT_FLAG', defaultValue: true), isTrue);
+      expect(Env.getBool('TEST_VERBOSE'), isTrue);
 
-      expect(system.env.require('TEST_SECRET'), 'secret_key_123');
-      expect(() => system.env.require('UNKNOWN_VAR'), throwsStateError);
+      expect(Env.require('TEST_SECRET'), 'secret_key_123');
+      expect(() => Env.require('UNKNOWN_VAR'), throwsStateError);
 
-      system.env.delete('TEST_PORT');
-      system.env.delete('TEST_VERBOSE');
-      system.env.delete('TEST_SECRET');
+      Env.delete('TEST_PORT');
+      Env.delete('TEST_VERBOSE');
+      Env.delete('TEST_SECRET');
     });
   });
 }

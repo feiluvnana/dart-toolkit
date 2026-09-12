@@ -217,7 +217,7 @@ void main() {
 
     test('a file is just another sink', () async {
       final temp = Directory.systemTemp.createTempSync('dt_log_');
-      addTearDown(() => io.remove(temp.path));
+      addTearDown(() => temp.deleteSync(recursive: true));
       final path = '${temp.path}/run.log';
       final sink = File(path).openWrite();
 
@@ -319,18 +319,18 @@ void main() {
     });
   });
 
-  group('io.csv', () {
+  group('csv', () {
     test('format ends lines with the newline it was given', () {
       final rows = [
         {'a': '1', 'b': '2'},
       ];
-      expect(format.csv.format(rows.seq), 'a,b\n1,2\n');
-      expect(format.csv.format(rows.seq, newline: '\r\n'), 'a,b\r\n1,2\r\n');
+      expect(Formats.toCsv(rows), 'a,b\n1,2\n');
+      expect(Formats.toCsv(rows, newline: '\r\n'), 'a,b\r\n1,2\r\n');
     });
 
     test('a header-only render honours it too', () {
       expect(
-        format.csv.format(
+        Formats.toCsv(
           const <Map<String, Object?>>[],
           headers: ['a', 'b'],
           newline: '\r\n',
@@ -341,43 +341,40 @@ void main() {
 
     test('write puts CRLF on disk', () async {
       final temp = Directory.systemTemp.createTempSync('dt_csv_');
-      addTearDown(() => io.remove(temp.path));
+      addTearDown(() => temp.deleteSync(recursive: true));
       final path = '${temp.path}/out.csv';
 
-      io.csv.write(
+      writeCsvSync(
         path,
         [
           {'a': '1'},
-        ].seq,
+        ],
         newline: '\r\n',
       );
 
       expect(File(path).readAsStringSync(), 'a\r\n1\r\n');
       // And it reads back as one row, not two.
-      expect((await format.csv.read(path)).maps.collect(.list()), [
+      expect(await readCsvRecords(path).toList(), [
         {'a': '1'},
       ]);
     });
 
     test('the eager cursor and the two streams agree', () async {
       final temp = Directory.systemTemp.createTempSync('dt_csv_');
-      addTearDown(() => io.remove(temp.path));
+      addTearDown(() => temp.deleteSync(recursive: true));
       final path = '${temp.path}/in.csv';
       File(path).writeAsStringSync('a,b\n1,2\n');
 
-      final Csv sheet = await format.csv.read(path);
-      final List<Map<String, String>> records = await io.csv
-          .records(path)
-          .collect(.list());
-      final List<List<String>> rows = await io.async.csv
-          .rows(path)
-          .collect(.list());
+      final Csv sheet = Formats.csv(File(path).readAsStringSync());
+      final List<Map<String, String>> records =
+          await readCsvRecords(path).toList();
+      final List<List<String>> rows = await readCsvRows(path).toList();
 
-      expect(sheet.maps.collect(.list()), records);
+      expect(sheet.maps.toList(), records);
       // The cursor keeps the header out of the rows; the flow does not, so
       // it is the header line plus what the cursor calls a row.
-      expect(sheet.headers.collect(.list()), rows.first);
-      expect(sheet.rows.collect(.list()), rows.skip(1).toList());
+      expect(sheet.headers.toList(), rows.first);
+      expect(sheet.rows.toList(), rows.skip(1).toList());
     });
   });
 
@@ -420,7 +417,7 @@ void main() {
       expect(boxes.value, 'yes');
       // An unticked box submits nothing, so it reads as absent.
       expect(
-        boxes.elements.transform(.map.nonnull((e) => e.value)).collect(.list()),
+        boxes.elements.map((e) => e.value).whereType<String>().toList(),
         ['yes'],
       );
     });
@@ -443,8 +440,9 @@ void main() {
         $(html)
             .$('input')
             .elements
-            .transform(.map.nonnull((e) => e.value))
-            .collect(.list()),
+            .map((e) => e.value)
+            .whereType<String>()
+            .toList(),
         ['2'],
       );
     });
@@ -462,7 +460,7 @@ void main() {
           '<main><div>Tom &amp; Jerry<br>caf&eacute;<br>&#65;&#66;</div></main>';
       // Stripping the tags left the entities behind in what is documented as
       // text.
-      expect($(html, 'div').lines.collect(.list()), [
+      expect($(html, 'div').lines.toList(), [
         'Tom & Jerry',
         'café',
         'AB',
@@ -471,7 +469,7 @@ void main() {
 
     test('lines without entities are untouched', () {
       expect(
-        $('<main><div>a<br>b</div></main>', 'div').lines.collect(.list()),
+        $('<main><div>a<br>b</div></main>', 'div').lines.toList(),
         ['a', 'b'],
       );
     });
@@ -499,8 +497,8 @@ void main() {
     });
 
     test('a flag reads its declared env variable', () {
-      system.env.set('DT_CONSOLE_FORCE', 'yes');
-      addTearDown(() => system.env.delete('DT_CONSOLE_FORCE'));
+      Env.set('DT_CONSOLE_FORCE', 'yes');
+      addTearDown(() => Env.delete('DT_CONSOLE_FORCE'));
 
       // Only option() took an env before, so a boolean could not be set by
       // the shell.
@@ -509,8 +507,8 @@ void main() {
     });
 
     test('the command line still beats the flag env', () {
-      system.env.set('DT_CONSOLE_FORCE', 'true');
-      addTearDown(() => system.env.delete('DT_CONSOLE_FORCE'));
+      Env.set('DT_CONSOLE_FORCE', 'true');
+      addTearDown(() => Env.delete('DT_CONSOLE_FORCE'));
 
       final force = Cli(const [
         '--no-force',
@@ -524,22 +522,22 @@ void main() {
       'unpacking restores the execute bit and the modification time',
       () async {
         final root = Directory.systemTemp.createTempSync('dt_zip_mode_');
-        addTearDown(() => io.remove(root.path));
+        addTearDown(() => root.deleteSync(recursive: true));
 
         final script = File('${root.path}/src/run.sh')
           ..createSync(recursive: true)
           ..writeAsStringSync('#!/bin/sh\necho hi\n');
         if (!Platform.isWindows) {
-          await system.run('chmod', ['755', script.path]);
+          await System.run('chmod', ['755', script.path]);
         }
         final when = DateTime(2021, 3, 4, 5, 6, 8);
         script.setLastModifiedSync(when);
 
         for (final name in ['out.zip', 'out.tar', 'out.tar.gz']) {
           final archive = '${root.path}/$name';
-          await format.zip.pack('${root.path}/src', archive);
+          await Formats.zip('${root.path}/src', archive);
           final dest = '${root.path}/back_$name';
-          await format.zip.unpack(archive, dest);
+          await Formats.unzip(archive, dest);
 
           final restored = File('$dest/run.sh');
           expect(restored.existsSync(), isTrue, reason: name);
@@ -558,15 +556,15 @@ void main() {
 
     test('a plain file keeps its own mode', () async {
       final root = Directory.systemTemp.createTempSync('dt_zip_one_');
-      addTearDown(() => io.remove(root.path));
+      addTearDown(() => root.deleteSync(recursive: true));
 
       final file = File('${root.path}/notes.txt')..writeAsStringSync('hello');
       if (!Platform.isWindows) {
-        await system.run('chmod', ['600', file.path]);
+        await System.run('chmod', ['600', file.path]);
       }
 
-      await format.zip.pack(file.path, '${root.path}/one.zip');
-      await format.zip.unpack('${root.path}/one.zip', '${root.path}/back');
+      await Formats.zip(file.path, '${root.path}/one.zip');
+      await Formats.unzip('${root.path}/one.zip', '${root.path}/back');
 
       if (!Platform.isWindows) {
         expect(
@@ -582,7 +580,7 @@ void main() {
       // `tool.git` used to wrap this. `system.run` already promises a result
       // rather than an exception, which was the whole of what the wrapper
       // added.
-      final res = await system.run('git', ['checkout', 'no-such-branch-xyz']);
+      final res = await System.run('git', ['checkout', 'no-such-branch-xyz']);
       expect(res.code, isA<int>());
       expect(res.ok, isFalse);
     });
@@ -594,7 +592,7 @@ void main() {
       final pool = Pool<int>(size: 1);
       // `.stream` on purpose: a test reaching for `listen` and `cancel` has
       // left the vocabulary, and the one word at the boundary says so.
-      final stream = pool.flow(List.generate(50, (int i) => i).seq, (i) async {
+      final stream = pool.flow(List.generate(50, (int i) => i), (i) async {
         started++;
         await Future<void>.delayed(const Duration(milliseconds: 1));
         return i;

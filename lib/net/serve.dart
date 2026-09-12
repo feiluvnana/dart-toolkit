@@ -6,7 +6,7 @@
 /// mean `dart:io`'s `HttpServer` and a hand-rolled request switch.
 ///
 /// ```dart
-/// final server = await net.serve(8080, (req) async {
+/// final server = await Http.serve(8080, (req) async {
 ///   return switch (req.path) {
 ///     '/callback' => Served.text(req.query['code'] ?? ''),
 ///     '/health' => Served.json({'ok': true}),

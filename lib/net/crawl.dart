@@ -19,15 +19,15 @@
 /// What [Crawl] adds over that line is the frontier, and only that.
 ///
 /// ```dart
-/// final crawl = net.crawl(
-///   [Fetch('https://example.test'.url)].seq,
-///   (res) => res.parse(format.html).$('a').attrs('href')
-///       .transform(.map(res.follow)),
+/// final crawl = Http.crawl(
+///   [Fetch('https://example.test'.url)],
+///   (res) => res.parse(Codec.html).$('a').attrs('href')
+///       .map(res.follow),
 /// )..concurrent(4)..sameHost()..depth(3)..limit(500);
 ///
 /// final titles = await crawl.flow
-///     .through(.map((r) => r.parse(format.html).$('h1').text))
-///     .collect(.list());
+///     .map((r) => r.parse(Codec.html).$('h1').text)
+///     .toList();
 /// ```
 library;
 
@@ -41,7 +41,6 @@ import 'package:crypto/crypto.dart';
 import '../concurrent/concurrent.dart';
 import '../format/format.dart';
 import '../src/fs.dart';
-import '../src/method.dart';
 import '../src/proc.dart';
 import 'net.dart';
 
@@ -97,7 +96,7 @@ typedef Stats = ({
 /// flow's `onListen` and stop when it is cancelled, so `crawl.flow` built and
 /// thrown away costs nothing, and `crawl.flow.collect(.first())` fetches one
 /// page.
-final class Crawl {
+final class Crawl extends Stream<Reply> {
   /// Creates a crawl seeded with [seeds].
   ///
   /// [next] is a pure function from a reply to the requests that follow it —
@@ -412,6 +411,20 @@ final class Crawl {
   /// Standard Dart alias for [flow].
   Stream<Reply> get stream => flow;
 
+  @override
+  StreamSubscription<Reply> listen(
+    void Function(Reply event)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) =>
+      flow.listen(
+        onData,
+        onError: onError,
+        onDone: onDone,
+        cancelOnError: cancelOnError,
+      );
+
   /// The replies and the failures, in band.
   Stream<Settled<Reply>> get settle => _open();
 
@@ -450,7 +463,7 @@ final class Crawl {
       running = true;
       _started = true;
       _began = DateTime.now();
-      final Send send = _send ?? net.http.call;
+      final Send send = _send ?? httpClient.call;
 
       try {
         // Setting up is the crawl's work too, so a resume file that cannot be
@@ -672,7 +685,7 @@ final class Crawl {
       // A lookup that never reached a server is not a server saying no.
       return Robots();
     }
-    if (reply.ok) return reply.parse(format.robots);
+    if (reply.ok) return parseRobots(reply.text);
     return reply.status >= 500 ? Robots.closed : Robots();
   }
 

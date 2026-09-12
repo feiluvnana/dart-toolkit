@@ -17,175 +17,182 @@ import '../util/rand.dart';
 // CONCURRENT & WORKER POOL (concurrent.* / Pool)
 // ============================================================================
 
-/// The `concurrent` domain: bounded async task pools.
-const ConcurrentAccessor concurrent = ConcurrentAccessor();
+/// Rate limiter token bucket, bounding operations per time window.
+typedef RateLimiter = Limiter;
 
-/// Entry point for bounded concurrency.
+/// Maps [worker] over [items] concurrently with at most [concurrency] in flight.
 ///
+/// Results preserve input order. If an error occurs, the run stops and the error
+/// propagates unless error handling is registered on a custom [Pool].
+Future<List<R>> parallelMap<I, R>(
+  Iterable<I> items,
+  FutureOr<R> Function(I item) worker, {
+  int concurrency = 4,
+  Duration delay = Duration.zero,
+  String? progress,
+}) {
+  final p = Pool<I>(size: concurrency, delay: delay);
+  if (progress != null) {
+    final list = items is List<I> ? items : items.toList();
+    final bar = Progress(total: list.length, message: progress);
+    p.on.progress((_) => bar.tick());
+    p.on.done(() => bar.done());
+    return p.run(list, worker);
+  }
+  return p.run(items, worker);
+}
+
+/// Maps [worker] over [items] with at most [concurrency] in flight, returning
+/// a list of [Settled] results ([Done] or [Broke]) without throwing on errors.
+Future<List<Settled<R>>> _settle<I, R>(
+  Iterable<I> items,
+  FutureOr<R> Function(I item) worker, {
+  int concurrency = 4,
+  Duration delay = Duration.zero,
+  String? progress,
+}) {
+  final p = Pool<I>(size: concurrency, delay: delay);
+  if (progress != null) {
+    final list = items is List<I> ? items : items.toList();
+    final bar = Progress(total: list.length, message: progress);
+    p.on.progress((_) => bar.tick());
+    p.on.done(() => bar.done());
+    return p.settle(list, worker);
+  }
+  return p.settle(items, worker);
+}
+
+/// Maps [worker] over [items] with at most [concurrency] in flight, returning
+/// a list of [Settled] results ([Done] or [Broke]) without throwing on errors.
+Future<List<Settled<R>>> settle<I, R>(
+  Iterable<I> items,
+  FutureOr<R> Function(I item) worker, {
+  int concurrency = 4,
+  Duration delay = Duration.zero,
+  String? progress,
+}) => _settle(
+  items,
+  worker,
+  concurrency: concurrency,
+  delay: delay,
+  progress: progress,
+);
+
+/// Retries [fn] if it throws, backing off with jitter between attempts.
+Future<T> retry<T>(
+  FutureOr<T> Function() fn, {
+  required int retries,
+  Duration backoff = const Duration(milliseconds: 100),
+  Duration cap = const Duration(seconds: 30),
+  bool Function(Object error)? when,
+  void Function(Object error, int attempt)? onRetry,
+}) => concurrentRetry(
+  fn,
+  retries: retries,
+  backoff: backoff,
+  cap: cap,
+  when: when,
+  onretry: onRetry,
+);
+
+/// Waits for [duration] without blocking the isolate.
+Future<void> delay(Duration duration) => Future<void>.delayed(duration);
+
+// ============================================================================
+// STATIC HELPER HUB: Concurrent
+// ============================================================================
+
+/// Static helper hub for concurrent execution, rate limiting, and retries.
+///
+/// Easily discoverable via IDE auto-complete:
 /// ```dart
-/// final replies = await concurrent.run(
-///   urls,
-///   (u) => net.http.send(.get, u),
-///   size: 8,
-/// );
+/// final results = await Concurrent.map([1, 2], (n) async => n * 2, concurrency: 8);
+/// final settled = await Concurrent.settle([1, 2], (n) async => n * 2);
+/// final res = await Concurrent.retry(() async => 'data', retries: 3);
 /// ```
-class ConcurrentAccessor {
-  /// Creates the accessor. Prefer the shared [concurrent] instance.
-  const ConcurrentAccessor();
+abstract final class Concurrent {
+  Concurrent._();
 
-  /// Maps [worker] over [items] with at most [size] tasks in flight.
-  ///
-  /// Results come back in the order of [items], not completion order. The
-  /// first task to throw aborts the run and its error propagates — construct
-  /// a [Pool] and register [PoolEvents.error] instead if you would rather
-  /// collect failures and continue.
-  ///
-  /// The form over items you already hold. `Pipe.map.async(worker, size: n)`
-  /// is the one over a source you do not — a crawl, a CSV too large for
-  /// memory, a piped stdin — and it is part of the flow vocabulary rather
-  /// than a member here, which is where it belongs and where 5.5.0 moved it
-  /// from (`flow.run`, an extension declared in this library). This keeps
-  /// [delay] and [Pool]'s error semantics, which that one does not carry, so
-  /// the two are not spellings of each other.
-  Future<List<R>> run<I, R>(
+  /// Maps [worker] over [items] concurrently with at most [concurrency] in flight.
+  static Future<List<R>> map<I, R>(
+    Iterable<I> items,
+    FutureOr<R> Function(I item) worker, {
+    int concurrency = 4,
+    Duration delay = Duration.zero,
+    String? progress,
+  }) =>
+      parallelMap(
+        items,
+        worker,
+        concurrency: concurrency,
+        delay: delay,
+        progress: progress,
+      );
+
+  /// Executes [worker] over [items] with at most [size] in flight.
+  static Future<List<R>> run<I, R>(
     Iterable<I> items,
     FutureOr<R> Function(I item) worker, {
     int size = 4,
     Duration delay = Duration.zero,
     String? progress,
-  }) {
-    final p = Pool<I>(size: size, delay: delay);
-    if (progress != null) {
-      final list = items is List<I> ? items : items.toList();
-      final bar = Progress(total: list.length, message: progress);
-      p.on.progress((_) => bar.tick());
-      p.on.done(() => bar.done());
-      return p.run(list, worker);
-    }
-    return p.run(items, worker);
-  }
+  }) =>
+      parallelMap(
+        items,
+        worker,
+        concurrency: size,
+        delay: delay,
+        progress: progress,
+      );
 
-  /// Maps [worker] over [items] with at most [size] in flight, and never
-  /// throws.
-  ///
-  /// One [Settled] per item, in the order of [items], so a failure is a value
-  /// the caller reads rather than an exception that ends the run:
-  ///
-  /// ```dart
-  /// final results = await concurrent.settle(urls, fetch);
-  /// for (final result in results) {
-  ///   switch (result) {
-  ///     case Done(:final value): save(value);
-  ///     case Broke(:final error): log.warn('$error');
-  ///   }
-  /// }
-  /// ```
-  ///
-  /// [run]'s twin, and the shorter half of the pair `Pool` has always
-  /// carried: [run] was reachable here without naming a [Pool] and this was
-  /// not, so the failure-tolerant form — the one a script reaching for a pool
-  /// usually wants — cost a type name the safe default does not.
-  Future<List<Settled<R>>> settle<I, R>(
+  /// Maps [worker] over [items] returning a list of [Settled] results without throwing on errors.
+  static Future<List<Settled<R>>> settle<I, R>(
     Iterable<I> items,
     FutureOr<R> Function(I item) worker, {
-    int size = 4,
+    int concurrency = 4,
     Duration delay = Duration.zero,
     String? progress,
-  }) {
-    final p = Pool<I>(size: size, delay: delay);
-    if (progress != null) {
-      final list = items is List<I> ? items : items.toList();
-      final bar = Progress(total: list.length, message: progress);
-      p.on.progress((_) => bar.tick());
-      p.on.done(() => bar.done());
-      return p.settle(list, worker);
-    }
-    return p.settle(items, worker);
-  }
+  }) =>
+      _settle(
+        items,
+        worker,
+        concurrency: concurrency,
+        delay: delay,
+        progress: progress,
+      );
 
-  /// Retries [fn] if it throws, backing off between attempts.
-  ///
-  /// [retries] is the number of *extra* attempts after the first, which is
-  /// what `Fetcher.retries` already means — so `retries: 2` runs [fn] up to
-  /// three times.
-  ///
-  /// **Required**, because this is the one place in the library where `0`
-  /// could not be the default: everything else switched off is a client that
-  /// still fetches, and `retry(fn, retries: 0)` is `fn()` under a name that
-  /// promises otherwise. A number nobody chose was the other option, and `2`
-  /// is what that looked like.
-  ///
-  /// ```dart
-  /// await concurrent.retry(
-  ///   () => net.http.send(.get, url),
-  ///   retries: 3,
-  ///   backoff: 500.ms,
-  ///   onretry: (error, attempt) => log.warn('attempt $attempt: $error'),
-  /// );
-  /// ```
-  ///
-  /// A `times:` stood beside this through 4.0.0, documented as *pass one or
-  /// the other* — two parameters for one number, which is the failure Rule 5
-  /// records the CLI's `def`/`defaultValue` pair going for. It also resolved
-  /// silently: `retries` was read first, so `retry(fn, times: 5, retries: 1)`
-  /// ran two attempts and ignored the five. [concurrentRetry], the function
-  /// under this one, kept its copy until 6.1.0.
-  Future<T> retry<T>(
+  /// Retries [fn] if it throws, backing off with jitter between attempts.
+  static Future<T> retry<T>(
     FutureOr<T> Function() fn, {
     required int retries,
     Duration backoff = const Duration(milliseconds: 100),
     Duration cap = const Duration(seconds: 30),
     bool Function(Object error)? when,
-    void Function(Object error, int attempt)? onretry,
-  }) => concurrentRetry(
-    fn,
-    retries: retries,
-    backoff: backoff,
-    cap: cap,
-    when: when,
-    onretry: onretry,
-  );
+    void Function(Object error, int attempt)? onRetry,
+  }) =>
+      concurrentRetry(
+        fn,
+        retries: retries,
+        backoff: backoff,
+        cap: cap,
+        when: when,
+        onretry: onRetry,
+      );
 
-  /// Creates a counting semaphore bounding concurrent access to [permits].
-  ///
-  /// `concurrent.mutex()` stood beside this through 4.0.0 and was
-  /// `Semaphore(1)` under a second name — a whole exported type for a value of
-  /// one argument. `concurrent.semaphore(1)` is the mutex.
-  Semaphore semaphore(int permits) => Semaphore(permits);
+  /// Waits for [duration] without blocking the isolate.
+  static Future<void> delay(Duration duration) =>
+      Future<void>.delayed(duration);
 
-  /// Creates a rate limiter allowing [count] operations [per] window.
-  ///
-  /// [Semaphore] bounds how many run at once and this bounds how often they
-  /// start, which are different limits — and the second is the one every
-  /// public API enforces. `Semaphore(4)` satisfies none of *5000 requests per
-  /// hour*, *10 per second* or *60 per minute*: four instant requests then
-  /// four more is eight in a second, so the script works until the day the
-  /// network is fast.
-  ///
-  /// ```dart
-  /// final limit = concurrent.rate(10, per: 1.s);
-  /// await limit.guard(() => net.http.send(.get, url));
-  /// ```
-  ///
-  /// It composes with the bound that is already here, which is the argument
-  /// for it living in this domain:
-  ///
-  /// ```dart
-  /// await concurrent.run(urls, (u) => limit.guard(() => net.http.send(.get, u)),
-  ///     size: 8);          // 8 in flight, never more than 10 per second
-  /// ```
-  Limiter rate(int count, {Duration per = const Duration(seconds: 1)}) =>
+  /// Creates a rate limiter token bucket, bounding operations per time window.
+  static Limiter rate(int count, {Duration per = const Duration(seconds: 1)}) =>
       Limiter(count, per: per);
 
-  /// A [Pool] running at most [size] tasks at once, [delay] apart.
-  ///
-  /// The third factory, so the domain stops being inconsistent about which of
-  /// its types has one: [semaphore] and [rate] had theirs and `Pool` did not.
-  /// Each is one line over the constructor, kept because
-  /// `concurrent.rate(10, per: 1.s)` is how the domain documents itself and
-  /// reads better inside a `Fetcher(...)` than `Limiter(10, per: 1.s)`.
-  Pool<I> pool<I>({int size = 4, Duration delay = Duration.zero}) =>
-      Pool<I>(size: size, delay: delay);
+  /// Creates a counting semaphore bounding concurrent access to [permits].
+  static Semaphore semaphore(int permits) => Semaphore(permits);
+
+  /// Creates a [Pool] running at most [concurrency] tasks at once, [delay] apart.
+  static Pool<I> pool<I>({int concurrency = 4, Duration delay = Duration.zero}) =>
+      Pool<I>(size: concurrency, delay: delay);
 }
 
 /// Lifecycle handlers for a [Pool], reachable as `pool.on`.
@@ -369,12 +376,12 @@ class Pool<I> {
   /// One outcome per item, in input order:
   ///
   /// ```dart
-  /// (await pool.settle(urls, fetch)).collect(.foreach((result) {
+  /// for (final result in await pool.settle(urls, fetch)) {
   ///   switch (result) {
   ///     case Done(:final value): save(value);
   ///     case Broke(:final error): log.warn('$error');
   ///   }
-  /// }));
+  /// }
   /// ```
   Future<List<Settled<R>>> settle<R>(
     Iterable<I> items,
@@ -634,10 +641,10 @@ class Semaphore implements Waiting {
 /// pair and a wrapping form, and the wrapping form is the one to use:
 ///
 /// ```dart
-/// final limit = concurrent.rate(10, per: 1.s);
+/// final limit = Concurrent.rate(10, per: 1.s);
 ///
 /// await limit.take();                            // waits for a token
-/// await limit.guard(() => net.http.send(.get, url));    // the wrapped form
+/// await limit.guard(() => Http.get(url));        // the wrapped form
 /// ```
 ///
 /// **The bucket refills smoothly**, one token every `per / count`, rather than
@@ -706,6 +713,9 @@ class Limiter implements Waiting {
     _schedule();
     return waiter.future;
   }
+
+  /// Alias for [take] to acquire a permit.
+  Future<void> acquire() => take();
 
   /// Takes a token, then runs [action].
   ///
@@ -816,12 +826,12 @@ Duration _backoffFor(int attempt, Duration base, Duration cap) {
 /// that has a value is the branch where it is non-nullable:
 ///
 /// ```dart
-/// for (final result in (await pool.settle(urls, fetch)).collect(.list())) {
+/// for (final result in await pool.settle(urls, fetch)) {
 ///   switch (result) {
 ///     case Done(:final value): save(value);
 ///     case Broke(:final error): log.warn('$error');
 ///   }
-///}
+/// }
 /// ```
 ///
 /// This was a record of four fields — `value`, `error`, `stack` and
@@ -834,6 +844,12 @@ sealed class Settled<R> {
   /// For a filter or a count. To *use* the value, match on [Done] instead:
   /// that is the branch where it is not null.
   bool get ok => this is Done<R>;
+
+  /// Whether the task finished successfully.
+  bool get isDone => this is Done<R>;
+
+  /// Whether the task failed with an error.
+  bool get isBroke => this is Broke<R>;
 
   /// The value, or `null` when the task threw.
   R? get value => switch (this) {
