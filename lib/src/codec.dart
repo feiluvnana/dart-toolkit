@@ -21,6 +21,11 @@
 /// `read` from a file comes free with it.
 library;
 
+import '../format/format.dart';
+import 'csv.dart';
+import 'json.dart';
+import 'markup.dart';
+
 // ============================================================================
 // FORMAT CODECS (Codec)
 // ============================================================================
@@ -42,4 +47,19 @@ library;
 abstract interface class Codec<T> {
   /// Decodes [text] into this format's cursor.
   T parse(String text);
+
+  /// HTML markup codec.
+  static Codec<Markup> get html => format.html;
+
+  /// JSON document cursor codec.
+  static Codec<Json> get json => format.json;
+
+  /// YAML document cursor codec.
+  static Codec<Json> get yaml => format.yaml;
+
+  /// TOML document cursor codec.
+  static Codec<Json> get toml => format.toml;
+
+  /// CSV cursor codec.
+  static Codec<Csv> get csv => format.csv;
 }

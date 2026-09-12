@@ -180,3 +180,126 @@ extension StringParseExtensions on String {
   /// Parses this string as an HTML markup cursor.
   Markup parseHtml() => format.html.parse(this);
 }
+
+/// Direct document and selector extensions on [Reply].
+extension ReplyDocumentExtensions on Reply {
+  /// Parsed HTML markup cursor.
+  Markup get html => parse(format.html);
+
+  /// jQuery-style selector shorthand over the parsed HTML document.
+  Markup $(String selector) => html.$(selector);
+
+  /// XPath selector shorthand over the parsed HTML document.
+  Markup $xpath(String path) => html.$xpath(path);
+}
+
+/// Fluent HTTP extensions directly on URL strings.
+extension StringHttpExtensions on String {
+  /// Sends a GET request to this URL.
+  Future<Reply> get({
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Encoding? encoding,
+    Fetch? fetch,
+  }) => url.get(
+    headers: headers,
+    timeout: timeout,
+    redirects: redirects,
+    retries: retries,
+    encoding: encoding,
+    fetch: fetch,
+  );
+
+  /// Sends a POST request to this URL.
+  Future<Reply> post({
+    Body? body,
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Encoding? encoding,
+    Fetch? fetch,
+  }) => url.post(
+    body: body,
+    headers: headers,
+    timeout: timeout,
+    redirects: redirects,
+    retries: retries,
+    encoding: encoding,
+    fetch: fetch,
+  );
+
+  /// Sends a PUT request to this URL.
+  Future<Reply> put({
+    Body? body,
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Encoding? encoding,
+    Fetch? fetch,
+  }) => url.put(
+    body: body,
+    headers: headers,
+    timeout: timeout,
+    redirects: redirects,
+    retries: retries,
+    encoding: encoding,
+    fetch: fetch,
+  );
+
+  /// Sends a DELETE request to this URL.
+  Future<Reply> delete({
+    Body? body,
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Encoding? encoding,
+    Fetch? fetch,
+  }) => url.delete(
+    body: body,
+    headers: headers,
+    timeout: timeout,
+    redirects: redirects,
+    retries: retries,
+    encoding: encoding,
+    fetch: fetch,
+  );
+
+  /// Sends a PATCH request to this URL.
+  Future<Reply> patch({
+    Body? body,
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Encoding? encoding,
+    Fetch? fetch,
+  }) => url.patch(
+    body: body,
+    headers: headers,
+    timeout: timeout,
+    redirects: redirects,
+    retries: retries,
+    encoding: encoding,
+    fetch: fetch,
+  );
+
+  /// Sends a HEAD request to this URL.
+  Future<Reply> head({
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Fetch? fetch,
+  }) => url.head(
+    headers: headers,
+    timeout: timeout,
+    redirects: redirects,
+    retries: retries,
+    fetch: fetch,
+  );
+}

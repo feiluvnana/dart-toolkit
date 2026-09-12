@@ -35,7 +35,7 @@ void main() async {
     // A response knows how to query its own HTML.
     final page = await client.send(.get, '$origin/'.url);
     log.ok(
-      'GET ${page.status} ${page.type} — ${page.parse(format.html).$('h1').text}',
+      'GET ${page.status} ${page.type} — ${page.$('h1').text}',
     );
 
     // Bodies are sealed, so the encoding is explicit at the call site:
@@ -47,22 +47,22 @@ void main() async {
     );
     // Reading a body is a codec, whichever format it is. Nothing throws: a
     // body that is not JSON is the empty cursor, so the fallback is a `??`.
-    log.ok('POST ${echo.status} — ${echo.parse(format.json).raw}');
-    final junk = Reply.text('<nope>').parse(format.json);
+    log.ok('POST ${echo.status} — ${echo.json.raw}');
+    final junk = Reply.text('<nope>').json;
     log.info('Fallback on junk: ${junk.raw ?? const {}}');
 
     // Cookies set anywhere in the session are sent everywhere they apply.
     await client.send(.get, '$origin/signin'.url);
     final who = await client.send(.get, '$origin/whoami'.url);
     log.ok(
-      'Session: ${who.body.trim()} (jar holds ${client.jar?.cookies.collect(.count())} cookies)',
+      'Session: ${who.body.trim()} (jar holds ${client.jar?.cookies.length} cookies)',
     );
 
     // A streamed download, written atomically through a `.part` file so an
     // interrupted run never leaves a truncated one behind. It skips a
     // destination that already holds bytes, so a re-run costs nothing.
     io.remove('output/blob.bin');
-    final bar = Progress(total: 1, unit: ProgressUnit.bytes, message: 'blob');
+    final bar = Progress(total: 1, unit: .bytes, message: 'blob');
     final file = await client.download(
       '$origin/blob'.url,
       'output/blob.bin',
@@ -78,12 +78,12 @@ void main() async {
 
     // Many URLs at once, bounded, results in input order.
     final pages = await concurrent.run(
-      ['$origin/', '$origin/whoami'].seq,
+      ['$origin/', '$origin/whoami'],
       (url) => client.send(.get, url.url),
       size: 2,
     );
     log.ok(
-      'Fetched ${pages.collect(.count())}: ${pages.transform(.map((p) => p.status)).collect(.list())}',
+      'Fetched ${pages.length}: ${pages.map((p) => p.status).toList()}',
     );
   } finally {
     await client.close();

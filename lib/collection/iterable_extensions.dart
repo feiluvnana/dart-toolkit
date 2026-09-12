@@ -233,4 +233,31 @@ extension IterableTerminals<T> on Iterable<T> {
     }
     return result;
   }
+
+  /// Arithmetic mean of elements or null if empty. Alias for [average].
+  double? avg([num Function(T item)? of]) => average(of);
+
+  /// Splits elements into two lists by [predicate]: those that match and those that do not.
+  (List<T>, List<T>) split(bool Function(T item) predicate) {
+    final matches = <T>[];
+    final nonMatches = <T>[];
+    for (final item in this) {
+      if (predicate(item)) {
+        matches.add(item);
+      } else {
+        nonMatches.add(item);
+      }
+    }
+    return (matches, nonMatches);
+  }
+
+  /// Groups elements by [keyOf] and counts the occurrences of each key.
+  Map<K, int> countBy<K>(K Function(T item) keyOf) {
+    final counts = <K, int>{};
+    for (final item in this) {
+      final key = keyOf(item);
+      counts[key] = (counts[key] ?? 0) + 1;
+    }
+    return counts;
+  }
 }

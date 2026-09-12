@@ -128,9 +128,7 @@ void main(List<String> args) async {
   } else {
     io.write(
       summary,
-      enriched
-          .transform(.map((e) => '${e.slug} ${e.key}'))
-          .collect(.join('\n')),
+      enriched.map((e) => '${e.slug} ${e.key}').join('\n'),
     );
     io.dump(io.path.join(dir, 'products.json'), [
       for (final e in enriched)
@@ -179,27 +177,23 @@ void main(List<String> args) async {
   // ------------------------------------------------------------ 5. console
   log.step(5, 5, 'Summary');
 
-  final cheapest = products.transform(.sort.by((p) => p.price));
+  final cheapest = products.sortedBy((p) => p.price);
   out.write(
     (Table(
-            headers: ['Product', 'Price', 'Slug'],
-            alignments: [ColumnAlign.left, ColumnAlign.right, ColumnAlign.left],
-          )
-          ..addAll(
-            [
-              for (final e
-                  in enriched.transform(.take.first(5)).collect(.list()))
-                [e.product.name, '\$${e.product.price}', e.slug],
-            ],
-          ))
-        .render(),
+      headers: ['Product', 'Price', 'Slug'],
+      alignments: [.left, .right, .left],
+      style: .unicode,
+    )..addAll([
+        for (final e in enriched.take(5))
+          [e.product.name, '\$${e.product.price}', e.slug],
+      ])).render(),
   );
 
   out.box(
     [
       'Run       $count',
       'Products  ${products.length}',
-      'Cheapest  ${cheapest.collect(.first())?.name} at \$${cheapest.collect(.first())?.price}',
+      'Cheapest  ${cheapest.firstOrNull?.name} at \$${cheapest.firstOrNull?.price}',
       'Elapsed   ${util.time.format(clock.elapsed)}',
     ].join('\n'),
     title: 'Result',
@@ -214,42 +208,33 @@ void main(List<String> args) async {
 /// On the listing, queue every product and follow pagination — `meta` survives
 /// the round trip, so the product stage knows the price the listing showed. A
 /// product page is a leaf.
-Iterable<Fetch> _next(Reply res) => switch (res.fetch.tag) {
-  null =>
-    res
-        .parse(format.html)
-        .$('.product')
-        .elements
-        .transform(
-          .map(
-            (card) => res.follow(
-              card.query.$('a').attr('href') ?? '',
-              tag: 'product',
-              meta: [
-                if (util.text.number(card.query.$('.price').text) case final p?)
-                  listed(p),
-              ],
-            ),
-          ),
-        )
-        .transform(
-          .plus(
-            [
-              if (res.parse(format.html).$('a.next').attr('href')
-                  case final next?)
-                res.follow(next),
-            ],
-          ),
+Iterable<Fetch> _next(Reply res) {
+  final html = res.html;
+  return switch (res.fetch.tag) {
+    null => [
+      ...html.all(
+        '.product',
+        (card) => res.follow(
+          card.$('a').attr('href') ?? '',
+          tag: 'product',
+          meta: [
+            if (util.text.number(card.$('.price').text) case final p?)
+              listed(p),
+          ],
         ),
-  _ => const <Fetch>[],
-};
+      ),
+      if (html.$('a.next').attr('href') case final next?)
+        res.follow(next),
+    ],
+    _ => const <Fetch>[],
+  };
+}
 
 /// A product page, as zero or one product.
 List<Product> _product(Reply res) {
-  final name = res.parse(format.html).pick(Field.text('h1'));
-  final price = util.text.number(
-    res.parse(format.html).pick(Field.text('.price')) ?? '',
-  );
+  final html = res.html;
+  final name = html.pick(.text('h1'));
+  final price = util.text.number(html.pick(.text('.price')) ?? '');
   if (name == null || price == null) return const [];
   return [(name: name, price: price, url: res.url.toString())];
 }

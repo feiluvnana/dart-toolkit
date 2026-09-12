@@ -16,7 +16,7 @@ void main() async {
   final out = system.console.writer;
 
   // ------------------------------------------------------------------ status
-  log.level = LogLevel.debug; // The default is `info`, which hides `debug`.
+  log.level = .debug; // The default is `info`, which hides `debug`.
   out.rule('console');
 
   log.step(1, 3, 'Resolving');
@@ -30,9 +30,9 @@ void main() async {
   await log.task('Warming up', () => util.time.wait(80.ms));
 
   // For a machine on the other end, one JSON object per line instead.
-  log.format = LogFormat.json;
+  log.format = .json;
   log.info('Structured for a log collector.');
-  log.format = LogFormat.plain;
+  log.format = .plain;
 
   // ------------------------------------------------------------------ moving
   log.step(2, 3, 'Working');
@@ -57,17 +57,14 @@ void main() async {
 
   out.write(
     (Table(
-            headers: ['Target', 'Size', 'Result'],
-            alignments: [ColumnAlign.left, ColumnAlign.right, ColumnAlign.left],
-          )
-          ..addAll(
-            [
-              ['app', util.size.format(1481012), 'ok'],
-              ['worker', util.size.format(233472), 'ok'],
-              ['cli', util.size.format(98304), 'failed'],
-            ].seq,
-          ))
-        .render(),
+      headers: ['Target', 'Size', 'Result'],
+      alignments: [.left, .right, .left],
+      style: .unicode,
+    )..addAll([
+        ['app', util.size.format(1481012), 'ok'],
+        ['worker', util.size.format(233472), 'ok'],
+        ['cli', util.size.format(98304), 'failed'],
+      ])).render(),
   );
 
   out.box(

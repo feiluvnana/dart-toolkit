@@ -95,7 +95,7 @@ Future<int> _build(Cli cli) async {
 }
 
 Future<int> _clean(Cli cli) async {
-  if (io.dir.walk(dest(), only: .file).collect(.empty())) {
+  if (io.dir.walk(dest(), only: .file).isEmpty) {
     log.info('Nothing to clean.');
     return 0;
   }

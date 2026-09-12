@@ -1,4 +1,4 @@
-// Shape the data between fetching and writing: Sequence, Dictionary, Json, YAML.
+// Shape the data between fetching and writing: IterableExtensions, Json, YAML.
 //
 //   dart run example/shape.dart
 //
@@ -16,20 +16,18 @@ void main() async {
   final out = system.console.writer;
 
   // -------------------------------------------------------------------- JSON
-  // One cursor, three doors: a response, a string, a file. Nothing is cast,
+  // One typed cursor, three doors: a response, a string, a file. Nothing is cast,
   // and a path that is not there reads empty rather than throwing.
   final res = Reply.text(_payload, fetch: Fetch('https://api.example.com'.url));
+  final doc = res.json;
 
-  log.info('total    ${res.parse(format.json).at('data.total').number()}');
-  log.info('cursor   ${res.parse(format.json).at('data').text('cursor')}');
+  log.info('total    ${doc.at('data.total').number()}');
+  log.info('cursor   ${doc.at('data').text('cursor')}');
   log.info(
-    'missing  ${res.parse(format.json).at('data.nope.deeper').text() ?? '(empty)'}',
+    'missing  ${doc.at('data.nope.deeper').text() ?? '(empty)'}',
   );
 
-  // `all` gives one typed value per array element — the JSON half of
-  // `Markup.all`, and it returns a Sequence.
-  final doc = res.parse(format.json);
-
+  // `all` gives one typed value per array element.
   final sales = doc
       .at('data.sales')
       .all(
@@ -40,117 +38,87 @@ void main() async {
           at: util.time.parse(row.text('at') ?? '') ?? DateTime(2000),
         ),
       );
-  log.ok('Read ${sales.collect(.count())} sales.');
+  log.ok('Read ${sales.length} sales.');
 
   // JSONPath is the other navigator: `at` walks one path to one node, this
   // runs a query and hands back every match.
   final cheap = doc
       .at('')
       .jsonpath(r'$.data.sales[?(@.amount < 100)]')
-      .transform(.map.nonnull((s) => s.text('product')));
-  log.info('under 100: ${cheap.collect(.join(', '))}');
-  log.info('every region: ${doc.jsonpath(r'$..region').collect(.count())}');
+      .mapNotNull((s) => s.text('product'))
+      .toList();
+  log.info('under 100: ${cheap.join(', ')}');
+  log.info('every region: ${doc.jsonpath(r'$..region').length}');
 
   // ---------------------------------------------------------------- shaping
-  // Two members: `transform` takes a Transformer, `collect` takes a Collector.
-  // Every operation is a factory on one of those, which is what lets each of
-  // them keep its ordinary name — `map`, `where`, `sort.by`, `take.first`.
-  // `sort` and `flip` are collectors: neither can name a first element before
-  // the source has ended, which is the line between the two types.
-  final top = sales
-      .transform(.sort.by((s) => s.amount))
-      .transform(.flip())
-      .transform(.take.first(3));
-  log.info('top three: ${top.collect(.join(', ', of: (s) => s.product))}');
+  // Fluent, expressive Iterable extensions: zero overhead, zero dynamic.
+  final top = sales.sortedByDescending((s) => s.amount).take(3);
+  log.info('top three: ${top.map((s) => s.product).join(', ')}');
 
-  // The daily-report shape, in one expression. `group.by` gives a
-  // Dictionary<K, Sequence<T>>, `.pairs` turns it back into records, and
-  // `sum`, `avg`, `max.by` and `count.by` finish it.
+  // The daily-report shape, in one expression. `groupBy` gives a
+  // Map<K, List<T>>, and `sum`, `avg`, `maxBy` finish it.
+  final regionalRows = sales
+      .groupBy((s) => s.region)
+      .entries
+      .map(
+        (e) => (
+          region: e.key,
+          orders: e.value.length,
+          revenue: e.value.sum((s) => s.amount),
+          best: e.value.maxBy((s) => s.amount)?.product ?? '',
+        ),
+      )
+      .toList()
+      .sortedBy((r) => r.region);
+
   out.write(
     (Table(
-            headers: ['Region', 'Orders', 'Revenue', 'Best'],
-            alignments: [
-              ColumnAlign.left,
-              ColumnAlign.right,
-              ColumnAlign.right,
-              ColumnAlign.left,
-            ],
-          )
-          ..addAll(
-            [
-              for (final row
-                  in sales
-                      .collect(.group.by((s) => s.region))
-                      .pairs
-                      .transform(
-                        .map(
-                          (e) => (
-                            region: e.$1,
-                            orders: e.$2.collect(.count()),
-                            revenue: e.$2.collect(.sum((s) => s.amount)),
-                            best:
-                                e.$2
-                                    .collect(.max.by((s) => s.amount))
-                                    ?.product ??
-                                '',
-                          ),
-                        ),
-                      )
-                      .transform(.sort.by((e) => e.region))
-                      .collect(.list()))
-                [
-                  row.region,
-                  row.orders,
-                  row.revenue.toStringAsFixed(2),
-                  row.best,
-                ],
-            ].seq,
-          ))
-        .render(),
+      headers: ['Region', 'Orders', 'Revenue', 'Best'],
+      alignments: [.left, .right, .right, .left],
+      style: .unicode,
+    )..addAll([
+        for (final row in regionalRows)
+          [
+            row.region,
+            row.orders,
+            row.revenue.toStringAsFixed(2),
+            row.best,
+          ],
+      ])).render(),
   );
 
-  // `count.by` is a counted report in one call; `util.time.day` is the
-  // grouping primitive `dart:core` has no one-liner for.
+  // `countBy` produces a counted report in one call; `util.time.day` groups by day.
   log.info(
-    'per day:    ${sales.collect(.count.by((s) => util.time.day(s.at))).length} days',
+    'per day:    ${sales.countBy((s) => util.time.day(s.at)).length} days',
   );
   log.info(
-    'mean order: ${sales.collect(.avg((s) => s.amount))?.toStringAsFixed(2)}',
+    'mean order: ${sales.avg((s) => s.amount)?.toStringAsFixed(2)}',
   );
 
-  // `split` and `unzip` come back as records, never a Pair type.
-  final (big, small) = sales.collect(.split((s) => s.amount >= 100));
-  log.info('${big.collect(.count())} large, ${small.collect(.count())} small');
+  // `split` partitions elements into a typed (matches, nonMatches) record.
+  final (big, small) = sales.split((s) => s.amount >= 100);
+  log.info('${big.length} large, ${small.length} small');
 
-  // `chunk` pairs directly with a bounded pool: batch, then send.
-  for (final batch in sales.transform(.chunk(2)).collect(.list())) {
+  // `chunk` batches elements for concurrency.
+  for (final batch in sales.chunk(2)) {
     await concurrent.run(batch, _send, size: 2);
   }
-  log.ok('Sent ${sales.collect(.count())} rows in batches of two.');
+  log.ok('Sent ${sales.length} rows in batches of two.');
 
-  // A chain is a value, so the standard cleanup is written once and used
-  // twice. This is the thing a method chain cannot offer at any price.
-  final cleanup = Transformer.where<Sale>((s) => s.amount > 0)
-      .then(Transformer.unique.by((s) => s.product))
-      .then(Transformer.sort.by((s) => s.product));
+  // Fluent filtering, deduplication, and sorting on any Iterable.
+  final cleaned = sales
+      .where((s) => s.amount > 0)
+      .unique((s) => s.product)
+      .sortedBy((s) => s.product);
 
   log.info(
-    'cleaned:    ${sales.transform(cleanup).collect(.count())} of '
-    '${sales.collect(.count())}',
+    'cleaned:    ${cleaned.length} of ${sales.length}',
   );
   log.info(
-    'top two:    ${sales.transform(cleanup).transform(.take.first(2)).collect(.join(', ', of: (s) => s.product))}',
+    'top two:    ${cleaned.take(2).map((s) => s.product).join(', ')}',
   );
 
-  // `.list` is the one word at the boundary to anything outside this library —
-  // a `List` parameter, a spread, `expect`. Inside the boundary there is one
-  // vocabulary, which is why Sequence is deliberately not an Iterable.
-  final names = <String>[
-    ...sales
-        .transform(.map((s) => s.product))
-        .transform(.unique())
-        .collect(.list()),
-  ];
+  final names = sales.map((s) => s.product).unique().toList();
   log.info('distinct products: ${names.length}');
 
   // ---------------------------------------------------- the other two formats
@@ -161,12 +129,8 @@ void main() async {
     config,
     format.yaml.format({
       'title': 'Regional sales',
-      'regions': sales
-          .transform(.map((s) => s.region))
-          .transform(.unique())
-          .transform(.sort())
-          .collect(.list()),
-      'limits': {'rows': sales.collect(.count()), 'currency': 'USD'},
+      'regions': sales.map((s) => s.region).unique().sorted(),
+      'limits': {'rows': sales.length, 'currency': 'USD'},
     }),
   );
 
@@ -176,7 +140,7 @@ void main() async {
   );
   log.info(
     'regions:    '
-    '${back.at('regions').all((r) => r.text()).nonNull.collect(.join(', '))}',
+    '${back.at('regions').all((r) => r.text()).nonNull.join(', ')}',
   );
   log.info('rows:       ${back.number('limits.rows')}');
 

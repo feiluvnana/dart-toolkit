@@ -50,6 +50,7 @@ import 'csv.dart';
 import 'dir.dart';
 import 'entry.dart';
 import 'path.dart';
+import '../collection/collection.dart';
 import '../src/entries.dart';
 import '../src/fs.dart';
 import '../src/lock.dart';
@@ -130,6 +131,9 @@ class IoAccessor {
     if (!file.existsSync()) return <String, Object?>{};
     return _dictionary(path, file.readAsStringSync());
   }
+
+  /// The state a script keeps between runs, bound to [path].
+  DiskState state(String path) => DiskState(path, dictionary(path));
 
   // --- Existence: one question per member ---
 
@@ -482,6 +486,10 @@ class IoAsyncAccessor {
     if (!await file.exists()) return <String, Object?>{};
     return _dictionary(path, await file.readAsString());
   }
+
+  /// The state a script keeps between runs, bound to [path].
+  Future<DiskState> state(String path) async =>
+      DiskState(path, await dictionary(path));
 
   // --- Existence ---
 
@@ -870,4 +878,35 @@ final class Appender {
 
   @override
   String toString() => 'Appender($path${_closed ? ', closed' : ''})';
+}
+
+/// Persistent script state backed by a JSON dictionary on disk.
+class DiskState {
+  /// The file path on disk.
+  final String path;
+  final Map<String, Object?> _data;
+
+  /// Creates a state container bound to [path].
+  DiskState(this.path, this._data);
+
+  /// Reads [slot]'s value from this state.
+  T? read<T>(Slot<T> slot) => _data.read(slot);
+
+  /// Writes [value] to [slot] in this state.
+  void write<T>(Slot<T> slot, T value) => _data.write(slot, value);
+
+  /// Whether [slot] is present in this state.
+  bool holds(Slot<Object?> slot) => _data.holds(slot);
+
+  /// Removes [slot] from this state.
+  void drop(Slot<Object?> slot) => _data.drop(slot);
+
+  /// Flushes this state atomically to disk at [path].
+  void save() => io.dump(path, _data);
+
+  /// Flushes this state atomically to disk at [path] asynchronously.
+  Future<void> saveAsync() => io.async.dump(path, _data);
+
+  /// The underlying map data.
+  Map<String, Object?> get raw => _data;
 }

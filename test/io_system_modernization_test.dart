@@ -31,9 +31,20 @@ void main() {
       final jsonFile = File('${tempDir.path}/data.json');
       await jsonFile.writeJson({'greeting': 'hello', 'count': 100});
       final json = await jsonFile.readJson();
-      expect(json, isA<Map<String, dynamic>>());
-      expect((json as Map<String, dynamic>)['greeting'], 'hello');
-      expect(json['count'], 100);
+      expect(json.text('greeting'), 'hello');
+      expect(json.number('count'), 100);
+
+      final decoded = await jsonFile.readDecoded<Map<String, dynamic>>();
+      expect(decoded['greeting'], 'hello');
+      expect(decoded['count'], 100);
+
+      final jsonSync = jsonFile.readJsonSync();
+      expect(jsonSync.text('greeting'), 'hello');
+      expect(jsonSync.number('count'), 100);
+
+      final decodedSync = jsonFile.readDecodedSync<Map<String, dynamic>>();
+      expect(decodedSync['greeting'], 'hello');
+      expect(decodedSync['count'], 100);
     });
 
     test('Directory extensions: walk, listEntries, ensure', () async {

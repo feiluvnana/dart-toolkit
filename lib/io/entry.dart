@@ -38,7 +38,10 @@ enum FileSystemEntryKind {
   directory,
 
   /// A symbolic link, whatever it resolves to.
-  link,
+  link;
+
+  /// Shorthand alias for [directory].
+  static FileSystemEntryKind get dir => directory;
 }
 
 /// One thing on the filesystem: a file, a directory or a link.

@@ -75,29 +75,35 @@ void main() {
   group('Json toMap and toList', () {
     test('toMap converts JSON object to native Map', () {
       final cursor = '{"host": "localhost", "port": 8080}'.parseJson();
-      final map = cursor.toMap();
+      final map = cursor.toMap<dynamic>();
       expect(map, isA<Map<String, dynamic>>());
       expect(map?['host'], equals('localhost'));
       expect(map?['port'], equals(8080));
+
+      final typedMap = cursor.toMap<Object?>();
+      expect(typedMap?['host'], equals('localhost'));
     });
 
     test('toMap returns null for non-object JSON', () {
-      expect('[1, 2, 3]'.parseJson().toMap(), isNull);
-      expect('"hello"'.parseJson().toMap(), isNull);
-      expect('123'.parseJson().toMap(), isNull);
+      expect('[1, 2, 3]'.parseJson().toMap<dynamic>(), isNull);
+      expect('"hello"'.parseJson().toMap<dynamic>(), isNull);
+      expect('123'.parseJson().toMap<dynamic>(), isNull);
     });
 
     test('toList converts JSON array to native List', () {
       final cursor = '["apple", "banana", "cherry"]'.parseJson();
-      final list = cursor.toList();
+      final list = cursor.toList<dynamic>();
       expect(list, isA<List<dynamic>>());
       expect(list, equals(['apple', 'banana', 'cherry']));
+
+      final stringList = cursor.toList<String>();
+      expect(stringList, equals(['apple', 'banana', 'cherry']));
     });
 
     test('toList returns null for non-array JSON', () {
-      expect('{"key": "val"}'.parseJson().toList(), isNull);
-      expect('"hello"'.parseJson().toList(), isNull);
-      expect('true'.parseJson().toList(), isNull);
+      expect('{"key": "val"}'.parseJson().toList<dynamic>(), isNull);
+      expect('"hello"'.parseJson().toList<dynamic>(), isNull);
+      expect('true'.parseJson().toList<dynamic>(), isNull);
     });
   });
 

@@ -8,74 +8,49 @@
 
 import 'package:dart_toolkit/dart_toolkit.dart';
 
+typedef Variant = ({String name, String? sku});
+typedef Product = ({String? title, num? price, List<Variant> variants});
+
 void main() {
   final log = system.console.logger;
   final res = Reply.text(_page, url: 'https://shop.test/p/1'.url);
 
-  // `res.$` is a jQuery-like selector over the parsed body: a chainable set
+  // Parse HTML once into a typed Markup cursor.
+  final page = res.html;
+
+  // `page.$` is a jQuery-like selector over the parsed body: a chainable set
   // whose extraction helpers are getters.
-  log.info('Title:  ${res.parse(format.html).$('h1').text}');
-  log.info('Price:  ${res.parse(format.html).$('.price').text}');
-  log.info('Tags:   ${res.parse(format.html).$('.tag').texts}');
-  log.info('Links:  ${res.parse(format.html).$('a').attrs('href')}');
-  log.info('Data:   ${res.parse(format.html).$('#product').attr('data-id')}');
+  log.info('Title:  ${page.$('h1').text}');
+  log.info('Price:  ${page.$('.price').text}');
+  log.info('Tags:   ${page.$('.tag').texts}');
+  log.info('Links:  ${page.$('a').attrs('href')}');
+  log.info('Data:   ${page.$('#product').attr('data-id')}');
 
   // Beyond CSS: :contains, :has, :eq, :first, :last, :even, :odd, :gt, :lt,
   // and [attr!=value]. Traversal mirrors jQuery too.
-  log.info(
-    'In stock:  ${res.parse(format.html).$('.variant:contains("In stock")').texts}',
-  );
-  log.info(
-    'Non-sale:  ${res.parse(format.html).$('.variant[data-sale!=yes]').count}',
-  );
-  log.info('Siblings:  ${res.parse(format.html).$('.price').siblings().count}');
-  log.info(
-    'XPath:     ${res.parse(format.html).$xpath('//span[@class="price"]').text}',
-  );
+  log.info('In stock:  ${page.$('.variant:contains("In stock")').texts}');
+  log.info('Non-sale:  ${page.$('.variant[data-sale!=yes]').count}');
+  log.info('Siblings:  ${page.$('.price').siblings().count}');
+  log.info('XPath:     ${page.$xpath('//span[@class="price"]').text}');
 
-  // The string shorthand, for a first look at an unfamiliar page: 'sel' is
-  // text, 'sel@attr' an attribute, ['sel'] every match, and ['sel', {...}] a
-  // repeated sub-object. Everything comes back as Object?.
-  final loose = res.parse(format.html).extract({
-    'title': 'h1',
-    'canonical': 'link[rel="canonical"]@href',
-    'tags': ['.tag'],
-    'variants': [
-      '.variant',
-      {'name': '.name', 'sku': '@data-sku'},
-    ],
-  });
-  system.console.writer.box(
-    loose.entries.map((e) => '${e.key.padRight(10)} ${e.value}').join('\n'),
-    title: 'extract',
-  );
+  // Where the type matters, name the field with dot shorthand: `pick` keeps it.
+  final String? title = page.pick(.text('h1'));
+  final List<String> skus = page.pick(.attrs('.variant', 'data-sku'));
+  final num? price = page.pick(.text('.price').map(_price));
 
-  // Where the type matters, name the field: `pick` keeps it. `map` converts,
-  // so a price arrives as a number rather than '$89.00'.
-  final String? title = res.parse(format.html).pick(Field.text('h1'));
-  final List<String> skus = res
-      .parse(format.html)
-      .pick(Field.attrs('.variant', 'data-sku'));
-  final num? price = res
-      .parse(format.html)
-      .pick(Field.text('.price').map(_price));
-
-  // Or build a record, every field's type intact and no cast anywhere.
-  final item = (
+  // Build a strongly-typed record: zero dynamic, zero cast.
+  final Product item = (
     title: title,
     price: price,
-    variants: res
-        .parse(format.html)
-        .all(
-          '.variant',
-          (row) => (name: row.$('.name').text, sku: row.attr('data-sku')),
-        ),
+    variants: page.all(
+      '.variant',
+      (row) => (name: row.$('.name').text, sku: row.attr('data-sku')),
+    ),
   );
 
   log.ok('$title — $price, skus $skus');
-  log.ok(
-    'First variant: ${item.variants.collect(.first())?.name} (${item.variants.collect(.first())?.sku})',
-  );
+  final first = item.variants.firstOrNull;
+  log.ok('First variant: ${first?.name} (${first?.sku})');
 }
 
 num? _price(String? text) => util.text.number(text ?? '');

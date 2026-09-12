@@ -99,9 +99,27 @@ class CliAccessor with _Spec {
   }
 
   /// Parses [args], replacing any previously parsed command line.
-  void parse(List<String> args) {
+  ///
+  /// When [autoHelp] is true, registers `-h`/`--help` if not already declared,
+  /// and if present in [args], prints usage and exits with code 0.
+  void parse(
+    List<String> args, {
+    bool autoHelp = false,
+    String? syntax,
+    String? desc,
+  }) {
+    if (autoHelp && !_declarations.containsKey('help')) {
+      flag('help', alias: 'h', desc: 'Show this message');
+    }
     _parsed = Cli(args);
     _changed();
+    if (autoHelp) {
+      if (_parsed.switches.containsKey('help') ||
+          _parsed.switches.containsKey('h')) {
+        stdout.writeln(usage(syntax: syntax, desc: desc));
+        exit(0);
+      }
+    }
   }
 
   /// The command line as last parsed, for handing to code that takes a [Cli].

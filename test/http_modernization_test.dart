@@ -66,9 +66,9 @@ void main() {
     test('Fluent HTTP extensions on Uri', () async {
       final reply = await at('/json').get();
       expect(reply.status, 200);
-      expect(reply.json, isA<Map<dynamic, dynamic>>());
-      expect((reply.json as Map<String, dynamic>)['message'], 'ok');
-      expect((reply.json as Map<String, dynamic>)['count'], 42);
+      expect(reply.json.text('message'), 'ok');
+      expect(reply.json.number('count'), 42);
+      expect(reply.jsonDecoded<Map<String, dynamic>>()['message'], 'ok');
 
       final echoReply = await at('/echo').post(body: const Body.text('via uri extension'));
       expect(echoReply.text, 'via uri extension');

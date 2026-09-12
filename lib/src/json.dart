@@ -217,17 +217,18 @@ final class Json {
   bool get empty => count == 0;
 
   /// Converts this JSON cursor to a native [Map] if it represents a JSON object, or `null` otherwise.
-  Map<String, dynamic>? toMap() => switch (raw) {
-    Map<String, dynamic> map => map,
+  Map<String, T>? toMap<T>() => switch (raw) {
+    Map<String, T> map => map,
     Map<Object?, Object?> map => {
-      for (final entry in map.entries) entry.key.toString(): entry.value,
+      for (final entry in map.entries) entry.key.toString(): entry.value as T,
     },
     _ => null,
   };
 
   /// Converts this JSON cursor to a native [List] if it represents a JSON array, or `null` otherwise.
-  List<dynamic>? toList() => switch (raw) {
-    List<dynamic> list => list,
+  List<T>? toList<T>() => switch (raw) {
+    List<T> list => list,
+    List<Object?> list => list.cast<T>(),
     _ => null,
   };
 

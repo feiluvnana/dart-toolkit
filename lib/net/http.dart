@@ -27,6 +27,8 @@ import '../util/rand.dart';
 import 'cache.dart';
 import 'fetch.dart';
 import '../format/format.dart';
+import '../src/json.dart';
+import '../system/console/progress.dart';
 
 // ============================================================================
 // HTTP NETWORKING (Fetcher / Reply)
@@ -240,8 +242,11 @@ class Reply {
   /// The response body decoded as a string. Alias for [body].
   String get text => body;
 
-  /// The response body parsed as JSON.
-  dynamic get json => parse(format.json).raw;
+  /// The response body parsed as a typed JSON document cursor.
+  Json get json => parse(format.json);
+
+  /// Decodes the JSON body directly as typed [T] when a raw map or list is required.
+  T jsonDecoded<T>() => json.raw as T;
 
   /// Whether this response came from an [HttpCache] rather than the network.
   ///
@@ -1334,8 +1339,20 @@ class Fetcher with _PathResolver {
     Map<String, Uri> tasks, {
     int size = 4,
     bool match = false,
+    String? progress,
+    void Function(String path, Uri uri)? onprogress,
   }) async {
-    await Pool<MapEntry<String, Uri>>(size: size).run(
+    final pool = Pool<MapEntry<String, Uri>>(size: size);
+    Progress? bar;
+    if (progress != null) {
+      bar = Progress(total: tasks.length, message: progress);
+      pool.on.progress((_) => bar?.tick());
+      pool.on.done(() => bar?.done());
+    }
+    if (onprogress != null) {
+      pool.on.progress((task) => onprogress(task.key, task.value));
+    }
+    await pool.run(
       tasks.entries,
       (task) => download(task.value, task.key, match: match),
     );

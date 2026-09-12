@@ -63,70 +63,52 @@ void main() async {
 
 /// The whole router: reply in, next requests out. A pure function, so it is
 /// testable with a `Reply.text` fixture and no crawl at all.
-Iterable<Fetch> _next(Reply res) => switch (res.fetch.tag) {
-  // The index: queue every artist, tagged so the next stage picks them up.
-  null =>
-    res
-        .parse(format.html)
-        .$('.artist a')
-        .elements
-        .transform(
-          .map(
-            (link) => res.follow(
-              link.attributes['href'] ?? '',
-              tag: 'artist',
-              meta: [artist(util.text.clean(link.text))],
-              // Artists are cheap and unlock everything else, so serve them first.
-              priority: 10,
-            ),
-          ),
-        ),
-  // An artist: queue their albums, passing the name down.
-  'artist' =>
-    res
-        .parse(format.html)
-        .$('.album a')
-        .elements
-        .transform(
-          .map(
-            (link) => res.follow(
-              link.attributes['href'] ?? '',
-              tag: 'album',
-              meta: [
-                if (res.fetch.meta.read(artist) ??
-                        res.parse(format.html).pick(Field.text('h1'))
-                    case final name?)
-                  artist(name),
-                album(util.text.clean(link.text)),
-              ],
-            ),
-          ),
-        ),
-  // An album is a leaf: nothing further to fetch.
-  _ => const <Fetch>[],
-};
+Iterable<Fetch> _next(Reply res) {
+  final html = res.html;
+  return switch (res.fetch.tag) {
+    // The index: queue every artist, tagged so the next stage picks them up.
+    null => html.all(
+      '.artist a',
+      (link) => res.follow(
+        link.attr('href') ?? '',
+        tag: 'artist',
+        meta: [artist(util.text.clean(link.text))],
+        // Artists are cheap and unlock everything else, so serve them first.
+        priority: 10,
+      ),
+    ),
+    // An artist: queue their albums, passing the name down.
+    'artist' => html.all(
+      '.album a',
+      (link) => res.follow(
+        link.attr('href') ?? '',
+        tag: 'album',
+        meta: [
+          if (res.fetch.meta.read(artist) ?? html.pick(.text('h1'))
+              case final name?)
+            artist(name),
+          album(util.text.clean(link.text)),
+        ],
+      ),
+    ),
+    // An album is a leaf: nothing further to fetch.
+    _ => const <Fetch>[],
+  };
+}
 
 /// One track per row of an album page.
 Iterable<Track> _tracks(Reply res) {
+  final html = res.html;
   final by = res.fetch.meta.read(artist) ?? '';
-  final on =
-      res.fetch.meta.read(album) ??
-      res.parse(format.html).pick(Field.text('h1')) ??
-      '';
-  return res
-      .parse(format.html)
-      .$('.track')
-      .elements
-      .transform(
-        .map(
-          (row) => (
-            artist: by,
-            album: on,
-            title: util.text.clean(row.query.$('.title').text),
-          ),
-        ),
-      )
-      .transform(.where((track) => track.title.isNotEmpty));
+  final on = res.fetch.meta.read(album) ?? html.pick(.text('h1')) ?? '';
+
+  return html.all('.track', (row) {
+    return (
+      artist: by,
+      album: on,
+      title: util.text.clean(row.$('.title').text),
+    );
+  }).where((track) => track.title.isNotEmpty);
 }
 
 /// The fixture transport: a closure over a map, which is what `MapDownloader`

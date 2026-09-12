@@ -18,6 +18,8 @@ const last = Slot<String>('last');
 void main() async {
   final log = system.console.logger;
   final dir = io.path.join('output', 'files');
+  final productsPath = io.path.join(dir, 'products.json');
+  final csvPath = io.path.join(dir, 'products.csv');
 
   final rows = [
     {'name': 'Mechanical Keyboard', 'price': 89.0},
@@ -31,33 +33,25 @@ void main() async {
     io.path.join(dir, 'names.txt'),
     [for (final row in rows) util.text.slug('${row['name']}')].join('\n'),
   );
-  io.dump(io.path.join(dir, 'products.json'), rows);
+  io.dump(productsPath, rows);
   io.bytes.write(io.path.join(dir, 'blob.bin'), [1, 2, 3]);
 
-  final back = await format.json.read(io.path.join(dir, 'products.json'));
+  final back = await format.json.read(productsPath);
   log.ok('Wrote and re-read ${back.count} products.');
   log.info('First name: ${back.text('0.name')}');
   log.info(
-    'Every name: ${back.jsonpath(r'$[*].name').transform(.map.nonnull((n) => n.text()))}',
+    'Every name: ${back.jsonpath(r'$[*].name').mapNotNull((n) => n.text()).toList()}',
   );
 
   // ---------------------------------------------------------------------- CSV
-  io.csv.write(io.path.join(dir, 'products.csv'), rows.seq);
-  final sheet = await format.csv.read(io.path.join(dir, 'products.csv'));
-  log.ok('CSV columns: ${sheet.headers.collect(.join(', '))}');
+  io.csv.write(csvPath, rows);
+  final sheet = await format.csv.read(csvPath);
+  log.ok('CSV columns: ${sheet.headers.join(', ')}');
 
-  // `records` streams rather than loading the file, and `io.async.csv.write`
-  // is its twin for writing: it turns a crawl of any size into a spreadsheet
-  // without the rows ever meeting in memory.
-  //
-  //   await io.async.csv.write('out.csv', crawl.flow(handler), headers: [...]);
-  await io.async.csv
-      .records(io.path.join(dir, 'products.csv'))
-      .collect(
-        .foreach(
-          (record) => log.debug('${record['name']} at ${record['price']}'),
-        ),
-      );
+  // `records` streams rather than loading the entire file into memory.
+  await for (final record in io.async.csv.records(csvPath)) {
+    log.debug('${record['name']} at ${record['price']}');
+  }
 
   // ------------------------------------------------------------------- paths
   log.info('join   ${io.path.join(dir, 'a', 'b.txt')}');
@@ -68,17 +62,17 @@ void main() async {
 
   // `has` is "exists and is non-empty", which is the question a resumable
   // script actually asks.
-  log.info('has    ${io.has(io.path.join(dir, 'products.json'))}');
+  log.info('has    ${io.has(productsPath)}');
   log.info(
-    'size   ${util.size.format(io.stat(io.path.join(dir, 'products.json'))!.size)}',
+    'size   ${util.size.format(io.stat(productsPath)!.size)}',
   );
   log.info(
-    'sha    ${io.hash(io.path.join(dir, 'products.json')).substring(0, 12)}',
+    'sha    ${io.hash(productsPath).substring(0, 12)}',
   );
 
-  final found = io.dir.walk(dir, only: .file, match: '*.{json,csv}');
+  final found = io.dir.walk(dir, only: .file, match: '*.{json,csv}').toList();
   log.ok(
-    'Found ${found.collect(.count())}: ${[for (final f in found.collect(.list())) io.path.filename(f.path)]}',
+    'Found ${found.length}: ${[for (final f in found) io.path.filename(f.path)]}',
   );
 
   // ------------------------------------------------------------- non-blocking
@@ -105,15 +99,14 @@ void main() async {
     }
   });
 
-  // ------------------------------------------------------------------- store
-  // A tiny JSON document for what a run has to remember: cursors, "last seen"
-  // markers, a resume point.
+  // ------------------------------------------------------------------- state
+  // Self-flushing typed state persistence using io.state.
   final statePath = io.path.join(dir, 'state.json');
-  final db = io.dictionary(statePath);
-  final count = (db.read(runs) ?? 0) + 1;
-  db
+  final state = io.state(statePath);
+  final count = (state.read(runs) ?? 0) + 1;
+  state
     ..write(runs, count)
     ..write(last, DateTime.now().toUtc().toIso8601String())
-    ..dump(statePath);
-  log.ok('Run #$count (last ${db.read(last)}).');
+    ..save();
+  log.ok('Run #$count (last ${state.read(last)}).');
 }

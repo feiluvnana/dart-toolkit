@@ -10,6 +10,7 @@ import 'dart:io';
 
 import '../format/format.dart';
 import '../src/fs.dart';
+import '../src/json.dart';
 import 'entry.dart';
 
 /// Fluent extensions on standard `dart:io` [File].
@@ -22,17 +23,17 @@ extension ToolkitFileExtensions on File {
   List<String> readLinesSync({Encoding encoding = utf8}) =>
       readAsLinesSync(encoding: encoding);
 
-  /// Reads and parses this file as JSON.
-  Future<dynamic> readJson() async {
-    final text = await readAsString();
-    return format.json.parse(text).raw;
-  }
+  /// Reads and parses this file as a JSON document cursor.
+  Future<Json> readJson() async => format.json.parse(await readAsString());
 
-  /// Reads and parses this file as JSON synchronously.
-  dynamic readJsonSync() {
-    final text = readAsStringSync();
-    return format.json.parse(text).raw;
-  }
+  /// Reads and parses this file as a JSON document cursor synchronously.
+  Json readJsonSync() => format.json.parse(readAsStringSync());
+
+  /// Decodes this file's JSON content directly as typed [T].
+  Future<T> readDecoded<T>() async => jsonDecode(await readAsString()) as T;
+
+  /// Decodes this file's JSON content directly as typed [T] synchronously.
+  T readDecodedSync<T>() => jsonDecode(readAsStringSync()) as T;
 
   /// Writes [content] atomically to this file staging through [part].
   Future<File> writeAtomic(

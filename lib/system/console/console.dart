@@ -52,6 +52,14 @@ class ConsoleAccessor {
   /// Interactive prompts: [ConsoleReader.ask], [ConsoleReader.pick] and more.
   ConsoleReader get reader => _reader;
 
+  /// Prompts for yes/no confirmation.
+  Future<bool> confirm(String prompt, {bool fallback = false}) =>
+      _reader.confirm(prompt, fallback: fallback);
+
+  /// Prompts for a line of text.
+  Future<String> ask(String prompt, {String fallback = ''}) =>
+      _reader.ask(prompt, fallback: fallback);
+
   /// Screen control. Geometry is [ConsoleWriter.width] and
   /// [ConsoleWriter.height], on [writer].
   Terminal get terminal => Terminal(_writer);

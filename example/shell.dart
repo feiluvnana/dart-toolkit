@@ -25,12 +25,12 @@ void main() async {
   final dart = system.which('dart');
   log.info('dart    ${dart ?? 'not on PATH'}');
 
-  final res = await system.run('echo', ['hello from a subprocess']);
+  final res = await system.run('echo', ['hello from a subprocess'], shell: true);
   log.ok('exit ${res.code}: ${res.out.trim()}');
 
   // Failures come back as a result rather than an exception, so a script can
   // decide for itself what a non-zero exit means.
-  final bad = await system.run('ls', ['/definitely/not/here']);
+  final bad = await system.run('ls', ['/definitely/not/here'], shell: true);
   if (!bad.ok) log.warn('ls exited ${bad.code}: ${util.text.clean(bad.err)}');
 
   // ---------------------------------------------------------------- archives
@@ -46,13 +46,13 @@ void main() async {
   await format.zip.pack(dir, archive);
   final entries = await format.zip.list(archive);
   log.ok(
-    'Packed ${entries.collect(.count())} entries, '
+    'Packed ${entries.length} entries, '
     '${util.size.format(io.stat(archive)!.size)}.',
   );
 
   // A single entry, read without unpacking the rest. Entry names are relative
   // to what was packed, which `list` is the way to check.
-  log.info('Entries: ${[for (final e in entries.collect(.list())) e.name]}');
+  log.info('Entries: ${[for (final e in entries) e.name]}');
   final notes = await format.zip.extract(archive, 'notes.txt');
   log.info(
     'notes.txt is ${notes?.length ?? 0} bytes, unpacked from the archive',

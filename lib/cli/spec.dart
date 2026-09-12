@@ -238,6 +238,41 @@ mixin _Spec {
     },
   );
 
+  /// Declares an option whose value is one of a list of allowed strings.
+  ///
+  /// ```dart
+  /// final format = cli.choose('format', ['mp3', 'flac', 'both'], def: 'mp3');
+  /// ```
+  Opt<String> choose(
+    String name,
+    List<String> choices, {
+    required String def,
+    String? alias,
+    String desc = '',
+    bool required = false,
+    String? env,
+  }) => _declare<String>(
+    name,
+    alias,
+    def,
+    _Decl(
+      alias: _short(alias),
+      desc: desc,
+      def: def,
+      required: required,
+      allowed: choices,
+      env: env,
+    ),
+    (cli, self) {
+      final text = cli._readText(self)?.trim();
+      if (text == null) return self.def;
+      for (final choice in choices) {
+        if (choice.toLowerCase() == text.toLowerCase()) return choice;
+      }
+      return self.def;
+    },
+  );
+
   /// Declares an option carrying a length of time.
   ///
   /// The value is read by `util.time.span`, so `--timeout 30s`,
@@ -284,7 +319,7 @@ mixin _Spec {
   ///
   /// ```dart
   /// final since = cli.date('since');
-  /// rows.transform(.where((r) => since() == null || r.seen.isAfter(since()!)));
+  /// rows.where((r) => since() == null || r.seen.isAfter(since()!));
   /// ```
   Opt<DateTime?> date(
     String name, {

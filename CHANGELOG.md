@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## 7.1.0
+
+**Modernization & Ergonomics: Strict typing, dot shorthands, unified progress, and legacy sequence retirement.**
+v7.1.0 completes the transition started in 7.0.0, retiring legacy sequence transformations (`.transform(...)`), introducing strict typing discipline across JSON/HTTP/Process boundaries, adding concise static dot-shorthands, providing cross-platform shell execution, and offering seamless automated progress tracking.
+
+### 1. Legacy Sequence API Retirement & Native Modernization
+- Retired `.transform(...)` and `Transform` sequences across all examples and `bin/` tooling in favor of native Dart 3 features (`.indexed`, record pattern matching, `whereType<T>()`, `mapNotNull()`, and native fluent methods like `sortedByDescending`, `groupBy`, `split`, `countBy`, `avg`, `unique`).
+- Refactored `bin/clean.dart` to leverage `io.dir.sweep` and modern CLI specifications (`--target`, `--format`, `--dry-run`, `--yes`).
+- Modernized `bin/keybox.dart` with modern CLI flags, declarative asset mappings, format parameterization, and graceful `system.shutdown()`.
+
+### 2. Strict Type Discipline
+- **Typed JSON Wrappers**: Eliminated `dynamic` return types from `Reply.json`, `SysResult.json`, `File.readJson()`, and `File.readJsonSync()`, standardizing on the strongly typed `Json` wrapper.
+- **Generic Decoders**: Added `Reply.jsonDecoded<T>()`, `SysResult.decodeJson<T>()`, `File.readDecoded<T>()`, and `File.readDecodedSync<T>()` for zero-boilerplate decoding directly into typed domain models or collections.
+- **Generic Json Collections**: Parameterized `Json.toMap<T>()` and `Json.toList<T>()` with explicit typing.
+
+### 3. Dot Shorthands
+- **Codecs**: Added static getters `Codec.html`, `Codec.json`, `Codec.yaml`, `Codec.toml`, `Codec.csv` allowing `.html`, `.json`, `.yaml`, `.toml`, `.csv` dot shorthand in any `Codec` context.
+- **File System**: Added `FileSystemEntryKind.dir` enabling `.dir` dot shorthand alongside `.directory`.
+
+### 4. Developer Experience & Ergonomics
+- **Reply Document Helpers**: Added `ReplyDocumentExtensions` exposing `.html`, `.$()`, and `.$xpath()` directly on `Reply` without intermediate markup conversions.
+- **String HTTP Extensions**: Added `StringHttpExtensions` (`'url'.get()`, `'url'.post()`, etc.) matching `Uri` extensions.
+- **Subprocess Shell Support**: Added `shell: bool` flag to `system.run` and `system.stream` (and `Sys.run` / `Sys.stream`) for executing shell built-ins and platform-specific commands.
+- **Interactive CLI & Auto-Help**: Added `cli.choose` interactive prompt helper and `autoHelp: bool` in `cli.parse` for automatic `--help` generation and exit handling.
+- **Automated Progress Bars**: Added automated `progress` parameter to `concurrent.run`, `concurrent.settle`, and `Fetcher.sync`.
+- **Persistent State Management**: Introduced `io.state(path)` and `io.async.state(path)` returning a lightweight `DiskState` container with typed slot reading/writing and atomic flush via `save()` and `saveAsync()`.
+- **Iterable Terminals**: Added `split`, `countBy`, and `avg` terminals to `IterableTerminals`.
+
 ## 7.0.0
 
 **The developer experience overhaul: supercharge Dart, don't replace it.**

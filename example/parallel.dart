@@ -14,25 +14,25 @@ void main() async {
   final ids = [for (var i = 1; i <= 12; i++) 'job-$i'];
 
   // ------------------------------------------------------------ the common case
-  // `concurrent.run` is the one-liner: at most four at a time, in order.
-  final bar = Progress(total: ids.length, message: 'Fetching');
-  final sizes = await concurrent.run(ids.seq, (id) async {
-    await util.time.wait(util.rand.jitter(40.ms));
-    bar.tick(1, id);
-    return id.length * 100;
-  }, size: 4);
-  bar.done();
+  // `concurrent.run` is the one-liner with automatic progress support.
+  final sizes = await concurrent.run(
+    ids,
+    (id) async {
+      await util.time.wait(util.rand.jitter(40.ms));
+      return id.length * 100;
+    },
+    size: 4,
+    progress: 'Fetching',
+  );
   log.ok(
-    'Fetched ${sizes.collect(.count())}, ${util.size.format(sizes.collect(.sum((size) => size)).toInt())} total',
+    'Fetched ${sizes.length}, ${util.size.format(sizes.sum().toInt())} total',
   );
 
   // `map.async` is the bounded pool over a source rather than a collection:
-  // `ordered: false` yields each result as it lands, for work whose output
-  // should not wait on the slowest item. It is part of the flow vocabulary
-  // now; it was `flow.run`, an extension declared over here, through 5.4.0.
+  // `ordered: false` yields each result as it lands.
   final seen = await ids.flow
       .through(.map.async(_measure, size: 4, ordered: false))
-      .collect(.count());
+      .length;
   log.info('Streamed $seen results.');
 
   // ------------------------------------------------------------- when one fails
@@ -43,14 +43,11 @@ void main() async {
 
   // `settle` never throws: every item comes back as a sealed Done or Broke.
   final results = await pool.settle(ids, _flaky);
-  final ok = results.transform(.where.type<Done<String>>()).collect(.count());
-  log.ok('$ok of ${results.collect(.count())} succeeded.');
+  final ok = results.whereType<Done<String>>().length;
+  log.ok('$ok of ${results.length} succeeded.');
 
-  for (final (i, result)
-      in results
-          .transform(.enumerate())
-          .transform(.take.first(4))
-          .collect(.list())) {
+  // Native Dart 3 record pattern matching on .indexed
+  for (final (i, result) in results.take(4).indexed) {
     log.info(switch (result) {
       Done(:final value) => '${ids[i].padRight(7)} $value',
       Broke(:final error) => '${ids[i].padRight(7)} failed — $error',
@@ -82,13 +79,11 @@ void main() async {
   log.ok('Semaphore let 4 tasks through 2 permits.');
 
   // ------------------------------------------------------------- the rate
-  // Those bound *how many at once*. A published API limit bounds *how often*,
-  // which a concurrency cap does not satisfy: four instant requests then four
-  // more is eight in a second. A limiter composes with the cap.
+  // Those bound *how many at once*. A published API limit bounds *how often*.
   final limit = concurrent.rate(4, per: 100.ms);
   final clock = (Stopwatch()..start());
   await concurrent.run(
-    List<int>.generate(12, (i) => i).seq,
+    List<int>.generate(12, (i) => i),
     (n) => limit.guard(() async => n),
     size: 8,
   );

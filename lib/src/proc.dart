@@ -14,6 +14,9 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import '../format/format.dart';
+import 'json.dart';
+
 // ============================================================================
 // SYSTEM, PROCESS RUNNER & SHUTDOWN SIGNALS
 // ============================================================================
@@ -51,8 +54,11 @@ class SysResult {
   List<String> get lines =>
       out.isEmpty ? const [] : out.split(RegExp(r'\r?\n')).where((l) => l.isNotEmpty).toList();
 
-  /// Parsed JSON object from [stdout].
-  dynamic get json => jsonDecode(out);
+  /// Parsed JSON document cursor from standard output.
+  Json get json => format.json.parse(out);
+
+  /// Decodes standard output JSON directly as typed [T].
+  T decodeJson<T>() => jsonDecode(out) as T;
 
   @override
   String toString() => 'SysResult(code: $code)';
@@ -68,11 +74,13 @@ class Sys {
     List<String> arguments, {
     String? cwd,
     bool includeStderr = false,
+    bool shell = false,
   }) async* {
     final process = await Process.start(
       executable,
       arguments,
       workingDirectory: cwd,
+      runInShell: shell,
     );
     Exit.adopt(process);
     try {
@@ -119,6 +127,7 @@ class Sys {
     String? cwd,
     bool inherit = false,
     bool echo = false,
+    bool shell = false,
     Duration? timeout,
     void Function(String line)? out,
     void Function(String line)? err,
@@ -133,6 +142,7 @@ class Sys {
         arguments,
         workingDirectory: cwd,
         mode: ProcessStartMode.inheritStdio,
+        runInShell: shell,
       );
       Exit.adopt(process);
       try {
@@ -151,6 +161,7 @@ class Sys {
       executable,
       arguments,
       workingDirectory: cwd,
+      runInShell: shell,
     );
     Exit.adopt(process);
 

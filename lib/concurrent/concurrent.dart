@@ -10,6 +10,7 @@ library;
 import 'dart:async';
 import 'dart:collection';
 
+import '../system/console/progress.dart';
 import '../util/rand.dart';
 
 // ============================================================================
@@ -51,7 +52,18 @@ class ConcurrentAccessor {
     FutureOr<R> Function(I item) worker, {
     int size = 4,
     Duration delay = Duration.zero,
-  }) => Pool<I>(size: size, delay: delay).run(items, worker);
+    String? progress,
+  }) {
+    final p = Pool<I>(size: size, delay: delay);
+    if (progress != null) {
+      final list = items is List<I> ? items : items.toList();
+      final bar = Progress(total: list.length, message: progress);
+      p.on.progress((_) => bar.tick());
+      p.on.done(() => bar.done());
+      return p.run(list, worker);
+    }
+    return p.run(items, worker);
+  }
 
   /// Maps [worker] over [items] with at most [size] in flight, and never
   /// throws.
@@ -78,7 +90,18 @@ class ConcurrentAccessor {
     FutureOr<R> Function(I item) worker, {
     int size = 4,
     Duration delay = Duration.zero,
-  }) => Pool<I>(size: size, delay: delay).settle(items, worker);
+    String? progress,
+  }) {
+    final p = Pool<I>(size: size, delay: delay);
+    if (progress != null) {
+      final list = items is List<I> ? items : items.toList();
+      final bar = Progress(total: list.length, message: progress);
+      p.on.progress((_) => bar.tick());
+      p.on.done(() => bar.done());
+      return p.settle(list, worker);
+    }
+    return p.settle(items, worker);
+  }
 
   /// Retries [fn] if it throws, backing off between attempts.
   ///
@@ -208,7 +231,7 @@ class PoolEvents<I> {
 ///
 /// ```dart
 /// // setup: final e = PoolFailure<Uri, String>(const [], const []);
-/// final broken = e.outcomes.transform(.where.type<Broke<String>>());
+/// final broken = e.outcomes.whereType<Broke<String>>();
 /// ```
 class PoolFailure<I, R> implements Exception {
   /// One outcome per item, in the order of [items].

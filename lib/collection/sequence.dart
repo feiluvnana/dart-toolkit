@@ -11,10 +11,16 @@ import 'transformer.dart';
 /// Pipeline transformation and collection operations directly on any [Iterable].
 extension IterablePipeline<T> on Iterable<T> {
   /// This iterable shaped by [step] — one [Transformer], applied lazily.
+  ///
+  /// Note: Prefer [IterableExtensions] (such as `sortedBy`, `unique`, `chunk`, `mapNotNull`)
+  /// or native Dart 3 collection methods directly.
   Iterable<R> transform<R>(Transformer<T, R> step) =>
       _Deferred(() => step.run(this));
 
   /// This iterable reduced by [step] — one [Collector], applied.
+  ///
+  /// Note: Prefer [IterableExtensions] / [IterableTerminals] (such as `sum`, `average`, `maxBy`,
+  /// `groupBy`, `split`, `countBy`) or native Dart 3 collection methods directly.
   R collect<R>(Collector<T, R> step) => step.run(this);
 
   /// Convenience getter returning this iterable directly.

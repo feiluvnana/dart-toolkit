@@ -68,13 +68,14 @@ class SystemAccessor {
   ///
   /// See [SysResult]. By default output is captured; set [inherit] to stream
   /// it to the terminal instead. When [timeout] elapses the process is killed
-  /// and the result carries code `-1`.
+  /// and the result carries code `-1`. Set [shell] to run the process in a shell.
   Future<SysResult> run(
     String executable,
     List<String> arguments, {
     String? cwd,
     bool inherit = false,
     bool echo = false,
+    bool shell = false,
     Duration? timeout,
     void Function(String line)? out,
     void Function(String line)? err,
@@ -84,6 +85,7 @@ class SystemAccessor {
     cwd: cwd,
     inherit: inherit,
     echo: echo,
+    shell: shell,
     timeout: timeout,
     out: out,
     err: err,
@@ -95,11 +97,13 @@ class SystemAccessor {
     List<String> arguments, {
     String? cwd,
     bool includeStderr = false,
+    bool shell = false,
   }) => Sys.stream(
     executable,
     arguments,
     cwd: cwd,
     includeStderr: includeStderr,
+    shell: shell,
   );
 
   /// Resolves [exe] to an absolute executable path, or `null` if not found.
