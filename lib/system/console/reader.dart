@@ -10,8 +10,6 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 
-import '../../collection/flow.dart';
-import '../../collection/sequence.dart';
 import 'ansi.dart';
 
 // ============================================================================
@@ -55,8 +53,8 @@ class ConsoleReader {
   /// ```dart
   /// // setup: Future<void> fetch(Uri u) async {}
   /// await system.console.reader.lines
-  ///     .transform(.map((line) => line.trim()))
-  ///     .transform(.map.async((line) => fetch(line.url), size: 4))
+  ///     .through(.map((line) => line.trim()))
+  ///     .through(.map.async((line) => fetch(line.url), size: 4))
   ///     .collect(.count());
   /// ```
   ///
@@ -64,7 +62,7 @@ class ConsoleReader {
   /// read a pipe and still ask a question. Ends when stdin closes; against a
   /// terminal that means it waits for the reader to end the input themselves,
   /// so guard it with [piped] where both modes are supported.
-  Flow<String> get lines => Flow(_lines());
+  Stream<String> get lines => _lines();
 
   Stream<String> _lines() async* {
     while (true) {
@@ -151,7 +149,7 @@ class ConsoleReader {
       if (validator == null || validator(answer)) return answer;
       // Nothing more is coming, so re-prompting would spin forever.
       if (read == null) throw _exhausted('ask');
-      stderr.writeln('${'✖'.brightred()} Invalid input, please try again.');
+      stderr.writeln('${'✖'.brightRed()} Invalid input, please try again.');
     }
   }
 
@@ -171,10 +169,10 @@ class ConsoleReader {
   /// would otherwise re-prompt forever.
   Future<O> pick<O>(
     String question, {
-    required Sequence<O> options,
+    required Iterable<O> options,
     String Function(O item)? label,
   }) async {
-    final choices = options.transform(.cast<O>()).collect(.list());
+    final choices = options.toList();
     _menu(question, choices, label);
     while (true) {
       stdout.write('Select (1-${choices.length}): ');
@@ -184,7 +182,7 @@ class ConsoleReader {
       if (choice != null && choice >= 1 && choice <= choices.length) {
         return choices[choice - 1];
       }
-      stderr.writeln('${'✖'.brightred()} Please enter 1-${choices.length}.');
+      stderr.writeln('${'✖'.brightRed()} Please enter 1-${choices.length}.');
     }
   }
 
@@ -192,20 +190,20 @@ class ConsoleReader {
   ///
   /// Accepts a comma- or space-separated list, `all` for everything, or an
   /// empty answer for nothing. Throws [StateError] at end of input.
-  Future<Sequence<O>> picks<O>(
+  Future<List<O>> picks<O>(
     String question, {
-    required Sequence<O> options,
+    required Iterable<O> options,
     String Function(O item)? label,
   }) async {
-    final choices = options.transform(.cast<O>()).collect(.list());
+    final choices = options.toList();
     _menu(question, choices, label);
     while (true) {
       stdout.write('Select (e.g. 1, 3 or all): ');
       final read = await line();
       if (read == null) throw _exhausted('picks');
       final answer = read.trim().toLowerCase();
-      if (answer.isEmpty) return const Sequence([]);
-      if (answer == 'all' || answer == '*') return Sequence(choices);
+      if (answer.isEmpty) return const [];
+      if (answer == 'all' || answer == '*') return choices;
 
       final indices = <int>{};
       var valid = true;
@@ -219,10 +217,10 @@ class ConsoleReader {
         indices.add(n - 1);
       }
       if (valid && indices.isNotEmpty) {
-        return Sequence(indices.map((i) => choices[i]));
+        return indices.map((i) => choices[i]).toList();
       }
       stderr.writeln(
-        '${'✖'.brightred()} Please enter numbers between 1 and '
+        '${'✖'.brightRed()} Please enter numbers between 1 and '
         '${choices.length}.',
       );
     }

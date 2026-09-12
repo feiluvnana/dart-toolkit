@@ -54,14 +54,12 @@ import '../src/entries.dart';
 import '../src/fs.dart';
 import '../src/lock.dart';
 import '../src/watch.dart';
-import '../collection/dictionary.dart';
-import '../collection/flow.dart';
-import '../collection/sequence.dart';
 
 export 'collections.dart';
 export 'csv.dart';
 export 'dir.dart';
 export 'entry.dart';
+export 'io_extensions.dart';
 export 'path.dart';
 export '../src/fs.dart' show Algo;
 export '../src/lock.dart' show LockedError;
@@ -105,7 +103,7 @@ class IoAccessor {
   /// The non-blocking mirror of this domain. See [IoAsyncAccessor].
   IoAsyncAccessor get async => const IoAsyncAccessor();
 
-  /// The JSON object at [path] as a [Dictionary], or an empty one when the
+  /// The JSON object at [path] as a [Map], or an empty one when the
   /// file is not there.
   ///
   /// The state a script keeps between runs, with [Slot]s for keys:
@@ -122,34 +120,33 @@ class IoAccessor {
   /// `format.json.read` already makes. `Store` held it, and held a
   /// process-wide mutable singleton with it.
   ///
-  /// An absent file is an empty dictionary, because a first run has nothing to
+  /// An absent file is an empty map, because a first run has nothing to
   /// read. A file that is there and is not a JSON object throws
   /// [FormatException], because that is a broken file rather than a missing
   /// one and silence is how a half-written snapshot becomes a silent data
   /// loss.
-  Dictionary<String, Object?> dictionary(String path) {
+  Map<String, Object?> dictionary(String path) {
     final file = File(path);
-    if (!file.existsSync()) return Dictionary<String, Object?>();
+    if (!file.existsSync()) return <String, Object?>{};
     return _dictionary(path, file.readAsStringSync());
   }
 
   // --- Existence: one question per member ---
 
   /// Whether anything at all is at [path] — file, directory or link.
-  ///
-  /// The question that had no answer through 5.1.0. [has] is not it: that one
-  /// means *a file exists and holds at least one byte*, which is three
-  /// questions fused into one, and a script writing
-  /// `if (!io.has(dir)) io.dir.make(dir)` was correct by accident.
-  ///
-  /// A symlink counts as existing even when it dangles, because something is
-  /// there, and `io.stat(path)?.islink` is how you tell it from a file.
-  ///
-  /// The kind questions were three members here — `isfile`, `isdir`,
-  /// `islink` — through 6.1.0, on both accessors. Each was a second reading
-  /// of the stat [stat] already returns, and the entry it hands back spells
-  /// all three: `io.stat(p)?.isfile`.
   bool exists(String path) => Entries.kind(path) != null;
+
+  /// Whether [path] points to a regular file.
+  bool isFile(String path) => Entries.kind(path) == FileSystemEntryKind.file;
+
+  /// Whether [path] points to a directory.
+  bool isDir(String path) => Entries.kind(path) == FileSystemEntryKind.directory;
+
+  /// Whether [path] points to a symbolic link.
+  bool isLink(String path) => Entries.kind(path) == FileSystemEntryKind.link;
+
+  /// The size of [path] in bytes, or `null` when absent.
+  int? size(String path) => stat(path)?.size;
 
   /// Whether [path] exists and holds at least one byte.
   ///
@@ -479,10 +476,10 @@ class IoAsyncAccessor {
   /// CSV files, streaming. See [CsvFileAsyncAccessor].
   CsvFileAsyncAccessor get csv => const CsvFileAsyncAccessor();
 
-  /// The JSON object at [path] as a [Dictionary]. See [IoAccessor.dictionary].
-  Future<Dictionary<String, Object?>> dictionary(String path) async {
+  /// The JSON object at [path] as a [Map]. See [IoAccessor.dictionary].
+  Future<Map<String, Object?>> dictionary(String path) async {
     final file = File(path);
-    if (!await file.exists()) return Dictionary<String, Object?>();
+    if (!await file.exists()) return <String, Object?>{};
     return _dictionary(path, await file.readAsString());
   }
 
@@ -491,6 +488,21 @@ class IoAsyncAccessor {
   /// Whether anything at all is at [path] — file, directory or link.
   Future<bool> exists(String path) async =>
       await Entries.kindAsync(path) != null;
+
+  /// Whether [path] points to a regular file without blocking.
+  Future<bool> isFile(String path) async =>
+      (await Entries.kindAsync(path)) == FileSystemEntryKind.file;
+
+  /// Whether [path] points to a directory without blocking.
+  Future<bool> isDir(String path) async =>
+      (await Entries.kindAsync(path)) == FileSystemEntryKind.directory;
+
+  /// Whether [path] points to a symbolic link without blocking.
+  Future<bool> isLink(String path) async =>
+      (await Entries.kindAsync(path)) == FileSystemEntryKind.link;
+
+  /// The size of [path] in bytes without blocking, or `null` when absent.
+  Future<int?> size(String path) async => (await stat(path))?.size;
 
   /// Whether [path] exists and holds at least one byte.
   Future<bool> has(String path) => Fs.hasAsync(path);
@@ -518,12 +530,12 @@ class IoAsyncAccessor {
   ///
   /// ```dart
   /// await io.async.lines('big.log')
-  ///     .transform(.where((line) => line.contains('ERROR')))
+  ///     .through(.where((line) => line.contains('ERROR')))
   ///     .collect(.foreach(print));
   ///
   /// await io.async.lines.write(
   ///   'out/errors.log',
-  ///   io.async.lines('big.log').transform(.where((l) => l.contains('ERROR'))),
+  ///   io.async.lines('big.log').through(.where((l) => l.contains('ERROR'))),
   /// );
   /// ```
   LinesAsyncAccessor get lines => const LinesAsyncAccessor();
@@ -583,17 +595,17 @@ class IoAsyncAccessor {
       Fs.hashAsync(path, algorithm);
 }
 
-/// Decodes a JSON object read from [path] into a [Dictionary].
-Dictionary<String, Object?> _dictionary(String path, String text) {
+/// Decodes a JSON object read from [path] into a [Map].
+Map<String, Object?> _dictionary(String path, String text) {
   final decoded = jsonDecode(text);
   if (decoded is! Map) {
     throw FormatException(
       '$path holds a ${decoded.runtimeType}, not a JSON object',
     );
   }
-  return Dictionary({
+  return {
     for (final entry in decoded.entries) entry.key.toString(): entry.value,
-  });
+  };
 }
 
 // ============================================================================
@@ -638,8 +650,8 @@ class ChunksAccessor {
   const ChunksAccessor();
 
   /// Reads [path] in byte chunks of at most [size] — on the walk, not before.
-  Sequence<List<int>> call(String path, {int size = 64 * 1024}) =>
-      Sequence(Fs.chunksSync(path, size: size));
+  Iterable<List<int>> call(String path, {int size = 64 * 1024}) =>
+      Fs.chunksSync(path, size: size);
 
   /// Writes [chunks] to [path] atomically, one after another.
   ///
@@ -648,10 +660,10 @@ class ChunksAccessor {
   /// larger than memory one line.
   FileSystemEntry write(
     String path,
-    Sequence<List<int>> chunks, {
+    Iterable<List<int>> chunks, {
     String part = '.part',
   }) => Fs.entryFor(
-    Fs.writeChunksSync(path, chunks.collect(.list()), part: part).path,
+    Fs.writeChunksSync(path, chunks.toList(), part: part).path,
   );
 }
 
@@ -661,8 +673,8 @@ class ChunksAsyncAccessor {
   const ChunksAsyncAccessor();
 
   /// Reads [path] in byte chunks of at most [size] as they arrive.
-  Flow<List<int>> call(String path, {int size = 64 * 1024}) =>
-      Flow.of(() => Fs.chunks(path, size: size));
+  Stream<List<int>> call(String path, {int size = 64 * 1024}) =>
+      Fs.chunks(path, size: size);
 
   /// Writes [chunks] to [path] atomically as they arrive.
   ///
@@ -674,10 +686,10 @@ class ChunksAsyncAccessor {
   /// renamed into place once the flow ends, and discarded if it fails.
   Future<FileSystemEntry> write(
     String path,
-    Flow<List<int>> chunks, {
+    Stream<List<int>> chunks, {
     String part = '.part',
   }) async =>
-      Fs.entryFor((await Fs.pourChunks(path, chunks.stream, part: part)).path);
+      Fs.entryFor((await Fs.pourChunks(path, chunks, part: part)).path);
 }
 
 /// The namespace behind [IoAccessor.lines].
@@ -686,8 +698,8 @@ class LinesAccessor {
   const LinesAccessor();
 
   /// Reads [path] as decoded lines — on the first walk, not before.
-  Sequence<String> call(String path, {Encoding encoding = utf8}) =>
-      Sequence(Fs.linesSync(path, encoding: encoding));
+  Iterable<String> call(String path, {Encoding encoding = utf8}) =>
+      Fs.linesSync(path, encoding: encoding);
 
   /// Writes [lines] to [path] atomically, one element per line.
   ///
@@ -696,14 +708,14 @@ class LinesAccessor {
   /// including the last.
   FileSystemEntry write(
     String path,
-    Sequence<String> lines, {
+    Iterable<String> lines, {
     String newline = '\n',
     Encoding encoding = utf8,
     String part = '.part',
   }) => Fs.entryFor(
     Fs.writeLinesSync(
       path,
-      lines.collect(.list()),
+      lines.toList(),
       newline: newline,
       encoding: encoding,
       part: part,
@@ -717,8 +729,8 @@ class LinesAsyncAccessor {
   const LinesAsyncAccessor();
 
   /// Reads [path] as decoded lines, without loading the whole file.
-  Flow<String> call(String path, {Encoding encoding = utf8}) =>
-      Flow.of(() => Fs.lines(path, encoding: encoding));
+  Stream<String> call(String path, {Encoding encoding = utf8}) =>
+      Fs.lines(path, encoding: encoding);
 
   /// Writes [lines] to [path] atomically as they arrive, one per line.
   ///
@@ -728,7 +740,7 @@ class LinesAsyncAccessor {
   /// ```dart
   /// await io.async.lines.write(
   ///   'titles.txt',
-  ///   net.crawl([Fetch(seed)].seq).flow.transform(.map((res) => res.url.toString())),
+  ///   net.crawl([Fetch(seed)]).stream.map((res) => res.url.toString()),
   /// );
   /// ```
   ///
@@ -736,14 +748,14 @@ class LinesAsyncAccessor {
   /// renamed into place once the flow ends, and discarded if it fails.
   Future<FileSystemEntry> write(
     String path,
-    Flow<String> lines, {
+    Stream<String> lines, {
     String newline = '\n',
     Encoding encoding = utf8,
     String part = '.part',
   }) async => Fs.entryFor(
     (await Fs.pourLines(
       path,
-      lines.stream,
+      lines,
       newline: newline,
       encoding: encoding,
       part: part,

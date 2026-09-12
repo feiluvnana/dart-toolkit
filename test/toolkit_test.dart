@@ -48,12 +48,10 @@ void main() {
               headers: ['Left', 'Right'],
               alignments: [ColumnAlign.left, ColumnAlign.right],
             )
-            ..add.all(
-              [
-                ['a', '1'],
-                ['bbb', '22'],
-              ].seq,
-            );
+            ..addAll([
+              ['a', '1'],
+              ['bbb', '22'],
+            ]);
       final lines = table.render().split('\n');
       // Every rendered row is the same visible width.
       final widths = lines
@@ -484,7 +482,7 @@ void main() async {
       // 50ms task vs 10ms task: 10ms task completes first
       final items = [50, 10];
       final streamed = await items.flow
-          .transform(
+          .through(
             .map.async(
               (delay) async {
                 await util.time.wait(delay.ms);
@@ -501,7 +499,7 @@ void main() async {
 
     test('map.async yields in input order by default', () async {
       final streamed = await [50, 10].flow
-          .transform(
+          .through(
             .map.async((delay) async {
               await util.time.wait(delay.ms);
               return 'done-$delay';
@@ -516,7 +514,7 @@ void main() async {
       var live = 0;
       var peak = 0;
       await List.generate(12, (i) => i).flow
-          .transform(
+          .through(
             .map.async((i) async {
               live++;
               if (live > peak) peak = live;
@@ -541,7 +539,7 @@ void main() async {
       }
 
       final first = await endless().flow
-          .transform(.map.async((n) async => n, size: 2))
+          .through(.map.async((n) async => n, size: 2))
           .collect(.first());
 
       expect(first, isZero);
@@ -552,7 +550,7 @@ void main() async {
     test('map.async propagates the first failure', () async {
       await expectLater(
         [1, 2, 3].flow
-            .transform(
+            .through(
               .map.async((n) async {
                 if (n == 2) throw StateError('boom');
                 return n;
@@ -1253,15 +1251,15 @@ void main() async {
       final temp = io.dir.temp('dict_absent_');
       try {
         final db = io.dictionary(io.path.join(temp.path, 'nothing.json'));
-        expect(db.empty, isTrue);
-        expect(db.count, equals(0));
+        expect(db.isEmpty, isTrue);
+        expect(db.length, equals(0));
       } finally {
         io.remove(temp.path);
       }
     });
 
     test('reads and writes through typed slots', () {
-      final db = Dictionary<String, Object?>();
+      final db = <String, Object?>{};
       db.write(_theme, 'dark');
       db.write(_counter, 42);
 
@@ -1302,7 +1300,7 @@ void main() async {
       final temp = io.dir.temp('dict_test_');
       try {
         final path = io.path.join(temp.path, 'cache.json');
-        Dictionary<String, Object?>()
+        <String, Object?>{}
           ..write(_userId, 'user_101')
           ..write(_visits, 5)
           ..dump(path);
@@ -1311,10 +1309,10 @@ void main() async {
         final reopened = io.dictionary(path);
         expect(reopened.read(_userId), equals('user_101'));
         expect(reopened.read(_visits), equals(5));
-        expect(reopened.count, equals(2));
+        expect(reopened.length, equals(2));
 
         reopened.clear();
-        expect(reopened.empty, isTrue);
+        expect(reopened.isEmpty, isTrue);
       } finally {
         io.remove(temp.path);
       }
@@ -1328,7 +1326,7 @@ void main() async {
         expect((await format.json.read(path)).raw, equals([1, 2, 3]));
 
         final objects = io.path.join(temp.path, 'by-host.json');
-        Dictionary<String, int>(const {'a.com': 2}).dump(objects);
+        const <String, int>{'a.com': 2}.dump(objects);
         expect((await format.json.read(objects)).raw, equals({'a.com': 2}));
       } finally {
         io.remove(temp.path);
@@ -1483,11 +1481,11 @@ void main() async {
         try {
           Ansi.enabled = true;
           expect('test'.color256(196), contains('\x1B[38;5;196m'));
-          expect('test'.bgcolor256(21), contains('\x1B[48;5;21m'));
+          expect('test'.bgColor256(21), contains('\x1B[48;5;21m'));
           expect('test'.rgb(255, 100, 50), contains('\x1B[38;2;255;100;50m'));
-          expect('test'.bgrgb(10, 20, 30), contains('\x1B[48;2;10;20;30m'));
+          expect('test'.bgRgb(10, 20, 30), contains('\x1B[48;2;10;20;30m'));
           expect('test'.hex('#FF0000'), contains('\x1B[38;2;255;0;0m'));
-          expect('test'.bghex('00FF00'), contains('\x1B[48;2;0;255;0m'));
+          expect('test'.bgHex('00FF00'), contains('\x1B[48;2;0;255;0m'));
 
           Ansi.enabled = false;
           expect('test'.color256(196), equals('test'));
@@ -1532,7 +1530,7 @@ void main() async {
 
     test('net exposes http and crawl', () {
       expect(net.http, isA<Fetcher>());
-      expect(net.crawl(const Sequence<Fetch>([])), isA<Crawl>());
+      expect(net.crawl(const <Fetch>[]), isA<Crawl>());
       // Selectors live on the top-level $, not on net. Like jQuery, find()
       // searches descendants, so a root-level match is read directly.
       expect(

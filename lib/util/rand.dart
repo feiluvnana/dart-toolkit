@@ -6,8 +6,6 @@ library;
 
 import 'dart:math';
 
-import '../collection/sequence.dart';
-
 // ============================================================================
 // RANDOMNESS (util.rand.*)
 // ============================================================================
@@ -59,10 +57,7 @@ class RandAccessor {
   }
 
   /// A shuffled copy of [items], leaving the original untouched.
-  ///
-  /// Randomness lives here rather than on [Sequence], so a sequence gets it by
-  /// exiting: `util.rand.shuffle(rows.collect(.list()))`.
-  Sequence<T> shuffle<T>(List<T> items) => Sequence([...items]..shuffle(_rng));
+  List<T> shuffle<T>(List<T> items) => [...items]..shuffle(_rng);
 
   /// A whole number in `[min, max)`.
   ///

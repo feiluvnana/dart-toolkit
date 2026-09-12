@@ -11,9 +11,6 @@
 /// there are four operation types and not two.
 library;
 
-import 'dictionary.dart';
-import 'sequence.dart';
-
 // ============================================================================
 // COLLECTORS (Collector<A, R>)
 // ============================================================================
@@ -111,9 +108,13 @@ class Collector<A, R> {
   /// ```dart
   /// rows.collect(.count());
   /// rows.collect(.count.where((r) => r.live));
-  /// rows.collect(.count.by((r) => r.host));    // Dictionary<String, int>
+  /// rows.collect(.count.by((r) => r.host));    // Map<String, int>
   /// ```
   static const count = _Count();
+
+  /// How many elements fall under each [key] — Kotlin's `countBy`.
+  static Collector<A, Map<K, int>> countBy<A, K>(K Function(A item) key) =>
+      count.by(key);
 
   /// Whether the sequence holds nothing.
   ///
@@ -150,10 +151,18 @@ class Collector<A, R> {
   /// ```
   static const first = _First();
 
+  /// The first element [test] accepts, or `null`.
+  static Collector<A, A?> firstWhere<A>(bool Function(A item) test) =>
+      first.where(test);
+
   /// The last element, or `null` when there is none.
   ///
   /// Callable, and a namespace, on the same terms as [first].
   static const last = _Last();
+
+  /// The last element [test] accepts, or `null`.
+  static Collector<A, A?> lastWhere<A>(bool Function(A item) test) =>
+      last.where(test);
 
   /// The only element, or `null` when there is not exactly one.
   ///
@@ -161,6 +170,10 @@ class Collector<A, R> {
   /// is `singleWhere`, and it is `null` rather than a throw when the test
   /// accepts none or several.
   static const single = _Single();
+
+  /// The only element [test] accepts, or `null` when it is not exactly one.
+  static Collector<A, A?> singleWhere<A>(bool Function(A item) test) =>
+      single.where(test);
 
   /// The element at [index], or `null` when the sequence is shorter.
   static Collector<A, A?> at<A>(int index) => Collector((items) {
@@ -179,16 +192,31 @@ class Collector<A, R> {
   /// idea and now has a different name.
   static const index = _Index();
 
+  /// The position of the first element equal to [value], or `null`.
+  static Collector<A, int?> indexOf<A>(A value) => index.of(value);
+
+  /// The position of the first element [test] accepts, or `null`.
+  static Collector<A, int?> indexWhere<A>(bool Function(A item) test) =>
+      index.where(test);
+
   /// The element with the largest [max]`.by(key)`, or `null` when empty.
   ///
   /// Kotlin's `maxBy`, split at the capital. Was `best`.
   static const max = _Max();
+
+  /// The element with the largest [key], or `null` when empty.
+  static Collector<A, A?> maxBy<A>(Comparable<Object?> Function(A item) key) =>
+      max.by(key);
 
   /// The element with the smallest [min]`.by(key)`, or `null` when empty.
   ///
   /// Not a complement of [max] that `!` could cover — negating a maximum does
   /// not give a minimum.
   static const min = _Min();
+
+  /// The element with the smallest [key], or `null` when empty.
+  static Collector<A, A?> minBy<A>(Comparable<Object?> Function(A item) key) =>
+      min.by(key);
 
   // --------------------------------------------------------------------------
   // Reducing
@@ -311,13 +339,18 @@ class Collector<A, R> {
   /// be inferred from and every bucket would arrive as `dynamic`.
   static const group = _Group();
 
+  /// The elements bucketed by [key].
+  static Collector<A, Map<K, List<A>>> groupBy<A, K>(
+          K Function(A item) key) =>
+      group.by(key);
+
   /// A lookup table keyed by `associate.by(key)` — Kotlin's `associateBy`.
   ///
   /// The last element to claim a key wins.
   ///
   /// ```dart
   /// rows.collect(.associate.by((r) => r.sku));
-  /// // Dictionary<String, Row>
+  /// // Map<String, Row>
   /// ```
   ///
   /// To key something other than the elements themselves, pair it first and
@@ -325,17 +358,20 @@ class Collector<A, R> {
   ///
   /// ```dart
   /// rows.transform(.map((r) => (r.sku, r.price))).collect(.dict());
-  /// // Dictionary<String, num>
+  /// // Map<String, num>
   /// ```
   static const associate = _Associate();
 
-  /// A sequence of `(key, value)` records as a [Dictionary].
+  /// A lookup table keyed by [key].
+  static Collector<A, Map<K, A>> associateBy<A, K>(
+          K Function(A item) key) =>
+      associate.by(key);
+
+  /// A sequence of `(key, value)` records as a [Map].
   ///
-  /// The way back into the keyed collection from anything that produced
-  /// pairs, and the twin of `Dictionary.pairs`. The last record to claim a key
-  /// wins.
-  static Collector<(K, V), Dictionary<K, V>> dict<K, V>() =>
-      Collector((pairs) => Dictionary.of(pairs));
+  /// The last record to claim a key wins.
+  static Collector<(K, V), Map<K, V>> dict<K, V>() =>
+      Collector((pairs) => {for (final (k, v) in pairs) k: v});
 
   /// The elements [test] accepts and the elements it rejects.
   ///
@@ -344,7 +380,7 @@ class Collector<A, R> {
   /// ```dart
   /// final (live, dead) = rows.collect(.split((r) => r.ok));
   /// ```
-  static Collector<A, (Sequence<A>, Sequence<A>)> split<A>(
+  static Collector<A, (List<A>, List<A>)> split<A>(
     bool Function(A item) test,
   ) => Collector((items) {
     final yes = <A>[];
@@ -352,7 +388,7 @@ class Collector<A, R> {
     for (final item in items) {
       (test(item) ? yes : no).add(item);
     }
-    return (Sequence(yes), Sequence(no));
+    return (yes, no);
   });
 
   // --------------------------------------------------------------------------
@@ -385,6 +421,10 @@ class Collector<A, R> {
         }
       });
 
+  /// Standard Dart alias for [foreach].
+  static Collector<A, void> forEach<A>(void Function(A item) each) =>
+      foreach(each);
+
   /// The elements as a list — the walk, and the result of it.
   ///
   /// The way out. A [Sequence] holds a recipe and never hands it over, so
@@ -398,12 +438,9 @@ class Collector<A, R> {
   static Collector<A, Set<A>> set<A>() =>
       Collector((items) => Set<A>.of(items));
 
-  /// The elements as a [Sequence] — the identity collector.
-  ///
-  /// What `group.by` gives each bucket, and the way to end a pipeline built
-  /// with [Transformer.into] without leaving this vocabulary.
-  static Collector<A, Sequence<A>> seq<A>() =>
-      Collector((items) => Sequence(items));
+  /// The elements as a [List] — the identity collector.
+  static Collector<A, List<A>> seq<A>() =>
+      Collector((items) => items.toList());
 
   /// An arbitrary reduction, for anything the named collectors do not cover.
   ///
@@ -446,7 +483,7 @@ class _Count {
   /// Exactly `group.into(key, .count())`, and defined as it: one implementation,
   /// two spellings of a call, because this is the one a script writes ten
   /// times for every one of the general form.
-  Collector<A, Dictionary<K, int>> by<A, K>(K Function(A item) key) =>
+  Collector<A, Map<K, int>> by<A, K>(K Function(A item) key) =>
       const _Group().into(key, const _Count().call<A>());
 }
 
@@ -560,14 +597,14 @@ A? _extreme<A>(
 class _Group {
   const _Group();
 
-  /// The elements bucketed by [key], every bucket a [Sequence].
-  Collector<A, Dictionary<K, Sequence<A>>> by<A, K>(K Function(A item) key) =>
-      into(key, Collector<A, Sequence<A>>(Sequence.new));
+  /// The elements bucketed by [key], every bucket a [List].
+  Collector<A, Map<K, List<A>>> by<A, K>(K Function(A item) key) =>
+      into(key, Collector<A, List<A>>((items) => items.toList()));
 
   /// The elements bucketed by [key], every bucket reduced by [down].
   ///
-  /// One pass: the buckets are never materialised as sequences first.
-  Collector<A, Dictionary<K, R>> into<A, K, R>(
+  /// One pass: the buckets are never materialised as lists first.
+  Collector<A, Map<K, R>> into<A, K, R>(
     K Function(A item) key,
     Collector<A, R> down,
   ) => Collector((items) {
@@ -575,9 +612,9 @@ class _Group {
     for (final item in items) {
       (buckets[key(item)] ??= <A>[]).add(item);
     }
-    return Dictionary({
+    return {
       for (final entry in buckets.entries) entry.key: down.run(entry.value),
-    });
+    };
   });
 }
 
@@ -589,7 +626,7 @@ class _Associate {
   ///
   /// The last element to claim a key wins, which is what `group.into(key,
   /// .last())` says the long way.
-  Collector<A, Dictionary<K, A>> by<A, K>(K Function(A item) key) => Collector(
-    (items) => Dictionary({for (final item in items) key(item): item}),
+  Collector<A, Map<K, A>> by<A, K>(K Function(A item) key) => Collector(
+    (items) => {for (final item in items) key(item): item},
   );
 }

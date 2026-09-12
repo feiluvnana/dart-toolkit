@@ -25,7 +25,6 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
-import '../collection/sequence.dart';
 import '../src/fs.dart';
 
 // ============================================================================
@@ -74,7 +73,7 @@ class PathAccessor {
   /// ```
   ///
   /// This reads a string and touches nothing. *Creating* that directory is
-  /// `io.dir.makeparent`, which is a different verb in a different namespace
+  /// `io.dir.makeParent`, which is a different verb in a different namespace
   /// — where through 5.1.0 the two were `io.dir` and `io.parent`, each named
   /// for what the other one did.
   String dirname(String path) => p.dirname(path);
@@ -104,7 +103,7 @@ class PathAccessor {
   ///
   /// An absolute path keeps its root as the first segment, so the result
   /// always rejoins to what went in.
-  Sequence<String> parts(String path) => Sequence(p.split(path));
+  List<String> parts(String path) => p.split(path);
 
   /// [path] with `.`, `..` and duplicate separators resolved.
   ///

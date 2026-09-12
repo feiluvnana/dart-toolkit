@@ -238,7 +238,7 @@ extension FormOnMarkup on Markup {
   /// if (search != null) await search.at(res.url).fill({'q': 'widgets'}).send();
   /// ```
   Form? form([String selector = 'form']) {
-    for (final element in $(selector).elements.collect(.list())) {
+    for (final element in $(selector).elements) {
       if (element.localName?.toLowerCase() == 'form') return Form(element);
       final inner = element.querySelector('form');
       if (inner != null) return Form(inner);

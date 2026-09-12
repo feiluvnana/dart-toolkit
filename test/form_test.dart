@@ -234,13 +234,13 @@ void main() {
                 .fill({'user': 'crawler'})
                 .fetch(tag: 'home', meta: [Slot<String>('from')('login')]),
           ].seq,
-          _ => const Sequence<Fetch>([]),
+          _ => const <Fetch>[],
         },
       );
 
       final landed = await crawl.flow
-          .transform(.where((res) => res.fetch.tag == 'home'))
-          .transform(.map((res) => res.parse(format.html).$('h1').text))
+          .through(.where((res) => res.fetch.tag == 'home'))
+          .through(.map((res) => res.parse(format.html).$('h1').text))
           .collect(.list());
 
       expect(landed, ['crawler in with tok-123']);
@@ -264,13 +264,13 @@ void main() {
                 .fill({'user': 'b'})
                 .fetch(tag: 'result'),
           ].seq,
-          _ => const Sequence<Fetch>([]),
+          _ => const <Fetch>[],
         },
       );
 
       final searches = await crawl.flow
-          .transform(.where((res) => res.fetch.tag == 'result'))
-          .transform(.map((res) => res.fetch.url.toString()))
+          .through(.where((res) => res.fetch.tag == 'result'))
+          .through(.map((res) => res.fetch.url.toString()))
           .collect(.list());
 
       // De-duplication accounts for the body, so the same URL twice with

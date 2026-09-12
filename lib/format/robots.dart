@@ -21,7 +21,6 @@
 /// for the shared client itself.
 library;
 
-import '../collection/sequence.dart';
 import '../src/codec.dart';
 import 'format.dart';
 
@@ -111,7 +110,7 @@ class Robots {
        _delays = delays;
 
   /// All user agents explicitly declared in the robots file.
-  Sequence<String> get agents => Sequence(_rules.keys.toList());
+  List<String> get agents => _rules.keys.toList();
 
   /// Parses [content] of a `robots.txt` file.
   factory Robots.parse(String content) {
@@ -196,7 +195,7 @@ class Robots {
   /// A declared `User-agent` matches when it is a case-insensitive prefix of
   /// the crawler's product token, so a `MyBot` group governs a crawler calling
   /// itself `MyBot/1.0`. The longest such group wins, falling back to `*`.
-  Sequence<RobotsRule> group(String agent) => Sequence(_group(agent));
+  List<RobotsRule> group(String agent) => _group(agent);
 
   List<RobotsRule> _group(String agent) {
     final full = agent.toLowerCase().trim();

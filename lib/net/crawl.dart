@@ -23,10 +23,10 @@
 ///   [Fetch('https://example.test'.url)].seq,
 ///   (res) => res.parse(format.html).$('a').attrs('href')
 ///       .transform(.map(res.follow)),
-/// )..concurrent(4)..samehost()..depth(3)..limit(500);
+/// )..concurrent(4)..sameHost()..depth(3)..limit(500);
 ///
 /// final titles = await crawl.flow
-///     .transform(.map((r) => r.parse(format.html).$('h1').text))
+///     .through(.map((r) => r.parse(format.html).$('h1').text))
 ///     .collect(.list());
 /// ```
 library;
@@ -38,10 +38,6 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 
-import '../collection/flow.dart';
-import '../collection/collector.dart';
-import '../collection/pipe.dart';
-import '../collection/sequence.dart';
 import '../concurrent/concurrent.dart';
 import '../format/format.dart';
 import '../src/fs.dart';
@@ -129,11 +125,11 @@ final class Crawl {
   ///
   /// Omitting [next] crawls exactly the seeds, which is what `net.http.sync`
   /// is for when there is no politeness or dedupe to want.
-  Crawl(Sequence<Fetch> seeds, [this._next])
-    : _seeds = seeds.transform(.cast<Fetch>()).collect(.list());
+  Crawl(Iterable<Fetch> seeds, [this._next])
+    : _seeds = seeds.cast<Fetch>().toList();
 
   final List<Fetch> _seeds;
-  final Sequence<Fetch> Function(Reply res)? _next;
+  final Iterable<Fetch> Function(Reply res)? _next;
 
   Send? _send;
   int _concurrency = 4;
@@ -214,12 +210,15 @@ final class Crawl {
 
   /// Pauses [gap] after each fetch, for politeness.
   ///
-  /// Set [perhost] to pace each host separately rather than the crawl as a
+  /// Set [perHost] to pace each host separately rather than the crawl as a
   /// whole — which is what a broad crawl wants, since a global pause slows
   /// every host down to protect one.
-  Crawl delay(Duration gap, {bool perhost = false}) {
+  Crawl delay(
+    Duration gap, {
+    bool perHost = false,
+  }) {
     _gap = gap;
-    _perhost = perhost;
+    _perhost = perHost;
     return this;
   }
 
@@ -248,7 +247,7 @@ final class Crawl {
   }
 
   /// Restricts the crawl to the host of the first seed.
-  Crawl samehost([bool enabled = true]) {
+  Crawl sameHost([bool enabled = true]) {
     _samehost = enabled;
     return this;
   }
@@ -263,12 +262,9 @@ final class Crawl {
   ///
   /// Entries are MIME types, optionally with a `/*` wildcard on the subtype.
   /// A reply carrying no `Content-Type` matches nothing.
-  Crawl accept(Sequence<String> types) {
+  Crawl accept(Iterable<String> types) {
     _accept.addAll(
-      types
-          .transform(.cast<String>())
-          .transform(.map((type) => type.toLowerCase()))
-          .collect(.list()),
+      types.map((type) => type.toLowerCase()),
     );
     return this;
   }
@@ -409,33 +405,19 @@ final class Crawl {
   /// that reports them.
   ///
   /// Cancelling stops the crawl, so `.collect(.first())` fetches one page.
-  Flow<Reply> get flow => Flow<Reply>.of(
-    () => _open()
-        .where((outcome) => outcome is Done<Reply>)
-        .map((outcome) => (outcome as Done<Reply>).value),
-  );
+  Stream<Reply> get flow => _open()
+      .where((outcome) => outcome is Done<Reply>)
+      .map((outcome) => (outcome as Done<Reply>).value);
+
+  /// Standard Dart alias for [flow].
+  Stream<Reply> get stream => flow;
 
   /// The replies and the failures, in band.
-  ///
-  /// One [Settled] per request that was served: [Done] carrying the reply,
-  /// [Broke] carrying what was thrown. The same outcome type `concurrent`
-  /// uses, which is the one-directional dependency Rule 2 allows.
-  ///
-  /// ```dart no-compile
-  /// await crawl.settle.collect(.foreach((outcome) => switch (outcome) {
-  ///   Done(:final value) => save(value),
-  ///   Broke(:final error) => log.warn('$error'),
-  /// }));
-  /// ```
-  Flow<Settled<Reply>> get settle => Flow<Settled<Reply>>.of(_open);
+  Stream<Settled<Reply>> get settle => _open();
 
   /// Drains the crawl and reports what it counted.
-  ///
-  /// One line over [flow]: `await flow.collect(.drain())`, then [stats]. The
-  /// shorthand for a crawl whose point is the side effects `next` had, or
-  /// the files a [Send] wrote.
   Future<Stats> run() async {
-    await flow.collect(Pour.foreach((_) {}));
+    await flow.drain<void>();
     return stats;
   }
 
@@ -569,7 +551,9 @@ final class Crawl {
 
         final followed = _next?.call(reply);
         if (followed != null) {
-          followed.collect(Collector.foreach<Fetch>(_schedule));
+          for (final f in followed) {
+            _schedule(f);
+          }
         }
 
         _inflight.remove(fetch);

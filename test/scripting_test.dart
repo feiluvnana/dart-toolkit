@@ -172,7 +172,7 @@ void main() {
       final again = net.crawl(pending.seq)
         ..using(serve(const {'/a': '<h1>second try</h1>'}));
       final served = await again.flow
-          .transform(.map((res) => res.parse(format.html).$('h1').text))
+          .through(.map((res) => res.parse(format.html).$('h1').text))
           .collect(.list());
 
       expect(served, ['second try']);
@@ -209,8 +209,8 @@ void main() {
 
         seen.add('start');
         final titles = await crawl.flow
-            .transform(.tap((res) => seen.add('progress')))
-            .transform(.map((res) => res.parse(format.html).$('h1').text))
+            .through(.tap((res) => seen.add('progress')))
+            .through(.map((res) => res.parse(format.html).$('h1').text))
             .collect(.list());
         seen.add('done');
 
@@ -294,7 +294,7 @@ void main() {
       final dir = _temp('dt_pipe_');
       final path = '${dir.path}/out.csv';
 
-      await io.async.csv.write(path, Flow.empty(), headers: ['a', 'b']);
+      await io.async.csv.write(path, const Stream.empty(), headers: ['a', 'b']);
 
       expect(File(path).readAsStringSync(), 'a,b\n');
     });
@@ -334,19 +334,17 @@ void main() {
               }),
             ))
             .flow
-            .transform(
+            .through(
               .flat.map(
                 (res) => res
                     .parse(format.html)
                     .$('.p')
                     .elements
-                    .transform(
-                      .map(
-                        (card) => <String, Object?>{
-                          'name': card.query.$('h2').text,
-                          'price': card.query.$('.c').text,
-                        },
-                      ),
+                    .map(
+                      (card) => <String, Object?>{
+                        'name': card.query.$('h2').text,
+                        'price': card.query.$('.c').text,
+                      },
                     ),
               ),
             ),

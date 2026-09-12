@@ -29,7 +29,7 @@ Send fixture(Map<String, String> pages, {List<Fetch>? sent}) => (fetch) async {
 };
 
 /// Every `href` on the page, as the next requests.
-Sequence<Fetch> links(Reply res) =>
+Iterable<Fetch> links(Reply res) =>
     res.parse(format.html).$('a').attrs('href').transform(.map(res.follow));
 
 void main() {
@@ -48,7 +48,7 @@ void main() {
           );
 
         final urls = await crawl.flow
-            .transform(.map((res) => res.url.path))
+            .through(.map((res) => res.url.path))
             .collect(.list());
 
         expect(urls, equals(['/', '/b', '/c']));
@@ -175,13 +175,13 @@ void main() {
                       ),
                     ),
                   ),
-            _ => const Sequence<Fetch>([]),
+            _ => const <Fetch>[],
           },
         )..using(fixture(pages));
 
         final visited = await crawl.flow
-            .transform(.where((res) => res.fetch.tag == 'song'))
-            .transform(
+            .through(.where((res) => res.fetch.tag == 'song'))
+            .through(
               .map(
                 (res) =>
                     '${res.fetch.meta.read(_name)}: '
@@ -205,12 +205,12 @@ void main() {
       );
 
       expect(
-        links(res).transform(.map((f) => f.url.toString())).collect(.list()),
+        links(res).map((f) => f.url.toString()).toList(),
         equals(['https://a.test/b', 'https://a.test/c']),
       );
-      expect(links(res).collect(.first())?.depth, equals(1));
+      expect(links(res).firstOrNull?.depth, equals(1));
       expect(
-        links(res).collect(.first())?.headers['Referer'],
+        links(res).firstOrNull?.headers['Referer'],
         equals('https://a.test/'),
       );
     });
@@ -231,7 +231,7 @@ void main() {
             );
 
         final texts = await crawl.flow
-            .transform(.map((res) => res.parse(format.html).$('p').text))
+            .through(.map((res) => res.parse(format.html).$('p').text))
             .collect(.list());
 
         expect(texts, equals(['Step 1', 'Step 2 Finished']));
@@ -287,8 +287,8 @@ void main() {
             );
 
       final texts = await crawl.flow
-          .transform(.map((res) => res.parse(format.html).$('div').text))
-          .transform(.take.when((text) => !text.contains('Abort')))
+          .through(.map((res) => res.parse(format.html).$('div').text))
+          .through(.take.when((text) => !text.contains('Abort')))
           .collect(.list());
 
       // `take.when` stops *at* the element it rejects, which is what
@@ -315,13 +315,13 @@ void main() {
                 ..concurrent(1)
                 ..using(flaky))
               .settle
-              .collect(.seq());
+              .toList();
 
-      expect(outcomes.collect(.count()), equals(2));
+      expect(outcomes.length, equals(2));
       expect(
         outcomes
-            .transform(.where.type<Broke<Reply>>())
-            .collect(.single())
+            .whereType<Broke<Reply>>()
+            .singleOrNull
             ?.error,
         isA<StateError>(),
       );
@@ -370,7 +370,7 @@ void main() {
         );
 
       final titles = await crawl.flow
-          .transform(
+          .through(
             .flat.map((res) => res.parse(format.html).$('.title').texts),
           )
           .collect(.list());
@@ -394,12 +394,12 @@ void main() {
             'https://other.com/ext': '<p>ext</p>',
           }),
         )
-        ..samehost()
+        ..sameHost()
         ..depth(1);
 
-      final visited = await crawl.flow
-          .transform(.map((res) => res.url.path))
-          .collect(.list());
+        final visited = await crawl.flow
+            .through(.map((res) => res.url.path))
+            .collect(.list());
 
       expect(visited, equals(['/root', '/child1']));
     });
@@ -417,7 +417,7 @@ void main() {
         ..deny(RegExp(r'/drop/'));
 
       final visited = await crawl.flow
-          .transform(.map((res) => res.url.path))
+          .through(.map((res) => res.url.path))
           .collect(.list());
       expect(visited, equals(['/a', '/keep/1']));
     });
@@ -463,7 +463,7 @@ void main() {
               ..accept(const ['text/html'].seq);
 
         final urls = await crawl.flow
-            .transform(.map((res) => res.url.path))
+            .through(.map((res) => res.url.path))
             .collect(.list());
 
         expect(sent.length, equals(2), reason: 'both are fetched');
@@ -482,7 +482,7 @@ void main() {
                       res.follow('https://host-b.test/1'),
                       res.follow('https://host-a.test/2'),
                     ].seq
-                  : const Sequence<Fetch>([]),
+                  : const <Fetch>[],
             )
             ..using(
               fixture(const {
@@ -492,7 +492,7 @@ void main() {
               }),
             )
             ..concurrent(3)
-            ..delay(const Duration(milliseconds: 60), perhost: true);
+            ..delay(const Duration(milliseconds: 60), perHost: true);
 
       await crawl.flow.collect(
         .foreach((res) => order.add(res.url.toString())),
@@ -541,7 +541,7 @@ void main() {
             );
 
       final tags = await crawl.flow
-          .transform(.map((res) => res.fetch.tag))
+          .through(.map((res) => res.fetch.tag))
           .collect(.list());
       expect(tags, equals(['first', 'second']));
     });
@@ -551,7 +551,7 @@ void main() {
       final crawl = net.crawl([Fetch(coerce(markup))].seq);
 
       final titles = await crawl.flow
-          .transform(.map((res) => res.parse(format.html).$('h2').text))
+          .through(.map((res) => res.parse(format.html).$('h2').text))
           .collect(.list());
       expect(titles, equals(['Explicit HTML']));
     });
@@ -562,7 +562,7 @@ void main() {
       try {
         final crawl = net.crawl([Fetch(Uri.file(file.path))].seq);
         final texts = await crawl.flow
-            .transform(.map((res) => res.parse(format.html).$('p').text))
+            .through(.map((res) => res.parse(format.html).$('p').text))
             .collect(.list());
         expect(texts, equals(['File Content']));
       } finally {
@@ -575,11 +575,11 @@ void main() {
         [Fetch(coerce('task:seed-alpha'))].seq,
         (res) => res.body == 'task:seed-alpha'
             ? [res.follow('task:seed-beta')].seq
-            : const Sequence<Fetch>([]),
+            : const <Fetch>[],
       );
 
       final seen = await crawl.flow
-          .transform(.map((res) => res.body))
+          .through(.map((res) => res.body))
           .collect(.list());
       expect(seen, equals(['task:seed-alpha', 'task:seed-beta']));
     });
@@ -627,7 +627,7 @@ void main() {
             ..obey();
 
       final urls = await crawl.flow
-          .transform(.map((res) => res.url.path))
+          .through(.map((res) => res.url.path))
           .collect(.list());
 
       expect(urls, equals(['/public']));
@@ -753,7 +753,7 @@ https://example.com/item2
               ..depth(8);
 
         final urls = await crawl.flow
-            .transform(.map((res) => res.url.path))
+            .through(.map((res) => res.url.path))
             .collect(.list());
         expect(urls, equals(['/sitemap.xml', '/one.xml', '/a']));
       },

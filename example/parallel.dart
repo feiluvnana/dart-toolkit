@@ -31,7 +31,7 @@ void main() async {
   // should not wait on the slowest item. It is part of the flow vocabulary
   // now; it was `flow.run`, an extension declared over here, through 5.4.0.
   final seen = await ids.flow
-      .transform(.map.async(_measure, size: 4, ordered: false))
+      .through(.map.async(_measure, size: 4, ordered: false))
       .collect(.count());
   log.info('Streamed $seen results.');
 
@@ -42,7 +42,7 @@ void main() async {
   pool.on.error((error, _, id) => log.warn('$id: $error'));
 
   // `settle` never throws: every item comes back as a sealed Done or Broke.
-  final results = await pool.settle(ids.seq, _flaky);
+  final results = await pool.settle(ids, _flaky);
   final ok = results.transform(.where.type<Done<String>>()).collect(.count());
   log.ok('$ok of ${results.collect(.count())} succeeded.');
 

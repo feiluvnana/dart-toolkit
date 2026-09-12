@@ -90,12 +90,12 @@ void main() {
           Fetcher(headers: const {'User-Agent': 'TestBot'}, timeout: 5.s).call,
         )
         ..concurrent(4)
-        ..delay(250.ms, perhost: true)
+        ..delay(250.ms, perHost: true)
         ..limit(1)
         ..depth(1)
         ..allow(RegExp(r'.*'))
         ..deny(RegExp(r'\.pdf\$'))
-        ..samehost(false);
+        ..sameHost(false);
 
       crawl.using(
         (fetch) async => Reply.text(
@@ -106,7 +106,7 @@ void main() {
       );
 
       final titles = await crawl.flow
-          .transform(
+          .through(
             .flat.map((res) => res.parse(format.html).$('.titleline').texts),
           )
           .collect(.list());
@@ -163,7 +163,7 @@ void main() {
     test('concurrent.md features run as documented', () async {
       // 1. flow.run
       final streamResults = await [20, 10].flow
-          .transform(
+          .through(
             .map.async(
               (int ms) async {
                 await util.time.wait(ms.ms);

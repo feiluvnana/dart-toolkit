@@ -23,7 +23,7 @@ const album = Slot<String>('album');
 void main() async {
   final log = system.console.logger;
 
-  final crawl = net.crawl([Fetch('https://music.test/artists'.url)].seq, _next)
+  final crawl = net.crawl([Fetch('https://music.test/artists'.url)], _next)
     // A transport is a `Send` — `Future<Reply> Function(Fetch)`. A fixture is
     // a closure over a map; a headless browser is a closure over a page.
     ..using(_fixture)
@@ -32,7 +32,7 @@ void main() async {
     // than one.
     ..concurrent(4)
     ..delay(20.ms)
-    ..samehost()
+    ..sameHost()
     ..depth(3)
     ..limit(500)
     ..allow(RegExp(r'music\.test/(artists|albums)'))
@@ -46,10 +46,10 @@ void main() async {
 
   // Extraction is downstream, on the flow: the crawl produces replies and the
   // collection vocabulary turns them into whatever this script wanted.
-  final tracks = await crawl.flow
-      .transform(.where((res) => res.fetch.tag == 'album'))
-      .transform(.flat.map(_tracks))
-      .collect(.list());
+  final tracks = await crawl.stream
+      .where((res) => res.fetch.tag == 'album')
+      .asyncExpand((res) => Stream.fromIterable(_tracks(res)))
+      .toList();
 
   log.ok(
     '${crawl.stats.fetched} pages, ${crawl.stats.failed} failed, '
@@ -63,7 +63,7 @@ void main() async {
 
 /// The whole router: reply in, next requests out. A pure function, so it is
 /// testable with a `Reply.text` fixture and no crawl at all.
-Sequence<Fetch> _next(Reply res) => switch (res.fetch.tag) {
+Iterable<Fetch> _next(Reply res) => switch (res.fetch.tag) {
   // The index: queue every artist, tagged so the next stage picks them up.
   null =>
     res
@@ -103,11 +103,11 @@ Sequence<Fetch> _next(Reply res) => switch (res.fetch.tag) {
           ),
         ),
   // An album is a leaf: nothing further to fetch.
-  _ => const Sequence<Fetch>([]),
+  _ => const <Fetch>[],
 };
 
 /// One track per row of an album page.
-Sequence<Track> _tracks(Reply res) {
+Iterable<Track> _tracks(Reply res) {
   final by = res.fetch.meta.read(artist) ?? '';
   final on =
       res.fetch.meta.read(album) ??

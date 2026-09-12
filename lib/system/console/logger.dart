@@ -85,15 +85,15 @@ class ConsoleLogger {
 
   /// Reports progress or context.
   void info(String message) =>
-      _out(LogLevel.info, 'info', 'ℹ'.brightblue(), message);
+      _out(LogLevel.info, 'info', 'ℹ'.brightBlue(), message);
 
   /// Reports success.
   void ok(String message) =>
-      _out(LogLevel.info, 'ok', '✔'.brightgreen(), message);
+      _out(LogLevel.info, 'ok', '✔'.brightGreen(), message);
 
   /// Reports a recoverable problem.
   void warn(String message) =>
-      _out(LogLevel.warn, 'warn', '⚠'.brightyellow(), message);
+      _out(LogLevel.warn, 'warn', '⚠'.brightYellow(), message);
 
   /// Reports a numbered step, e.g. `[2/5] Fetching`.
   void step(int step, int total, String message) => _out(
@@ -120,7 +120,7 @@ class ConsoleLogger {
       );
       return;
     }
-    writer.errorln('${_prefix()}${'✖'.brightred()} $message');
+    writer.errorln('${_prefix()}${'✖'.brightRed()} $message');
     if (exception != null) writer.errorln('  ${exception.toString().red()}');
     if (stack != null) writer.errorln(stack.toString().dim());
   }

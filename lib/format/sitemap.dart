@@ -17,7 +17,7 @@
 ///         ))
 ///     .depth(8)
 ///     .flow
-///     .transform(.map((r) => r.url))
+///     .through(.map((r) => r.url))
 ///     .collect(.list());
 /// ```
 ///
@@ -26,7 +26,6 @@
 /// that points back at itself.
 library;
 
-import '../collection/sequence.dart';
 import '../src/codec.dart';
 import 'format.dart';
 
@@ -45,17 +44,17 @@ final RegExp _loc = RegExp(
 /// text alike, because all three are what a `Sitemap:` line points at and
 /// which one arrived is not the caller's question.
 class SitemapAccessor
-    with FileCodec<Sequence<Uri>, Sequence<Uri>>
-    implements Codec<Sequence<Uri>> {
+    with FileCodec<List<Uri>, Iterable<Uri>>
+    implements Codec<List<Uri>> {
   /// Creates the accessor. Prefer the shared `format.sitemap` instance.
   const SitemapAccessor();
 
   /// Parses [text] into the URLs it names.
   ///
-  /// Text that names none is the empty sequence rather than a throw — the
+  /// Text that names none is the empty list rather than a throw — the
   /// contract every reader in this library keeps.
   @override
-  Sequence<Uri> parse(String text) {
+  List<Uri> parse(String text) {
     final matches = _loc.allMatches(text);
     final uris = <Uri>[];
     if (matches.isNotEmpty) {
@@ -65,7 +64,7 @@ class SitemapAccessor
         final uri = Uri.tryParse(raw.trim());
         if (uri != null && uri.hasScheme) uris.add(uri);
       }
-      return Sequence(List<Uri>.unmodifiable(uris));
+      return List<Uri>.unmodifiable(uris);
     }
 
     // A plain-text sitemap: one URL per line.
@@ -77,7 +76,7 @@ class SitemapAccessor
         uris.add(uri);
       }
     }
-    return Sequence(List<Uri>.unmodifiable(uris));
+    return List<Uri>.unmodifiable(uris);
   }
 
   /// Whether [text] is a sitemap *index* rather than a leaf sitemap.
@@ -88,17 +87,12 @@ class SitemapAccessor
   bool nested(String text) => text.contains('<sitemapindex');
 
   /// Renders [value] as a `<urlset>` document.
-  ///
-  /// The same [Sequence] [parse] hands back, so a sitemap read, filtered and
-  /// written again is three calls and no conversion between them. It took an
-  /// `Iterable` through 6.2.0, which made a codec's own round trip the one
-  /// thing it could not do.
   @override
-  String format(Sequence<Uri> value) {
+  String format(Iterable<Uri> value) {
     final out = StringBuffer()
       ..writeln('<?xml version="1.0" encoding="UTF-8"?>')
       ..writeln('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">');
-    for (final url in value.transform(.cast<Uri>()).collect(.list())) {
+    for (final url in value) {
       out.writeln('  <url><loc>$url</loc></url>');
     }
     out.writeln('</urlset>');

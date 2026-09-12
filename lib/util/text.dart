@@ -8,8 +8,6 @@ library;
 
 import 'dart:convert' as convert;
 
-import '../collection/sequence.dart';
-
 // ============================================================================
 // TEXT (util.text.*)
 // ============================================================================
@@ -243,9 +241,11 @@ class TextAccessor {
   }
 
   /// Every number in [text], in order, read the same way as [number].
-  Sequence<num> numbers(String text) => Sequence(
-    _digits.allMatches(text).map((match) => _read(match.group(0)!)).whereType(),
-  );
+  List<num> numbers(String text) => _digits
+      .allMatches(text)
+      .map((match) => _read(match.group(0)!))
+      .whereType<num>()
+      .toList();
 
   /// One matched token as a number, applying the parenthesised negative.
   static num? _read(String token) {
@@ -280,8 +280,8 @@ class TextAccessor {
       text.isEmpty ? text : text[0].toUpperCase() + text.substring(1);
 
   /// The words in [text].
-  Sequence<String> words(String text) =>
-      _wordish.allMatches(text).map((m) => m.group(0)!).seq;
+  List<String> words(String text) =>
+      _wordish.allMatches(text).map((m) => m.group(0)!).toList();
 
   /// Whether [text] holds nothing but whitespace, or is empty.
   bool blank(String text) => text.trim().isEmpty;
@@ -322,7 +322,7 @@ class TextAccessor {
   /// ```dart
   /// util.text.betweens(body, '"videoId":"', '"').collect(.first());
   /// ```
-  Sequence<String> betweens(String text, String start, String end) {
+  List<String> betweens(String text, String start, String end) {
     final results = <String>[];
     var cursor = 0;
     while (true) {
@@ -334,6 +334,6 @@ class TextAccessor {
       results.add(text.substring(head, to));
       cursor = to + end.length;
     }
-    return Sequence(results);
+    return results;
   }
 }

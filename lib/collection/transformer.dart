@@ -12,7 +12,6 @@
 library;
 
 import 'collector.dart';
-import 'sequence.dart';
 
 // ============================================================================
 // TRANSFORMERS (Transformer<A, B>)
@@ -94,10 +93,10 @@ import 'sequence.dart';
 /// rather than a second spelling:
 ///
 /// ```dart
-/// // setup: bool live(Row r) => r.live; final flow = Flow<Row>.empty();
+/// // setup: bool live(Row r) => r.live; final flow = Stream<Row>.empty();
 /// final cleanup = Transformer.where<Row>(live);
-/// rows.transform(cleanup);              // Sequence<Row>
-/// flow.transform(Pipe.of(cleanup));     // Flow<Row>
+/// rows.transform(cleanup);              // Iterable<Row>
+/// flow.through(Pipe.of(cleanup));       // Stream<Row>
 /// ```
 ///
 /// [Pipe.of] buffers nothing for a filter or a map, and holds the whole
@@ -184,6 +183,11 @@ class Transformer<A, B> {
   /// over time. A sequence of futures is `concurrent.run`.
   static const map = _Map();
 
+  /// Each element replaced by [each] of it, dropping nulls.
+  static Transformer<A, B> mapNotNull<A, B extends Object>(
+          B? Function(A item) each) =>
+      map.nonnull(each);
+
   /// The elements [test] accepts — Kotlin's `filter`, Dart's word.
   ///
   /// Callable, and a namespace: `where.type<R>()` keeps only the elements that
@@ -199,6 +203,9 @@ class Transformer<A, B> {
   /// name.
   static const where = _Where();
 
+  /// Only the elements that are an [R] — Kotlin's `filterIsInstance`.
+  static Transformer<Never, R> whereType<R>() => where.type<R>();
+
   /// Flattens, or expands each element into many.
   ///
   /// `flat()` concatenates elements that are themselves sequences — Kotlin's
@@ -206,9 +213,9 @@ class Transformer<A, B> {
   /// first, which is `flatMap` split at the capital.
   ///
   /// ```dart
-  /// // setup: final groups = Sequence([Sequence(const <Row>[])]);
+  /// // setup: final Iterable<Iterable<Row>> groups = const [<Row>[]];
   /// groups.transform(.flat());
-  /// rows.transform(.flat.map((r) => [r, r].seq));
+  /// rows.transform(.flat.map((r) => [r, r]));
   /// ```
   ///
   /// `flat()` is a `Transformer<Sequence<B>, B>`, so the analyzer checks the
@@ -222,6 +229,11 @@ class Transformer<A, B> {
   /// `map` away: `transform(.map((l) => l.seq)).transform(.flat())`.
   static const flat = _Flat();
 
+  /// Each element expanded into many by [each], and concatenated.
+  static Transformer<A, B> flatMap<A, B>(
+          Iterable<B> Function(A item) each) =>
+      flat.map(each);
+
   /// The elements with duplicates removed, keeping the first of each.
   ///
   /// `unique()` compares the elements themselves and `unique.by(key)` compares
@@ -232,6 +244,10 @@ class Transformer<A, B> {
   /// rows.transform(.unique.by((r) => r.sku));
   /// ```
   static const unique = _Unique();
+
+  /// The elements, keeping the first of each distinct [key].
+  static Transformer<A, A> uniqueBy<A, K>(K Function(A item) key) =>
+      unique.by(key);
 
   /// The leading or trailing elements, by count or by test.
   ///
@@ -251,12 +267,26 @@ class Transformer<A, B> {
   /// *is* rather than a change of container.
   static const take = _Take();
 
+  /// The leading elements [test] accepts, stopping at the first it does not.
+  static Transformer<A, A> takeWhile<A>(bool Function(A item) test) =>
+      take.when(test);
+
+  /// The trailing [n] elements, or all of them when there are fewer.
+  static Transformer<A, A> takeLast<A>(int n) => take.last(n);
+
   /// Everything but some elements, by count or by test.
   ///
   /// `skip.first(n)`, `skip.when(test)` and `skip.last(n)` — the exact
   /// opposites of [take], and they read as opposites, which `head`/`skip` and
   /// `tail`/`trim` never did.
   static const skip = _Skip();
+
+  /// Everything from the first element [test] rejects onwards.
+  static Transformer<A, A> skipWhile<A>(bool Function(A item) test) =>
+      skip.when(test);
+
+  /// Everything but the trailing [n] elements.
+  static Transformer<A, A> skipLast<A>(int n) => skip.last(n);
 
   /// The elements in ascending order.
   ///
@@ -350,29 +380,28 @@ class Transformer<A, B> {
   /// through 5.4.0, which is a chunking of no rows into no batches and is
   /// nobody's intention — `chunk(n)` with an `n` that came out zero is an
   /// arithmetic bug upstream, and silence let it reach the output.
-  static Transformer<A, Sequence<A>> chunk<A>(int size) {
+  static Transformer<A, List<A>> chunk<A>(int size) {
     _positive(size);
     return Transformer((items) => _chunked(items, size));
   }
 
-  static Iterable<Sequence<A>> _chunked<A>(Iterable<A> items, int size) sync* {
+  static Iterable<List<A>> _chunked<A>(Iterable<A> items, int size) sync* {
     var batch = <A>[];
     for (final item in items) {
       batch.add(item);
       if (batch.length == size) {
-        yield Sequence(batch);
+        yield batch;
         batch = <A>[];
       }
     }
-    if (batch.isNotEmpty) yield Sequence(batch);
+    if (batch.isNotEmpty) yield batch;
   }
 
   /// The elements paired elementwise with [other], stopping at the shorter.
   ///
-  /// A record, not a `Pair` type. [other] is read on every walk, which is
-  /// what keeps the chain lazy — see [Sequence]'s note on walking twice.
-  static Transformer<A, (A, R)> zip<A, R>(Sequence<R> other) =>
-      Transformer((items) => _zipped(items, other.collect(.list())));
+  /// A record, not a `Pair` type.
+  static Transformer<A, (A, R)> zip<A, R>(Iterable<R> other) =>
+      Transformer((items) => _zipped(items, other));
 
   static Iterable<(A, R)> _zipped<A, R>(
     Iterable<A> items,
@@ -386,12 +415,12 @@ class Transformer<A, B> {
   }
 
   /// The elements followed by [other]'s.
-  static Transformer<A, A> plus<A>(Sequence<A> other) =>
-      Transformer((items) => items.followedBy(other.collect(.list())));
+  static Transformer<A, A> plus<A>(Iterable<A> other) =>
+      Transformer((items) => items.followedBy(other));
 
   /// The elements [other] does not hold.
-  static Transformer<A, A> minus<A>(Sequence<A> other) =>
-      Transformer((items) => _without(items, other.collect(.set())));
+  static Transformer<A, A> minus<A>(Iterable<A> other) =>
+      Transformer((items) => _without(items, other.toSet()));
 
   static Iterable<A> _without<A>(Iterable<A> items, Set<A> drop) sync* {
     for (final item in items) {
@@ -402,8 +431,8 @@ class Transformer<A, B> {
   /// The elements [other] also holds, duplicates removed.
   ///
   /// `intersect` is not a word people reach for; `common` is.
-  static Transformer<A, A> common<A>(Sequence<A> other) =>
-      Transformer((items) => _shared(items, other.collect(.set())));
+  static Transformer<A, A> common<A>(Iterable<A> other) =>
+      Transformer((items) => _shared(items, other.toSet()));
 
   static Iterable<A> _shared<A>(Iterable<A> items, Set<A> keep) sync* {
     final seen = <A>{};
@@ -413,20 +442,16 @@ class Transformer<A, B> {
   }
 
   /// The elements, or [fallback]'s when there are none — Kotlin's `ifEmpty`.
-  ///
-  /// ```dart
-  /// titles.transform(.or(Sequence(const ['none'])));
-  /// ```
-  static Transformer<A, A> or<A>(Sequence<A> fallback) =>
+  static Transformer<A, A> or<A>(Iterable<A> fallback) =>
       Transformer((items) => _orelse(items, fallback));
 
-  static Iterable<A> _orelse<A>(Iterable<A> items, Sequence<A> fallback) sync* {
+  static Iterable<A> _orelse<A>(Iterable<A> items, Iterable<A> fallback) sync* {
     var any = false;
     for (final item in items) {
       any = true;
       yield item;
     }
-    if (!any) yield* fallback.collect(.list());
+    if (!any) yield* fallback;
   }
 
   /// The elements as [R]s, throwing on one that is not.
@@ -517,15 +542,15 @@ class _Where {
 class _Flat {
   const _Flat();
 
-  /// The elements concatenated, each of them a [Sequence].
+  /// The elements concatenated, each of them an [Iterable].
   ///
   /// [B] infers from the receiver, so `.flat()` is the whole call.
-  Transformer<Sequence<B>, B> call<B>() =>
-      Transformer((items) => items.expand((item) => item.collect(.list())));
+  Transformer<Iterable<B>, B> call<B>() =>
+      Transformer((items) => items.expand((item) => item));
 
   /// Each element expanded into many by [each], and the lot concatenated.
-  Transformer<A, B> map<A, B>(Sequence<B> Function(A item) each) => Transformer(
-    (items) => items.expand((item) => each(item).collect(.list())),
+  Transformer<A, B> map<A, B>(Iterable<B> Function(A item) each) => Transformer(
+    (items) => items.expand(each),
   );
 }
 

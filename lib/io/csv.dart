@@ -43,8 +43,6 @@ import 'dart:io';
 
 import '../src/csvtext.dart';
 import '../src/fs.dart';
-import '../collection/flow.dart';
-import '../collection/sequence.dart';
 import 'entry.dart';
 
 // ============================================================================
@@ -72,11 +70,11 @@ class CsvFileAccessor {
   /// Where `format.csv.read` reads the whole file, this yields a row at a
   /// time, so a file larger than memory can still be walked. Yields nothing
   /// when the file does not exist.
-  Sequence<List<String>> rows(
+  Iterable<List<String>> rows(
     String path, {
     String delimiter = ',',
     Encoding encoding = utf8,
-  }) => Sequence(_rows(path, delimiter: delimiter, encoding: encoding));
+  }) => _rows(path, delimiter: delimiter, encoding: encoding);
 
   Iterable<List<String>> _rows(
     String path, {
@@ -106,11 +104,11 @@ class CsvFileAccessor {
   /// Where `format.csv.read(path)` then `.maps` reads the whole file, this
   /// yields a record at a time. Blank lines are skipped and short rows are
   /// padded with empty strings.
-  Sequence<Map<String, String>> records(
+  Iterable<Map<String, String>> records(
     String path, {
     String delimiter = ',',
     Encoding encoding = utf8,
-  }) => Sequence(_records(path, delimiter: delimiter, encoding: encoding));
+  }) => _records(path, delimiter: delimiter, encoding: encoding);
 
   Iterable<Map<String, String>> _records(
     String path, {
@@ -137,7 +135,7 @@ class CsvFileAccessor {
   /// at the call — every cell is rendered by its `toString` either way.
   FileSystemEntry write<V>(
     String path,
-    Sequence<Map<String, V>> rows, {
+    Iterable<Map<String, V>> rows, {
     List<String>? headers,
     String delimiter = ',',
     String newline = '\n',
@@ -146,7 +144,7 @@ class CsvFileAccessor {
     Fs.writeSync(
       path,
       CsvText.records(
-        rows.collect(.list()),
+        rows.toList(),
         headers: headers,
         delimiter: delimiter,
         newline: newline,
@@ -165,11 +163,11 @@ class CsvFileAsyncAccessor {
   const CsvFileAsyncAccessor();
 
   /// Reads [path] as raw rows of cells. See [CsvFileAccessor.rows].
-  Flow<List<String>> rows(
+  Stream<List<String>> rows(
     String path, {
     String delimiter = ',',
     Encoding encoding = utf8,
-  }) => Flow.of(() => _rows(path, delimiter: delimiter, encoding: encoding));
+  }) => _rows(path, delimiter: delimiter, encoding: encoding);
 
   Stream<List<String>> _rows(
     String path, {
@@ -196,11 +194,11 @@ class CsvFileAsyncAccessor {
 
   /// Reads [path] as records keyed by the header line.
   /// See [CsvFileAccessor.records].
-  Flow<Map<String, String>> records(
+  Stream<Map<String, String>> records(
     String path, {
     String delimiter = ',',
     Encoding encoding = utf8,
-  }) => Flow.of(() => _records(path, delimiter: delimiter, encoding: encoding));
+  }) => _records(path, delimiter: delimiter, encoding: encoding);
 
   Stream<Map<String, String>> _records(
     String path, {
@@ -231,7 +229,7 @@ class CsvFileAsyncAccessor {
   /// ```dart
   /// await io.async.csv.write(
   ///   'products.csv',
-  ///   net.crawl([Fetch(seed)].seq).flow.transform(
+  ///   net.crawl([Fetch(seed)].seq).flow.through(
   ///     .map((res) => <String, Object?>{'name': res.url.path}),
   ///   ),
   ///   headers: ['name', 'price', 'url'],
@@ -252,7 +250,7 @@ class CsvFileAsyncAccessor {
   /// implementation, for the operation [CsvFileAccessor.write] already was.
   Future<FileSystemEntry> write<V>(
     String path,
-    Flow<Map<String, V>> rows, {
+    Stream<Map<String, V>> rows, {
     List<String>? headers,
     String delimiter = ',',
     String newline = '\n',
@@ -277,7 +275,7 @@ class CsvFileAsyncAccessor {
       }
 
       try {
-        await for (final row in rows.stream) {
+        await for (final row in rows) {
           columns ??= row.keys.toList();
           header();
           line([for (final key in columns) row[key]?.toString() ?? '']);

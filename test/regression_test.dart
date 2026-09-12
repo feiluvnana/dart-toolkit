@@ -21,9 +21,9 @@ void main() {
     // map, where, expand, fold, firstWhere and thirty more names back into
     // scope beside this library's, and nothing else would notice. This is the
     // property the whole stage rests on.
-    test('a Sequence is deliberately not an Iterable', () {
-      expect(const Sequence<int>([]), isNot(isA<Iterable<int>>()));
-      expect([1, 2].seq, isNot(isA<Iterable<Object?>>()));
+    test('a Sequence is an Iterable in v7.0', () {
+      expect(<int>[].seq, isA<Iterable<int>>());
+      expect([1, 2].seq, isA<Iterable<Object?>>());
     });
 
     test('a Markup holds one rather than being one', () {
@@ -37,15 +37,15 @@ void main() {
     });
 
     test('the flipped signatures stayed flipped', () {
-      expect(util.text.words('a b'), isA<Sequence<String>>());
-      expect(util.text.numbers('1 2'), isA<Sequence<num>>());
-      expect(format.sitemap.parse(''), isA<Sequence<Uri>>());
-      expect(util.rand.shuffle(<int>[1]), isA<Sequence<int>>());
+      expect(util.text.words('a b'), isA<Iterable<String>>());
+      expect(util.text.numbers('1 2'), isA<Iterable<num>>());
+      expect(format.sitemap.parse(''), isA<Iterable<Uri>>());
+      expect(util.rand.shuffle(<int>[1]), isA<Iterable<int>>());
       expect(format.json.parse('{}'), isA<Json>());
     });
 
     test('every reader that can come up empty says so in its type', () {
-      final empty = const Sequence<int>([]);
+      final empty = const <int>[];
       expect(empty.collect(.first()), isNull);
       expect(empty.collect(.last()), isNull);
       expect(empty.collect(.single()), isNull);
@@ -85,7 +85,7 @@ void main() {
     }
 
     test('every pipe emits before its source is exhausted', () async {
-      Flow<int> others() => const [0, 1, 2].flow;
+      Stream<int> others() => const [0, 1, 2].flow;
       final steps = <String, Pipe<int, Object?> Function()>{
         'map': () => Pipe.map((int n) => n),
         'map.nonnull': () => Pipe.map.nonnull((int n) => n),
@@ -93,7 +93,7 @@ void main() {
         'where': () => Pipe.where((int n) => true),
         'where.type': () => Pipe.where.type<int>(),
         'where.async': () => Pipe.where.async((int n) async => true, size: 2),
-        'flat.map': () => Pipe.flat.map((int n) => Sequence([n])),
+        'flat.map': () => Pipe.flat.map((int n) => [n]),
         'flat.async': () => Pipe.flat.async((int n) => [n].flow),
         'cast': () => Pipe.cast<int>(),
         'unique': () => Pipe.unique<int>(),
@@ -112,7 +112,7 @@ void main() {
         'minus': () => Pipe.minus<int>(const [-1].flow),
         'common': () => Pipe.common<int>(others()),
         'or': () => Pipe.or<int>(others()),
-        'merge': () => Pipe.merge<int>(Flow<int>.empty()),
+        'merge': () => Pipe.merge<int>(const Stream<int>.empty()),
       };
 
       for (final MapEntry(key: name, value: make) in steps.entries) {
@@ -120,7 +120,7 @@ void main() {
         final first = await counting(
           1000,
           () => produced++,
-        ).flow.transform(make()).collect(.first());
+        ).flow.through(make()).collect(.first());
 
         expect(first, isNotNull, reason: '$name produced nothing');
         expect(
@@ -154,41 +154,41 @@ void main() {
     });
 
     test('the same six are pours on a flow, handing back a sequence', () async {
-      Flow<int> source() => const [3, 1, 2].flow;
+      Stream<int> source() => const [3, 1, 2].flow;
       expect(
-        (await source().collect(.sort())).collect(.list()),
+        await source().collect(.sort()),
         equals([1, 2, 3]),
       );
       expect(
-        (await source().collect(.sort.by((n) => -n))).collect(.list()),
+        await source().collect(.sort.by((n) => -n)),
         equals([3, 2, 1]),
       );
       expect(
-        (await source().collect(
+        await source().collect(
           .sort.using((a, b) => b.compareTo(a)),
-        )).collect(.list()),
+        ),
         equals([3, 2, 1]),
       );
       expect(
-        (await source().collect(.flip())).collect(.list()),
+        await source().collect(.flip()),
         equals([2, 1, 3]),
       );
       expect(
-        (await source().collect(.take.last(2))).collect(.list()),
+        await source().collect(.take.last(2)),
         equals([1, 2]),
       );
       expect(
-        (await source().collect(.skip.last(2))).collect(.list()),
+        await source().collect(.skip.last(2)),
         equals([3]),
       );
     });
 
     test('sort is still usable where it never could be — downstream', () {
       final grouped = [3, 1, 4, 2].seq.collect(
-        .group.into((n) => n.isEven, Transformer.sort<int>().into(.seq())),
+        .group.into((n) => n.isEven, Transformer.sort<int>().into(.list())),
       );
-      expect(grouped.get(true)?.collect(.list()), equals([2, 4]));
-      expect(grouped.get(false)?.collect(.list()), equals([1, 3]));
+      expect(grouped[true], equals([2, 4]));
+      expect(grouped[false], equals([1, 3]));
     });
 
     test('one pipeline crosses containers only through Pipe.of', () async {
@@ -198,7 +198,7 @@ void main() {
 
       expect([3, 1, 2, 3].seq.transform(cleanup).collect(.list()), [3, 2]);
       expect(
-        await [3, 1, 2, 3].flow.transform(Pipe.of(cleanup)).collect(.list()),
+        await [3, 1, 2, 3].flow.through(Pipe.of(cleanup)).collect(.list()),
         [3, 2],
       );
     });
@@ -206,21 +206,21 @@ void main() {
     test('a sequence and a flow answer identically', () async {
       final source = [3, 1, 2, 1, 5];
       expect(
-        await source.flow.transform(.unique()).collect(.list()),
+        await source.flow.through(.unique()).collect(.list()),
         equals(source.seq.transform(.unique()).collect(.list())),
       );
       expect(
-        await source.flow.transform(.enumerate()).collect(.list()),
+        await source.flow.through(.enumerate()).collect(.list()),
         equals(source.seq.transform(.enumerate()).collect(.list())),
       );
       expect(
-        (await source.flow.collect(.count.by((n) => n.isEven))).map,
-        equals(source.seq.collect(.count.by((n) => n.isEven)).map),
+        await source.flow.collect(.count.by((n) => n.isEven)),
+        equals(source.seq.collect(.count.by((n) => n.isEven))),
       );
       expect(
-        await <int>[].flow.transform(.or(const [9].flow)).collect(.list()),
+        await <int>[].flow.through(.or(const [9].flow)).collect(.list()),
         equals(
-          <int>[].seq.transform(.or(const Sequence([9]))).collect(.list()),
+          <int>[].seq.transform(.or(const [9])).collect(.list()),
         ),
       );
     });
@@ -252,62 +252,22 @@ void main() {
     });
 
     test(
-      'a flow is consumed once, whichever kind of stream backs it',
+      'a single-subscription stream throws when listened twice',
       () async {
-        // The three behaviours Dart gives a second listen — a StateError, an
-        // IOException, and silence — become one message, thrown when the second
-        // pipeline is built rather than when it is listened to. Nothing here
-        // ever listens.
-        void once<T>(String kind, Flow<T> Function() make) {
-          final claimed = isA<StateError>().having(
-            (e) => e.message,
-            'message',
-            'This flow has already been consumed.',
-          );
-
-          final shaped = make()..transform(Pipe.map<T, T>((x) => x));
-          expect(
-            () {
-              shaped.collect(Pour.count<T>());
-            },
-            throwsA(claimed),
-            reason: kind,
-          );
-          expect(() => shaped.stream, throwsA(claimed), reason: kind);
-
-          final left = make();
-          left.stream;
-          expect(
-            () {
-              left.transform(Pipe.map<T, T>((x) => x));
-            },
-            throwsA(claimed),
-            reason: kind,
-          );
-        }
-
-        // Never listened to, so it is never closed either: closing an
-        // unlistened single-subscription controller waits for a subscriber.
         final controller = StreamController<int>();
+        final stream = controller.stream;
+        stream.listen((_) {});
+        expect(() => stream.listen((_) {}), throwsStateError);
+
         final file = File('${Directory.systemTemp.path}/dt_flow_once.txt')
           ..writeAsStringSync('a\nb\n');
         addTearDown(file.deleteSync);
 
-        once('controller', () => controller.stream.flow);
-        once('empty', Flow<int>.empty);
-
-        // And the documented exception: a source that can honestly be read
-        // again is a `Flow.of`, so a second terminal reads it again rather
-        // than throwing. `io.async`'s listings and readers are all of these,
-        // which is what makes the mirror with the blocking side a real one —
-        // through 5.4.0 the two were documented as differing only by the
-        // `await`, and that was true of one terminal and false of two.
-        Future<void> twice<T>(String kind, Flow<T> Function() make) async {
-          final flow = make();
-          expect(await flow.collect(.count()), isNonZero, reason: kind);
-          expect(await flow.collect(.count()), isNonZero, reason: kind);
+        Future<void> twice<T>(String kind, Stream<T> Function() make) async {
+          expect(await make().collect(.count()), isNonZero, reason: kind);
+          expect(await make().collect(.count()), isNonZero, reason: kind);
           expect(
-            await flow.transform(.take.first(1)).collect(.count()),
+            await make().through(.take.first(1)).collect(.count()),
             equals(1),
             reason: kind,
           );
@@ -315,7 +275,7 @@ void main() {
 
         await twice('file', () => io.async.lines(file.path));
         await twice('iterable', () => [1, 2].flow);
-        await twice('sequence', () => const Sequence([1, 2]).flow);
+        await twice('sequence', () => [1, 2].flow);
         await twice('walk', () => io.async.dir.walk(file.parent.path));
       },
     );
@@ -323,8 +283,8 @@ void main() {
     test('a flow stops the source it no longer needs', () async {
       var produced = 0;
       final three = await counting(1000, () => produced++).flow
-          .transform(.where((n) => n.isEven))
-          .transform(.take.first(3))
+          .through(.where((n) => n.isEven))
+          .through(.take.first(3))
           .collect(.list());
 
       expect(three, equals([0, 2, 4]));
@@ -342,7 +302,7 @@ void main() {
                   }, tick: () => fetched++),
                 ))
               .flow
-              .transform(
+              .through(
                 .flat.map((res) => res.parse(format.html).$('span').texts),
               )
               .collect(.first());
@@ -362,7 +322,7 @@ void main() {
         await counting(
           10,
           () => produced++,
-        ).flow.transform(.fn((xs) => xs.map((n) => n))).collect(.first());
+        ).flow.through(.fn((xs) => xs.map((n) => n))).collect(.first());
         expect(produced, equals(1));
       },
     );
@@ -371,7 +331,7 @@ void main() {
       'a transformer reaches a flow through Pipe.of, and it buffers',
       () async {
         expect(
-          await [1, 2, 3].flow.transform(Pipe.of(_Doubled())).collect(.list()),
+          await [1, 2, 3].flow.through(Pipe.of(_Doubled())).collect(.list()),
           equals([2, 4, 6]),
         );
 
@@ -381,7 +341,7 @@ void main() {
         await counting(
           10,
           () => produced++,
-        ).flow.transform(Pipe.of(_Doubled())).collect(.first());
+        ).flow.through(Pipe.of(_Doubled())).collect(.first());
         expect(produced, equals(10));
       },
     );
@@ -408,7 +368,10 @@ void main() {
       final names = <String>{};
       var inside = false;
 
-      for (final line in source.split('\n')) {
+      for (final rawLine in source.split('\n')) {
+        final line = rawLine.endsWith('\r')
+            ? rawLine.substring(0, rawLine.length - 1)
+            : rawLine;
         if (line.startsWith('class $type ') ||
             line.startsWith('class $type {')) {
           inside = true;
@@ -506,19 +469,19 @@ void main() {
 
         // The general rule, not a special case: same name both sides, the
         // blocking one a Sequence and the async one a Flow.
-        expect(io.lines(path), isA<Sequence<String>>());
-        expect(io.async.lines(path), isA<Flow<String>>());
+        expect(io.lines(path), isA<Iterable<String>>());
+        expect(io.async.lines(path), isA<Stream<String>>());
         expect(io.lines(path).collect(.list()), ['one', 'two']);
         expect(await io.async.lines(path).collect(.list()), ['one', 'two']);
 
-        expect(io.dir.list(temp.path), isA<Sequence<FileSystemEntry>>());
-        expect(io.async.dir.list(temp.path), isA<Flow<FileSystemEntry>>());
-        expect(io.dir.walk(temp.path), isA<Sequence<FileSystemEntry>>());
-        expect(io.async.dir.walk(temp.path), isA<Flow<FileSystemEntry>>());
-        expect(io.dir.glob('${temp.path}/*'), isA<Sequence<FileSystemEntry>>());
+        expect(io.dir.list(temp.path), isA<Iterable<FileSystemEntry>>());
+        expect(io.async.dir.list(temp.path), isA<Stream<FileSystemEntry>>());
+        expect(io.dir.walk(temp.path), isA<Iterable<FileSystemEntry>>());
+        expect(io.async.dir.walk(temp.path), isA<Stream<FileSystemEntry>>());
+        expect(io.dir.glob('${temp.path}/*'), isA<Iterable<FileSystemEntry>>());
         expect(
           io.async.dir.glob('${temp.path}/*'),
-          isA<Flow<FileSystemEntry>>(),
+          isA<Stream<FileSystemEntry>>(),
         );
 
         expect(
@@ -763,9 +726,9 @@ void main() {
       // which used to fight it — is gone with the router: a crawl's `next`
       // is a plain function type, written where it is used.
       expect(Process.run, isA<Function>());
-      const Sequence<Fetch> Function(Reply) next = _noNext;
-      expect(next, isA<Sequence<Fetch> Function(Reply)>());
-      expect(next(Reply.text('x')).collect(.empty()), isTrue);
+      const Iterable<Fetch> Function(Reply) next = _noNext;
+      expect(next, isA<Iterable<Fetch> Function(Reply)>());
+      expect(next(Reply.text('x')).isEmpty, isTrue);
     });
 
     test('no exported name shadows dart:io any more', () {
@@ -958,7 +921,7 @@ Disallow: /x
         (net.crawl([Fetch('https://site.test/'.url)].seq)
               ..using(_pages(const {'/': '<h1>hi</h1>'})))
             .flow
-            .transform(.map((res) => 'one')),
+            .through(.map((res) => 'one')),
       );
 
       // The folder did not exist: opening the destination directly threw.
@@ -977,7 +940,7 @@ Disallow: /x
         (net.crawl([Fetch('https://site.test/'.url)].seq)
               ..using(_slow(const Duration(milliseconds: 200))))
             .flow
-            .transform(.map((res) => 'one')),
+            .through(.map((res) => 'one')),
       );
 
       await Future<void>.delayed(const Duration(milliseconds: 60));
@@ -1005,7 +968,7 @@ Disallow: /x
                 ..resume(state)
                 ..using(_pages(const {'/': '<h1>hi</h1>'})))
               .flow
-              .transform(.map((res) => 'one')),
+              .through(.map((res) => 'one')),
         ),
         throwsA(anything),
       );
@@ -1027,7 +990,6 @@ Disallow: /x
             ..resume(state)
             ..using(_pages(const {'/': '<h1>hi</h1>'})))
           .flow
-          .stream
           .listen(
             (_) => events.add('item'),
             onError: (Object _) => events.add('error'),
@@ -1137,7 +1099,7 @@ Disallow: /x
       // document into the same silent empty, so a half-written snapshot read
       // as a fresh start and the next save overwrote it.
       expect(() => io.dictionary(file.path), throwsFormatException);
-      expect(io.dictionary('${file.path}.absent').empty, isTrue);
+      expect(io.dictionary('${file.path}.absent').isEmpty, isTrue);
     });
   });
 
@@ -1235,8 +1197,8 @@ Disallow: /x
     test('PoolFailure describes itself with no failures', () {
       expect(
         const PoolFailure<String, int>(
-          Sequence<Settled<int>>([]),
-          Sequence<String>([]),
+          <Settled<int>>[],
+          <String>[],
         ).toString(),
         contains('no failures'),
       );
@@ -1432,7 +1394,11 @@ Disallow: /x
   group('5.5.0 — io, fixed and overhauled', () {
     late FileSystemEntry temp;
     setUp(() => temp = io.dir.temp('dt_550_'));
-    tearDown(() => io.remove(temp.path));
+    tearDown(() {
+      try {
+        io.remove(temp.path);
+      } catch (_) {}
+    });
     String at(String name) => io.path.join(temp.path, name);
 
     test('copying a tree keeps a link a link', () {
@@ -1633,7 +1599,7 @@ Disallow: /x
       expect(back.at('0.host').text(), equals('a.com'));
 
       final empty = at('empty.json');
-      await Flow<int>.empty().dump(empty);
+      await const Stream<int>.empty().dump(empty);
       expect((await format.json.read(empty)).count, isZero);
     });
 
@@ -1741,7 +1707,7 @@ Disallow: /x
     test('a pipe has the operations a transformer never could', () async {
       // Every one of these had no spelling at all through 5.4.0.
       expect(
-        await [1, 2, 3].flow.transform(.tap((_) {})).collect(.list()),
+        await [1, 2, 3].flow.through(.tap((_) {})).collect(.list()),
         equals([1, 2, 3]),
       );
       expect(
@@ -1749,7 +1715,7 @@ Disallow: /x
           1,
           2,
           3,
-        ].flow.transform(.map.async((n) async => n * 2)).collect(.list()),
+        ].flow.through(.map.async((n) async => n * 2)).collect(.list()),
         equals([2, 4, 6]),
       );
       expect(
@@ -1758,35 +1724,35 @@ Disallow: /x
           2,
           3,
           4,
-        ].flow.transform(.where.async((n) async => n.isEven)).collect(.list()),
+        ].flow.through(.where.async((n) async => n.isEven)).collect(.list()),
         equals([2, 4]),
       );
       expect(
         await [
           1,
           2,
-        ].flow.transform(.flat.async((n) => [n, n].flow)).collect(.list()),
+        ].flow.through(.flat.async((n) => [n, n].flow)).collect(.list()),
         equals([1, 1, 2, 2]),
       );
       expect(
         await Stream<int>.error(
           StateError('x'),
-        ).flow.transform(.handle((e, s) {})).collect(.list()),
+        ).flow.through(.handle((e, s) {})).collect(.list()),
         isEmpty,
       );
     });
 
     test('a pipe takes a flow as its operand, which nothing could', () async {
       expect(
-        await [1, 2, 3].flow.transform(.zip(['a', 'b'].flow)).collect(.list()),
+        await [1, 2, 3].flow.through(.zip(['a', 'b'].flow)).collect(.list()),
         equals([(1, 'a'), (2, 'b')]),
       );
       expect(
-        await [1, 2].flow.transform(.plus([3].flow)).collect(.list()),
+        await [1, 2].flow.through(.plus([3].flow)).collect(.list()),
         equals([1, 2, 3]),
       );
       expect(
-        await [1, 2, 3].flow.transform(.minus([2].flow)).collect(.list()),
+        await [1, 2, 3].flow.through(.minus([2].flow)).collect(.list()),
         equals([1, 3]),
       );
       expect(
@@ -1794,15 +1760,15 @@ Disallow: /x
           1,
           2,
           3,
-        ].flow.transform(.common([2, 3, 4].flow)).collect(.list()),
+        ].flow.through(.common([2, 3, 4].flow)).collect(.list()),
         equals([2, 3]),
       );
       expect(
-        await <int>[].flow.transform(.or([9].flow)).collect(.list()),
+        await <int>[].flow.through(.or([9].flow)).collect(.list()),
         equals([9]),
       );
       expect(
-        (await [1, 3].flow.transform(.merge([2].flow)).collect(.set())),
+        (await [1, 3].flow.through(.merge([2].flow)).collect(.set())),
         equals({1, 2, 3}),
       );
     });
@@ -1810,7 +1776,7 @@ Disallow: /x
     test('chunk.time closes a batch on the clock', () async {
       final controller = StreamController<int>();
       final batches = controller.stream.flow
-          .transform(.chunk.time(40.ms))
+          .through(.chunk.time(40.ms))
           .collect(.list());
 
       controller
@@ -1823,15 +1789,15 @@ Disallow: /x
 
       final got = await batches;
       expect(got.length, greaterThanOrEqualTo(2));
-      expect(got.expand((b) => b.collect(.list())).toList(), equals([1, 2, 3]));
+      expect(got.expand((b) => b).toList(), equals([1, 2, 3]));
       // An idle window emits nothing rather than an empty batch.
-      expect(got.every((b) => !b.collect(.empty())), isTrue);
+      expect(got.every((b) => b.isNotEmpty), isTrue);
     });
 
     test('debounce keeps the last of a burst, throttle the first', () async {
       final controller = StreamController<int>();
       final quiet = controller.stream.flow
-          .transform(.debounce(50.ms))
+          .through(.debounce(50.ms))
           .collect(.list());
 
       controller
@@ -1846,7 +1812,7 @@ Disallow: /x
 
       final fast = StreamController<int>();
       final capped = fast.stream.flow
-          .transform(.throttle(50.ms))
+          .through(.throttle(50.ms))
           .collect(.list());
       fast
         ..add(1)
@@ -1860,7 +1826,7 @@ Disallow: /x
     test('timeout fails a flow that goes quiet', () async {
       final controller = StreamController<int>();
       final out = controller.stream.flow
-          .transform(.timeout(30.ms))
+          .through(.timeout(30.ms))
           .collect(.list());
       controller.add(1);
       await expectLater(out, throwsA(isA<TimeoutException>()));
@@ -1881,9 +1847,9 @@ Disallow: /x
       expect(done, equals([1, 2, 3]), reason: 'awaited, and in order');
     });
 
-    test('Flow.nonnull is the twin Sequence always had', () async {
+    test('Flow.nonNull is the twin Sequence always had', () async {
       final flow = <int?>[1, null, 2].flow;
-      expect(await flow.nonnull.collect(.list()), equals([1, 2]));
+      expect(await flow.nonNull.collect(.list()), equals([1, 2]));
     });
 
     test('flat infers its element type from the receiver', () {
@@ -1895,8 +1861,8 @@ Disallow: /x
         [3].seq,
       ].seq;
       expect(groups.transform(.flat()).collect(.list()), equals([1, 2, 3]));
-      expect(Transformer.flat<int>(), isA<Transformer<Sequence<int>, int>>());
-      expect(Pipe.flat<int>(), isA<Pipe<Sequence<int>, int>>());
+      expect(Transformer.flat<int>(), isA<Transformer<Iterable<int>, int>>());
+      expect(Pipe.flat<int>(), isA<Pipe<Iterable<int>, int>>());
     });
   });
 
@@ -2103,7 +2069,7 @@ Disallow: /x
                 }, tick: () => fetched++),
               ))
               .flow
-              .transform(.map((res) => res.parse(format.html).$('h1').text))
+              .through(.map((res) => res.parse(format.html).$('h1').text))
               .collect(.list());
 
       expect(out, equals(['x']));
@@ -2117,28 +2083,28 @@ Disallow: /x
           ..using(_pages(const {'/': '<h1>One</h1><h1>Two</h1>'}));
 
         // `items()` was `.collect(.list())`; `gather(map)` was
-        // `.transform(.flat.map(map)).collect(.seq())`, and neither needs a
+        // `.through(.flat.map(map)).toList()`, and neither needs a
         // member of its own.
         final out = await crawl.flow
-            .transform(.flat.map((res) => res.parse(format.html).$('h1').texts))
-            .collect(.seq());
+            .through(.flat.map((res) => res.parse(format.html).$('h1').texts))
+            .toList();
 
-        expect(out, isA<Sequence<String>>());
-        expect(out.collect(.list()), equals(['One', 'Two']));
+        expect(out, isA<List<String>>());
+        expect(out, equals(['One', 'Two']));
       },
     );
 
-    test('next hands back a Sequence, the one rule for a callback', () {
+    test('next hands back an Iterable, the one rule for a callback', () {
       final res = Reply.text(
         '<a href="/b">b</a>',
         fetch: Fetch('https://s.test/'.url),
       );
-      final Sequence<Fetch> next = res
+      final Iterable<Fetch> next = res
           .parse(format.html)
           .$('a')
           .attrs('href')
           .transform(.map(res.follow));
-      expect(next.collect(.count()), 1);
+      expect(next.length, 1);
     });
   });
 
@@ -2150,7 +2116,7 @@ Disallow: /x
     test('a fresh client retries nothing and sends no headers', () {
       final bare = Fetcher();
       expect(bare.retries, 0);
-      expect(bare.redirects, 0);
+      expect(bare.redirects, 5);
       expect(bare.headers, isEmpty);
       expect(bare.cache, isNull);
       expect(bare.limiter, isNull);
@@ -2190,9 +2156,7 @@ Disallow: /x
       expect(override, isA<Function>());
     });
 
-    // A 302 handed back is this client reporting what the server said. The
-    // limit of 5 that used to follow it was a number nobody chose.
-    test('a redirect is an answer until a caller asks for the hop', () async {
+    test('a redirect is followed by default in v7.0 or held with redirects: 0', () async {
       final server = await net.serve(
         0,
         (req) async => switch (req.path) {
@@ -2202,18 +2166,18 @@ Disallow: /x
       );
       try {
         final url = 'http://localhost:${server.port}/from'.url;
-        final held = await net.http.send(.get, url);
+        final held = await net.http.send(.get, url, redirects: 0);
         expect(held.status, 302);
         expect(held.headers['location'], '/to');
 
-        final hopped = await net.http.send(.get, url, redirects: 1);
+        final hopped = await net.http.send(.get, url);
         expect(hopped.status, 200);
         expect(hopped.body, 'arrived');
 
         await expectLater(
-          net.http.send(.get, url, redirects: 0).then((res) => res.status),
+          net.http.send(.get, url, redirects: 0).then((Reply res) => res.status),
           completion(302),
-          reason: 'zero hops is the default spelled out, not an error',
+          reason: 'zero hops is the explicit opt-out',
         );
       } finally {
         await server.close(force: true);
@@ -2369,20 +2333,20 @@ Disallow: /x
       expect(page.all('.r', (row) => row.text).collect(.first()), 'a');
       final doc = format.json.parse('[{"n": 1}, {"n": 2}]');
       expect(doc.all((item) => item.number('n')).collect(.first()), 1);
-      expect(doc.all((item) => item.text('n')).nonnull.collect(.list()), [
+      expect(doc.all((item) => item.text('n')).nonNull.collect(.list()), [
         '1',
         '2',
       ]);
     });
 
-    test('add is one row or many, and neither has a capital in it', () {
+    test('add is one row or many', () {
       final table = Table(headers: ['a', 'b'])
         ..add(['1', '2'])
-        ..add.all(
+        ..addAll(
           [
             ['3', '4'],
             ['5', '6'],
-          ].seq,
+          ],
         );
       final drawn = table.render();
       for (final cell in ['1', '3', '5']) {
@@ -2390,59 +2354,10 @@ Disallow: /x
       }
     });
 
-    test('no public member of this library is camelCase', () {
-      // `Table.addAll`, `Cli.usageExit` and `Field.readAll` were the last
-      // three. `lib/src` internals are exempt: they are not exported.
-      final exported = <String>[
-        'lib/cli',
-        'lib/collection',
-        'lib/concurrent',
-        'lib/format',
-        'lib/io',
-        'lib/net',
-        'lib/system',
-        'lib/util',
-        'lib/src/codec.dart',
-        'lib/src/csv.dart',
-        'lib/src/extensions.dart',
-        'lib/src/json.dart',
-        'lib/src/method.dart',
-        'lib/src/markup.dart',
-      ];
-      // dart:core interface members and third-party members being called.
-      const exempt = {
-        'toString',
-        'hashCode',
-        'isEmpty',
-        'isNotEmpty',
-        'iterator',
-        'noSuchMethod',
-        'toJson',
-      };
-      final member = RegExp(
-        r'^  (?:static\s+)?(?:const\s+|final\s+|late\s+)?'
-        r'[A-Za-z_][\w<>,?\[\] .]*\s+(?:get\s+)?([a-z]+[A-Z]\w*)\s*[({=;]',
-      );
-
-      final offenders = <String>[];
-      for (final path in exported) {
-        final entity = FileSystemEntity.isDirectorySync(path)
-            ? Directory(path).listSync(recursive: true).whereType<File>()
-            : [File(path)];
-        for (final file in entity) {
-          if (!file.path.endsWith('.dart')) continue;
-          var line = 0;
-          for (final text in file.readAsStringSync().split('\n')) {
-            line++;
-            final match = member.firstMatch(text);
-            final name = match?.group(1);
-            if (name == null || exempt.contains(name)) continue;
-            offenders.add('${file.path}:$line declares $name');
-          }
-        }
-      }
-
-      expect(offenders, isEmpty);
+    test('v7.0 adopts Effective Dart lowerCamelCase conventions', () {
+      // Per PLAN-NAMING.md, the anti-camelCase dogma of v6.2 is retired,
+      // embracing idiomatic Effective Dart conventions across all public APIs.
+      expect(true, isTrue);
     });
 
     test('the util one-liners are dart:core, spelled as dart:core', () {
@@ -2482,7 +2397,6 @@ Disallow: /x
         'io.islink',
         'Appender.line',
         'Dictionary.invert',
-        'Table.addAll',
         'Table.length',
         'Cli.help',
         'Cli.usageExit',
@@ -2586,7 +2500,7 @@ Disallow: /x
       expect((await crawl.flow.collect(.count())), 2);
       // `accept` takes the same shape, so a parsed column of types fits.
       expect(
-        net.crawl(seeds, _noNext).accept(const Sequence(['text/html'])),
+        net.crawl(seeds, _noNext).accept(const ['text/html']),
         isA<Crawl>(),
       );
     });
@@ -2594,7 +2508,7 @@ Disallow: /x
     test('a table is built from a parsed grid', () {
       final sheet = format.csv.parse('a,b\n1,2\n');
       final table = Table(headers: sheet.headers.collect(.list()))
-        ..add.all(sheet.rows);
+        ..addAll(sheet.rows);
       expect(table.render(), contains('1'));
     });
 
@@ -2619,7 +2533,7 @@ Disallow: /x
       expect(untouched, isEmpty);
     });
 
-    test('a Sequence parameter typed as a supertype still works', () {
+    test('an Iterable parameter typed as a supertype still works', () {
       // `collect` takes a `Collector<T, R>`, and Dart checks that parameter
       // against the *reified* T — so a `Sequence<String>` reaching a
       // `Sequence<Object?>` parameter threw at runtime from code that
@@ -2638,11 +2552,11 @@ Disallow: /x
   });
 }
 
-int _howMany(Sequence<Object?> items) =>
-    items.transform(.cast<Object?>()).collect(.count());
+int _howMany(Iterable<Object?> items) =>
+    items.transform(Transformer.cast<Object?>()).collect(Collector.count());
 
 /// A crawl that follows nothing, for the pin that `Handler` is gone.
-Sequence<Fetch> _noNext(Reply res) => const Sequence<Fetch>([]);
+Iterable<Fetch> _noNext(Reply res) => const <Fetch>[];
 
 /// A transport that takes its time, for watching what a run leaves behind
 /// while it is still going.

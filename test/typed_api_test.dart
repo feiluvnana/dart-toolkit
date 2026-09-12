@@ -61,7 +61,7 @@ void main() {
 
   group('Slotted', () {
     test('round-trips values through their slots', () {
-      final meta = Dictionary<String, Object?>.of([
+      final meta = Maps.fromPairs<String, Object?>([
         _name('Hey Jude'),
         _track(4),
       ]);
@@ -69,7 +69,7 @@ void main() {
       expect(meta.read(_name), 'Hey Jude');
       expect(meta.read(_track), 4);
       expect(meta.holds(_name), isTrue);
-      expect(meta.count, 2);
+      expect(meta.length, 2);
 
       meta.drop(_name);
       expect(meta.read(_name), isNull);
@@ -77,27 +77,25 @@ void main() {
     });
 
     test('write goes through the slot, set does not', () {
-      final meta = Dictionary<String, Object?>();
+      final meta = <String, Object?>{};
       meta.write(_since, DateTime.utc(2026));
 
-      expect(meta.get('since'), '2026-01-01T00:00:00.000Z');
+      expect(meta['since'], '2026-01-01T00:00:00.000Z');
       expect(meta.read(_since), DateTime.utc(2026));
     });
 
     test('a slot reading a key another slot wrote gets null, not a crash', () {
-      final meta = Dictionary<String, Object?>.of([_name('Hey Jude')]);
+      final meta = Maps.fromPairs<String, Object?>([_name('Hey Jude')]);
       expect(meta.read(const Slot<int>('name')), isNull);
     });
 
     test('map is what goes to disk, and survives jsonEncode', () {
-      final meta = Dictionary<String, Object?>.of([
+      final meta = Maps.fromPairs<String, Object?>([
         _name('Hey Jude'),
         _track(4),
         _since(DateTime.utc(2026)),
       ]);
-      final restored = Dictionary<String, Object?>(
-        (jsonDecode(jsonEncode(meta.map)) as Map).cast<String, Object?>(),
-      );
+      final restored = (jsonDecode(jsonEncode(meta)) as Map).cast<String, Object?>();
 
       expect(restored.read(_name), 'Hey Jude');
       expect(restored.read(_track), 4);
@@ -105,9 +103,9 @@ void main() {
     });
 
     test('pairs spread one bag into another', () {
-      final first = Dictionary<String, Object?>.of([_name('Hey Jude')]);
-      final second = Dictionary<String, Object?>.of([
-        ...first.pairs.collect(.list()),
+      final first = Maps.fromPairs<String, Object?>([_name('Hey Jude')]);
+      final second = Maps.fromPairs<String, Object?>([
+        ...first.pairs,
         _track(4),
       ]);
 
@@ -145,7 +143,7 @@ void main() {
                         ),
                       ),
                     ),
-              _ => const Sequence<Fetch>([]),
+              _ => const <Fetch>[],
             },
           )
           .using(
@@ -153,7 +151,7 @@ void main() {
                 Reply.text(pages['${fetch.url}'] ?? '', fetch: fetch),
           )
           .flow
-          .transform(.where((res) => res.fetch.tag == 'song'))
+          .through(.where((res) => res.fetch.tag == 'song'))
           .collect(.foreach((res) => seen.add(res.fetch.meta.read(_name))));
 
       expect(seen, ['One', 'Two']);
@@ -390,15 +388,14 @@ void main() {
         fail('expected PoolFailure');
       } on PoolFailure<int, int> catch (failure) {
         // One outcome type across `run`, `settle` and `on.error`.
-        final Sequence<Settled<int>> outcomes = failure.outcomes;
-        expect(outcomes.collect(.list()).map((o) => o.value), [10, null, 30]);
+        final List<Settled<int>> outcomes = failure.outcomes;
+        expect(outcomes.map((o) => o.value), [10, null, 30]);
 
         // Which item broke is the alignment with `items`, not a field on
         // `Broke` — the caller already holds the item.
         final broken = outcomes
-            .collect(.list())
             .indexWhere((o) => o is Broke<int>);
-        expect(failure.items.collect(.list())[broken], 2);
+        expect(failure.items.toList()[broken], 2);
       }
     });
   });
@@ -419,32 +416,32 @@ void main() {
       // buried inside a closure. There is no `T` any more: the crawl produces
       // replies, and what a script does with them is its own business.
       final titles = await crawl().flow
-          .transform(.flat.map((res) => res.parse(format.html).$('h1').texts))
-          .collect(.seq());
+          .through(.flat.map((res) => res.parse(format.html).$('h1').texts))
+          .toList();
 
-      expect(titles, isA<Sequence<String>>());
-      expect(titles.collect(.list()), ['One', 'Two']);
+      expect(titles, isA<List<String>>());
+      expect(titles, ['One', 'Two']);
     });
 
     test('returning nothing for a page filters it out', () async {
       final long = await crawl().flow
-          .transform(
+          .through(
             .flat.map(
               (res) => res
                   .parse(format.html)
                   .$('h1')
                   .texts
-                  .transform(.where((t) => t.length > 3)),
+                  .where((t) => t.length > 3),
             ),
           )
-          .collect(.seq());
+          .toList();
 
-      expect(long.collect(.empty()), isTrue);
+      expect(long.isEmpty, isTrue);
     });
 
     test('a record per page reads as one expression', () async {
       final rows = await crawl().flow
-          .transform(
+          .through(
             .map(
               (res) => (
                 url: res.url.path,
@@ -452,9 +449,9 @@ void main() {
               ),
             ),
           )
-          .collect(.seq());
+          .toList();
 
-      expect(rows.collect(.single())!.titles, 2);
+      expect(rows.single.titles, 2);
     });
   });
 }

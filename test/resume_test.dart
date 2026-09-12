@@ -27,7 +27,7 @@ Send halfway(Map<String, String> pages, int after, Crawl Function() crawl) {
 Send serve(Map<String, String> pages) =>
     (fetch) async => Reply.text(pages['${fetch.url}'] ?? '', fetch: fetch);
 
-Sequence<Fetch> links(Reply res) =>
+Iterable<Fetch> links(Reply res) =>
     res.parse(format.html).$('a').attrs('href').transform(.map(res.follow));
 
 String tempPath(String name) =>
@@ -68,7 +68,7 @@ void main() {
       // rather than as Object? out of a map.
       expect(copy.meta.read(_widget), 'Widget');
       expect(copy.meta.read(_index), 3);
-      expect(copy.meta.map, {'name': 'Widget', 'index': 3});
+      expect(copy.meta, {'name': 'Widget', 'index': 3});
       expect(copy.dedupe, isFalse);
       expect(copy.depth, 2);
     });
@@ -169,7 +169,7 @@ void main() {
 
     test('restore queues pending work past the visited set that saw it', () {
       const url = 'https://example.com/a';
-      final crawl = net.crawl(const Sequence<Fetch>([]))
+      final crawl = net.crawl(const <Fetch>[])
         ..restore({
           'version': Crawl.version,
           'pending': [
@@ -185,7 +185,7 @@ void main() {
     });
 
     test('restore brings the counters back', () {
-      final crawl = net.crawl(const Sequence<Fetch>([]))
+      final crawl = net.crawl(const <Fetch>[])
         ..restore({
           'stats': {'fetched': 40, 'scheduled': 40},
         });
@@ -194,7 +194,7 @@ void main() {
 
     test('a position from a newer version is refused', () {
       expect(
-        () => net.crawl(const Sequence<Fetch>([])).restore({
+        () => net.crawl(const <Fetch>[]).restore({
           'version': Crawl.version + 1,
         }),
         throwsFormatException,
@@ -268,7 +268,7 @@ void main() {
         ..using(halfway(pages, 1, () => one));
 
       final first = await one.flow
-          .transform(.map((res) => res.url.toString()))
+          .through(.map((res) => res.url.toString()))
           .collect(.list());
       expect(first, ['https://example.com/1']);
 
@@ -277,7 +277,7 @@ void main() {
         ..using(serve(pages));
 
       final second = await two.flow
-          .transform(.map((res) => res.url.toString()))
+          .through(.map((res) => res.url.toString()))
           .collect(.list());
 
       // The seed is not fetched again, and the pages the first leg queued but

@@ -121,63 +121,64 @@ class Ansi {
 
   // Bright Foreground Colors
   /// Bright red foreground.
-  static const String brightred = '\x1B[91m';
+  static const String brightRed = '\x1B[91m';
 
   /// Bright green foreground.
-  static const String brightgreen = '\x1B[92m';
+  static const String brightGreen = '\x1B[92m';
 
   /// Bright yellow foreground.
-  static const String brightyellow = '\x1B[93m';
+  static const String brightYellow = '\x1B[93m';
 
   /// Bright blue foreground.
-  static const String brightblue = '\x1B[94m';
+  static const String brightBlue = '\x1B[94m';
 
   /// Bright magenta foreground.
-  static const String brightmagenta = '\x1B[95m';
+  static const String brightMagenta = '\x1B[95m';
 
   /// Bright cyan foreground.
-  static const String brightcyan = '\x1B[96m';
+  static const String brightCyan = '\x1B[96m';
 
   /// Bright white foreground.
-  static const String brightwhite = '\x1B[97m';
+  static const String brightWhite = '\x1B[97m';
 
   // Background Colors
   /// Black background.
-  static const String bgblack = '\x1B[40m';
+  static const String bgBlack = '\x1B[40m';
 
   /// Red background.
-  static const String bgred = '\x1B[41m';
+  static const String bgRed = '\x1B[41m';
 
   /// Green background.
-  static const String bggreen = '\x1B[42m';
+  static const String bgGreen = '\x1B[42m';
 
   /// Yellow background.
-  static const String bgyellow = '\x1B[43m';
+  static const String bgYellow = '\x1B[43m';
 
   /// Blue background.
-  static const String bgblue = '\x1B[44m';
+  static const String bgBlue = '\x1B[44m';
 
   /// Magenta background.
-  static const String bgmagenta = '\x1B[45m';
+  static const String bgMagenta = '\x1B[45m';
 
   /// Cyan background.
-  static const String bgcyan = '\x1B[46m';
+  static const String bgCyan = '\x1B[46m';
 
   /// White background.
-  static const String bgwhite = '\x1B[47m';
+  static const String bgWhite = '\x1B[47m';
 
+  // --------------------------------------------------------------------------
   /// 256-color foreground ANSI sequence for [code] (0-255).
   static String color256(int code) => '\x1B[38;5;${code.clamp(0, 255)}m';
 
   /// 256-color background ANSI sequence for [code] (0-255).
-  static String bgcolor256(int code) => '\x1B[48;5;${code.clamp(0, 255)}m';
+  static String bgColor256(int code) => '\x1B[48;5;${code.clamp(0, 255)}m';
 
   /// Truecolor 24-bit RGB foreground ANSI sequence.
   static String rgb(int r, int g, int b) =>
       '\x1B[38;2;${r.clamp(0, 255)};${g.clamp(0, 255)};${b.clamp(0, 255)}m';
 
   /// Truecolor 24-bit RGB background ANSI sequence.
-  static String bgrgb(int r, int g, int b) =>
+  static String bgRgb(int r, int g, int b) =>
       '\x1B[48;2;${r.clamp(0, 255)};${g.clamp(0, 255)};${b.clamp(0, 255)}m';
 
   /// Truecolor from hex string (e.g. `#FF0000` or `FF0000`).
@@ -187,9 +188,9 @@ class Ansi {
   }
 
   /// Truecolor background from hex string (e.g. `#FF0000` or `FF0000`).
-  static String bghex(String code) {
+  static String bgHex(String code) {
     final (r, g, b) = _parseHex(code);
-    return bgrgb(r, g, b);
+    return bgRgb(r, g, b);
   }
 
   static (int, int, int) _parseHex(String code) {
@@ -407,67 +408,67 @@ extension AnsiStringExtension on String {
   String gray() => Ansi.format(this, Ansi.gray);
 
   /// Formats the string with high-intensity bright red color.
-  String brightred() => Ansi.format(this, Ansi.brightred);
+  String brightRed() => Ansi.format(this, Ansi.brightRed);
 
   /// Formats the string with high-intensity bright green color.
-  String brightgreen() => Ansi.format(this, Ansi.brightgreen);
+  String brightGreen() => Ansi.format(this, Ansi.brightGreen);
 
   /// Formats the string with high-intensity bright yellow color.
-  String brightyellow() => Ansi.format(this, Ansi.brightyellow);
+  String brightYellow() => Ansi.format(this, Ansi.brightYellow);
 
   /// Formats the string with high-intensity bright blue color.
-  String brightblue() => Ansi.format(this, Ansi.brightblue);
+  String brightBlue() => Ansi.format(this, Ansi.brightBlue);
 
   /// Formats the string with high-intensity bright magenta color.
-  String brightmagenta() => Ansi.format(this, Ansi.brightmagenta);
+  String brightMagenta() => Ansi.format(this, Ansi.brightMagenta);
 
   /// Formats the string with high-intensity bright cyan color.
-  String brightcyan() => Ansi.format(this, Ansi.brightcyan);
+  String brightCyan() => Ansi.format(this, Ansi.brightCyan);
 
   /// Formats the string with high-intensity bright white color.
-  String brightwhite() => Ansi.format(this, Ansi.brightwhite);
+  String brightWhite() => Ansi.format(this, Ansi.brightWhite);
 
   /// Sets background color to black.
-  String bgblack() => Ansi.format(this, Ansi.bgblack);
+  String bgBlack() => Ansi.format(this, Ansi.bgBlack);
 
   /// Sets background color to red.
-  String bgred() => Ansi.format(this, Ansi.bgred);
+  String bgRed() => Ansi.format(this, Ansi.bgRed);
 
   /// Sets background color to green.
-  String bggreen() => Ansi.format(this, Ansi.bggreen);
+  String bgGreen() => Ansi.format(this, Ansi.bgGreen);
 
   /// Sets background color to yellow.
-  String bgyellow() => Ansi.format(this, Ansi.bgyellow);
+  String bgYellow() => Ansi.format(this, Ansi.bgYellow);
 
   /// Sets background color to blue.
-  String bgblue() => Ansi.format(this, Ansi.bgblue);
+  String bgBlue() => Ansi.format(this, Ansi.bgBlue);
 
   /// Sets background color to magenta.
-  String bgmagenta() => Ansi.format(this, Ansi.bgmagenta);
+  String bgMagenta() => Ansi.format(this, Ansi.bgMagenta);
 
   /// Sets background color to cyan.
-  String bgcyan() => Ansi.format(this, Ansi.bgcyan);
+  String bgCyan() => Ansi.format(this, Ansi.bgCyan);
 
   /// Sets background color to white.
-  String bgwhite() => Ansi.format(this, Ansi.bgwhite);
+  String bgWhite() => Ansi.format(this, Ansi.bgWhite);
 
   /// Formats the string with 256-color foreground.
   String color256(int code) => Ansi.format(this, Ansi.color256(code));
 
   /// Formats the string with 256-color background.
-  String bgcolor256(int code) => Ansi.format(this, Ansi.bgcolor256(code));
+  String bgColor256(int code) => Ansi.format(this, Ansi.bgColor256(code));
 
   /// Formats the string with truecolor 24-bit RGB foreground.
   String rgb(int r, int g, int b) => Ansi.format(this, Ansi.rgb(r, g, b));
 
   /// Formats the string with truecolor 24-bit RGB background.
-  String bgrgb(int r, int g, int b) => Ansi.format(this, Ansi.bgrgb(r, g, b));
+  String bgRgb(int r, int g, int b) => Ansi.format(this, Ansi.bgRgb(r, g, b));
 
   /// Formats the string with hex color foreground (e.g. `#E67E22`).
   String hex(String code) => Ansi.format(this, Ansi.hex(code));
 
   /// Formats the string with hex color background (e.g. `#1B2631`).
-  String bghex(String code) => Ansi.format(this, Ansi.bghex(code));
+  String bgHex(String code) => Ansi.format(this, Ansi.bgHex(code));
 
   /// The terminal columns this string occupies, ANSI codes excluded.
   ///

@@ -96,18 +96,18 @@ class Spinner {
   /// Stops and reports success, defaulting to the current message.
   void ok([String? message]) {
     stop();
-    writer.writeln('${'✔'.brightgreen()} ${message ?? _message}');
+    writer.writeln('${'✔'.brightGreen()} ${message ?? _message}');
   }
 
   /// Stops and reports failure to stderr.
   void fail([String? message]) {
     stop();
-    writer.errorln('${'✖'.brightred()} ${message ?? _message}');
+    writer.errorln('${'✖'.brightRed()} ${message ?? _message}');
   }
 
   void _render() {
     if (!writer.tty) return;
     Terminal(writer).line();
-    writer.write('\r${frames[_frame].brightcyan().bold()} $_message');
+    writer.write('\r${frames[_frame].brightCyan().bold()} $_message');
   }
 }

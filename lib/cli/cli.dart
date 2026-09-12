@@ -71,6 +71,19 @@ class CliAccessor with _Spec {
   /// Creates the accessor. Prefer the shared [cli] instance.
   CliAccessor();
 
+  /// Creates a fresh, isolated [CliAccessor] instance independent of the shared [cli] singleton.
+  static CliAccessor isolated() => CliAccessor();
+
+  /// Resets all declarations, subcommands, and parsed state.
+  ///
+  /// Useful in tests to prevent registered flags and options from leaking
+  /// across test cases.
+  void reset() {
+    _declarations.clear();
+    _children.clear();
+    _parsed = Cli(const []);
+  }
+
   @override
   Cli get _reader => _parsed._reader;
 

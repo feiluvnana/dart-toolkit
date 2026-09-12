@@ -15,7 +15,6 @@ import 'package:path/path.dart' as p;
 import '../io/entry.dart';
 import '../src/fs.dart';
 import '../src/proc.dart';
-import '../collection/sequence.dart';
 
 // ============================================================================
 // ZIP TOOL (format.zip.*)
@@ -189,14 +188,14 @@ class ZipAccessor {
   /// so an archive of shell scripts unpacks with its execute bit intact and a
   /// restored tree keeps the dates it was packed with. Permissions are a no-op
   /// on Windows.
-  Future<Sequence<File>> unpack(
+  Future<List<File>> unpack(
     String source,
     String dest, {
     Format? format,
   }) async {
     final kind = format ?? Format.of(source);
     final archive = await _open(source, kind);
-    if (archive == null) return const Sequence([]);
+    if (archive == null) return const [];
     final root = p.normalize(p.absolute(dest));
     final written = <File>[];
     final executable = <int, List<String>>{};
@@ -228,7 +227,7 @@ class ZipAccessor {
     }
 
     await _permit(executable);
-    return Sequence(written);
+    return written;
   }
 
   /// Applies each set of unix permissions to the paths that carry it.
@@ -295,14 +294,15 @@ class ZipAccessor {
   /// `io.dir.walk`, `io.csv.rows` and `format.json.read` give for a missing path.
   /// Through 4.0.0 this was the one read in the library that raised
   /// `PathNotFoundException`.
-  Future<Sequence<ArchiveEntry>> list(String source, {Format? format}) async {
+  Future<List<ArchiveEntry>> list(String source, {Format? format}) async {
     final archive = await _open(source, format);
-    if (archive == null) return const Sequence([]);
-    return Sequence(
-      archive.map(
-        (entry) => ArchiveEntry(entry.name, entry.size, folder: !entry.isFile),
-      ),
-    );
+    if (archive == null) return const [];
+    return archive
+        .map(
+          (entry) =>
+              ArchiveEntry(entry.name, entry.size, folder: !entry.isFile),
+        )
+        .toList();
   }
 
   /// Takes one entry's bytes out of the archive at [source].

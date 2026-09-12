@@ -2,6 +2,42 @@
 
 All notable changes to this project will be documented in this file.
 
+## 7.0.0
+
+**The developer experience overhaul: supercharge Dart, don't replace it.**
+The earlier v6.x architecture enforced an isolated "walled garden" that separated developers from Dart idioms, standard types (`Iterable`, `Map`, `Stream`), standard HTTP convenience verbs, and standard `dart:io` abstractions. v7.0.0 transforms `dart_toolkit` into a high-productivity DX companion for Dart developers by embracing Dart's native types, bridging seamlessly with `dart:core`, `dart:io`, and `package:http`, delivering fluent extensions, restoring intuitive convenience helpers, and providing robust concurrency, atomic file operations, and CLI ergonomics.
+
+### 1. Native Collections & Universal Interoperability
+- **`Sequence<T>` implements `Iterable<T>`**: `Sequence` can now be used directly in `for-in` loops, passed to any Dart standard library function, and converted with `.toList()`.
+- **Universal Parameter Acceptance**: All collection-accepting APIs across the library (`concurrent.run`, `concurrent.settle`, `io.lines.write`, `io.chunks.write`, `io.csv.write`, `format.csv.format`, `format.csv.cells`, `net.crawl`, `Crawl`, `Pipe.flatMap`) now accept standard Dart `Iterable<T>` and `Map<K, V>` directly.
+- **Fluent Core Extensions**: Added `IterableExtensions` (`.filter()`, `.mapNotNull()`, `.flatMap()`, `.chunk(n)`, `.window()`, `.sorted()`, `.sortedBy()`, `.groupBy()`, `.distinctBy()`, `.zip()`, `.tap()`, `.sum`, `.average`), `MapExtensions` (`.filterKeys()`, `.filterValues()`, `.mapValues()`, `.pick()`, `.omit()`, `.merge()`, `.sortedByKey()`, `.invert()`), and `StreamExtensions` (`.filter()`, `.debounce()`, `.throttle()`, `.chunk()`, `.mergeWith()`, `.concatWith()`, `.recover()`, `.tap()`).
+- **Static Helper Trilogy**: Introduced `Iterables`, `Maps`, and `Streams` helpers for functional generation, zip, partition, combination, and transformations.
+
+### 2. HTTP Ergonomics & Ecosystem Coexistence
+- **Restored HTTP Convenience Verbs**: Added `.get()`, `.post()`, `.put()`, `.delete()`, `.patch()`, and `.head()` to `Fetcher` and `NetAccessor` (`net.http` and `net`).
+- **Method Tear-Off Support**: Convenience verbs work directly as method tear-offs (e.g. `concurrent.run(urls, net.http.get)`).
+- **Sane Real-World Redirect Defaults**: `Fetcher` and `Fetcher.browser` now default to `redirects: 5` (with explicit opt-out via `redirects: 0`).
+- **Streaming Response Bodies**: Added `Reply.stream` and `Fetcher.stream` yielding native `Stream<List<int>>` for downloading large payloads without memory buffering. Added `Reply.text`, `Reply.json`, `Reply.fromHttpResponse`, and `reply.toHttpResponse()`.
+- **Zone-Scoped Client Isolation**: Added `net.withClient(client, () => ...)` for isolated testing and mock injection without global state hazards.
+- **Fluent URI Extensions**: Quick HTTP requests on `Uri` and `String` (`uri.get()`, `post()`, `put()`, `delete()`, `patch()`, `head()`).
+
+### 3. Native `dart:io` DX Supercharging & Process Improvements
+- **Fluent `dart:io` Extensions**: Added extensions on `File` (`readLines`, `readJson`, `writeAtomic`, `writeBytesAtomic`, `appendLine`, `writeJson`), `Directory` (`walk`, `listEntries`, `ensure`), and `FileSystemEntity` (`entry`, `isFile`, `isDir`, `isLink`).
+- **Restored File System Predicates**: Restored non-throwing `io.isFile`, `io.isDir`, `io.isLink`, `io.exists`, `io.size` (and `io.async.*` equivalents).
+- **Process DX & `SysResult`**: Enhanced subprocess execution with `SysResult` properties (`exitCode`, `isSuccess`, `stdout`, `stderr`, `lines`, `json`) and real-time streaming execution via `system.stream(cmd, args)`.
+- **Typed Environment Accessors**: Added `system.env.int(key, {defaultValue})`, `system.env.bool(key, {defaultValue})`, and `system.env.require(key)`.
+- **Cross-Platform Hardening**: Windows-safe guarded signal handlers preventing `SIGTERM` crashes (`errno 50`), plus retry backoff for Windows atomic file swap operations.
+
+### 4. Document Cursors & CLI Isolation
+- **Scoped XPath Evaluation**: Fixed `Markup.$xpath` so queries on child element cursors isolate strictly to the element's subtree rather than the document root. Added `Markup.element` and `Markup.elementList`.
+- **Quick Parsing Extensions**: Added `String.parseJson()` and `String.parseHtml()`.
+- **JSON Direct Conversions**: Added `Json.toMap()` and `Json.toList()`.
+- **CLI Re-entrancy & Isolation**: Added `cli.reset()`, `CliAccessor.isolated()`, and `Cli.isolated()` for isolated testing.
+
+### 5. Effective Dart Naming Alignment & Deprecation Removal
+- Aligned naming with Effective Dart `lowerCamelCase` (`table.addAll`, `makeParent`, `httpOnly`, `perHost`, `sameHost`, `firstWhere`, `groupBy`, `brightRed`, etc.).
+- Completely removed all deprecated legacy APIs, squished names, and backward-compatible forwarders.
+
 ## 6.3.0
 
 **The seam.** `Sequence` is deliberately not an `Iterable` — that is what

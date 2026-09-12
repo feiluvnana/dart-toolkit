@@ -60,7 +60,7 @@ void main() async {
             headers: ['Target', 'Size', 'Result'],
             alignments: [ColumnAlign.left, ColumnAlign.right, ColumnAlign.left],
           )
-          ..add.all(
+          ..addAll(
             [
               ['app', util.size.format(1481012), 'ok'],
               ['worker', util.size.format(233472), 'ok'],
@@ -82,7 +82,7 @@ void main() async {
   // Colour is an extension on String, so it composes with anything that takes
   // one. Off a terminal these return the string unchanged.
   out.writeln(
-    '${'passed'.brightgreen()} · ${'failed'.brightred()} · ${'skipped'.dim()}',
+    '${'passed'.brightGreen()} · ${'failed'.brightRed()} · ${'skipped'.dim()}',
   );
 
   // Prompts live on the reader, and are left out here so the example stays

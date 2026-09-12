@@ -1003,8 +1003,19 @@ class Fs {
   /// The non-blocking twin of [_swap], for the write path that promises not
   /// to block.
   static Future<void> _swapAsync(File staging, File destination) async {
-    if (Platform.isWindows && await destination.exists()) {
-      await destination.delete();
+    if (Platform.isWindows) {
+      for (var attempt = 0; attempt < 10; attempt++) {
+        try {
+          if (await destination.exists()) {
+            await destination.delete();
+          }
+          await staging.rename(destination.path);
+          return;
+        } catch (_) {
+          if (attempt == 9) rethrow;
+          await Future<void>.delayed(const Duration(milliseconds: 15));
+        }
+      }
     }
     await staging.rename(destination.path);
   }

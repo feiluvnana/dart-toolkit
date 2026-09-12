@@ -30,7 +30,6 @@ import 'package:html/parser.dart' as html_parser;
 import 'package:xpath_selector_html_parser/xpath_selector_html_parser.dart';
 
 import '../src/jquery.dart';
-import '../collection/sequence.dart';
 import '../util/text.dart';
 
 const TextAccessor _text = TextAccessor();
@@ -92,19 +91,14 @@ class Markup {
   /// can answer and this cannot.
   Document? get document => _document;
 
-  /// The matched elements, as a [Sequence].
-  ///
-  /// This used to be an `IterableMixin<Element>`, which put Dart's whole
-  /// collection vocabulary next to this library's on every selector result.
-  /// A [Markup] now *holds* a sequence instead of being one, so the
-  /// element-level work has one spelling:
-  ///
-  /// ```dart
-  /// page.$('tr').elements
-  ///     .transform(.where((e) => e.classes.contains('live')))
-  ///     .collect(.count());
-  /// ```
-  Sequence<Element> get elements => Sequence(_elements);
+  /// The matched elements, as a [List].
+  List<Element> get elements => _elements;
+
+  /// The first matched element, or `null` when empty.
+  Element? get element => _elements.firstOrNull;
+
+  /// The matched elements as a standard Dart [List].
+  List<Element> get elementList => _elements;
 
   /// How many elements matched.
   int get count => _elements.length;
@@ -134,7 +128,7 @@ class Markup {
         }
       } catch (_) {}
     }
-    return Markup(elements, true, _document);
+    return Markup(elements, true, null);
   }
 
   /// A single-element result at [index]; empty when out of range.
@@ -195,9 +189,11 @@ class Markup {
   ///
   /// Where `extract` hands back `Map<String, Object?>` and leaves every value
   /// to be cast, this keeps the type of each field all the way out.
-  Sequence<R> all<R>(String selector, R Function(Markup row) build) => Sequence(
-    $(selector)._elements.map((element) => build(Markup([element], false))),
-  );
+  List<R> all<R>(String selector, R Function(Markup row) build) =>
+      $(selector)
+          ._elements
+          .map((element) => build(Markup([element], false)))
+          .toList();
 
   /// Reads a typed [field] from the first element of this set.
   ///
@@ -299,7 +295,7 @@ class Markup {
   ].where((s) => s.isNotEmpty).join(' ');
 
   /// The text of each match, one entry per element, read as [text] reads it.
-  Sequence<String> get texts => Sequence(_elements.map(readable));
+  List<String> get texts => _elements.map(readable).toList();
 
   /// [element]'s text as a reader sees it rather than as the source spells it.
   ///
@@ -347,9 +343,10 @@ class Markup {
   /// Shorter than the match count when some matches do not carry [name], so
   /// this cannot be zipped against [texts] — [all] is how a row's fields are
   /// read together.
-  Sequence<String> attrs(String name) => Sequence(
-    _elements.map((element) => element.attributes[name]).whereType<String>(),
-  );
+  List<String> attrs(String name) => _elements
+      .map((element) => element.attributes[name])
+      .whereType<String>()
+      .toList();
 
   /// The value of the first match, as a browser would submit it, or `null`.
   ///
@@ -365,14 +362,14 @@ class Markup {
   /// Stripping the tags leaves the entities behind, so `&amp;` used to survive
   /// into what is documented as text. They are decoded here the way the parser
   /// would have decoded them.
-  Sequence<String> get lines => Sequence(
-    _elements.expand(
-      (element) => element.innerHtml
-          .split(RegExp(r'<br\s*/?>|\r?\n'))
-          .map((s) => _decode(s.replaceAll(RegExp(r'<[^>]*>'), '')).trim())
-          .where((s) => s.isNotEmpty),
-    ),
-  );
+  List<String> get lines => _elements
+      .expand(
+        (element) => element.innerHtml
+            .split(RegExp(r'<br\s*/?>|\r?\n'))
+            .map((s) => _decode(s.replaceAll(RegExp(r'<[^>]*>'), '')).trim())
+            .where((s) => s.isNotEmpty),
+      )
+      .toList();
 
   /// [markup] with its HTML entities turned back into characters.
   static String _decode(String markup) {
@@ -409,7 +406,7 @@ class Markup {
   @override
   String toString() =>
       'Markup(count: $count, texts: '
-      '[${texts.transform(.take.first(3)).collect(.join(', '))}'
+      '[${texts.take(3).join(', ')}'
       '${count > 3 ? '...' : ''}])';
 }
 // ============================================================================

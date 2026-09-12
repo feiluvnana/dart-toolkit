@@ -31,8 +31,6 @@ import 'dart:convert';
 
 import 'package:path/path.dart' as p;
 
-import '../collection/dictionary.dart';
-import '../collection/slot.dart';
 import '../src/method.dart';
 import 'http.dart';
 
@@ -125,10 +123,7 @@ final class Fetch {
   final String? tag;
 
   /// Context carried to the reply, untouched by the crawl.
-  ///
-  /// Read and written through [Slot]s, so what was stored comes back with
-  /// its type — see the `Slotted` extension on [Dictionary].
-  final Dictionary<String, Object?> meta;
+  final Map<String, Object?> meta;
 
   /// Whether to de-duplicate this request. Defaults to true.
   final bool dedupe;
@@ -148,7 +143,7 @@ final class Fetch {
     this.dedupe = true,
     this.depth = 0,
   }) : headers = headers ?? {},
-       meta = Dictionary.of(meta ?? const []);
+       meta = {for (final (k, v) in (meta ?? const <(String, Object?)>[])) k: v};
 
   /// Restores a request from the map [toJson] produced.
   ///
@@ -190,7 +185,7 @@ final class Fetch {
     if (body != null) 'body': body!.toJson(),
     if (priority != 0) 'priority': priority,
     if (tag != null) 'tag': tag,
-    if (!meta.empty) 'meta': meta.map,
+    if (meta.isNotEmpty) 'meta': meta,
     if (!dedupe) 'dedupe': false,
     if (depth != 0) 'depth': depth,
   };

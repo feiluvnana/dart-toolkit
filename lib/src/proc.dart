@@ -32,8 +32,27 @@ class SysResult {
   /// Creates a result. Normally produced by [Sys.run].
   const SysResult({required this.code, required this.out, required this.err});
 
+  /// Process exit code. Alias for [code].
+  int get exitCode => code;
+
   /// Whether the process exited successfully (code `0`).
   bool get ok => code == 0;
+
+  /// Whether the process exited successfully (code `0`). Alias for [ok].
+  bool get isSuccess => ok;
+
+  /// Captured standard output. Alias for [out].
+  String get stdout => out;
+
+  /// Captured standard error. Alias for [err].
+  String get stderr => err;
+
+  /// The lines of captured standard output, ignoring empty lines.
+  List<String> get lines =>
+      out.isEmpty ? const [] : out.split(RegExp(r'\r?\n')).where((l) => l.isNotEmpty).toList();
+
+  /// Parsed JSON object from [stdout].
+  dynamic get json => jsonDecode(out);
 
   @override
   String toString() => 'SysResult(code: $code)';
@@ -42,6 +61,48 @@ class SysResult {
 /// Subprocess execution and OS helpers.
 class Sys {
   const Sys._();
+
+  /// Streams output lines from [executable] running with [arguments].
+  static Stream<String> stream(
+    String executable,
+    List<String> arguments, {
+    String? cwd,
+    bool includeStderr = false,
+  }) async* {
+    final process = await Process.start(
+      executable,
+      arguments,
+      workingDirectory: cwd,
+    );
+    Exit.adopt(process);
+    try {
+      if (!includeStderr) {
+        unawaited(process.stderr.drain<void>());
+        yield* process.stdout
+            .transform(systemEncoding.decoder)
+            .transform(const LineSplitter());
+      } else {
+        final controller = StreamController<String>();
+        var activeStreams = 2;
+        void onDone() {
+          activeStreams--;
+          if (activeStreams == 0) controller.close();
+        }
+        process.stdout
+            .transform(systemEncoding.decoder)
+            .transform(const LineSplitter())
+            .listen(controller.add, onError: controller.addError, onDone: onDone);
+        process.stderr
+            .transform(systemEncoding.decoder)
+            .transform(const LineSplitter())
+            .listen(controller.add, onError: controller.addError, onDone: onDone);
+        yield* controller.stream;
+      }
+      await process.exitCode;
+    } finally {
+      Exit.disown(process);
+    }
+  }
 
   /// Runs [executable] with [arguments] and waits for it to exit.
   ///
@@ -247,10 +308,10 @@ class Exit {
 
   // SIGINT is Ctrl-C; SIGTERM is what `kill`, a supervisor and a container
   // runtime send. Watching only the first left a terminated run's .part files
-  // on disk and its exit hooks unrun.
-  static const List<ProcessSignal> _watched = [
+  // on disk and its exit hooks unrun. Note that SIGTERM is unsupported on Windows.
+  static List<ProcessSignal> get _watched => [
     ProcessSignal.sigint,
-    ProcessSignal.sigterm,
+    if (!Platform.isWindows) ProcessSignal.sigterm,
   ];
 
   /// Starts watching for `SIGINT` and `SIGTERM`. Safe to call repeatedly.
@@ -259,11 +320,17 @@ class Exit {
     for (final signal in _watched) {
       try {
         _signals.add(
-          signal.watch().listen((_) async {
-            // The shell convention: 128 plus the signal number, so a caller
-            // can tell a Ctrl-C (130) from a `kill` (143).
-            await shutdown(128 + signal.signalNumber);
-          }),
+          signal.watch().listen(
+            (_) async {
+              // The shell convention: 128 plus the signal number, so a caller
+              // can tell a Ctrl-C (130) from a `kill` (143).
+              await shutdown(128 + signal.signalNumber);
+            },
+            onError: (_) {
+              // Gracefully ignore unsupported signal errors on some platforms
+            },
+            cancelOnError: false,
+          ),
         );
       } catch (_) {
         // Windows raises for SIGTERM, and signal handling is unavailable

@@ -331,7 +331,7 @@ void main() {
     test('a header-only render honours it too', () {
       expect(
         format.csv.format(
-          const Sequence<Map<String, Object?>>([]),
+          const <Map<String, Object?>>[],
           headers: ['a', 'b'],
           newline: '\r\n',
         ),
@@ -529,7 +529,9 @@ void main() {
         final script = File('${root.path}/src/run.sh')
           ..createSync(recursive: true)
           ..writeAsStringSync('#!/bin/sh\necho hi\n');
-        await system.run('chmod', ['755', script.path]);
+        if (!Platform.isWindows) {
+          await system.run('chmod', ['755', script.path]);
+        }
         final when = DateTime(2021, 3, 4, 5, 6, 8);
         script.setLastModifiedSync(when);
 
@@ -559,7 +561,9 @@ void main() {
       addTearDown(() => io.remove(root.path));
 
       final file = File('${root.path}/notes.txt')..writeAsStringSync('hello');
-      await system.run('chmod', ['600', file.path]);
+      if (!Platform.isWindows) {
+        await system.run('chmod', ['600', file.path]);
+      }
 
       await format.zip.pack(file.path, '${root.path}/one.zip');
       await format.zip.unpack('${root.path}/one.zip', '${root.path}/back');
@@ -594,7 +598,7 @@ void main() {
         started++;
         await Future<void>.delayed(const Duration(milliseconds: 1));
         return i;
-      }).stream;
+      });
 
       final subscription = stream.listen((_) {});
       await Future<void>.delayed(const Duration(milliseconds: 20));

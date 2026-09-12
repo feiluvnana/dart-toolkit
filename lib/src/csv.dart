@@ -19,7 +19,6 @@
 /// for what it is over — exactly as `Json` and `Markup` are.
 library;
 
-import '../collection/sequence.dart';
 import '../src/csvtext.dart';
 
 // ============================================================================
@@ -58,57 +57,37 @@ final class Csv {
   final List<List<String>> _rows;
 
   /// The column names, from the first line.
-  Sequence<String> get headers => Sequence(_headers);
+  List<String> get headers => _headers;
 
   /// The data rows, as raw cells, header line excluded.
-  ///
-  /// `io.csv.matrix` included the header line in what it returned; it is
-  /// [headers] here, so [rows] and [maps] describe the same records.
-  ///
-  /// A row is a `List<String>`, not a nested [Sequence]: the cells of one
-  /// record are a fixed tuple read by position, so `row[2]` is the question
-  /// asked of them and `collect(.at(2))` was the only way to ask it through
-  /// 6.2.0. It is also what `io.csv.rows` has always returned — the same
-  /// grid, read from a file instead of a string, and the two doors now spell
-  /// it the same way.
-  Sequence<List<String>> get rows => Sequence(_rows);
+  List<List<String>> get rows => _rows;
 
   /// The data rows keyed by [headers].
   ///
   /// Blank lines are skipped and short rows are padded with empty strings, so
   /// every map carries every column.
-  Sequence<Map<String, String>> get maps => Sequence(
-    _rows
-        .where((row) => !CsvText.blank(row))
-        .map(
-          (row) => {
-            for (var i = 0; i < _headers.length; i++)
-              _headers[i]: i < row.length ? row[i] : '',
-          },
-        ),
-  );
+  List<Map<String, String>> get maps => _rows
+      .where((row) => !CsvText.blank(row))
+      .map(
+        (row) => {
+          for (var i = 0; i < _headers.length; i++)
+            _headers[i]: i < row.length ? row[i] : '',
+        },
+      )
+      .toList();
 
   /// Every value in the column called [name], in row order.
   ///
   /// Empty when there is no such column — the contract every cursor in this
   /// library keeps, because the caller asked for a column and the honest
   /// answer is that there is not one.
-  ///
-  /// ```dart
-  /// // setup: final sheet = format.csv.parse('price\n1.50\n');
-  /// final total = sheet
-  ///     .column('price')
-  ///     .transform(.map((c) => double.tryParse(c) ?? 0))
-  ///     .collect(.sum((p) => p));
-  /// ```
-  Sequence<String> column(String name) {
+  List<String> column(String name) {
     final at = _headers.indexOf(name);
-    if (at == -1) return const Sequence([]);
-    return Sequence(
-      _rows
-          .where((row) => !CsvText.blank(row))
-          .map((row) => at < row.length ? row[at] : ''),
-    );
+    if (at == -1) return const [];
+    return _rows
+        .where((row) => !CsvText.blank(row))
+        .map((row) => at < row.length ? row[at] : '')
+        .toList();
   }
 
   /// How many data rows there are, header line excluded.

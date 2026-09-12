@@ -67,7 +67,7 @@ void main() {
       final books = doc
           .at('store.book')
           .all((b) => (title: b.text('title'), price: b.number('price')));
-      expect(books, isA<Sequence<Object?>>());
+      expect(books, isA<List<Object?>>());
       expect(books.collect(.count()), equals(3));
       expect(
         books.collect(.max.by((b) => b.price ?? 0))?.title,
@@ -90,7 +90,7 @@ void main() {
         format.json
             .parse('["a", 2, true, {"x":1}]')
             .all((item) => item.text())
-            .nonnull
+            .nonNull
             .collect(.list()),
         equals(['a', '2', 'true']),
       );
@@ -255,7 +255,7 @@ void main() {
         expect(
           (await format.json.read(
             path,
-          )).at('hosts').all((h) => h.text()).nonnull.collect(.list()),
+          )).at('hosts').all((h) => h.text()).nonNull.collect(.list()),
           equals(['a', 'b']),
         );
         expect((await format.json.read(path)).count, equals(1));

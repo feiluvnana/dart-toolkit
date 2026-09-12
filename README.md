@@ -47,15 +47,13 @@ belongs to, when it earns a top-level name, and how to name it.
 
 ## Design Philosophy
 
-1. **Lowercase, preferably one word.** Every primary action is a single word: `run`, `get`, `post`, `save`, `write`, `dump`, `follow`, `obey`, `using`, `step`, `ok`, `warn`, `ask`, `pick`, `which`, `clock`, `pack`, `slug`. Where one word genuinely will not do, the name stays lowercase rather than turning camelCase: `perhost`, `samehost`, `httponly`, `topleft`, `bgred`.
-2. **One name per operation.** There are no aliases and no flat shortcuts. Each operation lives in the domain that owns it and is reachable exactly one way — so there is never a question of which spelling to use.
-3. **Real types at every boundary.** URLs are `Uri`, delays are `Duration`, paths are `String`, bodies and hash algorithms are sealed types and enums. No `Object` or `dynamic` parameters, so the analyzer catches mistakes at the call site.
-4. **Atomic by default.** Every write stages through a `.part` file and is renamed into place only after a successful flush. Interrupted runs never leave truncated files, and Ctrl-C cleans up.
-5. **Seams the library already has.** A crawl is not a framework: a transport is a function (`Send`), a document is a `Codec`, and the results are a `Flow<Reply>`. Multi-stage routing is a Dart `switch` on the tag a request carried, which the compiler checks. 6.0.0 rebuilt `net` on those three and took it from 41 public types to 14.
-6. **One vocabulary for collections.** Everything this library hands back for you to *shape* is a [`Sequence`](lib/collection/collection.dart), a [`Dictionary`](lib/collection/collection.dart) or a [`Flow`](lib/collection/collection.dart), deliberately not an `Iterable`, a `Map` or a `Stream`, so Dart's names and these are never both in scope at one call site. `collect(.list())`, `.map` and `.stream` are the ways out at the boundary; `.seq`, `.dict` and `.flow` bring an outside collection in. A `Sequence` hands back no `Iterable` of its own — leaving is a call, not a getter, because a getter would put Dart's vocabulary one dot from every sequence in the library. Through 4.0.0 that claim was only half true — 53 public members handed back a `List`, `Map` or `Set` against 30 that handed back a `Sequence` — and 5.0.0 converted them.
-
-   **And what it returns, it takes.** Every reader handed back a `Sequence` and every writer took an `Iterable` through 6.2.0, so a CSV could not be written from the cursor that read it, a pool could not be fed from a crawl, and three codecs could not round-trip their own output — eleven crossings in the library's own surface, each paying `collect(.list())` to leave a vocabulary it was about to re-enter. 6.3.0 made every collection parameter a `Sequence`; a literal spends `.seq` to join, which is the cheaper half of the bridge. See [Rule 7](NAMESPACE.md).
-7. **A pipeline is a value.** A `Sequence` has two members: `transform` takes a [`Transformer`](lib/collection/collection.dart) and `collect` takes a [`Collector`](lib/collection/collection.dart). A `Flow` spells the same two over a [`Pipe`](lib/collection/pipe.dart) and a [`Pour`](lib/collection/pipe.dart), and so does a `Dictionary` — **one rule for three containers**. Everything else is a static factory on one of those four, which is what lets each operation take its ordinary name back — `map`, `where`, `take.first`, `group.by`, `max.by`. A namespace has no `Map` to collide with and no camelCase to forbid, so a compound operation splits at the capital instead of inventing a word. It also makes a chain storable, passable, supplyable by a caller and testable against a plain list.
+1. **Idiomatic Dart, preferably one word.** Primary actions are concise and expressive: `run`, `get`, `post`, `save`, `write`, `dump`, `follow`, `using`, `step`, `ok`, `warn`, `ask`, `pick`, `which`, `clock`, `pack`, `slug`. Effective Dart `lowerCamelCase` is embraced throughout (`makeParent`, `httpOnly`, `perHost`, `sameHost`, `firstWhere`, `groupBy`, `brightRed`), while deprecated lowercase aliases are preserved for smooth upgrades.
+2. **One name per operation.** Operations live in the domain that owns them, providing intuitive discovery without cognitive overhead or ambiguous duplicate namespaces.
+3. **Real types at every boundary.** URLs are `Uri`, delays are `Duration`, paths are `String`, bodies and hash algorithms are sealed types and enums. Universal interoperability ensures methods accept native `Iterable` and `Map`.
+4. **Atomic by default.** Every write stages through a `.part` file and is renamed into place only after a successful flush. Interrupted runs never leave truncated files, with robust cross-platform backoff retry and signal guards.
+5. **Seams the library already has.** A crawl is not a framework: a transport is a function (`Send`), a document is a `Codec`, and the results are a `Flow<Reply>`. Multi-stage routing is a Dart `switch` on the tag a request carried, which the compiler checks.
+6. **DX-First Native Collections.** In v7.0.0, `Sequence<T>` implements Dart's native `Iterable<T>`, bridging seamlessly with core Dart, while `Sequence`, `Dictionary`, and `Flow` remain available as expressive declarative pipeline tools. All APIs accept standard `Iterable` and `Map` directly, and powerful fluent extensions (`IterableExtensions`, `MapExtensions`, `StreamExtensions`) empower native Dart collections.
+7. **A pipeline is a value.** A `Sequence` has two members: `transform` takes a [`Transformer`](lib/collection/collection.dart) and `collect` takes a [`Collector`](lib/collection/collection.dart). A `Flow` spells the same two over a [`Pipe`](lib/collection/pipe.dart) and a [`Pour`](lib/collection/pipe.dart), and so does a `Dictionary` — **one rule for three containers**. Everything else is a static factory on one of those four, which is what lets each operation take its ordinary name back — `map`, `where`, `take.first`, `group.by`, `max.by`.
 
    Which half an operation lives on is a rule rather than a list: **a shaping step can emit before its source ends, a terminal needs the end.** That is why `take.first` is a `Pipe` and `sort` is a `Pour`. On a `Sequence` the same law is only bookkeeping — the source has an end, and reading all of it is what the operation *is* — so `sort`, `flip`, `take.last` and `skip.last` are `Transformer`s there and a chain never changes container.
 
@@ -117,10 +115,10 @@ void main(List<String> args) async {
     ..limit(50);
 
   final titles = await crawl.flow
-      .transform(.flat.map((res) =>
+      .through(.flat.map((res) =>
           res.parse(format.html).$('.titleline > a').texts))
-      .collect(.seq());
-  log.ok('Found ${titles.collect(.count())} headlines.');
+      .toList();
+  log.ok('Found ${titles.length} headlines.');
 
   // 3. Process concurrently, with a progress bar
   log.step(2, 3, 'Processing...');
@@ -135,7 +133,7 @@ void main(List<String> args) async {
   // 4. Report and save atomically
   log.step(3, 3, 'Saving...');
   system.console.writer.write(
-    (Table(headers: ['Metric', 'Value'])..add.all([
+    (Table(headers: ['Metric', 'Value'])..addAll([
       ['Crawled', titles.collect(.count())],
       ['Processed', processed.collect(.count())],
       ['Elapsed', util.time.format(clock.elapsed)],
@@ -155,7 +153,7 @@ This script exits on its own when it finishes — no manual cleanup call is need
 **Coming from 6.2?** 6.3.0 closed the seam between what this library returns
 and what it takes. Every collection parameter is now a `Sequence`, so
 `format.csv.format(sheet.maps)`, `format.sitemap.format(parsed)`,
-`concurrent.run(rows, work)`, `net.crawl(seeds)`, `table.add.all(sheet.rows)`
+`concurrent.run(rows, work)`, `net.crawl(seeds)`, `table.addAll(sheet.rows)`
 and `reader.pick(options: found)` compile without a conversion between them —
 a list literal adds `.seq`. `Csv.rows` is a `Sequence<List<String>>` rather
 than a nested sequence, so a cell is `row[2]`. `Transformer.tap` and
@@ -305,7 +303,7 @@ A crawl reaches a spreadsheet without passing through memory:
 ```dart
 await io.async.csv.write(
   'products.csv',
-  net.crawl([Fetch(seed)].seq).flow.transform(
+  net.crawl([Fetch(seed)].seq).flow.through(
     .map((res) => <String, Object?>{'name': res.url.path, 'price': '0'}),
   ),
   headers: ['name', 'price'],
@@ -386,7 +384,7 @@ single-stage crawl needs none of it and never did:
 ```dart
 // setup: final urls = <Uri>[];
 await urls.flow
-    .transform(.map.async((u) => net.http.send(.get, u), size: 4))
+    .through(.map.async((u) => net.http.send(.get, u), size: 4))
     .collect(.list());
 ```
 
@@ -404,13 +402,13 @@ final crawl = net.crawl(
       .map((a) =>
           res.follow(a.attributes['href']!, tag: 'song', meta: [name(a.text)])),
     ),
-    _ => const Sequence<Fetch>([]),
+    _ => const <Fetch>[],
   },
 )..concurrent(4)..limit(50)..depth(2);
 
 // Extraction is downstream, on the flow.
 await crawl.flow
-    .transform(.where((res) => res.fetch.tag == 'song'))
+    .through(.where((res) => res.fetch.tag == 'song'))
     .collect(.foreach((res) => print(
       '${res.fetch.meta.read(name)} -> '
       '${res.parse(format.html).$('a').attr('href')}',
@@ -434,7 +432,7 @@ retries, cap, cache and rate belong to the `Fetcher` you hand it:
 
 ```dart
 // setup: final seed = 'https://example.com'.url;
-// setup: Sequence<Fetch> next(Reply res) => const Sequence<Fetch>([]);
+// setup: Iterable<Fetch> next(Reply res) => const <Fetch>[];
 final crawl = net.crawl([Fetch(seed)].seq, next)
   ..using(Fetcher(
     headers: const {'User-Agent': 'ExampleBot/1.0'},
@@ -445,7 +443,7 @@ final crawl = net.crawl([Fetch(seed)].seq, next)
     limiter: concurrent.rate(10, per: 1.s),
   ).call)
   ..resume('crawl.state')     // carry on where an interrupted run stopped
-  ..accept(const Sequence(['text/html']))  // never hand a PDF to the parser
+  ..accept(const ['text/html'])  // never hand a PDF to the parser
   ..obey('ExampleBot/1.0');   // robots.txt, Crawl-delay included
 ```
 
@@ -678,14 +676,14 @@ The same vocabulary, and the same two members, over a source that arrives a piec
 
 ```dart
 await io.async.csv.records('big.csv')
-    .transform(.where((r) => r['live'] == 'yes'))
-    .transform(.take.first(1000))
+    .through(.where((r) => r['live'] == 'yes'))
+    .through(.take.first(1000))
     .collect(.count.by((r) => r['host']));
 
 // bounded async work over a source too large to hold, which
 // `concurrent.run` cannot take
 await io.async.lines('urls.txt')
-    .transform(.map.async((line) => net.http.send(.get, line.trim().url), size: 8))
+    .through(.map.async((line) => net.http.send(.get, line.trim().url), size: 8))
     .collect(.count());
 ```
 
@@ -738,14 +736,14 @@ A transport is a function, so a fixture is a closure over a map:
 final titles = await (net.crawl([Fetch('https://site.test'.url)].seq)
       ..using((f) async => Reply.text('<h1>Hi</h1>', fetch: f)))
     .flow
-    .transform(.map((res) => res.parse(format.html).$('h1').text))
+    .through(.map((res) => res.parse(format.html).$('h1').text))
     .collect(.list());
 ```
 
 `next` is a pure function, so the routing is testable with no crawl at all:
 
 ```dart
-// setup: Sequence<Fetch> next(Reply res) => const Sequence<Fetch>([]);
+// setup: Iterable<Fetch> next(Reply res) => const <Fetch>[];
 final urls = next(Reply.text('<a href="/b">b</a>', fetch: Fetch(seed)))
     .transform(.map((f) => f.url.toString()))
     .collect(.list());

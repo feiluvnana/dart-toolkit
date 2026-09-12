@@ -76,7 +76,7 @@ void main() async {
               ColumnAlign.left,
             ],
           )
-          ..add.all(
+          ..addAll(
             [
               for (final row
                   in sales
@@ -112,7 +112,7 @@ void main() async {
   // `count.by` is a counted report in one call; `util.time.day` is the
   // grouping primitive `dart:core` has no one-liner for.
   log.info(
-    'per day:    ${sales.collect(.count.by((s) => util.time.day(s.at))).count} days',
+    'per day:    ${sales.collect(.count.by((s) => util.time.day(s.at))).length} days',
   );
   log.info(
     'mean order: ${sales.collect(.avg((s) => s.amount))?.toStringAsFixed(2)}',
@@ -176,7 +176,7 @@ void main() async {
   );
   log.info(
     'regions:    '
-    '${back.at('regions').all((r) => r.text()).nonnull.collect(.join(', '))}',
+    '${back.at('regions').all((r) => r.text()).nonNull.collect(.join(', '))}',
   );
   log.info('rows:       ${back.number('limits.rows')}');
 

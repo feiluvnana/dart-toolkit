@@ -393,7 +393,7 @@ void main() {
         DateTime(2024, 3, 9, 23),
         DateTime(2024, 3, 10, 5),
       ].seq;
-      expect(stamps.collect(.count.by(util.time.day)).count, equals(2));
+      expect(stamps.collect(.count.by(util.time.day)).length, equals(2));
     });
 
     test('int gained the two missing rungs', () {

@@ -110,7 +110,7 @@ class HtmlAccessor with FileCodec<Markup, Markup> implements Codec<Markup> {
   /// [Markup.$] and back is the matches.
   @override
   String format(Markup markup) =>
-      markup.elements.transform(.map((e) => e.outerHtml)).collect(.join(''));
+      markup.elements.map((e) => e.outerHtml).join('');
 }
 
 /// Parses [markup] into a queryable [Markup] cursor.

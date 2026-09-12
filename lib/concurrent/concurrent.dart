@@ -11,8 +11,6 @@ import 'dart:async';
 import 'dart:collection';
 
 import '../util/rand.dart';
-import '../collection/flow.dart';
-import '../collection/sequence.dart';
 
 // ============================================================================
 // CONCURRENT & WORKER POOL (concurrent.* / Pool)
@@ -48,8 +46,8 @@ class ConcurrentAccessor {
   /// from (`flow.run`, an extension declared in this library). This keeps
   /// [delay] and [Pool]'s error semantics, which that one does not carry, so
   /// the two are not spellings of each other.
-  Future<Sequence<R>> run<I, R>(
-    Sequence<I> items,
+  Future<List<R>> run<I, R>(
+    Iterable<I> items,
     FutureOr<R> Function(I item) worker, {
     int size = 4,
     Duration delay = Duration.zero,
@@ -63,18 +61,20 @@ class ConcurrentAccessor {
   ///
   /// ```dart
   /// final results = await concurrent.settle(urls, fetch);
-  /// results.collect(.foreach((result) => switch (result) {
-  ///   Done(:final value) => save(value),
-  ///   Broke(:final error) => log.warn('$error'),
-  /// }));
+  /// for (final result in results) {
+  ///   switch (result) {
+  ///     case Done(:final value): save(value);
+  ///     case Broke(:final error): log.warn('$error');
+  ///   }
+  /// }
   /// ```
   ///
   /// [run]'s twin, and the shorter half of the pair `Pool` has always
   /// carried: [run] was reachable here without naming a [Pool] and this was
   /// not, so the failure-tolerant form — the one a script reaching for a pool
   /// usually wants — cost a type name the safe default does not.
-  Future<Sequence<Settled<R>>> settle<I, R>(
-    Sequence<I> items,
+  Future<List<Settled<R>>> settle<I, R>(
+    Iterable<I> items,
     FutureOr<R> Function(I item) worker, {
     int size = 4,
     Duration delay = Duration.zero,
@@ -207,36 +207,28 @@ class PoolEvents<I> {
 /// together say which item produced which failure:
 ///
 /// ```dart
-/// // setup: final e = PoolFailure<Uri, String>(const Sequence([]), const Sequence([]));
+/// // setup: final e = PoolFailure<Uri, String>(const [], const []);
 /// final broken = e.outcomes.transform(.where.type<Broke<String>>());
 /// ```
 class PoolFailure<I, R> implements Exception {
   /// One outcome per item, in the order of [items].
-  ///
-  /// `failures` was the 5.5.0 spelling and named only the broken ones;
-  /// `outcomes.transform(.where.type<Broke<R>>())` is that list, in the
-  /// vocabulary the rest of the library already uses for the question.
-  final Sequence<Settled<R>> outcomes;
+  final List<Settled<R>> outcomes;
 
   /// The items the pool was given, aligned with [outcomes].
-  ///
-  /// [Broke] deliberately does not carry the item — the caller already holds
-  /// it — so this is where the pairing lives.
-  final Sequence<I> items;
+  final List<I> items;
 
   /// Creates a failure summary.
   const PoolFailure(this.outcomes, this.items);
 
   /// How many of the pool's tasks threw.
-  int get broken =>
-      outcomes.collect(.count.where((Settled<R> o) => o is Broke<R>));
+  int get broken => outcomes.whereType<Broke<R>>().length;
 
   @override
   String toString() {
-    final first = outcomes.collect(.first.where((o) => o is Broke<R>));
+    final first = outcomes.whereType<Broke<R>>().firstOrNull;
     if (first == null) return 'PoolFailure: no failures recorded';
     return 'PoolFailure: $broken of the pool\'s tasks failed '
-        '(first: ${(first as Broke<R>).error})';
+        '(first: ${first.error})';
   }
 }
 
@@ -267,15 +259,15 @@ class Pool<I> {
   /// tasks from launching and propagates once the in-flight ones settle; if
   /// [PoolEvents.error] is registered every item is attempted and a
   /// [PoolFailure] is thrown at the end instead.
-  Future<Sequence<R>> run<R>(
-    Sequence<I> items,
+  Future<List<R>> run<R>(
+    Iterable<I> items,
     FutureOr<R> Function(I item) worker,
   ) async {
     for (final h in on._startHandlers) {
       h();
     }
 
-    final list = items.transform(.cast<I>()).collect(.list());
+    final list = items is List<I> ? items : items.toList();
     final results = List<R?>.filled(list.length, null);
     final outcomes = List<Settled<R>?>.filled(list.length, null);
     var failed = 0;
@@ -335,11 +327,11 @@ class Pool<I> {
     }
     if (failed > 0) {
       throw PoolFailure<I, R>(
-        Sequence(List<Settled<R>>.generate(list.length, (i) => outcomes[i]!)),
-        Sequence(list),
+        List<Settled<R>>.generate(list.length, (i) => outcomes[i]!),
+        list,
       );
     }
-    return Sequence(List<R>.generate(list.length, (i) => results[i] as R));
+    return List<R>.generate(list.length, (i) => results[i] as R);
   }
 
   /// Maps [worker] over all [items] to completion, never throwing on worker
@@ -361,15 +353,15 @@ class Pool<I> {
   ///   }
   /// }));
   /// ```
-  Future<Sequence<Settled<R>>> settle<R>(
-    Sequence<I> items,
+  Future<List<Settled<R>>> settle<R>(
+    Iterable<I> items,
     FutureOr<R> Function(I item) worker,
   ) async {
     for (final h in on._startHandlers) {
       h();
     }
 
-    final list = items.transform(.cast<I>()).collect(.list());
+    final list = items is List<I> ? items : items.toList();
     final outcomes = List<Settled<R>?>.filled(list.length, null);
     final active = <Future<void>>{};
     final limit = size > 0 ? size : 1;
@@ -407,7 +399,7 @@ class Pool<I> {
       h();
     }
 
-    return Sequence(List.generate(list.length, (i) => outcomes[i]!));
+    return List.generate(list.length, (i) => outcomes[i]!);
   }
 
   /// A [Flow] of the results of mapping [worker] over [items], in completion
@@ -429,8 +421,8 @@ class Pool<I> {
   /// registered before the flow exists, which the pipeline step cannot be.
   ///
   /// Was `stream`, returning a `Stream<R>`, through 5.3.0.
-  Flow<R> flow<R>(Sequence<I> items, FutureOr<R> Function(I item) worker) {
-    final list = items.transform(.cast<I>()).collect(.list());
+  Stream<R> flow<R>(Iterable<I> items, FutureOr<R> Function(I item) worker) {
+    final list = items.toList();
     final active = <Future<void>>{};
     final limit = size > 0 ? size : 1;
     final collecting = on._errorHandlers.isNotEmpty;
@@ -518,7 +510,7 @@ class Pool<I> {
       }
     }();
 
-    return Flow<R>(controller.stream);
+    return controller.stream;
   }
 }
 

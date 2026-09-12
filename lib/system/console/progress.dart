@@ -114,7 +114,7 @@ class Progress {
         : '$_current / $total';
 
     final parts = [
-      if (_message.isNotEmpty) _message.brightcyan(),
+      if (_message.isNotEmpty) _message.brightCyan(),
       '[${fill * filled}${empty * (width - filled).clamp(0, width)}]'.bold(),
       '${(fraction * 100).toStringAsFixed(1)}%'.padLeft(6).green(),
       '($metrics)'.dim(),
@@ -154,6 +154,6 @@ class Progress {
   void fail([String? message]) {
     _clock.stop();
     if (writer.tty) writer.writeln();
-    if (message != null) writer.errorln('${'✖'.brightred()} $message');
+    if (message != null) writer.errorln('${'✖'.brightRed()} $message');
   }
 }

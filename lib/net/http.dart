@@ -24,9 +24,9 @@ import '../src/fs.dart';
 import '../src/codec.dart';
 import '../src/method.dart';
 import '../util/rand.dart';
-import '../collection/sequence.dart';
 import 'cache.dart';
 import 'fetch.dart';
+import '../format/format.dart';
 
 // ============================================================================
 // HTTP NETWORKING (Fetcher / Reply)
@@ -226,8 +226,22 @@ class Reply {
   /// Page headers, lower-cased by `package:http`.
   final Map<String, String> headers;
 
+  /// The raw response body bytes, or empty if streamed.
+  final List<int> _rawBytes;
+
+  final Stream<List<int>>? _stream;
+
   /// The raw response body.
-  final List<int> bytes;
+  List<int> get bytes => _rawBytes;
+
+  /// A stream of the response body bytes.
+  Stream<List<int>> get stream => _stream ?? Stream.value(_rawBytes);
+
+  /// The response body decoded as a string. Alias for [body].
+  String get text => body;
+
+  /// The response body parsed as JSON.
+  dynamic get json => parse(format.json).raw;
 
   /// Whether this response came from an [HttpCache] rather than the network.
   ///
@@ -252,11 +266,48 @@ class Reply {
     Fetch? fetch,
     required this.status,
     required this.headers,
-    required this.bytes,
+    List<int>? bytes,
+    Stream<List<int>>? stream,
     Encoding? encoding,
     this.cached = false,
   }) : fetch = fetch ?? Fetch(url),
-       _encodingOverride = encoding;
+       _encodingOverride = encoding,
+       _rawBytes = bytes ?? const [],
+       _stream = stream;
+
+  /// Creates a streaming [Reply] yielding body chunks via [stream].
+  factory Reply.stream(
+    Stream<List<int>> stream, {
+    required Uri url,
+    Fetch? fetch,
+    int status = 200,
+    Map<String, String>? headers,
+    Encoding? encoding,
+  }) => Reply(
+    url: url,
+    fetch: fetch,
+    status: status,
+    headers: headers ?? const {'content-type': 'application/octet-stream'},
+    stream: stream,
+    encoding: encoding,
+  );
+
+  /// Creates a [Reply] from a `package:http` [http.Response].
+  factory Reply.fromHttpResponse(http.Response response, {Fetch? fetch}) => Reply(
+    url: response.request?.url ?? Uri.parse('http://localhost'),
+    fetch: fetch,
+    status: response.statusCode,
+    headers: response.headers,
+    bytes: response.bodyBytes,
+  );
+
+  /// Converts this [Reply] into a `package:http` [http.Response].
+  http.Response toHttpResponse() => http.Response.bytes(
+    bytes,
+    status,
+    headers: headers,
+    request: http.Request(fetch.method.wire, url),
+  );
 
   /// Creates a [Reply] from a [text] string.
   ///
@@ -602,11 +653,12 @@ class Fetcher with _PathResolver {
   /// them now, by name and on request.
   Fetcher({
     http.Client? pool,
+    http.Client? client,
     Map<String, String>? headers,
     this.timeout = const Duration(seconds: 30),
     this.retries = 0,
     this.backoff = const Duration(milliseconds: 500),
-    this.redirects = 0,
+    this.redirects = 5,
     this.base,
     this.encoding,
     bool session = false,
@@ -616,8 +668,8 @@ class Fetcher with _PathResolver {
     this.cache,
     this.limiter,
   }) : jar = jar ?? (session ? CookieJar() : null),
-       _ownsClient = pool == null,
-       _client = pool ?? _createClient(proxy),
+       _ownsClient = (pool ?? client) == null,
+       _client = pool ?? client ?? _createClient(proxy),
        headers = headers ?? const {};
 
   /// Creates a client that presents itself as a desktop browser.
@@ -632,11 +684,12 @@ class Fetcher with _PathResolver {
   /// ```
   factory Fetcher.browser({
     http.Client? pool,
+    http.Client? client,
     Map<String, String>? headers,
     Duration timeout = const Duration(seconds: 30),
     int retries = 0,
     Duration backoff = const Duration(milliseconds: 500),
-    int redirects = 0,
+    int redirects = 5,
     String? base,
     Encoding? encoding,
     bool session = false,
@@ -646,7 +699,7 @@ class Fetcher with _PathResolver {
     HttpCache? cache,
     Waiting? limiter,
   }) => Fetcher(
-    pool: pool,
+    pool: pool ?? client,
     headers: {..._browserHeaders, ...?headers},
     timeout: timeout,
     retries: retries,
@@ -703,10 +756,226 @@ class Fetcher with _PathResolver {
   /// wait, which is how a caller counts retries that happen in here — a crawl
   /// reports them as `stats.retried`.
   ///
-  /// [fetch] is the request the reply should report as its own
-  /// [Reply.fetch], carrying the `tag`, `meta` and `depth` a crawl put on it.
-  /// [call] passes it; a direct `get` has nothing to pass and the reply
-  /// describes itself.
+  /// Sends a GET request to [url].
+  Future<Reply> get(
+    Uri url, {
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Encoding? encoding,
+    Fetch? fetch,
+  }) => send(
+    HttpMethod.get,
+    url,
+    headers: headers,
+    timeout: timeout,
+    redirects: redirects,
+    retries: retries,
+    encoding: encoding,
+    fetch: fetch,
+  );
+
+  /// Sends a POST request to [url].
+  Future<Reply> post(
+    Uri url, {
+    Body? body,
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Encoding? encoding,
+    Fetch? fetch,
+  }) => send(
+    HttpMethod.post,
+    url,
+    body: body,
+    headers: headers,
+    timeout: timeout,
+    redirects: redirects,
+    retries: retries,
+    encoding: encoding,
+    fetch: fetch,
+  );
+
+  /// Sends a PUT request to [url].
+  Future<Reply> put(
+    Uri url, {
+    Body? body,
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Encoding? encoding,
+    Fetch? fetch,
+  }) => send(
+    HttpMethod.put,
+    url,
+    body: body,
+    headers: headers,
+    timeout: timeout,
+    redirects: redirects,
+    retries: retries,
+    encoding: encoding,
+    fetch: fetch,
+  );
+
+  /// Sends a DELETE request to [url].
+  Future<Reply> delete(
+    Uri url, {
+    Body? body,
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Encoding? encoding,
+    Fetch? fetch,
+  }) => send(
+    HttpMethod.delete,
+    url,
+    body: body,
+    headers: headers,
+    timeout: timeout,
+    redirects: redirects,
+    retries: retries,
+    encoding: encoding,
+    fetch: fetch,
+  );
+
+  /// Sends a PATCH request to [url].
+  Future<Reply> patch(
+    Uri url, {
+    Body? body,
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Encoding? encoding,
+    Fetch? fetch,
+  }) => send(
+    HttpMethod.patch,
+    url,
+    body: body,
+    headers: headers,
+    timeout: timeout,
+    redirects: redirects,
+    retries: retries,
+    encoding: encoding,
+    fetch: fetch,
+  );
+
+  /// Sends a HEAD request to [url].
+  Future<Reply> head(
+    Uri url, {
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Fetch? fetch,
+  }) => send(
+    HttpMethod.head,
+    url,
+    headers: headers,
+    timeout: timeout,
+    redirects: redirects,
+    retries: retries,
+    fetch: fetch,
+  );
+
+  /// Sends an HTTP request and returns a streaming [Reply] yielding body bytes
+  /// via [Reply.stream] without buffering the full body in heap memory.
+  Future<Reply> stream(
+    HttpMethod method,
+    Uri url, {
+    Map<String, String>? headers,
+    Body? body,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Encoding? encoding,
+    void Function(Uri url, int attempt)? onretry,
+    Fetch? fetch,
+  }) async {
+    final merged = {
+      ...this.headers,
+      ...?headers,
+    };
+    final deadline = timeout ?? this.timeout;
+    final effRetries = retries ?? this.retries;
+    final effRedirects = redirects ?? this.redirects;
+    final allowRetry = effRetries > 0;
+    final maxAttempts = allowRetry ? effRetries + 1 : 1;
+    var currentUrl = url;
+    var currentMethod = method;
+    var currentBody = body;
+    var redirectCount = 0;
+
+    while (true) {
+      for (var attempt = 1; ; attempt++) {
+        await limiter?.take();
+        final currentMerged = Map<String, String>.from(merged);
+        if (jar != null) {
+          final cookieHeader = jar!.header(currentUrl);
+          if (cookieHeader != null) {
+            currentMerged['Cookie'] = currentMerged.containsKey('Cookie')
+                ? '${currentMerged['Cookie']}; $cookieHeader'
+                : cookieHeader;
+          }
+        }
+        final request = http.Request(currentMethod.wire, currentUrl)
+          ..headers.addAll(currentMerged);
+        request.followRedirects = false;
+        currentBody?.apply(request);
+        try {
+          final streamed = await _client.send(request).timeout(deadline);
+          if (jar != null && streamed.headers.containsKey('set-cookie')) {
+            jar!.add(streamed.headers['set-cookie']!, uri: currentUrl);
+          }
+
+          if (effRedirects > 0 &&
+              _isRedirect(streamed.statusCode) &&
+              streamed.headers.containsKey('location')) {
+            if (redirectCount >= effRedirects) {
+              throw FatalHttpException(
+                'Redirect limit of $effRedirects exceeded',
+                uri: currentUrl,
+              );
+            }
+            redirectCount++;
+            final location = streamed.headers['location']!;
+            final nextUrl = currentUrl.resolve(location);
+            if (streamed.statusCode == 303 ||
+                ((streamed.statusCode == 301 || streamed.statusCode == 302) &&
+                    currentMethod != HttpMethod.get &&
+                    currentMethod != HttpMethod.head)) {
+              currentMethod = HttpMethod.get;
+              currentBody = null;
+            }
+            currentUrl = nextUrl;
+            await streamed.stream.drain<void>();
+            break;
+          }
+
+          return Reply.stream(
+            streamed.stream,
+            url: currentUrl,
+            fetch: fetch ?? Fetch(url, method: method),
+            status: streamed.statusCode,
+            headers: streamed.headers,
+            encoding: encoding ?? this.encoding,
+          );
+        } catch (error) {
+          if (error is FatalHttpException) rethrow;
+          if (!allowRetry || attempt >= maxAttempts) rethrow;
+          retried++;
+          onretry?.call(currentUrl, attempt);
+          await Future<void>.delayed(_backoffWithJitter(backoff * attempt));
+        }
+      }
+    }
+  }
+
+  /// Sends [method] to [url] and returns the response.
   Future<Reply> send(
     HttpMethod method,
     Uri url, {
@@ -1067,7 +1336,7 @@ class Fetcher with _PathResolver {
     bool match = false,
   }) async {
     await Pool<MapEntry<String, Uri>>(size: size).run(
-      tasks.entries.seq,
+      tasks.entries,
       (task) => download(task.value, task.key, match: match),
     );
   }
@@ -1103,7 +1372,7 @@ class Morsel {
   final bool secure;
 
   /// Whether access is restricted to HTTP (no scripts).
-  final bool httponly;
+  final bool httpOnly;
 
   /// Whether this cookie goes back only to the exact host that set it.
   ///
@@ -1125,7 +1394,7 @@ class Morsel {
     this.path,
     this.expires,
     this.secure = false,
-    this.httponly = false,
+    this.httpOnly = false,
     this.host = false,
   });
 
@@ -1195,7 +1464,7 @@ class Morsel {
     DateTime? expires;
     int? maxAge;
     var secure = false;
-    var httponly = false;
+    var httpOnly = false;
 
     for (final part in parts.skip(1)) {
       final kv = part.split('=');
@@ -1215,7 +1484,7 @@ class Morsel {
         case 'secure':
           secure = true;
         case 'httponly':
-          httponly = true;
+          httpOnly = true;
       }
     }
 
@@ -1234,7 +1503,7 @@ class Morsel {
           ? DateTime.now().add(Duration(seconds: maxAge))
           : expires,
       secure: secure,
-      httponly: httponly,
+      httpOnly: httpOnly,
     );
   }
 
@@ -1333,7 +1602,7 @@ class CookieJar {
   }
 
   /// All stored cookies.
-  Sequence<Morsel> get cookies => _cookies.values.seq;
+  List<Morsel> get cookies => _cookies.values.toList();
 
   /// The value of the stored cookie named [name], or `null`.
   String? operator [](String name) {
@@ -1354,3 +1623,4 @@ class CookieJar {
     );
   }
 }
+

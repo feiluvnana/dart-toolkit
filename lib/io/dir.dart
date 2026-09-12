@@ -81,13 +81,12 @@ class DirAccessor {
   /// library — every `io` write already does this for itself:
   ///
   /// ```dart
-  /// io.dir.makeparent('out/nested/report.txt');   // makes 'out/nested'
+  /// io.dir.makeParent('out/nested/report.txt');   // makes 'out/nested'
   /// io.write('out/nested/report.txt', 'done');    // makes it anyway
   /// ```
   ///
-  /// It was `io.parent` through 5.1.0, a name that reads like it returns the
-  /// parent and instead creates it. The reader is `io.path.dirname`.
-  FileSystemEntry makeparent(String path) => Fs.mkparentSync(path);
+  /// Creates the directory holding [path], including any missing parents.
+  FileSystemEntry makeParent(String path) => Fs.mkparentSync(path);
 
   /// Creates a new temporary directory with the given name [prefix].
   FileSystemEntry temp([String prefix = 'tmp_']) => Fs.tempSync(prefix);
@@ -104,11 +103,11 @@ class DirAccessor {
   ///
   /// Empty when [dir] does not exist, so a listing needs no [io.exists] in
   /// front of it. [match] is a glob — `*.csv`, not `RegExp(r'\.csv$')`.
-  Sequence<FileSystemEntry> list(
+  Iterable<FileSystemEntry> list(
     String dir, {
     FileSystemEntryKind? only,
     String? match,
-  }) => Sequence(Entries.list(dir, only: only, match: match));
+  }) => Entries.list(dir, only: only, match: match);
 
   /// Everything under [dir], however deep.
   ///
@@ -128,14 +127,18 @@ class DirAccessor {
   /// of its own ancestors would otherwise recurse until the stack ran out, so
   /// the walk remembers which real directories it has entered and stops the
   /// second time — the cycle is skipped, not an error.
-  Sequence<FileSystemEntry> walk(
+  Iterable<FileSystemEntry> walk(
     String dir, {
     FileSystemEntryKind? only,
     String? match,
     int? depth,
     bool follow = true,
-  }) => Sequence(
-    Entries.walk(dir, only: only, match: match, depth: depth, follow: follow),
+  }) => Entries.walk(
+    dir,
+    only: only,
+    match: match,
+    depth: depth,
+    follow: follow,
   );
 
   /// Every entry matching the shell-style [pattern], from the current
@@ -151,8 +154,8 @@ class DirAccessor {
   /// `[abc]` a class and `{a,b}` an alternation. The leading segments with no
   /// wildcard in them are the directory the walk starts from, so
   /// `out/reports/*.csv` opens one directory rather than the whole tree.
-  Sequence<FileSystemEntry> glob(String pattern) =>
-      Sequence(Entries.expand(pattern));
+  Iterable<FileSystemEntry> glob(String pattern) =>
+      Entries.expand(pattern);
 
   /// Deletes entries under [dir], and returns how many went.
   ///
@@ -268,39 +271,37 @@ class DirAsyncAccessor {
   Future<FileSystemEntry> make(String path) => Fs.mkdir(path);
 
   /// Creates the directory holding [path], including any missing parents.
-  Future<FileSystemEntry> makeparent(String path) => Fs.mkparent(path);
+  Future<FileSystemEntry> makeParent(String path) => Fs.mkparent(path);
 
   /// Creates a new temporary directory with the given name [prefix].
   Future<FileSystemEntry> temp([String prefix = 'tmp_']) => Fs.temp(prefix);
 
   /// Everything directly under [dir]: files, directories and links.
-  Flow<FileSystemEntry> list(
+  Stream<FileSystemEntry> list(
     String dir, {
     FileSystemEntryKind? only,
     String? match,
   }) =>
-      Flow.of(() => Entries.walkAsync(dir, only: only, match: match, depth: 1));
+      Entries.walkAsync(dir, only: only, match: match, depth: 1);
 
   /// Everything under [dir], however deep. See [DirAccessor.walk].
-  Flow<FileSystemEntry> walk(
+  Stream<FileSystemEntry> walk(
     String dir, {
     FileSystemEntryKind? only,
     String? match,
     int? depth,
     bool follow = true,
-  }) => Flow.of(
-    () => Entries.walkAsync(
-      dir,
-      only: only,
-      match: match,
-      depth: depth,
-      follow: follow,
-    ),
+  }) => Entries.walkAsync(
+    dir,
+    only: only,
+    match: match,
+    depth: depth,
+    follow: follow,
   );
 
   /// Every entry matching the shell-style [pattern]. See [DirAccessor.glob].
-  Flow<FileSystemEntry> glob(String pattern) =>
-      Flow.of(() => Entries.expandAsync(pattern));
+  Stream<FileSystemEntry> glob(String pattern) =>
+      Entries.expandAsync(pattern);
 
   /// Deletes entries under [dir], and returns how many went.
   /// See [DirAccessor.sweep].

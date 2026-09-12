@@ -30,7 +30,6 @@
 /// same call as `res.parse(format.json)`.
 library;
 
-import '../collection/collection.dart';
 import '../src/csvtext.dart';
 import '../src/codec.dart';
 import '../src/csv.dart';
@@ -46,7 +45,7 @@ import 'format.dart';
 /// and writing one a row at a time is `io.async.csv.write`. Those are about
 /// files, and they stayed where files live.
 class CsvAccessor
-    with FileCodec<Csv, Sequence<Map<String, Object?>>>
+    with FileCodec<Csv, Iterable<Map<String, Object?>>>
     implements Codec<Csv> {
   /// Creates the accessor. Prefer the shared `format.csv` instance.
   const CsvAccessor();
@@ -88,12 +87,14 @@ class CsvAccessor
   /// shape you were handed at runtime is how a typo becomes an empty file.
   @override
   String format(
-    Sequence<Map<String, Object?>> rows, {
+    Iterable<Map<String, Object?>> rows, {
     List<String>? headers,
     String delimiter = ',',
     String newline = '\n',
   }) => CsvText.records(
-    rows.transform(.cast<Map<String, Object?>>()).collect(.list()),
+    rows is List<Map<String, Object?>>
+        ? rows
+        : rows.cast<Map<String, Object?>>().toList(),
     headers: headers,
     delimiter: delimiter,
     newline: newline,
@@ -113,12 +114,14 @@ class CsvAccessor
   ///
   /// Writing it goes through `io.write` rather than a second name here.
   String cells(
-    Sequence<List<Object?>> rows, {
+    Iterable<List<Object?>> rows, {
     List<String>? headers,
     String delimiter = ',',
     String newline = '\n',
   }) => CsvText.cells(
-    rows.transform(.cast<List<Object?>>()).collect(.list()),
+    rows is List<List<Object?>>
+        ? rows
+        : rows.cast<List<Object?>>().toList(),
     headers: headers,
     delimiter: delimiter,
     newline: newline,

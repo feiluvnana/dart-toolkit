@@ -148,16 +148,16 @@ class ConsoleWriter {
     final left = pad ~/ 2;
 
     out.writeln(
-      '${style.topleft}${style.horizontal * left}$caption'
-      '${style.horizontal * (pad - left)}${style.topright}',
+      '${style.topLeft}${style.horizontal * left}$caption'
+      '${style.horizontal * (pad - left)}${style.topRight}',
     );
     for (final line in lines) {
       final fill = ' ' * (inner - line.width);
       out.writeln('${style.vertical} $line$fill ${style.vertical}');
     }
     out.writeln(
-      '${style.bottomleft}${style.horizontal * (inner + 2)}'
-      '${style.bottomright}',
+      '${style.bottomLeft}${style.horizontal * (inner + 2)}'
+      '${style.bottomRight}',
     );
   }
 }

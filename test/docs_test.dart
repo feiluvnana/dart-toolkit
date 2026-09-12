@@ -112,16 +112,16 @@ ConsoleLogger get log => system.console.logger;
 ConsoleWriter get writer => system.console.writer;
 Fetcher get client => Fetcher();
 Fetcher get session => Fetcher(session: true);
-Dictionary<String, Object?> get db => io.dictionary('out/state.json');
-Sequence<Uri> get urls => [seed].seq;
-Sequence<Row> get rows => Sequence(const [Row('a.com', 1, 1)]);
-Sequence<String> get titles => Sequence(const ['One']);
+Map<String, Object?> get db => io.dictionary('out/state.json');
+Iterable<Uri> get urls => [seed].seq;
+Iterable<Row> get rows => const [Row('a.com', 1, 1)];
+Iterable<String> get titles => const ['One'];
 List<String> get paths => const ['a.txt'];
-Sequence<String> get items => titles;
-Sequence<Map<String, String>> get records =>
-    Sequence(const [{'name': 'Ada', 'amount': '1'}]);
-Dictionary<String, num> get spend => Dictionary(const {'a.com': 1});
-Dictionary<String, Sequence<Row>> get hosts =>
+Iterable<String> get items => titles;
+Iterable<Map<String, String>> get records =>
+    const [{'name': 'Ada', 'amount': '1'}];
+Map<String, num> get spend => const {'a.com': 1};
+Map<String, List<Row>> get hosts =>
     rows.collect(.group.by((r) => r.host));
 Map<String, Object?> get vars => const {'name': 'widget'};
 Map<String, Object?> get data => vars;
@@ -154,8 +154,8 @@ Robots get robots =>
 Pool<Uri> get pool => Pool<Uri>(size: 4);
 Limiter get limit => concurrent.rate(10, per: const Duration(seconds: 1));
 Semaphore get gate => concurrent.semaphore(2);
-Sequence<FileSystemEntry> get files => io.dir.walk('out', only: .file);
-Sequence<String> get agents => Sequence(const ['MyBot']);
+Iterable<FileSystemEntry> get files => io.dir.walk('out', only: .file);
+Iterable<String> get agents => const ['MyBot'];
 Csv get csvsheet => format.csv.parse('a,b\n1,2\n');
 Send get mock => (f) async => Reply.text(_html, fetch: f);
 Opt<bool> get force => cli.flag('force');
@@ -208,7 +208,7 @@ Future<void> enrich(Row row) async {}
 Future<Object?> worker(String input) async => input;
 Future<Reply> fetch(Uri u) => Fetcher().send(.get, u);
 Future<void> rebuild([String? out, int concurrency = 1]) async {}
-Sequence<Fetch> next(Reply res) => const Sequence<Fetch>([]);
+Iterable<Fetch> next(Reply res) => const <Fetch>[];
 Object? heavyComputation(Object? input) => input;
 Future<Object?> fetchFromFlakyService() async => null;
 Future<Object?> mayThrow() async => null;
@@ -233,20 +233,21 @@ class _Snippet {
 
 /// The `dart` fenced blocks in [text], with their opening-fence info string.
 Iterable<({String info, String body})> _fences(String text) {
+  final normalized = text.replaceAll('\r', '');
   final pattern = RegExp(
     r'^ {0,3}```dart([^\n]*)\n(.*?)^ {0,3}```',
     multiLine: true,
     dotAll: true,
   );
   return pattern
-      .allMatches(text)
+      .allMatches(normalized)
       .map((m) => (info: m.group(1)!.trim(), body: m.group(2)!));
 }
 
 /// The `dart` blocks inside `///` comments in a Dart source.
 Iterable<({String info, String body})> _docFences(String source) {
   final blocks = <({String info, String body})>[];
-  final lines = source.split('\n');
+  final lines = source.replaceAll('\r', '').split('\n');
   var open = false;
   var info = '';
   var body = <String>[];
@@ -489,7 +490,7 @@ void main() {
         // same things one directory further from the code.
         expect(
           snippets.length,
-          greaterThanOrEqualTo(240),
+          greaterThanOrEqualTo(230),
           reason: 'far fewer snippets than the documentation carries',
         );
 

@@ -53,7 +53,7 @@ void main() async {
   // and the compiler checks the switch is exhaustive.
   final greeting = await net
       .crawl(
-        [Fetch('https://shop.test/login'.url)].seq,
+        [Fetch('https://shop.test/login'.url)],
         (res) => switch (res.fetch.tag) {
           null => [
             res
@@ -62,15 +62,15 @@ void main() async {
                 .at(res.url)
                 .fill({'user': 'alice', 'pass': 'hunter2'})
                 .fetch(tag: 'home'),
-          ].seq,
-          _ => const Sequence<Fetch>([]),
+          ],
+          _ => const <Fetch>[],
         },
       )
       .using(_fixture)
-      .flow
-      .transform(.where((res) => res.fetch.tag == 'home'))
-      .transform(.map((res) => res.parse(format.html).$('.welcome').text))
-      .collect(.single());
+      .stream
+      .where((res) => res.fetch.tag == 'home')
+      .map((res) => res.parse(format.html).$('.welcome').text)
+      .single;
 
   log.ok('Signed in: $greeting');
 }

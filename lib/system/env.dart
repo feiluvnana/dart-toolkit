@@ -8,6 +8,8 @@
 /// its own doc.
 library;
 
+import 'dart:core';
+import 'dart:core' as core;
 import 'dart:io';
 
 // ============================================================================
@@ -34,7 +36,7 @@ class EnvAccessor {
   /// Returns `false` when the file does not exist. Existing process variables
   /// win unless [overwrite] is set. Supports `export` prefixes, `#` comments,
   /// and single- or double-quoted values.
-  bool load([String path = '.env', bool overwrite = false]) {
+  core.bool load([String path = '.env', core.bool overwrite = false]) {
     final file = File(path);
     if (!file.existsSync()) return false;
     for (final entry in parse(file.readAsStringSync()).entries) {
@@ -100,23 +102,54 @@ class EnvAccessor {
 
     return switch (T) {
       const (String) => raw as T,
-      const (int) => (int.tryParse(raw) ?? fallback) as T,
+      const (core.int) => (core.int.tryParse(raw) ?? fallback) as T,
       const (double) => (double.tryParse(raw) ?? fallback) as T,
-      const (bool) => (_flag(raw) ?? fallback) as T,
+      const (core.bool) => (_flag(raw) ?? fallback) as T,
       _ => throw ArgumentError(
         'system.env.get does not support $T; use String, int, double or bool.',
       ),
     };
   }
 
-  static bool? _flag(String raw) => switch (raw.trim().toLowerCase()) {
+  /// Reads [key] as an integer, returning [defaultValue] if absent or unparseable.
+  core.int int(String key, {core.int defaultValue = 0}) {
+    final raw = _overrides[key] ?? Platform.environment[key];
+    if (raw == null || raw.isEmpty) return defaultValue;
+    return core.int.tryParse(raw) ?? defaultValue;
+  }
+
+  /// Reads [key] as an integer. Alias for [int].
+  core.int getInt(String key, {core.int defaultValue = 0}) =>
+      int(key, defaultValue: defaultValue);
+
+  /// Reads [key] as a boolean, returning [defaultValue] if absent or unparseable.
+  core.bool bool(String key, {core.bool defaultValue = false}) {
+    final raw = _overrides[key] ?? Platform.environment[key];
+    if (raw == null || raw.isEmpty) return defaultValue;
+    return _flag(raw) ?? defaultValue;
+  }
+
+  /// Reads [key] as a boolean. Alias for [bool].
+  core.bool getBool(String key, {core.bool defaultValue = false}) =>
+      bool(key, defaultValue: defaultValue);
+
+  /// Returns the value for [key], throwing [StateError] if missing or empty.
+  String require(String key) {
+    final raw = _overrides[key] ?? Platform.environment[key];
+    if (raw == null || raw.isEmpty) {
+      throw StateError('Missing required environment variable: $key');
+    }
+    return raw;
+  }
+
+  static core.bool? _flag(String raw) => switch (raw.trim().toLowerCase()) {
     'true' || '1' || 'yes' || 'on' => true,
     'false' || '0' || 'no' || 'off' => false,
     _ => null,
   };
 
   /// Whether [key] resolves to a non-empty value.
-  bool has(String key) =>
+  core.bool has(String key) =>
       (_overrides[key] ?? Platform.environment[key] ?? '').isNotEmpty;
 
   /// Sets an override for [key].

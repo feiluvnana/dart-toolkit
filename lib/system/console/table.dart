@@ -8,7 +8,6 @@
 /// which one was a writer. Nothing about the API moved.
 library;
 
-import '../../collection/collection.dart';
 import 'ansi.dart';
 import 'writer.dart';
 
@@ -31,16 +30,16 @@ enum ColumnAlign {
 /// Box-drawing characters used by [Table] and [ConsoleWriter.box].
 class TableStyle {
   /// Top-left corner.
-  final String topleft;
+  final String topLeft;
 
   /// Top-right corner.
-  final String topright;
+  final String topRight;
 
   /// Bottom-left corner.
-  final String bottomleft;
+  final String bottomLeft;
 
   /// Bottom-right corner.
-  final String bottomright;
+  final String bottomRight;
 
   /// Horizontal rule segment.
   final String horizontal;
@@ -52,60 +51,60 @@ class TableStyle {
   final String cross;
 
   /// Junction on the top edge.
-  final String topdivider;
+  final String topDivider;
 
   /// Junction on the bottom edge.
-  final String bottomdivider;
+  final String bottomDivider;
 
   /// Junction on the left edge.
-  final String leftdivider;
+  final String leftDivider;
 
   /// Junction on the right edge.
-  final String rightdivider;
+  final String rightDivider;
 
   /// Creates a style. Prefer [unicode] or [ascii].
   const TableStyle({
-    required this.topleft,
-    required this.topright,
-    required this.bottomleft,
-    required this.bottomright,
+    this.topLeft = '',
+    this.topRight = '',
+    this.bottomLeft = '',
+    this.bottomRight = '',
     required this.horizontal,
     required this.vertical,
     required this.cross,
-    required this.topdivider,
-    required this.bottomdivider,
-    required this.leftdivider,
-    required this.rightdivider,
+    this.topDivider = '',
+    this.bottomDivider = '',
+    this.leftDivider = '',
+    this.rightDivider = '',
   });
 
   /// Box-drawing characters. The default.
   static const TableStyle unicode = TableStyle(
-    topleft: '┌',
-    topright: '┐',
-    bottomleft: '└',
-    bottomright: '┘',
+    topLeft: '┌',
+    topRight: '┐',
+    bottomLeft: '└',
+    bottomRight: '┘',
     horizontal: '─',
     vertical: '│',
     cross: '┼',
-    topdivider: '┬',
-    bottomdivider: '┴',
-    leftdivider: '├',
-    rightdivider: '┤',
+    topDivider: '┬',
+    bottomDivider: '┴',
+    leftDivider: '├',
+    rightDivider: '┤',
   );
 
   /// Pure-ASCII characters, for terminals without box drawing.
   static const TableStyle ascii = TableStyle(
-    topleft: '+',
-    topright: '+',
-    bottomleft: '+',
-    bottomright: '+',
+    topLeft: '+',
+    topRight: '+',
+    bottomLeft: '+',
+    bottomRight: '+',
     horizontal: '-',
     vertical: '|',
     cross: '+',
-    topdivider: '+',
-    bottomdivider: '+',
-    leftdivider: '+',
-    rightdivider: '+',
+    topDivider: '+',
+    bottomDivider: '+',
+    leftDivider: '+',
+    rightDivider: '+',
   );
 }
 
@@ -164,18 +163,24 @@ class Table {
                : ColumnAlign.left,
        ];
 
-  /// Appends a row, or every row of an iterable.
+  /// Appends a row.
   ///
   /// ```dart no-compile
-  /// table.add(['app', '1.4 MB', 'ok']);   // one
-  /// table.add.all(rows);                  // many
+  /// table.add(['app', '1.4 MB', 'ok']);
   /// ```
+  void add(List<Object?> row) =>
+      _rows.add([for (final cell in row) cell?.toString() ?? '']);
+
+  /// Appends multiple [rows] to the table.
   ///
-  /// Two members under one name, the way `count()` and `count.by` are: the
-  /// plural was `addAll` through 6.1.0, the library's last camelCase member
-  /// on a type it declares, and Rule 4 splits a compound at the capital
-  /// rather than joining it. Cells are rendered with `toString`.
-  late final TableAdd add = TableAdd._(this);
+  /// ```dart no-compile
+  /// table.addAll(rows);
+  /// ```
+  void addAll(Iterable<List<Object?>> rows) {
+    for (final row in rows) {
+      add(row);
+    }
+  }
 
   /// Renders the table, including a trailing newline.
   String render() {
@@ -219,14 +224,14 @@ class Table {
     }
 
     final buffer = StringBuffer()
-      ..writeln(rule(style.topleft, style.topdivider, style.topright))
+      ..writeln(rule(style.topLeft, style.topDivider, style.topRight))
       ..write(row(header))
-      ..writeln(rule(style.leftdivider, style.cross, style.rightdivider));
+      ..writeln(rule(style.leftDivider, style.cross, style.rightDivider));
     for (final cells in _rows) {
       buffer.write(row(cells));
     }
     buffer.writeln(
-      rule(style.bottomleft, style.bottomdivider, style.bottomright),
+      rule(style.bottomLeft, style.bottomDivider, style.bottomRight),
     );
     return buffer.toString();
   }
@@ -290,27 +295,4 @@ class Table {
       ColumnAlign.center => '${' ' * (pad ~/ 2)}$text${' ' * (pad - pad ~/ 2)}',
     };
   }
-}
-
-/// The namespace behind [Table.add].
-///
-/// Callable, so `table.add(row)` is the singular and `table.add.all(rows)`
-/// the plural — one word each, no capital in the middle.
-class TableAdd {
-  const TableAdd._(this._table);
-
-  final Table _table;
-
-  /// Appends one [row].
-  void call(List<Object?> row) =>
-      _table._rows.add([for (final cell in row) cell?.toString() ?? '']);
-
-  /// Appends every row of [rows].
-  ///
-  /// A [Sequence] of rows, so what `format.csv.parse(...).rows` and
-  /// `io.csv.rows` read goes straight into a table; `.seq` turns a literal
-  /// grid into one. Each row stays a `List`, because its cells are a tuple
-  /// read by position and not a collection to be shaped.
-  void all(Sequence<List<Object?>> rows) =>
-      rows.transform(.cast<List<Object?>>()).collect(.foreach(call));
 }

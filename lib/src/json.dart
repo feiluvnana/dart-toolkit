@@ -27,7 +27,6 @@ library;
 
 import '../src/jsonpath.dart';
 import '../src/jsontext.dart';
-import '../collection/sequence.dart';
 
 // ============================================================================
 // JSON CURSORS (Json)
@@ -141,8 +140,8 @@ final class Json {
   /// An expression this reader cannot parse selects nothing, matching how a
   /// missing path reads: a typo mid-crawl is an empty result to notice, not an
   /// exception to catch.
-  Sequence<Json> jsonpath(String expression) =>
-      Sequence(JsonPath.of(expression).read(raw).map(Json.new));
+  List<Json> jsonpath(String expression) =>
+      JsonPath.of(expression).read(raw).map(Json.new).toList();
 
   /// The text at [path], or of this node when [path] is omitted.
   ///
@@ -198,8 +197,8 @@ final class Json {
   ///
   /// A node that is not an array counts as one element, and the empty cursor
   /// as none.
-  Sequence<R> all<R>(R Function(Json item) build) =>
-      Sequence(_elements()).transform(.map(build));
+  List<R> all<R>(R Function(Json item) build) =>
+      _elements().map(build).toList();
 
   /// How many elements or keys this node holds.
   ///
@@ -216,6 +215,21 @@ final class Json {
   ///
   /// No complement: `!doc.empty` already says the other thing.
   bool get empty => count == 0;
+
+  /// Converts this JSON cursor to a native [Map] if it represents a JSON object, or `null` otherwise.
+  Map<String, dynamic>? toMap() => switch (raw) {
+    Map<String, dynamic> map => map,
+    Map<Object?, Object?> map => {
+      for (final entry in map.entries) entry.key.toString(): entry.value,
+    },
+    _ => null,
+  };
+
+  /// Converts this JSON cursor to a native [List] if it represents a JSON array, or `null` otherwise.
+  List<dynamic>? toList() => switch (raw) {
+    List<dynamic> list => list,
+    _ => null,
+  };
 
   Iterable<Json> _elements() => switch (raw) {
     null => const <Json>[],

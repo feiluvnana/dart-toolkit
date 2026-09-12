@@ -19,9 +19,6 @@ import 'dart:async';
 
 import '../src/bounded.dart';
 import 'collector.dart';
-import 'dictionary.dart';
-import 'flow.dart';
-import 'sequence.dart';
 import 'transformer.dart';
 
 // ============================================================================
@@ -31,10 +28,10 @@ import 'transformer.dart';
 /// An operation that turns a flow of [A] into a flow of [B].
 ///
 /// ```dart
-/// // setup: final flow = Flow<Row>.empty(); Future<Row> price(Row r) async => r;
-/// flow.transform(.where((r) => r.live))
-///     .transform(.map.async(price, size: 8))
-///     .transform(.take.first(10));
+/// // setup: final flow = Stream<Row>.empty(); Future<Row> price(Row r) async => r;
+/// flow.through(.where((r) => r.live))
+///     .through(.map.async(price, size: 8))
+///     .through(.take.first(10));
 /// ```
 ///
 /// ## What a flow can do that a sequence cannot
@@ -103,10 +100,10 @@ class Pipe<A, B> {
   /// transformer somebody else wrote:
   ///
   /// ```dart
-  /// // setup: bool live(Row r) => r.live; final flow = Flow<Row>.empty();
+  /// // setup: bool live(Row r) => r.live; final flow = Stream<Row>.empty();
   /// final cleanup = Transformer.where<Row>(live);
   /// rows.transform(cleanup);
-  /// flow.transform(Pipe.of(cleanup));
+  /// flow.through(Pipe.of(cleanup));
   /// ```
   ///
   /// **It holds the whole source**, because a [Transformer] takes an
@@ -149,18 +146,26 @@ class Pipe<A, B> {
   /// and `map.async` awaits, at most [size] at a time.
   ///
   /// ```dart
-  /// // setup: final flow = Flow<Row>.empty();
+  /// // setup: final flow = Stream<Row>.empty();
   /// // setup: Future<Row> price(Row r) async => r;
-  /// flow.transform(.map((r) => r.name));
-  /// flow.transform(.map.async(price, size: 8));
+  /// flow.through(.map((r) => r.name));
+  /// flow.through(.map.async(price, size: 8));
   /// ```
   static const map = _Map();
+
+  /// Each element replaced by [each] of it, dropping nulls.
+  static Pipe<A, B> mapNotNull<A, B extends Object>(
+          B? Function(A item) each) =>
+      map.nonnull(each);
 
   /// The elements [test] accepts — Kotlin's `filter`, Dart's word.
   ///
   /// Callable, and a namespace: `where.type<R>()` keeps only the elements
   /// that are an [R], and `where.async` takes a test that awaits.
   static const where = _Where();
+
+  /// Only the elements that are an [R] — Kotlin's `filterIsInstance`.
+  static Pipe<Never, R> whereType<R>() => where.type<R>();
 
   /// Flattens, or expands each element into many.
   ///
@@ -170,16 +175,24 @@ class Pipe<A, B> {
   /// `asyncExpand`, in this vocabulary.
   ///
   /// ```dart
-  /// // setup: final pages = Flow<Sequence<Row>>.empty();
-  /// pages.transform(.flat());
+  /// // setup: final pages = Stream<Iterable<Row>>.empty();
+  /// pages.through(.flat());
   /// ```
   static const flat = _Flat();
+
+  /// Each element expanded into many by [each], and the lot concatenated.
+  static Pipe<A, B> flatMap<A, B>(Iterable<B> Function(A item) each) =>
+      flat.map(each);
 
   /// The elements with duplicates removed, keeping the first of each.
   ///
   /// Holds one key per distinct element for the life of the flow, which is
   /// the memory a `distinct` over an unbounded source costs.
   static const unique = _Unique();
+
+  /// The elements, keeping the first of each distinct [key].
+  static Pipe<A, A> uniqueBy<A, K>(K Function(A item) key) =>
+      unique.by(key);
 
   /// The leading elements, by count or by test.
   ///
@@ -188,8 +201,16 @@ class Pipe<A, B> {
   /// before the source ends.
   static const take = _Take();
 
+  /// The leading elements [test] accepts, stopping at the first it does not.
+  static Pipe<A, A> takeWhile<A>(bool Function(A item) test) =>
+      take.when(test);
+
   /// Everything but the leading elements, by count or by test.
   static const skip = _Skip();
+
+  /// Everything from the first element [test] rejects onwards.
+  static Pipe<A, A> skipWhile<A>(bool Function(A item) test) =>
+      skip.when(test);
 
   /// Each element paired with its position — Python's word.
   static Pipe<A, (int, A)> enumerate<A>() => Pipe((items) {
@@ -205,23 +226,18 @@ class Pipe<A, B> {
   /// whatever was left when the source ended.
   ///
   /// ```dart
-  /// // setup: final flow = Flow<Row>.empty(); Future<void> send(Sequence<Row> b) async {}
-  /// await flow.transform(.chunk(100)).collect(.foreach(send));
-  /// await flow.transform(.chunk.time(5.s)).collect(.foreach(send));
+  /// // setup: final flow = Stream<Row>.empty(); Future<void> send(List<Row> b) async {}
+  /// await flow.through(.chunk(100)).collect(.foreach(send));
+  /// await flow.through(.chunk.time(5.s)).collect(.foreach(send));
   /// ```
   static const chunk = _Chunk();
 
   /// The elements paired elementwise with [other], stopping at the shorter.
-  ///
-  /// ```dart
-  /// // setup: final left = Flow<String>.empty();
-  /// left.transform(.zip(io.async.lines('b.txt')));
-  /// ```
-  static Pipe<A, (A, R)> zip<A, R>(Flow<R> other) =>
+  static Pipe<A, (A, R)> zip<A, R>(Stream<R> other) =>
       Pipe((items) => _zipped(items, other));
 
-  static Stream<(A, R)> _zipped<A, R>(Stream<A> items, Flow<R> other) async* {
-    final right = StreamIterator<R>(other.stream);
+  static Stream<(A, R)> _zipped<A, R>(Stream<A> items, Stream<R> other) async* {
+    final right = StreamIterator<R>(other);
     try {
       await for (final left in items) {
         if (!await right.moveNext()) return;
@@ -233,35 +249,35 @@ class Pipe<A, B> {
   }
 
   /// The elements followed by [other]'s.
-  static Pipe<A, A> plus<A>(Flow<A> other) => Pipe((items) async* {
+  static Pipe<A, A> plus<A>(Stream<A> other) => Pipe((items) async* {
     yield* items;
-    yield* other.stream;
+    yield* other;
   });
 
   /// The elements [other] does not hold.
   ///
   /// [other] is read in full before the first element passes, because that is
   /// what *does not hold* needs to know.
-  static Pipe<A, A> minus<A>(Flow<A> other) => Pipe((items) async* {
-    final drop = await other.collect(.set());
+  static Pipe<A, A> minus<A>(Stream<A> other) => Pipe((items) async* {
+    final drop = await other.toSet();
     yield* items.where((item) => !drop.contains(item));
   });
 
   /// The elements [other] also holds, duplicates removed.
-  static Pipe<A, A> common<A>(Flow<A> other) => Pipe((items) async* {
-    final keep = await other.collect(.set());
+  static Pipe<A, A> common<A>(Stream<A> other) => Pipe((items) async* {
+    final keep = await other.toSet();
     final seen = <A>{};
     yield* items.where((item) => keep.contains(item) && seen.add(item));
   });
 
   /// The elements, or [fallback]'s when there are none — Kotlin's `ifEmpty`.
-  static Pipe<A, A> or<A>(Flow<A> fallback) => Pipe((items) async* {
+  static Pipe<A, A> or<A>(Stream<A> fallback) => Pipe((items) async* {
     var any = false;
     await for (final item in items) {
       any = true;
       yield item;
     }
-    if (!any) yield* fallback.stream;
+    if (!any) yield* fallback;
   });
 
   /// The elements as [R]s, throwing on one that is not.
@@ -355,10 +371,10 @@ class Pipe<A, B> {
   ///
   /// Ends when both have. Neither waits for the other, which is the whole
   /// point: two crawls, two watched directories, a source and its heartbeat.
-  static Pipe<A, A> merge<A>(Flow<A> other) =>
+  static Pipe<A, A> merge<A>(Stream<A> other) =>
       Pipe((items) => _merged(items, other));
 
-  static Stream<A> _merged<A>(Stream<A> items, Flow<A> other) {
+  static Stream<A> _merged<A>(Stream<A> items, Stream<A> other) {
     final out = StreamController<A>();
     var open = 2;
     void ended() {
@@ -366,7 +382,7 @@ class Pipe<A, B> {
     }
 
     final left = items.listen(out.add, onError: out.addError, onDone: ended);
-    final right = other.stream.listen(
+    final right = other.listen(
       out.add,
       onError: out.addError,
       onDone: ended,
@@ -396,8 +412,8 @@ class Pipe<A, B> {
   /// nothing else to give it:
   ///
   /// ```dart
-  /// // setup: final flow = Flow<int>.empty();
-  /// flow.transform(.fn((xs) => xs.map((n) => n * 2)));
+  /// // setup: final flow = Stream<int>.empty();
+  /// flow.through(.fn((xs) => xs.map((n) => n * 2)));
   /// ```
   ///
   /// For an operation with options, one used in six pipelines, or one worth a
@@ -417,7 +433,7 @@ class Pipe<A, B> {
 /// An operation that turns a flow of [A] into a single [R].
 ///
 /// ```dart
-/// // setup: final flow = Flow<Row>.empty();
+/// // setup: final flow = Stream<Row>.empty();
 /// await flow.collect(.count());
 /// await flow.collect(.group.into((r) => r.host, .sum((r) => r.cost)));
 /// ```
@@ -474,6 +490,10 @@ class Pour<A, R> {
   /// Callable, and a namespace: `count.where(test)` and `count.by(key)`.
   static const count = _Count();
 
+  /// How many elements fall under each [key].
+  static Pour<A, Map<K, int>> countBy<A, K>(K Function(A item) key) =>
+      count.by(key);
+
   /// Whether the flow holds nothing.
   static Pour<A, bool> empty<A>() => Pour((items) => items.isEmpty);
 
@@ -499,11 +519,23 @@ class Pour<A, R> {
   /// the crawl: one page fetched, not all of them.
   static const first = _First();
 
+  /// The first element [test] accepts, or `null`.
+  static Pour<A, A?> firstWhere<A>(bool Function(A item) test) =>
+      first.where(test);
+
   /// The last element, or `null` when there is none.
   static const last = _Last();
 
+  /// The last element [test] accepts, or `null`.
+  static Pour<A, A?> lastWhere<A>(bool Function(A item) test) =>
+      last.where(test);
+
   /// The only element, or `null` when there is not exactly one.
   static const single = _Single();
+
+  /// The only element [test] accepts, or `null` when it is not exactly one.
+  static Pour<A, A?> singleWhere<A>(bool Function(A item) test) =>
+      single.where(test);
 
   /// The element at [index], or `null` when the flow is shorter.
   static Pour<A, A?> at<A>(int index) => Pour((items) async {
@@ -518,11 +550,26 @@ class Pour<A, R> {
   /// Where an element is — `index.of(value)` and `index.where(test)`.
   static const index = _Index();
 
+  /// The position of the first element equal to [value], or `null`.
+  static Pour<A, int?> indexOf<A>(A value) => index.of(value);
+
+  /// The position of the first element [test] accepts, or `null`.
+  static Pour<A, int?> indexWhere<A>(bool Function(A item) test) =>
+      index.where(test);
+
   /// The element with the largest `max.by(key)`, or `null` when empty.
   static const max = _Max();
 
+  /// The element with the largest [key], or `null` when empty.
+  static Pour<A, A?> maxBy<A>(Comparable<Object?> Function(A item) key) =>
+      max.by(key);
+
   /// The element with the smallest `min.by(key)`, or `null` when empty.
   static const min = _Min();
+
+  /// The element with the smallest [key], or `null` when empty.
+  static Pour<A, A?> minBy<A>(Comparable<Object?> Function(A item) key) =>
+      min.by(key);
 
   // --------------------------------------------------------------------------
   // Reducing
@@ -602,11 +649,11 @@ class Pour<A, R> {
   /// source has arrived. **`sort` is not a pipe** is the whole of it.
   static const sort = _Sort();
 
-  /// The elements back to front, as a [Sequence].
-  static Pour<A, Sequence<A>> flip<A>() =>
-      Pour((items) async => Sequence((await items.toList()).reversed));
+  /// The elements back to front, as a [List].
+  static Pour<A, List<A>> flip<A>() =>
+      Pour((items) async => (await items.toList()).reversed.toList());
 
-  /// The trailing elements — `take.last(n)`, as a [Sequence].
+  /// The trailing elements — `take.last(n)`.
   static const take = _Take2();
 
   /// Everything but the trailing elements — `skip.last(n)`.
@@ -616,22 +663,31 @@ class Pour<A, R> {
   // Splitting into the other collection
   // --------------------------------------------------------------------------
 
-  /// The elements bucketed into a [Dictionary]. See [Collector.group].
+  /// The elements bucketed into a [Map]. See [Collector.group].
   ///
   /// `group.into` takes a [Collector] downstream, not another pour: a bucket
   /// is in memory by the time it is reduced, so it is a sequence-side
   /// operation and `group.into(f, .count())` infers exactly as it does there.
   static const group = _Group();
 
+  /// The elements bucketed into a [Map].
+  static Pour<A, Map<K, List<A>>> groupBy<A, K>(K Function(A item) key) =>
+      group.by(key);
+
   /// A lookup table keyed by `associate.by(key)` — Kotlin's `associateBy`.
   static const associate = _Associate();
 
-  /// A flow of `(key, value)` records as a [Dictionary].
-  static Pour<(K, V), Dictionary<K, V>> dict<K, V>() =>
-      Pour((pairs) async => Dictionary.of(await pairs.toList()));
+  /// A lookup table keyed by [key].
+  static Pour<A, Map<K, A>> associateBy<A, K>(K Function(A item) key) =>
+      associate.by(key);
+
+  /// A flow of `(key, value)` records as a [Map].
+  static Pour<(K, V), Map<K, V>> dict<K, V>() => Pour(
+    (pairs) async => {for (final (k, v) in await pairs.toList()) k: v},
+  );
 
   /// The elements [test] accepts and the elements it rejects.
-  static Pour<A, (Sequence<A>, Sequence<A>)> split<A>(
+  static Pour<A, (List<A>, List<A>)> split<A>(
     bool Function(A item) test,
   ) => Pour((items) async {
     final yes = <A>[];
@@ -639,7 +695,7 @@ class Pour<A, R> {
     await for (final item in items) {
       (test(item) ? yes : no).add(item);
     }
-    return (Sequence(yes), Sequence(no));
+    return (yes, no);
   });
 
   // --------------------------------------------------------------------------
@@ -669,6 +725,10 @@ class Pour<A, R> {
         }
       });
 
+  /// Standard Dart alias for [foreach].
+  static Pour<A, void> forEach<A>(FutureOr<void> Function(A item) each) =>
+      foreach(each);
+
   /// The elements as a list — the subscription, and the result of it.
   static Pour<A, List<A>> list<A>() =>
       Pour((items) async => List<A>.of(await items.toList()));
@@ -677,11 +737,11 @@ class Pour<A, R> {
   static Pour<A, Set<A>> set<A>() =>
       Pour((items) async => Set<A>.of(await items.toSet()));
 
-  /// The elements as a [Sequence] — the way from the flow to the collection.
+  /// The elements as a [List] — the way from the flow to the collection.
   ///
   /// The crossing `.flow` makes the other way.
-  static Pour<A, Sequence<A>> seq<A>() =>
-      Pour((items) async => Sequence(await items.toList()));
+  static Pour<A, List<A>> seq<A>() =>
+      Pour((items) async => await items.toList());
 
   /// An arbitrary streaming reduction, for anything the named ones miss.
   static Pour<A, R> fn<A, R>(Future<R> Function(Stream<A> items) run) =>
@@ -719,9 +779,9 @@ class _Map {
   /// ```dart
   /// // setup: Future<String> fetch(String u) async => u; void save(String s) {}
   /// await system.console.reader.lines
-  ///     .transform(.map((line) => line.trim()))
-  ///     .transform(.where((line) => line.isNotEmpty))
-  ///     .transform(.map.async(fetch, size: 4))
+  ///     .through(.map((line) => line.trim()))
+  ///     .through(.where((line) => line.isNotEmpty))
+  ///     .through(.map.async(fetch, size: 4))
   ///     .collect(.foreach(save));
   /// ```
   ///
@@ -779,20 +839,20 @@ class _Where {
 class _Flat {
   const _Flat();
 
-  /// The elements concatenated, each of them a [Sequence].
-  Pipe<Sequence<B>, B> call<B>() =>
-      Pipe((items) => items.expand((item) => item.collect(.list())));
+  /// The elements concatenated, each of them an [Iterable].
+  Pipe<Iterable<B>, B> call<B>() =>
+      Pipe((items) => items.expand((item) => item));
 
   /// Each element expanded into many by [each], and the lot concatenated.
-  Pipe<A, B> map<A, B>(Sequence<B> Function(A item) each) =>
-      Pipe((items) => items.expand((item) => each(item).collect(.list())));
+  Pipe<A, B> map<A, B>(Iterable<B> Function(A item) each) =>
+      Pipe((items) => items.expand(each));
 
-  /// Each element expanded into a [Flow] by [each], and the lot concatenated.
+  /// Each element expanded into a [Stream] by [each], and the lot concatenated.
   ///
   /// Dart's `asyncExpand`, in this vocabulary: one page of a paginated API
   /// per element, one file's lines per path.
-  Pipe<A, B> async<A, B>(Flow<B> Function(A item) each) =>
-      Pipe((items) => items.asyncExpand((item) => each(item).stream));
+  Pipe<A, B> async<A, B>(Stream<B> Function(A item) each) =>
+      Pipe((items) => items.asyncExpand(each));
 }
 
 /// The namespace behind [Pipe.unique].
@@ -841,23 +901,23 @@ class _Chunk {
   ///
   /// Throws [ArgumentError] on a [size] below one, the way
   /// [Transformer.chunk] does — it yielded nothing through 5.4.0.
-  Pipe<A, Sequence<A>> call<A>(int size) {
+  Pipe<A, List<A>> call<A>(int size) {
     if (size < 1) {
       throw ArgumentError.value(size, 'size', 'must be at least 1');
     }
     return Pipe((items) => _counted(items, size));
   }
 
-  static Stream<Sequence<A>> _counted<A>(Stream<A> items, int size) async* {
+  static Stream<List<A>> _counted<A>(Stream<A> items, int size) async* {
     var batch = <A>[];
     await for (final item in items) {
       batch.add(item);
       if (batch.length == size) {
-        yield Sequence(batch);
+        yield batch;
         batch = <A>[];
       }
     }
-    if (batch.isNotEmpty) yield Sequence(batch);
+    if (batch.isNotEmpty) yield batch;
   }
 
   /// Whatever has arrived, every [every] — the batch a clock closes.
@@ -866,22 +926,22 @@ class _Chunk {
   /// rows for an hour waiting for the hundredth. An empty window emits
   /// nothing, so an idle source is silent rather than a stream of empty
   /// batches, and whatever is held when the source ends is emitted.
-  Pipe<A, Sequence<A>> time<A>(Duration every) =>
+  Pipe<A, List<A>> time<A>(Duration every) =>
       Pipe((items) => _timed(items, every));
 
-  static Stream<Sequence<A>> _timed<A>(Stream<A> items, Duration every) {
-    late StreamController<Sequence<A>> out;
+  static Stream<List<A>> _timed<A>(Stream<A> items, Duration every) {
+    late StreamController<List<A>> out;
     late StreamSubscription<A> input;
     Timer? clock;
     var batch = <A>[];
 
     void close() {
       if (batch.isEmpty) return;
-      out.add(Sequence(batch));
+      out.add(batch);
       batch = <A>[];
     }
 
-    out = StreamController<Sequence<A>>(
+    out = StreamController<List<A>>(
       onListen: () {
         clock = Timer.periodic(every, (_) => close());
         input = items.listen(
@@ -923,7 +983,7 @@ class _Count {
       Pour((items) => items.where(test).length);
 
   /// How many elements fall under each [key] — Kotlin's `countBy`.
-  Pour<A, Dictionary<K, int>> by<A, K>(K Function(A item) key) =>
+  Pour<A, Map<K, int>> by<A, K>(K Function(A item) key) =>
       const _Group().into(key, Collector.count<A>());
 }
 
@@ -1038,19 +1098,16 @@ class _Sort {
   const _Sort();
 
   /// The elements in ascending order, which needs them [Comparable].
-  Pour<A, Sequence<A>> call<A>() =>
+  Pour<A, List<A>> call<A>() =>
       using((a, b) => (a as Comparable<Object?>).compareTo(b));
 
   /// The elements in ascending order of [key].
-  Pour<A, Sequence<A>> by<A>(Comparable<Object?> Function(A item) key) =>
+  Pour<A, List<A>> by<A>(Comparable<Object?> Function(A item) key) =>
       using((a, b) => key(a).compareTo(key(b)));
 
   /// The elements ordered by [compare] — Kotlin's `sortedWith`.
-  Pour<A, Sequence<A>> using<A>(int Function(A a, A b) compare) => Pour(
-    (items) async => Sequence(
-      await items.toList()
-        ..sort(compare),
-    ),
+  Pour<A, List<A>> using<A>(int Function(A a, A b) compare) => Pour(
+    (items) async => await items.toList()..sort(compare),
   );
 }
 
@@ -1059,10 +1116,10 @@ class _Take2 {
   const _Take2();
 
   /// The trailing [n] elements, or all of them when there are fewer.
-  Pour<A, Sequence<A>> last<A>(int n) => Pour((items) async {
-    if (n <= 0) return const Sequence([]);
+  Pour<A, List<A>> last<A>(int n) => Pour((items) async {
+    if (n <= 0) return const [];
     final all = await items.toList();
-    return Sequence(all.length <= n ? all : all.sublist(all.length - n));
+    return all.length <= n ? all : all.sublist(all.length - n);
   });
 }
 
@@ -1071,12 +1128,10 @@ class _Skip2 {
   const _Skip2();
 
   /// Everything but the trailing [n] elements — Kotlin's `dropLast`.
-  Pour<A, Sequence<A>> last<A>(int n) => Pour((items) async {
+  Pour<A, List<A>> last<A>(int n) => Pour((items) async {
     final all = await items.toList();
-    if (n <= 0) return Sequence(all);
-    return Sequence(
-      all.length <= n ? const [] : all.sublist(0, all.length - n),
-    );
+    if (n <= 0) return all;
+    return all.length <= n ? const [] : all.sublist(0, all.length - n);
   });
 }
 
@@ -1084,16 +1139,16 @@ class _Skip2 {
 class _Group {
   const _Group();
 
-  /// The elements bucketed by [key], every bucket a [Sequence].
-  Pour<A, Dictionary<K, Sequence<A>>> by<A, K>(K Function(A item) key) =>
-      into(key, Collector<A, Sequence<A>>(Sequence.new));
+  /// The elements bucketed by [key], every bucket a [List].
+  Pour<A, Map<K, List<A>>> by<A, K>(K Function(A item) key) =>
+      into(key, Collector<A, List<A>>((items) => items.toList()));
 
   /// The elements bucketed by [key], every bucket reduced by [down].
   ///
   /// One pass, and [down] is a [Collector]: by the time a bucket is reduced
   /// it is a list in memory, so the sequence-side vocabulary is the right one
   /// and `group.into(f, .count())` infers exactly as it does there.
-  Pour<A, Dictionary<K, R>> into<A, K, R>(
+  Pour<A, Map<K, R>> into<A, K, R>(
     K Function(A item) key,
     Collector<A, R> down,
   ) => Pour((items) async {
@@ -1101,9 +1156,9 @@ class _Group {
     await for (final item in items) {
       (buckets[key(item)] ??= <A>[]).add(item);
     }
-    return Dictionary({
+    return {
       for (final entry in buckets.entries) entry.key: down.run(entry.value),
-    });
+    };
   });
 }
 
@@ -1112,12 +1167,12 @@ class _Associate {
   const _Associate();
 
   /// A lookup table keyed by [key], holding the elements themselves.
-  Pour<A, Dictionary<K, A>> by<A, K>(K Function(A item) key) =>
+  Pour<A, Map<K, A>> by<A, K>(K Function(A item) key) =>
       Pour((items) async {
         final table = <K, A>{};
         await for (final item in items) {
           table[key(item)] = item;
         }
-        return Dictionary(table);
+        return table;
       });
 }

@@ -53,9 +53,9 @@
 ///           .crawl([Fetch('https://news.ycombinator.com'.url)].seq)
 ///         ..concurrent(system.os.cpus))
 ///       .flow
-///       .transform(.flat.map((res) =>
+///       .through(.flat.map((res) =>
 ///           res.parse(format.html).$('.titleline > a').texts))
-///       .transform(.unique())
+///       .through(.unique())
 ///       .collect(.join('\n'));
 ///
 ///   io.write('titles.txt', titles);

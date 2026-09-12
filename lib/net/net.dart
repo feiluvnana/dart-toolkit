@@ -40,8 +40,9 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 
-import '../collection/sequence.dart';
+import 'package:http/http.dart' as pkg_http;
 
 import 'crawl.dart';
 import 'fetch.dart';
@@ -83,7 +84,141 @@ class NetAccessor {
   /// The shared HTTP client: requests, downloads and [Fetcher.sync].
   ///
   /// A [Send], so it is also the default transport of every [Crawl].
-  Fetcher get http => _shared;
+  Fetcher get http => Zone.current[#_netClient] as Fetcher? ?? _shared;
+
+  /// Runs [action] within an async Zone where [net.http] resolves to [client].
+  ///
+  /// Accepts a [Fetcher] or a `package:http` [pkg_http.Client].
+  Future<R> withClient<R>(Object client, FutureOr<R> Function() action) async {
+    final fetcher = client is Fetcher
+        ? client
+        : client is pkg_http.Client
+            ? Fetcher(client: client)
+            : throw ArgumentError(
+                'Expected Fetcher or http.Client, got ${client.runtimeType}',
+              );
+    return runZoned(action, zoneValues: {#_netClient: fetcher});
+  }
+
+  /// Sends a GET request to [url] using [http].
+  Future<Reply> get(
+    Uri url, {
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Encoding? encoding,
+    Fetch? fetch,
+  }) => http.get(
+    url,
+    headers: headers,
+    timeout: timeout,
+    redirects: redirects,
+    retries: retries,
+    encoding: encoding,
+    fetch: fetch,
+  );
+
+  /// Sends a POST request to [url] using [http].
+  Future<Reply> post(
+    Uri url, {
+    Body? body,
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Encoding? encoding,
+    Fetch? fetch,
+  }) => http.post(
+    url,
+    body: body,
+    headers: headers,
+    timeout: timeout,
+    redirects: redirects,
+    retries: retries,
+    encoding: encoding,
+    fetch: fetch,
+  );
+
+  /// Sends a PUT request to [url] using [http].
+  Future<Reply> put(
+    Uri url, {
+    Body? body,
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Encoding? encoding,
+    Fetch? fetch,
+  }) => http.put(
+    url,
+    body: body,
+    headers: headers,
+    timeout: timeout,
+    redirects: redirects,
+    retries: retries,
+    encoding: encoding,
+    fetch: fetch,
+  );
+
+  /// Sends a DELETE request to [url] using [http].
+  Future<Reply> delete(
+    Uri url, {
+    Body? body,
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Encoding? encoding,
+    Fetch? fetch,
+  }) => http.delete(
+    url,
+    body: body,
+    headers: headers,
+    timeout: timeout,
+    redirects: redirects,
+    retries: retries,
+    encoding: encoding,
+    fetch: fetch,
+  );
+
+  /// Sends a PATCH request to [url] using [http].
+  Future<Reply> patch(
+    Uri url, {
+    Body? body,
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Encoding? encoding,
+    Fetch? fetch,
+  }) => http.patch(
+    url,
+    body: body,
+    headers: headers,
+    timeout: timeout,
+    redirects: redirects,
+    retries: retries,
+    encoding: encoding,
+    fetch: fetch,
+  );
+
+  /// Sends a HEAD request to [url] using [http].
+  Future<Reply> head(
+    Uri url, {
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Fetch? fetch,
+  }) => http.head(
+    url,
+    headers: headers,
+    timeout: timeout,
+    redirects: redirects,
+    retries: retries,
+    fetch: fetch,
+  );
 
   /// A crawl over [seeds], following whatever [next] returns.
   ///
@@ -101,8 +236,8 @@ class NetAccessor {
   /// A sitemap is a crawl of its own, which is what deleted `Sitemap.load`
   /// and its hand-rolled depth limit — see the `format.sitemap` library doc.
   Crawl crawl(
-    Sequence<Fetch> seeds, [
-    Sequence<Fetch> Function(Reply res)? next,
+    Iterable<Fetch> seeds, [
+    Iterable<Fetch> Function(Reply res)? next,
   ]) => Crawl(seeds, next);
 
   /// Binds [port] and answers every request with [handler].

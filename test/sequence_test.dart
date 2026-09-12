@@ -29,7 +29,7 @@ void main() {
         ].seq.transform(.map.nonnull(int.tryParse)).collect(.list()),
         equals([1, 3]),
       );
-      expect(<int?>[1, null, 3].seq.nonnull.collect(.list()), equals([1, 3]));
+      expect(<int?>[1, null, 3].seq.nonNull.collect(.list()), equals([1, 3]));
     });
 
     test('where is both sides, because ! works on a filter', () {
@@ -230,8 +230,8 @@ void main() {
     });
 
     test('the empty sequence is a const', () {
-      expect(const Sequence<int>([]).collect(.empty()), isTrue);
-      expect(const Sequence<int>([]).collect(.count()), isZero);
+      expect(const <int>[].collect(.empty()), isTrue);
+      expect(const <int>[].collect(.count()), isZero);
     });
 
     test('plus, minus, common and or', () {
@@ -245,7 +245,7 @@ void main() {
       );
       expect(a.transform(.common(b)).collect(.list()), equals([3]));
       expect(
-        const Sequence<int>([]).transform(.or(b)).collect(.list()),
+        const <int>[].transform(.or(b)).collect(.list()),
         equals([3, 4]),
       );
       expect(a.transform(.or(b)).collect(.list()), equals([1, 2, 3]));
@@ -291,14 +291,14 @@ void main() {
     test('count, empty and has', () {
       expect(rows.collect(.count()), equals(4));
       expect(rows.collect(.count.where((r) => r.host == 'a.com')), equals(2));
-      expect(const Sequence<int>([]).collect(.empty()), isTrue);
+      expect(const <int>[].collect(.empty()), isTrue);
       expect([1].seq.collect(.empty()), isFalse);
       expect([1, 2].seq.collect(.has(2)), isTrue);
       expect([1, 2].seq.collect(.has(9)), isFalse);
     });
 
     test('the five readers are nullable rather than throwing', () {
-      final empty = const Sequence<int>([]);
+      final empty = const <int>[];
       expect(empty.collect(.first()), isNull);
       expect(empty.collect(.last()), isNull);
       expect(empty.collect(.single()), isNull);
@@ -335,15 +335,15 @@ void main() {
       expect([1, 2].seq.collect(.any((n) => n.isEven)), isTrue);
       expect([1, 3].seq.collect(.any((n) => n.isEven)), isFalse);
       expect([2, 4].seq.collect(.all((n) => n.isEven)), isTrue);
-      expect(const Sequence<int>([]).collect(.all((n) => false)), isTrue);
+      expect(const <int>[].collect(.all((n) => false)), isTrue);
     });
 
     test('fold, sum and avg', () {
       expect([1, 2, 3].seq.collect(.fold(0, (t, n) => t + n)), equals(6));
       expect(rows.collect(.sum((r) => r.cost)), equals(8.5));
       expect(rows.collect(.avg((r) => r.score)), closeTo(4.5, 1e-9));
-      expect(const Sequence<int>([]).collect(.avg((n) => n)), isNull);
-      expect(const Sequence<int>([]).collect(.sum((n) => n)), isZero);
+      expect(const <int>[].collect(.avg((n) => n)), isNull);
+      expect(const <int>[].collect(.sum((n) => n)), isZero);
       expect(
         [1, 2].seq.collect(.sum((n) => n)),
         equals(3),
@@ -354,28 +354,27 @@ void main() {
     test('max.by and min.by', () {
       expect(rows.collect(.max.by((r) => r.score))?.score, equals(9));
       expect(rows.collect(.min.by((r) => r.score))?.score, equals(1));
-      expect(const Sequence<Row>([]).collect(.max.by((r) => r.score)), isNull);
+      expect(const <Row>[].collect(.max.by((r) => r.score)), isNull);
     });
 
     test('group, associate, count.by and split', () {
       final byHost = rows.collect(.group.by((r) => r.host));
-      expect(byHost.keys.collect(.list()), equals(['a.com', 'b.com', 'c.com']));
-      expect(byHost.get('a.com')!.collect(.count()), equals(2));
+      expect(byHost.keys.toList(), equals(['a.com', 'b.com', 'c.com']));
+      expect(byHost['a.com']!.length, equals(2));
 
-      final Dictionary<String, Row> latest = rows.collect(
+      final Map<String, Row> latest = rows.collect(
         .associate.by((r) => r.host),
       );
-      expect(latest.get('a.com')?.score, equals(5), reason: 'last wins');
+      expect(latest['a.com']?.score, equals(5), reason: 'last wins');
       expect(
         rows
             .transform(.map((r) => (r.host, r.score)))
-            .collect(.dict())
-            .get('b.com'),
+            .collect(.dict())['b.com'],
         equals(9),
       );
 
       expect(
-        rows.collect(.count.by((r) => r.host)).map,
+        rows.collect(.count.by((r) => r.host)),
         equals({'a.com': 2, 'b.com': 1, 'c.com': 1}),
       );
 
@@ -386,20 +385,19 @@ void main() {
 
     test('group.into reduces every bucket in the same pass', () {
       expect(
-        rows.collect(.group.into((r) => r.host, .sum((r) => r.cost))).map,
+        rows.collect(.group.into((r) => r.host, .sum((r) => r.cost))),
         equals({'a.com': 4.0, 'b.com': 4.0, 'c.com': 0.5}),
       );
       expect(
         rows
-            .collect(.group.into((r) => r.host, .max.by((r) => r.score)))
-            .get('a.com')
+            .collect(.group.into((r) => r.host, .max.by((r) => r.score)))['a.com']
             ?.score,
         equals(5),
       );
       // count.by is this, in one line, and is what a script actually writes.
       expect(
-        rows.collect(.group.into((r) => r.host, .count())).map,
-        equals(rows.collect(.count.by((r) => r.host)).map),
+        rows.collect(.group.into((r) => r.host, .count())),
+        equals(rows.collect(.count.by((r) => r.host))),
       );
     });
 
@@ -431,7 +429,7 @@ void main() {
 
   group('Sequence entry points', () {
     test('.seq brings an iterable in and .dict brings a map in', () {
-      expect([1, 2].seq, isA<Sequence<int>>());
+      expect([1, 2].seq, isA<Iterable<int>>());
       expect({'a': 1}.dict.pairs.collect(.list()), equals([('a', 1)]));
     });
 
@@ -448,28 +446,28 @@ void main() {
       expect(spend.collect(.first())?.spend, equals(4.0));
     });
 
-    test('toString stays short for a long sequence', () {
-      expect([1, 2, 3, 4, 5].seq.toString(), contains('…'));
+    test('toString of sequence is standard collection string', () {
+      expect([1, 2, 3, 4, 5].seq.toString(), equals('[1, 2, 3, 4, 5]'));
     });
   });
 
   group('the flip', () {
-    test('the library hands back sequences, not lists', () {
-      expect(util.text.words('one two'), isA<Sequence<String>>());
-      expect(util.text.numbers('1 2'), isA<Sequence<num>>());
-      expect(util.text.betweens('[a][b]', '[', ']'), isA<Sequence<String>>());
+    test('the library hands back iterables, lists, or sets', () {
+      expect(util.text.words('one two'), isA<Iterable<String>>());
+      expect(util.text.numbers('1 2'), isA<Iterable<num>>());
+      expect(util.text.betweens('[a][b]', '[', ']'), isA<Iterable<String>>());
       expect(
         format.sitemap.parse('https://example.com/a'),
-        isA<Sequence<Uri>>(),
+        isA<Iterable<Uri>>(),
       );
-      expect(util.rand.shuffle([1, 2]), isA<Sequence<int>>());
+      expect(util.rand.shuffle([1, 2]), isA<Iterable<int>>());
       expect(
         util.rand.shuffle([1, 2]).transform(.take.first(1)),
-        isA<Sequence<int>>(),
+        isA<Iterable<int>>(),
       );
       expect(
         format.robots.parse('User-agent: *').agents,
-        isA<Sequence<String>>(),
+        isA<Iterable<String>>(),
       );
     });
 
@@ -565,7 +563,7 @@ void main() {
     });
 
     test('a caller can be handed an operation it knows nothing about', () {
-      int howMany(Sequence<Row> source, Transformer<Row, Row> shape) =>
+      int howMany(Iterable<Row> source, Transformer<Row, Row> shape) =>
           source.transform(shape).collect(.count());
 
       expect(howMany(rows, Transformer.take.first(2)), equals(2));
@@ -573,16 +571,16 @@ void main() {
     });
   });
 
-  group('Flow', () {
+  group('Stream pipeline', () {
     test('the same two doors a sequence has', () async {
       final flow = [
         1,
         2,
         3,
         4,
-      ].flow.transform(.where((n) => n.isEven)).transform(.map((n) => n * 10));
+      ].flow.through(.where((n) => n.isEven)).through(.map((n) => n * 10));
 
-      expect(flow, isA<Flow<int>>());
+      expect(flow, isA<Stream<int>>());
       expect(await flow.collect(.list()), equals([20, 40]));
     });
 
@@ -591,23 +589,23 @@ void main() {
       expect(await [1, 2, 3].flow.collect(.count()), equals(3));
       expect(await [1, 2, 3].flow.collect(.first()), equals(1));
       expect(await <int>[].flow.collect(.first()), isNull);
-      expect(await Flow<int>.empty().collect(.count()), isZero);
+      expect(await const Stream<int>.empty().collect(.count()), isZero);
     });
 
     test('.flow is the seam, from all three sides', () async {
-      expect([1, 2].flow, isA<Flow<int>>());
-      expect([1, 2].seq.flow, isA<Flow<int>>());
-      expect(Stream<int>.fromIterable([1, 2]).flow, isA<Flow<int>>());
+      expect([1, 2].flow, isA<Stream<int>>());
+      expect([1, 2].seq.flow, isA<Stream<int>>());
+      expect(Stream<int>.fromIterable([1, 2]).flow, isA<Stream<int>>());
       expect(await [1, 2].seq.flow.collect(.list()), equals([1, 2]));
     });
 
     test('a sequence crosses to a flow and back', () async {
       final held = await rows.flow
-          .transform(.where((r) => r.cost > 1))
-          .collect(.seq());
+          .through(.where((r) => r.cost > 1))
+          .collect(.list());
 
-      expect(held, isA<Sequence<Row>>());
-      expect(held.collect(.count()), equals(3));
+      expect(held, isA<List<Row>>());
+      expect(held.length, equals(3));
       expect(await held.flow.collect(.count()), equals(3));
     });
 
@@ -620,18 +618,18 @@ void main() {
         }),
       );
 
-      final flow = source.flow.transform(.take.first(1));
+      final flow = source.flow.through(.take.first(1));
       expect(walked, isZero, reason: 'nothing walked at the seam');
       expect(await flow.collect(.list()), equals([1]));
       expect(walked, equals(1));
     });
 
-    test('stream is the one word at the boundary, and the way back', () async {
+    test('stream methods work directly on flow', () async {
       final out = await [
         1,
         2,
         3,
-      ].flow.stream.where((n) => n.isOdd).flow.collect(.list());
+      ].flow.where((n) => n.isOdd).collect(.list());
 
       expect(out, equals([1, 3]));
     });
@@ -720,8 +718,8 @@ void main() {
         equals(n.seq.collect(.group.by((v) => v.isEven)).keys.collect(.set())),
       );
       expect(
-        (await n.flow.collect(.associate.by((v) => v))).map,
-        equals(n.seq.collect(.associate.by((v) => v)).map),
+        await n.flow.collect(.associate.by((v) => v)),
+        equals(n.seq.collect(.associate.by((v) => v))),
       );
       expect(
         (await n.flow.collect(.split((v) => v.isOdd))).$1.collect(.list()),
@@ -746,7 +744,7 @@ void main() {
       // A transformer is a sequence-side value now, so a flow takes it only
       // through the adapter — which says out loud that it buffers.
       expect(
-        await rows.flow.transform(Pipe.of(cleanup)).collect(.count()),
+        await rows.flow.through(Pipe.of(cleanup)).collect(.count()),
         equals(2),
       );
       expect(
@@ -760,16 +758,16 @@ void main() {
     test('into composes both halves, ending in a terminal', () async {
       final top = Transformer.where<Row>(
         (r) => r.cost > 1,
-      ).then(Transformer.sort.by((r) => r.cost)).into(Collector.seq());
+      ).then(Transformer.sort.by((r) => r.cost)).into(Collector.list());
 
-      expect(rows.collect(top).collect(.first())?.host, equals('a.com'));
+      expect(rows.collect(top).firstOrNull?.host, equals('a.com'));
 
       final overtime = Pipe.where<Row>(
         (r) => r.cost > 1,
       ).into(Pour.sort.by((r) => r.cost));
 
       expect(
-        (await rows.flow.collect(overtime)).collect(.first())?.host,
+        (await rows.flow.collect(overtime)).firstOrNull?.host,
         equals('a.com'),
       );
     });
@@ -789,30 +787,18 @@ void main() {
         3,
         4,
         5,
-      ].flow.transform(.chunk(2)).collect(.list());
+      ].flow.through(.chunk(2)).collect(.list());
 
       expect(batches.length, equals(3));
-      expect(batches.first.collect(.list()), equals([1, 2]));
-      expect(batches.last.collect(.list()), equals([5]));
-    });
-
-    test('toString does not consume', () {
-      final flow = Flow<int>(Stream<int>.fromIterable(const [1, 2]));
-      expect(flow.toString(), equals('Flow<int>'));
-      flow.stream;
-      expect(flow.toString(), contains('consumed'));
+      expect(batches.first, equals([1, 2]));
+      expect(batches.last, equals([5]));
     });
 
     test('a flow over something re-walkable can be consumed twice', () async {
-      // `.flow` on a sequence or an iterable is a `Flow.of`: the source can
-      // honestly be read again, so a second terminal reads it again rather
-      // than throwing. The `io.async` listings are the same, which is what
-      // makes the mirror with `io` a real one.
-      final flow = [1, 2, 3].flow;
-      expect(flow.toString(), contains('rebuildable'));
-      expect(await flow.collect(.count()), equals(3));
-      expect(await flow.collect(.list()), equals([1, 2, 3]));
-      expect(await flow.transform(.map((n) => n * 2)).collect(.list()), [
+      final items = [1, 2, 3];
+      expect(await items.flow.collect(.count()), equals(3));
+      expect(await items.flow.collect(.list()), equals([1, 2, 3]));
+      expect(await items.flow.through(.map((n) => n * 2)).collect(.list()), [
         2,
         4,
         6,
@@ -821,92 +807,85 @@ void main() {
   });
 
   group('Dictionary', () {
-    test('reading is nullable and has tells absent from null', () {
-      final d = Dictionary<String, int?>(const {'a': 1, 'b': null});
+    test('reading is nullable and containsKey tells absent from null', () {
+      final d = <String, int?>{'a': 1, 'b': null};
 
-      expect(d.get('a'), equals(1));
-      expect(d.get('b'), isNull);
-      expect(d.get('c'), isNull);
-      expect(d.has('b'), isTrue);
-      expect(d.has('c'), isFalse);
-      expect(d.count, equals(2));
-      expect(d.empty, isFalse);
-      expect(const Dictionary<String, int>.empty().empty, isTrue);
+      expect(d['a'], equals(1));
+      expect(d['b'], isNull);
+      expect(d['c'], isNull);
+      expect(d.containsKey('b'), isTrue);
+      expect(d.containsKey('c'), isFalse);
+      expect(d.length, equals(2));
+      expect(d.isEmpty, isFalse);
+      expect(const <String, int>{}.isEmpty, isTrue);
     });
 
-    test('ensure and update cover the first write and every one after', () {
-      final seen = Dictionary<String, int>();
+    test('update and putIfAbsent cover the first write and every one after', () {
+      final seen = <String, int>{};
 
-      seen.update('a.com', (n) => (n ?? 0) + 1);
-      seen.update('a.com', (n) => (n ?? 0) + 1);
-      expect(seen.get('a.com'), equals(2));
+      seen.update('a.com', (n) => n + 1, ifAbsent: () => 1);
+      seen.update('a.com', (n) => n + 1, ifAbsent: () => 1);
+      expect(seen['a.com'], equals(2));
 
-      final bucket = Dictionary<String, List<int>>();
-      bucket.ensure('a', () => <int>[]).add(1);
-      bucket.ensure('a', () => <int>[]).add(2);
-      expect(bucket.get('a'), equals([1, 2]));
+      final bucket = <String, List<int>>{};
+      bucket.putIfAbsent('a', () => <int>[]).add(1);
+      bucket.putIfAbsent('a', () => <int>[]).add(2);
+      expect(bucket['a'], equals([1, 2]));
     });
 
-    test('set, delete, clear and merge', () {
-      final d = Dictionary<String, int>(const {'a': 1});
-      d.set('b', 2);
-      d.merge(Dictionary(const {'b': 3, 'c': 4}));
-      expect(d.map, equals({'a': 1, 'b': 3, 'c': 4}));
+    test('set, remove, clear and merge', () {
+      final d = <String, int>{'a': 1};
+      d['b'] = 2;
+      final merged = d.merge(const {'b': 3, 'c': 4});
+      expect(merged, equals({'a': 1, 'b': 3, 'c': 4}));
 
-      d.delete('a');
-      expect(d.has('a'), isFalse);
+      d.remove('a');
+      expect(d.containsKey('a'), isFalse);
       d.clear();
-      expect(d.empty, isTrue);
+      expect(d.isEmpty, isTrue);
     });
 
     test('it is a snapshot: the source cannot change underneath it', () {
       final source = <String, int>{'a': 1};
-      final d = source.dict;
+      final d = Map<String, int>.of(source);
       source['b'] = 2;
-      expect(d.count, equals(1));
-      expect(d.map, isNot(same(source)));
+      expect(d.length, equals(1));
+      expect(d, isNot(same(source)));
     });
 
     test('keys, values, pairs and invert cross into the other collection', () {
-      final d = Dictionary<String, int>(const {'a': 1, 'b': 2});
+      final d = <String, int>{'a': 1, 'b': 2};
 
-      expect(d.keys, isA<Sequence<String>>());
-      expect(d.keys.collect(.list()), equals(['a', 'b']));
-      expect(d.values.collect(.list()), equals([1, 2]));
-      expect(d.pairs.collect(.list()), equals([('a', 1), ('b', 2)]));
+      expect(d.keys, isA<Iterable<String>>());
+      expect(d.keys.toList(), equals(['a', 'b']));
+      expect(d.values.toList(), equals([1, 2]));
+      expect(d.pairs.toList(), equals([('a', 1), ('b', 2)]));
       expect(
-        d.transform<int, String>(.map((p) => (p.$2, p.$1))).map,
+        d.transform<int, String>(.map((p) => (p.$2, p.$1))),
         equals({1: 'a', 2: 'b'}),
       );
     });
 
     test('transform and collect run the same vocabulary over records', () {
-      final d = Dictionary<String, int>(const {'a': 1, 'b': 2, 'c': 3});
+      final d = <String, int>{'a': 1, 'b': 2, 'c': 3};
 
       expect(d.collect(.count()), equals(3));
       expect(d.collect(.sum((e) => e.$2)), equals(6));
       expect(
-        d.transform(.where((e) => e.$2.isOdd)).map,
+        d.transform(.where((e) => e.$2.isOdd)),
         equals({'a': 1, 'c': 3}),
       );
       expect(
-        d.transform(.map((e) => (e.$1.toUpperCase(), e.$2 * 2))).map,
+        d.transform(.map((e) => (e.$1.toUpperCase(), e.$2 * 2))),
         equals({'A': 2, 'B': 4, 'C': 6}),
       );
     });
 
     test('Collector.dict is the way back in from pairs', () {
       expect(
-        rows.transform(.map((r) => (r.host, r.score))).collect(.dict()).map,
+        rows.transform(.map((r) => (r.host, r.score))).collect(.dict()),
         equals({'a.com': 5, 'b.com': 9, 'c.com': 1}),
         reason: 'last record to claim a key wins',
-      );
-    });
-
-    test('toString stays short for a long dictionary', () {
-      expect(
-        Dictionary(const {'a': 1, 'b': 2, 'c': 3, 'd': 4, 'e': 5}).toString(),
-        contains('…'),
       );
     });
   });
@@ -916,7 +895,7 @@ void main() {
     const label = Slot<String>('label');
 
     test('typed keys read and write on any string-keyed dictionary', () {
-      final bag = Dictionary<String, Object?>();
+      final bag = <String, Object?>{};
 
       bag.write(cursor, 120);
       bag.write(label, 'run');
@@ -931,12 +910,12 @@ void main() {
     });
 
     test('a value that is not the shape the slot names reads as null', () {
-      final bag = Dictionary<String, Object?>()..write(label, 'dark');
+      final bag = <String, Object?>{}..write(label, 'dark');
       expect(bag.read(const Slot<int>('label')), isNull);
     });
 
     test('calling a slot gives the pair a dictionary takes', () {
-      final bag = Dictionary<String, Object?>.of([cursor(7), label('x')]);
+      final bag = Maps.fromPairs<String, Object?>([cursor(7), label('x')]);
       expect(bag.read(cursor), equals(7));
       expect(bag.read(label), equals('x'));
     });

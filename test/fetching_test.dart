@@ -383,7 +383,7 @@ void main() {
         );
 
       final handled = await crawl.flow
-          .transform(.map((res) => res.url.path))
+          .through(.map((res) => res.url.path))
           .collect(.list());
 
       expect(handled, isEmpty);
@@ -397,7 +397,7 @@ void main() {
         ..using((fetch) async => Reply.text('<h1>hi</h1>', fetch: fetch));
 
       final handled = await crawl.flow
-          .transform(.map((res) => res.url.path))
+          .through(.map((res) => res.url.path))
           .collect(.list());
 
       expect(handled, ['/page']);
@@ -474,13 +474,13 @@ void main() {
               tag: 'result',
             ),
           ].seq,
-          _ => const Sequence<Fetch>([]),
+          _ => const <Fetch>[],
         },
       )..using(transport);
 
       final seen = await crawl.flow
-          .transform(.where((res) => res.fetch.tag == 'result'))
-          .transform(.map((res) => res.parse(format.html).$('.welcome').text))
+          .through(.where((res) => res.fetch.tag == 'result'))
+          .through(.map((res) => res.parse(format.html).$('.welcome').text))
           .collect(.list());
 
       expect(seen, ['Signed in']);
@@ -498,7 +498,7 @@ void main() {
         await (net.crawl(
               [Fetch('https://example.com/search'.url)].seq,
               (res) => res.fetch.depth > 0
-                  ? const Sequence<Fetch>([])
+                  ? const <Fetch>[]
                   : ['1', '2', '2']
                         .map(
                           (page) => res.follow(
@@ -526,7 +526,7 @@ void main() {
         await (net.crawl(
               [Fetch('https://example.com/a'.url)].seq,
               (res) => res.fetch.depth > 0
-                  ? const Sequence<Fetch>([])
+                  ? const <Fetch>[]
                   : [
                       res.follow('/b', headers: {'X-Stage': 'two'}),
                     ].seq,

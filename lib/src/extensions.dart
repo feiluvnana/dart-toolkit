@@ -6,6 +6,13 @@
 /// one a few characters rather than a full constructor call.
 library;
 
+import 'dart:convert';
+
+import '../format/format.dart';
+import '../net/net.dart';
+import '../src/json.dart';
+import '../src/markup.dart';
+
 /// Turns a URL string into a [Uri].
 ///
 /// Every networking entry point in this library takes a [Uri], matching
@@ -46,4 +53,130 @@ extension DurationInt on int {
 
   /// This many days.
   Duration get d => Duration(days: this);
+}
+
+/// Fluent HTTP extensions on [Uri].
+extension UriHttpExtensions on Uri {
+  /// Sends a GET request to this URI.
+  Future<Reply> get({
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Encoding? encoding,
+    Fetch? fetch,
+  }) => net.http.get(
+    this,
+    headers: headers,
+    timeout: timeout,
+    redirects: redirects,
+    retries: retries,
+    encoding: encoding,
+    fetch: fetch,
+  );
+
+  /// Sends a POST request to this URI.
+  Future<Reply> post({
+    Body? body,
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Encoding? encoding,
+    Fetch? fetch,
+  }) => net.http.post(
+    this,
+    body: body,
+    headers: headers,
+    timeout: timeout,
+    redirects: redirects,
+    retries: retries,
+    encoding: encoding,
+    fetch: fetch,
+  );
+
+  /// Sends a PUT request to this URI.
+  Future<Reply> put({
+    Body? body,
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Encoding? encoding,
+    Fetch? fetch,
+  }) => net.http.put(
+    this,
+    body: body,
+    headers: headers,
+    timeout: timeout,
+    redirects: redirects,
+    retries: retries,
+    encoding: encoding,
+    fetch: fetch,
+  );
+
+  /// Sends a DELETE request to this URI.
+  Future<Reply> delete({
+    Body? body,
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Encoding? encoding,
+    Fetch? fetch,
+  }) => net.http.delete(
+    this,
+    body: body,
+    headers: headers,
+    timeout: timeout,
+    redirects: redirects,
+    retries: retries,
+    encoding: encoding,
+    fetch: fetch,
+  );
+
+  /// Sends a PATCH request to this URI.
+  Future<Reply> patch({
+    Body? body,
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Encoding? encoding,
+    Fetch? fetch,
+  }) => net.http.patch(
+    this,
+    body: body,
+    headers: headers,
+    timeout: timeout,
+    redirects: redirects,
+    retries: retries,
+    encoding: encoding,
+    fetch: fetch,
+  );
+
+  /// Sends a HEAD request to this URI.
+  Future<Reply> head({
+    Map<String, String>? headers,
+    Duration? timeout,
+    int? redirects,
+    int? retries,
+    Fetch? fetch,
+  }) => net.http.head(
+    this,
+    headers: headers,
+    timeout: timeout,
+    redirects: redirects,
+    retries: retries,
+    fetch: fetch,
+  );
+}
+
+/// Quick document parsing extensions on [String].
+extension StringParseExtensions on String {
+  /// Parses this string as a JSON document cursor.
+  Json parseJson() => format.json.parse(this);
+
+  /// Parses this string as an HTML markup cursor.
+  Markup parseHtml() => format.html.parse(this);
 }

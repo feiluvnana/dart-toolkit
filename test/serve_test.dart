@@ -75,8 +75,8 @@ void main() {
         isTrue,
         reason: 'redirect followed when asked for',
       );
-      final raw = await net.http.send(.get, at('/away'));
-      expect(raw.status, equals(302), reason: 'not followed by default');
+      final raw = await net.http.send(.get, at('/away'), redirects: 0);
+      expect(raw.status, equals(302), reason: 'not followed with redirects: 0');
       expect(raw.headers['location'], equals('/health'));
     });
 

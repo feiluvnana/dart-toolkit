@@ -89,6 +89,19 @@ class SystemAccessor {
     err: err,
   );
 
+  /// Streams output lines from [executable] with [arguments].
+  Stream<String> stream(
+    String executable,
+    List<String> arguments, {
+    String? cwd,
+    bool includeStderr = false,
+  }) => Sys.stream(
+    executable,
+    arguments,
+    cwd: cwd,
+    includeStderr: includeStderr,
+  );
+
   /// Resolves [exe] to an absolute executable path, or `null` if not found.
   ///
   /// Searches [paths] first, then `PATH`. On Windows the `.exe`, `.cmd` and

@@ -122,7 +122,7 @@ Disallow: /
       final client = Fetcher(retries: 9);
       expect(client.retries, equals(9));
       expect(
-        net.crawl(const Sequence<Fetch>([])).using(client.call),
+        net.crawl(const <Fetch>[]).using(client.call),
         isA<Crawl>(),
       );
     });
@@ -187,7 +187,7 @@ Disallow: /
         started++;
         await Future<void>.delayed(const Duration(milliseconds: 1));
         return i;
-      }).stream;
+      });
 
       final seen = <int>[];
       final subscription = stream.listen(seen.add);
@@ -202,7 +202,7 @@ Disallow: /
 
     test('results still arrive in completion order', () async {
       final out = await [30, 10, 20].flow
-          .transform(
+          .through(
             .map.async(
               (int ms) async {
                 await Future<void>.delayed(Duration(milliseconds: ms));
@@ -219,14 +219,13 @@ Disallow: /
     test('cancelling a flow.run stops launching work', () async {
       var started = 0;
       final stream = List.generate(50, (int i) => i).flow
-          .transform(
+          .through(
             .map.async((i) async {
               started++;
               await Future<void>.delayed(const Duration(milliseconds: 1));
               return i;
             }, size: 1),
-          )
-          .stream;
+          );
 
       final seen = <int>[];
       final subscription = stream.listen(seen.add);
@@ -336,10 +335,10 @@ Disallow: /
       try {
         final blocking = io.path.join(dir.path, 'a', 'b', 'file.txt');
         final future = io.path.join(dir.path, 'c', 'd', 'file.txt');
-        io.dir.makeparent(blocking);
+        io.dir.makeParent(blocking);
         // It was the one name on `io` that touches the disk and had no twin
         // here, which is exactly what Rule 3 says a mirror may not do.
-        await io.async.dir.makeparent(future);
+        await io.async.dir.makeParent(future);
 
         expect(
           io.has(io.path.dirname(blocking)),

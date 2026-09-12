@@ -83,30 +83,30 @@ void main(List<String> args) async {
     ..using(_fixture)
     ..concurrent(size())
     ..delay(util.rand.jitter(20.ms))
-    ..samehost()
+    ..sameHost()
     ..depth(2)
     ..limit(20);
 
   // `settle` puts the failures in band, so one bad page is reported rather
   // than swallowed and the good ones still arrive.
   final products = await crawl.settle
-      .transform(
+      .through(
         .tap((outcome) {
           if (outcome case Broke(:final error)) log.warn('crawl: $error');
         }),
       )
-      .transform(.where.type<Done<Reply>>())
-      .transform(.map((outcome) => outcome.value))
-      .transform(.where((res) => res.fetch.tag == 'product'))
-      .transform(.flat.map(_product))
-      .collect(.seq());
+      .through(.where.type<Done<Reply>>())
+      .through(.map((outcome) => outcome.value))
+      .through(.where((res) => res.fetch.tag == 'product'))
+      .through(.flat.map(_product))
+      .toList();
 
-  log.ok('Collected ${products.collect(.count())} products.');
+  log.ok('Collected ${products.length} products.');
 
   // --------------------------------------------------------- 2. concurrency
   log.step(2, 5, 'Enriching...');
 
-  final bar = Progress(total: products.collect(.count()), message: 'Enriching');
+  final bar = Progress(total: products.length, message: 'Enriching');
   final enriched = await concurrent.run(products, (product) async {
     await util.time.wait(util.rand.jitter(30.ms));
     bar.tick(1, product.name);
@@ -117,7 +117,7 @@ void main(List<String> args) async {
     );
   }, size: size());
   bar.done();
-  log.ok('Enriched ${enriched.collect(.count())} products.');
+  log.ok('Enriched ${enriched.length} products.');
 
   // ----------------------------------------------------------------- 3. io
   log.step(3, 5, 'Writing output...');
@@ -133,15 +133,15 @@ void main(List<String> args) async {
           .collect(.join('\n')),
     );
     io.dump(io.path.join(dir, 'products.json'), [
-      for (final e in enriched.collect(.list()))
+      for (final e in enriched)
         {'name': e.product.name, 'price': e.product.price, 'slug': e.slug},
     ]);
     io.csv.write(
       io.path.join(dir, 'products.csv'),
       [
-        for (final e in enriched.collect(.list()))
+        for (final e in enriched)
           {'name': e.product.name, 'price': e.product.price, 'slug': e.slug},
-      ].seq,
+      ],
     );
     log.ok('Wrote 3 files to $dir/.');
   }
@@ -185,12 +185,12 @@ void main(List<String> args) async {
             headers: ['Product', 'Price', 'Slug'],
             alignments: [ColumnAlign.left, ColumnAlign.right, ColumnAlign.left],
           )
-          ..add.all(
+          ..addAll(
             [
               for (final e
                   in enriched.transform(.take.first(5)).collect(.list()))
                 [e.product.name, '\$${e.product.price}', e.slug],
-            ].seq,
+            ],
           ))
         .render(),
   );
@@ -198,7 +198,7 @@ void main(List<String> args) async {
   out.box(
     [
       'Run       $count',
-      'Products  ${products.collect(.count())}',
+      'Products  ${products.length}',
       'Cheapest  ${cheapest.collect(.first())?.name} at \$${cheapest.collect(.first())?.price}',
       'Elapsed   ${util.time.format(clock.elapsed)}',
     ].join('\n'),
@@ -214,7 +214,7 @@ void main(List<String> args) async {
 /// On the listing, queue every product and follow pagination — `meta` survives
 /// the round trip, so the product stage knows the price the listing showed. A
 /// product page is a leaf.
-Sequence<Fetch> _next(Reply res) => switch (res.fetch.tag) {
+Iterable<Fetch> _next(Reply res) => switch (res.fetch.tag) {
   null =>
     res
         .parse(format.html)
@@ -238,20 +238,20 @@ Sequence<Fetch> _next(Reply res) => switch (res.fetch.tag) {
               if (res.parse(format.html).$('a.next').attr('href')
                   case final next?)
                 res.follow(next),
-            ].seq,
+            ],
           ),
         ),
-  _ => const Sequence<Fetch>([]),
+  _ => const <Fetch>[],
 };
 
 /// A product page, as zero or one product.
-Sequence<Product> _product(Reply res) {
+List<Product> _product(Reply res) {
   final name = res.parse(format.html).pick(Field.text('h1'));
   final price = util.text.number(
     res.parse(format.html).pick(Field.text('.price')) ?? '',
   );
-  if (name == null || price == null) return const Sequence<Product>([]);
-  return Sequence([(name: name, price: price, url: res.url.toString())]);
+  if (name == null || price == null) return const [];
+  return [(name: name, price: price, url: res.url.toString())];
 }
 
 /// The fixture transport, which is a closure over a map.

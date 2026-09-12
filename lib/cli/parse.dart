@@ -43,6 +43,18 @@ class Cli with _Spec {
     _parse();
   }
 
+  /// Creates a fresh, isolated [Cli] instance with the given [raw] arguments.
+  Cli.isolated([List<String> raw = const []]) : raw = List<String>.from(raw) {
+    _parse();
+  }
+
+  /// Resets all declarations and reparses the arguments.
+  void reset() {
+    _declarations.clear();
+    _children.clear();
+    _parse();
+  }
+
   /// The scope [run] built for the command it dispatched to, if any.
   ///
   /// An option declared globally is read from the same re-parse the handler
