@@ -1,10 +1,10 @@
 /// # Text
 ///
 /// The string handling a scraper actually needs: turning a heading into a
-/// filename ([slugify]), collapsing the whitespace a page is full of
-/// ([cleanText]), pulling a number out of `'\$1,234.50'` ([(t) => t.extractNumber()]),
-/// stripping tags off a fragment ([stripHtmlTags]) — and, in the other
-/// direction, filling a template ([renderTemplate]).
+/// filename ([StringToolkitExtensions.toSlug]), collapsing the whitespace a page is full of
+/// ([StringToolkitExtensions.cleanWhitespace]), pulling a number out of `'\$1,234.50'` (`extractNumber`),
+/// stripping tags off a fragment ([StringToolkitExtensions.stripTags]) — and, in the other
+/// direction, filling a template ([StringToolkitExtensions.render]).
 ///
 /// Every function here has a matching method on [StringToolkitExtensions], so
 /// One name each: `title.toSlug()`, and no `slugify(title)` beside it.
@@ -223,7 +223,7 @@ num? _extractNumber(String text) {
   return match == null ? null : _read(match.group(0)!);
 }
 
-/// Every number in [text], in order, read the same way as [(t) => t.extractNumber()].
+/// Every number in [text], in order, read the same way as `extractNumber`.
 List<num> _extractNumbers(String text) => _digits
     .allMatches(text)
     .map((match) => _read(match.group(0)!))

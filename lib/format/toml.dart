@@ -16,7 +16,7 @@ import 'format.dart';
 // TOML (format.toml.*)
 // ============================================================================
 
-/// The TOML codec. Reach it as [parseToml] or [DocumentFormat.toml].
+/// The TOML codec. Reach it as `String.parse` or [DocumentFormat.toml].
 ///
 /// ```dart
 /// final cargo = 'version = "1.0.0"'.parse(.toml);

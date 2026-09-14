@@ -22,7 +22,7 @@ enum ProgressUnit {
   /// Plain item counts.
   count,
 
-  /// Byte totals, rendered with [formatBytes].
+  /// Byte totals, rendered with [NumSizeExtension.formatBytes].
   bytes,
 }
 

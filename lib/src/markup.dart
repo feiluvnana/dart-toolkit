@@ -8,8 +8,8 @@
 /// that more than one domain hands back, belonging to none of them, and it
 /// computes rather than touches anything. It was under `lib/util/` through
 /// 5.4.0 without ever being reachable as `util.` anything. The *codec* that
-/// builds one is [parseHtml], beside [parseJson], [parseYaml] and
-/// [parseToml], because a format is knowledge from outside Dart.
+/// builds one is `String.parse`, beside `String.parse`, `String.parse` and
+/// `String.parse`, because a format is knowledge from outside Dart.
 ///
 /// Three doors produce the same cursor:
 ///
@@ -72,7 +72,7 @@ class Markup {
   /// when the markup has no body children, so a full page reads as usefully
   /// as a fragment.
   ///
-  /// Turning *text* into a document is [parseHtml]: parsing is the
+  /// Turning *text* into a document is `String.parse`: parsing is the
   /// codec's job, and rooting a cursor on the result is this one's.
   factory Markup.of(Document document, {bool isXPath = false}) {
     final children = document.body?.children;
@@ -141,7 +141,7 @@ class Markup {
 
   /// Everything matching [selector], with full jQuery syntax.
   ///
-  /// On a cursor rooted on a document — which is what [parseHtml]
+  /// On a cursor rooted on a document — which is what `String.parse`
   /// gives back — the search covers the whole page, so an element sitting at
   /// the top level of the body is found like any other. On a scoped cursor it
   /// covers the descendants of the current set, which is what makes the
@@ -198,7 +198,7 @@ class Markup {
 
   /// Reads a typed [field] from the first element of this set.
   ///
-  /// Scoped, so a [Field] works at any depth — inside [all], inside [one], or
+  /// Scoped, so a [Field] works at any depth — inside [all], inside [at], or
   /// straight off a page:
   ///
   /// ```dart
@@ -423,7 +423,7 @@ class Markup {
 /// `$xpath` stood here too through 4.0.0, on the *default* surface, which
 /// contradicted `lib/html.dart`\'s own doc comment and "the one
 /// survivor is an opt-in import". They were also `query` under a second name:
-/// with the callable shorthand gone, [Markup.\$xpath] answers on any cursor, so
+/// with the callable shorthand gone, `Markup.$xpath` answers on any cursor, so
 /// there was nothing an XPath-flavoured one did differently.
 extension QuerySelectorOnElement on Element {
   /// This element's value as a browser would submit it, or `null`.
@@ -740,7 +740,7 @@ final class _NullField extends Field<Object?> {
   Object? read(Element root) => null;
 }
 
-/// [Field.when], for the fields that may not find anything.
+/// `when`, for the fields that may not find anything.
 ///
 /// Most readers are nullable — [Field.text] and [Field.attr] both hand back
 /// `null` for a selector that matched nothing — so the converter a caller

@@ -1,8 +1,8 @@
 /// # JSON Text (internal)
 ///
 /// The two `dart:convert` calls the library's JSON support is built on, in one
-/// place so that [parseJson], [serve] and the other codecs all
-/// decode and encode identically. Public through [parseJson] and
+/// place so that `String.parse`, [serve] and the other codecs all
+/// decode and encode identically. Public through `String.parse` and
 /// [toJsonString]; never a public name of its own.
 library;
 

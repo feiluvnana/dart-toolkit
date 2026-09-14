@@ -54,7 +54,7 @@ import '../src/method.dart';
 ///
 /// The body is `application/x-www-form-urlencoded`, which is what a form
 /// sends unless it declares otherwise; a form with `enctype` set to
-/// `multipart/form-data` — one that uploads a file — throws from [body]
+/// `multipart/form-data` — one that uploads a file — throws from `Form.body`
 /// rather than sending something the server cannot read.
 final class Form {
   /// The `<form>` element this reads.
@@ -146,7 +146,7 @@ final class Form {
   ///
   /// A `GET` carries the form data in the query, *replacing* whatever query
   /// the action already had — again, what a browser does. Any other method
-  /// leaves the action alone and carries the fields in [body].
+  /// leaves the action alone and carries the fields in `Form.body`.
   Uri get url {
     if (method == HttpMethod.get && _fields.isNotEmpty) {
       return action.replace(queryParameters: _fields);

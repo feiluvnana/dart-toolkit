@@ -1,7 +1,7 @@
 /// # CSV Text (internal)
 ///
-/// One RFC 4180 state machine, driven two ways: [parseCsv] pushes a
-/// whole string through it, [readCsvRows] pushes a chunk at a time. Plus the
+/// One RFC 4180 state machine, driven two ways: `String.parse` pushes a
+/// whole string through it, `Path.csvRows` pushes a chunk at a time. Plus the
 /// two renderers behind [toCsvString].
 ///
 /// There were **two** independent parsers through 5.1.0 — a fast code-unit one
@@ -10,7 +10,7 @@
 /// precondition for merging them, not a substitute for it: two parsers that
 /// agree today are two parsers that drift at the next bug fix.
 ///
-/// Not exported: reach these through [parseCsv], [toCsvString] and the CSV file functions.
+/// Not exported: reach these through `String.parse`, [toCsvString] and the CSV file functions.
 library;
 
 // ============================================================================

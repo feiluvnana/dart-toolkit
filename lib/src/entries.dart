@@ -1,7 +1,7 @@
 /// # Listing, Walking & Globbing (internal)
 ///
-/// Implementation behind [listDir], [walkDir], [glob],
-/// [sweepDir] and [fileStat]. Every one of them hands back a
+/// Implementation behind `Path.list`, `Path.walk`, [glob],
+/// [sweepDir] and `Path.stat`. Every one of them hands back a
 /// [FileSystemEntry], which is what took the `dart:io` types back out of the
 /// public signatures.
 ///

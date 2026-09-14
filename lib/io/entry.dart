@@ -62,7 +62,7 @@ enum FileSystemEntryKind {
 /// resolves to, since Dart offers no `lstat`. For a symlink to a file that is
 /// the target's size, and [isLink] is still `true`.
 final class FileSystemEntry {
-  /// Creates an entry. Prefer [fileStat], [listDir] or [walkDir],
+  /// Creates an entry. Prefer `Path.stat`, `Path.list` or `Path.walk`,
   /// which fill
   /// these in from the disk.
   const FileSystemEntry({
@@ -130,9 +130,8 @@ final class FileSystemEntry {
   /// that it does not.
   ///
   /// Counting what is in a directory is a second listing, so it is a second
-  /// call: [isDirEmptySync] blocks and
-  /// [isDirEmpty] does not. This getter still answers for
-  /// either kind, by asking the right one.
+  /// call: `SyncPath.isDirEmpty` blocks and `Path.isDirEmpty` does not. This
+  /// getter still answers for either kind, by asking the right one.
   bool get empty => !isDir && size == 0;
 
   /// The `dart:io` handle, for the call this does not cover.

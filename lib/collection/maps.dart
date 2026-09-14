@@ -6,7 +6,7 @@
 ///
 /// Anything that *does* have a receiver is an extension instead — see
 /// [MapExtensions] for `merge`, `invert`, `pick`, `omit` and the rest, and
-/// [IterableExtensions.groupBy] for grouping an iterable.
+/// `groupBy` for grouping an iterable.
 library;
 
 import 'map_extensions.dart';

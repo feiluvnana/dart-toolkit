@@ -34,7 +34,7 @@ final RegExp _loc = RegExp(
   caseSensitive: false,
 );
 
-/// The sitemap codec. Reach it as [parseSitemap] or [DocumentFormat.sitemap].
+/// The sitemap codec. Reach it as `String.parse` or [DocumentFormat.sitemap].
 ///
 /// Reads XML `<urlset>`, XML `<sitemapindex>` and newline-delimited plain
 /// text alike, because all three are what a `Sitemap:` line points at and

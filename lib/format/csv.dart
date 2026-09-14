@@ -11,7 +11,7 @@
 ///
 /// 4.0.0 and 5.0.0 both deferred the move with the same worry — that splitting
 /// A second CSV home would create two spellings for *read a CSV file*. The [DocumentFormat] seam
-/// 4.0.0 built is what answers it: [read] is inherited from [FileFormat]
+/// 4.0.0 built is what answers it: [read] is inherited from [DocumentFormat]
 /// exactly as the other five inherit it, so there is one spelling, and the
 /// streaming members stay in `io/csv.dart` because they are about a file larger
 /// than memory rather than about CSV.
@@ -39,10 +39,10 @@ import 'format.dart';
 // CSV (format.csv.*)
 // ============================================================================
 
-/// The CSV codec. Reach it as [parseCsv] or [DocumentFormat.csv].
+/// The CSV codec. Reach it as `String.parse` or [DocumentFormat.csv].
 ///
-/// Reading a file too large to hold is [readCsvRows] and [readCsvRecords],
-/// and writing one a row at a time is [writeCsv]. Those are about
+/// Reading a file too large to hold is `Path.csvRows` and `Path.csvRecords`,
+/// and writing one a row at a time is `Path.writeCsv`. Those are about
 /// files, and they stayed where files live.
 class CsvFormat implements DocumentFormat<Csv, Iterable<Map<String, Object?>>> {
   /// Creates the codec. Prefer the shared [DocumentFormat.csv] instance.
@@ -110,7 +110,7 @@ class CsvFormat implements DocumentFormat<Csv, Iterable<Map<String, Object?>>> {
   /// ], headers: ['name', 'born']));
   /// ```
   ///
-  /// Writing it goes through [writeText] rather than a second name here.
+  /// Writing it goes through `Path.writeText` rather than a second name here.
   String cells(
     Iterable<List<Object?>> rows, {
     List<String>? headers,

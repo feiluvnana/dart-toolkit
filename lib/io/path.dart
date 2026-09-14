@@ -83,7 +83,7 @@ import '../src/watch.dart';
 /// functions. Members are grouped so that `path.` reads like a table of
 /// contents: **place** ([operator /], [parent], [name], [stem], [ext]),
 /// **ask** ([exists], [isFile], [isDir], [size]), **read** ([readText],
-/// [readJson], [read]), **write** ([writeText], [writeJson], [write]),
+/// [readJson], [read]), **write** (`Path.writeText`, `Path.writeJson`, [write]),
 /// **move** ([copyTo], [moveTo], [delete], [makeDir]), **walk** ([list],
 /// [walk], [glob], [watch]) and **hold** ([lock], [hash]).
 extension type const Path(String raw) implements String {
@@ -474,7 +474,7 @@ extension type const Path(String raw) implements String {
   /// Calls [onChange] when anything at or under this path changes.
   ///
   /// Returns the function that stops watching. A burst of events for one save
-  /// is coalesced into one call after [settle].
+  /// is coalesced into one call after `Iterable.settle`.
   Future<void> Function() watch(
     void Function(String path) onChange, {
     Pattern? pattern,

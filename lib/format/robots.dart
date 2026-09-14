@@ -27,7 +27,7 @@ import 'format.dart';
 // ROBOTS.TXT (format.robots.*)
 // ============================================================================
 
-/// The `robots.txt` codec. Reach it as [parseRobots] or [DocumentFormat.robots].
+/// The `robots.txt` codec. Reach it as `String.parse` or [DocumentFormat.robots].
 class RobotsFormat implements DocumentFormat<Robots, Robots> {
   /// Creates the codec. Prefer the shared [DocumentFormat.robots] instance.
   const RobotsFormat();

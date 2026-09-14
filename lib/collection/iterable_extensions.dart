@@ -17,7 +17,7 @@ extension IterableExtensions<T> on Iterable<T> {
   /// ```
   ///
   /// Results keep the input order. [progress] names a [Progress] bar to draw
-  /// while it runs. An error stops the run and propagates; [settle] is the
+  /// while it runs. An error stops the run and propagates; `Iterable.settle` is the
   /// version that does not.
   Future<List<R>> parallelMap<R>(
     FutureOr<R> Function(T item) worker, {

@@ -5,8 +5,8 @@
 /// the terminal (`console/`) and crash-safe shutdown.
 ///
 /// **[shutdown] is the only way out of the process.** It runs the [onExit]
-/// hooks, cleans up files registered with [trackFile] and processes registered
-/// with [adoptProcess], and only then terminates. `exit` does none of that.
+/// hooks, cleans up files registered with `ExitCleanup.deleteOnExit` and processes registered
+/// with `ProcessCleanup.killOnExit`, and only then terminates. `exit` does none of that.
 ///
 /// ```dart
 /// onExit(() async => Path('.tmp').delete());

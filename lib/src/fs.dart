@@ -324,7 +324,7 @@ class Fs {
   /// The staging file is registered with [Exit] so an interrupted run cannot
   /// leave it behind, and is only moved into place once [fill] completes. Any
   /// failure discards the staging file and rethrows. This is the single write
-  /// path behind [write], [save], [dump] and [download].
+  /// path behind [write], [save], [dump] and [Http.download].
   static Future<File> atomic(
     String path,
     Future<void> Function(File staging) fill, {
@@ -405,7 +405,7 @@ class Fs {
 
   /// The one JSON encoder in the library.
   ///
-  /// [writeJson] and [toJsonString] all reach
+  /// `Path.writeJson` and [toJsonString] all reach
   /// this, so the four of them cannot disagree about indentation or about
   /// what a type without a `toJson` does.
   static String _encode(Object? data, bool pretty) =>

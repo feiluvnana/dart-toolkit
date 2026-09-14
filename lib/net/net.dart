@@ -1,6 +1,6 @@
 /// # Networking
 ///
-/// HTTP requests and downloads ([get], [post], [download], [send]), the
+/// HTTP requests and downloads ([get], [post], [Http.download], [Http.send]), the
 /// frontier that crawls ([crawl], [Crawler]) — and the other direction, a
 /// server that listens ([serve], [serveOnce]).
 ///

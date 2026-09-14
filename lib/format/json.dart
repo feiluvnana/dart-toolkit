@@ -22,7 +22,7 @@ import 'format.dart';
 // JSON (format.json.*)
 // ============================================================================
 
-/// Entry point for JSON, reachable as [parseJson].
+/// Entry point for JSON, reachable as `String.parse`.
 ///
 /// ```dart
 /// final doc = res.body.parse(.json);
@@ -31,7 +31,7 @@ import 'format.dart';
 /// ```
 ///
 /// `Path(path).write(value, as: .json)` writes one to disk, staged through a
-/// `.part` file like every other write in this library; [writeJson] is the same
+/// `.part` file like every other write in this library; `Path.writeJson` is the same
 /// call under the shorter name a script reaches for. [format] is the string
 /// half, for when the text is going somewhere that is not a file.
 class JsonFormat implements DocumentFormat<Json, Object?> {
@@ -51,7 +51,7 @@ class JsonFormat implements DocumentFormat<Json, Object?> {
   /// Pass `indent: 0` for the compact single-line form.
   ///
   /// `Path(path).write(value, as: .json)` is this plus an atomic write, and
-  /// [writeJson] is that under a shorter name.
+  /// `Path.writeJson` is that under a shorter name.
   @override
   String format(Object? value, {int indent = 2}) =>
       JsonText.encode(value, indent: indent);

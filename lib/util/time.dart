@@ -1,7 +1,7 @@
 /// # Time, delays and timestamps
 ///
 /// Duration formatting and timestamps — and the readers back the other way,
-/// [parseTime] and [parseDuration], which are what a `--since` option or a
+/// `String.date` and `String.duration`, which are what a `--since` option or a
 /// date column in a CSV needs. Delays are always [Duration]; the [DurationInt]
 /// extension keeps call sites short (`250.ms`, `2.h`).
 /// {@category Utilities}

@@ -1,6 +1,6 @@
 /// # The CSV Cursor (`Csv`)
 ///
-/// What [parseCsv] and `CsvFormat().read` hand back: a table, with its
+/// What `String.parse` and `CsvFormat().read` hand back: a table, with its
 /// header line separated from its rows.
 ///
 /// It lives in `lib/src/` for the reason [Json] and [Markup] do — it is a

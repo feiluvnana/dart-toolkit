@@ -2,14 +2,14 @@
 ///
 /// Reading and writing the format everything else a script coordinates with is
 /// configured in — `pubspec.yaml` first, then CI, then Docker Compose, then
-/// Kubernetes. [writeJson] covers the format this library *writes*; this is the
+/// Kubernetes. `Path.writeJson` covers the format this library *writes*; this is the
 /// one everything else *reads*, and it is spelled member for member like
 /// [JsonFormat].
 ///
 /// A format is knowledge from outside Dart: knowing what a YAML
 /// file looks like is knowledge Dart does not have. That is the same argument
 /// that admitted archives, with a different noun — and the reason
-/// [parseJson] sits beside this rather than in `util`.
+/// `String.parse` sits beside this rather than in `util`.
 /// {@category Formats}
 library;
 
@@ -25,7 +25,7 @@ import 'format.dart';
 // YAML (format.yaml.*)
 // ============================================================================
 
-/// The YAML codec. Reach it as [parseYaml] or [DocumentFormat.yaml].
+/// The YAML codec. Reach it as `String.parse` or [DocumentFormat.yaml].
 ///
 /// Three members, spelled exactly like [JsonFormat] and [TomlFormat], so
 /// the format namespaces are learnable from each other:

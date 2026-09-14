@@ -22,7 +22,7 @@ import '../src/proc.dart';
 // ZIP TOOL (format.zip.*)
 // ============================================================================
 
-/// The archive formats [zip] and [unzip] read and write.
+/// The archive formats [zip] and `ArchiveOnPath.unzipInto` read and write.
 enum ArchiveFormat {
   /// A `.zip` container.
   zip,
@@ -375,7 +375,7 @@ Future<List<ArchiveEntry>> _listArchive(
 
 /// Takes one entry's bytes out of the archive at [source].
 ///
-/// The pair of [unzip]: that one writes everything to disk, this one hands
+/// The pair of `ArchiveOnPath.unzipInto`: that one writes everything to disk, this one hands
 /// back a single member in memory, and neither is a spelling of the other.
 /// Returns `null` when [name] is not in the archive, and when the archive
 /// itself is not there.
@@ -390,7 +390,7 @@ Future<List<int>?> _extractFromArchive(
 
 /// The archive at [source], or `null` when there is no file there.
 ///
-/// One read and one decode per call, shared by [listArchive], [extractFromArchive] and [unzip]
+/// One read and one decode per call, shared by [listArchive], [extractFromArchive] and `ArchiveOnPath.unzipInto`
 /// so the three of them agree about a missing file and about which format a
 /// name implies.
 Future<Archive?> _open(String source, ArchiveFormat? format) async {

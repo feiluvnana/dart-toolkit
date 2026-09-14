@@ -9,8 +9,8 @@
 /// It sat under `lib/util/` through 5.4.0 and was never reachable as `util.`
 /// anything — a directory named after an accessor should hold that
 /// accessor's members. It is exported from the package root exactly as
-/// before. The *codecs* are [parseJson], beside [parseYaml] and
-/// [parseToml], because a format is knowledge from outside Dart.
+/// before. The *codecs* are `String.parse`, beside `String.parse` and
+/// `String.parse`, because a format is knowledge from outside Dart.
 ///
 /// Three doors produce the same cursor:
 ///
@@ -66,7 +66,7 @@ final class Json {
 
   /// Wraps an already-decoded [raw] value.
   ///
-  /// Reach for [parseJson], `JsonFormat().read` or `Response.at` instead; this
+  /// Reach for `String.parse`, `JsonFormat().read` or `Response.at` instead; this
   /// is for a document that arrived decoded from somewhere else.
   const Json(this.raw);
 

@@ -1,12 +1,12 @@
 /// # Concurrency
 ///
 /// A bounded [Pool] for async work, and the two kinds of limit a script needs:
-/// [Semaphore] and [Mutex] bound **how many at once**, [RateLimiter] bounds
+/// [Semaphore] and `Semaphore` bound **how many at once**, [RateLimiter] bounds
 /// **how often**. This is concurrency, not parallelism: tasks interleave on
 /// one isolate, so it speeds up IO-bound work (requests, file reads) and does
 /// nothing for CPU-bound work.
 ///
-/// [parallelMap] and [settle] are the two you reach for most, and both are
+/// `Iterable.parallelMap` and `Iterable.settle` are the two you reach for most, and both are
 /// also extension methods on `Iterable` and `Stream`:
 ///
 /// ```dart
@@ -546,7 +546,7 @@ class RateLimiter implements Waiting {
 
   /// Takes a token, then runs [action].
   ///
-  /// Mirrors [Semaphore.withPermit] and [Mutex.protect]. The token is spent on
+  /// Mirrors `Semaphore.guard` and `Semaphore.guard`. The token is spent on
   /// starting, not on finishing, because a rate is about how often something
   /// begins.
   @override

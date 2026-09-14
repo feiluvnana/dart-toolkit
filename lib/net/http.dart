@@ -466,7 +466,7 @@ class Response {
   /// ```
   ///
   /// It tears off cleanly because the href comes first and everything else is
-  /// named. A `Referer` naming this page is set for you, [depth] grows by
+  /// named. A `Referer` naming this page is set for you, `Fetch.depth` grows by
   /// one, and relative URLs resolve against [url].
   ///
   /// Pass [method] and [body] to follow a form rather than a link — though a
@@ -1218,9 +1218,9 @@ class Fetcher with _PathResolver {
   /// to also skip on a loosely-named sibling — see [Fs.similar] for why that
   /// is off by default.
   ///
-  /// [retries] overrides the client's own, exactly as it does on [send], and
+  /// [retries] overrides the client's own, exactly as it does on [Http.send], and
   /// is `0` by default for the same reason. [onprogress] is spelled the way
-  /// [send]'s `onretry` and [watchPath]'s `onchange` are; it was `onProgress`
+  /// [Http.send]'s `onretry` and `Path.watch`'s `onchange` are; it was `onProgress`
   /// through 6.0.0, the library's one camelCase parameter.
   Future<FileSystemEntry> download(
     Uri url,

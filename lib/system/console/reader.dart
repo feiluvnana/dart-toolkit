@@ -16,7 +16,7 @@ import 'ansi.dart';
 // CONSOLE READER (system.console.reader.*)
 // ============================================================================
 
-/// Interactive prompts, reachable as [consoleReader].
+/// Interactive prompts, reachable as [Console].
 ///
 /// ```dart
 /// final name = await Console.ask('Project name');

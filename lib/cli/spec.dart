@@ -285,7 +285,7 @@ mixin _Spec {
 
   /// Declares an option carrying a length of time.
   ///
-  /// The value is read by [parseDuration], so `--timeout 30s`,
+  /// The value is read by `String.duration`, so `--timeout 30s`,
   /// `--timeout 1h30m` and a bare `--timeout 30` (seconds) all work. A value
   /// that is not a duration reads as [defaultsTo], and [Cli.require] reports it.
   ///
@@ -320,7 +320,7 @@ mixin _Spec {
 
   /// Declares an option carrying a date.
   ///
-  /// The value is read by [parseTime], so ISO-8601 and the loose forms
+  /// The value is read by `String.date`, so ISO-8601 and the loose forms
   /// it accepts all work. There is no sensible default date, so the [Opt]
   /// reads `null` when nothing was given — the option `--since` exists
   /// precisely so a script can tell "not given" from "the beginning of time".

@@ -1,14 +1,14 @@
 /// # Byte sizes
 ///
-/// Single source of truth for human-readable byte sizes: [formatBytes] writes
-/// one, [parseBytes] reads one back. Used by the console progress bar.
+/// Single source of truth for human-readable byte sizes: [NumSizeExtension.formatBytes] writes
+/// one, `String.bytes` reads one back. Used by the console progress bar.
 ///
 /// **Binary units, spelled as binary units.** The arithmetic here has always
 /// been 1024-based and the labels said `KB`, `MB`, `GB`, so a terabyte of disk
 /// formatted as `'931.3 GB'` and `parseBytes('5MB')` answered 5,242,880 — five
 /// *mebibytes* under a name that means five million. The arithmetic stayed and
-/// the labels were fixed: [formatBytes] writes `KiB`/`MiB`/`GiB`, and
-/// [parseBytes] accepts both families, giving each the scale its name carries.
+/// the labels were fixed: [NumSizeExtension.formatBytes] writes `KiB`/`MiB`/`GiB`, and
+/// `String.bytes` accepts both families, giving each the scale its name carries.
 /// {@category Utilities}
 library;
 

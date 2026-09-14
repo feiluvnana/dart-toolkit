@@ -180,8 +180,8 @@ final class RobotsPolicy {
 
 /// A crawl: a frontier over a [Send].
 ///
-/// Configure it by chaining, then take one of three terminals — [flow] for
-/// the replies as they arrive, [settle] for the same with the failures in
+/// Configure it by chaining, then take one of three terminals — the stream itself for
+/// the replies as they arrive, `Iterable.settle` for the same with the failures in
 /// band, [run] to drain it and read the [stats].
 ///
 /// **Twenty members, where `CrawlBuilder` alone had 45.** The ones that went
@@ -449,7 +449,7 @@ final class Crawler extends Stream<Response> {
   /// believed.
   ///
   /// A request that failed is counted in `stats.failed` and does not reach
-  /// the stream — one bad page does not end a crawl. [settle] is the terminal
+  /// the stream — one bad page does not end a crawl. `Iterable.settle` is the terminal
   /// that reports them.
   ///
   /// **Nothing is fetched until something listens.** Cancelling stops the
@@ -482,7 +482,7 @@ final class Crawler extends Stream<Response> {
 
   /// Stops the crawl once in-flight work settles, recording [reason].
   ///
-  /// Cancelling [flow] does this for you, which is the ordinary way. This is
+  /// Cancelling the stream itself does this for you, which is the ordinary way. This is
   /// the door for a caller holding the crawl rather than the flow.
   void stop([String reason = 'Stopped']) {
     _stopped = true;
@@ -692,7 +692,7 @@ final class Crawler extends Stream<Response> {
 
   static bool _isWeb(Uri url) => url.scheme == 'http' || url.scheme == 'https';
 
-  /// The `robots.txt` for [url]'s origin, fetched through [send] once.
+  /// The `robots.txt` for [url]'s origin, fetched through [Http.send] once.
   ///
   /// The pending fetch is cached, not just its result, so workers arriving at
   /// a new host together share one request instead of each issuing their own.
@@ -710,7 +710,7 @@ final class Crawler extends Stream<Response> {
     return _robots[origin] = _loadRobots(send, Uri.parse('$origin/robots.txt'));
   }
 
-  /// Reads `/robots.txt` through [send], per RFC 9309 section 2.3.1.
+  /// Reads `/robots.txt` through [Http.send], per RFC 9309 section 2.3.1.
   ///
   /// **2xx** — the rules in the body apply. **4xx** — the host has no rules,
   /// so everything is allowed. **5xx** — the rules are unreachable rather
