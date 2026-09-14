@@ -90,14 +90,14 @@ class Entries {
   /// `true` when there is nothing there at all, and `false` when [dir] is not
   /// a directory — the two answers `pathExists` and `dirExists` already give,
   /// so this one is only about what is inside.
-  static bool empty(String dir) {
+  static bool isEmpty(String dir) {
     final directory = Directory(dir);
     if (!directory.existsSync()) return true;
     return directory.listSync(followLinks: false).isEmpty;
   }
 
   /// The non-blocking twin of [empty].
-  static Future<bool> emptyAsync(String dir) async {
+  static Future<bool> isEmptyAsync(String dir) async {
     final directory = Directory(dir);
     if (!await directory.exists()) return true;
     return directory.list(followLinks: false).isEmpty;

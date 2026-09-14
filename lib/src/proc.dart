@@ -295,7 +295,7 @@ class Sys {
   /// Gives up responsibility for [process], once it has exited.
   static void disown(Process process) => Exit.disown(process);
 
-  /// Registers [fn] to run during graceful shutdown.
+  /// Registers [action] to run during graceful shutdown.
   static void hook(FutureOr<void> Function() fn) => Exit.hook(fn);
 
   /// Kills tracked children, deletes tracked partials, runs the exit hooks,
@@ -400,7 +400,7 @@ class Exit {
     _idle();
   }
 
-  /// Registers [fn] to run during graceful shutdown.
+  /// Registers [action] to run during graceful shutdown.
   ///
   /// Note that a registered hook keeps the `SIGINT` watcher alive, and so keeps
   /// the process alive, until [shutdown] runs the hooks.
@@ -409,7 +409,7 @@ class Exit {
     _hooks.add(fn);
   }
 
-  /// Unregisters [fn], releasing the watcher if nothing else is tracked.
+  /// Unregisters [action], releasing the watcher if nothing else is tracked.
   ///
   /// A hook registered for the length of one operation has to come off again
   /// when that operation ends: the watcher it installed keeps the process

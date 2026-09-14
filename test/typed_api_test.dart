@@ -237,7 +237,7 @@ void main() {
         ];
 
         expect(read, ['ok:10', 'bad:division by zero', 'ok:5']);
-        expect(outcomes.map((o) => o.ok).toList(), [true, false, true]);
+        expect(outcomes.map((o) => o.isDone).toList(), [true, false, true]);
         expect(outcomes[1].value, isNull);
         expect((outcomes[1] as Broke<int>).stack, isNotNull);
       },
@@ -305,7 +305,7 @@ void main() {
       final rows = await crawler()
           .map(
             (Response res) =>
-                (url: res.url.path, titles: res.parse(.html).$('h1').count),
+                (url: res.url.path, titles: res.parse(.html).$('h1').length),
           )
           .toList();
 

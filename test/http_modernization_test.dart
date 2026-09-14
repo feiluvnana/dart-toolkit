@@ -73,7 +73,7 @@ void main() {
       expect(reply.statusCode, 200);
       expect(reply.json.text('message'), 'ok');
       expect(reply.json.number('count'), 42);
-      expect(reply.jsonDecoded<Map<String, dynamic>>()['message'], 'ok');
+      expect(reply.decodeJson<Map<String, dynamic>>()['message'], 'ok');
 
       final echoReply = await Http.post(
         at('/echo'),

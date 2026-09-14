@@ -100,7 +100,7 @@ class ArchiveEntry {
 ///
 /// ```dart
 /// await Path('site').zipTo('site.zip');
-/// for (final e in await Path('site.zip').entries()) print(e.name);
+/// for (final e in await Path('site.zip').archiveEntries()) print(e.name);
 /// await Path('site.zip').unzipInto('restored');
 /// ```
 extension ArchiveOnPath on Path {
@@ -131,13 +131,18 @@ extension ArchiveOnPath on Path {
   ];
 
   /// What the archive here holds, without unpacking it.
-  Future<List<ArchiveEntry>> entries({ArchiveFormat? format}) =>
+  ///
+  /// Named apart from [Path.list], which answers the same question about a
+  /// *directory*: one `entries()` for both would have read as whichever the
+  /// reader happened to be thinking about.
+  Future<List<ArchiveEntry>> archiveEntries({ArchiveFormat? format}) =>
       _listArchive(raw, format: format);
 
   /// The bytes of one [name] inside the archive here, or `null`.
   ///
-  /// For reading a manifest out of a download without unpacking it.
-  Future<List<int>?> extract(String name, {ArchiveFormat? format}) =>
+  /// For reading a manifest out of a download without unpacking it — the one
+  /// entry, where [unzipInto] is all of them.
+  Future<List<int>?> readArchived(String name, {ArchiveFormat? format}) =>
       _extractFromArchive(raw, name, format: format);
 
   /// Writes an archive here from [files], a map of archive path to contents.

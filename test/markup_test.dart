@@ -33,13 +33,13 @@ void main() {
 
     test('parses HTML markup directly into Markup', () {
       final query = $(sampleHtml);
-      expect(query.empty, isFalse);
+      expect(query.isEmpty, isFalse);
       expect(query.$('.title').text, equals('Album Title'));
     });
 
     test('\$ selects straight out of markup', () {
       final tracks = $(sampleHtml, '.track');
-      expect(tracks.count, equals(3));
+      expect(tracks.length, equals(3));
       expect(tracks.elements.first.query.$('.num').text, equals('01.'));
       expect(tracks.elements.last.query.$('.num').text, equals('03.'));
     });
@@ -52,7 +52,10 @@ void main() {
         equals(['Track One', 'Track Two', 'Bonus Track']),
       );
       expect(doc.$('.footer p').text, equals('Copyright 2026'));
-      expect(doc.$('.footer').html.trim(), equals('<p>Copyright 2026</p>'));
+      expect(
+        doc.$('.footer').innerHtml.trim(),
+        equals('<p>Copyright 2026</p>'),
+      );
     });
 
     test('attributes extraction with attr and attrs', () {
@@ -70,25 +73,25 @@ void main() {
 
       expect(doc.$('.track').at(1).$('.link').text, equals('Track Two'));
       expect(doc.$('.track').at(-1).$('.link').text, equals('Bonus Track'));
-      expect(doc.$('.track').at(9).empty, isTrue);
+      expect(doc.$('.track').at(9).isEmpty, isTrue);
 
       final bonus = doc
           .$('.track')
-          .filter((Element el) => el.classes.contains('bonus'));
-      expect(bonus.count, equals(1));
+          .where((Element el) => el.classes.contains('bonus'));
+      expect(bonus.length, equals(1));
       expect(bonus.$('.link').text, equals('Bonus Track'));
 
       // Selector-based filtering is a separate, typed method.
-      expect(doc.$('.track').matching('.bonus').count, equals(1));
-      expect(doc.$('.track').matching(':not(.bonus)').count, equals(2));
+      expect(doc.$('.track').matching('.bonus').length, equals(1));
+      expect(doc.$('.track').matching(':not(.bonus)').length, equals(2));
 
-      expect(bonus.matching('.bonus').empty, isFalse);
-      expect(bonus.matching('.non-existent').empty, isTrue);
+      expect(bonus.matching('.bonus').isEmpty, isFalse);
+      expect(bonus.matching('.non-existent').isEmpty, isTrue);
 
-      expect(doc.$('.track-list').children().count, equals(3));
-      expect(doc.$('.track').parent().matching('.track-list').empty, isFalse);
-      expect(doc.$('.num').closest('.track').count, equals(3));
-      expect(doc.$('.track').at(0).siblings().count, equals(2));
+      expect(doc.$('.track-list').children().length, equals(3));
+      expect(doc.$('.track').parent().matching('.track-list').isEmpty, isFalse);
+      expect(doc.$('.num').closest('.track').length, equals(3));
+      expect(doc.$('.track').at(0).siblings().length, equals(2));
     });
 
     test('the cursor door, and the extension on Element', () {
@@ -127,7 +130,7 @@ void main() {
       expect(q.$('.missing').elements.firstOrNull, isNull);
 
       final allTracks = q.$('.track');
-      expect(allTracks.count, equals(3));
+      expect(allTracks.length, equals(3));
       expect(allTracks.elements.first.attributes['data-id'], equals('1'));
     });
 
@@ -165,8 +168,8 @@ void main() {
 
         // :has
         final boxWithLink = doc.$('.box:has(a.btn)');
-        expect(boxWithLink.count, equals(1));
-        expect(boxWithLink.matching('.with-link').empty, isFalse);
+        expect(boxWithLink.length, equals(1));
+        expect(boxWithLink.matching('.with-link').isEmpty, isFalse);
 
         // :header
         expect(doc.$(':header').texts, equals(['Main Header', 'Sub Header']));
@@ -184,12 +187,12 @@ void main() {
         expect(doc.$('ul li:eq(-1)').text, equals('Row 3'));
 
         // :input
-        expect(doc.$(':input').count, equals(2));
-        expect(doc.$(':checkbox').count, equals(1));
+        expect(doc.$(':input').length, equals(2));
+        expect(doc.$(':checkbox').length, equals(1));
         expect(doc.$(':text').attr('value'), equals('Alice'));
 
         // :empty
-        expect(doc.$('div:empty').matching('.empty-div').empty, isFalse);
+        expect(doc.$('div:empty').matching('.empty-div').isEmpty, isFalse);
       },
     );
 
@@ -203,7 +206,7 @@ void main() {
 
       // xpath returns Markup
       final allA = xp.$xpath('//a');
-      expect(allA.count, equals(3));
+      expect(allA.length, equals(3));
       expect(allA.texts, equals(['Track One', 'Track Two', 'Bonus Track']));
 
       // Text and attributes off an XPath cursor, read the way a CSS one is
@@ -285,13 +288,13 @@ void main() {
       final nested = $(
         '<section><div><p><b>hi</b></p></div></section>',
       ).$('div:has(p:contains(hi))');
-      expect(nested.count, equals(1));
+      expect(nested.length, equals(1));
 
       final quotedParen = $('<div><p>a)b</p></div>').$('p:contains("a)b")');
-      expect(quotedParen.count, equals(1));
+      expect(quotedParen.length, equals(1));
 
       final escapedQuote = $('<div><p>a"b</p></div>').$(r'p:contains("a\"b")');
-      expect(escapedQuote.count, equals(1));
+      expect(escapedQuote.length, equals(1));
     });
 
     test('find and the callable are one search, whichever selector', () {
@@ -302,25 +305,25 @@ void main() {
       // depending on which spelling you reached for. They are the same search
       // now, and `matching` is how you ask whether the set itself qualifies.
       final fragment = $('<div class="x">hello</div>');
-      expect(fragment.$('div').count, equals(1));
-      expect(fragment.$('div:contains(hello)').count, equals(1));
-      expect(fragment.$('.x:first').count, equals(1));
-      expect(fragment.$('div:contains(hello)').count, equals(1));
-      expect(fragment.matching('div:contains(hello)').count, equals(1));
+      expect(fragment.$('div').length, equals(1));
+      expect(fragment.$('div:contains(hello)').length, equals(1));
+      expect(fragment.$('.x:first').length, equals(1));
+      expect(fragment.$('div:contains(hello)').length, equals(1));
+      expect(fragment.matching('div:contains(hello)').length, equals(1));
 
       // An extended selector used to match the context element itself while
       // the plain-CSS fast path did not, so the same query answered
       // differently depending on whether it happened to carry a pseudo.
       final page = $('<html><body><p>x</p></body></html>');
-      expect(page.$('body:has(p)').count, equals(1));
-      expect(page.$('body:has(p)').count, equals(1));
+      expect(page.$('body:has(p)').length, equals(1));
+      expect(page.$('body:has(p)').length, equals(1));
 
       // Scoped, though: the result of a search is not rooted on the document,
       // so a chained find cannot quietly search the page again.
       final rows = $(
         '<div class="row"><b class="name">in</b></div><b class="name">out</b>',
       );
-      expect(rows.$('.name').count, equals(2));
+      expect(rows.$('.name').length, equals(2));
       expect(rows.$('.row').$('.name').texts, equals(['in']));
     });
 
@@ -433,8 +436,8 @@ void main() {
 
     test('matching uses the same evaluation as find', () {
       final second = page().$('li').at(1);
-      expect(second.matching('li:nth-child(2)').count, equals(1));
-      expect(second.matching('li:nth-child(3)').count, equals(0));
+      expect(second.matching('li:nth-child(2)').length, equals(1));
+      expect(second.matching('li:nth-child(3)').length, equals(0));
     });
 
     test('is and where match any of their branches', () {
@@ -508,7 +511,7 @@ void main() {
       for (final selector in selectors) {
         final viaFind = page.$(selector).elements.toSet();
         final viaMatching = every
-            .where((Element e) => e.query.matching(selector).count == 1)
+            .where((Element e) => e.query.matching(selector).length == 1)
             .toSet();
         expect(
           viaMatching,
@@ -523,11 +526,11 @@ void main() {
       () {
         final page = html.parse(.html);
         final b = page.$('.active').elements.first;
-        expect(b.query.matching('div p').count, equals(1));
-        expect(b.query.matching('div > p.active').count, equals(1));
-        expect(b.query.matching('p:nth-child(2)').count, equals(1));
-        expect(b.query.matching('p:first-child').count, equals(0));
-        expect(b.query.matching('.lead, .nope').count, equals(1));
+        expect(b.query.matching('div p').length, equals(1));
+        expect(b.query.matching('div > p.active').length, equals(1));
+        expect(b.query.matching('p:nth-child(2)').length, equals(1));
+        expect(b.query.matching('p:first-child').length, equals(0));
+        expect(b.query.matching('.lead, .nope').length, equals(1));
       },
     );
   });

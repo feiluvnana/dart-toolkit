@@ -11,7 +11,7 @@
 /// ```dart
 /// final sheet = 'a,b\n1,2'.parse(.csv);
 /// sheet.headers;                 // List<String>
-/// sheet.maps;                    // Iterable<Map<String, String>>
+/// sheet.records;                    // Iterable<Map<String, String>>
 /// sheet.column('a');             // Iterable<String>
 /// ```
 ///
@@ -73,7 +73,7 @@ final class Csv {
   ///
   /// Blank lines are skipped and short rows are padded with empty strings, so
   /// every map carries every column.
-  List<Map<String, String>> get maps => _rows
+  List<Map<String, String>> get records => _rows
       .where((row) => !CsvText.blank(row))
       .map(
         (row) => {
@@ -101,7 +101,7 @@ final class Csv {
   int get count => _rows.length;
 
   /// Whether there are no data rows.
-  bool get empty => _rows.isEmpty;
+  bool get isEmpty => _rows.isEmpty;
 
   @override
   String toString() => 'Csv(${_headers.length} columns, $count rows)';

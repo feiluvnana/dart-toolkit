@@ -96,16 +96,20 @@ class Markup {
   /// The first matched element, or `null` when empty.
   Element? get element => _elements.firstOrNull;
 
-  /// The matched elements as a standard Dart [List].
-  List<Element> get elementList => _elements;
-
   /// How many elements matched.
-  int get count => _elements.length;
+  ///
+  /// `length` and `isEmpty`, because that is what `dart:core` calls them on
+  /// everything else that holds a number of things. They were `count` and
+  /// `empty` through 8.1.0.
+  int get length => _elements.length;
 
   /// Whether nothing matched.
   ///
-  /// No complement: `!q.empty` already says the other thing.
-  bool get empty => _elements.isEmpty;
+  /// [isNotEmpty] is the complement, spelled as `dart:core` spells it.
+  bool get isEmpty => _elements.isEmpty;
+
+  /// Whether anything matched.
+  bool get isNotEmpty => _elements.isNotEmpty;
 
   /// Runs an XPath query across the current elements or document.
   ///
@@ -237,11 +241,12 @@ class Markup {
       Element.tag('html');
 
   /// The elements satisfying [test].
-  Markup filter(bool Function(Element element) test) =>
+  Markup where(bool Function(Element element) test) =>
       Markup(_elements.where(test).toList(), _isXPath);
 
   /// The elements that themselves match [selector].
-  Markup matching(String selector) => filter((e) => _matches(e, selector));
+  Markup matching(String selector) =>
+      where((element) => _matches(element, selector));
 
   /// The direct children of the current set, optionally matching [selector].
   Markup children([String? selector]) => _collect(
@@ -282,7 +287,7 @@ class Markup {
   });
 
   /// The immediately preceding sibling of each element.
-  Markup prev([String? selector]) => _sibling(-1, selector);
+  Markup previous([String? selector]) => _sibling(-1, selector);
 
   /// The immediately following sibling of each element.
   Markup next([String? selector]) => _sibling(1, selector);
@@ -325,10 +330,10 @@ class Markup {
   }
 
   /// The inner HTML of the first match, or `''` when empty.
-  String get html => _elements.isEmpty ? '' : _elements.first.innerHtml;
+  String get innerHtml => _elements.isEmpty ? '' : _elements.first.innerHtml;
 
   /// The outer HTML of the first match, or `''` when empty.
-  String get outer => _elements.isEmpty ? '' : _elements.first.outerHtml;
+  String get outerHtml => _elements.isEmpty ? '' : _elements.first.outerHtml;
 
   /// Attribute [name] on the first match, or `null`.
   ///
@@ -407,9 +412,9 @@ class Markup {
 
   @override
   String toString() =>
-      'Markup(count: $count, texts: '
+      'Markup(length: $length, texts: '
       '[${texts.take(3).join(', ')}'
-      '${count > 3 ? '...' : ''}])';
+      '${length > 3 ? '...' : ''}])';
 }
 // ============================================================================
 // EXTENSIONS
@@ -541,7 +546,7 @@ sealed class Field<T> {
       ListField(selector, schema);
 
   /// An arbitrary read, for anything the other cases do not cover.
-  static CallField<R> fn<R>(R Function(Element element) read) =>
+  static CallField<R> custom<R>(R Function(Element element) read) =>
       CallField<R>(read);
 
   /// Reads this field out of [root].
@@ -549,7 +554,7 @@ sealed class Field<T> {
 
   /// This field with [convert] applied to whatever it read.
   ///
-  /// Where [Field.fn] takes an element and does everything by hand, this takes
+  /// Where [Field.custom] takes an element and does everything by hand, this takes
   /// a field that already works and adjusts its answer:
   ///
   /// ```dart
@@ -722,7 +727,7 @@ final class ListField extends Field<List<Map<String, Object?>>> {
   ];
 }
 
-/// An arbitrary typed read. See [Field.fn].
+/// An arbitrary typed read. See [Field.custom].
 final class CallField<T> extends Field<T> {
   final T Function(Element element) _read;
 

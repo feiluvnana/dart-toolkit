@@ -31,7 +31,7 @@ void main() {
 
     test('text that is not JSON reads as the empty cursor', () {
       final broken = 'not json at all'.parse(.json);
-      expect(broken.empty, isTrue);
+      expect(broken.isEmpty, isTrue);
       expect(broken.text('a'), isNull);
       expect(broken.raw, isNull);
     });
@@ -45,7 +45,7 @@ void main() {
     });
 
     test('a missing path is empty, not an exception', () {
-      expect(doc.at('store.nope.deeper.still').empty, isTrue);
+      expect(doc.at('store.nope.deeper.still').isEmpty, isTrue);
       expect(doc.text('store.nope.deeper'), isNull);
       expect(doc.number('store.book[99].price'), isNull);
     });
@@ -59,11 +59,11 @@ void main() {
     });
 
     test('count and empty answer every shape', () {
-      expect(doc.at('store.book').count, equals(3));
-      expect(doc.at('store.bicycle').count, equals(3));
-      expect(doc.at('count').count, equals(1));
-      expect(doc.at('nope').count, isZero);
-      expect(doc.at('nope').empty, isTrue);
+      expect(doc.at('store.book').length, equals(3));
+      expect(doc.at('store.bicycle').length, equals(3));
+      expect(doc.at('count').length, equals(1));
+      expect(doc.at('nope').length, isZero);
+      expect(doc.at('nope').isEmpty, isTrue);
     });
 
     test('all and one build one value per element', () {
@@ -93,7 +93,7 @@ void main() {
         '["a", 2, true, {"x":1}]'
             .parse(.json)
             .all((item) => item.text())
-            .nonNull
+            .nonNulls
             .toList(),
         equals(['a', '2', 'true']),
       );
@@ -109,7 +109,7 @@ void main() {
     test('child, wildcard and recursive descent', () {
       expect(
         doc
-            .jsonpath(r'$.store.book[*].author')
+            .jsonPath(r'$.store.book[*].author')
             .map((n) => n.text())
             .whereType<String>()
             .toList(),
@@ -117,32 +117,32 @@ void main() {
       );
       expect(
         doc
-            .jsonpath(r'$..price')
+            .jsonPath(r'$..price')
             .map((n) => n.number())
             .whereType<num>()
             .toList(),
         equals([8.95, 12.99, 8.99, 19.95]),
       );
-      expect(doc.jsonpath(r'store.book[*]').length, equals(3));
-      expect(doc.jsonpath(r'$.store.*').length, equals(2));
+      expect(doc.jsonPath(r'store.book[*]').length, equals(3));
+      expect(doc.jsonPath(r'$.store.*').length, equals(2));
     });
 
     test('indices, negatives, unions and slices', () {
       expect(
         doc
-            .jsonpath(r'$.store.book[-1].title')
+            .jsonPath(r'$.store.book[-1].title')
             .map((n) => n.text())
             .whereType<String>()
             .toList(),
         equals(['Moby Dick']),
       );
-      expect(doc.jsonpath(r'$.store.book[0,2]').length, equals(2));
-      expect(doc.jsonpath(r'$.store.book[0:2]').length, equals(2));
-      expect(doc.jsonpath(r'$.store.book[:2]').length, equals(2));
+      expect(doc.jsonPath(r'$.store.book[0,2]').length, equals(2));
+      expect(doc.jsonPath(r'$.store.book[0:2]').length, equals(2));
+      expect(doc.jsonPath(r'$.store.book[:2]').length, equals(2));
       expect(
         '[1,2,3,4,5]'
             .parse(.json)
-            .jsonpath(r'$[::2]')
+            .jsonPath(r'$[::2]')
             .map((n) => n.number())
             .whereType<num>()
             .toList(),
@@ -151,7 +151,7 @@ void main() {
       expect(
         '[1,2,3]'
             .parse(.json)
-            .jsonpath(r'$[::-1]')
+            .jsonPath(r'$[::-1]')
             .map((n) => n.number())
             .whereType<num>()
             .toList(),
@@ -162,14 +162,14 @@ void main() {
     test('quoted names, single or several', () {
       expect(
         doc
-            .jsonpath(r"$['store']['bicycle']['colour']")
+            .jsonPath(r"$['store']['bicycle']['colour']")
             .map((n) => n.text())
             .whereType<String>()
             .toList(),
         equals(['red']),
       );
       expect(
-        doc.jsonpath(r"$.store.bicycle['colour','price']").length,
+        doc.jsonPath(r"$.store.bicycle['colour','price']").length,
         equals(2),
       );
     });
@@ -177,7 +177,7 @@ void main() {
     test('filters: existence, comparison and regex', () {
       expect(
         doc
-            .jsonpath(r'$.store.book[?(@.isbn)]')
+            .jsonPath(r'$.store.book[?(@.isbn)]')
             .map((b) => b.text('title'))
             .whereType<String>()
             .toList(),
@@ -185,23 +185,23 @@ void main() {
       );
       expect(
         doc
-            .jsonpath(r'$.store.book[?(@.price < 10)]')
+            .jsonPath(r'$.store.book[?(@.price < 10)]')
             .map((b) => b.text('title'))
             .whereType<String>()
             .toList(),
         equals(['Sayings', 'Moby Dick']),
       );
       expect(
-        doc.jsonpath(r'$.store.book[?(@.author == "Evelyn Waugh")]').length,
+        doc.jsonPath(r'$.store.book[?(@.author == "Evelyn Waugh")]').length,
         equals(1),
       );
       expect(
-        doc.jsonpath(r'$.store.book[?(@.author != "Evelyn Waugh")]').length,
+        doc.jsonPath(r'$.store.book[?(@.author != "Evelyn Waugh")]').length,
         equals(2),
       );
       expect(
         doc
-            .jsonpath(r'$.store.book[?(@.title =~ /^Mob/)]')
+            .jsonPath(r'$.store.book[?(@.title =~ /^Mob/)]')
             .map((b) => b.text('title'))
             .whereType<String>()
             .toList(),
@@ -210,15 +210,15 @@ void main() {
     });
 
     test('an expression it cannot read selects nothing', () {
-      expect(doc.jsonpath(r'$.store.book[').isEmpty, isTrue);
-      expect(doc.jsonpath(r'$[?(broken)]').isEmpty, isTrue);
-      expect(doc.jsonpath(r'$.store.book[a:b:c]').isEmpty, isTrue);
-      expect(doc.jsonpath('').length, equals(1), reason: 'the root itself');
+      expect(doc.jsonPath(r'$.store.book[').isEmpty, isTrue);
+      expect(doc.jsonPath(r'$[?(broken)]').isEmpty, isTrue);
+      expect(doc.jsonPath(r'$.store.book[a:b:c]').isEmpty, isTrue);
+      expect(doc.jsonPath('').length, equals(1), reason: 'the root itself');
     });
 
     test('the same expression is only parsed once', () {
       const query = r'$..price';
-      expect(doc.jsonpath(query).length, equals(doc.jsonpath(query).length));
+      expect(doc.jsonPath(query).length, equals(doc.jsonPath(query).length));
     });
   });
 
@@ -228,7 +228,7 @@ void main() {
         '{"data":{"items":[{"sku":"a"},{"sku":"b"}]}}',
         fetch: Fetch('https://example.com'.url),
       );
-      expect(res.body.parse(.json).at('data.items').count, equals(2));
+      expect(res.body.parse(.json).at('data.items').length, equals(2));
       expect(
         res.body
             .parse(.json)
@@ -242,7 +242,7 @@ void main() {
         (Response.text(
           '<html>',
           fetch: Fetch('https://example.com'.url),
-        ).body).parse(.json).at('a').empty,
+        ).body).parse(.json).at('a').isEmpty,
         isTrue,
         reason: 'a body that is not JSON never throws here',
       );
@@ -258,10 +258,10 @@ void main() {
         expect(
           (await Path(
             path,
-          ).read(.json)).at('hosts').all((h) => h.text()).nonNull.toList(),
+          ).read(.json)).at('hosts').all((h) => h.text()).nonNulls.toList(),
           equals(['a', 'b']),
         );
-        expect((await Path(path).read(.json)).count, equals(1));
+        expect((await Path(path).read(.json)).length, equals(1));
       } finally {
         dir.deleteSync(recursive: true);
       }

@@ -281,7 +281,7 @@ class Pool<I> {
   /// registered before the flow exists, which the pipeline step cannot be.
   ///
   /// Was `stream`, returning a `Stream<R>`, through 5.3.0.
-  Stream<R> flow<R>(Iterable<I> items, FutureOr<R> Function(I item) worker) {
+  Stream<R> stream<R>(Iterable<I> items, FutureOr<R> Function(I item) worker) {
     final list = items.toList();
     final active = <Future<void>>{};
     final limit = size > 0 ? size : 1;
@@ -598,7 +598,7 @@ class RateLimiter implements Waiting {
   String toString() => 'RateLimiter($count per ${per.inMilliseconds}ms)';
 }
 
-/// Retries [fn] if it throws.
+/// Retries [action] if it throws.
 ///
 /// [retries] is the number of *extra* attempts after the first, the one
 /// number every retry in this library counts in — [retry],
@@ -613,7 +613,7 @@ class RateLimiter implements Waiting {
 /// silently: `retries` was read first, so a call passing both ignored
 /// `times` without a word.
 Future<T> retry<T>(
-  FutureOr<T> Function() fn, {
+  FutureOr<T> Function() action, {
   required int retries,
   Duration backoff = const Duration(milliseconds: 100),
   Duration cap = const Duration(seconds: 30),
@@ -625,7 +625,7 @@ Future<T> retry<T>(
   while (true) {
     attempt++;
     try {
-      return await fn();
+      return await action();
     } catch (error) {
       if (attempt >= count || (when != null && !when(error))) {
         rethrow;
@@ -669,8 +669,6 @@ sealed class Settled<R> {
   ///
   /// For a filter or a count. To *use* the value, match on [Done] instead:
   /// that is the branch where it is not null.
-  bool get ok => this is Done<R>;
-
   /// Whether the task finished successfully.
   bool get isDone => this is Done<R>;
 

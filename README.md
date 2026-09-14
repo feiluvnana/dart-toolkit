@@ -63,14 +63,27 @@ await Path('dist/app.zip').hash(.sha256);
 **4. One name per operation.** Not one name plus an extension plus a `Sync`
 twin. Blocking calls are under `path.sync`, not behind a suffix on every name.
 
-**5. Real types at every boundary.** URLs are `Uri`, delays are `Duration`,
+**5. The word form says whether you get a copy.** This is `dart:core`'s rule,
+and the reason `sorted` is a participle while `sort` is not: a **noun or
+adjective** hands back a new value and leaves the receiver alone (`sorted`,
+`reversed`, `shuffled`, `distinct`, `inverted`, `merged`, `nonNulls`); a
+**verb** does something — mutates, or touches the disk, network or terminal
+(`List.sort`, `Map.addAll`, `writeText`, `delete`, `render`). `sorted` is
+spelled that way *because* `List.sort` sorts in place, and the two must never
+be confusable. Where `dart:core` already uses a verb for a copying operation —
+`where`, `map`, `expand`, `take` on `Iterable`; `trim`, `toLowerCase` on
+`String` — so does this package, because matching the platform beats matching
+ourselves. `By` is the keyed form of a member (`sortedBy`, `distinctBy`,
+`groupBy`, `maxByOrNull`); `OrNull` means it can be null.
+
+**6. Real types at every boundary.** URLs are `Uri`, delays are `Duration`,
 paths are `Path`, bodies and algorithms are sealed types and enums.
 
-**6. Atomic by default.** Every write stages through a `.part` file and is
+**7. Atomic by default.** Every write stages through a `.part` file and is
 renamed into place only after a successful flush. Interrupted runs never leave
 truncated files.
 
-**7. Native collections.** Everything operates directly on Dart 3 `Iterable`,
+**8. Native collections.** Everything operates directly on Dart 3 `Iterable`,
 `List`, `Map` and `Stream`. No wrapper types.
 
 ---
@@ -235,7 +248,7 @@ await path.makeDir();     await path.touch();       await path.linkTo(dest);
 // walk
 await dir.list();                    // one level -> List<FileSystemEntry>
 await dir.walk(match: '*.dart');     // the whole tree
-await dir.sweep(match: '*.part');    // delete, and how many went
+await dir.deleteFiles(match: '*.part');    // delete, and how many went
 await dir.dirSize;                   // the recursive byte total
 dir.watch((changed) => print(changed));
 
@@ -453,7 +466,7 @@ final res = await run('git', ['status', '--short']);
 if (res.ok) print(res.stdout);
 
 which('ffmpeg');
-env.get('PORT', 8080);
+env.value('PORT', 8080);
 onExit(() => Path('out/state.json').sync.writeJson(db));
 await shutdown();      // the one door out — it runs those hooks
 ```
@@ -531,7 +544,7 @@ what `String.parse`, `Response.parse`, `Path.read` and `Path.write` all take:
 ```dart
 final pubspec = await Path('pubspec.yaml').read(.yaml);
 pubspec.text('version');                          // no cast
-pubspec.jsonpath(r'$..sdk').map((n) => n.text()).nonNulls;
+pubspec.jsonPath(r'$..sdk').map((n) => n.text()).nonNulls;
 
 res.body.parse(.json).at('data.items').all((i) => i.text('sku'));
 res.body.parse(.html).$('h1').text;
@@ -555,8 +568,8 @@ somebody thought to add, where `run` has the whole executable.
 ```dart
 await Path('site').zipTo('site.zip');        // or site.tar.gz, .tgz, .tar.bz2
 await Path('site.zip').unzipInto('restored');  // skips zip-slip entries
-await Path('site.zip').entries();            // without unpacking
-await Path('site.zip').extract('index.html');  // one entry, in memory
+await Path('site.zip').archiveEntries();      // without unpacking
+await Path('site.zip').readArchived('index.html');  // one entry, in memory
 bytes.gzip();
 ```
 
@@ -570,9 +583,14 @@ back. See [lib/format/zip.dart](lib/format/zip.dart).
 rows.where((r) => r.live).take(10).sortedBy((r) => r.cost);
 rows.groupBy((r) => r.host);
 rows.countBy((r) => r.host);
-rows.maxBy((r) => r.score)?.url;
+rows.maxByOrNull((r) => r.score)?.url;
 items.chunk(2);  items.window(3);  items.distinct();
 ```
+
+**The names are `dart:core`'s.** Filtering is `where`, not `filter`;
+flattening is `expand`, not `flatMap`; dropping nulls is `dart:core`'s own
+`nonNulls`. A size is `length` and an emptiness check is `isEmpty` — on
+`Markup`, `Json` and `Csv` alike.
 
 Async stream processing over files and network feeds:
 

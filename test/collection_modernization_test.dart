@@ -38,7 +38,7 @@ void main() {
 
     test('Iterables.concat chains iterables', () {
       expect(
-        Iterables.concat([
+        Iterables.flatten([
           [1, 2],
           [3, 4],
         ]).toList(),
@@ -82,10 +82,13 @@ void main() {
 
   group('IterableExtensions', () {
     test('filter and flatMap and mapNotNull', () {
-      expect([1, 2, 3, 4].filter((n) => n.isEven).toList(), equals([2, 4]));
-      expect(['1', 'x', '3'].mapNotNull(int.tryParse).toList(), equals([1, 3]));
+      expect([1, 2, 3, 4].where((n) => n.isEven).toList(), equals([2, 4]));
       expect(
-        [1, 2].flatMap((n) => [n, n * 10]).toList(),
+        ['1', 'x', '3'].map(int.tryParse).nonNulls.toList(),
+        equals([1, 3]),
+      );
+      expect(
+        [1, 2].expand((n) => [n, n * 10]).toList(),
         equals([1, 10, 2, 20]),
       );
     });
@@ -110,7 +113,10 @@ void main() {
       expect([1, 2, 1, 3, 2].distinct().toList(), equals([1, 2, 3]));
 
       final words = ['apple', 'apricot', 'banana', 'blueberry'];
-      expect(words.distinct((w) => w[0]).toList(), equals(['apple', 'banana']));
+      expect(
+        words.distinctBy((w) => w[0]).toList(),
+        equals(['apple', 'banana']),
+      );
     });
 
     test('chunk and window', () {
@@ -145,9 +151,9 @@ void main() {
         [1, 2].zipWith(['a', 'b'], (a, b) => '$a$b').toList(),
         equals(['1a', '2b']),
       );
-      expect([1, 2].concat([3, 4]).toList(), equals([1, 2, 3, 4]));
-      expect([1, 2, 3].intersect([2, 3, 4]), equals({2, 3}));
-      expect([1, 2, 3].minus([2, 4]), equals([1, 3]));
+      expect([1, 2].followedBy([3, 4]).toList(), equals([1, 2, 3, 4]));
+      expect([1, 2, 3].intersection([2, 3, 4]), equals({2, 3}));
+      expect([1, 2, 3].difference([2, 4]), equals([1, 3]));
       expect([1, 2, 3].reversed.toList(), equals([3, 2, 1]));
 
       final tapped = <int>[];
@@ -158,8 +164,8 @@ void main() {
 
     test('NullableIterableExtensions nonNull and whereNotNull', () {
       final list = <int?>[1, null, 2, null, 3];
-      expect(list.nonNull.toList(), equals([1, 2, 3]));
-      expect(list.whereNotNull().toList(), equals([1, 2, 3]));
+      expect(list.nonNulls.toList(), equals([1, 2, 3]));
+      expect(list.nonNulls.toList(), equals([1, 2, 3]));
     });
 
     test(
@@ -170,21 +176,21 @@ void main() {
         expect([('a', 10), ('b', 20)].sum((item) => item.$2), equals(30));
         expect([2, 4, 6].average(), equals(4.0));
         expect(<int>[].average(), isNull);
-        expect([3, 1, 4, 2].max(), equals(4));
-        expect([3, 1, 4, 2].min(), equals(1));
-        expect(<int>[].max(), isNull);
-        expect(<int>[].min(), isNull);
+        expect([3, 1, 4, 2].maxOrNull(), equals(4));
+        expect([3, 1, 4, 2].minOrNull(), equals(1));
+        expect(<int>[].maxOrNull(), isNull);
+        expect(<int>[].minOrNull(), isNull);
 
         final items = [('a', 1), ('b', 9), ('c', 5)];
-        expect(items.maxBy((e) => e.$2), equals(('b', 9)));
-        expect(items.minBy((e) => e.$2), equals(('a', 1)));
+        expect(items.maxByOrNull((e) => e.$2), equals(('b', 9)));
+        expect(items.minByOrNull((e) => e.$2), equals(('a', 1)));
 
         expect(
           items.toMap(key: (e) => e.$1, value: (e) => e.$2),
           equals({'a': 1, 'b': 9, 'c': 5}),
         );
         expect(
-          items.associateBy((e) => e.$1),
+          items.toMapBy((e) => e.$1),
           equals({'a': ('a', 1), 'b': ('b', 9), 'c': ('c', 5)}),
         );
 
@@ -221,7 +227,7 @@ void main() {
         }),
       );
       expect(
-        Maps.groupByValues(words, keyOf: (w) => w[0], valueOf: (w) => w.length),
+        Maps.groupBy(words, keyOf: (w) => w[0], valueOf: (w) => w.length),
         equals({
           'a': [5, 7],
           'b': [6],
@@ -240,7 +246,7 @@ void main() {
     test('Maps.zip and Maps.invert', () {
       expect(Maps.zip(['a', 'b'], [1, 2]), equals({'a': 1, 'b': 2}));
       expect(
-        ({'a': 1, 'b': 1, 'c': 2}).invert(),
+        ({'a': 1, 'b': 1, 'c': 2}).inverted(),
         equals({
           1: ['a', 'b'],
           2: ['c'],
@@ -263,9 +269,9 @@ void main() {
       'MapExtensions: filter, filterKeys, filterValues, mapKeys, mapValues',
       () {
         final map = {'a': 1, 'b': 2, 'c': 3};
-        expect(map.filter((k, v) => v.isOdd), equals({'a': 1, 'c': 3}));
-        expect(map.filterKeys((k) => k != 'b'), equals({'a': 1, 'c': 3}));
-        expect(map.filterValues((v) => v > 1), equals({'b': 2, 'c': 3}));
+        expect(map.where((k, v) => v.isOdd), equals({'a': 1, 'c': 3}));
+        expect(map.whereKey((k) => k != 'b'), equals({'a': 1, 'c': 3}));
+        expect(map.whereValue((v) => v > 1), equals({'b': 2, 'c': 3}));
         expect(
           map.mapValues((k, v) => v * 10),
           equals({'a': 10, 'b': 20, 'c': 30}),
@@ -281,13 +287,13 @@ void main() {
       'MapExtensions: pick, omit, merge, sortedByKey, sortedByValue, pairs, invert',
       () {
         final map = {'b': 2, 'a': 3, 'c': 1};
-        expect(map.pick(['a', 'b']), equals({'b': 2, 'a': 3}));
-        expect(map.omit(['b']), equals({'a': 3, 'c': 1}));
+        expect(map.only(['a', 'b']), equals({'b': 2, 'a': 3}));
+        expect(map.except(['b']), equals({'a': 3, 'c': 1}));
         expect(map.sortedByKey().keys.toList(), equals(['a', 'b', 'c']));
         expect(map.sortedByValue().values.toList(), equals([1, 2, 3]));
         expect(map.pairs.toList(), equals([('b', 2), ('a', 3), ('c', 1)]));
         expect(
-          map.invert(),
+          map.inverted(),
           equals({
             2: ['b'],
             3: ['a'],
@@ -357,19 +363,21 @@ void main() {
       'StreamExtensions: filter, mapNotNull, flatMap, distinctBy, chunk, recover, tap',
       () async {
         final s = Stream.fromIterable([1, 2, 3, 4]);
-        expect(await s.filter((n) => n.isEven).toList(), equals([2, 4]));
+        expect(await s.where((n) => n.isEven).toList(), equals([2, 4]));
 
         final s2 = Stream.fromIterable(['1', 'bad', '3']);
-        expect(await s2.mapNotNull(int.tryParse).toList(), equals([1, 3]));
+        expect(await s2.map(int.tryParse).nonNulls.toList(), equals([1, 3]));
 
         final s3 = Stream.fromIterable([1, 2]);
         expect(
-          await s3.flatMap((n) => Stream.fromIterable([n, n * 10])).toList(),
+          await s3
+              .asyncExpand((n) => Stream.fromIterable([n, n * 10]))
+              .toList(),
           equals([1, 10, 2, 20]),
         );
 
         final s4 = Stream.fromIterable([1, 1, 2, 2, 3, 1]);
-        expect(await s4.distinctBy().toList(), equals([1, 2, 3, 1]));
+        expect(await s4.distinctBy((n) => n).toList(), equals([1, 2, 3, 1]));
 
         final s5 = Stream.fromIterable([1, 2, 3, 4, 5]);
         expect(
@@ -394,10 +402,10 @@ void main() {
 
     test('NullableStreamExtensions nonNull and whereNotNull', () async {
       final s = Stream<int?>.fromIterable([1, null, 2, null, 3]);
-      expect(await s.nonNull.toList(), equals([1, 2, 3]));
+      expect(await s.nonNulls.toList(), equals([1, 2, 3]));
 
       final s2 = Stream<int?>.fromIterable([1, null, 2, null, 3]);
-      expect(await s2.whereNotNull().toList(), equals([1, 2, 3]));
+      expect(await s2.nonNulls.toList(), equals([1, 2, 3]));
     });
 
     test('StreamTerminals: count, firstOrNull, lastOrNull', () async {

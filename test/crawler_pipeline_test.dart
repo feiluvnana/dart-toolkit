@@ -597,11 +597,11 @@ Crawl-delay: 0.5
       final robots = text.parse(.robots);
       expect(robots.sitemaps, equals(['https://example.com/sitemap.xml'.url]));
       expect(
-        robots.delay(agent: 'Googlebot'),
+        robots.crawlDelay(agent: 'Googlebot'),
         equals(const Duration(milliseconds: 500)),
       );
       expect(
-        robots.delay(agent: 'OtherBot'),
+        robots.crawlDelay(agent: 'OtherBot'),
         equals(const Duration(milliseconds: 2500)),
       );
 
@@ -630,7 +630,7 @@ Crawl-delay: 0.5
       final once = text.parse(.robots);
       final twice = once.render().parse(.robots);
       expect(twice.allowed('https://x.test/admin'.url), isFalse);
-      expect(twice.delay(), equals(const Duration(seconds: 1)));
+      expect(twice.crawlDelay(), equals(const Duration(seconds: 1)));
     });
 
     test('format.sitemap reads urlset, sitemapindex and plain text', () {

@@ -159,7 +159,7 @@ void main() {
     test('Iterable fluent helpers', () {
       final words = ['apple', 'banana', 'avocado', 'apricot', 'blueberry'];
       expect(
-        words.filter((w) => w.startsWith('a')),
+        words.where((w) => w.startsWith('a')),
         equals(['apple', 'avocado', 'apricot']),
       );
 
@@ -174,7 +174,7 @@ void main() {
 
       final duplicates = ['a', 'b', 'a', 'c', 'b'];
       expect(duplicates.distinct(), equals(['a', 'b', 'c']));
-      expect(words.distinct((w) => w[0]), equals(['apple', 'banana']));
+      expect(words.distinctBy((w) => w[0]), equals(['apple', 'banana']));
 
       expect(
         [1, 2, 3, 4, 5].chunk(2),
@@ -202,9 +202,9 @@ void main() {
       expect(counts['b'], equals(2));
 
       final nullables = ['1', '', '2', '', '3'];
-      final filtered = nullables.mapNotNull(
-        (s) => s.isEmpty ? null : int.parse(s),
-      );
+      final filtered = nullables
+          .map((s) => s.isEmpty ? null : int.parse(s))
+          .nonNulls;
       expect(filtered, equals([1, 2, 3]));
     });
   });
@@ -432,7 +432,7 @@ void main() {
 
     test('Random helpers', () {
       final list = [1, 2, 3, 4, 5];
-      expect(list.randomItem(), isIn(list));
+      expect(list.randomElement(), isIn(list));
       expect(Rand.between(10, 20), inInclusiveRange(10, 20));
       expect(Rand.id(16).length, equals(16));
     });
@@ -487,7 +487,7 @@ void main() {
     test('env and which', () {
       expect(env['PATH'] ?? env['Path'], isNotNull);
       expect(
-        env.get('NON_EXISTENT_KEY_123', 'default_val'),
+        env.value('NON_EXISTENT_KEY_123', 'default_val'),
         equals('default_val'),
       );
 
@@ -570,15 +570,15 @@ void main() {
     });
 
     test('Env static hub', () {
-      env.set('V8_TEST_KEY', 'v8_secret_val');
-      expect(env.has('V8_TEST_KEY'), isTrue);
+      env['V8_TEST_KEY'] = 'v8_secret_val';
+      expect(env.containsKey('V8_TEST_KEY'), isTrue);
       expect(env['V8_TEST_KEY'], equals('v8_secret_val'));
-      expect(env.get('V8_TEST_KEY', 'default'), equals('v8_secret_val'));
-      expect(env.get('MISSING_KEY_999', 'fallback'), equals('fallback'));
+      expect(env.value('V8_TEST_KEY', 'default'), equals('v8_secret_val'));
+      expect(env.value('MISSING_KEY_999', 'fallback'), equals('fallback'));
       expect(env.require('V8_TEST_KEY'), equals('v8_secret_val'));
 
-      env.delete('V8_TEST_KEY');
-      expect(env.has('V8_TEST_KEY'), isFalse);
+      env.remove('V8_TEST_KEY');
+      expect(env.containsKey('V8_TEST_KEY'), isFalse);
     });
 
     test('Concurrent static hub', () async {
@@ -707,7 +707,7 @@ void main() {
 
     test('Rand static hub', () {
       final list = [10, 20, 30, 40];
-      final picked = list.randomItem();
+      final picked = list.randomElement();
       expect(list, contains(picked));
 
       final shuffled = list.shuffled();

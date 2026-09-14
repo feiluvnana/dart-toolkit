@@ -367,7 +367,7 @@ void main() {
       ).csvRecords().toList();
       final List<List<String>> rows = await Path(path).csvRows().toList();
 
-      expect(sheet.maps.toList(), records);
+      expect(sheet.records.toList(), records);
       // The cursor keeps the header out of the rows; the flow does not, so
       // it is the header line plus what the cursor calls a row.
       expect(sheet.headers.toList(), rows.first);
@@ -483,8 +483,8 @@ void main() {
     });
 
     test('a flag reads its declared env variable', () {
-      env.set('DT_CONSOLE_FORCE', 'yes');
-      addTearDown(() => env.delete('DT_CONSOLE_FORCE'));
+      env['DT_CONSOLE_FORCE'] = 'yes';
+      addTearDown(() => env.remove('DT_CONSOLE_FORCE'));
 
       // Only option() took an env before, so a boolean could not be set by
       // the shell.
@@ -493,8 +493,8 @@ void main() {
     });
 
     test('the command line still beats the flag env', () {
-      env.set('DT_CONSOLE_FORCE', 'true');
-      addTearDown(() => env.delete('DT_CONSOLE_FORCE'));
+      env['DT_CONSOLE_FORCE'] = 'true';
+      addTearDown(() => env.remove('DT_CONSOLE_FORCE'));
 
       final force = Cli(const [
         '--no-force',
@@ -578,7 +578,7 @@ void main() {
       final pool = Pool<int>(size: 1);
       // `.stream` on purpose: a test reaching for `listen` and `cancel` has
       // left the vocabulary, and the one word at the boundary says so.
-      final stream = pool.flow(List.generate(50, (int i) => i), (i) async {
+      final stream = pool.stream(List.generate(50, (int i) => i), (i) async {
         started++;
         await Future<void>.delayed(const Duration(milliseconds: 1));
         return i;

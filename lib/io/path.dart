@@ -216,7 +216,7 @@ extension type const Path(String raw) implements String {
   }
 
   /// Whether this directory holds no entries.
-  Future<bool> get isDirEmpty => Entries.emptyAsync(raw);
+  Future<bool> get isDirEmpty => Entries.isEmptyAsync(raw);
 
   /// Whether a lock file here is currently held by a live process.
   ///
@@ -461,7 +461,10 @@ extension type const Path(String raw) implements String {
 
   /// Deletes the files under this directory matching [match], and says how
   /// many went. Directories are left in place.
-  Future<int> sweep({String? match}) async {
+  ///
+  /// It was `sweep` through 8.1.0, which did not say that anything was
+  /// deleted.
+  Future<int> deleteFiles({String? match}) async {
     var count = 0;
     for (final entry in await walk(match: match)) {
       if (entry.isFile || entry.isLink) {
@@ -688,7 +691,7 @@ extension type const SyncPath(String raw) implements String {
   List<FileSystemEntry> glob() => Entries.expand(raw).toList();
 
   /// Deletes the files under this directory matching [match].
-  int sweep({String? match}) {
+  int deleteFiles({String? match}) {
     var count = 0;
     for (final entry in walk(match: match)) {
       if ((entry.isFile || entry.isLink) && Fs.removeSync(entry.path)) count++;
@@ -706,7 +709,7 @@ extension type const SyncPath(String raw) implements String {
   }
 
   /// Whether this directory holds no entries.
-  bool get isDirEmpty => Entries.empty(raw);
+  bool get isDirEmpty => Entries.isEmpty(raw);
 
   /// Whether this path exists and holds something.
   bool get hasContent => Fs.has(raw);

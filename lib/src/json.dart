@@ -124,9 +124,9 @@ final class Json {
   /// ```dart
   /// final doc = body.parse(.json);
   ///
-  /// doc.jsonpath(r'$.store.book[*].author');        // every author
-  /// doc.jsonpath(r'$..price').map((p) => p.number()).nonNulls;
-  /// doc.jsonpath(r'$.store.book[?(@.price < 10)]')  // the cheap ones
+  /// doc.jsonPath(r'$.store.book[*].author');        // every author
+  /// doc.jsonPath(r'$..price').map((p) => p.number()).nonNulls;
+  /// doc.jsonPath(r'$.store.book[?(@.price < 10)]')  // the cheap ones
   ///    .map((b) => b.text('title')).nonNulls;
   /// ```
   ///
@@ -152,7 +152,7 @@ final class Json {
   /// An expression this reader cannot parse selects nothing, matching how a
   /// missing path reads: a typo mid-crawl is an empty result to notice, not an
   /// exception to catch.
-  List<Json> jsonpath(String expression) =>
+  List<Json> jsonPath(String expression) =>
       JsonPath.of(expression).read(raw).map(Json.new).toList();
 
   /// The text at [path], or of this node when [path] is omitted.
@@ -216,7 +216,7 @@ final class Json {
   ///
   /// A scalar counts as one and the empty cursor as none, so [count] answers
   /// "how much is here" for every shape a document can take.
-  int get count => switch (raw) {
+  int get length => switch (raw) {
     null => 0,
     List<Object?> list => list.length,
     Map<Object?, Object?> map => map.length,
@@ -225,8 +225,8 @@ final class Json {
 
   /// Whether this node holds nothing — which a missing path always does.
   ///
-  /// No complement: `!doc.empty` already says the other thing.
-  bool get empty => count == 0;
+  /// No complement: `!doc.isEmpty` already says the other thing.
+  bool get isEmpty => length == 0;
 
   /// Converts this JSON cursor to a native [Map] if it represents a JSON object, or `null` otherwise.
   Map<String, T>? toMap<T>() => switch (raw) {

@@ -245,7 +245,7 @@ class Response {
   Json get json => body.parse(.json);
 
   /// Decodes the JSON body directly as typed [T] when a raw map or list is required.
-  T jsonDecoded<T>() => json.raw as T;
+  T decodeJson<T>() => json.raw as T;
 
   /// Whether this response came from an [HttpCache] rather than the network.
   ///
@@ -363,7 +363,7 @@ class Response {
   bool get ok => statusCode >= 200 && statusCode < 300;
 
   /// The MIME type from the `Content-Type` header (e.g. `'text/html'`).
-  String? get type {
+  String? get contentType {
     final header = _header('content-type');
     if (header == null) return null;
     return header.split(';').first.trim().toLowerCase();
@@ -429,7 +429,7 @@ class Response {
   /// res.parse(.json).at('data.items');
   /// res.parse(.yaml).text('version');
   ///
-  /// switch (res.type) {
+  /// switch (res.contentType) {
   ///   case 'application/json': res.parse(.json).at('items');
   ///   default:                 res.parse(.html).$('.item');
   /// }
@@ -1628,7 +1628,7 @@ class CookieJar {
   void clear() => _cookies.clear();
 
   /// Removes every cookie whose expiry has passed.
-  void sweep() {
+  void removeExpired() {
     final now = DateTime.now();
     _cookies.removeWhere(
       (_, c) => c.expires != null && now.isAfter(c.expires!),

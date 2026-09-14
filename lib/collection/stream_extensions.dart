@@ -63,33 +63,21 @@ extension StreamExtensions<T> on Stream<T> {
     return controller.stream;
   }
 
-  /// Idiomatic alias for [where].
-  Stream<T> filter(bool Function(T) test) => where(test);
-
-  /// Maps events, silently discarding null results.
-  Stream<R> mapNotNull<R>(R? Function(T) f) async* {
-    await for (final event in this) {
-      final res = f(event);
-      if (res != null) yield res;
-    }
-  }
-
-  /// Merges streams generated from each event.
-  Stream<R> flatMap<R>(Stream<R> Function(T) f) async* {
-    await for (final event in this) {
-      yield* f(event);
-    }
-  }
-
-  /// Emits only when the key extracted by [by] changes relative to the previous event.
-  Stream<T> distinctBy([Object? Function(T)? by]) async* {
+  /// Emits an event only when its [key] differs from the one before it.
+  ///
+  /// The keyed form of `Stream.distinct`, which `dart:async` already has —
+  /// the way [IterableExtensions.distinctBy] is to `distinct`.
+  ///
+  /// `filter`, `mapNotNull` and `flatMap` stood here through 8.1.0: second
+  /// names for `where`, `map(…).nonNulls` and `asyncExpand`.
+  Stream<T> distinctBy(Object? Function(T event) key) async* {
     var hasPrevious = false;
     Object? previousKey;
     await for (final event in this) {
-      final key = by != null ? by(event) : event;
-      if (!hasPrevious || key != previousKey) {
+      final current = key(event);
+      if (!hasPrevious || current != previousKey) {
         hasPrevious = true;
-        previousKey = key;
+        previousKey = current;
         yield event;
       }
     }
@@ -207,7 +195,10 @@ extension StreamExtensions<T> on Stream<T> {
   Stream<T> mergeWith(Stream<T> other) => Streams.merge([this, other]);
 
   /// Plays this stream to completion, then plays [other].
-  Stream<T> concatWith(Stream<T> other) => Streams.concat([this, other]);
+  ///
+  /// Named for `Iterable.followedBy`, the same operation on the sync side. It
+  /// was `concatWith` through 8.1.0.
+  Stream<T> followedBy(Stream<T> other) => Streams.concat([this, other]);
 
   /// Pairs events at matching index from two streams.
   Stream<V> zipWith<R, V>(Stream<R> other, [V Function(T a, R b)? combiner]) =>
@@ -244,15 +235,19 @@ extension StreamExtensions<T> on Stream<T> {
 
 /// Null-filtering on nullable streams.
 extension NullableStreamExtensions<T extends Object> on Stream<T?> {
-  /// Emits only non-null events.
-  Stream<T> whereNotNull() async* {
+  /// The events that are not null.
+  ///
+  /// Spelled as `dart:core` spells it for `Iterable<T?>`, which has had
+  /// `nonNulls` since 3.0. `Stream` does not, so this is the one that was
+  /// missing — where 8.1.0 offered `whereNotNull()` *and* `nonNull`, two names
+  /// for an operation the language had already named.
+  Stream<T> get nonNulls => _nonNulls();
+
+  Stream<T> _nonNulls() async* {
     await for (final event in this) {
       if (event != null) yield event;
     }
   }
-
-  /// Ergonomic getter alias for [whereNotNull].
-  Stream<T> get nonNull => whereNotNull();
 }
 
 /// Fluent stream terminals.

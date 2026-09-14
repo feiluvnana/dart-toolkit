@@ -194,7 +194,7 @@ class Robots {
   /// A declared `User-agent` matches when it is a case-insensitive prefix of
   /// the crawler's product token, so a `MyBot` group governs a crawler calling
   /// itself `MyBot/1.0`. The longest such group wins, falling back to `*`.
-  List<RobotsRule> group(String agent) => _group(agent);
+  List<RobotsRule> rulesFor(String agent) => _group(agent);
 
   List<RobotsRule> _group(String agent) {
     final full = agent.toLowerCase().trim();
@@ -286,7 +286,7 @@ class Robots {
   ///
   /// Matched by the same product-token rules as [group]. A crawl started
   /// with `Crawler.obey` waits at least this long between requests to the host.
-  Duration? delay({String agent = '*'}) {
+  Duration? crawlDelay({String agent = '*'}) {
     final full = agent.toLowerCase().trim();
     final exact = _delays[full];
     if (exact != null) return exact;

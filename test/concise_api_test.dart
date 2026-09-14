@@ -99,7 +99,7 @@ void main() {
         equals('build'),
       );
 
-      env.set('OUT_DIR', 'from-env');
+      env['OUT_DIR'] = 'from-env';
       final fromEnv = Cli(const <String>[]);
       final out = fromEnv.option('out', env: 'OUT_DIR', defaultsTo: 'dist');
       expect(out(), equals('from-env'));
@@ -112,7 +112,7 @@ void main() {
     });
 
     test('a number that is not a number is reported, not silently defaulted', () {
-      // This is what `Http.get('concurrency', 4)` used to do: hand back 4 and let
+      // This is what `Http.value('concurrency', 4)` used to do: hand back 4 and let
       // the script run on a number nobody asked for.
       final cli = Cli(['--concurrency=fast']);
       final size = cli.number('concurrency', defaultsTo: 4);
@@ -159,7 +159,7 @@ void main() {
       final withEnv = Cli(const <String>[]);
       final token = withEnv.option('token', env: 'API_TOKEN', required: true);
       expect(() => withEnv.require(), throwsA(isA<ArgumentError>()));
-      env.set('API_TOKEN', 'secret');
+      env['API_TOKEN'] = 'secret';
       expect(() => withEnv.require(), returnsNormally);
       expect(token(), equals('secret'));
       env.clear();
@@ -518,8 +518,8 @@ void main() {
 
     test('Markup href, hrefs, src, srcs, lines', () {
       final q = html.parse(.html);
-      expect(q.matching('.active').empty, isFalse);
-      expect(q.matching('.missing').empty, isTrue);
+      expect(q.matching('.active').isEmpty, isFalse);
+      expect(q.matching('.missing').isEmpty, isTrue);
 
       expect(
         q.$('a').matching(r'[href$=".mp3"]').attr('href'),
@@ -541,7 +541,7 @@ void main() {
       );
 
       expect(q.$('a').elements.length, equals(2));
-      expect(q.$('a').matching(r'[href$=".mp3"]').count, equals(1));
+      expect(q.$('a').matching(r'[href$=".mp3"]').length, equals(1));
     });
 
     test('Response provides Markup via \$ and \$xpath', () {

@@ -69,7 +69,7 @@ void main() {
             'yaml' => await Path(missing).read(.yaml),
             _ => await Path(missing).read(.toml),
           };
-          expect(doc.empty, isTrue, reason: ext);
+          expect(doc.isEmpty, isTrue, reason: ext);
         }
       } finally {
         dir.deleteSync(recursive: true);
@@ -90,12 +90,12 @@ void main() {
       expect(doc.text('version'), equals('3.2.0'));
       expect(doc.text('environment.sdk'), equals('^3.7.0'));
       expect(
-        doc.at('dependencies').all((d) => d.text()).nonNull.toList(),
+        doc.at('dependencies').all((d) => d.text()).nonNulls.toList(),
         equals(['html', 'http']),
       );
       expect(doc.flag('flags.strict'), isTrue);
       expect(doc.number('flags.retries'), equals(3));
-      expect(doc.at('notes').empty, isTrue);
+      expect(doc.at('notes').isEmpty, isTrue);
     });
 
     test('the cursor holds plain maps, so it re-encodes as JSON', () {
@@ -108,7 +108,7 @@ void main() {
       expect(
         _yaml
             .parse(.yaml)
-            .jsonpath(r'$..sdk')
+            .jsonPath(r'$..sdk')
             .map((n) => n.text())
             .whereType<String>()
             .toList(),
@@ -117,7 +117,7 @@ void main() {
     });
 
     test('text that is not YAML is the empty cursor', () {
-      expect('a:\n b\n  - c: :'.parse(.yaml).empty, isTrue);
+      expect('a:\n b\n  - c: :'.parse(.yaml).isEmpty, isTrue);
     });
 
     test('format writes block style, quoting what would read back wrong', () {
@@ -170,7 +170,7 @@ void main() {
           equals('dart_toolkit'),
         );
         expect(
-          (await Path(p.join(dir.path, 'absent.yaml')).read(.yaml)).empty,
+          (await Path(p.join(dir.path, 'absent.yaml')).read(.yaml)).isEmpty,
           isTrue,
         );
       } finally {
@@ -181,7 +181,7 @@ void main() {
     test('it reads this repository own pubspec', () async {
       final pubspec = await Path('pubspec.yaml').read(.yaml);
       expect(pubspec.text('name'), equals('dart_toolkit'));
-      expect(pubspec.at('dependencies').count, greaterThan(3));
+      expect(pubspec.at('dependencies').length, greaterThan(3));
     });
   });
 
@@ -195,7 +195,7 @@ void main() {
     });
 
     test('text that is not TOML is the empty cursor', () {
-      expect('[[[not toml'.parse(.toml).empty, isTrue);
+      expect('[[[not toml'.parse(.toml).isEmpty, isTrue);
     });
 
     test('format writes a document back, and refuses a non-map', () {
@@ -221,7 +221,7 @@ void main() {
           equals('widget'),
         );
         expect(
-          (await Path(p.join(dir.path, 'absent.toml')).read(.toml)).empty,
+          (await Path(p.join(dir.path, 'absent.toml')).read(.toml)).isEmpty,
           isTrue,
         );
       } finally {

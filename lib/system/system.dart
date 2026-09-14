@@ -37,7 +37,7 @@ export 'env.dart';
 
 /// The process environment, with any overrides applied.
 ///
-/// Reads are `env['KEY']`; typed reads with a fallback are [Environment.get].
+/// Reads are `env['KEY']`; typed reads with a fallback are [Environment.value].
 /// [loadEnv] fills it from a `.env` file.
 Environment get env => sharedEnv;
 

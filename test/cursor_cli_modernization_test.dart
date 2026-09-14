@@ -18,21 +18,21 @@ void main() {
 
       // Top-level XPath finds both paragraphs
       final allTargets = doc.$xpath('//p[@class="target"]');
-      expect(allTargets.count, equals(2));
+      expect(allTargets.length, equals(2));
 
       // Scoped XPath on child cursor isolates to subtree
       final d1 = doc.$('#d1');
       final scopedTargets = d1.$xpath('.//p[@class="target"]');
-      expect(scopedTargets.count, equals(1));
+      expect(scopedTargets.length, equals(1));
       expect(scopedTargets.text, equals('Paragraph 1'));
 
       final d2 = doc.$('#d2');
       final scopedTargets2 = d2.$xpath('.//p[@class="target"]');
-      expect(scopedTargets2.count, equals(1));
+      expect(scopedTargets2.length, equals(1));
       expect(scopedTargets2.text, equals('Paragraph 2'));
     });
 
-    test('Markup.element and Markup.elementList getters', () {
+    test('Markup.element and Markup.elements getters', () {
       final html = '''
         <ul>
           <li class="item">One</li>
@@ -45,7 +45,7 @@ void main() {
       expect(firstLi, isNotNull);
       expect(firstLi?.text, equals('One'));
 
-      final allLis = doc.$('.item').elementList;
+      final allLis = doc.$('.item').elements;
       expect(allLis.length, equals(2));
       expect(allLis[0].text, equals('One'));
       expect(allLis[1].text, equals('Two'));
@@ -53,7 +53,7 @@ void main() {
       final emptyEl = doc.$('.missing').element;
       expect(emptyEl, isNull);
 
-      final emptyList = doc.$('.missing').elementList;
+      final emptyList = doc.$('.missing').elements;
       expect(emptyList, isEmpty);
     });
   });
@@ -69,7 +69,7 @@ void main() {
           .parseJson();
       expect(cursor.text('name'), equals('Alice'));
       expect(cursor.number('score'), equals(95));
-      expect(cursor.at('tags').count, equals(2));
+      expect(cursor.at('tags').length, equals(2));
     });
   });
 

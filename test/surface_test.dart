@@ -104,6 +104,35 @@ Set<String> _declaredTopLevel() {
   return found;
 }
 
+/// Every public member name declared under `lib/`, and whether it is static.
+///
+/// A static is constructor-like — it has no receiver to copy — so the
+/// copy-versus-mutate rule does not reach it: `Maps.merge(a, b)` is
+/// `Map.fromEntries`, not `Map.addAll`.
+Iterable<(String where, String name, bool isStatic)> _members() sync* {
+  final decl = RegExp(
+    r'^  (?:static\s+)?(?!final |var |const |return |assert)'
+    r'[A-Za-z_][A-Za-z0-9_<>,?\[\] .]*\s+'
+    r'(?:get\s+)?([a-zA-Z][A-Za-z0-9_]*)\s*[(<;=]',
+  );
+  for (final file in Directory('lib').listSync(recursive: true)) {
+    if (file is! File || !file.path.endsWith('.dart')) continue;
+    var n = 0;
+    for (final line in file.readAsLinesSync()) {
+      n++;
+      if (line.trimLeft().startsWith('///')) continue;
+      final match = decl.firstMatch(line);
+      if (match != null) {
+        yield (
+          '${file.path}:$n',
+          match.group(1)!,
+          line.trimLeft().startsWith('static '),
+        );
+      }
+    }
+  }
+}
+
 void main() {
   group('the public surface', () {
     test('is fourteen top-level names, and no more', () {
@@ -162,6 +191,73 @@ void main() {
           reason: '\$name is listed here but not declared under lib/.',
         );
       }
+    });
+  });
+
+  group('member names follow dart:core', () {
+    /// Names `dart:core` already owns for the same operation, and the ones
+    /// this package borrowed from Kotlin, lodash and rxdart instead.
+    ///
+    /// Every one of these was a member of this package at 8.1.0.
+    const foreign = {
+      'filter': 'where',
+      'flatMap': 'expand or asyncExpand',
+      'mapNotNull': 'map(...).nonNulls',
+      'whereNotNull': 'nonNulls',
+      'nonNull': 'nonNulls',
+      'associateBy': 'toMapBy',
+      'concatWith': 'followedBy',
+      'filterKeys': 'whereKey',
+      'filterValues': 'whereValue',
+      'omit': 'except',
+      'invert': 'inverted',
+      'elementList': 'elements',
+      'prev': 'previous',
+      'jsonpath': 'jsonPath — lowerCamelCase',
+      'randomItem': 'randomElement',
+      'jsonDecoded': 'decodeJson',
+      'picks': 'pickMany',
+      'sweep': 'deleteFiles — say that it deletes',
+      'intersect': 'intersection',
+      'minus': 'difference',
+      'flow': 'stream',
+      // A copy must not be spelled like the mutator it sits beside.
+      'merge': 'merged — Map.addAll is the one that mutates',
+    };
+
+    test('uses no name dart:core already spells differently', () {
+      final offenders = [
+        for (final (where, name, isStatic) in _members())
+          if (foreign.containsKey(name) &&
+              !(isStatic && const {'merge', 'flatten'}.contains(name)))
+            '$where: $name -> ${foreign[name]}',
+      ];
+      expect(offenders, isEmpty);
+    });
+
+    test('spells a count `length` and an emptiness check `isEmpty`', () {
+      final offenders = [
+        for (final (where, name, _) in _members())
+          // `count(test)` takes a predicate and is not `length`; RateLimiter's
+          // `count` is a rate, not a size.
+          if (name == 'empty') where,
+      ];
+      expect(
+        offenders,
+        isEmpty,
+        reason: '`dart:core` calls it isEmpty everywhere it has one.',
+      );
+    });
+
+    test('returns nullable maxima under an OrNull name', () {
+      // `package:collection` spells the throwing version `max` and the
+      // nullable one `maxOrNull`. Sharing the name with the opposite contract
+      // is the trap this guards.
+      final offenders = [
+        for (final (where, name, _) in _members())
+          if (const {'max', 'min', 'maxBy', 'minBy'}.contains(name)) where,
+      ];
+      expect(offenders, isEmpty);
     });
   });
 

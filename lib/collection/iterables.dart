@@ -68,7 +68,7 @@ abstract final class Iterables {
   }
 
   /// Concatenates multiple iterables sequentially.
-  static Iterable<T> concat<T>(Iterable<Iterable<T>> iterables) sync* {
+  static Iterable<T> flatten<T>(Iterable<Iterable<T>> iterables) sync* {
     for (final iterable in iterables) {
       yield* iterable;
     }

@@ -585,7 +585,7 @@ final class Crawler extends Stream<Response> {
           _skip(fetch);
           continue;
         }
-        robotsGap = rules.delay(agent: agent) ?? Duration.zero;
+        robotsGap = rules.crawlDelay(agent: agent) ?? Duration.zero;
       }
 
       // A Crawl-delay the site asked for is honoured per-host whether or not
@@ -602,7 +602,7 @@ final class Crawler extends Stream<Response> {
         if (_stopped) continue;
         _bytes += reply.bytes.length;
 
-        if (_accept.isNotEmpty && !_accepts(reply.type)) {
+        if (_accept.isNotEmpty && !_accepts(reply.contentType)) {
           // A PDF, an image, an archive: fetched, but not what was asked
           // for. Dropped here rather than inside every caller.
           _skip(fetch);

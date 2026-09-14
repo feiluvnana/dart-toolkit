@@ -28,7 +28,7 @@ abstract final class Maps {
   }) => {for (final item in items) key(item): value(item)};
 
   /// Groups [items] by extracted key and maps each value.
-  static Map<K, List<V>> groupByValues<T, K, V>(
+  static Map<K, List<V>> groupBy<T, K, V>(
     Iterable<T> items, {
     required K Function(T item) keyOf,
     required V Function(T item) valueOf,
@@ -48,7 +48,7 @@ abstract final class Maps {
     V Function(V existing, V incoming)? onConflict,
   }) => maps.fold(
     <K, V>{},
-    (result, map) => result.merge(map, onConflict: onConflict),
+    (result, map) => result.merged(map, onConflict: onConflict),
   );
 
   /// Zips keys and values into a Map.

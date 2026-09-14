@@ -45,7 +45,7 @@ void main(List<String> args) async {
   final out = Path(output());
 
   loadEnv();
-  Console.rule('dart-toolkit (${env.get('RUN_LABEL', 'demo')})');
+  Console.rule('dart-toolkit (${env.value('RUN_LABEL', 'demo')})');
   onExit(() => logger.info('Clean shutdown completed.'));
 
   // ------------------------------------------------------- 2. Crawler

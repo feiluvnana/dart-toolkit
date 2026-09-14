@@ -115,7 +115,8 @@ abstract final class Console {
       _reader.confirm(question, fallback: fallback);
 
   /// Asks [question] without echoing what is typed.
-  static Future<String> secret(String question) => _reader.secret(question);
+  static Future<String> askSecret(String question) =>
+      _reader.askSecret(question);
 
   /// Asks [question] as a numbered menu and returns the chosen option.
   static Future<O> pick<O>(
@@ -125,11 +126,11 @@ abstract final class Console {
   }) => _reader.pick(question, options: options, label: label);
 
   /// Asks [question] as a numbered menu and returns every chosen option.
-  static Future<List<O>> picks<O>(
+  static Future<List<O>> pickMany<O>(
     String question, {
     required Iterable<O> options,
     String Function(O item)? label,
-  }) => _reader.picks(question, options: options, label: label);
+  }) => _reader.pickMany(question, options: options, label: label);
 
   /// Closes standard input.
   static Future<void> close() => _reader.close();

@@ -277,7 +277,7 @@ class Cli with _Spec {
   /// Whether [value] spells a true boolean.
   ///
   /// Accepts the words an environment variable or `.env` file is likely to
-  /// carry, matching [Environment.get].
+  /// carry, matching [Environment.value].
   static bool _truthy(String value) => switch (value.trim().toLowerCase()) {
     'true' || '1' || 'yes' || 'on' => true,
     _ => false,
@@ -286,8 +286,8 @@ class Cli with _Spec {
   /// The value of the environment variable this declaration names, if set.
   String? _fromEnv(_Decl? decl) {
     final key = decl?.env;
-    if (key == null || !sharedEnv.has(key)) return null;
-    final String value = sharedEnv.get(key, '');
+    if (key == null || !sharedEnv.containsKey(key)) return null;
+    final String value = sharedEnv.value(key, '');
     return value;
   }
 

@@ -33,7 +33,7 @@ import 'format.dart';
 /// ```dart
 /// final pubspec = 'version: 8.0.0\ndependencies: {}'.parse(.yaml);
 /// pubspec.text('version');                            // '8.0.0'
-/// pubspec.at('dependencies').count;
+/// pubspec.at('dependencies').length;
 /// await Path('out.yaml').writeText(const YamlFormat().format({'name': 'x'}));
 /// ```
 ///

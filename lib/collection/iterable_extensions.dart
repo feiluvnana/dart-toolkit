@@ -62,21 +62,22 @@ extension IterableExtensions<T> on Iterable<T> {
     return pool.settle(items, worker);
   }
 
-  /// Idiomatic, Kotlin-style alias for [where].
-  Iterable<T> filter(bool Function(T) test) => where(test);
-
-  /// Transforms elements, silently discarding null results.
-  Iterable<R> mapNotNull<R>(R? Function(T) f) sync* {
-    for (final element in this) {
-      final res = f(element);
-      if (res != null) yield res;
-    }
-  }
-
-  /// Maps each element to an iterable and flattens the result.
-  Iterable<R> flatMap<R>(Iterable<R> Function(T) f) => expand(f);
-
-  /// Returns a new list sorted by [compare] or natural order.
+  /// A new list with these elements in order.
+  ///
+  /// **An adjective, because nothing here is mutated** — the same reason
+  /// `dart:core` calls the lazy backwards view `reversed` and the in-place
+  /// sort `sort`. `sorted` copies; `List.sort` does not.
+  ///
+  /// [sortedBy] is the keyed form: pass what to compare *by* rather than a
+  /// comparator that does the comparing. The pair matches
+  /// `package:collection`, so code that already knows one knows this one.
+  ///
+  /// ```dart
+  /// rows.sorted();                              // natural order
+  /// rows.sorted((a, b) => a.name.compareTo(b.name));  // a comparator
+  /// rows.sortedBy((r) => r.cost);                 // a key
+  /// rows.sortedByDescending((r) => r.cost);       // the same key, reversed
+  /// ```
   List<T> sorted([Comparator<T>? compare]) {
     final list = toList();
     if (compare != null) {
@@ -87,28 +88,38 @@ extension IterableExtensions<T> on Iterable<T> {
     return list;
   }
 
-  /// Returns a new list sorted ascending by comparable [key].
-  List<T> sortedBy<K extends Comparable<K>>(K Function(T) key) {
+  /// A new list with these elements in ascending order of [key].
+  ///
+  /// The keyed form of [sorted]. `by` is the suffix this package uses
+  /// throughout for *the thing to compare, group or compare-by*:
+  /// [sortedBy], [distinctBy], [groupBy], [countBy], [maxByOrNull],
+  /// [toMapBy].
+  List<T> sortedBy<K extends Comparable<K>>(K Function(T element) key) {
     final list = toList();
     list.sort((a, b) => key(a).compareTo(key(b)));
     return list;
   }
 
-  /// Returns a new list sorted descending by comparable [key].
-  List<T> sortedByDescending<K extends Comparable<K>>(K Function(T) key) {
+  /// A new list with these elements in descending order of [key].
+  List<T> sortedByDescending<K extends Comparable<K>>(
+    K Function(T element) key,
+  ) {
     final list = toList();
     list.sort((a, b) => key(b).compareTo(key(a)));
     return list;
   }
 
-  /// Deduplicates elements, optionally by extracted key.
-  Iterable<T> distinct([Object? Function(T)? by]) sync* {
+  /// The elements with duplicates dropped, keeping the first of each.
+  ///
+  /// Named for `Stream.distinct`, which is the same operation on the async
+  /// side. [distinctBy] is the keyed form, the way [sortedBy] is to [sorted].
+  Iterable<T> distinct() => distinctBy((element) => element);
+
+  /// The elements with duplicates dropped, compared by [key].
+  Iterable<T> distinctBy(Object? Function(T element) key) sync* {
     final seen = <Object?>{};
     for (final element in this) {
-      final key = by != null ? by(element) : element;
-      if (seen.add(key)) {
-        yield element;
-      }
+      if (seen.add(key(element))) yield element;
     }
   }
 
@@ -157,20 +168,19 @@ extension IterableExtensions<T> on Iterable<T> {
     }
   }
 
-  /// Appends [other] sequentially.
-  Iterable<T> concat(Iterable<T> other) sync* {
-    yield* this;
-    yield* other;
-  }
-
-  /// Retains elements present in both this and [other].
-  Set<T> intersect(Iterable<T> other) {
+  /// The elements this and [other] have in common.
+  ///
+  /// Named for `Set.intersection` and `Set.difference`, which are the same two
+  /// operations one layer down. `concat` and `minus` stood here through 8.1.0,
+  /// where the first was `followedBy` under a second name and the second was
+  /// the set word spelled as arithmetic.
+  Set<T> intersection(Iterable<T> other) {
     final otherSet = other.toSet();
     return toSet().intersection(otherSet);
   }
 
-  /// Returns elements in this not present in [other].
-  List<T> minus(Iterable<T> other) {
+  /// The elements of this that are not in [other].
+  List<T> difference(Iterable<T> other) {
     final otherSet = other.toSet();
     return where((x) => !otherSet.contains(x)).toList();
   }
@@ -187,27 +197,16 @@ extension IterableExtensions<T> on Iterable<T> {
   }
 }
 
-/// Null-filtering on nullable iterables.
-extension NullableIterableExtensions<T extends Object> on Iterable<T?> {
-  /// Returns only the non-null elements as an `Iterable<T>`.
-  Iterable<T> whereNotNull() sync* {
-    for (final element in this) {
-      if (element != null) yield element;
-    }
-  }
-
-  /// Ergonomic getter alias for [whereNotNull].
-  Iterable<T> get nonNull => whereNotNull();
-}
-
 /// Fluent terminal operations on [Iterable].
 extension IterableTerminals<T> on Iterable<T> {
-  /// Counts elements, optionally matching [predicate].
-  int count([bool Function(T item)? predicate]) {
-    if (predicate == null) return length;
+  /// How many elements satisfy [test].
+  ///
+  /// `test` is required, because `count()` without one is `length` under a
+  /// second name.
+  int count(bool Function(T element) test) {
     var n = 0;
-    for (final item in this) {
-      if (predicate(item)) n++;
+    for (final element in this) {
+      if (test(element)) n++;
     }
     return n;
   }
@@ -227,8 +226,14 @@ extension IterableTerminals<T> on Iterable<T> {
     return sum(of) / length;
   }
 
-  /// Maximum element according to [compare] or natural order.
-  T? max([Comparator<T>? compare]) {
+  /// The largest element by [compare], or natural order, and `null` when
+  /// there are none.
+  ///
+  /// **`OrNull` because it is.** `package:collection` spells the throwing
+  /// version `max` and the nullable one `maxOrNull`; this was named `max` and
+  /// returned null through 8.1.0, which is the same name for the opposite
+  /// contract.
+  T? maxOrNull([Comparator<T>? compare]) {
     final iter = iterator;
     if (!iter.moveNext()) return null;
     var maxVal = iter.current;
@@ -242,8 +247,9 @@ extension IterableTerminals<T> on Iterable<T> {
     return maxVal;
   }
 
-  /// Minimum element according to [compare] or natural order.
-  T? min([Comparator<T>? compare]) {
+  /// The smallest element by [compare], or natural order, and `null` when
+  /// there are none.
+  T? minOrNull([Comparator<T>? compare]) {
     final iter = iterator;
     if (!iter.moveNext()) return null;
     var minVal = iter.current;
@@ -257,15 +263,13 @@ extension IterableTerminals<T> on Iterable<T> {
     return minVal;
   }
 
-  /// Maximum element selected by comparable key [key].
-  T? maxBy<K extends Comparable<K>>(K Function(T item) key) {
-    return max((a, b) => key(a).compareTo(key(b)));
-  }
+  /// The element with the largest [key], and `null` when there are none.
+  T? maxByOrNull<K extends Comparable<K>>(K Function(T element) key) =>
+      maxOrNull((a, b) => key(a).compareTo(key(b)));
 
-  /// Minimum element selected by comparable key [key].
-  T? minBy<K extends Comparable<K>>(K Function(T item) key) {
-    return min((a, b) => key(a).compareTo(key(b)));
-  }
+  /// The element with the smallest [key], and `null` when there are none.
+  T? minByOrNull<K extends Comparable<K>>(K Function(T element) key) =>
+      minOrNull((a, b) => key(a).compareTo(key(b)));
 
   /// Converts this iterable into a Map by key and value extractors.
   Map<K, V> toMap<K, V>({
@@ -273,9 +277,13 @@ extension IterableTerminals<T> on Iterable<T> {
     required V Function(T item) value,
   }) => {for (final item in this) key(item): value(item)};
 
-  /// Creates a Map associating each item by extracted [key].
-  Map<K, T> associateBy<K>(K Function(T item) key) => {
-    for (final item in this) key(item): item,
+  /// This iterable as a `Map`, each element under its own [key].
+  ///
+  /// The one-per-key form of [groupBy], and a `to___()` copy the way `toList`
+  /// and `toSet` are. It was `associateBy` through 8.1.0, which is Kotlin's
+  /// word rather than Dart's.
+  Map<K, T> toMapBy<K>(K Function(T element) key) => {
+    for (final element in this) key(element): element,
   };
 
   /// Groups elements into a Map of Lists by [keyOf].

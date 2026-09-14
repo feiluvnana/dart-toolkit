@@ -170,6 +170,79 @@ either way.
 | `coerce` | internal; a crawl seed converts itself, and `.url` is `Uri.parse` |
 | `lib/src/bounded.dart` (`inorder`, `asdone`) | deleted — unreachable since 8.0.0 |
 
+### Named the way `dart:core` names things
+
+The surface had collected Kotlin's words, lodash's words and rxdart's words
+next to Dart's. Every one of them is now the name the platform already uses
+for the same operation, and the ones that were a second spelling are gone.
+
+| Deleted | Use |
+| :--- | :--- |
+| `Iterable.filter`, `Stream.filter`, `Markup.filter` | `where` |
+| `Iterable.flatMap`, `Stream.flatMap` | `expand`, `asyncExpand` |
+| `Iterable.mapNotNull`, `Stream.mapNotNull` | `map(…).nonNulls` |
+| `Iterable.concat` | `followedBy` |
+| `Iterable.whereNotNull()`, `Iterable.nonNull` | `dart:core`'s own `nonNulls` |
+| `Stream.whereNotNull()`, `Stream.nonNull` | `nonNulls` — one name, spelled as `dart:core` spells the `Iterable` one |
+| `Settled.ok` | `isDone` |
+| `Markup.elementList` | `elements` |
+| `Csv.count` | `length` |
+| `Environment.set` | `env['KEY'] = value` |
+| `CliParser.choose` | `option(allowed: […])` |
+| `Iterable.count()` with no argument | `length` |
+
+| Renamed | To | Why |
+| :--- | :--- | :--- |
+| `intersect`, `minus` | `intersection`, `difference` | `Set.intersection`, `Set.difference` |
+| `max`, `min`, `maxBy`, `minBy` | `maxOrNull`, `minOrNull`, `maxByOrNull`, `minByOrNull` | they return null; `package:collection` spells the *throwing* one `max` |
+| `distinct([by])` | `distinct()` + `distinctBy(key)` | the shape `sorted`/`sortedBy` already has |
+| `Stream.concatWith` | `followedBy` | `Iterable.followedBy` |
+| `associateBy` | `toMapBy` | a `to___()` copy, like `toList` |
+| `Map.filterKeys`, `filterValues` | `whereKey`, `whereValue` | `Iterable.where` |
+| `Map.pick`, `Map.omit` | `only`, `except` | `pick` already meant two other things here |
+| `Map.invert()`, `Map.merge()` | `inverted()`, `merged()` | a copy must not be spelled like the mutator beside it — `Map.addAll` is the merge that mutates |
+| `Markup.count`, `Markup.empty` | `length`, `isEmpty` (+ `isNotEmpty`) | `dart:core` |
+| `Json.count`, `Json.empty` | `length`, `isEmpty` | `dart:core` |
+| `Csv.empty`, `Csv.maps` | `isEmpty`, `records` | `dart:core`; and `maps` said nothing |
+| `FileSystemEntry.empty` | `isEmpty` | `dart:core` |
+| `Markup.prev` | `previous` | no abbreviations |
+| `Markup.html`, `Markup.outer` | `innerHtml`, `outerHtml` | the DOM's names, and symmetrical |
+| `Json.jsonpath` | `jsonPath` | lowerCamelCase |
+| `Field.fn` | `Field.custom` | no abbreviations |
+| `Path.entries()`, `Path.extract()` | `archiveEntries()`, `readArchived()` | `entries` collided with `list()` on a directory |
+| `Path.sweep()`, `CookieJar.sweep()` | `deleteFiles()`, `removeExpired()` | neither said it deleted anything |
+| `Response.type` | `contentType` | |
+| `Response.jsonDecoded<T>()` | `decodeJson<T>()` | `SysResult` already spelled it that way |
+| `Robots.delay()`, `Robots.group()` | `crawlDelay()`, `rulesFor()` | |
+| `Pool.flow()` | `stream()` | `flow` was culled everywhere else |
+| `Environment.get`, `has`, `delete`, `map()` | `value`, `containsKey`, `remove`, `toMap()` | Effective Dart: never start a method with `get`; the rest are `Map`'s words |
+| `Console.secret`, `Console.picks` | `askSecret`, `pickMany` | a verb phrase, and a plural verb was wrong |
+| `List.randomItem()` | `randomElement()` | `elementAt` |
+| `Iterables.concat` | `flatten` | it flattens |
+| `Maps.groupByValues` | `groupBy` | matches `Iterable.groupBy` |
+| `Progress.empty` | `blank` | it is a character, not an emptiness check |
+
+**The word form says whether you get a copy**, which is `dart:core`'s own
+rule and the answer to why `sorted` is a participle while `sort` is not: a
+noun or adjective hands back a new value and leaves the receiver alone
+(`sorted`, `reversed`, `shuffled`, `distinct`, `inverted`, `merged`,
+`nonNulls`); a verb does something — mutates, or touches the disk, network or
+terminal (`List.sort`, `Map.addAll`, `writeText`, `render`). `sorted` is
+spelled that way *because* `List.sort` sorts in place, and the two must never
+be confusable at a glance.
+
+Where `dart:core` already uses a verb for a copying operation — `where`,
+`map`, `expand`, `take` on `Iterable`; `trim`, `toLowerCase` on `String` — so
+does this package. Matching the platform beats matching ourselves. Static
+factories are constructor-like and keep their verbs (`Maps.merge`,
+`Streams.merge`, `Iterables.flatten`): with no receiver, there is no copy to
+distinguish.
+
+`surface_test.dart` guards the rules: no name `dart:core` already spells
+differently, no `empty` where `isEmpty` is meant, nothing nullable hiding
+under a name `package:collection` gives the throwing contract, and no copying
+instance member spelled as its mutating neighbour.
+
 ### Written in the language it targets
 
 Every doc comment, the README and the example are rewritten in Dart 3.10 form:

@@ -152,24 +152,24 @@ void main() {
     });
 
     test('Typed environment accessors in Env and env', () {
-      env.set('TEST_PORT', '9090');
-      env.set('TEST_VERBOSE', 'true');
-      env.set('TEST_SECRET', 'secret_key_123');
+      env['TEST_PORT'] = '9090';
+      env['TEST_VERBOSE'] = 'true';
+      env['TEST_SECRET'] = 'secret_key_123';
 
-      expect(env.get<int>('TEST_PORT', 3000), 9090);
-      expect(env.get<int>('NON_EXISTENT_PORT', 3000), 3000);
-      expect(env.get<int>('TEST_PORT', 0), 9090);
+      expect(env.value<int>('TEST_PORT', 3000), 9090);
+      expect(env.value<int>('NON_EXISTENT_PORT', 3000), 3000);
+      expect(env.value<int>('TEST_PORT', 0), 9090);
 
-      expect(env.get<bool>('TEST_VERBOSE', false), isTrue);
-      expect(env.get<bool>('NON_EXISTENT_FLAG', true), isTrue);
-      expect(env.get<bool>('TEST_VERBOSE', false), isTrue);
+      expect(env.value<bool>('TEST_VERBOSE', false), isTrue);
+      expect(env.value<bool>('NON_EXISTENT_FLAG', true), isTrue);
+      expect(env.value<bool>('TEST_VERBOSE', false), isTrue);
 
       expect(env.require('TEST_SECRET'), 'secret_key_123');
       expect(() => env.require('UNKNOWN_VAR'), throwsStateError);
 
-      env.delete('TEST_PORT');
-      env.delete('TEST_VERBOSE');
-      env.delete('TEST_SECRET');
+      env.remove('TEST_PORT');
+      env.remove('TEST_VERBOSE');
+      env.remove('TEST_SECRET');
     });
   });
 }

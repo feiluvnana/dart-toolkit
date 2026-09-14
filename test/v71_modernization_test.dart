@@ -52,22 +52,22 @@ void main() {
       expect(res.stdout.trim(), 'hello');
     });
 
-    test('CliParser choose string choices', () {
+    test('CliParser option with an allowed list', () {
       final parser = CliParser();
-      final fmt = parser.choose('format', [
-        'mp3',
-        'flac',
-        'both',
-      ], defaultsTo: 'mp3');
+      final fmt = parser.option(
+        'format',
+        allowed: const ['mp3', 'flac', 'both'],
+        defaultsTo: 'mp3',
+      );
       parser.parse(['--format', 'flac']);
       expect(fmt(), 'flac');
 
       final parserDef = CliParser();
-      final fmtDef = parserDef.choose('format', [
-        'mp3',
-        'flac',
-        'both',
-      ], defaultsTo: 'mp3');
+      final fmtDef = parserDef.option(
+        'format',
+        allowed: const ['mp3', 'flac', 'both'],
+        defaultsTo: 'mp3',
+      );
       parserDef.parse([]);
       expect(fmtDef(), 'mp3');
     });

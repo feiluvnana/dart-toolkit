@@ -51,8 +51,11 @@ class Progress {
   /// Character filling completed space.
   final String fill;
 
-  /// Character filling remaining space.
-  final String empty;
+  /// Character drawn in the space not yet filled.
+  ///
+  /// Named `blank` and not `empty`, because `isEmpty` is what `empty` means
+  /// everywhere else in this package and in `dart:core`.
+  final String blank;
 
   final Stopwatch _clock = Stopwatch();
   int _current = 0;
@@ -68,7 +71,7 @@ class Progress {
     this.width = 25,
     this.unit = ProgressUnit.count,
     this.fill = '█',
-    this.empty = '░',
+    this.blank = '░',
     String message = '',
     ConsoleWriter? writer,
   }) : _message = message,
@@ -112,7 +115,7 @@ class Progress {
 
     final parts = [
       if (_message.isNotEmpty) _message.brightCyan(),
-      '[${fill * filled}${empty * (width - filled).clamp(0, width)}]'.bold(),
+      '[${fill * filled}${blank * (width - filled).clamp(0, width)}]'.bold(),
       '${(fraction * 100).toStringAsFixed(1)}%'.padLeft(6).green(),
       '($metrics)'.dim(),
       ..._rate(),

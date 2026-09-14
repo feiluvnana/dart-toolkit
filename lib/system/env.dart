@@ -7,7 +7,7 @@
 /// ```dart
 /// loadEnv();
 /// final key  = env['API_KEY'];
-/// final port = env.get<int>('PORT', 8080);
+/// final port = env.value<int>('PORT', 8080);
 /// ```
 ///
 /// [Environment.parse] is the one parser outside the `format` library, and it
@@ -26,7 +26,7 @@ import 'dart:io';
 ///
 /// ```dart
 /// loadEnv();
-/// final port = env.get<int>('PORT', 8080);
+/// final port = env.value<int>('PORT', 8080);
 /// ```
 class Environment {
   final Map<String, String> _overrides = {};
@@ -39,7 +39,7 @@ class Environment {
       _overrides[key] ?? Platform.environment[key];
 
   /// Sets an override for [key].
-  void operator []=(String key, String value) => set(key, value);
+  void operator []=(String key, String value) => _overrides[key] = value;
 
   /// Loads `KEY=value` pairs from the file at [path].
   ///
@@ -102,11 +102,11 @@ class Environment {
   /// `false/0/no/off`, case-insensitively.
   ///
   /// ```dart
-  /// env.get('HOST', 'localhost'); // String
-  /// env.get('PORT', 8080);        // int
-  /// env.get('DEBUG', false);      // bool
+  /// env.value('HOST', 'localhost'); // String
+  /// env.value('PORT', 8080);        // int
+  /// env.value('DEBUG', false);      // bool
   /// ```
-  T get<T>(String key, T fallback) {
+  T value<T>(String key, T fallback) {
     final raw = _overrides[key] ?? Platform.environment[key];
     if (raw == null || raw.isEmpty) return fallback;
 
@@ -137,20 +137,17 @@ class Environment {
   };
 
   /// Whether [key] resolves to a non-empty value.
-  bool has(String key) =>
+  bool containsKey(String key) =>
       (_overrides[key] ?? Platform.environment[key] ?? '').isNotEmpty;
 
-  /// Sets an override for [key].
-  void set(String key, String value) => _overrides[key] = value;
-
   /// Removes the override for [key], exposing the process value again.
-  void delete(String key) => _overrides.remove(key);
+  void remove(String key) => _overrides.remove(key);
 
   /// Removes every override.
   void clear() => _overrides.clear();
 
   /// The process environment with overrides applied.
-  Map<String, String> map() => {...Platform.environment, ..._overrides};
+  Map<String, String> toMap() => {...Platform.environment, ..._overrides};
 }
 
 // ============================================================================

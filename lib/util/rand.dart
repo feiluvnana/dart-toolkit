@@ -4,7 +4,7 @@
 /// to look less like a machine.
 ///
 /// ```dart
-/// final agent = agents.toList().randomItem();
+/// final agent = agents.toList().randomElement();
 /// await delay(2.s.jittered());
 /// ```
 /// {@category Utilities}
@@ -38,7 +38,7 @@ abstract final class Rand {
   /// or restores an unseeded one when [seed] is omitted.
   ///
   /// Every random choice runs through one generator — [id], [chance],
-  /// [between], `list.randomItem()`, `list.shuffled()`, the crawl order they
+  /// [between], `list.randomElement()`, `list.shuffled()`, the crawl order they
   /// decide, and the `jittered()` on an HTTP retry — so seeding it makes a run
   /// repeat exactly. That is what a test of any of them needs:
   ///
@@ -98,7 +98,7 @@ extension RandomListExtensions<T> on List<T> {
   /// One item chosen uniformly at random.
   ///
   /// Throws [StateError] when this list is empty.
-  T randomItem() {
+  T randomElement() {
     if (isEmpty) throw StateError('Cannot pick from an empty list');
     return this[_rng.nextInt(length)];
   }

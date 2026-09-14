@@ -85,7 +85,7 @@ Disallow: /
     test('crawl-delay is matched by the same product token', () {
       final robots = Robots.parse(txt);
       expect(
-        robots.delay(agent: 'MyBot/1.0'),
+        robots.crawlDelay(agent: 'MyBot/1.0'),
         equals(const Duration(milliseconds: 2500)),
       );
     });
@@ -145,15 +145,15 @@ Disallow: /
     test('closest walks ancestors', () {
       final q = '<div class="outer"><div class="inner"><b>x</b></div></div>'
           .parse(.html);
-      expect(q.$('b').closest('.outer').count, equals(1));
-      expect(q.$('b').closest('.missing').count, equals(0));
+      expect(q.$('b').closest('.outer').length, equals(1));
+      expect(q.$('b').closest('.missing').length, equals(0));
     });
 
     test('a large child-combinator query stays linear', () {
       final rows = List.generate(2000, (i) => '<li class="i">$i</li>').join();
       final q = '<ul id="l">$rows</ul>'.parse(.html);
       final watch = Stopwatch()..start();
-      expect(q.$('#l > li.i').count, equals(2000));
+      expect(q.$('#l > li.i').length, equals(2000));
       watch.stop();
       // The quadratic form took several hundred milliseconds at this size.
       expect(watch.elapsedMilliseconds, lessThan(500));
@@ -164,7 +164,9 @@ Disallow: /
     test('cancelling the flow stops launching work', () async {
       var started = 0;
       final pool = Pool<int>(size: 1);
-      final stream = pool.flow(List.generate(50, (int i) => i), (int i) async {
+      final stream = pool.stream(List.generate(50, (int i) => i), (
+        int i,
+      ) async {
         started++;
         await Future<void>.delayed(const Duration(milliseconds: 1));
         return i;
@@ -183,7 +185,7 @@ Disallow: /
 
     test('results still arrive in completion order', () async {
       final pool = Pool<int>(size: 3);
-      final out = await pool.flow([30, 10, 20], (int ms) async {
+      final out = await pool.stream([30, 10, 20], (int ms) async {
         await Future<void>.delayed(Duration(milliseconds: ms));
         return ms;
       }).toList();
@@ -193,7 +195,9 @@ Disallow: /
     test('cancelling a flow.run stops launching work', () async {
       var started = 0;
       final pool = Pool<int>(size: 1);
-      final stream = pool.flow(List.generate(50, (int i) => i), (int i) async {
+      final stream = pool.stream(List.generate(50, (int i) => i), (
+        int i,
+      ) async {
         started++;
         await Future<void>.delayed(const Duration(milliseconds: 1));
         return i;
@@ -267,7 +271,7 @@ Disallow: /
     test('a custom read is typed too', () {
       final int count = res
           .parse(.html)
-          .pick(Field.fn((el) => el.querySelectorAll('.row').length));
+          .pick(Field.custom((el) => el.querySelectorAll('.row').length));
       expect(count, equals(2));
     });
 

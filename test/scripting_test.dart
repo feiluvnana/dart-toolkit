@@ -271,7 +271,7 @@ void main() {
 
       expect(File(path).readAsStringSync(), 'name\r\n"Alice, Chief"\r\n');
       // And it reads back as one row.
-      expect(File(path).readAsStringSync().parse(.csv).maps, [
+      expect(File(path).readAsStringSync().parse(.csv).records, [
         {'name': 'Alice, Chief'},
       ]);
     });
@@ -334,7 +334,7 @@ void main() {
         headers: ['name', 'price'],
       );
 
-      expect(File(path).readAsStringSync().parse(.csv).maps, [
+      expect(File(path).readAsStringSync().parse(.csv).records, [
         {'name': 'Wireless Keyboard', 'price': '49.99'},
         {'name': 'Mouse', 'price': '19.99'},
       ]);

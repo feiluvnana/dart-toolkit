@@ -5,8 +5,11 @@ library;
 
 /// Fluent transformations on any [Map].
 extension MapExtensions<K, V> on Map<K, V> {
-  /// Filters entries by [test], returning a new Map.
-  Map<K, V> filter(bool Function(K key, V value) test) {
+  /// A new map holding only the entries [test] accepts.
+  ///
+  /// Named for `Iterable.where`, and matching `Map.removeWhere`, which is the
+  /// mutating half `dart:core` already has. It was `filter` through 8.1.0.
+  Map<K, V> where(bool Function(K key, V value) test) {
     final result = <K, V>{};
     for (final entry in entries) {
       if (test(entry.key, entry.value)) {
@@ -17,11 +20,10 @@ extension MapExtensions<K, V> on Map<K, V> {
   }
 
   /// Filters entries by key predicate.
-  Map<K, V> filterKeys(bool Function(K key) test) => filter((k, _) => test(k));
+  Map<K, V> whereKey(bool Function(K key) test) => where((k, _) => test(k));
 
   /// Filters entries by value predicate.
-  Map<K, V> filterValues(bool Function(V value) test) =>
-      filter((_, v) => test(v));
+  Map<K, V> whereValue(bool Function(V value) test) => where((_, v) => test(v));
 
   /// Transforms values while keeping keys intact.
   Map<K, V2> mapValues<V2>(V2 Function(K key, V value) transform) {
@@ -41,20 +43,28 @@ extension MapExtensions<K, V> on Map<K, V> {
     return result;
   }
 
-  /// Returns a new Map retaining only the specified [keys].
-  Map<K, V> pick(Iterable<K> keys) {
-    final keySet = keys.toSet();
-    return filter((k, _) => keySet.contains(k));
+  /// A new map holding only [keys].
+  ///
+  /// `pick` and `omit` were lodash's words through 8.1.0, and `pick` already
+  /// meant two other things in this package — choosing at a prompt, and
+  /// reading a typed field off a page.
+  Map<K, V> only(Iterable<K> keys) {
+    final wanted = keys.toSet();
+    return where((k, _) => wanted.contains(k));
   }
 
-  /// Returns a new Map omitting the specified [keys].
-  Map<K, V> omit(Iterable<K> keys) {
-    final keySet = keys.toSet();
-    return filter((k, _) => !keySet.contains(k));
+  /// A new map holding everything but [keys].
+  Map<K, V> except(Iterable<K> keys) {
+    final unwanted = keys.toSet();
+    return where((k, _) => !unwanted.contains(k));
   }
 
-  /// Merges [other] into a new Map with optional [onConflict] resolution.
-  Map<K, V> merge(
+  /// A new map with [other] laid over this one.
+  ///
+  /// **`merged`, not `merge`** — `Map.addAll` is the merge that mutates, and
+  /// the two must not be confusable at a glance. [onConflict] decides what a
+  /// key held by both becomes; without it, [other] wins.
+  Map<K, V> merged(
     Map<K, V> other, {
     V Function(V existing, V incoming)? onConflict,
   }) {
@@ -88,8 +98,10 @@ extension MapExtensions<K, V> on Map<K, V> {
   /// Returns (key, value) pairs as an Iterable of records.
   Iterable<(K, V)> get pairs => entries.map((e) => (e.key, e.value));
 
-  /// Inverts the map: values become keys mapping to lists of original keys.
-  Map<V, List<K>> invert() {
+  /// A new map with values as keys, each mapping to the keys that held it.
+  ///
+  /// An adjective, not an imperative: nothing here is mutated.
+  Map<V, List<K>> inverted() {
     final result = <V, List<K>>{};
     for (final entry in entries) {
       result.putIfAbsent(entry.value, () => []).add(entry.key);

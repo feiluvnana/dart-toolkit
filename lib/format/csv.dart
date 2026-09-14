@@ -19,7 +19,7 @@
 /// ```dart
 /// final parsed = 'a,b\n1,2\n'.parse(.csv);    // Csv
 /// final sheet = await Path('a.csv').read(.csv);    // free, from FileFormat
-/// Path('out.csv').sync.writeText(const CsvFormat().format(sheet.maps));
+/// Path('out.csv').sync.writeText(const CsvFormat().format(sheet.records));
 ///
 /// final fetched = res.parse(.csv);          // and this now works
 /// ```
@@ -77,7 +77,7 @@ class CsvFormat implements DocumentFormat<Csv, Iterable<Map<String, Object?>>> {
   /// ]);
   /// ```
   ///
-  /// A native `Iterable`, so what [Csv.maps] and `readCsvRecords` read comes
+  /// A native `Iterable`, so what [Csv.records] and `readCsvRecords` read comes
   /// straight back here.
   ///
   /// For rows that are already lists of cells, see [cells]. They are two

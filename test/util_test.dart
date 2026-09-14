@@ -41,21 +41,24 @@ void main() {
       writeFile(at('src/b.txt'), 'beta');
       await Path(at('src')).zipTo(at('src.zip'));
 
-      final names = (await Path(
-        at('src.zip'),
-      ).entries()).where((e) => !e.folder).map((e) => e.name).toList()..sort();
+      final names =
+          (await Path(at('src.zip')).archiveEntries())
+              .where((e) => !e.folder)
+              .map((e) => e.name)
+              .toList()
+            ..sort();
       expect(names, equals(['a.txt', 'b.txt']));
 
-      final bytes = await Path(at('src.zip')).extract('b.txt');
+      final bytes = await Path(at('src.zip')).readArchived('b.txt');
       expect(utf8.decode(bytes!), equals('beta'));
-      expect(await Path(at('src.zip')).extract('missing.txt'), isNull);
+      expect(await Path(at('src.zip')).readArchived('missing.txt'), isNull);
     });
 
     test('bundles in-memory data', () async {
       await Path(
         at('mem.zip'),
       ).writeArchive({'notes.txt': utf8.encode('from memory')});
-      final bytes = await Path(at('mem.zip')).extract('notes.txt');
+      final bytes = await Path(at('mem.zip')).readArchived('notes.txt');
       expect(utf8.decode(bytes!), equals('from memory'));
     });
 
@@ -95,8 +98,8 @@ void main() {
 
     test('an archive that is not there is empty, not a throw', () async {
       final missing = at('absent.zip');
-      expect((await Path(missing).entries()).length, equals(0));
-      expect(await Path(missing).extract('a.txt'), isNull);
+      expect((await Path(missing).archiveEntries()).length, equals(0));
+      expect(await Path(missing).readArchived('a.txt'), isNull);
       expect((await Path(missing).unzipInto(at('nowhere'))).length, 0);
     });
 
@@ -350,14 +353,14 @@ void main() {
   group('Rand', () {
     test('pick, some and shuffle stay inside the pool', () {
       final pool = List.generate(10, (i) => i);
-      expect(pool, contains(pool.randomItem()));
+      expect(pool, contains(pool.randomElement()));
       final three = pool.shuffled().take(3).toList();
       expect(three, hasLength(3));
       expect(three.toSet(), hasLength(3));
       expect(pool.shuffled().take(99).toList(), hasLength(10));
       final shuffled = pool.shuffled();
       expect((shuffled.toList()..sort()), equals(pool));
-      expect(() => (<int>[]).randomItem(), throwsStateError);
+      expect(() => (<int>[]).randomElement(), throwsStateError);
     });
 
     test('between, id, jitter and chance stay in range', () {

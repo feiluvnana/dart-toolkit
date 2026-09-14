@@ -132,7 +132,7 @@ final class FileSystemEntry {
   /// Counting what is in a directory is a second listing, so it is a second
   /// call: `SyncPath.isDirEmpty` blocks and `Path.isDirEmpty` does not. This
   /// getter still answers for either kind, by asking the right one.
-  bool get empty => !isDir && size == 0;
+  bool get isEmpty => !isDir && size == 0;
 
   /// The `dart:io` handle, for the call this does not cover.
   ///

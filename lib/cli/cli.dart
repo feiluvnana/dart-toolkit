@@ -52,7 +52,7 @@ part 'usage.dart';
 
 /// Declares a command-line interface, then parses arguments against it.
 ///
-/// Declarations ([flag], [option], [number], [list], [choose] and the rest)
+/// Declarations ([flag], [option], [number], [list], [choice] and the rest)
 /// each return a typed [Opt] handle. Handles are readable after [parse], and
 /// re-reading is free.
 ///

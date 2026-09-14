@@ -79,7 +79,16 @@ mixin _Spec {
   /// [defaultsTo] is what the option reads when nothing supplied a value, and it
   /// satisfies [Cli.require] — so a default is written once, here, rather than
   /// at every call site. [env] names an environment variable to fall back to,
-  /// which also satisfies `require`. [allowed] limits the accepted values.
+  /// which also satisfies `require`. [allowed] limits the accepted values,
+  /// which is what `choose` was a second member for through 8.1.0:
+  ///
+  /// ```dart
+  /// final format = parser.option(
+  ///   'format',
+  ///   allowed: const ['mp3', 'flac', 'both'],
+  ///   defaultsTo: 'mp3',
+  /// );
+  /// ```
   ///
   /// ```dart
   /// final out = parser.option('out', abbr: 'o', defaultsTo: 'dist');
@@ -243,41 +252,6 @@ mixin _Spec {
       if (text == null) return self.defaultsTo;
       for (final value in values) {
         if (value.name.toLowerCase() == text) return value;
-      }
-      return self.defaultsTo;
-    },
-  );
-
-  /// Declares an option whose value is one of a list of allowed strings.
-  ///
-  /// ```dart
-  /// final format = parser.choose('format', ['mp3', 'flac', 'both'], defaultsTo: 'mp3');
-  /// ```
-  Opt<String> choose(
-    String name,
-    List<String> choices, {
-    required String defaultsTo,
-    String? abbr,
-    String help = '',
-    bool required = false,
-    String? env,
-  }) => _declare<String>(
-    name,
-    abbr,
-    defaultsTo,
-    _Decl(
-      abbr: _short(abbr),
-      help: help,
-      defaultsTo: defaultsTo,
-      required: required,
-      allowed: choices,
-      env: env,
-    ),
-    (cli, self) {
-      final text = cli._readText(self)?.trim();
-      if (text == null) return self.defaultsTo;
-      for (final choice in choices) {
-        if (choice.toLowerCase() == text.toLowerCase()) return choice;
       }
       return self.defaultsTo;
     },

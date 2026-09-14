@@ -189,7 +189,7 @@ class ConsoleReader {
   ///
   /// Accepts a comma- or space-separated list, `all` for everything, or an
   /// empty answer for nothing. Throws [StateError] at end of input.
-  Future<List<O>> picks<O>(
+  Future<List<O>> pickMany<O>(
     String question, {
     required Iterable<O> options,
     String Function(O item)? label,
@@ -199,7 +199,7 @@ class ConsoleReader {
     while (true) {
       stdout.write('Select (e.g. 1, 3 or all): ');
       final read = await line();
-      if (read == null) throw _exhausted('picks');
+      if (read == null) throw _exhausted('pickMany');
       final answer = read.trim().toLowerCase();
       if (answer.isEmpty) return const [];
       if (answer == 'all' || answer == '*') return choices;
@@ -228,7 +228,7 @@ class ConsoleReader {
   /// Asks [question] without echoing what is typed.
   ///
   /// Echo is restored even if reading fails.
-  Future<String> secret(String question) async {
+  Future<String> askSecret(String question) async {
     stdout.write('$question: ');
     // Both the read and the write throw when stdin is not a terminal — a
     // piped run should still be able to answer the prompt, just without echo
