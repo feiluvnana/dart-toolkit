@@ -81,9 +81,34 @@ class Environment {
 
       if (value.startsWith('"') || value.startsWith("'")) {
         final quote = value[0];
-        final close = value.indexOf(quote, 1);
-        if (close != -1) value = value.substring(1, close);
-        value = value.replaceAll(r'\n', '\n').replaceAll(r'\t', '\t');
+        var close = -1;
+        var escaped = false;
+        for (var i = 1; i < value.length; i++) {
+          final c = value[i];
+          if (escaped) {
+            escaped = false;
+          } else if (c == r'\') {
+            escaped = true;
+          } else if (c == quote) {
+            close = i;
+            break;
+          }
+        }
+        if (close != -1) {
+          value = value.substring(1, close);
+        } else {
+          value = value.substring(1);
+        }
+        if (quote == '"') {
+          value = value
+              .replaceAll(r'\"', '"')
+              .replaceAll(r'\\', r'\')
+              .replaceAll(r'\n', '\n')
+              .replaceAll(r'\r', '\r')
+              .replaceAll(r'\t', '\t');
+        } else {
+          value = value.replaceAll(r"\'", "'").replaceAll(r'\\', r'\');
+        }
       } else {
         // An unquoted value ends at a trailing ` #` comment.
         final comment = value.indexOf(' #');

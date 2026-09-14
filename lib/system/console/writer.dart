@@ -167,4 +167,24 @@ class ConsoleWriter {
       '${style.bottomRight}',
     );
   }
+
+  /// Draws a table to this writer.
+  void table({
+    required List<String> headers,
+    required Iterable<List<Object?>> rows,
+    List<ColumnAlign>? alignments,
+    TableStyle style = TableStyle.unicode,
+    int? width,
+  }) {
+    final t = Table(
+      headers: headers,
+      alignments: alignments,
+      style: style,
+      width: width ?? this.width,
+    );
+    for (final row in rows) {
+      t.add(row);
+    }
+    writeln(t.render());
+  }
 }

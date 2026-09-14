@@ -42,15 +42,6 @@ const _login = '''
 Response _page([String markup = _login]) =>
     Response.text(markup, fetch: Fetch('https://example.com/login'.url));
 
-/// What `Response.form` used to be, now that `net` does not parse.
-///
-/// Three lines in user space, which is the point: the convenience is cheap to
-/// write and does not have to be a member of [Response] that names a format.
-extension _FormOnReply on Response {
-  Form? form([String selector = 'form']) =>
-      body.parse(.html).form(selector)?.at(url);
-}
-
 void main() {
   group('Form.fields', () {
     test('collects the successful controls the way a browser would', () {

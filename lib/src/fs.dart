@@ -17,27 +17,16 @@ import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 
 import '../io/entry.dart';
+import '../util/hash.dart';
 import 'entries.dart';
 import 'jsontext.dart';
 import 'proc.dart';
 
+export '../util/hash.dart' show Algo;
+
 // ============================================================================
 // FILESYSTEM, PATHS & ATOMIC WRITES (Fs)
 // ============================================================================
-
-/// Hash algorithms accepted by [Fs.hash].
-///
-/// Named `Algo` and not `Digest` because `package:crypto` exports a `Digest`
-/// of its own — a hash *result*, where this one selects an *algorithm* — and
-/// two libraries exporting one name is an `ambiguous_import` error for anyone
-/// importing both.
-enum Algo {
-  /// SHA-256, producing a 64-character hex digest.
-  sha256,
-
-  /// MD5, producing a 32-character hex digest.
-  md5,
-}
 
 /// Static filesystem helpers backing the `io.*` namespace.
 ///

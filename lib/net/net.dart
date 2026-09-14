@@ -340,7 +340,7 @@ abstract final class Http {
 /// ```
 Crawler crawl(
   Iterable<Object> seeds, {
-  Iterable<Object> Function(Response res)? next,
+  FutureOr<Iterable<Object>> Function(Response res)? next,
   int concurrency = 4,
   Politeness politeness = Politeness.none,
   Scope scope = Scope.anywhere,
@@ -356,7 +356,15 @@ Crawler crawl(
   Send? send,
 }) => Crawler(
   seeds.map(_toFetch),
-  next: next == null ? null : (Response res) => next(res).map(_toFetch),
+  next: next == null
+      ? null
+      : (Response res) {
+          final resOrFut = next(res);
+          if (resOrFut is Future<Iterable<Object>>) {
+            return resOrFut.then((items) => items.map(_toFetch));
+          }
+          return resOrFut.map(_toFetch);
+        },
   concurrency: concurrency,
   politeness: politeness,
   scope: scope,
@@ -393,7 +401,8 @@ Future<Server> serve(
   int port,
   FutureOr<Served> Function(Asked req) handler, {
   String host = 'localhost',
-}) => serve_impl.serveOn(port, handler, host: host);
+  void Function(Object error, StackTrace stack)? onError,
+}) => serve_impl.serveOn(port, handler, host: host, onError: onError);
 
 /// Serves [port] until [handler] returns a non-null value, then replies and closes.
 Future<R?> serveOnce<R extends Object>(

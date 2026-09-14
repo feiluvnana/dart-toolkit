@@ -249,7 +249,7 @@ await path.makeDir();     await path.touch();       await path.linkTo(dest);
 await dir.list();                    // one level -> List<FileSystemEntry>
 await dir.walk(match: '*.dart');     // the whole tree
 await dir.deleteFiles(match: '*.part');    // delete, and how many went
-await dir.dirSize;                   // the recursive byte total
+await dir.dirSize();                 // the recursive byte total
 dir.watch((changed) => print(changed));
 
 // hold

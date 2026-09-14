@@ -216,6 +216,34 @@ class Sys {
     }
   }
 
+  /// Runs a command string (e.g. `Sys.exec('git status')`) and returns a [SysResult].
+  static Future<SysResult> exec(
+    String command, {
+    String? cwd,
+    bool inherit = false,
+    bool echo = false,
+    bool shell = true,
+    Duration? timeout,
+    void Function(String line)? out,
+    void Function(String line)? err,
+  }) {
+    final parts = command.trim().split(RegExp(r'\s+'));
+    if (parts.isEmpty || parts.first.isEmpty) {
+      throw ArgumentError.value(command, 'command', 'Command cannot be empty');
+    }
+    return run(
+      parts.first,
+      parts.skip(1).toList(),
+      cwd: cwd,
+      inherit: inherit,
+      echo: echo,
+      shell: shell,
+      timeout: timeout,
+      out: out,
+      err: err,
+    );
+  }
+
   /// How long a killed process is given to exit before `SIGKILL` follows.
   static const Duration _graceOnKill = Duration(seconds: 3);
 

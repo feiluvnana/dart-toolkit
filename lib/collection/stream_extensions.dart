@@ -14,6 +14,7 @@ extension StreamExtensions<T> on Stream<T> {
     FutureOr<R> Function(T event) worker, {
     int concurrency = 4,
   }) {
+    final bound = concurrency > 0 ? concurrency : 1;
     final controller = StreamController<R>();
     final active = <Future<void>>{};
     var isDone = false;
@@ -28,9 +29,6 @@ extension StreamExtensions<T> on Stream<T> {
     controller.onListen = () {
       sub = listen(
         (event) {
-          if (active.length >= concurrency) {
-            sub?.pause();
-          }
           late final Future<void> task;
           task = Future<void>(() async {
             try {
@@ -40,13 +38,16 @@ extension StreamExtensions<T> on Stream<T> {
               if (!controller.isClosed) controller.addError(err, st);
             } finally {
               active.remove(task);
-              if (active.length < concurrency && (sub?.isPaused ?? false)) {
+              if (active.length < bound && (sub?.isPaused ?? false)) {
                 sub?.resume();
               }
               checkDone();
             }
           });
           active.add(task);
+          if (active.length >= bound) {
+            sub?.pause();
+          }
         },
         onError: controller.addError,
         onDone: () {
@@ -65,12 +66,16 @@ extension StreamExtensions<T> on Stream<T> {
 
   /// Emits an event only when its [key] differs from the one before it.
   ///
-  /// The keyed form of `Stream.distinct`, which `dart:async` already has —
-  /// the way [IterableExtensions.distinctBy] is to `distinct`.
+  /// Consecutive only — the keyed form of `Stream.distinct`. For global
+  /// dedupe across a finite collection, use [IterableExtensions.distinctBy].
+  Stream<T> distinctBy(Object? Function(T event) key) =>
+      distinctConsecutiveBy(key);
+
+  /// Emits an event only when its [key] differs from the one before it.
   ///
-  /// `filter`, `mapNotNull` and `flatMap` stood here through 8.1.0: second
-  /// names for `where`, `map(…).nonNulls` and `asyncExpand`.
-  Stream<T> distinctBy(Object? Function(T event) key) async* {
+  /// Named to make the consecutive contract obvious beside
+  /// [IterableExtensions.distinctBy], which remembers every key it has seen.
+  Stream<T> distinctConsecutiveBy(Object? Function(T event) key) async* {
     var hasPrevious = false;
     Object? previousKey;
     await for (final event in this) {

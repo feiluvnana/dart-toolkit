@@ -62,15 +62,19 @@ class Lock {
 
     while (!_take(file)) {
       final holder = _read(file);
-      if (holder != null && !_alive(holder.pid)) {
-        // The recorded process is gone, so the lock is stale rather than held.
-        // A pure age cut-off ('older than an hour is stale') would break the
-        // one run that legitimately took ninety minutes.
-        _release(file);
+      if (holder == null || !_alive(holder)) {
+        if (file.existsSync()) {
+          _release(file);
+          continue;
+        }
+        if (deadline == null || DateTime.now().isAfter(deadline)) {
+          throw LockedError(path, pid: holder?.pid, since: holder?.since);
+        }
+        await Future<void>.delayed(retryEvery);
         continue;
       }
       if (deadline == null || DateTime.now().isAfter(deadline)) {
-        throw LockedError(path, pid: holder?.pid, since: holder?.since);
+        throw LockedError(path, pid: holder.pid, since: holder.since);
       }
       await Future<void>.delayed(retryEvery);
     }
@@ -87,11 +91,14 @@ class Lock {
     final file = File(path);
     while (!_take(file)) {
       final holder = _read(file);
-      if (holder != null && !_alive(holder.pid)) {
-        _release(file);
-        continue;
+      if (holder == null || !_alive(holder)) {
+        if (file.existsSync()) {
+          _release(file);
+          continue;
+        }
+        throw LockedError(path, pid: holder?.pid, since: holder?.since);
       }
-      throw LockedError(path, pid: holder?.pid, since: holder?.since);
+      throw LockedError(path, pid: holder.pid, since: holder.since);
     }
     try {
       return action();
@@ -103,7 +110,7 @@ class Lock {
   /// Whether the lock at [path] is currently held by a live process.
   static bool held(String path) {
     final holder = _read(File(path));
-    return holder != null && _alive(holder.pid);
+    return holder != null && _alive(holder);
   }
 
   static bool _take(File file) {
@@ -112,12 +119,15 @@ class Lock {
       // `exclusive` is the whole mechanism: the create fails rather than
       // truncating a lock somebody else is holding.
       file.createSync(exclusive: true);
+      // Flush so another process never observes the exclusive empty file as a
+      // permanent unreadable lock.
       file.writeAsStringSync(
         jsonEncode({
           'pid': pid,
           'since': DateTime.now().toUtc().toIso8601String(),
           'host': _hostname(),
         }),
+        flush: true,
       );
       // A lock file that survives a Ctrl-C is worse than no lock at all: the
       // next run refuses to start. This is the same registry that removes a
@@ -138,17 +148,21 @@ class Lock {
     }
   }
 
-  static ({int pid, DateTime? since})? _read(File file) {
+  static ({int pid, DateTime? since, String host})? _read(File file) {
     try {
       if (!file.existsSync()) return null;
-      final raw = jsonDecode(file.readAsStringSync());
-      if (raw is! Map<String, Object?>) return null;
+      final text = file.readAsStringSync();
+      if (text.trim().isEmpty) return null;
+      final raw = jsonDecode(text);
+      if (raw is! Map) return null;
       final holder = raw['pid'];
       if (holder is! int) return null;
       final since = raw['since'];
+      final host = raw['host'];
       return (
         pid: holder,
         since: since is String ? DateTime.tryParse(since) : null,
+        host: host is String ? host : '',
       );
     } on Object {
       // An unreadable or half-written lock file names no live process, so the
@@ -157,26 +171,36 @@ class Lock {
     }
   }
 
+  static final Map<int, (bool alive, int atMs)> _liveness = {};
+
   /// Whether process [holder] is still running.
-  static bool _alive(int holder) {
-    if (holder == pid) return true;
+  ///
+  /// A lock recorded on another host is treated as live: a local PID check
+  /// would confuse an unrelated process that reused the same pid number.
+  static bool _alive(({int pid, DateTime? since, String host}) holder) {
+    if (holder.host.isNotEmpty && holder.host != _hostname()) return true;
+    final id = holder.pid;
+    if (id == pid) return true;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final cached = _liveness[id];
+    if (cached != null && now - cached.$2 < 1000) return cached.$1;
+    var alive = true;
     try {
       if (Platform.isWindows) {
-        final res = Process.runSync('tasklist', [
-          '/FI',
-          'PID eq $holder',
-          '/NH',
-        ]);
-        return '${res.stdout}'.contains('$holder');
+        final res = Process.runSync('tasklist', ['/FI', 'PID eq $id', '/NH']);
+        alive = '${res.stdout}'.contains('$id');
+      } else {
+        // Signal 0 asks the kernel whether the process exists without
+        // disturbing it. Dart's own killPid has no signal-0 equivalent.
+        alive = Process.runSync('kill', ['-0', '$id']).exitCode == 0;
       }
-      // Signal 0 asks the kernel whether the process exists without
-      // disturbing it. Dart's own killPid has no signal-0 equivalent.
-      return Process.runSync('kill', ['-0', '$holder']).exitCode == 0;
     } on Object {
       // No way to ask: assume the holder is alive, because taking a lock that
       // somebody else holds is the worse of the two mistakes.
-      return true;
+      alive = true;
     }
+    _liveness[id] = (alive, now);
+    return alive;
   }
 
   static String _hostname() {

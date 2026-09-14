@@ -1,6 +1,8 @@
 import 'dart:io' as dart_io;
 
 import 'package:dart_toolkit/dart_toolkit.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -71,6 +73,68 @@ void main() {
       expect(client.limiter, same(limit));
       limit.close();
     });
+  });
+
+  group('Semaphore', () {
+    test('bounds concurrency and releases correctly', () async {
+      final sem = Semaphore(2);
+      expect(sem.available, equals(2));
+      await sem.take();
+      expect(sem.available, equals(1));
+      await sem.take();
+      expect(sem.available, equals(0));
+
+      var completed = false;
+      final waitTask = sem.take().then((_) => completed = true);
+      await delay(20.ms);
+      expect(completed, isFalse);
+
+      sem.release();
+      await waitTask;
+      expect(completed, isTrue);
+      expect(sem.available, equals(0));
+
+      sem.release();
+      expect(sem.available, equals(1));
+    });
+
+    test('guard releases permit on normal return and on error', () async {
+      final sem = Semaphore(1);
+      final res = await sem.guard(() async => 100);
+      expect(res, equals(100));
+      expect(sem.available, equals(1));
+
+      await expectLater(
+        sem.guard(() async => throw StateError('fail')),
+        throwsStateError,
+      );
+      expect(sem.available, equals(1));
+    });
+
+    test(
+      'Fetcher with Semaphore(1) can send multiple requests without deadlocking',
+      () async {
+        final sem = Semaphore(1);
+        final client = Fetcher(
+          limiter: sem,
+          client: MockClient((request) async => http.Response('ok', 200)),
+        );
+        addTearDown(client.close);
+
+        // Make 3 sequential requests; with permits: 1, previously this deadlocked on request 2
+        final res1 = await client.get(Uri.parse('https://example.com/1'));
+        expect(res1.text, equals('ok'));
+        expect(sem.available, equals(1));
+
+        final res2 = await client.get(Uri.parse('https://example.com/2'));
+        expect(res2.text, equals('ok'));
+        expect(sem.available, equals(1));
+
+        final res3 = await client.get(Uri.parse('https://example.com/3'));
+        expect(res3.text, equals('ok'));
+        expect(sem.available, equals(1));
+      },
+    );
   });
 
   group('withLock', () {

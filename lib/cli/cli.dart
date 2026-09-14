@@ -68,7 +68,14 @@ class CliParser with _Spec {
   final String? description;
 
   /// Creates a parser with no declarations.
-  CliParser({this.syntax, this.description});
+  CliParser({this.syntax, this.description, void Function(int code)? onExit})
+    : onExit = onExit ?? exit;
+
+  /// The action taken when [autoHelp] exits after printing usage.
+  ///
+  /// Defaults to `dart:io.exit`. Testing code can override this to prevent
+  /// terminating the test runner VM.
+  final void Function(int code) onExit;
 
   @override
   Cli get _reader => _parsed._reader;
@@ -91,7 +98,7 @@ class CliParser with _Spec {
   /// are read through the [Opt] handles the declarations returned.
   ///
   /// When [autoHelp] is set, `-h`/`--help` is registered if not already
-  /// declared, and printing usage then exits with code 0.
+  /// declared, and printing usage then exits with code 0 via [onExit].
   ///
   /// **That exit does not run [onExit] hooks**, because this method is
   /// synchronous and [shutdown] is not. Parse before registering any hook — or
@@ -106,7 +113,7 @@ class CliParser with _Spec {
         (_parsed.switches.containsKey('help') ||
             _parsed.switches.containsKey('h'))) {
       stdout.writeln(usage());
-      exit(0);
+      onExit(0);
     }
     return _parsed;
   }

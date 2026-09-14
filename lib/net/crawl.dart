@@ -220,7 +220,7 @@ final class Crawler extends Stream<Response> {
   /// is for when there is no politeness or dedupe to want.
   Crawler(
     Iterable<Fetch> seeds, {
-    Iterable<Fetch> Function(Response res)? next,
+    FutureOr<Iterable<Fetch>> Function(Response res)? next,
     int concurrency = 4,
     Politeness politeness = Politeness.none,
     Scope scope = Scope.anywhere,
@@ -253,7 +253,7 @@ final class Crawler extends Stream<Response> {
        _send = send;
 
   final List<Fetch> _seeds;
-  final Iterable<Fetch> Function(Response res)? _next;
+  final FutureOr<Iterable<Fetch>> Function(Response res)? _next;
 
   /// The transport this crawl answers its requests through.
   ///
@@ -341,6 +341,7 @@ final class Crawler extends Stream<Response> {
   int _active = 0;
   bool _started = false;
   bool _stopped = false;
+  bool _armed = false;
   DateTime? _began;
   DateTime? _ended;
   String? _reason;
@@ -609,7 +610,7 @@ final class Crawler extends Stream<Response> {
           continue;
         }
 
-        final followed = _next?.call(reply);
+        final followed = await _next?.call(reply);
         if (followed != null) {
           for (final f in followed) {
             _schedule(f);
@@ -833,6 +834,7 @@ final class Crawler extends Stream<Response> {
   void _arm() {
     final path = _resumePath;
     if (path == null) return;
+    _armed = true;
     _resumeTimer = Timer.periodic(_resumeEvery, (_) {
       // A periodic save is best effort. Letting a full disk throw from a
       // timer callback would take down the isolate mid-crawl, which is worse
@@ -850,6 +852,8 @@ final class Crawler extends Stream<Response> {
   Future<void> _disarm() async {
     final path = _resumePath;
     if (path == null) return;
+    final wasArmed = _armed;
+    _armed = false;
     _resumeTimer?.cancel();
     _resumeTimer = null;
     final hook = _resumeHook;
@@ -860,24 +864,31 @@ final class Crawler extends Stream<Response> {
       Exit.unhook(hook);
       _resumeHook = null;
     }
+    if (!wasArmed) return;
 
-    final saved = position;
-    if (_stopped || (saved['pending'] as List).isNotEmpty) {
-      await _save(path);
-      return;
+    try {
+      final saved = position;
+      if (_stopped || (saved['pending'] as List).isNotEmpty) {
+        await _save(path);
+        return;
+      }
+      // Every page handled: there is no position left worth keeping.
+      await _resumeWrites;
+      final file = File(path);
+      if (file.existsSync()) await file.delete();
+    } catch (_) {
+      // Best-effort cleanup: do not crash isolate on teardown race.
     }
-    // Every page handled: there is no position left worth keeping.
-    await _resumeWrites;
-    final file = File(path);
-    if (file.existsSync()) await file.delete();
   }
 
   /// Writes the position to [path], behind any write already in flight.
   Future<void> _save(String path) {
     final json = position;
-    return _resumeWrites = _resumeWrites.then(
-      (_) => Fs.dump(path, json, pretty: false),
-    );
+    return _resumeWrites = _resumeWrites.then((_) async {
+      try {
+        await Fs.dump(path, json, pretty: false);
+      } catch (_) {}
+    });
   }
 }
 

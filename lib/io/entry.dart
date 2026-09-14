@@ -21,6 +21,8 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import 'path.dart';
+
 // ============================================================================
 // FILESYSTEM ENTRIES (FileSystemEntry)
 // ============================================================================
@@ -66,14 +68,16 @@ final class FileSystemEntry {
   /// which fill
   /// these in from the disk.
   const FileSystemEntry({
-    required this.path,
+    required String path,
     required this.kind,
     required this.size,
     required this.modified,
-  });
+  }) : _path = path;
 
-  /// The path it was reached by.
-  final String path;
+  final String _path;
+
+  /// The path it was reached by, as a [Path].
+  Path get path => Path(_path);
 
   /// Whether this is a file, a directory or a link.
   final FileSystemEntryKind kind;
@@ -130,7 +134,7 @@ final class FileSystemEntry {
   /// that it does not.
   ///
   /// Counting what is in a directory is a second listing, so it is a second
-  /// call: `SyncPath.isDirEmpty` blocks and `Path.isDirEmpty` does not. This
+  /// call: `SyncPath.isDirEmpty()` blocks and `Path.isDirEmpty()` does not. This
   /// getter still answers for either kind, by asking the right one.
   bool get isEmpty => !isDir && size == 0;
 

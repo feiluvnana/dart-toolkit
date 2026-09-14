@@ -396,6 +396,13 @@ abstract interface class Waiting {
   /// Waits until this permits one unit of work.
   Future<void> take();
 
+  /// Releases one unit of work back to the waiting mechanism if applicable.
+  ///
+  /// For bounded concurrency limiters such as [Semaphore], this unblocks the
+  /// next waiting caller. For rate limiters such as [RateLimiter], permits are
+  /// time-metered rather than concurrency-metered, so this is a no-op.
+  void release();
+
   /// Runs [action] with one unit taken, releasing it however [action] ends.
   Future<R> guard<R>(FutureOr<R> Function() action);
 }
@@ -442,6 +449,7 @@ class Semaphore implements Waiting {
   /// Never hands back more than the semaphore was created with: a release that
   /// pairs with no acquire is ignored rather than raising the ceiling and
   /// quietly removing the bound this exists to enforce.
+  @override
   void release() {
     if (_waiters.isNotEmpty) {
       _waiters.removeFirst().complete();
@@ -544,6 +552,14 @@ class RateLimiter implements Waiting {
     return waiter.future;
   }
 
+  /// Releases a unit of work.
+  ///
+  /// For [RateLimiter], rate tokens replenish based on time rather than
+  /// concurrency completion, so this is an intentional no-op that fulfills
+  /// the [Waiting] contract.
+  @override
+  void release() {}
+
   /// Takes a token, then runs [action].
   ///
   /// Mirrors `Semaphore.guard` and `Semaphore.guard`. The token is spent on
@@ -600,10 +616,9 @@ class RateLimiter implements Waiting {
 
 /// Retries [action] if it throws.
 ///
-/// [retries] is the number of *extra* attempts after the first, the one
+/// [retries] is the number of *extra* attempts after the first (default 3), the one
 /// number every retry in this library counts in — [retry],
-/// `Fetcher.retries`, `Fetcher.send` — and it is required here for the
-/// reason [retry] gives. The delay grows linearly from
+/// `Fetcher.retries`, `Fetcher.send`. The delay grows linearly from
 /// [backoff], is capped at [cap], and carries up to 25% jitter so a pool of
 /// retrying tasks does not resynchronise onto the same instant.
 ///
@@ -614,7 +629,7 @@ class RateLimiter implements Waiting {
 /// `times` without a word.
 Future<T> retry<T>(
   FutureOr<T> Function() action, {
-  required int retries,
+  int retries = 3,
   Duration backoff = const Duration(milliseconds: 100),
   Duration cap = const Duration(seconds: 30),
   bool Function(Object error)? when,

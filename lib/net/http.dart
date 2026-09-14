@@ -21,6 +21,7 @@ import 'package:path/path.dart' as p;
 
 import '../concurrent/concurrent.dart';
 import '../io/entry.dart';
+import '../io/path.dart';
 import '../src/fs.dart';
 import '../src/format.dart';
 import '../src/method.dart';
@@ -224,13 +225,22 @@ class Response {
   /// Page headers, lower-cased by `package:http`.
   final Map<String, String> headers;
 
-  /// The raw response body bytes, or empty if streamed.
-  final List<int> _rawBytes;
+  /// The raw response body bytes, or empty if streamed until [readBytes].
+  List<int> _rawBytes;
 
-  final Stream<List<int>>? _stream;
+  Stream<List<int>>? _stream;
+
+  /// Whether the body is still a live stream (buffered accessors must not run).
+  bool get isStreamed => _stream != null;
 
   /// The raw response body.
-  List<int> get bytes => _rawBytes;
+  ///
+  /// Throws [StateError] when this reply was opened as a stream; drain
+  /// [stream], or call [readBytes] / [readText] first.
+  List<int> get bytes {
+    _ensureBuffered();
+    return _rawBytes;
+  }
 
   /// A stream of the response body bytes.
   Stream<List<int>> get stream => _stream ?? Stream.value(_rawBytes);
@@ -402,8 +412,39 @@ class Response {
     return utf8;
   }
 
+  void _ensureBuffered() {
+    if (_stream != null) {
+      throw StateError(
+        'Response body is streamed; use stream, readBytes(), or readText().',
+      );
+    }
+  }
+
+  /// Collects a streamed body into memory, then behaves as a buffered reply.
+  Future<List<int>> readBytes() async {
+    final live = _stream;
+    if (live == null) return _rawBytes;
+    final builder = BytesBuilder(copy: false);
+    await for (final chunk in live) {
+      builder.add(chunk);
+    }
+    _rawBytes = builder.takeBytes();
+    _stream = null;
+    _body = null;
+    _parsed.clear();
+    return _rawBytes;
+  }
+
+  /// Collects a streamed body and decodes it with [encoding].
+  Future<String> readText() async {
+    await readBytes();
+    _body = null;
+    return body;
+  }
+
   /// The body decoded using [encoding], tolerating malformed bytes when UTF-8. Cached.
   String get body {
+    _ensureBuffered();
     if (_body != null) return _body!;
     final enc = encoding;
     if (enc == utf8) {
@@ -439,6 +480,7 @@ class Response {
   /// once. Nothing here throws: a body that is not the format asked for is the
   /// empty cursor, the same as a missing path.
   T parse<T>(DocumentFormat<T, Object?> codec) {
+    _ensureBuffered();
     if (_parsed.containsKey(codec)) return _parsed[codec] as T;
     final value = codec.parse(body);
     _parsed[codec] = value;
@@ -477,7 +519,7 @@ class Response {
     HttpMethod method = HttpMethod.get,
     Body? body,
     String? tag,
-    Iterable<(String, Object?)>? meta,
+    Object? meta,
     Map<String, String>? headers,
     int priority = 0,
     bool dedupe = true,
@@ -496,12 +538,16 @@ class Response {
   /// Writes the response body to [path] atomically.
   ///
   /// One line over `writeBytes(path, res.bytes)`, kept because it
-  /// is written constantly.
-  Future<FileSystemEntry> save(String path, {String part = '.part'}) async =>
-      Fs.entryFor((await Fs.save(path, bytes, part: part)).path);
+  /// is written constantly. Streamed replies are drained first.
+  Future<Path> save(String path, {String part = '.part'}) async {
+    final data = isStreamed ? await readBytes() : _rawBytes;
+    return Path((await Fs.save(path, data, part: part)).path);
+  }
 
   @override
-  String toString() => '$statusCode $url (${bytes.length} bytes)';
+  String toString() => isStreamed
+      ? '$statusCode $url (streamed)'
+      : '$statusCode $url (${_rawBytes.length} bytes)';
 }
 
 /// Resolves destination paths against an optional base directory.
@@ -913,6 +959,7 @@ class Fetcher with _PathResolver {
     while (true) {
       for (var attempt = 1; ; attempt++) {
         await limiter?.take();
+        var releaseImmediately = true;
         final currentMerged = Map<String, String>.from(merged);
         if (jar != null) {
           final cookieHeader = jar!.header(currentUrl);
@@ -956,8 +1003,9 @@ class Fetcher with _PathResolver {
             break;
           }
 
+          releaseImmediately = false;
           return Response.stream(
-            streamed.stream,
+            _withLimiterRelease(streamed.stream, limiter),
             url: currentUrl,
             fetch: fetch ?? Fetch(url, method: method),
             statusCode: streamed.statusCode,
@@ -970,6 +1018,10 @@ class Fetcher with _PathResolver {
           retried++;
           onretry?.call(currentUrl, attempt);
           await Future<void>.delayed(_backoffWithJitter(backoff * attempt));
+        } finally {
+          if (releaseImmediately) {
+            limiter?.release();
+          }
         }
       }
     }
@@ -1104,9 +1156,49 @@ class Fetcher with _PathResolver {
           retried++;
           onretry?.call(currentUrl, attempt);
           await Future<void>.delayed(_backoffWithJitter(backoff * attempt));
+        } finally {
+          limiter?.release();
         }
       }
     }
+  }
+
+  static Stream<List<int>> _withLimiterRelease(
+    Stream<List<int>> stream,
+    Waiting? limiter,
+  ) {
+    if (limiter == null) return stream;
+    var released = false;
+    void release() {
+      if (!released) {
+        released = true;
+        limiter.release();
+      }
+    }
+
+    final controller = StreamController<List<int>>(sync: true);
+    StreamSubscription<List<int>>? sub;
+    controller.onListen = () {
+      sub = stream.listen(
+        controller.add,
+        onError: (Object e, StackTrace st) {
+          release();
+          controller.addError(e, st);
+        },
+        onDone: () {
+          release();
+          controller.close();
+        },
+        cancelOnError: false,
+      );
+    };
+    controller.onPause = () => sub?.pause();
+    controller.onResume = () => sub?.resume();
+    controller.onCancel = () {
+      release();
+      return sub?.cancel();
+    };
+    return controller.stream;
   }
 
   /// Reads [streamed] into a response, refusing bodies larger than [cap].

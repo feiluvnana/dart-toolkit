@@ -59,6 +59,32 @@ class Spinner {
     ConsoleWriter? writer,
   }) : writer = writer ?? sharedConsoleWriter;
 
+  /// Runs [action] while animating a spinner with [message], stopping with [ok]
+  /// on success or [fail] if [action] throws.
+  ///
+  /// ```dart
+  /// final data = await Spinner.run('Fetching catalogue...', () => Http.get(url));
+  /// ```
+  static Future<T> run<T>(
+    String message,
+    FutureOr<T> Function() action, {
+    String? successMessage,
+    String? failureMessage,
+    ConsoleWriter? writer,
+  }) async {
+    final spinner = Spinner(writer: writer)..start(message);
+    try {
+      final result = await action();
+      spinner.ok(successMessage);
+      return result;
+    } catch (e) {
+      spinner.fail(failureMessage);
+      rethrow;
+    } finally {
+      if (spinner.spinning) spinner.stop();
+    }
+  }
+
   /// Whether the spinner is currently animating.
   bool get spinning => _timer != null;
 

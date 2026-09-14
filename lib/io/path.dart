@@ -207,7 +207,7 @@ extension type const Path(String raw) implements String {
   int get size => Entries.at(raw)?.size ?? 0;
 
   /// The total size in bytes of everything under this directory.
-  Future<int> get dirSize async {
+  Future<int> dirSize() async {
     var total = 0;
     await for (final entry in Entries.walkAsync(raw)) {
       total += entry.size;
@@ -216,7 +216,7 @@ extension type const Path(String raw) implements String {
   }
 
   /// Whether this directory holds no entries.
-  Future<bool> get isDirEmpty => Entries.isEmptyAsync(raw);
+  Future<bool> isDirEmpty() => Entries.isEmptyAsync(raw);
 
   /// Whether a lock file here is currently held by a live process.
   ///
@@ -354,16 +354,30 @@ extension type const Path(String raw) implements String {
 
   /// Writes [rows] here as CSV, atomically, as they arrive.
   ///
-  /// Takes a `Stream` so a million rows never have to be in memory at once.
+  /// Accepts either a `Stream` (so a million rows never have to be in memory
+  /// at once) or an in-memory `Iterable` of row maps.
   /// The header line is [headers], or the keys of the first row.
-  Future<Path> writeCsv<V>(
-    Stream<Map<String, V>> rows, {
+  Future<Path> writeCsv(
+    Object rows, {
     List<String>? headers,
     String delimiter = ',',
     String newline = '\n',
     String part = '.part',
     Encoding encoding = utf8,
   }) async {
+    final Stream<Map<String, dynamic>> stream = switch (rows) {
+      Stream<Map<String, dynamic>> s => s,
+      Iterable<Map<String, dynamic>> it => Stream.fromIterable(it),
+      Stream<Object?> s => s.cast<Map<String, dynamic>>(),
+      Iterable<Object?> it => Stream.fromIterable(
+        it.cast<Map<String, dynamic>>(),
+      ),
+      _ => throw ArgumentError.value(
+        rows,
+        'rows',
+        'Expected Stream or Iterable of Map<String, dynamic>',
+      ),
+    };
     await Fs.atomic(raw, (staging) async {
       final sink = staging.openWrite(encoding: encoding);
       var columns = headers;
@@ -382,7 +396,7 @@ extension type const Path(String raw) implements String {
       }
 
       try {
-        await for (final row in rows) {
+        await for (final row in stream) {
           columns ??= row.keys.toList();
           header();
           line([for (final key in columns) row[key]?.toString() ?? '']);
@@ -491,6 +505,31 @@ extension type const Path(String raw) implements String {
     recursive: recursive,
   );
 
+  /// Changed files under this path, as an idiomatic [Stream].
+  Stream<Path> changes({
+    Pattern? pattern,
+    Duration settle = const Duration(milliseconds: 200),
+    bool recursive = true,
+  }) {
+    late final StreamController<Path> controller;
+    Future<void> Function()? stop;
+    controller = StreamController<Path>(
+      onListen: () {
+        stop = Watch.start(
+          raw,
+          (changed) {
+            if (!controller.isClosed) controller.add(Path(changed));
+          },
+          pattern: pattern,
+          settle: settle,
+          recursive: recursive,
+        );
+      },
+      onCancel: () => stop?.call(),
+    );
+    return controller.stream;
+  }
+
   // ----------------------------------------------------------------- hold --
 
   /// Runs [action] with the lock file here held, safe across OS processes.
@@ -526,6 +565,29 @@ extension type const Path(String raw) implements String {
 /// name, run on this thread. Reach for it in a short script where blocking the
 /// event loop costs nothing; prefer [Path] everywhere else.
 extension type const SyncPath(String raw) implements String {
+  /// Whether something exists at this path.
+  bool get exists =>
+      FileSystemEntity.typeSync(raw, followLinks: false) !=
+      FileSystemEntityType.notFound;
+
+  /// Whether a regular file is here.
+  bool get isFile => Entries.kind(raw) == FileSystemEntryKind.file;
+
+  /// Whether a directory is here.
+  bool get isDir => Directory(raw).existsSync();
+
+  /// Whether a symbolic link is here.
+  bool get isLink => Entries.kind(raw) == FileSystemEntryKind.link;
+
+  /// What is here, or `null` when nothing is.
+  FileSystemEntry? get stat => Entries.at(raw);
+
+  /// The size in bytes of the file here, and `0` for anything else.
+  int get size => Entries.at(raw)?.size ?? 0;
+
+  /// Whether a lock file here is currently held by a live process.
+  bool get isLocked => Lock.held(raw);
+
   /// The file here as text.
   String readText({Encoding encoding = utf8}) =>
       File(raw).readAsStringSync(encoding: encoding);
@@ -700,7 +762,7 @@ extension type const SyncPath(String raw) implements String {
   }
 
   /// The total size in bytes of everything under this directory.
-  int get dirSize {
+  int dirSize() {
     var total = 0;
     for (final entry in Entries.walk(raw)) {
       total += entry.size;
@@ -709,7 +771,7 @@ extension type const SyncPath(String raw) implements String {
   }
 
   /// Whether this directory holds no entries.
-  bool get isDirEmpty => Entries.isEmpty(raw);
+  bool isDirEmpty() => Entries.isEmpty(raw);
 
   /// Whether this path exists and holds something.
   bool get hasContent => Fs.has(raw);

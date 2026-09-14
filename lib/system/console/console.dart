@@ -95,6 +95,21 @@ abstract final class Console {
     TableStyle style = TableStyle.unicode,
   }) => _writer.box(text, title: title, style: style);
 
+  /// Draws a table to standard output.
+  static void table({
+    required List<String> headers,
+    required Iterable<List<Object?>> rows,
+    List<ColumnAlign>? alignments,
+    TableStyle style = TableStyle.unicode,
+    int? width,
+  }) => _writer.table(
+    headers: headers,
+    rows: rows,
+    alignments: alignments,
+    style: style,
+    width: width,
+  );
+
   /// The next line of standard input, or `null` at end of input.
   static Future<String?> line() => _reader.line();
 

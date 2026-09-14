@@ -37,6 +37,10 @@ import '../src/jsontext.dart';
 // ============================================================================
 
 /// One incoming request.
+/// Standard semantic alias for an incoming HTTP request ([Asked]).
+typedef ServerRequest = Asked;
+
+/// One incoming request.
 ///
 /// Named `Asked` rather than `Request` because 2.0.0 spent that name once
 /// already and renamed out of it: a type called `Request` sitting beside
@@ -105,6 +109,9 @@ final class Asked {
 /// Served.status(404);
 /// Served.redirect('/done'.url);
 /// ```
+/// Standard semantic alias for an outgoing HTTP response ([Served]).
+typedef ServerResponse = Served;
+
 final class Served {
   /// The HTTP status code this reply carries.
   final int statusCode;
@@ -313,24 +320,31 @@ Future<Server> serveOn(
   FutureOr<Served> Function(Asked req) handler, {
   String host = 'localhost',
   void Function()? sent,
+  void Function(Object error, StackTrace stack)? onError,
 }) async {
   final raw = await HttpServer.bind(host, port);
-  raw.listen((request) async {
-    Served reply;
-    try {
-      reply = await handler(Asked._(request));
-    } catch (_) {
-      // A handler that throws is a 500, not a dead socket: the client is
-      // waiting and a hung request is harder to debug than a statusCode.
-      reply = const Served.status(500);
-    }
-    try {
-      await reply._writeTo(request.response);
-    } catch (_) {
-      // The client hung up mid-write. Nothing left to say to it.
-    }
-    sent?.call();
-  }, onError: (Object _) {});
+  raw.listen(
+    (request) async {
+      Served reply;
+      try {
+        reply = await handler(Asked._(request));
+      } catch (error, stack) {
+        onError?.call(error, stack);
+        // A handler that throws is a 500, not a dead socket: the client is
+        // waiting and a hung request is harder to debug than a statusCode.
+        reply = const Served.status(500);
+      }
+      try {
+        await reply._writeTo(request.response);
+      } catch (_) {
+        // The client hung up mid-write. Nothing left to say to it.
+      }
+      sent?.call();
+    },
+    onError: (Object err, StackTrace st) {
+      onError?.call(err, st);
+    },
+  );
   return Server._(raw);
 }
 

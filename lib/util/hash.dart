@@ -20,7 +20,19 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart' as crypto;
 
-import '../src/fs.dart';
+/// The hash algorithms supported across the library.
+///
+/// Named `Algo` and not `Digest` because `package:crypto` exports a `Digest`
+/// of its own — a hash *result*, where this one selects an *algorithm* — and
+/// two libraries exporting one name is an `ambiguous_import` error for anyone
+/// importing both.
+enum Algo {
+  /// SHA-256, producing a 64-character hex digest.
+  sha256,
+
+  /// MD5, producing a 32-character hex digest.
+  md5,
+}
 
 List<int> _bytes(Object input) => switch (input) {
   String text => utf8.encode(text),

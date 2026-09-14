@@ -29,6 +29,11 @@ class Terminal {
   void clear() => _emit('\x1B[2J\x1B[H');
 
   /// Erases the current line.
+  ///
+  /// Self-describing alias for [line].
+  void clearLine() => line();
+
+  /// Erases the current line.
   void line() => _emit('\x1B[2K');
 
   /// Rings the terminal bell.

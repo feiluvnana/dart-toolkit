@@ -133,6 +133,8 @@ final class Fetch {
   final int depth;
 
   /// Creates a request for [url].
+  ///
+  /// [meta] accepts either a `Map<String, Object?>` or an `Iterable<(String, Object?)>`.
   Fetch(
     this.url, {
     this.method = HttpMethod.get,
@@ -140,13 +142,25 @@ final class Fetch {
     this.body,
     this.priority = 0,
     this.tag,
-    Iterable<(String, Object?)>? meta,
+    Object? meta,
     this.dedupe = true,
     this.depth = 0,
   }) : headers = headers ?? {},
-       meta = {
-         for (final (k, v) in (meta ?? const <(String, Object?)>[])) k: v,
-       };
+       meta = _coerceMeta(meta);
+
+  static Map<String, Object?> _coerceMeta(Object? meta) => switch (meta) {
+    null => {},
+    Map<String, Object?> m => Map.of(m),
+    Map<Object?, Object?> m => {
+      for (final e in m.entries) e.key.toString(): e.value,
+    },
+    Iterable<(String, Object?)> records => {for (final (k, v) in records) k: v},
+    Iterable<Object?> records => {
+      for (final item in records)
+        if (item is (String, Object?)) item.$1: item.$2,
+    },
+    _ => {},
+  };
 
   /// Restores a request from the map [toJson] produced.
   ///

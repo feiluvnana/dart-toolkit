@@ -12,7 +12,9 @@ library;
 
 import 'dart:async';
 
-import '../format/form.dart';
+import '../format/format.dart';
+import '../src/format.dart';
+import '../src/markup.dart';
 import 'net.dart';
 
 // ============================================================================
@@ -48,7 +50,7 @@ extension Sending on Form {
   /// see [Form.multipart].
   Fetch fetch({
     String? tag,
-    Iterable<(String, Object?)>? meta,
+    Object? meta,
     Map<String, String>? headers,
     int priority = 0,
     bool dedupe = true,
@@ -102,5 +104,21 @@ extension Sending on Form {
     return from.scheme == 'http' || from.scheme == 'https'
         ? {'Referer': from.toString()}
         : const {};
+  }
+}
+
+/// Direct HTML form extraction from a [Response].
+extension ResponseFormExtensions on Response {
+  /// Finds the first `<form>` matching [selector] in this response's HTML,
+  /// already resolved against this response's [url].
+  ///
+  /// ```dart
+  /// // setup: final login = Response.text(''); final session = Fetcher();
+  /// final home = await login.form('#login')!
+  ///     .fill({'user': 'me', 'pass': 'secret'})
+  ///     .send(using: session.call);
+  /// ```
+  Form? form([String selector = 'form']) {
+    return parse<Markup>(DocumentFormat.html).form(selector)?.at(url);
   }
 }

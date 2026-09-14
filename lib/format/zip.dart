@@ -89,6 +89,17 @@ class ArchiveEntry {
   /// Whether this entry is a directory rather than a file.
   final bool folder;
 
+  /// Whether this entry is a directory rather than a file.
+  ///
+  /// Standard alias matching [FileSystemEntry.isDir] and [Path.isDir].
+  bool get isDir => folder;
+
+  /// Whether this entry is a regular file.
+  bool get isFile => !folder;
+
+  /// The entry's path within the archive, as an alias for [name].
+  String get path => name;
+
   /// Creates an entry description.
   const ArchiveEntry(this.name, this.size, {this.folder = false});
 

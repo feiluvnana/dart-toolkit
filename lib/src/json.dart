@@ -182,6 +182,12 @@ final class Json {
     };
   }
 
+  /// The integer at [path], or of this node when [path] is omitted.
+  int? integer([String? path]) => number(path)?.toInt();
+
+  /// The floating-point decimal at [path], or of this node when [path] is omitted.
+  double? decimal([String? path]) => number(path)?.toDouble();
+
   /// The boolean at [path], or of this node when [path] is omitted.
   ///
   /// `"true"` and `"false"` parse; anything else reads `null`.
@@ -194,6 +200,11 @@ final class Json {
       _ => null,
     };
   }
+
+  /// The boolean at [path], or of this node when [path] is omitted.
+  ///
+  /// Standard alias for [flag].
+  bool? boolean([String? path]) => flag(path);
 
   /// One [R] per element of this node, each built from its own cursor.
   ///
@@ -224,9 +235,10 @@ final class Json {
   };
 
   /// Whether this node holds nothing — which a missing path always does.
-  ///
-  /// No complement: `!doc.isEmpty` already says the other thing.
   bool get isEmpty => length == 0;
+
+  /// Whether this node holds any elements or keys.
+  bool get isNotEmpty => !isEmpty;
 
   /// Converts this JSON cursor to a native [Map] if it represents a JSON object, or `null` otherwise.
   Map<String, T>? toMap<T>() => switch (raw) {
