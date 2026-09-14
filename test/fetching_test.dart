@@ -1,4 +1,4 @@
-/// Tests for what a crawl fetches, and what it manages not to. Each group
+/// Tests for what a crawler fetches, and what it manages not to. Each group
 /// names the behaviour that used to be missing: every re-run downloaded
 /// everything again, a PDF reached the HTML parser, and a form could only be
 /// posted by reaching past `res.follow` for `engine.add`.
@@ -44,9 +44,9 @@ void main() {
   group('HttpCache freshness', () {
     test('a response inside its max-age is fresh', () {
       final entry = CacheEntry(
-        response: Reply(
+        response: Response(
           url: Uri.parse('https://example.com/'),
-          status: 200,
+          statusCode: 200,
           headers: const {'cache-control': 'max-age=600'},
           bytes: const [],
         ),
@@ -59,9 +59,9 @@ void main() {
 
     test('a response past its max-age is not', () {
       final entry = CacheEntry(
-        response: Reply(
+        response: Response(
           url: Uri.parse('https://example.com/'),
-          status: 200,
+          statusCode: 200,
           headers: const {'cache-control': 'max-age=1'},
           bytes: const [],
         ),
@@ -73,9 +73,9 @@ void main() {
 
     test('no-cache means ask every time, however recent', () {
       final entry = CacheEntry(
-        response: Reply(
+        response: Response(
           url: Uri.parse('https://example.com/'),
-          status: 200,
+          statusCode: 200,
           headers: const {'cache-control': 'no-cache, max-age=600'},
           bytes: const [],
         ),
@@ -89,9 +89,9 @@ void main() {
     test('Expires is read against Date, not against the clock', () {
       final sent = DateTime.utc(2030);
       final entry = CacheEntry(
-        response: Reply(
+        response: Response(
           url: Uri.parse('https://example.com/'),
-          status: 200,
+          statusCode: 200,
           headers: {
             'date': HttpDate.format(sent),
             'expires': HttpDate.format(sent.add(const Duration(hours: 2))),
@@ -106,9 +106,9 @@ void main() {
 
     test('a server that promised nothing is never fresh', () {
       final entry = CacheEntry(
-        response: Reply(
+        response: Response(
           url: Uri.parse('https://example.com/'),
-          status: 200,
+          statusCode: 200,
           headers: const {},
           bytes: const [],
         ),
@@ -120,9 +120,9 @@ void main() {
     });
 
     test('validators are whatever the response gave us to ask with', () {
-      Reply with_(Map<String, String> headers) => Reply(
+      Response with_(Map<String, String> headers) => Response(
         url: Uri.parse('https://example.com/'),
-        status: 200,
+        statusCode: 200,
         headers: headers,
         bytes: const [],
       );
@@ -162,9 +162,9 @@ void main() {
 
       await cache.write(
         url,
-        Reply(
+        Response(
           url: url,
-          status: 200,
+          statusCode: 200,
           headers: const {'content-type': 'text/html', 'etag': '"abc"'},
           bytes: utf8.encode('<h1>Hi</h1>'),
         ),
@@ -173,7 +173,7 @@ void main() {
       final entry = await cache.read(url);
       expect(entry, isNotNull);
       expect(entry!.response.body, '<h1>Hi</h1>');
-      expect(entry.response.status, 200);
+      expect(entry.response.statusCode, 200);
       expect(entry.response.cached, isTrue);
       expect(entry.validators, {'If-None-Match': '"abc"'});
     });
@@ -187,9 +187,9 @@ void main() {
 
       await cache.write(
         url,
-        Reply(
+        Response(
           url: url,
-          status: 200,
+          statusCode: 200,
           headers: const {'content-type': 'image/png'},
           bytes: bytes,
         ),
@@ -220,9 +220,9 @@ void main() {
       for (final path in ['/a', '/b']) {
         await cache.write(
           Uri.parse('https://example.com$path'),
-          Reply(
+          Response(
             url: Uri.parse('https://example.com$path'),
-            status: 200,
+            statusCode: 200,
             headers: const {},
             bytes: const [],
           ),
@@ -372,33 +372,29 @@ void main() {
 
   group('crawl().accept', () {
     test('a response of the wrong type never reaches a handler', () async {
-      final crawl = Http.crawl([Fetch('https://example.com/page'.url)])
+      final crawler = crawl([Fetch('https://example.com/page'.url)])
         ..accept(const ['text/html'])
         ..using(
-          (fetch) async => Reply.text(
+          (fetch) async => Response.text(
             '%PDF-1.7',
             fetch: fetch,
             headers: const {'content-type': 'application/pdf'},
           ),
         );
 
-      final handled = await crawl
-          .map((res) => res.url.path)
-          .toList();
+      final handled = await crawler.map((res) => res.url.path).toList();
 
       expect(handled, isEmpty);
-      expect(crawl.stats.skipped, 1);
-      expect(crawl.stats.fetched, 0);
+      expect(crawler.stats.skipped, 1);
+      expect(crawler.stats.fetched, 0);
     });
 
     test('a subtype wildcard matches', () async {
-      final crawl = Http.crawl([Fetch('https://example.com/page'.url)])
+      final crawler = crawl([Fetch('https://example.com/page'.url)])
         ..accept(const ['text/*'])
-        ..using((fetch) async => Reply.text('<h1>hi</h1>', fetch: fetch));
+        ..using((fetch) async => Response.text('<h1>hi</h1>', fetch: fetch));
 
-      final handled = await crawl
-          .map((res) => res.url.path)
-          .toList();
+      final handled = await crawler.map((res) => res.url.path).toList();
 
       expect(handled, ['/page']);
     });
@@ -407,11 +403,11 @@ void main() {
       // `accept` does two things on purpose — the header and the filter — and
       // they are two halves of one intent, so they are set in one place.
       final sent = <Fetch>[];
-      await (Http.crawl([Fetch('https://example.com/'.url)])
+      await (crawl([Fetch('https://example.com/'.url)])
             ..accept(const ['text/html', 'application/xhtml+xml'])
             ..using((fetch) async {
               sent.add(fetch);
-              return Reply.text('<h1>hi</h1>', fetch: fetch);
+              return Response.text('<h1>hi</h1>', fetch: fetch);
             }))
           .run();
 
@@ -419,7 +415,7 @@ void main() {
     });
 
     test('a header the client already carries wins', () {
-      // Everything about the client is the client's: a crawl has no
+      // Everything about the client is the client's: a crawler has no
       // `.headers` to disagree with it.
       final client = Fetcher(headers: const {'Accept': 'text/plain'});
       expect(client.headers['Accept'], 'text/plain');
@@ -450,12 +446,12 @@ void main() {
     });
   });
 
-  group('crawl with method and body', () {
+  group('crawler with method and body', () {
     test('a POST request carries its payload and parses responses', () async {
       final sent = <Fetch>[];
-      Future<Reply> transport(Fetch fetch) async {
+      Future<Response> transport(Fetch fetch) async {
         sent.add(fetch);
-        return Reply.text(
+        return Response.text(
           fetch.method == HttpMethod.post
               ? '<p class="welcome">Signed in</p>'
               : '<form action="/login" method="post"></form>',
@@ -463,7 +459,7 @@ void main() {
         );
       }
 
-      final crawl = Http.crawl(
+      final crawler = crawl(
         [Fetch('https://example.com/login'.url)],
         (res) => switch (res.fetch.tag) {
           null => [
@@ -478,7 +474,7 @@ void main() {
         },
       )..using(transport);
 
-      final seen = await crawl
+      final seen = await crawler
           .where((res) => res.fetch.tag == 'result')
           .map((res) => parseHtml(res.body).$('.welcome').text)
           .toList();
@@ -495,21 +491,20 @@ void main() {
       'two posts to one URL with different fields are two fetches',
       () async {
         final sent = <Fetch>[];
-        await (Http.crawl(
+        await (crawl(
               [Fetch('https://example.com/search'.url)],
               (res) => res.fetch.depth > 0
                   ? const <Fetch>[]
-                  : ['1', '2', '2']
-                        .map(
-                          (page) => res.follow(
-                            '/search',
-                            method: HttpMethod.post,
-                            body: Body.form({'page': page}),
-                          ),
-                        ),
+                  : ['1', '2', '2'].map(
+                      (page) => res.follow(
+                        '/search',
+                        method: HttpMethod.post,
+                        body: Body.form({'page': page}),
+                      ),
+                    ),
             )..using((fetch) async {
               sent.add(fetch);
-              return Reply.text('<p>hits</p>', fetch: fetch);
+              return Response.text('<p>hits</p>', fetch: fetch);
             }))
             .run();
 
@@ -522,7 +517,7 @@ void main() {
       'a followed request carries the Referer and the caller headers',
       () async {
         final sent = <Fetch>[];
-        await (Http.crawl(
+        await (crawl(
               [Fetch('https://example.com/a'.url)],
               (res) => res.fetch.depth > 0
                   ? const <Fetch>[]
@@ -531,7 +526,7 @@ void main() {
                     ],
             )..using((fetch) async {
               sent.add(fetch);
-              return Reply.text('<a href="/b">b</a>', fetch: fetch);
+              return Response.text('<a href="/b">b</a>', fetch: fetch);
             }))
             .run();
 
@@ -541,20 +536,19 @@ void main() {
     );
   });
 
-  group('robots, over the crawl own transport', () {
+  group('robots, over the crawler own transport', () {
     test('a 5xx disallows everything, per RFC 9309 2.3.1.4', () async {
       final origin = await _Origin.start((req, origin) async {
         req.response.statusCode = 503;
       });
       addTearDown(origin.stop);
 
-      final crawl = Http.crawl([Fetch('${origin.root}/anything'.url)])
-        ..obey();
-      await crawl.run();
+      final crawler = crawl([Fetch('${origin.root}/anything'.url)])..obey();
+      await crawler.run();
 
-      // Unreachable rules are not absent rules: the crawl stays out.
-      expect(crawl.stats.skipped, 1);
-      expect(crawl.stats.fetched, 0);
+      // Unreachable rules are not absent rules: the crawler stays out.
+      expect(crawler.stats.skipped, 1);
+      expect(crawler.stats.fetched, 0);
     });
 
     test('a 404 still allows everything, per 2.3.1.3', () async {
@@ -567,15 +561,14 @@ void main() {
       });
       addTearDown(origin.stop);
 
-      final crawl = Http.crawl([Fetch('${origin.root}/anything'.url)])
-        ..obey();
-      await crawl.run();
+      final crawler = crawl([Fetch('${origin.root}/anything'.url)])..obey();
+      await crawler.run();
 
-      expect(crawl.stats.fetched, 1);
-      expect(crawl.stats.skipped, 0);
+      expect(crawler.stats.fetched, 1);
+      expect(crawler.stats.skipped, 0);
     });
 
-    test('a crawl obeying robots skips a host whose rules 500', () async {
+    test('a crawler obeying robots skips a host whose rules 500', () async {
       final origin = await _Origin.start((req, origin) async {
         if (req.uri.path == '/robots.txt') {
           req.response.statusCode = 500;
@@ -586,55 +579,52 @@ void main() {
       });
       addTearDown(origin.stop);
 
-      final crawl = Http.crawl([Fetch('${origin.root}/page'.url)])..obey();
-      await crawl.run();
+      final crawler = crawl([Fetch('${origin.root}/page'.url)])..obey();
+      await crawler.run();
 
-      expect(crawl.stats.skipped, 1);
+      expect(crawler.stats.skipped, 1);
       expect(origin.served, isEmpty);
     });
   });
 
-  group('Rand.seed', () {
-    tearDown(() => Rand.seed());
+  group('seedRandom', () {
+    tearDown(() => seedRandom());
 
     test('the same seed replays the same choices', () {
-      Rand.seed(42);
-      final first = [Rand.id(), Rand.between(0, 1000).toString()];
+      seedRandom(42);
+      final first = [randomId(), randomBetween(0, 1000).toString()];
 
-      Rand.seed(42);
-      final second = [Rand.id(), Rand.between(0, 1000).toString()];
+      seedRandom(42);
+      final second = [randomId(), randomBetween(0, 1000).toString()];
 
       expect(second, first);
     });
 
-    test('a crawl order can be made repeatable', () {
+    test('a crawler order can be made repeatable', () {
       const agents = ['a', 'b', 'c', 'd', 'e'];
 
-      Rand.seed(7);
-      final first = Rand.shuffle(agents);
-      Rand.seed(7);
+      seedRandom(7);
+      final first = randomShuffle(agents);
+      seedRandom(7);
 
-      expect(
-        Rand.shuffle(agents).toList(),
-        first.toList(),
-      );
+      expect(randomShuffle(agents).toList(), first.toList());
     });
 
     test('seeding again with nothing goes back to being unpredictable', () {
-      Rand.seed(1);
-      final seeded = Rand.id(32);
-      Rand.seed();
+      seedRandom(1);
+      final seeded = randomId(32);
+      seedRandom();
 
-      expect(Rand.id(32), isNot(seeded));
+      expect(randomId(32), isNot(seeded));
     });
 
     test('retry jitter runs off the same generator', () {
       // One generator, so a test that seeds it gets a repeatable backoff too.
-      Rand.seed(3);
-      final first = Rand.jitter(const Duration(seconds: 1));
-      Rand.seed(3);
+      seedRandom(3);
+      final first = jitter(const Duration(seconds: 1));
+      seedRandom(3);
 
-      expect(Rand.jitter(const Duration(seconds: 1)), first);
+      expect(jitter(const Duration(seconds: 1)), first);
     });
   });
 }

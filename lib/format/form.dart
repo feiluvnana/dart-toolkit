@@ -6,7 +6,7 @@
 /// the few it cares about, and works out where the result goes.
 ///
 /// **Reading a `<form>` is HTML; sending one is `net`.** This half declared
-/// itself inside `net` through 5.5.0 — an extension on a `format.html` type,
+/// itself inside `net` through 5.5.0 — an extension on a [parseHtml] type,
 /// walking a parsed DOM, in the domain whose own doc says it parses nothing.
 /// The sending half is the `Sending` extension over in `net`, which is the
 /// same shape as `io` declaring `Sequence.dump` on a `collection` type.
@@ -29,8 +29,8 @@ import '../src/method.dart';
 /// difference between a login that works and one that does not:
 ///
 /// ```dart
-/// final login = await Http.get('https://example.com/login'.url);
-/// final sent = await login.parse(Codec.html).form('#login')!
+/// final login = await get('https://example.com/login'.url);
+/// final sent = await login.parse(DocumentFormat.html).form('#login')!
 ///     .at(login.url)
 ///     .fill({'user': 'me', 'pass': secret})
 ///     .send();
@@ -42,7 +42,7 @@ import '../src/method.dart';
 /// ```dart no-compile
 /// net.crawl([Fetch(seed)].seq, (res) => switch (res.fetch.tag) {
 ///   null => [
-///     res.parse(format.html).form('form.search')!
+///     res.parse(DocumentFormat.html).form('form.search')!
 ///         .at(res.url)
 ///         .fill({'q': 'widgets'})
 ///         .fetch(tag: 'results'),
@@ -86,12 +86,12 @@ final class Form {
 
   /// This form, resolving relative actions against [page].
   ///
-  /// Reading a page is `format.html` and no longer knows what URL it came
+  /// Reading a page is [parseHtml] and no longer knows what URL it came
   /// from, so the response hands that over here:
   ///
   /// ```dart
-  /// final res = await Http.get(url);
-  /// await res.parse(Codec.html).form('#login')!
+  /// final res = await get(url);
+  /// await res.parse(DocumentFormat.html).form('#login')!
   ///     .at(res.url)
   ///     .fill({'user': user, 'pass': pass})
   ///     .send();
@@ -233,8 +233,8 @@ extension FormOnMarkup on Markup {
   /// submits to a relative `action` needs [Form.at] before it is sent:
   ///
   /// ```dart
-  /// final res = await Http.get(url);
-  /// final search = res.parse(Codec.html).form('form.search');
+  /// final res = await get(url);
+  /// final search = res.parse(DocumentFormat.html).form('form.search');
   /// if (search != null) await search.at(res.url).fill({'q': 'widgets'}).send();
   /// ```
   Form? form([String selector = 'form']) {

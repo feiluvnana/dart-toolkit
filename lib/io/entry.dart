@@ -7,7 +7,7 @@
 /// Seventeen signatures named `File`, `Directory`, `FileSystemEntity` or
 /// `FileStat` through 5.1.0, which leaked four types whose API this library
 /// does not control, does not document and cannot change — to buy exactly one
-/// `.path` across the whole repository. Rule 6 asks for real types at the
+/// `.path` across the whole repository. Real types at the
 /// boundary; it was written about parameters, and the return side had never
 /// been swept.
 ///
@@ -28,7 +28,7 @@ import 'package:path/path.dart' as p;
 ///
 /// Read off the entry itself and not what it points at, so a symlink is
 /// [link] whatever sits on the other end of it — which is the question
-/// `io.find` could never answer, and the reason a script that walks a tree
+/// a bare path could never answer, and the reason a script that walks a tree
 /// could not tell a loop from a file.
 enum FileSystemEntryKind {
   /// A regular file.
@@ -51,17 +51,17 @@ enum FileSystemEntryKind {
 /// that lets every `io` member stay complete in itself:
 ///
 /// ```dart
-/// for (final entry in Files.listSync('out')) {
+/// for (final entry in listDirSync('out')) {
 ///   if (entry.isDir) continue;
-///   if (fileExtension(entry.path) == '.part') Files.removeSync(entry.path);
+///   if (fileExtension(entry.path) == '.part') removePathSync(entry.path);
 /// }
 /// ```
 ///
 /// [kind] describes the entry; [size] and [modified] describe what it
 /// resolves to, since Dart offers no `lstat`. For a symlink to a file that is
-/// the target's size, and [islink] is still `true`.
+/// the target's size, and [isLink] is still `true`.
 final class FileSystemEntry {
-  /// Creates an entry. Prefer `io.stat`, `io.dir.list` or `io.dir.walk`,
+  /// Creates an entry. Prefer [fileStat], [listDir] or [walkDir],
   /// which fill
   /// these in from the disk.
   const FileSystemEntry({
@@ -81,7 +81,7 @@ final class FileSystemEntry {
   ///
   /// A directory's own on-disk size is a block count that answers nothing
   /// anybody asks, so it reads as zero. What is *in* a directory is
-  /// `io.dir.list(entry.path)`.
+  /// `listDir(entry.path)`.
   final int size;
 
   /// When the contents last changed.
@@ -90,14 +90,14 @@ final class FileSystemEntry {
   /// The last segment of [path], extension included.
   ///
   /// The one piece of path arithmetic this type keeps, defined as the
-  /// `io.path` call so there is one implementation of it. It survives because
+  /// path call so there is one implementation of it. It survives because
   /// `e.name` is in nearly every listing loop and
-  /// `io.path.filename(e.path)` inside a `where` is genuinely worse.
+  /// `filename(e.path)` inside a `where` is genuinely worse.
   ///
   /// `stem`, `ext` and `dirname` were here through 5.5.0 and are not: they
-  /// were `io.path.stem(e.path)`, `io.path.ext(e.path)` and
-  /// `io.path.dirname(e.path)` under four other names, on the same input, and
-  /// `io.path` is the domain that owns string arithmetic on a path.
+  /// were `stemName(e.path)`, `fileExtension(e.path)` and
+  /// `dirname(e.path)` on the same input, and
+  /// the path functions own string arithmetic on a path.
   String get name => p.basename(path);
 
   /// Whether this entry currently exists on disk.
@@ -107,41 +107,32 @@ final class FileSystemEntry {
 
   /// Whether this is a regular file.
   ///
-  /// [isfile], [isdir] and [islink] read [kind], which the one stat this
-  /// snapshot came from already answered. `io.isfile(path)` costs a syscall
+  /// [isFile], [isDir] and [isLink] read [kind], which the one stat this
+  /// snapshot came from already answered. `fileExists(path)` costs a syscall
   /// for the same question, so these are not a second spelling of it — they
-  /// are the cheap question about a value you are holding.
-  bool get isfile => kind == FileSystemEntryKind.file;
-
-  /// CamelCase alias for [isfile].
-  bool get isFile => isfile;
+  /// are the cheap question about a value you are already holding.
+  bool get isFile => kind == FileSystemEntryKind.file;
 
   /// Whether this is a directory.
-  bool get isdir => kind == FileSystemEntryKind.directory;
-
-  /// CamelCase alias for [isdir].
-  bool get isDir => isdir;
+  bool get isDir => kind == FileSystemEntryKind.directory;
 
   /// Whether this is a symbolic link.
-  bool get islink => kind == FileSystemEntryKind.link;
-
-  /// CamelCase alias for [islink].
-  bool get isLink => islink;
+  bool get isLink => kind == FileSystemEntryKind.link;
 
   /// Whether this entry holds nothing — zero bytes, for a file or a link.
   ///
   /// **Always `false` for a directory**, and reading the disk is why. This
   /// answered the directory question through 5.4.0 by calling `listSync`
   /// inside the getter, which broke the type's own promise — a snapshot of
-  /// one stat, not a handle — and made `io.async.empty` block on every
+  /// one stat, not a handle — and made the async check block on every
   /// directory it was asked about, from the accessor whose whole point is
   /// that it does not.
   ///
   /// Counting what is in a directory is a second listing, so it is a second
-  /// call and says which accessor it is on: `io.dir.empty(path)` blocks and
-  /// `io.async.dir.empty(path)` does not. `io.empty(path)` still answers for
+  /// call: [isDirEmptySync] blocks and
+  /// [isDirEmpty] does not. This getter still answers for
   /// either kind, by asking the right one.
-  bool get empty => !isdir && size == 0;
+  bool get empty => !isDir && size == 0;
 
   /// The `dart:io` handle, for the call this does not cover.
   ///

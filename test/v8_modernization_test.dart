@@ -52,7 +52,11 @@ void main() {
 
     test('writeJson, readJson, writeJsonSync, readJsonSync', () async {
       final filePath = p.join(tempDir.path, 'data.json');
-      final data = {'name': 'dart-toolkit', 'version': '8.0.0', 'items': [1, 2, 3]};
+      final data = {
+        'name': 'dart-toolkit',
+        'version': '8.0.0',
+        'items': [1, 2, 3],
+      };
 
       await writeJson(filePath, data);
       final readData = await readJson(filePath) as Map<String, dynamic>;
@@ -65,36 +69,42 @@ void main() {
       expect(syncData['score'], equals(42));
     });
 
-    test('listDir, listDirSync, walkDir, walkDirSync, makeDir, copyPath, removePath', () async {
-      final base = p.join(tempDir.path, 'listing');
-      makeDirSync(p.join(base, 'a'));
-      makeDirSync(p.join(base, 'b'));
-      writeTextSync(p.join(base, 'a', 'file1.txt'), 'f1');
-      writeTextSync(p.join(base, 'b', 'file2.md'), 'f2');
+    test(
+      'listDir, listDirSync, walkDir, walkDirSync, makeDir, copyPath, removePath',
+      () async {
+        final base = p.join(tempDir.path, 'listing');
+        makeDirSync(p.join(base, 'a'));
+        makeDirSync(p.join(base, 'b'));
+        writeTextSync(p.join(base, 'a', 'file1.txt'), 'f1');
+        writeTextSync(p.join(base, 'b', 'file2.md'), 'f2');
 
-      final listAsync = await listDir(base);
-      expect(listAsync.length, equals(2));
+        final listAsync = await listDir(base);
+        expect(listAsync.length, equals(2));
 
-      final listSyncRes = listDirSync(base);
-      expect(listSyncRes.length, equals(2));
+        final listSyncRes = listDirSync(base);
+        expect(listSyncRes.length, equals(2));
 
-      final walkAsyncRes = await walkDir(base);
-      expect(walkAsyncRes.length, greaterThanOrEqualTo(4));
+        final walkAsyncRes = await walkDir(base);
+        expect(walkAsyncRes.length, greaterThanOrEqualTo(4));
 
-      final walkSyncRes = walkDirSync(base, match: '*.txt');
-      expect(walkSyncRes.length, equals(1));
-      expect(walkSyncRes.first.name, equals('file1.txt'));
+        final walkSyncRes = walkDirSync(base, match: '*.txt');
+        expect(walkSyncRes.length, equals(1));
+        expect(walkSyncRes.first.name, equals('file1.txt'));
 
-      // copyPath
-      final copied = await copyPath(p.join(base, 'a', 'file1.txt'), p.join(base, 'a', 'file1_copy.txt'));
-      expect(copied.exists, isTrue);
-      expect(fileExists(copied.path), isTrue);
+        // copyPath
+        final copied = await copyPath(
+          p.join(base, 'a', 'file1.txt'),
+          p.join(base, 'a', 'file1_copy.txt'),
+        );
+        expect(copied.exists, isTrue);
+        expect(fileExists(copied.path), isTrue);
 
-      // removePath
-      final removed = await removePath(copied.path);
-      expect(removed, isTrue);
-      expect(fileExists(copied.path), isFalse);
-    });
+        // removePath
+        final removed = await removePath(copied.path);
+        expect(removed, isTrue);
+        expect(fileExists(copied.path), isFalse);
+      },
+    );
 
     test('withLock and withLockSync', () async {
       final lockFile = p.join(tempDir.path, 'resource.lock');
@@ -149,17 +159,40 @@ void main() {
 
     test('Iterable fluent helpers', () {
       final words = ['apple', 'banana', 'avocado', 'apricot', 'blueberry'];
-      expect(words.filter((w) => w.startsWith('a')), equals(['apple', 'avocado', 'apricot']));
+      expect(
+        words.filter((w) => w.startsWith('a')),
+        equals(['apple', 'avocado', 'apricot']),
+      );
 
-      expect(words.sortedBy((w) => w.length), equals(['apple', 'banana', 'avocado', 'apricot', 'blueberry']));
-      expect(words.sortedByDescending((w) => w.length).first, equals('blueberry'));
+      expect(
+        words.sortedBy((w) => w.length),
+        equals(['apple', 'banana', 'avocado', 'apricot', 'blueberry']),
+      );
+      expect(
+        words.sortedByDescending((w) => w.length).first,
+        equals('blueberry'),
+      );
 
       final duplicates = ['a', 'b', 'a', 'c', 'b'];
       expect(duplicates.distinct(), equals(['a', 'b', 'c']));
       expect(words.distinct((w) => w[0]), equals(['apple', 'banana']));
 
-      expect([1, 2, 3, 4, 5].chunk(2), equals([[1, 2], [3, 4], [5]]));
-      expect([1, 2, 3, 4].window(2), equals([[1, 2], [2, 3], [3, 4]]));
+      expect(
+        [1, 2, 3, 4, 5].chunk(2),
+        equals([
+          [1, 2],
+          [3, 4],
+          [5],
+        ]),
+      );
+      expect(
+        [1, 2, 3, 4].window(2),
+        equals([
+          [1, 2],
+          [2, 3],
+          [3, 4],
+        ]),
+      );
 
       final grouped = words.groupBy((w) => w[0]);
       expect(grouped['a']?.length, equals(3));
@@ -170,7 +203,9 @@ void main() {
       expect(counts['b'], equals(2));
 
       final nullables = ['1', '', '2', '', '3'];
-      final filtered = nullables.mapNotNull((s) => s.isEmpty ? null : int.parse(s));
+      final filtered = nullables.mapNotNull(
+        (s) => s.isEmpty ? null : int.parse(s),
+      );
       expect(filtered, equals([1, 2, 3]));
     });
   });
@@ -190,11 +225,15 @@ void main() {
 
     test('retry with exponential backoff', () async {
       var attempts = 0;
-      final result = await retry(() async {
-        attempts++;
-        if (attempts < 3) throw SocketException('network transient');
-        return 'success';
-      }, retries: 3, backoff: 5.ms);
+      final result = await retry(
+        () async {
+          attempts++;
+          if (attempts < 3) throw SocketException('network transient');
+          return 'success';
+        },
+        retries: 3,
+        backoff: 5.ms,
+      );
 
       expect(result, equals('success'));
       expect(attempts, equals(3));
@@ -204,7 +243,7 @@ void main() {
       final limiter = RateLimiter(5, per: 100.ms);
       final sw = Stopwatch()..start();
       for (var i = 0; i < 3; i++) {
-        await limiter.acquire();
+        await limiter.take();
       }
       sw.stop();
       expect(sw.elapsedMilliseconds, lessThan(200));
@@ -261,20 +300,26 @@ void main() {
       await server.close(force: true);
     });
 
-    test('Top-level get with Response properties and HTML selector shortcuts', () async {
-      final res = await get('$baseUrl/html');
-      expect(res.statusCode, equals(200));
-      expect(res.ok, isTrue);
-      expect(res.text, contains('Welcome'));
+    test(
+      'Top-level get with Response properties and HTML selector shortcuts',
+      () async {
+        final res = await get('$baseUrl/html');
+        expect(res.statusCode, equals(200));
+        expect(res.ok, isTrue);
+        expect(res.text, contains('Welcome'));
 
-      // DOM selectors shorthand
-      final h1 = res.$('h1.title');
-      expect(h1.text, equals('Welcome'));
+        // DOM selectors shorthand
+        final h1 = res.$('h1.title');
+        expect(h1.text, equals('Welcome'));
 
-      final listItems = res.$$('ul.items > li');
-      expect(listItems.length, equals(2));
-      expect(listItems.map((e) => e.text).toList(), equals(['Item 1', 'Item 2']));
-    });
+        final listItems = res.$$('ul.items > li');
+        expect(listItems.length, equals(2));
+        expect(
+          listItems.map((e) => e.text).toList(),
+          equals(['Item 1', 'Item 2']),
+        );
+      },
+    );
 
     test('Top-level get and post with JSON and text', () async {
       final res = await get('$baseUrl/json');
@@ -287,10 +332,10 @@ void main() {
       expect(postRes.text, equals('ECHO: hello server'));
     });
 
-    test('Response typedef is fully compatible with Reply', () {
-      Response r = Reply(
+    test('Response typedef is fully compatible with Response', () {
+      Response r = Response(
         url: Uri.parse('http://example.com'),
-        status: 200,
+        statusCode: 200,
         headers: {},
         bytes: utf8.encode('{"a": 1}'),
       );
@@ -302,21 +347,29 @@ void main() {
 
   group('v8.0.0 CLI Parser Modernization', () {
     test('CliParser parses flags, options, numbers, lists with defaults', () {
-      final parser = CliParser(description: 'Test CLI Tool')
-        ..flag('verbose', abbr: 'v', help: 'Verbose output')
-        ..flag('dry-run', abbr: 'n', defaultsTo: false)
-        ..option('config', abbr: 'c', defaultsTo: 'app.yaml')
-        ..number('port', abbr: 'p', defaultsTo: 8080)
-        ..list('tags', abbr: 't');
+      final parser = CliParser(description: 'Test CLI Tool');
+      // Declaring hands back the typed handle; that handle is how it is read.
+      final verbose = parser.flag('verbose', abbr: 'v', help: 'Verbose output');
+      final dryRun = parser.flag('dry-run', abbr: 'n', defaultsTo: false);
+      final config = parser.option('config', abbr: 'c', defaultsTo: 'app.yaml');
+      final port = parser.number('port', abbr: 'p', defaultsTo: 8080);
+      final tags = parser.list('tags', abbr: 't', splitCommas: true);
 
-      final parsed = parser.parse(['-v', '--port', '9000', '-t', 'web,api', 'file.txt']);
+      final parsed = parser.parse([
+        '-v',
+        '--port',
+        '9000',
+        '-t',
+        'web,api',
+        'file.txt',
+      ]);
 
-      expect(parsed.flag('verbose'), isTrue);
-      expect(parsed.flag('dry-run'), isFalse);
-      expect(parsed.option('config'), equals('app.yaml'));
-      expect(parsed.number('port'), equals(9000));
-      expect(parsed.list('tags'), equals(['web', 'api']));
-      expect(parsed.rest, equals(['file.txt']));
+      expect(verbose(), isTrue);
+      expect(dryRun(), isFalse);
+      expect(config(), equals('app.yaml'));
+      expect(port(), equals(9000));
+      expect(tags(), equals(['web', 'api']));
+      expect(parsed.args, equals(['file.txt']));
 
       // Usage text check
       final usage = parser.usage();
@@ -327,17 +380,26 @@ void main() {
   });
 
   group('v8.0.0 Utility Extensions & Helpers', () {
-    test('String extensions: toSlug, cleanWhitespace, clip, extractNumber, stripTags', () {
-      expect('Hello World! 2026'.toSlug(), equals('hello-world-2026'));
-      expect('  hello \t  \n world  '.cleanWhitespace(), equals('hello world'));
-      expect('<p>Hello <b>World</b></p>'.stripTags(), equals('Hello World'));
-      expect('Very long title here'.clip(9), equals('Very lon…'));
-      expect('Very long title here'.clip(9, ellipsis: '...'), equals('Very l...'));
-      expect('Price is \$49.99 today'.extractNumber(), equals(49.99));
-    });
+    test(
+      'String extensions: toSlug, cleanWhitespace, clip, extractNumber, stripTags',
+      () {
+        expect('Hello World! 2026'.toSlug(), equals('hello-world-2026'));
+        expect(
+          '  hello \t  \n world  '.cleanWhitespace(),
+          equals('hello world'),
+        );
+        expect('<p>Hello <b>World</b></p>'.stripTags(), equals('Hello World'));
+        expect('Very long title here'.clip(9), equals('Very lon…'));
+        expect(
+          'Very long title here'.clip(9, ellipsis: '...'),
+          equals('Very l...'),
+        );
+        expect('Price is \$49.99 today'.extractNumber(), equals(49.99));
+      },
+    );
 
     test('Size extensions & formatBytes / parseBytes', () {
-      expect(1024.bytes.formatted(), equals('1.0 KiB'));
+      expect(1024.bytes.formatBytes(), equals('1.0 KiB'));
       expect(formatBytes(1048576), equals('1.0 MiB'));
       expect(parseBytes('1.5 MB'), equals(1500000));
       expect(parseBytes('2 GiB'), equals(2 * 1024 * 1024 * 1024));
@@ -356,7 +418,12 @@ void main() {
     });
 
     test('Hashing functions: sha256Hash, md5Hash, hmacSha256', () {
-      expect(sha256Hash('hello'), equals('2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'));
+      expect(
+        sha256Hash('hello'),
+        equals(
+          '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+        ),
+      );
       expect(md5Hash('hello'), equals('5d41402abc4b2a76b9719d911017c592'));
       expect(hmacSha256('secret', 'message'), isNotEmpty);
     });
@@ -386,7 +453,13 @@ void main() {
       final csv = parseCsv('a,b,c\n1,2,3\n4,5,6');
       expect(csv.length, equals(2));
       expect(csv[0], equals(['1', '2', '3']));
-      expect(toCsvString([['x', 'y'], ['1', '2']]), contains('x,y'));
+      expect(
+        toCsvString([
+          ['x', 'y'],
+          ['1', '2'],
+        ]),
+        contains('x,y'),
+      );
     });
 
     test('parseRobots and parseSitemap', () {
@@ -406,7 +479,10 @@ void main() {
   group('v8.0.0 System Helpers', () {
     test('env and which', () {
       expect(env['PATH'] ?? env['Path'], isNotNull);
-      expect(env.get('NON_EXISTENT_KEY_123', 'default_val'), equals('default_val'));
+      expect(
+        env.get('NON_EXISTENT_KEY_123', 'default_val'),
+        equals('default_val'),
+      );
 
       final dartExe = which('dart');
       expect(dartExe, isNotNull);
@@ -419,7 +495,7 @@ void main() {
     });
   });
 
-  group('v8.0.0 Discoverable Static Helper Hubs', () {
+  group('top-level function surface', () {
     late Directory tempDir;
 
     setUp(() async {
@@ -432,31 +508,28 @@ void main() {
       }
     });
 
-    test('Files & IO static hubs', () async {
+    test('top-level file functions', () async {
       final file = p.join(tempDir.path, 'note.txt');
-      await Files.writeText(file, 'static hub content');
-      expect(Files.exists(file), isTrue);
-      expect(Files.isFile(file), isTrue);
-      expect(await Files.readText(file), equals('static hub content'));
-      expect(Files.readTextSync(file), equals('static hub content'));
-
-      // Alias IO
-      expect(await IO.readText(file), equals('static hub content'));
+      await writeText(file, 'static hub content');
+      expect(pathExists(file), isTrue);
+      expect(fileExists(file), isTrue);
+      expect(await readText(file), equals('static hub content'));
+      expect(readTextSync(file), equals('static hub content'));
 
       final jsonFile = p.join(tempDir.path, 'data.json');
-      await Files.writeJson(jsonFile, {'status': 'ok'});
-      final data = await Files.readJson(jsonFile) as Map<String, dynamic>;
+      await writeJson(jsonFile, {'status': 'ok'});
+      final data = await readJson(jsonFile) as Map<String, dynamic>;
       expect(data['status'], equals('ok'));
 
-      final list = await Files.list(tempDir.path);
+      final list = await listDir(tempDir.path);
       expect(list.length, equals(2));
     });
 
     test('Http static hub', () async {
-      expect(Http.client, isNotNull);
+      expect(httpClient, isNotNull);
 
-      // We can also test Http.crawl creation
-      final crawler = Http.crawl(['https://example.com']);
+      // We can also test crawl creation
+      final crawler = crawl(['https://example.com']);
       expect(crawler, isNotNull);
 
       // Verify serveOnce
@@ -467,7 +540,7 @@ void main() {
       });
 
       try {
-        final res = await Http.get('http://${server.address.host}:${server.port}');
+        final res = await get('http://${server.address.host}:${server.port}');
         expect(res.ok, isTrue);
         expect(res.text, equals('ok from local'));
       } finally {
@@ -476,35 +549,39 @@ void main() {
     });
 
     test('System & Sys static hubs', () async {
-      final res = await System.run('dart', ['--version']);
+      final res = await run('dart', ['--version']);
       expect(res.ok, isTrue);
 
-      final whichDart = System.which('dart');
+      final whichDart = which('dart');
       expect(whichDart, isNotNull);
 
       // Sys alias
-      expect(Sys.which('dart'), equals(whichDart));
-      expect(System.env, isNotNull);
+      expect(which('dart'), equals(whichDart));
+      expect(env, isNotNull);
     });
 
     test('Env static hub', () {
-      Env.set('V8_TEST_KEY', 'v8_secret_val');
-      expect(Env.has('V8_TEST_KEY'), isTrue);
-      expect(Env.read('V8_TEST_KEY'), equals('v8_secret_val'));
-      expect(Env.get('V8_TEST_KEY', 'default'), equals('v8_secret_val'));
-      expect(Env.get('MISSING_KEY_999', 'fallback'), equals('fallback'));
-      expect(Env.require('V8_TEST_KEY'), equals('v8_secret_val'));
+      env.set('V8_TEST_KEY', 'v8_secret_val');
+      expect(env.has('V8_TEST_KEY'), isTrue);
+      expect(env['V8_TEST_KEY'], equals('v8_secret_val'));
+      expect(env.get('V8_TEST_KEY', 'default'), equals('v8_secret_val'));
+      expect(env.get('MISSING_KEY_999', 'fallback'), equals('fallback'));
+      expect(env.require('V8_TEST_KEY'), equals('v8_secret_val'));
 
-      Env.delete('V8_TEST_KEY');
-      expect(Env.has('V8_TEST_KEY'), isFalse);
+      env.delete('V8_TEST_KEY');
+      expect(env.has('V8_TEST_KEY'), isFalse);
     });
 
     test('Concurrent static hub', () async {
       final items = [1, 2, 3, 4];
-      final squares = await Concurrent.map(items, (n) async => n * n, concurrency: 2);
+      final squares = await parallelMap(
+        items,
+        (n) async => n * n,
+        concurrency: 2,
+      );
       expect(squares, equals([1, 4, 9, 16]));
 
-      final settled = await Concurrent.settle(items, (n) async {
+      final settled = await settle(items, (n) async {
         if (n == 3) throw Exception('bad number 3');
         return n * 10;
       });
@@ -513,41 +590,52 @@ void main() {
       expect(settled[2].isBroke, isTrue);
 
       var retryCount = 0;
-      final retryRes = await Concurrent.retry(() async {
-        retryCount++;
-        if (retryCount < 2) throw Exception('fail once');
-        return 'success';
-      }, retries: 2, backoff: const Duration(milliseconds: 10));
+      final retryRes = await retry(
+        () async {
+          retryCount++;
+          if (retryCount < 2) throw Exception('fail once');
+          return 'success';
+        },
+        retries: 2,
+        backoff: const Duration(milliseconds: 10),
+      );
       expect(retryRes, equals('success'));
       expect(retryCount, equals(2));
 
-      await Concurrent.delay(const Duration(milliseconds: 1));
-      final limiter = Concurrent.rate(5);
+      await delay(const Duration(milliseconds: 1));
+      final limiter = RateLimiter(5);
       expect(limiter.count, equals(5));
     });
 
     test('Formats static hub', () {
-      final jsonDoc = Formats.json('{"version": 8}');
+      final jsonDoc = parseJson('{"version": 8}');
       expect(jsonDoc['version'], equals(8));
-      expect(Formats.toJson({'hello': 'world'}), contains('"hello": "world"'));
+      expect(toJsonString({'hello': 'world'}), contains('"hello": "world"'));
 
-      final html = Formats.html('<html><body><h1 class="title">Header</h1></body></html>');
+      final html = parseHtml(
+        '<html><body><h1 class="title">Header</h1></body></html>',
+      );
       expect(html.$('h1').text, equals('Header'));
 
-      final yaml = Formats.yaml('project: dart-toolkit');
+      final yaml = parseYaml('project: dart-toolkit');
       expect(yaml['project'], equals('dart-toolkit'));
-      expect(Formats.toYaml({'a': 1}), contains('a: 1'));
+      expect(toYamlString({'a': 1}), contains('a: 1'));
 
-      final csv = Formats.csv('id,name\n1,Alice');
+      final csv = parseCsv('id,name\n1,Alice');
       expect(csv.length, equals(1));
       expect(csv[0], equals(['1', 'Alice']));
-      expect(Formats.toCsv([{'id': 1, 'name': 'Alice'}]), contains('Alice'));
+      expect(
+        toCsvString([
+          {'id': 1, 'name': 'Alice'},
+        ]),
+        contains('Alice'),
+      );
 
-      final robots = Formats.robots('User-agent: *\nDisallow: /secret');
+      final robots = parseRobots('User-agent: *\nDisallow: /secret');
       expect(robots.allowed(Uri.parse('https://example.com/secret')), isFalse);
       expect(robots.allowed(Uri.parse('https://example.com/open')), isTrue);
 
-      final sitemap = Formats.sitemap('''
+      final sitemap = parseSitemap('''
         <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
           <url><loc>https://example.com/page</loc></url>
         </urlset>
@@ -556,60 +644,69 @@ void main() {
     });
 
     test('Text static hub', () {
-      expect(Text.slug('Hello, World! 2026'), equals('hello-world-2026'));
-      expect(Text.clean('  multi   space   text  '), equals('multi space text'));
-      expect(Text.clip('very long content string', 9), equals('very lon…'));
-      expect(Text.extractNumber(r'Total: $1,234.50 USD'), equals(1234.5));
-      expect(Text.stripTags('<p>Clean <b>text</b></p>'), equals('Clean text'));
+      expect(slugify('Hello, World! 2026'), equals('hello-world-2026'));
+      expect(cleanText('  multi   space   text  '), equals('multi space text'));
+      expect(clipText('very long content string', 9), equals('very lon…'));
+      expect(extractNumber(r'Total: $1,234.50 USD'), equals(1234.5));
+      expect(stripHtmlTags('<p>Clean <b>text</b></p>'), equals('Clean text'));
     });
 
     test('Time static hub', () {
-      expect(Time.format(const Duration(minutes: 5, seconds: 30)), equals('05:30'));
-      expect(Time.format(const Duration(hours: 1, minutes: 2, seconds: 3)), equals('01:02:03'));
-      expect(Time.stamp(), matches(RegExp(r'^\d{8}_\d{6}$')));
-      expect(Time.ago(DateTime.now().subtract(const Duration(minutes: 10))), contains('m ago'));
+      expect(
+        formatDuration(const Duration(minutes: 5, seconds: 30)),
+        equals('05:30'),
+      );
+      expect(
+        formatDuration(const Duration(hours: 1, minutes: 2, seconds: 3)),
+        equals('01:02:03'),
+      );
+      expect(timestamp(), matches(RegExp(r'^\d{8}_\d{6}$')));
+      expect(
+        timeAgo(DateTime.now().subtract(const Duration(minutes: 10))),
+        contains('m ago'),
+      );
 
-      final parsed = Time.parse('2026-09-12');
+      final parsed = parseTime('2026-09-12');
       expect(parsed?.year, equals(2026));
       expect(parsed?.month, equals(9));
       expect(parsed?.day, equals(12));
     });
 
     test('Hash static hub', () {
-      final sha = Hash.sha256('dart-toolkit');
+      final sha = sha256Hash('dart-toolkit');
       expect(sha.length, equals(64));
 
-      final md5 = Hash.md5('dart-toolkit');
+      final md5 = md5Hash('dart-toolkit');
       expect(md5.length, equals(32));
 
-      final sig = Hash.hmac('secret-key', 'data-payload');
+      final sig = hmacSha256('data-payload', 'secret-key');
       expect(sig.length, equals(64));
     });
 
     test('Size static hub', () {
-      expect(Size.format(1024), equals('1.0 KiB'));
-      expect(Size.format(1048576), equals('1.0 MiB'));
-      expect(Size.parse('1.0 MiB'), equals(1048576));
-      expect(Size.parse('500 B'), equals(500));
+      expect(formatBytes(1024), equals('1.0 KiB'));
+      expect(formatBytes(1048576), equals('1.0 MiB'));
+      expect(parseBytes('1.0 MiB'), equals(1048576));
+      expect(parseBytes('500 B'), equals(500));
     });
 
     test('Rand static hub', () {
       final list = [10, 20, 30, 40];
-      final picked = Rand.pick(list);
+      final picked = randomPick(list);
       expect(list, contains(picked));
 
-      final shuffled = Rand.shuffle(list);
+      final shuffled = randomShuffle(list);
       expect(shuffled.length, equals(4));
       expect(shuffled, containsAll(list));
 
-      final between = Rand.between(5, 15);
+      final between = randomBetween(5, 15);
       expect(between, greaterThanOrEqualTo(5));
       expect(between, lessThan(15));
 
-      final id = Rand.id(16);
+      final id = randomId(16);
       expect(id.length, equals(16));
 
-      final jittered = Rand.jitter(const Duration(seconds: 1));
+      final jittered = jitter(const Duration(seconds: 1));
       expect(jittered, greaterThanOrEqualTo(const Duration(seconds: 1)));
     });
   });

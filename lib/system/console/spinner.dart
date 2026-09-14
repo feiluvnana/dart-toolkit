@@ -57,7 +57,7 @@ class Spinner {
     this.frames = braille,
     this.interval = const Duration(milliseconds: 80),
     ConsoleWriter? writer,
-  }) : writer = writer ?? ConsoleWriter();
+  }) : writer = writer ?? sharedConsoleWriter;
 
   /// Whether the spinner is currently animating.
   bool get spinning => _timer != null;

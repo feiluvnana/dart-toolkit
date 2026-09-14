@@ -17,11 +17,10 @@ void main() {
     });
 
     test('Iterables.generate creates elements by index', () {
-      expect(Iterables.generate(3, (i) => 'item-$i').toList(), equals([
-        'item-0',
-        'item-1',
-        'item-2',
-      ]));
+      expect(
+        Iterables.generate(3, (i) => 'item-$i').toList(),
+        equals(['item-0', 'item-1', 'item-2']),
+      );
     });
 
     test('Iterables.iterate generates from seed', () {
@@ -62,7 +61,13 @@ void main() {
     });
 
     test('Iterables.partition splits into matching and non-matching', () {
-      final (evens, odds) = Iterables.partition([1, 2, 3, 4, 5], (n) => n.isEven);
+      final (evens, odds) = Iterables.partition([
+        1,
+        2,
+        3,
+        4,
+        5,
+      ], (n) => n.isEven);
       expect(evens, equals([2, 4]));
       expect(odds, equals([1, 3, 5]));
     });
@@ -78,10 +83,7 @@ void main() {
   group('IterableExtensions', () {
     test('filter and flatMap and mapNotNull', () {
       expect([1, 2, 3, 4].filter((n) => n.isEven).toList(), equals([2, 4]));
-      expect(
-        ['1', 'x', '3'].mapNotNull(int.tryParse).toList(),
-        equals([1, 3]),
-      );
+      expect(['1', 'x', '3'].mapNotNull(int.tryParse).toList(), equals([1, 3]));
       expect(
         [1, 2].flatMap((n) => [n, n * 10]).toList(),
         equals([1, 10, 2, 20]),
@@ -105,13 +107,10 @@ void main() {
 
     test('distinct and unique', () {
       expect([1, 2, 1, 3, 2].distinct().toList(), equals([1, 2, 3]));
-      expect([1, 2, 1, 3, 2].unique().toList(), equals([1, 2, 3]));
+      expect([1, 2, 1, 3, 2].distinct().toList(), equals([1, 2, 3]));
 
       final words = ['apple', 'apricot', 'banana', 'blueberry'];
-      expect(
-        words.distinct((w) => w[0]).toList(),
-        equals(['apple', 'banana']),
-      );
+      expect(words.distinct((w) => w[0]).toList(), equals(['apple', 'banana']));
     });
 
     test('chunk and window', () {
@@ -142,7 +141,10 @@ void main() {
 
     test('zip, concat, intersect, minus, reversed, tap', () {
       expect([1, 2].zip(['a', 'b']).toList(), equals([(1, 'a'), (2, 'b')]));
-      expect([1, 2].zipWith(['a', 'b'], (a, b) => '$a$b').toList(), equals(['1a', '2b']));
+      expect(
+        [1, 2].zipWith(['a', 'b'], (a, b) => '$a$b').toList(),
+        equals(['1a', '2b']),
+      );
       expect([1, 2].concat([3, 4]).toList(), equals([1, 2, 3, 4]));
       expect([1, 2, 3].intersect([2, 3, 4]), equals({2, 3}));
       expect([1, 2, 3].minus([2, 4]), equals([1, 3]));
@@ -160,34 +162,44 @@ void main() {
       expect(list.whereNotNull().toList(), equals([1, 2, 3]));
     });
 
-    test('IterableTerminals: count, sum, average, max, min, maxBy, minBy, toMap, associateBy, groupBy', () {
-      expect([1, 2, 3, 4].count((n) => n.isEven), equals(2));
-      expect([1, 2, 3].sum(), equals(6));
-      expect([('a', 10), ('b', 20)].sum((item) => item.$2), equals(30));
-      expect([2, 4, 6].average(), equals(4.0));
-      expect(<int>[].average(), isNull);
-      expect([3, 1, 4, 2].max(), equals(4));
-      expect([3, 1, 4, 2].min(), equals(1));
-      expect(<int>[].max(), isNull);
-      expect(<int>[].min(), isNull);
+    test(
+      'IterableTerminals: count, sum, average, max, min, maxBy, minBy, toMap, associateBy, groupBy',
+      () {
+        expect([1, 2, 3, 4].count((n) => n.isEven), equals(2));
+        expect([1, 2, 3].sum(), equals(6));
+        expect([('a', 10), ('b', 20)].sum((item) => item.$2), equals(30));
+        expect([2, 4, 6].average(), equals(4.0));
+        expect(<int>[].average(), isNull);
+        expect([3, 1, 4, 2].max(), equals(4));
+        expect([3, 1, 4, 2].min(), equals(1));
+        expect(<int>[].max(), isNull);
+        expect(<int>[].min(), isNull);
 
-      final items = [('a', 1), ('b', 9), ('c', 5)];
-      expect(items.maxBy((e) => e.$2), equals(('b', 9)));
-      expect(items.minBy((e) => e.$2), equals(('a', 1)));
+        final items = [('a', 1), ('b', 9), ('c', 5)];
+        expect(items.maxBy((e) => e.$2), equals(('b', 9)));
+        expect(items.minBy((e) => e.$2), equals(('a', 1)));
 
-      expect(
-        items.toMap(key: (e) => e.$1, value: (e) => e.$2),
-        equals({'a': 1, 'b': 9, 'c': 5}),
-      );
-      expect(
-        items.associateBy((e) => e.$1),
-        equals({'a': ('a', 1), 'b': ('b', 9), 'c': ('c', 5)}),
-      );
+        expect(
+          items.toMap(key: (e) => e.$1, value: (e) => e.$2),
+          equals({'a': 1, 'b': 9, 'c': 5}),
+        );
+        expect(
+          items.associateBy((e) => e.$1),
+          equals({'a': ('a', 1), 'b': ('b', 9), 'c': ('c', 5)}),
+        );
 
-      final grouped = [1, 2, 3, 4, 5, 6].groupBy((n) => n % 2 == 0 ? 'even' : 'odd');
-      expect(grouped['even'], equals([2, 4, 6]));
-      expect(grouped['odd'], equals([1, 3, 5]));
-    });
+        final grouped = [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+        ].groupBy((n) => n % 2 == 0 ? 'even' : 'odd');
+        expect(grouped['even'], equals([2, 4, 6]));
+        expect(grouped['odd'], equals([1, 3, 5]));
+      },
+    );
   });
 
   group('Maps helper & MapExtensions', () {
@@ -202,7 +214,7 @@ void main() {
     test('Maps.groupBy and Maps.groupByValues', () {
       final words = ['apple', 'apricot', 'banana'];
       expect(
-        Maps.groupBy(words, (w) => w[0]),
+        words.groupBy((w) => w[0]),
         equals({
           'a': ['apple', 'apricot'],
           'b': ['banana'],
@@ -218,20 +230,17 @@ void main() {
     });
 
     test('Maps.merge with onConflict', () {
-      final merged = Maps.merge(
-        [
-          {'a': 1, 'b': 2},
-          {'b': 20, 'c': 3},
-        ],
-        onConflict: (existing, incoming) => existing + incoming,
-      );
+      final merged = Maps.merge([
+        {'a': 1, 'b': 2},
+        {'b': 20, 'c': 3},
+      ], onConflict: (existing, incoming) => existing + incoming);
       expect(merged, equals({'a': 1, 'b': 22, 'c': 3}));
     });
 
     test('Maps.zip and Maps.invert', () {
       expect(Maps.zip(['a', 'b'], [1, 2]), equals({'a': 1, 'b': 2}));
       expect(
-        Maps.invert({'a': 1, 'b': 1, 'c': 2}),
+        ({'a': 1, 'b': 1, 'c': 2}).invert(),
         equals({
           1: ['a', 'b'],
           2: ['c'],
@@ -250,24 +259,43 @@ void main() {
       expect(diff.unchanged, equals({'z': 3}));
     });
 
-    test('MapExtensions: filter, filterKeys, filterValues, mapKeys, mapValues', () {
-      final map = {'a': 1, 'b': 2, 'c': 3};
-      expect(map.filter((k, v) => v.isOdd), equals({'a': 1, 'c': 3}));
-      expect(map.filterKeys((k) => k != 'b'), equals({'a': 1, 'c': 3}));
-      expect(map.filterValues((v) => v > 1), equals({'b': 2, 'c': 3}));
-      expect(map.mapValues((k, v) => v * 10), equals({'a': 10, 'b': 20, 'c': 30}));
-      expect(map.mapKeys((k, v) => k.toUpperCase()), equals({'A': 1, 'B': 2, 'C': 3}));
-    });
+    test(
+      'MapExtensions: filter, filterKeys, filterValues, mapKeys, mapValues',
+      () {
+        final map = {'a': 1, 'b': 2, 'c': 3};
+        expect(map.filter((k, v) => v.isOdd), equals({'a': 1, 'c': 3}));
+        expect(map.filterKeys((k) => k != 'b'), equals({'a': 1, 'c': 3}));
+        expect(map.filterValues((v) => v > 1), equals({'b': 2, 'c': 3}));
+        expect(
+          map.mapValues((k, v) => v * 10),
+          equals({'a': 10, 'b': 20, 'c': 30}),
+        );
+        expect(
+          map.mapKeys((k, v) => k.toUpperCase()),
+          equals({'A': 1, 'B': 2, 'C': 3}),
+        );
+      },
+    );
 
-    test('MapExtensions: pick, omit, merge, sortedByKey, sortedByValue, pairs, invert', () {
-      final map = {'b': 2, 'a': 3, 'c': 1};
-      expect(map.pick(['a', 'b']), equals({'b': 2, 'a': 3}));
-      expect(map.omit(['b']), equals({'a': 3, 'c': 1}));
-      expect(map.sortedByKey().keys.toList(), equals(['a', 'b', 'c']));
-      expect(map.sortedByValue().values.toList(), equals([1, 2, 3]));
-      expect(map.pairs.toList(), equals([('b', 2), ('a', 3), ('c', 1)]));
-      expect(map.invert(), equals({2: ['b'], 3: ['a'], 1: ['c']}));
-    });
+    test(
+      'MapExtensions: pick, omit, merge, sortedByKey, sortedByValue, pairs, invert',
+      () {
+        final map = {'b': 2, 'a': 3, 'c': 1};
+        expect(map.pick(['a', 'b']), equals({'b': 2, 'a': 3}));
+        expect(map.omit(['b']), equals({'a': 3, 'c': 1}));
+        expect(map.sortedByKey().keys.toList(), equals(['a', 'b', 'c']));
+        expect(map.sortedByValue().values.toList(), equals([1, 2, 3]));
+        expect(map.pairs.toList(), equals([('b', 2), ('a', 3), ('c', 1)]));
+        expect(
+          map.invert(),
+          equals({
+            2: ['b'],
+            3: ['a'],
+            1: ['c'],
+          }),
+        );
+      },
+    );
   });
 
   group('Streams helper & StreamExtensions', () {
@@ -293,7 +321,11 @@ void main() {
       final a = StreamController<int>();
       final b = StreamController<String>();
 
-      final combined = Streams.combineLatest(a.stream, b.stream, (x, y) => '$x$y');
+      final combined = Streams.combineLatest(
+        a.stream,
+        b.stream,
+        (x, y) => '$x$y',
+      );
       final events = <String>[];
       combined.listen(events.add);
 
@@ -321,39 +353,44 @@ void main() {
       expect(await Streams.race([fast, slow]).first, equals(100));
     });
 
-    test('StreamExtensions: filter, mapNotNull, flatMap, distinctBy, chunk, recover, tap', () async {
-      final s = Stream.fromIterable([1, 2, 3, 4]);
-      expect(await s.filter((n) => n.isEven).toList(), equals([2, 4]));
+    test(
+      'StreamExtensions: filter, mapNotNull, flatMap, distinctBy, chunk, recover, tap',
+      () async {
+        final s = Stream.fromIterable([1, 2, 3, 4]);
+        expect(await s.filter((n) => n.isEven).toList(), equals([2, 4]));
 
-      final s2 = Stream.fromIterable(['1', 'bad', '3']);
-      expect(await s2.mapNotNull(int.tryParse).toList(), equals([1, 3]));
+        final s2 = Stream.fromIterable(['1', 'bad', '3']);
+        expect(await s2.mapNotNull(int.tryParse).toList(), equals([1, 3]));
 
-      final s3 = Stream.fromIterable([1, 2]);
-      expect(
-        await s3.flatMap((n) => Stream.fromIterable([n, n * 10])).toList(),
-        equals([1, 10, 2, 20]),
-      );
+        final s3 = Stream.fromIterable([1, 2]);
+        expect(
+          await s3.flatMap((n) => Stream.fromIterable([n, n * 10])).toList(),
+          equals([1, 10, 2, 20]),
+        );
 
-      final s4 = Stream.fromIterable([1, 1, 2, 2, 3, 1]);
-      expect(await s4.distinctBy().toList(), equals([1, 2, 3, 1]));
+        final s4 = Stream.fromIterable([1, 1, 2, 2, 3, 1]);
+        expect(await s4.distinctBy().toList(), equals([1, 2, 3, 1]));
 
-      final s5 = Stream.fromIterable([1, 2, 3, 4, 5]);
-      expect(
-        await s5.chunk(2).toList(),
-        equals([
-          [1, 2],
-          [3, 4],
-          [5],
-        ]),
-      );
+        final s5 = Stream.fromIterable([1, 2, 3, 4, 5]);
+        expect(
+          await s5.chunk(2).toList(),
+          equals([
+            [1, 2],
+            [3, 4],
+            [5],
+          ]),
+        );
 
-      final errStream = Stream<int>.error(Exception('boom')).recover((_) => 999);
-      expect(await errStream.first, equals(999));
+        final errStream = Stream<int>.error(
+          Exception('boom'),
+        ).recover((_) => 999);
+        expect(await errStream.first, equals(999));
 
-      final tapped = <int>[];
-      await Stream.fromIterable([1, 2]).tap(tapped.add).toList();
-      expect(tapped, equals([1, 2]));
-    });
+        final tapped = <int>[];
+        await Stream.fromIterable([1, 2]).tap(tapped.add).toList();
+        expect(tapped, equals([1, 2]));
+      },
+    );
 
     test('NullableStreamExtensions nonNull and whereNotNull', () async {
       final s = Stream<int?>.fromIterable([1, null, 2, null, 3]);
@@ -364,7 +401,10 @@ void main() {
     });
 
     test('StreamTerminals: count, firstOrNull, lastOrNull', () async {
-      expect(await Stream.fromIterable([1, 2, 3, 4]).count((n) => n.isEven), equals(2));
+      expect(
+        await Stream.fromIterable([1, 2, 3, 4]).count((n) => n.isEven),
+        equals(2),
+      );
       expect(await Stream.fromIterable([1, 2, 3]).firstOrNull, equals(1));
       expect(await Stream<int>.empty().firstOrNull, isNull);
       expect(await Stream.fromIterable([1, 2, 3]).lastOrNull, equals(3));

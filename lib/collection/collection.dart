@@ -1,6 +1,17 @@
-/// # Native Dart 3 Collections & Stream Extensions
+/// # Collections
 ///
-/// Zero-allocation, idiomatic extensions directly on standard Dart [Iterable], [Stream], and [Map].
+/// Extensions directly on the standard [Iterable], [Stream] and [Map] — no
+/// wrapper types, no pipeline objects, nothing to convert into or out of:
+///
+/// ```dart
+/// items.sortedBy((s) => s.length).chunk(2);
+/// await urls.parallelMap(get, concurrency: 5);
+/// rows.groupBy((r) => r.name);
+/// ```
+///
+/// The three `Iterables`, `Maps` and `Streams` classes hold only what has no
+/// receiver to hang off: factories such as `Iterables.range` and n-ary
+/// combinators such as `Streams.merge`.
 library;
 
 export 'iterable_extensions.dart';

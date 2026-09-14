@@ -1,6 +1,6 @@
 /// # Inter-process Locking (internal)
 ///
-/// The machinery behind `io.lock`: an exclusively created lock file holding
+/// The machinery behind [withLock]: an exclusively created lock file holding
 /// the pid that took it, a liveness check so a stale lock is diagnosable
 /// rather than permanent, and release on normal return, on throw, and on
 /// Ctrl-C.
@@ -51,7 +51,7 @@ class Lock {
 
   /// Runs [action] holding the lock at [path].
   ///
-  /// See `io.lock`, which is how a script reaches this.
+  /// See [withLock], which is how a script reaches this.
   static Future<R> hold<R>(
     String path,
     FutureOr<R> Function() action, {

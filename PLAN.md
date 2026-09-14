@@ -1,7 +1,7 @@
-# dart-toolkit 8.0.0: Architecture & Redesign Plan
+# dart-toolkit 8.1.0: Architecture & Redesign Plan
 
 > **Version**: 8.0.0-dev  
-> **Status**: Proposed / Under Review  
+> **Status**: Delivered  
 > **Target**: Dart 3.10+ (Modern Idiomatic Dart)  
 > **Theme**: *Old convention out of the window.* Maximum DX, concise & idiomatic Dart, zero bloat, high performance.
 
@@ -30,27 +30,27 @@ For **8.0.0**, the old pseudo-namespace convention is completely abandoned:
 
 ## 2. At a Glance: 7.x vs 8.0.0
 
-| Domain / Area | 7.x (Namespace Approach) | 8.0.0 (Idiomatic Dart & Modern DX) | Discoverable Static Hub |
-| :--- | :--- | :--- | :--- |
-| **HTTP Requests** | `net.http.get(url)`, `net.http.post(url)` | `get(url)`, `post(url)` | `Http.get(...)`, `Http.post(...)` |
-| **HTTP Response** | `Reply` (`res.body`, `res.parse(...)`) | `Response` (`res.text`, `res.json`, `res.html`, `res.$('a')`) | `Response` |
-| **Web Crawling** | `net.crawl([Fetch(url)].seq, next)..concurrent(4)` | `crawl([url], next)` -> `Stream<Response>` | `Http.crawl(...)` |
-| **Atomic File Write** | `io.write(path, text)`, `io.dump(path, data)` | `writeText(path, text)`, `writeJson(path, data)` | `Files.writeText(...)`, `Files.writeJson(...)` |
-| **File Read** | `io.read(path)`, `io.lines(path)` | `readText(path)`, `readLines(path)`, `readJson(path)` | `Files.readText(...)`, `Files.readJson(...)` |
-| **Path Manipulation**| `io.path.join(...)`, `io.path.dirname(...)` | `p.join(...)` (re-exported `path`) | `p.join(...)`, `p.dirname(...)` |
-| **Directories** | `io.dir.list(path)`, `io.dir.walk(path)` | `listDir(path)`, `walkDir(path)`, `makeDir(path)` | `Files.list(...)`, `Files.walk(...)` |
-| **File Locking** | `io.lock(path, () => ...)` | `withLock(path, () => ...)` | `Files.lock(...)` / `IO.lock(...)` |
-| **Subprocesses** | `system.run('git', ['status'])` | `run('git', ['status'])` -> `ProcessResult` with `.ok` | `System.run(...)` / `Sys.run(...)` |
-| **Process Cleanup** | `system.on.exit(...)`, `system.shutdown()` | `onExit(...)`, `shutdown([code])` | `System.onExit(...)`, `System.shutdown(...)` |
-| **Environment** | `system.env.get('K')`, `system.env.load()` | `env['K']`, `env.get('K', default)`, `loadEnv()` | `Env['K']`, `Env.get(...)`, `Env.load()` |
-| **Concurrency** | `concurrent.run(items, worker, size: 4)` | `items.parallelMap(worker, concurrency: 4)` | `Concurrent.map(...)` |
-| **Failure Tolerance**| `concurrent.settle(items, worker)` | `items.settle(worker)` -> `List<Settled<T>>` | `Concurrent.settle(...)` |
-| **Rate Limiting** | `concurrent.rate(10, per: 1.s)` | `RateLimiter(10, per: 1.seconds)` | `Concurrent.rate(...)` |
-| **Retry with Backoff**| `concurrent.retry(fn, retries: 3)` | `retry(fn, retries: 3, backoff: 100.ms)` | `Concurrent.retry(...)` |
-| **Collections** | `Sequence`, `Dictionary`, `Flow`, `.through(...)` | Native `Iterable<T>` & `Stream<T>` extensions | `.chunk()`, `.sortedBy()`, `.groupBy()` |
-| **CLI Arguments** | `cli.flag(...)`, `cli.parse(args)` | `CliParser()`, `args.flag('f')` | `CliParser()` |
-| **Formats** | `format.html`, `format.json`, `format.zip` | `parseHtml()`, `parseJson()`, `zip()`, `unzip()` | `Formats.json(...)`, `Formats.zip(...)` |
-| **Utilities** | `util.time.wait(250.ms)`, `util.text.slug(s)` | `delay(250.ms)`, `s.toSlug()`, `sha256Hash(s)` | `Text.slug(...)`, `Time.format(...)`, `Hash.sha256(...)` |
+| Domain / Area | 7.x (Namespace Approach) | 8.0.0 (Idiomatic Dart & Modern DX) |
+| :--- | :--- | :--- |
+| **HTTP Requests** | `net.http.get(url)`, `net.http.post(url)` | `get(url)`, `post(url)` |
+| **HTTP Response** | `Reply` (`res.body`, `res.parse(...)`) | `Response` (`res.text`, `res.json`, `res.html`, `res.$('a')`) |
+| **Web Crawling** | `net.crawl([Fetch(url)].seq, next)..concurrent(4)` | `crawl([url], next)` -> `Stream<Response>` |
+| **Atomic File Write** | `io.write(path, text)`, `io.dump(path, data)` | `writeText(path, text)`, `writeJson(path, data)` |
+| **File Read** | `io.read(path)`, `io.lines(path)` | `readText(path)`, `readLines(path)`, `readJson(path)` |
+| **Path Manipulation**| `io.path.join(...)`, `io.path.dirname(...)` | `p.join(...)` (re-exported `path`) |
+| **Directories** | `io.dir.list(path)`, `io.dir.walk(path)` | `listDir(path)`, `walkDir(path)`, `makeDir(path)` |
+| **File Locking** | `io.lock(path, () => ...)` | `withLock(path, () => ...)` |
+| **Subprocesses** | `system.run('git', ['status'])` | `run('git', ['status'])` -> `ProcessResult` with `.ok` |
+| **Process Cleanup** | `system.on.exit(...)`, `system.shutdown()` | `onExit(...)`, `shutdown([code])` |
+| **Environment** | `system.env.get('K')`, `system.env.load()` | `env['K']`, `env.get('K', default)`, `loadEnv()` |
+| **Concurrency** | `concurrent.run(items, worker, size: 4)` | `items.parallelMap(worker, concurrency: 4)` |
+| **Failure Tolerance**| `concurrent.settle(items, worker)` | `items.settle(worker)` -> `List<Settled<T>>` |
+| **Rate Limiting** | `concurrent.rate(10, per: 1.s)` | `RateLimiter(10, per: 1.seconds)` |
+| **Retry with Backoff**| `concurrent.retry(fn, retries: 3)` | `retry(fn, retries: 3, backoff: 100.ms)` |
+| **Collections** | `Sequence`, `Dictionary`, `Flow`, `.through(...)` | Native `Iterable<T>` & `Stream<T>` extensions |
+| **CLI Arguments** | `cli.flag(...)`, `cli.parse(args)` | `CliParser()`, `args.flag('f')` |
+| **Formats** | `format.html`, `format.json`, `format.zip` | `parseHtml()`, `parseJson()`, `zip()`, `unzip()` |
+| **Utilities** | `util.time.wait(250.ms)`, `util.text.slug(s)` | `delay(250.ms)`, `s.toSlug()`, `sha256Hash(s)` |
 
 ---
 
@@ -643,7 +643,7 @@ flowchart TD
 
 With the completion of the modern 8.0 APIs (top-level functions, native Dart 3 extensions, and discoverable static hubs `Files`, `Http`, `System`, `Env`, `Concurrent`, `Formats`, `Text`, `Time`, `Hash`, `Size`, `Rand`), all remaining legacy traces are marked for immediate deletion:
 
-### 9.1 Files and Components to Delete
+### 9.1 Files and Components Deleted
 
 1. **Pipeline & Container Wrappers**:
    - `lib/collection/transformer.dart` (`Transformer` class and dot-shorthands)
@@ -671,3 +671,55 @@ With the completion of the modern 8.0 APIs (top-level functions, native Dart 3 e
 4. **Active Test Suite Migration**:
    - Update `test/crawler_pipeline_test.dart`, `test/form_test.dart`, `test/console_test.dart`, `test/docs_test.dart` to use native `List` / `Iterable` and modern 8.0 APIs.
 
+
+
+---
+
+## 10. Phase 3: Collapsing the Duplicate Surface
+
+Phase 2 left the library with **two** complete public surfaces: the top-level
+functions above, and a parallel set of `abstract final class` "discoverable
+static hubs" (`Files`, `Http`, `System`, `Env`, `Concurrent`, `Formats`,
+`Text`, `Time`, `Hash`, `Size`, `Rand`) whose ~197 members re-implemented them
+by copy-paste rather than forwarding. The two had already drifted —
+`Files.readBytes` returned `Uint8List` where the top-level `readBytes`
+returned `List<int>` — which is what a duplicated surface always does.
+
+The hubs were the removed namespace convention re-introduced with a capital
+letter (`io.read` → `Files.readText`), so they went the same way:
+
+1. **Every hub deleted.** Members without a top-level equivalent were promoted
+   to one (`appendText`, `pathExists`, `hasContent`, `fileHash`, `sweepDir`,
+   `dirSize`, `isDirEmpty`, `createLink`, `readLink`, `cpuCount`, `trackFile`,
+   `adoptProcess`, `withHttpClient`, `useHttpClient`, `parseDuration`,
+   `startOfDay`, `seedRandom`, `randomChance`, `zipBytes`, `listArchive`,
+   `extractFromArchive`, `gzipBytes`, and the `Text` family).
+2. **Every `*Accessor` deleted or renamed.** `TextAccessor`, `TimeAccessor`,
+   `SizeAccessor`, `RandAccessor`, `HashAccessor`, `SystemAccessor`,
+   `CliAccessor`, `ConsoleAccessor` and `ZipAccessor` held the implementations
+   the hubs and the extensions both forwarded to — five spellings of `slug`.
+   The implementation now lives in the top-level function, and the extension
+   method calls it. The seven `format` accessors are a real seam and were
+   renamed to what they are: `HtmlCodec`, `JsonCodec`, `YamlCodec`,
+   `TomlCodec`, `CsvCodec`, `RobotsCodec`, `SitemapCodec`.
+3. **The last two singletons deleted.** `cli` and `system` survived Phase 2;
+   `cli` was a *mutable global parser*, so declarations leaked between tests.
+   `CliParser` absorbed `CliAccessor`, and `ParsedCli` — a third layer that
+   re-read options by name that the caller already held an `Opt<T>` for — went
+   with it.
+4. **Synonyms removed.** `distinct`/`unique`, `average`/`avg`,
+   `Response`/`Reply`, `Crawler`/`Crawl`, `serveOnce`/`once`,
+   `retry`/`concurrentRetry`, `isFile`/`isfile`, `Environment.int`/`getInt`,
+   `Text.number`/`extractNumber`, `RateLimiter`/`Limiter`, `Files`/`IO`,
+   `System`/`Sys` — and `Hash.hmac(key, message)` / `Hash.sign(input, key)`,
+   two `Object` parameters in **opposite orders** under two names, which
+   compiled either way and silently produced the wrong signature.
+5. **One name per concept in the CLI.** `abbr`/`alias`, `help`/`desc`,
+   `defaultsTo`/`def` and `splitCommas`/`csv` were accepted as duplicate named
+   parameter *pairs* resolved with `??`. The `package:args` spelling survives.
+6. **`lowerCamelCase` finished.** `onprogress`, `onretry`, `onchange`,
+   `isfile`, `isdir`, `islink`, `allflags`, `alloptions`, `allcommands`.
+
+`NAMESPACE.md` is deleted, and the library doc comment on every barrel — which
+still taught `io.*`/`net.*`/`util.*` and linked classes that no longer existed
+(`PathAccessor.join`, `DirAccessor.make`) — was rewritten.

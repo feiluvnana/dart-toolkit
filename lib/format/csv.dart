@@ -1,28 +1,28 @@
-/// # CSV (`format.csv.*`)
+/// # CSV
 ///
 /// An RFC 4180 reader and writer with no external dependency: quoted fields,
 /// escaped quotes, `\r\n` or `\n` line endings, and a delimiter of any length.
 ///
-/// It is a codec, spelled exactly like [JsonAccessor], [YamlAccessor] and
-/// [TomlAccessor] — `parse`, `read`, `format` — and it sat under `io` through
-/// 5.1.0 for a historical reason rather than a rule. Rule 1 is explicit that a
+/// It is a codec, spelled exactly like [JsonFormat], [YamlFormat] and
+/// [TomlFormat] — `parse`, `read`, `format` — and it sat under `io` through
+/// 5.1.0 for a historical reason. It is clear that a
 /// file format is a *subject*, which is the sentence that admitted
-/// `format.zip`, then `format.json`, `yaml`, `toml` and `html`. CSV was the
+/// archives, then [parseJson], [parseYaml], [parseToml] and [parseHtml]. CSV was the
 /// one left outside.
 ///
 /// 4.0.0 and 5.0.0 both deferred the move with the same worry — that splitting
-/// `io.csv` would create two spellings for *read a CSV file*. The [Codec] seam
-/// 4.0.0 built is what answers it: [read] is inherited from [FileCodec]
+/// A second CSV home would create two spellings for *read a CSV file*. The [DocumentFormat] seam
+/// 4.0.0 built is what answers it: [read] is inherited from [FileFormat]
 /// exactly as the other five inherit it, so there is one spelling, and the
-/// streaming members stay in `io.csv` because they are about a file larger
+/// streaming members stay in `io/csv.dart` because they are about a file larger
 /// than memory rather than about CSV.
 ///
 /// ```dart
-/// final parsed = Formats.csv('a,b\n1,2\n');    // Csv
-/// final sheet = await const CsvAccessor().read('a.csv');    // free, from FileCodec
-/// Files.writeTextSync('out.csv', Formats.toCsv(sheet.maps));
+/// final parsed = parseCsv('a,b\n1,2\n');    // Csv
+/// final sheet = await const CsvFormat().read('a.csv');    // free, from FileFormat
+/// writeTextSync('out.csv', toCsvString(sheet.maps));
 ///
-/// final fetched = res.parse(Codec.csv);          // and this now works
+/// final fetched = res.parse(DocumentFormat.csv);          // and this now works
 /// ```
 ///
 /// That last line is the unlock. A crawl that fetches a CSV export had no way
@@ -31,7 +31,7 @@
 library;
 
 import '../src/csvtext.dart';
-import '../src/codec.dart';
+import '../src/format.dart';
 import '../src/csv.dart';
 import 'format.dart';
 
@@ -39,16 +39,16 @@ import 'format.dart';
 // CSV (format.csv.*)
 // ============================================================================
 
-/// Entry point for CSV, reachable as `format.csv`.
+/// The CSV codec. Reach it as [parseCsv] or [DocumentFormat.csv].
 ///
-/// Reading a file too large to hold is `io.csv.rows` and `io.csv.records`,
-/// and writing one a row at a time is `io.async.csv.write`. Those are about
+/// Reading a file too large to hold is [readCsvRows] and [readCsvRecords],
+/// and writing one a row at a time is [writeCsv]. Those are about
 /// files, and they stayed where files live.
-class CsvAccessor
-    with FileCodec<Csv, Iterable<Map<String, Object?>>>
-    implements Codec<Csv> {
-  /// Creates the accessor. Prefer the shared `format.csv` instance.
-  const CsvAccessor();
+class CsvFormat
+    with FileFormat<Csv, Iterable<Map<String, Object?>>>
+    implements DocumentFormat<Csv> {
+  /// Creates the codec. Prefer the shared [DocumentFormat.csv] instance.
+  const CsvFormat();
 
   /// Decodes [text] into a [Csv] cursor, the first line naming the columns.
   ///
@@ -73,7 +73,7 @@ class CsvAccessor
   /// ending Excel and RFC 4180 expect.
   ///
   /// ```dart
-  /// Formats.toCsv([
+  /// toCsvString([
   ///   {'name': 'Ada', 'born': 1815},
   ///   {'name': 'Alan', 'born': 1912},
   /// ]);
@@ -106,22 +106,20 @@ class CsvAccessor
   /// reads back. [headers] is written as a first line when given.
   ///
   /// ```dart
-  /// Files.writeTextSync('out.csv', const CsvAccessor().cells([
+  /// writeTextSync('out.csv', const CsvFormat().cells([
   ///   ['Ada', 1815],
   ///   ['Alan', 1912],
   /// ], headers: ['name', 'born']));
   /// ```
   ///
-  /// Writing it goes through `io.write` rather than a second name here.
+  /// Writing it goes through [writeText] rather than a second name here.
   String cells(
     Iterable<List<Object?>> rows, {
     List<String>? headers,
     String delimiter = ',',
     String newline = '\n',
   }) => CsvText.cells(
-    rows is List<List<Object?>>
-        ? rows
-        : rows.cast<List<Object?>>().toList(),
+    rows is List<List<Object?>> ? rows : rows.cast<List<Object?>>().toList(),
     headers: headers,
     delimiter: delimiter,
     newline: newline,

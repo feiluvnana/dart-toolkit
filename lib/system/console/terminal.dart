@@ -11,7 +11,7 @@ import 'writer.dart';
 // TERMINAL & CURSOR CONTROL
 // ============================================================================
 
-/// Screen control, reachable as `system.console.terminal`.
+/// Screen control, built on the shared console writer.
 ///
 /// The terminal's size is [ConsoleWriter.width] and [ConsoleWriter.height]:
 /// geometry belongs to the thing that knows where the output is going.
@@ -21,7 +21,7 @@ class Terminal {
 
   /// Creates an accessor writing through [writer], or to stdout by default.
   ///
-  /// Prefer the shared `system.console.terminal`. Pass a writer of your own to
+  /// Defaults to the shared console writer. Pass a writer of your own to
   /// capture what would have been sent to the screen.
   Terminal([ConsoleWriter? writer]) : writer = writer ?? ConsoleWriter();
 
@@ -39,14 +39,14 @@ class Terminal {
   }
 }
 
-/// Cursor control, reachable as `system.console.cursor`.
+/// Cursor control, built on the shared console writer.
 class Cursor {
   /// The writer control codes are written to.
   final ConsoleWriter writer;
 
   /// Creates an accessor writing through [writer], or to stdout by default.
   ///
-  /// Prefer the shared `system.console.cursor`.
+  /// Defaults to the shared console writer.
   Cursor([ConsoleWriter? writer]) : writer = writer ?? ConsoleWriter();
 
   /// Hides the cursor.

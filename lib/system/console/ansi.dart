@@ -16,7 +16,7 @@
 /// name on the extension.**
 ///
 /// `String.width` measures what a terminal will actually render, which is
-/// what every box in `system.console` lines its columns up with.
+/// what every box in the console lines its columns up with.
 library;
 
 import 'dart:io';
@@ -361,7 +361,7 @@ class Ansi {
 ///
 /// One member per code on [Ansi], with no holes: a regression test asserts
 /// that every `static const String` there has a member of the same name here,
-/// the same way the `io` / `io.async` mirror is pinned. Adding a colour is two
+/// the same way the sync / async mirror is pinned. Adding a colour is two
 /// edits and forgetting one fails the build, which is how `black`, `bgblack`,
 /// `bgmagenta` and `bgwhite` came to be missing in the first place.
 ///

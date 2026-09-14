@@ -12,18 +12,18 @@
 /// ```dart
 /// // A headless browser, a fixture, and middleware — which had no spelling
 /// // at all before.
-/// Future<Reply> fixture(Fetch f) async =>
-///     Reply.text('<h1>hi</h1>', fetch: f);
+/// Future<Response> fixture(Fetch f) async =>
+///     Response.text('<h1>hi</h1>', fetch: f);
 ///
 /// Send logged(Send inner) => (f) async {
 ///   final res = await inner(f);
-///   print('${res.status} ${f.url}');
+///   print('${res.statusCode} ${f.url}');
 ///   return res;
 /// };
 /// ```
 ///
-/// [Fetcher] implements [Send] itself, so `net.http` is the default one and
-/// `Crawl.using` takes any of them.
+/// [Fetcher] implements [Send] itself, so [get] is the default one and
+/// `Crawler.using` takes any of them.
 library;
 
 import 'dart:async';
@@ -40,10 +40,10 @@ import 'http.dart';
 
 /// Anything that can answer a [Fetch].
 ///
-/// A [Fetcher] is one, so `net.http` is the default. A closure over a `Map`
+/// A [Fetcher] is one, so [get] is the default. A closure over a `Map`
 /// is one, which is what `MapDownloader` was a public class for. A function
 /// that wraps another is one, which is middleware and had no spelling before.
-typedef Send = Future<Reply> Function(Fetch fetch);
+typedef Send = Future<Response> Function(Fetch fetch);
 
 /// Turns [target] — a URL, raw markup, a file path or a bare string — into a
 /// [Uri].
@@ -87,7 +87,7 @@ Uri coerce(String target, {Uri? base}) {
 /// request recognises the reply and recovers what it queued it with:
 ///
 /// ```dart
-/// // setup: final res = Reply.text('');
+/// // setup: final res = Response.text('');
 /// res.follow('/song/1', tag: 'song', meta: [('title', 'Hey Jude')]);
 /// // later, for the reply to that:
 /// final name = res.fetch.meta['title'] as String?;
@@ -143,7 +143,9 @@ final class Fetch {
     this.dedupe = true,
     this.depth = 0,
   }) : headers = headers ?? {},
-       meta = {for (final (k, v) in (meta ?? const <(String, Object?)>[])) k: v};
+       meta = {
+         for (final (k, v) in (meta ?? const <(String, Object?)>[])) k: v,
+       };
 
   /// Restores a request from the map [toJson] produced.
   ///

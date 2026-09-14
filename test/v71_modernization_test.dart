@@ -3,18 +3,18 @@ import 'package:test/test.dart';
 
 void main() {
   group('Modernization Tests', () {
-    test('Codec static dot shorthands', () {
-      final jsonCodec = Codec.json;
-      final htmlCodec = Codec.html;
-      final yamlCodec = Codec.yaml;
-      final tomlCodec = Codec.toml;
-      final csvCodec = Codec.csv;
+    test('DocumentFormat static dot shorthands', () {
+      final jsonCodec = DocumentFormat.json;
+      final htmlCodec = DocumentFormat.html;
+      final yamlCodec = DocumentFormat.yaml;
+      final tomlCodec = DocumentFormat.toml;
+      final csvCodec = DocumentFormat.csv;
 
-      expect(jsonCodec, isA<Codec<Json>>());
-      expect(htmlCodec, isA<Codec<Markup>>());
-      expect(yamlCodec, isA<Codec<Json>>());
-      expect(tomlCodec, isA<Codec<Json>>());
-      expect(csvCodec, isA<Codec<Csv>>());
+      expect(jsonCodec, isA<DocumentFormat<Json>>());
+      expect(htmlCodec, isA<DocumentFormat<Markup>>());
+      expect(yamlCodec, isA<DocumentFormat<Json>>());
+      expect(tomlCodec, isA<DocumentFormat<Json>>());
+      expect(csvCodec, isA<DocumentFormat<Csv>>());
 
       final jsonDoc = jsonCodec.parse('{"status": "ok"}');
       expect(jsonDoc.text('status'), 'ok');
@@ -23,15 +23,21 @@ void main() {
       expect(htmlDoc.$('h1').text, 'Hello');
     });
 
-    test('Reply document extensions and selector shorthands', () {
-      final reply = Reply.text('<html><body><div id="content"><p>Test paragraph</p></div></body></html>');
+    test('Response document extensions and selector shorthands', () {
+      final reply = Response.text(
+        '<html><body><div id="content"><p>Test paragraph</p></div></body></html>',
+      );
       expect(reply.html, isA<Markup>());
       expect(reply.$('#content p').text, 'Test paragraph');
       expect(reply.$xpath('//div[@id="content"]/p').text, 'Test paragraph');
     });
 
     test('SysResult JSON accessors', () {
-      final res = const SysResult(code: 0, out: '{"version": "7.1.0", "active": true}', err: '');
+      final res = const SysResult(
+        exitCode: 0,
+        stdout: '{"version": "7.1.0", "active": true}',
+        stderr: '',
+      );
       expect(res.json, isA<Json>());
       expect(res.json.text('version'), '7.1.0');
       expect(res.json.flag('active'), isTrue);
@@ -41,19 +47,27 @@ void main() {
       expect(decoded['active'], isTrue);
     });
 
-    test('System.run with shell: true', () async {
-      final res = await System.run('echo', ['hello'], shell: true);
+    test('run with shell: true', () async {
+      final res = await run('echo', ['hello'], shell: true);
       expect(res.stdout.trim(), 'hello');
     });
 
     test('CliParser choose string choices', () {
       final parser = CliParser();
-      final fmt = parser.choose('format', ['mp3', 'flac', 'both'], def: 'mp3');
+      final fmt = parser.choose('format', [
+        'mp3',
+        'flac',
+        'both',
+      ], defaultsTo: 'mp3');
       parser.parse(['--format', 'flac']);
       expect(fmt(), 'flac');
 
       final parserDef = CliParser();
-      final fmtDef = parserDef.choose('format', ['mp3', 'flac', 'both'], def: 'mp3');
+      final fmtDef = parserDef.choose('format', [
+        'mp3',
+        'flac',
+        'both',
+      ], defaultsTo: 'mp3');
       parserDef.parse([]);
       expect(fmtDef(), 'mp3');
     });
@@ -64,8 +78,8 @@ void main() {
       expect(evens, [2, 4, 6]);
       expect(odds, [1, 3, 5]);
 
-      expect(numbers.avg(), 3.5);
-      expect(<int>[].avg(), isNull);
+      expect(numbers.average(), 3.5);
+      expect(<int>[].average(), isNull);
 
       final words = ['apple', 'apricot', 'banana', 'blueberry', 'cherry'];
       final byFirstLetter = words.countBy((w) => w[0]);
@@ -74,16 +88,12 @@ void main() {
       expect(byFirstLetter['c'], 1);
     });
 
-    test('Concurrent.map with progress indicator', () async {
+    test('parallelMap with progress indicator', () async {
       final items = [1, 2, 3, 4];
-      final results = await Concurrent.map(
-        items,
-        (x) async {
-          await Future<void>.delayed(const Duration(milliseconds: 10));
-          return x * 10;
-        },
-        progress: 'Calculating',
-      );
+      final results = await parallelMap(items, (x) async {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        return x * 10;
+      }, progress: 'Calculating');
       expect(results, [10, 20, 30, 40]);
     });
   });

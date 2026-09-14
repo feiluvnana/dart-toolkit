@@ -1,10 +1,10 @@
 /// # The CSV Cursor (`Csv`)
 ///
-/// What `format.csv.parse` and `format.csv.read` hand back: a table, with its
+/// What [parseCsv] and `CsvFormat().read` hand back: a table, with its
 /// header line separated from its rows.
 ///
 /// It lives in `lib/src/` for the reason [Json] and [Markup] do — it is a
-/// pure value that both `format` and `net` hand back, through [Codec], and a
+/// pure value that both `format` and `net` hand back, through [DocumentFormat], and a
 /// type `net` needs cannot live under `format`. It was under `lib/util/`
 /// through 5.4.0 and was never reachable as `util.` anything.
 ///
@@ -15,7 +15,7 @@
 /// sheet.column('a');             // Iterable<String>
 /// ```
 ///
-/// `Table` was the obvious name and `system.console` has it, so this is named
+/// `Table` was the obvious name and the console has it, so this is named
 /// for what it is over — exactly as `Json` and `Markup` are.
 library;
 
@@ -27,7 +27,7 @@ import '../src/csvtext.dart';
 
 /// A parsed CSV table: one header line, then rows.
 ///
-/// The two shapes `io.csv.maps` and `io.csv.matrix` used to be two methods
+/// The two shapes `maps` and `matrix` used to be two methods
 /// for are two getters here, [maps] and [rows], off one parse — so choosing
 /// between them no longer means choosing which method to call before you have
 /// seen the file.

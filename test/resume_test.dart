@@ -1,9 +1,9 @@
-/// Tests for a crawl that survives being interrupted. Each group names the
+/// Tests for a crawler that survives being interrupted. Each group names the
 /// behaviour that used to be impossible: the frontier was in memory only, so
 /// anything a run had not yet fetched died with the process.
 ///
 /// In 6.0.0 `Snapshot`, `Stats` and `Deduplicator` are gone as public types —
-/// the saved position is JSON off [Crawl.position], and the counters are a
+/// the saved position is JSON off [Crawler.position], and the counters are a
 /// record.
 library;
 
@@ -14,22 +14,22 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
-/// A transport that serves fixtures and stops the crawl partway, so a test
+/// A transport that serves fixtures and stops the crawler partway, so a test
 /// can see what a half-finished run leaves behind.
-Send halfway(Map<String, String> pages, int after, Crawl Function() crawl) {
+Send halfway(Map<String, String> pages, int after, Crawler Function() crawler) {
   var served = 0;
   return (fetch) async {
     served++;
-    if (served > after) crawl().stop('halfway');
-    return Reply.text(pages['${fetch.url}'] ?? '', fetch: fetch);
+    if (served > after) crawler().stop('halfway');
+    return Response.text(pages['${fetch.url}'] ?? '', fetch: fetch);
   };
 }
 
 Send serve(Map<String, String> pages) =>
-    (fetch) async => Reply.text(pages['${fetch.url}'] ?? '', fetch: fetch);
+    (fetch) async => Response.text(pages['${fetch.url}'] ?? '', fetch: fetch);
 
-Iterable<Fetch> links(Reply res) =>
-    res.parse(Codec.html).$('a').attrs('href').map(res.follow);
+Iterable<Fetch> links(Response res) =>
+    res.parse(DocumentFormat.html).$('a').attrs('href').map(res.follow);
 
 String tempPath(String name) =>
     '${Directory.systemTemp.createTempSync('dt_resume_').path}/$name';
@@ -108,32 +108,28 @@ void main() {
     });
   });
 
-  group('Crawl.position', () {
+  group('Crawler.position', () {
     test('holds the frontier, the visited set and the counters', () async {
-      final crawl = Http.crawl(
-        [
-          Fetch(Uri.parse('https://example.com/a')),
-          Fetch(Uri.parse('https://example.com/b')),
-        ],
-      )..using(serve(const {}));
+      final crawler = crawl([
+        Fetch(Uri.parse('https://example.com/a')),
+        Fetch(Uri.parse('https://example.com/b')),
+      ])..using(serve(const {}));
 
-      await crawl.run();
-      final position = crawl.position;
+      await crawler.run();
+      final position = crawler.position;
 
-      expect(position['version'], Crawl.version);
+      expect(position['version'], Crawler.version);
       expect(position['pending'], isEmpty);
       expect((position['seen'] as List), hasLength(2));
       expect((position['stats'] as Map)['fetched'], 2);
     });
 
     test('a request that was never handled stays pending', () async {
-      final path = tempPath('crawl.state');
-      addTearDown(
-        () => Directory(p.dirname(path)).deleteSync(recursive: true),
-      );
+      final path = tempPath('crawler.state');
+      addTearDown(() => Directory(p.dirname(path)).deleteSync(recursive: true));
 
-      late Crawl crawl;
-      crawl = Http.crawl([Fetch('https://example.com/1'.url)], links)
+      late Crawler crawler;
+      crawler = crawl([Fetch('https://example.com/1'.url)], links)
         ..concurrent(1)
         ..resume(path)
         ..using(
@@ -143,15 +139,15 @@ void main() {
                   '<a href="/2">2</a><a href="/3">3</a><a href="/4">4</a>',
             },
             1,
-            () => crawl,
+            () => crawler,
           ),
         );
 
-      await crawl.run();
+      await crawler.run();
 
       // Pending is what the run had not finished, which is exactly what a
-      // resumed crawl has to pick up.
-      final pending = (crawl.position['pending'] as List)
+      // resumed crawler has to pick up.
+      final pending = (crawler.position['pending'] as List)
           .cast<Map<String, Object?>>();
       expect(
         pending.map((r) => r['url']),
@@ -165,9 +161,9 @@ void main() {
 
     test('restore queues pending work past the visited set that saw it', () {
       const url = 'https://example.com/a';
-      final crawl = Http.crawl(const <Fetch>[])
+      final crawler = crawl(const <Fetch>[])
         ..restore({
-          'version': Crawl.version,
+          'version': Crawler.version,
           'pending': [
             {'url': url},
           ],
@@ -177,43 +173,42 @@ void main() {
       // Routing it through the scope checks would have dropped it as a
       // duplicate, which is exactly the request the last run had not
       // finished.
-      expect((crawl.position['pending'] as List), hasLength(1));
+      expect((crawler.position['pending'] as List), hasLength(1));
     });
 
     test('restore brings the counters back', () {
-      final crawl = Http.crawl(const <Fetch>[])
+      final crawler = crawl(const <Fetch>[])
         ..restore({
           'stats': {'fetched': 40, 'scheduled': 40},
         });
-      expect(crawl.stats.fetched, 40);
+      expect(crawler.stats.fetched, 40);
     });
 
     test('a position from a newer version is refused', () {
       expect(
-        () => Http.crawl(const <Fetch>[]).restore({
-          'version': Crawl.version + 1,
-        }),
+        () => crawl(const <Fetch>[]).restore({'version': Crawler.version + 1}),
         throwsFormatException,
       );
     });
 
-    test('a started crawl refuses to be restored', () async {
-      final crawl = Http.crawl([Fetch('https://example.com/a'.url)])
+    test('a started crawler refuses to be restored', () async {
+      final crawler = crawl([Fetch('https://example.com/a'.url)])
         ..using(serve(const {'https://example.com/a': '<h1>a</h1>'}));
-      await crawl.run();
-      expect(() => crawl.restore(const <String, Object?>{}), throwsStateError);
+      await crawler.run();
+      expect(
+        () => crawler.restore(const <String, Object?>{}),
+        throwsStateError,
+      );
     });
   });
 
-  group('Crawl.resume', () {
-    test('an interrupted crawl leaves its unfetched queue on disk', () async {
-      final path = tempPath('crawl.state');
-      addTearDown(
-        () => Directory(p.dirname(path)).deleteSync(recursive: true),
-      );
+  group('Crawler.resume', () {
+    test('an interrupted crawler leaves its unfetched queue on disk', () async {
+      final path = tempPath('crawler.state');
+      addTearDown(() => Directory(p.dirname(path)).deleteSync(recursive: true));
 
-      late Crawl crawl;
-      crawl = Http.crawl([Fetch('https://example.com/1'.url)], links)
+      late Crawler crawler;
+      crawler = crawl([Fetch('https://example.com/1'.url)], links)
         ..concurrent(1)
         ..resume(path)
         ..using(
@@ -223,11 +218,11 @@ void main() {
                   '<a href="/2">2</a><a href="/3">3</a><a href="/4">4</a>',
             },
             1,
-            () => crawl,
+            () => crawler,
           ),
         );
 
-      final stats = await crawl.run();
+      final stats = await crawler.run();
 
       expect(stats.reason, 'halfway');
       expect(File(path).existsSync(), isTrue);
@@ -246,10 +241,8 @@ void main() {
     });
 
     test('a second run fetches what the first one did not', () async {
-      final path = tempPath('crawl.state');
-      addTearDown(
-        () => Directory(p.dirname(path)).deleteSync(recursive: true),
-      );
+      final path = tempPath('crawler.state');
+      addTearDown(() => Directory(p.dirname(path)).deleteSync(recursive: true));
 
       const pages = {
         'https://example.com/1': '<a href="/2">2</a><a href="/3">3</a>',
@@ -257,23 +250,23 @@ void main() {
         'https://example.com/3': '<p>three</p>',
       };
 
-      late Crawl one;
-      one = Http.crawl([Fetch('https://example.com/1'.url)], links)
+      late Crawler one;
+      one = crawl([Fetch('https://example.com/1'.url)], links)
         ..concurrent(1)
         ..resume(path)
         ..using(halfway(pages, 1, () => one));
 
       final first = await one
-          .map((Reply res) => res.url.toString())
+          .map((Response res) => res.url.toString())
           .toList();
       expect(first, ['https://example.com/1']);
 
-      final two = Http.crawl([Fetch('https://example.com/1'.url)], links)
+      final two = crawl([Fetch('https://example.com/1'.url)], links)
         ..resume(path)
         ..using(serve(pages));
 
       final second = await two
-          .map((Reply res) => res.url.toString())
+          .map((Response res) => res.url.toString())
           .toList();
 
       // The seed is not fetched again, and the pages the first leg queued but
@@ -289,11 +282,9 @@ void main() {
       expect(File(path).existsSync(), isFalse);
     });
 
-    test('limit counts the whole crawl, not each leg of it', () async {
-      final path = tempPath('crawl.state');
-      addTearDown(
-        () => Directory(p.dirname(path)).deleteSync(recursive: true),
-      );
+    test('limit counts the whole crawler, not each leg of it', () async {
+      final path = tempPath('crawler.state');
+      addTearDown(() => Directory(p.dirname(path)).deleteSync(recursive: true));
 
       const pages = {
         'https://example.com/1': '<a href="/2">2</a><a href="/3">3</a>',
@@ -302,8 +293,8 @@ void main() {
         'https://example.com/4': '<p>four</p>',
       };
 
-      late Crawl one;
-      one = Http.crawl([Fetch('https://example.com/1'.url)], links)
+      late Crawler one;
+      one = crawl([Fetch('https://example.com/1'.url)], links)
         ..concurrent(1)
         ..resume(path)
         ..limit(2)
@@ -311,7 +302,7 @@ void main() {
       final first = await one.run();
       expect(first.fetched, 1);
 
-      final two = Http.crawl([Fetch('https://example.com/1'.url)], links)
+      final two = crawl([Fetch('https://example.com/1'.url)], links)
         ..concurrent(1)
         ..resume(path)
         ..limit(2)
@@ -322,28 +313,26 @@ void main() {
     });
 
     test('a corrupt resume file throws instead of starting over', () async {
-      final path = tempPath('crawl.state');
-      addTearDown(
-        () => Directory(p.dirname(path)).deleteSync(recursive: true),
-      );
+      final path = tempPath('crawler.state');
+      addTearDown(() => Directory(p.dirname(path)).deleteSync(recursive: true));
       File(path).writeAsStringSync('{not json');
 
-      final crawl = Http.crawl([Fetch('https://example.com/1'.url)])
+      final crawler = crawl([Fetch('https://example.com/1'.url)])
         ..resume(path)
         ..using(serve(const {}));
 
-      expect(crawl.run(), throwsFormatException);
+      expect(crawler.run(), throwsFormatException);
     });
 
     test(
-      'a finished crawl leaves no watcher holding the process open',
+      'a finished crawler leaves no watcher holding the process open',
       () async {
-        final path = tempPath('crawl.state');
+        final path = tempPath('crawler.state');
         addTearDown(
           () => Directory(p.dirname(path)).deleteSync(recursive: true),
         );
 
-        await (Http.crawl([Fetch('https://example.com/1'.url)])
+        await (crawl([Fetch('https://example.com/1'.url)])
               ..resume(path)
               ..using(serve(const {'https://example.com/1': '<p>one</p>'})))
             .run();

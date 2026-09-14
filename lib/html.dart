@@ -1,6 +1,6 @@
 /// Opt-in export for the top-level `$` and `$xpath` selectors.
 ///
-/// `format.html.parse` is the name on the default surface; these are the
+/// [parseHtml] is the name on the default surface; these are the
 /// jQuery spelling of the same thing, kept off it because `$` in every
 /// script's global scope is a cost not every script wants to pay.
 ///

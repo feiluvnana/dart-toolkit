@@ -39,16 +39,16 @@ const _login = '''
 </body></html>
 ''';
 
-Reply _page([String markup = _login]) =>
-    Reply.text(markup, fetch: Fetch('https://example.com/login'.url));
+Response _page([String markup = _login]) =>
+    Response.text(markup, fetch: Fetch('https://example.com/login'.url));
 
-/// What `Reply.form` used to be, now that `net` does not parse.
+/// What `Response.form` used to be, now that `net` does not parse.
 ///
 /// Three lines in user space, which is the point: the convenience is cheap to
-/// write and does not have to be a member of [Reply] that names a format.
-extension _FormOnReply on Reply {
+/// write and does not have to be a member of [Response] that names a format.
+extension _FormOnReply on Response {
   Form? form([String selector = 'form']) =>
-      Formats.html(body).form(selector)?.at(url);
+      parseHtml(body).form(selector)?.at(url);
 }
 
 void main() {
@@ -222,7 +222,7 @@ void main() {
     });
 
     test('a crawl submits it by returning the request it describes', () async {
-      final c = Http.crawl(
+      final c = crawl(
         [Fetch('$base/login'.url)],
         (res) => switch (res.fetch.tag) {
           null => [
@@ -247,7 +247,7 @@ void main() {
     });
 
     test('two submissions of one form are two fetches, not one', () async {
-      final c = Http.crawl(
+      final c = crawl(
         [Fetch('$base/login'.url)],
         (res) => switch (res.fetch.tag) {
           null => [

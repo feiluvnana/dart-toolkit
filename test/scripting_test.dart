@@ -1,6 +1,6 @@
 /// Tests for the parts a real script needs and had to hand-roll. Each group
 /// names what used to be missing: scraped text arrived with the page's own
-/// indentation in it, a crawl counted its failures without saying which pages
+/// indentation in it, a crawler counted its failures without saying which pages
 /// they were, results could only reach a CSV by way of memory, and a tool
 /// could not read what was piped into it without a loop of its own.
 library;
@@ -13,15 +13,15 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:dart_toolkit/html.dart';
 import 'package:test/test.dart';
 
-/// A transport that fails every request, for testing what a crawl reports.
+/// A transport that fails every request, for testing what a crawler reports.
 ///
 /// A function, not a subclass: `Downloader` was four public classes for this.
-Future<Reply> broken(Fetch fetch) async =>
+Future<Response> broken(Fetch fetch) async =>
     throw StateError('boom for ${fetch.url}');
 
 /// A transport over a map of path to body.
 Send serve(Map<String, String> pages) =>
-    (fetch) async => Reply.text(
+    (fetch) async => Response.text(
       pages[fetch.url.path] ?? pages['${fetch.url}'] ?? '',
       fetch: fetch,
     );
@@ -29,7 +29,7 @@ Send serve(Map<String, String> pages) =>
 Directory _temp(String prefix) {
   final dir = Directory.systemTemp.createTempSync(prefix);
   addTearDown(() {
-    if (dir.existsSync()) Files.removeSync(dir.path);
+    if (dir.existsSync()) removePathSync(dir.path);
   });
   return dir;
 }
@@ -55,39 +55,42 @@ void main() {
     ''';
 
     test('a selector collapses the page indentation', () {
-      final res = Reply.text(page);
-      expect(res.parse(Codec.html).$('.name').text, 'Wireless Keyboard');
-      expect(res.parse(Codec.html).$('.price').text, r'$49.99');
-      expect(res.parse(Codec.html).$('.tags li').texts, [
+      final res = Response.text(page);
+      expect(
+        res.parse(DocumentFormat.html).$('.name').text,
+        'Wireless Keyboard',
+      );
+      expect(res.parse(DocumentFormat.html).$('.price').text, r'$49.99');
+      expect(res.parse(DocumentFormat.html).$('.tags li').texts, [
         'usb',
         'bluetooth',
       ]);
     });
 
     test('extract and pick read it the same way', () {
-      final res = Reply.text(page);
+      final res = Response.text(page);
       // One text reader behind all three, so they cannot drift apart.
       expect(
-        res.parse(Codec.html).extract({'name': '.name'})['name'],
+        res.parse(DocumentFormat.html).extract({'name': '.name'})['name'],
         'Wireless Keyboard',
       );
       expect(
-        res.parse(Codec.html).pick(Field.text('.name')),
+        res.parse(DocumentFormat.html).pick(Field.text('.name')),
         'Wireless Keyboard',
       );
-      expect(res.parse(Codec.html).pick(Field.texts('.tags li')), [
+      expect(res.parse(DocumentFormat.html).pick(Field.texts('.tags li')), [
         'usb',
         'bluetooth',
       ]);
       expect(
-        res.parse(Codec.html).extract({'name': '.name@text'})['name'],
+        res.parse(DocumentFormat.html).extract({'name': '.name@text'})['name'],
         'Wireless Keyboard',
       );
     });
 
     test('a repeated sub-object reads it the same way too', () {
-      final res = Reply.text(page);
-      final data = res.parse(Codec.html).extract({
+      final res = Response.text(page);
+      final data = res.parse(DocumentFormat.html).extract({
         'items': [
           '.product',
           {'name': '.name'},
@@ -97,14 +100,14 @@ void main() {
     });
 
     test('inside a pre the whitespace is the content, and is kept', () {
-      final res = Reply.text(page);
+      final res = Response.text(page);
       // What <pre> means. Collapsing it would destroy scraped code samples.
       expect(
-        res.parse(Codec.html).$('.code').text,
+        res.parse(DocumentFormat.html).$('.code').text,
         'line one\n  indented two',
       );
       expect(
-        res.parse(Codec.html).pick(Field.text('.code')),
+        res.parse(DocumentFormat.html).pick(Field.text('.code')),
         'line one\n  indented two',
       );
     });
@@ -119,7 +122,7 @@ void main() {
       expect($(html, 'code').text, 'a\n  b');
     });
 
-    test('zero-width characters go, as Text.clean drops them', () {
+    test('zero-width characters go, as cleanText drops them', () {
       const html = '<main><p>caf​é</p></main>';
       expect($(html, 'p').text, 'café');
     });
@@ -127,52 +130,47 @@ void main() {
 
   group('which pages failed', () {
     test('settle names the reply it happened on', () async {
-      final crawl = Http.crawl([Fetch('https://example.com/a'.url)])
+      final crawler = crawl([Fetch('https://example.com/a'.url)])
         ..using(broken);
 
-      final outcomes = await crawl.settle.toList();
+      final outcomes = await crawler.settle.toList();
 
-      expect(crawl.stats.failed, 1);
+      expect(crawler.stats.failed, 1);
       // `flow` leaves failures out; `settle` puts them in band, which is what
       // `on.error` and the `Failure` type were for.
-      final broke = outcomes
-          .whereType<Broke<Reply>>()
-          .single;
+      final broke = outcomes.whereType<Broke<Response>>().single;
       expect(broke.error, isA<StateError>());
       expect(broke.stack, isNotNull);
     });
 
     test('a next that throws is reported the same way', () async {
-      final crawl = Http.crawl(
+      final crawler = crawl(
         [Fetch('https://example.com/page'.url)],
-        (Reply res) => throw StateError('next blew up'),
+        (Response res) => throw StateError('next blew up'),
       )..using(serve(const {'/page': '<h1>hi</h1>'}));
 
-      final outcomes = await crawl.settle.toList();
-      expect(
-        outcomes.whereType<Broke<Reply>>().length,
-        1,
-      );
+      final outcomes = await crawler.settle.toList();
+      expect(outcomes.whereType<Broke<Response>>().length, 1);
     });
 
     test('the failed requests can be queued again as they were', () async {
       // `Settled` does not carry the item — the caller already holds it —
-      // and a crawl's position does: a request that failed is unfinished
+      // and a crawler's position does: a request that failed is unfinished
       // work, so it is still pending.
-      final crawl = Http.crawl([Fetch('https://example.com/a'.url)])
+      final crawler = crawl([Fetch('https://example.com/a'.url)])
         ..using(broken);
-      await crawl.run();
+      await crawler.run();
 
-      final pending = (crawl.position['pending'] as List)
+      final pending = (crawler.position['pending'] as List)
           .cast<Map<String, Object?>>()
           .map(Fetch.fromJson)
           .toList();
       expect(pending.single.url.toString(), 'https://example.com/a');
 
-      final again = Http.crawl(pending)
+      final again = crawl(pending)
         ..using(serve(const {'/a': '<h1>second try</h1>'}));
       final served = await again.flow
-          .map((Reply res) => res.parse(Codec.html).$('h1').text)
+          .map((Response res) => res.parse(DocumentFormat.html).$('h1').text)
           .toList();
 
       expect(served, ['second try']);
@@ -180,9 +178,9 @@ void main() {
 
     test('a failure is unfinished work, so the resume file keeps it', () async {
       final dir = _temp('dt_fail_');
-      final path = '${dir.path}/crawl.state';
+      final path = '${dir.path}/crawler.state';
 
-      await (Http.crawl([Fetch('https://example.com/a'.url)])
+      await (crawl([Fetch('https://example.com/a'.url)])
             ..using(broken)
             ..resume(path))
           .run();
@@ -196,29 +194,27 @@ void main() {
     });
   });
 
-  group('the crawl terminals replace the event bag', () {
+  group('the crawler terminals replace the event bag', () {
     test(
       'tap is on.progress; the lines around it are start and done',
       () async {
         final seen = <String>[];
 
-        final crawl = Http.crawl([Fetch('https://example.com/a'.url)])
+        final crawler = crawl([Fetch('https://example.com/a'.url)])
           ..concurrent(1)
           ..limit(1)
           ..using(serve(const {'/a': '<h1>hi</h1>'}));
 
         seen.add('start');
-        final titles = await crawl.flow
-            .map((Reply res) {
-              seen.add('progress');
-              return res.parse(Codec.html).$('h1').text;
-            })
-            .toList();
+        final titles = await crawler.flow.map((Response res) {
+          seen.add('progress');
+          return res.parse(DocumentFormat.html).$('h1').text;
+        }).toList();
         seen.add('done');
 
         expect(seen, ['start', 'progress', 'done']);
         expect(titles, ['hi']);
-        expect(crawl.stats.fetched, 1);
+        expect(crawler.stats.fetched, 1);
       },
     );
   });
@@ -228,7 +224,7 @@ void main() {
       final dir = _temp('dt_pipe_');
       final path = '${dir.path}/out.csv';
 
-      await Files.writeCsv(
+      await writeCsv(
         path,
         Stream.fromIterable([
           {'name': 'Alice', 'role': 'admin'},
@@ -246,7 +242,7 @@ void main() {
       final dir = _temp('dt_pipe_');
       final path = '${dir.path}/out.csv';
 
-      await Files.writeCsv(
+      await writeCsv(
         path,
         Stream.fromIterable([
           {'b': '2', 'a': '1'},
@@ -261,7 +257,7 @@ void main() {
       final dir = _temp('dt_pipe_');
       final path = '${dir.path}/out.csv';
 
-      await Files.writeCsv(
+      await writeCsv(
         path,
         Stream.fromIterable([
           {'n': 1, 'letter': 'a'},
@@ -277,7 +273,7 @@ void main() {
       final dir = _temp('dt_pipe_');
       final path = '${dir.path}/out.csv';
 
-      await Files.writeCsv(
+      await writeCsv(
         path,
         Stream.fromIterable([
           {'name': 'Alice, Chief'},
@@ -287,7 +283,7 @@ void main() {
 
       expect(File(path).readAsStringSync(), 'name\r\n"Alice, Chief"\r\n');
       // And it reads back as one row.
-      expect(Formats.csv(File(path).readAsStringSync()).maps, [
+      expect(parseCsv(File(path).readAsStringSync()).maps, [
         {'name': 'Alice, Chief'},
       ]);
     });
@@ -296,7 +292,7 @@ void main() {
       final dir = _temp('dt_pipe_');
       final path = '${dir.path}/out.csv';
 
-      await Files.writeCsv(
+      await writeCsv(
         path,
         const Stream<Map<String, Object?>>.empty(),
         headers: ['a', 'b'],
@@ -310,11 +306,11 @@ void main() {
       final path = '${dir.path}/out.csv';
 
       await expectLater(
-        Files.writeCsv(
+        writeCsv(
           path,
           // Through the boundary, deliberately: a source that fails is
           // somebody else's stream, so there is no `Flow.error`.
-          Stream<Map<String, Object?>>.error(StateError('mid-crawl')),
+          Stream<Map<String, Object?>>.error(StateError('mid-crawler')),
         ),
         throwsStateError,
       );
@@ -324,13 +320,13 @@ void main() {
       expect(File('$path.part').existsSync(), isFalse);
     });
 
-    test('a crawl reaches a spreadsheet in one call', () async {
+    test('a crawler reaches a spreadsheet in one call', () async {
       final dir = _temp('dt_pipe_');
       final path = '${dir.path}/products.csv';
 
-      await Files.writeCsv(
+      await writeCsv(
         path,
-        (Http.crawl([Fetch('https://shop.test/list'.url)])..using(
+        (crawl([Fetch('https://shop.test/list'.url)])..using(
               serve(const {
                 '/list':
                     '<div class="p"><h2>\n  Wireless\n  Keyboard\n</h2>'
@@ -341,8 +337,8 @@ void main() {
             ))
             .flow
             .expand(
-              (Reply res) => res
-                  .parse(Codec.html)
+              (Response res) => res
+                  .parse(DocumentFormat.html)
                   .all(
                     '.p',
                     (Markup card) => <String, Object?>{
@@ -354,7 +350,7 @@ void main() {
         headers: ['name', 'price'],
       );
 
-      expect(Formats.csv(File(path).readAsStringSync()).maps, [
+      expect(parseCsv(File(path).readAsStringSync()).maps, [
         {'name': 'Wireless Keyboard', 'price': '49.99'},
         {'name': 'Mouse', 'price': '19.99'},
       ]);
@@ -364,25 +360,25 @@ void main() {
   group('piped stdin', () {
     test('piped says whether there is input to read', () {
       // A bool either way; under a test runner stdin is not a keyboard.
-      expect(System.console.reader.piped, isA<bool>());
+      expect(consoleReader.piped, isA<bool>());
     });
 
     test('lines reads what was piped into a script', () async {
       final dir = Directory('output/stdin_test');
       dir.createSync(recursive: true);
-      addTearDown(() => Files.removeSync(dir.path));
+      addTearDown(() => removePathSync(dir.path));
 
       // Run a real script with real piped input: that is the use case.
       File('${dir.path}/tool.dart').writeAsStringSync('''
 import 'package:dart_toolkit/dart_toolkit.dart';
 
 void main() async {
-  print('piped=\${System.console.reader.piped}');
-  await for (final line in System.console.reader.lines) {
+  print('piped=\${consoleReader.piped}');
+  await for (final line in consoleReader.lines) {
     print('got \${line.trim()}');
   }
   print('done');
-  await System.console.reader.close();
+  await consoleReader.close();
 }
 ''');
 

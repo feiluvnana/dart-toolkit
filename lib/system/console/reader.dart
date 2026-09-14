@@ -1,4 +1,4 @@
-/// # Console Reader (`system.console.reader.*`)
+/// # Console reader
 ///
 /// Interactive prompts. Input is read from a single non-blocking stdin
 /// subscription, so a [Spinner] or [Progress] bar keeps animating while a
@@ -16,7 +16,7 @@ import 'ansi.dart';
 // CONSOLE READER (system.console.reader.*)
 // ============================================================================
 
-/// Interactive prompts, reachable as `system.console.reader`.
+/// Interactive prompts, reachable as [consoleReader].
 ///
 /// ```dart
 /// final name = await consoleReader.ask('Project name');

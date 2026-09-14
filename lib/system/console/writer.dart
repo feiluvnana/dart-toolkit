@@ -21,7 +21,7 @@ import 'terminal.dart';
 // CONSOLE WRITER (ConsoleWriter)
 // ============================================================================
 
-/// Structured terminal output, reachable as `system.console.writer`.
+/// Structured terminal output, reachable as [consoleWriter].
 ///
 /// Everything in this library that writes to the screen writes through one of
 /// these — tables, rules, boxes, the logger, progress bars, spinners, and the
@@ -34,6 +34,13 @@ import 'terminal.dart';
 /// Progress(total: 2, writer: writer)..tick()..done('Finished');
 /// expect(buffer.toString(), contains('Finished'));
 /// ```
+/// The one writer the whole console domain writes through.
+///
+/// [Progress], [Spinner] and the shared [ConsoleLogger] all default to it, so
+/// a progress bar and a log line interleave correctly instead of racing on the
+/// terminal through two separate writers.
+final ConsoleWriter sharedConsoleWriter = ConsoleWriter();
+
 class ConsoleWriter {
   /// Standard output sink.
   final StringSink out;

@@ -21,7 +21,7 @@ class Cli with _Spec {
   ///
   /// The conventional `EX_USAGE`: an unknown switch, a missing required
   /// option, a value outside `allowed`, or an unrecognised command. It was
-  /// `usageExit` through 6.1.0, which Rule 4 does not allow and no splitting
+  /// `usageExit` through 6.1.0, which no splitting
   /// fixes, because the compound is this library's own rather than Dart's —
   /// so it takes the one word that says what happened.
   static const int misuse = 64;
@@ -171,7 +171,7 @@ class Cli with _Spec {
 
   void _option(String key, String value) {
     final cleanKey = _clean(key);
-    final values = (_decl(cleanKey)?.csv ?? false)
+    final values = (_decl(cleanKey)?.splitCommas ?? false)
         ? value.split(',').map((v) => v.trim()).where((v) => v.isNotEmpty)
         : [value];
     _options[cleanKey] = values.isEmpty ? value : values.last;
@@ -181,13 +181,13 @@ class Cli with _Spec {
 
   static String _clean(String name) => name.replaceFirst(RegExp(r'^-+'), '');
 
-  /// The alias to use for [name]: the one passed in, else the one declared.
+  /// The abbr to use for [name]: the one passed in, else the one declared.
   ///
-  /// So an alias given once to [flag] or [option] is honoured by every later
+  /// So an abbr given once to [flag] or [option] is honoured by every later
   /// lookup, instead of having to be repeated at each call site.
   String? _alias(String name, String? explicit) {
     if (explicit != null) return _clean(explicit);
-    return _decl(_clean(name))?.alias;
+    return _decl(_clean(name))?.abbr;
   }
 
   /// Records that switch [name] was given, and how many times.
@@ -199,16 +199,16 @@ class Cli with _Spec {
   /// How many times the command line carried [opt]. See [Opt.count].
   int _count(Opt<Object?> opt) =>
       (_tally[opt.name] ?? 0) +
-      (opt.alias != null ? (_tally[opt.alias!] ?? 0) : 0);
+      (opt.abbr != null ? (_tally[opt.abbr!] ?? 0) : 0);
 
   /// Whether the command line carried [opt] at all. See [Opt.given].
   bool _given(Opt<Object?> opt) =>
       _flags.contains(opt.name) ||
-      (opt.alias != null && _flags.contains(opt.alias!));
+      (opt.abbr != null && _flags.contains(opt.abbr!));
 
   /// Whether `--no-[name]` was given for [opt]. See [Opt.negated].
   bool _negated(Opt<Object?> opt) =>
-      _no(opt.name) || (opt.alias != null && _no(opt.alias!));
+      _no(opt.name) || (opt.abbr != null && _no(opt.abbr!));
 
   /// Whether `--no-[clean]` (or `--no[clean]`) was given.
   bool _no(String clean) =>
@@ -227,13 +227,13 @@ class Cli with _Spec {
     if (_given(opt)) return true;
     final fromEnv = _fromEnv(_decl(opt.name));
     if (fromEnv != null) return _truthy(fromEnv);
-    return opt.def;
+    return opt.defaultsTo;
   }
 
   /// The text [opt] resolved to, or `null` when nothing supplied one.
   ///
   /// The command line first, then the environment variable the declaration
-  /// names. The declared default is [Opt.def]'s job, so it stays typed.
+  /// names. The declared default is [Opt.defaultsTo]'s job, so it stays typed.
   String? _readText(Opt<Object?> opt) =>
       _value(opt) ?? _fromEnv(_decl(opt.name));
 
@@ -241,12 +241,12 @@ class Cli with _Spec {
   List<String> _readAll(Opt<Object?> opt) {
     final values = [
       ...?_repeated[opt.name],
-      if (opt.alias != null) ...?_repeated[opt.alias!],
+      if (opt.abbr != null) ...?_repeated[opt.abbr!],
     ];
     if (values.isNotEmpty) return values;
     final fromEnv = _fromEnv(_decl(opt.name));
     if (fromEnv == null) return const [];
-    if (!(_decl(opt.name)?.csv ?? false)) return [fromEnv];
+    if (!(_decl(opt.name)?.splitCommas ?? false)) return [fromEnv];
     return fromEnv
         .split(',')
         .map((value) => value.trim())
@@ -270,14 +270,14 @@ class Cli with _Spec {
     for (final name in _flags) name: _options[name],
   };
 
-  /// The value the command line carried for [opt], under its name or alias.
+  /// The value the command line carried for [opt], under its name or abbr.
   String? _value(Opt<Object?> opt) =>
-      _options[opt.name] ?? (opt.alias == null ? null : _options[opt.alias!]);
+      _options[opt.name] ?? (opt.abbr == null ? null : _options[opt.abbr!]);
 
   /// Whether [value] spells a true boolean.
   ///
   /// Accepts the words an environment variable or `.env` file is likely to
-  /// carry, matching [EnvAccessor.get].
+  /// carry, matching [Environment.get].
   static bool _truthy(String value) => switch (value.trim().toLowerCase()) {
     'true' || '1' || 'yes' || 'on' => true,
     _ => false,
@@ -294,7 +294,7 @@ class Cli with _Spec {
   /// Validates the declared contract: required arguments and allowed values.
   ///
   /// Checks that [names] — or, by default, every option declared
-  /// `required: true` — resolved to a value. A declared `def`, or an `env`
+  /// `required: true` — resolved to a value. A declared `defaultsTo`, or an `env`
   /// variable that is set, counts as supplied. Every value that *was* given is
   /// also checked against its declaration's `allowed` list.
   ///
@@ -323,13 +323,13 @@ class Cli with _Spec {
   bool _supplied(String name) {
     final clean = _clean(name);
     final decl = _decl(clean);
-    final alias = _alias(name, null);
+    final abbr = _alias(name, null);
     final present =
-        _flags.contains(clean) || (alias != null && _flags.contains(alias));
+        _flags.contains(clean) || (abbr != null && _flags.contains(abbr));
     if (decl?.flag ?? false) return present;
-    if (decl?.def != null || _fromEnv(decl) != null) return true;
+    if (decl?.defaultsTo != null || _fromEnv(decl) != null) return true;
     if (_options.containsKey(clean)) return true;
-    if (alias != null && _options.containsKey(alias)) return true;
+    if (abbr != null && _options.containsKey(abbr)) return true;
     // Undeclared names have no shape to enforce; presence is all there is.
     return decl == null && present;
   }
@@ -347,7 +347,7 @@ class Cli with _Spec {
       if (decl.flag) continue;
       final given = [
         ...?_repeated[entry.key],
-        if (decl.alias != null) ...?_repeated[decl.alias!],
+        if (decl.abbr != null) ...?_repeated[decl.abbr!],
       ];
       for (final value in given) {
         final allowed = decl.allowed;
@@ -362,9 +362,9 @@ class Cli with _Spec {
           _Shape.number when int.tryParse(value.trim()) == null => 'a number',
           _Shape.decimal when double.tryParse(value.trim()) == null =>
             'a number',
-          _Shape.duration when const TimeAccessor().span(value) == null =>
+          _Shape.duration when parseDuration(value) == null =>
             'a duration such as 30s, 5m or 1h30m',
-          _Shape.date when const TimeAccessor().parse(value) == null =>
+          _Shape.date when parseTime(value) == null =>
             'a date such as 2024-03-09',
           _ => null,
         };
@@ -391,16 +391,16 @@ class Cli with _Spec {
   ///
   /// ```dart
   /// // setup: final cli = Cli(const []);
-  /// if (cli.unknown().isNotEmpty) {
-  ///   print(cli.usage());
-  ///   await system.shutdown(Cli.misuse);
+  /// if (parser.unknown().isNotEmpty) {
+  ///   print(parser.usage());
+  ///   await shutdown(Cli.misuse);
   /// }
   /// ```
   List<String> unknown() {
     final known = <String>{
       for (final entry in _declarations.entries) ...[
         entry.key,
-        if (entry.value.alias != null) entry.value.alias!,
+        if (entry.value.abbr != null) entry.value.abbr!,
       ],
     };
     return [
@@ -459,13 +459,14 @@ class Cli with _Spec {
   /// Future<int> build(Cli cli) async => 0;
   ///
   /// void main(List<String> args) async {
-  ///   cli.handle('build', build, desc: 'Build the project');
-  ///   await system.shutdown(await cli.run(args, version: '1.1.0'));
+  ///   final parser = CliParser();
+  ///   parser.handle('build', build, help: 'Build the project');
+  ///   await shutdown(await parser.run(args, version: '1.1.0'));
   /// }
   /// ```
   Future<int> run({
     String? syntax,
-    String? desc,
+    String? description,
     String? version,
     bool strict = false,
     FutureOr<int> Function(Cli cli)? body,
@@ -478,7 +479,7 @@ class Cli with _Spec {
             this,
             (cli, self) => cli._readFlag(self),
           )
-        : flag('help', alias: 'h', desc: 'Show this message');
+        : flag('help', abbr: 'h', help: 'Show this message');
     final showVersion = version == null
         ? null
         : (_declarations.containsKey('version')
@@ -489,7 +490,7 @@ class Cli with _Spec {
                   this,
                   (cli, self) => cli._readFlag(self),
                 )
-              : flag('version', desc: 'Show the version and exit'));
+              : flag('version', help: 'Show the version and exit'));
 
     final path = _resolve();
     final target = path.isEmpty ? null : path.last;
@@ -504,7 +505,9 @@ class Cli with _Spec {
       syntax: path.isEmpty
           ? (syntax ?? '$program <command> [options]')
           : '$line $trailing',
-      desc: path.isEmpty ? desc : (target!.desc.isEmpty ? null : target.desc),
+      description: path.isEmpty
+          ? description
+          : (target!.help.isEmpty ? null : target.help),
       declarations: scoped._declarations,
       children: (target?._children ?? _children),
     );
@@ -633,12 +636,12 @@ class Cli with _Spec {
   /// along with any commands registered through [handle] or [group].
   String usage({
     String? syntax,
-    String? desc,
+    String? description,
     Map<String, String>? flags,
     Map<String, String>? options,
   }) => _usage(
     syntax: syntax,
-    desc: desc,
+    description: description,
     declarations: flags == null && options == null ? _declarations : const {},
     children: _children,
     flags: flags,
@@ -652,18 +655,18 @@ class Cli with _Spec {
 /// ones when the command runs.
 ///
 /// ```dart
-/// cli.handle('build', build, desc: 'Build the project')
-///   ..option('out', alias: 'o', def: 'dist', desc: 'Output directory')
-///   ..flag('release', desc: 'Optimise the output');
+/// parser.handle('build', build, help: 'Build the project')
+///   ..option('out', abbr: 'o', defaultsTo: 'dist', help: 'Output directory')
+///   ..flag('release', help: 'Optimise the output');
 /// ```
 class Command with _Spec {
-  Command._(this.name, this.desc, this.handler);
+  Command._(this.name, this.help, this.handler);
 
   /// The word that selects this command.
   final String name;
 
   /// The one-line description shown in usage blocks.
-  final String desc;
+  final String help;
 
   /// What runs when this command is selected, or `null` for a [group].
   final FutureOr<int> Function(Cli cli)? handler;

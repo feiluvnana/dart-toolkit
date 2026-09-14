@@ -17,8 +17,7 @@ extension MapExtensions<K, V> on Map<K, V> {
   }
 
   /// Filters entries by key predicate.
-  Map<K, V> filterKeys(bool Function(K key) test) =>
-      filter((k, _) => test(k));
+  Map<K, V> filterKeys(bool Function(K key) test) => filter((k, _) => test(k));
 
   /// Filters entries by value predicate.
   Map<K, V> filterValues(bool Function(V value) test) =>
@@ -78,11 +77,11 @@ extension MapExtensions<K, V> on Map<K, V> {
 
   /// Returns a new Map sorted by value.
   Map<K, V> sortedByValue([Comparator<V>? compare]) {
-    final sortedEntries =
-        entries.toList()..sort((a, b) {
-          if (compare != null) return compare(a.value, b.value);
-          return (a.value as Comparable).compareTo(b.value);
-        });
+    final sortedEntries = entries.toList()
+      ..sort((a, b) {
+        if (compare != null) return compare(a.value, b.value);
+        return (a.value as Comparable).compareTo(b.value);
+      });
     return {for (final e in sortedEntries) e.key: e.value};
   }
 

@@ -405,13 +405,13 @@ class Fs {
 
   /// The one JSON encoder in the library.
   ///
-  /// `io.dump`, `seq.dump`, `dict.dump` and `format.json.format` all reach
+  /// [writeJson] and [toJsonString] all reach
   /// this, so the four of them cannot disagree about indentation or about
   /// what a type without a `toJson` does.
   static String _encode(Object? data, bool pretty) =>
       JsonText.encode(data, indent: pretty ? 2 : 0);
 
-  // --- Non-blocking counterparts, reached through `io.async.*` -------------
+  // --- Non-blocking counterparts -------------------------------------------
 
   /// Whether [path] exists and holds at least one byte, without blocking.
   static Future<bool> hasAsync(String path) async {
@@ -472,7 +472,7 @@ class Fs {
     await Directory(destination).create(recursive: true);
     await for (final entry in Entries.walkAsync(source, follow: false)) {
       final target = p.join(destination, p.relative(entry.path, from: source));
-      if (entry.isdir) {
+      if (entry.isDir) {
         await Directory(target).create(recursive: true);
         continue;
       }
@@ -556,7 +556,7 @@ class Fs {
     Directory(destination).createSync(recursive: true);
     for (final entry in Entries.walk(source, follow: false)) {
       final target = p.join(destination, p.relative(entry.path, from: source));
-      if (entry.isdir) {
+      if (entry.isDir) {
         Directory(target).createSync(recursive: true);
         continue;
       }
@@ -774,7 +774,7 @@ class Fs {
 
   /// Writes [chunks] to [path] atomically as they arrive.
   ///
-  /// The byte twin of [pourLines], and the write half `io.chunks` had no
+  /// The byte twin of [pourLines], and the write half the chunk reader had no
   /// spelling for through 5.5.0. Nothing is held but the chunk being written.
   static Future<File> pourChunks(
     String path,
@@ -902,7 +902,7 @@ class Fs {
 
   /// Reads [path] as decoded lines, blocking — on the first walk, not before.
   ///
-  /// A generator rather than `readAsLinesSync`, so `io.lines(path)` is the
+  /// A generator rather than `readAsLinesSync`, so [readLines] is the
   /// lazy view a [Sequence] promises: nothing is read until something walks
   /// it, a walk that stops early stops reading, and a second walk re-reads
   /// the file rather than replaying a snapshot of it.
@@ -982,7 +982,7 @@ class Fs {
   /// file private to the call, so concurrent writers race only on the final
   /// rename — which POSIX makes atomic, so the last writer wins cleanly.
   ///
-  /// [part] stays the suffix, so `io.dir.sweep(out, match: '*.part')` still
+  /// [part] stays the suffix, so `sweepDir(out, match: '*.part')` still
   /// finds an abandoned one.
   static String _staging(String path, String part) =>
       '$path.${pid.toRadixString(36)}${(_staged++).toRadixString(36)}$part';

@@ -1,6 +1,11 @@
-/// # Streams (`Streams`)
+/// # Stream factories
 ///
-/// Periodic flows, event generation, combining, merging, and concurrency racing over [Stream].
+/// Creating a [Stream] and combining several of them — the operations with no
+/// single receiver to hang off.
+///
+/// Anything that *does* have a receiver is an extension instead: see
+/// [StreamExtensions] for `parallelMap`, `chunk`, `debounce`, `throttle`,
+/// `mergeWith` and the rest.
 library;
 
 import 'dart:async';

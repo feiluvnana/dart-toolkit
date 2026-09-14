@@ -1,6 +1,6 @@
 /// Compiles every `dart` snippet in the documentation.
 ///
-/// NAMESPACE.md step 7 has said since 1.x that a stale example fails the
+/// A stale example fails the
 /// build, and for a long time nothing checked one. The pass filtered to whole
 /// programs — `if (!snippet.contains('void main(')) continue;` — which was a
 /// tenth of the blocks and none of the ones in `///` comments under `lib/`.
@@ -11,7 +11,7 @@
 /// documentation now — they are where the reasoning already lived, they
 /// reach the reader through dartdoc and through the editor, and they cannot
 /// drift from the signature they sit above. This harness compiles every
-/// snippet in them, plus the ones in `README.md`, `NAMESPACE.md` and
+/// snippet in them, plus the ones in `README.md` and
 /// `example/README.md`.
 ///
 /// Most documentation snippets are fragments that assume a `res`, a `page`, a
@@ -39,11 +39,7 @@ import 'package:test/test.dart';
 const _outDir = '.dart_tool/doc_snippets';
 
 /// Files whose `dart` blocks are compiled.
-List<File> _markdown() => [
-  File('README.md'),
-  File('NAMESPACE.md'),
-  File('example/README.md'),
-];
+List<File> _markdown() => [File('README.md'), File('example/README.md')];
 
 /// Dart sources whose `///` comments hold snippets.
 List<File> _sources() => Directory('lib')
@@ -75,15 +71,15 @@ Uri get url => seed;
 Uri get sitemapUrl => Uri.parse('https://example.com/sitemap.xml');
 // One fixture answers both the `net.http` snippets that read a response and
 // the `net.crawl` ones that call `follow` or read `fetch.meta` on it —
-// `Page<T>` folded into `Reply` in 6.0.0.
-Reply get res => Reply(
+// `Page<T>` folded into `Response` in 6.0.0.
+Response get res => Response(
   url: seed,
   fetch: Fetch(seed),
-  status: 200,
+  statusCode: 200,
   bytes: utf8.encode(_html),
   headers: const {'content-type': 'text/html'},
 );
-Reply get reply => res;
+Response get reply => res;
 Markup get page => parseHtml(_html);
 Markup get markup => page;
 Markup get card => page.$('.row');
@@ -152,15 +148,15 @@ Table get table => Table(headers: const ['a', 'b']);
 Robots get robots =>
     parseRobots('User-agent: *\nDisallow: /private');
 Pool<Uri> get pool => Pool<Uri>(size: 4);
-Limiter get limit => Concurrent.rate(10, per: const Duration(seconds: 1));
-Semaphore get gate => Concurrent.semaphore(2);
-Iterable<FileSystemEntry> get files => Files.listSync('out');
+RateLimiter get limit => RateLimiter(10, per: const Duration(seconds: 1));
+Semaphore get gate => Semaphore(2);
+Iterable<FileSystemEntry> get files => listDirSync('out');
 Iterable<String> get agents => const ['MyBot'];
 Csv get csvsheet => parseCsv('a,b\n1,2\n');
-Send get mock => (f) async => Reply.text(_html, fetch: f);
+Send get mock => (f) async => Response.text(_html, fetch: f);
 Opt<bool> get force => Cli(const []).flag('force');
 Opt<bool> get verbose => Cli(const []).flag('verbose');
-Opt<int> get concurrency => Cli(const []).number('concurrency', def: 4);
+Opt<int> get concurrency => Cli(const []).number('concurrency', defaultsTo: 4);
 IOSink get sink => stdout;
 File get file => File('out/file.txt');
 String get html => _html;
@@ -170,7 +166,7 @@ String get runId => 'run-1';
 Uri get searchUrl => Uri.parse('https://example.com/search');
 DateTime get publishedAt => DateTime(2026, 1, 1);
 DateTime get referenceAt => DateTime(2026, 1, 2);
-SysResult get result => const SysResult(code: 0, out: '', err: '');
+SysResult get result => const SysResult(exitCode: 0, stdout: '', stderr: '');
 List<String> get list => const ['a', 'b'];
 Row get item => const Row('a.com', 1, 1);
 Row get t => item;
@@ -195,7 +191,10 @@ class Config {
 enum Mode { fast, slow, debug }
 
 Form get form => page.form('#login')!.at(seed);
-Crawl get crawl => Http.crawl([Fetch(seed)])..using(mock);
+Crawler get crawler => crawl([Fetch(seed)])..using(mock);
+CliParser get parser => CliParser();
+Fetcher get mockClient => Fetcher();
+String get report => 'report';
 Asked? get req => null;
 Process get process => throw UnimplementedError();
 
@@ -205,9 +204,9 @@ Future<int> build(Cli cli) async => 0;
 Future<void> commit(List<String> paths) async {}
 Future<void> enrich(Row row) async {}
 Future<Object?> worker(String input) async => input;
-Future<Reply> fetch(Uri u) => Fetcher().send(HttpMethod.get, u);
+Future<Response> fetch(Uri u) => Fetcher().send(HttpMethod.get, u);
 Future<void> rebuild([String? out, int concurrency = 1]) async {}
-Iterable<Fetch> next(Reply res) => const <Fetch>[];
+Iterable<Fetch> next(Response res) => const <Fetch>[];
 Object? heavyComputation(Object? input) => input;
 Future<Object?> fetchFromFlakyService() async => null;
 Future<Object?> mayThrow() async => null;
@@ -450,7 +449,7 @@ int _delta(String line) {
 void main() {
   group('documentation', () {
     test(
-      'every dart snippet in lib///, README and NAMESPACE compiles',
+      'every dart snippet in lib///, README and the example compiles',
       () async {
         final snippets = <_Snippet>[];
         var skipped = 0;

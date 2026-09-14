@@ -1,4 +1,4 @@
-/// # Console Logger (`system.console.logger.*`)
+/// # Console logger
 ///
 /// Status lines with severity filtering. Errors go to stderr, everything else
 /// to stdout, so a script's diagnostics survive piping.
@@ -90,9 +90,6 @@ class ConsoleLogger {
   /// Reports success.
   void ok(String message) =>
       _out(LogLevel.info, 'ok', '✔'.brightGreen(), message);
-
-  /// Reports success. Alias for [ok].
-  void success(String message) => ok(message);
 
   /// Reports a recoverable problem.
   void warn(String message) =>

@@ -111,7 +111,7 @@ class TableStyle {
 /// A bordered text table.
 ///
 /// Build it, then [render] it to a string — printing it is
-/// `system.console.writer.write(table.render())`, which is what
+/// `consoleWriter.write(table.render())`, which is what
 /// `ConsoleWriter.table` was a second spelling of:
 ///
 /// ```dart

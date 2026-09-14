@@ -65,7 +65,8 @@ void main() {
     });
 
     test('parseJson creates a functioning Json cursor', () {
-      final cursor = '{"name": "Alice", "score": 95, "tags": ["admin", "dev"]}'.parseJson();
+      final cursor = '{"name": "Alice", "score": 95, "tags": ["admin", "dev"]}'
+          .parseJson();
       expect(cursor.text('name'), equals('Alice'));
       expect(cursor.number('score'), equals(95));
       expect(cursor.at('tags').count, equals(2));
@@ -110,13 +111,13 @@ void main() {
   group('CLI Isolation', () {
     test('CliParser creates independent CLI instances', () {
       final parser1 = CliParser();
-      final debug = parser1.flag('debug', alias: 'd');
+      final debug = parser1.flag('debug', abbr: 'd');
       final parsed1 = parser1.parse(['-d']);
       expect(debug(), isTrue);
       expect(parsed1.switches.containsKey('d'), isTrue);
 
       final parser2 = CliParser();
-      final verbose = parser2.flag('verbose', alias: 'v');
+      final verbose = parser2.flag('verbose', abbr: 'v');
       final parsed2 = parser2.parse([]);
       expect(verbose(), isFalse);
       expect(parsed2.switches, isEmpty);
@@ -124,7 +125,7 @@ void main() {
 
     test('Cli.isolated creates independent parser', () {
       final parser = Cli.isolated(['--output=build', 'input.txt']);
-      final outOpt = parser.option('output', def: 'dist');
+      final outOpt = parser.option('output', defaultsTo: 'dist');
       expect(outOpt(), equals('build'));
       expect(parser.args, equals(['input.txt']));
     });

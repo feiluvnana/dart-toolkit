@@ -1,10 +1,10 @@
 // Rendering a usage block, wrapped to the terminal.
 //
 // `_usage` is the one implementation behind `Cli.usage`, `Cli.help`,
-// `CliAccessor.usage` and `CliAccessor.help`. The four *parameter lists* are
+// `CliParser.usage` and `CliParser.help`. The four *parameter lists* are
 // still written out four times, and Dart offers no way not to: a `Usage`
 // value object would remove the repetition and turn
-// `cli.usage(syntax: 'x')` into `cli.usage(const Usage(syntax: 'x'))` at
+// `parser.usage(syntax: 'x')` into a `Usage` value object at
 // every call site, which is worse everywhere it is read. The repetition is
 // the cheaper of the two, and it is named here so the next sweep does not
 // rediscover it as a finding.
@@ -22,42 +22,49 @@ part of 'cli.dart';
 /// Renders a usage block, wrapped to the terminal.
 String _usage({
   String? syntax,
-  String? desc,
+  String? description,
   Map<String, _Decl> declarations = const {},
   Map<String, Command> children = const {},
   Map<String, String>? flags,
   Map<String, String>? options,
 }) {
-  final allflags = <String, String>{...?flags};
-  final alloptions = <String, String>{...?options};
-  final allcommands = <String, String>{};
+  final allFlags = <String, String>{...?flags};
+  final allOptions = <String, String>{...?options};
+  final allCommands = <String, String>{};
 
   for (final entry in declarations.entries) {
     final name = entry.key;
     final decl = entry.value;
-    final label = '${decl.alias != null ? '-${decl.alias}, ' : '    '}--$name';
+    final label = '${decl.abbr != null ? '-${decl.abbr}, ' : '    '}--$name';
     if (decl.flag) {
-      final def = decl.def == true ? ' [default: true]' : '';
-      allflags[label] = '${decl.desc}$def';
+      final defaultsTo = decl.defaultsTo == true ? ' [default: true]' : '';
+      allFlags[label] = '${decl.help}$defaultsTo';
       continue;
     }
     // `required` is only worth printing when nothing else can supply a value.
-    final required = decl.required && decl.def == null ? ' (required)' : '';
-    final def = decl.def != null ? ' [default: ${decl.def}]' : '';
+    final required = decl.required && decl.defaultsTo == null
+        ? ' (required)'
+        : '';
+    final defaultsTo = decl.defaultsTo != null
+        ? ' [default: ${decl.defaultsTo}]'
+        : '';
     final env = decl.env != null ? ' [env: ${decl.env}]' : '';
     final allowed = decl.allowed != null ? ' (${decl.allowed!.join('|')})' : '';
-    alloptions['$label <value>'] = '${decl.desc}$allowed$required$env$def';
+    allOptions['$label <value>'] =
+        '${decl.help}$allowed$required$env$defaultsTo';
   }
   for (final child in children.values) {
-    allcommands[child.name] = child.desc;
+    allCommands[child.name] = child.help;
   }
 
   final buffer = StringBuffer();
   final width = ConsoleWriter().width.clamp(40, 100);
-  if (desc != null && desc.isNotEmpty) buffer.writeln('$desc\n');
+  if (description != null && description.isNotEmpty) {
+    buffer.writeln('$description\n');
+  }
   if (syntax != null && syntax.isNotEmpty) buffer.writeln('Usage: $syntax\n');
 
-  final labels = [...allcommands.keys, ...allflags.keys, ...alloptions.keys];
+  final labels = [...allCommands.keys, ...allFlags.keys, ...allOptions.keys];
   final column = labels.isEmpty
       ? 24
       : labels
@@ -78,9 +85,9 @@ String _usage({
     buffer.writeln();
   }
 
-  section('Commands', allcommands);
-  section('Flags', allflags);
-  section('Options', alloptions);
+  section('Commands', allCommands);
+  section('Flags', allFlags);
+  section('Options', allOptions);
   return buffer.toString().trimRight();
 }
 
@@ -88,7 +95,7 @@ String _usage({
 ///
 /// Measured with `String.width` rather than by code units, the way every other
 /// box this library draws is: a CJK ideograph is one code unit and two
-/// columns, an emoji is two code units and two columns, and a `desc:` holding
+/// columns, an emoji is two code units and two columns, and a `help:` holding
 /// either wrapped past the edge of the terminal it was being wrapped for.
 List<String> _wrap(String text, int width) {
   if (text.isEmpty) return const [''];

@@ -1,22 +1,19 @@
-/// # Sitemaps (`format.sitemap.*`)
+/// # Sitemaps
 ///
 /// The format codec, spelled exactly like the rest: `parse`, `read`, `write`,
 /// `format`. A sitemap arrives from outside Dart with its own words —
-/// `<urlset>`, `<loc>`, `<sitemapindex>` — which is Rule 1's definition of a
-/// subject, so it sits with the other formats rather than in `net`.
+/// `<urlset>`, `<loc>`, `<sitemapindex>` — so it sits with the other formats
+/// rather than with the networking code.
 ///
-/// It was `net.sitemap(content)` and `Sitemap.load(url)` through 5.5.0. The
-/// parser moved here; the *loader* is gone, because following a sitemap index
+/// There is a parser here and no *loader*, because following a sitemap index
 /// is a crawl and gets depth, dedupe and politeness for free:
 ///
 /// ```dart
 /// // setup: final index = 'https://x.test/sitemap.xml'.url;
-/// final urls = await Http
-///     .crawl([Fetch(index)], (r) => Formats.sitemap(r.text).map(Fetch.new))
-///     .depth(8)
-///     .flow
-///     .map((r) => r.url)
-///     .toList();
+/// final urls = await crawl(
+///   [Fetch(index)],
+///   (r) => parseSitemap(r.text).map(Fetch.new),
+/// ).depth(8).flow.map((r) => r.url).toList();
 /// ```
 ///
 /// That is nine lines against ninety, and it cannot loop: `Sitemap.load`
@@ -24,7 +21,7 @@
 /// that points back at itself.
 library;
 
-import '../src/codec.dart';
+import '../src/format.dart';
 import 'format.dart';
 
 // ============================================================================
@@ -36,16 +33,16 @@ final RegExp _loc = RegExp(
   caseSensitive: false,
 );
 
-/// Entry point for sitemaps, reachable as `format.sitemap`.
+/// The sitemap codec. Reach it as [parseSitemap] or [DocumentFormat.sitemap].
 ///
 /// Reads XML `<urlset>`, XML `<sitemapindex>` and newline-delimited plain
 /// text alike, because all three are what a `Sitemap:` line points at and
 /// which one arrived is not the caller's question.
-class SitemapAccessor
-    with FileCodec<List<Uri>, Iterable<Uri>>
-    implements Codec<List<Uri>> {
-  /// Creates the accessor. Prefer the shared `format.sitemap` instance.
-  const SitemapAccessor();
+class SitemapFormat
+    with FileFormat<List<Uri>, Iterable<Uri>>
+    implements DocumentFormat<List<Uri>> {
+  /// Creates the codec. Prefer the shared [DocumentFormat.sitemap] instance.
+  const SitemapFormat();
 
   /// Parses [text] into the URLs it names.
   ///

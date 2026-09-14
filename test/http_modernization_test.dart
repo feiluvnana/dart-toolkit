@@ -9,7 +9,7 @@ void main() {
     late Server server;
 
     setUp(() async {
-      server = await Http.serve(0, (Asked req) async {
+      server = await serve(0, (Asked req) async {
         return switch (req.path) {
           '/hello' => const Served.text('hello world'),
           '/json' => Served.json({'message': 'ok', 'count': 42}),
@@ -28,93 +28,101 @@ void main() {
     Uri at(String path) => 'http://localhost:${server.port}$path'.url;
 
     test('HTTP convenience verbs on Http hub and top-level', () async {
-      final resGet = await Http.get(at('/hello'));
-      expect(resGet.status, 200);
+      final resGet = await get(at('/hello'));
+      expect(resGet.statusCode, 200);
       expect(resGet.text, 'hello world');
       expect(resGet.body, 'hello world');
 
-      final resPost = await Http.post(
+      final resPost = await post(
         at('/echo'),
         body: const Body.text('posted body'),
       );
-      expect(resPost.status, 200);
+      expect(resPost.statusCode, 200);
       expect(resPost.text, 'posted body');
 
       final resTop = await get(at('/hello'));
-      expect(resTop.status, 200);
+      expect(resTop.statusCode, 200);
       expect(resTop.text, 'hello world');
 
       final resPut = await put(at('/echo'), body: const Body.text('put body'));
-      expect(resPut.status, 200);
+      expect(resPut.statusCode, 200);
       expect(resPut.text, 'put body');
 
       final resDelete = await delete(at('/hello'));
-      expect(resDelete.status, 200);
+      expect(resDelete.statusCode, 200);
     });
 
-    test('Method tear-offs work directly with Concurrent.map over native List', () async {
-      final urls = [at('/hello'), at('/hello'), at('/hello')];
-      final replies = await Concurrent.map(urls, Http.get, concurrency: 2);
-      expect(replies.length, 3);
-      for (final r in replies) {
-        expect(r.status, 200);
-        expect(r.text, 'hello world');
-      }
-    });
+    test(
+      'Method tear-offs work directly with parallelMap over native List',
+      () async {
+        final urls = [at('/hello'), at('/hello'), at('/hello')];
+        final replies = await parallelMap(urls, get, concurrency: 2);
+        expect(replies.length, 3);
+        for (final r in replies) {
+          expect(r.statusCode, 200);
+          expect(r.text, 'hello world');
+        }
+      },
+    );
 
     test('Fluent HTTP extensions on Uri', () async {
       final reply = await at('/json').get();
-      expect(reply.status, 200);
+      expect(reply.statusCode, 200);
       expect(reply.json.text('message'), 'ok');
       expect(reply.json.number('count'), 42);
       expect(reply.jsonDecoded<Map<String, dynamic>>()['message'], 'ok');
 
-      final echoReply = await at('/echo').post(body: const Body.text('via uri extension'));
+      final echoReply = await at(
+        '/echo',
+      ).post(body: const Body.text('via uri extension'));
       expect(echoReply.text, 'via uri extension');
     });
 
     test('Sane redirect defaults follow redirects automatically', () async {
       // By default redirects: 5 follows hop1 -> hop2 -> hop3
-      final res = await Http.get(at('/hop1'));
-      expect(res.status, 200);
+      final res = await get(at('/hop1'));
+      expect(res.statusCode, 200);
       expect(res.text, 'reached hop 3');
 
       // Explicit opt-out with redirects: 0 holds at 302
-      final held = await Http.get(at('/hop1'), redirects: 0);
-      expect(held.status, 302);
+      final held = await get(at('/hop1'), redirects: 0);
+      expect(held.statusCode, 302);
       expect(held.headers['location'], '/hop2');
     });
 
-    test('Zone-scoped client isolation with Http.withClient', () async {
+    test('Zone-scoped client isolation with withHttpClient', () async {
       final mock = Fetcher(pool: _MockClient());
 
-      await Http.withClient(mock, () async {
-        final res = await Http.get('https://example.test/mock'.url);
-        expect(res.status, 200);
+      await withHttpClient(mock, () async {
+        final res = await get('https://example.test/mock'.url);
+        expect(res.statusCode, 200);
         expect(res.text, 'mocked response');
       });
 
       // Outside the zone, standard client is restored
-      final realRes = await Http.get(at('/hello'));
+      final realRes = await get(at('/hello'));
       expect(realRes.text, 'hello world');
     });
 
-    test('Streaming response body via Reply.stream and Fetcher.stream', () async {
-      final reply = await Http.client.stream(HttpMethod.get, at('/hello'));
-      expect(reply.status, 200);
-      final chunks = await reply.stream.toList();
-      final fullBody = utf8.decode(chunks.expand((c) => c).toList());
-      expect(fullBody, 'hello world');
-    });
+    test(
+      'Streaming response body via Response.stream and Fetcher.stream',
+      () async {
+        final reply = await httpClient.stream(HttpMethod.get, at('/hello'));
+        expect(reply.statusCode, 200);
+        final chunks = await reply.stream.toList();
+        final fullBody = utf8.decode(chunks.expand((c) => c).toList());
+        expect(fullBody, 'hello world');
+      },
+    );
 
     test('package:http ecosystem conversions', () async {
-      final reply = await Http.get(at('/hello'));
+      final reply = await get(at('/hello'));
       final httpResponse = reply.toHttpResponse();
       expect(httpResponse.statusCode, 200);
       expect(httpResponse.body, 'hello world');
 
-      final reconstructed = Reply.fromHttpResponse(httpResponse);
-      expect(reconstructed.status, 200);
+      final reconstructed = Response.fromHttpResponse(httpResponse);
+      expect(reconstructed.statusCode, 200);
       expect(reconstructed.text, 'hello world');
     });
   });

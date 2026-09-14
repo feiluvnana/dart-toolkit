@@ -1,13 +1,13 @@
-/// # HTML (`format.html.*`)
+/// # HTML
 ///
-/// The format codec, spelled exactly like [JsonAccessor], [YamlAccessor] and
-/// [TomlAccessor]: `parse`, `read`, `format`. HTML was the format this library
+/// The format codec, spelled exactly like [JsonFormat], [YamlFormat] and
+/// [TomlFormat]: `parse`, `read`, `format`. HTML was the format this library
 /// started with, which is why it spent four releases living in `net` as a `$`
-/// bolted to the side of a response — the one format that never got Rule 1
+/// bolted to the side of a response — the one format that never got
 /// applied to it. It is a format like the others, and it reads like them now.
 ///
 /// The [Markup] *cursor* the readers return is exported from `util`, because
-/// it is a pure value and a type `net` hands back through [Codec] cannot live
+/// it is a pure value and a type `net` hands back through [DocumentFormat] cannot live
 /// under `format`.
 ///
 /// `Form` and [FormOnMarkup.form] live in `format/form.dart` and are part of
@@ -28,40 +28,42 @@
 ///
 /// `markup.$('.track')` was an extension on `String` beside this through
 /// 6.0.0 — a third door onto one operation, and the one that had to be an
-/// extension because `String` is not ours. `format.html.$(markup, selector)`
+/// extension because `String` is not ours. `HtmlFormat().\$(markup, selector)`
 /// is the member form and this is the global one; the extension went.
 library;
 
 import 'package:html/parser.dart' as html_parser;
 
-import '../src/codec.dart';
+import '../src/format.dart';
 import '../src/markup.dart';
 import 'format.dart';
 
 // ============================================================================
-// HTML (format.html.*)
+// HTML
 // ============================================================================
 
-/// Entry point for HTML, reachable as `format.html`.
+/// Entry point for HTML, reachable as [parseHtml].
 ///
 /// ```dart
-/// final page = Formats.html(res.body);
-/// final cached = await const HtmlAccessor().read('fixtures/product.html');
-/// Files.writeTextSync('out.html', const HtmlAccessor().format(page.$('.card')));
+/// final page = parseHtml(res.body);
+/// final cached = await const HtmlFormat().read('fixtures/product.html');
+/// writeTextSync('out.html', const HtmlFormat().format(page.$('.card')));
 /// ```
 ///
-/// `format.html.write(path, markup)` writes one to disk atomically; [format]
+/// `const HtmlFormat().write(path, markup)` writes one to disk atomically; [format]
 /// is the string half, for when the markup is going somewhere that is not a
 /// file.
 ///
 /// `parse(t).text` is the *correct* way to get a page's text: it is right
 /// about entities, `<script>` bodies and malformed nesting, and it costs a
-/// document. `util.text.tags(t)` is a regex over the string and costs nothing;
+/// document. `stripHtmlTags(t)` is a regex over the string and costs nothing;
 /// it is the one for a snippet, and the one to reach for when there are ten
 /// thousand of them.
-class HtmlAccessor with FileCodec<Markup, Markup> implements Codec<Markup> {
-  /// Creates the accessor. Prefer the shared `format.html` instance.
-  const HtmlAccessor();
+class HtmlFormat
+    with FileFormat<Markup, Markup>
+    implements DocumentFormat<Markup> {
+  /// Creates the codec. Prefer the shared [DocumentFormat.html] instance.
+  const HtmlFormat();
 
   /// Parses [text] into a [Markup] cursor.
   ///
@@ -88,7 +90,7 @@ class HtmlAccessor with FileCodec<Markup, Markup> implements Codec<Markup> {
   ///
   /// ```dart
   /// // setup: const markup = '<li class="track">One</li>';
-  /// const HtmlAccessor().$(markup, '.track').texts;
+  /// const HtmlFormat().$(markup, '.track').texts;
   /// ```
   ///
   /// [selector] is required, which is what keeps this from being a second
@@ -115,7 +117,7 @@ class HtmlAccessor with FileCodec<Markup, Markup> implements Codec<Markup> {
 
 /// Parses [markup] into a queryable [Markup] cursor.
 ///
-/// The jQuery entry point, an alias of `format.html.parse`. Opt-in via
+/// The jQuery entry point, an alias of [parseHtml]. Opt-in via
 /// `package:dart_toolkit/html.dart`, because `$` in every script's global
 /// scope is a cost the default surface should not charge.
 ///
@@ -127,10 +129,10 @@ class HtmlAccessor with FileCodec<Markup, Markup> implements Codec<Markup> {
 ///
 /// `markup.$('.track')` was an extension on `String` beside this through
 /// 6.0.0 — a third door onto one operation, and the one that had to be an
-/// extension because `String` is not ours. `format.html.$(markup, selector)`
+/// extension because `String` is not ours. `HtmlFormat().\$(markup, selector)`
 /// is the member form and this is the global one; the extension went.
 Markup $(String markup, [String? selector]) {
-  final q = const HtmlAccessor().parse(markup);
+  final q = const HtmlFormat().parse(markup);
   return selector != null ? q.$(selector) : q;
 }
 
@@ -138,7 +140,7 @@ Markup $(String markup, [String? selector]) {
 ///
 /// The XPath twin of [$], on the same opt-in terms. It sets the flag itself,
 /// because the flag only ever decided which language `$xpath` runs and there
-/// was no way to observe it from the default surface — `format.html.query`
+/// was no way to observe it from the default surface — a query helper
 /// was a public member configuring one that is not public, and 6.0.0 deleted
 /// it.
 Markup $xpath(String markup, [String? query]) {

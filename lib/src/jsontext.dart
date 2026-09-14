@@ -1,9 +1,9 @@
 /// # JSON Text (internal)
 ///
 /// The two `dart:convert` calls the library's JSON support is built on, in one
-/// place so that `format.json`, `net.serve` and the other `format` codecs all
-/// decode and encode identically. Public through `format.json.parse` and
-/// `format.json.format`; never a public name of its own.
+/// place so that [parseJson], [serve] and the other codecs all
+/// decode and encode identically. Public through [parseJson] and
+/// [toJsonString]; never a public name of its own.
 library;
 
 import 'dart:convert';

@@ -1,22 +1,22 @@
-/// # YAML (`format.yaml.*`)
+/// # YAML
 ///
 /// Reading and writing the format everything else a script coordinates with is
 /// configured in — `pubspec.yaml` first, then CI, then Docker Compose, then
-/// Kubernetes. `io.dump` covers the format this library *writes*; this is the
+/// Kubernetes. [writeJson] covers the format this library *writes*; this is the
 /// one everything else *reads*, and it is spelled member for member like
-/// [JsonAccessor].
+/// [JsonFormat].
 ///
-/// A format is a subject in the sense Rule 1 means it: knowing what a YAML
+/// A format is knowledge from outside Dart: knowing what a YAML
 /// file looks like is knowledge Dart does not have. That is the same argument
-/// that admitted `format.zip`, with a different noun — and the reason
-/// `format.json` sits beside this rather than in `util`.
+/// that admitted archives, with a different noun — and the reason
+/// [parseJson] sits beside this rather than in `util`.
 library;
 
 import 'dart:convert';
 
 import 'package:yaml/yaml.dart' as yaml;
 
-import '../src/codec.dart';
+import '../src/format.dart';
 import '../src/json.dart';
 import 'format.dart';
 
@@ -24,24 +24,26 @@ import 'format.dart';
 // YAML (format.yaml.*)
 // ============================================================================
 
-/// Entry point for YAML, reachable as `format.yaml`.
+/// The YAML codec. Reach it as [parseYaml] or [DocumentFormat.yaml].
 ///
-/// Three members, spelled exactly like [JsonAccessor] and [TomlAccessor], so
+/// Three members, spelled exactly like [JsonFormat] and [TomlFormat], so
 /// the format namespaces are learnable from each other:
 ///
 /// ```dart
-/// final pubspec = Formats.yaml('version: 8.0.0\ndependencies: {}');
+/// final pubspec = parseYaml('version: 8.0.0\ndependencies: {}');
 /// pubspec.text('version');                            // '8.0.0'
 /// pubspec.at('dependencies').count;
-/// await Files.writeText('out.yaml', Formats.toYaml({'name': 'x'}));
+/// await writeText('out.yaml', toYamlString({'name': 'x'}));
 /// ```
 ///
 /// Reading gives a [Json] cursor rather than a type of its own: YAML and JSON
 /// decode to the same maps, lists and scalars, so a second cursor would be two
 /// spellings of one operation.
-class YamlAccessor with FileCodec<Json, Object?> implements Codec<Json> {
-  /// Creates the accessor. Prefer the shared `format.yaml` instance.
-  const YamlAccessor();
+class YamlFormat
+    with FileFormat<Json, Object?>
+    implements DocumentFormat<Json> {
+  /// Creates the codec. Prefer the shared [DocumentFormat.yaml] instance.
+  const YamlFormat();
 
   /// Parses YAML [text] into a [Json] cursor.
   ///

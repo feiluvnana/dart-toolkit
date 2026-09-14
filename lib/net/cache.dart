@@ -19,15 +19,13 @@ import 'http.dart';
 // HTTP CACHE
 // ============================================================================
 
-const HashAccessor _hash = HashAccessor();
-
 /// One response held in an [HttpCache], with the moment it was stored.
 ///
 /// [fresh] answers whether it can be served without asking the server at all;
 /// [validators] are the headers that ask cheaply when it cannot.
 class CacheEntry {
   /// The stored response.
-  final Reply response;
+  final Response response;
 
   /// When it was stored.
   final DateTime stored;
@@ -46,9 +44,9 @@ class CacheEntry {
     }
     return CacheEntry(
       stored: stored,
-      response: Reply(
+      response: Response(
         url: url,
-        status: (json['status'] as num? ?? 200).toInt(),
+        statusCode: (json['status'] as num? ?? 200).toInt(),
         headers: {
           for (final entry in (json['headers'] as Map? ?? const {}).entries)
             entry.key.toString(): entry.value.toString(),
@@ -112,7 +110,7 @@ class CacheEntry {
     'version': HttpCache.version,
     'url': response.url.toString(),
     'stored': stored.toIso8601String(),
-    'status': response.status,
+    'status': response.statusCode,
     'headers': response.headers,
     // Base64: a cached response is as likely to be an image as a page.
     'body': base64Encode(response.bytes),
@@ -120,12 +118,12 @@ class CacheEntry {
 
   @override
   String toString() =>
-      'CacheEntry(${response.status} ${response.url}, '
+      'CacheEntry(${response.statusCode} ${response.url}, '
       'stored: ${stored.toIso8601String()}, fresh: $fresh)';
 }
 
 /// Responses kept on disk between runs, reachable through
-/// `Fetcher(cache: ...)` and `net.crawl(...).cache(...)`.
+/// `Fetcher(cache: ...)` and `crawl(...).cache(...)`.
 ///
 /// Re-running a scrape over pages that have not changed is the common case
 /// while an extractor is being written. With a cache the second run asks each
@@ -152,7 +150,7 @@ class HttpCache {
   const HttpCache(this.dir);
 
   /// The file [url] is stored in, whether or not it exists.
-  String path(Uri url) => p.join(dir, '${_hash.sha(url.toString())}.json');
+  String path(Uri url) => p.join(dir, '${sha256Hash(url.toString())}.json');
 
   /// The entry stored for [url], or `null` when nothing is stored.
   ///
@@ -176,7 +174,7 @@ class HttpCache {
   }
 
   /// Stores [response] under [url], replacing anything already there.
-  Future<FileSystemEntry> write(Uri url, Reply response) async {
+  Future<FileSystemEntry> write(Uri url, Response response) async {
     await Fs.mkdir(dir);
     final entry = CacheEntry(response: response, stored: DateTime.now());
     return Fs.entryFor(

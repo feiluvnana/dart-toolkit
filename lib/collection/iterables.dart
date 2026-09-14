@@ -1,9 +1,15 @@
-/// # Iterables (`Iterables`)
+/// # Iterable factories
 ///
-/// Generation, ranges, combinators, partitioning, and zip algorithms over [Iterable].
+/// Creating an [Iterable] from nothing — ranges, repetition, generation — and
+/// combining several of them. The operations with no single receiver to hang
+/// off, so they are not extension methods.
+///
+/// Anything that *does* have a receiver is an extension instead: see
+/// [IterableExtensions] for `chunk`, `window`, `distinct`, `groupBy`,
+/// `sortedBy` and the rest.
 library;
 
-/// Static utility functions for creating and manipulating [Iterable]s.
+/// Factories and n-ary combinators for [Iterable].
 abstract final class Iterables {
   /// Creates an iterable of inline elements, filtering out null arguments.
   static Iterable<T> of<T>([

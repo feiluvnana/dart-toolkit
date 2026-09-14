@@ -1,6 +1,6 @@
 # Example: Full Pipeline
 
-The complete, end-to-end `dart-toolkit` 8.0.0 pipeline in a single runnable script:
+The complete, end-to-end `dart-toolkit` pipeline in a single runnable script:
 
 [`example.dart`](example.dart)
 
@@ -22,10 +22,10 @@ dart run example/example.dart --help
 ## Features Demonstrated
 
 - **CLI Parsing (`CliParser`)**: Declared options (`--output`), flags (`--force`), numbers (`--concurrency`), and auto-generated usage help.
-- **Console Domain (`logger`, `consoleWriter`)**: Step indicators, success badges, Unicode tables, boxes, rules, and progress bars.
-- **Web Crawling (`Http.crawl`)**: Multi-hop web crawling with offline fixture transport, delay jitter, concurrency limits, and scope rules.
+- **Console (`logger`, `consoleWriter`)**: Step indicators, success badges, Unicode tables, boxes, rules, and progress bars.
+- **Web Crawling (`crawl`)**: Multi-hop web crawling with offline fixture transport, delay jitter, concurrency limits, and scope rules.
 - **DOM Parsing & Extraction (`.$()`, `.all()`, `Field`)**: jQuery-style CSS queries, element attributes, readable text collapsing, and typed field extraction.
 - **Parallel Enrichment (`parallelMap`)**: Bounded concurrent execution over async collections with progress tracking.
-- **Atomic File I/O (`Files.writeJson`, `Files.writeCsv`, `Files.writeText`)**: Crash-safe atomic writes via staging files.
-- **Archive Compression (`Formats.zip`)**: Direct archive packing with formatted file sizes.
-- **Environment & Subprocesses (`Env`, `System.run`)**: `.env` configuration, git repository checks, and graceful shutdown lifecycle hooks (`System.onExit`).
+- **Atomic File I/O (`writeJson`, `writeCsv`, `writeText`)**: Crash-safe atomic writes via staging files.
+- **Archive Compression (`zip`)**: Direct archive packing with formatted file sizes.
+- **Environment & Subprocesses (`env`, `run`)**: `.env` configuration, git repository checks, and graceful shutdown lifecycle hooks (`onExit`).

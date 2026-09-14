@@ -1,7 +1,7 @@
 /// # HTTP Methods (`HttpMethod`)
 ///
-/// The verb a request carries. It lives in `lib/src/` for the reason [Codec]
-/// does: a `<form method="post">` is something `format.html` reads and
+/// The verb a request carries. It lives in `lib/src/` for the reason [DocumentFormat]
+/// does: a `<form method="post">` is something [parseHtml] reads and
 /// something `net` sends, and neither domain may depend on the other, so the
 /// value belongs to no domain. It is exported from the package root either
 /// way.

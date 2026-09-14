@@ -1,9 +1,9 @@
 /// # HTTP Networking (`net.*`)
 ///
 /// A client over `package:http` that retries, follows and caches only when a
-/// parameter said to — see [Fetcher]. A [Reply] carries the bytes,
+/// parameter said to — see [Fetcher]. A [Response] carries the bytes,
 /// the text and the headers, and nothing about what the bytes *are*: reading
-/// them is [Reply.parse] plus a codec from `format`, because a crawler
+/// them is [Response.parse] plus a codec from `format`, because a crawler
 /// fetches JSON, sitemaps, archives and images as readily as it fetches
 /// pages.
 library;
@@ -21,7 +21,7 @@ import 'package:path/path.dart' as p;
 import '../concurrent/concurrent.dart';
 import '../io/entry.dart';
 import '../src/fs.dart';
-import '../src/codec.dart';
+import '../src/format.dart';
 import '../src/method.dart';
 import '../util/rand.dart';
 import 'cache.dart';
@@ -31,7 +31,7 @@ import '../src/json.dart';
 import '../system/console/progress.dart';
 
 // ============================================================================
-// HTTP NETWORKING (Fetcher / Reply)
+// HTTP NETWORKING (Fetcher / Response)
 // ============================================================================
 
 /// An HTTP failure that retrying cannot fix.
@@ -190,7 +190,7 @@ final class _JsonBody extends Body {
 /// **`Page<T>` folded into this in 6.0.0.** Everything `Page` added was
 /// either the request it came from — [fetch], and [Fetch.tag], [Fetch.meta]
 /// and [Fetch.depth] through it — or a call on an engine. The engine calls
-/// are gone: `emit` because a crawl is a `Flow<Reply>` and the caller decides
+/// are gone: `emit` because a crawl is a `Flow<Response>` and the caller decides
 /// what to do with each reply, `stop` because cancelling that flow stops the
 /// crawl, and [follow] because it now *returns* the next request instead of
 /// queueing one.
@@ -199,13 +199,13 @@ final class _JsonBody extends Body {
 ///
 /// ```dart no-compile
 /// // before — a closure with a side effect, needing an engine behind it
-/// res.parse(format.html).$('a').attrs('href')
+/// res.parse(DocumentFormat.html).$('a').attrs('href')
 ///    .collect(.foreach((h) => res.follow(h)));
 ///
 /// // after — a pure function from a reply to the next requests
-/// res.parse(format.html).$('a').attrs('href').transform(.map(res.follow))
+/// res.parse(DocumentFormat.html).$('a').attrs('href').map(res.follow)
 /// ```
-class Reply {
+class Response {
   static final _charsetParam = RegExp(r'charset=([^;]+)', caseSensitive: false);
   static final _charsetMeta = RegExp(
     r'''<meta[^>]+(?:charset=["']?([a-zA-Z0-9_\-]+)|content=["'][^"']*charset=([a-zA-Z0-9_\-]+))''',
@@ -223,7 +223,7 @@ class Reply {
   final Fetch fetch;
 
   /// The HTTP status code.
-  final int status;
+  final int statusCode;
 
   /// Page headers, lower-cased by `package:http`.
   final Map<String, String> headers;
@@ -239,7 +239,10 @@ class Reply {
   /// A stream of the response body bytes.
   Stream<List<int>> get stream => _stream ?? Stream.value(_rawBytes);
 
-  /// The response body decoded as a string. Alias for [body].
+  /// The response body decoded as a string.
+  ///
+  /// Honours the charset from `Content-Type`, falling back to a `<meta>`
+  /// charset for HTML and then to UTF-8.
   String get text => body;
 
   /// The response body parsed as a typed JSON document cursor.
@@ -260,16 +263,16 @@ class Reply {
   String? _body;
 
   // Keyed by codec, and every accessor under `format` is a const instance, so
-  // reading a page through `format.html` five times parses it once. This is
+  // reading a page through [parseHtml] five times parses it once. This is
   // what the old `_doc` and `_json` caches did, for every format instead of
   // two.
-  final Map<Codec<Object?>, Object?> _parsed = {};
+  final Map<DocumentFormat<Object?>, Object?> _parsed = {};
 
   /// Creates a response. Normally produced by [Fetcher.send].
-  Reply({
+  Response({
     required this.url,
     Fetch? fetch,
-    required this.status,
+    required this.statusCode,
     required this.headers,
     List<int>? bytes,
     Stream<List<int>>? stream,
@@ -280,90 +283,88 @@ class Reply {
        _rawBytes = bytes ?? const [],
        _stream = stream;
 
-  /// Creates a streaming [Reply] yielding body chunks via [stream].
-  factory Reply.stream(
+  /// Creates a streaming [Response] yielding body chunks via [stream].
+  factory Response.stream(
     Stream<List<int>> stream, {
     required Uri url,
     Fetch? fetch,
-    int status = 200,
+    int statusCode = 200,
     Map<String, String>? headers,
     Encoding? encoding,
-  }) => Reply(
+  }) => Response(
     url: url,
     fetch: fetch,
-    status: status,
+    statusCode: statusCode,
     headers: headers ?? const {'content-type': 'application/octet-stream'},
     stream: stream,
     encoding: encoding,
   );
 
-  /// Creates a [Reply] from a `package:http` [http.Response].
-  factory Reply.fromHttpResponse(http.Response response, {Fetch? fetch}) => Reply(
-    url: response.request?.url ?? Uri.parse('http://localhost'),
-    fetch: fetch,
-    status: response.statusCode,
-    headers: response.headers,
-    bytes: response.bodyBytes,
-  );
+  /// Creates a [Response] from a `package:http` [http.Response].
+  factory Response.fromHttpResponse(http.Response response, {Fetch? fetch}) =>
+      Response(
+        url: response.request?.url ?? Uri.parse('http://localhost'),
+        fetch: fetch,
+        statusCode: response.statusCode,
+        headers: response.headers,
+        bytes: response.bodyBytes,
+      );
 
-  /// Converts this [Reply] into a `package:http` [http.Response].
+  /// Converts this [Response] into a `package:http` [http.Response].
   http.Response toHttpResponse() => http.Response.bytes(
     bytes,
-    status,
+    statusCode,
     headers: headers,
     request: http.Request(fetch.method.wire, url),
   );
 
-  /// Creates a [Reply] from a [text] string.
+  /// Creates a [Response] from a [text] string.
   ///
   /// The fixture a [Send] hands back, and the reason a crawl's `next` is
   /// testable with no network and no engine:
   ///
   /// ```dart
-  /// Future<Reply> fixture(Fetch f) async =>
-  ///     Reply.text('<h1>hi</h1>', fetch: f);
+  /// Future<Response> fixture(Fetch f) async =>
+  ///     Response.text('<h1>hi</h1>', fetch: f);
   /// ```
   ///
   /// With only [fetch] given, its URL is also the [url]: a fixture that says
   /// where it came from should resolve its own links from there rather than
   /// from `localhost`.
-  factory Reply.text(
+  factory Response.text(
     String text, {
     Uri? url,
-    int status = 200,
+    int statusCode = 200,
     Map<String, String>? headers,
     Fetch? fetch,
-  }) => Reply(
+  }) => Response(
     url: url ?? fetch?.url ?? Uri.parse('http://localhost'),
     fetch: fetch,
-    status: status,
+    statusCode: statusCode,
     headers: headers ?? const {'content-type': 'text/html; charset=utf-8'},
     bytes: utf8.encode(text),
   );
 
-  /// Creates a [Reply] carrying raw [data].
+  /// Creates a [Response] carrying raw [data].
   ///
-  /// The byte twin of [Reply.text], for a [Send] serving an image, an archive
+  /// The byte twin of [Response.text], for a [Send] serving an image, an archive
   /// or anything else a fixture is not text.
-  factory Reply.bytes(
+  factory Response.bytes(
     List<int> data, {
     Uri? url,
-    int status = 200,
+    int statusCode = 200,
     Map<String, String>? headers,
     Fetch? fetch,
-  }) => Reply(
+  }) => Response(
     url: url ?? fetch?.url ?? Uri.parse('http://localhost'),
     fetch: fetch,
-    status: status,
+    statusCode: statusCode,
     headers: headers ?? const {'content-type': 'application/octet-stream'},
     bytes: data,
   );
 
-  /// Whether [status] is in the 2xx range.
-  bool get ok => status >= 200 && status < 300;
-
-  /// The HTTP status code. Alias for [status].
-  int get statusCode => status;
+  /// Whether [statusCode] is in the 2xx range.
+  bool get ok => statusCode >= 200 && statusCode < 300;
 
   /// The MIME type from the `Content-Type` header (e.g. `'text/html'`).
   String? get type {
@@ -428,20 +429,20 @@ class Reply {
   /// a crawl over an API and a crawl over pages are written the same way.
   ///
   /// ```dart
-  /// res.parse(Codec.html).$('h1').text;
-  /// res.parse(Codec.json).at('data.items');
-  /// res.parse(Codec.yaml).text('version');
+  /// res.parse(DocumentFormat.html).$('h1').text;
+  /// res.parse(DocumentFormat.json).at('data.items');
+  /// res.parse(DocumentFormat.yaml).text('version');
   ///
   /// switch (res.type) {
-  ///   case 'application/json': res.parse(Codec.json).at('items');
-  ///   default:                 res.parse(Codec.html).$('.item');
+  ///   case 'application/json': res.parse(DocumentFormat.json).at('items');
+  ///   default:                 res.parse(DocumentFormat.html).$('.item');
   /// }
   /// ```
   ///
   /// Memoised per codec, so a handler that reads one page five times parses it
   /// once. Nothing here throws: a body that is not the format asked for is the
   /// empty cursor, the same as a missing path.
-  T parse<T>(Codec<T> codec) {
+  T parse<T>(DocumentFormat<T> codec) {
     if (_parsed.containsKey(codec)) return _parsed[codec] as T;
     final value = codec.parse(body);
     _parsed[codec] = value;
@@ -465,7 +466,7 @@ class Reply {
   /// with the collection vocabulary and needs no engine behind it:
   ///
   /// ```dart no-compile
-  /// res.parse(format.html).$('a').attrs('href').transform(.map(res.follow))
+  /// res.parse(DocumentFormat.html).$('a').attrs('href').map(res.follow)
   /// ```
   ///
   /// It tears off cleanly because the href comes first and everything else is
@@ -498,13 +499,13 @@ class Reply {
 
   /// Writes the response body to [path] atomically.
   ///
-  /// One line over `io.async.bytes.write(path, res.bytes)`, kept because it
+  /// One line over `writeBytes(path, res.bytes)`, kept because it
   /// is written constantly.
   Future<FileSystemEntry> save(String path, {String part = '.part'}) async =>
       Fs.entryFor((await Fs.save(path, bytes, part: part)).path);
 
   @override
-  String toString() => '$status $url (${bytes.length} bytes)';
+  String toString() => '$statusCode $url (${bytes.length} bytes)';
 }
 
 /// Resolves destination paths against an optional base directory.
@@ -529,7 +530,7 @@ mixin _PathResolver {
 
 /// An HTTP client that does what it was asked to do.
 ///
-/// Reachable as `net.http`, a shared instance. Construct one directly when you
+/// Reachable as [get], a shared instance. Construct one directly when you
 /// need your own headers, timeout or base directory — and close it when done.
 ///
 /// ```dart
@@ -547,7 +548,7 @@ mixin _PathResolver {
 /// twice. Opt in, one parameter at a time:
 ///
 /// ```dart
-/// final scraper = Fetcher.browser(retries: 3, limiter: Concurrent.rate(10, per: 1.s));
+/// final scraper = Fetcher.browser(retries: 3, limiter: RateLimiter(10, per: 1.s));
 /// ```
 class Fetcher with _PathResolver {
   final http.Client _client;
@@ -578,11 +579,10 @@ class Fetcher with _PathResolver {
 
   /// Redirect hops to follow, `0` for none.
   ///
-  /// **Zero by default**, like [retries]: a `3xx` is an answer the server
-  /// gave, and handing it back is this client reporting what happened rather
-  /// than quietly asking a second question. `res.status` is `302` and
-  /// `res.headers['location']` is where it points; `redirects: n` follows up
-  /// to `n` hops, and a longer chain throws [FatalHttpException].
+  /// **Five by default**, matching `package:http`. Pass `redirects: 0` to be
+  /// handed the `3xx` instead of following it: `res.statusCode` is then `302`
+  /// and `res.headers['location']` is where it points. A chain longer than a
+  /// positive limit throws [FatalHttpException].
   ///
   /// A per-call `redirect: bool` and a `redirects: int = 5` said this in two
   /// types through 6.0.0, and `5` was a number nobody chose.
@@ -603,7 +603,7 @@ class Fetcher with _PathResolver {
 
   /// Responses kept between runs, or `null` to always fetch.
   ///
-  /// Only `GET` responses with status 200 are stored, and only when the server
+  /// Only `GET` responses with statusCode 200 are stored, and only when the server
   /// did not say `no-store`. See [HttpCache].
   final HttpCache? cache;
 
@@ -622,12 +622,12 @@ class Fetcher with _PathResolver {
   /// included, because the server counts those too.
   ///
   /// ```dart
-  /// final api = Fetcher(limiter: Concurrent.rate(10, per: 1.s));
-  /// await Concurrent.run(urls, (u) => api.send(HttpMethod.get, u), size: 8);
+  /// final api = Fetcher(limiter: RateLimiter(10, per: 1.s));
+  /// await urls.parallelMap((u) => api.send(HttpMethod.get, u), concurrency: 8);
   /// ```
   ///
   /// Typed [Waiting], so a [Semaphore] paces this client as readily as a
-  /// [Limiter] — *at most three of my requests in flight anywhere in this
+  /// [RateLimiter] — *at most three of my requests in flight anywhere in this
   /// program* is as reasonable a rule as *ten per second*, and only the
   /// second one compiled through 5.5.0.
   ///
@@ -748,7 +748,7 @@ class Fetcher with _PathResolver {
   /// present, otherwise the delay is [backoff] multiplied by the attempt
   /// number with jitter. A `retry: bool` stood beside it through 6.0.0 — a
   /// flag deciding whether a number applied, which is the `times:`/`retries:`
-  /// pair Rule 5 deleted from `concurrent.retry` wearing a second hat.
+  /// pair that [retry] carries, wearing a second hat.
   ///
   /// [redirects] overrides the client's the same way, and reads the same:
   /// `0` returns the `3xx` itself, headers and all, and a chain longer than a
@@ -765,7 +765,7 @@ class Fetcher with _PathResolver {
   /// reports them as `stats.retried`.
   ///
   /// Sends a GET request to [url].
-  Future<Reply> get(
+  Future<Response> get(
     Uri url, {
     Map<String, String>? headers,
     Duration? timeout,
@@ -785,7 +785,7 @@ class Fetcher with _PathResolver {
   );
 
   /// Sends a POST request to [url].
-  Future<Reply> post(
+  Future<Response> post(
     Uri url, {
     Body? body,
     Map<String, String>? headers,
@@ -807,7 +807,7 @@ class Fetcher with _PathResolver {
   );
 
   /// Sends a PUT request to [url].
-  Future<Reply> put(
+  Future<Response> put(
     Uri url, {
     Body? body,
     Map<String, String>? headers,
@@ -829,7 +829,7 @@ class Fetcher with _PathResolver {
   );
 
   /// Sends a DELETE request to [url].
-  Future<Reply> delete(
+  Future<Response> delete(
     Uri url, {
     Body? body,
     Map<String, String>? headers,
@@ -851,7 +851,7 @@ class Fetcher with _PathResolver {
   );
 
   /// Sends a PATCH request to [url].
-  Future<Reply> patch(
+  Future<Response> patch(
     Uri url, {
     Body? body,
     Map<String, String>? headers,
@@ -873,7 +873,7 @@ class Fetcher with _PathResolver {
   );
 
   /// Sends a HEAD request to [url].
-  Future<Reply> head(
+  Future<Response> head(
     Uri url, {
     Map<String, String>? headers,
     Duration? timeout,
@@ -890,9 +890,9 @@ class Fetcher with _PathResolver {
     fetch: fetch,
   );
 
-  /// Sends an HTTP request and returns a streaming [Reply] yielding body bytes
-  /// via [Reply.stream] without buffering the full body in heap memory.
-  Future<Reply> stream(
+  /// Sends an HTTP request and returns a streaming [Response] yielding body bytes
+  /// via [Response.stream] without buffering the full body in heap memory.
+  Future<Response> stream(
     HttpMethod method,
     Uri url, {
     Map<String, String>? headers,
@@ -904,10 +904,7 @@ class Fetcher with _PathResolver {
     void Function(Uri url, int attempt)? onretry,
     Fetch? fetch,
   }) async {
-    final merged = {
-      ...this.headers,
-      ...?headers,
-    };
+    final merged = {...this.headers, ...?headers};
     final deadline = timeout ?? this.timeout;
     final effRetries = retries ?? this.retries;
     final effRedirects = redirects ?? this.redirects;
@@ -964,11 +961,11 @@ class Fetcher with _PathResolver {
             break;
           }
 
-          return Reply.stream(
+          return Response.stream(
             streamed.stream,
             url: currentUrl,
             fetch: fetch ?? Fetch(url, method: method),
-            status: streamed.statusCode,
+            statusCode: streamed.statusCode,
             headers: streamed.headers,
             encoding: encoding ?? this.encoding,
           );
@@ -984,7 +981,7 @@ class Fetcher with _PathResolver {
   }
 
   /// Sends [method] to [url] and returns the response.
-  Future<Reply> send(
+  Future<Response> send(
     HttpMethod method,
     Uri url, {
     Map<String, String>? headers,
@@ -1092,10 +1089,10 @@ class Fetcher with _PathResolver {
             return confirmed;
           }
 
-          final result = Reply(
+          final result = Response(
             url: currentUrl,
             fetch: fetch ?? Fetch(url, method: method),
-            status: response.statusCode,
+            statusCode: response.statusCode,
             headers: response.headers,
             bytes: response.bodyBytes,
             encoding: encoding ?? this.encoding,
@@ -1165,19 +1162,19 @@ class Fetcher with _PathResolver {
   ///
   /// A cache of anything but a plain successful `GET` would hand back answers
   /// to questions nobody asked again.
-  static bool _storable(HttpMethod method, Reply response) {
-    if (method != HttpMethod.get || response.status != 200) return false;
+  static bool _storable(HttpMethod method, Response response) {
+    if (method != HttpMethod.get || response.statusCode != 200) return false;
     final control = response.headers['cache-control']?.toLowerCase();
     return control == null || !control.contains('no-store');
   }
 
   /// [entry]'s response, restamped with the freshness headers a `304` carried.
-  static Reply _confirm(CacheEntry entry, Map<String, String> headers) {
+  static Response _confirm(CacheEntry entry, Map<String, String> headers) {
     const refreshed = ['cache-control', 'expires', 'date', 'etag'];
-    return Reply(
+    return Response(
       url: entry.response.url,
       fetch: entry.response.fetch,
-      status: entry.response.status,
+      statusCode: entry.response.statusCode,
       headers: {
         ...entry.response.headers,
         for (final name in refreshed)
@@ -1195,14 +1192,14 @@ class Fetcher with _PathResolver {
       statusCode == 307 ||
       statusCode == 308;
 
-  // The one generator in the library, so `util.rand.seed` makes a retry's
+  // The one generator in the library, so [seedRandom] makes a retry's
   // timing as repeatable as a crawl's order. Two generators doing this job is
   // one too many.
-  static const RandAccessor _rand = RandAccessor();
 
-  static Duration _backoffWithJitter(Duration base) => _rand.jitter(base);
+  static Duration _backoffWithJitter(Duration base) => jitter(base);
 
-  static bool _retryable(int status) => status >= 500 || status == 429;
+  static bool _retryable(int statusCode) =>
+      statusCode >= 500 || statusCode == 429;
 
   /// Parses a `Retry-After` header, in either delta-seconds or HTTP-date form.
   static Duration? _retryAfter(Map<String, String> headers) {
@@ -1228,7 +1225,7 @@ class Fetcher with _PathResolver {
   ///
   /// [retries] overrides the client's own, exactly as it does on [send], and
   /// is `0` by default for the same reason. [onprogress] is spelled the way
-  /// [send]'s `onretry` and `io.watch`'s `onchange` are; it was `onProgress`
+  /// [send]'s `onretry` and [watchPath]'s `onchange` are; it was `onProgress`
   /// through 6.0.0, the library's one camelCase parameter.
   Future<FileSystemEntry> download(
     Uri url,
@@ -1267,7 +1264,7 @@ class Fetcher with _PathResolver {
   /// Answers [fetch] — **this client, as a [Send]**.
   ///
   /// What makes `Fetcher` the default transport of a crawl without a class
-  /// hierarchy in between: `Crawl.using` takes a `Send`, a `Fetcher` is one,
+  /// hierarchy in between: `Crawler.using` takes a `Send`, a `Fetcher` is one,
   /// and so is any closure.
   ///
   /// Schemes other than `http` and `https` are answered here rather than on
@@ -1275,7 +1272,7 @@ class Fetcher with _PathResolver {
   /// `data:` document or raw markup: `Fetch(Uri.file(path))`,
   /// `Fetch(coerce(markup))`. `HttpDownloader` did this through 5.5.0 and was
   /// a class for it.
-  Future<Reply> call(Fetch fetch) async {
+  Future<Response> call(Fetch fetch) async {
     final uri = fetch.url;
     switch (uri.scheme) {
       case 'http':
@@ -1288,10 +1285,10 @@ class Fetcher with _PathResolver {
           fetch: fetch,
         );
       case 'data':
-        return Reply(
+        return Response(
           url: uri,
           fetch: fetch,
-          status: 200,
+          statusCode: 200,
           headers: {'content-type': uri.data?.mimeType ?? 'text/html'},
           bytes:
               uri.data?.contentAsBytes() ??
@@ -1302,18 +1299,18 @@ class Fetcher with _PathResolver {
         if (!await file.exists()) {
           // A path that is not there is a miss, not a page whose body is its
           // own URL: report it the way a 404 from the network would arrive.
-          return Reply(
+          return Response(
             url: uri,
             fetch: fetch,
-            status: 404,
+            statusCode: 404,
             headers: const {'content-type': 'text/plain'},
             bytes: const [],
           );
         }
-        return Reply(
+        return Response(
           url: uri,
           fetch: fetch,
-          status: 200,
+          statusCode: 200,
           headers: const {'content-type': 'text/html'},
           bytes: await file.readAsBytes(),
         );
@@ -1321,10 +1318,10 @@ class Fetcher with _PathResolver {
         final content = uri.scheme == 'string'
             ? Uri.decodeComponent(uri.path)
             : (uri.hasScheme ? uri.toString() : uri.path);
-        return Reply(
+        return Response(
           url: uri,
           fetch: fetch,
-          status: 200,
+          statusCode: 200,
           headers: const {'content-type': 'text/plain'},
           bytes: utf8.encode(content),
         );
@@ -1643,4 +1640,3 @@ class CookieJar {
     );
   }
 }
-

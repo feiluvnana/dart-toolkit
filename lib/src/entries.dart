@@ -1,11 +1,11 @@
 /// # Listing, Walking & Globbing (internal)
 ///
-/// Implementation behind `io.dir.list`, `io.dir.walk`, `io.dir.glob`,
-/// `io.dir.sweep` and `io.stat`. Every one of them hands back a
+/// Implementation behind [listDir], [walkDir], [glob],
+/// [sweepDir] and [fileStat]. Every one of them hands back a
 /// [FileSystemEntry], which is what took the `dart:io` types back out of the
 /// public signatures.
 ///
-/// Not exported: reach these operations through `io.dir.*`.
+/// Not exported: reach these operations through the directory functions.
 library;
 
 import 'dart:io';
@@ -18,7 +18,7 @@ import '../io/entry.dart';
 // LISTING, WALKING & GLOBBING (Entries)
 // ============================================================================
 
-/// Static listing helpers backing `io.dir.*`.
+/// Static listing helpers backing the directory functions.
 class Entries {
   const Entries._();
 
@@ -88,7 +88,7 @@ class Entries {
   /// Whether the directory at [dir] holds no entries.
   ///
   /// `true` when there is nothing there at all, and `false` when [dir] is not
-  /// a directory — the two answers `io.exists` and `io.isdir` already give,
+  /// a directory — the two answers `pathExists` and `dirExists` already give,
   /// so this one is only about what is inside.
   static bool empty(String dir) {
     final directory = Directory(dir);
@@ -170,7 +170,7 @@ class Entries {
       final entry = _fill(child.path, kind);
       if (_keeps(entry, only, matcher, rooted, root)) yield entry;
       if (depth != null && level >= depth) continue;
-      if (entry.isdir) {
+      if (entry.isDir) {
         yield* _step(
           child.path,
           level + 1,
@@ -182,7 +182,7 @@ class Entries {
           follow: follow,
           seen: seen,
         );
-      } else if (entry.islink && follow) {
+      } else if (entry.isLink && follow) {
         if (!FileSystemEntity.isDirectorySync(child.path)) continue;
         final String real;
         try {
@@ -251,7 +251,7 @@ class Entries {
       if (entry == null) continue;
       if (_keeps(entry, only, matcher, rooted, root)) yield entry;
       if (depth != null && level >= depth) continue;
-      if (entry.isdir) {
+      if (entry.isDir) {
         yield* _stepAsync(
           child.path,
           level + 1,
@@ -263,7 +263,7 @@ class Entries {
           follow: follow,
           seen: seen,
         );
-      } else if (entry.islink && follow) {
+      } else if (entry.isLink && follow) {
         if (!await FileSystemEntity.isDirectory(child.path)) continue;
         final String real;
         try {

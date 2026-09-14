@@ -65,17 +65,16 @@ extension ToolkitFileExtensions on File {
   }
 
   /// Writes [bytes] atomically to this file synchronously staging through [part].
-  File writeBytesAtomicSync(
-    List<int> bytes, {
-    String part = '.part',
-  }) {
+  File writeBytesAtomicSync(List<int> bytes, {String part = '.part'}) {
     Fs.saveSync(path, bytes, part: part);
     return this;
   }
 
   /// Appends [line] followed by a newline to this file.
   Future<File> appendLine(String line, {Encoding encoding = utf8}) async {
-    final endsWithNewline = !existsSync() || (await readAsString(encoding: encoding)).endsWith('\n');
+    final endsWithNewline =
+        !existsSync() ||
+        (await readAsString(encoding: encoding)).endsWith('\n');
     final prefix = endsWithNewline ? '' : '\n';
     await Fs.append(path, '$prefix$line\n', encoding: encoding);
     return this;
@@ -83,7 +82,8 @@ extension ToolkitFileExtensions on File {
 
   /// Appends [line] followed by a newline to this file synchronously.
   File appendLineSync(String line, {Encoding encoding = utf8}) {
-    final endsWithNewline = !existsSync() || readAsStringSync(encoding: encoding).endsWith('\n');
+    final endsWithNewline =
+        !existsSync() || readAsStringSync(encoding: encoding).endsWith('\n');
     final prefix = endsWithNewline ? '' : '\n';
     Fs.appendSync(path, '$prefix$line\n', encoding: encoding);
     return this;
@@ -112,15 +112,19 @@ extension ToolkitDirectoryExtensions on Directory {
   }) {
     final stream = list(recursive: recursive, followLinks: followLinks);
     if (matching == null) return stream;
-    return stream.where((entity) => matching.allMatches(entity.path).isNotEmpty);
+    return stream.where(
+      (entity) => matching.allMatches(entity.path).isNotEmpty,
+    );
   }
 
   /// Lists entries in this directory yielding [FileSystemEntry] objects.
   Stream<FileSystemEntry> listEntries({
     bool recursive = false,
     bool followLinks = true,
-  }) => list(recursive: recursive, followLinks: followLinks)
-      .map((entity) => Fs.entryFor(entity.path));
+  }) => list(
+    recursive: recursive,
+    followLinks: followLinks,
+  ).map((entity) => Fs.entryFor(entity.path));
 
   /// Ensures this directory exists asynchronously.
   Future<Directory> ensure() async => create(recursive: true);

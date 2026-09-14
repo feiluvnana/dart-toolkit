@@ -2,7 +2,7 @@
 ///
 /// A single-line bar with a rate and an ETA, repainted in place. It owns a
 /// cursor position and a clock, so it is one of the two things in
-/// `system.console` with state rather than a render.
+/// the console with state rather than a single render.
 ///
 /// Split out of `writer.dart` in 6.0.0. Nothing about the API moved.
 library;
@@ -17,15 +17,12 @@ import 'writer.dart';
 // PROGRESS BARS (Progress)
 // ============================================================================
 
-const SizeAccessor _size = SizeAccessor();
-const TimeAccessor _time = TimeAccessor();
-
 /// What a [Progress] bar is counting.
 enum ProgressUnit {
   /// Plain item counts.
   count,
 
-  /// Byte totals, rendered with [SizeAccessor.format].
+  /// Byte totals, rendered with [formatBytes].
   bytes,
 }
 
@@ -35,7 +32,7 @@ enum ProgressUnit {
 ///
 /// ```dart
 /// final bar = Progress(total: files.length, message: 'Downloading');
-/// for (final f in files) { await Files.readText(f.path); bar.tick(); }
+/// for (final f in files) { await readText(f.path); bar.tick(); }
 /// bar.done('Finished');
 /// ```
 class Progress {
@@ -64,7 +61,7 @@ class Progress {
 
   /// Creates a bar counting up to [total].
   ///
-  /// The glyph defaults match `system.console.progress`, so a bar built either
+  /// The glyph defaults are the shared ones, so a bar built either
   /// way looks the same.
   Progress({
     required this.total,
@@ -75,7 +72,7 @@ class Progress {
     String message = '',
     ConsoleWriter? writer,
   }) : _message = message,
-       writer = writer ?? ConsoleWriter() {
+       writer = writer ?? sharedConsoleWriter {
     _clock.start();
   }
 
@@ -110,7 +107,7 @@ class Progress {
     final fraction = total > 0 ? (_current / total).clamp(0.0, 1.0) : 0.0;
     final filled = (width * fraction).round();
     final metrics = unit == ProgressUnit.bytes
-        ? '${_size.format(_current)} / ${_size.format(total)}'
+        ? '${formatBytes(_current)} / ${formatBytes(total)}'
         : '$_current / $total';
 
     final parts = [
@@ -131,13 +128,13 @@ class Progress {
     if (elapsed.inMilliseconds <= 300 || _current <= 0) return const [];
     final perSecond = _current / (elapsed.inMilliseconds / 1000);
     final rate = unit == ProgressUnit.bytes
-        ? '${_size.format(perSecond.round())}/s'
+        ? '${formatBytes(perSecond.round())}/s'
         : '${perSecond.toStringAsFixed(1)} items/s';
     if (total <= _current || perSecond <= 0) return [rate.dim()];
     final remaining = Duration(
       seconds: ((total - _current) / perSecond).round(),
     );
-    return [rate.dim(), 'ETA ${_time.format(remaining)}'.dim()];
+    return [rate.dim(), 'ETA ${formatDuration(remaining)}'.dim()];
   }
 
   /// Fills the bar, prints [message] and moves to the next line.

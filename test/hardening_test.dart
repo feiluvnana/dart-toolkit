@@ -94,9 +94,9 @@ Disallow: /
   group('the transport seam', () {
     test('a crawl does not close the client it was handed', () async {
       final mine = Fetcher();
-      await (Http.crawl(
-        [Fetch('https://example.test/'.url)],
-      )..using(mine.call)).run();
+      await (crawl([
+        Fetch('https://example.test/'.url),
+      ])..using(mine.call)).run();
 
       // Reaching the socket layer proves the client was not closed. A `Send`
       // is a function and owns nothing, so there is nothing for the crawl to
@@ -118,44 +118,27 @@ Disallow: /
     test('retries is the client\'s knob, declared in one place', () {
       // Ten knobs at four levels through 5.5.0 — and a caller-supplied
       // downloader silently dropped five of them. Now there is one place for
-      // each, and `Crawl` has no member for any of them.
+      // each, and `Crawler` has no member for any of them.
       final client = Fetcher(retries: 9);
       expect(client.retries, equals(9));
-      expect(
-        Http.crawl(const <Fetch>[]).using(client.call),
-        isA<Crawl>(),
-      );
+      expect(crawl(const <Fetch>[]).using(client.call), isA<Crawler>());
     });
   });
 
   group('selectors', () {
     test('matches tests an element without scanning its parent', () {
-      final q = parseHtml(
-        '<ul><li class="a">1</li><li class="b">2</li></ul>',
-      );
+      final q = parseHtml('<ul><li class="a">1</li><li class="b">2</li></ul>');
       expect(q.$('li').matching('.a').texts, equals(['1']));
-      expect(
-        q.$('li').matching(':not(.a)').texts,
-        equals(['2']),
-      );
+      expect(q.$('li').matching(':not(.a)').texts, equals(['2']));
     });
 
     test('combinators are honoured by a single-element match', () {
       final q = parseHtml(
         '<div class="w"><p>a</p><span>b</span><span>c</span></div>',
       );
-      expect(
-        q.$('span').matching('p + span').texts,
-        equals(['b']),
-      );
-      expect(
-        q.$('span').matching('.w > span').texts,
-        equals(['b', 'c']),
-      );
-      expect(
-        q.$('span').matching('p ~ span').texts,
-        equals(['b', 'c']),
-      );
+      expect(q.$('span').matching('p + span').texts, equals(['b']));
+      expect(q.$('span').matching('.w > span').texts, equals(['b', 'c']));
+      expect(q.$('span').matching('p ~ span').texts, equals(['b', 'c']));
     });
 
     test('closest walks ancestors', () {
@@ -232,7 +215,7 @@ Disallow: /
     test('retries means attempts after the first', () async {
       var calls = 0;
       await expectLater(
-        Concurrent.retry(
+        retry(
           () async {
             calls++;
             throw StateError('nope');
@@ -248,7 +231,7 @@ Disallow: /
     test('times means total attempts', () async {
       var calls = 0;
       await expectLater(
-        Concurrent.retry(
+        retry(
           () async {
             calls++;
             throw StateError('nope');
@@ -263,7 +246,7 @@ Disallow: /
   });
 
   group('typed extraction', () {
-    final res = Reply.text('''
+    final res = Response.text('''
       <h1>Title</h1>
       <ul><li class="t">a</li><li class="t">b</li></ul>
       <div class="row"><span class="n">one</span><a href="/1">x</a></div>
@@ -271,10 +254,14 @@ Disallow: /
     ''');
 
     test('pick keeps the field type', () {
-      final String? title = res.parse(Codec.html).pick(Field.text('h1'));
-      final List<String> tags = res.parse(Codec.html).pick(Field.texts('.t'));
+      final String? title = res
+          .parse(DocumentFormat.html)
+          .pick(Field.text('h1'));
+      final List<String> tags = res
+          .parse(DocumentFormat.html)
+          .pick(Field.texts('.t'));
       final List<String> hrefs = res
-          .parse(Codec.html)
+          .parse(DocumentFormat.html)
           .pick(Field.attrs('.row a', 'href'));
       expect(title, equals('Title'));
       expect(tags, equals(['a', 'b']));
@@ -283,13 +270,13 @@ Disallow: /
 
     test('a custom read is typed too', () {
       final int count = res
-          .parse(Codec.html)
+          .parse(DocumentFormat.html)
           .pick(Field.fn((el) => el.querySelectorAll('.row').length));
       expect(count, equals(2));
     });
 
     test('the string shorthand still works', () {
-      final data = res.parse(Codec.html).extract({
+      final data = res.parse(DocumentFormat.html).extract({
         'title': 'h1',
         'tags': ['.t'],
         'rows': [
@@ -309,7 +296,7 @@ Disallow: /
     });
 
     test('Fields and shorthand mix in one schema', () {
-      final data = res.parse(Codec.html).extract({
+      final data = res.parse(DocumentFormat.html).extract({
         'title': Field.text('h1'),
         'tags': ['.t'],
       });
@@ -320,59 +307,56 @@ Disallow: /
 
   group('Files mirrors sync and async operations', () {
     test('parent has an async twin, like every other disk operation', () async {
-      final dir = Files.tempDirSync('dt_parent_');
+      final dir = tempDirSync('dt_parent_');
       try {
-        final blocking = Files.join(dir.path, 'a', 'b', 'file.txt');
-        final future = Files.join(dir.path, 'c', 'd', 'file.txt');
-        Files.makeDirSync(Files.dirname(blocking));
-        await Files.makeDir(Files.dirname(future));
+        final blocking = joinPath(dir.path, 'a', 'b', 'file.txt');
+        final future = joinPath(dir.path, 'c', 'd', 'file.txt');
+        makeDirSync(dirname(blocking));
+        await makeDir(dirname(future));
 
         expect(
-          Files.isFile(Files.dirname(blocking)),
+          fileExists(dirname(blocking)),
           isFalse,
           reason: 'a folder, not a file',
         );
-        expect(Directory(Files.dirname(blocking)).existsSync(), isTrue);
-        expect(Directory(Files.dirname(future)).existsSync(), isTrue);
+        expect(Directory(dirname(blocking)).existsSync(), isTrue);
+        expect(Directory(dirname(future)).existsSync(), isTrue);
       } finally {
-        Files.removeSync(dir.path);
+        removePathSync(dir.path);
       }
     });
 
     test('both write atomically to the same place', () async {
-      final dir = Files.tempDirSync('dt_io_');
+      final dir = tempDirSync('dt_io_');
       try {
-        final a = Files.join(dir.path, 'sync.txt');
-        final b = Files.join(dir.path, 'async.txt');
-        Files.writeTextSync(a, 'one');
-        await Files.writeText(b, 'two');
-        expect(Files.readTextSync(a), equals('one'));
-        expect(await Files.readText(b), equals('two'));
-        expect(Files.exists(a), isTrue);
-        expect(Files.exists(b), isTrue);
-        expect(
-          await Files.walk(dir.path),
-          hasLength(2),
-        );
-        expect(await Files.remove(b), isTrue);
-        expect(Files.exists(b), isFalse);
+        final a = joinPath(dir.path, 'sync.txt');
+        final b = joinPath(dir.path, 'async.txt');
+        writeTextSync(a, 'one');
+        await writeText(b, 'two');
+        expect(readTextSync(a), equals('one'));
+        expect(await readText(b), equals('two'));
+        expect(pathExists(a), isTrue);
+        expect(pathExists(b), isTrue);
+        expect(await walkDir(dir.path), hasLength(2));
+        expect(await removePath(b), isTrue);
+        expect(pathExists(b), isFalse);
       } finally {
-        Files.removeSync(dir.path);
+        removePathSync(dir.path);
       }
     });
 
     test('json round-trips through both', () async {
-      final dir = Files.tempDirSync('dt_json_');
+      final dir = tempDirSync('dt_json_');
       try {
-        final path = Files.join(dir.path, 'd.json');
-        Files.writeJsonSync(path, {'n': 1});
-        final readSync = parseJson(Files.readTextSync(path));
+        final path = joinPath(dir.path, 'd.json');
+        writeJsonSync(path, {'n': 1});
+        final readSync = parseJson(readTextSync(path));
         expect(readSync.number('n'), equals(1));
-        await Files.writeJson(path, {'n': 2});
-        final readAsync = parseJson(await Files.readText(path));
+        await writeJson(path, {'n': 2});
+        final readAsync = parseJson(await readText(path));
         expect(readAsync.number('n'), equals(2));
       } finally {
-        Files.removeSync(dir.path);
+        removePathSync(dir.path);
       }
     });
   });

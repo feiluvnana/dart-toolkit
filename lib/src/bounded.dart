@@ -6,7 +6,7 @@
 /// Implementation behind `Pipe.map.async` and `Pipe.where.async`. It lives
 /// here rather than in `collection` or `concurrent` because both need it and
 /// neither may depend on the other: `collection` is the bottom of the stack
-/// by Rule 2, and `concurrent` already sits above it.
+/// and the concurrency library already sits above it.
 ///
 /// Not exported: reach it through the `Pipe` vocabulary.
 library;

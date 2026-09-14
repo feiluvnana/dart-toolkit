@@ -1,13 +1,13 @@
-/// # TOML (`format.toml.*`)
+/// # TOML
 ///
-/// The same three members `format.yaml` has, over the same [Json] cursor, for
+/// The same three members YAML has, over the same [Json] cursor, for
 /// the other configuration format a script meets — Rust's `Cargo.toml`,
 /// Python's `pyproject.toml`, and anything else that picked TOML over YAML.
 library;
 
 import 'package:toml/toml.dart' as toml;
 
-import '../src/codec.dart';
+import '../src/format.dart';
 import '../src/json.dart';
 import 'format.dart';
 
@@ -15,18 +15,20 @@ import 'format.dart';
 // TOML (format.toml.*)
 // ============================================================================
 
-/// Entry point for TOML, reachable as `format.toml`.
+/// The TOML codec. Reach it as [parseToml] or [DocumentFormat.toml].
 ///
 /// ```dart
-/// final cargo = Formats.toml('version = "1.0.0"');
+/// final cargo = parseToml('version = "1.0.0"');
 /// cargo.text('version');
 /// ```
 ///
-/// Spelled member for member like [JsonAccessor] and [YamlAccessor], because
+/// Spelled member for member like [JsonFormat] and [YamlFormat], because
 /// the format namespaces should be learnable from each other.
-class TomlAccessor with FileCodec<Json, Object?> implements Codec<Json> {
-  /// Creates the accessor. Prefer the shared `format.toml` instance.
-  const TomlAccessor();
+class TomlFormat
+    with FileFormat<Json, Object?>
+    implements DocumentFormat<Json> {
+  /// Creates the codec. Prefer the shared [DocumentFormat.toml] instance.
+  const TomlFormat();
 
   /// Parses TOML [text] into a [Json] cursor.
   ///
@@ -34,7 +36,7 @@ class TomlAccessor with FileCodec<Json, Object?> implements Codec<Json> {
   @override
   Json parse(String text) {
     try {
-      return Json(YamlAccessor.plain(toml.TomlDocument.parse(text).toMap()));
+      return Json(YamlFormat.plain(toml.TomlDocument.parse(text).toMap()));
     } on Exception {
       return Json.none;
     }
@@ -47,7 +49,7 @@ class TomlAccessor with FileCodec<Json, Object?> implements Codec<Json> {
   /// handed when it cannot carry it.
   ///
   /// Through 4.0.0 both cases returned an empty string, so
-  /// `io.write(path, format.toml.format(rows))` wrote an empty file and
+  /// `writeText(path, toTomlString(rows))` wrote an empty file and
   /// reported success. Reading never throws and gives the empty cursor;
   /// writing never returns text that is wrong or absent. A caller can check
   /// for a throw and cannot check for a file that is silently blank.

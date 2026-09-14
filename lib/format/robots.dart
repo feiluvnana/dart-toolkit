@@ -1,37 +1,37 @@
-/// # robots.txt (`format.robots.*`)
+/// # robots.txt
 ///
-/// The format codec, spelled exactly like [JsonAccessor] and the rest:
+/// The format codec, spelled exactly like [JsonFormat] and the rest:
 /// `parse`, `read`, `write`, `format`. A `robots.txt` arrives from outside
 /// Dart with its own words — `User-agent`, `Disallow`, `Crawl-delay` — which
-/// is Rule 1's definition of a subject, and Rule 2's fifth test puts a
-/// subject with siblings in the family its siblings are in.
+/// is why it sits with the other formats rather than with the networking code.
 ///
-/// It was `net.robots(content)` through 5.5.0, in the domain whose own
-/// library doc opens *this domain does not parse anything*.
+/// A parser, not a fetcher: fetching one is the crawl's job.
 ///
 /// ```dart
-/// final rules = (await Http.get('https://x.test/robots.txt'.url))
-///     .parse(Codec.robots);
+/// final rules = (await get('https://x.test/robots.txt'.url))
+///     .parse(DocumentFormat.robots);
 /// rules.allowed('https://x.test/admin'.url, agent: 'MyBot');
 /// ```
 ///
-/// Fetching one is the crawl's job: `Crawl.obey()` reads `/robots.txt`
+/// Fetching one is the crawl's job: `Crawler.obey()` reads `/robots.txt`
 /// through the same [Send] the crawl uses, so politeness works against a
 /// fixture transport — which `Robots.load` could not do, because it reached
 /// for the shared client itself.
 library;
 
-import '../src/codec.dart';
+import '../src/format.dart';
 import 'format.dart';
 
 // ============================================================================
 // ROBOTS.TXT (format.robots.*)
 // ============================================================================
 
-/// Entry point for `robots.txt`, reachable as `format.robots`.
-class RobotsAccessor with FileCodec<Robots, Robots> implements Codec<Robots> {
-  /// Creates the accessor. Prefer the shared `format.robots` instance.
-  const RobotsAccessor();
+/// The `robots.txt` codec. Reach it as [parseRobots] or [DocumentFormat.robots].
+class RobotsFormat
+    with FileFormat<Robots, Robots>
+    implements DocumentFormat<Robots> {
+  /// Creates the codec. Prefer the shared [DocumentFormat.robots] instance.
+  const RobotsFormat();
 
   /// Parses [text] into a [Robots] evaluator.
   ///
@@ -251,7 +251,7 @@ class Robots {
   }
 
   /// Renders this document back to `robots.txt` text. See
-  /// [RobotsAccessor.format].
+  /// [RobotsFormat.format].
   String render() {
     final out = StringBuffer();
     for (final entry in _rules.entries) {
@@ -276,7 +276,7 @@ class Robots {
   ///
   /// RFC 9309 section 2.3.1.4 — a 5xx means the rules are unreachable, not
   /// absent, so crawling is disallowed outright rather than assumed free. A
-  /// crawl reaches this through `Crawl.obey`.
+  /// crawl reaches this through `Crawler.obey`.
   static final Robots closed = Robots(
     rules: {
       '*': [RobotsRule('/', allow: false)],
@@ -286,7 +286,7 @@ class Robots {
   /// The declared crawl delay for [agent], if any.
   ///
   /// Matched by the same product-token rules as [group]. A crawl started
-  /// with `Crawl.obey` waits at least this long between requests to the host.
+  /// with `Crawler.obey` waits at least this long between requests to the host.
   Duration? delay({String agent = '*'}) {
     final full = agent.toLowerCase().trim();
     final exact = _delays[full];

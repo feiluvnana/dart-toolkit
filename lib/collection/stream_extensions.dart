@@ -210,14 +210,8 @@ extension StreamExtensions<T> on Stream<T> {
   Stream<T> concatWith(Stream<T> other) => Streams.concat([this, other]);
 
   /// Pairs events at matching index from two streams.
-  Stream<V> zipWith<R, V>(
-    Stream<R> other, [
-    V Function(T a, R b)? combiner,
-  ]) => Streams.zip(
-    this,
-    other,
-    combiner ?? ((a, b) => (a, b) as V),
-  );
+  Stream<V> zipWith<R, V>(Stream<R> other, [V Function(T a, R b)? combiner]) =>
+      Streams.zip(this, other, combiner ?? ((a, b) => (a, b) as V));
 
   /// Replaces stream errors with a fallback event returned by [fallback].
   Stream<T> recover(T Function(Object error) fallback) {

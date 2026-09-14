@@ -8,15 +8,15 @@
 /// that more than one domain hands back, belonging to none of them, and it
 /// computes rather than touches anything. It was under `lib/util/` through
 /// 5.4.0 without ever being reachable as `util.` anything. The *codec* that
-/// builds one is `format.html`, beside `format.json`, `format.yaml` and
-/// `format.toml`, because a format is knowledge from outside Dart.
+/// builds one is [parseHtml], beside [parseJson], [parseYaml] and
+/// [parseToml], because a format is knowledge from outside Dart.
 ///
 /// Three doors produce the same cursor:
 ///
 /// ```dart
-/// res.parse(Codec.html);                 // a response
-/// Formats.html(body);                    // a string
-/// await const HtmlAccessor().read('page.html');    // a file
+/// res.parse(DocumentFormat.html);                 // a response
+/// parseHtml(body);                    // a string
+/// await const HtmlFormat().read('page.html');    // a file
 /// ```
 ///
 /// Navigation comes in two spellings, for the two questions: [Markup.$]
@@ -32,8 +32,6 @@ import 'package:xpath_selector_html_parser/xpath_selector_html_parser.dart';
 import '../src/jquery.dart';
 import '../util/text.dart';
 
-const TextAccessor _text = TextAccessor();
-
 // ============================================================================
 // MARKUP CURSORS (Markup)
 // ============================================================================
@@ -46,14 +44,14 @@ const TextAccessor _text = TextAccessor();
 /// for a value and the honest answer is that there is not one.
 ///
 /// ```dart
-/// final page = res.parse(Codec.html);
+/// final page = res.parse(DocumentFormat.html);
 ///
 /// page.$('h1').text;                     // String
 /// page.$('a').attrs('href');             // Iterable<String>
 /// page.$xpath('//table//td[2]').texts;   // Iterable<String>
 /// page.all('.product', (row) => (
 ///   name: row.$('.name').text,
-///   price: row.pick(Field.text('.price').when(Text.number)),
+///   price: row.pick(Field.text('.price').when(extractNumber)),
 /// ));                                    // List<({String name, num? price})>
 /// ```
 class Markup {
@@ -73,7 +71,7 @@ class Markup {
   /// when the markup has no body children, so a full page reads as usefully
   /// as a fragment.
   ///
-  /// Turning *text* into a document is `format.html.parse`: parsing is the
+  /// Turning *text* into a document is [parseHtml]: parsing is the
   /// codec's job, and rooting a cursor on the result is this one's.
   factory Markup.of(Document document, {bool isXPath = false}) {
     final children = document.body?.children;
@@ -142,7 +140,7 @@ class Markup {
 
   /// Everything matching [selector], with full jQuery syntax.
   ///
-  /// On a cursor rooted on a document — which is what `format.html.parse`
+  /// On a cursor rooted on a document — which is what [parseHtml]
   /// gives back — the search covers the whole page, so an element sitting at
   /// the top level of the body is found like any other. On a scoped cursor it
   /// covers the descendants of the current set, which is what makes the
@@ -158,12 +156,12 @@ class Markup {
   /// `page(selector)` was a second spelling of this through 4.0.0 — the
   /// release that made them one search kept both names for it. Worse, which
   /// selector *language* the callable spoke depended on hidden state: on a
-  /// cursor from `format.html.query` it ran the string as XPath instead, so
+  /// cursor from a query helper it ran the string as XPath instead, so
   /// nothing at the call site said which of the two it was. This one is CSS
   /// and [$xpath] is XPath, and the two names say which.
   ///
   /// It was `find` through 6.0.0, with `$` an opt-in extension on `String`
-  /// beside it. jQuery's `$` is what Rule 1 means by a subject arriving with
+  /// beside it. jQuery's `\$` is a subject arriving with
   /// its own vocabulary, and a *method* named `$` puts nothing in a script's
   /// global scope — which was the whole objection to the spelling. So the
   /// subject's own name won, and `find` went rather than standing beside it.
@@ -186,18 +184,16 @@ class Markup {
   /// final variants = page.all('.variant', (row) => (
   ///   name: row.$('.name').text,
   ///   sku: row.attr('data-sku'),
-  ///   price: row.pick(Field.text('.price').when(Text.number)),
+  ///   price: row.pick(Field.text('.price').when(extractNumber)),
   /// ));
   /// // List<({String name, String? sku, num? price})>
   /// ```
   ///
   /// Where `extract` hands back `Map<String, Object?>` and leaves every value
   /// to be cast, this keeps the type of each field all the way out.
-  List<R> all<R>(String selector, R Function(Markup row) build) =>
-      $(selector)
-          ._elements
-          .map((element) => build(Markup([element], false)))
-          .toList();
+  List<R> all<R>(String selector, R Function(Markup row) build) => $(
+    selector,
+  )._elements.map((element) => build(Markup([element], false))).toList();
 
   /// Reads a typed [field] from the first element of this set.
   ///
@@ -205,7 +201,7 @@ class Markup {
   /// straight off a page:
   ///
   /// ```dart
-  /// final String? title = res.parse(Codec.html).pick(Field.text('h1'));
+  /// final String? title = res.parse(DocumentFormat.html).pick(Field.text('h1'));
   /// ```
   T pick<T>(Field<T> field) => field.read(_root);
 
@@ -216,7 +212,7 @@ class Markup {
   /// sub-object — or a [Field], which says the same thing with a static type.
   ///
   /// ```dart
-  /// final data = res.parse(Codec.html).extract({
+  /// final data = res.parse(DocumentFormat.html).extract({
   ///   'title': 'h1',
   ///   'price': '.price',
   ///   'link': 'a@href',
@@ -315,7 +311,7 @@ class Markup {
   /// This is the one place text is read, so `res.\$(...).text`, `res.extract`
   /// and `res.pick` cannot drift apart.
   static String readable(Element element) =>
-      _preformatted(element) ? element.text.trim() : _text.clean(element.text);
+      _preformatted(element) ? element.text.trim() : cleanText(element.text);
 
   /// Whether [element] sits anywhere inside a `<pre>` or `<textarea>`.
   static bool _preformatted(Element element) {
@@ -336,7 +332,7 @@ class Markup {
   ///
   /// `href` and `src` had members of their own through 4.0.0 — four of them
   /// with the plurals, and two more on the [Element] extension. Each was this
-  /// call with a literal, which Rule 5 calls a bug in the API rather than a
+  /// call with a literal, which is a bug in the API rather than a
   /// convenience: `page.$('a').attr('href')`. They also multiplied without
   /// covering anything, since the next attribute a script wants is
   /// `data-id` and there was never going to be a member for that.
@@ -423,7 +419,7 @@ class Markup {
 /// For the one case that hands you an element rather than a [Markup] —
 /// [Markup.document], or a library that parsed the page itself. `$` and
 /// `$xpath` stood here too through 4.0.0, on the *default* surface, which
-/// contradicted both `lib/html.dart`'s own doc comment and Rule 5's "the one
+/// contradicted `lib/html.dart`\'s own doc comment and "the one
 /// survivor is an opt-in import". They were also `query` under a second name:
 /// with the callable shorthand gone, [Markup.\$xpath] answers on any cursor, so
 /// there was nothing an XPath-flavoured one did differently.
@@ -495,7 +491,7 @@ extension QuerySelectorOnDocument on Document {
 /// type test on `dynamic`.
 ///
 /// ```dart
-/// final page = res.parse(Codec.html);
+/// final page = res.parse(DocumentFormat.html);
 /// final title = page.pick(Field.text('h1'));           // String?
 /// final links = page.pick(Field.attrs('a', 'href'));   // List<String>
 /// ```
@@ -737,7 +733,7 @@ extension NullableField<T extends Object> on Field<T?> {
   /// [convert] applied to what this field read, only when it read something.
   ///
   /// ```dart
-  /// final price = Field.text('.price').when(Text.number);   // Field<num?>
+  /// final price = Field.text('.price').when(extractNumber);   // Field<num?>
   /// final qty = Field.text('.qty').when(int.tryParse);           // Field<int?>
   /// ```
   ///

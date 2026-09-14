@@ -40,14 +40,8 @@ void main() {
     test('\$ selects straight out of markup', () {
       final tracks = $(sampleHtml, '.track');
       expect(tracks.count, equals(3));
-      expect(
-        tracks.elements.first.query.$('.num').text,
-        equals('01.'),
-      );
-      expect(
-        tracks.elements.last.query.$('.num').text,
-        equals('03.'),
-      );
+      expect(tracks.elements.first.query.$('.num').text, equals('01.'));
+      expect(tracks.elements.last.query.$('.num').text, equals('03.'));
     });
 
     test('text, texts, and html extraction', () {
@@ -64,10 +58,7 @@ void main() {
     test('attributes extraction with attr and attrs', () {
       final doc = $(sampleHtml);
       expect(doc.$('.track').attr('data-id'), equals('1'));
-      expect(
-        doc.$('.track').attrs('data-id'),
-        equals(['1', '2', '3']),
-      );
+      expect(doc.$('.track').attrs('data-id'), equals(['1', '2', '3']));
       expect(
         doc.$('.track a').attrs('href'),
         equals(['/track/1', '/track/2', 'https://example.com/bonus']),
@@ -137,10 +128,7 @@ void main() {
 
       final allTracks = q.$('.track');
       expect(allTracks.count, equals(3));
-      expect(
-        allTracks.elements.first.attributes['data-id'],
-        equals('1'),
-      );
+      expect(allTracks.elements.first.attributes['data-id'], equals('1'));
     });
 
     test(
@@ -181,24 +169,15 @@ void main() {
         expect(boxWithLink.matching('.with-link').empty, isFalse);
 
         // :header
-        expect(
-          doc.$(':header').texts,
-          equals(['Main Header', 'Sub Header']),
-        );
+        expect(doc.$(':header').texts, equals(['Main Header', 'Sub Header']));
 
         // :first and :last
         expect(doc.$('ul li:first').text, equals('Row 0'));
         expect(doc.$('ul li:last').text, equals('Row 3'));
 
         // :even and :odd
-        expect(
-          doc.$('ul li:even').texts,
-          equals(['Row 0', 'Row 2']),
-        );
-        expect(
-          doc.$('ul li:odd').texts,
-          equals(['Row 1', 'Row 3']),
-        );
+        expect(doc.$('ul li:even').texts, equals(['Row 0', 'Row 2']));
+        expect(doc.$('ul li:odd').texts, equals(['Row 1', 'Row 3']));
 
         // :eq with positive and negative index
         expect(doc.$('ul li:eq(1)').text, equals('Row 1'));
@@ -225,10 +204,7 @@ void main() {
       // xpath returns Markup
       final allA = xp.$xpath('//a');
       expect(allA.count, equals(3));
-      expect(
-        allA.texts,
-        equals(['Track One', 'Track Two', 'Bonus Track']),
-      );
+      expect(allA.texts, equals(['Track One', 'Track Two', 'Bonus Track']));
 
       // Text and attributes off an XPath cursor, read the way a CSS one is
       // read. `xpathvalues` was a third reader for this through 6.1.0.
@@ -266,10 +242,7 @@ void main() {
 
         // Chainable Markup attribute helpers
         expect(selector.$('a').attr('href'), equals('/target1'));
-        expect(
-          selector.$('a').attrs('href'),
-          equals(['/target1', '/target2']),
-        );
+        expect(selector.$('a').attrs('href'), equals(['/target1', '/target2']));
         expect(selector.$('img').attr('src'), equals('/img/1.png'));
         expect(
           selector.$('img').attrs('src'),
@@ -281,30 +254,21 @@ void main() {
           equals(['Link Title 1', 'Link Title 2']),
         );
         expect(selector.$('img').attr('alt'), equals('Image 1'));
-        expect(
-          selector.$('img').attrs('alt'),
-          equals(['Image 1', 'Image 2']),
-        );
+        expect(selector.$('img').attrs('alt'), equals(['Image 1', 'Image 2']));
         expect(selector.$('form').attr('action'), equals('/submit-form'));
         expect(selector.$('input').value, equals('test@example.com'));
 
         // Markup getters
         final q = $(mediaHtml);
         expect(q.$('a').attr('href'), equals('/target1'));
-        expect(
-          q.$('a').attrs('href'),
-          equals(['/target1', '/target2']),
-        );
+        expect(q.$('a').attrs('href'), equals(['/target1', '/target2']));
         expect(q.$('a').attr('title'), equals('Link Title 1'));
         expect(
           q.$('a').attrs('title'),
           equals(['Link Title 1', 'Link Title 2']),
         );
         expect(q.$('img').attr('alt'), equals('Image 1'));
-        expect(
-          q.$('img').attrs('alt'),
-          equals(['Image 1', 'Image 2']),
-        );
+        expect(q.$('img').attrs('alt'), equals(['Image 1', 'Image 2']));
         expect(q.$('form').attr('action'), equals('/submit-form'));
         expect(q.$('input').value, equals('test@example.com'));
 
@@ -373,10 +337,7 @@ void main() {
       expect(fields.elements.first.value, equals('alice'));
       expect(fields.at(1).value, equals('Software developer'));
       expect(
-        fields.elements
-            .map((e) => e.value)
-            .nonNulls
-            .toList(),
+        fields.elements.map((e) => e.value).nonNulls.toList(),
         equals(['alice', 'Software developer', 'admin']),
       );
     });
@@ -402,18 +363,15 @@ void main() {
     );
 
     test('system.console builds a Table, Progress and Spinner', () {
-      final table = System.console.table(headers: ['Name', 'Age']);
+      final table = Table(headers: ['Name', 'Age']);
       table.add(['Bob', 30]);
       expect(table.headers, equals(['Name', 'Age']));
       expect(table.render(), contains('Bob'));
 
-      final progress = System.console.progress(
-        total: 10,
-        message: 'Downloading',
-      );
+      final progress = Progress(total: 10, message: 'Downloading');
       expect(progress.total, equals(10));
 
-      expect(System.console.spinner().spinning, isFalse);
+      expect(Spinner().spinning, isFalse);
     });
   });
 
@@ -441,26 +399,11 @@ void main() {
     });
 
     test('nth-child takes an+b, odd and even', () {
-      expect(
-        page().$('li:nth-child(odd)').texts,
-        equals(['1', '3', '5']),
-      );
-      expect(
-        page().$('li:nth-child(even)').texts,
-        equals(['2', '4']),
-      );
-      expect(
-        page().$('li:nth-child(2n+1)').texts,
-        equals(['1', '3', '5']),
-      );
-      expect(
-        page().$('li:nth-child(3n)').texts,
-        equals(['3']),
-      );
-      expect(
-        page().$('li:nth-child(-n+2)').texts,
-        equals(['1', '2']),
-      );
+      expect(page().$('li:nth-child(odd)').texts, equals(['1', '3', '5']));
+      expect(page().$('li:nth-child(even)').texts, equals(['2', '4']));
+      expect(page().$('li:nth-child(2n+1)').texts, equals(['1', '3', '5']));
+      expect(page().$('li:nth-child(3n)').texts, equals(['3']));
+      expect(page().$('li:nth-child(-n+2)').texts, equals(['1', '2']));
       expect(
         page().$('li:nth-child(n)').texts,
         equals(['1', '2', '3', '4', '5']),
@@ -468,52 +411,22 @@ void main() {
     });
 
     test('nth-of-type counts only siblings of the same tag', () {
-      expect(
-        page().$('.box p:nth-of-type(2)').texts,
-        equals(['pb']),
-      );
-      expect(
-        page().$('.box span:nth-of-type(2)').texts,
-        equals(['s2']),
-      );
-      expect(
-        page().$('.box p:first-of-type').texts,
-        equals(['pa']),
-      );
-      expect(
-        page().$('.box p:last-of-type').texts,
-        equals(['pc']),
-      );
-      expect(
-        page().$('.box span:nth-last-of-type(1)').texts,
-        equals(['s2']),
-      );
+      expect(page().$('.box p:nth-of-type(2)').texts, equals(['pb']));
+      expect(page().$('.box span:nth-of-type(2)').texts, equals(['s2']));
+      expect(page().$('.box p:first-of-type').texts, equals(['pa']));
+      expect(page().$('.box p:last-of-type').texts, equals(['pc']));
+      expect(page().$('.box span:nth-last-of-type(1)').texts, equals(['s2']));
     });
 
     test('the -last- pair counts from the end', () {
-      expect(
-        page().$('li:nth-last-child(1)').texts,
-        equals(['5']),
-      );
-      expect(
-        page().$('li:nth-last-child(2)').texts,
-        equals(['4']),
-      );
-      expect(
-        page().$('li:nth-last-child(odd)').texts,
-        equals(['1', '3', '5']),
-      );
+      expect(page().$('li:nth-last-child(1)').texts, equals(['5']));
+      expect(page().$('li:nth-last-child(2)').texts, equals(['4']));
+      expect(page().$('li:nth-last-child(odd)').texts, equals(['1', '3', '5']));
     });
 
     test('only-child and only-of-type', () {
-      expect(
-        page().$('h2:only-child').texts,
-        equals(['only']),
-      );
-      expect(
-        page().$('h2:only-of-type').texts,
-        equals(['only']),
-      );
+      expect(page().$('h2:only-child').texts, equals(['only']));
+      expect(page().$('h2:only-of-type').texts, equals(['only']));
       expect(page().$('li:only-child').texts, isEmpty);
       expect(page().$('.box p:only-of-type').texts, isEmpty);
     });
@@ -525,10 +438,7 @@ void main() {
     });
 
     test('is and where match any of their branches', () {
-      expect(
-        page().$('.box :is(span)').texts,
-        equals(['s1', 's2']),
-      );
+      expect(page().$('.box :is(span)').texts, equals(['s1', 's2']));
       expect(page().$(':where(h2)').texts, equals(['only']));
     });
 

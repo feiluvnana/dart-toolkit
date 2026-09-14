@@ -324,13 +324,13 @@ void main() {
       final rows = [
         {'a': '1', 'b': '2'},
       ];
-      expect(Formats.toCsv(rows), 'a,b\n1,2\n');
-      expect(Formats.toCsv(rows, newline: '\r\n'), 'a,b\r\n1,2\r\n');
+      expect(toCsvString(rows), 'a,b\n1,2\n');
+      expect(toCsvString(rows, newline: '\r\n'), 'a,b\r\n1,2\r\n');
     });
 
     test('a header-only render honours it too', () {
       expect(
-        Formats.toCsv(
+        toCsvString(
           const <Map<String, Object?>>[],
           headers: ['a', 'b'],
           newline: '\r\n',
@@ -344,13 +344,9 @@ void main() {
       addTearDown(() => temp.deleteSync(recursive: true));
       final path = '${temp.path}/out.csv';
 
-      writeCsvSync(
-        path,
-        [
-          {'a': '1'},
-        ],
-        newline: '\r\n',
-      );
+      writeCsvSync(path, [
+        {'a': '1'},
+      ], newline: '\r\n');
 
       expect(File(path).readAsStringSync(), 'a\r\n1\r\n');
       // And it reads back as one row, not two.
@@ -365,9 +361,10 @@ void main() {
       final path = '${temp.path}/in.csv';
       File(path).writeAsStringSync('a,b\n1,2\n');
 
-      final Csv sheet = Formats.csv(File(path).readAsStringSync());
-      final List<Map<String, String>> records =
-          await readCsvRecords(path).toList();
+      final Csv sheet = parseCsv(File(path).readAsStringSync());
+      final List<Map<String, String>> records = await readCsvRecords(
+        path,
+      ).toList();
       final List<List<String>> rows = await readCsvRows(path).toList();
 
       expect(sheet.maps.toList(), records);
@@ -416,10 +413,9 @@ void main() {
       final boxes = $(html).$('input');
       expect(boxes.value, 'yes');
       // An unticked box submits nothing, so it reads as absent.
-      expect(
-        boxes.elements.map((e) => e.value).whereType<String>().toList(),
-        ['yes'],
-      );
+      expect(boxes.elements.map((e) => e.value).whereType<String>().toList(), [
+        'yes',
+      ]);
     });
 
     test('a ticked box with no value reports on, as HTML says', () {
@@ -437,12 +433,9 @@ void main() {
         </form>
       ''';
       expect(
-        $(html)
-            .$('input')
-            .elements
-            .map((e) => e.value)
-            .whereType<String>()
-            .toList(),
+        $(
+          html,
+        ).$('input').elements.map((e) => e.value).whereType<String>().toList(),
         ['2'],
       );
     });
@@ -460,45 +453,38 @@ void main() {
           '<main><div>Tom &amp; Jerry<br>caf&eacute;<br>&#65;&#66;</div></main>';
       // Stripping the tags left the entities behind in what is documented as
       // text.
-      expect($(html, 'div').lines.toList(), [
-        'Tom & Jerry',
-        'café',
-        'AB',
-      ]);
+      expect($(html, 'div').lines.toList(), ['Tom & Jerry', 'café', 'AB']);
     });
 
     test('lines without entities are untouched', () {
-      expect(
-        $('<main><div>a<br>b</div></main>', 'div').lines.toList(),
-        ['a', 'b'],
-      );
+      expect($('<main><div>a<br>b</div></main>', 'div').lines.toList(), [
+        'a',
+        'b',
+      ]);
     });
   });
 
   group('cli', () {
     test('count reads a repeated switch as a level', () {
-      final verbose = Cli(const ['-vvv']).flag('verbose', alias: 'v');
+      final verbose = Cli(const ['-vvv']).flag('verbose', abbr: 'v');
       expect(verbose.count(), 3);
       expect(verbose.given(), isTrue);
     });
 
     test('the long and short forms add up', () {
-      final verbose = Cli(const [
-        '--verbose',
-        '-v',
-      ]).flag('verbose', alias: 'v');
+      final verbose = Cli(const ['--verbose', '-v']).flag('verbose', abbr: 'v');
       expect(verbose.count(), 2);
     });
 
     test('a switch never given counts zero', () {
-      final verbose = Cli(const []).flag('verbose', alias: 'v');
+      final verbose = Cli(const []).flag('verbose', abbr: 'v');
       expect(verbose.count(), 0);
       expect(verbose.given(), isFalse);
     });
 
     test('a flag reads its declared env variable', () {
-      Env.set('DT_CONSOLE_FORCE', 'yes');
-      addTearDown(() => Env.delete('DT_CONSOLE_FORCE'));
+      env.set('DT_CONSOLE_FORCE', 'yes');
+      addTearDown(() => env.delete('DT_CONSOLE_FORCE'));
 
       // Only option() took an env before, so a boolean could not be set by
       // the shell.
@@ -507,12 +493,12 @@ void main() {
     });
 
     test('the command line still beats the flag env', () {
-      Env.set('DT_CONSOLE_FORCE', 'true');
-      addTearDown(() => Env.delete('DT_CONSOLE_FORCE'));
+      env.set('DT_CONSOLE_FORCE', 'true');
+      addTearDown(() => env.delete('DT_CONSOLE_FORCE'));
 
       final force = Cli(const [
         '--no-force',
-      ]).flag('force', def: true, env: 'DT_CONSOLE_FORCE');
+      ]).flag('force', defaultsTo: true, env: 'DT_CONSOLE_FORCE');
       expect(force(), isFalse);
     });
   });
@@ -528,16 +514,16 @@ void main() {
           ..createSync(recursive: true)
           ..writeAsStringSync('#!/bin/sh\necho hi\n');
         if (!Platform.isWindows) {
-          await System.run('chmod', ['755', script.path]);
+          await run('chmod', ['755', script.path]);
         }
         final when = DateTime(2021, 3, 4, 5, 6, 8);
         script.setLastModifiedSync(when);
 
         for (final name in ['out.zip', 'out.tar', 'out.tar.gz']) {
           final archive = '${root.path}/$name';
-          await Formats.zip('${root.path}/src', archive);
+          await zip('${root.path}/src', archive);
           final dest = '${root.path}/back_$name';
-          await Formats.unzip(archive, dest);
+          await unzip(archive, dest);
 
           final restored = File('$dest/run.sh');
           expect(restored.existsSync(), isTrue, reason: name);
@@ -560,11 +546,11 @@ void main() {
 
       final file = File('${root.path}/notes.txt')..writeAsStringSync('hello');
       if (!Platform.isWindows) {
-        await System.run('chmod', ['600', file.path]);
+        await run('chmod', ['600', file.path]);
       }
 
-      await Formats.zip(file.path, '${root.path}/one.zip');
-      await Formats.unzip('${root.path}/one.zip', '${root.path}/back');
+      await zip(file.path, '${root.path}/one.zip');
+      await unzip('${root.path}/one.zip', '${root.path}/back');
 
       if (!Platform.isWindows) {
         expect(
@@ -580,8 +566,8 @@ void main() {
       // `tool.git` used to wrap this. `system.run` already promises a result
       // rather than an exception, which was the whole of what the wrapper
       // added.
-      final res = await System.run('git', ['checkout', 'no-such-branch-xyz']);
-      expect(res.code, isA<int>());
+      final res = await run('git', ['checkout', 'no-such-branch-xyz']);
+      expect(res.exitCode, isA<int>());
       expect(res.ok, isFalse);
     });
   });

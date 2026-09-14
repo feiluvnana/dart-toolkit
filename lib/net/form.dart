@@ -1,7 +1,7 @@
 /// # Sending a Form
 ///
 /// The other half of [Form]. Reading a `<form>` — its action, its method, the
-/// values its controls would submit — is HTML, and lives in `format.html`.
+/// values its controls would submit — is HTML, and lives in [parseHtml].
 /// Sending one is a socket, and lives here.
 ///
 /// This is the same shape as `io` declaring `Sequence.dump` on a `collection`
@@ -32,7 +32,7 @@ extension Sending on Form {
   /// ```dart no-compile
   /// net.crawl([Fetch(seed)].seq, (res) => switch (res.fetch.tag) {
   ///   null => [
-  ///     res.parse(format.html).form('#login')!
+  ///     res.parse(DocumentFormat.html).form('#login')!
   ///         .at(res.url)
   ///         .fill({'user': user, 'pass': pass})
   ///         .fetch(tag: 'home'),
@@ -58,7 +58,7 @@ extension Sending on Form {
     if (multipart) {
       throw UnsupportedError(
         'This form is multipart/form-data, which Form does not encode. Build '
-        'the request yourself with net.http.send(.post, url, body: ...).',
+        'the request yourself with send(.post, url, body: ...).',
       );
     }
     return Fetch(
@@ -76,14 +76,14 @@ extension Sending on Form {
 
   /// Submits the form and returns the reply.
   ///
-  /// Goes through [using], or the shared `net.http` — pass the client that
+  /// Goes through [using], or the shared [get] — pass the client that
   /// fetched the page when it holds a session, so the cookies that came with
   /// the form go back with it:
   ///
   /// ```dart
   /// final session = Fetcher(session: true);
   /// final login = await session.send(HttpMethod.get, 'https://example.test/login'.url);
-  /// final home = await login.parse(Codec.html).form('#login')!
+  /// final home = await login.parse(DocumentFormat.html).form('#login')!
   ///     .at(login.url)
   ///     .fill({'user': 'me', 'pass': 'secret'})
   ///     .send(using: session);
@@ -91,7 +91,7 @@ extension Sending on Form {
   ///
   /// Inside a crawl use [fetch], which hands the request back for the
   /// frontier to schedule rather than sending it here and now.
-  Future<Reply> send({Send? using, Map<String, String>? headers}) {
+  Future<Response> send({Send? using, Map<String, String>? headers}) {
     final send = using ?? httpClient.call;
     return send(fetch(headers: headers));
   }

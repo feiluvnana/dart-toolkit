@@ -19,12 +19,12 @@ void main() {
         'https://music.test/song/2': '<h1>Two</h1>',
       };
 
-      await Http.crawl(
+      await crawl(
             [Fetch('https://music.test/album'.url)],
             (res) => switch (res.fetch.tag) {
               null =>
                 res
-                    .parse(Codec.html)
+                    .parse(DocumentFormat.html)
                     .$('a')
                     .elements
                     .map(
@@ -39,7 +39,7 @@ void main() {
           )
           .using(
             (fetch) async =>
-                Reply.text(pages['${fetch.url}'] ?? '', fetch: fetch),
+                Response.text(pages['${fetch.url}'] ?? '', fetch: fetch),
           )
           .flow
           .where((res) => res.fetch.tag == 'song')
@@ -65,7 +65,7 @@ void main() {
   });
 
   group('records instead of Map<String, Object?>', () {
-    final page = Reply.text('''
+    final page = Response.text('''
       <div id="product">
         <h1>Wool Coat</h1>
         <span class="price">\$89.00</span>
@@ -83,7 +83,7 @@ void main() {
 
     test('all builds one typed record per match', () {
       final variants = page
-          .parse(Codec.html)
+          .parse(DocumentFormat.html)
           .all(
             '.variant',
             (row) => (
@@ -103,12 +103,12 @@ void main() {
 
     test('all plus first builds the record a page has at most one of', () {
       final seller = page
-          .parse(Codec.html)
+          .parse(DocumentFormat.html)
           .all(
             '.seller',
             (s) => (
               name: s.$('.name').text,
-              rating: s.pick(Field.text('.rating').when(Text.number)),
+              rating: s.pick(Field.text('.rating').when(extractNumber)),
             ),
           )
           .firstOrNull;
@@ -117,7 +117,7 @@ void main() {
       expect(seller?.rating, 4.5);
       expect(
         page
-            .parse(Codec.html)
+            .parse(DocumentFormat.html)
             .all('.missing', (s) => s.$('x').text)
             .firstOrNull,
         isNull,
@@ -126,12 +126,12 @@ void main() {
 
     test('a whole page reads as one nested record', () {
       final product = (
-        title: page.parse(Codec.html).$('h1').text,
+        title: page.parse(DocumentFormat.html).$('h1').text,
         price: page
-            .parse(Codec.html)
-            .pick(Field.text('.price').when(Text.number)),
+            .parse(DocumentFormat.html)
+            .pick(Field.text('.price').when(extractNumber)),
         variants: page
-            .parse(Codec.html)
+            .parse(DocumentFormat.html)
             .all(
               '.variant',
               (row) => (name: row.$('.name').text, sku: row.attr('data-sku')),
@@ -140,14 +140,11 @@ void main() {
 
       expect(product.title, 'Wool Coat');
       expect(product.price, 89.0);
-      expect(product.variants.map((v) => v.sku).toList(), [
-        'A1',
-        'A2',
-      ]);
+      expect(product.variants.map((v) => v.sku).toList(), ['A1', 'A2']);
     });
 
     test('all and pick see matches at the top level of the body', () {
-      final flat = Reply.text(
+      final flat = Response.text(
         '<h1>T</h1>'
         '<div class="variant" data-sku="A1"><span class="name">S</span></div>'
         '<div class="variant" data-sku="A2"><span class="name">L</span></div>',
@@ -155,28 +152,28 @@ void main() {
 
       expect(
         flat
-            .parse(Codec.html)
+            .parse(DocumentFormat.html)
             .all('.variant', (row) => row.attr('data-sku')),
         ['A1', 'A2'],
       );
       expect(
         flat
-            .parse(Codec.html)
+            .parse(DocumentFormat.html)
             .all('.variant', (row) => row.$('.name').text)
             .firstOrNull
             ?.trim(),
         'S',
       );
-      expect(flat.parse(Codec.html).pick(Field.text('h1')), 'T');
+      expect(flat.parse(DocumentFormat.html).pick(Field.text('h1')), 'T');
       expect(
-        Formats.html(flat.body).pick(Field.text('h1')),
-        flat.parse(Codec.html).pick(Field.text('h1')),
+        parseHtml(flat.body).pick(Field.text('h1')),
+        flat.parse(DocumentFormat.html).pick(Field.text('h1')),
       );
     });
 
     test('all scopes to the row, not the document', () {
       final names = page
-          .parse(Codec.html)
+          .parse(DocumentFormat.html)
           .all('.variant', (row) => row.$('.name').texts);
       expect(names, [
         ['Small'],
@@ -187,42 +184,40 @@ void main() {
 
   group('Field.map and Field.when', () {
     test('adjusts what a field that already works read', () {
-      final page = Reply.text(
+      final page = Response.text(
         '<span class="price">\$1,234.50</span><b>a</b><b>b</b>',
       );
 
       expect(
         page
-            .parse(Codec.html)
-            .pick(Field.text('.price').when(Text.number)),
+            .parse(DocumentFormat.html)
+            .pick(Field.text('.price').when(extractNumber)),
         1234.5,
       );
       expect(
         page
-            .parse(Codec.html)
+            .parse(DocumentFormat.html)
             .pick(Field.texts('b').map((rows) => rows.length)),
         2,
       );
       // `map` sees the null; `when` is not called at all for one.
       expect(
         page
-            .parse(Codec.html)
+            .parse(DocumentFormat.html)
             .pick(Field.text('.gone').map((t) => t ?? 'unknown')),
         'unknown',
       );
       expect(
         page
-            .parse(Codec.html)
-            .pick(Field.text('.gone').when(Text.number)),
+            .parse(DocumentFormat.html)
+            .pick(Field.text('.gone').when(extractNumber)),
         isNull,
       );
       // Chains, because the result is a Field like any other.
       expect(
         page
-            .parse(Codec.html)
-            .pick(
-              Field.text('.price').when(Text.number).map((n) => n! * 2),
-            ),
+            .parse(DocumentFormat.html)
+            .pick(Field.text('.price').when(extractNumber).map((n) => n! * 2)),
         2469.0,
       );
     });
@@ -248,11 +243,7 @@ void main() {
         ];
 
         expect(read, ['ok:10', 'bad:division by zero', 'ok:5']);
-        expect(outcomes.map((o) => o.ok).toList(), [
-          true,
-          false,
-          true,
-        ]);
+        expect(outcomes.map((o) => o.ok).toList(), [true, false, true]);
         expect(outcomes[1].value, isNull);
         expect((outcomes[1] as Broke<int>).stack, isNotNull);
       },
@@ -275,8 +266,7 @@ void main() {
 
         // Which item broke is the alignment with `items`, not a field on
         // `Broke` — the caller already holds the item.
-        final broken = outcomes
-            .indexWhere((o) => o is Broke<int>);
+        final broken = outcomes.indexWhere((o) => o is Broke<int>);
         expect(failure.items.toList()[broken], 2);
       }
     });
@@ -288,17 +278,20 @@ void main() {
       'https://site.test/b': '<h1>Three</h1>',
     };
 
-    Crawl crawl() => Http.crawl([Fetch('https://site.test'.url)])
+    Crawler crawler() => crawl([Fetch('https://site.test'.url)])
       ..using(
-        (fetch) async => Reply.text(pages['${fetch.url}'] ?? '', fetch: fetch),
+        (fetch) async =>
+            Response.text(pages['${fetch.url}'] ?? '', fetch: fetch),
       );
 
     test('the item type comes from the pipeline, not from the crawl', () async {
       // `gather` existed because `items` could only learn `T` from an emit
       // buried inside a closure. There is no `T` any more: the crawl produces
       // replies, and what a script does with them is its own business.
-      final titles = await crawl().flow
-          .expand((Reply res) => res.parse(Codec.html).$('h1').texts)
+      final titles = await crawler().flow
+          .expand(
+            (Response res) => res.parse(DocumentFormat.html).$('h1').texts,
+          )
           .toList();
 
       expect(titles, isA<List<String>>());
@@ -306,10 +299,10 @@ void main() {
     });
 
     test('returning nothing for a page filters it out', () async {
-      final long = await crawl().flow
+      final long = await crawler().flow
           .expand(
-            (Reply res) => res
-                .parse(Codec.html)
+            (Response res) => res
+                .parse(DocumentFormat.html)
                 .$('h1')
                 .texts
                 .where((t) => t.length > 3),
@@ -320,11 +313,11 @@ void main() {
     });
 
     test('a record per page reads as one expression', () async {
-      final rows = await crawl().flow
+      final rows = await crawler().flow
           .map(
-            (Reply res) => (
+            (Response res) => (
               url: res.url.path,
-              titles: res.parse(Codec.html).$('h1').count,
+              titles: res.parse(DocumentFormat.html).$('h1').count,
             ),
           )
           .toList();

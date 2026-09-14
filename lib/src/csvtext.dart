@@ -1,8 +1,8 @@
 /// # CSV Text (internal)
 ///
-/// One RFC 4180 state machine, driven two ways: `format.csv.parse` pushes a
-/// whole string through it, `io.csv.rows` pushes a chunk at a time. Plus the
-/// two renderers behind `format.csv.format` and `format.csv.cells`.
+/// One RFC 4180 state machine, driven two ways: [parseCsv] pushes a
+/// whole string through it, [readCsvRows] pushes a chunk at a time. Plus the
+/// two renderers behind [toCsvString].
 ///
 /// There were **two** independent parsers through 5.1.0 — a fast code-unit one
 /// for whole files and a character-at-a-time one for streams — which 5.0.0
@@ -10,7 +10,7 @@
 /// precondition for merging them, not a substitute for it: two parsers that
 /// agree today are two parsers that drift at the next bug fix.
 ///
-/// Not exported: reach these through `format.csv.*` and `io.csv.*`.
+/// Not exported: reach these through [parseCsv], [toCsvString] and the CSV file functions.
 library;
 
 // ============================================================================

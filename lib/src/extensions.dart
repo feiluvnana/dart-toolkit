@@ -19,16 +19,13 @@ import '../src/markup.dart';
 /// `package:http`. This keeps call sites short:
 ///
 /// ```dart
-/// final res = await Http.get('https://example.com'.url);
+/// final res = await get('https://example.com'.url);
 /// ```
 extension UrlString on String {
   /// Parses this string as a [Uri].
   ///
   /// Throws [FormatException] if the string is not a valid URI.
   Uri get url => Uri.parse(this);
-
-  /// Parses this string as a [Uri]. Alias for [url].
-  Uri toUri() => Uri.parse(this);
 }
 
 /// Builds a [Duration] from a plain number.
@@ -76,7 +73,7 @@ extension DurationInt on int {
 /// Fluent HTTP extensions on [Uri].
 extension UriHttpExtensions on Uri {
   /// Sends a GET request to this URI.
-  Future<Reply> get({
+  Future<Response> get({
     Map<String, String>? headers,
     Duration? timeout,
     int? redirects,
@@ -94,7 +91,7 @@ extension UriHttpExtensions on Uri {
   );
 
   /// Sends a POST request to this URI.
-  Future<Reply> post({
+  Future<Response> post({
     Body? body,
     Map<String, String>? headers,
     Duration? timeout,
@@ -114,7 +111,7 @@ extension UriHttpExtensions on Uri {
   );
 
   /// Sends a PUT request to this URI.
-  Future<Reply> put({
+  Future<Response> put({
     Body? body,
     Map<String, String>? headers,
     Duration? timeout,
@@ -134,7 +131,7 @@ extension UriHttpExtensions on Uri {
   );
 
   /// Sends a DELETE request to this URI.
-  Future<Reply> delete({
+  Future<Response> delete({
     Body? body,
     Map<String, String>? headers,
     Duration? timeout,
@@ -154,7 +151,7 @@ extension UriHttpExtensions on Uri {
   );
 
   /// Sends a PATCH request to this URI.
-  Future<Reply> patch({
+  Future<Response> patch({
     Body? body,
     Map<String, String>? headers,
     Duration? timeout,
@@ -174,7 +171,7 @@ extension UriHttpExtensions on Uri {
   );
 
   /// Sends a HEAD request to this URI.
-  Future<Reply> head({
+  Future<Response> head({
     Map<String, String>? headers,
     Duration? timeout,
     int? redirects,
@@ -193,16 +190,16 @@ extension UriHttpExtensions on Uri {
 /// Quick document parsing extensions on [String].
 extension StringParseExtensions on String {
   /// Parses this string as a JSON document cursor.
-  Json parseJson() => const JsonAccessor().parse(this);
+  Json parseJson() => const JsonFormat().parse(this);
 
   /// Parses this string as an HTML markup cursor.
-  Markup parseHtml() => const HtmlAccessor().parse(this);
+  Markup parseHtml() => const HtmlFormat().parse(this);
 }
 
-/// Direct document and selector extensions on [Reply].
-extension ReplyDocumentExtensions on Reply {
+/// Direct document and selector extensions on [Response].
+extension ReplyDocumentExtensions on Response {
   /// Parsed HTML markup cursor.
-  Markup get html => parse(const HtmlAccessor());
+  Markup get html => parse(const HtmlFormat());
 
   /// jQuery-style selector shorthand over the parsed HTML document.
   Markup $(String selector) => html.$(selector);
@@ -217,7 +214,7 @@ extension ReplyDocumentExtensions on Reply {
 /// Fluent HTTP extensions directly on URL strings.
 extension StringHttpExtensions on String {
   /// Sends a GET request to this URL.
-  Future<Reply> get({
+  Future<Response> get({
     Map<String, String>? headers,
     Duration? timeout,
     int? redirects,
@@ -234,7 +231,7 @@ extension StringHttpExtensions on String {
   );
 
   /// Sends a POST request to this URL.
-  Future<Reply> post({
+  Future<Response> post({
     Body? body,
     Map<String, String>? headers,
     Duration? timeout,
@@ -253,7 +250,7 @@ extension StringHttpExtensions on String {
   );
 
   /// Sends a PUT request to this URL.
-  Future<Reply> put({
+  Future<Response> put({
     Body? body,
     Map<String, String>? headers,
     Duration? timeout,
@@ -272,7 +269,7 @@ extension StringHttpExtensions on String {
   );
 
   /// Sends a DELETE request to this URL.
-  Future<Reply> delete({
+  Future<Response> delete({
     Body? body,
     Map<String, String>? headers,
     Duration? timeout,
@@ -291,7 +288,7 @@ extension StringHttpExtensions on String {
   );
 
   /// Sends a PATCH request to this URL.
-  Future<Reply> patch({
+  Future<Response> patch({
     Body? body,
     Map<String, String>? headers,
     Duration? timeout,
@@ -310,7 +307,7 @@ extension StringHttpExtensions on String {
   );
 
   /// Sends a HEAD request to this URL.
-  Future<Reply> head({
+  Future<Response> head({
     Map<String, String>? headers,
     Duration? timeout,
     int? redirects,

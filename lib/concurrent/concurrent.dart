@@ -1,10 +1,19 @@
-/// # Concurrent Domain (`concurrent.*`)
+/// # Concurrency
 ///
-/// A bounded pool for async work, and the two kinds of limit a script needs:
-/// [Semaphore] and [Mutex] bound **how many at once**, [Limiter] bounds **how
-/// often**. This is concurrency, not parallelism: tasks interleave on one
-/// isolate, so it speeds up IO-bound work (requests, file reads) and does
+/// A bounded [Pool] for async work, and the two kinds of limit a script needs:
+/// [Semaphore] and [Mutex] bound **how many at once**, [RateLimiter] bounds
+/// **how often**. This is concurrency, not parallelism: tasks interleave on
+/// one isolate, so it speeds up IO-bound work (requests, file reads) and does
 /// nothing for CPU-bound work.
+///
+/// [parallelMap] and [settle] are the two you reach for most, and both are
+/// also extension methods on `Iterable` and `Stream`:
+///
+/// ```dart
+/// final pages = await urls.parallelMap(get, concurrency: 5);
+/// final tried = await urls.settle(get, concurrency: 5);
+/// final data  = await retry(() => get(url), retries: 3);
+/// ```
 library;
 
 import 'dart:async';
@@ -12,13 +21,6 @@ import 'dart:collection';
 
 import '../system/console/progress.dart';
 import '../util/rand.dart';
-
-// ============================================================================
-// CONCURRENT & WORKER POOL (concurrent.* / Pool)
-// ============================================================================
-
-/// Rate limiter token bucket, bounding operations per time window.
-typedef RateLimiter = Limiter;
 
 /// Maps [worker] over [items] concurrently with at most [concurrency] in flight.
 ///
@@ -44,7 +46,7 @@ Future<List<R>> parallelMap<I, R>(
 
 /// Maps [worker] over [items] with at most [concurrency] in flight, returning
 /// a list of [Settled] results ([Done] or [Broke]) without throwing on errors.
-Future<List<Settled<R>>> _settle<I, R>(
+Future<List<Settled<R>>> settle<I, R>(
   Iterable<I> items,
   FutureOr<R> Function(I item) worker, {
   int concurrency = 4,
@@ -62,138 +64,8 @@ Future<List<Settled<R>>> _settle<I, R>(
   return p.settle(items, worker);
 }
 
-/// Maps [worker] over [items] with at most [concurrency] in flight, returning
-/// a list of [Settled] results ([Done] or [Broke]) without throwing on errors.
-Future<List<Settled<R>>> settle<I, R>(
-  Iterable<I> items,
-  FutureOr<R> Function(I item) worker, {
-  int concurrency = 4,
-  Duration delay = Duration.zero,
-  String? progress,
-}) => _settle(
-  items,
-  worker,
-  concurrency: concurrency,
-  delay: delay,
-  progress: progress,
-);
-
-/// Retries [fn] if it throws, backing off with jitter between attempts.
-Future<T> retry<T>(
-  FutureOr<T> Function() fn, {
-  required int retries,
-  Duration backoff = const Duration(milliseconds: 100),
-  Duration cap = const Duration(seconds: 30),
-  bool Function(Object error)? when,
-  void Function(Object error, int attempt)? onRetry,
-}) => concurrentRetry(
-  fn,
-  retries: retries,
-  backoff: backoff,
-  cap: cap,
-  when: when,
-  onretry: onRetry,
-);
-
 /// Waits for [duration] without blocking the isolate.
 Future<void> delay(Duration duration) => Future<void>.delayed(duration);
-
-// ============================================================================
-// STATIC HELPER HUB: Concurrent
-// ============================================================================
-
-/// Static helper hub for concurrent execution, rate limiting, and retries.
-///
-/// Easily discoverable via IDE auto-complete:
-/// ```dart
-/// final results = await Concurrent.map([1, 2], (n) async => n * 2, concurrency: 8);
-/// final settled = await Concurrent.settle([1, 2], (n) async => n * 2);
-/// final res = await Concurrent.retry(() async => 'data', retries: 3);
-/// ```
-abstract final class Concurrent {
-  Concurrent._();
-
-  /// Maps [worker] over [items] concurrently with at most [concurrency] in flight.
-  static Future<List<R>> map<I, R>(
-    Iterable<I> items,
-    FutureOr<R> Function(I item) worker, {
-    int concurrency = 4,
-    Duration delay = Duration.zero,
-    String? progress,
-  }) =>
-      parallelMap(
-        items,
-        worker,
-        concurrency: concurrency,
-        delay: delay,
-        progress: progress,
-      );
-
-  /// Executes [worker] over [items] with at most [size] in flight.
-  static Future<List<R>> run<I, R>(
-    Iterable<I> items,
-    FutureOr<R> Function(I item) worker, {
-    int size = 4,
-    Duration delay = Duration.zero,
-    String? progress,
-  }) =>
-      parallelMap(
-        items,
-        worker,
-        concurrency: size,
-        delay: delay,
-        progress: progress,
-      );
-
-  /// Maps [worker] over [items] returning a list of [Settled] results without throwing on errors.
-  static Future<List<Settled<R>>> settle<I, R>(
-    Iterable<I> items,
-    FutureOr<R> Function(I item) worker, {
-    int concurrency = 4,
-    Duration delay = Duration.zero,
-    String? progress,
-  }) =>
-      _settle(
-        items,
-        worker,
-        concurrency: concurrency,
-        delay: delay,
-        progress: progress,
-      );
-
-  /// Retries [fn] if it throws, backing off with jitter between attempts.
-  static Future<T> retry<T>(
-    FutureOr<T> Function() fn, {
-    required int retries,
-    Duration backoff = const Duration(milliseconds: 100),
-    Duration cap = const Duration(seconds: 30),
-    bool Function(Object error)? when,
-    void Function(Object error, int attempt)? onRetry,
-  }) =>
-      concurrentRetry(
-        fn,
-        retries: retries,
-        backoff: backoff,
-        cap: cap,
-        when: when,
-        onretry: onRetry,
-      );
-
-  /// Waits for [duration] without blocking the isolate.
-  static Future<void> delay(Duration duration) =>
-      Future<void>.delayed(duration);
-
-  /// Creates a rate limiter token bucket, bounding operations per time window.
-  static Limiter rate(int count, {Duration per = const Duration(seconds: 1)}) =>
-      Limiter(count, per: per);
-
-  /// Creates a counting semaphore bounding concurrent access to [permits].
-  static Semaphore semaphore(int permits) => Semaphore(permits);
-
-  /// Creates a [Pool] running at most [concurrency] tasks at once, [delay] apart.
-  static Pool<I> pool<I>({int concurrency = 4, Duration delay = Duration.zero}) =>
-      Pool<I>(size: concurrency, delay: delay);
-}
 
 /// Lifecycle handlers for a [Pool], reachable as `pool.on`.
 class PoolEvents<I> {
@@ -550,7 +422,7 @@ class Pool<I> {
 
 /// Something you wait on before doing work.
 ///
-/// [Semaphore] is *how many at once*; [Limiter] is *how often*. Two axes, and
+/// [Semaphore] is *how many at once*; [RateLimiter] is *how often*. Two axes, and
 /// through 5.5.0 they wore the same three member names — `take`, `guard`,
 /// `available` — with no type saying so, which meant a function accepting
 /// "something you wait on" had to pick one or take `dynamic`.
@@ -591,11 +463,11 @@ class Semaphore implements Waiting {
 
   /// Takes a permit, suspending if none are available.
   ///
-  /// Spelled like [Limiter.take], because the two are the same shape: one
+  /// Spelled like [RateLimiter.take], because the two are the same shape: one
   /// bounds how many run at once and the other how often they start. They used
   /// to say `acquire`/`withPermit` and `take`/`guard`, which is two dialects
   /// for one idea — and `withPermit` was the library's one camelCase member,
-  /// which Rule 4 forbids outright.
+  /// which this library does not do.
   @override
   Future<void> take() {
     if (_availablePermits > 0) {
@@ -622,7 +494,7 @@ class Semaphore implements Waiting {
 
   /// Takes a permit, runs [action], and releases it however [action] ends.
   ///
-  /// Spelled like [Limiter.guard].
+  /// Spelled like [RateLimiter.guard].
   @override
   Future<R> guard<R>(FutureOr<R> Function() action) async {
     await take();
@@ -641,17 +513,17 @@ class Semaphore implements Waiting {
 /// pair and a wrapping form, and the wrapping form is the one to use:
 ///
 /// ```dart
-/// final limit = Concurrent.rate(10, per: 1.s);
+/// final limit = RateLimiter(10, per: 1.s);
 ///
 /// await limit.take();                            // waits for a token
-/// await limit.guard(() => Http.get(url));        // the wrapped form
+/// await limit.guard(() => get(url));        // the wrapped form
 /// ```
 ///
 /// **The bucket refills smoothly**, one token every `per / count`, rather than
 /// in a lump at the end of each window. Smooth is what servers actually
 /// measure, and it also means a burst of ten at second zero does not lock out
 /// second one entirely. Waiters are served in the order they arrived.
-class Limiter implements Waiting {
+class RateLimiter implements Waiting {
   /// How many operations are allowed per [per].
   ///
   /// Also the burst ceiling: an idle limiter accumulates at most this many
@@ -673,7 +545,7 @@ class Limiter implements Waiting {
   /// Creates a limiter allowing [count] operations per [per].
   ///
   /// Starts full, so the first [count] operations do not wait.
-  Limiter(this.count, {this.per = const Duration(seconds: 1)})
+  RateLimiter(this.count, {this.per = const Duration(seconds: 1)})
     : _tokens = count.toDouble() {
     if (count <= 0) {
       throw ArgumentError.value(count, 'count', 'Must be greater than 0');
@@ -713,9 +585,6 @@ class Limiter implements Waiting {
     _schedule();
     return waiter.future;
   }
-
-  /// Alias for [take] to acquire a permit.
-  Future<void> acquire() => take();
 
   /// Takes a token, then runs [action].
   ///
@@ -768,30 +637,30 @@ class Limiter implements Waiting {
   }
 
   @override
-  String toString() => 'Limiter($count per ${per.inMilliseconds}ms)';
+  String toString() => 'RateLimiter($count per ${per.inMilliseconds}ms)';
 }
 
 /// Retries [fn] if it throws.
 ///
 /// [retries] is the number of *extra* attempts after the first, the one
-/// number every retry in this library counts in — `concurrent.retry`,
+/// number every retry in this library counts in — [retry],
 /// `Fetcher.retries`, `Fetcher.send` — and it is required here for the
-/// reason `concurrent.retry` gives. The delay grows linearly from
+/// reason [retry] gives. The delay grows linearly from
 /// [backoff], is capped at [cap], and carries up to 25% jitter so a pool of
 /// retrying tasks does not resynchronise onto the same instant.
 ///
 /// A `times:` stood beside [retries] here until 6.1.0, holding the same
-/// number one larger. 5.0.0 deleted it from `concurrent.retry` under Rule 5
+/// number one larger.
 /// and left it on the function that one calls, where it resolved just as
 /// silently: `retries` was read first, so a call passing both ignored
 /// `times` without a word.
-Future<T> concurrentRetry<T>(
+Future<T> retry<T>(
   FutureOr<T> Function() fn, {
   required int retries,
   Duration backoff = const Duration(milliseconds: 100),
   Duration cap = const Duration(seconds: 30),
   bool Function(Object error)? when,
-  void Function(Object error, int attempt)? onretry,
+  void Function(Object error, int attempt)? onRetry,
 }) async {
   final count = retries + 1;
   var attempt = 0;
@@ -803,21 +672,20 @@ Future<T> concurrentRetry<T>(
       if (attempt >= count || (when != null && !when(error))) {
         rethrow;
       }
-      onretry?.call(error, attempt);
+      onRetry?.call(error, attempt);
       await Future<void>.delayed(_backoffFor(attempt, backoff, cap));
     }
   }
 }
 
-// The library's one generator, the same one `net.http`'s retries draw from,
-// so `util.rand.seed` makes a retrying pool as repeatable as a crawl's order.
+// The library's one generator, the same one [get]'s retries draw from,
+// so [seedRandom] makes a retrying pool as repeatable as a crawl's order.
 // A second Random in here quietly made that promise false for this half.
-const RandAccessor _rand = RandAccessor();
 
 Duration _backoffFor(int attempt, Duration base, Duration cap) {
   final scaled = base * attempt;
   final bounded = scaled > cap ? cap : scaled;
-  return _rand.jitter(bounded);
+  return jitter(bounded);
 }
 
 /// What became of one task in [Pool.settle].

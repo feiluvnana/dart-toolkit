@@ -1,4 +1,4 @@
-/// # Serving (`net.serve`, `net.once`)
+/// # Serving
 ///
 /// The mirror image of the client half of `net`: something that listens. Three
 /// ordinary script jobs need one — catching an OAuth redirect, receiving a
@@ -6,7 +6,7 @@
 /// mean `dart:io`'s `HttpServer` and a hand-rolled request switch.
 ///
 /// ```dart
-/// final server = await Http.serve(8080, (req) async {
+/// final server = await serve(8080, (req) async {
 ///   return switch (req.path) {
 ///     '/callback' => Served.text(req.query['code'] ?? ''),
 ///     '/health' => Served.json({'ok': true}),
@@ -105,8 +105,8 @@ final class Asked {
 /// Served.redirect('/done'.url);
 /// ```
 final class Served {
-  /// The HTTP status code.
-  final int status;
+  /// The HTTP status code this reply carries.
+  final int statusCode;
 
   /// Extra response headers, on top of the content type this reply implies.
   final Map<String, String> headers;
@@ -117,7 +117,7 @@ final class Served {
   final String? _type;
 
   const Served._({
-    required this.status,
+    required this.statusCode,
     this.headers = const {},
     String? text,
     List<int>? bytes,
@@ -134,18 +134,18 @@ final class Served {
   /// `Served.html`, because one argument is cheaper than a second name.
   const Served.text(
     String text, {
-    int status = 200,
+    int statusCode = 200,
     String type = 'text/plain; charset=utf-8',
     Map<String, String> headers = const {},
-  }) : this._(status: status, headers: headers, text: text, type: type);
+  }) : this._(statusCode: statusCode, headers: headers, text: text, type: type);
 
   /// A JSON reply, encoded from [data].
   Served.json(
     Object? data, {
-    int status = 200,
+    int statusCode = 200,
     Map<String, String> headers = const {},
   }) : this._(
-         status: status,
+         statusCode: statusCode,
          headers: headers,
          text: JsonText.encode(data, indent: 0),
          type: 'application/json; charset=utf-8',
@@ -154,10 +154,15 @@ final class Served {
   /// A raw byte reply.
   const Served.bytes(
     List<int> data, {
-    int status = 200,
+    int statusCode = 200,
     String type = 'application/octet-stream',
     Map<String, String> headers = const {},
-  }) : this._(status: status, headers: headers, bytes: data, type: type);
+  }) : this._(
+         statusCode: statusCode,
+         headers: headers,
+         bytes: data,
+         type: type,
+       );
 
   /// The file at [path], streamed, with a content type guessed from its
   /// extension.
@@ -166,32 +171,35 @@ final class Served {
   /// written yet is a status rather than a crash.
   const Served.file(
     String path, {
-    int status = 200,
+    int statusCode = 200,
     String? type,
     Map<String, String> headers = const {},
-  }) : this._(status: status, headers: headers, file: path, type: type);
+  }) : this._(statusCode: statusCode, headers: headers, file: path, type: type);
 
   /// A bare status code, with the standard reason phrase as its body.
-  const Served.status(int status, {Map<String, String> headers = const {}})
+  const Served.status(int statusCode, {Map<String, String> headers = const {}})
     : this._(
-        status: status,
+        statusCode: statusCode,
         headers: headers,
         type: 'text/plain; charset=utf-8',
       );
 
   /// A redirect to [location].
   ///
-  /// `302` by default; pass `status: 301` for a permanent one. A relative
+  /// `302` by default; pass `statusCode: 301` for a permanent one. A relative
   /// reference is as valid a `Location` as an absolute one, so
   /// `Served.redirect('/done'.url)` is the ordinary case.
   ///
-  /// Took a `String` through 4.0.0, which Rule 6 opens by forbidding: URLs are
+  /// Took a `String` through 4.0.0: URLs are
   /// `Uri`, and `.url` exists so that costs six characters.
   Served.redirect(
     Uri location, {
-    int status = 302,
+    int statusCode = 302,
     Map<String, String> headers = const {},
-  }) : this._(status: status, headers: {'location': '$location', ...headers});
+  }) : this._(
+         statusCode: statusCode,
+         headers: {'location': '$location', ...headers},
+       );
 
   static const _types = {
     '.html': 'text/html; charset=utf-8',
@@ -219,7 +227,7 @@ final class Served {
       return;
     }
 
-    out.statusCode = status;
+    out.statusCode = statusCode;
     final type =
         _type ??
         (file == null
@@ -236,12 +244,12 @@ final class Served {
     } else if (_bytes case final bytes?) {
       out.add(bytes);
     } else {
-      out.write(_text ?? _reason(status));
+      out.write(_text ?? _reason(statusCode));
     }
     await out.close();
   }
 
-  static String _reason(int status) => switch (status) {
+  static String _reason(int statusCode) => switch (statusCode) {
     200 => 'OK',
     201 => 'Created',
     204 => '',
@@ -254,14 +262,14 @@ final class Served {
     429 => 'Too Many Requests',
     500 => 'Internal Server Error',
     503 => 'Service Unavailable',
-    _ => '$status',
+    _ => '$statusCode',
   };
 
   @override
-  String toString() => 'Served($status)';
+  String toString() => 'Served($statusCode)';
 }
 
-/// A listening server, handed back by `net.serve`.
+/// A listening server, handed back by [serve].
 ///
 /// Holds the socket open until [close], so a script that serves and then does
 /// nothing else stays alive — which is the point for a webhook receiver and a
@@ -280,7 +288,7 @@ final class Server {
   /// it *was* listening should not be the thing that crashes.
   final int port;
 
-  /// The address bound, as given to `net.serve`.
+  /// The address bound, as given to [serve].
   final String host;
 
   Server._(this._raw) : port = _raw.port, host = _raw.address.host;
@@ -296,7 +304,7 @@ final class Server {
 
 /// Binds [port] and answers every request with [handler].
 ///
-/// See `net.serve`, which is how a script reaches this. [sent] runs once each
+/// See [serve], which is how a script reaches this. [sent] runs once each
 /// reply has been flushed, which is what lets [onceOn] close only after its
 /// answer has actually reached the client.
 Future<Server> serveOn(
@@ -312,7 +320,7 @@ Future<Server> serveOn(
       reply = await handler(Asked._(request));
     } catch (_) {
       // A handler that throws is a 500, not a dead socket: the client is
-      // waiting and a hung request is harder to debug than a status.
+      // waiting and a hung request is harder to debug than a statusCode.
       reply = const Served.status(500);
     }
     try {
@@ -327,7 +335,7 @@ Future<Server> serveOn(
 
 /// Serves [port] until [handler] returns a value, then replies and closes.
 ///
-/// See `net.once`, which is how a script reaches this.
+/// See [serveOnce], which is how a script reaches this.
 Future<R?> onceOn<R extends Object>(
   int port,
   FutureOr<R?> Function(Asked req) handler, {

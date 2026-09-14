@@ -12,10 +12,10 @@ void main() {
         'extra1',
         'extra2',
       ]);
-      final force = cli.flag('force-compress', alias: 'f');
-      final size = cli.number('concurrency', def: 4);
-      final name = cli.option('name', def: 'default');
-      final missing = cli.number('missing', def: 42);
+      final force = cli.flag('force-compress', abbr: 'f');
+      final size = cli.number('concurrency', defaultsTo: 4);
+      final name = cli.option('name', defaultsTo: 'default');
+      final missing = cli.number('missing', defaultsTo: 42);
 
       expect(force(), isTrue);
       expect(size(), equals(8));
@@ -27,7 +27,7 @@ void main() {
 
     test('--no-x reads false and is not the same as being given', () {
       final cli = Cli(['--no-force']);
-      final force = cli.flag('force', def: true);
+      final force = cli.flag('force', defaultsTo: true);
 
       expect(force.negated(), isTrue);
       expect(force.given(), isFalse);
@@ -79,7 +79,7 @@ void main() {
 
       // The same has to hold for declarations made before `parse`.
       final sharedCli = CliParser();
-      final shared = sharedCli.flag('verbose', alias: 'v');
+      final shared = sharedCli.flag('verbose', abbr: 'v');
       final parsedCli = sharedCli.parse(['build', '--verbose', 'main.dart']);
       expect(parsedCli.command, equals('build'));
       expect(parsedCli.args, equals(['build', 'main.dart']));
@@ -88,27 +88,27 @@ void main() {
 
     test('an option resolves the command line, then env, then its default', () {
       final cli = Cli(const <String>[]);
-      expect(cli.option('out', def: 'dist')(), equals('dist'));
-      expect(cli.number('workers', def: 4)(), equals(4));
-      expect(cli.decimal('rate', def: 1.5)(), closeTo(1.5, 0.001));
-      expect(cli.flag('cache', def: true)(), isTrue);
+      expect(cli.option('out', defaultsTo: 'dist')(), equals('dist'));
+      expect(cli.number('workers', defaultsTo: 4)(), equals(4));
+      expect(cli.decimal('rate', defaultsTo: 1.5)(), closeTo(1.5, 0.001));
+      expect(cli.flag('cache', defaultsTo: true)(), isTrue);
 
       // The command line outranks the default.
       expect(
-        (Cli(['--out', 'build']).option('out', def: 'dist'))(),
+        (Cli(['--out', 'build']).option('out', defaultsTo: 'dist'))(),
         equals('build'),
       );
 
-      Env.set('OUT_DIR', 'from-env');
-      final env = Cli(const <String>[]);
-      final out = env.option('out', env: 'OUT_DIR', def: 'dist');
+      env.set('OUT_DIR', 'from-env');
+      final fromEnv = Cli(const <String>[]);
+      final out = fromEnv.option('out', env: 'OUT_DIR', defaultsTo: 'dist');
       expect(out(), equals('from-env'));
       // ...but the command line still wins over the environment.
       final given = Cli(['--out', 'cli']).option('out', env: 'OUT_DIR');
       expect(given(), equals('cli'));
       // Reaching a value through env is not the same as it being given.
       expect(out.given(), isFalse);
-      Env.clear();
+      env.clear();
     });
 
     test(
@@ -117,7 +117,7 @@ void main() {
         // This is what `get('concurrency', 4)` used to do: hand back 4 and let
         // the script run on a number nobody asked for.
         final cli = Cli(['--concurrency=fast']);
-        final size = cli.number('concurrency', def: 4);
+        final size = cli.number('concurrency', defaultsTo: 4);
 
         expect(size(), equals(4));
         expect(
@@ -135,33 +135,37 @@ void main() {
 
     test('choice reads an enum, and refuses a name the enum does not have', () {
       final ok = Cli(['--level=warn']);
-      final level = ok.choice('level', LogLevel.values, def: LogLevel.info);
+      final level = ok.choice(
+        'level',
+        LogLevel.values,
+        defaultsTo: LogLevel.info,
+      );
       expect(level(), LogLevel.warn);
       expect(() => ok.require(), returnsNormally);
 
       final absent = Cli(const <String>[]);
       expect(
-        absent.choice('level', LogLevel.values, def: LogLevel.info)(),
+        absent.choice('level', LogLevel.values, defaultsTo: LogLevel.info)(),
         LogLevel.info,
       );
 
       final bad = Cli(['--level=shout']);
-      bad.choice('level', LogLevel.values, def: LogLevel.info);
+      bad.choice('level', LogLevel.values, defaultsTo: LogLevel.info);
       expect(() => bad.require(), throwsA(isA<ArgumentError>()));
     });
 
     test('require accepts a default or an env variable as supplied', () {
       final withDef = Cli(const <String>[])
-        ..option('out', def: 'dist', required: true);
+        ..option('out', defaultsTo: 'dist', required: true);
       expect(() => withDef.require(), returnsNormally);
 
       final withEnv = Cli(const <String>[]);
       final token = withEnv.option('token', env: 'API_TOKEN', required: true);
       expect(() => withEnv.require(), throwsA(isA<ArgumentError>()));
-      Env.set('API_TOKEN', 'secret');
+      env.set('API_TOKEN', 'secret');
       expect(() => withEnv.require(), returnsNormally);
       expect(token(), equals('secret'));
-      Env.clear();
+      env.clear();
     });
 
     test('require rejects a value outside allowed', () {
@@ -185,18 +189,23 @@ void main() {
 
     test('list collects every occurrence, and csv splits one', () {
       final cli = Cli(['--tag=a, b ,c', '--tag', 'd']);
-      expect(cli.list('tag', csv: true)(), equals(['a', 'b', 'c', 'd']));
+      expect(
+        cli.list('tag', splitCommas: true)(),
+        equals(['a', 'b', 'c', 'd']),
+      );
 
       // Without csv the comma is just part of the value.
       expect(Cli(['--tag=a,b']).list('tag')(), equals(['a,b']));
 
       // Nothing given reads the declared default.
-      expect(Cli(const <String>[]).list('tag', def: const ['x'])(), ['x']);
+      expect(Cli(const <String>[]).list('tag', defaultsTo: const ['x'])(), [
+        'x',
+      ]);
     });
 
     test('unknown names switches no declaration covers', () {
       final cli = Cli(['--verbose', '--verbse', '--no-cache', '-f'])
-        ..flag('verbose', alias: 'f')
+        ..flag('verbose', abbr: 'f')
         ..flag('cache');
       expect(cli.unknown(), equals(['verbse']));
 
@@ -206,17 +215,17 @@ void main() {
 
     test('duration is the sixth option kind', () {
       final parser = Cli(['--timeout', '1h30m']);
-      final timeout = parser.duration('timeout', def: 30.s);
+      final timeout = parser.duration('timeout', defaultsTo: 30.s);
       expect(timeout(), equals(90.m));
 
       final bare = Cli(['--timeout', '45']);
-      expect(bare.duration('timeout', def: 30.s)(), equals(45.s));
+      expect(bare.duration('timeout', defaultsTo: 30.s)(), equals(45.s));
 
       final missing = Cli(<String>[]);
-      expect(missing.duration('timeout', def: 30.s)(), equals(30.s));
+      expect(missing.duration('timeout', defaultsTo: 30.s)(), equals(30.s));
 
       final bad = Cli(['--timeout', 'soon']);
-      final fallback = bad.duration('timeout', def: 30.s);
+      final fallback = bad.duration('timeout', defaultsTo: 30.s);
       expect(fallback(), equals(30.s), reason: 'a bad value reads as def');
       expect(
         () => bad.require(),
@@ -246,7 +255,7 @@ void main() {
 
       final defaulted = Cli(<String>[]);
       expect(
-        defaulted.date('since', def: DateTime(2020))(),
+        defaulted.date('since', defaultsTo: DateTime(2020))(),
         equals(DateTime(2020)),
       );
 
@@ -266,8 +275,12 @@ void main() {
 
     test('both kinds show their default in the usage block', () {
       final parser = Cli(<String>[])
-        ..duration('timeout', def: 90.m, desc: 'Give up after')
-        ..date('since', def: DateTime.utc(2024, 3, 9), desc: 'Only after');
+        ..duration('timeout', defaultsTo: 90.m, help: 'Give up after')
+        ..date(
+          'since',
+          defaultsTo: DateTime.utc(2024, 3, 9),
+          help: 'Only after',
+        );
       final usage = parser.usage();
       expect(usage, contains('--timeout'));
       expect(usage, contains('1h30m'));
@@ -283,9 +296,9 @@ void main() {
         final cli = Cli(['build', 'main.dart', '--out', 'build', '-r']);
         final out = cli.option(
           'out',
-          alias: 'o',
-          def: 'dist',
-          desc: 'Output directory',
+          abbr: 'o',
+          defaultsTo: 'dist',
+          help: 'Output directory',
         );
         late final Opt<bool> release;
         final build = cli.handle('build', (sub) {
@@ -293,8 +306,8 @@ void main() {
           // the handler was given, with no argument passed to either.
           seen = '${out()}|${sub.args}|${release()}';
           return 0;
-        }, desc: 'Build the project');
-        release = build.flag('release', alias: 'r', desc: 'Optimise');
+        }, help: 'Build the project');
+        release = build.flag('release', abbr: 'r', help: 'Optimise');
 
         expect(await cli.run(syntax: 'tool'), equals(0));
         // The command name is gone from the positionals, and the global option
@@ -306,7 +319,7 @@ void main() {
     test('a command option read outside its run says so', () {
       final cli = Cli(const <String>[]);
       final build = cli.handle('build', (_) => 0);
-      final out = build.option('out', def: 'dist');
+      final out = build.option('out', defaultsTo: 'dist');
 
       expect(
         out.call,
@@ -325,14 +338,14 @@ void main() {
     test('run resolves nested commands under a group', () async {
       var ran = '';
       final cli = Cli(['remote', 'add', 'origin', '--url=git@example.com']);
-      final remote = cli.group('remote', desc: 'Manage remotes');
+      final remote = cli.group('remote', help: 'Manage remotes');
       late final Opt<String> url;
       final add = remote.handle('add', (sub) {
         ran = '${url()}|${sub.args}';
         return 0;
-      }, desc: 'Add a remote');
+      }, help: 'Add a remote');
       url = add.option('url', required: true);
-      remote.handle('rm', (_) => 0, desc: 'Remove a remote');
+      remote.handle('rm', (_) => 0, help: 'Remove a remote');
 
       expect(await cli.run(syntax: 'tool'), equals(0));
       expect(ran, equals('git@example.com|[origin]'));
@@ -348,11 +361,11 @@ void main() {
     });
 
     test('run reports a command line it cannot understand', () async {
-      final typo = Cli(['buidl'])..handle('build', (_) => 0, desc: 'Build');
+      final typo = Cli(['buidl'])..handle('build', (_) => 0, help: 'Build');
       expect(await typo.run(syntax: 'tool'), equals(Cli.misuse));
 
       final unknownFlag = Cli(['build', '--verbse'])
-        ..handle('build', (_) => 0, desc: 'Build');
+        ..handle('build', (_) => 0, help: 'Build');
       expect(
         await unknownFlag.run(syntax: 'tool', strict: true),
         equals(Cli.misuse),
@@ -360,7 +373,7 @@ void main() {
 
       final missing = Cli(['build']);
       missing
-          .handle('build', (_) => 0, desc: 'Build')
+          .handle('build', (_) => 0, help: 'Build')
           .option('url', required: true);
       expect(await missing.run(syntax: 'tool'), equals(Cli.misuse));
     });
@@ -372,7 +385,7 @@ void main() {
         cli.handle('build', (_) {
           ran = true;
           return 0;
-        }, desc: 'Build');
+        }, help: 'Build');
         return cli;
       }
 
@@ -388,7 +401,7 @@ void main() {
     test('run falls back to body when no command matches', () async {
       var seen = '';
       final cli = Cli(['--out', 'x']);
-      final out = cli.option('out', desc: 'Output');
+      final out = cli.option('out', help: 'Output');
       final code = await cli.run(
         syntax: 'tool',
         body: (sub) {
@@ -402,13 +415,16 @@ void main() {
 
     test('usage lists commands, defaults, env and allowed values', () {
       final cli = Cli(const <String>[])
-        ..flag('verbose', alias: 'v', desc: 'Log every step')
-        ..option('out', alias: 'o', def: 'dist', desc: 'Output directory')
-        ..option('mode', desc: 'Build mode', allowed: ['debug', 'release'])
-        ..option('token', desc: 'API token', env: 'API_TOKEN', required: true);
-      cli.handle('build', (_) => 0, desc: 'Build the project');
+        ..flag('verbose', abbr: 'v', help: 'Log every step')
+        ..option('out', abbr: 'o', defaultsTo: 'dist', help: 'Output directory')
+        ..option('mode', help: 'Build mode', allowed: ['debug', 'release'])
+        ..option('token', help: 'API token', env: 'API_TOKEN', required: true);
+      cli.handle('build', (_) => 0, help: 'Build the project');
 
-      final help = cli.usage(syntax: 'tool <command>', desc: 'An example.');
+      final help = cli.usage(
+        syntax: 'tool <command>',
+        description: 'An example.',
+      );
       expect(help, contains('An example.'));
       expect(help, contains('Usage: tool <command>'));
       expect(help, contains('Commands:'));
@@ -445,11 +461,11 @@ void main() {
       expect(results, equals([10, 20, 30, 40]));
     });
 
-    test('Concurrent.run helper executes tasks', () async {
-      final results = await Concurrent.run(
+    test('parallelMap helper executes tasks', () async {
+      final results = await parallelMap(
         ['a', 'b', 'c'],
         (s) async => s.toUpperCase(),
-        size: 3,
+        concurrency: 3,
       );
       expect(results, equals(['A', 'B', 'C']));
     });
@@ -458,7 +474,7 @@ void main() {
       'a failing worker propagates its own error, not a null cast',
       () async {
         await expectLater(
-          Concurrent.run([1, 2, 3], (int i) async {
+          parallelMap([1, 2, 3], (int i) async {
             if (i == 2) throw StateError('boom');
             return i * 10;
           }),
@@ -531,18 +547,15 @@ void main() {
       expect(q.$('a').matching(r'[href$=".mp3"]').count, equals(1));
     });
 
-    test('Reply provides Markup via \$ and \$xpath', () {
-      final res = Reply(
+    test('Response provides Markup via \$ and \$xpath', () {
+      final res = Response(
         url: Uri.parse('https://example.com/sub/index.html'),
-        status: 200,
+        statusCode: 200,
         headers: const {},
         bytes: html.codeUnits,
       );
 
-      expect(
-        parseHtml(res.body).$('a').attr('href'),
-        equals('/track/1.mp3'),
-      );
+      expect(parseHtml(res.body).$('a').attr('href'), equals('/track/1.mp3'));
       expect(parseHtml(res.body).$('img').attr('src'), equals('album.jpg'));
       expect(
         parseHtml(res.body).$xpath('//a').attr('href'),
@@ -551,7 +564,7 @@ void main() {
     });
 
     test('follow returns the next request rather than queueing one', () {
-      final res = Reply.text(
+      final res = Response.text(
         '<a href="/next">n</a>',
         fetch: Fetch('https://example.com/'.url),
       );
@@ -569,14 +582,14 @@ void main() {
     test(
       'a flow that nobody collects fetches nothing, and stats is a record',
       () async {
-        final crawl = Http.crawl([Fetch('https://example.com/'.url)])
-          ..using((Fetch fetch) async => Reply.text('ok', fetch: fetch));
+        final crawler = crawl([Fetch('https://example.com/'.url)])
+          ..using((Fetch fetch) async => Response.text('ok', fetch: fetch));
 
         // Built and thrown away: the workers start in the flow's `onListen`.
-        crawl.flow;
-        expect(crawl.stats.fetched, isZero);
+        crawler.flow;
+        expect(crawler.stats.fetched, isZero);
 
-        final Stats stats = await crawl.run();
+        final Stats stats = await crawler.run();
         expect(stats.fetched, equals(1));
         expect(stats.reason, isNull);
       },
@@ -598,22 +611,21 @@ void main() {
     });
 
     test('logger exposes every severity', () {
-      expect(System.console.logger, isA<ConsoleLogger>());
-      expect(() => System.console.logger.info('Info'), returnsNormally);
-      expect(() => System.console.logger.ok('Success'), returnsNormally);
-      expect(() => System.console.logger.warn('Warn'), returnsNormally);
-      expect(() => System.console.logger.error('Error'), returnsNormally);
-      expect(() => System.console.logger.step(1, 1, 'Step'), returnsNormally);
-      expect(() => System.console.logger.debug('Debug'), returnsNormally);
+      expect(logger, isA<ConsoleLogger>());
+      expect(() => logger.info('Info'), returnsNormally);
+      expect(() => logger.ok('Success'), returnsNormally);
+      expect(() => logger.warn('Warn'), returnsNormally);
+      expect(() => logger.error('Error'), returnsNormally);
+      expect(() => logger.step(1, 1, 'Step'), returnsNormally);
+      expect(() => logger.debug('Debug'), returnsNormally);
     });
   });
 
-  group('Crawl entry points', () {
-    test('net.crawl configures without running', () {
-      final crawl = Http.crawl([Fetch('https://example.com'.url)])
-        ..concurrent(3);
-      expect(crawl, isA<Crawl>());
-      expect(crawl.stats.fetched, isZero);
+  group('Crawler entry points', () {
+    test('crawl configures without running', () {
+      final crawler = crawl([Fetch('https://example.com'.url)])..concurrent(3);
+      expect(crawler, isA<Crawler>());
+      expect(crawler.stats.fetched, isZero);
     });
 
     test('an independent Fetcher carries its own settings', () async {

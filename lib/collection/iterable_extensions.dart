@@ -88,9 +88,6 @@ extension IterableExtensions<T> on Iterable<T> {
     }
   }
 
-  /// Alias for [distinct].
-  Iterable<T> unique([Object? Function(T)? by]) => distinct(by);
-
   /// Batches elements into fixed-size lists.
   Iterable<List<T>> chunk(int size) sync* {
     if (size <= 0) throw ArgumentError.value(size, 'size', 'must be positive');
@@ -213,10 +210,9 @@ extension IterableTerminals<T> on Iterable<T> {
     var maxVal = iter.current;
     while (iter.moveNext()) {
       final curr = iter.current;
-      final cmp =
-          compare != null
-              ? compare(curr, maxVal)
-              : (curr as Comparable).compareTo(maxVal);
+      final cmp = compare != null
+          ? compare(curr, maxVal)
+          : (curr as Comparable).compareTo(maxVal);
       if (cmp > 0) maxVal = curr;
     }
     return maxVal;
@@ -229,10 +225,9 @@ extension IterableTerminals<T> on Iterable<T> {
     var minVal = iter.current;
     while (iter.moveNext()) {
       final curr = iter.current;
-      final cmp =
-          compare != null
-              ? compare(curr, minVal)
-              : (curr as Comparable).compareTo(minVal);
+      final cmp = compare != null
+          ? compare(curr, minVal)
+          : (curr as Comparable).compareTo(minVal);
       if (cmp < 0) minVal = curr;
     }
     return minVal;
@@ -255,8 +250,9 @@ extension IterableTerminals<T> on Iterable<T> {
   }) => {for (final item in this) key(item): value(item)};
 
   /// Creates a Map associating each item by extracted [key].
-  Map<K, T> associateBy<K>(K Function(T item) key) =>
-      {for (final item in this) key(item): item};
+  Map<K, T> associateBy<K>(K Function(T item) key) => {
+    for (final item in this) key(item): item,
+  };
 
   /// Groups elements into a Map of Lists by [keyOf].
   Map<K, List<T>> groupBy<K>(K Function(T item) keyOf) {
@@ -266,9 +262,6 @@ extension IterableTerminals<T> on Iterable<T> {
     }
     return result;
   }
-
-  /// Arithmetic mean of elements or null if empty. Alias for [average].
-  double? avg([num Function(T item)? of]) => average(of);
 
   /// Splits elements into two lists by [predicate]: those that match and those that do not.
   (List<T>, List<T>) split(bool Function(T item) predicate) {

@@ -2,6 +2,169 @@
 
 All notable changes to this project will be documented in this file.
 
+## 8.1.0
+
+**Collapse the duplicate public surface: one name per operation.**
+
+8.0.0 removed the namespace convention but left the library with *two* complete
+public surfaces — the top-level functions, and a parallel set of static "hub"
+classes whose ~197 members re-implemented them by copy-paste. The two had
+already drifted. This release deletes one of them, along with the last
+singletons, accessors and synonym pairs the convention left behind.
+
+### Static hubs removed
+
+`Files`, `Http`, `System`, `Env`, `Concurrent`, `Formats`, `Text`, `Time`,
+`Hash`, `Size` and `Rand` are deleted, with their aliases `IO` and `Sys`. Every
+member has a top-level function; where one did not exist it was promoted:
+
+| Removed | Use |
+| :--- | :--- |
+| `Files.readText`, `Files.list`, `Files.walk` | `readText`, `listDir`, `walkDir` |
+| `Files.append`, `Files.exists`, `Files.has` | `appendText`, `pathExists`, `hasContent` |
+| `Files.hash`, `Files.sweep`, `Files.dirSize` | `fileHash`, `sweepDir`, `dirSize` |
+| `Files.link`, `Files.symlinkTarget` | `createLink`, `readLink` |
+| `Files.join`, `Files.stem`, `Files.ext` | `joinPath`, `stemName`, `fileExtension` |
+| `Http.get`, `Http.crawl`, `Http.client` | `get`, `crawl`, `httpClient` |
+| `Http.withClient`, `Http.use` | `withHttpClient`, `useHttpClient` |
+| `System.cpus`, `System.track`, `System.adopt` | `cpuCount`, `trackFile`, `adoptProcess` |
+| `Env.load`, `Env.get`, `Env.read` | `loadEnv`, `env.get`, `env[key]` |
+| `Concurrent.map`, `Concurrent.rate` | `parallelMap`, `RateLimiter` |
+| `Formats.html`, `Formats.toJson` | `parseHtml`, `toJsonString` |
+| `Text.slug`, `Text.clean`, `Text.render` | `slugify`, `cleanText`, `renderTemplate` |
+| `Time.format`, `Time.span`, `Time.day` | `formatDuration`, `parseDuration`, `startOfDay` |
+| `Hash.sha256`, `Hash.hmac` | `sha256Hash`, `hmacSha256` |
+| `Size.format`, `Size.parse` | `formatBytes`, `parseBytes` |
+| `Rand.pick`, `Rand.seed`, `Rand.chance` | `randomPick`, `seedRandom`, `randomChance` |
+
+`Iterables`, `Maps` and `Streams` stay: they hold factories and n-ary
+combinators that have no receiver to hang off. Members of them that duplicated
+an extension (`Maps.groupBy`, `Maps.invert`) are gone.
+
+### Accessors removed or renamed
+
+- Deleted: `TextAccessor`, `TimeAccessor`, `SizeAccessor`, `RandAccessor`,
+  `HashAccessor`, `SystemAccessor`, `CliAccessor`, `ConsoleAccessor`,
+  `ZipAccessor`. These held the implementation that the hub, the top-level
+  function and the extension method all forwarded to — five spellings of
+  `slug`. The implementation now lives in the top-level function.
+- Renamed to what they are: `HtmlAccessor` → `HtmlCodec`, `JsonAccessor` →
+  `JsonCodec`, `YamlAccessor` → `YamlCodec`, `TomlAccessor` → `TomlCodec`,
+  `CsvAccessor` → `CsvCodec`, `RobotsAccessor` → `RobotsCodec`,
+  `SitemapAccessor` → `SitemapCodec`, `EnvAccessor` → `Environment`.
+- `ZipAccessor`'s methods are top-level: `zip`, `unzip`, `zipBytes`,
+  `listArchive`, `extractFromArchive`, `gzipBytes`, `gunzipBytes`.
+
+### The last two singletons removed
+
+- **`cli`** was a *mutable global parser*: declarations leaked between tests
+  and two parsers were impossible. `CliParser` absorbed `CliAccessor` and is
+  the one parser class. `ParsedCli` is gone with it — a third layer that
+  re-read options by name that the caller already held a typed `Opt<T>` for.
+  `CliParser.parse` returns the parsed `Cli`; options are read through the
+  handle the declaration returned.
+- **`system`** is gone; its members are top-level functions.
+
+### Synonyms removed
+
+One name per operation, everywhere:
+
+- `Reply` → **`Response`** and `Crawl` → **`Crawler`** are now the real class
+  names, not typedef aliases over them.
+- `Limiter` → **`RateLimiter`**; `concurrentRetry` → **`retry`**.
+- Removed: `Iterable.unique` (use `distinct`), `Iterable.avg` (use `average`),
+  `num.formatted` (use `formatBytes`), `once` (use `serveOnce`),
+  `FileSystemEntry.isfile`/`isdir`/`islink` (use `isFile`/`isDir`/`isLink`),
+  `Environment.int`/`getInt`/`bool`/`getBool` (use `env.get<int>(k, d)`),
+  `Text.number`/`tags` (use `extractNumber`/`stripHtmlTags`),
+  `ConsoleLogger.success` (use `ok`), `String.toUri()` (use `.url`),
+  `Semaphore.acquire` (use `take`, the name `Waiting` declares).
+- `Response.body` → **`Response.text`** and `Response.status` →
+  **`Response.statusCode`**, matching `package:http`. `Served` carries
+  `statusCode` too; its `Served.status(404)` constructor keeps its name.
+- `SysResult` carries `exitCode`, `stdout` and `stderr` — `dart:io`'s
+  `ProcessResult` vocabulary — instead of `code`/`out`/`err` with those four as
+  aliases. `isSuccess` is gone; `ok` stays.
+- **`Hash.hmac(key, message)` and `Hash.sign(input, key)` took the same two
+  `Object` parameters in opposite orders.** Either spelling compiled and one
+  silently produced the wrong signature. There is now one function,
+  `hmacSha256(input, key)`, payload first.
+
+### One name per named parameter
+
+`CliParser` accepted duplicate named-parameter *pairs* — `abbr`/`alias`,
+`help`/`desc`, `defaultsTo`/`def`, `splitCommas`/`csv` — resolved with `??`, so
+passing both gave a silent precedence. The `package:args` spelling (`abbr`,
+`help`, `defaultsTo`, `splitCommas`) is the only one, across `CliParser`, `Cli`
+and `Command`. A program's own blurb is `description`, distinct from an
+option's `help`.
+
+**Behaviour change:** `list(...)` no longer splits on commas by default. The
+two layers disagreed (`CliParser.list` split, `Cli.list` did not); the
+non-splitting default won. Pass `splitCommas: true` to restore it.
+
+### lowerCamelCase finished
+
+`onprogress` → `onProgress`, `onretry` → `onRetry`, `onchange` → `onChange`,
+plus the internal `allflags`/`alloptions`/`allcommands`.
+
+### Typing
+
+- `crawl(seeds, next)` takes `Iterable<Object>` rather than
+  `Iterable<dynamic>`, and a seed that is not a `String`, `Uri` or `Fetch` is
+  an `ArgumentError` at the call rather than an unfetchable URL later.
+- `readBytes`/`readBytesSync` return one type again; the hub and top-level
+  versions had drifted to `Uint8List` and `List<int>`.
+
+### Console
+
+`Progress` and `Spinner` defaulted their `writer` to a **new** `ConsoleWriter`,
+so a progress bar and a log line raced on the terminal through two writers.
+Both now default to the shared one, which is what `ConsoleAccessor.progress`
+existed to provide.
+
+### Name collisions with the rest of the ecosystem
+
+- **`Codec` and `JsonCodec` silently shadowed `dart:convert`.** Dart resolves a
+  package name over a platform one *without an ambiguity error*, so a file that
+  imported both got `The type 'Codec' is declared with 1 type parameters, but 2
+  type arguments were given` on its own unrelated code, with nothing pointing
+  here. The document seam is now `DocumentFormat<T>` and the codecs are
+  `HtmlFormat`, `JsonFormat`, `YamlFormat`, `TomlFormat`, `CsvFormat`,
+  `RobotsFormat`, `SitemapFormat`; `Codec.html` is `DocumentFormat.html`. The
+  archive `Format` enum is `ArchiveFormat`.
+- `README.md` claimed a file could import `package:http` alongside this package
+  "without a collision". It cannot: `get`, `post`, `put`, `patch`, `delete`,
+  `head`, `readBytes` and `Response` collide, as do `sorted`/`sortedBy`/
+  `whereNotNull` with `package:collection` and `flatMap`/`debounce`/`mergeWith`/
+  `concatWith` with `rxdart`. The README now says so and shows the `hide`.
+
+### Fixed
+
+- **`post(body: {...})` picked form-encoding or JSON from the map's inferred
+  static type.** `{'name': 'x'}` is a `Map<String, String>` and went out
+  form-encoded; `{'name': 'x', 'n': 1}` is a `Map<String, Object>` and went out
+  as JSON. Adding one integer field silently changed a request's content type.
+  A `Map` or `List` is now always JSON; form encoding is `Body.form(...)`.
+- `Fetcher.redirects` documented itself as "**Zero by default**" while the
+  constructor defaulted to `5`. The default is 5, matching `package:http`; the
+  doc was wrong.
+- `CliParser.parse(autoHelp: true)` exits via `exit(0)`, which skips the
+  [onExit] hooks this library otherwise guarantees. It cannot await
+  [shutdown] from a synchronous method, so the limitation is now documented and
+  `run` (async) is the recommended path.
+
+### Documentation
+
+- `NAMESPACE.md` is deleted.
+- Every library doc comment was rewritten. They still documented `io.*`,
+  `net.*`, `util.*` and friends, and linked classes that no longer existed
+  (`PathAccessor.join`, `DirAccessor.make`, `CliAccessor.run`).
+- `README.md` no longer opens by describing the library as namespace-based.
+- Doc prose throughout `lib/` no longer refers to `io.dir.*`, `util.text.*`,
+  `format.json.*` and the rest, nor to the numbered rules of the deleted
+  `NAMESPACE.md`.
+
 ## 8.0.0
 
 **Purge legacy sequence wrappers, discoverable static classes, and unified single example.**

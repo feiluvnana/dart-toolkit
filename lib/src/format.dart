@@ -1,4 +1,4 @@
-/// # Format Codecs (`Codec`)
+/// # ArchiveFormat Codecs (`DocumentFormat`)
 ///
 /// The seam between the domain that *fetches* bytes and the domain that
 /// *understands* them. `net` has a body and something that reads bodies; it
@@ -12,9 +12,9 @@
 /// either way.
 ///
 /// ```dart
-/// res.parse(Codec.html).$('h1').text;
-/// res.parse(Codec.json).at('data.items');
-/// res.parse(Codec.yaml).text('version');
+/// res.parse(DocumentFormat.html).$('h1').text;
+/// res.parse(DocumentFormat.json).at('data.items');
+/// res.parse(DocumentFormat.yaml).text('version');
 /// ```
 ///
 /// Implementing it is the whole contract for a new format: one method, and
@@ -27,16 +27,16 @@ import 'json.dart';
 import 'markup.dart';
 
 // ============================================================================
-// FORMAT CODECS (Codec)
+// FORMAT CODECS (DocumentFormat)
 // ============================================================================
 
 /// A format that turns text into a cursor of type [T].
 ///
 /// Every accessor under `format` implements this, which is what lets
-/// `Reply.parse` take any of them without naming one:
+/// `Response.parse` take any of them without naming one:
 ///
 /// ```dart
-/// Codec<Json> reader = Codec.yaml;
+/// DocumentFormat<Json> reader = DocumentFormat.yaml;
 /// final config = reader.parse(await File('config.yaml').readAsString());
 /// ```
 ///
@@ -44,28 +44,28 @@ import 'markup.dart';
 /// cursor — the contract every reader in this library keeps, because the
 /// caller asked for a document and the honest answer is that there is not
 /// one.
-abstract interface class Codec<T> {
+abstract interface class DocumentFormat<T> {
   /// Decodes [text] into this format's cursor.
   T parse(String text);
 
   /// HTML markup codec.
-  static Codec<Markup> get html => const HtmlAccessor();
+  static DocumentFormat<Markup> get html => const HtmlFormat();
 
   /// JSON document cursor codec.
-  static Codec<Json> get json => const JsonAccessor();
+  static DocumentFormat<Json> get json => const JsonFormat();
 
   /// YAML document cursor codec.
-  static Codec<Json> get yaml => const YamlAccessor();
+  static DocumentFormat<Json> get yaml => const YamlFormat();
 
   /// TOML document cursor codec.
-  static Codec<Json> get toml => const TomlAccessor();
+  static DocumentFormat<Json> get toml => const TomlFormat();
 
   /// CSV cursor codec.
-  static Codec<Csv> get csv => const CsvAccessor();
+  static DocumentFormat<Csv> get csv => const CsvFormat();
 
   /// Robots.txt codec.
-  static Codec<Robots> get robots => const RobotsAccessor();
+  static DocumentFormat<Robots> get robots => const RobotsFormat();
 
   /// Sitemap XML codec.
-  static Codec<List<Uri>> get sitemap => const SitemapAccessor();
+  static DocumentFormat<List<Uri>> get sitemap => const SitemapFormat();
 }

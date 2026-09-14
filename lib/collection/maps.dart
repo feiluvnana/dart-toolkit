@@ -1,15 +1,24 @@
-/// # Maps (`Maps`)
+/// # Map factories
 ///
-/// Grouping, pair extraction, inversion, diffing, and merging over [Map].
+/// Building a [Map] from something that is not one, and comparing two: the
+/// operations that have no receiver to hang off, so they are not extension
+/// methods on [Map].
+///
+/// Anything that *does* have a receiver is an extension instead — see
+/// [MapExtensions] for `merge`, `invert`, `pick`, `omit` and the rest, and
+/// [IterableExtensions.groupBy] for grouping an iterable.
 library;
+
+import 'map_extensions.dart';
 
 /// Static utility functions for creating and manipulating [Map]s.
 abstract final class Maps {
   Maps._();
 
   /// Builds a Map from (key, value) record pairs.
-  static Map<K, V> fromPairs<K, V>(Iterable<(K, V)> pairs) =>
-      {for (final (k, v) in pairs) k: v};
+  static Map<K, V> fromPairs<K, V>(Iterable<(K, V)> pairs) => {
+    for (final (k, v) in pairs) k: v,
+  };
 
   /// Builds a Map by extracting keys and values from [items].
   static Map<K, V> fromIterable<T, K, V>(
@@ -17,18 +26,6 @@ abstract final class Maps {
     required K Function(T item) key,
     required V Function(T item) value,
   }) => {for (final item in items) key(item): value(item)};
-
-  /// Groups [items] by extracted key [keyOf].
-  static Map<K, List<T>> groupBy<T, K>(
-    Iterable<T> items,
-    K Function(T item) keyOf,
-  ) {
-    final map = <K, List<T>>{};
-    for (final item in items) {
-      map.putIfAbsent(keyOf(item), () => []).add(item);
-    }
-    return map;
-  }
 
   /// Groups [items] by extracted key and maps each value.
   static Map<K, List<V>> groupByValues<T, K, V>(
@@ -43,23 +40,16 @@ abstract final class Maps {
     return map;
   }
 
-  /// Merges multiple maps into one, applying [onConflict] on key collisions.
+  /// Merges [maps] left to right into one, applying [onConflict] on collisions.
+  ///
+  /// The binary form is the `merge` extension on [Map]; this is the n-ary one.
   static Map<K, V> merge<K, V>(
     Iterable<Map<K, V>> maps, {
     V Function(V existing, V incoming)? onConflict,
-  }) {
-    final result = <K, V>{};
-    for (final map in maps) {
-      for (final entry in map.entries) {
-        if (result.containsKey(entry.key) && onConflict != null) {
-          result[entry.key] = onConflict(result[entry.key] as V, entry.value);
-        } else {
-          result[entry.key] = entry.value;
-        }
-      }
-    }
-    return result;
-  }
+  }) => maps.fold(
+    <K, V>{},
+    (result, map) => result.merge(map, onConflict: onConflict),
+  );
 
   /// Zips keys and values into a Map.
   static Map<K, V> zip<K, V>(Iterable<K> keys, Iterable<V> values) {
@@ -70,15 +60,6 @@ abstract final class Maps {
       result[iterK.current] = iterV.current;
     }
     return result;
-  }
-
-  /// Inverts a map: values become keys mapping to lists of original keys.
-  static Map<V, List<K>> invert<K, V>(Map<K, V> map) {
-    final inverted = <V, List<K>>{};
-    for (final entry in map.entries) {
-      inverted.putIfAbsent(entry.value, () => []).add(entry.key);
-    }
-    return inverted;
   }
 
   /// Computes the difference between map [a] and map [b].

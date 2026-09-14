@@ -24,44 +24,40 @@ import 'json.dart';
 /// The outcome of a subprocess launched by [Sys.run].
 class SysResult {
   /// Process exit code. `-1` indicates the process was killed by a timeout.
-  final int code;
+  ///
+  /// Spelled as `dart:io`'s [ProcessResult] spells it, so a reader who knows
+  /// one knows the other.
+  final int exitCode;
 
   /// Captured standard output. Empty when the process inherited the terminal.
-  final String out;
+  final String stdout;
 
   /// Captured standard error. Empty when the process inherited the terminal.
-  final String err;
+  final String stderr;
 
-  /// Creates a result. Normally produced by [Sys.run].
-  const SysResult({required this.code, required this.out, required this.err});
+  /// Creates a result. Normally produced by [run].
+  const SysResult({
+    required this.exitCode,
+    required this.stdout,
+    required this.stderr,
+  });
 
-  /// Process exit code. Alias for [code].
-  int get exitCode => code;
-
-  /// Whether the process exited successfully (code `0`).
-  bool get ok => code == 0;
-
-  /// Whether the process exited successfully (code `0`). Alias for [ok].
-  bool get isSuccess => ok;
-
-  /// Captured standard output. Alias for [out].
-  String get stdout => out;
-
-  /// Captured standard error. Alias for [err].
-  String get stderr => err;
+  /// Whether the process exited successfully (exit code `0`).
+  bool get ok => exitCode == 0;
 
   /// The lines of captured standard output, ignoring empty lines.
-  List<String> get lines =>
-      out.isEmpty ? const [] : out.split(RegExp(r'\r?\n')).where((l) => l.isNotEmpty).toList();
+  List<String> get lines => stdout.isEmpty
+      ? const []
+      : stdout.split(RegExp(r'\r?\n')).where((l) => l.isNotEmpty).toList();
 
   /// Parsed JSON document cursor from standard output.
-  Json get json => parseJson(out);
+  Json get json => parseJson(stdout);
 
   /// Decodes standard output JSON directly as typed [T].
-  T decodeJson<T>() => jsonDecode(out) as T;
+  T decodeJson<T>() => jsonDecode(stdout) as T;
 
   @override
-  String toString() => 'SysResult(code: $code)';
+  String toString() => 'SysResult(exitCode: $exitCode)';
 }
 
 /// Subprocess execution and OS helpers.
@@ -96,14 +92,23 @@ class Sys {
           activeStreams--;
           if (activeStreams == 0) controller.close();
         }
+
         process.stdout
             .transform(systemEncoding.decoder)
             .transform(const LineSplitter())
-            .listen(controller.add, onError: controller.addError, onDone: onDone);
+            .listen(
+              controller.add,
+              onError: controller.addError,
+              onDone: onDone,
+            );
         process.stderr
             .transform(systemEncoding.decoder)
             .transform(const LineSplitter())
-            .listen(controller.add, onError: controller.addError, onDone: onDone);
+            .listen(
+              controller.add,
+              onError: controller.addError,
+              onDone: onDone,
+            );
         yield* controller.stream;
       }
       await process.exitCode;
@@ -148,9 +153,9 @@ class Sys {
       try {
         final code = await _await(process, timeout);
         return SysResult(
-          code: code,
-          out: '',
-          err: code == -1 ? _timedOut(timeout) : '',
+          exitCode: code,
+          stdout: '',
+          stderr: code == -1 ? _timedOut(timeout) : '',
         );
       } finally {
         Exit.disown(process);
@@ -202,9 +207,9 @@ class Sys {
         draining,
       ).timeout(const Duration(seconds: 5), onTimeout: () => const []);
       return SysResult(
-        code: code,
-        out: outBuf.toString(),
-        err: code == -1 ? _timedOut(timeout) : errBuf.toString(),
+        exitCode: code,
+        stdout: outBuf.toString(),
+        stderr: code == -1 ? _timedOut(timeout) : errBuf.toString(),
       );
     } finally {
       Exit.disown(process);
