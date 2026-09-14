@@ -6,8 +6,6 @@
 /// one a few characters rather than a full constructor call.
 library;
 
-import 'dart:convert';
-
 import '../format/format.dart';
 import '../net/net.dart';
 import '../src/json.dart';
@@ -19,10 +17,18 @@ import '../src/markup.dart';
 /// `package:http`. This keeps call sites short:
 ///
 /// ```dart
-/// final res = await get('https://example.com'.url);
+/// final res = await Http.get('https://example.com'.url);
 /// ```
+///
+/// The same family as `.path`, `.bytes`, `.date` and `.duration`: *this
+/// string, read as something*.
 extension UrlString on String {
-  /// Parses this string as a [Uri].
+  /// This string read as a [Uri].
+  ///
+  /// Strict, the way `Uri.parse` is strict — a relative `'/health'` stays a
+  /// relative URI. A *crawl seed* is the lenient conversion, and it is done
+  /// for you: `crawl(['<h1>fixture</h1>'])` reads markup as a `data:` URI
+  /// without anything here having to guess.
   ///
   /// Throws [FormatException] if the string is not a valid URI.
   Uri get url => Uri.parse(this);
@@ -70,123 +76,6 @@ extension DurationInt on int {
   Duration get days => Duration(days: this);
 }
 
-/// Fluent HTTP extensions on [Uri].
-extension UriHttpExtensions on Uri {
-  /// Sends a GET request to this URI.
-  Future<Response> get({
-    Map<String, String>? headers,
-    Duration? timeout,
-    int? redirects,
-    int? retries,
-    Encoding? encoding,
-    Fetch? fetch,
-  }) => httpClient.get(
-    this,
-    headers: headers,
-    timeout: timeout,
-    redirects: redirects,
-    retries: retries,
-    encoding: encoding,
-    fetch: fetch,
-  );
-
-  /// Sends a POST request to this URI.
-  Future<Response> post({
-    Body? body,
-    Map<String, String>? headers,
-    Duration? timeout,
-    int? redirects,
-    int? retries,
-    Encoding? encoding,
-    Fetch? fetch,
-  }) => httpClient.post(
-    this,
-    body: body,
-    headers: headers,
-    timeout: timeout,
-    redirects: redirects,
-    retries: retries,
-    encoding: encoding,
-    fetch: fetch,
-  );
-
-  /// Sends a PUT request to this URI.
-  Future<Response> put({
-    Body? body,
-    Map<String, String>? headers,
-    Duration? timeout,
-    int? redirects,
-    int? retries,
-    Encoding? encoding,
-    Fetch? fetch,
-  }) => httpClient.put(
-    this,
-    body: body,
-    headers: headers,
-    timeout: timeout,
-    redirects: redirects,
-    retries: retries,
-    encoding: encoding,
-    fetch: fetch,
-  );
-
-  /// Sends a DELETE request to this URI.
-  Future<Response> delete({
-    Body? body,
-    Map<String, String>? headers,
-    Duration? timeout,
-    int? redirects,
-    int? retries,
-    Encoding? encoding,
-    Fetch? fetch,
-  }) => httpClient.delete(
-    this,
-    body: body,
-    headers: headers,
-    timeout: timeout,
-    redirects: redirects,
-    retries: retries,
-    encoding: encoding,
-    fetch: fetch,
-  );
-
-  /// Sends a PATCH request to this URI.
-  Future<Response> patch({
-    Body? body,
-    Map<String, String>? headers,
-    Duration? timeout,
-    int? redirects,
-    int? retries,
-    Encoding? encoding,
-    Fetch? fetch,
-  }) => httpClient.patch(
-    this,
-    body: body,
-    headers: headers,
-    timeout: timeout,
-    redirects: redirects,
-    retries: retries,
-    encoding: encoding,
-    fetch: fetch,
-  );
-
-  /// Sends a HEAD request to this URI.
-  Future<Response> head({
-    Map<String, String>? headers,
-    Duration? timeout,
-    int? redirects,
-    int? retries,
-    Fetch? fetch,
-  }) => httpClient.head(
-    this,
-    headers: headers,
-    timeout: timeout,
-    redirects: redirects,
-    retries: retries,
-    fetch: fetch,
-  );
-}
-
 /// Quick document parsing extensions on [String].
 extension StringParseExtensions on String {
   /// Parses this string as a JSON document cursor.
@@ -209,115 +98,15 @@ extension ReplyDocumentExtensions on Response {
 
   /// XPath selector shorthand over the parsed HTML document.
   Markup $xpath(String path) => html.$xpath(path);
-}
 
-/// Fluent HTTP extensions directly on URL strings.
-extension StringHttpExtensions on String {
-  /// Sends a GET request to this URL.
-  Future<Response> get({
-    Map<String, String>? headers,
-    Duration? timeout,
-    int? redirects,
-    int? retries,
-    Encoding? encoding,
-    Fetch? fetch,
-  }) => url.get(
-    headers: headers,
-    timeout: timeout,
-    redirects: redirects,
-    retries: retries,
-    encoding: encoding,
-    fetch: fetch,
-  );
-
-  /// Sends a POST request to this URL.
-  Future<Response> post({
-    Body? body,
-    Map<String, String>? headers,
-    Duration? timeout,
-    int? redirects,
-    int? retries,
-    Encoding? encoding,
-    Fetch? fetch,
-  }) => url.post(
-    body: body,
-    headers: headers,
-    timeout: timeout,
-    redirects: redirects,
-    retries: retries,
-    encoding: encoding,
-    fetch: fetch,
-  );
-
-  /// Sends a PUT request to this URL.
-  Future<Response> put({
-    Body? body,
-    Map<String, String>? headers,
-    Duration? timeout,
-    int? redirects,
-    int? retries,
-    Encoding? encoding,
-    Fetch? fetch,
-  }) => url.put(
-    body: body,
-    headers: headers,
-    timeout: timeout,
-    redirects: redirects,
-    retries: retries,
-    encoding: encoding,
-    fetch: fetch,
-  );
-
-  /// Sends a DELETE request to this URL.
-  Future<Response> delete({
-    Body? body,
-    Map<String, String>? headers,
-    Duration? timeout,
-    int? redirects,
-    int? retries,
-    Encoding? encoding,
-    Fetch? fetch,
-  }) => url.delete(
-    body: body,
-    headers: headers,
-    timeout: timeout,
-    redirects: redirects,
-    retries: retries,
-    encoding: encoding,
-    fetch: fetch,
-  );
-
-  /// Sends a PATCH request to this URL.
-  Future<Response> patch({
-    Body? body,
-    Map<String, String>? headers,
-    Duration? timeout,
-    int? redirects,
-    int? retries,
-    Encoding? encoding,
-    Fetch? fetch,
-  }) => url.patch(
-    body: body,
-    headers: headers,
-    timeout: timeout,
-    redirects: redirects,
-    retries: retries,
-    encoding: encoding,
-    fetch: fetch,
-  );
-
-  /// Sends a HEAD request to this URL.
-  Future<Response> head({
-    Map<String, String>? headers,
-    Duration? timeout,
-    int? redirects,
-    int? retries,
-    Fetch? fetch,
-  }) => url.head(
-    headers: headers,
-    timeout: timeout,
-    redirects: redirects,
-    retries: retries,
-    fetch: fetch,
-  );
+  /// Reads one typed [field] out of the parsed HTML document.
+  ///
+  /// ```dart
+  /// res.pick(.text('h1'));       // String?
+  /// res.pick(.number('.price')); // num?
+  /// ```
+  ///
+  /// The same shorthand relationship `$` has to `html.$`: a reply is read far
+  /// more often than it is converted.
+  T pick<T>(Field<T> field) => html.pick(field);
 }

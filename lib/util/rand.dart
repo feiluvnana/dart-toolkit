@@ -4,9 +4,10 @@
 /// to look less like a machine.
 ///
 /// ```dart
-/// final agent = randomPick(agents.toList());
-/// await delay(jitter(2.s));
+/// final agent = agents.toList().randomItem();
+/// await delay(2.s.jittered());
 /// ```
+/// {@category Utilities}
 library;
 
 import 'dart:math';
@@ -18,71 +19,72 @@ const int _maxDraw = 1 << 32;
 
 Random _rng = Random();
 
-/// Fixes the generator behind every function here to [seed], or restores an
-/// unseeded one when [seed] is omitted.
+/// Randomness with no receiver to hang off.
 ///
-/// Every random choice this library makes runs through one generator —
-/// [randomPick], [randomShuffle], [randomId], [randomChance], the crawl order
-/// they decide, and the [jitter] on an HTTP retry — so seeding it makes a run
-/// repeat exactly. That is what a test of any of them needs:
+/// Picking and shuffling act on a list, so they are members of one
+/// ([RandomListExtensions]); jitter acts on a duration, so it is a member of
+/// that (`250.ms.jittered()`). What is left here genuinely *generates* rather
+/// than transforms, and a generator has nothing to be a member of — so it is
+/// one small type rather than six names in global scope.
 ///
 /// ```dart
-/// // setup: final agents = ['a', 'b', 'c'];
-/// seedRandom(42);
-/// final first = randomId();
-/// seedRandom(42);
-/// assert(randomId() == first);
+/// Rand.seed(42);
+/// final id = Rand.id();           // 'x7Fk2mQp9Lda'
+/// if (Rand.chance(0.1)) print(1); // one time in ten
+/// Rand.between(1, 100);
 /// ```
-///
-/// Process-wide, and not for anything that must be unguessable: a seeded
-/// generator is reproducible by design.
-void seedRandom([int? seed]) => _rng = seed == null ? Random() : Random(seed);
+abstract final class Rand {
+  /// Fixes the generator behind every random choice in this library to [seed],
+  /// or restores an unseeded one when [seed] is omitted.
+  ///
+  /// Every random choice runs through one generator — [id], [chance],
+  /// [between], `list.randomItem()`, `list.shuffled()`, the crawl order they
+  /// decide, and the `jittered()` on an HTTP retry — so seeding it makes a run
+  /// repeat exactly. That is what a test of any of them needs:
+  ///
+  /// ```dart
+  /// Rand.seed(42);
+  /// final first = Rand.id();
+  /// Rand.seed(42);
+  /// assert(Rand.id() == first);
+  /// ```
+  ///
+  /// Process-wide, and not for anything that must be unguessable: a seeded
+  /// generator is reproducible by design.
+  static void seed([int? seed]) =>
+      _rng = seed == null ? Random() : Random(seed);
 
-/// One item chosen uniformly at random from [items].
-///
-/// Throws [StateError] when [items] is empty.
-T randomPick<T>(List<T> items) {
-  if (items.isEmpty) {
-    throw StateError('Cannot pick from an empty list');
+  /// A whole random integer in `[min, max)`.
+  ///
+  /// Spans wider than 2^32 are drawn from two smaller draws, since
+  /// [Random.nextInt] only accepts a 32-bit bound.
+  static int between(int min, int max) {
+    if (max <= min) return min;
+    final span = max - min;
+    if (span <= _maxDraw) return min + _rng.nextInt(span);
+    final high = _rng.nextInt(1 << 32);
+    final low = _rng.nextInt(1 << 32);
+    return min + (((high << 32) | low) % span).abs();
   }
-  return items[_rng.nextInt(items.length)];
+
+  /// A random URL-safe id of [length] characters.
+  static String id([int length = 12]) => String.fromCharCodes([
+    for (var i = 0; i < length; i++)
+      _alphabet.codeUnitAt(_rng.nextInt(_alphabet.length)),
+  ]);
+
+  /// `true` with probability [probability], which is clamped to `0..1`.
+  static bool chance([double probability = 0.5]) =>
+      _rng.nextDouble() < probability.clamp(0, 1);
 }
 
-/// A shuffled copy of [items], leaving the original list untouched.
-List<T> randomShuffle<T>(List<T> items) => [...items]..shuffle(_rng);
-
-/// A whole random integer in `[min, max)`.
+/// [base] varied by up to [spread] of itself, never shorter than [base].
 ///
-/// Spans wider than 2^32 are drawn from two smaller draws, since
-/// [Random.nextInt] only accepts a 32-bit bound.
-int randomBetween(int min, int max) {
-  if (max <= min) return min;
-  final span = max - min;
-  if (span <= _maxDraw) return min + _rng.nextInt(span);
-  final high = _rng.nextInt(1 << 32);
-  final low = _rng.nextInt(1 << 32);
-  return min + (((high << 32) | low) % span).abs();
-}
-
-/// A random URL-safe id of [length] characters.
-String randomId([int length = 12]) => String.fromCharCodes([
-  for (var i = 0; i < length; i++)
-    _alphabet.codeUnitAt(_rng.nextInt(_alphabet.length)),
-]);
-
-/// `true` with probability [probability], which is clamped to `0..1`.
-bool randomChance([double probability = 0.5]) =>
-    _rng.nextDouble() < probability.clamp(0, 1);
-
-/// Returns [base] varied by up to [spread] of itself, never shorter than [base].
-///
-/// A negative [spread] is treated as zero.
-///
-/// Spacing requests by a jittered delay stops a pool of workers from
-/// resynchronising onto the same instant.
-Duration jitter(Duration base, {double spread = 0.25}) {
-  // Only ever added, so the result is a delay of at least [base]; a negative
-  // spread would otherwise make a "jittered" wait finish early.
+/// The implementation behind `Duration.jittered()`, which is where callers
+/// reach it. A negative [spread] is treated as zero: it is only ever added, so
+/// the result is a delay of at least [base]; a negative spread would otherwise
+/// make a "jittered" wait finish early.
+Duration jitterOf(Duration base, {double spread = 0.25}) {
   final width = spread.isNaN ? 0.0 : (spread < 0 ? 0.0 : spread);
   return Duration(
     microseconds:
@@ -93,9 +95,14 @@ Duration jitter(Duration base, {double spread = 0.25}) {
 
 /// Random selection over this list.
 extension RandomListExtensions<T> on List<T> {
-  /// One item chosen uniformly at random. See [randomPick].
-  T randomItem() => randomPick(this);
+  /// One item chosen uniformly at random.
+  ///
+  /// Throws [StateError] when this list is empty.
+  T randomItem() {
+    if (isEmpty) throw StateError('Cannot pick from an empty list');
+    return this[_rng.nextInt(length)];
+  }
 
-  /// A shuffled copy, leaving this list untouched. See [randomShuffle].
-  List<T> shuffled() => randomShuffle(this);
+  /// A shuffled copy, leaving this list untouched.
+  List<T> shuffled() => [...this]..shuffle(_rng);
 }

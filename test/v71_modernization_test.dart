@@ -4,17 +4,17 @@ import 'package:test/test.dart';
 void main() {
   group('Modernization Tests', () {
     test('DocumentFormat static dot shorthands', () {
-      final jsonCodec = DocumentFormat.json;
-      final htmlCodec = DocumentFormat.html;
-      final yamlCodec = DocumentFormat.yaml;
-      final tomlCodec = DocumentFormat.toml;
-      final csvCodec = DocumentFormat.csv;
+      final DocumentFormat<Json, Object?> jsonCodec = .json;
+      final DocumentFormat<Markup, Markup> htmlCodec = .html;
+      final DocumentFormat<Json, Object?> yamlCodec = .yaml;
+      final DocumentFormat<Json, Object?> tomlCodec = .toml;
+      final DocumentFormat<Csv, Iterable<Map<String, Object?>>> csvCodec = .csv;
 
-      expect(jsonCodec, isA<DocumentFormat<Json>>());
-      expect(htmlCodec, isA<DocumentFormat<Markup>>());
-      expect(yamlCodec, isA<DocumentFormat<Json>>());
-      expect(tomlCodec, isA<DocumentFormat<Json>>());
-      expect(csvCodec, isA<DocumentFormat<Csv>>());
+      expect(jsonCodec, isA<JsonFormat>());
+      expect(htmlCodec, isA<HtmlFormat>());
+      expect(yamlCodec, isA<YamlFormat>());
+      expect(tomlCodec, isA<TomlFormat>());
+      expect(csvCodec, isA<CsvFormat>());
 
       final jsonDoc = jsonCodec.parse('{"status": "ok"}');
       expect(jsonDoc.text('status'), 'ok');
@@ -90,7 +90,7 @@ void main() {
 
     test('parallelMap with progress indicator', () async {
       final items = [1, 2, 3, 4];
-      final results = await parallelMap(items, (x) async {
+      final results = await items.parallelMap((x) async {
         await Future<void>.delayed(const Duration(milliseconds: 10));
         return x * 10;
       }, progress: 'Calculating');

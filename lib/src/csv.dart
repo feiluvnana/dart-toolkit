@@ -9,7 +9,7 @@
 /// through 5.4.0 and was never reachable as `util.` anything.
 ///
 /// ```dart
-/// final sheet = parseCsv('a,b\n1,2');
+/// final sheet = 'a,b\n1,2'.parse(.csv);
 /// sheet.headers;                 // List<String>
 /// sheet.maps;                    // Iterable<Map<String, String>>
 /// sheet.column('a');             // Iterable<String>
@@ -17,6 +17,7 @@
 ///
 /// `Table` was the obvious name and the console has it, so this is named
 /// for what it is over — exactly as `Json` and `Markup` are.
+/// {@category Formats}
 library;
 
 import '../src/csvtext.dart';

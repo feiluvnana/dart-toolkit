@@ -10,6 +10,7 @@
 /// The [Json] *cursor* the readers return is exported from `util`, because it
 /// is a pure value that `net` hands back too, through [DocumentFormat], and a type
 /// `net` needs cannot live under `format`.
+/// {@category Formats}
 library;
 
 import '../src/jsontext.dart';
@@ -24,18 +25,16 @@ import 'format.dart';
 /// Entry point for JSON, reachable as [parseJson].
 ///
 /// ```dart
-/// final doc = parseJson(res.body);
-/// final cfg = await const JsonFormat().read('config.json');
-/// writeTextSync('out.json', const JsonFormat().format(doc.raw));
+/// final doc = res.body.parse(.json);
+/// final cfg = await Path('config.json').read(.json);
+/// Path('out.json').sync.writeText(const JsonFormat().format(doc.raw));
 /// ```
 ///
-/// `const JsonFormat().write(path, value)` writes one to disk, staged through a
+/// `Path(path).write(value, as: .json)` writes one to disk, staged through a
 /// `.part` file like every other write in this library; [writeJson] is the same
 /// call under the shorter name a script reaches for. [format] is the string
 /// half, for when the text is going somewhere that is not a file.
-class JsonFormat
-    with FileFormat<Json, Object?>
-    implements DocumentFormat<Json> {
+class JsonFormat implements DocumentFormat<Json, Object?> {
   /// Creates the codec. Prefer the shared [DocumentFormat.json] instance.
   const JsonFormat();
 
@@ -51,7 +50,7 @@ class JsonFormat
   ///
   /// Pass `indent: 0` for the compact single-line form.
   ///
-  /// `const JsonFormat().write(path, value)` is this plus an atomic write, and
+  /// `Path(path).write(value, as: .json)` is this plus an atomic write, and
   /// [writeJson] is that under a shorter name.
   @override
   String format(Object? value, {int indent = 2}) =>

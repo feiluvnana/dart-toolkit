@@ -4,32 +4,74 @@
 [![Dart](https://img.shields.io/badge/Dart-3.10%2B-blue.svg)](https://dart.dev)
 [![GitHub](https://img.shields.io/badge/GitHub-feiluvnana%2Fdart--toolkit-brightgreen.svg)](https://github.com/feiluvnana/dart-toolkit)
 
-A cohesive automation and web-scraping toolkit for Dart, developed by **feiluvnana**. Built for writing clean command-line scripts in **plain, idiomatic Dart**: top-level functions, extensions on the native types, and ordinary classes.
+A cohesive automation and web-scraping toolkit for Dart, developed by **feiluvnana**.
+
+**Every operation hangs off the value it acts on. Every argument is a leading dot.**
+
+```dart
+import 'package:dart_toolkit/dart_toolkit.dart';
+
+final out = Path.cwd / 'output';
+await (out / 'products.json').writeJson(rows);      // atomic
+final settings = await Path('config.yaml').read(.yaml);
+
+final res = await Http.get('https://example.com'.url);
+final titles = res.$$('h1').map((h) => h.text);
+
+await for (final page in crawl(seeds, next: _next, politeness: .perHost(250.ms))) {
+  print(page.url);
+}
+```
 
 ### What is in it
 
-| Area | Reach for | Focus |
+| Reach for | On | For |
 | :--- | :--- | :--- |
-| **Files** | `readText`, `writeJson`, `listDir`, `walkDir`, `withLock` | One file: reading it, writing it **atomically**, asking what is at a path. Paths are `joinPath`/`dirname`/`stemName`; directories are `listDir`/`walkDir`/`makeDir` |
-| **Networking** | `get`, `post`, `download`, `crawl`, `serve` | HTTP requests, streaming downloads, the frontier that crawls, a server that listens — it fetches bytes and parses none of them |
-| **System** | `run`, `runStream`, `which`, `env`, `onExit`, `shutdown` | Subprocesses, environment, terminal IO — and the hooks that decide what happens to your files and child processes when the program is interrupted |
-| **Concurrency** | `parallelMap`, `settle`, `retry`, `Pool`, `RateLimiter` | Bounded async task pools, failure-tolerant fan-out, and rate limiting |
-| **Formats** | `parseHtml`, `parseJson`, `parseYaml`, `parseCsv`, `zip` | One pair of functions per format, every one behind the same `DocumentFormat` seam |
-| **Utilities** | `slugify`, `formatBytes`, `sha256Hash`, `jitter`, `delay` | Pure helpers: text, byte sizes, digests, randomness, time |
-| **CLI** | `CliParser`, `Cli`, `Opt` | Flags, options, subcommands, and usage text |
-| **Collections** | `sortedBy`, `chunk`, `window`, `distinct`, `groupBy` | Extensions straight onto `Iterable`, `Stream` and `Map` |
+| `Path` | `Path.cwd / 'out' / 'q3.json'` | Reading, writing **atomically**, listing, watching, locking, hashing, zipping — one type, ~45 members, no `Sync` suffixes |
+| `Http` | `Http.get`, `Http.post`, `Http.download` | One-off requests through a shared pooled client |
+| `Fetcher` | `Fetcher(session: true)` | A session: cookies, base headers, retries, cache, rate limit |
+| `crawl` | `crawl(seeds, next: …)` | A `Stream<Response>` from a self-feeding frontier |
+| `String` | `'x'.toSlug()`, `'5MiB'.bytes`, `body.parse(.html)` | Text, sizes, durations, hashes, every document format |
+| `Iterable` | `items.chunk(2)`, `urls.parallelMap(Http.get)` | Native collections, plus bounded async work |
+| `Console` / `logger` | `logger.ok(…)`, `Console.confirm(…)` | Terminal output and input |
+| `CliParser` | `parser.flag('force', abbr: 'f')` | Flags, options, subcommands, usage text |
 
 ---
 
-## Design Philosophy
+## Design
 
-1. **Idiomatic Dart.** Top-level functions (`readText`, `run`, `get`, `delay`), extensions on the types you already hold (`'x'.toSlug()`, `items.chunk(2)`, `250.ms`), and plain classes (`CliParser`, `Crawler`, `Pool`). No namespace object to go through, and Effective Dart `lowerCamelCase` throughout.
-2. **One name per operation.** Every operation has exactly one spelling. Where an operation reads naturally as a property of a value there is also an extension method, and it forwards to the same implementation — `slugify(title)` and `title.toSlug()` are the same call, never two.
-3. **Names say what they act on.** A bare `list`, `copy` or `join` at top level says nothing, so it is `listDir`, `copyPath`, `joinPath`.
-4. **Real types at every boundary.** URLs are `Uri`, delays are `Duration`, paths are `String`, bodies and hash algorithms are sealed types and enums. Declaring a CLI option hands back a typed `Opt<T>` handle rather than a name to look up later.
-5. **Atomic by default.** Every write stages through a `.part` file and is renamed into place only after a successful flush. Interrupted runs never leave truncated files.
-6. **Seams the library already has.** A crawl is not a framework: a transport is a function (`Send`), a document is a `DocumentFormat`, and the results are a `Stream<Response>`. Multi-stage routing is a Dart `switch` on the tag a request carried, which the compiler checks.
-7. **Native collections.** Everything operates directly on Dart 3 `Iterable`, `List`, `Map` and `Stream` — no wrapper types to convert into or out of.
+**1. Verbs live on their receiver.** A path operation is a member of `Path`, a
+response operation a member of `Response`, a string operation an extension on
+`String`. An editor cannot help with a list of global functions, because there
+is nothing to type before the dot. It can help perfectly with `path.`.
+
+**2. Arguments are typed values, reached with a leading dot.** Dart 3.10's dot
+shorthands mean a typed argument costs nothing at the call site:
+
+```dart
+res.parse(.yaml);
+page.pick(.text('h1'));
+await Http.post(url, body: .json({'q': 'widgets'}));
+crawl(seeds, politeness: .perHost(250.ms), scope: .sameHost);
+await Path('dist/app.zip').hash(.sha256);
+```
+
+**3. Top level is for what has no receiver** — and there are fourteen:
+`crawl`, `serve`, `serveOnce`, `run`, `runStream`, `which`, `env`, `loadEnv`,
+`onExit`, `shutdown`, `cpuCount`, `logger`, `delay`, `retry`.
+
+**4. One name per operation.** Not one name plus an extension plus a `Sync`
+twin. Blocking calls are under `path.sync`, not behind a suffix on every name.
+
+**5. Real types at every boundary.** URLs are `Uri`, delays are `Duration`,
+paths are `Path`, bodies and algorithms are sealed types and enums.
+
+**6. Atomic by default.** Every write stages through a `.part` file and is
+renamed into place only after a successful flush. Interrupted runs never leave
+truncated files.
+
+**7. Native collections.** Everything operates directly on Dart 3 `Iterable`,
+`List`, `Map` and `Stream`. No wrapper types.
 
 ---
 
@@ -44,32 +86,24 @@ dependencies:
       url: https://github.com/feiluvnana/dart-toolkit.git
 ```
 
-One import gives you everything:
+One import gives you everything, and it does not fight your other imports:
 
-```dart
+```dart no-compile
 import 'package:dart_toolkit/dart_toolkit.dart';
+import 'package:http/http.dart' hide Response;
+import 'package:collection/collection.dart';
 ```
 
-Type names do not collide with `dart:io` — `Fetcher` is this package's client,
-`HttpClient` is still `dart:io`'s:
+Through 8.1.0 this package put `get`, `post`, `put`, `patch`, `delete`, `head`
+and `readBytes` in global scope and the README had to tell you to hide all
+seven. They are `Http.get`, `Http.post` and `path.readBytes()` now, so
+**`Response` is the only name left to hide** — and only if you want
+`package:http`'s.
 
-```dart
-import 'dart:io';                                  // HttpClient is dart:io's
-import 'package:dart_toolkit/dart_toolkit.dart';   // Fetcher is this one's
-```
-
-**Importing `package:http` in the same file needs a `hide`.** This package puts
-`get`, `post`, `put`, `patch`, `delete`, `head`, `readBytes` and `Response` at
-top level, and `package:http` exports the same eight names:
-
-```dart
-import 'package:dart_toolkit/dart_toolkit.dart';
-import 'package:http/http.dart' hide get, post, put, patch, delete, head, readBytes, Response;
-```
-
-The same applies to `package:collection` and `rxdart`, whose `sorted`,
-`sortedBy`, `whereNotNull`, `flatMap`, `debounce`, `mergeWith` and `concatWith`
-extension members overlap with the ones here.
+`package:collection` shares a few *extension member* names with this package
+(`sorted`, `sortedBy`, `firstWhereOrNull`). Those are not an import problem:
+Dart only asks you to disambiguate at a call site that uses one, and
+`IterableExtensions(items).sorted()` names the one you meant.
 
 ---
 
@@ -79,306 +113,264 @@ extension members overlap with the ones here.
 import 'package:dart_toolkit/dart_toolkit.dart';
 
 void main(List<String> args) async {
-  // 1. Arguments
-  final parser = CliParser();
-  final concurrency = parser.number('concurrency', abbr: 'c', defaultsTo: 4);
-  final force = parser.flag('force', abbr: 'f');
-  parser.parse(args);
+  final cli = CliParser(description: 'Headline scraper.');
+  final concurrency = cli.number('concurrency', abbr: 'c', defaultsTo: 4);
+  final force = cli.flag('force', abbr: 'f');
+  cli.parse(args, autoHelp: true);
 
-  final log = logger;
   final clock = Stopwatch()..start();
+  logger.step(1, 3, 'Crawling headlines...');
 
-  // 2. Crawler and collect
-  log.step(1, 3, 'Crawling headlines...');
-  final crawler = crawl([Fetch('https://news.ycombinator.com'.url)])
-    ..concurrent(concurrency())
-    ..delay(250.ms)
-    ..limit(50);
+  final titles = await crawl(
+    ['https://news.ycombinator.com'],
+    concurrency: concurrency(),
+    politeness: .every(250.ms),
+    limit: 50,
+  ).expand((res) => res.$$('.titleline > a').map((el) => el.text)).toList();
 
-  final titles = await crawler
-      .expand((res) => res.parse(DocumentFormat.html).$('.titleline > a').texts)
-      .toList();
-  log.ok('Found ${titles.length} headlines.');
+  logger.ok('Found ${titles.length} headlines.');
 
-  // 3. Process concurrently, with a progress bar
-  log.step(2, 3, 'Processing...');
-  final batch = titles.take(10).toList();
-  final bar = Progress(total: batch.length, message: 'Processing');
-  final processed = await parallelMap(batch, (title) async {
-    bar.tick(1, title);
-    return title.toUpperCase();
-  }, concurrency: cpuCount);
-  bar.done('Done.');
+  logger.step(2, 3, 'Processing...');
+  final processed = await titles.take(10).parallelMap(
+    (title) async => title.toUpperCase(),
+    concurrency: cpuCount,
+    progress: 'Processing',
+  );
 
-  // 4. Report and save atomically
-  log.step(3, 3, 'Saving...');
-  consoleWriter.write(
+  logger.step(3, 3, 'Saving...');
+  Console.write(
     (Table(headers: ['Metric', 'Value'])..addAll([
       ['Crawled', '${titles.length}'],
       ['Processed', '${processed.length}'],
-      ['Elapsed', formatDuration(clock.elapsed)],
+      ['Elapsed', clock.elapsed.format()],
     ])).render(),
   );
 
-  final dest = joinPath('output', 'summary.txt');
-  if (force() || !pathExists(dest)) {
-    await writeText(dest, processed.join('\n'));
-    log.ok('Saved to $dest');
+  final dest = Path('output') / 'summary.txt';
+  if (force() || !dest.exists) {
+    await dest.parent.makeDir();
+    await dest.writeText(processed.join('\n'));
+    logger.ok('Saved to $dest');
   }
 }
 ```
 
-This script exits on its own when it finishes — no manual cleanup call is needed.
-
-**Coming from 7.x or earlier?** 8.x removed the namespace convention the
-library was built on: the `io.*`, `net.*`, `system.*`, `concurrent.*`,
-`util.*`, `format.*`, `cli.*` and `collection.*` accessor objects, the
-`Sequence` / `Dictionary` / `Flow` wrapper types and their
-`.through(...)` / `.collect(...)` pipelines, and the static hubs that
-briefly replaced them. Every operation is a top-level function or an
-extension method now, and there is one spelling of each. The full mapping
-is in [CHANGELOG.md](CHANGELOG.md).
+**Coming from 8.x?** The 168 public top-level names are 14. Everything else
+moved onto the value it acts on. The full mapping is in
+[CHANGELOG.md](CHANGELOG.md); the short version is `readText(p)` →
+`Path(p).readText()`, `get(u)` → `Http.get(u)`, `slugify(t)` → `t.toSlug()`,
+and the crawler's eleven cascade methods are named arguments.
 
 ---
 
 ## Conventions
 
-Two small extensions keep the strongly-typed signatures short at the call site.
-
-**URLs are `Uri`**, matching `package:http`:
+**This string, read as something.** One family of getters on `String`:
 
 ```dart
-await get('https://example.com'.url);  // .url parses the string
+'https://example.com'.url;   // Uri
+'output/q3.json'.path;       // Path
+'5 MiB'.bytes;               // int?     — 5242880
+'1h30m'.duration;            // Duration?
+'2024-03-09'.date;           // DateTime?
 ```
 
-**Delays are `Duration`**:
+**Delays are `Duration`:**
 
 ```dart
 await delay(250.ms);
-crawl([Fetch(url)]).delay(2.s);
+crawl(seeds, politeness: .every(2.s));
 ```
 
-`.ms`, `.s` and `.m` produce ordinary `Duration` values, usable anywhere one is accepted.
+`.ms`, `.s`, `.m` and `.hours` produce ordinary `Duration` values.
 
 ---
 
 ## Tour
 
-### Files, atomically
-
-Every write is atomic: staged through a `.part` file and renamed into place,
-so a file appears whole or not at all. Each operation is a top-level function
-with a `Sync` twin.
+### Files — one type, and every write atomic
 
 ```dart
-writeTextSync('out/notes.txt', 'hello');            // text
-writeBytesSync('out/blob.bin', [1, 2, 3]);          // bytes
-writeJsonSync('out/data.json', {'count': 42});      // JSON, atomically
-appendTextSync('out/run.log', 'done\n');                     // append
-final data = await const JsonFormat().read('out/data.json');  // -> Json cursor
-
-pathExists(path);                       // anything at all, of any kind
-fileStat(path);                         // -> FileSystemEntry?, one syscall
-fileStat(path)?.isFile;                 // and .isDir, .isLink, .size, .empty
-hasContent(path);                       // exists and non-empty
-fileHashSync(path, Algo.md5);
-
-readLinesSync(path);                         // List<String>
-writeLinesSync('out/hosts.txt', hosts.keys); // one per line, atomically
-tempFile('render_');                         // a temporary *file*
-
-joinPath('a', 'b', 'c.txt');
-dirname(path);  filename(path);  stemName(path);
-cwd;  home;                             // read nothing, so they live here
-
-makeDirSync('out/reports');
-listDirSync('out');                     // one level -> List<FileSystemEntry>
-walkDirSync('src', match: '**/*.dart'); // the whole tree, a glob
-walkDirSync('out', match: '*.mp3');
-sweepDirSync('out', match: '*.part');   // and how many went
-dirSizeSync('out');                     // the recursive byte total
-isDirEmptySync('out');                  // the directory question
-createLinkSync('out/latest', 'run-2026-09-11');
+final out = Path.cwd / 'output' / 'reports';
+await out.makeDir();
+await (out / 'q3.json').writeJson(rows);
+final report = await (out / 'notes.md').readText();
 ```
 
-**The read and write halves are spelled the same.** The name says the shape,
-and `.write` is how it goes back: `readText`/`writeText`, `readBytes`/
-`writeBytes`, `readLines`/`writeLines`, `readCsvRows`/`writeCsv`.
-
-**One matcher, one depth axis.** Every member that looks at more than one
-entry takes the same three filters — `only:` for the kind, `match:` for a
-glob, `depth:` for how far down.
-
-Everything that reads or writes a file hands back a `FileSystemEntry` — path,
-kind, size, mtime and the name parts — instead of a `dart:io` handle:
+`Path` is an **extension type over `String`**, so it is erased at run time —
+there is no wrapper to allocate and no conversion to pay for — and it
+`implements String`, so every `String` member comes along and a `Path` flows
+straight into `dart:io`:
 
 ```dart
-for (final entry in listDirSync('out')) {
+final settings = Path.home / '.tool' / 'config.yaml';
+settings.endsWith('.yaml');   // String members, free
+File(settings);               // dart:io, no conversion
+```
+
+The members group so that `path.` reads like a table of contents:
+
+```dart
+// place
+path.parent;  path.name;  path.stem;  path.ext;  path.parts;
+path.absolute;  path.normalized;  path.expanded;  path.relativeTo();
+
+// ask — one stat each, no syscall for questions a value already answers
+path.exists;  path.isFile;  path.isDir;  path.isLink;
+path.hasContent;  path.size;  path.stat;
+
+// read
+await path.readText();   await path.readLines();   await path.readBytes();
+await path.readJson();   await path.read(.yaml);   path.csvRecords();
+
+// write — every one atomic
+await path.writeText(text);    await path.writeLines(titles);
+await path.writeJson(data);    await path.write(data, as: .csv);
+await path.appendText('done\n');
+
+// move
+await path.copyTo(dest);  await path.moveTo(dest);  await path.delete();
+await path.makeDir();     await path.touch();       await path.linkTo(dest);
+
+// walk
+await dir.list();                    // one level -> List<FileSystemEntry>
+await dir.walk(match: '*.dart');     // the whole tree
+await dir.sweep(match: '*.part');    // delete, and how many went
+await dir.dirSize;                   // the recursive byte total
+dir.watch((changed) => print(changed));
+
+// hold
+await path.lock(() async => rebuild());
+await path.hash(.sha256);
+await dir.zipTo('site.zip');
+```
+
+**Blocking calls are one member, not a suffix on twenty-eight names:**
+
+```dart
+await settings.readText();   // Future<String>
+settings.sync.readText();    // String
+```
+
+Listing hands back `FileSystemEntry` — a snapshot of one stat, with nothing to
+close:
+
+```dart
+for (final entry in Path('out').sync.list()) {
   if (entry.isDir) continue;
-  if (fileExtension(entry.path) == '.part') removePathSync(entry.path);
+  if (Path(entry.path).ext == '.part') Path(entry.path).sync.delete();
 }
 ```
-
-`isFile`, `isDir`, `isLink` and `empty` come off the one stat the entry holds,
-so they cost nothing, where `fileExists(path)` costs a syscall for the same
-question. `stemName`, `fileExtension` and `dirname` are path arithmetic and
-never touch the disk.
-
-The `Sync` variants block. The async ones are what a crawl handler or pool
-worker wants — one blocking read stalls every task in flight:
-
-```dart
-await writeText('out/notes.txt', 'hello');
-final text = await readText('out/notes.txt');
-await walkDir('out');
-```
-
-Downloading is `download`, because a socket is networking's.
 
 A crawl reaches a spreadsheet without passing through memory:
 
 ```dart
-await writeCsv(
-  'products.csv',
-  crawl([Fetch(seed)]).map(
-    (res) => <String, Object?>{'name': res.url.path, 'price': '0'},
-  ),
-  headers: ['name', 'price'],
+await Path('products.csv').writeCsv(
+  crawl(seeds).map((res) => {'url': '${res.url}', 'size': res.bytes.length}),
+  headers: ['url', 'size'],
 );
 ```
 
-See [lib/io/io.dart](lib/io/io.dart), [lib/io/csv.dart](lib/io/csv.dart), [lib/collection/collection.dart](lib/collection/collection.dart).
+See [lib/io/path.dart](lib/io/path.dart).
 
 ### HTTP requests, and the codec seam
 
 ```dart
-final res = await get('https://example.com'.url);
+final res = await Http.get('https://example.com'.url);
 
 // `Http` fetches bytes; `DocumentFormat` reads them.
-final page = res.parse(DocumentFormat.html);
-page.$('h1').text;                    // text of first h1
-page.$('a').attrs('href');            // all hrefs
+res.$('h1').text;                     // text of the first h1
+res.$$('a').map((a) => a.attr('href'));
+res.parse(.json).at('data.total').number();
 
-res.parse(DocumentFormat.json).at('data.total').number();   // the other format
-
-// Typed extraction: a record, with every field's type intact.
-final item = (
-  title: page.$('h1.title').text,
-  price: page.pick(Field.text('.price').when(extractNumber)),
-  variants: page.all('.variant', (row) => (
-    name: row.$('.name').text,
-    sku: row.attr('data-sku'),
-  )),
-);
-item.variants.firstOrNull?.sku;       // String?, no cast
-
-// The string shorthand, for a first look at an unfamiliar page:
-final loose = page.extract({'title': 'h1.title', 'links': ['a.link@href']});
-
-// Stateful session with cookies:
-final session = Fetcher(session: true);
-
-await post(url, body: const Body.json({'id': 1}));
-await download(url, 'out/file.zip');
+await Http.post(url, body: .json({'id': 1}));
+await Http.download(url, into: Path('out') / 'file.zip');
 ```
 
+`body` is a sealed `Body`, so the shape is named rather than guessed:
+`.json(…)`, `.form(…)`, `.text(…)`, `.bytes(…)`. Through 8.1.0 it was
+`Object?` and a `Map<String, String>` silently became a form while a
+`Map<String, int>` became JSON.
+
 **A `Fetcher` does what it was asked to do and nothing more.** Retries,
-redirect-following, caching, cookies, rate limiting and a browser
-`User-Agent` are all parameters, and a parameter nobody filled in stays
-switched off:
+redirect-following, caching, cookies, rate limiting and a browser `User-Agent`
+are all parameters, and a parameter nobody filled in stays switched off:
 
 ```dart
-// setup: final url = 'https://example.com'.url;
-await get(url);                  // one request, no retry; a 302 comes
+await Http.get(url);                  // one request, no retry; a 302 comes
                                       // back as a 302
 
 final api = Fetcher(retries: 3, redirects: 5);
-await api.send(HttpMethod.get, url);  // retried, followed
-await api.send(HttpMethod.post, url, body: const Body.json({'id': 1}), retries: 0);
+await api.send(.get, url);            // retried, followed
+await api.send(.post, url, body: .json({'id': 1}), retries: 0);
 
 final scraper = Fetcher.browser();    // the Chrome UA and HTML Accept header
+final session = Fetcher(session: true);   // cookies
 ```
 
-**One verb, and the method is an argument.** `get`, `post`, `put`, `delete`,
-`patch` and `head` were six members through 6.1.0, each restating eight
-parameters to fill in one enum. A dot shorthand fills it in at the call site
-instead, so `send(.get, url)` is the whole vocabulary — and a tear-off is a
-lambda: `urls.parallelMap((u) => send(.get, u))`.
-
-Retries cover transport errors, 5xx and 429, honouring `Retry-After`; the
-count is the whole of the decision, so `retries: 3` retries a `POST` as
-readily as a `GET`. `redirects` is the hop budget: `0` hands back the `3xx`,
-and a chain longer than a positive limit throws. See
+Retries cover transport errors, 5xx and 429, honouring `Retry-After`;
+`redirects` is the hop budget, where `0` hands back the `3xx`. See
 [lib/net/http.dart](lib/net/http.dart).
 
 ### Crawling — the frontier, and nothing else
 
 A crawl is **a queue that feeds itself**, plus dedupe, per-host politeness,
-robots, depth, limit and resume. That is the whole scope of the type. A
-single-stage crawl needs none of it and never did:
+robots, depth, limit and resume. A single-stage fan-out needs none of it:
 
 ```dart
-// setup: final urls = <Uri>[];
-await parallelMap(urls, (u) => get(u), concurrency: 4);
+await urls.parallelMap(Http.get, concurrency: 4);
 ```
 
-What `crawl` adds over that line is the frontier:
+What `crawl` adds over that line is the frontier — and every knob it has is a
+named argument, so an editor shows all of them with their types and defaults:
 
 ```dart
-final crawler = crawl(
-  [Fetch('https://music.example.com/album'.url)],
+final songs = crawl(
+  ['https://music.example.com/album'],
   // The whole router: reply in, next requests out. A `switch` the compiler
   // checks, where `Router`, `route()` and `tag()` were three public members
   // that it did not.
-  (res) => switch (res.fetch.tag) {
-    null => res.parse(DocumentFormat.html).$('#songlist a').elements.map(
-      (a) =>
-          res.follow(a.attributes['href']!, tag: 'song', meta: [('name', a.text)]),
+  next: (res) => switch (res.fetch.tag) {
+    null => res.$$('#songlist a').map(
+      (a) => res.follow(a.attr('href')!, tag: 'song', meta: [('name', a.text)]),
     ),
     _ => const <Fetch>[],
   },
-)..concurrent(4)..limit(50)..depth(2);
+  concurrency: 4,
+  politeness: .perHost(250.ms),
+  scope: .sameHost,
+  robots: .obey('ExampleBot/1.0'),
+  accept: const ['text/html'],
+  depth: 2,
+  limit: 50,
+  resume: 'crawl.state',
+  send: Fetcher(
+    headers: const {'User-Agent': 'ExampleBot/1.0'},
+    timeout: 10.s,
+    retries: 3,
+    cache: HttpCache('.cache'),
+    limiter: RateLimiter(10, per: 1.s),
+  ).call,
+);
 
 // Extraction is downstream, on the stream.
-await for (final res in crawler.where((res) => res.fetch.tag == 'song')) {
-  print(
-    '${res.fetch.meta['name']} -> '
-    '${res.parse(DocumentFormat.html).$('a').attr('href')}',
-  );
+await for (final res in songs.where((res) => res.fetch.tag == 'song')) {
+  print('${res.fetch.meta['name']} -> ${res.$('a').attr('href')}');
 }
 ```
+
+**The crawl is the stream.** `Crawler extends Stream<Response>`, so every
+`Stream` member works on it directly; `.flow` and `.stream` were two more
+spellings of the same thing and are gone. `.settle` puts the failures in band,
+`.run()` drains to `stats`.
 
 `res.follow` **returns** the next request rather than queueing one — it
 resolves relative URLs, sets a `Referer` and grows the depth — so `next` is a
 pure function, testable with a `Response.text` fixture and no crawl at all.
 
-**Nothing is fetched until something collects**, and nothing about the *client*
-is a member here. A crawl owns the knobs a scheduler owns; headers, timeout,
-retries, cap, cache and rate belong to the `Fetcher` you hand it:
-
-```dart
-// setup: final seed = 'https://example.com'.url;
-// setup: Iterable<Fetch> next(Response res) => const <Fetch>[];
-final crawler = crawl([Fetch(seed)], next)
-  ..using(Fetcher(
-    headers: const {'User-Agent': 'ExampleBot/1.0'},
-    timeout: 10.s,
-    retries: 3,
-    cap: 5 * 1024 * 1024,
-    cache: HttpCache('.cache'),
-    limiter: RateLimiter(10, per: 1.s),
-  ).call)
-  ..resume('crawl.state')     // carry on where an interrupted run stopped
-  ..accept(const ['text/html'])  // never hand a PDF to the parser
-  ..obey('ExampleBot/1.0');   // robots.txt, Crawl-delay included
-```
-
-Ten knobs were declared at four levels through 5.5.0 — builder, engine,
-downloader and client, thirty-two declarations in all — and a caller-supplied
-downloader silently dropped five of them. A knob that lives in one place
-cannot be dropped in transit.
-
-See [lib/net/crawl.dart](lib/net/crawl.dart), [lib/net/fetch.dart](lib/net/fetch.dart).
+**Nothing is fetched until something listens**, and nothing about the *client*
+is configured here: headers, timeout, retries, cap, cache and rate belong to
+the `Fetcher` you hand it. See [lib/net/crawl.dart](lib/net/crawl.dart).
 
 ### `Send` — a transport is a function
 
@@ -390,8 +382,7 @@ typedef Send = Future<Response> Function(Fetch fetch);
 used to subclass a downloader base class is a closure:
 
 ```dart
-// A fixture, and the recorder `MapDownloader` was an exported class for: a
-// closure over a map, and a list it captures.
+// A fixture: a closure over a map, and a list it captures.
 Send fixture(Map<String, String> pages, List<Fetch> sent) => (f) async {
   sent.add(f);
   return Response.text(pages['${f.url}'] ?? '', fetch: f);
@@ -405,54 +396,53 @@ Send logged(Send inner) => (f) async {
 };
 ```
 
-No back-pointer, no item type, no inherited worker loop, no
-`UnsupportedError`, and no exported type per transport.
-
 ### `Form` — the forms a page carries
 
-Reading a page is half of it. `Markup.form(...)` collects a form's controls the
-way a browser would submit them — the hidden inputs, the CSRF token, the
-options already selected — so a script overrides the two fields it knows about
-and sends the rest back untouched:
+`Markup.form(...)` collects a form's controls the way a browser would submit
+them — the hidden inputs, the CSRF token, the options already selected — so a
+script overrides the two fields it knows about and sends the rest back
+untouched:
 
 ```dart
 final session = Fetcher(session: true);
-final res = await session.send(HttpMethod.get, 'https://example.com/login'.url);
+final res = await session.send(.get, 'https://example.com/login'.url);
 
-final home = await res.parse(DocumentFormat.html).form('#login')!
+final home = await res.parse(.html).form('#login')!
     .at(res.url)
     .fill({'user': user, 'pass': pass})
     .send(using: session.call);
 ```
 
-Finding a form and reading its controls is HTML, so `Form` comes out of
-`parseHtml`; sending one is a socket, so the networking side keeps the
-`Sending` extension and nothing else. `at` tells the form which URL its markup came
-from, which a cursor cannot know.
+Inside a crawl, `form.fetch()` is the request the form describes, and returning
+it from `next` is how it gets submitted. See
+[lib/format/form.dart](lib/format/form.dart).
 
-Inside a crawl, `form.fetch()` is the request the form describes, and
-returning it from `next` is how it gets submitted. See
-[lib/format/form.dart](lib/format/form.dart), [lib/net/form.dart](lib/net/form.dart).
-
-### HTML selectors
+### HTML selectors and typed extraction
 
 ```dart
-// setup: const markup = '<ul><li class="track" data-id="1">'
-// setup:     '<a href="/t/1">Track One</a></li></ul>';
-const HtmlFormat().$(markup, '.track a').texts;      // parse and select in one call
-parseHtml(markup).$('.track a').texts;  // the same, in two steps
-res.parse(DocumentFormat.html).$('.title').at(0).text;
+res.$('.title').text;                 // the first match
+res.$$('.track a').map((a) => a.text);
+res.parse(.html).$xpath('//h1');
 
-// The top-level function, opt-in via package:dart_toolkit/html.dart:
-$(markup, '.track a').texts;
-$(markup).$('.track').attrs('data-id');
+// Typed extraction: a record, with every field's type intact.
+final item = (
+  title: page.$('h1.title').text,
+  price: page.pick(.number('.price')),
+  variants: page.all('.variant', (row) => (
+    name: row.$('.name').text,
+    sku: row.attr('data-sku'),
+  )),
+);
+item.variants.firstOrNull?.sku;       // String?, no cast
 ```
 
-`$` is the selector on a cursor and `$xpath` its XPath twin — the jQuery
-spelling all the way down, because a *method* named `$` puts nothing in a
-script's global scope. Only the two top-level functions do, and those stay
-behind the opt-in import. `find` and `xpath` were the method names through
-6.0.0, with `$` an extension on `String` beside them.
+`$` is the selector on a cursor and `$xpath` its XPath twin. The two top-level
+functions of the same name stay behind an opt-in import, because a method named
+`$` puts nothing in a script's global scope and a function does:
+
+```dart
+import 'package:dart_toolkit/html.dart';
+```
 
 See [lib/src/markup.dart](lib/src/markup.dart).
 
@@ -464,14 +454,20 @@ if (res.ok) print(res.stdout);
 
 which('ffmpeg');
 env.get('PORT', 8080);
-onExit(() => writeJsonSync('out/state.json', db));    // and track, adopt, signals
+onExit(() => Path('out/state.json').sync.writeJson(db));
 await shutdown();      // the one door out — it runs those hooks
 ```
 
-`dart:io`'s `exit` skips every hook `onExit` exists to guarantee, and there is
-deliberately no re-export of it here.
+A scratch file or a child process is cleaned up by asking it to be:
 
-See [lib/system/system.dart](lib/system/system.dart), [lib/system/env.dart](lib/system/env.dart).
+```dart
+final scratch = await Path.tempFile();
+scratch.deleteOnExit();
+```
+
+`dart:io`'s `exit` skips every hook `onExit` exists to guarantee, and there is
+deliberately no re-export of it here. See
+[lib/system/system.dart](lib/system/system.dart).
 
 ### The command line your script presents
 
@@ -488,8 +484,8 @@ if (force()) rebuild(out(), size());
 Declaring returns the handle that reads it, so the type and the default live in
 one place and `--concurrency=fast` is a parse error rather than a silent 4.
 
-Or declare commands and `CliParser.run` parses, prints `--help`, validates and
-dispatches, returning an exit code:
+Or declare commands and let `CliParser.run` parse, print `--help`, validate and
+dispatch, returning an exit code:
 
 ```dart
 final parser = CliParser();
@@ -504,17 +500,18 @@ See [lib/cli/cli.dart](lib/cli/cli.dart).
 ### Bounded async work
 
 ```dart
-final bodies = await parallelMap(
-  urls,
-  (url) async => (await get(url)).parse(DocumentFormat.json),
+final bodies = await urls.parallelMap(
+  (url) async => (await Http.get(url)).parse(.json),
   concurrency: 8,
 );
 ```
 
-Results keep input order. The first failure propagates with its own error and stack; register `Pool.on.error` to collect failures and continue instead, or use `settle`, which returns a sealed `Done`/`Broke` per item and never throws:
+Results keep input order, and the first failure propagates with its own error
+and stack. `settle` is the version that never throws — a sealed `Done`/`Broke`
+per item:
 
 ```dart
-for (final result in await settle(urls, (u) => get(u))) {
+for (final result in await urls.settle(Http.get)) {
   switch (result) {
     case Done(:final value): print(value.statusCode);
     case Broke(:final error): print('failed: $error');
@@ -522,88 +519,67 @@ for (final result in await settle(urls, (u) => get(u))) {
 }
 ```
 
-It was reachable only by naming a `Pool` through 6.2.0, while `run` — the half that throws — had a shorthand here.
+`Semaphore` is *how many at once* and `RateLimiter` is *how often*; both
+implement `Waiting`, so a `Fetcher` can be paced by either. See
+[lib/concurrent/concurrent.dart](lib/concurrent/concurrent.dart).
 
-`Semaphore` is *how many at once* and `RateLimiter` is *how often*; both implement `Waiting`, so a `Fetcher` can be paced by either. See [lib/concurrent/concurrent.dart](lib/concurrent/concurrent.dart).
+### Formats — one codec, two directions, a leading dot
 
-### Formats — one pair of functions per format
-
-Every codec is spelled identically — `parse`, `read`, `write`, `format` — and
-every one implements `DocumentFormat`, which is what `res.parse(...)` takes:
+Every format implements `DocumentFormat` — `parse` in, `format` out — which is
+what `String.parse`, `Response.parse`, `Path.read` and `Path.write` all take:
 
 ```dart
-final pubspec = await const YamlFormat().read('pubspec.yaml');
+final pubspec = await Path('pubspec.yaml').read(.yaml);
 pubspec.text('version');                          // no cast
 pubspec.jsonpath(r'$..sdk').map((n) => n.text()).nonNulls;
 
-parseJson(res.body).at('data.items').all((i) => i.text('sku'));
-parseHtml(res.body).$('h1').text;
-parseCsv(res.body).column('sku');
-await const YamlFormat().write('out.yaml', {'name': 'x'});
+res.body.parse(.json).at('data.items').all((i) => i.text('sku'));
+res.body.parse(.html).$('h1').text;
+res.body.parse(.csv).column('sku');
+res.parse(.robots).allowed(url);
+res.parse(.sitemap);                              // List<Uri>
 
-res.parse(DocumentFormat.robots).allowed(url);
-res.parse(DocumentFormat.sitemap);                        // List<Uri>
-
-toCsvString(parseCsv(text).maps);
+await Path('out.yaml').write({'name': 'x'}, as: .yaml);
+DocumentFormat.json.format(data);                 // to a string
 ```
 
-`parseJson`, `parseYaml` and `parseToml` all hand back a `Json` cursor,
-because they decode to the same maps, lists and scalars; `parseHtml` hands
-back a `Markup` cursor. See [lib/format/json.dart](lib/format/json.dart),
-[lib/format/yaml.dart](lib/format/yaml.dart) and [lib/src/markup.dart](lib/src/markup.dart).
+`json`, `yaml` and `toml` all hand back a `Json` cursor, because they decode to
+the same maps, lists and scalars; `html` hands back a `Markup` cursor.
 
 **Formats, never binaries.** Wrappers for `git`, `gh` and `docker` were all
-tried and all removed: a wrapper only ever has the
-handful of subcommands somebody thought to add, where `run` has the
-whole executable and already returns a `SysResult` rather than throwing.
-
-```dart
-final head = await run('git', ['rev-parse', '--short', 'HEAD']);
-if (head.ok) print(head.stdout.trim());
-```
+tried and all removed: a wrapper only ever has the handful of subcommands
+somebody thought to add, where `run` has the whole executable.
 
 ### Archives
 
 ```dart
-await zip('site', 'site.zip');          // or site.tar.gz, .tgz, .tar.bz2
-await unzip('site.zip', 'restored');    // skips zip-slip entries
-await listArchive('site.zip');     // without unpacking
-await extractFromArchive('site.zip', 'index.html'); // one entry, in memory
+await Path('site').zipTo('site.zip');        // or site.tar.gz, .tgz, .tar.bz2
+await Path('site.zip').unzipInto('restored');  // skips zip-slip entries
+await Path('site.zip').entries();            // without unpacking
+await Path('site.zip').extract('index.html');  // one entry, in memory
+bytes.gzip();
 ```
 
 Archives are the one format here that is **not** a codec: an archive is a
 container of files, not a document with a shape, so there is no cursor to hand
-back.
-
-See [lib/format/zip.dart](lib/format/zip.dart).
+back. See [lib/format/zip.dart](lib/format/zip.dart).
 
 ### Collections — extensions on the native types
 
 ```dart
-rows.where((r) => r.live)
-    .take(10)
-    .sortedBy((r) => r.cost);
-
+rows.where((r) => r.live).take(10).sortedBy((r) => r.cost);
 rows.groupBy((r) => r.host);
 rows.countBy((r) => r.host);
 rows.maxBy((r) => r.score)?.url;
+items.chunk(2);  items.window(3);  items.distinct();
 ```
 
 Async stream processing over files and network feeds:
 
 ```dart
-await for (final r in readCsvRecords('big.csv')) {
-  if (r['live'] == 'yes') {
-    print(r['host']);
-  }
+await for (final r in Path('big.csv').csvRecords()) {
+  if (r['live'] == 'yes') print(r['host']);
 }
-
-// bounded async work over a stream
-await parallelMap(
-  await readLines('urls.txt'),
-  (line) => get(line.trim().url),
-  concurrency: 8,
-);
 ```
 
 See [lib/collection/collection.dart](lib/collection/collection.dart).
@@ -613,82 +589,81 @@ See [lib/collection/collection.dart](lib/collection/collection.dart).
 Nothing here touches the disk or the OS; that is what keeps it small.
 
 ```dart
-// setup: final clock = Stopwatch()..start();
-formatDuration(clock.elapsed);           // '02:15'
-formatBytes(5242880);                 // '5.0 MiB'
-slugify('Hello, World!');           // 'hello-world'
-extractNumber(r'$1,234.50');            // 1234.5
-sha256Hash(url).substring(0, 8);     // an 8-character cache key
-jitter(1.s);                     // 1.0s..1.25s
+clock.elapsed.format();            // '02:15'
+5242880.formatBytes();             // '5.0 MiB'
+'5 MiB'.bytes;                     // 5242880
+'Hello, World!'.toSlug();          // 'hello-world'
+r'$1,234.50'.extractNumber();      // 1234.5
+'$url'.hash().substring(0, 8);     // an 8-character cache key
+1.s.jittered();                    // 1.0s..1.25s
+Rand.id();                         // 'x7Fk2mQp9Lda'
 ```
 
 See [lib/util/util.dart](lib/util/util.dart).
 
 ---
 
-## Testing Your Pipelines
+## Testing your pipelines
 
 A transport is a function, so a fixture is a closure over a map:
 
 ```dart
-final titles = await (crawl([Fetch('https://site.test'.url)])
-      ..using((f) async => Response.text('<h1>Hi</h1>', fetch: f)))
-    .map((res) => res.parse(DocumentFormat.html).$('h1').text)
-    .toList();
+final titles = await crawl(
+  ['https://site.test'],
+  send: (f) async => Response.text('<h1>Hi</h1>', fetch: f),
+).map((res) => res.$('h1').text).toList();
 ```
 
 `next` is a pure function, so the routing is testable with no crawl at all:
 
 ```dart
-// setup: Iterable<Fetch> next(Response res) => const <Fetch>[];
-final urls = next(Response.text('<a href="/b">b</a>', fetch: Fetch(seed)))
+final found = next(Response.text('<a href="/b">b</a>', fetch: Fetch(seed)))
     .map((f) => f.url.toString())
     .toList();
 ```
 
-To configure custom client options:
+And a client can be swapped for one async scope:
 
 ```dart
-// setup: final token = 'xyz';
-final client = Fetcher(headers: {'Authorization': 'Bearer $token'});
+await Http.using(client, () async {
+  await Http.get(url);
+});
 ```
-
-See [lib/net/crawl.dart](lib/net/crawl.dart).
 
 ---
 
 ## Documentation
 
 The documentation is the `///` comments under `lib/`, read through dartdoc or
-on hover in an editor. Each file opens with a library-level comment that is
-the narrative for its domain — what the vocabulary is, why it is shaped that
-way, and what it cost. There was a `docs/` folder beside them through 5.4.0;
-5.5.0 retired it rather than keep two copies of every sentence.
+on hover in an editor. Each file opens with a library-level comment that is the
+narrative for its domain — what the vocabulary is, why it is shaped that way,
+and what it cost. Every snippet in them is compiled by the test suite, so none
+of it can drift.
 
 | Domain | Reference |
 | :--- | :--- |
-| Files & paths | [lib/io/io.dart](lib/io/io.dart) |
-| CSV tables | [lib/io/csv.dart](lib/io/csv.dart) |
-| Sequences, dictionaries, typed keys | [lib/collection/collection.dart](lib/collection/collection.dart) |
+| Paths, files, atomic writes | [lib/io/path.dart](lib/io/path.dart) |
+| Filesystem entries | [lib/io/entry.dart](lib/io/entry.dart) |
 | HTTP & downloads | [lib/net/http.dart](lib/net/http.dart) |
 | Crawling | [lib/net/crawl.dart](lib/net/crawl.dart) |
 | Requests & the transport seam | [lib/net/fetch.dart](lib/net/fetch.dart) |
 | Forms | [lib/format/form.dart](lib/format/form.dart) |
 | robots.txt & sitemaps | [lib/format/robots.dart](lib/format/robots.dart) |
 | HTML & selectors | [lib/src/markup.dart](lib/src/markup.dart) |
-| Subprocesses & shutdown | [lib/system/system.dart](lib/system/system.dart) |
-| CLI arguments | [lib/cli/cli.dart](lib/cli/cli.dart) |
-| Environment & `.env` | [lib/system/env.dart](lib/system/env.dart) |
-| Concurrency | [lib/concurrent/concurrent.dart](lib/concurrent/concurrent.dart) |
-| Terminal IO | [lib/system/console/console.dart](lib/system/console/console.dart) |
-| Time, sizes, text, hashing, randomness | [lib/util/util.dart](lib/util/util.dart) |
+| The codec seam | [lib/src/format.dart](lib/src/format.dart) |
 | JSON & JSONPath | [lib/format/json.dart](lib/format/json.dart) |
 | YAML & TOML | [lib/format/yaml.dart](lib/format/yaml.dart) |
-| Serving (`net.serve`) | [lib/net/serve.dart](lib/net/serve.dart) |
 | Archives | [lib/format/zip.dart](lib/format/zip.dart) |
+| Subprocesses & shutdown | [lib/system/system.dart](lib/system/system.dart) |
+| Environment & `.env` | [lib/system/env.dart](lib/system/env.dart) |
+| Terminal IO | [lib/system/console/console.dart](lib/system/console/console.dart) |
+| CLI arguments | [lib/cli/cli.dart](lib/cli/cli.dart) |
+| Concurrency | [lib/concurrent/concurrent.dart](lib/concurrent/concurrent.dart) |
+| Collections | [lib/collection/collection.dart](lib/collection/collection.dart) |
+| Time, sizes, text, hashing, randomness | [lib/util/util.dart](lib/util/util.dart) |
+| Serving | [lib/net/serve.dart](lib/net/serve.dart) |
 
-A short runnable script per use case lives in [`example/`](example/), with
-[example/example.dart](example/example.dart) putting them together as one
+[example/example.dart](example/example.dart) puts them together as one
 pipeline.
 
 ---

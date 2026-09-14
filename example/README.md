@@ -21,11 +21,12 @@ dart run example/example.dart --help
 
 ## Features Demonstrated
 
-- **CLI Parsing (`CliParser`)**: Declared options (`--output`), flags (`--force`), numbers (`--concurrency`), and auto-generated usage help.
-- **Console (`logger`, `consoleWriter`)**: Step indicators, success badges, Unicode tables, boxes, rules, and progress bars.
-- **Web Crawling (`crawl`)**: Multi-hop web crawling with offline fixture transport, delay jitter, concurrency limits, and scope rules.
-- **DOM Parsing & Extraction (`.$()`, `.all()`, `Field`)**: jQuery-style CSS queries, element attributes, readable text collapsing, and typed field extraction.
-- **Parallel Enrichment (`parallelMap`)**: Bounded concurrent execution over async collections with progress tracking.
-- **Atomic File I/O (`writeJson`, `writeCsv`, `writeText`)**: Crash-safe atomic writes via staging files.
-- **Archive Compression (`zip`)**: Direct archive packing with formatted file sizes.
-- **Environment & Subprocesses (`env`, `run`)**: `.env` configuration, git repository checks, and graceful shutdown lifecycle hooks (`onExit`).
+- **CLI parsing (`CliParser`)**: declared options (`--output`), flags (`--force`), numbers (`--concurrency`), and auto-generated usage help.
+- **Paths (`Path`)**: `out / 'products.json'` composes, `.exists` asks, `.makeDir()`, `.writeJson()`, `.write(rows, as: .csv)` and `.zipTo()` act — one type, and every write atomic.
+- **Console (`logger`, `Console`)**: step indicators, success badges, Unicode tables, boxes, rules, and progress bars.
+- **Web crawling (`crawl`)**: multi-hop crawling with an offline fixture transport, and every knob a named argument — `politeness: .every(20.ms.jittered())`, `scope: .sameHost`, `depth`, `limit`, `concurrency`.
+- **Leading dots**: `.every(…)`, `.sameHost`, `.text('h1')`, `.number('.price')`, `.csv`, `.left`, `.unicode` — the parameter type supplies the prefix.
+- **DOM parsing & extraction (`res.$$()`, `page.pick(.number(…))`)**: jQuery-style CSS queries, attributes, readable text collapsing, and typed field extraction into a record.
+- **Null-aware elements**: `[for (final card in …) ?card.$('a').attr('href')]` drops the misses, which is the shape a scraped `href` has.
+- **Parallel enrichment (`items.parallelMap`)**: bounded concurrent execution with a progress bar.
+- **Environment & subprocesses (`env`, `run`)**: `.env` configuration, a git check, and graceful shutdown hooks (`onExit`).

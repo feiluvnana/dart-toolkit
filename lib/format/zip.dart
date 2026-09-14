@@ -4,6 +4,7 @@
 /// squeeze bytes. The format comes from the file name — `.zip`, `.tar`,
 /// `.tar.gz`, `.tgz` and `.tar.bz2` are all understood — so one pair of calls
 /// covers every archive a script meets.
+/// {@category Formats}
 library;
 
 import 'dart:io';
@@ -13,6 +14,7 @@ import 'package:archive/archive.dart';
 import 'package:path/path.dart' as p;
 
 import '../io/entry.dart';
+import '../io/path.dart';
 import '../src/fs.dart';
 import '../src/proc.dart';
 
@@ -94,20 +96,83 @@ class ArchiveEntry {
   String toString() => folder ? '$name/' : '$name ($size bytes)';
 }
 
-/// Archives. Reach them as [zip], [unzip], [listArchive] and [extractFromArchive].
+/// Archives, as members of the path they are at.
 ///
 /// ```dart
-/// await zip('site', 'site.zip');
-/// (await listArchive('site.zip')).forEach((e) => print(e.name));
-/// await unzip('site.zip', 'restored');
+/// await Path('site').zipTo('site.zip');
+/// for (final e in await Path('site.zip').entries()) print(e.name);
+/// await Path('site.zip').unzipInto('restored');
 /// ```
+extension ArchiveOnPath on Path {
+  /// Packs what is here — a file or a whole folder — into the archive at
+  /// [dest].
+  ///
+  /// The format follows [dest]'s name; pass [format] to override it. Paths
+  /// inside the archive are relative to this path, so unpacking recreates the
+  /// tree without the leading directories. Existing archives are replaced, and
+  /// the write is atomic.
+  Future<Path> zipTo(String dest, {ArchiveFormat? format}) async =>
+      Path((await _zip(raw, dest, format: format)).path);
+
+  /// Unpacks the archive here into the folder [dest], returning what it wrote.
+  ///
+  /// An archive that is not there writes nothing rather than throwing. Entries
+  /// that would escape [dest] — a `..` segment or an absolute path, the "zip
+  /// slip" attack — are skipped rather than trusted, since an archive is
+  /// usually something you downloaded, and so are symlink entries, which can
+  /// point anywhere at all.
+  ///
+  /// A file's recorded modification time and unix permissions are restored, so
+  /// an archive of shell scripts unpacks with its execute bit intact and a
+  /// restored tree keeps the dates it was packed with. Permissions are a no-op
+  /// on Windows.
+  Future<List<Path>> unzipInto(String dest, {ArchiveFormat? format}) async => [
+    for (final file in await _unzip(raw, dest, format: format)) Path(file.path),
+  ];
+
+  /// What the archive here holds, without unpacking it.
+  Future<List<ArchiveEntry>> entries({ArchiveFormat? format}) =>
+      _listArchive(raw, format: format);
+
+  /// The bytes of one [name] inside the archive here, or `null`.
+  ///
+  /// For reading a manifest out of a download without unpacking it.
+  Future<List<int>?> extract(String name, {ArchiveFormat? format}) =>
+      _extractFromArchive(raw, name, format: format);
+
+  /// Writes an archive here from [files], a map of archive path to contents.
+  ///
+  /// For building one from data that never touched the disk.
+  ///
+  /// ```dart
+  /// await Path('out.zip').writeArchive({'notes.txt': utf8.encode('hi')});
+  /// ```
+  Future<Path> writeArchive(
+    Map<String, List<int>> files, {
+    ArchiveFormat? format,
+  }) async => Path((await _zipBytes(raw, files, format: format)).path);
+}
+
+/// Gzip, on the bytes themselves.
+extension GzipOnBytes on List<int> {
+  /// These bytes, gzip-compressed.
+  ///
+  /// Named for the operation, not the container: the output carries a gzip
+  /// header, so it is what a `.gz` file holds rather than a raw deflate
+  /// stream.
+  List<int> gzip() => GZipEncoder().encodeBytes(this);
+
+  /// These bytes, gzip-decompressed. The inverse of [gzip].
+  List<int> gunzip() => GZipDecoder().decodeBytes(this);
+}
+
 /// Packs [source] — a file or a whole folder — into the archive at [dest].
 ///
 /// The format follows [dest]'s name; pass [format] to override it. Paths
 /// inside the archive are relative to [source], so unpacking recreates the
 /// tree without the leading directories. Existing archives are replaced, and
 /// the write is atomic.
-Future<FileSystemEntry> zip(
+Future<FileSystemEntry> _zip(
   String source,
   String dest, {
   ArchiveFormat? format,
@@ -158,9 +223,9 @@ Future<FileSystemEntry> zip(
 /// For building an archive from data that never touched the disk.
 ///
 /// ```dart
-/// await zipBytes('out.zip', {'notes.txt': utf8.encode('hi')});
+/// await Path('out.zip').writeArchive({'notes.txt': utf8.encode('hi')});
 /// ```
-Future<FileSystemEntry> zipBytes(
+Future<FileSystemEntry> _zipBytes(
   String dest,
   Map<String, List<int>> files, {
   ArchiveFormat? format,
@@ -189,7 +254,7 @@ Future<FileSystemEntry> zipBytes(
 /// so an archive of shell scripts unpacks with its execute bit intact and a
 /// restored tree keeps the dates it was packed with. Permissions are a no-op
 /// on Windows.
-Future<List<File>> unzip(
+Future<List<File>> _unzip(
   String source,
   String dest, {
   ArchiveFormat? format,
@@ -295,7 +360,7 @@ const Duration _slack = Duration(days: 1);
 /// `walkDir`, `readCsvRows` and `JsonFormat.read` give for a missing path.
 /// Through 4.0.0 this was the one read in the library that raised
 /// `PathNotFoundException`.
-Future<List<ArchiveEntry>> listArchive(
+Future<List<ArchiveEntry>> _listArchive(
   String source, {
   ArchiveFormat? format,
 }) async {
@@ -314,7 +379,7 @@ Future<List<ArchiveEntry>> listArchive(
 /// back a single member in memory, and neither is a spelling of the other.
 /// Returns `null` when [name] is not in the archive, and when the archive
 /// itself is not there.
-Future<List<int>?> extractFromArchive(
+Future<List<int>?> _extractFromArchive(
   String source,
   String name, {
   ArchiveFormat? format,
@@ -333,16 +398,6 @@ Future<Archive?> _open(String source, ArchiveFormat? format) async {
   if (!await file.exists()) return null;
   return _decode(await file.readAsBytes(), format ?? ArchiveFormat.of(source));
 }
-
-/// Gzip-compresses [bytes].
-///
-/// Named for the operation, not the container: the output carries a gzip
-/// header, so it is what a `.gz` file holds rather than a raw deflate stream.
-List<int> gzipBytes(List<int> bytes) => GZipEncoder().encodeBytes(bytes);
-
-/// Reverses [gzipBytes], decompressing a gzip stream.
-List<int> gunzipBytes(List<int> bytes) =>
-    GZipDecoder().decodeBytes(_asBytes(bytes));
 
 Uint8List _asBytes(List<int> bytes) =>
     bytes is Uint8List ? bytes : Uint8List.fromList(bytes);

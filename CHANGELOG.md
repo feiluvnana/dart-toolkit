@@ -2,6 +2,203 @@
 
 All notable changes to this project will be documented in this file.
 
+## 9.0.0
+
+**The receiver is the namespace.** Every operation hangs off the value it acts
+on; every argument is a leading dot. **168 public top-level names become 14.**
+
+8.1.0 followed one decision honestly — *every operation is a top-level
+function* — and the consequences had become the library's main cost:
+
+| Measured at 8.1.0 | |
+| :--- | ---: |
+| Public top-level names | **168** |
+| …that were path or file verbs | **76** |
+| …that were `*Sync` twins | **28** |
+| Names colliding with `package:http` | **8** — the README told readers to write the `hide` clause |
+| Spellings of one HTTP GET | **4** |
+| `Crawler` terminals for one stream | **3**, plus 11 cascade mutators |
+| `no-compile` doc blocks documenting API deleted in 8.0.0 | **5 of 9** |
+
+An editor cannot help with 168 top-level names, because there is nothing to
+type before the dot. It helps perfectly with `path.`, `res.` or `items.`. And
+Dart 3.10's **dot shorthands** mean moving verbs onto types no longer makes
+arguments longer — `res.parse(.html)`, `body: .json({…})`,
+`politeness: .perHost(250.ms)`.
+
+### `Path` — one extension type replaces 76 top-level names
+
+```dart
+final out = Path.cwd / 'output' / 'reports';
+await out.makeDir();
+await (out / 'q3.json').writeJson(rows);
+final text = await (out / 'notes.md').readText();
+```
+
+`extension type const Path(String raw) implements String` — erased at run time,
+`const`-constructible, inherits every `String` member, and flows into
+`File(...)`, `Directory(...)` and any third-party signature taking a path with
+no conversion.
+
+Members group so `path.` reads like a table of contents: **place** (`/`,
+`parent`, `name`, `stem`, `ext`, `parts`, `absolute`, `normalized`, `expanded`,
+`relativeTo`, `sanitized`), **ask** (`exists`, `isFile`, `isDir`, `isLink`,
+`hasContent`, `size`, `stat`, `dirSize`, `isDirEmpty`, `isLocked`), **read**
+(`readText`, `readLines`, `readBytes`, `readJson`, `read(.yaml)`, `lines`,
+`chunks`, `csvRows`, `csvRecords`), **write** (`writeText`, `writeLines`,
+`writeBytes`, `writeJson`, `write(data, as: .csv)`, `writeCsv`, `appendText`,
+`touch`), **move** (`copyTo`, `moveTo`, `delete`, `makeDir`, `linkTo`,
+`readLink`), **walk** (`list`, `walk`, `glob`, `sweep`, `watch`) and **hold**
+(`lock`, `hash`, `zipTo`, `unzipInto`, `entries`, `extract`, `writeArchive`).
+
+**The 28 `Sync` twins become one member:**
+
+```dart
+await settings.readText();   // Future<String>
+settings.sync.readText();    // String
+```
+
+| Removed | Use |
+| :--- | :--- |
+| `readText`, `readLines`, `readBytes`, `readJson` (+ `Sync`) | `path.readText()`, … and `path.sync.readText()` |
+| `writeText`, `writeLines`, `writeBytes`, `writeJson`, `writeCsv`, `appendText` (+ `Sync`) | `path.writeText(…)`, … |
+| `joinPath`, `dirname`, `filename`, `stemName`, `fileExtension`, `pathParts` | `a / b`, `path.parent`, `.name`, `.stem`, `.ext`, `.parts` |
+| `absolutePath`, `normalizePath`, `relativePath`, `expandPath`, `sanitizeFilename` | `path.absolute`, `.normalized`, `.relativeTo()`, `.expanded`, `.sanitized()` |
+| `fileExists`, `dirExists`, `pathExists`, `hasContent`, `hasContentAsync`, `fileStat` | `path.isFile`, `.isDir`, `.exists`, `.hasContent`, `.stat` |
+| `listDir`, `walkDir`, `glob`, `sweepDir`, `dirSize`, `isDirEmpty` (+ `Sync`) | `path.list()`, `.walk()`, `.glob()`, `.sweep()`, `.dirSize`, `.isDirEmpty` |
+| `copyPath`, `movePath`, `removePath`, `makeDir`, `createLink`, `readLink` (+ `Sync`) | `path.copyTo()`, `.moveTo()`, `.delete()`, `.makeDir()`, `.linkTo()`, `.readLink()` |
+| `withLock`, `withLockSync`, `isLocked`, `watchPath`, `fileHash` (+ `Sync`) | `path.lock()`, `path.isLocked`, `path.watch()`, `path.hash(.sha256)` |
+| `tempFile`, `tempDir` (+ `Sync`), `cwd`, `home` | `Path.tempFile()`, `Path.tempDir()`, `Path.cwd`, `Path.home` |
+| `zip`, `unzip`, `zipBytes`, `listArchive`, `extractFromArchive` | `path.zipTo()`, `.unzipInto()`, `.writeArchive()`, `.entries()`, `.extract()` |
+| `gzipBytes`, `gunzipBytes` | `bytes.gzip()`, `bytes.gunzip()` |
+| `ToolkitFileExtensions`, `ToolkitDirectoryExtensions`, `ToolkitFileSystemEntityExtensions` | deleted — a third spelling of the same operations on `dart:io` types |
+
+### `Http` — the one static hub, and the end of `hide`
+
+```dart
+final res = await Http.get(url);
+await Http.post(url, body: .json({'q': 'widgets'}));
+await Http.download(url, into: Path('out') / 'catalogue.zip');
+```
+
+| Removed | Use |
+| :--- | :--- |
+| `get`, `post`, `put`, `patch`, `delete`, `head`, `send` | `Http.get`, `Http.post`, … |
+| `download(url, path)` | `Http.download(url, into: path)` |
+| `httpClient`, `withHttpClient`, `useHttpClient` | `Http.client`, `Http.using`, `Http.use` |
+| `UriHttpExtensions` (`uri.get()`, `uri.post()`, …) | `Http.get(uri)` |
+| `StringHttpExtensions` (`'url'.get()`, …) | `Http.get(url)` — and `get` is off every `String` |
+| `Fetcher(pool:)` | `Fetcher(client:)` |
+
+`Http.post(body:)` and friends now take a **`Body`**, not `Object?`. A `Map`
+read as JSON and a `Map<String, String>` read as a form, so adding one integer
+field to a request silently changed its content type. Name the shape instead:
+`.json(…)`, `.form(…)`, `.text(…)`, `.bytes(…)`.
+
+`Response` is the one name still shared with `package:http`; everything else
+that collided is gone.
+
+### The crawl — a signature, not a cascade
+
+Eleven cascade mutators become named arguments, so every knob is visible at the
+call site with its type and default, and none can change after the stream
+exists:
+
+```dart
+await for (final res in crawl(
+  ['https://shop.test/catalogue'],
+  next: _next,
+  concurrency: 8,
+  politeness: .perHost(250.ms),
+  scope: .sameHost,
+  robots: .obey('my-bot'),
+  accept: const ['text/html'],
+  depth: 2,
+  limit: 20,
+  resume: '.crawl.json',
+  send: _fixture,
+)) { }
+```
+
+| Removed | Use |
+| :--- | :--- |
+| `..using(send)` | `send:` |
+| `..concurrent(n)` | `concurrency:` |
+| `..delay(d)`, `..delay(d, perHost: true)` | `politeness: .every(d)`, `.perHost(d)` |
+| `..sameHost()` | `scope: .sameHost` (and the new `.sameOrigin`) |
+| `..obey(agent)` | `robots: .obey(agent)` |
+| `..depth(n)`, `..limit(n)`, `..accept(t)`, `..dedupe()` | `depth:`, `limit:`, `accept:`, `dedupe:` |
+| `..allow(p)`, `..deny(p)` | `allow: [p]`, `deny: [p]` |
+| `..resume(path, every: d)` | `resume: path`, `resumeEvery: d` |
+| `crawler.flow`, `crawler.stream` | the crawler — it `extends Stream<Response>` |
+
+New value types: `Politeness` (`.none`, `.every(d)`, `.perHost(d)`), `Scope`
+(`.anywhere`, `.sameHost`, `.sameOrigin`) and `RobotsPolicy` (`.ignore`,
+`.obey(agent)`).
+
+### One codec seam, two directions
+
+`DocumentFormat<T>` and the `FileFormat<T, V>` mixin merge into
+`DocumentFormat<T, V>` — `parse` in, `format` out. Reading a file is
+`Path.read`, writing one is `Path.write`, and the codec is a leading dot
+either way.
+
+| Removed | Use |
+| :--- | :--- |
+| `parseHtml`, `parseJson`, `parseYaml`, `parseToml`, `parseCsv`, `parseRobots`, `parseSitemap` | `text.parse(.html)`, `.parse(.json)`, … |
+| `toJsonString`, `toYamlString`, `toTomlString`, `toCsvString` | `DocumentFormat.json.format(data)`, … |
+| `FileFormat` mixin, `codec.read(path)`, `codec.write(path, v)` | `path.read(.yaml)`, `path.write(v, as: .yaml)` |
+| `readJson` returning `dynamic` | `path.readJson()` returning `Json` |
+
+### The alias cull
+
+| Removed | Use |
+| :--- | :--- |
+| `slugify`, `cleanText`, `stripHtmlTags`, `foldAccents`, `clipText`, `titleCase`, `capitalize`, `wordsOf`, `isBlank`, `renderTemplate`, `textBetween`, `allTextBetween`, `extractNumber(s)`, `toBase64`, `fromBase64` | the like-named members already on `String` — `t.toSlug()`, `t.cleanWhitespace()`, `t.stripTags()`, `t.clip(n)`, `t.words()`, `t.isBlank`, `t.render(v)`, `t.between(a, b)`, … |
+| `sha256Hash`, `md5Hash`, `hmacSha256`, `fileHash` | `s.hash()`, `s.hash(.md5)`, `s.hmac(key)`, `path.hash(.sha256)` — and the same two on `List<int>` |
+| `formatBytes`, `formatDuration` | `n.formatBytes()`, `d.format()` |
+| `parseBytes`, `parseDuration`, `parseTime` | `'5 MiB'.bytes`, `'1h30m'.duration`, `'2024-03-09'.date` |
+| `timestamp`, `timeAgo`, `startOfDay` | `date.timestamp`, `date.ago()`, `date.startOfDay` |
+| `jitter(d)` | `d.jittered()` |
+| `seedRandom`, `randomBetween`, `randomId`, `randomChance` | `Rand.seed`, `Rand.between`, `Rand.id`, `Rand.chance` |
+| `randomPick`, `randomShuffle` | `list.randomItem()`, `list.shuffled()` |
+| top-level `parallelMap`, `settle` | `items.parallelMap(…)`, `items.settle(…)` |
+| `consoleWriter`, `consoleReader` | `Console` — `write`, `writeln`, `rule`, `box`, `ask`, `confirm`, `secret`, `pick`, `picks`, `tty`, `width` |
+| `typedef ProgressBar = Progress` | `Progress` |
+| `trackFile`, `untrackFile` | `path.deleteOnExit()`, `path.keepOnExit()` |
+| `adoptProcess`, `disownProcess` | `process.killOnExit()`, `process.leaveRunning()` |
+| `coerce` | internal; a crawl seed converts itself, and `.url` is `Uri.parse` |
+| `lib/src/bounded.dart` (`inorder`, `asdone`) | deleted — unreachable since 8.0.0 |
+
+### Written in the language it targets
+
+Every doc comment, the README and the example are rewritten in Dart 3.10 form:
+`res.parse(.html)`, `page.pick(.number('.price'))`, `body: .json(…)`,
+`alignments: const [.left, .right]`, plus null-aware elements (`?maybeNull`),
+digit separators and wildcards.
+
+- **`Field.number(selector)`** is new. Reading a price was
+  `extractNumber(html.pick(Field.text('.price')) ?? '')` — three calls and a
+  fallback; it is `card.pick(.number('.price'))`.
+- **Zero `no-compile` blocks under `lib/`.** Five of the nine documented 7.x
+  API deleted in 8.0.0 — `net.crawl`, `.seq`, `Sequence`,
+  `.collect(.foreach(…))` — and survived only because the escape hatch
+  exempted them from the compile harness.
+- **`test/surface_test.dart`** is new: it asserts the fourteen top-level
+  names, that none of them collides with `package:http`, `package:collection`
+  or `rxdart`, that no `Sync` twin is at top level, that no doc writes a
+  prefix where a leading dot resolves, and that no `no-compile` block returns.
+- **`{@category}`** on every library, so dartdoc renders ten sections rather
+  than one alphabetical wall.
+
+### What did not change
+
+Atomic writes, crash safety, the retrying transport, the self-feeding
+frontier, robots handling, cookie sessions, the `Send` seam, `Markup`, `Json`,
+`CliParser`, `Pool`, `RateLimiter` and `Semaphore` keep their semantics
+exactly. 9.0.0 moves where you reach them, not what they do. No code
+generation, no build step, and collections stay native.
+
 ## 8.1.0
 
 **Collapse the duplicate public surface: one name per operation.**

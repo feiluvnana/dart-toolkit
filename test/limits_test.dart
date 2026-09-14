@@ -41,11 +41,10 @@ void main() {
 
     test('composes with parallelMap', () async {
       final limit = RateLimiter(4, per: 40.ms);
-      final results = await parallelMap<int, int>(
-        List<int>.generate(8, (i) => i),
-        (int n) => limit.guard(() async => n * 2),
-        concurrency: 3,
-      );
+      final results = await List<int>.generate(
+        8,
+        (i) => i,
+      ).parallelMap((int n) => limit.guard(() async => n * 2), concurrency: 3);
       expect(results, equals([0, 2, 4, 6, 8, 10, 12, 14]));
       limit.close();
     });
@@ -76,70 +75,69 @@ void main() {
 
   group('withLock', () {
     test('runs the action and releases on the way out', () async {
-      final dir = tempDirSync('dt_lock_');
+      final dir = SyncPath.tempDir('dt_lock_');
       try {
-        final path = joinPath(dir.path, '.run.lock');
-        expect(isLocked(path), isFalse);
-        final answer = await withLock(path, () async {
-          expect(isLocked(path), isTrue);
+        final path = Path(dir.path) / '.run.lock';
+        expect(Path(path).isLocked, isFalse);
+        final answer = await Path(path).lock(() async {
+          expect(Path(path).isLocked, isTrue);
           return 42;
         });
         expect(answer, equals(42));
-        expect(pathExists(path), isFalse, reason: 'released on normal return');
-        expect(isLocked(path), isFalse);
+        expect(Path(path).exists, isFalse, reason: 'released on normal return');
+        expect(Path(path).isLocked, isFalse);
       } finally {
-        removePathSync(dir.path);
+        Path(dir.path).sync.delete();
       }
     });
 
     test('releases when the action throws', () async {
-      final dir = tempDirSync('dt_lock_throw_');
+      final dir = SyncPath.tempDir('dt_lock_throw_');
       try {
-        final path = joinPath(dir.path, '.run.lock');
+        final path = Path(dir.path) / '.run.lock';
         await expectLater(
-          withLock(path, () => throw StateError('boom')),
+          Path(path).lock(() => throw StateError('boom')),
           throwsStateError,
         );
-        expect(isLocked(path), isFalse);
+        expect(Path(path).isLocked, isFalse);
       } finally {
-        removePathSync(dir.path);
+        Path(dir.path).sync.delete();
       }
     });
 
     test('a lock a live process holds is refused, or waited for', () async {
-      final dir = tempDirSync('dt_lock_busy_');
+      final dir = SyncPath.tempDir('dt_lock_busy_');
       try {
-        final path = joinPath(dir.path, '.run.lock');
-        final held = withLock(path, () => delay(400.ms));
+        final path = Path(dir.path) / '.run.lock';
+        final held = Path(path).lock(() => delay(400.ms));
 
         // Long enough for the outer lock to be taken.
         await delay(80.ms);
         await expectLater(
-          withLock(path, () async {}),
+          Path(path).lock(() async {}),
           throwsA(isA<LockedError>()),
         );
 
-        final queued = withLock(path, () async => 'second', wait: 5.s);
+        final queued = Path(path).lock(() async => 'second', wait: 5.s);
         await held;
         expect(await queued, equals('second'));
       } finally {
-        removePathSync(dir.path);
+        Path(dir.path).sync.delete();
       }
     });
 
     test('a stale lock is taken, not obeyed', () async {
-      final dir = tempDirSync('dt_lock_stale_');
+      final dir = SyncPath.tempDir('dt_lock_stale_');
       try {
-        final path = joinPath(dir.path, '.run.lock');
+        final path = Path(dir.path) / '.run.lock';
         // A pid no live process can have, written the way a real lock is.
-        writeTextSync(
+        Path(
           path,
-          '{"pid": 999999998, "since": "2020-01-01T00:00:00Z"}',
-        );
-        expect(isLocked(path), isFalse);
-        expect(await withLock(path, () async => 'taken'), equals('taken'));
+        ).sync.writeText('{"pid": 999999998, "since": "2020-01-01T00:00:00Z"}');
+        expect(Path(path).isLocked, isFalse);
+        expect(await Path(path).lock(() async => 'taken'), equals('taken'));
       } finally {
-        removePathSync(dir.path);
+        Path(dir.path).sync.delete();
       }
     });
 
@@ -152,25 +150,22 @@ void main() {
 
   group('watchPath', () {
     test('reports a change, coalescing the burst of a save', () async {
-      final dir = tempDirSync('dt_watch_');
+      final dir = SyncPath.tempDir('dt_watch_');
       final seen = <String>[];
       Future<void> Function()? stop;
       try {
-        stop = watchPath(
+        stop = Path(
           dir.path,
-          seen.add,
-          pattern: RegExp(r'\.txt$'),
-          settle: 120.ms,
-        );
+        ).watch(seen.add, pattern: RegExp(r'\.txt$'), settle: 120.ms);
         await delay(150.ms);
 
         // Three writes, as an editor does per save.
-        final path = joinPath(dir.path, 'note.txt');
+        final path = Path(dir.path) / 'note.txt';
         for (var i = 0; i < 3; i++) {
-          writeTextSync(path, 'v$i');
+          Path(path).sync.writeText('v$i');
           await delay(20.ms);
         }
-        writeTextSync(joinPath(dir.path, 'skipped.md'), 'ignored');
+        Path(Path(dir.path) / 'skipped.md').sync.writeText('ignored');
 
         await delay(900.ms);
         expect(
@@ -181,30 +176,29 @@ void main() {
         expect(seen.any((p) => p.endsWith('.md')), isFalse);
       } finally {
         await stop?.call();
-        removePathSync(dir.path);
+        Path(dir.path).sync.delete();
       }
     }, onPlatform: const {'windows': Skip('filesystem events differ')});
 
     test('stopping is idempotent and silences later changes', () async {
-      final dir = tempDirSync('dt_watch_stop_');
+      final dir = SyncPath.tempDir('dt_watch_stop_');
       final seen = <String>[];
       try {
-        final stop = watchPath(dir.path, seen.add, settle: Duration.zero);
+        final stop = Path(dir.path).watch(seen.add, settle: Duration.zero);
         await stop();
         await stop();
-        writeTextSync(joinPath(dir.path, 'after.txt'), 'x');
+        Path(Path(dir.path) / 'after.txt').sync.writeText('x');
         await delay(300.ms);
         expect(seen, isEmpty);
       } finally {
-        removePathSync(dir.path);
+        Path(dir.path).sync.delete();
       }
     });
 
     test('watching a path that does not exist is not an error', () async {
-      final stop = watchPath(
-        joinPath(dart_io.Directory.systemTemp.path, 'dt_absent_dir'),
-        (_) {},
-      );
+      final stop = Path(
+        Path(dart_io.Directory.systemTemp.path) / 'dt_absent_dir',
+      ).watch((_) {});
       await stop();
     });
   });

@@ -13,6 +13,7 @@
 /// [Environment.parse] is the one parser outside the `format` library, and it
 /// is documented as a deliberate exception rather than left to look like an
 /// oversight — see its own doc.
+/// {@category System}
 library;
 
 import 'dart:io';

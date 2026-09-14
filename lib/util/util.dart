@@ -9,17 +9,18 @@
 /// are the same call:
 ///
 /// ```dart
-/// slugify('Hello World');   // 'hello-world'
+/// 'Hello World'.toSlug();   // 'hello-world'
 /// 'Hello World'.toSlug();   // 'hello-world'
 /// ```
 ///
 /// The rule for what belongs here: anything that touches the disk lives in
 /// `io`, anything that touches the OS or the user lives in `system`. Archives
 /// are `format`, and the terminal is `system/console`.
+/// {@category Utilities}
 library;
 
 export 'hash.dart';
-export 'rand.dart';
+export 'rand.dart' hide jitterOf;
 export 'size.dart';
 export 'text.dart';
 export 'time.dart';

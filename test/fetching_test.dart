@@ -372,15 +372,15 @@ void main() {
 
   group('crawl().accept', () {
     test('a response of the wrong type never reaches a handler', () async {
-      final crawler = crawl([Fetch('https://example.com/page'.url)])
-        ..accept(const ['text/html'])
-        ..using(
-          (fetch) async => Response.text(
-            '%PDF-1.7',
-            fetch: fetch,
-            headers: const {'content-type': 'application/pdf'},
-          ),
-        );
+      final crawler = crawl(
+        [Fetch('https://example.com/page'.url)],
+        accept: const ['text/html'],
+        send: (fetch) async => Response.text(
+          '%PDF-1.7',
+          fetch: fetch,
+          headers: const {'content-type': 'application/pdf'},
+        ),
+      );
 
       final handled = await crawler.map((res) => res.url.path).toList();
 
@@ -390,9 +390,11 @@ void main() {
     });
 
     test('a subtype wildcard matches', () async {
-      final crawler = crawl([Fetch('https://example.com/page'.url)])
-        ..accept(const ['text/*'])
-        ..using((fetch) async => Response.text('<h1>hi</h1>', fetch: fetch));
+      final crawler = crawl(
+        [Fetch('https://example.com/page'.url)],
+        accept: const ['text/*'],
+        send: (fetch) async => Response.text('<h1>hi</h1>', fetch: fetch),
+      );
 
       final handled = await crawler.map((res) => res.url.path).toList();
 
@@ -403,13 +405,14 @@ void main() {
       // `accept` does two things on purpose — the header and the filter — and
       // they are two halves of one intent, so they are set in one place.
       final sent = <Fetch>[];
-      await (crawl([Fetch('https://example.com/'.url)])
-            ..accept(const ['text/html', 'application/xhtml+xml'])
-            ..using((fetch) async {
-              sent.add(fetch);
-              return Response.text('<h1>hi</h1>', fetch: fetch);
-            }))
-          .run();
+      await (crawl(
+        [Fetch('https://example.com/'.url)],
+        accept: const ['text/html', 'application/xhtml+xml'],
+        send: (fetch) async {
+          sent.add(fetch);
+          return Response.text('<h1>hi</h1>', fetch: fetch);
+        },
+      )).run();
 
       expect(sent.single.headers['Accept'], 'text/html, application/xhtml+xml');
     });
@@ -461,10 +464,10 @@ void main() {
 
       final crawler = crawl(
         [Fetch('https://example.com/login'.url)],
-        (res) => switch (res.fetch.tag) {
+        next: (res) => switch (res.fetch.tag) {
           null => [
             res.follow(
-              parseHtml(res.body).$('form').attr('action')!,
+              res.body.parse(.html).$('form').attr('action')!,
               method: HttpMethod.post,
               body: Body.form({'user': 'ada'}),
               tag: 'result',
@@ -472,11 +475,12 @@ void main() {
           ],
           _ => const <Fetch>[],
         },
-      )..using(transport);
+        send: transport,
+      );
 
       final seen = await crawler
           .where((res) => res.fetch.tag == 'result')
-          .map((res) => parseHtml(res.body).$('.welcome').text)
+          .map((res) => res.body.parse(.html).$('.welcome').text)
           .toList();
 
       expect(seen, ['Signed in']);
@@ -492,21 +496,21 @@ void main() {
       () async {
         final sent = <Fetch>[];
         await (crawl(
-              [Fetch('https://example.com/search'.url)],
-              (res) => res.fetch.depth > 0
-                  ? const <Fetch>[]
-                  : ['1', '2', '2'].map(
-                      (page) => res.follow(
-                        '/search',
-                        method: HttpMethod.post,
-                        body: Body.form({'page': page}),
-                      ),
-                    ),
-            )..using((fetch) async {
-              sent.add(fetch);
-              return Response.text('<p>hits</p>', fetch: fetch);
-            }))
-            .run();
+          [Fetch('https://example.com/search'.url)],
+          next: (res) => res.fetch.depth > 0
+              ? const <Fetch>[]
+              : ['1', '2', '2'].map(
+                  (page) => res.follow(
+                    '/search',
+                    method: HttpMethod.post,
+                    body: Body.form({'page': page}),
+                  ),
+                ),
+          send: (fetch) async {
+            sent.add(fetch);
+            return Response.text('<p>hits</p>', fetch: fetch);
+          },
+        )).run();
 
         // Page 2 asked for twice, fetched once: de-duplication reads the body.
         expect(sent.where((r) => r.method == HttpMethod.post), hasLength(2));
@@ -518,17 +522,17 @@ void main() {
       () async {
         final sent = <Fetch>[];
         await (crawl(
-              [Fetch('https://example.com/a'.url)],
-              (res) => res.fetch.depth > 0
-                  ? const <Fetch>[]
-                  : [
-                      res.follow('/b', headers: {'X-Stage': 'two'}),
-                    ],
-            )..using((fetch) async {
-              sent.add(fetch);
-              return Response.text('<a href="/b">b</a>', fetch: fetch);
-            }))
-            .run();
+          [Fetch('https://example.com/a'.url)],
+          next: (res) => res.fetch.depth > 0
+              ? const <Fetch>[]
+              : [
+                  res.follow('/b', headers: {'X-Stage': 'two'}),
+                ],
+          send: (fetch) async {
+            sent.add(fetch);
+            return Response.text('<a href="/b">b</a>', fetch: fetch);
+          },
+        )).run();
 
         expect(sent.last.headers['X-Stage'], 'two');
         expect(sent.last.headers['Referer'], contains('/a'));
@@ -543,7 +547,9 @@ void main() {
       });
       addTearDown(origin.stop);
 
-      final crawler = crawl([Fetch('${origin.root}/anything'.url)])..obey();
+      final crawler = crawl([
+        Fetch('${origin.root}/anything'.url),
+      ], robots: RobotsPolicy.obey());
       await crawler.run();
 
       // Unreachable rules are not absent rules: the crawler stays out.
@@ -561,7 +567,9 @@ void main() {
       });
       addTearDown(origin.stop);
 
-      final crawler = crawl([Fetch('${origin.root}/anything'.url)])..obey();
+      final crawler = crawl([
+        Fetch('${origin.root}/anything'.url),
+      ], robots: RobotsPolicy.obey());
       await crawler.run();
 
       expect(crawler.stats.fetched, 1);
@@ -579,7 +587,9 @@ void main() {
       });
       addTearDown(origin.stop);
 
-      final crawler = crawl([Fetch('${origin.root}/page'.url)])..obey();
+      final crawler = crawl([
+        Fetch('${origin.root}/page'.url),
+      ], robots: RobotsPolicy.obey());
       await crawler.run();
 
       expect(crawler.stats.skipped, 1);
@@ -588,14 +598,14 @@ void main() {
   });
 
   group('seedRandom', () {
-    tearDown(() => seedRandom());
+    tearDown(() => Rand.seed());
 
     test('the same seed replays the same choices', () {
-      seedRandom(42);
-      final first = [randomId(), randomBetween(0, 1000).toString()];
+      Rand.seed(42);
+      final first = [Rand.id(), Rand.between(0, 1000).toString()];
 
-      seedRandom(42);
-      final second = [randomId(), randomBetween(0, 1000).toString()];
+      Rand.seed(42);
+      final second = [Rand.id(), Rand.between(0, 1000).toString()];
 
       expect(second, first);
     });
@@ -603,28 +613,28 @@ void main() {
     test('a crawler order can be made repeatable', () {
       const agents = ['a', 'b', 'c', 'd', 'e'];
 
-      seedRandom(7);
-      final first = randomShuffle(agents);
-      seedRandom(7);
+      Rand.seed(7);
+      final first = agents.shuffled();
+      Rand.seed(7);
 
-      expect(randomShuffle(agents).toList(), first.toList());
+      expect(agents.shuffled().toList(), first.toList());
     });
 
     test('seeding again with nothing goes back to being unpredictable', () {
-      seedRandom(1);
-      final seeded = randomId(32);
-      seedRandom();
+      Rand.seed(1);
+      final seeded = Rand.id(32);
+      Rand.seed();
 
-      expect(randomId(32), isNot(seeded));
+      expect(Rand.id(32), isNot(seeded));
     });
 
     test('retry jitter runs off the same generator', () {
       // One generator, so a test that seeds it gets a repeatable backoff too.
-      seedRandom(3);
-      final first = jitter(const Duration(seconds: 1));
-      seedRandom(3);
+      Rand.seed(3);
+      final first = (const Duration(seconds: 1)).jittered();
+      Rand.seed(3);
 
-      expect(jitter(const Duration(seconds: 1)), first);
+      expect((const Duration(seconds: 1)).jittered(), first);
     });
   });
 }

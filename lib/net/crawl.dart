@@ -7,28 +7,31 @@
 ///
 /// - the transport is a [Send] — a function, not four classes;
 /// - a document is a `DocumentFormat`, through `Response.parse`;
-/// - the results are a `Flow<Response>`, so `tap`, `where`, `take`, `flat.map`
-///   and the rest of the collection vocabulary are the terminals.
+/// - the results are a `Stream<Response>`, because [Crawler] *is* one, so
+///   `where`, `take`, `expand`, `map` and the rest of `Stream` are the
+///   terminals.
 ///
 /// A single-stage crawl needs none of this and never did:
 ///
-/// ```dart no-compile
-/// await urls.parallelMap(get, concurrency: 4);
+/// ```dart
+/// await urls.parallelMap(Http.get, concurrency: 4);
 /// ```
 ///
 /// What [Crawler] adds over that line is the frontier, and only that.
 ///
 /// ```dart
 /// final crawler = crawl(
-///   [Fetch('https://example.test'.url)],
-///   (res) => res.parse(DocumentFormat.html).$('a').attrs('href')
-///       .map(res.follow),
-/// )..concurrent(4)..sameHost()..depth(3)..limit(500);
+///   ['https://example.test'],
+///   next: (res) => res.$('a').attrs('href').map(res.follow),
+///   concurrency: 4,
+///   scope: .sameHost,
+///   depth: 3,
+///   limit: 500,
+/// );
 ///
-/// final titles = await crawler.flow
-///     .map((r) => r.parse(DocumentFormat.html).$('h1').text)
-///     .toList();
+/// final titles = await crawler.map((r) => r.$('h1').text).toList();
 /// ```
+/// {@category Crawling}
 library;
 
 import 'dart:async';
@@ -45,7 +48,7 @@ import '../src/proc.dart';
 import 'net.dart';
 
 // ============================================================================
-// CRAWLING (net.crawl)
+// CRAWLING (crawl)
 // ============================================================================
 
 /// What a finished crawl counted.
@@ -81,6 +84,100 @@ typedef Stats = ({
   String? reason,
 });
 
+// ============================================================================
+// CRAWL POLICY (Politeness, Scope, RobotsPolicy)
+// ============================================================================
+
+/// How long a crawl waits between fetches.
+///
+/// Reached with a leading dot wherever a crawl is configured, because the
+/// parameter type supplies the prefix:
+///
+/// ```dart
+/// crawl(seeds, politeness: .perHost(250.ms));
+/// ```
+final class Politeness {
+  const Politeness.every(this.gap) : perHost = false;
+
+  /// Paces each host separately rather than the crawl as a whole.
+  ///
+  /// What a broad crawl wants: a global pause slows every host down to
+  /// protect one.
+  const Politeness.perHost(this.gap) : perHost = true;
+
+  /// Fetch as fast as the concurrency allows.
+  static const Politeness none = Politeness.every(Duration.zero);
+
+  /// How long to pause.
+  final Duration gap;
+
+  /// Whether [gap] is counted per host or across the crawl.
+  final bool perHost;
+
+  @override
+  String toString() => gap == Duration.zero
+      ? 'Politeness.none'
+      : 'Politeness($gap, perHost: $perHost)';
+}
+
+/// How far from its first seed a crawl may wander.
+///
+/// ```dart
+/// crawl(seeds, scope: .sameHost);
+/// ```
+enum Scope {
+  /// Follow a link anywhere.
+  anywhere,
+
+  /// Only follow links on the first seed's host, whatever the scheme or port.
+  sameHost,
+
+  /// Only follow links with the first seed's scheme, host *and* port.
+  sameOrigin;
+
+  /// Whether [url] is inside this scope, given the crawl's first [seed].
+  bool admits(Uri url, Uri? seed) {
+    if (seed == null || url.host.isEmpty) return true;
+    return switch (this) {
+      anywhere => true,
+      sameHost => url.host.toLowerCase() == seed.host.toLowerCase(),
+      sameOrigin =>
+        url.host.toLowerCase() == seed.host.toLowerCase() &&
+            url.scheme == seed.scheme &&
+            url.port == seed.port,
+    };
+  }
+}
+
+/// Whether a crawl obeys each host's `robots.txt`, and as whom.
+///
+/// ```dart
+/// crawl(seeds, robots: .obey('ExampleBot/1.0'));
+/// ```
+///
+/// `Crawl-delay` is honoured as a per-host floor whether or not the crawl's
+/// [Politeness] asked for per-host pacing.
+///
+/// `/robots.txt` is fetched through the crawl's own [Send], so politeness
+/// works against a fixture transport — which `Robots.load` could not do,
+/// because it reached for the shared client itself.
+final class RobotsPolicy {
+  /// Obeys `robots.txt`, identifying as [agent].
+  const RobotsPolicy.obey([this.agent = '*']);
+
+  const RobotsPolicy._() : agent = null;
+
+  /// Fetches whatever the frontier holds, asking no one.
+  static const RobotsPolicy ignore = RobotsPolicy._();
+
+  /// The user agent whose rules apply, or `null` when `robots.txt` is ignored.
+  final String? agent;
+
+  @override
+  String toString() =>
+      agent == null ? 'RobotsPolicy.ignore' : 'RobotsPolicy.obey($agent)';
+}
+
 /// A crawl: a frontier over a [Send].
 ///
 /// Configure it by chaining, then take one of three terminals — [flow] for
@@ -92,12 +189,18 @@ typedef Stats = ({
 /// routing to a `switch`, the terminals to the collection vocabulary, and the
 /// parsers to `format`.
 ///
-/// **Nothing is fetched until something collects.** The workers start in the
-/// flow's `onListen` and stop when it is cancelled, so `crawler.flow` built and
-/// thrown away costs nothing, and `crawler.flow.first` fetches one
-/// page.
+/// **Nothing is fetched until something listens.** The workers start in the
+/// stream's `onListen` and stop when it is cancelled, so a crawl built and
+/// thrown away costs nothing, and `crawler.first` fetches exactly one page.
 final class Crawler extends Stream<Response> {
   /// Creates a crawl seeded with [seeds].
+  ///
+  /// **Every knob is a named argument.** Through 8.1.0 they were eleven
+  /// cascade methods — `..concurrent(8)..delay(250.ms)..sameHost()` — which
+  /// meant an editor could not show you what a crawl could be told, the
+  /// defaults were invisible, and the fields stayed writable for the object's
+  /// whole life even though changing one after the first fetch did nothing
+  /// coherent. A signature answers all three.
   ///
   /// [next] is a pure function from a reply to the requests that follow it —
   /// reply in, requests out — which is why it is testable with a
@@ -105,45 +208,126 @@ final class Crawler extends Stream<Response> {
   /// router and the tag table together, because Dart's `switch` is a better
   /// router than three public members:
   ///
-  /// ```dart no-compile
-  /// net.crawl([Fetch(seed)].seq, (res) => switch (res.fetch.tag) {
-  ///   null     => res.parse(DocumentFormat.html).$('.artist a').attrs('href')
-  ///                  .transform(.map((h) => res.follow(h, tag: 'artist'))),
-  ///   'artist' => res.parse(DocumentFormat.html).$('.album a').attrs('href')
-  ///                  .transform(.map((h) => res.follow(h, tag: 'album'))),
-  ///   _        => const Sequence<Fetch>([]),
+  /// ```dart
+  /// crawl(seeds, next: (res) => switch (res.fetch.tag) {
+  ///   null     => res.$$('.artist a').map((a) => res.follow(a.attr('href')!, tag: 'artist')),
+  ///   'artist' => res.$$('.album a').map((a) => res.follow(a.attr('href')!, tag: 'album')),
+  ///   _        => const <Fetch>[],
   /// });
   /// ```
   ///
-  /// It hands back a [Sequence], which is the one rule for a callback
-  /// anywhere in this library: **what a callback gives the library back is a
-  /// `Sequence`** — here, in `Transformer.flat.map` and in `Pipe.flat.map`.
-  /// A literal crosses with `.seq`; everything this library returns is one
-  /// already, so `res.follow` composed through `transform(.map(...))` needs
-  /// no conversion at all.
-  ///
   /// Omitting [next] crawls exactly the seeds, which is what a bare fetch
   /// is for when there is no politeness or dedupe to want.
-  Crawler(Iterable<Fetch> seeds, [this._next])
-    : _seeds = seeds.cast<Fetch>().toList();
+  Crawler(
+    Iterable<Fetch> seeds, {
+    Iterable<Fetch> Function(Response res)? next,
+    int concurrency = 4,
+    Politeness politeness = Politeness.none,
+    Scope scope = Scope.anywhere,
+    RobotsPolicy robots = RobotsPolicy.ignore,
+    int? depth,
+    int? limit,
+    Iterable<Pattern> allow = const [],
+    Iterable<Pattern> deny = const [],
+    Iterable<String> accept = const [],
+    bool dedupe = true,
+    String? resume,
+    Duration resumeEvery = const Duration(seconds: 5),
+    Send? send,
+  }) : _seeds = seeds.cast<Fetch>().toList(),
+       _next = next,
+       _concurrency = concurrency > 0 ? concurrency : 1,
+       _politeness = politeness,
+       _scope = scope,
+       _robotsPolicy = robots,
+       _depth = depth == null ? null : (depth >= 0 ? depth : 0),
+       _limit = limit == null ? null : (limit > 0 ? limit : 1),
+       _allow = allow.toList(),
+       _deny = deny.toList(),
+       _accept = [for (final type in accept) type.toLowerCase()],
+       _dedupe = dedupe,
+       _resumePath = resume,
+       _resumeEvery = resumeEvery > Duration.zero
+           ? resumeEvery
+           : const Duration(seconds: 5),
+       _send = send;
 
   final List<Fetch> _seeds;
   final Iterable<Fetch> Function(Response res)? _next;
 
-  Send? _send;
-  int _concurrency = 4;
-  Duration _gap = Duration.zero;
-  bool _perhost = false;
-  int? _limit;
-  int? _depth;
-  final List<Pattern> _allow = [];
-  final List<Pattern> _deny = [];
-  final List<String> _accept = [];
-  bool _samehost = false;
-  bool _dedupe = true;
-  String? _agent;
-  String? _resumePath;
-  Duration _resumeEvery = const Duration(seconds: 5);
+  /// The transport this crawl answers its requests through.
+  ///
+  /// A [Fetcher] is a [Send], so a client with its own headers, timeout,
+  /// retries, cap, cache and limiter is configured **once, where those knobs
+  /// are declared** — which is why none of them is an argument here:
+  ///
+  /// ```dart
+  /// crawl(seeds, next: next, concurrency: 4, send: Fetcher(
+  ///   headers: {'User-Agent': 'ExampleBot/1.0'},
+  ///   timeout: 10.s,
+  ///   retries: 3,   // a crawl over the default client does not retry
+  ///   cap: 5.mb.toInt(),
+  ///   cache: HttpCache('.cache'),
+  ///   limiter: RateLimiter(10, per: 1.s),
+  /// ).call);
+  /// ```
+  final Send? _send;
+
+  /// At most this many fetches run at once.
+  final int _concurrency;
+
+  /// How long to pause between fetches, and whether per host.
+  final Politeness _politeness;
+
+  /// How far from the first seed's host the crawl may wander.
+  final Scope _scope;
+
+  /// Whether each host's `robots.txt` is obeyed, and as whom.
+  final RobotsPolicy _robotsPolicy;
+
+  /// At most this many hops away from a seed.
+  final int? _depth;
+
+  /// Stop after this many replies have been handled.
+  final int? _limit;
+
+  /// Only fetch URLs matching one of these. Empty allows everything.
+  final List<Pattern> _allow;
+
+  /// Never fetch a URL matching one of these.
+  final List<Pattern> _deny;
+
+  /// Only handle replies of these content types.
+  ///
+  /// **Two things, deliberately.** The types go out as the `Accept` header
+  /// and a reply that arrives as something else anyway is skipped before
+  /// `next` sees it. They are two halves of one intent — *only give me HTML*
+  /// — and splitting them would mean setting a header in one place and a
+  /// filter in another, where they can drift apart.
+  ///
+  /// Entries are MIME types, optionally with a `/*` wildcard on the subtype.
+  /// A reply carrying no `Content-Type` matches nothing.
+  final List<String> _accept;
+
+  /// Whether a request whose URL, method, tag and body were already seen is
+  /// dropped.
+  final bool _dedupe;
+
+  /// Where the crawl's position is saved, and picked up again from.
+  ///
+  /// An interrupted crawl otherwise starts over. On the way in an existing
+  /// file is restored — the frontier, the visited set and the counters, so
+  /// `limit` still counts the whole crawl rather than this leg of it. On the
+  /// way out the file is written every `resumeEvery`, once more when the run
+  /// stops, and once more again if the process is interrupted; a crawl that
+  /// finishes on its own deletes it, having nothing left to resume.
+  ///
+  /// Requests carry [Fetch.meta] through the file, so anything stored there
+  /// has to be JSON-encodable.
+  final String? _resumePath;
+
+  /// How often the position is written while the crawl runs.
+  final Duration _resumeEvery;
 
   // --- Runtime state ------------------------------------------------------
 
@@ -153,7 +337,7 @@ final class Crawler extends Stream<Response> {
   final Map<String, Future<Robots>> _robots = {};
   final Map<String, DateTime> _nextHostAccess = {};
   final Set<Completer<void>> _waiting = {};
-  String? _seedHost;
+  Uri? _seedOrigin;
   int _active = 0;
   bool _started = false;
   bool _stopped = false;
@@ -167,139 +351,8 @@ final class Crawler extends Stream<Response> {
   int _bytes = 0;
   int _scheduled = 0;
 
-  static const int _hostTableLimit = 4096;
-  static const int _robotsCacheLimit = 1024;
-
-  // --- Configuration ------------------------------------------------------
-
-  /// Answers this crawl's requests through [send], instead of [get].
-  ///
-  /// The transport seam. A [Fetcher] is a [Send], so a client with its own
-  /// headers, timeout, retries, cap, cache and limiter is configured **once,
-  /// where those knobs are declared** — which is why none of them is a
-  /// member here:
-  ///
-  /// ```dart no-compile
-  /// net.crawl(seeds, next)
-  ///    .using(Fetcher(
-  ///      headers: {'User-Agent': 'ExampleBot/1.0'},
-  ///      timeout: 10.s,
-  ///      retries: 3,   // a crawl over the default client does not retry
-  ///      cap: parseBytes('5MiB')!,
-  ///      cache: HttpCache('.cache'),
-  ///      limiter: RateLimiter(10, per: 1.s),
-  ///    ))
-  ///    .concurrent(4);
-  /// ```
-  ///
-  /// Through 5.5.0 ten of those knobs were declared at four levels — builder,
-  /// engine, downloader and client — thirty-two declarations in all, and a
-  /// caller-supplied downloader silently dropped five of them. A knob that
-  /// lives in one place cannot be dropped in transit.
-  Crawler using(Send send) {
-    _send = send;
-    return this;
-  }
-
-  /// Runs at most [count] fetches at once. Minimum one.
-  Crawler concurrent(int count) {
-    _concurrency = count > 0 ? count : 1;
-    return this;
-  }
-
-  /// Pauses [gap] after each fetch, for politeness.
-  ///
-  /// Set [perHost] to pace each host separately rather than the crawl as a
-  /// whole — which is what a broad crawl wants, since a global pause slows
-  /// every host down to protect one.
-  Crawler delay(Duration gap, {bool perHost = false}) {
-    _gap = gap;
-    _perhost = perHost;
-    return this;
-  }
-
-  /// Stops after [count] replies have been handled.
-  Crawler limit(int count) {
-    _limit = count > 0 ? count : 1;
-    return this;
-  }
-
-  /// Follows at most [hops] links away from a seed.
-  Crawler depth(int hops) {
-    _depth = hops >= 0 ? hops : 0;
-    return this;
-  }
-
-  /// Only fetches URLs matching [pattern]. Additive.
-  Crawler allow(Pattern pattern) {
-    _allow.add(pattern);
-    return this;
-  }
-
-  /// Never fetches URLs matching [pattern]. Additive.
-  Crawler deny(Pattern pattern) {
-    _deny.add(pattern);
-    return this;
-  }
-
-  /// Restricts the crawl to the host of the first seed.
-  Crawler sameHost([bool enabled = true]) {
-    _samehost = enabled;
-    return this;
-  }
-
-  /// Only handles replies of these content [types].
-  ///
-  /// **Two things, deliberately.** The types go out as the `Accept` header
-  /// and a reply that arrives as something else anyway is skipped before
-  /// `next` sees it. They are two halves of one intent — *only give me HTML*
-  /// — and splitting them would mean setting a header in one place and a
-  /// filter in another, where they can drift apart.
-  ///
-  /// Entries are MIME types, optionally with a `/*` wildcard on the subtype.
-  /// A reply carrying no `Content-Type` matches nothing.
-  Crawler accept(Iterable<String> types) {
-    _accept.addAll(types.map((type) => type.toLowerCase()));
-    return this;
-  }
-
-  /// Drops a request whose URL, method, tag and body were already seen.
-  Crawler dedupe([bool enabled = true]) {
-    _dedupe = enabled;
-    return this;
-  }
-
-  /// Obeys each host's `robots.txt`, as [agent].
-  ///
-  /// `Crawl-delay` is honoured as a per-host floor whether or not [delay]
-  /// asked for per-host pacing. It was `.robots(bool, agent)` through 5.5.0,
-  /// the flag is not the lookup: calling the member is
-  /// the flag.
-  ///
-  /// `/robots.txt` is fetched through this crawl's own [Send], so politeness
-  /// works against a fixture transport — which `Robots.load` could not do,
-  /// because it reached for the shared client itself.
-  Crawler obey([String agent = '*']) {
-    _agent = agent;
-    return this;
-  }
-
-  /// Saves the crawl's position to [path], and picks it up again from there.
-  ///
-  /// An interrupted crawl otherwise starts over. On the way in an existing
-  /// [path] is restored — the frontier, the visited set and the counters, so
-  /// [limit] still counts the whole crawl rather than this leg of it. On the
-  /// way out the file is written every [every], once more when the run stops,
-  /// and once more again if the process is interrupted; a crawl that finishes
-  /// on its own deletes it, having nothing left to resume.
-  ///
-  /// Requests carry [Fetch.meta] through the file, so anything stored there
-  /// has to be JSON-encodable.
-  Crawler resume(String path, {Duration every = const Duration(seconds: 5)}) {
-    _resumePath = path;
-    if (every > Duration.zero) _resumeEvery = every;
-    return this;
-  }
+  static const int _hostTableLimit = 4_096;
+  static const int _robotsCacheLimit = 1_024;
 
   // --- Position -----------------------------------------------------------
 
@@ -379,52 +432,51 @@ final class Crawler extends Stream<Response> {
 
   /// The replies, as they arrive.
   ///
-  /// **The terminal.** Everything the 5.5.0 builder offered as a member is a
-  /// step on this flow:
+  /// **The crawl is the stream.** A [Crawler] `extends Stream<Response>`, so
+  /// every `Stream` member works on it directly and there is nothing to reach
+  /// through:
   ///
-  /// | was | is |
-  /// | :--- | :--- |
-  /// | `on.progress(fn)` | `.transform(.tap(fn))` |
-  /// | `on.item(fn)` | the flow itself |
-  /// | `on.done(fn)` | the line after; [stats] |
-  /// | `on.error(fn)` | [settle] |
-  /// | `res.emit(item)` | what the caller does with the reply |
-  /// | `res.stop(reason)` | `.transform(.take.when(test))` |
-  /// | `crawler.flow.toList()` | every response |
-  /// | `crawler.flow.map(f).toList()` | mapped |
-  /// | `writeLines(path, …)` | saved |
+  /// ```dart
+  /// await for (final res in crawl(seeds, next: next)) print(res.url);
+  ///
+  /// final titles = await crawl(seeds, next: next)
+  ///     .expand((res) => res.$$('h1').map((h) => h.text))
+  ///     .toList();
+  /// ```
+  ///
+  /// It carried `.flow` and `.stream` as well through 8.1.0 — three spellings
+  /// of one stream, two of which existed only because the third was not
+  /// believed.
   ///
   /// A request that failed is counted in `stats.failed` and does not reach
-  /// this flow — one bad page does not end a crawl. [settle] is the terminal
+  /// the stream — one bad page does not end a crawl. [settle] is the terminal
   /// that reports them.
   ///
-  /// Cancelling stops the crawl, so `.collect(.first())` fetches one page.
-  Stream<Response> get flow => _open()
-      .where((outcome) => outcome is Done<Response>)
-      .map((outcome) => (outcome as Done<Response>).value);
-
-  /// Standard Dart alias for [flow].
-  Stream<Response> get stream => flow;
-
+  /// **Nothing is fetched until something listens.** Cancelling stops the
+  /// crawl, so `.first` fetches exactly one page.
   @override
   StreamSubscription<Response> listen(
     void Function(Response event)? onData, {
     Function? onError,
     void Function()? onDone,
     bool? cancelOnError,
-  }) => flow.listen(
+  }) => _replies.listen(
     onData,
     onError: onError,
     onDone: onDone,
     cancelOnError: cancelOnError,
   );
 
+  Stream<Response> get _replies => _open()
+      .where((outcome) => outcome is Done<Response>)
+      .map((outcome) => (outcome as Done<Response>).value);
+
   /// The replies and the failures, in band.
   Stream<Settled<Response>> get settle => _open();
 
   /// Drains the crawl and reports what it counted.
   Future<Stats> run() async {
-    await flow.drain<void>();
+    await _replies.drain<void>();
     return stats;
   }
 
@@ -457,7 +509,7 @@ final class Crawler extends Stream<Response> {
       running = true;
       _started = true;
       _began = DateTime.now();
-      final Send send = _send ?? httpClient.call;
+      final Send send = _send ?? Http.client.call;
 
       try {
         // Setting up is the crawl's work too, so a resume file that cannot be
@@ -526,7 +578,7 @@ final class Crawler extends Stream<Response> {
       _inflight.add(fetch);
 
       var robotsGap = Duration.zero;
-      final agent = _agent;
+      final agent = _robotsPolicy.agent;
       if (agent != null && _isWeb(fetch.url)) {
         final rules = await _rules(send, fetch.url);
         if (!rules.allowed(fetch.url, agent: agent)) {
@@ -538,7 +590,8 @@ final class Crawler extends Stream<Response> {
 
       // A Crawl-delay the site asked for is honoured per-host whether or not
       // per-host pacing was requested; it is a floor, not a replacement.
-      final hostGap = _perhost && _gap > robotsGap ? _gap : robotsGap;
+      final gap = _politeness.gap;
+      final hostGap = _politeness.perHost && gap > robotsGap ? gap : robotsGap;
       if (hostGap > Duration.zero && !_stopped) {
         await _throttle(fetch.url.host, hostGap);
       }
@@ -566,8 +619,8 @@ final class Crawler extends Stream<Response> {
         _inflight.remove(fetch);
         _fetched++;
         if (!sink.isClosed) sink.add(Done<Response>(reply));
-        if (_limit != null && _fetched >= _limit!) {
-          stop('Limit of $_limit pages reached');
+        if (_limit case final cap? when _fetched >= cap) {
+          stop('Limit of $cap pages reached');
         }
       } catch (error, stack) {
         _failed++;
@@ -577,8 +630,10 @@ final class Crawler extends Stream<Response> {
         if (_idle) _signal();
       }
 
-      if (!_perhost && _gap > Duration.zero && !_stopped) {
-        await Future<void>.delayed(_gap);
+      if (!_politeness.perHost &&
+          _politeness.gap > Duration.zero &&
+          !_stopped) {
+        await Future<void>.delayed(_politeness.gap);
       }
     }
   }
@@ -588,18 +643,13 @@ final class Crawler extends Stream<Response> {
   /// Pushes [fetch] into the frontier, unless the crawl's scope refuses it.
   void _schedule(Fetch fetch) {
     if (_stopped) return;
-    if (_limit != null && _scheduled >= _limit!) return;
+    if (_limit case final cap? when _scheduled >= cap) return;
 
-    if (_seedHost == null && fetch.url.host.isNotEmpty) {
-      _seedHost = fetch.url.host.toLowerCase();
+    if (_seedOrigin == null && fetch.url.host.isNotEmpty) {
+      _seedOrigin = fetch.url;
     }
-    if (_depth != null && fetch.depth > _depth!) return;
-    if (_samehost &&
-        _seedHost != null &&
-        fetch.url.host.isNotEmpty &&
-        fetch.url.host.toLowerCase() != _seedHost) {
-      return;
-    }
+    if (_depth case final hops? when fetch.depth > hops) return;
+    if (!_scope.admits(fetch.url, _seedOrigin)) return;
 
     final text = fetch.url.toString();
     if (_deny.any((pattern) => pattern.allMatches(text).isNotEmpty)) return;
@@ -679,7 +729,7 @@ final class Crawler extends Stream<Response> {
       // A lookup that never reached a server is not a server saying no.
       return Robots();
     }
-    if (reply.ok) return parseRobots(reply.text);
+    if (reply.ok) return reply.text.parse(.robots);
     return reply.statusCode >= 500 ? Robots.closed : Robots();
   }
 

@@ -14,15 +14,16 @@
 /// Three doors produce the same cursor:
 ///
 /// ```dart
-/// res.parse(DocumentFormat.html);                 // a response
-/// parseHtml(body);                    // a string
-/// await const HtmlFormat().read('page.html');    // a file
+/// res.parse(.html);                 // a response
+/// body.parse(.html);                    // a string
+/// await Path('page.html').read(.html);    // a file
 /// ```
 ///
 /// Navigation comes in two spellings, for the two questions: [Markup.$]
 /// runs a CSS selector across the tree, and [Markup.$xpath] runs an XPath
 /// query. [Field] is the typed form of a single read, for the values a
 /// scraper wants out with their types intact.
+/// {@category Formats}
 library;
 
 import 'package:html/dom.dart';
@@ -44,14 +45,14 @@ import '../util/text.dart';
 /// for a value and the honest answer is that there is not one.
 ///
 /// ```dart
-/// final page = res.parse(DocumentFormat.html);
+/// final page = res.parse(.html);
 ///
 /// page.$('h1').text;                     // String
 /// page.$('a').attrs('href');             // Iterable<String>
 /// page.$xpath('//table//td[2]').texts;   // Iterable<String>
 /// page.all('.product', (row) => (
 ///   name: row.$('.name').text,
-///   price: row.pick(Field.text('.price').when(extractNumber)),
+///   price: row.pick(Field.text('.price').when((t) => t.extractNumber())),
 /// ));                                    // List<({String name, num? price})>
 /// ```
 class Markup {
@@ -184,7 +185,7 @@ class Markup {
   /// final variants = page.all('.variant', (row) => (
   ///   name: row.$('.name').text,
   ///   sku: row.attr('data-sku'),
-  ///   price: row.pick(Field.text('.price').when(extractNumber)),
+  ///   price: row.pick(Field.text('.price').when((t) => t.extractNumber())),
   /// ));
   /// // List<({String name, String? sku, num? price})>
   /// ```
@@ -201,7 +202,7 @@ class Markup {
   /// straight off a page:
   ///
   /// ```dart
-  /// final String? title = res.parse(DocumentFormat.html).pick(Field.text('h1'));
+  /// final String? title = res.parse(.html).pick(Field.text('h1'));
   /// ```
   T pick<T>(Field<T> field) => field.read(_root);
 
@@ -212,7 +213,7 @@ class Markup {
   /// sub-object — or a [Field], which says the same thing with a static type.
   ///
   /// ```dart
-  /// final data = res.parse(DocumentFormat.html).extract({
+  /// final data = res.parse(.html).extract({
   ///   'title': 'h1',
   ///   'price': '.price',
   ///   'link': 'a@href',
@@ -310,8 +311,9 @@ class Markup {
   ///
   /// This is the one place text is read, so `res.\$(...).text`, `res.extract`
   /// and `res.pick` cannot drift apart.
-  static String readable(Element element) =>
-      _preformatted(element) ? element.text.trim() : cleanText(element.text);
+  static String readable(Element element) => _preformatted(element)
+      ? element.text.trim()
+      : element.text.cleanWhitespace();
 
   /// Whether [element] sits anywhere inside a `<pre>` or `<textarea>`.
   static bool _preformatted(Element element) {
@@ -491,7 +493,7 @@ extension QuerySelectorOnDocument on Document {
 /// type test on `dynamic`.
 ///
 /// ```dart
-/// final page = res.parse(DocumentFormat.html);
+/// final page = res.parse(.html);
 /// final title = page.pick(Field.text('h1'));           // String?
 /// final links = page.pick(Field.attrs('a', 'href'));   // List<String>
 /// ```
@@ -506,6 +508,20 @@ sealed class Field<T> {
   /// An empty [selector] reads the attribute off the root element itself.
   static AttrField attr(String selector, String attribute) =>
       AttrField(selector, attribute);
+
+  /// The first number in the text of the first match of [selector].
+  ///
+  /// ```dart
+  /// card.pick(.number('.price'));   // num?
+  /// ```
+  ///
+  /// A price is read three ways otherwise — select, read the text, pull the
+  /// number out of it — which the example program did in full through 8.1.0:
+  /// `extractNumber(html.pick(Field.text('.price')) ?? '')`. Currency symbols,
+  /// thousands separators and trailing units are all skipped; text with no
+  /// number in it is `null`.
+  static Field<num?> number(String selector) =>
+      TextField(selector).when((text) => text.extractNumber());
 
   /// The trimmed text of every match of [selector].
   static TextsField texts(String selector) => TextsField(selector);
@@ -733,7 +749,7 @@ extension NullableField<T extends Object> on Field<T?> {
   /// [convert] applied to what this field read, only when it read something.
   ///
   /// ```dart
-  /// final price = Field.text('.price').when(extractNumber);   // Field<num?>
+  /// final price = Field.text('.price').when((t) => t.extractNumber());   // Field<num?>
   /// final qty = Field.text('.qty').when(int.tryParse);           // Field<int?>
   /// ```
   ///

@@ -10,59 +10,17 @@
 /// also extension methods on `Iterable` and `Stream`:
 ///
 /// ```dart
-/// final pages = await urls.parallelMap(get, concurrency: 5);
-/// final tried = await urls.settle(get, concurrency: 5);
-/// final data  = await retry(() => get(url), retries: 3);
+/// final pages = await urls.parallelMap(Http.get, concurrency: 5);
+/// final tried = await urls.settle(Http.get, concurrency: 5);
+/// final data  = await retry(() => Http.get(url), retries: 3);
 /// ```
+/// {@category Concurrency}
 library;
 
 import 'dart:async';
 import 'dart:collection';
 
-import '../system/console/progress.dart';
-import '../util/rand.dart';
-
-/// Maps [worker] over [items] concurrently with at most [concurrency] in flight.
-///
-/// Results preserve input order. If an error occurs, the run stops and the error
-/// propagates unless error handling is registered on a custom [Pool].
-Future<List<R>> parallelMap<I, R>(
-  Iterable<I> items,
-  FutureOr<R> Function(I item) worker, {
-  int concurrency = 4,
-  Duration delay = Duration.zero,
-  String? progress,
-}) {
-  final p = Pool<I>(size: concurrency, delay: delay);
-  if (progress != null) {
-    final list = items is List<I> ? items : items.toList();
-    final bar = Progress(total: list.length, message: progress);
-    p.on.progress((_) => bar.tick());
-    p.on.done(() => bar.done());
-    return p.run(list, worker);
-  }
-  return p.run(items, worker);
-}
-
-/// Maps [worker] over [items] with at most [concurrency] in flight, returning
-/// a list of [Settled] results ([Done] or [Broke]) without throwing on errors.
-Future<List<Settled<R>>> settle<I, R>(
-  Iterable<I> items,
-  FutureOr<R> Function(I item) worker, {
-  int concurrency = 4,
-  Duration delay = Duration.zero,
-  String? progress,
-}) {
-  final p = Pool<I>(size: concurrency, delay: delay);
-  if (progress != null) {
-    final list = items is List<I> ? items : items.toList();
-    final bar = Progress(total: list.length, message: progress);
-    p.on.progress((_) => bar.tick());
-    p.on.done(() => bar.done());
-    return p.settle(list, worker);
-  }
-  return p.settle(items, worker);
-}
+import '../util/time.dart';
 
 /// Waits for [duration] without blocking the isolate.
 Future<void> delay(Duration duration) => Future<void>.delayed(duration);
@@ -516,7 +474,7 @@ class Semaphore implements Waiting {
 /// final limit = RateLimiter(10, per: 1.s);
 ///
 /// await limit.take();                            // waits for a token
-/// await limit.guard(() => get(url));        // the wrapped form
+/// await limit.guard(() => Http.get(url));        // the wrapped form
 /// ```
 ///
 /// **The bucket refills smoothly**, one token every `per / count`, rather than
@@ -685,7 +643,7 @@ Future<T> retry<T>(
 Duration _backoffFor(int attempt, Duration base, Duration cap) {
   final scaled = base * attempt;
   final bounded = scaled > cap ? cap : scaled;
-  return jitter(bounded);
+  return bounded.jittered();
 }
 
 /// What became of one task in [Pool.settle].

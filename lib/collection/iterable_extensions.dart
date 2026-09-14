@@ -6,37 +6,61 @@ library;
 import 'dart:async';
 
 import '../concurrent/concurrent.dart' as conc;
+import '../system/console/progress.dart';
 
 /// Fluent transformations on any [Iterable].
 extension IterableExtensions<T> on Iterable<T> {
-  /// Maps [worker] concurrently over elements with at most [concurrency] in flight.
+  /// Maps [worker] over these elements with at most [concurrency] in flight.
+  ///
+  /// ```dart
+  /// final pages = await urls.parallelMap(Http.get, concurrency: 8);
+  /// ```
+  ///
+  /// Results keep the input order. [progress] names a [Progress] bar to draw
+  /// while it runs. An error stops the run and propagates; [settle] is the
+  /// version that does not.
   Future<List<R>> parallelMap<R>(
     FutureOr<R> Function(T item) worker, {
     int concurrency = 4,
     Duration delay = Duration.zero,
     String? progress,
-  }) => conc.parallelMap(
-    this,
-    worker,
-    concurrency: concurrency,
-    delay: delay,
-    progress: progress,
-  );
+  }) {
+    final pool = conc.Pool<T>(size: concurrency, delay: delay);
+    if (progress == null) return pool.run(this, worker);
+    final items = this is List<T> ? this as List<T> : toList();
+    final bar = Progress(total: items.length, message: progress);
+    pool.on.progress((_) => bar.tick());
+    pool.on.done(bar.done);
+    return pool.run(items, worker);
+  }
 
-  /// Maps [worker] concurrently over elements with at most [concurrency] in flight,
-  /// collecting both successes ([Done]) and failures ([Broke]) without throwing.
+  /// Maps [worker] over these elements, collecting successes *and* failures.
+  ///
+  /// ```dart
+  /// for (final outcome in await urls.settle(Http.get)) {
+  ///   switch (outcome) {
+  ///     case Done(:final value): print(value.url);
+  ///     case Broke(:final error): logger.warn('$error');
+  ///   }
+  /// }
+  /// ```
+  ///
+  /// Nothing throws: every element produces a [Done] or a [Broke], in input
+  /// order, so one bad item does not end the run.
   Future<List<conc.Settled<R>>> settle<R>(
     FutureOr<R> Function(T item) worker, {
     int concurrency = 4,
     Duration delay = Duration.zero,
     String? progress,
-  }) => conc.settle(
-    this,
-    worker,
-    concurrency: concurrency,
-    delay: delay,
-    progress: progress,
-  );
+  }) {
+    final pool = conc.Pool<T>(size: concurrency, delay: delay);
+    if (progress == null) return pool.settle(this, worker);
+    final items = this is List<T> ? this as List<T> : toList();
+    final bar = Progress(total: items.length, message: progress);
+    pool.on.progress((_) => bar.tick());
+    pool.on.done(bar.done);
+    return pool.settle(items, worker);
+  }
 
   /// Idiomatic, Kotlin-style alias for [where].
   Iterable<T> filter(bool Function(T) test) => where(test);

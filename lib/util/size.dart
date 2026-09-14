@@ -9,6 +9,7 @@
 /// *mebibytes* under a name that means five million. The arithmetic stayed and
 /// the labels were fixed: [formatBytes] writes `KiB`/`MiB`/`GiB`, and
 /// [parseBytes] accepts both families, giving each the scale its name carries.
+/// {@category Utilities}
 library;
 
 import 'dart:math' as math;
@@ -72,54 +73,9 @@ int? _parseBytes(String text) {
   return scale == null ? null : (value * scale).round();
 }
 
-/// Renders [bytes] as a human-readable string, e.g. `'1.0 KiB'`.
-///
-/// [decimals] controls the fraction digits above a kibibyte; a count in plain
-/// bytes has no fraction to show, so `formatBytes(1023)` is `'1023 B'` and not
-/// `'1023.0 B'`.
-///
-/// A negative count keeps its sign — `formatBytes(-2048)` is `'-2.0 KiB'` —
-/// because a script that subtracted two sizes in the order it had them should
-/// see which way round they were rather than `'0 B'`.
-///
-/// [bytes] is a `num` because summing an iterable returns one: totalling the
-/// sizes of a directory and printing the total should not need a `.toInt()`
-/// cast made only to satisfy this signature. A fractional count is floored,
-/// which is the byte it names.
-///
-/// ```dart
-/// formatBytes(5 * 1024 * 1024); // '5.0 MiB'
-/// ```
-String formatBytes(num bytes, {int decimals = 1}) =>
-    _formatBytes(bytes, decimals: decimals);
-
-/// Parses a human-readable size such as `'10 KiB'` or `'2.5MB'` into bytes.
-///
-/// Returns `null` when [text] is not a size — including when it carries a unit
-/// this does not know, because reading `'10 XB'` as ten bytes would be a wrong
-/// answer dressed as a right one.
-///
-/// ```dart
-/// parseBytes('10 KiB');   // 10240
-/// parseBytes('10 KB');    // 10000
-/// parseBytes('10 K');     // 10240 — bare letters are binary
-/// parseBytes('512');      // 512   — a bare number is bytes
-/// parseBytes('10 XB');    // null
-/// ```
-///
-/// Both families are accepted and each means what it says: `KiB`/`MiB` and the
-/// bare `K`/`M` are 1024-based, `KB`/`MB` are 1000-based. Every unit
-/// [formatBytes] writes reads back, so `parseBytes(formatBytes(n))` is `n`
-/// rounded to the digits it printed.
-///
-/// A negative size parses, matching [formatBytes].
-int? parseBytes(String text) => _parseBytes(text);
-
 /// Byte-size formatting and unit arithmetic on [num].
 extension NumSizeExtension on num {
   /// Formats this number of bytes as a human-readable string (e.g. `'1.5 MiB'`).
-  ///
-  /// See [formatBytes].
   String formatBytes({int decimals = 1}) =>
       _formatBytes(this, decimals: decimals);
 
@@ -134,4 +90,27 @@ extension NumSizeExtension on num {
 
   /// Gibibytes in bytes (1024 * 1024 * 1024).
   num get gb => this * 1024 * 1024 * 1024;
+}
+
+/// A written byte size, read back as a number.
+///
+/// The same family as `.url`, `.path`, `.date` and `.duration`: *this string,
+/// read as something*.
+extension StringSizeExtension on String {
+  /// This size read as a number of bytes, or `null` when it is not one.
+  ///
+  /// ```dart
+  /// '10 KiB'.bytes;   // 10240
+  /// '10 KB'.bytes;    // 10000
+  /// '10 K'.bytes;     // 10240 — bare letters are binary
+  /// '512'.bytes;      // 512   — a bare number is bytes
+  /// '10 XB'.bytes;    // null
+  /// ```
+  ///
+  /// Both families are accepted and each means what it says: `KiB`/`MiB` and
+  /// the bare `K`/`M` are 1024-based, `KB`/`MB` are 1000-based. Every unit
+  /// [NumSizeExtension.formatBytes] writes reads back. A unit this does not
+  /// know is `null`, because reading `'10 XB'` as ten bytes would be a wrong
+  /// answer dressed as a right one.
+  int? get bytes => _parseBytes(this);
 }

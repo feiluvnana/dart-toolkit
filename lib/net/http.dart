@@ -6,6 +6,7 @@
 /// them is [Response.parse] plus a codec from `format`, because a crawler
 /// fetches JSON, sitemaps, archives and images as readily as it fetches
 /// pages.
+/// {@category Networking}
 library;
 
 import 'dart:async';
@@ -23,7 +24,7 @@ import '../io/entry.dart';
 import '../src/fs.dart';
 import '../src/format.dart';
 import '../src/method.dart';
-import '../util/rand.dart';
+import '../util/time.dart';
 import 'cache.dart';
 import 'fetch.dart';
 import '../format/format.dart';
@@ -190,20 +191,15 @@ final class _JsonBody extends Body {
 /// **`Page<T>` folded into this in 6.0.0.** Everything `Page` added was
 /// either the request it came from — [fetch], and [Fetch.tag], [Fetch.meta]
 /// and [Fetch.depth] through it — or a call on an engine. The engine calls
-/// are gone: `emit` because a crawl is a `Flow<Response>` and the caller decides
+/// are gone: `emit` because a crawl is a `Stream<Response>` and the caller decides
 /// what to do with each reply, `stop` because cancelling that flow stops the
 /// crawl, and [follow] because it now *returns* the next request instead of
 /// queueing one.
 ///
 /// That last change is the whole migration for a handler:
 ///
-/// ```dart no-compile
-/// // before — a closure with a side effect, needing an engine behind it
-/// res.parse(DocumentFormat.html).$('a').attrs('href')
-///    .collect(.foreach((h) => res.follow(h)));
-///
-/// // after — a pure function from a reply to the next requests
-/// res.parse(DocumentFormat.html).$('a').attrs('href').map(res.follow)
+/// ```dart
+/// res.$$('a').map((a) => a.attr('href')).nonNulls.map(res.follow);
 /// ```
 class Response {
   static final _charsetParam = RegExp(r'charset=([^;]+)', caseSensitive: false);
@@ -246,7 +242,7 @@ class Response {
   String get text => body;
 
   /// The response body parsed as a typed JSON document cursor.
-  Json get json => parseJson(body);
+  Json get json => body.parse(.json);
 
   /// Decodes the JSON body directly as typed [T] when a raw map or list is required.
   T jsonDecoded<T>() => json.raw as T;
@@ -263,10 +259,10 @@ class Response {
   String? _body;
 
   // Keyed by codec, and every accessor under `format` is a const instance, so
-  // reading a page through [parseHtml] five times parses it once. This is
+  // reading a page through `parse(.html)` five times parses it once. This is
   // what the old `_doc` and `_json` caches did, for every format instead of
   // two.
-  final Map<DocumentFormat<Object?>, Object?> _parsed = {};
+  final Map<DocumentFormat<Object?, Object?>, Object?> _parsed = {};
 
   /// Creates a response. Normally produced by [Fetcher.send].
   Response({
@@ -429,20 +425,20 @@ class Response {
   /// a crawl over an API and a crawl over pages are written the same way.
   ///
   /// ```dart
-  /// res.parse(DocumentFormat.html).$('h1').text;
-  /// res.parse(DocumentFormat.json).at('data.items');
-  /// res.parse(DocumentFormat.yaml).text('version');
+  /// res.parse(.html).$('h1').text;
+  /// res.parse(.json).at('data.items');
+  /// res.parse(.yaml).text('version');
   ///
   /// switch (res.type) {
-  ///   case 'application/json': res.parse(DocumentFormat.json).at('items');
-  ///   default:                 res.parse(DocumentFormat.html).$('.item');
+  ///   case 'application/json': res.parse(.json).at('items');
+  ///   default:                 res.parse(.html).$('.item');
   /// }
   /// ```
   ///
   /// Memoised per codec, so a handler that reads one page five times parses it
   /// once. Nothing here throws: a body that is not the format asked for is the
   /// empty cursor, the same as a missing path.
-  T parse<T>(DocumentFormat<T> codec) {
+  T parse<T>(DocumentFormat<T, Object?> codec) {
     if (_parsed.containsKey(codec)) return _parsed[codec] as T;
     final value = codec.parse(body);
     _parsed[codec] = value;
@@ -465,8 +461,8 @@ class Response {
   /// function from a reply to the requests that follow it, so this composes
   /// with the collection vocabulary and needs no engine behind it:
   ///
-  /// ```dart no-compile
-  /// res.parse(DocumentFormat.html).$('a').attrs('href').map(res.follow)
+  /// ```dart
+  /// res.$('a').attrs('href').map(res.follow);
   /// ```
   ///
   /// It tears off cleanly because the href comes first and everything else is
@@ -623,7 +619,7 @@ class Fetcher with _PathResolver {
   ///
   /// ```dart
   /// final api = Fetcher(limiter: RateLimiter(10, per: 1.s));
-  /// await urls.parallelMap((u) => api.send(HttpMethod.get, u), concurrency: 8);
+  /// await urls.parallelMap((u) => api.send(.get, u), concurrency: 8);
   /// ```
   ///
   /// Typed [Waiting], so a [Semaphore] paces this client as readily as a
@@ -660,7 +656,6 @@ class Fetcher with _PathResolver {
   /// lie told to a JSON API on a caller's behalf. [Fetcher.browser] sends
   /// them now, by name and on request.
   Fetcher({
-    http.Client? pool,
     http.Client? client,
     Map<String, String>? headers,
     this.timeout = const Duration(seconds: 30),
@@ -676,8 +671,8 @@ class Fetcher with _PathResolver {
     this.cache,
     this.limiter,
   }) : jar = jar ?? (session ? CookieJar() : null),
-       _ownsClient = (pool ?? client) == null,
-       _client = pool ?? client ?? _createClient(proxy),
+       _ownsClient = client == null,
+       _client = client ?? _createClient(proxy),
        headers = headers ?? const {};
 
   /// Creates a client that presents itself as a desktop browser.
@@ -707,7 +702,7 @@ class Fetcher with _PathResolver {
     HttpCache? cache,
     Waiting? limiter,
   }) => Fetcher(
-    pool: pool ?? client,
+    client: client,
     headers: {..._browserHeaders, ...?headers},
     timeout: timeout,
     retries: retries,
@@ -1196,7 +1191,7 @@ class Fetcher with _PathResolver {
   // timing as repeatable as a crawl's order. Two generators doing this job is
   // one too many.
 
-  static Duration _backoffWithJitter(Duration base) => jitter(base);
+  static Duration _backoffWithJitter(Duration base) => base.jittered();
 
   static bool _retryable(int statusCode) =>
       statusCode >= 500 || statusCode == 429;
@@ -1247,7 +1242,7 @@ class Fetcher with _PathResolver {
         final file = await Fs.download(
           url,
           dest,
-          pool: _client,
+          client: _client,
           headers: merged,
           onprogress: onprogress,
           part: part,

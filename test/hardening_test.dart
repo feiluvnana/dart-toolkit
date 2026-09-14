@@ -96,7 +96,7 @@ Disallow: /
       final mine = Fetcher();
       await (crawl([
         Fetch('https://example.test/'.url),
-      ])..using(mine.call)).run();
+      ], send: mine.call)).run();
 
       // Reaching the socket layer proves the client was not closed. A `Send`
       // is a function and owns nothing, so there is nothing for the crawl to
@@ -121,37 +121,37 @@ Disallow: /
       // each, and `Crawler` has no member for any of them.
       final client = Fetcher(retries: 9);
       expect(client.retries, equals(9));
-      expect(crawl(const <Fetch>[]).using(client.call), isA<Crawler>());
+      expect(crawl(const <Fetch>[], send: client.call), isA<Crawler>());
     });
   });
 
   group('selectors', () {
     test('matches tests an element without scanning its parent', () {
-      final q = parseHtml('<ul><li class="a">1</li><li class="b">2</li></ul>');
+      final q = '<ul><li class="a">1</li><li class="b">2</li></ul>'.parse(
+        .html,
+      );
       expect(q.$('li').matching('.a').texts, equals(['1']));
       expect(q.$('li').matching(':not(.a)').texts, equals(['2']));
     });
 
     test('combinators are honoured by a single-element match', () {
-      final q = parseHtml(
-        '<div class="w"><p>a</p><span>b</span><span>c</span></div>',
-      );
+      final q = '<div class="w"><p>a</p><span>b</span><span>c</span></div>'
+          .parse(.html);
       expect(q.$('span').matching('p + span').texts, equals(['b']));
       expect(q.$('span').matching('.w > span').texts, equals(['b', 'c']));
       expect(q.$('span').matching('p ~ span').texts, equals(['b', 'c']));
     });
 
     test('closest walks ancestors', () {
-      final q = parseHtml(
-        '<div class="outer"><div class="inner"><b>x</b></div></div>',
-      );
+      final q = '<div class="outer"><div class="inner"><b>x</b></div></div>'
+          .parse(.html);
       expect(q.$('b').closest('.outer').count, equals(1));
       expect(q.$('b').closest('.missing').count, equals(0));
     });
 
     test('a large child-combinator query stays linear', () {
       final rows = List.generate(2000, (i) => '<li class="i">$i</li>').join();
-      final q = parseHtml('<ul id="l">$rows</ul>');
+      final q = '<ul id="l">$rows</ul>'.parse(.html);
       final watch = Stopwatch()..start();
       expect(q.$('#l > li.i').count, equals(2000));
       watch.stop();
@@ -254,14 +254,10 @@ Disallow: /
     ''');
 
     test('pick keeps the field type', () {
-      final String? title = res
-          .parse(DocumentFormat.html)
-          .pick(Field.text('h1'));
-      final List<String> tags = res
-          .parse(DocumentFormat.html)
-          .pick(Field.texts('.t'));
+      final String? title = res.parse(.html).pick(Field.text('h1'));
+      final List<String> tags = res.parse(.html).pick(Field.texts('.t'));
       final List<String> hrefs = res
-          .parse(DocumentFormat.html)
+          .parse(.html)
           .pick(Field.attrs('.row a', 'href'));
       expect(title, equals('Title'));
       expect(tags, equals(['a', 'b']));
@@ -270,13 +266,13 @@ Disallow: /
 
     test('a custom read is typed too', () {
       final int count = res
-          .parse(DocumentFormat.html)
+          .parse(.html)
           .pick(Field.fn((el) => el.querySelectorAll('.row').length));
       expect(count, equals(2));
     });
 
     test('the string shorthand still works', () {
-      final data = res.parse(DocumentFormat.html).extract({
+      final data = res.parse(.html).extract({
         'title': 'h1',
         'tags': ['.t'],
         'rows': [
@@ -296,7 +292,7 @@ Disallow: /
     });
 
     test('Fields and shorthand mix in one schema', () {
-      final data = res.parse(DocumentFormat.html).extract({
+      final data = res.parse(.html).extract({
         'title': Field.text('h1'),
         'tags': ['.t'],
       });
@@ -307,56 +303,56 @@ Disallow: /
 
   group('Files mirrors sync and async operations', () {
     test('parent has an async twin, like every other disk operation', () async {
-      final dir = tempDirSync('dt_parent_');
+      final dir = SyncPath.tempDir('dt_parent_');
       try {
-        final blocking = joinPath(dir.path, 'a', 'b', 'file.txt');
-        final future = joinPath(dir.path, 'c', 'd', 'file.txt');
-        makeDirSync(dirname(blocking));
-        await makeDir(dirname(future));
+        final blocking = Path(dir.path) / 'a' / 'b' / 'file.txt';
+        final future = Path(dir.path) / 'c' / 'd' / 'file.txt';
+        Path(Path(blocking).parent).sync.makeDir();
+        await Path(Path(future).parent).makeDir();
 
         expect(
-          fileExists(dirname(blocking)),
+          Path(Path(blocking).parent).isFile,
           isFalse,
           reason: 'a folder, not a file',
         );
-        expect(Directory(dirname(blocking)).existsSync(), isTrue);
-        expect(Directory(dirname(future)).existsSync(), isTrue);
+        expect(Directory(Path(blocking).parent).existsSync(), isTrue);
+        expect(Directory(Path(future).parent).existsSync(), isTrue);
       } finally {
-        removePathSync(dir.path);
+        Path(dir.path).sync.delete();
       }
     });
 
     test('both write atomically to the same place', () async {
-      final dir = tempDirSync('dt_io_');
+      final dir = SyncPath.tempDir('dt_io_');
       try {
-        final a = joinPath(dir.path, 'sync.txt');
-        final b = joinPath(dir.path, 'async.txt');
-        writeTextSync(a, 'one');
-        await writeText(b, 'two');
-        expect(readTextSync(a), equals('one'));
-        expect(await readText(b), equals('two'));
-        expect(pathExists(a), isTrue);
-        expect(pathExists(b), isTrue);
-        expect(await walkDir(dir.path), hasLength(2));
-        expect(await removePath(b), isTrue);
-        expect(pathExists(b), isFalse);
+        final a = Path(dir.path) / 'sync.txt';
+        final b = Path(dir.path) / 'async.txt';
+        Path(a).sync.writeText('one');
+        await Path(b).writeText('two');
+        expect(Path(a).sync.readText(), equals('one'));
+        expect(await Path(b).readText(), equals('two'));
+        expect(Path(a).exists, isTrue);
+        expect(Path(b).exists, isTrue);
+        expect(await Path(dir.path).walk(), hasLength(2));
+        expect(await Path(b).delete(), isTrue);
+        expect(Path(b).exists, isFalse);
       } finally {
-        removePathSync(dir.path);
+        Path(dir.path).sync.delete();
       }
     });
 
     test('json round-trips through both', () async {
-      final dir = tempDirSync('dt_json_');
+      final dir = SyncPath.tempDir('dt_json_');
       try {
-        final path = joinPath(dir.path, 'd.json');
-        writeJsonSync(path, {'n': 1});
-        final readSync = parseJson(readTextSync(path));
+        final path = Path(dir.path) / 'd.json';
+        Path(path).sync.writeJson({'n': 1});
+        final readSync = Path(path).sync.readText().parse(.json);
         expect(readSync.number('n'), equals(1));
-        await writeJson(path, {'n': 2});
-        final readAsync = parseJson(await readText(path));
+        await Path(path).writeJson({'n': 2});
+        final readAsync = (await Path(path).readText()).parse(.json);
         expect(readAsync.number('n'), equals(2));
       } finally {
-        removePathSync(dir.path);
+        Path(dir.path).sync.delete();
       }
     });
   });

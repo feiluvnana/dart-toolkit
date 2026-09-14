@@ -51,7 +51,7 @@ class SysResult {
       : stdout.split(RegExp(r'\r?\n')).where((l) => l.isNotEmpty).toList();
 
   /// Parsed JSON document cursor from standard output.
-  Json get json => parseJson(stdout);
+  Json get json => stdout.parse(.json);
 
   /// Decodes standard output JSON directly as typed [T].
   T decodeJson<T>() => jsonDecode(stdout) as T;

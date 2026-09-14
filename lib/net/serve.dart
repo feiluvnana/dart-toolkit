@@ -20,6 +20,7 @@
 /// static-directory serving beyond [Served.file], HTTPS and WebSockets. Each
 /// is the first step towards a web framework, and this is a scraping toolkit
 /// that needs to catch a redirect.
+/// {@category Networking}
 library;
 
 import '../src/method.dart';

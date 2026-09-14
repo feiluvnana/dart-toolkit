@@ -33,13 +33,13 @@ name = "widget"
 void main() {
   group('the format family', () {
     test('the three codecs are spelled identically', () {
-      expect(parseJson('{"a":1}').number('a'), equals(1));
-      expect(parseYaml('a: 1').number('a'), equals(1));
-      expect(parseToml('a = 1').number('a'), equals(1));
+      expect('{"a":1}'.parse(.json).number('a'), equals(1));
+      expect('a: 1'.parse(.yaml).number('a'), equals(1));
+      expect('a = 1'.parse(.toml).number('a'), equals(1));
 
-      expect(toJsonString({'a': 1}, indent: 0), equals('{"a":1}'));
-      expect(toYamlString({'a': 1}).trim(), equals('a: 1'));
-      expect(toTomlString({'a': 1}).trim(), equals('a = 1'));
+      expect(const JsonFormat().format({'a': 1}, indent: 0), equals('{"a":1}'));
+      expect(const YamlFormat().format({'a': 1}).trim(), equals('a: 1'));
+      expect(const TomlFormat().format({'a': 1}).trim(), equals('a = 1'));
     });
 
     test('all three read a file, and a missing one is empty', () async {
@@ -50,30 +50,24 @@ void main() {
         File(p.join(dir.path, 'a.toml')).writeAsStringSync('n = 1');
 
         expect(
-          (await const JsonFormat().read(
-            p.join(dir.path, 'a.json'),
-          )).number('n'),
+          (await Path(p.join(dir.path, 'a.json')).read(.json)).number('n'),
           1,
         );
         expect(
-          (await const YamlFormat().read(
-            p.join(dir.path, 'a.yaml'),
-          )).number('n'),
+          (await Path(p.join(dir.path, 'a.yaml')).read(.yaml)).number('n'),
           1,
         );
         expect(
-          (await const TomlFormat().read(
-            p.join(dir.path, 'a.toml'),
-          )).number('n'),
+          (await Path(p.join(dir.path, 'a.toml')).read(.toml)).number('n'),
           1,
         );
 
         for (final ext in const ['json', 'yaml', 'toml']) {
           final missing = p.join(dir.path, 'absent.$ext');
           final doc = switch (ext) {
-            'json' => await const JsonFormat().read(missing),
-            'yaml' => await const YamlFormat().read(missing),
-            _ => await const TomlFormat().read(missing),
+            'json' => await Path(missing).read(.json),
+            'yaml' => await Path(missing).read(.yaml),
+            _ => await Path(missing).read(.toml),
           };
           expect(doc.empty, isTrue, reason: ext);
         }
@@ -91,7 +85,7 @@ void main() {
 
   group('format.yaml', () {
     test('parse gives the same cursor JSON does', () {
-      final doc = parseYaml(_yaml);
+      final doc = _yaml.parse(.yaml);
       expect(doc.text('name'), equals('dart_toolkit'));
       expect(doc.text('version'), equals('3.2.0'));
       expect(doc.text('environment.sdk'), equals('^3.7.0'));
@@ -105,26 +99,29 @@ void main() {
     });
 
     test('the cursor holds plain maps, so it re-encodes as JSON', () {
-      final doc = parseYaml(_yaml);
+      final doc = _yaml.parse(.yaml);
       expect(doc.raw, isA<Map<String, Object?>>());
-      expect(toJsonString(doc.raw, indent: 0), contains('"name"'));
+      expect(const JsonFormat().format(doc.raw, indent: 0), contains('"name"'));
     });
 
     test('jsonpath works over a YAML document too', () {
       expect(
-        parseYaml(
-          _yaml,
-        ).jsonpath(r'$..sdk').map((n) => n.text()).whereType<String>().toList(),
+        _yaml
+            .parse(.yaml)
+            .jsonpath(r'$..sdk')
+            .map((n) => n.text())
+            .whereType<String>()
+            .toList(),
         equals(['^3.7.0']),
       );
     });
 
     test('text that is not YAML is the empty cursor', () {
-      expect(parseYaml('a:\n b\n  - c: :').empty, isTrue);
+      expect('a:\n b\n  - c: :'.parse(.yaml).empty, isTrue);
     });
 
     test('format writes block style, quoting what would read back wrong', () {
-      final text = toYamlString({
+      final text = const YamlFormat().format({
         'name': 'widget',
         'version': '1.0',
         'on': 'yes',
@@ -157,7 +154,7 @@ void main() {
       expect(text, contains('    x: 1'));
       expect(text, contains('none: {}'));
       // And it round-trips through the reader.
-      final back = parseYaml(text);
+      final back = text.parse(.yaml);
       expect(back.text('version'), equals('1.0'));
       expect(back.text('on'), equals('yes'));
       expect(back.number('nested.deep.x'), equals(1));
@@ -169,13 +166,11 @@ void main() {
         final path = p.join(dir.path, 'c.yaml');
         File(path).writeAsStringSync(_yaml);
         expect(
-          (await const YamlFormat().read(path)).text('name'),
+          (await Path(path).read(.yaml)).text('name'),
           equals('dart_toolkit'),
         );
         expect(
-          (await const YamlFormat().read(
-            p.join(dir.path, 'absent.yaml'),
-          )).empty,
+          (await Path(p.join(dir.path, 'absent.yaml')).read(.yaml)).empty,
           isTrue,
         );
       } finally {
@@ -184,7 +179,7 @@ void main() {
     });
 
     test('it reads this repository own pubspec', () async {
-      final pubspec = await const YamlFormat().read('pubspec.yaml');
+      final pubspec = await Path('pubspec.yaml').read(.yaml);
       expect(pubspec.text('name'), equals('dart_toolkit'));
       expect(pubspec.at('dependencies').count, greaterThan(3));
     });
@@ -192,7 +187,7 @@ void main() {
 
   group('format.toml', () {
     test('parse, spelled the same as yaml', () {
-      final doc = parseToml(_toml);
+      final doc = _toml.parse(.toml);
       expect(doc.text('package.name'), equals('widget'));
       expect(doc.text('package.version'), equals('1.4.2'));
       expect(doc.text('dependencies.serde'), equals('1.0'));
@@ -200,17 +195,20 @@ void main() {
     });
 
     test('text that is not TOML is the empty cursor', () {
-      expect(parseToml('[[[not toml').empty, isTrue);
+      expect('[[[not toml'.parse(.toml).empty, isTrue);
     });
 
     test('format writes a document back, and refuses a non-map', () {
-      final text = toTomlString({
+      final text = const TomlFormat().format({
         'package': {'name': 'widget', 'version': '1.0.0'},
       });
-      expect(parseToml(text).text('package.name'), equals('widget'));
-      expect(() => toTomlString(['not', 'a', 'map']), throwsArgumentError);
-      expect(() => toTomlString('scalar'), throwsArgumentError);
-      expect(() => toTomlString(null), throwsArgumentError);
+      expect(text.parse(.toml).text('package.name'), equals('widget'));
+      expect(
+        () => const TomlFormat().format(['not', 'a', 'map']),
+        throwsArgumentError,
+      );
+      expect(() => const TomlFormat().format('scalar'), throwsArgumentError);
+      expect(() => const TomlFormat().format(null), throwsArgumentError);
     });
 
     test('read is the file door, and a missing file is empty', () async {
@@ -219,13 +217,11 @@ void main() {
         final path = p.join(dir.path, 'Cargo.toml');
         File(path).writeAsStringSync(_toml);
         expect(
-          (await const TomlFormat().read(path)).text('package.name'),
+          (await Path(path).read(.toml)).text('package.name'),
           equals('widget'),
         );
         expect(
-          (await const TomlFormat().read(
-            p.join(dir.path, 'absent.toml'),
-          )).empty,
+          (await Path(p.join(dir.path, 'absent.toml')).read(.toml)).empty,
           isTrue,
         );
       } finally {

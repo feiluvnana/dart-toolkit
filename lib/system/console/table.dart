@@ -111,7 +111,7 @@ class TableStyle {
 /// A bordered text table.
 ///
 /// Build it, then [render] it to a string — printing it is
-/// `consoleWriter.write(table.render())`, which is what
+/// `Console.write(table.render())`, which is what
 /// `ConsoleWriter.table` was a second spelling of:
 ///
 /// ```dart
@@ -165,7 +165,8 @@ class Table {
 
   /// Appends a row.
   ///
-  /// ```dart no-compile
+  /// ```dart
+  /// // setup: final table = Table(headers: ['name', 'size', 'state']);
   /// table.add(['app', '1.4 MB', 'ok']);
   /// ```
   void add(List<Object?> row) =>
@@ -173,8 +174,11 @@ class Table {
 
   /// Appends multiple [rows] to the table.
   ///
-  /// ```dart no-compile
-  /// table.addAll(rows);
+  /// ```dart
+  /// // setup: final table = Table(headers: ['host', 'hits']);
+  /// table.addAll([
+  ///   for (final row in rows) [row.host, row.cost],
+  /// ]);
   /// ```
   void addAll(Iterable<List<Object?>> rows) {
     for (final row in rows) {

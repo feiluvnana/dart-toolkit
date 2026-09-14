@@ -4,7 +4,10 @@
 /// [parseTime] and [parseDuration], which are what a `--since` option or a
 /// date column in a CSV needs. Delays are always [Duration]; the [DurationInt]
 /// extension keeps call sites short (`250.ms`, `2.h`).
+/// {@category Utilities}
 library;
+
+import 'rand.dart';
 
 /// Formats [duration] as `mm:ss`, or `hh:mm:ss` past an hour.
 ///
@@ -113,7 +116,7 @@ const _months = [
 ///
 /// ```dart
 /// // setup: final row = const {'date': '2026-01-01'};
-/// final since = parseTime(row['date'] ?? '') ?? DateTime(2000);
+/// final since = (row['date'] ?? '').date ?? DateTime(2000);
 /// ```
 DateTime? _parseTime(String text) {
   final trimmed = text.trim();
@@ -210,7 +213,7 @@ final _units = RegExp(r'(\d+(?:\.\d+)?)\s*(ms|s|m|h|d|w)?');
 ///
 /// ```dart
 /// // setup: final row = const {'retry_after': '30s'};
-/// final wait = parseDuration(row['retry_after'] ?? '') ?? 30.s;
+/// final wait = (row['retry_after'] ?? '').duration ?? 30.s;
 /// ```
 Duration? _parseDuration(String text) {
   final trimmed = text.trim().toLowerCase();
@@ -246,7 +249,7 @@ Duration? _parseDuration(String text) {
 /// no one-liner for it.
 ///
 /// ```dart
-/// rows.groupBy((r) => startOfDay(r.seen));
+/// rows.groupBy((r) => r.seen.startOfDay);
 /// ```
 DateTime _startOfDay(DateTime date) => date.isUtc
     ? DateTime.utc(date.year, date.month, date.day)
@@ -256,68 +259,57 @@ DateTime _startOfDay(DateTime date) => date.isUtc
 // PUBLIC API
 // ============================================================================
 
-/// Formats [duration] as `mm:ss`, or `hh:mm:ss` past an hour.
-///
-/// A negative duration formats its magnitude behind a `-`, so
-/// `formatDuration(-5.s)` is `'-00:05'`.
-///
-/// ```dart
-/// formatDuration(const Duration(minutes: 2)); // '02:00'
-/// ```
-String formatDuration(Duration duration) => _formatDuration(duration);
-
-/// A filename-safe timestamp, `yyyyMMdd_HHmmss`.
-///
-/// Uses [date], or the current local time.
-String timestamp([DateTime? date]) => _timestamp(date);
-
-/// A coarse human description of how long ago [past] was (e.g. `'5m ago'`).
-///
-/// Compares against [relativeTo], or now. Future instants report
-/// `'in the future'`.
-String timeAgo(DateTime past, [DateTime? relativeTo]) =>
-    _timeAgo(past, relativeTo);
-
-/// The [DateTime] [text] names, or `null` when it names none.
-///
-/// ISO-8601 is tried first, then the loose forms a spreadsheet column or a
-/// command line actually carries — `20240309_101500`, `2024/03/09`,
-/// `09/03/2024` (day first), `9 Mar 2024`. See the table on [_parseTime].
-DateTime? parseTime(String text) => _parseTime(text);
-
-/// The [Duration] [text] names, or `null` when it names none.
-///
-/// The units a timeout is written in — `ms`, `s`, `m`, `h`, `d`, `w` — and as
-/// many of them at once as you like: `'1h30m'`, `'2d 12h'`, `'250ms'`.
-/// Decimals are allowed (`'1.5h'`), and a bare number means seconds, so
-/// `--timeout 30` works.
-Duration? parseDuration(String text) => _parseDuration(text);
-
-/// [date] truncated to midnight, keeping its UTC or local flag.
-///
-/// The grouping primitive for a daily rollup, which `dart:core` has no
-/// one-liner for.
-DateTime startOfDay(DateTime date) => _startOfDay(date);
-
 /// Formatting for [Duration].
 extension DurationFormatExtension on Duration {
-  /// Formats this duration as `mm:ss` or `hh:mm:ss`. See [formatDuration].
+  /// This duration as `mm:ss`, or `hh:mm:ss` once it passes an hour.
+  ///
+  /// A negative duration formats its magnitude behind a `-`, so
+  /// `(-5.s).format()` is `'-00:05'`.
   String format() => _formatDuration(this);
+
+  /// This duration lengthened by up to [spread] of itself, at random.
+  ///
+  /// ```dart
+  /// await delay(2.s.jittered());
+  /// crawl(seeds, politeness: .perHost(250.ms.jittered()));
+  /// ```
+  ///
+  /// Spacing requests by a jittered delay stops a pool of workers from
+  /// resynchronising onto the same instant. Only ever added, so the result is
+  /// never shorter than this duration.
+  Duration jittered({double spread = 0.25}) => jitterOf(this, spread: spread);
 }
 
 /// Timestamps, relative descriptions and day truncation for [DateTime].
 extension DateTimeToolkitExtensions on DateTime {
   /// A filename-safe `yyyyMMdd_HHmmss` rendering of this instant.
-  ///
-  /// See [timestamp].
   String get timestamp => _timestamp(this);
 
   /// A coarse description of how long ago this instant was, against
-  /// [relativeTo] or now. See [timeAgo].
+  /// [relativeTo] or now.
   String ago([DateTime? relativeTo]) => _timeAgo(this, relativeTo);
 
   /// This instant truncated to midnight, keeping its UTC or local flag.
-  ///
-  /// See [startOfDay].
   DateTime get startOfDay => _startOfDay(this);
+}
+
+/// A written instant or span, read back.
+///
+/// The same family as `.url`, `.path` and `.bytes`: *this string, read as
+/// something*.
+extension StringTimeExtensions on String {
+  /// This text read as a [DateTime], or `null` when it names none.
+  ///
+  /// ISO-8601 is tried first, then the loose forms a spreadsheet column or a
+  /// command line actually carries — `20240309_101500`, `2024/03/09`,
+  /// `09/03/2024` (day first), `9 Mar 2024`.
+  DateTime? get date => _parseTime(this);
+
+  /// This text read as a [Duration], or `null` when it names none.
+  ///
+  /// The units a timeout is written in — `ms`, `s`, `m`, `h`, `d`, `w` — and
+  /// as many of them at once as you like: `'1h30m'`, `'2d 12h'`, `'250ms'`.
+  /// Decimals are allowed (`'1.5h'`), and a bare number means seconds, so
+  /// `--timeout 30` works.
+  Duration? get duration => _parseDuration(this);
 }

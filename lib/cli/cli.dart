@@ -34,6 +34,7 @@
 /// **One name per concept.** An option is declared with `abbr`, `help` and
 /// `defaultsTo` — the `package:args` spelling — and nothing accepts a second
 /// name for any of the three.
+/// {@category CLI}
 library;
 
 import 'dart:async';

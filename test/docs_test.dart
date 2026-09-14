@@ -80,16 +80,16 @@ Response get res => Response(
   headers: const {'content-type': 'text/html'},
 );
 Response get reply => res;
-Markup get page => parseHtml(_html);
+Markup get page => _html.parse(.html);
 Markup get markup => page;
 Markup get card => page.$('.row');
 Markup get row => card;
-Json get doc => parseJson('{"data":{"items":[{"sku":"a"}],"total":1}}');
+Json get doc => '{"data":{"items":[{"sku":"a"}],"total":1}}'.parse(.json);
 Json get config => doc;
 Json get pubspec => doc;
-String get path => 'out/file.txt';
-String get dir => 'out';
-String get dest => 'out/copy.txt';
+Path get path => Path('out/file.txt');
+Path get dir => Path('out');
+Path get dest => Path('out/copy.txt');
 String get text => 'some text';
 String get body => _html;
 String get template => 'Hello {name}';
@@ -105,14 +105,21 @@ int get size => 4;
 int get port => 8080;
 Duration get timeout => const Duration(seconds: 5);
 ConsoleLogger get log => logger;
-ConsoleWriter get writer => consoleWriter;
+ConsoleWriter get writer => ConsoleWriter();
 Fetcher get client => Fetcher();
 Fetcher get session => Fetcher(session: true);
 Map<String, Object?> get db => <String, Object?>{};
 Iterable<Uri> get urls => [seed];
+List<Uri> get seeds => [seed];
+String get summary => 'done';
+String get payload => 'payload';
+String get source => _html;
+Path get settings => Path('config.yaml');
+Stopwatch get clock => Stopwatch()..start();
+Iterable<Fetch> _next(Response res) => const <Fetch>[];
 Iterable<Row> get rows => const [Row('a.com', 1, 1)];
 Iterable<String> get titles => const ['One'];
-List<String> get paths => const ['a.txt'];
+List<Path> get paths => const [Path('a.txt')];
 Iterable<String> get items => titles;
 Iterable<Map<String, String>> get records =>
     const [{'name': 'Ada', 'amount': '1'}];
@@ -146,13 +153,13 @@ Progress get bar => Progress(total: 10, message: 'Working');
 Spinner get spin => Spinner();
 Table get table => Table(headers: const ['a', 'b']);
 Robots get robots =>
-    parseRobots('User-agent: *\nDisallow: /private');
+    'User-agent: *\nDisallow: /private'.parse(.robots);
 Pool<Uri> get pool => Pool<Uri>(size: 4);
 RateLimiter get limit => RateLimiter(10, per: const Duration(seconds: 1));
 Semaphore get gate => Semaphore(2);
-Iterable<FileSystemEntry> get files => listDirSync('out');
+Iterable<FileSystemEntry> get files => Path('out').sync.list();
 Iterable<String> get agents => const ['MyBot'];
-Csv get csvsheet => parseCsv('a,b\n1,2\n');
+Csv get csvsheet => 'a,b\n1,2\n'.parse(.csv);
 Send get mock => (f) async => Response.text(_html, fetch: f);
 Opt<bool> get force => Cli(const []).flag('force');
 Opt<bool> get verbose => Cli(const []).flag('verbose');
@@ -191,7 +198,7 @@ class Config {
 enum Mode { fast, slow, debug }
 
 Form get form => page.form('#login')!.at(seed);
-Crawler get crawler => crawl([Fetch(seed)])..using(mock);
+Crawler get crawler => crawl([Fetch(seed)], send: mock);
 CliParser get parser => CliParser();
 Fetcher get mockClient => Fetcher();
 String get report => 'report';

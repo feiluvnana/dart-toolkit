@@ -291,7 +291,7 @@ mixin _Spec {
   ///
   /// ```dart
   /// final timeout = parser.duration('timeout', defaultsTo: 30.s);
-  /// await get(url, timeout: timeout());
+  /// await Http.get(url, timeout: timeout());
   /// ```
   Opt<Duration> duration(
     String name, {
@@ -314,9 +314,7 @@ mixin _Spec {
     ),
     (cli, self) {
       final text = cli._readText(self);
-      return text == null
-          ? self.defaultsTo
-          : parseDuration(text) ?? self.defaultsTo;
+      return text == null ? self.defaultsTo : text.duration ?? self.defaultsTo;
     },
   );
 
@@ -352,9 +350,7 @@ mixin _Spec {
     ),
     (cli, self) {
       final text = cli._readText(self);
-      return text == null
-          ? self.defaultsTo
-          : parseTime(text) ?? self.defaultsTo;
+      return text == null ? self.defaultsTo : text.date ?? self.defaultsTo;
     },
   );
 

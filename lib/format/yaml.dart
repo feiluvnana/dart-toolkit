@@ -10,6 +10,7 @@
 /// file looks like is knowledge Dart does not have. That is the same argument
 /// that admitted archives, with a different noun — and the reason
 /// [parseJson] sits beside this rather than in `util`.
+/// {@category Formats}
 library;
 
 import 'dart:convert';
@@ -30,18 +31,16 @@ import 'format.dart';
 /// the format namespaces are learnable from each other:
 ///
 /// ```dart
-/// final pubspec = parseYaml('version: 8.0.0\ndependencies: {}');
+/// final pubspec = 'version: 8.0.0\ndependencies: {}'.parse(.yaml);
 /// pubspec.text('version');                            // '8.0.0'
 /// pubspec.at('dependencies').count;
-/// await writeText('out.yaml', toYamlString({'name': 'x'}));
+/// await Path('out.yaml').writeText(const YamlFormat().format({'name': 'x'}));
 /// ```
 ///
 /// Reading gives a [Json] cursor rather than a type of its own: YAML and JSON
 /// decode to the same maps, lists and scalars, so a second cursor would be two
 /// spellings of one operation.
-class YamlFormat
-    with FileFormat<Json, Object?>
-    implements DocumentFormat<Json> {
+class YamlFormat implements DocumentFormat<Json, Object?> {
   /// Creates the codec. Prefer the shared [DocumentFormat.yaml] instance.
   const YamlFormat();
 

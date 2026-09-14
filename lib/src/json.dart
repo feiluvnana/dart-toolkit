@@ -15,14 +15,15 @@
 /// Three doors produce the same cursor:
 ///
 /// ```dart
-/// res.parse(DocumentFormat.json).at('data.items');   // a response
-/// parseJson(text);                       // a string
-/// await readJson('config.json');      // a file
+/// res.parse(.json).at('data.items');   // a response
+/// text.parse(.json);                       // a string
+/// await Path('config.json').readJson();      // a file
 /// ```
 ///
 /// Navigation comes in two spellings, for the two questions: [Json.at] walks a
 /// dotted path to one node, and [Json.jsonpath] runs a JSONPath query and
 /// returns every match.
+/// {@category Formats}
 library;
 
 import '../src/jsonpath.dart';
@@ -36,11 +37,11 @@ import '../src/jsontext.dart';
 ///
 /// Reads never throw and never cast: a path that is not there, or holds
 /// something other than what was asked for, reads as `null` — the same
-/// contract [Slot.read], `Field.text` and [Sequence.first] keep, because the
+/// contract `Field.text` and `Markup.pick` keep, because the
 /// caller asked for a value and the honest answer is that there is not one.
 ///
 /// ```dart
-/// final doc = parseJson(body);
+/// final doc = body.parse(.json);
 ///
 /// doc.text('data.user.name');                   // String?
 /// doc.number('data.total');                     // num?
@@ -51,15 +52,15 @@ import '../src/jsontext.dart';
 /// ));                                           // List<({num? id, String? name})>
 /// ```
 ///
-/// There are no [Slot]s here. A slot exists so a *writer* and a *reader* in
-/// different places can agree on a key; reading a document is one place.
-/// `Slot` is the two-places case, and keeps its own typed keys.
+/// There are no typed keys here. A typed key exists so a *writer* and a
+/// *reader* in different places can agree on a name and a type; reading a
+/// document is one place, and a cursor reads what is already there.
 final class Json {
   /// The decoded value underneath — the escape hatch, and where a typed build
   /// of the whole document starts:
   ///
   /// ```dart
-  /// final config = Config.fromJson((await readJson(path)));
+  /// final config = Config.fromJson((await Path(path).readJson()));
   /// ```
   final Object? raw;
 
@@ -121,7 +122,7 @@ final class Json {
   /// after its language for the same reason:
   ///
   /// ```dart
-  /// final doc = parseJson(body);
+  /// final doc = body.parse(.json);
   ///
   /// doc.jsonpath(r'$.store.book[*].author');        // every author
   /// doc.jsonpath(r'$..price').map((p) => p.number()).nonNulls;
@@ -146,7 +147,7 @@ final class Json {
   ///
   /// Deliberately absent: script expressions, `$` inside a filter, and
   /// arithmetic. Each is a language rather than a query, and a filter that
-  /// needs one is a `keep` on the [Sequence] this returns.
+  /// needs one is a `where` on the list this returns.
   ///
   /// An expression this reader cannot parse selects nothing, matching how a
   /// missing path reads: a typo mid-crawl is an empty result to notice, not an
@@ -200,7 +201,7 @@ final class Json {
   /// half of `Markup.all`:
   ///
   /// ```dart
-  /// final items = res.parse(DocumentFormat.json).at('data.items').all((item) => (
+  /// final items = res.parse(.json).at('data.items').all((item) => (
   ///   sku: item.text('sku'),
   ///   price: item.number('price.amount'),
   /// ));

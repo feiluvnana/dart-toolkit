@@ -19,10 +19,10 @@ import 'ansi.dart';
 /// Interactive prompts, reachable as [consoleReader].
 ///
 /// ```dart
-/// final name = await consoleReader.ask('Project name');
-/// final go = await consoleReader.confirm('Continue?');
+/// final name = await Console.ask('Project name');
+/// final go = await Console.confirm('Continue?');
 /// final env =
-///     await consoleReader.pick('Target', options: ['dev', 'prod']);
+///     await Console.pick('Target', options: ['dev', 'prod']);
 /// ```
 class ConsoleReader {
   StreamSubscription<String>? _subscription;
@@ -52,7 +52,7 @@ class ConsoleReader {
   ///
   /// ```dart
   /// // setup: Future<void> fetch(Uri u) async {}
-  /// await for (final line in consoleReader.lines) {
+  /// await for (final line in Console.lines) {
   ///   await fetch(line.trim().url);
   /// }
   /// ```
@@ -78,9 +78,9 @@ class ConsoleReader {
   ///
   /// ```dart
   /// final urls =
-  ///     consoleReader.piped
-  ///         ? await consoleReader.lines.toList()
-  ///         : [await consoleReader.ask('URL')];
+  ///     Console.piped
+  ///         ? await Console.lines.toList()
+  ///         : [await Console.ask('URL')];
   /// ```
   bool get piped {
     try {

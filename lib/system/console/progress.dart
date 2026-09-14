@@ -32,7 +32,7 @@ enum ProgressUnit {
 ///
 /// ```dart
 /// final bar = Progress(total: files.length, message: 'Downloading');
-/// for (final f in files) { await readText(f.path); bar.tick(); }
+/// for (final f in files) { await Path(f.path).readText(); bar.tick(); }
 /// bar.done('Finished');
 /// ```
 class Progress {
@@ -107,7 +107,7 @@ class Progress {
     final fraction = total > 0 ? (_current / total).clamp(0.0, 1.0) : 0.0;
     final filled = (width * fraction).round();
     final metrics = unit == ProgressUnit.bytes
-        ? '${formatBytes(_current)} / ${formatBytes(total)}'
+        ? '${_current.formatBytes()} / ${total.formatBytes()}'
         : '$_current / $total';
 
     final parts = [
@@ -128,13 +128,13 @@ class Progress {
     if (elapsed.inMilliseconds <= 300 || _current <= 0) return const [];
     final perSecond = _current / (elapsed.inMilliseconds / 1000);
     final rate = unit == ProgressUnit.bytes
-        ? '${formatBytes(perSecond.round())}/s'
+        ? '${perSecond.round().formatBytes()}/s'
         : '${perSecond.toStringAsFixed(1)} items/s';
     if (total <= _current || perSecond <= 0) return [rate.dim()];
     final remaining = Duration(
       seconds: ((total - _current) / perSecond).round(),
     );
-    return [rate.dim(), 'ETA ${formatDuration(remaining)}'.dim()];
+    return [rate.dim(), 'ETA ${remaining.format()}'.dim()];
   }
 
   /// Fills the bar, prints [message] and moves to the next line.

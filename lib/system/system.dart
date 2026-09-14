@@ -9,7 +9,7 @@
 /// with [adoptProcess], and only then terminates. `exit` does none of that.
 ///
 /// ```dart
-/// onExit(() async => removePath('.tmp'));
+/// onExit(() async => Path('.tmp').delete());
 ///
 /// final res = await run('git', ['status', '--short']);
 /// if (res.ok) print(res.stdout);
@@ -19,6 +19,7 @@
 ///
 /// Argument parsing is not here. It reads a `List<String>` and touches
 /// nothing, so it is the `cli` library.
+/// {@category System}
 library;
 
 import 'dart:async';
@@ -27,6 +28,7 @@ import 'dart:io';
 import '../src/proc.dart' as proc;
 import '../src/proc.dart' show SysResult;
 import '../src/shared.dart';
+import '../io/path.dart';
 import 'env.dart';
 
 export '../src/proc.dart' show SysResult;
@@ -97,18 +99,38 @@ Future<Never> shutdown([int code = 0]) => proc.Sys.shutdown(code);
 /// The number of CPU cores available on this machine.
 int get cpuCount => Platform.numberOfProcessors;
 
-/// Registers [file] for deletion if the program is interrupted.
+/// What a graceful shutdown does to a file, and to a child process.
 ///
-/// Undone by [untrackFile]. The cleanup runs as part of [shutdown].
-void trackFile(File file) => proc.Sys.track(file);
-
-/// Stops tracking [file], leaving it in place on interruption.
-void untrackFile(File file) => proc.Sys.untrack(file);
-
-/// Takes responsibility for killing [process] if this program is interrupted.
+/// These were four top-level functions — `trackFile`, `untrackFile`,
+/// `adoptProcess`, `disownProcess` — for two questions with obvious receivers.
 ///
-/// Undone by [disownProcess].
-void adoptProcess(Process process) => proc.Sys.adopt(process);
+/// ```dart
+/// final scratch = await Path.tempFile();
+/// scratch.deleteOnExit();          // gone if the run is interrupted
+///
+/// final server = await Process.start('node', ['server.js']);
+/// server.killOnExit();             // not left behind
+/// ```
+///
+/// The cleanup runs as part of [shutdown], which [onExit] hooks also run in.
+extension ExitCleanup on Path {
+  /// Deletes this file if the program is interrupted.
+  ///
+  /// Undone by [keepOnExit].
+  void deleteOnExit() => proc.Sys.track(File(raw));
 
-/// Gives up responsibility for [process], leaving it running.
-void disownProcess(Process process) => proc.Sys.disown(process);
+  /// Leaves this file in place on interruption, undoing [deleteOnExit].
+  void keepOnExit() => proc.Sys.untrack(File(raw));
+}
+
+/// What a graceful shutdown does to a child process.
+extension ProcessCleanup on Process {
+  /// Takes responsibility for killing this process if the program is
+  /// interrupted.
+  ///
+  /// Undone by [leaveRunning].
+  void killOnExit() => proc.Sys.adopt(this);
+
+  /// Gives up responsibility for this process, leaving it running.
+  void leaveRunning() => proc.Sys.disown(this);
+}

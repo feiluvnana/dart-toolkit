@@ -852,13 +852,13 @@ class Fs {
   static Future<File> download(
     Uri url,
     String path, {
-    http.Client? pool,
+    http.Client? client,
     Map<String, String>? headers,
     void Function(int received, int total)? onprogress,
     String part = '.part',
   }) {
-    final httpClient = pool ?? http.Client();
-    final ownsClient = pool == null;
+    final httpClient = client ?? http.Client();
+    final ownsClient = client == null;
     return atomic(path, part: part, (staging) async {
       try {
         final request = http.Request('GET', url);
@@ -903,7 +903,7 @@ class Fs {
   /// Reads [path] as decoded lines, blocking — on the first walk, not before.
   ///
   /// A generator rather than `readAsLinesSync`, so [readLines] is the
-  /// lazy view a [Sequence] promises: nothing is read until something walks
+  /// lazy view a `Stream` promises: nothing is read until something walks
   /// it, a walk that stops early stops reading, and a second walk re-reads
   /// the file rather than replaying a snapshot of it.
   static Iterable<String> linesSync(

@@ -8,8 +8,8 @@
 /// A parser, not a fetcher: fetching one is the crawl's job.
 ///
 /// ```dart
-/// final rules = (await get('https://x.test/robots.txt'.url))
-///     .parse(DocumentFormat.robots);
+/// final rules = (await Http.get('https://x.test/robots.txt'.url))
+///     .parse(.robots);
 /// rules.allowed('https://x.test/admin'.url, agent: 'MyBot');
 /// ```
 ///
@@ -17,6 +17,7 @@
 /// through the same [Send] the crawl uses, so politeness works against a
 /// fixture transport — which `Robots.load` could not do, because it reached
 /// for the shared client itself.
+/// {@category Formats}
 library;
 
 import '../src/format.dart';
@@ -27,9 +28,7 @@ import 'format.dart';
 // ============================================================================
 
 /// The `robots.txt` codec. Reach it as [parseRobots] or [DocumentFormat.robots].
-class RobotsFormat
-    with FileFormat<Robots, Robots>
-    implements DocumentFormat<Robots> {
+class RobotsFormat implements DocumentFormat<Robots, Robots> {
   /// Creates the codec. Prefer the shared [DocumentFormat.robots] instance.
   const RobotsFormat();
 

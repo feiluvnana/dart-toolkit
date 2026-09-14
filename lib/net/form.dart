@@ -1,14 +1,13 @@
 /// # Sending a Form
 ///
 /// The other half of [Form]. Reading a `<form>` — its action, its method, the
-/// values its controls would submit — is HTML, and lives in [parseHtml].
-/// Sending one is a socket, and lives here.
+/// values its controls would submit — is HTML, and lives behind
+/// `markup.form(...)`. Sending one is a socket, and lives here.
 ///
-/// This is the same shape as `io` declaring `Sequence.dump` on a `collection`
-/// type: the domain that owns the *verb* declares the extension, on the type
-/// the domain that owns the *noun* holds. Through 5.5.0 both halves were in
-/// `net`, walking a parsed DOM in the domain whose own doc says it parses
-/// nothing.
+/// The domain that owns the *verb* declares the extension, on the type the
+/// domain that owns the *noun* holds. Through 5.5.0 both halves were in `net`,
+/// walking a parsed DOM in the domain whose own doc says it parses nothing.
+/// {@category Networking}
 library;
 
 import 'dart:async';
@@ -29,15 +28,15 @@ extension Sending on Form {
   /// stage that has to log in or search is one call rather than three details
   /// to get right. Inside a crawl this is what `next` returns:
   ///
-  /// ```dart no-compile
-  /// net.crawl([Fetch(seed)].seq, (res) => switch (res.fetch.tag) {
+  /// ```dart
+  /// crawl([seed], next: (res) => switch (res.fetch.tag) {
   ///   null => [
-  ///     res.parse(DocumentFormat.html).form('#login')!
+  ///     res.parse(.html).form('#login')!
   ///         .at(res.url)
   ///         .fill({'user': user, 'pass': pass})
   ///         .fetch(tag: 'home'),
-  ///   ].seq,
-  ///   _ => const Sequence<Fetch>([]),
+  ///   ],
+  ///   _ => const <Fetch>[],
   /// });
   /// ```
   ///
@@ -82,8 +81,8 @@ extension Sending on Form {
   ///
   /// ```dart
   /// final session = Fetcher(session: true);
-  /// final login = await session.send(HttpMethod.get, 'https://example.test/login'.url);
-  /// final home = await login.parse(DocumentFormat.html).form('#login')!
+  /// final login = await session.send(.get, 'https://example.test/login'.url);
+  /// final home = await login.parse(.html).form('#login')!
   ///     .at(login.url)
   ///     .fill({'user': 'me', 'pass': 'secret'})
   ///     .send(using: session);
@@ -92,7 +91,7 @@ extension Sending on Form {
   /// Inside a crawl use [fetch], which hands the request back for the
   /// frontier to schedule rather than sending it here and now.
   Future<Response> send({Send? using, Map<String, String>? headers}) {
-    final send = using ?? httpClient.call;
+    final send = using ?? Http.client.call;
     return send(fetch(headers: headers));
   }
 

@@ -1,0 +1,33 @@
+dartdoc:
+  categories:
+    Files:
+      name: Files
+    Networking:
+      name: Networking
+    Crawling:
+      name: Crawling
+    Formats:
+      name: Formats
+    System:
+      name: System
+    Terminal:
+      name: Terminal
+    CLI:
+      name: CLI
+    Concurrency:
+      name: Concurrency
+    Collections:
+      name: Collections
+    Utilities:
+      name: Utilities
+  categoryOrder:
+    - Files
+    - Networking
+    - Crawling
+    - Formats
+    - Collections
+    - Concurrency
+    - System
+    - Terminal
+    - CLI
+    - Utilities

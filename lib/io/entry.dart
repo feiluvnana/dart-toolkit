@@ -14,6 +14,7 @@
 /// The door is still there, once: [FileSystemEntry.entity], the way `Json.raw`
 /// and `Markup.document` are. Reaching for it is a visible choice rather than
 /// the default.
+/// {@category Files}
 library;
 
 import 'dart:io';
@@ -51,9 +52,9 @@ enum FileSystemEntryKind {
 /// that lets every `io` member stay complete in itself:
 ///
 /// ```dart
-/// for (final entry in listDirSync('out')) {
+/// for (final entry in Path('out').sync.list()) {
 ///   if (entry.isDir) continue;
-///   if (fileExtension(entry.path) == '.part') removePathSync(entry.path);
+///   if (Path(entry.path).ext == '.part') Path(entry.path).sync.delete();
 /// }
 /// ```
 ///

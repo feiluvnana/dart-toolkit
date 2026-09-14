@@ -324,13 +324,13 @@ void main() {
       final rows = [
         {'a': '1', 'b': '2'},
       ];
-      expect(toCsvString(rows), 'a,b\n1,2\n');
-      expect(toCsvString(rows, newline: '\r\n'), 'a,b\r\n1,2\r\n');
+      expect(const CsvFormat().format(rows), 'a,b\n1,2\n');
+      expect(const CsvFormat().format(rows, newline: '\r\n'), 'a,b\r\n1,2\r\n');
     });
 
     test('a header-only render honours it too', () {
       expect(
-        toCsvString(
+        const CsvFormat().format(
           const <Map<String, Object?>>[],
           headers: ['a', 'b'],
           newline: '\r\n',
@@ -344,13 +344,13 @@ void main() {
       addTearDown(() => temp.deleteSync(recursive: true));
       final path = '${temp.path}/out.csv';
 
-      writeCsvSync(path, [
+      Path(path).sync.writeCsv([
         {'a': '1'},
       ], newline: '\r\n');
 
       expect(File(path).readAsStringSync(), 'a\r\n1\r\n');
       // And it reads back as one row, not two.
-      expect(await readCsvRecords(path).toList(), [
+      expect(await Path(path).csvRecords().toList(), [
         {'a': '1'},
       ]);
     });
@@ -361,11 +361,11 @@ void main() {
       final path = '${temp.path}/in.csv';
       File(path).writeAsStringSync('a,b\n1,2\n');
 
-      final Csv sheet = parseCsv(File(path).readAsStringSync());
-      final List<Map<String, String>> records = await readCsvRecords(
+      final Csv sheet = File(path).readAsStringSync().parse(.csv);
+      final List<Map<String, String>> records = await Path(
         path,
-      ).toList();
-      final List<List<String>> rows = await readCsvRows(path).toList();
+      ).csvRecords().toList();
+      final List<List<String>> rows = await Path(path).csvRows().toList();
 
       expect(sheet.maps.toList(), records);
       // The cursor keeps the header out of the rows; the flow does not, so
@@ -521,9 +521,9 @@ void main() {
 
         for (final name in ['out.zip', 'out.tar', 'out.tar.gz']) {
           final archive = '${root.path}/$name';
-          await zip('${root.path}/src', archive);
+          await Path('${root.path}/src').zipTo(archive);
           final dest = '${root.path}/back_$name';
-          await unzip(archive, dest);
+          await Path(archive).unzipInto(dest);
 
           final restored = File('$dest/run.sh');
           expect(restored.existsSync(), isTrue, reason: name);
@@ -549,8 +549,8 @@ void main() {
         await run('chmod', ['600', file.path]);
       }
 
-      await zip(file.path, '${root.path}/one.zip');
-      await unzip('${root.path}/one.zip', '${root.path}/back');
+      await Path(file.path).zipTo('${root.path}/one.zip');
+      await Path('${root.path}/one.zip').unzipInto('${root.path}/back');
 
       if (!Platform.isWindows) {
         expect(

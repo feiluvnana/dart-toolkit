@@ -385,7 +385,7 @@ void main() {
         '<section><h2>only</h2></section>'
         '</body></html>';
 
-    Markup page() => parseHtml(html);
+    Markup page() => html.parse(.html);
 
     // csslib evaluates :first-child and :last-child and then stops.
     // `:nth-child(2)` matched nothing at all — a scraper written against it
@@ -473,7 +473,7 @@ void main() {
         '</body></html>';
 
     test('agrees with find for every shape it claims', () {
-      final page = parseHtml(html);
+      final page = html.parse(.html);
       final every = page.$('*').elements;
       const selectors = [
         'p',
@@ -521,7 +521,7 @@ void main() {
     test(
       'anything with a combinator or a pseudo still takes the slow path',
       () {
-        final page = parseHtml(html);
+        final page = html.parse(.html);
         final b = page.$('.active').elements.first;
         expect(b.query.matching('div p').count, equals(1));
         expect(b.query.matching('div > p.active').count, equals(1));

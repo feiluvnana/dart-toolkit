@@ -11,18 +11,19 @@
 /// ```dart
 /// // setup: final index = 'https://x.test/sitemap.xml'.url;
 /// final urls = await crawl(
-///   [Fetch(index)],
-///   (r) => parseSitemap(r.text).map(Fetch.new),
-/// ).depth(8).flow.map((r) => r.url).toList();
+///   [index],
+///   next: (r) => r.text.parse(.sitemap),
+///   depth: 8,
+/// ).map((r) => r.url).toList();
 /// ```
 ///
 /// That is nine lines against ninety, and it cannot loop: `Sitemap.load`
 /// carried its own visited set and its own `maxDepth: 8` to avoid the index
 /// that points back at itself.
+/// {@category Formats}
 library;
 
 import '../src/format.dart';
-import 'format.dart';
 
 // ============================================================================
 // SITEMAPS (format.sitemap.*)
@@ -38,9 +39,7 @@ final RegExp _loc = RegExp(
 /// Reads XML `<urlset>`, XML `<sitemapindex>` and newline-delimited plain
 /// text alike, because all three are what a `Sitemap:` line points at and
 /// which one arrived is not the caller's question.
-class SitemapFormat
-    with FileFormat<List<Uri>, Iterable<Uri>>
-    implements DocumentFormat<List<Uri>> {
+class SitemapFormat implements DocumentFormat<List<Uri>, Iterable<Uri>> {
   /// Creates the codec. Prefer the shared [DocumentFormat.sitemap] instance.
   const SitemapFormat();
 

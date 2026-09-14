@@ -30,6 +30,7 @@
 /// 6.0.0 — a third door onto one operation, and the one that had to be an
 /// extension because `String` is not ours. `HtmlFormat().\$(markup, selector)`
 /// is the member form and this is the global one; the extension went.
+/// {@category Formats}
 library;
 
 import 'package:html/parser.dart' as html_parser;
@@ -42,15 +43,15 @@ import 'format.dart';
 // HTML
 // ============================================================================
 
-/// Entry point for HTML, reachable as [parseHtml].
+/// Entry point for HTML, reachable as `text.parse(.html)`.
 ///
 /// ```dart
-/// final page = parseHtml(res.body);
-/// final cached = await const HtmlFormat().read('fixtures/product.html');
-/// writeTextSync('out.html', const HtmlFormat().format(page.$('.card')));
+/// final page = res.body.parse(.html);
+/// final cached = await Path('fixtures/product.html').read(.html);
+/// Path('out.html').sync.writeText(const HtmlFormat().format(page.$('.card')));
 /// ```
 ///
-/// `const HtmlFormat().write(path, markup)` writes one to disk atomically; [format]
+/// `Path(path).write(markup, as: .html)` writes one to disk atomically; [format]
 /// is the string half, for when the markup is going somewhere that is not a
 /// file.
 ///
@@ -59,9 +60,7 @@ import 'format.dart';
 /// document. `stripHtmlTags(t)` is a regex over the string and costs nothing;
 /// it is the one for a snippet, and the one to reach for when there are ten
 /// thousand of them.
-class HtmlFormat
-    with FileFormat<Markup, Markup>
-    implements DocumentFormat<Markup> {
+class HtmlFormat implements DocumentFormat<Markup, Markup> {
   /// Creates the codec. Prefer the shared [DocumentFormat.html] instance.
   const HtmlFormat();
 
@@ -117,7 +116,7 @@ class HtmlFormat
 
 /// Parses [markup] into a queryable [Markup] cursor.
 ///
-/// The jQuery entry point, an alias of [parseHtml]. Opt-in via
+/// The jQuery entry point, an alias of `text.parse(.html)`. Opt-in via
 /// `package:dart_toolkit/html.dart`, because `$` in every script's global
 /// scope is a cost the default surface should not charge.
 ///

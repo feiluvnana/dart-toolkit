@@ -4,11 +4,10 @@
 /// escaped quotes, `\r\n` or `\n` line endings, and a delimiter of any length.
 ///
 /// It is a codec, spelled exactly like [JsonFormat], [YamlFormat] and
-/// [TomlFormat] — `parse`, `read`, `format` — and it sat under `io` through
+/// [TomlFormat] — `parse` and `format` — and it sat under `io` through
 /// 5.1.0 for a historical reason. It is clear that a
 /// file format is a *subject*, which is the sentence that admitted
-/// archives, then [parseJson], [parseYaml], [parseToml] and [parseHtml]. CSV was the
-/// one left outside.
+/// archives, then JSON, YAML, TOML and HTML. CSV was the one left outside.
 ///
 /// 4.0.0 and 5.0.0 both deferred the move with the same worry — that splitting
 /// A second CSV home would create two spellings for *read a CSV file*. The [DocumentFormat] seam
@@ -18,16 +17,17 @@
 /// than memory rather than about CSV.
 ///
 /// ```dart
-/// final parsed = parseCsv('a,b\n1,2\n');    // Csv
-/// final sheet = await const CsvFormat().read('a.csv');    // free, from FileFormat
-/// writeTextSync('out.csv', toCsvString(sheet.maps));
+/// final parsed = 'a,b\n1,2\n'.parse(.csv);    // Csv
+/// final sheet = await Path('a.csv').read(.csv);    // free, from FileFormat
+/// Path('out.csv').sync.writeText(const CsvFormat().format(sheet.maps));
 ///
-/// final fetched = res.parse(DocumentFormat.csv);          // and this now works
+/// final fetched = res.parse(.csv);          // and this now works
 /// ```
 ///
 /// That last line is the unlock. A crawl that fetches a CSV export had no way
 /// to read it through the seam every other format goes through; it is now the
 /// same call as `res.parse(format.json)`.
+/// {@category Formats}
 library;
 
 import '../src/csvtext.dart';
@@ -44,9 +44,7 @@ import 'format.dart';
 /// Reading a file too large to hold is [readCsvRows] and [readCsvRecords],
 /// and writing one a row at a time is [writeCsv]. Those are about
 /// files, and they stayed where files live.
-class CsvFormat
-    with FileFormat<Csv, Iterable<Map<String, Object?>>>
-    implements DocumentFormat<Csv> {
+class CsvFormat implements DocumentFormat<Csv, Iterable<Map<String, Object?>>> {
   /// Creates the codec. Prefer the shared [DocumentFormat.csv] instance.
   const CsvFormat();
 
@@ -73,7 +71,7 @@ class CsvFormat
   /// ending Excel and RFC 4180 expect.
   ///
   /// ```dart
-  /// toCsvString([
+  /// const CsvFormat().format([
   ///   {'name': 'Ada', 'born': 1815},
   ///   {'name': 'Alan', 'born': 1912},
   /// ]);
@@ -106,7 +104,7 @@ class CsvFormat
   /// reads back. [headers] is written as a first line when given.
   ///
   /// ```dart
-  /// writeTextSync('out.csv', const CsvFormat().cells([
+  /// Path('out.csv').sync.writeText(const CsvFormat().cells([
   ///   ['Ada', 1815],
   ///   ['Alan', 1912],
   /// ], headers: ['name', 'born']));

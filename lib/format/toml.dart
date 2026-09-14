@@ -3,6 +3,7 @@
 /// The same three members YAML has, over the same [Json] cursor, for
 /// the other configuration format a script meets — Rust's `Cargo.toml`,
 /// Python's `pyproject.toml`, and anything else that picked TOML over YAML.
+/// {@category Formats}
 library;
 
 import 'package:toml/toml.dart' as toml;
@@ -18,15 +19,13 @@ import 'format.dart';
 /// The TOML codec. Reach it as [parseToml] or [DocumentFormat.toml].
 ///
 /// ```dart
-/// final cargo = parseToml('version = "1.0.0"');
+/// final cargo = 'version = "1.0.0"'.parse(.toml);
 /// cargo.text('version');
 /// ```
 ///
 /// Spelled member for member like [JsonFormat] and [YamlFormat], because
 /// the format namespaces should be learnable from each other.
-class TomlFormat
-    with FileFormat<Json, Object?>
-    implements DocumentFormat<Json> {
+class TomlFormat implements DocumentFormat<Json, Object?> {
   /// Creates the codec. Prefer the shared [DocumentFormat.toml] instance.
   const TomlFormat();
 

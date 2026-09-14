@@ -29,7 +29,7 @@ Send serve(Map<String, String> pages) =>
     (fetch) async => Response.text(pages['${fetch.url}'] ?? '', fetch: fetch);
 
 Iterable<Fetch> links(Response res) =>
-    res.parse(DocumentFormat.html).$('a').attrs('href').map(res.follow);
+    res.parse(.html).$('a').attrs('href').map(res.follow);
 
 String tempPath(String name) =>
     '${Directory.systemTemp.createTempSync('dt_resume_').path}/$name';
@@ -113,7 +113,7 @@ void main() {
       final crawler = crawl([
         Fetch(Uri.parse('https://example.com/a')),
         Fetch(Uri.parse('https://example.com/b')),
-      ])..using(serve(const {}));
+      ], send: serve(const {}));
 
       await crawler.run();
       final position = crawler.position;
@@ -129,19 +129,20 @@ void main() {
       addTearDown(() => Directory(p.dirname(path)).deleteSync(recursive: true));
 
       late Crawler crawler;
-      crawler = crawl([Fetch('https://example.com/1'.url)], links)
-        ..concurrent(1)
-        ..resume(path)
-        ..using(
-          halfway(
-            const {
-              'https://example.com/1':
-                  '<a href="/2">2</a><a href="/3">3</a><a href="/4">4</a>',
-            },
-            1,
-            () => crawler,
-          ),
-        );
+      crawler = crawl(
+        [Fetch('https://example.com/1'.url)],
+        next: links,
+        concurrency: 1,
+        resume: path,
+        send: halfway(
+          const {
+            'https://example.com/1':
+                '<a href="/2">2</a><a href="/3">3</a><a href="/4">4</a>',
+          },
+          1,
+          () => crawler,
+        ),
+      );
 
       await crawler.run();
 
@@ -192,8 +193,9 @@ void main() {
     });
 
     test('a started crawler refuses to be restored', () async {
-      final crawler = crawl([Fetch('https://example.com/a'.url)])
-        ..using(serve(const {'https://example.com/a': '<h1>a</h1>'}));
+      final crawler = crawl([
+        Fetch('https://example.com/a'.url),
+      ], send: serve(const {'https://example.com/a': '<h1>a</h1>'}));
       await crawler.run();
       expect(
         () => crawler.restore(const <String, Object?>{}),
@@ -208,19 +210,20 @@ void main() {
       addTearDown(() => Directory(p.dirname(path)).deleteSync(recursive: true));
 
       late Crawler crawler;
-      crawler = crawl([Fetch('https://example.com/1'.url)], links)
-        ..concurrent(1)
-        ..resume(path)
-        ..using(
-          halfway(
-            const {
-              'https://example.com/1':
-                  '<a href="/2">2</a><a href="/3">3</a><a href="/4">4</a>',
-            },
-            1,
-            () => crawler,
-          ),
-        );
+      crawler = crawl(
+        [Fetch('https://example.com/1'.url)],
+        next: links,
+        concurrency: 1,
+        resume: path,
+        send: halfway(
+          const {
+            'https://example.com/1':
+                '<a href="/2">2</a><a href="/3">3</a><a href="/4">4</a>',
+          },
+          1,
+          () => crawler,
+        ),
+      );
 
       final stats = await crawler.run();
 
@@ -251,19 +254,25 @@ void main() {
       };
 
       late Crawler one;
-      one = crawl([Fetch('https://example.com/1'.url)], links)
-        ..concurrent(1)
-        ..resume(path)
-        ..using(halfway(pages, 1, () => one));
+      one = crawl(
+        [Fetch('https://example.com/1'.url)],
+        next: links,
+        concurrency: 1,
+        resume: path,
+        send: halfway(pages, 1, () => one),
+      );
 
       final first = await one
           .map((Response res) => res.url.toString())
           .toList();
       expect(first, ['https://example.com/1']);
 
-      final two = crawl([Fetch('https://example.com/1'.url)], links)
-        ..resume(path)
-        ..using(serve(pages));
+      final two = crawl(
+        [Fetch('https://example.com/1'.url)],
+        next: links,
+        resume: path,
+        send: serve(pages),
+      );
 
       final second = await two
           .map((Response res) => res.url.toString())
@@ -294,19 +303,25 @@ void main() {
       };
 
       late Crawler one;
-      one = crawl([Fetch('https://example.com/1'.url)], links)
-        ..concurrent(1)
-        ..resume(path)
-        ..limit(2)
-        ..using(halfway(pages, 1, () => one));
+      one = crawl(
+        [Fetch('https://example.com/1'.url)],
+        next: links,
+        concurrency: 1,
+        resume: path,
+        limit: 2,
+        send: halfway(pages, 1, () => one),
+      );
       final first = await one.run();
       expect(first.fetched, 1);
 
-      final two = crawl([Fetch('https://example.com/1'.url)], links)
-        ..concurrent(1)
-        ..resume(path)
-        ..limit(2)
-        ..using(serve(pages));
+      final two = crawl(
+        [Fetch('https://example.com/1'.url)],
+        next: links,
+        concurrency: 1,
+        resume: path,
+        limit: 2,
+        send: serve(pages),
+      );
       final second = await two.run();
       // Two pages across both runs, not two more.
       expect(second.fetched, 2);
@@ -317,9 +332,11 @@ void main() {
       addTearDown(() => Directory(p.dirname(path)).deleteSync(recursive: true));
       File(path).writeAsStringSync('{not json');
 
-      final crawler = crawl([Fetch('https://example.com/1'.url)])
-        ..resume(path)
-        ..using(serve(const {}));
+      final crawler = crawl(
+        [Fetch('https://example.com/1'.url)],
+        resume: path,
+        send: serve(const {}),
+      );
 
       expect(crawler.run(), throwsFormatException);
     });
@@ -332,10 +349,11 @@ void main() {
           () => Directory(p.dirname(path)).deleteSync(recursive: true),
         );
 
-        await (crawl([Fetch('https://example.com/1'.url)])
-              ..resume(path)
-              ..using(serve(const {'https://example.com/1': '<p>one</p>'})))
-            .run();
+        await (crawl(
+          [Fetch('https://example.com/1'.url)],
+          resume: path,
+          send: serve(const {'https://example.com/1': '<p>one</p>'}),
+        )).run();
 
         // The exit hook that flushes the position has to come off again: it
         // keeps the signal watcher, and so the isolate, alive.

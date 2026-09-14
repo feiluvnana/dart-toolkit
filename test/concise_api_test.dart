@@ -111,27 +111,24 @@ void main() {
       env.clear();
     });
 
-    test(
-      'a number that is not a number is reported, not silently defaulted',
-      () {
-        // This is what `get('concurrency', 4)` used to do: hand back 4 and let
-        // the script run on a number nobody asked for.
-        final cli = Cli(['--concurrency=fast']);
-        final size = cli.number('concurrency', defaultsTo: 4);
+    test('a number that is not a number is reported, not silently defaulted', () {
+      // This is what `Http.get('concurrency', 4)` used to do: hand back 4 and let
+      // the script run on a number nobody asked for.
+      final cli = Cli(['--concurrency=fast']);
+      final size = cli.number('concurrency', defaultsTo: 4);
 
-        expect(size(), equals(4));
-        expect(
-          () => cli.require(),
-          throwsA(
-            isA<ArgumentError>().having(
-              (e) => e.message.toString(),
-              'message',
-              allOf(contains('--concurrency'), contains('fast')),
-            ),
+      expect(size(), equals(4));
+      expect(
+        () => cli.require(),
+        throwsA(
+          isA<ArgumentError>().having(
+            (e) => e.message.toString(),
+            'message',
+            allOf(contains('--concurrency'), contains('fast')),
           ),
-        );
-      },
-    );
+        ),
+      );
+    });
 
     test('choice reads an enum, and refuses a name the enum does not have', () {
       final ok = Cli(['--level=warn']);
@@ -462,11 +459,11 @@ void main() {
     });
 
     test('parallelMap helper executes tasks', () async {
-      final results = await parallelMap(
-        ['a', 'b', 'c'],
-        (s) async => s.toUpperCase(),
-        concurrency: 3,
-      );
+      final results = await ([
+        'a',
+        'b',
+        'c',
+      ]).parallelMap((s) async => s.toUpperCase(), concurrency: 3);
       expect(results, equals(['A', 'B', 'C']));
     });
 
@@ -474,7 +471,7 @@ void main() {
       'a failing worker propagates its own error, not a null cast',
       () async {
         await expectLater(
-          parallelMap([1, 2, 3], (int i) async {
+          ([1, 2, 3]).parallelMap((int i) async {
             if (i == 2) throw StateError('boom');
             return i * 10;
           }),
@@ -520,7 +517,7 @@ void main() {
     ''';
 
     test('Markup href, hrefs, src, srcs, lines', () {
-      final q = parseHtml(html);
+      final q = html.parse(.html);
       expect(q.matching('.active').empty, isFalse);
       expect(q.matching('.missing').empty, isTrue);
 
@@ -555,10 +552,10 @@ void main() {
         bytes: html.codeUnits,
       );
 
-      expect(parseHtml(res.body).$('a').attr('href'), equals('/track/1.mp3'));
-      expect(parseHtml(res.body).$('img').attr('src'), equals('album.jpg'));
+      expect(res.body.parse(.html).$('a').attr('href'), equals('/track/1.mp3'));
+      expect(res.body.parse(.html).$('img').attr('src'), equals('album.jpg'));
       expect(
-        parseHtml(res.body).$xpath('//a').attr('href'),
+        res.body.parse(.html).$xpath('//a').attr('href'),
         equals('/track/1.mp3'),
       );
     });
@@ -582,11 +579,12 @@ void main() {
     test(
       'a flow that nobody collects fetches nothing, and stats is a record',
       () async {
-        final crawler = crawl([Fetch('https://example.com/'.url)])
-          ..using((Fetch fetch) async => Response.text('ok', fetch: fetch));
+        final crawler = crawl([
+          Fetch('https://example.com/'.url),
+        ], send: (Fetch fetch) async => Response.text('ok', fetch: fetch));
 
         // Built and thrown away: the workers start in the flow's `onListen`.
-        crawler.flow;
+        crawler;
         expect(crawler.stats.fetched, isZero);
 
         final Stats stats = await crawler.run();
@@ -623,7 +621,7 @@ void main() {
 
   group('Crawler entry points', () {
     test('crawl configures without running', () {
-      final crawler = crawl([Fetch('https://example.com'.url)])..concurrent(3);
+      final crawler = crawl([Fetch('https://example.com'.url)], concurrency: 3);
       expect(crawler, isA<Crawler>());
       expect(crawler.stats.fetched, isZero);
     });

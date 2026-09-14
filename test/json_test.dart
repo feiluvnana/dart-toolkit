@@ -20,17 +20,17 @@ const _store = '''
 ''';
 
 void main() {
-  final doc = parseJson(_store);
+  final doc = _store.parse(.json);
 
   group('format.json', () {
     test('parse and format are the string doors', () {
-      expect(parseJson('{"a":1}').number('a'), equals(1));
-      expect(toJsonString({'a': 1}, indent: 0), equals('{"a":1}'));
-      expect(toJsonString({'a': 1}), contains('\n  "a": 1'));
+      expect('{"a":1}'.parse(.json).number('a'), equals(1));
+      expect(const JsonFormat().format({'a': 1}, indent: 0), equals('{"a":1}'));
+      expect(const JsonFormat().format({'a': 1}), contains('\n  "a": 1'));
     });
 
     test('text that is not JSON reads as the empty cursor', () {
-      final broken = parseJson('not json at all');
+      final broken = 'not json at all'.parse(.json);
       expect(broken.empty, isTrue);
       expect(broken.text('a'), isNull);
       expect(broken.raw, isNull);
@@ -55,7 +55,7 @@ void main() {
       expect(doc.text('store.bicycle.price'), equals('19.95'));
       expect(doc.flag('store.bicycle.electric'), isFalse);
       expect(doc.flag('store.bicycle.colour'), isNull);
-      expect(parseJson('{"a":"true"}').flag('a'), isTrue);
+      expect('{"a":"true"}'.parse(.json).flag('a'), isTrue);
     });
 
     test('count and empty answer every shape', () {
@@ -90,9 +90,11 @@ void main() {
 
     test('an array of scalars reads as text through all', () {
       expect(
-        parseJson(
-          '["a", 2, true, {"x":1}]',
-        ).all((item) => item.text()).nonNull.toList(),
+        '["a", 2, true, {"x":1}]'
+            .parse(.json)
+            .all((item) => item.text())
+            .nonNull
+            .toList(),
         equals(['a', '2', 'true']),
       );
     });
@@ -138,15 +140,21 @@ void main() {
       expect(doc.jsonpath(r'$.store.book[0:2]').length, equals(2));
       expect(doc.jsonpath(r'$.store.book[:2]').length, equals(2));
       expect(
-        parseJson(
-          '[1,2,3,4,5]',
-        ).jsonpath(r'$[::2]').map((n) => n.number()).whereType<num>().toList(),
+        '[1,2,3,4,5]'
+            .parse(.json)
+            .jsonpath(r'$[::2]')
+            .map((n) => n.number())
+            .whereType<num>()
+            .toList(),
         equals([1, 3, 5]),
       );
       expect(
-        parseJson(
-          '[1,2,3]',
-        ).jsonpath(r'$[::-1]').map((n) => n.number()).whereType<num>().toList(),
+        '[1,2,3]'
+            .parse(.json)
+            .jsonpath(r'$[::-1]')
+            .map((n) => n.number())
+            .whereType<num>()
+            .toList(),
         equals([3, 2, 1]),
       );
     });
@@ -220,16 +228,21 @@ void main() {
         '{"data":{"items":[{"sku":"a"},{"sku":"b"}]}}',
         fetch: Fetch('https://example.com'.url),
       );
-      expect(parseJson(res.body).at('data.items').count, equals(2));
+      expect(res.body.parse(.json).at('data.items').count, equals(2));
       expect(
-        parseJson(res.body).at('data.items').all((i) => i.text('sku')).toList(),
+        res.body
+            .parse(.json)
+            .at('data.items')
+            .all((i) => i.text('sku'))
+            .toList(),
         equals(['a', 'b']),
       );
-      expect(parseJson(res.body).at('').raw, isA<Map<String, Object?>>());
+      expect(res.body.parse(.json).at('').raw, isA<Map<String, Object?>>());
       expect(
-        parseJson(
-          Response.text('<html>', fetch: Fetch('https://example.com'.url)).body,
-        ).at('a').empty,
+        (Response.text(
+          '<html>',
+          fetch: Fetch('https://example.com'.url),
+        ).body).parse(.json).at('a').empty,
         isTrue,
         reason: 'a body that is not JSON never throws here',
       );
@@ -238,17 +251,17 @@ void main() {
       try {
         final path = p.join(dir.path, 'c.json');
         File(path).writeAsStringSync(
-          toJsonString({
+          const JsonFormat().format({
             'hosts': ['a', 'b'],
           }),
         );
         expect(
-          (await const JsonFormat().read(
+          (await Path(
             path,
-          )).at('hosts').all((h) => h.text()).nonNull.toList(),
+          ).read(.json)).at('hosts').all((h) => h.text()).nonNull.toList(),
           equals(['a', 'b']),
         );
-        expect((await const JsonFormat().read(path)).count, equals(1));
+        expect((await Path(path).read(.json)).count, equals(1));
       } finally {
         dir.deleteSync(recursive: true);
       }

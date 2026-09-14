@@ -48,7 +48,7 @@ Response _page([String markup = _login]) =>
 /// write and does not have to be a member of [Response] that names a format.
 extension _FormOnReply on Response {
   Form? form([String selector = 'form']) =>
-      parseHtml(body).form(selector)?.at(url);
+      body.parse(.html).form(selector)?.at(url);
 }
 
 void main() {
@@ -215,16 +215,16 @@ void main() {
           .fill({'user': 'me'})
           .send(using: session.call);
 
-      expect(parseHtml(home.body).$('h1').text, 'me in with tok-123');
+      expect(home.body.parse(.html).$('h1').text, 'me in with tok-123');
       // The cookie the login page set came back with the submission.
-      expect(parseHtml(home.body).$('p').text, contains('sid=session-1'));
+      expect(home.body.parse(.html).$('p').text, contains('sid=session-1'));
       expect(seen.last, startsWith('POST /session'));
     });
 
     test('a crawl submits it by returning the request it describes', () async {
       final c = crawl(
         [Fetch('$base/login'.url)],
-        (res) => switch (res.fetch.tag) {
+        next: (res) => switch (res.fetch.tag) {
           null => [
             res
                 .form('#login')!
@@ -238,7 +238,7 @@ void main() {
 
       final landed = await c
           .where((res) => res.fetch.tag == 'home')
-          .map((res) => parseHtml(res.body).$('h1').text)
+          .map((res) => res.body.parse(.html).$('h1').text)
           .toList();
 
       expect(landed, ['crawler in with tok-123']);
@@ -249,7 +249,7 @@ void main() {
     test('two submissions of one form are two fetches, not one', () async {
       final c = crawl(
         [Fetch('$base/login'.url)],
-        (res) => switch (res.fetch.tag) {
+        next: (res) => switch (res.fetch.tag) {
           null => [
             res
                 .form('#login')!

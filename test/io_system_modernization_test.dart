@@ -3,84 +3,85 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:test/test.dart';
 
 void main() {
-  group('v7.0 Native dart:io Extensions', () {
-    late Directory tempDir;
+  group('Path: one type, no dart:io wrapper layer', () {
+    late Path root;
 
     setUp(() {
-      tempDir = Directory.systemTemp.createTempSync('dt_native_io_test_');
+      root = SyncPath.tempDir('dt_path_test_');
     });
 
     tearDown(() {
       try {
-        tempDir.deleteSync(recursive: true);
+        root.sync.delete();
       } catch (_) {}
     });
 
-    test(
-      'File extensions: writeAtomic, readLines, appendLine, readJson, writeJson',
-      () async {
-        final file = File('${tempDir.path}/test.txt');
-        await file.writeAtomic('line 1\nline 2');
+    test('text, lines and appending, async and under .sync', () async {
+      final file = root / 'test.txt';
+      await file.writeText('line 1\nline 2');
 
-        expect(file.existsSync(), isTrue);
-        final lines = await file.readLines();
-        expect(lines, ['line 1', 'line 2']);
+      expect(file.isFile, isTrue);
+      expect(await file.readLines(), ['line 1', 'line 2']);
 
-        await file.appendLine('line 3');
-        final updatedLines = file.readLinesSync();
-        expect(updatedLines, ['line 1', 'line 2', 'line 3']);
+      await file.appendText('\nline 3');
+      expect(file.sync.readLines(), ['line 1', 'line 2', 'line 3']);
+    });
 
-        final jsonFile = File('${tempDir.path}/data.json');
-        await jsonFile.writeJson({'greeting': 'hello', 'count': 100});
-        final json = await jsonFile.readJson();
-        expect(json.text('greeting'), 'hello');
-        expect(json.number('count'), 100);
+    test('JSON round-trips through the same path', () async {
+      final file = root / 'data.json';
+      await file.writeJson({'greeting': 'hello', 'count': 100});
 
-        final decoded = await jsonFile.readDecoded<Map<String, dynamic>>();
-        expect(decoded['greeting'], 'hello');
-        expect(decoded['count'], 100);
+      final json = await file.readJson();
+      expect(json.text('greeting'), 'hello');
+      expect(json.number('count'), 100);
 
-        final jsonSync = jsonFile.readJsonSync();
-        expect(jsonSync.text('greeting'), 'hello');
-        expect(jsonSync.number('count'), 100);
+      final sync = file.sync.readJson();
+      expect(sync.text('greeting'), 'hello');
+      expect(sync.number('count'), 100);
 
-        final decodedSync = jsonFile.readDecodedSync<Map<String, dynamic>>();
-        expect(decodedSync['greeting'], 'hello');
-        expect(decodedSync['count'], 100);
-      },
-    );
+      // The same file through the codec seam, with a leading dot.
+      expect((await file.read(.json)).text('greeting'), 'hello');
+    });
 
-    test('Directory extensions: walk, listEntries, ensure', () async {
-      final sub = Directory('${tempDir.path}/sub/nested');
-      await sub.ensure();
-      expect(sub.existsSync(), isTrue);
+    test('`/` composes, and the pieces come back apart', () {
+      final file = root / 'sub' / 'nested' / 'a.dart';
+      expect(file.name, 'a.dart');
+      expect(file.stem, 'a');
+      expect(file.ext, '.dart');
+      expect(file.parent.name, 'nested');
+      expect(file.parent.parent.name, 'sub');
+    });
 
-      final f1 = File('${sub.path}/a.dart');
-      final f2 = File('${sub.path}/b.txt');
-      f1.writeAsStringSync('void main() {}');
-      f2.writeAsStringSync('text');
+    test('makeDir, walk and list', () async {
+      final sub = root / 'sub' / 'nested';
+      await sub.makeDir();
+      expect(sub.isDir, isTrue);
 
-      final dartFiles = await tempDir
-          .walk(matching: RegExp(r'\.dart$'))
-          .toList();
+      await (sub / 'a.dart').writeText('void main() {}');
+      await (sub / 'b.txt').writeText('text');
+
+      final dartFiles = await root.walk(match: '*.dart');
       expect(dartFiles.length, 1);
       expect(dartFiles.first.path, endsWith('a.dart'));
 
-      final entries = await sub.listEntries().toList();
+      final entries = await sub.list();
       expect(entries.length, 2);
       expect(entries.any((e) => e.name == 'a.dart'), isTrue);
     });
 
-    test('FileSystemEntity extensions: isFile, isDir, entry', () {
-      final file = File('${tempDir.path}/entity_test.txt');
-      file.writeAsStringSync('content');
+    test('a Path is a String, so dart:io takes it unchanged', () async {
+      final file = root / 'entity_test.txt';
+      await file.writeText('content');
 
+      expect(File(file).readAsStringSync(), 'content');
+      expect(file.endsWith('.txt'), isTrue);
+      expect('$file', file.raw);
       expect(file.isFile, isTrue);
       expect(file.isDir, isFalse);
       expect(file.isLink, isFalse);
-      expect(file.entry.name, 'entity_test.txt');
-      expect(tempDir.isDir, isTrue);
-      expect(tempDir.isFile, isFalse);
+      expect(file.stat?.name, 'entity_test.txt');
+      expect(root.isDir, isTrue);
+      expect(root.isFile, isFalse);
     });
   });
 
@@ -88,44 +89,44 @@ void main() {
     late String tempPath;
 
     setUp(() {
-      tempPath = tempDirSync('dt_pred_').path;
+      tempPath = SyncPath.tempDir('dt_pred_').path;
     });
 
     tearDown(() {
       try {
-        removePathSync(tempPath);
+        Path(tempPath).sync.delete();
       } catch (_) {}
     });
 
     test('Files sync predicates: isFile, isDir, exists, stat', () {
-      final filePath = joinPath(tempPath, 'sample.txt');
-      expect(pathExists(filePath), isFalse);
-      expect(fileExists(filePath), isFalse);
-      expect(dirExists(filePath), isFalse);
-      expect(fileStat(filePath)?.size, isNull);
+      final filePath = Path(tempPath) / 'sample.txt';
+      expect(Path(filePath).exists, isFalse);
+      expect(Path(filePath).isFile, isFalse);
+      expect(Path(filePath).isDir, isFalse);
+      expect(Path(filePath).stat?.size, isNull);
 
-      writeTextSync(filePath, 'hello world');
-      expect(pathExists(filePath), isTrue);
-      expect(fileExists(filePath), isTrue);
-      expect(dirExists(filePath), isFalse);
-      expect(fileStat(filePath)?.size, 11);
+      Path(filePath).sync.writeText('hello world');
+      expect(Path(filePath).exists, isTrue);
+      expect(Path(filePath).isFile, isTrue);
+      expect(Path(filePath).isDir, isFalse);
+      expect(Path(filePath).stat?.size, 11);
 
-      expect(dirExists(tempPath), isTrue);
-      expect(fileExists(tempPath), isFalse);
+      expect(Path(tempPath).isDir, isTrue);
+      expect(Path(tempPath).isFile, isFalse);
     });
 
     test('Files async predicates: isFile, isDir, exists, stat', () async {
-      final filePath = joinPath(tempPath, 'sample_async.txt');
-      expect(pathExists(filePath), isFalse);
-      expect(fileExists(filePath), isFalse);
-      expect(dirExists(filePath), isFalse);
-      expect(fileStat(filePath)?.size, isNull);
+      final filePath = Path(tempPath) / 'sample_async.txt';
+      expect(Path(filePath).exists, isFalse);
+      expect(Path(filePath).isFile, isFalse);
+      expect(Path(filePath).isDir, isFalse);
+      expect(Path(filePath).stat?.size, isNull);
 
-      await writeText(filePath, 'hello async');
-      expect(pathExists(filePath), isTrue);
-      expect(fileExists(filePath), isTrue);
-      expect(dirExists(filePath), isFalse);
-      expect(fileStat(filePath)?.size, 11);
+      await Path(filePath).writeText('hello async');
+      expect(Path(filePath).exists, isTrue);
+      expect(Path(filePath).isFile, isTrue);
+      expect(Path(filePath).isDir, isFalse);
+      expect(Path(filePath).stat?.size, 11);
     });
   });
 

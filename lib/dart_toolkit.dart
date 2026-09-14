@@ -1,39 +1,63 @@
 /// # Dart Script Toolkit (`dart-toolkit`)
 ///
 /// A web crawling pipeline and command-line automation toolkit for Dart,
-/// written the way Dart is written: **top-level functions, extensions on the
-/// native types, and plain classes**. There is no namespace object to go
-/// through and no wrapper type to convert into — `readText(path)` is the read,
-/// `items.chunk(2)` is the chunk, and a crawl is a `Stream<Response>`.
-///
-/// ## Core capabilities
-/// - **HTTP & web crawling**: [get], [post], [download], [Response] with
-///   [Response.html], `.$()`, `.$$()`, `.$xpath()`, and [crawl] / [Crawler]
-///   emitting a native `Stream<Response>`.
-/// - **Crash-safe atomic I/O**: [readText], [writeText], [readJson],
-///   [writeJson], [readLines], [writeLines], [withLock], [watchPath],
-///   [listDir] and [walkDir]. Every write is staged and renamed, so a file
-///   appears whole or not at all.
-/// - **Subprocesses & environment**: [run], [runStream], [which], [env],
-///   [loadEnv], and graceful [onExit] / [shutdown] hooks.
-/// - **Concurrency**: [parallelMap], [settle], [Pool], [RateLimiter],
-///   [Semaphore], [retry] and [delay].
-/// - **Terminal & CLI**: [CliParser], [logger], [ProgressBar], [Table], [ansi].
-/// - **Codecs & formats**: [parseHtml], [parseJson], [parseYaml], [parseToml],
-///   [parseCsv], [zip] and [unzip].
-/// - **Native extensions**: `sortedBy`, `chunk`, `window`, `distinct`,
-///   `groupBy`, `parallelMap`, `.ms`, `.seconds`, `.toSlug()`,
-///   `.extractNumber()`.
-///
-/// ## One name per thing
-///
-/// Every operation has exactly one spelling. Where an operation reads as a
-/// property of a value it is an extension method, and the top-level function
-/// it forwards to is the same call:
+/// written the way Dart 3.10 is written: **every operation hangs off the value
+/// it acts on, and every argument is a leading dot.**
 ///
 /// ```dart
-/// slugify('Hello World') == 'Hello World'.toSlug();
-/// formatBytes(2048) == 2048.formatBytes();
+/// final out = Path.cwd / 'output';
+/// await (out / 'products.json').writeJson(rows);    // atomic
+/// final settings = await Path('config.yaml').read(.yaml);
+///
+/// final res = await Http.get('https://example.com'.url);
+/// final titles = res.$$('h1').map((h) => h.text);
+/// ```
+///
+/// ## The map
+///
+/// | Reach for | Where | For |
+/// | :--- | :--- | :--- |
+/// | [Path] | `Path.cwd / 'out'` | Files, directories, locks, watches, hashes, archives — reading, writing **atomically**, walking |
+/// | [Http] | `Http.get(url)` | One-off requests through a shared pooled client |
+/// | [Fetcher] | `Fetcher(session: true)` | A session: cookies, base headers, retries, cache, rate limit |
+/// | [crawl] | `crawl(seeds, next: …)` | A `Stream<Response>` from a self-feeding frontier |
+/// | [Response] | `res.$('h1')`, `res.parse(.yaml)` | A reply, and every way of reading it |
+/// | `String` | `'x'.toSlug()`, `'5MiB'.bytes`, `body.parse(.html)` | Text, sizes, durations, digests, every document format |
+/// | `Iterable` | `items.chunk(2)`, `urls.parallelMap(Http.get)` | Native collections, plus bounded async work |
+/// | [Console] / [logger] | `logger.ok(…)` | Terminal output and input |
+/// | [CliParser] | `parser.flag('force')` | Flags, options, subcommands, usage |
+/// | [Pool], [RateLimiter], [Semaphore], [retry] | | Bounded, paced, retried work |
+///
+/// ## What is top level
+///
+/// Fourteen names, because these are the ones with no receiver to hang off:
+/// [crawl], [serve], [serveOnce], [run], [runStream], [which], [env],
+/// [loadEnv], [onExit], [shutdown], [cpuCount], [logger], [delay] and [retry].
+///
+/// Everything else is a member. 9.0.0 moved 154 top-level functions onto the
+/// values they act on: an editor cannot help with a flat list of names,
+/// because there is nothing to type before the dot, and it can help perfectly
+/// with `path.`, `res.` or `items.`.
+///
+/// ## One name per operation
+///
+/// Not one name plus an extension plus a `Sync` twin. Blocking filesystem
+/// calls live under one member rather than behind a suffix on twenty-eight
+/// names:
+///
+/// ```dart
+/// await settings.readText();   // Future<String>
+/// settings.sync.readText();    // String
+/// ```
+///
+/// ## A leading dot, everywhere a type is known
+///
+/// ```dart
+/// res.parse(.yaml);
+/// page.pick(.number('.price'));
+/// await Http.post(url, body: .json({'q': 'widgets'}));
+/// crawl(seeds, politeness: .perHost(250.ms), scope: .sameHost);
+/// await Path('dist/app.zip').hash(.sha256);
 /// ```
 ///
 /// ```dart
@@ -48,7 +72,7 @@
 ///       .distinct()
 ///       .join('\n');
 ///
-///   await writeText('titles.txt', titles);
+///   await Path('titles.txt').writeText(titles);
 /// }
 /// ```
 library;

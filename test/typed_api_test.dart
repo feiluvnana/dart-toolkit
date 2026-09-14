@@ -21,10 +21,10 @@ void main() {
 
       await crawl(
             [Fetch('https://music.test/album'.url)],
-            (res) => switch (res.fetch.tag) {
+            next: (res) => switch (res.fetch.tag) {
               null =>
                 res
-                    .parse(DocumentFormat.html)
+                    .parse(.html)
                     .$('a')
                     .elements
                     .map(
@@ -36,12 +36,9 @@ void main() {
                     ),
               _ => const <Fetch>[],
             },
-          )
-          .using(
-            (fetch) async =>
+            send: (fetch) async =>
                 Response.text(pages['${fetch.url}'] ?? '', fetch: fetch),
           )
-          .flow
           .where((res) => res.fetch.tag == 'song')
           .forEach((res) => seen.add(res.fetch.meta['name'] as String?));
 
@@ -83,7 +80,7 @@ void main() {
 
     test('all builds one typed record per match', () {
       final variants = page
-          .parse(DocumentFormat.html)
+          .parse(.html)
           .all(
             '.variant',
             (row) => (
@@ -103,12 +100,14 @@ void main() {
 
     test('all plus first builds the record a page has at most one of', () {
       final seller = page
-          .parse(DocumentFormat.html)
+          .parse(.html)
           .all(
             '.seller',
             (s) => (
               name: s.$('.name').text,
-              rating: s.pick(Field.text('.rating').when(extractNumber)),
+              rating: s.pick(
+                Field.text('.rating').when((t) => t.extractNumber()),
+              ),
             ),
           )
           .firstOrNull;
@@ -116,22 +115,19 @@ void main() {
       expect(seller?.name, 'Acme');
       expect(seller?.rating, 4.5);
       expect(
-        page
-            .parse(DocumentFormat.html)
-            .all('.missing', (s) => s.$('x').text)
-            .firstOrNull,
+        page.parse(.html).all('.missing', (s) => s.$('x').text).firstOrNull,
         isNull,
       );
     });
 
     test('a whole page reads as one nested record', () {
       final product = (
-        title: page.parse(DocumentFormat.html).$('h1').text,
+        title: page.parse(.html).$('h1').text,
         price: page
-            .parse(DocumentFormat.html)
-            .pick(Field.text('.price').when(extractNumber)),
+            .parse(.html)
+            .pick(Field.text('.price').when((t) => t.extractNumber())),
         variants: page
-            .parse(DocumentFormat.html)
+            .parse(.html)
             .all(
               '.variant',
               (row) => (name: row.$('.name').text, sku: row.attr('data-sku')),
@@ -150,30 +146,28 @@ void main() {
         '<div class="variant" data-sku="A2"><span class="name">L</span></div>',
       );
 
+      expect(flat.parse(.html).all('.variant', (row) => row.attr('data-sku')), [
+        'A1',
+        'A2',
+      ]);
       expect(
         flat
-            .parse(DocumentFormat.html)
-            .all('.variant', (row) => row.attr('data-sku')),
-        ['A1', 'A2'],
-      );
-      expect(
-        flat
-            .parse(DocumentFormat.html)
+            .parse(.html)
             .all('.variant', (row) => row.$('.name').text)
             .firstOrNull
             ?.trim(),
         'S',
       );
-      expect(flat.parse(DocumentFormat.html).pick(Field.text('h1')), 'T');
+      expect(flat.parse(.html).pick(Field.text('h1')), 'T');
       expect(
-        parseHtml(flat.body).pick(Field.text('h1')),
-        flat.parse(DocumentFormat.html).pick(Field.text('h1')),
+        flat.body.parse(.html).pick(Field.text('h1')),
+        flat.parse(.html).pick(Field.text('h1')),
       );
     });
 
     test('all scopes to the row, not the document', () {
       final names = page
-          .parse(DocumentFormat.html)
+          .parse(.html)
           .all('.variant', (row) => row.$('.name').texts);
       expect(names, [
         ['Small'],
@@ -190,34 +184,34 @@ void main() {
 
       expect(
         page
-            .parse(DocumentFormat.html)
-            .pick(Field.text('.price').when(extractNumber)),
+            .parse(.html)
+            .pick(Field.text('.price').when((t) => t.extractNumber())),
         1234.5,
       );
       expect(
-        page
-            .parse(DocumentFormat.html)
-            .pick(Field.texts('b').map((rows) => rows.length)),
+        page.parse(.html).pick(Field.texts('b').map((rows) => rows.length)),
         2,
       );
       // `map` sees the null; `when` is not called at all for one.
       expect(
-        page
-            .parse(DocumentFormat.html)
-            .pick(Field.text('.gone').map((t) => t ?? 'unknown')),
+        page.parse(.html).pick(Field.text('.gone').map((t) => t ?? 'unknown')),
         'unknown',
       );
       expect(
         page
-            .parse(DocumentFormat.html)
-            .pick(Field.text('.gone').when(extractNumber)),
+            .parse(.html)
+            .pick(Field.text('.gone').when((t) => t.extractNumber())),
         isNull,
       );
       // Chains, because the result is a Field like any other.
       expect(
         page
-            .parse(DocumentFormat.html)
-            .pick(Field.text('.price').when(extractNumber).map((n) => n! * 2)),
+            .parse(.html)
+            .pick(
+              Field.text(
+                '.price',
+              ).when((t) => t.extractNumber()).map((n) => n! * 2),
+            ),
         2469.0,
       );
     });
@@ -278,20 +272,18 @@ void main() {
       'https://site.test/b': '<h1>Three</h1>',
     };
 
-    Crawler crawler() => crawl([Fetch('https://site.test'.url)])
-      ..using(
-        (fetch) async =>
-            Response.text(pages['${fetch.url}'] ?? '', fetch: fetch),
-      );
+    Crawler crawler() => crawl(
+      [Fetch('https://site.test'.url)],
+      send: (fetch) async =>
+          Response.text(pages['${fetch.url}'] ?? '', fetch: fetch),
+    );
 
     test('the item type comes from the pipeline, not from the crawl', () async {
       // `gather` existed because `items` could only learn `T` from an emit
       // buried inside a closure. There is no `T` any more: the crawl produces
       // replies, and what a script does with them is its own business.
-      final titles = await crawler().flow
-          .expand(
-            (Response res) => res.parse(DocumentFormat.html).$('h1').texts,
-          )
+      final titles = await crawler()
+          .expand((Response res) => res.parse(.html).$('h1').texts)
           .toList();
 
       expect(titles, isA<List<String>>());
@@ -299,13 +291,10 @@ void main() {
     });
 
     test('returning nothing for a page filters it out', () async {
-      final long = await crawler().flow
+      final long = await crawler()
           .expand(
-            (Response res) => res
-                .parse(DocumentFormat.html)
-                .$('h1')
-                .texts
-                .where((t) => t.length > 3),
+            (Response res) =>
+                res.parse(.html).$('h1').texts.where((t) => t.length > 3),
           )
           .toList();
 
@@ -313,12 +302,10 @@ void main() {
     });
 
     test('a record per page reads as one expression', () async {
-      final rows = await crawler().flow
+      final rows = await crawler()
           .map(
-            (Response res) => (
-              url: res.url.path,
-              titles: res.parse(DocumentFormat.html).$('h1').count,
-            ),
+            (Response res) =>
+                (url: res.url.path, titles: res.parse(.html).$('h1').count),
           )
           .toList();
 

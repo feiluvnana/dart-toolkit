@@ -1,14 +1,15 @@
 // The pipeline: end-to-end modern web scraping and data processing.
 //
-// Demonstrates dart-toolkit 8.1.0 conventions:
-// - Top-level functions and extensions: one spelling per operation
+// Demonstrates dart-toolkit 9.0.0 conventions:
+// - `Path` for every filesystem operation, with `/` composing and every
+//   write atomic
+// - `Http` and `crawl(...)` with each knob a named argument
+// - A leading dot for every typed argument: `.perHost(…)`, `.sameHost`,
+//   `.number('.price')`, `.csv`
 // - CliParser for declared flags, options, and auto-help
-// - Console status logging, ProgressBar, and Table rendering
-// - crawler with fixtures for instant, offline reproducibility
-// - DOM traversal and typed extraction (.$(), .$$(), .all(), .texts, Field)
+// - Console status logging, Progress, and Table rendering
 // - Bounded concurrency with parallelMap
-// - Atomic, crash-safe JSON & CSV persistence
-// - Compression and archive creation with zip
+// - Atomic, crash-safe JSON & CSV persistence, and an archive
 //
 // Run with:
 //   dart run example/example.dart
@@ -20,95 +21,81 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 typedef Product = ({String name, num price, String url});
 
 void main(List<String> args) async {
-  // 1. Command-line argument parsing
-  final parser = CliParser(
+  // -------------------------------------------------- 1. Command line
+  final cli = CliParser(
     syntax: 'dart run example/example.dart [options]',
     description: 'Complete web crawling and data processing pipeline.',
   );
   // Declaring hands back a typed handle; calling the handle reads the value.
-  final force = parser.flag(
-    'force',
-    abbr: 'f',
-    help: 'Overwrite existing output',
-  );
-  final concurrency = parser.number(
+  final force = cli.flag('force', abbr: 'f', help: 'Overwrite existing output');
+  final concurrency = cli.number(
     'concurrency',
     abbr: 'c',
     defaultsTo: 4,
     help: 'Parallel enrichment tasks',
   );
-  final output = parser.option(
+  final output = cli.option(
     'output',
     abbr: 'o',
     defaultsTo: 'output/pipeline',
     help: 'Output directory',
   );
+  cli.parse(args, autoHelp: true);
 
-  parser.parse(args, autoHelp: true);
-  final outDir = output();
+  final out = Path(output());
 
   loadEnv();
-  final label = env.get('RUN_LABEL', 'demo');
-
-  consoleWriter.rule('dart-toolkit ($label)');
-
-  // Tracked partial files and hooks
+  Console.rule('dart-toolkit (${env.get('RUN_LABEL', 'demo')})');
   onExit(() => logger.info('Clean shutdown completed.'));
 
-  // -------------------------------------------------------------- 1. Crawler
+  // ------------------------------------------------------- 2. Crawler
   logger.step(1, 5, 'Crawling catalogue from offline fixtures...');
 
-  final crawler = crawl([Fetch('https://shop.test/catalogue'.url)], _next)
-    ..using(_fixture)
-    ..concurrent(concurrency())
-    ..delay(jitter(const Duration(milliseconds: 20)))
-    ..sameHost()
-    ..depth(2)
-    ..limit(20);
-
-  final products = await crawler.flow.expand(_extractProducts).toList();
+  // Every knob is a named argument, so an editor shows all of them with
+  // their types and defaults — and none can change once the stream exists.
+  final products = await crawl(
+    ['https://shop.test/catalogue'],
+    next: _next,
+    concurrency: concurrency(),
+    politeness: .every(20.ms.jittered()),
+    scope: .sameHost,
+    depth: 2,
+    limit: 20,
+    send: _fixture,
+  ).expand(_products).toList();
 
   logger.ok('Discovered ${products.length} products.');
 
-  // -------------------------------------------------------- 2. Concurrency
-  logger.step(
-    2,
-    5,
-    'Enriching items in parallel (concurrency: ${concurrency()})...',
+  // --------------------------------------------------- 3. Concurrency
+  logger.step(2, 5, 'Enriching in parallel (concurrency: ${concurrency()})...');
+
+  final enriched = await products.parallelMap(
+    (product) async {
+      await delay(25.ms.jittered());
+      return (
+        product: product,
+        slug: product.name.toSlug(),
+        sku: product.url.hash().substring(0, 8),
+      );
+    },
+    concurrency: concurrency(),
+    progress: 'Enriching',
   );
 
-  final bar = ProgressBar(total: products.length, message: 'Enriching');
-  final enriched = await products.parallelMap((product) async {
-    await delay(jitter(const Duration(milliseconds: 25)));
-    bar.tick(1, product.name);
-    return (
-      product: product,
-      slug: slugify(product.name),
-      sku: sha256Hash(product.url).substring(0, 8),
-    );
-  }, concurrency: concurrency());
-  bar.done();
   logger.ok('Enriched ${enriched.length} products.');
 
-  // ----------------------------------------------------------------- 3. I/O
-  logger.step(3, 5, 'Writing results atomically to $outDir/...');
+  // ----------------------------------------------------------- 4. I/O
+  logger.step(3, 5, 'Writing results atomically to $out/...');
+  await out.makeDir();
 
-  await makeDir(outDir);
-  final jsonPath = joinPath(outDir, 'products.json');
-  final csvPath = joinPath(outDir, 'products.csv');
-  final summaryPath = joinPath(outDir, 'summary.txt');
+  final summary = out / 'summary.txt';
+  final json = out / 'products.json';
+  final csv = out / 'products.csv';
 
-  if (!force() && pathExists(summaryPath)) {
-    logger.warn('$summaryPath exists; pass --force to overwrite.');
+  if (!force() && summary.exists) {
+    logger.warn('$summary exists; pass --force to overwrite.');
   } else {
-    // 1. Plain text
-    await writeText(
-      summaryPath,
-      enriched.map((e) => '${e.slug} [${e.sku}]').join('\n'),
-    );
-
-    // 2. Atomic JSON
-    await writeJson(jsonPath, [
+    final rows = [
       for (final e in enriched)
         {
           'name': e.product.name,
@@ -116,50 +103,40 @@ void main(List<String> args) async {
           'slug': e.slug,
           'sku': e.sku,
         },
-    ]);
+    ];
 
-    // 3. Atomic CSV
-    await writeCsv(
-      csvPath,
-      Stream.fromIterable([
-        for (final e in enriched)
-          {
-            'name': e.product.name,
-            'price': e.product.price,
-            'slug': e.slug,
-            'sku': e.sku,
-          },
-      ]),
-      headers: ['name', 'price', 'slug', 'sku'],
+    await summary.writeText(
+      enriched.map((e) => '${e.slug} [${e.sku}]').join('\n'),
     );
+    await json.writeJson(rows);
+    await csv.write(rows, as: .csv);
 
     logger.ok('Wrote summary.txt, products.json, and products.csv.');
   }
 
-  // ---------------------------------------------------------- 4. Archiving
+  // ----------------------------------------------------- 5. Archiving
   logger.step(4, 5, 'Compressing archive...');
 
-  final archivePath = joinPath('output', 'catalogue-${timestamp()}.zip');
-  await zip(jsonPath, archivePath);
-  final stat = fileStat(archivePath);
-  logger.ok('Packed ${formatBytes(stat?.size ?? 0)} into $archivePath.');
+  final archive = Path('output') / 'catalogue-${DateTime.now().timestamp}.zip';
+  await json.zipTo(archive);
+  logger.ok('Packed ${archive.size.formatBytes()} into $archive.');
 
-  // Check git if in repo
-  final gitRes = await run('git', ['status', '--porcelain']);
-  if (gitRes.ok) {
-    final status = gitRes.stdout.trim().isEmpty ? 'clean' : 'dirty';
-    logger.info('Workspace git status: $status.');
+  final git = await run('git', ['status', '--porcelain']);
+  if (git.ok) {
+    logger.info(
+      'Workspace git status: ${git.stdout.trim().isEmpty ? 'clean' : 'dirty'}.',
+    );
   }
 
-  // ------------------------------------------------------------ 5. Summary
+  // ------------------------------------------------------- 6. Summary
   logger.step(5, 5, 'Summary table');
 
-  final cheapest = products.sortedBy((p) => p.price);
-  consoleWriter.write(
+  final cheapest = products.sortedBy((p) => p.price).firstOrNull;
+  Console.write(
     (Table(
           headers: ['Product', 'Price', 'Slug'],
-          alignments: [ColumnAlign.left, ColumnAlign.right, ColumnAlign.left],
-          style: TableStyle.unicode,
+          alignments: const [.left, .right, .left],
+          style: .unicode,
         )..addAll([
           for (final e in enriched.take(5))
             [e.product.name, '\$${e.product.price}', e.slug],
@@ -167,11 +144,11 @@ void main(List<String> args) async {
         .render(),
   );
 
-  consoleWriter.box(
+  Console.box(
     [
       'Products  ${products.length}',
-      'Cheapest  ${cheapest.firstOrNull?.name} at \$${cheapest.firstOrNull?.price}',
-      'Archive   $archivePath',
+      'Cheapest  ${cheapest?.name} at \$${cheapest?.price}',
+      'Archive   $archive',
     ].join('\n'),
     title: 'Result',
   );
@@ -179,34 +156,37 @@ void main(List<String> args) async {
   await shutdown();
 }
 
-/// The crawler router: given a reply, emit subsequent URLs to visit.
+/// The crawler router: given a reply, emit the requests that follow it.
+///
+/// A pure function — reply in, requests out — so it is testable with a
+/// `Response.text` fixture and no crawl at all.
 Iterable<Fetch> _next(Response res) {
-  final html = res.parse(DocumentFormat.html);
-  return switch (res.fetch.tag) {
-    null => [
-      // Follow each product card
-      ...html.all(
-        '.product',
-        (card) => res.follow(card.$('a').attr('href') ?? '', tag: 'product'),
-      ),
-      // Follow pagination
-      if (html.$('a.next').attr('href') case final next?) res.follow(next),
-    ],
-    _ => const <Fetch>[],
-  };
+  if (res.fetch.tag != null) return const [];
+
+  // `?expr` drops the element when the expression is null — Dart 3.8's
+  // null-aware elements, which is exactly the shape a scraped `href` has.
+  final products = [
+    for (final card in res.$$('.product')) ?card.$('a').attr('href'),
+  ];
+  final next = res.$('a.next').attr('href');
+
+  return [
+    for (final href in products) res.follow(href, tag: 'product'),
+    if (next != null) res.follow(next),
+  ];
 }
 
-/// Extracts products from product page replies.
-Iterable<Product> _extractProducts(Response res) {
+/// Extracts products from product-page replies.
+Iterable<Product> _products(Response res) {
   if (res.fetch.tag != 'product') return const [];
-  final html = res.parse(DocumentFormat.html);
-  final name = html.pick(Field.text('h1'));
-  final price = extractNumber(html.pick(Field.text('.price')) ?? '');
+  final page = res.html;
+  final name = page.pick(.text('h1'));
+  final price = page.pick(.number('.price'));
   if (name == null || price == null) return const [];
-  return [(name: name, price: price, url: res.url.toString())];
+  return [(name: name, price: price, url: '${res.url}')];
 }
 
-/// Offline fixture transport: simulates web server responses offline.
+/// Offline fixture transport: a `Send` is a function, so this is a closure.
 Future<Response> _fixture(Fetch fetch) async {
   final body = _fixtures['${fetch.url}'];
   return Response.text(

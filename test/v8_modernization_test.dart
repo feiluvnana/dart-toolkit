@@ -24,30 +24,30 @@ void main() {
       final filePath = p.join(tempDir.path, 'sub', 'test.txt');
 
       // Async write & read
-      final entry = await writeText(filePath, 'hello world');
+      final entry = await Path(filePath).writeText('hello world');
       expect(entry.exists, isTrue);
       expect(entry.name, equals('test.txt'));
-      expect(await readText(filePath), equals('hello world'));
-      expect(fileExists(filePath), isTrue);
+      expect(await Path(filePath).readText(), equals('hello world'));
+      expect(Path(filePath).isFile, isTrue);
 
       // Sync write & read
       final syncPath = p.join(tempDir.path, 'sub2', 'sync.txt');
-      final syncEntry = writeTextSync(syncPath, 'sync content');
+      final syncEntry = Path(syncPath).sync.writeText('sync content');
       expect(syncEntry.exists, isTrue);
-      expect(readTextSync(syncPath), equals('sync content'));
-      expect(fileStat(syncPath), isNotNull);
+      expect(Path(syncPath).sync.readText(), equals('sync content'));
+      expect(Path(syncPath).stat, isNotNull);
     });
 
     test('writeLines, readLines, writeLinesSync, readLinesSync', () async {
       final filePath = p.join(tempDir.path, 'lines.txt');
-      await writeLines(filePath, ['line 1', 'line 2', 'line 3']);
+      await Path(filePath).writeLines(['line 1', 'line 2', 'line 3']);
 
-      final lines = await readLines(filePath);
+      final lines = await Path(filePath).readLines();
       expect(lines, equals(['line 1', 'line 2', 'line 3']));
 
       final syncPath = p.join(tempDir.path, 'lines_sync.txt');
-      writeLinesSync(syncPath, ['a', 'b']);
-      expect(readLinesSync(syncPath), equals(['a', 'b']));
+      Path(syncPath).sync.writeLines(['a', 'b']);
+      expect(Path(syncPath).sync.readLines(), equals(['a', 'b']));
     });
 
     test('writeJson, readJson, writeJsonSync, readJsonSync', () async {
@@ -58,51 +58,50 @@ void main() {
         'items': [1, 2, 3],
       };
 
-      await writeJson(filePath, data);
-      final readData = await readJson(filePath) as Map<String, dynamic>;
-      expect(readData['name'], equals('dart-toolkit'));
-      expect((readData['items'] as List)[1], equals(2));
+      await Path(filePath).writeJson(data);
+      final readData = await Path(filePath).readJson();
+      expect(readData.text('name'), equals('dart-toolkit'));
+      expect(readData.at('items').all((i) => i.number())[1], equals(2));
 
       final syncPath = p.join(tempDir.path, 'data_sync.json');
-      writeJsonSync(syncPath, {'score': 42});
-      final syncData = readJsonSync(syncPath) as Map<String, dynamic>;
-      expect(syncData['score'], equals(42));
+      Path(syncPath).sync.writeJson({'score': 42});
+      final syncData = Path(syncPath).sync.readJson();
+      expect(syncData.number('score'), equals(42));
     });
 
     test(
       'listDir, listDirSync, walkDir, walkDirSync, makeDir, copyPath, removePath',
       () async {
         final base = p.join(tempDir.path, 'listing');
-        makeDirSync(p.join(base, 'a'));
-        makeDirSync(p.join(base, 'b'));
-        writeTextSync(p.join(base, 'a', 'file1.txt'), 'f1');
-        writeTextSync(p.join(base, 'b', 'file2.md'), 'f2');
+        Path(p.join(base, 'a')).sync.makeDir();
+        Path(p.join(base, 'b')).sync.makeDir();
+        Path(p.join(base, 'a', 'file1.txt')).sync.writeText('f1');
+        Path(p.join(base, 'b', 'file2.md')).sync.writeText('f2');
 
-        final listAsync = await listDir(base);
+        final listAsync = await Path(base).list();
         expect(listAsync.length, equals(2));
 
-        final listSyncRes = listDirSync(base);
+        final listSyncRes = Path(base).sync.list();
         expect(listSyncRes.length, equals(2));
 
-        final walkAsyncRes = await walkDir(base);
+        final walkAsyncRes = await Path(base).walk();
         expect(walkAsyncRes.length, greaterThanOrEqualTo(4));
 
-        final walkSyncRes = walkDirSync(base, match: '*.txt');
+        final walkSyncRes = Path(base).sync.walk(match: '*.txt');
         expect(walkSyncRes.length, equals(1));
         expect(walkSyncRes.first.name, equals('file1.txt'));
 
         // copyPath
-        final copied = await copyPath(
+        final copied = await Path(
           p.join(base, 'a', 'file1.txt'),
-          p.join(base, 'a', 'file1_copy.txt'),
-        );
+        ).copyTo(p.join(base, 'a', 'file1_copy.txt'));
         expect(copied.exists, isTrue);
-        expect(fileExists(copied.path), isTrue);
+        expect(Path(copied.path).isFile, isTrue);
 
         // removePath
-        final removed = await removePath(copied.path);
+        final removed = await Path(copied.path).delete();
         expect(removed, isTrue);
-        expect(fileExists(copied.path), isFalse);
+        expect(Path(copied.path).isFile, isFalse);
       },
     );
 
@@ -110,13 +109,13 @@ void main() {
       final lockFile = p.join(tempDir.path, 'resource.lock');
 
       var executedSync = false;
-      withLockSync(lockFile, () {
+      Path(lockFile).sync.lock(() {
         executedSync = true;
       });
       expect(executedSync, isTrue);
 
       var executedAsync = false;
-      await withLock(lockFile, () async {
+      await Path(lockFile).lock(() async {
         await delay(10.ms);
         executedAsync = true;
       });
@@ -212,10 +211,10 @@ void main() {
 
   group('v8.0.0 Modern Concurrency & Rate Limiter', () {
     test('parallelMap and settle top-level functions', () async {
-      final res = await parallelMap([1, 2, 3], (n) => n * 3, concurrency: 2);
+      final res = await ([1, 2, 3]).parallelMap((n) => n * 3, concurrency: 2);
       expect(res, equals([3, 6, 9]));
 
-      final settled = await settle([1, 2], (n) {
+      final settled = await ([1, 2]).settle((n) {
         if (n == 2) throw StateError('err');
         return n;
       });
@@ -303,7 +302,7 @@ void main() {
     test(
       'Top-level get with Response properties and HTML selector shortcuts',
       () async {
-        final res = await get('$baseUrl/html');
+        final res = await Http.get('$baseUrl/html');
         expect(res.statusCode, equals(200));
         expect(res.ok, isTrue);
         expect(res.text, contains('Welcome'));
@@ -322,12 +321,15 @@ void main() {
     );
 
     test('Top-level get and post with JSON and text', () async {
-      final res = await get('$baseUrl/json');
+      final res = await Http.get('$baseUrl/json');
       expect(res.ok, isTrue);
       expect(res.json['status'], equals('ok'));
       expect(res.json['count'], equals(42));
 
-      final postRes = await post('$baseUrl/echo', body: 'hello server');
+      final postRes = await Http.post(
+        '$baseUrl/echo',
+        body: .text('hello server'),
+      );
       expect(postRes.ok, isTrue);
       expect(postRes.text, equals('ECHO: hello server'));
     });
@@ -400,9 +402,9 @@ void main() {
 
     test('Size extensions & formatBytes / parseBytes', () {
       expect(1024.bytes.formatBytes(), equals('1.0 KiB'));
-      expect(formatBytes(1048576), equals('1.0 MiB'));
-      expect(parseBytes('1.5 MB'), equals(1500000));
-      expect(parseBytes('2 GiB'), equals(2 * 1024 * 1024 * 1024));
+      expect(1048576.formatBytes(), equals('1.0 MiB'));
+      expect('1.5 MB'.bytes, equals(1500000));
+      expect('2 GiB'.bytes, equals(2 * 1024 * 1024 * 1024));
     });
 
     test('Time & Duration extensions', () {
@@ -412,49 +414,52 @@ void main() {
       expect(1.hours, equals(const Duration(hours: 1)));
       expect(3.days, equals(const Duration(days: 3)));
 
-      expect(formatDuration(const Duration(seconds: 65)), equals('01:05'));
-      expect(timestamp(), isNotEmpty);
-      expect(parseTime('2026-09-12T12:00:00Z'), isNotNull);
+      expect((const Duration(seconds: 65)).format(), equals('01:05'));
+      expect(DateTime.now().timestamp, isNotEmpty);
+      expect('2026-09-12T12:00:00Z'.date, isNotNull);
     });
 
     test('Hashing functions: sha256Hash, md5Hash, hmacSha256', () {
       expect(
-        sha256Hash('hello'),
+        'hello'.hash(),
         equals(
           '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
         ),
       );
-      expect(md5Hash('hello'), equals('5d41402abc4b2a76b9719d911017c592'));
-      expect(hmacSha256('secret', 'message'), isNotEmpty);
+      expect('hello'.hash(.md5), equals('5d41402abc4b2a76b9719d911017c592'));
+      expect('secret'.hmac('message'), isNotEmpty);
     });
 
     test('Random helpers', () {
       final list = [1, 2, 3, 4, 5];
-      expect(randomPick(list), isIn(list));
-      expect(randomBetween(10, 20), inInclusiveRange(10, 20));
-      expect(randomId(16).length, equals(16));
+      expect(list.randomItem(), isIn(list));
+      expect(Rand.between(10, 20), inInclusiveRange(10, 20));
+      expect(Rand.id(16).length, equals(16));
     });
   });
 
   group('v8.0.0 Formats Helpers', () {
     test('parseJson and toJsonString', () {
-      final json = parseJson('{"name": "test", "num": 10}');
+      final json = '{"name": "test", "num": 10}'.parse(.json);
       expect(json['name'], equals('test'));
-      expect(toJsonString({'a': 1}), contains('"a": 1'));
+      expect(const JsonFormat().format({'a': 1}), contains('"a": 1'));
     });
 
     test('parseYaml and toYamlString', () {
-      final yaml = parseYaml('name: toolkit\ncount: 5');
+      final yaml = 'name: toolkit\ncount: 5'.parse(.yaml);
       expect(yaml['name'], equals('toolkit'));
-      expect(toYamlString({'name': 'toolkit'}), contains('name: toolkit'));
+      expect(
+        const YamlFormat().format({'name': 'toolkit'}),
+        contains('name: toolkit'),
+      );
     });
 
     test('parseCsv and toCsvString', () {
-      final csv = parseCsv('a,b,c\n1,2,3\n4,5,6');
+      final csv = 'a,b,c\n1,2,3\n4,5,6'.parse(.csv);
       expect(csv.length, equals(2));
       expect(csv[0], equals(['1', '2', '3']));
       expect(
-        toCsvString([
+        const CsvFormat().cells([
           ['x', 'y'],
           ['1', '2'],
         ]),
@@ -463,15 +468,17 @@ void main() {
     });
 
     test('parseRobots and parseSitemap', () {
-      final robots = parseRobots('User-agent: *\nDisallow: /private');
+      final robots = 'User-agent: *\nDisallow: /private'.parse(.robots);
       expect(robots.allowed(Uri.parse('https://example.com/public')), isTrue);
       expect(robots.allowed(Uri.parse('https://example.com/private')), isFalse);
 
-      final sitemap = parseSitemap('''
+      final sitemap =
+          ('''
         <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
           <url><loc>https://example.com/</loc></url>
         </urlset>
-      ''');
+      ''')
+              .parse(.sitemap);
       expect(sitemap, contains(Uri.parse('https://example.com/')));
     });
   });
@@ -510,23 +517,23 @@ void main() {
 
     test('top-level file functions', () async {
       final file = p.join(tempDir.path, 'note.txt');
-      await writeText(file, 'static hub content');
-      expect(pathExists(file), isTrue);
-      expect(fileExists(file), isTrue);
-      expect(await readText(file), equals('static hub content'));
-      expect(readTextSync(file), equals('static hub content'));
+      await Path(file).writeText('static hub content');
+      expect(Path(file).exists, isTrue);
+      expect(Path(file).isFile, isTrue);
+      expect(await Path(file).readText(), equals('static hub content'));
+      expect(Path(file).sync.readText(), equals('static hub content'));
 
       final jsonFile = p.join(tempDir.path, 'data.json');
-      await writeJson(jsonFile, {'status': 'ok'});
-      final data = await readJson(jsonFile) as Map<String, dynamic>;
-      expect(data['status'], equals('ok'));
+      await Path(jsonFile).writeJson({'status': 'ok'});
+      final data = await Path(jsonFile).readJson();
+      expect(data.text('status'), equals('ok'));
 
-      final list = await listDir(tempDir.path);
+      final list = await Path(tempDir.path).list();
       expect(list.length, equals(2));
     });
 
     test('Http static hub', () async {
-      expect(httpClient, isNotNull);
+      expect(Http.client, isNotNull);
 
       // We can also test crawl creation
       final crawler = crawl(['https://example.com']);
@@ -540,7 +547,9 @@ void main() {
       });
 
       try {
-        final res = await get('http://${server.address.host}:${server.port}');
+        final res = await Http.get(
+          'http://${server.address.host}:${server.port}',
+        );
         expect(res.ok, isTrue);
         expect(res.text, equals('ok from local'));
       } finally {
@@ -574,14 +583,13 @@ void main() {
 
     test('Concurrent static hub', () async {
       final items = [1, 2, 3, 4];
-      final squares = await parallelMap(
-        items,
+      final squares = await items.parallelMap(
         (n) async => n * n,
         concurrency: 2,
       );
       expect(squares, equals([1, 4, 9, 16]));
 
-      final settled = await settle(items, (n) async {
+      final settled = await items.settle((n) async {
         if (n == 3) throw Exception('bad number 3');
         return n * 10;
       });
@@ -608,105 +616,112 @@ void main() {
     });
 
     test('Formats static hub', () {
-      final jsonDoc = parseJson('{"version": 8}');
+      final jsonDoc = '{"version": 8}'.parse(.json);
       expect(jsonDoc['version'], equals(8));
-      expect(toJsonString({'hello': 'world'}), contains('"hello": "world"'));
-
-      final html = parseHtml(
-        '<html><body><h1 class="title">Header</h1></body></html>',
+      expect(
+        const JsonFormat().format({'hello': 'world'}),
+        contains('"hello": "world"'),
       );
+
+      final html = '<html><body><h1 class="title">Header</h1></body></html>'
+          .parse(.html);
       expect(html.$('h1').text, equals('Header'));
 
-      final yaml = parseYaml('project: dart-toolkit');
+      final yaml = 'project: dart-toolkit'.parse(.yaml);
       expect(yaml['project'], equals('dart-toolkit'));
-      expect(toYamlString({'a': 1}), contains('a: 1'));
+      expect(const YamlFormat().format({'a': 1}), contains('a: 1'));
 
-      final csv = parseCsv('id,name\n1,Alice');
+      final csv = 'id,name\n1,Alice'.parse(.csv);
       expect(csv.length, equals(1));
       expect(csv[0], equals(['1', 'Alice']));
       expect(
-        toCsvString([
+        const CsvFormat().format([
           {'id': 1, 'name': 'Alice'},
         ]),
         contains('Alice'),
       );
 
-      final robots = parseRobots('User-agent: *\nDisallow: /secret');
+      final robots = 'User-agent: *\nDisallow: /secret'.parse(.robots);
       expect(robots.allowed(Uri.parse('https://example.com/secret')), isFalse);
       expect(robots.allowed(Uri.parse('https://example.com/open')), isTrue);
 
-      final sitemap = parseSitemap('''
+      final sitemap =
+          ('''
         <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
           <url><loc>https://example.com/page</loc></url>
         </urlset>
-      ''');
+      ''')
+              .parse(.sitemap);
       expect(sitemap, contains(Uri.parse('https://example.com/page')));
     });
 
     test('Text static hub', () {
-      expect(slugify('Hello, World! 2026'), equals('hello-world-2026'));
-      expect(cleanText('  multi   space   text  '), equals('multi space text'));
-      expect(clipText('very long content string', 9), equals('very lon…'));
-      expect(extractNumber(r'Total: $1,234.50 USD'), equals(1234.5));
-      expect(stripHtmlTags('<p>Clean <b>text</b></p>'), equals('Clean text'));
+      expect('Hello, World! 2026'.toSlug(), equals('hello-world-2026'));
+      expect(
+        '  multi   space   text  '.cleanWhitespace(),
+        equals('multi space text'),
+      );
+      expect('very long content string'.clip(9), equals('very lon…'));
+      expect(r'Total: $1,234.50 USD'.extractNumber(), equals(1234.5));
+      expect('<p>Clean <b>text</b></p>'.stripTags(), equals('Clean text'));
     });
 
     test('Time static hub', () {
       expect(
-        formatDuration(const Duration(minutes: 5, seconds: 30)),
+        (const Duration(minutes: 5, seconds: 30)).format(),
         equals('05:30'),
       );
       expect(
-        formatDuration(const Duration(hours: 1, minutes: 2, seconds: 3)),
+        (const Duration(hours: 1, minutes: 2, seconds: 3)).format(),
         equals('01:02:03'),
       );
-      expect(timestamp(), matches(RegExp(r'^\d{8}_\d{6}$')));
+      expect(DateTime.now().timestamp, matches(RegExp(r'^\d{8}_\d{6}$')));
       expect(
-        timeAgo(DateTime.now().subtract(const Duration(minutes: 10))),
+        (DateTime.now().subtract(const Duration(minutes: 10))).ago(),
         contains('m ago'),
       );
 
-      final parsed = parseTime('2026-09-12');
+      final parsed = '2026-09-12'.date;
       expect(parsed?.year, equals(2026));
       expect(parsed?.month, equals(9));
       expect(parsed?.day, equals(12));
     });
 
     test('Hash static hub', () {
-      final sha = sha256Hash('dart-toolkit');
+      final sha = 'dart-toolkit'.hash();
       expect(sha.length, equals(64));
 
-      final md5 = md5Hash('dart-toolkit');
+      final md5 = 'dart-toolkit'.hash(.md5);
       expect(md5.length, equals(32));
 
-      final sig = hmacSha256('data-payload', 'secret-key');
+      final sig = 'data-payload'.hmac('secret-key');
       expect(sig.length, equals(64));
     });
 
     test('Size static hub', () {
-      expect(formatBytes(1024), equals('1.0 KiB'));
-      expect(formatBytes(1048576), equals('1.0 MiB'));
-      expect(parseBytes('1.0 MiB'), equals(1048576));
-      expect(parseBytes('500 B'), equals(500));
+      expect(1024.formatBytes(), equals('1.0 KiB'));
+      expect(1048576.formatBytes(), equals('1.0 MiB'));
+      expect('1.0 MiB'.bytes, equals(1048576));
+      expect('500 B'.bytes, equals(500));
     });
 
     test('Rand static hub', () {
       final list = [10, 20, 30, 40];
-      final picked = randomPick(list);
+      final picked = list.randomItem();
       expect(list, contains(picked));
 
-      final shuffled = randomShuffle(list);
+      final shuffled = list.shuffled();
       expect(shuffled.length, equals(4));
       expect(shuffled, containsAll(list));
 
-      final between = randomBetween(5, 15);
+      final between = Rand.between(5, 15);
       expect(between, greaterThanOrEqualTo(5));
       expect(between, lessThan(15));
 
-      final id = randomId(16);
+      final id = Rand.id(16);
       expect(id.length, equals(16));
 
-      final jittered = jitter(const Duration(seconds: 1));
+      final jittered = (const Duration(seconds: 1)).jittered();
       expect(jittered, greaterThanOrEqualTo(const Duration(seconds: 1)));
     });
   });

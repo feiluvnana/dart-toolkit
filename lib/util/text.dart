@@ -2,12 +2,13 @@
 ///
 /// The string handling a scraper actually needs: turning a heading into a
 /// filename ([slugify]), collapsing the whitespace a page is full of
-/// ([cleanText]), pulling a number out of `'\$1,234.50'` ([extractNumber]),
+/// ([cleanText]), pulling a number out of `'\$1,234.50'` ([(t) => t.extractNumber()]),
 /// stripping tags off a fragment ([stripHtmlTags]) — and, in the other
 /// direction, filling a template ([renderTemplate]).
 ///
 /// Every function here has a matching method on [StringToolkitExtensions], so
-/// `slugify(title)` and `title.toSlug()` are the same call.
+/// One name each: `title.toSlug()`, and no `slugify(title)` beside it.
+/// {@category Utilities}
 library;
 
 import 'dart:convert' as convert;
@@ -51,7 +52,7 @@ String _slug(String text, {String separator = '-'}) {
 /// were indexed against each other, so one extra `c` in the replacements —
 /// six of them for five `ç` variants — shifted every group after it by one
 /// and folded 14 letters to the previous group's letter: `è` to `c`, `ñ` to
-/// `i`, and `slugify('Señor Muñoz')` to `'seior-muioz'`.
+/// `i`, and `'Señor Muñoz'.toSlug()` to `'seior-muioz'`.
 ///
 /// A map cannot go out of step with itself, a duplicate key is a compile
 /// error rather than a silently unreachable entry — `ñ` was listed twice —
@@ -150,7 +151,7 @@ String _cleanText(String text) =>
 /// [text] with any HTML tags removed and its whitespace cleaned.
 ///
 /// This is a regex and costs nothing, so it is the one for a snippet and for
-/// the ten thousandth of them. `parseHtml(t).text` builds a document
+/// the ten thousandth of them. `t.parse(.html).text` builds a document
 /// and is right about entities, `<script>` bodies and malformed nesting; it
 /// is the one for a page.
 String _stripHtmlTags(String text) => _cleanText(text.replaceAll(_tags, ' '));
@@ -204,10 +205,10 @@ String _cut(String text, int room) {
 /// Returns `null` when there is no number.
 ///
 /// ```dart
-/// extractNumber(r'$1,234.50');   // 1234.5
-/// extractNumber('(1,234.50)');   // -1234.5  — accounting negative
-/// extractNumber('1.5e3');        // 1500.0
-/// extractNumber('12 34');        // 12       — two numbers, not 1234
+/// r'$1,234.50'.extractNumber();   // 1234.5
+/// '(1,234.50)'.extractNumber();   // -1234.5  — accounting negative
+/// '1.5e3'.extractNumber();        // 1500.0
+/// '12 34'.extractNumber();        // 12       — two numbers, not 1234
 /// ```
 ///
 /// A comma, underscore or space between digits is grouping and dropped, but
@@ -222,7 +223,7 @@ num? _extractNumber(String text) {
   return match == null ? null : _read(match.group(0)!);
 }
 
-/// Every number in [text], in order, read the same way as [extractNumber].
+/// Every number in [text], in order, read the same way as [(t) => t.extractNumber()].
 List<num> _extractNumbers(String text) => _digits
     .allMatches(text)
     .map((match) => _read(match.group(0)!))
@@ -249,7 +250,7 @@ String _titleCase(String text) => text.replaceAllMapped(
 /// [text] with its first letter upper-cased and the rest untouched.
 ///
 /// ```dart
-/// capitalize('crème brûlée');   // 'Crème brûlée'
+/// 'crème brûlée'.capitalize();   // 'Crème brûlée'
 /// ```
 ///
 /// The first letter only — [titleCase] is the one that does every word, and
@@ -278,10 +279,10 @@ final _slots = RegExp(r'\{(\w+)\}');
 /// is otherwise `replaceAll` in a loop.
 ///
 /// ```dart
-/// renderTemplate('Hello {name}, {count} new', {'name': 'x', 'count': 3});
+/// 'Hello {name}, {count} new'.render({'name': 'x', 'count': 3});
 /// // 'Hello x, 3 new'
 ///
-/// renderTemplate(readTextSync('template.md'), vars);
+/// Path('template.md').sync.readText().render(vars);
 /// ```
 ///
 /// A missing key renders empty — the same contract `Field.text` and
@@ -300,7 +301,7 @@ String _renderTemplate(String template, Map<String, Object?> values) => template
 /// as a string embedded in a `<script>` block. [textBetween] is the singular, for the first hit only:
 ///
 /// ```dart
-/// allTextBetween(body, '"videoId":"', '"').firstOrNull;
+/// body.allBetween('"videoId":"', '"').firstOrNull;
 /// ```
 List<String> _allTextBetween(String text, String start, String end) {
   final results = <String>[];
@@ -321,164 +322,62 @@ List<String> _allTextBetween(String text, String start, String end) {
 // PUBLIC API
 // ============================================================================
 
-/// A lowercase, hyphenated form of [text], safe in a URL or a filename.
+/// Cleaning, slugs, extraction, clipping and templating, on the string itself.
 ///
-/// Accented Latin letters fold to their plain form; letters and digits of
-/// other scripts are kept as they are, and everything else becomes a single
-/// hyphen.
-///
-/// ```dart
-/// slugify('Hello, World!'); // 'hello-world'
-/// ```
-String slugify(String text, {String separator = '-'}) =>
-    _slug(text, separator: separator);
-
-/// [text] with runs of whitespace collapsed to one space, trimmed.
-///
-/// Also drops zero-width and soft-hyphen characters, which scraped markup is
-/// full of and which break equality checks in surprising ways.
-String cleanText(String text) => _cleanText(text);
-
-/// [text] with any HTML tags removed and its whitespace cleaned.
-///
-/// This is a regex and costs nothing, so it is the one for a snippet and for
-/// the ten thousandth of them. `parseHtml(t).text` builds a document and is
-/// right about entities, `<script>` bodies and malformed nesting; it is the
-/// one for a page.
-String stripHtmlTags(String text) => _stripHtmlTags(text);
-
-/// [text] with accented Latin letters replaced by their plain form.
-///
-/// `ß`, `æ`, `œ`, `ĳ` and `þ` fold to the two letters they are spelled with.
-/// A letter no entry covers is left alone, so other scripts pass through.
-String foldAccents(String text) => _foldAccents(text);
-
-/// [text] shortened to at most [length] characters, ending with [ellipsis].
-///
-/// Returns [text] unchanged when it already fits. Never splits a surrogate
-/// pair, so an emoji is not cut down the middle.
-String clipText(String text, int length, {String ellipsis = '…'}) =>
-    _clipText(text, length, ellipsis: ellipsis);
-
-/// The first decimal number in [text], ignoring currency and separators.
-///
-/// Returns `null` when there is no number.
-///
-/// ```dart
-/// extractNumber(r'\$1,234.50');   // 1234.5
-/// extractNumber('(1,234.50)');   // -1234.5  — accounting negative
-/// extractNumber('1.5e3');        // 1500.0
-/// extractNumber('12 34');        // 12       — two numbers, not 1234
-/// ```
-num? extractNumber(String text) => _extractNumber(text);
-
-/// Every number in [text], in order, read the same way as [extractNumber].
-List<num> extractNumbers(String text) => _extractNumbers(text);
-
-/// [text] with the first letter of each word capitalised.
-String titleCase(String text) => _titleCase(text);
-
-/// [text] with its first letter upper-cased and the rest untouched.
-///
-/// The first letter only — [titleCase] is the one that does every word, and
-/// upper-casing a whole string is `toUpperCase`, which `dart:core` owns.
-String capitalize(String text) => _capitalize(text);
-
-/// The words in [text].
-List<String> wordsOf(String text) => _wordsOf(text);
-
-/// Whether [text] holds nothing but whitespace, or is empty.
-bool isBlank(String text) => _isBlank(text);
-
-/// [template] with every `{key}` replaced by [values].
-///
-/// A missing key renders empty.
-///
-/// ```dart
-/// renderTemplate('Hello {name}, {count} new', {'name': 'x', 'count': 3});
-/// // 'Hello x, 3 new'
-/// ```
-///
-/// **Deliberately dumb.** `{key}` substitution and nothing else: no
-/// conditionals, no loops, no filters, no partials. Each of those is one step
-/// towards a template engine, and the moment a script needs a template engine
-/// it should have one rather than this.
-String renderTemplate(String template, Map<String, Object?> values) =>
-    _renderTemplate(template, values);
-
-/// The first occurrence of the text between [start] and [end], or `null`.
-///
-/// The quickest way to pull a value out of markup no selector reaches, such as
-/// a string embedded in a `<script>` block.
-///
-/// ```dart
-/// // setup: final body = '"videoId":"abc"';
-/// textBetween(body, '"videoId":"', '"'); // 'abc'
-/// ```
-String? textBetween(String text, String start, String end) =>
-    _allTextBetween(text, start, end).firstOrNull;
-
-/// Every occurrence of the text between [start] and [end].
-List<String> allTextBetween(String text, String start, String end) =>
-    _allTextBetween(text, start, end);
-
-/// [input] encoded as base64 text.
-///
-/// [input] is a `String` or a `List<int>`.
-String toBase64(Object input) => _toBase64(input);
-
-/// Reverses [toBase64], returning the decoded bytes.
-List<int> fromBase64(String input) => _fromBase64(input);
-
-/// Cleaning, slugs, extraction and clipping, on the string itself.
-///
-/// Each method mirrors the like-named top-level function.
+/// These were sixteen top-level functions *and* these sixteen members through
+/// 8.1.0 — `slugify(t)` beside `t.toSlug()`, `clipText(t, 40)` beside
+/// `t.clip(40)`, `wordsOf(t)` beside `t.words()` — thirty-two names for
+/// sixteen operations, in a library whose stated rule is one name each. The
+/// receiver is what survives: it is what an editor can complete.
 extension StringToolkitExtensions on String {
-  /// A lowercase, hyphenated form of this string. See [slugify].
+  /// A lowercase, hyphenated form of this string.
   String toSlug({String separator = '-'}) => _slug(this, separator: separator);
 
-  /// Runs of whitespace collapsed to one space, trimmed. See [cleanText].
+  /// Runs of whitespace collapsed to one space, trimmed.
   String cleanWhitespace() => _cleanText(this);
 
-  /// HTML tags removed and whitespace cleaned. See [stripHtmlTags].
+  /// HTML tags removed and whitespace cleaned.
   String stripTags() => _stripHtmlTags(this);
 
-  /// Accented Latin letters replaced by their plain form. See [foldAccents].
+  /// Accented Latin letters replaced by their plain form.
   String foldAccents() => _foldAccents(this);
 
-  /// Shortened to at most [length] characters. See [clipText].
+  /// Shortened to at most [length] characters.
   String clip(int length, {String ellipsis = '…'}) =>
       _clipText(this, length, ellipsis: ellipsis);
 
-  /// The first decimal number in this string. See [extractNumber].
+  /// The first decimal number in this string.
   num? extractNumber() => _extractNumber(this);
 
-  /// Every number in this string, in order. See [extractNumbers].
+  /// Every number in this string, in order.
   List<num> extractNumbers() => _extractNumbers(this);
 
-  /// The first letter of each word capitalised. See [titleCase].
+  /// The first letter of each word capitalised.
   String titleCase() => _titleCase(this);
 
-  /// The first letter upper-cased, the rest untouched. See [capitalize].
+  /// The first letter upper-cased, the rest untouched.
   String capitalize() => _capitalize(this);
 
-  /// The words in this string. See [wordsOf].
+  /// The words in this string.
   List<String> words() => _wordsOf(this);
 
-  /// Whether this string holds nothing but whitespace. See [isBlank].
+  /// Whether this string holds nothing but whitespace.
   bool get isBlank => _isBlank(this);
 
-  /// Every `{key}` replaced by [values]. See [renderTemplate].
+  /// Every `{key}` replaced by [values].
   String render(Map<String, Object?> values) => _renderTemplate(this, values);
 
-  /// The first text between [start] and [end], or `null`. See [textBetween].
+  /// The first text between [start] and [end], or `null`.
   String? between(String start, String end) =>
       _allTextBetween(this, start, end).firstOrNull;
 
-  /// Every occurrence between [start] and [end]. See [allTextBetween].
+  /// Every occurrence between [start] and [end].
   List<String> allBetween(String start, String end) =>
       _allTextBetween(this, start, end);
 
-  /// This string encoded as base64 text. See [toBase64].
+  /// This string encoded as base64 text.
   String toBase64() => _toBase64(this);
+
+  /// The bytes this base64 text encodes.
+  List<int> fromBase64() => _fromBase64(this);
 }

@@ -2,6 +2,7 @@
 ///
 /// An on-disk store of responses, so a second run over the same pages
 /// revalidates or skips them instead of downloading them all again.
+/// {@category Networking}
 library;
 
 import 'dart:async';
@@ -150,7 +151,7 @@ class HttpCache {
   const HttpCache(this.dir);
 
   /// The file [url] is stored in, whether or not it exists.
-  String path(Uri url) => p.join(dir, '${sha256Hash(url.toString())}.json');
+  String path(Uri url) => p.join(dir, '${url.toString().hash()}.json');
 
   /// The entry stored for [url], or `null` when nothing is stored.
   ///

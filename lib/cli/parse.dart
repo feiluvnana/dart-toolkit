@@ -362,10 +362,9 @@ class Cli with _Spec {
           _Shape.number when int.tryParse(value.trim()) == null => 'a number',
           _Shape.decimal when double.tryParse(value.trim()) == null =>
             'a number',
-          _Shape.duration when parseDuration(value) == null =>
+          _Shape.duration when value.duration == null =>
             'a duration such as 30s, 5m or 1h30m',
-          _Shape.date when parseTime(value) == null =>
-            'a date such as 2024-03-09',
+          _Shape.date when value.date == null => 'a date such as 2024-03-09',
           _ => null,
         };
         if (wanted != null) {

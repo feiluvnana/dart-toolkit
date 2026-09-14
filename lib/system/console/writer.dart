@@ -21,7 +21,7 @@ import 'terminal.dart';
 // CONSOLE WRITER (ConsoleWriter)
 // ============================================================================
 
-/// Structured terminal output, reachable as [consoleWriter].
+/// Structured terminal output, reachable as [Console].
 ///
 /// Everything in this library that writes to the screen writes through one of
 /// these — tables, rules, boxes, the logger, progress bars, spinners, and the

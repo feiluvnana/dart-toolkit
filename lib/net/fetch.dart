@@ -24,6 +24,7 @@
 ///
 /// [Fetcher] implements [Send] itself, so [get] is the default one and
 /// `Crawler.using` takes any of them.
+/// {@category Networking}
 library;
 
 import 'dart:async';
