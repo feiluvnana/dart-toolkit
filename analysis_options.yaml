@@ -24,6 +24,9 @@ linter:
     - avoid_annotating_with_dynamic
     - avoid_dynamic_calls
 
+formatter:
+  page_width: 120
+
 # For more information about the core and recommended set of lints, see
 # https://dart.dev/go/core-lints
 

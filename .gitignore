@@ -10,10 +10,8 @@ build/
 *.tar.gz
 tmp*
 
-# KeyBOX-specific automation scripts and media downloads
+# Downloaded media archives & directories
 Key BOX*
-keybox*
-bin/
 
 # Example output
 output/

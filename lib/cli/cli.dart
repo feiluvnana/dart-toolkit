@@ -1,181 +1,345 @@
-/// # Command-line arguments
-///
-/// A dependency-free parser for the flag shapes scripts actually use:
-/// `--flag`, `--key=value`, `--key value`, `-k value`, `-abc`, `--no-key`,
-/// repeated options, and trailing positional arguments.
-///
-/// Declaring an option hands back a typed [Opt] handle; calling the handle
-/// reads the value. There is no name-based lookup to get it wrong:
-///
-/// ```dart
-/// final parser = CliParser(description: 'Scrape a catalogue');
-/// final force = parser.flag('force', abbr: 'f', help: 'Overwrite output');
-/// final size = parser.number('concurrency', abbr: 'c', defaultsTo: 4);
-///
-/// final cli = parser.parse(args);
-/// if (force()) rebuild('dist', size());
-/// print(cli.args); // positional arguments
-/// ```
-///
-/// Or declare commands and let [CliParser.run] parse, validate, print
-/// `--help` and pick the handler:
-///
-/// ```dart
-/// Future<int> build(Cli cli) async => 0;
-///
-/// void main(List<String> args) async {
-///   final parser = CliParser();
-///   parser.handle('build', build, help: 'Build the project')
-///     ..option('out', abbr: 'o', defaultsTo: 'dist', help: 'Output directory');
-///   await shutdown(await parser.run(args));
-/// }
-/// ```
-///
-/// **One name per concept.** An option is declared with `abbr`, `help` and
-/// `defaultsTo` — the `package:args` spelling — and nothing accepts a second
-/// name for any of the three.
-/// {@category CLI}
-library;
-
 import 'dart:async';
 import 'dart:io';
 
-import '../src/shared.dart';
-import '../system/console/ansi.dart';
-import '../system/console/writer.dart';
-import '../util/time.dart';
+import 'ansi.dart';
 
-part 'opt.dart';
-part 'spec.dart';
-part 'parse.dart';
-part 'usage.dart';
+export 'ansi.dart';
+export 'console.dart';
+export 'logger.dart';
 
-/// Declares a command-line interface, then parses arguments against it.
-///
-/// Declarations ([flag], [option], [number], [list], [choice] and the rest)
-/// each return a typed [Opt] handle. Handles are readable after [parse], and
-/// re-reading is free.
-///
-/// Construct one per program, or one per test — there is no shared instance,
-/// so declarations cannot leak between them.
-class CliParser with _Spec {
-  Cli _parsed = Cli(const []);
+/// Handler for executing a CLI command action.
+typedef CommandHandler = FutureOr<void> Function(CliContext ctx);
 
-  /// The syntax line shown in usage help, e.g. `mytool <command> [options]`.
-  final String? syntax;
+/// Represents a CLI option/flag definition.
+class CliOption {
+  final String name;
+  final String description;
+  final List<String>? choice;
+  final bool flag;
+  final bool numeric;
+  final bool text;
+  final bool abbreviated;
+  final String? defaultTo;
 
-  /// The one-line description shown in usage help.
-  final String? description;
+  CliOption(
+    this.name, {
+    this.description = '',
+    this.choice,
+    this.flag = false,
+    this.numeric = false,
+    this.text = false,
+    this.abbreviated = false,
+    this.defaultTo,
+  });
+}
 
-  /// Creates a parser with no declarations.
-  CliParser({this.syntax, this.description, void Function(int code)? onExit})
-    : onExit = onExit ?? exit;
+/// Execution context provided to a command action containing parsed arguments.
+class CliContext {
+  final List<String> rest;
+  final Map<String, String?> options;
+  final Set<String> flags;
+  final CliCommand command;
 
-  /// The action taken when [autoHelp] exits after printing usage.
-  ///
-  /// Defaults to `dart:io.exit`. Testing code can override this to prevent
-  /// terminating the test runner VM.
-  final void Function(int code) onExit;
+  CliContext(this.rest, this.options, this.flags, this.command);
 
-  @override
-  Cli get _reader => _parsed._reader;
+  /// Checks if a boolean flag was supplied.
+  bool flag(String name) => flags.contains(name);
 
-  @override
-  void _changed() {
-    _parsed._declarations
-      ..clear()
-      ..addAll(_declarations);
-    _parsed._children
-      ..clear()
-      ..addAll(_children);
-    _parsed._parse();
+  /// Retrieves an option string value or fallback [defaultTo].
+  String? option(String name, {String? defaultTo}) => options[name] ?? defaultTo;
+
+  /// Retrieves an integer option or fallback [defaultTo].
+  int? number(String name, {int? defaultTo}) {
+    final val = options[name];
+    return val != null ? int.tryParse(val) ?? defaultTo : defaultTo;
   }
 
-  /// Parses [args] against the declarations made so far.
-  ///
-  /// Returns the parsed command line, which carries the positional [Cli.args],
-  /// the raw [Cli.switches] and the subcommand [Cli.command]. Declared options
-  /// are read through the [Opt] handles the declarations returned.
-  ///
-  /// When [autoHelp] is set, `-h`/`--help` is registered if not already
-  /// declared, and printing usage then exits with code 0 via [onExit].
-  ///
-  /// **That exit does not run [onExit] hooks**, because this method is
-  /// synchronous and [shutdown] is not. Parse before registering any hook — or
-  /// use [run], which is async and shuts down cleanly.
-  Cli parse(List<String> args, {bool autoHelp = false}) {
-    if (autoHelp && !_declarations.containsKey('help')) {
-      flag('help', abbr: 'h', help: 'Show this message');
-    }
-    _parsed = Cli(args);
-    _changed();
-    if (autoHelp &&
-        (_parsed.switches.containsKey('help') ||
-            _parsed.switches.containsKey('h'))) {
-      stdout.writeln(usage());
-      onExit(0);
-    }
-    return _parsed;
+  /// Retrieves a double decimal option or fallback [defaultTo].
+  double? decimal(String name, {double? defaultTo}) {
+    final val = options[name];
+    return val != null ? double.tryParse(val) ?? defaultTo : defaultTo;
   }
 
-  /// The command line as last parsed.
-  ///
-  /// Before the first [parse] this is an empty command line, not `null`, so
-  /// reading an [Opt] early gives its default rather than throwing.
-  Cli get parsed => _parsed;
+  /// Retrieves a comma-separated list option.
+  List<String> list(String name, {String separator = ','}) {
+    final val = options[name];
+    if (val == null || val.isEmpty) return const [];
+    return val.split(separator).map((s) => s.trim()).toList();
+  }
+}
 
-  /// Parses [args], dispatches to the matching command and returns its exit
-  /// code. See [Cli.run].
-  Future<int> run(
-    List<String> args, {
-    String? version,
-    bool strict = false,
-    FutureOr<int> Function(Cli cli)? body,
+/// Represents a CLI command or subcommand.
+class CliCommand {
+  final String name;
+  final String description;
+  final Map<String, CliOption> options = {};
+  final Map<String, CliCommand> subcommands = {};
+  CommandHandler? handler;
+
+  CliCommand(this.name, {this.description = '', this.handler});
+
+  /// Defines an option on this command.
+  CliCommand option(
+    String name, {
+    String description = '',
+    List<String>? choice,
+    bool flag = false,
+    bool numeric = false,
+    bool text = false,
+    bool abbreviated = false,
+    String? defaultTo,
   }) {
-    parse(args);
-    return _parsed.run(
-      syntax: syntax,
+    options[name] = CliOption(
+      name,
       description: description,
-      version: version,
-      strict: strict,
-      body: body,
+      choice: choice,
+      flag: flag,
+      numeric: numeric,
+      text: text,
+      abbreviated: abbreviated,
+      defaultTo: defaultTo,
     );
+    return this;
   }
 
-  /// Validates that [names] — or every declared required option — were given.
-  void require([Iterable<String>? names]) => _parsed.require(names);
+  /// Defines a nested subcommand on this command.
+  CliCommand subcommand(
+    String name, {
+    String description = '',
+    CommandHandler? handler,
+    void Function(CliCommand sub)? build,
+  }) {
+    final sub = CliCommand(name, description: description, handler: handler);
+    build?.call(sub);
+    subcommands[name] = sub;
+    return sub;
+  }
 
-  /// Every switch given that no declaration covers.
-  List<String> unknown() => _parsed.unknown();
+  /// Sets the handler action for this command.
+  CliCommand action(CommandHandler actionHandler) {
+    handler = actionHandler;
+    return this;
+  }
 
-  /// Every switch the parser saw, declared or not. See [Cli.switches].
-  Map<String, String?> get switches => _parsed.switches;
+  /// Prints usage help for this command.
+  void printUsage() {
+    stdout.writeln('${'Usage:'.bold} $name [options] [command]');
+    if (description.isNotEmpty) {
+      stdout.writeln('\n$description');
+    }
+    if (subcommands.isNotEmpty) {
+      stdout.writeln('\n${'Commands:'.bold}');
+      for (final sub in subcommands.values) {
+        stdout.writeln('  ${sub.name.padRight(16)} ${sub.description}');
+      }
+    }
+    if (options.isNotEmpty) {
+      stdout.writeln('\n${'Options:'.bold}');
+      for (final opt in options.values) {
+        final prefix = opt.abbreviated ? '-${opt.name}' : '--${opt.name}';
+        final choices = opt.choice != null ? ' [${opt.choice!.join(', ')}]' : '';
+        stdout.writeln('  ${prefix.padRight(16)} ${opt.description}$choices');
+      }
+    }
+    stdout.writeln('  --help, -h       Print this help message');
+  }
 
-  /// The first positional argument, when it names a subcommand.
-  String? get command => _parsed.command;
+  /// Dispatches and runs this command with [args].
+  Future<void> run(List<String> args) async {
+    if (args.contains('--help') || args.contains('-h')) {
+      if (!options.containsKey('help') && !options.containsKey('h')) {
+        printUsage();
+        return;
+      }
+    }
 
-  /// Positional arguments, in order. See [Cli.args].
-  List<String> get args => _parsed.args;
+    if (args.isNotEmpty && subcommands.containsKey(args.first)) {
+      final sub = subcommands[args.first]!;
+      await sub.run(args.sublist(1));
+      return;
+    }
 
-  /// The raw argument list as parsed.
-  List<String> get raw => _parsed.raw;
+    final parsedFlags = <String>{};
+    final parsedOptions = <String, String?>{
+      for (final opt in options.values)
+        if (opt.defaultTo != null) opt.name: opt.defaultTo,
+    };
+    final rest = <String>[];
 
-  /// The formatted usage block for the declarations made so far.
-  String usage({Map<String, String>? flags, Map<String, String>? options}) =>
-      _parsed.usage(
-        syntax: syntax,
-        description: description,
-        flags: flags,
-        options: options,
-      );
+    for (var i = 0; i < args.length; i++) {
+      final arg = args[i];
+      if (arg.startsWith('--')) {
+        final raw = arg.substring(2);
+        final eq = raw.indexOf('=');
+        final name = eq == -1 ? raw : raw.substring(0, eq);
+        final val = eq == -1 ? null : raw.substring(eq + 1);
 
-  /// Writes [usage] to stdout.
-  void printUsage() => stdout.writeln(usage());
+        final optDef = options[name];
+        if (optDef?.flag == true) {
+          parsedFlags.add(name);
+        } else if (val != null) {
+          parsedOptions[name] = val;
+        } else if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
+          parsedOptions[name] = args[++i];
+        } else {
+          parsedFlags.add(name);
+        }
+      } else if (arg.startsWith('-') && arg.length > 1) {
+        final name = arg.substring(1);
+        final optDef = options[name];
+        if (optDef?.flag == true) {
+          parsedFlags.add(name);
+        } else if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
+          parsedOptions[name] = args[++i];
+        } else {
+          parsedFlags.add(name);
+        }
+      } else {
+        rest.add(arg);
+      }
+    }
 
-  /// Clears every declaration, subcommand and parsed value.
-  void reset() {
-    _declarations.clear();
-    _children.clear();
-    _parsed = Cli(const []);
+    if (handler != null) {
+      await handler!(CliContext(rest, parsedOptions, parsedFlags, this));
+    } else if (subcommands.isNotEmpty) {
+      printUsage();
+    }
+  }
+}
+
+/// Root builder for command-line applications.
+class Cli {
+  final String name;
+  final String description;
+  final Map<String, CliOption> globalOptions = {};
+  final Map<String, CliCommand> commands = {};
+  CommandHandler? defaultHandler;
+
+  Cli({this.name = '', this.description = '', this.defaultHandler});
+
+  /// Defines a command on this CLI application.
+  CliCommand command(
+    String name, {
+    String description = '',
+    CommandHandler? handler,
+    void Function(CliCommand cmd)? build,
+  }) {
+    final cmd = CliCommand(name, description: description, handler: handler);
+    build?.call(cmd);
+    commands[name] = cmd;
+    return cmd;
+  }
+
+  /// Defines a global option.
+  Cli option(
+    String name, {
+    String description = '',
+    List<String>? choice,
+    bool flag = false,
+    bool numeric = false,
+    bool text = false,
+    bool abbreviated = false,
+    String? defaultTo,
+  }) {
+    globalOptions[name] = CliOption(
+      name,
+      description: description,
+      choice: choice,
+      flag: flag,
+      numeric: numeric,
+      text: text,
+      abbreviated: abbreviated,
+      defaultTo: defaultTo,
+    );
+    return this;
+  }
+
+  /// Sets the default action handler.
+  Cli action(CommandHandler handler) {
+    defaultHandler = handler;
+    return this;
+  }
+
+  /// Prints CLI usage.
+  void printUsage() {
+    final appName = name.isNotEmpty ? name : 'app';
+    stdout.writeln('${'Usage:'.bold} $appName [command] [options]');
+    if (description.isNotEmpty) stdout.writeln('\n$description');
+    if (commands.isNotEmpty) {
+      stdout.writeln('\n${'Commands:'.bold}');
+      for (final cmd in commands.values) {
+        stdout.writeln('  ${cmd.name.padRight(16)} ${cmd.description}');
+      }
+    }
+    stdout.writeln('\n${'Options:'.bold}');
+    if (globalOptions.isNotEmpty) {
+      for (final opt in globalOptions.values) {
+        final prefix = opt.abbreviated ? '-${opt.name}' : '--${opt.name}';
+        final choices = opt.choice != null ? ' [${opt.choice!.join(', ')}]' : '';
+        stdout.writeln('  ${prefix.padRight(16)} ${opt.description}$choices');
+      }
+    }
+    stdout.writeln('  --help, -h       Print this help message');
+  }
+
+  /// Dispatches and runs the CLI application with [args].
+  Future<void> run(List<String> args) async {
+    if (args.contains('--help') || args.contains('-h')) {
+      if (!globalOptions.containsKey('help') && !globalOptions.containsKey('h')) {
+        printUsage();
+        return;
+      }
+    }
+
+    if (args.isNotEmpty && commands.containsKey(args.first)) {
+      await commands[args.first]!.run(args.sublist(1));
+      return;
+    }
+
+    if (defaultHandler != null) {
+      final parsedFlags = <String>{};
+      final parsedOptions = <String, String?>{
+        for (final opt in globalOptions.values)
+          if (opt.defaultTo != null) opt.name: opt.defaultTo,
+      };
+      final rest = <String>[];
+
+      for (var i = 0; i < args.length; i++) {
+        final arg = args[i];
+        if (arg.startsWith('--')) {
+          final raw = arg.substring(2);
+          final eq = raw.indexOf('=');
+          final name = eq == -1 ? raw : raw.substring(0, eq);
+          final val = eq == -1 ? null : raw.substring(eq + 1);
+
+          final optDef = globalOptions[name];
+          if (optDef?.flag == true) {
+            parsedFlags.add(name);
+          } else if (val != null) {
+            parsedOptions[name] = val;
+          } else if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
+            parsedOptions[name] = args[++i];
+          } else {
+            parsedFlags.add(name);
+          }
+        } else if (arg.startsWith('-') && arg.length > 1) {
+          final name = arg.substring(1);
+          final optDef = globalOptions[name];
+          if (optDef?.flag == true) {
+            parsedFlags.add(name);
+          } else if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
+            parsedOptions[name] = args[++i];
+          } else {
+            parsedFlags.add(name);
+          }
+        } else {
+          rest.add(arg);
+        }
+      }
+
+      await defaultHandler!(CliContext(rest, parsedOptions, parsedFlags, CliCommand(name)));
+    } else {
+      printUsage();
+    }
   }
 }
