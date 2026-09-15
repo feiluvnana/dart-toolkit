@@ -411,10 +411,12 @@ Future<R?> serveOnce<R extends Object>(
   String host = 'localhost',
   Served reply = const Served.text('Done. You can close this tab.'),
   Duration? timeout,
+  void Function(Object error, StackTrace stack)? onError,
 }) => serve_impl.onceOn(
   port,
   handler,
   host: host,
   reply: reply,
   timeout: timeout,
+  onError: onError,
 );

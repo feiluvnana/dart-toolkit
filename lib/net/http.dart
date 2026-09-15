@@ -266,6 +266,8 @@ class Response {
 
   final Encoding? _encodingOverride;
 
+  bool _closed = false;
+
   String? _body;
 
   // Keyed by codec, and every accessor under `format` is a const instance, so
@@ -418,12 +420,37 @@ class Response {
         'Response body is streamed; use stream, readBytes(), or readText().',
       );
     }
+    if (_closed) {
+      throw StateError('Response body was closed before it was read.');
+    }
+  }
+
+  /// Abandons an unread streamed body, freeing the connection behind it.
+  ///
+  /// The counterpart of draining [stream]: a caller that decides off the
+  /// statusCode alone that it does not want the body says so here, rather than
+  /// dropping the reply and leaving the socket to a garbage collector.
+  Future<void> close() async {
+    final live = _stream;
+    if (live == null) return;
+    _stream = null;
+    _closed = true;
+    try {
+      await live.listen(null).cancel();
+    } on StateError {
+      // Already being listened to elsewhere; that listener owns the socket.
+    }
   }
 
   /// Collects a streamed body into memory, then behaves as a buffered reply.
   Future<List<int>> readBytes() async {
     final live = _stream;
-    if (live == null) return _rawBytes;
+    if (live == null) {
+      if (_closed) {
+        throw StateError('Response body was closed before it was read.');
+      }
+      return _rawBytes;
+    }
     final builder = BytesBuilder(copy: false);
     await for (final chunk in live) {
       builder.add(chunk);
@@ -748,7 +775,9 @@ class Fetcher with _PathResolver {
     HttpCache? cache,
     Waiting? limiter,
   }) => Fetcher(
-    client: client,
+    // [pool] is the shared connection pool the constructor documents; taking
+    // it and then not passing it gave every browser client its own.
+    client: client ?? pool,
     headers: {..._browserHeaders, ...?headers},
     timeout: timeout,
     retries: retries,
@@ -933,6 +962,12 @@ class Fetcher with _PathResolver {
 
   /// Sends an HTTP request and returns a streaming [Response] yielding body bytes
   /// via [Response.stream] without buffering the full body in heap memory.
+  ///
+  /// A [limiter] paces the request, not the body: the body is read on the
+  /// caller's schedule, and holding a [Semaphore] permit across a window this
+  /// client cannot see would deadlock the next call for a body nobody read.
+  /// The socket is the caller's to finish — drain [Response.stream], or
+  /// abandon it with [Response.close].
   Future<Response> stream(
     HttpMethod method,
     Uri url, {
@@ -959,7 +994,6 @@ class Fetcher with _PathResolver {
     while (true) {
       for (var attempt = 1; ; attempt++) {
         await limiter?.take();
-        var releaseImmediately = true;
         final currentMerged = Map<String, String>.from(merged);
         if (jar != null) {
           final cookieHeader = jar!.header(currentUrl);
@@ -1003,9 +1037,8 @@ class Fetcher with _PathResolver {
             break;
           }
 
-          releaseImmediately = false;
           return Response.stream(
-            _withLimiterRelease(streamed.stream, limiter),
+            streamed.stream,
             url: currentUrl,
             fetch: fetch ?? Fetch(url, method: method),
             statusCode: streamed.statusCode,
@@ -1019,9 +1052,7 @@ class Fetcher with _PathResolver {
           onretry?.call(currentUrl, attempt);
           await Future<void>.delayed(_backoffWithJitter(backoff * attempt));
         } finally {
-          if (releaseImmediately) {
-            limiter?.release();
-          }
+          limiter?.release();
         }
       }
     }
@@ -1163,44 +1194,6 @@ class Fetcher with _PathResolver {
     }
   }
 
-  static Stream<List<int>> _withLimiterRelease(
-    Stream<List<int>> stream,
-    Waiting? limiter,
-  ) {
-    if (limiter == null) return stream;
-    var released = false;
-    void release() {
-      if (!released) {
-        released = true;
-        limiter.release();
-      }
-    }
-
-    final controller = StreamController<List<int>>(sync: true);
-    StreamSubscription<List<int>>? sub;
-    controller.onListen = () {
-      sub = stream.listen(
-        controller.add,
-        onError: (Object e, StackTrace st) {
-          release();
-          controller.addError(e, st);
-        },
-        onDone: () {
-          release();
-          controller.close();
-        },
-        cancelOnError: false,
-      );
-    };
-    controller.onPause = () => sub?.pause();
-    controller.onResume = () => sub?.resume();
-    controller.onCancel = () {
-      release();
-      return sub?.cancel();
-    };
-    return controller.stream;
-  }
-
   /// Reads [streamed] into a response, refusing bodies larger than [cap].
   ///
   /// [deadline] bounds the whole body transfer, not just the headers, so a
@@ -1327,9 +1320,22 @@ class Fetcher with _PathResolver {
     if (match ? Fs.similar(dest) : Fs.has(dest)) return Fs.entryFor(dest);
 
     final merged = {...this.headers, ...?headers};
+    // A session's cookies belong on a download as much as on a page: without
+    // this, `Fetcher(session: true)` logged in and then fetched the file it
+    // had earned as an anonymous stranger.
+    if (jar != null) {
+      final cookieHeader = jar!.header(url);
+      if (cookieHeader != null) {
+        merged['Cookie'] = merged.containsKey('Cookie')
+            ? '${merged['Cookie']}; $cookieHeader'
+            : cookieHeader;
+      }
+    }
     final effRetries = retries ?? this.retries;
     final maxAttempts = effRetries > 0 ? effRetries + 1 : 1;
     for (var attempt = 1; ; attempt++) {
+      // Paced like every other request this client makes, retries included.
+      await limiter?.take();
       try {
         final file = await Fs.download(
           url,
@@ -1344,6 +1350,8 @@ class Fetcher with _PathResolver {
       } catch (_) {
         if (attempt >= maxAttempts) rethrow;
         await Future<void>.delayed(backoff * attempt);
+      } finally {
+        limiter?.release();
       }
     }
   }

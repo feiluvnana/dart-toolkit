@@ -428,10 +428,17 @@ class Fs {
   }
 
   /// Removes the file, link or directory at [path] without blocking.
+  ///
+  /// The kind is read **without following links**, so deleting a symlink to a
+  /// directory removes the link and never reaches into what it points at. A
+  /// dangling link is still a link, and still goes.
   static Future<bool> removeAsync(String path) async {
-    final type = await FileSystemEntity.type(path);
-    if (type == FileSystemEntityType.file ||
-        type == FileSystemEntityType.link) {
+    final type = await FileSystemEntity.type(path, followLinks: false);
+    if (type == FileSystemEntityType.link) {
+      await Link(path).delete();
+      return true;
+    }
+    if (type == FileSystemEntityType.file) {
       await File(path).delete();
       return true;
     }
@@ -637,10 +644,16 @@ class Fs {
   }
 
   /// Removes the file, link or directory at [path]; `false` when absent.
+  ///
+  /// Link-aware in the same way [removeAsync] is: a symlink is unlinked, not
+  /// followed into.
   static bool removeSync(String path) {
-    final type = FileSystemEntity.typeSync(path);
-    if (type == FileSystemEntityType.file ||
-        type == FileSystemEntityType.link) {
+    final type = FileSystemEntity.typeSync(path, followLinks: false);
+    if (type == FileSystemEntityType.link) {
+      Link(path).deleteSync();
+      return true;
+    }
+    if (type == FileSystemEntityType.file) {
       File(path).deleteSync();
       return true;
     }
@@ -914,6 +927,12 @@ class Fs {
   ///
   /// Reads the file in chunks, so hashing a file larger than memory works.
   static String hash(String path, [Algo algorithm = Algo.sha256]) {
+    // A file that is not there hashes as the empty input, the way `read`
+    // parses it as the empty document: an optional artifact needs no `exists`
+    // in front of the digest.
+    if (!File(path).existsSync()) {
+      return _digest(algorithm).convert(const []).toString();
+    }
     final handle = File(path).openSync();
     try {
       final sink = _CollectingSink();
@@ -940,10 +959,14 @@ class Fs {
     String path, [
     Algo algorithm = Algo.sha256,
   ]) async {
+    final file = File(path);
+    if (!await file.exists()) {
+      return _digest(algorithm).convert(const []).toString();
+    }
     final sink = _CollectingSink();
     final input = _digest(algorithm).startChunkedConversion(sink);
     try {
-      await for (final chunk in File(path).openRead()) {
+      await for (final chunk in file.openRead()) {
         input.add(chunk);
       }
     } finally {

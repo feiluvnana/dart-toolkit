@@ -29,6 +29,7 @@ class Watch {
     Pattern? pattern,
     Duration settle = const Duration(milliseconds: 200),
     bool recursive = true,
+    void Function(Object error, StackTrace stack)? onError,
   }) {
     final subscriptions = <String, StreamSubscription<FileSystemEvent>>{};
     final pending = <String, Timer>{};
@@ -39,10 +40,20 @@ class Watch {
       return pattern.allMatches(candidate).isNotEmpty;
     }
 
+    // A callback that throws does it inside a debounce timer, where there is
+    // no caller left to catch it: unreported, it takes down the isolate.
+    void deliver(String changed) {
+      try {
+        onChange(changed);
+      } catch (error, stack) {
+        onError?.call(error, stack);
+      }
+    }
+
     void fire(String changed) {
       if (stopped) return;
       if (settle <= Duration.zero) {
-        onChange(changed);
+        deliver(changed);
         return;
       }
       // An editor writes a file two or three times per save; without this the
@@ -51,7 +62,7 @@ class Watch {
       pending[changed]?.cancel();
       pending[changed] = Timer(settle, () {
         pending.remove(changed);
-        if (!stopped) onChange(changed);
+        if (!stopped) deliver(changed);
       });
     }
 
@@ -61,18 +72,29 @@ class Watch {
       if (!dir.existsSync()) return;
       final native = recursive && nativeRecursion;
       try {
-        subscriptions[directory] = dir.watch(recursive: native).listen((event) {
-          // A new directory under a hand-rolled recursive watch needs its
-          // own subscription, or nothing inside it is ever seen.
-          if (recursive &&
-              !native &&
-              event.isDirectory &&
-              event.type == FileSystemEvent.create) {
-            listen(event.path);
-          }
-          if (event.isDirectory) return;
-          if (wanted(event.path)) fire(event.path);
-        }, onError: (Object _) {});
+        subscriptions[directory] = dir
+            .watch(recursive: native)
+            .listen(
+              (event) {
+                // A new directory under a hand-rolled recursive watch needs its
+                // own subscription, or nothing inside it is ever seen.
+                if (recursive &&
+                    !native &&
+                    event.isDirectory &&
+                    event.type == FileSystemEvent.create) {
+                  listen(event.path);
+                }
+                if (event.isDirectory) return;
+                if (wanted(event.path)) fire(event.path);
+              },
+              onError: (Object error, StackTrace stack) {
+                // An inotify overflow or a permission change ends the subscription.
+                // Swallowed, a watcher looked idle forever; reported, the caller can
+                // restart it.
+                subscriptions.remove(directory);
+                onError?.call(error, stack);
+              },
+            );
       } on FileSystemException {
         // A directory that vanished between the walk and the watch is not an
         // error worth propagating out of a watcher.

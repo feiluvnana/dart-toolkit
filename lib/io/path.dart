@@ -71,6 +71,7 @@ import '../src/format.dart';
 import '../src/fs.dart';
 import '../src/json.dart';
 import '../src/lock.dart';
+import '../src/shared.dart';
 import '../src/watch.dart';
 
 // ============================================================================
@@ -159,7 +160,10 @@ extension type const Path(String raw) implements String {
     return Path(
       out.replaceAllMapped(
         RegExp(r'\$\{(\w+)\}|\$(\w+)'),
-        (m) => Platform.environment[m.group(1) ?? m.group(2)!] ?? '',
+        // Through the shared environment, so a name set by `loadEnv` or
+        // `env[…] =` expands to what `env` would report rather than to the
+        // empty string.
+        (m) => sharedEnv[m.group(1) ?? m.group(2)!] ?? '',
       ),
     );
   }
@@ -492,20 +496,29 @@ extension type const Path(String raw) implements String {
   ///
   /// Returns the function that stops watching. A burst of events for one save
   /// is coalesced into one call after `Iterable.settle`.
+  /// [onError] reports a watch the OS ended — an inotify overflow, a
+  /// permission change, a deleted directory — and anything [onChange] itself
+  /// throws. Without it those are silent, and a watcher that has stopped
+  /// seeing changes looks exactly like a tree that is not changing.
   Future<void> Function() watch(
     void Function(String path) onChange, {
     Pattern? pattern,
     Duration settle = const Duration(milliseconds: 200),
     bool recursive = true,
+    void Function(Object error, StackTrace stack)? onError,
   }) => Watch.start(
     raw,
     onChange,
     pattern: pattern,
     settle: settle,
     recursive: recursive,
+    onError: onError,
   );
 
   /// Changed files under this path, as an idiomatic [Stream].
+  ///
+  /// Watch failures arrive as stream errors, which is what a `Stream` already
+  /// has a channel for.
   Stream<Path> changes({
     Pattern? pattern,
     Duration settle = const Duration(milliseconds: 200),
@@ -523,6 +536,9 @@ extension type const Path(String raw) implements String {
           pattern: pattern,
           settle: settle,
           recursive: recursive,
+          onError: (error, stack) {
+            if (!controller.isClosed) controller.addError(error, stack);
+          },
         );
       },
       onCancel: () => stop?.call(),

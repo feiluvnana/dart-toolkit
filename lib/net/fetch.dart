@@ -167,7 +167,9 @@ final class Fetch {
   /// Throws [FormatException] when [json] carries no usable `url`.
   factory Fetch.fromJson(Map<String, Object?> json) {
     final url = Uri.tryParse(json['url'] as String? ?? '');
-    if (url == null) {
+    // `Uri.tryParse('')` is a Uri, not null, so a resume file missing its url
+    // used to restore a request that fetched nothing and reported 200.
+    if (url == null || (!url.hasScheme && url.path.isEmpty)) {
       throw FormatException('Fetch has no usable url: ${json['url']}');
     }
     final body = json['body'];

@@ -74,12 +74,18 @@ final class Json {
   static const Json none = Json(null);
 
   /// Accesses a map key or array index directly on the decoded value.
+  ///
+  /// A key that is not there, or an index outside the array, reads as `null`
+  /// rather than throwing — the same contract [at] keeps, and the reason this
+  /// is safe to write straight into a handler.
   dynamic operator [](Object key) {
     if (raw is Map && key is String) {
       return (raw as Map)[key];
     }
     if (raw is List && key is int) {
-      return (raw as List)[key];
+      final list = raw as List;
+      if (key < 0 || key >= list.length) return null;
+      return list[key];
     }
     return null;
   }
@@ -241,18 +247,25 @@ final class Json {
   bool get isNotEmpty => !isEmpty;
 
   /// Converts this JSON cursor to a native [Map] if it represents a JSON object, or `null` otherwise.
+  ///
+  /// A value that is not a [T] is left out rather than thrown over: a reader
+  /// that asks for `toMap<String>()` of a mixed object gets the string
+  /// entries, the way every other read here answers with what it found.
   Map<String, T>? toMap<T>() => switch (raw) {
     Map<String, T> map => map,
     Map<Object?, Object?> map => {
-      for (final entry in map.entries) entry.key.toString(): entry.value as T,
+      for (final entry in map.entries)
+        if (entry.value is T) entry.key.toString(): entry.value as T,
     },
     _ => null,
   };
 
   /// Converts this JSON cursor to a native [List] if it represents a JSON array, or `null` otherwise.
+  ///
+  /// Elements that are not a [T] are left out, for the reason [toMap] gives.
   List<T>? toList<T>() => switch (raw) {
     List<T> list => list,
-    List<Object?> list => list.cast<T>(),
+    List<Object?> list => list.whereType<T>().toList(),
     _ => null,
   };
 

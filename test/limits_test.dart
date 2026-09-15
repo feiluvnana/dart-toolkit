@@ -135,6 +135,48 @@ void main() {
         expect(sem.available, equals(1));
       },
     );
+
+    test('a streamed reply nobody reads does not hold the permit', () async {
+      final sem = Semaphore(1);
+      final client = Fetcher(
+        limiter: sem,
+        client: MockClient.streaming(
+          (request, bodyStream) async => http.StreamedResponse(
+            Stream.fromIterable([
+              [104, 105],
+            ]),
+            200,
+          ),
+        ),
+      );
+      addTearDown(client.close);
+
+      final first = await client.stream(HttpMethod.get, 'https://x.test/a'.url);
+      expect(first.statusCode, equals(200));
+      expect(sem.available, equals(1));
+
+      // The body is the caller's to finish, so a second stream must not wait
+      // on one that was never read.
+      final second = await client
+          .stream(HttpMethod.get, 'https://x.test/b'.url)
+          .timeout(2.s);
+      expect(await second.readText(), equals('hi'));
+      await first.close();
+    });
+
+    test('close abandons an unread body and refuses later reads', () async {
+      final res = Response.stream(
+        Stream.fromIterable([
+          [104, 105],
+        ]),
+        url: 'https://x.test/a'.url,
+      );
+      await res.close();
+      expect(res.isStreamed, isFalse);
+      expect(() => res.bytes, throwsStateError);
+      expect(res.readBytes, throwsStateError);
+      await res.close(); // idempotent
+    });
   });
 
   group('withLock', () {

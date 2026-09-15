@@ -326,4 +326,146 @@ void main() {
       expect(calls, equals(4));
     });
   });
+
+  group('v9.2 hardening', () {
+    late Directory tempDir;
+
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp('v92_test_');
+    });
+
+    tearDown(() async {
+      if (await tempDir.exists()) await tempDir.delete(recursive: true);
+    });
+
+    test('deleting a link to a directory does not reach the target', () async {
+      final target = Path(p.join(tempDir.path, 'target'));
+      await target.makeDir();
+      await (target / 'keep.txt').writeText('precious');
+      final link = Path(p.join(tempDir.path, 'link'));
+      await link.linkTo(target);
+
+      expect(await link.delete(), isTrue);
+      expect(link.exists, isFalse);
+      expect((target / 'keep.txt').exists, isTrue, reason: 'target survives');
+    });
+
+    test('a dangling link can still be deleted', () async {
+      final link = Path(p.join(tempDir.path, 'dangling'));
+      await link.linkTo(p.join(tempDir.path, 'nothing-here'));
+      expect(await link.delete(), isTrue);
+      expect(link.isLink, isFalse);
+    });
+
+    test('concurrency survives a robots lookup on a single seed', () async {
+      var active = 0;
+      var peak = 0;
+      final crawler = crawl(
+        ['https://c.test/'.url],
+        concurrency: 4,
+        robots: .obey('Bot/1.0'),
+        next: (Response res) => res.url.path == '/'
+            ? [for (var i = 0; i < 4; i++) res.follow('/page$i')]
+            : const <Fetch>[],
+        send: (fetch) async {
+          if (fetch.url.path == '/robots.txt') {
+            return Response.text('User-agent: *\nAllow: /', fetch: fetch);
+          }
+          active++;
+          peak = active > peak ? active : peak;
+          await delay(60.ms);
+          active--;
+          return Response.text('<p>ok</p>', fetch: fetch);
+        },
+      );
+
+      final stats = await crawler.run();
+      expect(stats.fetched, equals(5));
+      expect(peak, greaterThan(1), reason: 'more than one worker ran');
+    });
+
+    test('env keeps an escaped backslash out of the escape that follows', () {
+      final parsed = env.parse(
+        r'WIN="C:\\temp"'
+        '\n'
+        r'LIT="a\\nb"',
+      );
+      expect(parsed['WIN'], equals(r'C:\temp'));
+      expect(parsed['LIT'], equals(r'a\nb'));
+    });
+
+    test('Json reads out of range as null rather than throwing', () {
+      final doc = '[1,2]'.parse(.json);
+      expect(doc[99], isNull);
+      expect(doc[-1], isNull);
+      expect(doc[0], equals(1));
+      expect(
+        '{"a":1,"b":"x"}'.parse(.json).toMap<String>(),
+        equals({'b': 'x'}),
+      );
+      expect('[1,"x",2]'.parse(.json).toList<int>(), equals([1, 2]));
+    });
+
+    test('a sitemap round-trips a url with a query string', () {
+      final url = 'https://e.test/search?q=a&b=1'.url;
+      final xml = const SitemapFormat().format([url]);
+      expect(xml, contains('q=a&amp;b=1'));
+      expect(xml.parse(.sitemap), equals([url]));
+      expect(const SitemapFormat().nested('<SITEMAPINDEX>'), isTrue);
+    });
+
+    test('a form submits one hop deeper than the page it came from', () {
+      final res = Response.text(
+        '<form id="f" action="/next" method="POST"></form>',
+        fetch: Fetch('https://e.test/a'.url, depth: 2),
+      );
+      expect(res.form('#f')!.fetch().depth, equals(3));
+      expect(res.form('#f')!.fetch(depth: 0).depth, equals(0));
+    });
+
+    test('a missing file hashes as the empty input', () async {
+      final absent = Path(p.join(tempDir.path, 'nope.bin'));
+      const emptySha =
+          'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+      expect(await absent.hash(), equals(emptySha));
+      expect(absent.sync.hash(), equals(emptySha));
+    });
+
+    test('resume entries without a url are refused', () {
+      expect(() => Fetch.fromJson(const {'url': ''}), throwsFormatException);
+      expect(() => Fetch.fromJson(const {}), throwsFormatException);
+    });
+
+    test('expanded reads names loadEnv put in the environment', () {
+      env['DT_EXPAND_ROOT'] = p.join(tempDir.path, 'root');
+      addTearDown(() => env.remove('DT_EXPAND_ROOT'));
+      expect(
+        Path(r'$DT_EXPAND_ROOT/out').expanded,
+        equals(p.join(tempDir.path, 'root', 'out')),
+      );
+    });
+
+    test('a watcher reports what its callback throws', () async {
+      final dir = Path(tempDir.path);
+      final errors = <Object>[];
+      final stop = dir.watch(
+        (_) => throw StateError('handler blew up'),
+        settle: Duration.zero,
+        onError: (error, _) => errors.add(error),
+      );
+      addTearDown(stop);
+      await delay(120.ms);
+      await (dir / 'poke.txt').writeText('x');
+      await delay(400.ms);
+      expect(errors, isNotEmpty);
+      expect(errors.first, isA<StateError>());
+    });
+
+    test('which finds an executable inside a directory it is given', () {
+      final bin = Path(p.join(tempDir.path, 'bin'));
+      bin.sync.makeDir();
+      (bin / 'mytool').sync.writeText('#!/bin/sh\n');
+      expect(which('mytool', paths: [bin]), equals(p.join(bin, 'mytool')));
+    });
+  });
 }

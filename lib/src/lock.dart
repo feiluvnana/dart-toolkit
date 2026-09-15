@@ -59,20 +59,43 @@ class Lock {
   }) async {
     final file = File(path);
     final deadline = wait == null ? null : DateTime.now().add(wait);
+    ({int pid, DateTime? since, String host})? unreadable;
+    var sawUnreadable = false;
 
     while (!_take(file)) {
       final holder = _read(file);
-      if (holder == null || !_alive(holder)) {
-        if (file.existsSync()) {
-          _release(file);
-          continue;
+      if (holder == null) {
+        // No pid to ask about: either nobody is there, or a holder is between
+        // its exclusive create and its write. Those look identical for an
+        // instant, so the second look is what tells them apart.
+        if (!file.existsSync()) continue;
+        if (sawUnreadable) {
+          if (_steal(file)) continue;
+          sawUnreadable = false;
+        } else {
+          sawUnreadable = true;
         }
-        if (deadline == null || DateTime.now().isAfter(deadline)) {
-          throw LockedError(path, pid: holder?.pid, since: holder?.since);
+        if (deadline != null && DateTime.now().isAfter(deadline)) {
+          throw LockedError(path);
         }
         await Future<void>.delayed(retryEvery);
         continue;
       }
+      sawUnreadable = false;
+      if (!_alive(holder)) {
+        // The recorded process is gone, so the lock is stale rather than held.
+        // Confirming the same pid twice keeps a reclaim from racing a holder
+        // that took the lock in between.
+        if (unreadable != null &&
+            unreadable.pid == holder.pid &&
+            unreadable.since == holder.since) {
+          if (_steal(file)) continue;
+        }
+        unreadable = holder;
+        await Future<void>.delayed(retryEvery);
+        continue;
+      }
+      unreadable = null;
       if (deadline == null || DateTime.now().isAfter(deadline)) {
         throw LockedError(path, pid: holder.pid, since: holder.since);
       }
@@ -91,11 +114,19 @@ class Lock {
     final file = File(path);
     while (!_take(file)) {
       final holder = _read(file);
+      if (holder == null && !file.existsSync()) continue;
       if (holder == null || !_alive(holder)) {
-        if (file.existsSync()) {
-          _release(file);
-          continue;
-        }
+        // One confirming look, for the reason [hold] gives: a holder that has
+        // created the file but not written it yet is not a stale lock.
+        sleep(retryEvery);
+        final again = _read(file);
+        final settled =
+            (again == null && file.existsSync()) ||
+            (again != null &&
+                again.pid == holder?.pid &&
+                again.since == holder?.since &&
+                !_alive(again));
+        if (settled && _steal(file)) continue;
         throw LockedError(path, pid: holder?.pid, since: holder?.since);
       }
       throw LockedError(path, pid: holder.pid, since: holder.since);
@@ -119,6 +150,9 @@ class Lock {
       // `exclusive` is the whole mechanism: the create fails rather than
       // truncating a lock somebody else is holding.
       file.createSync(exclusive: true);
+      // Tracked before the write, so a Ctrl-C in the microsecond between the
+      // two does not leave a lock nobody can account for.
+      Sys.track(file);
       // Flush so another process never observes the exclusive empty file as a
       // permanent unreadable lock.
       file.writeAsStringSync(
@@ -129,14 +163,32 @@ class Lock {
         }),
         flush: true,
       );
-      // A lock file that survives a Ctrl-C is worse than no lock at all: the
-      // next run refuses to start. This is the same registry that removes a
-      // half-written `.part` file.
-      Sys.track(file);
       return true;
     } on FileSystemException {
       return false;
     }
+  }
+
+  /// Claims a stale lock by renaming it aside, so only one waiter clears it.
+  ///
+  /// Unlinking directly let two waiters both delete and both create — and let
+  /// the loser's delete take the winner's fresh lock with it. A rename fails
+  /// for everyone but the first, which is the claim.
+  static bool _steal(File file) {
+    final aside = File(
+      '${file.path}.stale.$pid.${DateTime.now().microsecondsSinceEpoch}',
+    );
+    try {
+      file.renameSync(aside.path);
+    } on FileSystemException {
+      return false;
+    }
+    try {
+      if (aside.existsSync()) aside.deleteSync();
+    } on FileSystemException {
+      // The claim is what mattered; a leftover here is not worth failing over.
+    }
+    return true;
   }
 
   static void _release(File file) {

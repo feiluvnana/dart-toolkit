@@ -336,8 +336,11 @@ Future<Server> serveOn(
       }
       try {
         await reply._writeTo(request.response);
-      } catch (_) {
-        // The client hung up mid-write. Nothing left to say to it.
+      } catch (error, stack) {
+        // The client hung up mid-write. Nothing left to say to it — but a caller
+        // waiting on `sent` must not be told the reply landed when it did not.
+        onError?.call(error, stack);
+        return;
       }
       sent?.call();
     },
@@ -357,6 +360,7 @@ Future<R?> onceOn<R extends Object>(
   String host = 'localhost',
   Served reply = const Served.text('Done. You can close this tab.'),
   Duration? timeout,
+  void Function(Object error, StackTrace stack)? onError,
 }) async {
   final delivered = Completer<void>();
   R? found;
@@ -378,6 +382,7 @@ Future<R?> onceOn<R extends Object>(
     sent: () {
       if (found != null && !delivered.isCompleted) delivered.complete();
     },
+    onError: onError,
   );
 
   Timer? clock;

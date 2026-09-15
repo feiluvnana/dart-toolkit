@@ -99,16 +99,7 @@ class Environment {
         } else {
           value = value.substring(1);
         }
-        if (quote == '"') {
-          value = value
-              .replaceAll(r'\"', '"')
-              .replaceAll(r'\\', r'\')
-              .replaceAll(r'\n', '\n')
-              .replaceAll(r'\r', '\r')
-              .replaceAll(r'\t', '\t');
-        } else {
-          value = value.replaceAll(r"\'", "'").replaceAll(r'\\', r'\');
-        }
+        value = _unescape(value, quote);
       } else {
         // An unquoted value ends at a trailing ` #` comment.
         final comment = value.indexOf(' #');
@@ -117,6 +108,46 @@ class Environment {
       result[key] = value;
     }
     return result;
+  }
+
+  /// Decodes the escapes inside a quoted `.env` value, left to right.
+  ///
+  /// One pass, because ordered `replaceAll`s decode their own output: turning
+  /// `\\` into `\` first left `C:\\temp` as `C:` + a tab + `emp` once the
+  /// `\t` pass ran over the backslash it had just produced.
+  static String _unescape(String value, String quote) {
+    final out = StringBuffer();
+    for (var i = 0; i < value.length; i++) {
+      final c = value[i];
+      if (c != r'\' || i + 1 >= value.length) {
+        out.write(c);
+        continue;
+      }
+      final next = value[i + 1];
+      // Single quotes carry no escapes in `.env` beyond the quote itself and
+      // the backslash, so anything else stays the two characters it was.
+      final decoded = quote == '"'
+          ? switch (next) {
+              'n' => '\n',
+              'r' => '\r',
+              't' => '\t',
+              '"' => '"',
+              r'\' => r'\',
+              _ => null,
+            }
+          : switch (next) {
+              "'" => "'",
+              r'\' => r'\',
+              _ => null,
+            };
+      if (decoded == null) {
+        out.write(c);
+        continue;
+      }
+      out.write(decoded);
+      i++;
+    }
+    return out.toString();
   }
 
   /// Reads [key] as [T], returning [fallback] when absent or unparseable.

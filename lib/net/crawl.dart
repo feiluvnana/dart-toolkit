@@ -339,6 +339,7 @@ final class Crawler extends Stream<Response> {
   final Set<Completer<void>> _waiting = {};
   Uri? _seedOrigin;
   int _active = 0;
+  int _claimed = 0;
   bool _started = false;
   bool _stopped = false;
   bool _armed = false;
@@ -577,69 +578,80 @@ final class Crawler extends Stream<Response> {
         continue;
       }
       _inflight.add(fetch);
-
-      var robotsGap = Duration.zero;
-      final agent = _robotsPolicy.agent;
-      if (agent != null && _isWeb(fetch.url)) {
-        final rules = await _rules(send, fetch.url);
-        if (!rules.allowed(fetch.url, agent: agent)) {
-          _skip(fetch);
-          continue;
-        }
-        robotsGap = rules.crawlDelay(agent: agent) ?? Duration.zero;
-      }
-
-      // A Crawl-delay the site asked for is honoured per-host whether or not
-      // per-host pacing was requested; it is a floor, not a replacement.
-      final gap = _politeness.gap;
-      final hostGap = _politeness.perHost && gap > robotsGap ? gap : robotsGap;
-      if (hostGap > Duration.zero && !_stopped) {
-        await _throttle(fetch.url.host, hostGap);
-      }
-
-      _active++;
+      // Claimed the moment it leaves the queue, not when the socket opens: a
+      // robots lookup or a politeness gap is a worker still working, and a
+      // sibling that read `_active` during that window used to conclude the
+      // crawl was finished and break — leaving one worker whatever
+      // `concurrency` said.
+      _claimed++;
       try {
-        final reply = await send(fetch);
-        if (_stopped) continue;
-        _bytes += reply.bytes.length;
-
-        if (_accept.isNotEmpty && !_accepts(reply.contentType)) {
-          // A PDF, an image, an archive: fetched, but not what was asked
-          // for. Dropped here rather than inside every caller.
-          _skip(fetch);
-          continue;
-        }
-
-        final followed = await _next?.call(reply);
-        if (followed != null) {
-          for (final f in followed) {
-            _schedule(f);
+        var robotsGap = Duration.zero;
+        final agent = _robotsPolicy.agent;
+        if (agent != null && _isWeb(fetch.url)) {
+          final rules = await _rules(send, fetch.url);
+          if (!rules.allowed(fetch.url, agent: agent)) {
+            _skip(fetch);
+            continue;
           }
+          robotsGap = rules.crawlDelay(agent: agent) ?? Duration.zero;
         }
 
-        _inflight.remove(fetch);
-        _fetched++;
-        if (!sink.isClosed) sink.add(Done<Response>(reply));
-        if (_limit case final cap? when _fetched >= cap) {
-          stop('Limit of $cap pages reached');
+        // A Crawl-delay the site asked for is honoured per-host whether or not
+        // per-host pacing was requested; it is a floor, not a replacement.
+        final gap = _politeness.gap;
+        final hostGap = _politeness.perHost && gap > robotsGap
+            ? gap
+            : robotsGap;
+        if (hostGap > Duration.zero && !_stopped) {
+          await _throttle(fetch.url.host, hostGap);
         }
-      } catch (error, stack) {
-        _failed++;
-        if (!sink.isClosed) sink.add(Broke<Response>(error, stack));
+
+        _active++;
+        try {
+          final reply = await send(fetch);
+          if (_stopped) continue;
+          _bytes += reply.bytes.length;
+
+          if (_accept.isNotEmpty && !_accepts(reply.contentType)) {
+            // A PDF, an image, an archive: fetched, but not what was asked
+            // for. Dropped here rather than inside every caller.
+            _skip(fetch);
+            continue;
+          }
+
+          final followed = await _next?.call(reply);
+          if (followed != null) {
+            for (final f in followed) {
+              _schedule(f);
+            }
+          }
+
+          _inflight.remove(fetch);
+          _fetched++;
+          if (!sink.isClosed) sink.add(Done<Response>(reply));
+          if (_limit case final cap? when _fetched >= cap) {
+            stop('Limit of $cap pages reached');
+          }
+        } catch (error, stack) {
+          _failed++;
+          if (!sink.isClosed) sink.add(Broke<Response>(error, stack));
+        } finally {
+          _active--;
+        }
+
+        if (!_politeness.perHost &&
+            _politeness.gap > Duration.zero &&
+            !_stopped) {
+          await Future<void>.delayed(_politeness.gap);
+        }
       } finally {
-        _active--;
+        _claimed--;
         if (_idle) _signal();
-      }
-
-      if (!_politeness.perHost &&
-          _politeness.gap > Duration.zero &&
-          !_stopped) {
-        await Future<void>.delayed(_politeness.gap);
       }
     }
   }
 
-  bool get _idle => _active == 0 && _queue.isEmpty;
+  bool get _idle => _claimed == 0 && _active == 0 && _queue.isEmpty;
 
   /// Pushes [fetch] into the frontier, unless the crawl's scope refuses it.
   void _schedule(Fetch fetch) {

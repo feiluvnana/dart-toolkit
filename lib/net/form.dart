@@ -48,13 +48,16 @@ extension Sending on Form {
   ///
   /// Throws [UnsupportedError] for a form declaring `multipart/form-data` —
   /// see [Form.multipart].
+  /// [depth] defaults to one hop past the page the form was read from, the way
+  /// `Response.follow` does — a form-driven `next` that restarted at zero
+  /// slipped past a crawl's `depth:` bound forever.
   Fetch fetch({
     String? tag,
     Object? meta,
     Map<String, String>? headers,
     int priority = 0,
     bool dedupe = true,
-    int depth = 0,
+    int? depth,
   }) {
     if (multipart) {
       throw UnsupportedError(
@@ -71,7 +74,7 @@ extension Sending on Form {
       meta: meta,
       priority: priority,
       dedupe: dedupe,
-      depth: depth,
+      depth: depth ?? this.depth + 1,
     );
   }
 
@@ -118,7 +121,7 @@ extension ResponseFormExtensions on Response {
   ///     .fill({'user': 'me', 'pass': 'secret'})
   ///     .send(using: session.call);
   /// ```
-  Form? form([String selector = 'form']) {
-    return parse<Markup>(DocumentFormat.html).form(selector)?.at(url);
-  }
+  Form? form([String selector = 'form']) => parse<Markup>(
+    DocumentFormat.html,
+  ).form(selector)?.at(url, depth: fetch.depth);
 }

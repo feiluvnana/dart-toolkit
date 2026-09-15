@@ -55,7 +55,7 @@ class SitemapFormat implements DocumentFormat<List<Uri>, Iterable<Uri>> {
       for (final match in matches) {
         final raw = match.group(1);
         if (raw == null) continue;
-        final uri = Uri.tryParse(raw.trim());
+        final uri = Uri.tryParse(_unescape(raw.trim()));
         if (uri != null && uri.hasScheme) uris.add(uri);
       }
       return List<Uri>.unmodifiable(uris);
@@ -78,7 +78,8 @@ class SitemapFormat implements DocumentFormat<List<Uri>, Iterable<Uri>> {
   /// A crawl following one does not need to ask — an index's children parse
   /// as URLs like any other, so `depth` bounds the descent — but a script
   /// reporting on a file does.
-  bool nested(String text) => text.contains('<sitemapindex');
+  /// Case-insensitive, because [parse] reads the tags that way too.
+  bool nested(String text) => text.toLowerCase().contains('<sitemapindex');
 
   /// Renders [value] as a `<urlset>` document.
   @override
@@ -87,9 +88,23 @@ class SitemapFormat implements DocumentFormat<List<Uri>, Iterable<Uri>> {
       ..writeln('<?xml version="1.0" encoding="UTF-8"?>')
       ..writeln('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">');
     for (final url in value) {
-      out.writeln('  <url><loc>$url</loc></url>');
+      out.writeln('  <url><loc>${_escape('$url')}</loc></url>');
     }
     out.writeln('</urlset>');
     return out.toString();
   }
+
+  // A URL with a query string has an `&` in it, and an unescaped `&` is not
+  // XML: written raw, the document a crawler is handed does not parse.
+  static String _escape(String text) => text
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;');
+
+  static String _unescape(String text) => text
+      .replaceAll('&lt;', '<')
+      .replaceAll('&gt;', '>')
+      .replaceAll('&quot;', '"')
+      .replaceAll('&apos;', "'")
+      .replaceAll('&amp;', '&');
 }

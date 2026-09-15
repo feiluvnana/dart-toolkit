@@ -247,23 +247,35 @@ class Sys {
   /// How long a killed process is given to exit before `SIGKILL` follows.
   static const Duration _graceOnKill = Duration(seconds: 3);
 
-  static Future<int> _await(Process process, Duration? timeout) {
+  static Future<int> _await(Process process, Duration? timeout) async {
     if (timeout == null) return process.exitCode;
-    return process.exitCode.timeout(
+    var timedOut = false;
+    await process.exitCode.timeout(
       timeout,
       onTimeout: () {
+        timedOut = true;
         // SIGTERM first, so the child can unwind, then SIGKILL if it ignores
         // it. Without the escalation a process that traps SIGTERM outlives the
         // result that claims to have killed it.
         process.kill();
-        Future<void>.delayed(_graceOnKill).then((_) {
-          try {
-            process.kill(ProcessSignal.sigkill);
-          } catch (_) {}
-        });
         return -1;
       },
     );
+    if (!timedOut) return process.exitCode;
+    // Awaited rather than scheduled on a timer: returning while the child is
+    // still up reported a kill that had not happened, and the later SIGKILL
+    // went to a pid the OS may since have handed to somebody else.
+    await process.exitCode.timeout(
+      _graceOnKill,
+      onTimeout: () {
+        try {
+          process.kill(ProcessSignal.sigkill);
+        } catch (_) {}
+        return -1;
+      },
+    );
+    await process.exitCode;
+    return -1;
   }
 
   static String _timedOut(Duration? timeout) =>
@@ -279,6 +291,16 @@ class Sys {
     final exts = isWin ? const ['.exe', '.cmd', '.bat', ''] : const [''];
 
     for (final candidate in paths ?? const <String>[]) {
+      // A well-known install location is usually a directory, which is what
+      // `paths` documents: looking only for a file there meant
+      // `which('git', paths: ['/opt/homebrew/bin'])` never found it.
+      if (Directory(candidate).existsSync()) {
+        for (final ext in exts) {
+          final joined = p.join(candidate, '$name$ext');
+          if (File(joined).existsSync()) return joined;
+        }
+        continue;
+      }
       if (File(candidate).existsSync()) return candidate;
       for (final ext in exts) {
         if (File('$candidate$ext').existsSync()) return '$candidate$ext';

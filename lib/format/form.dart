@@ -99,10 +99,21 @@ final class Form {
   /// ```
   ///
   /// Chainable, like [fill].
-  Form at(Uri page) {
+  ///
+  /// [depth] is how many hops the page itself was from a crawl's seed, so a
+  /// request built from this form counts as one more rather than restarting at
+  /// the seed. `Response.form` fills it in.
+  Form at(Uri page, {int depth = 0}) {
     _page = page;
+    this.depth = depth;
     return this;
   }
+
+  /// How far from the seed the page holding this form was.
+  ///
+  /// Read by `Sending.fetch`, which submits one hop deeper. Zero for a form
+  /// read out of loose markup, which has no crawl behind it.
+  int depth = 0;
 
   /// The values this form would submit, in document order.
   ///

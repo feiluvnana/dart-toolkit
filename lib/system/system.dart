@@ -68,6 +68,7 @@ Future<SysResult> run(
   shell: shell,
   timeout: timeout,
   out: out,
+  err: err,
 );
 
 /// Streams output lines from [executable] with [arguments].
