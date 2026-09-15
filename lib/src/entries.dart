@@ -92,14 +92,16 @@ class Entries {
   /// so this one is only about what is inside.
   static bool isEmpty(String dir) {
     final directory = Directory(dir);
-    if (!directory.existsSync()) return true;
+    // A file is not an empty directory. `Directory.exists` is false for one, so
+    // the plain existence check called every regular file empty.
+    if (!directory.existsSync()) return kind(dir) == null;
     return directory.listSync(followLinks: false).isEmpty;
   }
 
   /// The non-blocking twin of [empty].
   static Future<bool> isEmptyAsync(String dir) async {
     final directory = Directory(dir);
-    if (!await directory.exists()) return true;
+    if (!await directory.exists()) return await kindAsync(dir) == null;
     return directory.list(followLinks: false).isEmpty;
   }
 
@@ -413,6 +415,11 @@ class Entries {
         default:
           out.write(RegExp.escape(char));
       }
+    }
+    // An unclosed `{` would leave the group open and `RegExp` would throw on a
+    // pattern the caller typed by hand.
+    for (var open = braces; open > 0; open--) {
+      out.write(')');
     }
     return RegExp('$out\$');
   }

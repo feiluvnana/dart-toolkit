@@ -88,7 +88,10 @@ class Cli with _Spec {
 
       final isLong = arg.startsWith('--');
       final isShort = !isLong && arg.startsWith('-') && arg.length > 1;
-      if (!isLong && !isShort) {
+      // `-1` is a number, not a switch named `1`. `--offset -5` already
+      // treats the value as a number via [_isValue]; a bare `-1` has to
+      // follow the same rule or it vanishes from [args].
+      if (!isLong && (!isShort || num.tryParse(arg) != null)) {
         _rest.add(arg);
         _restAt.add(i);
         continue;
@@ -210,9 +213,19 @@ class Cli with _Spec {
   bool _negated(Opt<Object?> opt) =>
       _no(opt.name) || (opt.abbr != null && _no(opt.abbr!));
 
-  /// Whether `--no-[clean]` (or `--no[clean]`) was given.
-  bool _no(String clean) =>
-      _flags.contains('no-$clean') || _flags.contains('no$clean');
+  /// Whether `--no-[clean]` was given.
+  ///
+  /// The glued form `--no[clean]` used to count as well, so declaring
+  /// `flag('tice')` made `--notice` a negation. Only the hyphenated form is
+  /// negation; a glued name is its own switch, or an alias if one was
+  /// declared.
+  bool _no(String clean) {
+    if (_flags.contains('no-$clean')) return true;
+    final glued = 'no$clean';
+    return _flags.contains(glued) &&
+        _decl(glued) != null &&
+        _decl(glued) == _decl(clean);
+  }
 
   /// The value of a boolean [opt], from every source in order.
   ///

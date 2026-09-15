@@ -39,6 +39,10 @@ class CsvScanner {
   String _carry = '';
   bool _quoted = false;
   bool _started = false;
+  // Whether the current row has had a field opened at all. `""` leaves both the
+  // field buffer and the row empty, which is indistinguishable from a blank
+  // line unless the quote itself is remembered.
+  bool _opened = false;
 
   static const int _quote = 0x22; // "
   static const int _cr = 0x0D;
@@ -50,7 +54,7 @@ class CsvScanner {
   /// Feeds the last of the text and flushes the final row.
   void close() {
     _run(_carry, true);
-    if (_field.isNotEmpty || _row.isNotEmpty) _endRow();
+    if (_field.isNotEmpty || _row.isNotEmpty || _opened) _endRow();
   }
 
   void _endField() {
@@ -60,11 +64,13 @@ class CsvScanner {
 
   void _endRow() {
     // A line with nothing on it at all is separation, not an empty record —
-    // so a trailing newline does not add a row.
-    if (_field.isEmpty && _row.isEmpty) return;
+    // so a trailing newline does not add a row. A quoted empty field is a
+    // record, though, which is what [_opened] is here to say.
+    if (_field.isEmpty && _row.isEmpty && !_opened) return;
     _endField();
     onRow(List<String>.of(_row));
     _row.clear();
+    _opened = false;
   }
 
   void _run(String text, bool eof) {
@@ -123,6 +129,7 @@ class CsvScanner {
       if (unit == _quote) {
         take(i);
         _quoted = true;
+        _opened = true;
         run = i + 1;
         continue;
       }

@@ -188,10 +188,14 @@ extension type const Path(String raw) implements String {
   bool get exists => Entries.kind(raw) != null;
 
   /// Whether a regular file is here.
-  bool get isFile => File(raw).existsSync();
+  ///
+  /// A link is a link, not the file it points at — which is what [isLink] and
+  /// the `sync` view have always said, while this pair followed links and
+  /// disagreed with both.
+  bool get isFile => Entries.kind(raw) == FileSystemEntryKind.file;
 
   /// Whether a directory is here.
-  bool get isDir => Directory(raw).existsSync();
+  bool get isDir => Entries.kind(raw) == FileSystemEntryKind.directory;
 
   /// Whether a symbolic link is here.
   bool get isLink => Entries.kind(raw) == FileSystemEntryKind.link;
@@ -360,7 +364,11 @@ extension type const Path(String raw) implements String {
   ///
   /// Accepts either a `Stream` (so a million rows never have to be in memory
   /// at once) or an in-memory `Iterable` of row maps.
-  /// The header line is [headers], or the keys of the first row.
+  ///
+  /// For an `Iterable`, columns are [headers] or the union of every row's
+  /// keys — the same as [Files.writeCsv]. For a `Stream`, columns are
+  /// [headers] or the keys of the first row; later keys need [headers] or
+  /// they are dropped, because the header has already been written.
   Future<Path> writeCsv(
     Object rows, {
     List<String>? headers,
@@ -369,13 +377,26 @@ extension type const Path(String raw) implements String {
     String part = '.part',
     Encoding encoding = utf8,
   }) async {
+    if (rows is Iterable && rows is! String) {
+      final list = <Map<String, Object?>>[
+        for (final row in rows) Map<String, Object?>.from(row as Map),
+      ];
+      await Fs.write(
+        raw,
+        CsvText.records(
+          list,
+          headers: headers,
+          delimiter: delimiter,
+          newline: newline,
+        ),
+        part: part,
+        encoding: encoding,
+      );
+      return this;
+    }
     final Stream<Map<String, dynamic>> stream = switch (rows) {
       Stream<Map<String, dynamic>> s => s,
-      Iterable<Map<String, dynamic>> it => Stream.fromIterable(it),
       Stream<Object?> s => s.cast<Map<String, dynamic>>(),
-      Iterable<Object?> it => Stream.fromIterable(
-        it.cast<Map<String, dynamic>>(),
-      ),
       _ => throw ArgumentError.value(
         rows,
         'rows',
