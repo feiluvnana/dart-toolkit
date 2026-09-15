@@ -66,6 +66,10 @@ class Watch {
       });
     }
 
+    // Declared ahead of `listen`, which drops directories as their events say
+    // they are gone.
+    late final void Function(String directory) forget;
+
     void listen(String directory) {
       if (stopped || subscriptions.containsKey(directory)) return;
       final dir = Directory(directory);
@@ -78,11 +82,16 @@ class Watch {
               (event) {
                 // A new directory under a hand-rolled recursive watch needs its
                 // own subscription, or nothing inside it is ever seen.
-                if (recursive &&
-                    !native &&
-                    event.isDirectory &&
-                    event.type == FileSystemEvent.create) {
-                  listen(event.path);
+                if (recursive && !native && event.isDirectory) {
+                  if (event.type == FileSystemEvent.create) {
+                    listen(event.path);
+                  } else if (event.type == FileSystemEvent.delete ||
+                      event.type == FileSystemEvent.move) {
+                    // The subscription for a directory that is gone is dead but
+                    // still in the map, so a directory recreated under the same
+                    // name was never watched again.
+                    forget(event.path);
+                  }
                 }
                 if (event.isDirectory) return;
                 if (wanted(event.path)) fire(event.path);
@@ -94,6 +103,9 @@ class Watch {
                 subscriptions.remove(directory);
                 onError?.call(error, stack);
               },
+              // inotify closes the watch when the directory is removed. Left in
+              // the map, that name could never be watched again.
+              onDone: () => subscriptions.remove(directory),
             );
       } on FileSystemException {
         // A directory that vanished between the walk and the watch is not an
@@ -106,6 +118,20 @@ class Watch {
         }
       }
     }
+
+    forget = (directory) {
+      // The subtree goes with it: inotify watches on children of a removed
+      // directory are just as dead.
+      final gone = subscriptions.keys
+          .where(
+            (watched) =>
+                watched == directory || watched.startsWith('$directory/'),
+          )
+          .toList();
+      for (final watched in gone) {
+        subscriptions.remove(watched)?.cancel();
+      }
+    };
 
     if (FileSystemEntity.isDirectorySync(path)) {
       listen(path);

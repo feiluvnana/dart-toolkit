@@ -1008,7 +1008,7 @@ class Fetcher with _PathResolver {
         request.followRedirects = false;
         currentBody?.apply(request);
         try {
-          final streamed = await _client.send(request).timeout(deadline);
+          final streamed = await _sendWithin(request, deadline);
           if (jar != null && streamed.headers.containsKey('set-cookie')) {
             jar!.add(streamed.headers['set-cookie']!, uri: currentUrl);
           }
@@ -1033,7 +1033,14 @@ class Fetcher with _PathResolver {
               currentBody = null;
             }
             currentUrl = nextUrl;
-            await streamed.stream.drain<void>();
+            // A redirect body is nothing anyone wants, but it has to leave the
+            // socket before the next hop can use it — and a server that
+            // dribbles it must not hold the hop open forever.
+            try {
+              await streamed.stream.drain<void>().timeout(deadline);
+            } on TimeoutException {
+              // Nothing to salvage; the connection goes with it.
+            }
             break;
           }
 
@@ -1118,7 +1125,7 @@ class Fetcher with _PathResolver {
         request.followRedirects = false;
         currentBody?.apply(request);
         try {
-          final streamed = await _client.send(request).timeout(deadline);
+          final streamed = await _sendWithin(request, deadline);
           final response = await _collect(streamed, currentUrl, deadline);
           if (jar != null && response.headers.containsKey('set-cookie')) {
             jar!.add(response.headers['set-cookie']!, uri: currentUrl);
@@ -1194,6 +1201,27 @@ class Fetcher with _PathResolver {
     }
   }
 
+  /// Sends [request], giving up after [deadline] without abandoning the socket.
+  ///
+  /// `Future.timeout` walks away from the future, not from the request. The
+  /// response still arrives, with a body nobody reads, and the connection stays
+  /// pinned — so a retrying fetcher stacked one dead socket per attempt and
+  /// eventually blocked on its own connection pool. The late arrival is drained
+  /// here instead.
+  Future<http.StreamedResponse> _sendWithin(
+    http.BaseRequest request,
+    Duration deadline,
+  ) {
+    final sent = _client.send(request);
+    return sent.timeout(
+      deadline,
+      onTimeout: () {
+        sent.then((late) => late.stream.drain<void>()).ignore();
+        throw TimeoutException('Request to ${request.url} timed out', deadline);
+      },
+    );
+  }
+
   /// Reads [streamed] into a response, refusing bodies larger than [cap].
   ///
   /// [deadline] bounds the whole body transfer, not just the headers, so a
@@ -1235,7 +1263,16 @@ class Fetcher with _PathResolver {
       );
     }
 
-    return read().timeout(deadline);
+    final reading = read();
+    return reading.timeout(
+      deadline,
+      onTimeout: () {
+        // The read goes on until the socket closes; only its result is
+        // abandoned, and an error from it would otherwise be unhandled.
+        reading.ignore();
+        throw TimeoutException('Body from $url timed out', deadline);
+      },
+    );
   }
 
   /// Whether [response] is worth keeping between runs.

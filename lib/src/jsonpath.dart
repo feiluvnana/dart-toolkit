@@ -444,9 +444,14 @@ final class _Filter extends _Step {
       case '!=':
         return !_same(left, right);
       case '=~':
-        return right is String &&
-            left is String &&
-            RegExp(_pattern(right)).hasMatch(left);
+        if (right is! String || left is! String) return false;
+        try {
+          return RegExp(_pattern(right)).hasMatch(left);
+        } on FormatException {
+          // An unreadable expression selects nothing everywhere else in this
+          // parser; a pattern that will not compile is one of those.
+          return false;
+        }
     }
     final order = switch ((left, right)) {
       (final num a, final num b) => a.compareTo(b),

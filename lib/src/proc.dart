@@ -79,6 +79,8 @@ class Sys {
       runInShell: shell,
     );
     Exit.adopt(process);
+    var exited = false;
+    process.exitCode.then((_) => exited = true).ignore();
     try {
       if (!includeStderr) {
         unawaited(process.stderr.drain<void>());
@@ -87,13 +89,14 @@ class Sys {
             .transform(const LineSplitter());
       } else {
         final controller = StreamController<String>();
+        final pipes = <StreamSubscription<String>>[];
         var activeStreams = 2;
         void onDone() {
           activeStreams--;
           if (activeStreams == 0) controller.close();
         }
 
-        process.stdout
+        StreamSubscription<String> read(Stream<List<int>> pipe) => pipe
             .transform(systemEncoding.decoder)
             .transform(const LineSplitter())
             .listen(
@@ -101,19 +104,42 @@ class Sys {
               onError: controller.addError,
               onDone: onDone,
             );
-        process.stderr
-            .transform(systemEncoding.decoder)
-            .transform(const LineSplitter())
-            .listen(
-              controller.add,
-              onError: controller.addError,
-              onDone: onDone,
-            );
+
+        pipes
+          ..add(read(process.stdout))
+          ..add(read(process.stderr));
+        // Without this the two pipe subscriptions outlive a cancelled merge and
+        // go on feeding a controller nobody reads.
+        controller.onCancel = () async {
+          for (final pipe in pipes) {
+            await pipe.cancel();
+          }
+        };
         yield* controller.stream;
       }
       await process.exitCode;
     } finally {
+      // Cancelling the subscription ends this generator here, and the child was
+      // left running with nobody holding it — `disown` had just dropped the
+      // Ctrl-C cleanup too. Whoever stopped reading wanted the process stopped.
+      if (!exited) await _terminate(process);
       Exit.disown(process);
+    }
+  }
+
+  /// Stops [process] and waits, briefly, for it to actually be gone.
+  static Future<void> _terminate(Process process) async {
+    process.kill();
+    try {
+      await process.exitCode.timeout(const Duration(seconds: 2));
+    } on TimeoutException {
+      process.kill(ProcessSignal.sigkill);
+      try {
+        await process.exitCode.timeout(const Duration(seconds: 2));
+      } on TimeoutException {
+        // Unkillable — uninterruptible sleep or a zombie parent. Nothing left
+        // to do but stop waiting on it.
+      }
     }
   }
 
@@ -187,12 +213,13 @@ class Sys {
       Stream<List<int>> pipe,
       StringBuffer buffer,
       void Function(String line)? sink,
-    ) => pipe.transform(utf8.decoder).transform(const LineSplitter()).forEach((
-      line,
-    ) {
-      buffer.writeln(line);
-      sink?.call(line);
-    });
+    ) => pipe
+        .transform(systemEncoding.decoder)
+        .transform(const LineSplitter())
+        .forEach((line) {
+          buffer.writeln(line);
+          sink?.call(line);
+        });
 
     final draining = [
       drain(process.stdout, outBuf, out),

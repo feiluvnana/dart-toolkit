@@ -279,6 +279,10 @@ Future<List<File>> _unzip(
   final archive = await _open(source, kind);
   if (archive == null) return const [];
   final root = p.normalize(p.absolute(dest));
+  await Directory(root).create(recursive: true);
+  // The real root, because a temp directory is itself a link on macOS and
+  // every resolved member would look like an escape from the nominal one.
+  final real = await _resolved(root);
   final written = <File>[];
   final executable = <int, List<String>>{};
 
@@ -294,6 +298,15 @@ Future<List<File>> _unzip(
       continue;
     }
     await Directory(p.dirname(target)).create(recursive: true);
+    // A link already sitting where a member wants to be is a write that leaves
+    // [dest] the moment it is followed: the lexical check above cannot see it,
+    // because the archive's own name is innocent.
+    if (await FileSystemEntity.type(target, followLinks: false) ==
+        FileSystemEntityType.link) {
+      await Link(target).delete();
+    }
+    final parent = await _resolved(p.dirname(target));
+    if (parent != real && !p.isWithin(real, parent)) continue;
     final file = File(target);
     await file.writeAsBytes(entry.readBytes() ?? const <int>[]);
     written.add(file);
@@ -312,6 +325,19 @@ Future<List<File>> _unzip(
   return written;
 }
 
+/// Where [dir] really is, links resolved.
+///
+/// A member under a planted symlinked directory passes a lexical check and
+/// still lands outside the destination, so directories are resolved before the
+/// write rather than trusted.
+Future<String> _resolved(String dir) async {
+  try {
+    return p.normalize(await Directory(dir).resolveSymbolicLinks());
+  } on FileSystemException {
+    return p.normalize(dir);
+  }
+}
+
 /// Applies each set of unix permissions to the paths that carry it.
 ///
 /// One `chmod` per distinct mode rather than one per file, and none at all
@@ -323,8 +349,11 @@ Future<void> _permit(Map<int, List<String>> byMode) async {
     // Only worth a subprocess where the bits differ from what a fresh write
     // already produces.
     if (entry.key == 0x1a4 || entry.key == 0x1b6) continue;
+    // `--`, because a member named `--reference=/etc/passwd` is a path here and
+    // an option to chmod.
     await Sys.run('chmod', [
       entry.key.toRadixString(8).padLeft(3, '0'),
+      '--',
       ...entry.value,
     ]);
   }

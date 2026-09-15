@@ -469,12 +469,22 @@ final class Crawler extends Stream<Response> {
     cancelOnError: cancelOnError,
   );
 
-  Stream<Response> get _replies => _open()
+  // One run per crawler, not one per terminal. `_open()` builds a controller
+  // and starts the workers, so reading `settle` after a `listen` used to put a
+  // second pool on the same frontier — double-fetching and double-arming the
+  // resume timer. Cached, a second terminal gets the `Stream` contract's own
+  // error instead.
+  late final Stream<Settled<Response>> _outcomes = _open();
+
+  Stream<Response> get _replies => _outcomes
       .where((outcome) => outcome is Done<Response>)
       .map((outcome) => (outcome as Done<Response>).value);
 
   /// The replies and the failures, in band.
-  Stream<Settled<Response>> get settle => _open();
+  ///
+  /// One crawl either way: this and the reply stream are two views of the same
+  /// run, so take one of them.
+  Stream<Settled<Response>> get settle => _outcomes;
 
   /// Drains the crawl and reports what it counted.
   Future<Stats> run() async {

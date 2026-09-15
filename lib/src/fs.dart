@@ -465,6 +465,7 @@ class Fs {
       await _cloneAsync(source, destination, kind);
       return entryFor(destination);
     }
+    _refuseNesting(source, destination);
     await Directory(destination).create(recursive: true);
     await for (final entry in Entries.walkAsync(source, follow: false)) {
       final target = p.join(destination, p.relative(entry.path, from: source));
@@ -484,11 +485,45 @@ class Fs {
     String destination,
     FileSystemEntryKind kind,
   ) async {
+    await _unlinkIfLink(destination);
     if (kind == FileSystemEntryKind.link) {
       await Link(destination).create(await Link(source).target());
       return;
     }
     await File(source).copy(destination);
+  }
+
+  /// Removes a symlink sitting at [path], leaving anything else alone.
+  ///
+  /// A copy onto an existing link followed it and overwrote whatever it
+  /// pointed at, which is a write outside the destination the caller named.
+  static Future<void> _unlinkIfLink(String path) async {
+    if (await FileSystemEntity.type(path, followLinks: false) ==
+        FileSystemEntityType.link) {
+      await Link(path).delete();
+    }
+  }
+
+  static void _unlinkIfLinkSync(String path) {
+    if (FileSystemEntity.typeSync(path, followLinks: false) ==
+        FileSystemEntityType.link) {
+      Link(path).deleteSync();
+    }
+  }
+
+  /// Refuses a directory copy whose destination sits inside its own source.
+  ///
+  /// The walk would otherwise pick up what it had just written and copy that
+  /// too, nesting until the kernel refused the name.
+  static void _refuseNesting(String source, String destination) {
+    final from = p.normalize(p.absolute(source));
+    final to = p.normalize(p.absolute(destination));
+    if (from == to || p.isWithin(from, to)) {
+      throw FileSystemException(
+        'Cannot copy a directory into itself',
+        destination,
+      );
+    }
   }
 
   /// Moves [source] to [destination] without blocking, crossing filesystems.
@@ -549,6 +584,7 @@ class Fs {
       _clone(source, destination, kind);
       return entryFor(destination);
     }
+    _refuseNesting(source, destination);
     Directory(destination).createSync(recursive: true);
     for (final entry in Entries.walk(source, follow: false)) {
       final target = p.join(destination, p.relative(entry.path, from: source));
@@ -568,6 +604,7 @@ class Fs {
     String destination,
     FileSystemEntryKind kind,
   ) {
+    _unlinkIfLinkSync(destination);
     if (kind == FileSystemEntryKind.link) {
       Link(destination).createSync(Link(source).targetSync());
       return;
