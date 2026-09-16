@@ -20,6 +20,7 @@ class CliOption {
   final bool numeric;
   final bool abbreviated;
   final String? defaultTo;
+  final List<String>? choices;
 
   CliOption(
     this.name, {
@@ -28,6 +29,7 @@ class CliOption {
     this.numeric = false,
     this.abbreviated = false,
     this.defaultTo,
+    this.choices,
   });
 }
 
@@ -71,6 +73,7 @@ class CliCommand {
     bool numeric = false,
     bool abbreviated = false,
     String? defaultTo,
+    List<String>? choices,
   }) {
     options[name] = CliOption(
       name,
@@ -79,8 +82,26 @@ class CliCommand {
       numeric: numeric,
       abbreviated: abbreviated,
       defaultTo: defaultTo,
+      choices: choices,
     );
     return this;
+  }
+
+  /// Defines an option with a constrained list of valid [choices].
+  CliCommand choice(
+    String name,
+    List<String> choices, {
+    String description = '',
+    bool abbreviated = false,
+    String? defaultTo,
+  }) {
+    return option(
+      name,
+      description: description,
+      abbreviated: abbreviated,
+      defaultTo: defaultTo,
+      choices: choices,
+    );
   }
 
   /// Defines a nested subcommand.
@@ -116,7 +137,15 @@ class CliCommand {
       stdout.writeln('\n${'Options:'.bold}');
       for (final opt in options.values) {
         final prefix = opt.abbreviated ? '-${opt.name}' : '--${opt.name}';
-        stdout.writeln('  ${prefix.padRight(16)} ${opt.description}');
+        var desc = opt.description;
+        if (opt.choices != null && opt.choices!.isNotEmpty) {
+          final choiceList = '(${opt.choices!.join('|')})';
+          desc = desc.isEmpty ? choiceList : '$desc $choiceList';
+        }
+        if (opt.defaultTo != null) {
+          desc = '$desc [default: ${opt.defaultTo}]';
+        }
+        stdout.writeln('  ${prefix.padRight(16)} $desc');
       }
     }
     stdout.writeln('  --help, -h       Print this help message');
@@ -174,6 +203,18 @@ class CliCommand {
         }
       } else {
         rest.add(arg);
+      }
+    }
+
+    // Validate choices
+    for (final entry in parsedOptions.entries) {
+      final optDef = options[entry.key];
+      if (optDef != null && optDef.choices != null && entry.value != null) {
+        if (!optDef.choices!.contains(entry.value)) {
+          throw ArgumentError(
+            'Invalid value "${entry.value}" for option "${optDef.name}". Allowed choices: ${optDef.choices!.join(', ')}',
+          );
+        }
       }
     }
 

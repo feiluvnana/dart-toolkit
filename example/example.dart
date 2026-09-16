@@ -367,7 +367,7 @@ EXPORT_VAR=export_value
   final appCli = Cli(name: 'toolkit_app', description: 'Sample CLI App');
   appCli
       .command('deploy', description: 'Deploy application')
-      .option('target', abbreviated: true, defaultTo: 'staging', description: 'Deployment target')
+      .choice('target', ['staging', 'production'], abbreviated: true, defaultTo: 'staging', description: 'Deployment target')
       .option('dry-run', flag: true, description: 'Simulate without executing')
       .action((ctx) {
         final target = ctx.option('target');

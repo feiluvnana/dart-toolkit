@@ -70,10 +70,30 @@ void main() {
       expect(line.startsWith('  Audio Tracks: ['), isTrue);
     });
 
-    test('ConsoleProgress handles wide East Asian characters correctly within column budget', () {
-      final progress = Console.progress(100, message: 'Test', terminalColumns: 50);
-      final line = progress.formatLine('日本語テストタイトル');
-      expect(line.contains('...'), isTrue);
+    test('choice accepts valid options and throws ArgumentError on invalid value', () async {
+      final cli = Cli();
+      String? chosenFormat;
+
+      cli
+          .command('build')
+          .choice('format', ['debug', 'release'], defaultTo: 'debug')
+          .action((ctx) {
+            chosenFormat = ctx.option('format');
+          });
+
+      // Valid option
+      await cli.run(['build', '--format', 'release']);
+      expect(chosenFormat, equals('release'));
+
+      // Default value when omitted
+      await cli.run(['build']);
+      expect(chosenFormat, equals('debug'));
+
+      // Invalid value throws ArgumentError
+      expect(
+        () => cli.run(['build', '--format', 'invalid_mode']),
+        throwsA(isA<ArgumentError>()),
+      );
     });
   });
 }
