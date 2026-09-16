@@ -16,6 +16,11 @@ void main() {
       // Top-level $ shorthand
       final resDollar = await $('echo from_dollar', quiet: true);
       expect(resDollar.text, equals('from_dollar'));
+
+      // Future<ShellResult> extension getters
+      expect(await $('echo direct_text', quiet: true).text, equals('direct_text'));
+      expect(await $('echo "line1\nline2"', quiet: true).lines, equals(['line1', 'line2']));
+      expect(await $('echo true', quiet: true).ok, isTrue);
     });
 
     test('String.run() and Path.run() execute concise commands with workdir', () async {

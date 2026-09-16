@@ -20,7 +20,7 @@ extension CollectionIterableExtensions<T> on Iterable<T> {
   Map<K, List<T>> groupBy<K>(K Function(T item) key) {
     final map = <K, List<T>>{};
     for (final item in this) {
-      map.putIfAbsent(key(item), () => []).add(item);
+      (map[key(item)] ??= []).add(item);
     }
     return map;
   }
@@ -77,8 +77,16 @@ extension CollectionIterableExtensions<T> on Iterable<T> {
     return total;
   }
 
-  /// Averages numeric elements or mapped values.
-  double? average([num Function(T item)? of]) => isEmpty ? null : sum(of) / length;
+  /// Averages numeric elements or mapped values in a single pass.
+  double? average([num Function(T item)? of]) {
+    num total = 0;
+    var count = 0;
+    for (final item in this) {
+      total += of != null ? of(item) : (item as num);
+      count++;
+    }
+    return count == 0 ? null : total / count;
+  }
 
   /// Returns the item with the largest [key], or `null` if empty.
   T? maxByOrNull<K extends Comparable<K>>(K Function(T item) key) {

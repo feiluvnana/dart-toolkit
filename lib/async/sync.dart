@@ -1,10 +1,11 @@
 import 'dart:async';
+import 'dart:collection';
 
 /// A concurrency-limiting synchronization primitive.
 class Semaphore {
   final int maxPermits;
   int _currentPermits;
-  final _waiters = <Completer<void>>[];
+  final _waiters = Queue<Completer<void>>();
 
   Semaphore(this.maxPermits) : _currentPermits = maxPermits > 0 ? maxPermits : 1;
 
@@ -41,7 +42,7 @@ class Semaphore {
 
   void _release() {
     if (_waiters.isNotEmpty) {
-      final next = _waiters.removeAt(0);
+      final next = _waiters.removeFirst();
       next.complete();
     } else {
       _currentPermits++;

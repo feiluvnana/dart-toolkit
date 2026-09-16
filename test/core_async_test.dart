@@ -159,6 +159,18 @@ void main() {
 
       expect(count, equals(2));
     });
+
+    test('top-level retry() function retries and succeeds', () async {
+      var count = 0;
+      final result = await retry(() async {
+        count++;
+        if (count < 2) throw Exception('fail');
+        return 'success';
+      }, attempts: 3, delay: 5.ms);
+
+      expect(result, equals('success'));
+      expect(count, equals(2));
+    });
   });
 
   group('Async Synchronization (Mutex & Semaphore)', () {
@@ -289,6 +301,50 @@ void main() {
       expect(results[0], equals(const Right<Object, int>(20)));
       expect(results[1].isLeft, isTrue);
       expect(results[2], equals(const Right<Object, int>(60)));
+    });
+
+    test('parallelMap throws on first error and preserves order on success', () async {
+      final numbers = [1, 2, 3, 4, 5];
+      final squares = await numbers.parallelMap((n) async {
+        await Future<void>.delayed(5.ms);
+        return n * n;
+      }, concurrency: 2);
+
+      expect(squares, equals([1, 4, 9, 16, 25]));
+
+      // Throws on error
+      await expectLater(
+        numbers.parallelMap((n) async {
+          if (n == 3) throw StateError('failed on 3');
+          return n;
+        }),
+        throwsA(isA<StateError>()),
+      );
+    });
+
+    test('parallelSettle completes all tasks into Right/Left without throwing', () async {
+      final numbers = [10, 20, 30];
+      final outcomes = await numbers.parallelSettle((n) async {
+        if (n == 20) throw FormatException('bad format');
+        return n * 10;
+      });
+
+      expect(outcomes.length, equals(3));
+      expect(outcomes[0], equals(const Right<Object, int>(100)));
+      expect(outcomes[1].isLeft, isTrue);
+      expect(outcomes[1].leftOrNull, isA<FormatException>());
+      expect(outcomes[2], equals(const Right<Object, int>(300)));
+    });
+
+    test('parallelMap with void executes side-effects across all items', () async {
+      final seen = <int>[];
+      await [1, 2, 3].parallelMap<void>((n) async {
+        await Future<void>.delayed(5.ms);
+        seen.add(n);
+      }, concurrency: 2);
+
+      expect(seen.length, equals(3));
+      expect(seen.toSet(), equals({1, 2, 3}));
     });
   });
 }

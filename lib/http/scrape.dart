@@ -1,11 +1,15 @@
 import 'dart:async';
+import 'dart:collection';
 
 import 'package:http/http.dart' as http;
 
 import '../util/time.dart';
 
 /// Callback for processing an [http.Response] in the scraping pipeline.
-typedef ResponseCallback = FutureOr<void> Function(http.Response res);
+///
+/// Can return `void` (using `res.emit(item)`), a single [T], or an `Iterable<T>`
+/// which will be automatically emitted to the output stream.
+typedef ResponseCallback = FutureOr<dynamic> Function(http.Response res);
 
 final _metaExpando = Expando<Map<String, dynamic>>('scrape_meta');
 final _emitExpando = Expando<void Function(Object? item)>('scrape_emit');
@@ -141,7 +145,7 @@ Stream<T> _scrape<T>(
   late final StreamController<T> controller;
   final httpClient = client ?? http.Client();
   final visited = <Uri>{};
-  final queue = <http.BaseRequest>[];
+  final queue = Queue<http.BaseRequest>();
   final active = <Future<void>>{};
   final limit = concurrency > 0 ? concurrency : 1;
   var isStopped = false;
@@ -185,7 +189,7 @@ Stream<T> _scrape<T>(
     if (isStopped || controller.isClosed) return;
 
     while (queue.isNotEmpty && active.length < limit) {
-      final req = queue.removeAt(0);
+      final req = queue.removeFirst();
 
       late final Future<void> task;
       task = Future<void>(() async {
@@ -238,7 +242,16 @@ Stream<T> _scrape<T>(
           };
 
           final handler = _requestCallbackExpando[req] ?? parse;
-          await handler(rawRes);
+          final result = await handler(rawRes);
+          if (result != null && !controller.isClosed) {
+            if (result is Iterable<T>) {
+              for (final item in result) {
+                controller.add(item);
+              }
+            } else if (result is T) {
+              controller.add(result);
+            }
+          }
         } catch (e, st) {
           if (!controller.isClosed) controller.addError(e, st);
         } finally {

@@ -109,6 +109,23 @@ void main() {
       final allPrices = json.$jsonpath(r'$..price');
       expect(allPrices.length, equals(3));
       expect(allPrices.map((d) => d.raw).toList(), equals([8.95, 12.99, 19.95]));
+
+      // Index operator & unified to<T>() method
+      expect(json['store']['bicycle']['color'].to<String>(), equals('red'));
+      expect(json['store']['bicycle']['price'].to<double>(), equals(19.95));
+      expect(json['store']['bicycle']['price'].to<num>(), equals(19.95));
+      expect(json['store']['book'][0]['author'].to<String>(), equals('Nigel Rees'));
+      expect(json['store']['book'].list.length, equals(2));
+      expect(json['store']['book'].to<List<dynamic>>()?.length, equals(2));
+      expect(json['store']['nonexistent'].isNull, isTrue);
+      expect(json['store']['bicycle'].to<Map<String, dynamic>>()?['color'], equals('red'));
+
+      // Primitive coercion in to<T>()
+      final primitiveDoc = JsonDocument.parse('{"numStr": "123", "boolStr": "true", "intNum": 42}');
+      expect(primitiveDoc['numStr'].to<int>(), equals(123));
+      expect(primitiveDoc['boolStr'].to<bool>(), isTrue);
+      expect(primitiveDoc['intNum'].to<String>(), equals('42'));
+      expect(primitiveDoc['intNum'].to<double>(), equals(42.0));
     });
 
     test('scrape pipeline follows links, handles relative URLs, callbacks, and meta', () async {
@@ -179,6 +196,76 @@ void main() {
       }, client: client).toList();
 
       expect(results, equals([true]));
+    });
+
+    test('scrape supports returning items or iterables directly from callback', () async {
+      final client = MockClient((request) async {
+        return http.Response('<html><body><h1>Hello Scraper</h1></body></html>', 200);
+      });
+
+      final results = await 'https://example.com'.url.scrape<String>(
+        (res) => res.$('h1').firstOrNull?.text,
+        client: client,
+      ).toList();
+
+      expect(results, equals(['Hello Scraper']));
+    });
+
+    test('res.isolate() runs parsing and extraction on background isolate', () async {
+      final res = http.Response('''
+        <html>
+          <body>
+            <ul class="users">
+              <li data-id="1">Alice</li>
+              <li data-id="2">Bob</li>
+            </ul>
+          </body>
+        </html>
+      ''', 200);
+
+      final extracted = await res.isolate((r) {
+        final items = r.$('.users li');
+        return items.map((e) => {'id': e.attr('data-id'), 'name': e.text}).toList();
+      });
+
+      expect(extracted, equals([
+        {'id': '1', 'name': 'Alice'},
+        {'id': '2', 'name': 'Bob'},
+      ]));
+    });
+
+    test('res.isolateHtml(), isolateJson(), isolateXml() parse directly in isolate', () async {
+      final htmlRes = http.Response('<div><span class="val">42</span></div>', 200);
+      final numVal = await htmlRes.isolateHtml((doc) => doc.$('.val').firstOrNull?.text);
+      expect(numVal, equals('42'));
+
+      final jsonRes = http.Response('{"user": {"name": "John"}}', 200);
+      final nameVal = await jsonRes.isolateJson((json) => json.$jsonpath(r'$.user.name').firstOrNull?.to<String>());
+      expect(nameVal, equals('John'));
+
+      final xmlRes = http.Response('<root><item id="99">Hello</item></root>', 200);
+      final xmlVal = await xmlRes.isolateXml((xml) => xml.$xpath('//item').firstOrNull?.innerText);
+      expect(xmlVal, equals('Hello'));
+
+      // Uri isolate methods
+      final mockClient = MockClient((req) async {
+        if (req.url.path == '/api/item') {
+          return http.Response('{"id": 99, "title": "Toolkit"}', 200);
+        }
+        return http.Response('<html><body><h1>Hello Uri Isolate</h1></body></html>', 200);
+      });
+
+      final title = await 'https://example.com/api/item'.url.isolateJson(
+        (doc) => doc['title'].to<String>(),
+        client: mockClient,
+      );
+      expect(title, equals('Toolkit'));
+
+      final heading = await mockClient.isolateHtml(
+        'https://example.com/page'.url,
+        (doc) => doc.$('h1').firstOrNull?.text,
+      );
+      expect(heading, equals('Hello Uri Isolate'));
     });
 
   });

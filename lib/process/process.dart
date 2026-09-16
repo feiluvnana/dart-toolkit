@@ -76,16 +76,15 @@ Future<ShellResult> run(
   bool quiet = false,
   bool throwOnError = true,
   Encoding encoding = utf8,
-}) =>
-    _runProcess(
-      command,
-      workdir: workdir,
-      env: env,
-      timeout: timeout,
-      quiet: quiet,
-      throwOnError: throwOnError,
-      encoding: encoding,
-    );
+}) => _runProcess(
+  command,
+  workdir: workdir,
+  env: env,
+  timeout: timeout,
+  quiet: quiet,
+  throwOnError: throwOnError,
+  encoding: encoding,
+);
 
 /// Shorthand alias for [run].
 ///
@@ -101,20 +100,20 @@ Future<ShellResult> $(
   bool quiet = false,
   bool throwOnError = true,
   Encoding encoding = utf8,
-}) =>
-    run(
-      command,
-      workdir: workdir,
-      env: env,
-      timeout: timeout,
-      quiet: quiet,
-      throwOnError: throwOnError,
-      encoding: encoding,
-    );
+}) => run(
+  command,
+  workdir: workdir,
+  env: env,
+  timeout: timeout,
+  quiet: quiet,
+  throwOnError: throwOnError,
+  encoding: encoding,
+);
 
 /// Internal process execution implementation.
 Future<ShellResult> _runProcess(
   String command, {
+  List<String>? arguments,
   Path? workdir,
   Map<String, String>? env,
   Duration? timeout,
@@ -122,17 +121,25 @@ Future<ShellResult> _runProcess(
   bool throwOnError = true,
   Encoding encoding = utf8,
 }) async {
-  final parts = _splitCommand(command.trim());
-  if (parts.isEmpty) {
-    throw ArgumentError('Cannot execute an empty command string');
-  }
+  final String executable;
+  final List<String> args;
 
-  final executable = parts.first;
-  final arguments = parts.sublist(1);
+  if (arguments != null) {
+    executable = command;
+    args = arguments;
+    args.isEmpty ? command : '$command ${args.map((a) => a.contains(' ') ? '"$a"' : a).join(' ')}';
+  } else {
+    final parts = _splitCommand(command.trim());
+    if (parts.isEmpty) {
+      throw ArgumentError('Cannot execute an empty command string');
+    }
+    executable = parts.first;
+    args = parts.sublist(1);
+  }
 
   final process = await Process.start(
     executable,
-    arguments,
+    args,
     workingDirectory: workdir?.path,
     environment: env,
     runInShell: Platform.isWindows,
@@ -326,16 +333,15 @@ extension ShellStringExtension on String {
     bool quiet = false,
     bool throwOnError = true,
     Encoding encoding = utf8,
-  }) =>
-      _runProcess(
-        this,
-        workdir: workdir,
-        env: env,
-        timeout: timeout,
-        quiet: quiet,
-        throwOnError: throwOnError,
-        encoding: encoding,
-      );
+  }) => _runProcess(
+    this,
+    workdir: workdir,
+    env: env,
+    timeout: timeout,
+    quiet: quiet,
+    throwOnError: throwOnError,
+    encoding: encoding,
+  );
 
   /// Starts a command pipeline with this command piped into [next].
   CommandPipeline pipe(String next) => CommandPipeline([this, next]);
@@ -360,16 +366,29 @@ extension ShellPathExtension on Path {
     bool quiet = false,
     bool throwOnError = true,
     Encoding encoding = utf8,
-  }) {
-    final cmd = args.isEmpty ? path : '$path ${args.map((a) => a.contains(' ') ? '"$a"' : a).join(' ')}';
-    return _runProcess(
-      cmd,
-      workdir: workdir,
-      env: env,
-      timeout: timeout,
-      quiet: quiet,
-      throwOnError: throwOnError,
-      encoding: encoding,
-    );
-  }
+  }) => _runProcess(
+    path,
+    arguments: args,
+    workdir: workdir,
+    env: env,
+    timeout: timeout,
+    quiet: quiet,
+    throwOnError: throwOnError,
+    encoding: encoding,
+  );
+}
+
+/// Shorthand getters on `Future<ShellResult>` for clean chaining.
+extension FutureShellResultExtension on Future<ShellResult> {
+  /// The trimmed stdout text of the executed command.
+  Future<String> get text => then((r) => r.text);
+
+  /// The non-empty output lines of the executed command.
+  Future<List<String>> get lines => then((r) => r.lines);
+
+  /// The decoded JSON payload of the executed command.
+  Future<dynamic> get json => then((r) => r.json);
+
+  /// Whether the command exited successfully with code 0.
+  Future<bool> get ok => then((r) => r.ok);
 }

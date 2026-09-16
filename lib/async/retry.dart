@@ -50,8 +50,12 @@ class RetryBuilder<T> implements Future<T> {
     return this;
   }
 
+  Future<T>? _future;
+
   /// Executes the async action according to the retry configuration.
-  Future<T> run() async {
+  Future<T> run() => _future ??= _execute();
+
+  Future<T> _execute() async {
     var attemptCount = 0;
     var currentDelay = _delay;
 
@@ -97,6 +101,26 @@ class RetryBuilder<T> implements Future<T> {
   @override
   Future<T> whenComplete(FutureOr<void> Function() action) =>
       run().whenComplete(action);
+}
+
+/// Executes [action] with retry logic.
+Future<T> retry<T>(
+  FutureOr<T> Function() action, {
+  int attempts = 3,
+  Duration delay = const Duration(milliseconds: 200),
+  double backoff = 2.0,
+  bool jitter = true,
+  bool Function(Object error)? when,
+  void Function(int attempt, Object error, Duration nextDelay)? listen,
+}) {
+  var builder = RetryBuilder<T>(action)
+      .attempts(attempts)
+      .delay(delay)
+      .backoff(backoff)
+      .jitter(jitter);
+  if (when != null) builder = builder.when(when);
+  if (listen != null) builder = builder.listen(listen);
+  return builder.run();
 }
 
 /// Convenience retry extensions on async functions and closures.

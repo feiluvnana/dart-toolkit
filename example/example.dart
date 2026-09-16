@@ -82,11 +82,17 @@ void main(List<String> args) async {
     Logger.info('readLines(): ${await textFile.readLines()}');
     Logger.info('readBytes(): ${(await textFile.readBytes()).length} bytes');
 
-    // 2.5 Structured read/write: JSON, HTML, XML
+    // 2.5 Structured read/write: JSON, HTML, XML (Async & Sync)
     final jsonFile = workspace / 'payload.json';
-    await jsonFile.writeJson({'framework': 'dart_toolkit', 'active': true});
+    await jsonFile.writeJson({'framework': 'dart_toolkit', 'active': true, 'stars': 100});
     final jsonDoc = await jsonFile.readJson();
-    Logger.ok('readJson(): framework=${jsonDoc.$jsonpath(r'$.framework').firstOrNull?.raw}');
+    Logger.ok('readJson(): framework=${jsonDoc['framework'].to<String>()}, stars=${jsonDoc['stars'].to<int>()}');
+
+    // Synchronous document I/O
+    final syncJsonFile = workspace / 'sync_payload.json';
+    syncJsonFile.writeJsonSync({'mode': 'sync', 'fast': true});
+    final syncJsonDoc = syncJsonFile.readJsonSync();
+    Logger.ok('readJsonSync(): mode=${syncJsonDoc['mode'].to<String>()}, fast=${syncJsonDoc['fast'].to<bool>()}');
 
     final htmlFile = workspace / 'page.html';
     await htmlFile.writeText('<html><body><h1>Hello HTML</h1><p class="desc">Sample paragraph</p></body></html>');
@@ -98,14 +104,15 @@ void main(List<String> args) async {
     final xmlDoc = await xmlFile.readXml();
     Logger.ok('readXml(): title="${xmlDoc.$xpath('//book/title/text()').firstOrNull?.value}"');
 
-    // 2.6 Entity checks & sizing
+    // 2.6 Entity checks & sizing (Async & Sync)
     Logger.info('type(): ${await textFile.type()}, exist(): ${await textFile.exist()}, size(): ${await textFile.size()} bytes');
+    Logger.info('typeSync(): ${textFile.typeSync()}, existSync(): ${textFile.existSync()}, sizeSync(): ${textFile.sizeSync()} bytes');
 
-    // 2.7 Cryptographic checksums
-    Logger.ok('sha256(): ${await textFile.sha256()}');
-    Logger.ok('md5():    ${await textFile.md5()}');
+    // 2.7 Cryptographic checksums (Async & Sync)
+    Logger.ok('sha256(): ${await textFile.sha256()} | sha256Sync(): ${textFile.sha256Sync()}');
+    Logger.ok('md5():    ${await textFile.md5()} | md5Sync():    ${textFile.md5Sync()}');
 
-    // 2.8 Directory listing, glob, copy, move, delete, zip, unzip
+    // 2.8 Directory listing, glob, copy, move, delete, zip, unzip (Async & Sync)
     final nestedDir = workspace / 'nested';
     await nestedDir.mkdir();
     await (nestedDir / 'f1.txt').writeText('file 1');
@@ -113,30 +120,29 @@ void main(List<String> args) async {
 
     final allEntities = await workspace.list(recursive: true).toList();
     final allFiles = await workspace.files(recursive: true).toList();
-    final allDirs = await workspace.dirs().toList();
-    final globLogs = await workspace.glob('**/*.log').toList();
+    final syncGlobLogs = workspace.globSync('**/*.log');
 
-    Logger.info('list(): ${allEntities.length} entities, files(): ${allFiles.length}, dirs(): ${allDirs.length}');
-    Logger.info('glob("**/*.log"): ${globLogs.map((p) => p.name).toList()}');
+    Logger.info('list(): ${allEntities.length} entities, files(): ${allFiles.length}');
+    Logger.info('globSync("**/*.log"): ${syncGlobLogs.map((p) => p.name).toList()}');
 
-    // Copy & Move
+    // Copy & Move (Sync)
     final copyTarget = workspace / 'notes_copy.txt';
-    await textFile.copy(copyTarget.path);
-    Logger.ok('copy(): exists=${await copyTarget.exist()}');
+    textFile.copySync(copyTarget.path);
+    Logger.ok('copySync(): exists=${copyTarget.existSync()}');
 
     final moveTarget = workspace / 'notes_moved.txt';
-    await copyTarget.move(moveTarget.path);
-    Logger.ok('move(): exists=${await moveTarget.exist()}');
+    copyTarget.moveSync(moveTarget.path);
+    Logger.ok('moveSync(): exists=${moveTarget.existSync()}');
 
-    // Zip and Unzip
+    // Zip and Unzip (Sync)
     final zipFile = Path.temp / 'toolkit_demo_archive.zip';
-    await nestedDir.zip(zipFile.path);
-    Logger.ok('zip(): archive=${zipFile.name} (${await zipFile.size()} bytes)');
+    nestedDir.zipSync(zipFile.path);
+    Logger.ok('zipSync(): archive=${zipFile.name} (${zipFile.sizeSync()} bytes)');
 
     final extractedDir = workspace / 'unzipped';
-    await zipFile.unzip(extractedDir.path);
-    Logger.ok('unzip(): extracted ${await extractedDir.files(recursive: true).length} files');
-    await zipFile.delete();
+    zipFile.unzipSync(extractedDir.path);
+    Logger.ok('unzipSync(): extracted ${extractedDir.filesSync(recursive: true).length} files');
+    zipFile.deleteSync();
   } finally {
     await workspace.delete(recursive: true);
   }
@@ -175,38 +181,35 @@ EXPORT_VAR=export_value
   // =========================================================================
   // 4. Async & Concurrency Primitives (`dart_toolkit/async`)
   // =========================================================================
-  Logger.step(4, 8, 'Async Concurrency (parallelize, retry, Mutex, Semaphore, isolate, stream extensions)');
+  Logger.step(4, 8, 'Async Concurrency (parallelMap, parallelSettle, retry, Mutex, Semaphore, isolate)');
 
-  // 4.1 Parallelize on Iterable
+  // 4.1 Fail-fast parallelMap and resilient parallelSettle
   final items = [1, 2, 3, 4, 5, 6];
-  final parallelResults = await items.parallelize((n) async {
+  final mappedValues = await items.parallelMap((n) async {
     await 15.ms.delay();
     return n * 10;
   }, concurrency: 3);
+  Logger.ok('Iterable.parallelMap(concurrency: 3): $mappedValues');
 
-  final successValues = [
-    for (final r in parallelResults)
-      if (r case Right(:final value)) value,
-  ];
-  Logger.ok('Iterable.parallelize(concurrency: 3): $successValues');
+  final settledResults = await items.parallelSettle((n) async {
+    if (n == 4) throw Exception('Item 4 failed');
+    return n * 100;
+  }, concurrency: 3);
+  Logger.ok('Iterable.parallelSettle(): ${settledResults.map((e) => e.isRight ? e.rightOrNull : "ERROR").toList()}');
 
-  // 4.2 Retry with builder extension
+  // 4.2 Retry with top-level helper and builder
   var retryTries = 0;
-  final retryVal = await (() async {
+  final retryVal = await retry(() async {
     retryTries++;
     if (retryTries < 2) throw StateError('Transient timeout');
     return 'Connected successfully';
-  }).retry()
-      .attempts(3)
-      .delay(10.ms)
-      .backoff(1.5)
-      .jitter(true);
+  }, attempts: 3, delay: 10.ms, backoff: 1.5, jitter: true);
   Logger.ok('retry(): "$retryVal" (succeeded on attempt #$retryTries)');
 
   // 4.3 Mutex (Exclusive critical section)
   final mutex = Mutex();
   var mutexCounter = 0;
-  await [1, 2, 3, 4].parallelize((_) => mutex.protect(() async {
+  await [1, 2, 3, 4].parallelMap((_) => mutex.protect(() async {
     final current = mutexCounter;
     await 5.ms.delay();
     mutexCounter = current + 1;
@@ -217,7 +220,7 @@ EXPORT_VAR=export_value
   final semaphore = Semaphore(2);
   var maxConcurrent = 0;
   var currentConcurrent = 0;
-  await [1, 2, 3, 4, 5].parallelize((_) => semaphore.run(() async {
+  await [1, 2, 3, 4, 5].parallelMap((_) => semaphore.run(() async {
     currentConcurrent++;
     if (currentConcurrent > maxConcurrent) maxConcurrent = currentConcurrent;
     await 10.ms.delay();
@@ -265,11 +268,12 @@ EXPORT_VAR=export_value
   final guardedAsync = await Either.guardAsync(() async => 'async value');
   Logger.ok('Either.guard: ${guarded.rightOrNull}, Either.guardAsync: ${guardedAsync.rightOrNull}');
 
-  // 5.2 JSON Document with JSONPath
+  // 5.2 Unified JsonDocument with to<T>() and JSONPath
   final rawJson = '{"store": {"book": [{"title": "Sayings", "price": 8.95}, {"title": "Sword", "price": 12.99}]}}';
   final jsonParsed = JsonDocument.parse(rawJson);
-  final titles = jsonParsed.$jsonpath(r'$.store.book[*].title').map((n) => n.raw).toList();
-  Logger.ok('JsonDocument JSONPath: titles=$titles');
+  final titles = jsonParsed.$jsonpath(r'$.store.book[*].title').map((n) => n.to<String>()).toList();
+  final firstPrice = jsonParsed['store']['book'][0]['price'].to<double>();
+  Logger.ok('JsonDocument to<T>(): titles=$titles, firstBookPrice=$firstPrice');
 
   // 5.3 HTML Document with CSS & XPath
   final rawHtml = '<div class="content"><h2 id="main">Heading</h2><a href="/link1">One</a><a href="/link2">Two</a></div>';
@@ -287,16 +291,18 @@ EXPORT_VAR=export_value
   Logger.ok('String.match(): version=$versionMatch');
 
   // =========================================================================
-  // 6. HTTP Extension & Web Scraping Pipeline (`dart_toolkit/http`)
+  // 6. HTTP Extension & Isolate Parsing (`dart_toolkit/http`)
   // =========================================================================
-  Logger.step(6, 8, 'HTTP Response Extensions & Scraping Pipeline');
+  Logger.step(6, 8, 'HTTP Response Extensions & Isolate Parsing');
 
-  // 6.1 Response extension parsers
+  // 6.1 Response extension parsers & Isolate offloading
   final sampleResponse = http.Response('{"status": 200, "message": "OK"}', 200);
-  Logger.ok('http.Response.json(): ${sampleResponse.json().$jsonpath(r'$.message').firstOrNull?.raw}');
+  final isolatedMsg = await sampleResponse.isolateJson((json) => json['message'].to<String>());
+  Logger.ok('http.Response.isolateJson(): message=$isolatedMsg');
 
   final sampleHtmlResponse = http.Response('<title>Dart Toolkit Showcase</title>', 200);
-  Logger.ok('http.Response.html(): ${sampleHtmlResponse.html().$('title').firstOrNull?.text}');
+  final isolatedTitle = await sampleHtmlResponse.isolateHtml((doc) => doc.$('title').firstOrNull?.text);
+  Logger.ok('http.Response.isolateHtml(): title=$isolatedTitle');
 
   final sampleXmlResponse = http.Response('<status code="0"/>', 200);
   Logger.ok('http.Response.xml(): ${sampleXmlResponse.xml().$xpath(r'/status/@code').firstOrNull?.value}');

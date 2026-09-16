@@ -9,8 +9,21 @@ class JsonPath {
 
   const JsonPath._(this._steps);
 
-  /// Compiles or parses a JSONPath expression.
-  static JsonPath of(String expression) => JsonPath._(_parse(expression));
+  static final _cache = <String, JsonPath>{};
+  static const _maxCacheSize = 256;
+
+  /// Compiles or retrieves a cached JSONPath expression.
+  static JsonPath of(String expression) {
+    final cached = _cache[expression];
+    if (cached != null) return cached;
+
+    final compiled = JsonPath._(_parse(expression));
+    if (_cache.length >= _maxCacheSize) {
+      _cache.remove(_cache.keys.first);
+    }
+    _cache[expression] = compiled;
+    return compiled;
+  }
 
   /// Evaluates this expression against [root] and returns all matching values in document order.
   List<Object?> read(Object? root) {

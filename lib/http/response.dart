@@ -1,10 +1,53 @@
+import 'dart:async';
+import 'dart:isolate';
+
 import 'package:http/http.dart' as http;
 
+import '../async/isolate.dart';
 import '../core/core.dart';
 import '../fs/path.dart';
 
 /// Format parser extensions on [http.Response].
 extension HttpToolkitResponse on http.Response {
+  /// Executes a computation [action] on this response inside a background [Isolate].
+  ///
+  /// Only copies essential fields (body string, status code, headers, URL) into
+  /// the isolate, avoiding serialization overhead of the entire request/response object graph.
+  Future<R> isolate<R>(FutureOr<R> Function(http.Response res) action) {
+    final rawBody = body;
+    final code = statusCode;
+    final hdrs = headers;
+    final reqUrl = url;
+
+    return (() {
+      final isolatedRes = http.Response(
+        rawBody,
+        code,
+        headers: hdrs,
+        request: reqUrl != null ? http.Request('GET', reqUrl) : null,
+      );
+      return action(isolatedRes);
+    }).isolate();
+  }
+
+  /// Parses the response body as HTML and extracts data inside a background [Isolate].
+  Future<R> isolateHtml<R>(FutureOr<R> Function(HtmlDocument doc) action) {
+    final rawBody = body;
+    return (() => action(HtmlDocument.parse(rawBody))).isolate();
+  }
+
+  /// Parses the response body as JSON and extracts data inside a background [Isolate].
+  Future<R> isolateJson<R>(FutureOr<R> Function(JsonDocument doc) action) {
+    final rawBody = body;
+    return (() => action(JsonDocument.parse(rawBody))).isolate();
+  }
+
+  /// Parses the response body as XML and extracts data inside a background [Isolate].
+  Future<R> isolateXml<R>(FutureOr<R> Function(XmlDocument doc) action) {
+    final rawBody = body;
+    return (() => action(XmlDocument.parse(rawBody))).isolate();
+  }
+
   /// Parses the response body as HTML.
   HtmlDocument html() => HtmlDocument.parse(body);
 
@@ -44,6 +87,46 @@ extension HttpClientFormatExtensions on http.Client {
   Future<XmlDocument> xml(Uri url, {Map<String, String>? headers}) async {
     final res = await get(url, headers: headers);
     return res.xml();
+  }
+
+  /// Fetches [url] and executes [action] on a background [Isolate].
+  Future<R> isolate<R>(
+    Uri url,
+    FutureOr<R> Function(http.Response res) action, {
+    Map<String, String>? headers,
+  }) async {
+    final res = await get(url, headers: headers);
+    return res.isolate(action);
+  }
+
+  /// Fetches [url] and parses HTML inside a background [Isolate].
+  Future<R> isolateHtml<R>(
+    Uri url,
+    FutureOr<R> Function(HtmlDocument doc) action, {
+    Map<String, String>? headers,
+  }) async {
+    final res = await get(url, headers: headers);
+    return res.isolateHtml(action);
+  }
+
+  /// Fetches [url] and parses JSON inside a background [Isolate].
+  Future<R> isolateJson<R>(
+    Uri url,
+    FutureOr<R> Function(JsonDocument doc) action, {
+    Map<String, String>? headers,
+  }) async {
+    final res = await get(url, headers: headers);
+    return res.isolateJson(action);
+  }
+
+  /// Fetches [url] and parses XML inside a background [Isolate].
+  Future<R> isolateXml<R>(
+    Uri url,
+    FutureOr<R> Function(XmlDocument doc) action, {
+    Map<String, String>? headers,
+  }) async {
+    final res = await get(url, headers: headers);
+    return res.isolateXml(action);
   }
 }
 
@@ -88,6 +171,46 @@ extension UriHttpExtensions on Uri {
   Future<XmlDocument> xml({Map<String, String>? headers, http.Client? client}) async {
     final res = await get(headers: headers, client: client);
     return res.xml();
+  }
+
+  /// Fetches this URI and executes [action] on a background [Isolate].
+  Future<R> isolate<R>(
+    FutureOr<R> Function(http.Response res) action, {
+    Map<String, String>? headers,
+    http.Client? client,
+  }) async {
+    final res = await get(headers: headers, client: client);
+    return res.isolate(action);
+  }
+
+  /// Fetches this URI and parses HTML inside a background [Isolate].
+  Future<R> isolateHtml<R>(
+    FutureOr<R> Function(HtmlDocument doc) action, {
+    Map<String, String>? headers,
+    http.Client? client,
+  }) async {
+    final res = await get(headers: headers, client: client);
+    return res.isolateHtml(action);
+  }
+
+  /// Fetches this URI and parses JSON inside a background [Isolate].
+  Future<R> isolateJson<R>(
+    FutureOr<R> Function(JsonDocument doc) action, {
+    Map<String, String>? headers,
+    http.Client? client,
+  }) async {
+    final res = await get(headers: headers, client: client);
+    return res.isolateJson(action);
+  }
+
+  /// Fetches this URI and parses XML inside a background [Isolate].
+  Future<R> isolateXml<R>(
+    FutureOr<R> Function(XmlDocument doc) action, {
+    Map<String, String>? headers,
+    http.Client? client,
+  }) async {
+    final res = await get(headers: headers, client: client);
+    return res.isolateXml(action);
   }
 
   /// Downloads content from this URI to [destination] path, streaming [DownloadProgress] updates.
