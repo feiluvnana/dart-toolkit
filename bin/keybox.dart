@@ -16,6 +16,7 @@ void main(List<String> rawArgs) async {
       final formats = selectedFormat == 'all' ? const ['mp3', 'flac'] : [selectedFormat];
       final concurrency = int.tryParse(ctx.option('concurrency') ?? '4') ?? 4;
       final shouldCompress = ctx.flag('compress');
+      final totalStages = shouldCompress ? 4 : 3;
 
       final base = baseName.path;
       final baseUri = keyBase.url;
@@ -23,33 +24,25 @@ void main(List<String> rawArgs) async {
       final discNames = <int, String>{};
       final tracks = <int, Map<int, String>>{};
 
-      // 1. Scrape official metadata & images in background isolate
-      await Console.spin('Scraping official album metadata and artworks...', () async {
+      // Stage 1: Official metadata & images
+      Logger.step(1, totalStages, 'Scraping official album metadata and artworks');
+      await Console.spin('Parsing official website...', () async {
         final doc = await (baseUri / 'key_box.html').isolateHtml((d) => d);
         for (final li in doc.$('.key_cd_track_box ul li')) {
-          final discTitleElem = li.$('.track_disc_title').firstOrNull;
-          if (discTitleElem == null) continue;
-          final title = discTitleElem.text.path.sanitized();
-          final discNumStr = title.match(r'DISC\.(\d+)', 1) ?? title.replaceAll(RegExp(r'\D'), '');
-          final d = int.tryParse(discNumStr);
-          if (d == null) continue;
+          final title = li.$('.track_disc_title').first.text.path.sanitized();
+          final d = int.parse(title.match(r'DISC\.(\d+)', 1)!);
           discNames[d] = title;
-          final textStyleElem = li.$('.track_disc_text_style1').firstOrNull;
-          if (textStyleElem != null) {
-            tracks[d] = {
-              for (final line in textStyleElem.lines)
-                if (RegExp(r'^(\d+)\.(.*)$').firstMatch(line) case final m?)
-                  int.parse(m[1]!): (d == 22 && m[1] == '13') ? '小さなてのひら' : m[2]!.trim(),
-            };
-          }
+          tracks[d] = {
+            for (final line in li.$('.track_disc_text_style1').first.lines)
+              if (RegExp(r'^(\d+)\.(.*)$').firstMatch(line) case final m?)
+                int.parse(m[1]!): (d == 22 && m[1] == '13') ? '小さなてのひら' : m[2]!.trim(),
+          };
         }
 
         for (final e in doc.$('.key_cd_artworks_box')) {
-          final d = int.tryParse(e.text.replaceAll(RegExp(r'\D'), ''));
-          final href = e.$('a').firstOrNull?.attr('href');
-          if (d != null && href != null && discNames.containsKey(d)) {
-            downloads[base / discNames[d]! / href.path.name] = baseUri / href;
-          }
+          final d = int.parse(e.text.replaceAll(RegExp(r'\D'), ''));
+          final href = e.$('a').first.attr('href')!;
+          downloads[base / discNames[d]! / href.path.name] = baseUri / href;
         }
 
         downloads.addAll({
@@ -120,51 +113,59 @@ void main(List<String> rawArgs) async {
 
         final topicsDoc = await (baseUri / 'topics.html').isolateHtml((d) => d);
         for (final img in topicsDoc.$('.topics_box img')) {
-          if (img.attr('src') case final src?) {
-            downloads[base / 'Others/Events & Topics' / src.path.name] = baseUri / src;
-          }
+          final src = img.attr('src')!;
+          downloads[base / 'Others/Events & Topics' / src.path.name] = baseUri / src;
         }
       });
+      Logger.ok('Found ${discNames.length} discs and ${downloads.length} artwork/document assets.');
 
-      // 2. Scrape audio tracks
-      final audioStream = khinsider.url.scrape<({Path path, Uri url})>((res) async {
-        for (final tr in res.$('#songlist tr')) {
-          final tds = tr.$('td');
-          if (tds.length < 4) continue;
-          final href = tds[3].$('a').first.attr('href')!;
-          final d = int.parse(href.match(r'\/(\d+)-', 1) ?? tds[1].text.replaceAll(RegExp(r'\D'), ''));
-          final t = int.parse(href.match(r'-(\d+)\.', 1) ?? tds[2].text.replaceAll(RegExp(r'\D'), ''));
-          final disc = discNames[d]!;
-          final title = (tracks[d]?[t] ?? tds[3].text).path.sanitized();
+      // Stage 2: Audio tracks scraping
+      Logger.step(2, totalStages, 'Scraping audio tracks and download links');
+      var audioTracksCount = 0;
+      await Console.spin('Resolving track links from repository...', () async {
+        final audioStream = khinsider.url.scrape<({Path path, Uri url})>((res) async {
+          for (final tr in res.$('#songlist tr')) {
+            final tds = tr.$('td');
+            if (tds.length < 4) continue;
+            final href = tds[3].$('a').first.attr('href')!;
+            final d = int.parse(href.match(r'\/(\d+)-', 1) ?? tds[1].text.replaceAll(RegExp(r'\D'), ''));
+            final t = int.parse(href.match(r'-(\d+)\.', 1) ?? tds[2].text.replaceAll(RegExp(r'\D'), ''));
+            final disc = discNames[d]!;
+            final title = (tracks[d]?[t] ?? tds[3].text).path.sanitized();
 
-          for (final ext in formats) {
-            final target = base / disc / ext / '$t. $title.$ext';
-            if (!target.existSync()) {
-              res.follow(
-                href,
-                callback: (songRes) {
-                  final dlHref = songRes.$('a[href*=".$ext"]').first.attr('href')!;
-                  return (path: target, url: (songRes.url ?? khinsider.url).resolve(dlHref));
-                },
-              );
+            for (final ext in formats) {
+              final target = base / disc / ext / '$t. $title.$ext';
+              if (!target.existSync()) {
+                res.follow(
+                  href,
+                  callback: (songRes) {
+                    final dlHref = songRes.$('a[href*=".$ext"]').first.attr('href')!;
+                    return (path: target, url: (songRes.url ?? khinsider.url).resolve(dlHref));
+                  },
+                );
+              }
             }
           }
+        }, concurrency: concurrency);
+
+        await for (final item in audioStream) {
+          downloads[item.path] = item.url;
+          audioTracksCount++;
         }
-      }, concurrency: concurrency);
+      });
+      Logger.ok('Enqueued $audioTracksCount audio track downloads ($selectedFormat).');
 
-      await for (final item in audioStream) {
-        downloads[item.path] = item.url;
-      }
-
-      // 3. Download batch
-      final progress = Console.progress(downloads.length, message: 'Downloading files');
+      // Stage 3: Download batch
+      Logger.step(3, totalStages, 'Downloading assets (${downloads.length} files, concurrency: $concurrency)');
+      final progress = Console.progress(downloads.length, message: 'Downloading');
       await for (final status in downloads.downloadAll(concurrency: concurrency)) {
         if (status.current.isDone) progress.tick(1, status.current.path.name);
       }
       progress.done('All assets downloaded.');
 
-      // 4. Archive (if requested)
+      // Stage 4: Archive (if requested)
       if (shouldCompress) {
+        Logger.step(4, totalStages, 'Creating zip archive');
         await Console.spin('Compressing $baseName.zip...', () => base.zip('$baseName.zip'));
       }
 

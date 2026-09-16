@@ -123,7 +123,7 @@ class ConsoleSpinner {
   /// Stops the spinner with a success message.
   void success([String? finalMessage]) {
     _stop();
-    final elapsed = _stopwatch.elapsed.humanize().dim;
+    final elapsed = _stopwatch.elapsed.humanize();
     final text = finalMessage ?? message;
     stdout.writeln('  ✓ $text ($elapsed)'.green);
   }
@@ -131,7 +131,7 @@ class ConsoleSpinner {
   /// Stops the spinner with a failure message.
   void fail([String? errorMessage]) {
     _stop();
-    final elapsed = _stopwatch.elapsed.humanize().dim;
+    final elapsed = _stopwatch.elapsed.humanize();
     final text = errorMessage ?? message;
     stderr.writeln('  ✖ $text ($elapsed)'.red);
   }
@@ -139,7 +139,7 @@ class ConsoleSpinner {
   /// Stops the spinner with an informational message.
   void info([String? infoMessage]) {
     _stop();
-    final elapsed = _stopwatch.elapsed.humanize().dim;
+    final elapsed = _stopwatch.elapsed.humanize();
     final text = infoMessage ?? message;
     stdout.writeln('  ℹ $text ($elapsed)'.cyan);
   }
