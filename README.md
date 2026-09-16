@@ -13,10 +13,11 @@ A lightweight, modern, and concise script automation and web scraping toolkit fo
 - **Process & Shell**: Top-level `$()` and `run()`, `'cmd'.run()`, `path.run()`, `which()`, command pipelines with `|`.
 - **Filesystem & Path**: Ergonomic `Path` with `/` operator, `readText()`, `writeText()`, `readJson()`, `writeJson()`, `append()`, `replace()`, `sanitized()`, `sha256()`, `md5()`, `zip()`, `unzip()`.
 - **Environment**: `Env.get()`, `Env.set()`, `Env.require()`, `Env.has()`, `Env.load()`, `Env.all()`, OS and CI detection.
-- **Async Concurrency**: `items.parallelize()`, `(() => ...).retry()`, `Mutex`, `Semaphore`, `computation.isolate()`, stream operators (`chunk`, `flatmap`, `notnull`, `debounce`, `throttle`).
+- **Async Concurrency**: `items.parallelize()`, `(() => ...).retry()`, `Mutex`, `Semaphore`, `computation.isolate()`, `CancellationToken` with a uniform `.cancelWith(token)` on any `Stream`/`Future`, stream operators (`chunk`, `flatmap`, `notnull`, `debounce`, `throttle`).
 - **Document Parsing**: `Either<L, R>`, `JsonDocument` (JSONPath), `HtmlDocument` (CSS & XPath), `XmlDocument` (XPath).
 - **HTTP & Scraping**: `http.Response` extensions (`.json()`, `.html()`, `.xml()`), scraping pipeline with `url.scrape()`.
-- **CLI & Console**: Interactive `Prompt` (`ask`, `confirm`, `secret`, `select`), `Console.spin()`, `Console.spinner()`, `Console.progress()`, `Console.table()`, `Console.rule()`, ANSI styles, `Cli` app builder, `onExit()`, `die()`.
+- **CLI & Console**: Interactive `Prompt` (`ask`, `askWith` validation, `confirm`, `secret`, generic `select`), level-aware `Logger`, `Console.spin()`, `Console.spinner()`, `Console.progress()`, `Console.multiProgress()`, `Console.table()`, `Console.rule()`, `NO_COLOR`-aware ANSI styles, `Cli` app builder, `onExit()`, `die()`.
+- **Testable IO**: every CLI component writes through `ConsoleIo`, so output can be captured, redirected, or silenced without touching call sites.
 
 ---
 
@@ -119,6 +120,38 @@ Console.table(
     ['DB', 'Connected'],
   ],
 );
+```
+
+---
+
+### 6. Logging, Validation & Cancellation
+
+```dart
+// Logger respects a global level; silence a noisy section inline.
+Logger.level = LogLevel.debug;
+Logger.debug('resolved 128 candidate URLs');
+Logger.silenced(() => runVerboseStep());
+
+// Prompts validate and work with any element type.
+final port = Prompt.askWith('Port', defaultTo: '8080',
+    validate: (v) => int.tryParse(v) == null ? 'Must be a number' : null);
+
+final target = Prompt.select('Deploy target', servers,
+    display: (s) => '${s.name} (${s.region})');
+
+// One cancellation idiom for every async operation.
+final token = CancellationToken();
+onExit(() => token.cancel('interrupted'));
+
+await for (final item in url.scrape<Item>(parse).cancelWith(token)) {
+  print(item);
+}
+
+// Capture CLI output in tests without changing call sites.
+final buffer = StringBuffer();
+ConsoleIo.stdoutOverride = buffer;
+Logger.ok('captured, not printed');
+ConsoleIo.reset();
 ```
 
 ---

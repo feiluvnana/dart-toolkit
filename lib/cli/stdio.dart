@@ -7,7 +7,10 @@ import 'dart:io';
 class ConsoleIo {
   static StringSink? stdoutOverride;
   static StringSink? stderrOverride;
-  static String Function()? stdinLineReader;
+
+  /// Replaces standard input. Return `null` to signal end of input, which lets
+  /// tests and non-interactive runs exercise the EOF path of [Prompt].
+  static String? Function()? stdinLineReader;
 
   /// The active standard output sink.
   static StringSink get out => stdoutOverride ?? stdout;
