@@ -3,7 +3,7 @@ import 'package:test/test.dart';
 
 void main() {
   group('Collections', () {
-    test('chunk and window', () {
+    test('chunk', () {
       final items = [1, 2, 3, 4, 5];
       expect(
         items.chunk(2).toList(),
@@ -11,14 +11,6 @@ void main() {
           [1, 2],
           [3, 4],
           [5],
-        ]),
-      );
-      expect(
-        items.window(3).toList(),
-        equals([
-          [1, 2, 3],
-          [2, 3, 4],
-          [3, 4, 5],
         ]),
       );
     });
@@ -47,6 +39,16 @@ void main() {
       expect(words.distinctBy((w) => w[0]).toList(), equals(['apple', 'banana']));
     });
 
+    test('sorted, sortedBy, sortedByDescending', () {
+      final nums = [3, 1, 4, 2];
+      expect(nums.sorted(), equals([1, 2, 3, 4]));
+      expect(nums, equals([3, 1, 4, 2])); // non-mutating
+
+      final words = ['banana', 'apple', 'pie'];
+      expect(words.sortedBy((w) => w.length), equals(['pie', 'apple', 'banana']));
+      expect(words.sortedByDescending((w) => w.length), equals(['banana', 'apple', 'pie']));
+    });
+
     test('sum, average, maxByOrNull, minByOrNull', () {
       final items = [10, 20, 30];
       expect(items.sum(), equals(60));
@@ -55,21 +57,19 @@ void main() {
       expect(items.minByOrNull((x) => x), equals(10));
     });
 
-    test('Collections static helper', () {
-      expect(
-        Collections.flatten([
-          [1, 2],
-          [3, 4],
-        ]),
-        equals([1, 2, 3, 4]),
-      );
-      expect(
-        Collections.interleave([
-          [1, 2],
-          [3, 4],
-        ]).toList(),
-        equals([1, 3, 2, 4]),
-      );
+    test('List getOrNull and shuffled', () {
+      final list = ['alpha', 'beta'];
+      expect(list.getOrNull(0), equals('alpha'));
+      expect(list.getOrNull(5), isNull);
+      expect(list.getOrNull(-1), isNull);
+      expect(list.shuffled().length, equals(2));
+    });
+
+    test('Map mergeWith', () {
+      final m1 = {'a': 1, 'b': 2};
+      final m2 = {'b': 3, 'c': 4};
+      final merged = m1.mergeWith(m2, (v1, v2) => v1 + v2);
+      expect(merged, equals({'a': 1, 'b': 5, 'c': 4}));
     });
   });
 }

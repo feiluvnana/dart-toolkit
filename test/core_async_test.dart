@@ -60,7 +60,7 @@ void main() {
         if (item == 3) {
           throw Exception('item 3 failed');
         }
-        await Future<void>.delayed(Duration(milliseconds: (6 - item) * 10));
+        await Future<void>.delayed(((6 - item) * 10).ms);
         return 'res-$item';
       }, concurrency: 3);
 
@@ -81,7 +81,7 @@ void main() {
       await items.parallelize((item) async {
         currentInFlight++;
         if (currentInFlight > maxInFlight) maxInFlight = currentInFlight;
-        await Future<void>.delayed(const Duration(milliseconds: 20));
+        await Future<void>.delayed(20.ms);
         currentInFlight--;
         return item;
       }, concurrency: 3);
@@ -96,7 +96,7 @@ void main() {
 
       final results = await stream.parallelize((item) async {
         if (item == 2) throw Exception('fail 2');
-        await Future<void>.delayed(Duration(milliseconds: (4 - item) * 10));
+        await Future<void>.delayed(((4 - item) * 10).ms);
         return item * 10;
       }, concurrency: 2).toList();
 
@@ -109,4 +109,190 @@ void main() {
       expect(leftValues.length, equals(1));
     });
   });
+
+  group('Async Retry Builder', () {
+    test('retries failed actions up to attempts count and succeeds', () async {
+      var count = 0;
+      final retriedDelays = <Duration>[];
+
+      final result = await (() async {
+        count++;
+        if (count < 3) throw StateError('attempt $count failed');
+        return 'success';
+      }).retry()
+          .attempts(4)
+          .delay(10.ms)
+          .backoff(1.5)
+          .jitter(false)
+          .listen((att, err, nextDelay) => retriedDelays.add(nextDelay));
+
+      expect(result, equals('success'));
+      expect(count, equals(3));
+      expect(retriedDelays.length, equals(2));
+    });
+
+    test('rethrows error when attempts are exhausted', () async {
+      var count = 0;
+
+      await expectLater(
+        (() async {
+          count++;
+          throw FormatException('always fail');
+        }).retry().attempts(3).delay(5.ms),
+        throwsA(isA<FormatException>()),
+      );
+
+      expect(count, equals(3));
+    });
+
+    test('respects when filter predicate', () async {
+      var count = 0;
+
+      await expectLater(
+        (() async {
+          count++;
+          if (count == 1) throw ArgumentError('invalid arg');
+          throw StateError('state error');
+        }).retry().attempts(4).delay(5.ms).when((e) => e is ArgumentError),
+        throwsA(isA<StateError>()),
+      );
+
+      expect(count, equals(2));
+    });
+  });
+
+  group('Async Synchronization (Mutex & Semaphore)', () {
+    test('Mutex protects critical sections exclusively', () async {
+      final lock = Mutex();
+      var activeWorkers = 0;
+      var maxWorkers = 0;
+      final output = <int>[];
+
+      await [1, 2, 3].parallelize((id) async {
+        await lock.protect(() async {
+          activeWorkers++;
+          if (activeWorkers > maxWorkers) maxWorkers = activeWorkers;
+          await Future<void>.delayed(10.ms);
+          output.add(id);
+          activeWorkers--;
+        });
+      }, concurrency: 3);
+
+      expect(maxWorkers, equals(1));
+      expect(output.length, equals(3));
+      expect(lock.isLocked, isFalse);
+    });
+
+    test('Semaphore limits concurrent access to maxPermits', () async {
+      final sem = Semaphore(2);
+      var inFlight = 0;
+      var maxInFlight = 0;
+
+      await List.generate(5, (i) => i).parallelize((id) async {
+        await sem.run(() async {
+          inFlight++;
+          if (inFlight > maxInFlight) maxInFlight = inFlight;
+          await Future<void>.delayed(15.ms);
+          inFlight--;
+        });
+      }, concurrency: 5);
+
+      expect(maxInFlight, lessThanOrEqualTo(2));
+      expect(sem.availablePermits, equals(2));
+    });
+
+    test('Permit release is safe and idempotent', () async {
+      final sem = Semaphore(1);
+      final permit = await sem.acquire();
+      expect(sem.availablePermits, equals(0));
+
+      permit.release();
+      expect(sem.availablePermits, equals(1));
+
+      // Second release has no effect
+      permit.release();
+      expect(sem.availablePermits, equals(1));
+    });
+  });
+
+  group('Stream Extensions (RxDart powered)', () {
+    test('chunk batches stream events into fixed size lists', () async {
+      final stream = Stream.fromIterable([1, 2, 3, 4, 5]);
+      final chunks = await stream.chunk(2).toList();
+      expect(chunks, equals([[1, 2], [3, 4], [5]]));
+    });
+
+    test('flatmap transforms and flattens streams', () async {
+      final stream = Stream.fromIterable([1, 2]);
+      final flattened = await stream.flatmap((x) => Stream.fromIterable([x, x * 10])).toList();
+      expect(flattened, equals([1, 10, 2, 20]));
+    });
+
+    test('notnull filters out null values', () async {
+      final Stream<int?> stream = Stream.fromIterable([1, null, 2, null, 3]);
+      final nonNulls = await stream.notnull().toList();
+      expect(nonNulls, equals([1, 2, 3]));
+      expect(nonNulls, isA<List<int>>());
+    });
+
+    test('debounce suppresses rapid events', () async {
+      final controller = StreamController<int>();
+      final debounced = controller.stream.debounce(30.ms).toList();
+
+      controller.add(1);
+      await Future<void>.delayed(5.ms);
+      controller.add(2);
+      await Future<void>.delayed(5.ms);
+      controller.add(3);
+      await Future<void>.delayed(50.ms);
+      await controller.close();
+
+      expect(await debounced, equals([3]));
+    });
+
+    test('throttle limits emission rate', () async {
+      final controller = StreamController<int>();
+      final throttled = controller.stream.throttle(30.ms).toList();
+
+      controller.add(1);
+      controller.add(2);
+      controller.add(3);
+      await Future<void>.delayed(50.ms);
+      controller.add(4);
+      await controller.close();
+
+      expect(await throttled, equals([1, 4]));
+    });
+  });
+
+  group('Isolate Utilities', () {
+    test('(() => computation()).isolate() executes on background isolate', () async {
+      final res = await (() {
+        var sum = 0;
+        for (var i = 0; i < 1000; i++) {
+          sum += i;
+        }
+        return sum;
+      }).isolate();
+
+      expect(res, equals(499500));
+    });
+
+    test('parallelize with isolate: true runs workers on background isolates', () async {
+      final numbers = [10, 20, 30];
+      final results = await numbers.parallelize((n) {
+        if (n == 20) throw ArgumentError('bad 20');
+        return n * 2;
+      }, isolate: true);
+
+      expect(results.length, equals(3));
+      expect(results[0], equals(const Right<Object, int>(20)));
+      expect(results[1].isLeft, isTrue);
+      expect(results[2], equals(const Right<Object, int>(60)));
+    });
+  });
 }
+
+
+
+

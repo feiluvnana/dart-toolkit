@@ -44,11 +44,14 @@ extension DurationExtensions on Duration {
   }
 
   /// Randomizes this duration within `[1 - factor, 1 + factor]` range.
-  Duration jitter([double factor = 0.25, Random? random]) {
+  Duration jittered([double factor = 0.25, Random? random]) {
     final rand = random ?? Random();
     final clampedFactor = factor.clamp(0.0, 1.0);
     final variance = (rand.nextDouble() * 2 - 1) * clampedFactor;
     final ms = (inMilliseconds * (1 + variance)).round();
     return Duration(milliseconds: max(0, ms));
   }
+
+  /// Asynchronously delays execution for this duration.
+  Future<void> delay() => Future<void>.delayed(this);
 }

@@ -27,16 +27,16 @@ void main() {
 
       // CSS selector query
       final h1 = html.$('h1');
-      expect(h1.text, equals('Heading 1'));
+      expect(h1.firstOrNull?.text, equals('Heading 1'));
 
       final items = html.$('.items .item');
       expect(items.length, equals(2));
-      expect(items.texts, equals(['Item 1', 'Item 2']));
+      expect(items.map((e) => e.text).toList(), equals(['Item 1', 'Item 2']));
 
       // XPath selector query
       final xpathItems = html.$xpath('//ul/li');
       expect(xpathItems.length, equals(2));
-      expect(xpathItems.texts, equals(['Item 1', 'Item 2']));
+      expect(xpathItems.map((e) => e.text).toList(), equals(['Item 1', 'Item 2']));
     });
 
     test('res.xml() parses XML with XPath selector', () {
@@ -111,33 +111,75 @@ void main() {
       expect(allPrices.map((d) => d.raw).toList(), equals([8.95, 12.99, 19.95]));
     });
 
-    test('crawl pipeline follows links and collects data', () async {
+    test('scrape pipeline follows links, handles relative URLs, callbacks, and meta', () async {
       final client = MockClient((request) async {
         final path = request.url.path;
         if (path == '/index') {
           return http.Response(
-            '<html><body><h1>Index</h1><a href="https://example.com/page1">Page 1</a></body></html>',
+            '<html><body><h1>Catalog</h1><a href="product/1">Product 1</a></body></html>',
             200,
+            headers: {'content-type': 'text/html'},
           );
-        } else if (path == '/page1') {
-          return http.Response('<html><body><h1>Page 1 Content</h1></body></html>', 200);
+        } else if (path == '/product/1') {
+          return http.Response(
+            '{"name": "Widget", "price": 49.99}',
+            200,
+            headers: {'content-type': 'application/json'},
+          );
         }
         return http.Response('Not Found', 404);
       });
 
-      final seeds = [Uri.parse('https://example.com/index')];
-      final titles = await crawl<String>(
-        seeds,
-        client: client,
-        onFetch: (res) {
-          final page = res.html();
-          final title = page.$('h1').text;
-          final links = page.$('a').attrs('href').map(Uri.parse);
-          return CrawlAction.data(title, follow: links);
-        },
-      ).toList();
+      final items = await 'https://example.com/index'.url.scrape<Map<String, dynamic>>((res) {
+        expect(res, isA<http.Response>());
+        final category = res.$('h1').firstOrNull?.text;
 
-      expect(titles, containsAll(['Index', 'Page 1 Content']));
+        for (final a in res.$('a')) {
+          final href = a.attr('href');
+          if (href != null) {
+            res.follow(
+              href, // relative URL 'product/1' -> resolved to 'https://example.com/product/1'
+              meta: {'category': category, 'label': a.text},
+              callback: (detailRes) {
+                expect(detailRes, isA<http.Response>());
+                final json = detailRes.json();
+                detailRes.emit({
+                  'category': detailRes.meta['category'],
+                  'label': detailRes.meta['label'],
+                  'name': json.$jsonpath(r'$.name').firstOrNull?.raw,
+                  'price': json.$jsonpath(r'$.price').firstOrNull?.raw,
+                });
+              },
+            );
+          }
+        }
+      }, client: client).toList();
+
+      expect(items.length, equals(1));
+      expect(items.first, equals({
+        'category': 'Catalog',
+        'label': 'Product 1',
+        'name': 'Widget',
+        'price': 49.99,
+      }));
     });
+
+    test('scrape accepts http.Request seeds directly', () async {
+      final client = MockClient((request) async {
+        expect(request.headers['x-custom'], equals('test-header'));
+        return http.Response('{"ok": true}', 200, headers: {'content-type': 'application/json'});
+      });
+
+      final req = http.Request('GET', Uri.parse('https://example.com/api'))
+        ..headers['x-custom'] = 'test-header';
+
+      final results = await req.scrape<bool>((res) {
+        expect(res, isA<http.Response>());
+        res.emit(res.json().$jsonpath(r'$.ok').firstOrNull?.raw == true);
+      }, client: client).toList();
+
+      expect(results, equals([true]));
+    });
+
   });
 }

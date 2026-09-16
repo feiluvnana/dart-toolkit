@@ -21,7 +21,7 @@ void main() {
     test('Duration.jitter adds variance within bounds', () {
       final base = 1000.ms;
       for (var i = 0; i < 20; i++) {
-        final jittered = base.jitter(0.2);
+        final jittered = base.jittered(0.2);
         expect(jittered.inMilliseconds, greaterThanOrEqualTo(800));
         expect(jittered.inMilliseconds, lessThanOrEqualTo(1200));
       }

@@ -57,5 +57,23 @@ void main() {
       progress.tick(5, 'Completed');
       progress.done('Finished');
     });
+
+    test('ConsoleProgress truncates long labels to fit within terminal width', () {
+      final progress = Console.progress(556, message: 'Audio Tracks', terminalColumns: 80);
+      final line = progress.formatLine(
+        'DISC.21／ LB!キャラクターソング・semicrystalline.Little Busters! original arrange album・Rockstar Busters! 他より #11',
+      );
+
+      // Line length in terminal columns must not exceed terminalColumns - 1
+      expect(line.length, lessThanOrEqualTo(80));
+      expect(line.contains('...'), isTrue);
+      expect(line.startsWith('  Audio Tracks: ['), isTrue);
+    });
+
+    test('ConsoleProgress handles wide East Asian characters correctly within column budget', () {
+      final progress = Console.progress(100, message: 'Test', terminalColumns: 50);
+      final line = progress.formatLine('日本語テストタイトル');
+      expect(line.contains('...'), isTrue);
+    });
   });
 }
