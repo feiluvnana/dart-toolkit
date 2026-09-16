@@ -40,9 +40,13 @@ void main(List<String> rawArgs) async {
         }
 
         for (final e in doc.$('.key_cd_artworks_box')) {
-          final d = int.parse(e.text.replaceAll(RegExp(r'\D'), ''));
           final href = e.$('a').first.attr('href')!;
-          downloads[base / discNames[d]! / href.path.name] = baseUri / href;
+          if (e.text.match(r'DISC(\d+)', 1) case final dStr?) {
+            final d = int.parse(dStr);
+            downloads[base / discNames[d]! / href.path.name] = baseUri / href;
+          } else if (e.text.contains('ALL')) {
+            downloads[base / 'Others/KeyBOX' / href.path.name] = baseUri / href;
+          }
         }
 
         downloads.addAll({
