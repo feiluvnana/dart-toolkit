@@ -369,6 +369,13 @@ EXPORT_VAR=export_value
   }
   progressBar.done('Synchronization completed');
 
+  final multiBar = Console.multiProgress(6, slots: 3, message: 'Downloading Assets');
+  multiBar.updateTask('f1', label: 'track_01.flac', ratio: 0.4, received: 1024 * 500, total: 1024 * 1200);
+  multiBar.updateTask('f2', label: 'cover.jpg', ratio: 0.9, received: 1024 * 900, total: 1024 * 1000);
+  multiBar.updateTask('f3', label: 'booklet.pdf', ratio: 0.2, received: 1024 * 300, total: 1024 * 1500);
+  multiBar.tick(1);
+  multiBar.done('Multi-line downloads completed');
+
   // 8.4 CLI Parser building (Cli, CliCommand, CliOption, CliContext)
   final appCli = Cli(name: 'toolkit_app', description: 'Sample CLI App');
   appCli

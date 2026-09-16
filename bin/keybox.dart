@@ -157,9 +157,9 @@ void main(List<String> rawArgs) async {
 
       // Stage 3: Download batch
       Logger.step(3, totalStages, 'Downloading assets (${downloads.length} files, concurrency: $concurrency)');
-      final progress = Console.progress(downloads.length, message: 'Downloading');
+      final progress = Console.multiProgress(downloads.length, slots: concurrency, message: 'Downloading');
       await for (final status in downloads.downloadAll(concurrency: concurrency)) {
-        if (status.current.isDone) progress.tick(1, status.current.path.name);
+        progress.update(status);
       }
       progress.done('All assets downloaded.');
 

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:math';
 
 import '../collection/collection.dart';
+import '../fs/path.dart';
 import '../util/time.dart';
 import 'ansi.dart';
 
@@ -79,6 +80,267 @@ class ConsoleProgress {
     stdout.writeln();
     if (message != null && message.isNotEmpty) {
       stdout.writeln('  ✓ $message'.green);
+    }
+  }
+}
+
+class _ProgressSlot {
+  String? taskId;
+  String label = '';
+  double? ratio;
+  int? received;
+  int? total;
+  String? status;
+  bool isDone = false;
+  DateTime lastUpdated = DateTime.now();
+
+  void update({
+    String? taskId,
+    String? label,
+    double? ratio,
+    int? received,
+    int? total,
+    String? status,
+    bool? isDone,
+  }) {
+    if (taskId != null) this.taskId = taskId;
+    if (label != null) this.label = label;
+    this.ratio = ratio;
+    this.received = received;
+    this.total = total;
+    this.status = status;
+    if (isDone != null) this.isDone = isDone;
+    lastUpdated = DateTime.now();
+  }
+}
+
+String _formatBytes(int bytes) {
+  if (bytes < 1024) return '$bytes B';
+  if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+  if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+}
+
+/// Multi-line progress controller for concurrent background downloads and tasks.
+///
+/// Instances are created via [Console.multiProgress].
+class ConsoleMultiProgress {
+  final int total;
+  final int slots;
+  final String message;
+  final int? terminalColumns;
+  int _current = 0;
+  bool _isDone = false;
+  int _renderedLines = 0;
+  final List<_ProgressSlot> _slotList;
+  final Map<String, int> _slotByTask = {};
+
+  ConsoleMultiProgress._(
+    this.total, {
+    this.slots = 4,
+    this.message = '',
+    this.terminalColumns,
+  }) : _slotList = List.generate(max(1, slots), (_) => _ProgressSlot());
+
+  int get _columns {
+    if (terminalColumns != null && terminalColumns! > 0) return terminalColumns!;
+    try {
+      if (stdout.hasTerminal) {
+        return stdout.terminalColumns;
+      }
+    } catch (_) {}
+    return 80;
+  }
+
+  /// Formats all progress lines (overall bar + worker slots) according to terminal bounds.
+  List<String> formatLines() {
+    final maxCols = max(20, _columns - 1);
+    final lines = <String>[];
+
+    final percent = total > 0 ? ((_current / total) * 100).clamp(0, 100).toInt() : 0;
+    const barLength = 20;
+    final filled = total > 0 ? ((_current / total) * barLength).clamp(0, barLength).toInt() : 0;
+    final bar = '=' * filled + '-' * (barLength - filled);
+    final prefix = message.isNotEmpty ? '$message: ' : '';
+    final header = '  $prefix[$bar] $percent% ($_current/$total)';
+    lines.add(_truncateToVisualWidth(header, maxCols));
+
+    for (var i = 0; i < _slotList.length; i++) {
+      lines.add(_formatSlot(i, i == _slotList.length - 1, maxCols));
+    }
+
+    return lines;
+  }
+
+  String _formatSlot(int index, bool isLast, int maxCols) {
+    final slot = _slotList[index];
+    final prefix = isLast ? '  └─ ' : '  ├─ ';
+    if (slot.taskId == null && slot.label.isEmpty) {
+      return _truncateToVisualWidth('$prefix(idle)', maxCols);
+    }
+
+    const barLength = 12;
+    String barStr;
+    String percentStr;
+    if (slot.ratio != null) {
+      final ratio = slot.ratio!.clamp(0.0, 1.0);
+      final filled = (ratio * barLength).round();
+      final arrow = (filled > 0 && filled < barLength) ? '>' : (filled == barLength ? '=' : '');
+      final leadingEquals = filled > 0 ? '=' * (filled - (arrow == '>' ? 1 : 0)) : '';
+      final trailingDashes = '-' * (barLength - filled);
+      barStr = '[$leadingEquals$arrow$trailingDashes]';
+      percentStr = '${(ratio * 100).toInt()}%'.padLeft(4);
+    } else if (slot.isDone) {
+      barStr = '[${'=' * barLength}]';
+      percentStr = '100%'.padLeft(4);
+    } else {
+      barStr = '[- - - - - -]';
+      percentStr = ' --%'.padLeft(4);
+    }
+
+    var sizeStr = '';
+    if (slot.received != null && slot.received! > 0) {
+      if (slot.total != null && slot.total! > 0) {
+        sizeStr = '(${_formatBytes(slot.received!)}/${_formatBytes(slot.total!)}) ';
+      } else {
+        sizeStr = '(${_formatBytes(slot.received!)}) ';
+      }
+    }
+
+    var statusSuffix = '';
+    if (slot.status != null && slot.status!.isNotEmpty) {
+      statusSuffix = ' [${slot.status}]';
+    }
+
+    final fullLine = '$prefix$barStr $percentStr $sizeStr${slot.label}$statusSuffix';
+    return _truncateToVisualWidth(fullLine, maxCols);
+  }
+
+  void _render() {
+    if (_isDone) return;
+    if (!stdout.hasTerminal) return;
+
+    final lines = formatLines();
+    final buffer = StringBuffer();
+    if (_renderedLines > 0) {
+      buffer.write('\x1b[${_renderedLines}A');
+    }
+    for (final line in lines) {
+      buffer.write('\r\x1b[K${line.dim}\n');
+    }
+    stdout.write(buffer.toString());
+    _renderedLines = lines.length;
+  }
+
+  /// Updates progress for a specific concurrent [taskId].
+  void updateTask(
+    String taskId, {
+    required String label,
+    double? ratio,
+    int? received,
+    int? total,
+    String? status,
+    bool isDone = false,
+  }) {
+    if (_isDone) return;
+
+    int targetSlot;
+    final existingSlot = _slotByTask[taskId];
+    if (existingSlot != null) {
+      targetSlot = existingSlot;
+    } else {
+      var found = -1;
+      for (var i = 0; i < _slotList.length; i++) {
+        if (_slotList[i].taskId == null || _slotList[i].isDone) {
+          found = i;
+          break;
+        }
+      }
+      if (found == -1) {
+        var oldest = _slotList[0].lastUpdated;
+        found = 0;
+        for (var i = 1; i < _slotList.length; i++) {
+          if (_slotList[i].lastUpdated.isBefore(oldest)) {
+            oldest = _slotList[i].lastUpdated;
+            found = i;
+          }
+        }
+      }
+
+      final oldTask = _slotList[found].taskId;
+      if (oldTask != null) {
+        _slotByTask.remove(oldTask);
+      }
+      _slotByTask[taskId] = found;
+      targetSlot = found;
+    }
+
+    _slotList[targetSlot].update(
+      taskId: taskId,
+      label: label,
+      ratio: ratio,
+      received: received,
+      total: total,
+      status: status,
+      isDone: isDone,
+    );
+
+    if (isDone) {
+      _slotByTask.remove(taskId);
+    }
+
+    _render();
+  }
+
+  /// Updates multi-progress from a [BatchDownloadProgress] event.
+  void update(BatchDownloadProgress progress) {
+    if (_isDone) return;
+    _current = progress.completed;
+    final cur = progress.current;
+    final status = cur.isSkipped
+        ? 'skipped'
+        : cur.isFailed
+            ? 'failed'
+            : (cur.isDone ? 'done' : null);
+
+    updateTask(
+      cur.path.path,
+      label: cur.path.name,
+      ratio: cur.ratio,
+      received: cur.received,
+      total: cur.total,
+      status: status,
+      isDone: cur.isDone,
+    );
+  }
+
+  /// Advances the overall progress by [count].
+  void tick([int count = 1]) {
+    if (_isDone) return;
+    _current += count;
+    _render();
+  }
+
+  /// Marks multi-progress as done with an optional final [message].
+  void done([String? message]) {
+    if (_isDone) return;
+    _isDone = true;
+    if (stdout.hasTerminal && _renderedLines > 0) {
+      final buffer = StringBuffer();
+      buffer.write('\x1b[${_renderedLines}A');
+      for (var i = 0; i < _renderedLines; i++) {
+        buffer.write('\r\x1b[K\n');
+      }
+      buffer.write('\x1b[${_renderedLines}A');
+      if (message != null && message.isNotEmpty) {
+        buffer.write('  ✓ $message\n'.green);
+      }
+      stdout.write(buffer.toString());
+      _renderedLines = 0;
+    } else {
+      if (message != null && message.isNotEmpty) {
+        stdout.writeln('  ✓ $message'.green);
+      }
     }
   }
 }
@@ -294,6 +556,20 @@ class Console {
   /// Creates and starts a [ConsoleProgress] tracker.
   static ConsoleProgress progress(int total, {String? message, int? terminalColumns}) =>
       ConsoleProgress._(total, message: message ?? '', terminalColumns: terminalColumns);
+
+  /// Creates and starts a [ConsoleMultiProgress] tracker for concurrent operations.
+  static ConsoleMultiProgress multiProgress(
+    int total, {
+    int slots = 4,
+    String? message,
+    int? terminalColumns,
+  }) =>
+      ConsoleMultiProgress._(
+        total,
+        slots: slots,
+        message: message ?? '',
+        terminalColumns: terminalColumns,
+      );
 
   /// Creates an indeterminate [ConsoleSpinner] with [message].
   static ConsoleSpinner spinner(String message) => ConsoleSpinner._(message);

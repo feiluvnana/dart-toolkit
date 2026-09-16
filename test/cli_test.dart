@@ -70,6 +70,54 @@ void main() {
       expect(line.startsWith('  Audio Tracks: ['), isTrue);
     });
 
+    test('ConsoleMultiProgress formats header and multiple worker slots correctly', () {
+      final multi = Console.multiProgress(10, slots: 3, message: 'Downloading Assets', terminalColumns: 80);
+
+      // Initial state (all slots idle)
+      var lines = multi.formatLines();
+      expect(lines.length, equals(4)); // 1 header + 3 slots
+      expect(lines[0], contains('Downloading Assets: [--------------------] 0% (0/10)'));
+      expect(lines[1], contains('├─ (idle)'));
+      expect(lines[2], contains('├─ (idle)'));
+      expect(lines[3], contains('└─ (idle)'));
+
+      // Update active slots
+      multi.updateTask('task1', label: 'song01.flac', ratio: 0.5, received: 500000, total: 1000000);
+      multi.updateTask('task2', label: 'song02.flac', ratio: 0.8, received: 800000, total: 1000000);
+      multi.tick(1);
+
+      lines = multi.formatLines();
+      expect(lines[0], contains('10% (1/10)'));
+      expect(lines[1], contains('song01.flac'));
+      expect(lines[1], contains('50%'));
+      expect(lines[1], contains('488.3 KB/976.6 KB'));
+      expect(lines[2], contains('song02.flac'));
+      expect(lines[2], contains('80%'));
+      expect(lines[3], contains('└─ (idle)'));
+
+      // Update from BatchDownloadProgress
+      multi.update(
+        BatchDownloadProgress(
+          completed: 2,
+          total: 10,
+          newDownloads: 2,
+          current: DownloadProgress(
+            url: Uri.parse('http://example.com/song03.flac'),
+            path: Path('song03.flac'),
+            received: 300000,
+            total: 600000,
+            isDone: true,
+          ),
+        ),
+      );
+
+      lines = multi.formatLines();
+      expect(lines[0], contains('20% (2/10)'));
+      expect(lines.any((l) => l.contains('song03.flac') && l.contains('[done]')), isTrue);
+
+      expect(() => multi.done('All assets completed.'), returnsNormally);
+    });
+
     test('choice accepts valid options and throws ArgumentError on invalid value', () async {
       final cli = Cli();
       String? chosenFormat;
