@@ -94,15 +94,7 @@ class _ProgressSlot {
   bool isDone = false;
   DateTime lastUpdated = DateTime.now();
 
-  void update({
-    String? taskId,
-    String? label,
-    double? ratio,
-    int? received,
-    int? total,
-    String? status,
-    bool? isDone,
-  }) {
+  void update({String? taskId, String? label, double? ratio, int? received, int? total, String? status, bool? isDone}) {
     if (taskId != null) this.taskId = taskId;
     if (label != null) this.label = label;
     this.ratio = ratio;
@@ -135,12 +127,8 @@ class ConsoleMultiProgress {
   final List<_ProgressSlot> _slotList;
   final Map<String, int> _slotByTask = {};
 
-  ConsoleMultiProgress._(
-    this.total, {
-    this.slots = 4,
-    this.message = '',
-    this.terminalColumns,
-  }) : _slotList = List.generate(max(1, slots), (_) => _ProgressSlot());
+  ConsoleMultiProgress._(this.total, {this.slots = 4, this.message = '', this.terminalColumns})
+    : _slotList = List.generate(max(1, slots), (_) => _ProgressSlot());
 
   int get _columns {
     if (terminalColumns != null && terminalColumns! > 0) return terminalColumns!;
@@ -300,8 +288,8 @@ class ConsoleMultiProgress {
     final status = cur.isSkipped
         ? 'skipped'
         : cur.isFailed
-            ? 'failed'
-            : (cur.isDone ? 'done' : null);
+        ? 'failed'
+        : (cur.isDone ? 'done' : null);
 
     updateTask(
       cur.path.path,
@@ -558,18 +546,8 @@ class Console {
       ConsoleProgress._(total, message: message ?? '', terminalColumns: terminalColumns);
 
   /// Creates and starts a [ConsoleMultiProgress] tracker for concurrent operations.
-  static ConsoleMultiProgress multiProgress(
-    int total, {
-    int slots = 4,
-    String? message,
-    int? terminalColumns,
-  }) =>
-      ConsoleMultiProgress._(
-        total,
-        slots: slots,
-        message: message ?? '',
-        terminalColumns: terminalColumns,
-      );
+  static ConsoleMultiProgress multiProgress(int total, {int slots = 4, String? message, int? terminalColumns}) =>
+      ConsoleMultiProgress._(total, slots: slots, message: message ?? '', terminalColumns: terminalColumns);
 
   /// Creates an indeterminate [ConsoleSpinner] with [message].
   static ConsoleSpinner spinner(String message) => ConsoleSpinner._(message);
@@ -580,6 +558,5 @@ class Console {
     FutureOr<T> Function() action, {
     String? successMessage,
     String? failMessage,
-  }) =>
-      ConsoleSpinner._run(message, action, successMessage: successMessage, failMessage: failMessage);
+  }) => ConsoleSpinner._run(message, action, successMessage: successMessage, failMessage: failMessage);
 }

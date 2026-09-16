@@ -77,10 +77,7 @@ extension ParallelizeIterable<T> on Iterable<T> {
 
     final limit = concurrency > 0 ? concurrency : 1;
     final workerCount = list.length < limit ? list.length : limit;
-    final results = List<Either<Object, R>>.filled(
-      list.length,
-      Left<Object, R>(StateError('Uninitialized outcome')),
-    );
+    final results = List<Either<Object, R>>.filled(list.length, Left<Object, R>(StateError('Uninitialized outcome')));
     var nextIndex = 0;
 
     Future<void> runWorker() async {
@@ -110,8 +107,7 @@ extension ParallelizeIterable<T> on Iterable<T> {
     FutureOr<R> Function(T item) worker, {
     int concurrency = 4,
     bool isolate = false,
-  }) =>
-      parallelSettle(worker, concurrency: concurrency, isolate: isolate);
+  }) => parallelSettle(worker, concurrency: concurrency, isolate: isolate);
 }
 
 /// Concurrency extensions on [Stream] to process items in parallel.
@@ -119,11 +115,7 @@ extension ParallelizeStream<T> on Stream<T> {
   /// Maps [worker] concurrently over stream items, emitting results as they finish.
   ///
   /// Errors from individual workers are emitted into the stream's error channel.
-  Stream<R> parallelMap<R>(
-    FutureOr<R> Function(T item) worker, {
-    int concurrency = 4,
-    bool isolate = false,
-  }) {
+  Stream<R> parallelMap<R>(FutureOr<R> Function(T item) worker, {int concurrency = 4, bool isolate = false}) {
     final pool = Semaphore(concurrency > 0 ? concurrency : 1);
     late final StreamController<R> controller;
     final active = <Future<void>>{};
@@ -140,23 +132,29 @@ extension ParallelizeStream<T> on Stream<T> {
         subscription = listen(
           (item) {
             late final Future<void> task;
-            task = pool.run(() async {
-              if (isolate) {
-                return await Isolate.run(() => worker(item));
-              } else {
-                return await worker(item);
-              }
-            }).then((val) {
-              if (!controller.isClosed) controller.add(val);
-            }, onError: (Object err, StackTrace st) {
-              if (!controller.isClosed) controller.addError(err, st);
-            }).whenComplete(() {
-              active.remove(task);
-              if (subscription?.isPaused == true && pool.availablePermits > 0) {
-                subscription?.resume();
-              }
-              checkDone();
-            });
+            task = pool
+                .run(() async {
+                  if (isolate) {
+                    return await Isolate.run(() => worker(item));
+                  } else {
+                    return await worker(item);
+                  }
+                })
+                .then(
+                  (val) {
+                    if (!controller.isClosed) controller.add(val);
+                  },
+                  onError: (Object err, StackTrace st) {
+                    if (!controller.isClosed) controller.addError(err, st);
+                  },
+                )
+                .whenComplete(() {
+                  active.remove(task);
+                  if (subscription?.isPaused == true && pool.availablePermits > 0) {
+                    subscription?.resume();
+                  }
+                  checkDone();
+                });
             active.add(task);
             if (pool.availablePermits == 0) subscription?.pause();
           },
@@ -205,21 +203,24 @@ extension ParallelizeStream<T> on Stream<T> {
         subscription = listen(
           (item) {
             late final Future<void> task;
-            task = pool.run(() async {
-              if (isolate) {
-                return await Either.guardAsync(() => Isolate.run(() => worker(item)));
-              } else {
-                return await Either.guardAsync(() async => worker(item));
-              }
-            }).then((outcome) {
-              if (!controller.isClosed) controller.add(outcome);
-            }).whenComplete(() {
-              active.remove(task);
-              if (subscription?.isPaused == true && pool.availablePermits > 0) {
-                subscription?.resume();
-              }
-              checkDone();
-            });
+            task = pool
+                .run(() async {
+                  if (isolate) {
+                    return await Either.guardAsync(() => Isolate.run(() => worker(item)));
+                  } else {
+                    return await Either.guardAsync(() async => worker(item));
+                  }
+                })
+                .then((outcome) {
+                  if (!controller.isClosed) controller.add(outcome);
+                })
+                .whenComplete(() {
+                  active.remove(task);
+                  if (subscription?.isPaused == true && pool.availablePermits > 0) {
+                    subscription?.resume();
+                  }
+                  checkDone();
+                });
             active.add(task);
             if (pool.availablePermits == 0) subscription?.pause();
           },
@@ -250,7 +251,5 @@ extension ParallelizeStream<T> on Stream<T> {
     FutureOr<R> Function(T item) worker, {
     int concurrency = 4,
     bool isolate = false,
-  }) =>
-      parallelSettle(worker, concurrency: concurrency, isolate: isolate);
+  }) => parallelSettle(worker, concurrency: concurrency, isolate: isolate);
 }
-

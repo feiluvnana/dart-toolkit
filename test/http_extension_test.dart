@@ -173,12 +173,7 @@ void main() {
       }, client: client).toList();
 
       expect(items.length, equals(1));
-      expect(items.first, equals({
-        'category': 'Catalog',
-        'label': 'Product 1',
-        'name': 'Widget',
-        'price': 49.99,
-      }));
+      expect(items.first, equals({'category': 'Catalog', 'label': 'Product 1', 'name': 'Widget', 'price': 49.99}));
     });
 
     test('scrape accepts http.Request seeds directly', () async {
@@ -187,8 +182,7 @@ void main() {
         return http.Response('{"ok": true}', 200, headers: {'content-type': 'application/json'});
       });
 
-      final req = http.Request('GET', Uri.parse('https://example.com/api'))
-        ..headers['x-custom'] = 'test-header';
+      final req = http.Request('GET', Uri.parse('https://example.com/api'))..headers['x-custom'] = 'test-header';
 
       final results = await req.scrape<bool>((res) {
         expect(res, isA<http.Response>());
@@ -203,10 +197,9 @@ void main() {
         return http.Response('<html><body><h1>Hello Scraper</h1></body></html>', 200);
       });
 
-      final results = await 'https://example.com'.url.scrape<String>(
-        (res) => res.$('h1').firstOrNull?.text,
-        client: client,
-      ).toList();
+      final results = await 'https://example.com'.url
+          .scrape<String>((res) => res.$('h1').firstOrNull?.text, client: client)
+          .toList();
 
       expect(results, equals(['Hello Scraper']));
     });
@@ -228,10 +221,13 @@ void main() {
         return items.map((e) => {'id': e.attr('data-id'), 'name': e.text}).toList();
       });
 
-      expect(extracted, equals([
-        {'id': '1', 'name': 'Alice'},
-        {'id': '2', 'name': 'Bob'},
-      ]));
+      expect(
+        extracted,
+        equals([
+          {'id': '1', 'name': 'Alice'},
+          {'id': '2', 'name': 'Bob'},
+        ]),
+      );
     });
 
     test('res.isolateHtml(), isolateJson(), isolateXml() parse directly in isolate', () async {
@@ -267,6 +263,5 @@ void main() {
       );
       expect(heading, equals('Hello Uri Isolate'));
     });
-
   });
 }

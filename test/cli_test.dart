@@ -122,12 +122,9 @@ void main() {
       final cli = Cli();
       String? chosenFormat;
 
-      cli
-          .command('build')
-          .choice('format', ['debug', 'release'], defaultTo: 'debug')
-          .action((ctx) {
-            chosenFormat = ctx.option('format');
-          });
+      cli.command('build').choice('format', ['debug', 'release'], defaultTo: 'debug').action((ctx) {
+        chosenFormat = ctx.option('format');
+      });
 
       // Valid option
       await cli.run(['build', '--format', 'release']);
@@ -138,10 +135,7 @@ void main() {
       expect(chosenFormat, equals('debug'));
 
       // Invalid value throws ArgumentError
-      expect(
-        () => cli.run(['build', '--format', 'invalid_mode']),
-        throwsA(isA<ArgumentError>()),
-      );
+      expect(() => cli.run(['build', '--format', 'invalid_mode']), throwsA(isA<ArgumentError>()));
     });
 
     test('flag and number helpers configure and validate correctly', () async {
@@ -149,14 +143,10 @@ void main() {
       bool? isDryRun;
       int? concurrency;
 
-      cli
-          .command('serve')
-          .flag('dry-run', abbr: 'd')
-          .number('concurrency', abbr: 'c', defaultTo: 4)
-          .action((ctx) {
-            isDryRun = ctx.flag('dry-run');
-            concurrency = ctx.number('concurrency');
-          });
+      cli.command('serve').flag('dry-run', abbr: 'd').number('concurrency', abbr: 'c', defaultTo: 4).action((ctx) {
+        isDryRun = ctx.flag('dry-run');
+        concurrency = ctx.number('concurrency');
+      });
 
       // Shorthand abbreviations
       await cli.run(['serve', '-d', '-c', '8']);
@@ -169,10 +159,7 @@ void main() {
       expect(concurrency, equals(4));
 
       // Invalid numeric option throws ArgumentError
-      expect(
-        () => cli.run(['serve', '-c', 'not_a_number']),
-        throwsA(isA<ArgumentError>()),
-      );
+      expect(() => cli.run(['serve', '-c', 'not_a_number']), throwsA(isA<ArgumentError>()));
     });
   });
 }

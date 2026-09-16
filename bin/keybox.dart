@@ -14,7 +14,7 @@ void main(List<String> rawArgs) async {
 
       final selectedFormat = ctx.option('format', defaultTo: 'all')!;
       final formats = selectedFormat == 'all' ? const ['mp3', 'flac'] : [selectedFormat];
-      final concurrency = int.tryParse(ctx.option('concurrency') ?? '4') ?? 4;
+      final concurrency = ctx.number('concurrency', defaultTo: 4)!;
       final shouldCompress = ctx.flag('compress');
       final totalStages = shouldCompress ? 4 : 3;
 
@@ -42,8 +42,7 @@ void main(List<String> rawArgs) async {
         for (final e in doc.$('.key_cd_artworks_box')) {
           final href = e.$('a').first.attr('href')!;
           if (e.text.match(r'DISC(\d+)', 1) case final dStr?) {
-            final d = int.parse(dStr);
-            downloads[base / discNames[d]! / href.path.name] = baseUri / href;
+            downloads[base / discNames[int.parse(dStr)]! / href.path.name] = baseUri / href;
           } else if (e.text.contains('ALL')) {
             downloads[base / 'Others/KeyBOX' / href.path.name] = baseUri / href;
           }
@@ -75,28 +74,28 @@ void main(List<String> rawArgs) async {
             'sp_20th_main_image_3.jpg',
           ])
             base / 'Others/Key 20th Anniversary' / n: baseUri / 'common/image/$n',
-          base / 'Others/Events & Topics/Stamp Rally/key20th_stamp_poster_1.jpg':
-              baseUri / 'common/image/key20th_stamp_poster_1.jpg',
-          base / 'Others/Events & Topics/Stamp Rally/key20th_stamp_poster_1_a.jpg':
-              baseUri / 'common/image/key20th_stamp_poster_1_a.jpg',
-          for (final n in ['movie_image_0712.jpg', 'history_image_50.jpg', 'topics_image_20191217_2.jpg'])
-            base / 'Others/Events & Topics' / n: baseUri / 'common/image/$n',
-          for (var i = 1; i <= 8; i++)
-            base / 'Others/Events & Topics/General Election/key_election_$i.jpg':
-                baseUri / 'common/image/key_election_$i.jpg',
           for (final n in [
-            'kai',
-            'tanaka',
-            'minami',
-            'na-ga',
-            'suzukikeiko',
-            'sakurai',
-            'kohara',
-            'orito',
-            'suzuki',
-            'yurika',
+            'Stamp Rally/key20th_stamp_poster_1.jpg',
+            'Stamp Rally/key20th_stamp_poster_1_a.jpg',
+            'movie_image_0712.jpg',
+            'history_image_50.jpg',
+            'topics_image_20191217_2.jpg',
+            for (var i = 1; i <= 8; i++) 'General Election/key_election_$i.jpg',
+            for (final name in [
+              'kai',
+              'tanaka',
+              'minami',
+              'na-ga',
+              'suzukikeiko',
+              'sakurai',
+              'kohara',
+              'orito',
+              'suzuki',
+              'yurika',
+            ])
+              'Live Streams/profile_$name.jpg',
           ])
-            base / 'Others/Events & Topics/Live Streams/profile_$n.jpg': baseUri / 'common/image/profile_$n.jpg',
+            base / 'Others/Events & Topics' / n: baseUri / 'common/image/${n.path.name}',
         });
 
         final msgDoc = await (baseUri / 'message.html').isolateHtml((d) => d);

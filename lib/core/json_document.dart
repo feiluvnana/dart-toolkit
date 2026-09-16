@@ -14,8 +14,7 @@ class JsonDocument {
   factory JsonDocument.parse(String text) => JsonDocument(jsonDecode(text));
 
   /// Evaluates a JSONPath query and returns matching nodes wrapped in [JsonDocument].
-  List<JsonDocument> $jsonpath(String expression) =>
-      JsonPath.of(expression).read(raw).map(JsonDocument.new).toList();
+  List<JsonDocument> $jsonpath(String expression) => JsonPath.of(expression).read(raw).map(JsonDocument.new).toList();
 
   /// Accesses a child node by map [key] or list [index].
   JsonDocument operator [](Object keyOrIndex) {
@@ -37,8 +36,7 @@ class JsonDocument {
   bool get isNotNull => !isNull;
 
   /// Returns [raw] as a list of [JsonDocument]s, or empty list.
-  List<JsonDocument> get list =>
-      raw is List ? (raw as List).map(JsonDocument.new).toList() : const [];
+  List<JsonDocument> get list => raw is List ? (raw as List).map(JsonDocument.new).toList() : const [];
 
   /// Returns [raw] as a map of String to [JsonDocument]s, or empty map.
   Map<String, JsonDocument> get map =>

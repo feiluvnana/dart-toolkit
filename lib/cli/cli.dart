@@ -100,50 +100,18 @@ class CliCommand {
   }
 
   /// Defines a boolean flag on this command.
-  CliCommand flag(
-    String name, {
-    String description = '',
-    String? abbr,
-  }) {
-    return option(
-      name,
-      description: description,
-      flag: true,
-      abbr: abbr,
-    );
+  CliCommand flag(String name, {String description = '', String? abbr}) {
+    return option(name, description: description, flag: true, abbr: abbr);
   }
 
   /// Defines an option with a constrained list of valid [choices].
-  CliCommand choice(
-    String name,
-    List<String> choices, {
-    String description = '',
-    String? abbr,
-    String? defaultTo,
-  }) {
-    return option(
-      name,
-      description: description,
-      abbr: abbr,
-      defaultTo: defaultTo,
-      choices: choices,
-    );
+  CliCommand choice(String name, List<String> choices, {String description = '', String? abbr, String? defaultTo}) {
+    return option(name, description: description, abbr: abbr, defaultTo: defaultTo, choices: choices);
   }
 
   /// Defines an integer numeric option on this command with automatic number validation.
-  CliCommand number(
-    String name, {
-    String description = '',
-    String? abbr,
-    int? defaultTo,
-  }) {
-    return option(
-      name,
-      description: description,
-      numeric: true,
-      abbr: abbr,
-      defaultTo: defaultTo?.toString(),
-    );
+  CliCommand number(String name, {String description = '', String? abbr, int? defaultTo}) {
+    return option(name, description: description, numeric: true, abbr: abbr, defaultTo: defaultTo?.toString());
   }
 
   /// Defines a nested subcommand.

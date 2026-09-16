@@ -87,8 +87,7 @@ class RetryBuilder<T> implements Future<T> {
   Stream<T> asStream() => run().asStream();
 
   @override
-  Future<T> catchError(Function onError, {bool Function(Object error)? test}) =>
-      run().catchError(onError, test: test);
+  Future<T> catchError(Function onError, {bool Function(Object error)? test}) => run().catchError(onError, test: test);
 
   @override
   Future<R> then<R>(FutureOr<R> Function(T value) onValue, {Function? onError}) =>
@@ -99,8 +98,7 @@ class RetryBuilder<T> implements Future<T> {
       run().timeout(timeLimit, onTimeout: onTimeout);
 
   @override
-  Future<T> whenComplete(FutureOr<void> Function() action) =>
-      run().whenComplete(action);
+  Future<T> whenComplete(FutureOr<void> Function() action) => run().whenComplete(action);
 }
 
 /// Executes [action] with retry logic.
@@ -113,11 +111,7 @@ Future<T> retry<T>(
   bool Function(Object error)? when,
   void Function(int attempt, Object error, Duration nextDelay)? listen,
 }) {
-  var builder = RetryBuilder<T>(action)
-      .attempts(attempts)
-      .delay(delay)
-      .backoff(backoff)
-      .jitter(jitter);
+  var builder = RetryBuilder<T>(action).attempts(attempts).delay(delay).backoff(backoff).jitter(jitter);
   if (when != null) builder = builder.when(when);
   if (listen != null) builder = builder.listen(listen);
   return builder.run();

@@ -53,10 +53,7 @@ void main() {
     });
 
     test(r'$(...) throws ShellException when throwOnError is true (default)', () async {
-      expect(
-        () => $('dart --non-existent-flag-xyz', quiet: true),
-        throwsA(isA<ShellException>()),
-      );
+      expect(() => $('dart --non-existent-flag-xyz', quiet: true), throwsA(isA<ShellException>()));
     });
 
     test(r'$(...) returns ShellResult without throwing when throwOnError is false', () async {

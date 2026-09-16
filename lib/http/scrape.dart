@@ -13,14 +13,16 @@ typedef ResponseCallback = FutureOr<dynamic> Function(http.Response res);
 
 final _metaExpando = Expando<Map<String, dynamic>>('scrape_meta');
 final _emitExpando = Expando<void Function(Object? item)>('scrape_emit');
-final _followExpando = Expando<
-    void Function(
-      Object target, {
-      ResponseCallback? callback,
-      Map<String, dynamic>? meta,
-      Map<String, String>? headers,
-      bool dontFilter,
-    })>('scrape_follow');
+final _followExpando =
+    Expando<
+      void Function(
+        Object target, {
+        ResponseCallback? callback,
+        Map<String, dynamic>? meta,
+        Map<String, String>? headers,
+        bool dontFilter,
+      })
+    >('scrape_follow');
 
 final _requestMetaExpando = Expando<Map<String, dynamic>>('req_meta');
 final _requestCallbackExpando = Expando<ResponseCallback>('req_callback');
@@ -57,13 +59,7 @@ extension ScrapeResponseExtension on http.Response {
   }) {
     final followFn = _followExpando[this];
     if (followFn != null) {
-      followFn(
-        target,
-        callback: callback,
-        meta: meta,
-        headers: headers,
-        dontFilter: dontFilter,
-      );
+      followFn(target, callback: callback, meta: meta, headers: headers, dontFilter: dontFilter);
     }
   }
 
@@ -90,8 +86,7 @@ extension ScrapeUriExtension on Uri {
     Duration? delay,
     http.Client? client,
     int maxRetries = 2,
-  }) =>
-      _scrape<T>(this, parse, concurrency: concurrency, delay: delay, client: client, maxRetries: maxRetries);
+  }) => _scrape<T>(this, parse, concurrency: concurrency, delay: delay, client: client, maxRetries: maxRetries);
 }
 
 /// Convenience scrape extensions on iterables of URIs.
@@ -103,8 +98,7 @@ extension ScrapeIterableUriExtension on Iterable<Uri> {
     Duration? delay,
     http.Client? client,
     int maxRetries = 2,
-  }) =>
-      _scrape<T>(this, parse, concurrency: concurrency, delay: delay, client: client, maxRetries: maxRetries);
+  }) => _scrape<T>(this, parse, concurrency: concurrency, delay: delay, client: client, maxRetries: maxRetries);
 }
 
 /// Convenience scrape extensions on [http.BaseRequest] objects.
@@ -116,8 +110,7 @@ extension ScrapeBaseRequestExtension on http.BaseRequest {
     Duration? delay,
     http.Client? client,
     int maxRetries = 2,
-  }) =>
-      _scrape<T>(this, parse, concurrency: concurrency, delay: delay, client: client, maxRetries: maxRetries);
+  }) => _scrape<T>(this, parse, concurrency: concurrency, delay: delay, client: client, maxRetries: maxRetries);
 }
 
 /// Convenience scrape extensions on iterables of [http.BaseRequest] objects.
@@ -129,8 +122,7 @@ extension ScrapeIterableBaseRequestExtension on Iterable<http.BaseRequest> {
     Duration? delay,
     http.Client? client,
     int maxRetries = 2,
-  }) =>
-      _scrape<T>(this, parse, concurrency: concurrency, delay: delay, client: client, maxRetries: maxRetries);
+  }) => _scrape<T>(this, parse, concurrency: concurrency, delay: delay, client: client, maxRetries: maxRetries);
 }
 
 /// Internal functional scraping engine using standard `package:http`.
@@ -221,25 +213,26 @@ Stream<T> _scrape<T>(
               controller.add(item);
             }
           };
-          _followExpando[rawRes] = (
-            Object target, {
-            ResponseCallback? callback,
-            Map<String, dynamic>? meta,
-            Map<String, String>? headers,
-            bool dontFilter = false,
-          }) {
-            final baseUri = rawRes?.request?.url ?? req.url;
-            final resolvedUri = _resolve(baseUri, target);
-            if (resolvedUri != null) {
-              final nextReq = http.Request('GET', resolvedUri);
-              if (headers != null) nextReq.headers.addAll(headers);
-              _requestMetaExpando[nextReq] = {...reqMeta, ...?meta};
-              if (callback != null) _requestCallbackExpando[nextReq] = callback;
-              if (dontFilter) _requestDontFilterExpando[nextReq] = true;
-              enqueue(nextReq);
-              schedule();
-            }
-          };
+          _followExpando[rawRes] =
+              (
+                Object target, {
+                ResponseCallback? callback,
+                Map<String, dynamic>? meta,
+                Map<String, String>? headers,
+                bool dontFilter = false,
+              }) {
+                final baseUri = rawRes?.request?.url ?? req.url;
+                final resolvedUri = _resolve(baseUri, target);
+                if (resolvedUri != null) {
+                  final nextReq = http.Request('GET', resolvedUri);
+                  if (headers != null) nextReq.headers.addAll(headers);
+                  _requestMetaExpando[nextReq] = {...reqMeta, ...?meta};
+                  if (callback != null) _requestCallbackExpando[nextReq] = callback;
+                  if (dontFilter) _requestDontFilterExpando[nextReq] = true;
+                  enqueue(nextReq);
+                  schedule();
+                }
+              };
 
           final handler = _requestCallbackExpando[req] ?? parse;
           final result = await handler(rawRes);

@@ -26,19 +26,11 @@ class ShellResult {
   /// Concise trimmed stdout text.
   String get text => stdout.trim();
 
-  const ShellResult({
-    required this.command,
-    required this.exitcode,
-    required this.stdout,
-    required this.stderr,
-  });
+  const ShellResult({required this.command, required this.exitcode, required this.stdout, required this.stderr});
 
   /// Non-empty, trimmed lines extracted from [stdout].
-  List<String> get lines => stdout
-      .split(RegExp(r'\r?\n'))
-      .map((line) => line.trim())
-      .where((line) => line.isNotEmpty)
-      .toList();
+  List<String> get lines =>
+      stdout.split(RegExp(r'\r?\n')).map((line) => line.trim()).where((line) => line.isNotEmpty).toList();
 
   /// Parses [stdout] as a JSON document or structure (`Map` / `List`).
   dynamic get json => jsonDecode(text);

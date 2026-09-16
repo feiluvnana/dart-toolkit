@@ -40,9 +40,13 @@ void main(List<String> args) async {
   final multiLine = await 'echo "line1\nline2\nline3"'.run(quiet: true);
   Logger.info('ShellResult.lines: ${multiLine.lines}');
 
-  final jsonCmd = await 'echo \'{"name": "dart_toolkit", "version": 9, "features": ["async", "cli", "fs"]}\''.run(quiet: true);
+  final jsonCmd = await 'echo \'{"name": "dart_toolkit", "version": 9, "features": ["async", "cli", "fs"]}\''.run(
+    quiet: true,
+  );
   final parsedJson = jsonCmd.json as Map<String, dynamic>;
-  Logger.ok('ShellResult.json: name=${parsedJson['name']}, version=${parsedJson['version']}, features=${parsedJson['features']}');
+  Logger.ok(
+    'ShellResult.json: name=${parsedJson['name']}, version=${parsedJson['version']}, features=${parsedJson['features']}',
+  );
 
   // 1.5 Command Piping: .pipe() and operator |
   final piped = await ('echo "apple\nbanana\ncherry"'.pipe('grep an') | 'tr a-z A-Z').run(quiet: true);
@@ -65,7 +69,9 @@ void main(List<String> args) async {
     // 2.2 Path composition and properties
     final file = workspace / 'sub' / 'data.json';
     Logger.info('Path operator /: $file');
-    Logger.info('Path components: name="${file.name}", stem="${file.stem}", ext="${file.ext}", parent="${file.parent}"');
+    Logger.info(
+      'Path components: name="${file.name}", stem="${file.stem}", ext="${file.ext}", parent="${file.parent}"',
+    );
     Logger.info('Path segments:   ${file.segments}');
 
     // 2.3 Sanitization
@@ -97,7 +103,9 @@ void main(List<String> args) async {
     final htmlFile = workspace / 'page.html';
     await htmlFile.writeText('<html><body><h1>Hello HTML</h1><p class="desc">Sample paragraph</p></body></html>');
     final htmlDoc = await htmlFile.readHtml();
-    Logger.ok('readHtml(): h1="${htmlDoc.$('h1').firstOrNull?.text}", p="${htmlDoc.$xpath('//p[@class="desc"]').firstOrNull?.text}"');
+    Logger.ok(
+      'readHtml(): h1="${htmlDoc.$('h1').firstOrNull?.text}", p="${htmlDoc.$xpath('//p[@class="desc"]').firstOrNull?.text}"',
+    );
 
     final xmlFile = workspace / 'catalog.xml';
     await xmlFile.writeText('<catalog><book id="1"><title>Dart Guide</title></book></catalog>');
@@ -105,8 +113,12 @@ void main(List<String> args) async {
     Logger.ok('readXml(): title="${xmlDoc.$xpath('//book/title/text()').firstOrNull?.value}"');
 
     // 2.6 Entity checks & sizing (Async & Sync)
-    Logger.info('type(): ${await textFile.type()}, exist(): ${await textFile.exist()}, size(): ${await textFile.size()} bytes');
-    Logger.info('typeSync(): ${textFile.typeSync()}, existSync(): ${textFile.existSync()}, sizeSync(): ${textFile.sizeSync()} bytes');
+    Logger.info(
+      'type(): ${await textFile.type()}, exist(): ${await textFile.exist()}, size(): ${await textFile.size()} bytes',
+    );
+    Logger.info(
+      'typeSync(): ${textFile.typeSync()}, existSync(): ${textFile.existSync()}, sizeSync(): ${textFile.sizeSync()} bytes',
+    );
 
     // 2.7 Cryptographic checksums (Async & Sync)
     Logger.ok('sha256(): ${await textFile.sha256()} | sha256Sync(): ${textFile.sha256Sync()}');
@@ -199,33 +211,43 @@ EXPORT_VAR=export_value
 
   // 4.2 Retry with top-level helper and builder
   var retryTries = 0;
-  final retryVal = await retry(() async {
-    retryTries++;
-    if (retryTries < 2) throw StateError('Transient timeout');
-    return 'Connected successfully';
-  }, attempts: 3, delay: 10.ms, backoff: 1.5, jitter: true);
+  final retryVal = await retry(
+    () async {
+      retryTries++;
+      if (retryTries < 2) throw StateError('Transient timeout');
+      return 'Connected successfully';
+    },
+    attempts: 3,
+    delay: 10.ms,
+    backoff: 1.5,
+    jitter: true,
+  );
   Logger.ok('retry(): "$retryVal" (succeeded on attempt #$retryTries)');
 
   // 4.3 Mutex (Exclusive critical section)
   final mutex = Mutex();
   var mutexCounter = 0;
-  await [1, 2, 3, 4].parallelMap((_) => mutex.protect(() async {
-    final current = mutexCounter;
-    await 5.ms.delay();
-    mutexCounter = current + 1;
-  }));
+  await [1, 2, 3, 4].parallelMap(
+    (_) => mutex.protect(() async {
+      final current = mutexCounter;
+      await 5.ms.delay();
+      mutexCounter = current + 1;
+    }),
+  );
   Logger.ok('Mutex.protect(): counter=$mutexCounter (isLocked=${mutex.isLocked})');
 
   // 4.4 Semaphore (Permit-limited section)
   final semaphore = Semaphore(2);
   var maxConcurrent = 0;
   var currentConcurrent = 0;
-  await [1, 2, 3, 4, 5].parallelMap((_) => semaphore.run(() async {
-    currentConcurrent++;
-    if (currentConcurrent > maxConcurrent) maxConcurrent = currentConcurrent;
-    await 10.ms.delay();
-    currentConcurrent--;
-  }));
+  await [1, 2, 3, 4, 5].parallelMap(
+    (_) => semaphore.run(() async {
+      currentConcurrent++;
+      if (currentConcurrent > maxConcurrent) maxConcurrent = currentConcurrent;
+      await 10.ms.delay();
+      currentConcurrent--;
+    }),
+  );
   Logger.ok('Semaphore(2).run(): maxConcurrentReached=$maxConcurrent, availablePermits=${semaphore.availablePermits}');
 
   // 4.5 Isolate offloading
@@ -240,11 +262,7 @@ EXPORT_VAR=export_value
 
   // 4.6 Stream Extensions: chunk, flatmap, notnull, debounce, throttle
   final sourceStream = Stream.fromIterable([1, 2, null, 3, 4, null, 5, 6]);
-  final cleanChunks = await sourceStream
-      .notnull()
-      .flatmap((n) => Stream.value(n * 2))
-      .chunk(3)
-      .toList();
+  final cleanChunks = await sourceStream.notnull().flatmap((n) => Stream.value(n * 2)).chunk(3).toList();
   Logger.ok('Stream extensions (notnull -> flatmap -> chunk): $cleanChunks');
 
   // =========================================================================
@@ -276,7 +294,8 @@ EXPORT_VAR=export_value
   Logger.ok('JsonDocument to<T>(): titles=$titles, firstBookPrice=$firstPrice');
 
   // 5.3 HTML Document with CSS & XPath
-  final rawHtml = '<div class="content"><h2 id="main">Heading</h2><a href="/link1">One</a><a href="/link2">Two</a></div>';
+  final rawHtml =
+      '<div class="content"><h2 id="main">Heading</h2><a href="/link1">One</a><a href="/link2">Two</a></div>';
   final htmlParsed = HtmlDocument.parse(rawHtml);
   Logger.ok('HtmlDocument CSS: h2="${htmlParsed.$('#main').firstOrNull?.text}"');
   Logger.ok('HtmlDocument XPath: links=${htmlParsed.$xpath('//a/@href').map((n) => n.text).toList()}');
@@ -344,7 +363,9 @@ EXPORT_VAR=export_value
 
   // 8.1 ANSI Color and formatting extensions
   Logger.info('${'Bold Text'.bold} | ${'Italic'.italic} | ${'Underline'.underline} | ${'Dim'.dim}');
-  Logger.info('${'Green'.green} | ${'Red'.red} | ${'Yellow'.yellow} | ${'Cyan'.cyan} | ${'Magenta'.magenta} | ${'Blue'.blue} | ${'Grey'.grey}');
+  Logger.info(
+    '${'Green'.green} | ${'Red'.red} | ${'Yellow'.yellow} | ${'Cyan'.cyan} | ${'Magenta'.magenta} | ${'Blue'.blue} | ${'Grey'.grey}',
+  );
 
   // 8.2 Lifecycle hook registration
   onExit(() {

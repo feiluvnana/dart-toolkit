@@ -286,48 +286,49 @@ void main() {
       expect(syncAudioGlob.length, equals(2));
     });
 
-    test('synchronous filesystem operations (sizeSync, copySync, moveSync, zipSync, unzipSync, hashes, appendSync, replaceSync)', () {
-      final base = Path(tempDir.path) / 'sync_full_test';
-      base.mkdirSync();
+    test(
+      'synchronous filesystem operations (sizeSync, copySync, moveSync, zipSync, unzipSync, hashes, appendSync, replaceSync)',
+      () {
+        final base = Path(tempDir.path) / 'sync_full_test';
+        base.mkdirSync();
 
-      final file1 = base / 'file1.txt';
-      file1.writeTextSync('Hello World');
-      expect(file1.sizeSync(), equals(11));
-      expect(file1.readTextSync(), equals('Hello World'));
+        final file1 = base / 'file1.txt';
+        file1.writeTextSync('Hello World');
+        expect(file1.sizeSync(), equals(11));
+        expect(file1.readTextSync(), equals('Hello World'));
 
-      // appendSync & replaceSync
-      file1.appendSync('!!!');
-      expect(file1.readTextSync(), equals('Hello World!!!'));
-      file1.replaceSync('World', 'Dart');
-      expect(file1.readTextSync(), equals('Hello Dart!!!'));
+        // appendSync & replaceSync
+        file1.appendSync('!!!');
+        expect(file1.readTextSync(), equals('Hello World!!!'));
+        file1.replaceSync('World', 'Dart');
+        expect(file1.readTextSync(), equals('Hello Dart!!!'));
 
-      // hashes
-      expect(file1.sha256Sync().isNotEmpty, isTrue);
-      expect(file1.md5Sync().isNotEmpty, isTrue);
+        // hashes
+        expect(file1.sha256Sync().isNotEmpty, isTrue);
+        expect(file1.md5Sync().isNotEmpty, isTrue);
 
-      // copySync & moveSync
-      final copyDest = base / 'file1_copy.txt';
-      file1.copySync(copyDest.path);
-      expect(copyDest.existSync(), isTrue);
-      expect(copyDest.readTextSync(), equals('Hello Dart!!!'));
+        // copySync & moveSync
+        final copyDest = base / 'file1_copy.txt';
+        file1.copySync(copyDest.path);
+        expect(copyDest.existSync(), isTrue);
+        expect(copyDest.readTextSync(), equals('Hello Dart!!!'));
 
-      final moveDest = base / 'file1_moved.txt';
-      copyDest.moveSync(moveDest.path);
-      expect(copyDest.existSync(), isFalse);
-      expect(moveDest.existSync(), isTrue);
-      expect(moveDest.readTextSync(), equals('Hello Dart!!!'));
+        final moveDest = base / 'file1_moved.txt';
+        copyDest.moveSync(moveDest.path);
+        expect(copyDest.existSync(), isFalse);
+        expect(moveDest.existSync(), isTrue);
+        expect(moveDest.readTextSync(), equals('Hello Dart!!!'));
 
-      // zipSync & unzipSync
-      final zipDest = Path(tempDir.path) / 'archive_sync.zip';
-      base.zipSync(zipDest.path);
-      expect(zipDest.existSync(), isTrue);
+        // zipSync & unzipSync
+        final zipDest = Path(tempDir.path) / 'archive_sync.zip';
+        base.zipSync(zipDest.path);
+        expect(zipDest.existSync(), isTrue);
 
-      final unzipDir = Path(tempDir.path) / 'unzipped_sync';
-      zipDest.unzipSync(unzipDir.path);
-      expect(unzipDir.existSync(), isTrue);
-      expect(unzipDir.filesSync(recursive: true).isNotEmpty, isTrue);
-    });
+        final unzipDir = Path(tempDir.path) / 'unzipped_sync';
+        zipDest.unzipSync(unzipDir.path);
+        expect(unzipDir.existSync(), isTrue);
+        expect(unzipDir.filesSync(recursive: true).isNotEmpty, isTrue);
+      },
+    );
   });
 }
-
-

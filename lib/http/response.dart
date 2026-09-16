@@ -67,8 +67,6 @@ extension HttpToolkitResponse on http.Response {
   Uri? get url => request?.url;
 }
 
-
-
 /// Convenience format getters on [http.Client].
 extension HttpClientFormatExtensions on http.Client {
   /// Fetches [url] and parses the response body as HTML.
@@ -90,11 +88,7 @@ extension HttpClientFormatExtensions on http.Client {
   }
 
   /// Fetches [url] and executes [action] on a background [Isolate].
-  Future<R> isolate<R>(
-    Uri url,
-    FutureOr<R> Function(http.Response res) action, {
-    Map<String, String>? headers,
-  }) async {
+  Future<R> isolate<R>(Uri url, FutureOr<R> Function(http.Response res) action, {Map<String, String>? headers}) async {
     final res = await get(url, headers: headers);
     return res.isolate(action);
   }
@@ -120,11 +114,7 @@ extension HttpClientFormatExtensions on http.Client {
   }
 
   /// Fetches [url] and parses XML inside a background [Isolate].
-  Future<R> isolateXml<R>(
-    Uri url,
-    FutureOr<R> Function(XmlDocument doc) action, {
-    Map<String, String>? headers,
-  }) async {
+  Future<R> isolateXml<R>(Uri url, FutureOr<R> Function(XmlDocument doc) action, {Map<String, String>? headers}) async {
     final res = await get(url, headers: headers);
     return res.isolateXml(action);
   }
@@ -217,4 +207,3 @@ extension UriHttpExtensions on Uri {
   Stream<DownloadProgress> download(Path destination, {http.Client? client, bool overwrite = false}) =>
       destination.download(this, client: client, overwrite: overwrite);
 }
-

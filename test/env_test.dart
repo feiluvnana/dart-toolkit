@@ -45,10 +45,7 @@ SINGLE_QUOTED='single quote value'
     });
 
     test('Env.require throws StateError when missing', () {
-      expect(
-        () => Env.require('DEFINITELY_MISSING_VAR_9999'),
-        throwsA(isA<StateError>()),
-      );
+      expect(() => Env.require('DEFINITELY_MISSING_VAR_9999'), throwsA(isA<StateError>()));
     });
 
     test('Env.get with positional default returns fallback when missing', () {

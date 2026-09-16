@@ -115,16 +115,18 @@ void main() {
       var count = 0;
       final retriedDelays = <Duration>[];
 
-      final result = await (() async {
-        count++;
-        if (count < 3) throw StateError('attempt $count failed');
-        return 'success';
-      }).retry()
-          .attempts(4)
-          .delay(10.ms)
-          .backoff(1.5)
-          .jitter(false)
-          .listen((att, err, nextDelay) => retriedDelays.add(nextDelay));
+      final result =
+          await (() async {
+                count++;
+                if (count < 3) throw StateError('attempt $count failed');
+                return 'success';
+              })
+              .retry()
+              .attempts(4)
+              .delay(10.ms)
+              .backoff(1.5)
+              .jitter(false)
+              .listen((att, err, nextDelay) => retriedDelays.add(nextDelay));
 
       expect(result, equals('success'));
       expect(count, equals(3));
@@ -162,11 +164,15 @@ void main() {
 
     test('top-level retry() function retries and succeeds', () async {
       var count = 0;
-      final result = await retry(() async {
-        count++;
-        if (count < 2) throw Exception('fail');
-        return 'success';
-      }, attempts: 3, delay: 5.ms);
+      final result = await retry(
+        () async {
+          count++;
+          if (count < 2) throw Exception('fail');
+          return 'success';
+        },
+        attempts: 3,
+        delay: 5.ms,
+      );
 
       expect(result, equals('success'));
       expect(count, equals(2));
@@ -231,7 +237,14 @@ void main() {
     test('chunk batches stream events into fixed size lists', () async {
       final stream = Stream.fromIterable([1, 2, 3, 4, 5]);
       final chunks = await stream.chunk(2).toList();
-      expect(chunks, equals([[1, 2], [3, 4], [5]]));
+      expect(
+        chunks,
+        equals([
+          [1, 2],
+          [3, 4],
+          [5],
+        ]),
+      );
     });
 
     test('flatmap transforms and flattens streams', () async {
@@ -348,7 +361,3 @@ void main() {
     });
   });
 }
-
-
-
-

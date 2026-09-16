@@ -79,12 +79,7 @@ class Prompt {
   /// ```dart
   /// final env = Prompt.select('Target environment:', ['staging', 'production']);
   /// ```
-  static T select<T>(
-    String message,
-    List<T> options, [
-    int defaultIndex = 0,
-    String Function(T item)? display,
-  ]) {
+  static T select<T>(String message, List<T> options, [int defaultIndex = 0, String Function(T item)? display]) {
     if (options.isEmpty) {
       throw ArgumentError('Options list cannot be empty');
     }

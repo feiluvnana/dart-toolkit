@@ -242,20 +242,16 @@ extension type const Path(String path) implements String {
   JsonDocument readJsonSync() => JsonDocument.parse(readTextSync());
 
   /// Reads this file and parses it as an [HtmlDocument].
-  Future<HtmlDocument> readHtml([Encoding encoding = utf8]) async =>
-      HtmlDocument.parse(await readText(encoding));
+  Future<HtmlDocument> readHtml([Encoding encoding = utf8]) async => HtmlDocument.parse(await readText(encoding));
 
   /// Reads this file and parses it as an [HtmlDocument] synchronously.
-  HtmlDocument readHtmlSync([Encoding encoding = utf8]) =>
-      HtmlDocument.parse(readTextSync(encoding));
+  HtmlDocument readHtmlSync([Encoding encoding = utf8]) => HtmlDocument.parse(readTextSync(encoding));
 
   /// Reads this file and parses it as an [XmlDocument].
-  Future<XmlDocument> readXml([Encoding encoding = utf8]) async =>
-      XmlDocument.parse(await readText(encoding));
+  Future<XmlDocument> readXml([Encoding encoding = utf8]) async => XmlDocument.parse(await readText(encoding));
 
   /// Reads this file and parses it as an [XmlDocument] synchronously.
-  XmlDocument readXmlSync([Encoding encoding = utf8]) =>
-      XmlDocument.parse(readTextSync(encoding));
+  XmlDocument readXmlSync([Encoding encoding = utf8]) => XmlDocument.parse(readTextSync(encoding));
 
   /// Writes [content] to this file, creating parent directories if needed.
   Future<File> writeText(String content, {Encoding encoding = utf8}) async {
@@ -366,8 +362,11 @@ extension type const Path(String path) implements String {
   }
 
   /// Lists only directories located in this directory synchronously.
-  List<Path> dirsSync({bool recursive = false, bool followLinks = false}) =>
-      dir.listSync(recursive: recursive, followLinks: followLinks).whereType<Directory>().map((e) => Path(e.path)).toList();
+  List<Path> dirsSync({bool recursive = false, bool followLinks = false}) => dir
+      .listSync(recursive: recursive, followLinks: followLinks)
+      .whereType<Directory>()
+      .map((e) => Path(e.path))
+      .toList();
 
   /// Streams only symbolic links located in this directory.
   Stream<Path> links({bool recursive = false}) async* {
@@ -461,13 +460,7 @@ extension type const Path(String path) implements String {
         isSkipped: false,
       );
     } catch (e) {
-      yield DownloadProgress(
-        url: url,
-        path: this,
-        isDone: true,
-        isFailed: true,
-        error: e,
-      );
+      yield DownloadProgress(url: url, path: this, isDone: true, isFailed: true, error: e);
     } finally {
       if (client == null) httpClient.close();
     }
@@ -828,11 +821,7 @@ Stream<BatchDownloadProgress> _batchDownload(
 /// Batch download extensions on [Map<Path, Uri>].
 extension PathUriMapDownloadExtensions on Map<Path, Uri> {
   /// Downloads all path-URL pairs concurrently and streams [BatchDownloadProgress] updates.
-  Stream<BatchDownloadProgress> downloadAll({
-    http.Client? client,
-    int concurrency = 4,
-    bool overwrite = false,
-  }) =>
+  Stream<BatchDownloadProgress> downloadAll({http.Client? client, int concurrency = 4, bool overwrite = false}) =>
       _batchDownload(
         entries.map((e) => (path: e.key, url: e.value)),
         client: client,
@@ -844,11 +833,7 @@ extension PathUriMapDownloadExtensions on Map<Path, Uri> {
 /// Batch download extensions on [Map<Uri, Path>].
 extension UriPathMapDownloadExtensions on Map<Uri, Path> {
   /// Downloads all URL-path pairs concurrently and streams [BatchDownloadProgress] updates.
-  Stream<BatchDownloadProgress> downloadAll({
-    http.Client? client,
-    int concurrency = 4,
-    bool overwrite = false,
-  }) =>
+  Stream<BatchDownloadProgress> downloadAll({http.Client? client, int concurrency = 4, bool overwrite = false}) =>
       _batchDownload(
         entries.map((e) => (path: e.value, url: e.key)),
         client: client,
