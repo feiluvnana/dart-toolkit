@@ -95,5 +95,36 @@ void main() {
         throwsA(isA<ArgumentError>()),
       );
     });
+
+    test('flag and number helpers configure and validate correctly', () async {
+      final cli = Cli();
+      bool? isDryRun;
+      int? concurrency;
+
+      cli
+          .command('serve')
+          .flag('dry-run', abbr: 'd')
+          .number('concurrency', abbr: 'c', defaultTo: 4)
+          .action((ctx) {
+            isDryRun = ctx.flag('dry-run');
+            concurrency = ctx.number('concurrency');
+          });
+
+      // Shorthand abbreviations
+      await cli.run(['serve', '-d', '-c', '8']);
+      expect(isDryRun, isTrue);
+      expect(concurrency, equals(8));
+
+      // Defaults
+      await cli.run(['serve']);
+      expect(isDryRun, isFalse);
+      expect(concurrency, equals(4));
+
+      // Invalid numeric option throws ArgumentError
+      expect(
+        () => cli.run(['serve', '-c', 'not_a_number']),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
   });
 }

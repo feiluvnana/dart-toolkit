@@ -99,6 +99,20 @@ class CliCommand {
     return this;
   }
 
+  /// Defines a boolean flag on this command.
+  CliCommand flag(
+    String name, {
+    String description = '',
+    String? abbr,
+  }) {
+    return option(
+      name,
+      description: description,
+      flag: true,
+      abbr: abbr,
+    );
+  }
+
   /// Defines an option with a constrained list of valid [choices].
   CliCommand choice(
     String name,
@@ -113,6 +127,22 @@ class CliCommand {
       abbr: abbr,
       defaultTo: defaultTo,
       choices: choices,
+    );
+  }
+
+  /// Defines an integer numeric option on this command with automatic number validation.
+  CliCommand number(
+    String name, {
+    String description = '',
+    String? abbr,
+    int? defaultTo,
+  }) {
+    return option(
+      name,
+      description: description,
+      numeric: true,
+      abbr: abbr,
+      defaultTo: defaultTo?.toString(),
     );
   }
 
@@ -233,13 +263,18 @@ class CliCommand {
       }
     }
 
-    // Validate choices
+    // Validate choices and numeric options
     for (final entry in parsedOptions.entries) {
       final optDef = findOption(entry.key);
-      if (optDef != null && optDef.choices != null && entry.value != null) {
-        if (!optDef.choices!.contains(entry.value)) {
+      if (optDef != null && entry.value != null) {
+        if (optDef.choices != null && !optDef.choices!.contains(entry.value)) {
           throw ArgumentError(
             'Invalid value "${entry.value}" for option "${optDef.name}". Allowed choices: ${optDef.choices!.join(', ')}',
+          );
+        }
+        if (optDef.numeric && int.tryParse(entry.value!) == null) {
+          throw ArgumentError(
+            'Invalid numeric value "${entry.value}" for option "${optDef.name}". Expected an integer.',
           );
         }
       }

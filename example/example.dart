@@ -368,7 +368,7 @@ EXPORT_VAR=export_value
   appCli
       .command('deploy', description: 'Deploy application')
       .choice('target', ['staging', 'production'], abbr: 't', defaultTo: 'staging', description: 'Deployment target')
-      .option('dry-run', flag: true, abbr: 'd', description: 'Simulate without executing')
+      .flag('dry-run', abbr: 'd', description: 'Simulate without executing')
       .action((ctx) {
         final target = ctx.option('target');
         final isDryRun = ctx.flag('dry-run');

@@ -7,7 +7,7 @@ const baseName = 'Key BOX -for two decades- (2019)';
 void main(List<String> rawArgs) async {
   final cli = Cli(name: 'keybox', description: 'Key BOX Scraper & Downloader')
     ..choice('format', ['mp3', 'flac', 'all'], abbr: 'f', defaultTo: 'all', description: 'Music format')
-    ..option('compress', flag: true, abbr: 'c', description: 'Compress directory after download')
+    ..flag('compress', abbr: 'c', description: 'Compress directory after download')
     ..action((ctx) async {
       onExit(() => Logger.warn('Interrupted.'));
 
@@ -43,23 +43,50 @@ void main(List<String> rawArgs) async {
       downloads.addAll({
         base / 'Others/KeyBOX/keybox_image.png': baseUri / 'common/album_jacket/keybox_image.png',
         for (final n in [
-          '20th_box_image.jpg', 'key_box_main_image.png', 'sp_key_box_main_image.png',
-          'key_box_bg.jpg', 'key_box_onsale_title3.jpg', 'sp_20th_banner_keybox.png',
-        ]) base / 'Others/KeyBOX' / n: baseUri / 'common/image/$n',
-        base / 'Others/KeyBOX/00_Contents.jpg': 'https://jetta.vgmtreasurechest.com/soundtracks/key-box-for-two-decades-2019/00%20Contents.jpg'.url,
-        base / 'Others/KeyBOX/01_Box_sample.png': 'https://jetta.vgmtreasurechest.com/soundtracks/key-box-for-two-decades-2019/01%20Box%20sample.png'.url,
+          '20th_box_image.jpg',
+          'key_box_main_image.png',
+          'sp_key_box_main_image.png',
+          'key_box_bg.jpg',
+          'key_box_onsale_title3.jpg',
+          'sp_20th_banner_keybox.png',
+        ])
+          base / 'Others/KeyBOX' / n: baseUri / 'common/image/$n',
+        base / 'Others/KeyBOX/00_Contents.jpg':
+            'https://jetta.vgmtreasurechest.com/soundtracks/key-box-for-two-decades-2019/00%20Contents.jpg'.url,
+        base / 'Others/KeyBOX/01_Box_sample.png':
+            'https://jetta.vgmtreasurechest.com/soundtracks/key-box-for-two-decades-2019/01%20Box%20sample.png'.url,
         for (final n in [
-          '20th_main_image.jpg', '20th_main_bg.jpg', '20th_top_main_banner_1.png',
-          '20th_menu_logo.png', 'sp_20th_top_title.png', 'sp_20th_main_image_1.jpg',
-          'sp_20th_main_image_2.jpg', 'sp_20th_main_image_3.jpg',
-        ]) base / 'Others/Key 20th Anniversary' / n: baseUri / 'common/image/$n',
-        base / 'Others/Events & Topics/Stamp Rally/key20th_stamp_poster_1.jpg': baseUri / 'common/image/key20th_stamp_poster_1.jpg',
-        base / 'Others/Events & Topics/Stamp Rally/key20th_stamp_poster_1_a.jpg': baseUri / 'common/image/key20th_stamp_poster_1_a.jpg',
+          '20th_main_image.jpg',
+          '20th_main_bg.jpg',
+          '20th_top_main_banner_1.png',
+          '20th_menu_logo.png',
+          'sp_20th_top_title.png',
+          'sp_20th_main_image_1.jpg',
+          'sp_20th_main_image_2.jpg',
+          'sp_20th_main_image_3.jpg',
+        ])
+          base / 'Others/Key 20th Anniversary' / n: baseUri / 'common/image/$n',
+        base / 'Others/Events & Topics/Stamp Rally/key20th_stamp_poster_1.jpg':
+            baseUri / 'common/image/key20th_stamp_poster_1.jpg',
+        base / 'Others/Events & Topics/Stamp Rally/key20th_stamp_poster_1_a.jpg':
+            baseUri / 'common/image/key20th_stamp_poster_1_a.jpg',
         for (final n in ['movie_image_0712.jpg', 'history_image_50.jpg', 'topics_image_20191217_2.jpg'])
           base / 'Others/Events & Topics' / n: baseUri / 'common/image/$n',
         for (var i = 1; i <= 8; i++)
-          base / 'Others/Events & Topics/General Election/key_election_$i.jpg': baseUri / 'common/image/key_election_$i.jpg',
-        for (final n in ['kai', 'tanaka', 'minami', 'na-ga', 'suzukikeiko', 'sakurai', 'kohara', 'orito', 'suzuki', 'yurika'])
+          base / 'Others/Events & Topics/General Election/key_election_$i.jpg':
+              baseUri / 'common/image/key_election_$i.jpg',
+        for (final n in [
+          'kai',
+          'tanaka',
+          'minami',
+          'na-ga',
+          'suzukikeiko',
+          'sakurai',
+          'kohara',
+          'orito',
+          'suzuki',
+          'yurika',
+        ])
           base / 'Others/Events & Topics/Live Streams/profile_$n.jpg': baseUri / 'common/image/profile_$n.jpg',
       });
 
@@ -68,7 +95,11 @@ void main(List<String> rawArgs) async {
       for (final (i, box) in msgDoc.$('.message_white_box').take(4).indexed) {
         for (final (n, a) in box.$('a[href*="message_"]').indexed) {
           final href = a.attr('href')!;
-          final tag = href.contains('wfs') ? 'WFS_' : href.contains('cygames') ? 'Cygames_' : '';
+          final tag = href.contains('wfs')
+              ? 'WFS_'
+              : href.contains('cygames')
+              ? 'Cygames_'
+              : '';
           final pfx = '${n + 1}'.padLeft(2, '0');
           final name = (a.attr('title') ?? a.text.replaceAll('[New Message]', '')).path.sanitized();
           downloads[base / 'Others/Messages & Tributes/${categories[i]}/$tag${pfx}_$name.jpg'] = baseUri / href;
@@ -96,10 +127,13 @@ void main(List<String> rawArgs) async {
           for (final ext in formats) {
             final target = base / disc / ext / '$t. $title.$ext';
             if (!await target.exist()) {
-              res.follow(href, callback: (songRes) {
-                final dlHref = songRes.$('a[href*=".$ext"]').first.attr('href')!;
-                songRes.emit((path: target, url: (songRes.url ?? khinsider.url).resolve(dlHref)));
-              });
+              res.follow(
+                href,
+                callback: (songRes) {
+                  final dlHref = songRes.$('a[href*=".$ext"]').first.attr('href')!;
+                  songRes.emit((path: target, url: (songRes.url ?? khinsider.url).resolve(dlHref)));
+                },
+              );
             }
           }
         }
