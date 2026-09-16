@@ -18,7 +18,7 @@ class CliOption {
   final String description;
   final bool flag;
   final bool numeric;
-  final bool abbreviated;
+  final String? abbr;
   final String? defaultTo;
   final List<String>? choices;
 
@@ -27,7 +27,7 @@ class CliOption {
     this.description = '',
     this.flag = false,
     this.numeric = false,
-    this.abbreviated = false,
+    this.abbr,
     this.defaultTo,
     this.choices,
   });
@@ -61,9 +61,21 @@ class CliCommand {
   final String description;
   final Map<String, CliOption> options = {};
   final Map<String, CliCommand> subcommands = {};
+  final CliCommand? parent;
   CommandHandler? handler;
 
-  CliCommand(this.name, {this.description = '', this.handler});
+  CliCommand(this.name, {this.description = '', this.handler, this.parent});
+
+  /// Finds an option definition by full name in this command or its parent hierarchy.
+  CliOption? findOption(String name) => options[name] ?? parent?.findOption(name);
+
+  /// Finds an option definition by abbreviation in this command or its parent hierarchy.
+  CliOption? findAbbr(String abbr) {
+    for (final opt in options.values) {
+      if (opt.abbr == abbr) return opt;
+    }
+    return parent?.findAbbr(abbr);
+  }
 
   /// Defines an option or flag on this command.
   CliCommand option(
@@ -71,7 +83,7 @@ class CliCommand {
     String description = '',
     bool flag = false,
     bool numeric = false,
-    bool abbreviated = false,
+    String? abbr,
     String? defaultTo,
     List<String>? choices,
   }) {
@@ -80,7 +92,7 @@ class CliCommand {
       description: description,
       flag: flag,
       numeric: numeric,
-      abbreviated: abbreviated,
+      abbr: abbr,
       defaultTo: defaultTo,
       choices: choices,
     );
@@ -92,13 +104,13 @@ class CliCommand {
     String name,
     List<String> choices, {
     String description = '',
-    bool abbreviated = false,
+    String? abbr,
     String? defaultTo,
   }) {
     return option(
       name,
       description: description,
-      abbreviated: abbreviated,
+      abbr: abbr,
       defaultTo: defaultTo,
       choices: choices,
     );
@@ -111,7 +123,7 @@ class CliCommand {
     CommandHandler? handler,
     void Function(CliCommand sub)? build,
   }) {
-    final sub = CliCommand(name, description: description, handler: handler);
+    final sub = CliCommand(name, description: description, handler: handler, parent: this);
     build?.call(sub);
     subcommands[name] = sub;
     return sub;
@@ -130,13 +142,14 @@ class CliCommand {
     if (subcommands.isNotEmpty) {
       stdout.writeln('\n${'Commands:'.bold}');
       for (final sub in subcommands.values) {
-        stdout.writeln('  ${sub.name.padRight(16)} ${sub.description}');
+        stdout.writeln('  ${sub.name.padRight(20)} ${sub.description}');
       }
     }
     if (options.isNotEmpty) {
       stdout.writeln('\n${'Options:'.bold}');
       for (final opt in options.values) {
-        final prefix = opt.abbreviated ? '-${opt.name}' : '--${opt.name}';
+        final optName = '--${opt.name}';
+        final optPrefix = opt.abbr != null ? '-${opt.abbr}, $optName' : '    $optName';
         var desc = opt.description;
         if (opt.choices != null && opt.choices!.isNotEmpty) {
           final choiceList = '(${opt.choices!.join('|')})';
@@ -145,16 +158,16 @@ class CliCommand {
         if (opt.defaultTo != null) {
           desc = '$desc [default: ${opt.defaultTo}]';
         }
-        stdout.writeln('  ${prefix.padRight(16)} $desc');
+        stdout.writeln('  ${optPrefix.padRight(20)} $desc');
       }
     }
-    stdout.writeln('  --help, -h       Print this help message');
+    stdout.writeln('  -h, --help           Print this help message');
   }
 
   /// Dispatches and runs this command with [args].
   Future<void> run(List<String> args) async {
     if (args.contains('--help') || args.contains('-h')) {
-      if (!options.containsKey('help') && !options.containsKey('h')) {
+      if (findOption('help') == null && findAbbr('h') == null) {
         printUsage();
         return;
       }
@@ -181,25 +194,39 @@ class CliCommand {
         final name = eq == -1 ? raw : raw.substring(0, eq);
         final val = eq == -1 ? null : raw.substring(eq + 1);
 
-        final optDef = options[name];
-        if (optDef?.flag == true) {
-          parsedFlags.add(name);
+        final optDef = findOption(name);
+        if (optDef == null) {
+          throw ArgumentError('Unknown option: --$name');
+        }
+
+        if (optDef.flag) {
+          parsedFlags.add(optDef.name);
         } else if (val != null) {
-          parsedOptions[name] = val;
+          parsedOptions[optDef.name] = val;
         } else if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
-          parsedOptions[name] = args[++i];
+          parsedOptions[optDef.name] = args[++i];
         } else {
-          parsedFlags.add(name);
+          parsedFlags.add(optDef.name);
         }
       } else if (arg.startsWith('-') && arg.length > 1) {
-        final name = arg.substring(1);
-        final optDef = options[name];
-        if (optDef?.flag == true) {
-          parsedFlags.add(name);
+        final raw = arg.substring(1);
+        final eq = raw.indexOf('=');
+        final key = eq == -1 ? raw : raw.substring(0, eq);
+        final val = eq == -1 ? null : raw.substring(eq + 1);
+
+        final optDef = findAbbr(key);
+        if (optDef == null) {
+          throw ArgumentError('Unknown option: -$key');
+        }
+
+        if (optDef.flag) {
+          parsedFlags.add(optDef.name);
+        } else if (val != null) {
+          parsedOptions[optDef.name] = val;
         } else if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
-          parsedOptions[name] = args[++i];
+          parsedOptions[optDef.name] = args[++i];
         } else {
-          parsedFlags.add(name);
+          parsedFlags.add(optDef.name);
         }
       } else {
         rest.add(arg);
@@ -208,7 +235,7 @@ class CliCommand {
 
     // Validate choices
     for (final entry in parsedOptions.entries) {
-      final optDef = options[entry.key];
+      final optDef = findOption(entry.key);
       if (optDef != null && optDef.choices != null && entry.value != null) {
         if (!optDef.choices!.contains(entry.value)) {
           throw ArgumentError(

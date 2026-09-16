@@ -367,15 +367,15 @@ EXPORT_VAR=export_value
   final appCli = Cli(name: 'toolkit_app', description: 'Sample CLI App');
   appCli
       .command('deploy', description: 'Deploy application')
-      .choice('target', ['staging', 'production'], abbreviated: true, defaultTo: 'staging', description: 'Deployment target')
-      .option('dry-run', flag: true, description: 'Simulate without executing')
+      .choice('target', ['staging', 'production'], abbr: 't', defaultTo: 'staging', description: 'Deployment target')
+      .option('dry-run', flag: true, abbr: 'd', description: 'Simulate without executing')
       .action((ctx) {
         final target = ctx.option('target');
         final isDryRun = ctx.flag('dry-run');
         Logger.info('Dispatched CLI command: target=$target, dryRun=$isDryRun');
       });
 
-  await appCli.run(['deploy', '-target', 'production', '--dry-run']);
+  await appCli.run(['deploy', '-t', 'production', '--dry-run']);
 
   // 8.5 Interactive Prompts reference
   Logger.info('Interactive Prompts available:');

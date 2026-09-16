@@ -12,10 +12,10 @@ void main() {
 
       cli
           .command('fetch', description: 'Fetch data')
-          .option('verbose', flag: true)
+          .option('verbose', flag: true, abbr: 'v')
           .subcommand('scrape', description: 'Scrape URLs')
-          .option('concurrency', abbreviated: true, numeric: true, defaultTo: '4')
-          .option('out', abbreviated: true, defaultTo: 'dist')
+          .option('concurrency', abbr: 'c', numeric: true, defaultTo: '4')
+          .option('out', abbr: 'o', defaultTo: 'dist')
           .action((ctx) {
             executed = true;
             isVerbose = ctx.flag('verbose');
@@ -23,7 +23,7 @@ void main() {
             parsedOut = ctx.option('out');
           });
 
-      await cli.run(['fetch', 'scrape', '-concurrency', '8', '-out', 'output', '--verbose']);
+      await cli.run(['fetch', 'scrape', '-c', '8', '--out', 'output', '--verbose']);
 
       expect(executed, isTrue);
       expect(isVerbose, isTrue);
