@@ -306,7 +306,7 @@ EXPORT_VAR=export_value
   Logger.ok('XmlDocument XPath: names=${xmlParsed.$xpath('//user/name/text()').map((n) => n.value).toList()}');
 
   // 5.5 String regex match helper
-  final versionMatch = 'Release version 9.4.2-alpha'.match(r'version ([\d\.]+)', 1);
+  final versionMatch = 'Release version 9.4.2-alpha'.match(RegExp(r'version ([\d\.]+)'), 1);
   Logger.ok('String.match(): version=$versionMatch');
 
   // =========================================================================
@@ -434,5 +434,5 @@ EXPORT_VAR=export_value
   );
 
   Console.rule('All dart_toolkit APIs Verified Successfully');
-  onExit(null);
+  clearExitHooks();
 }

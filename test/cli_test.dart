@@ -161,5 +161,84 @@ void main() {
       // Invalid numeric option throws ArgumentError
       expect(() => cli.run(['serve', '-c', 'not_a_number']), throwsA(isA<ArgumentError>()));
     });
+
+    test('CLI handles negative option values and double dash terminator properly', () async {
+      final cli = Cli();
+      int? offset;
+      List<String>? rest;
+
+      cli.command('seek').option('offset', abbr: 'o').action((ctx) {
+        offset = ctx.number('offset');
+        rest = ctx.rest;
+      });
+
+      // Negative value with --offset
+      await cli.run(['seek', '--offset', '-5', 'file.txt']);
+      expect(offset, equals(-5));
+      expect(rest, equals(['file.txt']));
+
+      // Negative value with -o
+      await cli.run(['seek', '-o', '-10', 'audio.flac']);
+      expect(offset, equals(-10));
+      expect(rest, equals(['audio.flac']));
+
+      // Double dash terminator
+      await cli.run(['seek', '--offset', '20', '--', '--not-an-option', '-x']);
+      expect(offset, equals(20));
+      expect(rest, equals(['--not-an-option', '-x']));
+    });
+
+    test('CLI subcommand inherits option defaults from parent hierarchy', () async {
+      final cli = Cli();
+      String? parentFmt;
+      String? subFmt;
+
+      cli.option('format', defaultTo: 'all').subcommand('download').action((ctx) {
+        subFmt = ctx.option('format');
+      });
+
+      cli.action((ctx) {
+        parentFmt = ctx.option('format');
+      });
+
+      // Parent sees default
+      await cli.run([]);
+      expect(parentFmt, equals('all'));
+
+      // Subcommand sees parent default
+      await cli.run(['download']);
+      expect(subFmt, equals('all'));
+    });
+
+    test('ConsoleIo sink overrides capture output cleanly', () {
+      final outBuffer = StringBuffer();
+      final errBuffer = StringBuffer();
+      ConsoleIo.stdoutOverride = outBuffer;
+      ConsoleIo.stderrOverride = errBuffer;
+
+      try {
+        Logger.info('Hello from Logger');
+        Logger.error('Oops from Logger');
+        expect(outBuffer.toString(), contains('Hello from Logger'));
+        expect(errBuffer.toString(), contains('Oops from Logger'));
+      } finally {
+        ConsoleIo.reset();
+      }
+    });
+
+    test('onExit manages multiple hooks and execution', () async {
+      var hook1Executed = false;
+      var hook2Executed = false;
+
+      final unreg1 = onExit(() => hook1Executed = true);
+      final unreg2 = onExit(() => hook2Executed = true);
+
+      await runExitHooks();
+      expect(hook1Executed, isTrue);
+      expect(hook2Executed, isTrue);
+
+      unreg1();
+      unreg2();
+    });
   });
 }

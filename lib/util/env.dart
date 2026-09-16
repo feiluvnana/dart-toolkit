@@ -1,6 +1,8 @@
 import 'dart:io';
 
 /// Utilities for accessing system environment variables, `.env` file parsing, and platform checks.
+///
+/// {@category System}
 class Env {
   static final Map<String, String> _custom = {};
 
@@ -20,6 +22,16 @@ class Env {
     _custom[key] = value;
   }
 
+  /// Removes an in-memory custom environment variable.
+  static void remove(String key) {
+    _custom.remove(key);
+  }
+
+  /// Clears all custom environment variable overrides.
+  static void clearOverrides() {
+    _custom.clear();
+  }
+
   /// Checks if an environment variable [key] is defined and non-empty.
   static bool has(String key) {
     final val = get(key);
@@ -36,16 +48,16 @@ class Env {
   }
 
   /// Whether the current operating system is macOS.
-  static bool get isMac => Platform.isMacOS;
-
-  /// Shorthand alias for [isMac].
   static bool get isMacOS => Platform.isMacOS;
 
-  /// Whether the current operating system is Windows.
-  static bool get isWin => Platform.isWindows;
+  /// Shorthand alias for [isMacOS].
+  static bool get isMac => Platform.isMacOS;
 
-  /// Shorthand alias for [isWin].
+  /// Whether the current operating system is Windows.
   static bool get isWindows => Platform.isWindows;
+
+  /// Shorthand alias for [isWindows].
+  static bool get isWin => Platform.isWindows;
 
   /// Whether the current operating system is Linux.
   static bool get isLinux => Platform.isLinux;
@@ -68,52 +80,62 @@ class Env {
   /// Parses a `.env` format [source] string and loads key-value pairs into custom environment.
   ///
   /// If [override] is `false` (default), variables already defined in `Platform.environment` or loaded previously are preserved.
-  /// Returns the map of parsed key-value pairs.
-  static Map<String, String> load(String source, [bool override = false]) {
-    final result = <String, String>{};
+  static Map<String, String> parse(String source, {bool override = false}) {
+    final parsed = <String, String>{};
     final lines = source.split(RegExp(r'\r?\n'));
 
-    for (var line in lines) {
-      line = line.trim();
+    for (final rawLine in lines) {
+      var line = rawLine.trim();
       if (line.isEmpty || line.startsWith('#')) continue;
-
       if (line.startsWith('export ')) {
         line = line.substring(7).trim();
       }
 
-      final eqIndex = line.indexOf('=');
-      if (eqIndex == -1) continue;
+      final eqIdx = line.indexOf('=');
+      if (eqIdx == -1) continue;
 
-      final key = line.substring(0, eqIndex).trim();
-      if (key.isEmpty) continue;
+      final key = line.substring(0, eqIdx).trim();
+      var value = line.substring(eqIdx + 1).trim();
 
-      var value = line.substring(eqIndex + 1).trim();
-
-      // Handle quoted values
-      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-        value = value.substring(1, value.length - 1);
-        if (value.contains(r'\n')) {
-          value = value.replaceAll(r'\n', '\n');
+      if (value.startsWith('"')) {
+        final closeQuote = value.indexOf('"', 1);
+        if (closeQuote != -1) {
+          value = value.substring(1, closeQuote).replaceAll(r'\n', '\n');
+        }
+      } else if (value.startsWith("'")) {
+        final closeQuote = value.indexOf("'", 1);
+        if (closeQuote != -1) {
+          value = value.substring(1, closeQuote);
         }
       } else {
-        // Strip trailing comment if not quoted
-        final commentIndex = value.indexOf(' #');
-        if (commentIndex != -1) {
-          value = value.substring(0, commentIndex).trim();
+        final commentIdx = value.indexOf('#');
+        if (commentIdx != -1) {
+          value = value.substring(0, commentIdx).trim();
         }
       }
 
-      result[key] = value;
-      if (override || (!_custom.containsKey(key) && !Platform.environment.containsKey(key))) {
+      parsed[key] = value;
+      if (override || !Platform.environment.containsKey(key)) {
         _custom[key] = value;
       }
     }
 
-    return result;
+    return parsed;
   }
 
-  /// Clears in-memory custom environment overrides.
-  static void clearOverrides() {
-    _custom.clear();
+  /// Loads environment variables from `.env` content or file path at [sourceOrPath].
+  static Map<String, String> load([String sourceOrPath = '.env', bool override = false]) {
+    if (sourceOrPath.contains('\n') || sourceOrPath.contains('=')) {
+      return parse(sourceOrPath, override: override);
+    }
+    return loadSync(sourceOrPath, override);
+  }
+
+  /// Loads environment variables synchronously from `.env` file at [path].
+  static Map<String, String> loadSync([String path = '.env', bool override = false]) {
+    final file = File(path);
+    if (!file.existsSync()) return const {};
+    final content = file.readAsStringSync();
+    return parse(content, override: override);
   }
 }

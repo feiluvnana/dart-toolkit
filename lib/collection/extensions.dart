@@ -1,6 +1,8 @@
 import 'dart:math';
 
 /// Functional extensions on [Iterable].
+///
+/// {@category Collections}
 extension CollectionIterableExtensions<T> on Iterable<T> {
   /// Splits elements into fixed-size chunks of length [size].
   Iterable<List<T>> chunk(int size) sync* {

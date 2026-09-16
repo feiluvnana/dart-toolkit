@@ -3,17 +3,16 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../fs/path.dart';
+import '../util/env.dart';
 import 'shell_result.dart';
 
 export 'shell_result.dart';
 
-/// Splits a command-line string into executable name and arguments list,
-/// respecting single and double quotes and escaped spaces.
 List<String> _splitCommand(String command) {
   final args = <String>[];
   final current = StringBuffer();
-  var inSingleQuote = false;
-  var inDoubleQuote = false;
+  var inSingle = false;
+  var inDouble = false;
   var isEscaped = false;
 
   for (var i = 0; i < command.length; i++) {
@@ -30,17 +29,17 @@ List<String> _splitCommand(String command) {
       continue;
     }
 
-    if (char == "'" && !inDoubleQuote) {
-      inSingleQuote = !inSingleQuote;
+    if (char == "'" && !inDouble) {
+      inSingle = !inSingle;
       continue;
     }
 
-    if (char == '"' && !inSingleQuote) {
-      inDoubleQuote = !inDoubleQuote;
+    if (char == '"' && !inSingle) {
+      inDouble = !inDouble;
       continue;
     }
 
-    if (char.trim().isEmpty && !inSingleQuote && !inDoubleQuote) {
+    if (char == ' ' && !inSingle && !inDouble) {
       if (current.isNotEmpty) {
         args.add(current.toString());
         current.clear();
@@ -62,12 +61,9 @@ List<String> _splitCommand(String command) {
 ///
 /// If [quiet] is `false` (default), stdout and stderr are echoed live to the console.
 /// If [throwOnError] is `true` (default), a [ShellException] is thrown if the process exits with non-zero code.
+/// Pass [shell]: `true` to execute through the system shell interpreter (`cmd.exe` on Windows, `/bin/sh` on POSIX).
 ///
-/// Example:
-/// ```dart
-/// final res = await run('git status');
-/// final branch = await run('git branch --show-current', quiet: true);
-/// ```
+/// {@category System}
 Future<ShellResult> run(
   String command, {
   Path? workdir,
@@ -76,6 +72,7 @@ Future<ShellResult> run(
   bool quiet = false,
   bool throwOnError = true,
   Encoding encoding = utf8,
+  bool shell = false,
 }) => _runProcess(
   command,
   workdir: workdir,
@@ -84,14 +81,12 @@ Future<ShellResult> run(
   quiet: quiet,
   throwOnError: throwOnError,
   encoding: encoding,
+  shell: shell,
 );
 
 /// Shorthand alias for [run].
 ///
-/// Example:
-/// ```dart
-/// final branch = await $('git branch --show-current', quiet: true);
-/// ```
+/// {@category System}
 Future<ShellResult> $(
   String command, {
   Path? workdir,
@@ -100,6 +95,7 @@ Future<ShellResult> $(
   bool quiet = false,
   bool throwOnError = true,
   Encoding encoding = utf8,
+  bool shell = false,
 }) => run(
   command,
   workdir: workdir,
@@ -108,6 +104,7 @@ Future<ShellResult> $(
   quiet: quiet,
   throwOnError: throwOnError,
   encoding: encoding,
+  shell: shell,
 );
 
 /// Internal process execution implementation.
@@ -120,14 +117,16 @@ Future<ShellResult> _runProcess(
   bool quiet = false,
   bool throwOnError = true,
   Encoding encoding = utf8,
+  bool shell = false,
 }) async {
   final String executable;
   final List<String> args;
+  final String displayCommand;
 
   if (arguments != null) {
     executable = command;
     args = arguments;
-    args.isEmpty ? command : '$command ${args.map((a) => a.contains(' ') ? '"$a"' : a).join(' ')}';
+    displayCommand = args.isEmpty ? command : '$command ${args.map((a) => a.contains(' ') ? '"$a"' : a).join(' ')}';
   } else {
     final parts = _splitCommand(command.trim());
     if (parts.isEmpty) {
@@ -135,17 +134,19 @@ Future<ShellResult> _runProcess(
     }
     executable = parts.first;
     args = parts.sublist(1);
+    displayCommand = command;
   }
+
+  final mergedEnv = {...Env.all(), ...?env};
 
   final process = await Process.start(
     executable,
     args,
     workingDirectory: workdir?.path,
-    environment: env,
-    runInShell: Platform.isWindows,
+    environment: mergedEnv,
+    runInShell: shell || Platform.isWindows,
   );
 
-  // Close stdin immediately since interactive stdin is not needed for non-interactive run
   try {
     await process.stdin.close();
   } catch (_) {}
@@ -169,7 +170,7 @@ Future<ShellResult> _runProcess(
       timeout,
       onTimeout: () {
         process.kill(ProcessSignal.sigkill);
-        throw TimeoutException('Command "$command" timed out after $timeout');
+        throw TimeoutException('Command "$displayCommand" timed out after $timeout');
       },
     );
   }
@@ -178,7 +179,7 @@ Future<ShellResult> _runProcess(
   await Future.wait([stdoutFuture, stderrFuture]);
 
   final result = ShellResult(
-    command: command,
+    command: displayCommand,
     exitcode: code,
     stdout: stdoutBuf.toString(),
     stderr: stderrBuf.toString(),
@@ -195,29 +196,20 @@ Future<ShellResult> _runProcess(
 ///
 /// Returns a [Path] to the binary if found, or `null` otherwise.
 ///
-/// Example:
-/// ```dart
-/// final gitPath = await which('git');
-/// ```
+/// {@category System}
 Future<Path?> which(String executable) async {
-  if (executable.isEmpty) return null;
-
-  // Direct absolute or relative path given
-  if (executable.contains('/') || (Platform.isWindows && executable.contains(r'\'))) {
-    final direct = Path(executable);
-    if (await direct.exist()) return direct;
-  }
-
-  final pathEnv = Platform.environment['PATH'] ?? '';
+  final pathVar = Platform.environment['PATH'] ?? '';
   final separator = Platform.isWindows ? ';' : ':';
-  final paths = pathEnv.split(separator).where((p) => p.isNotEmpty);
+  final paths = pathVar.split(separator).where((p) => p.isNotEmpty);
 
-  final extensions = Platform.isWindows ? ['', '.exe', '.bat', '.cmd'] : [''];
+  final extensions = Platform.isWindows
+      ? (Platform.environment['PATHEXT']?.split(';') ?? ['.exe', '.bat', '.cmd'])
+      : [''];
 
   for (final dir in paths) {
     for (final ext in extensions) {
       final candidate = Path(dir) / '$executable$ext';
-      if (await candidate.exist()) {
+      if (await candidate.exists()) {
         return candidate;
       }
     }
@@ -226,28 +218,31 @@ Future<Path?> which(String executable) async {
   return null;
 }
 
-/// Represents a sequence of piped shell commands.
+/// Pipeline of chained system commands connected via standard streams (e.g. `cmd1 | cmd2 | cmd3`).
+///
+/// {@category System}
 class CommandPipeline {
   final List<String> _commands;
 
   CommandPipeline(List<String> commands) : _commands = List.unmodifiable(commands);
 
-  /// Appends [next] command to the pipeline.
+  /// Pipes the output of this pipeline into another [next] command.
   CommandPipeline pipe(String next) => CommandPipeline([..._commands, next]);
 
   /// Alias for [pipe].
   CommandPipeline operator |(String next) => pipe(next);
 
-  /// Executes the pipeline, piping stdout from each process into stdin of the next.
+  /// Executes this command pipeline asynchronously.
   Future<ShellResult> run({
     Path? workdir,
     Map<String, String>? env,
     Duration? timeout,
     bool quiet = false,
     bool throwOnError = true,
+    Encoding encoding = utf8,
   }) async {
     if (_commands.isEmpty) {
-      throw StateError('Pipeline contains no commands');
+      throw StateError('Cannot execute an empty command pipeline');
     }
 
     if (_commands.length == 1) {
@@ -258,46 +253,52 @@ class CommandPipeline {
         timeout: timeout,
         quiet: quiet,
         throwOnError: throwOnError,
+        encoding: encoding,
       );
     }
 
     final processes = <Process>[];
+    final mergedEnv = {...Env.all(), ...?env};
+
     try {
-      for (var i = 0; i < _commands.length; i++) {
-        final parts = _splitCommand(_commands[i].trim());
-        final proc = await Process.start(
+      for (final cmd in _commands) {
+        final parts = _splitCommand(cmd.trim());
+        if (parts.isEmpty) {
+          throw ArgumentError('Empty command in pipeline');
+        }
+        final p = await Process.start(
           parts.first,
           parts.sublist(1),
           workingDirectory: workdir?.path,
-          environment: env,
+          environment: mergedEnv,
           runInShell: Platform.isWindows,
         );
-        processes.add(proc);
+        processes.add(p);
       }
 
-      // Close stdin of first process
-      try {
-        await processes.first.stdin.close();
-      } catch (_) {}
-
-      // Pipe intermediates
       for (var i = 0; i < processes.length - 1; i++) {
-        processes[i].stdout.pipe(processes[i + 1].stdin).catchError((_) {});
+        final current = processes[i];
+        final next = processes[i + 1];
+        current.stdout.pipe(next.stdin).catchError((_) {});
       }
 
       final lastProcess = processes.last;
       final stdoutBuf = StringBuffer();
       final stderrBuf = StringBuffer();
 
-      final stdoutFuture = lastProcess.stdout.transform(utf8.decoder).forEach((data) {
+      final stdoutFuture = lastProcess.stdout.transform(encoding.decoder).forEach((data) {
         stdoutBuf.write(data);
         if (!quiet) stdout.write(data);
       });
 
-      final stderrFuture = lastProcess.stderr.transform(utf8.decoder).forEach((data) {
-        stderrBuf.write(data);
-        if (!quiet) stderr.write(data);
-      });
+      final stderrFuture = Future.wait(
+        processes.map(
+          (p) => p.stderr.transform(encoding.decoder).forEach((data) {
+            stderrBuf.write(data);
+            if (!quiet) stderr.write(data);
+          }),
+        ),
+      );
 
       final exitCodes = await Future.wait(processes.map((p) => p.exitCode));
       await Future.wait([stdoutFuture, stderrFuture]);
@@ -324,6 +325,8 @@ class CommandPipeline {
 }
 
 /// Extension on [String] for concise command execution and piping.
+///
+/// {@category System}
 extension ShellStringExtension on String {
   /// Executes this string as a system command.
   Future<ShellResult> run({
@@ -333,6 +336,7 @@ extension ShellStringExtension on String {
     bool quiet = false,
     bool throwOnError = true,
     Encoding encoding = utf8,
+    bool shell = false,
   }) => _runProcess(
     this,
     workdir: workdir,
@@ -341,6 +345,7 @@ extension ShellStringExtension on String {
     quiet: quiet,
     throwOnError: throwOnError,
     encoding: encoding,
+    shell: shell,
   );
 
   /// Starts a command pipeline with this command piped into [next].
@@ -351,6 +356,8 @@ extension ShellStringExtension on String {
 }
 
 /// Extension on [Path] for executing scripts or binaries directly.
+///
+/// {@category System}
 extension ShellPathExtension on Path {
   /// Executes the file or binary at this path as a system command.
   ///
@@ -366,6 +373,7 @@ extension ShellPathExtension on Path {
     bool quiet = false,
     bool throwOnError = true,
     Encoding encoding = utf8,
+    bool shell = false,
   }) => _runProcess(
     path,
     arguments: args,
@@ -375,10 +383,13 @@ extension ShellPathExtension on Path {
     quiet: quiet,
     throwOnError: throwOnError,
     encoding: encoding,
+    shell: shell,
   );
 }
 
 /// Shorthand getters on `Future<ShellResult>` for clean chaining.
+///
+/// {@category System}
 extension FutureShellResultExtension on Future<ShellResult> {
   /// The trimmed stdout text of the executed command.
   Future<String> get text => then((r) => r.text);

@@ -81,5 +81,24 @@ void main() {
         expect(res.text, equals('beta'));
       }
     });
+
+    test('Path.run preserves arguments in ShellResult.command', () async {
+      final echoPath = (await which('echo')) ?? 'echo'.path;
+      final res = await echoPath.run(args: ['arg1', 'arg2'], quiet: true);
+      expect(res.command, contains('arg1 arg2'));
+      expect(res.command.startsWith(echoPath.path), isTrue);
+    });
+
+    test('Subprocesses receive environment variables set via Env.set', () async {
+      if (!Platform.isWindows) {
+        Env.set('DART_TOOLKIT_TEST_VAR', 'propagated_value');
+        try {
+          final res = await run('printenv DART_TOOLKIT_TEST_VAR', quiet: true);
+          expect(res.text, equals('propagated_value'));
+        } finally {
+          Env.remove('DART_TOOLKIT_TEST_VAR');
+        }
+      }
+    });
   });
 }

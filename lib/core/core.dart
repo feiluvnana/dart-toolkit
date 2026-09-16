@@ -4,6 +4,8 @@
 /// - [Either], [Left], and [Right]
 /// - [JsonDocument], [HtmlDocument], [XmlDocument]
 /// - Common [StringCoreExtensions]
+///
+/// {@category Formats}
 library;
 
 export 'either.dart';

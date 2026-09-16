@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:collection';
 
 /// A concurrency-limiting synchronization primitive.
+///
+/// {@category Concurrency}
 class Semaphore {
   final int maxPermits;
   int _currentPermits;
@@ -51,6 +53,8 @@ class Semaphore {
 }
 
 /// A permit representing acquired access to a [Semaphore].
+///
+/// {@category Concurrency}
 class Permit {
   final Semaphore _semaphore;
   bool _released = false;
@@ -60,22 +64,26 @@ class Permit {
   /// Whether this permit has been released.
   bool get isReleased => _released;
 
-  /// Releases this permit back to the semaphore.
+  /// Releases the permit back to its semaphore. Safe and idempotent to call multiple times.
   void release() {
-    if (!_released) {
-      _released = true;
-      _semaphore._release();
-    }
+    if (_released) return;
+    _released = true;
+    _semaphore._release();
   }
 }
 
-/// Mutual exclusion lock (a [Semaphore] with capacity 1).
-class Mutex extends Semaphore {
-  Mutex() : super(1);
+/// A mutual exclusion lock ensuring only one critical section executes at any time.
+///
+/// {@category Concurrency}
+class Mutex {
+  final Semaphore _semaphore = Semaphore(1);
 
   /// Whether the mutex is currently locked.
-  bool get isLocked => availablePermits == 0;
+  bool get isLocked => _semaphore.availablePermits == 0;
 
-  /// Executes [action] exclusively, ensuring no other task runs concurrently.
-  Future<T> protect<T>(FutureOr<T> Function() action) => run<T>(action);
+  /// Executes [action] while holding the mutex lock.
+  Future<T> run<T>(FutureOr<T> Function() action) => _semaphore.run(action);
+
+  /// Shorthand alias for [run].
+  Future<T> protect<T>(FutureOr<T> Function() action) => run(action);
 }

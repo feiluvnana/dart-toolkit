@@ -1,6 +1,8 @@
 import 'dart:math';
 
 /// Short duration extensions on [int].
+///
+/// {@category Utilities}
 extension DurationInt on int {
   /// This many milliseconds.
   Duration get ms => Duration(milliseconds: this);
@@ -19,6 +21,8 @@ extension DurationInt on int {
 }
 
 /// Functional extensions on [Duration].
+///
+/// {@category Utilities}
 extension DurationExtensions on Duration {
   /// Formats this duration into a human-readable string.
   ///

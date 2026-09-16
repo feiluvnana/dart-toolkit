@@ -7,7 +7,13 @@ import '../async/isolate.dart';
 import '../core/core.dart';
 import '../fs/path.dart';
 
+final Expando<HtmlDocument> _htmlMemo = Expando<HtmlDocument>('htmlMemo');
+final Expando<XmlDocument> _xmlMemo = Expando<XmlDocument>('xmlMemo');
+final Expando<JsonDocument> _jsonMemo = Expando<JsonDocument>('jsonMemo');
+
 /// Format parser extensions on [http.Response].
+///
+/// {@category Networking}
 extension HttpToolkitResponse on http.Response {
   /// Executes a computation [action] on this response inside a background [Isolate].
   ///
@@ -48,14 +54,14 @@ extension HttpToolkitResponse on http.Response {
     return (() => action(XmlDocument.parse(rawBody))).isolate();
   }
 
-  /// Parses the response body as HTML.
-  HtmlDocument html() => HtmlDocument.parse(body);
+  /// Parses the response body as HTML (memoized per response instance).
+  HtmlDocument html() => _htmlMemo[this] ??= HtmlDocument.parse(body);
 
-  /// Parses the response body as XML.
-  XmlDocument xml() => XmlDocument.parse(body);
+  /// Parses the response body as XML (memoized per response instance).
+  XmlDocument xml() => _xmlMemo[this] ??= XmlDocument.parse(body);
 
-  /// Parses the response body as JSON.
-  JsonDocument json() => JsonDocument.parse(body);
+  /// Parses the response body as JSON (memoized per response instance).
+  JsonDocument json() => _jsonMemo[this] ??= JsonDocument.parse(body);
 
   /// Direct CSS selector query on the HTML document parsed from this response body.
   List<Element> $(String selector) => html().$(selector);
@@ -68,6 +74,8 @@ extension HttpToolkitResponse on http.Response {
 }
 
 /// Convenience format getters on [http.Client].
+///
+/// {@category Networking}
 extension HttpClientFormatExtensions on http.Client {
   /// Fetches [url] and parses the response body as HTML.
   Future<HtmlDocument> html(Uri url, {Map<String, String>? headers}) async {
@@ -121,6 +129,8 @@ extension HttpClientFormatExtensions on http.Client {
 }
 
 /// Convenience HTTP request, format parsing, and path operators on [Uri].
+///
+/// {@category Networking}
 extension UriHttpExtensions on Uri {
   /// Resolves [subpath] against this URI.
   Uri operator /(String subpath) => resolve(subpath);

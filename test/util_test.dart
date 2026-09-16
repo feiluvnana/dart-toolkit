@@ -29,11 +29,12 @@ void main() {
   });
 
   group('String Extensions', () {
-    test('String.match extracts regex groups using String or RegExp pattern', () {
-      expect('Release version 9.4.2-alpha'.match(r'version ([\d\.]+)', 1), equals('9.4.2'));
-      expect('DISC.05 (Original Soundtrack)'.match(r'DISC\.(\d+)', 1), equals('05'));
+    test('String.match extracts regex groups using RegExp pattern and matches literal strings', () {
+      expect('Release version 9.4.2-alpha'.match(RegExp(r'version ([\d\.]+)'), 1), equals('9.4.2'));
+      expect('DISC.05 (Original Soundtrack)'.match(RegExp(r'DISC\.(\d+)'), 1), equals('05'));
       expect('DISC.05'.match(RegExp(r'DISC\.(\d+)'), 1), equals('05'));
-      expect('No match here'.match(r'DISC\.(\d+)', 1), isNull);
+      expect('No match here'.match(RegExp(r'DISC\.(\d+)'), 1), isNull);
+      expect('exact-match'.match('exact'), equals('exact'));
     });
   });
 }

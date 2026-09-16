@@ -10,11 +10,11 @@ void main(List<String> rawArgs) async {
     ..option('concurrency', abbr: 'j', defaultTo: '4', description: 'Concurrent download workers')
     ..flag('compress', abbr: 'c', description: 'Compress directory after download')
     ..action((ctx) async {
-      onExit(() => Logger.warn('Interrupted.'));
+      final unregisterExit = onExit(() => Logger.warn('Interrupted.'));
 
-      final selectedFormat = ctx.option('format', defaultTo: 'all')!;
+      final selectedFormat = ctx.option('format', defaultTo: 'all') ?? 'all';
       final formats = selectedFormat == 'all' ? const ['mp3', 'flac'] : [selectedFormat];
-      final concurrency = ctx.number('concurrency', defaultTo: 4)!;
+      final concurrency = ctx.number('concurrency', defaultTo: 4) ?? 4;
       final shouldCompress = ctx.flag('compress');
       final totalStages = shouldCompress ? 4 : 3;
 
@@ -30,7 +30,7 @@ void main(List<String> rawArgs) async {
         final doc = await (baseUri / 'key_box.html').isolateHtml((d) => d);
         for (final li in doc.$('.key_cd_track_box ul li')) {
           final title = li.$('.track_disc_title').first.text.path.sanitized();
-          final d = int.parse(title.match(r'DISC\.(\d+)', 1)!);
+          final d = int.parse(title.match(RegExp(r'DISC\.(\d+)'), 1)!);
           discNames[d] = title;
           tracks[d] = {
             for (final line in li.$('.track_disc_text_style1').first.lines)
@@ -41,7 +41,7 @@ void main(List<String> rawArgs) async {
 
         for (final e in doc.$('.key_cd_artworks_box')) {
           final href = e.$('a').first.attr('href')!;
-          if (e.text.match(r'DISC(\d+)', 1) case final dStr?) {
+          if (e.text.match(RegExp(r'DISC(\d+)'), 1) case final dStr?) {
             downloads[base / discNames[int.parse(dStr)]! / href.path.name] = baseUri / href;
           } else if (e.text.contains('ALL')) {
             downloads[base / 'Others/KeyBOX' / href.path.name] = baseUri / href;
@@ -126,24 +126,24 @@ void main(List<String> rawArgs) async {
       Logger.step(2, totalStages, 'Scraping audio tracks and download links');
       var audioTracksCount = 0;
       await Console.spin('Resolving track links from repository...', () async {
-        final audioStream = khinsider.url.scrape<({Path path, Uri url})>((res) async {
-          for (final tr in res.$('#songlist tr')) {
+        final audioStream = khinsider.url.scrape<({Path path, Uri url})>((ctx) async {
+          for (final tr in ctx.response.$('#songlist tr')) {
             final tds = tr.$('td');
             if (tds.length < 4) continue;
             final href = tds[3].$('a').first.attr('href')!;
-            final d = int.parse(href.match(r'\/(\d+)-', 1) ?? tds[1].text.replaceAll(RegExp(r'\D'), ''));
-            final t = int.parse(href.match(r'-(\d+)\.', 1) ?? tds[2].text.replaceAll(RegExp(r'\D'), ''));
+            final d = int.parse(href.match(RegExp(r'/(\d+)-'), 1) ?? tds[1].text.replaceAll(RegExp(r'\D'), ''));
+            final t = int.parse(href.match(RegExp(r'-(\d+)\.'), 1) ?? tds[2].text.replaceAll(RegExp(r'\D'), ''));
             final disc = discNames[d]!;
             final title = (tracks[d]?[t] ?? tds[3].text).path.sanitized();
 
             for (final ext in formats) {
               final target = base / disc / ext / '$t. $title.$ext';
-              if (!target.existSync()) {
-                res.follow(
+              if (!target.existsSync()) {
+                ctx.follow(
                   href,
-                  callback: (songRes) {
-                    final dlHref = songRes.$('a[href*=".$ext"]').first.attr('href')!;
-                    return (path: target, url: (songRes.url ?? khinsider.url).resolve(dlHref));
+                  callback: (songCtx) {
+                    final dlHref = songCtx.response.$('a[href*=".$ext"]').first.attr('href')!;
+                    songCtx.emit((path: target, url: (songCtx.response.url ?? khinsider.url).resolve(dlHref)));
                   },
                 );
               }
@@ -184,7 +184,7 @@ void main(List<String> rawArgs) async {
       );
 
       Logger.ok('Completed successfully.');
-      onExit(null);
+      unregisterExit();
     });
 
   await cli.run(rawArgs);

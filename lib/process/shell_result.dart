@@ -1,6 +1,8 @@
 import 'dart:convert';
 
 /// The result of executing a system command.
+///
+/// {@category System}
 class ShellResult {
   /// The command string that was executed.
   final String command;
@@ -18,10 +20,10 @@ class ShellResult {
   bool get ok => exitcode == 0;
 
   /// Whether the process failed with a non-zero exit code.
-  bool get failed => !ok;
+  bool get isFailed => exitcode != 0;
 
-  /// Shorthand alias for [failed].
-  bool get isFailed => failed;
+  /// Shorthand alias for [isFailed].
+  bool get failed => isFailed;
 
   /// Concise trimmed stdout text.
   String get text => stdout.trim();
@@ -40,6 +42,8 @@ class ShellResult {
 }
 
 /// Exception thrown when a command fails and `throwOnError` is enabled.
+///
+/// {@category System}
 class ShellException implements Exception {
   final ShellResult result;
 

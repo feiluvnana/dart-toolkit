@@ -1,14 +1,56 @@
+import 'dart:io';
+
+/// Controller for ANSI escape codes and terminal color output.
+///
+/// Automatically disabled when `NO_COLOR` environment variable is set or when stdout does not support ANSI escapes.
+///
+/// {@category Terminal}
+class Ansi {
+  static bool? _override;
+
+  /// Global regex pattern for matching ANSI escape sequences.
+  static final RegExp escapePattern = RegExp(r'\x1B\[[0-?]*[ -/]*[@-~]');
+
+  /// Whether ANSI styling is enabled.
+  static bool get enabled {
+    if (_override != null) return _override!;
+    if (Platform.environment.containsKey('NO_COLOR') && Platform.environment['NO_COLOR']!.isNotEmpty) {
+      return false;
+    }
+    try {
+      return stdout.supportsAnsiEscapes;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Manually override ANSI styling state.
+  static set enabled(bool? value) {
+    _override = value;
+  }
+
+  /// Strips all ANSI escape sequences from [text].
+  static String strip(String text) => text.replaceAll(escapePattern, '');
+}
+
 /// ANSI terminal styling extensions on [String].
+///
+/// {@category Terminal}
 extension AnsiString on String {
-  String get red => '\x1B[31m$this\x1B[0m';
-  String get green => '\x1B[32m$this\x1B[0m';
-  String get yellow => '\x1B[33m$this\x1B[0m';
-  String get blue => '\x1B[34m$this\x1B[0m';
-  String get magenta => '\x1B[35m$this\x1B[0m';
-  String get cyan => '\x1B[36m$this\x1B[0m';
-  String get grey => '\x1B[90m$this\x1B[0m';
-  String get bold => '\x1B[1m$this\x1B[0m';
-  String get dim => '\x1B[2m$this\x1B[0m';
-  String get italic => '\x1B[3m$this\x1B[0m';
-  String get underline => '\x1B[4m$this\x1B[0m';
+  String _wrap(String code) => Ansi.enabled ? '\x1B[${code}m$this\x1B[0m' : this;
+
+  String get red => _wrap('31');
+  String get green => _wrap('32');
+  String get yellow => _wrap('33');
+  String get blue => _wrap('34');
+  String get magenta => _wrap('35');
+  String get cyan => _wrap('36');
+  String get grey => _wrap('90');
+  String get bold => _wrap('1');
+  String get dim => _wrap('2');
+  String get italic => _wrap('3');
+  String get underline => _wrap('4');
+
+  /// Returns this string with all ANSI escape codes stripped.
+  String get stripped => Ansi.strip(this);
 }

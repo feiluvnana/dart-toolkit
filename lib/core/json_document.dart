@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'src/jsonpath.dart';
 
 /// A parsed JSON document with JSONPath selector, indexing, and serialization support.
+///
+/// {@category Formats}
 class JsonDocument {
   /// The underlying raw JSON value (Map, List, or primitive).
   final Object? raw;
@@ -43,23 +45,25 @@ class JsonDocument {
       raw is Map ? (raw as Map).map((k, v) => MapEntry('$k', JsonDocument(v))) : const {};
 
   /// Converts or casts [raw] to type [T], or returns `null`.
+  /// Supports both non-nullable and nullable type arguments (e.g. `to<int>()`, `to<int?>()`).
   T? to<T>() {
     final val = raw;
     if (val == null) return null;
     if (val is T) return val as T;
-    if (T == String) return val.toString() as T;
-    if (T == int) {
+    if (<String>[] is List<T>) return val.toString() as T;
+    if (<int>[] is List<T>) {
       if (val is num) return val.toInt() as T;
       return int.tryParse('$val') as T?;
     }
-    if (T == double) {
+    if (<double>[] is List<T>) {
       if (val is num) return val.toDouble() as T;
       return double.tryParse('$val') as T?;
     }
-    if (T == num) {
+    if (<num>[] is List<T>) {
+      if (val is num) return val as T;
       return num.tryParse('$val') as T?;
     }
-    if (T == bool) {
+    if (<bool>[] is List<T>) {
       if (val == 'true' || val == 1) return true as T;
       if (val == 'false' || val == 0) return false as T;
     }

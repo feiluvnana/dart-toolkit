@@ -6,7 +6,7 @@ import 'package:xml/xml.dart' as xml_dom;
 
 void main() {
   group('HTTP Extension & Crawler', () {
-    test('res.html() parses HTML with CSS and XPath selectors', () {
+    test('res.html() parses HTML with CSS and XPath selectors and memoizes parsed doc', () {
       final res = http.Response('''
         <!DOCTYPE html>
         <html>
@@ -23,6 +23,7 @@ void main() {
 
       final html = res.html();
       expect(html, isA<HtmlDocument>());
+      expect(identical(res.html(), html), isTrue); // Memoized per response instance
       expect(html.document.querySelector('h1')?.text, equals('Heading 1'));
 
       // CSS selector query
@@ -37,6 +38,9 @@ void main() {
       final xpathItems = html.$xpath('//ul/li');
       expect(xpathItems.length, equals(2));
       expect(xpathItems.map((e) => e.text).toList(), equals(['Item 1', 'Item 2']));
+
+      // XPath throws on invalid syntax
+      expect(() => html.$xpath('//[['), throwsException);
     });
 
     test('res.xml() parses XML with XPath selector', () {
@@ -55,6 +59,7 @@ void main() {
 
       final xml = res.xml();
       expect(xml, isA<XmlDocument>());
+      expect(identical(res.xml(), xml), isTrue);
       expect(xml.raw.rootElement.name.local, equals('bookstore'));
 
       // XPath selector query
@@ -67,7 +72,7 @@ void main() {
       expect((learningTitles.first as xml_dom.XmlElement).innerText, equals('Learning XML'));
     });
 
-    test('res.json() parses JSON with JSONPath selector', () {
+    test('res.json() parses JSON with JSONPath selector and memoizes parsed doc', () {
       final res = http.Response('''
         {
           "store": {
@@ -95,6 +100,7 @@ void main() {
 
       final json = res.json();
       expect(json, isA<JsonDocument>());
+      expect(identical(res.json(), json), isTrue);
       expect(json.raw, isA<Map<String, dynamic>>());
 
       // JSONPath selector query
@@ -110,25 +116,29 @@ void main() {
       expect(allPrices.length, equals(3));
       expect(allPrices.map((d) => d.raw).toList(), equals([8.95, 12.99, 19.95]));
 
-      // Index operator & unified to<T>() method
+      // Index operator & unified to<T>() method with nullable type arguments
       expect(json['store']['bicycle']['color'].to<String>(), equals('red'));
       expect(json['store']['bicycle']['price'].to<double>(), equals(19.95));
+      expect(json['store']['bicycle']['price'].to<double?>(), equals(19.95));
       expect(json['store']['bicycle']['price'].to<num>(), equals(19.95));
+      expect(json['store']['bicycle']['price'].to<int?>(), equals(19));
       expect(json['store']['book'][0]['author'].to<String>(), equals('Nigel Rees'));
       expect(json['store']['book'].list.length, equals(2));
       expect(json['store']['book'].to<List<dynamic>>()?.length, equals(2));
       expect(json['store']['nonexistent'].isNull, isTrue);
+      expect(json['store']['nonexistent'].to<int?>(), isNull);
       expect(json['store']['bicycle'].to<Map<String, dynamic>>()?['color'], equals('red'));
 
       // Primitive coercion in to<T>()
       final primitiveDoc = JsonDocument.parse('{"numStr": "123", "boolStr": "true", "intNum": 42}');
       expect(primitiveDoc['numStr'].to<int>(), equals(123));
+      expect(primitiveDoc['numStr'].to<int?>(), equals(123));
       expect(primitiveDoc['boolStr'].to<bool>(), isTrue);
       expect(primitiveDoc['intNum'].to<String>(), equals('42'));
       expect(primitiveDoc['intNum'].to<double>(), equals(42.0));
     });
 
-    test('scrape pipeline follows links, handles relative URLs, callbacks, and meta', () async {
+    test('scrape pipeline follows links, handles relative URLs, typed ScrapeContext callbacks, and meta', () async {
       final client = MockClient((request) async {
         final path = request.url.path;
         if (path == '/index') {
@@ -147,22 +157,22 @@ void main() {
         return http.Response('Not Found', 404);
       });
 
-      final items = await 'https://example.com/index'.url.scrape<Map<String, dynamic>>((res) {
-        expect(res, isA<http.Response>());
-        final category = res.$('h1').firstOrNull?.text;
+      final items = await 'https://example.com/index'.url.scrape<Map<String, dynamic>>((ctx) {
+        expect(ctx, isA<ScrapeContext<Map<String, dynamic>>>());
+        final category = ctx.response.$('h1').firstOrNull?.text;
 
-        for (final a in res.$('a')) {
+        for (final a in ctx.response.$('a')) {
           final href = a.attr('href');
           if (href != null) {
-            res.follow(
-              href, // relative URL 'product/1' -> resolved to 'https://example.com/product/1'
+            ctx.follow(
+              href,
               meta: {'category': category, 'label': a.text},
-              callback: (detailRes) {
-                expect(detailRes, isA<http.Response>());
-                final json = detailRes.json();
-                detailRes.emit({
-                  'category': detailRes.meta['category'],
-                  'label': detailRes.meta['label'],
+              callback: (detailCtx) {
+                expect(detailCtx, isA<ScrapeContext<Map<String, dynamic>>>());
+                final json = detailCtx.response.json();
+                detailCtx.emit({
+                  'category': detailCtx.meta['category'],
+                  'label': detailCtx.meta['label'],
                   'name': json.$jsonpath(r'$.name').firstOrNull?.raw,
                   'price': json.$jsonpath(r'$.price').firstOrNull?.raw,
                 });
@@ -176,32 +186,46 @@ void main() {
       expect(items.first, equals({'category': 'Catalog', 'label': 'Product 1', 'name': 'Widget', 'price': 49.99}));
     });
 
-    test('scrape accepts http.Request seeds directly', () async {
+    test('scrape accepts http.Request seeds directly and handles dedupe properly', () async {
+      var requestCount = 0;
       final client = MockClient((request) async {
-        expect(request.headers['x-custom'], equals('test-header'));
+        requestCount++;
+        if (request.method == 'POST') {
+          return http.Response('{"ok": true, "body": "${request.body}"}', 200);
+        }
         return http.Response('{"ok": true}', 200, headers: {'content-type': 'application/json'});
       });
 
-      final req = http.Request('GET', Uri.parse('https://example.com/api'))..headers['x-custom'] = 'test-header';
+      final req1 = http.Request('POST', Uri.parse('https://example.com/api'))..body = 'body1';
+      final req2 = http.Request('POST', Uri.parse('https://example.com/api'))..body = 'body2';
 
-      final results = await req.scrape<bool>((res) {
-        expect(res, isA<http.Response>());
-        res.emit(res.json().$jsonpath(r'$.ok').firstOrNull?.raw == true);
+      final results = await [req1, req2].scrape<String>((ctx) {
+        ctx.emit(ctx.response.json()['body'].to<String>() ?? '');
       }, client: client).toList();
 
-      expect(results, equals([true]));
+      // Two POST requests with different bodies must both execute and not be falsely deduped
+      expect(results, equals(['body1', 'body2']));
+      expect(requestCount, equals(2));
     });
 
-    test('scrape supports returning items or iterables directly from callback', () async {
+    test('scrape supports CancellationToken to abort gracefully', () async {
       final client = MockClient((request) async {
-        return http.Response('<html><body><h1>Hello Scraper</h1></body></html>', 200);
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        return http.Response('{"ok": true}', 200);
       });
 
-      final results = await 'https://example.com'.url
-          .scrape<String>((res) => res.$('h1').firstOrNull?.text, client: client)
-          .toList();
+      final cancelToken = CancellationToken();
+      final stream = 'https://example.com/items'.url.scrape<String>(
+        (ctx) {
+          ctx.emit('item');
+        },
+        client: client,
+        cancelToken: cancelToken,
+      );
 
-      expect(results, equals(['Hello Scraper']));
+      Future.microtask(() => cancelToken.cancel('User requested stop'));
+      final items = await stream.toList();
+      expect(items.isEmpty, isTrue);
     });
 
     test('res.isolate() runs parsing and extraction on background isolate', () async {
@@ -243,7 +267,6 @@ void main() {
       final xmlVal = await xmlRes.isolateXml((xml) => xml.$xpath('//item').firstOrNull?.innerText);
       expect(xmlVal, equals('Hello'));
 
-      // Uri isolate methods
       final mockClient = MockClient((req) async {
         if (req.url.path == '/api/item') {
           return http.Response('{"id": 99, "title": "Toolkit"}', 200);

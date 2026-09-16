@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 import 'package:xml/xml.dart' as xml_dom;
 
@@ -78,8 +79,8 @@ void main() {
       final jsonFile = root / 'data.json';
 
       final doc = await jsonFile.writeJson({'title': 'KeyBOX', 'discs': 50});
-      expect(doc, isA<JsonDocument>());
-      expect(doc.raw, equals({'title': 'KeyBOX', 'discs': 50}));
+      expect(doc, isA<File>());
+      expect(doc.existsSync(), isTrue);
 
       final readDoc = await jsonFile.readJson();
       expect(readDoc.raw, equals({'title': 'KeyBOX', 'discs': 50}));
@@ -330,5 +331,53 @@ void main() {
         expect(unzipDir.filesSync(recursive: true).isNotEmpty, isTrue);
       },
     );
+
+    test('atomic download handles short read, cleans up partials and prevents sticky failure', () async {
+      final client = MockClient.streaming((request, bodyStream) async {
+        // Advertises 1000 bytes but sends only 10 bytes
+        return http.StreamedResponse(
+          Stream.value(List<int>.filled(10, 65)),
+          200,
+          contentLength: 1000,
+          headers: {'content-length': '1000'},
+        );
+      });
+
+      final base = Path(tempDir.path) / 'atomic_dl_test';
+      final target = base / 'truncated.dat';
+
+      final progressEvents = await target.download('https://example.com/truncated.dat'.url, client: client).toList();
+      final last = progressEvents.last;
+      expect(last.isFailed, isTrue);
+      expect(last.isDone, isTrue);
+
+      // Target file must NOT exist on disk
+      expect(await target.exists(), isFalse);
+      // Partial file must NOT be left on disk
+      expect(File('${target.path}.part').existsSync(), isFalse);
+
+      // Subsequent download attempt is not falsely skipped
+      final reattempt = await target.download('https://example.com/truncated.dat'.url, client: client).toList();
+      expect(reattempt.first.isSkipped, isFalse);
+    });
+
+    test('glob supports caseSensitive parameter and platform defaults', () {
+      final base = Path(tempDir.path) / 'glob_case_test';
+      base.mkdirSync();
+      (base / 'song.mp3').writeTextSync('data');
+
+      // Case insensitive match
+      expect(base.globSync('*.MP3', caseSensitive: false).length, equals(1));
+      // Case sensitive match
+      expect(base.globSync('*.MP3', caseSensitive: true).isEmpty, equals(true));
+      expect(base.globSync('*.mp3', caseSensitive: true).length, equals(1));
+    });
+
+    test('Path normalization and equality', () {
+      final p1 = Path('a/b/c');
+      final p2 = Path('a/b/../b/c');
+      expect(p1.normalized, equals(p2.normalized));
+      expect(Path.normalize('a/./b//c').path, equals(p.normalize('a/./b//c')));
+    });
   });
 }

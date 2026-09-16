@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:rxdart/rxdart.dart';
 
 /// Clean stream operator extensions powered by RxDart.
+///
+/// {@category Concurrency}
 extension ToolkitStreamExtensions<T> on Stream<T> {
   /// Batches stream items into lists of [size] elements (mirrors `Iterable.chunk`).
   Stream<List<T>> chunk(int size) => bufferCount(size);
@@ -25,6 +27,8 @@ extension ToolkitStreamExtensions<T> on Stream<T> {
 }
 
 /// Nullability filter extensions on streams of nullable items.
+///
+/// {@category Concurrency}
 extension ToolkitNullableStreamExtensions<T extends Object> on Stream<T?> {
   /// Filters out all null values, returning a non-nullable `Stream<T>`.
   Stream<T> notnull() => whereNotNull();

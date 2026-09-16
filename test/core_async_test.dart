@@ -359,5 +359,99 @@ void main() {
       expect(seen.length, equals(3));
       expect(seen.toSet(), equals({1, 2, 3}));
     });
+
+    test('parallelMap with CancellationToken cancels in-flight work', () async {
+      final token = CancellationToken();
+      final items = [1, 2, 3, 4, 5];
+      Future.delayed(15.ms, () => token.cancel('cancelled by user'));
+
+      await expectLater(
+        items.parallelMap((n) async {
+          await Future<void>.delayed(50.ms);
+          return n;
+        }, cancelToken: token),
+        throwsA(isA<CancellationException>()),
+      );
+    });
+  });
+
+  group('JsonPath & String Pattern Evaluation', () {
+    test('JsonPath parses and evaluates objects, arrays, and wildcards', () {
+      final doc = {
+        'items': [
+          {'id': 1, 'name': 'Item 1'},
+          {'id': 2, 'name': 'Item 2'},
+        ],
+      };
+      final jsonDoc = JsonDocument(doc);
+      final names = jsonDoc.$jsonpath(r'$.items[*].name').map((d) => d.raw).toList();
+      expect(names, equals(['Item 1', 'Item 2']));
+    });
+
+    test('JsonPath throws on unsupported slice and filter expressions', () {
+      final jsonDoc = JsonDocument([1, 2, 3, 4, 5]);
+      // Slices must throw UnsupportedError
+      expect(() => jsonDoc.$jsonpath(r'$.a[1:3]'), throwsA(isA<UnsupportedError>()));
+      // Filters must throw UnsupportedError
+      expect(() => jsonDoc.$jsonpath(r'$.a[?(@.v > 20)]'), throwsA(isA<UnsupportedError>()));
+      // Invalid unclosed brackets
+      expect(() => jsonDoc.$jsonpath(r'$.a[unclosed'), throwsA(isA<FormatException>()));
+    });
+
+    test('String.match handles plain strings and RegExps without regex coercion', () {
+      // Plain string with dot
+      expect('axb'.match('a.b'), isNull);
+      expect('a.b'.match('a.b'), equals('a.b'));
+
+      // RegExp pattern
+      expect('axb'.match(RegExp(r'a.b')), equals('axb'));
+      expect('track-01.mp3'.match(RegExp(r'track-(\d+)'), 1), equals('01'));
+    });
+  });
+
+  group('Either Subtype Equality & Typed Guards', () {
+    test('Either == works across compatible subtype parameters', () {
+      const leftObj = Left<Object, int>('err');
+      const leftStr = Left<String, num>('err');
+      expect(leftObj == leftStr, isTrue);
+
+      const rightObj = Right<Object, int>(42);
+      const rightNum = Right<String, num>(42);
+      expect(rightObj == rightNum, isTrue);
+    });
+
+    test('Either.tryCatch with typed error parameter', () {
+      final outcome = Either.tryCatch<FormatException, int>(() => int.parse('not_a_num'));
+      expect(outcome.isLeft, isTrue);
+      expect(outcome.leftOrNull, isA<FormatException>());
+    });
+  });
+
+  group('RetryBuilder Robustness', () {
+    test('RetryBuilder throws StateError if mutated after execution started', () async {
+      final builder = RetryBuilder(() async => 42);
+      final future = builder.run();
+      expect(await future, equals(42));
+      expect(() => builder.attempts(5), throwsA(isA<StateError>()));
+    });
+
+    test('RetryBuilder respects maxDelay cap', () async {
+      var attemptCount = 0;
+
+      await retry(
+        () {
+          attemptCount++;
+          if (attemptCount < 3) throw StateError('retry me');
+          return true;
+        },
+        attempts: 4,
+        delay: 50.ms,
+        maxDelay: 60.ms,
+        backoff: 3.0,
+        jitter: false,
+      );
+
+      expect(attemptCount, equals(3));
+    });
   });
 }

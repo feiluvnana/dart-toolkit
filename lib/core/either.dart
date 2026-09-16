@@ -1,6 +1,8 @@
 import 'dart:async';
 
 /// A type-safe disjoint union representing either a failure [Left] or a success [Right].
+///
+/// {@category Formats}
 sealed class Either<L, R> {
   const Either();
 
@@ -57,9 +59,47 @@ sealed class Either<L, R> {
       return Left(error);
     }
   }
+
+  /// Evaluates [action] synchronously with typed error capturing.
+  static Either<E, T> tryCatch<E extends Object, T>(
+    T Function() action, {
+    E Function(Object error, StackTrace stackTrace)? onError,
+  }) {
+    try {
+      return Right(action());
+    } catch (error, stackTrace) {
+      if (onError != null) {
+        return Left(onError(error, stackTrace));
+      }
+      if (error is E) {
+        return Left(error);
+      }
+      return Left(error as E);
+    }
+  }
+
+  /// Evaluates [action] asynchronously with typed error capturing.
+  static Future<Either<E, T>> tryCatchAsync<E extends Object, T>(
+    FutureOr<T> Function() action, {
+    E Function(Object error, StackTrace stackTrace)? onError,
+  }) async {
+    try {
+      return Right(await action());
+    } catch (error, stackTrace) {
+      if (onError != null) {
+        return Left(onError(error, stackTrace));
+      }
+      if (error is E) {
+        return Left(error);
+      }
+      return Left(error as E);
+    }
+  }
 }
 
 /// The failure / left branch of [Either].
+///
+/// {@category Formats}
 final class Left<L, R> extends Either<L, R> {
   /// The underlying left value.
   final L value;
@@ -68,7 +108,7 @@ final class Left<L, R> extends Either<L, R> {
   const Left(this.value);
 
   @override
-  bool operator ==(Object other) => identical(this, other) || (other is Left<L, R> && other.value == value);
+  bool operator ==(Object other) => identical(this, other) || (other is Left && other.value == value);
 
   @override
   int get hashCode => value.hashCode;
@@ -78,6 +118,8 @@ final class Left<L, R> extends Either<L, R> {
 }
 
 /// The success / right branch of [Either].
+///
+/// {@category Formats}
 final class Right<L, R> extends Either<L, R> {
   /// The underlying right value.
   final R value;
@@ -86,7 +128,7 @@ final class Right<L, R> extends Either<L, R> {
   const Right(this.value);
 
   @override
-  bool operator ==(Object other) => identical(this, other) || (other is Right<L, R> && other.value == value);
+  bool operator ==(Object other) => identical(this, other) || (other is Right && other.value == value);
 
   @override
   int get hashCode => value.hashCode;

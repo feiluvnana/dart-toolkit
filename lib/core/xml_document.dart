@@ -2,6 +2,8 @@ import 'package:xml/xml.dart' as xml;
 import 'package:xml/xpath.dart';
 
 /// A parsed XML document with XPath selector support.
+///
+/// {@category Formats}
 class XmlDocument {
   /// The underlying parsed XML document.
   final xml.XmlDocument raw;

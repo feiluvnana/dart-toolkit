@@ -78,7 +78,9 @@ class JsonPath {
 
       if (text[i] == '[') {
         final close = text.indexOf(']', i);
-        if (close == -1) break;
+        if (close == -1) {
+          throw FormatException('Unclosed bracket in JSONPath expression: $expression');
+        }
         final inside = text.substring(i + 1, close).trim();
         i = close + 1;
 
@@ -86,12 +88,16 @@ class JsonPath {
           steps.add(const _Wild());
         } else if (int.tryParse(inside) case final idx?) {
           steps.add(_Index(idx));
-        } else {
-          final clean =
-              (inside.startsWith("'") && inside.endsWith("'")) || (inside.startsWith('"') && inside.endsWith('"'))
-              ? inside.substring(1, inside.length - 1)
-              : inside;
+        } else if (inside.contains(':')) {
+          throw UnsupportedError('JSONPath array slice syntax "[$inside]" is not supported');
+        } else if (inside.startsWith('?') || inside.startsWith('(')) {
+          throw UnsupportedError('JSONPath filter expressions "[$inside]" are not supported');
+        } else if ((inside.startsWith("'") && inside.endsWith("'")) ||
+            (inside.startsWith('"') && inside.endsWith('"'))) {
+          final clean = inside.substring(1, inside.length - 1);
           steps.add(_Child(clean));
+        } else {
+          throw FormatException('Invalid JSONPath bracket expression: [$inside]');
         }
         continue;
       }
