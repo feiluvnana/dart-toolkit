@@ -27,20 +27,29 @@ void main(List<String> rawArgs) async {
       await Console.spin('Scraping official album metadata and artworks...', () async {
         final doc = await (baseUri / 'key_box.html').isolateHtml((d) => d);
         for (final li in doc.$('.key_cd_track_box ul li')) {
-          final title = li.$('.track_disc_title').first.text.path.sanitized();
-          final d = int.parse(title.match(r'DISC\.(\d+)', 1)!);
+          final discTitleElem = li.$('.track_disc_title').firstOrNull;
+          if (discTitleElem == null) continue;
+          final title = discTitleElem.text.path.sanitized();
+          final discNumStr = title.match(r'DISC\.(\d+)', 1) ?? title.replaceAll(RegExp(r'\D'), '');
+          final d = int.tryParse(discNumStr);
+          if (d == null) continue;
           discNames[d] = title;
-          tracks[d] = {
-            for (final line in li.$('.track_disc_text_style1').first.lines)
-              if (RegExp(r'^(\d+)\.(.*)$').firstMatch(line) case final m?)
-                int.parse(m[1]!): (d == 22 && m[1] == '13') ? '小さなてのひら' : m[2]!.trim(),
-          };
+          final textStyleElem = li.$('.track_disc_text_style1').firstOrNull;
+          if (textStyleElem != null) {
+            tracks[d] = {
+              for (final line in textStyleElem.lines)
+                if (RegExp(r'^(\d+)\.(.*)$').firstMatch(line) case final m?)
+                  int.parse(m[1]!): (d == 22 && m[1] == '13') ? '小さなてのひら' : m[2]!.trim(),
+            };
+          }
         }
 
         for (final e in doc.$('.key_cd_artworks_box')) {
-          final d = int.parse(e.text.replaceAll(RegExp(r'\D'), ''));
-          final href = e.$('a').first.attr('href')!;
-          downloads[base / discNames[d]! / href.path.name] = baseUri / href;
+          final d = int.tryParse(e.text.replaceAll(RegExp(r'\D'), ''));
+          final href = e.$('a').firstOrNull?.attr('href');
+          if (d != null && href != null && discNames.containsKey(d)) {
+            downloads[base / discNames[d]! / href.path.name] = baseUri / href;
+          }
         }
 
         downloads.addAll({

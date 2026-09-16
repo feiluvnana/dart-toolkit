@@ -5,7 +5,8 @@ extension StringCoreExtensions on String {
 
   /// Extracts the first match of [pattern] at [group], or `null`.
   String? match(Pattern pattern, [int group = 0]) {
-    final match = pattern.allMatches(this).firstOrNull;
-    return match?.group(group);
+    final regExp = pattern is RegExp ? pattern : RegExp(pattern.toString());
+    final m = regExp.firstMatch(this);
+    return (m != null && group <= m.groupCount) ? m.group(group) : null;
   }
 }
