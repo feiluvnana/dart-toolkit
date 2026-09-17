@@ -150,114 +150,95 @@ _RequestKey _makeRequestKey(http.BaseRequest req) {
   return (req.method.toUpperCase(), req.url, bodyHash);
 }
 
-/// Convenience scrape extensions on URI objects.
+/// Scrape entry points.
+///
+/// All four forward to one engine; the defaults live there so a change to
+/// `concurrency` is a one-line edit rather than five.
 ///
 /// {@category Crawling}
-extension ScrapeUriExtension on Uri {
-  /// Scrapes this URI with a type-safe Scrapy-style response handler.
+extension UriScrapeExtensions on Uri {
+  /// Scrapes this URL with a type-safe Scrapy-style response handler.
+  ///
+  /// ```dart
+  /// await for (final item in url.scrape<Item>((ctx) {
+  ///   ctx.emit(parse(ctx.response));
+  ///   ctx.followAll(ctx.response.html().$('a.next').map((a) => a.attr('href')!));
+  /// })) { ... }
+  /// ```
   Stream<T> scrape<T>(
     ScrapeHandler<T> parse, {
-    int concurrency = 4,
+    int? concurrency,
     Duration? delay,
     http.Client? client,
-    int maxRetries = 2,
+    int? maxRetries,
     CancellationToken? cancelToken,
-  }) => _scrape<T>(
-    this,
+  }) => _scrape([http.Request('GET', this)], parse, concurrency, delay, client, maxRetries, cancelToken);
+}
+
+/// {@category Crawling}
+extension IterableUriScrapeExtensions on Iterable<Uri> {
+  /// Scrapes these URLs with a type-safe Scrapy-style response handler.
+  Stream<T> scrape<T>(
+    ScrapeHandler<T> parse, {
+    int? concurrency,
+    Duration? delay,
+    http.Client? client,
+    int? maxRetries,
+    CancellationToken? cancelToken,
+  }) => _scrape(
+    [for (final url in this) http.Request('GET', url)],
     parse,
-    concurrency: concurrency,
-    delay: delay,
-    client: client,
-    maxRetries: maxRetries,
-    cancelToken: cancelToken,
+    concurrency,
+    delay,
+    client,
+    maxRetries,
+    cancelToken,
   );
 }
 
-/// Convenience scrape extensions on iterables of URIs.
-///
 /// {@category Crawling}
-extension ScrapeIterableUriExtension on Iterable<Uri> {
-  /// Scrapes this collection of URIs with a type-safe Scrapy-style response handler.
-  Stream<T> scrape<T>(
-    ScrapeHandler<T> parse, {
-    int concurrency = 4,
-    Duration? delay,
-    http.Client? client,
-    int maxRetries = 2,
-    CancellationToken? cancelToken,
-  }) => _scrape<T>(
-    this,
-    parse,
-    concurrency: concurrency,
-    delay: delay,
-    client: client,
-    maxRetries: maxRetries,
-    cancelToken: cancelToken,
-  );
-}
-
-/// Convenience scrape extensions on [http.BaseRequest] objects.
-///
-/// {@category Crawling}
-extension ScrapeBaseRequestExtension on http.BaseRequest {
+extension RequestScrapeExtensions on http.BaseRequest {
   /// Scrapes this request with a type-safe Scrapy-style response handler.
   Stream<T> scrape<T>(
     ScrapeHandler<T> parse, {
-    int concurrency = 4,
+    int? concurrency,
     Duration? delay,
     http.Client? client,
-    int maxRetries = 2,
+    int? maxRetries,
     CancellationToken? cancelToken,
-  }) => _scrape<T>(
-    this,
-    parse,
-    concurrency: concurrency,
-    delay: delay,
-    client: client,
-    maxRetries: maxRetries,
-    cancelToken: cancelToken,
-  );
+  }) => _scrape([this], parse, concurrency, delay, client, maxRetries, cancelToken);
 }
 
-/// Convenience scrape extensions on iterables of [http.BaseRequest] objects.
-///
 /// {@category Crawling}
-extension ScrapeIterableBaseRequestExtension on Iterable<http.BaseRequest> {
-  /// Scrapes this collection of requests with a type-safe Scrapy-style response handler.
+extension IterableRequestScrapeExtensions on Iterable<http.BaseRequest> {
+  /// Scrapes these requests with a type-safe Scrapy-style response handler.
   Stream<T> scrape<T>(
     ScrapeHandler<T> parse, {
-    int concurrency = 4,
+    int? concurrency,
     Duration? delay,
     http.Client? client,
-    int maxRetries = 2,
+    int? maxRetries,
     CancellationToken? cancelToken,
-  }) => _scrape<T>(
-    this,
-    parse,
-    concurrency: concurrency,
-    delay: delay,
-    client: client,
-    maxRetries: maxRetries,
-    cancelToken: cancelToken,
-  );
+  }) => _scrape(this, parse, concurrency, delay, client, maxRetries, cancelToken);
 }
 
 /// Internal functional scraping engine using standard `package:http`.
 Stream<T> _scrape<T>(
-  Object seeds,
-  ScrapeHandler<T> parse, {
-  int concurrency = 4,
+  Iterable<http.BaseRequest> seeds,
+  ScrapeHandler<T> parse,
+  int? concurrency,
   Duration? delay,
   http.Client? client,
-  int maxRetries = 2,
+  int? maxRetries,
   CancellationToken? cancelToken,
-}) {
+) {
+  final limit = (concurrency ?? 4) > 0 ? (concurrency ?? 4) : 1;
+  final retries = maxRetries ?? 2;
   late final StreamController<T> controller;
   final httpClient = client ?? http.Client();
   final visited = <_RequestKey>{};
   final queue = Queue<http.BaseRequest>();
   final active = <Future<void>>{};
-  final limit = concurrency > 0 ? concurrency : 1;
   var isStopped = false;
 
   void enqueue(http.BaseRequest req) {
@@ -267,33 +248,8 @@ Stream<T> _scrape<T>(
     queue.add(req);
   }
 
-  http.BaseRequest? toRequest(Object seed) {
-    if (seed is http.BaseRequest) {
-      return seed;
-    } else if (seed is Uri) {
-      return http.Request('GET', seed);
-    } else if (seed is String) {
-      final parsed = Uri.tryParse(seed);
-      if (parsed != null) return http.Request('GET', parsed);
-    }
-    return null;
-  }
-
-  if (seeds is Iterable<Object>) {
-    for (final s in seeds) {
-      final req = toRequest(s);
-      if (req != null) enqueue(req);
-    }
-  } else if (seeds is Iterable) {
-    for (final dynamic s in seeds) {
-      if (s is Object) {
-        final req = toRequest(s);
-        if (req != null) enqueue(req);
-      }
-    }
-  } else {
-    final req = toRequest(seeds);
-    if (req != null) enqueue(req);
+  for (final seed in seeds) {
+    enqueue(seed);
   }
 
   void schedule() {
@@ -312,7 +268,7 @@ Stream<T> _scrape<T>(
 
           http.Response? rawRes;
           var attempts = 0;
-          while (attempts <= maxRetries &&
+          while (attempts <= retries &&
               rawRes == null &&
               !isStopped &&
               (cancelToken == null || !cancelToken.isCancelled)) {
@@ -321,7 +277,7 @@ Stream<T> _scrape<T>(
               rawRes = await http.Response.fromStream(streamed);
             } catch (err) {
               attempts++;
-              if (attempts > maxRetries) rethrow;
+              if (attempts > retries) rethrow;
               await Future<void>.delayed((200 * attempts).ms);
             }
           }

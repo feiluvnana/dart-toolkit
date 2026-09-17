@@ -2,7 +2,7 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 
 void main(List<String> args) async {
   final cli = Cli(name: 'deployer', description: 'Sample Deployment Tool')
-    ..option('env', abbr: 'e', defaultTo: 'production', choices: ['dev', 'staging', 'production'])
+    ..choice('env', ['dev', 'staging', 'production'], abbr: 'e', defaultTo: 'production')
     ..number('workers', abbr: 'w', defaultTo: 4)
     ..flag('dry-run', abbr: 'd', description: 'Simulate without executing')
     ..action((ctx) async {

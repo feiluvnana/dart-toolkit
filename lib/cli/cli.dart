@@ -1,7 +1,7 @@
 import 'dart:async';
 
-import 'ansi.dart';
 import '../util/stdio.dart';
+import 'ansi.dart';
 
 export 'ansi.dart';
 export 'console.dart';
@@ -12,61 +12,116 @@ export 'prompt.dart';
 /// Callback action executed when a CLI command is triggered.
 typedef CommandHandler = FutureOr<void> Function(CliContext ctx);
 
-/// Represents a parsed option definition for a command.
+/// An option declared on a [CliCommand].
+///
+/// The four kinds are mutually exclusive, so an option cannot be both a flag
+/// and numeric.
 ///
 /// {@category CLI}
-class CliOption {
+sealed class CliOption {
+  /// The long name, used as `--name`.
   final String name;
-  final String description;
-  final bool flag;
-  final bool numeric;
-  final String? abbr;
-  final String? defaultTo;
-  final List<String>? choices;
 
-  const CliOption(
-    this.name, {
-    this.description = '',
-    this.flag = false,
-    this.numeric = false,
-    this.abbr,
-    this.defaultTo,
-    this.choices,
-  });
+  /// Help text shown by [CliCommand.printUsage].
+  final String description;
+
+  /// The single-character short form, used as `-a`.
+  final String? abbr;
+
+  const CliOption(this.name, {this.description = '', this.abbr});
+
+  /// The default as it appears in help text, or `null` when there is none.
+  String? get defaultLabel;
 }
 
-/// Execution context passed to command actions with parsed arguments, options, and flags.
+/// A boolean option. Present means true; it never consumes a value.
+///
+/// {@category CLI}
+final class CliFlag extends CliOption {
+  const CliFlag(super.name, {super.description, super.abbr});
+
+  @override
+  String? get defaultLabel => null;
+}
+
+/// An option taking an arbitrary string value.
+///
+/// {@category CLI}
+final class CliValue extends CliOption {
+  /// Used when the option is absent.
+  final String? defaultTo;
+
+  const CliValue(super.name, {super.description, super.abbr, this.defaultTo});
+
+  @override
+  String? get defaultLabel => defaultTo;
+}
+
+/// An option taking an integer value, validated during parsing.
+///
+/// {@category CLI}
+final class CliNumber extends CliOption {
+  /// Used when the option is absent.
+  final int? defaultTo;
+
+  const CliNumber(super.name, {super.description, super.abbr, this.defaultTo});
+
+  @override
+  String? get defaultLabel => defaultTo?.toString();
+}
+
+/// An option restricted to [choices], validated during parsing.
+///
+/// {@category CLI}
+final class CliChoice extends CliOption {
+  /// The permitted values.
+  final List<String> choices;
+
+  /// Used when the option is absent.
+  final String? defaultTo;
+
+  const CliChoice(super.name, this.choices, {super.description, super.abbr, this.defaultTo});
+
+  @override
+  String? get defaultLabel => defaultTo;
+}
+
+/// Parsed arguments passed to a [CommandHandler].
 ///
 /// {@category CLI}
 class CliContext {
-  /// Unparsed positional arguments.
+  /// Positional arguments, plus everything after a `--` terminator.
   final List<String> rest;
 
-  /// Parsed options with their string values.
-  final Map<String, String?> options;
+  /// Parsed option values. A [CliNumber] is stored as an `int`, parsed once.
+  final Map<String, Object?> values;
 
-  /// Parsed boolean flags.
+  /// Flags that were present.
   final Set<String> flags;
 
-  /// The active command definition.
+  /// The command that was dispatched.
   final CliCommand command;
 
-  CliContext(this.rest, this.options, this.flags, this.command);
+  CliContext(this.rest, this.values, this.flags, this.command);
 
-  /// Checks if a boolean [flag] is set.
+  /// Whether [name] was set.
   bool flag(String name) => flags.contains(name);
 
-  /// Retrieves an option value by [name], with an optional fallback [defaultTo].
-  String? option(String name, {String? defaultTo}) => options[name] ?? command.findOption(name)?.defaultTo ?? defaultTo;
+  /// The string value of [name], or [defaultTo].
+  String? option(String name, {String? defaultTo}) => values[name]?.toString() ?? defaultTo;
 
-  /// Retrieves an integer option or fallback [defaultTo].
-  int? number(String name, {int? defaultTo}) {
-    final val = option(name);
-    return val != null ? int.tryParse(val) ?? defaultTo : defaultTo;
-  }
+  /// The integer value of [name], or [defaultTo].
+  int? number(String name, {int? defaultTo}) => switch (values[name]) {
+    final int value => value,
+    final String value => int.tryParse(value) ?? defaultTo,
+    _ => defaultTo,
+  };
 }
 
-/// Represents a CLI command or application.
+/// A command, or a whole command-line application.
+///
+/// Every builder method returns the receiver, so a chain always configures one
+/// command; nested commands are built through [subcommand]'s `build` callback.
 ///
 /// {@category CLI}
 class CliCommand {
@@ -79,55 +134,42 @@ class CliCommand {
 
   CliCommand(this.name, {this.description = '', this.handler, this.parent});
 
-  /// Finds an option definition by full name in this command or its parent hierarchy.
+  /// Looks up an option by name, walking up to the root command.
   CliOption? findOption(String name) => options[name] ?? parent?.findOption(name);
 
-  /// Finds an option definition by abbreviation in this command or its parent hierarchy.
+  /// Looks up an option by short form, walking up to the root command.
   CliOption? findAbbr(String abbr) {
-    for (final opt in options.values) {
-      if (opt.abbr == abbr) return opt;
+    for (final option in options.values) {
+      if (option.abbr == abbr) return option;
     }
     return parent?.findAbbr(abbr);
   }
 
-  /// Defines an option or flag on this command.
-  CliCommand option(
-    String name, {
-    String description = '',
-    bool flag = false,
-    bool numeric = false,
-    String? abbr,
-    String? defaultTo,
-    List<String>? choices,
-  }) {
-    options[name] = CliOption(
-      name,
-      description: description,
-      flag: flag,
-      numeric: numeric,
-      abbr: abbr,
-      defaultTo: defaultTo,
-      choices: choices,
-    );
+  /// Declares [option] on this command.
+  CliCommand declare(CliOption option) {
+    options[option.name] = option;
     return this;
   }
 
-  /// Defines a boolean flag on this command.
-  CliCommand flag(String name, {String description = '', String? abbr}) {
-    return option(name, description: description, flag: true, abbr: abbr);
-  }
+  /// Declares a string option.
+  CliCommand option(String name, {String description = '', String? abbr, String? defaultTo}) =>
+      declare(CliValue(name, description: description, abbr: abbr, defaultTo: defaultTo));
 
-  /// Defines an option with a constrained list of valid [choices].
-  CliCommand choice(String name, List<String> choices, {String description = '', String? abbr, String? defaultTo}) {
-    return option(name, description: description, abbr: abbr, defaultTo: defaultTo, choices: choices);
-  }
+  /// Declares a boolean flag.
+  CliCommand flag(String name, {String description = '', String? abbr}) =>
+      declare(CliFlag(name, description: description, abbr: abbr));
 
-  /// Defines an integer numeric option on this command with automatic number validation.
-  CliCommand number(String name, {String description = '', String? abbr, int? defaultTo}) {
-    return option(name, description: description, numeric: true, abbr: abbr, defaultTo: defaultTo?.toString());
-  }
+  /// Declares an option restricted to [choices].
+  CliCommand choice(String name, List<String> choices, {String description = '', String? abbr, String? defaultTo}) =>
+      declare(CliChoice(name, choices, description: description, abbr: abbr, defaultTo: defaultTo));
 
-  /// Defines a nested subcommand.
+  /// Declares an integer option, validated during parsing.
+  CliCommand number(String name, {String description = '', String? abbr, int? defaultTo}) =>
+      declare(CliNumber(name, description: description, abbr: abbr, defaultTo: defaultTo));
+
+  /// Declares a nested subcommand, configured through [build].
+  ///
+  /// Returns this command, not the child, so a chain stays on one receiver.
   CliCommand subcommand(
     String name, {
     String description = '',
@@ -137,10 +179,10 @@ class CliCommand {
     final sub = CliCommand(name, description: description, handler: handler, parent: this);
     build?.call(sub);
     subcommands[name] = sub;
-    return sub;
+    return this;
   }
 
-  /// Sets the handler action for this command.
+  /// Sets the action this command runs.
   CliCommand action(CommandHandler actionHandler) {
     handler = actionHandler;
     return this;
@@ -158,24 +200,23 @@ class CliCommand {
     }
     if (options.isNotEmpty) {
       ConsoleIo.out.writeln('\n${'Options:'.bold}');
-      for (final opt in options.values) {
-        final optName = '--${opt.name}';
-        final optPrefix = opt.abbr != null ? '-${opt.abbr}, $optName' : '    $optName';
-        var desc = opt.description;
-        if (opt.choices != null && opt.choices!.isNotEmpty) {
-          final choiceList = '(${opt.choices!.join('|')})';
-          desc = desc.isEmpty ? choiceList : '$desc $choiceList';
+      for (final option in options.values) {
+        final optName = '--${option.name}';
+        final prefix = option.abbr != null ? '-${option.abbr}, $optName' : '    $optName';
+        var desc = option.description;
+        if (option is CliChoice && option.choices.isNotEmpty) {
+          final list = '(${option.choices.join('|')})';
+          desc = desc.isEmpty ? list : '$desc $list';
         }
-        if (opt.defaultTo != null) {
-          desc = '$desc [default: ${opt.defaultTo}]';
-        }
-        ConsoleIo.out.writeln('  ${optPrefix.padRight(20)} $desc');
+        final fallback = option.defaultLabel;
+        if (fallback != null) desc = '$desc [default: $fallback]';
+        ConsoleIo.out.writeln('  ${prefix.padRight(20)} $desc');
       }
     }
     ConsoleIo.out.writeln('  -h, --help           Print this help message');
   }
 
-  /// Dispatches and runs this command with [args].
+  /// Parses [args] and runs this command, or a matching subcommand.
   Future<void> run(List<String> args) async {
     if (args.contains('--help') || args.contains('-h')) {
       if (findOption('help') == null && findAbbr('h') == null) {
@@ -185,114 +226,112 @@ class CliCommand {
     }
 
     if (args.isNotEmpty && subcommands.containsKey(args.first)) {
-      final sub = subcommands[args.first]!;
-      await sub.run(args.sublist(1));
+      await subcommands[args.first]!.run(args.sublist(1));
       return;
     }
 
     final parsedFlags = <String>{};
+    final parsedValues = <String, Object?>{};
+    final rest = <String>[];
 
-    // Seed defaults from this command and all parent commands in hierarchy
-    final allDefs = <String, CliOption>{};
-    var cur = this;
-    while (true) {
-      for (final opt in cur.options.values) {
-        allDefs.putIfAbsent(opt.name, () => opt);
+    // Defaults come from this command and every ancestor, nearest first.
+    for (var cur = this; ; cur = cur.parent!) {
+      for (final option in cur.options.values) {
+        final fallback = switch (option) {
+          CliValue(:final defaultTo) => defaultTo,
+          CliNumber(:final defaultTo) => defaultTo,
+          CliChoice(:final defaultTo) => defaultTo,
+          CliFlag() => null,
+        };
+        if (fallback != null) parsedValues.putIfAbsent(option.name, () => fallback);
       }
       if (cur.parent == null) break;
-      cur = cur.parent!;
     }
 
-    final parsedOptions = <String, String?>{
-      for (final opt in allDefs.values)
-        if (opt.defaultTo != null) opt.name: opt.defaultTo,
-    };
-    final rest = <String>[];
+    void assign(CliOption option, String raw) {
+      switch (option) {
+        case CliFlag():
+          parsedFlags.add(option.name);
+        case CliNumber():
+          final value = int.tryParse(raw);
+          if (value == null) {
+            throw ArgumentError('Invalid numeric value "$raw" for option "${option.name}". Expected an integer.');
+          }
+          parsedValues[option.name] = value;
+        case CliChoice(:final choices):
+          if (!choices.contains(raw)) {
+            throw ArgumentError(
+              'Invalid value "$raw" for option "${option.name}". Allowed choices: ${choices.join(', ')}',
+            );
+          }
+          parsedValues[option.name] = raw;
+        case CliValue():
+          parsedValues[option.name] = raw;
+      }
+    }
 
     for (var i = 0; i < args.length; i++) {
       final arg = args[i];
       if (arg == '--') {
-        // Option parsing terminator: all remaining arguments are positional
         rest.addAll(args.sublist(i + 1));
         break;
-      } else if (arg.startsWith('--')) {
-        final raw = arg.substring(2);
-        final eq = raw.indexOf('=');
-        final name = eq == -1 ? raw : raw.substring(0, eq);
-        final val = eq == -1 ? null : raw.substring(eq + 1);
+      }
 
-        final optDef = findOption(name);
-        if (optDef == null) {
-          throw ArgumentError('Unknown option: --$name');
-        }
-
-        if (optDef.flag) {
-          parsedFlags.add(optDef.name);
-        } else if (val != null) {
-          parsedOptions[optDef.name] = val;
-        } else if (i + 1 < args.length) {
-          parsedOptions[optDef.name] = args[++i];
-        } else {
-          throw ArgumentError('Option "--$name" requires a value.');
-        }
-      } else if (arg.startsWith('-') && arg.length > 1) {
-        final raw = arg.substring(1);
-        final eq = raw.indexOf('=');
-        final key = eq == -1 ? raw : raw.substring(0, eq);
-        final val = eq == -1 ? null : raw.substring(eq + 1);
-
-        final optDef = findAbbr(key);
-        if (optDef == null) {
-          throw ArgumentError('Unknown option: -$key');
-        }
-
-        if (optDef.flag) {
-          parsedFlags.add(optDef.name);
-        } else if (val != null) {
-          parsedOptions[optDef.name] = val;
-        } else if (i + 1 < args.length) {
-          parsedOptions[optDef.name] = args[++i];
-        } else {
-          throw ArgumentError('Option "-$key" requires a value.');
-        }
-      } else {
+      final isLong = arg.startsWith('--');
+      if (!isLong && (!arg.startsWith('-') || arg.length <= 1)) {
         rest.add(arg);
+        continue;
+      }
+
+      final raw = arg.substring(isLong ? 2 : 1);
+      final eq = raw.indexOf('=');
+      final key = eq == -1 ? raw : raw.substring(0, eq);
+      final inline = eq == -1 ? null : raw.substring(eq + 1);
+
+      final option = isLong ? findOption(key) : findAbbr(key);
+      if (option == null) throw ArgumentError('Unknown option: ${isLong ? '--' : '-'}$key');
+
+      if (option is CliFlag) {
+        parsedFlags.add(option.name);
+      } else if (inline != null) {
+        assign(option, inline);
+      } else if (i + 1 < args.length) {
+        assign(option, args[++i]);
+      } else {
+        throw ArgumentError('Option "${isLong ? '--' : '-'}$key" requires a value.');
       }
     }
 
-    // Validate choices and numeric options
-    for (final entry in parsedOptions.entries) {
-      final optDef = findOption(entry.key);
-      if (optDef != null && entry.value != null) {
-        if (optDef.choices != null && !optDef.choices!.contains(entry.value)) {
-          throw ArgumentError(
-            'Invalid value "${entry.value}" for option "${optDef.name}". Allowed choices: ${optDef.choices!.join(', ')}',
-          );
-        }
-        if (optDef.numeric && int.tryParse(entry.value!) == null) {
-          throw ArgumentError(
-            'Invalid numeric value "${entry.value}" for option "${optDef.name}". Expected an integer.',
-          );
-        }
+    // Defaults bypass assign(), so validate them here.
+    for (final entry in parsedValues.entries) {
+      final option = findOption(entry.key);
+      if (option is CliChoice && !option.choices.contains(entry.value)) {
+        throw ArgumentError(
+          'Invalid value "${entry.value}" for option "${option.name}". '
+          'Allowed choices: ${option.choices.join(', ')}',
+        );
       }
     }
 
     if (handler != null) {
-      await handler!(CliContext(rest, parsedOptions, parsedFlags, this));
+      await handler!(CliContext(rest, parsedValues, parsedFlags, this));
     } else {
       printUsage();
     }
   }
 }
 
-/// Root builder for command-line applications.
+/// The root of a command-line application.
 ///
 /// {@category CLI}
 class Cli extends CliCommand {
   Cli({String name = 'app', String description = ''}) : super(name, description: description);
 
-  /// Adds a top-level command.
-  CliCommand command(String name, {String description = '', CommandHandler? handler}) {
-    return subcommand(name, description: description, handler: handler);
-  }
+  /// Declares a top-level command, configured through [build].
+  CliCommand command(
+    String name, {
+    String description = '',
+    CommandHandler? handler,
+    void Function(CliCommand)? build,
+  }) => subcommand(name, description: description, handler: handler, build: build);
 }

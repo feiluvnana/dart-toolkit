@@ -10,18 +10,25 @@ void main() {
       int? parsedConcurrency;
       bool? isVerbose;
 
-      cli
-          .command('fetch', description: 'Fetch data')
-          .option('verbose', flag: true, abbr: 'v')
-          .subcommand('scrape', description: 'Scrape URLs')
-          .option('concurrency', abbr: 'c', numeric: true, defaultTo: '4')
-          .option('out', abbr: 'o', defaultTo: 'dist')
-          .action((ctx) {
-            executed = true;
-            isVerbose = ctx.flag('verbose');
-            parsedConcurrency = ctx.number('concurrency');
-            parsedOut = ctx.option('out');
-          });
+      cli.command(
+        'fetch',
+        description: 'Fetch data',
+        build: (fetch) => fetch
+          ..flag('verbose', abbr: 'v')
+          ..subcommand(
+            'scrape',
+            description: 'Scrape URLs',
+            build: (scrape) => scrape
+              ..number('concurrency', abbr: 'c', defaultTo: 4)
+              ..option('out', abbr: 'o', defaultTo: 'dist')
+              ..action((ctx) {
+                executed = true;
+                isVerbose = ctx.flag('verbose');
+                parsedConcurrency = ctx.number('concurrency');
+                parsedOut = ctx.option('out');
+              }),
+          ),
+      );
 
       await cli.run(['fetch', 'scrape', '-c', '8', '--out', 'output', '--verbose']);
 
@@ -29,6 +36,37 @@ void main() {
       expect(isVerbose, isTrue);
       expect(parsedConcurrency, equals(8));
       expect(parsedOut, equals('output'));
+    });
+
+    test('option kinds are mutually exclusive and typed', () async {
+      final cli = Cli();
+      Object? rawNumber;
+
+      cli.command(
+        'build',
+        build: (build) => build
+          ..number('jobs', defaultTo: 4)
+          ..flag('watch')
+          ..choice('mode', ['debug', 'release'])
+          ..option('out')
+          ..action((ctx) => rawNumber = ctx.values['jobs']),
+      );
+
+      // Each declaration produces exactly one kind. The old shape let
+      // flag: true and numeric: true coexist on one option.
+      final build = cli.subcommands['build']!;
+      expect(build.options['jobs'], isA<CliNumber>());
+      expect(build.options['watch'], isA<CliFlag>());
+      expect(build.options['mode'], isA<CliChoice>());
+      expect(build.options['out'], isA<CliValue>());
+
+      // A numeric option is parsed once, not re-parsed on every read.
+      await cli.run(['build']);
+      expect(rawNumber, isA<int>());
+      expect(rawNumber, equals(4));
+
+      await cli.run(['build', '--jobs', '9']);
+      expect(rawNumber, equals(9));
     });
 
     test('Logger methods execute cleanly', () {
@@ -117,9 +155,12 @@ void main() {
       final cli = Cli();
       String? chosenFormat;
 
-      cli.command('build').choice('format', ['debug', 'release'], defaultTo: 'debug').action((ctx) {
-        chosenFormat = ctx.option('format');
-      });
+      cli.command(
+        'build',
+        build: (build) => build
+          ..choice('format', ['debug', 'release'], defaultTo: 'debug')
+          ..action((ctx) => chosenFormat = ctx.option('format')),
+      );
 
       // Valid option
       await cli.run(['build', '--format', 'release']);
@@ -138,10 +179,16 @@ void main() {
       bool? isDryRun;
       int? concurrency;
 
-      cli.command('serve').flag('dry-run', abbr: 'd').number('concurrency', abbr: 'c', defaultTo: 4).action((ctx) {
-        isDryRun = ctx.flag('dry-run');
-        concurrency = ctx.number('concurrency');
-      });
+      cli.command(
+        'serve',
+        build: (serve) => serve
+          ..flag('dry-run', abbr: 'd')
+          ..number('concurrency', abbr: 'c', defaultTo: 4)
+          ..action((ctx) {
+            isDryRun = ctx.flag('dry-run');
+            concurrency = ctx.number('concurrency');
+          }),
+      );
 
       // Shorthand abbreviations
       await cli.run(['serve', '-d', '-c', '8']);
@@ -162,10 +209,15 @@ void main() {
       int? offset;
       List<String>? rest;
 
-      cli.command('seek').option('offset', abbr: 'o').action((ctx) {
-        offset = ctx.number('offset');
-        rest = ctx.rest;
-      });
+      cli.command(
+        'seek',
+        build: (seek) => seek
+          ..option('offset', abbr: 'o')
+          ..action((ctx) {
+            offset = ctx.number('offset');
+            rest = ctx.rest;
+          }),
+      );
 
       // Negative value with --offset
       await cli.run(['seek', '--offset', '-5', 'file.txt']);
@@ -188,13 +240,10 @@ void main() {
       String? parentFmt;
       String? subFmt;
 
-      cli.option('format', defaultTo: 'all').subcommand('download').action((ctx) {
-        subFmt = ctx.option('format');
-      });
-
-      cli.action((ctx) {
-        parentFmt = ctx.option('format');
-      });
+      cli
+          .option('format', defaultTo: 'all')
+          .subcommand('download', build: (sub) => sub.action((ctx) => subFmt = ctx.option('format')))
+          .action((ctx) => parentFmt = ctx.option('format'));
 
       // Parent sees default
       await cli.run([]);

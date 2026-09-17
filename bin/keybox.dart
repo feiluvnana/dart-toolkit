@@ -7,7 +7,7 @@ const baseName = 'Key BOX -for two decades- (2019)';
 void main(List<String> rawArgs) async {
   final cli = Cli(name: 'keybox', description: 'Key BOX Scraper & Downloader')
     ..choice('format', ['mp3', 'flac', 'all'], abbr: 'f', defaultTo: 'all', description: 'Music format')
-    ..option('concurrency', abbr: 'j', defaultTo: '4', description: 'Concurrent download workers')
+    ..number('concurrency', abbr: 'j', defaultTo: 4, description: 'Concurrent download workers')
     ..flag('compress', abbr: 'c', description: 'Compress directory after download')
     ..action((ctx) async {
       final unregisterExit = onExit(() => Logger.warn('Interrupted.'));

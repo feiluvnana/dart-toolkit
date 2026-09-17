@@ -218,7 +218,7 @@ EXPORT_VAR=export_value
       if (retryTries < 2) throw StateError('Transient timeout');
       return 'Connected successfully';
     },
-    attempts: 3,
+    maxAttempts: 3,
     delay: 10.ms,
     backoff: 1.5,
     jitter: true,

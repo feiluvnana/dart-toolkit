@@ -149,7 +149,7 @@ void main() {
                 return 'success';
               })
               .retry()
-              .attempts(4)
+              .maxAttempts(4)
               .delay(10.ms)
               .backoff(1.5)
               .jitter(false)
@@ -167,7 +167,7 @@ void main() {
         (() async {
           count++;
           throw FormatException('always fail');
-        }).retry().attempts(3).delay(5.ms),
+        }).retry().maxAttempts(3).delay(5.ms),
         throwsA(isA<FormatException>()),
       );
 
@@ -182,7 +182,7 @@ void main() {
           count++;
           if (count == 1) throw ArgumentError('invalid arg');
           throw StateError('state error');
-        }).retry().attempts(4).delay(5.ms).when((e) => e is ArgumentError),
+        }).retry().maxAttempts(4).delay(5.ms).when((e) => e is ArgumentError),
         throwsA(isA<StateError>()),
       );
 
@@ -197,7 +197,7 @@ void main() {
           if (count < 2) throw Exception('fail');
           return 'success';
         },
-        attempts: 3,
+        maxAttempts: 3,
         delay: 5.ms,
       );
 
@@ -472,7 +472,7 @@ void main() {
       final builder = RetryBuilder(() async => 42);
       final future = builder.run();
       expect(await future, equals(42));
-      expect(() => builder.attempts(5), throwsA(isA<StateError>()));
+      expect(() => builder.maxAttempts(5), throwsA(isA<StateError>()));
     });
 
     test('RetryBuilder respects maxDelay cap', () async {
@@ -484,7 +484,7 @@ void main() {
           if (attemptCount < 3) throw StateError('retry me');
           return true;
         },
-        attempts: 4,
+        maxAttempts: 4,
         delay: 50.ms,
         maxDelay: 60.ms,
         backoff: 3.0,
