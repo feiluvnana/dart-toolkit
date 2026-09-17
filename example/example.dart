@@ -193,21 +193,21 @@ EXPORT_VAR=export_value
   // =========================================================================
   // 4. Async & Concurrency Primitives (`dart_toolkit/async`)
   // =========================================================================
-  Logger.step(4, 8, 'Async Concurrency (parallelMap, parallelSettle, retry, Mutex, Semaphore, isolate)');
+  Logger.step(4, 8, 'Async Concurrency (parallelize, unwrap, retry, Mutex, Semaphore, isolate)');
 
-  // 4.1 Fail-fast parallelMap and resilient parallelSettle
+  // 4.1 One primitive: parallelize settles, unwrap picks the error policy
   final items = [1, 2, 3, 4, 5, 6];
-  final mappedValues = await items.parallelMap((n) async {
+  final mappedValues = (await items.parallelize((n) async {
     await 15.ms.delay();
     return n * 10;
-  }, concurrency: 3);
-  Logger.ok('Iterable.parallelMap(concurrency: 3): $mappedValues');
+  }, concurrency: 3)).unwrap();
+  Logger.ok('Iterable.parallelize().unwrap(): $mappedValues');
 
-  final settledResults = await items.parallelSettle((n) async {
+  final settledResults = await items.parallelize((n) async {
     if (n == 4) throw Exception('Item 4 failed');
     return n * 100;
   }, concurrency: 3);
-  Logger.ok('Iterable.parallelSettle(): ${settledResults.map((e) => e.isRight ? e.rightOrNull : "ERROR").toList()}');
+  Logger.ok('Iterable.parallelize(): rights=${settledResults.rights}, lefts=${settledResults.lefts.length}');
 
   // 4.2 Retry with top-level helper and builder
   var retryTries = 0;
@@ -227,7 +227,7 @@ EXPORT_VAR=export_value
   // 4.3 Mutex (Exclusive critical section)
   final mutex = Mutex();
   var mutexCounter = 0;
-  await [1, 2, 3, 4].parallelMap(
+  await [1, 2, 3, 4].parallelize(
     (_) => mutex.protect(() async {
       final current = mutexCounter;
       await 5.ms.delay();
@@ -240,7 +240,7 @@ EXPORT_VAR=export_value
   final semaphore = Semaphore(2);
   var maxConcurrent = 0;
   var currentConcurrent = 0;
-  await [1, 2, 3, 4, 5].parallelMap(
+  await [1, 2, 3, 4, 5].parallelize(
     (_) => semaphore.run(() async {
       currentConcurrent++;
       if (currentConcurrent > maxConcurrent) maxConcurrent = currentConcurrent;
@@ -282,9 +282,9 @@ EXPORT_VAR=export_value
   Logger.info('Either ok: isRight=${okEither.isRight}, value=${okEither.rightOrNull}');
   Logger.info('Either fail: isLeft=${failEither.isLeft}, error=${failEither.leftOrNull}');
 
-  final guarded = Either.guard(() => int.parse('123'));
-  final guardedAsync = await Either.guardAsync(() async => 'async value');
-  Logger.ok('Either.guard: ${guarded.rightOrNull}, Either.guardAsync: ${guardedAsync.rightOrNull}');
+  final guarded = Either.tryCatch(() => int.parse('123'));
+  final guardedAsync = await Either.tryCatchAsync(() async => 'async value');
+  Logger.ok('Either.tryCatch: ${guarded.rightOrNull}, Either.tryCatchAsync: ${guardedAsync.rightOrNull}');
 
   // 5.2 Unified JsonDocument with to<T>() and JSONPath
   final rawJson = '{"store": {"book": [{"title": "Sayings", "price": 8.95}, {"title": "Sword", "price": 12.99}]}}';

@@ -241,4 +241,20 @@ void main() {
       unreg2();
     });
   });
+
+  group('ANSI composition', () {
+    tearDown(() => Ansi.enabled = null);
+
+    test('nested styles reopen after an inner reset', () {
+      Ansi.enabled = true;
+      final composed = '${'a'.red}b';
+      expect(composed.bold, equals('\x1B[1m\x1B[31ma\x1B[0m\x1B[1mb\x1B[0m'));
+      expect(Ansi.strip(composed.bold), equals('ab'));
+    });
+
+    test('styling is a no-op when ANSI is disabled', () {
+      Ansi.enabled = false;
+      expect('${'a'.red}b'.bold, equals('ab'));
+    });
+  });
 }

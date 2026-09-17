@@ -37,7 +37,13 @@ class Ansi {
 ///
 /// {@category Terminal}
 extension AnsiString on String {
-  String _wrap(String code) => Ansi.enabled ? '\x1B[${code}m$this\x1B[0m' : this;
+  /// Wraps this string in SGR [code], reopening it after any nested reset so that
+  /// styles compose: `('a'.red + 'b').bold` leaves `b` bold.
+  String _wrap(String code) {
+    if (!Ansi.enabled) return this;
+    final reopened = replaceAll('\x1B[0m', '\x1B[0m\x1B[${code}m');
+    return '\x1B[${code}m$reopened\x1B[0m';
+  }
 
   String get red => _wrap('31');
   String get green => _wrap('32');

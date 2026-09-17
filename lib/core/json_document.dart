@@ -18,17 +18,23 @@ class JsonDocument {
   /// Evaluates a JSONPath query and returns matching nodes wrapped in [JsonDocument].
   List<JsonDocument> $jsonpath(String expression) => JsonPath.of(expression).read(raw).map(JsonDocument.new).toList();
 
-  /// Accesses a child node by map [key] or list [index].
+  /// Accesses a child node by map key ([String]) or list index ([int]).
+  ///
+  /// A missing key or an out-of-range index yields the null document; any other
+  /// key type is a programming error and throws [ArgumentError].
   JsonDocument operator [](Object keyOrIndex) {
-    if (raw is Map && keyOrIndex is String) {
-      return JsonDocument((raw as Map)[keyOrIndex]);
-    } else if (raw is List && keyOrIndex is int) {
-      final list = raw as List;
-      if (keyOrIndex >= 0 && keyOrIndex < list.length) {
-        return JsonDocument(list[keyOrIndex]);
-      }
+    switch (keyOrIndex) {
+      case String():
+        return raw is Map ? JsonDocument((raw as Map)[keyOrIndex]) : const JsonDocument(null);
+      case int():
+        if (raw is List) {
+          final list = raw as List;
+          if (keyOrIndex >= 0 && keyOrIndex < list.length) return JsonDocument(list[keyOrIndex]);
+        }
+        return const JsonDocument(null);
+      default:
+        throw ArgumentError.value(keyOrIndex, 'keyOrIndex', 'Must be a String key or an int index');
     }
-    return const JsonDocument(null);
   }
 
   /// Whether this JSON document represents null.

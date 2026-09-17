@@ -145,14 +145,15 @@ extension type const Path(String path) implements String {
   /// The current working directory.
   static Path get current => Path(Directory.current.path);
 
-  /// Creates a normalized path representation.
-  static Path normalize(String raw) => Path(p.normalize(raw));
-
   /// Appends [part] to this path.
   Path operator /(String part) => Path(p.join(path, part));
 
-  /// The normalized representation of this path.
-  String get normalized => p.normalize(path);
+  /// The canonical form of this path, with `.` and `..` segments resolved.
+  ///
+  /// `Path` is an extension type over [String] and so cannot override `==`:
+  /// `Path('/a/b/../b')` and `Path('/a/b')` are distinct map keys. **Normalize at
+  /// map boundaries** — `map[p.normalized]` — to make them coincide.
+  Path get normalized => Path(p.normalize(path));
 
   /// The final component of this path (e.g. `'song.mp3'` or `'folder'`).
   String get name => p.basename(path);

@@ -377,7 +377,12 @@ void main() {
       final p1 = Path('a/b/c');
       final p2 = Path('a/b/../b/c');
       expect(p1.normalized, equals(p2.normalized));
-      expect(Path.normalize('a/./b//c').path, equals(p.normalize('a/./b//c')));
+      expect(Path('a/./b//c').normalized.path, equals(p.normalize('a/./b//c')));
+
+      // normalized returns a Path, so it composes back into a Path-keyed map.
+      expect(p1 == p2, isFalse);
+      final byPath = <Path, int>{p1.normalized: 1};
+      expect(byPath[p2.normalized], equals(1));
     });
   });
 }

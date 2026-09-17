@@ -286,5 +286,49 @@ void main() {
       );
       expect(heading, equals('Hello Uri Isolate'));
     });
+
+    test('follow rejects a non-Uri, non-String target', () async {
+      final client = MockClient((request) async => http.Response('<html></html>', 200));
+
+      final stream = 'https://example.com/'.url.scrape<String>((ctx) {
+        ctx.follow(42);
+      }, client: client);
+
+      await expectLater(stream, emitsError(isA<ArgumentError>()));
+    });
+
+    test('follow rejects body and fields together', () async {
+      final client = MockClient((request) async => http.Response('<html></html>', 200));
+
+      final stream = 'https://example.com/'.url.scrape<String>((ctx) {
+        ctx.follow('/next', method: 'POST', body: 'raw', fields: {'a': 'b'});
+      }, client: client);
+
+      await expectLater(stream, emitsError(isA<ArgumentError>()));
+    });
+
+    test('a followed POST carries its body', () async {
+      final bodies = <String>[];
+      final client = MockClient((request) async {
+        bodies.add(request.body);
+        return http.Response('<html></html>', 200);
+      });
+
+      await 'https://example.com/'.url.scrape<String>((ctx) {
+        if (ctx.request.url.path == '/') {
+          ctx.follow('/submit', method: 'POST', fields: {'q': 'dart'});
+        }
+      }, client: client).toList();
+
+      expect(bodies, contains('q=dart'));
+    });
+
+    test('JsonDocument rejects a key that is neither String nor int', () {
+      final doc = JsonDocument.parse('{"a": [1, 2]}');
+      expect(doc['a'][0].to<int>(), equals(1));
+      expect(doc['missing'].isNull, isTrue);
+      expect(doc['a'][99].isNull, isTrue);
+      expect(() => doc[3.5], throwsA(isA<ArgumentError>()));
+    });
   });
 }

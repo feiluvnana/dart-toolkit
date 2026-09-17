@@ -28,8 +28,9 @@ class ScrapeContext<T> {
     Map<String, dynamic>? meta,
     Map<String, String>? headers,
     String method,
-    Object? body,
-    bool dontFilter,
+    String? body,
+    Map<String, String>? fields,
+    bool allowDuplicates,
   })
   _follow;
 
@@ -46,8 +47,9 @@ class ScrapeContext<T> {
       Map<String, dynamic>? meta,
       Map<String, String>? headers,
       String method,
-      Object? body,
-      bool dontFilter,
+      String? body,
+      Map<String, String>? fields,
+      bool allowDuplicates,
     })
     follow,
   }) : _emit = emit,
@@ -69,17 +71,25 @@ class ScrapeContext<T> {
   }
 
   /// Follows a [target] URL, scheduling a new request with optional [callback], [meta], and [headers].
+  ///
+  /// [target] must be a [Uri] or a [String] href, resolved against this response's URL.
+  /// Pass at most one of [body] (a raw request body) and [fields] (form-encoded fields).
+  /// Set [allowDuplicates] to re-request a URL the crawl has already visited.
   void follow(
     Object target, {
     FutureOr<void> Function(ScrapeContext<T> ctx)? callback,
     Map<String, dynamic>? meta,
     Map<String, String>? headers,
     String method = 'GET',
-    Object? body,
-    bool dontFilter = false,
+    String? body,
+    Map<String, String>? fields,
+    bool allowDuplicates = false,
   }) {
     if (_isClosed) {
       throw StateError('Cannot follow after scrape handler execution has completed.');
+    }
+    if (body != null && fields != null) {
+      throw ArgumentError('Pass at most one of "body" and "fields".');
     }
     _follow(
       target,
@@ -88,7 +98,8 @@ class ScrapeContext<T> {
       headers: headers,
       method: method,
       body: body,
-      dontFilter: dontFilter,
+      fields: fields,
+      allowDuplicates: allowDuplicates,
     );
   }
 
@@ -99,10 +110,21 @@ class ScrapeContext<T> {
     Map<String, dynamic>? meta,
     Map<String, String>? headers,
     String method = 'GET',
-    bool dontFilter = false,
+    String? body,
+    Map<String, String>? fields,
+    bool allowDuplicates = false,
   }) {
     for (final target in targets) {
-      follow(target, callback: callback, meta: meta, headers: headers, method: method, dontFilter: dontFilter);
+      follow(
+        target,
+        callback: callback,
+        meta: meta,
+        headers: headers,
+        method: method,
+        body: body,
+        fields: fields,
+        allowDuplicates: allowDuplicates,
+      );
     }
   }
 
@@ -341,31 +363,22 @@ Stream<T> _scrape<T>(
                   Map<String, dynamic>? meta,
                   Map<String, String>? headers,
                   String method = 'GET',
-                  Object? body,
-                  bool dontFilter = false,
+                  String? body,
+                  Map<String, String>? fields,
+                  bool allowDuplicates = false,
                 }) {
                   final baseUri = rawRes?.request?.url ?? req.url;
                   final resolvedUri = _resolve(baseUri, target);
-                  if (resolvedUri != null) {
-                    final http.Request nextReq;
-                    if (method.toUpperCase() == 'POST' && body != null) {
-                      nextReq = http.Request('POST', resolvedUri);
-                      if (body is String) {
-                        nextReq.body = body;
-                      } else if (body is Map<String, String>) {
-                        nextReq.bodyFields = body;
-                      }
-                    } else {
-                      nextReq = http.Request(method, resolvedUri);
-                    }
+                  final nextReq = http.Request(method, resolvedUri);
+                  if (body != null) nextReq.body = body;
+                  if (fields != null) nextReq.bodyFields = fields;
 
-                    if (headers != null) nextReq.headers.addAll(headers);
-                    _requestMetaExpando[nextReq] = {...reqMeta, ...?meta};
-                    if (callback != null) _requestCallbackExpando[nextReq] = callback;
-                    if (dontFilter) _requestDontFilterExpando[nextReq] = true;
-                    enqueue(nextReq);
-                    schedule();
-                  }
+                  if (headers != null) nextReq.headers.addAll(headers);
+                  _requestMetaExpando[nextReq] = {...reqMeta, ...?meta};
+                  if (callback != null) _requestCallbackExpando[nextReq] = callback;
+                  if (allowDuplicates) _requestDontFilterExpando[nextReq] = true;
+                  enqueue(nextReq);
+                  schedule();
                 },
           );
 
@@ -417,14 +430,11 @@ Stream<T> _scrape<T>(
   return controller.stream;
 }
 
-Uri? _resolve(Uri base, Object target) {
-  if (target is Uri) {
-    return base.resolveUri(target);
-  } else if (target is String) {
-    return base.resolve(target);
-  }
-  return null;
-}
+Uri _resolve(Uri base, Object target) => switch (target) {
+  Uri() => base.resolveUri(target),
+  String() => base.resolve(target),
+  _ => throw ArgumentError.value(target, 'target', 'Must be a Uri or a String href'),
+};
 
 http.BaseRequest _cloneRequest(http.BaseRequest req) {
   if (req is http.Request) {

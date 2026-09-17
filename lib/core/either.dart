@@ -1,5 +1,7 @@
 import 'dart:async';
 
+Object _throwable(Object? value) => value ?? StateError('Unwrapped a Left holding null');
+
 /// A type-safe disjoint union representing either a failure [Left] or a success [Right].
 ///
 /// {@category Formats}
@@ -42,17 +44,23 @@ sealed class Either<L, R> {
     Right<L, R>(:final value) => Right(value),
   };
 
-  /// Asynchronously evaluates [action], capturing any thrown error into a [Left].
-  static Future<Either<Object, T>> guardAsync<T>(FutureOr<T> Function() action) async {
-    try {
-      return Right(await action());
-    } catch (error) {
-      return Left(error);
-    }
-  }
+  /// Returns the [Right] value, or throws the [Left] value.
+  ///
+  /// Use when a failure at this point is genuinely exceptional; use [fold] or
+  /// [rightOrNull] when it is not.
+  R unwrap() => switch (this) {
+    Right<L, R>(:final value) => value,
+    Left<L, R>(:final value) => throw _throwable(value),
+  };
 
-  /// Synchronously evaluates [action], capturing any thrown error into a [Left].
-  static Either<Object, T> guard<T>(T Function() action) {
+  /// Runs a synchronous [action], capturing anything it throws as a [Left].
+  ///
+  /// Narrow the failure type afterwards with [mapLeft]:
+  ///
+  /// ```dart
+  /// final outcome = Either.tryCatch(() => int.parse(raw)).mapLeft(ParseFailure.from);
+  /// ```
+  static Either<Object, T> tryCatch<T>(T Function() action) {
     try {
       return Right(action());
     } catch (error) {
@@ -60,39 +68,14 @@ sealed class Either<L, R> {
     }
   }
 
-  /// Evaluates [action] synchronously with typed error capturing.
-  static Either<E, T> tryCatch<E extends Object, T>(
-    T Function() action, {
-    E Function(Object error, StackTrace stackTrace)? onError,
-  }) {
-    try {
-      return Right(action());
-    } catch (error, stackTrace) {
-      if (onError != null) {
-        return Left(onError(error, stackTrace));
-      }
-      if (error is E) {
-        return Left(error);
-      }
-      return Left(error as E);
-    }
-  }
-
-  /// Evaluates [action] asynchronously with typed error capturing.
-  static Future<Either<E, T>> tryCatchAsync<E extends Object, T>(
-    FutureOr<T> Function() action, {
-    E Function(Object error, StackTrace stackTrace)? onError,
-  }) async {
+  /// Runs an asynchronous [action], capturing anything it throws as a [Left].
+  ///
+  /// Accepts a synchronous or asynchronous closure; the result is always awaited.
+  static Future<Either<Object, T>> tryCatchAsync<T>(FutureOr<T> Function() action) async {
     try {
       return Right(await action());
-    } catch (error, stackTrace) {
-      if (onError != null) {
-        return Left(onError(error, stackTrace));
-      }
-      if (error is E) {
-        return Left(error);
-      }
-      return Left(error as E);
+    } catch (error) {
+      return Left(error);
     }
   }
 }
@@ -135,4 +118,32 @@ final class Right<L, R> extends Either<L, R> {
 
   @override
   String toString() => 'Right($value)';
+}
+
+/// Collection helpers for iterables of [Either] outcomes.
+///
+/// {@category Formats}
+extension IterableEitherExtensions<L, R> on Iterable<Either<L, R>> {
+  /// Every [Right] value in order, throwing the first [Left] value encountered.
+  List<R> unwrap() => [for (final outcome in this) outcome.unwrap()];
+
+  /// Only the [Right] values, discarding failures.
+  List<R> get rights => [
+    for (final outcome in this)
+      if (outcome case Right<L, R>(:final value)) value,
+  ];
+
+  /// Only the [Left] values.
+  List<L> get lefts => [
+    for (final outcome in this)
+      if (outcome case Left<L, R>(:final value)) value,
+  ];
+}
+
+/// Stream helpers for streams of [Either] outcomes.
+///
+/// {@category Formats}
+extension StreamEitherExtensions<L, R> on Stream<Either<L, R>> {
+  /// Emits every [Right] value, forwarding the first [Left] into the error channel.
+  Stream<R> unwrap() => map((outcome) => outcome.unwrap());
 }

@@ -35,20 +35,47 @@ void main() {
       expect(leftMapped, equals(const Left<String, int>('ERROR')));
     });
 
-    test('Either.guard and Either.guardAsync', () async {
-      final syncSuccess = Either.guard(() => 10 + 5);
+    test('Either.tryCatch and Either.tryCatchAsync', () async {
+      final syncSuccess = Either.tryCatch(() => 10 + 5);
       expect(syncSuccess, equals(const Right<Object, int>(15)));
 
-      final syncFailure = Either.guard<int>(() => throw FormatException('bad'));
+      final syncFailure = Either.tryCatch<int>(() => throw FormatException('bad'));
       expect(syncFailure.isLeft, isTrue);
       expect(syncFailure.leftOrNull, isA<FormatException>());
 
-      final asyncSuccess = await Either.guardAsync(() async => 'hello');
+      final asyncSuccess = await Either.tryCatchAsync(() async => 'hello');
       expect(asyncSuccess, equals(const Right<Object, String>('hello')));
 
-      final asyncFailure = await Either.guardAsync<String>(() async => throw StateError('failed'));
+      final asyncFailure = await Either.tryCatchAsync<String>(() async => throw StateError('failed'));
       expect(asyncFailure.isLeft, isTrue);
       expect(asyncFailure.leftOrNull, isA<StateError>());
+
+      // tryCatchAsync also accepts a synchronous closure.
+      expect(await Either.tryCatchAsync(() => 1), equals(const Right<Object, int>(1)));
+    });
+
+    test('Either.unwrap returns the Right value or throws the Left value', () {
+      expect(const Right<Object, int>(7).unwrap(), equals(7));
+
+      final failure = FormatException('nope');
+      expect(() => Left<Object, int>(failure).unwrap(), throwsA(same(failure)));
+      expect(() => const Left<Object?, int>(null).unwrap(), throwsA(isA<StateError>()));
+    });
+
+    test('Iterable<Either>.unwrap / rights / lefts partition outcomes', () {
+      final boom = StateError('boom');
+      final outcomes = <Either<Object, int>>[const Right(1), Left(boom), const Right(3)];
+
+      expect(outcomes.rights, equals([1, 3]));
+      expect(outcomes.lefts, equals([boom]));
+      expect(() => outcomes.unwrap(), throwsA(same(boom)));
+      expect(<Either<Object, int>>[const Right(1), const Right(2)].unwrap(), equals([1, 2]));
+    });
+
+    test('Stream<Either>.unwrap forwards the first Left as a stream error', () {
+      final boom = StateError('boom');
+      final stream = Stream<Either<Object, int>>.fromIterable([const Right(1), Left(boom)]);
+      expect(stream.unwrap(), emitsInOrder([1, emitsError(same(boom))]));
     });
   });
 
@@ -316,28 +343,31 @@ void main() {
       expect(results[2], equals(const Right<Object, int>(60)));
     });
 
-    test('parallelMap throws on first error and preserves order on success', () async {
+    test('parallelize().unwrap() preserves order and throws the first failure', () async {
       final numbers = [1, 2, 3, 4, 5];
-      final squares = await numbers.parallelMap((n) async {
+      final squares = (await numbers.parallelize((n) async {
         await Future<void>.delayed(5.ms);
         return n * n;
-      }, concurrency: 2);
+      }, concurrency: 2)).unwrap();
 
       expect(squares, equals([1, 4, 9, 16, 25]));
 
-      // Throws on error
-      await expectLater(
-        numbers.parallelMap((n) async {
-          if (n == 3) throw StateError('failed on 3');
-          return n;
-        }),
-        throwsA(isA<StateError>()),
-      );
+      final settled = await numbers.parallelize((n) async {
+        if (n == 3) throw StateError('failed on 3');
+        return n;
+      });
+      expect(() => settled.unwrap(), throwsA(isA<StateError>()));
     });
 
-    test('parallelSettle completes all tasks into Right/Left without throwing', () async {
+    test('parallelize does not throw on a workload with zero failures', () async {
+      final outcomes = await [1, 2].parallelize((n) => n * 2);
+      expect(outcomes.rights, equals([2, 4]));
+      expect(outcomes.lefts, isEmpty);
+    });
+
+    test('parallelize completes all tasks into Right/Left without throwing', () async {
       final numbers = [10, 20, 30];
-      final outcomes = await numbers.parallelSettle((n) async {
+      final outcomes = await numbers.parallelize((n) async {
         if (n == 20) throw FormatException('bad format');
         return n * 10;
       });
@@ -349,9 +379,9 @@ void main() {
       expect(outcomes[2], equals(const Right<Object, int>(300)));
     });
 
-    test('parallelMap with void executes side-effects across all items', () async {
+    test('parallelize with void executes side-effects across all items', () async {
       final seen = <int>[];
-      await [1, 2, 3].parallelMap<void>((n) async {
+      await [1, 2, 3].parallelize<void>((n) async {
         await Future<void>.delayed(5.ms);
         seen.add(n);
       }, concurrency: 2);
@@ -360,18 +390,23 @@ void main() {
       expect(seen.toSet(), equals({1, 2, 3}));
     });
 
-    test('parallelMap with CancellationToken cancels in-flight work', () async {
+    test('parallelize with CancellationToken reports unexecuted work as Left', () async {
       final token = CancellationToken();
       final items = [1, 2, 3, 4, 5];
       Future.delayed(15.ms, () => token.cancel('cancelled by user'));
 
-      await expectLater(
-        items.parallelMap((n) async {
+      final outcomes = await items.parallelize(
+        (n) async {
           await Future<void>.delayed(50.ms);
           return n;
-        }, cancelToken: token),
-        throwsA(isA<CancellationException>()),
+        },
+        concurrency: 1,
+        cancelToken: token,
       );
+
+      expect(outcomes.lefts, isNotEmpty);
+      expect(outcomes.lefts.whereType<CancellationException>(), isNotEmpty);
+      expect(() => outcomes.unwrap(), throwsA(isA<CancellationException>()));
     });
   });
 
@@ -420,10 +455,15 @@ void main() {
       expect(rightObj == rightNum, isTrue);
     });
 
-    test('Either.tryCatch with typed error parameter', () {
-      final outcome = Either.tryCatch<FormatException, int>(() => int.parse('not_a_num'));
-      expect(outcome.isLeft, isTrue);
-      expect(outcome.leftOrNull, isA<FormatException>());
+    test('Either.tryCatch captures any thrown error, whatever its type', () {
+      final parsed = Either.tryCatch(() => int.parse('not_a_num'));
+      expect(parsed.isLeft, isTrue);
+      expect(parsed.leftOrNull, isA<FormatException>());
+
+      // Narrowing happens afterwards, so no error type can be unrepresentable.
+      final narrowed = Either.tryCatch<int>(() => throw StateError('boom')).mapLeft((e) => FormatException('\$e'));
+      expect(narrowed.isLeft, isTrue);
+      expect(narrowed.leftOrNull, isA<FormatException>());
     });
   });
 
