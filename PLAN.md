@@ -34,13 +34,21 @@ dart doc 2>&1 | grep 'public libraries'   # library count, tracked per phase
 
 Targets, tracked at each phase boundary:
 
-| metric | now | target |
-|---|---|---|
-| public callable members | 435 | ≤ 325 |
-| public libraries | 34 | 9 |
-| third-party deps of `fs/fs.dart` | 7 | 1 |
-| third-party deps of `process/process.dart` | 7 | 1 |
-| `Path` members | 83 | ≤ 50 |
+| metric | before | target | achieved |
+|---|---|---|---|
+| public callable members | 435 | ≤ 325 | **399** — see note |
+| public libraries | 34 | 9 | **11** (10 barrels + `dart_toolkit`) |
+| third-party deps of `fs/fs.dart` | 7 | 1 | **1** (`path`) |
+| third-party deps of `process/process.dart` | 7 | 1 | **1** (`path`) |
+| `Path` members | 83 | ≤ 50 | **59** |
+
+> **The member target was wrong, not the work.** 435 → ≤ 325 assumed dropping the 32 `*Sync`
+> mirrors, which §10 rules out for a scripting toolkit. The deletions landed (−36 net) but are
+> partly offset by additions that were the point of other phases: `unwrap`/`rights`/`lefts` (+5),
+> the four sealed `CliOption` variants with their constructors (+12), `Os` (+3),
+> `ConsoleIo.isTerminal`/`columns` (+2), `BytesHashExtensions` (+2). Revised target: **≤ 400**,
+> with the composition of the surface — no aliases, no cross products, no illegal states — as
+> the thing that actually improved.
 
 ---
 

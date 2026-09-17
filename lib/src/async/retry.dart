@@ -60,7 +60,7 @@ class RetryBuilder<T> implements Future<T> {
     return this;
   }
 
-  /// Conditional filter specifying whether [error] should trigger a retry.
+  /// Retries only when [predicate] accepts the thrown error.
   RetryBuilder<T> when(bool Function(Object error) predicate) {
     _checkNotStarted();
     _retryIf = predicate;

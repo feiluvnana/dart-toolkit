@@ -1,6 +1,8 @@
 /// # Filesystem & Paths
 ///
+/// `Path`: an ergonomic, `String`-compatible filesystem path.
+///
 /// {@category Files}
 library;
 
-export 'path.dart';
+export '../src/fs/path.dart';

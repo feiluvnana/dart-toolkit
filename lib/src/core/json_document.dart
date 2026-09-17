@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-import 'src/jsonpath.dart';
+import 'jsonpath.dart';
 
 /// A parsed JSON document with JSONPath selector, indexing, and serialization support.
 ///

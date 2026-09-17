@@ -1,6 +1,8 @@
 /// # Collections
 ///
+/// Functional extensions on `Iterable`, `List` and `Map`.
+///
 /// {@category Collections}
 library;
 
-export 'extensions.dart';
+export '../src/collection/iterable_extensions.dart';

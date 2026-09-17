@@ -1,10 +1,11 @@
-/// # HTTP Extension & Web Scraping (`http.*`)
+/// # HTTP & Web Scraping
 ///
-/// Format parser extensions on `package:http`'s [http.Response] and Scrapy-inspired [scrape] pipeline.
+/// Format parsing on `http.Response`, a Scrapy-style scraping
+/// pipeline, and atomic downloads.
 ///
 /// {@category Crawling}
 library;
 
-export 'download.dart';
-export 'response.dart';
-export 'scrape.dart';
+export '../src/http/download.dart';
+export '../src/http/response.dart';
+export '../src/http/scrape.dart';

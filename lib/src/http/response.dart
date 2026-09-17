@@ -4,7 +4,9 @@ import 'dart:isolate';
 import 'package:http/http.dart' as http;
 
 import '../async/isolate.dart';
-import '../core/core.dart';
+import '../core/html_document.dart';
+import '../core/json_document.dart';
+import '../core/xml_document.dart';
 
 final Expando<HtmlDocument> _htmlMemo = Expando<HtmlDocument>('htmlMemo');
 final Expando<XmlDocument> _xmlMemo = Expando<XmlDocument>('xmlMemo');

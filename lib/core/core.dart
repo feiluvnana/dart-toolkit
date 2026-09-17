@@ -1,15 +1,13 @@
 /// # Core Types & Documents
 ///
-/// Core building blocks and functional primitives:
-/// - [Either], [Left], and [Right]
-/// - [JsonDocument], [HtmlDocument], [XmlDocument]
-/// - Common [StringCoreExtensions]
+/// `Either`, and the `JsonDocument` / `HtmlDocument` / `XmlDocument`
+/// parsers with CSS, XPath and JSONPath selectors.
 ///
 /// {@category Formats}
 library;
 
-export 'either.dart';
-export 'extensions.dart';
-export 'html_document.dart';
-export 'json_document.dart';
-export 'xml_document.dart';
+export '../src/core/either.dart';
+export '../src/core/html_document.dart';
+export '../src/core/json_document.dart';
+export '../src/core/string_extensions.dart';
+export '../src/core/xml_document.dart';

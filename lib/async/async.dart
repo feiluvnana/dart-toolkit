@@ -1,14 +1,14 @@
 /// # Async & Concurrency
 ///
-/// Primitives for concurrent parallel execution, retry builder, synchronization (Mutex, Semaphore),
-/// isolate offloading, cancellation tokens, and stream extensions.
+/// Bounded parallelism, retries, synchronisation primitives, isolate
+/// offloading, cancellation tokens and stream operators.
 ///
 /// {@category Concurrency}
 library;
 
-export 'cancellation_token.dart';
-export 'isolate.dart';
-export 'parallelize.dart';
-export 'retry.dart';
-export 'stream_extensions.dart';
-export 'sync.dart';
+export '../src/async/cancellation_token.dart';
+export '../src/async/isolate.dart';
+export '../src/async/parallelize.dart';
+export '../src/async/retry.dart';
+export '../src/async/stream_extensions.dart';
+export '../src/async/sync.dart';
