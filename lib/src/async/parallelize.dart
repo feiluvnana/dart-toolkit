@@ -9,19 +9,15 @@ import 'sync.dart';
 ///
 /// {@category Concurrency}
 extension IterableParallelExtensions<T> on Iterable<T> {
-  /// Maps [worker] concurrently over all elements, settling every task.
+  /// Maps [worker] over all elements, at most [concurrency] at a time.
   ///
-  /// - Preserves input order in the returned `List<Either<Object, R>>`.
-  /// - Successes are wrapped in [Right], failures in [Left]. Never throws for an
-  ///   individual task; call `.unwrap()` on the result to surface the first failure.
-  /// - Pass [concurrency] to control the maximum tasks in flight (default 4).
-  /// - Set [isolate] to `true` to offload worker computation to background [Isolate]s.
-  /// - Optionally pass [cancelToken] to cooperatively abort the operation; tasks that
-  ///   never ran come back as a [Left] holding a [CancellationException].
+  /// Settles every task and preserves input order; an individual failure never
+  /// throws. Tasks skipped by [cancelToken] come back as a [Left] holding a
+  /// [CancellationException]. [isolate] runs each worker in a background [Isolate].
   ///
   /// ```dart
-  /// final settled = await urls.parallelize(fetch);          // every outcome
-  /// final pages   = (await urls.parallelize(fetch)).unwrap(); // or throw the first failure
+  /// final settled = await urls.parallelize(fetch);            // every outcome
+  /// final pages   = (await urls.parallelize(fetch)).unwrap(); // or throw the first
   /// ```
   Future<List<Either<Object, R>>> parallelize<R>(
     FutureOr<R> Function(T item) worker, {
@@ -63,10 +59,9 @@ extension IterableParallelExtensions<T> on Iterable<T> {
 ///
 /// {@category Concurrency}
 extension StreamParallelExtensions<T> on Stream<T> {
-  /// Maps [worker] concurrently over stream items, emitting outcomes as they settle.
+  /// Maps [worker] over stream items, emitting outcomes as they settle.
   ///
-  /// Never throws into the stream's error channel for an individual task; call
-  /// `.unwrap()` on the result to forward the first failure as a stream error.
+  /// An individual failure never reaches the error channel; `.unwrap()` forwards it.
   Stream<Either<Object, R>> parallelize<R>(
     FutureOr<R> Function(T item) worker, {
     int concurrency = 4,

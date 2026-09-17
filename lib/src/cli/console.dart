@@ -161,7 +161,6 @@ class ConsoleMultiProgress {
     final maxCols = max(20, _columns - 1);
     final lines = <String>[];
 
-    // Header overall progress
     final percent = total > 0 ? ((_current / total) * 100).clamp(0, 100).toInt() : 0;
     const barLength = 20;
     final filled = total > 0 ? ((_current / total) * barLength).clamp(0, barLength).toInt() : 0;
@@ -170,7 +169,6 @@ class ConsoleMultiProgress {
     final header = '  $prefix[$bar] $percent% ($_current/$total)';
     lines.add(_truncateToVisualWidth(header, maxCols));
 
-    // Slots
     for (var i = 0; i < _slotList.length; i++) {
       final isLast = i == _slotList.length - 1;
       final treePfx = isLast ? '  └─ ' : '  ├─ ';

@@ -116,22 +116,22 @@ void main() {
       expect(out.toString(), contains('(default)'));
     });
 
-    test('askWith re-prompts until validate accepts', () {
+    test('ask re-prompts until validate accepts', () {
       feed(['abc', '8080']);
-      final port = Prompt.askWith('Port', validate: (v) => int.tryParse(v) == null ? 'Must be a number' : null);
+      final port = Prompt.ask('Port', validate: (v) => int.tryParse(v) == null ? 'Must be a number' : null);
       expect(port, equals('8080'));
       expect(out.toString(), contains('Must be a number'));
     });
 
     test('ask falls back to the default at end of input instead of hanging', () {
       ConsoleIo.stdinLineReader = () => null; // immediate end of input
-      final value = Prompt.ask('Name', 'fallback');
+      final value = Prompt.ask('Name', defaultTo: 'fallback');
       expect(value, equals('fallback'));
     });
 
     test('required ask throws rather than looping when input is exhausted', () {
       ConsoleIo.stdinLineReader = () => null; // immediate end of input
-      expect(() => Prompt.askWith('Name', required: true), throwsA(isA<StateError>()));
+      expect(() => Prompt.ask('Name', required: true), throwsA(isA<StateError>()));
     });
   });
 

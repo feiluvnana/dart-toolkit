@@ -49,16 +49,9 @@ void clearExitHooks() {
   _sigtermSub = null;
 }
 
-/// Registers a cleanup hook [callback] to run when the process receives termination signals or exits.
+/// Registers [callback] to run on SIGINT, SIGTERM or normal exit.
 ///
-/// Returns a function to unregister the hook.
-///
-/// Example:
-/// ```dart
-/// final unregister = onExit(() async {
-///   await cleanupTempContainers();
-/// });
-/// ```
+/// Returns a function that unregisters it.
 ///
 /// {@category CLI}
 void Function() onExit(FutureOr<void> Function() callback) {
@@ -67,12 +60,7 @@ void Function() onExit(FutureOr<void> Function() callback) {
   return () => _exitHooks.remove(callback);
 }
 
-/// Prints [message] to stderr and immediately terminates the process with [exitCode], running exit hooks first.
-///
-/// Example:
-/// ```dart
-/// die('Configuration file is missing');
-/// ```
+/// Prints [message] to stderr, runs the exit hooks, and exits with [exitCode].
 ///
 /// {@category CLI}
 Never die(String message, {int exitCode = 1}) {

@@ -1,9 +1,6 @@
 import 'dart:async';
 
-/// A token used to signal cancellation of asynchronous operations.
-///
-/// Pass a [CancellationToken] to operations like `scrape`, `download`, `downloadAll`,
-/// `parallelMap`, and `retry` to gracefully abort in-flight or queued work.
+/// Signals cancellation to cooperating asynchronous operations.
 ///
 /// {@category Concurrency}
 class CancellationToken {
@@ -11,7 +8,6 @@ class CancellationToken {
   final List<void Function()> _listeners = [];
   Object? _reason;
 
-  /// Creates a new [CancellationToken].
   CancellationToken();
 
   /// Whether cancellation has been requested.
@@ -62,22 +58,16 @@ class CancellationException implements Exception {
   String toString() => 'CancellationException: $message';
 }
 
-/// Uniform cancellation composition for any [Stream], so cancellation reads the
-/// same everywhere instead of threading a token through each signature.
+/// Cancellation for any [Stream].
 ///
-/// Prefer this when composing; pass `cancelToken:` directly to an operation
-/// when you want it to abort queued work internally as well.
-///
-/// ```dart
-/// await for (final item in url.scrape<Item>(parse).cancelWith(token)) { ... }
-/// ```
+/// Composes at the use site; pass `cancelToken:` to the operation itself when it
+/// must also stop doing queued work.
 ///
 /// {@category Concurrency}
 extension StreamCancelExtensions<T> on Stream<T> {
   /// Stops this stream when [token] is cancelled.
   ///
-  /// Set [throwOnCancel] to surface a [CancellationException] instead of
-  /// closing the stream silently.
+  /// [throwOnCancel] surfaces a [CancellationException] instead of closing silently.
   Stream<T> cancelWith(CancellationToken token, {bool throwOnCancel = false}) {
     late final StreamController<T> controller;
     StreamSubscription<T>? subscription;
@@ -121,14 +111,13 @@ extension StreamCancelExtensions<T> on Stream<T> {
   }
 }
 
-/// Uniform cancellation composition for any [Future].
+/// Cancellation for any [Future].
 ///
 /// {@category Concurrency}
 extension FutureCancelExtensions<T> on Future<T> {
   /// Completes with a [CancellationException] as soon as [token] is cancelled.
   ///
-  /// The underlying work is not interrupted; pass `cancelToken:` to the
-  /// operation itself when it must stop doing work.
+  /// The underlying work is not interrupted.
   Future<T> cancelWith(CancellationToken token) {
     if (token.isCancelled) {
       return Future<T>.error(CancellationException(token.reason?.toString() ?? 'Operation was cancelled.'));

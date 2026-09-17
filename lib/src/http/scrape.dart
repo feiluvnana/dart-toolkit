@@ -138,7 +138,7 @@ typedef ScrapeHandler<T> = FutureOr<void> Function(ScrapeContext<T> ctx);
 
 final _requestMetaExpando = Expando<Map<String, dynamic>>('req_meta');
 final _requestCallbackExpando = Expando<Object>('req_callback');
-final _requestDontFilterExpando = Expando<bool>('req_dont_filter');
+final _requestAllowDuplicatesExpando = Expando<bool>('req_allow_duplicates');
 
 typedef _RequestKey = (String method, Uri url, int bodyHash);
 
@@ -242,9 +242,9 @@ Stream<T> _scrape<T>(
   var isStopped = false;
 
   void enqueue(http.BaseRequest req) {
-    final dontFilter = _requestDontFilterExpando[req] ?? false;
+    final allowDuplicates = _requestAllowDuplicatesExpando[req] ?? false;
     final key = _makeRequestKey(req);
-    if (!dontFilter && !visited.add(key)) return;
+    if (!allowDuplicates && !visited.add(key)) return;
     queue.add(req);
   }
 
@@ -315,7 +315,7 @@ Stream<T> _scrape<T>(
                   if (headers != null) nextReq.headers.addAll(headers);
                   _requestMetaExpando[nextReq] = {...reqMeta, ...?meta};
                   if (callback != null) _requestCallbackExpando[nextReq] = callback;
-                  if (allowDuplicates) _requestDontFilterExpando[nextReq] = true;
+                  if (allowDuplicates) _requestAllowDuplicatesExpando[nextReq] = true;
                   enqueue(nextReq);
                   schedule();
                 },

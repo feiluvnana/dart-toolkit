@@ -124,7 +124,7 @@ class RetryBuilder<T> implements Future<T> {
     }
   }
 
-  // Future<T> implementation allowing direct `await` on the builder:
+  // Implements Future<T> so the builder can be awaited directly.
 
   @override
   Stream<T> asStream() => run().asStream();

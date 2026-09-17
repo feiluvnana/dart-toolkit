@@ -4,34 +4,27 @@ import 'dart:io';
 import 'ansi.dart';
 import '../util/stdio.dart';
 
-/// Helper for interactive terminal input and user prompts.
+/// Interactive terminal prompts.
 ///
-/// Every prompt degrades gracefully when no input is available (EOF, piped
-/// stdin, or CI): instead of looping forever it falls back to the supplied
-/// default, or throws a [StateError] when no default can be applied.
+/// At end of input — piped stdin, CI — a prompt falls back to its default
+/// rather than looping forever, or throws [StateError] when it has none.
 ///
 /// {@category CLI}
 class Prompt {
   /// Reads one line, returning `null` at end of input.
   static String? _read() => ConsoleIo.readLine(encoding: utf8)?.trim();
 
-  /// Prompts the user for text input.
+  /// Prompts for text input, returning [defaultTo] on an empty answer.
   ///
-  /// If [defaultTo] is provided, it is displayed in brackets and returned when the user presses Enter without typing.
-  /// Pass [validate] to reject input: return an error message to re-prompt, or `null` to accept.
+  /// [validate] returns an error message to re-prompt, or `null` to accept.
+  /// At end of input the default is used, or a [StateError] is thrown when a
+  /// [required] value has none.
   ///
-  /// Example:
   /// ```dart
-  /// final name = Prompt.ask('Project name', 'my_app');
-  /// final port = Prompt.ask('Port', '8080', validate: (v) => int.tryParse(v) == null ? 'Must be a number' : null);
+  /// final port = Prompt.ask('Port', defaultTo: '8080',
+  ///     validate: (v) => int.tryParse(v) == null ? 'Must be a number' : null);
   /// ```
-  static String ask(String message, [String? defaultTo, bool required = false]) =>
-      askWith(message, defaultTo: defaultTo, required: required);
-
-  /// Prompts the user for text input with an optional [validate] callback.
-  ///
-  /// Separated from [ask] so the concise positional form stays unchanged.
-  static String askWith(
+  static String ask(
     String message, {
     String? defaultTo,
     bool required = false,
@@ -43,7 +36,6 @@ class Prompt {
       final input = _read();
 
       if (input == null) {
-        // End of input: fall back rather than spinning forever.
         if (defaultTo != null) return defaultTo;
         if (!required) return '';
         throw StateError('No input available for required prompt: $message');
@@ -66,14 +58,7 @@ class Prompt {
     }
   }
 
-  /// Prompts the user for a yes/no boolean confirmation.
-  ///
-  /// Example:
-  /// ```dart
-  /// if (Prompt.confirm('Deploy to production?', false)) {
-  ///   ...
-  /// }
-  /// ```
+  /// Prompts for a yes/no confirmation.
   static bool confirm(String message, [bool defaultTo = true]) {
     final hint = defaultTo ? '[Y/n]'.dim : '[y/N]'.dim;
     ConsoleIo.out.write('$message $hint: ');
@@ -83,12 +68,7 @@ class Prompt {
     return input == 'y' || input == 'yes' || input == 'true' || input == '1';
   }
 
-  /// Prompts the user for sensitive input (password, API keys) hiding typed characters.
-  ///
-  /// Example:
-  /// ```dart
-  /// final token = Prompt.secret('Enter API Token:');
-  /// ```
+  /// Prompts for sensitive input, hiding typed characters.
   static String secret(String message) {
     ConsoleIo.out.write('$message: ');
     var isEchoModeAvailable = false;
@@ -112,21 +92,10 @@ class Prompt {
     }
   }
 
-  /// Prompts the user to select one option from [choices].
+  /// Prompts for one of [choices], of any element type.
   ///
-  /// Works with any element type. Pass [display] to control how each choice is
-  /// rendered, which keeps the prompt usable for records and domain objects.
-  ///
-  /// Example:
-  /// ```dart
-  /// final env = Prompt.select('Environment', ['dev', 'staging', 'prod']);
-  ///
-  /// final target = Prompt.select(
-  ///   'Deploy target',
-  ///   servers,
-  ///   display: (s) => '${s.name} (${s.region})',
-  /// );
-  /// ```
+  /// [display] renders each choice, which keeps records and domain objects usable:
+  /// `Prompt.select('Target', servers, display: (s) => s.name)`.
   static T select<T>(String message, List<T> choices, {T? defaultTo, String Function(T choice)? display}) {
     if (choices.isEmpty) {
       throw ArgumentError('Choices cannot be empty');

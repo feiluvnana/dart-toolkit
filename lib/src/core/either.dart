@@ -44,22 +44,15 @@ sealed class Either<L, R> {
     Right<L, R>(:final value) => Right(value),
   };
 
-  /// Returns the [Right] value, or throws the [Left] value.
-  ///
-  /// Use when a failure at this point is genuinely exceptional; use [fold] or
-  /// [rightOrNull] when it is not.
+  /// The [Right] value, or throws the [Left] value.
   R unwrap() => switch (this) {
     Right<L, R>(:final value) => value,
     Left<L, R>(:final value) => throw _throwable(value),
   };
 
-  /// Runs a synchronous [action], capturing anything it throws as a [Left].
+  /// Runs [action], capturing anything it throws as a [Left].
   ///
-  /// Narrow the failure type afterwards with [mapLeft]:
-  ///
-  /// ```dart
-  /// final outcome = Either.tryCatch(() => int.parse(raw)).mapLeft(ParseFailure.from);
-  /// ```
+  /// Narrow the failure type afterwards with [mapLeft].
   static Either<Object, T> tryCatch<T>(T Function() action) {
     try {
       return Right(action());
@@ -68,9 +61,7 @@ sealed class Either<L, R> {
     }
   }
 
-  /// Runs an asynchronous [action], capturing anything it throws as a [Left].
-  ///
-  /// Accepts a synchronous or asynchronous closure; the result is always awaited.
+  /// Runs [action], capturing anything it throws as a [Left]. Accepts sync or async.
   static Future<Either<Object, T>> tryCatchAsync<T>(FutureOr<T> Function() action) async {
     try {
       return Right(await action());

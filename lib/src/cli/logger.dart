@@ -21,10 +21,7 @@ enum LogLevel {
   silent,
 }
 
-/// Helper class for structured and colored terminal logging.
-///
-/// Output is filtered by [level] and written through [ConsoleIo], so it can be
-/// silenced, redirected, or captured in tests without touching call sites.
+/// Levelled terminal logging, written through [ConsoleIo].
 ///
 /// {@category CLI}
 class Logger {

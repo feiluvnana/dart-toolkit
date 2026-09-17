@@ -56,11 +56,10 @@ List<String> _splitCommand(String command) {
   return args;
 }
 
-/// Executes a system [command] asynchronously.
+/// Runs [command], echoing its output unless [quiet].
 ///
-/// If [quiet] is `false` (default), stdout and stderr are echoed live to the console.
-/// If [throwOnError] is `true` (default), a [ShellException] is thrown if the process exits with non-zero code.
-/// Pass [shell]: `true` to execute through the system shell interpreter (`cmd.exe` on Windows, `/bin/sh` on POSIX).
+/// Throws [ShellException] on a non-zero exit unless [throwOnError] is false.
+/// [shell] runs through the system interpreter rather than exec'ing directly.
 ///
 /// {@category System}
 Future<ShellResult> run(
@@ -335,12 +334,7 @@ extension StringShellExtensions on String {
 ///
 /// {@category System}
 extension PathShellExtensions on Path {
-  /// Executes the file or binary at this path as a system command.
-  ///
-  /// Example:
-  /// ```dart
-  /// final res = await (Path.current / 'scripts/deploy.sh').run(args: ['--prod']);
-  /// ```
+  /// Runs the file at this path as a command: `(dir / 'deploy.sh').run(args: ['--prod'])`.
   Future<ShellResult> run({
     List<String> args = const [],
     Path? workdir,

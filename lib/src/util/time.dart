@@ -24,13 +24,7 @@ extension IntDurationExtensions on int {
 ///
 /// {@category Utilities}
 extension DurationExtensions on Duration {
-  /// Formats this duration into a human-readable string.
-  ///
-  /// Examples:
-  /// - `125.ms` -> `"125ms"`
-  /// - `45.s` -> `"45s"`
-  /// - `2.m + 15.s` -> `"2m 15s"`
-  /// - `1.h + 5.m + 2.s` -> `"1h 5m 2s"`
+  /// A human-readable form: `125ms`, `45s`, `2m 15s`, `1h 5m 2s`.
   String humanize() {
     if (inMilliseconds < 1000) {
       return '${inMilliseconds}ms';
