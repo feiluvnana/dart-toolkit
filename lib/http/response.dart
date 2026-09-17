@@ -5,7 +5,6 @@ import 'package:http/http.dart' as http;
 
 import '../async/isolate.dart';
 import '../core/core.dart';
-import '../fs/path.dart';
 
 final Expando<HtmlDocument> _htmlMemo = Expando<HtmlDocument>('htmlMemo');
 final Expando<XmlDocument> _xmlMemo = Expando<XmlDocument>('xmlMemo');
@@ -212,8 +211,4 @@ extension UriExtensions on Uri {
     final res = await get(headers: headers, client: client);
     return res.isolateXml(action);
   }
-
-  /// Downloads content from this URI to [destination] path, streaming [DownloadProgress] updates.
-  Stream<DownloadProgress> download(Path destination, {http.Client? client, bool overwrite = false}) =>
-      destination.download(this, client: client, overwrite: overwrite);
 }

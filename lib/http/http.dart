@@ -5,5 +5,6 @@
 /// {@category Crawling}
 library;
 
+export 'download.dart';
 export 'response.dart';
 export 'scrape.dart';

@@ -33,5 +33,9 @@ jobs:
       - name: Analyze project source
         run: dart analyze --fatal-infos
 
+      - name: Check module dependency budget
+        run: dart run tool/check_deps.dart
+        if: matrix.os == 'ubuntu-latest'
+
       - name: Run tests with coverage
         run: dart test --coverage=coverage

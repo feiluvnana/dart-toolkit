@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:http/http.dart' as http;
 
@@ -90,26 +91,26 @@ void main(List<String> args) async {
 
     // 2.5 Structured read/write: JSON, HTML, XML (Async & Sync)
     final jsonFile = workspace / 'payload.json';
-    await jsonFile.writeJson({'framework': 'dart_toolkit', 'active': true, 'stars': 100});
-    final jsonDoc = await jsonFile.readJson();
+    await jsonFile.writeText(jsonEncode({'framework': 'dart_toolkit', 'active': true, 'stars': 100}));
+    final jsonDoc = JsonDocument.parse(await jsonFile.readText());
     Logger.ok('readJson(): framework=${jsonDoc['framework'].to<String>()}, stars=${jsonDoc['stars'].to<int>()}');
 
     // Synchronous document I/O
     final syncJsonFile = workspace / 'sync_payload.json';
-    syncJsonFile.writeJsonSync({'mode': 'sync', 'fast': true});
-    final syncJsonDoc = syncJsonFile.readJsonSync();
+    syncJsonFile.writeTextSync(jsonEncode({'mode': 'sync', 'fast': true}));
+    final syncJsonDoc = JsonDocument.parse(syncJsonFile.readTextSync());
     Logger.ok('readJsonSync(): mode=${syncJsonDoc['mode'].to<String>()}, fast=${syncJsonDoc['fast'].to<bool>()}');
 
     final htmlFile = workspace / 'page.html';
     await htmlFile.writeText('<html><body><h1>Hello HTML</h1><p class="desc">Sample paragraph</p></body></html>');
-    final htmlDoc = await htmlFile.readHtml();
+    final htmlDoc = HtmlDocument.parse(await htmlFile.readText());
     Logger.ok(
       'readHtml(): h1="${htmlDoc.$('h1').firstOrNull?.text}", p="${htmlDoc.$xpath('//p[@class="desc"]').firstOrNull?.text}"',
     );
 
     final xmlFile = workspace / 'catalog.xml';
     await xmlFile.writeText('<catalog><book id="1"><title>Dart Guide</title></book></catalog>');
-    final xmlDoc = await xmlFile.readXml();
+    final xmlDoc = XmlDocument.parse(await xmlFile.readText());
     Logger.ok('readXml(): title="${xmlDoc.$xpath('//book/title/text()').firstOrNull?.value}"');
 
     // 2.6 Entity checks & sizing (Async & Sync)
@@ -121,8 +122,8 @@ void main(List<String> args) async {
     );
 
     // 2.7 Cryptographic checksums (Async & Sync)
-    Logger.ok('sha256(): ${await textFile.sha256()} | sha256Sync(): ${textFile.sha256Sync()}');
-    Logger.ok('md5():    ${await textFile.md5()} | md5Sync():    ${textFile.md5Sync()}');
+    Logger.ok('sha256(): ${(await textFile.readBytes()).sha256} | sha256Sync(): ${textFile.readBytesSync().sha256}');
+    Logger.ok('md5():    ${(await textFile.readBytes()).md5} | md5Sync():    ${textFile.readBytesSync().md5}');
 
     // 2.8 Directory listing, glob, copy, move, delete, zip, unzip (Async & Sync)
     final nestedDir = workspace / 'nested';
@@ -181,13 +182,13 @@ SERVER_NAME="Production API"
 CACHE_ENABLED=true # inline comment
 EXPORT_VAR=export_value
 ''';
-  final loadedDotEnv = Env.load(dotEnvContent);
+  final loadedDotEnv = Env.parse(dotEnvContent);
   Logger.ok('Env.load: $loadedDotEnv');
 
   // 3.3 Platform & CI environment detection
-  Logger.info('Env.isMacOS: ${Env.isMacOS} (isMacOS: ${Env.isMacOS})');
-  Logger.info('Env.isWindows: ${Env.isWindows} (isWindows: ${Env.isWindows})');
-  Logger.info('Env.isLinux: ${Env.isLinux}');
+  Logger.info('Os.isMacOS: ${Os.isMacOS} (isMacOS: ${Os.isMacOS})');
+  Logger.info('Os.isWindows: ${Os.isWindows} (isWindows: ${Os.isWindows})');
+  Logger.info('Os.isLinux: ${Os.isLinux}');
   Logger.info('Env.isCI: ${Env.isCI}');
 
   // =========================================================================

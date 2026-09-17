@@ -1,17 +1,9 @@
 import 'dart:async';
-import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:archive/archive_io.dart';
-import 'package:crypto/crypto.dart' as crypto;
-import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
-
-import '../async/cancellation_token.dart';
-import '../cli/console.dart';
-import '../core/core.dart';
 
 final _invalidPathChars = RegExp(r'[:*?"<>|\r\n\t]');
 final _whitespaceCollapse = RegExp(r'\s+');
@@ -20,116 +12,6 @@ final _whitespaceCollapse = RegExp(r'\s+');
 ///
 /// {@category Files}
 enum PathType { file, dir, link, none }
-
-/// Progress state for an individual file download.
-///
-/// {@category Files}
-class DownloadProgress {
-  /// The source URL being downloaded.
-  final Uri url;
-
-  /// The destination path on disk.
-  final Path path;
-
-  /// Number of bytes received so far.
-  final int received;
-
-  /// Total expected bytes from Content-Length header, or `null` if unknown.
-  final int? total;
-
-  /// Whether the download has finished (either saved to disk, skipped, or failed).
-  final bool isDone;
-
-  /// Whether the download was skipped because the file already exists and overwrite is false.
-  final bool isSkipped;
-
-  /// Whether the download failed (e.g. 404, short read, or connection error).
-  final bool isFailed;
-
-  /// Optional error object if the download failed.
-  final Object? error;
-
-  const DownloadProgress({
-    required this.url,
-    required this.path,
-    this.received = 0,
-    this.total,
-    this.isDone = false,
-    this.isSkipped = false,
-    this.isFailed = false,
-    this.error,
-  });
-
-  /// Progress ratio from 0.0 to 1.0, or `null` if total content length is unknown.
-  double? get ratio => (total != null && total! > 0) ? (received / total!).clamp(0.0, 1.0) : null;
-
-  /// Progress percentage from 0 to 100, or `null` if total content length is unknown.
-  int? get percent => ratio != null ? (ratio! * 100).round() : null;
-
-  @override
-  String toString() =>
-      'DownloadProgress(path: $path, received: $received, total: $total, isDone: $isDone, isSkipped: $isSkipped, isFailed: $isFailed)';
-}
-
-/// Aggregated progress state during batch file downloads.
-///
-/// {@category Files}
-class BatchDownloadProgress {
-  /// Total number of files completed so far (downloaded + skipped + failed).
-  final int completed;
-
-  /// Total count of files in the batch.
-  final int total;
-
-  /// Number of files newly downloaded (not skipped).
-  final int newDownloads;
-
-  /// The current file's progress update.
-  final DownloadProgress current;
-
-  const BatchDownloadProgress({
-    required this.completed,
-    required this.total,
-    required this.newDownloads,
-    required this.current,
-  });
-
-  /// Overall completion ratio from 0.0 to 1.0.
-  double get ratio => total > 0 ? (completed / total).clamp(0.0, 1.0) : 1.0;
-
-  /// Overall completion percentage from 0 to 100.
-  int get percent => (ratio * 100).round();
-
-  @override
-  String toString() =>
-      'BatchDownloadProgress(completed: $completed/$total, newDownloads: $newDownloads, current: $current)';
-}
-
-/// Adapter extension bridging [BatchDownloadProgress] to [ConsoleMultiProgress].
-///
-/// {@category Files}
-extension BatchDownloadProgressMultiProgressExtension on ConsoleMultiProgress {
-  /// Updates multi-progress from a [BatchDownloadProgress] event.
-  void update(BatchDownloadProgress progress) {
-    setCompleted(progress.completed);
-    final cur = progress.current;
-    final status = cur.isSkipped
-        ? 'skipped'
-        : cur.isFailed
-        ? 'failed'
-        : (cur.isDone ? 'done' : null);
-
-    updateTask(
-      cur.path.path,
-      label: cur.path.name,
-      ratio: cur.ratio,
-      received: cur.received,
-      total: cur.total,
-      status: status,
-      isDone: cur.isDone,
-    );
-  }
-}
 
 /// A path representation on top of [String] with canonical normalization and filesystem helpers.
 ///
@@ -278,24 +160,6 @@ extension type const Path(String path) implements String {
   /// Reads this file as a list of lines synchronously.
   List<String> readLinesSync([Encoding encoding = utf8]) => asFile.readAsLinesSync(encoding: encoding);
 
-  /// Reads this file and parses it as a [JsonDocument].
-  Future<JsonDocument> readJson() async => JsonDocument.parse(await readText());
-
-  /// Reads this file and parses it as a [JsonDocument] synchronously.
-  JsonDocument readJsonSync() => JsonDocument.parse(readTextSync());
-
-  /// Reads this file and parses it as an [HtmlDocument].
-  Future<HtmlDocument> readHtml([Encoding encoding = utf8]) async => HtmlDocument.parse(await readText(encoding));
-
-  /// Reads this file and parses it as an [HtmlDocument] synchronously.
-  HtmlDocument readHtmlSync([Encoding encoding = utf8]) => HtmlDocument.parse(readTextSync(encoding));
-
-  /// Reads this file and parses it as an [XmlDocument].
-  Future<XmlDocument> readXml([Encoding encoding = utf8]) async => XmlDocument.parse(await readText(encoding));
-
-  /// Reads this file and parses it as an [XmlDocument] synchronously.
-  XmlDocument readXmlSync([Encoding encoding = utf8]) => XmlDocument.parse(readTextSync(encoding));
-
   /// Writes [content] string to this file, creating parent directories if not present.
   Future<File> writeText(String content, {Encoding encoding = utf8}) async {
     await asFile.parent.create(recursive: true);
@@ -334,34 +198,6 @@ extension type const Path(String path) implements String {
     asFile.writeAsStringSync(lines.map((l) => '$l\n').join(), encoding: encoding);
     return asFile;
   }
-
-  /// Serializes [data] to JSON and writes to this file, creating parent directories if not present.
-  Future<File> writeJson(Object? data, {bool pretty = false, Encoding encoding = utf8}) async {
-    final encoder = pretty ? const JsonEncoder.withIndent('  ') : const JsonEncoder();
-    return writeText(encoder.convert(data), encoding: encoding);
-  }
-
-  /// Serializes [data] to JSON and writes to this file synchronously, creating parent directories if not present.
-  File writeJsonSync(Object? data, {bool pretty = false, Encoding encoding = utf8}) {
-    final encoder = pretty ? const JsonEncoder.withIndent('  ') : const JsonEncoder();
-    return writeTextSync(encoder.convert(data), encoding: encoding);
-  }
-
-  /// Writes [content] HTML to this file, creating parent directories if not present.
-  Future<File> writeHtml(Object content, {Encoding encoding = utf8}) =>
-      writeText(content is HtmlDocument ? content.document.outerHtml : content.toString(), encoding: encoding);
-
-  /// Writes [content] HTML to this file synchronously, creating parent directories if not present.
-  File writeHtmlSync(Object content, {Encoding encoding = utf8}) =>
-      writeTextSync(content is HtmlDocument ? content.document.outerHtml : content.toString(), encoding: encoding);
-
-  /// Writes [content] XML to this file, creating parent directories if not present.
-  Future<File> writeXml(Object content, {Encoding encoding = utf8}) =>
-      writeText(content is XmlDocument ? content.raw.toXmlString() : content.toString(), encoding: encoding);
-
-  /// Writes [content] XML to this file synchronously, creating parent directories if not present.
-  File writeXmlSync(Object content, {Encoding encoding = utf8}) =>
-      writeTextSync(content is XmlDocument ? content.raw.toXmlString() : content.toString(), encoding: encoding);
 
   /// Lists all entities in this directory.
   Stream<Path> list({bool recursive = false, bool followLinks = false}) =>
@@ -423,117 +259,6 @@ extension type const Path(String path) implements String {
       }
     }
     return results;
-  }
-
-  /// Downloads content from [url] atomically using a `.part` temporary file and streams [DownloadProgress] updates.
-  ///
-  /// - Downloads to `<filename>.part` and renames to final destination only upon successful full download.
-  /// - Verifies `Content-Length` header; incomplete or short reads are treated as errors.
-  /// - Deletes `.part` file on failure to prevent permanent corruption of future runs.
-  /// - Supports [cancelToken] for graceful cooperative cancellation.
-  Stream<DownloadProgress> download(
-    Uri url, {
-    http.Client? client,
-    bool overwrite = false,
-    CancellationToken? cancelToken,
-  }) async* {
-    if (!overwrite && await exists()) {
-      yield DownloadProgress(url: url, path: this, isDone: true, isSkipped: true);
-      return;
-    }
-
-    if (cancelToken != null && cancelToken.isCancelled) {
-      yield DownloadProgress(
-        url: url,
-        path: this,
-        isDone: true,
-        isFailed: true,
-        error: CancellationException(cancelToken.reason?.toString() ?? 'Download cancelled'),
-      );
-      return;
-    }
-
-    final httpClient = client ?? http.Client();
-    final partFile = File('${asFile.path}.part');
-    var received = 0;
-    int? total;
-
-    try {
-      final request = http.Request('GET', url);
-      final streamed = await httpClient.send(request);
-
-      if (streamed.statusCode < 200 || streamed.statusCode >= 300) {
-        yield DownloadProgress(
-          url: url,
-          path: this,
-          isDone: true,
-          isFailed: true,
-          error: HttpException('Download failed with status ${streamed.statusCode}', uri: url),
-        );
-        return;
-      }
-
-      final headerContentLength = streamed.headers['content-length'];
-      total = streamed.contentLength ?? (headerContentLength != null ? int.tryParse(headerContentLength) : null);
-
-      await partFile.parent.create(recursive: true);
-      final sink = partFile.openWrite();
-
-      try {
-        await for (final chunk in streamed.stream) {
-          if (cancelToken != null && cancelToken.isCancelled) {
-            throw CancellationException(cancelToken.reason?.toString() ?? 'Download cancelled');
-          }
-          sink.add(chunk);
-          received += chunk.length;
-          yield DownloadProgress(
-            url: url,
-            path: this,
-            received: received,
-            total: total,
-            isDone: false,
-            isSkipped: false,
-          );
-        }
-      } finally {
-        await sink.close();
-      }
-
-      if (total != null && received != total) {
-        throw HttpException('Download incomplete: expected $total bytes but received $received bytes', uri: url);
-      }
-
-      if (await asFile.exists()) {
-        await asFile.delete();
-      }
-      await partFile.rename(asFile.path);
-
-      yield DownloadProgress(
-        url: url,
-        path: this,
-        received: received,
-        total: total ?? received,
-        isDone: true,
-        isSkipped: false,
-      );
-    } catch (e) {
-      if (await partFile.exists()) {
-        try {
-          await partFile.delete();
-        } catch (_) {}
-      }
-      yield DownloadProgress(
-        url: url,
-        path: this,
-        received: received,
-        total: total ?? received,
-        isDone: true,
-        isFailed: true,
-        error: e,
-      );
-    } finally {
-      if (client == null) httpClient.close();
-    }
   }
 
   /// Creates a directory at this path.
@@ -632,7 +357,7 @@ extension type const Path(String path) implements String {
     }
   }
 
-  /// Deletes this file, directory, or asLink.
+  /// Deletes this file, directory, or link.
   Future<void> delete({bool recursive = false}) async {
     final t = await type();
     if (t == PathType.file) {
@@ -654,113 +379,6 @@ extension type const Path(String path) implements String {
     } else if (t == PathType.link) {
       asLink.deleteSync();
     }
-  }
-
-  /// Compresses this directory or file into a zip archive at [destination].
-  Future<File> zipTo(String destination) async {
-    final targetPath = destination;
-    final zipFile = File(targetPath);
-    await zipFile.parent.create(recursive: true);
-    final encoder = ZipFileEncoder();
-    final t = await type();
-    if (t == PathType.dir) {
-      await encoder.zipDirectory(asDir, filename: targetPath);
-    } else {
-      encoder.create(targetPath);
-      await encoder.addFile(asFile);
-      encoder.close();
-    }
-    return zipFile;
-  }
-
-  /// Compresses this directory or file into a zip archive at [destination] synchronously.
-  File zipToSync(String destination) {
-    final targetPath = destination;
-    final zipFile = File(targetPath);
-    zipFile.parent.createSync(recursive: true);
-    final encoder = ZipFileEncoder();
-    final t = typeSync();
-    if (t == PathType.dir) {
-      encoder.create(targetPath);
-      for (final entity in asDir.listSync(recursive: true, followLinks: false)) {
-        if (entity is File) {
-          final rel = p.relative(entity.path, from: path);
-          final bytes = entity.readAsBytesSync();
-          encoder.addArchiveFile(ArchiveFile(rel, bytes.length, bytes));
-        }
-      }
-      encoder.close();
-    } else {
-      encoder.create(targetPath);
-      final bytes = asFile.readAsBytesSync();
-      encoder.addArchiveFile(ArchiveFile(p.basename(asFile.path), bytes.length, bytes));
-      encoder.close();
-    }
-    return zipFile;
-  }
-
-  /// Extracts the archive at this path into [destination].
-  Future<Directory> extractTo(String destination) async {
-    final destPath = destination;
-    final dest = Directory(destPath);
-    await dest.create(recursive: true);
-    final bytes = await readBytes();
-    final archive = ZipDecoder().decodeBytes(bytes);
-    for (final entity in archive) {
-      final outPath = p.join(destPath, entity.name);
-      if (entity.isFile) {
-        final outFile = File(outPath);
-        await outFile.parent.create(recursive: true);
-        await outFile.writeAsBytes(entity.content as List<int>);
-      } else {
-        await Directory(outPath).create(recursive: true);
-      }
-    }
-    return dest;
-  }
-
-  /// Extracts the archive at this path into [destination] synchronously.
-  Directory extractToSync(String destination) {
-    final destPath = destination;
-    final dest = Directory(destPath);
-    dest.createSync(recursive: true);
-    final bytes = readBytesSync();
-    final archive = ZipDecoder().decodeBytes(bytes);
-    for (final entity in archive) {
-      final outPath = p.join(destPath, entity.name);
-      if (entity.isFile) {
-        final outFile = File(outPath);
-        outFile.parent.createSync(recursive: true);
-        outFile.writeAsBytesSync(entity.content as List<int>);
-      } else {
-        Directory(outPath).createSync(recursive: true);
-      }
-    }
-    return dest;
-  }
-
-  /// Calculates the SHA-256 cryptographic hash of this asFile.
-  Future<String> sha256() async {
-    final bytes = await readBytes();
-    return crypto.sha256.convert(bytes).toString();
-  }
-
-  /// Calculates the SHA-256 cryptographic hash of this file synchronously.
-  String sha256Sync() {
-    final bytes = readBytesSync();
-    return crypto.sha256.convert(bytes).toString();
-  }
-
-  /// Calculates the MD5 cryptographic hash of this asFile.
-  Future<String> md5() async {
-    final bytes = await readBytes();
-    return crypto.md5.convert(bytes).toString();
-  }
-
-  /// Calculates the MD5 cryptographic hash of this file synchronously.
-  String md5Sync() {
-    final bytes = readBytesSync();
-    return crypto.md5.convert(bytes).toString();
   }
 
   /// Appends [content] to this file, creating parent directories and file if not present.
@@ -836,130 +454,4 @@ RegExp _globToRegex(String pattern, {bool? caseSensitive}) {
   buffer.write(r'$');
   final isSensitive = caseSensitive ?? (!Platform.isWindows && !Platform.isMacOS);
   return RegExp(buffer.toString(), caseSensitive: isSensitive);
-}
-
-Stream<BatchDownloadProgress> _batchDownload(
-  Iterable<({Path path, Uri url})> pairs, {
-  http.Client? client,
-  int concurrency = 4,
-  bool overwrite = false,
-  CancellationToken? cancelToken,
-}) async* {
-  final items = pairs.toList();
-  final totalFiles = items.length;
-  if (totalFiles == 0) return;
-
-  var completedCount = 0;
-  var newCount = 0;
-  final httpClient = client ?? http.Client();
-
-  final controller = StreamController<BatchDownloadProgress>();
-  final limit = concurrency > 0 ? concurrency : 1;
-  final queue = Queue<({Path path, Uri url})>.from(items);
-  final active = <Future<void>>{};
-
-  void schedule() {
-    if (controller.isClosed || (cancelToken != null && cancelToken.isCancelled)) return;
-
-    while (queue.isNotEmpty && active.length < limit) {
-      final item = queue.removeFirst();
-
-      late final Future<void> task;
-      task = Future<void>(() async {
-        try {
-          if (cancelToken != null && cancelToken.isCancelled) return;
-          await for (final p in item.path.download(
-            item.url,
-            client: httpClient,
-            overwrite: overwrite,
-            cancelToken: cancelToken,
-          )) {
-            if (p.isDone) {
-              completedCount++;
-              if (!p.isSkipped && !p.isFailed) newCount++;
-            }
-            if (!controller.isClosed) {
-              controller.add(
-                BatchDownloadProgress(completed: completedCount, total: totalFiles, newDownloads: newCount, current: p),
-              );
-            }
-          }
-        } catch (e) {
-          completedCount++;
-          if (!controller.isClosed) {
-            controller.add(
-              BatchDownloadProgress(
-                completed: completedCount,
-                total: totalFiles,
-                newDownloads: newCount,
-                current: DownloadProgress(url: item.url, path: item.path, isDone: true, isFailed: true, error: e),
-              ),
-            );
-          }
-        } finally {
-          active.remove(task);
-          if (queue.isEmpty && active.isEmpty && !controller.isClosed) {
-            if (client == null) httpClient.close();
-            controller.close();
-          } else {
-            schedule();
-          }
-        }
-      });
-      active.add(task);
-    }
-
-    if (queue.isEmpty && active.isEmpty && !controller.isClosed) {
-      if (client == null) httpClient.close();
-      controller.close();
-    }
-  }
-
-  controller.onListen = () {
-    cancelToken?.onCancel(() {
-      if (!controller.isClosed) {
-        controller.close();
-      }
-    });
-    schedule();
-  };
-  yield* controller.stream;
-}
-
-/// Batch download extensions on [Map<Path, Uri>].
-///
-/// {@category Files}
-extension PathUriMapDownloadExtensions on Map<Path, Uri> {
-  /// Downloads all path-URL pairs concurrently and streams [BatchDownloadProgress] updates.
-  Stream<BatchDownloadProgress> downloadAll({
-    http.Client? client,
-    int concurrency = 4,
-    bool overwrite = false,
-    CancellationToken? cancelToken,
-  }) => _batchDownload(
-    entries.map((e) => (path: e.key, url: e.value)),
-    client: client,
-    concurrency: concurrency,
-    overwrite: overwrite,
-    cancelToken: cancelToken,
-  );
-}
-
-/// Batch download extensions on [Map<Uri, Path>].
-///
-/// {@category Files}
-extension UriPathMapDownloadExtensions on Map<Uri, Path> {
-  /// Downloads all URL-path pairs concurrently and streams [BatchDownloadProgress] updates.
-  Stream<BatchDownloadProgress> downloadAll({
-    http.Client? client,
-    int concurrency = 4,
-    bool overwrite = false,
-    CancellationToken? cancelToken,
-  }) => _batchDownload(
-    entries.map((e) => (path: e.value, url: e.key)),
-    client: client,
-    concurrency: concurrency,
-    overwrite: overwrite,
-    cancelToken: cancelToken,
-  );
 }

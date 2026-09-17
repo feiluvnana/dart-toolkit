@@ -27,10 +27,13 @@ void main() {
       await file.writeText('hello world');
 
       // echo -n "hello world" | sha256sum -> b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9
-      expect(await file.sha256(), equals('b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9'));
+      expect(
+        (await file.readBytes()).sha256,
+        equals('b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9'),
+      );
 
       // echo -n "hello world" | md5sum -> 5eb63bbbe01eeed093cb22bb8f5acdc3
-      expect(await file.md5(), equals('5eb63bbbe01eeed093cb22bb8f5acdc3'));
+      expect((await file.readBytes()).md5, equals('5eb63bbbe01eeed093cb22bb8f5acdc3'));
     });
 
     test('Path append and replace edit in-place', () async {

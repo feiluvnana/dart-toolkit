@@ -20,7 +20,7 @@ void main(List<String> rawArgs) async {
 
       final base = baseName.path;
       final baseUri = keyBase.url;
-      final downloads = <Path, Uri>{};
+      final downloads = <Uri, Path>{};
       final discNames = <int, String>{};
       final tracks = <int, Map<int, String>>{};
 
@@ -42,14 +42,14 @@ void main(List<String> rawArgs) async {
         for (final e in doc.$('.key_cd_artworks_box')) {
           final href = e.$('a').first.attr('href')!;
           if (e.text.match(RegExp(r'DISC(\d+)'), 1) case final dStr?) {
-            downloads[base / discNames[int.parse(dStr)]! / href.path.name] = baseUri / href;
+            downloads[baseUri / href] = base / discNames[int.parse(dStr)]! / href.path.name;
           } else if (e.text.contains('ALL')) {
-            downloads[base / 'Others/KeyBOX' / href.path.name] = baseUri / href;
+            downloads[baseUri / href] = base / 'Others/KeyBOX' / href.path.name;
           }
         }
 
         downloads.addAll({
-          base / 'Others/KeyBOX/keybox_image.png': baseUri / 'common/album_jacket/keybox_image.png',
+          baseUri / 'common/album_jacket/keybox_image.png': base / 'Others/KeyBOX/keybox_image.png',
           for (final n in [
             '20th_box_image.jpg',
             'key_box_main_image.png',
@@ -58,11 +58,11 @@ void main(List<String> rawArgs) async {
             'key_box_onsale_title3.jpg',
             'sp_20th_banner_keybox.png',
           ])
-            base / 'Others/KeyBOX' / n: baseUri / 'common/image/$n',
-          base / 'Others/KeyBOX/00_Contents.jpg':
-              'https://jetta.vgmtreasurechest.com/soundtracks/key-box-for-two-decades-2019/00%20Contents.jpg'.url,
-          base / 'Others/KeyBOX/01_Box_sample.png':
-              'https://jetta.vgmtreasurechest.com/soundtracks/key-box-for-two-decades-2019/01%20Box%20sample.png'.url,
+            baseUri / 'common/image/$n': base / 'Others/KeyBOX' / n,
+          'https://jetta.vgmtreasurechest.com/soundtracks/key-box-for-two-decades-2019/00%20Contents.jpg'.url:
+              base / 'Others/KeyBOX/00_Contents.jpg',
+          'https://jetta.vgmtreasurechest.com/soundtracks/key-box-for-two-decades-2019/01%20Box%20sample.png'.url:
+              base / 'Others/KeyBOX/01_Box_sample.png',
           for (final n in [
             '20th_main_image.jpg',
             '20th_main_bg.jpg',
@@ -73,7 +73,7 @@ void main(List<String> rawArgs) async {
             'sp_20th_main_image_2.jpg',
             'sp_20th_main_image_3.jpg',
           ])
-            base / 'Others/Key 20th Anniversary' / n: baseUri / 'common/image/$n',
+            baseUri / 'common/image/$n': base / 'Others/Key 20th Anniversary' / n,
           for (final n in [
             'Stamp Rally/key20th_stamp_poster_1.jpg',
             'Stamp Rally/key20th_stamp_poster_1_a.jpg',
@@ -95,7 +95,7 @@ void main(List<String> rawArgs) async {
             ])
               'Live Streams/profile_$name.jpg',
           ])
-            base / 'Others/Events & Topics' / n: baseUri / 'common/image/${n.path.name}',
+            baseUri / 'common/image/${n.path.name}': base / 'Others/Events & Topics' / n,
         });
 
         final msgDoc = await (baseUri / 'message.html').isolateHtml((d) => d);
@@ -110,14 +110,14 @@ void main(List<String> rawArgs) async {
                 : '';
             final pfx = '${n + 1}'.padLeft(2, '0');
             final name = (a.attr('title') ?? a.text.replaceAll('[New Message]', '')).path.sanitized();
-            downloads[base / 'Others/Messages & Tributes/${categories[i]}/$tag${pfx}_$name.jpg'] = baseUri / href;
+            downloads[baseUri / href] = base / 'Others/Messages & Tributes/${categories[i]}/$tag${pfx}_$name.jpg';
           }
         }
 
         final topicsDoc = await (baseUri / 'topics.html').isolateHtml((d) => d);
         for (final img in topicsDoc.$('.topics_box img')) {
           final src = img.attr('src')!;
-          downloads[base / 'Others/Events & Topics' / src.path.name] = baseUri / src;
+          downloads[baseUri / src] = base / 'Others/Events & Topics' / src.path.name;
         }
       });
       Logger.ok('Found ${discNames.length} discs and ${downloads.length} artwork/document assets.');
@@ -152,7 +152,7 @@ void main(List<String> rawArgs) async {
         }, concurrency: concurrency);
 
         await for (final item in audioStream) {
-          downloads[item.path] = item.url;
+          downloads[item.url] = item.path;
           audioTracksCount++;
         }
       });
@@ -162,7 +162,21 @@ void main(List<String> rawArgs) async {
       Logger.step(3, totalStages, 'Downloading assets (${downloads.length} files, concurrency: $concurrency)');
       final progress = Console.multiProgress(downloads.length, slots: concurrency, message: 'Downloading');
       await for (final status in downloads.downloadAll(concurrency: concurrency)) {
-        progress.update(status);
+        final file = status.current;
+        progress.setCompleted(status.completed);
+        progress.updateTask(
+          file.path.path,
+          label: file.path.name,
+          ratio: file.ratio,
+          received: file.received,
+          total: file.total,
+          status: file.isSkipped
+              ? 'skipped'
+              : file.isFailed
+              ? 'failed'
+              : (file.isDone ? 'done' : null),
+          isDone: file.isDone,
+        );
       }
       progress.done('All assets downloaded.');
 

@@ -47,15 +47,6 @@ class Env {
     return val;
   }
 
-  /// Whether the current operating system is macOS.
-  static bool get isMacOS => Platform.isMacOS;
-
-  /// Whether the current operating system is Windows.
-  static bool get isWindows => Platform.isWindows;
-
-  /// Whether the current operating system is Linux.
-  static bool get isLinux => Platform.isLinux;
-
   /// Whether the current script is running in a Continuous Integration (CI) environment.
   ///
   /// Checks common CI environment variables (`CI`, `GITHUB_ACTIONS`, `GITLAB_CI`, `TRAVIS`, `CIRCLECI`, `BITBUCKET_BUILD_NUMBER`, `TF_BUILD`).
@@ -117,16 +108,10 @@ class Env {
     return parsed;
   }
 
-  /// Loads environment variables from `.env` content or file path at [sourceOrPath].
-  static Map<String, String> load([String sourceOrPath = '.env', bool override = false]) {
-    if (sourceOrPath.contains('\n') || sourceOrPath.contains('=')) {
-      return parse(sourceOrPath, override: override);
-    }
-    return loadSync(sourceOrPath, override);
-  }
-
-  /// Loads environment variables synchronously from `.env` file at [path].
-  static Map<String, String> loadSync([String path = '.env', bool override = false]) {
+  /// Loads environment variables from the `.env` file at [path].
+  ///
+  /// Pass [parse] the file's contents instead when the source is not a file.
+  static Map<String, String> loadFile([String path = '.env', bool override = false]) {
     final file = File(path);
     if (!file.existsSync()) return const {};
     final content = file.readAsStringSync();

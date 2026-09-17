@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dart_toolkit/dart_toolkit.dart';
@@ -78,11 +79,11 @@ void main() {
       final root = Path(tempDir.path) / 'json_test';
       final jsonFile = root / 'data.json';
 
-      final doc = await jsonFile.writeJson({'title': 'KeyBOX', 'discs': 50});
+      final doc = await jsonFile.writeText(jsonEncode({'title': 'KeyBOX', 'discs': 50}));
       expect(doc, isA<File>());
       expect(doc.existsSync(), isTrue);
 
-      final readDoc = await jsonFile.readJson();
+      final readDoc = JsonDocument.parse(await jsonFile.readText());
       expect(readDoc.raw, equals({'title': 'KeyBOX', 'discs': 50}));
       expect(readDoc.$jsonpath(r'$.discs').first.raw, equals(50));
     });
@@ -152,16 +153,16 @@ void main() {
 
       // 2. Single download on Uri
       final file1Alt = base / 'file1_alt.txt';
-      final uriUpdates = await 'https://example.com/file1.txt'.url.download(file1Alt, client: client).toList();
+      final uriUpdates = await file1Alt.download('https://example.com/file1.txt'.url, client: client).toList();
       expect(uriUpdates.last.isDone, isTrue);
       expect(await file1Alt.readText(), equals('Hello file 1'));
 
-      // 3. Batch downloadAll on Map<Path, Uri>
-      final mapPathUri = {
-        base / 'batch1.txt': 'https://example.com/file1.txt'.url,
-        base / 'batch2.txt': 'https://example.com/file2.txt'.url,
+      // 3. Batch downloadAll on a source-to-destination map
+      final mapUriPath = {
+        'https://example.com/file1.txt'.url: base / 'batch1.txt',
+        'https://example.com/file2.txt'.url: base / 'batch2.txt',
       };
-      final batch1Updates = await mapPathUri.downloadAll(client: client, concurrency: 2).toList();
+      final batch1Updates = await mapUriPath.downloadAll(client: client, concurrency: 2).toList();
       expect(batch1Updates.isNotEmpty, isTrue);
       final finalBatch1 = batch1Updates.last;
       expect(finalBatch1.completed, equals(2));
@@ -193,36 +194,39 @@ void main() {
       // HTML
       final htmlFile = base / 'page.html';
       final initialHtml = HtmlDocument.parse('<!DOCTYPE html><html><body><h1>Header</h1></body></html>');
-      await htmlFile.writeHtml(initialHtml);
+      await htmlFile.writeText(initialHtml.document.outerHtml);
       expect(await htmlFile.exists(), isTrue);
 
-      final readHtmlDoc = await htmlFile.readHtml();
+      final readHtmlDoc = HtmlDocument.parse(await htmlFile.readText());
       expect(readHtmlDoc.$('h1').firstOrNull?.text, equals('Header'));
 
       // XML
       final xmlFile = base / 'data.xml';
       final initialXml = XmlDocument.parse('<root><item id="1">Value</item></root>');
-      await xmlFile.writeXml(initialXml);
+      await xmlFile.writeText(initialXml.raw.toXmlString());
       expect(await xmlFile.exists(), isTrue);
 
-      final readXmlDoc = await xmlFile.readXml();
+      final readXmlDoc = XmlDocument.parse(await xmlFile.readText());
       expect((readXmlDoc.$xpath('//item').firstOrNull as xml_dom.XmlElement?)?.innerText, equals('Value'));
 
       // Sync document operations
       final syncJsonFile = base / 'sync.json';
-      syncJsonFile.writeJsonSync({'key': 'val', 'num': 42});
+      syncJsonFile.writeTextSync(jsonEncode({'key': 'val', 'num': 42}));
       expect(syncJsonFile.existsSync(), isTrue);
-      final syncJson = syncJsonFile.readJsonSync();
+      final syncJson = JsonDocument.parse(syncJsonFile.readTextSync());
       expect(syncJson['key'].to<String>(), equals('val'));
       expect(syncJson['num'].to<int>(), equals(42));
 
       final syncHtmlFile = base / 'sync.html';
-      syncHtmlFile.writeHtmlSync(HtmlDocument.parse('<h2>Sync Header</h2>'));
-      expect(syncHtmlFile.readHtmlSync().$('h2').first.text, equals('Sync Header'));
+      syncHtmlFile.writeTextSync((HtmlDocument.parse('<h2>Sync Header</h2>')).document.outerHtml);
+      expect(HtmlDocument.parse(syncHtmlFile.readTextSync()).$('h2').first.text, equals('Sync Header'));
 
       final syncXmlFile = base / 'sync.xml';
-      syncXmlFile.writeXmlSync(XmlDocument.parse('<root><node>Sync</node></root>'));
-      expect((syncXmlFile.readXmlSync().$xpath('//node').first as xml_dom.XmlElement).innerText, equals('Sync'));
+      syncXmlFile.writeTextSync((XmlDocument.parse('<root><node>Sync</node></root>')).raw.toXmlString());
+      expect(
+        (XmlDocument.parse(syncXmlFile.readTextSync()).$xpath('//node').first as xml_dom.XmlElement).innerText,
+        equals('Sync'),
+      );
 
       // mkdirSync & deleteSync
       final syncDir = base / 'sync_dir_test';
@@ -305,8 +309,8 @@ void main() {
         expect(file1.readTextSync(), equals('Hello Dart!!!'));
 
         // hashes
-        expect(file1.sha256Sync().isNotEmpty, isTrue);
-        expect(file1.md5Sync().isNotEmpty, isTrue);
+        expect(file1.readBytesSync().sha256.isNotEmpty, isTrue);
+        expect(file1.readBytesSync().md5.isNotEmpty, isTrue);
 
         // copySync & moveSync
         final copyDest = base / 'file1_copy.txt';

@@ -9,7 +9,7 @@ void main() async {
     await note.writeText('Hello from Dart Toolkit!');
     Logger.ok('Created file at $note (size: ${await note.size()} bytes)');
 
-    final sha = await note.sha256();
+    final sha = (await note.readBytes()).sha256;
     Logger.info('SHA-256: $sha');
 
     final zipPath = tempDir / 'archive.zip';

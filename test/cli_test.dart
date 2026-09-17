@@ -95,20 +95,15 @@ void main() {
       expect(lines[2], contains('80%'));
       expect(lines[3], contains('└─ (idle)'));
 
-      // Update from BatchDownloadProgress
-      multi.update(
-        BatchDownloadProgress(
-          completed: 2,
-          total: 10,
-          newDownloads: 2,
-          current: DownloadProgress(
-            url: Uri.parse('http://example.com/song03.flac'),
-            path: Path('song03.flac'),
-            received: 300000,
-            total: 600000,
-            isDone: true,
-          ),
-        ),
+      multi.setCompleted(2);
+      multi.updateTask(
+        'song03.flac',
+        label: 'song03.flac',
+        ratio: 0.5,
+        received: 300000,
+        total: 600000,
+        status: 'done',
+        isDone: true,
       );
 
       lines = multi.formatLines();

@@ -17,7 +17,7 @@ ESCAPED_NEWLINE="line1\\nline2"
 SINGLE_QUOTED='single quote value'
 ''';
 
-      final env = Env.load(sample);
+      final env = Env.parse(sample);
       expect(env['API_URL'], equals('https://api.example.com'));
       expect(env['PORT'], equals('8080'));
       expect(env['SECRET_KEY'], equals('super secret key with spaces'));
@@ -27,9 +27,9 @@ SINGLE_QUOTED='single quote value'
       expect(Env.get('PORT'), equals('8080'));
     });
 
-    test('Env.load with file content and Env.all()', () async {
+    test('Env.parse with file content and Env.all()', () async {
       final sample = 'TEST_VAR_XYZ=12345\nANOTHER_VAR="test value"';
-      final loaded = Env.load(sample, true);
+      final loaded = Env.parse(sample, override: true);
       expect(loaded['TEST_VAR_XYZ'], equals('12345'));
       expect(Env.get('TEST_VAR_XYZ'), equals('12345'));
       expect(Env.require('TEST_VAR_XYZ'), equals('12345'));
@@ -53,8 +53,8 @@ SINGLE_QUOTED='single quote value'
     });
 
     test('Platform getters work without errors', () {
-      expect(Env.isMacOS || Env.isWindows || Env.isLinux, isTrue);
-      expect(Env.isMacOS || Env.isWindows, isTrue);
+      expect(Os.isMacOS || Os.isWindows || Os.isLinux, isTrue);
+      expect(Os.isMacOS || Os.isWindows, isTrue);
       expect(Env.isCI, isA<bool>());
     });
   });
