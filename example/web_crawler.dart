@@ -5,7 +5,7 @@ void main() async {
 
   // Scraping pipeline with typed ScrapeContext<T>
   final stream = 'https://news.ycombinator.com'.url.scrape<({String title, String? link})>((ctx) {
-    for (final row in ctx.response.$('tr.athing')) {
+    for (final row in ctx.response.html().$('tr.athing')) {
       final titleSpan = row.$('.titleline > a').firstOrNull;
       if (titleSpan != null) {
         ctx.emit((title: titleSpan.text, link: titleSpan.attr('href')));

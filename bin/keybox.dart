@@ -27,7 +27,7 @@ void main(List<String> rawArgs) async {
       // Stage 1: Official metadata & images
       Logger.step(1, totalStages, 'Scraping official album metadata and artworks');
       await Console.spin('Parsing official website...', () async {
-        final doc = await (baseUri / 'key_box.html').isolateHtml((d) => d);
+        final doc = await (await (baseUri / 'key_box.html').get()).isolateHtml((d) => d);
         for (final li in doc.$('.key_cd_track_box ul li')) {
           final title = li.$('.track_disc_title').first.text.path.sanitized();
           final d = int.parse(title.match(RegExp(r'DISC\.(\d+)'), 1)!);
@@ -98,7 +98,7 @@ void main(List<String> rawArgs) async {
             baseUri / 'common/image/${n.path.name}': base / 'Others/Events & Topics' / n,
         });
 
-        final msgDoc = await (baseUri / 'message.html').isolateHtml((d) => d);
+        final msgDoc = await (await (baseUri / 'message.html').get()).isolateHtml((d) => d);
         const categories = ['Anime Staff', 'Voice Cast', 'Guest Tributes', 'Key Staff & Creators'];
         for (final (i, box) in msgDoc.$('.message_white_box').take(4).indexed) {
           for (final (n, a) in box.$('a[href*="message_"]').indexed) {
@@ -114,7 +114,7 @@ void main(List<String> rawArgs) async {
           }
         }
 
-        final topicsDoc = await (baseUri / 'topics.html').isolateHtml((d) => d);
+        final topicsDoc = await (await (baseUri / 'topics.html').get()).isolateHtml((d) => d);
         for (final img in topicsDoc.$('.topics_box img')) {
           final src = img.attr('src')!;
           downloads[baseUri / src] = base / 'Others/Events & Topics' / src.path.name;
@@ -127,7 +127,7 @@ void main(List<String> rawArgs) async {
       var audioTracksCount = 0;
       await Console.spin('Resolving track links from repository...', () async {
         final audioStream = khinsider.url.scrape<({Path path, Uri url})>((ctx) async {
-          for (final tr in ctx.response.$('#songlist tr')) {
+          for (final tr in ctx.response.html().$('#songlist tr')) {
             final tds = tr.$('td');
             if (tds.length < 4) continue;
             final href = tds[3].$('a').first.attr('href')!;
@@ -142,7 +142,7 @@ void main(List<String> rawArgs) async {
                 ctx.follow(
                   href,
                   callback: (songCtx) {
-                    final dlHref = songCtx.response.$('a[href*=".$ext"]').first.attr('href')!;
+                    final dlHref = songCtx.response.html().$('a[href*=".$ext"]').first.attr('href')!;
                     songCtx.emit((path: target, url: (songCtx.response.url ?? khinsider.url).resolve(dlHref)));
                   },
                 );

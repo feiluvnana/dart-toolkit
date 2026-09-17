@@ -159,9 +159,9 @@ void main() {
 
       final items = await 'https://example.com/index'.url.scrape<Map<String, dynamic>>((ctx) {
         expect(ctx, isA<ScrapeContext<Map<String, dynamic>>>());
-        final category = ctx.response.$('h1').firstOrNull?.text;
+        final category = ctx.response.html().$('h1').firstOrNull?.text;
 
-        for (final a in ctx.response.$('a')) {
+        for (final a in ctx.response.html().$('a')) {
           final href = a.attr('href');
           if (href != null) {
             ctx.follow(
@@ -241,7 +241,7 @@ void main() {
       ''', 200);
 
       final extracted = await res.isolate((r) {
-        final items = r.$('.users li');
+        final items = r.html().$('.users li');
         return items.map((e) => {'id': e.attr('data-id'), 'name': e.text}).toList();
       });
 
@@ -254,7 +254,7 @@ void main() {
       );
     });
 
-    test('res.isolateHtml(), isolateJson(), isolateXml() parse directly in isolate', () async {
+    test('Response.isolateHtml/Json/Xml parse directly in an isolate', () async {
       final htmlRes = http.Response('<div><span class="val">42</span></div>', 200);
       final numVal = await htmlRes.isolateHtml((doc) => doc.$('.val').firstOrNull?.text);
       expect(numVal, equals('42'));
@@ -274,16 +274,12 @@ void main() {
         return http.Response('<html><body><h1>Hello Uri Isolate</h1></body></html>', 200);
       });
 
-      final title = await 'https://example.com/api/item'.url.isolateJson(
-        (doc) => doc['title'].to<String>(),
-        client: mockClient,
-      );
+      final itemRes = await 'https://example.com/api/item'.url.get(client: mockClient);
+      final title = await itemRes.isolateJson((doc) => doc['title'].to<String>());
       expect(title, equals('Toolkit'));
 
-      final heading = await mockClient.isolateHtml(
-        'https://example.com/page'.url,
-        (doc) => doc.$('h1').firstOrNull?.text,
-      );
+      final pageRes = await 'https://example.com/page'.url.get(client: mockClient);
+      final heading = await pageRes.isolateHtml((doc) => doc.$('h1').firstOrNull?.text);
       expect(heading, equals('Hello Uri Isolate'));
     });
 

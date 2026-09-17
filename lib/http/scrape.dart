@@ -4,9 +4,7 @@ import 'dart:collection';
 import 'package:http/http.dart' as http;
 
 import '../async/cancellation_token.dart';
-import '../core/core.dart';
 import '../util/time.dart';
-import 'response.dart';
 
 /// Context provided to scraping callbacks containing the HTTP response and controls for emitting items and following links.
 ///
@@ -127,21 +125,6 @@ class ScrapeContext<T> {
       );
     }
   }
-
-  /// Direct access to parsed HTML document (memoized on response).
-  HtmlDocument html() => response.html();
-
-  /// Direct access to parsed XML document (memoized on response).
-  XmlDocument xml() => response.xml();
-
-  /// Direct access to parsed JSON document (memoized on response).
-  JsonDocument json() => response.json();
-
-  /// Direct CSS query shorthand on response.
-  List<Element> $(String selector) => response.$(selector);
-
-  /// Direct XPath query shorthand on response.
-  List<Element> $xpath(String query) => response.$xpath(query);
 
   void _close() {
     _isClosed = true;
