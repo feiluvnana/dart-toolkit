@@ -5,12 +5,12 @@ Execution plan for every finding in [AUDIT.md](AUDIT.md), baseline `d67c0d0`
 
 **This package is `0.0.1` and has one known consumer (`bin/keybox.dart`). This plan treats
 breaking changes as acceptable and does not add deprecation shims.** Every removal below has a
-one-line replacement, listed in §10.
+one-line replacement, listed in §11.
 
 **For whoever executes this:** phases are ordered so the tree is green after each one. Do not
 start a phase before the previous phase's gate passes. Each phase is one commit. Commit messages
 follow the existing `type(scope): summary` style, no trailers. Do not pick a version number —
-that is the user's call (§12).
+that is the user's call (§13).
 
 ---
 
@@ -593,7 +593,7 @@ the duplication and the untyped engine:
 > seed type. Dart has no implicit conversions, so a sealed `Seed` forces `Seed.url(u)` at every
 > call site and makes the headline API worse. The maintenance hazard the audit actually measured
 > — one signature written five times with five copies of the defaults — is fully removed;
-> the extension count is not. **Flagged for the user in §12.**
+> the extension count is not. **Flagged for the user in §13.**
 
 ---
 
@@ -631,7 +631,7 @@ from 34. Nothing under `src/` appears in the generated docs.
    made the surface feel obligatory. Replace with three task-shaped examples
    (`cli_app.dart`, `file_automation.dart`, `web_crawler.dart` already exist) and delete
    `example.dart`.
-3. **CHANGELOG.md** — one entry listing every breaking change, with the §10 migration table
+3. **CHANGELOG.md** — one entry listing every breaking change, with the §11 migration table
    inline. Leave the version heading as `## Unreleased`; the user sets the number.
 4. **`doc/conventions.md`** — write down the rules this plan establishes, so the next addition
    does not re-create the mess:
@@ -649,7 +649,33 @@ from 34. Nothing under `src/` appears in the generated docs.
 
 ---
 
-## 9. Not doing, and why
+## 9. Phase 9 — trim the comments (last step)
+
+Run **after** every other phase, so it trims the final text rather than text that is about to
+change.
+
+The doc comments have grown to carry design rationale that belongs in this plan, in
+`doc/conventions.md`, or in the CHANGELOG. Pass over `lib/` and cut them back:
+
+1. **One line for the common case.** A member whose name and signature say what it does gets a
+   single `/// Sentence.` — no restatement of the parameter list, no "Returns a ... that ...".
+2. **Keep only what the reader cannot infer**: units, defaults that matter, throwing behaviour,
+   mutually exclusive parameters, and anything surprising (`unwrap` is not fail-fast;
+   `Path` cannot override `==`).
+3. **Delete rationale.** Why an API is shaped this way goes in `doc/conventions.md`; the
+   audit trail goes in the CHANGELOG. Doc comments are reference, not argument.
+4. **Delete restated code.** Comments that narrate the next line go; comments naming a
+   non-obvious invariant stay.
+5. **Examples only where the shape is not obvious** — `scrape`, `parallelize`/`unwrap`, `Cli`,
+   `Prompt.select`. Not on `Path.readText`.
+6. Keep every `{@category ...}` annotation and the `@template`/`@macro` pairs.
+
+Target: no doc comment longer than three lines unless it documents throwing behaviour or a
+worked example. `dart doc` must still report zero warnings afterwards.
+
+---
+
+## 10. Not doing, and why
 
 Carried from AUDIT §6 plus two decisions this plan adds.
 
@@ -658,14 +684,14 @@ Carried from AUDIT §6 plus two decisions this plan adds.
 | Drop the `*Sync` mirrors | **No.** Synchronous IO is the point of a scripting toolkit. Phase 4 removes 16 of 32 as a side effect of moving concerns off `Path`; the remaining 16 mirror a core that earns them. |
 | Drop `implements String` from `Path` | **No.** It causes the `.path`/`.path` inversion and the equality split, but it is what lets a `Path` go anywhere a path string is expected. Mitigated by `normalized` returning `Path` (§1.6) and documented as a contract. |
 | Rename `parallelize` | **No.** README headline; §1.2 makes it the single surviving concurrency primitive instead. |
-| Keep a fail-fast `parallelMap` | **No.** Replaced by `parallelize(...).unwrap()`, which picks the error policy at the use site instead of forking the primitive. Semantic change flagged in §1.3 and §12. |
+| Keep a fail-fast `parallelMap` | **No.** Replaced by `parallelize(...).unwrap()`, which picks the error policy at the use site instead of forking the primitive. Semantic change flagged in §1.3 and §13. |
 | Upstream XPath strictness | **No.** `xpath_selector` accepts malformed expressions. Capped by the dependency; unchanged since the previous audit. |
 | Delete `FutureShellResultExtension` | **No** — keep `await run('cmd').text`. AUDIT §4.9 is right that it is a one-off convention, but shell chaining is this package's hottest path. Recorded as an explicit exception in `doc/conventions.md` rather than removed or generalised. |
 | Collapse `scrape` to one entry point | **Partially** — see §6.3 deviation. |
 
 ---
 
-## 10. Migration table (for CHANGELOG and README)
+## 11. Migration table (for CHANGELOG and README)
 
 | removed / renamed | replacement |
 |---|---|
@@ -712,7 +738,7 @@ Carried from AUDIT §6 plus two decisions this plan adds.
 
 ---
 
-## 11. Verification matrix
+## 12. Verification matrix
 
 | AUDIT finding | phase | how it is proven |
 |---|---|---|
@@ -735,7 +761,7 @@ of each phase so the trend is visible in `git log`.
 
 ---
 
-## 12. Decisions for the user before execution starts
+## 13. Decisions for the user before execution starts
 
 Three points where this plan chose, and the choice is reversible:
 

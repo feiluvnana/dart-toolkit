@@ -1,5 +1,5 @@
 import 'ansi.dart';
-import 'stdio.dart';
+import '../util/stdio.dart';
 
 /// Severity levels for [Logger], ordered from most to least verbose.
 ///

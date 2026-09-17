@@ -1,10 +1,9 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:math';
 
 import '../util/time.dart';
 import 'ansi.dart';
-import 'stdio.dart';
+import '../util/stdio.dart';
 
 /// Progress controller for terminal activity.
 ///
@@ -24,8 +23,9 @@ class ConsoleProgress {
   int get _columns {
     if (terminalColumns != null && terminalColumns! > 0) return terminalColumns!;
     try {
-      if (stdout.hasTerminal) {
-        return stdout.terminalColumns;
+      final cols = ConsoleIo.columns;
+      if (cols != null) {
+        return cols;
       }
     } catch (_) {}
     return 80;
@@ -70,7 +70,7 @@ class ConsoleProgress {
     final lineWidth = _stringVisualWidth(line);
     final padding = ' ' * max(0, min(_lastWidth - lineWidth, maxCols - lineWidth));
 
-    if (stdout.hasTerminal && Ansi.enabled) {
+    if (ConsoleIo.isTerminal && Ansi.enabled) {
       ConsoleIo.out.write('\r\x1b[K${line.dim}$padding');
     } else {
       ConsoleIo.out.writeln(line);
@@ -83,7 +83,7 @@ class ConsoleProgress {
     if (_isDone) return;
     _isDone = true;
     _lastWidth = 0;
-    if (stdout.hasTerminal && Ansi.enabled) {
+    if (ConsoleIo.isTerminal && Ansi.enabled) {
       ConsoleIo.out.writeln();
     }
     if (message != null && message.isNotEmpty) {
@@ -148,8 +148,9 @@ class ConsoleMultiProgress {
   int get _columns {
     if (terminalColumns != null && terminalColumns! > 0) return terminalColumns!;
     try {
-      if (stdout.hasTerminal) {
-        return stdout.terminalColumns;
+      final cols = ConsoleIo.columns;
+      if (cols != null) {
+        return cols;
       }
     } catch (_) {}
     return 80;
@@ -221,8 +222,11 @@ class ConsoleMultiProgress {
 
   void _render() {
     if (_isDone) return;
-    if (!stdout.hasTerminal || !Ansi.enabled) return;
+    if (!ConsoleIo.isTerminal || !Ansi.enabled) return;
+    _renderInPlace();
+  }
 
+  void _renderInPlace() {
     final lines = formatLines();
     final buffer = StringBuffer();
     if (_renderedLines > 0) {
@@ -233,6 +237,16 @@ class ConsoleMultiProgress {
     }
     ConsoleIo.out.write(buffer.toString());
     _renderedLines = lines.length;
+  }
+
+  /// Without a terminal there is no cursor to move, so emit one durable line per
+  /// completed task instead of a redrawn frame. [ConsoleProgress] behaves the same
+  /// way; the two must not diverge in CI.
+  void _renderCompletion(_ProgressSlot slot) {
+    if (_isDone || ConsoleIo.isTerminal) return;
+    final status = slot.status ?? 'done';
+    final size = slot.total != null && slot.total! > 0 ? ' (${_formatBytes(slot.total!)})' : '';
+    ConsoleIo.out.writeln('  [$_current/$total] ${slot.label}$size [$status]');
   }
 
   void _requestRender() {
@@ -307,6 +321,7 @@ class ConsoleMultiProgress {
 
     if (isDone) {
       _slotByTask.remove(taskId);
+      _renderCompletion(_slotList[targetSlot]);
     }
 
     _requestRender();
@@ -333,7 +348,7 @@ class ConsoleMultiProgress {
     _renderTimer?.cancel();
     _renderTimer = null;
 
-    if (stdout.hasTerminal && Ansi.enabled && _renderedLines > 0) {
+    if (ConsoleIo.isTerminal && Ansi.enabled && _renderedLines > 0) {
       final buffer = StringBuffer();
       buffer.write('\x1b[${_renderedLines}A');
       for (var i = 0; i < _renderedLines; i++) {
@@ -379,7 +394,7 @@ class ConsoleSpinner {
   /// Starts the spinner animation.
   void start() {
     _stopwatch.start();
-    if (stdout.hasTerminal && Ansi.enabled) {
+    if (ConsoleIo.isTerminal && Ansi.enabled) {
       _timer = Timer.periodic(const Duration(milliseconds: 80), (_) {
         if (_isDone) return;
         final frame = _frames[_frameIndex % _frames.length];
@@ -422,7 +437,7 @@ class ConsoleSpinner {
     _timer?.cancel();
     _timer = null;
     _stopwatch.stop();
-    if (stdout.hasTerminal && Ansi.enabled) {
+    if (ConsoleIo.isTerminal && Ansi.enabled) {
       ConsoleIo.out.write('\r\x1b[K');
     }
   }
@@ -514,7 +529,7 @@ String _truncateToVisualWidth(String str, int maxWidth) {
 class Console {
   /// Clears the terminal screen.
   static void clear() {
-    if (stdout.hasTerminal && Ansi.enabled) {
+    if (ConsoleIo.isTerminal && Ansi.enabled) {
       ConsoleIo.out.write('\x1B[2J\x1B[0;0H');
     }
   }
@@ -523,7 +538,7 @@ class Console {
   static void rule([String? title]) {
     int cols = 80;
     try {
-      if (stdout.hasTerminal) cols = stdout.terminalColumns;
+      cols = ConsoleIo.columns ?? cols;
     } catch (_) {}
 
     if (title == null || title.isEmpty) {

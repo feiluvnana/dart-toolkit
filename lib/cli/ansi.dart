@@ -1,5 +1,8 @@
 import 'dart:io';
 
+import '../util/env.dart';
+import '../util/stdio.dart';
+
 /// Controller for ANSI escape codes and terminal color output.
 ///
 /// Automatically disabled when `NO_COLOR` environment variable is set or when stdout does not support ANSI escapes.
@@ -12,11 +15,14 @@ class Ansi {
   static final RegExp escapePattern = RegExp(r'\x1B\[[0-?]*[ -/]*[@-~]');
 
   /// Whether ANSI styling is enabled.
+  ///
+  /// Resolution order: an explicit [enabled] override, then `NO_COLOR`, then the
+  /// active sink — redirecting [ConsoleIo.stdoutOverride] disables styling so
+  /// captured output is plain, unless an override says otherwise.
   static bool get enabled {
     if (_override != null) return _override!;
-    if (Platform.environment.containsKey('NO_COLOR') && Platform.environment['NO_COLOR']!.isNotEmpty) {
-      return false;
-    }
+    if (Env.has('NO_COLOR')) return false;
+    if (ConsoleIo.stdoutOverride != null) return false;
     try {
       return stdout.supportsAnsiEscapes;
     } catch (_) {

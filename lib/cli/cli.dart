@@ -1,14 +1,13 @@
 import 'dart:async';
 
 import 'ansi.dart';
-import 'stdio.dart';
+import '../util/stdio.dart';
 
 export 'ansi.dart';
 export 'console.dart';
 export 'lifecycle.dart';
 export 'logger.dart';
 export 'prompt.dart';
-export 'stdio.dart';
 
 /// Callback action executed when a CLI command is triggered.
 typedef CommandHandler = FutureOr<void> Function(CliContext ctx);

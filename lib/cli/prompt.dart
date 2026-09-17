@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'ansi.dart';
-import 'stdio.dart';
+import '../util/stdio.dart';
 
 /// Helper for interactive terminal input and user prompts.
 ///

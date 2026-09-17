@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import '../util/stdio.dart';
 import '../fs/path.dart';
 import '../util/env.dart';
 import 'shell_result.dart';
@@ -156,12 +157,12 @@ Future<ShellResult> _runProcess(
 
   final stdoutFuture = process.stdout.transform(encoding.decoder).forEach((data) {
     stdoutBuf.write(data);
-    if (!quiet) stdout.write(data);
+    if (!quiet) ConsoleIo.out.write(data);
   });
 
   final stderrFuture = process.stderr.transform(encoding.decoder).forEach((data) {
     stderrBuf.write(data);
-    if (!quiet) stderr.write(data);
+    if (!quiet) ConsoleIo.err.write(data);
   });
 
   var exitCodeFuture = process.exitCode;
@@ -288,14 +289,14 @@ class CommandPipeline {
 
       final stdoutFuture = lastProcess.stdout.transform(encoding.decoder).forEach((data) {
         stdoutBuf.write(data);
-        if (!quiet) stdout.write(data);
+        if (!quiet) ConsoleIo.out.write(data);
       });
 
       final stderrFuture = Future.wait(
         processes.map(
           (p) => p.stderr.transform(encoding.decoder).forEach((data) {
             stderrBuf.write(data);
-            if (!quiet) stderr.write(data);
+            if (!quiet) ConsoleIo.err.write(data);
           }),
         ),
       );
