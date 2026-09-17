@@ -4,26 +4,33 @@
 [![Dart](https://img.shields.io/badge/Dart-3.10%2B-blue.svg)](https://dart.dev)
 [![GitHub](https://img.shields.io/badge/GitHub-feiluvnana%2Fdart--toolkit-brightgreen.svg)](https://github.com/feiluvnana/dart-toolkit)
 
-A lightweight, modern, and concise script automation and web scraping toolkit for Dart.
+A scripting, automation and web-scraping toolkit for Dart.
 
 ---
 
-## Features
+## Modules
 
-- **Process & Shell**: Top-level `$()` and `run()`, `'cmd'.run()`, `path.run()`, `which()`, command pipelines with `|`.
-- **Filesystem & Path**: Ergonomic `Path` with `/` operator, `readText()`, `writeText()`, `readJson()`, `writeJson()`, `append()`, `replace()`, `sanitized()`, `sha256()`, `md5()`, `zip()`, `unzip()`.
-- **Environment**: `Env.get()`, `Env.set()`, `Env.require()`, `Env.has()`, `Env.load()`, `Env.all()`, OS and CI detection.
-- **Async Concurrency**: `items.parallelize()`, `(() => ...).retry()`, `Mutex`, `Semaphore`, `computation.isolate()`, `CancellationToken` with a uniform `.cancelWith(token)` on any `Stream`/`Future`, stream operators (`chunk`, `flatmap`, `notnull`, `debounce`, `throttle`).
-- **Document Parsing**: `Either<L, R>`, `JsonDocument` (JSONPath), `HtmlDocument` (CSS & XPath), `XmlDocument` (XPath).
-- **HTTP & Scraping**: `http.Response` extensions (`.json()`, `.html()`, `.xml()`), scraping pipeline with `url.scrape()`.
-- **CLI & Console**: Interactive `Prompt` (`ask`, `askWith` validation, `confirm`, `secret`, generic `select`), level-aware `Logger`, `Console.spin()`, `Console.spinner()`, `Console.progress()`, `Console.multiProgress()`, `Console.table()`, `Console.rule()`, `NO_COLOR`-aware ANSI styles, `Cli` app builder, `onExit()`, `die()`.
-- **Testable IO**: every CLI component writes through `ConsoleIo`, so output can be captured, redirected, or silenced without touching call sites.
+Import the whole toolkit, or just the module you need — each is exported separately and pulls
+only its own dependencies.
+
+| import | contents | third-party cost |
+|---|---|---|
+| `collection/collection.dart` | `Iterable`, `List`, `Map` extensions | — |
+| `util/util.dart` | `Env`, `Os`, `ConsoleIo`, duration helpers | — |
+| `cli/cli.dart` | `Cli`, `Prompt`, `Logger`, `Console`, ANSI | — |
+| `core/core.dart` | `Either`, `JsonDocument`, `HtmlDocument`, `XmlDocument` | html, xml, xpath |
+| `async/async.dart` | `parallelize`, `retry`, `Mutex`, `CancellationToken` | rxdart |
+| `fs/fs.dart` | `Path` | path |
+| `hash/hash.dart` | SHA-256, MD5 | crypto |
+| `archive/archive.dart` | zip, unzip | archive, path |
+| `process/process.dart` | `run`, pipelines, `which` | path |
+| `http/http.dart` | scraping, downloads, response parsing | http + core's |
+
+`tool/check_deps.dart` enforces this table in CI.
 
 ---
 
 ## Installation
-
-Add `dart_toolkit` to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
@@ -34,133 +41,151 @@ dependencies:
 
 ---
 
-## Quick Tour
+## Tour
 
-### 1. Process & Shell Automation
+### Processes
 
 ```dart
-import 'package:dart_toolkit/dart_toolkit.dart';
+final res = await run('git status --short');
+if (res.ok) print(res.text);
 
-void main() async {
-  // Execute system commands
-  final res = await $('git status --short');
-  if (res.ok) print(res.text);
+await 'echo "Hello World"'.run();
+await (await which('dart'))?.run(args: ['--version']);
 
-  // String and Path extensions
-  await 'echo "Hello World"'.run();
-  await (await which('dart'))?.run(args: ['--version']);
-
-  // Piping processes
-  final piped = await ('echo "apple\nbanana"' | 'grep an').run();
-  print(piped.lines);
-}
+final piped = await ('echo "apple\nbanana"' | 'grep an').run();
+print(piped.lines);
 ```
 
-### 2. Filesystem & Paths
+### Paths
+
+`Path` is an extension type over `String`, so it goes anywhere a path string does.
 
 ```dart
 final dir = Path.temp / 'my_project';
 await dir.mkdir();
 
 final file = dir / 'config.json';
-await file.writeJson({'version': '0.0.1', 'debug': true});
+await file.writeText(jsonEncode({'version': '0.0.1'}));
 
-final json = await file.readJson();
-print(json.$jsonpath(r'$.version').firstOrNull?.raw);
+final config = JsonDocument.parse(await file.readText());
+print(config.$jsonpath(r'$.version').first.raw);
 
-print('SHA-256: ${await file.sha256()}');
+print((await file.readBytes()).sha256);
+await dir.zipTo('${dir.path}.zip');
 ```
 
-### 3. Environment & `.env`
+`Path` cannot override `==` — normalize at map boundaries:
 
 ```dart
-// Load .env content
-Env.load('PORT=8080\nDB_HOST=localhost');
-
-final port = Env.get('PORT', '3000');
-final dbHost = Env.require('DB_HOST');
-final allVars = Env.all();
+final seen = <Path, int>{p.normalized: 1};
 ```
 
-### 4. Async & Concurrency
+### Concurrency
+
+One primitive settles every task; `unwrap` picks the error policy at the use site.
 
 ```dart
-// Bounded parallel execution
-final results = await [1, 2, 3, 4].parallelize((n) async {
-  await 100.ms.delay();
-  return n * 10;
-}, concurrency: 2);
+final settled = await urls.parallelize(fetch, concurrency: 8);  // List<Either<Object, Page>>
+print('${settled.rights.length} ok, ${settled.lefts.length} failed');
 
-// Retry builder
-final data = await (() async => fetchData()).retry().attempts(3).delay(200.ms);
-
-// Critical section protection
-final mutex = Mutex();
-await mutex.protect(() async {
-  // atomic critical section
-});
+final pages = (await urls.parallelize(fetch)).unwrap();  // or throw the first failure
 ```
 
-### 5. CLI, Prompts & Spinners
-
 ```dart
-onExit(() => print('Cleaning up...'));
+final data = await (() => fetchData()).retry().maxAttempts(3).delay(200.ms);
 
-await Console.spin('Deploying...', () async {
-  await 500.ms.delay();
-});
-
-final answer = Prompt.confirm('Proceed with deployment?', true);
-if (!answer) die('Aborted by user');
-
-Console.table(
-  headers: ['Name', 'Status'],
-  rows: [
-    ['API', 'Running'],
-    ['DB', 'Connected'],
-  ],
-);
+final lock = Mutex();
+await lock.run(() async { /* critical section */ });
 ```
 
----
-
-### 6. Logging, Validation & Cancellation
+One cancellation idiom composes over any `Stream` or `Future`:
 
 ```dart
-// Logger respects a global level; silence a noisy section inline.
-Logger.level = LogLevel.debug;
-Logger.debug('resolved 128 candidate URLs');
-Logger.silenced(() => runVerboseStep());
-
-// Prompts validate and work with any element type.
-final port = Prompt.askWith('Port', defaultTo: '8080',
-    validate: (v) => int.tryParse(v) == null ? 'Must be a number' : null);
-
-final target = Prompt.select('Deploy target', servers,
-    display: (s) => '${s.name} (${s.region})');
-
-// One cancellation idiom for every async operation.
 final token = CancellationToken();
 onExit(() => token.cancel('interrupted'));
 
 await for (final item in url.scrape<Item>(parse).cancelWith(token)) {
   print(item);
 }
+```
 
-// Capture CLI output in tests without changing call sites.
+### Scraping
+
+```dart
+final items = url.scrape<Item>((ctx) {
+  for (final row in ctx.response.html().$('tr.item')) {
+    ctx.emit(Item(row.$('.title').first.text));
+  }
+  ctx.followAll(ctx.response.html().$('a.next').map((a) => a.attr('href')!));
+}, concurrency: 8);
+
+await for (final item in items) print(item);
+```
+
+Downloads are atomic — a `.part` file renamed on success, with `Content-Length` verified:
+
+```dart
+await for (final p in {url: dest}.downloadAll(concurrency: 4)) {
+  print('${p.completed}/${p.total} ${p.current.path.name}');
+}
+```
+
+### Errors
+
+```dart
+final outcome = Either.tryCatch(() => int.parse(raw));
+final typed = outcome.mapLeft(ParseFailure.from);   // narrow afterwards
+print(typed.fold((e) => 'failed: $e', (v) => 'got $v'));
+```
+
+### CLI
+
+Option kinds are a sealed type, so a flag cannot also be numeric.
+
+```dart
+final cli = Cli(name: 'deployer')
+  ..choice('env', ['dev', 'staging', 'production'], abbr: 'e', defaultTo: 'production')
+  ..number('workers', abbr: 'w', defaultTo: 4)
+  ..flag('dry-run', abbr: 'd')
+  ..action((ctx) async {
+    Logger.info('Deploying to ${ctx.option('env')} with ${ctx.number('workers')} workers');
+    await Console.spin('Deploying...', deploy);
+  });
+
+await cli.run(args);
+```
+
+Every builder method returns the receiver; nesting is explicit:
+
+```dart
+cli.command('fetch', build: (fetch) => fetch
+  ..flag('verbose', abbr: 'v')
+  ..action(run));
+```
+
+### Testable IO
+
+Every console write — including subprocess output — goes through `ConsoleIo`, which also drives
+terminal detection, so redirecting the sink redirects what gets rendered.
+
+```dart
 final buffer = StringBuffer();
 ConsoleIo.stdoutOverride = buffer;
 Logger.ok('captured, not printed');
+await run('echo also-captured');
 ConsoleIo.reset();
 ```
 
 ---
 
-## Full Example
+## Examples
 
-See [`example/example.dart`](example/example.dart) for a runnable demonstration of every API.
+See [`example/`](example/) for three runnable programs.
 
----
+## Conventions
+
+[`CONVENTIONS.md`](CONVENTIONS.md) records the rules this API follows, so additions do
+not re-create what [`AUDIT.md`](AUDIT.md) found.
 
 ## License
 

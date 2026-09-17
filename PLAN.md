@@ -641,7 +641,7 @@ from 34. Nothing under `src/` appears in the generated docs.
    `example.dart`.
 3. **CHANGELOG.md** — one entry listing every breaking change, with the §11 migration table
    inline. Leave the version heading as `## Unreleased`; the user sets the number.
-4. **`doc/conventions.md`** — write down the rules this plan establishes, so the next addition
+4. **`CONVENTIONS.md`** — write down the rules this plan establishes, so the next addition
    does not re-create the mess:
    - extensions are named `<Receiver>Extensions`, receiver first, no module prefix;
    - top-level functions are reserved for verbs typed constantly in scripts
@@ -663,14 +663,14 @@ Run **after** every other phase, so it trims the final text rather than text tha
 change.
 
 The doc comments have grown to carry design rationale that belongs in this plan, in
-`doc/conventions.md`, or in the CHANGELOG. Pass over `lib/` and cut them back:
+`CONVENTIONS.md`, or in the CHANGELOG. Pass over `lib/` and cut them back:
 
 1. **One line for the common case.** A member whose name and signature say what it does gets a
    single `/// Sentence.` — no restatement of the parameter list, no "Returns a ... that ...".
 2. **Keep only what the reader cannot infer**: units, defaults that matter, throwing behaviour,
    mutually exclusive parameters, and anything surprising (`unwrap` is not fail-fast;
    `Path` cannot override `==`).
-3. **Delete rationale.** Why an API is shaped this way goes in `doc/conventions.md`; the
+3. **Delete rationale.** Why an API is shaped this way goes in `CONVENTIONS.md`; the
    audit trail goes in the CHANGELOG. Doc comments are reference, not argument.
 4. **Delete restated code.** Comments that narrate the next line go; comments naming a
    non-obvious invariant stay.
@@ -694,7 +694,7 @@ Carried from AUDIT §6 plus two decisions this plan adds.
 | Rename `parallelize` | **No.** README headline; §1.2 makes it the single surviving concurrency primitive instead. |
 | Keep a fail-fast `parallelMap` | **No.** Replaced by `parallelize(...).unwrap()`, which picks the error policy at the use site instead of forking the primitive. Semantic change flagged in §1.3 and §13. |
 | Upstream XPath strictness | **No.** `xpath_selector` accepts malformed expressions. Capped by the dependency; unchanged since the previous audit. |
-| Delete `FutureShellResultExtension` | **No** — keep `await run('cmd').text`. AUDIT §4.9 is right that it is a one-off convention, but shell chaining is this package's hottest path. Recorded as an explicit exception in `doc/conventions.md` rather than removed or generalised. |
+| Delete `FutureShellResultExtension` | **No** — keep `await run('cmd').text`. AUDIT §4.9 is right that it is a one-off convention, but shell chaining is this package's hottest path. Recorded as an explicit exception in `CONVENTIONS.md` rather than removed or generalised. |
 | Collapse `scrape` to one entry point | **Partially** — see §6.3 deviation. |
 
 ---
