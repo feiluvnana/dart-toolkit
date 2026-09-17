@@ -408,7 +408,7 @@ class ConsoleSpinner {
   }
 
   /// Stops the spinner with a success message.
-  void success([String? successMessage]) {
+  void succeed([String? successMessage]) {
     _stop();
     final elapsed = _stopwatch.elapsed.humanize();
     final text = successMessage ?? message;
@@ -423,11 +423,11 @@ class ConsoleSpinner {
     ConsoleIo.err.writeln('  ✖ $text ($elapsed)'.red);
   }
 
-  /// Stops the spinner with an informational message.
-  void info([String? infoMessage]) {
+  /// Stops the spinner with a neutral message.
+  void stop([String? finalMessage]) {
     _stop();
     final elapsed = _stopwatch.elapsed.humanize();
-    final text = infoMessage ?? message;
+    final text = finalMessage ?? message;
     ConsoleIo.out.writeln('  ℹ $text ($elapsed)'.cyan);
   }
 
@@ -451,7 +451,7 @@ class ConsoleSpinner {
     final spinner = ConsoleSpinner._(message)..start();
     try {
       final result = await action();
-      spinner.success(successMessage);
+      spinner.succeed(successMessage);
       return result;
     } catch (e) {
       spinner.fail(failMessage ?? '$message failed: $e');

@@ -50,14 +50,8 @@ class Env {
   /// Whether the current operating system is macOS.
   static bool get isMacOS => Platform.isMacOS;
 
-  /// Shorthand alias for [isMacOS].
-  static bool get isMac => Platform.isMacOS;
-
   /// Whether the current operating system is Windows.
   static bool get isWindows => Platform.isWindows;
-
-  /// Shorthand alias for [isWindows].
-  static bool get isWin => Platform.isWindows;
 
   /// Whether the current operating system is Linux.
   static bool get isLinux => Platform.isLinux;

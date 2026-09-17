@@ -23,8 +23,8 @@ void main() {
     test('Console.spinner controls start, success, fail, info', () {
       final spinner = Console.spinner('Custom spinner');
       expect(() => spinner.start(), returnsNormally);
-      expect(() => spinner.info('Info note'), returnsNormally);
-      expect(() => spinner.success('Done'), returnsNormally);
+      expect(() => spinner.stop('Info note'), returnsNormally);
+      expect(() => spinner.succeed('Done'), returnsNormally);
       expect(() => spinner.fail('Error'), returnsNormally);
     });
 

@@ -13,7 +13,7 @@ void main() async {
     Logger.info('SHA-256: $sha');
 
     final zipPath = tempDir / 'archive.zip';
-    await tempDir.zip(zipPath.path);
+    await tempDir.zipTo(zipPath.path);
     Logger.ok('Zipped directory into $zipPath');
   } finally {
     await tempDir.delete(recursive: true);

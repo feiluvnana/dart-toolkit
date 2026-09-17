@@ -42,7 +42,7 @@ class Ansi {
 /// ANSI terminal styling extensions on [String].
 ///
 /// {@category Terminal}
-extension AnsiString on String {
+extension StringAnsiExtensions on String {
   /// Wraps this string in SGR [code], reopening it after any nested reset so that
   /// styles compose: `('a'.red + 'b').bold` leaves `b` bold.
   String _wrap(String code) {

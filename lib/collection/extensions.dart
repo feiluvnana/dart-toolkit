@@ -3,7 +3,7 @@ import 'dart:math';
 /// Functional extensions on [Iterable].
 ///
 /// {@category Collections}
-extension CollectionIterableExtensions<T> on Iterable<T> {
+extension IterableExtensions<T> on Iterable<T> {
   /// Splits elements into fixed-size chunks of length [size].
   Iterable<List<T>> chunk(int size) sync* {
     if (size <= 0) throw ArgumentError.value(size, 'size', 'Must be positive');
@@ -131,7 +131,7 @@ extension CollectionIterableExtensions<T> on Iterable<T> {
 }
 
 /// Functional extensions on [List].
-extension CollectionListExtensions<T> on List<T> {
+extension ListExtensions<T> on List<T> {
   /// Returns the element at [index], or `null` if out of bounds.
   T? getOrNull(int index) => index >= 0 && index < length ? this[index] : null;
 
@@ -140,7 +140,7 @@ extension CollectionListExtensions<T> on List<T> {
 }
 
 /// Functional extensions on [Map].
-extension CollectionMapExtensions<K, V> on Map<K, V> {
+extension MapExtensions<K, V> on Map<K, V> {
   /// Merges with [other] map, resolving collisions with [resolve].
   Map<K, V> mergeWith(Map<K, V> other, V Function(V v1, V v2) resolve) {
     final result = Map<K, V>.from(this);
@@ -156,7 +156,7 @@ extension CollectionMapExtensions<K, V> on Map<K, V> {
 }
 
 /// Extensions on paired iterables.
-extension PairedIterable<A, B> on Iterable<(A, B)> {
+extension IterablePairExtensions<A, B> on Iterable<(A, B)> {
   /// Splits a sequence of records into two lists.
   (List<A>, List<B>) get unzip {
     final listA = <A>[], listB = <B>[];

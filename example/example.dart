@@ -14,10 +14,10 @@ void main(List<String> args) async {
   Logger.info('which("dart"): $dartPath');
 
   // 1.2 Top-level $ and run()
-  final echo1 = await $(r'echo "Running via $"', quiet: true);
+  final echo1 = await run(r'echo "Running via $"', quiet: true);
   final echo2 = await run('echo "Running via run()"', quiet: true);
-  Logger.ok('Dollar execution: "${echo1.text}" (ok: ${echo1.ok}, exitcode: ${echo1.exitcode})');
-  Logger.ok('Run execution:    "${echo2.text}" (failed: ${echo2.failed})');
+  Logger.ok('Dollar execution: "${echo1.text}" (ok: ${echo1.ok}, exitcode: ${echo1.exitCode})');
+  Logger.ok('Run execution:    "${echo2.text}" (failed: ${echo2.isFailed})');
 
   // 1.3 Extension syntax on String and Path
   final stringRun = await 'echo "Running via String.run()"'.run(quiet: true);
@@ -82,7 +82,7 @@ void main(List<String> args) async {
     final textFile = workspace / 'notes.txt';
     await textFile.writeText('Line 1: Alpha\nLine 2: Beta\n');
     await textFile.append('Line 3: Gamma\n');
-    await textFile.replace('Beta', 'BETA_REPLACED');
+    await textFile.replaceInFile('Beta', 'BETA_REPLACED');
 
     Logger.ok('readText():\n${(await textFile.readText()).trim()}');
     Logger.info('readLines(): ${await textFile.readLines()}');
@@ -114,10 +114,10 @@ void main(List<String> args) async {
 
     // 2.6 Entity checks & sizing (Async & Sync)
     Logger.info(
-      'type(): ${await textFile.type()}, exist(): ${await textFile.exist()}, size(): ${await textFile.size()} bytes',
+      'type(): ${await textFile.type()}, exist(): ${await textFile.exists()}, size(): ${await textFile.size()} bytes',
     );
     Logger.info(
-      'typeSync(): ${textFile.typeSync()}, existSync(): ${textFile.existSync()}, sizeSync(): ${textFile.sizeSync()} bytes',
+      'typeSync(): ${textFile.typeSync()}, existSync(): ${textFile.existsSync()}, sizeSync(): ${textFile.sizeSync()} bytes',
     );
 
     // 2.7 Cryptographic checksums (Async & Sync)
@@ -140,19 +140,19 @@ void main(List<String> args) async {
     // Copy & Move (Sync)
     final copyTarget = workspace / 'notes_copy.txt';
     textFile.copySync(copyTarget.path);
-    Logger.ok('copySync(): exists=${copyTarget.existSync()}');
+    Logger.ok('copySync(): exists=${copyTarget.existsSync()}');
 
     final moveTarget = workspace / 'notes_moved.txt';
     copyTarget.moveSync(moveTarget.path);
-    Logger.ok('moveSync(): exists=${moveTarget.existSync()}');
+    Logger.ok('moveSync(): exists=${moveTarget.existsSync()}');
 
     // Zip and Unzip (Sync)
     final zipFile = Path.temp / 'toolkit_demo_archive.zip';
-    nestedDir.zipSync(zipFile.path);
+    nestedDir.zipToSync(zipFile.path);
     Logger.ok('zipSync(): archive=${zipFile.name} (${zipFile.sizeSync()} bytes)');
 
     final extractedDir = workspace / 'unzipped';
-    zipFile.unzipSync(extractedDir.path);
+    zipFile.extractToSync(extractedDir.path);
     Logger.ok('unzipSync(): extracted ${extractedDir.filesSync(recursive: true).length} files');
     zipFile.deleteSync();
   } finally {
@@ -185,8 +185,8 @@ EXPORT_VAR=export_value
   Logger.ok('Env.load: $loadedDotEnv');
 
   // 3.3 Platform & CI environment detection
-  Logger.info('Env.isMac: ${Env.isMac} (isMacOS: ${Env.isMacOS})');
-  Logger.info('Env.isWin: ${Env.isWin} (isWindows: ${Env.isWindows})');
+  Logger.info('Env.isMacOS: ${Env.isMacOS} (isMacOS: ${Env.isMacOS})');
+  Logger.info('Env.isWindows: ${Env.isWindows} (isWindows: ${Env.isWindows})');
   Logger.info('Env.isLinux: ${Env.isLinux}');
   Logger.info('Env.isCI: ${Env.isCI}');
 
@@ -228,13 +228,13 @@ EXPORT_VAR=export_value
   final mutex = Mutex();
   var mutexCounter = 0;
   await [1, 2, 3, 4].parallelize(
-    (_) => mutex.protect(() async {
+    (_) => mutex.run(() async {
       final current = mutexCounter;
       await 5.ms.delay();
       mutexCounter = current + 1;
     }),
   );
-  Logger.ok('Mutex.protect(): counter=$mutexCounter (isLocked=${mutex.isLocked})');
+  Logger.ok('Mutex.run(): counter=$mutexCounter (isLocked=${mutex.isLocked})');
 
   // 4.4 Semaphore (Permit-limited section)
   final semaphore = Semaphore(2);
@@ -262,7 +262,7 @@ EXPORT_VAR=export_value
 
   // 4.6 Stream Extensions: chunk, flatmap, notnull, debounce, throttle
   final sourceStream = Stream.fromIterable([1, 2, null, 3, 4, null, 5, 6]);
-  final cleanChunks = await sourceStream.notnull().flatmap((n) => Stream.value(n * 2)).chunk(3).toList();
+  final cleanChunks = await sourceStream.whereNotNull().flatMap((n) => Stream.value(n * 2)).chunk(3).toList();
   Logger.ok('Stream extensions (notnull -> flatmap -> chunk): $cleanChunks');
 
   // =========================================================================
@@ -380,8 +380,7 @@ EXPORT_VAR=export_value
 
   final customSpinner = Console.spinner('Manual spinner control')..start();
   await 40.ms.delay();
-  customSpinner.info('Discovered components');
-  customSpinner.success('Manual spinner complete');
+  customSpinner.succeed('Manual spinner complete');
 
   final progressBar = Console.progress(4, message: 'Synchronizing');
   for (var i = 1; i <= 4; i++) {

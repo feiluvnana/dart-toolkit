@@ -14,7 +14,7 @@ final Expando<JsonDocument> _jsonMemo = Expando<JsonDocument>('jsonMemo');
 /// Format parser extensions on [http.Response].
 ///
 /// {@category Networking}
-extension HttpToolkitResponse on http.Response {
+extension ResponseExtensions on http.Response {
   /// Executes a computation [action] on this response inside a background [Isolate].
   ///
   /// Only copies essential fields (body string, status code, headers, URL) into
@@ -131,7 +131,7 @@ extension HttpClientFormatExtensions on http.Client {
 /// Convenience HTTP request, format parsing, and path operators on [Uri].
 ///
 /// {@category Networking}
-extension UriHttpExtensions on Uri {
+extension UriExtensions on Uri {
   /// Resolves [subpath] against this URI.
   Uri operator /(String subpath) => resolve(subpath);
 

@@ -22,9 +22,9 @@ void main() {
       final sub = root / 'sub' / 'file.txt';
 
       expect(sub, equals('test_dir/sub/file.txt'.replaceAll('/', Platform.pathSeparator)));
-      expect(sub.file, isA<File>());
-      expect(sub.dir, isA<Directory>());
-      expect(sub.file.path, equals(sub));
+      expect(sub.asFile, isA<File>());
+      expect(sub.asDir, isA<Directory>());
+      expect(sub.asFile.path, equals(sub));
     });
 
     test('String extension .path and /', () {
@@ -44,11 +44,11 @@ void main() {
       final root = Path(tempDir.path) / 'text_test';
       final file = root / 'hello.txt';
 
-      expect(await file.exist(), isFalse);
+      expect(await file.exists(), isFalse);
       expect(await file.type(), equals(PathType.none));
 
       await file.writeText('Hello World');
-      expect(await file.exist(), isTrue);
+      expect(await file.exists(), isTrue);
       expect(await file.type(), equals(PathType.file));
       expect(await file.readText(), equals('Hello World'));
       expect(await file.size(), equals(11));
@@ -60,11 +60,11 @@ void main() {
 
       // Sync counterparts
       final syncFile = root / 'sync.txt';
-      expect(syncFile.existSync(), isFalse);
+      expect(syncFile.existsSync(), isFalse);
       expect(syncFile.typeSync(), equals(PathType.none));
 
       syncFile.writeTextSync('Sync Content');
-      expect(syncFile.existSync(), isTrue);
+      expect(syncFile.existsSync(), isTrue);
       expect(syncFile.typeSync(), equals(PathType.file));
       expect(syncFile.readTextSync(), equals('Sync Content'));
       expect(syncFile.readLinesSync(), equals(['Sync Content']));
@@ -98,28 +98,28 @@ void main() {
 
       // Zip
       final zipFile = base / 'archive.zip';
-      await folder.zip(zipFile);
-      expect(await zipFile.exist(), isTrue);
+      await folder.zipTo(zipFile);
+      expect(await zipFile.exists(), isTrue);
 
       // Unzip
       final extracted = base / 'extracted';
-      await zipFile.unzip(extracted);
-      expect(await (extracted / 'note.txt').exist(), isTrue);
+      await zipFile.extractTo(extracted);
+      expect(await (extracted / 'note.txt').exists(), isTrue);
       expect(await (extracted / 'note.txt').readText(), equals('Archive Note'));
 
       // Copy & Move
       final copied = base / 'copied_dir';
       await folder.copy(copied);
-      expect(await (copied / 'note.txt').exist(), isTrue);
+      expect(await (copied / 'note.txt').exists(), isTrue);
 
       final moved = base / 'moved_dir';
       await copied.move(moved);
-      expect(await copied.exist(), isFalse);
-      expect(await (moved / 'note.txt').exist(), isTrue);
+      expect(await copied.exists(), isFalse);
+      expect(await (moved / 'note.txt').exists(), isTrue);
 
       // Delete
       await moved.delete(recursive: true);
-      expect(await moved.exist(), isFalse);
+      expect(await moved.exists(), isFalse);
     });
 
     test('download and downloadAll stream progress correctly', () async {
@@ -194,7 +194,7 @@ void main() {
       final htmlFile = base / 'page.html';
       final initialHtml = HtmlDocument.parse('<!DOCTYPE html><html><body><h1>Header</h1></body></html>');
       await htmlFile.writeHtml(initialHtml);
-      expect(await htmlFile.exist(), isTrue);
+      expect(await htmlFile.exists(), isTrue);
 
       final readHtmlDoc = await htmlFile.readHtml();
       expect(readHtmlDoc.$('h1').firstOrNull?.text, equals('Header'));
@@ -203,7 +203,7 @@ void main() {
       final xmlFile = base / 'data.xml';
       final initialXml = XmlDocument.parse('<root><item id="1">Value</item></root>');
       await xmlFile.writeXml(initialXml);
-      expect(await xmlFile.exist(), isTrue);
+      expect(await xmlFile.exists(), isTrue);
 
       final readXmlDoc = await xmlFile.readXml();
       expect((readXmlDoc.$xpath('//item').firstOrNull as xml_dom.XmlElement?)?.innerText, equals('Value'));
@@ -211,7 +211,7 @@ void main() {
       // Sync document operations
       final syncJsonFile = base / 'sync.json';
       syncJsonFile.writeJsonSync({'key': 'val', 'num': 42});
-      expect(syncJsonFile.existSync(), isTrue);
+      expect(syncJsonFile.existsSync(), isTrue);
       final syncJson = syncJsonFile.readJsonSync();
       expect(syncJson['key'].to<String>(), equals('val'));
       expect(syncJson['num'].to<int>(), equals(42));
@@ -229,7 +229,7 @@ void main() {
       syncDir.mkdirSync();
       expect(syncDir.typeSync(), equals(PathType.dir));
       syncDir.deleteSync(recursive: true);
-      expect(syncDir.existSync(), isFalse);
+      expect(syncDir.existsSync(), isFalse);
     });
 
     test('list, files, dirs, links, and glob streams', () async {
@@ -301,7 +301,7 @@ void main() {
         // appendSync & replaceSync
         file1.appendSync('!!!');
         expect(file1.readTextSync(), equals('Hello World!!!'));
-        file1.replaceSync('World', 'Dart');
+        file1.replaceInFileSync('World', 'Dart');
         expect(file1.readTextSync(), equals('Hello Dart!!!'));
 
         // hashes
@@ -311,23 +311,23 @@ void main() {
         // copySync & moveSync
         final copyDest = base / 'file1_copy.txt';
         file1.copySync(copyDest.path);
-        expect(copyDest.existSync(), isTrue);
+        expect(copyDest.existsSync(), isTrue);
         expect(copyDest.readTextSync(), equals('Hello Dart!!!'));
 
         final moveDest = base / 'file1_moved.txt';
         copyDest.moveSync(moveDest.path);
-        expect(copyDest.existSync(), isFalse);
-        expect(moveDest.existSync(), isTrue);
+        expect(copyDest.existsSync(), isFalse);
+        expect(moveDest.existsSync(), isTrue);
         expect(moveDest.readTextSync(), equals('Hello Dart!!!'));
 
         // zipSync & unzipSync
         final zipDest = Path(tempDir.path) / 'archive_sync.zip';
-        base.zipSync(zipDest.path);
-        expect(zipDest.existSync(), isTrue);
+        base.zipToSync(zipDest.path);
+        expect(zipDest.existsSync(), isTrue);
 
         final unzipDir = Path(tempDir.path) / 'unzipped_sync';
-        zipDest.unzipSync(unzipDir.path);
-        expect(unzipDir.existSync(), isTrue);
+        zipDest.extractToSync(unzipDir.path);
+        expect(unzipDir.existsSync(), isTrue);
         expect(unzipDir.filesSync(recursive: true).isNotEmpty, isTrue);
       },
     );

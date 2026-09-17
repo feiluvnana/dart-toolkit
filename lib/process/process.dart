@@ -85,29 +85,6 @@ Future<ShellResult> run(
   shell: shell,
 );
 
-/// Shorthand alias for [run].
-///
-/// {@category System}
-Future<ShellResult> $(
-  String command, {
-  Path? workdir,
-  Map<String, String>? env,
-  Duration? timeout,
-  bool quiet = false,
-  bool throwOnError = true,
-  Encoding encoding = utf8,
-  bool shell = false,
-}) => run(
-  command,
-  workdir: workdir,
-  env: env,
-  timeout: timeout,
-  quiet: quiet,
-  throwOnError: throwOnError,
-  encoding: encoding,
-  shell: shell,
-);
-
 /// Internal process execution implementation.
 Future<ShellResult> _runProcess(
   String command, {
@@ -181,7 +158,7 @@ Future<ShellResult> _runProcess(
 
   final result = ShellResult(
     command: displayCommand,
-    exitcode: code,
+    exitCode: code,
     stdout: stdoutBuf.toString(),
     stderr: stderrBuf.toString(),
   );
@@ -307,7 +284,7 @@ class CommandPipeline {
       final lastExitCode = exitCodes.last;
       final result = ShellResult(
         command: _commands.join(' | '),
-        exitcode: lastExitCode,
+        exitCode: lastExitCode,
         stdout: stdoutBuf.toString(),
         stderr: stderrBuf.toString(),
       );
@@ -328,7 +305,7 @@ class CommandPipeline {
 /// Extension on [String] for concise command execution and piping.
 ///
 /// {@category System}
-extension ShellStringExtension on String {
+extension StringShellExtensions on String {
   /// Executes this string as a system command.
   Future<ShellResult> run({
     Path? workdir,
@@ -359,7 +336,7 @@ extension ShellStringExtension on String {
 /// Extension on [Path] for executing scripts or binaries directly.
 ///
 /// {@category System}
-extension ShellPathExtension on Path {
+extension PathShellExtensions on Path {
   /// Executes the file or binary at this path as a system command.
   ///
   /// Example:
@@ -391,7 +368,7 @@ extension ShellPathExtension on Path {
 /// Shorthand getters on `Future<ShellResult>` for clean chaining.
 ///
 /// {@category System}
-extension FutureShellResultExtension on Future<ShellResult> {
+extension FutureShellResultExtensions on Future<ShellResult> {
   /// The trimmed stdout text of the executed command.
   Future<String> get text => then((r) => r.text);
 

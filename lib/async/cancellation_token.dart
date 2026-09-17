@@ -73,7 +73,7 @@ class CancellationException implements Exception {
 /// ```
 ///
 /// {@category Concurrency}
-extension CancellableStream<T> on Stream<T> {
+extension StreamCancelExtensions<T> on Stream<T> {
   /// Stops this stream when [token] is cancelled.
   ///
   /// Set [throwOnCancel] to surface a [CancellationException] instead of
@@ -124,7 +124,7 @@ extension CancellableStream<T> on Stream<T> {
 /// Uniform cancellation composition for any [Future].
 ///
 /// {@category Concurrency}
-extension CancellableFuture<T> on Future<T> {
+extension FutureCancelExtensions<T> on Future<T> {
   /// Completes with a [CancellationException] as soon as [token] is cancelled.
   ///
   /// The underlying work is not interrupted; pass `cancelToken:` to the

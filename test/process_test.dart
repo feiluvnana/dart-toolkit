@@ -5,22 +5,22 @@ import 'package:test/test.dart';
 
 void main() {
   group('Process & Shell Execution', () {
-    test(r'run() and $(...) execute system commands and capture stdout', () async {
+    test(r'run() and run(...) execute system commands and capture stdout', () async {
       final resRun = await run('echo hello_world', quiet: true);
       expect(resRun.ok, isTrue);
-      expect(resRun.failed, isFalse);
-      expect(resRun.exitcode, equals(0));
+      expect(resRun.isFailed, isFalse);
+      expect(resRun.exitCode, equals(0));
       expect(resRun.text, equals('hello_world'));
       expect(resRun.lines, equals(['hello_world']));
 
       // Top-level $ shorthand
-      final resDollar = await $('echo from_dollar', quiet: true);
+      final resDollar = await run('echo from_dollar', quiet: true);
       expect(resDollar.text, equals('from_dollar'));
 
       // Future<ShellResult> extension getters
-      expect(await $('echo direct_text', quiet: true).text, equals('direct_text'));
-      expect(await $('echo "line1\nline2"', quiet: true).lines, equals(['line1', 'line2']));
-      expect(await $('echo true', quiet: true).ok, isTrue);
+      expect(await run('echo direct_text', quiet: true).text, equals('direct_text'));
+      expect(await run('echo "line1\nline2"', quiet: true).lines, equals(['line1', 'line2']));
+      expect(await run('echo true', quiet: true).ok, isTrue);
     });
 
     test('String.run() and Path.run() execute concise commands with workdir', () async {
@@ -52,22 +52,22 @@ void main() {
       expect(res.json, isA<Map<String, dynamic>>());
     });
 
-    test(r'$(...) throws ShellException when throwOnError is true (default)', () async {
-      expect(() => $('dart --non-existent-flag-xyz', quiet: true), throwsA(isA<ShellException>()));
+    test(r'run(...) throws ShellException when throwOnError is true (default)', () async {
+      expect(() => run('dart --non-existent-flag-xyz', quiet: true), throwsA(isA<ShellException>()));
     });
 
-    test(r'$(...) returns ShellResult without throwing when throwOnError is false', () async {
-      final res = await $('dart --non-existent-flag-xyz', quiet: true, throwOnError: false);
+    test(r'run(...) returns ShellResult without throwing when throwOnError is false', () async {
+      final res = await run('dart --non-existent-flag-xyz', quiet: true, throwOnError: false);
       expect(res.ok, isFalse);
-      expect(res.failed, isTrue);
       expect(res.isFailed, isTrue);
-      expect(res.exitcode, isNot(equals(0)));
+      expect(res.isFailed, isTrue);
+      expect(res.exitCode, isNot(equals(0)));
     });
 
     test('which() locates system executables', () async {
       final dartPath = await which('dart');
       expect(dartPath, isNotNull);
-      expect(await dartPath!.exist(), isTrue);
+      expect(await dartPath!.exists(), isTrue);
 
       final nonExistent = await which('non_existent_binary_xyz_123');
       expect(nonExistent, isNull);

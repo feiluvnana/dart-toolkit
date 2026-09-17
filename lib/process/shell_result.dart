@@ -8,7 +8,7 @@ class ShellResult {
   final String command;
 
   /// The process exit code (0 indicates success).
-  final int exitcode;
+  final int exitCode;
 
   /// Standard output captured as a string.
   final String stdout;
@@ -17,18 +17,15 @@ class ShellResult {
   final String stderr;
 
   /// Whether the process exited successfully with code 0.
-  bool get ok => exitcode == 0;
+  bool get ok => exitCode == 0;
 
   /// Whether the process failed with a non-zero exit code.
-  bool get isFailed => exitcode != 0;
-
-  /// Shorthand alias for [isFailed].
-  bool get failed => isFailed;
+  bool get isFailed => exitCode != 0;
 
   /// Concise trimmed stdout text.
   String get text => stdout.trim();
 
-  const ShellResult({required this.command, required this.exitcode, required this.stdout, required this.stderr});
+  const ShellResult({required this.command, required this.exitCode, required this.stdout, required this.stderr});
 
   /// Non-empty, trimmed lines extracted from [stdout].
   List<String> get lines =>
@@ -51,5 +48,5 @@ class ShellException implements Exception {
 
   @override
   String toString() =>
-      'ShellException: Command "${result.command}" exited with code ${result.exitcode}.\nStderr:\n${result.stderr.trim()}';
+      'ShellException: Command "${result.command}" exited with code ${result.exitCode}.\nStderr:\n${result.stderr.trim()}';
 }

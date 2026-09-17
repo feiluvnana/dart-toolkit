@@ -53,7 +53,7 @@ SINGLE_QUOTED='single quote value'
     });
 
     test('Platform getters work without errors', () {
-      expect(Env.isMac || Env.isWin || Env.isLinux, isTrue);
+      expect(Env.isMacOS || Env.isWindows || Env.isLinux, isTrue);
       expect(Env.isMacOS || Env.isWindows, isTrue);
       expect(Env.isCI, isA<bool>());
     });

@@ -83,7 +83,4 @@ class Mutex {
 
   /// Executes [action] while holding the mutex lock.
   Future<T> run<T>(FutureOr<T> Function() action) => _semaphore.run(action);
-
-  /// Shorthand alias for [run].
-  Future<T> protect<T>(FutureOr<T> Function() action) => run(action);
 }

@@ -67,8 +67,11 @@ class RetryBuilder<T> implements Future<T> {
     return this;
   }
 
-  /// Attaches a [CancellationToken] to abort retries.
-  RetryBuilder<T> cancelWith(CancellationToken token) {
+  /// Attaches a [CancellationToken] that aborts the retry loop.
+  ///
+  /// Distinct from `Future.cancelWith`, which only completes the outer future
+  /// with an error and leaves the retries running.
+  RetryBuilder<T> cancelOn(CancellationToken token) {
     _checkNotStarted();
     _cancelToken = token;
     return this;
@@ -163,7 +166,7 @@ Future<T> retry<T>(
     builder = builder.when(when);
   }
   if (cancelToken != null) {
-    builder = builder.cancelWith(cancelToken);
+    builder = builder.cancelOn(cancelToken);
   }
   return builder.run();
 }
@@ -171,7 +174,7 @@ Future<T> retry<T>(
 /// Extension on closures to construct a [RetryBuilder] fluently.
 ///
 /// {@category Concurrency}
-extension RetryFunctionExtension<T> on FutureOr<T> Function() {
+extension FunctionRetryExtensions<T> on FutureOr<T> Function() {
   /// Retries this computation up to [attempts] times with exponential backoff.
   RetryBuilder<T> retry([int attempts = 3]) => RetryBuilder<T>(this).attempts(attempts);
 }

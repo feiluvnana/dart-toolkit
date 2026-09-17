@@ -3,7 +3,7 @@ import 'dart:math';
 /// Short duration extensions on [int].
 ///
 /// {@category Utilities}
-extension DurationInt on int {
+extension IntDurationExtensions on int {
   /// This many milliseconds.
   Duration get ms => Duration(milliseconds: this);
 

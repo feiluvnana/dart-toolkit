@@ -214,7 +214,7 @@ void main() {
       final output = <int>[];
 
       await [1, 2, 3].parallelize((id) async {
-        await lock.protect(() async {
+        await lock.run(() async {
           activeWorkers++;
           if (activeWorkers > maxWorkers) maxWorkers = activeWorkers;
           await Future<void>.delayed(10.ms);
@@ -276,13 +276,13 @@ void main() {
 
     test('flatmap transforms and flattens streams', () async {
       final stream = Stream.fromIterable([1, 2]);
-      final flattened = await stream.flatmap((x) => Stream.fromIterable([x, x * 10])).toList();
+      final flattened = await stream.flatMap((x) => Stream.fromIterable([x, x * 10])).toList();
       expect(flattened, equals([1, 10, 2, 20]));
     });
 
     test('notnull filters out null values', () async {
       final Stream<int?> stream = Stream.fromIterable([1, null, 2, null, 3]);
-      final nonNulls = await stream.notnull().toList();
+      final nonNulls = await stream.whereNotNull().toList();
       expect(nonNulls, equals([1, 2, 3]));
       expect(nonNulls, isA<List<int>>());
     });

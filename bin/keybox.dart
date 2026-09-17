@@ -169,7 +169,7 @@ void main(List<String> rawArgs) async {
       // Stage 4: Archive (if requested)
       if (shouldCompress) {
         Logger.step(4, totalStages, 'Creating zip archive');
-        await Console.spin('Compressing $baseName.zip...', () => base.zip('$baseName.zip'));
+        await Console.spin('Compressing $baseName.zip...', () => base.zipTo('$baseName.zip'));
       }
 
       // Summary Table

@@ -173,14 +173,14 @@ extension type const Path(String path) implements String {
   /// The individual path segments.
   List<String> get segments => p.split(path);
 
-  /// Returns a [Link] pointing to this path.
-  Link get link => Link(path);
+  /// This path as a [Link]. See [links] for the links *inside* this directory.
+  Link get asLink => Link(path);
 
-  /// Returns a [File] pointing to this path.
-  File get file => File(path);
+  /// This path as a [File]. See [files] for the files *inside* this directory.
+  File get asFile => File(path);
 
-  /// Returns a [Directory] pointing to this path.
-  Directory get dir => Directory(path);
+  /// This path as a [Directory]. See [dirs] for the directories *inside* it.
+  Directory get asDir => Directory(path);
 
   /// Returns the current entity type.
   Future<PathType> type() async {
@@ -199,9 +199,6 @@ extension type const Path(String path) implements String {
     return t != FileSystemEntityType.notFound;
   }
 
-  /// Shorthand alias for [exists].
-  Future<bool> exist() => exists();
-
   /// Returns the current entity type synchronously.
   PathType typeSync() {
     final entityType = FileSystemEntity.typeSync(path, followLinks: false);
@@ -219,17 +216,14 @@ extension type const Path(String path) implements String {
     return t != FileSystemEntityType.notFound;
   }
 
-  /// Shorthand alias for [existsSync].
-  bool existSync() => existsSync();
-
   /// Calculates the file size or recursive directory size in bytes.
   Future<int> size() async {
     final t = await type();
     if (t == PathType.file) {
-      return (await file.stat()).size;
+      return (await asFile.stat()).size;
     } else if (t == PathType.dir) {
       var total = 0;
-      await for (final entity in dir.list(recursive: true, followLinks: false)) {
+      await for (final entity in asDir.list(recursive: true, followLinks: false)) {
         if (entity is File) {
           total += entity.lengthSync();
         }
@@ -243,10 +237,10 @@ extension type const Path(String path) implements String {
   int sizeSync() {
     final t = typeSync();
     if (t == PathType.file) {
-      return file.lengthSync();
+      return asFile.lengthSync();
     } else if (t == PathType.dir) {
       var total = 0;
-      for (final entity in dir.listSync(recursive: true, followLinks: false)) {
+      for (final entity in asDir.listSync(recursive: true, followLinks: false)) {
         if (entity is File) {
           total += entity.lengthSync();
         }
@@ -267,22 +261,22 @@ extension type const Path(String path) implements String {
   }
 
   /// Reads this file as a string.
-  Future<String> readText([Encoding encoding = utf8]) => file.readAsString(encoding: encoding);
+  Future<String> readText([Encoding encoding = utf8]) => asFile.readAsString(encoding: encoding);
 
   /// Reads this file as a string synchronously.
-  String readTextSync([Encoding encoding = utf8]) => file.readAsStringSync(encoding: encoding);
+  String readTextSync([Encoding encoding = utf8]) => asFile.readAsStringSync(encoding: encoding);
 
   /// Reads this file as raw bytes.
-  Future<Uint8List> readBytes() => file.readAsBytes();
+  Future<Uint8List> readBytes() => asFile.readAsBytes();
 
   /// Reads this file as raw bytes synchronously.
-  Uint8List readBytesSync() => file.readAsBytesSync();
+  Uint8List readBytesSync() => asFile.readAsBytesSync();
 
   /// Reads this file as a list of lines.
-  Future<List<String>> readLines([Encoding encoding = utf8]) => file.readAsLines(encoding: encoding);
+  Future<List<String>> readLines([Encoding encoding = utf8]) => asFile.readAsLines(encoding: encoding);
 
   /// Reads this file as a list of lines synchronously.
-  List<String> readLinesSync([Encoding encoding = utf8]) => file.readAsLinesSync(encoding: encoding);
+  List<String> readLinesSync([Encoding encoding = utf8]) => asFile.readAsLinesSync(encoding: encoding);
 
   /// Reads this file and parses it as a [JsonDocument].
   Future<JsonDocument> readJson() async => JsonDocument.parse(await readText());
@@ -304,41 +298,41 @@ extension type const Path(String path) implements String {
 
   /// Writes [content] string to this file, creating parent directories if not present.
   Future<File> writeText(String content, {Encoding encoding = utf8}) async {
-    await file.parent.create(recursive: true);
-    return file.writeAsString(content, encoding: encoding);
+    await asFile.parent.create(recursive: true);
+    return asFile.writeAsString(content, encoding: encoding);
   }
 
   /// Writes [content] string to this file synchronously, creating parent directories if not present.
   File writeTextSync(String content, {Encoding encoding = utf8}) {
-    file.parent.createSync(recursive: true);
-    file.writeAsStringSync(content, encoding: encoding);
-    return file;
+    asFile.parent.createSync(recursive: true);
+    asFile.writeAsStringSync(content, encoding: encoding);
+    return asFile;
   }
 
   /// Writes raw [bytes] to this file, creating parent directories if not present.
   Future<File> writeBytes(List<int> bytes) async {
-    await file.parent.create(recursive: true);
-    return file.writeAsBytes(bytes);
+    await asFile.parent.create(recursive: true);
+    return asFile.writeAsBytes(bytes);
   }
 
   /// Writes raw [bytes] to this file synchronously, creating parent directories if not present.
   File writeBytesSync(List<int> bytes) {
-    file.parent.createSync(recursive: true);
-    file.writeAsBytesSync(bytes);
-    return file;
+    asFile.parent.createSync(recursive: true);
+    asFile.writeAsBytesSync(bytes);
+    return asFile;
   }
 
   /// Writes [lines] to this file separated by newlines, creating parent directories if not present.
   Future<File> writeLines(Iterable<String> lines, {Encoding encoding = utf8}) async {
-    await file.parent.create(recursive: true);
-    return file.writeAsString(lines.map((l) => '$l\n').join(), encoding: encoding);
+    await asFile.parent.create(recursive: true);
+    return asFile.writeAsString(lines.map((l) => '$l\n').join(), encoding: encoding);
   }
 
   /// Writes [lines] to this file separated by newlines synchronously, creating parent directories if not present.
   File writeLinesSync(Iterable<String> lines, {Encoding encoding = utf8}) {
-    file.parent.createSync(recursive: true);
-    file.writeAsStringSync(lines.map((l) => '$l\n').join(), encoding: encoding);
-    return file;
+    asFile.parent.createSync(recursive: true);
+    asFile.writeAsStringSync(lines.map((l) => '$l\n').join(), encoding: encoding);
+    return asFile;
   }
 
   /// Serializes [data] to JSON and writes to this file, creating parent directories if not present.
@@ -371,35 +365,35 @@ extension type const Path(String path) implements String {
 
   /// Lists all entities in this directory.
   Stream<Path> list({bool recursive = false, bool followLinks = false}) =>
-      dir.list(recursive: recursive, followLinks: followLinks).map((e) => Path(e.path));
+      asDir.list(recursive: recursive, followLinks: followLinks).map((e) => Path(e.path));
 
   /// Lists all entities in this directory synchronously.
   List<Path> listSync({bool recursive = false, bool followLinks = false}) =>
-      dir.listSync(recursive: recursive, followLinks: followLinks).map((e) => Path(e.path)).toList();
+      asDir.listSync(recursive: recursive, followLinks: followLinks).map((e) => Path(e.path)).toList();
 
   /// Lists only files located in this directory.
   Stream<Path> files({bool recursive = false}) =>
-      dir.list(recursive: recursive, followLinks: false).where((e) => e is File).map((e) => Path(e.path));
+      asDir.list(recursive: recursive, followLinks: false).where((e) => e is File).map((e) => Path(e.path));
 
   /// Lists only files located in this directory synchronously.
   List<Path> filesSync({bool recursive = false}) =>
-      dir.listSync(recursive: recursive, followLinks: false).whereType<File>().map((e) => Path(e.path)).toList();
+      asDir.listSync(recursive: recursive, followLinks: false).whereType<File>().map((e) => Path(e.path)).toList();
 
   /// Lists only subdirectories located in this directory.
   Stream<Path> dirs({bool recursive = false}) =>
-      dir.list(recursive: recursive, followLinks: false).where((e) => e is Directory).map((e) => Path(e.path));
+      asDir.list(recursive: recursive, followLinks: false).where((e) => e is Directory).map((e) => Path(e.path));
 
   /// Lists only subdirectories located in this directory synchronously.
   List<Path> dirsSync({bool recursive = false}) =>
-      dir.listSync(recursive: recursive, followLinks: false).whereType<Directory>().map((e) => Path(e.path)).toList();
+      asDir.listSync(recursive: recursive, followLinks: false).whereType<Directory>().map((e) => Path(e.path)).toList();
 
   /// Lists only symbolic links located in this directory.
   Stream<Path> links({bool recursive = false}) =>
-      dir.list(recursive: recursive, followLinks: false).where((e) => e is Link).map((e) => Path(e.path));
+      asDir.list(recursive: recursive, followLinks: false).where((e) => e is Link).map((e) => Path(e.path));
 
   /// Lists only symbolic links located in this directory synchronously.
   List<Path> linksSync({bool recursive = false}) =>
-      dir.listSync(recursive: recursive, followLinks: false).whereType<Link>().map((e) => Path(e.path)).toList();
+      asDir.listSync(recursive: recursive, followLinks: false).whereType<Link>().map((e) => Path(e.path)).toList();
 
   /// Streams paths matching [pattern] (glob syntax, e.g. `'**/*.mp3'` or `'**/flac'`).
   ///
@@ -407,7 +401,7 @@ extension type const Path(String path) implements String {
   /// Pass [caseSensitive] to override.
   Stream<Path> glob(String pattern, {bool? caseSensitive}) async* {
     final matcher = _globToRegex(pattern, caseSensitive: caseSensitive);
-    await for (final entity in dir.list(recursive: true, followLinks: false)) {
+    await for (final entity in asDir.list(recursive: true, followLinks: false)) {
       final rel = p.relative(entity.path, from: path).replaceAll(r'\', '/');
       if (matcher.hasMatch(rel) || matcher.hasMatch(entity.path.replaceAll(r'\', '/'))) {
         yield Path(entity.path);
@@ -422,7 +416,7 @@ extension type const Path(String path) implements String {
   List<Path> globSync(String pattern, {bool? caseSensitive}) {
     final matcher = _globToRegex(pattern, caseSensitive: caseSensitive);
     final results = <Path>[];
-    for (final entity in dir.listSync(recursive: true, followLinks: false)) {
+    for (final entity in asDir.listSync(recursive: true, followLinks: false)) {
       final rel = p.relative(entity.path, from: path).replaceAll(r'\', '/');
       if (matcher.hasMatch(rel) || matcher.hasMatch(entity.path.replaceAll(r'\', '/'))) {
         results.add(Path(entity.path));
@@ -460,7 +454,7 @@ extension type const Path(String path) implements String {
     }
 
     final httpClient = client ?? http.Client();
-    final partFile = File('${file.path}.part');
+    final partFile = File('${asFile.path}.part');
     var received = 0;
     int? total;
 
@@ -509,10 +503,10 @@ extension type const Path(String path) implements String {
         throw HttpException('Download incomplete: expected $total bytes but received $received bytes', uri: url);
       }
 
-      if (await file.exists()) {
-        await file.delete();
+      if (await asFile.exists()) {
+        await asFile.delete();
       }
-      await partFile.rename(file.path);
+      await partFile.rename(asFile.path);
 
       yield DownloadProgress(
         url: url,
@@ -543,25 +537,25 @@ extension type const Path(String path) implements String {
   }
 
   /// Creates a directory at this path.
-  Future<Directory> mkdir({bool recursive = true}) => dir.create(recursive: recursive);
+  Future<Directory> mkdir({bool recursive = true}) => asDir.create(recursive: recursive);
 
   /// Creates a directory at this path synchronously.
   Directory mkdirSync({bool recursive = true}) {
-    dir.createSync(recursive: recursive);
-    return dir;
+    asDir.createSync(recursive: recursive);
+    return asDir;
   }
 
   /// Creates a symlink at this path pointing to [target].
-  Future<Link> mklink(String target) async {
-    await link.parent.create(recursive: true);
-    return link.create(target);
+  Future<Link> symlink(String target) async {
+    await asLink.parent.create(recursive: true);
+    return asLink.create(target);
   }
 
   /// Creates a symlink at this path pointing to [target] synchronously.
-  Link mklinkSync(String target) {
-    link.parent.createSync(recursive: true);
-    link.createSync(target);
-    return link;
+  Link symlinkSync(String target) {
+    asLink.parent.createSync(recursive: true);
+    asLink.createSync(target);
+    return asLink;
   }
 
   /// Copies this file or directory to [targetPath].
@@ -570,9 +564,9 @@ extension type const Path(String path) implements String {
     if (t == PathType.file) {
       final dest = File(targetPath);
       await dest.parent.create(recursive: true);
-      await file.copy(targetPath);
+      await asFile.copy(targetPath);
     } else if (t == PathType.dir) {
-      await for (final entity in dir.list(recursive: true, followLinks: false)) {
+      await for (final entity in asDir.list(recursive: true, followLinks: false)) {
         final rel = p.relative(entity.path, from: path);
         final dest = p.join(targetPath, rel);
         if (entity is Directory) {
@@ -593,9 +587,9 @@ extension type const Path(String path) implements String {
     if (t == PathType.file) {
       final dest = File(targetPath);
       dest.parent.createSync(recursive: true);
-      file.copySync(targetPath);
+      asFile.copySync(targetPath);
     } else if (t == PathType.dir) {
-      for (final entity in dir.listSync(recursive: true, followLinks: false)) {
+      for (final entity in asDir.listSync(recursive: true, followLinks: false)) {
         final rel = p.relative(entity.path, from: path);
         final dest = p.join(targetPath, rel);
         if (entity is Directory) {
@@ -616,9 +610,9 @@ extension type const Path(String path) implements String {
     await dest.parent.create(recursive: true);
     final t = await type();
     if (t == PathType.file) {
-      await file.rename(targetPath);
+      await asFile.rename(targetPath);
     } else if (t == PathType.dir) {
-      await dir.rename(targetPath);
+      await asDir.rename(targetPath);
     } else {
       throw FileSystemException('Cannot move non-existent path', path);
     }
@@ -630,23 +624,23 @@ extension type const Path(String path) implements String {
     dest.parent.createSync(recursive: true);
     final t = typeSync();
     if (t == PathType.file) {
-      file.renameSync(targetPath);
+      asFile.renameSync(targetPath);
     } else if (t == PathType.dir) {
-      dir.renameSync(targetPath);
+      asDir.renameSync(targetPath);
     } else {
       throw FileSystemException('Cannot move non-existent path', path);
     }
   }
 
-  /// Deletes this file, directory, or link.
+  /// Deletes this file, directory, or asLink.
   Future<void> delete({bool recursive = false}) async {
     final t = await type();
     if (t == PathType.file) {
-      await file.delete();
+      await asFile.delete();
     } else if (t == PathType.dir) {
-      await dir.delete(recursive: recursive);
+      await asDir.delete(recursive: recursive);
     } else if (t == PathType.link) {
-      await link.delete();
+      await asLink.delete();
     }
   }
 
@@ -654,41 +648,41 @@ extension type const Path(String path) implements String {
   void deleteSync({bool recursive = false}) {
     final t = typeSync();
     if (t == PathType.file) {
-      file.deleteSync();
+      asFile.deleteSync();
     } else if (t == PathType.dir) {
-      dir.deleteSync(recursive: recursive);
+      asDir.deleteSync(recursive: recursive);
     } else if (t == PathType.link) {
-      link.deleteSync();
+      asLink.deleteSync();
     }
   }
 
-  /// Compresses this directory or file into a zip file at [zipPath].
-  Future<File> zip(Object zipPath) async {
-    final targetPath = zipPath is Path ? zipPath.path : zipPath.toString();
+  /// Compresses this directory or file into a zip archive at [destination].
+  Future<File> zipTo(String destination) async {
+    final targetPath = destination;
     final zipFile = File(targetPath);
     await zipFile.parent.create(recursive: true);
     final encoder = ZipFileEncoder();
     final t = await type();
     if (t == PathType.dir) {
-      await encoder.zipDirectory(dir, filename: targetPath);
+      await encoder.zipDirectory(asDir, filename: targetPath);
     } else {
       encoder.create(targetPath);
-      await encoder.addFile(file);
+      await encoder.addFile(asFile);
       encoder.close();
     }
     return zipFile;
   }
 
-  /// Compresses this directory or file into a zip file at [zipPath] synchronously.
-  File zipSync(Object zipPath) {
-    final targetPath = zipPath is Path ? zipPath.path : zipPath.toString();
+  /// Compresses this directory or file into a zip archive at [destination] synchronously.
+  File zipToSync(String destination) {
+    final targetPath = destination;
     final zipFile = File(targetPath);
     zipFile.parent.createSync(recursive: true);
     final encoder = ZipFileEncoder();
     final t = typeSync();
     if (t == PathType.dir) {
       encoder.create(targetPath);
-      for (final entity in dir.listSync(recursive: true, followLinks: false)) {
+      for (final entity in asDir.listSync(recursive: true, followLinks: false)) {
         if (entity is File) {
           final rel = p.relative(entity.path, from: path);
           final bytes = entity.readAsBytesSync();
@@ -698,16 +692,16 @@ extension type const Path(String path) implements String {
       encoder.close();
     } else {
       encoder.create(targetPath);
-      final bytes = file.readAsBytesSync();
-      encoder.addArchiveFile(ArchiveFile(p.basename(file.path), bytes.length, bytes));
+      final bytes = asFile.readAsBytesSync();
+      encoder.addArchiveFile(ArchiveFile(p.basename(asFile.path), bytes.length, bytes));
       encoder.close();
     }
     return zipFile;
   }
 
-  /// Extracts the archive at this path to [destinationDir].
-  Future<Directory> unzip(Object destinationDir) async {
-    final destPath = destinationDir is Path ? destinationDir.path : destinationDir.toString();
+  /// Extracts the archive at this path into [destination].
+  Future<Directory> extractTo(String destination) async {
+    final destPath = destination;
     final dest = Directory(destPath);
     await dest.create(recursive: true);
     final bytes = await readBytes();
@@ -725,9 +719,9 @@ extension type const Path(String path) implements String {
     return dest;
   }
 
-  /// Extracts the archive at this path to [destinationDir] synchronously.
-  Directory unzipSync(Object destinationDir) {
-    final destPath = destinationDir is Path ? destinationDir.path : destinationDir.toString();
+  /// Extracts the archive at this path into [destination] synchronously.
+  Directory extractToSync(String destination) {
+    final destPath = destination;
     final dest = Directory(destPath);
     dest.createSync(recursive: true);
     final bytes = readBytesSync();
@@ -745,7 +739,7 @@ extension type const Path(String path) implements String {
     return dest;
   }
 
-  /// Calculates the SHA-256 cryptographic hash of this file.
+  /// Calculates the SHA-256 cryptographic hash of this asFile.
   Future<String> sha256() async {
     final bytes = await readBytes();
     return crypto.sha256.convert(bytes).toString();
@@ -757,7 +751,7 @@ extension type const Path(String path) implements String {
     return crypto.sha256.convert(bytes).toString();
   }
 
-  /// Calculates the MD5 cryptographic hash of this file.
+  /// Calculates the MD5 cryptographic hash of this asFile.
   Future<String> md5() async {
     final bytes = await readBytes();
     return crypto.md5.convert(bytes).toString();
@@ -771,38 +765,40 @@ extension type const Path(String path) implements String {
 
   /// Appends [content] to this file, creating parent directories and file if not present.
   Future<File> append(String content, {Encoding encoding = utf8}) async {
-    await file.parent.create(recursive: true);
-    return file.writeAsString(content, mode: FileMode.append, encoding: encoding);
+    await asFile.parent.create(recursive: true);
+    return asFile.writeAsString(content, mode: FileMode.append, encoding: encoding);
   }
 
   /// Appends [content] to this file synchronously, creating parent directories and file if not present.
   File appendSync(String content, {Encoding encoding = utf8}) {
-    file.parent.createSync(recursive: true);
-    file.writeAsStringSync(content, mode: FileMode.append, encoding: encoding);
-    return file;
+    asFile.parent.createSync(recursive: true);
+    asFile.writeAsStringSync(content, mode: FileMode.append, encoding: encoding);
+    return asFile;
   }
 
-  /// In-place replaces occurrences of [from] with [replacement] in this file.
-  Future<File> replace(Pattern from, String replacement, {Encoding encoding = utf8}) async {
+  /// Rewrites this file, replacing occurrences of [from] with [replacement].
+  ///
+  /// Writes to disk. The inherited [String.replaceAll] operates on the path text.
+  Future<File> replaceInFile(Pattern from, String replacement, {Encoding encoding = utf8}) async {
     final text = await readText(encoding);
     return writeText(text.replaceAll(from, replacement), encoding: encoding);
   }
 
-  /// In-place replaces occurrences of [from] with [replacement] in this file synchronously.
-  File replaceSync(Pattern from, String replacement, {Encoding encoding = utf8}) {
+  /// Rewrites this file synchronously, replacing occurrences of [from] with [replacement].
+  File replaceInFileSync(Pattern from, String replacement, {Encoding encoding = utf8}) {
     final text = readTextSync(encoding);
     return writeTextSync(text.replaceAll(from, replacement), encoding: encoding);
   }
 
   /// Watches this file or directory for filesystem changes.
   Stream<FileSystemEvent> watch({bool recursive = false, int events = FileSystemEvent.all}) =>
-      file.watch(recursive: recursive, events: events);
+      asFile.watch(recursive: recursive, events: events);
 }
 
 /// Convenience extension on [String] to convert to [Path] or join paths.
 ///
 /// {@category Files}
-extension PathStringExtension on String {
+extension StringPathExtensions on String {
   /// Wraps this string into a [Path].
   Path get path => Path(this);
 
