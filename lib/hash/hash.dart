@@ -1,6 +1,6 @@
 /// # Hashing
 ///
-/// SHA-256 and MD5 digests over raw bytes.
+/// SHA-256 and MD5 digests of a file, streamed, or of bytes in memory.
 ///
 /// {@category Files}
 library;

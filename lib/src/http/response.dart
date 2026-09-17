@@ -1,76 +1,49 @@
 import 'dart:async';
-import 'dart:io';
-import 'dart:isolate';
 
 import 'package:http/http.dart' as http;
 
 import '../async/isolate.dart';
-import '../html/html_document.dart';
 import '../core/json_document.dart';
-import '../xml/xml_document.dart';
+import 'fetch.dart';
 import 'session.dart';
 
 final Expando<String> _bodyMemo = Expando<String>('bodyMemo');
-final Expando<HtmlDocument> _htmlMemo = Expando<HtmlDocument>('htmlMemo');
-final Expando<XmlDocument> _xmlMemo = Expando<XmlDocument>('xmlMemo');
 final Expando<JsonDocument> _jsonMemo = Expando<JsonDocument>('jsonMemo');
 
-/// Format parser extensions on [http.Response].
+/// Body access and JSON parsing on [http.Response].
+///
+/// `html()` and `xml()` live in `html/html.dart` and `xml/xml.dart`, with the parsers
+/// they need, so a program that never parses them never compiles them.
 ///
 /// {@category Networking}
 extension ResponseExtensions on http.Response {
-  /// Executes a computation [action] on this response inside a background [Isolate].
+  /// Runs [action] on a copy of this response inside a background [Isolate].
   ///
-  /// Only copies essential fields (body string, status code, headers, URL) into
-  /// the isolate, avoiding serialization overhead of the entire request/response object graph.
-  ///
-  /// Extract data in [action]; returning the parsed document copies the whole object
-  /// graph back and buys nothing over parsing here.
+  /// Copies the body, status, headers and URL — not the request graph. Extract data in
+  /// [action]; returning a parsed document copies it all back and buys nothing.
   Future<R> isolate<R>(FutureOr<R> Function(http.Response res) action) {
     final rawBody = text;
     final code = statusCode;
     final hdrs = headers;
-    final reqUrl = url;
+    final req = request;
+    final method = req?.method ?? 'GET';
+    final reqUrl = req?.url;
 
     return (() {
-      final isolatedRes = http.Response(
+      final copy = http.Response(
         rawBody,
         code,
         headers: hdrs,
-        request: reqUrl != null ? http.Request('GET', reqUrl) : null,
+        request: reqUrl != null ? http.Request(method, reqUrl) : null,
       );
-      return action(isolatedRes);
+      return action(copy);
     }).isolate();
-  }
-
-  /// Parses the response body as HTML and extracts data inside a background [Isolate].
-  Future<R> isolateHtml<R>(FutureOr<R> Function(HtmlDocument doc) action) {
-    final rawBody = text;
-    return (() => action(HtmlDocument.parse(rawBody))).isolate();
-  }
-
-  /// Parses the response body as JSON and extracts data inside a background [Isolate].
-  Future<R> isolateJson<R>(FutureOr<R> Function(JsonDocument doc) action) {
-    final rawBody = text;
-    return (() => action(JsonDocument.parse(rawBody))).isolate();
-  }
-
-  /// Parses the response body as XML and extracts data inside a background [Isolate].
-  Future<R> isolateXml<R>(FutureOr<R> Function(XmlDocument doc) action) {
-    final rawBody = text;
-    return (() => action(XmlDocument.parse(rawBody))).isolate();
   }
 
   /// The decoded body, decoded once per response instance.
   ///
   /// `package:http` re-decodes `bodyBytes` on every `body` access; this does not.
   String get text => _bodyMemo[this] ??= body;
-
-  /// Parses the response body as HTML (memoized per response instance).
-  HtmlDocument html() => _htmlMemo[this] ??= HtmlDocument.parse(text);
-
-  /// Parses the response body as XML (memoized per response instance).
-  XmlDocument xml() => _xmlMemo[this] ??= XmlDocument.parse(text);
 
   /// Parses the response body as JSON (memoized per response instance).
   JsonDocument json() => _jsonMemo[this] ??= JsonDocument.parse(text);
@@ -82,12 +55,15 @@ extension ResponseExtensions on http.Response {
   bool get ok => statusCode >= 200 && statusCode < 300;
 }
 
-/// HTTP requests and format parsing on [Uri].
+/// HTTP requests and JSON on [Uri].
 ///
 /// {@category Networking}
 extension UriExtensions on Uri {
-  /// Resolves [subpath] against this URI.
-  Uri operator /(String subpath) => resolve(subpath);
+  /// Appends [part] as a path segment, treating this URI as a directory.
+  ///
+  /// `'https://x.com/api'.url / 'users'` is `https://x.com/api/users`. An absolute or
+  /// `..` [part] still resolves as an href would.
+  Uri operator /(String part) => (path.endsWith('/') ? this : replace(path: '$path/')).resolve(part);
 
   /// Performs an HTTP GET request to this URI.
   Future<http.Response> get({Map<String, String>? headers, http.Client? client}) async {
@@ -109,28 +85,10 @@ extension UriExtensions on Uri {
     }
   }
 
-  /// Fetches this URI and parses the response body as HTML.
-  ///
-  /// Throws [HttpException] unless the status is 2xx — an error page parses fine and
-  /// then matches nothing. Use [get] with [ResponseExtensions.ok] to handle it yourself.
-  Future<HtmlDocument> html({Map<String, String>? headers, http.Client? client}) async =>
-      (await _fetched(headers, client)).html();
-
   /// Fetches this URI and parses the response body as JSON.
   ///
-  /// Throws [HttpException] unless the status is 2xx.
+  /// Throws [HttpException] unless the status is 2xx. Use [get] with
+  /// [ResponseExtensions.ok] to handle a failure yourself.
   Future<JsonDocument> json({Map<String, String>? headers, http.Client? client}) async =>
-      (await _fetched(headers, client)).json();
-
-  /// Fetches this URI and parses the response body as XML.
-  ///
-  /// Throws [HttpException] unless the status is 2xx.
-  Future<XmlDocument> xml({Map<String, String>? headers, http.Client? client}) async =>
-      (await _fetched(headers, client)).xml();
-
-  Future<http.Response> _fetched(Map<String, String>? headers, http.Client? client) async {
-    final res = await get(headers: headers, client: client);
-    if (!res.ok) throw HttpException('GET failed with status ${res.statusCode}', uri: this);
-    return res;
-  }
+      (await fetchOk(this, headers, client)).json();
 }

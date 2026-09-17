@@ -1,6 +1,6 @@
 import 'dart:io';
 
-/// Utilities for accessing system environment variables, `.env` file parsing, and platform checks.
+/// Environment variables: the process's, in-memory overrides, and `.env` parsing.
 ///
 /// {@category System}
 class Env {
@@ -9,13 +9,8 @@ class Env {
   /// Returns the current merged environment map (custom loaded vars taking precedence over system vars).
   static Map<String, String> all() => {...Platform.environment, ..._custom};
 
-  /// Retrieves an environment variable by [key], with an optional [defaultTo] fallback.
-  ///
-  /// Example:
-  /// ```dart
-  /// final port = Env.get('PORT', '8080');
-  /// ```
-  static String? get(String key, [String? defaultTo]) => _custom[key] ?? Platform.environment[key] ?? defaultTo;
+  /// The variable [key], or `null`: `Env.get('PORT') ?? '8080'`.
+  static String? get(String key) => _custom[key] ?? Platform.environment[key];
 
   /// Sets or overrides a custom environment variable in-memory.
   static void set(String key, String value) {
@@ -64,7 +59,9 @@ class Env {
 
   /// Parses a `.env` format [source] string and loads key-value pairs into custom environment.
   ///
-  /// If [override] is `false` (default), variables already defined in `Platform.environment` or loaded previously are preserved.
+  /// If [override] is `false` (default), a variable already defined — in `Platform.environment`
+  /// or by an earlier [parse], [load] or [set] — is preserved. Supports `#` comments, `export`,
+  /// single and double quotes and `\n` inside double quotes; not `${VAR}` expansion.
   static Map<String, String> parse(String source, {bool override = false}) {
     final parsed = <String, String>{};
     final lines = source.split(RegExp(r'\r?\n'));
@@ -100,7 +97,7 @@ class Env {
       }
 
       parsed[key] = value;
-      if (override || !Platform.environment.containsKey(key)) {
+      if (override || (!Platform.environment.containsKey(key) && !_custom.containsKey(key))) {
         _custom[key] = value;
       }
     }

@@ -9,8 +9,8 @@ void main(List<String> args) async {
     ..flag('dry-run', abbr: 'd', description: 'Simulate without executing')
     ..action((ctx) async {
       // Declared defaults arrive here; a required option cannot be missing.
-      final env = ctx.option('env')!;
-      final workers = ctx.number('workers')!;
+      final env = ctx.option('env');
+      final workers = ctx.number('workers');
       final isDryRun = ctx.flag('dry-run');
 
       final stage = Logger.stages(2);
@@ -27,11 +27,6 @@ void main(List<String> args) async {
       progress.done('Deployment finished.');
     });
 
-  // Parsing reports usage errors — a missing required option, a bad choice — as
-  // ArgumentError. A script turns that into an exit code.
-  try {
-    await cli.run(args);
-  } on ArgumentError catch (e) {
-    await die('${e.message}', exitCode: 64);
-  }
+  // A usage error prints and exits 64; exit hooks run and the process ends when this returns.
+  await cli.run(args);
 }

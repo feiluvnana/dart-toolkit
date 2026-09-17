@@ -60,8 +60,11 @@ extension PathArchiveExtensions on Path {
     final dest = Directory(destination)..createSync(recursive: true);
     final input = InputFileStream(path);
     try {
+      final root = p.normalize(p.absolute(destination));
       for (final entry in ZipDecoder().decodeStream(input)) {
-        final outPath = p.join(destination, entry.name);
+        final outPath = p.normalize(p.join(root, entry.name));
+        // An entry named `../x` must not land outside [destination].
+        if (!p.isWithin(root, outPath)) throw FileSystemException('Archive entry escapes destination', entry.name);
         if (entry.isFile) {
           final out = OutputFileStream(outPath);
           try {

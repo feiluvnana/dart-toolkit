@@ -69,9 +69,10 @@ extension StreamExtensions<T> on Stream<T> {
 
   /// Emits at most one item per [duration] window.
   ///
-  /// [leading] emits the item that opens a window, [trailing] the last one seen
-  /// during it; with both set an item can be emitted twice only if it is alone.
+  /// [leading] emits the item that opens a window, [trailing] the last *other* item
+  /// seen during it. An item alone in its window is emitted once either way.
   Stream<T> throttle(Duration duration, {bool leading = true, bool trailing = false}) {
+    if (!leading && !trailing) throw ArgumentError('throttle needs leading, trailing or both; neither emits nothing');
     Timer? timer;
     T? pending;
     var hasPending = false;

@@ -5,6 +5,8 @@ import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 
+import '../util/env.dart';
+
 final _invalidPathChars = RegExp(r'[:*?"<>|\r\n\t]');
 final _invalidNameChars = RegExp(r'[/\\:*?"<>|\r\n\t]');
 final _whitespaceCollapse = RegExp(r'\s+');
@@ -19,8 +21,7 @@ enum PathType { file, dir, link, none }
 /// {@category Files}
 extension type const Path(String path) implements String {
   /// The user's home directory.
-  static Path get home =>
-      Path(Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? Directory.current.path);
+  static Path get home => Path(Env.get('HOME') ?? Env.get('USERPROFILE') ?? Directory.current.path);
 
   /// The system temporary directory.
   static Path get temp => Path(Directory.systemTemp.path);
@@ -66,15 +67,7 @@ extension type const Path(String path) implements String {
   Directory get asDir => Directory(path);
 
   /// Returns the current entity type.
-  Future<PathType> type() async {
-    final entityType = await FileSystemEntity.type(path, followLinks: false);
-    return switch (entityType) {
-      FileSystemEntityType.file => PathType.file,
-      FileSystemEntityType.directory => PathType.dir,
-      FileSystemEntityType.link => PathType.link,
-      _ => PathType.none,
-    };
-  }
+  Future<PathType> type() async => _pathType(await FileSystemEntity.type(path, followLinks: false));
 
   /// Checks if this path exists on disk.
   Future<bool> exists() async {
@@ -83,15 +76,7 @@ extension type const Path(String path) implements String {
   }
 
   /// Returns the current entity type synchronously.
-  PathType typeSync() {
-    final entityType = FileSystemEntity.typeSync(path, followLinks: false);
-    return switch (entityType) {
-      FileSystemEntityType.file => PathType.file,
-      FileSystemEntityType.directory => PathType.dir,
-      FileSystemEntityType.link => PathType.link,
-      _ => PathType.none,
-    };
-  }
+  PathType typeSync() => _pathType(FileSystemEntity.typeSync(path, followLinks: false));
 
   /// Checks synchronously if this path exists on disk.
   bool existsSync() {
@@ -107,9 +92,7 @@ extension type const Path(String path) implements String {
     } else if (t == PathType.dir) {
       var total = 0;
       await for (final entity in asDir.list(recursive: true, followLinks: false)) {
-        if (entity is File) {
-          total += entity.lengthSync();
-        }
+        if (entity is File) total += await entity.length();
       }
       return total;
     }
@@ -147,10 +130,10 @@ extension type const Path(String path) implements String {
   }
 
   /// Reads this file as a string.
-  Future<String> readText([Encoding encoding = utf8]) => asFile.readAsString(encoding: encoding);
+  Future<String> readText({Encoding encoding = utf8}) => asFile.readAsString(encoding: encoding);
 
   /// Reads this file as a string synchronously.
-  String readTextSync([Encoding encoding = utf8]) => asFile.readAsStringSync(encoding: encoding);
+  String readTextSync({Encoding encoding = utf8}) => asFile.readAsStringSync(encoding: encoding);
 
   /// Reads this file as raw bytes.
   Future<Uint8List> readBytes() => asFile.readAsBytes();
@@ -159,10 +142,10 @@ extension type const Path(String path) implements String {
   Uint8List readBytesSync() => asFile.readAsBytesSync();
 
   /// Reads this file as a list of lines.
-  Future<List<String>> readLines([Encoding encoding = utf8]) => asFile.readAsLines(encoding: encoding);
+  Future<List<String>> readLines({Encoding encoding = utf8}) => asFile.readAsLines(encoding: encoding);
 
   /// Reads this file as a list of lines synchronously.
-  List<String> readLinesSync([Encoding encoding = utf8]) => asFile.readAsLinesSync(encoding: encoding);
+  List<String> readLinesSync({Encoding encoding = utf8}) => asFile.readAsLinesSync(encoding: encoding);
 
   /// Writes [content] string to this file, creating parent directories if not present.
   Future<File> writeText(String content, {Encoding encoding = utf8}) async {
@@ -235,7 +218,7 @@ extension type const Path(String path) implements String {
   List<Path> linksSync({bool recursive = false}) =>
       asDir.listSync(recursive: recursive, followLinks: false).whereType<Link>().map((e) => Path(e.path)).toList();
 
-  /// Streams paths matching [pattern] (glob syntax, e.g. `'**/*.mp3'` or `'**/flac'`).
+  /// Streams paths matching [pattern]: `*`, `**` and `?` only, e.g. `'**/*.mp3'`.
   ///
   /// Defaults to platform case sensitivity (case-sensitive on Linux, insensitive on Windows/macOS).
   /// Pass [caseSensitive] to override.
@@ -246,7 +229,7 @@ extension type const Path(String path) implements String {
     }
   }
 
-  /// Lists paths matching [pattern] synchronously (glob syntax, e.g. `'**/*.mp3'` or `'**/flac'`).
+  /// Lists paths matching [pattern] synchronously: `*`, `**` and `?` only.
   ///
   /// Defaults to platform case sensitivity (case-sensitive on Linux, insensitive on Windows/macOS).
   /// Pass [caseSensitive] to override.
@@ -332,31 +315,30 @@ extension type const Path(String path) implements String {
     }
   }
 
-  /// Moves this file or directory to [targetPath].
+  /// Moves this file or directory to [targetPath], copying and deleting across filesystems.
   Future<void> move(String targetPath) async {
-    final dest = File(targetPath);
-    await dest.parent.create(recursive: true);
+    await File(targetPath).parent.create(recursive: true);
     final t = await type();
-    if (t == PathType.file) {
-      await asFile.rename(targetPath);
-    } else if (t == PathType.dir) {
-      await asDir.rename(targetPath);
-    } else {
-      throw FileSystemException('Cannot move non-existent path', path);
+    if (t == PathType.none) throw FileSystemException('Cannot move non-existent path', path);
+    try {
+      await (t == PathType.dir ? asDir : asFile).rename(targetPath);
+    } on FileSystemException {
+      // `rename` cannot cross devices (EXDEV); fall back to copy then delete.
+      await copy(targetPath);
+      await delete(recursive: true);
     }
   }
 
-  /// Moves this file or directory to [targetPath] synchronously.
+  /// Moves this file or directory to [targetPath] synchronously, copying and deleting across filesystems.
   void moveSync(String targetPath) {
-    final dest = File(targetPath);
-    dest.parent.createSync(recursive: true);
+    File(targetPath).parent.createSync(recursive: true);
     final t = typeSync();
-    if (t == PathType.file) {
-      asFile.renameSync(targetPath);
-    } else if (t == PathType.dir) {
-      asDir.renameSync(targetPath);
-    } else {
-      throw FileSystemException('Cannot move non-existent path', path);
+    if (t == PathType.none) throw FileSystemException('Cannot move non-existent path', path);
+    try {
+      (t == PathType.dir ? asDir : asFile).renameSync(targetPath);
+    } on FileSystemException {
+      copySync(targetPath);
+      deleteSync(recursive: true);
     }
   }
 
@@ -401,13 +383,13 @@ extension type const Path(String path) implements String {
   ///
   /// Writes to disk. The inherited [String.replaceAll] operates on the path text.
   Future<File> replaceInFile(Pattern from, String replacement, {Encoding encoding = utf8}) async {
-    final text = await readText(encoding);
+    final text = await readText(encoding: encoding);
     return writeText(text.replaceAll(from, replacement), encoding: encoding);
   }
 
   /// Rewrites this file synchronously, replacing occurrences of [from] with [replacement].
   File replaceInFileSync(Pattern from, String replacement, {Encoding encoding = utf8}) {
-    final text = readTextSync(encoding);
+    final text = readTextSync(encoding: encoding);
     return writeTextSync(text.replaceAll(from, replacement), encoding: encoding);
   }
 
@@ -436,6 +418,13 @@ extension StringPathExtensions on String {
     return Path(cleaned.isEmpty ? '_' : cleaned);
   }
 }
+
+PathType _pathType(FileSystemEntityType type) => switch (type) {
+  FileSystemEntityType.file => PathType.file,
+  FileSystemEntityType.directory => PathType.dir,
+  FileSystemEntityType.link => PathType.link,
+  _ => PathType.none,
+};
 
 final _globCache = <(String, bool), RegExp>{};
 

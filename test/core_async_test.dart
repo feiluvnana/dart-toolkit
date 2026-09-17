@@ -24,10 +24,10 @@ void main() {
       expect(left.fold((l) => 'L: $l', (r) => 'R: $r'), equals('L: error'));
 
       // map
-      final mappedRight = right.map((r) => r * 2);
+      final mappedRight = right.mapRight((r) => r * 2);
       expect(mappedRight, equals(const Right<String, int>(84)));
 
-      final mappedLeft = left.map((r) => r * 2);
+      final mappedLeft = left.mapRight((r) => r * 2);
       expect(mappedLeft, equals(const Left<String, int>('error')));
 
       // mapLeft
@@ -142,18 +142,18 @@ void main() {
       var count = 0;
       final retriedDelays = <Duration>[];
 
-      final result =
-          await (() async {
-                count++;
-                if (count < 3) throw StateError('attempt $count failed');
-                return 'success';
-              })
-              .retry()
-              .attempts(4)
-              .delay(10.ms)
-              .backoff(1.5)
-              .jitter(false)
-              .listen((att, err, nextDelay) => retriedDelays.add(nextDelay));
+      final result = await retry(
+        () async {
+          count++;
+          if (count < 3) throw StateError('attempt $count failed');
+          return 'success';
+        },
+        attempts: 4,
+        delay: 10.ms,
+        backoff: 1.5,
+        jitter: false,
+        onRetry: (att, err, nextDelay) => retriedDelays.add(nextDelay),
+      );
 
       expect(result, equals('success'));
       expect(count, equals(3));
@@ -164,10 +164,14 @@ void main() {
       var count = 0;
 
       await expectLater(
-        (() async {
-          count++;
-          throw FormatException('always fail');
-        }).retry().attempts(3).delay(5.ms),
+        retry(
+          () async {
+            count++;
+            throw FormatException('always fail');
+          },
+          attempts: 3,
+          delay: 5.ms,
+        ),
         throwsA(isA<FormatException>()),
       );
 
@@ -178,11 +182,16 @@ void main() {
       var count = 0;
 
       await expectLater(
-        (() async {
-          count++;
-          if (count == 1) throw ArgumentError('invalid arg');
-          throw StateError('state error');
-        }).retry().attempts(4).delay(5.ms).when((e) => e is ArgumentError),
+        retry(
+          () async {
+            count++;
+            if (count == 1) throw ArgumentError('invalid arg');
+            throw StateError('state error');
+          },
+          attempts: 4,
+          delay: 5.ms,
+          when: (e) => e is ArgumentError,
+        ),
         throwsA(isA<StateError>()),
       );
 
@@ -528,15 +537,8 @@ void main() {
     });
   });
 
-  group('RetryBuilder Robustness', () {
-    test('RetryBuilder throws StateError if mutated after execution started', () async {
-      final builder = RetryBuilder(() async => 42);
-      final future = builder.run();
-      expect(await future, equals(42));
-      expect(() => builder.attempts(5), throwsA(isA<StateError>()));
-    });
-
-    test('RetryBuilder respects maxDelay cap', () async {
+  group('retry robustness', () {
+    test('retry respects maxDelay cap', () async {
       var attemptCount = 0;
 
       await retry(

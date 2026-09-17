@@ -32,11 +32,15 @@ shaking makes it free.
 | `async/async.dart` | `parallelize`, `retry`, `Mutex`, `CancelToken`, stream operators | — |
 | `fs/fs.dart` | `Path` | path |
 | `hash/hash.dart` | SHA-256, MD5 | crypto, path |
-| `html/html.dart` | `HtmlDocument`, element queries | html |
-| `xml/xml.dart` | `XmlDocument` | xml |
+| `html/html.dart` | `HtmlDocument`, element queries, `res.html()`, `url.html()` | html, http |
+| `xml/xml.dart` | `XmlDocument`, `res.xml()`, `url.xml()` | xml, http |
 | `archive/archive.dart` | zip, unzip | archive, path |
 | `process/process.dart` | `run`, pipelines, `which` | path |
-| `http/http.dart` | scraping, downloads, response parsing, `Http.session` | http, html, xml, path |
+| `http/http.dart` | requests, JSON, scraping, downloads, `Http.session` | http, path |
+
+A format bridge lives with its parser: `http` no longer compiles the HTML and XML parsers
+for a program that downloads files or reads JSON. `tool/startup.dart` prints what each
+module costs to import.
 
 `tool/check_deps.dart` enforces this table in CI, and fails a `bin/` or `example/` file that
 imports the barrel.
@@ -62,10 +66,11 @@ dependencies:
 final res = await run('git status --short');
 if (res.ok) print(res.text);
 
-await 'echo "Hello World"'.run();
+final prs = await run('gh pr list --json number', quiet: true).json;   // a JsonDocument
+await run('cat', input: 'fed to stdin');
 await (await which('dart'))?.run(args: ['--version']);
 
-final piped = await ('echo "apple\nbanana"' | 'grep an').run();
+final piped = await ('echo "apple\nbanana"' | 'grep an').run();      // pipefail semantics
 print(piped.lines);
 ```
 
@@ -112,7 +117,7 @@ final pages = (await urls.parallelize(fetch)).unwrap();  // or throw the first f
 ```
 
 ```dart
-final data = await (() => fetchData()).retry().attempts(3).delay(200.ms);
+final data = await retry(fetchData, attempts: 3, delay: 200.ms);
 
 final lock = Mutex();
 await lock.run(() async { /* critical section */ });
@@ -140,18 +145,22 @@ final items = url.scrape<Item>((ctx) {
 }, concurrency: 8);
 ```
 
-`ctx.url` is where the response came from, and `ctx.resolve` resolves against it — the same base
-`follow` uses.
+`ctx.url` is the URL that was requested, and `ctx.resolve` resolves against it — the same base
+`follow` uses. A 429 or 5xx is retried, honouring `Retry-After`.
 
-One session shares a client across every request inside it, and closes it on the way out:
+One session shares a client across every request inside it, closes it on the way out, and is
+where the timeout and default headers live:
 
 ```dart
 await Http.session(() async {
   final doc = await url.html();        // throws on a non-2xx status
   final res = await other.get();       // ...or check it yourself
   if (!res.ok) await die('${res.statusCode} from $other');
-});
+}, timeout: 30.s, headers: {'user-agent': 'my-tool/1.0'});
 ```
+
+`url / 'users'` appends a path segment, treating the base as a directory — the same glyph as
+`Path./`, with the same meaning.
 
 ### Downloads
 
@@ -188,7 +197,9 @@ print(typed.fold((e) => 'failed: $e', (v) => 'got $v'));
 ### CLI
 
 Option kinds are a sealed type, so a flag cannot also be numeric. A default is declared once —
-reads see it — and `required: true` makes absence a parse error.
+`ctx.option` and `ctx.number` are non-null because of it — and `required: true` makes absence a
+usage error. `Cli.run` owns the lifecycle: a usage error prints and exits 64, and when the
+action returns the exit hooks run and the signal handlers are released so the process ends.
 
 ```dart
 final cli = Cli(name: 'deployer')
@@ -199,17 +210,16 @@ final cli = Cli(name: 'deployer')
   ..action((ctx) async {
     final stage = Logger.stages(2);
     stage('Checking target');           // [1/2] Checking target
-    Logger.info('Deploying to ${ctx.option('env')!} with ${ctx.number('workers')!} workers');
+    Logger.info('Deploying to ${ctx.option('env')} with ${ctx.number('workers')} workers');
     stage('Rolling out');
     await Console.spin('Deploying...', deploy);
   });
 
-try {
-  await cli.run(args);
-} on ArgumentError catch (e) {
-  await die('${e.message}', exitCode: 64);
-}
+await cli.run(args);   // deployer -dw8 -t abc, deployer --workers=8 fetch, ...
 ```
+
+Options may precede the subcommand, short flags combine (`-dv`), and a short option may attach
+its value (`-w8`).
 
 Every builder method returns the receiver; nesting is explicit:
 

@@ -113,15 +113,6 @@ extension IterableExtensions<T> on Iterable<T> {
       yield (itA.current, itB.current);
     }
   }
-
-  /// Maps elements with index access.
-  Iterable<R> mapIndexed<R>(R Function(int index, T item) transform) sync* {
-    var i = 0;
-    for (final item in this) {
-      yield transform(i, item);
-      i++;
-    }
-  }
 }
 
 /// Functional extensions on [List].

@@ -53,7 +53,11 @@ class JsonPath {
           if (i < text.length && text[i] == '*') i++;
           continue;
         }
-        if (text[i] == '[') continue;
+        if (text[i] == '[') {
+          // `..[0]`: the bracket applies to every descendant and the node itself.
+          steps.add(const _Descend(null, includeSelf: true));
+          continue;
+        }
         final name = _readName(text, i);
         steps.add(_Descend(name.$1 == '*' ? null : name.$1));
         i = name.$2;
@@ -166,10 +170,12 @@ final class _Wild extends _Step {
 
 final class _Descend extends _Step {
   final String? key;
-  const _Descend(this.key);
+  final bool includeSelf;
+  const _Descend(this.key, {this.includeSelf = false});
 
   @override
   void apply(Object? node, List<Object?> out) {
+    if (includeSelf) out.add(node);
     void walk(Object? n) {
       if (n is Map) {
         if (key != null && n.containsKey(key)) {

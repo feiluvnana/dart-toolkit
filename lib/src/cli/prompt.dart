@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'ansi.dart';
 import '../util/stdio.dart';
+import 'ansi.dart';
 
 /// Interactive terminal prompts.
 ///
@@ -30,6 +30,7 @@ class Prompt {
     bool required = false,
     String? Function(String value)? validate,
   }) {
+    assert(!(required && defaultTo != null), 'A required prompt cannot also have a default.');
     while (true) {
       final defaultHint = defaultTo != null ? ' ($defaultTo)'.dim : '';
       ConsoleIo.out.write('$message$defaultHint: ');
@@ -103,7 +104,7 @@ class Prompt {
 
     String label(T choice) => display?.call(choice) ?? '$choice';
 
-    final defaultIndex = defaultTo != null ? choices.indexOf(defaultTo as T) : -1;
+    final defaultIndex = defaultTo != null ? choices.indexOf(defaultTo) : -1;
 
     ConsoleIo.out.writeln('$message:');
     for (var i = 0; i < choices.length; i++) {

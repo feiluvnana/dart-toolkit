@@ -8,10 +8,15 @@ final List<FutureOr<void> Function()> _exitHooks = [];
 StreamSubscription<ProcessSignal>? _sigintSub;
 StreamSubscription<ProcessSignal>? _sigtermSub;
 
+bool _exiting = false;
+
 void _ensureSignalHandlers() {
   if (_sigintSub != null) return;
 
   void handleSignal(ProcessSignal signal) async {
+    // A second signal while the hooks run must not run them again.
+    if (_exiting) return;
+    _exiting = true;
     await runExitHooks();
     exit(128 + signal.signalNumber);
   }
@@ -49,9 +54,10 @@ void clearExitHooks() {
   _sigtermSub = null;
 }
 
-/// Registers [callback] to run on SIGINT, SIGTERM or normal exit.
+/// Registers [callback] to run on SIGINT, SIGTERM, [die], or when [Cli.run] returns.
 ///
-/// Returns a function that unregisters it.
+/// Returns a function that unregisters it. The signal watch keeps the isolate alive, so
+/// a script without a [Cli] must end with [die], `exit`, or [clearExitHooks].
 ///
 /// {@category CLI}
 void Function() onExit(FutureOr<void> Function() callback) {

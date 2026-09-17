@@ -23,15 +23,15 @@ void main() {
       expect(await run('echo true', quiet: true).ok, isTrue);
     });
 
-    test('String.run() and Path.run() execute concise commands with workdir', () async {
-      final res = await 'echo "hello from extension"'.run(quiet: true);
+    test('run() and Path.run() execute commands with workdir', () async {
+      final res = await run('echo "hello from extension"', quiet: true);
       expect(res.ok, isTrue);
       expect(res.text, equals('hello from extension'));
 
       final temp = Path.temp / 'test_proc_run';
       await temp.mkdir();
       try {
-        final resDir = await 'pwd'.run(workdir: temp, quiet: true);
+        final resDir = await run('pwd', workdir: temp, quiet: true);
         if (!Platform.isWindows) {
           expect(resDir.text, contains(temp.name));
         }
@@ -44,12 +44,18 @@ void main() {
       }
     });
 
-    test('ShellResult.json parses JSON output correctly', () async {
-      final res = await 'echo \'{"name":"toolkit","version":9}\''.run(quiet: true);
-      final json = res.json as Map<String, dynamic>;
-      expect(json['name'], equals('toolkit'));
-      expect(json['version'], equals(9));
-      expect(res.json, isA<Map<String, dynamic>>());
+    test('ShellResult.json is a JsonDocument', () async {
+      final res = await run('echo \'{"name":"toolkit","version":9}\'', quiet: true);
+      expect(res.json['name'].to<String>(), equals('toolkit'));
+      expect(res.json['version'].to<int>(), equals(9));
+      expect((await run('echo \'[1,2]\'', quiet: true).json).list.length, equals(2));
+    });
+
+    test('run feeds input to stdin and splits on any whitespace', () async {
+      if (!Platform.isWindows) {
+        expect(await run('cat', input: 'fed', quiet: true).text, equals('fed'));
+        expect(await run('echo\ta\tb', quiet: true).text, equals('a b'));
+      }
     });
 
     test(r'run(...) throws ShellException when throwOnError is true (default)', () async {
@@ -75,10 +81,14 @@ void main() {
 
     test('CommandPipeline and pipe operator | pipe stdout between processes', () async {
       if (!Platform.isWindows) {
-        final pipeline = 'echo "alpha\nbeta\ngamma"'.pipe('grep beta');
-        final res = await pipeline.run(quiet: true);
+        final res = await ('echo "alpha\nbeta\ngamma"' | 'grep beta').run(quiet: true);
         expect(res.ok, isTrue);
         expect(res.text, equals('beta'));
+
+        // pipefail: an upstream failure is the pipeline's failure.
+        final failed = await ('false' | 'cat').run(quiet: true, throwOnError: false);
+        expect(failed.ok, isFalse);
+        expect(() => ('false' | 'cat').run(quiet: true), throwsA(isA<ShellException>()));
       }
     });
 

@@ -66,6 +66,7 @@ extension StreamParallelExtensions<T> on Stream<T> {
   /// Maps [worker] over stream items, emitting outcomes as they settle.
   ///
   /// An individual failure never reaches the error channel; `.unwrap()` forwards it.
+  /// A paused consumer pauses the source: nothing is buffered on its behalf.
   Stream<Either<Object, R>> parallelize<R>(
     FutureOr<R> Function(T item) worker, {
     int concurrency = 4,
@@ -76,10 +77,28 @@ extension StreamParallelExtensions<T> on Stream<T> {
     late final StreamController<Either<Object, R>> controller;
     final active = <Future<void>>{};
     StreamSubscription<T>? subscription;
+    void Function()? unregister;
+    // Two independent reasons to hold the source: no free permit, and a paused consumer.
+    var heldForPermit = false;
 
     void checkDone() {
       if (subscription == null && active.isEmpty && !controller.isClosed) {
+        unregister?.call();
         controller.close();
+      }
+    }
+
+    void hold() {
+      if (!heldForPermit) {
+        heldForPermit = true;
+        subscription?.pause();
+      }
+    }
+
+    void releaseIfIdle() {
+      if (heldForPermit && pool.permits > 0) {
+        heldForPermit = false;
+        subscription?.resume();
       }
     }
 
@@ -90,7 +109,7 @@ extension StreamParallelExtensions<T> on Stream<T> {
           return;
         }
 
-        cancelToken?.onCancel(() {
+        unregister = cancelToken?.onCancel(() {
           subscription?.cancel();
           if (!controller.isClosed) controller.close();
         });
@@ -110,16 +129,14 @@ extension StreamParallelExtensions<T> on Stream<T> {
                 })
                 .whenComplete(() {
                   active.remove(task);
-                  if (subscription?.isPaused == true && pool.permits > 0) {
-                    subscription?.resume();
-                  }
+                  releaseIfIdle();
                   checkDone();
                 });
             active.add(task);
-            if (pool.permits == 0) subscription?.pause();
+            if (pool.permits == 0) hold();
           },
           onError: (Object error, StackTrace st) {
-            if (!controller.isClosed) controller.add(Left(error));
+            if (!controller.isClosed) controller.add(Left(error, st));
           },
           onDone: () {
             subscription = null;
@@ -128,13 +145,12 @@ extension StreamParallelExtensions<T> on Stream<T> {
         );
       },
       onCancel: () async {
+        unregister?.call();
         await subscription?.cancel();
         subscription = null;
       },
       onPause: () => subscription?.pause(),
-      onResume: () {
-        if (pool.permits > 0) subscription?.resume();
-      },
+      onResume: () => subscription?.resume(),
     );
 
     return controller.stream;

@@ -63,6 +63,12 @@ everything that registers internally calls it when its work finishes. Without th
 token retains every listener it was ever given — measured at 52 MB for 200 000 completed
 `cancelWith` calls.
 
+## The session owns what every request shares
+
+The client, the timeout and the default headers are set once on `Http.session`. A timeout on
+each entry point would be six parameters expressing one decision; a stalled server should fail
+the same way everywhere.
+
 ## No cross products
 
 Do not add a method because it is the combination of two that already exist. `client.json(uri)`
@@ -71,7 +77,7 @@ Twenty-one members expressed four ideas before this rule.
 
 An entry point earns its place when the composition cannot reconstruct it. `Response.isolate`
 stayed because it copies four fields instead of shipping the request graph across an isolate
-boundary.
+boundary; `isolateHtml` did not, because it was `isolate((r) => f(r.html()))`.
 
 ## Two modules meet through an interface in `util`
 
@@ -79,6 +85,26 @@ boundary.
 depend on each other — `http`'s `DownloadProgress` and `cli`'s `ConsoleMultiProgress` — meet at
 `TaskProgress`/`BatchProgress` declared there. This is the legal shape for a cross-module seam;
 an import edge between two leaf modules is not, and `tool/check_deps.dart` fails it.
+
+## A format bridge lives with its parser
+
+`res.html()` and `url.html()` are in `html`, `res.xml()` and `url.xml()` in `xml`; `http` keeps
+`json()` because `core` is dependency-free. Under `dart run` the import closure is compiled on
+every invocation, and `http` used to carry both parsers for every program: about a second per
+run for a downloader that parsed neither. `tool/startup.dart` measures it; quote its deltas.
+
+## `Cli.run` is the lifecycle
+
+It parses, dispatches, turns a usage error into a message and exit code 64, runs the exit
+hooks, and releases the signal handlers so the process can end. A signal watch keeps the
+isolate alive — a script that registers `onExit` and never reaches `Cli.run`, `die` or
+`clearExitHooks` does not exit. `CliCommand.run` throws instead of exiting; tests use it.
+
+## A guaranteed value is not nullable
+
+A declared default or `required: true` guarantees a value, so `ctx.option` and `ctx.number`
+return it non-null and throw `StateError` when the guarantee was not made. The `*OrNull` forms
+are for an optional without a default. Every program used to bang every read.
 
 ## A component is not a path
 
@@ -118,6 +144,11 @@ parameter, because the parsed values already carry it.
 `elementAtOrNull` and `nonNulls` ship with Dart; the package's `getOrNull` and `whereNotNull`
 were second names for them and are gone. The one behavioural difference is documented rather than
 re-implemented: `elementAtOrNull` throws on a negative index where `getOrNull` returned `null`.
+
+## A failure carries its trace
+
+`Either.tryCatch` records the stack trace with the error and `unwrap` rethrows with it, so a
+`parallelize` failure points at the throw, not at the unwrap.
 
 ## Error policy is chosen at the use site
 

@@ -1,5 +1,7 @@
-import 'ansi.dart';
+import 'dart:async';
+
 import '../util/stdio.dart';
+import 'ansi.dart';
 
 /// Severity levels for [Logger], ordered from most to least verbose.
 ///
@@ -49,12 +51,12 @@ class Logger {
   /// Whether [level] currently permits [candidate] to be written.
   static bool enabled(LogLevel candidate) => candidate.index >= level.index && level != LogLevel.silent;
 
-  /// Runs [action] with logging suppressed, restoring the previous [level] afterwards.
-  static T silenced<T>(T Function() action) {
+  /// Runs [action], sync or async, with logging suppressed, restoring [level] afterwards.
+  static Future<T> silenced<T>(FutureOr<T> Function() action) async {
     final previous = level;
     level = LogLevel.silent;
     try {
-      return action();
+      return await action();
     } finally {
       level = previous;
     }
@@ -86,10 +88,10 @@ class Logger {
     ConsoleIo.out.writeln('  ℹ $message'.cyan);
   }
 
-  /// Logs a warning message: `  ⚠ message`.
+  /// Logs a warning message to standard error: `  ⚠ message`.
   static void warn(String message) {
     if (!enabled(LogLevel.warn)) return;
-    ConsoleIo.out.writeln('  ⚠ $message'.yellow);
+    ConsoleIo.err.writeln('  ⚠ $message'.yellow);
   }
 
   /// Logs an error message to standard error: `  ✖ message`.

@@ -67,10 +67,27 @@ void main() {
     test('ConsoleMultiProgress reports each completion without a terminal', () {
       final progress = Console.multiProgress(total: 3, slots: 2, message: 'files', columns: 80);
 
+      var completed = 0;
       for (final name in ['a.txt', 'b.txt', 'c.txt']) {
-        progress.updateTask(name, label: name, ratio: 0.5, received: 512, total: 1024);
-        progress.tick();
-        progress.updateTask(name, label: name, ratio: 1.0, received: 1024, total: 1024, isDone: true);
+        final path = Path('out/$name');
+        final url = 'https://example.com/$name'.url;
+        progress.report(
+          BatchDownloadProgress(
+            completed: completed,
+            total: 3,
+            written: completed,
+            current: Downloading(url, path, received: 512, total: 1024),
+          ),
+        );
+        completed++;
+        progress.report(
+          BatchDownloadProgress(
+            completed: completed,
+            total: 3,
+            written: completed,
+            current: Downloaded(url, path, 1024),
+          ),
+        );
       }
       progress.done('finished');
 
@@ -110,15 +127,22 @@ void main() {
       expect(lines.any((l) => l.contains('b.txt') && l.contains('[skipped]')), isTrue);
     });
 
-    test('ConsoleProgress still reports a line per tick without a terminal', () {
+    test('ConsoleProgress without a terminal reports each new tenth, not each tick', () {
       final progress = Console.progress(3, message: 'files', columns: 80);
       progress
         ..tick()
         ..tick()
         ..tick();
       progress.done('finished');
-
       expect(out.toString().trim().split('\n').length, equals(4));
+
+      out.clear();
+      final fine = Console.progress(1000, message: 'steps', columns: 80);
+      for (var i = 0; i < 1000; i++) {
+        fine.tick();
+      }
+      fine.done();
+      expect(out.toString().trim().split('\n').length, lessThanOrEqualTo(11), reason: 'one line per tenth');
     });
   });
 

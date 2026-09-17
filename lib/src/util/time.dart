@@ -20,6 +20,8 @@ extension IntDurationExtensions on int {
   Duration get d => Duration(days: this);
 }
 
+final _random = Random();
+
 /// Functional extensions on [Duration].
 ///
 /// {@category Utilities}
@@ -43,7 +45,7 @@ extension DurationExtensions on Duration {
 
   /// Randomizes this duration within `[1 - factor, 1 + factor]` range.
   Duration jittered([double factor = 0.25, Random? random]) {
-    final rand = random ?? Random();
+    final rand = random ?? _random;
     final clampedFactor = factor.clamp(0.0, 1.0);
     final variance = (rand.nextDouble() * 2 - 1) * clampedFactor;
     final ms = (inMilliseconds * (1 + variance)).round();

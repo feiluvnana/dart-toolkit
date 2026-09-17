@@ -1,6 +1,6 @@
 /// Common string convenience extensions.
 ///
-/// {@category Utilities}
+/// {@category Formats}
 extension StringExtensions on String {
   /// Parses this string as a [Uri].
   Uri get url => Uri.parse(this);

@@ -3,148 +3,16 @@ import 'dart:async';
 import '../util/time.dart';
 import 'cancellation_token.dart';
 
-/// Builder for configuring and executing retries on asynchronous operations.
+/// Runs [action] up to [attempts] times, waiting [delay] × [backoff]ⁿ between tries.
 ///
-/// {@category Concurrency}
-class RetryBuilder<T> implements Future<T> {
-  final FutureOr<T> Function() _action;
-  int _maxAttempts = 3;
-  Duration _delay = const Duration(milliseconds: 200);
-  Duration? _maxDelay;
-  double _backoff = 2.0;
-  bool _jitter = true;
-  bool Function(Object error)? _retryIf;
-  void Function(int attempt, Object error, Duration nextDelay)? _listener;
-  CancelToken? _cancelToken;
-
-  RetryBuilder(this._action);
-
-  void _checkNotStarted() {
-    if (_future != null) {
-      throw StateError('Cannot modify RetryBuilder configuration after execution has started.');
-    }
-  }
-
-  /// Maximum number of attempts, including the initial try (default: 3).
-  RetryBuilder<T> attempts(int count) {
-    _checkNotStarted();
-    _maxAttempts = count > 0 ? count : 1;
-    return this;
-  }
-
-  /// Initial delay before the first retry (default: 200ms).
-  RetryBuilder<T> delay(Duration duration) {
-    _checkNotStarted();
-    _delay = duration;
-    return this;
-  }
-
-  /// Maximum delay cap for exponential backoff.
-  RetryBuilder<T> maxDelay(Duration duration) {
-    _checkNotStarted();
-    _maxDelay = duration;
-    return this;
-  }
-
-  /// Exponential backoff factor (default: 2.0).
-  RetryBuilder<T> backoff(double factor) {
-    _checkNotStarted();
-    _backoff = factor >= 1.0 ? factor : 1.0;
-    return this;
-  }
-
-  /// Whether to add randomized jitter to retry delays (default: true).
-  RetryBuilder<T> jitter([bool enabled = true]) {
-    _checkNotStarted();
-    _jitter = enabled;
-    return this;
-  }
-
-  /// Retries only when [predicate] accepts the thrown error.
-  RetryBuilder<T> when(bool Function(Object error) predicate) {
-    _checkNotStarted();
-    _retryIf = predicate;
-    return this;
-  }
-
-  /// Attaches a [CancelToken] that aborts the retry loop.
-  ///
-  /// Distinct from `Future.cancelWith`, which only completes the outer future
-  /// with an error and leaves the retries running.
-  RetryBuilder<T> cancelOn(CancelToken token) {
-    _checkNotStarted();
-    _cancelToken = token;
-    return this;
-  }
-
-  /// Callback listener triggered on each retry attempt before waiting for the next delay.
-  RetryBuilder<T> listen(void Function(int attempt, Object error, Duration nextDelay) callback) {
-    _checkNotStarted();
-    _listener = callback;
-    return this;
-  }
-
-  Future<T>? _future;
-
-  /// Executes the async action according to the retry configuration.
-  Future<T> run() => _future ??= _execute();
-
-  Future<T> _execute() async {
-    var attemptCount = 0;
-    var currentDelay = _delay;
-
-    while (true) {
-      _cancelToken?.throwIfCancelled();
-      attemptCount++;
-      try {
-        return await _action();
-      } catch (error) {
-        _cancelToken?.throwIfCancelled();
-        final shouldRetry = attemptCount < _maxAttempts && (_retryIf == null || _retryIf!(error));
-        if (!shouldRetry) {
-          rethrow;
-        }
-
-        var delayToWait = _jitter ? currentDelay.jittered(0.25) : currentDelay;
-        if (_maxDelay != null && delayToWait > _maxDelay!) {
-          delayToWait = _maxDelay!;
-        }
-        _listener?.call(attemptCount, error, delayToWait);
-
-        if (delayToWait > Duration.zero) {
-          await Future<void>.delayed(delayToWait);
-        }
-
-        var nextDelayMs = (currentDelay.inMilliseconds * _backoff).round();
-        currentDelay = Duration(milliseconds: nextDelayMs);
-        if (_maxDelay != null && currentDelay > _maxDelay!) {
-          currentDelay = _maxDelay!;
-        }
-      }
-    }
-  }
-
-  // Implements Future<T> so the builder can be awaited directly.
-
-  @override
-  Stream<T> asStream() => run().asStream();
-
-  @override
-  Future<T> catchError(Function onError, {bool Function(Object error)? test}) => run().catchError(onError, test: test);
-
-  @override
-  Future<R> then<R>(FutureOr<R> Function(T value) onValue, {Function? onError}) =>
-      run().then(onValue, onError: onError);
-
-  @override
-  Future<T> timeout(Duration timeLimit, {FutureOr<T> Function()? onTimeout}) =>
-      run().timeout(timeLimit, onTimeout: onTimeout);
-
-  @override
-  Future<T> whenComplete(FutureOr<void> Function() action) => run().whenComplete(action);
-}
-
-/// Shorthand function to retry [action] up to [attempts] times with exponential backoff.
+/// [delay] is jittered by ±25 % unless [jitter] is false, and never exceeds [maxDelay].
+/// [when] limits which errors are retried; anything thrown is retried by default,
+/// `Error`s included. [onRetry] fires before each wait. [cancelToken] aborts the loop
+/// with a [CancelledException], unlike `Future.cancelWith`, which leaves it running.
+///
+/// ```dart
+/// final data = await retry(fetchData, attempts: 3, delay: 200.ms);
+/// ```
 ///
 /// {@category Concurrency}
 Future<T> retry<T>(
@@ -155,26 +23,30 @@ Future<T> retry<T>(
   double backoff = 2.0,
   bool jitter = true,
   bool Function(Object error)? when,
+  void Function(int attempt, Object error, Duration nextDelay)? onRetry,
   CancelToken? cancelToken,
-}) {
-  var builder = RetryBuilder<T>(action).attempts(attempts).delay(delay).backoff(backoff).jitter(jitter);
+}) async {
+  final maxAttempts = attempts > 0 ? attempts : 1;
+  final factor = backoff >= 1.0 ? backoff : 1.0;
+  var attempt = 0;
+  var current = delay;
 
-  if (maxDelay != null) {
-    builder = builder.maxDelay(maxDelay);
-  }
-  if (when != null) {
-    builder = builder.when(when);
-  }
-  if (cancelToken != null) {
-    builder = builder.cancelOn(cancelToken);
-  }
-  return builder.run();
-}
+  while (true) {
+    cancelToken?.throwIfCancelled();
+    attempt++;
+    try {
+      return await action();
+    } catch (error) {
+      cancelToken?.throwIfCancelled();
+      if (attempt >= maxAttempts || !(when?.call(error) ?? true)) rethrow;
 
-/// Extension on closures to construct a [RetryBuilder] fluently.
-///
-/// {@category Concurrency}
-extension FunctionRetryExtensions<T> on FutureOr<T> Function() {
-  /// Retries this computation up to [attempts] times with exponential backoff.
-  RetryBuilder<T> retry([int attempts = 3]) => RetryBuilder<T>(this).attempts(attempts);
+      var wait = jitter ? current.jittered(0.25) : current;
+      if (maxDelay != null && wait > maxDelay) wait = maxDelay;
+      onRetry?.call(attempt, error, wait);
+      if (wait > Duration.zero) await Future<void>.delayed(wait);
+
+      current = Duration(milliseconds: (current.inMilliseconds * factor).round());
+      if (maxDelay != null && current > maxDelay) current = maxDelay;
+    }
+  }
 }

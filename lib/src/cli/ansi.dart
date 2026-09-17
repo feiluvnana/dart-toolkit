@@ -7,7 +7,7 @@ import '../util/stdio.dart';
 ///
 /// Automatically disabled when `NO_COLOR` environment variable is set or when stdout does not support ANSI escapes.
 ///
-/// {@category Terminal}
+/// {@category CLI}
 class Ansi {
   static bool? _override;
 
@@ -41,7 +41,7 @@ class Ansi {
 
 /// ANSI terminal styling extensions on [String].
 ///
-/// {@category Terminal}
+/// {@category CLI}
 extension StringAnsiExtensions on String {
   /// Wraps this string in SGR [code], reopening it after any nested reset so that
   /// styles compose: `('a'.red + 'b').bold` leaves `b` bold.

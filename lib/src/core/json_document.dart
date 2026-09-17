@@ -20,8 +20,9 @@ class JsonDocument {
 
   /// Accesses a child node by map key ([String]) or list index ([int]).
   ///
-  /// A missing key or an out-of-range index yields the null document; any other
-  /// key type is a programming error and throws [ArgumentError].
+  /// A negative index counts from the end, as `$[-1]` does. A missing key or an
+  /// out-of-range index yields the null document; any other key type throws
+  /// [ArgumentError].
   JsonDocument operator [](Object keyOrIndex) {
     switch (keyOrIndex) {
       case String():
@@ -29,7 +30,8 @@ class JsonDocument {
       case int():
         if (raw is List) {
           final list = raw as List;
-          if (keyOrIndex >= 0 && keyOrIndex < list.length) return JsonDocument(list[keyOrIndex]);
+          final i = keyOrIndex < 0 ? list.length + keyOrIndex : keyOrIndex;
+          if (i >= 0 && i < list.length) return JsonDocument(list[i]);
         }
         return const JsonDocument(null);
       default:
@@ -51,24 +53,18 @@ class JsonDocument {
       raw is Map ? (raw as Map).map((k, v) => MapEntry('$k', JsonDocument(v))) : const {};
 
   /// Converts or casts [raw] to type [T], or returns `null`.
-  /// Supports both non-nullable and nullable type arguments (e.g. `to<int>()`, `to<int?>()`).
+  ///
+  /// Numbers and booleans are parsed from strings; a `Map` or `List` asked for as
+  /// `String` comes back JSON encoded. Nullable type arguments are accepted.
   T? to<T>() {
     final val = raw;
     if (val == null) return null;
     if (val is T) return val as T;
-    if (const <String>[] is List<T>) return val.toString() as T;
-    if (const <int>[] is List<T>) {
-      if (val is num) return val.toInt() as T;
-      return int.tryParse('$val') as T?;
-    }
-    if (const <double>[] is List<T>) {
-      if (val is num) return val.toDouble() as T;
-      return double.tryParse('$val') as T?;
-    }
-    if (const <num>[] is List<T>) {
-      if (val is num) return val as T;
-      return num.tryParse('$val') as T?;
-    }
+    if (const <String>[] is List<T>) return (val is Map || val is List ? jsonEncode(val) : val.toString()) as T;
+    // `num` before `int` and `double`: `const <int>[] is List<num>` is true.
+    if (const <num>[] is List<T>) return num.tryParse('$val') as T?;
+    if (const <int>[] is List<T>) return (val is num ? val.toInt() : int.tryParse('$val')) as T?;
+    if (const <double>[] is List<T>) return (val is num ? val.toDouble() : double.tryParse('$val')) as T?;
     if (const <bool>[] is List<T>) {
       if (val == 'true' || val == 1) return true as T;
       if (val == 'false' || val == 0) return false as T;

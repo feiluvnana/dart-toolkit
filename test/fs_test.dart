@@ -89,7 +89,7 @@ void main() {
       expect(syncBin.readBytesSync(), equals([10, 20, 30]));
     });
 
-    test('writeJson and readJson return JsonDocument', () async {
+    test('writeText and readText round-trip a JSON file', () async {
       final root = Path(tempDir.path) / 'json_test';
       final jsonFile = root / 'data.json';
 

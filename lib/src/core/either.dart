@@ -33,21 +33,21 @@ sealed class Either<L, R> {
   };
 
   /// Maps the success value if [Right], preserving [Left].
-  Either<L, T> map<T>(T Function(R right) transform) => switch (this) {
+  Either<L, T> mapRight<T>(T Function(R right) transform) => switch (this) {
     Right<L, R>(:final value) => Right(transform(value)),
-    Left<L, R>(:final value) => Left(value),
+    Left<L, R>(:final value, :final trace) => Left(value, trace),
   };
 
-  /// Maps the left failure value if [Left], preserving [Right].
+  /// Maps the left failure value if [Left], preserving [Right] and the captured trace.
   Either<T, R> mapLeft<T>(T Function(L left) transform) => switch (this) {
-    Left<L, R>(:final value) => Left(transform(value)),
+    Left<L, R>(:final value, :final trace) => Left(transform(value), trace),
     Right<L, R>(:final value) => Right(value),
   };
 
-  /// The [Right] value, or throws the [Left] value.
+  /// The [Right] value, or throws the [Left] value with the trace it was caught with.
   R unwrap() => switch (this) {
     Right<L, R>(:final value) => value,
-    Left<L, R>(:final value) => throw _throwable(value),
+    Left<L, R>(:final value, :final trace) => Error.throwWithStackTrace(_throwable(value), trace ?? StackTrace.current),
   };
 
   /// Runs [action], capturing anything it throws as a [Left].
@@ -56,8 +56,8 @@ sealed class Either<L, R> {
   static Either<Object, T> tryCatch<T>(T Function() action) {
     try {
       return Right(action());
-    } catch (error) {
-      return Left(error);
+    } catch (error, trace) {
+      return Left(error, trace);
     }
   }
 
@@ -65,8 +65,8 @@ sealed class Either<L, R> {
   static Future<Either<Object, T>> tryCatchAsync<T>(FutureOr<T> Function() action) async {
     try {
       return Right(await action());
-    } catch (error) {
-      return Left(error);
+    } catch (error, trace) {
+      return Left(error, trace);
     }
   }
 }
@@ -78,8 +78,11 @@ final class Left<L, R> extends Either<L, R> {
   /// The underlying left value.
   final L value;
 
+  /// Where the failure was caught, when [Either.tryCatch] produced it; [unwrap] rethrows with it.
+  final StackTrace? trace;
+
   /// Creates a [Left] outcome.
-  const Left(this.value);
+  const Left(this.value, [this.trace]);
 
   @override
   bool operator ==(Object other) => identical(this, other) || (other is Left && other.value == value);
@@ -135,6 +138,6 @@ extension IterableEitherExtensions<L, R> on Iterable<Either<L, R>> {
 ///
 /// {@category Formats}
 extension StreamEitherExtensions<L, R> on Stream<Either<L, R>> {
-  /// Emits every [Right] value, forwarding the first [Left] into the error channel.
+  /// Emits every [Right] value; every [Left] becomes an error event, and the stream continues.
   Stream<R> unwrap() => map((outcome) => outcome.unwrap());
 }

@@ -48,14 +48,19 @@ SINGLE_QUOTED='single quote value'
       expect(() => Env.require('DEFINITELY_MISSING_VAR_9999'), throwsA(isA<StateError>()));
     });
 
-    test('Env.get with positional default returns fallback when missing', () {
-      expect(Env.get('NON_EXISTENT_VAR', 'fallback_val'), equals('fallback_val'));
+    test('Env.get is null when missing; ?? supplies the fallback', () {
+      expect(Env.get('NON_EXISTENT_VAR') ?? 'fallback_val', equals('fallback_val'));
+      expect(Env.isCI, isA<bool>());
     });
 
-    test('Platform getters work without errors', () {
-      expect(Os.isMacOS || Os.isWindows || Os.isLinux, isTrue);
-      expect(Os.isMacOS || Os.isWindows, isTrue);
-      expect(Env.isCI, isA<bool>());
+    test('Env.parse without override preserves a value loaded earlier', () {
+      Env.remove('AUDIT_FIRST_WINS');
+      Env.parse('AUDIT_FIRST_WINS=first');
+      Env.parse('AUDIT_FIRST_WINS=second');
+      expect(Env.get('AUDIT_FIRST_WINS'), equals('first'));
+      Env.parse('AUDIT_FIRST_WINS=third', override: true);
+      expect(Env.get('AUDIT_FIRST_WINS'), equals('third'));
+      Env.remove('AUDIT_FIRST_WINS');
     });
   });
 }

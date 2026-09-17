@@ -1,7 +1,8 @@
 /// # HTTP & Web Scraping
 ///
-/// Format parsing on `http.Response`, a Scrapy-style scraping
-/// pipeline, atomic downloads and the shared-client session seam.
+/// Requests and JSON on `Uri` and `http.Response`, a Scrapy-style scraping
+/// pipeline, atomic downloads and the shared-client session seam. HTML and XML
+/// parsing are in `html/html.dart` and `xml/xml.dart`.
 ///
 /// {@category Crawling}
 library;

@@ -1,6 +1,39 @@
 import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:test/test.dart';
 
+/// A [TaskProgress] for tests, so the renderer is driven the way `report` is in a program.
+class _Task implements TaskProgress {
+  @override
+  final String taskId;
+  @override
+  final String label;
+  @override
+  final double? ratio;
+  @override
+  final int? received;
+  @override
+  final int? total;
+  @override
+  final String? status;
+  @override
+  final bool isDone;
+  const _Task(this.taskId, this.label, this.ratio, this.received, this.total, this.status, this.isDone);
+}
+
+class _Batch implements BatchProgress {
+  @override
+  final int completed;
+  @override
+  final int? total;
+  @override
+  final TaskProgress current;
+  const _Batch(this.completed, this.total, this.current);
+}
+
+_Task _task(String id, String label, double? ratio, int? received, int? total, {String? status, bool done = false}) =>
+    _Task(id, label, ratio, received, total, status, done);
+_Batch _batch(int completed, int? total, TaskProgress current) => _Batch(completed, total, current);
+
 void main() {
   group('CLI', () {
     test('command with option, subcommand, and action execution', () async {
@@ -15,7 +48,7 @@ void main() {
         description: 'Fetch data',
         build: (fetch) => fetch
           ..flag('verbose', abbr: 'v')
-          ..subcommand(
+          ..command(
             'scrape',
             description: 'Scrape URLs',
             build: (scrape) => scrape
@@ -120,9 +153,8 @@ void main() {
       expect(lines[3], contains('└─ (idle)'));
 
       // Update active slots
-      multi.updateTask('task1', label: 'song01.flac', ratio: 0.5, received: 500000, total: 1000000);
-      multi.updateTask('task2', label: 'song02.flac', ratio: 0.8, received: 800000, total: 1000000);
-      multi.tick(1);
+      multi.report(_batch(1, 10, _task('task1', 'song01.flac', 0.5, 500000, 1000000)));
+      multi.report(_batch(1, 10, _task('task2', 'song02.flac', 0.8, 800000, 1000000)));
 
       lines = multi.formatLines();
       expect(lines[0], contains('10% (1/10)'));
@@ -133,16 +165,7 @@ void main() {
       expect(lines[2], contains('80%'));
       expect(lines[3], contains('└─ (idle)'));
 
-      multi.setCompleted(2);
-      multi.updateTask(
-        'song03.flac',
-        label: 'song03.flac',
-        ratio: 0.5,
-        received: 300000,
-        total: 600000,
-        status: 'done',
-        isDone: true,
-      );
+      multi.report(_batch(2, 10, _task('song03.flac', 'song03.flac', 0.5, 300000, 600000, status: 'done', done: true)));
 
       lines = multi.formatLines();
       expect(lines[0], contains('20% (2/10)'));
@@ -152,7 +175,8 @@ void main() {
     });
 
     test('choice accepts valid options and throws ArgumentError on invalid value', () async {
-      final cli = Cli();
+      // CliCommand.run throws; Cli.run would turn the error into exit code 64.
+      final cli = CliCommand('app');
       String? chosenFormat;
 
       cli.command(
@@ -175,7 +199,7 @@ void main() {
     });
 
     test('flag and number helpers configure and validate correctly', () async {
-      final cli = Cli();
+      final cli = CliCommand('app');
       bool? isDryRun;
       int? concurrency;
 
@@ -212,9 +236,9 @@ void main() {
       cli.command(
         'seek',
         build: (seek) => seek
-          ..option('offset', abbr: 'o')
+          ..number('offset', abbr: 'o')
           ..action((ctx) {
-            offset = ctx.number('offset');
+            offset = ctx.numberOrNull('offset');
             rest = ctx.rest;
           }),
       );
@@ -235,6 +259,83 @@ void main() {
       expect(rest, equals(['--not-an-option', '-x']));
     });
 
+    test('options before the subcommand, combined short flags and attached values parse', () async {
+      final cli = CliCommand('app');
+      bool? verbose;
+      bool? dry;
+      int? jobs;
+      List<String>? rest;
+      cli
+        ..flag('verbose', abbr: 'v')
+        ..flag('dry-run', abbr: 'd')
+        ..number('jobs', abbr: 'j', defaultTo: 1)
+        ..command(
+          'build',
+          build: (b) => b.action((ctx) {
+            verbose = ctx.flag('verbose');
+            dry = ctx.flag('dry-run');
+            jobs = ctx.number('jobs');
+            rest = ctx.rest;
+          }),
+        );
+
+      await cli.run(['-v', 'build', '-dj4', 'target']);
+      expect(verbose, isTrue);
+      expect(dry, isTrue);
+      expect(jobs, equals(4));
+      expect(rest, equals(['target']));
+
+      await cli.run(['build', '-vd', '--jobs=2']);
+      expect(verbose, isTrue);
+      expect(dry, isTrue);
+      expect(jobs, equals(2));
+    });
+
+    test('--help as an option value or after -- is a value, not a request for help', () async {
+      String? token;
+      final out = StringBuffer();
+      ConsoleIo.out = out;
+      try {
+        final cli = CliCommand('app')
+          ..option('token')
+          ..action((ctx) => token = ctx.option('token'));
+        await cli.run(['--token', '--help']);
+        expect(token, equals('--help'));
+        expect(out.toString(), isNot(contains('Usage')));
+
+        await cli.run(['--help']);
+        expect(out.toString(), contains('Usage'));
+      } finally {
+        ConsoleIo.reset();
+      }
+    });
+
+    test('a choice default outside the choices fails at declaration', () {
+      expect(() => CliCommand('app').choice('mode', ['a', 'b'], defaultTo: 'c'), throwsArgumentError);
+    });
+
+    test('option() and number() are non-null; the OrNull forms are for absent optionals', () async {
+      String? name;
+      int? port;
+      Object? error;
+      final cli = CliCommand('app')
+        ..option('name')
+        ..number('port')
+        ..action((ctx) {
+          name = ctx.optionOrNull('name');
+          port = ctx.numberOrNull('port');
+          try {
+            ctx.option('name');
+          } catch (e) {
+            error = e;
+          }
+        });
+      await cli.run([]);
+      expect(name, isNull);
+      expect(port, isNull);
+      expect(error, isA<StateError>());
+    });
+
     test('CLI subcommand inherits option defaults from parent hierarchy', () async {
       final cli = Cli();
       String? parentFmt;
@@ -242,7 +343,7 @@ void main() {
 
       cli
           .option('format', defaultTo: 'all')
-          .subcommand('download', build: (sub) => sub.action((ctx) => subFmt = ctx.option('format')))
+          .command('download', build: (sub) => sub.action((ctx) => subFmt = ctx.option('format')))
           .action((ctx) => parentFmt = ctx.option('format'));
 
       // Parent sees default
@@ -272,7 +373,7 @@ void main() {
 
     test('a required option is enforced at parse time', () async {
       String? token;
-      final cli = Cli()
+      final cli = CliCommand('app')
         ..option('token', abbr: 't', required: true, description: 'API token')
         ..action((ctx) => token = ctx.option('token'));
 
@@ -285,7 +386,7 @@ void main() {
       );
 
       // Required is also enforced from an ancestor command, and shows up in help.
-      final nested = Cli()
+      final nested = CliCommand('app')
         ..number('port', required: true)
         ..command('serve', build: (serve) => serve..action((_) {}));
       expect(() => nested.run(['serve']), throwsA(isA<ArgumentError>()));

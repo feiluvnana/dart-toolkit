@@ -1,6 +1,7 @@
 /// # XML
 ///
-/// `XmlDocument`, with XPath selectors.
+/// `XmlDocument`, with XPath selectors, and the XML bridges on `http.Response`
+/// and `Uri`.
 ///
 /// {@category Formats}
 library;

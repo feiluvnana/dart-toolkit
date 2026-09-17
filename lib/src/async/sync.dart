@@ -9,7 +9,7 @@ class Semaphore {
   int _currentPermits;
   final _waiters = Queue<Completer<void>>();
 
-  Semaphore(this.maxPermits) : _currentPermits = maxPermits > 0 ? maxPermits : 1;
+  Semaphore(int permits) : maxPermits = permits > 0 ? permits : 1, _currentPermits = permits > 0 ? permits : 1;
 
   /// Number of currently available permits.
   int get permits => _currentPermits;

@@ -8,33 +8,55 @@ import 'ansi.dart';
 
 /// Coalesces redraws so a producer that reports per chunk does not issue a write
 /// per chunk. Shared by [ConsoleProgress] and [ConsoleMultiProgress]; they must not
-/// disagree about how often the terminal is touched.
+/// disagree about how often the terminal is touched. Always draws the *latest* state.
 class _FrameGate {
   static const _interval = Duration(milliseconds: 33);
   DateTime? _last;
   Timer? _timer;
+  void Function()? _pending;
 
   void request(void Function() render) {
     final now = DateTime.now();
     if (_last == null || now.difference(_last!) >= _interval) {
       _timer?.cancel();
       _timer = null;
+      _pending = null;
       render();
       _last = now;
     } else {
-      _timer ??= Timer(_interval, () {
-        _timer = null;
-        render();
-        _last = DateTime.now();
-      });
+      _pending = render;
+      _timer ??= Timer(_interval, flush);
     }
   }
 
-  void stop() {
+  /// Draws a deferred frame now, so `done()` never leaves the last state unrendered.
+  void flush() {
     _timer?.cancel();
     _timer = null;
+    final render = _pending;
+    _pending = null;
+    if (render != null) {
+      render();
+      _last = DateTime.now();
+    }
   }
 }
+
+int _columnsOr(int? fixed) {
+  if (fixed != null && fixed > 0) return fixed;
+  return ConsoleIo.columns ?? 80;
+}
+
+String _bar(int current, int total, String message) {
+  const barLength = 20;
+  final percent = total > 0 ? ((current / total) * 100).clamp(0, 100).toInt() : 0;
+  final filled = total > 0 ? ((current / total) * barLength).clamp(0, barLength).toInt() : 0;
+  final bar = '=' * filled + '-' * (barLength - filled);
+  final prefix = message.isNotEmpty ? '$message: ' : '';
+  return '  $prefix[$bar] $percent% ($current/$total)';
+}
+
+bool _interactive() => ConsoleIo.isTerminal && Ansi.enabled;
 
 /// Progress controller for terminal activity.
 ///
@@ -48,68 +70,47 @@ class ConsoleProgress {
   int _current = 0;
   bool _isDone = false;
   int _lastWidth = 0;
+  int _lastDecile = -1;
   final _frames = _FrameGate();
 
   ConsoleProgress._(this.total, {this.message = '', this.columns});
 
-  int get _columns {
-    final fixed = columns;
-    if (fixed != null && fixed > 0) return fixed;
-    try {
-      final cols = ConsoleIo.columns;
-      if (cols != null) {
-        return cols;
-      }
-    } catch (_) {}
-    return 80;
-  }
-
   /// Formats the single-line progress text for current progress and [label],
   /// truncated to fit within terminal bounds.
   String formatLine([String? label]) {
-    final percent = total > 0 ? ((_current / total) * 100).clamp(0, 100).toInt() : 0;
-    const barLength = 20;
-    final filled = total > 0 ? ((_current / total) * barLength).clamp(0, barLength).toInt() : 0;
-    final bar = '=' * filled + '-' * (barLength - filled);
-    final prefix = message.isNotEmpty ? '$message: ' : '';
-    final base = '  $prefix[$bar] $percent% ($_current/$total)';
-    final maxCols = max(20, _columns - 1);
+    final base = _bar(_current, total, message);
+    final maxCols = max(20, _columnsOr(columns) - 1);
 
     var line = base;
-    final baseWidth = _stringVisualWidth(base);
     if (label != null && label.isNotEmpty) {
-      final availableForSuffix = maxCols - baseWidth;
+      final availableForSuffix = maxCols - _stringVisualWidth(base);
       // " ($label)" requires 3 columns for " (" and ")"
-      if (availableForSuffix > 5) {
-        final maxLabelWidth = availableForSuffix - 3;
-        final truncatedLabel = _truncateToVisualWidth(label, maxLabelWidth);
-        line = '$base ($truncatedLabel)';
-      }
+      if (availableForSuffix > 5) line = '$base (${_truncateToVisualWidth(label, availableForSuffix - 3)})';
     }
-
-    if (_stringVisualWidth(line) > maxCols) {
-      line = _truncateToVisualWidth(line, maxCols);
-    }
-
-    return line;
+    return _truncateToVisualWidth(line, maxCols);
   }
 
   /// Advances the progress by [count] and optionally displays [label].
   ///
   /// Redraws are coalesced at the same rate as [ConsoleMultiProgress]', so a caller
-  /// may tick per chunk.
+  /// may tick per chunk. Without a terminal a line is written when a new tenth is
+  /// reached, not per tick.
   void tick([int count = 1, String? label]) {
     if (_isDone) return;
     _current += count;
-    if (ConsoleIo.isTerminal && Ansi.enabled) {
+    if (_interactive()) {
       _frames.request(() => _render(label));
     } else {
-      ConsoleIo.out.writeln(formatLine(label));
+      final decile = total > 0 ? (_current * 10 ~/ total).clamp(0, 10) : 0;
+      if (decile != _lastDecile) {
+        _lastDecile = decile;
+        ConsoleIo.out.writeln(formatLine(label));
+      }
     }
   }
 
   void _render(String? label) {
-    final maxCols = max(20, _columns - 1);
+    final maxCols = max(20, _columnsOr(columns) - 1);
     final line = formatLine(label);
     final lineWidth = _stringVisualWidth(line);
     final padding = ' ' * max(0, min(_lastWidth - lineWidth, maxCols - lineWidth));
@@ -120,15 +121,11 @@ class ConsoleProgress {
   /// Marks progress as done with an optional final [message].
   void done([String? message]) {
     if (_isDone) return;
+    _frames.flush();
     _isDone = true;
-    _frames.stop();
     _lastWidth = 0;
-    if (ConsoleIo.isTerminal && Ansi.enabled) {
-      ConsoleIo.out.writeln();
-    }
-    if (message != null && message.isNotEmpty) {
-      ConsoleIo.out.writeln('  ✓ $message'.green);
-    }
+    if (_interactive()) ConsoleIo.out.writeln();
+    if (message != null && message.isNotEmpty) ConsoleIo.out.writeln('  ✓ $message'.green);
   }
 }
 
@@ -142,30 +139,21 @@ class _ProgressSlot {
   bool isDone = false;
   DateTime lastUpdated = DateTime.now();
 
-  void update({String? taskId, String? label, double? ratio, int? received, int? total, String? status, bool? isDone}) {
-    if (taskId != null) this.taskId = taskId;
-    if (label != null) this.label = label;
-    this.ratio = ratio;
-    this.received = received;
-    this.total = total;
-    this.status = status;
-    if (isDone != null) this.isDone = isDone;
-    lastUpdated = DateTime.now();
-  }
-
-  void reset() {
-    taskId = null;
-    label = '';
-    ratio = null;
-    received = null;
-    total = null;
-    status = null;
-    isDone = false;
+  void update(TaskProgress task) {
+    taskId = task.taskId;
+    label = task.label;
+    ratio = task.ratio;
+    received = task.received;
+    total = task.total;
+    status = task.status;
+    isDone = task.isDone;
     lastUpdated = DateTime.now();
   }
 }
 
 /// Multi-task concurrent progress display for terminal applications.
+///
+/// Driven by [report]; it renders whatever a [BatchProgress] carries.
 ///
 /// {@category Terminal}
 class ConsoleMultiProgress {
@@ -179,51 +167,23 @@ class ConsoleMultiProgress {
   int _renderedLines = 0;
   final List<_ProgressSlot> _slotList;
   final Map<String, int> _slotByTask = {};
-
   final _frames = _FrameGate();
 
   ConsoleMultiProgress._(this.total, {this.slots = 4, this.message = '', this.columns})
     : _slotList = List.generate(slots > 0 ? slots : 1, (_) => _ProgressSlot());
 
-  int get _columns {
-    final fixed = columns;
-    if (fixed != null && fixed > 0) return fixed;
-    try {
-      final cols = ConsoleIo.columns;
-      if (cols != null) {
-        return cols;
-      }
-    } catch (_) {}
-    return 80;
-  }
-
   /// Formats the multi-progress lines (header + worker slots).
   List<String> formatLines() {
-    final maxCols = max(20, _columns - 1);
-    final lines = <String>[];
-
-    final percent = total > 0 ? ((_current / total) * 100).clamp(0, 100).toInt() : 0;
-    const barLength = 20;
-    final filled = total > 0 ? ((_current / total) * barLength).clamp(0, barLength).toInt() : 0;
-    final bar = '=' * filled + '-' * (barLength - filled);
-    final prefix = message.isNotEmpty ? '$message: ' : '';
-    final header = '  $prefix[$bar] $percent% ($_current/$total)';
-    lines.add(_truncateToVisualWidth(header, maxCols));
-
-    for (var i = 0; i < _slotList.length; i++) {
-      final isLast = i == _slotList.length - 1;
-      final treePfx = isLast ? '  └─ ' : '  ├─ ';
-      final slotLine = _formatSlotLine(_slotList[i], treePfx, maxCols);
-      lines.add(slotLine);
-    }
-
-    return lines;
+    final maxCols = max(20, _columnsOr(columns) - 1);
+    return [
+      _truncateToVisualWidth(_bar(_current, total, message), maxCols),
+      for (var i = 0; i < _slotList.length; i++)
+        _formatSlotLine(_slotList[i], i == _slotList.length - 1 ? '  └─ ' : '  ├─ ', maxCols),
+    ];
   }
 
   String _formatSlotLine(_ProgressSlot slot, String prefix, int maxCols) {
-    if (slot.taskId == null && slot.label.isEmpty) {
-      return '$prefix(idle)';
-    }
+    if (slot.taskId == null && slot.label.isEmpty) return '$prefix(idle)';
 
     const subBarLen = 10;
     final ratio = slot.ratio;
@@ -241,36 +201,22 @@ class ConsoleMultiProgress {
       percentStr = ' --%';
     }
 
-    String sizeStr = '';
+    var sizeStr = '';
     if (slot.received != null && slot.total != null && slot.total! > 0) {
-      final rec = _formatBytes(slot.received!);
-      final tot = _formatBytes(slot.total!);
-      sizeStr = '($rec/$tot) ';
+      sizeStr = '(${_formatBytes(slot.received!)}/${_formatBytes(slot.total!)}) ';
     } else if (slot.received != null && slot.received! > 0) {
       sizeStr = '(${_formatBytes(slot.received!)}) ';
     }
 
-    String statusSuffix = '';
-    if (slot.status != null && slot.status!.isNotEmpty) {
-      statusSuffix = ' [${slot.status}]';
-    }
-
-    final fullLine = '$prefix$barStr $percentStr $sizeStr${slot.label}$statusSuffix';
-    return _truncateToVisualWidth(fullLine, maxCols);
+    final statusSuffix = slot.status != null && slot.status!.isNotEmpty ? ' [${slot.status}]' : '';
+    return _truncateToVisualWidth('$prefix$barStr $percentStr $sizeStr${slot.label}$statusSuffix', maxCols);
   }
 
   void _render() {
-    if (_isDone) return;
-    if (!ConsoleIo.isTerminal || !Ansi.enabled) return;
-    _renderInPlace();
-  }
-
-  void _renderInPlace() {
-    final lines = formatLines();
+    if (_isDone || !_interactive()) return;
     final buffer = StringBuffer();
-    if (_renderedLines > 0) {
-      buffer.write('\x1b[${_renderedLines}A');
-    }
+    if (_renderedLines > 0) buffer.write('\x1b[${_renderedLines}A');
+    final lines = formatLines();
     for (final line in lines) {
       buffer.write('\r\x1b[K${line.dim}\n');
     }
@@ -279,8 +225,7 @@ class ConsoleMultiProgress {
   }
 
   /// Without a terminal there is no cursor to move, so emit one durable line per
-  /// completed task instead of a redrawn frame. [ConsoleProgress] behaves the same
-  /// way; the two must not diverge in CI.
+  /// completed task instead of a redrawn frame.
   void _renderCompletion(_ProgressSlot slot) {
     if (_isDone || ConsoleIo.isTerminal) return;
     final status = slot.status ?? 'done';
@@ -288,70 +233,21 @@ class ConsoleMultiProgress {
     ConsoleIo.out.writeln('  [$_current/$total] ${slot.label}$size [$status]');
   }
 
-  void _requestRender() {
-    if (_isDone) return;
-    _frames.request(_render);
-  }
+  int _slotFor(String taskId) {
+    final existing = _slotByTask[taskId];
+    if (existing != null) return existing;
 
-  /// Updates progress for a specific concurrent [taskId].
-  void updateTask(
-    String taskId, {
-    required String label,
-    double? ratio,
-    int? received,
-    int? total,
-    String? status,
-    bool isDone = false,
-  }) {
-    if (_isDone) return;
-
-    int targetSlot;
-    final existingSlot = _slotByTask[taskId];
-    if (existingSlot != null) {
-      targetSlot = existingSlot;
-    } else {
-      var found = -1;
-      for (var i = 0; i < _slotList.length; i++) {
-        if (_slotList[i].taskId == null || _slotList[i].isDone) {
-          found = i;
-          break;
-        }
+    var found = _slotList.indexWhere((s) => s.taskId == null || s.isDone);
+    if (found == -1) {
+      found = 0;
+      for (var i = 1; i < _slotList.length; i++) {
+        if (_slotList[i].lastUpdated.isBefore(_slotList[found].lastUpdated)) found = i;
       }
-      if (found == -1) {
-        var oldest = _slotList[0].lastUpdated;
-        found = 0;
-        for (var i = 1; i < _slotList.length; i++) {
-          if (_slotList[i].lastUpdated.isBefore(oldest)) {
-            oldest = _slotList[i].lastUpdated;
-            found = i;
-          }
-        }
-      }
-
-      final oldTask = _slotList[found].taskId;
-      if (oldTask != null) {
-        _slotByTask.remove(oldTask);
-      }
-      _slotByTask[taskId] = found;
-      targetSlot = found;
     }
-
-    _slotList[targetSlot].update(
-      taskId: taskId,
-      label: label,
-      ratio: ratio,
-      received: received,
-      total: total,
-      status: status,
-      isDone: isDone,
-    );
-
-    if (isDone) {
-      _slotByTask.remove(taskId);
-      _renderCompletion(_slotList[targetSlot]);
-    }
-
-    _requestRender();
+    final oldTask = _slotList[found].taskId;
+    if (oldTask != null) _slotByTask.remove(oldTask);
+    _slotByTask[taskId] = found;
+    return found;
   }
 
   /// Renders one [BatchProgress] update: the overall count, a revised [total], and
@@ -360,55 +256,34 @@ class ConsoleMultiProgress {
     if (_isDone) return;
     final discovered = batch.total;
     if (discovered != null && discovered > total) total = discovered;
+    _current = batch.completed;
+
     final task = batch.current;
-    setCompleted(batch.completed);
-    updateTask(
-      task.taskId,
-      label: task.label,
-      ratio: task.ratio,
-      received: task.received,
-      total: task.total,
-      status: task.status,
-      isDone: task.isDone,
-    );
-  }
-
-  /// Advances the overall progress by [count].
-  void tick([int count = 1]) {
-    if (_isDone) return;
-    _current += count;
-    _requestRender();
-  }
-
-  /// Sets overall completed count directly.
-  void setCompleted(int completed) {
-    if (_isDone) return;
-    _current = completed;
-    _requestRender();
+    final slot = _slotList[_slotFor(task.taskId)]..update(task);
+    if (task.isDone) {
+      _slotByTask.remove(task.taskId);
+      _renderCompletion(slot);
+    }
+    _frames.request(_render);
   }
 
   /// Marks multi-progress as done with an optional final [message].
   void done([String? message]) {
     if (_isDone) return;
+    _frames.flush();
     _isDone = true;
-    _frames.stop();
 
-    if (ConsoleIo.isTerminal && Ansi.enabled && _renderedLines > 0) {
-      final buffer = StringBuffer();
-      buffer.write('\x1b[${_renderedLines}A');
+    if (_interactive() && _renderedLines > 0) {
+      final buffer = StringBuffer('\x1b[${_renderedLines}A');
       for (var i = 0; i < _renderedLines; i++) {
         buffer.write('\r\x1b[K\n');
       }
       buffer.write('\x1b[${_renderedLines}A');
-      if (message != null && message.isNotEmpty) {
-        buffer.write('  ✓ $message\n'.green);
-      }
+      if (message != null && message.isNotEmpty) buffer.write('  ✓ $message\n'.green);
       ConsoleIo.out.write(buffer.toString());
       _renderedLines = 0;
-    } else {
-      if (message != null && message.isNotEmpty) {
-        ConsoleIo.out.writeln('  ✓ $message'.green);
-      }
+    } else if (message != null && message.isNotEmpty) {
+      ConsoleIo.out.writeln('  ✓ $message'.green);
     }
   }
 }
@@ -439,13 +314,11 @@ class ConsoleSpinner {
   /// Starts the spinner animation.
   void start() {
     _stopwatch.start();
-    if (ConsoleIo.isTerminal && Ansi.enabled) {
+    if (_interactive()) {
       _timer = Timer.periodic(const Duration(milliseconds: 80), (_) {
         if (_isDone) return;
-        final frame = _frames[_frameIndex % _frames.length];
-        _frameIndex++;
-        final elapsed = _stopwatch.elapsed.humanize();
-        ConsoleIo.out.write('\r\x1b[K${frame.cyan} $message (${elapsed.dim})');
+        final frame = _frames[_frameIndex++ % _frames.length];
+        ConsoleIo.out.write('\r\x1b[K${frame.cyan} $message (${_stopwatch.elapsed.humanize().dim})');
       });
     } else {
       ConsoleIo.out.writeln('  ⠋ $message...');
@@ -455,25 +328,19 @@ class ConsoleSpinner {
   /// Stops the spinner with a success message.
   void succeed([String? successMessage]) {
     _stop();
-    final elapsed = _stopwatch.elapsed.humanize();
-    final text = successMessage ?? message;
-    ConsoleIo.out.writeln('  ✓ $text (${elapsed.dim})'.green);
+    ConsoleIo.out.writeln('  ✓ ${successMessage ?? message} (${_stopwatch.elapsed.humanize().dim})'.green);
   }
 
   /// Stops the spinner with a failure message.
   void fail([String? errorMessage]) {
     _stop();
-    final elapsed = _stopwatch.elapsed.humanize();
-    final text = errorMessage ?? message;
-    ConsoleIo.err.writeln('  ✖ $text ($elapsed)'.red);
+    ConsoleIo.err.writeln('  ✖ ${errorMessage ?? message} (${_stopwatch.elapsed.humanize()})'.red);
   }
 
   /// Stops the spinner with a neutral message.
   void stop([String? finalMessage]) {
     _stop();
-    final elapsed = _stopwatch.elapsed.humanize();
-    final text = finalMessage ?? message;
-    ConsoleIo.out.writeln('  ℹ $text ($elapsed)'.cyan);
+    ConsoleIo.out.writeln('  ℹ ${finalMessage ?? message} (${_stopwatch.elapsed.humanize()})'.cyan);
   }
 
   void _stop() {
@@ -482,9 +349,7 @@ class ConsoleSpinner {
     _timer?.cancel();
     _timer = null;
     _stopwatch.stop();
-    if (ConsoleIo.isTerminal && Ansi.enabled) {
-      ConsoleIo.out.write('\r\x1b[K');
-    }
+    if (_interactive()) ConsoleIo.out.write('\r\x1b[K');
   }
 
   static Future<T> _run<T>(
@@ -512,7 +377,7 @@ int _charVisualWidth(int rune) {
   if (rune >= 0x200b && rune <= 0x200f) return 0;
   if (rune >= 0xfe00 && rune <= 0xfe0f) return 0;
 
-  // East Asian Wide / Fullwidth / Emoji
+  // East Asian Wide / Fullwidth / Emoji. Dingbats (✓ ✖ ⚠, U+2600–27BF) are one column.
   if ((rune >= 0x1100 && rune <= 0x115f) ||
       rune == 0x2329 ||
       rune == 0x232a ||
@@ -524,7 +389,6 @@ int _charVisualWidth(int rune) {
       (rune >= 0xfe30 && rune <= 0xfe6f) ||
       (rune >= 0xff00 && rune <= 0xff60) ||
       (rune >= 0xffe0 && rune <= 0xffe6) ||
-      (rune >= 0x2600 && rune <= 0x27bf) ||
       (rune >= 0x1f300 && rune <= 0x1faff) ||
       (rune >= 0x20000 && rune <= 0x2fffd) ||
       (rune >= 0x30000 && rune <= 0x3fffd)) {
@@ -534,9 +398,8 @@ int _charVisualWidth(int rune) {
 }
 
 int _stringVisualWidth(String str) {
-  final clean = Ansi.strip(str);
   var width = 0;
-  for (final rune in clean.runes) {
+  for (final rune in Ansi.strip(str).runes) {
     width += _charVisualWidth(rune);
   }
   return width;
@@ -547,25 +410,18 @@ String _truncateToVisualWidth(String str, int maxWidth) {
   if (_stringVisualWidth(str) <= maxWidth) return str;
 
   const ellipsis = '...';
-  const ellipsisWidth = 3;
-  if (maxWidth <= ellipsisWidth) {
-    return '.' * maxWidth;
-  }
+  if (maxWidth <= ellipsis.length) return '.' * maxWidth;
 
-  final targetWidth = maxWidth - ellipsisWidth;
-  final clean = Ansi.strip(str);
+  final targetWidth = maxWidth - ellipsis.length;
   final buffer = StringBuffer();
   var currentWidth = 0;
-
-  for (final rune in clean.runes) {
+  for (final rune in Ansi.strip(str).runes) {
     final w = _charVisualWidth(rune);
     if (currentWidth + w > targetWidth) break;
     buffer.writeCharCode(rune);
     currentWidth += w;
   }
-
-  buffer.write(ellipsis);
-  return buffer.toString();
+  return '$buffer$ellipsis';
 }
 
 /// Helpers for rendering tables, rules, and terminal animations.
@@ -574,77 +430,61 @@ String _truncateToVisualWidth(String str, int maxWidth) {
 class Console {
   /// Clears the terminal screen.
   static void clear() {
-    if (ConsoleIo.isTerminal && Ansi.enabled) {
-      ConsoleIo.out.write('\x1B[2J\x1B[0;0H');
-    }
+    if (_interactive()) ConsoleIo.out.write('\x1B[2J\x1B[0;0H');
   }
 
   /// Renders a horizontal divider rule across the terminal with an optional centered [title].
   static void rule([String? title]) {
-    int cols = 80;
-    try {
-      cols = ConsoleIo.columns ?? cols;
-    } catch (_) {}
+    final cols = ConsoleIo.columns ?? 80;
 
     if (title == null || title.isEmpty) {
       ConsoleIo.out.writeln('─' * cols);
       return;
     }
 
-    final cleanTitle = Ansi.strip(title);
-    final titleLen = cleanTitle.length + 2;
+    final titleLen = _stringVisualWidth(title) + 2;
     if (titleLen >= cols) {
       ConsoleIo.out.writeln('── $title ──');
       return;
     }
 
     final sideLen = (cols - titleLen) ~/ 2;
-    final left = '─' * sideLen;
-    final right = '─' * (cols - titleLen - sideLen);
-    ConsoleIo.out.writeln('$left $title $right'.cyan);
+    ConsoleIo.out.writeln('${'─' * sideLen} $title ${'─' * (cols - titleLen - sideLen)}'.cyan);
   }
 
   /// Renders a formatted text table with borders to standard output.
   static void table({required List<String> headers, required List<List<Object?>> rows}) {
     if (headers.isEmpty && rows.isEmpty) return;
 
-    final numCols = headers.isNotEmpty ? headers.length : (rows.isNotEmpty ? rows.first.length : 0);
-    final colWidths = List<int>.filled(numCols, 0);
-
-    for (var i = 0; i < headers.length; i++) {
-      colWidths[i] = max(colWidths[i], _stringVisualWidth(headers[i]));
+    final numCols = headers.isNotEmpty ? headers.length : rows.first.length;
+    final cells = [
+      for (final row in rows) [for (var i = 0; i < numCols; i++) i < row.length ? '${row[i]}' : ''],
+    ];
+    final widths = [for (final h in headers) _stringVisualWidth(h)];
+    while (widths.length < numCols) {
+      widths.add(0);
     }
-
-    for (final row in rows) {
-      for (var i = 0; i < row.length && i < numCols; i++) {
-        colWidths[i] = max(colWidths[i], _stringVisualWidth('${row[i]}'));
-      }
-    }
-
-    String buildDivider(String left, String mid, String right, String cross) {
-      final parts = colWidths.map((w) => mid * (w + 2));
-      return '$left${parts.join(cross)}$right';
-    }
-
-    String formatRow(List<Object?> cells) {
-      final parts = <String>[];
+    for (final row in cells) {
       for (var i = 0; i < numCols; i++) {
-        final val = i < cells.length ? '${cells[i]}' : '';
-        final pad = ' ' * (colWidths[i] - _stringVisualWidth(val));
-        parts.add(' $val$pad ');
+        widths[i] = max(widths[i], _stringVisualWidth(row[i]));
       }
-      return '│${parts.join('│')}│';
     }
 
-    ConsoleIo.out.writeln(buildDivider('┌', '─', '┐', '┬'));
+    String divider(String left, String mid, String right, String cross) =>
+        '$left${widths.map((w) => mid * (w + 2)).join(cross)}$right';
+
+    String formatRow(List<String> row) =>
+        '│${[for (var i = 0; i < numCols; i++) ' ${row[i]}${' ' * (widths[i] - _stringVisualWidth(row[i]))} '].join('│')}│';
+
+    ConsoleIo.out.writeln(divider('┌', '─', '┐', '┬'));
     if (headers.isNotEmpty) {
       ConsoleIo.out.writeln(formatRow(headers));
-      ConsoleIo.out.writeln(buildDivider('├', '─', '┤', '┼'));
+      ConsoleIo.out.writeln(divider('├', '─', '┤', '┼'));
     }
-    for (final row in rows) {
+    for (final row in cells) {
       ConsoleIo.out.writeln(formatRow(row));
     }
-    ConsoleIo.out.writeln(buildDivider('└', '─', '┘', '┴'));
+    ConsoleIo.out.writeln(divider('└', '─', '┘', '┴'));
   }
 
   /// Creates a single-line progress indicator for [total] steps.

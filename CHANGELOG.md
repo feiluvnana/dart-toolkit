@@ -2,6 +2,88 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+Audit IV read the source and then ran it: every bug below was reproduced by a probe before it
+was fixed, and every measurement is a back-to-back delta. **Everything is breaking; there are no
+deprecation shims.**
+
+### Removed
+
+- **`RetryBuilder` and `Function.retry()`.** `retry(action, attempts: 3, delay: 200.ms,
+  onRetry: …)` is the one spelling; it reads like `parallelize(f, concurrency: 8)` and the
+  builder was 130 lines for a third way to say it.
+- **`String.run()`.** `run('cmd')` is the verb; `Path.run(args:)` stays because it execs an
+  argv without splitting. **`.pipe()`** — `|` is the operator, and the doc called `pipe` an alias.
+- **`CliCommand.subcommand`** — it is `command` at every level.
+- **`Response.isolateHtml/isolateJson/isolateXml`** — `res.isolate((r) => f(r.html()))`.
+- **`Os`** — `Platform.isMacOS` and friends from `dart:io` are the same thing.
+- **`Iterable.mapIndexed`** — the SDK's `indexed`. **`ScrapeContext.emitAll`** — `items.forEach(ctx.emit)`.
+- **`Env.get(key, defaultTo)`** — `Env.get(key) ?? fallback`; the parameter never tightened the type.
+- **`ConsoleMultiProgress.updateTask/tick/setCompleted`** — `report(BatchProgress)` is the API.
+- **`BaseRequest.scrape`** — `[request].scrape(f)`.
+
+### Changed — module layout
+
+- **`res.html()`, `url.html()` moved to `html/html.dart`; `res.xml()`, `url.xml()` to
+  `xml/xml.dart`.** `http` compiled both parsers for every program. Measured under `dart run`:
+  `http` was +1050 ms over a bare script, of which the parsers were ≈900. A downloader or JSON
+  client now pays ≈+155; an HTML scraper saves the XML share, ≈0.4 s per run. Budgets:
+  `http: {http, path}`, `html: {html, http}`, `xml: {xml, http}`. `tool/startup.dart` prints
+  the table.
+
+### Changed — call sites
+
+- **`ctx.option()` and `ctx.number()` are non-null** and throw `StateError` when the option was
+  neither given nor defaulted; `optionOrNull`/`numberOrNull` are for optionals without a default.
+  Every program used to bang every read.
+- **`Cli.run` owns the lifecycle**: a usage error prints and exits 64, and when the action
+  returns the exit hooks run and the signal handlers are released. The five-line `try/catch`
+  every program carried is gone. `CliCommand.run` still throws, for tests.
+- **`Uri./` appends a path segment** (`'https://x.com/api'.url / 'users'` →
+  `https://x.com/api/users`); it used to resolve as an href and drop the last segment.
+- **`ShellResult.json` is a `JsonDocument`**, like every other `json` in the package.
+- **`Http.session(timeout:, headers:)`** — one place for the request timeout (headers and each
+  body chunk) and default headers; nothing in `http` could time out before.
+- **`download`/`downloadAll` take `headers:`**; **`run` takes `input:`** for stdin;
+  **`CommandPipeline` has pipefail semantics** — the exit code is the rightmost non-zero one and
+  `throwOnError` covers every stage.
+- **The CLI parser** accepts options before the subcommand (`app -v fetch`), combined short
+  flags (`-vd`) and attached values (`-j4`). `--help` is recognised only where an option is
+  expected, not as a value or after `--`. A `CliChoice` default outside its choices fails at
+  declaration.
+- **`scrape` retries 429 and 5xx**, honouring `Retry-After`; `concurrency` and `retries`
+  defaults are declared on the entry points. **`ScrapeContext.meta`** is `Map<String, Object?>`.
+- **`Logger.silenced` accepts an async body** and returns a `Future`. **`Logger.warn` writes to
+  stderr** with `error`.
+- **`Path.readText`/`readLines`** take `encoding:` by name, like `writeText`. **`Path.move`**
+  copies and deletes when `rename` cannot cross filesystems.
+
+### Fixed
+
+- A script that called `onExit` never exited: the signal watch kept the isolate alive. `Cli.run`
+  releases it; the doc says what a bare script must do.
+- Leaving a `downloadAll` loop early kept downloading: the controller had no `onCancel`.
+- `extractToSync` wrote an entry named `../x` outside the destination.
+- `Stream.parallelize` resumed the source while the consumer was paused, buffering every result.
+- Three `CancelToken.onCancel` registrations were never unregistered (`Stream.parallelize`,
+  `downloadAll`, `scrape`).
+- `Either.tryCatch` dropped the stack trace; `unwrap` now rethrows with the one it caught.
+- `JsonDocument.to<num>()` returned `null` for numeric strings; `to<String>()` on a map or list
+  returns JSON. `doc[-1]` counts from the end, as `$[-1]` does.
+- JSONPath `$..[0]` dropped the descent step.
+- `Element.lines` left entities encoded, and re-serialised the subtree to do it: 4.95 ms →
+  0.32 ms on 2000 rows.
+- `Env.parse(override: false)` overwrote values loaded earlier, contrary to its doc.
+- `run` split on U+0020 only; tabs and newlines in a command string are now separators.
+- `✓`, `✖` and `⚠` were counted two columns wide, misaligning table borders.
+- A progress bar's last frame was never drawn when the final tick fell inside the 33 ms gate,
+  and a deferred frame showed the first throttled label rather than the latest.
+- `ConsoleProgress` without a terminal wrote one line per tick (1001 lines for 1000 ticks); it
+  now writes one per new tenth.
+- Scrape deduplication keyed on a hash of the body; it keys on the value. `throttle` with
+  neither `leading` nor `trailing` emitted nothing silently; it throws.
+
 ## 0.0.2
 
 Three audits land in this release, newest first. *Audit III* ran the package and measured it;

@@ -1,4 +1,4 @@
-import 'dart:convert';
+import '../core/json_document.dart';
 
 final _newline = RegExp(r'\r?\n');
 
@@ -29,8 +29,8 @@ class ShellResult {
   /// Non-empty, trimmed lines extracted from [stdout].
   List<String> get lines => stdout.split(_newline).map((line) => line.trim()).where((line) => line.isNotEmpty).toList();
 
-  /// Parses [stdout] as a JSON document or structure (`Map` / `List`).
-  dynamic get json => jsonDecode(text);
+  /// [stdout] parsed as JSON.
+  JsonDocument get json => JsonDocument.parse(text);
 
   @override
   String toString() => text.isNotEmpty ? text : stderr.trim();

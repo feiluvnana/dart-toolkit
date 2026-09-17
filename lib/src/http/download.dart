@@ -1,6 +1,6 @@
 /// # Downloads
 ///
-/// {@category Files}
+/// {@category Networking}
 library;
 
 import 'dart:async';
@@ -17,7 +17,7 @@ import 'session.dart';
 /// The state of one file download: [Downloading], [Downloaded], [DownloadSkipped]
 /// or [DownloadFailed].
 ///
-/// {@category Files}
+/// {@category Networking}
 sealed class DownloadProgress implements TaskProgress {
   /// The source URL.
   final Uri url;
@@ -71,7 +71,7 @@ sealed class DownloadProgress implements TaskProgress {
 
 /// Bytes are arriving.
 ///
-/// {@category Files}
+/// {@category Networking}
 final class Downloading extends DownloadProgress {
   @override
   final int received;
@@ -85,7 +85,7 @@ final class Downloading extends DownloadProgress {
 
 /// The file was written and renamed into place.
 ///
-/// {@category Files}
+/// {@category Networking}
 final class Downloaded extends DownloadProgress {
   /// Bytes written.
   final int bytes;
@@ -95,14 +95,14 @@ final class Downloaded extends DownloadProgress {
 
 /// The destination already existed and `overwrite` was false.
 ///
-/// {@category Files}
+/// {@category Networking}
 final class DownloadSkipped extends DownloadProgress {
   const DownloadSkipped(super.url, super.path);
 }
 
 /// The transfer failed; the `.part` file has been removed.
 ///
-/// {@category Files}
+/// {@category Networking}
 final class DownloadFailed extends DownloadProgress {
   /// What went wrong.
   final Object error;
@@ -112,7 +112,7 @@ final class DownloadFailed extends DownloadProgress {
 
 /// Aggregated progress for a batch of downloads.
 ///
-/// {@category Files}
+/// {@category Networking}
 class BatchDownloadProgress implements BatchProgress {
   /// Files finished so far — downloaded, skipped or failed.
   @override
@@ -149,7 +149,7 @@ const _flushEvery = 4 * 1024 * 1024;
 
 /// Download operations on [Path].
 ///
-/// {@category Files}
+/// {@category Networking}
 extension PathDownloadExtensions on Path {
   /// Downloads [url] to this path atomically, streaming [DownloadProgress] updates.
   ///
@@ -158,6 +158,7 @@ extension PathDownloadExtensions on Path {
   Stream<DownloadProgress> download(
     Uri url, {
     http.Client? client,
+    Map<String, String>? headers,
     bool overwrite = false,
     CancelToken? cancelToken,
   }) async* {
@@ -172,21 +173,20 @@ extension PathDownloadExtensions on Path {
     }
 
     final lease = clientFor(client);
-    final httpClient = lease.client;
     final partFile = File('${asFile.path}.part');
     var received = 0;
-    int? total;
 
     try {
-      final streamed = await httpClient.send(http.Request('GET', url));
+      final request = http.Request('GET', url);
+      if (headers != null) request.headers.addAll(headers);
+      final streamed = await lease.client.send(request);
 
       if (streamed.statusCode < 200 || streamed.statusCode >= 300) {
         yield DownloadFailed(url, this, HttpException('Download failed with status ${streamed.statusCode}', uri: url));
         return;
       }
 
-      final headerContentLength = streamed.headers['content-length'];
-      total = streamed.contentLength ?? (headerContentLength != null ? int.tryParse(headerContentLength) : null);
+      final total = streamed.contentLength;
 
       await partFile.parent.create(recursive: true);
       final sink = partFile.openWrite();
@@ -238,6 +238,7 @@ Stream<BatchDownloadProgress> _batchDownload(
   Stream<({Uri url, Path path})> source, {
   int? knownTotal,
   http.Client? client,
+  Map<String, String>? headers,
   int concurrency = 4,
   bool overwrite = false,
   CancelToken? cancelToken,
@@ -252,15 +253,18 @@ Stream<BatchDownloadProgress> _batchDownload(
   var completed = 0;
   var written = 0;
   var sourceDone = false;
+  var stopped = false;
   StreamSubscription<({Uri url, Path path})>? subscription;
+  void Function()? unregister;
 
-  bool cancelled() => cancelToken != null && cancelToken.isCancelled;
+  bool cancelled() => stopped || (cancelToken != null && cancelToken.isCancelled);
 
   void finish() {
-    if (controller.isClosed) return;
+    stopped = true;
+    unregister?.call();
     subscription?.cancel();
     lease.close();
-    controller.close();
+    if (!controller.isClosed) controller.close();
   }
 
   void emit(DownloadProgress progress) {
@@ -290,7 +294,7 @@ Stream<BatchDownloadProgress> _batchDownload(
   }
 
   void schedule() {
-    if (controller.isClosed || cancelled()) return;
+    if (cancelled() || controller.isClosed) return;
     applyBackpressure();
 
     while (queue.isNotEmpty && active.length < limit) {
@@ -303,9 +307,11 @@ Stream<BatchDownloadProgress> _batchDownload(
           await for (final p in item.path.download(
             item.url,
             client: lease.client,
+            headers: headers,
             overwrite: overwrite,
             cancelToken: cancelToken,
           )) {
+            if (cancelled()) break;
             if (p.isDone) {
               completed++;
               if (p is Downloaded) written++;
@@ -330,32 +336,36 @@ Stream<BatchDownloadProgress> _batchDownload(
     if (queue.isEmpty && active.isEmpty && sourceDone) finish();
   }
 
-  controller.onListen = () {
-    cancelToken?.onCancel(finish);
-    subscription = source.listen(
-      (item) {
-        discovered++;
-        queue.add(item);
-        schedule();
-      },
-      onError: controller.addError,
-      onDone: () {
-        sourceDone = true;
-        schedule();
-      },
-    );
-  };
+  controller
+    ..onListen = () {
+      unregister = cancelToken?.onCancel(finish);
+      subscription = source.listen(
+        (item) {
+          discovered++;
+          queue.add(item);
+          schedule();
+        },
+        onError: controller.addError,
+        onDone: () {
+          sourceDone = true;
+          schedule();
+        },
+      );
+    }
+    // A consumer that stops listening stops the transfers, not just the reports.
+    ..onCancel = finish;
 
   return controller.stream;
 }
 
 /// Batch downloads over a fixed set of pairs.
 ///
-/// {@category Files}
+/// {@category Networking}
 extension IterableDownloadExtensions on Iterable<({Uri url, Path path})> {
   /// Downloads every pair, at most [concurrency] at a time.
   Stream<BatchDownloadProgress> downloadAll({
     http.Client? client,
+    Map<String, String>? headers,
     int concurrency = 4,
     bool overwrite = false,
     CancelToken? cancelToken,
@@ -365,6 +375,7 @@ extension IterableDownloadExtensions on Iterable<({Uri url, Path path})> {
       Stream.fromIterable(items),
       knownTotal: items.length,
       client: client,
+      headers: headers,
       concurrency: concurrency,
       overwrite: overwrite,
       cancelToken: cancelToken,
@@ -374,22 +385,30 @@ extension IterableDownloadExtensions on Iterable<({Uri url, Path path})> {
 
 /// Batch downloads over pairs that are still being discovered.
 ///
-/// {@category Files}
+/// {@category Networking}
 extension StreamDownloadExtensions on Stream<({Uri url, Path path})> {
   /// Downloads pairs as they arrive, so discovery and transfer overlap.
   ///
   /// [BatchDownloadProgress.total] is `null` until this stream closes.
   Stream<BatchDownloadProgress> downloadAll({
     http.Client? client,
+    Map<String, String>? headers,
     int concurrency = 4,
     bool overwrite = false,
     CancelToken? cancelToken,
-  }) => _batchDownload(this, client: client, concurrency: concurrency, overwrite: overwrite, cancelToken: cancelToken);
+  }) => _batchDownload(
+    this,
+    client: client,
+    headers: headers,
+    concurrency: concurrency,
+    overwrite: overwrite,
+    cancelToken: cancelToken,
+  );
 }
 
 /// Batch downloads over a source-to-destination map.
 ///
-/// {@category Files}
+/// {@category Networking}
 extension MapDownloadExtensions on Map<Uri, Path> {
   /// These entries as download pairs, for composing with the iterable and stream forms.
   Iterable<({Uri url, Path path})> get pairs => entries.map((e) => (url: e.key, path: e.value));
@@ -400,8 +419,15 @@ extension MapDownloadExtensions on Map<Uri, Path> {
   /// [IterableDownloadExtensions] form over records.
   Stream<BatchDownloadProgress> downloadAll({
     http.Client? client,
+    Map<String, String>? headers,
     int concurrency = 4,
     bool overwrite = false,
     CancelToken? cancelToken,
-  }) => pairs.downloadAll(client: client, concurrency: concurrency, overwrite: overwrite, cancelToken: cancelToken);
+  }) => pairs.downloadAll(
+    client: client,
+    headers: headers,
+    concurrency: concurrency,
+    overwrite: overwrite,
+    cancelToken: cancelToken,
+  );
 }

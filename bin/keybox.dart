@@ -5,6 +5,7 @@ import 'package:dart_toolkit/core/core.dart';
 import 'package:dart_toolkit/fs/fs.dart';
 import 'package:dart_toolkit/html/html.dart';
 import 'package:dart_toolkit/http/http.dart';
+import 'package:dart_toolkit/util/util.dart';
 
 const keyBase = 'https://key.visualarts.gr.jp/key20th/';
 const khinsider = 'https://downloads.khinsider.com/game-soundtracks/album/key-box-for-two-decades-2019';
@@ -18,7 +19,7 @@ void main(List<String> rawArgs) async {
     ..choice('format', ['mp3', 'flac', 'all'], abbr: 'f', defaultTo: 'all', description: 'Music format')
     ..number('concurrency', abbr: 'j', defaultTo: 4, description: 'Concurrent download workers')
     ..flag('compress', abbr: 'c', description: 'Compress directory after download')
-    ..action((ctx) => Http.session(() => run(ctx)));
+    ..action((ctx) => Http.session(() => run(ctx), timeout: 60.s));
 
   await cli.run(rawArgs);
 }
@@ -27,9 +28,9 @@ Future<void> run(CliContext ctx) async {
   final token = CancelToken();
   onExit(token.cancel);
 
-  final selectedFormat = ctx.option('format')!;
+  final selectedFormat = ctx.option('format');
   final formats = selectedFormat == 'all' ? const ['mp3', 'flac'] : [selectedFormat];
-  final concurrency = ctx.number('concurrency')!;
+  final concurrency = ctx.number('concurrency');
   final shouldCompress = ctx.flag('compress');
   final stage = Logger.stages(shouldCompress ? 3 : 2);
 

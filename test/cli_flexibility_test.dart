@@ -30,7 +30,7 @@ void main() {
 
       expect(out.toString(), isNot(contains('nope')));
       expect(out.toString(), contains('yes'));
-      expect(out.toString(), contains('warned'));
+      expect(err.toString(), contains('warned'));
       expect(err.toString(), contains('boom'));
     });
 
@@ -48,7 +48,7 @@ void main() {
       Logger.warn('visible');
 
       expect(out.toString(), isNot(contains('hidden')));
-      expect(out.toString(), contains('visible'));
+      expect(err.toString(), contains('visible'));
     });
 
     test('silent suppresses everything including errors', () {
@@ -59,9 +59,10 @@ void main() {
       expect(err.toString(), isEmpty);
     });
 
-    test('silenced() restores the previous level afterwards', () {
+    test('silenced() restores the previous level afterwards, async bodies included', () async {
       Logger.level = LogLevel.info;
-      final result = Logger.silenced(() {
+      final result = await Logger.silenced(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
         Logger.info('muted');
         return 42;
       });

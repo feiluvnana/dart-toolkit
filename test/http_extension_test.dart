@@ -322,17 +322,17 @@ void main() {
       );
     });
 
-    test('Response.isolateHtml/Json/Xml parse directly in an isolate', () async {
+    test('Response.isolate composes with html(), json() and xml()', () async {
       final htmlRes = http.Response('<div><span class="val">42</span></div>', 200);
-      final numVal = await htmlRes.isolateHtml((doc) => doc.$('.val').firstOrNull?.text);
+      final numVal = await htmlRes.isolate((r) => r.html().$('.val').firstOrNull?.text);
       expect(numVal, equals('42'));
 
       final jsonRes = http.Response('{"user": {"name": "John"}}', 200);
-      final nameVal = await jsonRes.isolateJson((json) => json.$(r'$.user.name').firstOrNull?.to<String>());
+      final nameVal = await jsonRes.isolate((r) => r.json().$(r'$.user.name').firstOrNull?.to<String>());
       expect(nameVal, equals('John'));
 
       final xmlRes = http.Response('<root><item id="99">Hello</item></root>', 200);
-      final xmlVal = await xmlRes.isolateXml((xml) => xml.$('//item').firstOrNull?.innerText);
+      final xmlVal = await xmlRes.isolate((r) => r.xml().$('//item').firstOrNull?.innerText);
       expect(xmlVal, equals('Hello'));
 
       final mockClient = MockClient((req) async {
@@ -343,11 +343,11 @@ void main() {
       });
 
       final itemRes = await 'https://example.com/api/item'.url.get(client: mockClient);
-      final title = await itemRes.isolateJson((doc) => doc['title'].to<String>());
+      final title = await itemRes.isolate((r) => r.json()['title'].to<String>());
       expect(title, equals('Toolkit'));
 
       final pageRes = await 'https://example.com/page'.url.get(client: mockClient);
-      final heading = await pageRes.isolateHtml((doc) => doc.$('h1').firstOrNull?.text);
+      final heading = await pageRes.isolate((r) => r.html().$('h1').firstOrNull?.text);
       expect(heading, equals('Hello Uri Isolate'));
     });
 
