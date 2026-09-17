@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+final _newline = RegExp(r'\r?\n');
+
 /// The result of executing a system command.
 ///
 /// {@category System}
@@ -19,17 +21,13 @@ class ShellResult {
   /// Whether the process exited successfully with code 0.
   bool get ok => exitCode == 0;
 
-  /// Whether the process failed with a non-zero exit code.
-  bool get isFailed => exitCode != 0;
-
   /// Concise trimmed stdout text.
   String get text => stdout.trim();
 
   const ShellResult({required this.command, required this.exitCode, required this.stdout, required this.stderr});
 
   /// Non-empty, trimmed lines extracted from [stdout].
-  List<String> get lines =>
-      stdout.split(RegExp(r'\r?\n')).map((line) => line.trim()).where((line) => line.isNotEmpty).toList();
+  List<String> get lines => stdout.split(_newline).map((line) => line.trim()).where((line) => line.isNotEmpty).toList();
 
   /// Parses [stdout] as a JSON document or structure (`Map` / `List`).
   dynamic get json => jsonDecode(text);

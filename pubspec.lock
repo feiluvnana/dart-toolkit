@@ -97,14 +97,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.0.2"
-  expressions:
-    dependency: transitive
-    description:
-      name: expressions
-      sha256: f3b0e99563a9a1bde1138e728eb722f292cc7d2aec55d28136c49b1a370306c5
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.2.5+3"
   ffi:
     dependency: transitive
     description:
@@ -273,22 +265,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.2.1"
-  quiver:
-    dependency: transitive
-    description:
-      name: quiver
-      sha256: ea0b925899e64ecdfbf9c7becb60d5b50e706ade44a85b2363be2a22d88117d2
-      url: "https://pub.dev"
-    source: hosted
-    version: "3.2.2"
-  rxdart:
-    dependency: "direct main"
-    description:
-      name: rxdart
-      sha256: "5c3004a4a8dbb94bd4bf5412a4def4acdaa12e12f269737a5751369e12d1a962"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.28.0"
   shelf:
     dependency: transitive
     description:
@@ -465,22 +441,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "7.0.1"
-  xpath_selector:
-    dependency: transitive
-    description:
-      name: xpath_selector
-      sha256: "6d8295565a34a6e2821a0721592e584c70421e52a0f54955e0c8e41963db7c90"
-      url: "https://pub.dev"
-    source: hosted
-    version: "3.0.2"
-  xpath_selector_html_parser:
-    dependency: "direct main"
-    description:
-      name: xpath_selector_html_parser
-      sha256: ebc562a07832a4062a2bc1c238fd59a81d31d841f15460caeed412ce078af9e0
-      url: "https://pub.dev"
-    source: hosted
-    version: "3.0.1"
   yaml:
     dependency: transitive
     description:

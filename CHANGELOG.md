@@ -2,14 +2,169 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased
+## 0.0.2
 
-An API audit ([AUDIT.md](AUDIT.md)) found 435 public members across 34 public libraries — roughly
+Three audits land in this release, newest first. *Audit III* ran the package and measured it;
+*Audit II* read the API from the call site — the three examples and `bin/keybox.dart`; *Audit I*
+read the surface from the source. **Everything is breaking; there are no deprecation shims.**
+
+### Audit III — performance
+
+#### Removed
+
+- **`rxdart` and `xpath_selector_html_parser` are no longer dependencies.** The six `Stream`
+  operators (`chunk`, `chunkTime`, `debounce`, `throttle`, `delayBy`, `flatMap`) keep their names
+  and semantics and are now implemented on `dart:async`; `flatMap` still merges its inner streams
+  concurrently. `async` now has no third-party dependencies at all.
+- **`HtmlDocument.$xpath` and `Element.$xpath`.** Use the CSS `$`. On a 2000-row table
+  `$('tr td a')` took 0.43 ms where `$xpath('//tr/td/a')` took 62 ms — 145× — and the gap widened
+  quadratically with document size. `XmlDocument`'s XPath is unaffected; it comes from
+  `package:xml`.
+- **`ListExtensions.getOrNull`** — the SDK's `elementAtOrNull` is the same operation. One
+  difference, deliberately not re-implemented: it throws on a negative index where `getOrNull`
+  returned `null`.
+- **`ShellResult.isFailed`** — `!result.ok`.
+- **`IterableExtensions.sortedByDescending`** — `sortedBy(key, desc: true)`.
+
+#### Changed — module layout
+
+- **Programs import modules, not the barrel.** Under `dart run` the front end compiles the whole
+  transitive closure every invocation: measured at 1722 ms for `dart_toolkit.dart` against 281 ms
+  for a bare script. `example/cli_app.dart` went from **1820 ms to 627 ms** by naming its two
+  modules. `tool/check_deps.dart` now fails any `bin/` or `example/` file that imports the barrel.
+  AOT is unaffected — tree shaking already made the barrel free for `dart compile`d tools.
+- **`HtmlDocument` and `XmlDocument` moved out of `core`** into new `html/html.dart` and
+  `xml/xml.dart` libraries. `core` now has no third-party dependencies, so a script that parses
+  JSON no longer loads an HTML and an XML parser to do it: 1394 ms → 342 ms.
+
+#### Changed — memory
+
+- **`Path.sha256()` / `Path.md5()` stream the file.** `(await p.readBytes()).sha256` peaked at
+  888 MB of resident memory on a 512 MB file; the new form peaks at 266 MB for the same digest in
+  the same time. `BytesHashExtensions` remains for callers that already hold bytes.
+- **`extractTo`, `extractToSync` and `zipToSync` stream.** Extracting a 320 MB archive peaked at
+  685 MB and now peaks at 302 MB; `zipToSync` was 1.5× slower than `zipTo` for reading each entry
+  whole.
+- **Downloads bound their write queue.** `IOSink.add` only queues, so `received` ran up to
+  87.8 MB ahead of what was on disk for a 128 MB transfer. The writer now waits for the disk every
+  4 MB, which caps the gap at 4 MB.
+- **The scrape engine respects a paused consumer.** A 301-page crawl whose subscription was paused
+  before the first event used to fetch all 301 pages and buffer every item; it now stops after the
+  in-flight requests. `_batchDownload` likewise stops reading its source ahead by more than four
+  times `concurrency`.
+- **`CancelToken.onCancel` returns a function that unregisters the listener**, and both
+  `cancelWith` implementations call it when their work completes. 200 000 completed
+  `Future.cancelWith` calls on one token used to retain 52 MB.
+
+#### Changed — algorithms
+
+- **`sortedBy` evaluates its key once per element**, not once per comparison: sorting 10 000 items
+  called the key 206 806 times and now calls it 10 000. `maxBy` and `minBy` (renamed from
+  `maxByOrNull` / `minByOrNull`) hold the incumbent key instead of recomputing it.
+- **`glob` matches each entry once, against its relative path only**, and caches the compiled
+  pattern. 9.2 ms → 5.7 ms over 2000 files. **This changes results**: a pattern that only matched
+  through the absolute path — `glob('assets/*.mp3')` from inside `.../assets` — no longer matches.
+- `Element.lines`, `ShellResult.lines` and `_splitCommand` no longer build regexes or
+  one-character strings per call; `JsonDocument.to<T>()` uses `const` type probes; `which` stats
+  the `PATH` in parallel.
+- **`Response.text`** exposes the body decoded once per response — `package:http` re-decodes
+  `bodyBytes` on every `body` access — and `html()`, `xml()` and `json()` share it.
+- **`ConsoleProgress` and `ConsoleMultiProgress` share one 33 ms frame gate.** The single-line one
+  used to write on every `tick`, so a caller driving it from a per-chunk stream issued a terminal
+  write per chunk.
+
+#### Changed — names
+
+`terminalColumns:` → `columns:` · `allowDuplicates:` → `revisit:` · `maxRetries:` → `retries:` ·
+`maxAttempts:` / `.maxAttempts(n)` → `attempts:` / `.attempts(n)` ·
+`ConsoleIo.stdoutOverride` / `stderrOverride` / `stdinLineReader` → assignable `ConsoleIo.out` /
+`err` / `input` (plus `ConsoleIo.redirected`) · `Env.clearOverrides()` → `Env.clear()` ·
+`Env.loadFile(p, true)` → `Env.load(path: p, override: true)`, with the positional boolean gone · `Semaphore.availablePermits` / `queueLength` → `permits` /
+`waiting` · `BatchDownloadProgress.newDownloads` → `written` · `CancellationToken` /
+`CancellationException` → `CancelToken` / `CancelledException` · `Stream.whereNotNull()` →
+`Stream.nonNulls` · `JsonDocument.$jsonpath` and `XmlDocument.$xpath` → `$` ·
+`ElementQueryExtensions` → `ElementExtensions` · `UriPathMapDownloadExtensions` →
+`MapDownloadExtensions` · `FutureShellResultExtensions` → `FutureShellExtensions` ·
+`NullableStreamExtensions` → `StreamNullableExtensions`.
+
+#### Measured and deliberately not changed
+
+The terminal renderer (6.4 µs per frame), `run()` (at parity with a hand-rolled `Process.start`),
+download throughput (93 ms for 64 MB, against 89 ms for raw `dart:io`), and `parallelize(isolate:)`
+(30 ms against 103 ms single-threaded, near a hand-built pool's 25 ms). `parallelize` gained one
+doc line instead: the worker and everything it captures is copied **per item**, not per isolate.
+
+### Audit II — the API as used
+
+#### Fixed
+
+- **`Path.sanitized()` could not sanitize a filename.** Its character class excluded separators,
+  so `'AIR / Farewell song'.path.sanitized()` kept the slash and a scraped title silently created
+  a directory. `String.filename` is the component-level operation; `sanitized()` still cleans a
+  whole path.
+- **`die()` dropped async exit hooks.** It ran hooks without awaiting them, so an `async` hook
+  that ran on SIGINT was skipped on `die`. It is now `Future<Never>`: `await die('...')` still
+  has static type `Never`.
+- **`Map<Uri, Path>` was the only batch download entry point**, so two destinations for one URL
+  collapsed to one with no error.
+- **`Uri.html()`/`json()`/`xml()` parsed error pages.** A 404 body parsed fine and matched
+  nothing; they now throw `HttpException` unless the status is 2xx. `get()` is unchanged — check
+  `Response.ok` yourself.
+
+#### Added
+
+- **`required: true` on `option`, `number` and `choice`.** Absence is an `ArgumentError` at parse
+  time, and the help text says `[required]`. A required option cannot also declare a default.
+- **`String.filename`** — one string, one path component, separators escaped.
+- **`Response.ok`** — 2xx, mirroring `ShellResult.ok`.
+- **`TaskProgress` and `BatchProgress` in `util`**, plus `ConsoleMultiProgress.report`, so a
+  producer and a renderer in different modules meet without an import edge. An 18-line adapter at
+  each call site becomes `progress.report(p)`.
+- **`downloadAll` on `Iterable<({Uri url, Path path})>` and `Stream<…>`**, so discovery overlaps
+  with transfer, and `Map<Uri, Path>.pairs` to bridge the two shapes.
+- **`ScrapeContext.url` and `.resolve`** — the base the engine itself resolves against, instead of
+  reconstructing it from a nullable `response.url`.
+- **`Http.session`** — one client for every HTTP call inside the callback, closed on return. The
+  13 `client:` parameters remain as the per-call override.
+- **`Logger.stages`** — a counter that owns the total: `stage('…')` prints `[n/total] …`.
+
+#### Changed
+
+- **`DownloadProgress` is sealed**: `Downloading | Downloaded | DownloadSkipped | DownloadFailed`.
+  `isDone`/`isSkipped`/`isFailed`/`error` are gone; `error` now exists only on the failure case.
+- **`BatchDownloadProgress.total` is `int?`** — `null` while a stream source is still producing —
+  and `ratio` is nullable with it. `percent` is gone.
+- **`CliContext.option`/`number` lost their `defaultTo` parameter.** The declaration already
+  carries it.
+- **`Logger.step` is gone**, replaced by `Logger.stages`.
+- **`Console.multiProgress` takes `total:` as a named parameter**, defaulting to 0 for work that
+  is still being discovered, and revises it upward from `report`.
+- **`Console.table` rows are `List<List<Object?>>`**, so call sites stop interpolating.
+
+#### Migration
+
+| was | now |
+|---|---|
+| `title.path.sanitized()` | `title.filename` |
+| `die('x')` | `await die('x')` |
+| `p.isSkipped ? … : p.isFailed ? … : …` | `switch (p) { … }` over the sealed cases |
+| `p.percent` | `p.ratio` |
+| `ctx.option('f', defaultTo: 'all') ?? 'all'` | `ctx.option('f')!`, default declared once |
+| `Logger.step(1, 3, 'x')` | `final stage = Logger.stages(3); stage('x');` |
+| `Console.multiProgress(n, slots: 4)` | `Console.multiProgress(total: n, slots: 4)` |
+| 18-line `updateTask(…)` block | `progress.report(p)` |
+| `(await uri.get()).isolateHtml((d) => d)` | `await uri.html()` |
+
+---
+
+### Audit I — the API surface
+
+An API audit found 435 public members across 34 public libraries — roughly
 one public member per twelve lines of implementation — plus two correctness defects in the typed
 error API. This release acts on it. **Everything below is breaking; there are no deprecation
 shims.** Every removal has a one-line replacement, listed under Migration.
 
-### Fixed
+#### Fixed
 
 - **`Either.tryCatch`/`tryCatchAsync` threw instead of returning a `Left`.** With a type
   parameter `E` and no `onError`, the fallback was `error as E`, so capturing an error that was
@@ -34,7 +189,7 @@ shims.** Every removal has a one-line replacement, listed under Migration.
 - **`JsonDocument[key]` returned the null document** for a key that was neither `String` nor
   `int`, indistinguishable from a real JSON null; it now throws.
 
-### Changed
+#### Changed
 
 - **`parallelMap` and `parallelSettle` are gone.** `parallelize` is the single primitive; it
   settles every task. `unwrap`, `rights` and `lefts` pick the error policy at the use site.
@@ -51,7 +206,7 @@ shims.** Every removal has a one-line replacement, listed under Migration.
   `package:path` alone — down from seven third-party packages each.
 - **Implementation moved under `lib/src/`.** 34 public libraries → 11.
 
-### Removed
+#### Removed
 
 - Fifteen aliases: `Path.exist`/`existSync`, `Env.isMac`/`isWin`, `ShellResult.failed`,
   `Mutex.protect`, top-level `$()`, `Prompt.askWith`, `Either.guard`/`guardAsync`,
@@ -64,7 +219,7 @@ shims.** Every removal has a one-line replacement, listed under Migration.
 - `Map<Path, Uri>.downloadAll`; only the source-to-destination orientation survives.
 - `example/example.dart`, which claimed to demonstrate every API.
 
-### Added
+#### Added
 
 - `Either.unwrap`, `Iterable<Either>.unwrap`/`rights`/`lefts`, `Stream<Either>.unwrap`.
 - `Os` for platform detection, split out of `Env`.
@@ -73,7 +228,7 @@ shims.** Every removal has a one-line replacement, listed under Migration.
 - `tool/check_deps.dart`, a per-module third-party dependency budget, enforced in CI.
 - [`CONVENTIONS.md`](CONVENTIONS.md).
 
-### Migration
+#### Migration
 
 | removed / renamed | replacement |
 |---|---|

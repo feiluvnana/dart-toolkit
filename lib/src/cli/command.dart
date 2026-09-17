@@ -26,6 +26,9 @@ sealed class CliOption {
 
   /// The default as it appears in help text, or `null` when there is none.
   String? get defaultLabel;
+
+  /// Whether parsing fails when this option is absent. Never true for a [CliFlag].
+  bool get required;
 }
 
 /// A boolean option. Present means true; it never consumes a value.
@@ -36,6 +39,10 @@ final class CliFlag extends CliOption {
 
   @override
   String? get defaultLabel => null;
+
+  /// Always false: an absent flag is simply false.
+  @override
+  bool get required => false;
 }
 
 /// An option taking an arbitrary string value.
@@ -45,7 +52,11 @@ final class CliValue extends CliOption {
   /// Used when the option is absent.
   final String? defaultTo;
 
-  const CliValue(super.name, {super.description, super.abbr, this.defaultTo});
+  @override
+  final bool required;
+
+  const CliValue(super.name, {super.description, super.abbr, this.defaultTo, this.required = false})
+    : assert(!(required && defaultTo != null), 'A required option cannot also have a default.');
 
   @override
   String? get defaultLabel => defaultTo;
@@ -58,7 +69,11 @@ final class CliNumber extends CliOption {
   /// Used when the option is absent.
   final int? defaultTo;
 
-  const CliNumber(super.name, {super.description, super.abbr, this.defaultTo});
+  @override
+  final bool required;
+
+  const CliNumber(super.name, {super.description, super.abbr, this.defaultTo, this.required = false})
+    : assert(!(required && defaultTo != null), 'A required option cannot also have a default.');
 
   @override
   String? get defaultLabel => defaultTo?.toString();
@@ -74,7 +89,11 @@ final class CliChoice extends CliOption {
   /// Used when the option is absent.
   final String? defaultTo;
 
-  const CliChoice(super.name, this.choices, {super.description, super.abbr, this.defaultTo});
+  @override
+  final bool required;
+
+  const CliChoice(super.name, this.choices, {super.description, super.abbr, this.defaultTo, this.required = false})
+    : assert(!(required && defaultTo != null), 'A required option cannot also have a default.');
 
   @override
   String? get defaultLabel => defaultTo;
@@ -101,14 +120,14 @@ class CliContext {
   /// Whether [name] was set.
   bool flag(String name) => flags.contains(name);
 
-  /// The string value of [name], or [defaultTo].
-  String? option(String name, {String? defaultTo}) => values[name]?.toString() ?? defaultTo;
+  /// The string value of [name], including a default declared on the option.
+  String? option(String name) => values[name]?.toString();
 
-  /// The integer value of [name], or [defaultTo].
-  int? number(String name, {int? defaultTo}) => switch (values[name]) {
+  /// The integer value of [name], including a default declared on the option.
+  int? number(String name) => switch (values[name]) {
     final int value => value,
-    final String value => int.tryParse(value) ?? defaultTo,
-    _ => defaultTo,
+    final String value => int.tryParse(value),
+    _ => null,
   };
 }
 
@@ -146,20 +165,27 @@ class CliCommand {
   }
 
   /// Declares a string option.
-  CliCommand option(String name, {String description = '', String? abbr, String? defaultTo}) =>
-      declare(CliValue(name, description: description, abbr: abbr, defaultTo: defaultTo));
+  CliCommand option(String name, {String description = '', String? abbr, String? defaultTo, bool required = false}) =>
+      declare(CliValue(name, description: description, abbr: abbr, defaultTo: defaultTo, required: required));
 
   /// Declares a boolean flag.
   CliCommand flag(String name, {String description = '', String? abbr}) =>
       declare(CliFlag(name, description: description, abbr: abbr));
 
   /// Declares an option restricted to [choices].
-  CliCommand choice(String name, List<String> choices, {String description = '', String? abbr, String? defaultTo}) =>
-      declare(CliChoice(name, choices, description: description, abbr: abbr, defaultTo: defaultTo));
+  CliCommand choice(
+    String name,
+    List<String> choices, {
+    String description = '',
+    String? abbr,
+    String? defaultTo,
+    bool required = false,
+  }) =>
+      declare(CliChoice(name, choices, description: description, abbr: abbr, defaultTo: defaultTo, required: required));
 
   /// Declares an integer option, validated during parsing.
-  CliCommand number(String name, {String description = '', String? abbr, int? defaultTo}) =>
-      declare(CliNumber(name, description: description, abbr: abbr, defaultTo: defaultTo));
+  CliCommand number(String name, {String description = '', String? abbr, int? defaultTo, bool required = false}) =>
+      declare(CliNumber(name, description: description, abbr: abbr, defaultTo: defaultTo, required: required));
 
   /// Declares a nested subcommand, configured through [build].
   ///
@@ -204,6 +230,7 @@ class CliCommand {
         }
         final fallback = option.defaultLabel;
         if (fallback != null) desc = '$desc [default: $fallback]';
+        if (option.required) desc = '$desc [required]';
         ConsoleIo.out.writeln('  ${prefix.padRight(20)} $desc');
       }
     }
@@ -305,6 +332,16 @@ class CliCommand {
           'Allowed choices: ${option.choices.join(', ')}',
         );
       }
+    }
+
+    // Required options are enforced once, after parsing, on this command and its ancestors.
+    for (var cur = this; ; cur = cur.parent!) {
+      for (final option in cur.options.values) {
+        if (option.required && !parsedValues.containsKey(option.name)) {
+          throw ArgumentError('Missing required option "--${option.name}".');
+        }
+      }
+      if (cur.parent == null) break;
     }
 
     if (handler != null) {

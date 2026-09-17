@@ -14,7 +14,7 @@ class XmlDocument {
   /// Parses [text] as XML.
   factory XmlDocument.parse(String text) => XmlDocument(xml.XmlDocument.parse(text));
 
-  /// XPath selector query.
+  /// Finds all nodes matching XPath [query].
   // ignore: experimental_member_use
-  Iterable<xml.XmlNode> $xpath(String query) => raw.xpath(query);
+  Iterable<xml.XmlNode> $(String query) => raw.xpath(query);
 }

@@ -15,8 +15,8 @@ class JsonDocument {
   /// Parses [text] as JSON.
   factory JsonDocument.parse(String text) => JsonDocument(jsonDecode(text));
 
-  /// Evaluates a JSONPath query and returns matching nodes wrapped in [JsonDocument].
-  List<JsonDocument> $jsonpath(String expression) => JsonPath.of(expression).read(raw).map(JsonDocument.new).toList();
+  /// Finds all nodes matching JSONPath [expression].
+  List<JsonDocument> $(String expression) => JsonPath.of(expression).read(raw).map(JsonDocument.new).toList();
 
   /// Accesses a child node by map key ([String]) or list index ([int]).
   ///
@@ -56,20 +56,20 @@ class JsonDocument {
     final val = raw;
     if (val == null) return null;
     if (val is T) return val as T;
-    if (<String>[] is List<T>) return val.toString() as T;
-    if (<int>[] is List<T>) {
+    if (const <String>[] is List<T>) return val.toString() as T;
+    if (const <int>[] is List<T>) {
       if (val is num) return val.toInt() as T;
       return int.tryParse('$val') as T?;
     }
-    if (<double>[] is List<T>) {
+    if (const <double>[] is List<T>) {
       if (val is num) return val.toDouble() as T;
       return double.tryParse('$val') as T?;
     }
-    if (<num>[] is List<T>) {
+    if (const <num>[] is List<T>) {
       if (val is num) return val as T;
       return num.tryParse('$val') as T?;
     }
-    if (<bool>[] is List<T>) {
+    if (const <bool>[] is List<T>) {
       if (val == 'true' || val == 1) return true as T;
       if (val == 'false' || val == 0) return false as T;
     }

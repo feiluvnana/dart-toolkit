@@ -13,7 +13,11 @@ extension IterableParallelExtensions<T> on Iterable<T> {
   ///
   /// Settles every task and preserves input order; an individual failure never
   /// throws. Tasks skipped by [cancelToken] come back as a [Left] holding a
-  /// [CancellationException]. [isolate] runs each worker in a background [Isolate].
+  /// [CancelledException].
+  ///
+  /// [isolate] runs each worker in a background [Isolate]. The worker and everything
+  /// it captures is copied **per item**, not per isolate — hoist shared data into the
+  /// worker rather than closing over it.
   ///
   /// ```dart
   /// final settled = await urls.parallelize(fetch);            // every outcome
@@ -23,7 +27,7 @@ extension IterableParallelExtensions<T> on Iterable<T> {
     FutureOr<R> Function(T item) worker, {
     int concurrency = 4,
     bool isolate = false,
-    CancellationToken? cancelToken,
+    CancelToken? cancelToken,
   }) async {
     final list = toList();
     if (list.isEmpty) return [];
@@ -50,7 +54,7 @@ extension IterableParallelExtensions<T> on Iterable<T> {
 
     return [
       for (final outcome in results)
-        outcome ?? Left<Object, R>(CancellationException(cancelToken?.reason?.toString() ?? 'Task was not executed.')),
+        outcome ?? Left<Object, R>(CancelledException(cancelToken?.reason?.toString() ?? 'Task was not executed.')),
     ];
   }
 }
@@ -66,7 +70,7 @@ extension StreamParallelExtensions<T> on Stream<T> {
     FutureOr<R> Function(T item) worker, {
     int concurrency = 4,
     bool isolate = false,
-    CancellationToken? cancelToken,
+    CancelToken? cancelToken,
   }) {
     final pool = Semaphore(concurrency > 0 ? concurrency : 1);
     late final StreamController<Either<Object, R>> controller;
@@ -106,13 +110,13 @@ extension StreamParallelExtensions<T> on Stream<T> {
                 })
                 .whenComplete(() {
                   active.remove(task);
-                  if (subscription?.isPaused == true && pool.availablePermits > 0) {
+                  if (subscription?.isPaused == true && pool.permits > 0) {
                     subscription?.resume();
                   }
                   checkDone();
                 });
             active.add(task);
-            if (pool.availablePermits == 0) subscription?.pause();
+            if (pool.permits == 0) subscription?.pause();
           },
           onError: (Object error, StackTrace st) {
             if (!controller.isClosed) controller.add(Left(error));
@@ -129,7 +133,7 @@ extension StreamParallelExtensions<T> on Stream<T> {
       },
       onPause: () => subscription?.pause(),
       onResume: () {
-        if (pool.availablePermits > 0) subscription?.resume();
+        if (pool.permits > 0) subscription?.resume();
       },
     );
 

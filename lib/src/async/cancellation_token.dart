@@ -3,12 +3,12 @@ import 'dart:async';
 /// Signals cancellation to cooperating asynchronous operations.
 ///
 /// {@category Concurrency}
-class CancellationToken {
+class CancelToken {
   bool _isCancelled = false;
-  final List<void Function()> _listeners = [];
+  final Set<void Function()> _listeners = {};
   Object? _reason;
 
-  CancellationToken();
+  CancelToken();
 
   /// Whether cancellation has been requested.
   bool get isCancelled => _isCancelled;
@@ -21,7 +21,7 @@ class CancellationToken {
     if (_isCancelled) return;
     _isCancelled = true;
     _reason = reason;
-    for (final listener in List.of(_listeners)) {
+    for (final listener in _listeners.toList()) {
       try {
         listener();
       } catch (_) {}
@@ -29,33 +29,37 @@ class CancellationToken {
     _listeners.clear();
   }
 
-  /// Registers a callback to be invoked when cancellation is requested.
-  void onCancel(void Function() listener) {
+  /// Registers [listener] to run when cancellation is requested.
+  ///
+  /// Returns a function that unregisters it. Call it when the work finishes on its
+  /// own — a long-lived token otherwise retains every listener ever registered.
+  void Function() onCancel(void Function() listener) {
     if (_isCancelled) {
       listener();
-    } else {
-      _listeners.add(listener);
+      return () {};
     }
+    _listeners.add(listener);
+    return () => _listeners.remove(listener);
   }
 
-  /// Throws a [CancellationException] if cancellation has already been requested.
+  /// Throws a [CancelledException] if cancellation has already been requested.
   void throwIfCancelled() {
     if (_isCancelled) {
-      throw CancellationException(_reason?.toString() ?? 'Operation was cancelled.');
+      throw CancelledException(_reason?.toString() ?? 'Operation was cancelled.');
     }
   }
 }
 
-/// Exception thrown when an asynchronous operation is aborted via a [CancellationToken].
+/// Exception thrown when an asynchronous operation is aborted via a [CancelToken].
 ///
 /// {@category Concurrency}
-class CancellationException implements Exception {
+class CancelledException implements Exception {
   final String message;
 
-  const CancellationException([this.message = 'Operation was cancelled.']);
+  const CancelledException([this.message = 'Operation was cancelled.']);
 
   @override
-  String toString() => 'CancellationException: $message';
+  String toString() => 'CancelledException: $message';
 }
 
 /// Cancellation for any [Stream].
@@ -67,15 +71,16 @@ class CancellationException implements Exception {
 extension StreamCancelExtensions<T> on Stream<T> {
   /// Stops this stream when [token] is cancelled.
   ///
-  /// [throwOnCancel] surfaces a [CancellationException] instead of closing silently.
-  Stream<T> cancelWith(CancellationToken token, {bool throwOnCancel = false}) {
+  /// [throwOnCancel] surfaces a [CancelledException] instead of closing silently.
+  Stream<T> cancelWith(CancelToken token, {bool throwOnCancel = false}) {
     late final StreamController<T> controller;
     StreamSubscription<T>? subscription;
+    void Function()? unregister;
 
     void finish() {
       if (controller.isClosed) return;
       if (throwOnCancel) {
-        controller.addError(CancellationException(token.reason?.toString() ?? 'Operation was cancelled.'));
+        controller.addError(CancelledException(token.reason?.toString() ?? 'Operation was cancelled.'));
       }
       subscription?.cancel();
       subscription = null;
@@ -88,12 +93,13 @@ extension StreamCancelExtensions<T> on Stream<T> {
           finish();
           return;
         }
-        token.onCancel(finish);
+        unregister = token.onCancel(finish);
         subscription = listen(
           controller.add,
           onError: controller.addError,
           onDone: () {
             subscription = null;
+            unregister?.call();
             if (!controller.isClosed) controller.close();
           },
         );
@@ -101,6 +107,7 @@ extension StreamCancelExtensions<T> on Stream<T> {
       onPause: () => subscription?.pause(),
       onResume: () => subscription?.resume(),
       onCancel: () async {
+        unregister?.call();
         final sub = subscription;
         subscription = null;
         await sub?.cancel();
@@ -115,24 +122,26 @@ extension StreamCancelExtensions<T> on Stream<T> {
 ///
 /// {@category Concurrency}
 extension FutureCancelExtensions<T> on Future<T> {
-  /// Completes with a [CancellationException] as soon as [token] is cancelled.
+  /// Completes with a [CancelledException] as soon as [token] is cancelled.
   ///
   /// The underlying work is not interrupted.
-  Future<T> cancelWith(CancellationToken token) {
+  Future<T> cancelWith(CancelToken token) {
     if (token.isCancelled) {
-      return Future<T>.error(CancellationException(token.reason?.toString() ?? 'Operation was cancelled.'));
+      return Future<T>.error(CancelledException(token.reason?.toString() ?? 'Operation was cancelled.'));
     }
     final completer = Completer<T>();
-    token.onCancel(() {
+    final unregister = token.onCancel(() {
       if (!completer.isCompleted) {
-        completer.completeError(CancellationException(token.reason?.toString() ?? 'Operation was cancelled.'));
+        completer.completeError(CancelledException(token.reason?.toString() ?? 'Operation was cancelled.'));
       }
     });
     then(
       (value) {
+        unregister();
         if (!completer.isCompleted) completer.complete(value);
       },
       onError: (Object error, StackTrace stackTrace) {
+        unregister();
         if (!completer.isCompleted) completer.completeError(error, stackTrace);
       },
     );

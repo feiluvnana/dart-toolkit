@@ -4,7 +4,7 @@ import 'package:test/test.dart';
 void main() {
   group('Environment & .env utilities', () {
     tearDown(() {
-      Env.clearOverrides();
+      Env.clear();
     });
 
     test('Env.load parses keys, values, quotes, and comments', () {

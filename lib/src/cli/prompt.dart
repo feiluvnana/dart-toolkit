@@ -73,7 +73,7 @@ class Prompt {
     ConsoleIo.out.write('$message: ');
     var isEchoModeAvailable = false;
     try {
-      if (ConsoleIo.stdinLineReader == null && stdin.hasTerminal) {
+      if (ConsoleIo.input == null && stdin.hasTerminal) {
         stdin.echoMode = false;
         isEchoModeAvailable = true;
       }

@@ -149,7 +149,7 @@ void main() {
                 return 'success';
               })
               .retry()
-              .maxAttempts(4)
+              .attempts(4)
               .delay(10.ms)
               .backoff(1.5)
               .jitter(false)
@@ -167,7 +167,7 @@ void main() {
         (() async {
           count++;
           throw FormatException('always fail');
-        }).retry().maxAttempts(3).delay(5.ms),
+        }).retry().attempts(3).delay(5.ms),
         throwsA(isA<FormatException>()),
       );
 
@@ -182,7 +182,7 @@ void main() {
           count++;
           if (count == 1) throw ArgumentError('invalid arg');
           throw StateError('state error');
-        }).retry().maxAttempts(4).delay(5.ms).when((e) => e is ArgumentError),
+        }).retry().attempts(4).delay(5.ms).when((e) => e is ArgumentError),
         throwsA(isA<StateError>()),
       );
 
@@ -197,7 +197,7 @@ void main() {
           if (count < 2) throw Exception('fail');
           return 'success';
         },
-        maxAttempts: 3,
+        attempts: 3,
         delay: 5.ms,
       );
 
@@ -243,24 +243,24 @@ void main() {
       }, concurrency: 5);
 
       expect(maxInFlight, lessThanOrEqualTo(2));
-      expect(sem.availablePermits, equals(2));
+      expect(sem.permits, equals(2));
     });
 
     test('Permit release is safe and idempotent', () async {
       final sem = Semaphore(1);
       final permit = await sem.acquire();
-      expect(sem.availablePermits, equals(0));
+      expect(sem.permits, equals(0));
 
       permit.release();
-      expect(sem.availablePermits, equals(1));
+      expect(sem.permits, equals(1));
 
       // Second release has no effect
       permit.release();
-      expect(sem.availablePermits, equals(1));
+      expect(sem.permits, equals(1));
     });
   });
 
-  group('Stream Extensions (RxDart powered)', () {
+  group('Stream Extensions', () {
     test('chunk batches stream events into fixed size lists', () async {
       final stream = Stream.fromIterable([1, 2, 3, 4, 5]);
       final chunks = await stream.chunk(2).toList();
@@ -282,7 +282,7 @@ void main() {
 
     test('notnull filters out null values', () async {
       final Stream<int?> stream = Stream.fromIterable([1, null, 2, null, 3]);
-      final nonNulls = await stream.whereNotNull().toList();
+      final nonNulls = await stream.nonNulls.toList();
       expect(nonNulls, equals([1, 2, 3]));
       expect(nonNulls, isA<List<int>>());
     });
@@ -314,6 +314,67 @@ void main() {
       await controller.close();
 
       expect(await throttled, equals([1, 4]));
+    });
+
+    test('chunkTime batches per window and skips empty windows', () async {
+      final controller = StreamController<int>();
+      final windows = controller.stream.chunkTime(30.ms).toList();
+
+      controller.add(1);
+      controller.add(2);
+      await Future<void>.delayed(60.ms); // this window closes, the next stays empty
+      controller.add(3);
+      await Future<void>.delayed(60.ms);
+      await controller.close();
+
+      expect(
+        await windows,
+        equals([
+          [1, 2],
+          [3],
+        ]),
+      );
+    });
+
+    test('delayBy shifts every item and still completes', () async {
+      final sw = Stopwatch()..start();
+      final shifted = await Stream.fromIterable([1, 2, 3]).delayBy(40.ms).toList();
+      sw.stop();
+
+      expect(shifted, equals([1, 2, 3]));
+      expect(sw.elapsedMilliseconds, greaterThanOrEqualTo(35));
+    });
+
+    test('a paused subscription receives nothing and drains on resume', () async {
+      final controller = StreamController<int>();
+      final received = <List<int>>[];
+      final sub = controller.stream.chunkTime(10.ms).listen(received.add);
+
+      sub.pause();
+      controller.add(1);
+      await Future<void>.delayed(40.ms);
+      expect(received, isEmpty);
+
+      sub.resume();
+      await Future<void>.delayed(40.ms);
+      expect(
+        received,
+        equals([
+          [1],
+        ]),
+      );
+
+      await sub.cancel();
+      await controller.close();
+    });
+
+    test('flatMap runs inner streams concurrently', () async {
+      // Sequential expansion would give [1, 2]; concurrent gives the fast one first.
+      final merged = await Stream.fromIterable([
+        40,
+        5,
+      ]).flatMap((ms) => Stream.fromFuture(Future.delayed(ms.ms, () => ms))).toList();
+      expect(merged, equals([5, 40]));
     });
   });
 
@@ -390,8 +451,8 @@ void main() {
       expect(seen.toSet(), equals({1, 2, 3}));
     });
 
-    test('parallelize with CancellationToken reports unexecuted work as Left', () async {
-      final token = CancellationToken();
+    test('parallelize with CancelToken reports unexecuted work as Left', () async {
+      final token = CancelToken();
       final items = [1, 2, 3, 4, 5];
       Future.delayed(15.ms, () => token.cancel('cancelled by user'));
 
@@ -405,8 +466,8 @@ void main() {
       );
 
       expect(outcomes.lefts, isNotEmpty);
-      expect(outcomes.lefts.whereType<CancellationException>(), isNotEmpty);
-      expect(() => outcomes.unwrap(), throwsA(isA<CancellationException>()));
+      expect(outcomes.lefts.whereType<CancelledException>(), isNotEmpty);
+      expect(() => outcomes.unwrap(), throwsA(isA<CancelledException>()));
     });
   });
 
@@ -419,18 +480,18 @@ void main() {
         ],
       };
       final jsonDoc = JsonDocument(doc);
-      final names = jsonDoc.$jsonpath(r'$.items[*].name').map((d) => d.raw).toList();
+      final names = jsonDoc.$(r'$.items[*].name').map((d) => d.raw).toList();
       expect(names, equals(['Item 1', 'Item 2']));
     });
 
     test('JsonPath throws on unsupported slice and filter expressions', () {
       final jsonDoc = JsonDocument([1, 2, 3, 4, 5]);
       // Slices must throw UnsupportedError
-      expect(() => jsonDoc.$jsonpath(r'$.a[1:3]'), throwsA(isA<UnsupportedError>()));
+      expect(() => jsonDoc.$(r'$.a[1:3]'), throwsA(isA<UnsupportedError>()));
       // Filters must throw UnsupportedError
-      expect(() => jsonDoc.$jsonpath(r'$.a[?(@.v > 20)]'), throwsA(isA<UnsupportedError>()));
+      expect(() => jsonDoc.$(r'$.a[?(@.v > 20)]'), throwsA(isA<UnsupportedError>()));
       // Invalid unclosed brackets
-      expect(() => jsonDoc.$jsonpath(r'$.a[unclosed'), throwsA(isA<FormatException>()));
+      expect(() => jsonDoc.$(r'$.a[unclosed'), throwsA(isA<FormatException>()));
     });
 
     test('String.match handles plain strings and RegExps without regex coercion', () {
@@ -472,7 +533,7 @@ void main() {
       final builder = RetryBuilder(() async => 42);
       final future = builder.run();
       expect(await future, equals(42));
-      expect(() => builder.maxAttempts(5), throwsA(isA<StateError>()));
+      expect(() => builder.attempts(5), throwsA(isA<StateError>()));
     });
 
     test('RetryBuilder respects maxDelay cap', () async {
@@ -484,7 +545,7 @@ void main() {
           if (attemptCount < 3) throw StateError('retry me');
           return true;
         },
-        maxAttempts: 4,
+        attempts: 4,
         delay: 50.ms,
         maxDelay: 60.ms,
         backoff: 3.0,

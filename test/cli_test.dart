@@ -70,7 +70,7 @@ void main() {
     });
 
     test('Logger methods execute cleanly', () {
-      expect(() => Logger.step(1, 3, 'Processing...'), returnsNormally);
+      expect(() => Logger.stages(3)('Processing...'), returnsNormally);
       expect(() => Logger.ok('Done'), returnsNormally);
       expect(() => Logger.info('Info note'), returnsNormally);
       expect(() => Logger.warn('Warning note'), returnsNormally);
@@ -97,7 +97,7 @@ void main() {
     });
 
     test('ConsoleProgress truncates long labels to fit within terminal width', () {
-      final progress = Console.progress(556, message: 'Audio Tracks', terminalColumns: 80);
+      final progress = Console.progress(556, message: 'Audio Tracks', columns: 80);
       final line = progress.formatLine(
         'DISC.21／ LB!キャラクターソング・semicrystalline.Little Busters! original arrange album・Rockstar Busters! 他より #11',
       );
@@ -109,7 +109,7 @@ void main() {
     });
 
     test('ConsoleMultiProgress formats header and multiple worker slots correctly', () {
-      final multi = Console.multiProgress(10, slots: 3, message: 'Downloading Assets', terminalColumns: 80);
+      final multi = Console.multiProgress(total: 10, slots: 3, message: 'Downloading Assets', columns: 80);
 
       // Initial state (all slots idle)
       var lines = multi.formatLines();
@@ -257,8 +257,8 @@ void main() {
     test('ConsoleIo sink overrides capture output cleanly', () {
       final outBuffer = StringBuffer();
       final errBuffer = StringBuffer();
-      ConsoleIo.stdoutOverride = outBuffer;
-      ConsoleIo.stderrOverride = errBuffer;
+      ConsoleIo.out = outBuffer;
+      ConsoleIo.err = errBuffer;
 
       try {
         Logger.info('Hello from Logger');
@@ -268,6 +268,56 @@ void main() {
       } finally {
         ConsoleIo.reset();
       }
+    });
+
+    test('a required option is enforced at parse time', () async {
+      String? token;
+      final cli = Cli()
+        ..option('token', abbr: 't', required: true, description: 'API token')
+        ..action((ctx) => token = ctx.option('token'));
+
+      await cli.run(['--token', 'abc']);
+      expect(token, equals('abc'));
+
+      expect(
+        () => cli.run([]),
+        throwsA(isA<ArgumentError>().having((e) => e.message, 'message', contains('Missing required option'))),
+      );
+
+      // Required is also enforced from an ancestor command, and shows up in help.
+      final nested = Cli()
+        ..number('port', required: true)
+        ..command('serve', build: (serve) => serve..action((_) {}));
+      expect(() => nested.run(['serve']), throwsA(isA<ArgumentError>()));
+    });
+
+    test('a declared default reaches the context with no read-site argument', () async {
+      String? format;
+      int? workers;
+
+      final cli = Cli()
+        ..choice('format', ['mp3', 'all'], defaultTo: 'all')
+        ..number('workers', defaultTo: 4)
+        ..action((ctx) {
+          format = ctx.option('format');
+          workers = ctx.number('workers');
+        });
+
+      await cli.run([]);
+      expect(format, equals('all'));
+      expect(workers, equals(4));
+    });
+
+    test('exit hooks are awaited, async ones included', () async {
+      var asyncHookFinished = false;
+      final unreg = onExit(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        asyncHookFinished = true;
+      });
+
+      await runExitHooks();
+      expect(asyncHookFinished, isTrue);
+      unreg();
     });
 
     test('onExit manages multiple hooks and execution', () async {

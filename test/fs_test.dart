@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -39,6 +40,19 @@ void main() {
       expect(cleaned.contains('*'), isFalse);
       expect(cleaned.contains('?'), isFalse);
       expect(cleaned.contains('<'), isFalse);
+    });
+
+    test('filename escapes separators that sanitized() keeps', () {
+      expect('AIR / Farewell song'.filename, equals('AIR _ Farewell song'));
+      expect(r'a\b'.filename, equals('a_b'));
+      expect('  spaced   out  '.filename, equals('spaced out'));
+      expect('///'.filename, equals('___'));
+      expect(''.filename, equals('_'));
+
+      // The point of the distinction: a scraped title can never grow a directory.
+      final target = 'Key BOX'.path / 'DISC01' / '${'AIR / Farewell'.filename}.mp3';
+      expect(target.segments.length, equals(3));
+      expect('AIR / Farewell song'.path.sanitized().contains('/'), isTrue);
     });
 
     test('type, exist, writeText, readText, writeBytes, readBytes, and size', () async {
@@ -85,7 +99,7 @@ void main() {
 
       final readDoc = JsonDocument.parse(await jsonFile.readText());
       expect(readDoc.raw, equals({'title': 'KeyBOX', 'discs': 50}));
-      expect(readDoc.$jsonpath(r'$.discs').first.raw, equals(50));
+      expect(readDoc.$(r'$.discs').first.raw, equals(50));
     });
 
     test('mkdir, copy, move, delete, zip, and unzip', () async {
@@ -141,20 +155,19 @@ void main() {
       final updates = await file1.download('https://example.com/file1.txt'.url, client: client).toList();
       expect(updates.isNotEmpty, isTrue);
       final lastUpdate = updates.last;
-      expect(lastUpdate.isDone, isTrue);
-      expect(lastUpdate.isSkipped, isFalse);
+      expect(lastUpdate, isA<Downloaded>());
       expect(lastUpdate.received, equals(12));
       expect(await file1.readText(), equals('Hello file 1'));
 
       // Re-download without overwrite skips
       final skipUpdates = await file1.download('https://example.com/file1.txt'.url, client: client).toList();
-      expect(skipUpdates.single.isSkipped, isTrue);
+      expect(skipUpdates.single, isA<DownloadSkipped>());
       expect(skipUpdates.single.isDone, isTrue);
 
       // 2. Single download on Uri
       final file1Alt = base / 'file1_alt.txt';
       final uriUpdates = await file1Alt.download('https://example.com/file1.txt'.url, client: client).toList();
-      expect(uriUpdates.last.isDone, isTrue);
+      expect(uriUpdates.last, isA<Downloaded>());
       expect(await file1Alt.readText(), equals('Hello file 1'));
 
       // 3. Batch downloadAll on a source-to-destination map
@@ -166,12 +179,38 @@ void main() {
       expect(batch1Updates.isNotEmpty, isTrue);
       final finalBatch1 = batch1Updates.last;
       expect(finalBatch1.completed, equals(2));
-      expect(finalBatch1.newDownloads, equals(2));
-      // 4. Failed download returns isFailed: true without crashing
+      expect(finalBatch1.written, equals(2));
+      // 4. A failure is a DownloadFailed, carrying its error
       final fileFail = base / 'not_found.txt';
       final failUpdates = await fileFail.download('https://example.com/404.txt'.url, client: client).toList();
-      expect(failUpdates.last.isDone, isTrue);
-      expect(failUpdates.last.isFailed, isTrue);
+      expect(failUpdates.last, isA<DownloadFailed>());
+      expect((failUpdates.last as DownloadFailed).error, isA<HttpException>());
+
+      // 5. The iterable form keeps two destinations for one URL; a Map cannot
+      final pairs = [
+        (url: 'https://example.com/file1.txt'.url, path: base / 'twice_a.txt'),
+        (url: 'https://example.com/file1.txt'.url, path: base / 'twice_b.txt'),
+      ];
+      final twice = await pairs.downloadAll(client: client, concurrency: 2).toList();
+      expect(twice.last.completed, equals(2));
+      expect(twice.last.total, equals(2));
+      expect(await (base / 'twice_a.txt').exists(), isTrue);
+      expect(await (base / 'twice_b.txt').exists(), isTrue);
+
+      // 6. The stream form overlaps discovery with transfer; total is unknown until it closes
+      final discovered = StreamController<({Uri url, Path path})>();
+      final events = <BatchDownloadProgress>[];
+      final done = discovered.stream.downloadAll(client: client, concurrency: 2).forEach(events.add);
+      discovered.add((url: 'https://example.com/file1.txt'.url, path: base / 'streamed1.txt'));
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(events.isNotEmpty, isTrue);
+      expect(events.first.total, isNull, reason: 'total is unknown while the source is open');
+      discovered.add((url: 'https://example.com/file2.txt'.url, path: base / 'streamed2.txt'));
+      await discovered.close();
+      await done;
+      expect(events.last.total, equals(2));
+      expect(events.last.completed, equals(2));
+      expect(await (base / 'streamed2.txt').readText(), equals('Hello file 2'));
     });
 
     test('name, stem, ext, parent, and segments properties', () {
@@ -207,7 +246,7 @@ void main() {
       expect(await xmlFile.exists(), isTrue);
 
       final readXmlDoc = XmlDocument.parse(await xmlFile.readText());
-      expect((readXmlDoc.$xpath('//item').firstOrNull as xml_dom.XmlElement?)?.innerText, equals('Value'));
+      expect((readXmlDoc.$('//item').firstOrNull as xml_dom.XmlElement?)?.innerText, equals('Value'));
 
       // Sync document operations
       final syncJsonFile = base / 'sync.json';
@@ -224,7 +263,7 @@ void main() {
       final syncXmlFile = base / 'sync.xml';
       syncXmlFile.writeTextSync((XmlDocument.parse('<root><node>Sync</node></root>')).raw.toXmlString());
       expect(
-        (XmlDocument.parse(syncXmlFile.readTextSync()).$xpath('//node').first as xml_dom.XmlElement).innerText,
+        (XmlDocument.parse(syncXmlFile.readTextSync()).$('//node').first as xml_dom.XmlElement).innerText,
         equals('Sync'),
       );
 
@@ -336,6 +375,49 @@ void main() {
       },
     );
 
+    test('zip round-trips every file byte-for-byte, sync and async', () async {
+      final src = Path(tempDir.path) / 'roundtrip_src';
+      for (var i = 0; i < 4; i++) {
+        // Bigger than one stream buffer so the streaming encoder really chunks.
+        (src / 'dir$i' / 'f$i.bin').writeBytesSync(List<int>.generate(300000, (b) => (b + i) % 251));
+      }
+      final expected = {
+        for (final f in src.filesSync(recursive: true)) f.path.substring(src.path.length): f.readBytesSync(),
+      };
+      expect(expected.length, equals(4));
+
+      for (final mode in ['sync', 'async']) {
+        final zip = Path(tempDir.path) / 'roundtrip_$mode.zip';
+        final out = Path(tempDir.path) / 'roundtrip_out_$mode';
+        if (mode == 'sync') {
+          src.zipToSync(zip.path);
+          zip.extractToSync(out.path);
+        } else {
+          await src.zipTo(zip.path);
+          await zip.extractTo(out.path);
+        }
+
+        final actual = {
+          for (final f in out.filesSync(recursive: true)) f.path.substring(out.path.length): f.readBytesSync(),
+        };
+        expect(actual.length, equals(expected.length), reason: '$mode entry count');
+        for (final entry in expected.entries) {
+          final match = actual.entries.firstWhere((a) => a.key.endsWith(entry.key));
+          expect(match.value, equals(entry.value), reason: '$mode ${entry.key}');
+        }
+      }
+    });
+
+    test('glob matches relative to the root, not through the absolute path', () {
+      final base = Path(tempDir.path) / 'glob_rel' / 'assets';
+      (base / 'song.mp3').writeTextSync('x');
+
+      expect(base.globSync('*.mp3').length, equals(1));
+      // 'assets' is a segment of the absolute path but not of any relative one,
+      // so it must not match. The old two-pass matcher let it through.
+      expect(base.globSync('assets/*.mp3'), isEmpty);
+    });
+
     test('atomic download handles short read, cleans up partials and prevents sticky failure', () async {
       final client = MockClient.streaming((request, bodyStream) async {
         // Advertises 1000 bytes but sends only 10 bytes
@@ -352,7 +434,7 @@ void main() {
 
       final progressEvents = await target.download('https://example.com/truncated.dat'.url, client: client).toList();
       final last = progressEvents.last;
-      expect(last.isFailed, isTrue);
+      expect(last, isA<DownloadFailed>());
       expect(last.isDone, isTrue);
 
       // Target file must NOT exist on disk
@@ -362,7 +444,7 @@ void main() {
 
       // Subsequent download attempt is not falsely skipped
       final reattempt = await target.download('https://example.com/truncated.dat'.url, client: client).toList();
-      expect(reattempt.first.isSkipped, isFalse);
+      expect(reattempt.first, isNot(isA<DownloadSkipped>()));
     });
 
     test('glob supports caseSensitive parameter and platform defaults', () {

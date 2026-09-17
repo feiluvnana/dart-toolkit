@@ -60,15 +60,14 @@ void Function() onExit(FutureOr<void> Function() callback) {
   return () => _exitHooks.remove(callback);
 }
 
-/// Prints [message] to stderr, runs the exit hooks, and exits with [exitCode].
+/// Prints [message] to stderr, awaits the exit hooks, and exits with [exitCode].
+///
+/// Await it — `await die('...')` has static type [Never], so the code after it is
+/// still unreachable.
 ///
 /// {@category CLI}
-Never die(String message, {int exitCode = 1}) {
+Future<Never> die(String message, {int exitCode = 1}) async {
   ConsoleIo.err.writeln('  ✖ $message'.red);
-  for (final hook in List.of(_exitHooks)) {
-    try {
-      hook();
-    } catch (_) {}
-  }
+  await runExitHooks();
   exit(exitCode);
 }

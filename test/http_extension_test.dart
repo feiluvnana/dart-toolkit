@@ -1,12 +1,30 @@
+import 'dart:io';
+
 import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:test/test.dart';
 import 'package:xml/xml.dart' as xml_dom;
 
+class _CountingClient extends http.BaseClient {
+  final http.Client _inner;
+  final void Function() _onClose;
+
+  _CountingClient(this._inner, this._onClose);
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) => _inner.send(request);
+
+  @override
+  void close() {
+    _onClose();
+    _inner.close();
+  }
+}
+
 void main() {
   group('HTTP Extension & Crawler', () {
-    test('res.html() parses HTML with CSS and XPath selectors and memoizes parsed doc', () {
+    test('res.html() parses HTML with CSS selectors and memoizes parsed doc', () {
       final res = http.Response('''
         <!DOCTYPE html>
         <html>
@@ -34,13 +52,10 @@ void main() {
       expect(items.length, equals(2));
       expect(items.map((e) => e.text).toList(), equals(['Item 1', 'Item 2']));
 
-      // XPath selector query
-      final xpathItems = html.$xpath('//ul/li');
-      expect(xpathItems.length, equals(2));
-      expect(xpathItems.map((e) => e.text).toList(), equals(['Item 1', 'Item 2']));
-
-      // XPath throws on invalid syntax
-      expect(() => html.$xpath('//[['), throwsException);
+      // Descendant selector reaches the same nodes
+      final listItems = html.$('ul li');
+      expect(listItems.length, equals(2));
+      expect(listItems.map((e) => e.text).toList(), equals(['Item 1', 'Item 2']));
     });
 
     test('res.xml() parses XML with XPath selector', () {
@@ -63,11 +78,11 @@ void main() {
       expect(xml.raw.rootElement.name.local, equals('bookstore'));
 
       // XPath selector query
-      final titles = xml.$xpath('//book/title');
+      final titles = xml.$('//book/title');
       expect(titles.length, equals(2));
       expect(titles.map((n) => (n as xml_dom.XmlElement).innerText).toList(), equals(['Harry Potter', 'Learning XML']));
 
-      final learningTitles = xml.$xpath('//book[@category="learning"]/title');
+      final learningTitles = xml.$('//book[@category="learning"]/title');
       expect(learningTitles.length, equals(1));
       expect((learningTitles.first as xml_dom.XmlElement).innerText, equals('Learning XML'));
     });
@@ -104,15 +119,15 @@ void main() {
       expect(json.raw, isA<Map<String, dynamic>>());
 
       // JSONPath selector query
-      final prices = json.$jsonpath(r'$.store.book[*].price');
+      final prices = json.$(r'$.store.book[*].price');
       expect(prices.length, equals(2));
       expect(prices.map((d) => d.raw).toList(), equals([8.95, 12.99]));
 
-      final authors = json.$jsonpath(r'$..author');
+      final authors = json.$(r'$..author');
       expect(authors.length, equals(2));
       expect(authors.map((d) => d.raw).toList(), equals(['Nigel Rees', 'Evelyn Waugh']));
 
-      final allPrices = json.$jsonpath(r'$..price');
+      final allPrices = json.$(r'$..price');
       expect(allPrices.length, equals(3));
       expect(allPrices.map((d) => d.raw).toList(), equals([8.95, 12.99, 19.95]));
 
@@ -173,8 +188,8 @@ void main() {
                 detailCtx.emit({
                   'category': detailCtx.meta['category'],
                   'label': detailCtx.meta['label'],
-                  'name': json.$jsonpath(r'$.name').firstOrNull?.raw,
-                  'price': json.$jsonpath(r'$.price').firstOrNull?.raw,
+                  'name': json.$(r'$.name').firstOrNull?.raw,
+                  'price': json.$(r'$.price').firstOrNull?.raw,
                 });
               },
             );
@@ -184,6 +199,59 @@ void main() {
 
       expect(items.length, equals(1));
       expect(items.first, equals({'category': 'Catalog', 'label': 'Product 1', 'name': 'Widget', 'price': 49.99}));
+    });
+
+    test('fetch-and-parse refuses a non-2xx page, get() reports it instead', () async {
+      final client = MockClient((request) async => http.Response('<html>not found</html>', 404));
+
+      await expectLater('https://example.com/missing'.url.html(client: client), throwsA(isA<HttpException>()));
+
+      final res = await 'https://example.com/missing'.url.get(client: client);
+      expect(res.ok, isFalse);
+      expect(res.html().$('html').isNotEmpty, isTrue, reason: 'the body is still there to inspect');
+    });
+
+    test('ctx.url is the response URL, and ctx.resolve matches what follow() does', () async {
+      final client = MockClient((request) async {
+        if (request.url.path == '/album') {
+          return http.Response('<a href="track/7.mp3">t</a>', 200);
+        }
+        return http.Response('ok', 200);
+      });
+
+      final resolved = await 'https://example.com/album'.url.scrape<Uri>((ctx) {
+        expect(ctx.url, equals('https://example.com/album'.url));
+        ctx.emit(ctx.resolve(ctx.response.html().$('a').first.attr('href')!));
+      }, client: client).toList();
+
+      expect(resolved.single, equals('https://example.com/track/7.mp3'.url));
+    });
+
+    test('Http.session shares one client across every call inside it', () async {
+      var closed = 0;
+      var requests = 0;
+      final client = _CountingClient(
+        MockClient((request) async {
+          requests++;
+          return http.Response('<html><b>ok</b></html>', 200);
+        }),
+        () => closed++,
+      );
+
+      expect(Http.client, isNull, reason: 'no ambient client outside a session');
+
+      final pages = await Http.session(() async {
+        expect(identical(Http.client, client), isTrue);
+        final a = await 'https://example.com/a'.url.html();
+        final b = await 'https://example.com/b'.url.get();
+        expect(b.ok, isTrue);
+        return [a.$('b').first.text, b.body];
+      }, client: client);
+
+      expect(pages.first, equals('ok'));
+      expect(requests, equals(2));
+      expect(closed, equals(0), reason: 'a supplied client is the caller\'s to close');
+      expect(Http.client, isNull, reason: 'the session ends with its body');
     });
 
     test('scrape accepts http.Request seeds directly and handles dedupe properly', () async {
@@ -208,13 +276,13 @@ void main() {
       expect(requestCount, equals(2));
     });
 
-    test('scrape supports CancellationToken to abort gracefully', () async {
+    test('scrape supports CancelToken to abort gracefully', () async {
       final client = MockClient((request) async {
         await Future<void>.delayed(const Duration(milliseconds: 50));
         return http.Response('{"ok": true}', 200);
       });
 
-      final cancelToken = CancellationToken();
+      final cancelToken = CancelToken();
       final stream = 'https://example.com/items'.url.scrape<String>(
         (ctx) {
           ctx.emit('item');
@@ -260,11 +328,11 @@ void main() {
       expect(numVal, equals('42'));
 
       final jsonRes = http.Response('{"user": {"name": "John"}}', 200);
-      final nameVal = await jsonRes.isolateJson((json) => json.$jsonpath(r'$.user.name').firstOrNull?.to<String>());
+      final nameVal = await jsonRes.isolateJson((json) => json.$(r'$.user.name').firstOrNull?.to<String>());
       expect(nameVal, equals('John'));
 
       final xmlRes = http.Response('<root><item id="99">Hello</item></root>', 200);
-      final xmlVal = await xmlRes.isolateXml((xml) => xml.$xpath('//item').firstOrNull?.innerText);
+      final xmlVal = await xmlRes.isolateXml((xml) => xml.$('//item').firstOrNull?.innerText);
       expect(xmlVal, equals('Hello'));
 
       final mockClient = MockClient((req) async {

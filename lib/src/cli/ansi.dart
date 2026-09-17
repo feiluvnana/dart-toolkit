@@ -17,12 +17,12 @@ class Ansi {
   /// Whether ANSI styling is enabled.
   ///
   /// Resolution order: an explicit [enabled] override, then `NO_COLOR`, then the
-  /// active sink — redirecting [ConsoleIo.stdoutOverride] disables styling so
+  /// active sink — redirecting [ConsoleIo.out] disables styling so
   /// captured output is plain, unless an override says otherwise.
   static bool get enabled {
     if (_override != null) return _override!;
     if (Env.has('NO_COLOR')) return false;
-    if (ConsoleIo.stdoutOverride != null) return false;
+    if (ConsoleIo.redirected) return false;
     try {
       return stdout.supportsAnsiEscapes;
     } catch (_) {

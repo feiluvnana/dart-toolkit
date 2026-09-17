@@ -21,6 +21,24 @@ enum LogLevel {
   silent,
 }
 
+/// A self-numbering sequence of stage banners. Created by [Logger.stages].
+///
+/// {@category CLI}
+class Stages {
+  /// How many stages the run has.
+  final int total;
+  int _current = 0;
+
+  Stages(this.total);
+
+  /// Prints the next stage banner: `[n/total] message`.
+  void call(String message) {
+    _current++;
+    if (!Logger.enabled(LogLevel.info)) return;
+    ConsoleIo.out.writeln('[$_current/$total] $message'.cyan.bold);
+  }
+}
+
 /// Levelled terminal logging, written through [ConsoleIo].
 ///
 /// {@category CLI}
@@ -42,11 +60,13 @@ class Logger {
     }
   }
 
-  /// Logs a progress step badge: `[current/total] message`.
-  static void step(int current, int total, String message) {
-    if (!enabled(LogLevel.info)) return;
-    ConsoleIo.out.writeln('[$current/$total] $message'.cyan.bold);
-  }
+  /// A counter over [total] stages, printing `[n/total] message` on each call.
+  ///
+  /// ```dart
+  /// final stage = Logger.stages(3);
+  /// stage('Scraping metadata');   // [1/3] Scraping metadata
+  /// ```
+  static Stages stages(int total) => Stages(total);
 
   /// Logs a verbose diagnostic message: `  · message`.
   static void debug(String message) {

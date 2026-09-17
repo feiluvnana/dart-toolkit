@@ -15,7 +15,7 @@ class RetryBuilder<T> implements Future<T> {
   bool _jitter = true;
   bool Function(Object error)? _retryIf;
   void Function(int attempt, Object error, Duration nextDelay)? _listener;
-  CancellationToken? _cancelToken;
+  CancelToken? _cancelToken;
 
   RetryBuilder(this._action);
 
@@ -26,7 +26,7 @@ class RetryBuilder<T> implements Future<T> {
   }
 
   /// Maximum number of attempts, including the initial try (default: 3).
-  RetryBuilder<T> maxAttempts(int count) {
+  RetryBuilder<T> attempts(int count) {
     _checkNotStarted();
     _maxAttempts = count > 0 ? count : 1;
     return this;
@@ -67,11 +67,11 @@ class RetryBuilder<T> implements Future<T> {
     return this;
   }
 
-  /// Attaches a [CancellationToken] that aborts the retry loop.
+  /// Attaches a [CancelToken] that aborts the retry loop.
   ///
   /// Distinct from `Future.cancelWith`, which only completes the outer future
   /// with an error and leaves the retries running.
-  RetryBuilder<T> cancelOn(CancellationToken token) {
+  RetryBuilder<T> cancelOn(CancelToken token) {
     _checkNotStarted();
     _cancelToken = token;
     return this;
@@ -144,20 +144,20 @@ class RetryBuilder<T> implements Future<T> {
   Future<T> whenComplete(FutureOr<void> Function() action) => run().whenComplete(action);
 }
 
-/// Shorthand function to retry [action] up to [maxAttempts] times with exponential backoff.
+/// Shorthand function to retry [action] up to [attempts] times with exponential backoff.
 ///
 /// {@category Concurrency}
 Future<T> retry<T>(
   FutureOr<T> Function() action, {
-  int maxAttempts = 3,
+  int attempts = 3,
   Duration delay = const Duration(milliseconds: 200),
   Duration? maxDelay,
   double backoff = 2.0,
   bool jitter = true,
   bool Function(Object error)? when,
-  CancellationToken? cancelToken,
+  CancelToken? cancelToken,
 }) {
-  var builder = RetryBuilder<T>(action).maxAttempts(maxAttempts).delay(delay).backoff(backoff).jitter(jitter);
+  var builder = RetryBuilder<T>(action).attempts(attempts).delay(delay).backoff(backoff).jitter(jitter);
 
   if (maxDelay != null) {
     builder = builder.maxDelay(maxDelay);
@@ -175,6 +175,6 @@ Future<T> retry<T>(
 ///
 /// {@category Concurrency}
 extension FunctionRetryExtensions<T> on FutureOr<T> Function() {
-  /// Retries this computation up to [maxAttempts] times with exponential backoff.
-  RetryBuilder<T> retry([int maxAttempts = 3]) => RetryBuilder<T>(this).maxAttempts(maxAttempts);
+  /// Retries this computation up to [attempts] times with exponential backoff.
+  RetryBuilder<T> retry([int attempts = 3]) => RetryBuilder<T>(this).attempts(attempts);
 }

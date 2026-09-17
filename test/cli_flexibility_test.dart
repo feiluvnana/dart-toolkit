@@ -11,8 +11,8 @@ void main() {
     setUp(() {
       out = StringBuffer();
       err = StringBuffer();
-      ConsoleIo.stdoutOverride = out;
-      ConsoleIo.stderrOverride = err;
+      ConsoleIo.out = out;
+      ConsoleIo.err = err;
       Ansi.enabled = false;
     });
 
@@ -44,7 +44,7 @@ void main() {
       Logger.level = LogLevel.warn;
       Logger.info('hidden');
       Logger.ok('hidden too');
-      Logger.step(1, 2, 'hidden step');
+      Logger.stages(2)('hidden step');
       Logger.warn('visible');
 
       expect(out.toString(), isNot(contains('hidden')));
@@ -79,7 +79,7 @@ void main() {
 
     setUp(() {
       out = StringBuffer();
-      ConsoleIo.stdoutOverride = out;
+      ConsoleIo.out = out;
       Ansi.enabled = false;
     });
 
@@ -91,7 +91,7 @@ void main() {
     /// Feeds [lines] to prompts, then end-of-input.
     void feed(List<String> lines) {
       final queue = List<String>.from(lines);
-      ConsoleIo.stdinLineReader = () => queue.isEmpty ? null : queue.removeAt(0);
+      ConsoleIo.input = () => queue.isEmpty ? null : queue.removeAt(0);
     }
 
     test('select works with non-String choices via display', () {
@@ -124,20 +124,20 @@ void main() {
     });
 
     test('ask falls back to the default at end of input instead of hanging', () {
-      ConsoleIo.stdinLineReader = () => null; // immediate end of input
+      ConsoleIo.input = () => null; // immediate end of input
       final value = Prompt.ask('Name', defaultTo: 'fallback');
       expect(value, equals('fallback'));
     });
 
     test('required ask throws rather than looping when input is exhausted', () {
-      ConsoleIo.stdinLineReader = () => null; // immediate end of input
+      ConsoleIo.input = () => null; // immediate end of input
       expect(() => Prompt.ask('Name', required: true), throwsA(isA<StateError>()));
     });
   });
 
   group('Uniform cancellation composition', () {
     test('Stream.cancelWith stops delivery once the token fires', () async {
-      final token = CancellationToken();
+      final token = CancelToken();
       final controller = StreamController<int>();
       final received = <int>[];
 
@@ -154,8 +154,8 @@ void main() {
       await controller.close();
     });
 
-    test('Stream.cancelWith can surface a CancellationException', () async {
-      final token = CancellationToken();
+    test('Stream.cancelWith can surface a CancelledException', () async {
+      final token = CancelToken();
       final controller = StreamController<int>();
       final stream = controller.stream.cancelWith(token, throwOnCancel: true);
 
@@ -164,26 +164,47 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       token.cancel('halt');
 
-      await expectLater(future, throwsA(isA<CancellationException>()));
+      await expectLater(future, throwsA(isA<CancelledException>()));
       await controller.close();
     });
 
     test('Stream.cancelWith on an already-cancelled token yields nothing', () async {
-      final token = CancellationToken()..cancel();
+      final token = CancelToken()..cancel();
       final items = await Stream.fromIterable([1, 2, 3]).cancelWith(token).toList();
       expect(items, isEmpty);
     });
 
+    test('onCancel returns a working unregister', () async {
+      final token = CancelToken();
+      var fired = 0;
+
+      final unregister = token.onCancel(() => fired++);
+      token.onCancel(() => fired++);
+      unregister();
+
+      // Work that completes normally deregisters itself; not observable from here
+      // beyond "it still behaves", but it is what stops a long-lived token from
+      // retaining every listener it was ever given.
+      await Future<int>.value(1).cancelWith(token);
+      final controller = StreamController<int>();
+      final drained = controller.stream.cancelWith(token).toList();
+      await controller.close();
+      await drained;
+
+      token.cancel('now');
+      expect(fired, equals(1));
+    });
+
     test('Future.cancelWith rejects as soon as the token fires', () async {
-      final token = CancellationToken();
+      final token = CancelToken();
       final slow = Future<int>.delayed(const Duration(seconds: 5), () => 1);
       final guarded = slow.cancelWith(token);
       token.cancel('stop');
-      await expectLater(guarded, throwsA(isA<CancellationException>()));
+      await expectLater(guarded, throwsA(isA<CancelledException>()));
     });
 
     test('Future.cancelWith passes the value through when not cancelled', () async {
-      final token = CancellationToken();
+      final token = CancelToken();
       final value = await Future<int>.value(7).cancelWith(token);
       expect(value, equals(7));
     });

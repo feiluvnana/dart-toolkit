@@ -12,10 +12,10 @@ class Semaphore {
   Semaphore(this.maxPermits) : _currentPermits = maxPermits > 0 ? maxPermits : 1;
 
   /// Number of currently available permits.
-  int get availablePermits => _currentPermits;
+  int get permits => _currentPermits;
 
   /// Number of tasks currently waiting for a permit.
-  int get queueLength => _waiters.length;
+  int get waiting => _waiters.length;
 
   /// Acquires a permit, waiting asynchronously if none are available.
   ///
@@ -79,7 +79,7 @@ class Mutex {
   final Semaphore _semaphore = Semaphore(1);
 
   /// Whether the mutex is currently locked.
-  bool get isLocked => _semaphore.availablePermits == 0;
+  bool get isLocked => _semaphore.permits == 0;
 
   /// Executes [action] while holding the mutex lock.
   Future<T> run<T>(FutureOr<T> Function() action) => _semaphore.run(action);

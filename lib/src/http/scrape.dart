@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import '../async/cancellation_token.dart';
 import '../util/time.dart';
+import 'session.dart';
 
 /// Context provided to scraping callbacks containing the HTTP response and controls for emitting items and following links.
 ///
@@ -19,6 +20,9 @@ class ScrapeContext<T> {
   /// Metadata carried over from previous requests in the scraping pipeline.
   final Map<String, dynamic> meta;
 
+  /// The URL this response came from, and the base [resolve] and [follow] resolve against.
+  final Uri url;
+
   final void Function(T item) _emit;
   final void Function(
     Object target, {
@@ -28,7 +32,7 @@ class ScrapeContext<T> {
     String method,
     String? body,
     Map<String, String>? fields,
-    bool allowDuplicates,
+    bool revisit,
   })
   _follow;
 
@@ -38,6 +42,7 @@ class ScrapeContext<T> {
     required this.response,
     required this.request,
     required this.meta,
+    required this.url,
     required void Function(T item) emit,
     required void Function(
       Object target, {
@@ -47,11 +52,14 @@ class ScrapeContext<T> {
       String method,
       String? body,
       Map<String, String>? fields,
-      bool allowDuplicates,
+      bool revisit,
     })
     follow,
   }) : _emit = emit,
        _follow = follow;
+
+  /// Resolves [href] — a [Uri] or a [String] — against [url], as [follow] does.
+  Uri resolve(Object href) => _resolve(url, href);
 
   /// Emits a typed item [item] to the output stream.
   void emit(T item) {
@@ -72,7 +80,7 @@ class ScrapeContext<T> {
   ///
   /// [target] must be a [Uri] or a [String] href, resolved against this response's URL.
   /// Pass at most one of [body] (a raw request body) and [fields] (form-encoded fields).
-  /// Set [allowDuplicates] to re-request a URL the crawl has already visited.
+  /// Set [revisit] to re-request a URL the crawl has already visited.
   void follow(
     Object target, {
     FutureOr<void> Function(ScrapeContext<T> ctx)? callback,
@@ -81,7 +89,7 @@ class ScrapeContext<T> {
     String method = 'GET',
     String? body,
     Map<String, String>? fields,
-    bool allowDuplicates = false,
+    bool revisit = false,
   }) {
     if (_isClosed) {
       throw StateError('Cannot follow after scrape handler execution has completed.');
@@ -97,7 +105,7 @@ class ScrapeContext<T> {
       method: method,
       body: body,
       fields: fields,
-      allowDuplicates: allowDuplicates,
+      revisit: revisit,
     );
   }
 
@@ -110,7 +118,7 @@ class ScrapeContext<T> {
     String method = 'GET',
     String? body,
     Map<String, String>? fields,
-    bool allowDuplicates = false,
+    bool revisit = false,
   }) {
     for (final target in targets) {
       follow(
@@ -121,7 +129,7 @@ class ScrapeContext<T> {
         method: method,
         body: body,
         fields: fields,
-        allowDuplicates: allowDuplicates,
+        revisit: revisit,
       );
     }
   }
@@ -170,9 +178,9 @@ extension UriScrapeExtensions on Uri {
     int? concurrency,
     Duration? delay,
     http.Client? client,
-    int? maxRetries,
-    CancellationToken? cancelToken,
-  }) => _scrape([http.Request('GET', this)], parse, concurrency, delay, client, maxRetries, cancelToken);
+    int? retries,
+    CancelToken? cancelToken,
+  }) => _scrape([http.Request('GET', this)], parse, concurrency, delay, client, retries, cancelToken);
 }
 
 /// {@category Crawling}
@@ -183,15 +191,15 @@ extension IterableUriScrapeExtensions on Iterable<Uri> {
     int? concurrency,
     Duration? delay,
     http.Client? client,
-    int? maxRetries,
-    CancellationToken? cancelToken,
+    int? retries,
+    CancelToken? cancelToken,
   }) => _scrape(
     [for (final url in this) http.Request('GET', url)],
     parse,
     concurrency,
     delay,
     client,
-    maxRetries,
+    retries,
     cancelToken,
   );
 }
@@ -204,9 +212,9 @@ extension RequestScrapeExtensions on http.BaseRequest {
     int? concurrency,
     Duration? delay,
     http.Client? client,
-    int? maxRetries,
-    CancellationToken? cancelToken,
-  }) => _scrape([this], parse, concurrency, delay, client, maxRetries, cancelToken);
+    int? retries,
+    CancelToken? cancelToken,
+  }) => _scrape([this], parse, concurrency, delay, client, retries, cancelToken);
 }
 
 /// {@category Crawling}
@@ -217,9 +225,9 @@ extension IterableRequestScrapeExtensions on Iterable<http.BaseRequest> {
     int? concurrency,
     Duration? delay,
     http.Client? client,
-    int? maxRetries,
-    CancellationToken? cancelToken,
-  }) => _scrape(this, parse, concurrency, delay, client, maxRetries, cancelToken);
+    int? retries,
+    CancelToken? cancelToken,
+  }) => _scrape(this, parse, concurrency, delay, client, retries, cancelToken);
 }
 
 /// Internal functional scraping engine using standard `package:http`.
@@ -229,22 +237,23 @@ Stream<T> _scrape<T>(
   int? concurrency,
   Duration? delay,
   http.Client? client,
-  int? maxRetries,
-  CancellationToken? cancelToken,
+  int? retries,
+  CancelToken? cancelToken,
 ) {
   final limit = (concurrency ?? 4) > 0 ? (concurrency ?? 4) : 1;
-  final retries = maxRetries ?? 2;
+  final retryLimit = retries ?? 2;
   late final StreamController<T> controller;
-  final httpClient = client ?? http.Client();
+  final lease = clientFor(client);
+  final httpClient = lease.client;
   final visited = <_RequestKey>{};
   final queue = Queue<http.BaseRequest>();
   final active = <Future<void>>{};
   var isStopped = false;
 
   void enqueue(http.BaseRequest req) {
-    final allowDuplicates = _requestAllowDuplicatesExpando[req] ?? false;
+    final revisit = _requestAllowDuplicatesExpando[req] ?? false;
     final key = _makeRequestKey(req);
-    if (!allowDuplicates && !visited.add(key)) return;
+    if (!revisit && !visited.add(key)) return;
     queue.add(req);
   }
 
@@ -254,6 +263,9 @@ Stream<T> _scrape<T>(
 
   void schedule() {
     if (isStopped || controller.isClosed || (cancelToken != null && cancelToken.isCancelled)) return;
+    // A paused consumer stops the crawl: without this the engine runs the whole
+    // frontier to completion and buffers every item in the controller.
+    if (controller.isPaused) return;
 
     while (queue.isNotEmpty && active.length < limit) {
       final req = queue.removeFirst();
@@ -268,7 +280,7 @@ Stream<T> _scrape<T>(
 
           http.Response? rawRes;
           var attempts = 0;
-          while (attempts <= retries &&
+          while (attempts <= retryLimit &&
               rawRes == null &&
               !isStopped &&
               (cancelToken == null || !cancelToken.isCancelled)) {
@@ -277,7 +289,7 @@ Stream<T> _scrape<T>(
               rawRes = await http.Response.fromStream(streamed);
             } catch (err) {
               attempts++;
-              if (attempts > retries) rethrow;
+              if (attempts > retryLimit) rethrow;
               await Future<void>.delayed((200 * attempts).ms);
             }
           }
@@ -290,6 +302,7 @@ Stream<T> _scrape<T>(
             response: rawRes,
             request: req,
             meta: reqMeta,
+            url: rawRes.request?.url ?? req.url,
             emit: (item) {
               if (!controller.isClosed) {
                 controller.add(item);
@@ -304,7 +317,7 @@ Stream<T> _scrape<T>(
                   String method = 'GET',
                   String? body,
                   Map<String, String>? fields,
-                  bool allowDuplicates = false,
+                  bool revisit = false,
                 }) {
                   final baseUri = rawRes?.request?.url ?? req.url;
                   final resolvedUri = _resolve(baseUri, target);
@@ -315,7 +328,7 @@ Stream<T> _scrape<T>(
                   if (headers != null) nextReq.headers.addAll(headers);
                   _requestMetaExpando[nextReq] = {...reqMeta, ...?meta};
                   if (callback != null) _requestCallbackExpando[nextReq] = callback;
-                  if (allowDuplicates) _requestAllowDuplicatesExpando[nextReq] = true;
+                  if (revisit) _requestAllowDuplicatesExpando[nextReq] = true;
                   enqueue(nextReq);
                   schedule();
                 },
@@ -334,7 +347,7 @@ Stream<T> _scrape<T>(
         } finally {
           active.remove(task);
           if (queue.isEmpty && active.isEmpty && !controller.isClosed) {
-            if (client == null) httpClient.close();
+            lease.close();
             controller.close();
           } else {
             schedule();
@@ -345,7 +358,7 @@ Stream<T> _scrape<T>(
     }
 
     if (queue.isEmpty && active.isEmpty && !controller.isClosed) {
-      if (client == null) httpClient.close();
+      lease.close();
       controller.close();
     }
   }
@@ -362,8 +375,9 @@ Stream<T> _scrape<T>(
     },
     onCancel: () {
       isStopped = true;
-      if (client == null) httpClient.close();
+      lease.close();
     },
+    onResume: schedule,
   );
 
   return controller.stream;

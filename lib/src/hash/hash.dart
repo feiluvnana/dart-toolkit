@@ -5,9 +5,26 @@ library;
 
 import 'package:crypto/crypto.dart' as crypto;
 
-/// Cryptographic digests over raw bytes.
+import '../fs/path.dart';
+
+/// Cryptographic digests of a file, streamed.
 ///
-/// Compose with a reader to hash a file: `(await p.readBytes()).sha256`.
+/// {@category Files}
+extension PathHashExtensions on Path {
+  /// The SHA-256 digest of this file, hex encoded.
+  ///
+  /// Reads the file as a stream: memory is constant in its size.
+  Future<String> sha256() async => (await crypto.sha256.bind(asFile.openRead()).first).toString();
+
+  /// The MD5 digest of this file, hex encoded.
+  ///
+  /// Reads the file as a stream: memory is constant in its size.
+  Future<String> md5() async => (await crypto.md5.bind(asFile.openRead()).first).toString();
+}
+
+/// Cryptographic digests over bytes already in memory.
+///
+/// To hash a file use [PathHashExtensions.sha256], which does not load it.
 ///
 /// {@category Files}
 extension BytesHashExtensions on List<int> {

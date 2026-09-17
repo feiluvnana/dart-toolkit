@@ -8,7 +8,7 @@ void main() {
     test(r'run() and run(...) execute system commands and capture stdout', () async {
       final resRun = await run('echo hello_world', quiet: true);
       expect(resRun.ok, isTrue);
-      expect(resRun.isFailed, isFalse);
+      expect(resRun.ok, isTrue);
       expect(resRun.exitCode, equals(0));
       expect(resRun.text, equals('hello_world'));
       expect(resRun.lines, equals(['hello_world']));
@@ -59,8 +59,8 @@ void main() {
     test(r'run(...) returns ShellResult without throwing when throwOnError is false', () async {
       final res = await run('dart --non-existent-flag-xyz', quiet: true, throwOnError: false);
       expect(res.ok, isFalse);
-      expect(res.isFailed, isTrue);
-      expect(res.isFailed, isTrue);
+      expect(res.ok, isFalse);
+      expect(res.ok, isFalse);
       expect(res.exitCode, isNot(equals(0)));
     });
 

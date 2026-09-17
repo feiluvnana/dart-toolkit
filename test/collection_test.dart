@@ -46,22 +46,24 @@ void main() {
 
       final words = ['banana', 'apple', 'pie'];
       expect(words.sortedBy((w) => w.length), equals(['pie', 'apple', 'banana']));
-      expect(words.sortedByDescending((w) => w.length), equals(['banana', 'apple', 'pie']));
+      expect(words.sortedBy((String w) => w.length, desc: true), equals(['banana', 'apple', 'pie']));
     });
 
-    test('sum, average, maxByOrNull, minByOrNull', () {
+    test('sum, average, maxBy, minBy', () {
       final items = [10, 20, 30];
       expect(items.sum(), equals(60));
       expect(items.average(), equals(20.0));
-      expect(items.maxByOrNull((x) => x), equals(30));
-      expect(items.minByOrNull((x) => x), equals(10));
+      expect(items.maxBy((x) => x), equals(30));
+      expect(items.minBy((x) => x), equals(10));
     });
 
-    test('List getOrNull and shuffled', () {
+    test('List elementAtOrNull and shuffled', () {
       final list = ['alpha', 'beta'];
-      expect(list.getOrNull(0), equals('alpha'));
-      expect(list.getOrNull(5), isNull);
-      expect(list.getOrNull(-1), isNull);
+      expect(list.elementAtOrNull(0), equals('alpha'));
+      expect(list.elementAtOrNull(5), isNull);
+      // The SDK member rejects a negative index rather than returning null,
+      // which the deleted `getOrNull` accepted.
+      expect(() => list.elementAtOrNull(-1), throwsRangeError);
       expect(list.shuffled().length, equals(2));
     });
 

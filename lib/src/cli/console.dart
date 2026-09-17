@@ -1,9 +1,40 @@
 import 'dart:async';
 import 'dart:math';
 
+import '../util/progress.dart';
+import '../util/stdio.dart';
 import '../util/time.dart';
 import 'ansi.dart';
-import '../util/stdio.dart';
+
+/// Coalesces redraws so a producer that reports per chunk does not issue a write
+/// per chunk. Shared by [ConsoleProgress] and [ConsoleMultiProgress]; they must not
+/// disagree about how often the terminal is touched.
+class _FrameGate {
+  static const _interval = Duration(milliseconds: 33);
+  DateTime? _last;
+  Timer? _timer;
+
+  void request(void Function() render) {
+    final now = DateTime.now();
+    if (_last == null || now.difference(_last!) >= _interval) {
+      _timer?.cancel();
+      _timer = null;
+      render();
+      _last = now;
+    } else {
+      _timer ??= Timer(_interval, () {
+        _timer = null;
+        render();
+        _last = DateTime.now();
+      });
+    }
+  }
+
+  void stop() {
+    _timer?.cancel();
+    _timer = null;
+  }
+}
 
 /// Progress controller for terminal activity.
 ///
@@ -13,15 +44,17 @@ import '../util/stdio.dart';
 class ConsoleProgress {
   final int total;
   final String message;
-  final int? terminalColumns;
+  final int? columns;
   int _current = 0;
   bool _isDone = false;
   int _lastWidth = 0;
+  final _frames = _FrameGate();
 
-  ConsoleProgress._(this.total, {this.message = '', this.terminalColumns});
+  ConsoleProgress._(this.total, {this.message = '', this.columns});
 
   int get _columns {
-    if (terminalColumns != null && terminalColumns! > 0) return terminalColumns!;
+    final fixed = columns;
+    if (fixed != null && fixed > 0) return fixed;
     try {
       final cols = ConsoleIo.columns;
       if (cols != null) {
@@ -62,19 +95,25 @@ class ConsoleProgress {
   }
 
   /// Advances the progress by [count] and optionally displays [label].
+  ///
+  /// Redraws are coalesced at the same rate as [ConsoleMultiProgress]', so a caller
+  /// may tick per chunk.
   void tick([int count = 1, String? label]) {
     if (_isDone) return;
     _current += count;
+    if (ConsoleIo.isTerminal && Ansi.enabled) {
+      _frames.request(() => _render(label));
+    } else {
+      ConsoleIo.out.writeln(formatLine(label));
+    }
+  }
+
+  void _render(String? label) {
     final maxCols = max(20, _columns - 1);
     final line = formatLine(label);
     final lineWidth = _stringVisualWidth(line);
     final padding = ' ' * max(0, min(_lastWidth - lineWidth, maxCols - lineWidth));
-
-    if (ConsoleIo.isTerminal && Ansi.enabled) {
-      ConsoleIo.out.write('\r\x1b[K${line.dim}$padding');
-    } else {
-      ConsoleIo.out.writeln(line);
-    }
+    ConsoleIo.out.write('\r\x1b[K${line.dim}$padding');
     _lastWidth = lineWidth + padding.length;
   }
 
@@ -82,6 +121,7 @@ class ConsoleProgress {
   void done([String? message]) {
     if (_isDone) return;
     _isDone = true;
+    _frames.stop();
     _lastWidth = 0;
     if (ConsoleIo.isTerminal && Ansi.enabled) {
       ConsoleIo.out.writeln();
@@ -129,24 +169,25 @@ class _ProgressSlot {
 ///
 /// {@category Terminal}
 class ConsoleMultiProgress {
-  final int total;
+  /// Steps in the batch. A stream-sourced batch revises it upward as work is discovered.
+  int total;
   final int slots;
   final String message;
-  final int? terminalColumns;
+  final int? columns;
   int _current = 0;
   bool _isDone = false;
   int _renderedLines = 0;
   final List<_ProgressSlot> _slotList;
   final Map<String, int> _slotByTask = {};
 
-  DateTime? _lastRenderTime;
-  Timer? _renderTimer;
+  final _frames = _FrameGate();
 
-  ConsoleMultiProgress._(this.total, {this.slots = 4, this.message = '', this.terminalColumns})
+  ConsoleMultiProgress._(this.total, {this.slots = 4, this.message = '', this.columns})
     : _slotList = List.generate(slots > 0 ? slots : 1, (_) => _ProgressSlot());
 
   int get _columns {
-    if (terminalColumns != null && terminalColumns! > 0) return terminalColumns!;
+    final fixed = columns;
+    if (fixed != null && fixed > 0) return fixed;
     try {
       final cols = ConsoleIo.columns;
       if (cols != null) {
@@ -249,19 +290,7 @@ class ConsoleMultiProgress {
 
   void _requestRender() {
     if (_isDone) return;
-    final now = DateTime.now();
-    if (_lastRenderTime == null || now.difference(_lastRenderTime!) >= const Duration(milliseconds: 33)) {
-      _renderTimer?.cancel();
-      _renderTimer = null;
-      _render();
-      _lastRenderTime = now;
-    } else {
-      _renderTimer ??= Timer(const Duration(milliseconds: 33), () {
-        _renderTimer = null;
-        _render();
-        _lastRenderTime = DateTime.now();
-      });
-    }
+    _frames.request(_render);
   }
 
   /// Updates progress for a specific concurrent [taskId].
@@ -325,6 +354,25 @@ class ConsoleMultiProgress {
     _requestRender();
   }
 
+  /// Renders one [BatchProgress] update: the overall count, a revised [total], and
+  /// the current task's slot.
+  void report(BatchProgress batch) {
+    if (_isDone) return;
+    final discovered = batch.total;
+    if (discovered != null && discovered > total) total = discovered;
+    final task = batch.current;
+    setCompleted(batch.completed);
+    updateTask(
+      task.taskId,
+      label: task.label,
+      ratio: task.ratio,
+      received: task.received,
+      total: task.total,
+      status: task.status,
+      isDone: task.isDone,
+    );
+  }
+
   /// Advances the overall progress by [count].
   void tick([int count = 1]) {
     if (_isDone) return;
@@ -343,8 +391,7 @@ class ConsoleMultiProgress {
   void done([String? message]) {
     if (_isDone) return;
     _isDone = true;
-    _renderTimer?.cancel();
-    _renderTimer = null;
+    _frames.stop();
 
     if (ConsoleIo.isTerminal && Ansi.enabled && _renderedLines > 0) {
       final buffer = StringBuffer();
@@ -558,7 +605,7 @@ class Console {
   }
 
   /// Renders a formatted text table with borders to standard output.
-  static void table({required List<String> headers, required List<List<dynamic>> rows}) {
+  static void table({required List<String> headers, required List<List<Object?>> rows}) {
     if (headers.isEmpty && rows.isEmpty) return;
 
     final numCols = headers.isNotEmpty ? headers.length : (rows.isNotEmpty ? rows.first.length : 0);
@@ -579,7 +626,7 @@ class Console {
       return '$left${parts.join(cross)}$right';
     }
 
-    String formatRow(List<dynamic> cells) {
+    String formatRow(List<Object?> cells) {
       final parts = <String>[];
       for (var i = 0; i < numCols; i++) {
         final val = i < cells.length ? '${cells[i]}' : '';
@@ -601,12 +648,15 @@ class Console {
   }
 
   /// Creates a single-line progress indicator for [total] steps.
-  static ConsoleProgress progress(int total, {String message = '', int? terminalColumns}) =>
-      ConsoleProgress._(total, message: message, terminalColumns: terminalColumns);
+  static ConsoleProgress progress(int total, {String message = '', int? columns}) =>
+      ConsoleProgress._(total, message: message, columns: columns);
 
-  /// Creates a multi-line concurrent progress indicator for [total] steps across [slots] workers.
-  static ConsoleMultiProgress multiProgress(int total, {int slots = 4, String message = '', int? terminalColumns}) =>
-      ConsoleMultiProgress._(total, slots: slots, message: message, terminalColumns: terminalColumns);
+  /// Creates a multi-line concurrent progress indicator across [slots] workers.
+  ///
+  /// Omit [total] when the work is still being discovered; [ConsoleMultiProgress.report]
+  /// revises it upward as it arrives.
+  static ConsoleMultiProgress multiProgress({int total = 0, int slots = 4, String message = '', int? columns}) =>
+      ConsoleMultiProgress._(total, slots: slots, message: message, columns: columns);
 
   /// Creates an indeterminate animated spinner.
   static ConsoleSpinner spinner(String message) => ConsoleSpinner._(message);

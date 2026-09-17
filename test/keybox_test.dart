@@ -20,11 +20,11 @@ void main() {
 
       final cli = Cli(name: 'keybox', description: 'Key BOX Scraper & Downloader')
         ..choice('format', ['mp3', 'flac', 'all'], abbr: 'f', defaultTo: 'all', description: 'Music format')
-        ..option('concurrency', abbr: 'j', defaultTo: '4', description: 'Concurrent download workers')
+        ..number('concurrency', abbr: 'j', defaultTo: 4, description: 'Concurrent download workers')
         ..flag('compress', abbr: 'c', description: 'Compress directory after download')
         ..action((ctx) {
-          chosenFormat = ctx.option('format', defaultTo: 'all');
-          concurrency = ctx.number('concurrency', defaultTo: 4);
+          chosenFormat = ctx.option('format');
+          concurrency = ctx.number('concurrency');
           shouldCompress = ctx.flag('compress');
         });
 
@@ -52,7 +52,7 @@ void main() {
       ''';
 
       final doc = HtmlDocument.parse(sampleHtml);
-      final discTitle = doc.$('.track_disc_title').first.text.path.sanitized();
+      final discTitle = doc.$('.track_disc_title').first.text.filename;
       final d = int.parse(discTitle.match(RegExp(r'DISC\.(\d+)'), 1)!);
       expect(d, equals(1));
       expect(discTitle.contains('DISC.01'), isTrue);

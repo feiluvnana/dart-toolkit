@@ -28,7 +28,7 @@ class Env {
   }
 
   /// Clears all custom environment variable overrides.
-  static void clearOverrides() {
+  static void clear() {
     _custom.clear();
   }
 
@@ -111,7 +111,7 @@ class Env {
   /// Loads environment variables from the `.env` file at [path].
   ///
   /// Pass [parse] the file's contents instead when the source is not a file.
-  static Map<String, String> loadFile([String path = '.env', bool override = false]) {
+  static Map<String, String> load({String path = '.env', bool override = false}) {
     final file = File(path);
     if (!file.existsSync()) return const {};
     final content = file.readAsStringSync();

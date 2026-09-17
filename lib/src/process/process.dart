@@ -14,39 +14,28 @@ List<String> _splitCommand(String command) {
   var inDouble = false;
   var isEscaped = false;
 
+  const backslash = 0x5c, singleQuote = 0x27, doubleQuote = 0x22, space = 0x20;
+
   for (var i = 0; i < command.length; i++) {
-    final char = command[i];
+    final char = command.codeUnitAt(i);
 
     if (isEscaped) {
-      current.write(char);
+      current.writeCharCode(char);
       isEscaped = false;
-      continue;
-    }
-
-    if (char == r'\') {
+    } else if (char == backslash) {
       isEscaped = true;
-      continue;
-    }
-
-    if (char == "'" && !inDouble) {
+    } else if (char == singleQuote && !inDouble) {
       inSingle = !inSingle;
-      continue;
-    }
-
-    if (char == '"' && !inSingle) {
+    } else if (char == doubleQuote && !inSingle) {
       inDouble = !inDouble;
-      continue;
-    }
-
-    if (char == ' ' && !inSingle && !inDouble) {
+    } else if (char == space && !inSingle && !inDouble) {
       if (current.isNotEmpty) {
         args.add(current.toString());
         current.clear();
       }
-      continue;
+    } else {
+      current.writeCharCode(char);
     }
-
-    current.write(char);
   }
 
   if (current.isNotEmpty) {
@@ -181,13 +170,13 @@ Future<Path?> which(String executable) async {
       ? (Platform.environment['PATHEXT']?.split(';') ?? ['.exe', '.bat', '.cmd'])
       : [''];
 
-  for (final dir in paths) {
-    for (final ext in extensions) {
-      final candidate = Path(dir) / '$executable$ext';
-      if (await candidate.exists()) {
-        return candidate;
-      }
-    }
+  final candidates = [
+    for (final dir in paths)
+      for (final ext in extensions) Path(dir) / '$executable$ext',
+  ];
+  final found = await Future.wait(candidates.map((c) => c.exists()));
+  for (var i = 0; i < candidates.length; i++) {
+    if (found[i]) return candidates[i];
   }
 
   return null;
@@ -360,7 +349,7 @@ extension PathShellExtensions on Path {
 /// Shorthand getters on `Future<ShellResult>` for clean chaining.
 ///
 /// {@category System}
-extension FutureShellResultExtensions on Future<ShellResult> {
+extension FutureShellExtensions on Future<ShellResult> {
   /// The trimmed stdout text of the executed command.
   Future<String> get text => then((r) => r.text);
 

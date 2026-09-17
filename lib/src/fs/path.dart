@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:path/path.dart' as p;
 
 final _invalidPathChars = RegExp(r'[:*?"<>|\r\n\t]');
+final _invalidNameChars = RegExp(r'[/\\:*?"<>|\r\n\t]');
 final _whitespaceCollapse = RegExp(r'\s+');
 
 /// Represents the type of filesystem entity at a [Path].
@@ -133,6 +134,9 @@ extension type const Path(String path) implements String {
   }
 
   /// Returns a sanitized path with invalid filesystem characters removed from components.
+  ///
+  /// Separators survive, because this is a path. For a single component — a scraped
+  /// title that may contain `/` — use [StringPathExtensions.filename].
   Path sanitized() {
     final parts = p.split(path);
     final sanitizedParts = parts.map((part) {
@@ -238,10 +242,7 @@ extension type const Path(String path) implements String {
   Stream<Path> glob(String pattern, {bool? caseSensitive}) async* {
     final matcher = _globToRegex(pattern, caseSensitive: caseSensitive);
     await for (final entity in asDir.list(recursive: true, followLinks: false)) {
-      final rel = p.relative(entity.path, from: path).replaceAll(r'\', '/');
-      if (matcher.hasMatch(rel) || matcher.hasMatch(entity.path.replaceAll(r'\', '/'))) {
-        yield Path(entity.path);
-      }
+      if (matcher.hasMatch(_relative(entity.path))) yield Path(entity.path);
     }
   }
 
@@ -251,14 +252,16 @@ extension type const Path(String path) implements String {
   /// Pass [caseSensitive] to override.
   List<Path> globSync(String pattern, {bool? caseSensitive}) {
     final matcher = _globToRegex(pattern, caseSensitive: caseSensitive);
-    final results = <Path>[];
-    for (final entity in asDir.listSync(recursive: true, followLinks: false)) {
-      final rel = p.relative(entity.path, from: path).replaceAll(r'\', '/');
-      if (matcher.hasMatch(rel) || matcher.hasMatch(entity.path.replaceAll(r'\', '/'))) {
-        results.add(Path(entity.path));
-      }
-    }
-    return results;
+    return [
+      for (final entity in asDir.listSync(recursive: true, followLinks: false))
+        if (matcher.hasMatch(_relative(entity.path))) Path(entity.path),
+    ];
+  }
+
+  /// [child] relative to this directory, with forward slashes, for glob matching.
+  String _relative(String child) {
+    final rel = p.relative(child, from: path);
+    return Platform.isWindows ? rel.replaceAll(r'\', '/') : rel;
   }
 
   /// Creates a directory at this path.
@@ -422,9 +425,24 @@ extension StringPathExtensions on String {
 
   /// Joins this path with [other].
   Path operator /(String other) => Path(this) / other;
+
+  /// This string as a single path component, safe to join with [Path.operator /].
+  ///
+  /// Separators and reserved characters become `_`, whitespace runs collapse, and
+  /// the result is never empty. Use [Path.sanitized] for a whole path, which keeps
+  /// its separators.
+  Path get filename {
+    final cleaned = replaceAll(_invalidNameChars, '_').replaceAll(_whitespaceCollapse, ' ').trim();
+    return Path(cleaned.isEmpty ? '_' : cleaned);
+  }
 }
 
+final _globCache = <(String, bool), RegExp>{};
+
 RegExp _globToRegex(String pattern, {bool? caseSensitive}) {
+  final isSensitive = caseSensitive ?? (!Platform.isWindows && !Platform.isMacOS);
+  final cached = _globCache[(pattern, isSensitive)];
+  if (cached != null) return cached;
   final normalized = pattern.replaceAll(r'\', '/');
   final buffer = StringBuffer('^');
   var i = 0;
@@ -452,6 +470,5 @@ RegExp _globToRegex(String pattern, {bool? caseSensitive}) {
     i++;
   }
   buffer.write(r'$');
-  final isSensitive = caseSensitive ?? (!Platform.isWindows && !Platform.isMacOS);
-  return RegExp(buffer.toString(), caseSensitive: isSensitive);
+  return _globCache[(pattern, isSensitive)] = RegExp(buffer.toString(), caseSensitive: isSensitive);
 }

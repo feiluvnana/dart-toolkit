@@ -56,18 +56,13 @@ extension IterableExtensions<T> on Iterable<T> {
     return list;
   }
 
-  /// Sorts elements by [key] in ascending order.
-  List<T> sortedBy<K extends Comparable<K>>(K Function(T item) key) {
-    final list = toList();
-    list.sort((a, b) => key(a).compareTo(key(b)));
-    return list;
-  }
-
-  /// Sorts elements by [key] in descending order.
-  List<T> sortedByDescending<K extends Comparable<K>>(K Function(T item) key) {
-    final list = toList();
-    list.sort((a, b) => key(b).compareTo(key(a)));
-    return list;
+  /// Sorts elements by [key], descending when [desc] is set.
+  ///
+  /// [key] is evaluated once per element, not once per comparison.
+  List<T> sortedBy<K extends Comparable<K>>(K Function(T item) key, {bool desc = false}) {
+    final decorated = [for (final item in this) (key(item), item)]
+      ..sort((a, b) => desc ? b.$1.compareTo(a.$1) : a.$1.compareTo(b.$1));
+    return [for (final pair in decorated) pair.$2];
   }
 
   /// Sums numeric elements or mapped values.
@@ -90,26 +85,25 @@ extension IterableExtensions<T> on Iterable<T> {
     return count == 0 ? null : total / count;
   }
 
-  /// Returns the item with the largest [key], or `null` if empty.
-  T? maxByOrNull<K extends Comparable<K>>(K Function(T item) key) {
-    final it = iterator;
-    if (!it.moveNext()) return null;
-    var maxItem = it.current;
-    while (it.moveNext()) {
-      if (key(it.current).compareTo(key(maxItem)) > 0) maxItem = it.current;
-    }
-    return maxItem;
-  }
+  /// The item with the largest [key], or `null` when empty.
+  T? maxBy<K extends Comparable<K>>(K Function(T item) key) => _extremeBy(key, 1);
 
-  /// Returns the item with the smallest [key], or `null` if empty.
-  T? minByOrNull<K extends Comparable<K>>(K Function(T item) key) {
+  /// The item with the smallest [key], or `null` when empty.
+  T? minBy<K extends Comparable<K>>(K Function(T item) key) => _extremeBy(key, -1);
+
+  T? _extremeBy<K extends Comparable<K>>(K Function(T item) key, int sign) {
     final it = iterator;
     if (!it.moveNext()) return null;
-    var minItem = it.current;
+    var best = it.current;
+    var bestKey = key(best);
     while (it.moveNext()) {
-      if (key(it.current).compareTo(key(minItem)) < 0) minItem = it.current;
+      final candidateKey = key(it.current);
+      if (candidateKey.compareTo(bestKey) * sign > 0) {
+        best = it.current;
+        bestKey = candidateKey;
+      }
     }
-    return minItem;
+    return best;
   }
 
   /// Pairs elements from this and [other] into records.
@@ -132,9 +126,6 @@ extension IterableExtensions<T> on Iterable<T> {
 
 /// Functional extensions on [List].
 extension ListExtensions<T> on List<T> {
-  /// Returns the element at [index], or `null` if out of bounds.
-  T? getOrNull(int index) => index >= 0 && index < length ? this[index] : null;
-
   /// Returns a shuffled copy of this list.
   List<T> shuffled([Random? random]) => toList()..shuffle(random);
 }
@@ -145,11 +136,7 @@ extension MapExtensions<K, V> on Map<K, V> {
   Map<K, V> mergeWith(Map<K, V> other, V Function(V v1, V v2) resolve) {
     final result = Map<K, V>.from(this);
     for (final entry in other.entries) {
-      if (result.containsKey(entry.key)) {
-        result[entry.key] = resolve(result[entry.key] as V, entry.value);
-      } else {
-        result[entry.key] = entry.value;
-      }
+      result.update(entry.key, (existing) => resolve(existing, entry.value), ifAbsent: () => entry.value);
     }
     return result;
   }

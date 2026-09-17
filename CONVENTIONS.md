@@ -1,7 +1,8 @@
 # API conventions
 
-Rules this package follows, written down so additions do not re-create what
-[AUDIT.md](AUDIT.md) found.
+Rules this package follows, written down so additions do not re-create what three audits found.
+The audits themselves are gone; what they concluded is here, and what changed because of them is
+in [CHANGELOG.md](CHANGELOG.md).
 
 ## One name per operation
 
@@ -9,11 +10,24 @@ No aliases. If two spellings exist, one of them is deleted — not deprecated, n
 ergonomics". The audit found fifteen, and every one was a thing a reader had to learn was the
 same thing.
 
+## A program imports modules, not the barrel
+
+`dart_toolkit.dart` re-exports everything. Under `dart run` the front end compiles the whole
+transitive closure on every invocation, so the barrel costs ~1.4 s per run against ~0.3 s for the
+modules a program actually uses. Narrow imports in `bin/` and `example/` are enforced by
+`tool/check_deps.dart`. The barrel is for tools you `dart compile` once, where tree shaking makes
+it free.
+
+The same rule shapes the modules themselves: `core` has no third-party dependencies, and
+`HtmlDocument` and `XmlDocument` live in `html` and `xml` so that parsing JSON does not load an
+HTML and an XML parser to do it.
+
 ## Extensions are `<Receiver>Extensions`
 
 Receiver first, plural, no module prefix, no `Toolkit`. Where two extensions share a receiver,
 qualify by purpose after the receiver: `StringAnsiExtensions`, `StringShellExtensions`,
-`StringPathExtensions`.
+`StringPathExtensions`. Receiver first even when an adjective reads better —
+`StreamNullableExtensions`, not `NullableStreamExtensions`.
 
 ## A member belongs to the module that owns its dependency
 
@@ -29,6 +43,26 @@ means changing the budget on purpose, in a reviewable diff.
 `Logger`, `Prompt`, `Env`, `Os`, `Ansi`. The dividing line is how often a script types it, not
 what layer it belongs to.
 
+## One query operator per document type, spelled `$`
+
+`HtmlDocument.$` is CSS, `XmlDocument.$` is XPath, `JsonDocument.$` is JSONPath — one query
+language per format, each the one native to it. HTML XPath existed alongside the CSS `$` and was
+145× slower on a 2000-row page and quadratic in document size; it is gone, along with the package
+that supplied it.
+
+## A file operation streams
+
+Hashing, archiving and downloading name the file, not its bytes. `p.sha256()` reads a stream;
+`(await p.readBytes()).sha256` held the whole file, which cost 888 MB of resident memory on a
+512 MB file against 266 MB. Where a whole-file read is unavoidable the API says so.
+
+## A registration returns its unregistration
+
+`onExit` and `CancelToken.onCancel` both return a `void Function()` that undoes them, and
+everything that registers internally calls it when its work finishes. Without that, a long-lived
+token retains every listener it was ever given — measured at 52 MB for 200 000 completed
+`cancelWith` calls.
+
 ## No cross products
 
 Do not add a method because it is the combination of two that already exist. `client.json(uri)`
@@ -39,10 +73,31 @@ An entry point earns its place when the composition cannot reconstruct it. `Resp
 stayed because it copies four fields instead of shipping the request graph across an isolate
 boundary.
 
+## Two modules meet through an interface in `util`
+
+`util` has no dependencies, so every module can see it. A producer and a renderer that must not
+depend on each other — `http`'s `DownloadProgress` and `cli`'s `ConsoleMultiProgress` — meet at
+`TaskProgress`/`BatchProgress` declared there. This is the legal shape for a cross-module seam;
+an import edge between two leaf modules is not, and `tool/check_deps.dart` fails it.
+
+## A component is not a path
+
+`sanitized()` cleans a path and keeps its separators. `filename` turns one string into one
+component and escapes them. Anything that came from outside — a scraped title, a header, user
+input — goes through `filename`.
+
+## `isolate*` extracts, it does not return the document
+
+`res.isolateHtml((d) => d)` copies the whole parsed graph back across the boundary and buys
+nothing over parsing here. Return the data the callback extracted.
+
 ## Illegal states should not be representable
 
 Prefer a sealed type to a set of booleans. `CliOption` is `CliFlag | CliValue | CliNumber |
-CliChoice`, not four orthogonal fields that let `flag: true, numeric: true` compile.
+CliChoice`, not four orthogonal fields that let `flag: true, numeric: true` compile;
+`DownloadProgress` is `Downloading | Downloaded | DownloadSkipped | DownloadFailed`, not three
+booleans and a nullable error. A `required` option cannot also carry a default — the constructor
+asserts it.
 
 Prefer a typed parameter to `Object`. Where a union genuinely cannot be expressed — `follow`
 takes a `Uri` or a relative `String` href — throw `ArgumentError` on anything else rather than
@@ -52,6 +107,17 @@ silently doing nothing.
 
 All of them, including `subcommand`. A chain always configures one object; nesting goes through a
 `build` callback, where the indentation shows it.
+
+## A default is declared once
+
+The declaration owns it: `..number('workers', defaultTo: 4)`. Readers have no `defaultTo`
+parameter, because the parsed values already carry it.
+
+## Deleting beats wrapping when the SDK already has it
+
+`elementAtOrNull` and `nonNulls` ship with Dart; the package's `getOrNull` and `whereNotNull`
+were second names for them and are gone. The one behavioural difference is documented rather than
+re-implemented: `elementAtOrNull` throws on a negative index where `getOrNull` returned `null`.
 
 ## Error policy is chosen at the use site
 
