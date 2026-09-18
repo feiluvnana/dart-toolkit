@@ -11,13 +11,16 @@ void main() async {
 
   // One client for every request inside the session, closed when it returns.
   await Http.session(() async {
-    // A crawl is a chain: limits, then hooks. It is also the stream of what the hooks emit.
-    // follow() stays on news.ycombinator.com by itself; a failed page is a Left, not a crash.
+    // A crawl is a chain of hooks, and the stream of what they emit. Every setting is on
+    // onInit's context; follow() stays on news.ycombinator.com by itself; a failed page is a
+    // Left, not a crash.
     final stories = 'https://news.ycombinator.com'.url
         .scrape<Story>()
-        .concurrency(8)
-        .delay(200.ms)
-        .maxPages(5)
+        .onInit((ctx) {
+          ctx.concurrency = 8;
+          ctx.delay = 200.ms;
+          ctx.maxPages = 5;
+        })
         .onRequest((ctx) => ctx.request.headers['accept-language'] = 'en')
         .onResponse((ctx) {
           final html = ctx.response.html();

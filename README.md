@@ -136,13 +136,15 @@ await for (final item in url.scrape<Item>().onResponse(parse).rights.cancelWith(
 
 ### Scraping
 
-A crawl is a chain: limits, then hooks. The chain is also the stream of what the hooks emit.
+A crawl is a chain of five hooks, and the stream of what they emit.
 
 ```dart
 final stories = url.scrape<Story>()
-    .concurrency(8)
-    .delay(200.ms)
-    .maxPages(50)
+    .onInit((ctx) {
+      ctx.concurrency = 8;
+      ctx.delay = 200.ms;
+      ctx.maxPages = 50;
+    })
     .onRequest((ctx) => ctx.request.headers['accept-language'] = 'en')
     .onResponse((ctx) {
       final html = ctx.response.html();
@@ -159,8 +161,11 @@ final stories = url.scrape<Story>()
 await for (final story in stories.rights) print(story);
 ```
 
-Four hooks, each with the context for its moment:
+Five hooks, each with the context for its moment:
 
+- `onInit` — once, on listen, with every setting: `concurrency`, `perHost`, `delay`, `timeout`,
+  `retries`, `redirects`, `bodyLimit`, `maxPages`, `maxDepth`, `headers`, `userAgent`, `scope`,
+  and `seed()` to add starting points. It may be async — fetch a token, read a config.
 - `onRequest` — before every send. Edit `ctx.request.headers`, or `ctx.skip()`.
 - `onResponse` — every 2xx. `ctx.emit`, `ctx.follow`, `ctx.stop`; `ctx.url` is the page that
   answered, after redirects, and `ctx.depth` and `ctx.pages` say where the crawl is.
@@ -170,14 +175,12 @@ Four hooks, each with the context for its moment:
   leaves the failure a `Left`.
 - `onFinish` — once, with a `ScrapeSummary` of pages, failures, requests, retries, bytes, time.
 
-`follow` stays on the seeds' hosts and drops `mailto:` and `javascript:` by itself; `.scope()`
-widens the rule for the crawl, `offsite: true` for one link. `follow(onResponse:, onError:)`
+`follow` stays on the seeds' hosts and drops `mailto:` and `javascript:` by itself; `ctx.scope`
+in `onInit` widens the rule for the crawl, `offsite: true` for one link. `follow(onResponse:, onError:)`
 overrides the hooks for one request, and `meta:` rides along to it.
 
-Limits: `.concurrency(total, perHost:)`, `.delay()` between requests to one host,
-`.deadline()` per request, `.retries()`, `.redirects()`, `.bodyLimit()`, `.maxPages()`,
-`.maxDepth()`, `.headers()`, `.userAgent()`, `.seed()`. Defaults: 16 in flight, 8 per host,
-30 s, 2 retries, 5 hops, 16 MB, and a host answering 429 or 503 is paused for its `Retry-After`.
+Defaults: 16 in flight, 8 per host, 30 s, 2 retries, 5 hops, 16 MB, and a host answering 429 or
+503 is paused for its `Retry-After`.
 
 A failure is an item, not a stream error — the contract `parallelize` has, on a stream:
 

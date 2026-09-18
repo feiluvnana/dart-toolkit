@@ -163,16 +163,14 @@ converter should not accept `E` — narrow with `mapLeft` afterwards.
 
 ## A crawl is a chain of hooks
 
-`url.scrape<T>()` returns a `Scrape<T>`: a builder whose methods return the receiver, and a
-`Stream<Either<ScrapeFailure, T>>`. Limits are methods (`concurrency`, `delay`, `maxPages`,
-`scope`, …); behaviour is hooks (`onRequest`, `onResponse`, `onError`, `onFinish`), each given
-the context for its moment and nothing else. A bare named parameter on `scrape` is not the
-shape: it would put a limit next to a hook next to a client in one argument list, and a reader
-cannot chain it. The engine defaults are chosen so that a chain with one `onResponse` finishes
-a crawl of one site without taking the site down.
-
-A builder method may not shadow a `Stream` member — `deadline`, not `timeout` — because the
-chain is the stream.
+`url.scrape<T>()` returns a `Scrape<T>`: five hooks whose registration returns the receiver,
+and a `Stream<Either<ScrapeFailure, T>>`. Every setting lives on one object, the `InitContext`
+handed to `onInit`, so a reader finds the whole configuration in one block and the chain stays
+five names long. Behaviour is the other four hooks — `onRequest`, `onResponse`, `onError`,
+`onFinish` — each given the context for its moment and nothing else. A bare named parameter on
+`scrape`, or a builder method per setting, is not the shape: the first cannot chain, the second
+puts twelve limits between a reader and the hooks. The defaults are chosen so that a chain with
+one `onResponse` finishes a crawl of one site without taking the site down.
 
 ## Sync mirrors are allowed only on `fs`
 

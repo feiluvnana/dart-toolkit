@@ -10,23 +10,24 @@ The example crawler, pointed at one site with `follow` on every link, walked thr
 domains, printed each story four times and died on one TLS handshake with no URL in the trace.
 Every one of those was the API's default.
 
-- **`url.scrape<T>()` returns a `Scrape<T>`**: a builder and a `Stream<Either<ScrapeFailure, T>>`
-  in one. Limits chain — `concurrency(total, perHost:)`, `delay`, `deadline`, `retries`,
-  `redirects`, `bodyLimit`, `maxPages`, `maxDepth`, `headers`, `userAgent`, `scope`, `seed` —
-  and hooks chain — `onRequest`, `onResponse`, `onError`, `onFinish`. Nothing is sent until the
-  stream is listened to; configuring it afterwards throws.
+- **`url.scrape<T>()` returns a `Scrape<T>`**: five hooks on a chain and a
+  `Stream<Either<ScrapeFailure, T>>` in one. `onInit` receives every setting on an `InitContext`
+  — `concurrency`, `perHost`, `delay`, `timeout`, `retries`, `redirects`, `bodyLimit`,
+  `maxPages`, `maxDepth`, `headers`, `userAgent`, `scope`, `seed()` — and may be async;
+  `onRequest`, `onResponse`, `onError`, `onFinish` are the behaviour. Nothing is sent until the
+  stream is listened to.
 - **A failure is a `Left`** — `RequestFailed`, `BadStatus` or `HandlerFailed`, each carrying URL,
   request, depth and meta — and the crawl continues. `.rights`, `.lefts` and `.unwrap()` on
   `Stream<Either>` pick the policy, as they do on `parallelize`'s list. Nothing reaches the error
-  channel except a throwing `onFinish`, which is the stream's last event.
-- **Contexts.** `RequestContext` (`request` to edit, `skip()`); `ResponseContext` (`response`,
+  channel except a throwing `onInit` or `onFinish`, which is the stream's only or last event.
+- **Contexts.** `InitContext` (the settings, `seed()`); `RequestContext` (`request` to edit, `skip()`); `ResponseContext` (`response`,
   `url` after redirects, `depth`, `pages`, `meta`, `emit`, `follow`, `stop`); `ErrorContext`
   (`failure` to switch on, `attempt`, `retry(after:)`, `ignore()`, `emit`, `follow`, `stop`);
   `ScrapeSummary` (`pages`, `failures`, `requests`, `retries`, `bytes`, `elapsed`).
   `follow(onResponse:, onError:)` overrides the hooks for one request.
 - **Only a 2xx reaches `onResponse`.** Anything else, after the engine's retries, reaches
   `onError`, and is a `BadStatus` unless the hook says otherwise.
-- **`follow` stays in scope** — the seeds' hosts by default, `.scope()` to widen, `offsite: true`
+- **`follow` stays in scope** — the seeds' hosts by default, `ctx.scope` in `onInit` to widen, `offsite: true`
   for one link — and drops `mailto:`, `javascript:` and `tel:`. A seed that redirects — apex to
   `www.` — moves the crawl's home with it; any other redirect out of scope is a `BadStatus`.
 - **The engine owns the rest:** one queue per host and a ready-host queue, so dispatch is O(1);

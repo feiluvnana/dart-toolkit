@@ -9,6 +9,9 @@ import '../core/either.dart';
 import '../util/time.dart';
 import 'session.dart';
 
+/// Runs once, on listen, before anything is sent; see [InitContext].
+typedef InitHook<T> = FutureOr<void> Function(InitContext<T> ctx);
+
 /// Runs before a request is sent; see [RequestContext].
 typedef RequestHook = FutureOr<void> Function(RequestContext ctx);
 
@@ -123,6 +126,65 @@ final class HandlerFailed extends ScrapeFailure {
 // ---------------------------------------------------------------------------------------------
 // Contexts
 // ---------------------------------------------------------------------------------------------
+
+/// The crawl's settings, all of them, set once in [Scrape.onInit].
+///
+/// Defaults: 16 requests in flight, 8 per host, no delay, 30 s timeout, 2 retries, 5 redirect
+/// hops, a 16 MB body cap, `user-agent: dart-toolkit` unless the session sets one, and a scope
+/// of the seeds' hosts. Changes after the hook returns have no effect.
+///
+/// {@category Crawling}
+final class InitContext<T> {
+  /// Requests in flight overall.
+  int concurrency = 16;
+
+  /// Requests in flight to one host.
+  int perHost = 8;
+
+  /// Minimum gap between two requests to the same host.
+  Duration delay = Duration.zero;
+
+  /// Wait for headers and for each body chunk.
+  Duration timeout = 30.s;
+
+  /// Re-sends after a transport error or a 5xx; never after a TLS failure.
+  int retries = 2;
+
+  /// Redirect hops followed before a request fails.
+  int redirects = 5;
+
+  /// Bytes of body read before a response is abandoned.
+  int bodyLimit = 16 * 1024 * 1024;
+
+  /// Stops the crawl after this many 2xx responses.
+  int? maxPages;
+
+  /// Drops requests deeper than this many hops from a seed.
+  int? maxDepth;
+
+  /// Headers on every request that does not set them itself.
+  final Map<String, String> headers = {};
+
+  /// The `user-agent`, unless a request or the session sets one.
+  String userAgent = 'dart-toolkit';
+
+  /// Which URLs [ResponseContext.follow] may go to. Default: the seeds' hosts.
+  bool Function(Uri url)? scope;
+
+  final List<http.BaseRequest> _seeds;
+  final Map<Uri, Map<String, Object?>> _seedMeta = {};
+
+  InitContext._(this._seeds);
+
+  /// The starting points so far.
+  List<Uri> get seeds => [for (final s in _seeds) s.url];
+
+  /// Adds a starting point.
+  void seed(Uri url, {Map<String, Object?>? meta}) {
+    _seeds.add(http.Request('GET', url));
+    if (meta != null) _seedMeta[url] = meta;
+  }
+}
 
 /// A request about to be sent. Mutate [request] to sign or tag it; [skip] to not send it.
 ///
@@ -370,16 +432,14 @@ final class ScrapeSummary {
 // The chain
 // ---------------------------------------------------------------------------------------------
 
-/// A crawl: configured by chaining, driven by hooks, consumed as a stream.
+/// A crawl: five hooks on a chain, consumed as a stream.
 ///
 /// It is a `Stream<Either<ScrapeFailure, T>>`, so `.rights`, `.lefts`, `.unwrap()`, `.take`
-/// and `.cancelWith` apply. Nothing is sent until it is listened to; configuring it after that
-/// throws [StateError].
+/// and `.cancelWith` apply. Nothing is sent until it is listened to.
 ///
 /// ```dart
 /// final items = url.scrape<Item>()
-///     .concurrency(8)
-///     .maxPages(50)
+///     .onInit((ctx) => ctx..concurrency = 8..maxPages = 50)
 ///     .onResponse((ctx) {
 ///       ctx.emit(parse(ctx.response));
 ///       for (final a in ctx.response.html().$('a.next')) ctx.follow(a.attr('href')!);
@@ -390,130 +450,46 @@ final class ScrapeSummary {
 /// await for (final item in items.rights) { ... }
 /// ```
 ///
-/// Defaults: 16 requests in flight, 8 per host, no delay, 30 s deadline, 2 retries, 5 redirect
-/// hops, a 16 MB body cap, `user-agent: dart-toolkit` unless the session sets one, and a scope
-/// of the seeds' hosts.
-///
 /// {@category Crawling}
 final class Scrape<T> extends StreamView<Either<ScrapeFailure, T>> {
-  final _Config<T> _cfg;
+  final _Hooks<T> _hooks;
 
-  Scrape._(this._cfg, StreamController<Either<ScrapeFailure, T>> controller) : super(controller.stream);
+  Scrape._(this._hooks, StreamController<Either<ScrapeFailure, T>> controller) : super(controller.stream);
 
   factory Scrape._of(Iterable<http.BaseRequest> seeds) {
-    final cfg = _Config<T>(seeds.toList());
+    final hooks = _Hooks<T>(seeds.toList());
     late final StreamController<Either<ScrapeFailure, T>> controller;
-    controller = StreamController(onListen: () => _run(cfg, controller));
-    return Scrape._(cfg, controller);
+    controller = StreamController(onListen: () => _run(hooks, controller));
+    return Scrape._(hooks, controller);
   }
 
-  _Config<T> get _c {
-    if (_cfg.started) throw StateError('Configure a Scrape before listening to it.');
-    return _cfg;
-  }
-
-  // -- limits --
-
-  /// Requests in flight overall, and [perHost] to one host.
-  Scrape<T> concurrency(int total, {int? perHost}) {
-    _c.concurrency = total < 1 ? 1 : total;
-    if (perHost != null) _c.perHost = perHost < 1 ? 1 : perHost;
+  /// Once, on listen, with every setting on an [InitContext]. May be async.
+  Scrape<T> onInit(InitHook<T> hook) {
+    _hooks.onInit = hook;
     return this;
   }
-
-  /// Minimum gap between two requests to the same host.
-  Scrape<T> delay(Duration gap) {
-    _c.delay = gap;
-    return this;
-  }
-
-  /// Per-request wait for headers and for each body chunk. (`timeout` is `Stream.timeout`.)
-  Scrape<T> deadline(Duration limit) {
-    _c.timeout = limit;
-    return this;
-  }
-
-  /// Re-sends after a transport error or a 5xx; never after a TLS failure.
-  Scrape<T> retries(int count) {
-    _c.retries = count < 0 ? 0 : count;
-    return this;
-  }
-
-  /// Redirect hops followed before a request fails.
-  Scrape<T> redirects(int hops) {
-    _c.redirects = hops < 0 ? 0 : hops;
-    return this;
-  }
-
-  /// Bytes of body read before a response is abandoned.
-  Scrape<T> bodyLimit(int bytes) {
-    _c.bodyLimit = bytes;
-    return this;
-  }
-
-  /// Stops the crawl after this many 2xx responses.
-  Scrape<T> maxPages(int count) {
-    _c.maxPages = count;
-    return this;
-  }
-
-  /// Drops requests deeper than this many hops from a seed.
-  Scrape<T> maxDepth(int hops) {
-    _c.maxDepth = hops;
-    return this;
-  }
-
-  // -- requests --
-
-  /// Adds a starting point.
-  Scrape<T> seed(Uri url, {Map<String, Object?>? meta}) {
-    _c.seeds.add(http.Request('GET', url));
-    if (meta != null) _c.seedMeta[url] = meta;
-    return this;
-  }
-
-  /// Headers on every request that does not set them itself.
-  Scrape<T> headers(Map<String, String> defaults) {
-    _c.headers.addAll(defaults);
-    return this;
-  }
-
-  /// The `user-agent`, unless a request or the session sets one.
-  Scrape<T> userAgent(String agent) {
-    _c.userAgent = agent;
-    return this;
-  }
-
-  /// Which URLs [ResponseContext.follow] may go to. Default: the seeds' hosts.
-  Scrape<T> scope(bool Function(Uri url) allow) {
-    _c.scope = allow;
-    return this;
-  }
-
-  // -- hooks --
 
   /// Before every send, retries included.
   Scrape<T> onRequest(RequestHook hook) {
-    _c.onRequest = hook;
+    _hooks.onRequest = hook;
     return this;
   }
 
   /// On every 2xx.
   Scrape<T> onResponse(ResponseHook<T> hook) {
-    _c.onResponse = hook;
+    _hooks.onResponse = hook;
     return this;
   }
 
-  /// When the engine has given up on a request; the failure is a [Left] unless the hook says
-  /// otherwise.
+  /// When the engine has given up on a request; the failure is a [Left] unless the hook acts.
   Scrape<T> onError(ErrorHook<T> hook) {
-    _c.onError = hook;
+    _hooks.onError = hook;
     return this;
   }
 
   /// Once, after the last item. If it throws, the error is the stream's last event.
   Scrape<T> onFinish(FinishHook hook) {
-    _c.onFinish = hook;
+    _hooks.onFinish = hook;
     return this;
   }
 }
@@ -542,28 +518,15 @@ extension IterableRequestScrapeExtensions on Iterable<http.BaseRequest> {
 // Engine
 // ---------------------------------------------------------------------------------------------
 
-final class _Config<T> {
+final class _Hooks<T> {
   final List<http.BaseRequest> seeds;
-  final Map<Uri, Map<String, Object?>> seedMeta = {};
-  int concurrency = 16;
-  int perHost = 8;
-  Duration delay = Duration.zero;
-  Duration timeout = 30.s;
-  int retries = 2;
-  int redirects = 5;
-  int bodyLimit = 16 * 1024 * 1024;
-  int? maxPages;
-  int? maxDepth;
-  final Map<String, String> headers = {};
-  String userAgent = 'dart-toolkit';
-  bool Function(Uri url)? scope;
+  InitHook<T>? onInit;
   RequestHook? onRequest;
   ResponseHook<T>? onResponse;
   ErrorHook<T>? onError;
   FinishHook? onFinish;
-  bool started = false;
 
-  _Config(this.seeds);
+  _Hooks(this.seeds);
 }
 
 /// Identity of a request for deduplication: the values, not a hash of them.
@@ -613,13 +576,25 @@ class _Host<T> {
   Timer? pauseTimer;
 }
 
-void _run<T>(_Config<T> cfg, StreamController<Either<ScrapeFailure, T>> controller) {
-  cfg.started = true;
+Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>> controller) async {
+  final cfg = InitContext<T>._(hooks.seeds);
+  if (hooks.onInit case final init?) {
+    try {
+      await init(cfg);
+    } catch (e, st) {
+      controller.addError(e, st);
+      return controller.close();
+    }
+  }
+  if (cfg.concurrency < 1) cfg.concurrency = 1;
+  if (cfg.perHost < 1) cfg.perHost = 1;
+  if (cfg.retries < 0) cfg.retries = 0;
+  if (cfg.redirects < 0) cfg.redirects = 0;
   final started = DateTime.now();
   final lease = clientFor(null);
   final sessionHasUserAgent = lease.headers?.keys.any((k) => k.toLowerCase() == 'user-agent') ?? false;
 
-  final seedHosts = <String>{for (final s in cfg.seeds) s.url.host.toLowerCase()};
+  final seedHosts = <String>{for (final s in cfg._seeds) s.url.host.toLowerCase()};
   final inScope = cfg.scope ?? (Uri url) => seedHosts.contains(url.host.toLowerCase());
   final visited = <_RequestKey>{};
   final hosts = <String, _Host<T>>{};
@@ -650,7 +625,7 @@ void _run<T>(_Config<T> cfg, StreamController<Either<ScrapeFailure, T>> controll
     }
     lease.close();
     if (controller.isClosed) return;
-    final finish = cfg.onFinish;
+    final finish = hooks.onFinish;
     if (finish == null) return unawaited(controller.close());
     final summary = ScrapeSummary(
       pages: pages,
@@ -767,7 +742,7 @@ void _run<T>(_Config<T> cfg, StreamController<Either<ScrapeFailure, T>> controll
   /// The engine has given up on [item]: the error hook decides, else the failure is a [Left].
   Future<void> fail(_Host<T> host, _Item<T> item, ScrapeFailure failure, StackTrace st) async {
     if (stopped) return;
-    final hook = item.onError ?? cfg.onError;
+    final hook = item.onError ?? hooks.onError;
     if (hook == null) return add(Left(failure, st));
 
     running++;
@@ -867,7 +842,7 @@ void _run<T>(_Config<T> cfg, StreamController<Either<ScrapeFailure, T>> controll
 
   Future<void> handle(_Host<T> host, _Item<T> item, http.BaseRequest sent, http.Response res) async {
     pages++;
-    final hook = item.onResponse ?? cfg.onResponse;
+    final hook = item.onResponse ?? hooks.onResponse;
     if (hook == null) return;
     running++;
     final ctx = ResponseContext<T>._(
@@ -906,7 +881,7 @@ void _run<T>(_Config<T> cfg, StreamController<Either<ScrapeFailure, T>> controll
     }
     if (!sessionHasUserAgent) sent.headers.putIfAbsent('user-agent', () => cfg.userAgent);
 
-    if (cfg.onRequest case final hook? when sent is http.Request) {
+    if (hooks.onRequest case final hook? when sent is http.Request) {
       final ctx = RequestContext._(sent, item.depth, item.attempt, item.meta);
       try {
         await hook(ctx);
@@ -1007,8 +982,8 @@ void _run<T>(_Config<T> cfg, StreamController<Either<ScrapeFailure, T>> controll
     if (inFlight == 0 && queued == 0 && waiting == 0 && running == 0) close();
   };
 
-  for (final seed in cfg.seeds) {
-    enqueue(_Item<T>(seed, meta: cfg.seedMeta[seed.url] ?? const {}));
+  for (final seed in cfg._seeds) {
+    enqueue(_Item<T>(seed, meta: cfg._seedMeta[seed.url] ?? const {}));
   }
 
   controller

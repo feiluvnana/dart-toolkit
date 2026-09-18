@@ -820,7 +820,7 @@ void main() {
           return await ['/flaky', '/gone', '/quiet', '/teapot']
               .map((p) => Uri.parse('https://example.com$p'))
               .scrape<String>()
-              .retries(1)
+              .onInit((c) => c.retries = 1)
               .onResponse((ctx) => ctx.emit(ctx.response.body))
               .onError((ctx) {
                 switch (ctx.failure) {
@@ -881,7 +881,7 @@ void main() {
         final pages = await Http.session(() async {
           return await 'https://example.com/0'.url
               .scrape<int>()
-              .maxPages(3)
+              .onInit((c) => c.maxPages = 3)
               .onResponse((ctx) {
                 ctx.emit(ctx.pages);
                 for (var i = 1; i <= 20; i++) {
@@ -906,8 +906,10 @@ void main() {
         await Http.session(() async {
           await 'https://a.com/0'.url
               .scrape<void>()
-              .maxDepth(1)
-              .scope((u) => u.host == 'a.com' || u.host == 'b.com')
+              .onInit((c) {
+                c.maxDepth = 1;
+                c.scope = (u) => u.host == 'a.com' || u.host == 'b.com';
+              })
               .onResponse((ctx) {
                 ctx.follow('https://b.com/${ctx.depth + 1}');
                 ctx.follow('https://c.com/${ctx.depth + 1}');
@@ -932,7 +934,7 @@ void main() {
             Uri.parse('https://a.com/2'),
             Uri.parse('https://a.com/3'),
             Uri.parse('https://b.com/1'),
-          ].scrape<void>().delay(const Duration(milliseconds: 80)).toList();
+          ].scrape<void>().onInit((c) => c.delay = const Duration(milliseconds: 80)).toList();
         }, client: client);
 
         final a = stamps['a.com']!..sort();
@@ -941,37 +943,51 @@ void main() {
         expect(stamps['b.com']!.single, lessThan(70), reason: 'the other host is not paced by a.com');
       });
 
-      test('seed() adds a start with its own meta; headers() and userAgent() apply to every send', () async {
-        final seen = <String, Map<String, String>>{};
+      test(
+        'onInit may be async; seed() adds a start with its own meta; headers and userAgent apply to every send',
+        () async {
+          final seen = <String, Map<String, String>>{};
+          final client = MockClient((request) async {
+            seen[request.url.path] = request.headers;
+            return http.Response('ok', 200);
+          });
+
+          final metas = await Http.session(() async {
+            return await 'https://example.com/a'.url
+                .scrape<Object?>()
+                .onInit((c) async {
+                  await Future<void>.delayed(Duration.zero); // may be async: fetch a token, read a config
+                  c.seed(Uri.parse('https://example.com/b'), meta: {'tag': 'b'});
+                  c.headers['x-crawl'] = '1';
+                  c.userAgent = 'mine/2';
+                  expect(c.seeds.map((u) => u.path), equals(['/a', '/b']));
+                })
+                .onResponse((ctx) => ctx.emit(ctx.meta['tag']))
+                .rights
+                .toList();
+          }, client: client);
+
+          expect(metas.toSet(), equals({null, 'b'}));
+          expect(seen['/b']!['x-crawl'], equals('1'));
+          expect(seen['/b']!['user-agent'], equals('mine/2'));
+        },
+      );
+
+      test('a Scrape is a Stream; a throwing onInit sends nothing and is the only event', () async {
+        var sent = 0;
         final client = MockClient((request) async {
-          seen[request.url.path] = request.headers;
+          sent++;
           return http.Response('ok', 200);
         });
-
-        final metas = await Http.session(() async {
-          return await 'https://example.com/a'.url
-              .scrape<Object?>()
-              .seed(Uri.parse('https://example.com/b'), meta: {'tag': 'b'})
-              .headers({'x-crawl': '1'})
-              .userAgent('mine/2')
-              .onResponse((ctx) => ctx.emit(ctx.meta['tag']))
-              .rights
-              .toList();
-        }, client: client);
-
-        expect(metas.toSet(), equals({null, 'b'}));
-        expect(seen['/b']!['x-crawl'], equals('1'));
-        expect(seen['/b']!['user-agent'], equals('mine/2'));
-      });
-
-      test('configuring after listen throws; a Scrape is a Stream', () async {
-        final client = MockClient((request) async => http.Response('ok', 200));
         await Http.session(() async {
           final crawl = 'https://example.com/'.url.scrape<void>();
           expect(crawl, isA<Stream<Either<ScrapeFailure, void>>>());
-          await crawl.toList();
-          expect(() => crawl.maxPages(1), throwsStateError);
+          await expectLater(
+            'https://example.com/'.url.scrape<void>().onInit((_) => throw StateError('no token')).toList(),
+            throwsStateError,
+          );
         }, client: client);
+        expect(sent, equals(0));
       });
 
       test('follow(onResponse:, onError:) override the crawl hooks for one request', () async {
