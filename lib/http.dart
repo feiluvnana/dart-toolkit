@@ -20,6 +20,6 @@ import 'util.dart';
 
 part 'src/http/client.dart';
 part 'src/http/download.dart';
-part 'src/http/response.dart';
+part 'src/http/uri.dart';
 part 'src/http/scrape.dart';
 part 'src/http/session.dart';

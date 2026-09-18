@@ -346,10 +346,13 @@ final class _Key {
   _Key(this.parts);
 
   @override
-  bool operator ==(Object other) =>
-      other is _Key &&
-      other.parts.length == parts.length &&
-      [for (var i = 0; i < parts.length; i++) parts[i] == other.parts[i]].every((e) => e);
+  bool operator ==(Object other) {
+    if (other is! _Key || other.parts.length != parts.length) return false;
+    for (var i = 0; i < parts.length; i++) {
+      if (parts[i] != other.parts[i]) return false;
+    }
+    return true;
+  }
 
   @override
   int get hashCode => Object.hashAll(parts);

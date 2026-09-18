@@ -388,7 +388,10 @@ class Sequence<T> extends Iterable<T> {
   bool none(bool Function(T element) test) => !any(test);
 
   @override
-  String toString() => 'Sequence(${_items.take(4).join(', ')}${_items.length > 4 ? ', …' : ''})';
+  String toString() {
+    final head = _items.take(5).toList(); // one pass, so a single-use source is not consumed twice
+    return 'Sequence(${head.take(4).join(', ')}${head.length > 4 ? ', …' : ''})';
+  }
 }
 
 /// A [Sequence] of nested iterables.
