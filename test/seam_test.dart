@@ -196,11 +196,11 @@ void main() {
         Stream<({Uri url, Path path})> queue() async* {
           yield* Stream.fromIterable(artwork.pairs);
           yield* base.resolve('/index').scrape<({Uri url, Path path})>().onResponse((ctx) {
-            for (final a in ctx.response.html().$('a.track')) {
+            for (final a in ctx.response.html.$('a.track')) {
               ctx.follow(
                 a.attr('href')!,
                 onResponse: (song) {
-                  final href = song.response.html().$('a').first.attr('href')!;
+                  final href = song.response.html.$('a').first.attr('href')!;
                   song.emit((url: song.resolve(href), path: dir / 'tracks' / song.url.pathSegments.last));
                 },
               );
@@ -254,7 +254,7 @@ void main() {
           .scrape<String>()
           .onResponse((ctx) {
             ctx.emit(ctx.url.toString());
-            for (final a in ctx.response.html().$('a')) {
+            for (final a in ctx.response.html.$('a')) {
               final href = a.attr('href');
               if (href != null) ctx.follow(href);
             }

@@ -8,10 +8,8 @@ extension StringExtensions on String {
   /// Extracts the first match of [pattern] at [group], or `null`.
   ///
   /// Evaluates [pattern] using standard Dart `Pattern` semantics without coercing non-RegExp strings into regex.
-  String? match(Pattern pattern, [int group = 0]) {
-    final matches = pattern.allMatches(this);
-    if (matches.isEmpty) return null;
-    final m = matches.first;
-    return (m is RegExpMatch) ? (group <= m.groupCount ? m.group(group) : null) : (group == 0 ? m.group(0) : null);
-  }
+  String? match(Pattern pattern, [int group = 0]) => switch (pattern.allMatches(this).firstOrNull) {
+    null => null,
+    final m => group <= m.groupCount ? m.group(group) : null,
+  };
 }

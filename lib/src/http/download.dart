@@ -175,6 +175,7 @@ extension PathDownloadExtensions on Path {
     final lease = clientFor(client);
     final partFile = File('${asFile.path}.part');
     var received = 0;
+    var done = false;
 
     try {
       final request = http.Request('GET', url);
@@ -182,6 +183,9 @@ extension PathDownloadExtensions on Path {
       final streamed = await lease.client.send(request);
 
       if (streamed.statusCode < 200 || streamed.statusCode >= 300) {
+        // Close the body instead of holding the connection until GC.
+        unawaited(streamed.stream.listen(null, cancelOnError: true).cancel().catchError((_) {}));
+        done = true;
         yield DownloadFailed(url, this, HttpException('Download failed with status ${streamed.statusCode}', uri: url));
         return;
       }
@@ -194,9 +198,7 @@ extension PathDownloadExtensions on Path {
 
       try {
         await for (final chunk in streamed.stream) {
-          if (cancelToken != null && cancelToken.isCancelled) {
-            throw CancelledException(cancelToken.reason?.toString() ?? 'Download cancelled');
-          }
+          cancelToken?.throwIfCancelled();
           sink.add(chunk);
           received += chunk.length;
           unflushed += chunk.length;
@@ -217,21 +219,25 @@ extension PathDownloadExtensions on Path {
         throw HttpException('Download incomplete: expected $total bytes but received $received bytes', uri: url);
       }
 
-      if (await asFile.exists()) await asFile.delete();
       await partFile.rename(asFile.path);
-
+      done = true;
       yield Downloaded(url, this, received);
     } catch (e) {
-      if (await partFile.exists()) {
-        try {
-          await partFile.delete();
-        } catch (_) {}
-      }
+      done = true;
+      await _discard(partFile);
       yield DownloadFailed(url, this, e);
     } finally {
+      // A consumer that stops listening leaves through here without the `catch`.
+      if (!done) await _discard(partFile);
       lease.close();
     }
   }
+}
+
+Future<void> _discard(File part) async {
+  try {
+    if (await part.exists()) await part.delete();
+  } catch (_) {}
 }
 
 Stream<BatchDownloadProgress> _batchDownload(

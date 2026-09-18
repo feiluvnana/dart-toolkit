@@ -26,7 +26,7 @@ typedef FinishHook = FutureOr<void> Function(ScrapeSummary summary);
 
 /// Schedules one more request from inside a hook. See [ResponseContext.follow].
 typedef Follow<T> =
-    void Function(
+    bool Function(
       Object target, {
       ResponseHook<T>? onResponse,
       ErrorHook<T>? onError,
@@ -87,10 +87,10 @@ final class RequestFailed extends ScrapeFailure {
 /// A non-2xx response after retries; the body is still on [response].
 ///
 /// {@category Crawling}
-final class BadStatus extends ScrapeFailure {
+final class StatusFailed extends ScrapeFailure {
   final http.Response response;
 
-  const BadStatus({
+  const StatusFailed({
     required super.url,
     required super.request,
     required super.depth,
@@ -108,10 +108,10 @@ final class BadStatus extends ScrapeFailure {
 /// A hook threw. Programmer errors — `follow(42)` — land here too.
 ///
 /// {@category Crawling}
-final class HandlerFailed extends ScrapeFailure {
+final class HookFailed extends ScrapeFailure {
   final Object error;
 
-  const HandlerFailed({
+  const HookFailed({
     required super.url,
     required super.request,
     required super.depth,
@@ -130,8 +130,9 @@ final class HandlerFailed extends ScrapeFailure {
 /// The crawl's settings, all of them, set once in [Scrape.onInit].
 ///
 /// Defaults: 16 requests in flight, 8 per host, no delay, 30 s timeout, 2 retries, 5 redirect
-/// hops, a 16 MB body cap, and a scope of the seeds' hosts. Changes after the hook returns have
-/// no effect. Anything per request — a header, the `user-agent` — is [Scrape.onRequest]'s.
+/// hops, a 16 MB body cap, no page or depth limit, and a scope of the seeds' hosts with or
+/// without `www.`. Changes after the hook returns have no effect. Anything per request — a
+/// header, the `user-agent` — is [Scrape.onRequest]'s.
 ///
 /// {@category Crawling}
 final class InitContext<T> {
@@ -157,12 +158,12 @@ final class InitContext<T> {
   int bodyLimit = 16 * 1024 * 1024;
 
   /// Stops the crawl after this many 2xx responses.
-  int? maxPages;
+  int? pages;
 
   /// Drops requests deeper than this many hops from a seed.
-  int? maxDepth;
+  int? depth;
 
-  /// Which URLs [ResponseContext.follow] may go to. Default: the seeds' hosts.
+  /// Which URLs [ResponseContext.follow] may go to. Default: the seeds' hosts, `www.` or not.
   bool Function(Uri url)? scope;
 
   final List<http.BaseRequest> _seeds;
@@ -175,6 +176,7 @@ final class InitContext<T> {
 
   /// Adds a starting point.
   void seed(Uri url, {Map<String, Object?>? meta}) {
+    url = url.removeFragment();
     _seeds.add(http.Request('GET', url));
     if (meta != null) _seedMeta[url] = meta;
   }
@@ -208,32 +210,111 @@ final class RequestContext {
   void skip() => _skipped = true;
 }
 
+/// What a hook holding a page or a failure can do: [emit], [follow], [stop].
+///
+/// {@category Crawling}
+sealed class HookContext<T> {
+  final void Function(T item) _emit;
+  final Follow<T> _follow;
+  final void Function() _stop;
+  bool _closed = false;
+
+  HookContext._(this._emit, this._follow, this._stop);
+
+  /// The URL this hook is about; [resolve] and [follow] resolve against it.
+  Uri get url;
+
+  /// The request as it was scheduled.
+  http.BaseRequest get request;
+
+  /// Hops from a seed; seeds are 0.
+  int get depth;
+
+  /// Metadata carried from the request that scheduled this one.
+  Map<String, Object?> get meta;
+
+  /// Resolves [href] — a [Uri] or a [String] — against [url], as [follow] does.
+  Uri resolve(Object href) => _resolve(url, href);
+
+  /// Emits [item] on the scrape stream.
+  void emit(T item) {
+    _open('emit');
+    _acted();
+    _emit(item);
+  }
+
+  /// Schedules a request for [target], a [Uri] or a [String] href resolved against [url].
+  ///
+  /// Returns whether it was scheduled. A target outside the crawl's scope, or with a non-http
+  /// scheme, is dropped unless [offsite] is set; so is one already visited unless [revisit] is
+  /// set. Pass at most one of [body] and [fields]. [onResponse] and [onError] override the
+  /// crawl's hooks for this request.
+  bool follow(
+    Object target, {
+    ResponseHook<T>? onResponse,
+    ErrorHook<T>? onError,
+    Map<String, Object?>? meta,
+    Map<String, String>? headers,
+    String method = 'GET',
+    String? body,
+    Map<String, String>? fields,
+    bool revisit = false,
+    bool offsite = false,
+  }) {
+    _open('follow');
+    if (body != null && fields != null) throw ArgumentError('Pass at most one of "body" and "fields".');
+    final scheduled = _follow(
+      target,
+      onResponse: onResponse,
+      onError: onError,
+      meta: meta,
+      headers: headers,
+      method: method,
+      body: body,
+      fields: fields,
+      revisit: revisit,
+      offsite: offsite,
+    );
+    if (scheduled) _acted();
+    return scheduled;
+  }
+
+  /// Ends the crawl: the frontier is dropped and nothing more is sent. Hooks already running
+  /// finish and their emits are delivered; the stream closes when the last one returns.
+  void stop() {
+    _open('stop');
+    _stop();
+  }
+
+  void _acted() {}
+
+  void _open(String what) {
+    if (_closed) throw StateError('Cannot $what after the hook has returned.');
+  }
+}
+
 /// One 2xx response and the controls for the crawl around it.
 ///
 /// {@category Crawling}
-final class ResponseContext<T> {
+final class ResponseContext<T> extends HookContext<T> {
   /// The response; always 2xx.
   final http.Response response;
 
-  /// The request as it was scheduled.
+  @override
   final http.BaseRequest request;
 
-  /// The URL that answered — after redirects. [resolve] and [follow] resolve against it.
+  /// The URL that answered — after redirects.
+  @override
   final Uri url;
 
-  /// Hops from a seed; seeds are 0.
+  @override
   final int depth;
 
   /// Responses handled so far in this crawl, this one included.
   final int pages;
 
-  /// Metadata carried from the request that scheduled this one.
+  @override
   final Map<String, Object?> meta;
-
-  final void Function(T item) _emit;
-  final Follow<T> _follow;
-  final void Function() _stop;
-  bool _closed = false;
 
   ResponseContext._({
     required this.response,
@@ -245,125 +326,33 @@ final class ResponseContext<T> {
     required void Function(T item) emit,
     required Follow<T> follow,
     required void Function() stop,
-  }) : _emit = emit,
-       _follow = follow,
-       _stop = stop;
-
-  /// Resolves [href] — a [Uri] or a [String] — against [url], as [follow] does.
-  Uri resolve(Object href) => _resolve(url, href);
-
-  /// Emits [item] on the scrape stream.
-  void emit(T item) {
-    _open('emit');
-    _emit(item);
-  }
-
-  /// Schedules a request for [target], a [Uri] or a [String] href resolved against [url].
-  ///
-  /// A target outside the crawl's [Scrape.scope], or with a non-http scheme, is dropped unless
-  /// [offsite] is set; so is one already visited unless [revisit] is set. Pass at most one of
-  /// [body] and [fields]. [onResponse] and [onError] override the crawl's hooks for this request.
-  void follow(
-    Object target, {
-    ResponseHook<T>? onResponse,
-    ErrorHook<T>? onError,
-    Map<String, Object?>? meta,
-    Map<String, String>? headers,
-    String method = 'GET',
-    String? body,
-    Map<String, String>? fields,
-    bool revisit = false,
-    bool offsite = false,
-  }) {
-    _open('follow');
-    if (body != null && fields != null) throw ArgumentError('Pass at most one of "body" and "fields".');
-    _follow(
-      target,
-      onResponse: onResponse,
-      onError: onError,
-      meta: meta,
-      headers: headers,
-      method: method,
-      body: body,
-      fields: fields,
-      revisit: revisit,
-      offsite: offsite,
-    );
-  }
-
-  /// Ends the crawl: the frontier is dropped and nothing more is sent. Hooks already running
-  /// finish and their emits are delivered; the stream closes when the last one returns.
-  void stop() {
-    _open('stop');
-    _stop();
-  }
-
-  void _open(String what) {
-    if (_closed) throw StateError('Cannot $what after the hook has returned.');
-  }
+  }) : super._(emit, follow, stop);
 }
 
 /// A request the engine has given up on. Unless the hook acts — [retry], [ignore], [emit] or
-/// [follow] — [failure] goes to the stream as a [Left].
+/// a [follow] that was scheduled — [failure] goes to the stream as a [Left].
 ///
 /// {@category Crawling}
-final class ErrorContext<T> {
+final class ErrorContext<T> extends HookContext<T> {
   /// What went wrong: `switch` on it.
   final ScrapeFailure failure;
 
   /// Requests sent so far for this URL.
   final int attempt;
 
-  final void Function(T item) _emit;
-  final Follow<T> _follow;
   final void Function(Duration after) _retry;
-  final void Function() _stop;
   bool _handled = false;
-  bool _closed = false;
 
-  ErrorContext._(this.failure, this.attempt, this._emit, this._follow, this._retry, this._stop);
+  ErrorContext._(this.failure, this.attempt, super.emit, super.follow, this._retry, super.stop) : super._();
 
+  @override
   Uri get url => failure.url;
+  @override
   http.BaseRequest get request => failure.request;
+  @override
   int get depth => failure.depth;
+  @override
   Map<String, Object?> get meta => failure.meta;
-
-  /// Emits a fallback [item] in place of the page.
-  void emit(T item) {
-    _open('emit');
-    _handled = true;
-    _emit(item);
-  }
-
-  /// Schedules an alternative; the named arguments are those of [ResponseContext.follow].
-  void follow(
-    Object target, {
-    ResponseHook<T>? onResponse,
-    ErrorHook<T>? onError,
-    Map<String, Object?>? meta,
-    Map<String, String>? headers,
-    String method = 'GET',
-    String? body,
-    Map<String, String>? fields,
-    bool revisit = false,
-    bool offsite = false,
-  }) {
-    _open('follow');
-    if (body != null && fields != null) throw ArgumentError('Pass at most one of "body" and "fields".');
-    _handled = true;
-    _follow(
-      target,
-      onResponse: onResponse,
-      onError: onError,
-      meta: meta,
-      headers: headers,
-      method: method,
-      body: body,
-      fields: fields,
-      revisit: revisit,
-      offsite: offsite,
-    );
-  }
 
   /// Sends the request again [after] a wait, past the engine's own retry budget.
   void retry({Duration after = Duration.zero}) {
@@ -378,15 +367,8 @@ final class ErrorContext<T> {
     _handled = true;
   }
 
-  /// Ends the crawl; see [ResponseContext.stop].
-  void stop() {
-    _open('stop');
-    _stop();
-  }
-
-  void _open(String what) {
-    if (_closed) throw StateError('Cannot $what after the hook has returned.');
-  }
+  @override
+  void _acted() => _handled = true;
 }
 
 /// What a crawl did, handed to [Scrape.onFinish].
@@ -405,6 +387,9 @@ final class ScrapeSummary {
   /// Re-sends, by the engine or by [ErrorContext.retry].
   final int retries;
 
+  /// Follows not sent: already visited, out of scope, too deep, or not http(s).
+  final int dropped;
+
   /// Body bytes received.
   final int bytes;
 
@@ -415,12 +400,14 @@ final class ScrapeSummary {
     required this.failures,
     required this.requests,
     required this.retries,
+    required this.dropped,
     required this.bytes,
     required this.elapsed,
   });
 
   @override
-  String toString() => '$pages pages, $failures failures, $requests requests in ${elapsed.inMilliseconds} ms';
+  String toString() =>
+      '$pages pages, $failures failures, $requests requests, $dropped dropped in ${elapsed.inMilliseconds} ms';
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -434,7 +421,7 @@ final class ScrapeSummary {
 ///
 /// ```dart
 /// final items = url.scrape<Item>()
-///     .onInit((ctx) => ctx..concurrency = 8..maxPages = 50)
+///     .onInit((ctx) => ctx..concurrency = 8..pages = 50)
 ///     .onResponse((ctx) {
 ///       ctx.emit(parse(ctx.response));
 ///       for (final a in ctx.response.html().$('a.next')) ctx.follow(a.attr('href')!);
@@ -494,13 +481,13 @@ final class Scrape<T> extends StreamView<Either<ScrapeFailure, T>> {
 /// {@category Crawling}
 extension UriScrapeExtensions on Uri {
   /// A crawl seeded here.
-  Scrape<T> scrape<T>() => Scrape<T>._of([http.Request('GET', this)]);
+  Scrape<T> scrape<T>() => Scrape<T>._of([http.Request('GET', removeFragment())]);
 }
 
 /// {@category Crawling}
 extension IterableUriScrapeExtensions on Iterable<Uri> {
   /// A crawl seeded here.
-  Scrape<T> scrape<T>() => Scrape<T>._of([for (final url in this) http.Request('GET', url)]);
+  Scrape<T> scrape<T>() => Scrape<T>._of([for (final url in this) http.Request('GET', url.removeFragment())]);
 }
 
 /// {@category Crawling}
@@ -531,6 +518,12 @@ const _userAgent = 'dart-toolkit';
 typedef _RequestKey = (String method, Uri url, String body);
 
 _RequestKey _key(http.BaseRequest req) => (req.method.toUpperCase(), req.url, req is http.Request ? req.body : '');
+
+/// Headers that stay behind when a redirect leaves the host.
+const _credential = {'authorization', 'cookie', 'proxy-authorization'};
+
+/// `www.example.com` and `example.com` are one site.
+String _site(String host) => host.startsWith('www.') ? host.substring(4) : host;
 
 /// Failures that will not change on a second attempt.
 bool _certain(Object e) =>
@@ -570,6 +563,7 @@ class _Host<T> {
   int backoffs = 0;
   DateTime nextSend = DateTime.fromMillisecondsSinceEpoch(0);
   bool paused = false;
+  DateTime pausedUntil = DateTime.fromMillisecondsSinceEpoch(0);
   bool ready = false;
   Timer? pauseTimer;
 }
@@ -592,8 +586,8 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
   final lease = clientFor(null);
   final sessionHasUserAgent = lease.headers?.keys.any((k) => k.toLowerCase() == 'user-agent') ?? false;
 
-  final seedHosts = <String>{for (final s in cfg._seeds) s.url.host.toLowerCase()};
-  final inScope = cfg.scope ?? (Uri url) => seedHosts.contains(url.host.toLowerCase());
+  final seedHosts = <String>{for (final s in cfg._seeds) _site(s.url.host)};
+  final inScope = cfg.scope ?? (Uri url) => seedHosts.contains(_site(url.host));
   final visited = <_RequestKey>{};
   final hosts = <String, _Host<T>>{};
   final ready = Queue<_Host<T>>();
@@ -607,6 +601,7 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
   var failures = 0;
   var requests = 0;
   var retries = 0;
+  var dropped = 0;
   var bytes = 0;
   var stopped = false;
   var closed = false;
@@ -630,6 +625,7 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
       failures: failures,
       requests: requests,
       retries: retries,
+      dropped: dropped,
       bytes: bytes,
       elapsed: DateTime.now().difference(started),
     );
@@ -646,7 +642,7 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
 
   late final void Function() dispatch;
 
-  _Host<T> hostOf(Uri url) => hosts.putIfAbsent(url.host.toLowerCase(), _Host<T>.new);
+  _Host<T> hostOf(Uri url) => hosts.putIfAbsent(url.host, _Host<T>.new);
 
   void checkReady(_Host<T> host) {
     if (stopped || host.ready || host.paused || host.queue.isEmpty || host.inFlight >= cfg.perHost) return;
@@ -676,8 +672,12 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
     timers.add(timer);
   }
 
+  /// Holds [host] for [duration], or for the rest of a longer hold already in place.
   void pause(_Host<T> host, Duration duration) {
+    final until = DateTime.now().add(duration);
+    if (host.paused && host.pausedUntil.isAfter(until)) return;
     host.paused = true;
+    host.pausedUntil = until;
     host.pauseTimer?.cancel();
     host.pauseTimer = Timer(duration, () {
       host.pauseTimer = null;
@@ -688,22 +688,36 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
   }
 
   Duration retryAfter(http.Response res, _Host<T> host) {
-    final seconds = int.tryParse(res.headers['retry-after']?.trim() ?? '');
-    if (seconds != null) return Duration(seconds: seconds);
+    final header = res.headers['retry-after']?.trim() ?? '';
+    if (int.tryParse(header) case final seconds?) return Duration(seconds: seconds);
+    if (header.isNotEmpty) {
+      try {
+        final wait = HttpDate.parse(header).difference(DateTime.now());
+        return wait.isNegative ? Duration.zero : wait;
+      } on FormatException {
+        // Not a date either; fall through to the backoff.
+      }
+    }
     final ms = 500 * (1 << host.backoffs.clamp(0, 6));
     host.backoffs++;
     return Duration(milliseconds: ms > 30000 ? 30000 : ms);
   }
 
   /// Schedules [item] unless it is too deep, off-scheme, out of scope, or already visited.
-  void enqueue(_Item<T> item) {
-    if (stopped) return;
-    if (cfg.maxDepth case final max? when item.depth > max) return;
+  bool enqueue(_Item<T> item) {
+    if (stopped) return false;
+    bool drop() {
+      dropped++;
+      return false;
+    }
+
+    if (cfg.depth case final max? when item.depth > max) return drop();
     final url = item.request.url;
-    if (url.scheme != 'http' && url.scheme != 'https') return;
-    if (!item.offsite && !inScope(url)) return;
-    if (!item.revisit && !visited.add(_key(item.request))) return;
+    if (url.scheme != 'http' && url.scheme != 'https') return drop();
+    if (!item.offsite && !inScope(url)) return drop();
+    if (!item.revisit && !visited.add(_key(item.request))) return drop();
     push(hostOf(url), item);
+    return true;
   }
 
   void stop() {
@@ -723,7 +737,7 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
         if (body != null) next.body = body;
         if (fields != null) next.bodyFields = fields;
         if (headers != null) next.headers.addAll(headers);
-        enqueue(
+        final scheduled = enqueue(
           _Item<T>(
             next,
             onResponse: onResponse,
@@ -735,11 +749,17 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
           ),
         );
         dispatch();
+        return scheduled;
       };
 
   /// The engine has given up on [item]: the error hook decides, else the failure is a [Left].
   Future<void> fail(_Host<T> host, _Item<T> item, ScrapeFailure failure, StackTrace st) async {
-    if (stopped) return;
+    if (stopped) {
+      // The crawl is over; a request that failed in flight is not news, a hook that threw is.
+      if (failure is HookFailed) add(Left(failure, st));
+      if (running == 0) close();
+      return;
+    }
     final hook = item.onError ?? hooks.onError;
     if (hook == null) return add(Left(failure, st));
 
@@ -757,10 +777,7 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
       if (!ctx._handled) add(Left(failure, st));
     } catch (e, hookSt) {
       add(
-        Left(
-          HandlerFailed(url: failure.url, request: item.request, depth: item.depth, meta: item.meta, error: e),
-          hookSt,
-        ),
+        Left(HookFailed(url: failure.url, request: item.request, depth: item.depth, meta: item.meta, error: e), hookSt),
       );
     } finally {
       ctx._closed = true;
@@ -778,7 +795,7 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
     attempts: item.attempt,
   );
 
-  BadStatus badStatus(_Item<T> item, http.Response res) => BadStatus(
+  StatusFailed statusFailed(_Item<T> item, http.Response res) => StatusFailed(
     url: res.request?.url ?? item.request.url,
     request: item.request,
     depth: item.depth,
@@ -798,28 +815,32 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
 
   Future<void> redirect(_Host<T> host, _Item<T> item, http.BaseRequest sent, http.Response res) {
     final location = res.headers['location']?.trim();
-    if (location == null || location.isEmpty) return fail(host, item, badStatus(item, res), StackTrace.current);
+    if (location == null || location.isEmpty) return fail(host, item, statusFailed(item, res), StackTrace.current);
     if (item.hops >= cfg.redirects) {
       final e = http.ClientException('Too many redirects', sent.url);
       return fail(host, item, requestFailed(item, sent.url, e), StackTrace.current);
     }
     final target = sent.url.resolve(location);
     if (target.scheme != 'http' && target.scheme != 'https') {
-      return fail(host, item, badStatus(item, res), StackTrace.current);
+      return fail(host, item, statusFailed(item, res), StackTrace.current);
     }
     // A seed that redirects — apex to www — moves the crawl's home with it.
     if (item.depth == 0) {
-      seedHosts.add(target.host.toLowerCase());
+      seedHosts.add(_site(target.host));
     } else if (!item.offsite && !inScope(target)) {
-      return fail(host, item, badStatus(item, res), StackTrace.current);
+      return fail(host, item, statusFailed(item, res), StackTrace.current);
     }
 
     final status = res.statusCode;
     final downgrade =
         status == 303 || ((status == 301 || status == 302) && sent.method != 'GET' && sent.method != 'HEAD');
     final next = http.Request(downgrade ? 'GET' : sent.method, target);
+    final crossHost = target.host != sent.url.host;
     for (final MapEntry(:key, :value) in sent.headers.entries) {
-      if (downgrade && (key.toLowerCase() == 'content-type' || key.toLowerCase() == 'content-length')) continue;
+      final k = key.toLowerCase();
+      if (downgrade && (k == 'content-type' || k == 'content-length')) continue;
+      // Credentials do not follow a redirect to another host, as a browser's would not.
+      if (crossHost && _credential.contains(k)) continue;
       next.headers[key] = value;
     }
     if (!downgrade && sent is http.Request) next.bodyBytes = sent.bodyBytes;
@@ -862,7 +883,7 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
       await fail(
         host,
         item,
-        HandlerFailed(url: sent.url, request: item.request, depth: item.depth, meta: item.meta, error: e),
+        HookFailed(url: sent.url, request: item.request, depth: item.depth, meta: item.meta, error: e),
         st,
       );
       return;
@@ -884,7 +905,7 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
         return fail(
           host,
           item,
-          HandlerFailed(url: sent.url, request: item.request, depth: item.depth, meta: item.meta, error: e),
+          HookFailed(url: sent.url, request: item.request, depth: item.depth, meta: item.meta, error: e),
           st,
         );
       }
@@ -931,24 +952,24 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
         item.attempt++;
         return push(host, item, first: true);
       }
-      return fail(host, item, badStatus(item, res), StackTrace.current);
+      return fail(host, item, statusFailed(item, res), StackTrace.current);
     }
     if (status >= 500) {
       if (item.attempt <= cfg.retries) return requeue(host, item, (200 * item.attempt).ms);
-      return fail(host, item, badStatus(item, res), StackTrace.current);
+      return fail(host, item, statusFailed(item, res), StackTrace.current);
     }
-    if (status < 200 || status >= 300) return fail(host, item, badStatus(item, res), StackTrace.current);
+    if (status < 200 || status >= 300) return fail(host, item, statusFailed(item, res), StackTrace.current);
 
     host.backoffs = 0;
     await handle(host, item, sent, res);
-    if (cfg.maxPages case final max? when pages >= max) stop();
+    if (cfg.pages case final max? when pages >= max) stop();
   }
 
   dispatch = () {
     if (closed || stopped || controller.isPaused) return;
     final now = DateTime.now();
     while (inFlight < cfg.concurrency && ready.isNotEmpty) {
-      if (cfg.maxPages case final max? when pages + inFlight >= max) break;
+      if (cfg.pages case final max? when pages + inFlight >= max) break;
       final host = ready.removeFirst();
       host.ready = false;
       if (host.paused || host.queue.isEmpty || host.inFlight >= cfg.perHost) continue;
@@ -987,9 +1008,10 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
   dispatch();
 }
 
+/// [target] against [base], without its fragment: `/p#a` and `/p#b` are one page.
 Uri _resolve(Uri base, Object target) => switch (target) {
-  Uri() => base.resolveUri(target),
-  String() => base.resolve(target),
+  Uri() => base.resolveUri(target).removeFragment(),
+  String() => base.resolve(target).removeFragment(),
   _ => throw ArgumentError.value(target, 'target', 'Must be a Uri or a String href'),
 };
 

@@ -23,7 +23,7 @@ extension StreamExtensions<T> on Stream<T> {
   /// Batches items collected within each window of [duration].
   ///
   /// A window that collects nothing emits nothing.
-  Stream<List<T>> chunkTime(Duration duration) {
+  Stream<List<T>> chunkEvery(Duration duration) {
     var batch = <T>[];
     Timer? timer;
     return _lift<List<T>>(
@@ -192,6 +192,17 @@ extension StreamExtensions<T> on Stream<T> {
 
     return controller.stream;
   }
+}
+
+/// Combining several streams.
+///
+/// {@category Concurrency}
+extension IterableStreamExtensions<T> on Iterable<Stream<T>> {
+  /// One stream of every item from all of these, as they arrive; done when all are done.
+  ///
+  /// Unlike `yield*` after `yield*`, the sources run at the same time. Errors pass through
+  /// and the stream continues. Cancelling cancels every source.
+  Stream<T> merge() => Stream<Stream<T>>.fromIterable(this).flatMap((s) => s);
 }
 
 /// Nullability filter on streams of nullable items.

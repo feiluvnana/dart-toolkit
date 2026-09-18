@@ -56,12 +56,12 @@ extension IterableExtensions<T> on Iterable<T> {
     return list;
   }
 
-  /// Sorts elements by [key], descending when [desc] is set.
+  /// Sorts elements by [key], largest first when [descending] is set.
   ///
   /// [key] is evaluated once per element, not once per comparison.
-  List<T> sortedBy<K extends Comparable<K>>(K Function(T item) key, {bool desc = false}) {
+  List<T> sortedBy<K extends Comparable<K>>(K Function(T item) key, {bool descending = false}) {
     final decorated = [for (final item in this) (key(item), item)]
-      ..sort((a, b) => desc ? b.$1.compareTo(a.$1) : a.$1.compareTo(b.$1));
+      ..sort((a, b) => descending ? b.$1.compareTo(a.$1) : a.$1.compareTo(b.$1));
     return [for (final pair in decorated) pair.$2];
   }
 

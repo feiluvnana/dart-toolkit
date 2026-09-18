@@ -7,8 +7,8 @@ void main() {
   group('Process & Shell Execution', () {
     test(r'run() and run(...) execute system commands and capture stdout', () async {
       final resRun = await run('echo hello_world', quiet: true);
-      expect(resRun.ok, isTrue);
-      expect(resRun.ok, isTrue);
+      expect(resRun.isOk, isTrue);
+      expect(resRun.isOk, isTrue);
       expect(resRun.exitCode, equals(0));
       expect(resRun.text, equals('hello_world'));
       expect(resRun.lines, equals(['hello_world']));
@@ -20,12 +20,12 @@ void main() {
       // Future<ShellResult> extension getters
       expect(await run('echo direct_text', quiet: true).text, equals('direct_text'));
       expect(await run('echo "line1\nline2"', quiet: true).lines, equals(['line1', 'line2']));
-      expect(await run('echo true', quiet: true).ok, isTrue);
+      expect(await run('echo true', quiet: true).isOk, isTrue);
     });
 
     test('run() and Path.run() execute commands with workdir', () async {
       final res = await run('echo "hello from extension"', quiet: true);
-      expect(res.ok, isTrue);
+      expect(res.isOk, isTrue);
       expect(res.text, equals('hello from extension'));
 
       final temp = Path.temp / 'test_proc_run';
@@ -64,9 +64,9 @@ void main() {
 
     test(r'run(...) returns ShellResult without throwing when throwOnError is false', () async {
       final res = await run('dart --non-existent-flag-xyz', quiet: true, throwOnError: false);
-      expect(res.ok, isFalse);
-      expect(res.ok, isFalse);
-      expect(res.ok, isFalse);
+      expect(res.isOk, isFalse);
+      expect(res.isOk, isFalse);
+      expect(res.isOk, isFalse);
       expect(res.exitCode, isNot(equals(0)));
     });
 
@@ -82,12 +82,12 @@ void main() {
     test('CommandPipeline and pipe operator | pipe stdout between processes', () async {
       if (!Platform.isWindows) {
         final res = await ('echo "alpha\nbeta\ngamma"' | 'grep beta').run(quiet: true);
-        expect(res.ok, isTrue);
+        expect(res.isOk, isTrue);
         expect(res.text, equals('beta'));
 
         // pipefail: an upstream failure is the pipeline's failure.
         final failed = await ('false' | 'cat').run(quiet: true, throwOnError: false);
-        expect(failed.ok, isFalse);
+        expect(failed.isOk, isFalse);
         expect(() => ('false' | 'cat').run(quiet: true), throwsA(isA<ShellException>()));
       }
     });

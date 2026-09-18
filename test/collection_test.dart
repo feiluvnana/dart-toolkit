@@ -46,7 +46,7 @@ void main() {
 
       final words = ['banana', 'apple', 'pie'];
       expect(words.sortedBy((w) => w.length), equals(['pie', 'apple', 'banana']));
-      expect(words.sortedBy((String w) => w.length, desc: true), equals(['banana', 'apple', 'pie']));
+      expect(words.sortedBy((String w) => w.length, descending: true), equals(['banana', 'apple', 'pie']));
     });
 
     test('sum, average, maxBy, minBy', () {

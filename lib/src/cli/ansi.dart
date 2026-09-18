@@ -21,14 +21,19 @@ class Ansi {
   /// captured output is plain, unless an override says otherwise.
   static bool get enabled {
     if (_override != null) return _override!;
+    if (ConsoleIo.isRedirected) return false;
     if (Env.has('NO_COLOR')) return false;
-    if (ConsoleIo.redirected) return false;
+    return _terminal;
+  }
+
+  /// Whether the process's stdout takes escapes: a native call, asked once.
+  static final bool _terminal = () {
     try {
       return stdout.supportsAnsiEscapes;
     } catch (_) {
       return false;
     }
-  }
+  }();
 
   /// Manually override ANSI styling state.
   static set enabled(bool? value) {

@@ -36,7 +36,7 @@ class Stages {
   /// Prints the next stage banner: `[n/total] message`.
   void call(String message) {
     _current++;
-    if (!Logger.enabled(LogLevel.info)) return;
+    if (!Logger.isEnabled(LogLevel.info)) return;
     ConsoleIo.out.writeln('[$_current/$total] $message'.cyan.bold);
   }
 }
@@ -49,7 +49,7 @@ class Logger {
   static LogLevel level = LogLevel.info;
 
   /// Whether [level] currently permits [candidate] to be written.
-  static bool enabled(LogLevel candidate) => candidate.index >= level.index && level != LogLevel.silent;
+  static bool isEnabled(LogLevel candidate) => candidate.index >= level.index && level != LogLevel.silent;
 
   /// Runs [action], sync or async, with logging suppressed, restoring [level] afterwards.
   static Future<T> silenced<T>(FutureOr<T> Function() action) async {
@@ -72,31 +72,31 @@ class Logger {
 
   /// Logs a verbose diagnostic message: `  · message`.
   static void debug(String message) {
-    if (!enabled(LogLevel.debug)) return;
+    if (!isEnabled(LogLevel.debug)) return;
     ConsoleIo.out.writeln('  · $message'.dim);
   }
 
   /// Logs a success message: `  ✓ message`.
   static void ok(String message) {
-    if (!enabled(LogLevel.info)) return;
+    if (!isEnabled(LogLevel.info)) return;
     ConsoleIo.out.writeln('  ✓ $message'.green);
   }
 
   /// Logs an informational message: `  ℹ message`.
   static void info(String message) {
-    if (!enabled(LogLevel.info)) return;
+    if (!isEnabled(LogLevel.info)) return;
     ConsoleIo.out.writeln('  ℹ $message'.cyan);
   }
 
   /// Logs a warning message to standard error: `  ⚠ message`.
   static void warn(String message) {
-    if (!enabled(LogLevel.warn)) return;
+    if (!isEnabled(LogLevel.warn)) return;
     ConsoleIo.err.writeln('  ⚠ $message'.yellow);
   }
 
   /// Logs an error message to standard error: `  ✖ message`.
   static void error(String message) {
-    if (!enabled(LogLevel.error)) return;
+    if (!isEnabled(LogLevel.error)) return;
     ConsoleIo.err.writeln('  ✖ $message'.red);
   }
 }

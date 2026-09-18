@@ -19,7 +19,7 @@ class ShellResult {
   final String stderr;
 
   /// Whether the process exited successfully with code 0.
-  bool get ok => exitCode == 0;
+  bool get isOk => exitCode == 0;
 
   /// Concise trimmed stdout text.
   String get text => stdout.trim();

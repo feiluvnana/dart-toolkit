@@ -318,7 +318,7 @@ class ConsoleSpinner {
       _timer = Timer.periodic(const Duration(milliseconds: 80), (_) {
         if (_isDone) return;
         final frame = _frames[_frameIndex++ % _frames.length];
-        ConsoleIo.out.write('\r\x1b[K${frame.cyan} $message (${_stopwatch.elapsed.humanize().dim})');
+        ConsoleIo.out.write('\r\x1b[K${frame.cyan} $message (${_stopwatch.elapsed.humanized.dim})');
       });
     } else {
       ConsoleIo.out.writeln('  ⠋ $message...');
@@ -328,19 +328,19 @@ class ConsoleSpinner {
   /// Stops the spinner with a success message.
   void succeed([String? successMessage]) {
     _stop();
-    ConsoleIo.out.writeln('  ✓ ${successMessage ?? message} (${_stopwatch.elapsed.humanize().dim})'.green);
+    ConsoleIo.out.writeln('  ✓ ${successMessage ?? message} (${_stopwatch.elapsed.humanized.dim})'.green);
   }
 
   /// Stops the spinner with a failure message.
   void fail([String? errorMessage]) {
     _stop();
-    ConsoleIo.err.writeln('  ✖ ${errorMessage ?? message} (${_stopwatch.elapsed.humanize()})'.red);
+    ConsoleIo.err.writeln('  ✖ ${errorMessage ?? message} (${_stopwatch.elapsed.humanized})'.red);
   }
 
   /// Stops the spinner with a neutral message.
   void stop([String? finalMessage]) {
     _stop();
-    ConsoleIo.out.writeln('  ℹ ${finalMessage ?? message} (${_stopwatch.elapsed.humanize()})'.cyan);
+    ConsoleIo.out.writeln('  ℹ ${finalMessage ?? message} (${_stopwatch.elapsed.humanized})'.cyan);
   }
 
   void _stop() {
@@ -352,19 +352,14 @@ class ConsoleSpinner {
     if (_interactive()) ConsoleIo.out.write('\r\x1b[K');
   }
 
-  static Future<T> _run<T>(
-    String message,
-    FutureOr<T> Function() action, {
-    String? successMessage,
-    String? failMessage,
-  }) async {
+  static Future<T> _run<T>(String message, FutureOr<T> Function() action, {String? done, String? failed}) async {
     final spinner = ConsoleSpinner._(message)..start();
     try {
       final result = await action();
-      spinner.succeed(successMessage);
+      spinner.succeed(done);
       return result;
     } catch (e) {
-      spinner.fail(failMessage ?? '$message failed: $e');
+      spinner.fail(failed ?? '$message failed: $e');
       rethrow;
     }
   }
@@ -501,11 +496,34 @@ class Console {
   /// Creates an indeterminate animated spinner.
   static ConsoleSpinner spinner(String message) => ConsoleSpinner._(message);
 
-  /// Executes [action] while displaying an animated spinner with [message].
-  static Future<T> spin<T>(
-    String message,
-    FutureOr<T> Function() action, {
-    String? successMessage,
-    String? failMessage,
-  }) => ConsoleSpinner._run(message, action, successMessage: successMessage, failMessage: failMessage);
+  /// Runs [action] behind a spinner; [done] and [failed] replace [message] on the final line.
+  static Future<T> spin<T>(String message, FutureOr<T> Function() action, {String? done, String? failed}) =>
+      ConsoleSpinner._run(message, action, done: done, failed: failed);
+}
+
+/// Rendering a batch as it runs.
+///
+/// {@category Terminal}
+extension StreamBatchProgressExtensions<T extends BatchProgress> on Stream<T> {
+  /// Draws this batch in a [ConsoleMultiProgress] until it ends, then prints [done].
+  ///
+  /// Returns the last event, or `null` for an empty batch.
+  ///
+  /// ```dart
+  /// final last = await pairs.downloadAll(concurrency: 4).show(slots: 4, message: 'Downloading');
+  /// ```
+  Future<T?> show({int slots = 4, String message = '', String? done, int? columns}) async {
+    final progress = Console.multiProgress(slots: slots, message: message, columns: columns);
+    T? last;
+    var failed = true;
+    try {
+      await for (final p in this) {
+        progress.report(last = p);
+      }
+      failed = false;
+    } finally {
+      progress.done(failed ? null : done);
+    }
+    return last;
+  }
 }

@@ -19,15 +19,14 @@ void main() async {
         .onInit((ctx) {
           ctx.concurrency = 8;
           ctx.delay = 200.ms;
-          ctx.maxPages = 5;
+          ctx.pages = 5;
         })
         .onRequest((ctx) => ctx.request.headers['accept-language'] = 'en')
         .onResponse((ctx) {
-          final html = ctx.response.html();
+          final html = ctx.response.html;
           for (final row in html.$('tr.athing')) {
-            if (row.$('.titleline > a').firstOrNull case final a?) {
-              ctx.emit((title: a.text, link: ctx.resolve(a.attr('href')!)));
-            }
+            final a = row.$('.titleline > a');
+            if (a.attr('href') case final href?) ctx.emit((title: a.text, link: ctx.resolve(href)));
           }
           for (final a in html.$('a[href]')) {
             ctx.follow(a.attr('href')!);

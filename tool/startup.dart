@@ -5,6 +5,9 @@
 //   dart run tool/startup.dart http html  # a subset
 //
 // Timings drift by tens of milliseconds between runs; read the deltas, not the totals.
+//
+// This measures `dart run file.dart`. A package executable — `dart run dart_toolkit:keybox` —
+// goes through pub's incremental snapshot and pays none of this after the first run.
 import 'dart:io';
 
 const modules = [

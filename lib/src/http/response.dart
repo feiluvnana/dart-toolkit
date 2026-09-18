@@ -45,14 +45,14 @@ extension ResponseExtensions on http.Response {
   /// `package:http` re-decodes `bodyBytes` on every `body` access; this does not.
   String get text => _bodyMemo[this] ??= body;
 
-  /// Parses the response body as JSON (memoized per response instance).
-  JsonDocument json() => _jsonMemo[this] ??= JsonDocument.parse(text);
+  /// The body parsed as JSON, once per response instance.
+  JsonDocument get json => _jsonMemo[this] ??= JsonDocument.parse(text);
 
   /// The request URL of this response.
   Uri? get url => request?.url;
 
   /// Whether the status code is 2xx.
-  bool get ok => statusCode >= 200 && statusCode < 300;
+  bool get isOk => statusCode >= 200 && statusCode < 300;
 }
 
 /// HTTP requests and JSON on [Uri].
@@ -88,7 +88,7 @@ extension UriExtensions on Uri {
   /// Fetches this URI and parses the response body as JSON.
   ///
   /// Throws [HttpException] unless the status is 2xx. Use [get] with
-  /// [ResponseExtensions.ok] to handle a failure yourself.
+  /// [ResponseExtensions.isOk] to handle a failure yourself.
   Future<JsonDocument> json({Map<String, String>? headers, http.Client? client}) async =>
-      (await fetchOk(this, headers, client)).json();
+      (await fetchOk(this, headers, client)).json;
 }

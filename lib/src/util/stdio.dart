@@ -13,22 +13,32 @@ class ConsoleIo {
   static String? Function()? input;
 
   /// The active standard output sink. Assign to redirect it; assign `null` to restore.
-  static StringSink get out => _out ?? stdout;
+  static StringSink get out => _out ?? _stdout;
   static set out(StringSink? sink) => _out = sink;
 
   /// The active standard error sink. Assign to redirect it; assign `null` to restore.
-  static StringSink get err => _err ?? stderr;
+  static StringSink get err => _err ?? _stderr;
   static set err(StringSink? sink) => _err = sink;
 
+  /// The process sinks with a closed pipe made harmless: `app --help | head` ends the
+  /// reader early, and without this the write that follows is an unhandled `Broken pipe`.
+  static final IOSink _stdout = _quiet(stdout);
+  static final IOSink _stderr = _quiet(stderr);
+
+  static IOSink _quiet(IOSink sink) {
+    sink.done.catchError((_) {});
+    return sink;
+  }
+
   /// Whether output is going somewhere other than the process's own stdout.
-  static bool get redirected => _out != null;
+  static bool get isRedirected => _out != null;
 
   /// Whether the *active* output sink is an interactive terminal.
   ///
   /// Redirecting [out] must also redirect the decision about what to render, so
   /// every cursor-control path gates on this rather than on `stdout.hasTerminal`.
   static bool get isTerminal {
-    if (redirected) return false;
+    if (isRedirected) return false;
     try {
       return stdout.hasTerminal;
     } catch (_) {

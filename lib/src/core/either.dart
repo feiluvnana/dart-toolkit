@@ -50,21 +50,21 @@ sealed class Either<L, R> {
     Left<L, R>(:final value, :final trace) => Error.throwWithStackTrace(_throwable(value), trace ?? StackTrace.current),
   };
 
-  /// Runs [action], capturing anything it throws as a [Left].
+  /// Runs [action], sync or async, capturing anything it throws as a [Left].
   ///
   /// Narrow the failure type afterwards with [mapLeft].
-  static Either<Object, T> tryCatch<T>(T Function() action) {
+  static Future<Either<Object, T>> tryCatch<T>(FutureOr<T> Function() action) async {
     try {
-      return Right(action());
+      return Right(await action());
     } catch (error, trace) {
       return Left(error, trace);
     }
   }
 
-  /// Runs [action], capturing anything it throws as a [Left]. Accepts sync or async.
-  static Future<Either<Object, T>> tryCatchAsync<T>(FutureOr<T> Function() action) async {
+  /// Runs [action], capturing anything it throws as a [Left], without an `await`.
+  static Either<Object, T> tryCatchSync<T>(T Function() action) {
     try {
-      return Right(await action());
+      return Right(action());
     } catch (error, trace) {
       return Left(error, trace);
     }

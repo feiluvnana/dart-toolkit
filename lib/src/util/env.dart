@@ -22,8 +22,11 @@ class Env {
     _custom.remove(key);
   }
 
-  /// Clears all custom environment variable overrides.
-  static void clear() {
+  /// Whether any override has been set, loaded or parsed.
+  static bool get hasOverrides => _custom.isNotEmpty;
+
+  /// Drops every override; the process environment is untouched.
+  static void reset() {
     _custom.clear();
   }
 

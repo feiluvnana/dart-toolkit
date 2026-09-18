@@ -1,8 +1,22 @@
 import 'dart:async';
 
+import '../async/cancellation_token.dart';
 import '../util/stdio.dart';
 import 'ansi.dart';
 import 'lifecycle.dart';
+
+/// A command line the program cannot act on: an unknown option, a bad value, a missing
+/// required option. [Cli.run] prints it and exits 64; [CliCommand.run] throws it.
+///
+/// {@category CLI}
+final class UsageException implements Exception {
+  final String message;
+
+  const UsageException(this.message);
+
+  @override
+  String toString() => message;
+}
 
 /// Callback action executed when a CLI command is triggered.
 typedef CommandHandler = FutureOr<void> Function(CliContext ctx);
@@ -30,7 +44,7 @@ sealed class CliOption {
   String? get defaultLabel;
 
   /// Whether parsing fails when this option is absent. Never true for a [CliFlag].
-  bool get required;
+  bool get isRequired;
 }
 
 /// A boolean option. Present means true; it never consumes a value.
@@ -44,7 +58,7 @@ final class CliFlag extends CliOption {
 
   /// Always false: an absent flag is simply false.
   @override
-  bool get required => false;
+  bool get isRequired => false;
 }
 
 /// An option taking an arbitrary string value.
@@ -55,10 +69,11 @@ final class CliValue extends CliOption {
   final String? defaultTo;
 
   @override
-  final bool required;
+  final bool isRequired;
 
-  const CliValue(super.name, {super.description, super.abbr, this.defaultTo, this.required = false})
-    : assert(!(required && defaultTo != null), 'A required option cannot also have a default.');
+  const CliValue(super.name, {super.description, super.abbr, this.defaultTo, bool required = false})
+    : isRequired = required,
+      assert(!(required && defaultTo != null), 'A required option cannot also have a default.');
 
   @override
   String? get defaultLabel => defaultTo;
@@ -72,10 +87,11 @@ final class CliNumber extends CliOption {
   final int? defaultTo;
 
   @override
-  final bool required;
+  final bool isRequired;
 
-  const CliNumber(super.name, {super.description, super.abbr, this.defaultTo, this.required = false})
-    : assert(!(required && defaultTo != null), 'A required option cannot also have a default.');
+  const CliNumber(super.name, {super.description, super.abbr, this.defaultTo, bool required = false})
+    : isRequired = required,
+      assert(!(required && defaultTo != null), 'A required option cannot also have a default.');
 
   @override
   String? get defaultLabel => defaultTo?.toString();
@@ -92,10 +108,11 @@ final class CliChoice extends CliOption {
   final String? defaultTo;
 
   @override
-  final bool required;
+  final bool isRequired;
 
-  const CliChoice(super.name, this.choices, {super.description, super.abbr, this.defaultTo, this.required = false})
-    : assert(!(required && defaultTo != null), 'A required option cannot also have a default.');
+  const CliChoice(super.name, this.choices, {super.description, super.abbr, this.defaultTo, bool required = false})
+    : isRequired = required,
+      assert(!(required && defaultTo != null), 'A required option cannot also have a default.');
 
   @override
   String? get defaultLabel => defaultTo;
@@ -117,7 +134,12 @@ class CliContext {
   /// The command that was dispatched.
   final CliCommand command;
 
-  CliContext(this.rest, this.values, this.flags, this.command);
+  /// Cancelled on SIGINT, SIGTERM and [die], before the other exit hooks run. Pass it to
+  /// `downloadAll`, `parallelize`, `cancelWith`; a script needs no token of its own.
+  final CancelToken cancel;
+
+  CliContext(this.rest, this.values, this.flags, this.command, {CancelToken? cancel})
+    : cancel = cancel ?? CancelToken();
 
   /// Whether [name] was set.
   bool flag(String name) => flags.contains(name);
@@ -243,7 +265,7 @@ class CliCommand {
         }
         final fallback = option.defaultLabel;
         if (fallback != null) desc = '$desc [default: $fallback]';
-        if (option.required) desc = '$desc [required]';
+        if (option.isRequired) desc = '$desc [required]';
         ConsoleIo.out.writeln('  ${prefix.padRight(20)} $desc');
       }
     }
@@ -255,11 +277,11 @@ class CliCommand {
   /// Parses [args] and runs this command, or a matching subcommand.
   ///
   /// Options may precede the subcommand (`app -v fetch`); short flags combine (`-vd`)
-  /// and a short option may attach its value (`-j4`). Usage errors throw [ArgumentError];
+  /// and a short option may attach its value (`-j4`). Usage errors throw [UsageException];
   /// [Cli.run] turns them into a message and exit code 64.
-  Future<void> run(List<String> args) => _run(args, {}, {});
+  Future<void> run(List<String> args) => _run(args, {}, {}, CancelToken());
 
-  Future<void> _run(List<String> args, Map<String, Object?> values, Set<String> flags) async {
+  Future<void> _run(List<String> args, Map<String, Object?> values, Set<String> flags, CancelToken cancel) async {
     final rest = <String>[];
     final ownsHelp = findOption('help') != null || findAbbr('h') != null;
 
@@ -270,12 +292,12 @@ class CliCommand {
         case CliNumber():
           final value = int.tryParse(raw);
           if (value == null) {
-            throw ArgumentError('Invalid numeric value "$raw" for option "${option.name}". Expected an integer.');
+            throw UsageException('Invalid numeric value "$raw" for option "${option.name}". Expected an integer.');
           }
           values[option.name] = value;
         case CliChoice(:final choices):
           if (!choices.contains(raw)) {
-            throw ArgumentError(
+            throw UsageException(
               'Invalid value "$raw" for option "${option.name}". Allowed choices: ${choices.join(', ')}',
             );
           }
@@ -296,7 +318,7 @@ class CliCommand {
       if (!isLong && (!arg.startsWith('-') || arg.length <= 1)) {
         // The first positional naming a subcommand dispatches to it, carrying what is parsed so far.
         if (rest.isEmpty && subcommands.containsKey(arg)) {
-          return subcommands[arg]!._run(args.sublist(i + 1), values, flags);
+          return subcommands[arg]!._run(args.sublist(i + 1), values, flags, cancel);
         }
         rest.add(arg);
         continue;
@@ -317,7 +339,7 @@ class CliCommand {
         // `-vd` is two flags; `-j4` is `-j 4`; `-vj4` is both.
         for (var k = 0; k < key.length; k++) {
           final each = findAbbr(key[k]);
-          if (each == null) throw ArgumentError('Unknown option in "-$key": -${key[k]}');
+          if (each == null) throw UsageException('Unknown option in "-$key": -${key[k]}');
           if (each is CliFlag) {
             flags.add(each.name);
             continue;
@@ -328,13 +350,13 @@ class CliCommand {
           } else if (i + 1 < args.length) {
             assign(each, args[++i]);
           } else {
-            throw ArgumentError('Option "-${key[k]}" requires a value.');
+            throw UsageException('Option "-${key[k]}" requires a value.');
           }
           break;
         }
         continue;
       }
-      if (option == null) throw ArgumentError('Unknown option: ${isLong ? '--' : '-'}$key');
+      if (option == null) throw UsageException('Unknown option: ${isLong ? '--' : '-'}$key');
 
       if (option is CliFlag) {
         flags.add(option.name);
@@ -343,7 +365,7 @@ class CliCommand {
       } else if (i + 1 < args.length) {
         assign(option, args[++i]);
       } else {
-        throw ArgumentError('Option "${isLong ? '--' : '-'}$key" requires a value.');
+        throw UsageException('Option "${isLong ? '--' : '-'}$key" requires a value.');
       }
     }
 
@@ -357,14 +379,14 @@ class CliCommand {
           CliFlag() => null,
         };
         if (fallback != null) values.putIfAbsent(option.name, () => fallback);
-        if (option.required && !values.containsKey(option.name)) {
-          throw ArgumentError('Missing required option "--${option.name}".');
+        if (option.isRequired && !values.containsKey(option.name)) {
+          throw UsageException('Missing required option "--${option.name}".');
         }
       }
     }
 
     if (handler != null) {
-      await handler!(CliContext(rest, values, flags, this));
+      await handler!(CliContext(rest, values, flags, this, cancel: cancel));
     } else {
       printUsage();
     }
@@ -378,18 +400,22 @@ class Cli extends CliCommand {
   Cli({String name = 'app', String description = ''}) : super(name, description: description);
 
   /// Parses [args], runs the matching command, then runs the exit hooks and releases
-  /// the signal handlers so the process can end.
+  /// the signal handlers so the process can end — whether the action returned or threw.
   ///
   /// A usage error — unknown option, bad choice, missing required option — is printed
   /// to stderr and exits with code 64. [CliCommand.run] throws instead; use it to test.
+  /// `ctx.cancel` is cancelled first on a signal, on [die], and when the action ends.
   @override
   Future<void> run(List<String> args) async {
+    final cancel = CancelToken();
+    onExit(cancel.cancel);
     try {
-      await super.run(args);
-    } on ArgumentError catch (e) {
+      await _run(args, {}, {}, cancel);
+    } on UsageException catch (e) {
       await die('${e.message}\n  Run "$name --help" for usage.', exitCode: 64);
+    } finally {
+      await runExitHooks();
+      clearExitHooks();
     }
-    await runExitHooks();
-    clearExitHooks();
   }
 }

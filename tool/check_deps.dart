@@ -14,7 +14,7 @@ const budgets = <String, Set<String>>{
   'core': {},
   'fs': {'path'},
   'hash': {'crypto', 'path'},
-  'html': {'html', 'http'},
+  'html': {'http'},
   'http': {'http', 'path'},
   'process': {'path'},
   'util': {},

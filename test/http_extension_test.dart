@@ -25,7 +25,7 @@ class _CountingClient extends http.BaseClient {
 
 void main() {
   group('HTTP Extension & Crawler', () {
-    test('res.html() parses HTML with CSS selectors and memoizes parsed doc', () {
+    test('res.html parses HTML with CSS selectors and memoizes parsed doc', () {
       final res = http.Response('''
         <!DOCTYPE html>
         <html>
@@ -40,10 +40,10 @@ void main() {
         </html>
         ''', 200);
 
-      final html = res.html();
+      final html = res.html;
       expect(html, isA<HtmlDocument>());
-      expect(identical(res.html(), html), isTrue); // Memoized per response instance
-      expect(html.document.querySelector('h1')?.text, equals('Heading 1'));
+      expect(identical(res.html, html), isTrue); // Memoized per response instance
+      expect(html.$('h1').text, equals('Heading 1'));
 
       // CSS selector query
       final h1 = html.$('h1');
@@ -59,7 +59,7 @@ void main() {
       expect(listItems.map((e) => e.text).toList(), equals(['Item 1', 'Item 2']));
     });
 
-    test('res.xml() parses XML with XPath selector', () {
+    test('res.xml parses XML with XPath selector', () {
       final res = http.Response('''
         <bookstore>
           <book category="fiction">
@@ -73,9 +73,9 @@ void main() {
         </bookstore>
         ''', 200);
 
-      final xml = res.xml();
+      final xml = res.xml;
       expect(xml, isA<XmlDocument>());
-      expect(identical(res.xml(), xml), isTrue);
+      expect(identical(res.xml, xml), isTrue);
       expect(xml.raw.rootElement.name.local, equals('bookstore'));
 
       // XPath selector query
@@ -88,7 +88,7 @@ void main() {
       expect((learningTitles.first as xml_dom.XmlElement).innerText, equals('Learning XML'));
     });
 
-    test('res.json() parses JSON with JSONPath selector and memoizes parsed doc', () {
+    test('res.json parses JSON with JSONPath selector and memoizes parsed doc', () {
       final res = http.Response('''
         {
           "store": {
@@ -114,9 +114,9 @@ void main() {
         }
         ''', 200);
 
-      final json = res.json();
+      final json = res.json;
       expect(json, isA<JsonDocument>());
-      expect(identical(res.json(), json), isTrue);
+      expect(identical(res.json, json), isTrue);
       expect(json.raw, isA<Map<String, dynamic>>());
 
       // JSONPath selector query
@@ -178,9 +178,9 @@ void main() {
             .scrape<Map<String, dynamic>>()
             .onResponse((ctx) {
               expect(ctx, isA<ResponseContext<Map<String, dynamic>>>());
-              final category = ctx.response.html().$('h1').firstOrNull?.text;
+              final category = ctx.response.html.$('h1').firstOrNull?.text;
 
-              for (final a in ctx.response.html().$('a')) {
+              for (final a in ctx.response.html.$('a')) {
                 final href = a.attr('href');
                 if (href != null) {
                   ctx.follow(
@@ -188,7 +188,7 @@ void main() {
                     meta: {'category': category, 'label': a.text},
                     onResponse: (detailCtx) {
                       expect(detailCtx, isA<ResponseContext<Map<String, dynamic>>>());
-                      final json = detailCtx.response.json();
+                      final json = detailCtx.response.json;
                       detailCtx.emit({
                         'category': detailCtx.meta['category'],
                         'label': detailCtx.meta['label'],
@@ -214,8 +214,8 @@ void main() {
       await expectLater('https://example.com/missing'.url.html(client: client), throwsA(isA<HttpException>()));
 
       final res = await 'https://example.com/missing'.url.get(client: client);
-      expect(res.ok, isFalse);
-      expect(res.html().$('html').isNotEmpty, isTrue, reason: 'the body is still there to inspect');
+      expect(res.isOk, isFalse);
+      expect(res.html.$('html').isNotEmpty, isTrue, reason: 'the body is still there to inspect');
     });
 
     test('ctx.url is the response URL, and ctx.resolve matches what follow() does', () async {
@@ -231,7 +231,7 @@ void main() {
             .scrape<Uri>()
             .onResponse((ctx) {
               expect(ctx.url, equals('https://example.com/album'.url));
-              ctx.emit(ctx.resolve(ctx.response.html().$('a').first.attr('href')!));
+              ctx.emit(ctx.resolve(ctx.response.html.$('a').first.attr('href')!));
             })
             .rights
             .toList();
@@ -257,7 +257,7 @@ void main() {
         expect(identical(Http.client, client), isTrue);
         final a = await 'https://example.com/a'.url.html();
         final b = await 'https://example.com/b'.url.get();
-        expect(b.ok, isTrue);
+        expect(b.isOk, isTrue);
         return [a.$('b').first.text, b.body];
       }, client: client);
 
@@ -284,7 +284,7 @@ void main() {
         return await [req1, req2]
             .scrape<String>()
             .onResponse((ctx) {
-              ctx.emit(ctx.response.json()['body'].to<String>() ?? '');
+              ctx.emit(ctx.response.json['body'].to<String>() ?? '');
             })
             .rights
             .toList();
@@ -331,7 +331,7 @@ void main() {
       ''', 200);
 
       final extracted = await res.isolate((r) {
-        final items = r.html().$('.users li');
+        final items = r.html.$('.users li');
         return items.map((e) => {'id': e.attr('data-id'), 'name': e.text}).toList();
       });
 
@@ -346,15 +346,15 @@ void main() {
 
     test('Response.isolate composes with html(), json() and xml()', () async {
       final htmlRes = http.Response('<div><span class="val">42</span></div>', 200);
-      final numVal = await htmlRes.isolate((r) => r.html().$('.val').firstOrNull?.text);
+      final numVal = await htmlRes.isolate((r) => r.html.$('.val').firstOrNull?.text);
       expect(numVal, equals('42'));
 
       final jsonRes = http.Response('{"user": {"name": "John"}}', 200);
-      final nameVal = await jsonRes.isolate((r) => r.json().$(r'$.user.name').firstOrNull?.to<String>());
+      final nameVal = await jsonRes.isolate((r) => r.json.$(r'$.user.name').firstOrNull?.to<String>());
       expect(nameVal, equals('John'));
 
       final xmlRes = http.Response('<root><item id="99">Hello</item></root>', 200);
-      final xmlVal = await xmlRes.isolate((r) => r.xml().$('//item').firstOrNull?.innerText);
+      final xmlVal = await xmlRes.isolate((r) => r.xml.$('//item').firstOrNull?.innerText);
       expect(xmlVal, equals('Hello'));
 
       final mockClient = MockClient((req) async {
@@ -365,11 +365,11 @@ void main() {
       });
 
       final itemRes = await 'https://example.com/api/item'.url.get(client: mockClient);
-      final title = await itemRes.isolate((r) => r.json()['title'].to<String>());
+      final title = await itemRes.isolate((r) => r.json['title'].to<String>());
       expect(title, equals('Toolkit'));
 
       final pageRes = await 'https://example.com/page'.url.get(client: mockClient);
-      final heading = await pageRes.isolate((r) => r.html().$('h1').firstOrNull?.text);
+      final heading = await pageRes.isolate((r) => r.html.$('h1').firstOrNull?.text);
       expect(heading, equals('Hello Uri Isolate'));
     });
 
@@ -382,8 +382,8 @@ void main() {
         });
 
         final lefts = await stream.lefts.toList();
-        expect(lefts.single, isA<HandlerFailed>());
-        expect((lefts.single as HandlerFailed).error, isA<ArgumentError>());
+        expect(lefts.single, isA<HookFailed>());
+        expect((lefts.single as HookFailed).error, isA<ArgumentError>());
         expect(
           () => 'https://example.com/'.url
               .scrape<String>()
@@ -392,7 +392,7 @@ void main() {
               })
               .unwrap()
               .toList(),
-          throwsA(isA<HandlerFailed>()),
+          throwsA(isA<HookFailed>()),
         );
       }, client: client);
     });
@@ -406,8 +406,8 @@ void main() {
         });
 
         final lefts = await stream.lefts.toList();
-        expect(lefts.single, isA<HandlerFailed>());
-        expect((lefts.single as HandlerFailed).error, isA<ArgumentError>());
+        expect(lefts.single, isA<HookFailed>());
+        expect((lefts.single as HookFailed).error, isA<ArgumentError>());
       }, client: client);
     });
 
@@ -455,7 +455,7 @@ void main() {
       }, client: client);
     });
 
-    test('a 404 is a BadStatus and the handler does not run', () async {
+    test('a 404 is a StatusFailed and the handler does not run', () async {
       var handlerRan = false;
       final client = MockClient((request) async => http.Response('Not Found', 404));
 
@@ -468,8 +468,8 @@ void main() {
         expect(handlerRan, isFalse);
         expect(outcomes.length, equals(1));
         final failure = outcomes.single.leftOrNull;
-        expect(failure, isA<BadStatus>());
-        expect((failure as BadStatus).response.statusCode, equals(404));
+        expect(failure, isA<StatusFailed>());
+        expect((failure as StatusFailed).response.statusCode, equals(404));
       }, client: client);
     });
 
@@ -713,7 +713,7 @@ void main() {
       );
     });
 
-    test('a redirect off the seeds\' hosts is a BadStatus, not silence', () async {
+    test('a redirect off the seeds\' hosts is a StatusFailed, not silence', () async {
       final client = MockClient((request) async {
         if (request.url.path == '/out') return http.Response('', 302, headers: {'location': 'https://other.com/'});
         return http.Response('<a href="/out">o</a>', 200);
@@ -724,8 +724,8 @@ void main() {
       }, client: client);
 
       final failure = outcomes.single.leftOrNull;
-      expect(failure, isA<BadStatus>());
-      expect((failure as BadStatus).response.statusCode, equals(302));
+      expect(failure, isA<StatusFailed>());
+      expect((failure as StatusFailed).response.statusCode, equals(302));
     });
 
     test('stop() lets running handlers finish and delivers their emits', () async {
@@ -757,7 +757,7 @@ void main() {
       final outcomes = await Http.session(() async {
         return await 'https://example.com/'.url.scrape<void>().onResponse((ctx) => throw StateError('boom')).toList();
       }, client: client);
-      expect(outcomes.single.leftOrNull, isA<HandlerFailed>());
+      expect(outcomes.single.leftOrNull, isA<HookFailed>());
     });
 
     test('the session\'s user-agent wins over the engine default', () async {
@@ -824,11 +824,11 @@ void main() {
               .onResponse((ctx) => ctx.emit(ctx.response.body))
               .onError((ctx) {
                 switch (ctx.failure) {
-                  case BadStatus(response: http.Response(statusCode: 500)):
+                  case StatusFailed(response: http.Response(statusCode: 500)):
                     ctx.retry();
-                  case BadStatus(response: http.Response(statusCode: 410)):
+                  case StatusFailed(response: http.Response(statusCode: 410)):
                     ctx.emit('fallback');
-                  case BadStatus(response: http.Response(statusCode: 404)):
+                  case StatusFailed(response: http.Response(statusCode: 404)):
                     ctx.ignore();
                   default:
                     break;
@@ -838,7 +838,7 @@ void main() {
         }, client: client);
 
         expect(outcomes.rights, containsAll(['up', 'fallback']));
-        expect(outcomes.lefts.map((f) => (f as BadStatus).response.statusCode), equals([418]));
+        expect(outcomes.lefts.map((f) => (f as StatusFailed).response.statusCode), equals([418]));
         expect(flaky, equals(5), reason: 'the engine sent twice, the hook kept retrying until 200');
       });
 
@@ -871,7 +871,7 @@ void main() {
         expect(summary!.bytes, equals(5));
       });
 
-      test('maxPages stops the crawl and never over-fetches by more than the in-flight window', () async {
+      test('pages stops the crawl and never over-fetches by more than the in-flight window', () async {
         var sent = 0;
         final client = MockClient((request) async {
           sent++;
@@ -881,7 +881,7 @@ void main() {
         final pages = await Http.session(() async {
           return await 'https://example.com/0'.url
               .scrape<int>()
-              .onInit((c) => c.maxPages = 3)
+              .onInit((c) => c.pages = 3)
               .onResponse((ctx) {
                 ctx.emit(ctx.pages);
                 for (var i = 1; i <= 20; i++) {
@@ -896,7 +896,7 @@ void main() {
         expect(sent, equals(3));
       });
 
-      test('maxDepth drops what is too deep; scope() widens the hosts', () async {
+      test('depth drops what is too deep; scope() widens the hosts', () async {
         final requested = <String>[];
         final client = MockClient((request) async {
           requested.add('${request.url.host}${request.url.path}');
@@ -907,7 +907,7 @@ void main() {
           await 'https://a.com/0'.url
               .scrape<void>()
               .onInit((c) {
-                c.maxDepth = 1;
+                c.depth = 1;
                 c.scope = (u) => u.host == 'a.com' || u.host == 'b.com';
               })
               .onResponse((ctx) {

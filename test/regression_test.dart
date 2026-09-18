@@ -33,7 +33,7 @@ void main() {
     });
 
     test('Either keeps the stack trace of the failure it caught', () async {
-      final outcome = await Either.tryCatchAsync(() async => _boom());
+      final outcome = await Either.tryCatch(() async => _boom());
       try {
         outcome.unwrap();
         fail('should throw');

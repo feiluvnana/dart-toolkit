@@ -25,9 +25,6 @@ void main(List<String> rawArgs) async {
 }
 
 Future<void> run(CliContext ctx) async {
-  final token = CancelToken();
-  onExit(token.cancel);
-
   final selectedFormat = ctx.option('format');
   final formats = selectedFormat == 'all' ? const ['mp3', 'flac'] : [selectedFormat];
   final concurrency = ctx.number('concurrency');
@@ -45,18 +42,18 @@ Future<void> run(CliContext ctx) async {
   await Console.spin('Parsing official website...', () async {
     final doc = await (baseUri / 'key_box.html').html();
     for (final li in doc.$('.key_cd_track_box ul li')) {
-      final title = li.$('.track_disc_title').first.text.filename;
+      final title = li.$('.track_disc_title').text.filename;
       final d = int.parse(title.match(RegExp(r'DISC\.(\d+)'), 1)!);
       discNames[d] = title;
       tracks[d] = {
-        for (final line in li.$('.track_disc_text_style1').first.lines)
+        for (final line in li.$('.track_disc_text_style1').lines)
           if (RegExp(r'^(\d+)\.(.*)$').firstMatch(line) case final m?)
             int.parse(m[1]!): (d == 22 && m[1] == '13') ? '小さなてのひら'.filename : m[2]!.filename,
       };
     }
 
     for (final e in doc.$('.key_cd_artworks_box')) {
-      final href = e.$('a').first.attr('href')!;
+      final href = e.$('a').attr('href')!;
       if (e.text.match(RegExp(r'DISC(\d+)'), 1) case final dStr?) {
         artwork[baseUri / href] = base / discNames[int.parse(dStr)]! / href.path.name;
       } else if (e.text.contains('ALL')) {
@@ -138,46 +135,40 @@ Future<void> run(CliContext ctx) async {
   });
   Logger.ok('Found ${discNames.length} discs and ${artwork.length} artwork/document assets.');
 
-  // Stage 2: Track links and downloads, overlapped — tracks resolve while artwork transfers.
+  // Stage 2: Track links and downloads, merged — tracks resolve while artwork transfers.
   stage('Resolving tracks and downloading assets (concurrency: $concurrency)');
-  final progress = Console.multiProgress(slots: concurrency, message: 'Downloading');
-  BatchDownloadProgress? last;
+  final songs = khinsider.url
+      .scrape<Asset>()
+      .onResponse((ctx) {
+        for (final tr in ctx.response.html.$('#songlist tr')) {
+          final tds = tr.$('td');
+          if (tds.length < 4) continue;
+          final href = tds[3].$('a').attr('href')!;
+          final d = int.parse(href.match(RegExp(r'/(\d+)-'), 1) ?? tds[1].text.replaceAll(RegExp(r'\D'), ''));
+          final t = int.parse(href.match(RegExp(r'-(\d+)\.'), 1) ?? tds[2].text.replaceAll(RegExp(r'\D'), ''));
+          final title = tracks[d]?[t] ?? tds[3].text.filename;
+          final missing = {for (final ext in formats) ext: base / discNames[d]! / ext / '$t. $title.$ext'}
+            ..removeWhere((_, path) => path.existsSync());
+          if (missing.isEmpty) continue;
 
-  Stream<Asset> queue() async* {
-    yield* Stream.fromIterable(artwork.pairs);
-    yield* khinsider.url
-        .scrape<Asset>()
-        .onResponse((ctx) async {
-          for (final tr in ctx.response.html().$('#songlist tr')) {
-            final tds = tr.$('td');
-            if (tds.length < 4) continue;
-            final href = tds[3].$('a').first.attr('href')!;
-            final d = int.parse(href.match(RegExp(r'/(\d+)-'), 1) ?? tds[1].text.replaceAll(RegExp(r'\D'), ''));
-            final t = int.parse(href.match(RegExp(r'-(\d+)\.'), 1) ?? tds[2].text.replaceAll(RegExp(r'\D'), ''));
-            final disc = discNames[d]!;
-            final title = tracks[d]?[t] ?? tds[3].text.filename;
+          ctx.follow(
+            href,
+            onResponse: (song) {
+              final page = song.response.html;
+              for (final MapEntry(key: ext, value: path) in missing.entries) {
+                song.emit((url: song.resolve(page.$('a[href*=".$ext"]').attr('href')!), path: path));
+              }
+            },
+          );
+        }
+      })
+      .onError((ctx) => Logger.warn('${ctx.failure}'))
+      .rights;
 
-            for (final ext in formats) {
-              final target = base / disc / ext / '$t. $title.$ext';
-              if (target.existsSync()) continue;
-              ctx.follow(
-                href,
-                onResponse: (song) {
-                  final dlHref = song.response.html().$('a[href*=".$ext"]').first.attr('href')!;
-                  song.emit((url: song.resolve(dlHref), path: target));
-                },
-              );
-            }
-          }
-        })
-        .rights
-        .cancelWith(token);
-  }
-
-  await for (final p in queue().downloadAll(concurrency: concurrency, cancelToken: token)) {
-    progress.report(last = p);
-  }
-  progress.done('All assets downloaded.');
+  final last = await [Stream.fromIterable(artwork.pairs), songs]
+      .merge()
+      .downloadAll(concurrency: concurrency, cancelToken: ctx.cancel)
+      .show(slots: concurrency, message: 'Downloading', done: 'All assets downloaded.');
 
   // Stage 3: Archive (if requested)
   if (shouldCompress) {

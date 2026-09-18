@@ -29,8 +29,8 @@ final Expando<XmlDocument> _xmlMemo = Expando<XmlDocument>('xmlMemo');
 ///
 /// {@category Formats}
 extension ResponseXmlExtensions on http.Response {
-  /// Parses the response body as XML (memoized per response instance).
-  XmlDocument xml() => _xmlMemo[this] ??= XmlDocument.parse(text);
+  /// The body parsed as XML, once per response instance.
+  XmlDocument get xml => _xmlMemo[this] ??= XmlDocument.parse(text);
 }
 
 /// XML fetching on [Uri].
@@ -41,5 +41,5 @@ extension UriXmlExtensions on Uri {
   ///
   /// Throws [HttpException] unless the status is 2xx.
   Future<XmlDocument> xml({Map<String, String>? headers, http.Client? client}) async =>
-      (await fetchOk(this, headers, client)).xml();
+      (await fetchOk(this, headers, client)).xml;
 }

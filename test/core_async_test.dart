@@ -35,23 +35,23 @@ void main() {
       expect(leftMapped, equals(const Left<String, int>('ERROR')));
     });
 
-    test('Either.tryCatch and Either.tryCatchAsync', () async {
-      final syncSuccess = Either.tryCatch(() => 10 + 5);
+    test('Either.tryCatchSync and Either.tryCatch', () async {
+      final syncSuccess = Either.tryCatchSync(() => 10 + 5);
       expect(syncSuccess, equals(const Right<Object, int>(15)));
 
-      final syncFailure = Either.tryCatch<int>(() => throw FormatException('bad'));
+      final syncFailure = Either.tryCatchSync<int>(() => throw FormatException('bad'));
       expect(syncFailure.isLeft, isTrue);
       expect(syncFailure.leftOrNull, isA<FormatException>());
 
-      final asyncSuccess = await Either.tryCatchAsync(() async => 'hello');
+      final asyncSuccess = await Either.tryCatch(() async => 'hello');
       expect(asyncSuccess, equals(const Right<Object, String>('hello')));
 
-      final asyncFailure = await Either.tryCatchAsync<String>(() async => throw StateError('failed'));
+      final asyncFailure = await Either.tryCatch<String>(() async => throw StateError('failed'));
       expect(asyncFailure.isLeft, isTrue);
       expect(asyncFailure.leftOrNull, isA<StateError>());
 
-      // tryCatchAsync also accepts a synchronous closure.
-      expect(await Either.tryCatchAsync(() => 1), equals(const Right<Object, int>(1)));
+      // tryCatch also accepts a synchronous closure.
+      expect(await Either.tryCatch(() => 1), equals(const Right<Object, int>(1)));
     });
 
     test('Either.unwrap returns the Right value or throws the Left value', () {
@@ -334,9 +334,9 @@ void main() {
       expect(await throttled, equals([1, 4]));
     });
 
-    test('chunkTime batches per window and skips empty windows', () async {
+    test('chunkEvery batches per window and skips empty windows', () async {
       final controller = StreamController<int>();
-      final windows = controller.stream.chunkTime(30.ms).toList();
+      final windows = controller.stream.chunkEvery(30.ms).toList();
 
       controller.add(1);
       controller.add(2);
@@ -366,7 +366,7 @@ void main() {
     test('a paused subscription receives nothing and drains on resume', () async {
       final controller = StreamController<int>();
       final received = <List<int>>[];
-      final sub = controller.stream.chunkTime(10.ms).listen(received.add);
+      final sub = controller.stream.chunkEvery(10.ms).listen(received.add);
 
       sub.pause();
       controller.add(1);
@@ -534,13 +534,13 @@ void main() {
       expect(rightObj == rightNum, isTrue);
     });
 
-    test('Either.tryCatch captures any thrown error, whatever its type', () {
-      final parsed = Either.tryCatch(() => int.parse('not_a_num'));
+    test('Either.tryCatchSync captures any thrown error, whatever its type', () {
+      final parsed = Either.tryCatchSync(() => int.parse('not_a_num'));
       expect(parsed.isLeft, isTrue);
       expect(parsed.leftOrNull, isA<FormatException>());
 
       // Narrowing happens afterwards, so no error type can be unrepresentable.
-      final narrowed = Either.tryCatch<int>(() => throw StateError('boom')).mapLeft((e) => FormatException('\$e'));
+      final narrowed = Either.tryCatchSync<int>(() => throw StateError('boom')).mapLeft((e) => FormatException('\$e'));
       expect(narrowed.isLeft, isTrue);
       expect(narrowed.leftOrNull, isA<FormatException>());
     });

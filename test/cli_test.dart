@@ -174,7 +174,7 @@ void main() {
       expect(() => multi.done('All assets completed.'), returnsNormally);
     });
 
-    test('choice accepts valid options and throws ArgumentError on invalid value', () async {
+    test('choice accepts valid options and throws UsageException on invalid value', () async {
       // CliCommand.run throws; Cli.run would turn the error into exit code 64.
       final cli = CliCommand('app');
       String? chosenFormat;
@@ -194,8 +194,8 @@ void main() {
       await cli.run(['build']);
       expect(chosenFormat, equals('debug'));
 
-      // Invalid value throws ArgumentError
-      expect(() => cli.run(['build', '--format', 'invalid_mode']), throwsA(isA<ArgumentError>()));
+      // Invalid value throws UsageException
+      expect(() => cli.run(['build', '--format', 'invalid_mode']), throwsA(isA<UsageException>()));
     });
 
     test('flag and number helpers configure and validate correctly', () async {
@@ -224,8 +224,8 @@ void main() {
       expect(isDryRun, isFalse);
       expect(concurrency, equals(4));
 
-      // Invalid numeric option throws ArgumentError
-      expect(() => cli.run(['serve', '-c', 'not_a_number']), throwsA(isA<ArgumentError>()));
+      // Invalid numeric option throws UsageException
+      expect(() => cli.run(['serve', '-c', 'not_a_number']), throwsA(isA<UsageException>()));
     });
 
     test('CLI handles negative option values and double dash terminator properly', () async {
@@ -382,14 +382,14 @@ void main() {
 
       expect(
         () => cli.run([]),
-        throwsA(isA<ArgumentError>().having((e) => e.message, 'message', contains('Missing required option'))),
+        throwsA(isA<UsageException>().having((e) => e.message, 'message', contains('Missing required option'))),
       );
 
       // Required is also enforced from an ancestor command, and shows up in help.
       final nested = CliCommand('app')
         ..number('port', required: true)
         ..command('serve', build: (serve) => serve..action((_) {}));
-      expect(() => nested.run(['serve']), throwsA(isA<ArgumentError>()));
+      expect(() => nested.run(['serve']), throwsA(isA<UsageException>()));
     });
 
     test('a declared default reaches the context with no read-site argument', () async {

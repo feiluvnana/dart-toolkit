@@ -10,13 +10,17 @@ No aliases. If two spellings exist, one of them is deleted — not deprecated, n
 ergonomics". The audit found fifteen, and every one was a thing a reader had to learn was the
 same thing.
 
-## A program imports modules, not the barrel
+## A program imports modules, not the barrel — and an executable runs through the snapshot
 
-`dart_toolkit.dart` re-exports everything. Under `dart run` the front end compiles the whole
-transitive closure on every invocation, so the barrel costs ~1.4 s per run against ~0.3 s for the
-modules a program actually uses. Narrow imports in `bin/` and `example/` are enforced by
+`dart_toolkit.dart` re-exports everything. Under `dart run file.dart` the front end compiles the
+whole transitive closure on every invocation, so the barrel costs ~1.4 s per run against ~0.3 s
+for the modules a program actually uses. Narrow imports in `bin/` and `example/` are enforced by
 `tool/check_deps.dart`. The barrel is for tools you `dart compile` once, where tree shaking makes
 it free.
+
+`dart run dart_toolkit:<name>` is different: pub keeps an incremental snapshot of a package
+executable and recompiles only what changed. Measured on `keybox --help`, three pairs: 352–414 ms
+against 1 332–1 475 ms for `dart run bin/keybox.dart`, edits included. That is how `bin/` is run.
 
 The same rule shapes the modules themselves: `core` has no third-party dependencies, and
 `HtmlDocument` and `XmlDocument` live in `html` and `xml` so that parsing JSON does not load an
@@ -50,6 +54,18 @@ language per format, each the one native to it. HTML XPath existed alongside the
 145× slower on a 2000-row page and quadratic in document size; it is gone, along with the package
 that supplied it.
 
+`$` on HTML returns `Elements`, a `List<Element>` that also answers `text`, `attr()`, `lines`
+and `$()` for its first match. Eight call sites lost a `.first`; an empty match throws a
+`StateError` that says so, where `.first` said "No element".
+
+## The HTML parser is ours
+
+`package:html` and `csslib` cost ~580 ms of front-end work per `dart run` — the whole startup
+of a scraper — for an HTML5 tree builder a scraper does not need. `lib/src/html/` is a tag-soup
+parser and a selector engine, checked against the old parser on real pages in
+`test/html_differential_test.dart`. A new selector or a new implicit-close rule is added there
+first. The reference parser stays a dev dependency for that test and nothing else.
+
 ## A file operation streams
 
 Hashing, archiving and downloading name the file, not its bytes. `p.sha256()` reads a stream;
@@ -75,9 +91,13 @@ Do not add a method because it is the combination of two that already exist. `cl
 was `uri.json(client: client)`; `uri.isolateHtml(f)` was `(await uri.get()).isolateHtml(f)`.
 Twenty-one members expressed four ideas before this rule.
 
-An entry point earns its place when the composition cannot reconstruct it. `Response.isolate`
-stayed because it copies four fields instead of shipping the request graph across an isolate
-boundary; `isolateHtml` did not, because it was `isolate((r) => f(r.html()))`.
+An entry point earns its place when the composition cannot reconstruct it, or when it deletes a
+line at every call site: `Response.isolate` stayed because it copies four fields instead of
+shipping the request graph across an isolate boundary; `isolateHtml` did not, because it was
+`isolate((r) => f(r.html))`. `Elements.attr`, `Stream<BatchProgress>.show()` and
+`Iterable<Stream>.merge()` are compositions too, and stay because each replaced a loop or a
+`.first` in `bin/keybox.dart`. `Map.downloadAll` and `pairs` both stay: `{url: dest}.downloadAll()`
+is the common case and `pairs` is for merging with a stream.
 
 ## Two modules meet through an interface in `util`
 
@@ -108,7 +128,7 @@ are for an optional without a default. Every program used to bang every read.
 
 ## A component is not a path
 
-`sanitized()` cleans a path and keeps its separators. `filename` turns one string into one
+`sanitized` cleans a path and keeps its separators. `filename` turns one string into one
 component and escapes them. Anything that came from outside — a scraped title, a header, user
 input — goes through `filename`.
 
@@ -150,6 +170,22 @@ re-implemented: `elementAtOrNull` throws on a negative index where `getOrNull` r
 `Either.tryCatch` records the stack trace with the error and `unwrap` rethrows with it, so a
 `parallelize` failure points at the throw, not at the unwrap.
 
+## Names
+
+1. A read-only boolean is `is*` (`isDone`, `isOk`, `isCI`). A boolean *switch* the caller sets
+   is a bare adjective (`Ansi.enabled = false`), as `stdin.echoMode` is. A boolean *parameter*
+   is a bare adjective or imperative (`recursive: true`, `descending: true`).
+2. When a sync and an async form both exist, the async one is bare and the sync one ends in
+   `Sync`: `exists`/`existsSync`, `tryCatch`/`tryCatchSync`. A member with one form has no
+   suffix.
+3. A pure function of the receiver is a getter; anything that does IO or takes an argument is a
+   method. `name`, `sanitized`, `res.json` are getters; `size()`, `exists()`, `url.json()` are
+   methods.
+4. One word per idea across modules: a hook's failure is `HookFailed`; the wrapped tree is `raw`;
+   the message printed on success is `done:`; restoring defaults is `reset()`.
+5. Short and meaningful beats descriptive: `done:` not `successMessage:`, `chunkEvery` not
+   `chunkTime`. A name typed once per program may be long (`throwIfCancelled`).
+
 ## Error policy is chosen at the use site
 
 `parallelize` settles every task and returns `List<Either<Object, R>>`. The caller picks:
@@ -161,17 +197,26 @@ TLS handshake 600 pages in is how the rule reached streams.
 `Either.tryCatch` has no error type parameter. A function that cannot honour `E` without a
 converter should not accept `E` — narrow with `mapLeft` afterwards.
 
+After `stop()`, a request that fails in flight is not reported — the crawl is over — but a hook
+that throws still is: a programmer error is never swallowed.
+
 ## A crawl is a chain of hooks
 
 `url.scrape<T>()` returns a `Scrape<T>`: five hooks whose registration returns the receiver,
 and a `Stream<Either<ScrapeFailure, T>>`. Every crawl-wide setting lives on one object, the
 `InitContext` handed to `onInit`, so a reader finds the whole configuration in one block and the
 chain stays five names long. Anything that can differ per request — a header, the `user-agent`
-— is not a setting; it is `onRequest` editing the request. Behaviour is the other four hooks — `onRequest`, `onResponse`, `onError`,
-`onFinish` — each given the context for its moment and nothing else. A bare named parameter on
-`scrape`, or a builder method per setting, is not the shape: the first cannot chain, the second
-puts twelve limits between a reader and the hooks. The defaults are chosen so that a chain with
-one `onResponse` finishes a crawl of one site without taking the site down.
+— is not a setting; it is `onRequest` editing the request. Behaviour is the other four hooks —
+`onRequest`, `onResponse`, `onError`, `onFinish` — each given the context for its moment and
+nothing else. A bare named parameter on `scrape`, or a builder method per setting, is not the
+shape: the first cannot chain, the second puts twelve limits between a reader and the hooks. The
+defaults are chosen so that a chain with one `onResponse` finishes a crawl of one site without
+taking the site down — and "one site" means the seeds' hosts with or without `www.`, without
+fragments, and never a second fetch of a page already followed. `follow` says whether it
+scheduled anything, because a silent drop cost keybox every FLAC.
+
+`Cli.run` owns one `CancelToken` per run, `ctx.cancel`, cancelled on a signal, on `die` and
+when the action ends. A script that needs cancellation passes it on instead of building its own.
 
 ## Sync mirrors are allowed only on `fs`
 

@@ -52,7 +52,7 @@ void main() {
       final lines = await file.readLines();
       expect(lines, equals(['title: Dart Toolkit', 'author: feiluvnana', 'version: 9.0.0']));
 
-      await file.replaceInFile('9.0.0', '9.1.0');
+      await file.replaceText('9.0.0', '9.1.0');
       expect(await file.readText(), contains('version: 9.1.0'));
     });
   });

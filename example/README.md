@@ -2,15 +2,17 @@
 
 Three task-shaped programs. Each is runnable and each is checked by `dart analyze` in CI.
 
-Each one opens with the modules it uses, not `dart_toolkit.dart` — under `dart run` the barrel
-costs about 1.4 s of front-end work per invocation against about 0.3 s. `tool/check_deps.dart`
-fails the build if one of these files reaches for the barrel again.
+Each one opens with the modules it uses, not `dart_toolkit.dart` — under `dart run file.dart`
+the barrel costs about 1.4 s of front-end work per invocation against about 0.3 s.
+`tool/check_deps.dart` fails the build if one of these files reaches for the barrel again. A
+`bin/` executable has a cheaper path: `dart run dart_toolkit:keybox` uses pub's incremental
+snapshot and starts in about 0.4 s.
 
 | file | shows |
 |---|---|
 | [`cli_app.dart`](cli_app.dart) | `Cli` option kinds, required options, `Logger.stages`, `Console.progress` |
 | [`file_automation.dart`](file_automation.dart) | `Path`, `filename`, hashing, archiving |
-| [`web_crawler.dart`](web_crawler.dart) | `Http.session`, the `scrape` pipeline, typed `ScrapeContext` |
+| [`web_crawler.dart`](web_crawler.dart) | `Http.session`, the `scrape` chain, `Elements` queries |
 
 ```sh
 dart run example/cli_app.dart --token abc --env staging --workers 8

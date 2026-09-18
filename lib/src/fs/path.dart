@@ -116,11 +116,11 @@ extension type const Path(String path) implements String {
     return 0;
   }
 
-  /// Returns a sanitized path with invalid filesystem characters removed from components.
+  /// This path with invalid filesystem characters replaced in every component.
   ///
   /// Separators survive, because this is a path. For a single component — a scraped
   /// title that may contain `/` — use [StringPathExtensions.filename].
-  Path sanitized() {
+  Path get sanitized {
     final parts = p.split(path);
     final sanitizedParts = parts.map((part) {
       if (part == '/' || part == '\\' || part.endsWith(':')) return part;
@@ -382,13 +382,13 @@ extension type const Path(String path) implements String {
   /// Rewrites this file, replacing occurrences of [from] with [replacement].
   ///
   /// Writes to disk. The inherited [String.replaceAll] operates on the path text.
-  Future<File> replaceInFile(Pattern from, String replacement, {Encoding encoding = utf8}) async {
+  Future<File> replaceText(Pattern from, String replacement, {Encoding encoding = utf8}) async {
     final text = await readText(encoding: encoding);
     return writeText(text.replaceAll(from, replacement), encoding: encoding);
   }
 
   /// Rewrites this file synchronously, replacing occurrences of [from] with [replacement].
-  File replaceInFileSync(Pattern from, String replacement, {Encoding encoding = utf8}) {
+  File replaceTextSync(Pattern from, String replacement, {Encoding encoding = utf8}) {
     final text = readTextSync(encoding: encoding);
     return writeTextSync(text.replaceAll(from, replacement), encoding: encoding);
   }

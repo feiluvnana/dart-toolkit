@@ -36,13 +36,13 @@ void main() {
 
     test('sanitized cleans invalid filename characters', () {
       final p = Path(r'folder/invalid:*?"<>| name.mp3');
-      final cleaned = p.sanitized();
+      final cleaned = p.sanitized;
       expect(cleaned.contains('*'), isFalse);
       expect(cleaned.contains('?'), isFalse);
       expect(cleaned.contains('<'), isFalse);
     });
 
-    test('filename escapes separators that sanitized() keeps', () {
+    test('filename escapes separators that sanitized keeps', () {
       expect('AIR / Farewell song'.filename, equals('AIR _ Farewell song'));
       expect(r'a\b'.filename, equals('a_b'));
       expect('  spaced   out  '.filename, equals('spaced out'));
@@ -52,7 +52,7 @@ void main() {
       // The point of the distinction: a scraped title can never grow a directory.
       final target = 'Key BOX'.path / 'DISC01' / '${'AIR / Farewell'.filename}.mp3';
       expect(target.segments.length, equals(3));
-      expect('AIR / Farewell song'.path.sanitized().contains('/'), isTrue);
+      expect('AIR / Farewell song'.path.sanitized.contains('/'), isTrue);
     });
 
     test('type, exist, writeText, readText, writeBytes, readBytes, and size', () async {
@@ -233,7 +233,7 @@ void main() {
       // HTML
       final htmlFile = base / 'page.html';
       final initialHtml = HtmlDocument.parse('<!DOCTYPE html><html><body><h1>Header</h1></body></html>');
-      await htmlFile.writeText(initialHtml.document.outerHtml);
+      await htmlFile.writeText(initialHtml.outerHtml);
       expect(await htmlFile.exists(), isTrue);
 
       final readHtmlDoc = HtmlDocument.parse(await htmlFile.readText());
@@ -257,7 +257,7 @@ void main() {
       expect(syncJson['num'].to<int>(), equals(42));
 
       final syncHtmlFile = base / 'sync.html';
-      syncHtmlFile.writeTextSync((HtmlDocument.parse('<h2>Sync Header</h2>')).document.outerHtml);
+      syncHtmlFile.writeTextSync(HtmlDocument.parse('<h2>Sync Header</h2>').outerHtml);
       expect(HtmlDocument.parse(syncHtmlFile.readTextSync()).$('h2').first.text, equals('Sync Header'));
 
       final syncXmlFile = base / 'sync.xml';
@@ -344,7 +344,7 @@ void main() {
         // appendSync & replaceSync
         file1.appendSync('!!!');
         expect(file1.readTextSync(), equals('Hello World!!!'));
-        file1.replaceInFileSync('World', 'Dart');
+        file1.replaceTextSync('World', 'Dart');
         expect(file1.readTextSync(), equals('Hello Dart!!!'));
 
         // hashes

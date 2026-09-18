@@ -8,39 +8,56 @@ import '../util/env.dart';
 import '../util/stdio.dart';
 import 'shell_result.dart';
 
+/// Splits [command] as a POSIX shell would read a simple command: whitespace separates,
+/// single quotes take everything literally, double quotes let `\\ \" \$ \`` escape, and an
+/// unquoted backslash escapes the next character. No expansion of any kind.
 List<String> _splitCommand(String command) {
   final args = <String>[];
   final current = StringBuffer();
+  var quoted = false; // an empty quoted string is still an argument
   var inSingle = false;
   var inDouble = false;
-  var isEscaped = false;
 
-  const backslash = 0x5c, singleQuote = 0x27, doubleQuote = 0x22;
+  const backslash = 0x5c, singleQuote = 0x27, doubleQuote = 0x22, dollar = 0x24, backtick = 0x60;
   bool isSpace(int c) => c == 0x20 || c == 0x09 || c == 0x0a || c == 0x0d;
 
   for (var i = 0; i < command.length; i++) {
     final char = command.codeUnitAt(i);
-
-    if (isEscaped) {
-      current.writeCharCode(char);
-      isEscaped = false;
-    } else if (char == backslash) {
-      isEscaped = true;
-    } else if (char == singleQuote && !inDouble) {
-      inSingle = !inSingle;
-    } else if (char == doubleQuote && !inSingle) {
-      inDouble = !inDouble;
-    } else if (isSpace(char) && !inSingle && !inDouble) {
-      if (current.isNotEmpty) {
-        args.add(current.toString());
-        current.clear();
+    if (inSingle) {
+      if (char == singleQuote) {
+        inSingle = false;
+      } else {
+        current.writeCharCode(char);
       }
+    } else if (inDouble) {
+      if (char == doubleQuote) {
+        inDouble = false;
+      } else if (char == backslash && i + 1 < command.length) {
+        final next = command.codeUnitAt(i + 1);
+        if (next == backslash || next == doubleQuote || next == dollar || next == backtick) {
+          current.writeCharCode(next);
+          i++;
+        } else {
+          current.writeCharCode(char);
+        }
+      } else {
+        current.writeCharCode(char);
+      }
+    } else if (char == backslash && i + 1 < command.length) {
+      current.writeCharCode(command.codeUnitAt(++i));
+    } else if (char == singleQuote) {
+      inSingle = quoted = true;
+    } else if (char == doubleQuote) {
+      inDouble = quoted = true;
+    } else if (isSpace(char)) {
+      if (current.isNotEmpty || quoted) args.add(current.toString());
+      current.clear();
+      quoted = false;
     } else {
       current.writeCharCode(char);
     }
   }
-
-  if (current.isNotEmpty) args.add(current.toString());
+  if (current.isNotEmpty || quoted) args.add(current.toString());
   return args;
 }
 
@@ -73,8 +90,10 @@ Future<ShellResult> run(
   shell: shell,
 );
 
-/// The environment children inherit: the process's plus [Env] overrides plus [extra].
+/// The environment children inherit: the process's plus [Env] overrides plus [extra], or
+/// `null` — inherit as is — when there is nothing to add.
 Map<String, String>? _childEnv(Map<String, String>? extra) {
+  if (extra == null && !Env.hasOverrides) return null;
   final all = Env.all();
   if (extra != null) all.addAll(extra);
   return all;
@@ -124,11 +143,11 @@ Future<ShellResult> _runProcess(
     runInShell: shell || Platform.isWindows,
   );
 
-  await _feed(process, input, encoding);
-
   final stdoutBuf = StringBuffer();
   final stderrBuf = StringBuffer();
 
+  // Readers first: a child that echoes a large [input] fills its stdout pipe and stops
+  // reading stdin, so feeding before draining deadlocks both sides.
   final stdoutFuture = process.stdout.transform(encoding.decoder).forEach((data) {
     stdoutBuf.write(data);
     if (!quiet) ConsoleIo.out.write(data);
@@ -138,6 +157,8 @@ Future<ShellResult> _runProcess(
     stderrBuf.write(data);
     if (!quiet) ConsoleIo.err.write(data);
   });
+
+  final fed = _feed(process, input, encoding);
 
   var exitCodeFuture = process.exitCode;
   if (timeout != null) {
@@ -151,7 +172,7 @@ Future<ShellResult> _runProcess(
   }
 
   final code = await exitCodeFuture;
-  await Future.wait([stdoutFuture, stderrFuture]);
+  await Future.wait([stdoutFuture, stderrFuture, fed]);
 
   final result = ShellResult(
     command: displayCommand,
@@ -245,10 +266,10 @@ class CommandPipeline {
         );
       }
 
-      await _feed(processes.first, input, encoding);
       for (var i = 0; i < processes.length - 1; i++) {
         processes[i].stdout.pipe(processes[i + 1].stdin).catchError((_) {});
       }
+      final fed = _feed(processes.first, input, encoding);
 
       final lastProcess = processes.last;
       final stdoutBuf = StringBuffer();
@@ -276,7 +297,7 @@ class CommandPipeline {
         );
       }
       final exitCodes = await exitCodesFuture;
-      await Future.wait([stdoutFuture, stderrFuture]);
+      await Future.wait([stdoutFuture, stderrFuture, fed]);
 
       final exitCode = exitCodes.lastWhere((c) => c != 0, orElse: () => 0);
       final result = ShellResult(
@@ -349,5 +370,5 @@ extension FutureShellExtensions on Future<ShellResult> {
   Future<JsonDocument> get json => then((r) => r.json);
 
   /// Whether the command exited successfully with code 0.
-  Future<bool> get ok => then((r) => r.ok);
+  Future<bool> get isOk => then((r) => r.isOk);
 }

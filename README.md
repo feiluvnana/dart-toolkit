@@ -10,10 +10,12 @@ A scripting, automation and web-scraping toolkit for Dart.
 
 ## Modules
 
-**Import the modules you use, not the barrel.** Under `dart run` the front end compiles the whole
-transitive closure on every invocation, so `package:dart_toolkit/dart_toolkit.dart` costs about
-1.4 s per run against about 0.3 s for a narrow import — measured, and the reason every program in
-this repo lists its modules:
+**Run an executable through pub's snapshot, and import the modules you use.** `dart run
+dart_toolkit:keybox` starts in about 0.4 s and picks up edits; `dart run bin/keybox.dart`
+recompiles the whole import closure every time and takes about 1.4 s. For an ad-hoc script the
+imports are the lever: `package:dart_toolkit/dart_toolkit.dart` costs about 1.4 s per run against
+about 0.3 s for a narrow import — measured, and the reason every program in this repo lists its
+modules:
 
 ```dart
 import 'package:dart_toolkit/cli/cli.dart';
@@ -26,21 +28,22 @@ shaking makes it free.
 | import | contents | third-party cost |
 |---|---|---|
 | `collection/collection.dart` | `Iterable`, `List`, `Map` extensions | — |
-| `util/util.dart` | `Env`, `Os`, `ConsoleIo`, `TaskProgress`, duration helpers | — |
+| `util/util.dart` | `Env`, `ConsoleIo`, `TaskProgress`, duration helpers | — |
 | `cli/cli.dart` | `Cli`, `Prompt`, `Logger`, `Console`, ANSI | — |
 | `core/core.dart` | `Either`, `JsonDocument`, string helpers | — |
 | `async/async.dart` | `parallelize`, `retry`, `Mutex`, `CancelToken`, stream operators | — |
 | `fs/fs.dart` | `Path` | path |
 | `hash/hash.dart` | SHA-256, MD5 | crypto, path |
-| `html/html.dart` | `HtmlDocument`, element queries, `res.html()`, `url.html()` | html, http |
-| `xml/xml.dart` | `XmlDocument`, `res.xml()`, `url.xml()` | xml, http |
+| `html/html.dart` | `HtmlDocument`, `Elements`, CSS selectors, `res.html`, `url.html` | http |
+| `xml/xml.dart` | `XmlDocument`, `res.xml`, `url.xml` | xml, http |
 | `archive/archive.dart` | zip, unzip | archive, path |
 | `process/process.dart` | `run`, pipelines, `which` | path |
 | `http/http.dart` | requests, JSON, scraping, downloads, `Http.session` | http, path |
 
-A format bridge lives with its parser: `http` no longer compiles the HTML and XML parsers
-for a program that downloads files or reads JSON. `tool/startup.dart` prints what each
-module costs to import.
+A format bridge lives with its parser: `http` does not compile the HTML and XML parsers for a
+program that downloads files or reads JSON. The HTML parser is in-house — `package:html` alone
+was 580 ms of every scraper's startup — and is checked against it on real pages in the test
+suite. `tool/startup.dart` prints what each module costs to import.
 
 `tool/check_deps.dart` enforces this table in CI, and fails a `bin/` or `example/` file that
 imports the barrel.
@@ -64,7 +67,7 @@ dependencies:
 
 ```dart
 final res = await run('git status --short');
-if (res.ok) print(res.text);
+if (res.isOk) print(res.text);
 
 final prs = await run('gh pr list --json number', quiet: true).json;   // a JsonDocument
 await run('cat', input: 'fed to stdin');
@@ -73,6 +76,21 @@ await (await which('dart'))?.run(args: ['--version']);
 final piped = await ('echo "apple\nbanana"' | 'grep an').run();      // pipefail semantics
 print(piped.lines);
 ```
+
+### HTML
+
+`$` takes a CSS selector and returns `Elements`: a list, whose `text`, `attr()` and `lines`
+answer for the first match.
+
+```dart
+final doc = await url.html();                       // or res.html, or '<p>…</p>'.html
+final title = doc.$('h1').text;
+for (final a in doc.$('td.title > a[href]')) print(a.attr('href'));
+final tracks = doc.$('#songlist tr').$('td:nth-child(3)').map((td) => td.text);
+```
+
+The parser is the package's own: tag soup lands where a browser puts it, and it starts in a
+fraction of the time `package:html` did.
 
 ### Paths
 
@@ -93,7 +111,7 @@ await dir.zipTo('${dir.path}.zip');
 ```
 
 A name that came from outside — a scraped title, a header, user input — becomes one component
-with `filename`; `sanitized()` is for a whole path and keeps its separators:
+with `filename`; `sanitized` is for a whole path and keeps its separators:
 
 ```dart
 dir / 'AIR / Farewell song'.filename;   // .../AIR _ Farewell song
@@ -123,13 +141,11 @@ final lock = Mutex();
 await lock.run(() async { /* critical section */ });
 ```
 
-One cancellation idiom composes over any `Stream` or `Future`:
+One cancellation idiom composes over any `Stream` or `Future`, and a `Cli` action already has a
+token — `ctx.cancel` — that a signal, `die` and the end of the action cancel:
 
 ```dart
-final token = CancelToken();
-onExit(() => token.cancel('interrupted'));
-
-await for (final item in url.scrape<Item>().onResponse(parse).rights.cancelWith(token)) {
+await for (final item in url.scrape<Item>().onResponse(parse).rights.cancelWith(ctx.cancel)) {
   print(item);
 }
 ```
@@ -143,15 +159,14 @@ final stories = url.scrape<Story>()
     .onInit((ctx) {
       ctx.concurrency = 8;
       ctx.delay = 200.ms;
-      ctx.maxPages = 50;
+      ctx.pages = 50;
     })
     .onRequest((ctx) => ctx.request.headers['accept-language'] = 'en')
     .onResponse((ctx) {
-      final html = ctx.response.html();
+      final html = ctx.response.html;
       for (final row in html.$('tr.athing')) {
-        if (row.$('.titleline > a').firstOrNull case final a?) {
-          ctx.emit((title: a.text, link: ctx.resolve(a.attr('href')!)));
-        }
+        final a = row.$('.titleline > a');   // Elements: text and attr() answer for the first match
+        if (a.attr('href') case final href?) ctx.emit((title: a.text, link: ctx.resolve(href)));
       }
       for (final a in html.$('a[href]')) ctx.follow(a.attr('href')!);
     })
@@ -164,20 +179,23 @@ await for (final story in stories.rights) print(story);
 Five hooks, each with the context for its moment:
 
 - `onInit` — once, on listen, with every crawl-wide setting: `concurrency`, `perHost`, `delay`,
-  `timeout`, `retries`, `redirects`, `bodyLimit`, `maxPages`, `maxDepth`, `scope`, and `seed()`
+  `timeout`, `retries`, `redirects`, `bodyLimit`, `pages`, `depth`, `scope`, and `seed()`
   to add starting points. It may be async — fetch a token, read a config.
 - `onRequest` — before every send. Anything per request is here: a header, the `user-agent`, a
   signature on `ctx.request`, or `ctx.skip()`.
 - `onResponse` — every 2xx. `ctx.emit`, `ctx.follow`, `ctx.stop`; `ctx.url` is the page that
   answered, after redirects, and `ctx.depth` and `ctx.pages` say where the crawl is.
 - `onError` — the engine has given up on a request. `switch` on `ctx.failure`
-  (`RequestFailed | BadStatus | HandlerFailed`), then `ctx.retry(after:)`, `ctx.emit` a
+  (`RequestFailed | StatusFailed | HookFailed`), then `ctx.retry(after:)`, `ctx.emit` a
   fallback, `ctx.follow` an alternative, or `ctx.ignore()`. A hook that does none of those
   leaves the failure a `Left`.
-- `onFinish` — once, with a `ScrapeSummary` of pages, failures, requests, retries, bytes, time.
+- `onFinish` — once, with a `ScrapeSummary` of pages, failures, requests, retries, drops,
+  bytes, time.
 
-`follow` stays on the seeds' hosts and drops `mailto:` and `javascript:` by itself; `ctx.scope`
-in `onInit` widens the rule for the crawl, `offsite: true` for one link. `follow(onResponse:, onError:)`
+`follow` stays on the seeds' hosts (`www.` or not), strips fragments, never fetches a page
+twice, and drops `mailto:` and `javascript:` by itself — and returns `false` when it dropped
+something, so nothing vanishes silently. `ctx.scope` in `onInit` widens the rule for the crawl,
+`offsite: true` for one link, `revisit: true` for one refetch. `follow(onResponse:, onError:)`
 overrides the hooks for one request, and `meta:` rides along to it.
 
 Defaults: 16 in flight, 8 per host, 30 s, 2 retries, 5 hops, 16 MB, `user-agent: dart-toolkit`
@@ -200,7 +218,7 @@ where the timeout and default headers live:
 await Http.session(() async {
   final doc = await url.html();        // throws on a non-2xx status
   final res = await other.get();       // ...or check it yourself
-  if (!res.ok) await die('${res.statusCode} from $other');
+  if (!res.isOk) await die('${res.statusCode} from $other');
 }, timeout: 30.s, headers: {'user-agent': 'my-tool/1.0'});
 ```
 
@@ -223,18 +241,21 @@ await for (final p in {url: dest}.downloadAll(concurrency: 4)) {
 }
 ```
 
-A progress widget needs none of that — `report` takes the batch update whole:
+A progress widget needs none of that — `show` renders the batch and returns its last event, and
+`merge` lets a fixed list and a crawl feed the same downloader at the same time:
 
 ```dart
-final progress = Console.multiProgress(slots: 8, message: 'Downloading');
-await for (final p in scraped.downloadAll(concurrency: 8)) progress.report(p);
-progress.done('Done.');
+final last = await [Stream.fromIterable(artwork.pairs), scraped]
+    .merge()
+    .downloadAll(concurrency: 8, cancelToken: ctx.cancel)
+    .show(slots: 8, message: 'Downloading', done: 'Done.');
+print('${last?.written} new files');
 ```
 
 ### Errors
 
 ```dart
-final outcome = Either.tryCatch(() => int.parse(raw));
+final outcome = Either.tryCatchSync(() => int.parse(raw));
 final typed = outcome.mapLeft(ParseFailure.from);   // narrow afterwards
 print(typed.fold((e) => 'failed: $e', (v) => 'got $v'));
 ```
@@ -243,8 +264,9 @@ print(typed.fold((e) => 'failed: $e', (v) => 'got $v'));
 
 Option kinds are a sealed type, so a flag cannot also be numeric. A default is declared once —
 `ctx.option` and `ctx.number` are non-null because of it — and `required: true` makes absence a
-usage error. `Cli.run` owns the lifecycle: a usage error prints and exits 64, and when the
-action returns the exit hooks run and the signal handlers are released so the process ends.
+usage error. `Cli.run` owns the lifecycle: a usage error (`UsageException`) prints and exits 64,
+`ctx.cancel` is cancelled on a signal, and whether the action returns or throws the exit hooks
+run and the signal handlers are released so the process ends.
 
 ```dart
 final cli = Cli(name: 'deployer')

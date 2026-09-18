@@ -45,8 +45,8 @@ extension IterableParallelExtensions<T> on Iterable<T> {
 
         final item = list[index];
         results[index] = isolate
-            ? await Either.tryCatchAsync(() => Isolate.run(() => worker(item)))
-            : await Either.tryCatchAsync(() => worker(item));
+            ? await Either.tryCatch(() => Isolate.run(() => worker(item)))
+            : await Either.tryCatch(() => worker(item));
       }
     }
 
@@ -121,8 +121,8 @@ extension StreamParallelExtensions<T> on Stream<T> {
             task = pool
                 .run(
                   () => isolate
-                      ? Either.tryCatchAsync(() => Isolate.run(() => worker(item)))
-                      : Either.tryCatchAsync(() => worker(item)),
+                      ? Either.tryCatch(() => Isolate.run(() => worker(item)))
+                      : Either.tryCatch(() => worker(item)),
                 )
                 .then((outcome) {
                   if (!controller.isClosed) controller.add(outcome);

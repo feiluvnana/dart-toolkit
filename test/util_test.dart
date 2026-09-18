@@ -12,10 +12,10 @@ void main() {
     });
 
     test('Duration.humanize formats nicely', () {
-      expect(350.ms.humanize(), equals('350ms'));
-      expect(45.s.humanize(), equals('45s'));
-      expect((2.m + 15.s).humanize(), equals('2m 15s'));
-      expect((1.h + 5.m + 2.s).humanize(), equals('1h 5m 2s'));
+      expect(350.ms.humanized, equals('350ms'));
+      expect(45.s.humanized, equals('45s'));
+      expect((2.m + 15.s).humanized, equals('2m 15s'));
+      expect((1.h + 5.m + 2.s).humanized, equals('1h 5m 2s'));
     });
 
     test('Duration.jitter adds variance within bounds', () {
