@@ -80,7 +80,7 @@ multi: this is one
       expect(_show(_plain(reference.loadYaml(out))), _show(doc.yaml.raw));
       expect(
         '{"a": "yes", "b": "1", "c": "x: y", "d": [1, {"e": null}]}'.json.toYaml(),
-        'a: "yes"\nb: "1"\nc: "x: y"\nd:\n  - 1\n  - e: null\n',
+        'a: yes\nb: "1"\nc: "x: y"\nd:\n  - 1\n  - e: null\n', // YAML 1.2: yes is text, so it stays plain
       );
     });
   });

@@ -452,7 +452,7 @@ final class Group<K, T> extends Sequence<T> {
   Group._(this.key, List<T> elements) : super._(elements);
 
   @override
-  String toString() => 'Group($key: ${length} elements)';
+  String toString() => 'Group($key: $length elements)';
 }
 
 /// A [Sequence] of groups.
