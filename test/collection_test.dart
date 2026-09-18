@@ -1,139 +1,252 @@
-import 'package:dart_toolkit/dart_toolkit.dart';
+import 'dart:io';
+
+import 'package:dart_toolkit/collection.dart';
+import 'package:dart_toolkit/core.dart';
+import 'package:dart_toolkit/html.dart';
 import 'package:test/test.dart';
 
 void main() {
-  group('Collections', () {
-    test('chunk', () {
-      final items = [1, 2, 3, 4, 5];
-      expect(
-        items.chunk(2).toList(),
-        equals([
-          [1, 2],
-          [3, 4],
-          [5],
-        ]),
-      );
+  group('Seq', () {
+    final words = ['apple', 'apricot', 'banana', 'avocado'];
+
+    test('is an Iterable that keeps the chain lazy and typed', () {
+      var pulled = 0;
+      final s = [1, 2, 3, 4, 5, 6].seq
+          .map((n) {
+            pulled++;
+            return n * 2;
+          })
+          .where((n) => n > 4)
+          .take(2);
+      expect(s, isA<Iterable<int>>());
+      expect(pulled, 0);
+      expect(s.toList(), [6, 8]);
+      expect(pulled, 4);
+      expect([for (final n in s) n], [6, 8]);
+      expect(s.seq, same(s));
     });
 
-    test('zip and unzip', () {
-      final a = [1, 2, 3];
-      final b = ['a', 'b', 'c'];
-      final zipped = a.zip(b).toList();
-      expect(zipped, equals([(1, 'a'), (2, 'b'), (3, 'c')]));
-
-      final (unA, unB) = zipped.unzip;
-      expect(unA, equals(a));
-      expect(unB, equals(b));
-    });
-
-    test('groupBy, countBy, distinctBy', () {
-      final words = ['apple', 'apricot', 'banana', 'avocado'];
-      expect(
-        words.groupBy((w) => w[0]),
-        equals({
-          'a': ['apple', 'apricot', 'avocado'],
-          'b': ['banana'],
-        }),
-      );
-      expect(words.countBy((w) => w[0]), equals({'a': 3, 'b': 1}));
-      expect(words.distinctBy((w) => w[0]).toList(), equals(['apple', 'banana']));
-    });
-
-    test('sorted, sortedBy, sortedByDescending', () {
-      final nums = [3, 1, 4, 2];
-      expect(nums.sorted(), equals([1, 2, 3, 4]));
-      expect(nums, equals([3, 1, 4, 2])); // non-mutating
-
-      final words = ['banana', 'apple', 'pie'];
-      expect(words.sortedBy((w) => w.length), equals(['pie', 'apple', 'banana']));
-      expect(words.sortedBy((String w) => w.length, descending: true), equals(['banana', 'apple', 'pie']));
-    });
-
-    test('sum, average, maxBy, minBy', () {
-      final items = [10, 20, 30];
-      expect(items.sum(), equals(60));
-      expect(items.average(), equals(20.0));
-      expect(items.maxBy((x) => x), equals(30));
-      expect(items.minBy((x) => x), equals(10));
-    });
-
-    test('List elementAtOrNull and shuffled', () {
-      final list = ['alpha', 'beta'];
-      expect(list.elementAtOrNull(0), equals('alpha'));
-      expect(list.elementAtOrNull(5), isNull);
-      // The SDK member rejects a negative index rather than returning null,
-      // which the deleted `getOrNull` accepted.
-      expect(() => list.elementAtOrNull(-1), throwsRangeError);
-      expect(list.shuffled().length, equals(2));
-    });
-
-    test('Map mergeWith', () {
-      final m1 = {'a': 1, 'b': 2};
-      final m2 = {'b': 3, 'c': 4};
-      final merged = m1.mergeWith(m2, (v1, v2) => v1 + v2);
-      expect(merged, equals({'a': 1, 'b': 5, 'c': 4}));
-    });
-  });
-
-  group('collection', () {
-    test('partition and indexBy', () {
-      final (even, odd) = [1, 2, 3, 4, 5].partition((n) => n.isEven);
-      expect(even, [2, 4]);
-      expect(odd, [1, 3, 5]);
-      expect(['aa', 'b', 'cc'].indexBy((s) => s.length), {2: 'cc', 1: 'b'});
-    });
-
-    test('distinct, windowed, takeLast, skipLast, none, flattened', () {
-      expect([3, 1, 3, 2, 1].distinct, [3, 1, 2]);
-      expect([1, 2, 3, 4].windowed(2).toList(), [
-        [1, 2],
-        [2, 3],
-        [3, 4],
-      ]);
-      expect([1, 2, 3, 4, 5].windowed(2, step: 2).toList(), [
-        [1, 2],
-        [3, 4],
-      ]);
-      expect([1, 2, 3, 4, 5].windowed(2, step: 2, partial: true).toList(), [
+    test('shape: distinct, chunk, windowed, pairwise, zip, cartesian, interleave, scan, takeLast, skipLast', () {
+      expect([3, 1, 3, 2, 1].seq.distinct.toList(), [3, 1, 2]);
+      expect(words.seq.distinctBy((w) => w[0]).toList(), ['apple', 'banana']);
+      expect([1, 2, 3, 4, 5].seq.chunk(2).toList(), [
         [1, 2],
         [3, 4],
         [5],
       ]);
-      expect([1, 2, 3, 4].takeLast(2), [3, 4]);
-      expect([1, 2, 3, 4].skipLast(3), [1]);
-      expect([1, 2].takeLast(5), [1, 2]);
-      expect([1, 3].none((n) => n.isEven), isTrue);
+      expect([1, 2, 3, 4].seq.windowed(2).toList(), [
+        [1, 2],
+        [2, 3],
+        [3, 4],
+      ]);
+      expect([1, 2, 3, 4, 5].seq.windowed(2, step: 2, partial: true).toList(), [
+        [1, 2],
+        [3, 4],
+        [5],
+      ]);
+      expect([1, 2, 3].seq.pairwise.toList(), [(1, 2), (2, 3)]);
+      expect([1, 2, 3].seq.zip(['a', 'b']).toList(), [(1, 'a'), (2, 'b')]);
+      expect([1, 2].seq.cartesian(['a', 'b']).toList(), [(1, 'a'), (1, 'b'), (2, 'a'), (2, 'b')]);
+      expect([1, 3, 5].seq.interleave([2, 4]).toList(), [1, 2, 3, 4, 5]);
+      expect([1, 2, 3].seq.scan(0, (a, b) => a + b).toList(), [1, 3, 6]);
+      expect([1, 2, 3, 4].seq.takeLast(2).toList(), [3, 4]);
+      expect([1, 2, 3, 4].seq.skipLast(3).toList(), [1]);
+      expect([1, 2, 3].seq.reversed.toList(), [3, 2, 1]);
+      expect([1, 2, 3].seq.whereNot((n) => n.isEven).toList(), [1, 3]);
       expect(
         [
           [1],
           [2, 3],
-          <int>[],
-        ].flattened.toList(),
+        ].seq.flattened.toList(),
         [1, 2, 3],
       );
+      expect(Seq.range(3).toList(), [0, 1, 2]);
+      expect(Seq.range(2, 8, 3).toList(), [2, 5]);
     });
 
-    test('records, toMap, where, mapValues, mapKeys, inverted', () {
+    test('sortedBy … thenBy equals a compound comparator, and is stable', () {
+      final pairs = [(1, 'b'), (2, 'a'), (1, 'a'), (2, 'b'), (1, 'a')];
+      expect(pairs.seq.sortedBy((p) => p.$1).thenBy((p) => p.$2).toList(), [
+        (1, 'a'),
+        (1, 'a'),
+        (1, 'b'),
+        (2, 'a'),
+        (2, 'b'),
+      ]);
+      expect(pairs.seq.sortedBy((p) => p.$1, descending: true).thenBy((p) => p.$2, descending: true).first, (2, 'b'));
+      expect(words.seq.sorted().first, 'apple');
+      expect(words.seq.sortedBy((w) => w.length).thenWith((a, b) => b.compareTo(a)).toList(), [
+        'apple',
+        'banana',
+        'avocado',
+        'apricot',
+      ]);
+      final random = [for (var i = 0; i < 2000; i++) (i * 7919 % 13, i * 104729 % 17, i)];
+      final a = random.seq.sortedBy((r) => r.$1).thenBy((r) => r.$2, descending: true).toList();
+      final b = random.toList()
+        ..sort(
+          (x, y) => x.$1 != y.$1
+              ? x.$1.compareTo(y.$1)
+              : x.$2 != y.$2
+              ? y.$2.compareTo(x.$2)
+              : x.$3.compareTo(y.$3),
+        );
+      expect(a, b);
+    });
+
+    test('sets keep the left order', () {
+      expect([1, 2, 3].seq.union([3, 4, 1]).toList(), [1, 2, 3, 4]);
+      expect([1, 2, 3, 2].seq.intersect([2, 3, 9]).toList(), [2, 3]);
+      expect([1, 2, 3].seq.except([2]).toList(), [1, 3]);
+    });
+
+    test('joins index the right side once', () {
+      final songs = [(href: '/1', title: 'One'), (href: '/2', title: 'Two'), (href: '/3', title: 'Three')];
+      final pages = [(href: '/1', size: 10), (href: '/2', size: 20), (href: '/2', size: 21)];
+      expect(
+        songs.seq.innerJoin(pages, on: (s) => s.href, to: (p) => p.href, (s, p) => '${s.title}:${p.size}').toList(),
+        ['One:10', 'Two:20', 'Two:21'],
+      );
+      expect(
+        songs.seq.leftJoin(pages, on: (s) => s.href, to: (p) => p.href, (s, p) => '${s.title}:${p?.size}').toList(),
+        ['One:10', 'Two:20', 'Two:21', 'Three:null'],
+      );
+      expect(songs.seq.groupJoin(pages, on: (s) => s.href, to: (p) => p.href, (s, ps) => ps.length).toList(), [
+        1,
+        2,
+        0,
+      ]);
+    });
+
+    test('groupBy, countBy, indexBy, partition, numbers', () {
+      expect(words.seq.groupBy((w) => w[0]).toMap(), {
+        'a': ['apple', 'apricot', 'avocado'],
+        'b': ['banana'],
+      });
+      expect(words.seq.countBy((w) => w[0]).toMap(), {'a': 3, 'b': 1});
+      expect(words.seq.groupBy((w) => w[0]).mapValues((g) => g.length).sortedByValue(descending: true).keys.first, 'a');
+      expect(['aa', 'b', 'cc'].seq.indexBy((s) => s.length), {2: 'cc', 1: 'b'});
+      final (even, odd) = [1, 2, 3, 4, 5].seq.partition((n) => n.isEven);
+      expect(even, [2, 4]);
+      expect(odd, [1, 3, 5]);
+      expect([10, 20, 30].seq.sum(), 60);
+      expect(words.seq.sum((w) => w.length), 25);
+      expect([10, 20, 30].seq.average(), 20.0);
+      expect(<int>[].seq.average(), isNull);
+      expect(words.seq.maxBy((w) => w.length), 'apricot');
+      expect(words.seq.minBy((w) => w.length), 'apple');
+      expect([3, 9, 1].seq.minMax((n) => n), (1, 9));
+      expect([1, 3].seq.none((n) => n.isEven), isTrue);
+    });
+
+    test('a Map is a Seq of records and comes back as a Map', () {
       final m = {'a': 1, 'b': 2, 'c': 3};
-      expect(m.records.toList(), [('a', 1), ('b', 2), ('c', 3)]);
-      expect(m.records.toMap(), m);
-      expect(m.where((k, v) => v.isOdd), {'a': 1, 'c': 3});
-      expect(m.mapValues((v) => v * 10), {'a': 10, 'b': 20, 'c': 30});
-      expect(m.mapKeys((k) => k.toUpperCase()), {'A': 1, 'B': 2, 'C': 3});
-      expect(m.inverted, {1: 'a', 2: 'b', 3: 'c'});
-      for (final (k, v) in m.records) {
+      expect(m.seq.toList(), [('a', 1), ('b', 2), ('c', 3)]);
+      expect(m.seq.where((p) => p.$2.isOdd).toMap(), {'a': 1, 'c': 3});
+      expect(m.seq.mapValues((v) => v * 10).toMap(), {'a': 10, 'b': 20, 'c': 30});
+      expect(m.seq.mapKeys((k) => k.toUpperCase()).toMap(), {'A': 1, 'B': 2, 'C': 3});
+      expect(m.seq.inverted.toMap(), {1: 'a', 2: 'b', 3: 'c'});
+      expect(m.seq.followedBy({'b': 5}.seq).toMap((a, b) => a + b), {'a': 1, 'b': 7, 'c': 3});
+      expect(m.seq.sortedByValue(descending: true).keys.toList(), ['c', 'b', 'a']);
+      final (ks, vs) = m.seq.unzip;
+      expect(ks, ['a', 'b', 'c']);
+      expect(vs, [1, 2, 3]);
+      for (final (k, v) in m.seq) {
         expect(m[k], v);
       }
     });
+  });
 
-    test('a query chain reads as one sentence', () {
-      final tracks = [(disc: 1, n: 2, s: 300), (disc: 1, n: 1, s: 200), (disc: 2, n: 1, s: 100)];
-      final byDisc = tracks.groupBy((t) => t.disc).mapValues((ts) => ts.sortedBy((t) => t.n).map((t) => t.n).toList());
-      expect(byDisc, {
-        1: [1, 2],
-        2: [1],
+  group('Table', () {
+    final t = Table.rows([
+      {'disc': 1, 'n': 2, 'title': 'B', 'size': '1,200'},
+      {'disc': 1, 'n': 1, 'title': 'A', 'size': 800},
+      {'disc': 2, 'n': 1, 'title': 'C', 'size': 9.5},
+    ]);
+
+    test('columns, rows, typed reads', () {
+      expect(t.columns, ['disc', 'n', 'title', 'size']);
+      expect(t.length, 3);
+      expect(t[0].number('size'), 1200);
+      expect(t[0].get<int>('size'), 1200);
+      expect(t[2].text('title'), 'C');
+      expect(t.column('n'), [2, 1, 1]);
+      expect(Table.records([1, 2], (n) => {'n': n, 'sq': n * n}).column('sq'), [1, 4]);
+    });
+
+    test('where, orderBy … thenBy, select, rename, derive, drop, distinct, take', () {
+      expect(t.where((r) => r['disc'] == 1).column('title'), ['B', 'A']);
+      expect(t.orderBy('disc').thenBy('n').column('title'), ['A', 'B', 'C']);
+      expect(t.orderBy('size', descending: true).column('title'), ['B', 'A', 'C']); // '1,200' reads as 1200
+      expect(t.select(['title', 'n']).columns, ['title', 'n']);
+      expect(t.rename({'n': 'track'}).columns, ['disc', 'track', 'title', 'size']);
+      expect(t.derive('kb', (r) => r.number('size')! / 1000).column('kb'), [1.2, 0.8, 0.0095]);
+      expect(t.drop(['size', 'title']).columns, ['disc', 'n']);
+      expect(t.distinct(['disc']).length, 2);
+      expect(t.take(1).length, 1);
+      expect(t.skip(2).length, 1);
+    });
+
+    test('groupBy folds, pivot, join', () {
+      expect(t.groupBy('disc').count().rows, [
+        {'disc': 1, 'count': 2},
+        {'disc': 2, 'count': 1},
+      ]);
+      expect(t.groupBy('disc').sum('size').column('size'), [2000, 9.5]);
+      expect(t.groupBy('disc').agg({'size': Agg.max, 'title': Agg.list}).rows.first, {
+        'disc': 1,
+        'size': '1,200',
+        'title': ['B', 'A'],
       });
-      expect(tracks.groupBy((t) => t.disc).mapValues((ts) => ts.sum((t) => t.s)), {1: 500, 2: 100});
+      expect(t.groupBy('disc').aggWith({'first': (rows) => rows.first['title']}).column('first'), ['B', 'C']);
+      final p = t.pivot(rows: 'disc', column: 'title', value: 'size');
+      expect(p.columns, ['disc', 'B', 'A', 'C']);
+      expect(p.rows.first, {'disc': 1, 'B': 1200, 'A': 800, 'C': 0});
+      final formats = Table.rows([
+        {'disc': 1, 'format': 'flac'},
+        {'disc': 3, 'format': 'mp3'},
+      ]);
+      expect(t.join(formats, on: 'disc').column('format'), ['flac', 'flac']);
+      expect(t.leftJoin(formats, on: 'disc').column('format'), ['flac', 'flac', null]);
+      final clash = Table.rows([
+        {'disc': 2, 'title': 'other'},
+      ]);
+      expect(t.join(clash, on: 'disc').columns, ['disc', 'n', 'title', 'size', 'title_2']);
+    });
+
+    test('CSV round trip with quotes and newlines; JSON; HTML; save', () async {
+      const csv = 'name,note\n"Smith, J","said ""hi""\nthen left"\nLee,\n';
+      final parsed = Table.csv(csv);
+      expect(parsed.columns, ['name', 'note']);
+      expect(parsed.rows, [
+        {'name': 'Smith, J', 'note': 'said "hi"\nthen left'},
+        {'name': 'Lee', 'note': ''},
+      ]);
+      expect(Table.csv(parsed.toCsv()).rows, parsed.rows);
+      expect(t.toCsv().split('\n').first, 'disc,n,title,size');
+
+      final json = '[{"a": 1, "b": "x"}, {"a": 2}]'.json;
+      expect(json.table.columns, ['a', 'b']);
+      expect(json.table.rows, [
+        {'a': 1, 'b': 'x'},
+        {'a': 2},
+      ]);
+      expect('{"items": [{"a": 1}]}'.json.$(r'$.items[*]').table.length, 1);
+
+      final html =
+          '<table><tr><th>Title</th><th>Size</th></tr><tr><td>A</td><td>10</td></tr><tr><td>B</td><td>20</td></tr></table>'
+              .html;
+      expect(html.$('table').table.columns, ['Title', 'Size']);
+      expect(html.$('table').table.orderBy('Size', descending: true).column('Title'), ['B', 'A']);
+      expect('<table><tr><td>x</td><td>y</td></tr></table>'.html.$('table').table.columns, ['c1', 'c2']);
+
+      final dir = Directory.systemTemp.createTempSync('tbl_');
+      try {
+        await t.saveCsv('${dir.path}/out.csv');
+        expect(Table.csv(File('${dir.path}/out.csv').readAsStringSync()).length, 3);
+      } finally {
+        dir.deleteSync(recursive: true);
+      }
     });
   });
 }

@@ -6,6 +6,7 @@
 /// {@category Formats}
 library;
 
+import 'collection.dart';
 import 'http.dart';
 import 'xpath.dart';
 

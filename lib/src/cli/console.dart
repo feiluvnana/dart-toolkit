@@ -521,3 +521,14 @@ extension StreamBatchProgressExtensions<T extends BatchProgress> on Stream<T> {
     return last;
   }
 }
+
+/// {@category Terminal}
+extension TableConsoleExtensions on Table {
+  /// Prints this table through [Console.table].
+  void show() => Console.table(
+    headers: columns,
+    rows: [
+      for (final r in rows) [for (final c in columns) r[c]],
+    ],
+  );
+}

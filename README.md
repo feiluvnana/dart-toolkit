@@ -27,7 +27,7 @@ shaking makes it free.
 
 | import | contents | third-party |
 |---|---|---|
-| `collection.dart` | query and reshape `Iterable`, `List`, `Map`: `groupBy`, `sortedBy`, `partition`, `records`, `mapValues`… | — |
+| `collection.dart` | `Seq` (`.seq` on any `Iterable` or `Map`): lazy queries, multi-key sort, joins, sets; `Table`: rows of named columns, CSV in and out | — |
 | `util.dart` | `Env`, `ConsoleIo`, `TaskProgress`, `Crc32`, duration helpers | — |
 | `cli.dart` | `Cli`, `Prompt`, `Logger`, `Console`, ANSI | — |
 | `core.dart` | `Either`, `JsonDocument`, string helpers | — |
@@ -140,20 +140,35 @@ final seen = <Path, int>{p.normalized: 1};
 
 ### Collections
 
-One vocabulary over `Iterable` and `Map`, the one Kotlin settled on: a verb with `By` takes a
-key selector, an adjective returns a new collection, and nothing the SDK already has is
-repeated. A map's entries are records, so a loop destructures them.
+Nothing is added to `Iterable` or `Map`. The way in is a conversion: `.seq` gives a `Seq`, a
+lazy query with LINQ's and Kotlin's vocabulary that is still an `Iterable` on the way out;
+`.table` gives a `Table`, rows of named columns. Both are opt-in; a plain list needs neither.
 
 ```dart
-final byDisc = tracks.groupBy((t) => t.disc).mapValues((ts) => ts.sortedBy((t) => t.number));
-for (final (disc, list) in byDisc.records) print('$disc: ${list.length}');
+final top = tracks.seq
+    .where((t) => t.format == 'flac')
+    .sortedBy((t) => t.disc).thenBy((t) => t.number, descending: true)
+    .take(10);                                            // still lazy, still an Iterable
 
-final (flac, mp3) = files.partition((f) => f.ext == 'flac');
-final sizes = files.indexBy((f) => f.name).mapValues((f) => f.sizeSync());
-final total = files.sum((f) => f.sizeSync());
-words.countBy((w) => w[0]).where((k, n) => n > 1).inverted;
-[1, 2, 3, 4].windowed(2);            // [1,2] [2,3] [3,4]
-pairs.toMap();                        // Iterable<(K, V)> → Map
+tracks.seq.groupBy((t) => t.disc).mapValues((g) => g.length).toMap();   // {1: 12, 2: 9}
+songs.seq.innerJoin(pages, on: (s) => s.href, to: (p) => p.href, (s, p) => (s, p.size));
+[1, 2, 3].seq.union([3, 4]).scan(0, (a, b) => a + b);    // 1, 3, 6, 10
+for (final (k, v) in map.seq.sortedByValue(descending: true).take(3)) print('$k $v');
+```
+
+A `Table` comes from maps, records, a JSON array, CSV text or an HTML `<table>`, and goes
+back out as CSV, JSON or a console table:
+
+```dart
+final t = doc.$('table#songs').table;                     // <th> → columns, <tr> → rows
+t.where((r) => r.number('size')! > 1e6)
+    .orderBy('disc').thenBy('n')
+    .select(['title', 'size'])
+    .show();
+t.groupBy('disc').sum('size');                            // Table(disc, size)
+t.pivot(rows: 'disc', column: 'format', value: 'size');
+await t.join(other, on: 'href').saveCsv('out.csv');
+final rows = json.$(r'$.items[*]').table;                 // or Table.csv(text), Table.rows(list)
 ```
 
 ### Concurrency

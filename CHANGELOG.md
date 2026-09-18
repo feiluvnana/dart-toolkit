@@ -5,12 +5,21 @@ deltas measured on the same machine; `tool/startup.dart` reproduces the startup 
 
 ## Unreleased
 
-- **Collections speak one vocabulary.** `Iterable`: `distinct`, `windowed`, `takeLast`,
-  `skipLast`, `none`, `flattened`, `toMap()` on pairs, next to `groupBy`, `countBy`, `indexBy`,
-  `partition`, `sortedBy`, `sum`, `average`, `maxBy`, `minBy`, `zip`, `chunk`. `Map`: `records`
-  (entries as `(k, v)` for destructuring loops), `where`, `mapValues`, `mapKeys`, `inverted`,
-  `mergeWith`. A verb with `By` takes a key selector; an adjective returns a new collection;
-  nothing the SDK has is repeated.
+- **`collection` is a query type, not a set of extensions.** Every extension on `Iterable`,
+  `List` and `Map` is gone. `items.seq` and `map.seq` give a `Seq<T>` — lazy, still an
+  `Iterable`, with the SDK's `where`/`map`/`take`… returning `Seq` so the chain continues, and
+  LINQ's and Kotlin's vocabulary on top: `distinct`, `distinctBy`, `chunk`, `windowed`,
+  `pairwise`, `zip`, `cartesian`, `interleave`, `scan`, `takeLast`, `skipLast`, `reversed`,
+  `shuffled`, `whereNot`, `indexed`; `sorted`/`sortedBy` returning `Sorted` with `thenBy` and
+  `thenWith`; `union`, `intersect`, `except` keeping order; `innerJoin`, `leftJoin`, `groupJoin`
+  as hash joins; `groupBy` and `countBy` as `(key, value)` records with `mapValues`, `mapKeys`,
+  `inverted`, `sortedByKey`, `sortedByValue`, `toMap([merge])`, `unzip`; `indexBy`,
+  `partition`, `sum`, `average`, `minBy`, `maxBy`, `minMax`, `none`; `Seq.range`.
+- **`Table`**: rows of named columns from `Table.rows`, `Table.records`, `Table.csv`,
+  `json.table`, `doc.$('table').table`; `where`, `orderBy`/`thenBy`, `select`, `rename`,
+  `derive`, `drop`, `distinct`, `take`, `skip`, `join`/`leftJoin`, `groupBy` with `count`,
+  `sum`, `avg`, `min`, `max`, `agg`, `aggWith`, `pivot`; typed reads on rows (`number`, `text`,
+  `get<T>`, with `'1,200'` counting as 1200); out as `toCsv`, `saveCsv`, `toJson`, `show()`.
 - **keybox takes no options.** It downloads every format and zips the result; `Cli` stays only
   as the lifecycle (`--help`, `--version`, `ctx.cancel`).
 - **No CI.** The GitHub workflow is gone; `tool/check_deps.dart`, `dart analyze` and `dart test`
