@@ -147,7 +147,7 @@ extension PathDownloadExtensions on Path {
   /// deletes the `.part` file on failure. Honours [cancelToken] cooperatively.
   Stream<DownloadProgress> download(
     Uri url, {
-    http.Client? client,
+    Client? client,
     Map<String, String>? headers,
     bool overwrite = false,
     CancelToken? cancelToken,
@@ -168,7 +168,7 @@ extension PathDownloadExtensions on Path {
     var done = false;
 
     try {
-      final request = http.Request('GET', url);
+      final request = Request('GET', url);
       if (headers != null) request.headers.addAll(headers);
       final streamed = await lease.client.send(request);
 
@@ -233,7 +233,7 @@ Future<void> _discard(File part) async {
 Stream<BatchDownloadProgress> _batchDownload(
   Stream<({Uri url, Path path})> source, {
   int? knownTotal,
-  http.Client? client,
+  Client? client,
   Map<String, String>? headers,
   int concurrency = 4,
   bool overwrite = false,
@@ -360,7 +360,7 @@ Stream<BatchDownloadProgress> _batchDownload(
 extension IterableDownloadExtensions on Iterable<({Uri url, Path path})> {
   /// Downloads every pair, at most [concurrency] at a time.
   Stream<BatchDownloadProgress> downloadAll({
-    http.Client? client,
+    Client? client,
     Map<String, String>? headers,
     int concurrency = 4,
     bool overwrite = false,
@@ -387,7 +387,7 @@ extension StreamDownloadExtensions on Stream<({Uri url, Path path})> {
   ///
   /// [BatchDownloadProgress.total] is `null` until this stream closes.
   Stream<BatchDownloadProgress> downloadAll({
-    http.Client? client,
+    Client? client,
     Map<String, String>? headers,
     int concurrency = 4,
     bool overwrite = false,
@@ -414,7 +414,7 @@ extension MapDownloadExtensions on Map<Uri, Path> {
   /// A `Map` holds one destination per URL. To send one URL to two places, use the
   /// [IterableDownloadExtensions] form over records.
   Stream<BatchDownloadProgress> downloadAll({
-    http.Client? client,
+    Client? client,
     Map<String, String>? headers,
     int concurrency = 4,
     bool overwrite = false,

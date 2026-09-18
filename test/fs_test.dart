@@ -3,8 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:dart_toolkit/dart_toolkit.dart';
-import 'package:http/http.dart' as http;
-import 'package:http/testing.dart';
+import 'package:dart_toolkit/testing.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
@@ -140,11 +139,11 @@ void main() {
       final client = MockClient((request) async {
         final path = request.url.path;
         if (path == '/file1.txt') {
-          return http.Response('Hello file 1', 200, headers: {'content-length': '12'});
+          return Response('Hello file 1', 200, headers: {'content-length': '12'});
         } else if (path == '/file2.txt') {
-          return http.Response('Hello file 2', 200, headers: {'content-length': '12'});
+          return Response('Hello file 2', 200, headers: {'content-length': '12'});
         }
-        return http.Response('Not Found', 404);
+        return Response('Not Found', 404);
       });
 
       final base = Path(tempDir.path) / 'download_test';
@@ -417,7 +416,7 @@ void main() {
     test('atomic download handles short read, cleans up partials and prevents sticky failure', () async {
       final client = MockClient.streaming((request, bodyStream) async {
         // Advertises 1000 bytes but sends only 10 bytes
-        return http.StreamedResponse(
+        return StreamedResponse(
           Stream.value(List<int>.filled(10, 65)),
           200,
           contentLength: 1000,

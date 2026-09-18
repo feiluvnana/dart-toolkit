@@ -21,6 +21,8 @@ const modules = [
   'process',
   'html',
   'xml',
+  'xpath',
+  'testing',
   'archive',
   'http',
 ];

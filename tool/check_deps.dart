@@ -14,11 +14,13 @@ const budgets = <String, Set<String>>{
   'core': {},
   'fs': {'path'},
   'hash': {'crypto', 'path'},
-  'html': {'http', 'path'},
-  'http': {'http', 'path'},
+  'html': {'path'},
+  'http': {'path'},
   'process': {'path'},
+  'testing': {'path'},
   'util': {},
-  'xml': {'http', 'path'},
+  'xml': {'path'},
+  'xpath': {},
 };
 
 final _directive = RegExp(r"""^\s*(?:import|export|part)\s+'([^']+)'""", multiLine: true);

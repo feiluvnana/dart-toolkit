@@ -1,53 +1,5 @@
 part of '../../http.dart';
 
-final Expando<String> _bodyMemo = Expando<String>('bodyMemo');
-final Expando<JsonDocument> _jsonMemo = Expando<JsonDocument>('jsonMemo');
-
-/// Body access and JSON parsing on [http.Response].
-///
-/// `html()` and `xml()` live in `html/html.dart` and `xml/xml.dart`, with the parsers
-/// they need, so a program that never parses them never compiles them.
-///
-/// {@category Networking}
-extension ResponseExtensions on http.Response {
-  /// Runs [action] on a copy of this response inside a background [Isolate].
-  ///
-  /// Copies the body, status, headers and URL — not the request graph. Extract data in
-  /// [action]; returning a parsed document copies it all back and buys nothing.
-  Future<R> isolate<R>(FutureOr<R> Function(http.Response res) action) {
-    final rawBody = text;
-    final code = statusCode;
-    final hdrs = headers;
-    final req = request;
-    final method = req?.method ?? 'GET';
-    final reqUrl = req?.url;
-
-    return (() {
-      final copy = http.Response(
-        rawBody,
-        code,
-        headers: hdrs,
-        request: reqUrl != null ? http.Request(method, reqUrl) : null,
-      );
-      return action(copy);
-    }).isolate();
-  }
-
-  /// The decoded body, decoded once per response instance.
-  ///
-  /// `package:http` re-decodes `bodyBytes` on every `body` access; this does not.
-  String get text => _bodyMemo[this] ??= body;
-
-  /// The body parsed as JSON, once per response instance.
-  JsonDocument get json => _jsonMemo[this] ??= JsonDocument.parse(text);
-
-  /// The request URL of this response.
-  Uri? get url => request?.url;
-
-  /// Whether the status code is 2xx.
-  bool get isOk => statusCode >= 200 && statusCode < 300;
-}
-
 /// HTTP requests and JSON on [Uri].
 ///
 /// {@category Networking}
@@ -58,37 +10,52 @@ extension UriExtensions on Uri {
   /// `..` [part] still resolves as an href would.
   Uri operator /(String part) => (path.endsWith('/') ? this : replace(path: '$path/')).resolve(part);
 
-  /// Performs an HTTP GET request to this URI.
-  Future<http.Response> get({Map<String, String>? headers, http.Client? client}) async {
+  /// Sends [request] through [client], the session's client, or a fresh one, and buffers the body.
+  Future<Response> send(Request request, {Client? client}) async {
     final lease = _clientFor(client);
     try {
-      return await lease.client.get(this, headers: headers);
+      return await (await lease.client.send(request)).read();
     } finally {
       lease.close();
     }
   }
 
+  /// Performs an HTTP GET request to this URI.
+  Future<Response> get({Map<String, String>? headers, Client? client}) =>
+      send(Request('GET', this, headers: headers), client: client);
+
   /// Performs an HTTP POST request to this URI.
-  Future<http.Response> post({Map<String, String>? headers, Object? body, http.Client? client}) async {
-    final lease = _clientFor(client);
-    try {
-      return await lease.client.post(this, headers: headers, body: body);
-    } finally {
-      lease.close();
+  ///
+  /// [body] is a [String] (sent as UTF-8 text), a `List<int>`, or a `Map<String, String>`
+  /// (sent form-encoded).
+  Future<Response> post({Map<String, String>? headers, Object? body, Client? client}) {
+    final request = Request('POST', this, headers: headers);
+    switch (body) {
+      case null:
+        break;
+      case String():
+        request.text = body;
+      case List<int>():
+        request.bytes = Uint8List.fromList(body);
+      case Map<String, String>():
+        request.fields = body;
+      default:
+        throw ArgumentError.value(body, 'body', 'Must be a String, a List<int> or a Map<String, String>');
     }
+    return send(request, client: client);
   }
 
   /// GETs this URI and throws [HttpException] unless the status is 2xx.
   ///
   /// `url.json()`, `url.html()` and `url.xml()` are `fetch` plus a parse; use [get] with
-  /// [ResponseExtensions.isOk] to handle a failure yourself.
-  Future<http.Response> fetch({Map<String, String>? headers, http.Client? client}) async {
+  /// [Response.isOk] to handle a failure yourself.
+  Future<Response> fetch({Map<String, String>? headers, Client? client}) async {
     final res = await get(headers: headers, client: client);
     if (!res.isOk) throw HttpException('GET failed with status ${res.statusCode}', uri: this);
     return res;
   }
 
   /// Fetches this URI and parses the response body as JSON; see [fetch].
-  Future<JsonDocument> json({Map<String, String>? headers, http.Client? client}) async =>
+  Future<JsonDocument> json({Map<String, String>? headers, Client? client}) async =>
       (await fetch(headers: headers, client: client)).json;
 }

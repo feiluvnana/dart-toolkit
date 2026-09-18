@@ -2,18 +2,17 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dart_toolkit/dart_toolkit.dart';
-import 'package:http/http.dart' as http;
-import 'package:http/testing.dart';
+import 'package:dart_toolkit/testing.dart';
 import 'package:test/test.dart';
 
-class _CountingClient extends http.BaseClient {
-  final http.Client _inner;
+class _CountingClient implements Client {
+  final Client _inner;
   final void Function() _onClose;
 
   _CountingClient(this._inner, this._onClose);
 
   @override
-  Future<http.StreamedResponse> send(http.BaseRequest request) => _inner.send(request);
+  Future<StreamedResponse> send(Request request) => _inner.send(request);
 
   @override
   void close() {
@@ -25,7 +24,7 @@ class _CountingClient extends http.BaseClient {
 void main() {
   group('HTTP Extension & Crawler', () {
     test('res.html parses HTML with CSS selectors and memoizes parsed doc', () {
-      final res = http.Response('''
+      final res = Response('''
         <!DOCTYPE html>
         <html>
           <head><title>Test Page</title></head>
@@ -59,7 +58,7 @@ void main() {
     });
 
     test('res.xml parses XML with XPath selector', () {
-      final res = http.Response('''
+      final res = Response('''
         <bookstore>
           <book category="fiction">
             <title lang="en">Harry Potter</title>
@@ -88,7 +87,7 @@ void main() {
     });
 
     test('res.json parses JSON with JSONPath selector and memoizes parsed doc', () {
-      final res = http.Response('''
+      final res = Response('''
         {
           "store": {
             "book": [
@@ -157,19 +156,19 @@ void main() {
       final client = MockClient((request) async {
         final path = request.url.path;
         if (path == '/index') {
-          return http.Response(
+          return Response(
             '<html><body><h1>Catalog</h1><a href="product/1">Product 1</a></body></html>',
             200,
             headers: {'content-type': 'text/html'},
           );
         } else if (path == '/product/1') {
-          return http.Response(
+          return Response(
             '{"name": "Widget", "price": 49.99}',
             200,
             headers: {'content-type': 'application/json'},
           );
         }
-        return http.Response('Not Found', 404);
+        return Response('Not Found', 404);
       });
 
       final items = await Http.session(() async {
@@ -208,7 +207,7 @@ void main() {
     });
 
     test('fetch-and-parse refuses a non-2xx page, get() reports it instead', () async {
-      final client = MockClient((request) async => http.Response('<html>not found</html>', 404));
+      final client = MockClient((request) async => Response('<html>not found</html>', 404));
 
       await expectLater('https://example.com/missing'.url.html(client: client), throwsA(isA<HttpException>()));
 
@@ -220,9 +219,9 @@ void main() {
     test('ctx.url is the response URL, and ctx.resolve matches what follow() does', () async {
       final client = MockClient((request) async {
         if (request.url.path == '/album') {
-          return http.Response('<a href="track/7.mp3">t</a>', 200);
+          return Response('<a href="track/7.mp3">t</a>', 200);
         }
-        return http.Response('ok', 200);
+        return Response('ok', 200);
       });
 
       final resolved = await Http.session(() async {
@@ -245,7 +244,7 @@ void main() {
       final client = _CountingClient(
         MockClient((request) async {
           requests++;
-          return http.Response('<html><b>ok</b></html>', 200);
+          return Response('<html><b>ok</b></html>', 200);
         }),
         () => closed++,
       );
@@ -257,7 +256,7 @@ void main() {
         final a = await 'https://example.com/a'.url.html();
         final b = await 'https://example.com/b'.url.get();
         expect(b.isOk, isTrue);
-        return [a.$('b').first.text, b.body];
+        return [a.$('b').first.text, b.text];
       }, client: client);
 
       expect(pages.first, equals('ok'));
@@ -266,18 +265,18 @@ void main() {
       expect(Http.client, isNull, reason: 'the session ends with its body');
     });
 
-    test('scrape accepts http.Request seeds directly and handles dedupe properly', () async {
+    test('scrape accepts Request seeds directly and handles dedupe properly', () async {
       var requestCount = 0;
       final client = MockClient((request) async {
         requestCount++;
         if (request.method == 'POST') {
-          return http.Response('{"ok": true, "body": "${request.body}"}', 200);
+          return Response('{"ok": true, "body": "${request.text}"}', 200);
         }
-        return http.Response('{"ok": true}', 200, headers: {'content-type': 'application/json'});
+        return Response('{"ok": true}', 200, headers: {'content-type': 'application/json'});
       });
 
-      final req1 = http.Request('POST', Uri.parse('https://example.com/api'))..body = 'body1';
-      final req2 = http.Request('POST', Uri.parse('https://example.com/api'))..body = 'body2';
+      final req1 = Request('POST', Uri.parse('https://example.com/api'))..text = 'body1';
+      final req2 = Request('POST', Uri.parse('https://example.com/api'))..text = 'body2';
 
       final results = await Http.session(() async {
         return await [req1, req2]
@@ -297,7 +296,7 @@ void main() {
     test('scrape supports CancelToken to abort gracefully', () async {
       final client = MockClient((request) async {
         await Future<void>.delayed(const Duration(milliseconds: 50));
-        return http.Response('{"ok": true}', 200);
+        return Response('{"ok": true}', 200);
       });
 
       final cancelToken = CancelToken();
@@ -318,7 +317,7 @@ void main() {
     });
 
     test('res.isolate() runs parsing and extraction on background isolate', () async {
-      final res = http.Response('''
+      final res = Response('''
         <html>
           <body>
             <ul class="users">
@@ -344,23 +343,23 @@ void main() {
     });
 
     test('Response.isolate composes with html(), json() and xml()', () async {
-      final htmlRes = http.Response('<div><span class="val">42</span></div>', 200);
+      final htmlRes = Response('<div><span class="val">42</span></div>', 200);
       final numVal = await htmlRes.isolate((r) => r.html.$('.val').firstOrNull?.text);
       expect(numVal, equals('42'));
 
-      final jsonRes = http.Response('{"user": {"name": "John"}}', 200);
+      final jsonRes = Response('{"user": {"name": "John"}}', 200);
       final nameVal = await jsonRes.isolate((r) => r.json.$(r'$.user.name').firstOrNull?.to<String>());
       expect(nameVal, equals('John'));
 
-      final xmlRes = http.Response('<root><item id="99">Hello</item></root>', 200);
+      final xmlRes = Response('<root><item id="99">Hello</item></root>', 200);
       final xmlVal = await xmlRes.isolate((r) => r.xml.$('//item').text);
       expect(xmlVal, equals('Hello'));
 
       final mockClient = MockClient((req) async {
         if (req.url.path == '/api/item') {
-          return http.Response('{"id": 99, "title": "Toolkit"}', 200);
+          return Response('{"id": 99, "title": "Toolkit"}', 200);
         }
-        return http.Response('<html><body><h1>Hello Uri Isolate</h1></body></html>', 200);
+        return Response('<html><body><h1>Hello Uri Isolate</h1></body></html>', 200);
       });
 
       final itemRes = await 'https://example.com/api/item'.url.get(client: mockClient);
@@ -373,7 +372,7 @@ void main() {
     });
 
     test('follow rejects a non-Uri, non-String target', () async {
-      final client = MockClient((request) async => http.Response('<html></html>', 200));
+      final client = MockClient((request) async => Response('<html></html>', 200));
 
       await Http.session(() async {
         final stream = 'https://example.com/'.url.scrape<String>().onResponse((ctx) {
@@ -397,7 +396,7 @@ void main() {
     });
 
     test('follow rejects body and fields together', () async {
-      final client = MockClient((request) async => http.Response('<html></html>', 200));
+      final client = MockClient((request) async => Response('<html></html>', 200));
 
       await Http.session(() async {
         final stream = 'https://example.com/'.url.scrape<String>().onResponse((ctx) {
@@ -413,8 +412,8 @@ void main() {
     test('a followed POST carries its body', () async {
       final bodies = <String>[];
       final client = MockClient((request) async {
-        bodies.add(request.body);
-        return http.Response('<html></html>', 200);
+        bodies.add(request.text);
+        return Response('<html></html>', 200);
       });
 
       await Http.session(() async {
@@ -437,14 +436,14 @@ void main() {
         if (request.url.path == '/bad') {
           throw const SocketException('Connection refused');
         }
-        return http.Response('ok', 200);
+        return Response('ok', 200);
       });
 
       await Http.session(() async {
         final outcomes = await [Uri.parse('https://example.com/bad'), Uri.parse('https://example.com/good')]
             .scrape<String>()
             .onResponse((ctx) {
-              ctx.emit(ctx.response.body);
+              ctx.emit(ctx.response.text);
             })
             .toList();
 
@@ -456,7 +455,7 @@ void main() {
 
     test('a 404 is a StatusFailed and the handler does not run', () async {
       var handlerRan = false;
-      final client = MockClient((request) async => http.Response('Not Found', 404));
+      final client = MockClient((request) async => Response('Not Found', 404));
 
       await Http.session(() async {
         final outcomes = await 'https://example.com/missing'.url.scrape<String>().onResponse((ctx) {
@@ -476,7 +475,7 @@ void main() {
       final requestedPaths = <String>[];
       final client = MockClient((request) async {
         requestedPaths.add('${request.url.host}${request.url.path}');
-        return http.Response('ok', 200);
+        return Response('ok', 200);
       });
 
       await Http.session(() async {
@@ -501,7 +500,7 @@ void main() {
       final requested = <String>[];
       final client = MockClient((request) async {
         requested.add(request.url.toString());
-        return http.Response('ok', 200);
+        return Response('ok', 200);
       });
 
       await Http.session(() async {
@@ -521,7 +520,7 @@ void main() {
 
     test('stop() after page 3 leaves the crawl at <= 3 + in-flight pages', () async {
       var handledPages = 0;
-      final client = MockClient((request) async => http.Response('ok', 200));
+      final client = MockClient((request) async => Response('ok', 200));
 
       await Http.session(() async {
         await 'https://example.com/1'.url
@@ -545,7 +544,7 @@ void main() {
       var dispatched = 0;
       final client = MockClient((request) async {
         dispatched++;
-        return http.Response('ok', 200);
+        return Response('ok', 200);
       });
 
       await Http.session(() async {
@@ -567,19 +566,19 @@ void main() {
         if (request.url.host == 'a.com') {
           if (!log.contains('a-429')) {
             log.add('a-429');
-            return http.Response('too many requests', 429, headers: {'retry-after': '1'});
+            return Response('too many requests', 429, headers: {'retry-after': '1'});
           }
           log.add('a-ok');
-          return http.Response('ok-a', 200);
+          return Response('ok-a', 200);
         } else {
           log.add('b-ok');
-          return http.Response('ok-b', 200);
+          return Response('ok-b', 200);
         }
       });
 
       await Http.session(() async {
         final stream = [Uri.parse('https://a.com/1'), Uri.parse('https://b.com/1')].scrape<String>().onResponse((ctx) {
-          ctx.emit('${ctx.url.host}:${ctx.response.body}');
+          ctx.emit('${ctx.url.host}:${ctx.response.text}');
         });
 
         final items = await stream.rights.toList();
@@ -619,14 +618,14 @@ void main() {
           }
         }
 
-        return http.StreamedResponse(generateBody(), 200);
+        return StreamedResponse(generateBody(), 200);
       });
 
       await Http.session(() async {
         final outcomes = await 'https://example.com/large'.url.scrape<void>().toList();
         expect(outcomes.length, equals(1));
         final failure = outcomes.single.leftOrNull as RequestFailed;
-        expect(failure.error, isA<http.ClientException>());
+        expect(failure.error, isA<ClientException>());
         expect(failure.attempts, equals(1));
         expect(bytesSent, lessThanOrEqualTo(16 * 1024 * 1024 + 64 * 1024));
       }, client: mock);
@@ -635,12 +634,12 @@ void main() {
     test('a redirect updates ctx.url and relative resolution', () async {
       final client = MockClient((request) async {
         if (request.url.path == '/initial') {
-          return http.Response('', 301, headers: {'location': '/final/page'});
+          return Response('', 301, headers: {'location': '/final/page'});
         }
         if (request.url.path == '/final/page') {
-          return http.Response('<html><a href="detail">Link</a></html>', 200);
+          return Response('<html><a href="detail">Link</a></html>', 200);
         }
-        return http.Response('ok', 200);
+        return Response('ok', 200);
       });
 
       await Http.session(() async {
@@ -666,7 +665,7 @@ void main() {
         }
         await Future<void>.delayed(const Duration(milliseconds: 20));
         currentInFlight--;
-        return http.Response('ok', 200);
+        return Response('ok', 200);
       });
 
       await Http.session(() async {
@@ -679,16 +678,16 @@ void main() {
     });
 
     test('a seed that redirects to another host moves the crawl there, and keeps its headers', () async {
-      final requests = <http.Request>[];
+      final requests = <Request>[];
       final client = MockClient((request) async {
         requests.add(request);
         if (request.url.host == 'example.com') {
-          return http.Response('', 301, headers: {'location': 'https://www.example.com/home'});
+          return Response('', 301, headers: {'location': 'https://www.example.com/home'});
         }
-        return http.Response('<a href="/next">n</a>', 200);
+        return Response('<a href="/next">n</a>', 200);
       });
 
-      final seed = http.Request('GET', Uri.parse('https://example.com/'))..headers['x-test'] = '1';
+      final seed = Request('GET', Uri.parse('https://example.com/'))..headers['x-test'] = '1';
       final pages = await Http.session(() async {
         return await [seed]
             .scrape<String>()
@@ -714,8 +713,8 @@ void main() {
 
     test('a redirect off the seeds\' hosts is a StatusFailed, not silence', () async {
       final client = MockClient((request) async {
-        if (request.url.path == '/out') return http.Response('', 302, headers: {'location': 'https://other.com/'});
-        return http.Response('<a href="/out">o</a>', 200);
+        if (request.url.path == '/out') return Response('', 302, headers: {'location': 'https://other.com/'});
+        return Response('<a href="/out">o</a>', 200);
       });
 
       final outcomes = await Http.session(() async {
@@ -730,7 +729,7 @@ void main() {
     test('stop() lets running handlers finish and delivers their emits', () async {
       final client = MockClient((request) async {
         if (request.url.path == '/slow') await Future<void>.delayed(const Duration(milliseconds: 100));
-        return http.Response('ok', 200);
+        return Response('ok', 200);
       });
 
       final items = await Http.session(() async {
@@ -752,7 +751,7 @@ void main() {
     });
 
     test('nothing reaches the error channel: a throwing handler is a Left', () async {
-      final client = MockClient((request) async => http.Response('ok', 200));
+      final client = MockClient((request) async => Response('ok', 200));
       final outcomes = await Http.session(() async {
         return await 'https://example.com/'.url.scrape<void>().onResponse((ctx) => throw StateError('boom')).toList();
       }, client: client);
@@ -763,7 +762,7 @@ void main() {
       final agents = <String?>[];
       final client = MockClient((request) async {
         agents.add(request.headers['user-agent']);
-        return http.Response('ok', 200);
+        return Response('ok', 200);
       });
 
       await Http.session(() => 'https://example.com/'.url.scrape<void>().toList(), client: client);
@@ -781,7 +780,7 @@ void main() {
         final seen = <String, String?>{};
         final client = MockClient((request) async {
           seen[request.url.path] = request.headers['x-sig'];
-          return http.Response('ok', 200);
+          return Response('ok', 200);
         });
 
         final outcomes = await Http.session(() async {
@@ -805,13 +804,13 @@ void main() {
         final client = MockClient((request) async {
           switch (request.url.path) {
             case '/flaky':
-              return ++flaky < 5 ? http.Response('down', 500) : http.Response('up', 200);
+              return ++flaky < 5 ? Response('down', 500) : Response('up', 200);
             case '/gone':
-              return http.Response('gone', 410);
+              return Response('gone', 410);
             case '/quiet':
-              return http.Response('nope', 404);
+              return Response('nope', 404);
             default:
-              return http.Response('teapot', 418);
+              return Response('teapot', 418);
           }
         });
 
@@ -820,14 +819,14 @@ void main() {
               .map((p) => Uri.parse('https://example.com$p'))
               .scrape<String>()
               .onInit((c) => c.retries = 1)
-              .onResponse((ctx) => ctx.emit(ctx.response.body))
+              .onResponse((ctx) => ctx.emit(ctx.response.text))
               .onError((ctx) {
                 switch (ctx.failure) {
-                  case StatusFailed(response: http.Response(statusCode: 500)):
+                  case StatusFailed(response: Response(statusCode: 500)):
                     ctx.retry();
-                  case StatusFailed(response: http.Response(statusCode: 410)):
+                  case StatusFailed(response: Response(statusCode: 410)):
                     ctx.emit('fallback');
-                  case StatusFailed(response: http.Response(statusCode: 404)):
+                  case StatusFailed(response: Response(statusCode: 404)):
                     ctx.ignore();
                   default:
                     break;
@@ -843,8 +842,8 @@ void main() {
 
       test('onFinish gets the summary once, after the last item', () async {
         final client = MockClient((request) async {
-          if (request.url.path == '/bad') return http.Response('x', 404);
-          return http.Response('body', 200);
+          if (request.url.path == '/bad') return Response('x', 404);
+          return Response('body', 200);
         });
 
         ScrapeSummary? summary;
@@ -874,7 +873,7 @@ void main() {
         var sent = 0;
         final client = MockClient((request) async {
           sent++;
-          return http.Response('ok', 200);
+          return Response('ok', 200);
         });
 
         final pages = await Http.session(() async {
@@ -899,7 +898,7 @@ void main() {
         final requested = <String>[];
         final client = MockClient((request) async {
           requested.add('${request.url.host}${request.url.path}');
-          return http.Response('ok', 200);
+          return Response('ok', 200);
         });
 
         await Http.session(() async {
@@ -924,7 +923,7 @@ void main() {
         final watch = Stopwatch()..start();
         final client = MockClient((request) async {
           (stamps[request.url.host] ??= []).add(watch.elapsedMilliseconds);
-          return http.Response('ok', 200);
+          return Response('ok', 200);
         });
 
         await Http.session(() async {
@@ -948,7 +947,7 @@ void main() {
           final seen = <String, Map<String, String>>{};
           final client = MockClient((request) async {
             seen[request.url.path] = request.headers;
-            return http.Response('ok', 200);
+            return Response('ok', 200);
           });
 
           final metas = await Http.session(() async {
@@ -975,7 +974,7 @@ void main() {
         var sent = 0;
         final client = MockClient((request) async {
           sent++;
-          return http.Response('ok', 200);
+          return Response('ok', 200);
         });
         await Http.session(() async {
           final crawl = 'https://example.com/'.url.scrape<void>();
@@ -990,8 +989,8 @@ void main() {
 
       test('follow(onResponse:, onError:) override the crawl hooks for one request', () async {
         final client = MockClient((request) async {
-          if (request.url.path == '/detail') return http.Response('d', 404);
-          return http.Response('ok', 200);
+          if (request.url.path == '/detail') return Response('d', 404);
+          return Response('ok', 200);
         });
 
         final outcomes = await Http.session(() async {

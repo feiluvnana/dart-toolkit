@@ -11,7 +11,7 @@ const _clientKey = #dartToolkitHttpClient;
 /// {@category Networking}
 class Http {
   /// The client of the enclosing [session], or `null` outside one.
-  static http.Client? get client => Zone.current[_clientKey] as http.Client?;
+  static Client? get client => Zone.current[_clientKey] as Client?;
 
   /// Runs [body] with one shared client for every HTTP call inside it.
   ///
@@ -23,12 +23,12 @@ class Http {
   /// open client delays process exit until its idle connections time out.
   static Future<T> session<T>(
     FutureOr<T> Function() body, {
-    http.Client? client,
+    Client? client,
     Duration? timeout,
     Map<String, String>? headers,
   }) async {
     final owned = client == null;
-    final inner = client ?? http.Client();
+    final inner = client ?? IoClient();
     final shared = timeout == null && headers == null ? inner : _SessionClient(inner, headers, timeout, owned: owned);
     try {
       return await runZoned(() async => body(), zoneValues: {_clientKey: shared});
@@ -39,8 +39,8 @@ class Http {
 }
 
 /// Applies a session's default headers and timeout to every request.
-class _SessionClient extends http.BaseClient {
-  final http.Client _inner;
+final class _SessionClient implements Client {
+  final Client _inner;
   final Map<String, String>? _headers;
   final Duration? _timeout;
   final bool _owned;
@@ -48,19 +48,19 @@ class _SessionClient extends http.BaseClient {
   _SessionClient(this._inner, this._headers, this._timeout, {required bool owned}) : _owned = owned;
 
   @override
-  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+  Future<StreamedResponse> send(Request request) async {
     _headers?.forEach((key, value) => request.headers.putIfAbsent(key, () => value));
     final timeout = _timeout;
     if (timeout == null) return _inner.send(request);
     final res = await _inner.send(request).timeout(timeout);
-    return http.StreamedResponse(
+    return StreamedResponse(
       res.stream.timeout(timeout),
       res.statusCode,
       contentLength: res.contentLength,
       request: res.request,
+      url: res.url,
       headers: res.headers,
       isRedirect: res.isRedirect,
-      persistentConnection: res.persistentConnection,
       reasonPhrase: res.reasonPhrase,
     );
   }
@@ -72,8 +72,8 @@ class _SessionClient extends http.BaseClient {
 }
 
 /// A borrowed or owned client.
-class _ClientLease {
-  final http.Client client;
+final class _ClientLease {
+  final Client client;
 
   /// The session's default headers, or `null` outside a session or when it set none.
   final Map<String, String>? headers;
@@ -88,8 +88,8 @@ class _ClientLease {
 }
 
 /// Resolves the client for one call: the explicit one, else the session's, else a new one.
-_ClientLease _clientFor(http.Client? explicit) {
+_ClientLease _clientFor(Client? explicit) {
   final shared = explicit ?? Http.client;
-  if (shared == null) return _ClientLease(http.Client(), true);
+  if (shared == null) return _ClientLease(IoClient(), true);
   return _ClientLease(shared, false, headers: shared is _SessionClient ? shared._headers : null);
 }

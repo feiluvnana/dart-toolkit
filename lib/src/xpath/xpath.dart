@@ -1,4 +1,4 @@
-part of '../../core.dart';
+part of '../../xpath.dart';
 
 /// What kind of node an [XPathTree] node is.
 ///

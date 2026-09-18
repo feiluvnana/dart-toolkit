@@ -13,3 +13,4 @@ export 'http.dart';
 export 'process.dart';
 export 'util.dart';
 export 'xml.dart';
+export 'xpath.dart';

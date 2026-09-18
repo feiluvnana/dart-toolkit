@@ -6,10 +6,8 @@
 /// {@category Formats}
 library;
 
-import 'package:http/http.dart' as http;
-
-import 'core.dart';
 import 'http.dart';
+import 'xpath.dart';
 
 part 'src/html/dom.dart';
 part 'src/html/entities.dart';

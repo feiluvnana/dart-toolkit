@@ -42,7 +42,7 @@ sealed class ScrapeFailure {
   final Uri url;
 
   /// The request as it was scheduled.
-  final http.BaseRequest request;
+  final Request request;
 
   /// Hops from a seed; seeds are 0.
   final int depth;
@@ -79,7 +79,7 @@ final class RequestFailed extends ScrapeFailure {
 ///
 /// {@category Crawling}
 final class StatusFailed extends ScrapeFailure {
-  final http.Response response;
+  final Response response;
 
   const StatusFailed({
     required super.url,
@@ -157,7 +157,7 @@ final class InitContext<T> {
   /// Which URLs [ResponseContext.follow] may go to. Default: the seeds' hosts, `www.` or not.
   bool Function(Uri url)? scope;
 
-  final List<http.BaseRequest> _seeds;
+  final List<Request> _seeds;
   final Map<Uri, Map<String, Object?>> _seedMeta = {};
 
   InitContext._(this._seeds);
@@ -168,7 +168,7 @@ final class InitContext<T> {
   /// Adds a starting point.
   void seed(Uri url, {Map<String, Object?>? meta}) {
     url = url.removeFragment();
-    _seeds.add(http.Request('GET', url));
+    _seeds.add(Request('GET', url));
     if (meta != null) _seedMeta[url] = meta;
   }
 }
@@ -179,7 +179,7 @@ final class InitContext<T> {
 /// {@category Crawling}
 final class RequestContext {
   /// The request as it will be sent; its `headers` are yours to edit.
-  final http.Request request;
+  final Request request;
 
   /// Hops from a seed; seeds are 0.
   final int depth;
@@ -216,7 +216,7 @@ sealed class HookContext<T> {
   Uri get url;
 
   /// The request as it was scheduled.
-  http.BaseRequest get request;
+  Request get request;
 
   /// Hops from a seed; seeds are 0.
   int get depth;
@@ -289,10 +289,10 @@ sealed class HookContext<T> {
 /// {@category Crawling}
 final class ResponseContext<T> extends HookContext<T> {
   /// The response; always 2xx.
-  final http.Response response;
+  final Response response;
 
   @override
-  final http.BaseRequest request;
+  final Request request;
 
   /// The URL that answered — after redirects.
   @override
@@ -339,7 +339,7 @@ final class ErrorContext<T> extends HookContext<T> {
   @override
   Uri get url => failure.url;
   @override
-  http.BaseRequest get request => failure.request;
+  Request get request => failure.request;
   @override
   int get depth => failure.depth;
   @override
@@ -429,7 +429,7 @@ final class Scrape<T> extends StreamView<Either<ScrapeFailure, T>> {
 
   Scrape._(this._hooks, StreamController<Either<ScrapeFailure, T>> controller) : super(controller.stream);
 
-  factory Scrape._of(Iterable<http.BaseRequest> seeds) {
+  factory Scrape._of(Iterable<Request> seeds) {
     final hooks = _Hooks<T>(seeds.toList());
     late final StreamController<Either<ScrapeFailure, T>> controller;
     controller = StreamController(onListen: () => _run(hooks, controller));
@@ -472,17 +472,17 @@ final class Scrape<T> extends StreamView<Either<ScrapeFailure, T>> {
 /// {@category Crawling}
 extension UriScrapeExtensions on Uri {
   /// A crawl seeded here.
-  Scrape<T> scrape<T>() => Scrape<T>._of([http.Request('GET', removeFragment())]);
+  Scrape<T> scrape<T>() => Scrape<T>._of([Request('GET', removeFragment())]);
 }
 
 /// {@category Crawling}
 extension IterableUriScrapeExtensions on Iterable<Uri> {
   /// A crawl seeded here.
-  Scrape<T> scrape<T>() => Scrape<T>._of([for (final url in this) http.Request('GET', url.removeFragment())]);
+  Scrape<T> scrape<T>() => Scrape<T>._of([for (final url in this) Request('GET', url.removeFragment())]);
 }
 
 /// {@category Crawling}
-extension IterableRequestScrapeExtensions on Iterable<http.BaseRequest> {
+extension IterableRequestScrapeExtensions on Iterable<Request> {
   /// A crawl seeded with these requests — any method, body or headers.
   Scrape<T> scrape<T>() => Scrape<T>._of(this);
 }
@@ -492,7 +492,7 @@ extension IterableRequestScrapeExtensions on Iterable<http.BaseRequest> {
 // ---------------------------------------------------------------------------------------------
 
 final class _Hooks<T> {
-  final List<http.BaseRequest> seeds;
+  final List<Request> seeds;
   InitHook<T>? onInit;
   RequestHook? onRequest;
   ResponseHook<T>? onResponse;
@@ -508,7 +508,7 @@ const _userAgent = 'dart-toolkit';
 /// Identity of a request for deduplication: the values, not a hash of them.
 typedef _RequestKey = (String method, Uri url, String body);
 
-_RequestKey _key(http.BaseRequest req) => (req.method.toUpperCase(), req.url, req is http.Request ? req.body : '');
+_RequestKey _key(Request req) => (req.method, req.url, String.fromCharCodes(req.bytes));
 
 /// Headers that stay behind when a redirect leaves the host.
 const _credential = {'authorization', 'cookie', 'proxy-authorization'};
@@ -521,12 +521,12 @@ bool _certain(Object e) =>
     e is HandshakeException || e is CertificateException || e is TlsException || e is _BodyTooLarge;
 
 /// A body over the cap; the same on every attempt, so never retried.
-final class _BodyTooLarge extends http.ClientException {
-  _BodyTooLarge(int cap, Uri url) : super('Response body over $cap bytes', url);
+final class _BodyTooLarge extends ClientException {
+  const _BodyTooLarge(int cap, Uri url) : super('Response body over $cap bytes', url);
 }
 
 class _Item<T> {
-  final http.BaseRequest request;
+  final Request request;
   final ResponseHook<T>? onResponse;
   final ErrorHook<T>? onError;
   final Map<String, Object?> meta;
@@ -678,7 +678,7 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
     });
   }
 
-  Duration retryAfter(http.Response res, _Host<T> host) {
+  Duration retryAfter(Response res, _Host<T> host) {
     final header = res.headers['retry-after']?.trim() ?? '';
     if (int.tryParse(header) case final seconds?) return Duration(seconds: seconds);
     if (header.isNotEmpty) {
@@ -724,10 +724,9 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
 
   Follow<T> followFrom(_Item<T> item, Uri base) =>
       (target, {onResponse, onError, meta, headers, method = 'GET', body, fields, revisit = false, offsite = false}) {
-        final next = http.Request(method, _resolve(base, target));
-        if (body != null) next.body = body;
-        if (fields != null) next.bodyFields = fields;
-        if (headers != null) next.headers.addAll(headers);
+        final next = Request(method, _resolve(base, target), headers: headers);
+        if (body != null) next.text = body;
+        if (fields != null) next.fields = fields;
         final scheduled = enqueue(
           _Item<T>(
             next,
@@ -786,8 +785,8 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
     attempts: item.attempt,
   );
 
-  StatusFailed statusFailed(_Item<T> item, http.Response res) => StatusFailed(
-    url: res.request?.url ?? item.request.url,
+  StatusFailed statusFailed(_Item<T> item, Response res) => StatusFailed(
+    url: res.url ?? item.request.url,
     request: item.request,
     depth: item.depth,
     meta: item.meta,
@@ -804,11 +803,11 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
     return fail(host, item, requestFailed(item, url, e), st);
   }
 
-  Future<void> redirect(_Host<T> host, _Item<T> item, http.BaseRequest sent, http.Response res) {
+  Future<void> redirect(_Host<T> host, _Item<T> item, Request sent, Response res) {
     final location = res.headers['location']?.trim();
     if (location == null || location.isEmpty) return fail(host, item, statusFailed(item, res), StackTrace.current);
     if (item.hops >= cfg.redirects) {
-      final e = http.ClientException('Too many redirects', sent.url);
+      final e = ClientException('Too many redirects', sent.url);
       return fail(host, item, requestFailed(item, sent.url, e), StackTrace.current);
     }
     final target = sent.url.resolve(location);
@@ -825,7 +824,7 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
     final status = res.statusCode;
     final downgrade =
         status == 303 || ((status == 301 || status == 302) && sent.method != 'GET' && sent.method != 'HEAD');
-    final next = http.Request(downgrade ? 'GET' : sent.method, target);
+    final next = Request(downgrade ? 'GET' : sent.method, target);
     final crossHost = target.host != sent.url.host;
     for (final MapEntry(:key, :value) in sent.headers.entries) {
       final k = key.toLowerCase();
@@ -834,7 +833,7 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
       if (crossHost && _credential.contains(k)) continue;
       next.headers[key] = value;
     }
-    if (!downgrade && sent is http.Request) next.bodyBytes = sent.bodyBytes;
+    if (!downgrade) next.bytes = sent.bytes;
     if (!item.revisit && !visited.add(_key(next))) return Future.value();
 
     final hop = _Item<T>(
@@ -850,7 +849,7 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
     return Future.value();
   }
 
-  Future<void> handle(_Host<T> host, _Item<T> item, http.BaseRequest sent, http.Response res) async {
+  Future<void> handle(_Host<T> host, _Item<T> item, Request sent, Response res) async {
     pages++;
     final hook = item.onResponse ?? hooks.onResponse;
     if (hook == null) return;
@@ -888,7 +887,7 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
     final sent = _clone(item.request);
     if (!sessionHasUserAgent) sent.headers.putIfAbsent('user-agent', () => _userAgent);
 
-    if (hooks.onRequest case final hook? when sent is http.Request) {
+    if (hooks.onRequest case final hook?) {
       final ctx = RequestContext._(sent, item.depth, item.attempt, item.meta);
       try {
         await hook(ctx);
@@ -904,7 +903,7 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
     }
 
     requests++;
-    final http.StreamedResponse streamed;
+    final StreamedResponse streamed;
     try {
       streamed = await lease.client.send(sent).timeout(cfg.timeout);
     } catch (e, st) {
@@ -924,13 +923,13 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
     host.consecutiveFailures = 0;
     bytes += builder.length;
 
-    final res = http.Response.bytes(
+    final res = Response.bytes(
       builder.takeBytes(),
       streamed.statusCode,
       request: sent,
+      url: streamed.url,
       headers: streamed.headers,
       isRedirect: streamed.isRedirect,
-      persistentConnection: streamed.persistentConnection,
       reasonPhrase: streamed.reasonPhrase,
     );
     final status = res.statusCode;
@@ -1006,13 +1005,5 @@ Uri _resolve(Uri base, Object target) => switch (target) {
   _ => throw ArgumentError.value(target, 'target', 'Must be a Uri or a String href'),
 };
 
-/// A fresh, unfinalized copy the engine can send once per attempt, with redirects left to it.
-/// A request that cannot be copied is sent as is; a retry of it fails as a [RequestFailed].
-http.BaseRequest _clone(http.BaseRequest req) {
-  if (req is! http.Request) return req..followRedirects = false;
-  return http.Request(req.method, req.url)
-    ..followRedirects = false
-    ..persistentConnection = req.persistentConnection
-    ..bodyBytes = req.bodyBytes
-    ..headers.addAll(req.headers);
-}
+/// A fresh copy the engine can send once per attempt, with redirects left to it.
+Request _clone(Request req) => req.copy()..followRedirects = false;

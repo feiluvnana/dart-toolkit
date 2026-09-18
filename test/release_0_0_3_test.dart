@@ -2,15 +2,14 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:dart_toolkit/dart_toolkit.dart';
-import 'package:http/http.dart' as http;
-import 'package:http/testing.dart';
+import 'package:dart_toolkit/testing.dart';
 import 'package:test/test.dart';
 
 /// Every test here reproduced a defect in 0.0.2 before the fix landed.
 void main() {
   group('scrape', () {
     test('a hook that calls stop() and then throws still closes the stream', () async {
-      final client = MockClient((r) async => http.Response('ok', 200));
+      final client = MockClient((r) async => Response('ok', 200));
       final items = await Http.session(
         () => 'https://a.com/x'.url.scrape<int>().onResponse((ctx) {
           ctx.stop();
@@ -23,7 +22,7 @@ void main() {
     });
 
     test('follow returns false for a URL already followed, and the drop is counted', () async {
-      final client = MockClient((r) async => http.Response('<a href="/song/1">s</a>', 200));
+      final client = MockClient((r) async => Response('<a href="/song/1">s</a>', 200));
       final results = <bool>[];
       ScrapeSummary? summary;
       final out = await Http.session(
@@ -49,7 +48,7 @@ void main() {
       final hits = <String>[];
       final client = MockClient((r) async {
         hits.add(r.url.toString());
-        return http.Response(
+        return Response(
           r.url.path == '/' ? '<a href="/p#a">a</a><a href="/p#b">b</a><a href="/p">c</a>' : 'x',
           200,
         );
@@ -69,7 +68,7 @@ void main() {
       final hits = <String>[];
       final client = MockClient((r) async {
         hits.add(r.url.host);
-        return http.Response(
+        return Response(
           r.url.host == 'a.com' ? '<a href="https://www.a.com/q">w</a><a href="https://b.com/">b</a>' : '',
           200,
         );
@@ -89,8 +88,8 @@ void main() {
       final seen = <String, String?>{};
       final client = MockClient((r) async {
         seen[r.url.host] = r.headers['authorization'];
-        if (r.url.host == 'a.com') return http.Response('', 302, headers: {'location': 'https://cdn.example/'});
-        return http.Response('ok', 200);
+        if (r.url.host == 'a.com') return Response('', 302, headers: {'location': 'https://cdn.example/'});
+        return Response('ok', 200);
       });
       await Http.session(
         () => 'https://a.com/'.url
@@ -110,8 +109,8 @@ void main() {
       var n = 0;
       final client = MockClient((r) async {
         n++;
-        if (n == 1) return http.Response('', 503, headers: {'retry-after': 'Wed, 21 Oct 2015 07:28:00 GMT'});
-        return http.Response('ok', 200);
+        if (n == 1) return Response('', 503, headers: {'retry-after': 'Wed, 21 Oct 2015 07:28:00 GMT'});
+        return Response('ok', 200);
       });
       final sw = Stopwatch()..start();
       final out = await Http.session(
@@ -129,8 +128,8 @@ void main() {
       final client = MockClient((r) async {
         sent.add(sw.elapsedMilliseconds);
         n++;
-        if (n <= 2) return http.Response('', 429, headers: {'retry-after': n == 1 ? '1' : '0'});
-        return http.Response('ok', 200);
+        if (n <= 2) return Response('', 429, headers: {'retry-after': n == 1 ? '1' : '0'});
+        return Response('ok', 200);
       });
       await Http.session(
         () => ['https://a.com/1'.url, 'https://a.com/2'.url].scrape<int>().onResponse((c) => c.emit(1)).toList(),
@@ -146,7 +145,7 @@ void main() {
     setUp(() => dir = Directory.systemTemp.createTempSync('dl_'));
     tearDown(() => dir.deleteSync(recursive: true));
 
-    http.Client slowClient() => MockClient.streaming((req, body) async {
+    Client slowClient() => MockClient.streaming((req, body) async {
       Stream<List<int>> chunks() async* {
         for (var i = 0; i < 20; i++) {
           await Future<void>.delayed(const Duration(milliseconds: 10));
@@ -154,7 +153,7 @@ void main() {
         }
       }
 
-      return http.StreamedResponse(chunks(), 200, contentLength: 2000);
+      return StreamedResponse(chunks(), 200, contentLength: 2000);
     });
 
     test('a consumer that stops listening leaves no .part file behind', () async {
@@ -173,7 +172,7 @@ void main() {
       var cancelled = false;
       final client = MockClient.streaming((req, body) async {
         final c = StreamController<List<int>>(onCancel: () => cancelled = true, onListen: () {});
-        return http.StreamedResponse(c.stream, 404, contentLength: 10);
+        return StreamedResponse(c.stream, 404, contentLength: 10);
       });
       final r = await Http.session(
         () => (Path(dir.path) / 'x').download('https://a.com/x'.url).toList(),
@@ -249,7 +248,7 @@ void main() {
       final out = StringBuffer();
       ConsoleIo.out = out;
       try {
-        final client = MockClient((r) async => http.Response('data', 200));
+        final client = MockClient((r) async => Response('data', 200));
         final dir = Directory.systemTemp.createTempSync('show_');
         try {
           final last = await Http.session(

@@ -1,24 +1,24 @@
 /// # HTTP & Web Scraping
 ///
-/// Requests and JSON on `Uri` and `http.Response`, a Scrapy-style scraping
-/// pipeline, atomic downloads and the shared-client session seam. HTML and XML
-/// parsing are in `html/html.dart` and `xml/xml.dart`.
+/// `Request`, `Response` and `Client` over `dart:io`, requests and JSON on `Uri`, a
+/// Scrapy-style scraping pipeline, atomic downloads and the shared-client session seam.
+/// HTML and XML parsing are in `html.dart` and `xml.dart`; a mock client is in `testing.dart`.
 ///
 /// {@category Crawling}
 library;
 
 import 'dart:async';
 import 'dart:collection';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
-
-import 'package:http/http.dart' as http;
 
 import 'async.dart';
 import 'core.dart';
 import 'fs.dart';
 import 'util.dart';
 
+part 'src/http/client.dart';
 part 'src/http/download.dart';
 part 'src/http/response.dart';
 part 'src/http/scrape.dart';

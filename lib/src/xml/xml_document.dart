@@ -2,10 +2,10 @@ part of '../../xml.dart';
 
 final Expando<XmlDocument> _xmlMemo = Expando<XmlDocument>('xmlMemo');
 
-/// XML parsing on [http.Response].
+/// XML parsing on [Response].
 ///
 /// {@category Formats}
-extension ResponseXmlExtensions on http.Response {
+extension ResponseXmlExtensions on Response {
   /// The body parsed as XML, once per response instance.
   XmlDocument get xml => _xmlMemo[this] ??= XmlDocument.parse(text);
 }
@@ -15,7 +15,7 @@ extension ResponseXmlExtensions on http.Response {
 /// {@category Formats}
 extension UriXmlExtensions on Uri {
   /// Fetches this URI and parses the response body as XML; see `fetch`.
-  Future<XmlDocument> xml({Map<String, String>? headers, http.Client? client}) async =>
+  Future<XmlDocument> xml({Map<String, String>? headers, Client? client}) async =>
       (await fetch(headers: headers, client: client)).xml;
 }
 
