@@ -1,4 +1,4 @@
-part of '../../xml.dart';
+part of '../../../formats.dart';
 
 /// A node in a parsed XML tree: an [XmlElement], an [XmlText], or an [XmlAttribute] selected
 /// by an XPath `@` step.
@@ -243,3 +243,9 @@ const _xmlTree = _XmlTree();
 
 String _escapeXml(String s) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 String _escapeAttr(String s) => _escapeXml(s).replaceAll('"', '&quot;');
+
+/// {@category Formats}
+extension StringXmlExtensions on String {
+  /// This string parsed as XML.
+  XmlDocument get xml => XmlDocument.parse(this);
+}

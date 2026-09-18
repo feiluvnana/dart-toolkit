@@ -1,8 +1,7 @@
 import 'dart:io';
 
 import 'package:dart_toolkit/collection.dart';
-import 'package:dart_toolkit/core.dart';
-import 'package:dart_toolkit/html.dart';
+import 'package:dart_toolkit/formats.dart';
 import 'package:test/test.dart';
 
 void main() {

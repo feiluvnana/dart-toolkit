@@ -1,6 +1,5 @@
 // ignore_for_file: experimental_member_use
 import 'package:dart_toolkit/collection.dart';
-import 'package:dart_toolkit/core.dart';
 import 'package:dart_toolkit/formats.dart';
 import 'package:test/test.dart';
 import 'package:yaml/yaml.dart' as reference;

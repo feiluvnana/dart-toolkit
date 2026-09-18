@@ -4,7 +4,6 @@ import 'package:dart_toolkit/cli.dart';
 import 'package:dart_toolkit/collection.dart';
 import 'package:dart_toolkit/core.dart';
 import 'package:dart_toolkit/fs.dart';
-import 'package:dart_toolkit/html.dart';
 import 'package:dart_toolkit/http.dart';
 import 'package:dart_toolkit/util.dart';
 

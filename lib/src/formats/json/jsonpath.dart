@@ -2,7 +2,7 @@
 //
 // A lightweight and fast JSONPath evaluator.
 
-part of '../../core.dart';
+part of '../../../formats.dart';
 
 /// A parsed JSONPath expression.
 class JsonPath {

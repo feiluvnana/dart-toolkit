@@ -1,6 +1,5 @@
 // ignore_for_file: experimental_member_use
-import 'package:dart_toolkit/html.dart';
-import 'package:dart_toolkit/xml.dart';
+import 'package:dart_toolkit/formats.dart';
 import 'package:test/test.dart';
 import 'package:xml/xml.dart' as reference;
 import 'package:xml/xpath.dart';

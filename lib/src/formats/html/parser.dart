@@ -1,7 +1,7 @@
 // A tag-soup HTML parser: one pass, no HTML5 insertion modes, the implicit closes and
 // synthesised elements a scraper meets in practice.
 
-part of '../../html.dart';
+part of '../../../formats.dart';
 
 /// Elements with no content and no end tag.
 const _voidElements = {

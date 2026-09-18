@@ -15,10 +15,12 @@ import 'dart:typed_data';
 
 import 'async.dart';
 import 'core.dart';
+import 'formats.dart';
 import 'fs.dart';
 import 'util.dart';
 
 part 'src/http/client.dart';
+part 'src/http/documents.dart';
 part 'src/http/download.dart';
 part 'src/http/uri.dart';
 part 'src/http/scrape.dart';

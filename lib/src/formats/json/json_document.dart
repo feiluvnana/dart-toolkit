@@ -1,4 +1,4 @@
-part of '../../core.dart';
+part of '../../../formats.dart';
 
 /// A parsed JSON document with JSONPath selector, indexing, and serialization support.
 ///
@@ -73,4 +73,12 @@ class JsonDocument {
   /// Converts this document to a JSON encoded string.
   @override
   String toString() => jsonEncode(raw);
+}
+
+/// JSON decoding.
+///
+/// {@category Formats}
+extension StringJsonExtensions on String {
+  /// Parses this string as JSON.
+  JsonDocument get json => JsonDocument.parse(this);
 }

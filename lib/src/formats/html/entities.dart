@@ -2,7 +2,7 @@
 // decoded arithmetically. The long tail of HTML 5 names is not here on purpose: this table
 // covers what pages use, and the full list is 2 231 entries of startup cost.
 
-part of '../../html.dart';
+part of '../../../formats.dart';
 
 const Map<String, String> _entities = {
   'AElig': '\u{c6}',

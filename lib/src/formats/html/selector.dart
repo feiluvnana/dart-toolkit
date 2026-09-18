@@ -1,7 +1,7 @@
 // CSS selectors, the part scrapers use: type, `#id`, `.class`, the seven attribute forms,
 // the four combinators, selector lists, and the structural pseudo-classes.
 
-part of '../../html.dart';
+part of '../../../formats.dart';
 
 /// A compiled selector list.
 final class _Selector {

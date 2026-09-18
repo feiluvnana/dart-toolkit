@@ -1,6 +1,6 @@
 // The HTML tree: nodes, elements, and the queries on them.
 
-part of '../../html.dart';
+part of '../../../formats.dart';
 
 /// A node in a parsed HTML tree: an [Element] or a [Text].
 ///
@@ -387,3 +387,45 @@ String _escapeText(String text) => text.replaceAll('&', '&amp;').replaceAll('<',
 
 /// [value] with `&` and `"` escaped for a double-quoted attribute.
 String _escapeAttribute(String value) => value.replaceAll('&', '&amp;').replaceAll('"', '&quot;');
+
+/// An HTML `<table>` as a [Table].
+///
+/// {@category Formats}
+extension ElementTableExtensions on Element {
+  /// This `<table>` (or the first one below this element) as rows of named columns: `<th>`
+  /// texts name the columns, or `c1, c2, …` when there are none; each `<tr>` with `<td>` is a row.
+  Table get table {
+    final t = name == 'table' ? this : $('table').firstOrNull;
+    if (t == null) return Table(const [], const []);
+    var header = <String>[];
+    final body = <List<String>>[];
+    for (final tr in t.$('tr')) {
+      final ths = tr.$('th');
+      final tds = tr.$('td');
+      if (header.isEmpty && ths.isNotEmpty && tds.isEmpty) {
+        header = [for (final th in ths) th.text.trim()];
+      } else if (tds.isNotEmpty) {
+        body.add([for (final td in tds) td.text.trim()]);
+      }
+    }
+    final width = body.fold(header.length, (w, r) => r.length > w ? r.length : w);
+    final columns = [
+      for (var i = 0; i < width; i++) i < header.length && header[i].isNotEmpty ? header[i] : 'c${i + 1}',
+    ];
+    return Table(columns, [
+      for (final r in body) {for (var i = 0; i < columns.length; i++) columns[i]: i < r.length ? r[i] : null},
+    ]);
+  }
+}
+
+/// {@category Formats}
+extension ElementsTableExtensions on Elements {
+  /// The first matched element's [ElementTableExtensions.table].
+  Table get table => isEmpty ? Table(const [], const []) : first.table;
+}
+
+/// {@category Formats}
+extension StringHtmlExtensions on String {
+  /// This string parsed as HTML.
+  HtmlDocument get html => HtmlDocument.parse(this);
+}

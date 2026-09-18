@@ -13,7 +13,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
-import 'core.dart';
+import 'formats.dart';
 
 part 'src/collection/sequence.dart';
 part 'src/collection/table.dart';

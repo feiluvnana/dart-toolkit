@@ -1,4 +1,4 @@
-part of '../../xml.dart';
+part of '../../../formats.dart';
 
 /// Parses [source] into its document element. Lenient where a scraper wants it: a mismatched
 /// end tag closes the nearest open element of that name, an unknown entity stays literal.
