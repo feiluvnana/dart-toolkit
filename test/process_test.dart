@@ -111,4 +111,20 @@ void main() {
       }
     });
   });
+
+  group('process', () {
+    test('a child that echoes a large stdin does not deadlock', () async {
+      final big = 'x' * 2000000;
+      final r = await run('cat', input: big, quiet: true).timeout(const Duration(seconds: 10));
+      expect(r.stdout.length, big.length);
+    });
+
+    test('the splitter reads quotes and backslashes as a POSIX shell does', () async {
+      expect(await run(r'echo C:\Users\x', quiet: true).text, 'C:Usersx');
+      expect(await run(r"echo 'a\b'", quiet: true).text, r'a\b');
+      expect(await run(r'echo "\d \$ \" \\"', quiet: true).text, r'\d $ " \');
+      expect((await run(r'printf %s ""', quiet: true)).stdout, '');
+      expect(await run(r'echo "two words" one', quiet: true).lines, ['two words one']);
+    });
+  });
 }

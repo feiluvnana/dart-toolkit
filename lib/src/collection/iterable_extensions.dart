@@ -106,6 +106,18 @@ extension IterableExtensions<T> on Iterable<T> {
     return best;
   }
 
+  /// Splits elements into those that pass [test] and those that do not, in order.
+  (List<T> matching, List<T> rest) partition(bool Function(T item) test) {
+    final yes = <T>[], no = <T>[];
+    for (final item in this) {
+      (test(item) ? yes : no).add(item);
+    }
+    return (yes, no);
+  }
+
+  /// A map from [key] to the last element with that key.
+  Map<K, T> indexBy<K>(K Function(T item) key) => {for (final item in this) key(item): item};
+
   /// Pairs elements from this and [other] into records.
   Iterable<(T, R)> zip<R>(Iterable<R> other) sync* {
     final itA = iterator, itB = other.iterator;

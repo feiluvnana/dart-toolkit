@@ -4,87 +4,78 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:test/test.dart';
 
 void main() {
-  group('Core Either', () {
-    test('Left and Right properties and pattern matching', () {
-      final Either<String, int> right = Right(42);
-      final Either<String, int> left = Left('error');
+  group('Uniform cancellation composition', () {
+    test('Stream.cancelWith stops delivery once the token fires', () async {
+      final token = CancelToken();
+      final controller = StreamController<int>();
+      final received = <int>[];
 
-      expect(right.isRight, isTrue);
-      expect(right.isLeft, isFalse);
-      expect(right.rightOrNull, equals(42));
-      expect(right.leftOrNull, isNull);
+      final done = controller.stream.cancelWith(token).forEach(received.add);
 
-      expect(left.isLeft, isTrue);
-      expect(left.isRight, isFalse);
-      expect(left.leftOrNull, equals('error'));
-      expect(left.rightOrNull, isNull);
+      controller.add(1);
+      await Future<void>.delayed(Duration.zero);
+      token.cancel('enough');
+      controller.add(2);
+      await Future<void>.delayed(Duration.zero);
 
-      // fold
-      expect(right.fold((l) => 'L: $l', (r) => 'R: $r'), equals('R: 42'));
-      expect(left.fold((l) => 'L: $l', (r) => 'R: $r'), equals('L: error'));
-
-      // map
-      final mappedRight = right.mapRight((r) => r * 2);
-      expect(mappedRight, equals(const Right<String, int>(84)));
-
-      final mappedLeft = left.mapRight((r) => r * 2);
-      expect(mappedLeft, equals(const Left<String, int>('error')));
-
-      // mapLeft
-      final leftMapped = left.mapLeft((l) => l.toUpperCase());
-      expect(leftMapped, equals(const Left<String, int>('ERROR')));
+      await done;
+      expect(received, equals([1]));
+      await controller.close();
     });
 
-    test('Either.tryCatchSync and Either.tryCatch', () async {
-      final syncSuccess = Either.tryCatchSync(() => 10 + 5);
-      expect(syncSuccess, equals(const Right<Object, int>(15)));
+    test('Stream.cancelWith can surface a CancelledException', () async {
+      final token = CancelToken();
+      final controller = StreamController<int>();
+      final stream = controller.stream.cancelWith(token, throwOnCancel: true);
 
-      final syncFailure = Either.tryCatchSync<int>(() => throw FormatException('bad'));
-      expect(syncFailure.isLeft, isTrue);
-      expect(syncFailure.leftOrNull, isA<FormatException>());
+      final future = stream.toList();
+      controller.add(1);
+      await Future<void>.delayed(Duration.zero);
+      token.cancel('halt');
 
-      final asyncSuccess = await Either.tryCatch(() async => 'hello');
-      expect(asyncSuccess, equals(const Right<Object, String>('hello')));
-
-      final asyncFailure = await Either.tryCatch<String>(() async => throw StateError('failed'));
-      expect(asyncFailure.isLeft, isTrue);
-      expect(asyncFailure.leftOrNull, isA<StateError>());
-
-      // tryCatch also accepts a synchronous closure.
-      expect(await Either.tryCatch(() => 1), equals(const Right<Object, int>(1)));
+      await expectLater(future, throwsA(isA<CancelledException>()));
+      await controller.close();
     });
 
-    test('Either.unwrap returns the Right value or throws the Left value', () {
-      expect(const Right<Object, int>(7).unwrap(), equals(7));
-
-      final failure = FormatException('nope');
-      expect(() => Left<Object, int>(failure).unwrap(), throwsA(same(failure)));
-      expect(() => const Left<Object?, int>(null).unwrap(), throwsA(isA<StateError>()));
+    test('Stream.cancelWith on an already-cancelled token yields nothing', () async {
+      final token = CancelToken()..cancel();
+      final items = await Stream.fromIterable([1, 2, 3]).cancelWith(token).toList();
+      expect(items, isEmpty);
     });
 
-    test('Iterable<Either>.unwrap / rights / lefts partition outcomes', () {
-      final boom = StateError('boom');
-      final outcomes = <Either<Object, int>>[const Right(1), Left(boom), const Right(3)];
+    test('onCancel returns a working unregister', () async {
+      final token = CancelToken();
+      var fired = 0;
 
-      expect(outcomes.rights, equals([1, 3]));
-      expect(outcomes.lefts, equals([boom]));
-      expect(() => outcomes.unwrap(), throwsA(same(boom)));
-      expect(<Either<Object, int>>[const Right(1), const Right(2)].unwrap(), equals([1, 2]));
+      final unregister = token.onCancel(() => fired++);
+      token.onCancel(() => fired++);
+      unregister();
+
+      // Work that completes normally deregisters itself; not observable from here
+      // beyond "it still behaves", but it is what stops a long-lived token from
+      // retaining every listener it was ever given.
+      await Future<int>.value(1).cancelWith(token);
+      final controller = StreamController<int>();
+      final drained = controller.stream.cancelWith(token).toList();
+      await controller.close();
+      await drained;
+
+      token.cancel('now');
+      expect(fired, equals(1));
     });
 
-    test('Stream<Either>.unwrap forwards the first Left as a stream error', () {
-      final boom = StateError('boom');
-      final stream = Stream<Either<Object, int>>.fromIterable([const Right(1), Left(boom)]);
-      expect(stream.unwrap(), emitsInOrder([1, emitsError(same(boom))]));
+    test('Future.cancelWith rejects as soon as the token fires', () async {
+      final token = CancelToken();
+      final slow = Future<int>.delayed(const Duration(seconds: 5), () => 1);
+      final guarded = slow.cancelWith(token);
+      token.cancel('stop');
+      await expectLater(guarded, throwsA(isA<CancelledException>()));
     });
 
-    test('Stream<Either>.rights and lefts partition outcomes', () async {
-      final boom = StateError('boom');
-      Stream<Either<Object, int>> createStream() =>
-          Stream<Either<Object, int>>.fromIterable([const Right(1), Left(boom), const Right(3)]);
-
-      expect(await createStream().rights.toList(), equals([1, 3]));
-      expect(await createStream().lefts.toList(), equals([boom]));
+    test('Future.cancelWith passes the value through when not cancelled', () async {
+      final token = CancelToken();
+      final value = await Future<int>.value(7).cancelWith(token);
+      expect(value, equals(7));
     });
   });
 
@@ -489,63 +480,6 @@ void main() {
     });
   });
 
-  group('JsonPath & String Pattern Evaluation', () {
-    test('JsonPath parses and evaluates objects, arrays, and wildcards', () {
-      final doc = {
-        'items': [
-          {'id': 1, 'name': 'Item 1'},
-          {'id': 2, 'name': 'Item 2'},
-        ],
-      };
-      final jsonDoc = JsonDocument(doc);
-      final names = jsonDoc.$(r'$.items[*].name').map((d) => d.raw).toList();
-      expect(names, equals(['Item 1', 'Item 2']));
-    });
-
-    test('JsonPath throws on unsupported slice and filter expressions', () {
-      final jsonDoc = JsonDocument([1, 2, 3, 4, 5]);
-      // Slices must throw UnsupportedError
-      expect(() => jsonDoc.$(r'$.a[1:3]'), throwsA(isA<UnsupportedError>()));
-      // Filters must throw UnsupportedError
-      expect(() => jsonDoc.$(r'$.a[?(@.v > 20)]'), throwsA(isA<UnsupportedError>()));
-      // Invalid unclosed brackets
-      expect(() => jsonDoc.$(r'$.a[unclosed'), throwsA(isA<FormatException>()));
-    });
-
-    test('String.match handles plain strings and RegExps without regex coercion', () {
-      // Plain string with dot
-      expect('axb'.match('a.b'), isNull);
-      expect('a.b'.match('a.b'), equals('a.b'));
-
-      // RegExp pattern
-      expect('axb'.match(RegExp(r'a.b')), equals('axb'));
-      expect('track-01.mp3'.match(RegExp(r'track-(\d+)'), 1), equals('01'));
-    });
-  });
-
-  group('Either Subtype Equality & Typed Guards', () {
-    test('Either == works across compatible subtype parameters', () {
-      const leftObj = Left<Object, int>('err');
-      const leftStr = Left<String, num>('err');
-      expect(leftObj == leftStr, isTrue);
-
-      const rightObj = Right<Object, int>(42);
-      const rightNum = Right<String, num>(42);
-      expect(rightObj == rightNum, isTrue);
-    });
-
-    test('Either.tryCatchSync captures any thrown error, whatever its type', () {
-      final parsed = Either.tryCatchSync(() => int.parse('not_a_num'));
-      expect(parsed.isLeft, isTrue);
-      expect(parsed.leftOrNull, isA<FormatException>());
-
-      // Narrowing happens afterwards, so no error type can be unrepresentable.
-      final narrowed = Either.tryCatchSync<int>(() => throw StateError('boom')).mapLeft((e) => FormatException('\$e'));
-      expect(narrowed.isLeft, isTrue);
-      expect(narrowed.leftOrNull, isA<FormatException>());
-    });
-  });
-
   group('retry robustness', () {
     test('retry respects maxDelay cap', () async {
       var attemptCount = 0;
@@ -564,6 +498,41 @@ void main() {
       );
 
       expect(attemptCount, equals(3));
+    });
+  });
+
+  group('async', () {
+    test('Stream.parallelize holds the source while the consumer is paused', () async {
+      var produced = 0;
+      final source = StreamController<int>();
+      final out = source.stream
+          .map((i) {
+            produced++;
+            return i;
+          })
+          .parallelize((i) async {
+            await Future<void>.delayed(const Duration(milliseconds: 20));
+            return i;
+          }, concurrency: 2);
+      final sub = out.listen((_) {});
+      source
+        ..add(1)
+        ..add(2);
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      sub.pause();
+      for (var i = 3; i <= 20; i++) {
+        source.add(i);
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      expect(produced, lessThanOrEqualTo(4), reason: 'nothing pulled on a paused consumer\'s behalf');
+      sub.resume();
+      await source.close();
+      await sub.asFuture<void>();
+      expect(produced, equals(20));
+    });
+
+    test('throttle rejects the combination that emits nothing', () {
+      expect(() => Stream<int>.empty().throttle(1.ms, leading: false), throwsArgumentError);
     });
   });
 }

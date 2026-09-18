@@ -12,7 +12,7 @@ snapshot and starts in about 0.4 s.
 |---|---|
 | [`cli_app.dart`](cli_app.dart) | `Cli` option kinds, required options, `Logger.stages`, `Console.progress` |
 | [`file_automation.dart`](file_automation.dart) | `Path`, `filename`, hashing, archiving |
-| [`web_crawler.dart`](web_crawler.dart) | `Http.session`, the `scrape` chain, `Elements` queries |
+| [`web_crawler.dart`](web_crawler.dart) | `Http.session`, the `scrape` chain, `Elements` and `$x` queries |
 
 ```sh
 dart run example/cli_app.dart --token abc --env staging --workers 8

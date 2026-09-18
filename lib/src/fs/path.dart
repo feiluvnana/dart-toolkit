@@ -47,6 +47,21 @@ extension type const Path(String path) implements String {
   /// The parent directory as a [Path].
   Path get parent => Path(p.dirname(path));
 
+  /// Whether this path starts at a root.
+  bool get isAbsolute => p.isAbsolute(path);
+
+  /// This path made absolute against the working directory, and normalized.
+  Path get absolute => Path(p.normalize(p.absolute(path)));
+
+  /// This path relative to [from].
+  Path relativeTo(String from) => Path(p.relative(path, from: from));
+
+  /// This path with its extension replaced by [ext], with or without the dot; `''` removes it.
+  Path withExt(String ext) => Path(p.setExtension(path, ext.isEmpty || ext.startsWith('.') ? ext : '.$ext'));
+
+  /// This path with its final component replaced by [name].
+  Path withName(String name) => parent / name;
+
   /// The individual path segments.
   List<String> get segments => p.split(path);
 
@@ -75,6 +90,33 @@ extension type const Path(String path) implements String {
   bool existsSync() {
     final t = FileSystemEntity.typeSync(path, followLinks: false);
     return t != FileSystemEntityType.notFound;
+  }
+
+  /// When this file or directory was last modified.
+  Future<DateTime> modified() async => (await FileStat.stat(path)).modified;
+
+  /// When this file or directory was last modified, synchronously.
+  DateTime modifiedSync() => FileStat.statSync(path).modified;
+
+  /// Creates this file if it does not exist, else sets its modification time to now.
+  Future<File> touch() async {
+    if (await asFile.exists()) {
+      await asFile.setLastModified(DateTime.now());
+      return asFile;
+    }
+    await asFile.parent.create(recursive: true);
+    return asFile.create();
+  }
+
+  /// Creates this file if it does not exist, else sets its modification time to now.
+  File touchSync() {
+    if (asFile.existsSync()) {
+      asFile.setLastModifiedSync(DateTime.now());
+    } else {
+      asFile.parent.createSync(recursive: true);
+      asFile.createSync();
+    }
+    return asFile;
   }
 
   /// Calculates the file size or recursive directory size in bytes.
@@ -136,6 +178,10 @@ extension type const Path(String path) implements String {
 
   /// Reads this file as a list of lines.
   Future<List<String>> readLines({Encoding encoding = utf8}) => asFile.readAsLines(encoding: encoding);
+
+  /// Streams this file's lines without holding the file; for the whole list use [readLines].
+  Stream<String> lines({Encoding encoding = utf8}) =>
+      asFile.openRead().transform(encoding.decoder).transform(const LineSplitter());
 
   /// Reads this file as a list of lines synchronously.
   List<String> readLinesSync({Encoding encoding = utf8}) => asFile.readAsLinesSync(encoding: encoding);

@@ -7,6 +7,9 @@ extension StringExtensions on String {
   /// Parses this string as a [Uri].
   Uri get url => Uri.parse(this);
 
+  /// Parses this string as JSON.
+  JsonDocument get json => JsonDocument.parse(this);
+
   /// Extracts the first match of [pattern] at [group], or `null`.
   ///
   /// Evaluates [pattern] using standard Dart `Pattern` semantics without coercing non-RegExp strings into regex.

@@ -56,15 +56,34 @@ that supplied it.
 
 `$` on HTML returns `Elements`, a `List<Element>` that also answers `text`, `attr()`, `lines`
 and `$()` for its first match. Eight call sites lost a `.first`; an empty match throws a
-`StateError` that says so, where `.first` said "No element".
+`StateError` that says so, where `.first` said "No element". HTML also has `$x`, XPath under
+the name the browser console gives it, returning `Nodes` — elements, text and attributes —
+because `//tr[td[2]="FLAC"]/td[1]/a/@href` has no CSS spelling. XML's `$` is that engine.
 
-## The HTML parser is ours
+## The parsers and the client are ours
 
-`package:html` and `csslib` cost ~580 ms of front-end work per `dart run` — the whole startup
-of a scraper — for an HTML5 tree builder a scraper does not need. `lib/src/html/` is a tag-soup
-parser and a selector engine, checked against the old parser on real pages in
-`test/html_differential_test.dart`. A new selector or a new implicit-close rule is added there
-first. The reference parser stays a dev dependency for that test and nothing else.
+`package:html`, `xml`, `archive` and `http` together cost about a second of front-end work per
+`dart run` for machinery a scripting toolkit does not need: an HTML5 tree builder, a
+schema-aware XML stack, a pure-Dart deflate, a client layer over the `dart:io` client. Each is
+replaced in-house — a tag-soup HTML parser and CSS engine, an XML parser and an XPath 1.0
+subset (`lib/xpath.dart`, shared with HTML as `$x`), a zip container over `dart:io`'s zlib,
+`Request`/`Response`/`Client` over `HttpClient` — and each is checked against the package it
+replaced on real inputs in `test/<module>_test.dart`. The reference packages stay dev
+dependencies for those tests and nothing else. `path` is the one runtime dependency.
+
+Where Dart is genuinely slow and the operating system already has the code, `dart:ffi` binds
+it: hashing runs on CommonCrypto or libcrypto at 2–3 GB/s against 170 MB/s in Dart, with
+`package:crypto` as the fallback. Rust is not on the table until a measured, CPU-bound,
+non-parsing hot spot appears that the SDK and the OS do not already cover.
+
+## A module is one library
+
+`lib/<module>.dart` holds a module's doc, its imports and its `part` list; every file under
+`lib/src/<module>/` is a part of it. What a module does not publish is `_private` and shared
+freely between its parts — no `show` lists, no re-exports, no "not exported" comments. Another
+module is used through its module file, `import 'http.dart'`, never through a file inside its
+`src/`; what one module offers another is therefore public API. Programs import
+`package:dart_toolkit/<module>.dart`.
 
 ## A file operation streams
 

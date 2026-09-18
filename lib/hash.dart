@@ -14,6 +14,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart' as crypto;
 
 import 'fs.dart';
+import 'util.dart';
 
 part 'src/hash/hash.dart';
 part 'src/hash/native.dart';

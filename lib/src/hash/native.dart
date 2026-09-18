@@ -7,8 +7,7 @@ abstract interface class _Digest {
   Uint8List finish();
 }
 
-_Digest _sha256() => _Native.instance?.sha256() ?? _CryptoDigest(crypto.sha256);
-_Digest _md5() => _Native.instance?.md5() ?? _CryptoDigest(crypto.md5);
+_Digest _digest(Hash algorithm) => _Native.instance?.digest(algorithm) ?? _CryptoDigest(algorithm._crypto);
 
 String _hex(Uint8List bytes) {
   const digits = '0123456789abcdef';
@@ -66,8 +65,7 @@ abstract final class _Native {
     return null;
   }
 
-  _Digest sha256();
-  _Digest md5();
+  _Digest digest(Hash algorithm);
 }
 
 /// Bytes are copied into one reusable native buffer, at most [_bufferSize] at a time.
@@ -92,10 +90,7 @@ final class _CommonCrypto extends _Native {
   }
 
   @override
-  _Digest sha256() => _CcDigest(this, 'CC_SHA256', 32);
-
-  @override
-  _Digest md5() => _CcDigest(this, 'CC_MD5', 16);
+  _Digest digest(Hash algorithm) => _CcDigest(this, algorithm._cc, algorithm.length);
 }
 
 final class _CcDigest implements _Digest {
@@ -110,7 +105,7 @@ final class _CcDigest implements _Digest {
   _CcDigest(this._cc, String prefix, this._length)
     : _update = _cc._lib.lookupFunction<_CcUpdateC, _CcUpdateD>('${prefix}_Update'),
       _final = _cc._lib.lookupFunction<_CcFinalC, _CcFinalD>('${prefix}_Final'),
-      _ctx = _cc._malloc(256), // CC_SHA256_CTX is 104 bytes, CC_MD5_CTX 92
+      _ctx = _cc._malloc(512), // the largest context, CC_SHA512_CTX, is 208 bytes
       _buffer = _cc._malloc(_bufferSize) {
     _cc._lib.lookupFunction<_CcInitC, _CcInitD>('${prefix}_Init')(_ctx);
   }
@@ -163,8 +158,7 @@ final class _LibCrypto extends _Native {
   late final _EvpInitD _init = _lib.lookupFunction<_EvpInitC, _EvpInitD>('EVP_DigestInit_ex');
   late final _EvpUpdateD _update = _lib.lookupFunction<_EvpUpdateC, _EvpUpdateD>('EVP_DigestUpdate');
   late final _EvpFinalD _final = _lib.lookupFunction<_EvpFinalC, _EvpFinalD>('EVP_DigestFinal_ex');
-  late final Pointer<Void> _sha256Md = _lib.lookupFunction<_EvpMdC, _EvpMdD>('EVP_sha256')();
-  late final Pointer<Void> _md5Md = _lib.lookupFunction<_EvpMdC, _EvpMdD>('EVP_md5')();
+  final Map<Hash, Pointer<Void>> _mds = {};
 
   _LibCrypto() {
     _new; // resolve now, so a missing library fails at load time and falls back
@@ -183,10 +177,8 @@ final class _LibCrypto extends _Native {
   }
 
   @override
-  _Digest sha256() => _EvpDigest(this, _sha256Md, 32);
-
-  @override
-  _Digest md5() => _EvpDigest(this, _md5Md, 16);
+  _Digest digest(Hash algorithm) =>
+      _EvpDigest(this, _mds[algorithm] ??= _lib.lookupFunction<_EvpMdC, _EvpMdD>(algorithm._evp)(), algorithm.length);
 }
 
 final class _EvpDigest implements _Digest {

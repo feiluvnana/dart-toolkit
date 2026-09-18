@@ -64,39 +64,6 @@ final class ZipEntry {
 }
 
 // ---------------------------------------------------------------------------------------------
-// CRC-32
-// ---------------------------------------------------------------------------------------------
-
-final Uint32List _crcTable = () {
-  final table = Uint32List(256);
-  for (var n = 0; n < 256; n++) {
-    var c = n;
-    for (var k = 0; k < 8; k++) {
-      c = (c & 1) != 0 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
-    }
-    table[n] = c;
-  }
-  return table;
-}();
-
-final class _Crc32 {
-  int _state = 0xFFFFFFFF;
-  int length = 0;
-
-  void add(List<int> data) {
-    var c = _state;
-    final table = _crcTable;
-    for (var i = 0; i < data.length; i++) {
-      c = table[(c ^ data[i]) & 0xff] ^ (c >>> 8);
-    }
-    _state = c;
-    length += data.length;
-  }
-
-  int get value => (_state ^ 0xFFFFFFFF) & _max32;
-}
-
-// ---------------------------------------------------------------------------------------------
 // Little-endian record building and parsing
 // ---------------------------------------------------------------------------------------------
 
@@ -392,7 +359,7 @@ Future<File> _zip(Path source, String destination, int level) async {
       );
       await add(w.localHeader(e));
       if (isDir) continue;
-      final crc = _Crc32();
+      final crc = Crc32();
       var compressed = 0;
       final pending = <List<int>>[];
       final deflate = ZLibEncoder(raw: true, level: level).startChunkedConversion(_ChunkSink(pending.add));
@@ -452,7 +419,7 @@ File _zipSync(Path source, String destination, int level) {
       );
       add(w.localHeader(e));
       if (isDir) continue;
-      final crc = _Crc32();
+      final crc = Crc32();
       var compressed = 0;
       final deflate = ZLibEncoder(raw: true, level: level).startChunkedConversion(
         _ChunkSink((c) {
@@ -653,7 +620,7 @@ final class _ZipReader {
     final start = _dataStart(await _read(e._offset, 30), e);
     await target.parent.create(recursive: true);
     final out = target.openWrite();
-    final crc = _Crc32();
+    final crc = Crc32();
     try {
       var data = source.openRead(start, start + e.compressedSize);
       if (e._method == _methodDeflate) data = data.transform(ZLibDecoder(raw: true));
@@ -678,7 +645,7 @@ final class _ZipReader {
     final start = _dataStart(_readSync(e._offset, 30), e);
     target.parent.createSync(recursive: true);
     final out = target.openSync(mode: FileMode.write);
-    final crc = _Crc32();
+    final crc = Crc32();
     try {
       final sink = _ChunkSink((c) {
         crc.add(c);
@@ -701,7 +668,7 @@ final class _ZipReader {
     _verify(e, crc);
   }
 
-  static void _verify(ZipEntry e, _Crc32 crc) {
+  static void _verify(ZipEntry e, Crc32 crc) {
     if (crc.length != e.size || crc.value != e.crc32) {
       throw FormatException('Corrupt entry ${e.name}: expected ${e.size} bytes, CRC ${e.crc32.toRadixString(16)}');
     }

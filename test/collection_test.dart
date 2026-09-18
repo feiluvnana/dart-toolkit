@@ -74,4 +74,13 @@ void main() {
       expect(merged, equals({'a': 1, 'b': 5, 'c': 4}));
     });
   });
+
+  group('collection', () {
+    test('partition and indexBy', () {
+      final (even, odd) = [1, 2, 3, 4, 5].partition((n) => n.isEven);
+      expect(even, [2, 4]);
+      expect(odd, [1, 3, 5]);
+      expect(['aa', 'b', 'cc'].indexBy((s) => s.length), {2: 'cc', 1: 'b'});
+    });
+  });
 }

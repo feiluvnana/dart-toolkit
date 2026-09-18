@@ -1,7 +1,9 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:test/test.dart';
 
-/// A [TaskProgress] for tests, so the renderer is driven the way `report` is in a program.
 class _Task implements TaskProgress {
   @override
   final String taskId;
@@ -35,6 +37,169 @@ _Task _task(String id, String label, double? ratio, int? received, int? total, {
 _Batch _batch(int completed, int? total, TaskProgress current) => _Batch(completed, total, current);
 
 void main() {
+  group('CLI Automation: Spinner & Lifecycle', () {
+    test('Console.spin runs action and returns result', () async {
+      final res = await Console.spin('Processing task', () async {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        return 42;
+      });
+      expect(res, equals(42));
+    });
+
+    test('Console.spin rethrows on error', () async {
+      expect(
+        () => Console.spin('Failing task', () async {
+          throw Exception('Task error');
+        }),
+        throwsA(isA<Exception>()),
+      );
+    });
+
+    test('Console.spinner controls start, success, fail, info', () {
+      final spinner = Console.spinner('Custom spinner');
+      expect(() => spinner.start(), returnsNormally);
+      expect(() => spinner.stop('Info note'), returnsNormally);
+      expect(() => spinner.succeed('Done'), returnsNormally);
+      expect(() => spinner.fail('Error'), returnsNormally);
+    });
+
+    test('onExit registers hook safely', () {
+      expect(() => onExit(() {}), returnsNormally);
+    });
+  });
+
+  group('Logger levels', () {
+    late StringBuffer out;
+    late StringBuffer err;
+
+    setUp(() {
+      out = StringBuffer();
+      err = StringBuffer();
+      ConsoleIo.out = out;
+      ConsoleIo.err = err;
+      Ansi.enabled = false;
+    });
+
+    tearDown(() {
+      ConsoleIo.reset();
+      Ansi.enabled = null;
+      Logger.level = LogLevel.info;
+    });
+
+    test('default level emits info and above but not debug', () {
+      Logger.debug('nope');
+      Logger.info('yes');
+      Logger.warn('warned');
+      Logger.error('boom');
+
+      expect(out.toString(), isNot(contains('nope')));
+      expect(out.toString(), contains('yes'));
+      expect(err.toString(), contains('warned'));
+      expect(err.toString(), contains('boom'));
+    });
+
+    test('debug level includes verbose diagnostics', () {
+      Logger.level = LogLevel.debug;
+      Logger.debug('verbose detail');
+      expect(out.toString(), contains('verbose detail'));
+    });
+
+    test('warn level suppresses info and ok', () {
+      Logger.level = LogLevel.warn;
+      Logger.info('hidden');
+      Logger.ok('hidden too');
+      Logger.stages(2)('hidden step');
+      Logger.warn('visible');
+
+      expect(out.toString(), isNot(contains('hidden')));
+      expect(err.toString(), contains('visible'));
+    });
+
+    test('silent suppresses everything including errors', () {
+      Logger.level = LogLevel.silent;
+      Logger.info('x');
+      Logger.error('y');
+      expect(out.toString(), isEmpty);
+      expect(err.toString(), isEmpty);
+    });
+
+    test('silenced() restores the previous level afterwards, async bodies included', () async {
+      Logger.level = LogLevel.info;
+      final result = await Logger.silenced(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+        Logger.info('muted');
+        return 42;
+      });
+      expect(result, equals(42));
+      expect(out.toString(), isEmpty);
+      expect(Logger.level, equals(LogLevel.info));
+
+      Logger.info('audible');
+      expect(out.toString(), contains('audible'));
+    });
+  });
+
+  group('Prompt flexibility', () {
+    late StringBuffer out;
+
+    setUp(() {
+      out = StringBuffer();
+      ConsoleIo.out = out;
+      Ansi.enabled = false;
+    });
+
+    tearDown(() {
+      ConsoleIo.reset();
+      Ansi.enabled = null;
+    });
+
+    /// Feeds [lines] to prompts, then end-of-input.
+    void feed(List<String> lines) {
+      final queue = List<String>.from(lines);
+      ConsoleIo.input = () => queue.isEmpty ? null : queue.removeAt(0);
+    }
+
+    test('select works with non-String choices via display', () {
+      feed(['2']);
+      final servers = [(name: 'alpha', region: 'us'), (name: 'beta', region: 'eu')];
+      final picked = Prompt.select('Target', servers, display: (s) => '${s.name} (${s.region})');
+      expect(picked.name, equals('beta'));
+      expect(out.toString(), contains('alpha (us)'));
+      expect(out.toString(), contains('beta (eu)'));
+    });
+
+    test('select infers String choices exactly as before', () {
+      feed(['3']);
+      final env = Prompt.select('Environment', ['dev', 'staging', 'prod']);
+      expect(env, equals('prod'));
+    });
+
+    test('select returns the default on empty input', () {
+      feed(['']);
+      final env = Prompt.select('Environment', ['dev', 'staging'], defaultTo: 'staging');
+      expect(env, equals('staging'));
+      expect(out.toString(), contains('(default)'));
+    });
+
+    test('ask re-prompts until validate accepts', () {
+      feed(['abc', '8080']);
+      final port = Prompt.ask('Port', validate: (v) => int.tryParse(v) == null ? 'Must be a number' : null);
+      expect(port, equals('8080'));
+      expect(out.toString(), contains('Must be a number'));
+    });
+
+    test('ask falls back to the default at end of input instead of hanging', () {
+      ConsoleIo.input = () => null; // immediate end of input
+      final value = Prompt.ask('Name', defaultTo: 'fallback');
+      expect(value, equals('fallback'));
+    });
+
+    test('required ask throws rather than looping when input is exhausted', () {
+      ConsoleIo.input = () => null; // immediate end of input
+      expect(() => Prompt.ask('Name', required: true), throwsA(isA<StateError>()));
+    });
+  });
+
   group('CLI', () {
     test('command with option, subcommand, and action execution', () async {
       final cli = Cli();
@@ -450,6 +615,222 @@ void main() {
     test('styling is a no-op when ANSI is disabled', () {
       Ansi.enabled = false;
       expect('${'a'.red}b'.bold, equals('ab'));
+    });
+  });
+
+  group('cli', () {
+    test('--version prints name and version', () async {
+      final out = StringBuffer();
+      ConsoleIo.out = out;
+      try {
+        await (Cli(name: 'demo', version: '1.2.3')..action((_) => fail('not run'))).run(['--version']);
+        expect(out.toString().trim(), 'demo 1.2.3');
+      } finally {
+        ConsoleIo.reset();
+      }
+    });
+  });
+
+  group('cli', () {
+    test('a ✓ cell is one column wide, so table borders stay aligned', () {
+      final buf = StringBuffer();
+      ConsoleIo.out = buf;
+      Ansi.enabled = false;
+      try {
+        Console.table(
+          headers: ['a', 'b'],
+          rows: [
+            ['✓ ok', 'x'],
+            ['plain', 'y'],
+          ],
+        );
+      } finally {
+        ConsoleIo.reset();
+        Ansi.enabled = null;
+      }
+      final widths = buf.toString().trimRight().split('\n').map((l) => l.runes.length).toSet();
+      expect(widths.length, equals(1));
+    });
+
+    test('Logger.warn goes to stderr with Logger.error', () {
+      final err = StringBuffer();
+      ConsoleIo.err = err;
+      try {
+        Logger.warn('careful');
+      } finally {
+        ConsoleIo.reset();
+      }
+      expect(err.toString(), contains('careful'));
+    });
+  });
+
+  group('cli', () {
+    test('an ArgumentError in the action is not a usage error', () async {
+      final cli = CliCommand('demo')..action((ctx) => throw ArgumentError('bug in the action'));
+      expect(() => cli.run([]), throwsA(isA<ArgumentError>()));
+    });
+
+    test('a usage error is a UsageException with the message', () async {
+      final cli = CliCommand('demo')..number('n');
+      expect(
+        () => cli.run(['--n', 'x']),
+        throwsA(isA<UsageException>().having((e) => e.message, 'message', contains('Invalid numeric value'))),
+      );
+    });
+
+    test('ctx.cancel is cancelled when the action ends, and exit hooks run when it throws', () async {
+      CancelToken? seen;
+      var hookRan = false;
+      onExit(() => hookRan = true);
+      final cli = Cli(name: 'demo')
+        ..action((ctx) {
+          seen = ctx.cancel;
+          expect(ctx.cancel.isCancelled, isFalse);
+          throw StateError('bug');
+        });
+      await expectLater(cli.run([]), throwsStateError);
+      expect(hookRan, isTrue);
+      expect(seen!.isCancelled, isTrue);
+    });
+  });
+
+  group('ConsoleIo seam', () {
+    late StringBuffer out;
+
+    setUp(() {
+      out = StringBuffer();
+      ConsoleIo.out = out;
+    });
+
+    tearDown(() {
+      ConsoleIo.reset();
+      Ansi.enabled = null;
+      Env.remove('NO_COLOR');
+    });
+
+    test('captures subprocess output, not just Logger output', () async {
+      Logger.ok('via Logger');
+      await run('echo SUBPROCESS_MARKER');
+
+      expect(out.toString(), contains('via Logger'));
+      expect(out.toString(), contains('SUBPROCESS_MARKER'));
+    });
+
+    test('quiet: true still suppresses subprocess output', () async {
+      final result = await run('echo QUIET_MARKER', quiet: true);
+
+      expect(result.stdout, contains('QUIET_MARKER'));
+      expect(out.toString(), isNot(contains('QUIET_MARKER')));
+    });
+
+    test('a redirected sink is never treated as a terminal', () {
+      expect(ConsoleIo.isTerminal, isFalse);
+      expect(ConsoleIo.columns, isNull);
+    });
+
+    test('a redirected sink disables ANSI unless explicitly overridden', () {
+      expect(Ansi.enabled, isFalse);
+
+      Ansi.enabled = true;
+      expect(Ansi.enabled, isTrue);
+    });
+
+    test('Ansi resolves override, then NO_COLOR, then the sink', () {
+      ConsoleIo.reset();
+
+      // 1. An explicit override wins over everything.
+      Ansi.enabled = true;
+      Env.set('NO_COLOR', '1');
+      expect(Ansi.enabled, isTrue, reason: 'explicit override beats NO_COLOR');
+
+      // 2. With no override, NO_COLOR read from Env disables styling. The value
+      //    lives in Env only -- Platform.environment never sees it -- so this
+      //    pins Env as the source Ansi consults.
+      Ansi.enabled = null;
+      expect(Platform.environment.containsKey('NO_COLOR'), isFalse);
+      expect(Env.has('NO_COLOR'), isTrue);
+      expect(Ansi.enabled, isFalse);
+    });
+
+    test('ConsoleMultiProgress reports each completion without a terminal', () {
+      final progress = Console.multiProgress(total: 3, slots: 2, message: 'files', columns: 80);
+
+      var completed = 0;
+      for (final name in ['a.txt', 'b.txt', 'c.txt']) {
+        final path = Path('out/$name');
+        final url = 'https://example.com/$name'.url;
+        progress.report(
+          BatchDownloadProgress(
+            completed: completed,
+            total: 3,
+            written: completed,
+            current: Downloading(url, path, received: 512, total: 1024),
+          ),
+        );
+        completed++;
+        progress.report(
+          BatchDownloadProgress(
+            completed: completed,
+            total: 3,
+            written: completed,
+            current: Downloaded(url, path, 1024),
+          ),
+        );
+      }
+      progress.done('finished');
+
+      final lines = out.toString().trim().split('\n');
+      expect(lines.length, greaterThanOrEqualTo(4));
+      for (final name in ['a.txt', 'b.txt', 'c.txt']) {
+        expect(lines.where((l) => l.contains(name)).length, equals(1), reason: '\$name reported exactly once');
+      }
+      expect(lines.last, contains('finished'));
+    });
+
+    test('report() renders a BatchProgress without the caller restating its fields', () {
+      final progress = Console.multiProgress(slots: 2, message: 'files', columns: 80);
+      final url = 'https://example.com/a.txt'.url;
+      final path = Path('out/a.txt');
+
+      progress.report(
+        BatchDownloadProgress(
+          completed: 0,
+          total: null,
+          written: 0,
+          current: Downloading(url, path, received: 512, total: 1024),
+        ),
+      );
+      expect(progress.total, equals(0), reason: 'an open stream has no total yet');
+
+      progress.report(BatchDownloadProgress(completed: 1, total: 2, written: 1, current: Downloaded(url, path, 1024)));
+      expect(progress.total, equals(2), reason: 'total is revised as the source discovers work');
+
+      progress.report(
+        BatchDownloadProgress(completed: 2, total: 2, written: 1, current: DownloadSkipped(url, Path('out/b.txt'))),
+      );
+      progress.done('finished');
+
+      final lines = out.toString().trim().split('\n');
+      expect(lines.any((l) => l.contains('a.txt') && l.contains('[done]')), isTrue);
+      expect(lines.any((l) => l.contains('b.txt') && l.contains('[skipped]')), isTrue);
+    });
+
+    test('ConsoleProgress without a terminal reports each new tenth, not each tick', () {
+      final progress = Console.progress(3, message: 'files', columns: 80);
+      progress
+        ..tick()
+        ..tick()
+        ..tick();
+      progress.done('finished');
+      expect(out.toString().trim().split('\n').length, equals(4));
+
+      out.clear();
+      final fine = Console.progress(1000, message: 'steps', columns: 80);
+      for (var i = 0; i < 1000; i++) {
+        fine.tick();
+      }
+      fine.done();
+      expect(out.toString().trim().split('\n').length, lessThanOrEqualTo(11), reason: 'one line per tenth');
     });
   });
 }

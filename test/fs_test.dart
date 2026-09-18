@@ -8,6 +8,94 @@ import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 void main() {
+  group('fs', () {
+    late Path dir;
+    setUp(() => dir = Path(Directory.systemTemp.createTempSync('fs4_').path));
+    tearDown(() => dir.deleteSync(recursive: true));
+
+    test('absolute, relativeTo, withExt, withName', () {
+      final f = dir / 'a' / 'song.mp3';
+      expect(f.isAbsolute, isTrue);
+      expect(Path('x/y').isAbsolute, isFalse);
+      expect(Path('x/y').absolute, Path.current / 'x' / 'y');
+      expect(f.relativeTo(dir), Path('a/song.mp3'));
+      expect(f.withExt('flac').name, 'song.flac');
+      expect(f.withExt('.flac').name, 'song.flac');
+      expect(f.withExt('').name, 'song');
+      expect(f.withName('other.mp3'), dir / 'a' / 'other.mp3');
+    });
+
+    test('touch, modified, lines', () async {
+      final f = dir / 'deep' / 'notes.txt';
+      await f.touch();
+      expect(await f.exists(), isTrue);
+      final first = await f.modified();
+      await f.writeText('one\ntwo\nthree');
+      expect(await f.lines().toList(), ['one', 'two', 'three']);
+      final g = (dir / 'g.txt')..touchSync();
+      expect(g.modifiedSync().difference(first).inSeconds.abs(), lessThan(5));
+    });
+
+    test('String.json parses like JsonDocument.parse', () {
+      expect('{"a": [1, 2]}'.json.$(r'$.a[1]').first.raw, 2);
+    });
+  });
+
+  group('FS Automation Extensions', () {
+    late Path testDir;
+
+    setUp(() async {
+      testDir = Path.temp / 'dart_toolkit_fs_auto_test';
+      await testDir.mkdir();
+    });
+
+    tearDown(() async {
+      if (await testDir.exists()) {
+        await testDir.delete(recursive: true);
+      }
+    });
+
+    test('Path static getters return valid paths', () {
+      expect(Path.current.isNotEmpty, isTrue);
+      expect(Path.temp.isNotEmpty, isTrue);
+      expect(Path.home.isNotEmpty, isTrue);
+    });
+
+    test('Path sha256 and md5 checksums calculate correctly', () async {
+      final file = testDir / 'test_hash.txt';
+      await file.writeText('hello world');
+
+      // echo -n "hello world" | sha256sum -> b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9
+      expect(await file.sha256(), equals('b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9'));
+
+      // echo -n "hello world" | md5sum -> 5eb63bbbe01eeed093cb22bb8f5acdc3
+      expect(await file.md5(), equals('5eb63bbbe01eeed093cb22bb8f5acdc3'));
+    });
+
+    test('streamed and in-memory digests agree across chunk boundaries', () async {
+      // Larger than one read buffer, so the streaming path really does chunk.
+      final file = testDir / 'big_hash.bin';
+      await file.writeBytes(List<int>.generate(1 << 20, (i) => i % 251));
+
+      expect(await file.sha256(), equals((await file.readBytes()).sha256));
+      expect(await file.md5(), equals((await file.readBytes()).md5));
+    });
+
+    test('Path append and replace edit in-place', () async {
+      final file = testDir / 'doc.txt';
+      await file.writeText('title: Dart Toolkit\n');
+
+      await file.append('author: feiluvnana\n');
+      await file.append('version: 9.0.0\n');
+
+      final lines = await file.readLines();
+      expect(lines, equals(['title: Dart Toolkit', 'author: feiluvnana', 'version: 9.0.0']));
+
+      await file.replaceText('9.0.0', '9.1.0');
+      expect(await file.readText(), contains('version: 9.1.0'));
+    });
+  });
+
   group('FS Path', () {
     final tempDir = Directory.systemTemp.createTempSync('fs_path_test_');
 
@@ -413,7 +501,7 @@ void main() {
       expect(base.globSync('assets/*.mp3'), isEmpty);
     });
 
-    test('atomic download handles short read, cleans up partials and prevents sticky failure', () async {
+    test('atomic download handles short read, keeps the partial for a resume, never gets stuck', () async {
       final client = MockClient.streaming((request, bodyStream) async {
         // Advertises 1000 bytes but sends only 10 bytes
         return StreamedResponse(
@@ -432,14 +520,16 @@ void main() {
       expect(last, isA<DownloadFailed>());
       expect(last.isDone, isTrue);
 
-      // Target file must NOT exist on disk
+      // Target file must NOT exist on disk; the partial stays as the resume point.
       expect(await target.exists(), isFalse);
-      // Partial file must NOT be left on disk
-      expect(File('${target.path}.part').existsSync(), isFalse);
+      expect(File('${target.path}.part').lengthSync(), 10);
 
-      // Subsequent download attempt is not falsely skipped
+      // Subsequent download attempt is not falsely skipped; a server that ignores the Range
+      // request (200, not 206) makes it start over rather than append.
       final reattempt = await target.download('https://example.com/truncated.dat'.url, client: client).toList();
       expect(reattempt.first, isNot(isA<DownloadSkipped>()));
+      expect(reattempt.last, isA<DownloadFailed>());
+      expect(File('${target.path}.part').lengthSync(), 10);
     });
 
     test('glob supports caseSensitive parameter and platform defaults', () {

@@ -25,25 +25,28 @@ import 'package:dart_toolkit/util.dart';
 The barrel re-exports everything and is there for tools you `dart compile` once, where tree
 shaking makes it free.
 
-| import | contents | third-party cost |
+| import | contents | third-party |
 |---|---|---|
-| `collection/collection.dart` | `Iterable`, `List`, `Map` extensions | — |
-| `util/util.dart` | `Env`, `ConsoleIo`, `TaskProgress`, duration helpers | — |
-| `cli/cli.dart` | `Cli`, `Prompt`, `Logger`, `Console`, ANSI | — |
-| `core/core.dart` | `Either`, `JsonDocument`, string helpers | — |
-| `async/async.dart` | `parallelize`, `retry`, `Mutex`, `CancelToken`, stream operators | — |
-| `fs/fs.dart` | `Path` | path |
-| `hash/hash.dart` | SHA-256, MD5 | crypto, path |
-| `html/html.dart` | `HtmlDocument`, `Elements`, CSS selectors, `res.html`, `url.html` | http |
-| `xml/xml.dart` | `XmlDocument`, `res.xml`, `url.xml` | xml, http |
-| `archive/archive.dart` | zip, unzip | archive, path |
-| `process/process.dart` | `run`, pipelines, `which` | path |
-| `http/http.dart` | requests, JSON, scraping, downloads, `Http.session` | http, path |
+| `collection.dart` | `Iterable`, `List`, `Map` extensions | — |
+| `util.dart` | `Env`, `ConsoleIo`, `TaskProgress`, `Crc32`, duration helpers | — |
+| `cli.dart` | `Cli`, `Prompt`, `Logger`, `Console`, ANSI | — |
+| `core.dart` | `Either`, `JsonDocument`, string helpers | — |
+| `async.dart` | `parallelize`, `retry`, `Mutex`, `CancelToken`, stream operators | — |
+| `xpath.dart` | the XPath engine `html` and `xml` share | — |
+| `fs.dart` | `Path` | path |
+| `hash.dart` | MD5, SHA-1/224/256/384/512, CRC-32, HMAC — native where the OS has a library | crypto (fallback), path |
+| `html.dart` | `HtmlDocument`, `Elements`, CSS `$`, XPath `$x`, `res.html`, `url.html` | path |
+| `xml.dart` | `XmlDocument`, XPath `$`, `res.xml`, `url.xml` | path |
+| `archive.dart` | zip and unzip, streamed, ZIP64 | path |
+| `process.dart` | `run`, pipelines, `which` | path |
+| `http.dart` | `Request`, `Response`, `Client`, `Http.session`, scraping, downloads | path |
+| `testing.dart` | `MockClient` | path |
 
-A format bridge lives with its parser: `http` does not compile the HTML and XML parsers for a
-program that downloads files or reads JSON. The HTML parser is in-house — `package:html` alone
-was 580 ms of every scraper's startup — and is checked against it on real pages in the test
-suite. `tool/startup.dart` prints what each module costs to import.
+Every parser and the HTTP client are the package's own, checked against the packages they
+replaced in the test suite: `package:html`, `xml`, `archive` and `http` together cost about a
+second of front-end work per `dart run` and are gone. `path` is the one runtime dependency;
+`crypto` is the pure-Dart fallback for hashing where the platform has no native library.
+`tool/startup.dart` prints what each module costs to import.
 
 `tool/check_deps.dart` enforces this table in CI, and fails a `bin/` or `example/` file that
 imports the barrel.
@@ -77,20 +80,30 @@ final piped = await ('echo "apple\nbanana"' | 'grep an').run();      // pipefail
 print(piped.lines);
 ```
 
-### HTML
+### HTML and XML
 
 `$` takes a CSS selector and returns `Elements`: a list, whose `text`, `attr()` and `lines`
-answer for the first match.
+answer for the first match. `$x` takes XPath, as in the browser console, and returns `Nodes`.
 
 ```dart
 final doc = await url.html();                       // or res.html, or '<p>…</p>'.html
 final title = doc.$('h1').text;
 for (final a in doc.$('td.title > a[href]')) print(a.attr('href'));
 final tracks = doc.$('#songlist tr').$('td:nth-child(3)').map((td) => td.text);
+final flac = doc.$x('//tr[td[2]="FLAC"]/td[1]/a/@href').texts;
+final table = doc.$x('//h2[contains(., "Tracks")]/following-sibling::table[1]').elements.$('td');
 ```
 
-The parser is the package's own: tag soup lands where a browser puts it, and it starts in a
-fraction of the time `package:html` did.
+XML gets the same shape with XPath as its `$`:
+
+```dart
+final feed = await url.xml();                        // or res.xml, or '<rss>…</rss>'.xml
+for (final item in feed.$('//item').elements) print(item.$('title').text);
+final urls = feed.$('//media:content/@url').texts;
+```
+
+Both parsers are the package's own — tag soup lands where a browser puts it — and each is
+checked against the package it replaced on real documents in the test suite.
 
 ### Paths
 
@@ -106,8 +119,10 @@ await file.writeText(jsonEncode({'version': '0.0.1'}));
 final config = JsonDocument.parse(await file.readText());
 print(config.$(r'$.version').first.raw);
 
-print(await file.sha256());
-await dir.zipTo('${dir.path}.zip');
+print(await file.sha256());                        // native on macOS and Linux, ~2 GB/s
+print('payload'.hmac(Hash.sha256, secret));
+await dir.zipTo('${dir.path}.zip');                 // streamed, ZIP64, dart:io's zlib
+for (final e in await zip.zipEntries()) print('${e.name} ${e.size}');
 ```
 
 A name that came from outside — a scraped title, a header, user input — becomes one component
@@ -212,23 +227,30 @@ await for (final r in stories) switch (r) { case Right(:final value): ...; case 
 ```
 
 One session shares a client across every request inside it, closes it on the way out, and is
-where the timeout and default headers live:
+where the timeout and default headers live. `get`, `head`, `post`, `put`, `patch` and `delete`
+take `body:` (text, bytes or form fields) or `json:`; `fetch` is a GET that must be 2xx.
 
 ```dart
 await Http.session(() async {
-  final doc = await url.html();        // throws on a non-2xx status
-  final res = await other.get();       // ...or check it yourself
+  final doc = await url.html();                         // throws on a non-2xx status
+  final res = await other.get();                        // ...or check it yourself
   if (!res.isOk) await die('${res.statusCode} from $other');
+  final created = await api.withQuery({'v': 2}).post(json: {'name': 'x'});
 }, timeout: 30.s, headers: {'user-agent': 'my-tool/1.0'});
 ```
+
+The client is `dart:io`'s, wrapped in `Request`, `Response` and `Client`; `Http.session(client:)`
+takes any `Client`, and `package:dart_toolkit/testing.dart` has a `MockClient` for tests.
 
 `url / 'users'` appends a path segment, treating the base as a directory — the same glyph as
 `Path./`, with the same meaning.
 
 ### Downloads
 
-Atomic — a `.part` file renamed on success, with `Content-Length` verified. Take a map, an
-iterable of `(url:, path:)` records, or a stream of them, so discovery and transfer overlap:
+Atomic — a `.part` file renamed on success, with `Content-Length` verified — and resumable: a
+failed or interrupted transfer keeps its `.part`, and the next download of the same path picks
+up with a `Range` request. Take a map, an iterable of `(url:, path:)` records, or a stream of
+them, so discovery and transfer overlap:
 
 ```dart
 await for (final p in {url: dest}.downloadAll(concurrency: 4)) {
@@ -299,7 +321,8 @@ cli.command('fetch', build: (fetch) => fetch
 ### Testable IO
 
 Every console write — including subprocess output — goes through `ConsoleIo`, which also drives
-terminal detection, so redirecting the sink redirects what gets rendered.
+terminal detection, so redirecting the sink redirects what gets rendered. Every request goes
+through a `Client`, so a `MockClient` stands in for the network.
 
 ```dart
 final buffer = StringBuffer();
@@ -307,6 +330,9 @@ ConsoleIo.out = buffer;
 Logger.ok('captured, not printed');
 await run('echo also-captured');
 ConsoleIo.reset();
+
+final client = MockClient((req) async => Response('{"ok": true}', 200));
+await Http.session(() => url.json(), client: client);
 ```
 
 ---

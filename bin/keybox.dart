@@ -15,7 +15,7 @@ const baseName = 'Key BOX -for two decades- (2019)';
 typedef Asset = ({Uri url, Path path});
 
 void main(List<String> rawArgs) async {
-  final cli = Cli(name: 'keybox', description: 'Key BOX Scraper & Downloader')
+  final cli = Cli(name: 'keybox', description: 'Key BOX Scraper & Downloader', version: '0.0.4')
     ..choice('format', ['mp3', 'flac', 'all'], abbr: 'f', defaultTo: 'all', description: 'Music format')
     ..number('concurrency', abbr: 'j', defaultTo: 4, description: 'Concurrent download workers')
     ..flag('compress', abbr: 'c', description: 'Compress directory after download')

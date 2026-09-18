@@ -265,9 +265,17 @@ class CliCommand {
       }
     }
     ConsoleIo.out.writeln('  -h, --help           Print this help message');
+    if (_version != null) ConsoleIo.out.writeln('      --version        Print the version');
   }
 
   String get _fullName => parent == null ? name : '${parent!._fullName} $name';
+
+  CliCommand get _root => parent == null ? this : parent!._root;
+
+  String? get _version => switch (_root) {
+    Cli(:final version) => version,
+    _ => null,
+  };
 
   /// Parses [args] and runs this command, or a matching subcommand.
   ///
@@ -326,6 +334,10 @@ class CliCommand {
 
       if (!ownsHelp && (isLong ? key == 'help' : key == 'h')) {
         printUsage();
+        return;
+      }
+      if (isLong && key == 'version' && _version != null && findOption('version') == null) {
+        ConsoleIo.out.writeln('${_root.name} $_version');
         return;
       }
 
@@ -392,7 +404,10 @@ class CliCommand {
 ///
 /// {@category CLI}
 class Cli extends CliCommand {
-  Cli({String name = 'app', String description = ''}) : super(name, description: description);
+  /// Printed by `--version` when set.
+  final String? version;
+
+  Cli({String name = 'app', String description = '', this.version}) : super(name, description: description);
 
   /// Parses [args], runs the matching command, then runs the exit hooks and releases
   /// the signal handlers so the process can end — whether the action returned or threw.

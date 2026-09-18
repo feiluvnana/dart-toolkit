@@ -5,7 +5,6 @@ import 'package:test/test.dart';
 import 'package:xml/xml.dart' as reference;
 import 'package:xml/xpath.dart';
 
-/// The in-house XML parser and XPath engine against `package:xml`, expression by expression.
 void main() {
   const feed = '''<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE rss [ <!ENTITY nbsp "&#160;"> ]>

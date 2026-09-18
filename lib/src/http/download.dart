@@ -90,7 +90,7 @@ final class DownloadSkipped extends DownloadProgress {
   const DownloadSkipped(super.url, super.path);
 }
 
-/// The transfer failed; the `.part` file has been removed.
+/// The transfer failed; its `.part` file stays for a resume.
 ///
 /// {@category Networking}
 final class DownloadFailed extends DownloadProgress {
@@ -143,13 +143,16 @@ const _flushEvery = 4 * 1024 * 1024;
 extension PathDownloadExtensions on Path {
   /// Downloads [url] to this path atomically, streaming [DownloadProgress] updates.
   ///
-  /// Writes `<name>.part` and renames on success, verifies `Content-Length`, and
-  /// deletes the `.part` file on failure. Honours [cancelToken] cooperatively.
+  /// Writes `<name>.part` and renames on success, verifies `Content-Length`, and honours
+  /// [cancelToken] cooperatively. A failed or cancelled transfer keeps its `.part`; the next
+  /// download of the same path resumes it with a `Range` request when [resume] is set, and
+  /// starts over when the server does not honour the range.
   Stream<DownloadProgress> download(
     Uri url, {
     Client? client,
     Map<String, String>? headers,
     bool overwrite = false,
+    bool resume = true,
     CancelToken? cancelToken,
   }) async* {
     if (!overwrite && await exists()) {
@@ -165,25 +168,35 @@ extension PathDownloadExtensions on Path {
     final lease = _clientFor(client);
     final partFile = File('${asFile.path}.part');
     var received = 0;
-    var done = false;
 
     try {
-      final request = Request('GET', url);
-      if (headers != null) request.headers.addAll(headers);
-      final streamed = await lease.client.send(request);
+      var offset = resume && await partFile.exists() ? await partFile.length() : 0;
+      final request = Request('GET', url, headers: headers);
+      if (offset > 0) request.headers['range'] = 'bytes=$offset-';
+      var streamed = await lease.client.send(request);
 
-      if (streamed.statusCode < 200 || streamed.statusCode >= 300) {
+      if (streamed.statusCode == 416 && offset > 0) {
+        // The part is not a prefix of what the server has now; start over.
+        unawaited(streamed.stream.listen(null, cancelOnError: true).cancel().catchError((_) {}));
+        offset = 0;
+        streamed = await lease.client.send(Request('GET', url, headers: headers));
+      }
+      if (!streamed.isOk && streamed.statusCode != 206) {
         // Close the body instead of holding the connection until GC.
         unawaited(streamed.stream.listen(null, cancelOnError: true).cancel().catchError((_) {}));
-        done = true;
         yield DownloadFailed(url, this, HttpException('Download failed with status ${streamed.statusCode}', uri: url));
         return;
       }
-
-      final total = streamed.contentLength;
+      final resumed = streamed.statusCode == 206 && offset > 0;
+      if (!resumed) offset = 0;
+      final total = switch (streamed.headers['content-range']) {
+        final range? when resumed => int.tryParse(range.split('/').last),
+        _ => streamed.contentLength == null ? null : offset + streamed.contentLength!,
+      };
 
       await partFile.parent.create(recursive: true);
-      final sink = partFile.openWrite();
+      final sink = partFile.openWrite(mode: resumed ? FileMode.append : FileMode.write);
+      received = offset;
       var unflushed = 0;
 
       try {
@@ -206,19 +219,15 @@ extension PathDownloadExtensions on Path {
       }
 
       if (total != null && received != total) {
+        if (received > total) await _discard(partFile); // not a prefix of anything; useless
         throw HttpException('Download incomplete: expected $total bytes but received $received bytes', uri: url);
       }
 
       await partFile.rename(asFile.path);
-      done = true;
       yield Downloaded(url, this, received);
     } catch (e) {
-      done = true;
-      await _discard(partFile);
       yield DownloadFailed(url, this, e);
     } finally {
-      // A consumer that stops listening leaves through here without the `catch`.
-      if (!done) await _discard(partFile);
       lease.close();
     }
   }
@@ -237,6 +246,7 @@ Stream<BatchDownloadProgress> _batchDownload(
   Map<String, String>? headers,
   int concurrency = 4,
   bool overwrite = false,
+  bool resume = true,
   CancelToken? cancelToken,
 }) {
   final controller = StreamController<BatchDownloadProgress>();
@@ -305,6 +315,7 @@ Stream<BatchDownloadProgress> _batchDownload(
             client: lease.client,
             headers: headers,
             overwrite: overwrite,
+            resume: resume,
             cancelToken: cancelToken,
           )) {
             if (cancelled()) break;
@@ -364,6 +375,7 @@ extension IterableDownloadExtensions on Iterable<({Uri url, Path path})> {
     Map<String, String>? headers,
     int concurrency = 4,
     bool overwrite = false,
+    bool resume = true,
     CancelToken? cancelToken,
   }) {
     final items = toList();
@@ -374,6 +386,7 @@ extension IterableDownloadExtensions on Iterable<({Uri url, Path path})> {
       headers: headers,
       concurrency: concurrency,
       overwrite: overwrite,
+      resume: resume,
       cancelToken: cancelToken,
     );
   }
@@ -391,6 +404,7 @@ extension StreamDownloadExtensions on Stream<({Uri url, Path path})> {
     Map<String, String>? headers,
     int concurrency = 4,
     bool overwrite = false,
+    bool resume = true,
     CancelToken? cancelToken,
   }) => _batchDownload(
     this,
@@ -398,6 +412,7 @@ extension StreamDownloadExtensions on Stream<({Uri url, Path path})> {
     headers: headers,
     concurrency: concurrency,
     overwrite: overwrite,
+    resume: resume,
     cancelToken: cancelToken,
   );
 }
@@ -418,12 +433,14 @@ extension MapDownloadExtensions on Map<Uri, Path> {
     Map<String, String>? headers,
     int concurrency = 4,
     bool overwrite = false,
+    bool resume = true,
     CancelToken? cancelToken,
   }) => pairs.downloadAll(
     client: client,
     headers: headers,
     concurrency: concurrency,
     overwrite: overwrite,
+    resume: resume,
     cancelToken: cancelToken,
   );
 }

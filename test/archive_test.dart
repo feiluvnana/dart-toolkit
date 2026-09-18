@@ -2,14 +2,13 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:archive/archive_io.dart' as reference;
-import 'package:dart_toolkit/archive.dart';
-import 'package:dart_toolkit/fs.dart';
+import 'package:archive/archive_io.dart';
+import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:test/test.dart';
 
-/// The in-house zip against `package:archive` and the system `unzip`: every archive we write
-/// must open in both, and every archive they write must open in ours, byte for byte.
 void main() {
   late Path tmp;
+
   late Path src;
 
   setUp(() {
@@ -99,5 +98,16 @@ void main() {
     await reference.ZipFileEncoder().zipDirectory(src.asDir, filename: tmp / 'b.zip');
     final theirs = sw.elapsedMicroseconds;
     expect(ours, lessThan(theirs * 2), reason: '$ours µs vs $theirs µs');
+  });
+
+  group('archive', () {
+    test('extractToSync refuses an entry that escapes the destination', () async {
+      final tmp = Path(Directory.systemTemp.createTempSync('zipslip_').path);
+      addTearDown(() => tmp.delete(recursive: true));
+      final zip = tmp / 'evil.zip';
+      await zip.writeBytes(ZipEncoder().encode(Archive()..addFile(ArchiveFile.string('../evil.txt', 'pwned'))));
+      expect(() => zip.extractToSync(tmp / 'dest'), throwsA(isA<FileSystemException>()));
+      expect((tmp / 'evil.txt').existsSync(), isFalse);
+    });
   });
 }

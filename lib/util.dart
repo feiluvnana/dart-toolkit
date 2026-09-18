@@ -9,7 +9,9 @@ library;
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
+part 'src/util/crc32.dart';
 part 'src/util/env.dart';
 part 'src/util/progress.dart';
 part 'src/util/stdio.dart';

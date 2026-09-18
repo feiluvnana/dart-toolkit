@@ -3,6 +3,66 @@
 Every release so far is breaking and ships no deprecation shims. Numbers are back-to-back
 deltas measured on the same machine; `tool/startup.dart` reproduces the startup ones.
 
+## 0.0.4 — dependency-free
+
+Every parser and the HTTP client are in-house, hashing is native, one library per module, and
+a widening pass over what scripts reach for. Measured on the same machine as 0.0.3: importing
+`html` costs +278 ms over a bare script against +660–720 in 0.0.2, `xml` +252 against +693,
+`archive` +190 against +413, `http` +168 against +291; the barrel +221 against +1 250. The one
+runtime dependency left is `path`.
+
+### In-house
+
+- **`archive`**: a streaming zip writer and reader over `dart:io`'s native zlib, ZIP64 when
+  sizes or counts overflow, directory entries, UTF-8 names. Same throughput as before (the
+  old file API already used native zlib), 330 ms less startup. `zipEntries()` lists an archive
+  without extracting. Checked against `package:archive` and the system `zip`/`unzip`.
+- **`xml`**: an XML parser and an XPath 1.0 subset — axes and abbreviations, `*`, `prefix:*`,
+  `text()`, predicates with positions, comparisons, `and`/`or`/`not()`, `contains()`,
+  `starts-with()`, `normalize-space()`, `count()`, `last()`, union. `XmlDocument.root`,
+  `XmlElement`, `XmlNodes` with `text`, `texts`, `attr()`, `elements`. Checked against
+  `package:xml` expression by expression; where the reference departs from XPath 1.0 (`!=` and
+  node-set-to-number comparisons) ours follows the spec.
+- **`xpath.dart`**: the engine, generic over an `XPathTree`, so **HTML has `$x`** — the browser
+  console's name — returning `Nodes` (elements, text, attributes) with `text`, `texts`, `attr()`
+  and `elements` to continue with CSS: `doc.$x('//tr[td[2]="FLAC"]/td[1]/a/@href').texts`.
+- **`http`**: `Request`, `Response`, `StreamedResponse`, `Headers`, `Client`, `IoClient` over
+  `dart:io`'s `HttpClient`; `ClientException` for transport failures. `Response.text` decodes
+  by charset once; `Response.url` is the URL that answered, absolute. `MockClient` lives in
+  `package:dart_toolkit/testing.dart`. Breaking: every `http.Response`/`http.Request` in user
+  code becomes `Response`/`Request`; `body` is `text`, `bodyBytes` is `bytes`.
+- **`hash`** runs on CommonCrypto (macOS) or libcrypto (Linux) through `dart:ffi` — 2–3 GB/s
+  against 170 MB/s — and falls back to `package:crypto`. `isNativeHashing` says which.
+
+### Layout
+
+- **One library per module.** `lib/<module>.dart` is the module — doc, imports, `part` list —
+  and `lib/src/<module>/*` are its parts. Internals are private instead of hidden by `show`;
+  `fetchOk` became the public `Uri.fetch()`. Imports are `package:dart_toolkit/<module>.dart`.
+- **Tests: one file per module.** Twenty files became thirteen; the differential tests against
+  the replaced packages live in the module they check.
+
+### Added
+
+- Hashing: `Hash` enum (md5, sha1, sha224, sha256, sha384, sha512), `hash(Hash)`, `sha1()`,
+  `sha512()` and the rest on `Path`, bytes and strings; `crc32`; `hmac(Hash, key)`. `Crc32` in
+  `util`, shared with the zip writer.
+- `Path`: `isAbsolute`, `absolute`, `relativeTo`, `withExt`, `withName`, `modified()`,
+  `touch()`, `lines()` (streamed), and their sync twins where IO is involved.
+- `String.json`, `String.xml`, `String.html` parse a string.
+- HTTP: `head`, `put`, `patch`, `delete`; `json:` on every method with a body;
+  `Uri.withQuery({...})`; `Uri.send(Request)`.
+- **Downloads resume.** A failed or interrupted transfer keeps its `.part`; the next download of
+  the same path sends `Range: bytes=N-` and appends on 206, starts over on 200, restarts on 416.
+  `resume: false` turns it off. Breaking: the `.part` is no longer deleted on failure.
+- `Cli(version:)` answers `--version`. `Iterable.partition`, `Iterable.indexBy`.
+
+### Fixed
+
+- The redirect target a client followed was reported relative; it is resolved.
+- After gzip decoding, `content-length` and `content-encoding` no longer describe the body and
+  are dropped from the response headers.
+
 ## 0.0.3 — brevity and speed
 
 An audit that read every public member, then probed the engine with mock clients. Ten defects
