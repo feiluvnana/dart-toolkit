@@ -44,11 +44,11 @@ void main() {
       }
     });
 
-    test('ShellResult.json is a JsonDocument', () async {
+    test('command output parses as JSON through text.json', () async {
       final res = await run('echo \'{"name":"toolkit","version":9}\'', quiet: true);
-      expect(res.json['name'].to<String>(), equals('toolkit'));
-      expect(res.json['version'].to<int>(), equals(9));
-      expect((await run('echo \'[1,2]\'', quiet: true).json).list.length, equals(2));
+      expect(res.text.json['name'].to<String>(), equals('toolkit'));
+      expect(res.text.json['version'].to<int>(), equals(9));
+      expect((await run('echo \'[1,2]\'', quiet: true).text).json.list.length, equals(2));
     });
 
     test('run feeds input to stdin and splits on any whitespace', () async {

@@ -38,7 +38,7 @@ class Ansi {
   }
 
   /// Strips all ANSI escape sequences from [text].
-  static String strip(String text) => text.replaceAll(escapePattern, '');
+  static String strip(String text) => ConsoleIo.stripAnsi(text);
 }
 
 /// ANSI terminal styling extensions on [String].

@@ -66,7 +66,7 @@ dependencies:
 final res = await run('git status --short');
 if (res.isOk) print(res.text);
 
-final prs = await run('gh pr list --json number', quiet: true).json;   // a JsonDocument
+final prs = (await run('gh pr list --json number', quiet: true).text).json;   // a JsonDocument
 await run('cat', input: 'fed to stdin');
 await (await which('dart'))?.run(args: ['--version']);
 

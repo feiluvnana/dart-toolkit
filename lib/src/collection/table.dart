@@ -272,6 +272,11 @@ final class Table {
     return file.writeAsString(toCsv(separator: separator));
   }
 
+  /// Prints this table with borders through `ConsoleIo`.
+  void show() => ConsoleIo.table(columns, [
+    for (final r in rows) [for (final c in columns) r[c]],
+  ]);
+
   /// The rows, as `jsonEncode` wants them: `jsonEncode(table)` is a JSON array of objects.
   List<Row> toJson() => rows;
 

@@ -9,7 +9,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'formats.dart';
 import 'fs.dart';
 import 'core.dart';
 

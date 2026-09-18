@@ -12,7 +12,6 @@ import 'dart:io';
 import 'dart:math';
 
 import 'async.dart';
-import 'collection.dart';
 import 'core.dart';
 
 part 'src/cli/ansi.dart';

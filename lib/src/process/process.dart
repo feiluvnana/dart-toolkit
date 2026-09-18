@@ -358,9 +358,6 @@ extension FutureShellExtensions on Future<ShellResult> {
   /// The non-empty output lines of the executed command.
   Future<List<String>> get lines => then((r) => r.lines);
 
-  /// The stdout of the executed command, parsed as JSON.
-  Future<JsonDocument> get json => then((r) => r.json);
-
   /// Whether the command exited successfully with code 0.
   Future<bool> get isOk => then((r) => r.isOk);
 }

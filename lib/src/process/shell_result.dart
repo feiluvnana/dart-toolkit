@@ -29,9 +29,6 @@ class ShellResult {
   /// Non-empty, trimmed lines extracted from [stdout].
   List<String> get lines => stdout.split(_newline).map((line) => line.trim()).where((line) => line.isNotEmpty).toList();
 
-  /// [stdout] parsed as JSON.
-  JsonDocument get json => JsonDocument.parse(text);
-
   @override
   String toString() => text.isNotEmpty ? text : stderr.trim();
 }

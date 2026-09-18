@@ -77,11 +77,11 @@ class ConsoleProgress {
 
     var line = base;
     if (label != null && label.isNotEmpty) {
-      final availableForSuffix = maxCols - _stringVisualWidth(base);
+      final availableForSuffix = maxCols - ConsoleIo.width(base);
       // " ($label)" requires 3 columns for " (" and ")"
-      if (availableForSuffix > 5) line = '$base (${_truncateToVisualWidth(label, availableForSuffix - 3)})';
+      if (availableForSuffix > 5) line = '$base (${ConsoleIo.truncate(label, availableForSuffix - 3)})';
     }
-    return _truncateToVisualWidth(line, maxCols);
+    return ConsoleIo.truncate(line, maxCols);
   }
 
   /// Advances the progress by [count] and optionally displays [label].
@@ -106,7 +106,7 @@ class ConsoleProgress {
   void _render(String? label) {
     final maxCols = max(20, _columnsOr(columns) - 1);
     final line = formatLine(label);
-    final lineWidth = _stringVisualWidth(line);
+    final lineWidth = ConsoleIo.width(line);
     final padding = ' ' * max(0, min(_lastWidth - lineWidth, maxCols - lineWidth));
     ConsoleIo.out.write('\r\x1b[K${line.dim}$padding');
     _lastWidth = lineWidth + padding.length;
@@ -170,7 +170,7 @@ class ConsoleMultiProgress {
   List<String> formatLines() {
     final maxCols = max(20, _columnsOr(columns) - 1);
     return [
-      _truncateToVisualWidth(_bar(_current, total, message), maxCols),
+      ConsoleIo.truncate(_bar(_current, total, message), maxCols),
       for (var i = 0; i < _slotList.length; i++)
         _formatSlotLine(_slotList[i], i == _slotList.length - 1 ? '  └─ ' : '  ├─ ', maxCols),
     ];
@@ -203,7 +203,7 @@ class ConsoleMultiProgress {
     }
 
     final statusSuffix = slot.status != null && slot.status!.isNotEmpty ? ' [${slot.status}]' : '';
-    return _truncateToVisualWidth('$prefix$barStr $percentStr $sizeStr${slot.label}$statusSuffix', maxCols);
+    return ConsoleIo.truncate('$prefix$barStr $percentStr $sizeStr${slot.label}$statusSuffix', maxCols);
   }
 
   void _render() {
@@ -359,60 +359,6 @@ class ConsoleSpinner {
   }
 }
 
-int _charVisualWidth(int rune) {
-  if (rune < 0x20 || (rune >= 0x7f && rune < 0xa0)) return 0;
-  // Combining characters / zero width
-  if (rune >= 0x0300 && rune <= 0x036f) return 0;
-  if (rune >= 0x200b && rune <= 0x200f) return 0;
-  if (rune >= 0xfe00 && rune <= 0xfe0f) return 0;
-
-  // East Asian Wide / Fullwidth / Emoji. Dingbats (✓ ✖ ⚠, U+2600–27BF) are one column.
-  if ((rune >= 0x1100 && rune <= 0x115f) ||
-      rune == 0x2329 ||
-      rune == 0x232a ||
-      (rune >= 0x2e80 && rune <= 0x303e) ||
-      (rune >= 0x3040 && rune <= 0xa4cf) ||
-      (rune >= 0xac00 && rune <= 0xd7a3) ||
-      (rune >= 0xf900 && rune <= 0xfaff) ||
-      (rune >= 0xfe10 && rune <= 0xfe19) ||
-      (rune >= 0xfe30 && rune <= 0xfe6f) ||
-      (rune >= 0xff00 && rune <= 0xff60) ||
-      (rune >= 0xffe0 && rune <= 0xffe6) ||
-      (rune >= 0x1f300 && rune <= 0x1faff) ||
-      (rune >= 0x20000 && rune <= 0x2fffd) ||
-      (rune >= 0x30000 && rune <= 0x3fffd)) {
-    return 2;
-  }
-  return 1;
-}
-
-int _stringVisualWidth(String str) {
-  var width = 0;
-  for (final rune in Ansi.strip(str).runes) {
-    width += _charVisualWidth(rune);
-  }
-  return width;
-}
-
-String _truncateToVisualWidth(String str, int maxWidth) {
-  if (maxWidth <= 0) return '';
-  if (_stringVisualWidth(str) <= maxWidth) return str;
-
-  const ellipsis = '...';
-  if (maxWidth <= ellipsis.length) return '.' * maxWidth;
-
-  final targetWidth = maxWidth - ellipsis.length;
-  final buffer = StringBuffer();
-  var currentWidth = 0;
-  for (final rune in Ansi.strip(str).runes) {
-    final w = _charVisualWidth(rune);
-    if (currentWidth + w > targetWidth) break;
-    buffer.writeCharCode(rune);
-    currentWidth += w;
-  }
-  return '$buffer$ellipsis';
-}
-
 /// Helpers for rendering tables, rules, and terminal animations.
 ///
 /// {@category Terminal}
@@ -431,7 +377,7 @@ class Console {
       return;
     }
 
-    final titleLen = _stringVisualWidth(title) + 2;
+    final titleLen = ConsoleIo.width(title) + 2;
     if (titleLen >= cols) {
       ConsoleIo.out.writeln('── $title ──');
       return;
@@ -441,40 +387,9 @@ class Console {
     ConsoleIo.out.writeln('${'─' * sideLen} $title ${'─' * (cols - titleLen - sideLen)}'.cyan);
   }
 
-  /// Renders a formatted text table with borders to standard output.
-  static void table({required List<String> headers, required List<List<Object?>> rows}) {
-    if (headers.isEmpty && rows.isEmpty) return;
-
-    final numCols = headers.isNotEmpty ? headers.length : rows.first.length;
-    final cells = [
-      for (final row in rows) [for (var i = 0; i < numCols; i++) i < row.length ? '${row[i]}' : ''],
-    ];
-    final widths = [for (final h in headers) _stringVisualWidth(h)];
-    while (widths.length < numCols) {
-      widths.add(0);
-    }
-    for (final row in cells) {
-      for (var i = 0; i < numCols; i++) {
-        widths[i] = max(widths[i], _stringVisualWidth(row[i]));
-      }
-    }
-
-    String divider(String left, String mid, String right, String cross) =>
-        '$left${widths.map((w) => mid * (w + 2)).join(cross)}$right';
-
-    String formatRow(List<String> row) =>
-        '│${[for (var i = 0; i < numCols; i++) ' ${row[i]}${' ' * (widths[i] - _stringVisualWidth(row[i]))} '].join('│')}│';
-
-    ConsoleIo.out.writeln(divider('┌', '─', '┐', '┬'));
-    if (headers.isNotEmpty) {
-      ConsoleIo.out.writeln(formatRow(headers));
-      ConsoleIo.out.writeln(divider('├', '─', '┤', '┼'));
-    }
-    for (final row in cells) {
-      ConsoleIo.out.writeln(formatRow(row));
-    }
-    ConsoleIo.out.writeln(divider('└', '─', '┘', '┴'));
-  }
+  /// Renders a text table with borders through [ConsoleIo.table].
+  static void table({required List<String> headers, required List<List<Object?>> rows}) =>
+      ConsoleIo.table(headers, rows);
 
   /// Creates a single-line progress indicator for [total] steps.
   static ConsoleProgress progress(int total, {String message = '', int? columns}) =>
@@ -520,15 +435,4 @@ extension StreamBatchProgressExtensions<T extends BatchProgress> on Stream<T> {
     }
     return last;
   }
-}
-
-/// {@category Terminal}
-extension TableConsoleExtensions on Table {
-  /// Prints this table through [Console.table].
-  void show() => Console.table(
-    headers: columns,
-    rows: [
-      for (final r in rows) [for (final c in columns) r[c]],
-    ],
-  );
 }

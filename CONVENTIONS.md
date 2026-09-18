@@ -267,7 +267,7 @@ Including subprocess output. `ConsoleIo.isTerminal` and `ConsoleIo.columns` — 
 
 ## Accepted exception
 
-`Future<ShellResult>` mirrors `text`, `lines`, `json` and `ok` onto itself so that
+`Future<ShellResult>` mirrors `text`, `lines` and `isOk` onto itself so that
 `await run('cmd').text` works. No other result type does this. Shell chaining is this package's
 hottest path and it earns the inconsistency; nothing else does.
 

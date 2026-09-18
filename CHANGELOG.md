@@ -10,6 +10,10 @@ deltas measured on the same machine; `tool/startup.dart` reproduces the startup 
   and INI in `formats`, with the `http` bridges (`res.html`, `url.xml()`) in `http`;
   `testing.dart` is gone — the handler-backed `Client` is `test/mock_client.dart`. Imports:
   `package:dart_toolkit/{core,collection,formats,async,cli,fs,crypto,process,http}.dart`.
+  `ConsoleIo.table`, `width`, `truncate` and `stripAnsi` live in `core` so `Table.show()` and
+  `Console.table` share one renderer without `cli` importing the parsers. `ShellResult.json`
+  is gone: `run(cmd).text` then `.json`, so a shell script does not compile the parsers either.
+  Three pairs over bare: `cli` +30 ms, `process` +100, `http` +240, `formats` +120.
 
 - **`collection` is a query type, not a set of extensions.** Every extension on `Iterable`,
   `List` and `Map` is gone. `items.sequence` and `map.sequence` give a `Sequence<T>` — lazy, still an
