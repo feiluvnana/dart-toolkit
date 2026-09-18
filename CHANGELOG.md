@@ -27,6 +27,13 @@ deltas measured on the same machine; `tool/startup.dart` reproduces the startup 
   that throw naming the column and row when a cell does not convert (`numberOrNull`,
   `getOrNull` for the quiet form); a wrong column name anywhere is an `ArgumentError` that
   lists the columns; out as `toCsv`, `saveCsv`, `toJson`, `show()`.
+- **`formats.dart`**: YAML (block and flow, `|` and `>`, anchors, several documents), TOML 1.0
+  (tables, arrays of tables, dotted keys, all four string kinds, inline tables) and INI decode
+  to `JsonDocument` — `text.yaml`, `text.toml`, `text.ini` — so JSONPath and `to<T>()` serve
+  every configuration file; `doc.toYaml()` writes YAML back. In-house, dependency-free; YAML is
+  checked against `package:yaml` (a dev dependency) on a pubspec- and workflow-shaped document.
+- **`Table` formats**: `Table.tsv`, `Table.ndjson`, `toTsv`, `toNdjson`, `toMarkdown`
+  (numbers right-aligned) beside CSV.
 - **keybox takes no options.** It downloads every format and zips the result; `Cli` stays only
   as the lifecycle (`--help`, `--version`, `ctx.cancel`).
 - **No CI.** The GitHub workflow is gone; `tool/check_deps.dart`, `dart analyze` and `dart test`

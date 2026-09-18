@@ -27,10 +27,11 @@ shaking makes it free.
 
 | import | contents | third-party |
 |---|---|---|
-| `collection.dart` | `Sequence` (`.sequence` on any `Iterable` or `Map`): lazy queries, multi-key sort, joins, sets; `Table`: rows of named columns, CSV in and out | — |
+| `collection.dart` | `Sequence` (`.sequence` on any `Iterable` or `Map`): lazy queries, multi-key sort, joins, sets; `Table`: rows of named columns; CSV, TSV, NDJSON, Markdown | — |
 | `util.dart` | `Env`, `ConsoleIo`, `TaskProgress`, `Crc32`, duration helpers | — |
 | `cli.dart` | `Cli`, `Prompt`, `Logger`, `Console`, ANSI | — |
 | `core.dart` | `Either`, `JsonDocument`, string helpers | — |
+| `formats.dart` | YAML, TOML, INI → `JsonDocument`; YAML out | — |
 | `async.dart` | `parallelize`, `retry`, `Mutex`, `CancelToken`, stream operators | — |
 | `xpath.dart` | the XPath engine `html` and `xml` share | — |
 | `fs.dart` | `Path` | path |
@@ -104,6 +105,23 @@ final urls = feed.$('//media:content/@url').texts;
 
 Both parsers are the package's own — tag soup lands where a browser puts it — and each is
 checked against the package it replaced on real documents in the test suite.
+
+### Formats
+
+Every data and configuration format decodes to the same `JsonDocument`, so one query language
+and one `to<T>()` serve them all. The parsers are the package's own; YAML is checked against
+`package:yaml` in the test suite.
+
+```dart
+final pubspec = (await 'pubspec.yaml'.path.readText()).yaml;
+print(pubspec.$(r'$.dependencies.*').length);
+final port = configText.toml['server']['port'].to<int>();
+final debug = iniText.ini['debug'].to<bool>();
+await 'out.yaml'.path.writeText(pubspec.toYaml());
+
+Table.csv(text); Table.tsv(text); Table.ndjson(text);      // in
+t.toCsv(); t.toTsv(); t.toNdjson(); t.toMarkdown();         // out
+```
 
 ### Paths
 

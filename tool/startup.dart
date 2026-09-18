@@ -12,6 +12,7 @@ import 'dart:io';
 
 const modules = [
   'core',
+  'formats',
   'util',
   'collection',
   'async',

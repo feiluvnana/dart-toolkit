@@ -12,6 +12,7 @@ const budgets = <String, Set<String>>{
   'cli': {},
   'collection': {},
   'core': {},
+  'formats': {},
   'fs': {'path'},
   'hash': {'crypto', 'path'},
   'html': {'path'},

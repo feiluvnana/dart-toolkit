@@ -41,7 +41,7 @@ extension ElementTableExtensions on Element {
   Table get table {
     final t = name == 'table' ? this : $('table').firstOrNull;
     if (t == null) return Table(const [], const []);
-    final trs = t.$('tr').where((tr) => tr.parent?.name != 'table' || true).toList();
+    final trs = t.$('tr');
     var header = <String>[];
     final body = <List<String>>[];
     for (final tr in trs) {

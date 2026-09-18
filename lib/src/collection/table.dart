@@ -87,6 +87,16 @@ final class Table {
     ]);
   }
 
+  /// A table from tab-separated text; see [Table.csv].
+  factory Table.tsv(String text) => Table.csv(text, separator: '\t');
+
+  /// A table from newline-delimited JSON: one object per line, blank lines skipped.
+  factory Table.ndjson(String text) => Table.rows([
+    for (final line in text.split('\n'))
+      if (line.trim().isNotEmpty)
+        if (jsonDecode(line) case final Map<Object?, Object?> m) {for (final e in m.entries) '${e.key}': e.value},
+  ]);
+
   static Row _copy(Map<String, Object?> r) => Map<String, Object?>.of(r);
 
   /// The rows as a query.
@@ -230,6 +240,27 @@ final class Table {
     final sb = StringBuffer()..writeln(columns.map(cell).join(separator));
     for (final r in rows) {
       sb.writeln(columns.map((c) => cell(r[c])).join(separator));
+    }
+    return sb.toString();
+  }
+
+  /// Tab-separated text; see [toCsv].
+  String toTsv() => toCsv(separator: '\t');
+
+  /// Newline-delimited JSON: one object per row.
+  String toNdjson() => rows.map(jsonEncode).join('\n') + (rows.isEmpty ? '' : '\n');
+
+  /// A Markdown table, numbers right-aligned.
+  String toMarkdown() {
+    final numeric = [
+      for (final c in columns) rows.isNotEmpty && rows.every((r) => r[c] == null || _coerce<num>(r[c]) != null),
+    ];
+    String cell(Object? v) => (v == null ? '' : '$v').replaceAll('|', r'\|').replaceAll('\n', ' ');
+    final sb = StringBuffer()
+      ..writeln('| ${columns.join(' | ')} |')
+      ..writeln('| ${[for (final n in numeric) n ? '---:' : '---'].join(' | ')} |');
+    for (final r in rows) {
+      sb.writeln('| ${columns.map((c) => cell(r[c])).join(' | ')} |');
     }
     return sb.toString();
   }

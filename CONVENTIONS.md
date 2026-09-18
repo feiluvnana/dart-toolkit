@@ -54,6 +54,10 @@ language per format, each the one native to it. HTML XPath existed alongside the
 145× slower on a 2000-row page and quadratic in document size; it is gone, along with the package
 that supplied it.
 
+Every configuration and data format — JSON, YAML, TOML, INI — decodes to `JsonDocument`, so
+JSONPath and `to<T>()` are learned once. HTML and XML keep their own trees because their
+queries are about structure the JSON model does not have.
+
 `$` on HTML returns `Elements`, a `List<Element>` that also answers `text`, `attr()`, `lines`
 and `$()` for its first match. Eight call sites lost a `.first`; an empty match throws a
 `StateError` that says so, where `.first` said "No element". HTML also has `$x`, XPath under
