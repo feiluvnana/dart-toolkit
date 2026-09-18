@@ -1,6 +1,4 @@
-import 'package:dart_toolkit/cli.dart';
-import 'package:dart_toolkit/http.dart';
-import 'package:dart_toolkit/core.dart';
+import 'package:dart_toolkit/dart_toolkit.dart';
 
 typedef Story = ({String title, Uri link});
 

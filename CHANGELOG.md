@@ -5,6 +5,9 @@ deltas measured on the same machine; `tool/startup.dart` reproduces the startup 
 
 ## Unreleased
 
+- **One import.** With every parser and the client in-house, `dart_toolkit.dart` is within
+  70 ms of the five module imports a scraper listed by hand, so programs import it; the module
+  files stay for a program that wants less, and `check_deps` no longer forbids the barrel.
 - **Nine modules.** `util` folded into `core`; `archive` into `fs` (zip is in-house, the
   compression the SDK's); `hash` is `crypto`; `html`, `xml` and `xpath` joined JSON, YAML, TOML
   and INI in `formats`, with the `http` bridges (`res.html`, `url.xml()`) in `http`;

@@ -10,20 +10,18 @@ No aliases. If two spellings exist, one of them is deleted — not deprecated, n
 ergonomics". The audit found fifteen, and every one was a thing a reader had to learn was the
 same thing.
 
-## A program imports modules, not the barrel — and an executable runs through the snapshot
+## One import, unless a program measures otherwise
 
-`dart_toolkit.dart` re-exports everything. Under `dart run file.dart` the front end compiles the
-whole transitive closure on every invocation, so the barrel costs ~1.4 s per run against ~0.3 s
-for the modules a program actually uses. Narrow imports in `bin/` and `example/` are enforced by
-`tool/check_deps.dart`. The barrel is for tools you `dart compile` once, where tree shaking makes
-it free.
+`dart_toolkit.dart` re-exports everything. When the parsers were third-party it cost ~1.4 s per
+`dart run` against ~0.3 s for the modules a program used, and every program listed its modules.
+With every parser and the client in-house the barrel is within 70 ms of a scraper's five
+imports, so programs import it and the module files stay for the program that wants less.
+`tool/startup.dart` measures both; an executable run as `dart run dart_toolkit:<name>` goes
+through pub's incremental snapshot and pays neither after the first run.
 
-`dart run dart_toolkit:<name>` is different: pub keeps an incremental snapshot of a package
-executable and recompiles only what changed. Measured on `keybox --help`, three pairs: 352–414 ms
-against 1 332–1 475 ms for `dart run bin/keybox.dart`, edits included. That is how `bin/` is run.
 
-The same rule shapes the modules themselves: `core`, `collection` and `formats` have no
-third-party dependencies, and there are nine modules, not one per type.
+The modules still matter for their own sake: `core`, `collection` and `formats` have no
+third-party dependencies, and there are nine of them, not one per type.
 
 ## Extensions are `<Receiver>Extensions`
 
@@ -87,7 +85,7 @@ non-parsing hot spot appears that the SDK and the OS do not already cover.
 freely between its parts — no `show` lists, no re-exports, no "not exported" comments. Another
 module is used through its module file, `import 'http.dart'`, never through a file inside its
 `src/`; what one module offers another is therefore public API. Programs import
-`package:dart_toolkit/<module>.dart`.
+`package:dart_toolkit/dart_toolkit.dart`, or a module file when they want less.
 
 ## A file operation streams
 

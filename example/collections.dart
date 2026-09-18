@@ -1,5 +1,4 @@
-import 'package:dart_toolkit/cli.dart';
-import 'package:dart_toolkit/collection.dart';
+import 'package:dart_toolkit/dart_toolkit.dart';
 
 /// The same six tasks twice: with the SDK's `Iterable` and `Map`, then with `Sequence` and
 /// `Table`. Both halves print the same thing; the point is what each one takes to say.

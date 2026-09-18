@@ -2,11 +2,8 @@
 
 Four task-shaped programs, each runnable and analysed with the package.
 
-Each one opens with the modules it uses, not `dart_toolkit.dart` — under `dart run file.dart`
-the barrel costs about 1.4 s of front-end work per invocation against about 0.3 s.
-`tool/check_deps.dart` fails the build if one of these files reaches for the barrel again. A
-`bin/` executable has a cheaper path: `dart run dart_toolkit:keybox` uses pub's incremental
-snapshot and starts in about 0.4 s.
+Each one opens with one import, `package:dart_toolkit/dart_toolkit.dart`; a `bin/` executable
+run as `dart run dart_toolkit:keybox` uses pub's incremental snapshot and starts in about 0.4 s.
 
 | file | shows |
 |---|---|

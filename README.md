@@ -10,20 +10,16 @@ A scripting, automation and web-scraping toolkit for Dart.
 
 ## Modules
 
-**Run an executable through pub's snapshot, and import the modules you use.** `dart run
-dart_toolkit:keybox` starts in about 0.4 s and picks up edits; `dart run bin/keybox.dart`
-recompiles the whole import closure every time and takes about 1.4 s. For an ad-hoc script the
-imports are the lever: `package:dart_toolkit/dart_toolkit.dart` costs about 1.4 s per run against
-about 0.3 s for a narrow import — measured, and the reason every program in this repo lists its
-modules:
+**One import.** `package:dart_toolkit/dart_toolkit.dart` brings every module; since every
+parser and the HTTP client are the package's own, it costs about what a scraper's five module
+imports cost by hand (measured within 70 ms, on a 0.4 s bare start). A program that wants less
+imports modules individually, and an executable run as `dart run dart_toolkit:<name>` pays
+nothing after the first run either way.
 
 ```dart
-import 'package:dart_toolkit/cli.dart';
-import 'package:dart_toolkit/core.dart';
+import 'package:dart_toolkit/dart_toolkit.dart';
 ```
 
-The barrel re-exports everything and is there for tools you `dart compile` once, where tree
-shaking makes it free.
 
 | import | contents | third-party |
 |---|---|---|
@@ -42,8 +38,7 @@ packages they replaced in the test suite; `path` is the one runtime dependency, 
 pure-Dart fallback for hashing where the platform has no native library. `tool/startup.dart`
 prints what each module costs to import.
 
-`tool/check_deps.dart` checks this table on demand, and fails a `bin/` or `example/` file that
-imports the barrel.
+`tool/check_deps.dart` checks this table on demand.
 
 ---
 

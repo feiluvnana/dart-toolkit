@@ -1,6 +1,4 @@
-import 'package:dart_toolkit/cli.dart';
-import 'package:dart_toolkit/fs.dart';
-import 'package:dart_toolkit/crypto.dart';
+import 'package:dart_toolkit/dart_toolkit.dart';
 
 void main() async {
   final tempDir = Path.temp / 'toolkit_file_demo';
