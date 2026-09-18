@@ -1,6 +1,6 @@
 # Examples
 
-Three task-shaped programs. Each is runnable and each is checked by `dart analyze` in CI.
+Three task-shaped programs, each runnable and analysed with the package.
 
 Each one opens with the modules it uses, not `dart_toolkit.dart` — under `dart run file.dart`
 the barrel costs about 1.4 s of front-end work per invocation against about 0.3 s.
@@ -22,4 +22,4 @@ dart run example/web_crawler.dart          # needs network
 
 There is deliberately no example that demonstrates every API at once. One existed, and it made
 the surface feel obligatory rather than compositional. `bin/keybox.dart` is the program that
-composes several modules at once; it is analysed in CI and serves as the composition test.
+composes several modules at once and serves as the composition test.

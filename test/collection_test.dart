@@ -82,5 +82,58 @@ void main() {
       expect(odd, [1, 3, 5]);
       expect(['aa', 'b', 'cc'].indexBy((s) => s.length), {2: 'cc', 1: 'b'});
     });
+
+    test('distinct, windowed, takeLast, skipLast, none, flattened', () {
+      expect([3, 1, 3, 2, 1].distinct, [3, 1, 2]);
+      expect([1, 2, 3, 4].windowed(2).toList(), [
+        [1, 2],
+        [2, 3],
+        [3, 4],
+      ]);
+      expect([1, 2, 3, 4, 5].windowed(2, step: 2).toList(), [
+        [1, 2],
+        [3, 4],
+      ]);
+      expect([1, 2, 3, 4, 5].windowed(2, step: 2, partial: true).toList(), [
+        [1, 2],
+        [3, 4],
+        [5],
+      ]);
+      expect([1, 2, 3, 4].takeLast(2), [3, 4]);
+      expect([1, 2, 3, 4].skipLast(3), [1]);
+      expect([1, 2].takeLast(5), [1, 2]);
+      expect([1, 3].none((n) => n.isEven), isTrue);
+      expect(
+        [
+          [1],
+          [2, 3],
+          <int>[],
+        ].flattened.toList(),
+        [1, 2, 3],
+      );
+    });
+
+    test('records, toMap, where, mapValues, mapKeys, inverted', () {
+      final m = {'a': 1, 'b': 2, 'c': 3};
+      expect(m.records.toList(), [('a', 1), ('b', 2), ('c', 3)]);
+      expect(m.records.toMap(), m);
+      expect(m.where((k, v) => v.isOdd), {'a': 1, 'c': 3});
+      expect(m.mapValues((v) => v * 10), {'a': 10, 'b': 20, 'c': 30});
+      expect(m.mapKeys((k) => k.toUpperCase()), {'A': 1, 'B': 2, 'C': 3});
+      expect(m.inverted, {1: 'a', 2: 'b', 3: 'c'});
+      for (final (k, v) in m.records) {
+        expect(m[k], v);
+      }
+    });
+
+    test('a query chain reads as one sentence', () {
+      final tracks = [(disc: 1, n: 2, s: 300), (disc: 1, n: 1, s: 200), (disc: 2, n: 1, s: 100)];
+      final byDisc = tracks.groupBy((t) => t.disc).mapValues((ts) => ts.sortedBy((t) => t.n).map((t) => t.n).toList());
+      expect(byDisc, {
+        1: [1, 2],
+        2: [1],
+      });
+      expect(tracks.groupBy((t) => t.disc).mapValues((ts) => ts.sum((t) => t.s)), {1: 500, 2: 100});
+    });
   });
 }

@@ -38,7 +38,7 @@ qualify by purpose after the receiver: `StringAnsiExtensions`, `StringShellExten
 Not the module that reads nicest at the call site. `download` is `http`, not `fs`, even though
 `path.download(url)` reads better than the alternative. `zipTo` is `archive`. `sha256` is `hash`.
 
-`tool/check_deps.dart` holds a per-module third-party budget and runs in CI. Adding a dependency
+`tool/check_deps.dart` holds a per-module third-party budget; run it before a release. Adding a dependency
 means changing the budget on purpose, in a reviewable diff.
 
 ## Top-level functions are for verbs you type constantly

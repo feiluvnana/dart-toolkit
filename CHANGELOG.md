@@ -3,6 +3,19 @@
 Every release so far is breaking and ships no deprecation shims. Numbers are back-to-back
 deltas measured on the same machine; `tool/startup.dart` reproduces the startup ones.
 
+## Unreleased
+
+- **Collections speak one vocabulary.** `Iterable`: `distinct`, `windowed`, `takeLast`,
+  `skipLast`, `none`, `flattened`, `toMap()` on pairs, next to `groupBy`, `countBy`, `indexBy`,
+  `partition`, `sortedBy`, `sum`, `average`, `maxBy`, `minBy`, `zip`, `chunk`. `Map`: `records`
+  (entries as `(k, v)` for destructuring loops), `where`, `mapValues`, `mapKeys`, `inverted`,
+  `mergeWith`. A verb with `By` takes a key selector; an adjective returns a new collection;
+  nothing the SDK has is repeated.
+- **keybox takes no options.** It downloads every format and zips the result; `Cli` stays only
+  as the lifecycle (`--help`, `--version`, `ctx.cancel`).
+- **No CI.** The GitHub workflow is gone; `tool/check_deps.dart`, `dart analyze` and `dart test`
+  are run by hand before a release.
+
 ## 0.0.4 — dependency-free
 
 Every parser and the HTTP client are in-house, hashing is native, one library per module, and

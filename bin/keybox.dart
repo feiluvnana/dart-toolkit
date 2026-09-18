@@ -1,6 +1,7 @@
 import 'package:dart_toolkit/archive.dart';
 import 'package:dart_toolkit/async.dart';
 import 'package:dart_toolkit/cli.dart';
+import 'package:dart_toolkit/collection.dart';
 import 'package:dart_toolkit/core.dart';
 import 'package:dart_toolkit/fs.dart';
 import 'package:dart_toolkit/html.dart';
@@ -10,27 +11,21 @@ import 'package:dart_toolkit/util.dart';
 const keyBase = 'https://key.visualarts.gr.jp/key20th/';
 const khinsider = 'https://downloads.khinsider.com/game-soundtracks/album/key-box-for-two-decades-2019';
 const baseName = 'Key BOX -for two decades- (2019)';
+const formats = ['mp3', 'flac'];
+const concurrency = 4;
 
 /// What the scrapers produce and the downloader consumes.
 typedef Asset = ({Uri url, Path path});
 
-void main(List<String> rawArgs) async {
-  final cli = Cli(name: 'keybox', description: 'Key BOX Scraper & Downloader', version: '0.0.4')
-    ..choice('format', ['mp3', 'flac', 'all'], abbr: 'f', defaultTo: 'all', description: 'Music format')
-    ..number('concurrency', abbr: 'j', defaultTo: 4, description: 'Concurrent download workers')
-    ..flag('compress', abbr: 'c', description: 'Compress directory after download')
-    ..action((ctx) => Http.session(() => run(ctx), timeout: 60.s));
+/// Downloads the whole box set — artwork, documents, every track in every format — and zips it.
+void main(List<String> args) => Cli(
+  name: 'keybox',
+  description: 'Key BOX Scraper & Downloader',
+  version: '0.0.4',
+).action((ctx) => Http.session(() => run(ctx.cancel), timeout: 60.s)).run(args);
 
-  await cli.run(rawArgs);
-}
-
-Future<void> run(CliContext ctx) async {
-  final selectedFormat = ctx.option('format');
-  final formats = selectedFormat == 'all' ? const ['mp3', 'flac'] : [selectedFormat];
-  final concurrency = ctx.number('concurrency');
-  final shouldCompress = ctx.flag('compress');
-  final stage = Logger.stages(shouldCompress ? 3 : 2);
-
+Future<void> run(CancelToken cancel) async {
+  final stage = Logger.stages(3);
   final base = baseName.path;
   final baseUri = keyBase.url;
   final artwork = <Uri, Path>{};
@@ -136,7 +131,7 @@ Future<void> run(CliContext ctx) async {
   Logger.ok('Found ${discNames.length} discs and ${artwork.length} artwork/document assets.');
 
   // Stage 2: Track links and downloads, merged — tracks resolve while artwork transfers.
-  stage('Resolving tracks and downloading assets (concurrency: $concurrency)');
+  stage('Resolving tracks and downloading assets');
   final songs = khinsider.url
       .scrape<Asset>()
       .onResponse((ctx) {
@@ -155,7 +150,7 @@ Future<void> run(CliContext ctx) async {
             href,
             onResponse: (song) {
               final page = song.response.html;
-              for (final MapEntry(key: ext, value: path) in missing.entries) {
+              for (final (ext, path) in missing.records) {
                 song.emit((url: song.resolve(page.$('a[href*=".$ext"]').attr('href')!), path: path));
               }
             },
@@ -167,25 +162,21 @@ Future<void> run(CliContext ctx) async {
 
   final last = await [Stream.fromIterable(artwork.pairs), songs]
       .merge()
-      .downloadAll(concurrency: concurrency, cancelToken: ctx.cancel)
+      .downloadAll(concurrency: concurrency, cancelToken: cancel)
       .show(slots: concurrency, message: 'Downloading', done: 'All assets downloaded.');
 
-  // Stage 3: Archive (if requested)
-  if (shouldCompress) {
-    stage('Creating zip archive');
-    await Console.spin('Compressing $baseName.zip...', () => base.zipTo('$baseName.zip'));
-  }
+  // Stage 3: Archive
+  stage('Creating zip archive');
+  await Console.spin('Compressing $baseName.zip...', () => base.zipTo('$baseName.zip'));
 
   Console.table(
     headers: ['Property', 'Value'],
     rows: [
-      ['Format', selectedFormat],
       ['Assets', last?.total ?? 0],
       ['Downloaded', last?.written ?? 0],
       ['Discs', discNames.length],
-      ['Compression', shouldCompress ? 'Enabled ($baseName.zip)' : 'Disabled'],
+      ['Archive', '$baseName.zip'],
     ],
   );
-
   Logger.ok('Completed successfully.');
 }

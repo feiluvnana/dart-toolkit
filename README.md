@@ -27,7 +27,7 @@ shaking makes it free.
 
 | import | contents | third-party |
 |---|---|---|
-| `collection.dart` | `Iterable`, `List`, `Map` extensions | — |
+| `collection.dart` | query and reshape `Iterable`, `List`, `Map`: `groupBy`, `sortedBy`, `partition`, `records`, `mapValues`… | — |
 | `util.dart` | `Env`, `ConsoleIo`, `TaskProgress`, `Crc32`, duration helpers | — |
 | `cli.dart` | `Cli`, `Prompt`, `Logger`, `Console`, ANSI | — |
 | `core.dart` | `Either`, `JsonDocument`, string helpers | — |
@@ -48,7 +48,7 @@ second of front-end work per `dart run` and are gone. `path` is the one runtime 
 `crypto` is the pure-Dart fallback for hashing where the platform has no native library.
 `tool/startup.dart` prints what each module costs to import.
 
-`tool/check_deps.dart` enforces this table in CI, and fails a `bin/` or `example/` file that
+`tool/check_deps.dart` checks this table on demand, and fails a `bin/` or `example/` file that
 imports the barrel.
 
 ---
@@ -136,6 +136,24 @@ dir / 'AIR / Farewell song'.filename;   // .../AIR _ Farewell song
 
 ```dart
 final seen = <Path, int>{p.normalized: 1};
+```
+
+### Collections
+
+One vocabulary over `Iterable` and `Map`, the one Kotlin settled on: a verb with `By` takes a
+key selector, an adjective returns a new collection, and nothing the SDK already has is
+repeated. A map's entries are records, so a loop destructures them.
+
+```dart
+final byDisc = tracks.groupBy((t) => t.disc).mapValues((ts) => ts.sortedBy((t) => t.number));
+for (final (disc, list) in byDisc.records) print('$disc: ${list.length}');
+
+final (flac, mp3) = files.partition((f) => f.ext == 'flac');
+final sizes = files.indexBy((f) => f.name).mapValues((f) => f.sizeSync());
+final total = files.sum((f) => f.sizeSync());
+words.countBy((w) => w[0]).where((k, n) => n > 1).inverted;
+[1, 2, 3, 4].windowed(2);            // [1,2] [2,3] [3,4]
+pairs.toMap();                        // Iterable<(K, V)> → Map
 ```
 
 ### Concurrency

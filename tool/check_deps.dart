@@ -2,7 +2,7 @@
 //
 // A member belongs to the module that owns its dependency, not the module that
 // reads nicest at the call site. This check is what stops the graph re-tangling:
-// adding an import that busts a budget fails CI until the budget is changed on
+// adding an import that busts a budget fails this check until the budget is changed on
 // purpose.
 import 'dart:io';
 
