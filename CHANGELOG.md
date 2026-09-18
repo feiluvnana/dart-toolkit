@@ -6,15 +6,15 @@ deltas measured on the same machine; `tool/startup.dart` reproduces the startup 
 ## Unreleased
 
 - **`collection` is a query type, not a set of extensions.** Every extension on `Iterable`,
-  `List` and `Map` is gone. `items.seq` and `map.seq` give a `Seq<T>` — lazy, still an
-  `Iterable`, with the SDK's `where`/`map`/`take`… returning `Seq` so the chain continues, and
+  `List` and `Map` is gone. `items.sequence` and `map.sequence` give a `Sequence<T>` — lazy, still an
+  `Iterable`, with the SDK's `where`/`map`/`take`… returning `Sequence` so the chain continues, and
   LINQ's and Kotlin's vocabulary on top: `distinct`, `distinctBy`, `chunk`, `windowed`,
   `pairwise`, `zip`, `cartesian`, `interleave`, `scan`, `takeLast`, `skipLast`, `reversed`,
   `shuffled`, `whereNot`, `indexed`; `sorted`/`sortedBy` returning `Sorted` with `thenBy` and
   `thenWith`; `union`, `intersect`, `except` keeping order; `innerJoin`, `leftJoin`, `groupJoin`
   as hash joins; `groupBy` and `countBy` as `(key, value)` records with `mapValues`, `mapKeys`,
   `inverted`, `sortedByKey`, `sortedByValue`, `toMap([merge])`, `unzip`; `indexBy`,
-  `partition`, `sum`, `average`, `minBy`, `maxBy`, `minMax`, `none`; `Seq.range`.
+  `partition`, `sum`, `average`, `minBy`, `maxBy`, `minMax`, `none`; `Sequence.range`.
 - **`Table`**: rows of named columns from `Table.rows`, `Table.records`, `Table.csv`,
   `json.table`, `doc.$('table').table`; `where`, `orderBy`/`thenBy`, `select`, `rename`,
   `derive`, `drop`, `distinct`, `take`, `skip`, `join`/`leftJoin`, `groupBy` with `count`,

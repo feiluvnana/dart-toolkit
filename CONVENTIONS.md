@@ -237,13 +237,13 @@ scheduled anything, because a silent drop cost keybox every FLAC.
 `Cli.run` owns one `CancelToken` per run, `ctx.cancel`, cancelled on a signal, on `die` and
 when the action ends. A script that needs cancellation passes it on instead of building its own.
 
-## Collections are queried through `Seq` and `Table`, never through extensions on `Iterable`
+## Collections are queried through `Sequence` and `Table`, never through extensions on `Iterable`
 
 Dart's `Iterable` and `Map` stay exactly what the SDK made them. The toolkit's collection
-vocabulary lives on `Seq<T>` (`items.seq`, `map.seq`) and `Table`, so a reader who sees `.seq`
-knows the toolkit's words apply and a reader who does not sees only the SDK's. `Seq` is an
-`Iterable`, so it leaves the way it came; the SDK's lazy operators return `Seq` on it so the
-chain is never broken. The type budget is three: `Seq`, `Sorted` (the sort that remembers its
+vocabulary lives on `Sequence<T>` (`items.sequence`, `map.sequence`) and `Table`, so a reader who sees `.sequence`
+knows the toolkit's words apply and a reader who does not sees only the SDK's. `Sequence` is an
+`Iterable`, so it leaves the way it came; the SDK's lazy operators return `Sequence` on it so the
+chain is never broken. The type budget is three: `Sequence`, `Sorted` (the sort that remembers its
 keys for `thenBy`), `Table`.
 
 ## Sync mirrors are allowed only on `fs`

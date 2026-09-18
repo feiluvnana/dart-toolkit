@@ -1,54 +1,54 @@
 part of '../../collection.dart';
 
-/// The way in: any `Iterable` becomes a [Seq].
+/// The way in: any `Iterable` becomes a [Sequence].
 ///
 /// {@category Collections}
-extension SeqExtensions<T> on Iterable<T> {
-  /// This iterable as a query: `items.seq.where(…).sortedBy(…).thenBy(…).take(3)`.
-  Seq<T> get seq => this is Seq<T> ? this as Seq<T> : Seq<T>._(this);
+extension SequenceExtensions<T> on Iterable<T> {
+  /// This iterable as a query: `items.sequence.where(…).sortedBy(…).thenBy(…).take(3)`.
+  Sequence<T> get sequence => this is Sequence<T> ? this as Sequence<T> : Sequence<T>._(this);
 }
 
 /// A map's entries as a query over `(key, value)` records; `toMap()` goes back.
 ///
 /// {@category Collections}
-extension MapSeqExtensions<K, V> on Map<K, V> {
-  /// `for (final (k, v) in map.seq)`, `map.seq.mapValues(…).toMap()`.
-  Seq<(K, V)> get seq => Seq<(K, V)>._(entries.map((e) => (e.key, e.value)));
+extension MapSequenceExtensions<K, V> on Map<K, V> {
+  /// `for (final (k, v) in map.sequence)`, `map.sequence.mapValues(…).toMap()`.
+  Sequence<(K, V)> get sequence => Sequence<(K, V)>._(entries.map((e) => (e.key, e.value)));
 }
 
 /// A lazy query over elements — LINQ's `IEnumerable`, Kotlin's `Sequence` — that is also an
-/// [Iterable], so it goes anywhere one does. Every step returns a [Seq] and runs when the
+/// [Iterable], so it goes anywhere one does. Every step returns a [Sequence] and runs when the
 /// result is read; the terminal operations ([toList], [sum], [groupBy], [first], …) run it.
 ///
 /// A verb with `By` takes a key selector; an adjective (`sorted`, `distinct`, `reversed`)
 /// returns a new sequence; the SDK's names are kept where the SDK has the operation.
 ///
 /// ```dart
-/// final top = tracks.seq
+/// final top = tracks.sequence
 ///     .where((t) => t.format == 'flac')
 ///     .sortedBy((t) => t.disc).thenBy((t) => t.number)
 ///     .take(10)
 ///     .toList();
-/// final perDisc = tracks.seq.groupBy((t) => t.disc).mapValues((g) => g.length).toMap();
+/// final perDisc = tracks.sequence.groupBy((t) => t.disc).mapValues((g) => g.length).toMap();
 /// ```
 ///
 /// {@category Collections}
-class Seq<T> extends Iterable<T> {
+class Sequence<T> extends Iterable<T> {
   final Iterable<T> _source;
 
-  const Seq._(this._source);
+  const Sequence._(this._source);
 
   /// What the operators iterate; [Sorted] answers its sorted list here.
   Iterable<T> get _items => _source;
 
   /// A sequence of nothing.
-  const Seq.empty() : _source = const Iterable.empty();
+  const Sequence.empty() : _source = const Iterable.empty();
 
   /// The sequence `0, 1, …, n-1`, or `start, start+step, …` while below [end].
-  static Seq<int> range(int startOrCount, [int? end, int step = 1]) {
+  static Sequence<int> range(int startOrCount, [int? end, int step = 1]) {
     final start = end == null ? 0 : startOrCount;
     final stop = end ?? startOrCount;
-    return Seq<int>._(_range(start, stop, step));
+    return Sequence<int>._(_range(start, stop, step));
   }
 
   static Iterable<int> _range(int start, int stop, int step) sync* {
@@ -61,51 +61,51 @@ class Seq<T> extends Iterable<T> {
   @override
   Iterator<T> get iterator => _items.iterator;
 
-  // ---- the SDK's lazy operators, returning a Seq so the chain continues
+  // ---- the SDK's lazy operators, returning a Sequence so the chain continues
 
   @override
-  Seq<T> where(bool Function(T element) test) => Seq._(_items.where(test));
+  Sequence<T> where(bool Function(T element) test) => Sequence._(_items.where(test));
 
   @override
-  Seq<R> map<R>(R Function(T e) toElement) => Seq._(_items.map(toElement));
+  Sequence<R> map<R>(R Function(T e) toElement) => Sequence._(_items.map(toElement));
 
   @override
-  Seq<R> expand<R>(Iterable<R> Function(T element) toElements) => Seq._(_items.expand(toElements));
+  Sequence<R> expand<R>(Iterable<R> Function(T element) toElements) => Sequence._(_items.expand(toElements));
 
   @override
-  Seq<T> take(int count) => Seq._(_items.take(count));
+  Sequence<T> take(int count) => Sequence._(_items.take(count));
 
   @override
-  Seq<T> skip(int count) => Seq._(_items.skip(count));
+  Sequence<T> skip(int count) => Sequence._(_items.skip(count));
 
   @override
-  Seq<T> takeWhile(bool Function(T value) test) => Seq._(_items.takeWhile(test));
+  Sequence<T> takeWhile(bool Function(T value) test) => Sequence._(_items.takeWhile(test));
 
   @override
-  Seq<T> skipWhile(bool Function(T value) test) => Seq._(_items.skipWhile(test));
+  Sequence<T> skipWhile(bool Function(T value) test) => Sequence._(_items.skipWhile(test));
 
   @override
-  Seq<T> followedBy(Iterable<T> other) => Seq._(_items.followedBy(other));
+  Sequence<T> followedBy(Iterable<T> other) => Sequence._(_items.followedBy(other));
 
   @override
-  Seq<R> whereType<R>() => Seq._(_items.whereType<R>());
+  Sequence<R> whereType<R>() => Sequence._(_items.whereType<R>());
 
   @override
-  Seq<R> cast<R>() => Seq._(_items.cast<R>());
+  Sequence<R> cast<R>() => Sequence._(_items.cast<R>());
 
   // ---- shape
 
   /// Elements that fail [test].
-  Seq<T> whereNot(bool Function(T element) test) => where((e) => !test(e));
+  Sequence<T> whereNot(bool Function(T element) test) => where((e) => !test(e));
 
   /// Each element with its position.
-  Seq<(int, T)> get indexed => Seq._(_items.indexed);
+  Sequence<(int, T)> get indexed => Sequence._(_items.indexed);
 
   /// Each element once, by `==`, in first-seen order.
-  Seq<T> get distinct => distinctBy((e) => e);
+  Sequence<T> get distinct => distinctBy((e) => e);
 
   /// Each [key] once, keeping the first element that had it.
-  Seq<T> distinctBy(Object? Function(T element) key) => Seq._(() sync* {
+  Sequence<T> distinctBy(Object? Function(T element) key) => Sequence._(() sync* {
     final seen = <Object?>{};
     for (final e in _items) {
       if (seen.add(key(e))) yield e;
@@ -113,9 +113,9 @@ class Seq<T> extends Iterable<T> {
   }());
 
   /// Fixed-size runs of [size]; the last may be short.
-  Seq<List<T>> chunk(int size) {
+  Sequence<List<T>> chunk(int size) {
     if (size <= 0) throw ArgumentError.value(size, 'size', 'Must be positive');
-    return Seq._(() sync* {
+    return Sequence._(() sync* {
       var batch = <T>[];
       for (final e in _items) {
         batch.add(e);
@@ -129,9 +129,9 @@ class Seq<T> extends Iterable<T> {
   }
 
   /// Sliding windows of [size] advancing by [step]; a trailing short window only when [partial].
-  Seq<List<T>> windowed(int size, {int step = 1, bool partial = false}) {
+  Sequence<List<T>> windowed(int size, {int step = 1, bool partial = false}) {
     if (size <= 0 || step <= 0) throw ArgumentError('size and step must be positive');
-    return Seq._(() sync* {
+    return Sequence._(() sync* {
       final list = toList();
       for (var i = 0; i < list.length; i += step) {
         if (i + size <= list.length) {
@@ -145,7 +145,7 @@ class Seq<T> extends Iterable<T> {
   }
 
   /// Neighbouring pairs: `(e0, e1), (e1, e2), …`.
-  Seq<(T, T)> get pairwise => Seq._(() sync* {
+  Sequence<(T, T)> get pairwise => Sequence._(() sync* {
     final it = iterator;
     if (!it.moveNext()) return;
     var prev = it.current;
@@ -156,7 +156,7 @@ class Seq<T> extends Iterable<T> {
   }());
 
   /// Elements paired with [other]'s, stopping at the shorter.
-  Seq<(T, R)> zip<R>(Iterable<R> other) => Seq._(() sync* {
+  Sequence<(T, R)> zip<R>(Iterable<R> other) => Sequence._(() sync* {
     final a = iterator, b = other.iterator;
     while (a.moveNext() && b.moveNext()) {
       yield (a.current, b.current);
@@ -164,7 +164,7 @@ class Seq<T> extends Iterable<T> {
   }());
 
   /// Every `(a, b)` with `a` from here and `b` from [other].
-  Seq<(T, R)> cartesian<R>(Iterable<R> other) => Seq._(() sync* {
+  Sequence<(T, R)> cartesian<R>(Iterable<R> other) => Sequence._(() sync* {
     for (final a in _items) {
       for (final b in other) {
         yield (a, b);
@@ -173,7 +173,7 @@ class Seq<T> extends Iterable<T> {
   }());
 
   /// Alternating elements from here and [other]; the longer finishes alone.
-  Seq<T> interleave(Iterable<T> other) => Seq._(() sync* {
+  Sequence<T> interleave(Iterable<T> other) => Sequence._(() sync* {
     final a = iterator, b = other.iterator;
     var moreA = a.moveNext(), moreB = b.moveNext();
     while (moreA || moreB) {
@@ -188,8 +188,8 @@ class Seq<T> extends Iterable<T> {
     }
   }());
 
-  /// The running [combine] from [seed]: `[1, 2, 3].seq.scan(0, (a, b) => a + b)` is `1, 3, 6`.
-  Seq<R> scan<R>(R seed, R Function(R acc, T element) combine) => Seq._(() sync* {
+  /// The running [combine] from [seed]: `[1, 2, 3].sequence.scan(0, (a, b) => a + b)` is `1, 3, 6`.
+  Sequence<R> scan<R>(R seed, R Function(R acc, T element) combine) => Sequence._(() sync* {
     var acc = seed;
     for (final e in _items) {
       acc = combine(acc, e);
@@ -198,24 +198,24 @@ class Seq<T> extends Iterable<T> {
   }());
 
   /// The last [count] elements.
-  Seq<T> takeLast(int count) => Seq._(() sync* {
+  Sequence<T> takeLast(int count) => Sequence._(() sync* {
     final list = toList();
     yield* count >= list.length ? list : list.sublist(list.length - count);
   }());
 
   /// Everything but the last [count] elements.
-  Seq<T> skipLast(int count) => Seq._(() sync* {
+  Sequence<T> skipLast(int count) => Sequence._(() sync* {
     final list = toList();
     if (count < list.length) yield* list.sublist(0, list.length - count);
   }());
 
   /// The elements in reverse.
-  Seq<T> get reversed => Seq._(() sync* {
+  Sequence<T> get reversed => Sequence._(() sync* {
     yield* toList().reversed;
   }());
 
   /// A random permutation.
-  Seq<T> shuffled([Random? random]) => Seq._(() sync* {
+  Sequence<T> shuffled([Random? random]) => Sequence._(() sync* {
     yield* toList()..shuffle(random);
   }());
 
@@ -232,16 +232,16 @@ class Seq<T> extends Iterable<T> {
   // ---- sets, in this side's order
 
   /// These, then what [other] adds, each once.
-  Seq<T> union(Iterable<T> other) => followedBy(other).distinct;
+  Sequence<T> union(Iterable<T> other) => followedBy(other).distinct;
 
   /// The elements [other] also has, each once.
-  Seq<T> intersect(Iterable<T> other) => Seq._(() sync* {
+  Sequence<T> intersect(Iterable<T> other) => Sequence._(() sync* {
     final theirs = other.toSet();
     yield* distinct.where(theirs.contains);
   }());
 
   /// The elements [other] lacks.
-  Seq<T> except(Iterable<T> other) => Seq._(() sync* {
+  Sequence<T> except(Iterable<T> other) => Sequence._(() sync* {
     final theirs = other.toSet();
     yield* where((e) => !theirs.contains(e));
   }());
@@ -252,15 +252,15 @@ class Seq<T> extends Iterable<T> {
   /// (`join` is the SDK's string join, so this is `innerJoin`.)
   ///
   /// ```dart
-  /// songs.seq.innerJoin(pages, on: (s) => s.href, to: (p) => p.href, (s, p) => (s.title, p.size));
+  /// songs.sequence.innerJoin(pages, on: (s) => s.href, to: (p) => p.href, (s, p) => (s.title, p.size));
   /// ```
-  Seq<R> innerJoin<U, K, R>(
+  Sequence<R> innerJoin<U, K, R>(
     Iterable<U> other,
     R Function(T mine, U theirs) select, {
     required K Function(T element) on,
     required K Function(U element) to,
-  }) => Seq._(() sync* {
-    final index = other.seq.groupBy(to).toMap();
+  }) => Sequence._(() sync* {
+    final index = other.sequence.groupBy(to).toMap();
     for (final e in _items) {
       for (final m in index[on(e)] ?? const []) {
         yield select(e, m as U);
@@ -269,13 +269,13 @@ class Seq<T> extends Iterable<T> {
   }());
 
   /// Left join: every element here with its match on [other], or `null`.
-  Seq<R> leftJoin<U, K, R>(
+  Sequence<R> leftJoin<U, K, R>(
     Iterable<U> other,
     R Function(T mine, U? theirs) select, {
     required K Function(T element) on,
     required K Function(U element) to,
-  }) => Seq._(() sync* {
-    final index = other.seq.groupBy(to).toMap();
+  }) => Sequence._(() sync* {
+    final index = other.sequence.groupBy(to).toMap();
     for (final e in _items) {
       final matches = index[on(e)];
       if (matches == null) {
@@ -289,13 +289,13 @@ class Seq<T> extends Iterable<T> {
   }());
 
   /// Group join: every element here with the list of its matches on [other], possibly empty.
-  Seq<R> groupJoin<U, K, R>(
+  Sequence<R> groupJoin<U, K, R>(
     Iterable<U> other,
     R Function(T mine, List<U> theirs) select, {
     required K Function(T element) on,
     required K Function(U element) to,
-  }) => Seq._(() sync* {
-    final index = other.seq.groupBy(to).toMap();
+  }) => Sequence._(() sync* {
+    final index = other.sequence.groupBy(to).toMap();
     for (final e in _items) {
       yield select(e, index[on(e)] ?? const []);
     }
@@ -304,7 +304,7 @@ class Seq<T> extends Iterable<T> {
   // ---- grouping: records, so mapValues / toMap continue the sentence
 
   /// `(key, elements)` per distinct [key], in first-seen order.
-  Seq<(K, List<T>)> groupBy<K>(K Function(T element) key) => Seq._(() sync* {
+  Sequence<(K, List<T>)> groupBy<K>(K Function(T element) key) => Sequence._(() sync* {
     final map = <K, List<T>>{};
     for (final e in _items) {
       (map[key(e)] ??= []).add(e);
@@ -313,7 +313,7 @@ class Seq<T> extends Iterable<T> {
   }());
 
   /// `(key, count)` per distinct [key].
-  Seq<(K, int)> countBy<K>(K Function(T element) key) => groupBy(key).mapValues((g) => g.length);
+  Sequence<(K, int)> countBy<K>(K Function(T element) key) => groupBy(key).mapValues((g) => g.length);
 
   /// A map from [key] to the last element with it.
   Map<K, T> indexBy<K>(K Function(T element) key) => {for (final e in _items) key(e): e};
@@ -379,35 +379,35 @@ class Seq<T> extends Iterable<T> {
   bool none(bool Function(T element) test) => !any(test);
 
   @override
-  String toString() => 'Seq(${_items.take(4).join(', ')}${_items.length > 4 ? ', …' : ''})';
+  String toString() => 'Sequence(${_items.take(4).join(', ')}${_items.length > 4 ? ', …' : ''})';
 }
 
-/// A [Seq] of nested iterables.
+/// A [Sequence] of nested iterables.
 ///
 /// {@category Collections}
-extension SeqOfIterableExtensions<T> on Seq<Iterable<T>> {
+extension SequenceOfIterableExtensions<T> on Sequence<Iterable<T>> {
   /// One level of nesting removed.
-  Seq<T> get flattened => expand((e) => e);
+  Sequence<T> get flattened => expand((e) => e);
 }
 
-/// A [Seq] of `(key, value)` records — a map's entries, a [Seq.groupBy], a [Seq.zip].
+/// A [Sequence] of `(key, value)` records — a map's entries, a [Sequence.groupBy], a [Sequence.zip].
 ///
 /// {@category Collections}
-extension SeqOfPairsExtensions<K, V> on Seq<(K, V)> {
+extension SequenceOfPairsExtensions<K, V> on Sequence<(K, V)> {
   /// The keys.
-  Seq<K> get keys => map((p) => p.$1);
+  Sequence<K> get keys => map((p) => p.$1);
 
   /// The values.
-  Seq<V> get values => map((p) => p.$2);
+  Sequence<V> get values => map((p) => p.$2);
 
   /// The same keys, values through [transform].
-  Seq<(K, R)> mapValues<R>(R Function(V value) transform) => map((p) => (p.$1, transform(p.$2)));
+  Sequence<(K, R)> mapValues<R>(R Function(V value) transform) => map((p) => (p.$1, transform(p.$2)));
 
   /// The same values, keys through [transform].
-  Seq<(R, V)> mapKeys<R>(R Function(K key) transform) => map((p) => (transform(p.$1), p.$2));
+  Sequence<(R, V)> mapKeys<R>(R Function(K key) transform) => map((p) => (transform(p.$1), p.$2));
 
   /// Values as keys and keys as values.
-  Seq<(V, K)> get inverted => map((p) => (p.$2, p.$1));
+  Sequence<(V, K)> get inverted => map((p) => (p.$2, p.$1));
 
   /// Pairs sorted by key; keys must be [Comparable].
   Sorted<(K, V)> sortedByKey({bool descending = false}) =>
@@ -434,13 +434,13 @@ extension SeqOfPairsExtensions<K, V> on Seq<(K, V)> {
   (List<K>, List<V>) get unzip => (keys.toList(), values.toList());
 }
 
-/// A [Seq] sorted by one or more keys; [thenBy] adds the next one.
+/// A [Sequence] sorted by one or more keys; [thenBy] adds the next one.
 ///
 /// Each [thenBy] sorts the source again with one more key, stably, so equal primary keys keep
 /// the secondary order.
 ///
 /// {@category Collections}
-final class Sorted<T> extends Seq<T> {
+final class Sorted<T> extends Sequence<T> {
   final List<Comparator<T>> _keys;
   List<T>? _cache;
 

@@ -150,7 +150,7 @@ Future<void> run(CancelToken cancel) async {
             href,
             onResponse: (song) {
               final page = song.response.html;
-              for (final (ext, path) in missing.seq) {
+              for (final (ext, path) in missing.sequence) {
                 song.emit((url: song.resolve(page.$('a[href*=".$ext"]').attr('href')!), path: path));
               }
             },

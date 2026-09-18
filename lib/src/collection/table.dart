@@ -76,7 +76,7 @@ final class Table {
   static Row _copy(Map<String, Object?> r) => Map<String, Object?>.of(r);
 
   /// The rows as a query.
-  Seq<Row> get seq => rows.seq;
+  Sequence<Row> get sequence => rows.sequence;
 
   int get length => rows.length;
   bool get isEmpty => rows.isEmpty;
@@ -155,7 +155,7 @@ final class Table {
   Table leftJoin(Table other, {required String on, String? to}) => _join(other, on, to ?? on, left: true);
 
   Table _join(Table other, String on, String to, {required bool left}) {
-    final index = other.rows.seq.groupBy((r) => _Key([r[to]])).toMap();
+    final index = other.rows.sequence.groupBy((r) => _Key([r[to]])).toMap();
     final rightColumns = {
       for (final c in other.columns)
         if (c != to) c: columns.contains(c) ? '${c}_2' : c,
@@ -181,9 +181,9 @@ final class Table {
   Table pivot({required String rows, required String column, required String value, Agg agg = Agg.sum}) {
     final columnValues = <String>{for (final r in this.rows) r.text(column)}.toList();
     final out = <Row>[];
-    for (final (k, group) in this.rows.seq.groupBy((r) => _Key([r[rows]]))) {
+    for (final (k, group) in this.rows.sequence.groupBy((r) => _Key([r[rows]]))) {
       final row = <String, Object?>{rows: k.parts.first};
-      final byColumn = group.seq.groupBy((r) => r.text(column)).toMap();
+      final byColumn = group.sequence.groupBy((r) => r.text(column)).toMap();
       for (final c in columnValues) {
         row[c] = _foldCells(agg, [for (final r in byColumn[c] ?? const <Row>[]) r[value]]);
       }
@@ -229,7 +229,7 @@ final class TableGroups {
   final Map<_Key, List<Row>> _groups;
 
   TableGroups._(Table table, this._keys)
-    : _groups = table.rows.seq.groupBy((r) => _Key([for (final k in _keys) r[k]])).toMap();
+    : _groups = table.rows.sequence.groupBy((r) => _Key([for (final k in _keys) r[k]])).toMap();
 
   /// The keys and how many rows each has, in a column named [as].
   Table count({String as = 'count'}) => _fold({as: (rows) => rows.length});

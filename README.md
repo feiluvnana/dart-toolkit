@@ -27,7 +27,7 @@ shaking makes it free.
 
 | import | contents | third-party |
 |---|---|---|
-| `collection.dart` | `Seq` (`.seq` on any `Iterable` or `Map`): lazy queries, multi-key sort, joins, sets; `Table`: rows of named columns, CSV in and out | — |
+| `collection.dart` | `Sequence` (`.sequence` on any `Iterable` or `Map`): lazy queries, multi-key sort, joins, sets; `Table`: rows of named columns, CSV in and out | — |
 | `util.dart` | `Env`, `ConsoleIo`, `TaskProgress`, `Crc32`, duration helpers | — |
 | `cli.dart` | `Cli`, `Prompt`, `Logger`, `Console`, ANSI | — |
 | `core.dart` | `Either`, `JsonDocument`, string helpers | — |
@@ -140,20 +140,20 @@ final seen = <Path, int>{p.normalized: 1};
 
 ### Collections
 
-Nothing is added to `Iterable` or `Map`. The way in is a conversion: `.seq` gives a `Seq`, a
+Nothing is added to `Iterable` or `Map`. The way in is a conversion: `.sequence` gives a `Sequence`, a
 lazy query with LINQ's and Kotlin's vocabulary that is still an `Iterable` on the way out;
 `.table` gives a `Table`, rows of named columns. Both are opt-in; a plain list needs neither.
 
 ```dart
-final top = tracks.seq
+final top = tracks.sequence
     .where((t) => t.format == 'flac')
     .sortedBy((t) => t.disc).thenBy((t) => t.number, descending: true)
     .take(10);                                            // still lazy, still an Iterable
 
-tracks.seq.groupBy((t) => t.disc).mapValues((g) => g.length).toMap();   // {1: 12, 2: 9}
-songs.seq.innerJoin(pages, on: (s) => s.href, to: (p) => p.href, (s, p) => (s, p.size));
-[1, 2, 3].seq.union([3, 4]).scan(0, (a, b) => a + b);    // 1, 3, 6, 10
-for (final (k, v) in map.seq.sortedByValue(descending: true).take(3)) print('$k $v');
+tracks.sequence.groupBy((t) => t.disc).mapValues((g) => g.length).toMap();   // {1: 12, 2: 9}
+songs.sequence.innerJoin(pages, on: (s) => s.href, to: (p) => p.href, (s, p) => (s, p.size));
+[1, 2, 3].sequence.union([3, 4]).scan(0, (a, b) => a + b);    // 1, 3, 6, 10
+for (final (k, v) in map.sequence.sortedByValue(descending: true).take(3)) print('$k $v');
 ```
 
 A `Table` comes from maps, records, a JSON array, CSV text or an HTML `<table>`, and goes
