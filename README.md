@@ -129,46 +129,64 @@ One cancellation idiom composes over any `Stream` or `Future`:
 final token = CancelToken();
 onExit(() => token.cancel('interrupted'));
 
-await for (final item in url.scrape<Item>(parse).rights.cancelWith(token)) {
+await for (final item in url.scrape<Item>().onResponse(parse).rights.cancelWith(token)) {
   print(item);
 }
 ```
 
 ### Scraping
 
-`scrape` takes a handler and nothing else. Every decision is made on `ctx`; everything a crawl
-should never have to decide is an engine default.
+A crawl is a chain: limits, then hooks. The chain is also the stream of what the hooks emit.
 
 ```dart
-final stories = url.scrape<Story>((ctx) {
-  final html = ctx.response.html();
-  for (final row in html.$('tr.athing')) {
-    if (row.$('.titleline > a').firstOrNull case final a?) {
-      ctx.emit((title: a.text, link: ctx.resolve(a.attr('href')!)));
-    }
-  }
-  for (final a in html.$('a[href]')) ctx.follow(a.attr('href')!);
-  if (ctx.pages >= 5) ctx.stop();
-});
+final stories = url.scrape<Story>()
+    .concurrency(8)
+    .delay(200.ms)
+    .maxPages(50)
+    .onRequest((ctx) => ctx.request.headers['accept-language'] = 'en')
+    .onResponse((ctx) {
+      final html = ctx.response.html();
+      for (final row in html.$('tr.athing')) {
+        if (row.$('.titleline > a').firstOrNull case final a?) {
+          ctx.emit((title: a.text, link: ctx.resolve(a.attr('href')!)));
+        }
+      }
+      for (final a in html.$('a[href]')) ctx.follow(a.attr('href')!);
+    })
+    .onError((ctx) => Logger.warn('${ctx.failure}'))
+    .onFinish((summary) => Logger.info('$summary'));
+
+await for (final story in stories.rights) print(story);
 ```
 
-`follow` stays on the seeds' hosts and drops `mailto:` and `javascript:` by itself;
-`offsite: true` is the one way to leave. `ctx.depth` and `ctx.pages` bound a crawl from inside,
-`stop()` ends it, and only a 2xx reaches the handler. `ctx.url` is the page that answered, after
-redirects, and `resolve` and `follow` resolve against it.
+Four hooks, each with the context for its moment:
+
+- `onRequest` — before every send. Edit `ctx.request.headers`, or `ctx.skip()`.
+- `onResponse` — every 2xx. `ctx.emit`, `ctx.follow`, `ctx.stop`; `ctx.url` is the page that
+  answered, after redirects, and `ctx.depth` and `ctx.pages` say where the crawl is.
+- `onError` — the engine has given up on a request. `switch` on `ctx.failure`
+  (`RequestFailed | BadStatus | HandlerFailed`), then `ctx.retry(after:)`, `ctx.emit` a
+  fallback, `ctx.follow` an alternative, or `ctx.ignore()`. A hook that does none of those
+  leaves the failure a `Left`.
+- `onFinish` — once, with a `ScrapeSummary` of pages, failures, requests, retries, bytes, time.
+
+`follow` stays on the seeds' hosts and drops `mailto:` and `javascript:` by itself; `.scope()`
+widens the rule for the crawl, `offsite: true` for one link. `follow(onResponse:, onError:)`
+overrides the hooks for one request, and `meta:` rides along to it.
+
+Limits: `.concurrency(total, perHost:)`, `.delay()` between requests to one host,
+`.deadline()` per request, `.retries()`, `.redirects()`, `.bodyLimit()`, `.maxPages()`,
+`.maxDepth()`, `.headers()`, `.userAgent()`, `.seed()`. Defaults: 16 in flight, 8 per host,
+30 s, 2 retries, 5 hops, 16 MB, and a host answering 429 or 503 is paused for its `Retry-After`.
 
 A failure is an item, not a stream error — the contract `parallelize` has, on a stream:
 
 ```dart
-await for (final s in stories.rights) print(s);   // skip failures
-stories.lefts                                     // RequestFailed | BadStatus | HandlerFailed
-stories.unwrap()                                  // throw the first
+stories.rights      // skip failures
+stories.lefts       // only the failures
+stories.unwrap()    // throw the first
 await for (final r in stories) switch (r) { case Right(:final value): ...; case Left(:final value): ... }
 ```
-
-The engine keeps 16 requests in flight and 8 per host, pauses a host that answers 429 or 503
-for its `Retry-After`, retries a transport error or a 5xx twice and a TLS failure never, times
-out at 30 s, abandons a body over 16 MB, and sends a `user-agent` unless the session sets one.
 
 One session shares a client across every request inside it, closes it on the way out, and is
 where the timeout and default headers live:

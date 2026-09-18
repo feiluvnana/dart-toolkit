@@ -175,8 +175,9 @@ void main() {
 
       final items = await Http.session(() async {
         return await 'https://example.com/index'.url
-            .scrape<Map<String, dynamic>>((ctx) {
-              expect(ctx, isA<ScrapeContext<Map<String, dynamic>>>());
+            .scrape<Map<String, dynamic>>()
+            .onResponse((ctx) {
+              expect(ctx, isA<ResponseContext<Map<String, dynamic>>>());
               final category = ctx.response.html().$('h1').firstOrNull?.text;
 
               for (final a in ctx.response.html().$('a')) {
@@ -185,8 +186,8 @@ void main() {
                   ctx.follow(
                     href,
                     meta: {'category': category, 'label': a.text},
-                    callback: (detailCtx) {
-                      expect(detailCtx, isA<ScrapeContext<Map<String, dynamic>>>());
+                    onResponse: (detailCtx) {
+                      expect(detailCtx, isA<ResponseContext<Map<String, dynamic>>>());
                       final json = detailCtx.response.json();
                       detailCtx.emit({
                         'category': detailCtx.meta['category'],
@@ -227,7 +228,8 @@ void main() {
 
       final resolved = await Http.session(() async {
         return await 'https://example.com/album'.url
-            .scrape<Uri>((ctx) {
+            .scrape<Uri>()
+            .onResponse((ctx) {
               expect(ctx.url, equals('https://example.com/album'.url));
               ctx.emit(ctx.resolve(ctx.response.html().$('a').first.attr('href')!));
             })
@@ -280,7 +282,8 @@ void main() {
 
       final results = await Http.session(() async {
         return await [req1, req2]
-            .scrape<String>((ctx) {
+            .scrape<String>()
+            .onResponse((ctx) {
               ctx.emit(ctx.response.json()['body'].to<String>() ?? '');
             })
             .rights
@@ -301,7 +304,8 @@ void main() {
       final cancelToken = CancelToken();
       final items = await Http.session(() async {
         final stream = 'https://example.com/items'.url
-            .scrape<String>((ctx) {
+            .scrape<String>()
+            .onResponse((ctx) {
               ctx.emit('item');
             })
             .rights
@@ -373,7 +377,7 @@ void main() {
       final client = MockClient((request) async => http.Response('<html></html>', 200));
 
       await Http.session(() async {
-        final stream = 'https://example.com/'.url.scrape<String>((ctx) {
+        final stream = 'https://example.com/'.url.scrape<String>().onResponse((ctx) {
           ctx.follow(42);
         });
 
@@ -382,7 +386,8 @@ void main() {
         expect((lefts.single as HandlerFailed).error, isA<ArgumentError>());
         expect(
           () => 'https://example.com/'.url
-              .scrape<String>((ctx) {
+              .scrape<String>()
+              .onResponse((ctx) {
                 ctx.follow(42);
               })
               .unwrap()
@@ -396,7 +401,7 @@ void main() {
       final client = MockClient((request) async => http.Response('<html></html>', 200));
 
       await Http.session(() async {
-        final stream = 'https://example.com/'.url.scrape<String>((ctx) {
+        final stream = 'https://example.com/'.url.scrape<String>().onResponse((ctx) {
           ctx.follow('/next', method: 'POST', body: 'raw', fields: {'a': 'b'});
         });
 
@@ -415,7 +420,8 @@ void main() {
 
       await Http.session(() async {
         await 'https://example.com/'.url
-            .scrape<String>((ctx) {
+            .scrape<String>()
+            .onResponse((ctx) {
               if (ctx.request.url.path == '/') {
                 ctx.follow('/submit', method: 'POST', fields: {'q': 'dart'});
               }
@@ -437,7 +443,8 @@ void main() {
 
       await Http.session(() async {
         final outcomes = await [Uri.parse('https://example.com/bad'), Uri.parse('https://example.com/good')]
-            .scrape<String>((ctx) {
+            .scrape<String>()
+            .onResponse((ctx) {
               ctx.emit(ctx.response.body);
             })
             .toList();
@@ -453,7 +460,7 @@ void main() {
       final client = MockClient((request) async => http.Response('Not Found', 404));
 
       await Http.session(() async {
-        final outcomes = await 'https://example.com/missing'.url.scrape<String>((ctx) {
+        final outcomes = await 'https://example.com/missing'.url.scrape<String>().onResponse((ctx) {
           handlerRan = true;
           ctx.emit('should not emit');
         }).toList();
@@ -475,7 +482,8 @@ void main() {
 
       await Http.session(() async {
         await 'https://example.com/root'.url
-            .scrape<void>((ctx) {
+            .scrape<void>()
+            .onResponse((ctx) {
               ctx.follow('https://other.com/drop');
               ctx.follow('https://example.com/keep');
               ctx.follow('https://other.com/allowed', offsite: true);
@@ -499,7 +507,8 @@ void main() {
 
       await Http.session(() async {
         await 'https://example.com/start'.url
-            .scrape<void>((ctx) {
+            .scrape<void>()
+            .onResponse((ctx) {
               ctx.follow('mailto:alice@example.com');
               ctx.follow('javascript:void(0)');
               ctx.follow('tel:123456');
@@ -517,7 +526,8 @@ void main() {
 
       await Http.session(() async {
         await 'https://example.com/1'.url
-            .scrape<void>((ctx) {
+            .scrape<void>()
+            .onResponse((ctx) {
               handledPages++;
               if (ctx.pages >= 3) {
                 ctx.stop();
@@ -540,7 +550,7 @@ void main() {
       });
 
       await Http.session(() async {
-        final stream = 'https://example.com/1'.url.scrape<int>((ctx) {
+        final stream = 'https://example.com/1'.url.scrape<int>().onResponse((ctx) {
           ctx.emit(ctx.pages);
           ctx.follow('https://example.com/${ctx.pages + 1}');
         });
@@ -569,7 +579,7 @@ void main() {
       });
 
       await Http.session(() async {
-        final stream = [Uri.parse('https://a.com/1'), Uri.parse('https://b.com/1')].scrape<String>((ctx) {
+        final stream = [Uri.parse('https://a.com/1'), Uri.parse('https://b.com/1')].scrape<String>().onResponse((ctx) {
           ctx.emit('${ctx.url.host}:${ctx.response.body}');
         });
 
@@ -589,7 +599,7 @@ void main() {
       });
 
       await Http.session(() async {
-        final outcomes = await 'https://example.com/tls'.url.scrape<void>((_) {}).toList();
+        final outcomes = await 'https://example.com/tls'.url.scrape<void>().toList();
         expect(outcomes.length, equals(1));
         final failure = outcomes.single.leftOrNull as RequestFailed;
         expect(failure.attempts, equals(1));
@@ -614,7 +624,7 @@ void main() {
       });
 
       await Http.session(() async {
-        final outcomes = await 'https://example.com/large'.url.scrape<void>((_) {}).toList();
+        final outcomes = await 'https://example.com/large'.url.scrape<void>().toList();
         expect(outcomes.length, equals(1));
         final failure = outcomes.single.leftOrNull as RequestFailed;
         expect(failure.error, isA<http.ClientException>());
@@ -636,7 +646,8 @@ void main() {
 
       await Http.session(() async {
         await 'https://example.com/initial'.url
-            .scrape<void>((ctx) {
+            .scrape<void>()
+            .onResponse((ctx) {
               expect(ctx.url, equals(Uri.parse('https://example.com/final/page')));
               expect(ctx.resolve('detail'), equals(Uri.parse('https://example.com/final/detail')));
             })
@@ -661,7 +672,7 @@ void main() {
 
       await Http.session(() async {
         final seeds = [for (var i = 0; i < 20; i++) Uri.parse('https://example.com/item/$i')];
-        await seeds.scrape<void>((_) {}).rights.toList();
+        await seeds.scrape<void>().rights.toList();
       }, client: client);
 
       expect(maxInFlightSeen, lessThanOrEqualTo(8));
@@ -681,7 +692,8 @@ void main() {
       final seed = http.Request('GET', Uri.parse('https://example.com/'))..headers['x-test'] = '1';
       final pages = await Http.session(() async {
         return await [seed]
-            .scrape<String>((ctx) {
+            .scrape<String>()
+            .onResponse((ctx) {
               ctx.emit(ctx.url.toString());
               ctx.follow('/next');
             })
@@ -708,7 +720,7 @@ void main() {
       });
 
       final outcomes = await Http.session(() async {
-        return await 'https://example.com/'.url.scrape<void>((ctx) => ctx.follow('/out')).toList();
+        return await 'https://example.com/'.url.scrape<void>().onResponse((ctx) => ctx.follow('/out')).toList();
       }, client: client);
 
       final failure = outcomes.single.leftOrNull;
@@ -724,7 +736,8 @@ void main() {
 
       final items = await Http.session(() async {
         return await [Uri.parse('https://example.com/slow'), Uri.parse('https://example.com/fast')]
-            .scrape<String>((ctx) async {
+            .scrape<String>()
+            .onResponse((ctx) async {
               if (ctx.url.path == '/fast') {
                 ctx.stop();
                 await Future<void>.delayed(const Duration(milliseconds: 150));
@@ -742,7 +755,7 @@ void main() {
     test('nothing reaches the error channel: a throwing handler is a Left', () async {
       final client = MockClient((request) async => http.Response('ok', 200));
       final outcomes = await Http.session(() async {
-        return await 'https://example.com/'.url.scrape<void>((ctx) => throw StateError('boom')).toList();
+        return await 'https://example.com/'.url.scrape<void>().onResponse((ctx) => throw StateError('boom')).toList();
       }, client: client);
       expect(outcomes.single.leftOrNull, isA<HandlerFailed>());
     });
@@ -754,14 +767,229 @@ void main() {
         return http.Response('ok', 200);
       });
 
-      await Http.session(() => 'https://example.com/'.url.scrape<void>((_) {}).toList(), client: client);
+      await Http.session(() => 'https://example.com/'.url.scrape<void>().toList(), client: client);
       await Http.session(
-        () => 'https://example.com/'.url.scrape<void>((_) {}).toList(),
+        () => 'https://example.com/'.url.scrape<void>().toList(),
         client: client,
         headers: {'user-agent': 'mine/1.0'},
       );
 
       expect(agents, equals(['dart-toolkit', 'mine/1.0']));
+    });
+
+    group('Scrape chain', () {
+      test('onRequest edits headers and skip() drops a request without a report', () async {
+        final seen = <String, String?>{};
+        final client = MockClient((request) async {
+          seen[request.url.path] = request.headers['x-sig'];
+          return http.Response('ok', 200);
+        });
+
+        final outcomes = await Http.session(() async {
+          return await [Uri.parse('https://example.com/a'), Uri.parse('https://example.com/skip')]
+              .scrape<String>()
+              .onRequest((ctx) {
+                if (ctx.url.path == '/skip') return ctx.skip();
+                ctx.request.headers['x-sig'] = 'signed:${ctx.attempt}';
+              })
+              .onResponse((ctx) => ctx.emit(ctx.url.path))
+              .toList();
+        }, client: client);
+
+        expect(outcomes.rights, equals(['/a']));
+        expect(outcomes.lefts, isEmpty);
+        expect(seen, equals({'/a': 'signed:1'}));
+      });
+
+      test('onError: retry past the budget, ignore, emit a fallback, or let it be a Left', () async {
+        var flaky = 0;
+        final client = MockClient((request) async {
+          switch (request.url.path) {
+            case '/flaky':
+              return ++flaky < 5 ? http.Response('down', 500) : http.Response('up', 200);
+            case '/gone':
+              return http.Response('gone', 410);
+            case '/quiet':
+              return http.Response('nope', 404);
+            default:
+              return http.Response('teapot', 418);
+          }
+        });
+
+        final outcomes = await Http.session(() async {
+          return await ['/flaky', '/gone', '/quiet', '/teapot']
+              .map((p) => Uri.parse('https://example.com$p'))
+              .scrape<String>()
+              .retries(1)
+              .onResponse((ctx) => ctx.emit(ctx.response.body))
+              .onError((ctx) {
+                switch (ctx.failure) {
+                  case BadStatus(response: http.Response(statusCode: 500)):
+                    ctx.retry();
+                  case BadStatus(response: http.Response(statusCode: 410)):
+                    ctx.emit('fallback');
+                  case BadStatus(response: http.Response(statusCode: 404)):
+                    ctx.ignore();
+                  default:
+                    break;
+                }
+              })
+              .toList();
+        }, client: client);
+
+        expect(outcomes.rights, containsAll(['up', 'fallback']));
+        expect(outcomes.lefts.map((f) => (f as BadStatus).response.statusCode), equals([418]));
+        expect(flaky, equals(5), reason: 'the engine sent twice, the hook kept retrying until 200');
+      });
+
+      test('onFinish gets the summary once, after the last item', () async {
+        final client = MockClient((request) async {
+          if (request.url.path == '/bad') return http.Response('x', 404);
+          return http.Response('body', 200);
+        });
+
+        ScrapeSummary? summary;
+        final order = <String>[];
+        await Http.session(() async {
+          await for (final r
+              in [
+                Uri.parse('https://example.com/a'),
+                Uri.parse('https://example.com/bad'),
+              ].scrape<String>().onResponse((ctx) => ctx.emit('a')).onFinish((s) {
+                summary = s;
+                order.add('finish');
+              })) {
+            order.add(r.isRight ? 'item' : 'left');
+          }
+        }, client: client);
+
+        expect(order, hasLength(3));
+        expect(order.last, equals('finish'));
+        expect(summary!.pages, equals(1));
+        expect(summary!.failures, equals(1));
+        expect(summary!.requests, equals(2));
+        expect(summary!.bytes, equals(5));
+      });
+
+      test('maxPages stops the crawl and never over-fetches by more than the in-flight window', () async {
+        var sent = 0;
+        final client = MockClient((request) async {
+          sent++;
+          return http.Response('ok', 200);
+        });
+
+        final pages = await Http.session(() async {
+          return await 'https://example.com/0'.url
+              .scrape<int>()
+              .maxPages(3)
+              .onResponse((ctx) {
+                ctx.emit(ctx.pages);
+                for (var i = 1; i <= 20; i++) {
+                  ctx.follow('/${ctx.pages}-$i');
+                }
+              })
+              .rights
+              .toList();
+        }, client: client);
+
+        expect(pages, equals([1, 2, 3]));
+        expect(sent, equals(3));
+      });
+
+      test('maxDepth drops what is too deep; scope() widens the hosts', () async {
+        final requested = <String>[];
+        final client = MockClient((request) async {
+          requested.add('${request.url.host}${request.url.path}');
+          return http.Response('ok', 200);
+        });
+
+        await Http.session(() async {
+          await 'https://a.com/0'.url
+              .scrape<void>()
+              .maxDepth(1)
+              .scope((u) => u.host == 'a.com' || u.host == 'b.com')
+              .onResponse((ctx) {
+                ctx.follow('https://b.com/${ctx.depth + 1}');
+                ctx.follow('https://c.com/${ctx.depth + 1}');
+              })
+              .toList();
+        }, client: client);
+
+        expect(requested, equals(['a.com/0', 'b.com/1']));
+      });
+
+      test('delay() spaces requests to one host and not to another', () async {
+        final stamps = <String, List<int>>{};
+        final watch = Stopwatch()..start();
+        final client = MockClient((request) async {
+          (stamps[request.url.host] ??= []).add(watch.elapsedMilliseconds);
+          return http.Response('ok', 200);
+        });
+
+        await Http.session(() async {
+          await [
+            Uri.parse('https://a.com/1'),
+            Uri.parse('https://a.com/2'),
+            Uri.parse('https://a.com/3'),
+            Uri.parse('https://b.com/1'),
+          ].scrape<void>().delay(const Duration(milliseconds: 80)).toList();
+        }, client: client);
+
+        final a = stamps['a.com']!..sort();
+        expect(a[1] - a[0], greaterThanOrEqualTo(70));
+        expect(a[2] - a[1], greaterThanOrEqualTo(70));
+        expect(stamps['b.com']!.single, lessThan(70), reason: 'the other host is not paced by a.com');
+      });
+
+      test('seed() adds a start with its own meta; headers() and userAgent() apply to every send', () async {
+        final seen = <String, Map<String, String>>{};
+        final client = MockClient((request) async {
+          seen[request.url.path] = request.headers;
+          return http.Response('ok', 200);
+        });
+
+        final metas = await Http.session(() async {
+          return await 'https://example.com/a'.url
+              .scrape<Object?>()
+              .seed(Uri.parse('https://example.com/b'), meta: {'tag': 'b'})
+              .headers({'x-crawl': '1'})
+              .userAgent('mine/2')
+              .onResponse((ctx) => ctx.emit(ctx.meta['tag']))
+              .rights
+              .toList();
+        }, client: client);
+
+        expect(metas.toSet(), equals({null, 'b'}));
+        expect(seen['/b']!['x-crawl'], equals('1'));
+        expect(seen['/b']!['user-agent'], equals('mine/2'));
+      });
+
+      test('configuring after listen throws; a Scrape is a Stream', () async {
+        final client = MockClient((request) async => http.Response('ok', 200));
+        await Http.session(() async {
+          final crawl = 'https://example.com/'.url.scrape<void>();
+          expect(crawl, isA<Stream<Either<ScrapeFailure, void>>>());
+          await crawl.toList();
+          expect(() => crawl.maxPages(1), throwsStateError);
+        }, client: client);
+      });
+
+      test('follow(onResponse:, onError:) override the crawl hooks for one request', () async {
+        final client = MockClient((request) async {
+          if (request.url.path == '/detail') return http.Response('d', 404);
+          return http.Response('ok', 200);
+        });
+
+        final outcomes = await Http.session(() async {
+          return await 'https://example.com/'.url
+              .scrape<String>()
+              .onResponse((ctx) => ctx.follow('/detail', onError: (e) => e.emit('detail-fallback')))
+              .onError((ctx) => ctx.emit('crawl-fallback'))
+              .toList();
+        }, client: client);
+
+        expect(outcomes.rights, equals(['detail-fallback']));
+      });
     });
 
     test('JsonDocument rejects a key that is neither String nor int', () {

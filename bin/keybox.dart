@@ -146,7 +146,8 @@ Future<void> run(CliContext ctx) async {
   Stream<Asset> queue() async* {
     yield* Stream.fromIterable(artwork.pairs);
     yield* khinsider.url
-        .scrape<Asset>((ctx) async {
+        .scrape<Asset>()
+        .onResponse((ctx) async {
           for (final tr in ctx.response.html().$('#songlist tr')) {
             final tds = tr.$('td');
             if (tds.length < 4) continue;
@@ -161,7 +162,7 @@ Future<void> run(CliContext ctx) async {
               if (target.existsSync()) continue;
               ctx.follow(
                 href,
-                callback: (song) {
+                onResponse: (song) {
                   final dlHref = song.response.html().$('a[href*=".$ext"]').first.attr('href')!;
                   song.emit((url: song.resolve(dlHref), path: target));
                 },

@@ -195,11 +195,11 @@ void main() {
       await Http.session(() async {
         Stream<({Uri url, Path path})> queue() async* {
           yield* Stream.fromIterable(artwork.pairs);
-          yield* base.resolve('/index').scrape<({Uri url, Path path})>((ctx) {
+          yield* base.resolve('/index').scrape<({Uri url, Path path})>().onResponse((ctx) {
             for (final a in ctx.response.html().$('a.track')) {
               ctx.follow(
                 a.attr('href')!,
-                callback: (song) {
+                onResponse: (song) {
                   final href = song.response.html().$('a').first.attr('href')!;
                   song.emit((url: song.resolve(href), path: dir / 'tracks' / song.url.pathSegments.last));
                 },
@@ -251,7 +251,8 @@ void main() {
       final root = Uri.parse('http://127.0.0.1:${chain.port}/chain/0');
       const concurrency = 8;
       final sub = root
-          .scrape<String>((ctx) {
+          .scrape<String>()
+          .onResponse((ctx) {
             ctx.emit(ctx.url.toString());
             for (final a in ctx.response.html().$('a')) {
               final href = a.attr('href');
