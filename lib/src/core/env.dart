@@ -1,4 +1,4 @@
-part of '../../util.dart';
+part of '../../core.dart';
 
 /// Environment variables: the process's, in-memory overrides, and `.env` parsing.
 ///

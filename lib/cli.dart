@@ -13,7 +13,7 @@ import 'dart:math';
 
 import 'async.dart';
 import 'collection.dart';
-import 'util.dart';
+import 'core.dart';
 
 part 'src/cli/ansi.dart';
 part 'src/cli/command.dart';

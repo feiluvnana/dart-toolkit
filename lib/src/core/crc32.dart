@@ -1,4 +1,4 @@
-part of '../../util.dart';
+part of '../../core.dart';
 
 /// A running CRC-32 (IEEE), as zip and PNG use it.
 ///

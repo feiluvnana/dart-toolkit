@@ -1,4 +1,7 @@
-part of '../../testing.dart';
+import 'dart:async';
+import 'dart:typed_data';
+
+import 'package:dart_toolkit/http.dart';
 
 /// A [Client] whose responses come from a handler.
 ///

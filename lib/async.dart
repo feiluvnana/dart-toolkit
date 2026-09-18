@@ -11,7 +11,6 @@ import 'dart:collection';
 import 'dart:isolate';
 
 import 'core.dart';
-import 'util.dart';
 
 part 'src/async/cancellation_token.dart';
 part 'src/async/isolate.dart';

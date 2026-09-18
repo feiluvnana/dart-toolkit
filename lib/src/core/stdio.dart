@@ -1,4 +1,4 @@
-part of '../../util.dart';
+part of '../../core.dart';
 
 /// Injectable standard I/O seam for CLI components (Logger, Console, Prompt).
 ///

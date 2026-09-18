@@ -1,4 +1,4 @@
-part of '../../archive.dart';
+part of '../../fs.dart';
 
 /// Zip archive operations on [Path].
 ///

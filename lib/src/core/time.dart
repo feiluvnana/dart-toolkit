@@ -1,4 +1,4 @@
-part of '../../util.dart';
+part of '../../core.dart';
 
 /// Short duration extensions on [int].
 ///

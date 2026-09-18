@@ -5,6 +5,12 @@ deltas measured on the same machine; `tool/startup.dart` reproduces the startup 
 
 ## Unreleased
 
+- **Nine modules.** `util` folded into `core`; `archive` into `fs` (zip is in-house, the
+  compression the SDK's); `hash` is `crypto`; `html`, `xml` and `xpath` joined JSON, YAML, TOML
+  and INI in `formats`, with the `http` bridges (`res.html`, `url.xml()`) in `http`;
+  `testing.dart` is gone — the handler-backed `Client` is `test/mock_client.dart`. Imports:
+  `package:dart_toolkit/{core,collection,formats,async,cli,fs,crypto,process,http}.dart`.
+
 - **`collection` is a query type, not a set of extensions.** Every extension on `Iterable`,
   `List` and `Map` is gone. `items.sequence` and `map.sequence` give a `Sequence<T>` — lazy, still an
   `Iterable`, with the SDK's `where`/`map`/`take`… returning `Sequence` so the chain continues, and

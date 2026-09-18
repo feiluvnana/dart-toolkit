@@ -1,7 +1,7 @@
 // The zip container: local headers, a central directory, an end record, ZIP64 when sizes
 // or counts overflow. Compression is dart:io's native zlib.
 
-part of '../../archive.dart';
+part of '../../fs.dart';
 
 const _sigLocal = 0x04034b50;
 const _sigCentral = 0x02014b50;

@@ -1,7 +1,6 @@
-import 'package:dart_toolkit/archive.dart';
 import 'package:dart_toolkit/cli.dart';
 import 'package:dart_toolkit/fs.dart';
-import 'package:dart_toolkit/hash.dart';
+import 'package:dart_toolkit/crypto.dart';
 
 void main() async {
   final tempDir = Path.temp / 'toolkit_file_demo';

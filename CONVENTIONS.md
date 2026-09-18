@@ -22,9 +22,8 @@ it free.
 executable and recompiles only what changed. Measured on `keybox --help`, three pairs: 352–414 ms
 against 1 332–1 475 ms for `dart run bin/keybox.dart`, edits included. That is how `bin/` is run.
 
-The same rule shapes the modules themselves: `core` has no third-party dependencies, and
-`HtmlDocument` and `XmlDocument` live in `html` and `xml` so that parsing JSON does not load an
-HTML and an XML parser to do it.
+The same rule shapes the modules themselves: `core`, `collection` and `formats` have no
+third-party dependencies, and there are nine modules, not one per type.
 
 ## Extensions are `<Receiver>Extensions`
 
@@ -36,7 +35,8 @@ qualify by purpose after the receiver: `StringAnsiExtensions`, `StringShellExten
 ## A member belongs to the module that owns its dependency
 
 Not the module that reads nicest at the call site. `download` is `http`, not `fs`, even though
-`path.download(url)` reads better than the alternative. `zipTo` is `archive`. `sha256` is `hash`.
+`path.download(url)` reads better than the alternative. `sha256` is `crypto`. `zipTo` is `fs`,
+because the zip container is in-house and its compression is the SDK's.
 
 `tool/check_deps.dart` holds a per-module third-party budget; run it before a release. Adding a dependency
 means changing the budget on purpose, in a reviewable diff.
@@ -70,7 +70,7 @@ because `//tr[td[2]="FLAC"]/td[1]/a/@href` has no CSS spelling. XML's `$` is tha
 `dart run` for machinery a scripting toolkit does not need: an HTML5 tree builder, a
 schema-aware XML stack, a pure-Dart deflate, a client layer over the `dart:io` client. Each is
 replaced in-house — a tag-soup HTML parser and CSS engine, an XML parser and an XPath 1.0
-subset (`lib/xpath.dart`, shared with HTML as `$x`), a zip container over `dart:io`'s zlib,
+subset (the `XPath` engine in `formats`, shared with HTML as `$x`), a zip container over `dart:io`'s zlib,
 `Request`/`Response`/`Client` over `HttpClient` — and each is checked against the package it
 replaced on real inputs in `test/<module>_test.dart`. The reference packages stay dev
 dependencies for those tests and nothing else. `path` is the one runtime dependency.
@@ -122,19 +122,19 @@ shipping the request graph across an isolate boundary; `isolateHtml` did not, be
 `.first` in `bin/keybox.dart`. `Map.downloadAll` and `pairs` both stay: `{url: dest}.downloadAll()`
 is the common case and `pairs` is for merging with a stream.
 
-## Two modules meet through an interface in `util`
+## Two modules meet through an interface in `core`
 
-`util` has no dependencies, so every module can see it. A producer and a renderer that must not
+`core` has no dependencies, so every module can see it. A producer and a renderer that must not
 depend on each other — `http`'s `DownloadProgress` and `cli`'s `ConsoleMultiProgress` — meet at
-`TaskProgress`/`BatchProgress` declared there. This is the legal shape for a cross-module seam;
-an import edge between two leaf modules is not, and `tool/check_deps.dart` fails it.
+`TaskProgress`/`BatchProgress` declared there. This is the legal shape for a cross-module seam.
 
-## A format bridge lives with its parser
+## Every document format is in `formats`; the bridges are in `http`
 
-`res.html()` and `url.html()` are in `html`, `res.xml()` and `url.xml()` in `xml`; `http` keeps
-`json()` because `core` is dependency-free. Under `dart run` the import closure is compiled on
-every invocation, and `http` used to carry both parsers for every program: about a second per
-run for a downloader that parsed neither. `tool/startup.dart` measures it; quote its deltas.
+JSON, YAML, TOML, INI, HTML, XML and the XPath engine are one module, `formats`, with no
+dependencies. `http` imports it for `Response.json` and so also carries `res.html`, `res.xml`,
+`url.html()`, `url.xml()`. When the parsers were third-party this would have cost a second of
+startup per networked program; in-house they cost tens of milliseconds, and one module to learn
+is worth that. `tool/startup.dart` measures it; quote its deltas.
 
 ## `Cli.run` is the lifecycle
 
@@ -249,6 +249,11 @@ knows the toolkit's words apply and a reader who does not sees only the SDK's. `
 `Iterable`, so it leaves the way it came; the SDK's lazy operators return `Sequence` on it so the
 chain is never broken. The type budget is three: `Sequence`, `Sorted` (the sort that remembers its
 keys for `thenBy`), `Table`.
+
+## Nothing in `lib/` exists only for tests
+
+A test double is a test's business. The handler-backed `Client` lives in `test/mock_client.dart`,
+not in a published library; a user who wants one copies forty lines.
 
 ## Sync mirrors are allowed only on `fs`
 

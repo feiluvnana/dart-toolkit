@@ -6,7 +6,7 @@
 //
 // {@category Utilities}
 
-part of '../../util.dart';
+part of '../../core.dart';
 
 /// One unit of work inside a batch, as a renderer needs to see it.
 ///

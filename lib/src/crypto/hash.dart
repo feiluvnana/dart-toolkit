@@ -1,4 +1,4 @@
-part of '../../hash.dart';
+part of '../../crypto.dart';
 
 /// A digest algorithm.
 ///

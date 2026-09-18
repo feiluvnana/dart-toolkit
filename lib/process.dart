@@ -11,7 +11,7 @@ import 'dart:io';
 
 import 'formats.dart';
 import 'fs.dart';
-import 'util.dart';
+import 'core.dart';
 
 part 'src/process/process.dart';
 part 'src/process/shell_result.dart';

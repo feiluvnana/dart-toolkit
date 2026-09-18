@@ -17,7 +17,6 @@ import 'async.dart';
 import 'core.dart';
 import 'formats.dart';
 import 'fs.dart';
-import 'util.dart';
 
 part 'src/http/client.dart';
 part 'src/http/documents.dart';

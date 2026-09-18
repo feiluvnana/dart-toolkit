@@ -3,7 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dart_toolkit/dart_toolkit.dart';
-import 'package:dart_toolkit/testing.dart';
+import 'mock_client.dart';
 import 'package:test/test.dart';
 
 class _CountingClient implements Client {

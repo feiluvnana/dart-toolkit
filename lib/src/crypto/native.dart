@@ -1,4 +1,4 @@
-part of '../../hash.dart';
+part of '../../crypto.dart';
 
 /// A streaming digest. Native — CommonCrypto on macOS, OpenSSL's libcrypto on Linux — when
 /// the platform provides one, `package:crypto` otherwise. Same bytes out either way.

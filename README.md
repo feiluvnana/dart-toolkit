@@ -19,7 +19,7 @@ modules:
 
 ```dart
 import 'package:dart_toolkit/cli.dart';
-import 'package:dart_toolkit/util.dart';
+import 'package:dart_toolkit/core.dart';
 ```
 
 The barrel re-exports everything and is there for tools you `dart compile` once, where tree
@@ -27,27 +27,20 @@ shaking makes it free.
 
 | import | contents | third-party |
 |---|---|---|
+| `core.dart` | `Either`, `Env`, `ConsoleIo`, `TaskProgress`, `Crc32`, string and duration helpers | — |
 | `collection.dart` | `Sequence` (`.sequence` on any `Iterable` or `Map`): lazy queries, multi-key sort, joins, sets; `Table`: rows of named columns; CSV, TSV, NDJSON, Markdown | — |
-| `util.dart` | `Env`, `ConsoleIo`, `TaskProgress`, `Crc32`, duration helpers | — |
-| `cli.dart` | `Cli`, `Prompt`, `Logger`, `Console`, ANSI | — |
-| `core.dart` | `Either`, `JsonDocument`, string helpers | — |
-| `formats.dart` | YAML, TOML, INI → `JsonDocument`; YAML out | — |
+| `formats.dart` | `JsonDocument` with JSONPath; YAML, TOML, INI into it; `HtmlDocument` with CSS `$` and XPath `$x`; `XmlDocument` with XPath `$`; YAML out | — |
 | `async.dart` | `parallelize`, `retry`, `Mutex`, `CancelToken`, stream operators | — |
-| `xpath.dart` | the XPath engine `html` and `xml` share | — |
-| `fs.dart` | `Path` | path |
-| `hash.dart` | MD5, SHA-1/224/256/384/512, CRC-32, HMAC — native where the OS has a library | crypto (fallback), path |
-| `html.dart` | `HtmlDocument`, `Elements`, CSS `$`, XPath `$x`, `res.html`, `url.html` | path |
-| `xml.dart` | `XmlDocument`, XPath `$`, `res.xml`, `url.xml` | path |
-| `archive.dart` | zip and unzip, streamed, ZIP64 | path |
+| `cli.dart` | `Cli`, `Prompt`, `Logger`, `Console`, ANSI | — |
+| `fs.dart` | `Path`, zip and unzip streamed with ZIP64 | path |
+| `crypto.dart` | MD5, SHA-1/224/256/384/512, CRC-32, HMAC — native where the OS has a library | crypto (fallback), path |
 | `process.dart` | `run`, pipelines, `which` | path |
-| `http.dart` | `Request`, `Response`, `Client`, `Http.session`, scraping, downloads | path |
-| `testing.dart` | `MockClient` | path |
+| `http.dart` | `Request`, `Response`, `Client`, `Http.session`, scraping, downloads, `res.html`, `url.json()` | path |
 
-Every parser and the HTTP client are the package's own, checked against the packages they
-replaced in the test suite: `package:html`, `xml`, `archive` and `http` together cost about a
-second of front-end work per `dart run` and are gone. `path` is the one runtime dependency;
-`crypto` is the pure-Dart fallback for hashing where the platform has no native library.
-`tool/startup.dart` prints what each module costs to import.
+Nine modules. Every parser and the HTTP client are the package's own, checked against the
+packages they replaced in the test suite; `path` is the one runtime dependency, `crypto` the
+pure-Dart fallback for hashing where the platform has no native library. `tool/startup.dart`
+prints what each module costs to import.
 
 `tool/check_deps.dart` checks this table on demand, and fails a `bin/` or `example/` file that
 imports the barrel.
@@ -293,7 +286,8 @@ await Http.session(() async {
 ```
 
 The client is `dart:io`'s, wrapped in `Request`, `Response` and `Client`; `Http.session(client:)`
-takes any `Client`, and `package:dart_toolkit/testing.dart` has a `MockClient` for tests.
+takes any `Client`, so a test hands it one that answers from a handler — `test/mock_client.dart`
+is forty lines and yours to copy.
 
 `url / 'users'` appends a path segment, treating the base as a directory — the same glyph as
 `Path./`, with the same meaning.
@@ -375,7 +369,7 @@ cli.command('fetch', build: (fetch) => fetch
 
 Every console write — including subprocess output — goes through `ConsoleIo`, which also drives
 terminal detection, so redirecting the sink redirects what gets rendered. Every request goes
-through a `Client`, so a `MockClient` stands in for the network.
+through a `Client`, so a handler-backed one stands in for the network.
 
 ```dart
 final buffer = StringBuffer();
