@@ -221,9 +221,9 @@ class Sequence<T> extends Iterable<T> {
 
   // ---- order
 
-  /// Sorted by [compare] or natural order; `thenBy` adds a tie-break.
-  Sorted<T> sorted([Comparator<T>? compare]) =>
-      Sorted<T>._(_items, [compare ?? (a, b) => (a as Comparable<Object?>).compareTo(b)]);
+  /// Sorted by [compare]; `thenBy` adds a tie-break. Elements that are [Comparable] have
+  /// [ComparableSequenceExtensions.sorted] instead.
+  Sorted<T> sortedWith(Comparator<T> compare) => Sorted<T>._(_items, [compare]);
 
   /// Sorted by [key], largest first when [descending]; `thenBy` adds the next key.
   Sorted<T> sortedBy<K extends Comparable<K>>(K Function(T element) key, {bool descending = false}) =>
@@ -301,19 +301,28 @@ class Sequence<T> extends Iterable<T> {
     }
   }());
 
-  // ---- grouping: records, so mapValues / toMap continue the sentence
+  // ---- grouping: each group is a Sequence with a key, so the sentence continues on it
 
-  /// `(key, elements)` per distinct [key], in first-seen order.
-  Sequence<(K, List<T>)> groupBy<K>(K Function(T element) key) => Sequence._(() sync* {
+  /// One [Group] per distinct [key], in first-seen order; each group is a [Sequence] of its
+  /// elements with a [Group.key].
+  ///
+  /// ```dart
+  /// tracks.sequence.groupBy((t) => t.disc).mapValues((g) => g.sumBy((t) => t.seconds)).toMap()
+  /// tracks.sequence.groupBy((t) => t.disc).expand((g) => g.sortedBy((t) => t.n).take(2))
+  /// ```
+  Sequence<Group<K, T>> groupBy<K>(K Function(T element) key) => Sequence._(() sync* {
     final map = <K, List<T>>{};
     for (final e in _items) {
       (map[key(e)] ??= []).add(e);
     }
-    yield* map.entries.map((e) => (e.key, e.value));
+    yield* map.entries.map((e) => Group<K, T>._(e.key, e.value));
   }());
 
   /// `(key, count)` per distinct [key].
   Sequence<(K, int)> countBy<K>(K Function(T element) key) => groupBy(key).mapValues((g) => g.length);
+
+  /// How many elements there are, or how many pass [test].
+  int count([bool Function(T element)? test]) => test == null ? length : where(test).length;
 
   /// A map from [key] to the last element with it.
   Map<K, T> indexBy<K>(K Function(T element) key) => {for (final e in _items) key(e): e};
@@ -327,23 +336,23 @@ class Sequence<T> extends Iterable<T> {
     return (yes, no);
   }
 
-  // ---- numbers
+  // ---- numbers; a Sequence<num> also has `sum`, `average`, `min`, `max` as getters
 
-  /// The sum of [of] over the elements, or of the elements themselves.
-  num sum([num Function(T element)? of]) {
+  /// The sum of [of] over the elements.
+  num sumBy(num Function(T element) of) {
     num total = 0;
     for (final e in _items) {
-      total += of != null ? of(e) : (e as num);
+      total += of(e);
     }
     return total;
   }
 
   /// The mean of [of] over the elements, or `null` when empty.
-  double? average([num Function(T element)? of]) {
+  double? averageBy(num Function(T element) of) {
     num total = 0;
     var n = 0;
     for (final e in _items) {
-      total += of != null ? of(e) : (e as num);
+      total += of(e);
       n++;
     }
     return n == 0 ? null : total / n;
@@ -411,11 +420,11 @@ extension SequenceOfPairsExtensions<K, V> on Sequence<(K, V)> {
 
   /// Pairs sorted by key; keys must be [Comparable].
   Sorted<(K, V)> sortedByKey({bool descending = false}) =>
-      sorted((a, b) => (descending ? -1 : 1) * (a.$1 as Comparable<Object?>).compareTo(b.$1));
+      sortedWith((a, b) => (descending ? -1 : 1) * (a.$1 as Comparable<Object?>).compareTo(b.$1));
 
   /// Pairs sorted by value; values must be [Comparable].
   Sorted<(K, V)> sortedByValue({bool descending = false}) =>
-      sorted((a, b) => (descending ? -1 : 1) * (a.$2 as Comparable<Object?>).compareTo(b.$2));
+      sortedWith((a, b) => (descending ? -1 : 1) * (a.$2 as Comparable<Object?>).compareTo(b.$2));
 
   /// A map from the pairs; a repeated key keeps the later value, or what [merge] returns.
   Map<K, V> toMap([V Function(V existing, V incoming)? merge]) {
@@ -432,6 +441,71 @@ extension SequenceOfPairsExtensions<K, V> on Sequence<(K, V)> {
 
   /// Two lists, keys and values.
   (List<K>, List<V>) get unzip => (keys.toList(), values.toList());
+}
+
+/// One group of a [Sequence.groupBy]: the elements that share [key], as a [Sequence].
+///
+/// {@category Collections}
+final class Group<K, T> extends Sequence<T> {
+  final K key;
+
+  Group._(this.key, List<T> elements) : super._(elements);
+
+  @override
+  String toString() => 'Group($key: ${length} elements)';
+}
+
+/// A [Sequence] of groups.
+///
+/// {@category Collections}
+extension SequenceOfGroupsExtensions<K, T> on Sequence<Group<K, T>> {
+  /// The keys.
+  Sequence<K> get keys => map((g) => g.key);
+
+  /// `(key, result)` with each group folded by [fold]: `groupBy(…).mapValues((g) => g.length)`.
+  Sequence<(K, R)> mapValues<R>(R Function(Group<K, T> group) fold) => map((g) => (g.key, fold(g)));
+
+  /// `(key, size)` per group.
+  Sequence<(K, int)> get counts => mapValues((g) => g.length);
+
+  /// The groups as a map of lists.
+  Map<K, List<T>> toMap() => {for (final g in this) g.key: g.toList()};
+}
+
+/// A [Sequence] of numbers.
+///
+/// {@category Collections}
+extension NumSequenceExtensions<T extends num> on Sequence<T> {
+  /// The sum; 0 when empty.
+  T get sum => fold(T == int ? 0 as T : 0.0 as T, (a, b) => (a + b) as T);
+
+  /// The mean, or `null` when empty.
+  double? get average {
+    num total = 0;
+    var n = 0;
+    for (final e in this) {
+      total += e;
+      n++;
+    }
+    return n == 0 ? null : total / n;
+  }
+}
+
+/// A [Sequence] of [Comparable] elements: numbers, strings, dates, durations.
+///
+/// {@category Collections}
+extension ComparableSequenceExtensions<T extends Comparable<Object>> on Sequence<T> {
+  /// Sorted in natural order; `thenBy` adds a tie-break, `descending` flips it.
+  Sorted<T> get sorted => sortedWith((a, b) => a.compareTo(b));
+
+  /// Sorted largest first.
+  Sorted<T> get sortedDescending => sortedWith((a, b) => b.compareTo(a));
+
+  /// The largest element, or `null` when empty.
+  T? get max => fold<T?>(null, (m, e) => m == null || e.compareTo(m) > 0 ? e : m);
+
+  /// The smallest element, or `null` when empty.
+  T? get min => fold<T?>(null, (m, e) => m == null || e.compareTo(m) < 0 ? e : m);
 }
 
 /// A [Sequence] sorted by one or more keys; [thenBy] adds the next one.

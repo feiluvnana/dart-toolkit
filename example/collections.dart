@@ -34,7 +34,7 @@ void main() {
   // Sequence: group, fold each group, sort by value.
   final rankedB = tracks.sequence
       .groupBy((t) => t.disc)
-      .mapValues((g) => g.sequence.sum((t) => t.seconds))
+      .mapValues((g) => g.sumBy((t) => t.seconds))
       .sortedByValue(descending: true);
   show(rankedA.map((e) => '${e.key}: ${e.value}s'), rankedB.map((r) => '${r.$1}: ${r.$2}s'));
 
@@ -83,7 +83,7 @@ void main() {
   final topB = tracks.sequence
       .where((t) => t.format == 'flac')
       .groupBy((t) => t.disc)
-      .expand((g) => g.$2.sequence.sortedBy((t) => t.seconds, descending: true).take(2));
+      .expand((g) => g.sortedBy((t) => t.seconds, descending: true).take(2));
   show(topA.map((t) => t.title), topB.map((t) => t.title));
 
   Console.rule('6. As a table: filter, sort, pick columns, print');
@@ -100,9 +100,9 @@ void main() {
   );
   // Table: the same, as a query; `show()` prints it, `toCsv()` would write it.
   Table.records(tracks, (t) => {'disc': t.disc, 'title': t.title, 'seconds': t.seconds})
-      .where((r) => r.number('seconds')! > 200)
+      .where((r) => r.number('seconds') > 200)
       .orderBy('disc')
-      .derive('min', (r) => (r.number('seconds')! / 60).toStringAsFixed(1))
+      .derive('min', (r) => (r.number('seconds') / 60).toStringAsFixed(1))
       .select(['disc', 'title', 'min'])
       .show();
   Table.records(

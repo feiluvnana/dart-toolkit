@@ -5,10 +5,21 @@ typedef Row = Map<String, Object?>;
 
 /// Typed reads on a row; a value scraped as text still counts as a number.
 ///
+/// `number` and `get` throw a [StateError] naming the column and the row when the value is
+/// missing or does not convert, so a typo or a bad cell fails where it happens; the `OrNull`
+/// forms answer `null` instead.
+///
 /// {@category Collections}
 extension RowExtensions on Map<String, Object?> {
-  /// The value of [column] as [T], coercing text to numbers and booleans; `null` when it cannot.
-  T? get<T>(String column) => _coerce<T>(this[column]);
+  /// The value of [column] as [T], coercing text to numbers and booleans.
+  T get<T>(String column) {
+    final value = _coerce<T>(this[column]);
+    if (value == null) throw StateError('Column "$column" is not a $T in row $this');
+    return value;
+  }
+
+  /// The value of [column] as [T], or `null` when missing or not convertible.
+  T? getOrNull<T>(String column) => _coerce<T>(this[column]);
 
   /// The value of [column] as text, `''` for null.
   String text(String column) => switch (this[column]) {
@@ -16,8 +27,11 @@ extension RowExtensions on Map<String, Object?> {
     final v => '$v',
   };
 
+  /// The value of [column] as a number; `'1,200'` counts.
+  num number(String column) => get<num>(column);
+
   /// The value of [column] as a number, or `null`.
-  num? number(String column) => _coerce<num>(this[column]);
+  num? numberOrNull(String column) => _coerce<num>(this[column]);
 }
 
 /// How a grouped column is folded.
@@ -82,11 +96,18 @@ final class Table {
   bool get isEmpty => rows.isEmpty;
   bool get isNotEmpty => rows.isNotEmpty;
 
-  /// Row [index].
-  Row operator [](int index) => rows[index];
+  /// Every value of [column], top to bottom: `t['title']`. Rows are `t.rows[i]`.
+  List<Object?> operator [](String column) => [for (final r in rows) r[_has(column)]];
 
-  /// Every value of [column], top to bottom.
-  List<Object?> column(String name) => [for (final r in rows) r[name]];
+  /// Every value of [column] as a number; a cell that is not one throws.
+  List<num> numbers(String column) => [for (final r in rows) r.number(_has(column))];
+
+  /// Every value of [column] as text.
+  List<String> texts(String column) => [for (final r in rows) r.text(_has(column))];
+
+  /// [name], or an [ArgumentError] that lists the columns there are.
+  String _has(String name) =>
+      columns.contains(name) ? name : throw ArgumentError('No column "$name"; columns are ${columns.join(', ')}');
 
   /// Only the rows that pass [test].
   Table where(bool Function(Row row) test) => Table._(columns, rows.where(test).toList(), const []);
@@ -98,10 +119,10 @@ final class Table {
   Table skip(int count) => Table._(columns, rows.skip(count).toList(), _order);
 
   /// Sorted by [column], largest first when [descending]; numbers compare as numbers, `null` last.
-  Table orderBy(String column, {bool descending = false}) => _sorted([(column, descending)]);
+  Table orderBy(String column, {bool descending = false}) => _sorted([(_has(column), descending)]);
 
   /// The next sort key, where [orderBy]'s tie.
-  Table thenBy(String column, {bool descending = false}) => _sorted([..._order, (column, descending)]);
+  Table thenBy(String column, {bool descending = false}) => _sorted([..._order, (_has(column), descending)]);
 
   Table _sorted(List<(String, bool)> order) {
     final sorted = rows.indexed.toList()
@@ -139,7 +160,7 @@ final class Table {
 
   /// One row per distinct combination of [by] (every column when omitted); the first wins.
   Table distinct([List<String>? by]) {
-    final keys = by ?? columns;
+    final keys = by?.map(_has).toList() ?? columns;
     final seen = <_Key>{};
     return Table._(columns, [
       for (final r in rows)
@@ -155,6 +176,8 @@ final class Table {
   Table leftJoin(Table other, {required String on, String? to}) => _join(other, on, to ?? on, left: true);
 
   Table _join(Table other, String on, String to, {required bool left}) {
+    _has(on);
+    other._has(to);
     final index = other.rows.sequence.groupBy((r) => _Key([r[to]])).toMap();
     final rightColumns = {
       for (final c in other.columns)
@@ -175,15 +198,19 @@ final class Table {
   }
 
   /// Rows grouped by [column] (and [more]), ready for [TableGroups.count], `sum`, `agg`.
-  TableGroups groupBy(String column, [List<String> more = const []]) => TableGroups._(this, [column, ...more]);
+  TableGroups groupBy(String column, [List<String> more = const []]) =>
+      TableGroups._(this, [_has(column), ...more.map(_has)]);
 
   /// A crosstab: one row per [rows] value, one column per [column] value, [value] folded by [agg].
   Table pivot({required String rows, required String column, required String value, Agg agg = Agg.sum}) {
+    _has(rows);
+    _has(column);
+    _has(value);
     final columnValues = <String>{for (final r in this.rows) r.text(column)}.toList();
     final out = <Row>[];
-    for (final (k, group) in this.rows.sequence.groupBy((r) => _Key([r[rows]]))) {
-      final row = <String, Object?>{rows: k.parts.first};
-      final byColumn = group.sequence.groupBy((r) => r.text(column)).toMap();
+    for (final group in this.rows.sequence.groupBy((r) => _Key([r[rows]]))) {
+      final row = <String, Object?>{rows: group.key.parts.first};
+      final byColumn = group.groupBy((r) => r.text(column)).toMap();
       for (final c in columnValues) {
         row[c] = _foldCells(agg, [for (final r in byColumn[c] ?? const <Row>[]) r[value]]);
       }

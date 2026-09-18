@@ -14,12 +14,19 @@ deltas measured on the same machine; `tool/startup.dart` reproduces the startup 
   `thenWith`; `union`, `intersect`, `except` keeping order; `innerJoin`, `leftJoin`, `groupJoin`
   as hash joins; `groupBy` and `countBy` as `(key, value)` records with `mapValues`, `mapKeys`,
   `inverted`, `sortedByKey`, `sortedByValue`, `toMap([merge])`, `unzip`; `indexBy`,
-  `partition`, `sum`, `average`, `minBy`, `maxBy`, `minMax`, `none`; `Sequence.range`.
+  `partition`, `sumBy`, `averageBy`, `count`, `minBy`, `maxBy`, `minMax`, `none`;
+  `Sequence.range`. A group is a `Sequence` with a `key`, so `groupBy(…).expand((g) => g.take(2))`
+  reads on. Typed where the type allows it: `sum`, `average` are getters on a `Sequence<num>`,
+  `sorted`, `sortedDescending`, `min`, `max` on a `Sequence` of `Comparable`s — no cast, no
+  runtime surprise; `sortedWith` takes a comparator for the rest.
 - **`Table`**: rows of named columns from `Table.rows`, `Table.records`, `Table.csv`,
   `json.table`, `doc.$('table').table`; `where`, `orderBy`/`thenBy`, `select`, `rename`,
   `derive`, `drop`, `distinct`, `take`, `skip`, `join`/`leftJoin`, `groupBy` with `count`,
-  `sum`, `avg`, `min`, `max`, `agg`, `aggWith`, `pivot`; typed reads on rows (`number`, `text`,
-  `get<T>`, with `'1,200'` counting as 1200); out as `toCsv`, `saveCsv`, `toJson`, `show()`.
+  `sum`, `avg`, `min`, `max`, `agg`, `aggWith`, `pivot`; `t['column']` for a column, `numbers`,
+  `texts`; typed reads on rows (`number`, `get<T>`, `text`, with `'1,200'` counting as 1200)
+  that throw naming the column and row when a cell does not convert (`numberOrNull`,
+  `getOrNull` for the quiet form); a wrong column name anywhere is an `ArgumentError` that
+  lists the columns; out as `toCsv`, `saveCsv`, `toJson`, `show()`.
 - **keybox takes no options.** It downloads every format and zips the result; `Cli` stays only
   as the lifecycle (`--help`, `--version`, `ctx.cancel`).
 - **No CI.** The GitHub workflow is gone; `tool/check_deps.dart`, `dart analyze` and `dart test`

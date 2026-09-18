@@ -153,6 +153,7 @@ final top = tracks.sequence
 tracks.sequence.groupBy((t) => t.disc).mapValues((g) => g.length).toMap();   // {1: 12, 2: 9}
 songs.sequence.innerJoin(pages, on: (s) => s.href, to: (p) => p.href, (s, p) => (s, p.size));
 [1, 2, 3].sequence.union([3, 4]).scan(0, (a, b) => a + b);    // 1, 3, 6, 10
+prices.sequence.sum; names.sequence.sorted.first;             // typed: only on numbers, only on Comparables
 for (final (k, v) in map.sequence.sortedByValue(descending: true).take(3)) print('$k $v');
 ```
 
@@ -162,7 +163,7 @@ array, CSV text or an HTML `<table>`, and goes back out as CSV, JSON or a consol
 
 ```dart
 final t = doc.$('table#songs').table;                     // <th> → columns, <tr> → rows
-t.where((r) => r.number('size')! > 1e6)
+t.where((r) => r.number('size') > 1e6)
     .orderBy('disc').thenBy('n')
     .select(['title', 'size'])
     .show();

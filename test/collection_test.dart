@@ -77,7 +77,10 @@ void main() {
         2,
         'b',
       ));
-      expect(words.sequence.sorted().first, 'apple');
+      expect(words.sequence.sorted.first, 'apple');
+      expect([3, 1, 2].sequence.sortedDescending.toList(), [3, 2, 1]);
+      expect([3, 1, 2].sequence.max, 3);
+      expect(<int>[].sequence.min, isNull);
       expect(words.sequence.sortedBy((w) => w.length).thenWith((a, b) => b.compareTo(a)).toList(), [
         'apple',
         'banana',
@@ -139,10 +142,12 @@ void main() {
       final (even, odd) = [1, 2, 3, 4, 5].sequence.partition((n) => n.isEven);
       expect(even, [2, 4]);
       expect(odd, [1, 3, 5]);
-      expect([10, 20, 30].sequence.sum(), 60);
-      expect(words.sequence.sum((w) => w.length), 25);
-      expect([10, 20, 30].sequence.average(), 20.0);
-      expect(<int>[].sequence.average(), isNull);
+      expect([10, 20, 30].sequence.sum, 60);
+      expect([1.5, 2.5].sequence.sum, 4.0);
+      expect(words.sequence.sumBy((w) => w.length), 25);
+      expect([10, 20, 30].sequence.average, 20.0);
+      expect(words.sequence.averageBy((w) => w.length), 6.25);
+      expect(<int>[].sequence.average, isNull);
       expect(words.sequence.maxBy((w) => w.length), 'apricot');
       expect(words.sequence.minBy((w) => w.length), 'apple');
       expect([3, 9, 1].sequence.minMax((n) => n), (1, 9));
@@ -177,20 +182,26 @@ void main() {
     test('columns, rows, typed reads', () {
       expect(t.columns, ['disc', 'n', 'title', 'size']);
       expect(t.length, 3);
-      expect(t[0].number('size'), 1200);
-      expect(t[0].get<int>('size'), 1200);
-      expect(t[2].text('title'), 'C');
-      expect(t.column('n'), [2, 1, 1]);
-      expect(Table.records([1, 2], (n) => {'n': n, 'sq': n * n}).column('sq'), [1, 4]);
+      expect(t.rows[0].number('size'), 1200);
+      expect(t.rows[0].get<int>('size'), 1200);
+      expect(t.rows[0].numberOrNull('title'), isNull);
+      expect(() => t.rows[0].number('title'), throwsStateError);
+      expect(() => t['nope'], throwsArgumentError);
+      expect(() => t.orderBy('nope'), throwsArgumentError);
+      expect(t.numbers('size'), [1200, 800, 9.5]);
+      expect(t.texts('title'), ['B', 'A', 'C']);
+      expect(t.rows[2].text('title'), 'C');
+      expect(t['n'], [2, 1, 1]);
+      expect(Table.records([1, 2], (n) => {'n': n, 'sq': n * n})['sq'], [1, 4]);
     });
 
     test('where, orderBy … thenBy, select, rename, derive, drop, distinct, take', () {
-      expect(t.where((r) => r['disc'] == 1).column('title'), ['B', 'A']);
-      expect(t.orderBy('disc').thenBy('n').column('title'), ['A', 'B', 'C']);
-      expect(t.orderBy('size', descending: true).column('title'), ['B', 'A', 'C']); // '1,200' reads as 1200
+      expect(t.where((r) => r['disc'] == 1)['title'], ['B', 'A']);
+      expect(t.orderBy('disc').thenBy('n')['title'], ['A', 'B', 'C']);
+      expect(t.orderBy('size', descending: true)['title'], ['B', 'A', 'C']); // '1,200' reads as 1200
       expect(t.select(['title', 'n']).columns, ['title', 'n']);
       expect(t.rename({'n': 'track'}).columns, ['disc', 'track', 'title', 'size']);
-      expect(t.derive('kb', (r) => r.number('size')! / 1000).column('kb'), [1.2, 0.8, 0.0095]);
+      expect(t.derive('kb', (r) => r.number('size') / 1000)['kb'], [1.2, 0.8, 0.0095]);
       expect(t.drop(['size', 'title']).columns, ['disc', 'n']);
       expect(t.distinct(['disc']).length, 2);
       expect(t.take(1).length, 1);
@@ -202,13 +213,13 @@ void main() {
         {'disc': 1, 'count': 2},
         {'disc': 2, 'count': 1},
       ]);
-      expect(t.groupBy('disc').sum('size').column('size'), [2000, 9.5]);
+      expect(t.groupBy('disc').sum('size')['size'], [2000, 9.5]);
       expect(t.groupBy('disc').agg({'size': Agg.max, 'title': Agg.list}).rows.first, {
         'disc': 1,
         'size': '1,200',
         'title': ['B', 'A'],
       });
-      expect(t.groupBy('disc').aggWith({'first': (rows) => rows.first['title']}).column('first'), ['B', 'C']);
+      expect(t.groupBy('disc').aggWith({'first': (rows) => rows.first['title']})['first'], ['B', 'C']);
       final p = t.pivot(rows: 'disc', column: 'title', value: 'size');
       expect(p.columns, ['disc', 'B', 'A', 'C']);
       expect(p.rows.first, {'disc': 1, 'B': 1200, 'A': 800, 'C': 0});
@@ -216,8 +227,8 @@ void main() {
         {'disc': 1, 'format': 'flac'},
         {'disc': 3, 'format': 'mp3'},
       ]);
-      expect(t.join(formats, on: 'disc').column('format'), ['flac', 'flac']);
-      expect(t.leftJoin(formats, on: 'disc').column('format'), ['flac', 'flac', null]);
+      expect(t.join(formats, on: 'disc')['format'], ['flac', 'flac']);
+      expect(t.leftJoin(formats, on: 'disc')['format'], ['flac', 'flac', null]);
       final clash = Table.rows([
         {'disc': 2, 'title': 'other'},
       ]);
@@ -247,7 +258,7 @@ void main() {
           '<table><tr><th>Title</th><th>Size</th></tr><tr><td>A</td><td>10</td></tr><tr><td>B</td><td>20</td></tr></table>'
               .html;
       expect(html.$('table').table.columns, ['Title', 'Size']);
-      expect(html.$('table').table.orderBy('Size', descending: true).column('Title'), ['B', 'A']);
+      expect(html.$('table').table.orderBy('Size', descending: true)['Title'], ['B', 'A']);
       expect('<table><tr><td>x</td><td>y</td></tr></table>'.html.$('table').table.columns, ['c1', 'c2']);
 
       final dir = Directory.systemTemp.createTempSync('tbl_');
