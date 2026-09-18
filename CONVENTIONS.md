@@ -164,9 +164,10 @@ converter should not accept `E` — narrow with `mapLeft` afterwards.
 ## A crawl is a chain of hooks
 
 `url.scrape<T>()` returns a `Scrape<T>`: five hooks whose registration returns the receiver,
-and a `Stream<Either<ScrapeFailure, T>>`. Every setting lives on one object, the `InitContext`
-handed to `onInit`, so a reader finds the whole configuration in one block and the chain stays
-five names long. Behaviour is the other four hooks — `onRequest`, `onResponse`, `onError`,
+and a `Stream<Either<ScrapeFailure, T>>`. Every crawl-wide setting lives on one object, the
+`InitContext` handed to `onInit`, so a reader finds the whole configuration in one block and the
+chain stays five names long. Anything that can differ per request — a header, the `user-agent`
+— is not a setting; it is `onRequest` editing the request. Behaviour is the other four hooks — `onRequest`, `onResponse`, `onError`,
 `onFinish` — each given the context for its moment and nothing else. A bare named parameter on
 `scrape`, or a builder method per setting, is not the shape: the first cannot chain, the second
 puts twelve limits between a reader and the hooks. The defaults are chosen so that a chain with

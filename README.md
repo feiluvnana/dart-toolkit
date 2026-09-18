@@ -163,10 +163,11 @@ await for (final story in stories.rights) print(story);
 
 Five hooks, each with the context for its moment:
 
-- `onInit` — once, on listen, with every setting: `concurrency`, `perHost`, `delay`, `timeout`,
-  `retries`, `redirects`, `bodyLimit`, `maxPages`, `maxDepth`, `headers`, `userAgent`, `scope`,
-  and `seed()` to add starting points. It may be async — fetch a token, read a config.
-- `onRequest` — before every send. Edit `ctx.request.headers`, or `ctx.skip()`.
+- `onInit` — once, on listen, with every crawl-wide setting: `concurrency`, `perHost`, `delay`,
+  `timeout`, `retries`, `redirects`, `bodyLimit`, `maxPages`, `maxDepth`, `scope`, and `seed()`
+  to add starting points. It may be async — fetch a token, read a config.
+- `onRequest` — before every send. Anything per request is here: a header, the `user-agent`, a
+  signature on `ctx.request`, or `ctx.skip()`.
 - `onResponse` — every 2xx. `ctx.emit`, `ctx.follow`, `ctx.stop`; `ctx.url` is the page that
   answered, after redirects, and `ctx.depth` and `ctx.pages` say where the crawl is.
 - `onError` — the engine has given up on a request. `switch` on `ctx.failure`
@@ -179,8 +180,9 @@ Five hooks, each with the context for its moment:
 in `onInit` widens the rule for the crawl, `offsite: true` for one link. `follow(onResponse:, onError:)`
 overrides the hooks for one request, and `meta:` rides along to it.
 
-Defaults: 16 in flight, 8 per host, 30 s, 2 retries, 5 hops, 16 MB, and a host answering 429 or
-503 is paused for its `Retry-After`.
+Defaults: 16 in flight, 8 per host, 30 s, 2 retries, 5 hops, 16 MB, `user-agent: dart-toolkit`
+unless a request or the session names one, and a host answering 429 or 503 is paused for its
+`Retry-After`.
 
 A failure is an item, not a stream error — the contract `parallelize` has, on a stream:
 

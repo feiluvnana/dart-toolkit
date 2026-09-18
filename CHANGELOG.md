@@ -13,8 +13,9 @@ Every one of those was the API's default.
 - **`url.scrape<T>()` returns a `Scrape<T>`**: five hooks on a chain and a
   `Stream<Either<ScrapeFailure, T>>` in one. `onInit` receives every setting on an `InitContext`
   — `concurrency`, `perHost`, `delay`, `timeout`, `retries`, `redirects`, `bodyLimit`,
-  `maxPages`, `maxDepth`, `headers`, `userAgent`, `scope`, `seed()` — and may be async;
-  `onRequest`, `onResponse`, `onError`, `onFinish` are the behaviour. Nothing is sent until the
+  `maxPages`, `maxDepth`, `scope`, `seed()` — and may be async; anything per request, a header
+  or the `user-agent`, is `onRequest` editing the request; `onResponse`, `onError`, `onFinish`
+  are the rest of the behaviour. Nothing is sent until the
   stream is listened to.
 - **A failure is a `Left`** — `RequestFailed`, `BadStatus` or `HandlerFailed`, each carrying URL,
   request, depth and meta — and the crawl continues. `.rights`, `.lefts` and `.unwrap()` on

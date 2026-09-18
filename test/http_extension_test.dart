@@ -958,10 +958,9 @@ void main() {
                 .onInit((c) async {
                   await Future<void>.delayed(Duration.zero); // may be async: fetch a token, read a config
                   c.seed(Uri.parse('https://example.com/b'), meta: {'tag': 'b'});
-                  c.headers['x-crawl'] = '1';
-                  c.userAgent = 'mine/2';
                   expect(c.seeds.map((u) => u.path), equals(['/a', '/b']));
                 })
+                .onRequest((r) => r.request.headers.addAll({'x-crawl': '1', 'user-agent': 'mine/2'}))
                 .onResponse((ctx) => ctx.emit(ctx.meta['tag']))
                 .rights
                 .toList();

@@ -130,8 +130,8 @@ final class HandlerFailed extends ScrapeFailure {
 /// The crawl's settings, all of them, set once in [Scrape.onInit].
 ///
 /// Defaults: 16 requests in flight, 8 per host, no delay, 30 s timeout, 2 retries, 5 redirect
-/// hops, a 16 MB body cap, `user-agent: dart-toolkit` unless the session sets one, and a scope
-/// of the seeds' hosts. Changes after the hook returns have no effect.
+/// hops, a 16 MB body cap, and a scope of the seeds' hosts. Changes after the hook returns have
+/// no effect. Anything per request — a header, the `user-agent` — is [Scrape.onRequest]'s.
 ///
 /// {@category Crawling}
 final class InitContext<T> {
@@ -162,12 +162,6 @@ final class InitContext<T> {
   /// Drops requests deeper than this many hops from a seed.
   int? maxDepth;
 
-  /// Headers on every request that does not set them itself.
-  final Map<String, String> headers = {};
-
-  /// The `user-agent`, unless a request or the session sets one.
-  String userAgent = 'dart-toolkit';
-
   /// Which URLs [ResponseContext.follow] may go to. Default: the seeds' hosts.
   bool Function(Uri url)? scope;
 
@@ -186,7 +180,8 @@ final class InitContext<T> {
   }
 }
 
-/// A request about to be sent. Mutate [request] to sign or tag it; [skip] to not send it.
+/// A request about to be sent. Edit [request] — a header, the `user-agent`, a signature — or
+/// [skip] it.
 ///
 /// {@category Crawling}
 final class RequestContext {
@@ -528,6 +523,9 @@ final class _Hooks<T> {
 
   _Hooks(this.seeds);
 }
+
+/// Sent unless the request, [Scrape.onRequest] or the session names one.
+const _userAgent = 'dart-toolkit';
 
 /// Identity of a request for deduplication: the values, not a hash of them.
 typedef _RequestKey = (String method, Uri url, String body);
@@ -876,10 +874,7 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
 
   Future<void> execute(_Host<T> host, _Item<T> item) async {
     final sent = _clone(item.request);
-    for (final MapEntry(:key, :value) in cfg.headers.entries) {
-      sent.headers.putIfAbsent(key, () => value);
-    }
-    if (!sessionHasUserAgent) sent.headers.putIfAbsent('user-agent', () => cfg.userAgent);
+    if (!sessionHasUserAgent) sent.headers.putIfAbsent('user-agent', () => _userAgent);
 
     if (hooks.onRequest case final hook? when sent is http.Request) {
       final ctx = RequestContext._(sent, item.depth, item.attempt, item.meta);
