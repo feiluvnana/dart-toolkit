@@ -156,8 +156,9 @@ songs.sequence.innerJoin(pages, on: (s) => s.href, to: (p) => p.href, (s, p) => 
 for (final (k, v) in map.sequence.sortedByValue(descending: true).take(3)) print('$k $v');
 ```
 
-A `Table` comes from maps, records, a JSON array, CSV text or an HTML `<table>`, and goes
-back out as CSV, JSON or a console table:
+[`example/collections.dart`](example/collections.dart) solves six tasks with the SDK's
+`Iterable` and again with `Sequence`, side by side. A `Table` comes from maps, records, a JSON
+array, CSV text or an HTML `<table>`, and goes back out as CSV, JSON or a console table:
 
 ```dart
 final t = doc.$('table#songs').table;                     // <th> → columns, <tr> → rows
