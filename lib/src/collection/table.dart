@@ -268,14 +268,8 @@ final class TableGroups {
 }
 
 Object? _foldCells(Agg how, List<Object?> values) {
-  final nums = [
-    for (final v in values)
-      if (_coerce<num>(v) case final n?) n,
-  ];
-  final present = [
-    for (final v in values)
-      if (v != null) v,
-  ];
+  final nums = [for (final v in values) ?_coerce<num>(v)];
+  final present = [for (final v in values) ?v];
   return switch (how) {
     Agg.count => values.length,
     Agg.sum => nums.fold<num>(0, (a, b) => a + b),
@@ -320,8 +314,9 @@ T? _coerce<T>(Object? val) {
   if (const <String>[] is List<T>) return '$val' as T;
   final text = val is String ? val.trim().replaceAll(',', '') : '$val';
   if (const <num>[] is List<T>) return num.tryParse(text) as T?;
-  if (const <int>[] is List<T>)
+  if (const <int>[] is List<T>) {
     return (val is num ? val.toInt() : int.tryParse(text) ?? double.tryParse(text)?.toInt()) as T?;
+  }
   if (const <double>[] is List<T>) return (val is num ? val.toDouble() : double.tryParse(text)) as T?;
   if (const <bool>[] is List<T>) {
     if (val == 'true' || val == 1) return true as T;
