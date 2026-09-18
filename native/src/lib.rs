@@ -19,7 +19,7 @@ thread_local! {
 }
 
 
-fn set_error(msg: &str) {
+pub(crate) fn set_error(msg: &str) {
     LAST_ERROR.with(|e| *e.borrow_mut() = msg.to_string());
 }
 

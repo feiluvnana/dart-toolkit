@@ -18,13 +18,15 @@ final class Key {
 
   Key.fromHex(String hex) : bytes = hex.hexBytes;
   Key.fromBase64(String text) : bytes = text.base64Bytes;
+  Key.fromBase32(String text) : bytes = text.base32Bytes;
 
-  /// UTF-8 bytes of [text] — a passphrase, not a key; derive with [Pbkdf2] or [Argon2id].
+  /// UTF-8 bytes of [text]: a passphrase, not a key; derive with [Argon2id] or [Pbkdf2].
   Key.text(String text) : bytes = utf8.encode(text);
 
   int get length => bytes.length;
   String get hex => bytes.hex;
   String get base64 => bytes.base64;
+  String get base32 => bytes.base32;
 
   @override
   String toString() => 'Key(${bytes.length} bytes)';
@@ -40,6 +42,15 @@ abstract final class Crypto {
   /// A random token for URLs and headers: [length] bytes as base64url, 43 characters for 32.
   static String token([int length = 32]) => _randomBytes(length).base64Url;
 
+  /// A random (version 4) UUID.
+  static String uuid() {
+    final b = _randomBytes(16);
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    final h = _hex(b);
+    return '${h.substring(0, 8)}-${h.substring(8, 12)}-${h.substring(12, 16)}-${h.substring(16, 20)}-${h.substring(20)}';
+  }
+
   /// Whether [a] and [b] are equal, in time that depends only on their lengths.
   static bool equals(List<int> a, List<int> b) {
     if (a.length != b.length) return false;
@@ -52,47 +63,102 @@ abstract final class Crypto {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Key derivation
+// Key derivation and password hashing
 // ---------------------------------------------------------------------------------------------
 
-/// PBKDF2: a key from a password, slowly on purpose.
+/// Turns a password into a stored string that carries its own algorithm, parameters and salt,
+/// in the standard form other systems read (`$argon2id$…`, `$2b$…`, `$scrypt$…`,
+/// `$pbkdf2-sha256$…`); [Password.verify] reads any of them back.
 ///
 /// {@category Crypto}
-final class Pbkdf2 {
-  final Hash hash;
+abstract interface class PasswordHasher {
+  String hash(String password);
+}
+
+String _passwordHash(int alg, int a, int b, int c, String password) => Native.withBytes(
+  utf8.encode(password),
+  (p, pl) => _takeText((out, len) => _N.passwordHash(alg, a, b, c, p, pl, out, len)),
+);
+
+Uint8List _kdf(_SlowKdf f, List<int> password, List<int> salt, int a, int b, int c, int length) =>
+    _with2(password, salt, (p, pl, s, sl) => Native.withOut(length, (out) => f(p, pl, s, sl, a, b, c, out, length)));
+
+/// Argon2id (RFC 9106): the password hash to choose today.
+///
+/// {@category Crypto}
+final class Argon2id implements PasswordHasher {
+  /// Memory in KiB; 64 MiB by default.
+  final int memoryKib;
+  final int iterations;
+  final int parallelism;
+
+  const Argon2id({this.memoryKib = 65536, this.iterations = 3, this.parallelism = 4});
+
+  /// [length] raw bytes from [password] and [salt], for a key.
+  Uint8List derive(List<int> password, List<int> salt, {int length = 32}) =>
+      _kdf(_N.argon2id, password, salt, memoryKib, iterations, parallelism, length);
+
+  /// `$argon2id$v=19$m=65536,t=3,p=4$<salt>$<hash>` with a fresh salt.
+  @override
+  String hash(String password) => _passwordHash(0, memoryKib, iterations, parallelism, password);
+}
+
+/// bcrypt: what most existing user tables hold. Passwords longer than 72 bytes are truncated.
+///
+/// {@category Crypto}
+final class Bcrypt implements PasswordHasher {
+  /// Work factor, log2 of the rounds; 12 is 4 096 rounds.
+  final int cost;
+
+  const Bcrypt({this.cost = 12});
+
+  /// `$2b$12$<salt+hash>` with a fresh salt.
+  @override
+  String hash(String password) => _passwordHash(1, cost, 0, 0, password);
+}
+
+/// scrypt (RFC 7914).
+///
+/// {@category Crypto}
+final class Scrypt implements PasswordHasher {
+  /// log2 of the CPU/memory cost N; 15 is 32 MiB.
+  final int logN;
+  final int r;
+  final int p;
+
+  const Scrypt({this.logN = 15, this.r = 8, this.p = 1});
+
+  Uint8List derive(List<int> password, List<int> salt, {int length = 32}) =>
+      _kdf(_N.scrypt, password, salt, logN, r, p, length);
+
+  /// `$scrypt$ln=15,r=8,p=1$<salt>$<hash>` with a fresh salt.
+  @override
+  String hash(String password) => _passwordHash(2, logN, r, p, password);
+}
+
+/// PBKDF2 (RFC 8018), for systems that still require it.
+///
+/// {@category Crypto}
+final class Pbkdf2 implements PasswordHasher {
+  final Hash digest;
   final int iterations;
 
-  /// OWASP's 2023 floor for SHA-256 is 600 000.
-  const Pbkdf2(this.hash, {this.iterations = 600000});
+  /// OWASP's floor for SHA-256 is 600 000.
+  const Pbkdf2([this.digest = Hash.sha256, this.iterations = 600000]);
 
-  /// [length] bytes derived from [password] and [salt].
-  Uint8List derive(List<int> password, List<int> salt, {int length = 32}) {
-    if (Native.isAvailable) {
-      return _with2(
-        password,
-        salt,
-        (p, pl, s, sl) => Native.withOut(length, (out) => _N.pbkdf2(hash.index, p, pl, s, sl, iterations, out, length)),
-      );
+  Uint8List derive(List<int> password, List<int> salt, {int length = 32}) => _with2(
+    password,
+    salt,
+    (p, pl, s, sl) => Native.withOut(length, (out) => _N.pbkdf2(digest.index, p, pl, s, sl, iterations, out, length)),
+  );
+
+  /// `$pbkdf2-sha256$i=600000$<salt>$<hash>` with a fresh salt; the digest must be SHA-256 or SHA-512.
+  @override
+  String hash(String password) {
+    if (digest != Hash.sha256 && digest != Hash.sha512) {
+      throw ArgumentError.value(digest, 'digest', 'the PBKDF2 string form takes SHA-256 or SHA-512');
     }
-    final h = hash._crypto;
-    if (h == null) throw UnsupportedError('pbkdf2 ${hash.name} needs dart_toolkit_native: ${Native.reason}');
-    // RFC 8018 §5.2 over package:crypto's HMAC.
-    final mac = crypto.Hmac(h, password);
-    final out = BytesBuilder(copy: false);
-    for (var block = 1; out.length < length; block++) {
-      var u = Uint8List.fromList(
-        mac.convert([...salt, block >> 24, block >> 16 & 0xff, block >> 8 & 0xff, block & 0xff]).bytes,
-      );
-      final t = Uint8List.fromList(u);
-      for (var i = 1; i < iterations; i++) {
-        u = Uint8List.fromList(mac.convert(u).bytes);
-        for (var j = 0; j < t.length; j++) {
-          t[j] ^= u[j];
-        }
-      }
-      out.add(t);
-    }
-    return Uint8List.sublistView(out.takeBytes(), 0, length);
+    return _passwordHash(3, iterations, digest.index, 0, password);
   }
 }
 
@@ -100,31 +166,17 @@ final class Pbkdf2 {
 ///
 /// {@category Crypto}
 final class Hkdf {
-  final Hash hash;
+  final Hash digest;
 
-  const Hkdf([this.hash = Hash.sha256]);
+  const Hkdf([this.digest = Hash.sha256]);
 
   /// [length] bytes from [secret], with optional [salt] and context [info].
-  Uint8List derive(List<int> secret, {List<int> salt = const [], List<int> info = const [], int length = 32}) {
-    if (Native.isAvailable) {
-      return _with3(
-        secret,
-        salt,
-        info,
-        (s, sl, a, al, i, il) => Native.withOut(length, (out) => _N.hkdf(hash.index, s, sl, a, al, i, il, out, length)),
-      );
-    }
-    final h = hash._crypto;
-    if (h == null) throw UnsupportedError('hkdf ${hash.name} needs dart_toolkit_native: ${Native.reason}');
-    final prk = crypto.Hmac(h, salt.isEmpty ? Uint8List(hash.length) : salt).convert(secret).bytes;
-    final out = BytesBuilder(copy: false);
-    var t = <int>[];
-    for (var i = 1; out.length < length; i++) {
-      t = crypto.Hmac(h, prk).convert([...t, ...info, i]).bytes;
-      out.add(t);
-    }
-    return Uint8List.sublistView(out.takeBytes(), 0, length);
-  }
+  Uint8List derive(List<int> secret, {List<int> salt = const [], List<int> info = const [], int length = 32}) => _with3(
+    secret,
+    salt,
+    info,
+    (s, sl, a, al, i, il) => Native.withOut(length, (out) => _N.hkdf(digest.index, s, sl, a, al, i, il, out, length)),
+  );
 
   /// Several keys from one secret, one `info` label each.
   List<Uint8List> expand(List<int> secret, {required Map<String, int> lengths, List<int> salt = const []}) => [
@@ -133,65 +185,21 @@ final class Hkdf {
   ];
 }
 
-/// Argon2id (RFC 9106): the password hash to use when the native library is present.
+/// Password storage: [hash] with the algorithm of your choice, [verify] with whatever the
+/// string says it is.
 ///
-/// {@category Crypto}
-final class Argon2id {
-  /// Memory in KiB; 64 MiB by default.
-  final int memoryKib;
-  final int iterations;
-  final int parallelism;
-
-  const Argon2id({this.memoryKib = 65536, this.iterations = 3, this.parallelism = 4});
-
-  Uint8List derive(List<int> password, List<int> salt, {int length = 32}) =>
-      _with2(password, salt, (p, pl, s, sl) => Native.withOut(length, (out) => _argon2(p, pl, s, sl, out, length)));
-
-  int _argon2(_U8 p, int pl, _U8 s, int sl, _U8 out, int length) {
-    Native.require('argon2id');
-    return _N.argon2id(p, pl, s, sl, memoryKib, iterations, parallelism, out, length);
-  }
-}
-
-/// Password hashing that carries its own parameters, so verification reads them back:
-/// `argon2id$m=65536,t=3,p=4$<salt>$<hash>` natively, `pbkdf2-sha256$600000$<salt>$<hash>` in Dart.
+/// ```dart
+/// final stored = Password.hash(input);                 // Argon2id
+/// final legacy = Password.hash(input, const Bcrypt()); // for a table other software reads
+/// Password.verify(input, stored);
+/// ```
 ///
 /// {@category Crypto}
 abstract final class Password {
-  /// A stored form of [password], with a fresh 16-byte salt.
-  static String hash(String password) {
-    final salt = _randomBytes(16);
-    final pw = utf8.encode(password);
-    if (Native.isAvailable) {
-      const a = Argon2id();
-      final h = a.derive(pw, salt);
-      return 'argon2id\$m=${a.memoryKib},t=${a.iterations},p=${a.parallelism}\$${salt.base64Url}\$${h.base64Url}';
-    }
-    const k = Pbkdf2(Hash.sha256);
-    return 'pbkdf2-sha256\$${k.iterations}\$${salt.base64Url}\$${k.derive(pw, salt).base64Url}';
-  }
+  static String hash(String password, [PasswordHasher algorithm = const Argon2id()]) => algorithm.hash(password);
 
-  /// Whether [password] produced [stored]; constant time over the hash.
-  static bool verify(String password, String stored) {
-    final parts = stored.split('\$');
-    if (parts.length != 4) return false;
-    final pw = utf8.encode(password);
-    final salt = parts[2].base64Bytes;
-    final expected = parts[3].base64Bytes;
-    final Uint8List actual;
-    switch (parts[0]) {
-      case 'argon2id':
-        final p = {for (final kv in parts[1].split(',')) kv.split('=')[0]: int.parse(kv.split('=')[1])};
-        actual = Argon2id(
-          memoryKib: p['m']!,
-          iterations: p['t']!,
-          parallelism: p['p']!,
-        ).derive(pw, salt, length: expected.length);
-      case 'pbkdf2-sha256':
-        actual = Pbkdf2(Hash.sha256, iterations: int.parse(parts[1])).derive(pw, salt, length: expected.length);
-      default:
-        return false;
-    }
-    return Crypto.equals(actual, expected);
-  }
+  /// Whether [password] produced [stored]: bcrypt (`$2a$`, `$2b$`, `$2y$`), Argon2, scrypt or
+  /// PBKDF2 in PHC form. Malformed input is `false`, never an error.
+  static bool verify(String password, String stored) =>
+      _with2(utf8.encode(password), utf8.encode(stored), (p, pl, s, sl) => _N.passwordVerify(p, pl, s, sl)) == 1;
 }

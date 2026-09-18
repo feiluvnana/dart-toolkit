@@ -35,15 +35,16 @@ opposite. Coherence, documentation and feature count rank below both.
   numbers from the same minute, never one. `tool/startup.dart` prints the per-module table.
 - **Nothing third-party at runtime but `path`.** Every parser, the HTTP client and the archive
   formats are the package's own; `package:html`, `xml`, `archive` and `http` together cost a
-  second of front-end work per `dart run`. `crypto` is the pure-Dart fallback for digests and
-  will go when the Dart SHA-2 is written.
+  second of front-end work per `dart run`.
 - **The native library does what Dart cannot do fast.** `native/` is one Rust `cdylib`,
   `dart_toolkit_native`, prebuilt per platform and loaded through `dart:ffi` by `native.dart`'s
   `Native`; only `fs` and `crypto` import it, so `dart:ffi` costs a program that uses neither
-  nothing. It holds digests, MACs, KDFs, AEAD, signatures and every archive format. Dart keeps a fallback
-  only where a script must run without the asset (digests, HMAC, HKDF, PBKDF2); everything else
-  throws `UnsupportedError` naming what is missing and why. Bytes cross as pointer and length,
-  files by path, long work inside `Isolate.run`; no callbacks into Dart.
+  nothing. It holds every digest, MAC, KDF, password hash, cipher, key agreement, signature and
+  archive format; there is no Dart fallback for any of them, because two implementations of one
+  primitive is two places for a bug. Without the library those calls throw `UnsupportedError`
+  naming what was needed and why it is absent. Bytes cross as pointer and length, files by path,
+  long work inside `Isolate.run`; no callbacks into Dart. A new primitive is one Rust function
+  behind one `lookupFunction`, plus its published vector in `test/crypto_test.dart`.
 - **A file operation streams.** Hashing, downloading and archiving name the file, not its bytes.
 - **An executable runs through pub's snapshot**: `dart run dart_toolkit:<name>`.
 - **Error policy is chosen at the use site.** `parallelize` and `scrape` settle everything into

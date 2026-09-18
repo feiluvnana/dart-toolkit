@@ -30,7 +30,7 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 | `async.dart` | `parallelize`, `retry`, `Mutex`, `CancelToken`, stream operators | — |
 | `cli.dart` | `Cli`, `Console` (tables, spinners, progress, prompts), `Logger`, ANSI | — |
 | `fs.dart` | `Path`; zip, 7z, rar, tar and gz/xz/zstd/bz2 archives with passwords, through the native library | path |
-| `crypto.dart` | digests (MD5 to BLAKE3), HMAC, PBKDF2, HKDF, Argon2id, `Password`, AES-GCM, ChaCha20-Poly1305, Ed25519, ECDSA, RSA verify | crypto (fallback) |
+| `crypto.dart` | 16 digests and 4 checksums, HMAC, PBKDF2, HKDF, Argon2id, scrypt, bcrypt, `Password`, AES-GCM/CBC, ChaCha20- and XChaCha20-Poly1305, X25519, ECDH, Ed25519, ECDSA, RSA (sign, verify, OAEP), PEM keys, `Jwt`, `Totp` | — |
 | `process.dart` | `run`, pipelines, `which` | — |
 | `http.dart` | `Request`, `Response`, `Client`, `Http.session`, scraping, downloads, `res.html`, `url.json()` | — |
 
@@ -185,19 +185,27 @@ final rows = json.$(r'$.items[*]').table;                 // or Table.csv(text),
 
 ### Crypto
 
-Digests, MACs, key derivation, authenticated encryption and signatures, the same on every
-platform through the native library, with pure Dart for digests, HMAC, HKDF and PBKDF2 when it
-is absent. Published vectors and `openssl` agree with every one of them in the test suite.
+Every primitive is the native library's, so it is the same and fast on every platform; the
+test suite checks each against its published vectors and against `openssl`.
 
 ```dart
-'abc'.sha256;  bytes.blake3;  await file.hash(Hash.sha3_256);  'body'.hmac(Hash.sha256, secret)
-final key = Key.random();  Crypto.token();  Crypto.equals(a, b)
-Pbkdf2(Hash.sha256).derive(pw, salt);  Hkdf().derive(secret, info: ctx, length: 64)
-Password.hash('pw');  Password.verify('pw', stored)                 // argon2id, self-describing
-final box = Aes.gcm(key);  box.open(box.seal(plain, aad: header))   // nonce ‖ ct ‖ tag
-await box.encryptFile(src, dst)
-Ed25519.generate().sign(msg);  Ecdsa.p256(priv).sign(msg);  Rsa.verify(pem, msg, sig)
+'abc'.sha256;  bytes.blake3;  await file.hash(Hash.sha3_256);  file.crc32();  bytes.xxh3
+'body'.hmac(Hash.sha256, secret);  Crypto.token();  Crypto.uuid();  Crypto.equals(a, b)
+Password.hash('pw');  Password.hash('pw', const Bcrypt());  Password.verify('pw', stored)
+Argon2id().derive(pw, salt);  Scrypt().derive(pw, salt);  Hkdf().derive(secret, info: ctx)
+final box = Aes.gcm(Key.random());  box.open(box.seal(plain, aad: header))   // nonce ‖ ct ‖ tag
+await box.encryptFile(src, dst);  Aes.cbc(key).open(fromOpenssl);  XChaCha20Poly1305(key)
+X25519.generate().agree(theirPublicKey);  Ecdh.generate().agree(theirPublicKey)
+Ed25519.fromPem(pem).sign(msg);  Ecdsa.generate().publicPem;  Rsa.generate().sign(msg, pss: true)
+Jwt.sign({'sub': 'me', 'exp': Jwt.at(in10min)}, key);  Jwt.verify(token, publicPem)
+Totp.fromBase32(secret).code();  totp.verify(input);  totp.uri('me@example.com', issuer: 'App')
 ```
+
+`Password` writes the standard string for each algorithm (`$argon2id$…`, `$2b$…`, `$scrypt$…`,
+`$pbkdf2-sha256$…`) and verifies any of them, so a user table another program wrote works as is.
+`Jwt` picks the algorithm from the key you pass (`Key` → HS256, `Ed25519` → EdDSA, `Ecdsa` →
+ES256, `Rsa` → RS256 or PS256) and refuses a token whose `alg` does not match the key it is
+verified with.
 
 ### Concurrency
 

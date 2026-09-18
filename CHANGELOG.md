@@ -3,6 +3,42 @@
 Every release so far is breaking and ships no deprecation shims. Numbers are back-to-back
 deltas measured on the same machine; `tool/startup.dart` reproduces the startup ones.
 
+## Unreleased
+
+`crypto` is native only and covers what scripts commonly reach for. `package:crypto` is gone;
+`path` is the only dependency.
+
+- **No Dart fallback.** Digests, HMAC, HKDF and PBKDF2 no longer have a pure-Dart twin; without
+  the native library they throw `UnsupportedError` like everything else. One implementation per
+  primitive, and `crypto` imports nothing third-party.
+- **Digests**: SHA-512/256, SHA3-224, SHA3-384, Keccak-256, BLAKE2s, RIPEMD-160 join the ten
+  there were; HMAC, PBKDF2 and HKDF work over every cryptographic digest (not BLAKE2/BLAKE3).
+  `bytes.hashBytes` is one native call, no streaming handle.
+- **Checksums** in the same `Hash` enum: CRC-32, CRC-32C, xxHash64, XXH3; `bytes.crc32`,
+  `file.xxh3()`, `checksum(Hash.crc32c)`. `Hash.isChecksum` tells them apart.
+- **Passwords** in their standard string forms: `Argon2id`, `Bcrypt`, `Scrypt`, `Pbkdf2` all
+  implement `PasswordHasher`; `Password.hash(pw, const Bcrypt())` writes `$2b$…`,
+  `Password.verify` reads bcrypt (`$2a$`/`$2b$`/`$2y$`) and PHC Argon2, scrypt and PBKDF2
+  strings, so tables other software wrote verify as is. `Scrypt.derive` for raw keys.
+  `Pbkdf2`'s and `Hkdf`'s `hash` field is now `digest`; `Pbkdf2(Hash.sha256, 4096)` is positional.
+- **Ciphers**: `XChaCha20Poly1305` (24-byte nonce) and `Aes.cbc` (PKCS#7, no tag, for
+  `openssl enc` interop; `aad` is refused).
+- **Key agreement**: `X25519` and `Ecdh.p256`, both `generate()` / `agree(theirPublicKey)`.
+- **Keys as PEM**: `Ed25519.fromPem`, `Ecdsa.fromPem` (PKCS#8 or SEC1), `.pem`, `.publicPem`,
+  `publicFromPem`; keys from `openssl genpkey` load and the exported PEMs match `openssl pkey`.
+- **RSA** is a full type: `Rsa.generate(bits)`, `Rsa.fromPem`, `publicPem`, `sign` with PKCS#1
+  v1.5 or PSS, `verify` with either, `Rsa.encrypt` / `decrypt` with OAEP.
+- **`Jwt`**: `sign(claims, key)` chooses HS256/384/512, EdDSA, ES256, RS256/PS256 from the key;
+  `verify` checks the signature, `exp` and `nbf` and refuses `alg: none` or an `alg` that does
+  not match the key's kind. The HS256 output is byte-for-byte jwt.io's example.
+- **`Totp`**: RFC 6238 codes, HOTP, `verify` with a drift window, `uri` for QR enrolment,
+  `Key.fromBase32` and `.base32` for the secrets.
+- `Crypto.uuid()`; `Native.take` for library-allocated results, which also shortened the
+  archive listing binding.
+
+Measured back to back, importing `crypto` costs the same as before within the noise; the
+library grew from 2.5 to 3.0 MB and loads lazily in about 15 ms on first use.
+
 ## 0.0.4 — dependency-free, native where it counts
 
 Every parser and the HTTP client are in-house, hashing is native, one library per module, and

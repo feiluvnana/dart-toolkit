@@ -1,8 +1,8 @@
 part of '../../native.dart';
 
 /// The toolkit's native library, `dart_toolkit_native`: one Rust `cdylib` with the same
-/// functions on every platform, shipped prebuilt inside the package. `crypto` and `fs` use it
-/// when it loads and fall back to Dart, or throw [UnsupportedError], when it does not.
+/// functions on every platform, shipped prebuilt inside the package. `crypto` and the archive
+/// half of `fs` are thin bindings to it and throw [UnsupportedError] when it did not load.
 ///
 /// Lookup order: `DART_TOOLKIT_NATIVE` (a path), the directory of the running executable, then
 /// `native/prebuilt/<os>_<arch>/` inside the package.
@@ -118,6 +118,26 @@ abstract final class Native {
       return Uint8List.fromList(ptr.asTypedList(n));
     } finally {
       free(ptr);
+    }
+  }
+
+  static final void Function(Pointer<Uint8>, int) _free = require(
+    'free',
+  ).lookupFunction<Void Function(Pointer<Uint8>, IntPtr), void Function(Pointer<Uint8>, int)>('tk_free');
+
+  /// Runs [body] with a pointer-and-length pair the library fills with its own allocation;
+  /// the bytes are copied out and the allocation freed. A negative return throws [StateError].
+  static Uint8List take(int Function(Pointer<Pointer<Uint8>> out, Pointer<IntPtr> len) body) {
+    final out = malloc(sizeOf<Pointer<Uint8>>()).cast<Pointer<Uint8>>();
+    final len = malloc(sizeOf<IntPtr>()).cast<IntPtr>();
+    try {
+      if (body(out, len) < 0) throw StateError(lastError());
+      final data = Uint8List.fromList(out.value.asTypedList(len.value));
+      _free(out.value, len.value);
+      return data;
+    } finally {
+      free(out.cast());
+      free(len.cast());
     }
   }
 

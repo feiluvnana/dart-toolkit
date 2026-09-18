@@ -1,8 +1,8 @@
 part of '../../crypto.dart';
 
-/// An authenticated cipher: [seal] chooses a fresh 12-byte nonce and prepends it, so the
-/// output is `nonce ‖ ciphertext ‖ tag` and [open] needs only the key. A tampered byte, a
-/// wrong key or a wrong [aad] makes [open] throw [CipherException]. Needs the native library.
+/// A symmetric cipher: [seal] chooses a fresh random nonce and prepends it, so the output is
+/// `nonce ‖ ciphertext ‖ tag` and [open] needs only the key. A tampered byte, a wrong key or a
+/// wrong [aad] makes [open] throw [CipherException].
 ///
 /// ```dart
 /// final box = Aes.gcm(Key.random());
@@ -19,8 +19,8 @@ sealed class Cipher {
 
   /// Encrypts [plain]; [aad] is authenticated but not encrypted.
   Uint8List seal(List<int> plain, {List<int> aad = const []}) {
-    Native.require(_name);
-    final nonce = _randomBytes(12);
+    _checkAad(aad);
+    final nonce = _randomBytes(_nonceLength);
     final ct = _with3(
       key.bytes,
       aad,
@@ -35,11 +35,11 @@ sealed class Cipher {
 
   /// Decrypts what [seal] produced.
   Uint8List open(List<int> sealed, {List<int> aad = const []}) {
-    Native.require(_name);
-    if (sealed.length < 12 + 16) throw CipherException('Sealed data is too short');
-    final nonce = sealed.sublist(0, 12);
-    final body = sealed.sublist(12);
-    final out = _with3(
+    _checkAad(aad);
+    if (sealed.length < _nonceLength + 16) throw CipherException('Sealed data is too short');
+    final nonce = sealed.sublist(0, _nonceLength);
+    final body = sealed.sublist(_nonceLength);
+    return _with3(
       key.bytes,
       aad,
       body,
@@ -55,7 +55,6 @@ sealed class Cipher {
         }
       }),
     );
-    return out;
   }
 
   /// Encrypts [source] into [dest] in 1 MB sealed chunks; memory stays flat.
@@ -91,10 +90,15 @@ sealed class Cipher {
     }
   }
 
-  String get _name => switch (this) {
-    Aes() => 'AES-GCM',
-    ChaCha20Poly1305() => 'ChaCha20-Poly1305',
+  int get _nonceLength => switch (_alg) {
+    2 => 24,
+    3 => 16,
+    _ => 12,
   };
+
+  void _checkAad(List<int> aad) {
+    if (_alg == 3 && aad.isNotEmpty) throw ArgumentError('AES-CBC cannot authenticate aad; use Aes.gcm');
+  }
 
   static Uint8List _counter(int i) => Uint8List(8)..buffer.asByteData().setUint64(0, i);
   static Uint8List _lengthPrefix(int n) => Uint8List(4)..buffer.asByteData().setUint32(0, n);
@@ -113,11 +117,18 @@ sealed class Cipher {
   }
 }
 
-/// AES in GCM mode; the key is 16 or 32 bytes.
+/// AES with a 16- or 32-byte key.
 ///
 /// {@category Crypto}
 final class Aes extends Cipher {
+  /// AES-GCM: authenticated, the default choice.
   const Aes.gcm(Key key) : super._(key, 0);
+
+  /// AES-CBC with PKCS#7 padding: no integrity check, for data other systems produced or
+  /// expect (`openssl enc -aes-256-cbc`). The output is `iv ‖ ciphertext`; `aad` is not allowed,
+  /// and [open] throws [CipherException] only when the padding is wrong, which a wrong key
+  /// mostly, not always, causes.
+  const Aes.cbc(Key key) : super._(key, 3);
 }
 
 /// ChaCha20-Poly1305 (RFC 8439); the key is 32 bytes.
@@ -125,6 +136,14 @@ final class Aes extends Cipher {
 /// {@category Crypto}
 final class ChaCha20Poly1305 extends Cipher {
   const ChaCha20Poly1305(Key key) : super._(key, 1);
+}
+
+/// XChaCha20-Poly1305: ChaCha20-Poly1305 with a 24-byte nonce, safe for any number of
+/// messages under one key.
+///
+/// {@category Crypto}
+final class XChaCha20Poly1305 extends Cipher {
+  const XChaCha20Poly1305(Key key) : super._(key, 2);
 }
 
 /// Decryption failed: the data, the key or the aad is not what was sealed.

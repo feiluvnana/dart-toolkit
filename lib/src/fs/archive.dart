@@ -175,48 +175,32 @@ final class _NativeArchive {
         Int32 Function(Uint32, Pointer<Uint8>, IntPtr, Pointer<Uint8>, IntPtr),
         int Function(int, Pointer<Uint8>, int, Pointer<Uint8>, int)
       >('tk_decompress');
-  static final _free = _lib.lookupFunction<Void Function(Pointer<Uint8>, IntPtr), void Function(Pointer<Uint8>, int)>(
-    'tk_free',
-  );
-
   static void _check(int code) {
-    if (code >= 0) return;
-    final message = Native.lastError();
-    if (message.contains('password') || message.contains('Wrong password') || message.contains('checksum')) {
-      throw FormatException(message);
-    }
-    throw FormatException(message);
+    if (code < 0) throw FormatException(Native.lastError());
   }
 
-  static List<ArchiveEntry> list(String path, String? password) => Native.withText(
-    path,
-    (p, pl) => Native.withText(password, (pw, pwl) {
-      final outPtr = Native.malloc(sizeOf<Pointer<Uint8>>()).cast<Pointer<Uint8>>();
-      final outLen = Native.malloc(sizeOf<IntPtr>()).cast<IntPtr>();
-      try {
-        _check(_list(p, pl, pw, pwl, outPtr, outLen));
-        final data = outPtr.value.asTypedList(outLen.value);
-        final json = jsonDecode(utf8.decode(data)) as List;
-        _free(outPtr.value, outLen.value);
-        return [
-          for (final e in json.cast<Map<String, Object?>>())
-            ArchiveEntry(
-              name: e['name'] as String,
-              size: e['size'] as int,
-              compressedSize: e['compressed'] as int,
-              isDir: e['dir'] as bool,
-              isEncrypted: e['encrypted'] as bool,
-              modified: e['modified'] == null
-                  ? null
-                  : DateTime.fromMillisecondsSinceEpoch((e['modified'] as int) * 1000),
-            ),
-        ];
-      } finally {
-        Native.free(outPtr.cast());
-        Native.free(outLen.cast());
-      }
-    }),
-  );
+  static List<ArchiveEntry> list(String path, String? password) {
+    final Uint8List data;
+    try {
+      data = Native.withText(
+        path,
+        (p, pl) => Native.withText(password, (pw, pwl) => Native.take((out, len) => _list(p, pl, pw, pwl, out, len))),
+      );
+    } on StateError catch (e) {
+      throw FormatException(e.message);
+    }
+    return [
+      for (final e in (jsonDecode(utf8.decode(data)) as List).cast<Map<String, Object?>>())
+        ArchiveEntry(
+          name: e['name'] as String,
+          size: e['size'] as int,
+          compressedSize: e['compressed'] as int,
+          isDir: e['dir'] as bool,
+          isEncrypted: e['encrypted'] as bool,
+          modified: e['modified'] == null ? null : DateTime.fromMillisecondsSinceEpoch((e['modified'] as int) * 1000),
+        ),
+    ];
+  }
 
   static int extract(String path, String dest, String? password) => Native.withText(
     path,
