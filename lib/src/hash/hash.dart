@@ -1,11 +1,8 @@
-/// # Hashing
-///
-/// {@category Files}
-library;
+// # Hashing
+//
+// {@category Files}
 
-import 'package:crypto/crypto.dart' as crypto;
-
-import '../fs/path.dart';
+part of '../../hash.dart';
 
 /// Cryptographic digests of a file, streamed.
 ///

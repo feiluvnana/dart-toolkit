@@ -5,4 +5,6 @@
 /// {@category Collections}
 library;
 
-export '../src/collection/iterable_extensions.dart';
+import 'dart:math';
+
+part 'src/collection/iterable_extensions.dart';

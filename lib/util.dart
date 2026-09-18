@@ -6,7 +6,11 @@
 /// {@category Utilities}
 library;
 
-export '../src/util/env.dart';
-export '../src/util/progress.dart';
-export '../src/util/stdio.dart';
-export '../src/util/time.dart';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math';
+
+part 'src/util/env.dart';
+part 'src/util/progress.dart';
+part 'src/util/stdio.dart';
+part 'src/util/time.dart';

@@ -1,4 +1,4 @@
-import '../core/json_document.dart';
+part of '../../process.dart';
 
 final _newline = RegExp(r'\r?\n');
 

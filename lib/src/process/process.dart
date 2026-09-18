@@ -1,12 +1,4 @@
-import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
-
-import '../core/json_document.dart';
-import '../fs/path.dart';
-import '../util/env.dart';
-import '../util/stdio.dart';
-import 'shell_result.dart';
+part of '../../process.dart';
 
 /// Splits [command] as a POSIX shell would read a simple command: whitespace separates,
 /// single quotes take everything literally, double quotes let `\\ \" \$ \`` escape, and an

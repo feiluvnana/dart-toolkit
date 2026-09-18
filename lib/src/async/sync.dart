@@ -1,5 +1,4 @@
-import 'dart:async';
-import 'dart:collection';
+part of '../../async.dart';
 
 /// A concurrency-limiting synchronization primitive.
 ///

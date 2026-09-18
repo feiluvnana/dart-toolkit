@@ -1,13 +1,6 @@
-/// The HTML bridges on `http.Response`, `Uri` and `String`; the tree itself is in `dom.dart`.
-library;
+// The HTML bridges on `http.Response`, `Uri` and `String`; the tree itself is in `dom.dart`.
 
-import 'package:http/http.dart' as http;
-
-import '../http/fetch.dart';
-import '../http/response.dart';
-import 'dom.dart';
-
-export 'dom.dart' show Element, Elements, HtmlDocument, Node, Text, decodeEntities;
+part of '../../html.dart';
 
 final Expando<HtmlDocument> _htmlMemo = Expando<HtmlDocument>('htmlMemo');
 
@@ -28,7 +21,7 @@ extension UriHtmlExtensions on Uri {
   /// Throws [HttpException] unless the status is 2xx — an error page parses fine and
   /// then matches nothing. Use `get` with `isOk` to handle it yourself.
   Future<HtmlDocument> html({Map<String, String>? headers, http.Client? client}) async =>
-      (await fetchOk(this, headers, client)).html;
+      (await fetch(headers: headers, client: client)).html;
 }
 
 /// Parsing on [String].

@@ -1,9 +1,6 @@
-/// The HTML tree: nodes, elements, and the queries on them.
-library;
+// The HTML tree: nodes, elements, and the queries on them.
 
-import 'entities.dart';
-import 'parser.dart';
-import 'selector.dart';
+part of '../../html.dart';
 
 /// A node in a parsed HTML tree: an [Element] or a [Text].
 ///
@@ -12,7 +9,7 @@ sealed class Node {
   /// The element containing this node, or `null` at the root.
   Element? parent;
 
-  /// The text of this node and everything below it, entities decoded.
+  /// The text of this node and everything below it, _entities decoded.
   String get text;
 
   /// This node serialised back to HTML.
@@ -34,7 +31,7 @@ final class Text extends Node {
   String get text => data;
 
   @override
-  String get outerHtml => escapeText(data);
+  String get outerHtml => _escapeText(data);
 }
 
 /// An element: a lowercase [name], its [attributes], and the [nodes] inside it.
@@ -68,7 +65,7 @@ final class Element extends Node {
   String? attr(String name) => attributes[name];
 
   /// Every descendant matching CSS [selector], in document order.
-  Elements $(String selector) => Elements(Selector.parse(selector).matchAll(this));
+  Elements $(String selector) => Elements(_Selector.parse(selector).matchAll(this));
 
   @override
   String get text {
@@ -83,7 +80,7 @@ final class Element extends Node {
     return sb.toString();
   }
 
-  /// Text lines split at `<br>` and newlines, entities decoded, tags dropped, blanks removed.
+  /// Text lines split at `<br>` and newlines, _entities decoded, tags dropped, blanks removed.
   List<String> get lines {
     final out = <String>[];
     final current = StringBuffer();
@@ -120,11 +117,11 @@ final class Element extends Node {
   String get outerHtml {
     final sb = StringBuffer('<$name');
     for (final MapEntry(:key, :value) in attributes.entries) {
-      sb.write(' $key="${escapeAttribute(value)}"');
+      sb.write(' $key="${_escapeAttribute(value)}"');
     }
     sb.write('>');
-    if (voidElements.contains(name)) return sb.toString();
-    if (rawTextElements.contains(name)) {
+    if (_voidElements.contains(name)) return sb.toString();
+    if (_rawTextElements.contains(name)) {
       for (final n in nodes) {
         sb.write(n is Text ? n.data : n.outerHtml);
       }
@@ -169,7 +166,7 @@ extension type Elements(List<Element> _list) implements List<Element> {
 
   /// Every descendant of every match that matches [selector], each once, in document order.
   Elements $(String selector) {
-    final s = Selector.parse(selector);
+    final s = _Selector.parse(selector);
     final seen = <Element>{};
     return Elements([
       for (final e in _list)
@@ -192,10 +189,10 @@ final class HtmlDocument {
 
   /// Parses [text] as HTML. Tag soup is fine: unclosed `<p>` and `<li>`, missing
   /// `<html>`/`<body>`, and `<tr>` straight inside `<table>` all land where a browser puts them.
-  factory HtmlDocument.parse(String text) => HtmlDocument(parseHtml(text));
+  factory HtmlDocument.parse(String text) => HtmlDocument(_parseHtml(text));
 
   /// Every element matching CSS [selector], in document order.
-  Elements $(String selector) => Elements(Selector.parse(selector).matchAll(root, includeSelf: true));
+  Elements $(String selector) => Elements(_Selector.parse(selector).matchAll(root, includeSelf: true));
 
   /// The `<head>` element.
   Element get head => root.children.firstWhere((e) => e.name == 'head');
@@ -203,7 +200,7 @@ final class HtmlDocument {
   /// The `<body>` element.
   Element get body => root.children.firstWhere((e) => e.name == 'body');
 
-  /// The document's text, entities decoded.
+  /// The document's text, _entities decoded.
   String get text => root.text;
 
   /// The document serialised back to HTML.
@@ -267,11 +264,11 @@ String? _reference(String name) {
     if (code == null || code <= 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) return null;
     return String.fromCharCode(code);
   }
-  return entities[name];
+  return _entities[name];
 }
 
 /// [text] with `&`, `<` and `>` escaped for a text node.
-String escapeText(String text) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+String _escapeText(String text) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 
 /// [value] with `&` and `"` escaped for a double-quoted attribute.
-String escapeAttribute(String value) => value.replaceAll('&', '&amp;').replaceAll('"', '&quot;');
+String _escapeAttribute(String value) => value.replaceAll('&', '&amp;').replaceAll('"', '&quot;');

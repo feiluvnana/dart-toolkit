@@ -1,9 +1,4 @@
-import 'dart:async';
-
-import '../async/cancellation_token.dart';
-import '../util/stdio.dart';
-import 'ansi.dart';
-import 'lifecycle.dart';
+part of '../../cli.dart';
 
 /// A command line the program cannot act on: an unknown option, a bad value, a missing
 /// required option. [Cli.run] prints it and exits 64; [CliCommand.run] throws it.

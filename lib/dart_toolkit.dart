@@ -1,15 +1,15 @@
 /// # Dart Toolkit
 library;
 
-export 'archive/archive.dart';
-export 'async/async.dart';
-export 'cli/cli.dart';
-export 'collection/collection.dart';
-export 'core/core.dart';
-export 'fs/fs.dart';
-export 'hash/hash.dart';
-export 'html/html.dart';
-export 'http/http.dart';
-export 'process/process.dart';
-export 'util/util.dart';
-export 'xml/xml.dart';
+export 'archive.dart';
+export 'async.dart';
+export 'cli.dart';
+export 'collection.dart';
+export 'core.dart';
+export 'fs.dart';
+export 'hash.dart';
+export 'html.dart';
+export 'http.dart';
+export 'process.dart';
+export 'util.dart';
+export 'xml.dart';

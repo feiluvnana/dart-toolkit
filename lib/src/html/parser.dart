@@ -1,19 +1,18 @@
-/// A tag-soup HTML parser: one pass, no HTML5 insertion modes, the implicit closes and
-/// synthesised elements a scraper meets in practice.
-library;
+// A tag-soup HTML parser: one pass, no HTML5 insertion modes, the implicit closes and
+// synthesised elements a scraper meets in practice.
 
-import 'dom.dart';
+part of '../../html.dart';
 
 /// Elements with no content and no end tag.
-const voidElements = {
+const _voidElements = {
   'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr', //
   'basefont', 'bgsound', 'frame', 'keygen', 'command',
 };
 
-/// Elements whose content is raw text up to their end tag, entities left alone.
-const rawTextElements = {'script', 'style', 'xmp', 'iframe', 'noembed', 'noframes'};
+/// Elements whose content is raw text up to their end tag, _entities left alone.
+const _rawTextElements = {'script', 'style', 'xmp', 'iframe', 'noembed', 'noframes'};
 
-/// Elements whose content is text up to their end tag, entities decoded.
+/// Elements whose content is text up to their end tag, _entities decoded.
 const _rcdataElements = {'textarea', 'title'};
 
 /// Elements that belong in `<head>` when they appear before any body content.
@@ -46,7 +45,7 @@ const _closesSibling = <String, (Set<String>, Set<String>)>{
 };
 
 /// Parses [source] into an `<html>` element with `<head>` and `<body>`.
-Element parseHtml(String source) => _Parser(source).run();
+Element _parseHtml(String source) => _Parser(source).run();
 
 final class _Parser {
   final String src;
@@ -313,9 +312,9 @@ final class _Parser {
     }
     final parent = current;
     parent.nodes.add(element..parent = parent);
-    if (voidElements.contains(name) || selfClosing) return;
+    if (_voidElements.contains(name) || selfClosing) return;
 
-    if (rawTextElements.contains(name) || _rcdataElements.contains(name)) {
+    if (_rawTextElements.contains(name) || _rcdataElements.contains(name)) {
       final close = RegExp('</$name\\s*>', caseSensitive: false);
       final m = close.firstMatch(src.substring(pos));
       final end = m == null ? src.length : pos + m.start;

@@ -1,14 +1,8 @@
-/// # Archives
-///
-/// {@category Files}
-library;
+// # Archives
+//
+// {@category Files}
 
-import 'dart:io';
-
-import 'package:archive/archive_io.dart';
-import 'package:path/path.dart' as p;
-
-import '../fs/path.dart';
+part of '../../archive.dart';
 
 /// Zip archive operations on [Path].
 ///

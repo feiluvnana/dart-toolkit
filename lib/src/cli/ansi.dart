@@ -1,7 +1,4 @@
-import 'dart:io';
-
-import '../util/env.dart';
-import '../util/stdio.dart';
+part of '../../cli.dart';
 
 /// Controller for ANSI escape codes and terminal color output.
 ///

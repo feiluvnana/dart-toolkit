@@ -1,11 +1,4 @@
-import 'dart:async';
-
-import 'package:http/http.dart' as http;
-
-import '../async/isolate.dart';
-import '../core/json_document.dart';
-import 'fetch.dart';
-import 'session.dart';
+part of '../../http.dart';
 
 final Expando<String> _bodyMemo = Expando<String>('bodyMemo');
 final Expando<JsonDocument> _jsonMemo = Expando<JsonDocument>('jsonMemo');
@@ -67,7 +60,7 @@ extension UriExtensions on Uri {
 
   /// Performs an HTTP GET request to this URI.
   Future<http.Response> get({Map<String, String>? headers, http.Client? client}) async {
-    final lease = clientFor(client);
+    final lease = _clientFor(client);
     try {
       return await lease.client.get(this, headers: headers);
     } finally {
@@ -77,7 +70,7 @@ extension UriExtensions on Uri {
 
   /// Performs an HTTP POST request to this URI.
   Future<http.Response> post({Map<String, String>? headers, Object? body, http.Client? client}) async {
-    final lease = clientFor(client);
+    final lease = _clientFor(client);
     try {
       return await lease.client.post(this, headers: headers, body: body);
     } finally {
@@ -85,10 +78,17 @@ extension UriExtensions on Uri {
     }
   }
 
-  /// Fetches this URI and parses the response body as JSON.
+  /// GETs this URI and throws [HttpException] unless the status is 2xx.
   ///
-  /// Throws [HttpException] unless the status is 2xx. Use [get] with
+  /// `url.json()`, `url.html()` and `url.xml()` are `fetch` plus a parse; use [get] with
   /// [ResponseExtensions.isOk] to handle a failure yourself.
+  Future<http.Response> fetch({Map<String, String>? headers, http.Client? client}) async {
+    final res = await get(headers: headers, client: client);
+    if (!res.isOk) throw HttpException('GET failed with status ${res.statusCode}', uri: this);
+    return res;
+  }
+
+  /// Fetches this URI and parses the response body as JSON; see [fetch].
   Future<JsonDocument> json({Map<String, String>? headers, http.Client? client}) async =>
-      (await fetchOk(this, headers, client)).json;
+      (await fetch(headers: headers, client: client)).json;
 }

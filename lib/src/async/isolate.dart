@@ -1,5 +1,4 @@
-import 'dart:async';
-import 'dart:isolate';
+part of '../../async.dart';
 
 /// Extension on closures to offload execution to a background [Isolate].
 ///

@@ -5,4 +5,8 @@
 /// {@category Files}
 library;
 
-export '../src/hash/hash.dart';
+import 'package:crypto/crypto.dart' as crypto;
+
+import 'fs.dart';
+
+part 'src/hash/hash.dart';

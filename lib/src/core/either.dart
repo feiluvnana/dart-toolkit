@@ -1,4 +1,4 @@
-import 'dart:async';
+part of '../../core.dart';
 
 Object _throwable(Object? value) => value ?? StateError('Unwrapped a Left holding null');
 

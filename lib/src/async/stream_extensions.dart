@@ -1,4 +1,4 @@
-import 'dart:async';
+part of '../../async.dart';
 
 /// Stream operators built on `dart:async`.
 ///

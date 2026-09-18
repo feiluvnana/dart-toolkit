@@ -1,3 +1,5 @@
+part of '../../core.dart';
+
 /// Common string convenience extensions.
 ///
 /// {@category Formats}

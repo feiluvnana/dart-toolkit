@@ -18,8 +18,8 @@ about 0.3 s for a narrow import — measured, and the reason every program in th
 modules:
 
 ```dart
-import 'package:dart_toolkit/cli/cli.dart';
-import 'package:dart_toolkit/util/util.dart';
+import 'package:dart_toolkit/cli.dart';
+import 'package:dart_toolkit/util.dart';
 ```
 
 The barrel re-exports everything and is there for tools you `dart compile` once, where tree

@@ -1,4 +1,4 @@
-import 'dart:async';
+part of '../../async.dart';
 
 /// Signals cancellation to cooperating asynchronous operations.
 ///

@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:dart_toolkit/html/html.dart';
+import 'package:dart_toolkit/html.dart';
 import 'package:html/parser.dart' as reference;
 import 'package:test/test.dart';
 

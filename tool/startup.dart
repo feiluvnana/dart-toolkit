@@ -34,7 +34,7 @@ Future<void> main(List<String> args) async {
     for (final m in selected) {
       File(
         '${dir.path}/$m.dart',
-      ).writeAsStringSync("import 'package:dart_toolkit/$m/$m.dart';\nvoid main() => print(0);\n");
+      ).writeAsStringSync("import 'package:dart_toolkit/$m.dart';\nvoid main() => print(0);\n");
     }
     File(
       '${dir.path}/barrel.dart',

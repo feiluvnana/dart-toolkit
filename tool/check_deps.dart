@@ -14,14 +14,14 @@ const budgets = <String, Set<String>>{
   'core': {},
   'fs': {'path'},
   'hash': {'crypto', 'path'},
-  'html': {'http'},
+  'html': {'http', 'path'},
   'http': {'http', 'path'},
   'process': {'path'},
   'util': {},
-  'xml': {'http', 'xml'},
+  'xml': {'http', 'path', 'xml'},
 };
 
-final _directive = RegExp(r"""^\s*(?:import|export)\s+'([^']+)'""", multiLine: true);
+final _directive = RegExp(r"""^\s*(?:import|export|part)\s+'([^']+)'""", multiLine: true);
 
 Set<String> closure(File entry) {
   final seen = <String>{};
@@ -71,7 +71,7 @@ void main() {
   var failed = !barrelFreePrograms();
 
   for (final entry in budgets.entries) {
-    final barrel = File('lib/${entry.key}/${entry.key}.dart');
+    final barrel = File('lib/${entry.key}.dart');
     if (!barrel.existsSync()) {
       stderr.writeln('MISSING  ${barrel.path}');
       failed = true;

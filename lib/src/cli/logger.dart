@@ -1,7 +1,4 @@
-import 'dart:async';
-
-import '../util/stdio.dart';
-import 'ansi.dart';
+part of '../../cli.dart';
 
 /// Severity levels for [Logger], ordered from most to least verbose.
 ///

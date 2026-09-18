@@ -1,18 +1,8 @@
-/// # Downloads
-///
-/// {@category Networking}
-library;
+// # Downloads
+//
+// {@category Networking}
 
-import 'dart:async';
-import 'dart:collection';
-import 'dart:io';
-
-import 'package:http/http.dart' as http;
-
-import '../async/cancellation_token.dart';
-import '../fs/path.dart';
-import '../util/progress.dart';
-import 'session.dart';
+part of '../../http.dart';
 
 /// The state of one file download: [Downloading], [Downloaded], [DownloadSkipped]
 /// or [DownloadFailed].
@@ -172,7 +162,7 @@ extension PathDownloadExtensions on Path {
       return;
     }
 
-    final lease = clientFor(client);
+    final lease = _clientFor(client);
     final partFile = File('${asFile.path}.part');
     var received = 0;
     var done = false;
@@ -253,7 +243,7 @@ Stream<BatchDownloadProgress> _batchDownload(
   final limit = concurrency > 0 ? concurrency : 1;
   final queue = Queue<({Uri url, Path path})>();
   final active = <Future<void>>{};
-  final lease = clientFor(client);
+  final lease = _clientFor(client);
 
   var discovered = 0;
   var completed = 0;

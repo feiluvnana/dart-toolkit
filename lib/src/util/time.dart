@@ -1,4 +1,4 @@
-import 'dart:math';
+part of '../../util.dart';
 
 /// Short duration extensions on [int].
 ///

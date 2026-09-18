@@ -1,4 +1,4 @@
-import 'dart:math';
+part of '../../collection.dart';
 
 /// Functional extensions on [Iterable].
 ///

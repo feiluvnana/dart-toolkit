@@ -1,9 +1,4 @@
-import 'package:http/http.dart' as http;
-import 'package:xml/xml.dart' as xml;
-import 'package:xml/xpath.dart';
-
-import '../http/fetch.dart';
-import '../http/response.dart';
+part of '../../xml.dart';
 
 /// A parsed XML document with XPath selector support.
 ///
@@ -41,5 +36,5 @@ extension UriXmlExtensions on Uri {
   ///
   /// Throws [HttpException] unless the status is 2xx.
   Future<XmlDocument> xml({Map<String, String>? headers, http.Client? client}) async =>
-      (await fetchOk(this, headers, client)).xml;
+      (await fetch(headers: headers, client: client)).xml;
 }

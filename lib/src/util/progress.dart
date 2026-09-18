@@ -1,11 +1,12 @@
-/// The seam between something that makes progress and something that renders it.
-///
-/// Both interfaces live here, in the one module every other module already depends
-/// on, so a producer (`http`) and a renderer (`cli`) can meet without an edge
-/// between them.
-///
-/// {@category Utilities}
-library;
+// The seam between something that makes progress and something that renders it.
+//
+// Both interfaces live here, in the one module every other module already depends
+// on, so a producer (`http`) and a renderer (`cli`) can meet without an edge
+// between them.
+//
+// {@category Utilities}
+
+part of '../../util.dart';
 
 /// One unit of work inside a batch, as a renderer needs to see it.
 ///

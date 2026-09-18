@@ -1,8 +1,4 @@
-import 'dart:async';
-import 'dart:io';
-
-import 'ansi.dart';
-import '../util/stdio.dart';
+part of '../../cli.dart';
 
 final List<FutureOr<void> Function()> _exitHooks = [];
 StreamSubscription<ProcessSignal>? _sigintSub;

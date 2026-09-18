@@ -1,11 +1,11 @@
-import 'package:dart_toolkit/archive/archive.dart';
-import 'package:dart_toolkit/async/async.dart';
-import 'package:dart_toolkit/cli/cli.dart';
-import 'package:dart_toolkit/core/core.dart';
-import 'package:dart_toolkit/fs/fs.dart';
-import 'package:dart_toolkit/html/html.dart';
-import 'package:dart_toolkit/http/http.dart';
-import 'package:dart_toolkit/util/util.dart';
+import 'package:dart_toolkit/archive.dart';
+import 'package:dart_toolkit/async.dart';
+import 'package:dart_toolkit/cli.dart';
+import 'package:dart_toolkit/core.dart';
+import 'package:dart_toolkit/fs.dart';
+import 'package:dart_toolkit/html.dart';
+import 'package:dart_toolkit/http.dart';
+import 'package:dart_toolkit/util.dart';
 
 const keyBase = 'https://key.visualarts.gr.jp/key20th/';
 const khinsider = 'https://downloads.khinsider.com/game-soundtracks/album/key-box-for-two-decades-2019';

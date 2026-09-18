@@ -1,5 +1,5 @@
-import 'package:dart_toolkit/cli/cli.dart';
-import 'package:dart_toolkit/util/util.dart';
+import 'package:dart_toolkit/cli.dart';
+import 'package:dart_toolkit/util.dart';
 
 void main(List<String> args) async {
   final cli = Cli(name: 'deployer', description: 'Sample Deployment Tool')

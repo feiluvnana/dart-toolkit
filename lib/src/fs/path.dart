@@ -1,11 +1,4 @@
-import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
-import 'dart:typed_data';
-
-import 'package:path/path.dart' as p;
-
-import '../util/env.dart';
+part of '../../fs.dart';
 
 final _invalidPathChars = RegExp(r'[:*?"<>|\r\n\t]');
 final _invalidNameChars = RegExp(r'[/\\:*?"<>|\r\n\t]');

@@ -1,10 +1,4 @@
-import 'dart:async';
-import 'dart:math';
-
-import '../util/progress.dart';
-import '../util/stdio.dart';
-import '../util/time.dart';
-import 'ansi.dart';
+part of '../../cli.dart';
 
 /// Coalesces redraws so a producer that reports per chunk does not issue a write
 /// per chunk. Shared by [ConsoleProgress] and [ConsoleMultiProgress]; they must not

@@ -1,7 +1,8 @@
-/// # JSONPath (internal)
-///
-/// A lightweight and fast JSONPath evaluator.
-library;
+// # JSONPath (internal)
+//
+// A lightweight and fast JSONPath evaluator.
+
+part of '../../core.dart';
 
 /// A parsed JSONPath expression.
 class JsonPath {

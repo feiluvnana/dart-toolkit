@@ -8,6 +8,10 @@
 /// {@category Formats}
 library;
 
-export '../src/core/either.dart';
-export '../src/core/json_document.dart';
-export '../src/core/string_extensions.dart';
+import 'dart:async';
+import 'dart:convert';
+
+part 'src/core/either.dart';
+part 'src/core/json_document.dart';
+part 'src/core/jsonpath.dart';
+part 'src/core/string_extensions.dart';

@@ -1,7 +1,4 @@
-import 'dart:async';
-
-import '../util/time.dart';
-import 'cancellation_token.dart';
+part of '../../async.dart';
 
 /// Runs [action] up to [attempts] times, waiting [delay] × [backoff]ⁿ between tries.
 ///

@@ -1,9 +1,4 @@
-import 'dart:async';
-import 'dart:isolate';
-
-import '../core/either.dart';
-import 'cancellation_token.dart';
-import 'sync.dart';
+part of '../../async.dart';
 
 /// Concurrency extensions on [Iterable] to process work in parallel.
 ///

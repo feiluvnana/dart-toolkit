@@ -1,13 +1,4 @@
-import 'dart:async';
-import 'dart:collection';
-import 'dart:io';
-import 'dart:typed_data';
-
-import 'package:http/http.dart' as http;
-
-import '../core/either.dart';
-import '../util/time.dart';
-import 'session.dart';
+part of '../../http.dart';
 
 /// Runs once, on listen, before anything is sent; see [InitContext].
 typedef InitHook<T> = FutureOr<void> Function(InitContext<T> ctx);
@@ -583,7 +574,7 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
   if (cfg.retries < 0) cfg.retries = 0;
   if (cfg.redirects < 0) cfg.redirects = 0;
   final started = DateTime.now();
-  final lease = clientFor(null);
+  final lease = _clientFor(null);
   final sessionHasUserAgent = lease.headers?.keys.any((k) => k.toLowerCase() == 'user-agent') ?? false;
 
   final seedHosts = <String>{for (final s in cfg._seeds) _site(s.url.host)};

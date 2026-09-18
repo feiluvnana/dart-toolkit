@@ -1,8 +1,4 @@
-import 'dart:convert';
-import 'dart:io';
-
-import '../util/stdio.dart';
-import 'ansi.dart';
+part of '../../cli.dart';
 
 /// Interactive terminal prompts.
 ///

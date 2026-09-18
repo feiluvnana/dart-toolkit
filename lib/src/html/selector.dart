@@ -1,19 +1,18 @@
-/// CSS selectors, the part scrapers use: type, `#id`, `.class`, the seven attribute forms,
-/// the four combinators, selector lists, and the structural pseudo-classes.
-library;
+// CSS selectors, the part scrapers use: type, `#id`, `.class`, the seven attribute forms,
+// the four combinators, selector lists, and the structural pseudo-classes.
 
-import 'dom.dart';
+part of '../../html.dart';
 
 /// A compiled selector list.
-final class Selector {
+final class _Selector {
   final List<_Complex> _alternatives;
 
-  const Selector._(this._alternatives);
+  const _Selector._(this._alternatives);
 
-  static final _cache = <String, Selector>{};
+  static final _cache = <String, _Selector>{};
 
   /// Parses [source], or returns the cached result. Throws [FormatException] on bad syntax.
-  static Selector parse(String source) => _cache[source] ??= Selector._(_SelectorParser(source).parseList());
+  static _Selector parse(String source) => _cache[source] ??= _Selector._(_SelectorParser(source).parseList());
 
   /// Whether [e] matches.
   bool matches(Element e) => _alternatives.any((c) => c.matches(e));
@@ -241,10 +240,10 @@ final class _SelectorParser {
       case 'empty':
         return (e) => e.nodes.every((n) => n is Text && n.data.isEmpty);
       case 'not':
-        final inner = Selector.parse(arg ?? '');
+        final inner = _Selector.parse(arg ?? '');
         return (e) => !inner.matches(e);
       case 'has':
-        final inner = Selector.parse(arg ?? '');
+        final inner = _Selector.parse(arg ?? '');
         return (e) => inner.matchAll(e).isNotEmpty;
       case 'root':
         return (e) => e.parent == null;
@@ -321,8 +320,6 @@ final class _SelectorParser {
     i++;
   }
 }
-
-final _ws = RegExp(r'\s+');
 
 bool _hasClass(Element e, String cls) {
   final attr = e.attributes['class'];
