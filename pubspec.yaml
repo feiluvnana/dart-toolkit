@@ -16,13 +16,13 @@ environment:
   sdk: ^3.10.0
 
 dependencies:
-  archive: ^4.2.0
   crypto: ^3.0.7
   http: ^1.6.0
   path: ^1.9.0
-  xml: ^7.0.1
 
 dev_dependencies:
+  xml: ^7.0.1 # the reference the in-house XML parser is checked against
+  archive: ^4.2.0 # the reference the in-house zip is checked against
   html: ^0.15.7 # the reference parser the in-house one is checked against
   lints: ^6.0.0
   test: ^1.25.6

@@ -7,7 +7,6 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
-import 'package:xml/xml.dart' as xml_dom;
 
 void main() {
   group('FS Path', () {
@@ -242,11 +241,11 @@ void main() {
       // XML
       final xmlFile = base / 'data.xml';
       final initialXml = XmlDocument.parse('<root><item id="1">Value</item></root>');
-      await xmlFile.writeText(initialXml.raw.toXmlString());
+      await xmlFile.writeText(initialXml.outerXml);
       expect(await xmlFile.exists(), isTrue);
 
       final readXmlDoc = XmlDocument.parse(await xmlFile.readText());
-      expect((readXmlDoc.$('//item').firstOrNull as xml_dom.XmlElement?)?.innerText, equals('Value'));
+      expect(readXmlDoc.$('//item').text, equals('Value'));
 
       // Sync document operations
       final syncJsonFile = base / 'sync.json';
@@ -261,11 +260,8 @@ void main() {
       expect(HtmlDocument.parse(syncHtmlFile.readTextSync()).$('h2').first.text, equals('Sync Header'));
 
       final syncXmlFile = base / 'sync.xml';
-      syncXmlFile.writeTextSync((XmlDocument.parse('<root><node>Sync</node></root>')).raw.toXmlString());
-      expect(
-        (XmlDocument.parse(syncXmlFile.readTextSync()).$('//node').first as xml_dom.XmlElement).innerText,
-        equals('Sync'),
-      );
+      syncXmlFile.writeTextSync(XmlDocument.parse('<root><node>Sync</node></root>').outerXml);
+      expect(XmlDocument.parse(syncXmlFile.readTextSync()).$('//node').text, equals('Sync'));
 
       // mkdirSync & deleteSync
       final syncDir = base / 'sync_dir_test';

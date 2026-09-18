@@ -34,6 +34,24 @@ final class Text extends Node {
   String get outerHtml => _escapeText(data);
 }
 
+/// An attribute, as an XPath `@name` step selects it.
+///
+/// {@category Formats}
+final class Attribute extends Node {
+  final String name;
+  final String value;
+
+  Attribute(this.name, this.value, Element owner) {
+    parent = owner;
+  }
+
+  @override
+  String get text => value;
+
+  @override
+  String get outerHtml => '$name="${_escapeAttribute(value)}"';
+}
+
 /// An element: a lowercase [name], its [attributes], and the [nodes] inside it.
 ///
 /// {@category Formats}
@@ -66,6 +84,9 @@ final class Element extends Node {
 
   /// Every descendant matching CSS [selector], in document order.
   Elements $(String selector) => Elements(_Selector.parse(selector).matchAll(this));
+
+  /// The nodes matching XPath [expression] with this element as the context; see [XPath].
+  Nodes $x(String expression) => Nodes(XPath.parse(expression).select(this, _htmlTree));
 
   @override
   String get text {
@@ -175,7 +196,40 @@ extension type Elements(List<Element> _list) implements List<Element> {
     ]);
   }
 
+  /// The nodes matching XPath [expression] from each match, each node once, in document order.
+  Nodes $x(String expression) {
+    final x = XPath.parse(expression);
+    final seen = <Node>{};
+    return Nodes([
+      for (final e in _list)
+        for (final n in x.select(e, _htmlTree))
+          if (seen.add(n)) n,
+    ]);
+  }
+
   Element get _first => _list.isEmpty ? throw StateError('Nothing matched the selector') : _list.first;
+}
+
+/// The nodes an XPath query selected, in document order: elements, text and attributes. A
+/// [List], with the first node's [text] and [attr] one hop closer, and [elements] to go on
+/// with CSS: `doc.$x('//table[.//th="Title"]').elements.$('td')`.
+///
+/// {@category Formats}
+extension type Nodes(List<Node> _list) implements List<Node> {
+  /// The first node's string value. Throws [StateError] when nothing matched.
+  String get text => _list.isEmpty ? throw StateError('Nothing matched the XPath expression') : _list.first.text;
+
+  /// Attribute [name] on the first element, or `null` when absent or nothing matched.
+  String? attr(String name) => _list.whereType<Element>().firstOrNull?.attributes[name];
+
+  /// Only the elements among the selected nodes.
+  Elements get elements => Elements(_list.whereType<Element>().toList());
+
+  /// Every node's string value.
+  List<String> get texts => [for (final n in _list) n.text];
+
+  /// XPath [expression] from each selected element, each node once.
+  Nodes $x(String expression) => elements.$x(expression);
 }
 
 /// A parsed HTML document with CSS selectors.
@@ -194,6 +248,10 @@ final class HtmlDocument {
   /// Every element matching CSS [selector], in document order.
   Elements $(String selector) => Elements(_Selector.parse(selector).matchAll(root, includeSelf: true));
 
+  /// The nodes matching XPath [expression], from the document: `//a/@href`,
+  /// `//tr[td[2]="FLAC"]/td[1]/a`, `//h2[contains(., "Tracks")]/following-sibling::table[1]`.
+  Nodes $x(String expression) => Nodes(XPath.parse(expression).select(root, _htmlTree));
+
   /// The `<head>` element.
   Element get head => root.children.firstWhere((e) => e.name == 'head');
 
@@ -209,6 +267,63 @@ final class HtmlDocument {
   @override
   String toString() => outerHtml;
 }
+
+/// Stands for the document above `<html>`, so an absolute XPath has somewhere to start.
+final class _Document extends Node {
+  final Element root;
+  _Document(this.root);
+  @override
+  String get text => root.text;
+  @override
+  String get outerHtml => root.outerHtml;
+}
+
+final class _HtmlTree implements XPathTree<Node> {
+  const _HtmlTree();
+
+  @override
+  XPathKind kind(Node n) => switch (n) {
+    Element() => XPathKind.element,
+    Text() => XPathKind.text,
+    Attribute() => XPathKind.attribute,
+    _Document() => XPathKind.document,
+  };
+
+  @override
+  Node? parent(Node n) => switch (n) {
+    _Document() => null,
+    Element(parent: null) => _Document(n),
+    _ => n.parent,
+  };
+
+  @override
+  List<Node> children(Node n) => switch (n) {
+    Element() => n.nodes,
+    _Document() => [n.root],
+    _ => const [],
+  };
+
+  @override
+  String name(Node n) => switch (n) {
+    Element() => n.name,
+    Attribute() => n.name,
+    _ => '',
+  };
+
+  @override
+  Map<String, String>? attributes(Node n) => n is Element ? n.attributes : null;
+
+  @override
+  String text(Node n) => n.text;
+
+  @override
+  Node attribute(Node owner, String name, String value) => Attribute(name, value, owner as Element);
+
+  @override
+  Node document(Node root) => root is _Document ? root : _Document(root as Element);
+}
+
+const _htmlTree = _HtmlTree();
 
 /// Decodes `&amp;`, `&#38;`, `&#x26;` and the HTML 4 named references in [text].
 String decodeEntities(String text) {

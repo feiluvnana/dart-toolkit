@@ -8,6 +8,7 @@ library;
 
 import 'package:http/http.dart' as http;
 
+import 'core.dart';
 import 'http.dart';
 
 part 'src/html/dom.dart';

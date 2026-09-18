@@ -1,78 +1,83 @@
-// # Archives
-//
-// {@category Files}
-
 part of '../../archive.dart';
 
 /// Zip archive operations on [Path].
 ///
-/// Every operation streams: memory is constant in the size of the archive.
+/// Every operation streams: memory is constant in the size of the archive. Compression is
+/// the platform's zlib through `dart:io`; the container is written and read here.
 ///
 /// {@category Files}
 extension PathArchiveExtensions on Path {
   /// Compresses this directory or file into a zip archive at [destination].
-  Future<File> zipTo(String destination) async {
-    final zipFile = File(destination);
-    await zipFile.parent.create(recursive: true);
-    final encoder = ZipFileEncoder();
-    if (await type() == PathType.dir) {
-      await encoder.zipDirectory(asDir, filename: destination);
-    } else {
-      encoder.create(destination);
-      await encoder.addFile(asFile);
-      await encoder.close();
-    }
-    return zipFile;
-  }
+  ///
+  /// Entries are relative to this path; a file becomes one entry named after itself.
+  /// [level] is zlib's, 0–9. Symbolic links are skipped.
+  Future<File> zipTo(String destination, {int level = 6}) => _zip(this, destination, level);
 
   /// Compresses this directory or file into a zip archive at [destination] synchronously.
-  File zipToSync(String destination) {
-    final zipFile = File(destination);
-    zipFile.parent.createSync(recursive: true);
-    final encoder = ZipFileEncoder()..create(destination);
-    if (typeSync() == PathType.dir) {
-      for (final entity in asDir.listSync(recursive: true, followLinks: false)) {
-        if (entity is File) encoder.addFileSync(entity, p.relative(entity.path, from: path));
-      }
-    } else {
-      encoder.addFileSync(asFile);
-    }
-    encoder.closeSync();
-    return zipFile;
-  }
+  File zipToSync(String destination, {int level = 6}) => _zipSync(this, destination, level);
 
   /// Extracts the archive at this path into [destination].
+  ///
+  /// Throws [FormatException] on a corrupt entry or a CRC mismatch, [UnsupportedError] on
+  /// an encrypted entry or an unknown compression method, and [FileSystemException] on an
+  /// entry that would land outside [destination].
   Future<Directory> extractTo(String destination) async {
     final dest = Directory(destination);
     await dest.create(recursive: true);
-    await extractFileToDisk(path, destination);
-    return dest;
-  }
-
-  /// Extracts the archive at this path into [destination] synchronously.
-  Directory extractToSync(String destination) {
-    final dest = Directory(destination)..createSync(recursive: true);
-    final input = InputFileStream(path);
+    final root = p.normalize(p.absolute(destination));
+    final reader = await _ZipReader.open(asFile);
     try {
-      final root = p.normalize(p.absolute(destination));
-      for (final entry in ZipDecoder().decodeStream(input)) {
-        final outPath = p.normalize(p.join(root, entry.name));
-        // An entry named `../x` must not land outside [destination].
-        if (!p.isWithin(root, outPath)) throw FileSystemException('Archive entry escapes destination', entry.name);
-        if (entry.isFile) {
-          final out = OutputFileStream(outPath);
-          try {
-            entry.writeContent(out);
-          } finally {
-            out.closeSync();
-          }
+      for (final entry in await reader.entries()) {
+        final out = _target(root, entry);
+        if (entry.isDir) {
+          await Directory(out).create(recursive: true);
         } else {
-          Directory(outPath).createSync(recursive: true);
+          await reader.extract(entry, File(out), asFile);
         }
       }
     } finally {
-      input.closeSync();
+      await reader.close();
     }
     return dest;
+  }
+
+  /// Extracts the archive at this path into [destination] synchronously; see [extractTo].
+  Directory extractToSync(String destination) {
+    final dest = Directory(destination)..createSync(recursive: true);
+    final root = p.normalize(p.absolute(destination));
+    final reader = _ZipReader.openSync(asFile);
+    try {
+      for (final entry in reader.entriesSync()) {
+        final out = _target(root, entry);
+        if (entry.isDir) {
+          Directory(out).createSync(recursive: true);
+        } else {
+          reader.extractSync(entry, File(out));
+        }
+      }
+    } finally {
+      reader.closeSync();
+    }
+    return dest;
+  }
+
+  /// The entries of the archive at this path, from its central directory, without extracting.
+  Future<List<ZipEntry>> zipEntries() async {
+    final reader = await _ZipReader.open(asFile);
+    try {
+      return await reader.entries();
+    } finally {
+      await reader.close();
+    }
+  }
+
+  /// The entries of the archive at this path, synchronously.
+  List<ZipEntry> zipEntriesSync() {
+    final reader = _ZipReader.openSync(asFile);
+    try {
+      return reader.entriesSync();
+    } finally {
+      reader.closeSync();
+    }
   }
 }

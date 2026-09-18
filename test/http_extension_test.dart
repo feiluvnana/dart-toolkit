@@ -5,7 +5,6 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:test/test.dart';
-import 'package:xml/xml.dart' as xml_dom;
 
 class _CountingClient extends http.BaseClient {
   final http.Client _inner;
@@ -76,16 +75,16 @@ void main() {
       final xml = res.xml;
       expect(xml, isA<XmlDocument>());
       expect(identical(res.xml, xml), isTrue);
-      expect(xml.raw.rootElement.name.local, equals('bookstore'));
+      expect(xml.root.local, equals('bookstore'));
 
       // XPath selector query
       final titles = xml.$('//book/title');
       expect(titles.length, equals(2));
-      expect(titles.map((n) => (n as xml_dom.XmlElement).innerText).toList(), equals(['Harry Potter', 'Learning XML']));
+      expect(titles.map((n) => n.text).toList(), equals(['Harry Potter', 'Learning XML']));
 
       final learningTitles = xml.$('//book[@category="learning"]/title');
       expect(learningTitles.length, equals(1));
-      expect((learningTitles.first as xml_dom.XmlElement).innerText, equals('Learning XML'));
+      expect(learningTitles.text, equals('Learning XML'));
     });
 
     test('res.json parses JSON with JSONPath selector and memoizes parsed doc', () {
@@ -354,7 +353,7 @@ void main() {
       expect(nameVal, equals('John'));
 
       final xmlRes = http.Response('<root><item id="99">Hello</item></root>', 200);
-      final xmlVal = await xmlRes.isolate((r) => r.xml.$('//item').firstOrNull?.innerText);
+      final xmlVal = await xmlRes.isolate((r) => r.xml.$('//item').text);
       expect(xmlVal, equals('Hello'));
 
       final mockClient = MockClient((req) async {

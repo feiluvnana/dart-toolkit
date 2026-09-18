@@ -18,7 +18,7 @@ packages:
     source: hosted
     version: "14.3.0"
   archive:
-    dependency: "direct main"
+    dependency: "direct dev"
     description:
       name: archive
       sha256: ace891da0862b0e4cabbb064ee3fd87b2728b898949fdb366d83fe98342c9f19
@@ -434,7 +434,7 @@ packages:
     source: hosted
     version: "1.2.1"
   xml:
-    dependency: "direct main"
+    dependency: "direct dev"
     description:
       name: xml
       sha256: "67f0aff7be013d107995e9b75bf4e7f2c3ef2dfdb2c8e68024bba0a7fd5756a4"

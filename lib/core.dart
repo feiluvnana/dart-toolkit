@@ -15,3 +15,4 @@ part 'src/core/either.dart';
 part 'src/core/json_document.dart';
 part 'src/core/jsonpath.dart';
 part 'src/core/string_extensions.dart';
+part 'src/core/xpath.dart';

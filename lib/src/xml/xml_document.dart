@@ -1,23 +1,5 @@
 part of '../../xml.dart';
 
-/// A parsed XML document with XPath selector support.
-///
-/// {@category Formats}
-class XmlDocument {
-  /// The underlying parsed XML document.
-  final xml.XmlDocument raw;
-
-  /// Creates an [XmlDocument] wrapping an existing [raw] document.
-  XmlDocument(this.raw);
-
-  /// Parses [text] as XML.
-  factory XmlDocument.parse(String text) => XmlDocument(xml.XmlDocument.parse(text));
-
-  /// Finds all nodes matching XPath [query].
-  // ignore: experimental_member_use
-  Iterable<xml.XmlNode> $(String query) => raw.xpath(query);
-}
-
 final Expando<XmlDocument> _xmlMemo = Expando<XmlDocument>('xmlMemo');
 
 /// XML parsing on [http.Response].
@@ -32,9 +14,15 @@ extension ResponseXmlExtensions on http.Response {
 ///
 /// {@category Formats}
 extension UriXmlExtensions on Uri {
-  /// Fetches this URI and parses the response body as XML.
-  ///
-  /// Throws [HttpException] unless the status is 2xx.
+  /// Fetches this URI and parses the response body as XML; see `fetch`.
   Future<XmlDocument> xml({Map<String, String>? headers, http.Client? client}) async =>
       (await fetch(headers: headers, client: client)).xml;
+}
+
+/// Parsing on [String].
+///
+/// {@category Formats}
+extension StringXmlExtensions on String {
+  /// This string parsed as XML.
+  XmlDocument get xml => XmlDocument.parse(this);
 }

@@ -7,7 +7,7 @@
 import 'dart:io';
 
 const budgets = <String, Set<String>>{
-  'archive': {'archive', 'path'},
+  'archive': {'path'},
   'async': {},
   'cli': {},
   'collection': {},
@@ -18,7 +18,7 @@ const budgets = <String, Set<String>>{
   'http': {'http', 'path'},
   'process': {'path'},
   'util': {},
-  'xml': {'http', 'path', 'xml'},
+  'xml': {'http', 'path'},
 };
 
 final _directive = RegExp(r"""^\s*(?:import|export|part)\s+'([^']+)'""", multiLine: true);
