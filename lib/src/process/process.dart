@@ -142,12 +142,12 @@ Future<ShellResult> _runProcess(
   // reading stdin, so feeding before draining deadlocks both sides.
   final stdoutFuture = process.stdout.transform(encoding.decoder).forEach((data) {
     stdoutBuf.write(data);
-    if (!quiet) ConsoleIo.out.write(data);
+    if (!quiet) Io.out.write(data);
   });
 
   final stderrFuture = process.stderr.transform(encoding.decoder).forEach((data) {
     stderrBuf.write(data);
-    if (!quiet) ConsoleIo.err.write(data);
+    if (!quiet) Io.err.write(data);
   });
 
   final fed = _feed(process, input, encoding);
@@ -269,14 +269,14 @@ class CommandPipeline {
 
       final stdoutFuture = lastProcess.stdout.transform(encoding.decoder).forEach((data) {
         stdoutBuf.write(data);
-        if (!quiet) ConsoleIo.out.write(data);
+        if (!quiet) Io.out.write(data);
       });
 
       final stderrFuture = Future.wait(
         processes.map(
           (p) => p.stderr.transform(encoding.decoder).forEach((data) {
             stderrBuf.write(data);
-            if (!quiet) ConsoleIo.err.write(data);
+            if (!quiet) Io.err.write(data);
           }),
         ),
       );

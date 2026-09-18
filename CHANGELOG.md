@@ -3,56 +3,7 @@
 Every release so far is breaking and ships no deprecation shims. Numbers are back-to-back
 deltas measured on the same machine; `tool/startup.dart` reproduces the startup ones.
 
-## Unreleased
-
-- **One import.** With every parser and the client in-house, `dart_toolkit.dart` is within
-  70 ms of the five module imports a scraper listed by hand, so programs import it; the module
-  files stay for a program that wants less, and `check_deps` no longer forbids the barrel.
-- **Nine modules.** `util` folded into `core`; `archive` into `fs` (zip is in-house, the
-  compression the SDK's); `hash` is `crypto`; `html`, `xml` and `xpath` joined JSON, YAML, TOML
-  and INI in `formats`, with the `http` bridges (`res.html`, `url.xml()`) in `http`;
-  `testing.dart` is gone — the handler-backed `Client` is `test/mock_client.dart`. Imports:
-  `package:dart_toolkit/{core,collection,formats,async,cli,fs,crypto,process,http}.dart`.
-  `ConsoleIo.table`, `width`, `truncate` and `stripAnsi` live in `core` so `Table.show()` and
-  `Console.table` share one renderer without `cli` importing the parsers. `ShellResult.json`
-  is gone: `run(cmd).text` then `.json`, so a shell script does not compile the parsers either.
-  Three pairs over bare: `cli` +30 ms, `process` +100, `http` +240, `formats` +120.
-
-- **`collection` is a query type, not a set of extensions.** Every extension on `Iterable`,
-  `List` and `Map` is gone. `items.sequence` and `map.sequence` give a `Sequence<T>` — lazy, still an
-  `Iterable`, with the SDK's `where`/`map`/`take`… returning `Sequence` so the chain continues, and
-  LINQ's and Kotlin's vocabulary on top: `distinct`, `distinctBy`, `chunk`, `windowed`,
-  `pairwise`, `zip`, `cartesian`, `interleave`, `scan`, `takeLast`, `skipLast`, `reversed`,
-  `shuffled`, `whereNot`, `indexed`; `sorted`/`sortedBy` returning `Sorted` with `thenBy` and
-  `thenWith`; `union`, `intersect`, `except` keeping order; `innerJoin`, `leftJoin`, `groupJoin`
-  as hash joins; `groupBy` and `countBy` as `(key, value)` records with `mapValues`, `mapKeys`,
-  `inverted`, `sortedByKey`, `sortedByValue`, `toMap([merge])`, `unzip`; `indexBy`,
-  `partition`, `sumBy`, `averageBy`, `count`, `minBy`, `maxBy`, `minMax`, `none`;
-  `Sequence.range`. A group is a `Sequence` with a `key`, so `groupBy(…).expand((g) => g.take(2))`
-  reads on. Typed where the type allows it: `sum`, `average` are getters on a `Sequence<num>`,
-  `sorted`, `sortedDescending`, `min`, `max` on a `Sequence` of `Comparable`s — no cast, no
-  runtime surprise; `sortedWith` takes a comparator for the rest.
-- **`Table`**: rows of named columns from `Table.rows`, `Table.records`, `Table.csv`,
-  `json.table`, `doc.$('table').table`; `where`, `orderBy`/`thenBy`, `select`, `rename`,
-  `derive`, `drop`, `distinct`, `take`, `skip`, `join`/`leftJoin`, `groupBy` with `count`,
-  `sum`, `avg`, `min`, `max`, `agg`, `aggWith`, `pivot`; `t['column']` for a column, `numbers`,
-  `texts`; typed reads on rows (`number`, `get<T>`, `text`, with `'1,200'` counting as 1200)
-  that throw naming the column and row when a cell does not convert (`numberOrNull`,
-  `getOrNull` for the quiet form); a wrong column name anywhere is an `ArgumentError` that
-  lists the columns; out as `toCsv`, `saveCsv`, `toJson`, `show()`.
-- **`formats.dart`**: YAML (block and flow, `|` and `>`, anchors, several documents), TOML 1.0
-  (tables, arrays of tables, dotted keys, all four string kinds, inline tables) and INI decode
-  to `JsonDocument` — `text.yaml`, `text.toml`, `text.ini` — so JSONPath and `to<T>()` serve
-  every configuration file; `doc.toYaml()` writes YAML back. In-house, dependency-free; YAML is
-  checked against `package:yaml` (a dev dependency) on a pubspec- and workflow-shaped document.
-- **`Table` formats**: `Table.tsv`, `Table.ndjson`, `toTsv`, `toNdjson`, `toMarkdown`
-  (numbers right-aligned) beside CSV.
-- **keybox takes no options.** It downloads every format and zips the result; `Cli` stays only
-  as the lifecycle (`--help`, `--version`, `ctx.cancel`).
-- **No CI.** The GitHub workflow is gone; `tool/check_deps.dart`, `dart analyze` and `dart test`
-  are run by hand before a release.
-
-## 0.0.4 — dependency-free
+## 0.0.4 — dependency-free, native where it counts
 
 Every parser and the HTTP client are in-house, hashing is native, one library per module, and
 a widening pass over what scripts reach for. Measured on the same machine as 0.0.3: importing
@@ -112,6 +63,80 @@ runtime dependency left is `path`.
 - After gzip decoding, `content-length` and `content-encoding` no longer describe the body and
   are dropped from the response headers.
 
+
+### The native library
+
+- **`dart_toolkit_native`**, one Rust `cdylib` under `native/`, prebuilt per platform into
+  `native/prebuilt/<os>_<arch>/`, loaded by `native.dart`'s `Native` through `dart:ffi` (a path in
+  `DART_TOOLKIT_NATIVE`, next to the executable, or inside the package). The same functions on
+  every platform; nothing asked of the user's machine. `make native` builds it; only
+  `macos_arm64` is built so far, so other platforms throw `UnsupportedError` from what needs it.
+- **`crypto`** on it: digests MD5, SHA-1, SHA-2, SHA-3, BLAKE2b, BLAKE3 (SHA-256 at 2.4 GB/s
+  against 168 MB/s in Dart), HMAC, PBKDF2, HKDF, Argon2id, `Password.hash/verify`, `Key`,
+  `Crypto.token/equals`, `Aes.gcm` and `ChaCha20Poly1305` with `seal`/`open` and chunked
+  `encryptFile`/`decryptFile`, `Ed25519`, `Ecdsa.p256`, `Rsa.verify`, hex and base64url
+  helpers. Pure Dart stays for digests, HMAC, HKDF and PBKDF2 when the library is absent.
+  Every primitive is checked against RFC and NIST vectors and `openssl`.
+- **`fs` archives** on it: `archiveTo`, `extractTo`, `archiveEntries` for zip (AES-256
+  passwords), 7z (passwords), rar (read, RAR4 and RAR5, passwords and encrypted headers), tar
+  and tar.gz/xz/zst/bz2; `compressTo`/`decompressTo`, `gzipTo`/`gunzipTo` for single streams.
+  Permissions and times restored; a traversal check on every entry. The Dart zip writer and
+  reader are gone; `zipTo` is `archiveTo('x.zip')`.
+- **Names.** `Prompt` folded into `Console` (`Console.ask`, `confirm`, `select`, `secret`);
+  `ConsoleIo` is `Io`. `Crc32` left `core`; `crc32` stays on bytes, strings and paths.
+- **Housekeeping.** `Makefile` for check, test, native and release; `.gitignore` for the Rust
+  build tree and the binaries, `.pubignore` letting the binaries into the package;
+  `tool/check_deps.dart` removed (the pubspec is the budget now); timing assertions removed from
+  the tests, which are `make bench`'s job; `CONVENTIONS.md` rewritten around the two things the
+  package optimises for.
+
+- **One import.** With every parser and the client in-house, `dart_toolkit.dart` is within
+  70 ms of the five module imports a scraper listed by hand, so programs import it; the module
+  files stay for a program that wants less, and `check_deps` no longer forbids the barrel.
+- **Nine modules.** `util` folded into `core`; `archive` into `fs` (zip is in-house, the
+  compression the SDK's); `hash` is `crypto`; `html`, `xml` and `xpath` joined JSON, YAML, TOML
+  and INI in `formats`, with the `http` bridges (`res.html`, `url.xml()`) in `http`;
+  `testing.dart` is gone — the handler-backed `Client` is `test/mock_client.dart`. Imports:
+  `package:dart_toolkit/{core,collection,formats,async,cli,fs,crypto,process,http}.dart`.
+  `Io.table`, `width`, `truncate` and `stripAnsi` live in `core` so `Table.show()` and
+  `Console.table` share one renderer without `cli` importing the parsers. `ShellResult.json`
+  is gone: `run(cmd).text` then `.json`, so a shell script does not compile the parsers either.
+  Three pairs over bare: `cli` +30 ms, `process` +100, `http` +240, `formats` +120.
+
+- **`collection` is a query type, not a set of extensions.** Every extension on `Iterable`,
+  `List` and `Map` is gone. `items.sequence` and `map.sequence` give a `Sequence<T>` — lazy, still an
+  `Iterable`, with the SDK's `where`/`map`/`take`… returning `Sequence` so the chain continues, and
+  LINQ's and Kotlin's vocabulary on top: `distinct`, `distinctBy`, `chunk`, `windowed`,
+  `pairwise`, `zip`, `cartesian`, `interleave`, `scan`, `takeLast`, `skipLast`, `reversed`,
+  `shuffled`, `whereNot`, `indexed`; `sorted`/`sortedBy` returning `Sorted` with `thenBy` and
+  `thenWith`; `union`, `intersect`, `except` keeping order; `innerJoin`, `leftJoin`, `groupJoin`
+  as hash joins; `groupBy` and `countBy` as `(key, value)` records with `mapValues`, `mapKeys`,
+  `inverted`, `sortedByKey`, `sortedByValue`, `toMap([merge])`, `unzip`; `indexBy`,
+  `partition`, `sumBy`, `averageBy`, `count`, `minBy`, `maxBy`, `minMax`, `none`;
+  `Sequence.range`. A group is a `Sequence` with a `key`, so `groupBy(…).expand((g) => g.take(2))`
+  reads on. Typed where the type allows it: `sum`, `average` are getters on a `Sequence<num>`,
+  `sorted`, `sortedDescending`, `min`, `max` on a `Sequence` of `Comparable`s — no cast, no
+  runtime surprise; `sortedWith` takes a comparator for the rest.
+- **`Table`**: rows of named columns from `Table.rows`, `Table.records`, `Table.csv`,
+  `json.table`, `doc.$('table').table`; `where`, `orderBy`/`thenBy`, `select`, `rename`,
+  `derive`, `drop`, `distinct`, `take`, `skip`, `join`/`leftJoin`, `groupBy` with `count`,
+  `sum`, `avg`, `min`, `max`, `agg`, `aggWith`, `pivot`; `t['column']` for a column, `numbers`,
+  `texts`; typed reads on rows (`number`, `get<T>`, `text`, with `'1,200'` counting as 1200)
+  that throw naming the column and row when a cell does not convert (`numberOrNull`,
+  `getOrNull` for the quiet form); a wrong column name anywhere is an `ArgumentError` that
+  lists the columns; out as `toCsv`, `saveCsv`, `toJson`, `show()`.
+- **`formats.dart`**: YAML (block and flow, `|` and `>`, anchors, several documents), TOML 1.0
+  (tables, arrays of tables, dotted keys, all four string kinds, inline tables) and INI decode
+  to `JsonDocument` — `text.yaml`, `text.toml`, `text.ini` — so JSONPath and `to<T>()` serve
+  every configuration file; `doc.toYaml()` writes YAML back. In-house, dependency-free; YAML is
+  checked against `package:yaml` (a dev dependency) on a pubspec- and workflow-shaped document.
+- **`Table` formats**: `Table.tsv`, `Table.ndjson`, `toTsv`, `toNdjson`, `toMarkdown`
+  (numbers right-aligned) beside CSV.
+- **keybox takes no options.** It downloads every format and zips the result; `Cli` stays only
+  as the lifecycle (`--help`, `--version`, `ctx.cancel`).
+- **No CI.** The GitHub workflow is gone; `tool/check_deps.dart`, `dart analyze` and `dart test`
+  are run by hand before a release.
+
 ## 0.0.3 — brevity and speed
 
 An audit that read every public member, then probed the engine with mock clients. Ten defects
@@ -160,7 +185,7 @@ the sync twin ends in `Sync`; a pure function of the receiver is a getter; one w
 | was | is |
 |---|---|
 | `Response.ok`, `ShellResult.ok`, `Future<ShellResult>.ok` | `isOk` |
-| `ConsoleIo.redirected`, `CliOption.required`, `Logger.enabled()` | `isRedirected`, `isRequired`, `isEnabled()` |
+| `Io.redirected`, `CliOption.required`, `Logger.enabled()` | `isRedirected`, `isRequired`, `isEnabled()` |
 | `sortedBy(desc:)` | `sortedBy(descending:)` |
 | `Either.tryCatch` (sync), `tryCatchAsync` | `tryCatchSync`, `tryCatch` |
 | `Path.sanitized()`, `Duration.humanize()` | `sanitized`, `humanized` |

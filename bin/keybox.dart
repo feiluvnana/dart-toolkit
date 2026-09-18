@@ -159,7 +159,7 @@ Future<void> run(CancelToken cancel) async {
 
   // Stage 3: Archive
   stage('Creating zip archive');
-  await Console.spin('Compressing $baseName.zip...', () => base.zipTo('$baseName.zip'));
+  await Console.spin('Compressing $baseName.zip...', () => base.archiveTo('$baseName.zip'));
 
   Console.table(
     headers: ['Property', 'Value'],

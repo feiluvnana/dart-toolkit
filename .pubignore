@@ -1,16 +1,9 @@
-# Git and local environment
-.git/
-.github/
+# What pub publishes: everything git tracks, plus the prebuilt native binaries, minus the
+# Rust build tree, the tests and the tooling.
 .dart_tool/
 build/
-
-# Media and KeyBOX downloads
-Key BOX*/
-*.7z
-*.part
-*.zip
-*.tar.gz
-tmp*
-
-# Bin scripts meant for internal automation
-bin/
+coverage/
+native/target/
+test/
+tool/
+Makefile

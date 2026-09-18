@@ -1,9 +1,9 @@
 part of '../../core.dart';
 
-/// Injectable standard I/O seam for CLI components (Logger, Console, Prompt).
+/// The process's standard I/O, injectable: every console write and read goes through it.
 ///
 /// {@category CLI}
-class ConsoleIo {
+class Io {
   static StringSink? _out;
   static StringSink? _err;
 

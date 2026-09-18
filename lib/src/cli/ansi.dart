@@ -14,11 +14,11 @@ class Ansi {
   /// Whether ANSI styling is enabled.
   ///
   /// Resolution order: an explicit [enabled] override, then `NO_COLOR`, then the
-  /// active sink — redirecting [ConsoleIo.out] disables styling so
+  /// active sink — redirecting [Io.out] disables styling so
   /// captured output is plain, unless an override says otherwise.
   static bool get enabled {
     if (_override != null) return _override!;
-    if (ConsoleIo.isRedirected) return false;
+    if (Io.isRedirected) return false;
     if (Env.has('NO_COLOR')) return false;
     return _terminal;
   }
@@ -38,7 +38,7 @@ class Ansi {
   }
 
   /// Strips all ANSI escape sequences from [text].
-  static String strip(String text) => ConsoleIo.stripAnsi(text);
+  static String strip(String text) => Io.stripAnsi(text);
 }
 
 /// ANSI terminal styling extensions on [String].

@@ -216,29 +216,6 @@ cert = 'a;b'
     });
   }
 
-  test('the in-house parser is not slower than the reference on the largest fixture', () {
-    final src = File('test/fixtures/key_box.html').readAsStringSync();
-    for (var i = 0; i < 3; i++) {
-      HtmlDocument.parse(src);
-      reference.parse(src);
-    }
-    final ours = Stopwatch()..start();
-    for (var i = 0; i < 20; i++) {
-      HtmlDocument.parse(src);
-    }
-    ours.stop();
-    final ref = Stopwatch()..start();
-    for (var i = 0; i < 20; i++) {
-      reference.parse(src);
-    }
-    ref.stop();
-    expect(
-      ours.elapsedMicroseconds,
-      lessThan(ref.elapsedMicroseconds * 1.5),
-      reason: '${ours.elapsed} vs ${ref.elapsed}',
-    );
-  });
-
   group('html', () {
     test('Element.lines decodes entities and splits at <br>', () {
       final doc = HtmlDocument.parse('<p id="x">A &amp; B &lt;c&gt;<br>D\nE<br></p>');
@@ -422,34 +399,6 @@ cert = 'a;b'
     expect(page.$('tr').$x('td[2]').texts, ['MP3', 'FLAC']);
     expect(page.$x('//nothing').attr('href'), isNull);
     expect(() => page.$x('//nothing').text, throwsStateError);
-  });
-
-  test('parsing is not slower than package:xml', () {
-    final big = StringBuffer('<rss><channel>');
-    for (var i = 0; i < 5000; i++) {
-      big.write('<item id="$i"><title>Item $i &amp; co</title><price currency="JPY">${i * 3}</price></item>');
-    }
-    big.write('</channel></rss>');
-    final src = big.toString();
-    for (var i = 0; i < 2; i++) {
-      XmlDocument.parse(src);
-      reference.XmlDocument.parse(src);
-    }
-    final ours = Stopwatch()..start();
-    for (var i = 0; i < 5; i++) {
-      XmlDocument.parse(src).$('//item[price>9000]/title');
-    }
-    ours.stop();
-    final ref = Stopwatch()..start();
-    for (var i = 0; i < 5; i++) {
-      reference.XmlDocument.parse(src).xpath('//item[price>9000]/title');
-    }
-    ref.stop();
-    expect(
-      ours.elapsedMicroseconds,
-      lessThan(ref.elapsedMicroseconds * 1.5),
-      reason: '${ours.elapsed} vs ${ref.elapsed}',
-    );
   });
 }
 

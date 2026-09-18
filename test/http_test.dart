@@ -1307,7 +1307,7 @@ void main() {
 
     test('show() renders a batch and returns its last event', () async {
       final out = StringBuffer();
-      ConsoleIo.out = out;
+      Io.out = out;
       try {
         final client = MockClient((r) async => Response('data', 200));
         final dir = Directory.systemTemp.createTempSync('show_');
@@ -1325,7 +1325,7 @@ void main() {
           dir.deleteSync(recursive: true);
         }
       } finally {
-        ConsoleIo.reset();
+        Io.reset();
       }
     });
 
@@ -1355,7 +1355,7 @@ void main() {
 
     setUp(() async {
       out = StringBuffer();
-      ConsoleIo.out = out;
+      Io.out = out;
       tempDir = Directory.systemTemp.createTempSync('pipeline_test_');
       server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       base = Uri.parse('http://127.0.0.1:${server.port}');
@@ -1378,7 +1378,7 @@ void main() {
     });
 
     tearDown(() async {
-      ConsoleIo.reset();
+      Io.reset();
       await server.close(force: true);
       tempDir.deleteSync(recursive: true);
     });

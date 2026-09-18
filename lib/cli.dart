@@ -19,4 +19,3 @@ part 'src/cli/command.dart';
 part 'src/cli/console.dart';
 part 'src/cli/lifecycle.dart';
 part 'src/cli/logger.dart';
-part 'src/cli/prompt.dart';

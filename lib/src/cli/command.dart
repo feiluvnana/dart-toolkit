@@ -240,16 +240,16 @@ class CliCommand {
 
   /// Prints usage help for this command.
   void printUsage() {
-    ConsoleIo.out.writeln('${'Usage:'.bold} $_fullName [options] [command]');
-    if (description.isNotEmpty) ConsoleIo.out.writeln('\n$description');
+    Io.out.writeln('${'Usage:'.bold} $_fullName [options] [command]');
+    if (description.isNotEmpty) Io.out.writeln('\n$description');
     if (subcommands.isNotEmpty) {
-      ConsoleIo.out.writeln('\n${'Commands:'.bold}');
+      Io.out.writeln('\n${'Commands:'.bold}');
       for (final sub in subcommands.values) {
-        ConsoleIo.out.writeln('  ${sub.name.padRight(20)} ${sub.description}');
+        Io.out.writeln('  ${sub.name.padRight(20)} ${sub.description}');
       }
     }
     if (options.isNotEmpty) {
-      ConsoleIo.out.writeln('\n${'Options:'.bold}');
+      Io.out.writeln('\n${'Options:'.bold}');
       for (final option in options.values) {
         final optName = '--${option.name}';
         final prefix = option.abbr != null ? '-${option.abbr}, $optName' : '    $optName';
@@ -261,11 +261,11 @@ class CliCommand {
         final fallback = option.defaultLabel;
         if (fallback != null) desc = '$desc [default: $fallback]';
         if (option.isRequired) desc = '$desc [required]';
-        ConsoleIo.out.writeln('  ${prefix.padRight(20)} $desc');
+        Io.out.writeln('  ${prefix.padRight(20)} $desc');
       }
     }
-    ConsoleIo.out.writeln('  -h, --help           Print this help message');
-    if (_version != null) ConsoleIo.out.writeln('      --version        Print the version');
+    Io.out.writeln('  -h, --help           Print this help message');
+    if (_version != null) Io.out.writeln('      --version        Print the version');
   }
 
   String get _fullName => parent == null ? name : '${parent!._fullName} $name';
@@ -337,7 +337,7 @@ class CliCommand {
         return;
       }
       if (isLong && key == 'version' && _version != null && findOption('version') == null) {
-        ConsoleIo.out.writeln('${_root.name} $_version');
+        Io.out.writeln('${_root.name} $_version');
         return;
       }
 

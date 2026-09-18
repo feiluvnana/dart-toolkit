@@ -1,20 +1,21 @@
-# Dart environment & builds
+# Dart
 .dart_tool/
 .packages
 build/
+coverage/
 
-# Temporary files & archives
+# The native library: cargo's build tree, and the prebuilt binaries (`make native` rebuilds
+# them; `.pubignore` lets them into the published package)
+native/target/
+native/prebuilt/
+
+# Scratch output of the examples and keybox
 *.7z
 *.part
 *.zip
-*.tar.gz
+*.tar.*
 tmp*
-
-# Downloaded media archives & directories
 Key BOX*
-
-# Example output
 output/
 out/
-tracks.jsonl
 dist/

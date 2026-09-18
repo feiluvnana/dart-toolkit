@@ -13,4 +13,5 @@ export 'crypto.dart';
 export 'formats.dart';
 export 'fs.dart';
 export 'http.dart';
+export 'native.dart';
 export 'process.dart';

@@ -1,20 +1,25 @@
 /// # Crypto
 ///
-/// Digests of a file, streamed, or of bytes and strings in memory — MD5, SHA-1, SHA-2, CRC-32,
-/// HMAC — on the platform's native library where there is one, in Dart where there is not.
+/// Digests, MACs, key derivation, authenticated encryption and signatures, the same on every
+/// platform through the toolkit's own native library (`Native`), with pure Dart for digests,
+/// HMAC, HKDF and PBKDF2 when it is absent.
 ///
-/// {@category Files}
+/// {@category Crypto}
 library;
 
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
 
-import 'core.dart';
 import 'fs.dart';
+import 'native.dart';
 
+part 'src/crypto/cipher.dart';
 part 'src/crypto/hash.dart';
+part 'src/crypto/keys.dart';
 part 'src/crypto/native.dart';
+part 'src/crypto/sign.dart';

@@ -38,7 +38,7 @@ class _FrameGate {
 
 int _columnsOr(int? fixed) {
   if (fixed != null && fixed > 0) return fixed;
-  return ConsoleIo.columns ?? 80;
+  return Io.columns ?? 80;
 }
 
 String _bar(int current, int total, String message) {
@@ -50,7 +50,7 @@ String _bar(int current, int total, String message) {
   return '  $prefix[$bar] $percent% ($current/$total)';
 }
 
-bool _interactive() => ConsoleIo.isTerminal && Ansi.enabled;
+bool _interactive() => Io.isTerminal && Ansi.enabled;
 
 /// Progress controller for terminal activity.
 ///
@@ -77,11 +77,11 @@ class ConsoleProgress {
 
     var line = base;
     if (label != null && label.isNotEmpty) {
-      final availableForSuffix = maxCols - ConsoleIo.width(base);
+      final availableForSuffix = maxCols - Io.width(base);
       // " ($label)" requires 3 columns for " (" and ")"
-      if (availableForSuffix > 5) line = '$base (${ConsoleIo.truncate(label, availableForSuffix - 3)})';
+      if (availableForSuffix > 5) line = '$base (${Io.truncate(label, availableForSuffix - 3)})';
     }
-    return ConsoleIo.truncate(line, maxCols);
+    return Io.truncate(line, maxCols);
   }
 
   /// Advances the progress by [count] and optionally displays [label].
@@ -98,7 +98,7 @@ class ConsoleProgress {
       final decile = total > 0 ? (_current * 10 ~/ total).clamp(0, 10) : 0;
       if (decile != _lastDecile) {
         _lastDecile = decile;
-        ConsoleIo.out.writeln(formatLine(label));
+        Io.out.writeln(formatLine(label));
       }
     }
   }
@@ -106,9 +106,9 @@ class ConsoleProgress {
   void _render(String? label) {
     final maxCols = max(20, _columnsOr(columns) - 1);
     final line = formatLine(label);
-    final lineWidth = ConsoleIo.width(line);
+    final lineWidth = Io.width(line);
     final padding = ' ' * max(0, min(_lastWidth - lineWidth, maxCols - lineWidth));
-    ConsoleIo.out.write('\r\x1b[K${line.dim}$padding');
+    Io.out.write('\r\x1b[K${line.dim}$padding');
     _lastWidth = lineWidth + padding.length;
   }
 
@@ -118,8 +118,8 @@ class ConsoleProgress {
     _frames.flush();
     _isDone = true;
     _lastWidth = 0;
-    if (_interactive()) ConsoleIo.out.writeln();
-    if (message != null && message.isNotEmpty) ConsoleIo.out.writeln('  ✓ $message'.green);
+    if (_interactive()) Io.out.writeln();
+    if (message != null && message.isNotEmpty) Io.out.writeln('  ✓ $message'.green);
   }
 }
 
@@ -170,7 +170,7 @@ class ConsoleMultiProgress {
   List<String> formatLines() {
     final maxCols = max(20, _columnsOr(columns) - 1);
     return [
-      ConsoleIo.truncate(_bar(_current, total, message), maxCols),
+      Io.truncate(_bar(_current, total, message), maxCols),
       for (var i = 0; i < _slotList.length; i++)
         _formatSlotLine(_slotList[i], i == _slotList.length - 1 ? '  └─ ' : '  ├─ ', maxCols),
     ];
@@ -203,7 +203,7 @@ class ConsoleMultiProgress {
     }
 
     final statusSuffix = slot.status != null && slot.status!.isNotEmpty ? ' [${slot.status}]' : '';
-    return ConsoleIo.truncate('$prefix$barStr $percentStr $sizeStr${slot.label}$statusSuffix', maxCols);
+    return Io.truncate('$prefix$barStr $percentStr $sizeStr${slot.label}$statusSuffix', maxCols);
   }
 
   void _render() {
@@ -214,17 +214,17 @@ class ConsoleMultiProgress {
     for (final line in lines) {
       buffer.write('\r\x1b[K${line.dim}\n');
     }
-    ConsoleIo.out.write(buffer.toString());
+    Io.out.write(buffer.toString());
     _renderedLines = lines.length;
   }
 
   /// Without a terminal there is no cursor to move, so emit one durable line per
   /// completed task instead of a redrawn frame.
   void _renderCompletion(_ProgressSlot slot) {
-    if (_isDone || ConsoleIo.isTerminal) return;
+    if (_isDone || Io.isTerminal) return;
     final status = slot.status ?? 'done';
     final size = slot.total != null && slot.total! > 0 ? ' (${_formatBytes(slot.total!)})' : '';
-    ConsoleIo.out.writeln('  [$_current/$total] ${slot.label}$size [$status]');
+    Io.out.writeln('  [$_current/$total] ${slot.label}$size [$status]');
   }
 
   int _slotFor(String taskId) {
@@ -274,10 +274,10 @@ class ConsoleMultiProgress {
       }
       buffer.write('\x1b[${_renderedLines}A');
       if (message != null && message.isNotEmpty) buffer.write('  ✓ $message\n'.green);
-      ConsoleIo.out.write(buffer.toString());
+      Io.out.write(buffer.toString());
       _renderedLines = 0;
     } else if (message != null && message.isNotEmpty) {
-      ConsoleIo.out.writeln('  ✓ $message'.green);
+      Io.out.writeln('  ✓ $message'.green);
     }
   }
 }
@@ -312,29 +312,29 @@ class ConsoleSpinner {
       _timer = Timer.periodic(const Duration(milliseconds: 80), (_) {
         if (_isDone) return;
         final frame = _frames[_frameIndex++ % _frames.length];
-        ConsoleIo.out.write('\r\x1b[K${frame.cyan} $message (${_stopwatch.elapsed.humanized.dim})');
+        Io.out.write('\r\x1b[K${frame.cyan} $message (${_stopwatch.elapsed.humanized.dim})');
       });
     } else {
-      ConsoleIo.out.writeln('  ⠋ $message...');
+      Io.out.writeln('  ⠋ $message...');
     }
   }
 
   /// Stops the spinner with a success message.
   void succeed([String? successMessage]) {
     _stop();
-    ConsoleIo.out.writeln('  ✓ ${successMessage ?? message} (${_stopwatch.elapsed.humanized.dim})'.green);
+    Io.out.writeln('  ✓ ${successMessage ?? message} (${_stopwatch.elapsed.humanized.dim})'.green);
   }
 
   /// Stops the spinner with a failure message.
   void fail([String? errorMessage]) {
     _stop();
-    ConsoleIo.err.writeln('  ✖ ${errorMessage ?? message} (${_stopwatch.elapsed.humanized})'.red);
+    Io.err.writeln('  ✖ ${errorMessage ?? message} (${_stopwatch.elapsed.humanized})'.red);
   }
 
   /// Stops the spinner with a neutral message.
   void stop([String? finalMessage]) {
     _stop();
-    ConsoleIo.out.writeln('  ℹ ${finalMessage ?? message} (${_stopwatch.elapsed.humanized})'.cyan);
+    Io.out.writeln('  ℹ ${finalMessage ?? message} (${_stopwatch.elapsed.humanized})'.cyan);
   }
 
   void _stop() {
@@ -343,7 +343,7 @@ class ConsoleSpinner {
     _timer?.cancel();
     _timer = null;
     _stopwatch.stop();
-    if (_interactive()) ConsoleIo.out.write('\r\x1b[K');
+    if (_interactive()) Io.out.write('\r\x1b[K');
   }
 
   static Future<T> _run<T>(String message, FutureOr<T> Function() action, {String? done, String? failed}) async {
@@ -359,37 +359,164 @@ class ConsoleSpinner {
   }
 }
 
-/// Helpers for rendering tables, rules, and terminal animations.
+/// The terminal: tables, rules, spinners, progress, and prompts.
+///
+/// At end of input — piped stdin, CI — a prompt falls back to its default rather than looping
+/// forever, or throws [StateError] when it has none.
 ///
 /// {@category Terminal}
 class Console {
+  /// Reads one line, returning `null` at end of input.
+  static String? _read() => Io.readLine(encoding: utf8)?.trim();
+
+  /// Prompts for text input, returning [defaultTo] on an empty answer.
+  ///
+  /// [validate] returns an error message to re-prompt, or `null` to accept.
+  /// At end of input the default is used, or a [StateError] is thrown when a
+  /// [required] value has none.
+  ///
+  /// ```dart
+  /// final port = Console.ask('Port', defaultTo: '8080',
+  ///     validate: (v) => int.tryParse(v) == null ? 'Must be a number' : null);
+  /// ```
+  static String ask(
+    String message, {
+    String? defaultTo,
+    bool required = false,
+    String? Function(String value)? validate,
+  }) {
+    assert(!(required && defaultTo != null), 'A required prompt cannot also have a default.');
+    while (true) {
+      final defaultHint = defaultTo != null ? ' ($defaultTo)'.dim : '';
+      Io.out.write('$message$defaultHint: ');
+      final input = _read();
+
+      if (input == null) {
+        if (defaultTo != null) return defaultTo;
+        if (!required) return '';
+        throw StateError('No input available for required prompt: $message');
+      }
+
+      final value = input.isEmpty ? (defaultTo ?? '') : input;
+
+      if (value.isEmpty && required) {
+        Io.out.writeln('  Value cannot be empty.'.red);
+        continue;
+      }
+
+      final error = validate?.call(value);
+      if (error != null) {
+        Io.out.writeln('  $error'.red);
+        continue;
+      }
+
+      return value;
+    }
+  }
+
+  /// Prompts for a yes/no confirmation.
+  static bool confirm(String message, [bool defaultTo = true]) {
+    final hint = defaultTo ? '[Y/n]'.dim : '[y/N]'.dim;
+    Io.out.write('$message $hint: ');
+    final input = _read()?.toLowerCase();
+
+    if (input == null || input.isEmpty) return defaultTo;
+    return input == 'y' || input == 'yes' || input == 'true' || input == '1';
+  }
+
+  /// Prompts for sensitive input, hiding typed characters.
+  static String secret(String message) {
+    Io.out.write('$message: ');
+    var isEchoModeAvailable = false;
+    try {
+      if (Io.input == null && stdin.hasTerminal) {
+        stdin.echoMode = false;
+        isEchoModeAvailable = true;
+      }
+    } catch (_) {}
+
+    try {
+      final input = _read() ?? '';
+      Io.out.writeln();
+      return input;
+    } finally {
+      if (isEchoModeAvailable) {
+        try {
+          stdin.echoMode = true;
+        } catch (_) {}
+      }
+    }
+  }
+
+  /// Prompts for one of [choices], of any element type.
+  ///
+  /// [display] renders each choice, which keeps records and domain objects usable:
+  /// `Console.select('Target', servers, display: (s) => s.name)`.
+  static T select<T>(String message, List<T> choices, {T? defaultTo, String Function(T choice)? display}) {
+    if (choices.isEmpty) {
+      throw ArgumentError('Choices cannot be empty');
+    }
+
+    String label(T choice) => display?.call(choice) ?? '$choice';
+
+    final defaultIndex = defaultTo != null ? choices.indexOf(defaultTo) : -1;
+
+    Io.out.writeln('$message:');
+    for (var i = 0; i < choices.length; i++) {
+      final marker = i == defaultIndex ? ' (default)'.dim : '';
+      Io.out.writeln('  ${i + 1}) ${label(choices[i])}$marker');
+    }
+
+    while (true) {
+      final defaultHint = defaultIndex >= 0 ? ' [${defaultIndex + 1}]' : '';
+      Io.out.write('Select [1-${choices.length}]$defaultHint: ');
+      final input = _read();
+
+      if (input == null) {
+        if (defaultIndex >= 0) return choices[defaultIndex];
+        throw StateError('No input available for required prompt: $message');
+      }
+
+      if (input.isEmpty && defaultIndex >= 0) return choices[defaultIndex];
+
+      final index = int.tryParse(input);
+      if (index != null && index >= 1 && index <= choices.length) {
+        return choices[index - 1];
+      }
+
+      final match = choices.where((c) => label(c) == input);
+      if (match.isNotEmpty) return match.first;
+
+      Io.out.writeln('  Invalid choice, please enter a number from 1 to ${choices.length}.'.red);
+    }
+  }
+
   /// Clears the terminal screen.
   static void clear() {
-    if (_interactive()) ConsoleIo.out.write('\x1B[2J\x1B[0;0H');
+    if (_interactive()) Io.out.write('\x1B[2J\x1B[0;0H');
   }
 
   /// Renders a horizontal divider rule across the terminal with an optional centered [title].
   static void rule([String? title]) {
-    final cols = ConsoleIo.columns ?? 80;
+    final cols = Io.columns ?? 80;
 
     if (title == null || title.isEmpty) {
-      ConsoleIo.out.writeln('─' * cols);
+      Io.out.writeln('─' * cols);
       return;
     }
 
-    final titleLen = ConsoleIo.width(title) + 2;
+    final titleLen = Io.width(title) + 2;
     if (titleLen >= cols) {
-      ConsoleIo.out.writeln('── $title ──');
+      Io.out.writeln('── $title ──');
       return;
     }
 
     final sideLen = (cols - titleLen) ~/ 2;
-    ConsoleIo.out.writeln('${'─' * sideLen} $title ${'─' * (cols - titleLen - sideLen)}'.cyan);
+    Io.out.writeln('${'─' * sideLen} $title ${'─' * (cols - titleLen - sideLen)}'.cyan);
   }
 
-  /// Renders a text table with borders through [ConsoleIo.table].
-  static void table({required List<String> headers, required List<List<Object?>> rows}) =>
-      ConsoleIo.table(headers, rows);
+  /// Renders a text table with borders through [Io.table].
+  static void table({required List<String> headers, required List<List<Object?>> rows}) => Io.table(headers, rows);
 
   /// Creates a single-line progress indicator for [total] steps.
   static ConsoleProgress progress(int total, {String message = '', int? columns}) =>

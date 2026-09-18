@@ -69,7 +69,7 @@ void Function() onExit(FutureOr<void> Function() callback) {
 ///
 /// {@category CLI}
 Future<Never> die(String message, {int exitCode = 1}) async {
-  ConsoleIo.err.writeln('  ✖ $message'.red);
+  Io.err.writeln('  ✖ $message'.red);
   await runExitHooks();
   exit(exitCode);
 }

@@ -272,8 +272,8 @@ final class Table {
     return file.writeAsString(toCsv(separator: separator));
   }
 
-  /// Prints this table with borders through `ConsoleIo`.
-  void show() => ConsoleIo.table(columns, [
+  /// Prints this table with borders through `Io`.
+  void show() => Io.table(columns, [
     for (final r in rows) [for (final c in columns) r[c]],
   ]);
 

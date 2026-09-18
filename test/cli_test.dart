@@ -75,13 +75,13 @@ void main() {
     setUp(() {
       out = StringBuffer();
       err = StringBuffer();
-      ConsoleIo.out = out;
-      ConsoleIo.err = err;
+      Io.out = out;
+      Io.err = err;
       Ansi.enabled = false;
     });
 
     tearDown(() {
-      ConsoleIo.reset();
+      Io.reset();
       Ansi.enabled = null;
       Logger.level = LogLevel.info;
     });
@@ -144,25 +144,25 @@ void main() {
 
     setUp(() {
       out = StringBuffer();
-      ConsoleIo.out = out;
+      Io.out = out;
       Ansi.enabled = false;
     });
 
     tearDown(() {
-      ConsoleIo.reset();
+      Io.reset();
       Ansi.enabled = null;
     });
 
     /// Feeds [lines] to prompts, then end-of-input.
     void feed(List<String> lines) {
       final queue = List<String>.from(lines);
-      ConsoleIo.input = () => queue.isEmpty ? null : queue.removeAt(0);
+      Io.input = () => queue.isEmpty ? null : queue.removeAt(0);
     }
 
     test('select works with non-String choices via display', () {
       feed(['2']);
       final servers = [(name: 'alpha', region: 'us'), (name: 'beta', region: 'eu')];
-      final picked = Prompt.select('Target', servers, display: (s) => '${s.name} (${s.region})');
+      final picked = Console.select('Target', servers, display: (s) => '${s.name} (${s.region})');
       expect(picked.name, equals('beta'));
       expect(out.toString(), contains('alpha (us)'));
       expect(out.toString(), contains('beta (eu)'));
@@ -170,33 +170,33 @@ void main() {
 
     test('select infers String choices exactly as before', () {
       feed(['3']);
-      final env = Prompt.select('Environment', ['dev', 'staging', 'prod']);
+      final env = Console.select('Environment', ['dev', 'staging', 'prod']);
       expect(env, equals('prod'));
     });
 
     test('select returns the default on empty input', () {
       feed(['']);
-      final env = Prompt.select('Environment', ['dev', 'staging'], defaultTo: 'staging');
+      final env = Console.select('Environment', ['dev', 'staging'], defaultTo: 'staging');
       expect(env, equals('staging'));
       expect(out.toString(), contains('(default)'));
     });
 
     test('ask re-prompts until validate accepts', () {
       feed(['abc', '8080']);
-      final port = Prompt.ask('Port', validate: (v) => int.tryParse(v) == null ? 'Must be a number' : null);
+      final port = Console.ask('Port', validate: (v) => int.tryParse(v) == null ? 'Must be a number' : null);
       expect(port, equals('8080'));
       expect(out.toString(), contains('Must be a number'));
     });
 
     test('ask falls back to the default at end of input instead of hanging', () {
-      ConsoleIo.input = () => null; // immediate end of input
-      final value = Prompt.ask('Name', defaultTo: 'fallback');
+      Io.input = () => null; // immediate end of input
+      final value = Console.ask('Name', defaultTo: 'fallback');
       expect(value, equals('fallback'));
     });
 
     test('required ask throws rather than looping when input is exhausted', () {
-      ConsoleIo.input = () => null; // immediate end of input
-      expect(() => Prompt.ask('Name', required: true), throwsA(isA<StateError>()));
+      Io.input = () => null; // immediate end of input
+      expect(() => Console.ask('Name', required: true), throwsA(isA<StateError>()));
     });
   });
 
@@ -459,7 +459,7 @@ void main() {
     test('--help as an option value or after -- is a value, not a request for help', () async {
       String? token;
       final out = StringBuffer();
-      ConsoleIo.out = out;
+      Io.out = out;
       try {
         final cli = CliCommand('app')
           ..option('token')
@@ -471,7 +471,7 @@ void main() {
         await cli.run(['--help']);
         expect(out.toString(), contains('Usage'));
       } finally {
-        ConsoleIo.reset();
+        Io.reset();
       }
     });
 
@@ -520,11 +520,11 @@ void main() {
       expect(subFmt, equals('all'));
     });
 
-    test('ConsoleIo sink overrides capture output cleanly', () {
+    test('Io sink overrides capture output cleanly', () {
       final outBuffer = StringBuffer();
       final errBuffer = StringBuffer();
-      ConsoleIo.out = outBuffer;
-      ConsoleIo.err = errBuffer;
+      Io.out = outBuffer;
+      Io.err = errBuffer;
 
       try {
         Logger.info('Hello from Logger');
@@ -532,7 +532,7 @@ void main() {
         expect(outBuffer.toString(), contains('Hello from Logger'));
         expect(errBuffer.toString(), contains('Oops from Logger'));
       } finally {
-        ConsoleIo.reset();
+        Io.reset();
       }
     });
 
@@ -621,12 +621,12 @@ void main() {
   group('cli', () {
     test('--version prints name and version', () async {
       final out = StringBuffer();
-      ConsoleIo.out = out;
+      Io.out = out;
       try {
         await (Cli(name: 'demo', version: '1.2.3')..action((_) => fail('not run'))).run(['--version']);
         expect(out.toString().trim(), 'demo 1.2.3');
       } finally {
-        ConsoleIo.reset();
+        Io.reset();
       }
     });
   });
@@ -634,7 +634,7 @@ void main() {
   group('cli', () {
     test('a ✓ cell is one column wide, so table borders stay aligned', () {
       final buf = StringBuffer();
-      ConsoleIo.out = buf;
+      Io.out = buf;
       Ansi.enabled = false;
       try {
         Console.table(
@@ -645,7 +645,7 @@ void main() {
           ],
         );
       } finally {
-        ConsoleIo.reset();
+        Io.reset();
         Ansi.enabled = null;
       }
       final widths = buf.toString().trimRight().split('\n').map((l) => l.runes.length).toSet();
@@ -654,11 +654,11 @@ void main() {
 
     test('Logger.warn goes to stderr with Logger.error', () {
       final err = StringBuffer();
-      ConsoleIo.err = err;
+      Io.err = err;
       try {
         Logger.warn('careful');
       } finally {
-        ConsoleIo.reset();
+        Io.reset();
       }
       expect(err.toString(), contains('careful'));
     });
@@ -694,16 +694,16 @@ void main() {
     });
   });
 
-  group('ConsoleIo seam', () {
+  group('Io seam', () {
     late StringBuffer out;
 
     setUp(() {
       out = StringBuffer();
-      ConsoleIo.out = out;
+      Io.out = out;
     });
 
     tearDown(() {
-      ConsoleIo.reset();
+      Io.reset();
       Ansi.enabled = null;
       Env.remove('NO_COLOR');
     });
@@ -724,8 +724,8 @@ void main() {
     });
 
     test('a redirected sink is never treated as a terminal', () {
-      expect(ConsoleIo.isTerminal, isFalse);
-      expect(ConsoleIo.columns, isNull);
+      expect(Io.isTerminal, isFalse);
+      expect(Io.columns, isNull);
     });
 
     test('a redirected sink disables ANSI unless explicitly overridden', () {
@@ -736,7 +736,7 @@ void main() {
     });
 
     test('Ansi resolves override, then NO_COLOR, then the sink', () {
-      ConsoleIo.reset();
+      Io.reset();
 
       // 1. An explicit override wins over everything.
       Ansi.enabled = true;

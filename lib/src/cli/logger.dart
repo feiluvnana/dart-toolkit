@@ -34,11 +34,11 @@ class Stages {
   void call(String message) {
     _current++;
     if (!Logger.isEnabled(LogLevel.info)) return;
-    ConsoleIo.out.writeln('[$_current/$total] $message'.cyan.bold);
+    Io.out.writeln('[$_current/$total] $message'.cyan.bold);
   }
 }
 
-/// Levelled terminal logging, written through [ConsoleIo].
+/// Levelled terminal logging, written through [Io].
 ///
 /// {@category CLI}
 class Logger {
@@ -70,30 +70,30 @@ class Logger {
   /// Logs a verbose diagnostic message: `  · message`.
   static void debug(String message) {
     if (!isEnabled(LogLevel.debug)) return;
-    ConsoleIo.out.writeln('  · $message'.dim);
+    Io.out.writeln('  · $message'.dim);
   }
 
   /// Logs a success message: `  ✓ message`.
   static void ok(String message) {
     if (!isEnabled(LogLevel.info)) return;
-    ConsoleIo.out.writeln('  ✓ $message'.green);
+    Io.out.writeln('  ✓ $message'.green);
   }
 
   /// Logs an informational message: `  ℹ message`.
   static void info(String message) {
     if (!isEnabled(LogLevel.info)) return;
-    ConsoleIo.out.writeln('  ℹ $message'.cyan);
+    Io.out.writeln('  ℹ $message'.cyan);
   }
 
   /// Logs a warning message to standard error: `  ⚠ message`.
   static void warn(String message) {
     if (!isEnabled(LogLevel.warn)) return;
-    ConsoleIo.err.writeln('  ⚠ $message'.yellow);
+    Io.err.writeln('  ⚠ $message'.yellow);
   }
 
   /// Logs an error message to standard error: `  ✖ message`.
   static void error(String message) {
     if (!isEnabled(LogLevel.error)) return;
-    ConsoleIo.err.writeln('  ✖ $message'.red);
+    Io.err.writeln('  ✖ $message'.red);
   }
 }

@@ -16,7 +16,7 @@ void main() async {
 
     // The archive must live outside the directory being zipped.
     final zipPath = Path.temp / 'toolkit_file_demo.zip';
-    await tempDir.zipTo(zipPath);
+    await tempDir.archiveTo(zipPath);
     Logger.ok('Zipped directory into $zipPath (${await zipPath.size()} bytes)');
     await zipPath.delete();
   } finally {

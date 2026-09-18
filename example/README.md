@@ -8,7 +8,7 @@ run as `dart run dart_toolkit:keybox` uses pub's incremental snapshot and starts
 | file | shows |
 |---|---|
 | [`cli_app.dart`](cli_app.dart) | `Cli` option kinds, required options, `Logger.stages`, `Console.progress` |
-| [`file_automation.dart`](file_automation.dart) | `Path`, `filename`, digests, zip |
+| [`file_automation.dart`](file_automation.dart) | `Path`, `filename`, digests, archives |
 | [`web_crawler.dart`](web_crawler.dart) | `Http.session`, the `scrape` chain, `Elements` and `$x` queries |
 | [`collections.dart`](collections.dart) | six tasks solved with the SDK's `Iterable` and again with `Sequence` and `Table`, side by side |
 

@@ -23,22 +23,25 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 
 | import | contents | third-party |
 |---|---|---|
-| `core.dart` | `Either`, `Env`, `ConsoleIo`, `TaskProgress`, `Crc32`, string and duration helpers | — |
+| `core.dart` | `Either`, `Env`, `Io`, `TaskProgress`, string and duration helpers | — |
+| `native.dart` | `Native`: loads `dart_toolkit_native`, the package's Rust library, for `fs` and `crypto` | path |
 | `collection.dart` | `Sequence` (`.sequence` on any `Iterable` or `Map`): lazy queries, multi-key sort, joins, sets; `Table`: rows of named columns; CSV, TSV, NDJSON, Markdown | — |
 | `formats.dart` | `JsonDocument` with JSONPath; YAML, TOML, INI into it; `HtmlDocument` with CSS `$` and XPath `$x`; `XmlDocument` with XPath `$`; YAML out | — |
 | `async.dart` | `parallelize`, `retry`, `Mutex`, `CancelToken`, stream operators | — |
-| `cli.dart` | `Cli`, `Prompt`, `Logger`, `Console`, ANSI | — |
-| `fs.dart` | `Path`, zip and unzip streamed with ZIP64 | path |
-| `crypto.dart` | MD5, SHA-1/224/256/384/512, CRC-32, HMAC — native where the OS has a library | crypto (fallback), path |
-| `process.dart` | `run`, pipelines, `which` | path |
-| `http.dart` | `Request`, `Response`, `Client`, `Http.session`, scraping, downloads, `res.html`, `url.json()` | path |
+| `cli.dart` | `Cli`, `Console` (tables, spinners, progress, prompts), `Logger`, ANSI | — |
+| `fs.dart` | `Path`; zip, 7z, rar, tar and gz/xz/zstd/bz2 archives with passwords, through the native library | path |
+| `crypto.dart` | digests (MD5 to BLAKE3), HMAC, PBKDF2, HKDF, Argon2id, `Password`, AES-GCM, ChaCha20-Poly1305, Ed25519, ECDSA, RSA verify | crypto (fallback) |
+| `process.dart` | `run`, pipelines, `which` | — |
+| `http.dart` | `Request`, `Response`, `Client`, `Http.session`, scraping, downloads, `res.html`, `url.json()` | — |
 
-Nine modules. Every parser and the HTTP client are the package's own, checked against the
-packages they replaced in the test suite; `path` is the one runtime dependency, `crypto` the
-pure-Dart fallback for hashing where the platform has no native library. `tool/startup.dart`
-prints what each module costs to import.
+Ten modules. Every parser and the HTTP client are the package's own, checked against the
+packages they replaced in the test suite. What Dart cannot do fast — hashing at 2–3 GB/s,
+AES, Argon2, 7z and rar — runs in **`dart_toolkit_native`**, one Rust library the package ships
+prebuilt and loads through `dart:ffi`; `Native.isAvailable` and `Native.reason` say whether it
+loaded, and anything that needs it throws an `UnsupportedError` naming what and why when it
+did not. `tool/startup.dart` prints what each module costs to import.
 
-`tool/check_deps.dart` checks this table on demand.
+
 
 ---
 
@@ -125,10 +128,11 @@ await file.writeText(jsonEncode({'version': '0.0.1'}));
 final config = JsonDocument.parse(await file.readText());
 print(config.$(r'$.version').first.raw);
 
-print(await file.sha256());                        // native on macOS and Linux, ~2 GB/s
-print('payload'.hmac(Hash.sha256, secret));
-await dir.zipTo('${dir.path}.zip');                 // streamed, ZIP64, dart:io's zlib
-for (final e in await zip.zipEntries()) print('${e.name} ${e.size}');
+print(await file.sha256());                        // 2.4 GB/s through the native library
+await dir.archiveTo('${dir.path}.7z', password: 'pw');   // also .zip, .tar.gz, .tar.zst, .tar.xz, .tar.bz2
+await 'photos.rar'.path.extractTo(dir, password: 'pw');   // rar reads; the format's licence forbids writing
+for (final e in await zip.archiveEntries()) print('${e.name} ${e.size}');
+await log.gzipTo('log.gz');  await big.compressTo('big.zst');
 ```
 
 A name that came from outside — a scraped title, a header, user input — becomes one component
@@ -177,6 +181,22 @@ t.groupBy('disc').sum('size');                            // Table(disc, size)
 t.pivot(rows: 'disc', column: 'format', value: 'size');
 await t.join(other, on: 'href').saveCsv('out.csv');
 final rows = json.$(r'$.items[*]').table;                 // or Table.csv(text), Table.rows(list)
+```
+
+### Crypto
+
+Digests, MACs, key derivation, authenticated encryption and signatures, the same on every
+platform through the native library, with pure Dart for digests, HMAC, HKDF and PBKDF2 when it
+is absent. Published vectors and `openssl` agree with every one of them in the test suite.
+
+```dart
+'abc'.sha256;  bytes.blake3;  await file.hash(Hash.sha3_256);  'body'.hmac(Hash.sha256, secret)
+final key = Key.random();  Crypto.token();  Crypto.equals(a, b)
+Pbkdf2(Hash.sha256).derive(pw, salt);  Hkdf().derive(secret, info: ctx, length: 64)
+Password.hash('pw');  Password.verify('pw', stored)                 // argon2id, self-describing
+final box = Aes.gcm(key);  box.open(box.seal(plain, aad: header))   // nonce ‖ ct ‖ tag
+await box.encryptFile(src, dst)
+Ed25519.generate().sign(msg);  Ecdsa.p256(priv).sign(msg);  Rsa.verify(pem, msg, sig)
 ```
 
 ### Concurrency
@@ -362,16 +382,17 @@ cli.command('fetch', build: (fetch) => fetch
 
 ### Testable IO
 
-Every console write — including subprocess output — goes through `ConsoleIo`, which also drives
+Every console write — including subprocess output — goes through `Io`, which also drives
 terminal detection, so redirecting the sink redirects what gets rendered. Every request goes
-through a `Client`, so a handler-backed one stands in for the network.
+through a `Client`, so a handler-backed one stands in for the network. `make` runs analyze,
+format and the tests; `make native` builds the Rust library for this machine.
 
 ```dart
 final buffer = StringBuffer();
-ConsoleIo.out = buffer;
+Io.out = buffer;
 Logger.ok('captured, not printed');
 await run('echo also-captured');
-ConsoleIo.reset();
+Io.reset();
 
 final client = MockClient((req) async => Response('{"ok": true}', 200));
 await Http.session(() => url.json(), client: client);
