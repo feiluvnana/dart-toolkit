@@ -4,6 +4,38 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Scraping — driven from the context
+
+The example crawler, pointed at one site with `follow` on every link, walked three other
+domains, printed each story four times and died on one TLS handshake with no URL in the trace.
+Every one of those was the API's default. `scrape` now takes a handler and nothing else.
+
+- **`scrape<T>(handler)` returns `Stream<Either<ScrapeFailure, T>>`.** A failed request is a
+  `Left` — `RequestFailed`, `BadStatus` or `HandlerFailed`, each carrying URL, request, depth and
+  meta — and the crawl continues. `.rights`, `.lefts` and `.unwrap()` on `Stream<Either>` pick the
+  policy, as they do on `parallelize`'s list. Nothing reaches the error channel.
+- **Only a 2xx reaches the handler.** Anything else, after retries, is a `BadStatus` with the
+  response on it.
+- **`follow` stays on the seeds' hosts** and drops `mailto:`, `javascript:` and `tel:`;
+  `offsite: true` leaves. A seed that redirects — apex to `www.` — moves the crawl's home with it;
+  any other redirect off-host is a `BadStatus`, not silence.
+- **`ctx.depth`, `ctx.pages`, `ctx.stop()`.** Breadth is `if (ctx.depth < 2)`, size is
+  `if (ctx.pages >= n) ctx.stop()`, and `.take(n)` on the stream already stopped dispatch.
+  `stop()` drops the frontier; handlers already running finish and their emits are delivered.
+- **The engine owns what it should never have asked about:** 16 in flight, 8 per host, with one
+  queue per host and a ready-host queue so dispatch is O(1); a host answering 429 or 503 is
+  paused for `Retry-After` or a capped backoff while other hosts continue; two retries on a
+  transport error or 5xx, none on a TLS failure or an oversize body, and none for a host on its
+  third consecutive failure; 30 s on headers and on each chunk; a 16 MB body cap enforced on
+  the stream, not after buffering; redirects followed by the engine with the request's headers
+  kept and the method downgraded on 303, so `ctx.url` is the page that answered; a `user-agent`
+  when neither the request nor the session sets one.
+- **Removed:** every named parameter of `scrape` — `concurrency`, `delay`, `retries`, `client`,
+  `cancelToken` (the last two were `Http.session(client:)` and `.cancelWith(token)` already) —
+  and `ScrapeContext.followAll`, which is `targets.forEach(ctx.follow)`.
+- **Startup:** no new imports. `tool/startup.dart http`, three alternating pairs against
+  `HEAD`: +232/+272/+249 ms against +258/+253/+270 — within noise, in both directions.
+
 Audit IV read the source and then ran it: every bug below was reproduced by a probe before it
 was fixed, and every measurement is a back-to-back delta. **Everything is breaking; there are no
 deprecation shims.**

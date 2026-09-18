@@ -145,33 +145,32 @@ Future<void> run(CliContext ctx) async {
 
   Stream<Asset> queue() async* {
     yield* Stream.fromIterable(artwork.pairs);
-    yield* khinsider.url.scrape<Asset>(
-      (ctx) async {
-        for (final tr in ctx.response.html().$('#songlist tr')) {
-          final tds = tr.$('td');
-          if (tds.length < 4) continue;
-          final href = tds[3].$('a').first.attr('href')!;
-          final d = int.parse(href.match(RegExp(r'/(\d+)-'), 1) ?? tds[1].text.replaceAll(RegExp(r'\D'), ''));
-          final t = int.parse(href.match(RegExp(r'-(\d+)\.'), 1) ?? tds[2].text.replaceAll(RegExp(r'\D'), ''));
-          final disc = discNames[d]!;
-          final title = tracks[d]?[t] ?? tds[3].text.filename;
+    yield* khinsider.url
+        .scrape<Asset>((ctx) async {
+          for (final tr in ctx.response.html().$('#songlist tr')) {
+            final tds = tr.$('td');
+            if (tds.length < 4) continue;
+            final href = tds[3].$('a').first.attr('href')!;
+            final d = int.parse(href.match(RegExp(r'/(\d+)-'), 1) ?? tds[1].text.replaceAll(RegExp(r'\D'), ''));
+            final t = int.parse(href.match(RegExp(r'-(\d+)\.'), 1) ?? tds[2].text.replaceAll(RegExp(r'\D'), ''));
+            final disc = discNames[d]!;
+            final title = tracks[d]?[t] ?? tds[3].text.filename;
 
-          for (final ext in formats) {
-            final target = base / disc / ext / '$t. $title.$ext';
-            if (target.existsSync()) continue;
-            ctx.follow(
-              href,
-              callback: (song) {
-                final dlHref = song.response.html().$('a[href*=".$ext"]').first.attr('href')!;
-                song.emit((url: song.resolve(dlHref), path: target));
-              },
-            );
+            for (final ext in formats) {
+              final target = base / disc / ext / '$t. $title.$ext';
+              if (target.existsSync()) continue;
+              ctx.follow(
+                href,
+                callback: (song) {
+                  final dlHref = song.response.html().$('a[href*=".$ext"]').first.attr('href')!;
+                  song.emit((url: song.resolve(dlHref), path: target));
+                },
+              );
+            }
           }
-        }
-      },
-      concurrency: concurrency,
-      cancelToken: token,
-    );
+        })
+        .rights
+        .cancelWith(token);
   }
 
   await for (final p in queue().downloadAll(concurrency: concurrency, cancelToken: token)) {

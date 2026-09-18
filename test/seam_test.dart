@@ -205,7 +205,7 @@ void main() {
                 },
               );
             }
-          }, concurrency: 2);
+          }).rights;
         }
 
         await for (final p in queue().downloadAll(concurrency: 2)) {
@@ -249,7 +249,7 @@ void main() {
       addTearDown(() => chain.close(force: true));
 
       final root = Uri.parse('http://127.0.0.1:${chain.port}/chain/0');
-      const concurrency = 4;
+      const concurrency = 8;
       final sub = root
           .scrape<String>((ctx) {
             ctx.emit(ctx.url.toString());
@@ -257,7 +257,8 @@ void main() {
               final href = a.attr('href');
               if (href != null) ctx.follow(href);
             }
-          }, concurrency: concurrency)
+          })
+          .rights
           .listen((_) {});
 
       sub.pause();

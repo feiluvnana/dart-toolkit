@@ -129,24 +129,46 @@ One cancellation idiom composes over any `Stream` or `Future`:
 final token = CancelToken();
 onExit(() => token.cancel('interrupted'));
 
-await for (final item in url.scrape<Item>(parse).cancelWith(token)) {
+await for (final item in url.scrape<Item>(parse).rights.cancelWith(token)) {
   print(item);
 }
 ```
 
 ### Scraping
 
+`scrape` takes a handler and nothing else. Every decision is made on `ctx`; everything a crawl
+should never have to decide is an engine default.
+
 ```dart
-final items = url.scrape<Item>((ctx) {
-  for (final row in ctx.response.html().$('tr.item')) {
-    ctx.emit(Item(row.$('.title').first.text, link: ctx.resolve(row.$('a').first.attr('href')!)));
+final stories = url.scrape<Story>((ctx) {
+  final html = ctx.response.html();
+  for (final row in html.$('tr.athing')) {
+    if (row.$('.titleline > a').firstOrNull case final a?) {
+      ctx.emit((title: a.text, link: ctx.resolve(a.attr('href')!)));
+    }
   }
-  ctx.followAll(ctx.response.html().$('a.next').map((a) => a.attr('href')!));
-}, concurrency: 8);
+  for (final a in html.$('a[href]')) ctx.follow(a.attr('href')!);
+  if (ctx.pages >= 5) ctx.stop();
+});
 ```
 
-`ctx.url` is the URL that was requested, and `ctx.resolve` resolves against it — the same base
-`follow` uses. A 429 or 5xx is retried, honouring `Retry-After`.
+`follow` stays on the seeds' hosts and drops `mailto:` and `javascript:` by itself;
+`offsite: true` is the one way to leave. `ctx.depth` and `ctx.pages` bound a crawl from inside,
+`stop()` ends it, and only a 2xx reaches the handler. `ctx.url` is the page that answered, after
+redirects, and `resolve` and `follow` resolve against it.
+
+A failure is an item, not a stream error — the contract `parallelize` has, on a stream:
+
+```dart
+await for (final s in stories.rights) print(s);   // skip failures
+stories.lefts                                     // RequestFailed | BadStatus | HandlerFailed
+stories.unwrap()                                  // throw the first
+await for (final r in stories) switch (r) { case Right(:final value): ...; case Left(:final value): ... }
+```
+
+The engine keeps 16 requests in flight and 8 per host, pauses a host that answers 429 or 503
+for its `Retry-After`, retries a transport error or a 5xx twice and a TLS failure never, times
+out at 30 s, abandons a body over 16 MB, and sends a `user-agent` unless the session sets one.
 
 One session shares a client across every request inside it, closes it on the way out, and is
 where the timeout and default headers live:

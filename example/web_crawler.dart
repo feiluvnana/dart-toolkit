@@ -10,20 +10,28 @@ void main() async {
 
   // One client for every request inside the session, closed when it returns.
   await Http.session(() async {
-    final front = await 'https://news.ycombinator.com'.url.get();
-    if (!front.ok) await die('Hacker News returned ${front.statusCode}');
-
-    // ctx.url is where the response came from; ctx.resolve uses it, as follow() does.
-    final stream = 'https://news.ycombinator.com'.url.scrape<Story>((ctx) {
-      for (final row in ctx.response.html().$('tr.athing')) {
-        if (row.$('.titleline > a').firstOrNull?.attr('href') case final href?) {
-          ctx.emit((title: row.$('.titleline > a').first.text, link: ctx.resolve(href)));
+    // Every decision is the handler's: what to emit, what to follow, when to stop.
+    // follow() stays on news.ycombinator.com by itself; a failed page is a Left, not a crash.
+    final stories = 'https://news.ycombinator.com'.url.scrape<Story>((ctx) {
+      final html = ctx.response.html();
+      for (final row in html.$('tr.athing')) {
+        if (row.$('.titleline > a').firstOrNull case final a?) {
+          ctx.emit((title: a.text, link: ctx.resolve(a.attr('href')!)));
         }
       }
+      for (final a in html.$('a[href]')) {
+        ctx.follow(a.attr('href')!);
+      }
+      if (ctx.pages >= 5) ctx.stop();
     });
 
-    await for (final story in stream.take(5)) {
-      Logger.ok('${story.title} -> ${story.link}');
+    await for (final story in stories) {
+      switch (story) {
+        case Right(:final value):
+          Logger.ok('${value.title} -> ${value.link}');
+        case Left(:final value):
+          Logger.warn('$value');
+      }
     }
   });
 }

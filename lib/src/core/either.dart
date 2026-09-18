@@ -140,4 +140,10 @@ extension IterableEitherExtensions<L, R> on Iterable<Either<L, R>> {
 extension StreamEitherExtensions<L, R> on Stream<Either<L, R>> {
   /// Emits every [Right] value; every [Left] becomes an error event, and the stream continues.
   Stream<R> unwrap() => map((outcome) => outcome.unwrap());
+
+  /// Only the [Right] values, discarding failures.
+  Stream<R> get rights => where((outcome) => outcome.isRight).map((outcome) => (outcome as Right<L, R>).value);
+
+  /// Only the [Left] values.
+  Stream<L> get lefts => where((outcome) => outcome.isLeft).map((outcome) => (outcome as Left<L, R>).value);
 }

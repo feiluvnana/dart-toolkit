@@ -77,6 +77,15 @@ void main() {
       final stream = Stream<Either<Object, int>>.fromIterable([const Right(1), Left(boom)]);
       expect(stream.unwrap(), emitsInOrder([1, emitsError(same(boom))]));
     });
+
+    test('Stream<Either>.rights and lefts partition outcomes', () async {
+      final boom = StateError('boom');
+      Stream<Either<Object, int>> createStream() =>
+          Stream<Either<Object, int>>.fromIterable([const Right(1), Left(boom), const Right(3)]);
+
+      expect(await createStream().rights.toList(), equals([1, 3]));
+      expect(await createStream().lefts.toList(), equals([boom]));
+    });
   });
 
   group('Async parallelize on Iterable', () {

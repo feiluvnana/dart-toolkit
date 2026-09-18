@@ -154,10 +154,22 @@ re-implemented: `elementAtOrNull` throws on a negative index where `getOrNull` r
 
 `parallelize` settles every task and returns `List<Either<Object, R>>`. The caller picks:
 `.rights`, `.lefts`, or `.unwrap()` to throw the first failure. There is no fail-fast variant of
-the primitive.
+the primitive. `scrape` is the stream instance of the rule: `Stream<Either<ScrapeFailure, T>>`,
+`.rights`, `.lefts` or `.unwrap()`, and nothing on the error channel — a crawl that died on one
+TLS handshake 600 pages in is how the rule reached streams.
 
 `Either.tryCatch` has no error type parameter. A function that cannot honour `E` without a
 converter should not accept `E` — narrow with `mapLeft` afterwards.
+
+## A crawl is driven from its context
+
+`scrape` takes a handler and nothing else. What the handler can decide, it decides on `ctx`:
+`emit`, `follow`, `stop`, and `depth` and `pages` to decide with. What it should never have to
+decide — concurrency, per-host pacing, retries, timeout, body cap, redirects, user-agent — the
+engine defaults, with no knob. `concurrency:`, `delay:`, `retries:`, `maxPages:`, `cancelToken:`
+and `client:` all existed once; the last two were `.cancelWith(token)` and `Http.session(client:)`
+already, and the rest were either a line in the handler or a default the engine should have had.
+A configuration callback is the same parameters behind a different door.
 
 ## Sync mirrors are allowed only on `fs`
 

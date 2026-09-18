@@ -76,9 +76,12 @@ class _SessionClient extends http.BaseClient {
 /// A borrowed or owned client. Internal: hidden by `http/http.dart`.
 class ClientLease {
   final http.Client client;
+
+  /// The session's default headers, or `null` outside a session or when it set none.
+  final Map<String, String>? headers;
   final bool _owned;
 
-  const ClientLease(this.client, this._owned);
+  const ClientLease(this.client, this._owned, {this.headers});
 
   /// Closes the client only if this lease created it.
   void close() {
@@ -89,5 +92,6 @@ class ClientLease {
 /// Resolves the client for one call: the explicit one, else the session's, else a new one.
 ClientLease clientFor(http.Client? explicit) {
   final shared = explicit ?? Http.client;
-  return shared != null ? ClientLease(shared, false) : ClientLease(http.Client(), true);
+  if (shared == null) return ClientLease(http.Client(), true);
+  return ClientLease(shared, false, headers: shared is _SessionClient ? shared._headers : null);
 }
