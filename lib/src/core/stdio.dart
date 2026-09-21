@@ -66,6 +66,34 @@ class Io {
     input = null;
   }
 
+  /// Whether ANSI styling is enabled.
+  ///
+  /// Resolution order: an explicit assignment here, then `NO_COLOR`, then the active sink —
+  /// redirecting [out] disables styling so captured output is plain. Assign `null` to
+  /// restore the automatic answer.
+  ///
+  /// This lives beside [out], [isTerminal] and [width] because it is the same question they
+  /// answer: what the active sink can render.
+  static bool get color {
+    if (_color != null) return _color!;
+    if (isRedirected) return false;
+    if (Env.has('NO_COLOR')) return false;
+    return _ansiTerminal;
+  }
+
+  static set color(bool? value) => _color = value;
+
+  static bool? _color;
+
+  /// Whether the process's stdout takes escapes: a native call, asked once.
+  static final bool _ansiTerminal = () {
+    try {
+      return stdout.supportsAnsiEscapes;
+    } catch (_) {
+      return false;
+    }
+  }();
+
   /// [text] without ANSI escape sequences.
   static String stripAnsi(String text) => text.replaceAll(_ansiEscape, '');
 
@@ -95,40 +123,9 @@ class Io {
     }
     return '$buffer$ellipsis';
   }
-
-  /// Writes a bordered text table to [out]; a short row is padded, a long one cut.
-  static void table(List<String> headers, List<List<Object?>> rows) {
-    if (headers.isEmpty && rows.isEmpty) return;
-    final numCols = headers.isNotEmpty ? headers.length : rows.first.length;
-    final cells = [
-      for (final row in rows) [for (var i = 0; i < numCols; i++) i < row.length ? '${row[i]}' : ''],
-    ];
-    final widths = [for (final h in headers) width(h)];
-    while (widths.length < numCols) {
-      widths.add(0);
-    }
-    for (final row in cells) {
-      for (var i = 0; i < numCols; i++) {
-        widths[i] = max(widths[i], width(row[i]));
-      }
-    }
-    String divider(String left, String mid, String right, String cross) =>
-        '$left${widths.map((w) => mid * (w + 2)).join(cross)}$right';
-    String line(List<String> row) =>
-        '│${[for (var i = 0; i < numCols; i++) ' ${row[i]}${' ' * (widths[i] - width(row[i]))} '].join('│')}│';
-    out.writeln(divider('┌', '─', '┐', '┬'));
-    if (headers.isNotEmpty) {
-      out.writeln(line(headers));
-      out.writeln(divider('├', '─', '┤', '┼'));
-    }
-    for (final row in cells) {
-      out.writeln(line(row));
-    }
-    out.writeln(divider('└', '─', '┘', '┴'));
-  }
 }
 
-// ---- text measurement and the table renderer: here so that `cli` and `collection` share them
+// ---- text measurement: here so that `cli` and `collection` share it
 
 int _charVisualWidth(int rune) {
   if (rune < 0x20 || (rune >= 0x7f && rune < 0xa0)) return 0;

@@ -50,9 +50,9 @@ void main() {
         expect('abc'.hash(h), abc[h], reason: h.name);
         expect(h.length, abc[h]!.length ~/ 2, reason: h.name);
       }
-      expect('abc'.crc32, 0x352441c2);
-      expect('abc'.xxh3, '78af5f94892f3950'); // 64 bits, so hex rather than a wrapped int
-      expect(''.sha256, 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
+      expect('abc'.checksum(Hash.crc32), 0x352441c2);
+      expect('abc'.hash(Hash.xxh3), '78af5f94892f3950'); // 64 bits, so hex rather than a wrapped int
+      expect(''.hash(Hash.sha256), 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
     });
 
     test('files stream through the same digest; openssl agrees', () async {
@@ -60,11 +60,11 @@ void main() {
       try {
         final f = Path(dir.path) / 'big.bin';
         await f.writeBytes(data);
-        expect(await f.sha256(), data.sha256);
-        expect(await f.blake3(), data.blake3);
-        expect(await f.crc32(), data.crc32);
-        expect(await f.xxh3(), data.xxh3);
-        expect((await openssl(['dgst', '-sha512', '-r', f])).split(' ').first, await f.sha512());
+        expect(await f.hash(Hash.sha256), data.hash(Hash.sha256));
+        expect(await f.hash(Hash.blake3), data.hash(Hash.blake3));
+        expect(await f.checksum(Hash.crc32), data.checksum(Hash.crc32));
+        expect(await f.hash(Hash.xxh3), data.hash(Hash.xxh3));
+        expect((await openssl(['dgst', '-sha512', '-r', f])).split(' ').first, await f.hash(Hash.sha512));
         expect((await openssl(['dgst', '-sha3-384', '-r', f])).split(' ').first, await f.hash(Hash.sha3_384));
       } finally {
         dir.deleteSync(recursive: true);
@@ -110,11 +110,11 @@ void main() {
 
   group('checksum width', () {
     test('a 64-bit checksum reads as hex rather than a wrapped negative int', () {
-      expect([1, 2, 3].xxh3, matches(RegExp(r'^[0-9a-f]{16}$')));
-      expect('abc'.xxh3, '78af5f94892f3950');
+      expect([1, 2, 3].hash(Hash.xxh3), matches(RegExp(r'^[0-9a-f]{16}$')));
+      expect('abc'.hash(Hash.xxh3), '78af5f94892f3950');
       expect(() => [1, 2, 3].checksum(Hash.xxh64), throwsArgumentError);
       expect(() => [1, 2, 3].checksum(Hash.xxh3), throwsArgumentError);
-      expect([1, 2, 3].crc32, isNonNegative);
+      expect([1, 2, 3].checksum(Hash.crc32), isNonNegative);
       expect([1, 2, 3].checksum(Hash.crc32c), isNonNegative);
     });
 

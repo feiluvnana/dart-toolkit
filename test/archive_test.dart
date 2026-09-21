@@ -28,7 +28,8 @@ void main() {
   tearDown(() => tmp.deleteSync(recursive: true));
 
   Map<String, String> digests(Path root) => {
-    for (final f in root.filesSync(recursive: true)) f.path.substring(root.length + 1): f.readBytesSync().sha256,
+    for (final f in root.filesSync(recursive: true))
+      f.path.substring(root.length + 1): f.readBytesSync().hash(Hash.sha256),
   };
 
   for (final ext in ['.zip', '.7z', '.tar', '.tar.gz', '.tar.xz', '.tar.zst', '.tar.bz2']) {
@@ -81,7 +82,11 @@ void main() {
       final packed = tmp / 'text${c.extension}';
       await file.compressTo(packed);
       await packed.decompressTo(tmp / 'text${c.extension}.out');
-      expect((tmp / 'text${c.extension}.out').readBytesSync().sha256, file.readBytesSync().sha256, reason: c.name);
+      expect(
+        (tmp / 'text${c.extension}.out').readBytesSync().hash(Hash.sha256),
+        file.readBytesSync().hash(Hash.sha256),
+        reason: c.name,
+      );
       final tool = switch (c) {
         Compression.gzip => 'gzip',
         Compression.xz => 'xz',
@@ -92,8 +97,8 @@ void main() {
       expect(r.exitCode, 0, reason: '${c.name}: ${r.stderr}');
       expect((r.stdout as String).length, file.readTextSync().length);
     }
-    await file.gzipTo(tmp / 'g.gz');
-    await (tmp / 'g.gz').gunzipTo(tmp / 'g.txt');
+    await file.compressTo(tmp / 'g.gz');
+    await (tmp / 'g.gz').decompressTo(tmp / 'g.txt');
     expect((tmp / 'g.txt').readTextSync(), file.readTextSync());
   });
 

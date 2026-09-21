@@ -1,5 +1,3 @@
-import 'package:dart_toolkit/dart_toolkit.dart';
-
 /// `tk` — the toolkit as a tool. Every command is a few lines over the library, which makes
 /// this the composition test: if a command needs a helper the package does not have, that is
 /// the package's problem, not the command's.
@@ -11,45 +9,32 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 ///   dart run dart_toolkit:tk fetch https://example.com
 ///   dart run dart_toolkit:tk pack lib --to /tmp/lib.zip
 ///   dart run dart_toolkit:tk peek /tmp/lib.zip
+library;
+
+import 'package:dart_toolkit/dart_toolkit.dart';
+
+/// The options, declared once as values: the name is written here and nowhere else, and
+/// `ctx(top)` comes back an `int` because `top` says so.
+final verbose = Flag('verbose', abbr: 'v', description: 'Show debug logging');
+final algo = Opt.among('algo', Hash.values, abbr: 'a', description: 'Digest algorithm').or(Hash.sha256);
+final top = Opt.number('top', abbr: 'n', description: 'How many to show').or(10);
+final query = Opt.text('query', abbr: 'q', description: r'A JSONPath, e.g. $.dependencies.*');
+final asYaml = Flag('yaml', abbr: 'y', description: 'Print the document as YAML');
+final out = Opt.text('out', abbr: 'o', description: 'Write to this path instead of stdout');
+final to = Opt.text('to', abbr: 't', description: 'Destination, e.g. out.zip or out.tar.gz').required();
+
 Future<void> main(List<String> args) async {
-  final tk = Cli(name: 'tk', description: 'Small jobs, from the toolkit', version: '0.0.1')
-    ..flag('verbose', abbr: 'v', description: 'Show debug logging')
-    ..command(
-      'hash',
-      description: 'Digest files, one per line',
-      build: (c) => c
-        ..choice('algo', [for (final h in Hash.values) h.name], abbr: 'a', defaultTo: 'sha256')
-        ..action(hash),
-    )
-    ..command(
-      'find',
-      description: 'Match a glob and report the biggest hits',
-      build: (c) => c
-        ..number('top', abbr: 'n', defaultTo: 10, description: 'How many to show')
-        ..action(find),
-    )
+  final tk = Cli(name: 'tk', description: 'Small jobs, from the toolkit', version: '0.0.2', options: [verbose])
+    ..command('hash', description: 'Digest files, one per line', options: [algo], handler: hash)
+    ..command('find', description: 'Match a glob and report the biggest hits', options: [top], handler: find)
     ..command(
       'read',
       description: 'Parse YAML, TOML, INI or JSON and query it',
-      build: (c) => c
-        ..option('query', abbr: 'q', description: r'A JSONPath, e.g. $.dependencies.*')
-        ..flag('yaml', abbr: 'y', description: 'Print the document as YAML')
-        ..action(read),
+      options: [query, asYaml],
+      handler: read,
     )
-    ..command(
-      'fetch',
-      description: 'GET a URL to stdout, or to a file with --out',
-      build: (c) => c
-        ..option('out', abbr: 'o', description: 'Write to this path instead of stdout')
-        ..action(fetch),
-    )
-    ..command(
-      'pack',
-      description: 'Archive a directory; the format comes from --to',
-      build: (c) => c
-        ..option('to', abbr: 't', required: true, description: 'Destination, e.g. out.zip or out.tar.gz')
-        ..action(pack),
-    )
+    ..command('fetch', description: 'GET a URL to stdout, or to a file with --out', options: [out], handler: fetch)
+    ..command('pack', description: 'Archive a directory; the format comes from --to', options: [to], handler: pack)
     ..command('peek', description: 'List an archive without extracting it', handler: peek);
 
   await tk.run(args);
@@ -59,7 +44,7 @@ Future<void> main(List<String> args) async {
 Future<void> hash(CliContext ctx) async {
   _verbose(ctx);
   if (ctx.rest.isEmpty) await die('hash needs at least one path');
-  final algorithm = Hash.values.firstWhere((h) => h.name == ctx.option('algo'));
+  final algorithm = ctx(algo);
 
   final digested = await ctx.rest.parallelize(
     (path) async => (path: path, digest: await path.path.hash(algorithm)),
@@ -89,7 +74,7 @@ Future<void> find(CliContext ctx) async {
     return;
   }
   Table.records(
-    sized.rights.sequence.sortedBy((r) => r.bytes, descending: true).take(ctx.number('top')),
+    sized.rights.sequence.sortedBy((r) => r.bytes, descending: true).take(ctx(top)),
     (r) => {'bytes': r.bytes, 'file': r.file},
   ).show();
   Logger.ok('${sized.rights.length} matches, ${sized.rights.sequence.sumBy((r) => r.bytes)} bytes');
@@ -111,15 +96,15 @@ Future<void> read(CliContext ctx) async {
     final other => throw UsageException('cannot read ".$other"; try yaml, toml, ini or json'),
   };
 
-  if (ctx.optionOrNull('query') case final query?) {
-    final hits = doc.$(query);
-    Logger.debug('${hits.length} hits for $query');
+  if (ctx(query) case final expression?) {
+    final hits = doc.$(expression);
+    Logger.debug('${hits.length} hits for $expression');
     for (final hit in hits) {
       Io.out.writeln(hit);
     }
     return;
   }
-  Io.out.writeln(ctx.flag('yaml') ? doc.toYaml() : '$doc');
+  Io.out.writeln(ctx(asYaml) ? doc.toYaml() : '$doc');
 }
 
 /// To stdout, or to a file with progress.
@@ -128,14 +113,12 @@ Future<void> fetch(CliContext ctx) async {
   final url = (ctx.rest.firstOrNull ?? await die('fetch needs a URL')).url;
 
   await Http.session(timeout: 30.s, () async {
-    if (ctx.optionOrNull('out') case final out?) {
-      // `download` reports one file; the batch form is what `show()` renders, so a single
-      // download goes through a one-entry map.
-      final last = await {
-        url: out.path,
-      }.downloadAll(overwrite: true, cancelToken: ctx.cancel).show(slots: 1, message: 'Fetching', done: 'Fetched');
+    if (ctx(out) case final path?) {
+      final last = await path.path
+          .download(url, overwrite: true, cancelToken: ctx.cancel)
+          .show(slots: 1, message: 'Fetching', done: 'Fetched');
       if (last?.current case DownloadFailed(:final error)) await die('$error');
-      Logger.ok('$out is ${await out.path.size()} bytes');
+      Logger.ok('$path is ${await path.path.size()} bytes');
       return;
     }
     final res = await url.get();
@@ -147,10 +130,14 @@ Future<void> fetch(CliContext ctx) async {
 Future<void> pack(CliContext ctx) async {
   _verbose(ctx);
   final source = (ctx.rest.firstOrNull ?? await die('pack needs a directory')).path;
-  final to = ctx.option('to').path;
+  final target = ctx(to).path;
 
-  await Console.spin('Packing $source into ${to.name}…', () => source.archiveTo(to), done: 'Packed ${to.name}');
-  Logger.ok('${to.name} is ${await to.size()} bytes from ${await source.size()} bytes');
+  await Console.spin(
+    'Packing $source into ${target.name}…',
+    () => source.archiveTo(target),
+    done: 'Packed ${target.name}',
+  );
+  Logger.ok('${target.name} is ${await target.size()} bytes from ${await source.size()} bytes');
 }
 
 Future<void> peek(CliContext ctx) async {
@@ -168,5 +155,5 @@ Future<void> peek(CliContext ctx) async {
 }
 
 void _verbose(CliContext ctx) {
-  if (ctx.flag('verbose')) Logger.level = LogLevel.debug;
+  if (ctx(verbose)) Logger.level = LogLevel.debug;
 }

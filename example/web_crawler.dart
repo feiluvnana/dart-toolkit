@@ -106,7 +106,7 @@ Future<void> main() async {
 
       Logger.ok('${last?.written ?? 0} written of ${last?.total ?? 0}');
       await for (final f in into.files()) {
-        Logger.info('${f.name}  ${await f.size()} B  sha256 ${(await f.sha256()).substring(0, 12)}…');
+        Logger.info('${f.name}  ${await f.size()} B  sha256 ${(await f.hash(Hash.sha256)).substring(0, 12)}…');
       }
     } finally {
       await into.delete(recursive: true);

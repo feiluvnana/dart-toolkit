@@ -88,8 +88,13 @@ final class _ClientLease {
 }
 
 /// Resolves the client for one call: the explicit one, else the session's, else a new one.
-_ClientLease _clientFor(Client? explicit) {
-  final shared = explicit ?? Http.client;
+/// Runs [body] with [client] as the ambient client, so the calls nested inside it reuse
+/// the connection rather than each opening one of their own.
+T _withClient<T>(Client client, T Function() body) => runZoned(body, zoneValues: {_clientKey: client});
+
+/// The enclosing [Http.session]'s client, or a fresh one this call owns and must close.
+_ClientLease _clientFor() {
+  final shared = Http.client;
   if (shared == null) return _ClientLease(IoClient(), true);
   return _ClientLease(shared, false, headers: shared is _SessionClient ? shared._headers : null);
 }

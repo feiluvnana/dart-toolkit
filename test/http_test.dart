@@ -80,12 +80,12 @@ void main() {
         final target = Path(dir.path) / 'f.bin';
         await Http.session(() async {
           final first = await target.download('https://a.com/f'.url).toList();
-          expect(first.last, isA<DownloadFailed>());
+          expect(first.last.current, isA<DownloadFailed>());
           expect(File('$target.part').lengthSync(), 2000);
           fail = false;
           final second = await target.download('https://a.com/f'.url).toList();
-          expect(second.last, isA<Downloaded>());
-          expect((second.first as Downloading).received, greaterThan(2000));
+          expect(second.last.current, isA<Downloaded>());
+          expect((second.first.current as Downloading).received, greaterThan(2000));
         }, client: client);
         expect(ranges, [null, 'bytes=2000-']);
         expect(target.readBytesSync(), body);
@@ -151,11 +151,11 @@ void main() {
       expect(xml.root.local, equals('bookstore'));
 
       // XPath selector query
-      final titles = xml.$('//book/title');
+      final titles = xml.$x('//book/title');
       expect(titles.length, equals(2));
       expect(titles.map((n) => n.text).toList(), equals(['Harry Potter', 'Learning XML']));
 
-      final learningTitles = xml.$('//book[@category="learning"]/title');
+      final learningTitles = xml.$x('//book[@category="learning"]/title');
       expect(learningTitles.length, equals(1));
       expect(learningTitles.text, equals('Learning XML'));
     });
@@ -279,11 +279,13 @@ void main() {
     test('fetch-and-parse refuses a non-2xx page, get() reports it instead', () async {
       final client = MockClient((request) async => Response('<html>not found</html>', 404));
 
-      await expectLater('https://example.com/missing'.url.html(client: client), throwsA(isA<HttpException>()));
+      await Http.session(client: client, () async {
+        await expectLater('https://example.com/missing'.url.html(), throwsA(isA<HttpException>()));
 
-      final res = await 'https://example.com/missing'.url.get(client: client);
-      expect(res.isOk, isFalse);
-      expect(res.html.$('html').isNotEmpty, isTrue, reason: 'the body is still there to inspect');
+        final res = await 'https://example.com/missing'.url.get();
+        expect(res.isOk, isFalse);
+        expect(res.html.$('html').isNotEmpty, isTrue, reason: 'the body is still there to inspect');
+      });
     });
 
     test('ctx.url is the response URL, and ctx.resolve matches what follow() does', () async {
@@ -422,7 +424,7 @@ void main() {
       expect(nameVal, equals('John'));
 
       final xmlRes = Response('<root><item id="99">Hello</item></root>', 200);
-      final xmlVal = await xmlRes.isolate((r) => r.xml.$('//item').text);
+      final xmlVal = await xmlRes.isolate((r) => r.xml.$x('//item').text);
       expect(xmlVal, equals('Hello'));
 
       final mockClient = MockClient((req) async {
@@ -432,13 +434,15 @@ void main() {
         return Response('<html><body><h1>Hello Uri Isolate</h1></body></html>', 200);
       });
 
-      final itemRes = await 'https://example.com/api/item'.url.get(client: mockClient);
-      final title = await itemRes.isolate((r) => r.json['title'].to<String>());
-      expect(title, equals('Toolkit'));
+      await Http.session(client: mockClient, () async {
+        final itemRes = await 'https://example.com/api/item'.url.get();
+        final title = await itemRes.isolate((r) => r.json['title'].to<String>());
+        expect(title, equals('Toolkit'));
 
-      final pageRes = await 'https://example.com/page'.url.get(client: mockClient);
-      final heading = await pageRes.isolate((r) => r.html.$('h1').firstOrNull?.text);
-      expect(heading, equals('Hello Uri Isolate'));
+        final pageRes = await 'https://example.com/page'.url.get();
+        final heading = await pageRes.isolate((r) => r.html.$('h1').firstOrNull?.text);
+        expect(heading, equals('Hello Uri Isolate'));
+      });
     });
 
     test('follow rejects a non-Uri, non-String target', () async {
@@ -1286,7 +1290,7 @@ void main() {
         client: client,
       );
       await Future<void>.delayed(const Duration(milliseconds: 50));
-      expect(r.single, isA<DownloadFailed>());
+      expect(r.single.current, isA<DownloadFailed>());
       expect(cancelled, isTrue);
     });
   });

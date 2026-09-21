@@ -25,12 +25,12 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 |---|---|---|
 | `core.dart` | `Either`, `Env`, `Io`, `TaskProgress`, string and duration helpers | — |
 | `native.dart` | `Native`: loads `dart_toolkit_native`, the package's Rust library, for `fs` and `hash` | path |
-| `collection.dart` | `Sequence` (`.sequence` on any `Iterable` or `Map`): lazy queries, multi-key sort, joins, sets; `Table`: rows of named columns; CSV, TSV, NDJSON, Markdown | — |
-| `formats.dart` | `JsonDocument` with JSONPath; YAML, TOML, INI into it; `HtmlDocument` with CSS `$` and XPath `$x`; `XmlDocument` with XPath `$`; YAML out | — |
+| `collection.dart` | `Sequence` (`.sequence` on any `Iterable` or `Map`): lazy queries, multi-key sort, joins, sets; `Table`: rows of named columns, and the package's one table renderer; CSV, NDJSON, Markdown | — |
+| `formats.dart` | `JsonDocument` with JSONPath; YAML, TOML, INI into it; one markup tree for `HtmlDocument` and `XmlDocument`, CSS `$` and XPath `$x` on both; YAML out | — |
 | `async.dart` | `parallelize`, `retry`, `Mutex`, `CancelToken`, stream operators | — |
-| `cli.dart` | `Cli`, `Console` (tables, spinners, progress, prompts), `Logger`, ANSI | — |
+| `cli.dart` | `Cli` with typed options, `Console` (spinners, progress, prompts), `Logger`, ANSI styling | — |
 | `fs.dart` | `Path`; zip, 7z, rar, tar and gz/xz/zstd/bz2 archives with passwords, through the native library | path |
-| `hash.dart` | 16 digests and 4 checksums, HMAC, hex/base64/base32, `Crypto.token`, `uuid`, `equals` | — |
+| `hash.dart` | 16 digests and 4 checksums behind one `hash(Hash.…)`, HMAC, hex/base64/base32, `Crypto.token`, `uuid`, `equals` | — |
 | `process.dart` | `run`, pipelines, `which` | — |
 | `http.dart` | `Request`, `Response`, `Client`, `Http.session`, scraping, downloads, `res.html`, `url.json()` | — |
 
@@ -86,12 +86,14 @@ final flac = doc.$x('//tr[td[2]="FLAC"]/td[1]/a/@href').texts;
 final table = doc.$x('//h2[contains(., "Tracks")]/following-sibling::table[1]').elements.$('td');
 ```
 
-XML gets the same shape with XPath as its `$`:
+XML is the same tree and the same two queries — `$` is CSS and `$x` is XPath, here as
+everywhere — parsed and serialised as XML: names keep their case and their prefixes, and an
+empty element closes itself.
 
 ```dart
 final feed = await url.xml();                        // or res.xml, or '<rss>…</rss>'.xml
-for (final item in feed.$('//item').elements) print(item.$('title').text);
-final urls = feed.$('//media:content/@url').texts;
+for (final item in feed.$('item')) print(item.$('title').text);
+final urls = feed.$x('//media:content/@url').texts;  // a prefixed name is not CSS
 ```
 
 Both parsers are the package's own — tag soup lands where a browser puts it — and each is
@@ -110,8 +112,8 @@ final port = configText.toml['server']['port'].to<int>();
 final debug = iniText.ini['debug'].to<bool>();
 await 'out.yaml'.path.writeText(pubspec.toYaml());
 
-Table.csv(text); Table.tsv(text); Table.ndjson(text);      // in
-t.toCsv(); t.toTsv(); t.toNdjson(); t.toMarkdown();         // out
+Table.csv(text); Table.cells(headers, rows); Table.ndjson(text);   // in
+t.toCsv(); t.toNdjson(); t.toMarkdown(); t.show();                 // out
 ```
 
 ### Paths
@@ -128,11 +130,11 @@ await file.writeText(jsonEncode({'version': '0.0.1'}));
 final config = JsonDocument.parse(await file.readText());
 print(config.$(r'$.version').first.raw);
 
-print(await file.sha256());                        // 2.4 GB/s through the native library
+print(await file.hash(Hash.sha256));                        // 2.4 GB/s through the native library
 await dir.archiveTo('${dir.path}.7z', password: 'pw');   // also .zip, .tar.gz, .tar.zst, .tar.xz, .tar.bz2
 await 'photos.rar'.path.extractTo(dir, password: 'pw');   // rar reads; the format's licence forbids writing
 for (final e in await zip.archiveEntries()) print('${e.name} ${e.size}');
-await log.gzipTo('log.gz');  await big.compressTo('big.zst');
+await log.compressTo('log.gz');  await big.compressTo('big.zst');
 ```
 
 A name that came from outside — a scraped title, a header, user input — becomes one component
@@ -190,14 +192,14 @@ suite checks each against its published vectors and against `openssl`. A file st
 memory is flat whatever its size.
 
 ```dart
-'abc'.sha256;  bytes.blake3;  await file.hash(Hash.sha3_256);  await file.crc32();  bytes.xxh3
+'abc'.hash(Hash.sha256);  bytes.hash(Hash.blake3);  await file.hash(Hash.sha3_256);  await file.checksum(Hash.crc32);  bytes.hash(Hash.xxh3)
 'body'.hmac(Hash.sha256, secret);  Crypto.token();  Crypto.uuid();  Crypto.equals(a, b)
 bytes.hex;  bytes.base64Url;  'JBSWY3DP'.base32Bytes;  '6869'.hexBytes
 ```
 
 Sixteen digests and four checksums: md5, sha1, the SHA-2 and SHA-3 families, keccak256,
 blake2s, blake2b, blake3, ripemd160, and crc32, crc32c, xxh64, xxh3. The 32-bit checksums
-read as an `int` (`bytes.crc32`); the 64-bit ones read as hex, because they do not fit one.
+read as an `int` (`bytes.checksum(Hash.crc32)`); the 64-bit ones read as hex, because they do not fit one.
 
 **Encryption, password hashing, signatures and JWT are deliberately absent.** This is a
 toolkit for automation scripts: it identifies, verifies and encodes data, and has no
@@ -318,6 +320,9 @@ failed or interrupted transfer keeps its `.part`, and the next download of the s
 up with a `Range` request. Take a map, an iterable of `(url:, path:)` records, or a stream of
 them, so discovery and transfer overlap:
 
+One file or many, the events are the same — `dest.download(url)` is a batch of one, so it
+renders with the same `show` and needs no wrapping:
+
 ```dart
 await for (final p in {url: dest}.downloadAll(concurrency: 4)) {
   switch (p.current) {
@@ -350,22 +355,27 @@ print(typed.fold((e) => 'failed: $e', (v) => 'got $v'));
 
 ### CLI
 
-Option kinds are a sealed type, so a flag cannot also be numeric. A default is declared once —
-`ctx.option` and `ctx.number` are non-null because of it — and `required: true` makes absence a
-usage error. `Cli.run` owns the lifecycle: a usage error (`UsageException`) prints and exits 64,
-`ctx.cancel` is cancelled on a signal, and whether the action returns or throws the exit hooks
-run and the signal handlers are released so the process ends.
+An option is a value, so its name is written once and its type is the type you read back.
+`Opt.among` takes the values themselves — an enum, not a list of strings to match again by
+hand — and `.or(…)` and `.required()` are what make `ctx(…)` non-nullable. `Cli.run` owns the
+lifecycle: a usage error (`UsageException`) prints and exits 64, `ctx.cancel` is cancelled on a
+signal, and whether the action returns or throws the exit hooks run and the signal handlers
+are released so the process ends.
 
 ```dart
-final cli = Cli(name: 'deployer')
-  ..choice('env', ['dev', 'staging', 'production'], abbr: 'e', defaultTo: 'production')
-  ..option('token', abbr: 't', required: true)
-  ..number('workers', abbr: 'w', defaultTo: 4)
-  ..flag('dry-run', abbr: 'd')
+enum Env { dev, staging, production }
+
+final env = Opt.among('env', Env.values, abbr: 'e').or(Env.production);  // Env
+final token = Opt.text('token', abbr: 't').required();                   // String
+final workers = Opt.number('workers', abbr: 'w').or(4);                  // int
+final dryRun = Flag('dry-run', abbr: 'd');                               // bool
+final since = Opt.by('since', DateTime.parse);                           // DateTime?
+
+final cli = Cli(name: 'deployer', options: [env, token, workers, dryRun])
   ..action((ctx) async {
     final stage = Logger.stages(2);
     stage('Checking target');           // [1/2] Checking target
-    Logger.info('Deploying to ${ctx.option('env')} with ${ctx.number('workers')} workers');
+    Logger.info('Deploying to ${ctx(env).name} with ${ctx(workers)} workers');
     stage('Rolling out');
     await Console.spin('Deploying...', deploy);
   });
@@ -376,12 +386,10 @@ await cli.run(args);   // deployer -dw8 -t abc, deployer --workers=8 fetch, ...
 Options may precede the subcommand, short flags combine (`-dv`), and a short option may attach
 its value (`-w8`).
 
-Every builder method returns the receiver; nesting is explicit:
+A subcommand takes its options the same way; `build:` is for one that nests further:
 
 ```dart
-cli.command('fetch', build: (fetch) => fetch
-  ..flag('verbose', abbr: 'v')
-  ..action(run));
+cli.command('fetch', description: 'Fetch a thing', options: [verbose], handler: run);
 ```
 
 ### Testable IO
@@ -402,6 +410,9 @@ final client = MockClient((req) async => Response('{"ok": true}', 200));
 await Http.session(() => url.json(), client: client);
 ```
 
+No request method takes a `client:` of its own: the session is where a program says which
+client to use, once, and everything inside it — requests, downloads, a whole crawl — uses it.
+
 ---
 
 ## Examples
@@ -411,7 +422,7 @@ than a tour:
 
 | file | shows |
 |---|---|
-| [`cli_app.dart`](example/cli_app.dart) | subcommands, the four option kinds, stages, progress, `ctx.cancel`, exit hooks |
+| [`cli_app.dart`](example/cli_app.dart) | subcommands, typed options, stages, progress, `ctx.cancel`, exit hooks |
 | [`concurrent_work.dart`](example/concurrent_work.dart) | `parallelize` settling into `Either`, `retry`, `CancelToken`, `Mutex`, isolates, stream operators |
 | [`config_formats.dart`](example/config_formats.dart) | YAML, TOML, INI, JSON and XML through one document type, JSONPath, `toYaml` |
 | [`files_and_digests.dart`](example/files_and_digests.dart) | `Path`, `glob`, digests for de-duplication, archives, verification |

@@ -126,13 +126,6 @@ extension PathArchiveExtensions on Path {
     return File(destination);
   }
 
-  /// gzip this file into [destination].
-  Future<File> gzipTo(String destination, {int? level}) =>
-      compressTo(destination, codec: Compression.gzip, level: level);
-
-  /// gunzip this file into [destination].
-  Future<File> gunzipTo(String destination) => decompressTo(destination, codec: Compression.gzip);
-
   static Compression _codecOf(String path) {
     for (final c in Compression.values) {
       if (path.toLowerCase().endsWith(c.extension)) return c;

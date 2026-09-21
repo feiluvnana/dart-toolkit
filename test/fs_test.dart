@@ -66,10 +66,10 @@ void main() {
       await file.writeText('hello world');
 
       // echo -n "hello world" | sha256sum -> b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9
-      expect(await file.sha256(), equals('b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9'));
+      expect(await file.hash(Hash.sha256), equals('b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9'));
 
       // echo -n "hello world" | md5sum -> 5eb63bbbe01eeed093cb22bb8f5acdc3
-      expect(await file.md5(), equals('5eb63bbbe01eeed093cb22bb8f5acdc3'));
+      expect(await file.hash(Hash.md5), equals('5eb63bbbe01eeed093cb22bb8f5acdc3'));
     });
 
     test('streamed and in-memory digests agree across chunk boundaries', () async {
@@ -77,8 +77,8 @@ void main() {
       final file = testDir / 'big_hash.bin';
       await file.writeBytes(List<int>.generate(1 << 20, (i) => i % 251));
 
-      expect(await file.sha256(), equals((await file.readBytes()).sha256));
-      expect(await file.md5(), equals((await file.readBytes()).md5));
+      expect(await file.hash(Hash.sha256), equals((await file.readBytes()).hash(Hash.sha256)));
+      expect(await file.hash(Hash.md5), equals((await file.readBytes()).hash(Hash.md5)));
     });
 
     test('Path append and replace edit in-place', () async {
@@ -234,69 +234,71 @@ void main() {
         return Response('Not Found', 404);
       });
 
-      final base = Path(tempDir.path) / 'download_test';
+      await Http.session(client: client, () async {
+        final base = Path(tempDir.path) / 'download_test';
 
-      // 1. Single download on Path
-      final file1 = base / 'file1.txt';
-      final updates = await file1.download('https://example.com/file1.txt'.url, client: client).toList();
-      expect(updates.isNotEmpty, isTrue);
-      final lastUpdate = updates.last;
-      expect(lastUpdate, isA<Downloaded>());
-      expect(lastUpdate.received, equals(12));
-      expect(await file1.readText(), equals('Hello file 1'));
+        // 1. Single download on Path
+        final file1 = base / 'file1.txt';
+        final updates = await file1.download('https://example.com/file1.txt'.url).toList();
+        expect(updates.isNotEmpty, isTrue);
+        final lastUpdate = updates.last.current;
+        expect(lastUpdate, isA<Downloaded>());
+        expect(lastUpdate.received, equals(12));
+        expect(await file1.readText(), equals('Hello file 1'));
 
-      // Re-download without overwrite skips
-      final skipUpdates = await file1.download('https://example.com/file1.txt'.url, client: client).toList();
-      expect(skipUpdates.single, isA<DownloadSkipped>());
-      expect(skipUpdates.single.isDone, isTrue);
+        // Re-download without overwrite skips
+        final skipUpdates = await file1.download('https://example.com/file1.txt'.url).toList();
+        expect(skipUpdates.single.current, isA<DownloadSkipped>());
+        expect(skipUpdates.single.current.isDone, isTrue);
 
-      // 2. Single download on Uri
-      final file1Alt = base / 'file1_alt.txt';
-      final uriUpdates = await file1Alt.download('https://example.com/file1.txt'.url, client: client).toList();
-      expect(uriUpdates.last, isA<Downloaded>());
-      expect(await file1Alt.readText(), equals('Hello file 1'));
+        // 2. Single download on Uri
+        final file1Alt = base / 'file1_alt.txt';
+        final uriUpdates = await file1Alt.download('https://example.com/file1.txt'.url).toList();
+        expect(uriUpdates.last.current, isA<Downloaded>());
+        expect(await file1Alt.readText(), equals('Hello file 1'));
 
-      // 3. Batch downloadAll on a source-to-destination map
-      final mapUriPath = {
-        'https://example.com/file1.txt'.url: base / 'batch1.txt',
-        'https://example.com/file2.txt'.url: base / 'batch2.txt',
-      };
-      final batch1Updates = await mapUriPath.downloadAll(client: client, concurrency: 2).toList();
-      expect(batch1Updates.isNotEmpty, isTrue);
-      final finalBatch1 = batch1Updates.last;
-      expect(finalBatch1.completed, equals(2));
-      expect(finalBatch1.written, equals(2));
-      // 4. A failure is a DownloadFailed, carrying its error
-      final fileFail = base / 'not_found.txt';
-      final failUpdates = await fileFail.download('https://example.com/404.txt'.url, client: client).toList();
-      expect(failUpdates.last, isA<DownloadFailed>());
-      expect((failUpdates.last as DownloadFailed).error, isA<HttpException>());
+        // 3. Batch downloadAll on a source-to-destination map
+        final mapUriPath = {
+          'https://example.com/file1.txt'.url: base / 'batch1.txt',
+          'https://example.com/file2.txt'.url: base / 'batch2.txt',
+        };
+        final batch1Updates = await mapUriPath.downloadAll(concurrency: 2).toList();
+        expect(batch1Updates.isNotEmpty, isTrue);
+        final finalBatch1 = batch1Updates.last;
+        expect(finalBatch1.completed, equals(2));
+        expect(finalBatch1.written, equals(2));
+        // 4. A failure is a DownloadFailed, carrying its error
+        final fileFail = base / 'not_found.txt';
+        final failUpdates = await fileFail.download('https://example.com/404.txt'.url).toList();
+        expect(failUpdates.last.current, isA<DownloadFailed>());
+        expect((failUpdates.last.current as DownloadFailed).error, isA<HttpException>());
 
-      // 5. The iterable form keeps two destinations for one URL; a Map cannot
-      final pairs = [
-        (url: 'https://example.com/file1.txt'.url, path: base / 'twice_a.txt'),
-        (url: 'https://example.com/file1.txt'.url, path: base / 'twice_b.txt'),
-      ];
-      final twice = await pairs.downloadAll(client: client, concurrency: 2).toList();
-      expect(twice.last.completed, equals(2));
-      expect(twice.last.total, equals(2));
-      expect(await (base / 'twice_a.txt').exists(), isTrue);
-      expect(await (base / 'twice_b.txt').exists(), isTrue);
+        // 5. The iterable form keeps two destinations for one URL; a Map cannot
+        final pairs = [
+          (url: 'https://example.com/file1.txt'.url, path: base / 'twice_a.txt'),
+          (url: 'https://example.com/file1.txt'.url, path: base / 'twice_b.txt'),
+        ];
+        final twice = await pairs.downloadAll(concurrency: 2).toList();
+        expect(twice.last.completed, equals(2));
+        expect(twice.last.total, equals(2));
+        expect(await (base / 'twice_a.txt').exists(), isTrue);
+        expect(await (base / 'twice_b.txt').exists(), isTrue);
 
-      // 6. The stream form overlaps discovery with transfer; total is unknown until it closes
-      final discovered = StreamController<({Uri url, Path path})>();
-      final events = <BatchDownloadProgress>[];
-      final done = discovered.stream.downloadAll(client: client, concurrency: 2).forEach(events.add);
-      discovered.add((url: 'https://example.com/file1.txt'.url, path: base / 'streamed1.txt'));
-      await Future<void>.delayed(const Duration(milliseconds: 20));
-      expect(events.isNotEmpty, isTrue);
-      expect(events.first.total, isNull, reason: 'total is unknown while the source is open');
-      discovered.add((url: 'https://example.com/file2.txt'.url, path: base / 'streamed2.txt'));
-      await discovered.close();
-      await done;
-      expect(events.last.total, equals(2));
-      expect(events.last.completed, equals(2));
-      expect(await (base / 'streamed2.txt').readText(), equals('Hello file 2'));
+        // 6. The stream form overlaps discovery with transfer; total is unknown until it closes
+        final discovered = StreamController<({Uri url, Path path})>();
+        final events = <BatchDownloadProgress>[];
+        final done = discovered.stream.downloadAll(concurrency: 2).forEach(events.add);
+        discovered.add((url: 'https://example.com/file1.txt'.url, path: base / 'streamed1.txt'));
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        expect(events.isNotEmpty, isTrue);
+        expect(events.first.total, isNull, reason: 'total is unknown while the source is open');
+        discovered.add((url: 'https://example.com/file2.txt'.url, path: base / 'streamed2.txt'));
+        await discovered.close();
+        await done;
+        expect(events.last.total, equals(2));
+        expect(events.last.completed, equals(2));
+        expect(await (base / 'streamed2.txt').readText(), equals('Hello file 2'));
+      });
     });
 
     test('name, stem, ext, parent, and segments properties', () {
@@ -332,7 +334,7 @@ void main() {
       expect(await xmlFile.exists(), isTrue);
 
       final readXmlDoc = XmlDocument.parse(await xmlFile.readText());
-      expect(readXmlDoc.$('//item').text, equals('Value'));
+      expect(readXmlDoc.$x('//item').text, equals('Value'));
 
       // Sync document operations
       final syncJsonFile = base / 'sync.json';
@@ -348,7 +350,7 @@ void main() {
 
       final syncXmlFile = base / 'sync.xml';
       syncXmlFile.writeTextSync(XmlDocument.parse('<root><node>Sync</node></root>').outerXml);
-      expect(XmlDocument.parse(syncXmlFile.readTextSync()).$('//node').text, equals('Sync'));
+      expect(XmlDocument.parse(syncXmlFile.readTextSync()).$x('//node').text, equals('Sync'));
 
       // mkdirSync & deleteSync
       final syncDir = base / 'sync_dir_test';
@@ -431,8 +433,8 @@ void main() {
         expect(file1.readTextSync(), equals('Hello Dart!!!'));
 
         // hashes
-        expect(file1.readBytesSync().sha256.isNotEmpty, isTrue);
-        expect(file1.readBytesSync().md5.isNotEmpty, isTrue);
+        expect(file1.readBytesSync().hash(Hash.sha256).isNotEmpty, isTrue);
+        expect(file1.readBytesSync().hash(Hash.md5).isNotEmpty, isTrue);
 
         // copySync & moveSync
         final copyDest = base / 'file1_copy.txt';
@@ -469,24 +471,26 @@ void main() {
         );
       });
 
-      final base = Path(tempDir.path) / 'atomic_dl_test';
-      final target = base / 'truncated.dat';
+      await Http.session(client: client, () async {
+        final base = Path(tempDir.path) / 'atomic_dl_test';
+        final target = base / 'truncated.dat';
 
-      final progressEvents = await target.download('https://example.com/truncated.dat'.url, client: client).toList();
-      final last = progressEvents.last;
-      expect(last, isA<DownloadFailed>());
-      expect(last.isDone, isTrue);
+        final progressEvents = await target.download('https://example.com/truncated.dat'.url).toList();
+        final last = progressEvents.last.current;
+        expect(last, isA<DownloadFailed>());
+        expect(last.isDone, isTrue);
 
-      // Target file must NOT exist on disk; the partial stays as the resume point.
-      expect(await target.exists(), isFalse);
-      expect(File('${target.path}.part').lengthSync(), 10);
+        // Target file must NOT exist on disk; the partial stays as the resume point.
+        expect(await target.exists(), isFalse);
+        expect(File('${target.path}.part').lengthSync(), 10);
 
-      // Subsequent download attempt is not falsely skipped; a server that ignores the Range
-      // request (200, not 206) makes it start over rather than append.
-      final reattempt = await target.download('https://example.com/truncated.dat'.url, client: client).toList();
-      expect(reattempt.first, isNot(isA<DownloadSkipped>()));
-      expect(reattempt.last, isA<DownloadFailed>());
-      expect(File('${target.path}.part').lengthSync(), 10);
+        // Subsequent download attempt is not falsely skipped; a server that ignores the Range
+        // request (200, not 206) makes it start over rather than append.
+        final reattempt = await target.download('https://example.com/truncated.dat'.url).toList();
+        expect(reattempt.first.current, isNot(isA<DownloadSkipped>()));
+        expect(reattempt.last.current, isA<DownloadFailed>());
+        expect(File('${target.path}.part').lengthSync(), 10);
+      });
     });
 
     test('glob supports caseSensitive parameter and platform defaults', () {

@@ -1,26 +1,28 @@
-import 'package:dart_toolkit/dart_toolkit.dart';
-
-/// A command-line application: subcommands, the four kinds of option, and the lifecycle
+/// A command-line application: subcommands, the kinds of option, and the lifecycle
 /// around them.
 ///
 ///   dart run example/cli_app.dart deploy --token abc --env staging -w 8
 ///   dart run example/cli_app.dart deploy --help
 ///   dart run example/cli_app.dart status
 ///   dart run example/cli_app.dart --version
+library;
+
+import 'package:dart_toolkit/dart_toolkit.dart';
+
+enum Env { dev, staging, production }
+
+// An option is a value. Its name is written here and nowhere else, and its type is the type
+// `ctx(…)` gives back: `.or(…)` and `.required()` are what make that type non-nullable.
+final verbose = Flag('verbose', abbr: 'v', description: 'Log every step');
+final env = Opt.among('env', Env.values, abbr: 'e', description: 'Target').or(Env.staging);
+final token = Opt.text('token', abbr: 't', description: 'Deployment token').required();
+final workers = Opt.number('workers', abbr: 'w', description: 'Parallel workers').or(4);
+final dryRun = Flag('dry-run', abbr: 'd', description: 'Say what would happen and stop');
+
 Future<void> main(List<String> args) async {
-  final cli = Cli(name: 'deployer', description: 'Ship things somewhere', version: '1.2.0')
-    // Declared on the root, so every subcommand can read it and `-v` works anywhere.
-    ..flag('verbose', abbr: 'v', description: 'Log every step')
-    ..command(
-      'deploy',
-      description: 'Roll out a release',
-      build: (deploy) => deploy
-        ..choice('env', ['dev', 'staging', 'production'], abbr: 'e', defaultTo: 'staging', description: 'Target')
-        ..option('token', abbr: 't', required: true, description: 'Deployment token')
-        ..number('workers', abbr: 'w', defaultTo: 4, description: 'Parallel workers')
-        ..flag('dry-run', abbr: 'd', description: 'Say what would happen and stop')
-        ..action(rollOut),
-    )
+  // `verbose` is on the root, so every subcommand can read it and `-v` works anywhere.
+  final cli = Cli(name: 'deployer', description: 'Ship things somewhere', version: '1.2.0', options: [verbose])
+    ..command('deploy', description: 'Roll out a release', options: [env, token, workers, dryRun], handler: rollOut)
     ..command('status', description: 'Show what is deployed', handler: showStatus);
 
   // Parses, dispatches, then runs the exit hooks and releases the signal handlers so the
@@ -29,17 +31,17 @@ Future<void> main(List<String> args) async {
 }
 
 Future<void> rollOut(CliContext ctx) async {
-  if (ctx.flag('verbose')) Logger.level = LogLevel.debug;
+  if (ctx(verbose)) Logger.level = LogLevel.debug;
 
-  // A declared default or `required: true` means these cannot be missing, so they are not
-  // nullable. `optionOrNull` is there for the ones that may be.
-  final env = ctx.option('env');
-  final workers = ctx.number('workers');
-  final token = ctx.option('token');
-  Logger.debug('token of ${token.length} chars, $workers workers');
+  // `env` is an `Env`, `parallel` an `int`, `secret` a `String` — the options said so, so
+  // there is no lookup, no parse and no null check here.
+  final target = ctx(env);
+  final parallel = ctx(workers);
+  final secret = ctx(token);
+  Logger.debug('token of ${secret.length} chars, $parallel workers');
 
   // At end of input — a pipe, CI — a prompt takes its default instead of hanging.
-  if (env == 'production' && !Console.confirm('Really deploy to production?', false)) {
+  if (target == Env.production && !Console.confirm('Really deploy to production?', false)) {
     await die('Cancelled at the prompt.', exitCode: 3);
   }
 
@@ -49,10 +51,10 @@ Future<void> rollOut(CliContext ctx) async {
   final stage = Logger.stages(3);
 
   stage('Checking the target');
-  await Console.spin('Contacting $env…', () => 200.ms.delay(), done: '$env is reachable');
+  await Console.spin('Contacting ${target.name}…', () => 200.ms.delay(), done: '${target.name} is reachable');
 
   stage('Uploading');
-  if (ctx.flag('dry-run')) {
+  if (ctx(dryRun)) {
     Logger.warn('dry run: nothing was uploaded');
     release();
     return;
@@ -68,26 +70,26 @@ Future<void> rollOut(CliContext ctx) async {
       progress.tick(1, name);
       return name;
     },
-    concurrency: workers,
+    concurrency: parallel,
     cancelToken: ctx.cancel,
   );
   progress.done('${uploaded.rights.length} chunks uploaded');
 
   stage('Reporting');
-  Console.table(
-    headers: ['setting', 'value'],
-    rows: [
-      ['environment', env],
-      ['workers', workers],
+  Table.cells(
+    ['setting', 'value'],
+    [
+      ['environment', target.name],
+      ['workers', parallel],
       ['chunks', uploaded.rights.length],
       ['failed', uploaded.lefts.length],
     ],
-  );
-  Logger.ok('Deployed to $env.');
+  ).show();
+  Logger.ok('Deployed to ${target.name}.');
 }
 
 Future<void> showStatus(CliContext ctx) async {
-  if (ctx.flag('verbose')) Logger.level = LogLevel.debug;
+  if (ctx(verbose)) Logger.level = LogLevel.debug;
   Logger.debug('reading the deployment record');
 
   Table.records([

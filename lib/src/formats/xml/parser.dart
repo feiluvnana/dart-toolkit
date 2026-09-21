@@ -2,20 +2,20 @@ part of '../../../formats.dart';
 
 /// Parses [source] into its document element. Lenient where a scraper wants it: a mismatched
 /// end tag closes the nearest open element of that name, an unknown entity stays literal.
-XmlElement _parseXml(String source) {
+Element _parseXml(String source) {
   final src = source.contains('\r') ? source.replaceAll('\r\n', '\n').replaceAll('\r', '\n') : source;
-  XmlElement? root;
-  final open = <XmlElement>[];
+  Element? root;
+  final open = <Element>[];
   var pos = 0;
 
   void text(String raw) {
     if (open.isEmpty) return; // whitespace or junk outside the document element
     final target = open.last;
     final data = _decodeXmlEntities(raw);
-    if (target.children.lastOrNull case final XmlText last) {
-      target.children[target.children.length - 1] = XmlText(last.data + data)..parent = target;
+    if (target.nodes.lastOrNull case final Text last) {
+      target.nodes[target.nodes.length - 1] = Text(last.data + data)..parent = target;
     } else {
-      target.children.add(XmlText(data)..parent = target);
+      target.nodes.add(Text(data)..parent = target);
     }
   }
 
@@ -35,10 +35,10 @@ XmlElement _parseXml(String source) {
       final data = src.substring(pos + 9, end == -1 ? src.length : end);
       if (open.isNotEmpty) {
         final target = open.last;
-        if (target.children.lastOrNull case final XmlText last) {
-          target.children[target.children.length - 1] = XmlText(last.data + data)..parent = target;
+        if (target.nodes.lastOrNull case final Text last) {
+          target.nodes[target.nodes.length - 1] = Text(last.data + data)..parent = target;
         } else {
-          target.children.add(XmlText(data)..parent = target);
+          target.nodes.add(Text(data)..parent = target);
         }
       }
       pos = end == -1 ? src.length : end + 3;
@@ -79,7 +79,7 @@ XmlElement _parseXml(String source) {
   return result;
 }
 
-int _startTag(String src, int pos, List<XmlElement> open, void Function(XmlElement) onRoot) {
+int _startTag(String src, int pos, List<Element> open, void Function(Element) onRoot) {
   var i = pos + 1;
   final start = i;
   while (i < src.length && _isXmlNameChar(src.codeUnitAt(i))) {
@@ -142,12 +142,12 @@ int _startTag(String src, int pos, List<XmlElement> open, void Function(XmlEleme
     }
     attributes.putIfAbsent(attrName, () => _decodeXmlEntities(value));
   }
-  final element = XmlElement(name, attributes);
+  final element = Element(name, attributes, Syntax.xml);
   if (open.isEmpty) {
     onRoot(element);
   } else {
     element.parent = open.last;
-    open.last.children.add(element);
+    open.last.nodes.add(element);
   }
   if (!selfClosing) open.add(element);
   return i;

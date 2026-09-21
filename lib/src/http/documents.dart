@@ -20,10 +20,8 @@ extension ResponseDocumentExtensions on Response {
 /// {@category Networking}
 extension UriDocumentExtensions on Uri {
   /// Fetches this URI and parses the body as HTML.
-  Future<HtmlDocument> html({Map<String, String>? headers, Client? client}) async =>
-      (await fetch(headers: headers, client: client)).html;
+  Future<HtmlDocument> html({Map<String, String>? headers}) async => (await fetch(headers: headers)).html;
 
   /// Fetches this URI and parses the body as XML.
-  Future<XmlDocument> xml({Map<String, String>? headers, Client? client}) async =>
-      (await fetch(headers: headers, client: client)).xml;
+  Future<XmlDocument> xml({Map<String, String>? headers}) async => (await fetch(headers: headers)).xml;
 }

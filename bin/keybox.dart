@@ -13,7 +13,7 @@ typedef Asset = ({Uri url, Path path});
 void main(List<String> args) => Cli(
   name: 'keybox',
   description: 'Key BOX Scraper & Downloader',
-  version: '0.0.1',
+  version: '0.0.2',
 ).action((ctx) => Http.session(() => run(ctx.cancel), timeout: 60.s)).run(args);
 
 Future<void> run(CancelToken cancel) async {
@@ -161,14 +161,14 @@ Future<void> run(CancelToken cancel) async {
   stage('Creating zip archive');
   await Console.spin('Compressing $baseName.zip...', () => base.archiveTo('$baseName.zip'));
 
-  Console.table(
-    headers: ['Property', 'Value'],
-    rows: [
+  Table.cells(
+    ['Property', 'Value'],
+    [
       ['Assets', last?.total ?? 0],
       ['Downloaded', last?.written ?? 0],
       ['Discs', discNames.length],
       ['Archive', '$baseName.zip'],
     ],
-  );
+  ).show();
   Logger.ok('Completed successfully.');
 }

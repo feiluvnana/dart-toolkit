@@ -141,15 +141,33 @@ const _flushEvery = 4 * 1024 * 1024;
 ///
 /// {@category Networking}
 extension PathDownloadExtensions on Path {
-  /// Downloads [url] to this path atomically, streaming [DownloadProgress] updates.
+  /// Downloads [url] to this path atomically, streaming the same [BatchDownloadProgress]
+  /// that `downloadAll` streams — one file is a batch of one, so `show()` renders it and
+  /// nothing has to be wrapped in a map to be reported.
   ///
   /// Writes `<name>.part` and renames on success, verifies `Content-Length`, and honours
   /// [cancelToken] cooperatively. A failed or cancelled transfer keeps its `.part`; the next
   /// download of the same path resumes it with a `Range` request when [resume] is set, and
-  /// starts over when the server does not honour the range.
-  Stream<DownloadProgress> download(
+  /// starts over when the server does not honour the range. The per-file state is
+  /// [BatchDownloadProgress.current].
+  Stream<BatchDownloadProgress> download(
     Uri url, {
-    Client? client,
+    Map<String, String>? headers,
+    bool overwrite = false,
+    bool resume = true,
+    CancelToken? cancelToken,
+  }) => _batchDownload(
+    Stream.value((url: url, path: this)),
+    knownTotal: 1,
+    headers: headers,
+    concurrency: 1,
+    overwrite: overwrite,
+    resume: resume,
+    cancelToken: cancelToken,
+  );
+
+  Stream<DownloadProgress> _download(
+    Uri url, {
     Map<String, String>? headers,
     bool overwrite = false,
     bool resume = true,
@@ -165,7 +183,7 @@ extension PathDownloadExtensions on Path {
       return;
     }
 
-    final lease = _clientFor(client);
+    final lease = _clientFor();
     final partFile = File('${asFile.path}.part');
     var received = 0;
 
@@ -242,7 +260,6 @@ Future<void> _discard(File part) async {
 Stream<BatchDownloadProgress> _batchDownload(
   Stream<({Uri url, Path path})> source, {
   int? knownTotal,
-  Client? client,
   Map<String, String>? headers,
   int concurrency = 4,
   bool overwrite = false,
@@ -253,7 +270,7 @@ Stream<BatchDownloadProgress> _batchDownload(
   final limit = concurrency > 0 ? concurrency : 1;
   final queue = Queue<({Uri url, Path path})>();
   final active = <Future<void>>{};
-  final lease = _clientFor(client);
+  final lease = _clientFor();
 
   var discovered = 0;
   var completed = 0;
@@ -310,14 +327,19 @@ Stream<BatchDownloadProgress> _batchDownload(
       task = Future<void>(() async {
         try {
           if (cancelled()) return;
-          await for (final p in item.path.download(
-            item.url,
-            client: lease.client,
-            headers: headers,
-            overwrite: overwrite,
-            resume: resume,
-            cancelToken: cancelToken,
-          )) {
+          // The batch owns one client; each file's download joins it rather than opening
+          // a connection of its own.
+          final transfers = _withClient(
+            lease.client,
+            () => item.path._download(
+              item.url,
+              headers: headers,
+              overwrite: overwrite,
+              resume: resume,
+              cancelToken: cancelToken,
+            ),
+          );
+          await for (final p in transfers) {
             if (cancelled()) break;
             if (p.isDone) {
               completed++;
@@ -371,7 +393,6 @@ Stream<BatchDownloadProgress> _batchDownload(
 extension IterableDownloadExtensions on Iterable<({Uri url, Path path})> {
   /// Downloads every pair, at most [concurrency] at a time.
   Stream<BatchDownloadProgress> downloadAll({
-    Client? client,
     Map<String, String>? headers,
     int concurrency = 4,
     bool overwrite = false,
@@ -382,7 +403,6 @@ extension IterableDownloadExtensions on Iterable<({Uri url, Path path})> {
     return _batchDownload(
       Stream.fromIterable(items),
       knownTotal: items.length,
-      client: client,
       headers: headers,
       concurrency: concurrency,
       overwrite: overwrite,
@@ -400,7 +420,6 @@ extension StreamDownloadExtensions on Stream<({Uri url, Path path})> {
   ///
   /// [BatchDownloadProgress.total] is `null` until this stream closes.
   Stream<BatchDownloadProgress> downloadAll({
-    Client? client,
     Map<String, String>? headers,
     int concurrency = 4,
     bool overwrite = false,
@@ -408,7 +427,6 @@ extension StreamDownloadExtensions on Stream<({Uri url, Path path})> {
     CancelToken? cancelToken,
   }) => _batchDownload(
     this,
-    client: client,
     headers: headers,
     concurrency: concurrency,
     overwrite: overwrite,
@@ -429,14 +447,12 @@ extension MapDownloadExtensions on Map<Uri, Path> {
   /// A `Map` holds one destination per URL. To send one URL to two places, use the
   /// [IterableDownloadExtensions] form over records.
   Stream<BatchDownloadProgress> downloadAll({
-    Client? client,
     Map<String, String>? headers,
     int concurrency = 4,
     bool overwrite = false,
     bool resume = true,
     CancelToken? cancelToken,
   }) => pairs.downloadAll(
-    client: client,
     headers: headers,
     concurrency: concurrency,
     overwrite: overwrite,

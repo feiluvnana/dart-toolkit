@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:test/test.dart';
 
+enum Mode { debug, release }
+
 class _Task implements TaskProgress {
   @override
   final String taskId;
@@ -77,12 +79,12 @@ void main() {
       err = StringBuffer();
       Io.out = out;
       Io.err = err;
-      Ansi.enabled = false;
+      Io.color = false;
     });
 
     tearDown(() {
       Io.reset();
-      Ansi.enabled = null;
+      Io.color = null;
       Logger.level = LogLevel.info;
     });
 
@@ -145,12 +147,12 @@ void main() {
     setUp(() {
       out = StringBuffer();
       Io.out = out;
-      Ansi.enabled = false;
+      Io.color = false;
     });
 
     tearDown(() {
       Io.reset();
-      Ansi.enabled = null;
+      Io.color = null;
     });
 
     /// Feeds [lines] to prompts, then end-of-input.
@@ -208,24 +210,25 @@ void main() {
       int? parsedConcurrency;
       bool? isVerbose;
 
+      final verbose = Flag('verbose', abbr: 'v');
+      final concurrency = Opt.number('concurrency', abbr: 'c').or(4);
+      final out = Opt.text('out', abbr: 'o').or('dist');
+
       cli.command(
         'fetch',
         description: 'Fetch data',
-        build: (fetch) => fetch
-          ..flag('verbose', abbr: 'v')
-          ..command(
-            'scrape',
-            description: 'Scrape URLs',
-            build: (scrape) => scrape
-              ..number('concurrency', abbr: 'c', defaultTo: 4)
-              ..option('out', abbr: 'o', defaultTo: 'dist')
-              ..action((ctx) {
-                executed = true;
-                isVerbose = ctx.flag('verbose');
-                parsedConcurrency = ctx.number('concurrency');
-                parsedOut = ctx.option('out');
-              }),
-          ),
+        options: [verbose],
+        build: (fetch) => fetch.command(
+          'scrape',
+          description: 'Scrape URLs',
+          options: [concurrency, out],
+          handler: (ctx) {
+            executed = true;
+            isVerbose = ctx(verbose);
+            parsedConcurrency = ctx(concurrency);
+            parsedOut = ctx(out);
+          },
+        ),
       );
 
       await cli.run(['fetch', 'scrape', '-c', '8', '--out', 'output', '--verbose']);
@@ -236,35 +239,44 @@ void main() {
       expect(parsedOut, equals('output'));
     });
 
-    test('option kinds are mutually exclusive and typed', () async {
+    test('an option carries its own type, so reading it needs no lookup or cast', () async {
       final cli = Cli();
-      Object? rawNumber;
+      final jobs = Opt.number('jobs').or(4);
+      final watch = Flag('watch');
+      final mode = Opt.among('mode', Mode.values);
+      final out = Opt.text('out');
+
+      Object? readJobs;
+      Object? readWatch;
+      Object? readMode;
+      Object? readOut;
 
       cli.command(
         'build',
-        build: (build) => build
-          ..number('jobs', defaultTo: 4)
-          ..flag('watch')
-          ..choice('mode', ['debug', 'release'])
-          ..option('out')
-          ..action((ctx) => rawNumber = ctx.values['jobs']),
+        options: [jobs, watch, mode, out],
+        handler: (ctx) {
+          // Each of these is statically typed by its option; nothing here is a cast.
+          final int j = ctx(jobs);
+          final bool w = ctx(watch);
+          final Mode? m = ctx(mode);
+          final String? o = ctx(out);
+          (readJobs, readWatch, readMode, readOut) = (j, w, m, o);
+        },
       );
 
-      // Each declaration produces exactly one kind. The old shape let
-      // flag: true and numeric: true coexist on one option.
-      final build = cli.subcommands['build']!;
-      expect(build.options['jobs'], isA<CliNumber>());
-      expect(build.options['watch'], isA<CliFlag>());
-      expect(build.options['mode'], isA<CliChoice>());
-      expect(build.options['out'], isA<CliValue>());
-
-      // A numeric option is parsed once, not re-parsed on every read.
+      // The default lives on the option, and a number is parsed once during parsing.
       await cli.run(['build']);
-      expect(rawNumber, isA<int>());
-      expect(rawNumber, equals(4));
+      expect(readJobs, isA<int>());
+      expect(readJobs, equals(4));
+      expect(readWatch, isFalse);
+      expect(readMode, isNull);
+      expect(readOut, isNull);
 
-      await cli.run(['build', '--jobs', '9']);
-      expect(rawNumber, equals(9));
+      await cli.run(['build', '--jobs', '9', '--watch', '--mode', 'release', '--out', 'dist']);
+      expect(readJobs, equals(9));
+      expect(readWatch, isTrue);
+      expect(readMode, equals(Mode.release));
+      expect(readOut, equals('dist'));
     });
 
     test('Logger methods execute cleanly', () {
@@ -278,13 +290,13 @@ void main() {
     test('Console table, rule, and progress execute cleanly', () {
       expect(() => Console.rule('Summary'), returnsNormally);
       expect(
-        () => Console.table(
-          headers: ['Name', 'Value'],
-          rows: [
+        () => Table.cells(
+          ['Name', 'Value'],
+          [
             ['Alpha', 10],
             ['Beta', 20],
           ],
-        ),
+        ).show(),
         returnsNormally,
       );
 
@@ -344,12 +356,8 @@ void main() {
       final cli = CliCommand('app');
       String? chosenFormat;
 
-      cli.command(
-        'build',
-        build: (build) => build
-          ..choice('format', ['debug', 'release'], defaultTo: 'debug')
-          ..action((ctx) => chosenFormat = ctx.option('format')),
-      );
+      final format = Opt.among('format', Mode.values).or(Mode.debug);
+      cli.command('build', options: [format], handler: (ctx) => chosenFormat = ctx(format).name);
 
       // Valid option
       await cli.run(['build', '--format', 'release']);
@@ -368,15 +376,16 @@ void main() {
       bool? isDryRun;
       int? concurrency;
 
+      final dryRun = Flag('dry-run', abbr: 'd');
+      final workers = Opt.number('concurrency', abbr: 'c').or(4);
+
       cli.command(
         'serve',
-        build: (serve) => serve
-          ..flag('dry-run', abbr: 'd')
-          ..number('concurrency', abbr: 'c', defaultTo: 4)
-          ..action((ctx) {
-            isDryRun = ctx.flag('dry-run');
-            concurrency = ctx.number('concurrency');
-          }),
+        options: [dryRun, workers],
+        handler: (ctx) {
+          isDryRun = ctx(dryRun);
+          concurrency = ctx(workers);
+        },
       );
 
       // Shorthand abbreviations
@@ -398,14 +407,15 @@ void main() {
       int? offset;
       List<String>? rest;
 
+      final offsetOpt = Opt.number('offset', abbr: 'o');
+
       cli.command(
         'seek',
-        build: (seek) => seek
-          ..number('offset', abbr: 'o')
-          ..action((ctx) {
-            offset = ctx.numberOrNull('offset');
-            rest = ctx.rest;
-          }),
+        options: [offsetOpt],
+        handler: (ctx) {
+          offset = ctx(offsetOpt);
+          rest = ctx.rest;
+        },
       );
 
       // Negative value with --offset
@@ -430,18 +440,21 @@ void main() {
       bool? dry;
       int? jobs;
       List<String>? rest;
+      final verboseOpt = Flag('verbose', abbr: 'v');
+      final dryOpt = Flag('dry-run', abbr: 'd');
+      final jobsOpt = Opt.number('jobs', abbr: 'j').or(1);
       cli
-        ..flag('verbose', abbr: 'v')
-        ..flag('dry-run', abbr: 'd')
-        ..number('jobs', abbr: 'j', defaultTo: 1)
+        ..declare(verboseOpt)
+        ..declare(dryOpt)
+        ..declare(jobsOpt)
         ..command(
           'build',
-          build: (b) => b.action((ctx) {
-            verbose = ctx.flag('verbose');
-            dry = ctx.flag('dry-run');
-            jobs = ctx.number('jobs');
+          handler: (ctx) {
+            verbose = ctx(verboseOpt);
+            dry = ctx(dryOpt);
+            jobs = ctx(jobsOpt);
             rest = ctx.rest;
-          }),
+          },
         );
 
       await cli.run(['-v', 'build', '-dj4', 'target']);
@@ -461,9 +474,8 @@ void main() {
       final out = StringBuffer();
       Io.out = out;
       try {
-        final cli = CliCommand('app')
-          ..option('token')
-          ..action((ctx) => token = ctx.option('token'));
+        final tokenOpt = Opt.text('token');
+        final cli = CliCommand('app', options: [tokenOpt])..action((ctx) => token = ctx(tokenOpt));
         await cli.run(['--token', '--help']);
         expect(token, equals('--help'));
         expect(out.toString(), isNot(contains('Usage')));
@@ -475,30 +487,56 @@ void main() {
       }
     });
 
-    test('a choice default outside the choices fails at declaration', () {
-      expect(() => CliCommand('app').choice('mode', ['a', 'b'], defaultTo: 'c'), throwsArgumentError);
+    test('Opt.by parses whatever a function of your own returns', () async {
+      final since = Opt.by('since', DateTime.parse);
+      final port = Opt.by('port', Uri.parse).or(Uri.parse('http://localhost'));
+      DateTime? parsed;
+      Uri? url;
+
+      final cli = CliCommand('app', options: [since, port])
+        ..action((ctx) {
+          parsed = ctx(since);
+          url = ctx(port);
+        });
+
+      await cli.run(['--since', '2026-09-21', '--port', 'https://example.com']);
+      expect(parsed, DateTime(2026, 9, 21));
+      expect(url, Uri.parse('https://example.com'));
+
+      await cli.run([]);
+      expect(parsed, isNull, reason: 'no default, so the type is nullable');
+      expect(url, Uri.parse('http://localhost'));
+
+      // Anything the parser throws is a usage error, not a crash.
+      expect(
+        () => cli.run(['--since', 'not-a-date']),
+        throwsA(isA<UsageException>().having((e) => e.message, 'message', contains('Invalid value "not-a-date"'))),
+      );
     });
 
-    test('option() and number() are non-null; the OrNull forms are for absent optionals', () async {
+    test('a default outside the choices fails at declaration', () {
+      expect(() => Opt.among('mode', Mode.values).or(Mode.debug), returnsNormally);
+      expect(() => Opt.among('mode', ['a', 'b']).or('c'), throwsArgumentError);
+    });
+
+    test('an option with no default reads as null; one with a default cannot be null', () async {
       String? name;
       int? port;
-      Object? error;
-      final cli = CliCommand('app')
-        ..option('name')
-        ..number('port')
+      final nameOpt = Opt.text('name');
+      final portOpt = Opt.number('port');
+      final sizeOpt = Opt.number('size').or(10);
+
+      final cli = CliCommand('app', options: [nameOpt, portOpt, sizeOpt])
         ..action((ctx) {
-          name = ctx.optionOrNull('name');
-          port = ctx.numberOrNull('port');
-          try {
-            ctx.option('name');
-          } catch (e) {
-            error = e;
-          }
+          // `nameOpt` and `portOpt` are nullable types; `sizeOpt` is not, and needs no `!`.
+          name = ctx(nameOpt);
+          port = ctx(portOpt);
+          expect(ctx(sizeOpt), equals(10));
+          expect(ctx.given(nameOpt), isFalse);
         });
       await cli.run([]);
       expect(name, isNull);
       expect(port, isNull);
-      expect(error, isA<StateError>());
     });
 
     test('CLI subcommand inherits option defaults from parent hierarchy', () async {
@@ -506,10 +544,11 @@ void main() {
       String? parentFmt;
       String? subFmt;
 
+      final format = Opt.text('format').or('all');
       cli
-          .option('format', defaultTo: 'all')
-          .command('download', build: (sub) => sub.action((ctx) => subFmt = ctx.option('format')))
-          .action((ctx) => parentFmt = ctx.option('format'));
+          .declare(format)
+          .command('download', handler: (ctx) => subFmt = ctx(format))
+          .action((ctx) => parentFmt = ctx(format));
 
       // Parent sees default
       await cli.run([]);
@@ -538,9 +577,8 @@ void main() {
 
     test('a required option is enforced at parse time', () async {
       String? token;
-      final cli = CliCommand('app')
-        ..option('token', abbr: 't', required: true, description: 'API token')
-        ..action((ctx) => token = ctx.option('token'));
+      final tokenOpt = Opt.text('token', abbr: 't', description: 'API token').required();
+      final cli = CliCommand('app', options: [tokenOpt])..action((ctx) => token = ctx(tokenOpt));
 
       await cli.run(['--token', 'abc']);
       expect(token, equals('abc'));
@@ -551,22 +589,20 @@ void main() {
       );
 
       // Required is also enforced from an ancestor command, and shows up in help.
-      final nested = CliCommand('app')
-        ..number('port', required: true)
-        ..command('serve', build: (serve) => serve..action((_) {}));
+      final nested = CliCommand('app', options: [Opt.number('port').required()])..command('serve', handler: (_) {});
       expect(() => nested.run(['serve']), throwsA(isA<UsageException>()));
     });
 
     test('a declared default reaches the context with no read-site argument', () async {
       String? format;
       int? workers;
+      final formatOpt = Opt.among('format', ['mp3', 'all']).or('all');
+      final workersOpt = Opt.number('workers').or(4);
 
-      final cli = Cli()
-        ..choice('format', ['mp3', 'all'], defaultTo: 'all')
-        ..number('workers', defaultTo: 4)
+      final cli = Cli(options: [formatOpt, workersOpt])
         ..action((ctx) {
-          format = ctx.option('format');
-          workers = ctx.number('workers');
+          format = ctx(formatOpt);
+          workers = ctx(workersOpt);
         });
 
       await cli.run([]);
@@ -603,17 +639,17 @@ void main() {
   });
 
   group('ANSI composition', () {
-    tearDown(() => Ansi.enabled = null);
+    tearDown(() => Io.color = null);
 
     test('nested styles reopen after an inner reset', () {
-      Ansi.enabled = true;
+      Io.color = true;
       final composed = '${'a'.red}b';
       expect(composed.bold, equals('\x1B[1m\x1B[31ma\x1B[0m\x1B[1mb\x1B[0m'));
-      expect(Ansi.strip(composed.bold), equals('ab'));
+      expect(Io.stripAnsi(composed.bold), equals('ab'));
     });
 
     test('styling is a no-op when ANSI is disabled', () {
-      Ansi.enabled = false;
+      Io.color = false;
       expect('${'a'.red}b'.bold, equals('ab'));
     });
   });
@@ -635,18 +671,18 @@ void main() {
     test('a ✓ cell is one column wide, so table borders stay aligned', () {
       final buf = StringBuffer();
       Io.out = buf;
-      Ansi.enabled = false;
+      Io.color = false;
       try {
-        Console.table(
-          headers: ['a', 'b'],
-          rows: [
+        Table.cells(
+          ['a', 'b'],
+          [
             ['✓ ok', 'x'],
             ['plain', 'y'],
           ],
-        );
+        ).show();
       } finally {
         Io.reset();
-        Ansi.enabled = null;
+        Io.color = null;
       }
       final widths = buf.toString().trimRight().split('\n').map((l) => l.runes.length).toSet();
       expect(widths.length, equals(1));
@@ -671,7 +707,7 @@ void main() {
     });
 
     test('a usage error is a UsageException with the message', () async {
-      final cli = CliCommand('demo')..number('n');
+      final cli = CliCommand('demo', options: [Opt.number('n')]);
       expect(
         () => cli.run(['--n', 'x']),
         throwsA(isA<UsageException>().having((e) => e.message, 'message', contains('Invalid numeric value'))),
@@ -704,7 +740,7 @@ void main() {
 
     tearDown(() {
       Io.reset();
-      Ansi.enabled = null;
+      Io.color = null;
       Env.remove('NO_COLOR');
     });
 
@@ -729,27 +765,27 @@ void main() {
     });
 
     test('a redirected sink disables ANSI unless explicitly overridden', () {
-      expect(Ansi.enabled, isFalse);
+      expect(Io.color, isFalse);
 
-      Ansi.enabled = true;
-      expect(Ansi.enabled, isTrue);
+      Io.color = true;
+      expect(Io.color, isTrue);
     });
 
     test('Ansi resolves override, then NO_COLOR, then the sink', () {
       Io.reset();
 
       // 1. An explicit override wins over everything.
-      Ansi.enabled = true;
+      Io.color = true;
       Env.set('NO_COLOR', '1');
-      expect(Ansi.enabled, isTrue, reason: 'explicit override beats NO_COLOR');
+      expect(Io.color, isTrue, reason: 'explicit override beats NO_COLOR');
 
       // 2. With no override, NO_COLOR read from Env disables styling. The value
       //    lives in Env only -- Platform.environment never sees it -- so this
       //    pins Env as the source Ansi consults.
-      Ansi.enabled = null;
+      Io.color = null;
       expect(Platform.environment.containsKey('NO_COLOR'), isFalse);
       expect(Env.has('NO_COLOR'), isTrue);
-      expect(Ansi.enabled, isFalse);
+      expect(Io.color, isFalse);
     });
 
     test('ConsoleMultiProgress reports each completion without a terminal', () {

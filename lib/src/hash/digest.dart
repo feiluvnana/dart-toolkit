@@ -58,21 +58,10 @@ extension PathHashExtensions on Path {
     }
   }
 
-  Future<String> md5() => hash(Hash.md5);
-  Future<String> sha1() => hash(Hash.sha1);
-  Future<String> sha256() => hash(Hash.sha256);
-  Future<String> sha512() => hash(Hash.sha512);
-  Future<String> blake3() => hash(Hash.blake3);
-
   /// A 32-bit checksum of this file as an integer: `file.checksum(Hash.crc32c)`.
   ///
-  /// The 64-bit checksums do not fit a Dart `int` unsigned; read those as hex, with
-  /// [hash] or [xxh3].
+  /// The 64-bit checksums do not fit a Dart `int` unsigned; read those as hex, with [hash].
   Future<int> checksum(Hash algorithm) async => _int(algorithm, await hashBytes(algorithm));
-  Future<int> crc32() => checksum(Hash.crc32);
-
-  /// xxh3 of this file, hex encoded — 64 bits, so not an `int`.
-  Future<String> xxh3() => hash(Hash.xxh3);
 }
 
 /// Digests and MACs over bytes in memory.
@@ -88,21 +77,10 @@ extension BytesHashExtensions on List<int> {
     (p, n) => Native.withOut(_maxDigest, (out) => _N.digest(algorithm.index, p, n, out, _maxDigest)),
   );
 
-  String get md5 => hash(Hash.md5);
-  String get sha1 => hash(Hash.sha1);
-  String get sha256 => hash(Hash.sha256);
-  String get sha512 => hash(Hash.sha512);
-  String get blake3 => hash(Hash.blake3);
-
   /// A 32-bit checksum as an integer: `bytes.checksum(Hash.crc32c)`.
   ///
-  /// The 64-bit checksums do not fit a Dart `int` unsigned; read those as hex, with
-  /// [hash] or [xxh3].
+  /// The 64-bit checksums do not fit a Dart `int` unsigned; read those as hex, with [hash].
   int checksum(Hash algorithm) => _int(algorithm, hashBytes(algorithm));
-  int get crc32 => checksum(Hash.crc32);
-
-  /// xxh3 of these bytes, hex encoded — 64 bits, so not an `int`.
-  String get xxh3 => hash(Hash.xxh3);
 
   /// The HMAC of these bytes under [key], hex encoded: `body.hmac(Hash.sha256, secret)`.
   String hmac(Hash algorithm, List<int> key) => _hex(hmacBytes(algorithm, key));
@@ -115,19 +93,17 @@ extension BytesHashExtensions on List<int> {
   );
 }
 
-/// Digests of a string's UTF-8 bytes: `'hello'.sha256`.
+/// Digests of a string's UTF-8 bytes: `'hello'.hash(Hash.sha256)`.
 ///
 /// {@category Crypto}
 extension StringHashExtensions on String {
+  /// The [algorithm] digest of this string's UTF-8 bytes, hex encoded.
   String hash(Hash algorithm) => utf8.encode(this).hash(algorithm);
-  String get md5 => hash(Hash.md5);
-  String get sha1 => hash(Hash.sha1);
-  String get sha256 => hash(Hash.sha256);
-  String get sha512 => hash(Hash.sha512);
-  String get blake3 => hash(Hash.blake3);
+
+  /// A 32-bit checksum of this string's UTF-8 bytes as an integer.
   int checksum(Hash algorithm) => utf8.encode(this).checksum(algorithm);
-  int get crc32 => checksum(Hash.crc32);
-  String get xxh3 => hash(Hash.xxh3);
+
+  /// The HMAC of this string under [key], hex encoded.
   String hmac(Hash algorithm, String key) => utf8.encode(this).hmac(algorithm, utf8.encode(key));
 }
 

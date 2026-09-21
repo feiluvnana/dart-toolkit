@@ -76,6 +76,16 @@ final class Table {
 
   /// A table from CSV text (RFC 4180: quoted fields, doubled quotes, newlines inside quotes).
   /// The first record names the columns; every value is a [String].
+  /// A table from [headers] and positional [rows] — the shape a program already has when
+  /// it is about to print something. A short row is padded, a long one cut.
+  ///
+  /// ```dart
+  /// Table.cells(['setting', 'value'], [['workers', 8], ['dry run', false]]).show();
+  /// ```
+  factory Table.cells(List<String> headers, Iterable<List<Object?>> rows) => Table(headers, [
+    for (final row in rows) {for (var i = 0; i < headers.length; i++) headers[i]: i < row.length ? row[i] : null},
+  ]);
+
   factory Table.csv(String text, {String separator = ','}) {
     _oneChar(separator);
     final records = _parseCsv(text, separator);
@@ -87,9 +97,6 @@ final class Table {
           {for (var i = 0; i < header.length; i++) header[i]: i < r.length ? r[i] : null},
     ]);
   }
-
-  /// A table from tab-separated text; see [Table.csv].
-  factory Table.tsv(String text) => Table.csv(text, separator: '\t');
 
   /// A table from newline-delimited JSON: one object per line, blank lines skipped.
   factory Table.ndjson(String text) => Table.rows([
@@ -256,9 +263,6 @@ final class Table {
     return sb.toString();
   }
 
-  /// Tab-separated text; see [toCsv].
-  String toTsv() => toCsv(separator: '\t');
-
   /// Newline-delimited JSON: one object per row.
   String toNdjson() => rows.map(jsonEncode).join('\n') + (rows.isEmpty ? '' : '\n');
 
@@ -284,10 +288,36 @@ final class Table {
     return file.writeAsString(toCsv(separator: separator));
   }
 
-  /// Prints this table with borders through `Io`.
-  void show() => Io.table(columns, [
-    for (final r in rows) [for (final c in columns) r[c]],
-  ]);
+  /// Prints this table with borders to `Io.out`; a short row is padded, a long one cut.
+  ///
+  /// This is the package's only table renderer: anything with rows and columns to print
+  /// becomes a [Table] first, `Table.cells` being the shortest way in.
+  void show() {
+    final grid = [
+      for (final r in rows) [for (final c in columns) '${r[c]}'],
+    ];
+    final widths = [for (final h in columns) Io.width(h)];
+    for (final row in grid) {
+      for (var i = 0; i < columns.length; i++) {
+        widths[i] = max(widths[i], Io.width(row[i]));
+      }
+    }
+
+    String divider(String left, String mid, String right, String cross) =>
+        '$left${widths.map((w) => mid * (w + 2)).join(cross)}$right';
+    String line(List<String> row) =>
+        '│${[for (var i = 0; i < columns.length; i++) ' ${row[i]}${' ' * (widths[i] - Io.width(row[i]))} '].join('│')}│';
+
+    Io.out.writeln(divider('┌', '─', '┐', '┬'));
+    if (columns.isNotEmpty) {
+      Io.out.writeln(line(columns));
+      Io.out.writeln(divider('├', '─', '┤', '┼'));
+    }
+    for (final row in grid) {
+      Io.out.writeln(line(row));
+    }
+    Io.out.writeln(divider('└', '─', '┘', '┴'));
+  }
 
   /// The rows, as `jsonEncode` wants them: `jsonEncode(table)` is a JSON array of objects.
   List<Row> toJson() => rows;

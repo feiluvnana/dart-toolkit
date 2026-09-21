@@ -29,7 +29,7 @@ Future<void> main() async {
 
     // Hash them all at once, then group by digest. Two modules meeting: `parallelize` from
     // async, `groupBy` from collection, digests from hash.
-    final hashed = await everything.parallelize((f) async => (digest: await f.sha256(), file: f));
+    final hashed = await everything.parallelize((f) async => (digest: await f.hash(Hash.sha256), file: f));
     final groups = hashed.rights.sequence.groupBy((h) => h.digest);
 
     for (final group in groups.where((g) => g.length > 1)) {
@@ -56,16 +56,16 @@ Future<void> main() async {
     // A single-stream codec, when there is one file rather than a tree. The destination has
     // to be kept in a variable: these operations answer with a dart:io File, not a Path.
     final gz = root / 'c/nested/deep.md.gz';
-    await (root / 'c/nested/deep.md').gzipTo(gz);
+    await (root / 'c/nested/deep.md').compressTo(gz);
     Logger.info('gzip: ${gz.name} is ${await gz.size()} bytes');
 
     Console.rule('Verifying, the way a release does');
 
-    final digest = await zip.sha256();
+    final digest = await zip.hash(Hash.sha256);
     Logger.info('sha256 ${digest.substring(0, 24)}…');
     // Compare a digest against one from elsewhere without leaking where it first differs.
     Logger.ok('matches a second pass: ${Crypto.equals(digest.hexBytes, await zip.hashBytes(Hash.sha256))}');
-    Logger.info('crc32 of the same file: ${await zip.crc32()} (a checksum, not a signature)');
+    Logger.info('crc32 of the same file: ${await zip.checksum(Hash.crc32)} (a checksum, not a signature)');
 
     Console.rule('Paths are strings, with the parts named');
 

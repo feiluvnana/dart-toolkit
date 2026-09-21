@@ -13,9 +13,23 @@ opposite. Coherence, documentation and feature count rank below both.
 - **A conversion is the way in.** `'…'.url`, `.path`, `.json`, `.yaml`, `.html`, `.sequence`,
   `.table`, `60.s`. Nothing is added to `Iterable`, `Map` or `String` beyond those entry points;
   the vocabulary lives on the type they return.
+- **A name is written once.** Anything a caller declares and then looks back up is a name
+  spelled twice and a typo the compiler cannot see. A CLI option is a value — `Opt.number('top').or(10)`
+  — and `ctx(top)` is an `int` because the option says so; `Opt.among('algo', Hash.values)` takes
+  the values, so nothing rebuilds an enum from a string. `Table` still keys by column name,
+  because a CSV's columns are not known until it is read.
+- **Ambient over threaded.** A setting every call would otherwise carry belongs to the scope
+  that sets it: `Http.session` holds the client, so no request, download or crawl takes a
+  `client:` of its own. A genuinely per-call argument — `headers:` — stays an argument.
+- **One shape for one and for many.** `dest.download(url)` reports what `downloadAll` reports,
+  a batch of one, so `show()` renders either and nothing gets wrapped in a one-entry map to be
+  displayed.
 - **A method earns its place by what it deletes at the call site.** `Elements.attr`, `show()`,
   `merge()`, `thenBy` each removed a line from `bin/keybox.dart`, the benchmark program. A
-  method that merely composes two others does not.
+  method that merely composes two others does not: `gzipTo`, `Table.tsv`, `Ansi.strip`,
+  `Console.table` and twenty-one per-algorithm digest shortcuts were each one line over
+  something one line away, and are gone. `text.hash(Hash.sha256)` is longer than `text.sha256`
+  was and is the only spelling for all twenty algorithms, which is the trade this rule means.
 - **A guaranteed value is not nullable.** `ctx.option('x')` with a default, `row.number('size')`,
   `Elements.text` return the value or throw a `StateError` that names what was missing. The
   `*OrNull` form is for the caller who expects absence.
@@ -36,6 +50,10 @@ opposite. Coherence, documentation and feature count rank below both.
 - **Nothing third-party at runtime but `path`.** Every parser, the HTTP client and the archive
   formats are the package's own; `package:html`, `xml`, `archive` and `http` together cost a
   second of front-end work per `dart run`.
+- **The renderer is the type.** `Table.show()` is the only table renderer; `Table.cells`
+  takes the headers-and-rows shape a program already has. `Io` owns every question about the
+  active sink — where it goes, whether it is a terminal, how wide it is, whether it takes
+  colour — and `cli` asks `Io`, never a second namespace of its own.
 - **The native library does what Dart cannot do fast.** `native/` is one Rust `cdylib`,
   `dart_toolkit_native`, prebuilt per platform and loaded through `dart:ffi` by `native.dart`'s
   `Native`; only `fs` and `hash` import it, so `dart:ffi` costs a program that uses neither
@@ -64,8 +82,14 @@ opposite. Coherence, documentation and feature count rank below both.
   `part` list; `lib/src/<module>/` holds the parts. Internals are `_private`; there is no `show`,
   no re-export, no `part` across modules. A module uses another through its module file.
 - **Every document format is `formats`**, decoded into `JsonDocument` where the model fits
-  (JSON, YAML, TOML, INI) and into its own tree where it does not (HTML, XML). The `http`
+  (JSON, YAML, TOML, INI) and into the markup tree where it does not (HTML, XML). The `http`
   bridges (`res.html`, `url.xml()`) are in `http`, which imports `formats`.
+- **One markup tree.** `Node`, `Element`, `Text`, `Attribute`, `Nodes` and `Elements` serve
+  HTML and XML alike; they differ in the parser, and in `Element.syntax`, which decides how an
+  element serialises and whether a CSS name folds case. Because there is one tree, the XPath
+  engine walks `Node` directly instead of being generic over a tree interface.
+- **`$` is CSS and `$x` is XPath, on every document.** `$` meaning CSS on HTML and XPath on
+  XML was one glyph with two meanings; XML now answers both, matching names as written.
 - **Two modules meet through an interface in `core`** (`TaskProgress`, `BatchProgress`).
 - **Nothing in `lib/` exists for tests.** The handler-backed `Client` is `test/mock_client.dart`.
 - **Tests are one file per module**, and where a piece replaced a package, a differential test

@@ -1,38 +1,51 @@
 part of '../../formats.dart';
 
-/// What kind of node an [XPathTree] node is.
+/// What kind of node a [Node] is, as XPath sees it.
 ///
 /// {@category Formats}
 enum XPathKind { document, element, attribute, text }
 
-/// How an [XPath] walks a tree it knows nothing about. `html` and `xml` each implement it
-/// once for their node types; nothing else needs to.
-///
-/// {@category Formats}
-abstract interface class XPathTree<N extends Object> {
-  XPathKind kind(N node);
+/// How the engine reads the one markup tree. These are the whole contract an [XPath] has
+/// with a [Node]; they were an interface while HTML and XML had a tree each.
+XPathKind _kind(Node n) => switch (n) {
+  Element() => XPathKind.element,
+  Text() => XPathKind.text,
+  Attribute() => XPathKind.attribute,
+  _Document() => XPathKind.document,
+};
 
-  /// The parent, or the document node above the root element, or `null` above that.
-  N? parent(N node);
+/// The parent, or the document node above the root element, or `null` above that.
+Node? _up(Node n) => switch (n) {
+  _Document() => null,
+  Element(parent: null) => _Document(n),
+  _ => n.parent,
+};
 
-  /// Child nodes of an element, or the root element of a document node.
-  List<N> children(N node);
+/// Child nodes of an element, or the root element of a document node.
+List<Node> _down(Node n) => switch (n) {
+  Element() => n.nodes,
+  _Document() => [n.root],
+  _ => const [],
+};
 
-  /// The qualified name of an element or attribute; `''` otherwise.
-  String name(N node);
+/// The qualified name of an element or attribute; `''` otherwise.
+String _nameOf(Node n) => switch (n) {
+  Element() => n.name,
+  Attribute() => n.name,
+  _ => '',
+};
 
-  /// An element's attributes, or `null`.
-  Map<String, String>? attributes(N node);
+/// An element's attributes, or `null`.
+Map<String, String>? _attrsOf(Node n) => n is Element ? n.attributes : null;
 
-  /// The string value: descendant text, text data, or an attribute's value.
-  String text(N node);
+/// The string value: descendant text, text data, or an attribute's value.
+String _textOf(Node n) => n.text;
 
-  /// A node standing for the attribute [name]=[value] on [owner].
-  N attribute(N owner, String name, String value);
+/// A node standing for the attribute [name]=[value] on [owner].
+Node _attributeOf(Node owner, String name, String value) => Attribute(name, value, owner as Element);
 
-  /// A node standing for the document that holds [root].
-  N document(N root);
-}
+/// A node standing for the document that holds [root].
+Node _documentOf(Node root) => root is _Document ? root : _Document(root as Element);
 
 /// A compiled XPath 1.0 expression, the subset feeds, sitemaps, API responses and scraped
 /// pages need: location paths with the child, descendant, parent, self, attribute, ancestor
@@ -63,38 +76,37 @@ final class XPath {
   /// order. An absolute path starts at the document above [context]'s root element.
   ///
   /// Throws [FormatException] when the expression evaluates to a string, number or boolean.
-  List<N> select<N extends Object>(N context, XPathTree<N> tree) {
+  List<Node> select(Node context) {
     var root = context;
-    for (var p = tree.parent(root); p != null && tree.kind(p) != XPathKind.document; p = tree.parent(p)) {
+    for (var p = _up(root); p != null && _kind(p) != XPathKind.document; p = _up(p)) {
       root = p;
     }
-    final value = _root.eval(_Ctx<N>(context, 1, 1, tree, tree.document(root)));
-    if (value is! List<N>) throw FormatException('XPath does not select nodes: it evaluates to $value');
+    final value = _root.eval(_Ctx(context, 1, 1, _documentOf(root)));
+    if (value is! List<Node>) throw FormatException('XPath does not select nodes: it evaluates to $value');
     return [
       for (final n in value)
-        if (tree.kind(n) != XPathKind.document) n,
+        if (_kind(n) != XPathKind.document) n,
     ];
   }
 }
 
-final class _Ctx<N extends Object> {
-  final N node;
+final class _Ctx {
+  final Node node;
   final int position;
   final int size;
-  final XPathTree<N> tree;
-  final N document;
+  final Node document;
 
   /// Shared with every context this one spawns, so [order] is built once per query.
-  final _Order<N> _shared;
+  final _Order _shared;
 
-  _Ctx(this.node, this.position, this.size, this.tree, this.document) : _shared = _Order<N>();
+  _Ctx(this.node, this.position, this.size, this.document) : _shared = _Order();
 
-  _Ctx._(this.node, this.position, this.size, this.tree, this.document, this._shared);
+  _Ctx._(this.node, this.position, this.size, this.document, this._shared);
 
-  _Ctx<N> at(N n, int position, int size) => _Ctx._(n, position, size, tree, document, _shared);
+  _Ctx at(Node n, int position, int size) => _Ctx._(n, position, size, document, _shared);
 
   /// Every node's position in document order, built once per query; see [_Order].
-  Map<N, int> get order => _shared.of(this);
+  Map<Node, int> get order => _shared.of(this);
 }
 
 /// Document order, shared by every context in one query.
@@ -108,21 +120,21 @@ final class _Ctx<N extends Object> {
 /// lookups per comparison instead of one), and the same key precomputed per node (one small
 /// map per owning element — thousands of tiny allocations for one large one). The one big
 /// map wins; see `audit/bench5.dart`.
-final class _Order<N extends Object> {
-  Map<N, int>? _map;
+final class _Order {
+  Map<Node, int>? _map;
 
-  Map<N, int> of(_Ctx<N> c) => _map ??= () {
-    final order = <N, int>{};
+  Map<Node, int> of(_Ctx c) => _map ??= () {
+    final order = <Node, int>{};
     var i = 0;
-    void walk(N n) {
+    void walk(Node n) {
       order[n] = i++;
-      final attrs = c.tree.attributes(n);
+      final attrs = _attrsOf(n);
       if (attrs != null) {
         for (final MapEntry(:key, :value) in attrs.entries) {
-          order[c.tree.attribute(n, key, value)] = i++;
+          order[Attribute(key, value, n as Element)] = i++;
         }
       }
-      for (final child in c.tree.children(n)) {
+      for (final child in _down(n)) {
         walk(child);
       }
     }
@@ -133,19 +145,19 @@ final class _Order<N extends Object> {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Expression tree. Values are List<N> (a node-set), String, double or bool.
+// Expression tree. Values are List<Node> (a node-set), String, double or bool.
 // ---------------------------------------------------------------------------------------------
 
 sealed class _XNode {
   const _XNode();
-  Object eval<N extends Object>(_Ctx<N> c);
+  Object eval(_Ctx c);
 }
 
 final class _Literal extends _XNode {
   final Object value;
   const _Literal(this.value);
   @override
-  Object eval<N extends Object>(_Ctx<N> c) => value;
+  Object eval(_Ctx c) => value;
 }
 
 final class _XPathExpr extends _XNode {
@@ -155,18 +167,18 @@ final class _XPathExpr extends _XNode {
   const _XPathExpr(this.absolute, this.steps, {this.filter});
 
   @override
-  Object eval<N extends Object>(_Ctx<N> c) {
-    List<N> current;
+  Object eval(_Ctx c) {
+    List<Node> current;
     if (filter != null) {
       final v = filter!.eval(c);
-      if (v is! List<N>) throw const FormatException('A path must start from a node-set');
+      if (v is! List<Node>) throw const FormatException('A path must start from a node-set');
       current = v;
     } else {
       current = [absolute ? c.document : c.node];
     }
     for (final step in steps) {
-      final next = <N>[];
-      final seen = <N>{};
+      final next = <Node>[];
+      final seen = <Node>{};
       for (final n in current) {
         for (final m in step.apply(c, n)) {
           if (seen.add(m)) next.add(m);
@@ -193,16 +205,16 @@ final class _Filter extends _XNode {
   const _Filter(this.primary, this.predicates);
 
   @override
-  Object eval<N extends Object>(_Ctx<N> c) {
+  Object eval(_Ctx c) {
     final v = primary.eval(c);
-    if (v is! List<N>) throw const FormatException('A predicate needs a node-set');
+    if (v is! List<Node>) throw const FormatException('A predicate needs a node-set');
     var nodes = v;
     if (nodes.length > 1) {
       final order = c.order;
       nodes = nodes.toList()..sort((x, y) => (order[x] ?? -1).compareTo(order[y] ?? -1));
     }
     for (final p in predicates) {
-      final kept = <N>[];
+      final kept = <Node>[];
       for (var i = 0; i < nodes.length; i++) {
         final r = p.eval(c.at(nodes[i], i + 1, nodes.length));
         if (r is double ? r == i + 1 : _bool(r)) kept.add(nodes[i]);
@@ -217,11 +229,11 @@ final class _Union extends _XNode {
   final _XNode left, right;
   const _Union(this.left, this.right);
   @override
-  Object eval<N extends Object>(_Ctx<N> c) {
+  Object eval(_Ctx c) {
     final a = left.eval(c), b = right.eval(c);
-    if (a is! List<N> || b is! List<N>) throw const FormatException('| needs node-sets on both sides');
+    if (a is! List<Node> || b is! List<Node>) throw const FormatException('| needs node-sets on both sides');
     final order = c.order;
-    return <N>{...a, ...b}.toList()..sort((x, y) => (order[x] ?? -1).compareTo(order[y] ?? -1));
+    return <Node>{...a, ...b}.toList()..sort((x, y) => (order[x] ?? -1).compareTo(order[y] ?? -1));
   }
 }
 
@@ -231,7 +243,7 @@ final class _Binary extends _XNode {
   const _Binary(this.op, this.left, this.right);
 
   @override
-  Object eval<N extends Object>(_Ctx<N> c) {
+  Object eval(_Ctx c) {
     switch (op) {
       case 'or':
         return _bool(left.eval(c)) || _bool(right.eval(c));
@@ -239,31 +251,24 @@ final class _Binary extends _XNode {
         return _bool(left.eval(c)) && _bool(right.eval(c));
     }
     final a = left.eval(c), b = right.eval(c);
-    final t = c.tree;
     return switch (op) {
-      '=' => _compare(t, a, b, (x, y) => x == y, (x, y) => x == y),
-      '!=' => _compare(t, a, b, (x, y) => x != y, (x, y) => x != y),
-      '<' => _compare(t, a, b, (x, y) => _num(x) < _num(y), (x, y) => x < y),
-      '>' => _compare(t, a, b, (x, y) => _num(x) > _num(y), (x, y) => x > y),
-      '<=' => _compare(t, a, b, (x, y) => _num(x) <= _num(y), (x, y) => x <= y),
-      '>=' => _compare(t, a, b, (x, y) => _num(x) >= _num(y), (x, y) => x >= y),
-      '+' => _numOf(t, a) + _numOf(t, b),
-      '-' => _numOf(t, a) - _numOf(t, b),
+      '=' => _compare(a, b, (x, y) => x == y, (x, y) => x == y),
+      '!=' => _compare(a, b, (x, y) => x != y, (x, y) => x != y),
+      '<' => _compare(a, b, (x, y) => _num(x) < _num(y), (x, y) => x < y),
+      '>' => _compare(a, b, (x, y) => _num(x) > _num(y), (x, y) => x > y),
+      '<=' => _compare(a, b, (x, y) => _num(x) <= _num(y), (x, y) => x <= y),
+      '>=' => _compare(a, b, (x, y) => _num(x) >= _num(y), (x, y) => x >= y),
+      '+' => _numOf(a) + _numOf(b),
+      '-' => _numOf(a) - _numOf(b),
       _ => throw FormatException('Unknown operator $op'),
     };
   }
 
   /// XPath 1.0 comparison: a node-set compares by the string value of any of its nodes.
-  static bool _compare<N extends Object>(
-    XPathTree<N> t,
-    Object a,
-    Object b,
-    bool Function(String, String) str,
-    bool Function(double, double) num,
-  ) {
-    if (a is List<N> && b is List<N>) return a.any((x) => b.any((y) => str(t.text(x), t.text(y))));
-    if (a is List<N>) return a.any((x) => _compare(t, t.text(x), b, str, num));
-    if (b is List<N>) return b.any((y) => _compare(t, a, t.text(y), str, num));
+  static bool _compare(Object a, Object b, bool Function(String, String) str, bool Function(double, double) num) {
+    if (a is List<Node> && b is List<Node>) return a.any((x) => b.any((y) => str(_textOf(x), _textOf(y))));
+    if (a is List<Node>) return a.any((x) => _compare(_textOf(x), b, str, num));
+    if (b is List<Node>) return b.any((y) => _compare(a, _textOf(y), str, num));
     if (a is bool || b is bool) return str(_bool(a).toString(), _bool(b).toString());
     if (a is double || b is double) return num(_num(a), _num(b));
     return str(_string(a), _string(b));
@@ -274,7 +279,7 @@ final class _Negate extends _XNode {
   final _XNode inner;
   const _Negate(this.inner);
   @override
-  Object eval<N extends Object>(_Ctx<N> c) => -_numOf(c.tree, inner.eval(c));
+  Object eval(_Ctx c) => -_numOf(inner.eval(c));
 }
 
 final class _Call extends _XNode {
@@ -283,14 +288,13 @@ final class _Call extends _XNode {
   const _Call(this.name, this.args);
 
   @override
-  Object eval<N extends Object>(_Ctx<N> c) {
-    final t = c.tree;
+  Object eval(_Ctx c) {
     Object arg(int i) => args[i].eval(c);
-    String s(int i) => args.length > i ? _stringOf(t, arg(i)) : t.text(c.node);
-    N? first() {
+    String s(int i) => args.length > i ? _stringOf(arg(i)) : _textOf(c.node);
+    Node? first() {
       if (args.isEmpty) return c.node;
       final v = arg(0);
-      return v is List<N> && v.isNotEmpty ? v.first : null;
+      return v is List<Node> && v.isNotEmpty ? v.first : null;
     }
 
     switch (name) {
@@ -300,7 +304,7 @@ final class _Call extends _XNode {
         return c.position.toDouble();
       case 'count':
         final v = arg(0);
-        if (v is! List<N>) throw const FormatException('count() needs a node-set');
+        if (v is! List<Node>) throw const FormatException('count() needs a node-set');
         return v.length.toDouble();
       case 'not':
         return !_bool(arg(0));
@@ -311,7 +315,7 @@ final class _Call extends _XNode {
       case 'string':
         return s(0);
       case 'number':
-        return args.isEmpty ? _num(t.text(c.node)) : _numOf(t, arg(0));
+        return args.isEmpty ? _num(_textOf(c.node)) : _numOf(arg(0));
       case 'boolean':
         return _bool(arg(0));
       case 'contains':
@@ -336,10 +340,10 @@ final class _Call extends _XNode {
         return i == -1 ? '' : a.substring(i + b.length);
       case 'name':
         final n = first();
-        return n == null ? '' : t.name(n);
+        return n == null ? '' : _nameOf(n);
       case 'local-name':
         final n = first();
-        return n == null ? '' : t.name(n).split(':').last;
+        return n == null ? '' : _nameOf(n).split(':').last;
     }
     throw FormatException('Unsupported XPath function $name()');
   }
@@ -360,15 +364,14 @@ final class _XStep {
 
   const _XStep(this.axis, this.test, this.predicates);
 
-  List<N> apply<N extends Object>(_Ctx<N> c, N context) {
-    final t = c.tree;
+  List<Node> apply(_Ctx c, Node context) {
     var candidates = [
-      for (final n in _axis(t, context))
-        if (_matches(t, n)) n,
+      for (final n in _axis(context))
+        if (_matches(n)) n,
     ];
     final reverse = axis == 'ancestor' || axis == 'ancestor-or-self' || axis == 'preceding-sibling';
     for (final p in predicates) {
-      final kept = <N>[];
+      final kept = <Node>[];
       final size = candidates.length;
       for (var i = 0; i < size; i++) {
         final position = reverse ? size - i : i + 1;
@@ -380,58 +383,58 @@ final class _XStep {
     return candidates;
   }
 
-  bool _matches<N extends Object>(XPathTree<N> t, N n) {
+  bool _matches(Node n) {
     final test = this.test;
-    final kind = t.kind(n);
+    final kind = _kind(n);
     if (test == null) return kind != XPathKind.document;
     if (test == 'text()') return kind == XPathKind.text;
     if (kind != XPathKind.element && kind != XPathKind.attribute) return false;
     if (test == '*') return true;
-    final name = t.name(n);
+    final name = _nameOf(n);
     if (test.endsWith(':*')) return name.startsWith(test.substring(0, test.length - 1));
     return name == test;
   }
 
-  Iterable<N> _axis<N extends Object>(XPathTree<N> t, N n) sync* {
+  Iterable<Node> _axis(Node n) sync* {
     switch (axis) {
       case 'child':
-        yield* t.children(n);
+        yield* _down(n);
       case 'descendant':
-        yield* _descendants(t, n);
+        yield* _descendants(n);
       case 'descendant-or-self':
         yield n;
-        yield* _descendants(t, n);
+        yield* _descendants(n);
       case 'parent':
-        final p = t.parent(n);
+        final p = _up(n);
         if (p != null) yield p;
       case 'ancestor':
-        for (var p = t.parent(n); p != null; p = t.parent(p)) {
+        for (var p = _up(n); p != null; p = _up(p)) {
           yield p;
         }
       case 'ancestor-or-self':
         yield n;
-        for (var p = t.parent(n); p != null; p = t.parent(p)) {
+        for (var p = _up(n); p != null; p = _up(p)) {
           yield p;
         }
       case 'self':
         yield n;
       case 'attribute':
-        final attrs = t.attributes(n);
+        final attrs = _attrsOf(n);
         if (attrs != null) {
           for (final MapEntry(:key, :value) in attrs.entries) {
-            yield t.attribute(n, key, value);
+            yield _attributeOf(n, key, value);
           }
         }
       case 'following-sibling':
-        final p = t.parent(n);
+        final p = _up(n);
         if (p != null) {
-          final siblings = t.children(p);
+          final siblings = _down(p);
           yield* siblings.skip(siblings.indexOf(n) + 1);
         }
       case 'preceding-sibling':
-        final p = t.parent(n);
+        final p = _up(n);
         if (p != null) {
-          final siblings = t.children(p);
+          final siblings = _down(p);
           yield* siblings.take(siblings.indexOf(n)).toList().reversed;
         }
       default:
@@ -439,10 +442,10 @@ final class _XStep {
     }
   }
 
-  static Iterable<N> _descendants<N extends Object>(XPathTree<N> t, N n) sync* {
-    for (final c in t.children(n)) {
+  static Iterable<Node> _descendants(Node n) sync* {
+    for (final c in _down(n)) {
       yield c;
-      yield* _descendants(t, c);
+      yield* _descendants(c);
     }
   }
 }
@@ -466,8 +469,7 @@ double _num(Object v) => switch (v) {
   _ => double.nan,
 };
 
-double _numOf<N extends Object>(XPathTree<N> t, Object v) =>
-    v is List<N> ? (v.isEmpty ? double.nan : _num(t.text(v.first))) : _num(v);
+double _numOf(Object v) => v is List<Node> ? (v.isEmpty ? double.nan : _num(_textOf(v.first))) : _num(v);
 
 String _string(Object v) => switch (v) {
   final String s => s,
@@ -476,8 +478,7 @@ String _string(Object v) => switch (v) {
   _ => '',
 };
 
-String _stringOf<N extends Object>(XPathTree<N> t, Object v) =>
-    v is List<N> ? (v.isEmpty ? '' : t.text(v.first)) : _string(v);
+String _stringOf(Object v) => v is List<Node> ? (v.isEmpty ? '' : _textOf(v.first)) : _string(v);
 
 // ---------------------------------------------------------------------------------------------
 // Parser

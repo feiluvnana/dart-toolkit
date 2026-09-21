@@ -9,10 +9,14 @@ final class _Selector {
 
   const _Selector._(this._alternatives);
 
-  static final _cache = <String, _Selector>{};
+  static final _cache = <(String, bool), _Selector>{};
 
   /// Parses [source], or returns the cached result. Throws [FormatException] on bad syntax.
-  static _Selector parse(String source) => _cache[source] ??= _Selector._(_SelectorParser(source).parseList());
+  ///
+  /// [fold] lowercases type and attribute names, which is what HTML wants and what XML,
+  /// whose names are case-sensitive, does not.
+  static _Selector parse(String source, {bool fold = true}) =>
+      _cache[(source, fold)] ??= _Selector._(_SelectorParser(source, fold).parseList());
 
   /// Whether [e] matches.
   bool matches(Element e) => _withSiblings(() => _matches(e));
@@ -186,9 +190,15 @@ typedef _Test = bool Function(Element e);
 
 final class _SelectorParser {
   final String s;
+
+  /// Whether a type or attribute name is matched case-insensitively; see [_Selector.parse].
+  final bool fold;
+
   int i = 0;
 
-  _SelectorParser(this.s);
+  _SelectorParser(this.s, [this.fold = true]);
+
+  String _name(String raw) => fold ? raw.toLowerCase() : raw;
 
   List<_Complex> parseList() {
     final out = <_Complex>[];
@@ -226,7 +236,7 @@ final class _SelectorParser {
     String? type;
     final tests = <_Test>[];
     if (i < s.length && (s[i] == '*' || _isIdentStart(s.codeUnitAt(i)))) {
-      type = s[i] == '*' ? '*' : ident().toLowerCase();
+      type = s[i] == '*' ? '*' : _name(ident());
       if (type == '*') i++;
     }
     while (i < s.length) {
@@ -257,7 +267,7 @@ final class _SelectorParser {
 
   _Test attribute() {
     skipWs();
-    final name = ident().toLowerCase();
+    final name = _name(ident());
     skipWs();
     if (i < s.length && s[i] == ']') {
       i++;

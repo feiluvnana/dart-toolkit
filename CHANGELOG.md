@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.0.2
+
+A conciseness pass over the whole API. Nothing was removed that cannot still be done; four
+places where a caller had to say the same thing twice are gone, and about sixty public members
+went with them. Every change below is breaking.
+
+### A name is written once
+
+- **CLI options are values, not strings.** `Flag('verbose')`, `Opt.text`, `Opt.number`,
+  `Opt.among(name, values)` and `Opt.by(name, parse)` declare an option; `.or(v)` and
+  `.required()` guarantee it; `ctx(option)` reads it at the option's own type.
+  `Opt.among('algo', Hash.values)` takes the enum itself, so nothing rebuilds it from a string
+  with `firstWhere` afterwards. `Opt.by` parses anything — a `DateTime`, a `Uri` — which the
+  old four fixed kinds could not.
+  - Removed: `CliContext.flag`, `.option`, `.number`, `.optionOrNull`, `.numberOrNull`, `.values`;
+    `CliCommand.option`, `.flag`, `.choice`, `.number`; `CliFlag`, `CliValue`, `CliNumber`,
+    `CliChoice`.
+  - Added: `Flag`, `Opt`, `OptionalOpt.or`, `OptionalOpt.required`, `CliContext.call`,
+    `CliContext.given`, and an `options:` argument on `Cli`, `CliCommand` and `command()`.
+- **`Client` left eighteen signatures.** `Http.session` is where a program names its client;
+  `get`, `post`, `fetch`, `json`, `html`, `xml`, `send`, `download` and `downloadAll` no longer
+  take `client:`. Per-request `headers:` stays. A batch download publishes its own client to
+  the transfers inside it, so connection reuse is unchanged.
+
+### One shape for one and for many
+
+- **`Path.download` reports `BatchDownloadProgress`**, the same events `downloadAll` reports,
+  with a total of 1. `show()` now renders a single download directly; the per-file state is
+  `progress.current`. This deletes the one-entry-map workaround `bin/tk.dart` had to write.
+
+### One markup tree
+
+- **HTML and XML share `Node`, `Element`, `Text`, `Attribute`, `Nodes` and `Elements`.**
+  `XmlNode`, `XmlElement`, `XmlText`, `XmlAttribute` and `XmlNodes` are gone; `XmlDocument` and
+  `HtmlDocument` remain, holding the same tree. `Element.syntax` decides how an element
+  serialises.
+- **`$` is CSS and `$x` is XPath, on both.** `XmlDocument.$` was XPath and is now CSS, matching
+  XML names as written rather than folded; XPath on XML moves to `$x`. XML gains CSS selectors;
+  a prefixed name such as `media:content` is not a CSS identifier and needs `$x`.
+- **`XPathTree` is gone.** It existed so one engine could walk two trees; with one tree the
+  engine walks `Node` directly, and the type parameter is gone from all of `xpath.dart`.
+- Renamed on nodes: `outerHtml`/`outerXml` to `markup`, `innerHtml`/`innerXml` to `innerMarkup`.
+  `HtmlDocument.outerHtml` and `XmlDocument.outerXml` are unchanged.
+- Added: `Elements.texts` and `Nodes.$`, so the two collections answer the same questions;
+  `Element.local` and `Element.prefix` now work for HTML too.
+
+### One spelling per operation
+
+- **Digests.** The twenty-one per-algorithm shortcuts (`.md5`, `.sha1`, `.sha256`, `.sha512`,
+  `.blake3`, `.crc32`, `.xxh3` on `Path`, `List<int>` and `String`) are removed. `hash(Hash.x)`,
+  `hashBytes`, `checksum`, `hmac` and `hmacBytes` are the whole surface, and they cover all
+  twenty algorithms rather than five.
+- **Tables.** `Io.table` and `Console.table` are removed; `Table.show()` is the only renderer,
+  and `Table.cells(headers, rows)` takes the shape those two took.
+- **ANSI.** `Ansi` is removed. `Ansi.enabled` is `Io.color` and `Ansi.strip` was `Io.stripAnsi`;
+  `Io` now answers every question about the active sink. The string styling getters (`.red`,
+  `.bold`, `.stripped`) are unchanged.
+- Removed as pure compositions: `Path.gzipTo`, `Path.gunzipTo` (use `compressTo`/`decompressTo`),
+  `Table.tsv`, `Table.toTsv` (use `csv`/`toCsv` with `separator: '\t'`).
+
+### Internal
+
+- `scrape`'s `follow` parameters are spelled once, in a `_Plan`, instead of once per hop
+  between the hook and the frontier. No API change.
+
 ## 0.0.1
 
 First release. A scripting, automation and web-scraping toolkit for Dart, in ten modules

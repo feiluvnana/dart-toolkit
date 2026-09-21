@@ -80,8 +80,8 @@ verbose = yes
 ''';
 
   // XML answers to XPath, so `$` here is a path rather than a key.
-  final items = feed.xml.$('//item');
+  final items = feed.xml.$x('//item');
   Logger.info('items: ${items.length}');
   Logger.info('first title: ${items.$('title').text}');
-  Logger.info('all titles: ${feed.xml.$('//item/title').texts.join(' | ')}');
+  Logger.info('all titles: ${feed.xml.$x('//item/title').texts.join(' | ')}');
 }

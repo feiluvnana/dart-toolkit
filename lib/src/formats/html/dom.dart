@@ -1,22 +1,30 @@
-// The HTML tree: nodes, elements, and the queries on them.
+// The markup tree: nodes, elements, and the queries on them. HTML and XML differ in how
+// they are parsed and serialised, not in what they parse into, so there is one tree.
 
 part of '../../../formats.dart';
 
-/// A node in a parsed HTML tree: an [Element] or a [Text].
+/// Which markup an [Element] was parsed from, and so how it serialises: HTML keeps its
+/// void and raw-text elements, XML closes everything and may close it in one tag.
+///
+/// {@category Formats}
+enum Syntax { html, xml }
+
+/// A node in a parsed markup tree: an [Element], a [Text], or an [Attribute] selected by
+/// an XPath `@` step.
 ///
 /// {@category Formats}
 sealed class Node {
   /// The element containing this node, or `null` at the root.
   Element? parent;
 
-  /// The text of this node and everything below it, _entities decoded.
+  /// The text of this node and everything below it, entities decoded.
   String get text;
 
-  /// This node serialised back to HTML.
-  String get outerHtml;
+  /// This node serialised back to the markup it came from.
+  String get markup;
 
   @override
-  String toString() => outerHtml;
+  String toString() => markup;
 }
 
 /// A run of text. [data] is decoded: `&amp;` is already `&`.
@@ -31,7 +39,7 @@ final class Text extends Node {
   String get text => data;
 
   @override
-  String get outerHtml => _escapeText(data);
+  String get markup => _escapeText(data);
 }
 
 /// An attribute, as an XPath `@name` step selects it.
@@ -49,7 +57,7 @@ final class Attribute extends Node {
   String get text => value;
 
   @override
-  String get outerHtml => '$name="${_escapeAttribute(value)}"';
+  String get markup => '$name="${_escapeAttribute(value)}"';
 
   /// Two of these are the same attribute when they name the same thing on the same element.
   ///
@@ -63,23 +71,38 @@ final class Attribute extends Node {
   int get hashCode => Object.hash(identityHashCode(parent), name);
 }
 
-/// An element: a lowercase [name], its [attributes], and the [nodes] inside it.
+/// An element: a [name], its [attributes], and the [nodes] inside it.
+///
+/// One class for both markups: an HTML tag name and attribute name arrive lowercased, an
+/// XML one as written, and [syntax] is what decides how the element serialises and whether
+/// a CSS selector folds case.
 ///
 /// {@category Formats}
 final class Element extends Node {
-  /// The tag name, lowercase: `a`, `div`, `td`.
+  /// The tag name: lowercase for HTML (`a`, `div`, `td`), as written for XML
+  /// (`item`, `media:content`).
   final String name;
 
-  /// Attributes by lowercase name, values decoded. A valueless attribute is `''`.
+  /// Attributes by name — lowercased for HTML, as written for XML — values decoded. A
+  /// valueless attribute is `''`.
   final Map<String, String> attributes;
 
   /// Child nodes in document order.
   final List<Node> nodes = [];
 
-  Element(this.name, [Map<String, String>? attributes]) : attributes = attributes ?? {};
+  /// Which markup this element came from.
+  final Syntax syntax;
+
+  Element(this.name, [Map<String, String>? attributes, this.syntax = Syntax.html]) : attributes = attributes ?? {};
 
   /// Child elements, skipping text.
   Iterable<Element> get children => nodes.whereType<Element>();
+
+  /// The name without its namespace prefix: `content` for `media:content`.
+  String get local => name.contains(':') ? name.substring(name.indexOf(':') + 1) : name;
+
+  /// The namespace prefix, or `null`.
+  String? get prefix => name.contains(':') ? name.substring(0, name.indexOf(':')) : null;
 
   /// The `id` attribute, or `null`.
   String? get id => attributes['id'];
@@ -94,10 +117,13 @@ final class Element extends Node {
   String? attr(String name) => attributes[name];
 
   /// Every descendant matching CSS [selector], in document order.
-  Elements $(String selector) => Elements(_Selector.parse(selector).matchAll(this));
+  ///
+  /// Names fold to lowercase for HTML and match as written for XML. A prefixed XML name
+  /// (`media:content`) is not a CSS identifier; select those with the XPath form.
+  Elements $(String selector) => Elements(_Selector.parse(selector, fold: syntax == Syntax.html).matchAll(this));
 
   /// The nodes matching XPath [expression] with this element as the context; see [XPath].
-  Nodes $x(String expression) => Nodes(XPath.parse(expression).select(this, _htmlTree));
+  Nodes $x(String expression) => Nodes(XPath.parse(expression).select(this));
 
   @override
   String get text {
@@ -147,22 +173,30 @@ final class Element extends Node {
   }
 
   /// The children serialised, without this element's own tags.
-  String get innerHtml => nodes.map((n) => n.outerHtml).join();
+  String get innerMarkup => nodes.map((n) => n.markup).join();
 
   @override
-  String get outerHtml {
+  String get markup {
     final sb = StringBuffer('<$name');
     for (final MapEntry(:key, :value) in attributes.entries) {
       sb.write(' $key="${_escapeAttribute(value)}"');
+    }
+    if (syntax == Syntax.xml) {
+      if (nodes.isEmpty) return '$sb/>';
+      sb
+        ..write('>')
+        ..write(innerMarkup)
+        ..write('</$name>');
+      return sb.toString();
     }
     sb.write('>');
     if (_voidElements.contains(name)) return sb.toString();
     if (_rawTextElements.contains(name)) {
       for (final n in nodes) {
-        sb.write(n is Text ? n.data : n.outerHtml);
+        sb.write(n is Text ? n.data : n.markup);
       }
     } else {
-      sb.write(innerHtml);
+      sb.write(innerMarkup);
     }
     sb.write('</$name>');
     return sb.toString();
@@ -197,12 +231,15 @@ extension type Elements(List<Element> _list) implements List<Element> {
   /// The first match's text lines; see [Element.lines]. Throws [StateError] when nothing matched.
   List<String> get lines => _first.lines;
 
+  /// Every match's text, in document order; [text] is the first one.
+  List<String> get texts => [for (final e in _list) e.text];
+
   /// Attribute [name] on the first match, or `null` when it is absent or nothing matched.
   String? attr(String name) => _list.firstOrNull?.attributes[name];
 
   /// Every descendant of every match that matches [selector], each once, in document order.
   Elements $(String selector) {
-    final s = _Selector.parse(selector);
+    final s = _Selector.parse(selector, fold: _list.firstOrNull?.syntax != Syntax.xml);
     final seen = <Element>{};
     return Elements([
       for (final e in _list)
@@ -217,7 +254,7 @@ extension type Elements(List<Element> _list) implements List<Element> {
     final seen = <Node>{};
     return Nodes([
       for (final e in _list)
-        for (final n in x.select(e, _htmlTree))
+        for (final n in x.select(e))
           if (seen.add(n)) n,
     ]);
   }
@@ -243,6 +280,9 @@ extension type Nodes(List<Node> _list) implements List<Node> {
   /// Every node's string value.
   List<String> get texts => [for (final n in _list) n.text];
 
+  /// Every descendant of every selected element matching CSS [selector], each once.
+  Elements $(String selector) => elements.$(selector);
+
   /// XPath [expression] from each selected element, each node once.
   Nodes $x(String expression) => elements.$x(expression);
 }
@@ -265,7 +305,7 @@ final class HtmlDocument {
 
   /// The nodes matching XPath [expression], from the document: `//a/@href`,
   /// `//tr[td[2]="FLAC"]/td[1]/a`, `//h2[contains(., "Tracks")]/following-sibling::table[1]`.
-  Nodes $x(String expression) => Nodes(XPath.parse(expression).select(root, _htmlTree));
+  Nodes $x(String expression) => Nodes(XPath.parse(expression).select(root));
 
   /// The `<head>` element.
   Element get head => root.children.firstWhere((e) => e.name == 'head');
@@ -277,7 +317,7 @@ final class HtmlDocument {
   String get text => root.text;
 
   /// The document serialised back to HTML.
-  String get outerHtml => root.outerHtml;
+  String get outerHtml => root.markup;
 
   @override
   String toString() => outerHtml;
@@ -290,55 +330,8 @@ final class _Document extends Node {
   @override
   String get text => root.text;
   @override
-  String get outerHtml => root.outerHtml;
+  String get markup => root.markup;
 }
-
-final class _HtmlTree implements XPathTree<Node> {
-  const _HtmlTree();
-
-  @override
-  XPathKind kind(Node n) => switch (n) {
-    Element() => XPathKind.element,
-    Text() => XPathKind.text,
-    Attribute() => XPathKind.attribute,
-    _Document() => XPathKind.document,
-  };
-
-  @override
-  Node? parent(Node n) => switch (n) {
-    _Document() => null,
-    Element(parent: null) => _Document(n),
-    _ => n.parent,
-  };
-
-  @override
-  List<Node> children(Node n) => switch (n) {
-    Element() => n.nodes,
-    _Document() => [n.root],
-    _ => const [],
-  };
-
-  @override
-  String name(Node n) => switch (n) {
-    Element() => n.name,
-    Attribute() => n.name,
-    _ => '',
-  };
-
-  @override
-  Map<String, String>? attributes(Node n) => n is Element ? n.attributes : null;
-
-  @override
-  String text(Node n) => n.text;
-
-  @override
-  Node attribute(Node owner, String name, String value) => Attribute(name, value, owner as Element);
-
-  @override
-  Node document(Node root) => root is _Document ? root : _Document(root as Element);
-}
-
-const _htmlTree = _HtmlTree();
 
 /// Decodes `&amp;`, `&#38;`, `&#x26;` and the HTML 4 named references in [text].
 String decodeEntities(String text) {

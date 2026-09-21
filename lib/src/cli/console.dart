@@ -50,7 +50,7 @@ String _bar(int current, int total, String message) {
   return '  $prefix[$bar] $percent% ($current/$total)';
 }
 
-bool _interactive() => Io.isTerminal && Ansi.enabled;
+bool _interactive() => Io.isTerminal && Io.color;
 
 /// Progress controller for terminal activity.
 ///
@@ -514,9 +514,6 @@ class Console {
     final sideLen = (cols - titleLen) ~/ 2;
     Io.out.writeln('${'─' * sideLen} $title ${'─' * (cols - titleLen - sideLen)}'.cyan);
   }
-
-  /// Renders a text table with borders through [Io.table].
-  static void table({required List<String> headers, required List<List<Object?>> rows}) => Io.table(headers, rows);
 
   /// Creates a single-line progress indicator for [total] steps.
   static ConsoleProgress progress(int total, {String message = '', int? columns}) =>

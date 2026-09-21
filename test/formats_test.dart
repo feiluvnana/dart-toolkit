@@ -185,7 +185,7 @@ cert = 'a;b'
     ]);
 
     test('tsv, ndjson and markdown round-trip or render', () {
-      expect(Table.tsv(t.toTsv()).rows, [
+      expect(Table.csv(t.toCsv(separator: '\t'), separator: '\t').rows, [
         {'name': 'a|b', 'n': '1'},
         {'name': 'c', 'n': '20'},
       ]);
@@ -276,7 +276,7 @@ cert = 'a;b'
 
     test('serialisation round-trips', () {
       const src = '<div class="a"><p>x &amp; y</p><br><img src="i.png"></div>';
-      expect(src.html.body.innerHtml, src);
+      expect(src.html.body.innerMarkup, src);
     });
   });
 
@@ -350,7 +350,7 @@ cert = 'a;b'
     final ours = XmlDocument.parse(feed);
     final theirs = reference.XmlDocument.parse(feed);
     for (final expr in expressions) {
-      final a = [for (final n in ours.$(expr)) _ours(n)];
+      final a = [for (final n in ours.$x(expr)) _ours(n)];
       final b = [for (final n in theirs.xpath(expr)) _theirs(n)];
       expect(a, equals(b), reason: expr);
     }
@@ -358,28 +358,50 @@ cert = 'a;b'
 
   test('node-set to number comparisons follow XPath 1.0 (package:xml does not)', () {
     final doc = XmlDocument.parse(feed);
-    expect(doc.$('//item[price>900]/title').texts, ['First <post>']);
-    expect(doc.$('//item[price<10]/title').texts, ['Third']);
-    expect(doc.$('//price[.>=800]/../title').texts, ['First <post>', '二番目']);
-    expect(doc.$('//item[number(price)>900]/title').texts, ['First <post>']);
-    expect(doc.$('//item[@id!="1"]/title').texts, ['二番目', 'Third']);
+    expect(doc.$x('//item[price>900]/title').texts, ['First <post>']);
+    expect(doc.$x('//item[price<10]/title').texts, ['Third']);
+    expect(doc.$x('//price[.>=800]/../title').texts, ['First <post>', '二番目']);
+    expect(doc.$x('//item[number(price)>900]/title').texts, ['First <post>']);
+    expect(doc.$x('//item[@id!="1"]/title').texts, ['二番目', 'Third']);
+  });
+
+  test('one tree, two markups: CSS folds for HTML and matches as written for XML', () {
+    const mixed = '<r><Item id="1"><title>Upper</title></Item><item id="2"><title>lower</title><e/></item></r>';
+    final doc = mixed.xml;
+
+    // XML names are case-sensitive, so these are different elements.
+    expect(doc.$('item').texts, ['lower']);
+    expect(doc.$('Item').texts, ['Upper']);
+    expect(doc.$('item[id="2"]').texts, ['lower']);
+
+    // The same document answers XPath, and both queries return the shared node types.
+    expect(doc.$x('//title').texts, ['Upper', 'lower']);
+    expect(doc.$('title').first, isA<Element>());
+    expect(doc.$x('//title').first, isA<Node>());
+
+    // Serialisation follows the syntax the element was parsed from.
+    expect(doc.$('e').first.markup, '<e/>');
+    expect('<p>a<br>b'.html.$('p').first.markup, '<p>a<br>b</p>');
+
+    // HTML still folds case.
+    expect('<DIV><P>hi</P></DIV>'.html.$('div p').text, 'hi');
   });
 
   test('the tree: names, prefixes, attributes, entities, CDATA, serialisation', () {
     final doc = XmlDocument.parse(feed);
     expect(doc.root.name, 'rss');
     expect(doc.root.attr('version'), '2.0');
-    final creator = doc.$('//dc:creator').elements.first;
+    final creator = doc.$x('//dc:creator').elements.first;
     expect((creator.name, creator.prefix, creator.local), ('dc:creator', 'dc', 'creator'));
-    expect(doc.$('//channel/title').text, 'Key Sounds & more');
-    expect(doc.$('//item[1]/title').text, 'First <post>');
-    expect(doc.$('//description').text, 'Some <b>bold</b> text & more');
-    expect(doc.$('//media:content').attr('url'), 'https://cdn.example/1.mp3');
-    expect(doc.$('//item').$('title').map((n) => n.text), ['First <post>', '二番目', 'Third']);
-    expect(doc.$('//empty').elements.first.outerXml, '<empty/>');
-    expect(XmlDocument.parse(doc.outerXml).$('//item').length, 3);
+    expect(doc.$x('//channel/title').text, 'Key Sounds & more');
+    expect(doc.$x('//item[1]/title').text, 'First <post>');
+    expect(doc.$x('//description').text, 'Some <b>bold</b> text & more');
+    expect(doc.$x('//media:content').attr('url'), 'https://cdn.example/1.mp3');
+    expect(doc.$x('//item').$('title').map((n) => n.text), ['First <post>', '二番目', 'Third']);
+    expect(doc.$x('//empty').elements.first.markup, '<empty/>');
+    expect(XmlDocument.parse(doc.outerXml).$x('//item').length, 3);
     expect(() => XmlDocument.parse('just text'), throwsFormatException);
-    expect(() => doc.$('//item/'), throwsFormatException);
+    expect(() => doc.$x('//item/'), throwsFormatException);
     expect(() => doc.$('count(//item)'), throwsFormatException);
   });
 
@@ -484,10 +506,10 @@ String _show(Object? v) => switch (v) {
   _ => '$v',
 };
 
-String _ours(XmlNode n) => switch (n) {
-  XmlElement() => 'E:${n.name}:${n.text.trim()}',
-  XmlAttribute() => 'A:${n.name}=${n.value}',
-  XmlText() => 'T:${n.data.trim()}',
+String _ours(Node n) => switch (n) {
+  Element() => 'E:${n.name}:${n.text.trim()}',
+  Attribute() => 'A:${n.name}=${n.value}',
+  Text() => 'T:${n.data.trim()}',
   _ => 'O:${n.runtimeType}',
 };
 

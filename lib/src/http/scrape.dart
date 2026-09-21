@@ -16,19 +16,33 @@ typedef ErrorHook<T> = FutureOr<void> Function(ErrorContext<T> ctx);
 typedef FinishHook = FutureOr<void> Function(ScrapeSummary summary);
 
 /// Schedules one more request from inside a hook. See [ResponseContext.follow].
-typedef Follow<T> =
-    bool Function(
-      Object target, {
-      ResponseHook<T>? onResponse,
-      ErrorHook<T>? onError,
-      Map<String, Object?>? meta,
-      Map<String, String>? headers,
-      String method,
-      String? body,
-      Map<String, String>? fields,
-      bool revisit,
-      bool offsite,
-    });
+/// What [HookContext.follow] was asked for, on its way to the engine. The named arguments
+/// are spelled once, here, rather than once per hop between the hook and the frontier.
+final class _Plan<T> {
+  final ResponseHook<T>? onResponse;
+  final ErrorHook<T>? onError;
+  final Map<String, Object?>? meta;
+  final Map<String, String>? headers;
+  final String method;
+  final String? body;
+  final Map<String, String>? fields;
+  final bool revisit;
+  final bool offsite;
+
+  const _Plan({
+    this.onResponse,
+    this.onError,
+    this.meta,
+    this.headers,
+    this.method = 'GET',
+    this.body,
+    this.fields,
+    this.revisit = false,
+    this.offsite = false,
+  });
+}
+
+typedef _Follow<T> = bool Function(Object target, _Plan<T> plan);
 
 // ---------------------------------------------------------------------------------------------
 // Failures
@@ -210,7 +224,7 @@ final class RequestContext {
 /// {@category Crawling}
 sealed class HookContext<T> {
   final void Function(T item) _emit;
-  final Follow<T> _follow;
+  final _Follow<T> _follow;
   final void Function() _stop;
   bool _closed = false;
 
@@ -260,15 +274,17 @@ sealed class HookContext<T> {
     if (body != null && fields != null) throw ArgumentError('Pass at most one of "body" and "fields".');
     final scheduled = _follow(
       target,
-      onResponse: onResponse,
-      onError: onError,
-      meta: meta,
-      headers: headers,
-      method: method,
-      body: body,
-      fields: fields,
-      revisit: revisit,
-      offsite: offsite,
+      _Plan<T>(
+        onResponse: onResponse,
+        onError: onError,
+        meta: meta,
+        headers: headers,
+        method: method,
+        body: body,
+        fields: fields,
+        revisit: revisit,
+        offsite: offsite,
+      ),
     );
     if (scheduled) _acted();
     return scheduled;
@@ -319,7 +335,7 @@ final class ResponseContext<T> extends HookContext<T> {
     required this.pages,
     required this.meta,
     required void Function(T item) emit,
-    required Follow<T> follow,
+    required _Follow<T> follow,
     required void Function() stop,
   }) : super._(emit, follow, stop);
 }
@@ -589,7 +605,7 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
   if (cfg.retries < 0) cfg.retries = 0;
   if (cfg.redirects < 0) cfg.redirects = 0;
   final started = DateTime.now();
-  final lease = _clientFor(null);
+  final lease = _clientFor();
   final sessionHasUserAgent = lease.headers?.keys.any((k) => k.toLowerCase() == 'user-agent') ?? false;
 
   final seedHosts = <String>{for (final s in cfg._seeds) _site(s.url.host)};
@@ -745,25 +761,24 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
     if (running == 0) close();
   }
 
-  Follow<T> followFrom(_Item<T> item, Uri base) =>
-      (target, {onResponse, onError, meta, headers, method = 'GET', body, fields, revisit = false, offsite = false}) {
-        final next = Request(method, _resolve(base, target), headers: headers);
-        if (body != null) next.text = body;
-        if (fields != null) next.fields = fields;
-        final scheduled = enqueue(
-          _Item<T>(
-            next,
-            onResponse: onResponse,
-            onError: onError,
-            meta: {...item.meta, ...?meta},
-            depth: item.depth + 1,
-            revisit: revisit,
-            offsite: offsite,
-          ),
-        );
-        dispatch();
-        return scheduled;
-      };
+  _Follow<T> followFrom(_Item<T> item, Uri base) => (target, plan) {
+    final next = Request(plan.method, _resolve(base, target), headers: plan.headers);
+    if (plan.body case final body?) next.text = body;
+    if (plan.fields case final fields?) next.fields = fields;
+    final scheduled = enqueue(
+      _Item<T>(
+        next,
+        onResponse: plan.onResponse,
+        onError: plan.onError,
+        meta: {...item.meta, ...?plan.meta},
+        depth: item.depth + 1,
+        revisit: plan.revisit,
+        offsite: plan.offsite,
+      ),
+    );
+    dispatch();
+    return scheduled;
+  };
 
   /// The engine has given up on [item]: the error hook decides, else the failure is a [Left].
   Future<void> fail(_Host<T> host, _Item<T> item, ScrapeFailure failure, StackTrace st) async {

@@ -91,12 +91,12 @@ void main() {
     for (final t in tracks)
       if (t.seconds > 200) {'disc': t.disc, 'title': t.title, 'min': (t.seconds / 60).toStringAsFixed(1)},
   ]..sort((a, b) => (a['disc'] as int).compareTo(b['disc'] as int));
-  Console.table(
-    headers: ['disc', 'title', 'min'],
-    rows: [
+  Table.cells(
+    ['disc', 'title', 'min'],
+    [
       for (final r in rowsA) [r['disc'], r['title'], r['min']],
     ],
-  );
+  ).show();
   // Table: the same, as a query; `show()` prints it, `toCsv()` would write it.
   Table.records(tracks, (t) => {'disc': t.disc, 'title': t.title, 'seconds': t.seconds})
       .where((r) => r.number('seconds') > 200)
@@ -113,11 +113,11 @@ void main() {
 /// Prints both answers side by side and says whether they agree.
 void show(Iterable<String> iterableApi, Iterable<String> sequenceApi) {
   final a = iterableApi.toList(), b = sequenceApi.toList();
-  Console.table(
-    headers: ['Iterable', 'Sequence'],
-    rows: [
+  Table.cells(
+    ['Iterable', 'Sequence'],
+    [
       for (var i = 0; i < a.length; i++) [a[i], i < b.length ? b[i] : ''],
     ],
-  );
+  ).show();
   a.toString() == b.toString() ? Logger.ok('same result') : Logger.error('results differ');
 }

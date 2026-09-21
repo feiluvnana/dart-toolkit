@@ -21,9 +21,14 @@ extension UriExtensions on Uri {
     }..removeWhere((k, _) => params.containsKey(k) && params[k] == null),
   );
 
-  /// Sends [request] through [client], the session's client, or a fresh one, and buffers the body.
-  Future<Response> send(Request request, {Client? client}) async {
-    final lease = _clientFor(client);
+  /// Sends [request] through the enclosing [Http.session]'s client, or a fresh one, and
+  /// buffers the body.
+  ///
+  /// There is no `client:` argument anywhere in this module: a program that wants a
+  /// particular client — a mock, a proxy, one with a timeout — says so once, by wrapping
+  /// its work in [Http.session].
+  Future<Response> send(Request request) async {
+    final lease = _clientFor();
     try {
       return await (await lease.client.send(request)).read();
     } finally {
@@ -32,43 +37,40 @@ extension UriExtensions on Uri {
   }
 
   /// GET.
-  Future<Response> get({Map<String, String>? headers, Client? client}) =>
-      send(Request('GET', this, headers: headers), client: client);
+  Future<Response> get({Map<String, String>? headers}) => send(Request('GET', this, headers: headers));
 
   /// HEAD: the headers without the body.
-  Future<Response> head({Map<String, String>? headers, Client? client}) =>
-      send(Request('HEAD', this, headers: headers), client: client);
+  Future<Response> head({Map<String, String>? headers}) => send(Request('HEAD', this, headers: headers));
 
   /// POST. [body] is a [String] (UTF-8 text), a `List<int>`, or a `Map<String, String>`
   /// (form-encoded); [json] is any JSON-encodable value, sent as `application/json`.
-  Future<Response> post({Map<String, String>? headers, Object? body, Object? json, Client? client}) =>
-      send(_withBody('POST', headers, body, json), client: client);
+  Future<Response> post({Map<String, String>? headers, Object? body, Object? json}) =>
+      send(_withBody('POST', headers, body, json));
 
   /// PUT; see [post] for [body] and [json].
-  Future<Response> put({Map<String, String>? headers, Object? body, Object? json, Client? client}) =>
-      send(_withBody('PUT', headers, body, json), client: client);
+  Future<Response> put({Map<String, String>? headers, Object? body, Object? json}) =>
+      send(_withBody('PUT', headers, body, json));
 
   /// PATCH; see [post] for [body] and [json].
-  Future<Response> patch({Map<String, String>? headers, Object? body, Object? json, Client? client}) =>
-      send(_withBody('PATCH', headers, body, json), client: client);
+  Future<Response> patch({Map<String, String>? headers, Object? body, Object? json}) =>
+      send(_withBody('PATCH', headers, body, json));
 
   /// DELETE; see [post] for [body] and [json].
-  Future<Response> delete({Map<String, String>? headers, Object? body, Object? json, Client? client}) =>
-      send(_withBody('DELETE', headers, body, json), client: client);
+  Future<Response> delete({Map<String, String>? headers, Object? body, Object? json}) =>
+      send(_withBody('DELETE', headers, body, json));
 
   /// GETs this URI and throws [HttpException] unless the status is 2xx.
   ///
   /// `url.json()`, `url.html()` and `url.xml()` are `fetch` plus a parse; use [get] with
   /// [Response.isOk] to handle a failure yourself.
-  Future<Response> fetch({Map<String, String>? headers, Client? client}) async {
-    final res = await get(headers: headers, client: client);
+  Future<Response> fetch({Map<String, String>? headers}) async {
+    final res = await get(headers: headers);
     if (!res.isOk) throw HttpException('GET failed with status ${res.statusCode}', uri: this);
     return res;
   }
 
   /// Fetches this URI and parses the response body as JSON; see [fetch].
-  Future<JsonDocument> json({Map<String, String>? headers, Client? client}) async =>
-      (await fetch(headers: headers, client: client)).json;
+  Future<JsonDocument> json({Map<String, String>? headers}) async => (await fetch(headers: headers)).json;
 
   Request _withBody(String method, Map<String, String>? headers, Object? body, Object? json) {
     if (body != null && json != null) throw ArgumentError('Pass at most one of "body" and "json".');

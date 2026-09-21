@@ -1,7 +1,8 @@
 /// # Hashing & Encoding
 ///
 /// Digests and checksums of files, bytes and text; HMAC; hex, base64 and base32; secure
-/// random bytes, tokens and UUIDs. The digests run in the toolkit's native library
+/// random bytes, tokens and UUIDs. The algorithm is always an argument — `text.hash(Hash.sha256)`,
+/// `file.hash(Hash.blake3)` — so there is one spelling for all twenty, not a shortcut for five. The digests run in the toolkit's native library
 /// (`Native`) and throw [UnsupportedError] naming what they needed when it did not load;
 /// the encodings and the random helpers are pure Dart and always work.
 ///
