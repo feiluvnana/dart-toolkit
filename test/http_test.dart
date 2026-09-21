@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dart_toolkit/dart_toolkit.dart';
+import 'client_conformance.dart';
 import 'mock_client.dart';
 import 'package:test/test.dart';
 
@@ -1479,4 +1480,6 @@ void main() {
       await sub.cancel();
     });
   });
+
+  clientConformance('IoClient', (_) => IoClient());
 }

@@ -32,7 +32,7 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 | `fs.dart` | `Path`; zip, 7z, rar, tar and gz/xz/zstd/bz2 archives with passwords, through the native library | path |
 | `hash.dart` | 16 digests and 4 checksums behind one `hash(Hash.…)`, HMAC, hex/base64/base32, `Crypto.token`, `uuid`, `equals` | — |
 | `process.dart` | `run`, pipelines, `which` | — |
-| `http.dart` | `Request`, `Response`, `Client`, `Http.session`, scraping, downloads, `res.html`, `url.json()` | — |
+| `http.dart` | `Request`, `Response`, `Client` (`IoClient`, `BrowserClient` over Chrome), `Http.session`, scraping, downloads, `res.html`, `url.json()` | — |
 
 Ten modules. Every parser and the HTTP client are the package's own, checked against the
 packages they replaced in the test suite. What Dart cannot do fast — hashing at 2–3 GB/s,
@@ -306,12 +306,68 @@ await Http.session(() async {
 }, timeout: 30.s, headers: {'user-agent': 'my-tool/1.0'});
 ```
 
-The client is `dart:io`'s, wrapped in `Request`, `Response` and `Client`; `Http.session(client:)`
-takes any `Client`, so a test hands it one that answers from a handler — `test/mock_client.dart`
-is forty lines and yours to copy.
-
 `url / 'users'` appends a path segment, treating the base as a directory — the same glyph as
 `Path./`, with the same meaning.
+
+### Clients
+
+Every request in the module — a `get`, a download, a crawl — is sent through one `Client`, and
+`Http.session(client:)` is the only place a program names it. There are two, and a test's is a
+third:
+
+```dart
+await Http.session(client: IoClient(), () async { … });                  // the default: dart:io
+await Http.session(client: await BrowserClient.launch(), () async { … });  // Chrome renders it
+await Http.session(client: MockClient((r) async => Response('ok', 200)), () async { … });
+```
+
+`BrowserClient` speaks the DevTools protocol over a websocket — no third-party package and no
+Chromium download: `launch()` finds the Chrome already installed and runs it headless,
+`attach(port:)` joins one already running. The page arrives as the DOM **after its own scripts
+have run**, in `Response.bytes`, so `res.html`, `$`, `$x` and the whole scrape engine work over
+it unchanged:
+
+```dart
+final browser = await BrowserClient.launch(tabs: 4);
+await Http.session(client: browser, () async {
+  await for (final item in url.scrape<Item>()
+      .onRequest((ctx) => ctx.request[BrowserClient.waitFor] = '.results .item')
+      .onResponse(parse)
+      .rights) print(item);
+});
+await browser.close();
+```
+
+Only a GET without a `range` is rendered. A POST, a resumable download, an image — everything
+else goes to the plain HTTP client underneath, carrying the browser's cookies for that host, so
+a crawl that renders its pages still fetches its files at the speed of a socket.
+
+What a page needs before it is worth reading is said per request, with a `RequestKey`:
+
+| key | |
+|---|---|
+| `BrowserClient.waitFor` | wait until a CSS selector matches |
+| `BrowserClient.waitUntil` | `BrowserWait.load` or `.idle` — `load`, then half a second of silence |
+| `BrowserClient.script` | JavaScript to run before the DOM is read; may return a promise |
+| `BrowserClient.direct` | send this one down the plain client instead |
+
+A `RequestKey<T>` is how any client is told something HTTP has no word for, and **a client
+ignores every key it does not know** — which is what lets the same crawl run over `IoClient`,
+which ignores the wait, and over `BrowserClient`, which honours it. To write a third client,
+implement two methods:
+
+```dart
+abstract interface class Client {
+  Future<StreamedResponse> send(Request request);
+  FutureOr<void> close();        // awaited by Http.session, so a socket teardown is safe
+}
+```
+
+and point `clientConformance` at it — `test/client_conformance.dart` brings its own server and
+checks the promises the rest of the module relies on: a non-2xx is a response and not a throw,
+`url` is the URL that answered, a body arrives as a stream, an unknown directive is ignored.
+`MockClient` is forty lines and `BrowserClient` five hundred and twenty; both are yours to read
+before writing a third.
 
 ### Downloads
 

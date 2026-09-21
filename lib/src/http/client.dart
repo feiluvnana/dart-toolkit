@@ -29,6 +29,38 @@ final class Headers extends MapBase<String, String> {
   bool containsKey(Object? key) => key is String && _map.containsKey(key.toLowerCase());
 }
 
+/// A directive a [Client] may honour, carried on a [Request] under a typed name.
+///
+/// The fields of [Request] describe HTTP and nothing else. A client that is not HTTP — a
+/// browser, a proxy with rules of its own — needs to be told things HTTP has no word for,
+/// and a key is where they go:
+///
+/// ```dart
+/// const waitFor = RequestKey<String>('wait-for');
+///
+/// url.scrape<Item>().onRequest((ctx) => ctx.request[waitFor] = '.item');
+/// ```
+///
+/// A client reads it with the key itself — `waitFor(request)` — and **ignores every key it
+/// does not know**. That is what makes the same crawl run unchanged on [IoClient], which
+/// ignores the wait, and on [BrowserClient], which honours it.
+///
+/// {@category Networking}
+final class RequestKey<T extends Object> {
+  /// What this key is called, in messages and in `toString`.
+  final String name;
+
+  const RequestKey(this.name);
+
+  /// The value [request] carries under this key, or `null` when it carries none.
+  T? call(Request request) => request._directives?[this] as T?;
+
+  bool _accepts(Object? value) => value is T;
+
+  @override
+  String toString() => name;
+}
+
 /// A request: [method], [url], [headers] and a body of [bytes].
 ///
 /// {@category Networking}
@@ -43,6 +75,9 @@ final class Request {
   bool followRedirects = true;
   int maxRedirects = 5;
   bool persistentConnection = true;
+
+  /// Client-specific directives, absent until one is set; see [RequestKey].
+  Map<RequestKey<Object>, Object>? _directives;
 
   Request(String method, this.url, {Map<String, String>? headers, List<int>? bytes, String? text})
     : method = method.toUpperCase(),
@@ -64,11 +99,21 @@ final class Request {
     headers['content-type'] = 'application/x-www-form-urlencoded; charset=utf-8';
   }
 
-  /// An independent copy: same method, URL, headers, body and options.
+  /// Sets the directive [key] carries for the client that answers this request.
+  ///
+  /// `request[waitFor] = '.item'`; read it back with the key, `waitFor(request)`. Throws
+  /// [ArgumentError] when [value] is not of the key's type.
+  void operator []=(RequestKey<Object> key, Object value) {
+    if (!key._accepts(value)) throw ArgumentError.value(value, key.name, 'is not what this key holds');
+    (_directives ??= {})[key] = value;
+  }
+
+  /// An independent copy: same method, URL, headers, body, options and directives.
   Request copy() => Request(method, url, headers: headers, bytes: bytes)
     ..followRedirects = followRedirects
     ..maxRedirects = maxRedirects
-    ..persistentConnection = persistentConnection;
+    ..persistentConnection = persistentConnection
+    .._directives = _directives == null ? null : Map.of(_directives!);
 
   @override
   String toString() => '$method $url';
@@ -227,10 +272,19 @@ String _decode(Uint8List bytes, String? contentType) {
 ///
 /// {@category Networking}
 abstract interface class Client {
+  /// Sends [request] and answers with the response whose body is still arriving.
+  ///
+  /// The contract an implementation owes its caller: a non-2xx status is a [StreamedResponse],
+  /// not a throw; a transport failure is a [ClientException] or a `dart:io` exception;
+  /// [StreamedResponse.url] is the URL that *answered*, after whatever redirects were
+  /// followed; and a [RequestKey] the implementation does not recognise is ignored.
   Future<StreamedResponse> send(Request request);
 
   /// Releases connections; the client cannot be used afterwards.
-  void close();
+  ///
+  /// [Http.session] awaits this, so an implementation that shuts down over a socket — a
+  /// browser, a pool — may return a future and be sure it is waited for.
+  FutureOr<void> close();
 }
 
 /// Reads and discards a response body, releasing the connection instead of holding it

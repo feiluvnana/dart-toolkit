@@ -20,7 +20,15 @@ opposite. Coherence, documentation and feature count rank below both.
   because a CSV's columns are not known until it is read.
 - **Ambient over threaded.** A setting every call would otherwise carry belongs to the scope
   that sets it: `Http.session` holds the client, so no request, download or crawl takes a
-  `client:` of its own. A genuinely per-call argument — `headers:` — stays an argument.
+  `client:` of its own. A genuinely per-call argument — `headers:` — stays an argument. This
+  survived the second client: `BrowserClient` is named in the same one place `IoClient` is, and
+  `url.html()` says nothing about either.
+- **A seam is two methods, and unknown means ignored.** Anything pluggable is an
+  `abstract interface class` small enough to implement in an afternoon — `Client` is `send` and
+  `close` — and what one implementation understands and another does not travels as a typed key
+  (`RequestKey`) that the others skip in silence. A capability flag, a probe, or a `switch` over
+  implementations would each put the caller back in the business of knowing which one it has.
+  A seam ships with the battery that says whether an implementation honours it.
 - **One shape for one and for many.** `dest.download(url)` reports what `downloadAll` reports,
   a batch of one, so `show()` renders either and nothing gets wrapped in a one-entry map to be
   displayed.

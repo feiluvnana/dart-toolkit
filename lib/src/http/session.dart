@@ -33,7 +33,7 @@ class Http {
     try {
       return await runZoned(() async => body(), zoneValues: {_clientKey: shared});
     } finally {
-      if (owned) inner.close();
+      if (owned) await inner.close();
     }
   }
 }
@@ -66,9 +66,7 @@ final class _SessionClient implements Client {
   }
 
   @override
-  void close() {
-    if (_owned) _inner.close();
-  }
+  FutureOr<void> close() => _owned ? _inner.close() : null;
 }
 
 /// A borrowed or owned client.
@@ -82,8 +80,13 @@ final class _ClientLease {
   const _ClientLease(this.client, this._owned, {this.headers});
 
   /// Closes the client only if this lease created it.
+  ///
+  /// A lease is closed from synchronous teardown — a crawl finishing, a download's `finally`
+  /// — so a client that closes asynchronously is left to finish on its own; a session's
+  /// client, the one that may be a browser, is awaited in [Http.session] instead.
   void close() {
-    if (_owned) client.close();
+    if (!_owned) return;
+    if (client.close() case final Future<void> pending) unawaited(pending.catchError((Object _) {}));
   }
 }
 

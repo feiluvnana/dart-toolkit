@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+### A client is the only thing that touches the network, so anything can be one
+
+- **`BrowserClient`, a second built-in client, renders every page in Chrome.** It speaks the
+  DevTools protocol over a `dart:io` websocket — no third-party package and no Chromium
+  download: `BrowserClient.launch()` runs the Chrome already installed, `attach(port:)` joins
+  one already running. The rendered DOM arrives as `Response.bytes`, so `res.html`, `$`, `$x`,
+  the scrape engine's scope, dedupe and redirects all work over it with nothing changed but the
+  one word in `Http.session(client:)`.
+  - Only a GET without a `range` is rendered; a POST, a resumable download and an asset go to
+    the plain client underneath, carrying the browser's cookies for that host.
+  - `tabs:` bounds how many pages render at once — the crawl's `concurrency` is the engine's
+    budget, this is the browser's.
+  - Added: `BrowserClient`, `BrowserWait`.
+- **`RequestKey<T>`: a typed directive a client may honour.** The fields of `Request` describe
+  HTTP and nothing else; a client that is not HTTP is told the rest with a key, and **ignores
+  every key it does not know** — which is what lets one crawl run over either client.
+  `request[BrowserClient.waitFor] = '.item'`, read back as `waitFor(request)`.
+  - Added: `RequestKey`, `Request.operator []=`; `BrowserClient.waitFor`, `.waitUntil`,
+    `.script`, `.direct`.
+- **`Client.close` returns `FutureOr<void>`** and `Http.session` awaits it, so an
+  implementation that shuts down over a socket is waited for rather than raced. Breaking for
+  implementors only in that the signature widened; a `void close()` still satisfies it.
+- **`test/client_conformance.dart` checks an implementation against its own server.** The
+  promises the rest of the module relies on, written down and executable: a non-2xx is a
+  response and not a throw, `url` is the URL that answered, a body arrives as a stream, an
+  unknown directive is ignored, `close` is idempotent. Both built-in clients pass it.
+
 ## 0.0.2
 
 A conciseness pass over the whole API. Nothing was removed that cannot still be done; four
