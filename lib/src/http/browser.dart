@@ -43,9 +43,25 @@ enum BrowserWait {
 /// cookies for the host, so a crawl that renders its pages still downloads its files at
 /// the speed of a socket. [direct] forces one request down that path.
 ///
+/// **A page is never lost.** A wait that expires, an interstitial that never clears, a
+/// challenge a human has to click: none of them throw and none of them close the tab. The
+/// DOM as it stands comes back with the status the server gave it, and [open] hands the
+/// same tab over for a human or a script to carry on with:
+///
+/// ```dart
+/// final page = await browser.open('https://example.com/login'.url);
+/// await page.fill('#user', 'me');
+/// await page.click('button[type=submit]');
+/// await page.waitFor('.dashboard');
+/// print((await page.html()).$('.balance').text);     // read it whenever you like
+/// await page.close();
+/// ```
+///
 /// {@category Networking}
 final class BrowserClient implements Client {
   /// Waits until a CSS selector matches before the page is read: `request[waitFor] = '.item'`.
+  ///
+  /// A selector that never matches is not an error — the page comes back as it stands.
   static const waitFor = RequestKey<String>('browser.wait-for');
 
   /// How long to wait before reading a page; [BrowserWait.load] unless the client was built
@@ -59,19 +75,23 @@ final class BrowserClient implements Client {
   /// Sends this request down the plain HTTP client instead of rendering it: `request[direct] = true`.
   static const direct = RequestKey<bool>('browser.direct');
 
+  /// How long this request may sit on an interstitial, overriding the client's `challenge:`.
+  static const challenge = RequestKey<Duration>('browser.challenge');
+
   final WebSocket _socket;
   final Client _assets;
   final bool _ownsAssets;
   final Process? _process;
   final Directory? _profile;
   final Duration _timeout;
+  final Duration _challenge;
   final BrowserWait _wait;
   final String? _userAgent;
   final Semaphore _permits;
-  final Queue<_Tab> _idle = Queue();
+  final Queue<BrowserPage> _free = Queue();
+  final Set<BrowserPage> _pages = {};
   final Map<int, Completer<Map<String, Object?>>> _calls = {};
   final Map<String, StreamController<_Cdp>> _sessions = {};
-  final Set<_Tab> _open = {};
 
   var _nextId = 0;
   var _closed = false;
@@ -81,6 +101,7 @@ final class BrowserClient implements Client {
     required Client assets,
     required bool ownsAssets,
     required Duration timeout,
+    required Duration challenge,
     required BrowserWait wait,
     required int tabs,
     required String? userAgent,
@@ -89,6 +110,7 @@ final class BrowserClient implements Client {
   }) : _assets = assets,
        _ownsAssets = ownsAssets,
        _timeout = timeout,
+       _challenge = challenge,
        _wait = wait,
        _userAgent = userAgent,
        _process = process,
@@ -96,6 +118,9 @@ final class BrowserClient implements Client {
        _permits = Semaphore(tabs) {
     _socket.listen(_dispatch, onDone: _abort, onError: (Object _) => _abort());
   }
+
+  /// Whether this client has been closed.
+  bool get isClosed => _closed;
 
   /// Starts a headless Chrome of its own and connects to it.
   ///
@@ -106,6 +131,12 @@ final class BrowserClient implements Client {
   /// own; without it a request's `user-agent` header is dropped, because a browser that
   /// announces itself as something else is a browser for no reason.
   ///
+  /// [challenge] is how long a page that answers with an interstitial — Cloudflare's "just
+  /// a moment", a 503 that reloads itself — is given to become the real page before it is
+  /// handed back as it is. Nothing throws when it does not: the interstitial is the
+  /// response. With `headless: false` that wait is also a human's chance to click the box,
+  /// and [open] takes the tab over for one.
+  ///
   /// [assets] answers everything that is not a page render, and is closed with this client
   /// unless it was supplied.
   static Future<BrowserClient> launch({
@@ -113,6 +144,7 @@ final class BrowserClient implements Client {
     bool headless = true,
     int tabs = 4,
     Duration timeout = const Duration(seconds: 30),
+    Duration challenge = const Duration(seconds: 20),
     BrowserWait wait = BrowserWait.load,
     String? userAgent,
     Client? assets,
@@ -145,6 +177,7 @@ final class BrowserClient implements Client {
         assets: assets ?? IoClient(),
         ownsAssets: assets == null,
         timeout: timeout,
+        challenge: challenge,
         wait: wait,
         tabs: tabs,
         userAgent: userAgent,
@@ -161,12 +194,15 @@ final class BrowserClient implements Client {
   /// Connects to a Chrome already running with `--remote-debugging-port=<port>`.
   ///
   /// The browser outlives [close], which only lets go of it: the tabs this client opened
-  /// are closed, nothing else is. See [launch] for the other arguments.
+  /// are closed, nothing else is. This is the client for a site that already knows the
+  /// person running the program — their profile, their cookies, their logged-in session.
+  /// See [launch] for the other arguments.
   static Future<BrowserClient> attach({
     int port = 9222,
     String host = '127.0.0.1',
     int tabs = 4,
     Duration timeout = const Duration(seconds: 30),
+    Duration challenge = const Duration(seconds: 20),
     BrowserWait wait = BrowserWait.load,
     String? userAgent,
     Client? assets,
@@ -187,10 +223,32 @@ final class BrowserClient implements Client {
       assets: assets ?? IoClient(),
       ownsAssets: assets == null,
       timeout: timeout,
+      challenge: challenge,
       wait: wait,
       tabs: tabs,
       userAgent: userAgent,
     );
+  }
+
+  /// A tab of its own, for a page that is worked rather than fetched.
+  ///
+  /// The caller owns it until [BrowserPage.close]; it is outside the pool [send] draws on,
+  /// so holding one open — while a human solves a captcha, while a script clicks through a
+  /// form — never starves a crawl. [url] is navigated to when given.
+  Future<BrowserPage> open([Uri? url, BrowserWait? until]) async {
+    final page = await _tab();
+    if (url != null) await page.goto(url, until: until);
+    return page;
+  }
+
+  /// [open], then [action], then closes the tab whatever [action] did.
+  Future<T> page<T>(Uri url, FutureOr<T> Function(BrowserPage page) action, {BrowserWait? until}) async {
+    final page = await open(url, until);
+    try {
+      return await action(page);
+    } finally {
+      await page.close();
+    }
   }
 
   @override
@@ -200,31 +258,64 @@ final class BrowserClient implements Client {
       return _assets.send(await _withCookies(request));
     }
     final permit = await _permits.acquire();
-    _Tab? tab;
+    BrowserPage? page;
     try {
-      tab = _idle.isNotEmpty ? _idle.removeFirst() : await _open_();
-      final rendered = await _render(tab, request);
-      _idle.add(tab);
-      tab = null;
-      return rendered;
+      page = _free.isNotEmpty ? _free.removeFirst() : await _tab();
+      await page.headers({
+        for (final MapEntry(:key, :value) in request.headers.entries)
+          if (!_unsafe.contains(key.toLowerCase())) key: value,
+      });
+      final res = await page.goto(
+        request.url,
+        until: waitUntil(request) ?? _wait,
+        challenge: challenge(request) ?? _challenge,
+        request: request,
+      );
+      // Both directives may be set, and both change what the DOM says, so the page is read
+      // again only after the last of them has run.
+      var moved = false;
+      if (waitFor(request) case final selector?) {
+        await page.waitFor(selector);
+        moved = true;
+      }
+      if (script(request) case final source?) {
+        await page.eval(source, awaitPromise: true);
+        moved = true;
+      }
+      return _streamed(moved ? await page.response(request) : res, request);
     } finally {
-      if (tab != null) await _discard(tab);
+      // A tab is returned to the pool however the render went: the page it holds may be a
+      // challenge someone is in the middle of solving, and closing it would throw that away.
+      if (page != null) {
+        if (page._alive && !_closed) {
+          _free.add(page);
+        } else {
+          await page.close();
+        }
+      }
       permit.release();
     }
   }
+
+  StreamedResponse _streamed(Response res, Request request) => StreamedResponse(
+    Stream.value(res.bytes),
+    res.statusCode,
+    contentLength: res.bytes.length,
+    headers: res.headers,
+    request: request,
+    url: res.url,
+  );
 
   /// Closes every tab this client opened, the connection, and — for [launch] — the browser.
   @override
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
-    for (final tab in _open.toList()) {
-      try {
-        await _call('Target.closeTarget', {'targetId': tab.target});
-      } catch (_) {}
+    for (final page in _pages.toList()) {
+      await page.close();
     }
-    _open.clear();
-    _idle.clear();
+    _pages.clear();
+    _free.clear();
     await _socket.close().catchError((Object _) => null);
     _abort();
     if (_ownsAssets) await _assets.close();
@@ -238,137 +329,28 @@ final class BrowserClient implements Client {
     if (_profile case final profile?) await _erase(profile);
   }
 
-  // ---- rendering -------------------------------------------------------------------------
-
-  Future<StreamedResponse> _render(_Tab tab, Request request) async {
-    final url = request.url;
-    final headers = {
-      for (final MapEntry(:key, :value) in request.headers.entries)
-        if (!_unsafe.contains(key.toLowerCase())) key: value,
-    };
-    await _call('Network.setExtraHTTPHeaders', {'headers': headers}, tab);
-
-    Map<String, Object?>? document;
-    var frame = '';
-    final events = _sessions[tab.session]!.stream.listen((event) {
-      if (event.method != 'Network.responseReceived') return;
-      final params = event.params;
-      if (params['type'] != 'Document') return;
-      if (frame.isNotEmpty && params['frameId'] != frame) return;
-      document = params['response'] as Map<String, Object?>?;
-    });
-    try {
-      final nav = await _call('Page.navigate', {'url': '$url'}, tab);
-      if (nav['errorText'] case final String error when error.isNotEmpty) {
-        throw ClientException(_readable(error), url);
-      }
-      frame = nav['frameId'] as String? ?? '';
-
-      await _waitForLoad(tab, waitUntil(request) ?? _wait);
-      if (waitFor(request) case final selector?) await _waitForSelector(tab, selector, url);
-      if (script(request) case final source?) await _evaluate(tab, source, awaitPromise: true);
-
-      final mime = document?['mimeType'] as String? ?? 'text/html';
-      final markup = mime.contains('html') || mime.contains('xml');
-      final body = await _evaluate(
-        tab,
-        markup ? 'document.documentElement.outerHTML' : 'document.body ? document.body.innerText : ""',
-      );
-      final bytes = utf8.encode(body is String ? body : '$body');
-
-      final answered = Headers();
-      switch (document?['headers']) {
-        case final Map<String, Object?> raw:
-          raw.forEach((name, value) => answered[name] = '$value');
-      }
-      // The wire's length and encoding described the bytes before the page ran; these are
-      // the bytes after it.
-      answered
-        ..remove('content-encoding')
-        ..['content-length'] = '${bytes.length}'
-        ..putIfAbsent('content-type', () => '$mime; charset=utf-8');
-      return StreamedResponse(
-        Stream.value(bytes),
-        switch (document?['status']) {
-          final int status => status,
-          final num status => status.toInt(),
-          _ => 200,
-        },
-        contentLength: bytes.length,
-        headers: answered,
-        request: request,
-        url: switch (document?['url']) {
-          final String answeredUrl => Uri.tryParse(answeredUrl) ?? url,
-          _ => url,
-        },
-      );
-    } finally {
-      await events.cancel();
-      await _call('Network.setExtraHTTPHeaders', {
-        'headers': <String, String>{},
-      }, tab).catchError((Object _) => <String, Object?>{});
-    }
-  }
-
-  Future<void> _waitForLoad(_Tab tab, BrowserWait wait) async {
-    final want = wait == BrowserWait.idle ? 'networkIdle' : 'load';
-    final events = _sessions[tab.session]!.stream;
-    await events
-        .firstWhere((e) => e.method == 'Page.lifecycleEvent' && e.params['name'] == want)
-        .timeout(
-          _timeout,
-          onTimeout: () => throw ClientException('Timed out waiting for $want', Uri.parse(tab.target)),
-        );
-  }
-
-  Future<void> _waitForSelector(_Tab tab, String selector, Uri url) async {
-    final quoted = jsonEncode(selector);
-    final found = await _evaluate(tab, '''
-new Promise((resolve) => {
-  const hit = () => document.querySelector($quoted);
-  if (hit()) return resolve(true);
-  const observer = new MutationObserver(() => { if (hit()) { observer.disconnect(); resolve(true); } });
-  observer.observe(document.documentElement, {childList: true, subtree: true});
-})''', awaitPromise: true);
-    if (found != true) throw ClientException('Timed out waiting for "$selector"', url);
-  }
-
-  Future<Object?> _evaluate(_Tab tab, String expression, {bool awaitPromise = false}) async {
-    final result = await _call('Runtime.evaluate', {
-      'expression': expression,
-      'returnByValue': true,
-      'awaitPromise': awaitPromise,
-    }, tab);
-    if (result['exceptionDetails'] case final Map<String, Object?> thrown) {
-      throw ClientException('Page script failed: ${thrown['text'] ?? thrown}');
-    }
-    return (result['result'] as Map<String, Object?>?)?['value'];
-  }
-
   // ---- tabs ------------------------------------------------------------------------------
 
-  Future<_Tab> _open_() async {
+  Future<BrowserPage> _tab() async {
     final created = await _call('Target.createTarget', {'url': 'about:blank'});
-    final target = created['targetId'] as String;
-    final attached = await _call('Target.attachToTarget', {'targetId': target, 'flatten': true});
-    final tab = _Tab(target, attached['sessionId'] as String);
+    final attached = await _call('Target.attachToTarget', {'targetId': created['targetId'] as String, 'flatten': true});
+    final tab = _Tab(created['targetId'] as String, attached['sessionId'] as String);
     _sessions[tab.session] = StreamController<_Cdp>.broadcast();
-    _open.add(tab);
+    final page = BrowserPage._(this, tab);
+    _pages.add(page);
     await _call('Page.enable', null, tab);
     await _call('Network.enable', null, tab);
     await _call('Page.setLifecycleEventsEnabled', {'enabled': true}, tab);
     if (_userAgent case final agent?) {
       await _call('Emulation.setUserAgentOverride', {'userAgent': agent}, tab);
     }
-    return tab;
-  }
-
-  Future<void> _discard(_Tab tab) async {
-    _open.remove(tab);
-    await _sessions.remove(tab.session)?.close();
-    try {
-      await _call('Target.closeTarget', {'targetId': tab.target});
-    } catch (_) {}
+    page._listen();
+    final tree = await _call('Page.getFrameTree', null, tab);
+    page._frame = switch (tree['frameTree']) {
+      final Map<String, Object?> root => (root['frame'] as Map<String, Object?>?)?['id'] as String? ?? '',
+      _ => '',
+    };
+    return page;
   }
 
   /// The browser's cookies for [request]'s URL, on a request the plain client will send.
@@ -397,19 +379,18 @@ new Promise((resolve) => {
 
   // ---- the protocol ----------------------------------------------------------------------
 
-  Future<Map<String, Object?>> _call(String method, [Map<String, Object?>? params, _Tab? tab]) {
-    if (_closed && method != 'Target.closeTarget') {
-      throw ClientException('The browser client is closed');
-    }
+  Future<Map<String, Object?>> _call(String method, [Map<String, Object?>? params, _Tab? tab, Duration? timeout]) {
+    if (_closed && method != 'Target.closeTarget') throw ClientException('The browser client is closed');
     final id = ++_nextId;
     final completer = Completer<Map<String, Object?>>();
     _calls[id] = completer;
     _socket.add(jsonEncode({'id': id, 'method': method, 'params': ?params, 'sessionId': ?tab?.session}));
+    final limit = timeout ?? _timeout;
     return completer.future.timeout(
-      _timeout,
+      limit,
       onTimeout: () {
         _calls.remove(id);
-        throw ClientException('$method timed out after ${_timeout.inSeconds}s');
+        throw ClientException('$method timed out after ${limit.inSeconds}s');
       },
     );
   }
@@ -442,6 +423,366 @@ new Promise((resolve) => {
       unawaited(session.close());
     }
     _sessions.clear();
+  }
+}
+
+/// One tab, open for as long as the work takes.
+///
+/// A page is what [BrowserClient.open] hands over and what [BrowserClient.send] drives
+/// underneath. Its reads never throw on an empty result and its waits never throw on time:
+/// [waitFor] answers `false`, [response] answers whatever the DOM says now. What is on the
+/// screen is always available, which is the property an interstitial needs.
+///
+/// {@category Networking}
+final class BrowserPage {
+  final BrowserClient _client;
+  final _Tab _tab;
+
+  StreamSubscription<_Cdp>? _events;
+  Map<String, Object?>? _document;
+  Completer<void>? _waiter;
+  String _want = '';
+  String _frame = '';
+  Uri _url = Uri.parse('about:blank');
+  bool _alive = true;
+
+  BrowserPage._(this._client, this._tab);
+
+  /// The URL this tab is on, after every redirect and navigation it has made.
+  Uri get url => _url;
+
+  /// Whether the tab is still open.
+  bool get isOpen => _alive;
+
+  /// The status of the last document this tab loaded, or `null` before the first.
+  int? get statusCode => switch (_document?['status']) {
+    final int status => status,
+    final num status => status.toInt(),
+    _ => null,
+  };
+
+  /// Navigates, waits, and answers with the page as it stands afterwards.
+  ///
+  /// A navigation that Chrome refuses outright — a name that does not resolve, a refused
+  /// connection — throws [ClientException]. Everything softer than that is a response: a
+  /// wait that expires, an interstitial that never clears, a 403 challenge page.
+  /// [challenge] is how long to let an interstitial become the real page; see
+  /// [BrowserClient.launch].
+  Future<Response> goto(Uri url, {BrowserWait? until, Duration? challenge, Request? request}) async {
+    final wait = until ?? _client._wait;
+    _arm(wait == BrowserWait.idle ? 'networkIdle' : 'load');
+    final nav = await _call('Page.navigate', {'url': '$url'});
+    if (nav['errorText'] case final String error when error.isNotEmpty) {
+      _disarm();
+      throw ClientException(_readable(error), url);
+    }
+    if (nav['frameId'] case final String frame when frame.isNotEmpty) _frame = frame;
+    _url = url;
+    await _settle();
+
+    final patience = challenge ?? _client._challenge;
+    var res = await response(request);
+    if (patience <= Duration.zero || !_interstitial(res)) return res;
+    // The page is a challenge: Cloudflare's reload, a 503 that comes back, a box for a
+    // human to click. None of that is a failure, and the tab stays open for it.
+    final deadline = DateTime.now().add(patience);
+    while (DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      if (!_alive) break;
+      res = await response(request);
+      if (!_interstitial(res)) return res;
+    }
+    return res;
+  }
+
+  /// The page as it stands now: the DOM its scripts have built, under the status and headers
+  /// the server answered the document with.
+  ///
+  /// Callable whenever — mid-challenge, mid-form, after a click — and never throws for a
+  /// page that has not finished.
+  Future<Response> response([Request? request]) async {
+    final mime = _document?['mimeType'] as String? ?? 'text/html';
+    final markup = mime.contains('html') || mime.contains('xml');
+    final body = await eval(
+      markup
+          ? 'document.documentElement ? document.documentElement.outerHTML : ""'
+          : 'document.body ? document.body.innerText : ""',
+    );
+    final bytes = utf8.encode(body is String ? body : '${body ?? ''}');
+    final headers = Headers();
+    switch (_document?['headers']) {
+      case final Map<String, Object?> raw:
+        raw.forEach((name, value) => headers[name] = '$value');
+    }
+    // The wire's length and encoding described the bytes before the page ran; these are the
+    // bytes after it.
+    headers
+      ..remove('content-encoding')
+      ..['content-length'] = '${bytes.length}'
+      ..putIfAbsent('content-type', () => '$mime; charset=utf-8');
+    return Response.bytes(
+      bytes,
+      statusCode ?? 200,
+      headers: headers,
+      request: request,
+      url: switch (_document?['url']) {
+        final String answered => Uri.tryParse(answered) ?? _url,
+        _ => _url,
+      },
+    );
+  }
+
+  /// The page as a parsed document; `(await page.response()).html` without the parentheses.
+  Future<HtmlDocument> html() async => (await response()).html;
+
+  /// Waits until [selector] matches, and answers whether it did before [timeout].
+  ///
+  /// The wait ends the moment the element appears — a mutation observer, not a poll — and
+  /// expiring is an answer, not an exception.
+  Future<bool> waitFor(String selector, {Duration? timeout}) => _watch(selector, timeout: timeout, gone: false);
+
+  /// Waits until [selector] matches nothing — a spinner going away, a challenge clearing —
+  /// and answers whether it did before [timeout].
+  Future<bool> waitWhile(String selector, {Duration? timeout}) => _watch(selector, timeout: timeout, gone: true);
+
+  Future<bool> _watch(String selector, {required bool gone, Duration? timeout}) async {
+    final limit = timeout ?? _client._timeout;
+    final quoted = jsonEncode(selector);
+    final hit = gone ? '!document.querySelector($quoted)' : '!!document.querySelector($quoted)';
+    final found = await eval(
+      '''
+new Promise((resolve) => {
+  const hit = () => $hit;
+  if (hit()) return resolve(true);
+  const observer = new MutationObserver(() => { if (hit()) { observer.disconnect(); resolve(true); } });
+  observer.observe(document.documentElement, {childList: true, subtree: true, attributes: true});
+  setTimeout(() => { observer.disconnect(); resolve(false); }, ${limit.inMilliseconds});
+})''',
+      awaitPromise: true,
+      timeout: limit + const Duration(seconds: 5),
+    );
+    return found == true;
+  }
+
+  /// Clicks the first element [selector] matches, as a mouse would.
+  ///
+  /// The element is scrolled into view and the click lands at its centre with real mouse
+  /// events; an element with no box on screen is clicked through the DOM instead. Answers
+  /// `false` when nothing matched.
+  Future<bool> click(String selector) async {
+    final node = await _node(selector);
+    if (node == null) return false;
+    try {
+      await _call('DOM.scrollIntoViewIfNeeded', {'nodeId': node});
+      final box = await _call('DOM.getBoxModel', {'nodeId': node});
+      final quad = ((box['model'] as Map<String, Object?>?)?['content'] as List?)?.cast<num>();
+      if (quad == null || quad.length < 6) throw const ClientException('no box');
+      final x = (quad[0] + quad[4]) / 2;
+      final y = (quad[1] + quad[5]) / 2;
+      await _call('Input.dispatchMouseEvent', {'type': 'mouseMoved', 'x': x, 'y': y});
+      for (final type in ['mousePressed', 'mouseReleased']) {
+        await _call('Input.dispatchMouseEvent', {
+          'type': type,
+          'x': x,
+          'y': y,
+          'button': 'left',
+          'buttons': 1,
+          'clickCount': 1,
+        });
+      }
+      return true;
+    } catch (_) {
+      // Off-screen, zero-sized, or covered: the DOM's own click still runs the handler.
+      return await eval('''(() => {
+  const el = document.querySelector(${jsonEncode(selector)});
+  if (!el) return false;
+  el.click();
+  return true;
+})()''') ==
+          true;
+    }
+  }
+
+  /// Focuses the first element [selector] matches and types [value] into it.
+  ///
+  /// Answers `false` when nothing matched. The text arrives as text, not as a key at a
+  /// time, so a field that listens for `input` sees it and one that listens for `keydown`
+  /// may not — [press] is there for the second kind.
+  Future<bool> fill(String selector, String value) async {
+    final node = await _node(selector);
+    if (node == null) return false;
+    await _call('DOM.focus', {'nodeId': node});
+    await eval('''(() => {
+  const el = document.querySelector(${jsonEncode(selector)});
+  if (el && 'value' in el) el.value = '';
+})()''');
+    await _call('Input.insertText', {'text': value});
+    return true;
+  }
+
+  /// Presses a key on whatever has focus: `Enter`, `Tab`, `Escape`, `ArrowDown`, or a
+  /// single character.
+  Future<void> press(String key) async {
+    final (code, text) = switch (key) {
+      'Enter' => (13, '\r'),
+      'Tab' => (9, '\t'),
+      'Escape' => (27, null),
+      'Backspace' => (8, null),
+      'ArrowUp' => (38, null),
+      'ArrowDown' => (40, null),
+      'ArrowLeft' => (37, null),
+      'ArrowRight' => (39, null),
+      _ => (key.codeUnitAt(0), key),
+    };
+    for (final type in ['keyDown', 'keyUp']) {
+      await _call('Input.dispatchKeyEvent', {
+        'type': type == 'keyDown' && text != null ? 'keyDown' : type,
+        'key': key,
+        'windowsVirtualKeyCode': code,
+        'nativeVirtualKeyCode': code,
+        if (type == 'keyDown' && text != null) 'text': text,
+      });
+    }
+  }
+
+  /// Scrolls to the bottom [times] times, waiting [settle] after each — an infinite feed,
+  /// loaded. Answers the page height when it stopped growing.
+  Future<num> scroll({int times = 3, Duration settle = const Duration(milliseconds: 500)}) async {
+    num height = 0;
+    for (var i = 0; i < times; i++) {
+      final grown = await eval(
+        '''(async () => {
+  const before = document.body ? document.body.scrollHeight : 0;
+  window.scrollTo(0, before);
+  await new Promise((r) => setTimeout(r, ${settle.inMilliseconds}));
+  return document.body ? document.body.scrollHeight : 0;
+})()''',
+        awaitPromise: true,
+        timeout: settle + const Duration(seconds: 10),
+      );
+      final now = grown is num ? grown : 0;
+      if (now == height) break;
+      height = now;
+    }
+    return height;
+  }
+
+  /// Runs [expression] in the page and answers what it evaluated to, as JSON-able Dart.
+  ///
+  /// With [awaitPromise], a promise is waited for — an `async` IIFE is the usual shape.
+  /// A script that throws throws [ClientException] naming what it said.
+  Future<Object?> eval(String expression, {bool awaitPromise = false, Duration? timeout}) async {
+    final result = await _call('Runtime.evaluate', {
+      'expression': expression,
+      'returnByValue': true,
+      'awaitPromise': awaitPromise,
+    }, timeout);
+    if (result['exceptionDetails'] case final Map<String, Object?> thrown) {
+      throw ClientException('Page script failed: ${thrown['text'] ?? thrown}');
+    }
+    return (result['result'] as Map<String, Object?>?)?['value'];
+  }
+
+  /// A PNG of the visible page — what the person in front of the window would see, for a
+  /// log, a report, or a look at the challenge that will not clear.
+  Future<Uint8List> screenshot() async {
+    final shot = await _call('Page.captureScreenshot', {'format': 'png'});
+    return base64.decode(shot['data'] as String? ?? '');
+  }
+
+  /// Sets headers sent with every request this tab makes from now on.
+  Future<void> headers(Map<String, String> headers) => _call('Network.setExtraHTTPHeaders', {'headers': headers});
+
+  /// Closes the tab. Safe twice.
+  Future<void> close() async {
+    if (!_alive) return;
+    _alive = false;
+    _client._pages.remove(this);
+    _client._free.remove(this);
+    await _events?.cancel();
+    await _client._sessions.remove(_tab.session)?.close();
+    try {
+      await _client._call('Target.closeTarget', {'targetId': _tab.target});
+    } catch (_) {}
+  }
+
+  // ---- internals -------------------------------------------------------------------------
+
+  Future<Map<String, Object?>> _call(String method, [Map<String, Object?>? params, Duration? timeout]) {
+    if (!_alive) throw ClientException('The page is closed', _url);
+    return _client._call(method, params, _tab, timeout);
+  }
+
+  Future<int?> _node(String selector) async {
+    try {
+      final doc = await _call('DOM.getDocument', {'depth': 0});
+      final root = (doc['root'] as Map<String, Object?>?)?['nodeId'];
+      final found = await _call('DOM.querySelector', {'nodeId': root, 'selector': selector});
+      final node = found['nodeId'] as int? ?? 0;
+      return node == 0 ? null : node;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _listen() {
+    _events = _client._sessions[_tab.session]?.stream.listen((event) {
+      switch (event.method) {
+        case 'Network.responseReceived':
+          final params = event.params;
+          if (params['type'] != 'Document') return;
+          // A challenge renders inside an iframe; only the main frame is this page.
+          if (_frame.isNotEmpty && params['frameId'] != _frame) return;
+          _document = params['response'] as Map<String, Object?>?;
+        case 'Page.frameNavigated':
+          final frame = event.params['frame'] as Map<String, Object?>?;
+          if (frame == null || (_frame.isNotEmpty && frame['id'] != _frame)) return;
+          if (frame['url'] case final String moved) _url = Uri.tryParse(moved) ?? _url;
+        case 'Page.lifecycleEvent':
+          if (event.params['name'] != _want) return;
+          final waiter = _waiter;
+          if (waiter != null && !waiter.isCompleted) waiter.complete();
+      }
+    });
+  }
+
+  /// Arms the lifecycle wait *before* navigating, so a page that loads faster than the call
+  /// returns is not waited for forever.
+  void _arm(String event) {
+    _want = event;
+    _waiter = Completer<void>();
+  }
+
+  void _disarm() {
+    _want = '';
+    _waiter = null;
+  }
+
+  /// Waits for the armed lifecycle event, and gives up quietly: a page that never fires
+  /// `load` still has a DOM worth reading.
+  Future<void> _settle() async {
+    final waiter = _waiter;
+    if (waiter == null) return;
+    try {
+      // The field is what the listener completes, so it stays set until the wait is over.
+      await waiter.future.timeout(_client._timeout, onTimeout: () {});
+    } finally {
+      if (identical(_waiter, waiter)) _disarm();
+    }
+  }
+
+  /// Whether this looks like an interstitial rather than the page that was asked for.
+  bool _interstitial(Response res) {
+    final status = res.statusCode;
+    if (status != 403 && status != 503 && status != 429) return false;
+    final body = res.text;
+    return body.length < 80000 &&
+        (body.contains('cf-browser-verification') ||
+            body.contains('challenge-form') ||
+            body.contains('__cf_chl') ||
+            body.contains('cf-turnstile') ||
+            body.contains('Just a moment') ||
+            body.contains('Checking your browser'));
   }
 }
 

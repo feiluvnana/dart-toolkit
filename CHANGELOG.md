@@ -14,7 +14,28 @@
     the plain client underneath, carrying the browser's cookies for that host.
   - `tabs:` bounds how many pages render at once — the crawl's `concurrency` is the engine's
     budget, this is the browser's.
-  - Added: `BrowserClient`, `BrowserWait`.
+  - Added: `BrowserClient`, `BrowserPage`, `BrowserWait`.
+- **A page is never lost.** A wait that expires, a script that matches nothing, an
+  interstitial that never clears: none of them throw and none of them close the tab. The DOM
+  as it stands comes back under the status the server gave it, and the tab returns to the pool
+  still on that page — closing it would throw away a challenge somebody is in the middle of
+  solving. Only a navigation Chrome refuses outright — a name that will not resolve, a refused
+  connection — is still a `ClientException`, which is what the crawl engine retries.
+  - `challenge:` is how long a page that answers with an interstitial (Cloudflare's "just a
+    moment", a 503 that reloads itself) is given to become the real page, 20 s by default and
+    per request with the `BrowserClient.challenge` key. With `headless: false` that wait is
+    also a human's chance to click the box.
+- **`BrowserPage`: a tab that is worked rather than fetched.** `browser.open(url)` hands one
+  over, `browser.page(url, action)` scopes it, and it is outside the pool `send` draws on, so
+  holding one open never starves a crawl.
+  - `response()` and `html()` answer with the DOM as it stands, at any moment — mid-challenge,
+    mid-form, between clicks.
+  - `click` lands real mouse events at the element's centre after scrolling it into view, and
+    falls back to the DOM's own `click` for an element with no box; `fill` focuses and inserts
+    text; `press` sends a key; `scroll` walks an infinite feed until it stops growing.
+  - `waitFor` and `waitWhile` watch with a mutation observer and answer `false` on time rather
+    than throwing; `eval` runs JavaScript and can await a promise; `screenshot` is a PNG of
+    what the window shows.
 - **`RequestKey<T>`: a typed directive a client may honour.** The fields of `Request` describe
   HTTP and nothing else; a client that is not HTTP is told the rest with a key, and **ignores
   every key it does not know** — which is what lets one crawl run over either client.

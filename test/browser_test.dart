@@ -32,6 +32,7 @@ void main() {
     late HttpServer server;
     late Uri base;
     late BrowserClient browser;
+    var challenged = 0;
 
     setUpAll(() async {
       if (chrome == null) return;
@@ -52,6 +53,45 @@ void main() {
       '<ul class="items"><li class="item">alpha</li><li class="item">beta</li></ul>';
   }, 150);
 </script></body></html>''');
+            // An interstitial that becomes the real page on its own, the way Cloudflare's
+            // does: 403, a marker, and a reload.
+            case '/challenge':
+              challenged++;
+              if (challenged <= 2) {
+                response.statusCode = 403;
+                response.headers.contentType = ContentType.html;
+                response.write('''
+<html><head><title>Just a moment...</title></head>
+<body class="cf-browser-verification">Checking your browser
+<script>setTimeout(() => location.reload(), 300);</script></body></html>''');
+              } else {
+                response.headers.contentType = ContentType.html;
+                response.write('<html><body><h1 id="real">through</h1></body></html>');
+              }
+            // One that never clears, the captcha nobody clicked.
+            case '/stuck':
+              response.statusCode = 403;
+              response.headers.contentType = ContentType.html;
+              response.write('''
+<html><head><title>Just a moment...</title></head>
+<body class="cf-browser-verification">Checking your browser
+<script>setTimeout(() => location.reload(), 300);</script></body></html>''');
+            case '/form':
+              response.headers.contentType = ContentType.html;
+              response.write('''
+<html><body>
+  <input id="name"><button id="go">go</button><div id="out"></div>
+  <script>
+    document.getElementById('go').addEventListener('click', () => {
+      setTimeout(() => {
+        const out = document.createElement('p');
+        out.className = 'greeting';
+        out.textContent = 'hello ' + document.getElementById('name').value;
+        document.getElementById('out').appendChild(out);
+      }, 100);
+    });
+  </script>
+</body></html>''');
             case '/asset':
               response.headers.contentType = ContentType.binary;
               response.add(List.filled(2048, 7));
@@ -111,6 +151,58 @@ void main() {
         expect(seen, ['POST /asset', 'GET /asset', 'GET /asset']);
       } finally {
         await hybrid.close();
+      }
+    }, skip: absent);
+
+    test('an interstitial is waited out, not thrown', () async {
+      challenged = 0;
+      final res = await (await browser.send(Request('GET', base.resolve('/challenge')))).read();
+      expect(res.statusCode, 200);
+      expect(res.html.$('#real').text, 'through');
+    }, skip: absent);
+
+    test('one that never clears is a page, and the client survives it', () async {
+      final stuck = Request('GET', base.resolve('/stuck'))..[BrowserClient.challenge] = 1.s;
+      final res = await (await browser.send(stuck)).read();
+
+      // Not an exception, not a closed tab: the interstitial itself, with its real status,
+      // for the caller to decide about — and a human to click, in a visible window.
+      expect(res.statusCode, 403);
+      expect(res.text, contains('Just a moment'));
+      expect(browser.isClosed, isFalse);
+
+      // The next page still renders through the same client.
+      final after = await (await browser.send(Request('GET', base.resolve('/rendered')))).read();
+      expect(after.statusCode, 200);
+    }, skip: absent);
+
+    test('a page is driven by hand: fill, click, read, and read again', () async {
+      final page = await browser.open(base.resolve('/form'));
+      try {
+        expect((await page.html()).$('.greeting'), isEmpty);
+        expect(await page.fill('#name', 'world'), isTrue);
+        expect(await page.click('#go'), isTrue);
+        expect(await page.waitFor('.greeting'), isTrue);
+        expect((await page.html()).$('.greeting').text, 'hello world');
+        expect(await page.waitWhile('.nothing-like-this', timeout: 1.s), isTrue);
+        expect(await page.waitFor('.never-appears', timeout: 500.ms), isFalse);
+        expect((await page.screenshot()).length, greaterThan(100));
+        expect(page.statusCode, 200);
+      } finally {
+        await page.close();
+      }
+    }, skip: absent);
+
+    test('a held page does not starve the render pool', () async {
+      final held = await browser.open(base.resolve('/form'));
+      try {
+        // `tabs: 2` and a page held open: renders still go through.
+        for (var i = 0; i < 3; i++) {
+          expect((await (await browser.send(Request('GET', base.resolve('/rendered')))).read()).statusCode, 200);
+        }
+        expect(held.isOpen, isTrue);
+      } finally {
+        await held.close();
       }
     }, skip: absent);
 

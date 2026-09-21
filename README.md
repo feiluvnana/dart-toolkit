@@ -349,7 +349,43 @@ What a page needs before it is worth reading is said per request, with a `Reques
 | `BrowserClient.waitFor` | wait until a CSS selector matches |
 | `BrowserClient.waitUntil` | `BrowserWait.load` or `.idle` — `load`, then half a second of silence |
 | `BrowserClient.script` | JavaScript to run before the DOM is read; may return a promise |
+| `BrowserClient.challenge` | how long this page may sit on an interstitial |
 | `BrowserClient.direct` | send this one down the plain client instead |
+
+**A page is never lost.** A wait that expires, a selector that matches nothing, a challenge
+that never clears: none of them throw and none of them close the tab. The DOM as it stands
+comes back under the status the server gave it, and the tab goes back to the pool still on that
+page — closing it would throw away a challenge somebody is in the middle of solving. A page
+that answers with an interstitial is given `challenge:` (20 s by default) to become the real
+page on its own; with `headless: false` that is also a human's chance to click the box. Only a
+navigation Chrome refuses outright — a name that will not resolve, a refused connection — is a
+`ClientException`, which is what a crawl retries.
+
+### Driving a page
+
+`send` fetches; `open` hands the tab over. It is outside the pool `send` draws on, so holding
+one open — through a login, a captcha, a form — never starves a crawl:
+
+```dart
+final page = await browser.open(loginUrl);
+await page.fill('#user', 'me');
+await page.click('button[type=submit]');
+await page.waitFor('.dashboard');                 // false on time, never a throw
+print((await page.html()).$('.balance').text);    // read the DOM whenever you like
+await Path('shot.png').writeBytes(await page.screenshot());
+await page.close();
+```
+
+| | |
+|---|---|
+| `goto(url, until:, challenge:)` | navigate and wait; answers with the page as it stands |
+| `response()`, `html()`, `statusCode`, `url` | what the tab holds right now, at any moment |
+| `waitFor(sel)`, `waitWhile(sel)` | a mutation observer; `false` when the time runs out |
+| `click(sel)`, `fill(sel, text)`, `press(key)` | real mouse and key events, with a DOM fallback |
+| `scroll(times:)` | walk an infinite feed until it stops growing |
+| `eval(js, awaitPromise:)`, `screenshot()` | run anything; a PNG of what the window shows |
+
+`browser.page(url, (page) async { … })` is the same thing with the close written for you.
 
 A `RequestKey<T>` is how any client is told something HTTP has no word for, and **a client
 ignores every key it does not know** — which is what lets the same crawl run over `IoClient`,
