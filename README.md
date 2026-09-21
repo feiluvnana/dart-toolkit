@@ -24,19 +24,19 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 | import | contents | third-party |
 |---|---|---|
 | `core.dart` | `Either`, `Env`, `Io`, `TaskProgress`, string and duration helpers | — |
-| `native.dart` | `Native`: loads `dart_toolkit_native`, the package's Rust library, for `fs` and `crypto` | path |
+| `native.dart` | `Native`: loads `dart_toolkit_native`, the package's Rust library, for `fs` and `hash` | path |
 | `collection.dart` | `Sequence` (`.sequence` on any `Iterable` or `Map`): lazy queries, multi-key sort, joins, sets; `Table`: rows of named columns; CSV, TSV, NDJSON, Markdown | — |
 | `formats.dart` | `JsonDocument` with JSONPath; YAML, TOML, INI into it; `HtmlDocument` with CSS `$` and XPath `$x`; `XmlDocument` with XPath `$`; YAML out | — |
 | `async.dart` | `parallelize`, `retry`, `Mutex`, `CancelToken`, stream operators | — |
 | `cli.dart` | `Cli`, `Console` (tables, spinners, progress, prompts), `Logger`, ANSI | — |
 | `fs.dart` | `Path`; zip, 7z, rar, tar and gz/xz/zstd/bz2 archives with passwords, through the native library | path |
-| `crypto.dart` | 16 digests and 4 checksums, HMAC, PBKDF2, HKDF, Argon2id, scrypt, bcrypt, `Password`, AES-GCM/CBC, ChaCha20- and XChaCha20-Poly1305, X25519, ECDH, Ed25519, ECDSA, RSA (sign, verify, OAEP), PEM keys, `Jwt`, `Totp` | — |
+| `hash.dart` | 16 digests and 4 checksums, HMAC, hex/base64/base32, `Crypto.token`, `uuid`, `equals` | — |
 | `process.dart` | `run`, pipelines, `which` | — |
 | `http.dart` | `Request`, `Response`, `Client`, `Http.session`, scraping, downloads, `res.html`, `url.json()` | — |
 
 Ten modules. Every parser and the HTTP client are the package's own, checked against the
 packages they replaced in the test suite. What Dart cannot do fast — hashing at 2–3 GB/s,
-AES, Argon2, 7z and rar — runs in **`dart_toolkit_native`**, one Rust library the package ships
+7z and rar — runs in **`dart_toolkit_native`**, one Rust library the package ships
 prebuilt and loads through `dart:ffi`; `Native.isAvailable` and `Native.reason` say whether it
 loaded, and anything that needs it throws an `UnsupportedError` naming what and why when it
 did not. `tool/startup.dart` prints what each module costs to import.
@@ -183,29 +183,25 @@ await t.join(other, on: 'href').saveCsv('out.csv');
 final rows = json.$(r'$.items[*]').table;                 // or Table.csv(text), Table.rows(list)
 ```
 
-### Crypto
+### Hashing
 
-Every primitive is the native library's, so it is the same and fast on every platform; the
-test suite checks each against its published vectors and against `openssl`.
+Digests run in the native library, so they are the same and fast on every platform; the test
+suite checks each against its published vectors and against `openssl`. A file streams, so
+memory is flat whatever its size.
 
 ```dart
-'abc'.sha256;  bytes.blake3;  await file.hash(Hash.sha3_256);  file.crc32();  bytes.xxh3
+'abc'.sha256;  bytes.blake3;  await file.hash(Hash.sha3_256);  await file.crc32();  bytes.xxh3
 'body'.hmac(Hash.sha256, secret);  Crypto.token();  Crypto.uuid();  Crypto.equals(a, b)
-Password.hash('pw');  Password.hash('pw', const Bcrypt());  Password.verify('pw', stored)
-Argon2id().derive(pw, salt);  Scrypt().derive(pw, salt);  Hkdf().derive(secret, info: ctx)
-final box = Aes.gcm(Key.random());  box.open(box.seal(plain, aad: header))   // nonce ‖ ct ‖ tag
-await box.encryptFile(src, dst);  Aes.cbc(key).open(fromOpenssl);  XChaCha20Poly1305(key)
-X25519.generate().agree(theirPublicKey);  Ecdh.generate().agree(theirPublicKey)
-Ed25519.fromPem(pem).sign(msg);  Ecdsa.generate().publicPem;  Rsa.generate().sign(msg, pss: true)
-Jwt.sign({'sub': 'me', 'exp': Jwt.at(in10min)}, key);  Jwt.verify(token, publicPem)
-Totp.fromBase32(secret).code();  totp.verify(input);  totp.uri('me@example.com', issuer: 'App')
+bytes.hex;  bytes.base64Url;  'JBSWY3DP'.base32Bytes;  '6869'.hexBytes
 ```
 
-`Password` writes the standard string for each algorithm (`$argon2id$…`, `$2b$…`, `$scrypt$…`,
-`$pbkdf2-sha256$…`) and verifies any of them, so a user table another program wrote works as is.
-`Jwt` picks the algorithm from the key you pass (`Key` → HS256, `Ed25519` → EdDSA, `Ecdsa` →
-ES256, `Rsa` → RS256 or PS256) and refuses a token whose `alg` does not match the key it is
-verified with.
+Sixteen digests and four checksums: md5, sha1, the SHA-2 and SHA-3 families, keccak256,
+blake2s, blake2b, blake3, ripemd160, and crc32, crc32c, xxh64, xxh3. The 32-bit checksums
+read as an `int` (`bytes.crc32`); the 64-bit ones read as hex, because they do not fit one.
+
+**Encryption, password hashing, signatures and JWT are deliberately absent.** This is a
+toolkit for automation scripts: it identifies, verifies and encodes data, and has no
+business owning the code that protects it. Use a dedicated package when you need that.
 
 ### Concurrency
 
@@ -410,13 +406,34 @@ await Http.session(() => url.json(), client: client);
 
 ## Examples
 
-See [`example/`](example/) for three runnable programs.
+See [`example/`](example/) for seven runnable programs — one per area, each a task rather
+than a tour:
+
+| file | shows |
+|---|---|
+| [`cli_app.dart`](example/cli_app.dart) | subcommands, the four option kinds, stages, progress, `ctx.cancel`, exit hooks |
+| [`concurrent_work.dart`](example/concurrent_work.dart) | `parallelize` settling into `Either`, `retry`, `CancelToken`, `Mutex`, isolates, stream operators |
+| [`config_formats.dart`](example/config_formats.dart) | YAML, TOML, INI, JSON and XML through one document type, JSONPath, `toYaml` |
+| [`files_and_digests.dart`](example/files_and_digests.dart) | `Path`, `glob`, digests for de-duplication, archives, verification |
+| [`shell_pipeline.dart`](example/shell_pipeline.dart) | `run`, pipelines, `which`, failure policy, `Env` |
+| [`web_crawler.dart`](example/web_crawler.dart) | one-shot requests, the five-hook crawl, downloads with progress |
+| [`collections.dart`](example/collections.dart) | six tasks with the SDK's `Iterable`, then with `Sequence` and `Table`, side by side |
+
+`bin/` holds the executables: [`tk.dart`](bin/tk.dart) is the toolkit as a command-line tool
+(`hash`, `find`, `read`, `fetch`, `pack`, `peek`), and [`keybox.dart`](bin/keybox.dart) is the
+program the brevity rules in `CONVENTIONS.md` are measured against.
+
+```sh
+dart run bin/tk.dart find 'lib/**/*.dart' --top 5
+dart run bin/tk.dart read pubspec.yaml --query '$.dependencies.*'
+dart run example/config_formats.dart
+```
 
 ## Conventions
 
 [`CONVENTIONS.md`](CONVENTIONS.md) records the rules this API follows, so additions do
-not re-create what the audits behind them found. [`CHANGELOG.md`](CHANGELOG.md) records what
-each one changed.
+not re-create what the audits behind them found. [`CHANGELOG.md`](CHANGELOG.md) records what each
+release contains.
 
 ## License
 

@@ -42,22 +42,26 @@ class Stages {
 ///
 /// {@category CLI}
 class Logger {
+  static const _levelKey = #dartToolkitLogLevel;
+  static LogLevel _processLevel = LogLevel.info;
+
   /// The minimum severity that is emitted. Defaults to [LogLevel.info].
-  static LogLevel level = LogLevel.info;
+  ///
+  /// Reads the level [silenced] set for the work in progress, if any, and otherwise the
+  /// process-wide one that assigning to this sets.
+  static LogLevel get level => Zone.current[_levelKey] as LogLevel? ?? _processLevel;
+
+  static set level(LogLevel value) => _processLevel = value;
 
   /// Whether [level] currently permits [candidate] to be written.
   static bool isEnabled(LogLevel candidate) => candidate.index >= level.index && level != LogLevel.silent;
 
-  /// Runs [action], sync or async, with logging suppressed, restoring [level] afterwards.
-  static Future<T> silenced<T>(FutureOr<T> Function() action) async {
-    final previous = level;
-    level = LogLevel.silent;
-    try {
-      return await action();
-    } finally {
-      level = previous;
-    }
-  }
+  /// Runs [action], sync or async, with logging suppressed.
+  ///
+  /// The suppression belongs to [action] and what it awaits — not to the process — so a
+  /// task running beside it still reports. `Http.session` scopes its client the same way.
+  static Future<T> silenced<T>(FutureOr<T> Function() action) =>
+      runZoned(() async => action(), zoneValues: {_levelKey: LogLevel.silent});
 
   /// A counter over [total] stages, printing `[n/total] message` on each call.
   ///

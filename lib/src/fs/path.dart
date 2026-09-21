@@ -356,9 +356,9 @@ extension type const Path(String path) implements String {
 
   /// Moves this file or directory to [targetPath], copying and deleting across filesystems.
   Future<void> move(String targetPath) async {
-    await File(targetPath).parent.create(recursive: true);
     final t = await type();
     if (t == PathType.none) throw FileSystemException('Cannot move non-existent path', path);
+    await File(targetPath).parent.create(recursive: true);
     try {
       await (t == PathType.dir ? asDir : asFile).rename(targetPath);
     } on FileSystemException {
@@ -370,9 +370,9 @@ extension type const Path(String path) implements String {
 
   /// Moves this file or directory to [targetPath] synchronously, copying and deleting across filesystems.
   void moveSync(String targetPath) {
-    File(targetPath).parent.createSync(recursive: true);
     final t = typeSync();
     if (t == PathType.none) throw FileSystemException('Cannot move non-existent path', path);
+    File(targetPath).parent.createSync(recursive: true);
     try {
       (t == PathType.dir ? asDir : asFile).renameSync(targetPath);
     } on FileSystemException {

@@ -12,8 +12,12 @@ use std::path::Path;
 use std::slice;
 
 mod archive;
-mod crypto;
+mod digest;
 
+// Thread-local, which is sound only because every caller reads the message in the same
+// synchronous block as the call that failed. Dart does not promise an isolate keeps one OS
+// thread across message-loop turns, so never put an `await` between a failing call and its
+// `tk_last_error`.
 thread_local! {
     static LAST_ERROR: RefCell<String> = RefCell::new(String::new());
 }
@@ -94,6 +98,30 @@ pub unsafe extern "C" fn tk_last_error(out: *mut u8, cap: usize) -> i32 {
         bytes_mut(out, n).copy_from_slice(&b[..n]);
         b.len() as i32
     })
+}
+
+/// Allocates `len` zeroed bytes, released with `tk_dealloc`.
+///
+/// Exported so the Dart side never has to look `malloc` up in the host process, which
+/// `DynamicLibrary.process()` cannot do everywhere — and so Dart and Rust stop sharing an
+/// allocator by coincidence.
+#[no_mangle]
+pub extern "C" fn tk_alloc(len: usize) -> *mut u8 {
+    if len == 0 {
+        return std::ptr::null_mut();
+    }
+    let mut buffer = vec![0u8; len];
+    let ptr = buffer.as_mut_ptr();
+    std::mem::forget(buffer);
+    ptr
+}
+
+/// Releases what `tk_alloc` returned. `len` must be the length it was asked for.
+#[no_mangle]
+pub unsafe extern "C" fn tk_dealloc(ptr: *mut u8, len: usize) {
+    if !ptr.is_null() && len != 0 {
+        drop(Vec::from_raw_parts(ptr, len, len));
+    }
 }
 
 #[no_mangle]

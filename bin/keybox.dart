@@ -13,7 +13,7 @@ typedef Asset = ({Uri url, Path path});
 void main(List<String> args) => Cli(
   name: 'keybox',
   description: 'Key BOX Scraper & Downloader',
-  version: '0.0.4',
+  version: '0.0.1',
 ).action((ctx) => Http.session(() => run(ctx.cancel), timeout: 60.s)).run(args);
 
 Future<void> run(CancelToken cancel) async {

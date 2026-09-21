@@ -177,13 +177,13 @@ extension PathDownloadExtensions on Path {
 
       if (streamed.statusCode == 416 && offset > 0) {
         // The part is not a prefix of what the server has now; start over.
-        unawaited(streamed.stream.listen(null, cancelOnError: true).cancel().catchError((_) {}));
+        _drain(streamed);
         offset = 0;
         streamed = await lease.client.send(Request('GET', url, headers: headers));
       }
       if (!streamed.isOk && streamed.statusCode != 206) {
         // Close the body instead of holding the connection until GC.
-        unawaited(streamed.stream.listen(null, cancelOnError: true).cancel().catchError((_) {}));
+        _drain(streamed);
         yield DownloadFailed(url, this, HttpException('Download failed with status ${streamed.statusCode}', uri: url));
         return;
       }

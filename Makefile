@@ -8,7 +8,7 @@
 DART ?= dart
 TARGET := $(shell $(DART) run --packages=.dart_tool/package_config.json tool/target.dart 2>/dev/null)
 
-.PHONY: all check format analyze deps test native native-clean bench startup release clean
+.PHONY: all check format analyze deps test native native-clean audit bench startup release clean
 
 all: check test
 
@@ -34,13 +34,20 @@ native:
 native-clean:
 	cd native && cargo clean
 
+## The archive parsers read files from the internet, so the release checks them for advisories.
+## `cargo install cargo-audit` if it is missing; the target says so rather than failing silently.
+audit:
+	@command -v cargo-audit >/dev/null 2>&1 \
+		&& (cd native && cargo audit) \
+		|| echo "cargo-audit not installed: cargo install cargo-audit (skipping advisory check)"
+
 startup:
 	$(DART) run tool/startup.dart
 
 bench: startup
 	$(DART) run example/collections.dart > /dev/null && echo "collections example: ok"
 
-release: check test native
+release: check test native audit
 	@echo "Bump version in pubspec.yaml and move Unreleased in CHANGELOG.md, then: git tag v$$(grep '^version' pubspec.yaml | cut -d' ' -f2)"
 
 clean: native-clean

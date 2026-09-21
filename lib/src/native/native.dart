@@ -1,7 +1,7 @@
 part of '../../native.dart';
 
 /// The toolkit's native library, `dart_toolkit_native`: one Rust `cdylib` with the same
-/// functions on every platform, shipped prebuilt inside the package. `crypto` and the archive
+/// functions on every platform, shipped prebuilt inside the package. `hash` and the archive
 /// half of `fs` are thin bindings to it and throw [UnsupportedError] when it did not load.
 ///
 /// Lookup order: `DART_TOOLKIT_NATIVE` (a path), the directory of the running executable, then
@@ -83,41 +83,57 @@ abstract final class Native {
     final f = require(
       'error',
     ).lookupFunction<Int32 Function(Pointer<Uint8>, IntPtr), int Function(Pointer<Uint8>, int)>('tk_last_error');
-    final buf = malloc(1024);
+    const cap = 1024;
+    final buf = alloc(cap);
     try {
-      final n = f(buf, 1024);
-      return n <= 0 ? 'unknown error' : utf8.decode(buf.asTypedList(n < 1024 ? n : 1024));
+      final n = f(buf, cap);
+      if (n <= 0) return 'unknown error';
+      // A message longer than the buffer is cut, and cutting mid-character would make
+      // `utf8.decode` throw over the top of the error being reported.
+      return utf8.decode(buf.asTypedList(n < cap ? n : cap), allowMalformed: true);
     } finally {
-      free(buf);
+      free(buf, cap);
     }
   }
 
-  static final Pointer<Uint8> Function(int) malloc = DynamicLibrary.process()
-      .lookupFunction<Pointer<Uint8> Function(IntPtr), Pointer<Uint8> Function(int)>('malloc');
-  static final void Function(Pointer<Uint8>) free = DynamicLibrary.process()
-      .lookupFunction<Void Function(Pointer<Uint8>), void Function(Pointer<Uint8>)>('free');
+  /// The library's own allocator, rather than the host process's `malloc`.
+  ///
+  /// `DynamicLibrary.process()` cannot find `malloc` on every platform, and sharing an
+  /// allocator across the boundary by coincidence is not worth the one saved export.
+  static final Pointer<Uint8> Function(int) _alloc = require(
+    'memory',
+  ).lookupFunction<Pointer<Uint8> Function(IntPtr), Pointer<Uint8> Function(int)>('tk_alloc');
+  static final void Function(Pointer<Uint8>, int) _dealloc = require(
+    'memory',
+  ).lookupFunction<Void Function(Pointer<Uint8>, IntPtr), void Function(Pointer<Uint8>, int)>('tk_dealloc');
+
+  /// [size] bytes of native memory, released by [free].
+  static Pointer<Uint8> alloc(int size) => _alloc(size);
+
+  /// Releases what [alloc] returned; [size] is what it was asked for.
+  static void free(Pointer<Uint8> ptr, int size) => _dealloc(ptr, size);
 
   /// Runs [body] with [data] copied into native memory.
   static R withBytes<R>(List<int> data, R Function(Pointer<Uint8> ptr, int len) body) {
     if (data.isEmpty) return body(nullptr, 0);
-    final ptr = malloc(data.length);
+    final ptr = alloc(data.length);
     try {
       ptr.asTypedList(data.length).setAll(0, data);
       return body(ptr, data.length);
     } finally {
-      free(ptr);
+      free(ptr, data.length);
     }
   }
 
   /// Runs [body] with a native buffer of [size] bytes; returns the first [n] of them as told by [body].
   static Uint8List withOut(int size, int Function(Pointer<Uint8> out) body) {
-    final ptr = malloc(size);
+    final ptr = alloc(size);
     try {
       final n = body(ptr);
       if (n < 0) throw StateError(lastError());
       return Uint8List.fromList(ptr.asTypedList(n));
     } finally {
-      free(ptr);
+      free(ptr, size);
     }
   }
 
@@ -128,16 +144,17 @@ abstract final class Native {
   /// Runs [body] with a pointer-and-length pair the library fills with its own allocation;
   /// the bytes are copied out and the allocation freed. A negative return throws [StateError].
   static Uint8List take(int Function(Pointer<Pointer<Uint8>> out, Pointer<IntPtr> len) body) {
-    final out = malloc(sizeOf<Pointer<Uint8>>()).cast<Pointer<Uint8>>();
-    final len = malloc(sizeOf<IntPtr>()).cast<IntPtr>();
+    final outSize = sizeOf<Pointer<Uint8>>(), lenSize = sizeOf<IntPtr>();
+    final out = alloc(outSize).cast<Pointer<Uint8>>();
+    final len = alloc(lenSize).cast<IntPtr>();
     try {
       if (body(out, len) < 0) throw StateError(lastError());
       final data = Uint8List.fromList(out.value.asTypedList(len.value));
       _free(out.value, len.value);
       return data;
     } finally {
-      free(out.cast());
-      free(len.cast());
+      free(out.cast(), outSize);
+      free(len.cast(), lenSize);
     }
   }
 

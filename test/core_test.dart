@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:test/test.dart';
@@ -276,6 +277,18 @@ SINGLE_QUOTED='single quote value'
         expect(jittered.inMilliseconds, greaterThanOrEqualTo(800));
         expect(jittered.inMilliseconds, lessThanOrEqualTo(1200));
       }
+    });
+  });
+
+  group('source hygiene', () {
+    test('no library file holds a control byte that makes it binary to grep', () {
+      // A raw NUL in a string literal once made an entire 756-line file invisible to
+      // grep, ripgrep and code search.
+      final offenders = [
+        for (final f in Directory('lib').listSync(recursive: true).whereType<File>())
+          if (f.path.endsWith('.dart') && f.readAsBytesSync().any((b) => b < 9 || (b > 13 && b < 32))) f.path,
+      ];
+      expect(offenders, isEmpty);
     });
   });
 }

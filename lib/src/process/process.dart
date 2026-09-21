@@ -59,6 +59,12 @@ List<String> _splitCommand(String command) {
 /// [input] is written to stdin, which is otherwise closed at once. [shell] runs through
 /// the system interpreter rather than exec'ing directly.
 ///
+/// [command] is split here, the way a POSIX shell reads a simple command — so **never
+/// interpolate a scraped or user-supplied value into it**. Pass those as arguments, where
+/// nothing re-reads them: `(await which('git'))!.run(args: ['commit', '-m', message])`. On
+/// Windows every command goes through `cmd.exe` whatever [shell] says, which reinterprets
+/// metacharacters in the string a second time.
+///
 /// {@category System}
 Future<ShellResult> run(
   String command, {

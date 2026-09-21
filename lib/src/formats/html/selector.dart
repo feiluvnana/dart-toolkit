@@ -15,26 +15,123 @@ final class _Selector {
   static _Selector parse(String source) => _cache[source] ??= _Selector._(_SelectorParser(source).parseList());
 
   /// Whether [e] matches.
-  bool matches(Element e) => _alternatives.any((c) => c.matches(e));
+  bool matches(Element e) => _withSiblings(() => _matches(e));
+
+  bool _matches(Element e) => _alternatives.any((c) => c.matches(e));
 
   /// Every descendant of [root] that matches, in document order; [root] itself too when
   /// [includeSelf] is set.
-  List<Element> matchAll(Element root, {bool includeSelf = false}) {
+  List<Element> matchAll(Element root, {bool includeSelf = false}) => _withSiblings(() {
     final out = <Element>[];
     void walk(Element e) {
       for (final n in e.nodes) {
         if (n is Element) {
-          if (matches(n)) out.add(n);
+          if (_matches(n)) out.add(n);
           walk(n);
         }
       }
     }
 
-    if (includeSelf && matches(root)) out.add(root);
+    if (includeSelf && _matches(root)) out.add(root);
     walk(root);
     return out;
+  });
+}
+
+/// Where each element sits among its element siblings, for the length of one query.
+///
+/// The positional pseudo-classes and the sibling combinators all ask that question, and
+/// asking the tree directly costs a scan per candidate — which makes a selector quadratic
+/// in the number of siblings. This fills one list per parent and answers from it. It lives
+/// for exactly one query: the tree cannot change underneath it, and the next query builds a
+/// fresh one, so nothing can go stale.
+final class _Siblings {
+  final Map<Element, List<Element>> _children = {};
+  final Map<Element, int> _index = {};
+  final Map<(Element, String), (List<Element>, Map<Element, int>)> _byType = {};
+
+  /// [parent]'s child elements, indexed on first use.
+  List<Element> of(Element parent) => _children[parent] ??= () {
+    final list = <Element>[];
+    for (final node in parent.nodes) {
+      if (node is Element) {
+        _index[node] = list.length;
+        list.add(node);
+      }
+    }
+    return list;
+  }();
+
+  /// [e]'s 0-based position among its element siblings.
+  int indexOf(Element e) {
+    final parent = e.parent;
+    if (parent == null) return 0;
+    of(parent);
+    return _index[e] ?? 0;
+  }
+
+  /// How many element siblings [e] has, itself included.
+  int countOf(Element e) {
+    final parent = e.parent;
+    return parent == null ? 1 : of(parent).length;
+  }
+
+  (List<Element>, Map<Element, int>) _typed(Element e) {
+    final parent = e.parent!;
+    return _byType[(parent, e.name)] ??= () {
+      final list = <Element>[];
+      final index = <Element, int>{};
+      for (final c in of(parent)) {
+        if (c.name == e.name) {
+          index[c] = list.length;
+          list.add(c);
+        }
+      }
+      return (list, index);
+    }();
+  }
+
+  /// How many siblings share [e]'s tag name, itself included.
+  int typeCountOf(Element e) => e.parent == null ? 1 : _typed(e).$1.length;
+
+  /// [e]'s 0-based position among the siblings sharing its tag name.
+  int typeIndexOf(Element e) => e.parent == null ? 0 : _typed(e).$2[e] ?? 0;
+
+  /// The next element sibling, or `null`.
+  Element? next(Element e) {
+    final parent = e.parent;
+    if (parent == null) return null;
+    final kids = of(parent);
+    final i = indexOf(e) + 1;
+    return i < kids.length ? kids[i] : null;
+  }
+
+  /// The previous element sibling, or `null`.
+  Element? previous(Element e) {
+    final parent = e.parent;
+    if (parent == null) return null;
+    final i = indexOf(e) - 1;
+    return i >= 0 ? of(parent)[i] : null;
   }
 }
+
+/// The index for the query in progress. A nested query — `:has()`, `:not()` — reuses the
+/// enclosing one, since it walks the same tree.
+_Siblings? _active;
+
+T _withSiblings<T>(T Function() body) {
+  final outer = _active;
+  _active ??= _Siblings();
+  try {
+    return body();
+  } finally {
+    _active = outer;
+  }
+}
+
+/// The active index. A predicate is only ever called from inside a query, so the fallback
+/// is defensive: correct, just uncached.
+_Siblings get _sibs => _active ?? _Siblings();
 
 /// A chain of compound selectors and the combinators between them, matched right to left.
 final class _Complex {
@@ -58,10 +155,10 @@ final class _Complex {
         }
         return false;
       case '+':
-        final prev = e.previousElement;
+        final prev = _sibs.previous(e);
         return prev != null && _match(prev, i - 1);
       case '~':
-        for (var prev = e.previousElement; prev != null; prev = prev.previousElement) {
+        for (var prev = _sibs.previous(e); prev != null; prev = _sibs.previous(prev)) {
           if (_match(prev, i - 1)) return true;
         }
         return false;
@@ -185,10 +282,11 @@ final class _SelectorParser {
     expect(']');
     String norm(String v) => ci ? v.toLowerCase() : v;
     final want = norm(value);
+    // `op` is the single character before the `=`, so only the bare forms can arrive here.
     return switch (op) {
       '=' => (e) => e.attributes[name] != null && norm(e.attributes[name]!) == want,
-      '~=' || '~' => (e) => e.attributes[name] != null && norm(e.attributes[name]!).split(_ws).contains(want),
-      '|=' || '|' => (e) {
+      '~' => (e) => e.attributes[name] != null && norm(e.attributes[name]!).split(_ws).contains(want),
+      '|' => (e) {
         final v = e.attributes[name];
         return v != null && (norm(v) == want || norm(v).startsWith('$want-'));
       },
@@ -214,29 +312,28 @@ final class _SelectorParser {
       arg = s.substring(start, i).trim();
       expect(')');
     }
+    // Every positional case requires a parent, as `:first-child` always has: these
+    // pseudo-classes are about an element's place among siblings, and the root has none.
     switch (name) {
       case 'first-child':
-        return (e) => e.previousElement == null && e.parent != null;
+        return (e) => e.parent != null && _sibs.indexOf(e) == 0;
       case 'last-child':
-        return (e) => e.nextElement == null && e.parent != null;
+        return (e) => e.parent != null && _sibs.indexOf(e) == _sibs.countOf(e) - 1;
       case 'only-child':
-        return (e) => e.parent != null && e.previousElement == null && e.nextElement == null;
+        return (e) => e.parent != null && _sibs.countOf(e) == 1;
       case 'first-of-type':
-        return (e) => _ofType(e).first == e;
+        return (e) => e.parent != null && _sibs.typeIndexOf(e) == 0;
       case 'last-of-type':
-        return (e) => _ofType(e).last == e;
+        return (e) => e.parent != null && _sibs.typeIndexOf(e) == _sibs.typeCountOf(e) - 1;
       case 'nth-child':
         final f = _nth(arg ?? '');
-        return (e) => e.parent != null && f(e.parent!.children.toList().indexOf(e) + 1);
+        return (e) => e.parent != null && f(_sibs.indexOf(e) + 1);
       case 'nth-last-child':
         final f = _nth(arg ?? '');
-        return (e) {
-          final kids = e.parent?.children.toList();
-          return kids != null && f(kids.length - kids.indexOf(e));
-        };
+        return (e) => e.parent != null && f(_sibs.countOf(e) - _sibs.indexOf(e));
       case 'nth-of-type':
         final f = _nth(arg ?? '');
-        return (e) => f(_ofType(e).indexOf(e) + 1);
+        return (e) => e.parent != null && f(_sibs.typeIndexOf(e) + 1);
       case 'empty':
         return (e) => e.nodes.every((n) => n is Text && n.data.isEmpty);
       case 'not':
@@ -251,11 +348,6 @@ final class _SelectorParser {
         throw FormatException('Unsupported pseudo-class ":$name"', s, i);
     }
   }
-
-  static List<Element> _ofType(Element e) => [
-    for (final c in e.parent?.children ?? const <Element>[])
-      if (c.name == e.name) c,
-  ];
 
   /// `odd`, `even`, `3`, `2n+1`, `-n+3` → a predicate on a 1-based index.
   static bool Function(int) _nth(String arg) {

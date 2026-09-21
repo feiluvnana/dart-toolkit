@@ -137,6 +137,8 @@ fn list(path: &str, password: Option<&str>) -> Result<Vec<Entry>, String> {
                 out.push(Entry {
                     name: e.filename.to_string_lossy().to_string(),
                     size: e.unpacked_size,
+                    // unrar's listing header exposes no packed size, so this repeats the
+                    // unpacked one rather than inventing a number.
                     compressed: e.unpacked_size,
                     dir: e.is_directory(),
                     encrypted: e.is_encrypted(),
@@ -226,9 +228,16 @@ fn extract(path: &str, dest: &str, password: Option<&str>) -> Result<i32, String
             }
         }
         "7z" => {
+            // The crate writes the files itself, so the traversal guard has to run over the
+            // entry names first — zip, rar and tar each check theirs as they extract. The
+            // listing then also supplies the count, instead of a second pass after the fact.
+            let entries = list(path, password)?;
+            for e in &entries {
+                inside(root, &e.name)?;
+            }
             let pw = sevenz_rust2::Password::from(password.unwrap_or(""));
             sevenz_rust2::decompress_file_with_password(path, dest, pw).map_err(|e| e.to_string())?;
-            count = list(path, password)?.iter().filter(|e| !e.dir).count() as i32;
+            count = entries.iter().filter(|e| !e.dir).count() as i32;
         }
         "rar" => {
             let a = match password {
@@ -283,6 +292,8 @@ fn walk(src: &Path) -> Result<Vec<(String, PathBuf, bool)>, String> {
         let entry = entry.map_err(|e| e.to_string())?;
         let rel = entry.path().strip_prefix(src).map_err(|e| e.to_string())?.to_string_lossy().replace('\\', "/");
         let is_dir = entry.file_type().is_dir();
+        // Symlinks are skipped on purpose: an archive may be extracted anywhere, and a
+        // link pointing out of the tree is the same hazard `inside` exists to stop.
         if entry.file_type().is_symlink() {
             continue;
         }

@@ -1,6 +1,6 @@
 name: dart_toolkit
 description: A lightweight, modular web crawling pipeline and command-line automation toolkit for Dart.
-version: 0.0.4
+version: 0.0.1
 repository: https://github.com/feiluvnana/dart-toolkit
 issue_tracker: https://github.com/feiluvnana/dart-toolkit/issues
 homepage: https://github.com/feiluvnana/dart-toolkit
@@ -11,6 +11,12 @@ topics:
   - cli
   - automation
   - concurrency
+
+# `dart pub global activate dart_toolkit` puts these on the PATH; inside the package they
+# run as `dart run bin/<name>.dart`, and for a dependent as `dart run dart_toolkit:<name>`.
+executables:
+  tk:
+  keybox:
 
 environment:
   sdk: ^3.10.0

@@ -2,7 +2,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:dart_toolkit/native.dart';
-import 'package:dart_toolkit/crypto.dart';
+import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/fs.dart';
 import 'package:test/test.dart';
 
@@ -123,5 +123,18 @@ void main() {
     (tmp / 'bad.zip').writeBytesSync(List.filled(100, 7));
     expect(() => (tmp / 'bad.zip').archiveEntries(), throwsA(isA<FormatException>()));
     expect(() => src.archiveTo(tmp / 'a.qqq'), throwsArgumentError);
+  });
+
+  test('an entry that escapes the destination is refused and writes nothing', () async {
+    // The guard exists to stop `../../.ssh/authorized_keys`; the fixture holds three such
+    // names, one of them only escaping after a `nested/..` segment.
+    final dir = Directory.systemTemp.createTempSync('slip_');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final into = Path(dir.path) / 'into';
+
+    await expectLater(() => Path('test/fixtures/zip_slip.zip').extractTo(into), throwsA(isA<FormatException>()));
+    expect(File('${dir.path}/escaped.txt').existsSync(), isFalse);
+    expect(File('${dir.path}/also_escaped.txt').existsSync(), isFalse);
+    expect(File(Path(dir.path) / 'escaped.txt').existsSync(), isFalse);
   });
 }

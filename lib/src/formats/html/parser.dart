@@ -315,14 +315,14 @@ final class _Parser {
     if (_voidElements.contains(name) || selfClosing) return;
 
     if (_rawTextElements.contains(name) || _rcdataElements.contains(name)) {
-      final close = RegExp('</$name\\s*>', caseSensitive: false);
-      final m = close.firstMatch(src.substring(pos));
-      final end = m == null ? src.length : pos + m.start;
-      final raw = src.substring(pos, end);
+      // Scanned in place: copying the rest of the document to run a regex over it costs a
+      // full-document copy per <script> or <style>, and a page has many of both.
+      final close = _endTag(src, pos, name);
+      final raw = src.substring(pos, close?.start ?? src.length);
       if (raw.isNotEmpty) {
         element.nodes.add(Text(_rcdataElements.contains(name) ? decodeEntities(raw) : raw)..parent = element);
       }
-      pos = m == null ? src.length : pos + m.end;
+      pos = close?.past ?? src.length;
       return;
     }
     open.add(element);
@@ -343,6 +343,28 @@ final class _Parser {
 }
 
 const _blockBoundaries = {'table', 'td', 'th', 'div', 'section', 'article', 'body', 'li', 'ul', 'ol', 'blockquote'};
+
+/// The end tag `</[name]>` at or after [from], allowing whitespace before the `>` and any
+/// case in the name — `</$name\s*>` without compiling a pattern or copying the source.
+({int start, int past})? _endTag(String src, int from, String name) {
+  for (var i = src.indexOf('<', from); i != -1 && i + 1 < src.length; i = src.indexOf('<', i + 1)) {
+    if (src.codeUnitAt(i + 1) != 0x2f) continue; // not `</`
+    var j = i + 2;
+    var k = 0;
+    while (k < name.length && j < src.length && _toLower(src.codeUnitAt(j)) == name.codeUnitAt(k)) {
+      j++;
+      k++;
+    }
+    if (k != name.length) continue;
+    while (j < src.length && _isSpace(src.codeUnitAt(j))) {
+      j++;
+    }
+    if (j < src.length && src.codeUnitAt(j) == 0x3e) return (start: i, past: j + 1);
+  }
+  return null;
+}
+
+int _toLower(int c) => (c >= 0x41 && c <= 0x5a) ? c + 0x20 : c;
 
 bool _isAlpha(int c) => (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a);
 bool _isNameChar(int c) => _isAlpha(c) || (c >= 0x30 && c <= 0x39) || c == 0x2d || c == 0x5f || c == 0x3a || c == 0x2e;

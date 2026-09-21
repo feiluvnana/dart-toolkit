@@ -400,6 +400,70 @@ cert = 'a;b'
     expect(page.$x('//nothing').attr('href'), isNull);
     expect(() => page.$x('//nothing').text, throwsStateError);
   });
+
+  group('node identity and ordering', () {
+    final doc = '<html><body><a href="/one">1</a><img src="/two"><a href="/three">3</a></body></html>'.html;
+
+    test('a union of attribute sets comes back in document order, each node once', () {
+      expect(doc.$x('//a/@href | //img/@src').texts, ['/one', '/two', '/three']);
+      expect(doc.$x('//a/@href | //a/@href').texts, ['/one', '/three']);
+    });
+
+    test('an attribute node equals the same attribute on the same element', () {
+      final first = doc.$x('//a/@href').first;
+      final again = doc.$x('//a/@href').first;
+      expect(first, again);
+      expect({first, again}.length, 1);
+    });
+  });
+
+  group('yaml block scalars', () {
+    test('a literal block keeps its interior blank lines', () {
+      expect('text: |\n  a\n\n  b\n'.yaml['text'].to<String>(), 'a\n\nb\n');
+    });
+
+    test('a folded block folds breaks but keeps spacing inside a line', () {
+      expect('text: >\n  a  b\n'.yaml['text'].to<String>(), 'a  b\n');
+      expect('text: >\n  one\n  two\n'.yaml['text'].to<String>(), 'one two\n');
+      expect('text: >\n  one\n\n  two\n'.yaml['text'].to<String>(), 'one\ntwo\n');
+    });
+
+    test('chomping: strip, clip and keep', () {
+      expect('t: |-\n  a\n'.yaml['t'].to<String>(), 'a');
+      expect('t: |\n  a\n'.yaml['t'].to<String>(), 'a\n');
+      expect('t: |+\n  a\n\n'.yaml['t'].to<String>(), 'a\n\n');
+    });
+
+    test('an apostrophe in a plain scalar does not swallow the comment', () {
+      expect("name: don't # trailing\n".yaml['name'].to<String>(), "don't");
+    });
+  });
+
+  group('table scoping', () {
+    test('a row reports its own cells, not a nested table\'s', () {
+      const html =
+          '<table><tr><th>a</th><th>b</th></tr>'
+          '<tr><td>1</td><td><table><tr><td>inner</td></tr></table></td></tr></table>';
+      final t = html.html.$('table').table;
+      expect(t.columns, ['a', 'b']);
+      expect(t.rows.first.length, 2);
+      expect(t.length, 1);
+    });
+  });
+
+  group('positional pseudo-classes', () {
+    test('nth-child and of-type over many siblings, and at a parentless root', () {
+      final doc = '<ul>${'<li>x</li>' * 50}</ul>'.html;
+      expect(doc.$('li:nth-child(2n)').length, 25);
+      expect(doc.$('li:first-child').length, 1);
+      expect(doc.$('li:last-child').length, 1);
+      expect(doc.$('li:nth-last-child(1)').length, 1);
+      expect(doc.$('li:first-of-type').length, 1);
+      // The root has no parent, so it is not any child — and must not throw.
+      expect(doc.$(':first-of-type').length, isNonNegative);
+      expect(doc.$('html:first-child'), isEmpty);
+    });
+  });
 }
 
 /// package:yaml's YamlMap/YamlList as plain Dart, for comparison.

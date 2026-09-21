@@ -213,8 +213,10 @@ final class Response {
   String toString() => 'Response($statusCode${reasonPhrase == null ? '' : ' $reasonPhrase'}, ${bytes.length} bytes)';
 }
 
+final _charset = RegExp(r'charset=["\x27]?([^;"\x27\s]+)', caseSensitive: false);
+
 String _decode(Uint8List bytes, String? contentType) {
-  final charset = RegExp(r'charset=["\x27]?([^;"\x27\s]+)', caseSensitive: false).firstMatch(contentType ?? '')?[1];
+  final charset = _charset.firstMatch(contentType ?? '')?[1];
   return switch (charset?.toLowerCase()) {
     'iso-8859-1' || 'latin1' || 'latin-1' || 'us-ascii' || 'ascii' => latin1.decode(bytes),
     _ => utf8.decode(bytes, allowMalformed: true),
@@ -230,6 +232,11 @@ abstract interface class Client {
   /// Releases connections; the client cannot be used afterwards.
   void close();
 }
+
+/// Reads and discards a response body, releasing the connection instead of holding it
+/// until the client reaps an idle one.
+void _drain(StreamedResponse response) =>
+    unawaited(response.stream.listen(null, cancelOnError: true).cancel().catchError((_) {}));
 
 /// A transport-level failure: the connection closed early, too many redirects, a body over a
 /// cap. Socket and TLS failures come through as `dart:io`'s own exceptions.

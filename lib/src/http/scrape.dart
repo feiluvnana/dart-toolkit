@@ -121,9 +121,9 @@ final class HookFailed extends ScrapeFailure {
 /// The crawl's settings, all of them, set once in [Scrape.onInit].
 ///
 /// Defaults: 16 requests in flight, 8 per host, no delay, 30 s timeout, 2 retries, 5 redirect
-/// hops, a 16 MB body cap, no page or depth limit, and a scope of the seeds' hosts with or
-/// without `www.`. Changes after the hook returns have no effect. Anything per request — a
-/// header, the `user-agent` — is [Scrape.onRequest]'s.
+/// hops, a 16 MB body cap, a 30 s cap on `Retry-After`, no page or depth limit, and a scope of
+/// the seeds' hosts with or without `www.`. The context is not reachable once the hook
+/// returns. Anything per request — a header, the `user-agent` — is [Scrape.onRequest]'s.
 ///
 /// {@category Crawling}
 final class InitContext<T> {
@@ -141,6 +141,10 @@ final class InitContext<T> {
 
   /// Re-sends after a transport error or a 5xx; never after a TLS failure.
   int retries = 2;
+
+  /// The longest a server's `Retry-After` may hold a host. A request asking for longer
+  /// fails instead of waiting, so one header cannot park the crawl for hours.
+  Duration maxRetryAfter = const Duration(seconds: 30);
 
   /// Redirect hops followed before a request fails.
   int redirects = 5;
@@ -505,10 +509,21 @@ final class _Hooks<T> {
 /// Sent unless the request, [Scrape.onRequest] or the session names one.
 const _userAgent = 'dart-toolkit';
 
-/// Identity of a request for deduplication: the values, not a hash of them.
-typedef _RequestKey = (String method, Uri url, String body);
+/// Identity of a request for deduplication. The body is hashed rather than kept: the set
+/// lives as long as the crawl, and a POST-driven crawl would otherwise retain every body.
+typedef _RequestKey = (String method, Uri url, int body);
 
-_RequestKey _key(Request req) => (req.method, req.url, String.fromCharCodes(req.bytes));
+_RequestKey _key(Request req) => (req.method, req.url, _fnv1a(req.bytes));
+
+/// FNV-1a, 64-bit. Wide enough that two different bodies to one URL colliding — which
+/// would silently drop a page — is not a practical concern.
+int _fnv1a(List<int> bytes) {
+  var h = 0xcbf29ce484222325;
+  for (final b in bytes) {
+    h = (h ^ b) * 0x100000001b3;
+  }
+  return h;
+}
 
 /// Headers that stay behind when a redirect leaves the host.
 const _credential = {'authorization', 'cookie', 'proxy-authorization'};
@@ -633,7 +648,10 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
 
   late final void Function() dispatch;
 
-  _Host<T> hostOf(Uri url) => hosts.putIfAbsent(url.host, _Host<T>.new);
+  // Keyed by site, not host: `www.example.com` and `example.com` are one server, and the
+  // crawl already treats them as one for scope. Two buckets would double `perHost` and
+  // halve `delay` for any site linked both ways.
+  _Host<T> hostOf(Uri url) => hosts.putIfAbsent(_site(url.host), _Host<T>.new);
 
   void checkReady(_Host<T> host) {
     if (stopped || host.ready || host.paused || host.queue.isEmpty || host.inFlight >= cfg.perHost) return;
@@ -678,17 +696,22 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
     });
   }
 
-  Duration retryAfter(Response res, _Host<T> host) {
+  /// How long to hold [host], or `null` when the server asked for longer than
+  /// [InitContext.maxRetryAfter] and the request should fail rather than wait.
+  Duration? retryAfter(Response res, _Host<T> host) {
     final header = res.headers['retry-after']?.trim() ?? '';
-    if (int.tryParse(header) case final seconds?) return Duration(seconds: seconds);
-    if (header.isNotEmpty) {
+    Duration? asked;
+    if (int.tryParse(header) case final seconds?) {
+      asked = Duration(seconds: seconds);
+    } else if (header.isNotEmpty) {
       try {
         final wait = HttpDate.parse(header).difference(DateTime.now());
-        return wait.isNegative ? Duration.zero : wait;
+        asked = wait.isNegative ? Duration.zero : wait;
       } on FormatException {
         // Not a date either; fall through to the backoff.
       }
     }
+    if (asked != null) return asked > cfg.maxRetryAfter ? null : asked;
     final ms = 500 * (1 << host.backoffs.clamp(0, 6));
     host.backoffs++;
     return Duration(milliseconds: ms > 30000 ? 30000 : ms);
@@ -904,9 +927,13 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
 
     requests++;
     final StreamedResponse streamed;
+    final pending = lease.client.send(sent);
     try {
-      streamed = await lease.client.send(sent).timeout(cfg.timeout);
+      streamed = await pending.timeout(cfg.timeout);
     } catch (e, st) {
+      // A send that lands after the timeout still holds a connection until its body is
+      // read, so the abandoned response is drained rather than left to the client's reaper.
+      unawaited(pending.then(_drain, onError: (Object _) {}));
       return transportFailure(host, item, sent.url, e, st);
     }
 
@@ -936,7 +963,9 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
 
     if (status >= 300 && status < 400) return redirect(host, item, sent, res);
     if (status == 429 || status == 503) {
-      pause(host, retryAfter(res, host));
+      final wait = retryAfter(res, host);
+      if (wait == null) return fail(host, item, statusFailed(item, res), StackTrace.current);
+      pause(host, wait);
       if (item.attempt <= cfg.retries) {
         retries++;
         item.attempt++;

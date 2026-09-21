@@ -37,10 +37,24 @@ final class _Line {
 
 final class _YamlParser {
   final List<_Line> lines;
+
+  /// The document as written. A block scalar reads from here, not from [lines]: [lines] has
+  /// had comments stripped and blank lines dropped, and a `|` block keeps both.
+  final List<String> source;
+
   final Map<String, Object?> anchors = {};
   int pos = 0;
 
-  _YamlParser(String source) : lines = _split(source);
+  _YamlParser(String text) : source = _sourceLines(text), lines = _split(text);
+
+  /// The document's lines, with a trailing newline understood as ending the last line
+  /// rather than starting an empty one — which a `|+` block would otherwise keep as a
+  /// blank line that was never written.
+  static List<String> _sourceLines(String text) {
+    final out = text.replaceAll('\r\n', '\n').split('\n');
+    if (out.isNotEmpty && out.last.isEmpty) out.removeLast();
+    return out;
+  }
 
   static List<_Line> _split(String source) {
     final out = <_Line>[];
@@ -67,7 +81,7 @@ final class _YamlParser {
         if (c == q) q = '';
         continue;
       }
-      if (c == '"' || c == "'") {
+      if ((c == '"' || c == "'") && _opensString(line, i)) {
         q = c;
       } else if (c == '#' && (i == 0 || line[i - 1] == ' ' || line[i - 1] == '\t')) {
         return line.substring(0, i);
@@ -76,13 +90,23 @@ final class _YamlParser {
     return line;
   }
 
+  /// Whether the quote at [i] starts a quoted string rather than being an apostrophe.
+  ///
+  /// `name: don't # x` has a `'` in the middle of a word: treating that as an opening quote
+  /// left the string unterminated and kept the comment as part of the value.
+  static bool _opensString(String line, int i) {
+    if (i == 0) return true;
+    return switch (line[i - 1]) {
+      ' ' || '\t' || ':' || '-' || '[' || '{' || ',' || '>' => true,
+      _ => false,
+    };
+  }
+
   Object? parse() {
     final docs = <Object?>[];
-    var sawSeparator = false;
     while (pos < lines.length) {
       final t = lines[pos].text;
       if (t == '---' || t.startsWith('--- ')) {
-        sawSeparator = true;
         if (t.length > 4) {
           lines[pos] = _Line(lines[pos].number, lines[pos].indent, t.substring(4).trim());
         } else {
@@ -102,7 +126,7 @@ final class _YamlParser {
       docs.add(_node(lines[pos].indent));
     }
     if (docs.isEmpty) return null;
-    return docs.length == 1 && !sawSeparator || docs.length == 1 ? docs.single : docs;
+    return docs.length == 1 ? docs.single : docs;
   }
 
   _Line get line => lines[pos];
@@ -227,21 +251,68 @@ final class _YamlParser {
     return sb.toString();
   }
 
+  /// A `|` literal or `>` folded block: the following source lines indented past [indent],
+  /// blank lines and interior spacing included.
   Object? _block(String header, int indent) {
     final folded = header[0] == '>';
     final keep = header.contains('+'), strip = header.contains('-');
-    final buf = <String>[];
-    int? blockIndent;
-    while (pos < lines.length && line.indent > indent - 1 && (blockIndent == null || line.indent >= blockIndent)) {
-      blockIndent ??= line.indent;
-      // Reconstruct relative indentation inside the block.
-      buf.add(' ' * (line.indent - blockIndent) + line.text);
+    // An explicit indentation indicator, as in `|2`.
+    final explicit = int.tryParse(header.replaceAll(RegExp('[|>+-]'), '').trim());
+
+    var blockIndent = explicit == null ? -1 : indent + explicit;
+    final body = <String>[];
+    var row = (pos < lines.length ? lines[pos].number : source.length + 1) - 1;
+    for (; row < source.length; row++) {
+      final text = source[row];
+      if (text.trim().isEmpty) {
+        // A blank line inside the block is content — which is why this reads the source.
+        if (blockIndent != -1) body.add('');
+        continue;
+      }
+      var column = 0;
+      while (column < text.length && text[column] == ' ') {
+        column++;
+      }
+      if (blockIndent == -1) {
+        if (column < indent) break; // dedented before any content: the block is empty
+        blockIndent = column;
+      }
+      if (column < blockIndent) break;
+      body.add(text.substring(blockIndent).trimRight());
+    }
+    while (pos < lines.length && lines[pos].number <= row) {
       pos++;
     }
-    var text = folded ? buf.join(' ').replaceAll(RegExp(r' {2,}'), ' ') : buf.join('\n');
-    if (!strip) text += '\n';
-    if (keep) text += '\n';
-    return text;
+
+    // Trailing blank lines are chomping's business rather than content.
+    var trailing = 0;
+    while (body.isNotEmpty && body.last.isEmpty) {
+      body.removeLast();
+      trailing++;
+    }
+
+    final text = folded ? _fold(body) : body.join('\n');
+    if (strip) return text;
+    return keep ? text + '\n' * (trailing + 1) : '$text\n';
+  }
+
+  /// Folded style: a break between two non-empty lines becomes one space, a blank line
+  /// becomes a newline, and a line indented past the block keeps its own break. Spaces
+  /// inside a line are content and are left alone.
+  static String _fold(List<String> body) {
+    final out = StringBuffer();
+    for (var i = 0; i < body.length; i++) {
+      final text = body[i];
+      if (text.isEmpty) {
+        out.write('\n');
+        continue;
+      }
+      if (i > 0 && body[i - 1].isNotEmpty && out.isNotEmpty) {
+        out.write(text.startsWith(' ') ? '\n' : ' ');
+      }
+      out.write(text);
+    }
+    return out.toString();
   }
 
   Object? _flow(String t) {
@@ -326,6 +397,12 @@ final class _YamlParser {
     });
   }
 
+  static final _int = RegExp(r'^[+-]?\d+$');
+  static final _hex = RegExp(r'^0x[0-9a-fA-F]+$');
+  static final _oct = RegExp(r'^0o[0-7]+$');
+  static final _float = RegExp(r'^[+-]?(\d+\.\d*|\.\d+|\d+)([eE][+-]?\d+)?$');
+  static final _fractional = RegExp(r'[.eE]');
+
   static Object? _plain(String t) {
     switch (t) {
       case '' || '~' || 'null' || 'Null' || 'NULL':
@@ -341,12 +418,10 @@ final class _YamlParser {
       case '.nan' || '.NaN' || '.NAN':
         return double.nan;
     }
-    if (RegExp(r'^[+-]?\d+$').hasMatch(t)) return int.parse(t);
-    if (RegExp(r'^0x[0-9a-fA-F]+$').hasMatch(t)) return int.parse(t.substring(2), radix: 16);
-    if (RegExp(r'^0o[0-7]+$').hasMatch(t)) return int.parse(t.substring(2), radix: 8);
-    if (RegExp(r'^[+-]?(\d+\.\d*|\.\d+|\d+)([eE][+-]?\d+)?$').hasMatch(t) && t.contains(RegExp(r'[.eE]'))) {
-      return double.parse(t);
-    }
+    if (_int.hasMatch(t)) return int.parse(t);
+    if (_hex.hasMatch(t)) return int.parse(t.substring(2), radix: 16);
+    if (_oct.hasMatch(t)) return int.parse(t.substring(2), radix: 8);
+    if (_float.hasMatch(t) && t.contains(_fractional)) return double.parse(t);
     return t;
   }
 }

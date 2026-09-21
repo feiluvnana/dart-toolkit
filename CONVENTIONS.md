@@ -38,13 +38,20 @@ opposite. Coherence, documentation and feature count rank below both.
   second of front-end work per `dart run`.
 - **The native library does what Dart cannot do fast.** `native/` is one Rust `cdylib`,
   `dart_toolkit_native`, prebuilt per platform and loaded through `dart:ffi` by `native.dart`'s
-  `Native`; only `fs` and `crypto` import it, so `dart:ffi` costs a program that uses neither
-  nothing. It holds every digest, MAC, KDF, password hash, cipher, key agreement, signature and
-  archive format; there is no Dart fallback for any of them, because two implementations of one
+  `Native`; only `fs` and `hash` import it, so `dart:ffi` costs a program that uses neither
+  nothing. It holds the digests, MACs and archive formats and nothing else; there is no Dart
+  fallback for any of them, because two implementations of one
   primitive is two places for a bug. Without the library those calls throw `UnsupportedError`
   naming what was needed and why it is absent. Bytes cross as pointer and length, files by path,
-  long work inside `Isolate.run`; no callbacks into Dart. A new primitive is one Rust function
-  behind one `lookupFunction`, plus its published vector in `test/crypto_test.dart`.
+  long work inside `Isolate.run`; no callbacks into Dart. Every function that fills a caller
+  buffer takes its capacity and every entry point is wrapped in `guard`, so neither an overrun
+  nor a panic can cross the ABI; memory comes from the library's own `tk_alloc`, never the host
+  process's `malloc`. A new primitive is one Rust function behind one `lookupFunction`, plus its
+  published vector in `test/hash_test.dart`.
+- **Cryptography beyond hashing is out of scope.** No ciphers, password hashes, key agreement,
+  signatures or JWT. This package automates scripts, and owning that code means owning its
+  failure modes; hashing, HMAC and the encodings stay, because identifying and verifying data
+  is what a script actually does.
 - **A file operation streams.** Hashing, downloading and archiving name the file, not its bytes.
 - **An executable runs through pub's snapshot**: `dart run dart_toolkit:<name>`.
 - **Error policy is chosen at the use site.** `parallelize` and `scrape` settle everything into
@@ -78,4 +85,4 @@ throws still is.
 ## Documentation
 
 One line for the common case; document only what the signature cannot say. Rationale is here;
-the audit trail is `CHANGELOG.md`.
+what each release contains is `CHANGELOG.md`.

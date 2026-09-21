@@ -1,4 +1,4 @@
-part of '../../crypto.dart';
+part of '../../hash.dart';
 
 const _hexDigits = '0123456789abcdef';
 const _b32Alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';

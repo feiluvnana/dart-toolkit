@@ -50,6 +50,14 @@ final class XmlAttribute extends XmlNode {
 
   @override
   String get outerXml => '$name="${_escapeAttr(value)}"';
+
+  /// Two of these are the same attribute when they name the same thing on the same element;
+  /// see [Attribute.operator ==].
+  @override
+  bool operator ==(Object other) => other is XmlAttribute && other.name == name && identical(other.parent, parent);
+
+  @override
+  int get hashCode => Object.hash(identityHashCode(parent), name);
 }
 
 /// An element: a qualified [name], its [attributes], and the [children] inside it.

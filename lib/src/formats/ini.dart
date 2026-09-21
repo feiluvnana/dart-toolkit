@@ -10,10 +10,14 @@ extension StringIniExtensions on String {
   JsonDocument get ini => JsonDocument(_parseIni(this));
 }
 
+final _iniNewline = RegExp(r'\r?\n');
+final _iniAssign = RegExp('[=:]');
+final _iniComment = RegExp(r'\s[;#]');
+
 Map<String, Object?> _parseIni(String text) {
   final root = <String, Object?>{};
   var section = root;
-  for (final raw in text.split(RegExp(r'\r?\n'))) {
+  for (final raw in text.split(_iniNewline)) {
     final line = raw.trim();
     if (line.isEmpty || line.startsWith(';') || line.startsWith('#')) continue;
     if (line.startsWith('[') && line.endsWith(']')) {
@@ -23,7 +27,7 @@ Map<String, Object?> _parseIni(String text) {
       }
       continue;
     }
-    final eq = line.indexOf(RegExp('[=:]'));
+    final eq = line.indexOf(_iniAssign);
     if (eq == -1) {
       section[line] = null;
       continue;
@@ -34,7 +38,7 @@ Map<String, Object?> _parseIni(String text) {
     if (close != -1) {
       value = value.substring(1, close);
     } else {
-      final comment = value.indexOf(RegExp(r'\s[;#]'));
+      final comment = value.indexOf(_iniComment);
       if (comment != -1) value = value.substring(0, comment).trim();
     }
     var target = section;

@@ -20,25 +20,6 @@ digest = "0.10"
 hmac = "0.12"
 crc32c = "0.6"
 xxhash-rust = { version = "0.8", features = ["xxh64", "xxh3"] }
-# KDFs and password hashes
-hkdf = "0.12"
-pbkdf2 = { version = "0.12", features = ["simple", "std"] }
-argon2 = { version = "0.5", features = ["std"] }
-scrypt = "0.11"
-bcrypt = "0.17"
-password-hash = { version = "0.5", features = ["std"] }
-rand_core = { version = "0.6", features = ["getrandom"] }
-# ciphers
-aes-gcm = "0.10"
-chacha20poly1305 = "0.10"
-aes = "0.8"
-cbc = { version = "0.1", features = ["alloc"] }
-# signatures and key agreement
-ed25519-dalek = { version = "2", features = ["rand_core", "pkcs8", "pem"] }
-p256 = { version = "0.13", features = ["ecdsa", "ecdh", "pem"] }
-x25519-dalek = { version = "2", features = ["static_secrets"] }
-rsa = { version = "0.9", features = ["sha2", "pem"] }
-signature = "2"
 # archives
 zip = { version = "2", default-features = false, features = ["deflate", "bzip2", "zstd", "aes-crypto", "time"] }
 sevenz-rust2 = { version = "0.13", default-features = false, features = ["compress", "aes256", "bzip2", "util"] }

@@ -8,9 +8,6 @@ part of '../../cli.dart';
 class Ansi {
   static bool? _override;
 
-  /// Global regex pattern for matching ANSI escape sequences.
-  static final RegExp escapePattern = RegExp(r'\x1B\[[0-?]*[ -/]*[@-~]');
-
   /// Whether ANSI styling is enabled.
   ///
   /// Resolution order: an explicit [enabled] override, then `NO_COLOR`, then the

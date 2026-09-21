@@ -84,9 +84,52 @@ final class _Ctx<N extends Object> {
   final XPathTree<N> tree;
   final N document;
 
-  const _Ctx(this.node, this.position, this.size, this.tree, this.document);
+  /// Shared with every context this one spawns, so [order] is built once per query.
+  final _Order<N> _shared;
 
-  _Ctx<N> at(N n, int position, int size) => _Ctx(n, position, size, tree, document);
+  _Ctx(this.node, this.position, this.size, this.tree, this.document) : _shared = _Order<N>();
+
+  _Ctx._(this.node, this.position, this.size, this.tree, this.document, this._shared);
+
+  _Ctx<N> at(N n, int position, int size) => _Ctx._(n, position, size, tree, document, _shared);
+
+  /// Every node's position in document order, built once per query; see [_Order].
+  Map<N, int> get order => _shared.of(this);
+}
+
+/// Document order, shared by every context in one query.
+///
+/// Every node in the tree gets a position, attributes included — which means allocating an
+/// attribute node per attribute to key the map with, and is why the walk is worth doing at
+/// most once per query however many unions and predicates need to sort.
+///
+/// Two cheaper-looking shapes were tried and are both slower, measured: computing a
+/// (owner, slot) key inside the comparator (no attribute nodes allocated, but four map
+/// lookups per comparison instead of one), and the same key precomputed per node (one small
+/// map per owning element — thousands of tiny allocations for one large one). The one big
+/// map wins; see `audit/bench5.dart`.
+final class _Order<N extends Object> {
+  Map<N, int>? _map;
+
+  Map<N, int> of(_Ctx<N> c) => _map ??= () {
+    final order = <N, int>{};
+    var i = 0;
+    void walk(N n) {
+      order[n] = i++;
+      final attrs = c.tree.attributes(n);
+      if (attrs != null) {
+        for (final MapEntry(:key, :value) in attrs.entries) {
+          order[c.tree.attribute(n, key, value)] = i++;
+        }
+      }
+      for (final child in c.tree.children(n)) {
+        walk(child);
+      }
+    }
+
+    walk(c.document);
+    return order;
+  }();
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -134,7 +177,7 @@ final class _XPathExpr extends _XNode {
     // Child, self and attribute steps keep document order; after any other axis the
     // per-context results interleave and the set is put back in order.
     if (current.length > 1 && (steps.length > 1 || filter != null) && steps.any((s) => !_ordered.contains(s.axis))) {
-      final order = _documentOrder(c);
+      final order = c.order;
       current.sort((x, y) => (order[x] ?? -1).compareTo(order[y] ?? -1));
     }
     return current;
@@ -155,7 +198,7 @@ final class _Filter extends _XNode {
     if (v is! List<N>) throw const FormatException('A predicate needs a node-set');
     var nodes = v;
     if (nodes.length > 1) {
-      final order = _documentOrder(c);
+      final order = c.order;
       nodes = nodes.toList()..sort((x, y) => (order[x] ?? -1).compareTo(order[y] ?? -1));
     }
     for (final p in predicates) {
@@ -170,26 +213,6 @@ final class _Filter extends _XNode {
   }
 }
 
-Map<N, int> _documentOrder<N extends Object>(_Ctx<N> c) {
-  final order = <N, int>{};
-  var i = 0;
-  void walk(N n) {
-    order[n] = i++;
-    final attrs = c.tree.attributes(n);
-    if (attrs != null) {
-      for (final MapEntry(:key, :value) in attrs.entries) {
-        order[c.tree.attribute(n, key, value)] = i++;
-      }
-    }
-    for (final child in c.tree.children(n)) {
-      walk(child);
-    }
-  }
-
-  walk(c.document);
-  return order;
-}
-
 final class _Union extends _XNode {
   final _XNode left, right;
   const _Union(this.left, this.right);
@@ -197,7 +220,7 @@ final class _Union extends _XNode {
   Object eval<N extends Object>(_Ctx<N> c) {
     final a = left.eval(c), b = right.eval(c);
     if (a is! List<N> || b is! List<N>) throw const FormatException('| needs node-sets on both sides');
-    final order = _documentOrder(c);
+    final order = c.order;
     return <N>{...a, ...b}.toList()..sort((x, y) => (order[x] ?? -1).compareTo(order[y] ?? -1));
   }
 }
@@ -462,6 +485,10 @@ String _stringOf<N extends Object>(XPathTree<N> t, Object v) =>
 
 const _nodeTypeTests = {'text', 'node', 'comment', 'processing-instruction'};
 
+/// Prefix for a name test that must never match. Written as an escape on purpose: as a raw
+/// byte it made this file binary to `grep`, `ripgrep` and code search.
+const _unmatchable = '\x00';
+
 final class _XPathParser {
   final String s;
   int i = 0;
@@ -694,7 +721,9 @@ final class _XPathParser {
             ? null
             : name == 'text'
             ? 'text()'
-            : ' $name';
+            // comment() and processing-instruction() parse but match nothing: the parsers
+            // keep neither kind of node. The sentinel is a name no element can have.
+            : '$_unmatchable$name';
       } else if (name.endsWith(':') && _take('*')) {
         test = '$name*';
       } else {

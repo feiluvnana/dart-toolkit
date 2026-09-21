@@ -4,9 +4,12 @@ part of '../../formats.dart';
 ///
 /// {@category Formats}
 extension StringTomlExtensions on String {
-  /// This TOML 1.0 text as a document: tables and arrays of tables become nested objects and
+  /// This TOML text as a document: tables and arrays of tables become nested objects and
   /// arrays, dotted keys nest, strings of all four kinds decode, numbers and booleans are
   /// themselves, dates and times stay text.
+  ///
+  /// Covers TOML 1.0 as scripts use it, checked by `test/formats_test.dart` rather than
+  /// against the specification's own suite: redefining a table is not detected.
   ///
   /// Throws [FormatException] with a line number on bad syntax.
   JsonDocument get toml => JsonDocument(_TomlParser(this).parse());
@@ -128,6 +131,10 @@ final class _TomlParser {
     return k >= s.length || s[k] == '#' || s[k] == '\n' || s[k] == '\r' || s[k] == ',' || s[k] == ']' || s[k] == '}';
   }
 
+  static final _int = RegExp(r'^[+-]?\d+$');
+  static final _float = RegExp(r'^[+-]?(\d+\.\d+([eE][+-]?\d+)?|\d+[eE][+-]?\d+)$');
+  static final _dateOrTime = RegExp(r'^\d{4}-\d\d-\d\d|^\d\d:\d\d:\d\d');
+
   Object? _literal(String t) {
     switch (t) {
       case 'true':
@@ -142,12 +149,12 @@ final class _TomlParser {
         return double.nan;
     }
     final plain = t.replaceAll('_', '');
-    if (RegExp(r'^[+-]?\d+$').hasMatch(plain)) return int.parse(plain);
+    if (_int.hasMatch(plain)) return int.parse(plain);
     if (plain.startsWith('0x')) return int.parse(plain.substring(2), radix: 16);
     if (plain.startsWith('0o')) return int.parse(plain.substring(2), radix: 8);
     if (plain.startsWith('0b')) return int.parse(plain.substring(2), radix: 2);
-    if (RegExp(r'^[+-]?(\d+\.\d+([eE][+-]?\d+)?|\d+[eE][+-]?\d+)$').hasMatch(plain)) return double.parse(plain);
-    if (RegExp(r'^\d{4}-\d\d-\d\d|^\d\d:\d\d:\d\d').hasMatch(t)) return t; // dates and times stay text
+    if (_float.hasMatch(plain)) return double.parse(plain);
+    if (_dateOrTime.hasMatch(t)) return t; // dates and times stay text
     throw _error('Not a TOML value: $t');
   }
 

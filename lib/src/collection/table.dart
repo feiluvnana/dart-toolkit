@@ -77,6 +77,7 @@ final class Table {
   /// A table from CSV text (RFC 4180: quoted fields, doubled quotes, newlines inside quotes).
   /// The first record names the columns; every value is a [String].
   factory Table.csv(String text, {String separator = ','}) {
+    _oneChar(separator);
     final records = _parseCsv(text, separator);
     if (records.isEmpty) return Table(const [], const []);
     final header = records.first;
@@ -97,7 +98,17 @@ final class Table {
         if (jsonDecode(line) case final Map<Object?, Object?> m) {for (final e in m.entries) '${e.key}': e.value},
   ]);
 
-  static Row _copy(Map<String, Object?> r) => Map<String, Object?>.of(r);
+  /// The scanner reads a separator byte at a time, so a longer one would silently match on
+  /// its first character alone.
+  static void _oneChar(String separator) {
+    if (separator.length != 1) {
+      throw ArgumentError.value(separator, 'separator', 'must be exactly one character');
+    }
+  }
+
+  /// Rows are frozen on the way in, so the documented immutability is real: a write
+  /// through `table.rows` would otherwise change this table and every table derived from it.
+  static Row _copy(Map<String, Object?> r) => Map<String, Object?>.unmodifiable(r);
 
   /// The rows as a query.
   Sequence<Row> get sequence => rows.sequence;
@@ -148,7 +159,7 @@ final class Table {
 
   /// Only [names], in that order.
   Table select(List<String> names) => Table._(List.unmodifiable(names), [
-    for (final r in rows) {for (final n in names) n: r[n]},
+    for (final r in rows) _copy({for (final n in names) n: r[n]}),
   ], const []);
 
   /// Every column but [names].
@@ -159,13 +170,13 @@ final class Table {
 
   /// Columns renamed by [names], old to new.
   Table rename(Map<String, String> names) => Table._(List.unmodifiable([for (final c in columns) names[c] ?? c]), [
-    for (final r in rows) {for (final MapEntry(:key, :value) in r.entries) names[key] ?? key: value},
+    for (final r in rows) _copy({for (final MapEntry(:key, :value) in r.entries) names[key] ?? key: value}),
   ], const []);
 
   /// A new column [name] computed from each row.
   Table derive(String name, Object? Function(Row row) value) =>
       Table._(List.unmodifiable([...columns.where((c) => c != name), name]), [
-        for (final r in rows) {...r, name: value(r)},
+        for (final r in rows) _copy({...r, name: value(r)}),
       ], const []);
 
   /// One row per distinct combination of [by] (every column when omitted); the first wins.
@@ -197,11 +208,11 @@ final class Table {
     for (final r in rows) {
       final matches = index[_Key([r[on]])];
       if (matches == null) {
-        if (left) out.add({...r, for (final c in rightColumns.values) c: null});
+        if (left) out.add(_copy({...r, for (final c in rightColumns.values) c: null}));
         continue;
       }
       for (final m in matches) {
-        out.add({...r, for (final MapEntry(:key, :value) in rightColumns.entries) value: m[key]});
+        out.add(_copy({...r, for (final MapEntry(:key, :value) in rightColumns.entries) value: m[key]}));
       }
     }
     return Table._(List.unmodifiable([...columns, ...rightColumns.values]), out, const []);
@@ -224,13 +235,14 @@ final class Table {
       for (final c in columnValues) {
         row[c] = _foldCells(agg, [for (final r in byColumn[c] ?? const <Row>[]) r[value]]);
       }
-      out.add(row);
+      out.add(_copy(row));
     }
     return Table._(List.unmodifiable([rows, ...columnValues]), out, const []);
   }
 
   /// CSV text with a header row; fields are quoted when they need it.
   String toCsv({String separator = ','}) {
+    _oneChar(separator);
     String cell(Object? v) {
       final s = v == null ? '' : '$v';
       final needsQuote = s.contains(separator) || s.contains('"') || s.contains('\n') || s.contains('\r');
@@ -323,10 +335,10 @@ final class TableGroups {
   Table _fold(Map<String, Object? Function(List<Row> rows)> folds) =>
       Table._(List.unmodifiable([..._keys, ...folds.keys]), [
         for (final MapEntry(key: k, value: rows) in _groups.entries)
-          {
+          Table._copy({
             for (var i = 0; i < _keys.length; i++) _keys[i]: k.parts[i],
             for (final MapEntry(key: name, value: f) in folds.entries) name: f(rows),
-          },
+          }),
       ], const []);
 }
 

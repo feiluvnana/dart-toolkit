@@ -50,6 +50,17 @@ final class Attribute extends Node {
 
   @override
   String get outerHtml => '$name="${_escapeAttribute(value)}"';
+
+  /// Two of these are the same attribute when they name the same thing on the same element.
+  ///
+  /// An `@href` step and a document-order walk each mint their own instance for one
+  /// attribute, and the sets and maps that de-duplicate and order a node-set have to see
+  /// those as one node — otherwise a union repeats attributes and cannot sort them.
+  @override
+  bool operator ==(Object other) => other is Attribute && other.name == name && identical(other.parent, parent);
+
+  @override
+  int get hashCode => Object.hash(identityHashCode(parent), name);
 }
 
 /// An element: a lowercase [name], its [attributes], and the [nodes] inside it.
@@ -102,6 +113,10 @@ final class Element extends Node {
   }
 
   /// Text lines split at `<br>` and newlines, _entities decoded, tags dropped, blanks removed.
+  ///
+  /// A non-breaking space counts as a space here, unlike in [text]: these are lines meant to
+  /// be read, while [text] is the node's string value and has to stay faithful — XPath's
+  /// `string()` and every predicate comparison go through it.
   List<String> get lines {
     final out = <String>[];
     final current = StringBuffer();
@@ -327,33 +342,26 @@ const _htmlTree = _HtmlTree();
 
 /// Decodes `&amp;`, `&#38;`, `&#x26;` and the HTML 4 named references in [text].
 String decodeEntities(String text) {
-  final amp = text.indexOf('&');
+  var amp = text.indexOf('&');
   if (amp == -1) return text;
-  final sb = StringBuffer(text.substring(0, amp));
-  var i = amp;
-  while (i < text.length) {
-    final c = text.codeUnitAt(i);
-    if (c != 0x26) {
-      sb.writeCharCode(c);
-      i++;
-      continue;
-    }
-    final end = _referenceEnd(text, i + 1);
-    if (end == -1) {
-      sb.write('&');
-      i++;
-      continue;
-    }
-    final name = text.substring(i + 1, end);
-    final decoded = _reference(name);
+  // The run between two references is copied in one go. Walking it code unit at a time
+  // costs about four times as much, and most text has far more prose than entities.
+  final sb = StringBuffer();
+  var last = 0;
+  while (amp != -1) {
+    final end = _referenceEnd(text, amp + 1);
+    final decoded = end == -1 ? null : _reference(text.substring(amp + 1, end));
     if (decoded == null) {
-      sb.write('&');
-      i++;
+      amp = text.indexOf('&', amp + 1);
       continue;
     }
-    sb.write(decoded);
-    i = end + (end < text.length && text.codeUnitAt(end) == 0x3b ? 1 : 0);
+    sb
+      ..write(text.substring(last, amp))
+      ..write(decoded);
+    last = end + (end < text.length && text.codeUnitAt(end) == 0x3b ? 1 : 0);
+    amp = text.indexOf('&', last);
   }
+  sb.write(text.substring(last));
   return sb.toString();
 }
 
@@ -388,6 +396,14 @@ String _escapeText(String text) => text.replaceAll('&', '&amp;').replaceAll('<',
 /// [value] with `&` and `"` escaped for a double-quoted attribute.
 String _escapeAttribute(String value) => value.replaceAll('&', '&amp;').replaceAll('"', '&quot;');
 
+/// The nearest ancestor of [e] named [name], or `null`.
+Element? _closest(Element e, String name) {
+  for (var p = e.parent; p != null; p = p.parent) {
+    if (p.name == name) return p;
+  }
+  return null;
+}
+
 /// An HTML `<table>` as a [Table].
 ///
 /// {@category Formats}
@@ -399,9 +415,17 @@ extension ElementTableExtensions on Element {
     if (t == null) return Table(const [], const []);
     var header = <String>[];
     final body = <List<String>>[];
-    for (final tr in t.$('tr')) {
-      final ths = tr.$('th');
-      final tds = tr.$('td');
+    // Scoped by nearest enclosing table and row: `$` searches the whole subtree, so a
+    // nested table would otherwise contribute its rows and cells to this one.
+    for (final tr in t.$('tr').where((tr) => _closest(tr, 'table') == t)) {
+      final ths = [
+        for (final th in tr.$('th'))
+          if (_closest(th, 'tr') == tr) th,
+      ];
+      final tds = [
+        for (final td in tr.$('td'))
+          if (_closest(td, 'tr') == tr) td,
+      ];
       if (header.isEmpty && ths.isNotEmpty && tds.isEmpty) {
         header = [for (final th in ths) th.text.trim()];
       } else if (tds.isNotEmpty) {

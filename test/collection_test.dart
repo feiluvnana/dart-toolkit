@@ -269,4 +269,47 @@ void main() {
       }
     });
   });
+
+  group('Table immutability and input validation', () {
+    test('a table cannot be edited through its rows', () {
+      final t = Table(
+        ['x'],
+        [
+          {'x': 1},
+        ],
+      );
+      expect(() => t.rows.first['x'] = 99, throwsUnsupportedError);
+      expect(t['x'].first, 1);
+    });
+
+    test('rows stay frozen through the operations that build new ones', () {
+      final t = Table(
+        ['x'],
+        [
+          {'x': 1},
+        ],
+      );
+      for (final derived in [
+        t.select(['x']),
+        t.derive('y', (r) => 2),
+        t.rename({'x': 'z'}),
+      ]) {
+        expect(() => derived.rows.first[derived.columns.first] = 0, throwsUnsupportedError);
+      }
+    });
+
+    test('a separator longer than one character is refused, not silently truncated', () {
+      expect(() => Table.csv('a||b\n1||2\n', separator: '||'), throwsArgumentError);
+      expect(
+        () => Table(
+          ['a'],
+          [
+            {'a': 1},
+          ],
+        ).toCsv(separator: '||'),
+        throwsArgumentError,
+      );
+      expect(Table.csv('a;b\n1;2\n', separator: ';').columns, ['a', 'b']);
+    });
+  });
 }

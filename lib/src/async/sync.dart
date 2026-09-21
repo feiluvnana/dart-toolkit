@@ -4,11 +4,10 @@ part of '../../async.dart';
 ///
 /// {@category Concurrency}
 class Semaphore {
-  final int maxPermits;
   int _currentPermits;
   final _waiters = Queue<Completer<void>>();
 
-  Semaphore(int permits) : maxPermits = permits > 0 ? permits : 1, _currentPermits = permits > 0 ? permits : 1;
+  Semaphore(int permits) : _currentPermits = permits > 0 ? permits : 1;
 
   /// Number of currently available permits.
   int get permits => _currentPermits;
@@ -59,9 +58,6 @@ class Permit {
   bool _released = false;
 
   Permit._(this._semaphore);
-
-  /// Whether this permit has been released.
-  bool get isReleased => _released;
 
   /// Releases the permit back to its semaphore. Safe and idempotent to call multiple times.
   void release() {

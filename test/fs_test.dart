@@ -513,4 +513,21 @@ void main() {
       expect(byPath[p2.normalized], equals(1));
     });
   });
+
+  group('move validates before it creates', () {
+    test('moving a file that is not there leaves no directories behind', () async {
+      final dir = Directory.systemTemp.createTempSync('move_');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      await expectLater(
+        () => '${dir.path}/absent.txt'.path.move('${dir.path}/made/up/here.txt'),
+        throwsA(isA<FileSystemException>()),
+      );
+      expect(Directory('${dir.path}/made').existsSync(), isFalse);
+      expect(
+        () => '${dir.path}/absent.txt'.path.moveSync('${dir.path}/also/here.txt'),
+        throwsA(isA<FileSystemException>()),
+      );
+      expect(Directory('${dir.path}/also').existsSync(), isFalse);
+    });
+  });
 }

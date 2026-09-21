@@ -833,4 +833,30 @@ void main() {
       expect(out.toString().trim().split('\n').length, lessThanOrEqualTo(11), reason: 'one line per tenth');
     });
   });
+
+  group('Logger scoping', () {
+    test('silencing one task does not silence a concurrent one', () async {
+      final out = StringBuffer();
+      Io.out = out;
+      addTearDown(Io.reset);
+      await Future.wait([
+        Logger.silenced(() async => await Future<void>.delayed(const Duration(milliseconds: 20))),
+        Future(() async {
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+          Logger.info('concurrent');
+        }),
+      ]);
+      expect(out.toString(), contains('concurrent'));
+    });
+
+    test('silenced suppresses its own body and restores afterwards', () async {
+      final out = StringBuffer();
+      Io.out = out;
+      addTearDown(Io.reset);
+      await Logger.silenced(() async => Logger.info('hidden'));
+      Logger.info('shown');
+      expect(out.toString(), isNot(contains('hidden')));
+      expect(out.toString(), contains('shown'));
+    });
+  });
 }
