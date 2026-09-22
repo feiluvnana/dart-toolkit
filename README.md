@@ -464,7 +464,9 @@ of records.
 
 `ChromeClient` speaks the DevTools protocol over a websocket — no third-party package and no
 Chromium download: `launch()` finds the Chrome already installed and runs it headless,
-`attach(port:)` joins one already running, and `connect()` does whichever is needed. The page
+`attach(port:)` joins one already running, and `connect()` does whichever is needed.
+`launch(profile:)` keeps the cookies and the login between runs while still owning the process,
+and a profile can only be open in one browser at a time. The page
 arrives as the DOM **after its own scripts have run**, in `Response.bytes`, so `res.html`, `$`,
 `$x` and the whole scrape engine work over it unchanged:
 

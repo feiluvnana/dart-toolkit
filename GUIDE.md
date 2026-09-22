@@ -887,10 +887,15 @@ Chromium download. The page arrives as the DOM **after its own scripts have run*
 Three ways in, for three situations:
 
 ```dart
-await ChromeClient.launch();          // a fresh headless browser, dead with the client
+await ChromeClient.launch();           // a fresh headless browser, dead with the client
 await ChromeClient.attach(port: 9222); // join one already running; never killed
 await ChromeClient.connect();          // attach if there is one, else start one that outlives the run
 ```
+
+`launch(profile:)` is the fourth shape: a browser this client owns and kills, that still keeps
+its cookies and its login between runs. Who owns the process and what the browser remembers
+are independent, and both constructors that start one take both. A profile can only be open in
+one browser at a time, so two runs at once on the same one is an error that says so.
 
 `connect()` is the one for a script that is run again and again: it keeps one browser and one
 profile across runs (`~/.dart_toolkit/chrome` unless another is named), so a site you logged

@@ -287,6 +287,11 @@ final class ChromeClient implements Client {
 
   /// Starts a headless Chrome of its own and connects to it.
   ///
+  /// [profile] is a user-data directory to keep, which makes this a browser that remembers —
+  /// the same cookies and the same login on every run, as [connect]'s does — while the process
+  /// still dies with the client. Without one the profile is temporary and erased on [close],
+  /// which is what makes a plain `launch` a browser that has never been anywhere.
+  ///
   /// [executable] defaults to `CHROME_PATH` and then to the usual install locations of
   /// Chrome, Chromium and Edge. [tabs] is how many pages render at once — the crawl's
   /// `concurrency` is the engine's budget, this is the browser's. [wait] is the default
@@ -312,6 +317,7 @@ final class ChromeClient implements Client {
   /// unless it was supplied. One supplied here is used as it is, proxy and all.
   static Future<ChromeClient> launch({
     String? executable,
+    Path? profile,
     bool headless = true,
     int tabs = 4,
     Duration timeout = const Duration(seconds: 30),
@@ -328,11 +334,20 @@ final class ChromeClient implements Client {
     if (binary == null) {
       throw const ClientException('No Chrome found. Install Chrome or Chromium, set CHROME_PATH, or pass executable:.');
     }
-    final profile = await Directory.systemTemp.createTemp('dart_toolkit_chrome_');
+    // A profile of its own is a browser that remembers: the same cookies, the same login, run
+    // after run. Without one it is a temporary directory, which is what makes a plain `launch`
+    // a browser that has never been anywhere.
+    final own = profile == null ? null : Directory(profile.absolute.path);
+    await own?.create(recursive: true);
+    final dir = own ?? await Directory.systemTemp.createTemp('dart_toolkit_chrome_');
+    // A kept profile still holds the last run's `DevToolsActivePort`, and that file is how the
+    // port is found: left there, this connects to whatever used to be listening and is
+    // refused. A temporary profile never has one, which is why `launch` never needed this.
+    if (own != null) await File('${dir.path}/DevToolsActivePort').delete().catchError((Object _) => File(''));
     final process = await Process.start(binary, [
       if (headless) '--headless=new',
       '--remote-debugging-port=0',
-      '--user-data-dir=${profile.path}',
+      '--user-data-dir=${dir.path}',
       '--no-first-run',
       '--no-default-browser-check',
       '--disable-background-networking',
@@ -347,7 +362,7 @@ final class ChromeClient implements Client {
       'about:blank',
     ]);
     try {
-      final endpoint = await _activePort(profile, process, timeout);
+      final endpoint = await _activePort(dir, process, timeout);
       return ChromeClient._(
         await WebSocket.connect(endpoint.toString()),
         assets: assets ?? IoClient(proxy: proxy),
@@ -362,11 +377,24 @@ final class ChromeClient implements Client {
         stealth: stealth,
         block: block,
         process: process,
-        profile: profile,
+        // Only a directory this made is a directory this may delete.
+        profile: own == null ? dir : null,
       );
     } catch (_) {
       process.kill();
-      await _erase(profile);
+      if (own == null) await _erase(dir);
+      // A profile can only be open in one browser at a time: a second Chrome told to use one
+      // that is taken hands its command line to the first and exits at once, which arrives
+      // here as a browser that was never ready. Saying only that sends the reader looking at
+      // the wrong thing — the proxy, the binary, the timeout — so say which it is.
+      if (own != null) {
+        if (await _heldBy(own) case final holder?) {
+          throw ClientException(
+            'Chrome will not start on ${own.path}: $holder is already using that profile. '
+            'Quit it, wait for the other run to finish, or give this one a profile of its own.',
+          );
+        }
+      }
       rethrow;
     }
   }
@@ -1742,6 +1770,22 @@ String? _chrome() {
     if (File(candidate).existsSync()) return candidate;
   }
   return null;
+}
+
+/// Who holds [profile], as Chrome's own lock records it, or `null` when nothing does.
+///
+/// The lock is a symlink named `SingletonLock` pointing at `<host>-<pid>`. It is read rather
+/// than removed: a lock with a live browser behind it is not this program's to break.
+Future<String?> _heldBy(Directory profile) async {
+  final lock = Link('${profile.path}/SingletonLock');
+  try {
+    if (!await lock.exists()) return null;
+    final target = await lock.target();
+    final pid = int.tryParse(target.split('-').last);
+    return pid == null ? 'another browser' : 'a browser (pid $pid)';
+  } catch (_) {
+    return 'another browser';
+  }
 }
 
 /// Chrome writes the port it actually took, and the browser's websocket path, into the

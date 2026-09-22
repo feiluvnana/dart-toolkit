@@ -601,6 +601,49 @@ void main() {
       expect(seen, contains('/asset'), reason: 'the download went around it');
     }, skip: absent);
 
+    test('a launched browser can keep its profile, and only one may hold it', () async {
+      final dir = await Directory.systemTemp.createTemp('tk_profile_');
+      addTearDown(() => dir.delete(recursive: true));
+      final profile = dir.path.path / 'chrome';
+
+      final first = await ChromeClient.launch(profile: profile, tabs: 1);
+      final page = await first.open(base.resolve('/rendered'));
+      await page.cookies([
+        // Dated, not a session cookie: a session cookie is one a browser is *meant* to forget
+        // when it closes, so it would prove nothing about the profile.
+        Cookie('remembered', 'yes')
+          ..domain = base.host
+          ..path = '/'
+          ..expires = DateTime.now().toUtc().add(const Duration(days: 1)),
+      ]);
+      await page.close();
+
+      // A second browser on the same profile is refused, and says which it is rather than
+      // leaving the reader to suspect the proxy, the binary or the timeout.
+      await expectLater(
+        ChromeClient.launch(profile: profile, tabs: 1),
+        throwsA(
+          isA<ClientException>().having((e) => e.message, 'message', allOf(contains(profile), contains('profile'))),
+        ),
+      );
+      await first.close();
+
+      // ...and once it lets go, the same profile is the same browser: the cookie is still there.
+      final second = await ChromeClient.launch(profile: profile, tabs: 1);
+      try {
+        final again = await second.open(base.resolve('/rendered'));
+        expect(
+          (await again.cookies()).map((c) => '${c.name}=${c.value}'),
+          contains('remembered=yes'),
+          reason: 'a kept profile is what makes a login survive the run',
+        );
+        await again.close();
+      } finally {
+        await second.close();
+      }
+      expect(Directory(profile).existsSync(), isTrue, reason: 'a profile that was given is not erased');
+    }, skip: absent);
+
     test('a crawl runs on a client held rather than scoped', () async {
       final seen = <String>[];
       await browser

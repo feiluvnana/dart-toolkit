@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### A launched browser can remember
+
+- **Added: `ChromeClient.launch(profile:)`** — a user-data directory to keep, so a browser this
+  client owns and kills still has the same cookies and the same login on every run. `connect`
+  had `profile:` and `launch` did not, which is a grid with a hole in it: the two settings are
+  independent, one being *who owns the process* and the other *what the browser remembers*.
+  Without one the profile is temporary and erased on `close`, exactly as before.
+- **A profile can only be open in one browser at a time**, and a second Chrome told to use a
+  taken one hands over its command line and exits at once — which arrived as
+  `Chrome exited before it was ready` and sent the reader looking at the proxy, the binary or
+  the timeout. It now reads the profile's own lock and names what holds it:
+  `a browser (pid 28318) is already using that profile`.
+- **A kept profile's stale `DevToolsActivePort` is cleared before starting.** The file is how
+  the port is found, and last run's copy points at whatever used to be listening, so the very
+  first `launch(profile:)` of a second run connected to a dead port and was refused. A
+  temporary profile never has one, which is why `launch` had never needed this.
+
 ### The browser goes through the proxy, and so do its downloads
 
 - **Fixed: `IoClient(proxy:)` with credentials never authenticated.** Credentials were
