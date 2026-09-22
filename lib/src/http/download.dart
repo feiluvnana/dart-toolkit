@@ -182,7 +182,7 @@ extension PathDownloadExtensions on Path {
   /// and nothing has to be wrapped in a map to be reported.
   ///
   /// Writes `<name>.part` and renames on success, verifies `Content-Length`, and stops on
-  /// the enclosing [Cancel.session]. A failed or cancelled transfer keeps its `.part`; the next
+  /// the enclosing [Cancel.scope]. A failed or cancelled transfer keeps its `.part`; the next
   /// download of the same path resumes it with a `Range` request when [resume] is set, and
   /// starts over when the server does not honour the range. The per-file state is
   /// [BatchDownloadProgress.current].
@@ -232,7 +232,9 @@ extension PathDownloadExtensions on Path {
 
     try {
       var offset = resume && await partFile.exists() ? await partFile.length() : 0;
-      final request = Request('GET', url, headers: headers);
+      // A download wants the resource, so it says so: a client that renders pages hands
+      // this to plain HTTP instead of building a DOM out of a zip. See [Request.raw].
+      final request = Request('GET', url, headers: headers)..[Request.raw] = true;
       if (offset > 0) request.headers['range'] = 'bytes=$offset-';
       // Only against a destination already in place: a half-written `.part` says nothing
       // about when the whole file was last changed.
@@ -251,7 +253,7 @@ extension PathDownloadExtensions on Path {
         // The part is not a prefix of what the server has now; start over.
         _drain(streamed);
         offset = 0;
-        streamed = await lease.client.send(Request('GET', url, headers: headers));
+        streamed = await lease.client.send(Request('GET', url, headers: headers)..[Request.raw] = true);
       }
       if (!streamed.isOk && streamed.statusCode != 206) {
         // Close the body instead of holding the connection until GC.

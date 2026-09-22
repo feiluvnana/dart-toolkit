@@ -465,8 +465,8 @@ final class Scrape<T> extends StreamView<Either<ScrapeFailure, T>> {
 
   Scrape._(this._hooks, StreamController<Either<ScrapeFailure, T>> controller) : super(controller.stream);
 
-  factory Scrape._of(Iterable<Request> seeds) {
-    final hooks = _Hooks<T>(seeds.toList());
+  factory Scrape._of(Iterable<Request> seeds, {Client? client}) {
+    final hooks = _Hooks<T>(seeds.toList(), client: client);
     late final StreamController<Either<ScrapeFailure, T>> controller;
     controller = StreamController(onListen: () => _run(hooks, controller));
     return Scrape._(hooks, controller);
@@ -529,16 +529,22 @@ extension IterableRequestScrapeExtensions on Iterable<Request> {
 
 final class _Hooks<T> {
   final List<Request> seeds;
+
+  /// The client this crawl was started on, when it was started from one
+  /// ([ClientExtensions.scrape]) rather than inside an [Http.scope]. A crawl cannot read the
+  /// ambient client at construction — `onListen` runs in the listener's zone, not the
+  /// builder's — so a held client travels here instead.
+  final Client? client;
   InitHook<T>? onInit;
   RequestHook? onRequest;
   ResponseHook<T>? onResponse;
   ErrorHook<T>? onError;
   FinishHook? onFinish;
 
-  _Hooks(this.seeds);
+  _Hooks(this.seeds, {this.client});
 }
 
-/// Sent unless the request, [Scrape.onRequest] or the session names one.
+/// Sent unless the request, [Scrape.onRequest] or the scope names one.
 const _userAgent = 'dart-toolkit';
 
 /// Identity of a request for deduplication. The body is hashed rather than kept: the set
@@ -629,8 +635,8 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
   if (cfg.retries < 0) cfg.retries = 0;
   if (cfg.redirects < 0) cfg.redirects = 0;
   final started = DateTime.now();
-  final lease = _clientFor();
-  final sessionHasUserAgent = lease.headers?.keys.any((k) => k.toLowerCase() == 'user-agent') ?? false;
+  final lease = hooks.client == null ? _clientFor() : _ClientLease(hooks.client!, false);
+  final scopeHasUserAgent = lease.headers?.keys.any((k) => k.toLowerCase() == 'user-agent') ?? false;
 
   final seedHosts = <String>{for (final s in cfg._seeds) _site(s.url.host)};
   final inScope = cfg.scope ?? (Uri url) => seedHosts.contains(_site(url.host));
@@ -970,7 +976,7 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
 
   Future<void> execute(_Host<T> host, _Item<T> item) async {
     final sent = _clone(item.request);
-    if (!sessionHasUserAgent) sent.headers.putIfAbsent('user-agent', () => _userAgent);
+    if (!scopeHasUserAgent) sent.headers.putIfAbsent('user-agent', () => _userAgent);
 
     if (cfg.robots) {
       final rules = await robotsFor(host, sent.url);

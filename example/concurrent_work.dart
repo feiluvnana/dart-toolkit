@@ -10,18 +10,18 @@ Future<void> main() async {
   // Four in flight. Every outcome comes back in input order, and one failure never throws:
   // the result is a list of Either, so the caller decides what a failure means.
   final settled = await ids.parallelize(score, concurrency: 4);
-  Logger.info('${settled.rights.length} ok, ${settled.lefts.length} failed');
-  Logger.warn('first failure: ${settled.lefts.first}');
+  Console.info('${settled.rights.length} ok, ${settled.lefts.length} failed');
+  Console.warn('first failure: ${settled.lefts.first}');
 
   // Same call, three policies.
-  Logger.info('discard failures: ${settled.rights.take(4).join(', ')}…');
-  Logger.info('inspect them:     ${settled.lefts.map((e) => '$e').join(' / ')}');
+  Console.info('discard failures: ${settled.rights.take(4).join(', ')}…');
+  Console.info('inspect them:     ${settled.lefts.map((e) => '$e').join(' / ')}');
   try {
     settled.unwrap();
   } on Flaky catch (e) {
     // unwrap rethrows the original error, with the stack trace it was caught with — not a
     // wrapper type. Catch what the worker throws.
-    Logger.info('or throw the first: $e');
+    Console.info('or throw the first: $e');
   }
 
   Console.rule('As they settle, rather than all at once');
@@ -31,9 +31,9 @@ Future<void> main() async {
   var seen = 0;
   await for (final outcome in Stream.fromIterable(ids).parallelize(score, concurrency: 3).rights) {
     seen++;
-    if (seen <= 3) Logger.info('arrived: $outcome');
+    if (seen <= 3) Console.info('arrived: $outcome');
   }
-  Logger.ok('$seen results streamed');
+  Console.ok('$seen results streamed');
 
   Console.rule('Retrying what is worth retrying');
 
@@ -48,9 +48,9 @@ Future<void> main() async {
     delay: 20.ms,
     // Only retry what a second attempt could fix. Everything else rethrows at once.
     when: (e) => e is Flaky,
-    onRetry: (n, error, next) => Logger.warn('attempt $n: $error — retrying in ${next.humanized}'),
+    onRetry: (n, error, next) => Console.warn('attempt $n: $error — retrying in ${next.humanized}'),
   );
-  Logger.ok(connected);
+  Console.ok(connected);
 
   Console.rule('Stopping early');
 
@@ -58,9 +58,9 @@ Future<void> main() async {
   // CancelledException, so the report still accounts for every item.
   final token = CancelToken();
   60.ms.delay().then((_) => token.cancel('ran out of patience'));
-  final partial = await Cancel.session(() => ids.parallelize(score, concurrency: 2), token: token);
-  Logger.info('${partial.rights.length} finished, ${partial.lefts.length} cancelled or failed');
-  Logger.info('reason: ${token.reason}');
+  final partial = await Cancel.scope(() => ids.parallelize(score, concurrency: 2), token: token);
+  Console.info('${partial.rights.length} finished, ${partial.lefts.length} cancelled or failed');
+  Console.info('reason: ${token.reason}');
 
   Console.rule('One at a time, where something cannot overlap');
 
@@ -75,27 +75,27 @@ Future<void> main() async {
     concurrency: 3,
   );
   // Three workers, but enter and leave never interleave.
-  Logger.info(order.join(' → '));
+  Console.info(order.join(' → '));
 
   Console.rule('Off the main isolate');
 
   // A closure becomes background work by asking it to.
   final count = await (() => primesBelow(200000)).isolate();
-  Logger.ok('$count primes below 200000, counted without blocking this isolate');
+  Console.ok('$count primes below 200000, counted without blocking this isolate');
 
   Console.rule('Stream operators');
 
   final batches = await Stream.fromIterable(ids).chunk(5).map((b) => b.length).toList();
-  Logger.info('chunk(5) over ${ids.length}: $batches');
+  Console.info('chunk(5) over ${ids.length}: $batches');
 
   final merged = await [
     Stream.fromIterable(['a', 'b']),
     Stream.fromIterable(['c', 'd', 'e']),
   ].merge().toList();
-  Logger.info('merge: ${merged.join(', ')} (both sources run at the same time)');
+  Console.info('merge: ${merged.join(', ')} (both sources run at the same time)');
 
   final kept = await Stream.fromIterable([1, null, 2, null, 3]).nonNulls.toList();
-  Logger.info('nonNulls: $kept');
+  Console.info('nonNulls: $kept');
 }
 
 /// Work that takes a while and sometimes fails, the way real work does.

@@ -38,14 +38,14 @@ Future<void> main(List<String> args) async {
 }
 
 Future<void> rollOut(CliContext ctx) async {
-  if (ctx(verbose)) Logger.level = LogLevel.debug;
+  if (ctx(verbose)) Console.level = LogLevel.debug;
 
   // `env` is an `Env`, `parallel` an `int`, `secret` a `String` — the options said so, so
   // there is no lookup, no parse and no null check here.
   final target = ctx(env);
   final parallel = ctx(workers);
   final secret = ctx(token);
-  Logger.debug('token of ${secret.length} chars, $parallel workers');
+  Console.debug('token of ${secret.length} chars, $parallel workers');
 
   // At end of input — a pipe, CI — a prompt takes its default instead of hanging.
   if (target == Env.production && !Console.confirm('Really deploy to production?', or: false)) {
@@ -53,22 +53,22 @@ Future<void> rollOut(CliContext ctx) async {
   }
 
   // Runs on SIGINT, SIGTERM, `die`, and when the action returns. Returns its own removal.
-  final release = onExit(() => Logger.info('released the deploy lock'));
+  final release = onExit(() => Console.info('released the deploy lock'));
 
-  final stage = Logger.stages(3);
+  final stage = Console.stages(3);
 
   stage('Checking the target');
   await Console.spin('Contacting ${target.name}…', () => 200.ms.delay(), done: '${target.name} is reachable');
 
   stage('Uploading');
   if (ctx(dryRun)) {
-    Logger.warn('dry run: nothing was uploaded');
+    Console.warn('dry run: nothing was uploaded');
     release();
     return;
   }
 
   // `ctx.cancel` is this run's token, already wired to Ctrl-C. Pass it to anything that takes
-  // `Cli.run` opened a `Cancel.session` holding `ctx.cancel`, so `parallelize`, `download`
+  // `Cli.run` opened a `Cancel.scope` holding `ctx.cancel`, so `parallelize`, `download`
   // and `retry` below stop with it and none of them is passed a token.
   final files = [for (var i = 1; i <= 12; i++) 'chunk-$i.tar.gz'];
   final progress = Console.progress(files.length, message: 'Uploading');
@@ -89,12 +89,12 @@ Future<void> rollOut(CliContext ctx) async {
       ['failed', uploaded.lefts.length],
     ],
   ).show();
-  Logger.ok('Deployed to ${target.name}.');
+  Console.ok('Deployed to ${target.name}.');
 }
 
 Future<void> showStatus(CliContext ctx) async {
-  if (ctx(verbose)) Logger.level = LogLevel.debug;
-  Logger.debug('reading the deployment record');
+  if (ctx(verbose)) Console.level = LogLevel.debug;
+  Console.debug('reading the deployment record');
 
   Table.rows(
     [
@@ -105,5 +105,5 @@ Future<void> showStatus(CliContext ctx) async {
   ).show();
 
   // Positional arguments, and everything after a `--`, arrive as `rest`.
-  if (ctx.rest.isNotEmpty) Logger.info('also asked about: ${ctx.rest.join(', ')}');
+  if (ctx.rest.isNotEmpty) Console.info('also asked about: ${ctx.rest.join(', ')}');
 }

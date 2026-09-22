@@ -5,11 +5,11 @@ const _cancelKey = #dartToolkitCancelToken;
 /// The ambient cancellation seam.
 ///
 /// A token is not threaded through the calls that cooperate with it; a scope holds one
-/// and everything inside it stops together — the same shape as `Http.session`.
+/// and everything inside it stops together — the same shape as `Http.scope`.
 ///
 /// ```dart
 /// final stop = CancelToken();
-/// await Cancel.session(() async {
+/// await Cancel.scope(() async {
 ///   await for (final p in pairs.download(concurrency: 8)) show(p);
 /// }, token: stop);
 /// ```
@@ -19,17 +19,17 @@ const _cancelKey = #dartToolkitCancelToken;
 ///
 /// {@category Concurrency}
 class Cancel {
-  /// The token of the enclosing [session], or `null` outside one.
+  /// The token of the enclosing [scope], or `null` outside one.
   static CancelToken? get token => Zone.current[_cancelKey] as CancelToken?;
 
-  /// Whether the enclosing [session] has been cancelled; `false` outside one.
+  /// Whether the enclosing [scope] has been cancelled; `false` outside one.
   static bool get isCancelled => token?.isCancelled ?? false;
 
-  /// Why the enclosing [session] was cancelled, or `null` — outside one, or when it was
+  /// Why the enclosing [scope] was cancelled, or `null` — outside one, or when it was
   /// cancelled without a reason.
   static Object? get reason => token?.reason;
 
-  /// Throws a [CancelledException] if the enclosing [session] has been cancelled.
+  /// Throws a [CancelledException] if the enclosing [scope] has been cancelled.
   ///
   /// What a loop of its own calls to cooperate:
   ///
@@ -40,9 +40,9 @@ class Cancel {
   /// }
   /// ```
   ///
-  /// Outside a session this does nothing, for the same reason [isCancelled] is `false`
+  /// Outside a scope this does nothing, for the same reason [isCancelled] is `false`
   /// there: nothing has cancelled it. That is the difference from
-  /// [StreamCancelExtensions.cancellable], which throws a [StateError] outside a session —
+  /// [StreamCancelExtensions.cancellable], which throws a [StateError] outside a scope —
   /// an adapter with no scope to bind to would be a wrapper that silently does nothing,
   /// where a reading of the ambient state has a true answer either way.
   static void throwIfCancelled() => token?.throwIfCancelled();
@@ -50,8 +50,8 @@ class Cancel {
   /// Runs [body] with [token] — or a fresh one — as the ambient token.
   ///
   /// Returns what [body] returns. The token is the caller's to cancel; nothing here
-  /// cancels it on the way out, so a token shared between sessions keeps working.
-  static Future<T> session<T>(FutureOr<T> Function() body, {CancelToken? token}) async =>
+  /// cancels it on the way out, so a token shared between scopes keeps working.
+  static Future<T> scope<T>(FutureOr<T> Function() body, {CancelToken? token}) async =>
       runZoned(() async => body(), zoneValues: {_cancelKey: token ?? CancelToken()});
 }
 
@@ -124,7 +124,7 @@ class CancelledException implements Exception {
 ///
 /// {@category Concurrency}
 extension StreamCancelExtensions<T> on Stream<T> {
-  /// This stream, ended when the enclosing [Cancel.session] is cancelled.
+  /// This stream, ended when the enclosing [Cancel.scope] is cancelled.
   ///
   /// The stream closes; it does not fail. Whether that is an ending or an error is the
   /// caller's to decide, and [Cancel.isCancelled] after the loop is what says which:
@@ -134,7 +134,7 @@ extension StreamCancelExtensions<T> on Stream<T> {
   /// if (Cancel.isCancelled) return;
   /// ```
   ///
-  /// Throws [StateError] outside a session: a token is named once, where the scope opens.
+  /// Throws [StateError] outside a scope: a token is named once, where the scope opens.
   Stream<T> get cancellable {
     final token = Cancel.token ?? _noToken();
     late final StreamController<T> controller;
@@ -184,11 +184,11 @@ extension StreamCancelExtensions<T> on Stream<T> {
 /// {@category Concurrency}
 extension FutureCancelExtensions<T> on Future<T> {
   /// This future, failed with a [CancelledException] as soon as the enclosing
-  /// [Cancel.session] is cancelled.
+  /// [Cancel.scope] is cancelled.
   ///
   /// A future has no quiet ending to offer — it completes with a value or an error — so
   /// where [StreamCancelExtensions.cancellable] closes, this one fails. The underlying work
-  /// is not interrupted. Throws [StateError] outside a session.
+  /// is not interrupted. Throws [StateError] outside a scope.
   Future<T> get cancellable {
     final token = Cancel.token ?? _noToken();
     if (token.isCancelled) {
@@ -214,4 +214,4 @@ extension FutureCancelExtensions<T> on Future<T> {
   }
 }
 
-Never _noToken() => throw StateError('No CancelToken in scope: wrap the call in Cancel.session.');
+Never _noToken() => throw StateError('No CancelToken in scope: wrap the call in Cancel.scope.');

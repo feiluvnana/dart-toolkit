@@ -6,14 +6,14 @@ Future<void> main() async {
   Console.rule('This package, read from its own pubspec');
 
   final pubspec = (await 'pubspec.yaml'.path.readText()).yaml;
-  Logger.info('name     ${pubspec['name'].to<String>()}');
-  Logger.info('version  ${pubspec['version'].to<String>()}');
-  Logger.info('sdk      ${pubspec['environment']['sdk'].to<String>()}');
+  Console.info('name     ${pubspec['name'].to<String>()}');
+  Console.info('version  ${pubspec['version'].to<String>()}');
+  Console.info('sdk      ${pubspec['environment']['sdk'].to<String>()}');
 
   // `$` is JSONPath. `..` descends, `*` takes every value at that level.
-  Logger.info('runtime deps  ${pubspec.$(r'$.dependencies.*').length}');
-  Logger.info('dev deps      ${pubspec.$(r'$.dev_dependencies.*').length}');
-  Logger.info('topics        ${pubspec.$(r'$.topics[*]').map((t) => t.to<String>()).join(', ')}');
+  Console.info('runtime deps  ${pubspec.$(r'$.dependencies.*').length}');
+  Console.info('dev deps      ${pubspec.$(r'$.dev_dependencies.*').length}');
+  Console.info('topics        ${pubspec.$(r'$.topics[*]').map((t) => t.to<String>()).join(', ')}');
 
   Console.rule('The same shape, whatever the format');
 
@@ -41,15 +41,15 @@ verbose = yes
   // Every one of these is a JsonDocument: same indexing, same `$`, same `to<T>()`.
   for (final (label, doc) in [('toml', toml.toml), ('ini', ini.ini), ('json', json.json)]) {
     final port = doc.$(r'$..port').firstOrNull?.to<int>();
-    Logger.info('$label  port=${port ?? '—'}  keys=${doc.map.keys.join(', ')}');
+    Console.info('$label  port=${port ?? '—'}  keys=${doc.map.keys.join(', ')}');
   }
 
   // Values are typed on the way out, and text converts when it can: `port = 8080` in TOML is
   // already an int, `workers = 4` in INI too, and a quoted "8080" would still read as one.
   final server = toml.toml['server'];
-  Logger.ok('tls enabled: ${server['tls']['enabled'].to<bool>()}');
-  Logger.ok('tags: ${server['tags'].list.map((t) => t.to<String>()).join(' + ')}');
-  Logger.ok('a missing key is the null document, not a crash: ${server['nope']['deeper'].isNull}');
+  Console.ok('tls enabled: ${server['tls']['enabled'].to<bool>()}');
+  Console.ok('tags: ${server['tags'].list.map((t) => t.to<String>()).join(' + ')}');
+  Console.ok('a missing key is the null document, not a crash: ${server['nope']['deeper'].isNull}');
 
   Console.rule('Out again, as YAML');
 
@@ -68,7 +68,7 @@ verbose = yes
   payload.json.table.orderBy('region').thenBy('rps', descending: true).select(['name', 'region', 'rps']).show();
 
   final busiest = payload.json.table.groupBy('region').sum('rps', as: 'total').orderBy('total', descending: true);
-  Logger.ok('busiest region: ${busiest.rows.first.text('region')} at ${busiest.rows.first.number('total')} rps');
+  Console.ok('busiest region: ${busiest.rows.first.text('region')} at ${busiest.rows.first.number('total')} rps');
 
   Console.rule('XML, when the answer is a feed');
 
@@ -81,7 +81,7 @@ verbose = yes
 
   // XML answers to XPath, so `$` here is a path rather than a key.
   final items = feed.xml.$x('//item');
-  Logger.info('items: ${items.length}');
-  Logger.info('first title: ${items.$('title').text}');
-  Logger.info('all titles: ${feed.xml.$x('//item/title').texts.join(' | ')}');
+  Console.info('items: ${items.length}');
+  Console.info('first title: ${items.$('title').text}');
+  Console.info('all titles: ${feed.xml.$x('//item/title').texts.join(' | ')}');
 }

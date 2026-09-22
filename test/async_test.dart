@@ -4,13 +4,13 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:test/test.dart';
 
 void main() {
-  group('Cancel.session', () {
+  group('Cancel.scope', () {
     test('the token is ambient: retry and cancellable find it without being passed one', () async {
       final stop = CancelToken();
       var attempts = 0;
 
       await expectLater(
-        Cancel.session(() async {
+        Cancel.scope(() async {
           expect(Cancel.token, same(stop));
           expect(Cancel.isCancelled, isFalse);
           return retry(
@@ -28,12 +28,12 @@ void main() {
       expect(attempts, 2, reason: 'the loop stopped at the cancel, not at attempt 5');
     });
 
-    test('cancellable takes the session token, and says so when there is none', () async {
+    test('cancellable takes the scope token, and says so when there is none', () async {
       final stop = CancelToken();
       final controller = StreamController<int>();
       final received = <int>[];
 
-      final done = Cancel.session(() {
+      final done = Cancel.scope(() {
         final out = controller.stream.cancellable.forEach(received.add);
         controller.add(1);
         return out;
@@ -49,9 +49,9 @@ void main() {
       expect(() => Stream<int>.empty().cancellable.toList(), throwsStateError);
     });
 
-    test('the ambient readings mirror the token, and are quiet outside a session', () async {
+    test('the ambient readings mirror the token, and are quiet outside a scope', () async {
       final stop = CancelToken();
-      await Cancel.session(token: stop, () async {
+      await Cancel.scope(token: stop, () async {
         expect(Cancel.isCancelled, isFalse);
         expect(Cancel.reason, isNull);
         expect(Cancel.throwIfCancelled, returnsNormally);
@@ -62,7 +62,7 @@ void main() {
         expect(Cancel.throwIfCancelled, throwsA(isA<CancelledException>()));
       });
 
-      // No session: nothing has cancelled it, so the readings say so rather than throwing.
+      // No scope: nothing has cancelled it, so the readings say so rather than throwing.
       expect(Cancel.isCancelled, isFalse);
       expect(Cancel.reason, isNull);
       expect(Cancel.throwIfCancelled, returnsNormally);
@@ -71,29 +71,29 @@ void main() {
       expect(() => Future<int>.value(1).cancellable, throwsStateError);
     });
 
-    test('sessions nest, and the inner token wins inside it', () async {
+    test('scopes nest, and the inner token wins inside it', () async {
       final outer = CancelToken();
       final inner = CancelToken();
-      await Cancel.session(() async {
+      await Cancel.scope(() async {
         expect(Cancel.token, same(outer));
-        await Cancel.session(() async => expect(Cancel.token, same(inner)), token: inner);
+        await Cancel.scope(() async => expect(Cancel.token, same(inner)), token: inner);
         expect(Cancel.token, same(outer));
       }, token: outer);
     });
 
-    test('a session with no token of its own still has one', () async {
-      await Cancel.session(() async => expect(Cancel.token, isNotNull));
+    test('a scope with no token of its own still has one', () async {
+      await Cancel.scope(() async => expect(Cancel.token, isNotNull));
       expect(Cancel.token, isNull, reason: 'and nothing leaks out of it');
     });
   });
 
   group('Uniform cancellation composition', () {
-    test('Stream.cancellable stops delivery once the session fires', () async {
+    test('Stream.cancellable stops delivery once the scope fires', () async {
       final token = CancelToken();
       final controller = StreamController<int>();
       final received = <int>[];
 
-      await Cancel.session(token: token, () async {
+      await Cancel.scope(token: token, () async {
         final done = controller.stream.cancellable.forEach(received.add);
 
         controller.add(1);
@@ -112,7 +112,7 @@ void main() {
       final token = CancelToken();
       final controller = StreamController<int>();
 
-      await Cancel.session(token: token, () async {
+      await Cancel.scope(token: token, () async {
         final collected = controller.stream.cancellable.toList();
         controller.add(1);
         await Future<void>.delayed(Duration.zero);
@@ -127,7 +127,7 @@ void main() {
 
     test('Stream.cancellable on an already-cancelled token yields nothing', () async {
       final token = CancelToken()..cancel();
-      final items = await Cancel.session(token: token, () => Stream.fromIterable([1, 2, 3]).cancellable.toList());
+      final items = await Cancel.scope(token: token, () => Stream.fromIterable([1, 2, 3]).cancellable.toList());
       expect(items, isEmpty);
     });
 
@@ -143,7 +143,7 @@ void main() {
       // beyond "it still behaves", but it is what stops a long-lived token from
       // retaining every listener it was ever given.
       final controller = StreamController<int>();
-      await Cancel.session(token: token, () async {
+      await Cancel.scope(token: token, () async {
         await Future<int>.value(1).cancellable;
         final drained = controller.stream.cancellable.toList();
         await controller.close();
@@ -157,7 +157,7 @@ void main() {
     test('Future.cancellable rejects as soon as the token fires', () async {
       final token = CancelToken();
       final slow = Future<int>.delayed(const Duration(seconds: 5), () => 1);
-      await Cancel.session(token: token, () async {
+      await Cancel.scope(token: token, () async {
         final guarded = slow.cancellable;
         token.cancel('stop');
         await expectLater(guarded, throwsA(isA<CancelledException>()));
@@ -166,7 +166,7 @@ void main() {
 
     test('Future.cancellable passes the value through when not cancelled', () async {
       final token = CancelToken();
-      final value = await Cancel.session(token: token, () => Future<int>.value(7).cancellable);
+      final value = await Cancel.scope(token: token, () => Future<int>.value(7).cancellable);
       expect(value, equals(7));
     });
   });
@@ -557,7 +557,7 @@ void main() {
       final items = [1, 2, 3, 4, 5];
       Future.delayed(15.ms, () => token.cancel('cancelled by user'));
 
-      final outcomes = await Cancel.session(
+      final outcomes = await Cancel.scope(
         () => items.parallelize((n) async {
           await Future<void>.delayed(50.ms);
           return n;

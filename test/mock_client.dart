@@ -7,7 +7,7 @@ import 'package:dart_toolkit/http.dart';
 ///
 /// ```dart
 /// final client = MockClient((request) async => Response('ok', 200));
-/// await Http.session(() => url.get(), client: client);
+/// await Http.scope(() => url.get(), client: client);
 /// ```
 ///
 /// {@category Networking}
@@ -37,5 +37,5 @@ final class MockClient implements Client {
   Future<StreamedResponse> send(Request request) => _handler(request, Stream.value(Uint8List.fromList(request.bytes)));
 
   @override
-  void close() {}
+  Future<void> close() async {}
 }

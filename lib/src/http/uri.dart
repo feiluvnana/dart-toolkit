@@ -21,16 +21,21 @@ extension UriExtensions on Uri {
     }..removeWhere((k, _) => params.containsKey(k) && params[k] == null),
   );
 
-  /// Sends [request] through the enclosing [Http.session]'s client, or a fresh one, and
+  /// Sends [request] through the enclosing [Http.scope]'s client, or a fresh one, and
   /// buffers the body.
   ///
-  /// There is no `client:` argument anywhere in this module: a program that wants a
-  /// particular client — a mock, a proxy, one with a timeout — says so once, by wrapping
-  /// its work in [Http.session].
+  /// A program that wants a particular client — a mock, a proxy, one with a timeout — says
+  /// so once by wrapping its work in [Http.scope], or holds the client and calls
+  /// [ClientExtensions.get] and its siblings on it.
+  ///
+  /// [request] is copied before it goes out, so the caller's object comes back untouched
+  /// and sending it twice sends it twice — a scope stamps its `cookie` and default headers
+  /// onto what it sends, and without the copy the second send would carry the first send's
+  /// jar and skip the refresh. [Response.request] is the copy that went on the wire.
   Future<Response> send(Request request) async {
     final lease = _clientFor();
     try {
-      return await (await lease.client.send(request)).read();
+      return await (await lease.client.send(request.copy())).read();
     } finally {
       lease.close();
     }

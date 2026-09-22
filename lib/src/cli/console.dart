@@ -1,8 +1,8 @@
 part of '../../cli.dart';
 
 /// Coalesces redraws so a producer that reports per chunk does not issue a write
-/// per chunk. Shared by [ConsoleProgress] and [ConsoleMultiProgress]; they must not
-/// disagree about how often the terminal is touched. Always draws the *latest* state.
+/// per chunk. Shared by every [_Live] renderer; they must not disagree about how often
+/// the terminal is touched. Always draws the *latest* state.
 class _FrameGate {
   static const _interval = Duration(milliseconds: 33);
   DateTime? _last;
@@ -52,22 +52,266 @@ String _bar(int current, int total, String message) {
 
 bool _interactive() => Io.isTerminal && Io.color;
 
-/// Progress controller for terminal activity.
+String _formatBytes(int bytes) {
+  if (bytes < 1024) return '$bytes B';
+  if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+  if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+}
+
+// ---- the live region -------------------------------------------------------------------
+
+/// A renderer that owns the bottom rows of the terminal and can redraw them in place.
 ///
-/// Instances are created via [Console.progress].
-///
-/// {@category Terminal}
-class ConsoleProgress {
-  final int total;
-  final String message;
-  final int? columns;
-  int _current = 0;
-  bool _isDone = false;
-  int _lastWidth = 0;
-  int _lastDecile = -1;
+/// The one reason [Console] can mix a spinner with a log line. Only the innermost live
+/// renderer is on screen; anything durable — a log line, a rule, a prompt — [_wipe]s it,
+/// writes where it stood, and [_paint]s it again underneath. Without this the two write to
+/// the same row and garble each other, which is what they used to do.
+abstract class _Live {
+  /// Rows this renderer put on screen last frame.
+  int _rows = 0;
+
   final _frames = _FrameGate();
 
-  ConsoleProgress._(this.total, {this.message = '', this.columns});
+  /// The lines this renderer wants on screen right now.
+  List<String> _lines();
+
+  /// Whether it still wants to be drawn at all; a finished one never repaints.
+  bool get _running;
+
+  /// Redraws through the frame gate, and only while this is the renderer on screen.
+  void _render() {
+    if (!_running || !identical(Console._top, this)) return;
+    _frames.request(_paint);
+  }
+
+  /// The cursor ends on the row below the last line, so every renderer agrees about
+  /// where it left the terminal and [_wipe] is the same three moves for all of them.
+  void _paint() {
+    if (!_interactive() || !_running) return;
+    final lines = _lines();
+    final buffer = StringBuffer();
+    if (_rows > 0) buffer.write('\x1b[${_rows}A');
+    for (final line in lines) {
+      buffer.write('\r\x1b[K$line\n');
+    }
+    // Rows the last frame used and this one does not: a board whose slot count shrank.
+    for (var i = lines.length; i < _rows; i++) {
+      buffer.write('\r\x1b[K\n');
+    }
+    if (_rows > lines.length) buffer.write('\x1b[${_rows - lines.length}A');
+    Io.out.write(buffer.toString());
+    _rows = lines.length;
+  }
+
+  /// Clears the rows and leaves the cursor where the first one was.
+  void _wipe() {
+    _frames.flush();
+    if (!_interactive() || _rows == 0) return;
+    final buffer = StringBuffer('\x1b[${_rows}A');
+    for (var i = 0; i < _rows; i++) {
+      buffer.write('\r\x1b[K\n');
+    }
+    buffer.write('\x1b[${_rows}A');
+    Io.out.write(buffer.toString());
+    _rows = 0;
+  }
+}
+
+// ---- spinners --------------------------------------------------------------------------
+
+/// The frames an indeterminate [Spinner] cycles through, and how fast.
+///
+/// The named ones cover what a terminal usually wants; the constructor takes any frames,
+/// so a program with its own is not stuck choosing from this list:
+///
+/// ```dart
+/// const pulse = SpinnerStyle(['·', 'o', 'O', 'o'], interval: Duration(milliseconds: 120));
+/// Console.spinner('Waiting', style: pulse);
+/// ```
+///
+/// {@category Terminal}
+final class SpinnerStyle {
+  /// The frames, drawn in order and wrapped around.
+  final List<String> frames;
+
+  /// How long each frame stays on screen.
+  final Duration interval;
+
+  const SpinnerStyle(this.frames, {this.interval = const Duration(milliseconds: 80)});
+
+  /// The rotating braille dot, the default: eight dots in one cell, so it turns in place
+  /// without changing width.
+  static const braille = SpinnerStyle(['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']);
+
+  /// A single braille dot orbiting the cell — quieter than [braille].
+  static const dot = SpinnerStyle(['⠁', '⠂', '⠄', '⡀', '⢀', '⠠', '⠐', '⠈']);
+
+  /// ASCII, for a terminal or a font that will not draw braille.
+  static const line = SpinnerStyle([r'-', r'\', r'|', r'/'], interval: Duration(milliseconds: 100));
+
+  /// A growing and shrinking ellipsis, for waiting on something slow.
+  static const ellipsis = SpinnerStyle(['   ', '.  ', '.. ', '...'], interval: Duration(milliseconds: 300));
+
+  /// A bar that rises and falls.
+  static const bar = SpinnerStyle(['▁', '▃', '▄', '▅', '▆', '▇', '▆', '▅', '▄', '▃']);
+
+  /// A circling arc.
+  static const arc = SpinnerStyle(['◜', '◠', '◝', '◞', '◡', '◟'], interval: Duration(milliseconds: 100));
+}
+
+/// An indeterminate spinner, for work with no measurable size.
+///
+/// [Console.spin] wraps an action and is the shorter way in when the work is one call.
+/// This is the handle for when it is not: the message changes as the work moves on, and
+/// the program decides how it ends.
+///
+/// ```dart
+/// final spinner = Console.spinner('Connecting');
+/// spinner.text = 'Fetching the index';
+/// Console.info('found 12 files');        // scrolls above; the spinner keeps spinning
+/// spinner.succeed('12 files indexed');
+/// ```
+///
+/// Without a terminal it writes one line when it starts and one when it ends, so a log
+/// captured from CI reads the same without the animation.
+///
+/// {@category Terminal}
+final class Spinner extends _Live {
+  /// The frames being drawn.
+  final SpinnerStyle style;
+
+  final Stopwatch _watch = Stopwatch();
+  String _text;
+  Timer? _timer;
+  int _frame = 0;
+  bool _stopped = false;
+
+  Spinner._(this._text, this.style);
+
+  /// The message beside the frame. Assigning redraws it without restarting the animation.
+  String get text => _text;
+
+  set text(String value) {
+    if (_text == value) return;
+    _text = value;
+    _render();
+  }
+
+  /// How long this spinner has been running.
+  Duration get elapsed => _watch.elapsed;
+
+  /// Whether it is still spinning.
+  bool get isSpinning => !_stopped;
+
+  @override
+  bool get _running => !_stopped;
+
+  @override
+  List<String> _lines() {
+    final frame = style.frames[_frame % style.frames.length];
+    final time = _watch.elapsed.humanized;
+    // The text is cut, never the styled line: truncating a string with escapes in it can
+    // cut one in half and leave the terminal wearing the colour.
+    final room = max(10, _columnsOr(null) - Io.width(frame) - Io.width(time) - 6);
+    return ['${frame.cyan} ${Io.truncate(_text, room)} (${time.dim})'];
+  }
+
+  void _start() {
+    _watch.start();
+    if (_interactive()) {
+      Console._push(this);
+      _timer = Timer.periodic(style.interval, (_) {
+        if (_stopped) return;
+        _frame++;
+        _render();
+      });
+    } else {
+      Io.out.writeln('  ${style.frames.first} $_text...');
+    }
+  }
+
+  /// Ends it with `✓ message`, on stdout.
+  void succeed([String? message]) => _finish('✓', message ?? _text, (s) => s.green, err: false);
+
+  /// Ends it with `✖ message`, on stderr.
+  void fail([String? message]) => _finish('✖', message ?? _text, (s) => s.red, err: true);
+
+  /// Ends it with `⚠ message`, on stderr.
+  void warn([String? message]) => _finish('⚠', message ?? _text, (s) => s.yellow, err: true);
+
+  /// Ends it with `ℹ message`, on stdout.
+  void info([String? message]) => _finish('ℹ', message ?? _text, (s) => s.cyan, err: false);
+
+  /// Ends it with no final line at all.
+  void stop() => _finish(null, null, null, err: false);
+
+  void _finish(String? mark, String? message, String Function(String)? paint, {required bool err}) {
+    if (_stopped) return;
+    _stopped = true;
+    _timer?.cancel();
+    _timer = null;
+    _watch.stop();
+    Console._pop(this);
+    if (mark == null || message == null || paint == null) return;
+    (err ? Io.err : Io.out).writeln(paint('  $mark $message (${_watch.elapsed.humanized.dim})'));
+  }
+
+  static Future<T> run<T>(
+    String message,
+    FutureOr<T> Function() action, {
+    String? done,
+    String? failed,
+    SpinnerStyle style = SpinnerStyle.braille,
+  }) async {
+    final spinner = Spinner._(message, style).._start();
+    try {
+      final result = await action();
+      spinner.succeed(done);
+      return result;
+    } catch (e) {
+      spinner.fail(failed ?? '$message failed: $e');
+      rethrow;
+    }
+  }
+}
+
+// ---- a bar for one measurable thing ----------------------------------------------------
+
+/// A single-line progress bar over [total] steps.
+///
+/// Created by [Console.progress]. Redraws are coalesced, so a caller may tick per chunk;
+/// without a terminal a line is written when a new tenth is reached, not per tick.
+///
+/// {@category Terminal}
+final class ProgressBar extends _Live {
+  /// Steps in the run.
+  final int total;
+
+  /// The label drawn before the bar.
+  final String message;
+
+  /// A fixed width, or `null` to follow the terminal.
+  final int? columns;
+
+  int _current = 0;
+  bool _isDone = false;
+  int _lastDecile = -1;
+  String? _label;
+
+  ProgressBar._(this.total, {this.message = '', this.columns});
+
+  /// Steps counted so far.
+  int get current => _current;
+
+  /// Whether [done] has been called.
+  bool get isDone => _isDone;
+
+  @override
+  bool get _running => !_isDone;
+
+  @override
+  List<String> _lines() => [formatLine(_label).dim];
 
   /// Formats the single-line progress text for current progress and [label],
   /// truncated to fit within terminal bounds.
@@ -85,15 +329,13 @@ class ConsoleProgress {
   }
 
   /// Advances the progress by [count] and optionally displays [label].
-  ///
-  /// Redraws are coalesced at the same rate as [ConsoleMultiProgress]', so a caller
-  /// may tick per chunk. Without a terminal a line is written when a new tenth is
-  /// reached, not per tick.
   void tick([int count = 1, String? label]) {
     if (_isDone) return;
     _current += count;
+    if (label != null) _label = label;
     if (_interactive()) {
-      _frames.request(() => _render(label));
+      if (_rows == 0) Console._push(this);
+      _render();
     } else {
       final decile = total > 0 ? (_current * 10 ~/ total).clamp(0, 10) : 0;
       if (decile != _lastDecile) {
@@ -103,22 +345,12 @@ class ConsoleProgress {
     }
   }
 
-  void _render(String? label) {
-    final maxCols = max(20, _columnsOr(columns) - 1);
-    final line = formatLine(label);
-    final lineWidth = Io.width(line);
-    final padding = ' ' * max(0, min(_lastWidth - lineWidth, maxCols - lineWidth));
-    Io.out.write('\r\x1b[K${line.dim}$padding');
-    _lastWidth = lineWidth + padding.length;
-  }
-
   /// Marks progress as done with an optional final [message].
   void done([String? message]) {
     if (_isDone) return;
     _frames.flush();
     _isDone = true;
-    _lastWidth = 0;
-    if (_interactive()) Io.out.writeln();
+    Console._pop(this);
     if (message != null && message.isNotEmpty) Io.out.writeln('  ✓ $message'.green);
   }
 }
@@ -145,34 +377,53 @@ class _ProgressSlot {
   }
 }
 
-/// Multi-task concurrent progress display for terminal applications.
+/// A multi-line board of concurrent tasks: a header bar and one row per worker.
 ///
-/// Driven by [report]; it renders whatever a [BatchProgress] carries.
+/// Created by [Console.tasks] and driven by [report]; it renders whatever a
+/// [BatchProgress] carries, so any producer that speaks that interface — a batch download,
+/// a crawl — can be shown without either side knowing about the other.
 ///
 /// {@category Terminal}
-class ConsoleMultiProgress {
+final class TaskBoard extends _Live {
   /// Steps in the batch. A stream-sourced batch revises it upward as work is discovered.
   int total;
+
+  /// How many task rows are drawn.
   final int slots;
+
+  /// The label drawn before the header bar.
   final String message;
+
+  /// A fixed width, or `null` to follow the terminal.
   final int? columns;
+
   int _current = 0;
   bool _isDone = false;
-  int _renderedLines = 0;
   final List<_ProgressSlot> _slotList;
   final Map<String, int> _slotByTask = {};
-  final _frames = _FrameGate();
 
-  ConsoleMultiProgress._(this.total, {this.slots = 4, this.message = '', this.columns})
+  TaskBoard._(this.total, {this.slots = 4, this.message = '', this.columns})
     : _slotList = List.generate(slots > 0 ? slots : 1, (_) => _ProgressSlot());
 
-  /// Formats the multi-progress lines (header + worker slots).
+  /// Steps finished so far.
+  int get current => _current;
+
+  /// Whether [done] has been called.
+  bool get isDone => _isDone;
+
+  @override
+  bool get _running => !_isDone;
+
+  @override
+  List<String> _lines() => formatLines();
+
+  /// Formats the board's lines: the header bar, then one line per slot.
   List<String> formatLines() {
     final maxCols = max(20, _columnsOr(columns) - 1);
     return [
-      Io.truncate(_bar(_current, total, message), maxCols),
+      Io.truncate(_bar(_current, total, message), maxCols).dim,
       for (var i = 0; i < _slotList.length; i++)
-        _formatSlotLine(_slotList[i], i == _slotList.length - 1 ? '  └─ ' : '  ├─ ', maxCols),
+        _formatSlotLine(_slotList[i], i == _slotList.length - 1 ? '  └─ ' : '  ├─ ', maxCols).dim,
     ];
   }
 
@@ -204,18 +455,6 @@ class ConsoleMultiProgress {
 
     final statusSuffix = slot.status != null && slot.status!.isNotEmpty ? ' [${slot.status}]' : '';
     return Io.truncate('$prefix$barStr $percentStr $sizeStr${slot.label}$statusSuffix', maxCols);
-  }
-
-  void _render() {
-    if (_isDone || !_interactive()) return;
-    final buffer = StringBuffer();
-    if (_renderedLines > 0) buffer.write('\x1b[${_renderedLines}A');
-    final lines = formatLines();
-    for (final line in lines) {
-      buffer.write('\r\x1b[K${line.dim}\n');
-    }
-    Io.out.write(buffer.toString());
-    _renderedLines = lines.length;
   }
 
   /// Without a terminal there is no cursor to move, so emit one durable line per
@@ -258,106 +497,180 @@ class ConsoleMultiProgress {
       _slotByTask.remove(task.taskId);
       _renderCompletion(slot);
     }
-    _frames.request(_render);
+    if (_interactive() && _rows == 0) Console._push(this);
+    _render();
   }
 
-  /// Marks multi-progress as done with an optional final [message].
+  /// Marks the board as done with an optional final [message].
   void done([String? message]) {
     if (_isDone) return;
     _frames.flush();
     _isDone = true;
-
-    if (_interactive() && _renderedLines > 0) {
-      final buffer = StringBuffer('\x1b[${_renderedLines}A');
-      for (var i = 0; i < _renderedLines; i++) {
-        buffer.write('\r\x1b[K\n');
-      }
-      buffer.write('\x1b[${_renderedLines}A');
-      if (message != null && message.isNotEmpty) buffer.write('  ✓ $message\n'.green);
-      Io.out.write(buffer.toString());
-      _renderedLines = 0;
-    } else if (message != null && message.isNotEmpty) {
-      Io.out.writeln('  ✓ $message'.green);
-    }
+    Console._pop(this);
+    if (message != null && message.isNotEmpty) Io.out.writeln('  ✓ $message'.green);
   }
 }
 
-String _formatBytes(int bytes) {
-  if (bytes < 1024) return '$bytes B';
-  if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-  if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-  return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+// ---- logging ---------------------------------------------------------------------------
+
+/// Severity levels for [Console]'s log verbs, ordered from most to least verbose.
+///
+/// {@category CLI}
+enum LogLevel {
+  /// Everything, including [Console.debug].
+  debug,
+
+  /// Informational messages and above (the default).
+  info,
+
+  /// Warnings and errors only.
+  warn,
+
+  /// Errors only.
+  error,
+
+  /// Suppresses all output.
+  silent,
 }
 
-/// Animated terminal spinner for indeterminate background tasks.
+/// A self-numbering sequence of stage banners. Created by [Console.stages].
 ///
-/// Driven by [Console.spin], the one way in.
-///
-/// {@category Terminal}
-class _ConsoleSpinner {
-  static const List<String> _frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+/// {@category CLI}
+class Stages {
+  /// How many stages the run has.
+  final int total;
+  int _current = 0;
 
-  final String message;
-  final Stopwatch _stopwatch = Stopwatch();
-  Timer? _timer;
-  int _frameIndex = 0;
-  bool _isDone = false;
+  Stages(this.total);
 
-  _ConsoleSpinner(this.message);
-
-  /// Starts the spinner animation.
-  void _start() {
-    _stopwatch.start();
-    if (_interactive()) {
-      _timer = Timer.periodic(const Duration(milliseconds: 80), (_) {
-        if (_isDone) return;
-        final frame = _frames[_frameIndex++ % _frames.length];
-        Io.out.write('\r\x1b[K${frame.cyan} $message (${_stopwatch.elapsed.humanized.dim})');
-      });
-    } else {
-      Io.out.writeln('  ⠋ $message...');
-    }
-  }
-
-  void _succeed(String? done) {
-    _stop();
-    Io.out.writeln('  ✓ ${done ?? message} (${_stopwatch.elapsed.humanized.dim})'.green);
-  }
-
-  void _fail(String? failed) {
-    _stop();
-    Io.err.writeln('  ✖ ${failed ?? message} (${_stopwatch.elapsed.humanized})'.red);
-  }
-
-  void _stop() {
-    if (_isDone) return;
-    _isDone = true;
-    _timer?.cancel();
-    _timer = null;
-    _stopwatch.stop();
-    if (_interactive()) Io.out.write('\r\x1b[K');
-  }
-
-  static Future<T> run<T>(String message, FutureOr<T> Function() action, {String? done, String? failed}) async {
-    final spinner = _ConsoleSpinner(message).._start();
-    try {
-      final result = await action();
-      spinner._succeed(done);
-      return result;
-    } catch (e) {
-      spinner._fail(failed ?? '$message failed: $e');
-      rethrow;
-    }
+  /// Prints the next stage banner: `[n/total] message`.
+  void call(String message) {
+    _current++;
+    if (!Console.isEnabled(LogLevel.info)) return;
+    Console._durable(() => Io.out.writeln('[$_current/$total] $message'.cyan.bold));
   }
 }
 
-/// The terminal: tables, rules, spinners, progress, and prompts.
+// ---- the namespace ---------------------------------------------------------------------
+
+/// The terminal: logging, rules, spinners, progress, boards and prompts.
 ///
-/// At end of input — piped stdin, CI — a prompt falls back to its default rather than looping
-/// forever, or throws [StateError] when it has none.
+/// One namespace for everything that reaches a terminal, and one live region underneath it,
+/// so the parts compose: a log line written while a spinner is running scrolls above it
+/// rather than landing on top of it, and a prompt asked mid-download does the same.
+///
+/// At end of input — piped stdin, CI — a prompt falls back to its default rather than
+/// looping forever, or throws [StateError] when it has none.
 ///
 /// {@category Terminal}
 class Console {
+  // ---- the live region ----
+
+  /// The renderers on screen, innermost last; only that one is drawn.
+  static final List<_Live> _stack = [];
+
+  static _Live? get _top => _stack.isEmpty ? null : _stack.last;
+
+  static void _push(_Live live) {
+    if (_stack.contains(live)) return;
+    _top?._wipe();
+    _stack.add(live);
+    live._paint();
+  }
+
+  static void _pop(_Live live) {
+    final index = _stack.indexOf(live);
+    if (index == -1) return;
+    final wasTop = index == _stack.length - 1;
+    if (wasTop) live._wipe();
+    _stack.removeAt(index);
+    if (wasTop) _top?._paint();
+  }
+
+  /// Writes something that stays on screen, above whatever is live.
+  ///
+  /// Every verb on this class goes through here. A renderer holding the bottom rows is
+  /// cleared, [write] lands where it stood, and the renderer is drawn again below it.
+  static void _durable(void Function() write) {
+    final live = _top;
+    if (live == null) {
+      write();
+      return;
+    }
+    live._wipe();
+    write();
+    live._paint();
+  }
+
+  /// Writes [message] durably, above any spinner or progress bar on screen.
+  ///
+  /// The unlevelled escape hatch: everything [Io.out.writeln] does, without landing on top
+  /// of a live renderer. Prefer a log verb when the line has a severity.
+  static void writeln([String message = '']) => _durable(() => Io.out.writeln(message));
+
+  // ---- logging ----
+
+  static const _levelKey = #dartToolkitLogLevel;
+  static LogLevel _processLevel = LogLevel.info;
+
+  /// The minimum severity that is emitted. Defaults to [LogLevel.info].
+  ///
+  /// Reads the level [silenced] set for the work in progress, if any, and otherwise the
+  /// process-wide one that assigning to this sets.
+  static LogLevel get level => Zone.current[_levelKey] as LogLevel? ?? _processLevel;
+
+  static set level(LogLevel value) => _processLevel = value;
+
+  /// Whether [level] currently permits [candidate] to be written.
+  static bool isEnabled(LogLevel candidate) => candidate.index >= level.index && level != LogLevel.silent;
+
+  /// Runs [action], sync or async, with logging suppressed.
+  ///
+  /// The suppression belongs to [action] and what it awaits — not to the process — so a
+  /// task running beside it still reports. `Http.scope` scopes its client the same way.
+  static Future<T> silenced<T>(FutureOr<T> Function() action) =>
+      runZoned(() async => action(), zoneValues: {_levelKey: LogLevel.silent});
+
+  /// A counter over [total] stages, printing `[n/total] message` on each call.
+  ///
+  /// ```dart
+  /// final stage = Console.stages(3);
+  /// stage('Scraping metadata');   // [1/3] Scraping metadata
+  /// ```
+  static Stages stages(int total) => Stages(total);
+
+  /// Logs a verbose diagnostic message: `  · message`.
+  static void debug(String message) {
+    if (!isEnabled(LogLevel.debug)) return;
+    _durable(() => Io.out.writeln('  · $message'.dim));
+  }
+
+  /// Logs a success message: `  ✓ message`. Filtered at [LogLevel.info], like [info].
+  static void ok(String message) {
+    if (!isEnabled(LogLevel.info)) return;
+    _durable(() => Io.out.writeln('  ✓ $message'.green));
+  }
+
+  /// Logs an informational message: `  ℹ message`.
+  static void info(String message) {
+    if (!isEnabled(LogLevel.info)) return;
+    _durable(() => Io.out.writeln('  ℹ $message'.cyan));
+  }
+
+  /// Logs a warning message to standard error: `  ⚠ message`.
+  static void warn(String message) {
+    if (!isEnabled(LogLevel.warn)) return;
+    _durable(() => Io.err.writeln('  ⚠ $message'.yellow));
+  }
+
+  /// Logs an error message to standard error: `  ✖ message`.
+  static void error(String message) {
+    if (!isEnabled(LogLevel.error)) return;
+    _durable(() => Io.err.writeln('  ✖ $message'.red));
+  }
+
+  // ---- prompts ----
+
   /// Reads one line, returning `null` at end of input.
   static String? _read() => Io.readLine(encoding: utf8)?.trim();
 
@@ -373,46 +686,57 @@ class Console {
   /// ```
   static String ask(String message, {String? or, bool required = false, String? Function(String value)? validate}) {
     assert(!(required && or != null), 'A required prompt cannot also have a default.');
-    while (true) {
-      final defaultHint = or != null ? ' ($or)'.dim : '';
-      Io.out.write('$message$defaultHint: ');
-      final input = _read();
+    final live = _top?.._wipe();
+    try {
+      while (true) {
+        final defaultHint = or != null ? ' ($or)'.dim : '';
+        Io.out.write('$message$defaultHint: ');
+        final input = _read();
 
-      if (input == null) {
-        if (or != null) return or;
-        if (!required) return '';
-        throw StateError('No input available for required prompt: $message');
+        if (input == null) {
+          if (or != null) return or;
+          if (!required) return '';
+          throw StateError('No input available for required prompt: $message');
+        }
+
+        final value = input.isEmpty ? (or ?? '') : input;
+
+        if (value.isEmpty && required) {
+          Io.out.writeln('  Value cannot be empty.'.red);
+          continue;
+        }
+
+        final error = validate?.call(value);
+        if (error != null) {
+          Io.out.writeln('  $error'.red);
+          continue;
+        }
+
+        return value;
       }
-
-      final value = input.isEmpty ? (or ?? '') : input;
-
-      if (value.isEmpty && required) {
-        Io.out.writeln('  Value cannot be empty.'.red);
-        continue;
-      }
-
-      final error = validate?.call(value);
-      if (error != null) {
-        Io.out.writeln('  $error'.red);
-        continue;
-      }
-
-      return value;
+    } finally {
+      live?._paint();
     }
   }
 
   /// Prompts for a yes/no confirmation, returning [or] on an empty answer.
   static bool confirm(String message, {bool or = true}) {
-    final hint = or ? '[Y/n]'.dim : '[y/N]'.dim;
-    Io.out.write('$message $hint: ');
-    final input = _read()?.toLowerCase();
+    final live = _top?.._wipe();
+    try {
+      final hint = or ? '[Y/n]'.dim : '[y/N]'.dim;
+      Io.out.write('$message $hint: ');
+      final input = _read()?.toLowerCase();
 
-    if (input == null || input.isEmpty) return or;
-    return input == 'y' || input == 'yes' || input == 'true' || input == '1';
+      if (input == null || input.isEmpty) return or;
+      return input == 'y' || input == 'yes' || input == 'true' || input == '1';
+    } finally {
+      live?._paint();
+    }
   }
 
   /// Prompts for sensitive input, hiding typed characters.
   static String secret(String message) {
+    final live = _top?.._wipe();
     Io.out.write('$message: ');
     var isEchoModeAvailable = false;
     try {
@@ -432,6 +756,7 @@ class Console {
           stdin.echoMode = true;
         } catch (_) {}
       }
+      live?._paint();
     }
   }
 
@@ -447,44 +772,53 @@ class Console {
     String label(T choice) => display?.call(choice) ?? '$choice';
 
     final defaultIndex = or != null ? choices.indexOf(or) : -1;
+    final live = _top?.._wipe();
 
-    Io.out.writeln('$message:');
-    for (var i = 0; i < choices.length; i++) {
-      final marker = i == defaultIndex ? ' (default)'.dim : '';
-      Io.out.writeln('  ${i + 1}) ${label(choices[i])}$marker');
-    }
-
-    while (true) {
-      final defaultHint = defaultIndex >= 0 ? ' [${defaultIndex + 1}]' : '';
-      Io.out.write('Select [1-${choices.length}]$defaultHint: ');
-      final input = _read();
-
-      if (input == null) {
-        if (defaultIndex >= 0) return choices[defaultIndex];
-        throw StateError('No input available for required prompt: $message');
+    try {
+      Io.out.writeln('$message:');
+      for (var i = 0; i < choices.length; i++) {
+        final marker = i == defaultIndex ? ' (default)'.dim : '';
+        Io.out.writeln('  ${i + 1}) ${label(choices[i])}$marker');
       }
 
-      if (input.isEmpty && defaultIndex >= 0) return choices[defaultIndex];
+      while (true) {
+        final defaultHint = defaultIndex >= 0 ? ' [${defaultIndex + 1}]' : '';
+        Io.out.write('Select [1-${choices.length}]$defaultHint: ');
+        final input = _read();
 
-      final index = int.tryParse(input);
-      if (index != null && index >= 1 && index <= choices.length) {
-        return choices[index - 1];
+        if (input == null) {
+          if (defaultIndex >= 0) return choices[defaultIndex];
+          throw StateError('No input available for required prompt: $message');
+        }
+
+        if (input.isEmpty && defaultIndex >= 0) return choices[defaultIndex];
+
+        final index = int.tryParse(input);
+        if (index != null && index >= 1 && index <= choices.length) {
+          return choices[index - 1];
+        }
+
+        final match = choices.where((c) => label(c) == input);
+        if (match.isNotEmpty) return match.first;
+
+        Io.out.writeln('  Invalid choice, please enter a number from 1 to ${choices.length}.'.red);
       }
-
-      final match = choices.where((c) => label(c) == input);
-      if (match.isNotEmpty) return match.first;
-
-      Io.out.writeln('  Invalid choice, please enter a number from 1 to ${choices.length}.'.red);
+    } finally {
+      live?._paint();
     }
   }
+
+  // ---- the screen ----
 
   /// Clears the terminal screen.
   static void clear() {
-    if (_interactive()) Io.out.write('\x1B[2J\x1B[0;0H');
+    if (!_interactive()) return;
+    _stack.clear();
+    Io.out.write('\x1B[2J\x1B[0;0H');
   }
 
   /// Renders a horizontal divider rule across the terminal with an optional centered [title].
-  static void rule([String? title]) {
+  static void rule([String? title]) => _durable(() {
     final cols = Io.columns ?? 80;
 
     if (title == null || title.isEmpty) {
@@ -500,31 +834,50 @@ class Console {
 
     final sideLen = (cols - titleLen) ~/ 2;
     Io.out.writeln('${'─' * sideLen} $title ${'─' * (cols - titleLen - sideLen)}'.cyan);
-  }
+  });
 
-  /// Creates a single-line progress indicator for [total] steps.
-  static ConsoleProgress progress(int total, {String message = '', int? columns}) =>
-      ConsoleProgress._(total, message: message, columns: columns);
+  // ---- indicators ----
 
-  /// Creates a multi-line concurrent progress indicator across [slots] workers.
+  /// A single-line progress bar over [total] steps.
+  static ProgressBar progress(int total, {String message = '', int? columns}) =>
+      ProgressBar._(total, message: message, columns: columns);
+
+  /// A board of [slots] concurrent task rows under one header bar.
   ///
-  /// Omit [total] when the work is still being discovered; [ConsoleMultiProgress.report]
-  /// revises it upward as it arrives.
-  static ConsoleMultiProgress multiProgress({int total = 0, int slots = 4, String message = '', int? columns}) =>
-      ConsoleMultiProgress._(total, slots: slots, message: message, columns: columns);
+  /// Omit [total] when the work is still being discovered; [TaskBoard.report] revises it
+  /// upward as it arrives.
+  static TaskBoard tasks({int total = 0, int slots = 4, String message = '', int? columns}) =>
+      TaskBoard._(total, slots: slots, message: message, columns: columns);
+
+  /// An indeterminate spinner, started and left running until the caller ends it.
+  ///
+  /// ```dart
+  /// final spinner = Console.spinner('Connecting');
+  /// spinner.text = 'Fetching the index';
+  /// spinner.succeed('12 files indexed');
+  /// ```
+  ///
+  /// Use [spin] instead when the work is a single call: it ends the spinner for you.
+  static Spinner spinner(String message, {SpinnerStyle style = SpinnerStyle.braille}) =>
+      Spinner._(message, style).._start();
 
   /// Runs [action] behind an indeterminate spinner; [done] and [failed] replace [message]
   /// on the final line. Whatever [action] returns comes back; whatever it throws is rethrown
   /// after the failure line.
-  static Future<T> spin<T>(String message, FutureOr<T> Function() action, {String? done, String? failed}) =>
-      _ConsoleSpinner.run(message, action, done: done, failed: failed);
+  static Future<T> spin<T>(
+    String message,
+    FutureOr<T> Function() action, {
+    String? done,
+    String? failed,
+    SpinnerStyle style = SpinnerStyle.braille,
+  }) => Spinner.run(message, action, done: done, failed: failed, style: style);
 }
 
 /// Rendering a batch as it runs.
 ///
 /// {@category Terminal}
 extension StreamBatchProgressExtensions<T extends BatchProgress> on Stream<T> {
-  /// Draws this batch in a [ConsoleMultiProgress] until it ends, then prints [done].
+  /// Draws this batch in a [TaskBoard] until it ends, then prints [done].
   ///
   /// Returns the last event, or `null` for an empty batch.
   ///
@@ -532,16 +885,16 @@ extension StreamBatchProgressExtensions<T extends BatchProgress> on Stream<T> {
   /// final last = await pairs.download(concurrency: 4).show(slots: 4, message: 'Downloading');
   /// ```
   Future<T?> show({int slots = 4, String message = '', String? done, int? columns}) async {
-    final progress = Console.multiProgress(slots: slots, message: message, columns: columns);
+    final board = Console.tasks(slots: slots, message: message, columns: columns);
     T? last;
     var failed = true;
     try {
       await for (final p in this) {
-        progress.report(last = p);
+        board.report(last = p);
       }
       failed = false;
     } finally {
-      progress.done(failed ? null : done);
+      board.done(failed ? null : done);
     }
     return last;
   }

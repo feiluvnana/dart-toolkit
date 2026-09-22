@@ -88,12 +88,12 @@ final class _Shell {
 /// The ambient shell seam: what every command in a scope shares.
 ///
 /// A working directory, an environment, a timeout or a failure policy that every command
-/// would otherwise repeat belongs to the scope that sets it — the shape [Http.session] has
+/// would otherwise repeat belongs to the scope that sets it — the shape [Http.scope] has
 /// for a client. Anything genuinely per command — `input:`, `args:`, `shell:` — stays an
-/// argument, and a per-call `workdir:` or `strict:` still wins over the session's.
+/// argument, and a per-call `workdir:` or `strict:` still wins over the scope's.
 ///
 /// ```dart
-/// await Shell.session(() async {
+/// await Shell.scope(() async {
 ///   await run('git fetch --all');
 ///   await run('git status --short');
 /// }, workdir: repo, timeout: 30.s);
@@ -103,8 +103,8 @@ final class _Shell {
 class Shell {
   /// Runs [body] with these settings for every command inside it.
   ///
-  /// [env] is added to the enclosing session's rather than replacing it.
-  static Future<T> session<T>(
+  /// [env] is added to the enclosing scope's rather than replacing it.
+  static Future<T> scope<T>(
     FutureOr<T> Function() body, {
     Path? workdir,
     Map<String, String>? env,
@@ -130,7 +130,7 @@ class Shell {
 /// Throws [ShellException] on a non-zero exit unless [strict] is false. [input] is written
 /// to stdin, which is otherwise closed at once. [shell] runs through the system interpreter
 /// rather than exec'ing directly. Every argument here defaults to the enclosing
-/// [Shell.session]'s, so a scope says `workdir:` once instead of every call.
+/// [Shell.scope]'s, so a scope says `workdir:` once instead of every call.
 ///
 /// [command] is split here, the way a POSIX shell reads a simple command — so **never
 /// interpolate a scraped or user-supplied value into it**. Pass those as arguments, where
@@ -293,7 +293,7 @@ class CommandPipeline {
   ///
   /// Like `pipefail`: [ShellResult.exitCode] is the rightmost non-zero exit code, and
   /// [strict] throws when any stage fails, not only the last. Unset arguments come from
-  /// the enclosing [Shell.session].
+  /// the enclosing [Shell.scope].
   Future<ShellResult> run({
     Path? workdir,
     Map<String, String>? env,
@@ -403,7 +403,7 @@ extension StringShellExtensions on String {
 extension PathShellExtensions on Path {
   /// Runs the file at this path as a command, with [args] passed as-is (no splitting).
   ///
-  /// Unset arguments come from the enclosing [Shell.session]; see [run].
+  /// Unset arguments come from the enclosing [Shell.scope]; see [run].
   Future<ShellResult> run({
     List<String> args = const [],
     Path? workdir,

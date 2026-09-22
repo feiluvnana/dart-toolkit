@@ -229,7 +229,7 @@ class CliContext {
   /// The value of [option] — the option itself is the key, so its type is its value's.
   ///
   /// ```dart
-  /// if (ctx(verbose)) Logger.level = LogLevel.debug;
+  /// if (ctx(verbose)) Console.level = LogLevel.debug;
   /// final n = ctx(top); // int, because `top` was declared with `.or(10)`
   /// ```
   ///
@@ -347,7 +347,7 @@ class CliCommand {
   /// [Cli.run] turns them into a message and exit code 64.
   Future<void> run(List<String> args) {
     final cancel = CancelToken();
-    return Cancel.session(() => _run(args, {}, cancel), token: cancel);
+    return Cancel.scope(() => _run(args, {}, cancel), token: cancel);
   }
 
   Future<void> _run(List<String> args, Map<CliOption<Object?>, Object?> values, CancelToken cancel) async {
@@ -457,14 +457,14 @@ class Cli extends CliCommand {
   /// to stderr and exits with code 64. [CliCommand.run] throws instead; use it to test.
   /// `ctx.cancel` is cancelled first on a signal, on [die], and when the action ends.
   ///
-  /// The action runs inside a [Cancel.session] holding that token, so everything under it
+  /// The action runs inside a [Cancel.scope] holding that token, so everything under it
   /// — downloads, crawls, `retry` — stops with it and takes no token of its own.
   @override
   Future<void> run(List<String> args) async {
     final cancel = CancelToken();
     onExit(cancel.cancel);
     try {
-      await Cancel.session(() => _run(args, {}, cancel), token: cancel);
+      await Cancel.scope(() => _run(args, {}, cancel), token: cancel);
     } on UsageException catch (e) {
       await die('${e.message}\n  Run "$name --help" for usage.', exitCode: 64);
     } finally {

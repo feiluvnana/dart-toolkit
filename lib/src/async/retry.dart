@@ -4,7 +4,7 @@ part of '../../async.dart';
 ///
 /// [delay] is jittered by ±25 % unless [jitter] is false, and never exceeds [maxDelay].
 /// [when] limits which errors are retried; anything thrown is retried by default,
-/// `Error`s included. [onRetry] fires before each wait. The enclosing [Cancel.session]
+/// `Error`s included. [onRetry] fires before each wait. The enclosing [Cancel.scope]
 /// aborts the loop with a [CancelledException], unlike `Future.cancellable`, which
 /// leaves it running.
 ///

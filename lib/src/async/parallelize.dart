@@ -7,7 +7,7 @@ extension IterableParallelExtensions<T> on Iterable<T> {
   /// Maps [worker] over all elements, at most [concurrency] at a time.
   ///
   /// Settles every task and preserves input order; an individual failure never
-  /// throws. Tasks the enclosing [Cancel.session] skipped come back as a [Left] holding a
+  /// throws. Tasks the enclosing [Cancel.scope] skipped come back as a [Left] holding a
   /// [CancelledException].
   ///
   /// [isolate] runs each worker in a background [Isolate]. The worker and everything
@@ -62,7 +62,7 @@ extension StreamParallelExtensions<T> on Stream<T> {
   ///
   /// An individual failure never reaches the error channel; `.unwrap()` forwards it.
   /// A paused consumer pauses the source: nothing is buffered on its behalf. The enclosing
-  /// [Cancel.session] stops it.
+  /// [Cancel.scope] stops it.
   Stream<Either<Object, R>> parallelize<R>(
     FutureOr<R> Function(T item) worker, {
     int concurrency = 4,

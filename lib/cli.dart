@@ -18,4 +18,3 @@ part 'src/cli/styling.dart';
 part 'src/cli/command.dart';
 part 'src/cli/console.dart';
 part 'src/cli/lifecycle.dart';
-part 'src/cli/logger.dart';

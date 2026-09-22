@@ -112,16 +112,16 @@ void main() {
     });
   });
 
-  group('Shell.session', () {
+  group('Shell.scope', () {
     test('the scope supplies workdir, env, quiet and strict, so a command repeats none of them', () async {
       final dir = Path(Directory.systemTemp.createTempSync('shell_').path);
       addTearDown(() => dir.deleteSync(recursive: true));
 
-      await Shell.session(
+      await Shell.scope(
         () async {
           expect(await run('pwd').text, endsWith(dir.name));
           expect(await run('printenv TK_MARKER').text, 'set-once');
-          // `strict: false` at the session level, so a failing command comes back instead.
+          // `strict: false` at the scope level, so a failing command comes back instead.
           final bad = await run('false');
           expect(bad.isOk, isFalse);
         },
@@ -132,8 +132,8 @@ void main() {
       );
     });
 
-    test('a per-call argument still wins over the session', () async {
-      await Shell.session(
+    test('a per-call argument still wins over the scope', () async {
+      await Shell.scope(
         () async {
           expect(() => run('false', strict: true), throwsA(isA<ShellException>()));
           expect(await run('true', strict: true).isOk, isTrue);
@@ -143,10 +143,10 @@ void main() {
       );
     });
 
-    test('env is added to the enclosing session, not swapped for it', () async {
-      await Shell.session(
+    test('env is added to the enclosing scope, not swapped for it', () async {
+      await Shell.scope(
         () async {
-          await Shell.session(() async {
+          await Shell.scope(() async {
             expect(await run('printenv OUTER').text, 'o');
             expect(await run('printenv INNER').text, 'i');
           }, env: {'INNER': 'i'});
@@ -162,7 +162,7 @@ void main() {
       (dir / 'hello.sh').writeTextSync('#!/bin/sh\necho from-script\n');
       await run('chmod +x ${dir / 'hello.sh'}', quiet: true);
 
-      await Shell.session(
+      await Shell.scope(
         () async {
           expect(await ('echo a b c' | 'tr " " "\n"').run().lines, ['a', 'b', 'c']);
           expect(await (dir / 'hello.sh').run().text, 'from-script');
@@ -172,7 +172,7 @@ void main() {
       );
     });
 
-    test('outside a session the documented defaults hold', () async {
+    test('outside a scope the documented defaults hold', () async {
       expect(() => run('false', quiet: true), throwsA(isA<ShellException>()));
       expect(await run('true', quiet: true).isOk, isTrue);
     });

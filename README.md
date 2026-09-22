@@ -27,12 +27,12 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 | `native.dart` | `Native`: loads `dart_toolkit_native`, the package's Rust library, for `fs` and `hash` | path |
 | `collection.dart` | `Sequence` (`.sequence` on any `Iterable` or `Map`): lazy queries, multi-key sort, joins, sets; `Table`: rows of named columns, and the package's one table renderer; CSV, NDJSON, Markdown | — |
 | `formats.dart` | `JsonDocument` with JSONPath; YAML, TOML, INI into it; one markup tree for `HtmlDocument` and `XmlDocument`, CSS `$` and XPath `$x` on both; YAML out | — |
-| `async.dart` | `parallelize`, `retry`, `Mutex`, `Cancel.session`, stream operators | — |
-| `cli.dart` | `Cli` with typed options, `Console` (spinners, progress, prompts), `Logger`, ANSI styling | — |
+| `async.dart` | `parallelize`, `retry`, `Mutex`, `Cancel.scope`, stream operators | — |
+| `cli.dart` | `Cli` with typed options, `Console` (logging, spinners, progress, boards, prompts), ANSI styling | — |
 | `fs.dart` | `Path`; zip, 7z, rar, tar and gz/xz/zstd/bz2 archives with passwords, by magic number, through the native library | path |
 | `hash.dart` | 16 digests and 4 checksums behind one `hash(Hash.…)`, HMAC, hex/base64/base32, `Secure.token`, `uuid`, `equals` | path |
-| `process.dart` | `run`, pipelines, `which`, `Shell.session` | path |
-| `http.dart` | `Request`, `Response`, `Client` (`IoClient`, `BrowserClient` over Chrome), `Http.session`, scraping, downloads, `res.html`, `url.json()` | — |
+| `process.dart` | `run`, pipelines, `which`, `Shell.scope` | path |
+| `http.dart` | `Request`, `Response`, `Client` (`IoClient`, `ChromeClient` over Chrome), `Http.scope`, scraping, downloads, `res.html`, `url.json()` | — |
 
 Ten modules. Every parser and the HTTP client are the package's own, checked against the
 packages they replaced in the test suite. What Dart cannot do fast — hashing at 2–3 GB/s,
@@ -73,11 +73,11 @@ print(piped.lines);
 ```
 
 A working directory, an environment, a timeout or a failure policy that every command would
-otherwise repeat belongs to the scope, not the call — the shape `Http.session` has for a
+otherwise repeat belongs to the scope, not the call — the shape `Http.scope` has for a
 client. `run`, `path.run(args:)` and a pipeline all read it, and a per-call argument still wins:
 
 ```dart
-await Shell.session(() async {
+await Shell.scope(() async {
   await run('git fetch --all');
   await run('git status --short');
   final probe = await run('git cat-file -e deadbeef', strict: true);   // this one may throw
@@ -251,14 +251,14 @@ final lock = Mutex();
 await lock.run(() async { /* critical section */ });
 ```
 
-**A token is not threaded, it is in scope.** `Cancel.session` holds one for everything inside
-it, the way `Http.session` holds a client: `download`, `parallelize`, `retry` and `cancellable`
+**A token is not threaded, it is in scope.** `Cancel.scope` holds one for everything inside
+it, the way `Http.scope` holds a client: `download`, `parallelize`, `retry` and `cancellable`
 all read `Cancel.token`, and none of them takes a `cancelToken:` of its own. `Cli.run` opens
 one around the action with `ctx.cancel` as its token, so a signal, `die` or the end of the
 action stops the lot.
 
 `Cancel.isCancelled`, `Cancel.reason` and `Cancel.throwIfCancelled()` read the ambient state —
-all three quiet outside a session, because nothing has cancelled it there. A loop of its own
+all three quiet outside a scope, because nothing has cancelled it there. A loop of its own
 cooperates with one line:
 
 ```dart
@@ -290,11 +290,11 @@ Future<void> work(CliContext ctx) async {
 ```
 
 Outside a `Cli`, open the scope yourself. There is no second way in: `.cancellable` takes no
-token and throws outside a session, so a token is named where the scope opens and nowhere else.
+token and throws outside a scope, so a token is named where the scope opens and nowhere else.
 
 ```dart
 final stop = CancelToken();
-await Cancel.session(() async {
+await Cancel.scope(() async {
   await for (final item in url.scrape<Item>().onResponse(parse).rights) print(item);
 }, token: stop);
 ```
@@ -319,8 +319,8 @@ final stories = url.scrape<Story>()
       }
       for (final a in html.$('a[href]')) ctx.follow(a.attr('href')!);
     })
-    .onError((ctx) => Logger.warn('${ctx.failure}'))
-    .onFinish((summary) => Logger.info('$summary'));
+    .onError((ctx) => Console.warn('${ctx.failure}'))
+    .onFinish((summary) => Console.info('$summary'));
 
 await for (final story in stories.rights) print(story);
 ```
@@ -354,7 +354,7 @@ host's gap but never lowers it. A site with no rules, or one that cannot be read
 nothing.
 
 Defaults: 16 in flight, 8 per host, 30 s, 2 retries, 5 hops, 16 MB, `user-agent: dart-toolkit`
-unless a request or the session names one, and a host answering 429 or 503 is paused for its
+unless a request or the scope names one, and a host answering 429 or 503 is paused for its
 `Retry-After`.
 
 A failure is an item, not a stream error — the contract `parallelize` has, on a stream:
@@ -366,14 +366,14 @@ stories.unwrap()    // throw the first
 await for (final r in stories) switch (r) { case Right(:final value): ...; case Left(:final value): ... }
 ```
 
-One session shares a client across every request inside it, closes it on the way out, and is
+One scope shares a client across every request inside it, closes it on the way out, and is
 where the timeout, default headers and cookie jar live. `get`, `head`, `post`, `put`, `patch` and `delete`
 name a body by what it is — at most one of `text:`, `bytes:`, `form:` and `json:`, each typed,
 each carrying its own `content-type`, and the same four words on `Request` and `follow`.
 `fetch` is a GET that must be 2xx.
 
 ```dart
-await Http.session(() async {
+await Http.scope(() async {
   final doc = await url.html();                         // throws on a non-2xx status
   final res = await other.get();                        // ...or check it yourself
   if (!res.isOk) await die('${res.statusCode} from $other');
@@ -383,10 +383,10 @@ await Http.session(() async {
 
 `cookies: true` keeps what the responses set and sends them back, so a login and the pages
 behind it are one crawl and nothing parses `set-cookie` by hand. The jar lasts as long as the
-session and never touches disk; a request that names its own `cookie` still wins.
+scope and never touches disk; a request that names its own `cookie` still wins.
 
 ```dart
-await Http.session(cookies: true, () async {
+await Http.scope(cookies: true, () async {
   await login.post(form: {'user': user, 'pass': pass});
   await for (final item in dashboard.scrape<Item>().onResponse(parse).rights) print(item);
 });
@@ -398,30 +398,62 @@ await Http.session(cookies: true, () async {
 ### Clients
 
 Every request in the module — a `get`, a download, a crawl — is sent through one `Client`, and
-`Http.session(client:)` is the only place a program names it. There are two, and a test's is a
+`Http.scope(client:)` is the only place a program names it. There are two, and a test's is a
 third:
 
 ```dart
-await Http.session(client: IoClient(), () async { … });                  // the default: dart:io
-await Http.session(client: await BrowserClient.launch(), () async { … });  // Chrome renders it
-await Http.session(client: MockClient((r) async => Response('ok', 200)), () async { … });
+await Http.scope(client: IoClient(), () async { … });                  // the default: dart:io
+await Http.scope(client: await ChromeClient.launch(), () async { … });  // Chrome renders it
+await Http.scope(client: MockClient((r) async => Response('ok', 200)), () async { … });
 ```
 
-`BrowserClient` speaks the DevTools protocol over a websocket — no third-party package and no
-Chromium download: `launch()` finds the Chrome already installed and runs it headless,
-`attach(port:)` joins one already running. The page arrives as the DOM **after its own scripts
-have run**, in `Response.bytes`, so `res.html`, `$`, `$x` and the whole scrape engine work over
-it unchanged:
+`IoClient` takes the transport's own limits: `perHost:` is how many connections may be open to
+one origin, and `connections:` caps the total in flight across every host, which `dart:io` has
+no setting for. The permit is held until the body is read to the end, cancelled or thrown, so
+the cap counts transfers rather than handshakes. `keepAlive:`, `connectTimeout:` and
+`userAgent:` are there too — `Http.scope(timeout:)` bounds the wait for a *response*, which is
+a different thing and composes with them.
 
 ```dart
-final browser = await BrowserClient.launch(tabs: 4);
-await Http.session(client: browser, () async {
+IoClient(connections: 32, perHost: 6, keepAlive: 30.s)
+```
+
+A scope is for code with no client to hand — a download deep in a call chain, a crawl
+assembled somewhere else. When the client *is* in hand, it takes the same verbs itself, and no
+scope is needed:
+
+```dart
+final chrome = await ChromeClient.connect();
+
+await chrome.get(url);                              // the page, rendered
+await chrome.html(url);                             // parsed
+await chrome.page(url, (p) => p.click('.download')); // the tab, live
+await chrome.scrape<Item>(url).onResponse(parse).rights.forEach(print);
+```
+
+This is not sugar. A scope holds a `Client`, and a `Client` is `send` and `close` — so through
+a scope, everything a particular client can do *beyond* the seam is invisible, and `page` was
+reachable only by keeping the client in a variable. Held, the client is the receiver: `page`
+sits beside `get` and the compiler decides whether it exists, so nothing probes, nothing casts,
+and nothing throws at runtime for asking a socket to click a button. The scope keeps the cases
+with no receiver to hang a client off — `stream.download(concurrency: 4)` over a merged stream
+of records.
+
+`ChromeClient` speaks the DevTools protocol over a websocket — no third-party package and no
+Chromium download: `launch()` finds the Chrome already installed and runs it headless,
+`attach(port:)` joins one already running, and `connect()` does whichever is needed. The page
+arrives as the DOM **after its own scripts have run**, in `Response.bytes`, so `res.html`, `$`,
+`$x` and the whole scrape engine work over it unchanged:
+
+```dart
+final chrome = await ChromeClient.launch(tabs: 4);
+await Http.scope(client: chrome, () async {
   await for (final item in url.scrape<Item>()
-      .onRequest((ctx) => ctx.request[BrowserClient.waitFor] = '.results .item')
+      .onRequest((ctx) => ctx.request[ChromeClient.waitFor] = '.results .item')
       .onResponse(parse)
       .rights) print(item);
 });
-await browser.close();
+await chrome.close();
 ```
 
 Only a GET without a `range` is rendered. A POST, a resumable download, an image — everything
@@ -432,11 +464,35 @@ What a page needs before it is worth reading is said per request, with a `Reques
 
 | key | |
 |---|---|
-| `BrowserClient.waitFor` | wait until a CSS selector matches |
-| `BrowserClient.waitUntil` | `BrowserWait.load` or `.idle` — `load`, then half a second of silence |
-| `BrowserClient.script` | JavaScript to run before the DOM is read; may return a promise |
-| `BrowserClient.challenge` | how long this page may sit on an interstitial |
-| `BrowserClient.direct` | send this one down the plain client instead |
+| `ChromeClient.waitFor` | wait until a CSS selector matches |
+| `ChromeClient.waitUntil` | `ChromeWait.load` or `.idle` — `load`, then half a second of silence |
+| `ChromeClient.script` | JavaScript to run before the DOM is read; may return a promise |
+| `ChromeClient.challenge` | how long this page may sit on an interstitial |
+
+`Request.raw` is the one directive that is not Chrome's own: it says *answer with the resource,
+never a rendering of it*, and any client that renders must hand it to plain HTTP instead. Every
+download sets it, so `path.download(url)` writes the file and not the viewer even inside a
+Chrome scope — a PDF put through a tab comes back as the DOM Chrome built to display it,
+which is not the PDF. `IoClient` renders nothing and ignores it.
+
+### The browser that outlives the run
+
+`launch()` is a fresh browser every time — temporary profile, no cookies, and the process dies
+with the client. That is right for a crawl and wrong for anything that depends on *being
+someone*. `connect()` keeps one browser and one profile across runs instead:
+
+```dart
+final chrome = await ChromeClient.connect();   // run 1: starts Chrome, you log in by hand
+await Http.scope(client: chrome, () async { … });
+await chrome.close();                           // the browser stays up
+```
+
+It probes the port, attaches if a Chrome is there, and otherwise starts one **detached** on a
+persistent profile (`~/.dart_toolkit/chrome`, or `profile:`) that `close()` never kills. The
+second run attaches in milliseconds with the cookies and the logged-in session still there. It
+is headful by default, because a browser you can see is one you can log into. A Chrome already
+on the port is attached to as it is, so `profile:`, `headless:` and `executable:` describe only
+how to *start* one.
 
 **A page is never lost.** A wait that expires, a selector that matches nothing, a challenge
 that never clears: none of them throw and none of them close the tab. The DOM as it stands
@@ -453,7 +509,7 @@ navigation Chrome refuses outright — a name that will not resolve, a refused c
 one open — through a login, a captcha, a form — never starves a crawl:
 
 ```dart
-final page = await browser.open(loginUrl);
+final page = await chrome.open(loginUrl);
 await page.fill('#user', 'me');
 await page.click('button[type=submit]');
 await page.waitFor('.dashboard');                 // false on time, never a throw
@@ -468,27 +524,41 @@ await page.close();
 | `response()`, `html()`, `statusCode`, `url` | what the tab holds right now, at any moment |
 | `waitFor(sel)`, `waitWhile(sel)` | a mutation observer; `false` when the time runs out |
 | `click(sel)`, `fill(sel, text)`, `press(key)` | real mouse and key events, with a DOM fallback |
-| `scroll(times:)` | walk an infinite feed until it stops growing |
-| `eval(js, awaitPromise:)`, `screenshot()` | run anything; a PNG of what the window shows |
+| `select(sel, value)`, `hover(sel)` | an option by value or by its text; a menu that opens on hover |
+| `text(sel)`, `attr(sel, name)`, `has(sel)` | one value off the live page; `attr` answers what the DOM resolved |
+| `navigating(action)` | run the action and wait out the navigation it causes |
+| `back()`, `scroll(times:)` | one entry back; walk an infinite feed until it stops growing |
+| `eval(js, awaitPromise:)`, `screenshot()`, `pdf()` | run anything; a PNG, or Chrome's own print |
+| `cookies()` | the jar, for handing a logged-in session to something that is not a browser |
 
-`browser.page(url, (page) async { … })` is the same thing with the close written for you.
+`chrome.page(url, (page) async { … })` is the same thing with the close written for you.
+
+`navigating` takes the action rather than being a bare `waitForNavigation()` you call after a
+click, and that is the point: a click is dispatched and returns immediately, so a fast page has
+finished loading before the next line runs and a wait armed afterwards has already missed the
+event it waits for. Give it the action and it cannot be got wrong:
+
+```dart
+await page.navigating(() => page.click('a.next'));
+print(page.url);
+```
 
 A `RequestKey<T>` is how any client is told something HTTP has no word for, and **a client
 ignores every key it does not know** — which is what lets the same crawl run over `IoClient`,
-which ignores the wait, and over `BrowserClient`, which honours it. To write a third client,
+which ignores the wait, and over `ChromeClient`, which honours it. To write a third client,
 implement two methods:
 
 ```dart
 abstract interface class Client {
   Future<StreamedResponse> send(Request request);
-  FutureOr<void> close();        // awaited by Http.session, so a socket teardown is safe
+  FutureOr<void> close();        // awaited by Http.scope, so a socket teardown is safe
 }
 ```
 
 and point `clientConformance` at it — `test/client_conformance.dart` brings its own server and
 checks the promises the rest of the module relies on: a non-2xx is a response and not a throw,
 `url` is the URL that answered, a body arrives as a stream, an unknown directive is ignored.
-`MockClient` is forty lines and `BrowserClient` five hundred and twenty; both are yours to read
+`MockClient` is forty lines and `ChromeClient` nine hundred and fifty; both are yours to read
 before writing a third.
 
 ### Downloads
@@ -567,9 +637,9 @@ final cli = Cli(
   name: 'deployer',
   options: [env, token, workers, dryRun],
   handler: (ctx) async {
-    final stage = Logger.stages(2);
+    final stage = Console.stages(2);
     stage('Checking target');           // [1/2] Checking target
-    Logger.info('Deploying to ${ctx(env).name} with ${ctx(workers)} workers');
+    Console.info('Deploying to ${ctx(env).name} with ${ctx(workers)} workers');
     stage('Rolling out');
     await Console.spin('Deploying...', deploy);
   },
@@ -587,6 +657,58 @@ its value (`-w8`). A subcommand nests by taking `commands:` of its own.
 `or` is the one word for a default, wherever one is given: `Opt.…or(value)`, and
 `Console.ask(or:)`, `confirm(or:)`, `select(or:)`.
 
+### Console
+
+One namespace for everything that reaches a terminal: log lines, rules, prompts, and the three
+indicators. They share a live region, so they compose — a log line written while a spinner is
+running scrolls above it instead of landing on top of it.
+
+```dart
+final spinner = Console.spinner('Connecting');
+Console.info('resolved 3 hosts');     // scrolls above; the spinner keeps spinning
+spinner.text = 'Fetching the index';  // redraws without restarting the animation
+spinner.succeed('index ready');
+```
+
+```
+  i resolved 3 hosts
+  ! one host was slow
+| Fetching the index (255ms)     <- the live row, redrawn in place
+```
+
+Logging is levelled and written through `Io`, so a redirected sink captures it:
+
+| | |
+|---|---|
+| `Console.debug/info/ok/warn/error(msg)` | `· ℹ ✓ ⚠ ✖`; `warn` and `error` go to stderr |
+| `Console.level`, `Console.isEnabled(l)` | the floor, `LogLevel.debug` … `silent` |
+| `Console.silenced(action)` | mutes *that* action and what it awaits, not the process |
+| `Console.stages(n)` | a self-numbering `[1/n] message` banner |
+| `Console.writeln(msg)` | unlevelled, still above the live region |
+
+The three indicators, each driven directly or through the sugar:
+
+| | |
+|---|---|
+| `Console.spinner(msg, style:)` | indeterminate; `text`, `succeed`, `fail`, `warn`, `info`, `stop` |
+| `Console.spin(msg, action)` | the same, ended for you when `action` settles |
+| `Console.progress(total)` | one measurable thing; `tick([n, label])`, `done([msg])` |
+| `Console.tasks(slots:)` | a board of concurrent rows; `report(batch)`, `done([msg])` |
+| `stream.show(slots:)` | any `Stream<BatchProgress>` straight onto a board |
+
+`SpinnerStyle` names the frames and the interval — `braille` (the default), `dot`, `line`,
+`ellipsis`, `bar`, `arc` — and takes any others, so a program with its own is not stuck
+choosing from the list:
+
+```dart
+const pulse = SpinnerStyle(['·', 'o', 'O', 'o'], interval: Duration(milliseconds: 120));
+Console.spinner('Waiting', style: pulse);
+```
+
+Without a terminal every one of these degrades to durable lines rather than escape codes: the
+spinner writes once when it starts and once when it ends, and a progress bar reports each new
+tenth. A captured log reads the same without the animation.
+
 ### Testable IO
 
 Every console write — including subprocess output — goes through `Io`, which also drives
@@ -597,15 +719,15 @@ format and the tests; `make native` builds the Rust library for this machine.
 ```dart
 final buffer = StringBuffer();
 Io.out = buffer;
-Logger.ok('captured, not printed');
+Console.ok('captured, not printed');
 await run('echo also-captured');
 Io.reset();
 
 final client = MockClient((req) async => Response('{"ok": true}', 200));
-await Http.session(() => url.json(), client: client);
+await Http.scope(() => url.json(), client: client);
 ```
 
-No request method takes a `client:` of its own: the session is where a program says which
+No request method takes a `client:` of its own: the scope is where a program says which
 client to use, once, and everything inside it — requests, downloads, a whole crawl — uses it.
 
 ---
@@ -618,7 +740,7 @@ than a tour:
 | file | shows |
 |---|---|
 | [`cli_app.dart`](example/cli_app.dart) | subcommands, typed options, stages, progress, `ctx.cancel`, exit hooks |
-| [`concurrent_work.dart`](example/concurrent_work.dart) | `parallelize` settling into `Either`, `retry`, `Cancel.session`, `Mutex`, isolates, stream operators |
+| [`concurrent_work.dart`](example/concurrent_work.dart) | `parallelize` settling into `Either`, `retry`, `Cancel.scope`, `Mutex`, isolates, stream operators |
 | [`config_formats.dart`](example/config_formats.dart) | YAML, TOML, INI, JSON and XML through one document type, JSONPath, `toYaml` |
 | [`files_and_digests.dart`](example/files_and_digests.dart) | `Path`, `glob`, digests for de-duplication, archives, verification |
 | [`shell_pipeline.dart`](example/shell_pipeline.dart) | `run`, pipelines, `which`, failure policy, `Env` |

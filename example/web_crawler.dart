@@ -7,29 +7,29 @@ Future<void> main() async {
   // One client for every request inside the session, with a timeout and default headers, and
   // closed when the session returns. Without this each call would build its own client and
   // throw away the connection.
-  await Http.session(timeout: 20.s, headers: {'user-agent': 'dart-toolkit example'}, () async {
+  await Http.scope(timeout: 20.s, headers: {'user-agent': 'dart-toolkit example'}, () async {
     Console.rule('One request, when one is all you need');
 
     // Fetch and parse in a single call. `json()`, `html()` and `xml()` each throw unless the
     // status is 2xx, so an error page cannot quietly match nothing.
     final item = await 'https://hacker-news.firebaseio.com/v0/item/1.json'.url.json();
-    Logger.info('item 1: "${item['title'].to<String>()}" by ${item['by'].to<String>()}');
+    Console.info('item 1: "${item['title'].to<String>()}" by ${item['by'].to<String>()}');
 
     // Or keep the response and decide for yourself.
     final res = await 'https://news.ycombinator.com'.url.get();
-    Logger.info('GET / → ${res.statusCode}, ${res.bytes.length} bytes, ok=${res.isOk}');
+    Console.info('GET / → ${res.statusCode}, ${res.bytes.length} bytes, ok=${res.isOk}');
 
     Console.rule('Querying a page');
 
     final page = res.html;
     // `$` is CSS and answers with a list whose `text` and `attr` speak for the first match.
-    Logger.info('title: ${page.$('title').text}');
-    Logger.info('first story: ${page.$('.titleline > a').text}');
-    Logger.info('links on the page: ${page.$('a[href]').length}');
+    Console.info('title: ${page.$('title').text}');
+    Console.info('first story: ${page.$('.titleline > a').text}');
+    Console.info('links on the page: ${page.$('a[href]').length}');
 
     // `$x` is XPath, for the questions CSS cannot ask — here, a link chosen by its own text.
     final more = page.$x('//a[text()="More"]/@href').texts;
-    Logger.info('the "More" link: ${more.join()}');
+    Console.info('the "More" link: ${more.join()}');
 
     Console.rule('A crawl: five hooks and a stream');
 
@@ -72,16 +72,16 @@ Future<void> main() async {
         // ignore, emit, follow — keeps the failure off the stream; doing nothing lets it
         // through as a Left.
         .onError((ctx) {
-          Logger.warn('${ctx.failure}');
+          Console.warn('${ctx.failure}');
           if (ctx.failure case RequestFailed() when ctx.attempt < 3) return ctx.retry(after: 1.s);
           ctx.ignore();
         })
-        .onFinish((summary) => Logger.info('$summary'));
+        .onFinish((summary) => Console.info('$summary'));
 
     // The crawl is a Stream<Either<ScrapeFailure, Story>>, so `rights`, `lefts`, `unwrap`,
     // `take` and `cancellable` all apply. Nothing is sent until it is listened to.
     final collected = await stories.rights.toList();
-    Logger.ok('${collected.length} stories');
+    Console.ok('${collected.length} stories');
 
     // Which is collection's problem now, not http's. `Table.rows` builds rows from any
     // maps; `.table` itself is the conversion on documents and HTML, not on plain maps.
@@ -90,7 +90,7 @@ Future<void> main() async {
     ).show();
 
     final busiest = collected.sequence.countBy((s) => s.site).sortedByValue(descending: true).take(3);
-    Logger.info('most linked: ${busiest.map((p) => '${p.$1} (${p.$2})').join(', ')}');
+    Console.info('most linked: ${busiest.map((p) => '${p.$1} (${p.$2})').join(', ')}');
 
     Console.rule('Downloading, with progress');
 
@@ -103,9 +103,9 @@ Future<void> main() async {
         'https://news.ycombinator.com/y18.svg'.url: into / 'y18.svg',
       }.download(concurrency: 2).show(message: 'Fetching assets', done: 'Assets fetched');
 
-      Logger.ok('${last?.written ?? 0} written of ${last?.total ?? 0}');
+      Console.ok('${last?.written ?? 0} written of ${last?.total ?? 0}');
       await for (final f in into.files()) {
-        Logger.info('${f.name}  ${await f.size()} B  sha256 ${(await f.hash(Hash.sha256)).substring(0, 12)}…');
+        Console.info('${f.name}  ${await f.size()} B  sha256 ${(await f.hash(Hash.sha256)).substring(0, 12)}…');
       }
     } finally {
       await into.delete(recursive: true);

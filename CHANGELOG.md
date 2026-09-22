@@ -1,5 +1,134 @@
 # Changelog
 
+## 0.0.4
+
+A scope is called a scope, a client you are holding can do everything, and the tab is a tab
+all the way down. The browser is called Chrome, the browser can outlive the run, and a
+download through it is the file again. One namespace owns the terminal, and the things drawn
+on it stopped writing over each other.
+
+### Renamed: `session` → `scope`
+
+- **`Http.session` → `Http.scope`, `Shell.session` → `Shell.scope`, `Cancel.session` →
+  `Cancel.scope`**, and `lib/src/http/session.dart` → `scope.dart`. The three read alike
+  because they *are* alike, and `scope` is the word that is true of all three: `session` was
+  exactly right for HTTP — a cookie jar plus connection reuse is the textbook definition —
+  and a metaphor for a workdir and a cancel token. The docs already called every one of them
+  "the scope" in prose; the API now agrees with the prose.
+
+### A client in your hand can do what a client in a scope cannot
+
+- **Added: `ClientExtensions`** — `client.get/head/post/put/patch/delete/fetch/json/html/xml`,
+  `client.fire(request)`, and `client.scrape<T>(url)` / `client.crawl<T>(requests)`. The same
+  verbs `UriExtensions` puts on a `Uri`, on a client you are holding.
+  - A scope holds a `Client`, and a `Client` is `send` and `close` — so through a scope,
+    everything a particular client can do *beyond* the seam is invisible. `ChromeClient.page`
+    was reachable only by keeping the client in a variable, which is the one thing the module
+    tells you never to do. Held, the client is the receiver: `page` sits beside `get` and the
+    compiler decides whether it exists. Nothing probes, nothing casts, and nothing throws at
+    runtime for asking a socket to click a button.
+  - A crawl could not take this route through the zone — a `Scrape` is lazy and its engine
+    starts in whichever zone finally listens — so `_Hooks` carries the client instead.
+  - `Http.scope` is unchanged and is still the only way in for the cases with no receiver to
+    hang a client off: `stream.download(concurrency: 4)` over a merged stream of records.
+
+### The tab grew the verbs it was missing
+
+- **Added to `ChromePage`: `text`, `attr`, `has`, `select`, `hover`, `navigating`, `back`,
+  `cookies`, `pdf`.** `text` and `attr` read one value off a live page without building a
+  whole `HtmlDocument` for it, and `attr` answers what the DOM resolved, so `href` comes back
+  absolute. `select` matches an option by value and then by the text a person would read.
+  `cookies` hands a logged-in jar to something that is not a browser.
+  - **`navigating(action)` takes the action rather than being a bare `waitForNavigation()`.**
+    A click is dispatched and returns immediately, and a fast page finishes loading before the
+    next line runs — a wait armed *after* the click has already missed the event and sits
+    until its timeout. The file said so already, over `_arm`: *arm before navigating*. Taking
+    the action is what makes that impossible to get wrong.
+  - **Fixed: `back()` hung for its whole timeout on the commonest kind of back.** A page the
+    back/forward cache restores is not loaded again and fires no second `load`, so a
+    lifecycle wait alone waited 30s for an event that was never coming. The URL moving is the
+    other proof the tab went back, and either will do.
+
+### Robustness
+
+- **Fixed: sending a request wrote on the caller's request.** A scope stamps its default
+  headers and its `cookie` onto what it sends, so the same `Request` sent twice carried the
+  first send's jar the second time — and the jar refresh was then skipped, because the guard
+  is *does this request already name a cookie*. `UriExtensions.send` copies before it sends;
+  `Client.send`'s contract now says outright that sending consumes a request.
+- **Fixed: a raw request through `ChromeClient` named no browser at all.** The rendered side
+  drops a caller's `user-agent` on purpose; the plain-socket side — the asset, the download —
+  sent none either, so a host saw the pages arrive from Chrome and the files arrive from
+  nothing. It now carries Chrome's own, asked once and kept, beside the cookies it already
+  carried.
+- **`Client.close()` is `Future<void>`, not `FutureOr<void>`.** Every caller had to write
+  `if (client.close() case final Future<void> pending)` to find out which it got. A
+  synchronous client returns an already-completed future and pays nothing; the seam absorbs
+  the difference instead of exporting it.
+- **Added: `IoClient(connections:, perHost:, keepAlive:, connectTimeout:, userAgent:)`.**
+  `connections` is a total in-flight cap across every host, which `dart:io` has no setting
+  for; the permit is held until the body is read to the end, cancelled or thrown, so the cap
+  counts transfers rather than handshakes.
+
+### A download through a browser was a rendering of the download
+
+- **Fixed: `path.download(url)` inside `Http.session(client: chrome)` wrote the DOM, not the
+  file.** A fresh transfer is a GET with no `range`, which was indistinguishable from a page,
+  so Chrome opened it in a tab and handed back the markup it built to display it — 2 KB of
+  binary came back as HTML, and the `Content-Length` check then failed the transfer outright.
+  Every binary download inside a Chrome session was silently wrong.
+  - **Added: `Request.raw`**, the one directive that is not a client's own: *answer with the
+    resource, never a rendering of it*. A client that renders must hand it to plain HTTP.
+    Every download sets it, so the download layer says what it wants without knowing Chrome
+    exists — and a third rendering client written later inherits the fix.
+  - **Removed: `ChromeClient.direct`**, which said the same thing one layer too low. The key
+    count is unchanged; it moved to where the contract lives.
+
+### A browser that is still there next time
+
+- **Added: `ChromeClient.connect()`** — attaches to the Chrome on the port, and starts one that
+  outlives the program when there is none. `launch()` is a fresh browser every time: temporary
+  profile, no cookies, process dies with the client. That is right for a crawl and wrong for
+  anything that depends on *being someone*. `connect()` keeps one browser and one profile
+  (`~/.dart_toolkit/chrome`, or `profile:`) across runs, so the second run attaches in
+  milliseconds with the logged-in session still there. `close()` never kills it, whichever run
+  started it. Headful by default, because a browser you can see is one you can log into.
+  - `attach()` now names the command that would start a Chrome to join, instead of failing
+    with whatever the probe threw.
+
+### One namespace for the terminal
+
+- **`Logger` is gone; its verbs are `Console`'s.** `Console.debug`, `.info`, `.ok`, `.warn`,
+  `.error`, `.stages`, `.level`, `.silenced` and `LogLevel` all read as before — the class in
+  front of them is the only change. Two namespaces wrote to one terminal and neither could see
+  the other, which is what made them garble each other; one namespace can hold a live region,
+  and two cannot.
+  - Removed: `Logger`, and `lib/src/cli/logger.dart` with it.
+- **Added: a live region, so the parts compose.** A spinner, bar or board owns the bottom rows
+  and says how many. Every durable write — a log line, a rule, a prompt — clears them, writes
+  where they stood, and draws them again underneath. `Console.info` during a `Console.spin`
+  used to land on the spinner's row; it now scrolls above it and the spinner keeps spinning.
+  Indicators nest: the innermost is the one on screen, and the one under it is redrawn when it
+  finishes.
+  - Added: `Console.writeln`, the unlevelled write that still respects the live region.
+- **Added: `Console.spinner(message)`**, the spinner as a handle rather than a wrapped call.
+  `Console.spin(msg, action)` was the only way in and ends when the action does; this one has
+  a mutable `text` and is ended by the program — `succeed`, `fail`, `warn`, `info`, `stop`.
+- **Added: `SpinnerStyle`** — `braille` (the default), `dot`, `line`, `ellipsis`, `bar`, `arc`,
+  and a constructor that takes any frames and interval, so the braille loader is directly
+  usable and a program with its own frames is not stuck choosing from the list.
+
+### Renamed
+
+- **`BrowserClient` → `ChromeClient`, `BrowserPage` → `ChromePage`, `BrowserWait` →
+  `ChromeWait`**, and `lib/src/http/browser.dart` → `chrome.dart`. It drives Chrome over the
+  DevTools protocol and nothing else; "browser" promised an abstraction that was never there.
+  The directive names on the wire moved with it: `browser.wait-for` is now `chrome.wait-for`.
+- **`Console.multiProgress()` → `Console.tasks()`**, and the indicator classes lost the prefix
+  the namespace already carries: `ConsoleProgress` → `ProgressBar`, `ConsoleMultiProgress` →
+  `TaskBoard`, and the private spinner is now `Spinner`. `multiProgress` named it by contrast
+  with the other one rather than by what it is, which is a board of concurrent tasks.
+
 ## 0.0.3
 
 A scope is the only way in, a second client is just a client, and the slow paths were measured

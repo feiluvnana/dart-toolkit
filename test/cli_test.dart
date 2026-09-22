@@ -74,12 +74,78 @@ void main() {
       expect(Io.stripAnsi(err.toString()), contains('Gave up'));
     });
 
+    test('Console.spinner is a handle the caller ends itself', () async {
+      final out = StringBuffer();
+      Io.out = out;
+      addTearDown(Io.reset);
+
+      final spinner = Console.spinner('Connecting');
+      expect(spinner.isSpinning, isTrue);
+      spinner.text = 'Fetching the index';
+      expect(spinner.text, equals('Fetching the index'));
+      spinner.succeed('index ready');
+
+      expect(spinner.isSpinning, isFalse);
+      expect(Io.stripAnsi(out.toString()), contains('index ready'));
+      // A second ending is not a second line.
+      spinner.fail('ignored');
+      expect(Io.stripAnsi(out.toString()), isNot(contains('ignored')));
+    });
+
+    test('a spinner ends on stderr when it fails or warns', () {
+      final out = StringBuffer();
+      final err = StringBuffer();
+      Io.out = out;
+      Io.err = err;
+      addTearDown(Io.reset);
+
+      Console.spinner('One').fail('broke');
+      Console.spinner('Two').warn('careful');
+      Console.spinner('Three').stop();
+
+      expect(Io.stripAnsi(err.toString()), contains('broke'));
+      expect(Io.stripAnsi(err.toString()), contains('careful'));
+      // stop() ends it with no final line: without a terminal each spinner still announces
+      // itself when it starts, so what `stop` owes is the absence of an ending, not silence.
+      expect(Io.stripAnsi(out.toString()), isNot(contains('✓')));
+      expect(Io.stripAnsi(out.toString()), contains('Three...'));
+    });
+
+    test('SpinnerStyle takes frames of its own', () {
+      const pulse = SpinnerStyle(['a', 'b'], interval: Duration(milliseconds: 10));
+      expect(pulse.frames, equals(['a', 'b']));
+      expect(SpinnerStyle.braille.frames.first, equals('⠋'));
+      expect(SpinnerStyle.braille.frames, hasLength(10));
+
+      final out = StringBuffer();
+      Io.out = out;
+      addTearDown(Io.reset);
+      // Without a terminal the first frame is what gets written.
+      Console.spinner('Waiting', style: pulse).stop();
+      expect(Io.stripAnsi(out.toString()), contains('a Waiting'));
+    });
+
+    test('Console.writeln writes unlevelled, and ignores the log level', () {
+      final out = StringBuffer();
+      Io.out = out;
+      addTearDown(Io.reset);
+
+      Console.level = LogLevel.silent;
+      addTearDown(() => Console.level = LogLevel.info);
+      Console.info('levelled line');
+      Console.writeln('bare line');
+
+      final text = Io.stripAnsi(out.toString());
+      expect(text, contains('bare line'));
+      expect(text, isNot(contains('levelled line')));
+    });
+
     test('onExit registers hook safely', () {
       expect(() => onExit(() {}), returnsNormally);
     });
   });
 
-  group('Logger levels', () {
+  group('Console log levels', () {
     late StringBuffer out;
     late StringBuffer err;
 
@@ -94,14 +160,14 @@ void main() {
     tearDown(() {
       Io.reset();
       Io.color = null;
-      Logger.level = LogLevel.info;
+      Console.level = LogLevel.info;
     });
 
     test('default level emits info and above but not debug', () {
-      Logger.debug('nope');
-      Logger.info('yes');
-      Logger.warn('warned');
-      Logger.error('boom');
+      Console.debug('nope');
+      Console.info('yes');
+      Console.warn('warned');
+      Console.error('boom');
 
       expect(out.toString(), isNot(contains('nope')));
       expect(out.toString(), contains('yes'));
@@ -110,42 +176,42 @@ void main() {
     });
 
     test('debug level includes verbose diagnostics', () {
-      Logger.level = LogLevel.debug;
-      Logger.debug('verbose detail');
+      Console.level = LogLevel.debug;
+      Console.debug('verbose detail');
       expect(out.toString(), contains('verbose detail'));
     });
 
     test('warn level suppresses info and ok', () {
-      Logger.level = LogLevel.warn;
-      Logger.info('hidden');
-      Logger.ok('hidden too');
-      Logger.stages(2)('hidden step');
-      Logger.warn('visible');
+      Console.level = LogLevel.warn;
+      Console.info('hidden');
+      Console.ok('hidden too');
+      Console.stages(2)('hidden step');
+      Console.warn('visible');
 
       expect(out.toString(), isNot(contains('hidden')));
       expect(err.toString(), contains('visible'));
     });
 
     test('silent suppresses everything including errors', () {
-      Logger.level = LogLevel.silent;
-      Logger.info('x');
-      Logger.error('y');
+      Console.level = LogLevel.silent;
+      Console.info('x');
+      Console.error('y');
       expect(out.toString(), isEmpty);
       expect(err.toString(), isEmpty);
     });
 
     test('silenced() restores the previous level afterwards, async bodies included', () async {
-      Logger.level = LogLevel.info;
-      final result = await Logger.silenced(() async {
+      Console.level = LogLevel.info;
+      final result = await Console.silenced(() async {
         await Future<void>.delayed(const Duration(milliseconds: 5));
-        Logger.info('muted');
+        Console.info('muted');
         return 42;
       });
       expect(result, equals(42));
       expect(out.toString(), isEmpty);
-      expect(Logger.level, equals(LogLevel.info));
+      expect(Console.level, equals(LogLevel.info));
 
-      Logger.info('audible');
+      Console.info('audible');
       expect(out.toString(), contains('audible'));
     });
   });
@@ -312,12 +378,12 @@ void main() {
       expect(readOut, equals('dist'));
     });
 
-    test('Logger methods execute cleanly', () {
-      expect(() => Logger.stages(3)('Processing...'), returnsNormally);
-      expect(() => Logger.ok('Done'), returnsNormally);
-      expect(() => Logger.info('Info note'), returnsNormally);
-      expect(() => Logger.warn('Warning note'), returnsNormally);
-      expect(() => Logger.error('Error note'), returnsNormally);
+    test('Console log methods execute cleanly', () {
+      expect(() => Console.stages(3)('Processing...'), returnsNormally);
+      expect(() => Console.ok('Done'), returnsNormally);
+      expect(() => Console.info('Info note'), returnsNormally);
+      expect(() => Console.warn('Warning note'), returnsNormally);
+      expect(() => Console.error('Error note'), returnsNormally);
     });
 
     test('Console table, rule, and progress execute cleanly', () {
@@ -339,7 +405,7 @@ void main() {
       progress.done('Finished');
     });
 
-    test('ConsoleProgress truncates long labels to fit within terminal width', () {
+    test('ProgressBar truncates long labels to fit within terminal width', () {
       final progress = Console.progress(556, message: 'Audio Tracks', columns: 80);
       final line = progress.formatLine(
         'DISC.21／ LB!キャラクターソング・semicrystalline.Little Busters! original arrange album・Rockstar Busters! 他より #11',
@@ -351,8 +417,8 @@ void main() {
       expect(line.startsWith('  Audio Tracks: ['), isTrue);
     });
 
-    test('ConsoleMultiProgress formats header and multiple worker slots correctly', () {
-      final multi = Console.multiProgress(total: 10, slots: 3, message: 'Downloading Assets', columns: 80);
+    test('TaskBoard formats header and multiple worker slots correctly', () {
+      final multi = Console.tasks(total: 10, slots: 3, message: 'Downloading Assets', columns: 80);
 
       // Initial state (all slots idle)
       var lines = multi.formatLines();
@@ -617,10 +683,10 @@ void main() {
       Io.err = errBuffer;
 
       try {
-        Logger.info('Hello from Logger');
-        Logger.error('Oops from Logger');
-        expect(outBuffer.toString(), contains('Hello from Logger'));
-        expect(errBuffer.toString(), contains('Oops from Logger'));
+        Console.info('Hello from Console');
+        Console.error('Oops from Console');
+        expect(outBuffer.toString(), contains('Hello from Console'));
+        expect(errBuffer.toString(), contains('Oops from Console'));
       } finally {
         Io.reset();
       }
@@ -745,11 +811,11 @@ void main() {
       expect(widths.length, equals(1));
     });
 
-    test('Logger.warn goes to stderr with Logger.error', () {
+    test('Console.warn goes to stderr with Console.error', () {
       final err = StringBuffer();
       Io.err = err;
       try {
-        Logger.warn('careful');
+        Console.warn('careful');
       } finally {
         Io.reset();
       }
@@ -780,7 +846,7 @@ void main() {
         handler: (ctx) {
           seen = ctx.cancel;
           expect(ctx.cancel.isCancelled, isFalse);
-          expect(Cancel.token, same(ctx.cancel), reason: 'the action runs inside a Cancel.session');
+          expect(Cancel.token, same(ctx.cancel), reason: 'the action runs inside a Cancel.scope');
           throw StateError('bug');
         },
       );
@@ -804,11 +870,11 @@ void main() {
       Env.remove('NO_COLOR');
     });
 
-    test('captures subprocess output, not just Logger output', () async {
-      Logger.ok('via Logger');
+    test('captures subprocess output, not just Console output', () async {
+      Console.ok('via Console');
       await run('echo SUBPROCESS_MARKER');
 
-      expect(out.toString(), contains('via Logger'));
+      expect(out.toString(), contains('via Console'));
       expect(out.toString(), contains('SUBPROCESS_MARKER'));
     });
 
@@ -848,8 +914,8 @@ void main() {
       expect(Io.color, isFalse);
     });
 
-    test('ConsoleMultiProgress reports each completion without a terminal', () {
-      final progress = Console.multiProgress(total: 3, slots: 2, message: 'files', columns: 80);
+    test('TaskBoard reports each completion without a terminal', () {
+      final progress = Console.tasks(total: 3, slots: 2, message: 'files', columns: 80);
 
       var completed = 0;
       for (final name in ['a.txt', 'b.txt', 'c.txt']) {
@@ -884,7 +950,7 @@ void main() {
     });
 
     test('report() renders a BatchProgress without the caller restating its fields', () {
-      final progress = Console.multiProgress(slots: 2, message: 'files', columns: 80);
+      final progress = Console.tasks(slots: 2, message: 'files', columns: 80);
       final url = 'https://example.com/a.txt'.url;
       final path = Path('out/a.txt');
 
@@ -911,7 +977,7 @@ void main() {
       expect(lines.any((l) => l.contains('b.txt') && l.contains('[skipped]')), isTrue);
     });
 
-    test('ConsoleProgress without a terminal reports each new tenth, not each tick', () {
+    test('ProgressBar without a terminal reports each new tenth, not each tick', () {
       final progress = Console.progress(3, message: 'files', columns: 80);
       progress
         ..tick()
@@ -930,16 +996,16 @@ void main() {
     });
   });
 
-  group('Logger scoping', () {
+  group('Console log scoping', () {
     test('silencing one task does not silence a concurrent one', () async {
       final out = StringBuffer();
       Io.out = out;
       addTearDown(Io.reset);
       await Future.wait([
-        Logger.silenced(() async => await Future<void>.delayed(const Duration(milliseconds: 20))),
+        Console.silenced(() async => await Future<void>.delayed(const Duration(milliseconds: 20))),
         Future(() async {
           await Future<void>.delayed(const Duration(milliseconds: 10));
-          Logger.info('concurrent');
+          Console.info('concurrent');
         }),
       ]);
       expect(out.toString(), contains('concurrent'));
@@ -949,8 +1015,8 @@ void main() {
       final out = StringBuffer();
       Io.out = out;
       addTearDown(Io.reset);
-      await Logger.silenced(() async => Logger.info('hidden'));
-      Logger.info('shown');
+      await Console.silenced(() async => Console.info('hidden'));
+      Console.info('shown');
       expect(out.toString(), isNot(contains('hidden')));
       expect(out.toString(), contains('shown'));
     });

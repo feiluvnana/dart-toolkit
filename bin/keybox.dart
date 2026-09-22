@@ -14,11 +14,11 @@ void main(List<String> args) => Cli(
   name: 'keybox',
   description: 'Key BOX Scraper & Downloader',
   version: '0.0.2',
-  handler: (ctx) => Http.session(run, timeout: 60.s),
+  handler: (ctx) => Http.scope(run, timeout: 60.s),
 ).run(args);
 
 Future<void> run() async {
-  final stage = Logger.stages(3);
+  final stage = Console.stages(3);
   final base = baseName.path;
   final baseUri = keyBase.url;
   final artwork = <Uri, Path>{};
@@ -121,7 +121,7 @@ Future<void> run() async {
       artwork[baseUri / src] = base / 'Others/Events & Topics' / src.path.name;
     }
   });
-  Logger.ok('Found ${discNames.length} discs and ${artwork.length} artwork/document assets.');
+  Console.ok('Found ${discNames.length} discs and ${artwork.length} artwork/document assets.');
 
   // Stage 2: Track links and downloads, merged — tracks resolve while artwork transfers.
   stage('Resolving tracks and downloading assets');
@@ -150,7 +150,7 @@ Future<void> run() async {
           );
         }
       })
-      .onError((ctx) => Logger.warn('${ctx.failure}'))
+      .onError((ctx) => Console.warn('${ctx.failure}'))
       .rights;
 
   final last = await [Stream.fromIterable(artwork.pairs), songs]
@@ -171,5 +171,5 @@ Future<void> run() async {
       ['Archive', '$baseName.zip'],
     ],
   ).show();
-  Logger.ok('Completed successfully.');
+  Console.ok('Completed successfully.');
 }

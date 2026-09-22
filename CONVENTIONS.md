@@ -24,23 +24,65 @@ opposite. Coherence, documentation and feature count rank below both.
   the values, so nothing rebuilds an enum from a string. `Table` still keys by column name,
   because a CSV's columns are not known until it is read.
 - **Ambient over threaded.** A setting every call would otherwise carry belongs to the scope
-  that sets it. There are three such scopes and they read alike: `Http.session` holds the
-  client, so no request, download or crawl takes a `client:`; `Shell.session` holds the
+  that sets it. There are three such scopes and they read alike: `Http.scope` holds the
+  client, so no request, download or crawl takes a `client:`; `Shell.scope` holds the
   workdir, environment, timeout, encoding and failure policy, so `run`, `path.run` and a
-  pipeline repeat none of them; `Cancel.session` holds the token, so `download`, `retry` and
+  pipeline repeat none of them; `Cancel.scope` holds the token, so `download`, `retry` and
   `.cancellable` take no `cancelToken:`. A genuinely per-call argument — `headers:`, `input:`,
   `args:` — stays an argument, and still wins over the scope. This survived the second client:
-  `BrowserClient` is named in the same one place `IoClient` is, and `url.html()` says nothing
+  `ChromeClient` is named in the same one place `IoClient` is, and `url.html()` says nothing
   about either.
 - **The scope is the only way in.** Not the default way — the only one. `cancelWith` kept an
-  optional token that defaulted to the session's, which is two ways to say one thing and the
+  optional token that defaulted to the scope's, which is two ways to say one thing and the
   one an audit finds threaded through call sites; it takes none now — and, taking nothing and
-  doing no IO, it is a getter called `cancellable` — and it throws outside a session. A client reaches the network through `Http.session` and a token reaches an
-  operation through `Cancel.session`, and there is no second door. What a scope *holds* is
-  named where it opens — `Http.session(client:)`, `Cancel.session(token:)` — and that is the
-  one place either word appears. A session's own settings are its arguments too:
-  `timeout:`, `headers:` and `cookies:` are all `Http.session`'s, never a request's.
-- **A scope is opened once, at the top.** `Cli.run` opens the `Cancel.session` whose token is
+  doing no IO, it is a getter called `cancellable` — and it throws outside a scope. A token
+  reaches an operation through `Cancel.scope` and nowhere else. What a scope *holds* is
+  named where it opens — `Http.scope(client:)`, `Cancel.scope(token:)` — and that is the
+  one place either word appears.
+  - **One door per situation, which is not the same as one door.** A client now has two ways
+    to reach the network and they are not alternatives: `url.get()` requires the scope and is
+    the only way in for code with no client to hand, and `client.get(url)` requires no scope
+    and is the only way in for code holding one. What the rule forbids is two spellings for
+    one situation — `cancelWith(token:)` beside `Cancel.scope`, `download` beside
+    `downloadAll` — because then a call site chooses for no reason and an audit finds the
+    argument threaded. Here the situation picks the spelling, and neither spelling can do the
+    other's job: a scope cannot carry a capability, and a receiver cannot appear where there
+    is no receiver.
+  - A scope's own settings are its arguments too: `timeout:`, `headers:` and `cookies:` are
+    all `Http.scope`'s, never a request's.
+- **A scope holds settings; it cannot hold a capability.** This is the line the three scopes
+  are drawn on, and the one `Http.scope` crossed without saying so. A timeout, a cookie jar,
+  default headers, a workdir, a cancel token are all *settings* — every implementation means
+  the same thing by them, so the scope can hold them and the call site pays nothing. A
+  `Client` is not only settings: `ChromeClient` can drive a tab, and `IoClient` cannot. What a
+  scope holds it holds as the seam's type, so through `Http.scope` a client is `send` and
+  `close` and nothing else — which is why `ChromePage` was reachable only by keeping the
+  client in a variable, the one thing *ambient over threaded* says never to do. The fix is not
+  a `url.page(…)` that probes the ambient client for a capability: that is the probe two
+  bullets down, and it would resurrect the `Browser` abstraction this release deleted for
+  promising something that was never there. Capabilities belong on the object
+  (`ClientExtensions`, so `chrome.page` sits beside `chrome.get` and the compiler rules on
+  it); the scope keeps the cases with no receiver to hang a client off —
+  `stream.download(concurrency: 4)` over a merged stream of records, which is `bin/keybox.dart`
+  line for line.
+- **Sending consumes a request.** A client writes on the request it is handed — a scope stamps
+  its default headers and its `cookie` there — so a `Request` is single-use. Everything that
+  sends one a caller owns copies it first, and the seam's own doc says so, because the
+  alternative is the bug this found: the same request sent twice carried the first send's jar
+  and the refresh was then skipped, since the guard is *does this request already name a
+  cookie*. The engine already copied defensively at every site; the discipline is now in the
+  type's contract instead of in each caller's memory.
+- **A wait is armed before the thing it waits for.** `ChromePage.navigating` takes the action
+  rather than being a bare `waitForNavigation()` called after a click, because a click returns
+  immediately and a fast page finishes loading before the next line runs — a wait armed
+  afterwards has already missed its event and sits until its timeout. Where a wait cannot be
+  armed first, it needs a second signal: `back()` waits on the lifecycle event *or* the URL
+  moving, because a page the back/forward cache restores fires no second `load` at all.
+- **A seam absorbs the difference; it does not export it.** `Client.close()` was
+  `FutureOr<void>`, which saved a synchronous implementation one `Future.value()` and cost
+  every caller an `if (client.close() case final Future<void> pending)` to find out which it
+  got. It is `Future<void>` now.
+- **A scope is opened once, at the top.** `Cli.run` opens the `Cancel.scope` whose token is
   `ctx.cancel`, so a program that wants ^C to stop its downloads writes nothing at all.
 - **A seam is two methods, and unknown means ignored.** Anything pluggable is an
   `abstract interface class` small enough to implement in an afternoon — `Client` is `send` and
@@ -48,6 +90,12 @@ opposite. Coherence, documentation and feature count rank below both.
   (`RequestKey`) that the others skip in silence. A capability flag, a probe, or a `switch` over
   implementations would each put the caller back in the business of knowing which one it has.
   A seam ships with the battery that says whether an implementation honours it.
+  - **A key every implementation must honour belongs to the seam, not to one side of it.**
+    `Request.raw` — *the resource, never a rendering of it* — reads like the Chrome-specific
+    keys beside it and is not one: it was `ChromeClient.direct`, and a download that wanted it
+    had to name Chrome to ask, which is the layering inverted. It sits on `Request` now, where
+    the contract does, so `download` says what it wants of any client and a renderer written
+    later inherits the obligation instead of reintroducing the bug.
 - **One shape and one name for one and for many.** `dest.download(url)`, `pairs.download()`,
   `stream.download()` and `map.download()` are one word over four receivers, streaming the
   same `BatchDownloadProgress`: one file is a batch of one, so `show()` renders either and
@@ -67,7 +115,7 @@ opposite. Coherence, documentation and feature count rank below both.
 - **An ambient scope answers every question its token does.** `Cancel.isCancelled`,
   `Cancel.reason` and `Cancel.throwIfCancelled()` mirror the three readings on `CancelToken`,
   because the alternative is `Cancel.token?.throwIfCancelled()` — which the package itself
-  wrote in three places, and whose `?.` silently does nothing outside a session where it looks
+  wrote in three places, and whose `?.` silently does nothing outside a scope where it looks
   like it checked. A reading is quiet outside the scope (nothing has cancelled it); an adapter
   like `.cancellable` throws there instead, because binding to a scope that does not exist
   would leave a wrapper that does nothing at all.
@@ -156,6 +204,14 @@ opposite. Coherence, documentation and feature count rank below both.
 - **`$` is CSS and `$x` is XPath, on every document.** `$` meaning CSS on HTML and XPath on
   XML was one glyph with two meanings; XML now answers both, matching names as written.
 - **Two modules meet through an interface in `core`** (`TaskProgress`, `BatchProgress`).
+- **One namespace owns the terminal, and one live region underneath it.** Everything that
+  writes to a terminal is on `Console` — the log verbs, the prompts, the rule, and the three
+  indicators. `Logger` was a second namespace for the same terminal, and the two could not see
+  each other: a `Logger.info` during a `Console.spin` wrote to the row the spinner was
+  redrawing, and they garbled. A renderer now owns the bottom rows and declares how many, so
+  any durable write clears them, lands where they stood, and draws them again below. That is
+  the whole reason the parts compose, and it is why the verbs are on the same class rather
+  than merely in the same module.
 - **Nothing in `lib/` exists for tests.** The handler-backed `Client` is `test/mock_client.dart`.
 - **Tests are one file per module**, and where a piece replaced a package, a differential test
   against that package or the system tool on real inputs. No timing assertions in tests; those

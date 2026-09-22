@@ -43,7 +43,7 @@ final class Headers extends MapBase<String, String> {
 ///
 /// A client reads it with the key itself — `waitFor(request)` — and **ignores every key it
 /// does not know**. That is what makes the same crawl run unchanged on [IoClient], which
-/// ignores the wait, and on [BrowserClient], which honours it.
+/// ignores the wait, and on [ChromeClient], which honours it.
 ///
 /// {@category Networking}
 final class RequestKey<T extends Object> {
@@ -69,6 +69,17 @@ final class RequestKey<T extends Object> {
 ///
 /// {@category Networking}
 final class Request {
+  /// Answer with the resource itself, never a rendering of it: `request[Request.raw] = true`.
+  ///
+  /// The one directive that is not a client's own. A client that renders — [ChromeClient],
+  /// and any other written later — must hand this request to plain HTTP instead, because
+  /// what the caller wants is the bytes the server sent. A PDF put through a tab comes back
+  /// as the DOM Chrome built to display it, which is not the PDF.
+  ///
+  /// Every download sets it, so `path.download(url)` writes the file and not the viewer
+  /// even inside `Http.scope(client: chrome)`. [IoClient] renders nothing and ignores it.
+  static const raw = RequestKey<bool>('raw');
+
   final String method;
   final Uri url;
   final Headers headers;
@@ -337,7 +348,7 @@ String _windows1252(Uint8List bytes) => String.fromCharCodes([
     if (b >= 0x80 && b <= 0x9f) _windows1252High[b - 0x80] else b,
 ]);
 
-/// Something a request can be sent through: the real client, a session's wrapper, a mock.
+/// Something a request can be sent through: the real client, a scope's wrapper, a mock.
 ///
 /// {@category Networking}
 abstract interface class Client {
@@ -347,13 +358,21 @@ abstract interface class Client {
   /// not a throw; a transport failure is a [ClientException] or a `dart:io` exception;
   /// [StreamedResponse.url] is the URL that *answered*, after whatever redirects were
   /// followed; and a [RequestKey] the implementation does not recognise is ignored.
+  ///
+  /// A client may write on the request it is handed — a scope stamps its default headers
+  /// and its `cookie` there — so **sending consumes a request**. Everything in this module
+  /// that sends one the caller owns copies it first ([UriExtensions.send],
+  /// [ClientExtensions.get] and its siblings, the crawl engine); a caller reaching `send`
+  /// directly and meaning to reuse the request copies it with [Request.copy].
   Future<StreamedResponse> send(Request request);
 
   /// Releases connections; the client cannot be used afterwards.
   ///
-  /// [Http.session] awaits this, so an implementation that shuts down over a socket — a
-  /// browser, a pool — may return a future and be sure it is waited for.
-  FutureOr<void> close();
+  /// Always a future, so every caller awaits one thing. A client that shuts down over a
+  /// socket — a browser, a pool — needs the wait; one that closes synchronously returns an
+  /// already-completed future and costs its caller nothing. The seam absorbs the difference
+  /// rather than making each call site branch on it.
+  Future<void> close();
 }
 
 /// Reads and discards a response body, releasing the connection instead of holding it
@@ -381,10 +400,55 @@ final class ClientException implements Exception {
 final class IoClient implements Client {
   final HttpClient _client;
 
-  IoClient([HttpClient? client]) : _client = client ?? HttpClient();
+  /// The total-transfer cap, or `null` when the client was built without `connections:`.
+  final Semaphore? _permits;
+
+  /// [perHost] is how many connections may be open to one origin at a time; [connections]
+  /// caps the total in flight across every host, which `dart:io` has no setting for. A
+  /// permit is held until the body is read to the end, cancelled or thrown, so the cap
+  /// counts transfers rather than handshakes.
+  ///
+  /// [keepAlive] is how long an idle connection is kept for the next request, and
+  /// [connectTimeout] bounds the handshake alone — [Http.scope]'s `timeout:` bounds the
+  /// wait for a response, which is a different thing and composes with this one.
+  /// [userAgent] is sent when a request does not name its own.
+  ///
+  /// [client] takes over an `HttpClient` configured elsewhere — a proxy, a certificate
+  /// policy; the settings here are applied on top of it.
+  IoClient({
+    int? connections,
+    int? perHost,
+    Duration? keepAlive,
+    Duration? connectTimeout,
+    String? userAgent,
+    HttpClient? client,
+  }) : _client = client ?? HttpClient(),
+       _permits = connections == null ? null : Semaphore(connections) {
+    if (perHost != null) _client.maxConnectionsPerHost = perHost;
+    if (keepAlive != null) _client.idleTimeout = keepAlive;
+    if (connectTimeout != null) _client.connectionTimeout = connectTimeout;
+    if (userAgent != null) _client.userAgent = userAgent;
+  }
 
   @override
   Future<StreamedResponse> send(Request request) async {
+    final permit = await _permits?.acquire();
+    var released = false;
+    void release() {
+      if (released) return;
+      released = true;
+      permit?.release();
+    }
+
+    try {
+      return await _send(request, release);
+    } catch (_) {
+      release();
+      rethrow;
+    }
+  }
+
+  Future<StreamedResponse> _send(Request request, void Function() release) async {
     final HttpClientResponse response;
     try {
       final io = await _client.openUrl(request.method, request.url);
@@ -403,7 +467,7 @@ final class IoClient implements Client {
     // One value per name, so a header the server repeated is joined. `set-cookie` is the
     // one that cannot be joined with a comma — its `Expires` holds one — and a newline
     // cannot appear in a header value, so it separates them unambiguously. Chrome's
-    // DevTools protocol joins the same header the same way, so [BrowserClient] agrees.
+    // DevTools protocol joins the same header the same way, so [ChromeClient] agrees.
     response.headers.forEach((name, values) => headers[name] = values.join(name == 'set-cookie' ? '\n' : ', '));
     if (response.contentLength == -1 && headers.containsKey('content-encoding')) {
       // dart:io decoded the body; the length and encoding on the wire no longer describe it.
@@ -416,9 +480,12 @@ final class IoClient implements Client {
       url = url.resolveUri(hop.location);
     }
     return StreamedResponse(
-      response.handleError(
-        (Object e) => throw ClientException(e is HttpException ? e.message : '$e', request.url),
-        test: (e) => e is HttpException,
+      _releasing(
+        response.handleError(
+          (Object e) => throw ClientException(e is HttpException ? e.message : '$e', request.url),
+          test: (e) => e is HttpException,
+        ),
+        release,
       ),
       response.statusCode,
       contentLength: response.contentLength == -1 ? null : response.contentLength,
@@ -431,5 +498,15 @@ final class IoClient implements Client {
   }
 
   @override
-  void close() => _client.close(force: true);
+  Future<void> close() async => _client.close(force: true);
+
+  /// Hands the permit back when the body ends, however it ends — read to completion, thrown,
+  /// or cancelled by a caller that stopped listening.
+  static Stream<List<int>> _releasing(Stream<List<int>> body, void Function() release) async* {
+    try {
+      yield* body;
+    } finally {
+      release();
+    }
+  }
 }

@@ -118,5 +118,5 @@ void show(Iterable<String> iterableApi, Iterable<String> sequenceApi) {
       for (var i = 0; i < a.length; i++) [a[i], i < b.length ? b[i] : ''],
     ],
   ).show();
-  a.toString() == b.toString() ? Logger.ok('same result') : Logger.error('results differ');
+  a.toString() == b.toString() ? Console.ok('same result') : Console.error('results differ');
 }

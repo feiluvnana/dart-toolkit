@@ -19,9 +19,9 @@ class _CountingClient implements Client {
   Future<StreamedResponse> send(Request request) => _inner.send(request);
 
   @override
-  void close() {
+  Future<void> close() async {
     _onClose();
-    _inner.close();
+    await _inner.close();
   }
 }
 
@@ -33,7 +33,7 @@ void main() {
         seen.add('${r.method} ${r.headers['content-type'] ?? '-'} ${r.text}');
         return Response('', 200);
       });
-      await Http.session(() async {
+      await Http.scope(() async {
         final u = 'https://a.com/x'.url;
         await u.head();
         await u.put(json: {'a': 1});
@@ -49,6 +49,73 @@ void main() {
         'POST application/x-www-form-urlencoded; charset=utf-8 k=v+w',
       ]);
       expect(() => 'https://a.com/'.url.post(text: 'x', json: 1), throwsArgumentError);
+    });
+
+    test('sending does not write on the caller\'s request', () async {
+      final sent = <String?>[];
+      final client = MockClient((r) async {
+        sent.add(r.headers['cookie']);
+        return Response('', 200, headers: {'set-cookie': 'a=${sent.length}; Path=/'});
+      });
+      final reused = Request('GET', 'https://a.com/x'.url);
+      await Http.scope(cookies: true, client: client, () async {
+        await 'https://a.com/x'.url.send(reused);
+        await 'https://a.com/x'.url.send(reused);
+      });
+      // Without the copy the second send carries the first send's jar and the refresh is
+      // skipped, because the guard is "does this request already name a cookie".
+      expect(sent, [null, 'a=1']);
+      expect(reused.headers.containsKey('cookie'), isFalse, reason: 'the caller\'s object is untouched');
+    });
+
+    test('the verbs work on a client held rather than scoped', () async {
+      final seen = <String>[];
+      final client = MockClient((r) async {
+        seen.add('${r.method} ${r.url.path}');
+        return Response(r.url.path == '/j' ? '{"n":1}' : '<p>hi</p>', 200);
+      });
+      expect((await client.get('https://a.com/g'.url)).statusCode, 200);
+      await client.post('https://a.com/p'.url, json: {'a': 1});
+      await client.head('https://a.com/h'.url);
+      expect((await client.json('https://a.com/j'.url))['n'].raw, 1);
+      expect((await client.html('https://a.com/d'.url)).$('p').text, 'hi');
+      expect(seen, ['GET /g', 'POST /p', 'HEAD /h', 'GET /j', 'GET /d']);
+    });
+
+    test('a client verb is the ambient client for what nests inside it', () async {
+      var opened = 0;
+      final client = MockClient((r) async {
+        opened++;
+        return Response('ok', 200);
+      });
+      await client.get('https://a.com/one'.url);
+      // Nested: the inner call finds the same client in the zone rather than opening its own.
+      await client.fire(Request('GET', 'https://a.com/two'.url));
+      expect(opened, 2);
+      expect(Http.client, isNull, reason: 'the zone does not outlive the call');
+    });
+
+    test('IoClient caps total transfers and frees the permit when a body ends', () async {
+      var inFlight = 0;
+      var peak = 0;
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      unawaited(
+        server.forEach((request) async {
+          inFlight++;
+          peak = peak > inFlight ? peak : inFlight;
+          await Future<void>.delayed(const Duration(milliseconds: 60));
+          request.response.write('body');
+          await request.response.close();
+          inFlight--;
+        }),
+      );
+      final url = Uri.parse('http://${server.address.address}:${server.port}/');
+      final client = IoClient(connections: 2);
+      await Future.wait([for (var i = 0; i < 6; i++) client.get(url)]);
+      expect(peak, lessThanOrEqualTo(2), reason: 'the cap counts transfers, not handshakes');
+      // Six requests through a cap of two only finish if every permit came back.
+      await client.close();
+      await server.close(force: true);
     });
 
     test('Uri.withQuery adds, replaces and removes parameters', () {
@@ -81,7 +148,7 @@ void main() {
           );
         });
         final target = Path(dir.path) / 'f.bin';
-        await Http.session(() async {
+        await Http.scope(() async {
           final first = await target.download('https://a.com/f'.url).toList();
           expect(first.last.current, isA<DownloadFailed>());
           expect(File('$target.part').lengthSync(), 2000);
@@ -244,7 +311,7 @@ void main() {
         return Response('Not Found', 404);
       });
 
-      final items = await Http.session(() async {
+      final items = await Http.scope(() async {
         return await 'https://example.com/index'.url
             .scrape<Map<String, dynamic>>()
             .onResponse((ctx) {
@@ -282,7 +349,7 @@ void main() {
     test('fetch-and-parse refuses a non-2xx page, get() reports it instead', () async {
       final client = MockClient((request) async => Response('<html>not found</html>', 404));
 
-      await Http.session(client: client, () async {
+      await Http.scope(client: client, () async {
         await expectLater('https://example.com/missing'.url.html(), throwsA(isA<HttpException>()));
 
         final res = await 'https://example.com/missing'.url.get();
@@ -299,7 +366,7 @@ void main() {
         return Response('ok', 200);
       });
 
-      final resolved = await Http.session(() async {
+      final resolved = await Http.scope(() async {
         return await 'https://example.com/album'.url
             .scrape<Uri>()
             .onResponse((ctx) {
@@ -313,7 +380,7 @@ void main() {
       expect(resolved.single, equals('https://example.com/track/7.mp3'.url));
     });
 
-    test('Http.session shares one client across every call inside it', () async {
+    test('Http.scope shares one client across every call inside it', () async {
       var closed = 0;
       var requests = 0;
       final client = _CountingClient(
@@ -324,9 +391,9 @@ void main() {
         () => closed++,
       );
 
-      expect(Http.client, isNull, reason: 'no ambient client outside a session');
+      expect(Http.client, isNull, reason: 'no ambient client outside a scope');
 
-      final pages = await Http.session(() async {
+      final pages = await Http.scope(() async {
         expect(identical(Http.client, client), isTrue);
         final a = await 'https://example.com/a'.url.html();
         final b = await 'https://example.com/b'.url.get();
@@ -337,7 +404,7 @@ void main() {
       expect(pages.first, equals('ok'));
       expect(requests, equals(2));
       expect(closed, equals(0), reason: 'a supplied client is the caller\'s to close');
-      expect(Http.client, isNull, reason: 'the session ends with its body');
+      expect(Http.client, isNull, reason: 'the scope ends with its body');
     });
 
     test('scrape accepts Request seeds directly and handles dedupe properly', () async {
@@ -353,7 +420,7 @@ void main() {
       final req1 = Request('POST', Uri.parse('https://example.com/api'))..text = 'body1';
       final req2 = Request('POST', Uri.parse('https://example.com/api'))..text = 'body2';
 
-      final results = await Http.session(() async {
+      final results = await Http.scope(() async {
         return await [req1, req2]
             .scrape<String>()
             .onResponse((ctx) {
@@ -375,8 +442,8 @@ void main() {
       });
 
       final cancelToken = CancelToken();
-      final items = await Http.session(() async {
-        return Cancel.session(token: cancelToken, () async {
+      final items = await Http.scope(() async {
+        return Cancel.scope(token: cancelToken, () async {
           final stream = 'https://example.com/items'.url
               .scrape<String>()
               .onResponse((ctx) {
@@ -439,7 +506,7 @@ void main() {
         return Response('<html><body><h1>Hello Uri Isolate</h1></body></html>', 200);
       });
 
-      await Http.session(client: mockClient, () async {
+      await Http.scope(client: mockClient, () async {
         final itemRes = await 'https://example.com/api/item'.url.get();
         final title = await itemRes.isolate((r) => r.json['title'].to<String>());
         expect(title, equals('Toolkit'));
@@ -453,7 +520,7 @@ void main() {
     test('follow rejects a non-Uri, non-String target', () async {
       final client = MockClient((request) async => Response('<html></html>', 200));
 
-      await Http.session(() async {
+      await Http.scope(() async {
         final stream = 'https://example.com/'.url.scrape<String>().onResponse((ctx) {
           ctx.follow(42);
         });
@@ -477,7 +544,7 @@ void main() {
     test('follow rejects body and fields together', () async {
       final client = MockClient((request) async => Response('<html></html>', 200));
 
-      await Http.session(() async {
+      await Http.scope(() async {
         final stream = 'https://example.com/'.url.scrape<String>().onResponse((ctx) {
           ctx.follow('/next', method: 'POST', text: 'raw', form: {'a': 'b'});
         });
@@ -495,7 +562,7 @@ void main() {
         return Response('<html></html>', 200);
       });
 
-      await Http.session(() async {
+      await Http.scope(() async {
         await 'https://example.com/'.url
             .scrape<String>()
             .onResponse((ctx) {
@@ -518,7 +585,7 @@ void main() {
         return Response('ok', 200);
       });
 
-      await Http.session(() async {
+      await Http.scope(() async {
         final outcomes = await [Uri.parse('https://example.com/bad'), Uri.parse('https://example.com/good')]
             .scrape<String>()
             .onResponse((ctx) {
@@ -536,7 +603,7 @@ void main() {
       var handlerRan = false;
       final client = MockClient((request) async => Response('Not Found', 404));
 
-      await Http.session(() async {
+      await Http.scope(() async {
         final outcomes = await 'https://example.com/missing'.url.scrape<String>().onResponse((ctx) {
           handlerRan = true;
           ctx.emit('should not emit');
@@ -557,7 +624,7 @@ void main() {
         return Response('ok', 200);
       });
 
-      await Http.session(() async {
+      await Http.scope(() async {
         await 'https://example.com/root'.url
             .scrape<void>()
             .onResponse((ctx) {
@@ -582,7 +649,7 @@ void main() {
         return Response('ok', 200);
       });
 
-      await Http.session(() async {
+      await Http.scope(() async {
         await 'https://example.com/start'.url
             .scrape<void>()
             .onResponse((ctx) {
@@ -601,7 +668,7 @@ void main() {
       var handledPages = 0;
       final client = MockClient((request) async => Response('ok', 200));
 
-      await Http.session(() async {
+      await Http.scope(() async {
         await 'https://example.com/1'.url
             .scrape<void>()
             .onResponse((ctx) {
@@ -626,7 +693,7 @@ void main() {
         return Response('ok', 200);
       });
 
-      await Http.session(() async {
+      await Http.scope(() async {
         final stream = 'https://example.com/1'.url.scrape<int>().onResponse((ctx) {
           ctx.emit(ctx.pages);
           ctx.follow('https://example.com/${ctx.pages + 1}');
@@ -655,7 +722,7 @@ void main() {
         }
       });
 
-      await Http.session(() async {
+      await Http.scope(() async {
         final stream = [Uri.parse('https://a.com/1'), Uri.parse('https://b.com/1')].scrape<String>().onResponse((ctx) {
           ctx.emit('${ctx.url.host}:${ctx.response.text}');
         });
@@ -675,7 +742,7 @@ void main() {
         throw const HandshakeException('Handshake failed');
       });
 
-      await Http.session(() async {
+      await Http.scope(() async {
         final outcomes = await 'https://example.com/tls'.url.scrape<void>().toList();
         expect(outcomes.length, equals(1));
         final failure = outcomes.single.leftOrNull as RequestFailed;
@@ -700,7 +767,7 @@ void main() {
         return StreamedResponse(generateBody(), 200);
       });
 
-      await Http.session(() async {
+      await Http.scope(() async {
         final outcomes = await 'https://example.com/large'.url.scrape<void>().toList();
         expect(outcomes.length, equals(1));
         final failure = outcomes.single.leftOrNull as RequestFailed;
@@ -721,7 +788,7 @@ void main() {
         return Response('ok', 200);
       });
 
-      await Http.session(() async {
+      await Http.scope(() async {
         await 'https://example.com/initial'.url
             .scrape<void>()
             .onResponse((ctx) {
@@ -747,7 +814,7 @@ void main() {
         return Response('ok', 200);
       });
 
-      await Http.session(() async {
+      await Http.scope(() async {
         final seeds = [for (var i = 0; i < 20; i++) Uri.parse('https://example.com/item/$i')];
         await seeds.scrape<void>().rights.toList();
       }, client: client);
@@ -767,7 +834,7 @@ void main() {
       });
 
       final seed = Request('GET', Uri.parse('https://example.com/'))..headers['x-test'] = '1';
-      final pages = await Http.session(() async {
+      final pages = await Http.scope(() async {
         return await [seed]
             .scrape<String>()
             .onResponse((ctx) {
@@ -796,7 +863,7 @@ void main() {
         return Response('<a href="/out">o</a>', 200);
       });
 
-      final outcomes = await Http.session(() async {
+      final outcomes = await Http.scope(() async {
         return await 'https://example.com/'.url.scrape<void>().onResponse((ctx) => ctx.follow('/out')).toList();
       }, client: client);
 
@@ -811,7 +878,7 @@ void main() {
         return Response('ok', 200);
       });
 
-      final items = await Http.session(() async {
+      final items = await Http.scope(() async {
         return await [Uri.parse('https://example.com/slow'), Uri.parse('https://example.com/fast')]
             .scrape<String>()
             .onResponse((ctx) async {
@@ -831,21 +898,21 @@ void main() {
 
     test('nothing reaches the error channel: a throwing handler is a Left', () async {
       final client = MockClient((request) async => Response('ok', 200));
-      final outcomes = await Http.session(() async {
+      final outcomes = await Http.scope(() async {
         return await 'https://example.com/'.url.scrape<void>().onResponse((ctx) => throw StateError('boom')).toList();
       }, client: client);
       expect(outcomes.single.leftOrNull, isA<HookFailed>());
     });
 
-    test('the session\'s user-agent wins over the engine default', () async {
+    test('the scope\'s user-agent wins over the engine default', () async {
       final agents = <String?>[];
       final client = MockClient((request) async {
         agents.add(request.headers['user-agent']);
         return Response('ok', 200);
       });
 
-      await Http.session(() => 'https://example.com/'.url.scrape<void>().toList(), client: client);
-      await Http.session(
+      await Http.scope(() => 'https://example.com/'.url.scrape<void>().toList(), client: client);
+      await Http.scope(
         () => 'https://example.com/'.url.scrape<void>().toList(),
         client: client,
         headers: {'user-agent': 'mine/1.0'},
@@ -862,7 +929,7 @@ void main() {
           return Response('ok', 200);
         });
 
-        final outcomes = await Http.session(() async {
+        final outcomes = await Http.scope(() async {
           return await [Uri.parse('https://example.com/a'), Uri.parse('https://example.com/skip')]
               .scrape<String>()
               .onRequest((ctx) {
@@ -893,7 +960,7 @@ void main() {
           }
         });
 
-        final outcomes = await Http.session(() async {
+        final outcomes = await Http.scope(() async {
           return await ['/flaky', '/gone', '/quiet', '/teapot']
               .map((p) => Uri.parse('https://example.com$p'))
               .scrape<String>()
@@ -927,7 +994,7 @@ void main() {
 
         ScrapeSummary? summary;
         final order = <String>[];
-        await Http.session(() async {
+        await Http.scope(() async {
           await for (final r
               in [
                 Uri.parse('https://example.com/a'),
@@ -955,7 +1022,7 @@ void main() {
           return Response('ok', 200);
         });
 
-        final pages = await Http.session(() async {
+        final pages = await Http.scope(() async {
           return await 'https://example.com/0'.url
               .scrape<int>()
               .onInit((c) => c.pages = 3)
@@ -980,7 +1047,7 @@ void main() {
           return Response('ok', 200);
         });
 
-        await Http.session(() async {
+        await Http.scope(() async {
           await 'https://a.com/0'.url
               .scrape<void>()
               .onInit((c) {
@@ -1005,7 +1072,7 @@ void main() {
           return Response('ok', 200);
         });
 
-        await Http.session(() async {
+        await Http.scope(() async {
           await [
             Uri.parse('https://a.com/1'),
             Uri.parse('https://a.com/2'),
@@ -1029,7 +1096,7 @@ void main() {
             return Response('ok', 200);
           });
 
-          final metas = await Http.session(() async {
+          final metas = await Http.scope(() async {
             return await 'https://example.com/a'.url
                 .scrape<Object?>()
                 .onInit((c) async {
@@ -1055,7 +1122,7 @@ void main() {
           sent++;
           return Response('ok', 200);
         });
-        await Http.session(() async {
+        await Http.scope(() async {
           final crawl = 'https://example.com/'.url.scrape<void>();
           expect(crawl, isA<Stream<Either<ScrapeFailure, void>>>());
           await expectLater(
@@ -1072,7 +1139,7 @@ void main() {
           return Response('ok', 200);
         });
 
-        final outcomes = await Http.session(() async {
+        final outcomes = await Http.scope(() async {
           return await 'https://example.com/'.url
               .scrape<String>()
               .onResponse((ctx) => ctx.follow('/detail', onError: (e) => e.emit('detail-fallback')))
@@ -1124,18 +1191,18 @@ void main() {
       expect(served, lessThanOrEqualTo(atBreak + 2), reason: 'only the in-flight requests may finish');
     });
 
-    test('a session timeout fails a stalled server instead of hanging', () async {
+    test('a scope timeout fails a stalled server instead of hanging', () async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       server.listen((req) {}); // never answers
       addTearDown(() => server.close(force: true));
       final url = Uri.parse('http://127.0.0.1:${server.port}/');
       await expectLater(
-        Http.session(() => url.get(), timeout: const Duration(milliseconds: 100)),
+        Http.scope(() => url.get(), timeout: const Duration(milliseconds: 100)),
         throwsA(isA<TimeoutException>()),
       );
     });
 
-    test('session headers reach every request that does not set them', () async {
+    test('scope headers reach every request that does not set them', () async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       server.listen((req) {
         req.response
@@ -1144,7 +1211,7 @@ void main() {
       });
       addTearDown(() => server.close(force: true));
       final url = Uri.parse('http://127.0.0.1:${server.port}/');
-      final ua = await Http.session(() async => (await url.get()).text, headers: {'user-agent': 'toolkit-test'});
+      final ua = await Http.scope(() async => (await url.get()).text, headers: {'user-agent': 'toolkit-test'});
       expect(ua, equals('toolkit-test'));
     });
   });
@@ -1152,7 +1219,7 @@ void main() {
   group('scrape', () {
     test('a hook that calls stop() and then throws still closes the stream', () async {
       final client = MockClient((r) async => Response('ok', 200));
-      final items = await Http.session(
+      final items = await Http.scope(
         () => 'https://a.com/x'.url.scrape<int>().onResponse((ctx) {
           ctx.stop();
           throw StateError('boom');
@@ -1167,7 +1234,7 @@ void main() {
       final client = MockClient((r) async => Response('<a href="/song/1">s</a>', 200));
       final results = <bool>[];
       ScrapeSummary? summary;
-      final out = await Http.session(
+      final out = await Http.scope(
         () => 'https://a.com/list'.url
             .scrape<String>()
             .onResponse((ctx) {
@@ -1192,7 +1259,7 @@ void main() {
         hits.add(r.url.toString());
         return Response(r.url.path == '/' ? '<a href="/p#a">a</a><a href="/p#b">b</a><a href="/p">c</a>' : 'x', 200);
       });
-      await Http.session(
+      await Http.scope(
         () => 'https://a.com/#top'.url.scrape<int>().onResponse((ctx) {
           for (final a in ctx.response.html.$('a')) {
             ctx.follow(a.attr('href')!);
@@ -1212,7 +1279,7 @@ void main() {
           200,
         );
       });
-      await Http.session(
+      await Http.scope(
         () => 'https://a.com/'.url.scrape<int>().onResponse((ctx) {
           for (final a in ctx.response.html.$('a')) {
             ctx.follow(a.attr('href')!);
@@ -1230,7 +1297,7 @@ void main() {
         if (r.url.host == 'a.com') return Response('', 302, headers: {'location': 'https://cdn.example/'});
         return Response('ok', 200);
       });
-      await Http.session(
+      await Http.scope(
         () => 'https://a.com/'.url
             .scrape<int>()
             .onRequest((ctx) {
@@ -1252,7 +1319,7 @@ void main() {
         return Response('ok', 200);
       });
       final sw = Stopwatch()..start();
-      final out = await Http.session(
+      final out = await Http.scope(
         () => 'https://a.com/'.url.scrape<int>().onResponse((c) => c.emit(1)).rights.toList(),
         client: client,
       );
@@ -1270,7 +1337,7 @@ void main() {
         if (n <= 2) return Response('', 429, headers: {'retry-after': n == 1 ? '1' : '0'});
         return Response('ok', 200);
       });
-      await Http.session(
+      await Http.scope(
         () => ['https://a.com/1'.url, 'https://a.com/2'.url].scrape<int>().onResponse((c) => c.emit(1)).toList(),
         client: client,
       );
@@ -1290,10 +1357,7 @@ void main() {
         final c = StreamController<List<int>>(onCancel: () => cancelled = true, onListen: () {});
         return StreamedResponse(c.stream, 404, contentLength: 10);
       });
-      final r = await Http.session(
-        () => (Path(dir.path) / 'x').download('https://a.com/x'.url).toList(),
-        client: client,
-      );
+      final r = await Http.scope(() => (Path(dir.path) / 'x').download('https://a.com/x'.url).toList(), client: client);
       await Future<void>.delayed(const Duration(milliseconds: 50));
       expect(r.single.current, isA<DownloadFailed>());
       expect(cancelled, isTrue);
@@ -1307,7 +1371,7 @@ void main() {
       addTearDown(() => dir.deleteSync(recursive: true));
       final url = 'https://example.com/a'.url;
 
-      await Http.session(() async {
+      await Http.scope(() async {
         expect((await (dir / 'one').download(url).last).written, 1);
         expect((await [(url: url, path: dir / 'two')].download().last).written, 1);
         expect((await Stream.value((url: url, path: dir / 'three')).download().last).written, 1);
@@ -1319,7 +1383,7 @@ void main() {
       }
     });
 
-    test('a download stops on the ambient session, taking no token of its own', () async {
+    test('a download stops on the ambient scope, taking no token of its own', () async {
       final stop = CancelToken();
       var served = 0;
       final client = MockClient((r) async {
@@ -1329,8 +1393,8 @@ void main() {
       final dir = Path(Directory.systemTemp.createTempSync('dl_').path);
       addTearDown(() => dir.deleteSync(recursive: true));
 
-      final seen = await Cancel.session(
-        () => Http.session(
+      final seen = await Cancel.scope(
+        () => Http.scope(
           () => [
             for (var i = 0; i < 20; i++) (url: 'https://example.com/$i'.url, path: dir / '$i'),
           ].download(concurrency: 1).toList(),
@@ -1351,7 +1415,7 @@ void main() {
         return Response('<html></html>', 200);
       });
 
-      await Http.session(() async {
+      await Http.scope(() async {
         final url = 'https://example.com/'.url;
         await url.post(text: 'plain');
         await url.post(bytes: [65, 66]);
@@ -1390,7 +1454,7 @@ void main() {
         final client = MockClient((r) async => Response('data', 200));
         final dir = Directory.systemTemp.createTempSync('show_');
         try {
-          final last = await Http.session(
+          final last = await Http.scope(
             () => {
               'https://a.com/1'.url: Path(dir.path) / '1',
               'https://a.com/2'.url: Path(dir.path) / '2',
@@ -1461,17 +1525,17 @@ void main() {
       tempDir.deleteSync(recursive: true);
     });
 
-    test('one session, overlapped discovery, one report() per update', () async {
+    test('one scope, overlapped discovery, one report() per update', () async {
       final dir = Path(tempDir.path);
       final artwork = <Uri, Path>{
         base.resolve('/art/1.png'): dir / 'art' / '1.png',
         base.resolve('/art/2.png'): dir / 'art' / '2.png',
       };
 
-      final progress = Console.multiProgress(slots: 2, message: 'Downloading');
+      final progress = Console.tasks(slots: 2, message: 'Downloading');
       BatchDownloadProgress? last;
 
-      await Http.session(() async {
+      await Http.scope(() async {
         Stream<({Uri url, Path path})> queue() async* {
           yield* Stream.fromIterable(artwork.pairs);
           yield* base.resolve('/index').scrape<({Uri url, Path path})>().onResponse((ctx) {
@@ -1612,7 +1676,7 @@ void main() {
     });
   });
 
-  group('a session keeps cookies when it is asked to', () {
+  group('a scope keeps cookies when it is asked to', () {
     late HttpServer server;
     late Uri base;
 
@@ -1640,14 +1704,14 @@ void main() {
     tearDown(() => server.close(force: true));
 
     test('what a response sets comes back on the next request', () async {
-      await Http.session(cookies: true, () async {
+      await Http.scope(cookies: true, () async {
         await (base / 'login').get();
         expect((await (base / 'page').get()).text, 'sid=abc123; theme=dark');
       });
     });
 
     test('a path-scoped cookie only goes to its path, longest first', () async {
-      await Http.session(cookies: true, () async {
+      await Http.scope(cookies: true, () async {
         await (base / 'login').get();
         expect((await (base / 'admin' / 'x').get()).text, 'adminonly=1; sid=abc123; theme=dark');
         expect((await (base / 'page').get()).text, isNot(contains('adminonly')));
@@ -1655,7 +1719,7 @@ void main() {
     });
 
     test('Max-Age=0 deletes, and a comma inside Expires does not split the header', () async {
-      await Http.session(cookies: true, () async {
+      await Http.scope(cookies: true, () async {
         await (base / 'login').get();
         await (base / 'logout').get();
         expect((await (base / 'page').get()).text, 'theme=dark', reason: 'sid is gone, the dated one stayed');
@@ -1663,11 +1727,11 @@ void main() {
     });
 
     test("a request's own cookie header wins, and no jar means no cookies", () async {
-      await Http.session(cookies: true, () async {
+      await Http.scope(cookies: true, () async {
         await (base / 'login').get();
         expect((await (base / 'page').get(headers: {'cookie': 'mine=1'})).text, 'mine=1');
       });
-      await Http.session(() async {
+      await Http.scope(() async {
         await (base / 'login').get();
         expect((await (base / 'page').get()).text, 'null', reason: 'off unless asked for');
       });

@@ -1,9 +1,9 @@
-// The cookie jar a session keeps, so a login and the pages behind it are one crawl.
+// The cookie jar a scope keeps, so a login and the pages behind it are one crawl.
 //
 // RFC 6265's storage and matching rules, less the public-suffix list: a `Domain` is
 // accepted when the host it came from is inside it, which stops `a.example.com` setting a
-// cookie for `other.com` but not for `com`. Nothing here is public — a session either
-// keeps cookies or does not, and `Http.session(cookies: true)` is the whole vocabulary.
+// cookie for `other.com` but not for `com`. Nothing here is public — a scope either
+// keeps cookies or does not, and `Http.scope(cookies: true)` is the whole vocabulary.
 
 part of '../../http.dart';
 
@@ -48,9 +48,9 @@ final class _Cookie {
   }
 }
 
-/// The cookies one [Http.session] has been given, and the `cookie` header they make.
+/// The cookies one [Http.scope] has been given, and the `cookie` header they make.
 ///
-/// A jar belongs to a session and nothing else: it is the scope that already holds the
+/// A jar belongs to a scope and nothing else: it is the scope that already holds the
 /// client, so a login and the requests after it share connections and cookies alike.
 final class _Jar {
   final List<_Cookie> _cookies = [];
@@ -106,7 +106,7 @@ final class _Jar {
           try {
             expires = HttpDate.parse(value);
           } on FormatException {
-            // Unparseable: the cookie stays for the session, as a browser keeps it.
+            // Unparseable: the cookie stays for the browser session, as a browser keeps it.
           }
         case 'max-age':
           maxAge = int.tryParse(value);

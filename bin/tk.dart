@@ -62,7 +62,7 @@ Future<void> hash(CliContext ctx) async {
     Io.out.writeln('${row.digest}  ${row.path}');
   }
   for (final failure in digested.lefts) {
-    Logger.error('$failure');
+    Console.error('$failure');
   }
 }
 
@@ -70,13 +70,13 @@ Future<void> hash(CliContext ctx) async {
 Future<void> find(CliContext ctx) async {
   _verbose(ctx);
   final pattern = ctx.rest.firstOrNull ?? '**/*';
-  Logger.debug('matching $pattern under ${Path.current}');
+  Console.debug('matching $pattern under ${Path.current}');
 
   final matches = await Path.current.glob(pattern).toList();
   final sized = await matches.parallelize((f) async => (file: f.relativeTo(Path.current), bytes: await f.size()));
 
   if (sized.rights.isEmpty) {
-    Logger.warn('nothing matched $pattern');
+    Console.warn('nothing matched $pattern');
     return;
   }
   Table.rows(
@@ -85,7 +85,7 @@ Future<void> find(CliContext ctx) async {
         .take(ctx(top))
         .map((r) => {'bytes': r.bytes, 'file': r.file}),
   ).show();
-  Logger.ok('${sized.rights.length} matches, ${sized.rights.sequence.sumBy((r) => r.bytes)} bytes');
+  Console.ok('${sized.rights.length} matches, ${sized.rights.sequence.sumBy((r) => r.bytes)} bytes');
 }
 
 /// Any of the four document formats, queried with one language.
@@ -106,7 +106,7 @@ Future<void> read(CliContext ctx) async {
 
   if (ctx(query) case final expression?) {
     final hits = doc.$(expression);
-    Logger.debug('${hits.length} hits for $expression');
+    Console.debug('${hits.length} hits for $expression');
     for (final hit in hits) {
       Io.out.writeln(hit);
     }
@@ -120,11 +120,11 @@ Future<void> fetch(CliContext ctx) async {
   _verbose(ctx);
   final url = (ctx.rest.firstOrNull ?? await die('fetch needs a URL')).url;
 
-  await Http.session(timeout: 30.s, () async {
+  await Http.scope(timeout: 30.s, () async {
     if (ctx(out) case final path?) {
       final last = await path.path.download(url, overwrite: true).show(slots: 1, message: 'Fetching', done: 'Fetched');
       if (last?.current case DownloadFailed(:final error)) await die('$error');
-      Logger.ok('$path is ${await path.path.size()} bytes');
+      Console.ok('$path is ${await path.path.size()} bytes');
       return;
     }
     final res = await url.get();
@@ -143,7 +143,7 @@ Future<void> pack(CliContext ctx) async {
     () => source.archiveTo(target),
     done: 'Packed ${target.name}',
   );
-  Logger.ok('${target.name} is ${await target.size()} bytes from ${await source.size()} bytes');
+  Console.ok('${target.name} is ${await target.size()} bytes from ${await source.size()} bytes');
 }
 
 Future<void> peek(CliContext ctx) async {
@@ -156,9 +156,9 @@ Future<void> peek(CliContext ctx) async {
   ).orderBy('size', descending: true).take(20).show();
 
   final files = entries.where((e) => !e.isDir);
-  Logger.ok('${files.length} files, ${files.sequence.sumBy((e) => e.size)} bytes uncompressed');
+  Console.ok('${files.length} files, ${files.sequence.sumBy((e) => e.size)} bytes uncompressed');
 }
 
 void _verbose(CliContext ctx) {
-  if (ctx(verbose)) Logger.level = LogLevel.debug;
+  if (ctx(verbose)) Console.level = LogLevel.debug;
 }

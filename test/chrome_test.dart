@@ -28,10 +28,10 @@ void main() {
   final chrome = _chrome();
   final absent = chrome == null ? 'no Chrome installed; set CHROME_PATH to run these' : null;
 
-  group('BrowserClient', () {
+  group('ChromeClient', () {
     late HttpServer server;
     late Uri base;
-    late BrowserClient browser;
+    late ChromeClient browser;
     var challenged = 0;
 
     setUpAll(() async {
@@ -92,6 +92,26 @@ void main() {
     });
   </script>
 </body></html>''');
+            case '/widgets':
+              response.headers.contentType = ContentType.html;
+              response.write('''
+<html><body>
+  <a id="link" href="/rendered" data-kind="next">go</a>
+  <select id="fmt">
+    <option value="e">EPUB</option>
+    <option value="p">PDF</option>
+  </select>
+  <div id="menu">menu</div><div id="pop"></div>
+  <p id="status">idle</p>
+  <script>
+    document.getElementById('fmt').addEventListener('change', (e) => {
+      document.getElementById('status').textContent = 'picked ' + e.target.value;
+    });
+    document.getElementById('menu').addEventListener('mouseover', () => {
+      document.getElementById('pop').textContent = 'opened';
+    });
+  </script>
+</body></html>''');
             case '/asset':
               response.headers.contentType = ContentType.binary;
               response.add(List.filled(2048, 7));
@@ -102,7 +122,7 @@ void main() {
           await response.close();
         }),
       );
-      browser = await BrowserClient.launch(tabs: 2);
+      browser = await ChromeClient.launch(tabs: 2);
     });
 
     tearDownAll(() async {
@@ -112,11 +132,11 @@ void main() {
     });
 
     test('reads the DOM the page builds, not the markup it was served', () async {
-      await Http.session(client: browser, () async {
+      await Http.scope(client: browser, () async {
         final plain = await IoClient().send(Request('GET', base.resolve('/rendered'))).then((r) => r.read());
         expect(plain.html.$('.item'), isEmpty, reason: 'the served markup has no items');
 
-        final request = Request('GET', base.resolve('/rendered'))..[BrowserClient.waitFor] = '.item';
+        final request = Request('GET', base.resolve('/rendered'))..[ChromeClient.waitFor] = '.item';
         final rendered = await (await browser.send(request)).read();
         expect(rendered.html.$('.item').map((e) => e.text), ['alpha', 'beta']);
       });
@@ -124,8 +144,8 @@ void main() {
 
     test('a script directive runs before the DOM is read', () async {
       final request = Request('GET', base.resolve('/rendered'))
-        ..[BrowserClient.waitFor] = '.item'
-        ..[BrowserClient.script] = "document.querySelector('.item').textContent = 'edited'";
+        ..[ChromeClient.waitFor] = '.item'
+        ..[ChromeClient.script] = "document.querySelector('.item').textContent = 'edited'";
       final res = await (await browser.send(request)).read();
       expect(res.html.$('.item').text, 'edited');
     }, skip: absent);
@@ -142,15 +162,30 @@ void main() {
         seen.add('${request.method} ${request.url.path}');
         return Response('delegated', 200);
       });
-      final hybrid = await BrowserClient.launch(tabs: 1, assets: assets);
+      final hybrid = await ChromeClient.launch(tabs: 1, assets: assets);
       try {
-        // A POST, a ranged GET and an explicit `direct` never open a tab.
+        // A POST, a ranged GET and an explicit `raw` never open a tab.
         await hybrid.send(Request('POST', base.resolve('/asset'), text: 'x'));
         await hybrid.send(Request('GET', base.resolve('/asset'), headers: {'range': 'bytes=0-'}));
-        await hybrid.send(Request('GET', base.resolve('/asset'))..[BrowserClient.direct] = true);
+        await hybrid.send(Request('GET', base.resolve('/asset'))..[Request.raw] = true);
         expect(seen, ['POST /asset', 'GET /asset', 'GET /asset']);
       } finally {
         await hybrid.close();
+      }
+    }, skip: absent);
+
+    test('a download inside a Chrome scope writes the file, not a rendering of it', () async {
+      final dir = await Directory.systemTemp.createTemp('dt_chrome_download_');
+      try {
+        final into = Path(dir.path) / 'asset.bin';
+        // The bug this pins: a fresh download is a GET with no `range`, which used to be
+        // indistinguishable from a page and got rendered — 2048 binary bytes came back as
+        // the DOM Chrome builds to display them. `Request.raw` is what tells them apart.
+        await Http.scope(client: browser, () => into.download(base.resolve('/asset')).drain<void>());
+        expect(await into.asFile.length(), 2048);
+        expect(await into.asFile.readAsBytes(), everyElement(7));
+      } finally {
+        await dir.delete(recursive: true);
       }
     }, skip: absent);
 
@@ -162,7 +197,7 @@ void main() {
     }, skip: absent);
 
     test('one that never clears is a page, and the client survives it', () async {
-      final stuck = Request('GET', base.resolve('/stuck'))..[BrowserClient.challenge] = 1.s;
+      final stuck = Request('GET', base.resolve('/stuck'))..[ChromeClient.challenge] = 1.s;
       final res = await (await browser.send(stuck)).read();
 
       // Not an exception, not a closed tab: the interstitial itself, with its real status,
@@ -207,13 +242,13 @@ void main() {
     }, skip: absent);
 
     test('a crawl over it emits what the scripts produced', () async {
-      final items = await Http.session(
+      final items = await Http.scope(
         client: browser,
         () => base
             .resolve('/rendered')
             .scrape<String>()
             .onInit((ctx) => ctx.pages = 1)
-            .onRequest((ctx) => ctx.request[BrowserClient.waitFor] = '.item')
+            .onRequest((ctx) => ctx.request[ChromeClient.waitFor] = '.item')
             .onResponse((ctx) {
               for (final item in ctx.response.html.$('.item')) {
                 ctx.emit(item.text);
@@ -224,9 +259,87 @@ void main() {
       );
       expect(items, ['alpha', 'beta']);
     }, skip: absent);
+
+    test('a raw request carries the browser\'s own user-agent, not nothing', () async {
+      final seen = <String, String?>{};
+      final probe = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      unawaited(
+        probe.forEach((request) async {
+          seen['ua'] = request.headers.value('user-agent');
+          request.response.add(List.filled(64, 1));
+          await request.response.close();
+        }),
+      );
+      final at = Uri.parse('http://${probe.address.address}:${probe.port}/file.bin');
+      await (await browser.send(Request('GET', at)..[Request.raw] = true)).read();
+      await probe.close(force: true);
+      expect(seen['ua'], contains('Chrome/'), reason: 'the file and the pages tell one story');
+    }, skip: absent);
+
+    test('text, attr and has read one value off a live page', () async {
+      await browser.page(base.resolve('/widgets'), (page) async {
+        expect(await page.text('#status'), 'idle');
+        expect(await page.has('#fmt'), isTrue);
+        expect(await page.has('.nothing'), isFalse);
+        // Resolved by the DOM, so a root-relative href comes back absolute.
+        expect(await page.attr('#link', 'href'), base.resolve('/rendered').toString());
+        // Not a property, so it falls through to getAttribute.
+        expect(await page.attr('#link', 'data-kind'), 'next');
+        expect(await page.attr('.nothing', 'href'), isNull);
+      });
+    }, skip: absent);
+
+    test('select fires change, by value or by the text a person reads', () async {
+      await browser.page(base.resolve('/widgets'), (page) async {
+        expect(await page.select('#fmt', 'p'), isTrue);
+        expect(await page.text('#status'), 'picked p');
+        expect(await page.select('#fmt', 'EPUB'), isTrue, reason: 'matched on the option text');
+        expect(await page.text('#status'), 'picked e');
+        expect(await page.select('#fmt', 'nope'), isFalse);
+        expect(await page.select('.nothing', 'p'), isFalse);
+      });
+    }, skip: absent);
+
+    test('hover opens what only opens on hover', () async {
+      await browser.page(base.resolve('/widgets'), (page) async {
+        expect(await page.text('#pop'), '');
+        expect(await page.hover('#menu'), isTrue);
+        expect(await page.waitFor('#pop:not(:empty)'), isTrue);
+        expect(await page.text('#pop'), 'opened');
+        expect(await page.hover('.nothing'), isFalse);
+      });
+    }, skip: absent);
+
+    test('navigating waits out a click that leaves the page, and back returns', () async {
+      await browser.page(base.resolve('/widgets'), (page) async {
+        expect(await page.navigating(() => page.click('#link')), isTrue);
+        expect(page.url.path, '/rendered');
+        expect(await page.back(), isTrue);
+        expect(page.url.path, '/widgets');
+        expect(await page.has('#fmt'), isTrue, reason: 'the first page is really back');
+      });
+    }, skip: absent);
+
+    test('cookies come back for handing to something that is not a browser', () async {
+      await browser.page(base.resolve('/widgets'), (page) async {
+        await page.eval("document.cookie = 'who=me; path=/'");
+        final jar = await page.cookies();
+        expect(jar.map((c) => '${c.name}=${c.value}'), contains('who=me'));
+      });
+    }, skip: absent);
+
+    test('a crawl runs on a client held rather than scoped', () async {
+      final seen = <String>[];
+      await browser
+          .scrape<void>(base.resolve('/rendered'))
+          .onRequest((ctx) => ctx.request[ChromeClient.waitFor] = '.item')
+          .onResponse((ctx) => seen.addAll(ctx.response.html.$('.item').map((e) => e.text)))
+          .drain<void>();
+      expect(seen, ['alpha', 'beta'], reason: 'the DOM the page built, so it went through Chrome');
+    }, skip: absent);
   });
 
   if (chrome != null) {
-    clientConformance('BrowserClient', (_) => BrowserClient.launch(tabs: 1));
+    clientConformance('ChromeClient', (_) => ChromeClient.launch(tabs: 1));
   }
 }

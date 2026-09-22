@@ -234,7 +234,7 @@ void main() {
         return Response('Not Found', 404);
       });
 
-      await Http.session(client: client, () async {
+      await Http.scope(client: client, () async {
         final base = Path(tempDir.path) / 'download_test';
 
         // 1. Single download on Path
@@ -471,7 +471,7 @@ void main() {
         );
       });
 
-      await Http.session(client: client, () async {
+      await Http.scope(client: client, () async {
         final base = Path(tempDir.path) / 'atomic_dl_test';
         final target = base / 'truncated.dat';
 

@@ -1,9 +1,9 @@
 part of '../../http.dart';
 
-/// How far [BrowserClient] waits before it reads a page.
+/// How far [ChromeClient] waits before it reads a page.
 ///
 /// {@category Networking}
-enum BrowserWait {
+enum ChromeWait {
   /// The document and its subresources have loaded — the `load` event.
   load,
 
@@ -20,8 +20,8 @@ enum BrowserWait {
 /// already running with `--remote-debugging-port`.
 ///
 /// ```dart
-/// final browser = await BrowserClient.launch();
-/// await Http.session(client: browser, () async {
+/// final browser = await ChromeClient.launch();
+/// await Http.scope(client: browser, () async {
 ///   await for (final item in url.scrape<Item>().onResponse(parse).rights) print(item);
 /// });
 /// ```
@@ -33,15 +33,16 @@ enum BrowserWait {
 ///
 /// ```dart
 /// .onRequest((ctx) {
-///   ctx.request[BrowserClient.waitFor] = '.results .item';
-///   ctx.request[BrowserClient.script] = 'window.scrollTo(0, document.body.scrollHeight)';
+///   ctx.request[ChromeClient.waitFor] = '.results .item';
+///   ctx.request[ChromeClient.script] = 'window.scrollTo(0, document.body.scrollHeight)';
 /// })
 /// ```
 ///
 /// Only a GET without a `range` is rendered. Everything else — a POST, a resumable
 /// download, an asset — goes to the plain HTTP client underneath, carrying the browser's
 /// cookies for the host, so a crawl that renders its pages still downloads its files at
-/// the speed of a socket. [direct] forces one request down that path.
+/// the speed of a socket. [Request.raw] forces one request down that path, and every download
+/// sets it, so a file downloaded through this client is the file and not a rendering of it.
 ///
 /// **A page is never lost.** A wait that expires, an interstitial that never clears, a
 /// challenge a human has to click: none of them throw and none of them close the tab. The
@@ -58,25 +59,22 @@ enum BrowserWait {
 /// ```
 ///
 /// {@category Networking}
-final class BrowserClient implements Client {
+final class ChromeClient implements Client {
   /// Waits until a CSS selector matches before the page is read: `request[waitFor] = '.item'`.
   ///
   /// A selector that never matches is not an error — the page comes back as it stands.
-  static const waitFor = RequestKey<String>('browser.wait-for');
+  static const waitFor = RequestKey<String>('chrome.wait-for');
 
-  /// How long to wait before reading a page; [BrowserWait.load] unless the client was built
+  /// How long to wait before reading a page; [ChromeWait.load] unless the client was built
   /// with another default.
-  static const waitUntil = RequestKey<BrowserWait>('browser.wait-until');
+  static const waitUntil = RequestKey<ChromeWait>('chrome.wait-until');
 
   /// JavaScript to run once the wait is over and before the DOM is read. It may evaluate to
   /// a promise — an `async` IIFE that scrolls and waits is the usual shape.
-  static const script = RequestKey<String>('browser.script');
-
-  /// Sends this request down the plain HTTP client instead of rendering it: `request[direct] = true`.
-  static const direct = RequestKey<bool>('browser.direct');
+  static const script = RequestKey<String>('chrome.script');
 
   /// How long this request may sit on an interstitial, overriding the client's `challenge:`.
-  static const challenge = RequestKey<Duration>('browser.challenge');
+  static const challenge = RequestKey<Duration>('chrome.challenge');
 
   final WebSocket _socket;
   final Client _assets;
@@ -85,24 +83,25 @@ final class BrowserClient implements Client {
   final Directory? _profile;
   final Duration _timeout;
   final Duration _challenge;
-  final BrowserWait _wait;
+  final ChromeWait _wait;
   final String? _userAgent;
   final Semaphore _permits;
-  final Queue<BrowserPage> _free = Queue();
-  final Set<BrowserPage> _pages = {};
+  final Queue<ChromePage> _free = Queue();
+  final Set<ChromePage> _pages = {};
   final Map<int, Completer<Map<String, Object?>>> _calls = {};
   final Map<String, StreamController<_Cdp>> _sessions = {};
 
   var _nextId = 0;
   var _closed = false;
+  String? _agent;
 
-  BrowserClient._(
+  ChromeClient._(
     this._socket, {
     required Client assets,
     required bool ownsAssets,
     required Duration timeout,
     required Duration challenge,
-    required BrowserWait wait,
+    required ChromeWait wait,
     required int tabs,
     required String? userAgent,
     Process? process,
@@ -139,13 +138,13 @@ final class BrowserClient implements Client {
   ///
   /// [assets] answers everything that is not a page render, and is closed with this client
   /// unless it was supplied.
-  static Future<BrowserClient> launch({
+  static Future<ChromeClient> launch({
     String? executable,
     bool headless = true,
     int tabs = 4,
     Duration timeout = const Duration(seconds: 30),
     Duration challenge = const Duration(seconds: 20),
-    BrowserWait wait = BrowserWait.load,
+    ChromeWait wait = ChromeWait.load,
     String? userAgent,
     Client? assets,
     List<String> args = const [],
@@ -172,7 +171,7 @@ final class BrowserClient implements Client {
     ]);
     try {
       final endpoint = await _activePort(profile, process, timeout);
-      return BrowserClient._(
+      return ChromeClient._(
         await WebSocket.connect(endpoint.toString()),
         assets: assets ?? IoClient(),
         ownsAssets: assets == null,
@@ -197,28 +196,103 @@ final class BrowserClient implements Client {
   /// are closed, nothing else is. This is the client for a site that already knows the
   /// person running the program — their profile, their cookies, their logged-in session.
   /// See [launch] for the other arguments.
-  static Future<BrowserClient> attach({
+  static Future<ChromeClient> attach({
     int port = 9222,
     String host = '127.0.0.1',
     int tabs = 4,
     Duration timeout = const Duration(seconds: 30),
     Duration challenge = const Duration(seconds: 20),
-    BrowserWait wait = BrowserWait.load,
+    ChromeWait wait = ChromeWait.load,
     String? userAgent,
     Client? assets,
   }) async {
-    final probe = IoClient();
-    final Uri endpoint;
-    try {
-      final res = await probe.send(Request('GET', Uri.parse('http://$host:$port/json/version'))).then((r) => r.read());
-      if (!res.isOk) throw ClientException('DevTools answered ${res.statusCode}', res.url);
-      final debugger = res.json['webSocketDebuggerUrl'].to<String>();
-      if (debugger == null) throw ClientException('DevTools named no websocket endpoint', res.url);
-      endpoint = Uri.parse(debugger);
-    } finally {
-      probe.close();
+    final endpoint = await _devtools(host, port);
+    if (endpoint == null) {
+      throw ClientException('No Chrome is listening on $host:$port. ${_howToStart(port)}');
     }
-    return BrowserClient._(
+    return ChromeClient._(
+      await WebSocket.connect(endpoint.toString()),
+      assets: assets ?? IoClient(),
+      ownsAssets: assets == null,
+      timeout: timeout,
+      challenge: challenge,
+      wait: wait,
+      tabs: tabs,
+      userAgent: userAgent,
+    );
+  }
+
+  /// Attaches to the Chrome on [port], and starts one that outlives this program if there
+  /// is none — the client for a script that is run again and again.
+  ///
+  /// [launch] is a fresh browser every time: a temporary profile, no cookies, and the
+  /// process dies with the client. That is right for a crawl and wrong for everything that
+  /// depends on *being someone* — a site behind a login, a session a human authenticated
+  /// once by hand. This keeps one browser and one profile across runs instead:
+  ///
+  /// ```dart
+  /// final chrome = await ChromeClient.connect();   // run 1: starts Chrome, logs in by hand
+  /// await Http.scope(client: chrome, () async { … });
+  /// await chrome.close();                          // the browser stays up
+  /// ```
+  ///
+  /// The second run finds that Chrome on the port and attaches to it in milliseconds, with
+  /// the cookies and the logged-in session still there. [close] never kills it, whichever
+  /// run started it; the person owns the browser, and quits it when they are done with it.
+  ///
+  /// [profile] is the user-data directory that makes it the same browser next time,
+  /// `~/.dart_toolkit/chrome` unless another is named. Because that profile persists, this
+  /// is [headless]-`false` by default: a browser you can see is one you can log into.
+  ///
+  /// A Chrome already running on [port] is attached to as it is — [profile], [headless],
+  /// [executable] and [args] describe how to *start* one and are ignored when none is needed.
+  static Future<ChromeClient> connect({
+    int port = 9222,
+    String host = '127.0.0.1',
+    String? executable,
+    Path? profile,
+    bool headless = false,
+    int tabs = 4,
+    Duration timeout = const Duration(seconds: 30),
+    Duration challenge = const Duration(seconds: 20),
+    ChromeWait wait = ChromeWait.load,
+    String? userAgent,
+    Client? assets,
+    List<String> args = const [],
+  }) async {
+    var endpoint = await _devtools(host, port);
+    if (endpoint == null) {
+      final binary = executable ?? _chrome();
+      if (binary == null) {
+        throw const ClientException(
+          'No Chrome found. Install Chrome or Chromium, set CHROME_PATH, or pass executable:.',
+        );
+      }
+      final dir = profile ?? Path.home / '.dart_toolkit' / 'chrome';
+      await Directory(dir).create(recursive: true);
+      // Detached: the browser is meant to outlive this program, so it must not be a child
+      // that dies with it. Nothing is read from its stdio, and the port is the handle.
+      await Process.start(binary, [
+        if (headless) '--headless=new',
+        '--remote-debugging-port=$port',
+        '--user-data-dir=$dir',
+        '--no-first-run',
+        '--no-default-browser-check',
+        ...args,
+        'about:blank',
+      ], mode: ProcessStartMode.detached);
+      // The port is polled rather than `DevToolsActivePort` read: the file is stale from the
+      // last run until Chrome rewrites it, and here the port is known because it was given.
+      final deadline = DateTime.now().add(timeout);
+      while (endpoint == null && DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        endpoint = await _devtools(host, port);
+      }
+      if (endpoint == null) {
+        throw ClientException('Chrome did not open a debugging port on $host:$port within ${timeout.inSeconds}s');
+      }
+    }
+    return ChromeClient._(
       await WebSocket.connect(endpoint.toString()),
       assets: assets ?? IoClient(),
       ownsAssets: assets == null,
@@ -232,17 +306,17 @@ final class BrowserClient implements Client {
 
   /// A tab of its own, for a page that is worked rather than fetched.
   ///
-  /// The caller owns it until [BrowserPage.close]; it is outside the pool [send] draws on,
+  /// The caller owns it until [ChromePage.close]; it is outside the pool [send] draws on,
   /// so holding one open — while a human solves a captcha, while a script clicks through a
   /// form — never starves a crawl. [url] is navigated to when given.
-  Future<BrowserPage> open([Uri? url, BrowserWait? until]) async {
+  Future<ChromePage> open([Uri? url, ChromeWait? until]) async {
     final page = await _tab();
     if (url != null) await page.goto(url, until: until);
     return page;
   }
 
   /// [open], then [action], then closes the tab whatever [action] did.
-  Future<T> page<T>(Uri url, FutureOr<T> Function(BrowserPage page) action, {BrowserWait? until}) async {
+  Future<T> page<T>(Uri url, FutureOr<T> Function(ChromePage page) action, {ChromeWait? until}) async {
     final page = await open(url, until);
     try {
       return await action(page);
@@ -254,11 +328,11 @@ final class BrowserClient implements Client {
   @override
   Future<StreamedResponse> send(Request request) async {
     if (_closed) throw ClientException('The browser client is closed', request.url);
-    if (direct(request) == true || request.method != 'GET' || request.headers.containsKey('range')) {
+    if (Request.raw(request) == true || request.method != 'GET' || request.headers.containsKey('range')) {
       return _assets.send(await _withCookies(request));
     }
     final permit = await _permits.acquire();
-    BrowserPage? page;
+    ChromePage? page;
     try {
       page = _free.isNotEmpty ? _free.removeFirst() : await _tab();
       await page.headers({
@@ -331,12 +405,12 @@ final class BrowserClient implements Client {
 
   // ---- tabs ------------------------------------------------------------------------------
 
-  Future<BrowserPage> _tab() async {
+  Future<ChromePage> _tab() async {
     final created = await _call('Target.createTarget', {'url': 'about:blank'});
     final attached = await _call('Target.attachToTarget', {'targetId': created['targetId'] as String, 'flatten': true});
     final tab = _Tab(created['targetId'] as String, attached['sessionId'] as String);
     _sessions[tab.session] = StreamController<_Cdp>.broadcast();
-    final page = BrowserPage._(this, tab);
+    final page = ChromePage._(this, tab);
     _pages.add(page);
     await _call('Page.enable', null, tab);
     await _call('Network.enable', null, tab);
@@ -353,8 +427,17 @@ final class BrowserClient implements Client {
     return page;
   }
 
-  /// The browser's cookies for [request]'s URL, on a request the plain client will send.
+  /// Makes [request] look like it came from this browser, for the plain client that will
+  /// send it: the cookies Chrome holds for the URL, and Chrome's own user-agent.
+  ///
+  /// A raw request is the other half of a rendered crawl — the asset, the download — and a
+  /// host that sees the pages arrive from Chrome and the files arrive from something that
+  /// names no browser at all has been told two different stories. The rendered side drops a
+  /// caller's `user-agent` on purpose; this side answers with the browser's real one.
   Future<Request> _withCookies(Request request) async {
+    if (!request.headers.containsKey('user-agent')) {
+      if (await _browserAgent() case final agent?) request.headers['user-agent'] = agent;
+    }
     if (request.headers.containsKey('cookie')) return request;
     try {
       final all = await _call('Storage.getCookies');
@@ -365,6 +448,19 @@ final class BrowserClient implements Client {
       if (jar.isNotEmpty) request.headers['cookie'] = jar.join('; ');
     } catch (_) {}
     return request;
+  }
+
+  /// This browser's user-agent — the override it was built with, else what Chrome reports,
+  /// asked once and kept.
+  Future<String?> _browserAgent() async {
+    if (_userAgent case final override?) return override;
+    if (_agent != null) return _agent;
+    try {
+      final version = await _call('Browser.getVersion');
+      return _agent = version['userAgent'] as String?;
+    } catch (_) {
+      return null;
+    }
   }
 
   static bool _sendsTo(Map<String, Object?> cookie, Uri url) {
@@ -428,14 +524,14 @@ final class BrowserClient implements Client {
 
 /// One tab, open for as long as the work takes.
 ///
-/// A page is what [BrowserClient.open] hands over and what [BrowserClient.send] drives
+/// A page is what [ChromeClient.open] hands over and what [ChromeClient.send] drives
 /// underneath. Its reads never throw on an empty result and its waits never throw on time:
 /// [waitFor] answers `false`, [response] answers whatever the DOM says now. What is on the
 /// screen is always available, which is the property an interstitial needs.
 ///
 /// {@category Networking}
-final class BrowserPage {
-  final BrowserClient _client;
+final class ChromePage {
+  final ChromeClient _client;
   final _Tab _tab;
 
   StreamSubscription<_Cdp>? _events;
@@ -446,7 +542,7 @@ final class BrowserPage {
   Uri _url = Uri.parse('about:blank');
   bool _alive = true;
 
-  BrowserPage._(this._client, this._tab);
+  ChromePage._(this._client, this._tab);
 
   /// The URL this tab is on, after every redirect and navigation it has made.
   Uri get url => _url;
@@ -467,10 +563,10 @@ final class BrowserPage {
   /// connection — throws [ClientException]. Everything softer than that is a response: a
   /// wait that expires, an interstitial that never clears, a 403 challenge page.
   /// [challenge] is how long to let an interstitial become the real page; see
-  /// [BrowserClient.launch].
-  Future<Response> goto(Uri url, {BrowserWait? until, Duration? challenge, Request? request}) async {
+  /// [ChromeClient.launch].
+  Future<Response> goto(Uri url, {ChromeWait? until, Duration? challenge, Request? request}) async {
     final wait = until ?? _client._wait;
-    _arm(wait == BrowserWait.idle ? 'networkIdle' : 'load');
+    _arm(wait == ChromeWait.idle ? 'networkIdle' : 'load');
     final nav = await _call('Page.navigate', {'url': '$url'});
     if (nav['errorText'] case final String error when error.isNotEmpty) {
       _disarm();
@@ -690,6 +786,155 @@ new Promise((resolve) => {
     return base64.decode(shot['data'] as String? ?? '');
   }
 
+  /// The text of the first element [selector] matches, or `null` when nothing matched.
+  ///
+  /// A read of one value off a live page without building a whole [HtmlDocument] for it —
+  /// what a poll for a status line or a price wants between clicks.
+  Future<String?> text(String selector) async => switch (await eval(
+    '''(() => { const el = document.querySelector(${jsonEncode(selector)}); return el ? el.innerText : null; })()''',
+  )) {
+    final String found => found,
+    _ => null,
+  };
+
+  /// The value of [name] on the first element [selector] matches, or `null`.
+  ///
+  /// The attribute as the DOM resolves it, so `href` and `src` come back absolute.
+  Future<String?> attr(String selector, String name) async => switch (await eval('''(() => {
+  const el = document.querySelector(${jsonEncode(selector)});
+  if (!el) return null;
+  const name = ${jsonEncode(name)};
+  return el[name] != null && typeof el[name] === 'string' ? el[name] : el.getAttribute(name);
+})()''')) {
+    final String found => found,
+    _ => null,
+  };
+
+  /// Whether [selector] matches anything right now.
+  Future<bool> has(String selector) async => await eval('!!document.querySelector(${jsonEncode(selector)})') == true;
+
+  /// Chooses [value] in the first `<select>` [selector] matches, firing `change`.
+  ///
+  /// [value] is matched against each option's `value` and then its text, so a dropdown can
+  /// be driven by what the person would read. Answers `false` when the select or the option
+  /// was not found.
+  Future<bool> select(String selector, String value) async =>
+      await eval('''(() => {
+  const el = document.querySelector(${jsonEncode(selector)});
+  if (!el || !el.options) return false;
+  const want = ${jsonEncode(value)};
+  const option = [...el.options].find((o) => o.value === want) ??
+                 [...el.options].find((o) => o.textContent.trim() === want);
+  if (!option) return false;
+  el.value = option.value;
+  el.dispatchEvent(new Event('input', {bubbles: true}));
+  el.dispatchEvent(new Event('change', {bubbles: true}));
+  return true;
+})()''') ==
+      true;
+
+  /// Moves the mouse over the first element [selector] matches — a menu that opens on hover,
+  /// a tooltip that loads its content. Answers `false` when nothing matched or it has no box.
+  Future<bool> hover(String selector) async {
+    final node = await _node(selector);
+    if (node == null) return false;
+    try {
+      await _call('DOM.scrollIntoViewIfNeeded', {'nodeId': node});
+      final box = await _call('DOM.getBoxModel', {'nodeId': node});
+      final quad = ((box['model'] as Map<String, Object?>?)?['content'] as List?)?.cast<num>();
+      if (quad == null || quad.length < 6) return false;
+      await _call('Input.dispatchMouseEvent', {
+        'type': 'mouseMoved',
+        'x': (quad[0] + quad[4]) / 2,
+        'y': (quad[1] + quad[5]) / 2,
+      });
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Runs [action] and waits for the navigation it causes — a click that leaves the page, a
+  /// form submitted, a `location` assigned. Answers whether the page settled before [timeout].
+  ///
+  /// The wait is armed before [action] runs, which is the whole reason this takes the action
+  /// instead of being a bare `waitForNavigation()` called after a click. A click is
+  /// dispatched and returns immediately, and a fast page can finish loading before the next
+  /// line runs; a wait armed afterwards has already missed the event it is waiting for and
+  /// sits until its timeout. Like every wait here, expiring is an answer, not an exception.
+  ///
+  /// ```dart
+  /// await page.navigating(() => page.click('a.next'));
+  /// print(page.url);
+  /// ```
+  Future<bool> navigating(FutureOr<void> Function() action, {ChromeWait? until, Duration? timeout}) async {
+    final wait = until ?? _client._wait;
+    _arm(wait == ChromeWait.idle ? 'networkIdle' : 'load');
+    try {
+      await action();
+    } catch (_) {
+      _disarm();
+      rethrow;
+    }
+    return _settle(timeout);
+  }
+
+  /// Goes back one entry in this tab's history, and waits. Answers `false` when there is
+  /// nothing to go back to.
+  Future<bool> back({ChromeWait? until, Duration? timeout}) async {
+    final history = await _call('Page.getNavigationHistory');
+    final index = history['currentIndex'] as int? ?? 0;
+    final entries = (history['entries'] as List? ?? const []).cast<Map<String, Object?>>();
+    if (index <= 0 || entries.isEmpty) return false;
+    final was = _url;
+    final wait = until ?? _client._wait;
+    _arm(wait == ChromeWait.idle ? 'networkIdle' : 'load');
+    await _call('Page.navigateToHistoryEntry', {'entryId': entries[index - 1]['id']});
+    // A page the back/forward cache restores is not loaded again and fires no second `load`,
+    // so the lifecycle wait on its own would sit out the whole timeout on the commonest kind
+    // of back. The URL moving is the other proof the tab went back, and either one will do.
+    final moved = await Future.any([_settle(timeout), _left(was, timeout)]);
+    _disarm();
+    return moved;
+  }
+
+  /// Answers once [url] is no longer [was] — the only signal a bfcache restore gives.
+  Future<bool> _left(Uri was, Duration? timeout) async {
+    final deadline = DateTime.now().add(timeout ?? _client._timeout);
+    while (_alive && DateTime.now().isBefore(deadline)) {
+      if (_url != was) return true;
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    return _url != was;
+  }
+
+  /// This tab's cookies — after a login, to hand to something that is not a browser.
+  Future<List<Cookie>> cookies() async {
+    final all = await _call('Network.getCookies');
+    return [
+      for (final c in (all['cookies'] as List? ?? const []).cast<Map<String, Object?>>())
+        Cookie(c['name'] as String? ?? '', c['value'] as String? ?? '')
+          ..domain = c['domain'] as String?
+          ..path = c['path'] as String?
+          ..secure = c['secure'] == true
+          ..httpOnly = c['httpOnly'] == true,
+    ];
+  }
+
+  /// The page as a PDF, the way Chrome's own "Save as PDF" prints it.
+  ///
+  /// Headless only — a headful Chrome answers `Printing is not available`, which comes
+  /// through as [ClientException].
+  Future<Uint8List> pdf({bool background = true, bool landscape = false, double scale = 1}) async {
+    final printed = await _call('Page.printToPDF', {
+      'printBackground': background,
+      'landscape': landscape,
+      'scale': scale,
+      'transferMode': 'ReturnAsBase64',
+    });
+    return base64.decode(printed['data'] as String? ?? '');
+  }
+
   /// Sets headers sent with every request this tab makes from now on.
   Future<void> headers(Map<String, String> headers) => _call('Network.setExtraHTTPHeaders', {'headers': headers});
 
@@ -759,16 +1004,18 @@ new Promise((resolve) => {
   }
 
   /// Waits for the armed lifecycle event, and gives up quietly: a page that never fires
-  /// `load` still has a DOM worth reading.
-  Future<void> _settle() async {
+  /// `load` still has a DOM worth reading. Answers whether the event arrived in time.
+  Future<bool> _settle([Duration? timeout]) async {
     final waiter = _waiter;
-    if (waiter == null) return;
+    if (waiter == null) return true;
+    var fired = true;
     try {
       // The field is what the listener completes, so it stays set until the wait is over.
-      await waiter.future.timeout(_client._timeout, onTimeout: () {});
+      await waiter.future.timeout(timeout ?? _client._timeout, onTimeout: () => fired = false);
     } finally {
       if (identical(_waiter, waiter)) _disarm();
     }
+    return fired;
   }
 
   /// Whether this looks like an interstitial rather than the page that was asked for.
@@ -817,6 +1064,28 @@ const _chromes = [
   r'C:\Program Files\Google\Chrome\Application\chrome.exe',
   r'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe',
 ];
+
+/// The browser's websocket endpoint on [host]:[port], or `null` when nothing answers there.
+Future<Uri?> _devtools(String host, int port) async {
+  final probe = IoClient();
+  try {
+    final res = await probe.send(Request('GET', Uri.parse('http://$host:$port/json/version'))).then((r) => r.read());
+    if (!res.isOk) return null;
+    return switch (res.json['webSocketDebuggerUrl'].to<String>()) {
+      final debugger? => Uri.tryParse(debugger),
+      _ => null,
+    };
+  } catch (_) {
+    // Nothing listening, or something that is not DevTools. Either way there is no browser.
+    return null;
+  } finally {
+    probe.close();
+  }
+}
+
+/// The command that starts a Chrome [attach] could join, for the message that says so.
+String _howToStart(int port) =>
+    'Start one with --remote-debugging-port=$port --user-data-dir=<dir>, or use ChromeClient.connect() to start it for you.';
 
 String? _chrome() {
   if (Platform.environment['CHROME_PATH'] case final path? when path.isNotEmpty) return path;
