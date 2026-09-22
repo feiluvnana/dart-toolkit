@@ -1,5 +1,65 @@
 # Changelog
 
+## Unreleased
+
+### The browser goes through the proxy, and so do its downloads
+
+- **Fixed: `IoClient(proxy:)` with credentials never authenticated.** Credentials were
+  registered under the empty realm, and `dart:io` matches them by the realm the proxy names —
+  so against any proxy that names one (which is most) the client 407'd, found nothing to send,
+  and was asked again forever. They are now supplied for whatever realm was actually asked
+  for. Shipped broken in 0.0.5, and found by running a proxy that names a realm at it.
+
+- **Added: `ChromeClient(proxy:)`** on all three constructors — `http://user:pass@host:8080`,
+  or a `socks5://`. It does two things, and the second is the point: `--proxy-server` for the
+  browser, and **the same proxy for the plain client underneath**. Without that the pages of a
+  crawl go one way and its files go another, which is the single most obvious thing a host can
+  notice about a client; it is the same reason a raw request already borrows the browser's
+  cookies and user-agent.
+- **Proxy credentials are answered over the protocol.** `--proxy-server` cannot carry a
+  password — Chrome opens a dialog for one, which this client now auto-dismisses, so an
+  authenticated proxy would have hung quietly. `Fetch.authRequired` answers it instead. That
+  costs a round trip per request and is paid only by a client that named one.
+- **Added: `ChromeClient.isNewBrowser`** — whether this run started the browser or joined one
+  already up. Always true for `launch` and false for `attach`; `connect` is whichever was
+  needed, and there was no way to find out which. It decides whether the settings that describe
+  how to *start* a browser — `proxy:`, `headless:`, `args:` — applied at all, and a program
+  that cares can now say so instead of guessing.
+
+### A positional is a value, and help says what the command takes
+
+- **Added: `Arg`**, beside `Opt`, with the same five words and the same two modifiers:
+  `Arg.text`, `Arg.number`, `Arg.among`, `Arg.by`, and `Arg.rest` for everything that is
+  left, each nullable until `.or(v)` or `.required()`. A command declares them with `args:`
+  and a handler reads them with `ctx(id)`, exactly as it reads an option.
+
+  ```dart
+  final id = Arg.text('id', description: 'The book id').required();
+
+  Cli(name: 'zlib', args: [id], options: [format], handler: (ctx) => fetch(ctx(id)));
+  ```
+
+  Before this there was only `CliContext.rest`, a raw `List<String>`: every program picked
+  its own out of it, checked it by hand, wrote its own error message, and got no type, no
+  default and no line in `--help` for the trouble. `bin/tk.dart` had a `need()` extension for
+  exactly that, and it is deleted — six commands now declare what they take, including
+  `tk hash <paths>...` as a variadic and `tk fetch <url>` parsed straight to a `Uri`.
+- **`rest` is still there and still raw**, for a command that declares no arguments. Declaring
+  them is what buys the checking: a missing required one, a bad value and an unexpected extra
+  are each a `UsageException`, which prints the usage hint and leaves with 64.
+- **Fixed: `-h` for anything else took `--help` with it.** The parser treated owning the `h`
+  abbreviation as owning help altogether, so a command with a `--host` answered `Unknown
+  option: --help`. The two are separate now — a declared `help` option owns the long form, an
+  `h` abbreviation owns the short one — and the help text stops claiming `-h, --help` when
+  `-h` belongs to something else.
+- **Fixed: the usage line advertised commands that did not exist.** Every program printed
+  `[options] [command]` whether or not it had subcommands. It now prints what the command
+  actually holds — `Usage: zlib <id> [options]` — with an `Arguments:` section beside
+  `Options:`, and `[command]` only where there is one.
+- **Added: `CliValue`**, the sealed base `Opt` and `Arg` share; `CliContext.call` and `given`
+  take it, so `ctx(…)` reads either. `CliOption` is still what an option is and still what
+  `options:` takes.
+
 ## 0.0.5
 
 A login that redirects keeps its session, a page that opens a dialog keeps its tab, and an

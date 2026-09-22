@@ -226,6 +226,8 @@ final class ChromeClient implements Client {
   final Duration _challenge;
   final ChromeWait _wait;
   final Device _device;
+  final Uri? _proxy;
+  final bool _started;
   final bool _stealth;
   final Set<Resource> _block;
   final Semaphore _permits;
@@ -251,6 +253,8 @@ final class ChromeClient implements Client {
     required ChromeWait wait,
     required int tabs,
     required Device device,
+    required Uri? proxy,
+    required bool started,
     required bool stealth,
     required Set<Resource> block,
     Process? process,
@@ -261,6 +265,8 @@ final class ChromeClient implements Client {
        _challenge = challenge,
        _wait = wait,
        _device = device,
+       _proxy = proxy,
+       _started = started,
        _stealth = stealth,
        _block = block,
        _process = process,
@@ -271,6 +277,13 @@ final class ChromeClient implements Client {
 
   /// Whether this client has been closed.
   bool get isClosed => _closed;
+
+  /// Whether this run started the browser, rather than joining one already up.
+  ///
+  /// Always true for [launch] and false for [attach]; [connect] is whichever was needed, and
+  /// this is the only way to find out which. It is what decides whether the settings that
+  /// describe how to *start* a browser — `proxy:`, `headless:`, `args:` — applied at all.
+  bool get isNewBrowser => _started;
 
   /// Starts a headless Chrome of its own and connects to it.
   ///
@@ -287,8 +300,16 @@ final class ChromeClient implements Client {
   /// response. With `headless: false` that wait is also a human's chance to click the box,
   /// and [open] takes the tab over for one.
   ///
+  /// [proxy] sends everything through one — `http://user:pass@host:8080`, or a `socks5://`.
+  /// Credentials cannot travel on a command line, so Chrome asks for them and this answers
+  /// over the protocol; that costs a round trip per request, and only for a client that named
+  /// an authenticated proxy. **The default [assets] client is given the same proxy**, because
+  /// the pages and the files of one crawl going by different routes is the thing a host
+  /// notices. Chrome bypasses the loopback for a proxy unless
+  /// `args: ['--proxy-bypass-list=<-loopback>']` says otherwise.
+  ///
   /// [assets] answers everything that is not a page render, and is closed with this client
-  /// unless it was supplied.
+  /// unless it was supplied. One supplied here is used as it is, proxy and all.
   static Future<ChromeClient> launch({
     String? executable,
     bool headless = true,
@@ -297,6 +318,7 @@ final class ChromeClient implements Client {
     Duration challenge = const Duration(seconds: 20),
     ChromeWait wait = ChromeWait.load,
     Device device = Device.desktop,
+    Uri? proxy,
     bool stealth = true,
     Set<Resource> block = const {},
     Client? assets,
@@ -318,6 +340,7 @@ final class ChromeClient implements Client {
       '--disable-renderer-backgrounding',
       '--disable-features=Translate,MediaRouter',
       if (stealth) '--disable-blink-features=AutomationControlled',
+      if (proxy != null) '--proxy-server=${_server(proxy)}',
       '--hide-scrollbars',
       '--mute-audio',
       ...args,
@@ -327,13 +350,15 @@ final class ChromeClient implements Client {
       final endpoint = await _activePort(profile, process, timeout);
       return ChromeClient._(
         await WebSocket.connect(endpoint.toString()),
-        assets: assets ?? IoClient(),
+        assets: assets ?? IoClient(proxy: proxy),
         ownsAssets: assets == null,
         timeout: timeout,
         challenge: challenge,
         wait: wait,
         tabs: tabs,
         device: device,
+        proxy: proxy,
+        started: true,
         stealth: stealth,
         block: block,
         process: process,
@@ -348,6 +373,10 @@ final class ChromeClient implements Client {
 
   /// Connects to a Chrome already running with `--remote-debugging-port=<port>`.
   ///
+  /// A [proxy] reaches the plain client underneath and this client's proxy authentication,
+  /// but not the browser: a browser already running keeps the route it was started with. To
+  /// put the pages through a proxy too, start it with `--proxy-server` or use [launch].
+  ///
   /// The browser outlives [close], which only lets go of it: the tabs this client opened
   /// are closed, nothing else is. This is the client for a site that already knows the
   /// person running the program — their profile, their cookies, their logged-in session.
@@ -360,6 +389,7 @@ final class ChromeClient implements Client {
     Duration challenge = const Duration(seconds: 20),
     ChromeWait wait = ChromeWait.load,
     Device device = Device.desktop,
+    Uri? proxy,
     bool stealth = true,
     Set<Resource> block = const {},
     Client? assets,
@@ -370,13 +400,15 @@ final class ChromeClient implements Client {
     }
     return ChromeClient._(
       await WebSocket.connect(endpoint.toString()),
-      assets: assets ?? IoClient(),
+      assets: assets ?? IoClient(proxy: proxy),
       ownsAssets: assets == null,
       timeout: timeout,
       challenge: challenge,
       wait: wait,
       tabs: tabs,
       device: device,
+      proxy: proxy,
+      started: false,
       stealth: stealth,
       block: block,
     );
@@ -405,7 +437,10 @@ final class ChromeClient implements Client {
   /// is [headless]-`false` by default: a browser you can see is one you can log into.
   ///
   /// A Chrome already running on [port] is attached to as it is — [profile], [headless],
-  /// [executable] and [args] describe how to *start* one and are ignored when none is needed.
+  /// [executable], [args] and [proxy] describe how to *start* one and are ignored when none
+  /// is needed. A [proxy] still reaches the plain client underneath either way, so a run that
+  /// joins an existing browser downloads through the proxy and renders around it; when that
+  /// matters, quit the browser first or give it a [profile] of its own.
   static Future<ChromeClient> connect({
     int port = 9222,
     String host = '127.0.0.1',
@@ -417,12 +452,14 @@ final class ChromeClient implements Client {
     Duration challenge = const Duration(seconds: 20),
     ChromeWait wait = ChromeWait.load,
     Device device = Device.desktop,
+    Uri? proxy,
     bool stealth = true,
     Set<Resource> block = const {},
     Client? assets,
     List<String> args = const [],
   }) async {
     var endpoint = await _devtools(host, port);
+    final started = endpoint == null;
     if (endpoint == null) {
       final binary = executable ?? _chrome();
       if (binary == null) {
@@ -440,6 +477,8 @@ final class ChromeClient implements Client {
         '--user-data-dir=$dir',
         '--no-first-run',
         '--no-default-browser-check',
+        if (stealth) '--disable-blink-features=AutomationControlled',
+        if (proxy != null) '--proxy-server=${_server(proxy)}',
         ...args,
         'about:blank',
       ], mode: ProcessStartMode.detached);
@@ -456,13 +495,15 @@ final class ChromeClient implements Client {
     }
     return ChromeClient._(
       await WebSocket.connect(endpoint.toString()),
-      assets: assets ?? IoClient(),
+      assets: assets ?? IoClient(proxy: proxy),
       ownsAssets: assets == null,
       timeout: timeout,
       challenge: challenge,
       wait: wait,
       tabs: tabs,
       device: device,
+      proxy: proxy,
+      started: started,
       stealth: stealth,
       block: block,
     );
@@ -583,7 +624,7 @@ final class ChromeClient implements Client {
     await _call('Page.setLifecycleEventsEnabled', {'enabled': true}, tab);
     await _dress(tab);
     page._listen();
-    if (_block.isNotEmpty) await page.block(_block);
+    await page.block(_block);
     final tree = await _call('Page.getFrameTree', null, tab);
     page._frame = switch (tree['frameTree']) {
       final Map<String, Object?> root => (root['frame'] as Map<String, Object?>?)?['id'] as String? ?? '',
@@ -747,7 +788,7 @@ final class ChromePage {
 
   StreamSubscription<_Cdp>? _events;
   FutureOr<void> Function(Dialog dialog)? _onDialog;
-  Set<Resource> _blocked = const {};
+  Set<Resource>? _blocked;
   Map<String, Object?>? _document;
   Completer<void>? _waiter;
   String _want = '';
@@ -1103,14 +1144,24 @@ new Promise((resolve) => {
   /// fraction of the bytes and a fraction of the time — `page.block(Resource.heavy)` is that
   /// trade, and the client takes it for every render when it is built with `block:`.
   Future<void> block(Set<Resource> kinds) async {
-    if (kinds.length == _blocked.length && kinds.every(_blocked.contains)) return;
+    if (_blocked case final was? when was.length == kinds.length && kinds.every(was.contains)) return;
     _blocked = kinds;
-    if (kinds.isEmpty) return _call('Fetch.disable').then((_) {});
+    // A proxy with credentials needs the same domain enabled, because `--proxy-server` cannot
+    // carry a password: Chrome asks for one, and the answer goes back over the protocol. That
+    // means pausing every request rather than only the blocked kinds, which is a round trip
+    // each — the price of an authenticated proxy, and paid only by a client that asked for one.
+    final authenticating = _client._proxy?.userInfo.isNotEmpty ?? false;
+    if (kinds.isEmpty && !authenticating) return _call('Fetch.disable').then((_) {});
     await _call('Fetch.enable', {
-      'patterns': [
-        for (final kind in kinds)
-          for (final type in kind._types) {'urlPattern': '*', 'resourceType': type, 'requestStage': 'Request'},
-      ],
+      'patterns': authenticating
+          ? [
+              {'urlPattern': '*', 'requestStage': 'Request'},
+            ]
+          : [
+              for (final kind in kinds)
+                for (final type in kind._types) {'urlPattern': '*', 'resourceType': type, 'requestStage': 'Request'},
+            ],
+      if (authenticating) 'handleAuthRequests': true,
     });
   }
 
@@ -1511,12 +1562,30 @@ new Promise((resolve) => {
           if (frame == null || (_frame.isNotEmpty && frame['id'] != _frame)) return;
           if (frame['url'] case final String moved) _url = Uri.tryParse(moved) ?? _url;
         case 'Fetch.requestPaused' when _parent == null:
-          // Only what `block` asked to be paused is ever paused, so everything that arrives
-          // here is something this page refuses to load.
+          // With an authenticating proxy everything pauses here, so what is refused is decided
+          // by the kind rather than by having arrived: a paused request this page does not
+          // block is sent on its way.
+          final kind = '${event.params['resourceType']}';
+          final refused = (_blocked ?? const <Resource>{}).any((r) => r._types.contains(kind));
           unawaited(
-            _call('Fetch.failRequest', {
+            _call(refused ? 'Fetch.failRequest' : 'Fetch.continueRequest', {
               'requestId': event.params['requestId'],
-              'errorReason': 'BlockedByClient',
+              if (refused) 'errorReason': 'BlockedByClient',
+            }).catchError((Object _) => const <String, Object?>{}),
+          );
+        case 'Fetch.authRequired' when _parent == null:
+          final proxy = _client._proxy;
+          final colon = proxy?.userInfo.indexOf(':') ?? -1;
+          unawaited(
+            _call('Fetch.continueWithAuth', {
+              'requestId': event.params['requestId'],
+              'authChallengeResponse': proxy == null || proxy.userInfo.isEmpty
+                  ? {'response': 'CancelAuth'}
+                  : {
+                      'response': 'ProvideCredentials',
+                      'username': colon == -1 ? proxy.userInfo : proxy.userInfo.substring(0, colon),
+                      'password': colon == -1 ? '' : proxy.userInfo.substring(colon + 1),
+                    },
             }).catchError((Object _) => const <String, Object?>{}),
           );
         case 'Page.javascriptDialogOpening' when _parent == null:
@@ -1702,6 +1771,10 @@ Future<void> _erase(Directory directory) async {
     if (await directory.exists()) await directory.delete(recursive: true);
   } catch (_) {}
 }
+
+/// What `--proxy-server` wants: scheme, host and port, and never the credentials — those
+/// cannot travel on a command line and are answered over the protocol instead.
+String _server(Uri proxy) => '${proxy.scheme}://${proxy.host}:${proxy.port}';
 
 /// `net::ERR_NAME_NOT_RESOLVED` says the same thing with less shouting.
 String _readable(String error) =>

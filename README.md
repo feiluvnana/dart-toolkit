@@ -488,7 +488,15 @@ interstitial to find.
 ```dart
 await ChromeClient.launch(block: Resource.heavy, device: Device.phone);
 await ChromeClient.launch(device: Device(locale: 'de-DE', timezone: 'Europe/Berlin'));
+await ChromeClient.launch(proxy: 'http://user:pass@host:8080'.url);
 ```
+
+`proxy:` routes the browser **and the plain client underneath**, so the pages and the files of
+one crawl take the same road — the same reason a raw request already borrows the browser's
+cookies and user-agent. Credentials cannot travel on a command line, so Chrome asks and the
+client answers over the protocol. A browser that is already running keeps the route it was
+started with, so `attach`, and `connect` when it joins rather than starts, proxy the downloads
+and not the pages; `isNewBrowser` says which happened.
 
 Only a GET without a `range` is rendered. A POST, a resumable download, an image — everything
 else goes to the plain HTTP client underneath, carrying the browser's cookies for that host, so
@@ -672,9 +680,10 @@ print(typed.fold((e) => 'failed: $e', (v) => 'got $v'));
 
 ### CLI
 
-An option is a value, so its name is written once and its type is the type you read back.
-`Opt.among` takes the values themselves — an enum, not a list of strings to match again by
-hand — and `.or(…)` and `.required()` are what make `ctx(…)` non-nullable. `Cli.run` owns the
+An option is a value, so its name is written once and its type is the type you read back —
+and **so is a positional**. `Opt.among` takes the values themselves — an enum, not a list of
+strings to match again by hand — and `.or(…)` and `.required()` are what make `ctx(…)`
+non-nullable, on both. `Cli.run` owns the
 lifecycle: a usage error (`UsageException`) prints and exits 64, `ctx.cancel` is cancelled on a
 signal, and whether the action returns or throws the exit hooks run and the signal handlers
 are released so the process ends.
@@ -692,8 +701,12 @@ final workers = Opt.number('workers', abbr: 'w').or(4);                  // int
 final dryRun = Opt.flag('dry-run', abbr: 'd');                           // bool
 final since = Opt.by('since', DateTime.parse);                           // DateTime?
 
+final id    = Arg.text('id', description: 'The thing to ship').required();   // String
+final hosts = Arg.rest('hosts').or(const []);                                // List<String>
+
 final cli = Cli(
   name: 'deployer',
+  args: [id, hosts],
   options: [env, token, workers, dryRun],
   handler: (ctx) async {
     final stage = Console.stages(2);
@@ -709,6 +722,26 @@ final cli = Cli(
 
 await cli.run(args);   // deployer -dw8 -t abc, deployer --workers=8 fetch, ...
 ```
+
+`Arg` is `Opt` written by position rather than by name: the same five kinds, the same `.or()`
+and `.required()`, read back with the same `ctx(id)`. They are bound in order before the
+handler runs, and a missing required one, a bad value or an unexpected extra is a
+`UsageException`. They also print themselves, which `ctx.rest` never did:
+
+```
+Usage: deployer <id> [hosts...] [options]
+
+Arguments:
+  <id>                 The thing to ship
+  [hosts...]
+
+Options:
+  -e, --env            (dev|staging|production) [default: production]
+```
+
+`<name>` is required and `[name]` is not, and `[command]` appears only where there are
+subcommands. `ctx.rest` is still the raw list for a command that declares no arguments;
+declaring them is what buys the type, the default, the checking and the help line.
 
 Options may precede the subcommand, short flags combine (`-dv`), and a short option may attach
 its value (`-w8`). A subcommand nests by taking `commands:` of its own.

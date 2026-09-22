@@ -13,8 +13,15 @@ library;
 
 import 'package:dart_toolkit/dart_toolkit.dart';
 
-/// The options, declared once as values: the name is written here and nowhere else, and
-/// `ctx(top)` comes back an `int` because `top` says so.
+/// The options and arguments, declared once as values: the name is written here and nowhere
+/// else, and `ctx(top)` comes back an `int` because `top` says so.
+final paths = Arg.rest('paths', description: 'Files to digest').required();
+final pattern = Arg.text('pattern', description: 'A glob, relative to here').or('**/*');
+final file = Arg.text('file', description: 'A YAML, TOML, INI or JSON file').required();
+final link = Arg.by('url', (raw) => raw.url, description: 'The URL to GET').required();
+final dir = Arg.text('dir', description: 'The directory to archive').required();
+final archive = Arg.text('archive', description: 'The archive to list').required();
+
 final verbose = Opt.flag('verbose', abbr: 'v', description: 'Show debug logging');
 final algo = Opt.among('algo', Hash.values, abbr: 'a', description: 'Digest algorithm').or(Hash.sha256);
 final top = Opt.number('top', abbr: 'n', description: 'How many to show').or(10);
@@ -29,27 +36,36 @@ Future<void> main(List<String> args) => Cli(
   version: '0.0.2',
   options: [verbose],
   commands: [
-    CliCommand('hash', description: 'Digest files, one per line', options: [algo], handler: _cmd(hash)),
-    CliCommand('find', description: 'Match a glob and report the biggest hits', options: [top], handler: _cmd(find)),
+    CliCommand('hash', description: 'Digest files, one per line', args: [paths], options: [algo], handler: _cmd(hash)),
+    CliCommand(
+      'find',
+      description: 'Match a glob and report the biggest hits',
+      args: [pattern],
+      options: [top],
+      handler: _cmd(find),
+    ),
     CliCommand(
       'read',
       description: 'Parse YAML, TOML, INI or JSON and query it',
+      args: [file],
       options: [query, asYaml],
       handler: _cmd(read),
     ),
     CliCommand(
       'fetch',
       description: 'GET a URL to stdout, or to a file with --out',
+      args: [link],
       options: [out],
       handler: _cmd(fetch),
     ),
     CliCommand(
       'pack',
       description: 'Archive a directory; the format comes from --to',
+      args: [dir],
       options: [to],
       handler: _cmd(pack),
     ),
-    CliCommand('peek', description: 'List an archive without extracting it', handler: _cmd(peek)),
+    CliCommand('peek', description: 'List an archive without extracting it', args: [archive], handler: _cmd(peek)),
   ],
 ).run(args);
 
@@ -60,21 +76,13 @@ CommandHandler _cmd(CommandHandler run) => (ctx) {
   return run(ctx);
 };
 
-extension on CliContext {
-  /// The first positional, or a usage error naming the command that wanted it — which is
-  /// what a missing argument is, so it prints the usage hint and leaves with 64.
-  String need(String what) => rest.firstOrNull ?? (throw UsageException('${command.name} needs $what'));
-}
-
 /// One path per positional argument, hashed in parallel, reported in input order.
 Future<void> hash(CliContext ctx) async {
-  if (ctx.rest.isEmpty) ctx.need('at least one path');
   final algorithm = ctx(algo);
 
-  final digested = await ctx.rest.parallelize(
-    (path) async => (path: path, digest: await path.path.hash(algorithm)),
-    concurrency: 4,
-  );
+  final digested = await ctx(
+    paths,
+  ).parallelize((path) async => (path: path, digest: await path.path.hash(algorithm)), concurrency: 4);
 
   for (final row in digested.rights) {
     Io.out.writeln('${row.digest}  ${row.path}');
@@ -86,16 +94,16 @@ Future<void> hash(CliContext ctx) async {
 
 /// A glob, then the biggest matches as a table.
 Future<void> find(CliContext ctx) async {
-  final pattern = ctx.rest.firstOrNull ?? '**/*';
-  Console.debug('matching $pattern under ${Path.current}');
+  final glob = ctx(pattern);
+  Console.debug('matching $glob under ${Path.current}');
 
-  final matches = await Path.current.glob(pattern).toList();
+  final matches = await Path.current.glob(glob).toList();
   final sized = (await matches.parallelize(
     (f) async => (file: f.relativeTo(Path.current), bytes: await f.size()),
   )).rights;
 
   if (sized.isEmpty) {
-    Console.warn('nothing matched $pattern');
+    Console.warn('nothing matched $glob');
     return;
   }
   Table.rows(
@@ -109,12 +117,12 @@ Future<void> find(CliContext ctx) async {
 
 /// Any of the four document formats, queried with one language.
 Future<void> read(CliContext ctx) async {
-  final file = ctx.need('a file').path;
-  final text = await file.readText();
+  final source = ctx(file).path;
+  final text = await source.readText();
 
   // The parser is chosen here rather than by the library: a file's extension is a guess, and
   // a wrong guess should be the caller's to make.
-  final doc = switch (file.ext.toLowerCase()) {
+  final doc = switch (source.ext.toLowerCase()) {
     'yaml' || 'yml' => text.yaml,
     'toml' => text.toml,
     'ini' || 'cfg' || 'conf' => text.ini,
@@ -135,7 +143,7 @@ Future<void> read(CliContext ctx) async {
 
 /// To stdout, or to a file with progress.
 Future<void> fetch(CliContext ctx) async {
-  final url = ctx.need('a URL').url;
+  final url = ctx(link);
 
   await Http.scope(timeout: 30.s, () async {
     if (ctx(out) case final path?) {
@@ -151,7 +159,7 @@ Future<void> fetch(CliContext ctx) async {
 }
 
 Future<void> pack(CliContext ctx) async {
-  final source = ctx.need('a directory').path;
+  final source = ctx(dir).path;
   final target = ctx(to).path;
 
   await Console.spin(
@@ -163,8 +171,7 @@ Future<void> pack(CliContext ctx) async {
 }
 
 Future<void> peek(CliContext ctx) async {
-  final archive = ctx.need('an archive').path;
-  final files = (await archive.archiveEntries()).where((e) => !e.isDir).toList();
+  final files = (await ctx(archive).path.archiveEntries()).where((e) => !e.isDir).toList();
 
   Table.rows(
     files.map((e) => {'size': e.size, 'packed': e.compressedSize, 'name': e.name}),

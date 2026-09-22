@@ -765,6 +765,185 @@ void main() {
     });
   });
 
+  group('a positional is a declared value, not a list to pick through', () {
+    Future<String> usageOf(CliCommand command, List<String> args) async {
+      final out = StringBuffer();
+      Io.out = out;
+      try {
+        await command.run(args);
+      } finally {
+        Io.reset();
+      }
+      return out.toString();
+    }
+
+    test('it is typed, defaulted and required exactly as an option is', () async {
+      final id = Arg.text('id').required();
+      final count = Arg.number('count').or(3);
+      Object? seenId;
+      Object? seenCount;
+
+      await CliCommand(
+        'demo',
+        args: [id, count],
+        handler: (ctx) {
+          seenId = ctx(id); // String, statically
+          seenCount = ctx(count); // int, statically
+        },
+      ).run(['abc', '7']);
+
+      expect(seenId, 'abc');
+      expect(seenCount, 7);
+    });
+
+    test('a default fills an absent one, and a bad value is a usage error', () async {
+      var seen = 0;
+      final count = Arg.number('count').or(3);
+      final cli = CliCommand('demo', args: [count], handler: (ctx) => seen = ctx(count));
+
+      await cli.run([]);
+      expect(seen, 3, reason: 'absent, so the default');
+      expect(() => cli.run(['nine']), throwsA(isA<UsageException>()));
+    });
+
+    test('a missing required one names itself, and an extra one is refused', () {
+      final id = Arg.text('id').required();
+      final cli = CliCommand('demo', args: [id], handler: (_) {});
+
+      expect(() => cli.run([]), throwsA(isA<UsageException>().having((e) => e.message, 'message', contains('<id>'))));
+      expect(
+        () => cli.run(['a', 'b']),
+        throwsA(isA<UsageException>().having((e) => e.message, 'message', contains('"b"'))),
+      );
+    });
+
+    test('a variadic one takes the remainder, and required means at least one', () async {
+      final tag = Arg.text('tag').required();
+      final paths = Arg.rest('paths').required();
+      List<String>? seen;
+      String? seenTag;
+      final cli = CliCommand(
+        'demo',
+        args: [tag, paths],
+        handler: (ctx) {
+          seenTag = ctx(tag);
+          seen = ctx(paths);
+        },
+      );
+
+      await cli.run(['v1', 'a.txt', 'b.txt', 'c.txt']);
+      expect(seenTag, 'v1');
+      expect(seen, ['a.txt', 'b.txt', 'c.txt']);
+      expect(() => cli.run(['v1']), throwsA(isA<UsageException>()));
+    });
+
+    test('a choice argument is matched by name, and an unknown one is refused', () async {
+      final level = Arg.among('level', LogLevel.values).or(LogLevel.info);
+      Object? seen;
+      final cli = CliCommand('demo', args: [level], handler: (ctx) => seen = ctx(level));
+
+      await cli.run(['warn']);
+      expect(seen, LogLevel.warn);
+      expect(() => cli.run(['loud']), throwsA(isA<UsageException>()));
+    });
+
+    test('a command that declares none keeps rest exactly as it was', () async {
+      List<String>? seen;
+      await CliCommand('demo', handler: (ctx) => seen = ctx.rest).run(['a', 'b', 'c']);
+      expect(seen, ['a', 'b', 'c'], reason: 'nothing checked, nothing consumed');
+    });
+
+    test('the usage line says what the command takes and nothing it does not', () async {
+      final help = await usageOf(
+        CliCommand(
+          'demo',
+          description: 'Does a thing',
+          args: [
+            Arg.text('id', description: 'Which one').required(),
+            Arg.rest('extra'),
+          ],
+          options: [Opt.flag('verbose', abbr: 'v')],
+          handler: (_) {},
+        ),
+        ['--help'],
+      );
+
+      expect(help, contains('Usage: demo <id> [extra...] [options]'));
+      expect(help, isNot(contains('[command]')), reason: 'this program has no commands');
+      expect(help, contains('Arguments:'));
+      expect(help, contains('<id>'));
+      expect(help, contains('Which one'));
+      expect(help, contains('[extra...]'));
+    });
+
+    test('a program with commands still advertises them', () async {
+      final help = await usageOf(
+        CliCommand(
+          'demo',
+          commands: [CliCommand('go', description: 'Go', handler: (_) {})],
+        ),
+        ['--help'],
+      );
+      expect(help, contains('Usage: demo [options] [command]'));
+      expect(help, contains('Commands:'));
+    });
+
+    test('a subcommand prints its own arguments, not its parent\'s', () async {
+      final help = await usageOf(
+        CliCommand(
+          'demo',
+          commands: [
+            CliCommand('go', description: 'Go', args: [Arg.text('where').required()], handler: (_) {}),
+          ],
+        ),
+        ['go', '--help'],
+      );
+      expect(help, contains('Usage: demo go <where> [options]'));
+    });
+
+    test('taking -h for something else does not take --help with it', () async {
+      final out = StringBuffer();
+      Io.out = out;
+      try {
+        // A command with a `--host` still answers `--help`; `-h` is the one it took.
+        await CliCommand(
+          'demo',
+          options: [Opt.text('host', abbr: 'h').or('127.0.0.1')],
+          handler: (_) => fail('help should have run instead'),
+        ).run(['--help']);
+      } finally {
+        Io.reset();
+      }
+      expect(out.toString(), contains('Usage: demo'));
+      expect(out.toString(), contains('--help'));
+      expect(out.toString(), isNot(contains('-h, --help')), reason: '-h belongs to --host now');
+    });
+
+    test('a command that declares its own help option keeps it', () async {
+      var ran = false;
+      await CliCommand('demo', options: [Opt.flag('help')], handler: (_) => ran = true).run(['--help']);
+      expect(ran, isTrue, reason: 'the declared option won, and usage was not printed');
+    });
+
+    test('an option among the positionals is still an option', () async {
+      final id = Arg.text('id').required();
+      final loud = Opt.flag('loud', abbr: 'l');
+      String? seen;
+      var wasLoud = false;
+      await CliCommand(
+        'demo',
+        args: [id],
+        options: [loud],
+        handler: (ctx) {
+          seen = ctx(id);
+          wasLoud = ctx(loud);
+        },
+      ).run(['-l', 'abc']);
+      expect(seen, 'abc');
+      expect(wasLoud, isTrue);
+    });
+  });
+
   group('ANSI composition', () {
     tearDown(() => Io.color = null);
 

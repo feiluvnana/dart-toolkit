@@ -576,7 +576,12 @@ final class IoClient implements Client {
   ///
   /// [proxy] sends everything through an HTTP proxy — `http://user:pass@host:8080`, with the
   /// credentials taken from the URL. Without it `dart:io`'s own reading of `http_proxy` and
-  /// `no_proxy` still applies. [insecure] accepts a certificate that does not verify, which
+  /// `no_proxy` still applies.
+  ///
+  /// A proxy that *rejects* the credentials is `dart:io`'s one rough edge here: it retries the
+  /// 407 rather than handing it back, and there is no way to stop it from outside `HttpClient`.
+  /// `Http.scope(timeout:)` bounds it, and a proxy that seems to hang is worth suspecting of
+  /// having rejected the password rather than of being slow. [insecure] accepts a certificate that does not verify, which
   /// is a self-signed intranet host and should be nothing else.
   ///
   /// [client] takes over an `HttpClient` configured elsewhere — a certificate policy, a
@@ -603,7 +608,19 @@ final class IoClient implements Client {
         final colon = proxy.userInfo.indexOf(':');
         final user = colon == -1 ? proxy.userInfo : proxy.userInfo.substring(0, colon);
         final password = colon == -1 ? '' : proxy.userInfo.substring(colon + 1);
-        _client.addProxyCredentials(proxy.host, proxy.port, '', HttpClientBasicCredentials(user, password));
+        final credentials = HttpClientBasicCredentials(user, password);
+        _client.addProxyCredentials(proxy.host, proxy.port, '', credentials);
+        // `dart:io` matches proxy credentials by the realm the proxy names, so registering
+        // them under the empty one answers only a proxy that uses the empty one — every other
+        // proxy 407s, finds nothing to send, and is asked again forever. This supplies them
+        // for whatever realm was actually asked for, and once per realm, so a wrong password
+        // fails instead of looping.
+        final asked = <String>{};
+        _client.authenticateProxy = (host, port, scheme, realm) async {
+          if (!asked.add('$host:$port/$realm')) return false;
+          _client.addProxyCredentials(host, port, realm ?? '', credentials);
+          return true;
+        };
       }
     }
     // The bodies are decoded here instead, because `dart:io` knows only gzip and this asks

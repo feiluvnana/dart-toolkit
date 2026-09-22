@@ -21,7 +21,12 @@ opposite. Coherence, documentation and feature count rank below both.
   both.
 - **A name is written once.** Anything a caller declares and then looks back up is a name
   spelled twice and a typo the compiler cannot see. A CLI option is a value — `Opt.number('top').or(10)`
-  — and `ctx(top)` is an `int` because the option says so; `Opt.among('algo', Hash.values)` takes
+  — and `ctx(top)` is an `int` because the option says so; a **positional is a value too**,
+  `Arg.text('id').required()`, read through the same `ctx(id)`. It was `ctx.rest` for a while,
+  which is the rule broken in the one place it was easiest to break: every program pulled its
+  own out of a `List<String>`, checked it by hand, wrote its own error message, and got no
+  type, no default and no line in `--help` for any of it. `Opt` and `Arg` differ in how they
+  are written on the command line and in nothing else; `Opt.among('algo', Hash.values)` takes
   the values, so nothing rebuilds an enum from a string. `Table` still keys by column name,
   because a CSV's columns are not known until it is read.
 - **Ambient over threaded.** A setting every call would otherwise carry belongs to the scope
@@ -142,6 +147,12 @@ opposite. Coherence, documentation and feature count rank below both.
 - **A grid with a hole in it cannot be guessed.** `hash`, `hashBytes`, `checksum`, `hmac` and
   `hmacBytes` are on `String`, `List<int>` and `Path` alike; when three receivers offered three
   different subsets, nobody could predict which. Fill the grid or cut the column.
+- **Help describes this command and nothing else.** `Usage: zlib [options] [command]` on a
+  program with no subcommands invites the reader to type something that cannot work, and a
+  program whose positionals appear nowhere in its help has not documented its own interface.
+  The usage line is now built from what the command actually holds — its arguments by name,
+  `[options]` always, `[command]` only when there are some — and one renderer writes the help
+  line for an `Arg` and an `Opt` alike, so the two cannot drift.
 - **A guaranteed value is not nullable.** `ctx.option('x')` with a default, `row.number('size')`,
   `Elements.text` return the value or throw a `StateError` that names what was missing. The
   `*OrNull` form is for the caller who expects absence.

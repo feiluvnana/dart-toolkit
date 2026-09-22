@@ -16,48 +16,163 @@ final class UsageException implements Exception {
 /// Callback action executed when a CLI command is triggered.
 typedef CommandHandler = FutureOr<void> Function(CliContext ctx);
 
-/// An option declared on a [CliCommand] and read back through [CliContext.call].
+/// Something a [CliCommand] declares and a handler reads back through [CliContext.call]:
+/// an [Opt], written `--name`, or an [Arg], written by its position.
 ///
-/// The option itself is the key, so a name is written once:
+/// The declaration itself is the key, so a name is written once and its type is the type
+/// that comes back:
 ///
 /// ```dart
 /// final top = Opt.number('top', abbr: 'n').or(10);
+/// final id  = Arg.text('id').required();
 /// …
-/// ctx(top) // an int, statically
+/// ctx(top)  // an int, statically
+/// ctx(id)   // a String, statically
 /// ```
 ///
-/// [T] carries whether a value is guaranteed: [Opt] is nullable until [Opt.or] gives it a
-/// default or [Opt.required] insists on one, and a [Flag] is always a `bool`.
+/// [T] carries whether a value is guaranteed: both are nullable until `or` gives a default
+/// or `required` insists on one, and a flag is always a `bool`.
 ///
 /// {@category CLI}
-sealed class CliOption<T> {
-  /// The long name, used as `--name`.
+sealed class CliValue<T> {
+  /// What it is called: in `--name` for an option, in `<name>` for an argument.
   final String name;
 
   /// Help text shown by `--help`.
   final String description;
 
-  /// The single-character short form, used as `-a`.
-  final String? abbr;
-
-  const CliOption(this.name, {this.description = '', this.abbr})
-    : assert(abbr == null || abbr.length == 1, 'abbr is one character');
+  const CliValue(this.name, {this.description = ''});
 
   /// Turns the text on the command line into the value, throwing [UsageException] when it
   /// is not one. Never called for a flag, which takes no value.
   T _parse(String raw);
 
-  /// Used when the option is absent, or `null` when there is none.
+  /// Used when it is absent, or `null` when there is none.
   T? get _or;
 
-  /// Whether parsing fails when this option is absent. Never true for a flag.
+  /// Whether parsing fails when it is absent. Never true for a flag.
   bool get _isRequired;
 
-  /// The values the option is restricted to, shown in help, or `null` when it is not.
+  /// The values it is restricted to, shown in help, or `null` when it is not.
   List<T>? get _choices => null;
+}
+
+/// An option declared on a [CliCommand], written `--name` or `-n`. See [Opt].
+///
+/// {@category CLI}
+sealed class CliOption<T> extends CliValue<T> {
+  /// The single-character short form, used as `-a`.
+  final String? abbr;
+
+  const CliOption(super.name, {super.description, this.abbr})
+    : assert(abbr == null || abbr.length == 1, 'abbr is one character');
 
   /// Whether this option takes a value of its own on the command line.
   bool get _takesValue => true;
+}
+
+/// A positional argument, written where it stands rather than by name. See [Arg].
+///
+/// A positional is a declared value like an option, which is the whole point: it is typed,
+/// it may have a default, it may be required, and it prints itself in `--help`. Before this
+/// existed every program pulled its own out of `CliContext.rest` and checked it by hand, and
+/// none of them showed up in the usage line.
+///
+/// {@category CLI}
+final class Arg<T> extends CliValue<T> {
+  final T Function(String raw) _parseValue;
+
+  @override
+  final List<T>? _choices;
+
+  @override
+  final T? _or;
+
+  @override
+  final bool _isRequired;
+
+  /// Whether this one takes everything that is left. At most one, and last.
+  final bool _variadic;
+
+  const Arg._(
+    super.name, {
+    required T Function(String raw) parse,
+    super.description,
+    List<T>? choices,
+    T? or,
+    bool required = false,
+    bool variadic = false,
+  }) : _parseValue = parse,
+       _choices = choices,
+       _or = or,
+       _isRequired = required,
+       _variadic = variadic;
+
+  /// A string argument.
+  static Arg<String?> text(String name, {String description = ''}) =>
+      Arg<String?>._(name, parse: (raw) => raw, description: description);
+
+  /// An integer argument, rejected during parsing when it is not one.
+  static Arg<int?> number(String name, {String description = ''}) =>
+      Arg<int?>._(name, parse: _int, description: description);
+
+  /// An argument restricted to [values], matched by [Enum.name] or `toString()`.
+  static Arg<V?> among<V>(String name, List<V> values, {String description = ''}) =>
+      Arg<V?>._(name, parse: (raw) => _among(name, values, raw), description: description, choices: values);
+
+  /// An argument parsed by [parse]; anything it throws becomes a [UsageException].
+  static Arg<V?> by<V>(String name, V Function(String raw) parse, {String description = ''}) =>
+      Arg<V?>._(name, parse: (raw) => _guard(name, parse, raw), description: description);
+
+  /// Everything that is left, as it was typed: `tk hash <path>...`.
+  ///
+  /// At most one per command and it must be declared last. `required()` on it means at
+  /// least one, and `or(const [])` means none is fine.
+  static Arg<List<String>?> rest(String name, {String description = ''}) =>
+      Arg<List<String>?>._(name, parse: (raw) => [raw], description: description, variadic: true);
+
+  @override
+  T _parse(String raw) => _parseValue(raw);
+
+  /// How it is written in the usage line: `<id>`, `[id]`, `<paths>...`, `[paths...]`.
+  String get _placeholder => switch ((_isRequired, _variadic)) {
+    (true, true) => '<$name>...',
+    (true, false) => '<$name>',
+    (false, true) => '[$name...]',
+    (false, false) => '[$name]',
+  };
+}
+
+/// What turns an optional [Arg] into one whose value is guaranteed, and so whose
+/// [CliContext.call] is non-nullable. It reads the same as [OptionalOpt] on purpose.
+///
+/// {@category CLI}
+extension OptionalArg<T extends Object> on Arg<T?> {
+  /// The same argument with [value] when it is absent.
+  Arg<T> or(T value) {
+    if (_choices case final allowed? when !allowed.contains(value)) {
+      throw ArgumentError.value(value, 'value', 'Not one of ${allowed.map(_label).join(', ')}');
+    }
+    return Arg<T>._(
+      name,
+      parse: (raw) => _parse(raw) as T,
+      description: description,
+      choices: _choices?.cast<T>(),
+      or: value,
+      variadic: _variadic,
+    );
+  }
+
+  /// The same argument, but parsing fails when it is absent — for a variadic one, when
+  /// nothing at all was given.
+  Arg<T> required() => Arg<T>._(
+    name,
+    parse: (raw) => _parse(raw) as T,
+    description: description,
+    choices: _choices?.cast<T>(),
+    required: true,
+    variadic: _variadic,
+  );
 }
 
 /// A boolean option: present means true, and it never consumes a value. See [Opt.flag].
@@ -208,7 +323,10 @@ T _guard<T, V>(String name, V Function(String raw) parse, String raw) {
 ///
 /// {@category CLI}
 class CliContext {
-  /// Positional arguments, plus everything after a `--` terminator.
+  /// Positional arguments as they were typed, plus everything after a `--` terminator.
+  ///
+  /// The raw list, for a command that declares no [Arg]s. One that does reads them through
+  /// [call] instead, typed and checked, and this is what they were bound from.
   final List<String> rest;
 
   /// The command that was dispatched.
@@ -220,9 +338,9 @@ class CliContext {
   /// a crawl or a `retry` inside it already stops; this is the handle that stops them.
   final CancelToken cancel;
 
-  final Map<CliOption<Object?>, Object?> _values;
+  final Map<CliValue<Object?>, Object?> _values;
 
-  CliContext(this.rest, Map<CliOption<Object?>, Object?> values, this.command, {CancelToken? cancel})
+  CliContext(this.rest, Map<CliValue<Object?>, Object?> values, this.command, {CancelToken? cancel})
     : _values = values,
       cancel = cancel ?? CancelToken();
 
@@ -235,15 +353,15 @@ class CliContext {
   ///
   /// Throws [StateError] only when a non-nullable option somehow reaches a handler
   /// unset — a declared default or `required()` is what rules that out.
-  T call<T>(CliOption<T> option) {
-    if (_values.containsKey(option)) return _values[option] as T;
-    if (option._or case final value?) return value;
+  T call<T>(CliValue<T> value) {
+    if (_values.containsKey(value)) return _values[value] as T;
+    if (value._or case final fallback?) return fallback;
     if (null is T) return null as T;
-    throw StateError('Option "--${option.name}" was not given and has no default.');
+    throw StateError('${value is Arg ? '<${value.name}>' : '--${value.name}'} was not given and has no default.');
   }
 
-  /// Whether [option] was given on the command line, default or not.
-  bool given(CliOption<Object?> option) => _values.containsKey(option);
+  /// Whether [value] was given on the command line, default or not.
+  bool given(CliValue<Object?> value) => _values.containsKey(value);
 }
 
 /// A command: a name, options, subcommands and the handler that runs it.
@@ -263,6 +381,7 @@ class CliCommand {
   /// What runs when this command is dispatched; usage is printed when it is `null`.
   final CommandHandler? handler;
 
+  final List<Arg<Object?>> _args;
   final List<CliOption<Object?>> _options;
   final Map<String, CliCommand> _subcommands;
   CliCommand? _parent;
@@ -271,10 +390,17 @@ class CliCommand {
     this.name, {
     this.description = '',
     this.handler,
+    Iterable<Arg<Object?>> args = const [],
     Iterable<CliOption<Object?>> options = const [],
     Iterable<CliCommand> commands = const [],
-  }) : _options = List.unmodifiable(options),
+  }) : _args = List.unmodifiable(args),
+       _options = List.unmodifiable(options),
        _subcommands = {for (final c in commands) c.name: c} {
+    assert(
+      _args.where((a) => a._variadic).length <= 1 &&
+          (_args.isEmpty || !_args.take(_args.length - 1).any((a) => a._variadic)),
+      'at most one variadic argument, and it is the last one',
+    );
     for (final c in _subcommands.values) {
       c._parent = this;
     }
@@ -298,8 +424,18 @@ class CliCommand {
 
   /// Prints usage help for this command.
   void _printUsage() {
-    Io.out.writeln('${'Usage:'.bold} $_fullName [options] [command]');
+    // Only what this command actually has. `[command]` on a program with no subcommands is
+    // an invitation to type something that cannot work.
+    final shape = [for (final arg in _args) arg._placeholder, '[options]', if (_subcommands.isNotEmpty) '[command]'];
+    Io.out.writeln('${'Usage:'.bold} $_fullName ${shape.join(' ')}');
     if (description.isNotEmpty) Io.out.writeln('\n$description');
+
+    if (_args.isNotEmpty) {
+      Io.out.writeln('\n${'Arguments:'.bold}');
+      for (final arg in _args) {
+        Io.out.writeln('  ${arg._placeholder.padRight(20)} ${_describe(arg)}');
+      }
+    }
 
     if (_subcommands.isNotEmpty) {
       Io.out.writeln('\n${'Commands:'.bold}');
@@ -308,27 +444,67 @@ class CliCommand {
       }
     }
 
-    if (_options.isNotEmpty) {
-      Io.out.writeln('\n${'Options:'.bold}');
-      for (final option in _options) {
-        final optName = '--${option.name}';
-        final prefix = option.abbr != null ? '-${option.abbr}, $optName' : '    $optName';
-        var desc = option.description;
-        if (option._choices case final allowed? when allowed.isNotEmpty) {
-          final list = '(${allowed.map(_label).join('|')})';
-          desc = desc.isEmpty ? list : '$desc $list';
+    Io.out.writeln('\n${'Options:'.bold}');
+    for (final option in _options) {
+      final optName = '--${option.name}';
+      final prefix = option.abbr != null ? '-${option.abbr}, $optName' : '    $optName';
+      // A flag's fallback is `false`, which is what absence already means; saying so is noise.
+      Io.out.writeln('  ${prefix.padRight(20)} ${_describe(option, fallback: option._takesValue)}');
+    }
+    // Only what this command will actually answer to.
+    if (_findOption('help') == null) {
+      Io.out.writeln(
+        '  ${(_findAbbr('h') == null ? '-h, --help' : '    --help').padRight(20)} Print this help message',
+      );
+    }
+    if (_version != null && _findOption('version') == null) {
+      Io.out.writeln('      --version        Print the version');
+    }
+  }
+
+  /// The help line for one declared value: what it is for, what it may be, what it is when
+  /// it is absent. One renderer, so an argument and an option read alike.
+  static String _describe(CliValue<Object?> value, {bool fallback = true}) {
+    var desc = value.description;
+    if (value._choices case final allowed? when allowed.isNotEmpty) {
+      final list = '(${allowed.map(_label).join('|')})';
+      desc = desc.isEmpty ? list : '$desc $list';
+    }
+    if (fallback) {
+      if (value._or case final given?) desc = '$desc [default: ${_label(given)}]';
+    }
+    // An argument says it is required by its own `<>`; an option has nowhere else to say so.
+    if (value._isRequired && value is! Arg) desc = '$desc [required]';
+    return desc;
+  }
+
+  /// Binds the positionals to the arguments this command declared, in order.
+  ///
+  /// A command that declares none keeps the old behaviour exactly: [CliContext.rest] is
+  /// whatever was typed and nothing is checked. Declaring them is what buys the checking.
+  void _bind(List<String> rest, Map<CliValue<Object?>, Object?> values) {
+    if (_args.isEmpty) return;
+    var at = 0;
+    for (final arg in _args) {
+      if (arg._variadic) {
+        final taken = rest.sublist(at.clamp(0, rest.length));
+        at = rest.length;
+        if (taken.isNotEmpty) {
+          values[arg] = taken;
+        } else if (arg._isRequired) {
+          throw UsageException('Missing argument ${arg._placeholder}.');
         }
-        // A flag's fallback is `false`, which is what absence already means; saying so is noise.
-        if (option._takesValue) {
-          if (option._or case final value?) desc = '$desc [default: ${_label(value)}]';
-        }
-        if (option._isRequired) desc = '$desc [required]';
-        Io.out.writeln('  ${prefix.padRight(20)} $desc');
+        continue;
+      }
+      if (at < rest.length) {
+        values[arg] = arg._parse(rest[at++]);
+      } else if (arg._isRequired) {
+        throw UsageException('Missing argument ${arg._placeholder}.');
       }
     }
-
-    Io.out.writeln('  -h, --help           Print this help message');
-    if (_version != null) Io.out.writeln('      --version        Print the version');
+    if (at < rest.length) {
+      throw UsageException('Unexpected argument "${rest[at]}".');
+    }
   }
 
   String get _fullName => _parent == null ? name : '${_parent!._fullName} $name';
@@ -350,9 +526,13 @@ class CliCommand {
     return Cancel.scope(() => _run(args, {}, cancel), token: cancel);
   }
 
-  Future<void> _run(List<String> args, Map<CliOption<Object?>, Object?> values, CancelToken cancel) async {
+  Future<void> _run(List<String> args, Map<CliValue<Object?>, Object?> values, CancelToken cancel) async {
     final rest = <String>[];
-    final ownsHelp = _findOption('help') != null || _findAbbr('h') != null;
+    // Taking `-h` for something of your own takes `-h` and nothing else: a command that has a
+    // `--host` should still answer `--help`, and one that declares a `help` option owns the
+    // long form alone. Conflating the two lost `--help` to any command with an `h` abbr.
+    final ownsLong = _findOption('help') != null;
+    final ownsShort = _findAbbr('h') != null;
 
     for (var i = 0; i < args.length; i++) {
       final arg = args[i];
@@ -377,7 +557,7 @@ class CliCommand {
       final key = eq == -1 ? raw : raw.substring(0, eq);
       final inline = eq == -1 ? null : raw.substring(eq + 1);
 
-      if (!ownsHelp && (isLong ? key == 'help' : key == 'h')) {
+      if (isLong ? key == 'help' && !ownsLong : key == 'h' && !ownsShort) {
         _printUsage();
         return;
       }
@@ -432,6 +612,8 @@ class CliCommand {
       }
     }
 
+    _bind(rest, values);
+
     if (handler != null) {
       await handler!(CliContext(rest, values, this, cancel: cancel));
     } else {
@@ -447,8 +629,15 @@ class Cli extends CliCommand {
   /// Printed by `--version` when set.
   final String? version;
 
-  Cli({String name = 'app', String description = '', this.version, super.options, super.commands, super.handler})
-    : super(name, description: description);
+  Cli({
+    String name = 'app',
+    String description = '',
+    this.version,
+    super.args,
+    super.options,
+    super.commands,
+    super.handler,
+  }) : super(name, description: description);
 
   /// Parses [args], runs the matching command, then runs the exit hooks and releases
   /// the signal handlers so the process can end — whether the action returned or threw.

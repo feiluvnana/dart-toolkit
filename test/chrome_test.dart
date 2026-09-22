@@ -542,6 +542,65 @@ void main() {
       await page.close();
     }, skip: absent);
 
+    test('a proxy carries the pages and the files alike', () async {
+      // A proxy that only counts and forwards. Chrome sends it absolute-form requests.
+      final seen = <String>[];
+      final proxy = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final forwarder = HttpClient();
+      addTearDown(() async {
+        forwarder.close(force: true);
+        await proxy.close(force: true);
+      });
+      unawaited(
+        proxy.forEach((request) async {
+          final target = request.requestedUri;
+          // Chrome talks to its own services through whatever proxy it is given; this one
+          // only relays plain HTTP to the test server, and says so to everything else.
+          if (request.method == 'CONNECT' || !target.hasScheme || target.host != '127.0.0.1') {
+            request.response.statusCode = HttpStatus.badGateway;
+            await request.response.close();
+            return;
+          }
+          seen.add(target.path);
+          final out = await forwarder.openUrl(request.method, target);
+          request.headers.forEach((name, values) {
+            if (name != 'host' && name != 'proxy-connection') out.headers.set(name, values.join(', '));
+          });
+          final answer = await out.close();
+          request.response.statusCode = answer.statusCode;
+          answer.headers.forEach((name, values) {
+            if (name != 'transfer-encoding' && name != 'content-length') {
+              request.response.headers.set(name, values.join(', '));
+            }
+          });
+          await answer.pipe(request.response);
+        }),
+      );
+
+      final through = await ChromeClient.launch(
+        tabs: 1,
+        proxy: 'http://127.0.0.1:${proxy.port}'.url,
+        // Chrome bypasses the loopback for a proxy by default, which is exactly what this
+        // test needs it not to do.
+        args: const ['--proxy-bypass-list=<-loopback>'],
+      );
+      try {
+        await Http.scope(client: through, () async {
+          // A render, and then a download — which goes to the plain client underneath.
+          expect((await (base / 'rendered').get()).text, contains('alpha'));
+          final file = Path((await Directory.systemTemp.createTemp('tk_px_')).path) / 'asset.bin';
+          addTearDown(() => file.parent.delete(recursive: true));
+          await file.download(base.resolve('/asset')).drain<void>();
+          expect(await file.size(), 2048);
+        });
+      } finally {
+        await through.close();
+      }
+
+      expect(seen, contains('/rendered'), reason: 'the page did not go through the proxy');
+      expect(seen, contains('/asset'), reason: 'the download went around it');
+    }, skip: absent);
+
     test('a crawl runs on a client held rather than scoped', () async {
       final seen = <String>[];
       await browser

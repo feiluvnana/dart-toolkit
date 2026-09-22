@@ -915,9 +915,16 @@ await ChromeClient.launch(
   challenge: 20.s,               // how long an interstitial may take to clear
   timeout: 30.s,
   headless: true,
+  proxy: 'http://user:pass@host:8080'.url,
   assets: IoClient(),            // answers everything that is not a page render
 );
 ```
+
+`proxy:` routes the browser and the default `assets` client alike, so the pages and the files
+of one crawl take the same road. Credentials cannot travel on a command line, so Chrome asks
+for them and this answers over the protocol, at the cost of a round trip per request. A
+browser already running keeps the route it was started with — `attach`, and `connect` when it
+joins one, proxy the downloads and not the pages, and `isNewBrowser` tells you which happened.
 
 `block:` is the largest single thing a rendered crawl can do for itself: a page whose images,
 fonts and media never arrive looks nothing like itself and says exactly the same words, in a
@@ -1205,10 +1212,10 @@ of it even inside a Chrome scope, and stops on the enclosing `Cancel.scope`.
 
 ## `cli` — options, commands, lifecycle, console
 
-### Options are values
+### Options and arguments are values
 
-An option is a value, so its name is written once and its type is the type you read back.
-`ctx(option)` is not nullable when the option has a default or is required.
+An option is a value, so its name is written once and its type is the type you read back —
+and so is a positional. `ctx(…)` is not nullable when it has a default or is required.
 
 ```dart
 enum Stage { dev, staging, production }
@@ -1224,6 +1231,40 @@ final since   = Opt.by('since', DateTime.parse);                                
 hand. `Opt.by` takes any parse. `.or(v)` gives a default and `.required()` makes it an error to
 omit; both make `ctx(…)` non-nullable.
 
+A positional is the same thing written by position rather than by name:
+
+```dart
+final id      = Arg.text('id', description: 'Which one').required();   // String
+final count   = Arg.number('count').or(1);                             // int
+final level   = Arg.among('level', LogLevel.values).or(LogLevel.info); // LogLevel
+final when    = Arg.by('when', DateTime.parse);                        // DateTime?
+final targets = Arg.rest('targets').required();                        // List<String>
+```
+
+`Arg.rest` takes everything that is left; there is at most one and it comes last, and on it
+`.required()` means *at least one*. A command declares them with `args:`, they are bound in
+order before the handler runs, and a missing required one, a bad value or an unexpected extra
+is a `UsageException`.
+
+They print themselves, which `ctx.rest` never did:
+
+```
+Usage: tk hash <paths>... [options]
+
+Arguments:
+  <paths>...           Files to digest
+
+Options:
+  -a, --algo           Digest algorithm (md5|sha1|…) [default: sha256]
+  -h, --help           Print this help message
+```
+
+`<name>` is required and `[name]` is not, so the usage line says which is which without a word
+of explanation, and `[command]` appears only on a command that has subcommands.
+
+`ctx.rest` is still the raw list of positionals, for a command that declares no `Arg`s at all —
+declaring them is what buys the type, the default, the checking and the help line.
+
 ### Commands
 
 A command is everything it is given: `options:`, `commands:` and `handler:` are constructor
@@ -1234,6 +1275,7 @@ final cli = Cli(
   name: 'deployer',
   description: 'Ship it',
   version: '1.2.0',
+  args: [id],
   options: [stage, token, workers, dryRun],
   handler: (ctx) async {
     Console.info('Deploying to ${ctx(stage).name} with ${ctx(workers)} workers');
@@ -1255,8 +1297,9 @@ its value (`-w8`). `--help` and `--version` are handled for you.
 Inside a handler, `CliContext` is what you have:
 
 ```dart
-ctx(workers);            // the typed value
-ctx.rest;                // the positional arguments
+ctx(workers);            // the typed value of an option
+ctx(id);                 // ...or of an argument
+ctx.rest;                // the raw positionals, for a command that declared none
 ctx.command;             // the command that ran
 ctx.cancel;              // the run's CancelToken
 ```
