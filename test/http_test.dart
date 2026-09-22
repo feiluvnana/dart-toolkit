@@ -1676,6 +1676,66 @@ void main() {
     });
   });
 
+  group('a body is asked for compressed and read decompressed', () {
+    late HttpServer server;
+    late Uri base;
+    late Uint8List payload;
+
+    setUp(() async {
+      payload = await File(p.join('test', 'fixtures', 'encoded.txt')).readAsBytes();
+      server = await HttpServer.bind('127.0.0.1', 0);
+      base = Uri.parse('http://127.0.0.1:${server.port}');
+      server.listen((r) async {
+        Future<void> serve(String encoding, String file) async {
+          r.response.headers.set('content-encoding', encoding);
+          r.response.add(await File(p.join('test', 'fixtures', file)).readAsBytes());
+        }
+
+        switch (r.uri.path) {
+          case '/br':
+            await serve('br', 'encoded.br');
+          case '/zstd':
+            await serve('zstd', 'encoded.zst');
+          case '/gzip':
+            r.response.headers.set('content-encoding', 'gzip');
+            r.response.add(gzip.encode(payload));
+          case '/empty':
+            // A 304 that still describes the entity it is not sending.
+            r.response
+              ..statusCode = 304
+              ..headers.set('content-encoding', 'br');
+          default:
+            r.response.write(r.headers.value('accept-encoding'));
+        }
+        await r.response.close();
+      });
+    });
+
+    tearDown(() => server.close(force: true));
+
+    test('what it asks for is what a browser asks for', () async {
+      final asked = (await (base / 'asked').get()).text;
+      expect(asked, contains('gzip'));
+      expect(asked.contains('br'), Native.isAvailable, reason: 'brotli is the native library');
+      expect(asked.contains('zstd'), Native.isAvailable);
+      expect(asked, isNot(contains('deflate')), reason: 'nothing agrees on what deflate means');
+    });
+
+    for (final encoding in ['gzip', if (Native.isAvailable) 'br', if (Native.isAvailable) 'zstd']) {
+      test('$encoding arrives decoded, and no longer says it is encoded', () async {
+        final res = await (base / encoding).get();
+        expect(res.bytes, payload);
+        // The wire's length and encoding described the bytes before they were decoded.
+        expect(res.headers['content-encoding'], isNull);
+        expect(res.headers['content-length'], isNull);
+      });
+    }
+
+    test('a response with no body is not handed to a decoder', () async {
+      expect((await (base / 'empty').get()).statusCode, 304);
+    });
+  });
+
   group('a scope keeps cookies when it is asked to', () {
     late HttpServer server;
     late Uri base;
@@ -1694,6 +1754,15 @@ void main() {
           case '/logout':
             r.response.headers.add('set-cookie', 'sid=; Path=/; Max-Age=0');
             r.response.write('out');
+          case '/signin':
+            // What a login actually looks like: the session is set on the hop, and the hop
+            // is the only place it is ever mentioned.
+            r.response
+              ..statusCode = 302
+              ..headers.add('set-cookie', 'sid=fromhop; Path=/')
+              ..headers.add('location', '/landed');
+          case '/landed':
+            r.response.write('${r.method} ${r.headers.value('cookie')}');
           default:
             r.response.write('${r.headers.value('cookie')}');
         }
@@ -1723,6 +1792,15 @@ void main() {
         await (base / 'login').get();
         await (base / 'logout').get();
         expect((await (base / 'page').get()).text, 'theme=dark', reason: 'sid is gone, the dated one stayed');
+      });
+    });
+
+    test('a cookie set on a redirect hop is kept, and the POST lands as a GET', () async {
+      await Http.scope(cookies: true, () async {
+        // The response at the end of the chain carries no `set-cookie` at all: if the client
+        // is left to follow its own redirects, this is where the session disappears.
+        expect((await (base / 'signin').post(form: {'u': 'me'})).text, 'GET sid=fromhop');
+        expect((await (base / 'page').get()).text, contains('sid=fromhop'));
       });
     });
 

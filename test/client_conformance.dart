@@ -57,6 +57,10 @@ void clientConformance(String name, FutureOr<Client> Function(Uri base) create, 
               response.headers.contentType = ContentType.text;
               final body = await utf8.decoder.bind(request).join();
               response.write('${request.method} ${request.headers.value('x-probe')} $body');
+            case '/upload':
+              response.headers.contentType = ContentType.text;
+              final body = await utf8.decoder.bind(request).join();
+              response.write('${request.headers.contentLength} ${body.length} $body');
             default:
               response.statusCode = 404;
           }
@@ -116,6 +120,21 @@ void clientConformance(String name, FutureOr<Client> Function(Uri base) create, 
       final request = Request('POST', base.resolve('/echo'), headers: {'x-probe': 'yes'}, text: 'payload');
       final res = await (await client.send(request)).read();
       expect(res.text, 'POST yes payload');
+    }, skip: skip.contains('methods') ? 'skipped by the implementation' : null);
+
+    test('a streamed body reaches the server, and its length was announced', () async {
+      // `files:` never fills `Request.bytes`, so an implementation that sends that field
+      // instead of `Request.open()` sends an empty body with a content-length that lies.
+      final dir = await Directory.systemTemp.createTemp('tk_upload_');
+      addTearDown(() => dir.delete(recursive: true));
+      final file = File('${dir.path}/note.txt')..writeAsStringSync('the payload');
+      final request = Request('POST', base.resolve('/upload'), form: {'title': 'x'}, files: {'doc': file.path.path});
+      final res = await (await client.send(request)).read();
+      final [announced, received, ...] = res.text.split(' ');
+      expect(announced, received, reason: 'content-length did not match what arrived');
+      expect(res.text, contains('the payload'));
+      expect(res.text, contains('name="title"'));
+      expect(res.text, contains('filename="note.txt"'));
     }, skip: skip.contains('methods') ? 'skipped by the implementation' : null);
 
     test('an unknown directive is ignored, not refused', () async {

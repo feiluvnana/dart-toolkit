@@ -23,34 +23,52 @@ final asYaml = Opt.flag('yaml', abbr: 'y', description: 'Print the document as Y
 final out = Opt.text('out', abbr: 'o', description: 'Write to this path instead of stdout');
 final to = Opt.text('to', abbr: 't', description: 'Destination, e.g. out.zip or out.tar.gz').required();
 
-Future<void> main(List<String> args) async {
-  final tk = Cli(
-    name: 'tk',
-    description: 'Small jobs, from the toolkit',
-    version: '0.0.2',
-    options: [verbose],
-    commands: [
-      CliCommand('hash', description: 'Digest files, one per line', options: [algo], handler: hash),
-      CliCommand('find', description: 'Match a glob and report the biggest hits', options: [top], handler: find),
-      CliCommand(
-        'read',
-        description: 'Parse YAML, TOML, INI or JSON and query it',
-        options: [query, asYaml],
-        handler: read,
-      ),
-      CliCommand('fetch', description: 'GET a URL to stdout, or to a file with --out', options: [out], handler: fetch),
-      CliCommand('pack', description: 'Archive a directory; the format comes from --to', options: [to], handler: pack),
-      CliCommand('peek', description: 'List an archive without extracting it', handler: peek),
-    ],
-  );
+Future<void> main(List<String> args) => Cli(
+  name: 'tk',
+  description: 'Small jobs, from the toolkit',
+  version: '0.0.2',
+  options: [verbose],
+  commands: [
+    CliCommand('hash', description: 'Digest files, one per line', options: [algo], handler: _cmd(hash)),
+    CliCommand('find', description: 'Match a glob and report the biggest hits', options: [top], handler: _cmd(find)),
+    CliCommand(
+      'read',
+      description: 'Parse YAML, TOML, INI or JSON and query it',
+      options: [query, asYaml],
+      handler: _cmd(read),
+    ),
+    CliCommand(
+      'fetch',
+      description: 'GET a URL to stdout, or to a file with --out',
+      options: [out],
+      handler: _cmd(fetch),
+    ),
+    CliCommand(
+      'pack',
+      description: 'Archive a directory; the format comes from --to',
+      options: [to],
+      handler: _cmd(pack),
+    ),
+    CliCommand('peek', description: 'List an archive without extracting it', handler: _cmd(peek)),
+  ],
+).run(args);
 
-  await tk.run(args);
+/// The root's `--verbose` reads the same way for every command, so it is applied here once
+/// rather than as the first line of six handlers.
+CommandHandler _cmd(CommandHandler run) => (ctx) {
+  if (ctx(verbose)) Console.level = LogLevel.debug;
+  return run(ctx);
+};
+
+extension on CliContext {
+  /// The first positional, or a usage error naming the command that wanted it — which is
+  /// what a missing argument is, so it prints the usage hint and leaves with 64.
+  String need(String what) => rest.firstOrNull ?? (throw UsageException('${command.name} needs $what'));
 }
 
 /// One path per positional argument, hashed in parallel, reported in input order.
 Future<void> hash(CliContext ctx) async {
-  _verbose(ctx);
-  if (ctx.rest.isEmpty) await die('hash needs at least one path');
+  if (ctx.rest.isEmpty) ctx.need('at least one path');
   final algorithm = ctx(algo);
 
   final digested = await ctx.rest.parallelize(
@@ -68,30 +86,30 @@ Future<void> hash(CliContext ctx) async {
 
 /// A glob, then the biggest matches as a table.
 Future<void> find(CliContext ctx) async {
-  _verbose(ctx);
   final pattern = ctx.rest.firstOrNull ?? '**/*';
   Console.debug('matching $pattern under ${Path.current}');
 
   final matches = await Path.current.glob(pattern).toList();
-  final sized = await matches.parallelize((f) async => (file: f.relativeTo(Path.current), bytes: await f.size()));
+  final sized = (await matches.parallelize(
+    (f) async => (file: f.relativeTo(Path.current), bytes: await f.size()),
+  )).rights;
 
-  if (sized.rights.isEmpty) {
+  if (sized.isEmpty) {
     Console.warn('nothing matched $pattern');
     return;
   }
   Table.rows(
-    sized.rights.sequence
+    sized.sequence
         .sortedBy((r) => r.bytes, descending: true)
         .take(ctx(top))
         .map((r) => {'bytes': r.bytes, 'file': r.file}),
   ).show();
-  Console.ok('${sized.rights.length} matches, ${sized.rights.sequence.sumBy((r) => r.bytes)} bytes');
+  Console.ok('${sized.length} matches, ${sized.sequence.sumBy((r) => r.bytes)} bytes');
 }
 
 /// Any of the four document formats, queried with one language.
 Future<void> read(CliContext ctx) async {
-  _verbose(ctx);
-  final file = (ctx.rest.firstOrNull ?? await die('read needs a file')).path;
+  final file = ctx.need('a file').path;
   final text = await file.readText();
 
   // The parser is chosen here rather than by the library: a file's extension is a guess, and
@@ -117,25 +135,23 @@ Future<void> read(CliContext ctx) async {
 
 /// To stdout, or to a file with progress.
 Future<void> fetch(CliContext ctx) async {
-  _verbose(ctx);
-  final url = (ctx.rest.firstOrNull ?? await die('fetch needs a URL')).url;
+  final url = ctx.need('a URL').url;
 
   await Http.scope(timeout: 30.s, () async {
     if (ctx(out) case final path?) {
       final last = await path.path.download(url, overwrite: true).show(slots: 1, message: 'Fetching', done: 'Fetched');
-      if (last?.current case DownloadFailed(:final error)) await die('$error');
+      if (last?.current case DownloadFailed(:final error)) await Lifecycle.exit('$error');
       Console.ok('$path is ${await path.path.size()} bytes');
       return;
     }
     final res = await url.get();
-    if (!res.isOk) await die('${res.statusCode} ${res.reasonPhrase ?? ''}'.trim());
+    if (!res.isOk) await Lifecycle.exit('${res.statusCode} ${res.reasonPhrase ?? ''}'.trim());
     Io.out.write(res.text);
   });
 }
 
 Future<void> pack(CliContext ctx) async {
-  _verbose(ctx);
-  final source = (ctx.rest.firstOrNull ?? await die('pack needs a directory')).path;
+  final source = ctx.need('a directory').path;
   final target = ctx(to).path;
 
   await Console.spin(
@@ -147,18 +163,11 @@ Future<void> pack(CliContext ctx) async {
 }
 
 Future<void> peek(CliContext ctx) async {
-  _verbose(ctx);
-  final archive = (ctx.rest.firstOrNull ?? await die('peek needs an archive')).path;
-  final entries = await archive.archiveEntries();
+  final archive = ctx.need('an archive').path;
+  final files = (await archive.archiveEntries()).where((e) => !e.isDir).toList();
 
   Table.rows(
-    entries.where((e) => !e.isDir).map((e) => {'size': e.size, 'packed': e.compressedSize, 'name': e.name}),
+    files.map((e) => {'size': e.size, 'packed': e.compressedSize, 'name': e.name}),
   ).orderBy('size', descending: true).take(20).show();
-
-  final files = entries.where((e) => !e.isDir);
   Console.ok('${files.length} files, ${files.sequence.sumBy((e) => e.size)} bytes uncompressed');
-}
-
-void _verbose(CliContext ctx) {
-  if (ctx(verbose)) Console.level = LogLevel.debug;
 }

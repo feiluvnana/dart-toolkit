@@ -48,12 +48,18 @@ extension UriExtensions on Uri {
   Future<Response> head({Map<String, String>? headers}) => send(Request('HEAD', this, headers: headers));
 
   /// POST. The body is named by what it is — at most one of [text] (UTF-8), [bytes],
-  /// [form] (url-encoded) or [json] — and carries the matching `content-type`. The same
-  /// four words name a body on [Request] and on `follow`.
+  /// [form] (url-encoded), [json] or [files] — and carries the matching `content-type`. The
+  /// same words name a body on [Request] and on `follow`.
+  ///
+  /// [files] is `multipart/form-data`, read off disk as it goes out and never held, so the
+  /// size of an upload is not the size of the program's heap. It is the one that pairs: with
+  /// [form] it sends the fields and the files together, which is a browser submitting a form
+  /// that has a file input on it.
   ///
   /// ```dart
   /// await api.post(json: {'name': 'x'});
   /// await api.post(form: {'q': 'dart'});
+  /// await api.post(form: {'title': 'holiday'}, files: {'photo': '~/beach.jpg'.path});
   /// ```
   Future<Response> post({
     Map<String, String>? headers,
@@ -61,7 +67,8 @@ extension UriExtensions on Uri {
     List<int>? bytes,
     Map<String, String>? form,
     Object? json,
-  }) => send(Request('POST', this, headers: headers, text: text, bytes: bytes, form: form, json: json));
+    Map<String, Path>? files,
+  }) => send(Request('POST', this, headers: headers, text: text, bytes: bytes, form: form, json: json, files: files));
 
   /// PUT; see [post] for the body.
   Future<Response> put({
@@ -70,7 +77,8 @@ extension UriExtensions on Uri {
     List<int>? bytes,
     Map<String, String>? form,
     Object? json,
-  }) => send(Request('PUT', this, headers: headers, text: text, bytes: bytes, form: form, json: json));
+    Map<String, Path>? files,
+  }) => send(Request('PUT', this, headers: headers, text: text, bytes: bytes, form: form, json: json, files: files));
 
   /// PATCH; see [post] for the body.
   Future<Response> patch({
@@ -79,7 +87,8 @@ extension UriExtensions on Uri {
     List<int>? bytes,
     Map<String, String>? form,
     Object? json,
-  }) => send(Request('PATCH', this, headers: headers, text: text, bytes: bytes, form: form, json: json));
+    Map<String, Path>? files,
+  }) => send(Request('PATCH', this, headers: headers, text: text, bytes: bytes, form: form, json: json, files: files));
 
   /// DELETE; see [post] for the body.
   Future<Response> delete({
@@ -88,7 +97,8 @@ extension UriExtensions on Uri {
     List<int>? bytes,
     Map<String, String>? form,
     Object? json,
-  }) => send(Request('DELETE', this, headers: headers, text: text, bytes: bytes, form: form, json: json));
+    Map<String, Path>? files,
+  }) => send(Request('DELETE', this, headers: headers, text: text, bytes: bytes, form: form, json: json, files: files));
 
   /// GETs this URI and throws [HttpException] unless the status is 2xx.
   ///

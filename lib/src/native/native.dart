@@ -166,6 +166,38 @@ abstract final class NativeBridge {
     }
   }
 
+  static final _inflateNew = require(
+    'content-encoding',
+  ).lookupFunction<Pointer<Void> Function(Uint32), Pointer<Void> Function(int)>('tk_inflate_new');
+  static final _inflatePush = require('content-encoding')
+      .lookupFunction<
+        Int32 Function(Pointer<Void>, Pointer<Uint8>, IntPtr, Pointer<Pointer<Uint8>>, Pointer<IntPtr>),
+        int Function(Pointer<Void>, Pointer<Uint8>, int, Pointer<Pointer<Uint8>>, Pointer<IntPtr>)
+      >('tk_inflate_push');
+  static final _inflateFree = require(
+    'content-encoding',
+  ).lookupFunction<Void Function(Pointer<Void>), void Function(Pointer<Void>)>('tk_inflate_free');
+
+  /// [body] with a `content-encoding` undone as it arrives; [codec] is 1 gzip, 2 deflate,
+  /// 3 brotli, 4 zstd.
+  ///
+  /// It is here rather than in `http` so that `http` binds no FFI of its own: a decoder is a
+  /// handle, three lookups and a pointer, and none of that belongs in a module about
+  /// requests. Nothing is buffered — a chunk off the socket goes in and whatever it decoded
+  /// to comes out, which is often nothing while a decoder fills its window.
+  static Stream<List<int>> inflate(Stream<List<int>> body, int codec) async* {
+    final handle = _inflateNew(codec);
+    if (handle == nullptr) throw StateError(lastError());
+    try {
+      await for (final chunk in body) {
+        final decoded = take((out, len) => withBytes(chunk, (ptr, size) => _inflatePush(handle, ptr, size, out, len)));
+        if (decoded.isNotEmpty) yield decoded;
+      }
+    } finally {
+      _inflateFree(handle);
+    }
+  }
+
   /// Runs [body] with [text] as UTF-8 in native memory; `null` becomes a null pointer.
   static R withText<R>(String? text, R Function(Pointer<Uint8> ptr, int len) body) =>
       text == null ? body(nullptr, 0) : withBytes(utf8.encode(text), body);

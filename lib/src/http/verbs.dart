@@ -43,7 +43,11 @@ extension ClientExtensions on Client {
     List<int>? bytes,
     Map<String, String>? form,
     Object? json,
-  }) => _withClient(this, () => url.post(headers: headers, text: text, bytes: bytes, form: form, json: json));
+    Map<String, Path>? files,
+  }) => _withClient(
+    this,
+    () => url.post(headers: headers, text: text, bytes: bytes, form: form, json: json, files: files),
+  );
 
   /// PUT; see [UriExtensions.post] for the body.
   Future<Response> put(
@@ -53,7 +57,11 @@ extension ClientExtensions on Client {
     List<int>? bytes,
     Map<String, String>? form,
     Object? json,
-  }) => _withClient(this, () => url.put(headers: headers, text: text, bytes: bytes, form: form, json: json));
+    Map<String, Path>? files,
+  }) => _withClient(
+    this,
+    () => url.put(headers: headers, text: text, bytes: bytes, form: form, json: json, files: files),
+  );
 
   /// PATCH; see [UriExtensions.post] for the body.
   Future<Response> patch(
@@ -63,7 +71,11 @@ extension ClientExtensions on Client {
     List<int>? bytes,
     Map<String, String>? form,
     Object? json,
-  }) => _withClient(this, () => url.patch(headers: headers, text: text, bytes: bytes, form: form, json: json));
+    Map<String, Path>? files,
+  }) => _withClient(
+    this,
+    () => url.patch(headers: headers, text: text, bytes: bytes, form: form, json: json, files: files),
+  );
 
   /// DELETE; see [UriExtensions.post] for the body.
   Future<Response> delete(
@@ -73,7 +85,11 @@ extension ClientExtensions on Client {
     List<int>? bytes,
     Map<String, String>? form,
     Object? json,
-  }) => _withClient(this, () => url.delete(headers: headers, text: text, bytes: bytes, form: form, json: json));
+    Map<String, Path>? files,
+  }) => _withClient(
+    this,
+    () => url.delete(headers: headers, text: text, bytes: bytes, form: form, json: json, files: files),
+  );
 
   /// GETs [url] and throws [HttpException] unless the status is 2xx.
   Future<Response> fetch(Uri url, {Map<String, String>? headers}) =>

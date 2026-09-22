@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:dart_toolkit/http.dart';
 
@@ -34,7 +33,7 @@ final class MockClient implements Client {
   MockClient.streaming(this._handler);
 
   @override
-  Future<StreamedResponse> send(Request request) => _handler(request, Stream.value(Uint8List.fromList(request.bytes)));
+  Future<StreamedResponse> send(Request request) => _handler(request, request.open());
 
   @override
   Future<void> close() async {}

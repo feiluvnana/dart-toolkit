@@ -2,7 +2,7 @@
 #
 #   make            analyze, format check, tests
 #   make native     build the Rust library for this machine into native/prebuilt/<target>/
-#   make bench      startup cost per module, and the digest/parser throughput probes
+#   make bench      startup cost per module
 #   make release    everything above, then the version bump reminder
 
 DART ?= dart
@@ -18,7 +18,7 @@ analyze:
 	$(DART) analyze --fatal-infos
 
 format:
-	$(DART) format --output=none --set-exit-if-changed lib bin example test tool
+	$(DART) format --output=none --set-exit-if-changed lib bin test tool
 
 test:
 	$(DART) test
@@ -45,7 +45,6 @@ startup:
 	$(DART) run tool/startup.dart
 
 bench: startup
-	$(DART) run example/collections.dart > /dev/null && echo "collections example: ok"
 
 release: check test native audit
 	@echo "Bump version in pubspec.yaml and move Unreleased in CHANGELOG.md, then: git tag v$$(grep '^version' pubspec.yaml | cut -d' ' -f2)"

@@ -192,8 +192,7 @@ prices.sequence.sum; names.sequence.sorted.first;             // typed: only on 
 for (final (k, v) in map.sequence.sortedByValue(descending: true).take(3)) print('$k $v');
 ```
 
-[`example/collections.dart`](example/collections.dart) solves six tasks with the SDK's
-`Iterable` and again with `Sequence`, side by side. A `Table` comes from maps, records, a JSON
+A `Table` comes from maps, records, a JSON
 array, CSV text or an HTML `<table>`, and goes back out as CSV, JSON or a console table:
 
 ```dart
@@ -254,8 +253,8 @@ await lock.run(() async { /* critical section */ });
 **A token is not threaded, it is in scope.** `Cancel.scope` holds one for everything inside
 it, the way `Http.scope` holds a client: `download`, `parallelize`, `retry` and `cancellable`
 all read `Cancel.token`, and none of them takes a `cancelToken:` of its own. `Cli.run` opens
-one around the action with `ctx.cancel` as its token, so a signal, `die` or the end of the
-action stops the lot.
+one around the action with `ctx.cancel` as its token, so a signal, `Lifecycle.exit` or the
+end of the action stops the lot.
 
 `Cancel.isCancelled`, `Cancel.reason` and `Cancel.throwIfCancelled()` read the ambient state —
 all three quiet outside a scope, because nothing has cancelled it there. A loop of its own
@@ -368,15 +367,23 @@ await for (final r in stories) switch (r) { case Right(:final value): ...; case 
 
 One scope shares a client across every request inside it, closes it on the way out, and is
 where the timeout, default headers and cookie jar live. `get`, `head`, `post`, `put`, `patch` and `delete`
-name a body by what it is — at most one of `text:`, `bytes:`, `form:` and `json:`, each typed,
-each carrying its own `content-type`, and the same four words on `Request` and `follow`.
+name a body by what it is — at most one of `text:`, `bytes:`, `form:`, `json:` and `files:`, each
+typed, each carrying its own `content-type`, and the same words on `Request` and `follow`.
 `fetch` is a GET that must be 2xx.
+
+`files:` is `multipart/form-data`, read off disk as it goes out and never held, so the size of
+an upload is not the size of the heap. It is the one that pairs: with `form:` it sends the
+fields and the files together, which is a browser submitting a form with a file input on it.
+
+```dart
+await api.post(form: {'title': 'holiday'}, files: {'photo': '~/beach.jpg'.path});
+```
 
 ```dart
 await Http.scope(() async {
   final doc = await url.html();                         // throws on a non-2xx status
   final res = await other.get();                        // ...or check it yourself
-  if (!res.isOk) await die('${res.statusCode} from $other');
+  if (!res.isOk) await Lifecycle.exit('${res.statusCode} from $other');
   final created = await api.withQuery({'v': 2}).post(json: {'name': 'x'});
 }, timeout: 30.s, headers: {'user-agent': 'my-tool/1.0'});
 ```
@@ -384,6 +391,11 @@ await Http.scope(() async {
 `cookies: true` keeps what the responses set and sends them back, so a login and the pages
 behind it are one crawl and nothing parses `set-cookie` by hand. The jar lasts as long as the
 scope and never touches disk; a request that names its own `cookie` still wins.
+
+The jar walks the redirect chain itself, hop by hop, because a login is a POST that answers 302
+and sets the session **on that hop** — the response at the end of the chain carries no
+`set-cookie` at all, and a client left to follow its own redirects arrives with the session
+already thrown away.
 
 ```dart
 await Http.scope(cookies: true, () async {
@@ -410,13 +422,24 @@ await Http.scope(client: MockClient((r) async => Response('ok', 200)), () async 
 `IoClient` takes the transport's own limits: `perHost:` is how many connections may be open to
 one origin, and `connections:` caps the total in flight across every host, which `dart:io` has
 no setting for. The permit is held until the body is read to the end, cancelled or thrown, so
-the cap counts transfers rather than handshakes. `keepAlive:`, `connectTimeout:` and
-`userAgent:` are there too — `Http.scope(timeout:)` bounds the wait for a *response*, which is
-a different thing and composes with them.
+the cap counts transfers rather than handshakes. `keepAlive:`, `connectTimeout:`,
+`userAgent:`, `proxy:` and `insecure:` are there too — `Http.scope(timeout:)` bounds the wait
+for a *response*, which is a different thing and composes with them.
 
 ```dart
 IoClient(connections: 32, perHost: 6, keepAlive: 30.s)
+IoClient(proxy: 'http://user:pass@127.0.0.1:8080'.url)
 ```
+
+It asks for what a browser asks for. `dart:io` announces `accept-encoding: gzip` and nothing
+else, which is both slower and a thing to be recognised by; this announces brotli and zstd as
+well and decodes them through the native library — brotli is 15–20% smaller than gzip on
+markup, which a page at a time is the difference between a crawl and a shorter one. A program
+without the native library asks for neither and nothing about it changes.
+
+It also walks its own redirect chain rather than letting `dart:io` walk it, so the rule about
+what a hop carries is one rule: 303, and 301 or 302 on anything but GET and HEAD, become a GET
+with no body; 307 and 308 keep both; and credentials do not follow to another host.
 
 A scope is for code with no client to hand — a download deep in a call chain, a crawl
 assembled somewhere else. When the client *is* in hand, it takes the same verbs itself, and no
@@ -456,6 +479,17 @@ await Http.scope(client: chrome, () async {
 await chrome.close();
 ```
 
+`block:` is the largest single thing a rendered crawl can do for itself — a page whose images,
+fonts and media never arrive looks nothing like itself and says exactly the same words, in a
+fraction of the bytes and a fraction of the time. `device:` is one argument instead of six, and
+`stealth:` (on unless it is turned off) hides the marks an automated Chrome leaves for an
+interstitial to find.
+
+```dart
+await ChromeClient.launch(block: Resource.heavy, device: Device.phone);
+await ChromeClient.launch(device: Device(locale: 'de-DE', timezone: 'Europe/Berlin'));
+```
+
 Only a GET without a `range` is rendered. A POST, a resumable download, an image — everything
 else goes to the plain HTTP client underneath, carrying the browser's cookies for that host, so
 a crawl that renders its pages still fetches its files at the speed of a socket.
@@ -468,6 +502,7 @@ What a page needs before it is worth reading is said per request, with a `Reques
 | `ChromeClient.waitUntil` | `ChromeWait.load` or `.idle` — `load`, then half a second of silence |
 | `ChromeClient.script` | JavaScript to run before the DOM is read; may return a promise |
 | `ChromeClient.challenge` | how long this page may sit on an interstitial |
+| `ChromeClient.block` | what this page refuses to load, over the client's `block:` |
 
 `Request.raw` is the one directive that is not Chrome's own: it says *answer with the resource,
 never a rendering of it*, and any client that renders must hand it to plain HTTP instead. Every
@@ -527,9 +562,15 @@ await page.close();
 | `select(sel, value)`, `hover(sel)` | an option by value or by its text; a menu that opens on hover |
 | `text(sel)`, `attr(sel, name)`, `has(sel)` | one value off the live page; `attr` answers what the DOM resolved |
 | `navigating(action)` | run the action and wait out the navigation it causes |
-| `back()`, `scroll(times:)` | one entry back; walk an infinite feed until it stops growing |
-| `eval(js, awaitPromise:)`, `screenshot()`, `pdf()` | run anything; a PNG, or Chrome's own print |
-| `cookies()` | the jar, for handing a logged-in session to something that is not a browser |
+| `downloading(action, to:)` | run the action and wait out the download it starts; answers the file |
+| `fetching(match, action)` | run the action and answer the XHR it fires, as a `Response` |
+| `block(kinds)` | refuse to load `Resource.heavy`, or any set of them, from now on |
+| `frame(match)` | the iframe as a page of its own — every word here works inside it |
+| `upload(sel, files)` | fill a file input the way a person fills one |
+| `back()`, `forward()`, `reload()`, `scroll(times:)` | the history; walk a feed until it stops growing |
+| `eval(js, awaitPromise:)`, `screenshot(selector:, full:)`, `pdf()` | run anything; a PNG of one element or the whole page |
+| `cookies([restore])` | read the jar, or put a saved session back into the browser |
+| `onDialog(handler)` | answer an `alert`, `confirm` or `prompt`; dismissed unless it is handled |
 
 `chrome.page(url, (page) async { … })` is the same thing with the close written for you.
 
@@ -543,6 +584,24 @@ await page.navigating(() => page.click('a.next'));
 print(page.url);
 ```
 
+`downloading` and `fetching` are the same shape for the same reason: a click that starts a
+download or fires an XHR returns just as fast, and neither wait can be armed after it.
+
+```dart
+final file = await page.downloading(() => page.click('.download'), to: 'books'.path);
+final more = await page.fetching('/api/items', () => page.click('.next'));
+print(more!.json['items']);          // the JSON behind the page, not the DOM it becomes
+```
+
+`downloading` and `fetching` are the same shape for the same reason: a click that starts a
+download or fires an XHR returns just as fast, and neither wait can be armed after it.
+
+```dart
+final file = await page.downloading(() => page.click('.download'), to: 'books'.path);
+final more = await page.fetching('/api/items', () => page.click('.next'));
+print(more!.json['items']);          // the JSON behind the page, not the DOM it becomes
+```
+
 A `RequestKey<T>` is how any client is told something HTTP has no word for, and **a client
 ignores every key it does not know** — which is what lets the same crawl run over `IoClient`,
 which ignores the wait, and over `ChromeClient`, which honours it. To write a third client,
@@ -551,7 +610,7 @@ implement two methods:
 ```dart
 abstract interface class Client {
   Future<StreamedResponse> send(Request request);
-  FutureOr<void> close();        // awaited by Http.scope, so a socket teardown is safe
+  Future<void> close();          // always a future, so no caller branches on which it got
 }
 ```
 
@@ -657,6 +716,40 @@ its value (`-w8`). A subcommand nests by taking `commands:` of its own.
 `or` is the one word for a default, wherever one is given: `Opt.…or(value)`, and
 `Console.ask(or:)`, `confirm(or:)`, `select(or:)`.
 
+### Lifecycle
+
+Two shapes and no others: `onExit` registers a listener for the exit event, and `exit` is the
+event happening.
+
+```dart
+Lifecycle.onExit(chrome.close);          // register
+Lifecycle.onExit(null);                  // forget every listener
+
+await Lifecycle.exit();                  // run them, leave with 0
+await Lifecycle.exit('no URL given');    // say why in red on stderr, leave with 1
+await Lifecycle.exit('bad args', 64);    // ...with the code you choose
+```
+
+Listeners run on SIGINT, SIGTERM, `Lifecycle.exit`, and when `Cli.run` returns — in
+registration order, and one that throws does not stop the rest, so a cleanup that fails cannot
+strand the ones behind it. `onExit` answers a function that removes *that* listener, for a
+cleanup that stops being necessary once the work it guarded has succeeded:
+
+```dart
+final release = Lifecycle.onExit(unlock);
+await deploy();
+release();                               // it worked; nothing to undo
+```
+
+The signal watch keeps the isolate alive, so a script with no `Cli` around it must end with
+`Lifecycle.exit`, `dart:io`'s `exit`, or `onExit(null)`.
+
+It is a namespace rather than two top-level functions for one reason: a top-level `exit` would
+**silently** shadow `dart:io`'s in every file importing this package — Dart resolves a name to
+a non-platform library without calling it ambiguous, so `exit(0)` would quietly stop meaning
+what it says. Namespaced, `dart:io`'s `exit` is untouched and does not run the listeners, which
+is exactly what someone who typed it expects.
+
 ### Console
 
 One namespace for everything that reaches a terminal: log lines, rules, prompts, and the three
@@ -732,30 +825,22 @@ client to use, once, and everything inside it — requests, downloads, a whole c
 
 ---
 
-## Examples
+## Executables
 
-See [`example/`](example/) for seven runnable programs — one per area, each a task rather
-than a tour:
-
-| file | shows |
-|---|---|
-| [`cli_app.dart`](example/cli_app.dart) | subcommands, typed options, stages, progress, `ctx.cancel`, exit hooks |
-| [`concurrent_work.dart`](example/concurrent_work.dart) | `parallelize` settling into `Either`, `retry`, `Cancel.scope`, `Mutex`, isolates, stream operators |
-| [`config_formats.dart`](example/config_formats.dart) | YAML, TOML, INI, JSON and XML through one document type, JSONPath, `toYaml` |
-| [`files_and_digests.dart`](example/files_and_digests.dart) | `Path`, `glob`, digests for de-duplication, archives, verification |
-| [`shell_pipeline.dart`](example/shell_pipeline.dart) | `run`, pipelines, `which`, failure policy, `Env` |
-| [`web_crawler.dart`](example/web_crawler.dart) | one-shot requests, the five-hook crawl, downloads with progress |
-| [`collections.dart`](example/collections.dart) | six tasks with the SDK's `Iterable`, then with `Sequence` and `Table`, side by side |
-
-`bin/` holds the executables: [`tk.dart`](bin/tk.dart) is the toolkit as a command-line tool
-(`hash`, `find`, `read`, `fetch`, `pack`, `peek`), and [`keybox.dart`](bin/keybox.dart) is the
-program the brevity rules in `CONVENTIONS.md` are measured against.
+`bin/` holds the two programs this package ships. [`tk.dart`](bin/tk.dart) is the toolkit as a
+command-line tool (`hash`, `find`, `read`, `fetch`, `pack`, `peek`), each command a few lines
+over the library; [`keybox.dart`](bin/keybox.dart) is the program the brevity rules in
+`CONVENTIONS.md` are measured against.
 
 ```sh
 dart run bin/tk.dart find 'lib/**/*.dart' --top 5
 dart run bin/tk.dart read pubspec.yaml --query '$.dependencies.*'
-dart run example/config_formats.dart
 ```
+
+## Guide
+
+[`GUIDE.md`](GUIDE.md) is the manual to this one's tour: every module in full, a cookbook of
+whole programs, and the testing, performance and troubleshooting notes.
 
 ## Conventions
 

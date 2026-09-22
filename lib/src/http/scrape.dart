@@ -28,6 +28,7 @@ final class _Plan<T> {
   final List<int>? bytes;
   final Map<String, String>? form;
   final Object? json;
+  final Map<String, Path>? files;
   final bool revisit;
   final bool offsite;
 
@@ -41,6 +42,7 @@ final class _Plan<T> {
     this.bytes,
     this.form,
     this.json,
+    this.files,
     this.revisit = false,
     this.offsite = false,
   });
@@ -282,6 +284,7 @@ sealed class HookContext<T> {
     List<int>? bytes,
     Map<String, String>? form,
     Object? json,
+    Map<String, Path>? files,
     bool revisit = false,
     bool offsite = false,
   }) {
@@ -297,6 +300,7 @@ sealed class HookContext<T> {
         text: text,
         bytes: bytes,
         form: form,
+        files: files,
         json: json,
         revisit: revisit,
         offsite: offsite,
@@ -564,8 +568,6 @@ int _fnv1a(List<int> bytes) {
 }
 
 /// Headers that stay behind when a redirect leaves the host.
-const _credential = {'authorization', 'cookie', 'proxy-authorization'};
-
 /// `www.example.com` and `example.com` are one site.
 String _site(String host) => host.startsWith('www.') ? host.substring(4) : host;
 
@@ -817,6 +819,7 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
       bytes: plan.bytes,
       form: plan.form,
       json: plan.json,
+      files: plan.files,
     );
     final scheduled = enqueue(
       _Item<T>(
@@ -912,19 +915,9 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
       return fail(host, item, statusFailed(item, res), StackTrace.current);
     }
 
-    final status = res.statusCode;
-    final downgrade =
-        status == 303 || ((status == 301 || status == 302) && sent.method != 'GET' && sent.method != 'HEAD');
-    final next = Request(downgrade ? 'GET' : sent.method, target);
-    final crossHost = target.host != sent.url.host;
-    for (final MapEntry(:key, :value) in sent.headers.entries) {
-      final k = key.toLowerCase();
-      if (downgrade && (k == 'content-type' || k == 'content-length')) continue;
-      // Credentials do not follow a redirect to another host, as a browser's would not.
-      if (crossHost && _credential.contains(k)) continue;
-      next.headers[key] = value;
-    }
-    if (!downgrade) next.bytes = sent.bytes;
+    // The same policy the client and the scope follow, and the directives go with it: a hop
+    // of a rendered crawl still wants the wait the request it came from asked for.
+    final next = sent._hop(target, res.statusCode);
     if (!item.revisit && !visited.add(_key(next))) return Future.value();
 
     final hop = _Item<T>(

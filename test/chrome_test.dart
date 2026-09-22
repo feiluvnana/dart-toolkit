@@ -33,6 +33,7 @@ void main() {
     late Uri base;
     late ChromeClient browser;
     var challenged = 0;
+    final hits = <String, int>{};
 
     setUpAll(() async {
       if (chrome == null) return;
@@ -41,7 +42,64 @@ void main() {
       unawaited(
         server.forEach((request) async {
           final response = request.response;
+          hits.update(request.uri.path, (n) => n + 1, ifAbsent: () => 1);
           switch (request.uri.path) {
+            // Everything a blocked crawl should never ask for, on one page.
+            case '/heavy':
+              response.headers.contentType = ContentType.html;
+              response.write('''
+<html><head><link rel="stylesheet" href="/style.css"></head>
+<body><h1 id="title">heavy</h1><img id="pic" src="/pixel.png"></body></html>''');
+            case '/style.css':
+              response.headers.contentType = ContentType('text', 'css');
+              response.write('h1 { color: red }');
+            case '/pixel.png':
+              response.headers.contentType = ContentType('image', 'png');
+              response.add(List.filled(64, 0));
+            // A link that downloads rather than navigates.
+            case '/downloads':
+              response.headers.contentType = ContentType.html;
+              response.write('<html><body><a id="get" href="/blob.bin" download>take it</a></body></html>');
+            case '/blob.bin':
+              response.headers
+                ..contentType = ContentType.binary
+                ..set('content-disposition', 'attachment; filename="report.bin"');
+              response.add(List.filled(1024, 3));
+            // The JSON behind the page, fetched by a click.
+            case '/api-page':
+              response.headers.contentType = ContentType.html;
+              response.write('''
+<html><body><button id="more">more</button><div id="out"></div><script>
+  document.getElementById('more').addEventListener('click', async () => {
+    const res = await fetch('/api/items');
+    document.getElementById('out').textContent = (await res.json()).items.length;
+  });
+</script></body></html>''');
+            case '/api/items':
+              response.headers.contentType = ContentType.json;
+              response.write('{"items":[1,2,3]}');
+            case '/picker':
+              response.headers.contentType = ContentType.html;
+              response.write('''
+<html><body><input id="pick" type="file"><p id="picked"></p><script>
+  document.getElementById('pick').addEventListener('change', (e) => {
+    document.getElementById('picked').textContent = e.target.files[0].name;
+  });
+</script></body></html>''');
+            case '/outer':
+              response.headers.contentType = ContentType.html;
+              response.write('''
+<html><body><p id="here">outside</p><iframe name="inner" src="/inner"></iframe></body></html>''');
+            case '/inner':
+              response.headers.contentType = ContentType.html;
+              response.write('''
+<html><body><p id="here">inside</p><input id="card"><button id="pay">pay</button>
+<script>document.getElementById('pay').addEventListener('click', () => {
+  document.getElementById('here').textContent = 'paid ' + document.getElementById('card').value;
+});</script></body></html>''');
+            case '/who':
+              response.headers.contentType = ContentType.html;
+              response.write('<html><body><p id="sent">${request.headers.value('cookie')}</p></body></html>');
             // Nothing in the markup; everything in the script. This is the page an HTTP
             // client cannot read and a browser can.
             case '/rendered':
@@ -112,6 +170,15 @@ void main() {
     });
   </script>
 </body></html>''');
+            // A page that opens a dialog while it loads. Chrome holds the renderer on it,
+            // so nothing below `load` ever happens until someone answers.
+            case '/dialog':
+              response.headers.contentType = ContentType.html;
+              response.write('''
+<html><body><p id="said"></p><script>
+  const answer = prompt('who are you?', 'nobody');
+  document.getElementById('said').textContent = 'answered ' + answer;
+</script></body></html>''');
             case '/asset':
               response.headers.contentType = ContentType.binary;
               response.add(List.filled(2048, 7));
@@ -326,6 +393,153 @@ void main() {
         final jar = await page.cookies();
         expect(jar.map((c) => '${c.name}=${c.value}'), contains('who=me'));
       });
+    }, skip: absent);
+
+    test('a dialog is answered, so the tab is not lost to it', () async {
+      // Without an answer Chrome holds the renderer and this never returns: `load` does not
+      // fire, the render times out, and the tab goes back into the pool still blocked.
+      final page = await browser.open();
+      final res = await page.goto(base.resolve('/dialog')).timeout(20.s);
+      expect(res.text, contains('answered null'), reason: 'dismissed by default');
+
+      page.onDialog((d) {
+        expect(d.type, 'prompt');
+        expect(d.message, 'who are you?');
+        expect(d.defaultValue, 'nobody');
+        return d.accept('me');
+      });
+      expect((await page.goto(base.resolve('/dialog')).timeout(20.s)).text, contains('answered me'));
+      await page.close();
+    }, skip: absent);
+
+    test('what is blocked is never asked for, and the page still reads', () async {
+      final page = await browser.open();
+      await page.block(Resource.heavy);
+      hits.clear();
+      await page.goto(base.resolve('/heavy'));
+      expect(await page.text('#title'), 'heavy');
+      expect(hits['/pixel.png'], isNull, reason: 'an image was asked for anyway');
+      expect(hits['/style.css'], 1, reason: 'a stylesheet is not heavy');
+      // And the same tab lets it through again once it is told to.
+      await page.block(const {});
+      hits.clear();
+      await page.goto(base.resolve('/heavy'));
+      expect(hits['/pixel.png'], 1);
+      await page.close();
+    }, skip: absent);
+
+    test('a click that downloads answers with the file it wrote', () async {
+      final dir = await Directory.systemTemp.createTemp('tk_dl_');
+      addTearDown(() => dir.delete(recursive: true));
+      final page = await browser.open(base.resolve('/downloads'));
+      final file = await page.downloading(() => page.click('#get'), to: dir.path.path);
+      expect(file, isNotNull);
+      expect(file!.name, 'report.bin', reason: 'the name the site gave it');
+      expect(await file.readBytes(), hasLength(1024));
+      await page.close();
+    }, skip: absent);
+
+    test('a download that never starts is null, not a throw', () async {
+      final page = await browser.open(base.resolve('/downloads'));
+      expect(await page.downloading(() async {}, timeout: 2.s), isNull);
+      await page.close();
+    }, skip: absent);
+
+    test('the JSON behind the page comes back instead of the DOM', () async {
+      final page = await browser.open(base.resolve('/api-page'));
+      final res = await page.fetching('/api/items', () => page.click('#more'));
+      expect(res, isNotNull);
+      expect(res!.statusCode, 200);
+      expect(res.json['items'].to<List<Object?>>()?.length, 3);
+      await page.close();
+    }, skip: absent);
+
+    test('a file input is filled the way a person fills one', () async {
+      final dir = await Directory.systemTemp.createTemp('tk_up_');
+      addTearDown(() => dir.delete(recursive: true));
+      final file = File('${dir.path}/photo.png')..writeAsBytesSync([1, 2, 3]);
+      final page = await browser.open(base.resolve('/picker'));
+      expect(await page.upload('#pick', [file.path.path]), isTrue);
+      expect(await page.text('#picked'), 'photo.png');
+      expect(await page.upload('#nothing', [file.path.path]), isFalse);
+      await page.close();
+    }, skip: absent);
+
+    test('a saved session is put back, and the host sees it', () async {
+      final page = await browser.open(base.resolve('/who'));
+      await page.cookies([
+        Cookie('sid', 'restored')
+          ..domain = base.host
+          ..path = '/',
+      ]);
+      await page.reload();
+      expect(await page.text('#sent'), contains('sid=restored'));
+      await page.close();
+    }, skip: absent);
+
+    test('the page is not told it is being driven', () async {
+      final page = await browser.open(base.resolve('/rendered'));
+      expect(await page.eval('navigator.webdriver'), isNull);
+      expect(await page.eval('!!window.chrome'), isTrue);
+      await page.close();
+    }, skip: absent);
+
+    test('a device is what the page believes it is on', () async {
+      final phone = await ChromeClient.launch(tabs: 1, device: Device.phone);
+      try {
+        final page = await phone.open(base.resolve('/rendered'));
+        expect(await page.eval('navigator.userAgent'), contains('iPhone'));
+        // Not `innerWidth`: a page with no `<meta name=viewport>` gets Chrome's 980px mobile
+        // fallback layout viewport, which is the emulation working rather than failing.
+        expect(await page.eval('screen.width'), 393);
+        expect(await page.eval('devicePixelRatio'), 3);
+        expect(await page.eval('navigator.maxTouchPoints'), greaterThan(0));
+      } finally {
+        await phone.close();
+      }
+    }, skip: absent);
+
+    test('a screenshot of one element is not a screenshot of the window', () async {
+      final page = await browser.open(base.resolve('/heavy'));
+      final whole = await page.screenshot();
+      final one = await page.screenshot(selector: '#title');
+      expect(whole, isNotEmpty);
+      expect(one, isNotEmpty);
+      expect(one.length, lessThan(whole.length));
+      expect(await page.screenshot(selector: '#missing'), isEmpty);
+      await page.close();
+    }, skip: absent);
+
+    test('forward goes back the way back came', () async {
+      final page = await browser.open(base.resolve('/widgets'));
+      await page.navigating(() => page.click('#link'));
+      expect(page.url.path, '/rendered');
+      expect(await page.back(), isTrue);
+      expect(page.url.path, '/widgets');
+      expect(await page.forward(), isTrue);
+      expect(page.url.path, '/rendered');
+      expect(await page.forward(), isFalse, reason: 'nothing ahead of the last entry');
+      await page.close();
+    }, skip: absent);
+
+    test('a frame is a page, so every word already works inside one', () async {
+      final page = await browser.open(base.resolve('/outer'));
+      expect(await page.text('#here'), 'outside', reason: 'the same selector matches both');
+
+      final inner = await page.frame('inner');
+      expect(inner, isNotNull);
+      expect(await inner!.text('#here'), 'inside');
+      expect(await inner.fill('#card', '4242'), isTrue);
+      expect(await inner.click('#pay'), isTrue);
+      expect(await inner.waitFor('#here'), isTrue);
+      expect(await inner.text('#here'), 'paid 4242');
+
+      // Closing a view of a tab closes nothing; the tab is still there.
+      await inner.close();
+      expect(page.isOpen, isTrue);
+      expect(await page.text('#here'), 'outside');
+      expect(await page.frame('nothing-like-this'), isNull);
+      await page.close();
     }, skip: absent);
 
     test('a crawl runs on a client held rather than scoped', () async {

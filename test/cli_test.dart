@@ -141,7 +141,7 @@ void main() {
     });
 
     test('onExit registers hook safely', () {
-      expect(() => onExit(() {}), returnsNormally);
+      expect(() => Lifecycle.onExit(() {}), returnsNormally);
     });
   });
 
@@ -733,31 +733,35 @@ void main() {
       expect(workers, equals(4));
     });
 
-    test('exit hooks are awaited, async ones included', () async {
+    test('exit listeners are awaited, async ones included', () async {
       var asyncHookFinished = false;
-      final unreg = onExit(() async {
+      Lifecycle.onExit(() async {
         await Future<void>.delayed(const Duration(milliseconds: 10));
         asyncHookFinished = true;
       });
-
-      await runExitHooks();
+      // Cli.run fires the listeners in its finally, which is the only public way in now
+      // that there is no third spelling for "run them".
+      await Cli(name: 'demo', handler: (_) {}).run([]);
       expect(asyncHookFinished, isTrue);
-      unreg();
     });
 
-    test('onExit manages multiple hooks and execution', () async {
-      var hook1Executed = false;
-      var hook2Executed = false;
+    test('onExit runs every listener, in order, and each returns its own removal', () async {
+      final order = <int>[];
+      Lifecycle.onExit(() => order.add(1));
+      final dropSecond = Lifecycle.onExit(() => order.add(2));
+      Lifecycle.onExit(() => order.add(3));
+      dropSecond();
 
-      final unreg1 = onExit(() => hook1Executed = true);
-      final unreg2 = onExit(() => hook2Executed = true);
+      await Cli(name: 'demo', handler: (_) {}).run([]);
+      expect(order, [1, 3], reason: 'registration order, and the removed one stayed out');
+    });
 
-      await runExitHooks();
-      expect(hook1Executed, isTrue);
-      expect(hook2Executed, isTrue);
-
-      unreg1();
-      unreg2();
+    test('onExit(null) forgets every listener', () async {
+      var ran = false;
+      Lifecycle.onExit(() => ran = true);
+      expect(Lifecycle.onExit(null), returnsNormally, reason: 'answers a no-op, not null');
+      await Cli(name: 'demo', handler: (_) {}).run([]);
+      expect(ran, isFalse);
     });
   });
 
@@ -840,7 +844,7 @@ void main() {
     test('ctx.cancel is cancelled when the action ends, and exit hooks run when it throws', () async {
       CancelToken? seen;
       var hookRan = false;
-      onExit(() => hookRan = true);
+      Lifecycle.onExit(() => hookRan = true);
       final cli = Cli(
         name: 'demo',
         handler: (ctx) {

@@ -13,6 +13,7 @@ use std::slice;
 
 mod archive;
 mod digest;
+mod inflate;
 
 // Thread-local, which is sound only because every caller reads the message in the same
 // synchronous block as the call that failed. Dart does not promise an isolate keeps one OS

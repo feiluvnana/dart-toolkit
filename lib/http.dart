@@ -18,11 +18,13 @@ import 'core.dart';
 import 'formats.dart';
 import 'fs.dart';
 import 'hash.dart';
+import 'native.dart';
 
 part 'src/http/chrome.dart';
 part 'src/http/client.dart';
 part 'src/http/cookies.dart';
 part 'src/http/documents.dart';
+part 'src/http/encoding.dart';
 part 'src/http/download.dart';
 part 'src/http/uri.dart';
 part 'src/http/verbs.dart';

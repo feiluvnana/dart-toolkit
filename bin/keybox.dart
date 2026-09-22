@@ -6,6 +6,14 @@ const baseName = 'Key BOX -for two decades- (2019)';
 const formats = ['mp3', 'flac'];
 const concurrency = 4;
 
+/// The patterns, compiled once: every one of them is read inside a loop over a page.
+final discTitle = RegExp(r'DISC\.(\d+)');
+final discLabel = RegExp(r'DISC(\d+)');
+final trackLine = RegExp(r'^(\d+)\.(.*)$');
+final hrefDisc = RegExp(r'/(\d+)-');
+final hrefTrack = RegExp(r'-(\d+)\.');
+final notDigits = RegExp(r'\D');
+
 /// What the scrapers produce and the downloader consumes.
 typedef Asset = ({Uri url, Path path});
 
@@ -20,86 +28,91 @@ void main(List<String> args) => Cli(
 Future<void> run() async {
   final stage = Console.stages(3);
   final base = baseName.path;
-  final baseUri = keyBase.url;
+  final site = keyBase.url;
   final artwork = <Uri, Path>{};
   final discNames = <int, Path>{};
   final tracks = <int, Map<int, Path>>{};
 
+  // Every asset is one href and one place under the box, so the lists below carry only the
+  // part that differs. An absolute href resolves to itself, which is how the two off-site
+  // scans join the same list; `images` adds the one prefix the bulk of them share.
+  void grab(String href, Path into) => artwork[site / href] = into;
+  void images(String into, List<String> names) {
+    for (final name in names) {
+      grab('common/image/${name.path.name}', base / into / name);
+    }
+  }
+
   // Stage 1: Official metadata & images
   stage('Scraping official album metadata and artworks');
   await Console.spin('Parsing official website...', () async {
-    final doc = await (baseUri / 'key_box.html').html();
+    final doc = await (site / 'key_box.html').html();
     for (final li in doc.$('.key_cd_track_box ul li')) {
       final title = li.$('.track_disc_title').text.filename;
-      final d = int.parse(title.match(RegExp(r'DISC\.(\d+)'), 1)!);
+      final d = int.parse(title.match(discTitle, 1)!);
       discNames[d] = title;
       tracks[d] = {
         for (final line in li.$('.track_disc_text_style1').lines)
-          if (RegExp(r'^(\d+)\.(.*)$').firstMatch(line) case final m?)
+          if (trackLine.firstMatch(line) case final m?)
             int.parse(m[1]!): (d == 22 && m[1] == '13') ? '小さなてのひら'.filename : m[2]!.filename,
       };
     }
 
     for (final e in doc.$('.key_cd_artworks_box')) {
       final href = e.$('a').attr('href')!;
-      if (e.text.match(RegExp(r'DISC(\d+)'), 1) case final dStr?) {
-        artwork[baseUri / href] = base / discNames[int.parse(dStr)]! / href.path.name;
+      if (e.text.match(discLabel, 1) case final d?) {
+        grab(href, base / discNames[int.parse(d)]! / href.path.name);
       } else if (e.text.contains('ALL')) {
-        artwork[baseUri / href] = base / 'Others/KeyBOX' / href.path.name;
+        grab(href, base / 'Others/KeyBOX' / href.path.name);
       }
     }
 
-    artwork.addAll({
-      baseUri / 'common/album_jacket/keybox_image.png': base / 'Others/KeyBOX/keybox_image.png',
-      for (final n in [
-        '20th_box_image.jpg',
-        'key_box_main_image.png',
-        'sp_key_box_main_image.png',
-        'key_box_bg.jpg',
-        'key_box_onsale_title3.jpg',
-        'sp_20th_banner_keybox.png',
-      ])
-        baseUri / 'common/image/$n': base / 'Others/KeyBOX' / n,
-      'https://jetta.vgmtreasurechest.com/soundtracks/key-box-for-two-decades-2019/00%20Contents.jpg'.url:
-          base / 'Others/KeyBOX/00_Contents.jpg',
-      'https://jetta.vgmtreasurechest.com/soundtracks/key-box-for-two-decades-2019/01%20Box%20sample.png'.url:
-          base / 'Others/KeyBOX/01_Box_sample.png',
-      for (final n in [
-        '20th_main_image.jpg',
-        '20th_main_bg.jpg',
-        '20th_top_main_banner_1.png',
-        '20th_menu_logo.png',
-        'sp_20th_top_title.png',
-        'sp_20th_main_image_1.jpg',
-        'sp_20th_main_image_2.jpg',
-        'sp_20th_main_image_3.jpg',
-      ])
-        baseUri / 'common/image/$n': base / 'Others/Key 20th Anniversary' / n,
-      for (final n in [
-        'Stamp Rally/key20th_stamp_poster_1.jpg',
-        'Stamp Rally/key20th_stamp_poster_1_a.jpg',
-        'movie_image_0712.jpg',
-        'history_image_50.jpg',
-        'topics_image_20191217_2.jpg',
-        for (var i = 1; i <= 8; i++) 'General Election/key_election_$i.jpg',
-        for (final name in [
-          'kai',
-          'tanaka',
-          'minami',
-          'na-ga',
-          'suzukikeiko',
-          'sakurai',
-          'kohara',
-          'orito',
-          'suzuki',
-          'yurika',
-        ])
-          'Live Streams/profile_$name.jpg',
-      ])
-        baseUri / 'common/image/${n.path.name}': base / 'Others/Events & Topics' / n,
-    });
+    grab('common/album_jacket/keybox_image.png', base / 'Others/KeyBOX/keybox_image.png');
+    const jetta = 'https://jetta.vgmtreasurechest.com/soundtracks/key-box-for-two-decades-2019';
+    grab('$jetta/00%20Contents.jpg', base / 'Others/KeyBOX/00_Contents.jpg');
+    grab('$jetta/01%20Box%20sample.png', base / 'Others/KeyBOX/01_Box_sample.png');
 
-    final msgDoc = await (baseUri / 'message.html').html();
+    images('Others/KeyBOX', [
+      '20th_box_image.jpg',
+      'key_box_main_image.png',
+      'sp_key_box_main_image.png',
+      'key_box_bg.jpg',
+      'key_box_onsale_title3.jpg',
+      'sp_20th_banner_keybox.png',
+    ]);
+    images('Others/Key 20th Anniversary', [
+      '20th_main_image.jpg',
+      '20th_main_bg.jpg',
+      '20th_top_main_banner_1.png',
+      '20th_menu_logo.png',
+      'sp_20th_top_title.png',
+      'sp_20th_main_image_1.jpg',
+      'sp_20th_main_image_2.jpg',
+      'sp_20th_main_image_3.jpg',
+    ]);
+    images('Others/Events & Topics', [
+      'Stamp Rally/key20th_stamp_poster_1.jpg',
+      'Stamp Rally/key20th_stamp_poster_1_a.jpg',
+      'movie_image_0712.jpg',
+      'history_image_50.jpg',
+      'topics_image_20191217_2.jpg',
+      for (var i = 1; i <= 8; i++) 'General Election/key_election_$i.jpg',
+      for (final name in [
+        'kai',
+        'tanaka',
+        'minami',
+        'na-ga',
+        'suzukikeiko',
+        'sakurai',
+        'kohara',
+        'orito',
+        'suzuki',
+        'yurika',
+      ])
+        'Live Streams/profile_$name.jpg',
+    ]);
+
+    final msgDoc = await (site / 'message.html').html();
     const categories = ['Anime Staff', 'Voice Cast', 'Guest Tributes', 'Key Staff & Creators'];
     for (final (i, box) in msgDoc.$('.message_white_box').take(4).indexed) {
       for (final (n, a) in box.$('a[href*="message_"]').indexed) {
@@ -111,14 +124,14 @@ Future<void> run() async {
             : '';
         final pfx = '${n + 1}'.padLeft(2, '0');
         final name = (a.attr('title') ?? a.text.replaceAll('[New Message]', '')).filename;
-        artwork[baseUri / href] = base / 'Others/Messages & Tributes' / categories[i] / '$tag${pfx}_$name.jpg';
+        grab(href, base / 'Others/Messages & Tributes' / categories[i] / '$tag${pfx}_$name.jpg');
       }
     }
 
-    final topicsDoc = await (baseUri / 'topics.html').html();
+    final topicsDoc = await (site / 'topics.html').html();
     for (final img in topicsDoc.$('.topics_box img')) {
       final src = img.attr('src')!;
-      artwork[baseUri / src] = base / 'Others/Events & Topics' / src.path.name;
+      grab(src, base / 'Others/Events & Topics' / src.path.name);
     }
   });
   Console.ok('Found ${discNames.length} discs and ${artwork.length} artwork/document assets.');
@@ -132,8 +145,9 @@ Future<void> run() async {
           final tds = tr.$('td');
           if (tds.length < 4) continue;
           final href = tds[3].$('a').attr('href')!;
-          final d = int.parse(href.match(RegExp(r'/(\d+)-'), 1) ?? tds[1].text.replaceAll(RegExp(r'\D'), ''));
-          final t = int.parse(href.match(RegExp(r'-(\d+)\.'), 1) ?? tds[2].text.replaceAll(RegExp(r'\D'), ''));
+          // The numbers come from the link where it has them, and from the columns where it does not.
+          final d = int.parse(href.match(hrefDisc, 1) ?? tds[1].text.replaceAll(notDigits, ''));
+          final t = int.parse(href.match(hrefTrack, 1) ?? tds[2].text.replaceAll(notDigits, ''));
           final title = tracks[d]?[t] ?? tds[3].text.filename;
           final missing = {for (final ext in formats) ext: base / discNames[d]! / ext / '$t. $title.$ext'}
             ..removeWhere((_, path) => path.existsSync());

@@ -9,7 +9,7 @@ coverage/
 native/target/
 native/prebuilt/
 
-# Scratch output of the examples and keybox
+# Scratch output of keybox
 *.7z
 *.part
 *.zip

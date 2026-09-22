@@ -1,5 +1,158 @@
 # Changelog
 
+## 0.0.5
+
+A login that redirects keeps its session, a page that opens a dialog keeps its tab, and an
+upload is no longer the size of the heap. The io client asks for what a browser asks for and
+walks its own redirects; the browser blocks what it will not read, downloads what it is told
+to, answers with the XHR behind the page, and reaches inside an iframe. And there is a guide.
+
+### The guide
+
+- **Added: [`GUIDE.md`](GUIDE.md)** — the manual, where `README.md` is the tour: every module,
+  every type worth naming, what each one is for, a cookbook of whole programs, and the
+  testing, performance and troubleshooting notes that were only ever in people's heads.
+
+### Two things that were quietly broken
+
+- **A login that redirects no longer loses its session.** `Http.scope(cookies: true)` stored
+  `set-cookie` from the response at the *end* of a redirect chain, and `dart:io` reports the
+  hops it followed without the headers they carried. The shape that breaks on is the commonest
+  one there is — `POST /login` → `302` → `GET /dashboard`, with the session set on the hop that
+  vanishes — so the jar stayed empty and every page behind the login came back logged out. The
+  jar now walks the chain itself, one hop at a time, and stores what each one sets against the
+  host that set it.
+- **A page that opens a dialog no longer takes the tab with it.** `Page.enable` turns off
+  Chrome's own auto-dismiss, so an `alert()` held the renderer: the wait timed out, and the tab
+  went back into the pool still blocked, taking one of the browser's slots with it for good.
+  Every dialog is now answered — dismissed by default, and `beforeunload` accepted, because
+  dismissing *that* one cancels the navigation that raised it.
+- **Added: `ChromePage.onDialog`**, for answering one on purpose. The handler gets a `Dialog`
+  and calls `accept([text])` or `dismiss()`; one that does neither, or that throws, leaves the
+  default, so a handler that only wants to read the message cannot hang a tab by forgetting.
+
+### The io client
+
+- **Added: `files:`, a `multipart/form-data` body that is never held.** The fifth body word, on
+  `Request`, on `post`/`put`/`patch`/`delete`, on the client verbs and on `follow`. It is read
+  off disk as it goes out, so the size of an upload is not the size of the heap — where before
+  a file had to be read into a `List<int>` and the multipart framing written by hand.
+
+  ```dart
+  await api.post(form: {'title': 'holiday'}, files: {'photo': '~/beach.jpg'.path});
+  ```
+
+  It is the one body word that pairs: `form` with `files` is not two bodies but the fields and
+  the files of one form, which is what a browser sends for a form with a file input on it.
+- **Added to the seam: `Request.open()` and `Request.contentLength`.** What a client sends is
+  the stream, not `Request.bytes` — which is empty for a body that was never in memory. The
+  body is opened again per send rather than replayed, which is what lets a 307 and a retry send
+  the same upload twice. `clientConformance` checks it, so an implementation that reads the
+  wrong field is told so rather than silently sending nothing under a `content-length` that
+  lies.
+- **Added: brotli and zstd.** `dart:io` announces `accept-encoding: gzip` and nothing else,
+  which is both slower and a thing to be recognised by. `IoClient` now asks for what a browser
+  asks for and decodes the answer as it streams — brotli is 15–20% smaller than gzip on markup,
+  which a page at a time is the difference between a crawl and a shorter one. brotli and zstd
+  are the native library's (`tk_inflate_new`/`push`/`free`, a handle per body, nothing
+  buffered); gzip is `dart:io`'s own. A program without the native library asks for neither and
+  nothing about it changes. `deflate` is not asked for: it is zlib-wrapped in the specification
+  and raw about half the time in practice, and a codec that cannot be read without guessing is
+  not worth a token in a header.
+
+  The cost is opening the library on the first request — 12.5 ms, 8 ms of it
+  `Isolate.resolvePackageUriSync`, measured back to back three times — paid once per process.
+- **`IoClient` walks its own redirect chain.** `dart:io` copies every header onto a hop,
+  including a credential, and reports only where it ended up. The policy is now `Request._hop`
+  and one rule for all three callers — the client, the jar's walk and the crawl engine, which
+  had it written out inline. 303 and a non-GET 301 or 302 become a bodiless GET; 307 and 308
+  keep both; `authorization`, `cookie` and `proxy-authorization` stop at another host.
+- **Added: `IoClient(proxy:, insecure:)`** — an explicit HTTP proxy with the credentials taken
+  from its URL, and a certificate that does not verify, for the self-signed intranet host and
+  nothing else.
+- **`Request.copy()` shares the body instead of duplicating it.** Every send copies the request
+  it was handed, so a 50 MB upload was allocated twice on the way out; what the copy is for is
+  the headers a client writes on.
+
+### The browser is a browser
+
+- **Added: `ChromePage.block` and `Resource`** — `page.block(Resource.heavy)`, or
+  `ChromeClient.launch(block:)` for every render, or `request[ChromeClient.block]` for one. The
+  largest single thing a rendered crawl can do for itself: a page whose images, fonts and media
+  never arrive looks nothing like itself and says exactly the same words. Not stylesheets or
+  scripts by default, which is where the line is — a page that cannot run its scripts is not
+  the page a browser was opened for.
+- **Added: `ChromePage.downloading`** — run the action, wait out the download it starts, answer
+  the file it wrote. Armed before the action for the reason `navigating` is, and `to:` is the
+  directory; the file keeps the name the site gave it. A download that never starts is `null`,
+  not a throw.
+- **Added: `ChromePage.fetching`** — run the action and answer the XHR it fires, body and all,
+  as a `Response`. The JSON behind the page instead of the DOM it eventually becomes, which is
+  the scrape most pages actually want.
+- **Added: `ChromePage.frame`** — the iframe as a `ChromePage` of its own, so `text`, `click`,
+  `fill`, `waitFor`, `eval` and `goto` all work inside it without a second vocabulary. A
+  checkout form, a comment widget and a captcha box each live in one and none of them can be
+  reached with a selector from the document around it. Closing a frame closes nothing; it is a
+  view of part of a tab.
+- **Added: `Device`, replacing `userAgent:`** — one argument instead of six. `Device.desktop`
+  is what a browser is unless it is told otherwise and `Device.phone` is the other site a great
+  many hosts serve, usually a simpler one with the same data in a tenth of the markup; `width`,
+  `height`, `scale`, `mobile`, `userAgent`, `locale` and `timezone` are the rest. The
+  user-agent still travels to the raw side, so pages and files tell a host one story.
+- **Added: `stealth:`, on unless it is turned off.** `--disable-blink-features=AutomationControlled`
+  for the browsers this starts, and a script before every document's first line for the rest of
+  what an automated Chrome leaves lying around — `navigator.webdriver`, a missing
+  `window.chrome`, an empty `plugins`, a `permissions.query` that disagrees with
+  `Notification.permission`. These are exactly what an interstitial reads before deciding
+  whether to show anyone the page.
+- **Added: `ChromePage.upload`, `reload`, `forward`, `screenshot(selector:, full:)`,
+  `cookies(restore)` and `ChromeWait.dom`.** `back` without `forward` or `reload` was a grid
+  with a hole in it; `cookies()` could read a session and not put one back, which is the half
+  that makes logging in by hand once worth doing; a screenshot could only be of the window;
+  and the two waits skipped the one a page served whole HTML actually needs.
+- **A subframe finishing loading no longer settles the page's wait.** The lifecycle wait took
+  any frame's event, so a page whose iframes load first came back before it had.
+
+### The examples are gone; `bin/` is the demonstration
+
+- **Removed: `example/`** — all seven programs. They were a second copy of the README, kept
+  in sync by hand and read by no one who had not already read the README. `bin/tk.dart` and
+  `bin/keybox.dart` are the programs that have to keep working, so they are the ones that
+  show what the library is like to use.
+- **`make bench` is `make startup`**, and `make format` no longer walks a directory that is
+  not there.
+
+### `tk` and `keybox` say it once
+
+- **`tk`**: `--verbose` is read in one place instead of as the first line of six handlers, a
+  missing positional is a `UsageException` — so it prints the usage hint and leaves with 64
+  like every other usage error, rather than a bare message and 1 — and `find` and `peek`
+  build their filtered list once instead of three and two times.
+- **`keybox`**: the patterns are compiled once rather than inside the loops that read them,
+  and the asset tables name only the part that differs. An absolute href resolves to itself,
+  so the two off-site scans go through the same helper as the ninety on-site ones.
+
+### The terminal lifecycle is two shapes and no others
+
+- **Added: `Lifecycle`**, replacing four top-level functions with one pair. `onExit`
+  registers a listener for the exit event and `exit` is the event happening, which is the
+  whole surface:
+  - `onExit(callback)` registers, and answers a function that removes *that* listener.
+    **`onExit(null)` forgets every listener** and stops the signal watch, absorbing
+    `clearExitHooks`.
+  - `exit([message, code])` runs the listeners and ends the process, absorbing `die`. With a
+    message it goes to stderr in red and the code defaults to 1; with none, to 0.
+- **Removed: `onExit`, `die`, `runExitHooks`, `clearExitHooks`** as top-level functions. Four
+  names for one event, in three different shapes, two of them named after the list they kept
+  rather than after anything a caller wants. `runExitHooks` is now private — firing the
+  listeners without leaving is what `Cli.run` does on its way out, not something a program
+  asks for, and the test that needed it drives `Cli.run` instead.
+- **It is a namespace and not two top-level functions on purpose.** A top-level `exit` would
+  *silently* shadow `dart:io`'s in every file that imports this package: Dart resolves a name
+  to a non-platform library without calling it ambiguous, so `exit(0)` would quietly stop
+  meaning what it says. Namespaced, `dart:io`'s `exit` is untouched and does not run the
+  listeners — which is what someone who typed it expects.
+
 ## 0.0.4
 
 A scope is called a scope, a client you are holding can do everything, and the tab is a tab

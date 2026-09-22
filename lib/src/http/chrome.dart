@@ -1,16 +1,137 @@
 part of '../../http.dart';
 
-/// How far [ChromeClient] waits before it reads a page.
+/// How far [ChromeClient] waits before it reads a page, in order of patience.
 ///
 /// {@category Networking}
 enum ChromeWait {
+  /// The markup has parsed — `DOMContentLoaded`. The earliest a selector can match, and
+  /// enough for a page whose content is in the HTML it was served.
+  dom,
+
   /// The document and its subresources have loaded — the `load` event.
   load,
 
   /// `load`, and then half a second in which no request started or finished. What a page
   /// that fetches its content after loading needs.
-  idle,
+  idle;
+
+  /// The lifecycle event Chrome calls this.
+  String get _lifecycle => switch (this) {
+    ChromeWait.dom => 'DOMContentLoaded',
+    ChromeWait.load => 'load',
+    ChromeWait.idle => 'networkIdle',
+  };
 }
+
+/// A kind of thing a page loads, for [ChromePage.block].
+///
+/// {@category Networking}
+enum Resource {
+  image(['Image']),
+  font(['Font']),
+  media(['Media']),
+  stylesheet(['Stylesheet']),
+  script(['Script']),
+  xhr(['XHR', 'Fetch']);
+
+  /// What the DevTools protocol calls it; `xhr` is two names there for one idea here.
+  final List<String> _types;
+
+  const Resource(this._types);
+
+  /// Everything a page can be read without: images, fonts and media.
+  ///
+  /// The three that are most of a page's bytes and none of its text, so a crawl that blocks
+  /// them reads exactly the same thing in a fraction of the time. Not stylesheets or scripts,
+  /// which is the line: a page that cannot run its scripts is not the page a browser was
+  /// opened for in the first place.
+  static const heavy = {Resource.image, Resource.font, Resource.media};
+}
+
+/// What the pages in a [ChromeClient] think they are running on.
+///
+/// One argument instead of six, and the two that matter have names: `Device.desktop` is what
+/// a browser is unless it is told otherwise, and `Device.phone` is the other site a great
+/// many hosts serve — usually a simpler one, with the same data in a tenth of the markup.
+///
+/// ```dart
+/// final chrome = await ChromeClient.launch(device: Device.phone);
+/// final german = await ChromeClient.launch(device: Device(locale: 'de-DE', timezone: 'Europe/Berlin'));
+/// ```
+///
+/// [userAgent] is also what a raw request through this client announces, so the pages and the
+/// files a crawl fetches tell the host one story rather than two.
+///
+/// {@category Networking}
+final class Device {
+  final int width;
+  final int height;
+
+  /// `devicePixelRatio` — 3 is a modern phone, 2 a retina laptop.
+  final double scale;
+
+  /// Whether the page is told it is a touch device with a mobile viewport.
+  final bool mobile;
+
+  /// What to call ourselves; Chrome's own unless this says otherwise.
+  final String? userAgent;
+
+  /// `de-DE`, which sets both `accept-language` and `navigator.language`.
+  final String? locale;
+
+  /// `Europe/Berlin` — what `new Date()` says inside the page.
+  final String? timezone;
+
+  const Device({
+    this.width = 1280,
+    this.height = 800,
+    this.scale = 1,
+    this.mobile = false,
+    this.userAgent,
+    this.locale,
+    this.timezone,
+  });
+
+  /// A browser window, and what a client renders in unless it is given another.
+  static const desktop = Device();
+
+  /// A recent iPhone, down to the user-agent — the mobile site, not the desktop one shrunk.
+  static const phone = Device(
+    width: 393,
+    height: 852,
+    scale: 3,
+    mobile: true,
+    userAgent:
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 '
+        '(KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+  );
+}
+
+/// What a page sees when it looks for the marks of an automated browser.
+///
+/// Every one of these is something Chrome leaves different under `--remote-debugging-port`
+/// and nowhere else, which is exactly what an interstitial checks before it decides whether
+/// to show anyone the page. The flag that matters most is not here but on the command line —
+/// `--disable-blink-features=AutomationControlled` — because `navigator.webdriver` is set
+/// before any script of ours could run; this covers the rest, and runs before the page's own
+/// first line in every document the tab loads.
+const _stealthScript = '''
+Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+if (!window.chrome) window.chrome = {runtime: {}, loadTimes: () => {}, csi: () => {}};
+if (navigator.plugins && navigator.plugins.length === 0) {
+  Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+}
+if (navigator.languages && navigator.languages.length === 0) {
+  Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+}
+const query = window.navigator.permissions && window.navigator.permissions.query;
+if (query) {
+  window.navigator.permissions.query = (p) =>
+    p && p.name === 'notifications'
+      ? Promise.resolve({state: Notification.permission})
+      : query.call(window.navigator.permissions, p);
+}
+''';
 
 /// A [Client] that renders every page in Chrome and answers with the DOM as it stands
 /// after the page's own scripts have run.
@@ -35,7 +156,17 @@ enum ChromeWait {
 /// .onRequest((ctx) {
 ///   ctx.request[ChromeClient.waitFor] = '.results .item';
 ///   ctx.request[ChromeClient.script] = 'window.scrollTo(0, document.body.scrollHeight)';
+///   ctx.request[ChromeClient.block] = Resource.heavy;
 /// })
+/// ```
+///
+/// What the browser is, and what it will not load, are said once at the top instead:
+/// [Device] is what the pages think they are running on, `block:` is what no render ever
+/// fetches — the largest single thing a rendered crawl can do for itself — and `stealth:`
+/// hides the marks an automated Chrome leaves for an interstitial to find.
+///
+/// ```dart
+/// await ChromeClient.launch(block: Resource.heavy, device: Device.phone);
 /// ```
 ///
 /// Only a GET without a `range` is rendered. Everything else — a POST, a resumable
@@ -55,8 +186,14 @@ enum ChromeWait {
 /// await page.click('button[type=submit]');
 /// await page.waitFor('.dashboard');
 /// print((await page.html()).$('.balance').text);     // read it whenever you like
+/// final file = await page.downloading(() => page.click('.statement'));
 /// await page.close();
 /// ```
+///
+/// A tab is worked with the words on [ChromePage]: [ChromePage.click], [ChromePage.fill] and
+/// [ChromePage.waitFor] for what is on the screen, [ChromePage.frame] for what is inside an
+/// iframe, and the three armed waits — [ChromePage.navigating], [ChromePage.downloading] and
+/// [ChromePage.fetching] — for what a click sets off.
 ///
 /// {@category Networking}
 final class ChromeClient implements Client {
@@ -76,6 +213,10 @@ final class ChromeClient implements Client {
   /// How long this request may sit on an interstitial, overriding the client's `challenge:`.
   static const challenge = RequestKey<Duration>('chrome.challenge');
 
+  /// What this page refuses to load, overriding the client's `block:`:
+  /// `request[ChromeClient.block] = Resource.heavy`.
+  static const block = RequestKey<Set<Resource>>('chrome.block');
+
   final WebSocket _socket;
   final Client _assets;
   final bool _ownsAssets;
@@ -84,12 +225,18 @@ final class ChromeClient implements Client {
   final Duration _timeout;
   final Duration _challenge;
   final ChromeWait _wait;
-  final String? _userAgent;
+  final Device _device;
+  final bool _stealth;
+  final Set<Resource> _block;
   final Semaphore _permits;
   final Queue<ChromePage> _free = Queue();
   final Set<ChromePage> _pages = {};
   final Map<int, Completer<Map<String, Object?>>> _calls = {};
   final Map<String, StreamController<_Cdp>> _sessions = {};
+
+  /// Events the browser itself sends, which belong to no tab: a download beginning, and its
+  /// progress. A page listens here for its own, matching on the frame that started them.
+  final StreamController<_Cdp> _browser = StreamController<_Cdp>.broadcast();
 
   var _nextId = 0;
   var _closed = false;
@@ -103,7 +250,9 @@ final class ChromeClient implements Client {
     required Duration challenge,
     required ChromeWait wait,
     required int tabs,
-    required String? userAgent,
+    required Device device,
+    required bool stealth,
+    required Set<Resource> block,
     Process? process,
     Directory? profile,
   }) : _assets = assets,
@@ -111,7 +260,9 @@ final class ChromeClient implements Client {
        _timeout = timeout,
        _challenge = challenge,
        _wait = wait,
-       _userAgent = userAgent,
+       _device = device,
+       _stealth = stealth,
+       _block = block,
        _process = process,
        _profile = profile,
        _permits = Semaphore(tabs) {
@@ -145,7 +296,9 @@ final class ChromeClient implements Client {
     Duration timeout = const Duration(seconds: 30),
     Duration challenge = const Duration(seconds: 20),
     ChromeWait wait = ChromeWait.load,
-    String? userAgent,
+    Device device = Device.desktop,
+    bool stealth = true,
+    Set<Resource> block = const {},
     Client? assets,
     List<String> args = const [],
   }) async {
@@ -164,6 +317,7 @@ final class ChromeClient implements Client {
       '--disable-backgrounding-occluded-windows',
       '--disable-renderer-backgrounding',
       '--disable-features=Translate,MediaRouter',
+      if (stealth) '--disable-blink-features=AutomationControlled',
       '--hide-scrollbars',
       '--mute-audio',
       ...args,
@@ -179,7 +333,9 @@ final class ChromeClient implements Client {
         challenge: challenge,
         wait: wait,
         tabs: tabs,
-        userAgent: userAgent,
+        device: device,
+        stealth: stealth,
+        block: block,
         process: process,
         profile: profile,
       );
@@ -203,7 +359,9 @@ final class ChromeClient implements Client {
     Duration timeout = const Duration(seconds: 30),
     Duration challenge = const Duration(seconds: 20),
     ChromeWait wait = ChromeWait.load,
-    String? userAgent,
+    Device device = Device.desktop,
+    bool stealth = true,
+    Set<Resource> block = const {},
     Client? assets,
   }) async {
     final endpoint = await _devtools(host, port);
@@ -218,7 +376,9 @@ final class ChromeClient implements Client {
       challenge: challenge,
       wait: wait,
       tabs: tabs,
-      userAgent: userAgent,
+      device: device,
+      stealth: stealth,
+      block: block,
     );
   }
 
@@ -256,7 +416,9 @@ final class ChromeClient implements Client {
     Duration timeout = const Duration(seconds: 30),
     Duration challenge = const Duration(seconds: 20),
     ChromeWait wait = ChromeWait.load,
-    String? userAgent,
+    Device device = Device.desktop,
+    bool stealth = true,
+    Set<Resource> block = const {},
     Client? assets,
     List<String> args = const [],
   }) async {
@@ -300,7 +462,9 @@ final class ChromeClient implements Client {
       challenge: challenge,
       wait: wait,
       tabs: tabs,
-      userAgent: userAgent,
+      device: device,
+      stealth: stealth,
+      block: block,
     );
   }
 
@@ -335,6 +499,7 @@ final class ChromeClient implements Client {
     ChromePage? page;
     try {
       page = _free.isNotEmpty ? _free.removeFirst() : await _tab();
+      await page.block(block(request) ?? _block);
       await page.headers({
         for (final MapEntry(:key, :value) in request.headers.entries)
           if (!_unsafe.contains(key.toLowerCase())) key: value,
@@ -414,17 +579,50 @@ final class ChromeClient implements Client {
     _pages.add(page);
     await _call('Page.enable', null, tab);
     await _call('Network.enable', null, tab);
+    await _call('Runtime.enable', null, tab);
     await _call('Page.setLifecycleEventsEnabled', {'enabled': true}, tab);
-    if (_userAgent case final agent?) {
-      await _call('Emulation.setUserAgentOverride', {'userAgent': agent}, tab);
-    }
+    await _dress(tab);
     page._listen();
+    if (_block.isNotEmpty) await page.block(_block);
     final tree = await _call('Page.getFrameTree', null, tab);
     page._frame = switch (tree['frameTree']) {
       final Map<String, Object?> root => (root['frame'] as Map<String, Object?>?)?['id'] as String? ?? '',
       _ => '',
     };
     return page;
+  }
+
+  /// Tells a new tab what it is running on, and hides what it is being run by.
+  ///
+  /// The locale and timezone overrides are tried rather than required: a Chromium build
+  /// without them is still a browser, and a page that is told the wrong timezone is a smaller
+  /// problem than a client that will not start.
+  Future<void> _dress(_Tab tab) async {
+    final device = _device;
+    await _call('Emulation.setDeviceMetricsOverride', {
+      'width': device.width,
+      'height': device.height,
+      'deviceScaleFactor': device.scale,
+      'mobile': device.mobile,
+    }, tab);
+    if (device.mobile) {
+      await _call('Emulation.setTouchEmulationEnabled', {'enabled': true, 'maxTouchPoints': 5}, tab);
+    }
+    if (device.userAgent != null || device.locale != null) {
+      await _call('Emulation.setUserAgentOverride', {
+        'userAgent': device.userAgent ?? await _browserAgent() ?? '',
+        'acceptLanguage': ?device.locale,
+      }, tab);
+    }
+    for (final (method, params) in [
+      if (device.locale case final locale?) ('Emulation.setLocaleOverride', {'locale': locale}),
+      if (device.timezone case final zone?) ('Emulation.setTimezoneOverride', {'timezoneId': zone}),
+    ]) {
+      try {
+        await _call(method, params, tab);
+      } catch (_) {}
+    }
+    if (_stealth) await _call('Page.addScriptToEvaluateOnNewDocument', {'source': _stealthScript}, tab);
   }
 
   /// Makes [request] look like it came from this browser, for the plain client that will
@@ -453,7 +651,7 @@ final class ChromeClient implements Client {
   /// This browser's user-agent — the override it was built with, else what Chrome reports,
   /// asked once and kept.
   Future<String?> _browserAgent() async {
-    if (_userAgent case final override?) return override;
+    if (_device.userAgent case final override?) return override;
     if (_agent != null) return _agent;
     try {
       final version = await _call('Browser.getVersion');
@@ -504,9 +702,14 @@ final class ChromeClient implements Client {
       }
       return completer.complete((message['result'] as Map<String, Object?>?) ?? const {});
     }
-    final session = _sessions[message['sessionId']];
-    if (session == null || session.isClosed) return;
-    session.add(_Cdp(message['method'] as String? ?? '', (message['params'] as Map<String, Object?>?) ?? const {}));
+    final event = _Cdp(message['method'] as String? ?? '', (message['params'] as Map<String, Object?>?) ?? const {});
+    // An event with no session is the browser's own rather than any tab's.
+    if (message['sessionId'] case final String id) {
+      final session = _sessions[id];
+      if (session != null && !session.isClosed) session.add(event);
+    } else if (!_browser.isClosed) {
+      _browser.add(event);
+    }
   }
 
   /// Fails every call still waiting; the socket will answer none of them.
@@ -519,6 +722,7 @@ final class ChromeClient implements Client {
       unawaited(session.close());
     }
     _sessions.clear();
+    if (!_browser.isClosed) unawaited(_browser.close());
   }
 }
 
@@ -534,7 +738,16 @@ final class ChromePage {
   final ChromeClient _client;
   final _Tab _tab;
 
+  /// The page this one is a frame of, or `null` when it is the tab itself.
+  final ChromePage? _parent;
+
+  /// Which execution context each frame of this tab evaluates in; filled by the tab's own
+  /// page and read by every frame view of it.
+  final Map<String, int> _contexts = {};
+
   StreamSubscription<_Cdp>? _events;
+  FutureOr<void> Function(Dialog dialog)? _onDialog;
+  Set<Resource> _blocked = const {};
   Map<String, Object?>? _document;
   Completer<void>? _waiter;
   String _want = '';
@@ -542,7 +755,14 @@ final class ChromePage {
   Uri _url = Uri.parse('about:blank');
   bool _alive = true;
 
-  ChromePage._(this._client, this._tab);
+  ChromePage._(this._client, this._tab, {ChromePage? parent}) : _parent = parent;
+
+  /// The page for the tab itself, which is this one unless this is a frame view.
+  ChromePage get _owner => _parent ?? this;
+
+  /// The context a frame's scripts run in; `null` for the tab, whose default context is the
+  /// one Chrome evaluates in anyway.
+  int? get _context => _parent == null ? null : _owner._contexts[_frame];
 
   /// The URL this tab is on, after every redirect and navigation it has made.
   Uri get url => _url;
@@ -566,7 +786,7 @@ final class ChromePage {
   /// [ChromeClient.launch].
   Future<Response> goto(Uri url, {ChromeWait? until, Duration? challenge, Request? request}) async {
     final wait = until ?? _client._wait;
-    _arm(wait == ChromeWait.idle ? 'networkIdle' : 'load');
+    _arm(wait._lifecycle);
     final nav = await _call('Page.navigate', {'url': '$url'});
     if (nav['errorText'] case final String error when error.isNotEmpty) {
       _disarm();
@@ -772,6 +992,7 @@ new Promise((resolve) => {
       'expression': expression,
       'returnByValue': true,
       'awaitPromise': awaitPromise,
+      'contextId': ?_context,
     }, timeout);
     if (result['exceptionDetails'] case final Map<String, Object?> thrown) {
       throw ClientException('Page script failed: ${thrown['text'] ?? thrown}');
@@ -779,10 +1000,31 @@ new Promise((resolve) => {
     return (result['result'] as Map<String, Object?>?)?['value'];
   }
 
-  /// A PNG of the visible page — what the person in front of the window would see, for a
-  /// log, a report, or a look at the challenge that will not clear.
-  Future<Uint8List> screenshot() async {
-    final shot = await _call('Page.captureScreenshot', {'format': 'png'});
+  /// A PNG: the window as the person in front of it would see it, one element when
+  /// [selector] names one, or the whole scrollable document with [full].
+  ///
+  /// For a log, a report, or a look at the challenge that will not clear. Empty when
+  /// [selector] matched nothing or matched something with no box on the page.
+  Future<Uint8List> screenshot({String? selector, bool full = false}) async {
+    final params = <String, Object?>{'format': 'png'};
+    if (selector != null) {
+      final quad = await _box(selector);
+      if (quad == null) return Uint8List(0);
+      params['clip'] = {
+        'x': quad[0],
+        'y': quad[1],
+        'width': quad[2] - quad[0],
+        'height': quad[5] - quad[1],
+        'scale': 1,
+      };
+    } else if (full) {
+      final metrics = await _call('Page.getLayoutMetrics');
+      final size = (metrics['cssContentSize'] ?? metrics['contentSize']) as Map<String, Object?>?;
+      params
+        ..['captureBeyondViewport'] = true
+        ..['clip'] = {'x': 0, 'y': 0, 'width': size?['width'] ?? 0, 'height': size?['height'] ?? 0, 'scale': 1};
+    }
+    final shot = await _call('Page.captureScreenshot', params);
     return base64.decode(shot['data'] as String? ?? '');
   }
 
@@ -854,6 +1096,149 @@ new Promise((resolve) => {
     }
   }
 
+  /// Refuses to load [kinds] in this tab from now on; `block({})` allows everything again.
+  ///
+  /// The largest single thing a rendered crawl can do for itself. A page whose images, fonts
+  /// and media never arrive looks nothing like itself and says exactly the same words, in a
+  /// fraction of the bytes and a fraction of the time — `page.block(Resource.heavy)` is that
+  /// trade, and the client takes it for every render when it is built with `block:`.
+  Future<void> block(Set<Resource> kinds) async {
+    if (kinds.length == _blocked.length && kinds.every(_blocked.contains)) return;
+    _blocked = kinds;
+    if (kinds.isEmpty) return _call('Fetch.disable').then((_) {});
+    await _call('Fetch.enable', {
+      'patterns': [
+        for (final kind in kinds)
+          for (final type in kind._types) {'urlPattern': '*', 'resourceType': type, 'requestStage': 'Request'},
+      ],
+    });
+  }
+
+  /// Runs [action] and waits for the download it starts, answering where the file landed.
+  ///
+  /// The wait is armed before [action] for the reason [navigating] is: a click that starts a
+  /// download returns at once, and a small file can be on disk before the next line runs.
+  /// [to] is the directory it lands in, the working directory unless another is named, and
+  /// the file keeps the name the site gave it. A download that never starts, or one the
+  /// browser cancels, answers `null` rather than throwing.
+  ///
+  /// ```dart
+  /// final file = await page.downloading(() => page.click('.download'), to: 'books'.path);
+  /// ```
+  Future<Path?> downloading(FutureOr<void> Function() action, {Path? to, Duration? timeout}) async {
+    final into = (to ?? Path.current).absolute;
+    await into.mkdir();
+    // `allowAndName` writes the file under its download id, which is the only name known
+    // before the download begins and so the only one this can wait for without guessing.
+    await _client._call('Browser.setDownloadBehavior', {
+      'behavior': 'allowAndName',
+      'downloadPath': into.path,
+      'eventsEnabled': true,
+    });
+    String? id;
+    String? suggested;
+    final finished = Completer<bool>();
+    void done(bool ok) {
+      if (!finished.isCompleted) finished.complete(ok);
+    }
+
+    final watch = _client._browser.stream.listen((event) {
+      switch (event.method) {
+        case 'Browser.downloadWillBegin':
+          if (id != null || (_frame.isNotEmpty && event.params['frameId'] != _frame)) return;
+          id = event.params['guid'] as String?;
+          suggested = event.params['suggestedFilename'] as String?;
+        case 'Browser.downloadProgress':
+          if (event.params['guid'] != id) return;
+          if (event.params['state'] case 'completed') done(true);
+          if (event.params['state'] case 'canceled') done(false);
+      }
+    });
+    try {
+      await action();
+      if (!await finished.future.timeout(timeout ?? _client._timeout, onTimeout: () => false)) return null;
+      final written = into / id!;
+      final wanted = into / (suggested ?? id!);
+      if (written.path != wanted.path) await written.move(wanted.path);
+      return wanted;
+    } finally {
+      await watch.cancel();
+    }
+  }
+
+  /// Runs [action] and answers the first response whose URL contains [match].
+  ///
+  /// The JSON behind the page rather than the page: a click that fires an XHR, and the XHR's
+  /// own body instead of the DOM it eventually becomes. Armed before [action], like every
+  /// wait here, and `null` when nothing matched before [timeout] or the body was gone by the
+  /// time it was asked for.
+  ///
+  /// ```dart
+  /// final page2 = await page.fetching('/api/items', () => page.click('.next'));
+  /// for (final item in page2!.json['items']) { ... }
+  /// ```
+  Future<Response?> fetching(String match, FutureOr<void> Function() action, {Duration? timeout}) async {
+    String? id;
+    Map<String, Object?>? answered;
+    final finished = Completer<void>();
+    final watch = _client._sessions[_tab.session]?.stream.listen((event) {
+      switch (event.method) {
+        case 'Network.responseReceived':
+          if (id != null) return;
+          final res = event.params['response'] as Map<String, Object?>?;
+          if (res == null || !'${res['url']}'.contains(match)) return;
+          id = event.params['requestId'] as String?;
+          answered = res;
+        case 'Network.loadingFinished':
+          if (event.params['requestId'] == id && !finished.isCompleted) finished.complete();
+      }
+    });
+    try {
+      await action();
+      await finished.future.timeout(timeout ?? _client._timeout, onTimeout: () {});
+      if (answered case final res?) {
+        final body = await _call('Network.getResponseBody', {'requestId': id});
+        final raw = body['body'] as String? ?? '';
+        final headers = Headers();
+        if (res['headers'] case final Map<String, Object?> sent) {
+          sent.forEach((name, value) => headers[name] = '$value');
+        }
+        return Response.bytes(
+          body['base64Encoded'] == true ? base64.decode(raw) : utf8.encode(raw),
+          (res['status'] as num?)?.toInt() ?? 200,
+          headers: headers,
+          url: Uri.tryParse('${res['url']}'),
+        );
+      }
+      return null;
+    } catch (_) {
+      // The body was evicted from the network cache, or the tab moved on while it was asked
+      // for. Either way there is nothing to answer with, and nothing has gone wrong.
+      return null;
+    } finally {
+      await watch?.cancel();
+    }
+  }
+
+  /// Puts [files] into the first file input [selector] matches, as a person choosing them
+  /// would. Answers `false` when nothing matched.
+  Future<bool> upload(String selector, List<Path> files) async {
+    final node = await _node(selector);
+    if (node == null) return false;
+    await _call('DOM.setFileInputFiles', {
+      'nodeId': node,
+      'files': [for (final file in files) file.absolute.path],
+    });
+    return true;
+  }
+
+  /// Loads this tab's URL again, and waits. Answers whether it settled before [timeout].
+  Future<bool> reload({ChromeWait? until, Duration? timeout}) async {
+    _arm((until ?? _client._wait)._lifecycle);
+    await _call('Page.reload');
+    return _settle(timeout);
+  }
+
   /// Runs [action] and waits for the navigation it causes — a click that leaves the page, a
   /// form submitted, a `location` assigned. Answers whether the page settled before [timeout].
   ///
@@ -869,7 +1254,7 @@ new Promise((resolve) => {
   /// ```
   Future<bool> navigating(FutureOr<void> Function() action, {ChromeWait? until, Duration? timeout}) async {
     final wait = until ?? _client._wait;
-    _arm(wait == ChromeWait.idle ? 'networkIdle' : 'load');
+    _arm(wait._lifecycle);
     try {
       await action();
     } catch (_) {
@@ -881,18 +1266,22 @@ new Promise((resolve) => {
 
   /// Goes back one entry in this tab's history, and waits. Answers `false` when there is
   /// nothing to go back to.
-  Future<bool> back({ChromeWait? until, Duration? timeout}) async {
+  Future<bool> back({ChromeWait? until, Duration? timeout}) => _history(-1, until, timeout);
+
+  /// Goes forward one entry, and waits. Answers `false` when there is nothing ahead.
+  Future<bool> forward({ChromeWait? until, Duration? timeout}) => _history(1, until, timeout);
+
+  Future<bool> _history(int step, ChromeWait? until, Duration? timeout) async {
     final history = await _call('Page.getNavigationHistory');
-    final index = history['currentIndex'] as int? ?? 0;
+    final index = (history['currentIndex'] as int? ?? 0) + step;
     final entries = (history['entries'] as List? ?? const []).cast<Map<String, Object?>>();
-    if (index <= 0 || entries.isEmpty) return false;
+    if (index < 0 || index >= entries.length) return false;
     final was = _url;
-    final wait = until ?? _client._wait;
-    _arm(wait == ChromeWait.idle ? 'networkIdle' : 'load');
-    await _call('Page.navigateToHistoryEntry', {'entryId': entries[index - 1]['id']});
+    _arm((until ?? _client._wait)._lifecycle);
+    await _call('Page.navigateToHistoryEntry', {'entryId': entries[index]['id']});
     // A page the back/forward cache restores is not loaded again and fires no second `load`,
     // so the lifecycle wait on its own would sit out the whole timeout on the commonest kind
-    // of back. The URL moving is the other proof the tab went back, and either one will do.
+    // of back. The URL moving is the other proof the tab went, and either one will do.
     final moved = await Future.any([_settle(timeout), _left(was, timeout)]);
     _disarm();
     return moved;
@@ -908,8 +1297,31 @@ new Promise((resolve) => {
     return _url != was;
   }
 
-  /// This tab's cookies — after a login, to hand to something that is not a browser.
-  Future<List<Cookie>> cookies() async {
+  /// This browser's cookies, and the way to give it some.
+  ///
+  /// `page.cookies()` reads them — after a login, to hand to something that is not a browser.
+  /// `page.cookies(saved)` puts [saved] in first, which is how a session a person logged into
+  /// by hand once becomes the session every run after it has. A cookie that names no domain
+  /// is attached to the page the tab is on. Cookies belong to the browser rather than to the
+  /// tab, so what one tab is given, every tab has.
+  Future<List<Cookie>> cookies([List<Cookie>? restore]) async {
+    if (restore != null && restore.isNotEmpty) {
+      await _call('Network.setCookies', {
+        'cookies': [
+          for (final c in restore)
+            <String, Object?>{
+              'name': c.name,
+              'value': c.value,
+              'domain': ?c.domain,
+              'path': ?c.path,
+              'secure': c.secure,
+              'httpOnly': c.httpOnly,
+              if (c.expires case final expiry?) 'expires': expiry.millisecondsSinceEpoch / 1000,
+              if (c.domain == null) 'url': '$_url',
+            },
+        ],
+      });
+    }
     final all = await _call('Network.getCookies');
     return [
       for (final c in (all['cookies'] as List? ?? const []).cast<Map<String, Object?>>())
@@ -938,10 +1350,95 @@ new Promise((resolve) => {
   /// Sets headers sent with every request this tab makes from now on.
   Future<void> headers(Map<String, String> headers) => _call('Network.setExtraHTTPHeaders', {'headers': headers});
 
-  /// Closes the tab. Safe twice.
+  /// What to do when the page opens a dialog; answers the function that undoes the
+  /// registration, and `onDialog(null)` forgets it.
+  ///
+  /// The handler answers with [Dialog.accept] or [Dialog.dismiss]. One that answers with
+  /// neither — or that throws — leaves the default, so a handler that only wants to *read*
+  /// the message need not remember to close it.
+  ///
+  /// ```dart
+  /// page.onDialog((d) => d.accept(d.type == 'prompt' ? 'yes' : null));
+  /// ```
+  void Function() onDialog(FutureOr<void> Function(Dialog dialog)? handler) {
+    _onDialog = handler;
+    return () {
+      if (identical(_onDialog, handler)) _onDialog = null;
+    };
+  }
+
+  /// Answers a dialog, whatever the handler did with it.
+  ///
+  /// It must be answered. Chrome holds the renderer on an open dialog, so a tab that ignores
+  /// one is a tab that will never load, evaluate or close again — and this client's tabs go
+  /// back into a pool, so one page's `alert()` would take the crawl's tab with it. Without a
+  /// handler the answer is a dismissal, which is what a page with nobody in front of it gets;
+  /// `beforeunload` is the exception, because dismissing that one cancels the navigation that
+  /// raised it.
+  Future<void> _dialog(Map<String, Object?> params) async {
+    final dialog = Dialog._(
+      this,
+      params['type'] as String? ?? 'alert',
+      params['message'] as String? ?? '',
+      params['defaultPrompt'] as String? ?? '',
+    );
+    try {
+      await _onDialog?.call(dialog);
+    } catch (_) {}
+    await (dialog.type == 'beforeunload' ? dialog.accept() : dialog.dismiss());
+  }
+
+  /// The iframe whose URL or `name` contains [match], as a page of its own.
+  ///
+  /// Everything on [ChromePage] then works inside it — `text`, `click`, `fill`, `waitFor`,
+  /// `eval`, `goto` — because what comes back *is* a [ChromePage]. That is the whole reason
+  /// this is one method and not a second vocabulary: a checkout form, a comment widget and a
+  /// captcha box each live in a frame, none of them can be reached with a selector from the
+  /// document around them, and none of them needs a word of its own to be worked with.
+  ///
+  /// ```dart
+  /// final form = await page.frame('checkout');
+  /// await form!.fill('#card', '4242…');
+  /// await form.click('button[type=submit]');
+  /// ```
+  ///
+  /// Answers `null` when nothing matches. What comes back is a view of part of this tab, so
+  /// closing it closes nothing; close the page it came from.
+  Future<ChromePage?> frame(String match) async {
+    final tree = await _call('Page.getFrameTree');
+    final found = _descend((tree['frameTree'] as Map<String, Object?>?) ?? const {}, match, root: true);
+    if (found == null) return null;
+    final page = ChromePage._(_client, _tab, parent: _owner)
+      .._frame = found.$1
+      .._url = Uri.tryParse(found.$2) ?? _url;
+    page._listen();
+    return page;
+  }
+
+  /// The first frame under [node] whose URL or name contains [match], as its id and its URL.
+  /// The tree is rooted at the page itself, which is never a match for one of its own frames.
+  static (String, String)? _descend(Map<String, Object?> node, String match, {bool root = false}) {
+    if (!root) {
+      if (node['frame'] case final Map<String, Object?> frame) {
+        final url = '${frame['url'] ?? ''}';
+        final name = '${frame['name'] ?? ''}';
+        if (url.contains(match) || (name.isNotEmpty && name.contains(match))) {
+          return (frame['id'] as String? ?? '', url);
+        }
+      }
+    }
+    for (final child in (node['childFrames'] as List? ?? const []).cast<Map<String, Object?>>()) {
+      if (_descend(child, match) case final hit?) return hit;
+    }
+    return null;
+  }
+
+  /// Closes the tab. Safe twice, and on a [frame] view it closes nothing, because a view of
+  /// part of a tab does not own the tab.
   Future<void> close() async {
     if (!_alive) return;
     _alive = false;
+    if (_parent != null) return _events?.cancel().then((_) {});
     _client._pages.remove(this);
     _client._free.remove(this);
     await _events?.cancel();
@@ -958,10 +1455,32 @@ new Promise((resolve) => {
     return _client._call(method, params, _tab, timeout);
   }
 
+  /// The content box of the first element [selector] matches, or `null` when it has none.
+  Future<List<num>?> _box(String selector) async {
+    final node = await _node(selector);
+    if (node == null) return null;
+    try {
+      await _call('DOM.scrollIntoViewIfNeeded', {'nodeId': node});
+      final box = await _call('DOM.getBoxModel', {'nodeId': node});
+      final quad = ((box['model'] as Map<String, Object?>?)?['content'] as List?)?.cast<num>();
+      return quad == null || quad.length < 6 ? null : quad;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<int?> _node(String selector) async {
     try {
       final doc = await _call('DOM.getDocument', {'depth': 0});
-      final root = (doc['root'] as Map<String, Object?>?)?['nodeId'];
+      Object? root = (doc['root'] as Map<String, Object?>?)?['nodeId'];
+      if (_parent != null) {
+        // A frame's nodes are not in the document around it; the way in is the `<iframe>`
+        // element that owns the frame, and the document hanging off it.
+        final owner = await _call('DOM.getFrameOwner', {'frameId': _frame});
+        final described = await _call('DOM.describeNode', {'backendNodeId': owner['backendNodeId'], 'depth': 1});
+        root = ((described['node'] as Map<String, Object?>?)?['contentDocument'] as Map<String, Object?>?)?['nodeId'];
+        if (root == null) return null;
+      }
       final found = await _call('DOM.querySelector', {'nodeId': root, 'selector': selector});
       final node = found['nodeId'] as int? ?? 0;
       return node == 0 ? null : node;
@@ -973,6 +1492,14 @@ new Promise((resolve) => {
   void _listen() {
     _events = _client._sessions[_tab.session]?.stream.listen((event) {
       switch (event.method) {
+        case 'Runtime.executionContextCreated':
+          final context = event.params['context'] as Map<String, Object?>?;
+          final about = context?['auxData'] as Map<String, Object?>?;
+          if (about?['frameId'] case final String frame) {
+            _owner._contexts[frame] = (context!['id'] as num).toInt();
+          }
+        case 'Runtime.executionContextsCleared':
+          _owner._contexts.clear();
         case 'Network.responseReceived':
           final params = event.params;
           if (params['type'] != 'Document') return;
@@ -983,8 +1510,22 @@ new Promise((resolve) => {
           final frame = event.params['frame'] as Map<String, Object?>?;
           if (frame == null || (_frame.isNotEmpty && frame['id'] != _frame)) return;
           if (frame['url'] case final String moved) _url = Uri.tryParse(moved) ?? _url;
+        case 'Fetch.requestPaused' when _parent == null:
+          // Only what `block` asked to be paused is ever paused, so everything that arrives
+          // here is something this page refuses to load.
+          unawaited(
+            _call('Fetch.failRequest', {
+              'requestId': event.params['requestId'],
+              'errorReason': 'BlockedByClient',
+            }).catchError((Object _) => const <String, Object?>{}),
+          );
+        case 'Page.javascriptDialogOpening' when _parent == null:
+          unawaited(_dialog(event.params));
         case 'Page.lifecycleEvent':
           if (event.params['name'] != _want) return;
+          // A subframe finishing loading is not this page finishing loading, and a page whose
+          // frames load first would otherwise settle before it had.
+          if (_frame.isNotEmpty && event.params['frameId'] != _frame) return;
           final waiter = _waiter;
           if (waiter != null && !waiter.isCompleted) waiter.complete();
       }
@@ -1030,6 +1571,45 @@ new Promise((resolve) => {
             body.contains('cf-turnstile') ||
             body.contains('Just a moment') ||
             body.contains('Checking your browser'));
+  }
+}
+
+/// A dialog the page opened: an `alert`, a `confirm`, a `prompt`, or the `beforeunload` a
+/// page raises as it is being left.
+///
+/// See [ChromePage.onDialog]. Answering twice is answering once; the tab closing under it is
+/// not an error.
+///
+/// {@category Networking}
+final class Dialog {
+  /// `alert`, `confirm`, `prompt` or `beforeunload`.
+  final String type;
+
+  /// What the page put in it.
+  final String message;
+
+  /// What a `prompt` was pre-filled with, empty for everything else.
+  final String defaultValue;
+
+  final ChromePage _page;
+  var _answered = false;
+
+  Dialog._(this._page, this.type, this.message, this.defaultValue);
+
+  /// OK, with [text] as the answer to a `prompt`.
+  Future<void> accept([String? text]) => _answer(true, text);
+
+  /// Cancel.
+  Future<void> dismiss() => _answer(false, null);
+
+  Future<void> _answer(bool accept, String? text) async {
+    if (_answered) return;
+    _answered = true;
+    try {
+      await _page._call('Page.handleJavaScriptDialog', {'accept': accept, 'promptText': ?text});
+    } catch (_) {
+      // The tab went away under it, and a dialog on a closed tab holds nothing up.
+    }
   }
 }
 

@@ -462,14 +462,14 @@ class Cli extends CliCommand {
   @override
   Future<void> run(List<String> args) async {
     final cancel = CancelToken();
-    onExit(cancel.cancel);
+    Lifecycle.onExit(cancel.cancel);
     try {
       await Cancel.scope(() => _run(args, {}, cancel), token: cancel);
     } on UsageException catch (e) {
-      await die('${e.message}\n  Run "$name --help" for usage.', exitCode: 64);
+      await Lifecycle.exit('${e.message}\n  Run "$name --help" for usage.', 64);
     } finally {
-      await runExitHooks();
-      clearExitHooks();
+      await _runExitHooks();
+      Lifecycle.onExit(null);
     }
   }
 }

@@ -15,8 +15,9 @@ opposite. Coherence, documentation and feature count rank below both.
   the vocabulary lives on the type they return.
 - **One word per idea, and the same word everywhere.** A default is `or` — `Opt.…or(v)`,
   `Console.ask(or:)`, `confirm(or:)`, `select(or:)`. A body is `text`/`bytes`/`form`/`json`, on
-  `Request`, on `post`/`put`/`patch`/`delete` and on `follow`. One file or a thousand is
-  `download`. An audit that finds a second word for an idea deletes it rather than documenting
+  `Request`, on `post`/`put`/`patch`/`delete` and on `follow` — and `files`, the fifth, which
+  is the one that pairs: `form` with `files` is not two bodies but the fields and the files of
+  one `multipart/form-data`. One file or a thousand is `download`. An audit that finds a second word for an idea deletes it rather than documenting
   both.
 - **A name is written once.** Anything a caller declares and then looks back up is a name
   spelled twice and a typo the compiler cannot see. A CLI option is a value — `Opt.number('top').or(10)`
@@ -72,12 +73,31 @@ opposite. Coherence, documentation and feature count rank below both.
   and the refresh was then skipped, since the guard is *does this request already name a
   cookie*. The engine already copied defensively at every site; the discipline is now in the
   type's contract instead of in each caller's memory.
+- **An event is a pair: `on<event>` registers, `<event>` fires.** Two shapes and no others,
+  and the pair reads the same way round from either end. The lifecycle had four names for one
+  event in three shapes — `onExit`, `die`, `runExitHooks`, `clearExitHooks` — two of them
+  named after the list they kept rather than after anything a caller wants, and none of them
+  telling you from its name that the other three existed. `Lifecycle.onExit` and
+  `Lifecycle.exit` are the whole surface: `onExit(null)` is how a registration is undone, so
+  removal needs no verb of its own, and *fire the listeners without leaving* turned out to be
+  something only `Cli.run` does, so it is private. A pair like this is namespaced when the
+  bare name would collide: a top-level `exit` does not merely clash with `dart:io`'s, it
+  **silently wins**, because Dart resolves a name to a non-platform library without calling it
+  ambiguous — a call site that reads `exit(0)` would stop meaning what it says.
 - **A wait is armed before the thing it waits for.** `ChromePage.navigating` takes the action
   rather than being a bare `waitForNavigation()` called after a click, because a click returns
   immediately and a fast page finishes loading before the next line runs — a wait armed
-  afterwards has already missed its event and sits until its timeout. Where a wait cannot be
+  afterwards has already missed its event and sits until its timeout. `downloading` and
+  `fetching` are the same shape for the same reason, and the three read alike on purpose: a
+  present participle takes the action that causes the thing it names. Where a wait cannot be
   armed first, it needs a second signal: `back()` waits on the lifecycle event *or* the URL
   moving, because a page the back/forward cache restores fires no second `load` at all.
+- **A policy with three callers is written once.** What a redirect hop carries — 303 and a
+  non-GET 301 or 302 becoming a bodiless GET, 307 and 308 keeping both, credentials stopping at
+  another host — is `Request._hop`, and `IoClient`, the cookie jar's walk and the crawl engine
+  all call it. The engine had it spelled out inline and the other two followed no chain at all;
+  the audit that found the jar losing a login's cookie found the same rule about to be written
+  a third time.
 - **A seam absorbs the difference; it does not export it.** `Client.close()` was
   `FutureOr<void>`, which saved a synchronous implementation one `Future.value()` and cost
   every caller an `if (client.close() case final Future<void> pending)` to find out which it
@@ -160,9 +180,14 @@ opposite. Coherence, documentation and feature count rank below both.
   colour — and `cli` asks `Io`, never a second namespace of its own.
 - **The native library does what Dart cannot do fast.** `native/` is one Rust `cdylib`,
   `dart_toolkit_native`, prebuilt per platform and loaded through `dart:ffi` by `native.dart`'s
-  `Native`; only `fs` and `hash` import it, so `dart:ffi` costs a program that uses neither
-  nothing. `http` imports `hash` for `download(checksum:)`, and that is free: it already loads
-  `fs`, which already loads `native`. Measured alternating, three rounds — +406/+373/+389 ms
+  `Native`; only `fs`, `hash` and `http` import it, so `dart:ffi` costs a program that uses
+  none of them nothing. `http` imports `hash` for `download(checksum:)` and `native` for brotli
+  and zstd, and both are free at import: it already loads `fs`, which already loads `native`.
+  What is not free is *opening* the library, which is lazy and costs 12.5 ms the first time —
+  8 ms of it `Isolate.resolvePackageUriSync`, measured back to back three times — so `http`
+  pays it on its first request, against 15–20% off every response body from then on. The FFI
+  itself stays in `NativeBridge`: `http` binds none of its own, because a decoder handle is not
+  a thing a module about requests should be holding. Measured alternating, three rounds — +406/+373/+389 ms
   over bare without it, +386/+415/+369 ms with. A module that does *not* reach `fs` still pays
   nothing, which is what the rule is for. It holds the digests, MACs and archive formats and nothing else; there is no Dart
   fallback for any of them, because two implementations of one
