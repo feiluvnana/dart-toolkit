@@ -186,14 +186,14 @@ if (query) {
 /// await page.click('button[type=submit]');
 /// await page.waitFor('.dashboard');
 /// print((await page.html()).$('.balance').text);     // read it whenever you like
-/// final file = await page.downloading(() => page.click('.statement'));
+/// final file = await page.waitForDownload(() => page.click('.statement'));
 /// await page.close();
 /// ```
 ///
 /// A tab is worked with the words on [ChromePage]: [ChromePage.click], [ChromePage.fill] and
 /// [ChromePage.waitFor] for what is on the screen, [ChromePage.frame] for what is inside an
-/// iframe, and the three armed waits — [ChromePage.navigating], [ChromePage.downloading] and
-/// [ChromePage.fetching] — for what a click sets off.
+/// iframe, and the three armed waits — [ChromePage.waitForNavigation],
+/// [ChromePage.waitForDownload] and [ChromePage.waitForResponse] — for what a click sets off.
 ///
 /// {@category Networking}
 final class ChromeClient implements Client {
@@ -1195,16 +1195,23 @@ new Promise((resolve) => {
 
   /// Runs [action] and waits for the download it starts, answering where the file landed.
   ///
-  /// The wait is armed before [action] for the reason [navigating] is: a click that starts a
+  /// The wait is armed before [action] for the reason [waitForNavigation] is: a click that starts a
   /// download returns at once, and a small file can be on disk before the next line runs.
   /// [to] is the directory it lands in, the working directory unless another is named, and
-  /// the file keeps the name the site gave it. A download that never starts, or one the
-  /// browser cancels, answers `null` rather than throwing.
+  /// the file keeps the name the site gave it. A download that never starts, one that stalls,
+  /// or one the browser cancels answers `null` rather than throwing.
+  ///
+  /// **[timeout] is how long the download may go quiet for, not how long it may take.** A
+  /// download is a stream of events rather than one of them, so a deadline on the whole
+  /// transfer gives up on big files and slow links for no reason — a book coming down a free
+  /// proxy makes steady progress the entire way and would fail a thirty-second total every
+  /// time. Silence is the thing worth giving up on, and a transfer that has died goes quiet at
+  /// once, so waiting on silence is both more patient and quicker to notice a real failure.
   ///
   /// ```dart
-  /// final file = await page.downloading(() => page.click('.download'), to: 'books'.path);
+  /// final file = await page.waitForDownload(() => page.click('.download'), to: 'books'.path);
   /// ```
-  Future<Path?> downloading(FutureOr<void> Function() action, {Path? to, Duration? timeout}) async {
+  Future<Path?> waitForDownload(FutureOr<void> Function() action, {Path? to, Duration? timeout}) async {
     final into = (to ?? Path.current).absolute;
     await into.mkdir();
     // `allowAndName` writes the file under its download id, which is the only name known
@@ -1216,6 +1223,7 @@ new Promise((resolve) => {
     });
     String? id;
     String? suggested;
+    var stirred = DateTime.now();
     final finished = Completer<bool>();
     void done(bool ok) {
       if (!finished.isCompleted) finished.complete(ok);
@@ -1227,15 +1235,18 @@ new Promise((resolve) => {
           if (id != null || (_frame.isNotEmpty && event.params['frameId'] != _frame)) return;
           id = event.params['guid'] as String?;
           suggested = event.params['suggestedFilename'] as String?;
+          stirred = DateTime.now();
         case 'Browser.downloadProgress':
           if (event.params['guid'] != id) return;
+          // Every one of these is proof the transfer is alive, whatever it says.
+          stirred = DateTime.now();
           if (event.params['state'] case 'completed') done(true);
           if (event.params['state'] case 'canceled') done(false);
       }
     });
     try {
       await action();
-      if (!await finished.future.timeout(timeout ?? _client._timeout, onTimeout: () => false)) return null;
+      if (!await _untilQuiet(finished, () => stirred, timeout ?? _client._timeout)) return null;
       final written = into / id!;
       final wanted = into / (suggested ?? id!);
       if (written.path != wanted.path) await written.move(wanted.path);
@@ -1253,10 +1264,10 @@ new Promise((resolve) => {
   /// time it was asked for.
   ///
   /// ```dart
-  /// final page2 = await page.fetching('/api/items', () => page.click('.next'));
+  /// final page2 = await page.waitForResponse('/api/items', () => page.click('.next'));
   /// for (final item in page2!.json['items']) { ... }
   /// ```
-  Future<Response?> fetching(String match, FutureOr<void> Function() action, {Duration? timeout}) async {
+  Future<Response?> waitForResponse(String match, FutureOr<void> Function() action, {Duration? timeout}) async {
     String? id;
     Map<String, Object?>? answered;
     final finished = Completer<void>();
@@ -1328,10 +1339,10 @@ new Promise((resolve) => {
   /// sits until its timeout. Like every wait here, expiring is an answer, not an exception.
   ///
   /// ```dart
-  /// await page.navigating(() => page.click('a.next'));
+  /// await page.waitForNavigation(() => page.click('a.next'));
   /// print(page.url);
   /// ```
-  Future<bool> navigating(FutureOr<void> Function() action, {ChromeWait? until, Duration? timeout}) async {
+  Future<bool> waitForNavigation(FutureOr<void> Function() action, {ChromeWait? until, Duration? timeout}) async {
     final wait = until ?? _client._wait;
     _arm(wait._lifecycle);
     try {
@@ -1364,6 +1375,19 @@ new Promise((resolve) => {
     final moved = await Future.any([_settle(timeout), _left(was, timeout)]);
     _disarm();
     return moved;
+  }
+
+  /// Waits for [finished], giving up only once [last] has stood still for [idle].
+  ///
+  /// The wait a download needs: it ends when the download does, or when nothing has happened
+  /// for long enough that nothing is going to. A transfer that is merely slow keeps moving
+  /// [last] and is waited out however long it takes.
+  static Future<bool> _untilQuiet(Completer<bool> finished, DateTime Function() last, Duration idle) async {
+    while (!finished.isCompleted) {
+      if (DateTime.now().difference(last()) >= idle) return false;
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+    return finished.future;
   }
 
   /// Answers once [url] is no longer [was] — the only signal a bfcache restore gives.

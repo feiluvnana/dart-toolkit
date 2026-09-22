@@ -89,12 +89,16 @@ opposite. Coherence, documentation and feature count rank below both.
   bare name would collide: a top-level `exit` does not merely clash with `dart:io`'s, it
   **silently wins**, because Dart resolves a name to a non-platform library without calling it
   ambiguous — a call site that reads `exit(0)` would stop meaning what it says.
-- **A wait is armed before the thing it waits for.** `ChromePage.navigating` takes the action
+- **A wait is armed before the thing it waits for.** `ChromePage.waitForNavigation` takes the action
   rather than being a bare `waitForNavigation()` called after a click, because a click returns
   immediately and a fast page finishes loading before the next line runs — a wait armed
-  afterwards has already missed its event and sits until its timeout. `downloading` and
-  `fetching` are the same shape for the same reason, and the three read alike on purpose: a
-  present participle takes the action that causes the thing it names. Where a wait cannot be
+  afterwards has already missed its event and sits until its timeout. `waitForDownload` and
+  `waitForResponse` are the same shape for the same reason, and the three read alike on
+  purpose. They were `navigating`, `downloading` and `fetching` for a while, on the theory that
+  a present participle takes the action that causes the thing it names — which is a rule the
+  reader has to be told before the names make sense, and one nothing else in the package
+  follows. `waitFor` and `waitWhile` were already on the same class, so these belong to a
+  family that exists; and they are what someone arriving from Playwright already types. Where a wait cannot be
   armed first, it needs a second signal: `back()` waits on the lifecycle event *or* the URL
   moving, because a page the back/forward cache restores fires no second `load` at all.
 - **A policy with three callers is written once.** What a redirect hop carries — 303 and a

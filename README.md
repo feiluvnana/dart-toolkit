@@ -571,9 +571,9 @@ await page.close();
 | `click(sel)`, `fill(sel, text)`, `press(key)` | real mouse and key events, with a DOM fallback |
 | `select(sel, value)`, `hover(sel)` | an option by value or by its text; a menu that opens on hover |
 | `text(sel)`, `attr(sel, name)`, `has(sel)` | one value off the live page; `attr` answers what the DOM resolved |
-| `navigating(action)` | run the action and wait out the navigation it causes |
-| `downloading(action, to:)` | run the action and wait out the download it starts; answers the file |
-| `fetching(match, action)` | run the action and answer the XHR it fires, as a `Response` |
+| `waitForNavigation(action)` | run the action and wait out the navigation it causes |
+| `waitForDownload(action, to:)` | run the action and wait out the download it starts; answers the file |
+| `waitForResponse(match, action)` | run the action and answer the XHR it fires, as a `Response` |
 | `block(kinds)` | refuse to load `Resource.heavy`, or any set of them, from now on |
 | `frame(match)` | the iframe as a page of its own — every word here works inside it |
 | `upload(sel, files)` | fill a file input the way a person fills one |
@@ -584,33 +584,24 @@ await page.close();
 
 `chrome.page(url, (page) async { … })` is the same thing with the close written for you.
 
-`navigating` takes the action rather than being a bare `waitForNavigation()` you call after a
-click, and that is the point: a click is dispatched and returns immediately, so a fast page has
-finished loading before the next line runs and a wait armed afterwards has already missed the
-event it waits for. Give it the action and it cannot be got wrong:
+All three waits **take the action** rather than being a bare `waitForNavigation()` you call
+after a click, and that is the whole point: a click is dispatched and returns immediately, so a
+fast page has finished loading before the next line runs, and a wait armed afterwards has
+already missed the event it waits for. Give it the action and it cannot be got wrong.
 
 ```dart
-await page.navigating(() => page.click('a.next'));
+await page.waitForNavigation(() => page.click('a.next'));
 print(page.url);
-```
 
-`downloading` and `fetching` are the same shape for the same reason: a click that starts a
-download or fires an XHR returns just as fast, and neither wait can be armed after it.
-
-```dart
-final file = await page.downloading(() => page.click('.download'), to: 'books'.path);
-final more = await page.fetching('/api/items', () => page.click('.next'));
+final file = await page.waitForDownload(() => page.click('.download'), to: 'books'.path);
+final more = await page.waitForResponse('/api/items', () => page.click('.next'));
 print(more!.json['items']);          // the JSON behind the page, not the DOM it becomes
 ```
 
-`downloading` and `fetching` are the same shape for the same reason: a click that starts a
-download or fires an XHR returns just as fast, and neither wait can be armed after it.
-
-```dart
-final file = await page.downloading(() => page.click('.download'), to: 'books'.path);
-final more = await page.fetching('/api/items', () => page.click('.next'));
-print(more!.json['items']);          // the JSON behind the page, not the DOM it becomes
-```
+`waitForDownload`'s `timeout` is how long the download may go **quiet** for, not how long it
+may take: a big file on a slow link reports progress the whole way and is waited out however
+long that is, while one that has died says nothing and is given up on sooner than any total
+deadline would manage.
 
 A `RequestKey<T>` is how any client is told something HTTP has no word for, and **a client
 ignores every key it does not know** — which is what lets the same crawl run over `IoClient`,

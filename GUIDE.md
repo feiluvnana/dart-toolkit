@@ -1002,9 +1002,9 @@ await page.close();
 | `select(sel, value)`, `hover(sel)` | an option by value or by its text; a menu that opens on hover |
 | `text(sel)`, `attr(sel, name)`, `has(sel)` | one value off the live page, without building a document |
 | `upload(sel, files)` | fill a file input the way a person fills one |
-| `navigating(action)` | run the action and wait out the navigation it causes |
-| `downloading(action, to:)` | run the action and wait out the download it starts; answers the file |
-| `fetching(match, action)` | run the action and answer the XHR it fires, as a `Response` |
+| `waitForNavigation(action)` | run the action and wait out the navigation it causes |
+| `waitForDownload(action, to:)` | run the action and wait out the download it starts; answers the file |
+| `waitForResponse(match, action)` | run the action and answer the XHR it fires, as a `Response` |
 | `block(kinds)` | refuse to load these from now on; `block({})` allows everything again |
 | `frame(match)` | the iframe as a page of its own |
 | `back()`, `forward()`, `reload()` | the history |
@@ -1017,18 +1017,18 @@ await page.close();
 | `headers(map)` | headers sent with every request this tab makes from now on |
 | `close()` | close the tab; safe twice |
 
-**A wait is armed before the thing it waits for.** `navigating`, `downloading` and `fetching`
-all take the action rather than being a bare `waitForX()` you call afterwards, and that is the
+**A wait is armed before the thing it waits for.** `waitForNavigation`, `waitForDownload`
+and `waitForResponse` all take the action rather than being a bare `waitForX()` you call afterwards, and that is the
 point: a click is dispatched and returns immediately, so a fast page has already finished
 before the next line runs, and a wait armed afterwards has missed its event and sits until its
 timeout.
 
 ```dart
-await page.navigating(() => page.click('a.next'));
+await page.waitForNavigation(() => page.click('a.next'));
 print(page.url);
 
-final file = await page.downloading(() => page.click('.download'), to: 'books'.path);
-final more = await page.fetching('/api/items', () => page.click('.next'));
+final file = await page.waitForDownload(() => page.click('.download'), to: 'books'.path);
+final more = await page.waitForResponse('/api/items', () => page.click('.next'));
 print(more!.json['items']);          // the JSON behind the page, not the DOM it becomes
 ```
 
@@ -1489,7 +1489,7 @@ await Lifecycle.exit();
 final page = await chrome.open(bookUrl);
 if (await page.has('#bookFormat')) await page.select('#bookFormat', 'EPUB');
 
-final file = await page.downloading(() => page.click('.addDownloadedBook'), to: 'books'.path);
+final file = await page.waitForDownload(() => page.click('.addDownloadedBook'), to: 'books'.path);
 Console.ok(file == null ? 'no download started' : 'saved ${file.name}');
 await page.close();
 ```
@@ -1498,7 +1498,7 @@ await page.close();
 
 ```dart
 await chrome.page(searchUrl, (page) async {
-  final res = await page.fetching('/api/search', () => page.fill('#q', 'dart').then((_) => page.press('Enter')));
+  final res = await page.waitForResponse('/api/search', () => page.fill('#q', 'dart').then((_) => page.press('Enter')));
   for (final hit in res!.json['hits'].list) print(hit['title'].to<String>());
 });
 ```

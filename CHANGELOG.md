@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Renamed: the three armed waits, and a download is waited out rather than timed
+
+- **`ChromePage.navigating` → `waitForNavigation`, `downloading` → `waitForDownload`,
+  `fetching` → `waitForResponse`.** The participles needed a rule explained before they read as
+  anything — and it was a rule nothing else in the package followed. `waitFor` and `waitWhile`
+  were already on the same class, so these now belong to a family that exists, and they are
+  what someone arriving from Playwright already types. What made them different stays: each
+  takes the action, so the wait cannot be armed too late.
+- **Fixed: `waitForDownload`'s `timeout` was a deadline on the whole transfer**, so a large
+  file, or a slow link, failed while it was going perfectly well — and the caller then threw
+  away a download that was most of the way there. It is now how long the download may go
+  *quiet* for. A transfer that is merely slow reports progress about twice a second the whole
+  way and is waited out however long it takes; one that has died goes silent at once and is
+  given up on sooner than a total deadline would have. This is the bug behind a book abandoned
+  mid-download for being slow.
+
 ### A launched browser can remember
 
 - **Added: `ChromeClient.launch(profile:)`** — a user-data directory to keep, so a browser this

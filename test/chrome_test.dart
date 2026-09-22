@@ -60,6 +60,25 @@ void main() {
             case '/downloads':
               response.headers.contentType = ContentType.html;
               response.write('<html><body><a id="get" href="/blob.bin" download>take it</a></body></html>');
+            // A file that arrives steadily but takes far longer than any one wait would allow.
+            case '/slow.bin':
+              response.headers
+                ..contentType = ContentType.binary
+                ..set('content-disposition', 'attachment; filename="slow.bin"');
+              for (var i = 0; i < 20; i++) {
+                response.add(List.filled(4096, 1));
+                await response.flush();
+                await Future<void>.delayed(const Duration(milliseconds: 200));
+              }
+            // One that begins and then says nothing ever again.
+            case '/stalled.bin':
+              response.headers
+                ..contentType = ContentType.binary
+                ..set('content-length', '999999')
+                ..set('content-disposition', 'attachment; filename="stalled.bin"');
+              response.add(List.filled(1024, 1));
+              await response.flush();
+              await Future<void>.delayed(const Duration(seconds: 30));
             case '/blob.bin':
               response.headers
                 ..contentType = ContentType.binary
@@ -377,9 +396,9 @@ void main() {
       });
     }, skip: absent);
 
-    test('navigating waits out a click that leaves the page, and back returns', () async {
+    test('waitForNavigation waits out a click that leaves the page, and back returns', () async {
       await browser.page(base.resolve('/widgets'), (page) async {
-        expect(await page.navigating(() => page.click('#link')), isTrue);
+        expect(await page.waitForNavigation(() => page.click('#link')), isTrue);
         expect(page.url.path, '/rendered');
         expect(await page.back(), isTrue);
         expect(page.url.path, '/widgets');
@@ -432,22 +451,53 @@ void main() {
       final dir = await Directory.systemTemp.createTemp('tk_dl_');
       addTearDown(() => dir.delete(recursive: true));
       final page = await browser.open(base.resolve('/downloads'));
-      final file = await page.downloading(() => page.click('#get'), to: dir.path.path);
+      final file = await page.waitForDownload(() => page.click('#get'), to: dir.path.path);
       expect(file, isNotNull);
       expect(file!.name, 'report.bin', reason: 'the name the site gave it');
       expect(await file.readBytes(), hasLength(1024));
       await page.close();
     }, skip: absent);
 
+    test('a slow download is waited out; a stalled one is not', () async {
+      final dir = await Directory.systemTemp.createTemp('tk_slow_');
+      addTearDown(() => dir.delete(recursive: true));
+      final page = await browser.open();
+
+      // Twenty chunks 200ms apart is about four seconds of transfer, against a wait of two:
+      // a deadline on the whole thing would fail it, and a wait on silence does not, because
+      // Chrome reports progress about twice a second the entire way.
+      await page.goto(base.resolve('/downloads'));
+      final began = DateTime.now();
+      final slow = await page.waitForDownload(
+        () => page.eval("location.href = '/slow.bin'"),
+        to: dir.path.path,
+        timeout: 2.s,
+      );
+      expect(slow, isNotNull, reason: 'a download making progress was given up on');
+      expect(await slow!.size(), 20 * 4096);
+      expect(DateTime.now().difference(began), greaterThan(2.s), reason: 'it outlived its own timeout');
+
+      // One that goes quiet after its first chunk is given up on promptly.
+      final gaveUp = DateTime.now();
+      final stalled = await page.waitForDownload(
+        () => page.eval("location.href = '/stalled.bin'"),
+        to: dir.path.path,
+        timeout: 2.s,
+      );
+      expect(stalled, isNull);
+      expect(DateTime.now().difference(gaveUp), lessThan(15.s), reason: 'silence should be noticed quickly');
+      await page.close();
+    }, skip: absent);
+
     test('a download that never starts is null, not a throw', () async {
       final page = await browser.open(base.resolve('/downloads'));
-      expect(await page.downloading(() async {}, timeout: 2.s), isNull);
+      expect(await page.waitForDownload(() async {}, timeout: 2.s), isNull);
       await page.close();
     }, skip: absent);
 
     test('the JSON behind the page comes back instead of the DOM', () async {
       final page = await browser.open(base.resolve('/api-page'));
-      final res = await page.fetching('/api/items', () => page.click('#more'));
+      final res = await page.waitForResponse('/api/items', () => page.click('#more'));
       expect(res, isNotNull);
       expect(res!.statusCode, 200);
       expect(res.json['items'].to<List<Object?>>()?.length, 3);
@@ -512,7 +562,7 @@ void main() {
 
     test('forward goes back the way back came', () async {
       final page = await browser.open(base.resolve('/widgets'));
-      await page.navigating(() => page.click('#link'));
+      await page.waitForNavigation(() => page.click('#link'));
       expect(page.url.path, '/rendered');
       expect(await page.back(), isTrue);
       expect(page.url.path, '/widgets');

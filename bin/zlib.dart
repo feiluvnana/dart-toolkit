@@ -119,8 +119,15 @@ Future<Either<String, Path>> attempt_(CliContext ctx, Uri? proxy) async {
     // The click, not the link. A `/dl/` URL's last segment is an opaque id, so downloading it
     // directly writes a file with no name and no extension; the name the site gave it is in
     // `content-disposition`, which only the browser reads.
-    final file = await page.downloading(() => page.click('[data-tk-pick]'), to: ctx(into).path);
-    return file == null ? const Left('the download never started') : Right(file);
+    // The wait is on silence, not on elapsed time, so a book coming down a free proxy at a
+    // trickle is waited out however long it takes — and a route that dies mid-file is noticed
+    // within the minute and handed to the next one.
+    final file = await Console.spin(
+      'Downloading',
+      () => page.waitForDownload(() => page.click('[data-tk-pick]'), to: ctx(into).path, timeout: 60.s),
+      done: 'Transfer finished',
+    );
+    return file == null ? const Left('the download never began, or went quiet for a minute') : Right(file);
   } on ClientException catch (e) {
     return Left('$e');
   } finally {
