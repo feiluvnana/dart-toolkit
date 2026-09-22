@@ -57,6 +57,10 @@ final class Table {
 
   final List<(String, bool)> _order;
 
+  /// [columns] as a set, built on the first lookup. A table is immutable, so it cannot go
+  /// stale, and every operation that names a column asks [_has] rather than scanning.
+  Set<String>? _names;
+
   Table._(this.columns, this.rows, this._order);
 
   /// A table over [columns] and [rows]; a row missing a column reads `null` there.
@@ -69,10 +73,6 @@ final class Table {
     final columns = <String>{for (final r in list) ...r.keys}.toList();
     return Table(columns, list);
   }
-
-  /// A table from [items] through [toRow].
-  static Table records<T>(Iterable<T> items, Map<String, Object?> Function(T item) toRow) =>
-      Table.rows(items.map(toRow));
 
   /// A table from CSV text (RFC 4180: quoted fields, doubled quotes, newlines inside quotes).
   /// The first record names the columns; every value is a [String].
@@ -124,18 +124,31 @@ final class Table {
   bool get isEmpty => rows.isEmpty;
   bool get isNotEmpty => rows.isNotEmpty;
 
+  // The column is checked once, not once per row: `_has` scans the column list, so leaving
+  // it inside the comprehension made reading one column cost rows × columns comparisons.
+
   /// Every value of [column], top to bottom: `t['title']`. Rows are `t.rows[i]`.
-  List<Object?> operator [](String column) => [for (final r in rows) r[_has(column)]];
+  List<Object?> operator [](String column) {
+    final c = _has(column);
+    return [for (final r in rows) r[c]];
+  }
 
   /// Every value of [column] as a number; a cell that is not one throws.
-  List<num> numbers(String column) => [for (final r in rows) r.number(_has(column))];
+  List<num> numbers(String column) {
+    final c = _has(column);
+    return [for (final r in rows) r.number(c)];
+  }
 
   /// Every value of [column] as text.
-  List<String> texts(String column) => [for (final r in rows) r.text(_has(column))];
+  List<String> texts(String column) {
+    final c = _has(column);
+    return [for (final r in rows) r.text(c)];
+  }
 
   /// [name], or an [ArgumentError] that lists the columns there are.
-  String _has(String name) =>
-      columns.contains(name) ? name : throw ArgumentError('No column "$name"; columns are ${columns.join(', ')}');
+  String _has(String name) => (_names ??= columns.toSet()).contains(name)
+      ? name
+      : throw ArgumentError('No column "$name"; columns are ${columns.join(', ')}');
 
   /// Only the rows that pass [test].
   Table where(bool Function(Row row) test) => Table._(columns, rows.where(test).toList(), const []);
@@ -153,15 +166,29 @@ final class Table {
   Table thenBy(String column, {bool descending = false}) => _sorted([..._order, (_has(column), descending)]);
 
   Table _sorted(List<(String, bool)> order) {
-    final sorted = rows.indexed.toList()
-      ..sort((a, b) {
-        for (final (col, desc) in order) {
-          final c = _compareCells(a.$2[col], b.$2[col]);
-          if (c != 0) return desc ? -c : c;
+    // Each sort column is pulled and coerced once per row rather than once per comparison;
+    // see [_Cell]. The position is the last tie-break, so the sort is stable.
+    final keys = [
+      for (final (col, _) in order) [for (final r in rows) _cell(r[col])],
+    ];
+    final positions = [for (var i = 0; i < rows.length; i++) i]
+      ..sort((x, y) {
+        for (var k = 0; k < order.length; k++) {
+          final a = keys[k][x];
+          final b = keys[k][y];
+          // An empty cell is missing data, not a small value, so it sorts last whichever
+          // way the column is sorted — which is what `orderBy` has always documented, and
+          // what negating the whole comparison quietly undid for a descending sort.
+          if (a.$2 == null || b.$2 == null) {
+            if (a.$2 == null && b.$2 == null) continue;
+            return a.$2 == null ? 1 : -1;
+          }
+          final c = _compare(a, b);
+          if (c != 0) return order[k].$2 ? -c : c;
         }
-        return a.$1.compareTo(b.$1);
+        return x.compareTo(y);
       });
-    return Table._(columns, [for (final s in sorted) s.$2], order);
+    return Table._(columns, [for (final i in positions) rows[i]], order);
   }
 
   /// Only [names], in that order.
@@ -170,10 +197,13 @@ final class Table {
   ], const []);
 
   /// Every column but [names].
-  Table drop(List<String> names) => select([
-    for (final c in columns)
-      if (!names.contains(c)) c,
-  ]);
+  Table drop(List<String> names) {
+    final dropped = names.toSet();
+    return select([
+      for (final c in columns)
+        if (!dropped.contains(c)) c,
+    ]);
+  }
 
   /// Columns renamed by [names], old to new.
   Table rename(Map<String, String> names) => Table._(List.unmodifiable([for (final c in columns) names[c] ?? c]), [
@@ -207,9 +237,10 @@ final class Table {
     _has(on);
     other._has(to);
     final index = other.rows.sequence.groupBy((r) => _Key([r[to]])).toMap();
+    final mine = _names ??= columns.toSet();
     final rightColumns = {
       for (final c in other.columns)
-        if (c != to) c: columns.contains(c) ? '${c}_2' : c,
+        if (c != to) c: mine.contains(c) ? '${c}_2' : c,
     };
     final out = <Row>[];
     for (final r in rows) {
@@ -406,14 +437,29 @@ final class _Key {
 }
 
 /// Cells compare as numbers when both are numbers or read as numbers, `null` last, text otherwise.
-int _compareCells(Object? a, Object? b) {
-  if (a == null) return b == null ? 0 : 1;
-  if (b == null) return -1;
-  final na = _coerce<num>(a), nb = _coerce<num>(b);
+/// A cell prepared for comparison: the number it coerces to, when it does, and the cell.
+///
+/// The coercion is the expensive half — a text cell is trimmed, stripped of its thousands
+/// separators and parsed — and a sort compares each cell about log n times, so [_sorted]
+/// does it once per row up front.
+typedef _Cell = (num? number, Object? value);
+
+_Cell _cell(Object? value) => (_coerce<num>(value), value);
+
+/// Cells in sort order: numbers as numbers, then like-typed comparables, then as text.
+/// `null` sorts last.
+int _compare(_Cell a, _Cell b) {
+  final (na, va) = a;
+  final (nb, vb) = b;
+  if (va == null) return vb == null ? 0 : 1;
+  if (vb == null) return -1;
   if (na != null && nb != null) return na.compareTo(nb);
-  if (a is Comparable && b is Comparable && a.runtimeType == b.runtimeType) return a.compareTo(b);
-  return '$a'.compareTo('$b');
+  if (va is Comparable && vb is Comparable && va.runtimeType == vb.runtimeType) return va.compareTo(vb);
+  return '$va'.compareTo('$vb');
 }
+
+/// Two raw cells by the same rule, for the comparisons that are not a sort.
+int _compareCells(Object? a, Object? b) => _compare(_cell(a), _cell(b));
 
 /// `JsonDocument.to<T>`'s coercions, plus thousands separators in text: `'1,200'` reads as 1200.
 T? _coerce<T>(Object? val) {

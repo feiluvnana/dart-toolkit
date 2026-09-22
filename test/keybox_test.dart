@@ -20,14 +20,18 @@ void main() {
 
       final format = Opt.among('format', ['mp3', 'flac', 'all'], abbr: 'f', description: 'Music format').or('all');
       final workers = Opt.number('concurrency', abbr: 'j', description: 'Concurrent download workers').or(4);
-      final compress = Flag('compress', abbr: 'c', description: 'Compress directory after download');
+      final compress = Opt.flag('compress', abbr: 'c', description: 'Compress directory after download');
 
-      final cli = Cli(name: 'keybox', description: 'Key BOX Scraper & Downloader', options: [format, workers, compress])
-        ..action((ctx) {
+      final cli = Cli(
+        name: 'keybox',
+        description: 'Key BOX Scraper & Downloader',
+        options: [format, workers, compress],
+        handler: (ctx) {
           chosenFormat = ctx(format);
           concurrency = ctx(workers);
           shouldCompress = ctx(compress);
-        });
+        },
+      );
 
       await cli.run(['--format', 'flac', '-j', '8', '--compress']);
 

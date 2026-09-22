@@ -4,7 +4,7 @@ part of '../../hash.dart';
 ///
 /// The checksums ([crc32] to [xxh3]) are fast and detect corruption, not tampering.
 ///
-/// {@category Crypto}
+/// {@category Hashing}
 enum Hash {
   md5(16),
   sha1(20),
@@ -40,7 +40,7 @@ enum Hash {
 
 /// Digests of a file, streamed: memory is constant in its size.
 ///
-/// {@category Crypto}
+/// {@category Hashing}
 extension PathHashExtensions on Path {
   /// The [algorithm] digest of this file, hex encoded.
   Future<String> hash(Hash algorithm) async => _hex(await hashBytes(algorithm));
@@ -62,19 +62,28 @@ extension PathHashExtensions on Path {
   ///
   /// The 64-bit checksums do not fit a Dart `int` unsigned; read those as hex, with [hash].
   Future<int> checksum(Hash algorithm) async => _int(algorithm, await hashBytes(algorithm));
+
+  /// The HMAC of this file's contents under [key], hex encoded.
+  Future<String> hmac(Hash algorithm, List<int> key) async => _hex(await hmacBytes(algorithm, key));
+
+  /// The HMAC of this file's contents under [key].
+  ///
+  /// Unlike [hashBytes] this reads the file into memory, because the MAC construction
+  /// the native library exposes takes the message whole.
+  Future<Uint8List> hmacBytes(Hash algorithm, List<int> key) async => (await readBytes()).hmacBytes(algorithm, key);
 }
 
 /// Digests and MACs over bytes in memory.
 ///
-/// {@category Crypto}
+/// {@category Hashing}
 extension BytesHashExtensions on List<int> {
   /// The [algorithm] digest of these bytes, hex encoded.
   String hash(Hash algorithm) => _hex(hashBytes(algorithm));
 
   /// The [algorithm] digest of these bytes.
-  Uint8List hashBytes(Hash algorithm) => Native.withBytes(
+  Uint8List hashBytes(Hash algorithm) => NativeBridge.withBytes(
     this,
-    (p, n) => Native.withOut(_maxDigest, (out) => _N.digest(algorithm.index, p, n, out, _maxDigest)),
+    (p, n) => NativeBridge.withOut(_maxDigest, (out) => _N.digest(algorithm.index, p, n, out, _maxDigest)),
   );
 
   /// A 32-bit checksum as an integer: `bytes.checksum(Hash.crc32c)`.
@@ -89,22 +98,29 @@ extension BytesHashExtensions on List<int> {
   Uint8List hmacBytes(Hash algorithm, List<int> key) => _with2(
     key,
     this,
-    (k, kl, d, dl) => Native.withOut(_maxDigest, (out) => _N.hmac(algorithm.index, k, kl, d, dl, out, _maxDigest)),
+    (k, kl, d, dl) =>
+        NativeBridge.withOut(_maxDigest, (out) => _N.hmac(algorithm.index, k, kl, d, dl, out, _maxDigest)),
   );
 }
 
 /// Digests of a string's UTF-8 bytes: `'hello'.hash(Hash.sha256)`.
 ///
-/// {@category Crypto}
+/// {@category Hashing}
 extension StringHashExtensions on String {
   /// The [algorithm] digest of this string's UTF-8 bytes, hex encoded.
   String hash(Hash algorithm) => utf8.encode(this).hash(algorithm);
+
+  /// The [algorithm] digest of this string's UTF-8 bytes.
+  Uint8List hashBytes(Hash algorithm) => utf8.encode(this).hashBytes(algorithm);
 
   /// A 32-bit checksum of this string's UTF-8 bytes as an integer.
   int checksum(Hash algorithm) => utf8.encode(this).checksum(algorithm);
 
   /// The HMAC of this string under [key], hex encoded.
   String hmac(Hash algorithm, String key) => utf8.encode(this).hmac(algorithm, utf8.encode(key));
+
+  /// The HMAC of this string under [key].
+  Uint8List hmacBytes(Hash algorithm, String key) => utf8.encode(this).hmacBytes(algorithm, utf8.encode(key));
 }
 
 /// Big-endian bytes as an integer, for the 32-bit checksums.

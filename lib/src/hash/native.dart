@@ -2,14 +2,14 @@ part of '../../hash.dart';
 
 // ---------------------------------------------------------------------------------------------
 // Bindings to the digest half of dart_toolkit_native. Bytes cross as (pointer, length) and
-// results land in a caller buffer through `Native.withOut`.
+// results land in a caller buffer through `NativeBridge.withOut`.
 // ---------------------------------------------------------------------------------------------
 
 typedef _U8 = Pointer<Uint8>;
 
 /// The native functions, looked up once on first use.
 final class _N {
-  static final lib = Native.require('hashing');
+  static final lib = NativeBridge.require('hashing');
 
   static final digestNew = lib.lookupFunction<Pointer<Void> Function(Uint32), Pointer<Void> Function(int)>(
     'tk_digest_new',
@@ -44,7 +44,7 @@ const _maxDigest = 64;
 /// A digest fed in pieces, for files; `bytes.hashBytes` is the one-call form.
 final class _Digest {
   final Pointer<Void> _ctx;
-  final _U8 _buffer = Native.alloc(_stage);
+  final _U8 _buffer = NativeBridge.alloc(_stage);
   late final Uint8List _view = _buffer.asTypedList(_stage);
   bool _released = false;
 
@@ -60,10 +60,10 @@ final class _Digest {
 
   Uint8List finish() {
     try {
-      return Native.withOut(_maxDigest, (out) => _N.digestFinal(_ctx, out, _maxDigest));
+      return NativeBridge.withOut(_maxDigest, (out) => _N.digestFinal(_ctx, out, _maxDigest));
     } finally {
       _released = true;
-      Native.free(_buffer, _stage);
+      NativeBridge.free(_buffer, _stage);
     }
   }
 
@@ -75,14 +75,14 @@ final class _Digest {
     _released = true;
     try {
       // `tk_digest_final` is what frees the context; the half-fed digest is discarded.
-      Native.withOut(_maxDigest, (out) => _N.digestFinal(_ctx, out, _maxDigest));
+      NativeBridge.withOut(_maxDigest, (out) => _N.digestFinal(_ctx, out, _maxDigest));
     } catch (_) {
       // Releasing is the point here; a failure to produce a digest nobody wants is not.
     }
-    Native.free(_buffer, _stage);
+    NativeBridge.free(_buffer, _stage);
   }
 }
 
 /// Runs [body] with two byte arguments in native memory.
 R _with2<R>(List<int> a, List<int> b, R Function(_U8, int, _U8, int) body) =>
-    Native.withBytes(a, (pa, la) => Native.withBytes(b, (pb, lb) => body(pa, la, pb, lb)));
+    NativeBridge.withBytes(a, (pa, la) => NativeBridge.withBytes(b, (pb, lb) => body(pa, la, pb, lb)));

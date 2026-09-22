@@ -77,7 +77,7 @@ class Logger {
     Io.out.writeln('  · $message'.dim);
   }
 
-  /// Logs a success message: `  ✓ message`.
+  /// Logs a success message: `  ✓ message`. Filtered at [LogLevel.info], like [info].
   static void ok(String message) {
     if (!isEnabled(LogLevel.info)) return;
     Io.out.writeln('  ✓ $message'.green);

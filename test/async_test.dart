@@ -4,42 +4,130 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:test/test.dart';
 
 void main() {
+  group('Cancel.session', () {
+    test('the token is ambient: retry and cancellable find it without being passed one', () async {
+      final stop = CancelToken();
+      var attempts = 0;
+
+      await expectLater(
+        Cancel.session(() async {
+          expect(Cancel.token, same(stop));
+          expect(Cancel.isCancelled, isFalse);
+          return retry(
+            () {
+              attempts++;
+              if (attempts == 2) stop.cancel('enough');
+              throw StateError('again');
+            },
+            attempts: 5,
+            delay: Duration.zero,
+          );
+        }, token: stop),
+        throwsA(isA<CancelledException>()),
+      );
+      expect(attempts, 2, reason: 'the loop stopped at the cancel, not at attempt 5');
+    });
+
+    test('cancellable takes the session token, and says so when there is none', () async {
+      final stop = CancelToken();
+      final controller = StreamController<int>();
+      final received = <int>[];
+
+      final done = Cancel.session(() {
+        final out = controller.stream.cancellable.forEach(received.add);
+        controller.add(1);
+        return out;
+      }, token: stop);
+
+      await Future<void>.delayed(Duration.zero);
+      stop.cancel();
+      controller.add(2);
+      await done;
+      expect(received, [1]);
+      await controller.close();
+
+      expect(() => Stream<int>.empty().cancellable.toList(), throwsStateError);
+    });
+
+    test('the ambient readings mirror the token, and are quiet outside a session', () async {
+      final stop = CancelToken();
+      await Cancel.session(token: stop, () async {
+        expect(Cancel.isCancelled, isFalse);
+        expect(Cancel.reason, isNull);
+        expect(Cancel.throwIfCancelled, returnsNormally);
+
+        stop.cancel('enough');
+        expect(Cancel.isCancelled, isTrue);
+        expect(Cancel.reason, 'enough');
+        expect(Cancel.throwIfCancelled, throwsA(isA<CancelledException>()));
+      });
+
+      // No session: nothing has cancelled it, so the readings say so rather than throwing.
+      expect(Cancel.isCancelled, isFalse);
+      expect(Cancel.reason, isNull);
+      expect(Cancel.throwIfCancelled, returnsNormally);
+      // The adapter is the one that refuses, because it would otherwise do nothing at all.
+      expect(() => Stream<int>.empty().cancellable, throwsStateError);
+      expect(() => Future<int>.value(1).cancellable, throwsStateError);
+    });
+
+    test('sessions nest, and the inner token wins inside it', () async {
+      final outer = CancelToken();
+      final inner = CancelToken();
+      await Cancel.session(() async {
+        expect(Cancel.token, same(outer));
+        await Cancel.session(() async => expect(Cancel.token, same(inner)), token: inner);
+        expect(Cancel.token, same(outer));
+      }, token: outer);
+    });
+
+    test('a session with no token of its own still has one', () async {
+      await Cancel.session(() async => expect(Cancel.token, isNotNull));
+      expect(Cancel.token, isNull, reason: 'and nothing leaks out of it');
+    });
+  });
+
   group('Uniform cancellation composition', () {
-    test('Stream.cancelWith stops delivery once the token fires', () async {
+    test('Stream.cancellable stops delivery once the session fires', () async {
       final token = CancelToken();
       final controller = StreamController<int>();
       final received = <int>[];
 
-      final done = controller.stream.cancelWith(token).forEach(received.add);
+      await Cancel.session(token: token, () async {
+        final done = controller.stream.cancellable.forEach(received.add);
 
-      controller.add(1);
-      await Future<void>.delayed(Duration.zero);
-      token.cancel('enough');
-      controller.add(2);
-      await Future<void>.delayed(Duration.zero);
+        controller.add(1);
+        await Future<void>.delayed(Duration.zero);
+        token.cancel('enough');
+        controller.add(2);
+        await Future<void>.delayed(Duration.zero);
 
-      await done;
+        await done;
+      });
       expect(received, equals([1]));
       await controller.close();
     });
 
-    test('Stream.cancelWith can surface a CancelledException', () async {
+    test('a cancelled stream ends with what it had; Cancel.isCancelled says why', () async {
       final token = CancelToken();
       final controller = StreamController<int>();
-      final stream = controller.stream.cancelWith(token, throwOnCancel: true);
 
-      final future = stream.toList();
-      controller.add(1);
-      await Future<void>.delayed(Duration.zero);
-      token.cancel('halt');
+      await Cancel.session(token: token, () async {
+        final collected = controller.stream.cancellable.toList();
+        controller.add(1);
+        await Future<void>.delayed(Duration.zero);
+        expect(Cancel.isCancelled, isFalse);
+        token.cancel('halt');
 
-      await expectLater(future, throwsA(isA<CancelledException>()));
+        expect(await collected, [1], reason: 'it closes rather than failing');
+        expect(Cancel.isCancelled, isTrue, reason: 'and the use site decides what that means');
+      });
       await controller.close();
     });
 
-    test('Stream.cancelWith on an already-cancelled token yields nothing', () async {
+    test('Stream.cancellable on an already-cancelled token yields nothing', () async {
       final token = CancelToken()..cancel();
-      final items = await Stream.fromIterable([1, 2, 3]).cancelWith(token).toList();
+      final items = await Cancel.session(token: token, () => Stream.fromIterable([1, 2, 3]).cancellable.toList());
       expect(items, isEmpty);
     });
 
@@ -54,27 +142,31 @@ void main() {
       // Work that completes normally deregisters itself; not observable from here
       // beyond "it still behaves", but it is what stops a long-lived token from
       // retaining every listener it was ever given.
-      await Future<int>.value(1).cancelWith(token);
       final controller = StreamController<int>();
-      final drained = controller.stream.cancelWith(token).toList();
-      await controller.close();
-      await drained;
+      await Cancel.session(token: token, () async {
+        await Future<int>.value(1).cancellable;
+        final drained = controller.stream.cancellable.toList();
+        await controller.close();
+        await drained;
+      });
 
       token.cancel('now');
       expect(fired, equals(1));
     });
 
-    test('Future.cancelWith rejects as soon as the token fires', () async {
+    test('Future.cancellable rejects as soon as the token fires', () async {
       final token = CancelToken();
       final slow = Future<int>.delayed(const Duration(seconds: 5), () => 1);
-      final guarded = slow.cancelWith(token);
-      token.cancel('stop');
-      await expectLater(guarded, throwsA(isA<CancelledException>()));
+      await Cancel.session(token: token, () async {
+        final guarded = slow.cancellable;
+        token.cancel('stop');
+        await expectLater(guarded, throwsA(isA<CancelledException>()));
+      });
     });
 
-    test('Future.cancelWith passes the value through when not cancelled', () async {
+    test('Future.cancellable passes the value through when not cancelled', () async {
       final token = CancelToken();
-      final value = await Future<int>.value(7).cancelWith(token);
+      final value = await Cancel.session(token: token, () => Future<int>.value(7).cancellable);
       expect(value, equals(7));
     });
   });
@@ -465,13 +557,12 @@ void main() {
       final items = [1, 2, 3, 4, 5];
       Future.delayed(15.ms, () => token.cancel('cancelled by user'));
 
-      final outcomes = await items.parallelize(
-        (n) async {
+      final outcomes = await Cancel.session(
+        () => items.parallelize((n) async {
           await Future<void>.delayed(50.ms);
           return n;
-        },
-        concurrency: 1,
-        cancelToken: token,
+        }, concurrency: 1),
+        token: token,
       );
 
       expect(outcomes.lefts, isNotEmpty);

@@ -79,15 +79,14 @@ Future<void> main() async {
         .onFinish((summary) => Logger.info('$summary'));
 
     // The crawl is a Stream<Either<ScrapeFailure, Story>>, so `rights`, `lefts`, `unwrap`,
-    // `take` and `cancelWith` all apply. Nothing is sent until it is listened to.
+    // `take` and `cancellable` all apply. Nothing is sent until it is listened to.
     final collected = await stories.rights.toList();
     Logger.ok('${collected.length} stories');
 
-    // Which is collection's problem now, not http's. `Table.records` builds rows from any
-    // objects; `.table` itself is the conversion on documents and HTML, not on plain maps.
-    Table.records(
-      collected.sequence.sortedBy((s) => s.rank).take(8),
-      (s) => {'#': s.rank, 'title': s.title, 'site': s.site},
+    // Which is collection's problem now, not http's. `Table.rows` builds rows from any
+    // maps; `.table` itself is the conversion on documents and HTML, not on plain maps.
+    Table.rows(
+      collected.sequence.sortedBy((s) => s.rank).take(8).map((s) => {'#': s.rank, 'title': s.title, 'site': s.site}),
     ).show();
 
     final busiest = collected.sequence.countBy((s) => s.site).sortedByValue(descending: true).take(3);
@@ -102,7 +101,7 @@ Future<void> main() async {
       final last = await {
         'https://news.ycombinator.com/favicon.ico'.url: into / 'favicon.ico',
         'https://news.ycombinator.com/y18.svg'.url: into / 'y18.svg',
-      }.downloadAll(concurrency: 2).show(message: 'Fetching assets', done: 'Assets fetched');
+      }.download(concurrency: 2).show(message: 'Fetching assets', done: 'Assets fetched');
 
       Logger.ok('${last?.written ?? 0} written of ${last?.total ?? 0}');
       await for (final f in into.files()) {

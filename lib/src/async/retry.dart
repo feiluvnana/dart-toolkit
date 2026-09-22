@@ -4,8 +4,9 @@ part of '../../async.dart';
 ///
 /// [delay] is jittered by ±25 % unless [jitter] is false, and never exceeds [maxDelay].
 /// [when] limits which errors are retried; anything thrown is retried by default,
-/// `Error`s included. [onRetry] fires before each wait. [cancelToken] aborts the loop
-/// with a [CancelledException], unlike `Future.cancelWith`, which leaves it running.
+/// `Error`s included. [onRetry] fires before each wait. The enclosing [Cancel.session]
+/// aborts the loop with a [CancelledException], unlike `Future.cancellable`, which
+/// leaves it running.
 ///
 /// ```dart
 /// final data = await retry(fetchData, attempts: 3, delay: 200.ms);
@@ -21,7 +22,6 @@ Future<T> retry<T>(
   bool jitter = true,
   bool Function(Object error)? when,
   void Function(int attempt, Object error, Duration nextDelay)? onRetry,
-  CancelToken? cancelToken,
 }) async {
   final maxAttempts = attempts > 0 ? attempts : 1;
   final factor = backoff >= 1.0 ? backoff : 1.0;
@@ -29,12 +29,12 @@ Future<T> retry<T>(
   var current = delay;
 
   while (true) {
-    cancelToken?.throwIfCancelled();
+    Cancel.throwIfCancelled();
     attempt++;
     try {
       return await action();
     } catch (error) {
-      cancelToken?.throwIfCancelled();
+      Cancel.throwIfCancelled();
       if (attempt >= maxAttempts || !(when?.call(error) ?? true)) rethrow;
 
       var wait = jitter ? current.jittered(0.25) : current;

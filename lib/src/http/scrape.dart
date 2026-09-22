@@ -24,8 +24,10 @@ final class _Plan<T> {
   final Map<String, Object?>? meta;
   final Map<String, String>? headers;
   final String method;
-  final String? body;
-  final Map<String, String>? fields;
+  final String? text;
+  final List<int>? bytes;
+  final Map<String, String>? form;
+  final Object? json;
   final bool revisit;
   final bool offsite;
 
@@ -35,8 +37,10 @@ final class _Plan<T> {
     this.meta,
     this.headers,
     this.method = 'GET',
-    this.body,
-    this.fields,
+    this.text,
+    this.bytes,
+    this.form,
+    this.json,
     this.revisit = false,
     this.offsite = false,
   });
@@ -175,6 +179,14 @@ final class InitContext<T> {
   /// Which URLs [ResponseContext.follow] may go to. Default: the seeds' hosts, `www.` or not.
   bool Function(Uri url)? scope;
 
+  /// Whether each host's `/robots.txt` is fetched once and obeyed.
+  ///
+  /// A path it forbids for this crawl's `user-agent` is dropped and counted in
+  /// [ScrapeSummary.dropped]; a `Crawl-delay` it asks for raises [delay] for that host
+  /// alone, never lowers it. A site with no `robots.txt`, or one that cannot be read,
+  /// forbids nothing.
+  bool robots = false;
+
   final List<Request> _seeds;
   final Map<Uri, Map<String, Object?>> _seedMeta = {};
 
@@ -256,8 +268,9 @@ sealed class HookContext<T> {
   ///
   /// Returns whether it was scheduled. A target outside the crawl's scope, or with a non-http
   /// scheme, is dropped unless [offsite] is set; so is one already visited unless [revisit] is
-  /// set. Pass at most one of [body] and [fields]. [onResponse] and [onError] override the
-  /// crawl's hooks for this request.
+  /// set. The body is at most one of [text], [bytes], [form] and [json], the same four words
+  /// [Request] and [UriExtensions.post] take. [onResponse] and [onError] override the crawl's
+  /// hooks for this request.
   bool follow(
     Object target, {
     ResponseHook<T>? onResponse,
@@ -265,13 +278,14 @@ sealed class HookContext<T> {
     Map<String, Object?>? meta,
     Map<String, String>? headers,
     String method = 'GET',
-    String? body,
-    Map<String, String>? fields,
+    String? text,
+    List<int>? bytes,
+    Map<String, String>? form,
+    Object? json,
     bool revisit = false,
     bool offsite = false,
   }) {
     _open('follow');
-    if (body != null && fields != null) throw ArgumentError('Pass at most one of "body" and "fields".');
     final scheduled = _follow(
       target,
       _Plan<T>(
@@ -280,8 +294,10 @@ sealed class HookContext<T> {
         meta: meta,
         headers: headers,
         method: method,
-        body: body,
-        fields: fields,
+        text: text,
+        bytes: bytes,
+        form: form,
+        json: json,
         revisit: revisit,
         offsite: offsite,
       ),
@@ -428,7 +444,7 @@ final class ScrapeSummary {
 /// A crawl: five hooks on a chain, consumed as a stream.
 ///
 /// It is a `Stream<Either<ScrapeFailure, T>>`, so `.rights`, `.lefts`, `.unwrap()`, `.take`
-/// and `.cancelWith` apply. Nothing is sent until it is listened to.
+/// and `.cancellable` apply. Nothing is sent until it is listened to.
 ///
 /// ```dart
 /// final items = url.scrape<Item>()
@@ -580,6 +596,14 @@ class _Item<T> {
 
 class _Host<T> {
   final Queue<_Item<T>> queue = Queue<_Item<T>>();
+
+  /// This host's `/robots.txt`, fetched at most once; the future is shared so the
+  /// requests that start together wait on one fetch rather than each making their own.
+  Future<_Robots>? robots;
+
+  /// A gap this host asked for through `Crawl-delay`. The crawl's own [InitContext.delay]
+  /// still applies; whichever is longer wins, so robots can slow a host but never hurry it.
+  Duration gap = Duration.zero;
   int inFlight = 0;
   int consecutiveFailures = 0;
   int backoffs = 0;
@@ -733,6 +757,23 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
     return Duration(milliseconds: ms > 30000 ? 30000 : ms);
   }
 
+  /// [host]'s rules, fetched once. Never through the frontier: robots.txt is not a page
+  /// the crawl is for, and a failure to read it is not a failure of the crawl.
+  Future<_Robots> robotsFor(_Host<T> host, Uri url) => host.robots ??= () async {
+    try {
+      final res = await lease.client
+          .send(Request('GET', url.replace(path: '/robots.txt', query: null, fragment: null)))
+          .timeout(cfg.timeout);
+      final body = await res.read().timeout(cfg.timeout);
+      // A 4xx is a site with no rules; a 5xx is a site that cannot say, and the
+      // conservative reading — refuse everything — would strand a whole crawl on one
+      // bad deploy, so both are read as open.
+      return body.isOk ? _Robots.parse(body.text, _userAgent) : _Robots.open;
+    } catch (_) {
+      return _Robots.open;
+    }
+  }();
+
   /// Schedules [item] unless it is too deep, off-scheme, out of scope, or already visited.
   bool enqueue(_Item<T> item) {
     if (stopped) return false;
@@ -762,9 +803,15 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
   }
 
   _Follow<T> followFrom(_Item<T> item, Uri base) => (target, plan) {
-    final next = Request(plan.method, _resolve(base, target), headers: plan.headers);
-    if (plan.body case final body?) next.text = body;
-    if (plan.fields case final fields?) next.fields = fields;
+    final next = Request(
+      plan.method,
+      _resolve(base, target),
+      headers: plan.headers,
+      text: plan.text,
+      bytes: plan.bytes,
+      form: plan.form,
+      json: plan.json,
+    );
     final scheduled = enqueue(
       _Item<T>(
         next,
@@ -925,6 +972,16 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
     final sent = _clone(item.request);
     if (!sessionHasUserAgent) sent.headers.putIfAbsent('user-agent', () => _userAgent);
 
+    if (cfg.robots) {
+      final rules = await robotsFor(host, sent.url);
+      if (!rules.allows(sent.url)) {
+        dropped++;
+        return;
+      }
+      // The site's own gap, where it asks for a longer one than the crawl already keeps.
+      if (rules.crawlDelay case final asked? when asked > host.gap) host.gap = asked;
+    }
+
     if (hooks.onRequest case final hook?) {
       final ctx = RequestContext._(sent, item.depth, item.attempt, item.meta);
       try {
@@ -1007,13 +1064,14 @@ Future<void> _run<T>(_Hooks<T> hooks, StreamController<Either<ScrapeFailure, T>>
       final host = ready.removeFirst();
       host.ready = false;
       if (host.paused || host.queue.isEmpty || host.inFlight >= cfg.perHost) continue;
-      if (cfg.delay > Duration.zero) {
+      final gap = host.gap > cfg.delay ? host.gap : cfg.delay;
+      if (gap > Duration.zero) {
         final wait = host.nextSend.difference(now);
         if (wait > Duration.zero) {
           pause(host, wait);
           continue;
         }
-        host.nextSend = now.add(cfg.delay);
+        host.nextSend = now.add(gap);
       }
       final item = host.queue.removeFirst();
       queued--;

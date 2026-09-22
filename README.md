@@ -27,11 +27,11 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 | `native.dart` | `Native`: loads `dart_toolkit_native`, the package's Rust library, for `fs` and `hash` | path |
 | `collection.dart` | `Sequence` (`.sequence` on any `Iterable` or `Map`): lazy queries, multi-key sort, joins, sets; `Table`: rows of named columns, and the package's one table renderer; CSV, NDJSON, Markdown | — |
 | `formats.dart` | `JsonDocument` with JSONPath; YAML, TOML, INI into it; one markup tree for `HtmlDocument` and `XmlDocument`, CSS `$` and XPath `$x` on both; YAML out | — |
-| `async.dart` | `parallelize`, `retry`, `Mutex`, `CancelToken`, stream operators | — |
+| `async.dart` | `parallelize`, `retry`, `Mutex`, `Cancel.session`, stream operators | — |
 | `cli.dart` | `Cli` with typed options, `Console` (spinners, progress, prompts), `Logger`, ANSI styling | — |
-| `fs.dart` | `Path`; zip, 7z, rar, tar and gz/xz/zstd/bz2 archives with passwords, through the native library | path |
-| `hash.dart` | 16 digests and 4 checksums behind one `hash(Hash.…)`, HMAC, hex/base64/base32, `Crypto.token`, `uuid`, `equals` | — |
-| `process.dart` | `run`, pipelines, `which` | — |
+| `fs.dart` | `Path`; zip, 7z, rar, tar and gz/xz/zstd/bz2 archives with passwords, by magic number, through the native library | path |
+| `hash.dart` | 16 digests and 4 checksums behind one `hash(Hash.…)`, HMAC, hex/base64/base32, `Secure.token`, `uuid`, `equals` | path |
+| `process.dart` | `run`, pipelines, `which`, `Shell.session` | path |
 | `http.dart` | `Request`, `Response`, `Client` (`IoClient`, `BrowserClient` over Chrome), `Http.session`, scraping, downloads, `res.html`, `url.json()` | — |
 
 Ten modules. Every parser and the HTTP client are the package's own, checked against the
@@ -70,6 +70,18 @@ await (await which('dart'))?.run(args: ['--version']);
 
 final piped = await ('echo "apple\nbanana"' | 'grep an').run();      // pipefail semantics
 print(piped.lines);
+```
+
+A working directory, an environment, a timeout or a failure policy that every command would
+otherwise repeat belongs to the scope, not the call — the shape `Http.session` has for a
+client. `run`, `path.run(args:)` and a pipeline all read it, and a per-call argument still wins:
+
+```dart
+await Shell.session(() async {
+  await run('git fetch --all');
+  await run('git status --short');
+  final probe = await run('git cat-file -e deadbeef', strict: true);   // this one may throw
+}, workdir: repo, env: {'GIT_TERMINAL_PROMPT': '0'}, timeout: 30.s, quiet: true, strict: false);
 ```
 
 ### HTML and XML
@@ -137,6 +149,17 @@ for (final e in await zip.archiveEntries()) print('${e.name} ${e.size}');
 await log.compressTo('log.gz');  await big.compressTo('big.zst');
 ```
 
+**Writing names the format; reading works it out.** `archiveTo` and `compressTo` take it from
+the destination's extension, because a file that does not exist yet has nothing else to go on.
+`extractTo`, `archiveEntries` and `decompressTo` read the file's magic number, so a download
+saved without an extension, or a `.bin` that is really a 7z, still opens:
+
+```dart
+await 'downloaded.bin'.path.extractTo(dir);   // zip, 7z, rar, tar or any of the tar codecs
+await 'blob'.path.decompressTo('out.txt');     // gzip, xz, zstd or bzip2
+Archive.of('x.rar');                           // Archive.rar — named, and read-only
+```
+
 A name that came from outside — a scraped title, a header, user input — becomes one component
 with `filename`; `sanitized` is for a whole path and keeps its separators:
 
@@ -182,7 +205,7 @@ t.where((r) => r.number('size') > 1e6)
 t.groupBy('disc').sum('size');                            // Table(disc, size)
 t.pivot(rows: 'disc', column: 'format', value: 'size');
 await t.join(other, on: 'href').saveCsv('out.csv');
-final rows = json.$(r'$.items[*]').table;                 // or Table.csv(text), Table.rows(list)
+final rows = json.$(r'$.items[*]').table;                 // or Table.csv(text), Table.rows(maps)
 ```
 
 ### Hashing
@@ -191,9 +214,13 @@ Digests run in the native library, so they are the same and fast on every platfo
 suite checks each against its published vectors and against `openssl`. A file streams, so
 memory is flat whatever its size.
 
+`hash`, `hashBytes`, `checksum`, `hmac` and `hmacBytes` read the same on all three receivers
+— a `String`, a `List<int>` and a `Path` — so none of them has to be guessed at:
+
 ```dart
-'abc'.hash(Hash.sha256);  bytes.hash(Hash.blake3);  await file.hash(Hash.sha3_256);  await file.checksum(Hash.crc32);  bytes.hash(Hash.xxh3)
-'body'.hmac(Hash.sha256, secret);  Crypto.token();  Crypto.uuid();  Crypto.equals(a, b)
+'abc'.hash(Hash.sha256);  bytes.hash(Hash.blake3);  await file.hash(Hash.sha3_256);  await file.checksum(Hash.crc32)
+'body'.hmac(Hash.sha256, secret);  await file.hmac(Hash.sha256, key);  bytes.hmacBytes(Hash.sha512, key)
+Secure.token();  Secure.uuid();  Secure.bytes();  Secure.equals(a, b)
 bytes.hex;  bytes.base64Url;  'JBSWY3DP'.base32Bytes;  '6869'.hexBytes
 ```
 
@@ -203,7 +230,8 @@ read as an `int` (`bytes.checksum(Hash.crc32)`); the 64-bit ones read as hex, be
 
 **Encryption, password hashing, signatures and JWT are deliberately absent.** This is a
 toolkit for automation scripts: it identifies, verifies and encodes data, and has no
-business owning the code that protects it. Use a dedicated package when you need that.
+business owning the code that protects it. Use a dedicated package when you need that. The
+class is `Secure`, not `Crypto`, for the same reason.
 
 ### Concurrency
 
@@ -223,13 +251,52 @@ final lock = Mutex();
 await lock.run(() async { /* critical section */ });
 ```
 
-One cancellation idiom composes over any `Stream` or `Future`, and a `Cli` action already has a
-token — `ctx.cancel` — that a signal, `die` and the end of the action cancel:
+**A token is not threaded, it is in scope.** `Cancel.session` holds one for everything inside
+it, the way `Http.session` holds a client: `download`, `parallelize`, `retry` and `cancellable`
+all read `Cancel.token`, and none of them takes a `cancelToken:` of its own. `Cli.run` opens
+one around the action with `ctx.cancel` as its token, so a signal, `die` or the end of the
+action stops the lot.
+
+`Cancel.isCancelled`, `Cancel.reason` and `Cancel.throwIfCancelled()` read the ambient state —
+all three quiet outside a session, because nothing has cancelled it there. A loop of its own
+cooperates with one line:
 
 ```dart
-await for (final item in url.scrape<Item>().onResponse(parse).rights.cancelWith(ctx.cancel)) {
-  print(item);
+for (final item in items) {
+  Cancel.throwIfCancelled();
+  await handle(item);
 }
+```
+
+A stream or future that does not cooperate by itself gets `.cancellable`, which binds it to the
+scope. A stream ends; a future fails, having no quiet ending to offer. Either way the use site
+decides what an ending means:
+
+```dart
+await for (final item in feed.cancellable) print(item);
+if (Cancel.isCancelled) return;
+
+final page = await slow.cancellable;   // CancelledException if the scope fires first
+```
+
+```dart
+Future<void> main(List<String> args) => Cli(name: 'sync', handler: work).run(args);
+
+Future<void> work(CliContext ctx) async {
+  await pairs.download(concurrency: 8).show();       // stops on ^C
+  await urls.parallelize(fetch, concurrency: 8);     // and so do these
+  await retry(fetchIndex, attempts: 5);
+}
+```
+
+Outside a `Cli`, open the scope yourself. There is no second way in: `.cancellable` takes no
+token and throws outside a session, so a token is named where the scope opens and nowhere else.
+
+```dart
+final stop = CancelToken();
+await Cancel.session(() async {
+  await for (final item in url.scrape<Item>().onResponse(parse).rights) print(item);
+}, token: stop);
 ```
 
 ### Scraping
@@ -261,8 +328,8 @@ await for (final story in stories.rights) print(story);
 Five hooks, each with the context for its moment:
 
 - `onInit` — once, on listen, with every crawl-wide setting: `concurrency`, `perHost`, `delay`,
-  `timeout`, `retries`, `redirects`, `bodyLimit`, `pages`, `depth`, `scope`, and `seed()`
-  to add starting points. It may be async — fetch a token, read a config.
+  `timeout`, `retries`, `redirects`, `bodyLimit`, `pages`, `depth`, `scope`, `robots`, and
+  `seed()` to add starting points. It may be async — fetch a token, read a config.
 - `onRequest` — before every send. Anything per request is here: a header, the `user-agent`, a
   signature on `ctx.request`, or `ctx.skip()`.
 - `onResponse` — every 2xx. `ctx.emit`, `ctx.follow`, `ctx.stop`; `ctx.url` is the page that
@@ -276,9 +343,15 @@ Five hooks, each with the context for its moment:
 
 `follow` stays on the seeds' hosts (`www.` or not), strips fragments, never fetches a page
 twice, and drops `mailto:` and `javascript:` by itself — and returns `false` when it dropped
-something, so nothing vanishes silently. `ctx.scope` in `onInit` widens the rule for the crawl,
+something, so nothing vanishes silently. It names a body with the same four words `Request`
+and `post` use — `text:`, `bytes:`, `form:`, `json:`. `ctx.scope` in `onInit` widens the rule for the crawl,
 `offsite: true` for one link, `revisit: true` for one refetch. `follow(onResponse:, onError:)`
 overrides the hooks for one request, and `meta:` rides along to it.
+
+`ctx.robots = true` fetches each host's `/robots.txt` once and drops what it forbids into
+`summary.dropped`; longest match wins, `*` and `$` count, and a `Crawl-delay` raises that
+host's gap but never lowers it. A site with no rules, or one that cannot be read, forbids
+nothing.
 
 Defaults: 16 in flight, 8 per host, 30 s, 2 retries, 5 hops, 16 MB, `user-agent: dart-toolkit`
 unless a request or the session names one, and a host answering 429 or 503 is paused for its
@@ -294,8 +367,10 @@ await for (final r in stories) switch (r) { case Right(:final value): ...; case 
 ```
 
 One session shares a client across every request inside it, closes it on the way out, and is
-where the timeout and default headers live. `get`, `head`, `post`, `put`, `patch` and `delete`
-take `body:` (text, bytes or form fields) or `json:`; `fetch` is a GET that must be 2xx.
+where the timeout, default headers and cookie jar live. `get`, `head`, `post`, `put`, `patch` and `delete`
+name a body by what it is — at most one of `text:`, `bytes:`, `form:` and `json:`, each typed,
+each carrying its own `content-type`, and the same four words on `Request` and `follow`.
+`fetch` is a GET that must be 2xx.
 
 ```dart
 await Http.session(() async {
@@ -304,6 +379,17 @@ await Http.session(() async {
   if (!res.isOk) await die('${res.statusCode} from $other');
   final created = await api.withQuery({'v': 2}).post(json: {'name': 'x'});
 }, timeout: 30.s, headers: {'user-agent': 'my-tool/1.0'});
+```
+
+`cookies: true` keeps what the responses set and sends them back, so a login and the pages
+behind it are one crawl and nothing parses `set-cookie` by hand. The jar lasts as long as the
+session and never touches disk; a request that names its own `cookie` still wins.
+
+```dart
+await Http.session(cookies: true, () async {
+  await login.post(form: {'user': user, 'pass': pass});
+  await for (final item in dashboard.scrape<Item>().onResponse(parse).rights) print(item);
+});
 ```
 
 `url / 'users'` appends a path segment, treating the base as a directory — the same glyph as
@@ -412,11 +498,11 @@ failed or interrupted transfer keeps its `.part`, and the next download of the s
 up with a `Range` request. Take a map, an iterable of `(url:, path:)` records, or a stream of
 them, so discovery and transfer overlap:
 
-One file or many, the events are the same — `dest.download(url)` is a batch of one, so it
+One file or many, one name and one event stream — `dest.download(url)` is a batch of one, so it
 renders with the same `show` and needs no wrapping:
 
 ```dart
-await for (final p in {url: dest}.downloadAll(concurrency: 4)) {
+await for (final p in {url: dest}.download(concurrency: 4)) {
   switch (p.current) {
     case Downloading(:final ratio):   print('${p.current.label} $ratio');
     case Downloaded(:final bytes):    print('${p.current.label} $bytes B');
@@ -426,13 +512,23 @@ await for (final p in {url: dest}.downloadAll(concurrency: 4)) {
 }
 ```
 
+`checksum:` says what the bytes must hash to — a wrong one is a `DownloadFailed` holding a
+`ChecksumMismatch`, and the `.part` goes rather than waiting to be resumed into the same wrong
+file. `ifModified:` asks the server whether the file changed instead of skipping because it is
+there, and a `304` is a `DownloadSkipped`:
+
+```dart
+await 'sdk.zip'.path.download(url, checksum: (Hash.sha256, '9f86d0…')).show();
+await feed.path.download(url, ifModified: true).show();   // re-run cheaply
+```
+
 A progress widget needs none of that — `show` renders the batch and returns its last event, and
 `merge` lets a fixed list and a crawl feed the same downloader at the same time:
 
 ```dart
 final last = await [Stream.fromIterable(artwork.pairs), scraped]
     .merge()
-    .downloadAll(concurrency: 8, cancelToken: ctx.cancel)
+    .download(concurrency: 8)
     .show(slots: 8, message: 'Downloading', done: 'Done.');
 print('${last?.written} new files');
 ```
@@ -454,35 +550,42 @@ lifecycle: a usage error (`UsageException`) prints and exits 64, `ctx.cancel` is
 signal, and whether the action returns or throws the exit hooks run and the signal handlers
 are released so the process ends.
 
+Every option kind is behind `Opt`, the flag included, and a command is everything it is given:
+`options:`, `commands:` and `handler:` are constructor arguments, so there is one way to say
+each and nothing is set after the fact.
+
 ```dart
 enum Env { dev, staging, production }
 
 final env = Opt.among('env', Env.values, abbr: 'e').or(Env.production);  // Env
 final token = Opt.text('token', abbr: 't').required();                   // String
 final workers = Opt.number('workers', abbr: 'w').or(4);                  // int
-final dryRun = Flag('dry-run', abbr: 'd');                               // bool
+final dryRun = Opt.flag('dry-run', abbr: 'd');                           // bool
 final since = Opt.by('since', DateTime.parse);                           // DateTime?
 
-final cli = Cli(name: 'deployer', options: [env, token, workers, dryRun])
-  ..action((ctx) async {
+final cli = Cli(
+  name: 'deployer',
+  options: [env, token, workers, dryRun],
+  handler: (ctx) async {
     final stage = Logger.stages(2);
     stage('Checking target');           // [1/2] Checking target
     Logger.info('Deploying to ${ctx(env).name} with ${ctx(workers)} workers');
     stage('Rolling out');
     await Console.spin('Deploying...', deploy);
-  });
+  },
+  commands: [
+    CliCommand('fetch', description: 'Fetch a thing', options: [verbose], handler: fetch),
+  ],
+);
 
 await cli.run(args);   // deployer -dw8 -t abc, deployer --workers=8 fetch, ...
 ```
 
 Options may precede the subcommand, short flags combine (`-dv`), and a short option may attach
-its value (`-w8`).
+its value (`-w8`). A subcommand nests by taking `commands:` of its own.
 
-A subcommand takes its options the same way; `build:` is for one that nests further:
-
-```dart
-cli.command('fetch', description: 'Fetch a thing', options: [verbose], handler: run);
-```
+`or` is the one word for a default, wherever one is given: `Opt.…or(value)`, and
+`Console.ask(or:)`, `confirm(or:)`, `select(or:)`.
 
 ### Testable IO
 
@@ -515,7 +618,7 @@ than a tour:
 | file | shows |
 |---|---|
 | [`cli_app.dart`](example/cli_app.dart) | subcommands, typed options, stages, progress, `ctx.cancel`, exit hooks |
-| [`concurrent_work.dart`](example/concurrent_work.dart) | `parallelize` settling into `Either`, `retry`, `CancelToken`, `Mutex`, isolates, stream operators |
+| [`concurrent_work.dart`](example/concurrent_work.dart) | `parallelize` settling into `Either`, `retry`, `Cancel.session`, `Mutex`, isolates, stream operators |
 | [`config_formats.dart`](example/config_formats.dart) | YAML, TOML, INI, JSON and XML through one document type, JSONPath, `toYaml` |
 | [`files_and_digests.dart`](example/files_and_digests.dart) | `Path`, `glob`, digests for de-duplication, archives, verification |
 | [`shell_pipeline.dart`](example/shell_pipeline.dart) | `run`, pipelines, `which`, failure policy, `Env` |

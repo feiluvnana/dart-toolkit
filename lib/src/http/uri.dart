@@ -42,22 +42,48 @@ extension UriExtensions on Uri {
   /// HEAD: the headers without the body.
   Future<Response> head({Map<String, String>? headers}) => send(Request('HEAD', this, headers: headers));
 
-  /// POST. [body] is a [String] (UTF-8 text), a `List<int>`, or a `Map<String, String>`
-  /// (form-encoded); [json] is any JSON-encodable value, sent as `application/json`.
-  Future<Response> post({Map<String, String>? headers, Object? body, Object? json}) =>
-      send(_withBody('POST', headers, body, json));
+  /// POST. The body is named by what it is — at most one of [text] (UTF-8), [bytes],
+  /// [form] (url-encoded) or [json] — and carries the matching `content-type`. The same
+  /// four words name a body on [Request] and on `follow`.
+  ///
+  /// ```dart
+  /// await api.post(json: {'name': 'x'});
+  /// await api.post(form: {'q': 'dart'});
+  /// ```
+  Future<Response> post({
+    Map<String, String>? headers,
+    String? text,
+    List<int>? bytes,
+    Map<String, String>? form,
+    Object? json,
+  }) => send(Request('POST', this, headers: headers, text: text, bytes: bytes, form: form, json: json));
 
-  /// PUT; see [post] for [body] and [json].
-  Future<Response> put({Map<String, String>? headers, Object? body, Object? json}) =>
-      send(_withBody('PUT', headers, body, json));
+  /// PUT; see [post] for the body.
+  Future<Response> put({
+    Map<String, String>? headers,
+    String? text,
+    List<int>? bytes,
+    Map<String, String>? form,
+    Object? json,
+  }) => send(Request('PUT', this, headers: headers, text: text, bytes: bytes, form: form, json: json));
 
-  /// PATCH; see [post] for [body] and [json].
-  Future<Response> patch({Map<String, String>? headers, Object? body, Object? json}) =>
-      send(_withBody('PATCH', headers, body, json));
+  /// PATCH; see [post] for the body.
+  Future<Response> patch({
+    Map<String, String>? headers,
+    String? text,
+    List<int>? bytes,
+    Map<String, String>? form,
+    Object? json,
+  }) => send(Request('PATCH', this, headers: headers, text: text, bytes: bytes, form: form, json: json));
 
-  /// DELETE; see [post] for [body] and [json].
-  Future<Response> delete({Map<String, String>? headers, Object? body, Object? json}) =>
-      send(_withBody('DELETE', headers, body, json));
+  /// DELETE; see [post] for the body.
+  Future<Response> delete({
+    Map<String, String>? headers,
+    String? text,
+    List<int>? bytes,
+    Map<String, String>? form,
+    Object? json,
+  }) => send(Request('DELETE', this, headers: headers, text: text, bytes: bytes, form: form, json: json));
 
   /// GETs this URI and throws [HttpException] unless the status is 2xx.
   ///
@@ -71,27 +97,4 @@ extension UriExtensions on Uri {
 
   /// Fetches this URI and parses the response body as JSON; see [fetch].
   Future<JsonDocument> json({Map<String, String>? headers}) async => (await fetch(headers: headers)).json;
-
-  Request _withBody(String method, Map<String, String>? headers, Object? body, Object? json) {
-    if (body != null && json != null) throw ArgumentError('Pass at most one of "body" and "json".');
-    final request = Request(method, this, headers: headers);
-    if (json != null) {
-      request.bytes = utf8.encode(jsonEncode(json));
-      request.headers.putIfAbsent('content-type', () => 'application/json; charset=utf-8');
-      return request;
-    }
-    switch (body) {
-      case null:
-        break;
-      case String():
-        request.text = body;
-      case List<int>():
-        request.bytes = Uint8List.fromList(body);
-      case Map<String, String>():
-        request.fields = body;
-      default:
-        throw ArgumentError.value(body, 'body', 'Must be a String, a List<int> or a Map<String, String>');
-    }
-    return request;
-  }
 }

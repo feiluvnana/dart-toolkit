@@ -122,8 +122,8 @@ final class Element extends Node {
   /// (`media:content`) is not a CSS identifier; select those with the XPath form.
   Elements $(String selector) => Elements(_Selector.parse(selector, fold: syntax == Syntax.html).matchAll(this));
 
-  /// The nodes matching XPath [expression] with this element as the context; see [XPath].
-  Nodes $x(String expression) => Nodes(XPath.parse(expression).select(this));
+  /// The nodes matching XPath [expression] with this element as the context; see XPath.
+  Nodes $x(String expression) => Nodes(_XPath.parse(expression).select(this));
 
   @override
   String get text {
@@ -138,7 +138,7 @@ final class Element extends Node {
     return sb.toString();
   }
 
-  /// Text lines split at `<br>` and newlines, _entities decoded, tags dropped, blanks removed.
+  /// Text lines split at `<br>` and newlines, entities decoded, tags dropped, blanks removed.
   ///
   /// A non-breaking space counts as a space here, unlike in [text]: these are lines meant to
   /// be read, while [text] is the node's string value and has to stay faithful — XPath's
@@ -250,7 +250,7 @@ extension type Elements(List<Element> _list) implements List<Element> {
 
   /// The nodes matching XPath [expression] from each match, each node once, in document order.
   Nodes $x(String expression) {
-    final x = XPath.parse(expression);
+    final x = _XPath.parse(expression);
     final seen = <Node>{};
     return Nodes([
       for (final e in _list)
@@ -305,7 +305,7 @@ final class HtmlDocument {
 
   /// The nodes matching XPath [expression], from the document: `//a/@href`,
   /// `//tr[td[2]="FLAC"]/td[1]/a`, `//h2[contains(., "Tracks")]/following-sibling::table[1]`.
-  Nodes $x(String expression) => Nodes(XPath.parse(expression).select(root));
+  Nodes $x(String expression) => Nodes(_XPath.parse(expression).select(root));
 
   /// The `<head>` element.
   Element get head => root.children.firstWhere((e) => e.name == 'head');
@@ -313,7 +313,7 @@ final class HtmlDocument {
   /// The `<body>` element.
   Element get body => root.children.firstWhere((e) => e.name == 'body');
 
-  /// The document's text, _entities decoded.
+  /// The document's text, entities decoded.
   String get text => root.text;
 
   /// The document serialised back to HTML.
@@ -389,12 +389,23 @@ String _escapeText(String text) => text.replaceAll('&', '&amp;').replaceAll('<',
 /// [value] with `&` and `"` escaped for a double-quoted attribute.
 String _escapeAttribute(String value) => value.replaceAll('&', '&amp;').replaceAll('"', '&quot;');
 
-/// The nearest ancestor of [e] named [name], or `null`.
-Element? _closest(Element e, String name) {
-  for (var p = e.parent; p != null; p = p.parent) {
-    if (p.name == name) return p;
+/// Elements below [root] named in [names], skipping whatever is inside a nested element
+/// named in [stop], in document order.
+///
+/// The walk a `<table>` needs: a table inside a cell keeps its own rows, and a row keeps
+/// its own cells. Doing it with `$` instead meant a subtree search per row whose matches
+/// then had to be filtered back down by their nearest ancestor.
+List<Element> _within(Element root, Set<String> names, Set<String> stop) {
+  final out = <Element>[];
+  void walk(Element e) {
+    for (final node in e.nodes) {
+      if (node is! Element || stop.contains(node.name)) continue;
+      names.contains(node.name) ? out.add(node) : walk(node);
+    }
   }
-  return null;
+
+  walk(root);
+  return out;
 }
 
 /// An HTML `<table>` as a [Table].
@@ -408,16 +419,15 @@ extension ElementTableExtensions on Element {
     if (t == null) return Table(const [], const []);
     var header = <String>[];
     final body = <List<String>>[];
-    // Scoped by nearest enclosing table and row: `$` searches the whole subtree, so a
-    // nested table would otherwise contribute its rows and cells to this one.
-    for (final tr in t.$('tr').where((tr) => _closest(tr, 'table') == t)) {
+    for (final tr in _within(t, const {'tr'}, const {'table'})) {
+      final cells = _within(tr, const {'th', 'td'}, const {'table', 'tr'});
       final ths = [
-        for (final th in tr.$('th'))
-          if (_closest(th, 'tr') == tr) th,
+        for (final c in cells)
+          if (c.name == 'th') c,
       ];
       final tds = [
-        for (final td in tr.$('td'))
-          if (_closest(td, 'tr') == tr) td,
+        for (final c in cells)
+          if (c.name == 'td') c,
       ];
       if (header.isEmpty && ths.isNotEmpty && tds.isEmpty) {
         header = [for (final th in ths) th.text.trim()];

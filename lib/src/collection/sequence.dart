@@ -223,7 +223,7 @@ class Sequence<T> extends Iterable<T> {
 
   /// Sorted by [compare]; `thenBy` adds a tie-break. Elements that are [Comparable] have
   /// [ComparableSequenceExtensions.sorted] instead.
-  Sorted<T> sortedWith(Comparator<T> compare) => Sorted<T>._(_items, [compare]);
+  Sorted<T> sortedWith(Comparator<T> compare) => Sorted<T>._(_items, [_byComparator(compare)]);
 
   /// Sorted by [key], largest first when [descending]; `thenBy` adds the next key.
   Sorted<T> sortedBy<K extends Comparable<K>>(K Function(T element) key, {bool descending = false}) =>
@@ -320,9 +320,6 @@ class Sequence<T> extends Iterable<T> {
 
   /// `(key, count)` per distinct [key].
   Sequence<(K, int)> countBy<K>(K Function(T element) key) => groupBy(key).mapValues((g) => g.length);
-
-  /// How many elements there are, or how many pass [test].
-  int count([bool Function(T element)? test]) => test == null ? length : where(test).length;
 
   /// A map from [key] to the last element with it.
   Map<K, T> indexBy<K>(K Function(T element) key) => {for (final e in _items) key(e): e};
@@ -422,12 +419,10 @@ extension SequenceOfPairsExtensions<K, V> on Sequence<(K, V)> {
   Sequence<(V, K)> get inverted => map((p) => (p.$2, p.$1));
 
   /// Pairs sorted by key; keys must be [Comparable].
-  Sorted<(K, V)> sortedByKey({bool descending = false}) =>
-      sortedWith((a, b) => (descending ? -1 : 1) * (a.$1 as Comparable<Object?>).compareTo(b.$1));
+  Sorted<(K, V)> sortedByKey({bool descending = false}) => Sorted<(K, V)>._(this, [_byKey((p) => p.$1, descending)]);
 
   /// Pairs sorted by value; values must be [Comparable].
-  Sorted<(K, V)> sortedByValue({bool descending = false}) =>
-      sortedWith((a, b) => (descending ? -1 : 1) * (a.$2 as Comparable<Object?>).compareTo(b.$2));
+  Sorted<(K, V)> sortedByValue({bool descending = false}) => Sorted<(K, V)>._(this, [_byKey((p) => p.$2, descending)]);
 
   /// A map from the pairs; a repeated key keeps the later value, or what [merge] returns.
   Map<K, V> toMap([V Function(V existing, V incoming)? merge]) {
@@ -467,9 +462,6 @@ extension SequenceOfGroupsExtensions<K, T> on Sequence<Group<K, T>> {
 
   /// `(key, result)` with each group folded by [fold]: `groupBy(…).mapValues((g) => g.length)`.
   Sequence<(K, R)> mapValues<R>(R Function(Group<K, T> group) fold) => map((g) => (g.key, fold(g)));
-
-  /// `(key, size)` per group.
-  Sequence<(K, int)> get counts => mapValues((g) => g.length);
 
   /// The groups as a map of lists.
   Map<K, List<T>> toMap() => {for (final g in this) g.key: g.toList()};
@@ -518,7 +510,7 @@ extension ComparableSequenceExtensions<T extends Comparable<Object>> on Sequence
 ///
 /// {@category Collections}
 final class Sorted<T> extends Sequence<T> {
-  final List<Comparator<T>> _keys;
+  final List<_SortKey<T>> _keys;
   List<T>? _cache;
 
   Sorted._(super.source, this._keys) : super._();
@@ -527,16 +519,23 @@ final class Sorted<T> extends Sequence<T> {
   Iterable<T> get _items => _cache ??= _sort();
 
   List<T> _sort() {
-    // The index decorates each element so the sort is stable whatever `List.sort` does.
-    final decorated = [for (final (i, e) in _source.indexed) (i, e)]
-      ..sort((a, b) {
-        for (final k in _keys) {
-          final c = k(a.$2, b.$2);
+    final elements = _source.toList();
+    // Each key is extracted once per element rather than once per comparison: a sort of n
+    // elements makes about n·log n comparisons, so a selector that lowercases a string or
+    // parses a date was being paid for that many times over.
+    final extracts = [
+      for (final k in _keys) [for (final e in elements) k.extract(e)],
+    ];
+    // The position is the last tie-break, so the sort is stable whatever `List.sort` does.
+    final order = [for (var i = 0; i < elements.length; i++) i]
+      ..sort((x, y) {
+        for (var k = 0; k < _keys.length; k++) {
+          final c = _keys[k].compare(extracts[k][x], extracts[k][y]);
           if (c != 0) return c;
         }
-        return a.$1.compareTo(b.$1);
+        return x.compareTo(y);
       });
-    return [for (final d in decorated) d.$2];
+    return [for (final i in order) elements[i]];
   }
 
   /// The next key, applied where the earlier ones tie; largest first when [descending].
@@ -544,8 +543,26 @@ final class Sorted<T> extends Sequence<T> {
       Sorted<T>._(_source, [..._keys, _byKey(key, descending)]);
 
   /// The next tie-break, as a comparator.
-  Sorted<T> thenWith(Comparator<T> compare) => Sorted<T>._(_source, [..._keys, compare]);
+  Sorted<T> thenWith(Comparator<T> compare) => Sorted<T>._(_source, [..._keys, _byComparator(compare)]);
 }
 
-Comparator<T> _byKey<T, K extends Comparable<K>>(K Function(T element) key, bool descending) =>
-    descending ? (a, b) => key(b).compareTo(key(a)) : (a, b) => key(a).compareTo(key(b));
+/// One sort key: what to pull out of an element, and how two of those compare.
+///
+/// Splitting the two is what lets [Sorted] extract once per element; a bare [Comparator]
+/// has the selector sealed inside it and has to be handed whole elements every time.
+final class _SortKey<T> {
+  final Object? Function(T element) extract;
+  final int Function(Object? a, Object? b) compare;
+
+  const _SortKey(this.extract, this.compare);
+}
+
+/// A key from a selector; its values compare as [Comparable], which is what `sortedBy`'s
+/// `K extends Comparable<K>` and a record half alike guarantee.
+_SortKey<T> _byKey<T>(Object? Function(T element) key, bool descending) => _SortKey<T>(
+  key,
+  descending ? (a, b) => (b as Comparable<Object?>).compareTo(a) : (a, b) => (a as Comparable<Object?>).compareTo(b),
+);
+
+/// A caller's own comparator: nothing can be extracted from it, so the element is the key.
+_SortKey<T> _byComparator<T>(Comparator<T> compare) => _SortKey<T>((e) => e, (a, b) => compare(a as T, b as T));

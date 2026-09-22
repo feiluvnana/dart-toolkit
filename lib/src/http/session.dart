@@ -4,9 +4,9 @@ const _clientKey = #dartToolkitHttpClient;
 
 /// The ambient HTTP client seam.
 ///
-/// Every entry point in this module takes an optional `client:`. A session sets one
-/// for all of them at once, so a script reuses connections without threading a client
-/// through every call — and sets the timeout and default headers in the same place.
+/// No entry point in this module takes a `client:`. A session names one once, for every
+/// request, download and crawl inside it, so a script reuses connections without threading
+/// a client through every call — and sets the timeout and default headers in the same place.
 ///
 /// {@category Networking}
 class Http {
@@ -19,6 +19,17 @@ class Http {
   /// server fails with [TimeoutException] instead of hanging the program. [headers] are
   /// added to every request that does not set them itself — a `user-agent`, a referer.
   ///
+  /// [cookies] keeps what the responses set and sends them back, so a login and the pages
+  /// behind it are one session and nothing parses `set-cookie` by hand. The jar lives as
+  /// long as this call and is never written to disk.
+  ///
+  /// ```dart
+  /// await Http.session(cookies: true, () async {
+  ///   await login.post(form: {'user': u, 'pass': p});
+  ///   await for (final item in dashboard.scrape<Item>()...) { ... }
+  /// });
+  /// ```
+  ///
   /// The client is closed when [body] completes, unless [client] was supplied — an
   /// open client delays process exit until its idle connections time out.
   static Future<T> session<T>(
@@ -26,10 +37,13 @@ class Http {
     Client? client,
     Duration? timeout,
     Map<String, String>? headers,
+    bool cookies = false,
   }) async {
     final owned = client == null;
     final inner = client ?? IoClient();
-    final shared = timeout == null && headers == null ? inner : _SessionClient(inner, headers, timeout, owned: owned);
+    final shared = timeout == null && headers == null && !cookies
+        ? inner
+        : _SessionClient(inner, headers, timeout, cookies ? _Jar() : null, owned: owned);
     try {
       return await runZoned(() async => body(), zoneValues: {_clientKey: shared});
     } finally {
@@ -38,21 +52,31 @@ class Http {
   }
 }
 
-/// Applies a session's default headers and timeout to every request.
+/// Applies a session's default headers, timeout and cookie jar to every request.
 final class _SessionClient implements Client {
   final Client _inner;
   final Map<String, String>? _headers;
   final Duration? _timeout;
+  final _Jar? _jar;
   final bool _owned;
 
-  _SessionClient(this._inner, this._headers, this._timeout, {required bool owned}) : _owned = owned;
+  _SessionClient(this._inner, this._headers, this._timeout, this._jar, {required bool owned}) : _owned = owned;
 
   @override
   Future<StreamedResponse> send(Request request) async {
     _headers?.forEach((key, value) => request.headers.putIfAbsent(key, () => value));
+    // A request that names its own `cookie` keeps it: a per-call argument beats the scope.
+    if (_jar case final jar? when !request.headers.containsKey('cookie')) {
+      if (jar.headerFor(request.url) case final header?) request.headers['cookie'] = header;
+    }
     final timeout = _timeout;
-    if (timeout == null) return _inner.send(request);
-    final res = await _inner.send(request).timeout(timeout);
+    final res = timeout == null ? await _inner.send(request) : await _inner.send(request).timeout(timeout);
+    // Taken from the URL that answered, so a cookie set on the last hop of a redirect
+    // belongs to the host that set it.
+    if (_jar case final jar?) {
+      if (res.headers['set-cookie'] case final header?) jar.store(res.url ?? request.url, header);
+    }
+    if (timeout == null) return res;
     return StreamedResponse(
       res.stream.timeout(timeout),
       res.statusCode,

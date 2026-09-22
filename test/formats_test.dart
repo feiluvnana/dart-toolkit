@@ -486,6 +486,104 @@ cert = 'a;b'
       expect(doc.$('html:first-child'), isEmpty);
     });
   });
+
+  group('a nested selector reads the markup around it', () {
+    test('XML keeps its case inside :not() and :has()', () {
+      final doc = '<Root><Item id="1"/><item id="2"/></Root>'.xml;
+      expect(doc.$('Root > :not(Item)').attr('id'), '2', reason: 'the lowercase <item> is what is left');
+      expect(doc.$('Root > :not(item)').attr('id'), '1');
+      expect(doc.$('Root:has(item)'), hasLength(1));
+      expect(doc.$('Root:has(ITEM)'), isEmpty, reason: 'there is no <ITEM>');
+      expect(doc.$('Root:has(Item)'), hasLength(1));
+    });
+
+    test('HTML still folds inside them', () {
+      final doc = '<div><P>a</P><span>b</span></div>'.html;
+      expect(doc.$('div:has(P)'), hasLength(1));
+      expect(doc.$('div > :not(P)').first.name, 'span');
+    });
+
+    test(':has() answers the same with a match at either end of a long subtree', () {
+      final head = StringBuffer('<section><a>x</a>');
+      final tail = StringBuffer('<section>');
+      for (var i = 0; i < 200; i++) {
+        head.write('<span>y</span>');
+        tail.write('<span>y</span>');
+      }
+      expect('$head</section>'.html.$('section:has(a)'), hasLength(1));
+      expect('$tail<a>x</a></section>'.html.$('section:has(a)'), hasLength(1));
+      expect('$tail</section>'.html.$('section:has(a)'), isEmpty);
+    });
+  });
+
+  group('XPath selects the same nodes in the same order', () {
+    List<Node> inOrder(Element root) {
+      final out = <Node>[];
+      void go(Node n) {
+        out.add(n);
+        if (n is Element) {
+          for (final c in n.nodes) {
+            go(c);
+          }
+        }
+      }
+
+      go(root);
+      return out;
+    }
+
+    const markup =
+        '<html><body>'
+        '<div id="a"><p>one</p><span>two</span><div id="b"><p>three</p><a href="x">l</a></div></div>'
+        '<ul><li>1</li><li>2</li><li>3</li><li>4</li></ul>'
+        '<table><tr><th>H</th></tr><tr><td>c1</td><td>c2</td></tr></table>'
+        '</body></html>';
+
+    test('// is document order, whatever the axis underneath', () {
+      final doc = markup.html;
+      final order = {for (final (i, n) in inOrder(doc.root).indexed) n: i};
+      for (final expression in [
+        '//p',
+        '//div//p',
+        '//div/p',
+        '//li',
+        '//*',
+        '//div//*',
+        '//body/*',
+        '//li/following-sibling::li',
+        '//li/preceding-sibling::li',
+        '//td | //th',
+        '//p/ancestor::div',
+        '//span/preceding-sibling::p',
+        'descendant::p',
+      ]) {
+        final positions = [for (final n in doc.$x(expression)) order[n] ?? -1];
+        expect(positions, orderedEquals([...positions]..sort()), reason: expression);
+      }
+    });
+
+    test('a positional predicate still counts per parent, not per document', () {
+      final doc = markup.html;
+      expect(doc.$x('//li[1]').texts, ['1']);
+      expect(doc.$x('//li[last()]').texts, ['4']);
+      expect(doc.$x('//tr/td[2]').texts, ['c2']);
+      expect(doc.$x('(//li)[2]').texts, ['2'], reason: 'a filter counts over the whole set');
+      expect(doc.$x('//ul/li[position()>2]').texts, ['3', '4']);
+      expect(doc.$x('//p[1]').texts, ['one', 'three'], reason: 'one per parent, not the first in the document');
+    });
+
+    test('a sibling axis with a pinned position takes only what it needs', () {
+      final wide = StringBuffer('<ul>');
+      for (var i = 0; i < 400; i++) {
+        wide.write('<li>$i</li>');
+      }
+      final doc = '$wide</ul>'.html;
+      expect(doc.$x('//li[1]/following-sibling::li[1]').texts, ['1']);
+      expect(doc.$x('//li[1]/following-sibling::li[3]').texts, ['3']);
+      expect(doc.$x('//li[1]/following-sibling::li[999]'), isEmpty);
+      expect(doc.$x('//li/following-sibling::li'), hasLength(399), reason: 'unpinned still returns them all');
+    });
+  });
 }
 
 /// package:yaml's YamlMap/YamlList as plain Dart, for comparison.

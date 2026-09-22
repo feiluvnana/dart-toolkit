@@ -1,6 +1,10 @@
 part of '../../fs.dart';
 
-/// Container formats `archiveTo` writes; read from the destination's extension.
+/// Every container format the package knows, and the extension that names each one.
+///
+/// `archiveTo` writes all but [rar], which is read-only: the format's licence forbids
+/// writing it. Reading never needs this enum — `extractTo` and `archiveEntries` read the
+/// file's magic number — so it is here for `archiveTo`'s destination and for [of].
 ///
 /// {@category Files}
 enum Archive {
@@ -10,12 +14,19 @@ enum Archive {
   tarGz('.tar.gz'),
   tarXz('.tar.xz'),
   tarZst('.tar.zst'),
-  tarBz2('.tar.bz2');
+  tarBz2('.tar.bz2'),
+  rar('.rar');
 
   final String extension;
   const Archive(this.extension);
 
+  /// Whether [archiveTo] can write this format.
+  bool get isWritable => this != rar;
+
   /// The format for [path], by extension, or `null`.
+  ///
+  /// This reads the name, not the file. What a file actually is, the native library
+  /// decides from its first bytes when it is read.
   static Archive? of(String path) {
     final lower = path.toLowerCase();
     if (lower.endsWith('.tgz')) return tarGz;
@@ -83,8 +94,12 @@ extension PathArchiveExtensions on Path {
   /// extension. [level] is the codec's own scale; `null` is its default. Returns the file.
   ///
   /// zip and 7z take a [password] (AES-256); tar does not and throws [ArgumentError].
+  /// [Archive.rar] cannot be written and throws [ArgumentError] too.
   Future<File> archiveTo(String destination, {String? password, int? level}) async {
     final format = Archive.of(destination) ?? _unknown(destination);
+    if (!format.isWritable) {
+      throw ArgumentError('${format.name} can only be read; write .zip or .7z instead');
+    }
     if (format != Archive.zip && format != Archive.sevenZip && password != null) {
       throw ArgumentError('${format.name} has no encryption; use zip or 7z');
     }
@@ -93,6 +108,10 @@ extension PathArchiveExtensions on Path {
   }
 
   /// Extracts the archive at this path into [destination], restoring permissions and times.
+  ///
+  /// The format comes from the file's magic number, so a renamed or extension-less archive
+  /// still extracts; the name is only consulted when the bytes are inconclusive, which is
+  /// what tells a `.tar.gz` from a lone `.gz`.
   ///
   /// Throws [FormatException] on a corrupt archive or a wrong [password], [UnsupportedError]
   /// for a format the native library is needed for and it did not load.
@@ -107,7 +126,8 @@ extension PathArchiveExtensions on Path {
     return Directory(destination);
   }
 
-  /// The entries of the archive at this path, without extracting.
+  /// The entries of the archive at this path, without extracting; the format is read from
+  /// the file itself, as in [extractTo].
   Future<List<ArchiveEntry>> archiveEntries({String? password}) async {
     return Isolate.run(() => _NativeArchive.list(path, password));
   }
@@ -119,10 +139,13 @@ extension PathArchiveExtensions on Path {
     return File(destination);
   }
 
-  /// Decompresses this single-stream file into [destination]; the codec is this path's extension.
+  /// Decompresses this single-stream file into [destination].
+  ///
+  /// The codec is read from the file's magic number unless [codec] names one, so a stream
+  /// saved without its extension still decompresses. Throws [FormatException] when the
+  /// bytes are none of gzip, xz, zstd or bzip2.
   Future<File> decompressTo(String destination, {Compression? codec}) async {
-    final c = codec ?? _codecOf(path);
-    await Isolate.run(() => _NativeArchive.decompress(c, path, destination));
+    await Isolate.run(() => _NativeArchive.decompress(codec, path, destination));
     return File(destination);
   }
 
@@ -142,7 +165,7 @@ extension PathArchiveExtensions on Path {
 
 /// The archive functions of `dart_toolkit_native`, by file path.
 final class _NativeArchive {
-  static final _lib = Native.require('archives');
+  static final _lib = NativeBridge.require('archives');
   static final _list = _lib
       .lookupFunction<
         Int32 Function(Pointer<Uint8>, IntPtr, Pointer<Uint8>, IntPtr, Pointer<Pointer<Uint8>>, Pointer<IntPtr>),
@@ -169,15 +192,18 @@ final class _NativeArchive {
         int Function(int, Pointer<Uint8>, int, Pointer<Uint8>, int)
       >('tk_decompress');
   static void _check(int code) {
-    if (code < 0) throw FormatException(Native.lastError());
+    if (code < 0) throw FormatException(NativeBridge.lastError());
   }
 
   static List<ArchiveEntry> list(String path, String? password) {
     final Uint8List data;
     try {
-      data = Native.withText(
+      data = NativeBridge.withText(
         path,
-        (p, pl) => Native.withText(password, (pw, pwl) => Native.take((out, len) => _list(p, pl, pw, pwl, out, len))),
+        (p, pl) => NativeBridge.withText(
+          password,
+          (pw, pwl) => NativeBridge.take((out, len) => _list(p, pl, pw, pwl, out, len)),
+        ),
       );
     } on StateError catch (e) {
       throw FormatException(e.message);
@@ -195,11 +221,11 @@ final class _NativeArchive {
     ];
   }
 
-  static int extract(String path, String dest, String? password) => Native.withText(
+  static int extract(String path, String dest, String? password) => NativeBridge.withText(
     path,
-    (p, pl) => Native.withText(
+    (p, pl) => NativeBridge.withText(
       dest,
-      (d, dl) => Native.withText(password, (pw, pwl) {
+      (d, dl) => NativeBridge.withText(password, (pw, pwl) {
         final n = _extract(p, pl, d, dl, pw, pwl);
         _check(n);
         return n;
@@ -207,11 +233,11 @@ final class _NativeArchive {
     ),
   );
 
-  static int create(Archive format, String src, String dest, String? password, int level) => Native.withText(
+  static int create(Archive format, String src, String dest, String? password, int level) => NativeBridge.withText(
     src,
-    (s, sl) => Native.withText(
+    (s, sl) => NativeBridge.withText(
       dest,
-      (d, dl) => Native.withText(password, (pw, pwl) {
+      (d, dl) => NativeBridge.withText(password, (pw, pwl) {
         final n = _create(format.index, s, sl, d, dl, pw, pwl, level);
         _check(n);
         return n;
@@ -219,11 +245,16 @@ final class _NativeArchive {
     ),
   );
 
-  static void compress(Compression codec, String src, String dest, int level) => Native.withText(
+  static void compress(Compression codec, String src, String dest, int level) => NativeBridge.withText(
     src,
-    (s, sl) => Native.withText(dest, (d, dl) => _check(_compress(codec.index, s, sl, d, dl, level))),
+    (s, sl) => NativeBridge.withText(dest, (d, dl) => _check(_compress(codec.index, s, sl, d, dl, level))),
   );
 
-  static void decompress(Compression codec, String src, String dest) =>
-      Native.withText(src, (s, sl) => Native.withText(dest, (d, dl) => _check(_decompress(codec.index, s, sl, d, dl))));
+  /// A `null` codec asks the library to read the stream's magic number.
+  static const _detect = 0xFFFFFFFF;
+
+  static void decompress(Compression? codec, String src, String dest) => NativeBridge.withText(
+    src,
+    (s, sl) => NativeBridge.withText(dest, (d, dl) => _check(_decompress(codec?.index ?? _detect, s, sl, d, dl))),
+  );
 }

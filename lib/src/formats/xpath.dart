@@ -3,15 +3,15 @@ part of '../../formats.dart';
 /// What kind of node a [Node] is, as XPath sees it.
 ///
 /// {@category Formats}
-enum XPathKind { document, element, attribute, text }
+enum _XPathKind { document, element, attribute, text }
 
-/// How the engine reads the one markup tree. These are the whole contract an [XPath] has
+/// How the engine reads the one markup tree. These are the whole contract an XPath has
 /// with a [Node]; they were an interface while HTML and XML had a tree each.
-XPathKind _kind(Node n) => switch (n) {
-  Element() => XPathKind.element,
-  Text() => XPathKind.text,
-  Attribute() => XPathKind.attribute,
-  _Document() => XPathKind.document,
+_XPathKind _kind(Node n) => switch (n) {
+  Element() => _XPathKind.element,
+  Text() => _XPathKind.text,
+  Attribute() => _XPathKind.attribute,
+  _Document() => _XPathKind.document,
 };
 
 /// The parent, or the document node above the root element, or `null` above that.
@@ -57,19 +57,19 @@ Node _documentOf(Node root) => root is _Document ? root : _Document(root as Elem
 /// Parsed once per expression and cached. `html` exposes it as `$x`, `xml` as `$`.
 ///
 /// {@category Formats}
-final class XPath {
+final class _XPath {
   final _XNode _root;
 
-  const XPath._(this._root);
+  const _XPath._(this._root);
 
-  static final _cache = <String, XPath>{};
+  static final _cache = <String, _XPath>{};
 
   /// Compiles [source], or returns the cached result. Throws [FormatException] on bad syntax.
-  static XPath parse(String source) {
+  static _XPath parse(String source) {
     final cached = _cache[source];
     if (cached != null) return cached;
     if (_cache.length >= 256) _cache.remove(_cache.keys.first);
-    return _cache[source] = XPath._(_XPathParser(source).parse());
+    return _cache[source] = _XPath._(_XPathParser(source).parse());
   }
 
   /// The nodes this expression selects with [context] as the context node, in document
@@ -78,14 +78,14 @@ final class XPath {
   /// Throws [FormatException] when the expression evaluates to a string, number or boolean.
   List<Node> select(Node context) {
     var root = context;
-    for (var p = _up(root); p != null && _kind(p) != XPathKind.document; p = _up(p)) {
+    for (var p = _up(root); p != null && _kind(p) != _XPathKind.document; p = _up(p)) {
       root = p;
     }
     final value = _root.eval(_Ctx(context, 1, 1, _documentOf(root)));
     if (value is! List<Node>) throw FormatException('XPath does not select nodes: it evaluates to $value');
     return [
       for (final n in value)
-        if (_kind(n) != XPathKind.document) n,
+        if (_kind(n) != _XPathKind.document) n,
     ];
   }
 }
@@ -99,14 +99,42 @@ final class _Ctx {
   /// Shared with every context this one spawns, so [order] is built once per query.
   final _Order _shared;
 
-  _Ctx(this.node, this.position, this.size, this.document) : _shared = _Order();
+  /// Shared for the same reason; see [_Slots].
+  final _Slots _slots;
 
-  _Ctx._(this.node, this.position, this.size, this.document, this._shared);
+  _Ctx(this.node, this.position, this.size, this.document) : _shared = _Order(), _slots = _Slots();
 
-  _Ctx at(Node n, int position, int size) => _Ctx._(n, position, size, document, _shared);
+  _Ctx._(this.node, this.position, this.size, this.document, this._shared, this._slots);
+
+  _Ctx at(Node n, int position, int size) => _Ctx._(n, position, size, document, _shared, _slots);
 
   /// Every node's position in document order, built once per query; see [_Order].
   Map<Node, int> get order => _shared.of(this);
+
+  /// Where [child] sits among [parent]'s children; see [_Slots].
+  int slotOf(Node parent, Node child) => _slots.of(parent, child);
+}
+
+/// Where each node sits in its parent's child list, filled one parent at a time and kept
+/// for the length of one query.
+///
+/// The sibling axes each need a node's slot before they can walk away from it, and asking
+/// the list with `indexOf` costs a scan per node — which makes `following-sibling` over n
+/// siblings quadratic. The CSS engine keeps the same index for the same reason. It lives
+/// for exactly one query: the tree cannot change underneath it.
+final class _Slots {
+  final Map<Node, int> _slot = {};
+  final Set<Node> _indexed = {};
+
+  int of(Node parent, Node child) {
+    if (_indexed.add(parent)) {
+      final children = _down(parent);
+      for (var i = 0; i < children.length; i++) {
+        _slot[children[i]] = i;
+      }
+    }
+    return _slot[child] ?? -1;
+  }
 }
 
 /// Document order, shared by every context in one query.
@@ -186,8 +214,13 @@ final class _XPathExpr extends _XNode {
       }
       current = next;
     }
-    // Child, self and attribute steps keep document order; after any other axis the
-    // per-context results interleave and the set is put back in order.
+    // These axes keep document order; after any other one the per-context results
+    // interleave and the set is put back in order.
+    //
+    // The descendant axes belong here too, which is what spares `//x` the order map
+    // entirely: context nodes arrive in document order, and a node's subtree is a
+    // contiguous run of it, so the runs either nest — and the inner one's nodes were
+    // already emitted by the outer, where `seen` keeps them — or follow one another.
     if (current.length > 1 && (steps.length > 1 || filter != null) && steps.any((s) => !_ordered.contains(s.axis))) {
       final order = c.order;
       current.sort((x, y) => (order[x] ?? -1).compareTo(order[y] ?? -1));
@@ -195,7 +228,7 @@ final class _XPathExpr extends _XNode {
     return current;
   }
 
-  static const _ordered = {'child', 'self', 'attribute'};
+  static const _ordered = {'child', 'self', 'attribute', 'descendant', 'descendant-or-self'};
 }
 
 /// A node-set with predicates applied to it as a whole: `(//item)[2]`.
@@ -355,6 +388,32 @@ final _spaces = RegExp(r'\s+');
 // Steps
 // ---------------------------------------------------------------------------------------------
 
+/// `descendant-or-self::node()/child::x` is exactly `descendant::x`, and `//x` parses as
+/// the first. Written out, the step pair walks every node in the document — text nodes
+/// included — and then takes the children of each; the single step walks the subtree once.
+///
+/// Only when the child step carries no predicate. `//p[1]` is the first `p` of each parent,
+/// where `descendant::p[1]` would be the first `p` in the document.
+List<_XStep> _collapse(List<_XStep> steps) {
+  final out = <_XStep>[];
+  for (var i = 0; i < steps.length; i++) {
+    final step = steps[i];
+    final next = i + 1 < steps.length ? steps[i + 1] : null;
+    if (step.axis == 'descendant-or-self' &&
+        step.test == null &&
+        step.predicates.isEmpty &&
+        next != null &&
+        next.axis == 'child' &&
+        next.predicates.isEmpty) {
+      out.add(_XStep('descendant', next.test, const []));
+      i++;
+    } else {
+      out.add(step);
+    }
+  }
+  return out;
+}
+
 final class _XStep {
   final String axis;
 
@@ -365,11 +424,25 @@ final class _XStep {
   const _XStep(this.axis, this.test, this.predicates);
 
   List<Node> apply(_Ctx c, Node context) {
+    final reverse = axis == 'ancestor' || axis == 'ancestor-or-self' || axis == 'preceding-sibling';
+    // `[k]` is the k-th match and nothing after it, so on a forward axis the walk stops
+    // there rather than collecting the axis and throwing all but one away:
+    // `following-sibling::li[1]` is the next sibling, not every following sibling.
+    // A reverse axis counts from the context node, so it has to know how many there are.
+    if (!reverse) {
+      final k = _pinned;
+      if (k != null) {
+        var matched = 0;
+        for (final n in _axis(c, context)) {
+          if (_matches(n) && ++matched == k) return [n];
+        }
+        return const [];
+      }
+    }
     var candidates = [
-      for (final n in _axis(context))
+      for (final n in _axis(c, context))
         if (_matches(n)) n,
     ];
-    final reverse = axis == 'ancestor' || axis == 'ancestor-or-self' || axis == 'preceding-sibling';
     for (final p in predicates) {
       final kept = <Node>[];
       final size = candidates.length;
@@ -383,19 +456,29 @@ final class _XStep {
     return candidates;
   }
 
+  /// The one position a lone numeric predicate pins this step to — 1 for `[1]` — or `null`
+  /// when the step selects by anything else.
+  int? get _pinned {
+    if (predicates.length != 1) return null;
+    final only = predicates.first;
+    if (only is! _Literal) return null;
+    final k = only.value;
+    return k is double && k >= 1 && k == k.roundToDouble() ? k.toInt() : null;
+  }
+
   bool _matches(Node n) {
     final test = this.test;
     final kind = _kind(n);
-    if (test == null) return kind != XPathKind.document;
-    if (test == 'text()') return kind == XPathKind.text;
-    if (kind != XPathKind.element && kind != XPathKind.attribute) return false;
+    if (test == null) return kind != _XPathKind.document;
+    if (test == 'text()') return kind == _XPathKind.text;
+    if (kind != _XPathKind.element && kind != _XPathKind.attribute) return false;
     if (test == '*') return true;
     final name = _nameOf(n);
     if (test.endsWith(':*')) return name.startsWith(test.substring(0, test.length - 1));
     return name == test;
   }
 
-  Iterable<Node> _axis(Node n) sync* {
+  Iterable<Node> _axis(_Ctx c, Node n) sync* {
     switch (axis) {
       case 'child':
         yield* _down(n);
@@ -425,17 +508,21 @@ final class _XStep {
             yield _attributeOf(n, key, value);
           }
         }
+      // `yield*` over a range hands the whole run to the caller's iterator; yielding the
+      // nodes one at a time suspends this generator once per sibling and measured slower.
       case 'following-sibling':
         final p = _up(n);
         if (p != null) {
           final siblings = _down(p);
-          yield* siblings.skip(siblings.indexOf(n) + 1);
+          final from = c.slotOf(p, n) + 1;
+          if (from < siblings.length) yield* siblings.getRange(from, siblings.length);
         }
       case 'preceding-sibling':
         final p = _up(n);
         if (p != null) {
           final siblings = _down(p);
-          yield* siblings.take(siblings.indexOf(n)).toList().reversed;
+          final before = c.slotOf(p, n);
+          if (before > 0) yield* [for (var i = before - 1; i >= 0; i--) siblings[i]];
         }
       default:
         throw FormatException('Unsupported axis $axis::');
@@ -611,7 +698,11 @@ final class _XPathParser {
   _XNode _continuePath(_XNode primary) {
     _ws();
     if (_take('//')) {
-      return _XPathExpr(false, [const _XStep('descendant-or-self', null, []), ..._relativeSteps()], filter: primary);
+      return _XPathExpr(
+        false,
+        _collapse([const _XStep('descendant-or-self', null, []), ..._relativeSteps()]),
+        filter: primary,
+      );
     }
     if (_take('/')) return _XPathExpr(false, _relativeSteps(), filter: primary);
     return primary;
@@ -665,7 +756,7 @@ final class _XPathParser {
 
   _XNode _locationPath() {
     if (_take('//')) {
-      return _XPathExpr(true, [const _XStep('descendant-or-self', null, []), ..._relativeSteps()]);
+      return _XPathExpr(true, _collapse([const _XStep('descendant-or-self', null, []), ..._relativeSteps()]));
     }
     if (_take('/')) {
       _ws();
@@ -686,7 +777,7 @@ final class _XPathParser {
       } else if (_take('/')) {
         steps.add(_step());
       } else {
-        return steps;
+        return _collapse(steps);
       }
     }
   }

@@ -17,11 +17,14 @@ import 'async.dart';
 import 'core.dart';
 import 'formats.dart';
 import 'fs.dart';
+import 'hash.dart';
 
 part 'src/http/browser.dart';
 part 'src/http/client.dart';
+part 'src/http/cookies.dart';
 part 'src/http/documents.dart';
 part 'src/http/download.dart';
 part 'src/http/uri.dart';
+part 'src/http/robots.dart';
 part 'src/http/scrape.dart';
 part 'src/http/session.dart';

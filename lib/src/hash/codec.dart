@@ -15,7 +15,7 @@ String _hex(List<int> bytes) {
 
 /// Encodings of bytes: `digest.hex`, `token.base64Url`, `secret.base32`.
 ///
-/// {@category Crypto}
+/// {@category Hashing}
 extension BytesEncodingExtensions on List<int> {
   /// Hex, lowercase.
   String get hex => _hex(this);
@@ -45,7 +45,7 @@ extension BytesEncodingExtensions on List<int> {
 
 /// Decodings of text: `'6869'.hexBytes`, `'-_8'.base64Bytes`, `'JBSWY3DP'.base32Bytes`.
 ///
-/// {@category Crypto}
+/// {@category Hashing}
 extension StringEncodingExtensions on String {
   /// This hex string as bytes; whitespace is ignored.
   Uint8List get hexBytes {

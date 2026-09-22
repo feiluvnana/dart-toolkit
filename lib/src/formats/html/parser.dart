@@ -9,10 +9,10 @@ const _voidElements = {
   'basefont', 'bgsound', 'frame', 'keygen', 'command',
 };
 
-/// Elements whose content is raw text up to their end tag, _entities left alone.
+/// Elements whose content is raw text up to their end tag, entities left alone.
 const _rawTextElements = {'script', 'style', 'xmp', 'iframe', 'noembed', 'noframes'};
 
-/// Elements whose content is text up to their end tag, _entities decoded.
+/// Elements whose content is text up to their end tag, entities decoded.
 const _rcdataElements = {'textarea', 'title'};
 
 /// Elements that belong in `<head>` when they appear before any body content.

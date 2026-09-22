@@ -191,7 +191,7 @@ void main() {
       expect(t.texts('title'), ['B', 'A', 'C']);
       expect(t.rows[2].text('title'), 'C');
       expect(t['n'], [2, 1, 1]);
-      expect(Table.records([1, 2], (n) => {'n': n, 'sq': n * n})['sq'], [1, 4]);
+      expect(Table.rows([1, 2].map((n) => {'n': n, 'sq': n * n}))['sq'], [1, 4]);
     });
 
     test('where, orderBy … thenBy, select, rename, derive, drop, distinct, take', () {
@@ -310,6 +310,83 @@ void main() {
         throwsArgumentError,
       );
       expect(Table.csv('a;b\n1;2\n', separator: ';').columns, ['a', 'b']);
+    });
+  });
+
+  group('sorting extracts each key once', () {
+    test('sortedBy and thenBy call the selector once per element, not per comparison', () {
+      final items = [for (var i = 0; i < 500; i++) 'item-${(i * 7) % 500}'];
+      var primary = 0;
+      var secondary = 0;
+      final sorted = items.sequence
+          .sortedBy((e) {
+            primary++;
+            return e.length;
+          })
+          .thenBy((e) {
+            secondary++;
+            return e;
+          })
+          .toList();
+
+      expect(primary, items.length, reason: 'one extraction per element');
+      expect(secondary, items.length);
+      expect(
+        sorted,
+        equals(
+          [...items]..sort((a, b) {
+            final byLength = a.length.compareTo(b.length);
+            return byLength != 0 ? byLength : a.compareTo(b);
+          }),
+        ),
+      );
+    });
+
+    test('equal keys keep their original order', () {
+      final pairs = [(1, 'a'), (0, 'b'), (1, 'c'), (0, 'd'), (1, 'e')];
+      expect(pairs.sequence.sortedBy((p) => p.$1).map((p) => p.$2).toList(), ['b', 'd', 'a', 'c', 'e']);
+    });
+
+    test('descending, sortedWith and the pair sorts agree with the eager equivalents', () {
+      final nums = [5, 1, 4, 1, 3];
+      expect(nums.sequence.sortedBy((n) => n, descending: true).toList(), [5, 4, 3, 1, 1]);
+      expect(nums.sequence.sortedWith((a, b) => b.compareTo(a)).toList(), [5, 4, 3, 1, 1]);
+      final m = {'b': 2, 'a': 3, 'c': 1};
+      expect(m.sequence.sortedByKey().keys.toList(), ['a', 'b', 'c']);
+      expect(m.sequence.sortedByValue(descending: true).keys.toList(), ['a', 'b', 'c']);
+    });
+  });
+
+  group('Table reads a column once', () {
+    test('a column is validated once per call, and an unknown one still throws', () {
+      final t = Table(
+        ['n', 'name'],
+        [
+          for (var i = 0; i < 50; i++) {'n': '$i', 'name': 'row$i'},
+        ],
+      );
+      expect(t.texts('name').length, 50);
+      expect(t.numbers('n').last, 49);
+      expect(t['name'].first, 'row0');
+      expect(() => t.texts('nope'), throwsArgumentError);
+      expect(() => t['nope'], throwsArgumentError);
+      expect(() => t.numbers('nope'), throwsArgumentError);
+    });
+
+    test('orderBy and thenBy sort by the same rule as before, numbers as numbers', () {
+      final t = Table(
+        ['size', 'name'],
+        [
+          {'size': '1,200', 'name': 'b'},
+          {'size': '900', 'name': 'a'},
+          {'size': '1,200', 'name': 'a'},
+          {'size': null, 'name': 'z'},
+        ],
+      );
+      expect(t.orderBy('size').texts('name'), ['a', 'b', 'a', 'z'], reason: 'null last');
+      expect(t.orderBy('size').thenBy('name').texts('name'), ['a', 'a', 'b', 'z']);
+      expect(t.orderBy('size', descending: true).texts('size'), ['1,200', '1,200', '900', '']);
+      expect(t.orderBy('size', descending: true).texts('name').last, 'z', reason: 'null last either way');
     });
   });
 }

@@ -23,7 +23,4 @@ extension StringAnsiExtensions on String {
   String get dim => _wrap('2');
   String get italic => _wrap('3');
   String get underline => _wrap('4');
-
-  /// Returns this string with all ANSI escape codes stripped.
-  String get stripped => Io.stripAnsi(this);
 }

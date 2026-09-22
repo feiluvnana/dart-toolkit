@@ -15,27 +15,34 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 
 /// The options, declared once as values: the name is written here and nowhere else, and
 /// `ctx(top)` comes back an `int` because `top` says so.
-final verbose = Flag('verbose', abbr: 'v', description: 'Show debug logging');
+final verbose = Opt.flag('verbose', abbr: 'v', description: 'Show debug logging');
 final algo = Opt.among('algo', Hash.values, abbr: 'a', description: 'Digest algorithm').or(Hash.sha256);
 final top = Opt.number('top', abbr: 'n', description: 'How many to show').or(10);
 final query = Opt.text('query', abbr: 'q', description: r'A JSONPath, e.g. $.dependencies.*');
-final asYaml = Flag('yaml', abbr: 'y', description: 'Print the document as YAML');
+final asYaml = Opt.flag('yaml', abbr: 'y', description: 'Print the document as YAML');
 final out = Opt.text('out', abbr: 'o', description: 'Write to this path instead of stdout');
 final to = Opt.text('to', abbr: 't', description: 'Destination, e.g. out.zip or out.tar.gz').required();
 
 Future<void> main(List<String> args) async {
-  final tk = Cli(name: 'tk', description: 'Small jobs, from the toolkit', version: '0.0.2', options: [verbose])
-    ..command('hash', description: 'Digest files, one per line', options: [algo], handler: hash)
-    ..command('find', description: 'Match a glob and report the biggest hits', options: [top], handler: find)
-    ..command(
-      'read',
-      description: 'Parse YAML, TOML, INI or JSON and query it',
-      options: [query, asYaml],
-      handler: read,
-    )
-    ..command('fetch', description: 'GET a URL to stdout, or to a file with --out', options: [out], handler: fetch)
-    ..command('pack', description: 'Archive a directory; the format comes from --to', options: [to], handler: pack)
-    ..command('peek', description: 'List an archive without extracting it', handler: peek);
+  final tk = Cli(
+    name: 'tk',
+    description: 'Small jobs, from the toolkit',
+    version: '0.0.2',
+    options: [verbose],
+    commands: [
+      CliCommand('hash', description: 'Digest files, one per line', options: [algo], handler: hash),
+      CliCommand('find', description: 'Match a glob and report the biggest hits', options: [top], handler: find),
+      CliCommand(
+        'read',
+        description: 'Parse YAML, TOML, INI or JSON and query it',
+        options: [query, asYaml],
+        handler: read,
+      ),
+      CliCommand('fetch', description: 'GET a URL to stdout, or to a file with --out', options: [out], handler: fetch),
+      CliCommand('pack', description: 'Archive a directory; the format comes from --to', options: [to], handler: pack),
+      CliCommand('peek', description: 'List an archive without extracting it', handler: peek),
+    ],
+  );
 
   await tk.run(args);
 }
@@ -49,7 +56,6 @@ Future<void> hash(CliContext ctx) async {
   final digested = await ctx.rest.parallelize(
     (path) async => (path: path, digest: await path.path.hash(algorithm)),
     concurrency: 4,
-    cancelToken: ctx.cancel,
   );
 
   for (final row in digested.rights) {
@@ -73,9 +79,11 @@ Future<void> find(CliContext ctx) async {
     Logger.warn('nothing matched $pattern');
     return;
   }
-  Table.records(
-    sized.rights.sequence.sortedBy((r) => r.bytes, descending: true).take(ctx(top)),
-    (r) => {'bytes': r.bytes, 'file': r.file},
+  Table.rows(
+    sized.rights.sequence
+        .sortedBy((r) => r.bytes, descending: true)
+        .take(ctx(top))
+        .map((r) => {'bytes': r.bytes, 'file': r.file}),
   ).show();
   Logger.ok('${sized.rights.length} matches, ${sized.rights.sequence.sumBy((r) => r.bytes)} bytes');
 }
@@ -114,9 +122,7 @@ Future<void> fetch(CliContext ctx) async {
 
   await Http.session(timeout: 30.s, () async {
     if (ctx(out) case final path?) {
-      final last = await path.path
-          .download(url, overwrite: true, cancelToken: ctx.cancel)
-          .show(slots: 1, message: 'Fetching', done: 'Fetched');
+      final last = await path.path.download(url, overwrite: true).show(slots: 1, message: 'Fetching', done: 'Fetched');
       if (last?.current case DownloadFailed(:final error)) await die('$error');
       Logger.ok('$path is ${await path.path.size()} bytes');
       return;
@@ -145,9 +151,8 @@ Future<void> peek(CliContext ctx) async {
   final archive = (ctx.rest.firstOrNull ?? await die('peek needs an archive')).path;
   final entries = await archive.archiveEntries();
 
-  Table.records(
-    entries.where((e) => !e.isDir),
-    (e) => {'size': e.size, 'packed': e.compressedSize, 'name': e.name},
+  Table.rows(
+    entries.where((e) => !e.isDir).map((e) => {'size': e.size, 'packed': e.compressedSize, 'name': e.name}),
   ).orderBy('size', descending: true).take(20).show();
 
   final files = entries.where((e) => !e.isDir);

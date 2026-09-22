@@ -61,7 +61,11 @@ final class RequestKey<T extends Object> {
   String toString() => name;
 }
 
-/// A request: [method], [url], [headers] and a body of [bytes].
+/// A request: [method], [url], [headers] and a body.
+///
+/// A body is given one way, by what it is — [text], [bytes], [form] or [json] — and the
+/// same four words name it on [UriExtensions.post] and on `follow`. At most one may be
+/// set; the matching `content-type` comes with it.
 ///
 /// {@category Networking}
 final class Request {
@@ -79,11 +83,18 @@ final class Request {
   /// Client-specific directives, absent until one is set; see [RequestKey].
   Map<RequestKey<Object>, Object>? _directives;
 
-  Request(String method, this.url, {Map<String, String>? headers, List<int>? bytes, String? text})
-    : method = method.toUpperCase(),
-      headers = Headers(headers),
-      bytes = bytes != null ? Uint8List.fromList(bytes) : Uint8List(0) {
-    if (text != null) this.text = text;
+  Request(
+    String method,
+    this.url, {
+    Map<String, String>? headers,
+    String? text,
+    List<int>? bytes,
+    Map<String, String>? form,
+    Object? json,
+  }) : method = method.toUpperCase(),
+       headers = Headers(headers),
+       bytes = Uint8List(0) {
+    _body(this, text: text, bytes: bytes, form: form, json: json);
   }
 
   /// The body as text, UTF-8. Setting it sets a `content-type` of `text/plain` when none is set.
@@ -93,10 +104,16 @@ final class Request {
     headers.putIfAbsent('content-type', () => 'text/plain; charset=utf-8');
   }
 
-  /// Sets the body to form-encoded [fields] and the `content-type` to match.
-  set fields(Map<String, String> fields) {
-    bytes = utf8.encode(Uri(queryParameters: fields).query);
+  /// Sets the body to form-encoded [form] and the `content-type` to match.
+  set form(Map<String, String> form) {
+    bytes = utf8.encode(Uri(queryParameters: form).query);
     headers['content-type'] = 'application/x-www-form-urlencoded; charset=utf-8';
+  }
+
+  /// Sets the body to [json] encoded, and the `content-type` to `application/json`.
+  set json(Object? json) {
+    bytes = utf8.encode(jsonEncode(json));
+    headers.putIfAbsent('content-type', () => 'application/json; charset=utf-8');
   }
 
   /// Sets the directive [key] carries for the client that answers this request.
@@ -117,6 +134,22 @@ final class Request {
 
   @override
   String toString() => '$method $url';
+}
+
+/// Puts at most one of [text], [bytes], [form] and [json] on [request]; more than one is
+/// an [ArgumentError]. The one place the four body words are turned into a body.
+void _body(Request request, {String? text, List<int>? bytes, Map<String, String>? form, Object? json}) {
+  final given = [
+    if (text != null) 'text',
+    if (bytes != null) 'bytes',
+    if (form != null) 'form',
+    if (json != null) 'json',
+  ];
+  if (given.length > 1) throw ArgumentError('Pass at most one body: ${given.join(', ')} were all given.');
+  if (text != null) request.text = text;
+  if (bytes != null) request.bytes = Uint8List.fromList(bytes);
+  if (form != null) request.form = form;
+  if (json != null) request.json = json;
 }
 
 /// A response whose body is still arriving; [read] buffers it into a [Response].
@@ -258,15 +291,51 @@ final class Response {
   String toString() => 'Response($statusCode${reasonPhrase == null ? '' : ' $reasonPhrase'}, ${bytes.length} bytes)';
 }
 
-final _charset = RegExp(r'charset=["\x27]?([^;"\x27\s]+)', caseSensitive: false);
+final _charset = RegExp(r'charset=["\x27]?([^;"\x27\s>]+)', caseSensitive: false);
 
+/// A `charset` declared inside a `<meta>`, in either spelling; both carry `charset=`.
+final _metaCharset = RegExp(r'''<meta[^>]+charset\s*=\s*["']?([\w-]+)''', caseSensitive: false);
+
+/// Bytes the server sent, as text.
+///
+/// The `content-type` names the encoding when it can; a page that serves `text/html` with
+/// no charset and declares one in a `<meta>` instead is the common shape on the legacy web,
+/// so the head of the document is read to find out how to read the document — which is
+/// what a browser does. An encoding named here decodes; anything else is read as UTF-8
+/// with its bad bytes replaced, as before.
 String _decode(Uint8List bytes, String? contentType) {
-  final charset = _charset.firstMatch(contentType ?? '')?[1];
-  return switch (charset?.toLowerCase()) {
-    'iso-8859-1' || 'latin1' || 'latin-1' || 'us-ascii' || 'ascii' => latin1.decode(bytes),
+  final declared = _charset.firstMatch(contentType ?? '')?[1] ?? _declaredInMarkup(bytes);
+  return switch (declared?.toLowerCase()) {
+    // The HTML standard decodes `iso-8859-1` as windows-1252, and a page labelled either
+    // one almost always means the latter: the bytes Latin-1 leaves as C1 controls are
+    // curly quotes and dashes in every page that actually uses them.
+    'windows-1252' || 'cp1252' || 'iso-8859-1' || 'latin1' || 'latin-1' => _windows1252(bytes),
+    'us-ascii' || 'ascii' => latin1.decode(bytes),
     _ => utf8.decode(bytes, allowMalformed: true),
   };
 }
+
+/// The charset a document declares in its own first bytes, or `null`.
+String? _declaredInMarkup(Uint8List bytes) {
+  final head = latin1.decode(
+    Uint8List.sublistView(bytes, 0, bytes.length < 2048 ? bytes.length : 2048),
+    allowInvalid: true,
+  );
+  return _metaCharset.firstMatch(head)?[1];
+}
+
+/// windows-1252 is Latin-1 with 27 printable characters where Latin-1 has C1 controls.
+const _windows1252High = <int>[
+  0x20ac, 0x81, 0x201a, 0x192, 0x201e, 0x2026, 0x2020, 0x2021, //
+  0x2c6, 0x2030, 0x160, 0x2039, 0x152, 0x8d, 0x17d, 0x8f,
+  0x90, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014,
+  0x2dc, 0x2122, 0x161, 0x203a, 0x153, 0x9d, 0x17e, 0x178,
+];
+
+String _windows1252(Uint8List bytes) => String.fromCharCodes([
+  for (final b in bytes)
+    if (b >= 0x80 && b <= 0x9f) _windows1252High[b - 0x80] else b,
+]);
 
 /// Something a request can be sent through: the real client, a session's wrapper, a mock.
 ///
@@ -331,7 +400,11 @@ final class IoClient implements Client {
       throw ClientException(e.message, request.url);
     }
     final headers = Headers();
-    response.headers.forEach((name, values) => headers[name] = values.join(', '));
+    // One value per name, so a header the server repeated is joined. `set-cookie` is the
+    // one that cannot be joined with a comma — its `Expires` holds one — and a newline
+    // cannot appear in a header value, so it separates them unambiguously. Chrome's
+    // DevTools protocol joins the same header the same way, so [BrowserClient] agrees.
+    response.headers.forEach((name, values) => headers[name] = values.join(name == 'set-cookie' ? '\n' : ', '));
     if (response.contentLength == -1 && headers.containsKey('content-encoding')) {
       // dart:io decoded the body; the length and encoding on the wire no longer describe it.
       headers

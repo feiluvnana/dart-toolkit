@@ -98,15 +98,14 @@ void main() {
     ],
   ).show();
   // Table: the same, as a query; `show()` prints it, `toCsv()` would write it.
-  Table.records(tracks, (t) => {'disc': t.disc, 'title': t.title, 'seconds': t.seconds})
+  Table.rows(tracks.map((t) => {'disc': t.disc, 'title': t.title, 'seconds': t.seconds}))
       .where((r) => r.number('seconds') > 200)
       .orderBy('disc')
       .derive('min', (r) => (r.number('seconds') / 60).toStringAsFixed(1))
       .select(['disc', 'title', 'min'])
       .show();
-  Table.records(
-    tracks,
-    (t) => {'disc': t.disc, 'format': t.format, 'seconds': t.seconds},
+  Table.rows(
+    tracks.map((t) => {'disc': t.disc, 'format': t.format, 'seconds': t.seconds}),
   ).pivot(rows: 'disc', column: 'format', value: 'seconds').show();
 }
 

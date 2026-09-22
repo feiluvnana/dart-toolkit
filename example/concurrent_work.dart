@@ -58,7 +58,7 @@ Future<void> main() async {
   // CancelledException, so the report still accounts for every item.
   final token = CancelToken();
   60.ms.delay().then((_) => token.cancel('ran out of patience'));
-  final partial = await ids.parallelize(score, concurrency: 2, cancelToken: token);
+  final partial = await Cancel.session(() => ids.parallelize(score, concurrency: 2), token: token);
   Logger.info('${partial.rights.length} finished, ${partial.lefts.length} cancelled or failed');
   Logger.info('reason: ${token.reason}');
 

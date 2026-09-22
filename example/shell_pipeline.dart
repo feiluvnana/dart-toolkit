@@ -49,8 +49,8 @@ Future<void> main() async {
     Logger.warn('threw, as asked: exit ${e.result.exitCode}');
   }
 
-  // `throwOnError: false` hands the result back instead, for the caller who expects failure.
-  final probe = await run('git cat-file -e deadbeefdeadbeef', quiet: true, throwOnError: false);
+  // `strict: false` hands the result back instead, for the caller who expects failure.
+  final probe = await run('git cat-file -e deadbeefdeadbeef', quiet: true, strict: false);
   Logger.info('did not throw: exit ${probe.exitCode}, ok=${probe.isOk}');
 
   // Or settle it, and pick the policy where the value is used rather than where it is made.

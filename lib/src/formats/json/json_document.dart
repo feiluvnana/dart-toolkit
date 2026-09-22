@@ -14,7 +14,7 @@ class JsonDocument {
   factory JsonDocument.parse(String text) => JsonDocument(jsonDecode(text));
 
   /// Finds all nodes matching JSONPath [expression].
-  List<JsonDocument> $(String expression) => JsonPath.of(expression).read(raw).map(JsonDocument.new).toList();
+  List<JsonDocument> $(String expression) => _JsonPath.of(expression).read(raw).map(JsonDocument.new).toList();
 
   /// Accesses a child node by map key ([String]) or list index ([int]).
   ///

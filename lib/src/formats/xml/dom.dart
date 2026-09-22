@@ -27,7 +27,7 @@ final class XmlDocument {
 
   /// The nodes matching XPath [expression], evaluated from the document root: `//item`,
   /// `/rss/channel/item[1]/title`, `//a/@href`, `//book[@lang='en' and price>10]/title/text()`.
-  Nodes $x(String expression) => Nodes(XPath.parse(expression).select(root));
+  Nodes $x(String expression) => Nodes(_XPath.parse(expression).select(root));
 
   /// The document's text.
   String get text => root.text;

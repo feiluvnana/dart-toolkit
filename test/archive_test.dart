@@ -124,6 +124,48 @@ void main() {
     expect(() => src.archiveTo(tmp / 'x.rar'), throwsArgumentError);
   });
 
+  test('the format is read from the file, not its name', () async {
+    // Every container, renamed to something that says nothing, still lists and extracts.
+    for (final ext in ['.zip', '.7z', '.tar', '.tar.gz', '.tar.xz', '.tar.zst', '.tar.bz2']) {
+      final named = tmp / 'a$ext';
+      await src.archiveTo(named);
+      final anonymous = tmp / 'blob${ext.replaceAll('.', '_')}';
+      await named.copy(anonymous);
+
+      expect(Archive.of(anonymous), isNull, reason: '$ext: the name must say nothing');
+      expect(await anonymous.archiveEntries(), isNotEmpty, reason: ext);
+      await anonymous.extractTo(tmp / 'out${ext.replaceAll('.', '_')}');
+      expect(digests(tmp / 'out${ext.replaceAll('.', '_')}'), digests(src), reason: ext);
+    }
+
+    // And a rar, which the enum can name but not write.
+    final rar = tmp / 'anonymous_rar';
+    await Path('test/fixtures/rar5_stored.rar').copy(rar);
+    expect(await rar.archiveEntries(), isNotEmpty);
+  });
+
+  test('a single stream decompresses without its extension', () async {
+    final file = src / 'sub' / 'text.txt';
+    for (final c in Compression.values) {
+      final packed = tmp / 'named${c.extension}';
+      await file.compressTo(packed);
+      final anonymous = tmp / 'anonymous_${c.name}';
+      await packed.copy(anonymous);
+
+      await anonymous.decompressTo(tmp / 'out_${c.name}');
+      expect((tmp / 'out_${c.name}').readTextSync(), file.readTextSync(), reason: c.name);
+    }
+    // Bytes that are none of the four say so rather than guessing.
+    (tmp / 'plain').writeTextSync('not compressed');
+    expect(() => (tmp / 'plain').decompressTo(tmp / 'nope'), throwsA(isA<FormatException>()));
+  });
+
+  test('Archive names every format, and rar is read-only', () {
+    expect(Archive.of('x.rar'), Archive.rar);
+    expect(Archive.rar.isWritable, isFalse);
+    expect(Archive.values.where((a) => a.isWritable).length, Archive.values.length - 1);
+  });
+
   test('a corrupt archive and an unknown extension say so', () async {
     (tmp / 'bad.zip').writeBytesSync(List.filled(100, 7));
     expect(() => (tmp / 'bad.zip').archiveEntries(), throwsA(isA<FormatException>()));

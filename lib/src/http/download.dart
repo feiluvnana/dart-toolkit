@@ -137,49 +137,92 @@ class BatchDownloadProgress implements BatchProgress {
 /// can hold when the source is faster than the destination.
 const _flushEvery = 4 * 1024 * 1024;
 
+/// How often a transfer in flight reports itself.
+///
+/// A chunk arrives every few kilobytes and the renderer draws at a frame rate, so an event
+/// per chunk allocated two objects and pumped two stream controllers for an update nobody
+/// could see — and made the socket wait on the consumer to do it. The final state is always
+/// reported, whenever it lands.
+const _reportEvery = Duration(milliseconds: 50);
+
+/// What a download was asked for, on its way from the call site to the transfer.
+///
+/// Spelled once here rather than once per hop between the four `download` receivers, the
+/// batch loop and the writer, as [_Plan] is for a crawl.
+typedef _Transfer = ({
+  Map<String, String>? headers,
+  bool overwrite,
+  bool resume,
+  bool ifModified,
+  (Hash algorithm, String hex)? checksum,
+});
+
+/// A download whose bytes do not hash to what the caller said they would. The `.part` file
+/// is discarded: it is not what was asked for, and resuming it would never make it so.
+///
+/// {@category Networking}
+final class ChecksumMismatch implements Exception {
+  final Uri url;
+  final Hash algorithm;
+  final String expected;
+  final String actual;
+
+  const ChecksumMismatch(this.url, this.algorithm, this.expected, this.actual);
+
+  @override
+  String toString() => '$url: ${algorithm.name} is $actual, expected $expected';
+}
+
 /// Download operations on [Path].
 ///
 /// {@category Networking}
 extension PathDownloadExtensions on Path {
   /// Downloads [url] to this path atomically, streaming the same [BatchDownloadProgress]
-  /// that `downloadAll` streams — one file is a batch of one, so `show()` renders it and
-  /// nothing has to be wrapped in a map to be reported.
+  /// every other `download` streams — one file is a batch of one, so `show()` renders it
+  /// and nothing has to be wrapped in a map to be reported.
   ///
-  /// Writes `<name>.part` and renames on success, verifies `Content-Length`, and honours
-  /// [cancelToken] cooperatively. A failed or cancelled transfer keeps its `.part`; the next
+  /// Writes `<name>.part` and renames on success, verifies `Content-Length`, and stops on
+  /// the enclosing [Cancel.session]. A failed or cancelled transfer keeps its `.part`; the next
   /// download of the same path resumes it with a `Range` request when [resume] is set, and
   /// starts over when the server does not honour the range. The per-file state is
   /// [BatchDownloadProgress.current].
+  ///
+  /// [ifModified] asks the server whether the file changed rather than skipping because it
+  /// is there: the destination's timestamp goes out as `if-modified-since` and a `304` is a
+  /// [DownloadSkipped]. It implies [overwrite], since a file that did change is meant to
+  /// replace the old one.
+  ///
+  /// [checksum] is what the bytes must hash to; anything else is a [DownloadFailed] holding
+  /// a [ChecksumMismatch], and the `.part` is discarded rather than left to resume. It is
+  /// on this form alone: one checksum describes one file, so a batch has no use for it.
+  ///
+  /// ```dart
+  /// await 'sdk.zip'.path.download(url, checksum: (Hash.sha256, '9f86d0…')).show();
+  /// ```
   Stream<BatchDownloadProgress> download(
     Uri url, {
     Map<String, String>? headers,
     bool overwrite = false,
     bool resume = true,
-    CancelToken? cancelToken,
+    bool ifModified = false,
+    (Hash algorithm, String hex)? checksum,
   }) => _batchDownload(
     Stream.value((url: url, path: this)),
     knownTotal: 1,
-    headers: headers,
     concurrency: 1,
-    overwrite: overwrite,
-    resume: resume,
-    cancelToken: cancelToken,
+    how: (headers: headers, overwrite: overwrite, resume: resume, ifModified: ifModified, checksum: checksum),
   );
 
-  Stream<DownloadProgress> _download(
-    Uri url, {
-    Map<String, String>? headers,
-    bool overwrite = false,
-    bool resume = true,
-    CancelToken? cancelToken,
-  }) async* {
-    if (!overwrite && await exists()) {
+  Stream<DownloadProgress> _download(Uri url, _Transfer how) async* {
+    final (:headers, :overwrite, :resume, :ifModified, :checksum) = how;
+    final present = await exists();
+    if (present && !overwrite && !ifModified) {
       yield DownloadSkipped(url, this);
       return;
     }
 
-    if (cancelToken != null && cancelToken.isCancelled) {
-      yield DownloadFailed(url, this, CancelledException(cancelToken.reason?.toString() ?? 'Download cancelled'));
+    if (Cancel.isCancelled) {
+      yield DownloadFailed(url, this, CancelledException(Cancel.reason?.toString() ?? 'Download cancelled'));
       return;
     }
 
@@ -191,8 +234,19 @@ extension PathDownloadExtensions on Path {
       var offset = resume && await partFile.exists() ? await partFile.length() : 0;
       final request = Request('GET', url, headers: headers);
       if (offset > 0) request.headers['range'] = 'bytes=$offset-';
+      // Only against a destination already in place: a half-written `.part` says nothing
+      // about when the whole file was last changed.
+      if (ifModified && present && offset == 0) {
+        final stamp = HttpDate.format(await modified());
+        request.headers.putIfAbsent('if-modified-since', () => stamp);
+      }
       var streamed = await lease.client.send(request);
 
+      if (streamed.statusCode == 304) {
+        _drain(streamed);
+        yield DownloadSkipped(url, this);
+        return;
+      }
       if (streamed.statusCode == 416 && offset > 0) {
         // The part is not a prefix of what the server has now; start over.
         _drain(streamed);
@@ -217,9 +271,11 @@ extension PathDownloadExtensions on Path {
       received = offset;
       var unflushed = 0;
 
+      final since = Stopwatch()..start();
+      var nextReport = Duration.zero;
       try {
         await for (final chunk in streamed.stream) {
-          cancelToken?.throwIfCancelled();
+          Cancel.throwIfCancelled();
           sink.add(chunk);
           received += chunk.length;
           unflushed += chunk.length;
@@ -230,7 +286,12 @@ extension PathDownloadExtensions on Path {
             unflushed = 0;
             await sink.flush();
           }
-          yield Downloading(url, this, received: received, total: total);
+          // See [_reportEvery]. The first chunk always reports, so a slow transfer shows
+          // itself at once rather than after the first interval.
+          if (since.elapsed >= nextReport) {
+            nextReport = since.elapsed + _reportEvery;
+            yield Downloading(url, this, received: received, total: total);
+          }
         }
       } finally {
         await sink.close();
@@ -239,6 +300,15 @@ extension PathDownloadExtensions on Path {
       if (total != null && received != total) {
         if (received > total) await _discard(partFile); // not a prefix of anything; useless
         throw HttpException('Download incomplete: expected $total bytes but received $received bytes', uri: url);
+      }
+
+      if (checksum case (final algorithm, final expected)) {
+        final actual = await Path(partFile.path).hash(algorithm);
+        if (actual.toLowerCase() != expected.toLowerCase()) {
+          await _discard(partFile);
+          yield DownloadFailed(url, this, ChecksumMismatch(url, algorithm, expected.toLowerCase(), actual));
+          return;
+        }
       }
 
       await partFile.rename(asFile.path);
@@ -259,13 +329,11 @@ Future<void> _discard(File part) async {
 
 Stream<BatchDownloadProgress> _batchDownload(
   Stream<({Uri url, Path path})> source, {
+  required _Transfer how,
   int? knownTotal,
-  Map<String, String>? headers,
   int concurrency = 4,
-  bool overwrite = false,
-  bool resume = true,
-  CancelToken? cancelToken,
 }) {
+  final cancelToken = Cancel.token;
   final controller = StreamController<BatchDownloadProgress>();
   final limit = concurrency > 0 ? concurrency : 1;
   final queue = Queue<({Uri url, Path path})>();
@@ -329,16 +397,7 @@ Stream<BatchDownloadProgress> _batchDownload(
           if (cancelled()) return;
           // The batch owns one client; each file's download joins it rather than opening
           // a connection of its own.
-          final transfers = _withClient(
-            lease.client,
-            () => item.path._download(
-              item.url,
-              headers: headers,
-              overwrite: overwrite,
-              resume: resume,
-              cancelToken: cancelToken,
-            ),
-          );
+          final transfers = _withClient(lease.client, () => item.path._download(item.url, how));
           await for (final p in transfers) {
             if (cancelled()) break;
             if (p.isDone) {
@@ -391,23 +450,20 @@ Stream<BatchDownloadProgress> _batchDownload(
 ///
 /// {@category Networking}
 extension IterableDownloadExtensions on Iterable<({Uri url, Path path})> {
-  /// Downloads every pair, at most [concurrency] at a time.
-  Stream<BatchDownloadProgress> downloadAll({
+  /// Downloads every pair, at most [concurrency] at a time; see [PathDownloadExtensions.download].
+  Stream<BatchDownloadProgress> download({
     Map<String, String>? headers,
     int concurrency = 4,
     bool overwrite = false,
     bool resume = true,
-    CancelToken? cancelToken,
+    bool ifModified = false,
   }) {
     final items = toList();
     return _batchDownload(
       Stream.fromIterable(items),
       knownTotal: items.length,
-      headers: headers,
       concurrency: concurrency,
-      overwrite: overwrite,
-      resume: resume,
-      cancelToken: cancelToken,
+      how: (headers: headers, overwrite: overwrite, resume: resume, ifModified: ifModified, checksum: null),
     );
   }
 }
@@ -419,19 +475,16 @@ extension StreamDownloadExtensions on Stream<({Uri url, Path path})> {
   /// Downloads pairs as they arrive, so discovery and transfer overlap.
   ///
   /// [BatchDownloadProgress.total] is `null` until this stream closes.
-  Stream<BatchDownloadProgress> downloadAll({
+  Stream<BatchDownloadProgress> download({
     Map<String, String>? headers,
     int concurrency = 4,
     bool overwrite = false,
     bool resume = true,
-    CancelToken? cancelToken,
+    bool ifModified = false,
   }) => _batchDownload(
     this,
-    headers: headers,
     concurrency: concurrency,
-    overwrite: overwrite,
-    resume: resume,
-    cancelToken: cancelToken,
+    how: (headers: headers, overwrite: overwrite, resume: resume, ifModified: ifModified, checksum: null),
   );
 }
 
@@ -446,17 +499,17 @@ extension MapDownloadExtensions on Map<Uri, Path> {
   ///
   /// A `Map` holds one destination per URL. To send one URL to two places, use the
   /// [IterableDownloadExtensions] form over records.
-  Stream<BatchDownloadProgress> downloadAll({
+  Stream<BatchDownloadProgress> download({
     Map<String, String>? headers,
     int concurrency = 4,
     bool overwrite = false,
     bool resume = true,
-    CancelToken? cancelToken,
-  }) => pairs.downloadAll(
+    bool ifModified = false,
+  }) => pairs.download(
     headers: headers,
     concurrency: concurrency,
     overwrite: overwrite,
     resume: resume,
-    cancelToken: cancelToken,
+    ifModified: ifModified,
   );
 }

@@ -259,12 +259,17 @@ extension type const Path(String path) implements String {
 
   /// Streams paths matching [pattern]: `*`, `**` and `?` only, e.g. `'**/*.mp3'`.
   ///
+  /// The walk goes only where the pattern can match: `'build/**/*.o'` descends into
+  /// `build`, and a pattern without `**` is never followed deeper than it has segments.
+  ///
   /// Defaults to platform case sensitivity (case-sensitive on Linux, insensitive on Windows/macOS).
   /// Pass [caseSensitive] to override.
   Stream<Path> glob(String pattern, {bool? caseSensitive}) async* {
-    final matcher = _globToRegex(pattern, caseSensitive: caseSensitive);
-    await for (final entity in asDir.list(recursive: true, followLinks: false)) {
-      if (matcher.hasMatch(_relative(entity.path))) yield Path(entity.path);
+    final (start, rest, depth) = _globPlan(pattern);
+    if (start != path && !await Directory(start).exists()) return;
+    final matcher = _globToRegex(rest, caseSensitive: caseSensitive);
+    await for (final entity in _walk(Directory(start), depth)) {
+      if (matcher.hasMatch(Path(start)._relative(entity.path))) yield Path(entity.path);
     }
   }
 
@@ -273,11 +278,38 @@ extension type const Path(String path) implements String {
   /// Defaults to platform case sensitivity (case-sensitive on Linux, insensitive on Windows/macOS).
   /// Pass [caseSensitive] to override.
   List<Path> globSync(String pattern, {bool? caseSensitive}) {
-    final matcher = _globToRegex(pattern, caseSensitive: caseSensitive);
+    final (start, rest, depth) = _globPlan(pattern);
+    if (start != path && !Directory(start).existsSync()) return const [];
+    final matcher = _globToRegex(rest, caseSensitive: caseSensitive);
     return [
-      for (final entity in asDir.listSync(recursive: true, followLinks: false))
-        if (matcher.hasMatch(_relative(entity.path))) Path(entity.path),
+      for (final entity in _walkSync(Directory(start), depth))
+        if (matcher.hasMatch(Path(start)._relative(entity.path))) Path(entity.path),
     ];
+  }
+
+  /// Where a [glob] has to start, what it matches from there, and how deep it can go.
+  ///
+  /// The segments before the first wildcard are a directory, not a pattern, and the
+  /// segments after it bound the depth unless one of them is `**`. Walking the whole
+  /// subtree and filtering the result instead meant a glob under one directory paid for
+  /// every other directory beside it.
+  (String start, String rest, int? depth) _globPlan(String pattern) {
+    final normalized = pattern.replaceAll(r'\', '/');
+    final segments = normalized.split('/');
+    var fixed = 0;
+    // An absolute pattern has nothing to anchor to here, and the last segment is always
+    // part of the match, never of the prefix.
+    if (!normalized.startsWith('/')) {
+      while (fixed < segments.length - 1 && !segments[fixed].contains('*') && !segments[fixed].contains('?')) {
+        fixed++;
+      }
+    }
+    final rest = segments.skip(fixed).join('/');
+    return (
+      fixed == 0 ? path : p.join(path, segments.take(fixed).join('/')),
+      rest,
+      rest.contains('**') ? null : segments.length - fixed,
+    );
   }
 
   /// [child] relative to this directory, with forward slashes, for glob matching.
@@ -466,6 +498,28 @@ PathType _pathType(FileSystemEntityType type) => switch (type) {
 };
 
 final _globCache = <(String, bool), RegExp>{};
+
+/// Everything under [dir], at most [depth] levels down — unbounded when it is `null`.
+///
+/// `Directory.list(recursive: true)` has no depth, so a glob that cannot match below its
+/// own segment count would still walk everything there.
+Stream<FileSystemEntity> _walk(Directory dir, int? depth) async* {
+  if (depth != null && depth < 1) return;
+  await for (final entity in dir.list(followLinks: false)) {
+    yield entity;
+    if (entity is Directory) yield* _walk(entity, depth == null ? null : depth - 1);
+  }
+}
+
+List<FileSystemEntity> _walkSync(Directory dir, int? depth) {
+  if (depth != null && depth < 1) return const [];
+  final out = <FileSystemEntity>[];
+  for (final entity in dir.listSync(followLinks: false)) {
+    out.add(entity);
+    if (entity is Directory) out.addAll(_walkSync(entity, depth == null ? null : depth - 1));
+  }
+  return out;
+}
 
 RegExp _globToRegex(String pattern, {bool? caseSensitive}) {
   final isSensitive = caseSensitive ?? (!Platform.isWindows && !Platform.isMacOS);

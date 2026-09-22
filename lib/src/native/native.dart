@@ -25,39 +25,14 @@ abstract final class Native {
   static int get version =>
       _library == null ? 0 : _library!.lookupFunction<Uint32 Function(), int Function()>('tk_version')();
 
-  /// The file name for this platform.
-  static String get fileName => switch (Platform.operatingSystem) {
-    'macos' => 'libdart_toolkit_native.dylib',
-    'windows' => 'dart_toolkit_native.dll',
-    _ => 'libdart_toolkit_native.so',
-  };
-
-  /// This platform's folder under `native/prebuilt/`.
-  static String get target {
-    final arch = switch (Abi.current()) {
-      Abi.macosArm64 || Abi.linuxArm64 || Abi.windowsArm64 => 'arm64',
-      _ => 'x64',
-    };
-    return '${Platform.operatingSystem}_$arch';
-  }
-
-  /// The library, or an [UnsupportedError] that says what [feature] needed and why it is absent.
-  ///
-  /// Callers look functions up on it: `Native.require('7z').lookupFunction<…>('tk_archive_extract')`.
-  static DynamicLibrary require(String feature) {
-    final lib = _library;
-    if (lib == null) throw UnsupportedError('$feature needs dart_toolkit_native, which did not load: $reason');
-    return lib;
-  }
-
   static DynamicLibrary? _load() {
     final candidates = <String>[
       ?Platform.environment['DART_TOOLKIT_NATIVE'],
-      p.join(p.dirname(Platform.resolvedExecutable), fileName),
+      p.join(p.dirname(Platform.resolvedExecutable), NativeBridge.fileName),
     ];
     // Inside the package, for `dart run` from a checkout or a pub cache.
     final root = _packageRoot();
-    if (root != null) candidates.add(p.join(root, 'native', 'prebuilt', target, fileName));
+    if (root != null) candidates.add(p.join(root, 'native', 'prebuilt', NativeBridge.target, NativeBridge.fileName));
     final failures = <String>[];
     for (final path in candidates) {
       if (!File(path).existsSync()) continue;
@@ -67,7 +42,7 @@ abstract final class Native {
         failures.add('$path: $e');
       }
     }
-    _reason = failures.isEmpty ? 'no $fileName at ${candidates.join(', ')}' : failures.join('; ');
+    _reason = failures.isEmpty ? 'no $NativeBridge.fileName at ${candidates.join(', ')}' : failures.join('; ');
     return null;
   }
 
@@ -76,6 +51,39 @@ abstract final class Native {
     final uri = Isolate.resolvePackageUriSync(Uri.parse('package:dart_toolkit/core.dart'));
     if (uri == null || uri.scheme != 'file') return null;
     return p.dirname(p.dirname(uri.toFilePath()));
+  }
+}
+
+/// The FFI plumbing `fs` and `hash` bind through.
+///
+/// It is public only because those are separate libraries; nothing outside the package
+/// should call it, and it is not covered by the versioning promise. What a program asks
+/// about the native library is on [Native]: [Native.isAvailable], [Native.reason],
+/// [Native.version].
+abstract final class NativeBridge {
+  /// The library's file name on this platform.
+  static String get fileName => switch (Platform.operatingSystem) {
+    'macos' => 'libdart_toolkit_native.dylib',
+    'windows' => 'dart_toolkit_native.dll',
+    _ => 'libdart_toolkit_native.so',
+  };
+
+  /// This platform's folder under `native/prebuilt/`; `make native` asks for it by name.
+  static String get target {
+    final arch = switch (Abi.current()) {
+      Abi.macosArm64 || Abi.linuxArm64 || Abi.windowsArm64 => 'arm64',
+      _ => 'x64',
+    };
+    return '${Platform.operatingSystem}_$arch';
+  }
+
+  /// The library, or an [UnsupportedError] that says what [feature] needed and why it is absent.
+  static DynamicLibrary require(String feature) {
+    final lib = Native._library;
+    if (lib == null) {
+      throw UnsupportedError('$feature needs dart_toolkit_native, which did not load: ${Native.reason}');
+    }
+    return lib;
   }
 
   /// The last error message the library recorded.

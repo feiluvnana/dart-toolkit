@@ -18,6 +18,10 @@ dartdoc:
       name: Concurrency
     Collections:
       name: Collections
+    Hashing:
+      name: Hashing
+    Native:
+      name: Native
     Utilities:
       name: Utilities
   categoryOrder:
@@ -30,4 +34,6 @@ dartdoc:
     - System
     - Terminal
     - CLI
+    - Hashing
+    - Native
     - Utilities

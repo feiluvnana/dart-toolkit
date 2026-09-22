@@ -33,7 +33,7 @@ class ShellResult {
   String toString() => text.isNotEmpty ? text : stderr.trim();
 }
 
-/// Exception thrown when a command fails and `throwOnError` is enabled.
+/// Exception thrown when a command fails and `strict` is on.
 ///
 /// {@category System}
 class ShellException implements Exception {

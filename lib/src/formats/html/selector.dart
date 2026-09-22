@@ -11,12 +11,22 @@ final class _Selector {
 
   static final _cache = <(String, bool), _Selector>{};
 
+  /// Compiled selectors kept before the oldest is dropped. A program that builds selectors
+  /// from data — a column name, a user's input — would otherwise grow the cache forever;
+  /// the XPath engine caps its own at the same number.
+  static const _cacheLimit = 256;
+
   /// Parses [source], or returns the cached result. Throws [FormatException] on bad syntax.
   ///
   /// [fold] lowercases type and attribute names, which is what HTML wants and what XML,
   /// whose names are case-sensitive, does not.
-  static _Selector parse(String source, {bool fold = true}) =>
-      _cache[(source, fold)] ??= _Selector._(_SelectorParser(source, fold).parseList());
+  static _Selector parse(String source, {bool fold = true}) {
+    final key = (source, fold);
+    final cached = _cache[key];
+    if (cached != null) return cached;
+    if (_cache.length >= _cacheLimit) _cache.remove(_cache.keys.first);
+    return _cache[key] = _Selector._(_SelectorParser(source, fold).parseList());
+  }
 
   /// Whether [e] matches.
   bool matches(Element e) => _withSiblings(() => _matches(e));
@@ -39,6 +49,22 @@ final class _Selector {
     if (includeSelf && _matches(root)) out.add(root);
     walk(root);
     return out;
+  });
+
+  /// Whether any descendant of [root] matches, stopping at the first one.
+  ///
+  /// What `:has()` asks. Answering it with [matchAll] walked the whole subtree and built
+  /// the whole list to look at `isNotEmpty`, so `section:has(a)` paid for every node after
+  /// the `<a>` that already settled it.
+  bool matchAny(Element root) => _withSiblings(() {
+    bool walk(Element e) {
+      for (final n in e.nodes) {
+        if (n is Element && (_matches(n) || walk(n))) return true;
+      }
+      return false;
+    }
+
+    return walk(root);
   });
 }
 
@@ -346,12 +372,14 @@ final class _SelectorParser {
         return (e) => e.parent != null && f(_sibs.typeIndexOf(e) + 1);
       case 'empty':
         return (e) => e.nodes.every((n) => n is Text && n.data.isEmpty);
+      // A nested selector is read in the same markup as the one around it: on XML, where
+      // names are case-sensitive, `:not(Item)` means `Item` and not `item`.
       case 'not':
-        final inner = _Selector.parse(arg ?? '');
+        final inner = _Selector.parse(arg ?? '', fold: fold);
         return (e) => !inner.matches(e);
       case 'has':
-        final inner = _Selector.parse(arg ?? '');
-        return (e) => inner.matchAll(e).isNotEmpty;
+        final inner = _Selector.parse(arg ?? '', fold: fold);
+        return inner.matchAny;
       case 'root':
         return (e) => e.parent == null;
       default:

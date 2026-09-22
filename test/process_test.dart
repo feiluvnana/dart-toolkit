@@ -63,7 +63,7 @@ void main() {
     });
 
     test(r'run(...) returns ShellResult without throwing when throwOnError is false', () async {
-      final res = await run('dart --non-existent-flag-xyz', quiet: true, throwOnError: false);
+      final res = await run('dart --non-existent-flag-xyz', quiet: true, strict: false);
       expect(res.isOk, isFalse);
       expect(res.isOk, isFalse);
       expect(res.isOk, isFalse);
@@ -86,7 +86,7 @@ void main() {
         expect(res.text, equals('beta'));
 
         // pipefail: an upstream failure is the pipeline's failure.
-        final failed = await ('false' | 'cat').run(quiet: true, throwOnError: false);
+        final failed = await ('false' | 'cat').run(quiet: true, strict: false);
         expect(failed.isOk, isFalse);
         expect(() => ('false' | 'cat').run(quiet: true), throwsA(isA<ShellException>()));
       }
@@ -109,6 +109,72 @@ void main() {
           Env.remove('DART_TOOLKIT_TEST_VAR');
         }
       }
+    });
+  });
+
+  group('Shell.session', () {
+    test('the scope supplies workdir, env, quiet and strict, so a command repeats none of them', () async {
+      final dir = Path(Directory.systemTemp.createTempSync('shell_').path);
+      addTearDown(() => dir.deleteSync(recursive: true));
+
+      await Shell.session(
+        () async {
+          expect(await run('pwd').text, endsWith(dir.name));
+          expect(await run('printenv TK_MARKER').text, 'set-once');
+          // `strict: false` at the session level, so a failing command comes back instead.
+          final bad = await run('false');
+          expect(bad.isOk, isFalse);
+        },
+        workdir: dir,
+        env: {'TK_MARKER': 'set-once'},
+        quiet: true,
+        strict: false,
+      );
+    });
+
+    test('a per-call argument still wins over the session', () async {
+      await Shell.session(
+        () async {
+          expect(() => run('false', strict: true), throwsA(isA<ShellException>()));
+          expect(await run('true', strict: true).isOk, isTrue);
+        },
+        quiet: true,
+        strict: false,
+      );
+    });
+
+    test('env is added to the enclosing session, not swapped for it', () async {
+      await Shell.session(
+        () async {
+          await Shell.session(() async {
+            expect(await run('printenv OUTER').text, 'o');
+            expect(await run('printenv INNER').text, 'i');
+          }, env: {'INNER': 'i'});
+        },
+        env: {'OUTER': 'o'},
+        quiet: true,
+      );
+    });
+
+    test('a pipeline and Path.run read the same scope', () async {
+      final dir = Path(Directory.systemTemp.createTempSync('shell_').path);
+      addTearDown(() => dir.deleteSync(recursive: true));
+      (dir / 'hello.sh').writeTextSync('#!/bin/sh\necho from-script\n');
+      await run('chmod +x ${dir / 'hello.sh'}', quiet: true);
+
+      await Shell.session(
+        () async {
+          expect(await ('echo a b c' | 'tr " " "\n"').run().lines, ['a', 'b', 'c']);
+          expect(await (dir / 'hello.sh').run().text, 'from-script');
+        },
+        workdir: dir,
+        quiet: true,
+      );
+    });
+
+    test('outside a session the documented defaults hold', () async {
+      expect(() => run('false', quiet: true), throwsA(isA<ShellException>()));
+      expect(await run('true', quiet: true).isOk, isTrue);
     });
   });
 

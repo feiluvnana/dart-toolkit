@@ -262,7 +262,7 @@ void main() {
           'https://example.com/file1.txt'.url: base / 'batch1.txt',
           'https://example.com/file2.txt'.url: base / 'batch2.txt',
         };
-        final batch1Updates = await mapUriPath.downloadAll(concurrency: 2).toList();
+        final batch1Updates = await mapUriPath.download(concurrency: 2).toList();
         expect(batch1Updates.isNotEmpty, isTrue);
         final finalBatch1 = batch1Updates.last;
         expect(finalBatch1.completed, equals(2));
@@ -278,7 +278,7 @@ void main() {
           (url: 'https://example.com/file1.txt'.url, path: base / 'twice_a.txt'),
           (url: 'https://example.com/file1.txt'.url, path: base / 'twice_b.txt'),
         ];
-        final twice = await pairs.downloadAll(concurrency: 2).toList();
+        final twice = await pairs.download(concurrency: 2).toList();
         expect(twice.last.completed, equals(2));
         expect(twice.last.total, equals(2));
         expect(await (base / 'twice_a.txt').exists(), isTrue);
@@ -287,7 +287,7 @@ void main() {
         // 6. The stream form overlaps discovery with transfer; total is unknown until it closes
         final discovered = StreamController<({Uri url, Path path})>();
         final events = <BatchDownloadProgress>[];
-        final done = discovered.stream.downloadAll(concurrency: 2).forEach(events.add);
+        final done = discovered.stream.download(concurrency: 2).forEach(events.add);
         discovered.add((url: 'https://example.com/file1.txt'.url, path: base / 'streamed1.txt'));
         await Future<void>.delayed(const Duration(milliseconds: 20));
         expect(events.isNotEmpty, isTrue);
@@ -534,4 +534,89 @@ void main() {
       expect(Directory('${dir.path}/also').existsSync(), isFalse);
     });
   });
+
+  group('glob walks only where the pattern can match', () {
+    late Path root;
+
+    setUp(() async {
+      root = Path(Directory.systemTemp.createTempSync('tk_glob_').path);
+      for (final f in [
+        'lib/a.dart',
+        'lib/src/b.dart',
+        'lib/src/deep/c.dart',
+        'lib/notes.txt',
+        'build/junk.dart',
+        'build/nested/more/junk.dart',
+        'top.dart',
+        'README.md',
+      ]) {
+        await Path(p.join(root.path, f)).writeText('x');
+      }
+    });
+
+    tearDown(() => root.delete(recursive: true));
+
+    /// The whole tree, filtered — what glob did before it learned where to start.
+    Future<List<String>> byWalkingEverything(String pattern) async {
+      final matcher = _globLike(pattern);
+      final out = <String>[];
+      await for (final e in root.asDir.list(recursive: true, followLinks: false)) {
+        if (matcher.hasMatch(p.relative(e.path, from: root.path))) out.add(e.path);
+      }
+      return out..sort();
+    }
+
+    for (final pattern in [
+      'lib/**/*.dart',
+      'lib/*.dart',
+      'lib/src/*.dart',
+      '**/*.dart',
+      '*.md',
+      '*.dart',
+      'lib/src/deep/c.dart',
+      'build/**/*.dart',
+    ]) {
+      test('$pattern matches what a whole-tree walk matches', () async {
+        final got = (await root.glob(pattern).toList()).map((e) => e.path).toList()..sort();
+        expect(got, equals(await byWalkingEverything(pattern)), reason: pattern);
+        expect(root.globSync(pattern).map((e) => e.path).toList()..sort(), equals(got), reason: '$pattern, sync');
+      });
+    }
+
+    test('a prefix directory that is not there matches nothing rather than throwing', () async {
+      expect(await root.glob('nope/**/*.dart').toList(), isEmpty);
+      expect(root.globSync('nope/*.dart'), isEmpty);
+    });
+
+    test('a pattern without ** does not descend past its own segments', () async {
+      expect((await root.glob('lib/*.dart').toList()).map((e) => e.name), unorderedEquals(['a.dart']));
+      expect((await root.glob('*.dart').toList()).map((e) => e.name), unorderedEquals(['top.dart']));
+    });
+  });
+}
+
+/// The pattern rules `glob` documents — `*`, `**` and `?` — as one regular expression.
+RegExp _globLike(String pattern) {
+  final buffer = StringBuffer('^');
+  for (var i = 0; i < pattern.length; i++) {
+    final c = pattern[i];
+    if (c == '*' && i + 1 < pattern.length && pattern[i + 1] == '*') {
+      if (i + 2 < pattern.length && pattern[i + 2] == '/') {
+        buffer.write('(?:.+/)?');
+        i += 2;
+      } else {
+        buffer.write('.*');
+        i += 1;
+      }
+    } else if (c == '*') {
+      buffer.write('[^/]*');
+    } else if (c == '?') {
+      buffer.write('[^/]');
+    } else if (r'.+()^$[]{}|\'.contains(c)) {
+      buffer.write('\\$c');
+    } else {
+      buffer.write(c);
+    }
+  }
+  return RegExp('$buffer\$');
 }

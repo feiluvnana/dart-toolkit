@@ -14,9 +14,10 @@ void main(List<String> args) => Cli(
   name: 'keybox',
   description: 'Key BOX Scraper & Downloader',
   version: '0.0.2',
-).action((ctx) => Http.session(() => run(ctx.cancel), timeout: 60.s)).run(args);
+  handler: (ctx) => Http.session(run, timeout: 60.s),
+).run(args);
 
-Future<void> run(CancelToken cancel) async {
+Future<void> run() async {
   final stage = Logger.stages(3);
   final base = baseName.path;
   final baseUri = keyBase.url;
@@ -154,7 +155,7 @@ Future<void> run(CancelToken cancel) async {
 
   final last = await [Stream.fromIterable(artwork.pairs), songs]
       .merge()
-      .downloadAll(concurrency: concurrency, cancelToken: cancel)
+      .download(concurrency: concurrency)
       .show(slots: concurrency, message: 'Downloading', done: 'All assets downloaded.');
 
   // Stage 3: Archive

@@ -13,17 +13,24 @@ enum Env { dev, staging, production }
 
 // An option is a value. Its name is written here and nowhere else, and its type is the type
 // `ctx(…)` gives back: `.or(…)` and `.required()` are what make that type non-nullable.
-final verbose = Flag('verbose', abbr: 'v', description: 'Log every step');
+final verbose = Opt.flag('verbose', abbr: 'v', description: 'Log every step');
 final env = Opt.among('env', Env.values, abbr: 'e', description: 'Target').or(Env.staging);
 final token = Opt.text('token', abbr: 't', description: 'Deployment token').required();
 final workers = Opt.number('workers', abbr: 'w', description: 'Parallel workers').or(4);
-final dryRun = Flag('dry-run', abbr: 'd', description: 'Say what would happen and stop');
+final dryRun = Opt.flag('dry-run', abbr: 'd', description: 'Say what would happen and stop');
 
 Future<void> main(List<String> args) async {
   // `verbose` is on the root, so every subcommand can read it and `-v` works anywhere.
-  final cli = Cli(name: 'deployer', description: 'Ship things somewhere', version: '1.2.0', options: [verbose])
-    ..command('deploy', description: 'Roll out a release', options: [env, token, workers, dryRun], handler: rollOut)
-    ..command('status', description: 'Show what is deployed', handler: showStatus);
+  final cli = Cli(
+    name: 'deployer',
+    description: 'Ship things somewhere',
+    version: '1.2.0',
+    options: [verbose],
+    commands: [
+      CliCommand('deploy', description: 'Roll out a release', options: [env, token, workers, dryRun], handler: rollOut),
+      CliCommand('status', description: 'Show what is deployed', handler: showStatus),
+    ],
+  );
 
   // Parses, dispatches, then runs the exit hooks and releases the signal handlers so the
   // process can end. A usage error prints to stderr and exits 64.
@@ -41,7 +48,7 @@ Future<void> rollOut(CliContext ctx) async {
   Logger.debug('token of ${secret.length} chars, $parallel workers');
 
   // At end of input — a pipe, CI — a prompt takes its default instead of hanging.
-  if (target == Env.production && !Console.confirm('Really deploy to production?', false)) {
+  if (target == Env.production && !Console.confirm('Really deploy to production?', or: false)) {
     await die('Cancelled at the prompt.', exitCode: 3);
   }
 
@@ -61,18 +68,15 @@ Future<void> rollOut(CliContext ctx) async {
   }
 
   // `ctx.cancel` is this run's token, already wired to Ctrl-C. Pass it to anything that takes
-  // one — `parallelize`, `downloadAll`, `cancelWith` — and a script needs no token of its own.
+  // `Cli.run` opened a `Cancel.session` holding `ctx.cancel`, so `parallelize`, `download`
+  // and `retry` below stop with it and none of them is passed a token.
   final files = [for (var i = 1; i <= 12; i++) 'chunk-$i.tar.gz'];
   final progress = Console.progress(files.length, message: 'Uploading');
-  final uploaded = await files.parallelize(
-    (name) async {
-      await (30 + name.length * 4).ms.delay();
-      progress.tick(1, name);
-      return name;
-    },
-    concurrency: parallel,
-    cancelToken: ctx.cancel,
-  );
+  final uploaded = await files.parallelize((name) async {
+    await (30 + name.length * 4).ms.delay();
+    progress.tick(1, name);
+    return name;
+  }, concurrency: parallel);
   progress.done('${uploaded.rights.length} chunks uploaded');
 
   stage('Reporting');
@@ -92,11 +96,13 @@ Future<void> showStatus(CliContext ctx) async {
   if (ctx(verbose)) Logger.level = LogLevel.debug;
   Logger.debug('reading the deployment record');
 
-  Table.records([
-    (env: 'production', version: '1.1.9', healthy: true),
-    (env: 'staging', version: '1.2.0', healthy: true),
-    (env: 'dev', version: '1.2.0-rc', healthy: false),
-  ], (row) => {'env': row.env, 'version': row.version, 'healthy': row.healthy ? 'yes' : 'NO'}).show();
+  Table.rows(
+    [
+      (env: 'production', version: '1.1.9', healthy: true),
+      (env: 'staging', version: '1.2.0', healthy: true),
+      (env: 'dev', version: '1.2.0-rc', healthy: false),
+    ].map((row) => {'env': row.env, 'version': row.version, 'healthy': row.healthy ? 'yes' : 'NO'}),
+  ).show();
 
   // Positional arguments, and everything after a `--`, arrive as `rest`.
   if (ctx.rest.isNotEmpty) Logger.info('also asked about: ${ctx.rest.join(', ')}');

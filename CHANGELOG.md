@@ -1,6 +1,185 @@
 # Changelog
 
-## Unreleased
+## 0.0.3
+
+A scope is the only way in, a second client is just a client, and the slow paths were measured
+rather than argued about. Every ambient setting — the HTTP client, the shell's environment, the
+cancellation token — is named once where its scope opens and nowhere else; `cancelToken:` and
+`client:` are gone from every signature that took them. A crawl can now keep cookies, obey
+`robots.txt`, verify a download and ask whether a file changed, none of which it could do
+without writing it by hand. Seven hot paths got between 1.6× and 39× faster, each with two
+numbers from the same run. Breaking where it is breaking, and the entries say so.
+
+### A setting every call would carry belongs to the scope, not the call
+
+- **`Cancel.session` makes the cancellation token ambient**, the shape `Http.session` has for
+  a client. `download`, `retry` and `.cancellable` read `Cancel.token`; none of them takes a
+  `cancelToken:` any more. `Cli.run` opens a session around the action whose token is
+  `ctx.cancel`, so a program that wants ^C to stop its downloads writes nothing at all — the
+  benchmark program lost a parameter and a threaded argument.
+  - Added: `Cancel.session`, `Cancel.token`, `Cancel.isCancelled`.
+  - **`cancelWith` is `cancellable`, and it is a getter.** The name was for the argument it no
+    longer takes; taking none and doing no IO, it is a getter like `sorted` and `reversed`.
+    `stream.cancelWith(token, true)` is `stream.cancellable`, and `future.cancelWith(token)` is
+    `future.cancellable`. Outside a session both throw a `StateError` that says so — a token is
+    named where the scope opens and nowhere else.
+  - **One name now means one thing on both receivers.** `Stream.cancelWith()` closed quietly
+    while `Future.cancelWith()` threw, so the call did not say which. `cancellable` ends a
+    stream and fails a future, because a future has no quiet ending to offer, and that is the
+    whole difference.
+  - **Removed: `throwOnCancel:`.** It was a flag on `Stream` alone, selecting between two
+    endings. `Cancel.isCancelled` after the loop already says whether the scope fired, which is
+    error policy chosen at the use site, where this package puts it.
+  - **Added: `Cancel.reason` and `Cancel.throwIfCancelled()`**, so the scope answers all three
+    questions its token does — the package itself was reaching through
+    `Cancel.token?.throwIfCancelled()` in three places, where the `?.` silently does nothing
+    outside a session and looks like it checked. All three readings are quiet outside a
+    session; only `.cancellable` refuses there.
+  - Removed: `cancelToken:` from `Path.download`, all three batch downloads, `retry` and both
+    `parallelize`s.
+- **`Shell.session` does the same for processes.** `workdir`, `env`, `timeout`, `encoding`,
+  `quiet` and `strict` are set once for a scope and read by `run`, `path.run(args:)` and a
+  pipeline alike; a per-call argument still wins, and `env` adds to the enclosing session
+  rather than replacing it. The nine-parameter list that was written out four times is written
+  once.
+  - Renamed: `throwOnError:` → `strict:`, a bare adjective like every other parameter.
+
+### One name per operation
+
+- **`downloadAll` is gone; everything is `download`.** `dest.download(url)`, `pairs.download()`,
+  `stream.download()` and `map.download()` are one word over four receivers, streaming the
+  same `BatchDownloadProgress` — one file is a batch of one.
+- **A request body is named by what it is, everywhere.** `text:`, `bytes:`, `form:` and `json:`,
+  at most one, each typed and each carrying its `content-type`. They read the same on
+  `Request`, on `get`/`post`/`put`/`patch`/`delete` and on `ctx.follow`, replacing three
+  vocabularies — `post(body:, json:)` where `body` was an untyped `Object?` checked at runtime,
+  `follow(body:, fields:)`, and `Request(text:, bytes:)` with a `fields` setter.
+  - Removed: `body:` and `fields:`; `Request.fields` is `Request.form`, and `Request.json` is
+    new.
+- **`or` is the one word for a default.** `Console.ask(or:)`, `Console.confirm(or:)` — named
+  now, not positional — and `Console.select(or:)`, matching `Opt.…or(value)`.
+- **A command is what it is given.** `CliCommand(options:, commands:, handler:)`; `declare()`,
+  `action()`, `command(…, build:)` and the public mutable `handler` field are gone, which was
+  four ways to say two things. `Cli` takes `commands:` and `handler:` too.
+- **Deleted, each one line over something one line away:** `String.stripped` (use
+  `Io.stripAnsi`), `Sequence.count` (`length`, or `where(…).length`), `Group.counts`
+  (`countBy`), `Table.records` (`Table.rows(items.map(toRow))`), and `Console.spinner` with
+  `ConsoleSpinner.start`/`succeed`/`fail`/`stop` (`Console.spin(message, action, done:,
+  failed:)` is the only spinner).
+
+### What a crawl could not do without writing it by hand
+
+- **A session can keep cookies.** `Http.session(cookies: true, …)` stores what the responses
+  set and sends them back, so a login and the pages behind it are one crawl. The jar lives as
+  long as the session, is never written to disk, and a request that names its own `cookie`
+  still wins. Path and domain scoping, `Secure`, `Expires` and `Max-Age` are honoured; the
+  only vocabulary is the flag.
+  - `IoClient` joins a repeated `set-cookie` with a newline rather than a comma, which its
+    `Expires` contains. Chrome's DevTools protocol already joined it that way, so
+    `BrowserClient` agrees.
+- **A crawl can obey `robots.txt`.** `ctx.robots = true` on `Scrape.onInit` fetches each
+  host's rules once and drops what they forbid into `ScrapeSummary.dropped`. Longest match
+  wins and a tie goes to `Allow`, as RFC 9309 says; `*` and `$` in a path count. A
+  `Crawl-delay` raises that host's gap and never lowers it, so robots can slow a crawl but
+  not hurry it. A site with no `robots.txt`, or one that cannot be read, forbids nothing.
+- **A download can be verified.** `dest.download(url, checksum: (Hash.sha256, '9f86d0…'))`
+  fails with a `ChecksumMismatch` and discards the `.part`, which is not what was asked for
+  and would never become it. On the single-file form alone: one checksum describes one file.
+- **A download can be conditional.** `ifModified: true` sends the destination's timestamp as
+  `if-modified-since` instead of skipping because the file is there; a `304` is a
+  `DownloadSkipped`. On all four receivers.
+
+### A page is read in the encoding it is written in
+
+- **`Response.text` honours `<meta charset>` and decodes windows-1252.** A page served as
+  `text/html` with no charset in the header and `<meta charset="windows-1252">` inside used to
+  come back as replacement characters — silently, since nothing throws. The head of the
+  document is now read to find out how to read the document, as a browser does, and both
+  `<meta charset>` spellings count. `iso-8859-1` decodes as windows-1252, which the HTML
+  standard requires and which is what a page labelled either one almost always is. UTF-8 is
+  unchanged.
+
+### Measured, not argued
+
+Same process, warm, best of six, against the previous commit.
+
+- **`glob` walks only where the pattern can match** — 143 ms → 3.7 ms on this repo for
+  `lib/**/*.dart`. The segments before the first wildcard are a directory, not a pattern, so
+  the walk starts there; and a pattern without `**` is never followed deeper than it has
+  segments. It was listing the whole tree — `native/target` included — and filtering the
+  result.
+- **A sibling axis with a pinned position stops at it** — `//li/following-sibling::li[1]` over
+  3 000 siblings, 72.5 ms → 2.0 ms. `[k]` on a forward axis needs the k-th match and nothing
+  after it, where the axis used to be collected whole and all but one thrown away. A sibling's
+  slot also comes from a per-query index now, as the CSS engine has always done, instead of an
+  `indexOf` scan per node.
+- **`//x` is one axis walk** — `//span` over 8 000 elements, 4.0 ms → 1.2 ms.
+  `descendant-or-self::node()/child::x` is exactly `descendant::x` when the step carries no
+  predicate, and the descendant axes keep document order, so the collapsed form also skips
+  building the order map. `//p[1]` is left alone: it means the first `p` of each parent, where
+  `descendant::p[1]` would mean the first in the document.
+- **A sort extracts each key once** — `sortedBy` over 20 000 elements, 12.7 ms → 5.6 ms, and
+  690 270 selector calls → 20 000. The key was computed inside the comparator, so a selector
+  that lowercases a string or parses a date was paid for on every comparison. `Table.orderBy`
+  had the same shape, where the coercion is a trim, a separator strip and a parse.
+- **A table reads a column once per call** — `texts` over 20 000 rows, 1.3 ms → 0.5 ms. The
+  column name was validated inside the row loop, and validating it scans the column list.
+- **`:has()` stops at the first match** — 16.3 ms → 7.6 ms where the match is the first child
+  of a large subtree. It was building the whole match list to ask whether it was empty.
+- **`Element.table` walks the rows once** — a 3 000-row table, 2.1 ms → 1.3 ms. It ran two
+  subtree selector queries per row and then filtered the matches back down by their nearest
+  ancestor.
+- **A download reports at most every 50 ms.** It was allocating two objects and pumping two
+  stream controllers per socket chunk — about 16 000 events per gigabyte — for updates the
+  frame-limited renderer could not draw, and making the socket wait on the consumer to do it.
+  The final state is always reported.
+- **The CSS selector cache evicts.** It grew forever; the XPath cache next to it has always
+  capped at 256, and now both do.
+
+### Fixed
+
+- **A nested CSS selector reads the markup around it.** `:not()` and `:has()` parsed their
+  argument as HTML whatever the document was, so on XML `Root > :not(Item)` kept `<Item>`
+  instead of `<item>` — the wrong element — and `Root:has(ITEM)` matched a document with no
+  `<ITEM>`.
+- **`orderBy(descending: true)` keeps `null` last**, which is what it documents. Negating the
+  whole comparison quietly reversed the null rule too, so an empty cell sorted first.
+- **Private names no longer reach the caller.** Six `FormatException` and `StateError`
+  messages named `_XPath`, and four doc comments named `_entities`.
+
+### An archive is what its bytes say it is
+
+- **The format is read from the file, not from its name.** `extractTo`, `archiveEntries` and
+  `decompressTo` sniff the magic number in the native library and fall back to the extension,
+  so a download saved as `.bin`, a renamed archive or an extension-less blob still opens —
+  every container, `rar` included, and all four single-stream codecs. `archiveTo` and
+  `compressTo` still read the destination's extension, because a file that does not exist yet
+  has nothing else to go on.
+- **`Archive.rar` names the format that was already readable.** The enum now covers everything
+  the package reads; `Archive.isWritable` is false for it alone, and `archiveTo` says so
+  instead of failing further down.
+
+### What is public is what a caller uses
+
+- **The FFI plumbing moved off `Native`.** `Native` is `isAvailable`, `reason` and `version`;
+  `require`, `alloc`, `free`, `withBytes`, `withOut`, `withText`, `take`, `lastError`,
+  `fileName` and `target` are on `NativeBridge`, public only because `fs` and `hash` are
+  separate libraries and documented as outside the versioning promise.
+- **A parser's internals are not API.** `CliOption.parse`/`fallback`/`isRequired`/`choices`/
+  `takesValue` and `CliCommand.findOption`/`findAbbr`/`printUsage`/`subcommands`/`parent`/
+  `options` are private. `XPath`, `XPathKind` and `JsonPath` are private too: `$` and `$x` are
+  how a query is run, and two ways to run one was one too many.
+- **Every option kind is behind `Opt`.** `Flag('x')` is `Opt.flag('x')`, so typing `Opt.`
+  shows all five kinds rather than four.
+- **`Crypto` is `Secure`.** The library doc says this package does not protect data; the class
+  holding `token`, `uuid`, random bytes and constant-time `equals` should not have claimed
+  otherwise. `Crypto.randomBytes` is `Secure.bytes`.
+- **The hash grid is filled.** `hash`, `hashBytes`, `checksum`, `hmac` and `hmacBytes` are on
+  `String`, `List<int>` and `Path` alike; `Path.hmac`, `Path.hmacBytes`, `String.hashBytes` and
+  `String.hmacBytes` are new. Which receiver had which was previously unguessable.
+- **Fixed:** `Http.session`'s doc claimed every entry point takes a `client:` — none does, and
+  that is the point. `{@category Crypto}` and `{@category Core}` were undeclared and are now
+  `Hashing` and `Utilities`; `Hashing` and `Native` are declared in `dartdoc_options.yaml`.
 
 ### A client is the only thing that touches the network, so anything can be one
 

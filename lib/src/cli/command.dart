@@ -34,7 +34,7 @@ sealed class CliOption<T> {
   /// The long name, used as `--name`.
   final String name;
 
-  /// Help text shown by [CliCommand.printUsage].
+  /// Help text shown by `--help`.
   final String description;
 
   /// The single-character short form, used as `-a`.
@@ -44,49 +44,48 @@ sealed class CliOption<T> {
     : assert(abbr == null || abbr.length == 1, 'abbr is one character');
 
   /// Turns the text on the command line into the value, throwing [UsageException] when it
-  /// is not one. Never called for a [Flag], which takes no value.
-  T parse(String raw);
+  /// is not one. Never called for a flag, which takes no value.
+  T _parse(String raw);
 
   /// Used when the option is absent, or `null` when there is none.
-  T? get fallback;
+  T? get _or;
 
-  /// Whether parsing fails when this option is absent. Never true for a [Flag].
-  bool get isRequired;
+  /// Whether parsing fails when this option is absent. Never true for a flag.
+  bool get _isRequired;
 
   /// The values the option is restricted to, shown in help, or `null` when it is not.
-  List<T>? get choices => null;
+  List<T>? get _choices => null;
 
   /// Whether this option takes a value of its own on the command line.
-  bool get takesValue => true;
+  bool get _takesValue => true;
 }
 
-/// A boolean option. Present means true; it never consumes a value.
-///
-/// {@category CLI}
-final class Flag extends CliOption<bool> {
-  const Flag(super.name, {super.description, super.abbr});
+/// A boolean option: present means true, and it never consumes a value. See [Opt.flag].
+final class _Flag extends CliOption<bool> {
+  const _Flag(super.name, {super.description, super.abbr});
 
   @override
-  bool parse(String raw) => true;
+  bool _parse(String raw) => true;
 
   @override
-  bool get fallback => false;
+  bool get _or => false;
 
   @override
-  bool get isRequired => false;
+  bool get _isRequired => false;
 
   @override
-  bool get takesValue => false;
+  bool get _takesValue => false;
 }
 
-/// An option taking a value: a string, an integer, one of a fixed set, or whatever a
-/// function of your own returns.
+/// An option: a flag, a string, an integer, one of a fixed set, or whatever a function
+/// of your own returns. Every kind is behind this one name.
 ///
-/// The constructors all produce a nullable option; [OptionalOpt.or] and
-/// [OptionalOpt.required] are what guarantee a value, and they are what make
-/// [CliContext.call] return a non-nullable [T].
+/// All but [flag] produce a nullable option; [OptionalOpt.or] and [OptionalOpt.required]
+/// are what guarantee a value, and they are what make [CliContext.call] return a
+/// non-nullable [T].
 ///
 /// ```dart
+/// final dry   = Opt.flag('dry-run', abbr: 'd');                 // bool
 /// final out   = Opt.text('out', abbr: 'o');                     // String?
 /// final to    = Opt.text('to', abbr: 't').required();           // String
 /// final top   = Opt.number('top', abbr: 'n').or(10);            // int
@@ -96,26 +95,33 @@ final class Flag extends CliOption<bool> {
 ///
 /// {@category CLI}
 final class Opt<T> extends CliOption<T> {
-  final T Function(String raw) _parse;
+  final T Function(String raw) _parseValue;
 
   @override
-  final List<T>? choices;
+  final List<T>? _choices;
 
   @override
-  final T? fallback;
+  final T? _or;
 
   @override
-  final bool isRequired;
+  final bool _isRequired;
 
   const Opt._(
     super.name, {
     required T Function(String raw) parse,
     super.description,
     super.abbr,
-    this.choices,
-    this.fallback,
-    this.isRequired = false,
-  }) : _parse = parse;
+    List<T>? choices,
+    T? or,
+    bool required = false,
+  }) : _parseValue = parse,
+       _choices = choices,
+       _or = or,
+       _isRequired = required;
+
+  /// A boolean option. Present means true; it never consumes a value.
+  static CliOption<bool> flag(String name, {String description = '', String? abbr}) =>
+      _Flag(name, description: description, abbr: abbr);
 
   /// A string option.
   static Opt<String?> text(String name, {String description = '', String? abbr}) =>
@@ -134,7 +140,7 @@ final class Opt<T> extends CliOption<T> {
       Opt<V?>._(name, parse: (raw) => _guard(name, parse, raw), description: description, abbr: abbr);
 
   @override
-  T parse(String raw) => _parse(raw);
+  T _parse(String raw) => _parseValue(raw);
 }
 
 /// What turns an optional [Opt] into one whose value is guaranteed, and so whose
@@ -148,7 +154,7 @@ extension OptionalOpt<T extends Object> on Opt<T?> {
   /// choices — a default the parser would reject is a bug in the declaration, not in the
   /// command line.
   Opt<T> or(T value) {
-    if (choices case final allowed? when !allowed.contains(value)) {
+    if (_choices case final allowed? when !allowed.contains(value)) {
       throw ArgumentError.value(value, 'value', 'Not one of ${allowed.map(_label).join(', ')}');
     }
     return Opt<T>._(
@@ -156,8 +162,8 @@ extension OptionalOpt<T extends Object> on Opt<T?> {
       parse: (raw) => _parse(raw) as T,
       description: description,
       abbr: abbr,
-      choices: choices?.cast<T>(),
-      fallback: value,
+      choices: _choices?.cast<T>(),
+      or: value,
     );
   }
 
@@ -167,8 +173,8 @@ extension OptionalOpt<T extends Object> on Opt<T?> {
     parse: (raw) => _parse(raw) as T,
     description: description,
     abbr: abbr,
-    choices: choices?.cast<T>(),
-    isRequired: true,
+    choices: _choices?.cast<T>(),
+    required: true,
   );
 }
 
@@ -208,8 +214,10 @@ class CliContext {
   /// The command that was dispatched.
   final CliCommand command;
 
-  /// Cancelled on SIGINT, SIGTERM and [die], before the other exit hooks run. Pass it to
-  /// `downloadAll`, `parallelize`, `cancelWith`; a script needs no token of its own.
+  /// Cancelled on SIGINT, SIGTERM and [die], before the other exit hooks run.
+  ///
+  /// [Cli.run] makes it the ambient [Cancel.token] for the whole action, so a download,
+  /// a crawl or a `retry` inside it already stops; this is the handle that stops them.
   final CancelToken cancel;
 
   final Map<CliOption<Object?>, Object?> _values;
@@ -229,7 +237,7 @@ class CliContext {
   /// unset — a declared default or `required()` is what rules that out.
   T call<T>(CliOption<T> option) {
     if (_values.containsKey(option)) return _values[option] as T;
-    if (option.fallback case final value?) return value;
+    if (option._or case final value?) return value;
     if (null is T) return null as T;
     throw StateError('Option "--${option.name}" was not given and has no default.');
   }
@@ -240,97 +248,81 @@ class CliContext {
 
 /// A command: a name, options, subcommands and the handler that runs it.
 ///
+/// Everything a command is, it is given: [options], [commands] and [handler] are
+/// constructor arguments, and nothing sets them afterwards.
+///
+/// ```dart
+/// CliCommand('fetch', description: 'Fetch a thing', options: [verbose], handler: fetch)
+/// ```
+///
 /// {@category CLI}
 class CliCommand {
   final String name;
   final String description;
-  final List<CliOption<Object?>> options = [];
-  final Map<String, CliCommand> subcommands = {};
-  final CliCommand? parent;
-  CommandHandler? handler;
+
+  /// What runs when this command is dispatched; usage is printed when it is `null`.
+  final CommandHandler? handler;
+
+  final List<CliOption<Object?>> _options;
+  final Map<String, CliCommand> _subcommands;
+  CliCommand? _parent;
 
   CliCommand(
     this.name, {
     this.description = '',
     this.handler,
-    this.parent,
     Iterable<CliOption<Object?>> options = const [],
-  }) {
-    this.options.addAll(options);
+    Iterable<CliCommand> commands = const [],
+  }) : _options = List.unmodifiable(options),
+       _subcommands = {for (final c in commands) c.name: c} {
+    for (final c in _subcommands.values) {
+      c._parent = this;
+    }
   }
 
   /// Looks up an option by name, walking up to the root command.
-  CliOption<Object?>? findOption(String name) {
-    for (final option in options) {
+  CliOption<Object?>? _findOption(String name) {
+    for (final option in _options) {
       if (option.name == name) return option;
     }
-    return parent?.findOption(name);
+    return _parent?._findOption(name);
   }
 
   /// Looks up an option by short form, walking up to the root command.
-  CliOption<Object?>? findAbbr(String abbr) {
-    for (final option in options) {
+  CliOption<Object?>? _findAbbr(String abbr) {
+    for (final option in _options) {
       if (option.abbr == abbr) return option;
     }
-    return parent?.findAbbr(abbr);
-  }
-
-  /// Declares [option] on this command.
-  CliCommand declare(CliOption<Object?> option) {
-    options.add(option);
-    return this;
-  }
-
-  /// Declares a nested command with its [options] and [handler]; [build] is for one that
-  /// nests further.
-  ///
-  /// Returns this command, not the child, so a chain stays on one receiver.
-  CliCommand command(
-    String name, {
-    String description = '',
-    CommandHandler? handler,
-    Iterable<CliOption<Object?>> options = const [],
-    void Function(CliCommand)? build,
-  }) {
-    final sub = CliCommand(name, description: description, handler: handler, parent: this, options: options);
-    build?.call(sub);
-    subcommands[name] = sub;
-    return this;
-  }
-
-  /// Sets the action this command runs.
-  CliCommand action(CommandHandler actionHandler) {
-    handler = actionHandler;
-    return this;
+    return _parent?._findAbbr(abbr);
   }
 
   /// Prints usage help for this command.
-  void printUsage() {
+  void _printUsage() {
     Io.out.writeln('${'Usage:'.bold} $_fullName [options] [command]');
     if (description.isNotEmpty) Io.out.writeln('\n$description');
 
-    if (subcommands.isNotEmpty) {
+    if (_subcommands.isNotEmpty) {
       Io.out.writeln('\n${'Commands:'.bold}');
-      for (final sub in subcommands.values) {
+      for (final sub in _subcommands.values) {
         Io.out.writeln('  ${sub.name.padRight(20)} ${sub.description}');
       }
     }
 
-    if (options.isNotEmpty) {
+    if (_options.isNotEmpty) {
       Io.out.writeln('\n${'Options:'.bold}');
-      for (final option in options) {
+      for (final option in _options) {
         final optName = '--${option.name}';
         final prefix = option.abbr != null ? '-${option.abbr}, $optName' : '    $optName';
         var desc = option.description;
-        if (option.choices case final allowed? when allowed.isNotEmpty) {
+        if (option._choices case final allowed? when allowed.isNotEmpty) {
           final list = '(${allowed.map(_label).join('|')})';
           desc = desc.isEmpty ? list : '$desc $list';
         }
         // A flag's fallback is `false`, which is what absence already means; saying so is noise.
-        if (option.takesValue) {
-          if (option.fallback case final value?) desc = '$desc [default: ${_label(value)}]';
+        if (option._takesValue) {
+          if (option._or case final value?) desc = '$desc [default: ${_label(value)}]';
         }
-        if (option.isRequired) desc = '$desc [required]';
+        if (option._isRequired) desc = '$desc [required]';
         Io.out.writeln('  ${prefix.padRight(20)} $desc');
       }
     }
@@ -339,9 +331,9 @@ class CliCommand {
     if (_version != null) Io.out.writeln('      --version        Print the version');
   }
 
-  String get _fullName => parent == null ? name : '${parent!._fullName} $name';
+  String get _fullName => _parent == null ? name : '${_parent!._fullName} $name';
 
-  CliCommand get _root => parent == null ? this : parent!._root;
+  CliCommand get _root => _parent == null ? this : _parent!._root;
 
   String? get _version => switch (_root) {
     Cli(:final version) => version,
@@ -353,11 +345,14 @@ class CliCommand {
   /// Options may precede the subcommand (`app -v fetch`); short flags combine (`-vd`)
   /// and a short option may attach its value (`-j4`). Usage errors throw [UsageException];
   /// [Cli.run] turns them into a message and exit code 64.
-  Future<void> run(List<String> args) => _run(args, {}, CancelToken());
+  Future<void> run(List<String> args) {
+    final cancel = CancelToken();
+    return Cancel.session(() => _run(args, {}, cancel), token: cancel);
+  }
 
   Future<void> _run(List<String> args, Map<CliOption<Object?>, Object?> values, CancelToken cancel) async {
     final rest = <String>[];
-    final ownsHelp = findOption('help') != null || findAbbr('h') != null;
+    final ownsHelp = _findOption('help') != null || _findAbbr('h') != null;
 
     for (var i = 0; i < args.length; i++) {
       final arg = args[i];
@@ -370,8 +365,8 @@ class CliCommand {
       final isLong = arg.startsWith('--');
       if (!isLong && (!arg.startsWith('-') || arg.length <= 1)) {
         // The first positional naming a subcommand dispatches to it, carrying what is parsed so far.
-        if (rest.isEmpty && subcommands.containsKey(arg)) {
-          return subcommands[arg]!._run(args.sublist(i + 1), values, cancel);
+        if (rest.isEmpty && _subcommands.containsKey(arg)) {
+          return _subcommands[arg]!._run(args.sublist(i + 1), values, cancel);
         }
         rest.add(arg);
         continue;
@@ -383,30 +378,30 @@ class CliCommand {
       final inline = eq == -1 ? null : raw.substring(eq + 1);
 
       if (!ownsHelp && (isLong ? key == 'help' : key == 'h')) {
-        printUsage();
+        _printUsage();
         return;
       }
-      if (isLong && key == 'version' && _version != null && findOption('version') == null) {
+      if (isLong && key == 'version' && _version != null && _findOption('version') == null) {
         Io.out.writeln('${_root.name} $_version');
         return;
       }
 
-      final option = isLong ? findOption(key) : findAbbr(key);
+      final option = isLong ? _findOption(key) : _findAbbr(key);
 
       if (option == null && !isLong && key.length > 1) {
         // `-vd` is two flags; `-j4` is `-j 4`; `-vj4` is both.
         for (var k = 0; k < key.length; k++) {
-          final each = findAbbr(key[k]);
+          final each = _findAbbr(key[k]);
           if (each == null) throw UsageException('Unknown option in "-$key": -${key[k]}');
-          if (!each.takesValue) {
+          if (!each._takesValue) {
             values[each] = true;
             continue;
           }
           final attached = key.substring(k + 1);
           if (attached.isNotEmpty) {
-            values[each] = each.parse(attached);
+            values[each] = each._parse(attached);
           } else if (i + 1 < args.length) {
-            values[each] = each.parse(args[++i]);
+            values[each] = each._parse(args[++i]);
           } else {
             throw UsageException('Option "-${key[k]}" requires a value.');
           }
@@ -417,21 +412,21 @@ class CliCommand {
 
       if (option == null) throw UsageException('Unknown option: ${isLong ? '--' : '-'}$key');
 
-      if (!option.takesValue) {
+      if (!option._takesValue) {
         values[option] = true;
       } else if (inline != null) {
-        values[option] = option.parse(inline);
+        values[option] = option._parse(inline);
       } else if (i + 1 < args.length) {
-        values[option] = option.parse(args[++i]);
+        values[option] = option._parse(args[++i]);
       } else {
         throw UsageException('Option "${isLong ? '--' : '-'}$key" requires a value.');
       }
     }
 
     // Required checks cover this command and every ancestor; defaults live on the option.
-    for (CliCommand? cur = this; cur != null; cur = cur.parent) {
-      for (final option in cur.options) {
-        if (option.isRequired && !values.containsKey(option)) {
+    for (CliCommand? cur = this; cur != null; cur = cur._parent) {
+      for (final option in cur._options) {
+        if (option._isRequired && !values.containsKey(option)) {
           throw UsageException('Missing required option "--${option.name}".');
         }
       }
@@ -440,7 +435,7 @@ class CliCommand {
     if (handler != null) {
       await handler!(CliContext(rest, values, this, cancel: cancel));
     } else {
-      printUsage();
+      _printUsage();
     }
   }
 }
@@ -452,7 +447,7 @@ class Cli extends CliCommand {
   /// Printed by `--version` when set.
   final String? version;
 
-  Cli({String name = 'app', String description = '', this.version, super.options})
+  Cli({String name = 'app', String description = '', this.version, super.options, super.commands, super.handler})
     : super(name, description: description);
 
   /// Parses [args], runs the matching command, then runs the exit hooks and releases
@@ -461,12 +456,15 @@ class Cli extends CliCommand {
   /// A usage error — unknown option, bad choice, missing required option — is printed
   /// to stderr and exits with code 64. [CliCommand.run] throws instead; use it to test.
   /// `ctx.cancel` is cancelled first on a signal, on [die], and when the action ends.
+  ///
+  /// The action runs inside a [Cancel.session] holding that token, so everything under it
+  /// — downloads, crawls, `retry` — stops with it and takes no token of its own.
   @override
   Future<void> run(List<String> args) async {
     final cancel = CancelToken();
     onExit(cancel.cancel);
     try {
-      await _run(args, {}, cancel);
+      await Cancel.session(() => _run(args, {}, cancel), token: cancel);
     } on UsageException catch (e) {
       await die('${e.message}\n  Run "$name --help" for usage.', exitCode: 64);
     } finally {

@@ -64,7 +64,7 @@ Future<void> main() async {
     final digest = await zip.hash(Hash.sha256);
     Logger.info('sha256 ${digest.substring(0, 24)}…');
     // Compare a digest against one from elsewhere without leaking where it first differs.
-    Logger.ok('matches a second pass: ${Crypto.equals(digest.hexBytes, await zip.hashBytes(Hash.sha256))}');
+    Logger.ok('matches a second pass: ${Secure.equals(digest.hexBytes, await zip.hashBytes(Hash.sha256))}');
     Logger.info('crc32 of the same file: ${await zip.checksum(Hash.crc32)} (a checksum, not a signature)');
 
     Console.rule('Paths are strings, with the parts named');

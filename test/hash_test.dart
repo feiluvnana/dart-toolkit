@@ -90,21 +90,21 @@ void main() {
       expect('-_8'.base64Bytes, [251, 255]);
       expect(utf8.encode('Hello!').base32, 'JBSWY3DPEE');
       expect('jbsw y3dp ee=='.base32Bytes, utf8.encode('Hello!'));
-      expect(Crypto.uuid(), matches(RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')));
+      expect(Secure.uuid(), matches(RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')));
     });
   });
 
   group('random', () {
     test('token, uuid and a constant-time compare', () {
-      expect(Crypto.randomBytes().length, 32);
-      expect(Crypto.randomBytes(16).length, 16);
-      expect(Crypto.token().length, 43);
-      expect(Crypto.token(16).length, 22);
-      expect(Crypto.token(), isNot(Crypto.token()));
-      expect(Crypto.uuid(), matches(RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')));
-      expect(Crypto.equals([1, 2], [1, 2]), isTrue);
-      expect(Crypto.equals([1, 2], [1, 3]), isFalse);
-      expect(Crypto.equals([1, 2], [1, 2, 3]), isFalse);
+      expect(Secure.bytes().length, 32);
+      expect(Secure.bytes(16).length, 16);
+      expect(Secure.token().length, 43);
+      expect(Secure.token(16).length, 22);
+      expect(Secure.token(), isNot(Secure.token()));
+      expect(Secure.uuid(), matches(RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')));
+      expect(Secure.equals([1, 2], [1, 2]), isTrue);
+      expect(Secure.equals([1, 2], [1, 3]), isFalse);
+      expect(Secure.equals([1, 2], [1, 2, 3]), isFalse);
     });
   });
 

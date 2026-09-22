@@ -19,6 +19,8 @@ const GZIP: u32 = 0;
 const XZ: u32 = 1;
 const ZSTD: u32 = 2;
 const BZIP2: u32 = 3;
+/// `tk_decompress` codec meaning "read the file's magic number".
+const DETECT: u32 = u32::MAX;
 
 #[derive(serde::Serialize)]
 struct Entry {
@@ -28,6 +30,86 @@ struct Entry {
     dir: bool,
     encrypted: bool,
     modified: Option<i64>,
+}
+
+/// The first `n` bytes of `path`, or fewer at end of file.
+fn head(path: &str, n: usize) -> Vec<u8> {
+    let mut buf = vec![0u8; n];
+    match File::open(path) {
+        Ok(f) => {
+            let mut r = BufReader::new(f);
+            let mut filled = 0;
+            while filled < n {
+                match r.read(&mut buf[filled..]) {
+                    Ok(0) | Err(_) => break,
+                    Ok(k) => filled += k,
+                }
+            }
+            buf.truncate(filled);
+            buf
+        }
+        Err(_) => Vec::new(),
+    }
+}
+
+/// The container format of the bytes themselves, when they say so without ambiguity.
+///
+/// A magic number outranks the file name: an archive keeps its format when it is renamed,
+/// downloaded without an extension or saved as `.bin`. The single-stream codecs are not
+/// here because they are ambiguous — a gzip member holds a tar or any other single file —
+/// and are resolved by `detect_read` after the extension has had its say.
+fn sniff(path: &str) -> Option<&'static str> {
+    let b = head(path, 512);
+    if b.len() >= 4 && &b[0..2] == b"PK" && matches!(b[2], 3 | 5 | 7) {
+        return Some("zip");
+    }
+    if b.len() >= 6 && &b[0..6] == b"7z\xbc\xaf\x27\x1c" {
+        return Some("7z");
+    }
+    if b.len() >= 7 && &b[0..6] == b"Rar!\x1a\x07" {
+        return Some("rar");
+    }
+    // A tar's `ustar` magic sits at offset 257, not at the front.
+    if b.len() >= 265 && &b[257..262] == b"ustar" {
+        return Some("tar");
+    }
+    None
+}
+
+/// The codec of a single compressed stream, by magic number.
+fn sniff_codec(path: &str) -> Option<u32> {
+    let b = head(path, 8);
+    if b.len() >= 2 && &b[0..2] == b"\x1f\x8b" {
+        return Some(GZIP);
+    }
+    if b.len() >= 6 && &b[0..6] == b"\xfd7zXZ\x00" {
+        return Some(XZ);
+    }
+    if b.len() >= 4 && &b[0..4] == b"\x28\xb5\x2f\xfd" {
+        return Some(ZSTD);
+    }
+    if b.len() >= 3 && &b[0..3] == b"BZh" {
+        return Some(BZIP2);
+    }
+    None
+}
+
+/// The format to read `path` as: an unambiguous magic number first, then the file name,
+/// then a compressed stream taken to hold a tar.
+fn detect_read(path: &str) -> Result<&'static str, String> {
+    if let Some(kind) = sniff(path) {
+        return Ok(kind);
+    }
+    if let Ok(kind) = detect(path) {
+        return Ok(kind);
+    }
+    match sniff_codec(path) {
+        Some(GZIP) => Ok("tar.gz"),
+        Some(XZ) => Ok("tar.xz"),
+        Some(ZSTD) => Ok("tar.zst"),
+        Some(BZIP2) => Ok("tar.bz2"),
+        _ => Err(format!("{}: not an archive, and its name does not say what it is", path)),
+    }
 }
 
 fn detect(path: &str) -> Result<&'static str, String> {
@@ -95,7 +177,7 @@ fn tar_writer(path: &str, format: u32, level: i32) -> Result<Box<dyn Write>, Str
 // ---------------------------------------------------------------------------------------------
 
 fn list(path: &str, password: Option<&str>) -> Result<Vec<Entry>, String> {
-    let kind = detect(path)?;
+    let kind = detect_read(path)?;
     let mut out = Vec::new();
     match kind {
         "zip" => {
@@ -202,7 +284,7 @@ fn set_mode(path: &Path, mode: Option<u32>) {
 fn set_mode(_path: &Path, _mode: Option<u32>) {}
 
 fn extract(path: &str, dest: &str, password: Option<&str>) -> Result<i32, String> {
-    let kind = detect(path)?;
+    let kind = detect_read(path)?;
     let root = Path::new(dest);
     std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
     let mut count = 0;
@@ -399,7 +481,13 @@ pub unsafe extern "C" fn tk_compress(codec: u32, src: *const u8, slen: usize, de
 #[no_mangle]
 pub unsafe extern "C" fn tk_decompress(codec: u32, src: *const u8, slen: usize, dest: *const u8, dlen: usize) -> i32 {
     guard(|| {
-        let input = BufReader::new(read_file(text(src, slen)?)?);
+        let path = text(src, slen)?;
+        let codec = if codec == DETECT {
+            sniff_codec(path).ok_or_else(|| format!("{}: not a gzip, xz, zstd or bzip2 stream", path))?
+        } else {
+            codec
+        };
+        let input = BufReader::new(read_file(path)?);
         let out = BufWriter::new(create_file(text(dest, dlen)?)?);
         match codec {
             GZIP => pump(flate2::read::MultiGzDecoder::new(input), out)?,

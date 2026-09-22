@@ -6,12 +6,15 @@ final _secure = Random.secure();
 Uint8List _randomBytes(int n) => Uint8List.fromList([for (var i = 0; i < n; i++) _secure.nextInt(256)]);
 
 /// Random bytes, tokens, identifiers, and comparing digests without leaking where they
-/// differ.
+/// differ — everything here draws on the operating system's secure random source.
+///
+/// The name is not `Crypto` on purpose: this package identifies, verifies and encodes
+/// data, and does not protect it. See the `hash` library doc.
 ///
 /// {@category Hashing}
-abstract final class Crypto {
+abstract final class Secure {
   /// [length] random bytes.
-  static Uint8List randomBytes([int length = 32]) => _randomBytes(length);
+  static Uint8List bytes([int length = 32]) => _randomBytes(length);
 
   /// A random token for URLs and headers: [length] bytes as base64url, 43 characters for 32.
   static String token([int length = 32]) => _randomBytes(length).base64Url;

@@ -53,11 +53,84 @@ List<String> _splitCommand(String command) {
   return args;
 }
 
+const _shellKey = #dartToolkitShellScope;
+
+/// The settings every command in a scope shares.
+final class _Shell {
+  final Path? workdir;
+  final Map<String, String>? env;
+  final Duration? timeout;
+  final Encoding encoding;
+  final bool quiet;
+  final bool strict;
+
+  const _Shell({this.workdir, this.env, this.timeout, this.encoding = utf8, this.quiet = false, this.strict = true});
+
+  static _Shell get current => Zone.current[_shellKey] as _Shell? ?? const _Shell();
+
+  _Shell merge({
+    Path? workdir,
+    Map<String, String>? env,
+    Duration? timeout,
+    Encoding? encoding,
+    bool? quiet,
+    bool? strict,
+  }) => _Shell(
+    workdir: workdir ?? this.workdir,
+    env: env == null ? this.env : {...?this.env, ...env},
+    timeout: timeout ?? this.timeout,
+    encoding: encoding ?? this.encoding,
+    quiet: quiet ?? this.quiet,
+    strict: strict ?? this.strict,
+  );
+}
+
+/// The ambient shell seam: what every command in a scope shares.
+///
+/// A working directory, an environment, a timeout or a failure policy that every command
+/// would otherwise repeat belongs to the scope that sets it — the shape [Http.session] has
+/// for a client. Anything genuinely per command — `input:`, `args:`, `shell:` — stays an
+/// argument, and a per-call `workdir:` or `strict:` still wins over the session's.
+///
+/// ```dart
+/// await Shell.session(() async {
+///   await run('git fetch --all');
+///   await run('git status --short');
+/// }, workdir: repo, timeout: 30.s);
+/// ```
+///
+/// {@category System}
+class Shell {
+  /// Runs [body] with these settings for every command inside it.
+  ///
+  /// [env] is added to the enclosing session's rather than replacing it.
+  static Future<T> session<T>(
+    FutureOr<T> Function() body, {
+    Path? workdir,
+    Map<String, String>? env,
+    Duration? timeout,
+    Encoding? encoding,
+    bool? quiet,
+    bool? strict,
+  }) async {
+    final scope = _Shell.current.merge(
+      workdir: workdir,
+      env: env,
+      timeout: timeout,
+      encoding: encoding,
+      quiet: quiet,
+      strict: strict,
+    );
+    return runZoned(() async => body(), zoneValues: {_shellKey: scope});
+  }
+}
+
 /// Runs [command], echoing its output unless [quiet].
 ///
-/// Throws [ShellException] on a non-zero exit unless [throwOnError] is false.
-/// [input] is written to stdin, which is otherwise closed at once. [shell] runs through
-/// the system interpreter rather than exec'ing directly.
+/// Throws [ShellException] on a non-zero exit unless [strict] is false. [input] is written
+/// to stdin, which is otherwise closed at once. [shell] runs through the system interpreter
+/// rather than exec'ing directly. Every argument here defaults to the enclosing
+/// [Shell.session]'s, so a scope says `workdir:` once instead of every call.
 ///
 /// [command] is split here, the way a POSIX shell reads a simple command — so **never
 /// interpolate a scraped or user-supplied value into it**. Pass those as arguments, where
@@ -72,19 +145,21 @@ Future<ShellResult> run(
   Map<String, String>? env,
   Duration? timeout,
   String? input,
-  bool quiet = false,
-  bool throwOnError = true,
-  Encoding encoding = utf8,
+  bool? quiet,
+  bool? strict,
+  Encoding? encoding,
   bool shell = false,
 }) => _runProcess(
   command,
-  workdir: workdir,
-  env: env,
-  timeout: timeout,
+  scope: _Shell.current.merge(
+    workdir: workdir,
+    env: env,
+    timeout: timeout,
+    encoding: encoding,
+    quiet: quiet,
+    strict: strict,
+  ),
   input: input,
-  quiet: quiet,
-  throwOnError: throwOnError,
-  encoding: encoding,
   shell: shell,
 );
 
@@ -107,16 +182,12 @@ Future<void> _feed(Process process, String? input, Encoding encoding) async {
 /// Internal process execution implementation.
 Future<ShellResult> _runProcess(
   String command, {
+  required _Shell scope,
   List<String>? arguments,
-  Path? workdir,
-  Map<String, String>? env,
-  Duration? timeout,
   String? input,
-  bool quiet = false,
-  bool throwOnError = true,
-  Encoding encoding = utf8,
   bool shell = false,
 }) async {
+  final _Shell(:workdir, :env, :timeout, :encoding, :quiet, :strict) = scope;
   final String executable;
   final List<String> args;
   final String displayCommand;
@@ -179,7 +250,7 @@ Future<ShellResult> _runProcess(
     stderr: stderrBuf.toString(),
   );
 
-  if (throwOnError && code != 0) throw ShellException(result);
+  if (strict && code != 0) throw ShellException(result);
   return result;
 }
 
@@ -221,33 +292,33 @@ class CommandPipeline {
   /// Executes this command pipeline asynchronously.
   ///
   /// Like `pipefail`: [ShellResult.exitCode] is the rightmost non-zero exit code, and
-  /// [throwOnError] throws when any stage fails, not only the last.
+  /// [strict] throws when any stage fails, not only the last. Unset arguments come from
+  /// the enclosing [Shell.session].
   Future<ShellResult> run({
     Path? workdir,
     Map<String, String>? env,
     Duration? timeout,
     String? input,
-    bool quiet = false,
-    bool throwOnError = true,
-    Encoding encoding = utf8,
+    bool? quiet,
+    bool? strict,
+    Encoding? encoding,
   }) async {
     if (_commands.isEmpty) throw StateError('Cannot execute an empty command pipeline');
+    final scope = _Shell.current.merge(
+      workdir: workdir,
+      env: env,
+      timeout: timeout,
+      encoding: encoding,
+      quiet: quiet,
+      strict: strict,
+    );
 
     if (_commands.length == 1) {
-      return _runProcess(
-        _commands.first,
-        workdir: workdir,
-        env: env,
-        timeout: timeout,
-        input: input,
-        quiet: quiet,
-        throwOnError: throwOnError,
-        encoding: encoding,
-      );
+      return _runProcess(_commands.first, scope: scope, input: input);
     }
 
     final processes = <Process>[];
-    final environment = _childEnv(env);
+    final environment = _childEnv(scope.env);
 
     try {
       for (final cmd in _commands) {
@@ -257,7 +328,7 @@ class CommandPipeline {
           await Process.start(
             parts.first,
             parts.sublist(1),
-            workingDirectory: workdir?.path,
+            workingDirectory: scope.workdir?.path,
             environment: environment,
             runInShell: Platform.isWindows,
           ),
@@ -267,31 +338,32 @@ class CommandPipeline {
       for (var i = 0; i < processes.length - 1; i++) {
         processes[i].stdout.pipe(processes[i + 1].stdin).catchError((_) {});
       }
-      final fed = _feed(processes.first, input, encoding);
+      final fed = _feed(processes.first, input, scope.encoding);
 
       final lastProcess = processes.last;
       final stdoutBuf = StringBuffer();
       final stderrBuf = StringBuffer();
 
-      final stdoutFuture = lastProcess.stdout.transform(encoding.decoder).forEach((data) {
+      final stdoutFuture = lastProcess.stdout.transform(scope.encoding.decoder).forEach((data) {
         stdoutBuf.write(data);
-        if (!quiet) Io.out.write(data);
+        if (!scope.quiet) Io.out.write(data);
       });
 
       final stderrFuture = Future.wait(
         processes.map(
-          (p) => p.stderr.transform(encoding.decoder).forEach((data) {
+          (p) => p.stderr.transform(scope.encoding.decoder).forEach((data) {
             stderrBuf.write(data);
-            if (!quiet) Io.err.write(data);
+            if (!scope.quiet) Io.err.write(data);
           }),
         ),
       );
 
       var exitCodesFuture = Future.wait(processes.map((p) => p.exitCode));
-      if (timeout != null) {
+      if (scope.timeout case final limit?) {
         exitCodesFuture = exitCodesFuture.timeout(
-          timeout,
-          onTimeout: () => throw TimeoutException('Pipeline "${_commands.join(' | ')}" timed out after $timeout'),
+          limit,
+          onTimeout: () =>
+              throw TimeoutException('Pipeline "${_commands.join(' | ')}" timed out after ${scope.timeout}'),
         );
       }
       final exitCodes = await exitCodesFuture;
@@ -305,7 +377,7 @@ class CommandPipeline {
         stderr: stderrBuf.toString(),
       );
 
-      if (throwOnError && exitCode != 0) throw ShellException(result);
+      if (scope.strict && exitCode != 0) throw ShellException(result);
       return result;
     } finally {
       for (final p in processes) {
@@ -330,26 +402,30 @@ extension StringShellExtensions on String {
 /// {@category System}
 extension PathShellExtensions on Path {
   /// Runs the file at this path as a command, with [args] passed as-is (no splitting).
+  ///
+  /// Unset arguments come from the enclosing [Shell.session]; see [run].
   Future<ShellResult> run({
     List<String> args = const [],
     Path? workdir,
     Map<String, String>? env,
     Duration? timeout,
     String? input,
-    bool quiet = false,
-    bool throwOnError = true,
-    Encoding encoding = utf8,
+    bool? quiet,
+    bool? strict,
+    Encoding? encoding,
     bool shell = false,
   }) => _runProcess(
     path,
+    scope: _Shell.current.merge(
+      workdir: workdir,
+      env: env,
+      timeout: timeout,
+      encoding: encoding,
+      quiet: quiet,
+      strict: strict,
+    ),
     arguments: args,
-    workdir: workdir,
-    env: env,
-    timeout: timeout,
     input: input,
-    quiet: quiet,
-    throwOnError: throwOnError,
-    encoding: encoding,
     shell: shell,
   );
 }

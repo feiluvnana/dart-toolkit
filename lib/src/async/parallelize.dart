@@ -7,7 +7,7 @@ extension IterableParallelExtensions<T> on Iterable<T> {
   /// Maps [worker] over all elements, at most [concurrency] at a time.
   ///
   /// Settles every task and preserves input order; an individual failure never
-  /// throws. Tasks skipped by [cancelToken] come back as a [Left] holding a
+  /// throws. Tasks the enclosing [Cancel.session] skipped come back as a [Left] holding a
   /// [CancelledException].
   ///
   /// [isolate] runs each worker in a background [Isolate]. The worker and everything
@@ -22,8 +22,8 @@ extension IterableParallelExtensions<T> on Iterable<T> {
     FutureOr<R> Function(T item) worker, {
     int concurrency = 4,
     bool isolate = false,
-    CancelToken? cancelToken,
   }) async {
+    final cancelToken = Cancel.token;
     final list = toList();
     if (list.isEmpty) return [];
 
@@ -49,7 +49,7 @@ extension IterableParallelExtensions<T> on Iterable<T> {
 
     return [
       for (final outcome in results)
-        outcome ?? Left<Object, R>(CancelledException(cancelToken?.reason?.toString() ?? 'Task was not executed.')),
+        outcome ?? Left<Object, R>(CancelledException(Cancel.reason?.toString() ?? 'Task was not executed.')),
     ];
   }
 }
@@ -61,13 +61,15 @@ extension StreamParallelExtensions<T> on Stream<T> {
   /// Maps [worker] over stream items, emitting outcomes as they settle.
   ///
   /// An individual failure never reaches the error channel; `.unwrap()` forwards it.
-  /// A paused consumer pauses the source: nothing is buffered on its behalf.
+  /// A paused consumer pauses the source: nothing is buffered on its behalf. The enclosing
+  /// [Cancel.session] stops it.
   Stream<Either<Object, R>> parallelize<R>(
     FutureOr<R> Function(T item) worker, {
     int concurrency = 4,
     bool isolate = false,
-    CancelToken? cancelToken,
   }) {
+    // Read on listen, not here: a stream is often built in one zone and listened in another.
+    CancelToken? cancelToken;
     final pool = Semaphore(concurrency > 0 ? concurrency : 1);
     late final StreamController<Either<Object, R>> controller;
     final active = <Future<void>>{};
@@ -99,7 +101,8 @@ extension StreamParallelExtensions<T> on Stream<T> {
 
     controller = StreamController<Either<Object, R>>(
       onListen: () {
-        if (cancelToken != null && cancelToken.isCancelled) {
+        cancelToken = Cancel.token;
+        if (cancelToken case final token? when token.isCancelled) {
           controller.close();
           return;
         }
@@ -111,7 +114,7 @@ extension StreamParallelExtensions<T> on Stream<T> {
 
         subscription = listen(
           (item) {
-            if (cancelToken != null && cancelToken.isCancelled) return;
+            if (cancelToken?.isCancelled ?? false) return;
             late final Future<void> task;
             task = pool
                 .run(

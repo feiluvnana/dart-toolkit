@@ -57,12 +57,21 @@ void main() {
       );
     });
 
-    test('Console.spinner controls start, success, fail, info', () {
-      final spinner = Console.spinner('Custom spinner');
-      expect(() => spinner.start(), returnsNormally);
-      expect(() => spinner.stop('Info note'), returnsNormally);
-      expect(() => spinner.succeed('Done'), returnsNormally);
-      expect(() => spinner.fail('Error'), returnsNormally);
+    test('Console.spin renders the done and failed lines', () async {
+      final out = StringBuffer();
+      final err = StringBuffer();
+      Io.out = out;
+      Io.err = err;
+      addTearDown(Io.reset);
+
+      await Console.spin('Working', () async => 1, done: 'Finished');
+      await expectLater(
+        Console.spin('Working', () async => throw Exception('nope'), failed: 'Gave up'),
+        throwsA(isA<Exception>()),
+      );
+
+      expect(Io.stripAnsi(out.toString()), contains('Finished'));
+      expect(Io.stripAnsi(err.toString()), contains('Gave up'));
     });
 
     test('onExit registers hook safely', () {
@@ -178,7 +187,7 @@ void main() {
 
     test('select returns the default on empty input', () {
       feed(['']);
-      final env = Console.select('Environment', ['dev', 'staging'], defaultTo: 'staging');
+      final env = Console.select('Environment', ['dev', 'staging'], or: 'staging');
       expect(env, equals('staging'));
       expect(out.toString(), contains('(default)'));
     });
@@ -192,7 +201,7 @@ void main() {
 
     test('ask falls back to the default at end of input instead of hanging', () {
       Io.input = () => null; // immediate end of input
-      final value = Console.ask('Name', defaultTo: 'fallback');
+      final value = Console.ask('Name', or: 'fallback');
       expect(value, equals('fallback'));
     });
 
@@ -204,31 +213,36 @@ void main() {
 
   group('CLI', () {
     test('command with option, subcommand, and action execution', () async {
-      final cli = Cli();
       var executed = false;
       String? parsedOut;
       int? parsedConcurrency;
       bool? isVerbose;
 
-      final verbose = Flag('verbose', abbr: 'v');
+      final verbose = Opt.flag('verbose', abbr: 'v');
       final concurrency = Opt.number('concurrency', abbr: 'c').or(4);
       final out = Opt.text('out', abbr: 'o').or('dist');
 
-      cli.command(
-        'fetch',
-        description: 'Fetch data',
-        options: [verbose],
-        build: (fetch) => fetch.command(
-          'scrape',
-          description: 'Scrape URLs',
-          options: [concurrency, out],
-          handler: (ctx) {
-            executed = true;
-            isVerbose = ctx(verbose);
-            parsedConcurrency = ctx(concurrency);
-            parsedOut = ctx(out);
-          },
-        ),
+      final cli = Cli(
+        commands: [
+          CliCommand(
+            'fetch',
+            description: 'Fetch data',
+            options: [verbose],
+            commands: [
+              CliCommand(
+                'scrape',
+                description: 'Scrape URLs',
+                options: [concurrency, out],
+                handler: (ctx) {
+                  executed = true;
+                  isVerbose = ctx(verbose);
+                  parsedConcurrency = ctx(concurrency);
+                  parsedOut = ctx(out);
+                },
+              ),
+            ],
+          ),
+        ],
       );
 
       await cli.run(['fetch', 'scrape', '-c', '8', '--out', 'output', '--verbose']);
@@ -239,10 +253,25 @@ void main() {
       expect(parsedOut, equals('output'));
     });
 
+    test('every option kind is behind Opt, including the flag', () async {
+      final kinds = <CliOption<Object?>>[
+        Opt.flag('f'),
+        Opt.text('t'),
+        Opt.number('n'),
+        Opt.among('a', Mode.values),
+        Opt.by('b', DateTime.parse),
+      ];
+      expect(kinds.map((o) => o.name), ['f', 't', 'n', 'a', 'b']);
+
+      bool? flagged;
+      final flag = Opt.flag('dry', abbr: 'd');
+      await CliCommand('app', options: [flag], handler: (ctx) => flagged = ctx(flag)).run(['-d']);
+      expect(flagged, isTrue);
+    });
+
     test('an option carries its own type, so reading it needs no lookup or cast', () async {
-      final cli = Cli();
       final jobs = Opt.number('jobs').or(4);
-      final watch = Flag('watch');
+      final watch = Opt.flag('watch');
       final mode = Opt.among('mode', Mode.values);
       final out = Opt.text('out');
 
@@ -251,17 +280,21 @@ void main() {
       Object? readMode;
       Object? readOut;
 
-      cli.command(
-        'build',
-        options: [jobs, watch, mode, out],
-        handler: (ctx) {
-          // Each of these is statically typed by its option; nothing here is a cast.
-          final int j = ctx(jobs);
-          final bool w = ctx(watch);
-          final Mode? m = ctx(mode);
-          final String? o = ctx(out);
-          (readJobs, readWatch, readMode, readOut) = (j, w, m, o);
-        },
+      final cli = Cli(
+        commands: [
+          CliCommand(
+            'build',
+            options: [jobs, watch, mode, out],
+            handler: (ctx) {
+              // Each of these is statically typed by its option; nothing here is a cast.
+              final int j = ctx(jobs);
+              final bool w = ctx(watch);
+              final Mode? m = ctx(mode);
+              final String? o = ctx(out);
+              (readJobs, readWatch, readMode, readOut) = (j, w, m, o);
+            },
+          ),
+        ],
       );
 
       // The default lives on the option, and a number is parsed once during parsing.
@@ -353,11 +386,15 @@ void main() {
 
     test('choice accepts valid options and throws UsageException on invalid value', () async {
       // CliCommand.run throws; Cli.run would turn the error into exit code 64.
-      final cli = CliCommand('app');
       String? chosenFormat;
 
       final format = Opt.among('format', Mode.values).or(Mode.debug);
-      cli.command('build', options: [format], handler: (ctx) => chosenFormat = ctx(format).name);
+      final cli = CliCommand(
+        'app',
+        commands: [
+          CliCommand('build', options: [format], handler: (ctx) => chosenFormat = ctx(format).name),
+        ],
+      );
 
       // Valid option
       await cli.run(['build', '--format', 'release']);
@@ -372,20 +409,24 @@ void main() {
     });
 
     test('flag and number helpers configure and validate correctly', () async {
-      final cli = CliCommand('app');
       bool? isDryRun;
       int? concurrency;
 
-      final dryRun = Flag('dry-run', abbr: 'd');
+      final dryRun = Opt.flag('dry-run', abbr: 'd');
       final workers = Opt.number('concurrency', abbr: 'c').or(4);
 
-      cli.command(
-        'serve',
-        options: [dryRun, workers],
-        handler: (ctx) {
-          isDryRun = ctx(dryRun);
-          concurrency = ctx(workers);
-        },
+      final cli = CliCommand(
+        'app',
+        commands: [
+          CliCommand(
+            'serve',
+            options: [dryRun, workers],
+            handler: (ctx) {
+              isDryRun = ctx(dryRun);
+              concurrency = ctx(workers);
+            },
+          ),
+        ],
       );
 
       // Shorthand abbreviations
@@ -403,19 +444,22 @@ void main() {
     });
 
     test('CLI handles negative option values and double dash terminator properly', () async {
-      final cli = Cli();
       int? offset;
       List<String>? rest;
 
       final offsetOpt = Opt.number('offset', abbr: 'o');
 
-      cli.command(
-        'seek',
-        options: [offsetOpt],
-        handler: (ctx) {
-          offset = ctx(offsetOpt);
-          rest = ctx.rest;
-        },
+      final cli = Cli(
+        commands: [
+          CliCommand(
+            'seek',
+            options: [offsetOpt],
+            handler: (ctx) {
+              offset = ctx(offsetOpt);
+              rest = ctx.rest;
+            },
+          ),
+        ],
       );
 
       // Negative value with --offset
@@ -435,27 +479,28 @@ void main() {
     });
 
     test('options before the subcommand, combined short flags and attached values parse', () async {
-      final cli = CliCommand('app');
       bool? verbose;
       bool? dry;
       int? jobs;
       List<String>? rest;
-      final verboseOpt = Flag('verbose', abbr: 'v');
-      final dryOpt = Flag('dry-run', abbr: 'd');
+      final verboseOpt = Opt.flag('verbose', abbr: 'v');
+      final dryOpt = Opt.flag('dry-run', abbr: 'd');
       final jobsOpt = Opt.number('jobs', abbr: 'j').or(1);
-      cli
-        ..declare(verboseOpt)
-        ..declare(dryOpt)
-        ..declare(jobsOpt)
-        ..command(
-          'build',
-          handler: (ctx) {
-            verbose = ctx(verboseOpt);
-            dry = ctx(dryOpt);
-            jobs = ctx(jobsOpt);
-            rest = ctx.rest;
-          },
-        );
+      final cli = CliCommand(
+        'app',
+        options: [verboseOpt, dryOpt, jobsOpt],
+        commands: [
+          CliCommand(
+            'build',
+            handler: (ctx) {
+              verbose = ctx(verboseOpt);
+              dry = ctx(dryOpt);
+              jobs = ctx(jobsOpt);
+              rest = ctx.rest;
+            },
+          ),
+        ],
+      );
 
       await cli.run(['-v', 'build', '-dj4', 'target']);
       expect(verbose, isTrue);
@@ -475,7 +520,7 @@ void main() {
       Io.out = out;
       try {
         final tokenOpt = Opt.text('token');
-        final cli = CliCommand('app', options: [tokenOpt])..action((ctx) => token = ctx(tokenOpt));
+        final cli = CliCommand('app', options: [tokenOpt], handler: (ctx) => token = ctx(tokenOpt));
         await cli.run(['--token', '--help']);
         expect(token, equals('--help'));
         expect(out.toString(), isNot(contains('Usage')));
@@ -493,11 +538,14 @@ void main() {
       DateTime? parsed;
       Uri? url;
 
-      final cli = CliCommand('app', options: [since, port])
-        ..action((ctx) {
+      final cli = CliCommand(
+        'app',
+        options: [since, port],
+        handler: (ctx) {
           parsed = ctx(since);
           url = ctx(port);
-        });
+        },
+      );
 
       await cli.run(['--since', '2026-09-21', '--port', 'https://example.com']);
       expect(parsed, DateTime(2026, 9, 21));
@@ -526,29 +574,32 @@ void main() {
       final portOpt = Opt.number('port');
       final sizeOpt = Opt.number('size').or(10);
 
-      final cli = CliCommand('app', options: [nameOpt, portOpt, sizeOpt])
-        ..action((ctx) {
+      final cli = CliCommand(
+        'app',
+        options: [nameOpt, portOpt, sizeOpt],
+        handler: (ctx) {
           // `nameOpt` and `portOpt` are nullable types; `sizeOpt` is not, and needs no `!`.
           name = ctx(nameOpt);
           port = ctx(portOpt);
           expect(ctx(sizeOpt), equals(10));
           expect(ctx.given(nameOpt), isFalse);
-        });
+        },
+      );
       await cli.run([]);
       expect(name, isNull);
       expect(port, isNull);
     });
 
     test('CLI subcommand inherits option defaults from parent hierarchy', () async {
-      final cli = Cli();
       String? parentFmt;
       String? subFmt;
 
       final format = Opt.text('format').or('all');
-      cli
-          .declare(format)
-          .command('download', handler: (ctx) => subFmt = ctx(format))
-          .action((ctx) => parentFmt = ctx(format));
+      final cli = Cli(
+        options: [format],
+        commands: [CliCommand('download', handler: (ctx) => subFmt = ctx(format))],
+        handler: (ctx) => parentFmt = ctx(format),
+      );
 
       // Parent sees default
       await cli.run([]);
@@ -578,7 +629,7 @@ void main() {
     test('a required option is enforced at parse time', () async {
       String? token;
       final tokenOpt = Opt.text('token', abbr: 't', description: 'API token').required();
-      final cli = CliCommand('app', options: [tokenOpt])..action((ctx) => token = ctx(tokenOpt));
+      final cli = CliCommand('app', options: [tokenOpt], handler: (ctx) => token = ctx(tokenOpt));
 
       await cli.run(['--token', 'abc']);
       expect(token, equals('abc'));
@@ -589,7 +640,11 @@ void main() {
       );
 
       // Required is also enforced from an ancestor command, and shows up in help.
-      final nested = CliCommand('app', options: [Opt.number('port').required()])..command('serve', handler: (_) {});
+      final nested = CliCommand(
+        'app',
+        options: [Opt.number('port').required()],
+        commands: [CliCommand('serve', handler: (_) {})],
+      );
       expect(() => nested.run(['serve']), throwsA(isA<UsageException>()));
     });
 
@@ -599,11 +654,13 @@ void main() {
       final formatOpt = Opt.among('format', ['mp3', 'all']).or('all');
       final workersOpt = Opt.number('workers').or(4);
 
-      final cli = Cli(options: [formatOpt, workersOpt])
-        ..action((ctx) {
+      final cli = Cli(
+        options: [formatOpt, workersOpt],
+        handler: (ctx) {
           format = ctx(formatOpt);
           workers = ctx(workersOpt);
-        });
+        },
+      );
 
       await cli.run([]);
       expect(format, equals('all'));
@@ -659,7 +716,7 @@ void main() {
       final out = StringBuffer();
       Io.out = out;
       try {
-        await (Cli(name: 'demo', version: '1.2.3')..action((_) => fail('not run'))).run(['--version']);
+        await Cli(name: 'demo', version: '1.2.3', handler: (_) => fail('not run')).run(['--version']);
         expect(out.toString().trim(), 'demo 1.2.3');
       } finally {
         Io.reset();
@@ -702,7 +759,7 @@ void main() {
 
   group('cli', () {
     test('an ArgumentError in the action is not a usage error', () async {
-      final cli = CliCommand('demo')..action((ctx) => throw ArgumentError('bug in the action'));
+      final cli = CliCommand('demo', handler: (ctx) => throw ArgumentError('bug in the action'));
       expect(() => cli.run([]), throwsA(isA<ArgumentError>()));
     });
 
@@ -718,12 +775,15 @@ void main() {
       CancelToken? seen;
       var hookRan = false;
       onExit(() => hookRan = true);
-      final cli = Cli(name: 'demo')
-        ..action((ctx) {
+      final cli = Cli(
+        name: 'demo',
+        handler: (ctx) {
           seen = ctx.cancel;
           expect(ctx.cancel.isCancelled, isFalse);
+          expect(Cancel.token, same(ctx.cancel), reason: 'the action runs inside a Cancel.session');
           throw StateError('bug');
-        });
+        },
+      );
       await expectLater(cli.run([]), throwsStateError);
       expect(hookRan, isTrue);
       expect(seen!.isCancelled, isTrue);

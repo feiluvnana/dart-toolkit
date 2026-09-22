@@ -5,20 +5,20 @@
 part of '../../../formats.dart';
 
 /// A parsed JSONPath expression.
-class JsonPath {
+class _JsonPath {
   final List<_Step> _steps;
 
-  const JsonPath._(this._steps);
+  const _JsonPath._(this._steps);
 
-  static final _cache = <String, JsonPath>{};
+  static final _cache = <String, _JsonPath>{};
   static const _maxCacheSize = 256;
 
   /// Compiles or retrieves a cached JSONPath expression.
-  static JsonPath of(String expression) {
+  static _JsonPath of(String expression) {
     final cached = _cache[expression];
     if (cached != null) return cached;
 
-    final compiled = JsonPath._(_parse(expression));
+    final compiled = _JsonPath._(_parse(expression));
     if (_cache.length >= _maxCacheSize) {
       _cache.remove(_cache.keys.first);
     }

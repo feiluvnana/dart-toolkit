@@ -291,10 +291,10 @@ String _formatBytes(int bytes) {
 
 /// Animated terminal spinner for indeterminate background tasks.
 ///
-/// Instances are created via [Console.spinner] or run using [Console.spin].
+/// Driven by [Console.spin], the one way in.
 ///
 /// {@category Terminal}
-class ConsoleSpinner {
+class _ConsoleSpinner {
   static const List<String> _frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
   final String message;
@@ -303,10 +303,10 @@ class ConsoleSpinner {
   int _frameIndex = 0;
   bool _isDone = false;
 
-  ConsoleSpinner._(this.message);
+  _ConsoleSpinner(this.message);
 
   /// Starts the spinner animation.
-  void start() {
+  void _start() {
     _stopwatch.start();
     if (_interactive()) {
       _timer = Timer.periodic(const Duration(milliseconds: 80), (_) {
@@ -319,22 +319,14 @@ class ConsoleSpinner {
     }
   }
 
-  /// Stops the spinner with a success message.
-  void succeed([String? successMessage]) {
+  void _succeed(String? done) {
     _stop();
-    Io.out.writeln('  ✓ ${successMessage ?? message} (${_stopwatch.elapsed.humanized.dim})'.green);
+    Io.out.writeln('  ✓ ${done ?? message} (${_stopwatch.elapsed.humanized.dim})'.green);
   }
 
-  /// Stops the spinner with a failure message.
-  void fail([String? errorMessage]) {
+  void _fail(String? failed) {
     _stop();
-    Io.err.writeln('  ✖ ${errorMessage ?? message} (${_stopwatch.elapsed.humanized})'.red);
-  }
-
-  /// Stops the spinner with a neutral message.
-  void stop([String? finalMessage]) {
-    _stop();
-    Io.out.writeln('  ℹ ${finalMessage ?? message} (${_stopwatch.elapsed.humanized})'.cyan);
+    Io.err.writeln('  ✖ ${failed ?? message} (${_stopwatch.elapsed.humanized})'.red);
   }
 
   void _stop() {
@@ -346,14 +338,14 @@ class ConsoleSpinner {
     if (_interactive()) Io.out.write('\r\x1b[K');
   }
 
-  static Future<T> _run<T>(String message, FutureOr<T> Function() action, {String? done, String? failed}) async {
-    final spinner = ConsoleSpinner._(message)..start();
+  static Future<T> run<T>(String message, FutureOr<T> Function() action, {String? done, String? failed}) async {
+    final spinner = _ConsoleSpinner(message).._start();
     try {
       final result = await action();
-      spinner.succeed(done);
+      spinner._succeed(done);
       return result;
     } catch (e) {
-      spinner.fail(failed ?? '$message failed: $e');
+      spinner._fail(failed ?? '$message failed: $e');
       rethrow;
     }
   }
@@ -369,35 +361,30 @@ class Console {
   /// Reads one line, returning `null` at end of input.
   static String? _read() => Io.readLine(encoding: utf8)?.trim();
 
-  /// Prompts for text input, returning [defaultTo] on an empty answer.
+  /// Prompts for text input, returning [or] on an empty answer.
   ///
   /// [validate] returns an error message to re-prompt, or `null` to accept.
   /// At end of input the default is used, or a [StateError] is thrown when a
   /// [required] value has none.
   ///
   /// ```dart
-  /// final port = Console.ask('Port', defaultTo: '8080',
+  /// final port = Console.ask('Port', or: '8080',
   ///     validate: (v) => int.tryParse(v) == null ? 'Must be a number' : null);
   /// ```
-  static String ask(
-    String message, {
-    String? defaultTo,
-    bool required = false,
-    String? Function(String value)? validate,
-  }) {
-    assert(!(required && defaultTo != null), 'A required prompt cannot also have a default.');
+  static String ask(String message, {String? or, bool required = false, String? Function(String value)? validate}) {
+    assert(!(required && or != null), 'A required prompt cannot also have a default.');
     while (true) {
-      final defaultHint = defaultTo != null ? ' ($defaultTo)'.dim : '';
+      final defaultHint = or != null ? ' ($or)'.dim : '';
       Io.out.write('$message$defaultHint: ');
       final input = _read();
 
       if (input == null) {
-        if (defaultTo != null) return defaultTo;
+        if (or != null) return or;
         if (!required) return '';
         throw StateError('No input available for required prompt: $message');
       }
 
-      final value = input.isEmpty ? (defaultTo ?? '') : input;
+      final value = input.isEmpty ? (or ?? '') : input;
 
       if (value.isEmpty && required) {
         Io.out.writeln('  Value cannot be empty.'.red);
@@ -414,13 +401,13 @@ class Console {
     }
   }
 
-  /// Prompts for a yes/no confirmation.
-  static bool confirm(String message, [bool defaultTo = true]) {
-    final hint = defaultTo ? '[Y/n]'.dim : '[y/N]'.dim;
+  /// Prompts for a yes/no confirmation, returning [or] on an empty answer.
+  static bool confirm(String message, {bool or = true}) {
+    final hint = or ? '[Y/n]'.dim : '[y/N]'.dim;
     Io.out.write('$message $hint: ');
     final input = _read()?.toLowerCase();
 
-    if (input == null || input.isEmpty) return defaultTo;
+    if (input == null || input.isEmpty) return or;
     return input == 'y' || input == 'yes' || input == 'true' || input == '1';
   }
 
@@ -452,14 +439,14 @@ class Console {
   ///
   /// [display] renders each choice, which keeps records and domain objects usable:
   /// `Console.select('Target', servers, display: (s) => s.name)`.
-  static T select<T>(String message, List<T> choices, {T? defaultTo, String Function(T choice)? display}) {
+  static T select<T>(String message, List<T> choices, {T? or, String Function(T choice)? display}) {
     if (choices.isEmpty) {
       throw ArgumentError('Choices cannot be empty');
     }
 
     String label(T choice) => display?.call(choice) ?? '$choice';
 
-    final defaultIndex = defaultTo != null ? choices.indexOf(defaultTo) : -1;
+    final defaultIndex = or != null ? choices.indexOf(or) : -1;
 
     Io.out.writeln('$message:');
     for (var i = 0; i < choices.length; i++) {
@@ -526,12 +513,11 @@ class Console {
   static ConsoleMultiProgress multiProgress({int total = 0, int slots = 4, String message = '', int? columns}) =>
       ConsoleMultiProgress._(total, slots: slots, message: message, columns: columns);
 
-  /// Creates an indeterminate animated spinner.
-  static ConsoleSpinner spinner(String message) => ConsoleSpinner._(message);
-
-  /// Runs [action] behind a spinner; [done] and [failed] replace [message] on the final line.
+  /// Runs [action] behind an indeterminate spinner; [done] and [failed] replace [message]
+  /// on the final line. Whatever [action] returns comes back; whatever it throws is rethrown
+  /// after the failure line.
   static Future<T> spin<T>(String message, FutureOr<T> Function() action, {String? done, String? failed}) =>
-      ConsoleSpinner._run(message, action, done: done, failed: failed);
+      _ConsoleSpinner.run(message, action, done: done, failed: failed);
 }
 
 /// Rendering a batch as it runs.
@@ -543,7 +529,7 @@ extension StreamBatchProgressExtensions<T extends BatchProgress> on Stream<T> {
   /// Returns the last event, or `null` for an empty batch.
   ///
   /// ```dart
-  /// final last = await pairs.downloadAll(concurrency: 4).show(slots: 4, message: 'Downloading');
+  /// final last = await pairs.download(concurrency: 4).show(slots: 4, message: 'Downloading');
   /// ```
   Future<T?> show({int slots = 4, String message = '', String? done, int? columns}) async {
     final progress = Console.multiProgress(slots: slots, message: message, columns: columns);

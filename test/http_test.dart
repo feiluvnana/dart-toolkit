@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dart_toolkit/dart_toolkit.dart';
+import 'package:path/path.dart' as p;
 import 'client_conformance.dart';
 import 'mock_client.dart';
 import 'package:test/test.dart';
@@ -35,9 +37,9 @@ void main() {
         final u = 'https://a.com/x'.url;
         await u.head();
         await u.put(json: {'a': 1});
-        await u.patch(body: 'text');
+        await u.patch(text: 'text');
         await u.delete();
-        await u.post(body: {'k': 'v w'});
+        await u.post(form: {'k': 'v w'});
       }, client: client);
       expect(seen, [
         'HEAD - ',
@@ -46,7 +48,7 @@ void main() {
         'DELETE - ',
         'POST application/x-www-form-urlencoded; charset=utf-8 k=v+w',
       ]);
-      expect(() => 'https://a.com/'.url.post(body: 'x', json: 1), throwsArgumentError);
+      expect(() => 'https://a.com/'.url.post(text: 'x', json: 1), throwsArgumentError);
     });
 
     test('Uri.withQuery adds, replaces and removes parameters', () {
@@ -374,16 +376,18 @@ void main() {
 
       final cancelToken = CancelToken();
       final items = await Http.session(() async {
-        final stream = 'https://example.com/items'.url
-            .scrape<String>()
-            .onResponse((ctx) {
-              ctx.emit('item');
-            })
-            .rights
-            .cancelWith(cancelToken);
+        return Cancel.session(token: cancelToken, () async {
+          final stream = 'https://example.com/items'.url
+              .scrape<String>()
+              .onResponse((ctx) {
+                ctx.emit('item');
+              })
+              .rights
+              .cancellable;
 
-        Future.microtask(() => cancelToken.cancel('User requested stop'));
-        return await stream.toList();
+          Future.microtask(() => cancelToken.cancel('User requested stop'));
+          return await stream.toList();
+        });
       }, client: client);
 
       expect(items.isEmpty, isTrue);
@@ -475,7 +479,7 @@ void main() {
 
       await Http.session(() async {
         final stream = 'https://example.com/'.url.scrape<String>().onResponse((ctx) {
-          ctx.follow('/next', method: 'POST', body: 'raw', fields: {'a': 'b'});
+          ctx.follow('/next', method: 'POST', text: 'raw', form: {'a': 'b'});
         });
 
         final lefts = await stream.lefts.toList();
@@ -496,7 +500,7 @@ void main() {
             .scrape<String>()
             .onResponse((ctx) {
               if (ctx.request.url.path == '/') {
-                ctx.follow('/submit', method: 'POST', fields: {'q': 'dart'});
+                ctx.follow('/submit', method: 'POST', form: {'q': 'dart'});
               }
             })
             .rights
@@ -1112,7 +1116,7 @@ void main() {
 
       final base = Uri.parse('http://127.0.0.1:${server.port}/');
       final pairs = [for (var i = 0; i < 12; i++) (url: base / '$i', path: dir / '$i.bin')];
-      await for (final p in pairs.downloadAll(concurrency: 2)) {
+      await for (final p in pairs.download(concurrency: 2)) {
         if (p.completed >= 1) break;
       }
       final atBreak = served;
@@ -1297,6 +1301,75 @@ void main() {
   });
 
   group('brevity', () {
+    test('one name for one and for many: download reads the same on four receivers', () async {
+      final client = MockClient((r) async => Response('payload', 200));
+      final dir = Path(Directory.systemTemp.createTempSync('dl_').path);
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final url = 'https://example.com/a'.url;
+
+      await Http.session(() async {
+        expect((await (dir / 'one').download(url).last).written, 1);
+        expect((await [(url: url, path: dir / 'two')].download().last).written, 1);
+        expect((await Stream.value((url: url, path: dir / 'three')).download().last).written, 1);
+        expect((await {url: dir / 'four'}.download().last).written, 1);
+      }, client: client);
+
+      for (final n in ['one', 'two', 'three', 'four']) {
+        expect((dir / n).readTextSync(), 'payload');
+      }
+    });
+
+    test('a download stops on the ambient session, taking no token of its own', () async {
+      final stop = CancelToken();
+      var served = 0;
+      final client = MockClient((r) async {
+        if (++served == 3) stop.cancel('enough');
+        return Response('payload', 200);
+      });
+      final dir = Path(Directory.systemTemp.createTempSync('dl_').path);
+      addTearDown(() => dir.deleteSync(recursive: true));
+
+      final seen = await Cancel.session(
+        () => Http.session(
+          () => [
+            for (var i = 0; i < 20; i++) (url: 'https://example.com/$i'.url, path: dir / '$i'),
+          ].download(concurrency: 1).toList(),
+          client: client,
+        ),
+        token: stop,
+      );
+
+      expect(seen, isNotEmpty);
+      expect(served, lessThan(20), reason: 'the batch stopped rather than running to the end');
+      expect(seen.last.completed, lessThan(20));
+    });
+
+    test('the four body words read the same on Request, the verbs and follow', () async {
+      final sent = <String>[];
+      final client = MockClient((r) async {
+        sent.add('${r.headers['content-type'] ?? '-'} ${r.text}');
+        return Response('<html></html>', 200);
+      });
+
+      await Http.session(() async {
+        final url = 'https://example.com/'.url;
+        await url.post(text: 'plain');
+        await url.post(bytes: [65, 66]);
+        await url.post(form: {'q': 'a b'});
+        await url.post(json: {'n': 1});
+        await url.send(Request('POST', url, json: {'n': 2}));
+      }, client: client);
+
+      expect(sent, [
+        'text/plain; charset=utf-8 plain',
+        '- AB',
+        'application/x-www-form-urlencoded; charset=utf-8 q=a+b',
+        'application/json; charset=utf-8 {"n":1}',
+        'application/json; charset=utf-8 {"n":2}',
+      ]);
+      expect(() => 'https://a.com/'.url.post(form: {}, json: 1), throwsArgumentError);
+    });
+
     test('merge runs its sources at the same time', () async {
       Stream<String> tick(String tag, int ms) async* {
         for (var i = 0; i < 3; i++) {
@@ -1321,7 +1394,7 @@ void main() {
             () => {
               'https://a.com/1'.url: Path(dir.path) / '1',
               'https://a.com/2'.url: Path(dir.path) / '2',
-            }.downloadAll().show(slots: 2, message: 'Downloading', done: 'All done'),
+            }.download().show(slots: 2, message: 'Downloading', done: 'All done'),
             client: client,
           );
           expect(last!.completed, 2);
@@ -1414,7 +1487,7 @@ void main() {
           }).rights;
         }
 
-        await for (final p in queue().downloadAll(concurrency: 2)) {
+        await for (final p in queue().download(concurrency: 2)) {
           progress.report(last = p);
         }
       });
@@ -1436,7 +1509,7 @@ void main() {
       expect(lines.where((l) => l.contains('[done]')).length, equals(5));
 
       // Re-running skips what is already on disk instead of re-fetching it.
-      final again = await artwork.downloadAll().toList();
+      final again = await artwork.download().toList();
       expect(again.last.written, equals(0));
       expect(again.every((p) => p.current is DownloadSkipped), isTrue);
     });
@@ -1482,4 +1555,264 @@ void main() {
   });
 
   clientConformance('IoClient', (_) => IoClient());
+
+  group('a response is decoded by what declares its encoding', () {
+    late HttpServer server;
+    late Uri base;
+    late List<int> body;
+    String? contentType;
+
+    setUp(() async {
+      server = await HttpServer.bind('127.0.0.1', 0);
+      base = Uri.parse('http://127.0.0.1:${server.port}/');
+      server.listen((r) {
+        if (contentType != null) r.response.headers.set('content-type', contentType!);
+        r.response
+          ..add(body)
+          ..close();
+      });
+    });
+
+    tearDown(() => server.close(force: true));
+
+    // “So” in windows-1252: the bytes Latin-1 leaves as C1 controls.
+    const quoted = [0x93, 0x53, 0x6f, 0x94];
+
+    test('the charset in the header wins', () async {
+      body = quoted;
+      contentType = 'text/plain; charset=windows-1252';
+      expect((await base.get()).text, '“So”');
+    });
+
+    test('a page that declares its own charset is read by it', () async {
+      body = [...utf8.encode('<meta charset="windows-1252"><p>'), ...quoted];
+      contentType = 'text/html';
+      expect((await base.get()).text, endsWith('“So”'));
+    });
+
+    test('the http-equiv spelling counts too', () async {
+      body = [...utf8.encode('<meta http-equiv="Content-Type" content="text/html; charset=windows-1252">'), ...quoted];
+      contentType = 'text/html';
+      expect((await base.get()).text, endsWith('“So”'));
+    });
+
+    test('iso-8859-1 is read as windows-1252, as the HTML standard says', () async {
+      body = quoted;
+      contentType = 'text/plain; charset=iso-8859-1';
+      expect((await base.get()).text, '“So”');
+    });
+
+    test('utf-8 is still utf-8, declared or not', () async {
+      body = utf8.encode('héllo “x”');
+      contentType = 'text/plain; charset=utf-8';
+      expect((await base.get()).text, 'héllo “x”');
+      contentType = 'application/json';
+      body = utf8.encode('{"k":"é"}');
+      expect((await base.get()).json['k'].to<String>(), 'é');
+    });
+  });
+
+  group('a session keeps cookies when it is asked to', () {
+    late HttpServer server;
+    late Uri base;
+
+    setUp(() async {
+      server = await HttpServer.bind('127.0.0.1', 0);
+      base = Uri.parse('http://127.0.0.1:${server.port}');
+      server.listen((r) {
+        switch (r.uri.path) {
+          case '/login':
+            r.response.headers
+              ..add('set-cookie', 'sid=abc123; Path=/; Expires=Wed, 21 Oct 2099 07:28:00 GMT')
+              ..add('set-cookie', 'theme=dark; Path=/')
+              ..add('set-cookie', 'adminonly=1; Path=/admin');
+            r.response.write('in');
+          case '/logout':
+            r.response.headers.add('set-cookie', 'sid=; Path=/; Max-Age=0');
+            r.response.write('out');
+          default:
+            r.response.write('${r.headers.value('cookie')}');
+        }
+        r.response.close();
+      });
+    });
+
+    tearDown(() => server.close(force: true));
+
+    test('what a response sets comes back on the next request', () async {
+      await Http.session(cookies: true, () async {
+        await (base / 'login').get();
+        expect((await (base / 'page').get()).text, 'sid=abc123; theme=dark');
+      });
+    });
+
+    test('a path-scoped cookie only goes to its path, longest first', () async {
+      await Http.session(cookies: true, () async {
+        await (base / 'login').get();
+        expect((await (base / 'admin' / 'x').get()).text, 'adminonly=1; sid=abc123; theme=dark');
+        expect((await (base / 'page').get()).text, isNot(contains('adminonly')));
+      });
+    });
+
+    test('Max-Age=0 deletes, and a comma inside Expires does not split the header', () async {
+      await Http.session(cookies: true, () async {
+        await (base / 'login').get();
+        await (base / 'logout').get();
+        expect((await (base / 'page').get()).text, 'theme=dark', reason: 'sid is gone, the dated one stayed');
+      });
+    });
+
+    test("a request's own cookie header wins, and no jar means no cookies", () async {
+      await Http.session(cookies: true, () async {
+        await (base / 'login').get();
+        expect((await (base / 'page').get(headers: {'cookie': 'mine=1'})).text, 'mine=1');
+      });
+      await Http.session(() async {
+        await (base / 'login').get();
+        expect((await (base / 'page').get()).text, 'null', reason: 'off unless asked for');
+      });
+    });
+  });
+
+  group('a crawl can obey robots.txt', () {
+    late HttpServer server;
+    late Uri base;
+    late List<String> hits;
+
+    setUp(() async {
+      hits = [];
+      server = await HttpServer.bind('127.0.0.1', 0);
+      base = Uri.parse('http://127.0.0.1:${server.port}');
+      server.listen((r) {
+        hits.add(r.uri.path);
+        if (r.uri.path == '/robots.txt') {
+          r.response.write('User-agent: *\nDisallow: /private\nDisallow: /*.pdf\$\nAllow: /private/ok\n');
+        } else {
+          r.response.write(
+            '<a href="/private/x">a</a><a href="/private/ok">b</a><a href="/pub">c</a><a href="/doc.pdf">d</a>',
+          );
+        }
+        r.response.close();
+      });
+    });
+
+    tearDown(() => server.close(force: true));
+
+    Future<(List<String> fetched, ScrapeSummary summary)> crawl({required bool robots}) async {
+      final seen = <String>[];
+      late ScrapeSummary summary;
+      await (base / 'start')
+          .scrape<String>()
+          .onInit(
+            (c) => c
+              ..robots = robots
+              ..concurrency = 1,
+          )
+          .onResponse((ctx) {
+            seen.add(ctx.url.path);
+            if (ctx.depth == 0) {
+              for (final a in ctx.response.html.$('a')) {
+                ctx.follow(a.attr('href')!);
+              }
+            }
+          })
+          .onFinish((s) => summary = s)
+          .drain<void>();
+      return (seen..sort(), summary);
+    }
+
+    test('off by default, every link is fetched', () async {
+      final (fetched, summary) = await crawl(robots: false);
+      expect(fetched, ['/doc.pdf', '/private/ok', '/private/x', '/pub', '/start']);
+      expect(summary.dropped, 0);
+      expect(hits, isNot(contains('/robots.txt')));
+    });
+
+    test('on, a disallowed path is dropped and a longer Allow still wins', () async {
+      final (fetched, summary) = await crawl(robots: true);
+      expect(fetched, ['/private/ok', '/pub', '/start'], reason: '/private/x and the pdf are out');
+      expect(summary.dropped, 2);
+    });
+
+    test('robots.txt is read once for the host, however many requests it has', () async {
+      await crawl(robots: true);
+      expect(hits.where((h) => h == '/robots.txt'), hasLength(1));
+    });
+  });
+
+  group('a download can be verified and made conditional', () {
+    late HttpServer server;
+    late Uri base;
+    late Path dir;
+    var served = 'hello world';
+    var conditionals = 0;
+
+    setUp(() async {
+      conditionals = 0;
+      dir = Path(Directory.systemTemp.createTempSync('tk_dl_').path);
+      server = await HttpServer.bind('127.0.0.1', 0);
+      base = Uri.parse('http://127.0.0.1:${server.port}');
+      server.listen((r) {
+        if (r.headers.value('if-modified-since') != null) {
+          conditionals++;
+          if (r.uri.path == '/same') {
+            r.response.statusCode = HttpStatus.notModified;
+            r.response.close();
+            return;
+          }
+        }
+        r.response
+          ..write(served)
+          ..close();
+      });
+    });
+
+    tearDown(() async {
+      await server.close(force: true);
+      await dir.delete(recursive: true);
+    });
+
+    test('a matching checksum downloads, a wrong one fails and leaves nothing behind', () async {
+      final sample = Path(p.join(dir.path, 'sample.txt'));
+      await sample.writeText(served);
+      final want = await sample.hash(Hash.sha256);
+      await sample.delete();
+
+      final good = Path(p.join(dir.path, 'good.txt'));
+      final last = await good.download(base / 'f', checksum: (Hash.sha256, want)).last;
+      expect(last.current, isA<Downloaded>());
+      expect(await good.readText(), served);
+
+      final bad = Path(p.join(dir.path, 'bad.txt'));
+      final failed = await bad.download(base / 'f', checksum: (Hash.sha256, 'deadbeef')).last;
+      expect(failed.current, isA<DownloadFailed>());
+      expect((failed.current as DownloadFailed).error, isA<ChecksumMismatch>());
+      expect(await bad.exists(), isFalse);
+      expect(await Path('${bad.path}.part').exists(), isFalse, reason: 'the part is wrong, not resumable');
+    });
+
+    test('ifModified asks the server instead of skipping on presence', () async {
+      final dest = Path(p.join(dir.path, 'c.txt'));
+      await dest.download(base / 'same').drain<void>();
+      expect(conditionals, 0, reason: 'nothing to be conditional about yet');
+
+      final again = await dest.download(base / 'same', ifModified: true).last;
+      expect(again.current, isA<DownloadSkipped>());
+      expect(conditionals, 1, reason: 'it asked');
+
+      served = 'changed';
+      final changed = await dest.download(base / 'f', ifModified: true).last;
+      expect(changed.current, isA<Downloaded>());
+      expect(await dest.readText(), 'changed');
+    });
+
+    test('without ifModified, a file that is there is still skipped unasked', () async {
+      final dest = Path(p.join(dir.path, 'd.txt'));
+      await dest.writeText('old');
+      final result = await dest.download(base / 'f').last;
+      expect(result.current, isA<DownloadSkipped>());
+      expect(conditionals, 0);
+      expect(await dest.readText(), 'old');
+    });
+  });
 }
