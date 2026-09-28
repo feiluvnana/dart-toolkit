@@ -1,0 +1,19 @@
+/// # CLI & Terminal
+///
+/// Command-line application builder, prompts, logging, progress
+/// indicators, tables and ANSI styling.
+///
+/// {@category CLI}
+library;
+
+import 'dart:async';
+import 'dart:io';
+import 'dart:math';
+
+import 'core.dart';
+
+part 'src/cli/styling.dart';
+part 'src/cli/command.dart';
+part 'src/cli/completion.dart';
+part 'src/cli/console.dart';
+part 'src/cli/lifecycle.dart';

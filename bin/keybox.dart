@@ -1,0 +1,174 @@
+import 'package:dart_toolkit/dart_toolkit.dart';
+
+const keyBase = 'https://key.visualarts.gr.jp/key20th/';
+const khinsider = 'https://downloads.khinsider.com/game-soundtracks/album/key-box-for-two-decades-2019';
+const baseName = 'Key BOX -for two decades- (2019)';
+const formats = ['mp3', 'flac'];
+const concurrency = 4;
+
+/// The patterns, compiled once: every one of them is read inside a loop over a page.
+final discTitle = RegExp(r'DISC\.(\d+)');
+final discLabel = RegExp(r'DISC(\d+)');
+final trackLine = RegExp(r'^(\d+)\.(.*)$');
+final hrefDisc = RegExp(r'/(\d+)-');
+final hrefTrack = RegExp(r'-(\d+)\.');
+final notDigits = RegExp(r'\D');
+
+/// What the scrapers produce and the downloader consumes.
+typedef Asset = ({Uri url, Path path});
+
+/// Downloads the whole box set — artwork, documents, every track in every format — and zips it.
+void main(List<String> args) => Cli(
+  name: 'keybox',
+  description: 'Key BOX Scraper & Downloader',
+  version: '0.0.6',
+  handler: (ctx) => Http.scope(run, timeout: 60.s, retries: 3),
+).run(args);
+
+Future<void> run() async {
+  final stage = Console.stages(3);
+  final base = baseName.path;
+  final site = keyBase.url;
+  final artwork = <Uri, Path>{};
+  final discNames = <int, Path>{};
+  final tracks = <int, Map<int, Path>>{};
+
+  // Every asset is one href and one place under the box, so the lists below carry only the
+  // part that differs. An absolute href resolves to itself, which is how the two off-site
+  // scans join the same list; `images` adds the one prefix the bulk of them share.
+  void grab(String href, Path into) => artwork[site / href] = into;
+  void images(String into, List<String> names) {
+    for (final name in names) {
+      grab('common/image/${name.path.name}', base / into / name);
+    }
+  }
+
+  // Stage 1: Official metadata & images
+  stage('Scraping official album metadata and artworks');
+  await Console.spin('Parsing official website...', () async {
+    final doc = await (site / 'key_box.html').html();
+    for (final li in doc.$('.key_cd_track_box ul li')) {
+      final title = li.$('.track_disc_title').text.filename;
+      final d = int.parse(title.match(discTitle, 1)!);
+      discNames[d] = title;
+      tracks[d] = {
+        for (final line in li.$('.track_disc_text_style1').lines)
+          if (trackLine.firstMatch(line) case final m?)
+            int.parse(m[1]!): (d == 22 && m[1] == '13') ? '小さなてのひら'.filename : m[2]!.filename,
+      };
+    }
+
+    for (final e in doc.$('.key_cd_artworks_box')) {
+      final href = e.$('a').attr('href');
+      if (e.text.match(discLabel, 1) case final d?) {
+        grab(href, base / discNames[int.parse(d)]! / href.path.name);
+      } else if (e.text.contains('ALL')) {
+        grab(href, base / 'Others/KeyBOX' / href.path.name);
+      }
+    }
+
+    grab('common/album_jacket/keybox_image.png', base / 'Others/KeyBOX/keybox_image.png');
+    const jetta = 'https://jetta.vgmtreasurechest.com/soundtracks/key-box-for-two-decades-2019';
+    grab('$jetta/00%20Contents.jpg', base / 'Others/KeyBOX/00_Contents.jpg');
+    grab('$jetta/01%20Box%20sample.png', base / 'Others/KeyBOX/01_Box_sample.png');
+
+    images('Others/KeyBOX', [
+      '20th_box_image.jpg',
+      'key_box_main_image.png',
+      'sp_key_box_main_image.png',
+      'key_box_bg.jpg',
+      'key_box_onsale_title3.jpg',
+      'sp_20th_banner_keybox.png',
+    ]);
+    images('Others/Key 20th Anniversary', [
+      '20th_main_image.jpg',
+      '20th_main_bg.jpg',
+      '20th_top_main_banner_1.png',
+      '20th_menu_logo.png',
+      'sp_20th_top_title.png',
+      'sp_20th_main_image_1.jpg',
+      'sp_20th_main_image_2.jpg',
+      'sp_20th_main_image_3.jpg',
+    ]);
+    images('Others/Events & Topics', [
+      'Stamp Rally/key20th_stamp_poster_1.jpg',
+      'Stamp Rally/key20th_stamp_poster_1_a.jpg',
+      'movie_image_0712.jpg',
+      'history_image_50.jpg',
+      'topics_image_20191217_2.jpg',
+      for (var i = 1; i <= 8; i++) 'General Election/key_election_$i.jpg',
+      for (final name in 'kai tanaka minami na-ga suzukikeiko sakurai kohara orito suzuki yurika'.split(' '))
+        'Live Streams/profile_$name.jpg',
+    ]);
+
+    final msgDoc = await (site / 'message.html').html();
+    const categories = ['Anime Staff', 'Voice Cast', 'Guest Tributes', 'Key Staff & Creators'];
+    for (final (i, box) in msgDoc.$('.message_white_box').take(4).indexed) {
+      for (final (n, a) in box.$('a[href*="message_"]').indexed) {
+        final href = a.attr('href');
+        final tag = href.contains('wfs') ? 'WFS_' : (href.contains('cygames') ? 'Cygames_' : '');
+        final pfx = '${n + 1}'.padLeft(2, '0');
+        final name = (a.attrOrNull('title') ?? a.text.replaceAll('[New Message]', '')).filename;
+        grab(href, base / 'Others/Messages & Tributes' / categories[i] / '$tag${pfx}_$name.jpg');
+      }
+    }
+
+    final topicsDoc = await (site / 'topics.html').html();
+    for (final img in topicsDoc.$('.topics_box img')) {
+      final src = img.attr('src');
+      grab(src, base / 'Others/Events & Topics' / src.path.name);
+    }
+  });
+  Console.ok('Found ${discNames.length} discs and ${artwork.length} artwork/document assets.');
+
+  // Stage 2: Track links and downloads, merged — tracks resolve while artwork transfers.
+  stage('Resolving tracks and downloading assets');
+  final songs = khinsider.url
+      .scrape<Asset>()
+      .onResponse((ctx) {
+        for (final tr in ctx.response.html.$('#songlist tr')) {
+          final tds = tr.$('td');
+          if (tds.length < 4) continue;
+          final href = tds[3].$('a').attr('href');
+          // The numbers come from the link where it has them, and from the columns where it does not.
+          final d = int.parse(href.match(hrefDisc, 1) ?? tds[1].text.replaceAll(notDigits, ''));
+          final t = int.parse(href.match(hrefTrack, 1) ?? tds[2].text.replaceAll(notDigits, ''));
+          final title = tracks[d]?[t] ?? tds[3].text.filename;
+          final missing = {for (final ext in formats) ext: base / discNames[d]! / ext / '$t. $title.$ext'}
+            ..removeWhere((_, path) => path.existsSync());
+          if (missing.isEmpty) continue;
+
+          ctx.follow(
+            href,
+            onResponse: (song) {
+              final page = song.response.html;
+              for (final (ext, path) in missing.sequence) {
+                song.emit((url: song.resolve(page.$('a[href*=".$ext"]').attr('href')), path: path));
+              }
+            },
+          );
+        }
+      })
+      .onError((ctx) => Console.warn(ctx.failure))
+      .rights;
+
+  final last = await [
+    Stream.fromIterable(artwork.pairs),
+    songs,
+  ].merge().download(concurrency: concurrency).show(message: 'Downloading', done: 'All assets downloaded.');
+
+  // Stage 3: Archive
+  stage('Creating zip archive');
+  await Console.spin('Compressing $baseName.zip...', () => base.archiveTo('$baseName.zip'));
+
+  Table.cells(
+    ['Property', 'Value'],
+    [
+      ['Assets', last?.total ?? 0],
+      ['Downloaded', last?.written ?? 0],
+      ['Discs', discNames.length],
+      ['Archive', '$baseName.zip'],
+    ],
+  ).show();
+  Console.ok('Completed successfully.');
+}
