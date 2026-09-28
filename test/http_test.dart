@@ -1,0 +1,3039 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:dart_toolkit/dart_toolkit.dart';
+import 'package:path/path.dart' as p;
+import 'client_conformance.dart';
+import 'mock_client.dart';
+import 'package:test/test.dart';
+
+class _CountingClient implements Client {
+  final Client _inner;
+  final void Function() _onClose;
+
+  _CountingClient(this._inner, this._onClose);
+
+  @override
+  Future<StreamedResponse> send(Request request) => _inner.send(request);
+
+  @override
+  Future<void> close() async {
+    _onClose();
+    await _inner.close();
+  }
+}
+
+void main() {
+  group('http', () {
+    test('head, put, patch, delete and json bodies', () async {
+      final seen = <String>[];
+      final client = MockClient((r) async {
+        seen.add('${r.method} ${r.headers['content-type'] ?? '-'} ${r.text}');
+        return Response('', 200);
+      });
+      await Http.scope(() async {
+        final u = 'https://a.com/x'.url;
+        await u.head();
+        await u.put(json: {'a': 1});
+        await u.patch(text: 'text');
+        await u.delete();
+        await u.post(form: {'k': 'v w'});
+      }, client: client);
+      expect(seen, [
+        'HEAD - ',
+        'PUT application/json; charset=utf-8 {"a":1}',
+        'PATCH text/plain; charset=utf-8 text',
+        'DELETE - ',
+        'POST application/x-www-form-urlencoded; charset=utf-8 k=v+w',
+      ]);
+      expect(() => 'https://a.com/'.url.post(text: 'x', json: 1), throwsArgumentError);
+    });
+
+    test('sending does not write on the caller\'s request', () async {
+      final sent = <String?>[];
+      final client = MockClient((r) async {
+        sent.add(r.headers['cookie']);
+        return Response('', 200, headers: {'set-cookie': 'a=${sent.length}; Path=/'});
+      });
+      final reused = Request('GET', 'https://a.com/x'.url);
+      await Http.scope(cookies: true, client: client, () async {
+        await 'https://a.com/x'.url.send(reused);
+        await 'https://a.com/x'.url.send(reused);
+      });
+      // Without the copy the second send carries the first send's jar and the refresh is
+      // skipped, because the guard is "does this request already name a cookie".
+      expect(sent, [null, 'a=1']);
+      expect(reused.headers.containsKey('cookie'), isFalse, reason: 'the caller\'s object is untouched');
+    });
+
+    test('the verbs work on a client held rather than scoped', () async {
+      final seen = <String>[];
+      final client = MockClient((r) async {
+        seen.add('${r.method} ${r.url.path}');
+        return Response(r.url.path == '/j' ? '{"n":1}' : '<p>hi</p>', 200);
+      });
+      expect((await client.get('https://a.com/g'.url)).statusCode, 200);
+      await client.post('https://a.com/p'.url, json: {'a': 1});
+      await client.head('https://a.com/h'.url);
+      expect((await client.json('https://a.com/j'.url))['n'].raw, 1);
+      expect((await client.html('https://a.com/d'.url)).$('p').text, 'hi');
+      expect(seen, ['GET /g', 'POST /p', 'HEAD /h', 'GET /j', 'GET /d']);
+    });
+
+    test('a client verb is the ambient client for what nests inside it', () async {
+      var opened = 0;
+      final client = MockClient((r) async {
+        opened++;
+        return Response('ok', 200);
+      });
+      await client.get('https://a.com/one'.url);
+      // Nested: the inner call finds the same client in the zone rather than opening its own.
+      await client.fire(Request('GET', 'https://a.com/two'.url));
+      expect(opened, 2);
+      expect(Http.client, isNull, reason: 'the zone does not outlive the call');
+    });
+
+    test('IoClient caps total transfers and frees the permit when a body ends', () async {
+      var inFlight = 0;
+      var peak = 0;
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      unawaited(
+        server.forEach((request) async {
+          inFlight++;
+          peak = peak > inFlight ? peak : inFlight;
+          await Future<void>.delayed(const Duration(milliseconds: 60));
+          request.response.write('body');
+          await request.response.close();
+          inFlight--;
+        }),
+      );
+      final url = Uri.parse('http://${server.address.address}:${server.port}/');
+      final client = IoClient(connections: 2);
+      await Future.wait([for (var i = 0; i < 6; i++) client.get(url)]);
+      expect(peak, lessThanOrEqualTo(2), reason: 'the cap counts transfers, not handshakes');
+      // Six requests through a cap of two only finish if every permit came back.
+      await client.close();
+      await server.close(force: true);
+    });
+
+    test('Uri.withQuery adds, replaces and removes parameters', () {
+      final u = 'https://a.com/s?q=old&keep=1'.url;
+      expect(u.withQuery({'q': 'new', 'page': 2}).toString(), 'https://a.com/s?q=new&keep=1&page=2');
+      expect(u.withQuery({'keep': null}).toString(), 'https://a.com/s?q=old');
+    });
+
+    test('a download resumes its .part with a Range request', () async {
+      final dir = Directory.systemTemp.createTempSync('resume_');
+      try {
+        final body = List.generate(5000, (i) => i & 0xff);
+        final ranges = <String?>[];
+        var fail = true;
+        final client = MockClient.streaming((req, _) async {
+          ranges.add(req.headers['range']);
+          final from = int.tryParse(req.headers['range']?.replaceAll(RegExp(r'\D'), '') ?? '') ?? 0;
+          Stream<List<int>> chunks() async* {
+            for (var i = from; i < body.length; i += 1000) {
+              if (fail && i >= 2000) throw const SocketException('dropped');
+              yield body.sublist(i, i + 1000);
+            }
+          }
+
+          return StreamedResponse(
+            chunks(),
+            from > 0 ? 206 : 200,
+            contentLength: body.length - from,
+            headers: from > 0 ? {'content-range': 'bytes $from-${body.length - 1}/${body.length}'} : null,
+          );
+        });
+        final target = Path(dir.path) / 'f.bin';
+        await Http.scope(() async {
+          final first = await target.download('https://a.com/f'.url).toList();
+          expect(first.last.current, isA<DownloadFailed>());
+          expect(File('$target.part').lengthSync(), 2000);
+          fail = false;
+          final second = await target.download('https://a.com/f'.url).toList();
+          expect(second.last.current, isA<Downloaded>());
+          expect((second.first.current as Downloading).received, greaterThan(2000));
+        }, client: client);
+        expect(ranges, [null, 'bytes=2000-']);
+        expect(target.readBytesSync(), body);
+        expect(File('$target.part').existsSync(), isFalse);
+      } finally {
+        dir.deleteSync(recursive: true);
+      }
+    });
+  });
+
+  group('HTTP Extension & Crawler', () {
+    test('res.html parses HTML with CSS selectors and memoizes parsed doc', () {
+      final res = Response('''
+        <!DOCTYPE html>
+        <html>
+          <head><title>Test Page</title></head>
+          <body>
+            <h1>Heading 1</h1>
+            <ul class="items">
+              <li class="item">Item 1</li>
+              <li class="item">Item 2</li>
+            </ul>
+          </body>
+        </html>
+        ''', 200);
+
+      final html = res.html;
+      expect(html, isA<HtmlDocument>());
+      expect(identical(res.html, html), isTrue); // Memoized per response instance
+      expect(html.$('h1').text, equals('Heading 1'));
+
+      // CSS selector query
+      final h1 = html.$('h1');
+      expect(h1.firstOrNull?.text, equals('Heading 1'));
+
+      final items = html.$('.items .item');
+      expect(items.length, equals(2));
+      expect(items.map((e) => e.text).toList(), equals(['Item 1', 'Item 2']));
+
+      // Descendant selector reaches the same nodes
+      final listItems = html.$('ul li');
+      expect(listItems.length, equals(2));
+      expect(listItems.map((e) => e.text).toList(), equals(['Item 1', 'Item 2']));
+    });
+
+    test('res.xml parses XML with XPath selector', () {
+      final res = Response('''
+        <bookstore>
+          <book category="fiction">
+            <title lang="en">Harry Potter</title>
+            <price>29.99</price>
+          </book>
+          <book category="learning">
+            <title lang="en">Learning XML</title>
+            <price>39.95</price>
+          </book>
+        </bookstore>
+        ''', 200);
+
+      final xml = res.xml;
+      expect(xml, isA<XmlDocument>());
+      expect(identical(res.xml, xml), isTrue);
+      expect(xml.root.local, equals('bookstore'));
+
+      // XPath selector query
+      final titles = xml.$x('//book/title');
+      expect(titles.length, equals(2));
+      expect(titles.map((n) => n.text).toList(), equals(['Harry Potter', 'Learning XML']));
+
+      final learningTitles = xml.$x('//book[@category="learning"]/title');
+      expect(learningTitles.length, equals(1));
+      expect(learningTitles.text, equals('Learning XML'));
+    });
+
+    test('res.json parses JSON with JSONPath selector and memoizes parsed doc', () {
+      final res = Response('''
+        {
+          "store": {
+            "book": [
+              {
+                "category": "reference",
+                "author": "Nigel Rees",
+                "title": "Sayings of the Century",
+                "price": 8.95
+              },
+              {
+                "category": "fiction",
+                "author": "Evelyn Waugh",
+                "title": "Sword of Honour",
+                "price": 12.99
+              }
+            ],
+            "bicycle": {
+              "color": "red",
+              "price": 19.95
+            }
+          }
+        }
+        ''', 200);
+
+      final json = res.json;
+      expect(json, isA<JsonDocument>());
+      expect(identical(res.json, json), isTrue);
+      expect(json.raw, isA<Map<String, dynamic>>());
+
+      // JSONPath selector query
+      final prices = json.$(r'$.store.book[*].price');
+      expect(prices.length, equals(2));
+      expect(prices.map((d) => d.raw).toList(), equals([8.95, 12.99]));
+
+      final authors = json.$(r'$..author');
+      expect(authors.length, equals(2));
+      expect(authors.map((d) => d.raw).toList(), equals(['Nigel Rees', 'Evelyn Waugh']));
+
+      final allPrices = json.$(r'$..price');
+      expect(allPrices.length, equals(3));
+      expect(allPrices.map((d) => d.raw).toList(), equals([8.95, 12.99, 19.95]));
+
+      // Index operator & unified to<T>() method with nullable type arguments
+      expect(json['store']['bicycle']['color'].to<String>(), equals('red'));
+      expect(json['store']['bicycle']['price'].to<double>(), equals(19.95));
+      expect(json['store']['bicycle']['price'].to<double?>(), equals(19.95));
+      expect(json['store']['bicycle']['price'].to<num>(), equals(19.95));
+      expect(json['store']['bicycle']['price'].toOrNull<int>(), isNull, reason: 'a fraction is not an int');
+      expect(json['store']['book'][0]['author'].to<String>(), equals('Nigel Rees'));
+      expect(json['store']['book'].list.length, equals(2));
+      expect(json['store']['book'].to<List<dynamic>>().length, equals(2));
+      expect(json['store']['nonexistent'].isNull, isTrue);
+      expect(json['store']['nonexistent'].to<int?>(), isNull);
+      expect(json['store']['bicycle'].to<Map<String, dynamic>>()['color'], equals('red'));
+
+      // Primitive coercion in to<T>()
+      final primitiveDoc = JsonDocument.parse('{"numStr": "123", "boolStr": "true", "intNum": 42}');
+      expect(primitiveDoc['numStr'].to<int>(), equals(123));
+      expect(primitiveDoc['numStr'].to<int?>(), equals(123));
+      expect(primitiveDoc['boolStr'].to<bool>(), isTrue);
+      expect(primitiveDoc['intNum'].to<String>(), equals('42'));
+      expect(primitiveDoc['intNum'].to<double>(), equals(42.0));
+    });
+
+    test('scrape pipeline follows links, handles relative URLs, typed ScrapeContext callbacks, and meta', () async {
+      final client = MockClient((request) async {
+        final path = request.url.path;
+        if (path == '/index') {
+          return Response(
+            '<html><body><h1>Catalog</h1><a href="product/1">Product 1</a></body></html>',
+            200,
+            headers: {'content-type': 'text/html'},
+          );
+        } else if (path == '/product/1') {
+          return Response('{"name": "Widget", "price": 49.99}', 200, headers: {'content-type': 'application/json'});
+        }
+        return Response('Not Found', 404);
+      });
+
+      final items = await Http.scope(() async {
+        return await 'https://example.com/index'.url
+            .scrape<Map<String, dynamic>>()
+            .onResponse((ctx) {
+              expect(ctx, isA<ResponseContext<Map<String, dynamic>>>());
+              final category = ctx.response.html.$('h1').firstOrNull?.text;
+
+              for (final a in ctx.response.html.$('a')) {
+                final href = a.attrOrNull('href');
+                if (href != null) {
+                  ctx.follow(
+                    href,
+                    meta: {'category': category, 'label': a.text},
+                    onResponse: (detailCtx) {
+                      expect(detailCtx, isA<ResponseContext<Map<String, dynamic>>>());
+                      final json = detailCtx.response.json;
+                      detailCtx.emit({
+                        'category': detailCtx.meta['category'],
+                        'label': detailCtx.meta['label'],
+                        'name': json.$(r'$.name').firstOrNull?.raw,
+                        'price': json.$(r'$.price').firstOrNull?.raw,
+                      });
+                    },
+                  );
+                }
+              }
+            })
+            .rights
+            .toList();
+      }, client: client);
+
+      expect(items.length, equals(1));
+      expect(items.first, equals({'category': 'Catalog', 'label': 'Product 1', 'name': 'Widget', 'price': 49.99}));
+    });
+
+    test('fetch-and-parse refuses a non-2xx page, get() reports it instead', () async {
+      final client = MockClient((request) async => Response('<html>not found</html>', 404));
+
+      await Http.scope(client: client, () async {
+        await expectLater('https://example.com/missing'.url.html(), throwsA(isA<HttpException>()));
+
+        final res = await 'https://example.com/missing'.url.get();
+        expect(res.isOk, isFalse);
+        expect(res.html.$('html').isNotEmpty, isTrue, reason: 'the body is still there to inspect');
+      });
+    });
+
+    test('ctx.url is the response URL, and ctx.resolve matches what follow() does', () async {
+      final client = MockClient((request) async {
+        if (request.url.path == '/album') {
+          return Response('<a href="track/7.mp3">t</a>', 200);
+        }
+        return Response('ok', 200);
+      });
+
+      final resolved = await Http.scope(() async {
+        return await 'https://example.com/album'.url
+            .scrape<Uri>()
+            .onResponse((ctx) {
+              expect(ctx.url, equals('https://example.com/album'.url));
+              ctx.emit(ctx.resolve(ctx.response.html.$('a').first.attr('href')));
+            })
+            .rights
+            .toList();
+      }, client: client);
+
+      expect(resolved.single, equals('https://example.com/track/7.mp3'.url));
+    });
+
+    test('Http.scope shares one client across every call inside it', () async {
+      var closed = 0;
+      var requests = 0;
+      final client = _CountingClient(
+        MockClient((request) async {
+          requests++;
+          return Response('<html><b>ok</b></html>', 200);
+        }),
+        () => closed++,
+      );
+
+      expect(Http.client, isNull, reason: 'no ambient client outside a scope');
+
+      final pages = await Http.scope(() async {
+        expect(identical(Http.client, client), isTrue);
+        final a = await 'https://example.com/a'.url.html();
+        final b = await 'https://example.com/b'.url.get();
+        expect(b.isOk, isTrue);
+        return [a.$('b').first.text, b.text];
+      }, client: client);
+
+      expect(pages.first, equals('ok'));
+      expect(requests, equals(2));
+      expect(closed, equals(0), reason: 'a supplied client is the caller\'s to close');
+      expect(Http.client, isNull, reason: 'the scope ends with its body');
+    });
+
+    test('scrape accepts Request seeds directly and handles dedupe properly', () async {
+      var requestCount = 0;
+      final client = MockClient((request) async {
+        requestCount++;
+        if (request.method == 'POST') {
+          return Response('{"ok": true, "body": "${request.text}"}', 200);
+        }
+        return Response('{"ok": true}', 200, headers: {'content-type': 'application/json'});
+      });
+
+      final req1 = Request('POST', Uri.parse('https://example.com/api'))..text = 'body1';
+      final req2 = Request('POST', Uri.parse('https://example.com/api'))..text = 'body2';
+
+      final results = await Http.scope(() async {
+        return await [req1, req2]
+            .scrape<String>()
+            .onResponse((ctx) {
+              ctx.emit(ctx.response.json['body'].to<String>());
+            })
+            .rights
+            .toList();
+      }, client: client);
+
+      // Two POST requests with different bodies must both execute and not be falsely deduped
+      expect(results, equals(['body1', 'body2']));
+      expect(requestCount, equals(2));
+    });
+
+    test('scrape supports CancelToken to abort gracefully', () async {
+      final client = MockClient((request) async {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        return Response('{"ok": true}', 200);
+      });
+
+      final cancelToken = CancelToken();
+      final items = await Http.scope(() async {
+        return Cancel.scope(token: cancelToken, () async {
+          final stream = 'https://example.com/items'.url
+              .scrape<String>()
+              .onResponse((ctx) {
+                ctx.emit('item');
+              })
+              .rights
+              .cancellable;
+
+          Future.microtask(() => cancelToken.cancel('User requested stop'));
+          return await stream.toList();
+        });
+      }, client: client);
+
+      expect(items.isEmpty, isTrue);
+    });
+
+    test('res.isolate() runs parsing and extraction on background isolate', () async {
+      final res = Response('''
+        <html>
+          <body>
+            <ul class="users">
+              <li data-id="1">Alice</li>
+              <li data-id="2">Bob</li>
+            </ul>
+          </body>
+        </html>
+      ''', 200);
+
+      final extracted = await res.isolate((r) {
+        final items = r.html.$('.users li');
+        return items.map((e) => {'id': e.attrOrNull('data-id'), 'name': e.text}).toList();
+      });
+
+      expect(
+        extracted,
+        equals([
+          {'id': '1', 'name': 'Alice'},
+          {'id': '2', 'name': 'Bob'},
+        ]),
+      );
+    });
+
+    test('Response.isolate composes with html(), json() and xml()', () async {
+      final htmlRes = Response('<div><span class="val">42</span></div>', 200);
+      final numVal = await htmlRes.isolate((r) => r.html.$('.val').firstOrNull?.text);
+      expect(numVal, equals('42'));
+
+      final jsonRes = Response('{"user": {"name": "John"}}', 200);
+      final nameVal = await jsonRes.isolate((r) => r.json.$(r'$.user.name').firstOrNull?.to<String>());
+      expect(nameVal, equals('John'));
+
+      final xmlRes = Response('<root><item id="99">Hello</item></root>', 200);
+      final xmlVal = await xmlRes.isolate((r) => r.xml.$x('//item').text);
+      expect(xmlVal, equals('Hello'));
+
+      final mockClient = MockClient((req) async {
+        if (req.url.path == '/api/item') {
+          return Response('{"id": 99, "title": "Toolkit"}', 200);
+        }
+        return Response('<html><body><h1>Hello Uri Isolate</h1></body></html>', 200);
+      });
+
+      await Http.scope(client: mockClient, () async {
+        final itemRes = await 'https://example.com/api/item'.url.get();
+        final title = await itemRes.isolate((r) => r.json['title'].to<String>());
+        expect(title, equals('Toolkit'));
+
+        final pageRes = await 'https://example.com/page'.url.get();
+        final heading = await pageRes.isolate((r) => r.html.$('h1').firstOrNull?.text);
+        expect(heading, equals('Hello Uri Isolate'));
+      });
+    });
+
+    test('follow rejects a non-Uri, non-String target', () async {
+      final client = MockClient((request) async => Response('<html></html>', 200));
+
+      await Http.scope(() async {
+        final stream = 'https://example.com/'.url.scrape<String>().onResponse((ctx) {
+          ctx.follow(42);
+        });
+
+        final lefts = await stream.lefts.toList();
+        expect(lefts.single, isA<HookFailed>());
+        expect((lefts.single as HookFailed).error, isA<ArgumentError>());
+        expect(
+          () => 'https://example.com/'.url
+              .scrape<String>()
+              .onResponse((ctx) {
+                ctx.follow(42);
+              })
+              .unwrap()
+              .toList(),
+          throwsA(isA<HookFailed>()),
+        );
+      }, client: client);
+    });
+
+    test('follow rejects body and fields together', () async {
+      final client = MockClient((request) async => Response('<html></html>', 200));
+
+      await Http.scope(() async {
+        final stream = 'https://example.com/'.url.scrape<String>().onResponse((ctx) {
+          ctx.follow('/next', method: 'POST', text: 'raw', form: {'a': 'b'});
+        });
+
+        final lefts = await stream.lefts.toList();
+        expect(lefts.single, isA<HookFailed>());
+        expect((lefts.single as HookFailed).error, isA<ArgumentError>());
+      }, client: client);
+    });
+
+    test('a followed POST carries its body', () async {
+      final bodies = <String>[];
+      final client = MockClient((request) async {
+        bodies.add(request.text);
+        return Response('<html></html>', 200);
+      });
+
+      await Http.scope(() async {
+        await 'https://example.com/'.url
+            .scrape<String>()
+            .onResponse((ctx) {
+              if (ctx.request.url.path == '/') {
+                ctx.follow('/submit', method: 'POST', form: {'q': 'dart'});
+              }
+            })
+            .rights
+            .toList();
+      }, client: client);
+
+      expect(bodies, contains('q=dart'));
+    });
+
+    test('a transport failure is a Left and the stream continues', () async {
+      final client = MockClient((request) async {
+        if (request.url.path == '/bad') {
+          throw const SocketException('Connection refused');
+        }
+        return Response('ok', 200);
+      });
+
+      await Http.scope(() async {
+        final outcomes = await [Uri.parse('https://example.com/bad'), Uri.parse('https://example.com/good')]
+            .scrape<String>()
+            .onResponse((ctx) {
+              ctx.emit(ctx.response.text);
+            })
+            .toList();
+
+        expect(outcomes.length, equals(2));
+        expect(outcomes.rights, equals(['ok']));
+        expect(outcomes.lefts.single, isA<RequestFailed>());
+      }, client: client);
+    });
+
+    test('a 404 is a StatusFailed and the handler does not run', () async {
+      var handlerRan = false;
+      final client = MockClient((request) async => Response('Not Found', 404));
+
+      await Http.scope(() async {
+        final outcomes = await 'https://example.com/missing'.url.scrape<String>().onResponse((ctx) {
+          handlerRan = true;
+          ctx.emit('should not emit');
+        }).toList();
+
+        expect(handlerRan, isFalse);
+        expect(outcomes.length, equals(1));
+        final failure = outcomes.single.leftOrNull;
+        expect(failure, isA<StatusFailed>());
+        expect((failure as StatusFailed).response.statusCode, equals(404));
+      }, client: client);
+    });
+
+    test('an off-host follow is dropped, an on-host one and an offsite: true one are not', () async {
+      final requestedPaths = <String>[];
+      final client = MockClient((request) async {
+        requestedPaths.add('${request.url.host}${request.url.path}');
+        return Response('ok', 200);
+      });
+
+      await Http.scope(() async {
+        await 'https://example.com/root'.url
+            .scrape<void>()
+            .onResponse((ctx) {
+              ctx.follow('https://other.com/drop');
+              ctx.follow('https://example.com/keep');
+              ctx.follow('https://other.com/allowed', offsite: true);
+            })
+            .rights
+            .toList();
+      }, client: client);
+
+      expect(requestedPaths, contains('example.com/root'));
+      expect(requestedPaths, contains('example.com/keep'));
+      expect(requestedPaths, contains('other.com/allowed'));
+      expect(requestedPaths, isNot(contains('other.com/drop')));
+    });
+
+    test('mailto: is dropped', () async {
+      final requested = <String>[];
+      final client = MockClient((request) async {
+        requested.add(request.url.toString());
+        return Response('ok', 200);
+      });
+
+      await Http.scope(() async {
+        await 'https://example.com/start'.url
+            .scrape<void>()
+            .onResponse((ctx) {
+              ctx.follow('mailto:alice@example.com');
+              ctx.follow('javascript:void(0)');
+              ctx.follow('tel:123456');
+            })
+            .rights
+            .toList();
+      }, client: client);
+
+      expect(requested, equals(['https://example.com/start']));
+    });
+
+    test('stop() after page 3 leaves the crawl at <= 3 + in-flight pages', () async {
+      var handledPages = 0;
+      final client = MockClient((request) async => Response('ok', 200));
+
+      await Http.scope(() async {
+        await 'https://example.com/1'.url
+            .scrape<void>()
+            .onResponse((ctx) {
+              handledPages++;
+              if (ctx.pages >= 3) {
+                ctx.stop();
+              }
+              ctx.follow('https://example.com/${ctx.pages + 1}');
+            })
+            .rights
+            .toList();
+      }, client: client);
+
+      expect(handledPages, lessThanOrEqualTo(3 + 16));
+      expect(handledPages, greaterThanOrEqualTo(3));
+    });
+
+    test('.take(2) stops dispatch', () async {
+      var dispatched = 0;
+      final client = MockClient((request) async {
+        dispatched++;
+        return Response('ok', 200);
+      });
+
+      await Http.scope(() async {
+        final stream = 'https://example.com/1'.url.scrape<int>().onResponse((ctx) {
+          ctx.emit(ctx.pages);
+          ctx.follow('https://example.com/${ctx.pages + 1}');
+        });
+
+        final results = await stream.rights.take(2).toList();
+        expect(results, equals([1, 2]));
+      }, client: client);
+
+      expect(dispatched, lessThanOrEqualTo(4));
+    });
+
+    test('a 429 pauses the host for Retry-After and other hosts keep going', () async {
+      final log = <String>[];
+      final client = MockClient((request) async {
+        if (request.url.host == 'a.com') {
+          if (!log.contains('a-429')) {
+            log.add('a-429');
+            return Response('too many requests', 429, headers: {'retry-after': '1'});
+          }
+          log.add('a-ok');
+          return Response('ok-a', 200);
+        } else {
+          log.add('b-ok');
+          return Response('ok-b', 200);
+        }
+      });
+
+      await Http.scope(() async {
+        final stream = [Uri.parse('https://a.com/1'), Uri.parse('https://b.com/1')].scrape<String>().onResponse((ctx) {
+          ctx.emit('${ctx.url.host}:${ctx.response.text}');
+        });
+
+        final items = await stream.rights.toList();
+        expect(items, contains('b.com:ok-b'));
+        expect(items, contains('a.com:ok-a'));
+      }, client: client);
+
+      expect(log.indexOf('b-ok'), lessThan(log.indexOf('a-ok')));
+    });
+
+    test('HandshakeException is sent once', () async {
+      var attempts = 0;
+      final client = MockClient((request) async {
+        attempts++;
+        throw const HandshakeException('Handshake failed');
+      });
+
+      await Http.scope(() async {
+        final outcomes = await 'https://example.com/tls'.url.scrape<void>().toList();
+        expect(outcomes.length, equals(1));
+        final failure = outcomes.single.leftOrNull as RequestFailed;
+        expect(failure.attempts, equals(1));
+        expect(failure.error, isA<HandshakeException>());
+        expect(attempts, equals(1));
+      }, client: client);
+    });
+
+    test('a 17 MB body is a RequestFailed and no more than 16 MB was read', () async {
+      var bytesSent = 0;
+      final mock = MockClient.streaming((request, bodyStream) async {
+        final total17Mb = 17 * 1024 * 1024;
+        const chunkSize = 64 * 1024;
+        Stream<List<int>> generateBody() async* {
+          while (bytesSent < total17Mb) {
+            bytesSent += chunkSize;
+            yield Uint8List(chunkSize);
+          }
+        }
+
+        return StreamedResponse(generateBody(), 200);
+      });
+
+      await Http.scope(() async {
+        final outcomes = await 'https://example.com/large'.url.scrape<void>().toList();
+        expect(outcomes.length, equals(1));
+        final failure = outcomes.single.leftOrNull as RequestFailed;
+        expect(failure.error, isA<ClientException>());
+        expect(failure.attempts, equals(1));
+        expect(bytesSent, lessThanOrEqualTo(16 * 1024 * 1024 + 64 * 1024));
+      }, client: mock);
+    });
+
+    test('a redirect updates ctx.url and relative resolution', () async {
+      final client = MockClient((request) async {
+        if (request.url.path == '/initial') {
+          return Response('', 301, headers: {'location': '/final/page'});
+        }
+        if (request.url.path == '/final/page') {
+          return Response('<html><a href="detail">Link</a></html>', 200);
+        }
+        return Response('ok', 200);
+      });
+
+      await Http.scope(() async {
+        await 'https://example.com/initial'.url
+            .scrape<void>()
+            .onResponse((ctx) {
+              expect(ctx.url, equals(Uri.parse('https://example.com/final/page')));
+              expect(ctx.resolve('detail'), equals(Uri.parse('https://example.com/final/detail')));
+            })
+            .rights
+            .toList();
+      }, client: client);
+    });
+
+    test('per-host limit holds at 8 with 20 queued', () async {
+      var currentInFlight = 0;
+      var maxInFlightSeen = 0;
+
+      final client = MockClient((request) async {
+        currentInFlight++;
+        if (currentInFlight > maxInFlightSeen) {
+          maxInFlightSeen = currentInFlight;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        currentInFlight--;
+        return Response('ok', 200);
+      });
+
+      await Http.scope(() async {
+        final seeds = [for (var i = 0; i < 20; i++) Uri.parse('https://example.com/item/$i')];
+        await seeds.scrape<void>().rights.toList();
+      }, client: client);
+
+      expect(maxInFlightSeen, lessThanOrEqualTo(8));
+      expect(maxInFlightSeen, greaterThanOrEqualTo(2));
+    });
+
+    test('a seed that redirects to another host moves the crawl there, and keeps its headers', () async {
+      final requests = <Request>[];
+      final client = MockClient((request) async {
+        requests.add(request);
+        if (request.url.host == 'example.com') {
+          return Response('', 301, headers: {'location': 'https://www.example.com/home'});
+        }
+        return Response('<a href="/next">n</a>', 200);
+      });
+
+      final seed = Request('GET', Uri.parse('https://example.com/'))..headers['x-test'] = '1';
+      final pages = await Http.scope(() async {
+        return await [seed]
+            .scrape<String>()
+            .onResponse((ctx) {
+              ctx.emit(ctx.url.toString());
+              ctx.follow('/next');
+            })
+            .rights
+            .toList();
+      }, client: client);
+
+      expect(
+        pages,
+        equals(['https://www.example.com/home', 'https://www.example.com/next']),
+        reason: 'www is the crawl\'s home now, so /next is on-host',
+      );
+      expect(
+        requests.take(2).map((r) => r.headers['x-test']),
+        everyElement('1'),
+        reason: 'the redirect hop carries the request\'s headers; a follow starts clean',
+      );
+    });
+
+    test('a redirect off the seeds\' hosts is a StatusFailed, not silence', () async {
+      final client = MockClient((request) async {
+        if (request.url.path == '/out') return Response('', 302, headers: {'location': 'https://other.com/'});
+        return Response('<a href="/out">o</a>', 200);
+      });
+
+      final outcomes = await Http.scope(() async {
+        return await 'https://example.com/'.url.scrape<void>().onResponse((ctx) => ctx.follow('/out')).toList();
+      }, client: client);
+
+      final failure = outcomes.single.leftOrNull;
+      expect(failure, isA<StatusFailed>());
+      expect((failure as StatusFailed).response.statusCode, equals(302));
+    });
+
+    test('stop() lets running handlers finish and delivers their emits', () async {
+      final client = MockClient((request) async {
+        if (request.url.path == '/slow') await Future<void>.delayed(const Duration(milliseconds: 100));
+        return Response('ok', 200);
+      });
+
+      final items = await Http.scope(() async {
+        return await [Uri.parse('https://example.com/slow'), Uri.parse('https://example.com/fast')]
+            .scrape<String>()
+            .onResponse((ctx) async {
+              if (ctx.url.path == '/fast') {
+                ctx.stop();
+                await Future<void>.delayed(const Duration(milliseconds: 150));
+                ctx.emit('after-stop');
+                ctx.follow('/never');
+              }
+            })
+            .rights
+            .toList();
+      }, client: client);
+
+      expect(items, equals(['after-stop']));
+    });
+
+    test('nothing reaches the error channel: a throwing handler is a Left', () async {
+      final client = MockClient((request) async => Response('ok', 200));
+      final outcomes = await Http.scope(() async {
+        return await 'https://example.com/'.url.scrape<void>().onResponse((ctx) => throw StateError('boom')).toList();
+      }, client: client);
+      expect(outcomes.single.leftOrNull, isA<HookFailed>());
+    });
+
+    test('the scope\'s user-agent wins over the engine default', () async {
+      final agents = <String?>[];
+      final client = MockClient((request) async {
+        agents.add(request.headers['user-agent']);
+        return Response('ok', 200);
+      });
+
+      await Http.scope(() => 'https://example.com/'.url.scrape<void>().toList(), client: client);
+      await Http.scope(
+        () => 'https://example.com/'.url.scrape<void>().toList(),
+        client: client,
+        headers: {'user-agent': 'mine/1.0'},
+      );
+
+      expect(agents, equals(['dart-toolkit', 'mine/1.0']));
+    });
+
+    group('Scrape chain', () {
+      test('onRequest edits headers and skip() drops a request without a report', () async {
+        final seen = <String, String?>{};
+        final client = MockClient((request) async {
+          seen[request.url.path] = request.headers['x-sig'];
+          return Response('ok', 200);
+        });
+
+        final outcomes = await Http.scope(() async {
+          return await [Uri.parse('https://example.com/a'), Uri.parse('https://example.com/skip')]
+              .scrape<String>()
+              .onRequest((ctx) {
+                if (ctx.url.path == '/skip') return ctx.skip();
+                ctx.request.headers['x-sig'] = 'signed:${ctx.attempt}';
+              })
+              .onResponse((ctx) => ctx.emit(ctx.url.path))
+              .toList();
+        }, client: client);
+
+        expect(outcomes.rights, equals(['/a']));
+        expect(outcomes.lefts, isEmpty);
+        expect(seen, equals({'/a': 'signed:1'}));
+      });
+
+      test('onError: retry past the budget, ignore, emit a fallback, or let it be a Left', () async {
+        var flaky = 0;
+        final client = MockClient((request) async {
+          switch (request.url.path) {
+            case '/flaky':
+              return ++flaky < 5 ? Response('down', 500) : Response('up', 200);
+            case '/gone':
+              return Response('gone', 410);
+            case '/quiet':
+              return Response('nope', 404);
+            default:
+              return Response('teapot', 418);
+          }
+        });
+
+        final outcomes = await Http.scope(() async {
+          return await ['/flaky', '/gone', '/quiet', '/teapot']
+              .map((p) => Uri.parse('https://example.com$p'))
+              .scrape<String>()
+              .onInit((c) => c.retries = 1)
+              .onResponse((ctx) => ctx.emit(ctx.response.text))
+              .onError((ctx) {
+                switch (ctx.failure) {
+                  case StatusFailed(response: Response(statusCode: 500)):
+                    ctx.retry();
+                  case StatusFailed(response: Response(statusCode: 410)):
+                    ctx.emit('fallback');
+                  case StatusFailed(response: Response(statusCode: 404)):
+                    ctx.ignore();
+                  default:
+                    break;
+                }
+              })
+              .toList();
+        }, client: client);
+
+        expect(outcomes.rights, containsAll(['up', 'fallback']));
+        expect(outcomes.lefts.map((f) => (f as StatusFailed).response.statusCode), equals([418]));
+        expect(flaky, equals(5), reason: 'the engine sent twice, the hook kept retrying until 200');
+      });
+
+      test('onFinish gets the summary once, after the last item', () async {
+        final client = MockClient((request) async {
+          if (request.url.path == '/bad') return Response('x', 404);
+          return Response('body', 200);
+        });
+
+        ScrapeSummary? summary;
+        final order = <String>[];
+        await Http.scope(() async {
+          await for (final r
+              in [
+                Uri.parse('https://example.com/a'),
+                Uri.parse('https://example.com/bad'),
+              ].scrape<String>().onResponse((ctx) => ctx.emit('a')).onFinish((s) {
+                summary = s;
+                order.add('finish');
+              })) {
+            order.add(r.isRight ? 'item' : 'left');
+          }
+        }, client: client);
+
+        expect(order, hasLength(3));
+        expect(order.last, equals('finish'));
+        expect(summary!.pages, equals(1));
+        expect(summary!.failures, equals(1));
+        expect(summary!.requests, equals(2));
+        expect(summary!.bytes, equals(5));
+      });
+
+      test('pages stops the crawl and never over-fetches by more than the in-flight window', () async {
+        var sent = 0;
+        final client = MockClient((request) async {
+          sent++;
+          return Response('ok', 200);
+        });
+
+        final pages = await Http.scope(() async {
+          return await 'https://example.com/0'.url
+              .scrape<int>()
+              .onInit((c) => c.pages = 3)
+              .onResponse((ctx) {
+                ctx.emit(ctx.pages);
+                for (var i = 1; i <= 20; i++) {
+                  ctx.follow('/${ctx.pages}-$i');
+                }
+              })
+              .rights
+              .toList();
+        }, client: client);
+
+        expect(pages, equals([1, 2, 3]));
+        expect(sent, equals(3));
+      });
+
+      test('depth drops what is too deep; scope() widens the hosts', () async {
+        final requested = <String>[];
+        final client = MockClient((request) async {
+          requested.add('${request.url.host}${request.url.path}');
+          return Response('ok', 200);
+        });
+
+        await Http.scope(() async {
+          await 'https://a.com/0'.url
+              .scrape<void>()
+              .onInit((c) {
+                c.depth = 1;
+                c.scope = (u) => u.host == 'a.com' || u.host == 'b.com';
+              })
+              .onResponse((ctx) {
+                ctx.follow('https://b.com/${ctx.depth + 1}');
+                ctx.follow('https://c.com/${ctx.depth + 1}');
+              })
+              .toList();
+        }, client: client);
+
+        expect(requested, equals(['a.com/0', 'b.com/1']));
+      });
+
+      test('delay() spaces requests to one host and not to another', () async {
+        final stamps = <String, List<int>>{};
+        final watch = Stopwatch()..start();
+        final client = MockClient((request) async {
+          (stamps[request.url.host] ??= []).add(watch.elapsedMilliseconds);
+          return Response('ok', 200);
+        });
+
+        await Http.scope(() async {
+          await [
+            Uri.parse('https://a.com/1'),
+            Uri.parse('https://a.com/2'),
+            Uri.parse('https://a.com/3'),
+            Uri.parse('https://b.com/1'),
+          ].scrape<void>().onInit((c) => c.delay = const Duration(milliseconds: 80)).toList();
+        }, client: client);
+
+        final a = stamps['a.com']!..sort();
+        expect(a[1] - a[0], greaterThanOrEqualTo(70));
+        expect(a[2] - a[1], greaterThanOrEqualTo(70));
+        expect(stamps['b.com']!.single, lessThan(70), reason: 'the other host is not paced by a.com');
+      });
+
+      test(
+        'onInit may be async; seed() adds a start with its own meta; headers and userAgent apply to every send',
+        () async {
+          final seen = <String, Map<String, String>>{};
+          final client = MockClient((request) async {
+            seen[request.url.path] = request.headers;
+            return Response('ok', 200);
+          });
+
+          final metas = await Http.scope(() async {
+            return await 'https://example.com/a'.url
+                .scrape<Object?>()
+                .onInit((c) async {
+                  await Future<void>.delayed(Duration.zero); // may be async: fetch a token, read a config
+                  c.seed(Uri.parse('https://example.com/b'), meta: {'tag': 'b'});
+                  expect(c.seeds.map((u) => u.path), equals(['/a', '/b']));
+                })
+                .onRequest((r) => r.request.headers.addAll({'x-crawl': '1', 'user-agent': 'mine/2'}))
+                .onResponse((ctx) => ctx.emit(ctx.meta['tag']))
+                .rights
+                .toList();
+          }, client: client);
+
+          expect(metas.toSet(), equals({null, 'b'}));
+          expect(seen['/b']!['x-crawl'], equals('1'));
+          expect(seen['/b']!['user-agent'], equals('mine/2'));
+        },
+      );
+
+      test('a Scrape is a Stream; a throwing onInit sends nothing and is the only event', () async {
+        var sent = 0;
+        final client = MockClient((request) async {
+          sent++;
+          return Response('ok', 200);
+        });
+        await Http.scope(() async {
+          final crawl = 'https://example.com/'.url.scrape<void>();
+          expect(crawl, isA<Stream<Either<ScrapeFailure, void>>>());
+          await expectLater(
+            'https://example.com/'.url.scrape<void>().onInit((_) => throw StateError('no token')).toList(),
+            throwsStateError,
+          );
+        }, client: client);
+        expect(sent, equals(0));
+      });
+
+      test('follow(onResponse:, onError:) override the crawl hooks for one request', () async {
+        final client = MockClient((request) async {
+          if (request.url.path == '/detail') return Response('d', 404);
+          return Response('ok', 200);
+        });
+
+        final outcomes = await Http.scope(() async {
+          return await 'https://example.com/'.url
+              .scrape<String>()
+              .onResponse((ctx) => ctx.follow('/detail', onError: (e) => e.emit('detail-fallback')))
+              .onError((ctx) => ctx.emit('crawl-fallback'))
+              .toList();
+        }, client: client);
+
+        expect(outcomes.rights, equals(['detail-fallback']));
+      });
+    });
+
+    test('JsonDocument rejects a key that is neither String nor int', () {
+      final doc = JsonDocument.parse('{"a": [1, 2]}');
+      expect(doc['a'][0].to<int>(), equals(1));
+      expect(doc['missing'].isNull, isTrue);
+      expect(doc['a'][99].isNull, isTrue);
+      expect(() => doc[3.5], throwsA(isA<ArgumentError>()));
+    });
+  });
+
+  group('http', () {
+    test('Uri / joins a segment, treating the base as a directory', () {
+      expect(('https://x.com/api'.url / 'users').toString(), equals('https://x.com/api/users'));
+      expect(('https://x.com/api/'.url / 'users').toString(), equals('https://x.com/api/users'));
+      expect(('https://x.com/api'.url / '/root').toString(), equals('https://x.com/root'));
+    });
+
+    test('leaving a downloadAll loop stops the transfers', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      var served = 0;
+      server.listen((req) async {
+        served++;
+        req.response.headers.contentLength = 4;
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+        req.response.add([1, 2, 3, 4]);
+        await req.response.close();
+      });
+      addTearDown(() => server.close(force: true));
+      final dir = Path(Directory.systemTemp.createTempSync('dl_break_').path);
+      addTearDown(() => dir.delete(recursive: true));
+
+      final base = Uri.parse('http://127.0.0.1:${server.port}/');
+      final pairs = [for (var i = 0; i < 12; i++) (url: base / '$i', path: dir / '$i.bin')];
+      await for (final p in pairs.download(concurrency: 2)) {
+        if (p.completed >= 1) break;
+      }
+      final atBreak = served;
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      expect(served, lessThanOrEqualTo(atBreak + 2), reason: 'only the in-flight requests may finish');
+    });
+
+    test('a scope timeout fails a stalled server instead of hanging', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      server.listen((req) {}); // never answers
+      addTearDown(() => server.close(force: true));
+      final url = Uri.parse('http://127.0.0.1:${server.port}/');
+      await expectLater(
+        Http.scope(() => url.get(), timeout: const Duration(milliseconds: 100)),
+        throwsA(isA<TimeoutException>()),
+      );
+    });
+
+    test('scope headers reach every request that does not set them', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      server.listen((req) {
+        req.response
+          ..write(req.headers.value('user-agent'))
+          ..close();
+      });
+      addTearDown(() => server.close(force: true));
+      final url = Uri.parse('http://127.0.0.1:${server.port}/');
+      final ua = await Http.scope(() async => (await url.get()).text, headers: {'user-agent': 'toolkit-test'});
+      expect(ua, equals('toolkit-test'));
+    });
+  });
+
+  group('scrape', () {
+    test('a hook that calls stop() and then throws still closes the stream', () async {
+      final client = MockClient((r) async => Response('ok', 200));
+      final items = await Http.scope(
+        () => 'https://a.com/x'.url.scrape<int>().onResponse((ctx) {
+          ctx.stop();
+          throw StateError('boom');
+        }).toList(),
+        client: client,
+      ).timeout(const Duration(seconds: 3));
+      expect(items, hasLength(1));
+      expect(items.single.leftOrNull, isA<HookFailed>());
+    });
+
+    test('follow returns false for a URL already followed, and the drop is counted', () async {
+      final client = MockClient((r) async => Response('<a href="/song/1">s</a>', 200));
+      final results = <bool>[];
+      ScrapeSummary? summary;
+      final out = await Http.scope(
+        () => 'https://a.com/list'.url
+            .scrape<String>()
+            .onResponse((ctx) {
+              if (ctx.depth > 0) return;
+              for (final ext in ['mp3', 'flac']) {
+                results.add(ctx.follow('/song/1', onResponse: (song) => song.emit(ext)));
+              }
+            })
+            .onFinish((s) => summary = s)
+            .rights
+            .toList(),
+        client: client,
+      );
+      expect(results, [true, false]);
+      expect(out, ['mp3']);
+      expect(summary!.dropped, 1);
+    });
+
+    test('fragments are not part of a page identity', () async {
+      final hits = <String>[];
+      final client = MockClient((r) async {
+        hits.add(r.url.toString());
+        return Response(r.url.path == '/' ? '<a href="/p#a">a</a><a href="/p#b">b</a><a href="/p">c</a>' : 'x', 200);
+      });
+      await Http.scope(
+        () => 'https://a.com/#top'.url.scrape<int>().onResponse((ctx) {
+          for (final a in ctx.response.html.$('a')) {
+            ctx.follow(a.attr('href'));
+          }
+        }).toList(),
+        client: client,
+      );
+      expect(hits, ['https://a.com/', 'https://a.com/p']);
+    });
+
+    test('the default scope treats www. and the apex as one site', () async {
+      final hits = <String>[];
+      final client = MockClient((r) async {
+        hits.add(r.url.host);
+        return Response(
+          r.url.host == 'a.com' ? '<a href="https://www.a.com/q">w</a><a href="https://b.com/">b</a>' : '',
+          200,
+        );
+      });
+      await Http.scope(
+        () => 'https://a.com/'.url.scrape<int>().onResponse((ctx) {
+          for (final a in ctx.response.html.$('a')) {
+            ctx.follow(a.attr('href'));
+          }
+        }).toList(),
+        client: client,
+      );
+      expect(hits, ['a.com', 'www.a.com']);
+    });
+
+    test('credentials do not follow a redirect to another host', () async {
+      final seen = <String, String?>{};
+      final client = MockClient((r) async {
+        seen[r.url.host] = r.headers['authorization'];
+        if (r.url.host == 'a.com') return Response('', 302, headers: {'location': 'https://cdn.example/'});
+        return Response('ok', 200);
+      });
+      await Http.scope(
+        () => 'https://a.com/'.url
+            .scrape<int>()
+            .onRequest((ctx) {
+              if (ctx.url.host == 'a.com') ctx.request.headers['authorization'] = 'Bearer SECRET';
+            })
+            .onResponse((ctx) {})
+            .toList(),
+        client: client,
+      );
+      expect(seen['a.com'], 'Bearer SECRET');
+      expect(seen['cdn.example'], isNull);
+    });
+
+    test('Retry-After as an HTTP date in the past means no wait', () async {
+      var n = 0;
+      final client = MockClient((r) async {
+        n++;
+        if (n == 1) return Response('', 503, headers: {'retry-after': 'Wed, 21 Oct 2015 07:28:00 GMT'});
+        return Response('ok', 200);
+      });
+      final sw = Stopwatch()..start();
+      final out = await Http.scope(
+        () => 'https://a.com/'.url.scrape<int>().onResponse((c) => c.emit(1)).rights.toList(),
+        client: client,
+      );
+      expect(out, [1]);
+      expect(sw.elapsedMilliseconds, lessThan(400));
+    });
+
+    test('a second 429 never shortens a longer pause', () async {
+      var n = 0;
+      final sent = <int>[];
+      final sw = Stopwatch()..start();
+      final client = MockClient((r) async {
+        sent.add(sw.elapsedMilliseconds);
+        n++;
+        if (n <= 2) return Response('', 429, headers: {'retry-after': n == 1 ? '1' : '0'});
+        return Response('ok', 200);
+      });
+      await Http.scope(
+        () => ['https://a.com/1'.url, 'https://a.com/2'.url].scrape<int>().onResponse((c) => c.emit(1)).toList(),
+        client: client,
+      );
+      // The third and fourth sends waited for the 1 s pause, not the 0 s one that arrived later.
+      expect(sent.skip(2).every((t) => t >= 900), isTrue, reason: '$sent');
+    });
+  });
+
+  group('download', () {
+    late Directory dir;
+    setUp(() => dir = Directory.systemTemp.createTempSync('dl_'));
+    tearDown(() => dir.deleteSync(recursive: true));
+
+    test('a non-2xx response is drained so the connection is not held', () async {
+      var cancelled = false;
+      final client = MockClient.streaming((req, body) async {
+        final c = StreamController<List<int>>(onCancel: () => cancelled = true, onListen: () {});
+        return StreamedResponse(c.stream, 404, contentLength: 10);
+      });
+      final r = await Http.scope(() => (Path(dir.path) / 'x').download('https://a.com/x'.url).toList(), client: client);
+      // A small body is read for up to a second, so the connection can be reused; one that
+      // says nothing in that second is cut off.
+      await Future<void>.delayed(const Duration(milliseconds: 1200));
+      expect(r.single.current, isA<DownloadFailed>());
+      expect(cancelled, isTrue);
+    });
+  });
+
+  group('brevity', () {
+    test('one name for one and for many: download reads the same on four receivers', () async {
+      final client = MockClient((r) async => Response('payload', 200));
+      final dir = Path(Directory.systemTemp.createTempSync('dl_').path);
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final url = 'https://example.com/a'.url;
+
+      await Http.scope(() async {
+        expect((await (dir / 'one').download(url).last).written, 1);
+        expect((await [(url: url, path: dir / 'two')].download().last).written, 1);
+        expect((await Stream.value((url: url, path: dir / 'three')).download().last).written, 1);
+        expect((await {url: dir / 'four'}.download().last).written, 1);
+      }, client: client);
+
+      for (final n in ['one', 'two', 'three', 'four']) {
+        expect((dir / n).readTextSync(), 'payload');
+      }
+    });
+
+    test('a download stops on the ambient scope, taking no token of its own', () async {
+      final stop = CancelToken();
+      var served = 0;
+      final client = MockClient((r) async {
+        if (++served == 3) stop.cancel('enough');
+        return Response('payload', 200);
+      });
+      final dir = Path(Directory.systemTemp.createTempSync('dl_').path);
+      addTearDown(() => dir.deleteSync(recursive: true));
+
+      final seen = await Cancel.scope(
+        () => Http.scope(
+          () => [
+            for (var i = 0; i < 20; i++) (url: 'https://example.com/$i'.url, path: dir / '$i'),
+          ].download(concurrency: 1).toList(),
+          client: client,
+        ),
+        token: stop,
+      );
+
+      expect(seen, isNotEmpty);
+      expect(served, lessThan(20), reason: 'the batch stopped rather than running to the end');
+      expect(seen.last.completed, lessThan(20));
+    });
+
+    test('the four body words read the same on Request, the verbs and follow', () async {
+      final sent = <String>[];
+      final client = MockClient((r) async {
+        sent.add('${r.headers['content-type'] ?? '-'} ${r.text}');
+        return Response('<html></html>', 200);
+      });
+
+      await Http.scope(() async {
+        final url = 'https://example.com/'.url;
+        await url.post(text: 'plain');
+        await url.post(bytes: [65, 66]);
+        await url.post(form: {'q': 'a b'});
+        await url.post(json: {'n': 1});
+        await url.send(Request('POST', url, json: {'n': 2}));
+      }, client: client);
+
+      expect(sent, [
+        'text/plain; charset=utf-8 plain',
+        '- AB',
+        'application/x-www-form-urlencoded; charset=utf-8 q=a+b',
+        'application/json; charset=utf-8 {"n":1}',
+        'application/json; charset=utf-8 {"n":2}',
+      ]);
+      expect(() => 'https://a.com/'.url.post(form: {}, json: 1), throwsArgumentError);
+    });
+
+    test('merge runs its sources at the same time', () async {
+      Stream<String> tick(String tag, int ms) async* {
+        for (var i = 0; i < 3; i++) {
+          await Future<void>.delayed(Duration(milliseconds: ms));
+          yield '$tag$i';
+        }
+      }
+
+      final out = await [tick('a', 30), tick('b', 20)].merge().toList();
+      expect(out, hasLength(6));
+      expect(out.first, 'b0');
+    });
+
+    test('show() renders a batch and returns its last event', () async {
+      final out = StringBuffer();
+      Io.out = out;
+      try {
+        final client = MockClient((r) async => Response('data', 200));
+        final dir = Directory.systemTemp.createTempSync('show_');
+        try {
+          final last = await Http.scope(
+            () => {
+              'https://a.com/1'.url: Path(dir.path) / '1',
+              'https://a.com/2'.url: Path(dir.path) / '2',
+            }.download().show(slots: 2, message: 'Downloading', done: 'All done'),
+            client: client,
+          );
+          expect(last!.completed, 2);
+          expect(out.toString(), contains('All done'));
+        } finally {
+          dir.deleteSync(recursive: true);
+        }
+      } finally {
+        Io.reset();
+      }
+    });
+
+    test('Elements answers for its first match and queries within every match', () {
+      final doc = '<ul><li><a href="/1">one</a></li><li><a href="/2">two</a></li></ul><p>x</p>'.html;
+      expect(doc.$('li a').text, 'one');
+      expect(doc.$('li a').attr('href'), '/1');
+      expect(doc.$('li').$('a').map((a) => a.attr('href')), ['/1', '/2']);
+      expect(doc.$('nothing').attrOrNull('href'), isNull);
+      expect(() => doc.$('nothing').text, throwsStateError);
+      expect(doc.$('li').length, 2);
+    });
+
+    test('String.match returns the group in one pass', () {
+      expect('disc-12-track'.match(RegExp(r'-(\d+)-'), 1), '12');
+      expect('disc-12-track'.match(RegExp(r'-(\d+)-'), 2), isNull);
+      expect('nothing'.match(RegExp(r'\d+')), isNull);
+      expect('a.b'.match('.'), '.');
+    });
+  });
+
+  group('scrape -> download -> progress, over real sockets', () {
+    late HttpServer server;
+    late Uri base;
+    late Directory tempDir;
+    late StringBuffer out;
+
+    setUp(() async {
+      out = StringBuffer();
+      Io.out = out;
+      tempDir = Directory.systemTemp.createTempSync('pipeline_test_');
+      server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      base = Uri.parse('http://127.0.0.1:${server.port}');
+      server.listen((req) {
+        final path = req.uri.path;
+        final res = req.response;
+        if (path == '/index') {
+          res.write([for (var i = 1; i <= 3; i++) '<a class="track" href="/track/$i">t$i</a>'].join());
+        } else if (path.startsWith('/track/')) {
+          res.write('<a href="/file/${path.split('/').last}.mp3">dl</a>');
+        } else if (path.startsWith('/file/') || path.startsWith('/art/')) {
+          final body = List<int>.filled(64, 7);
+          res.headers.contentLength = body.length;
+          res.add(body);
+        } else {
+          res.statusCode = 404;
+        }
+        res.close();
+      });
+    });
+
+    tearDown(() async {
+      Io.reset();
+      await server.close(force: true);
+      tempDir.deleteSync(recursive: true);
+    });
+
+    test('one scope, overlapped discovery, one report() per update', () async {
+      final dir = Path(tempDir.path);
+      final artwork = <Uri, Path>{
+        base.resolve('/art/1.png'): dir / 'art' / '1.png',
+        base.resolve('/art/2.png'): dir / 'art' / '2.png',
+      };
+
+      final progress = Console.tasks(slots: 2, message: 'Downloading');
+      BatchDownloadProgress? last;
+
+      await Http.scope(() async {
+        Stream<({Uri url, Path path})> queue() async* {
+          yield* Stream.fromIterable(artwork.pairs);
+          yield* base.resolve('/index').scrape<({Uri url, Path path})>().onResponse((ctx) {
+            for (final a in ctx.response.html.$('a.track')) {
+              ctx.follow(
+                a.attr('href'),
+                onResponse: (song) {
+                  final href = song.response.html.$('a').first.attr('href');
+                  song.emit((url: song.resolve(href), path: dir / 'tracks' / song.url.pathSegments.last));
+                },
+              );
+            }
+          }).rights;
+        }
+
+        await for (final p in queue().download(concurrency: 2)) {
+          progress.report(last = p);
+        }
+      });
+      progress.done('done');
+
+      expect(last, isNotNull);
+      expect(last!.total, equals(5), reason: 'two artworks plus three scraped tracks');
+      expect(last!.completed, equals(5));
+      expect(last!.written, equals(5));
+      expect(last!.current, isA<Downloaded>());
+
+      expect((dir / 'art' / '1.png').existsSync(), isTrue);
+      for (var i = 1; i <= 3; i++) {
+        expect((dir / 'tracks' / '$i').existsSync(), isTrue, reason: 'track $i landed');
+      }
+
+      // Every completion is reported exactly once, without a terminal.
+      final lines = out.toString().trim().split('\n');
+      expect(lines.where((l) => l.contains('[done]')).length, equals(5));
+
+      // Re-running skips what is already on disk instead of re-fetching it.
+      final again = await artwork.download().toList();
+      expect(again.last.written, equals(0));
+      expect(again.every((p) => p.current is DownloadSkipped), isTrue);
+    });
+
+    test('a paused consumer stops the crawl instead of buffering it', () async {
+      // /chain/n links to /chain/n+1, so the frontier is as long as the crawl runs.
+      var served = 0;
+      final chain = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      chain.listen((req) {
+        served++;
+        final n = int.parse(req.uri.pathSegments.last);
+        req.response
+          ..write(n < 200 ? '<a href="/chain/${n + 1}">next</a>' : '')
+          ..close();
+      });
+      addTearDown(() => chain.close(force: true));
+
+      final root = Uri.parse('http://127.0.0.1:${chain.port}/chain/0');
+      const concurrency = 8;
+      final sub = root
+          .scrape<String>()
+          .onResponse((ctx) {
+            ctx.emit(ctx.url.toString());
+            for (final a in ctx.response.html.$('a')) {
+              final href = a.attrOrNull('href');
+              if (href != null) ctx.follow(href);
+            }
+          })
+          .rights
+          .listen((_) {});
+
+      sub.pause();
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+
+      // Bounded by the in-flight requests, not by the size of the frontier.
+      expect(served, lessThanOrEqualTo(concurrency + 1), reason: 'fetched $served pages while paused');
+
+      sub.resume();
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(served, greaterThan(concurrency + 1), reason: 'resuming restarts the crawl');
+      await sub.cancel();
+    });
+  });
+
+  clientConformance('IoClient', (_) => IoClient());
+
+  group('a response is decoded by what declares its encoding', () {
+    late HttpServer server;
+    late Uri base;
+    late List<int> body;
+    String? contentType;
+
+    setUp(() async {
+      server = await HttpServer.bind('127.0.0.1', 0);
+      base = Uri.parse('http://127.0.0.1:${server.port}/');
+      server.listen((r) {
+        if (contentType != null) r.response.headers.set('content-type', contentType!);
+        r.response
+          ..add(body)
+          ..close();
+      });
+    });
+
+    tearDown(() => server.close(force: true));
+
+    // “So” in windows-1252: the bytes Latin-1 leaves as C1 controls.
+    const quoted = [0x93, 0x53, 0x6f, 0x94];
+
+    test('the charset in the header wins', () async {
+      body = quoted;
+      contentType = 'text/plain; charset=windows-1252';
+      expect((await base.get()).text, '“So”');
+    });
+
+    test('a page that declares its own charset is read by it', () async {
+      body = [...utf8.encode('<meta charset="windows-1252"><p>'), ...quoted];
+      contentType = 'text/html';
+      expect((await base.get()).text, endsWith('“So”'));
+    });
+
+    test('the http-equiv spelling counts too', () async {
+      body = [...utf8.encode('<meta http-equiv="Content-Type" content="text/html; charset=windows-1252">'), ...quoted];
+      contentType = 'text/html';
+      expect((await base.get()).text, endsWith('“So”'));
+    });
+
+    test('iso-8859-1 is read as windows-1252, as the HTML standard says', () async {
+      body = quoted;
+      contentType = 'text/plain; charset=iso-8859-1';
+      expect((await base.get()).text, '“So”');
+    });
+
+    test('utf-8 is still utf-8, declared or not', () async {
+      body = utf8.encode('héllo “x”');
+      contentType = 'text/plain; charset=utf-8';
+      expect((await base.get()).text, 'héllo “x”');
+      contentType = 'application/json';
+      body = utf8.encode('{"k":"é"}');
+      expect((await base.get()).json['k'].to<String>(), 'é');
+    });
+  });
+
+  group('a body is asked for compressed and read decompressed', () {
+    late HttpServer server;
+    late Uri base;
+    late Uint8List payload;
+
+    setUp(() async {
+      payload = await File(p.join('test', 'fixtures', 'encoded.txt')).readAsBytes();
+      server = await HttpServer.bind('127.0.0.1', 0);
+      base = Uri.parse('http://127.0.0.1:${server.port}');
+      server.listen((r) async {
+        Future<void> serve(String encoding, String file) async {
+          r.response.headers.set('content-encoding', encoding);
+          r.response.add(await File(p.join('test', 'fixtures', file)).readAsBytes());
+        }
+
+        switch (r.uri.path) {
+          case '/br':
+            await serve('br', 'encoded.br');
+          case '/zstd':
+            await serve('zstd', 'encoded.zst');
+          case '/gzip':
+            r.response.headers.set('content-encoding', 'gzip');
+            r.response.add(gzip.encode(payload));
+          case '/empty':
+            // A 304 that still describes the entity it is not sending.
+            r.response
+              ..statusCode = 304
+              ..headers.set('content-encoding', 'br');
+          default:
+            r.response.write(r.headers.value('accept-encoding'));
+        }
+        await r.response.close();
+      });
+    });
+
+    tearDown(() => server.close(force: true));
+
+    test('what it asks for is what a browser asks for', () async {
+      final asked = (await (base / 'asked').get()).text;
+      expect(asked, contains('gzip'));
+      expect(asked.contains('br'), NativeLib.isAvailable, reason: 'brotli is the native library');
+      expect(asked.contains('zstd'), NativeLib.isAvailable);
+      expect(asked, isNot(contains('deflate')), reason: 'nothing agrees on what deflate means');
+    });
+
+    for (final encoding in ['gzip', if (NativeLib.isAvailable) 'br', if (NativeLib.isAvailable) 'zstd']) {
+      test('$encoding arrives decoded, and no longer says it is encoded', () async {
+        final res = await (base / encoding).get();
+        expect(res.bytes, payload);
+        // The wire's length and encoding described the bytes before they were decoded.
+        expect(res.headers['content-encoding'], isNull);
+        expect(res.headers['content-length'], isNull);
+      });
+    }
+
+    test('a response with no body is not handed to a decoder', () async {
+      expect((await (base / 'empty').get()).statusCode, 304);
+    });
+  });
+
+  group('a scope keeps cookies when it is asked to', () {
+    late HttpServer server;
+    late Uri base;
+
+    setUp(() async {
+      server = await HttpServer.bind('127.0.0.1', 0);
+      base = Uri.parse('http://127.0.0.1:${server.port}');
+      server.listen((r) {
+        switch (r.uri.path) {
+          case '/login':
+            r.response.headers
+              ..add('set-cookie', 'sid=abc123; Path=/; Expires=Wed, 21 Oct 2099 07:28:00 GMT')
+              ..add('set-cookie', 'theme=dark; Path=/')
+              ..add('set-cookie', 'adminonly=1; Path=/admin');
+            r.response.write('in');
+          case '/logout':
+            r.response.headers.add('set-cookie', 'sid=; Path=/; Max-Age=0');
+            r.response.write('out');
+          case '/signin':
+            // What a login actually looks like: the session is set on the hop, and the hop
+            // is the only place it is ever mentioned.
+            r.response
+              ..statusCode = 302
+              ..headers.add('set-cookie', 'sid=fromhop; Path=/')
+              ..headers.add('location', '/landed');
+          case '/landed':
+            r.response.write('${r.method} ${r.headers.value('cookie')}');
+          default:
+            r.response.write('${r.headers.value('cookie')}');
+        }
+        r.response.close();
+      });
+    });
+
+    tearDown(() => server.close(force: true));
+
+    test('what a response sets comes back on the next request', () async {
+      await Http.scope(cookies: true, () async {
+        await (base / 'login').get();
+        expect((await (base / 'page').get()).text, 'sid=abc123; theme=dark');
+      });
+    });
+
+    test('a path-scoped cookie only goes to its path, longest first', () async {
+      await Http.scope(cookies: true, () async {
+        await (base / 'login').get();
+        expect((await (base / 'admin' / 'x').get()).text, 'adminonly=1; sid=abc123; theme=dark');
+        expect((await (base / 'page').get()).text, isNot(contains('adminonly')));
+      });
+    });
+
+    test('Max-Age=0 deletes, and a comma inside Expires does not split the header', () async {
+      await Http.scope(cookies: true, () async {
+        await (base / 'login').get();
+        await (base / 'logout').get();
+        expect((await (base / 'page').get()).text, 'theme=dark', reason: 'sid is gone, the dated one stayed');
+      });
+    });
+
+    test('a cookie set on a redirect hop is kept, and the POST lands as a GET', () async {
+      await Http.scope(cookies: true, () async {
+        // The response at the end of the chain carries no `set-cookie` at all: if the client
+        // is left to follow its own redirects, this is where the session disappears.
+        expect((await (base / 'signin').post(form: {'u': 'me'})).text, 'GET sid=fromhop');
+        expect((await (base / 'page').get()).text, contains('sid=fromhop'));
+      });
+    });
+
+    test("a request's own cookie header wins, and no jar means no cookies", () async {
+      await Http.scope(cookies: true, () async {
+        await (base / 'login').get();
+        expect((await (base / 'page').get(headers: {'cookie': 'mine=1'})).text, 'mine=1');
+      });
+      await Http.scope(() async {
+        await (base / 'login').get();
+        expect((await (base / 'page').get()).text, 'null', reason: 'off unless asked for');
+      });
+    });
+  });
+
+  group('a crawl can obey robots.txt', () {
+    late HttpServer server;
+    late Uri base;
+    late List<String> hits;
+
+    setUp(() async {
+      hits = [];
+      server = await HttpServer.bind('127.0.0.1', 0);
+      base = Uri.parse('http://127.0.0.1:${server.port}');
+      server.listen((r) {
+        hits.add(r.uri.path);
+        if (r.uri.path == '/robots.txt') {
+          r.response.write('User-agent: *\nDisallow: /private\nDisallow: /*.pdf\$\nAllow: /private/ok\n');
+        } else {
+          r.response.write(
+            '<a href="/private/x">a</a><a href="/private/ok">b</a><a href="/pub">c</a><a href="/doc.pdf">d</a>',
+          );
+        }
+        r.response.close();
+      });
+    });
+
+    tearDown(() => server.close(force: true));
+
+    Future<(List<String> fetched, ScrapeSummary summary)> crawl({required bool robots}) async {
+      final seen = <String>[];
+      late ScrapeSummary summary;
+      await (base / 'start')
+          .scrape<String>()
+          .onInit(
+            (c) => c
+              ..robots = robots
+              ..concurrency = 1,
+          )
+          .onResponse((ctx) {
+            seen.add(ctx.url.path);
+            if (ctx.depth == 0) {
+              for (final a in ctx.response.html.$('a')) {
+                ctx.follow(a.attr('href'));
+              }
+            }
+          })
+          .onFinish((s) => summary = s)
+          .drain<void>();
+      return (seen..sort(), summary);
+    }
+
+    test('off by default, every link is fetched', () async {
+      final (fetched, summary) = await crawl(robots: false);
+      expect(fetched, ['/doc.pdf', '/private/ok', '/private/x', '/pub', '/start']);
+      expect(summary.dropped, 0);
+      expect(hits, isNot(contains('/robots.txt')));
+    });
+
+    test('on, a disallowed path is dropped and a longer Allow still wins', () async {
+      final (fetched, summary) = await crawl(robots: true);
+      expect(fetched, ['/private/ok', '/pub', '/start'], reason: '/private/x and the pdf are out');
+      expect(summary.dropped, 2);
+    });
+
+    test('robots.txt is read once for the host, however many requests it has', () async {
+      await crawl(robots: true);
+      expect(hits.where((h) => h == '/robots.txt'), hasLength(1));
+    });
+  });
+
+  group('a download can be verified and made conditional', () {
+    late HttpServer server;
+    late Uri base;
+    late Path dir;
+    var served = 'hello world';
+    var conditionals = 0;
+
+    setUp(() async {
+      conditionals = 0;
+      dir = Path(Directory.systemTemp.createTempSync('tk_dl_').path);
+      server = await HttpServer.bind('127.0.0.1', 0);
+      base = Uri.parse('http://127.0.0.1:${server.port}');
+      server.listen((r) {
+        if (r.headers.value('if-modified-since') != null) {
+          conditionals++;
+          if (r.uri.path == '/same') {
+            r.response.statusCode = HttpStatus.notModified;
+            r.response.close();
+            return;
+          }
+        }
+        r.response
+          ..write(served)
+          ..close();
+      });
+    });
+
+    tearDown(() async {
+      await server.close(force: true);
+      await dir.delete(recursive: true);
+    });
+
+    test('a matching checksum downloads, a wrong one fails and leaves nothing behind', () async {
+      final sample = Path(p.join(dir.path, 'sample.txt'));
+      await sample.writeText(served);
+      final want = await sample.hash(Hash.sha256);
+      await sample.delete();
+
+      final good = Path(p.join(dir.path, 'good.txt'));
+      final last = await good.download(base / 'f', checksum: (Hash.sha256, want)).last;
+      expect(last.current, isA<Downloaded>());
+      expect(await good.readText(), served);
+
+      final bad = Path(p.join(dir.path, 'bad.txt'));
+      final failed = await bad.download(base / 'f', checksum: (Hash.sha256, 'deadbeef')).last;
+      expect(failed.current, isA<DownloadFailed>());
+      expect((failed.current as DownloadFailed).error, isA<ChecksumMismatch>());
+      expect(await bad.exists(), isFalse);
+      expect(await Path('${bad.path}.part').exists(), isFalse, reason: 'the part is wrong, not resumable');
+    });
+
+    test('ifModified asks the server instead of skipping on presence', () async {
+      final dest = Path(p.join(dir.path, 'c.txt'));
+      await dest.download(base / 'same').drain<void>();
+      expect(conditionals, 0, reason: 'nothing to be conditional about yet');
+
+      final again = await dest.download(base / 'same', ifModified: true).last;
+      expect(again.current, isA<DownloadSkipped>());
+      expect(conditionals, 1, reason: 'it asked');
+
+      served = 'changed';
+      final changed = await dest.download(base / 'f', ifModified: true).last;
+      expect(changed.current, isA<Downloaded>());
+      expect(await dest.readText(), 'changed');
+    });
+
+    test('without ifModified, a file that is there is still skipped unasked', () async {
+      final dest = Path(p.join(dir.path, 'd.txt'));
+      await dest.writeText('old');
+      final result = await dest.download(base / 'f').last;
+      expect(result.current, isA<DownloadSkipped>());
+      expect(conditionals, 0);
+      expect(await dest.readText(), 'old');
+    });
+  });
+
+  group('a crawl is a class the chain is sugar for', () {
+    late HttpServer server;
+    late Uri base;
+
+    setUp(() async {
+      server = await HttpServer.bind('127.0.0.1', 0);
+      base = Uri.parse('http://127.0.0.1:${server.port}');
+      server.listen((r) {
+        r.response.headers.contentType = ContentType.html;
+        r.response.write(switch (r.uri.path) {
+          '/books/1' => '<h2>Dune</h2><h2>Emma</h2><a class="next" href="/books/2">next</a>',
+          '/books/2' => '<h2>Emma</h2><h2>Ulysses</h2><a class="next" href="/books/404">next</a>',
+          _ => '',
+        });
+        if (r.uri.path == '/books/404') r.response.statusCode = 404;
+        r.response.close();
+      });
+    });
+
+    tearDown(() => server.close(force: true));
+
+    test('a subclass holds its state in fields and overrides the hooks it needs', () async {
+      final crawler = _Books(base / 'books' / '1');
+      final titles = await Http.scope(() => crawler.run().rights.toList());
+      expect(titles, ['Dune', 'Emma', 'Ulysses'], reason: 'the second Emma is a title already seen');
+      expect(crawler.pages, 2);
+      expect(crawler.failed, ['/books/404']);
+      expect(crawler.summary?.pages, 2);
+    });
+
+    test('run twice, it is two crawls of the same object, from the same seeds', () async {
+      final crawler = _Books(base / 'books' / '1');
+      await crawler.run().drain<void>();
+      crawler.seen.clear();
+      expect(await crawler.run().rights.toList(), ['Dune', 'Emma', 'Ulysses']);
+      expect(crawler.pages, 4);
+    });
+  });
+
+  group('the audit of 0.0.5', () {
+    late HttpServer server;
+    late Uri base;
+    late Map<String, int> hits;
+    late Set<int> ports;
+    late Map<String, List<DateTime>> times;
+
+    // The file a server stores gzipped and serves as `content-encoding: gzip`, whether it
+    // was asked to or not — nginx's `gzip_static` on a `.gz`, or a misconfigured type map.
+    final original = List<int>.generate(300000, (i) => (i * 7919) % 251);
+    final stored = gzip.encode(original);
+    var cutFirst = true;
+
+    setUp(() async {
+      hits = {};
+      ports = {};
+      times = {};
+      cutFirst = true;
+      server = await HttpServer.bind('127.0.0.1', 0);
+      base = Uri.parse('http://127.0.0.1:${server.port}');
+      server.listen((r) async {
+        final path = r.uri.path;
+        hits.update(path, (n) => n + 1, ifAbsent: () => 1);
+        ports.add(r.connectionInfo!.remotePort);
+        (times[path] ??= []).add(DateTime.now());
+        final res = r.response;
+        switch (path) {
+          case '/php':
+            res.headers
+              ..add('set-cookie', 'sid=abc; expires=Wed, 21-Oct-2099 07:28:00 GMT; path=/')
+              ..add('set-cookie', 'old=1; path=/');
+            res.write('in');
+          case '/php-logout':
+            res.headers.add('set-cookie', 'old=; expires=Thu, 01-Jan-1970 00:00:01 GMT; path=/');
+          case '/echo-cookie':
+            res.write('${r.headers.value('cookie')}');
+          case '/busy':
+            if (hits[path]! < 2) {
+              res.statusCode = 503;
+              res.headers.set('retry-after', 'Thu, 01-Jan-1970 00:00:00 GMT');
+            } else {
+              res.write('through');
+            }
+          case '/flaky':
+            if (hits[path]! < 3) res.statusCode = 500;
+            res.write('attempt ${hits[path]}');
+          case '/always500':
+            res.statusCode = 500;
+          case '/too-long':
+            res.statusCode = 429;
+            res.headers.set('retry-after', '3600');
+          case '/hop1':
+            res.statusCode = 302;
+            res.headers.set('location', '/hop2');
+            res.write('x' * 2000);
+          case '/hop2':
+            res.statusCode = 302;
+            res.headers.set('location', '/end');
+            res.write('x' * 2000);
+          case '/end':
+            res.write('end');
+          case '/slow':
+            await Future<void>.delayed(const Duration(milliseconds: 400));
+            res.write('late');
+          case '/data.bin.gz':
+            res.headers
+              ..set('content-encoding', 'gzip')
+              ..set('accept-ranges', 'bytes')
+              ..set('x-asked', '${r.headers.value('accept-encoding')}');
+            final range = r.headers.value('range');
+            if (range != null) {
+              final from = int.parse(range.substring(6, range.length - 1));
+              res
+                ..statusCode = 206
+                ..headers.set('content-range', 'bytes $from-${stored.length - 1}/${stored.length}')
+                ..contentLength = stored.length - from
+                ..add(stored.sublist(from));
+            } else if (cutFirst) {
+              cutFirst = false;
+              res
+                ..contentLength = stored.length
+                ..add(stored.sublist(0, stored.length ~/ 2));
+              await res.flush();
+              // Half the file, then the connection drops.
+              await Future<void>.delayed(const Duration(milliseconds: 100));
+              await res.close().catchError((Object _) {});
+              return;
+            } else {
+              res
+                ..contentLength = stored.length
+                ..add(stored);
+            }
+          case '/robots.txt':
+            res.write(
+              'User-agent: *\nDisallow: /*.php\$\n\nUser-agent: pickybot\nDisallow: /\n'
+              'Sitemap: $base/sitemap_index.xml\n',
+            );
+          case '/sitemap_index.xml':
+            res.write(
+              '<?xml version="1.0"?><sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+              '<sitemap><loc>$base/pages.xml.gz</loc></sitemap>'
+              '<sitemap><loc>$base/sitemap_index.xml</loc></sitemap></sitemapindex>',
+            );
+          case '/pages.xml.gz':
+            res.add(
+              gzip.encode(
+                utf8.encode(
+                  '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+                  '<url><loc>$base/a</loc></url><url><loc>$base/b</loc></url>'
+                  '<url><loc>https://elsewhere.example/c</loc></url><url><loc>$base/x/y.php</loc></url></urlset>',
+                ),
+              ),
+            );
+          default:
+            res.write('page $path');
+        }
+        // A response still open when the test tears the server down is not the test's failure.
+        await res.close().catchError((Object _) {});
+      });
+    });
+
+    tearDown(() => server.close(force: true));
+
+    test('a PHP-style Expires is a date, and 1970 deletes', () async {
+      await Http.scope(cookies: true, () async {
+        await (base / 'php').get();
+        expect((await (base / 'echo-cookie').get()).text, 'sid=abc; old=1');
+        await (base / 'php-logout').get();
+        expect((await (base / 'echo-cookie').get()).text, 'sid=abc', reason: 'the 1970 cookie is a deletion');
+      });
+    });
+
+    test('an odd Retry-After is waited on and retried, not thrown out of the crawl', () async {
+      final got = await (base / 'busy').scrape<String>().onResponse((ctx) => ctx.emit(ctx.response.text)).toList();
+      expect(got.map((e) => e.isRight), [isTrue]);
+      expect(hits['/busy'], 2);
+    });
+
+    test('a resumed download of a gzip-encoded file is the file the server has', () async {
+      final dir = Path(Directory.systemTemp.createTempSync('tk_gz_').path);
+      addTearDown(() => dir.delete(recursive: true));
+      final dest = dir / 'data.bin.gz';
+      expect((await dest.download(base / 'data.bin.gz').last).current, isA<DownloadFailed>());
+      final resumed = await dest.download(base / 'data.bin.gz').last;
+      expect(resumed.current, isA<Downloaded>());
+      expect(await dest.readBytes(), stored, reason: 'the stored bytes, neither decoded nor half-decoded');
+    });
+
+    test('a redirect hop small enough to read keeps its connection', () async {
+      await Http.scope(() async {
+        for (var i = 0; i < 5; i++) {
+          expect((await (base / 'hop1').get()).text, 'end');
+        }
+      });
+      expect(ports, hasLength(1), reason: 'fifteen requests, one connection');
+    });
+
+    test('a scope timeout gives the late response back, so the pool is not exhausted', () async {
+      final client = IoClient(connections: 1);
+      addTearDown(client.close);
+      await Http.scope(client: client, timeout: const Duration(milliseconds: 100), () async {
+        await expectLater((base / 'slow').get(), throwsA(isA<TimeoutException>()));
+        await Future<void>.delayed(const Duration(milliseconds: 600));
+        expect((await (base / 'fast').get()).text, 'page /fast', reason: 'the one permit came back');
+      });
+    });
+
+    test('scope retries: a 5xx and a 503 are sent again, a long Retry-After is not waited on', () async {
+      await Http.scope(retries: 3, () async {
+        expect((await (base / 'flaky').get()).text, 'attempt 3');
+        expect((await (base / 'busy').get()).text, 'through');
+        expect((await (base / 'too-long').get()).statusCode, 429);
+      });
+      expect(hits['/too-long'], 1);
+      await Http.scope(retries: 1, () async => expect((await (base / 'always500').get()).statusCode, 500));
+      expect(hits['/always500'], 2, reason: 'one send and one retry');
+    });
+
+    test('a crawl inside a retrying scope keeps its own budget', () async {
+      await Http.scope(retries: 5, () async {
+        await (base / 'always500').scrape<void>().onInit((c) => c.retries = 1).drain<void>();
+      });
+      expect(hits['/always500'], 2, reason: 'the crawl retries; the scope does not retry it again');
+    });
+
+    test('scope delay spaces the requests to one host, downloads included', () async {
+      final dir = Path(Directory.systemTemp.createTempSync('tk_delay_').path);
+      addTearDown(() => dir.delete(recursive: true));
+      await Http.scope(delay: const Duration(milliseconds: 150), () async {
+        await Future.wait([(base / 'd').get(), (base / 'd').get()]);
+        await {base / 'd': dir / 'd.txt'}.download(concurrency: 4).drain<void>();
+      });
+      final at = times['/d']!..sort();
+      expect(at, hasLength(3));
+      for (var i = 1; i < at.length; i++) {
+        expect(at[i].difference(at[i - 1]), greaterThanOrEqualTo(const Duration(milliseconds: 140)));
+      }
+    });
+
+    test('robots: an anchored rule matches at the end, and the agent sent is the agent asked about', () async {
+      Future<List<String>> crawl({String? agent}) async {
+        final seen = <String>[];
+        await [base / 'a.php' / 'b.php', base / 'x' / 'y.php', base / 'ok']
+            .scrape<void>()
+            .onInit((c) => c.robots = true)
+            .onRequest((ctx) {
+              if (agent != null) ctx.request.headers['user-agent'] = agent;
+            })
+            .onResponse((ctx) => seen.add(ctx.url.path))
+            .drain<void>();
+        return seen..sort();
+      }
+
+      expect(await crawl(), ['/ok'], reason: r'`/*.php$` is the end of the path, wherever the first .php was');
+      expect(await crawl(agent: 'Mozilla/5.0 (compatible; PickyBot/1.0)'), isEmpty);
+    });
+
+    test('sitemaps seed the crawl: robots names an index, the index a gzipped urlset', () async {
+      final seen = <String>[];
+      await (base / 'home')
+          .scrape<void>()
+          .onInit(
+            (c) => c
+              ..sitemaps = true
+              ..robots = true,
+          )
+          .onResponse((ctx) => seen.add(ctx.url.path))
+          .drain<void>();
+      expect(seen..sort(), ['/a', '/b', '/home'], reason: 'offsite and disallowed entries are dropped');
+      expect(hits['/sitemap_index.xml'], 1, reason: 'an index naming itself is read once');
+    });
+
+    test('two uploads of different files to one URL are two requests', () async {
+      final dir = Directory.systemTemp.createTempSync('tk_mp_');
+      addTearDown(() => dir.delete(recursive: true));
+      final one = File('${dir.path}/one.txt')..writeAsStringSync('1');
+      final two = File('${dir.path}/two.txt')..writeAsStringSync('22');
+      final sent = <String>[];
+      await (base / 'form').scrape<void>().onResponse((ctx) {
+        if (ctx.depth > 0) return sent.add('${ctx.request.contentLength}');
+        ctx
+          ..follow('/upload', method: 'POST', files: {'f': one.path.path})
+          ..follow('/upload', method: 'POST', files: {'f': two.path.path})
+          ..follow('/upload', method: 'POST', files: {'f': two.path.path});
+      }).drain<void>();
+      expect(sent, hasLength(2), reason: 'the third is the second again');
+    });
+
+    test('robots.txt is asked for raw, so a rendering client fetches the file', () async {
+      final raw = <String, bool?>{};
+      final client = MockClient((request) async {
+        raw[request.url.path] = Request.raw(request);
+        return Response(request.url.path == '/robots.txt' ? 'User-agent: *\nDisallow:\n' : 'ok', 200);
+      });
+      await client.scrape<void>(base / 'p').onInit((c) => c.robots = true).drain<void>();
+      expect(raw['/robots.txt'], isTrue);
+      expect(raw['/p'], isNull);
+    });
+  });
+
+  _nativeDecoding();
+  group('audit fixes: scrape', _scrapeAudit);
+  group('audit fixes: client', () {
+    late HttpServer server;
+    late Uri base;
+    late Map<String, List<HttpHeaders>> seen;
+    late Future<void> Function(HttpRequest r) handle;
+
+    setUp(() async {
+      seen = {};
+      server = await HttpServer.bind('127.0.0.1', 0);
+      base = Uri.parse('http://127.0.0.1:${server.port}');
+      server.listen((r) async {
+        (seen[r.uri.path] ??= []).add(r.headers);
+        try {
+          await handle(r);
+        } catch (_) {}
+      });
+    });
+
+    tearDown(() => server.close(force: true));
+
+    /// Sends [bytes] after the headers announce [length], then cuts the connection.
+    Future<void> cut(HttpRequest r, List<int> bytes, {required int length, int status = 200, String? range}) async {
+      r.response
+        ..statusCode = status
+        ..contentLength = length;
+      if (range != null) r.response.headers.set('content-range', range);
+      r.response.headers.set('etag', '"v1"');
+      final socket = await r.response.detachSocket();
+      socket.add(bytes);
+      await socket.flush();
+      socket.destroy();
+    }
+
+    Future<Path> dir() async => Path((await Directory.systemTemp.createTemp('dt_http_')).path);
+
+    test('a resume of a file that changed starts over rather than splicing two versions', () async {
+      final v1 = List.filled(100000, 0x41);
+      final v2 = List.filled(100000, 0x42);
+      var first = true;
+      handle = (r) async {
+        if (first) {
+          first = false;
+          return cut(r, v1.sublist(0, 40000), length: v1.length);
+        }
+        final current = '"v2"';
+        final ranged = r.headers.value('range');
+        r.response.headers.set('etag', current);
+        if (ranged != null && r.headers.value('if-range') == current) {
+          final from = int.parse(ranged.substring(6, ranged.length - 1));
+          r.response
+            ..statusCode = 206
+            ..headers.set('content-range', 'bytes $from-${v2.length - 1}/${v2.length}')
+            ..add(v2.sublist(from));
+        } else {
+          r.response.add(v2);
+        }
+        await r.response.close();
+      };
+      final to = (await dir()) / 'f.bin';
+      final a = await to.download(base / 'f').last;
+      expect(a.current, isA<DownloadFailed>());
+      final b = await to.download(base / 'f').last;
+      expect(b.current, isA<Downloaded>());
+      expect(seen['/f']!.last.value('if-range'), '"v1"');
+      expect(await File(to).readAsBytes(), v2, reason: 'all of v2, none of v1');
+      expect(File('$to.part.if-range').existsSync(), isFalse);
+    });
+
+    test('a 206 that does not start where the part ends is discarded, not appended', () async {
+      final body = List.generate(1000, (i) => i % 251);
+      var n = 0;
+      handle = (r) async {
+        n++;
+        if (n == 1) return cut(r, body.sublist(0, 500), length: 1000);
+        if (r.headers.value('range') != null) {
+          r.response
+            ..statusCode = 206
+            ..headers.set('content-range', 'bytes 0-999/1000')
+            ..add(body);
+        } else {
+          r.response.add(body);
+        }
+        await r.response.close();
+      };
+      final to = (await dir()) / 'g.bin';
+      await to.download(base / 'g').drain<void>();
+      final last = await to.download(base / 'g').last;
+      expect(last.current, isA<Downloaded>());
+      expect(await File(to).readAsBytes(), body);
+    });
+
+    test('a 416 for a part that is already the whole file completes it', () async {
+      final body = List.generate(2000, (i) => i % 7);
+      handle = (r) async {
+        r.response
+          ..statusCode = 416
+          ..headers.set('content-range', 'bytes */2000');
+        await r.response.close();
+      };
+      final to = (await dir()) / 'h.bin';
+      await File('$to.part').writeAsBytes(body);
+      final last = await to.download(base / 'h').last;
+      expect(last.current, isA<Downloaded>());
+      expect(await File(to).readAsBytes(), body);
+      expect(seen['/h'], hasLength(1));
+    });
+
+    test('two pairs with one destination are one download', () async {
+      handle = (r) async {
+        r.response.write('x');
+        await r.response.close();
+      };
+      final to = (await dir()) / 'same.txt';
+      final states = await [(url: base / 'a', path: to), (url: base / 'b', path: to)].download().toList();
+      expect(states.map((s) => s.current).whereType<DownloadSkipped>(), hasLength(1));
+      expect(states.map((s) => s.current).whereType<Downloaded>(), hasLength(1));
+      expect(states.last.completed, 2);
+    });
+
+    test('a redirect to another port or scheme does not carry the credentials', () async {
+      final other = await HttpServer.bind('127.0.0.1', 0);
+      String? leaked = 'unset';
+      other.listen((r) {
+        leaked = r.headers.value('authorization');
+        r.response.close();
+      });
+      handle = (r) async {
+        r.response
+          ..statusCode = 302
+          ..headers.set('location', 'http://127.0.0.1:${other.port}/x');
+        await r.response.close();
+      };
+      await (base / 'go').get(headers: {'authorization': 'Bearer SECRET'});
+      expect(leaked, isNull);
+      await other.close(force: true);
+
+      // The scheme counts too: https → http is a downgrade the token must not survive.
+      final sent = <String, String?>{};
+      final client = MockClient((r) async {
+        sent[r.url.toString()] = r.headers['authorization'];
+        return r.url.scheme == 'https'
+            ? Response('', 302, headers: {'location': 'http://a.com/plain'})
+            : Response('', 200);
+      });
+      await Http.scope(
+        cookies: true,
+        client: client,
+        () => 'https://a.com/s'.url.get(headers: {'authorization': 'Bearer SECRET'}),
+      );
+      expect(sent, {'https://a.com/s': 'Bearer SECRET', 'http://a.com/plain': null});
+    });
+
+    test('a scope\'s credential headers go only to the origin of its first request', () async {
+      final other = await HttpServer.bind('127.0.0.1', 0);
+      final auth = <String?>[];
+      other.listen((r) {
+        auth.add(r.headers.value('authorization'));
+        r.response.close();
+      });
+      handle = (r) async {
+        auth.add(r.headers.value('authorization'));
+        await r.response.close();
+      };
+      await Http.scope(headers: {'authorization': 'Bearer T', 'x-app': '1'}, () async {
+        await (base / 'api').get();
+        await Uri.parse('http://127.0.0.1:${other.port}/bucket').get();
+        await (base / 'api').get();
+      });
+      expect(auth, ['Bearer T', null, 'Bearer T']);
+      await other.close(force: true);
+    });
+
+    group('a cancel reaches', () {
+      test('a request waiting for headers', () async {
+        handle = (r) => Completer<void>().future; // never answers
+        final stop = CancelToken();
+        Timer(100.ms, stop.cancel);
+        await expectLater(Cancel.scope(() => (base / 'stall').get(), token: stop), throwsA(isA<CancelledException>()));
+      });
+
+      test('a Retry-After wait', () async {
+        handle = (r) async {
+          r.response
+            ..statusCode = 503
+            ..headers.set('retry-after', '25');
+          await r.response.close();
+        };
+        final stop = CancelToken();
+        Timer(100.ms, stop.cancel);
+        await expectLater(
+          Cancel.scope(() => Http.scope(retries: 2, () => (base / 'busy').get()), token: stop),
+          throwsA(isA<CancelledException>()),
+        );
+      });
+
+      test('a delay: gap', () async {
+        handle = (r) => r.response.close();
+        final stop = CancelToken();
+        Timer(100.ms, stop.cancel);
+        await expectLater(
+          Cancel.scope(
+            () => Http.scope(delay: 30.s, () async {
+              for (var i = 0; i < 3; i++) {
+                await (base / 'p$i').get();
+              }
+            }),
+            token: stop,
+          ),
+          throwsA(isA<CancelledException>()),
+        );
+        expect(seen.keys, ['/p0']);
+      });
+
+      test('a download stalled mid-body, which fails as cancelled and lets go of its socket', () async {
+        // A raw socket, because `HttpServer` does not notice a peer that hangs up on it.
+        final raw = await ServerSocket.bind('127.0.0.1', 0);
+        final hungUp = Completer<void>();
+        raw.listen((s) {
+          s.listen(
+            (_) => s
+              ..add('HTTP/1.1 200 OK\r\ncontent-length: 1048576\r\n\r\n'.codeUnits)
+              ..add(List.filled(100000, 1)), // and the rest never comes
+            onDone: () {
+              hungUp.complete();
+              s.destroy();
+            },
+          );
+        });
+        final stop = CancelToken();
+        final to = (await dir()) / 'stall.bin';
+        final states = <BatchDownloadProgress>[];
+        await Cancel.scope(() async {
+          await for (final s in to.download(Uri.parse('http://127.0.0.1:${raw.port}/stall'))) {
+            states.add(s);
+            if (s.current is Downloading) stop.cancel('enough');
+          }
+        }, token: stop);
+        expect(states.last.current, isA<DownloadFailed>());
+        expect((states.last.current as DownloadFailed).error, isA<CancelledException>());
+        await hungUp.future;
+        await raw.close();
+      });
+    });
+
+    test('retries: carry a download on from where a reset cut it', () async {
+      final body = List.generate(100000, (i) => i % 253);
+      var n = 0;
+      handle = (r) async {
+        n++;
+        if (n == 1) return cut(r, body.sublist(0, 30000), length: body.length);
+        final ranged = r.headers.value('range');
+        r.response.headers.set('etag', '"v1"');
+        if (ranged != null && r.headers.value('if-range') == '"v1"') {
+          final from = int.parse(ranged.substring(6, ranged.length - 1));
+          r.response
+            ..statusCode = 206
+            ..headers.set('content-range', 'bytes $from-${body.length - 1}/${body.length}')
+            ..add(body.sublist(from));
+        } else {
+          r.response.add(body);
+        }
+        await r.response.close();
+      };
+      final to = (await dir()) / 'r.bin';
+      final last = await Http.scope(retries: 3, () => to.download(base / 'r').last);
+      expect(last.current, isA<Downloaded>());
+      expect(n, 2);
+      expect(seen['/r']!.last.value('range'), 'bytes=30000-');
+      expect(await File(to).readAsBytes(), body);
+    });
+
+    test('retries: fetch a buffered body again when it breaks off', () async {
+      var n = 0;
+      handle = (r) async {
+        if (++n == 1) return cut(r, List.filled(100, 0x61), length: 1000);
+        r.response.write('a' * 1000);
+        await r.response.close();
+      };
+      final res = await Http.scope(retries: 2, () => (base / 'b').get());
+      expect(res.text, 'a' * 1000);
+      expect(n, 2);
+    });
+
+    test('a POST is not sent twice, unless the server said it did nothing', () async {
+      handle = (r) async {
+        r.response.statusCode = r.uri.path == '/declined' && seen['/declined']!.length < 2 ? 503 : 500;
+        if (r.uri.path == '/declined') r.response.headers.set('retry-after', '0');
+        if (r.uri.path == '/declined' && seen['/declined']!.length == 2) r.response.statusCode = 200;
+        await r.response.close();
+      };
+      await Http.scope(retries: 2, () async {
+        expect((await (base / 'order').post(json: {'buy': 1})).statusCode, 500);
+        expect((await (base / 'declined').post(json: {'buy': 1})).statusCode, 200);
+        expect((await (base / 'safe').get()).statusCode, 500);
+      });
+      expect(seen['/order'], hasLength(1));
+      expect(seen['/declined'], hasLength(2));
+      expect(seen['/safe'], hasLength(3));
+    });
+
+    test('delay: spaces a redirect hop too, without a jar', () async {
+      final at = <String, DateTime>{};
+      handle = (r) async {
+        at[r.uri.path] = DateTime.now();
+        if (r.uri.path == '/a') {
+          r.response
+            ..statusCode = 302
+            ..headers.set('location', '/b');
+        }
+        await r.response.close();
+      };
+      await Http.scope(delay: 300.ms, () => (base / 'a').get());
+      expect(at['/b']!.difference(at['/a']!), greaterThanOrEqualTo(const Duration(milliseconds: 290)));
+    });
+
+    test('cookies: an empty Domain is ignored, and a Secure one over http is refused', () async {
+      final cookies = <String?>[];
+      final client = MockClient((r) async {
+        cookies.add(r.headers['cookie']);
+        return Response(
+          '',
+          200,
+          headers: {if (r.url.path == '/set') 'set-cookie': 'a=1; Domain=; Path=/\ns=2; Secure; Path=/'},
+        );
+      });
+      await Http.scope(cookies: true, client: client, () async {
+        await 'http://a.com/set'.url.get();
+        await 'http://a.com/next'.url.get();
+        await 'https://a.com/next'.url.get();
+      });
+      expect(cookies, [null, 'a=1', 'a=1']);
+    });
+
+    test('robots: rules and paths compare percent-normalised, agents by product token', () async {
+      handle = (r) async {
+        if (r.uri.path == '/robots.txt') {
+          r.response.write('User-agent: bot\nDisallow: /\n\nUser-agent: *\nDisallow: /café\nDisallow: /a%3cb\n');
+        } else {
+          r.response.write('<a href="/caf%C3%A9/menu">1</a><a href="/a%3Cb">2</a><a href="/open">3</a>');
+        }
+        await r.response.close();
+      };
+      final fetched = <String>[];
+      await (base / 'start')
+          .scrape<void>()
+          .onInit((c) => c..robots = true)
+          .onRequest((c) => c.request.headers['user-agent'] = 'mybot/1.0')
+          .onResponse((ctx) {
+            fetched.add(ctx.url.path);
+            if (ctx.depth == 0) {
+              for (final a in ctx.response.html.$('a')) {
+                ctx.follow(a.attr('href'));
+              }
+            }
+          })
+          .drain<void>();
+      expect(fetched..sort(), ['/open', '/start'], reason: '`bot` is not `mybot`; both encoded paths are out');
+    });
+
+    test('fetch says the status line', () async {
+      handle = (r) async {
+        r.response.statusCode = 404;
+        await r.response.close();
+      };
+      await expectLater(
+        (base / 'missing').fetch(),
+        throwsA(isA<HttpException>().having((e) => e.message, 'message', '404 Not Found')),
+      );
+    });
+
+    group('events', () {
+      test('server-sent events', () async {
+        handle = (r) async {
+          r.response.headers.contentType = ContentType('text', 'event-stream');
+          r.response.write('data: a\ndata: b\nid: 7\n\n: a comment\nevent: done\ndata:x\n\ndata: cut off');
+          await r.response.close();
+        };
+        final events = await (base / 'sse').events().toList();
+        expect(events, [(event: 'message', data: 'a\nb', id: '7'), (event: 'done', data: 'x', id: '7')]);
+        expect(seen['/sse']!.single.value('accept'), 'text/event-stream');
+      });
+
+      test('NDJSON, asked with a JSON body', () async {
+        handle = (r) async {
+          final body = await utf8.decodeStream(r);
+          r.response.write('${r.method} $body\n\n{"n":1}\r\n{"n":2}\n');
+          await r.response.close();
+        };
+        final data = await (base / 'nd').events(json: {'stream': true}).map((e) => e.data).toList();
+        expect(data, ['POST {"stream":true}', '{"n":1}', '{"n":2}']);
+      });
+
+      test('a failing status throws', () async {
+        handle = (r) async {
+          r.response.statusCode = 500;
+          await r.response.close();
+        };
+        await expectLater((base / 'x').events().toList(), throwsA(isA<HttpException>()));
+      });
+    });
+
+    test('cache: a 304 is answered from disk as the 200 it stands for', () async {
+      handle = (r) async {
+        r.response.headers
+          ..set('etag', '"e1"')
+          ..set('content-type', 'text/plain');
+        if (r.uri.path == '/nostore') r.response.headers.set('cache-control', 'no-store');
+        if (r.headers.value('if-none-match') == '"e1"') {
+          r.response.statusCode = 304;
+        } else {
+          r.response.write('body of ${r.uri.path}');
+        }
+        await r.response.close();
+      };
+      final cache = await dir();
+      for (var run = 0; run < 2; run++) {
+        await Http.scope(cache: cache, () async {
+          final res = await (base / 'page').get();
+          expect((res.statusCode, res.text, res.headers['content-type']), (200, 'body of /page', 'text/plain'));
+          expect((await (base / 'nostore').get()).text, 'body of /nostore');
+        });
+      }
+      expect(seen['/page']!.map((h) => h.value('if-none-match')), [null, '"e1"']);
+      expect(seen['/nostore']!.map((h) => h.value('if-none-match')), [null, null]);
+    });
+  });
+}
+
+/// What the native library decodes for `http`: a compressed body that stops short, and the
+/// charsets past UTF-8 and windows-1252.
+void _nativeDecoding() => group('native decoding', () {
+  late HttpServer server;
+  late Uri base;
+  late List<int> body;
+  String? contentType;
+  String? contentEncoding;
+
+  setUp(() async {
+    server = await HttpServer.bind('127.0.0.1', 0);
+    base = Uri.parse('http://127.0.0.1:${server.port}/');
+    server.listen((r) {
+      if (contentType != null) r.response.headers.set('content-type', contentType!);
+      if (contentEncoding != null) r.response.headers.set('content-encoding', contentEncoding!);
+      // Chunked and cleanly ended: nothing on the wire says the body was cut.
+      r.response
+        ..add(body)
+        ..close();
+    });
+    contentType = null;
+    contentEncoding = null;
+  });
+
+  tearDown(() => server.close(force: true));
+
+  final payload = utf8.encode(List.generate(40000, (i) => 'line $i of the body').join('\n'));
+
+  for (final (encoding, packed) in [
+    ('gzip', () => gzip.encode(payload)),
+    ('zstd', () => File(p.join('test', 'fixtures', 'encoded.zst')).readAsBytesSync()),
+    ('br', () => File(p.join('test', 'fixtures', 'encoded.br')).readAsBytesSync()),
+  ]) {
+    test('a $encoding body cut in half is an error, not half a page', () async {
+      final whole = packed();
+      body = whole.sublist(0, whole.length ~/ 2);
+      contentEncoding = encoding;
+      await expectLater(
+        base.get(),
+        throwsA(isA<ClientException>().having((e) => e.message, 'message', contains(encoding))),
+      );
+    });
+  }
+
+  test('a corrupt gzip body is an error; an empty one is an empty body', () async {
+    contentEncoding = 'gzip';
+    body = [0x1f, 0x8b, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    await expectLater(base.get(), throwsA(isA<ClientException>()));
+    body = [];
+    expect((await base.get()).bytes, isEmpty);
+  });
+
+  test('a byte-order mark outranks the header', () async {
+    body = [0xef, 0xbb, 0xbf, ...utf8.encode('é')];
+    contentType = 'text/html; charset=iso-8859-1';
+    expect((await base.get()).text, 'é');
+    body = [0xff, 0xfe, 0x42, 0x30, 0x93, 0x30]; // “あん” in UTF-16LE
+    contentType = 'text/plain';
+    expect((await base.get()).text, 'あん');
+  });
+
+  test('JSON is not searched for a <meta>', () async {
+    body = utf8.encode('{"s":"é","html":"<meta charset=windows-1252>"}');
+    contentType = 'application/json';
+    expect((await base.get()).json['s'].to<String>(), 'é');
+  });
+
+  test('a page declaring UTF-16 from inside is UTF-8', () async {
+    body = utf8.encode('<meta charset="utf-16"><p>é');
+    contentType = 'text/html';
+    expect((await base.get()).text, endsWith('é'));
+  });
+
+  test('Shift_JIS, EUC-KR and GBK decode, by header or by <meta>', () async {
+    const shiftJis = [0x82, 0xb1, 0x82, 0xf1, 0x82, 0xc9, 0x82, 0xbf, 0x82, 0xcd];
+    body = shiftJis;
+    contentType = 'text/html; charset=Shift_JIS';
+    expect((await base.get()).text, 'こんにちは');
+    body = [...utf8.encode('<meta charset="shift_jis">'), ...shiftJis];
+    contentType = 'text/html';
+    expect((await base.get()).text, endsWith('こんにちは'));
+    body = [0xbe, 0xc8, 0xb3, 0xe7];
+    contentType = 'text/plain; charset=euc-kr';
+    expect((await base.get()).text, '안녕');
+    body = [0xc4, 0xe3, 0xba, 0xc3];
+    contentType = 'text/plain; charset=gbk';
+    expect((await base.get()).text, '你好');
+  });
+}, skip: NativeLib.isAvailable ? false : 'needs dart_toolkit_native');
+
+/// The crawler [Crawler]'s doc describes: its state is fields, and it overrides four hooks.
+final class _Books extends Crawler<String> {
+  final Uri home;
+  final seen = <String>{};
+  final failed = <String>[];
+  var pages = 0;
+  ScrapeSummary? summary;
+
+  _Books(this.home);
+
+  @override
+  void onInit(InitContext<String> ctx) => ctx
+    ..seed(home)
+    ..concurrency = 1;
+
+  @override
+  void onResponse(ResponseContext<String> ctx) {
+    pages++;
+    for (final title in ctx.response.html.$('h2')) {
+      if (seen.add(title.text)) ctx.emit(title.text);
+    }
+    for (final a in ctx.response.html.$('a.next')) {
+      ctx.follow(a.attr('href'));
+    }
+  }
+
+  @override
+  void onError(ErrorContext<String> ctx) {
+    failed.add(ctx.url.path);
+    ctx.ignore();
+  }
+
+  @override
+  Future<void> onFinish(ScrapeSummary summary) async => this.summary = summary;
+}
+
+/// A loopback server answering each path with [route]; `null` is a 404.
+Future<HttpServer> _site(FutureOr<void> Function(HttpRequest req)? Function(String path) route) async {
+  final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+  server.listen((req) async {
+    final handler = route(req.uri.path);
+    if (handler == null) {
+      req.response.statusCode = 404;
+    } else {
+      await handler(req);
+    }
+    await req.response.close();
+  });
+  return server;
+}
+
+FutureOr<void> Function(HttpRequest) _html(String body) => (req) {
+  req.response.headers.contentType = ContentType.html;
+  req.response.write(body);
+};
+
+void _scrapeAudit() {
+  test('a crawl stops when its Cancel.scope is cancelled', () async {
+    final server = await _site((path) => _html('<a href="/${int.parse(path.substring(1)) + 1}">next</a>'));
+    addTearDown(() => server.close(force: true));
+    final stop = CancelToken();
+    Timer(const Duration(milliseconds: 300), stop.cancel);
+    final watch = Stopwatch()..start();
+    final got = await Cancel.scope(
+      () => 'http://127.0.0.1:${server.port}/0'.url
+          .scrape<int>()
+          .onInit((ctx) => ctx.delay = const Duration(milliseconds: 100))
+          .onResponse((ctx) {
+            ctx.emit(ctx.depth);
+            ctx.follow(ctx.response.html.$('a'));
+          })
+          .rights
+          .toList(),
+      token: stop,
+    );
+    expect(watch.elapsed, lessThan(const Duration(seconds: 2)));
+    expect(got.length, lessThan(8));
+  });
+
+  test('a corrupt gzip sitemap is a sitemap that names nothing, not an uncaught error', () async {
+    final server = await _site(
+      (path) => switch (path) {
+        '/' => _html('home'),
+        '/sitemap.xml' => (req) => req.response.add([0x1f, 0x8b, 1, 2, 3, 4]),
+        _ => null,
+      },
+    );
+    addTearDown(() => server.close(force: true));
+    final uncaught = <Object>[];
+    final got = await runZonedGuarded(
+      () => 'http://127.0.0.1:${server.port}/'.url
+          .scrape<String>()
+          .onInit((ctx) => ctx.sitemaps = true)
+          .onResponse((ctx) => ctx.emit(ctx.url.path))
+          .rights
+          .toList(),
+      (e, _) => uncaught.add(e),
+    );
+    expect(uncaught, isEmpty);
+    expect(got, ['/']);
+  });
+
+  test('a gzipped sitemap that unpacks past the protocol\'s 50 MB is refused, not held', () async {
+    final bomb = gzip.encode(Uint8List(51 * 1024 * 1024));
+    final server = await _site(
+      (path) => switch (path) {
+        '/' => _html('home'),
+        '/sitemap.xml' => (req) => req.response.add(bomb),
+        _ => null,
+      },
+    );
+    addTearDown(() => server.close(force: true));
+    final got = await 'http://127.0.0.1:${server.port}/'.url
+        .scrape<String>()
+        .onInit((ctx) => ctx.sitemaps = true)
+        .onResponse((ctx) => ctx.emit(ctx.url.path))
+        .rights
+        .toList();
+    expect(got, ['/']);
+  });
+
+  test('a page a sitemap lists that redirects off-site does not widen the scope', () async {
+    final other = await _site(
+      (path) => switch (path) {
+        '/' => _html('<a href="/secret">s</a>'),
+        '/secret' => _html('secret'),
+        _ => null,
+      },
+    );
+    final home = await _site(
+      (path) => switch (path) {
+        '/' => _html('home'),
+        '/sitemap.xml' => (req) => req.response.write(
+          '<urlset><url><loc>http://127.0.0.1:${req.connectionInfo!.localPort}/go</loc></url></urlset>',
+        ),
+        '/go' =>
+          (req) => req.response
+            ..statusCode = 302
+            ..headers.set('location', 'http://localhost:${other.port}/'),
+        _ => null,
+      },
+    );
+    addTearDown(() => home.close(force: true));
+    addTearDown(() => other.close(force: true));
+    final got = await 'http://127.0.0.1:${home.port}/'.url
+        .scrape<String>()
+        .onInit((ctx) => ctx.sitemaps = true)
+        .onResponse((ctx) {
+          ctx.emit('${ctx.url.host}${ctx.url.path}');
+          ctx.follow(ctx.response.html.$('a'));
+        })
+        .rights
+        .toList();
+    expect(got, ['127.0.0.1/']);
+  });
+
+  test('a redirect back to itself with a cookie is followed; two redirects to one page count a drop', () async {
+    final server = await _site(
+      (path) => switch (path) {
+        '/login' => (req) {
+          if (req.headers.value('cookie')?.contains('ok=1') ?? false) {
+            req.response.write('in');
+          } else {
+            req.response
+              ..statusCode = 302
+              ..headers.set('set-cookie', 'ok=1; Path=/')
+              ..headers.set('location', '/login');
+          }
+        },
+        '/' => _html('<a href="/a">a</a><a href="/b">b</a>'),
+        '/a' || '/b' =>
+          (req) => req.response
+            ..statusCode = 302
+            ..headers.set('location', '/t'),
+        '/t' => _html('t'),
+        _ => null,
+      },
+    );
+    addTearDown(() => server.close(force: true));
+    final base = 'http://127.0.0.1:${server.port}';
+    final login = await Http.scope(
+      () => '$base/login'.url.scrape<String>().onResponse((ctx) => ctx.emit(ctx.response.text)).rights.toList(),
+      cookies: true,
+    );
+    expect(login, ['in']);
+
+    ScrapeSummary? summary;
+    final pages = await '$base/'.url
+        .scrape<String>()
+        .onInit((ctx) => ctx.concurrency = 1)
+        .onResponse((ctx) {
+          ctx.emit(ctx.url.path);
+          ctx.follow(ctx.response.html.$('a'));
+        })
+        .onFinish((s) => summary = s)
+        .rights
+        .toList();
+    expect(pages, ['/', '/t']);
+    expect(summary!.dropped, 1);
+  });
+
+  test('robots.txt and politeness belong to an origin: another port on one host is another site', () async {
+    final strict = await _site(
+      (path) => switch (path) {
+        '/robots.txt' => (req) => req.response.write('User-agent: *\nDisallow: /\n'),
+        _ => _html('x'),
+      },
+    );
+    final open = await _site((path) => path == '/robots.txt' ? null : _html('open'));
+    addTearDown(() => strict.close(force: true));
+    addTearDown(() => open.close(force: true));
+    final got = await ['http://127.0.0.1:${strict.port}/', 'http://127.0.0.1:${open.port}/']
+        .map((u) => u.url)
+        .scrape<int>()
+        .onInit((ctx) => ctx.robots = true)
+        .onResponse((ctx) => ctx.emit(ctx.url.port))
+        .rights
+        .toList();
+    expect(got, [open.port]);
+  });
+
+  test('/p? is /p, and follow takes the elements a query matched', () async {
+    final server = await _site(
+      (path) => switch (path) {
+        '/' => _html('<a href="/p?">1</a><a href="/p">2</a><a name="x">no href</a><img src="/i">'),
+        '/p' || '/i' => _html('leaf'),
+        _ => null,
+      },
+    );
+    addTearDown(() => server.close(force: true));
+    ScrapeSummary? summary;
+    final got = await 'http://127.0.0.1:${server.port}/'.url
+        .scrape<String>()
+        .onResponse((ctx) {
+          ctx.emit('${ctx.url}');
+          ctx.follow(ctx.response.html.$('a, img'));
+        })
+        .onFinish((s) => summary = s)
+        .rights
+        .toList();
+    expect(got.map((u) => u.url.path).toSet(), {'/', '/p', '/i'});
+    expect(got.where((u) => u.url.path == '/p'), hasLength(1));
+    expect(summary!.dropped, 2); // `/p` again, and the anchor with no href
+  });
+
+  test('a held client scrapes a Uri, Uris or Requests', () async {
+    final seen = <String>[];
+    final client = MockClient((r) async {
+      seen.add('${r.method} ${r.url.path} ${r.text}');
+      return Response('ok', 200, headers: {'content-type': 'text/plain'});
+    });
+    await client.scrape<void>('https://a.com/x'.url).toList();
+    await client.scrape<void>(['https://a.com/y'.url]).toList();
+    await client.scrape<void>([Request('POST', 'https://a.com/z'.url, text: 'q')]).toList();
+    expect(seen, ['GET /x ', 'GET /y ', 'POST /z q']);
+    expect(() => client.scrape<void>(42), throwsArgumentError);
+  });
+}
