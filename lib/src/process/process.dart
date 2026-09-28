@@ -1,0 +1,734 @@
+part of '../../process.dart';
+
+/// Splits [command] as a POSIX shell would read a simple command: whitespace separates,
+/// single quotes take everything literally, double quotes let `\\ \" \$ \`` escape, and an
+/// unquoted backslash escapes the next character. No expansion of any kind.
+///
+/// A quote that never closes is a [FormatException], and unquoted shell syntax — `|`, `&`,
+/// `;`, `<`, `>`, `$(`, a backtick — an [ArgumentError]: exec'd directly, `a | wc -l` would
+/// hand `|` to `a` as an argument and print the wrong thing without a word.
+List<String> _splitCommand(String command) {
+  final args = <String>[];
+  final current = StringBuffer();
+  var quoted = false; // an empty quoted string is still an argument
+  var inSingle = false;
+  var inDouble = false;
+
+  const backslash = 0x5c, singleQuote = 0x27, doubleQuote = 0x22, dollar = 0x24, backtick = 0x60;
+  bool isSpace(int c) => c == 0x20 || c == 0x09 || c == 0x0a || c == 0x0d;
+
+  for (var i = 0; i < command.length; i++) {
+    final char = command.codeUnitAt(i);
+    if (inSingle) {
+      if (char == singleQuote) {
+        inSingle = false;
+      } else {
+        current.writeCharCode(char);
+      }
+    } else if (inDouble) {
+      if (char == doubleQuote) {
+        inDouble = false;
+      } else if (char == backslash && i + 1 < command.length) {
+        final next = command.codeUnitAt(i + 1);
+        if (next == backslash || next == doubleQuote || next == dollar || next == backtick) {
+          current.writeCharCode(next);
+          i++;
+        } else {
+          current.writeCharCode(char);
+        }
+      } else {
+        current.writeCharCode(char);
+      }
+    } else if (char == backslash && i + 1 < command.length) {
+      current.writeCharCode(command.codeUnitAt(++i));
+    } else if (char == singleQuote) {
+      inSingle = quoted = true;
+    } else if (char == doubleQuote) {
+      inDouble = quoted = true;
+    } else if (isSpace(char)) {
+      if (current.isNotEmpty || quoted) args.add(current.toString());
+      current.clear();
+      quoted = false;
+    } else if (_shellSyntax(command, i) case final syntax?) {
+      throw ArgumentError(
+        '"$command" uses $syntax, which only a shell reads: pass shell: true, or pipe with '
+        "('a' | 'b').run()",
+      );
+    } else {
+      current.writeCharCode(char);
+    }
+  }
+  if (inSingle || inDouble) {
+    throw FormatException('Unterminated ${inSingle ? 'single' : 'double'} quote', command, command.length);
+  }
+  if (current.isNotEmpty || quoted) args.add(current.toString());
+  return args;
+}
+
+/// The shell operator starting at [i] of [command], unquoted, or `null`.
+String? _shellSyntax(String command, int i) => switch (command[i]) {
+  '|' || '&' || ';' || '<' || '>' || '`' => '`${command[i]}`',
+  r'$' when i + 1 < command.length && command[i + 1] == '(' => r'`$(`',
+  _ => null,
+};
+
+const _shellKey = #dartToolkitShellScope;
+
+/// The settings every command in a scope shares.
+final class _Shell {
+  final Path? workdir;
+  final Map<String, String>? env;
+  final Duration? timeout;
+  final Encoding encoding;
+  final bool quiet;
+  final bool strict;
+
+  const _Shell({this.workdir, this.env, this.timeout, this.encoding = utf8, this.quiet = false, this.strict = true});
+
+  static _Shell get current => Zone.current[_shellKey] as _Shell? ?? const _Shell();
+
+  _Shell merge({
+    Path? workdir,
+    Map<String, String>? env,
+    Duration? timeout,
+    Encoding? encoding,
+    bool? quiet,
+    bool? strict,
+  }) => _Shell(
+    workdir: workdir ?? this.workdir,
+    env: env == null ? this.env : {...?this.env, ...env},
+    timeout: timeout ?? this.timeout,
+    encoding: encoding ?? this.encoding,
+    quiet: quiet ?? this.quiet,
+    strict: strict ?? this.strict,
+  );
+
+  /// A decoder that never fails a command over its output: a stray byte is `U+FFFD`.
+  Converter<List<int>, String> get decoder =>
+      identical(encoding, utf8) ? const Utf8Decoder(allowMalformed: true) : encoding.decoder;
+}
+
+/// The per-call settings of [run], [PathShellExtensions.run] and [CommandPipeline.run].
+typedef _Given = ({
+  Path? workdir,
+  Map<String, String>? env,
+  Duration? timeout,
+  Encoding? encoding,
+  bool? quiet,
+  bool? strict,
+});
+
+/// The ambient shell seam: what every command in a scope shares.
+///
+/// A working directory, an environment, a timeout or a failure policy that every command
+/// would otherwise repeat belongs to the scope that sets it — the shape [Http.scope] has
+/// for a client. Anything genuinely per command — `input:`, `args:`, `shell:` — stays an
+/// argument, and a per-call `workdir:` or `strict:` still wins over the scope's.
+///
+/// ```dart
+/// await Shell.scope(() async {
+///   await run('git fetch --all');
+///   await run('git status --short');
+/// }, workdir: repo, timeout: 30.s);
+/// ```
+///
+/// {@category System}
+class Shell {
+  /// Runs [body] with these settings for every command inside it.
+  ///
+  /// [env] is added to the enclosing scope's rather than replacing it.
+  static Future<T> scope<T>(
+    FutureOr<T> Function() body, {
+    Path? workdir,
+    Map<String, String>? env,
+    Duration? timeout,
+    Encoding? encoding,
+    bool? quiet,
+    bool? strict,
+  }) async {
+    final scope = _Shell.current.merge(
+      workdir: workdir,
+      env: env,
+      timeout: timeout,
+      encoding: encoding,
+      quiet: quiet,
+      strict: strict,
+    );
+    return runZoned(() async => body(), zoneValues: {_shellKey: scope});
+  }
+}
+
+/// Runs [command], echoing its output unless [quiet].
+///
+/// Throws [ShellException] on a non-zero exit unless [strict] is false; an executable that
+/// is not there is exit code 127, as in a shell. [input] is written to stdin, which is
+/// otherwise closed at once. [inherit] gives the child this terminal — stdin, stdout and
+/// stderr — for `git commit`, `ssh` or `vim`; nothing is captured then. Every other argument
+/// defaults to the enclosing [Shell.scope]'s, so a scope says `workdir:` once instead of
+/// every call.
+///
+/// The enclosing [Cancel.scope] stops it: the child and everything it started get SIGTERM,
+/// then SIGKILL after two seconds, and this throws [CancelledException]. A [timeout] does
+/// the same and throws [ShellTimeoutException], carrying what was printed until then.
+/// Under `Cli.run` that is also what a ^C or a SIGTERM does to the children.
+///
+/// [command] is split here, the way a POSIX shell reads a simple command, and exec'd
+/// directly — so **never interpolate a scraped or user-supplied value into it**. Pass those
+/// as [args], which are appended as they are and never re-read: `run('git commit -m', args:
+/// [message])`. A quote that never closes is a [FormatException]; `|`, `&&` or `>` outside
+/// quotes is an [ArgumentError], since only a shell reads them. [shell] hands the string,
+/// unsplit, to `/bin/sh -c` (`cmd /c` on Windows) for pipes, globs, `&&` and `$VAR`, with
+/// [args] as `$1`, `$2`…: `run(r'grep -c "$1" *.log', shell: true, args: [pattern])`.
+///
+/// On Windows an executable found on the `PATH` runs directly; only a `.bat`, a `.cmd` or a
+/// `cmd.exe` built-in goes through `cmd.exe`, and there an argument holding one of `cmd`'s
+/// metacharacters (`& | < > ^ % "` or a newline) is an [ArgumentError], since `cmd` would
+/// read it as a command of its own.
+///
+/// What comes back is a [ShellRun]: a future of the result whose readings say what the
+/// caller wants, so `await run('git diff --quiet').isOk` neither throws nor echoes.
+///
+/// {@category System}
+ShellRun run(
+  String command, {
+  List<String> args = const [],
+  Path? workdir,
+  Map<String, String>? env,
+  Duration? timeout,
+  String? input,
+  bool? quiet,
+  bool? strict,
+  Encoding? encoding,
+  bool shell = false,
+  bool inherit = false,
+}) => ShellRun._((scope, live) {
+  final display = _display(command, args);
+  if (shell) {
+    final stage = Platform.isWindows
+        ? ('cmd', ['/c', command, ..._cmdSafe(args)])
+        : ('/bin/sh', ['-c', command, 'sh', ...args]); // `sh` is $0; args are $1…
+    return _exec([stage], display, scope, input: input, inherit: inherit, live: live);
+  }
+  final parts = _splitCommand(command.trim());
+  if (parts.isEmpty) throw ArgumentError('Cannot execute an empty command string');
+  return _exec(
+    [
+      (parts.first, [...parts.skip(1), ...args]),
+    ],
+    display,
+    scope,
+    input: input,
+    inherit: inherit,
+    viaShell: Platform.isWindows,
+    live: live,
+  );
+}, (workdir: workdir, env: env, timeout: timeout, encoding: encoding, quiet: quiet, strict: strict));
+
+/// How a command reads in an error or an echo: [args] quoted where a space would split them.
+String _display(String command, List<String> args) =>
+    args.isEmpty ? command : '$command ${args.map((a) => a.contains(' ') || a.isEmpty ? '"$a"' : a).join(' ')}';
+
+/// [args], refused if `cmd.exe` would read one as something other than an argument.
+///
+/// `cmd` has no quoting a program can rely on — `%VAR%` expands inside quotes, and `^`, `&`
+/// and `|` are read before the program's own parser sees anything — so the only safe
+/// argument is one without them (the "BatBadBut" class of injection).
+List<String> _cmdSafe(List<String> args) {
+  for (final arg in args) {
+    if (arg.contains(RegExp(r'[&|<>^%"\r\n]'))) {
+      throw ArgumentError.value(arg, 'args', 'cannot be passed through cmd.exe safely');
+    }
+  }
+  return args;
+}
+
+/// A command on its way: a `Future<ShellResult>`, and the readings on it.
+///
+/// It starts in a microtask rather than at once, so a reading chained straight onto
+/// [run] can still say how it should run: [text] and [lines] want the output, not to see
+/// it, so they imply `quiet: true`; [isOk] wants an answer, not an exception, so it also
+/// implies `strict: false`. An argument given to [run] itself still wins.
+///
+/// ```dart
+/// final branch = await run('git rev-parse --abbrev-ref HEAD').text;   // not echoed
+/// if (!await run('git diff --quiet').isOk) Console.warn('uncommitted changes');
+/// ```
+///
+/// {@category System}
+final class ShellRun implements Future<ShellResult> {
+  final Future<ShellResult> Function(_Shell scope, _Live? live) _start;
+  final _Shell _scope;
+  final bool? _quiet;
+  final bool? _strict;
+  bool _wantsOutput = false;
+  bool _wantsAnswer = false;
+  _Live? _live;
+
+  /// [given] is what the call site said; the rest comes from the enclosing [Shell.scope],
+  /// read here, in the caller's zone, and not when the process starts.
+  ShellRun._(this._start, _Given given)
+    : _scope = _Shell.current.merge(
+        workdir: given.workdir,
+        env: given.env,
+        timeout: given.timeout,
+        encoding: given.encoding,
+      ),
+      _quiet = given.quiet,
+      _strict = given.strict {
+    scheduleMicrotask(() => _result);
+  }
+
+  late final Future<ShellResult> _result = Future.sync(
+    () => _start(
+      _scope.merge(
+        quiet: _quiet ?? (_wantsOutput || _wantsAnswer ? true : null),
+        strict: _strict ?? (_wantsAnswer ? false : null),
+      ),
+      _live,
+    ),
+  );
+
+  /// Its stdout as it is printed, a line at a time, not echoed — for `tail -f`, a build log
+  /// or a server's output, which `text` would only give back at the end.
+  ///
+  /// A failure is the stream's error once the lines before it are out; cancelling the
+  /// subscription stops the command and everything it started.
+  ///
+  /// ```dart
+  /// await for (final line in run('tail -f app.log').stream) {
+  ///   if (line.contains('ready')) break;   // tail is stopped
+  /// }
+  /// ```
+  Stream<String> get stream {
+    if (_live case final live?) return live.lines.stream;
+    _wantsOutput = true;
+    final live = _live = _Live();
+    live.lines = StreamController<String>(
+      onCancel: () {
+        live.abandoned = true;
+        live.halt?.call(const CancelledException('The stream was cancelled.'));
+      },
+    );
+    _result.then(
+      (_) => live.lines.close(),
+      onError: (Object error, StackTrace trace) {
+        if (!live.abandoned) live.lines.addError(error, trace);
+        live.lines.close();
+      },
+    );
+    return live.lines.stream;
+  }
+
+  /// The trimmed stdout, not echoed.
+  Future<String> get text => (this.._wantsOutput = true)._result.then((r) => r.text);
+
+  /// The non-empty, trimmed stdout lines, not echoed.
+  Future<List<String>> get lines => (this.._wantsOutput = true)._result.then((r) => r.lines);
+
+  /// Whether it exited 0 — never a [ShellException], and not echoed.
+  Future<bool> get isOk => (this.._wantsAnswer = true)._result.then((r) => r.isOk);
+
+  @override
+  Future<R> then<R>(FutureOr<R> Function(ShellResult value) onValue, {Function? onError}) =>
+      _result.then(onValue, onError: onError);
+
+  @override
+  Future<ShellResult> catchError(Function onError, {bool Function(Object error)? test}) =>
+      _result.catchError(onError, test: test);
+
+  @override
+  Future<ShellResult> whenComplete(FutureOr<void> Function() action) => _result.whenComplete(action);
+
+  @override
+  Future<ShellResult> timeout(Duration timeLimit, {FutureOr<ShellResult> Function()? onTimeout}) =>
+      _result.timeout(timeLimit, onTimeout: onTimeout);
+
+  @override
+  Stream<ShellResult> asStream() => _result.asStream();
+}
+
+/// A [ShellRun.stream]: where the lines go, and how its listener stops the command.
+final class _Live {
+  late final StreamController<String> lines;
+  void Function(Object why)? halt;
+
+  /// Whether the listener went away, so nobody wants the error its stopping causes.
+  bool abandoned = false;
+}
+
+/// The environment children inherit: the process's plus [Env] overrides plus [extra], or
+/// `null` — inherit as is — when there is nothing to add.
+Map<String, String>? _childEnv(Map<String, String>? extra) {
+  if (extra == null && !Env.hasOverrides) return null;
+  final all = Env.all();
+  if (extra != null) all.addAll(extra);
+  return all;
+}
+
+Future<void> _feed(Process process, String? input, Encoding encoding) async {
+  try {
+    if (input != null) process.stdin.add(encoding.encode(input));
+    await process.stdin.close();
+  } catch (_) {}
+}
+
+/// How long a stopped child has between SIGTERM and SIGKILL.
+const _grace = Duration(seconds: 2);
+
+/// Runs [stages] as a pipeline — one stage is one command — and settles it.
+///
+/// Each stage's stdout feeds the next; the last one's stdout and every stage's stderr are
+/// captured. The exit code is the rightmost non-zero one, like `pipefail`.
+Future<ShellResult> _exec(
+  List<(String, List<String>)> stages,
+  String display,
+  _Shell scope, {
+  String? input,
+  bool inherit = false,
+  bool viaShell = false,
+  _Live? live,
+}) async {
+  if (inherit && input != null) throw ArgumentError('input: cannot be given to a child that inherits stdin');
+  if (inherit && live != null) throw ArgumentError('stream cannot read a child that inherits stdout');
+  final token = Cancel.token;
+  token?.throwIfCancelled();
+  final processes = <Process>[];
+  final environment = _childEnv(scope.env);
+  try {
+    for (final (executable, args) in stages) {
+      final (exe, cmd) = viaShell ? await _windowsTarget(executable) : (executable, false);
+      processes.add(
+        await Process.start(
+          exe,
+          cmd ? _cmdSafe(args) : args,
+          workingDirectory: scope.workdir?.path,
+          environment: environment,
+          runInShell: cmd,
+          mode: inherit ? ProcessStartMode.inheritStdio : ProcessStartMode.normal,
+        ),
+      );
+    }
+  } on ProcessException catch (e) {
+    for (final p in processes) {
+      p.kill(ProcessSignal.sigkill);
+    }
+    // A shell's codes: 126 for a file that is there but cannot be run, 127 for none at all.
+    final code = e.errorCode == 13 ? 126 : 127;
+    final result = ShellResult(command: display, exitCode: code, stdout: '', stderr: '${e.message}: ${e.executable}\n');
+    if (scope.strict) throw ShellException(result);
+    return result;
+  }
+
+  final stdoutBuf = StringBuffer();
+  final stderrBuf = StringBuffer();
+  final subscriptions = <StreamSubscription<String>>[];
+  final drained = <Future<void>>[];
+  void capture(Stream<List<int>> stream, StringBuffer into, {required bool err}) {
+    final echo = scope.quiet ? null : _Echo(err: err);
+    final done = Completer<void>();
+    final lines = err ? null : live?.lines;
+    var text = stream.transform(scope.decoder);
+    if (lines != null) {
+      // The live lines are the output; the buffer keeps them for the result.
+      text = text.transform(const LineSplitter()).map((line) {
+        lines.add(line);
+        return '$line\n';
+      });
+    }
+    subscriptions.add(
+      text.listen(
+        (data) {
+          into.write(data);
+          echo?.add(data);
+        },
+        onError: (Object _) {},
+        onDone: () {
+          echo?.close();
+          done.complete();
+        },
+      ),
+    );
+    drained.add(done.future);
+  }
+
+  var fed = Future<void>.value();
+  if (!inherit) {
+    // Readers first: a child that echoes a large [input] fills its stdout pipe and stops
+    // reading stdin, so feeding before draining deadlocks both sides.
+    for (var i = 0; i < processes.length - 1; i++) {
+      processes[i].stdout.pipe(processes[i + 1].stdin).catchError((_) {});
+    }
+    capture(processes.last.stdout, stdoutBuf, err: false);
+    for (final p in processes) {
+      capture(p.stderr, stderrBuf, err: true);
+    }
+    fed = _feed(processes.first, input, scope.encoding);
+  }
+
+  // Why it is being stopped, once something decides it is: a timeout or the scope's token.
+  final stop = Completer<Object>();
+  var tree = const <int>[];
+  void halt(Object why) {
+    if (stop.isCompleted) return;
+    // Synchronously, so a signal that is about to end this process still reaches them.
+    tree = _signalTree([for (final p in processes) p.pid], ProcessSignal.sigterm);
+    stop.complete(why);
+  }
+
+  final timer = scope.timeout == null
+      ? null
+      : Timer(scope.timeout!, () => halt(TimeoutException('"$display" timed out after ${scope.timeout}')));
+  final unregister = token?.onCancel(
+    () => halt(CancelledException(token.reason?.toString() ?? 'Operation was cancelled.')),
+  );
+  live?.halt = halt;
+  if (live?.abandoned ?? false) halt(const CancelledException('The stream was cancelled.'));
+  // When each stage exits, in order: a stage that fails after the one it feeds has gone was
+  // stopped by the broken pipe (`yes | head -1`), which is how a pipeline ends, not a failure.
+  final ended = <int>[];
+  final exits = Future.wait([
+    for (final (i, p) in processes.indexed) p.exitCode.then((code) => (ended..add(i), code).$2),
+  ]);
+  // The output is waited for under the same timeout and cancel as the exits: a background
+  // child left holding stdout open (`sleep 60 &`) would otherwise hold this call with it.
+  final settled = await Future.any<Object>([
+    exits.then((codes) async => (await Future.wait([...drained, fed]), codes).$2),
+    stop.future,
+  ]);
+  timer?.cancel();
+  unregister?.call();
+
+  ShellResult result(int code) =>
+      ShellResult(command: display, exitCode: code, stdout: '$stdoutBuf', stderr: '$stderrBuf');
+
+  if (settled is! List<int>) {
+    await _reap(tree);
+    for (final s in subscriptions) {
+      await s.cancel();
+    }
+    throw switch (settled) {
+      TimeoutException(:final message, :final duration) => ShellTimeoutException(result(-1), message, duration),
+      _ => settled,
+    };
+  }
+  final codes = [
+    for (final (i, code) in settled.indexed)
+      i + 1 < settled.length && ended.indexOf(i + 1) < ended.indexOf(i) ? 0 : code,
+  ];
+  final code = codes.lastWhere((c) => c != 0, orElse: () => 0);
+  if (scope.strict && code != 0) throw ShellException(result(code));
+  return result(code);
+}
+
+/// What Windows runs for [executable]: the file itself when the `PATH` has it and it is a
+/// program, or `cmd.exe` — the second field — for a `.bat`, a `.cmd` or a built-in such as
+/// `dir`, which nothing else can run.
+Future<(String, bool)> _windowsTarget(String executable) async {
+  final found = executable.contains(RegExp(r'[\\/]')) ? Path(executable) : await which(executable);
+  if (found == null) return (executable, true);
+  return const {'bat', 'cmd'}.contains(found.ext.toLowerCase()) ? (executable, true) : (found.path, false);
+}
+
+/// Sends [signal] to [roots] and everything they started, and returns every pid it sent to.
+///
+/// The tree is read from one `ps` table, synchronously: a stopped child's own children are
+/// the ones a timeout used to leave running, and reading it asynchronously would lose the
+/// race with a signal that ends this process.
+List<int> _signalTree(List<int> roots, ProcessSignal signal) {
+  if (Platform.isWindows) {
+    for (final pid in roots) {
+      Process.runSync('taskkill', ['/PID', '$pid', '/T', '/F']);
+    }
+    return const [];
+  }
+  final children = <int, List<int>>{};
+  try {
+    final table = Process.runSync('ps', ['-A', '-o', 'pid=', '-o', 'ppid=']).stdout as String;
+    for (final line in table.split('\n')) {
+      if (line.trim().split(RegExp(r'\s+')).map(int.tryParse).toList() case [final pid?, final ppid?]) {
+        (children[ppid] ??= []).add(pid);
+      }
+    }
+  } catch (_) {} // no `ps`: the roots alone
+  final tree = <int>[];
+  final queue = [...roots];
+  while (queue.isNotEmpty) {
+    final pid = queue.removeLast();
+    tree.add(pid);
+    queue.addAll(children[pid] ?? const []);
+  }
+  for (final pid in tree) {
+    Process.killPid(pid, signal);
+  }
+  return tree;
+}
+
+/// Waits up to [_grace] for [tree] to be gone, then SIGKILLs whatever is left.
+Future<void> _reap(List<int> tree) async {
+  // SIGCONT is the probe: it reaches a live process, harmlessly, and fails on a gone one.
+  List<int> alive() => [
+    for (final pid in tree)
+      if (Process.killPid(pid, ProcessSignal.sigcont)) pid,
+  ];
+  final deadline = DateTime.now().add(_grace);
+  var left = alive();
+  while (left.isNotEmpty && DateTime.now().isBefore(deadline)) {
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    left = alive();
+  }
+  for (final pid in left) {
+    Process.killPid(pid, ProcessSignal.sigkill);
+  }
+}
+
+/// A child's output on its way to the terminal. While a spinner or a board is drawn it
+/// goes a line at a time above it, through [IoBridge.above], instead of onto its row.
+final class _Echo {
+  final bool err;
+  final _partial = StringBuffer();
+
+  _Echo({required this.err});
+
+  StringSink get _sink => err ? Io.err : Io.out;
+
+  void add(String chunk) {
+    final above = IoBridge.above;
+    if (above == null) {
+      _sink.write(_partial.isEmpty ? chunk : '$_partial$chunk');
+      _partial.clear();
+      return;
+    }
+    _partial.write(chunk);
+    final text = _partial.toString();
+    final end = text.lastIndexOf('\n') + 1;
+    if (end == 0) return;
+    _partial
+      ..clear()
+      ..write(text.substring(end));
+    above(() => _sink.write(text.substring(0, end)));
+  }
+
+  void close() {
+    if (_partial.isEmpty) return;
+    final rest = '$_partial';
+    _partial.clear();
+    switch (IoBridge.above) {
+      case final above?:
+        above(() => _sink.writeln(rest));
+      case null:
+        _sink.write(rest);
+    }
+  }
+}
+
+/// Locates the absolute path of an executable on the `PATH` seen by [Env].
+///
+/// Returns a [Path] to the binary if found, or `null` otherwise.
+///
+/// {@category System}
+Future<Path?> which(String executable) async {
+  final pathVar = Env.get('PATH') ?? '';
+  final separator = Platform.isWindows ? ';' : ':';
+  final paths = pathVar.split(separator).where((p) => p.isNotEmpty);
+
+  final extensions = Platform.isWindows ? ['', ...?Env.get('PATHEXT')?.split(';')] : [''];
+
+  final candidates = [
+    for (final dir in paths)
+      for (final ext in extensions) Path(dir) / '$executable$ext',
+  ];
+  final found = await Future.wait(candidates.map(_isProgram));
+  for (var i = 0; i < candidates.length; i++) {
+    if (found[i]) return candidates[i];
+  }
+
+  return null;
+}
+
+/// Whether [candidate] is a file this process could run: a directory, or a file with no
+/// execute bit, is not what a shell would find.
+Future<bool> _isProgram(Path candidate) async {
+  final stat = await FileStat.stat(candidate.path);
+  if (stat.type != FileSystemEntityType.file) return false;
+  return Platform.isWindows || stat.mode & 0x49 != 0; // any of u+x, g+x, o+x
+}
+
+/// Pipeline of chained system commands connected via standard streams (e.g. `cmd1 | cmd2 | cmd3`).
+///
+/// {@category System}
+class CommandPipeline {
+  final List<String> _commands;
+
+  CommandPipeline(List<String> commands) : _commands = List.unmodifiable(commands);
+
+  /// Pipes the output of this pipeline into another [next] command.
+  CommandPipeline operator |(String next) => CommandPipeline([..._commands, next]);
+
+  /// Executes this command pipeline asynchronously.
+  ///
+  /// Like `pipefail`: [ShellResult.exitCode] is the rightmost non-zero exit code, and
+  /// [strict] throws when any stage fails, not only the last. Unset arguments come from
+  /// the enclosing [Shell.scope]; cancelling and timing out stop every stage, as for [run].
+  ShellRun run({
+    Path? workdir,
+    Map<String, String>? env,
+    Duration? timeout,
+    String? input,
+    bool? quiet,
+    bool? strict,
+    Encoding? encoding,
+  }) => ShellRun._((scope, live) {
+    if (_commands.isEmpty) throw StateError('Cannot execute an empty command pipeline');
+    final stages = [
+      for (final cmd in _commands)
+        switch (_splitCommand(cmd.trim())) {
+          [] => throw ArgumentError('Empty command in pipeline'),
+          [final exe, ...final args] => (exe, args),
+        },
+    ];
+    return _exec(stages, _commands.join(' | '), scope, input: input, viaShell: Platform.isWindows, live: live);
+  }, (workdir: workdir, env: env, timeout: timeout, encoding: encoding, quiet: quiet, strict: strict));
+}
+
+/// Pipeline construction on [String]: `('ls' | 'grep dart').run()`.
+///
+/// To run one command, use [run].
+///
+/// {@category System}
+extension StringShellExtensions on String {
+  /// Starts a command pipeline with this command piped into [next].
+  CommandPipeline operator |(String next) => CommandPipeline([this, next]);
+}
+
+/// Extension on [Path] for executing scripts or binaries directly.
+///
+/// {@category System}
+extension PathShellExtensions on Path {
+  /// Runs the file at this path as a command, with [args] passed as-is (no splitting).
+  ///
+  /// Nothing re-reads [args], on Windows included: only a `.bat` or `.cmd` goes through
+  /// `cmd.exe`, which is the one thing that can run them. Unset arguments come from the
+  /// enclosing [Shell.scope]; see [run].
+  ShellRun run({
+    List<String> args = const [],
+    Path? workdir,
+    Map<String, String>? env,
+    Duration? timeout,
+    String? input,
+    bool? quiet,
+    bool? strict,
+    Encoding? encoding,
+    bool inherit = false,
+  }) => ShellRun._(
+    (scope, live) => _exec(
+      [(path, args)],
+      _display(path, args),
+      scope,
+      input: input,
+      inherit: inherit,
+      viaShell: Platform.isWindows && const {'bat', 'cmd'}.contains(ext.toLowerCase()),
+      live: live,
+    ),
+    (workdir: workdir, env: env, timeout: timeout, encoding: encoding, quiet: quiet, strict: strict),
+  );
+}

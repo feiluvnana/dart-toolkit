@@ -1,0 +1,16 @@
+/// # Processes & Shell
+///
+/// Running system commands, pipelines and shell results.
+///
+/// {@category System}
+library;
+
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'core.dart';
+import 'fs.dart';
+
+part 'src/process/process.dart';
+part 'src/process/shell_result.dart';
