@@ -1,0 +1,12 @@
+# A macOS dylib names itself by its install name, and without this that is the absolute path it
+# was linked at on the build machine. `@rpath/` plus header padding lets a host rename it.
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-Wl,-headerpad_max_install_names", "-C", "link-arg=-Wl,-install_name,@rpath/libdart_toolkit_native.dylib"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-Wl,-headerpad_max_install_names", "-C", "link-arg=-Wl,-install_name,@rpath/libdart_toolkit_native.dylib"]
+
+# unrar picks its SIMD paths with `__builtin_cpu_supports`, whose `__cpu_model` zig's runtime
+# cannot link into a shared library on x86-64 Linux; the portable path is the one it takes.
+[env]
+CXXFLAGS_x86_64_unknown_linux_gnu = "-D__builtin_cpu_supports(x)=0"
