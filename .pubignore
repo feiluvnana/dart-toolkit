@@ -1,0 +1,27 @@
+# What pub publishes: everything git tracks, plus the prebuilt native binaries, minus the
+# Rust build tree, the tests and the tooling.
+#
+# A `.pubignore` replaces `.gitignore` for pub rather than adding to it, so every pattern that
+# keeps scratch output out of git is repeated here — the 0.0.5 dry run was 65 MB without them.
+.dart_tool/
+.packages
+build/
+coverage/
+native/target/
+native/prebuilt/**/*.d
+test/
+tool/
+Makefile
+
+# Scratch output: keybox, Chrome, downloads
+*.crdownload
+*.part
+*.7z
+*.zip
+*.tar.*
+tmp*
+Key BOX*
+output/
+out/
+dist/
+AUDIT.md

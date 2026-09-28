@@ -1,0 +1,27 @@
+# Dart
+.dart_tool/
+.packages
+build/
+coverage/
+
+# The native library: cargo's build tree, and the prebuilt binaries (`make native` rebuilds
+# them; `.pubignore` lets them into the published package)
+native/target/
+native/prebuilt/
+
+# Chrome's in-flight downloads, should one ever escape the client's own folder again
+*.crdownload
+
+# Scratch output of keybox
+*.7z
+*.part
+*.zip
+*.tar.*
+
+# …but the archive fixtures the tests read are checked in.
+!test/fixtures/*
+tmp*
+Key BOX*
+output/
+out/
+dist/
