@@ -374,10 +374,15 @@ final class ChromeClient implements Client {
     final dir = own ?? Directory('${scratch.path}/profile');
     final landing = Directory('${scratch.path}/downloads');
     await Future.wait([dir.create(), landing.create()]);
-    // A kept profile still holds the last run's `DevToolsActivePort`, and that file is how the
-    // port is found: left there, this connects to whatever used to be listening and is
-    // refused. A temporary profile never has one, which is why `launch` never needed this.
-    if (own != null) await File('${dir.path}/DevToolsActivePort').delete().catchError((Object _) => File(''));
+    if (own != null) {
+      if (await _heldBy(own) case final holder?) {
+        throw ClientException(
+          'Chrome will not start on ${own.path}: $holder is already using that profile. '
+          'Quit it, wait for the other run to finish, or give this one a profile of its own.',
+        );
+      }
+      await File('${dir.path}/DevToolsActivePort').delete().catchError((Object _) => File(''));
+    }
     // One `--disable-features`, because Chrome reads only the last: a caller's own is merged
     // into this list instead of silently replacing it.
     final disabled = {..._quiet};
@@ -688,13 +693,16 @@ final class ChromeClient implements Client {
   @override
   Future<void> close() async {
     if (_closed) return;
-    _closed = true;
     if (_process == null && _waits > 0 && !_gone) await _point(null);
     for (final page in _pages.toList()) {
       await page.close();
     }
     _pages.clear();
     _free.clear();
+    if (_process != null && !_gone) {
+      await _call('Browser.close').catchError((Object _) => const <String, Object?>{});
+    }
+    _closed = true;
     await _socket.close().catchError((Object _) => null);
     _abort();
     if (_ownsAssets) await _assets.close();
@@ -2085,6 +2093,7 @@ chrome=$!
 (
   trap - INT TERM HUP
   cat <&3
+  sleep 2
   kill -TERM $chrome
   sleep 5
   kill -KILL -- -$chrome || kill -KILL $chrome
@@ -2093,10 +2102,7 @@ watcher=$!
 exec 3<&-
 wait $chrome
 status=$?
-kill -TERM $chrome
-wait $chrome
 kill -KILL -- -$watcher || kill -KILL $watcher
-kill -KILL -- -$chrome
 rm -rf "$scratch"
 exit $status
 """;
@@ -2169,9 +2175,18 @@ Future<String?> _heldBy(Directory profile) async {
     if (!await lock.exists()) return null;
     final target = await lock.target();
     final pid = int.tryParse(target.split('-').last);
+    if (pid != null && !_isPidAlive(pid)) return null;
     return pid == null ? 'another browser' : 'a browser (pid $pid)';
   } catch (_) {
     return 'another browser';
+  }
+}
+
+bool _isPidAlive(int pid) {
+  try {
+    return Platform.isWindows ? true : Process.runSync('kill', ['-0', '$pid']).exitCode == 0;
+  } catch (_) {
+    return false;
   }
 }
 

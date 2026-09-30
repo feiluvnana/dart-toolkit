@@ -78,7 +78,7 @@ Future<({Uri page, String file})> link(String title, Format format) async {
   final page = site.resolve('$about/');
   final files = [
     for (final a in (await page.html()).$('a[property="schema:contentUrl"]'))
-      if (a.attrOrNull('href')?.split('/').last case final name? when name.endsWith(format.suffix)) name,
+      if (a.attrOrNull('href')?.split('/').last case final String name when name.endsWith(format.suffix)) name,
   ]..sort((a, b) => a.length - b.length);
   // `.epub` also ends the kepub and the advanced epub; the plain one is the shortest.
   if (files.isEmpty) throw '"$title" has no ${format.name}';

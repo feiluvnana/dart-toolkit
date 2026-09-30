@@ -1,5 +1,8 @@
 part of '../../core.dart';
 
+final _envLineBreakRegex = RegExp(r'\r?\n');
+final _envCommentRegex = RegExp(r'\s#');
+
 /// Environment variables: the process's, in-memory overrides, and `.env` parsing.
 ///
 /// {@category System}
@@ -59,12 +62,12 @@ class Env {
   /// with no key (`=value`) is skipped.
   static Map<String, String> parse(String source, {bool override = false}) {
     final parsed = <String, String>{};
-    final lines = source.split(RegExp(r'\r?\n'));
+    final lines = source.split(_envLineBreakRegex);
 
     for (var n = 0; n < lines.length; n++) {
       var line = lines[n].trim();
       if (line.isEmpty || line.startsWith('#')) continue;
-      if (RegExp(r'^export\s').hasMatch(line)) line = line.substring(7).trim();
+      if (line.startsWith('export ') || line.startsWith('export\t')) line = line.substring(7).trim();
 
       final eqIdx = line.indexOf('=');
       if (eqIdx == -1) continue;
@@ -83,11 +86,14 @@ class Env {
           raw = '$raw\n${lines[++end]}';
           closed = _quoted(raw);
         }
-        if (closed != null) (value, n) = (closed, end);
+        if (closed != null) {
+          value = closed;
+          n = end;
+        }
       } else {
         // A comment starts at a `#` after whitespace, as in a shell: `URL=http://x/#frag` and
         // `PASS=a#b` are values, `PORT=80 # web` is `80`.
-        final comment = value.startsWith('#') ? 0 : value.indexOf(RegExp(r'\s#'));
+        final comment = value.startsWith('#') ? 0 : value.indexOf(_envCommentRegex);
         if (comment != -1) value = value.substring(0, comment).trim();
       }
 

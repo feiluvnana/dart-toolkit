@@ -598,18 +598,19 @@ final _decimal = RegExp(r'^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$');
 T? _coerce<T>(Object? val) {
   if (val == null) return null;
   if (val is T) return val as T;
-  if (const <String>[] is List<T>) return '$val' as T;
+  if (T == String) return '$val' as T;
   var text = val is String ? val.trim() : '$val';
   if (text.contains(',') && _thousands.hasMatch(text)) text = text.replaceAll(',', '');
-  if (val is! num && (const <num>[] is List<T> || const <int>[] is List<T> || const <double>[] is List<T>)) {
-    if (!_decimal.hasMatch(text)) return null;
+  final isNumeric = T == num || T == int || T == double;
+  if (val is! num && isNumeric && !_decimal.hasMatch(text)) {
+    return null;
   }
-  if (const <num>[] is List<T>) return num.tryParse(text) as T?;
-  if (const <int>[] is List<T>) {
+  if (T == num) return num.tryParse(text) as T?;
+  if (T == int) {
     return (val is num ? val.toInt() : int.tryParse(text) ?? double.tryParse(text)?.toInt()) as T?;
   }
-  if (const <double>[] is List<T>) return (val is num ? val.toDouble() : double.tryParse(text)) as T?;
-  if (const <bool>[] is List<T>) {
+  if (T == double) return (val is num ? val.toDouble() : double.tryParse(text)) as T?;
+  if (T == bool) {
     if (val == 'true' || val == 1) return true as T;
     if (val == 'false' || val == 0) return false as T;
   }

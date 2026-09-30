@@ -441,10 +441,13 @@ Future<ShellResult> _exec(
           into.write(data);
           echo?.add(data);
         },
-        onError: (Object _) {},
+        onError: (Object _) {
+          echo?.close();
+          if (!done.isCompleted) done.complete();
+        },
         onDone: () {
           echo?.close();
-          done.complete();
+          if (!done.isCompleted) done.complete();
         },
       ),
     );

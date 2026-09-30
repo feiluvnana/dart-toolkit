@@ -160,6 +160,14 @@ final class Pool<T, R> {
       final handed = await free.future;
       unregister?.call();
       if (handed != null) return handed;
+      if (_idle.length + _busy.length + _starting < size) {
+        _starting++;
+        try {
+          return _take(await _start());
+        } finally {
+          _starting--;
+        }
+      }
     }
   }
 

@@ -38,7 +38,10 @@ extension IterableParallelExtensions<T> on Iterable<T> {
     } finally {
       pool._kill(null);
     }
-    return [for (final outcome in results) outcome ?? Left(_cancelledBy(token!))];
+    return [
+      for (final outcome in results)
+        outcome ?? Left(token != null ? _cancelledBy(token) : const CancelledException('Operation was aborted.')),
+    ];
   }
 }
 
