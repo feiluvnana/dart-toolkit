@@ -21,13 +21,14 @@ and wants less.
 
 ### Own namespaces
 
-A module whose names are short on purpose is **not** in the barrel. Today that is
-`package:dart_toolkit/ffi.dart` (`Ffi`, `Lib`, `Fn`, `C`, `Scope`, `Out`, `Owned`, `Callback`,
-`Layout`, `Field`).
+A module is **not** in the barrel when its names are short enough to collide with a `dart:`
+name, or when its compile cost falls on programs that never use it. Today that is
+`package:dart_toolkit/chrome.dart` (`ChromeClient`, `ChromePage`, `Device`, `Resource`,
+`ChromeWait`, `Dialog`): a third of `http`'s source, −32 ms on every `http` import.
 
 > *Why:* a package name silently beats a `dart:` name. The barrel's old `Native` class hid
 > `dart:ffi`'s `@Native` annotation, so `@Native<…>(symbol: …)` failed with "abstract class".
-> A barrel import must never claim a short name for every program.
+> And a scraper that never drives a tab paid Chrome's compile on every `dart run`.
 
 ### One name per operation
 
@@ -45,6 +46,7 @@ do the other's job.
 
 `'…'.url`, `.path`, `.json`, `.yaml`, `.html`, `.sequence`, `.table`, `60.s`. Nothing else is
 added to `String`, `Iterable` or `Map`; the vocabulary lives on the type the conversion returns.
+A module's conversions are one extension (`StringFormatsExtensions`), not one per getter.
 
 ### One word per idea, everywhere
 
@@ -56,6 +58,8 @@ added to `String`, `Iterable` or `Map`; the vocabulary lives on the type the con
 | one file or a thousand | `download` |
 | a guaranteed value | the bare name; `…OrNull` for the caller who expects absence |
 | repeatable | `.many()`, on `Opt` and `Arg` alike |
+| a link, resolved | `links` — against the document's `<base href>`, else its URL |
+| unset | an empty environment variable is unset, for `Env.get`, `getOrNull`, `has` and `parse` |
 
 ### A name is written once
 
@@ -63,12 +67,16 @@ Anything declared and then looked up again by string is a typo the compiler cann
 option **is** its value:
 
 ```dart
-final top = Opt.number('top').or(10);
-final id = Arg.text('id').required();
+final top = Opt.number('top', 'How many to show').abbr('n').or(10);
+final id = Arg.text('id', 'The build').required();
 // …
 ctx(top); // int
 ctx(id);  // String
 ```
+
+The help text is the second positional and every other property is a chain step (`.abbr`,
+`.env`, `.or`, `.many`) — Dart cannot mix an optional positional with named parameters, and
+`tk` wrote `description:` thirteen times.
 
 `Opt` and `Arg` differ only in how they are written on the command line. `Opt.among('algo',
 Hash.values)` takes the enum, so nothing rebuilds it from a string. `Table` still keys by
@@ -90,11 +98,16 @@ one engine behind both.
 
 ### A method earns its place by what it deletes at the call site
 
-Measured against `bin/keybox.dart`, `bin/books.dart` and `bin/tk.dart`. A method that merely
-composes two others one line apart does not earn it.
+Measured by the scripts people write, of which `bin/keybox.dart`, `bin/books.dart` and
+`bin/tk.dart` are examples, not the census. A method that merely composes two others one line
+apart does not earn it; one that a script author reaches for — `countBy`, `frame()`, a browser's
+`cookies()` — earns it even where `bin/` never calls it.
 
 > *Deleted for this reason:* `gzipTo`, `Table.tsv`, `Ansi.strip`, `Console.table`,
-> `Sequence.count`, `String.stripped`, twenty-one per-algorithm digest shortcuts.
+> `Sequence.count`, `String.stripped`, twenty-one per-algorithm digest shortcuts; in Audit IV
+> `Mutex`, `Sequence.none`/`whereNot`/`shuffled`, `Either.fold`/`isLeft`, `Env.require`.
+> Kept by the same audit, though `bin/` never calls them: Chrome's `frame`, `scroll`, `back`,
+> `pdf` and dialogs, `countBy`, `chunkEvery`, `Duration.jittered`, unrar.
 > `text.hash(Hash.sha256)` is longer than `text.sha256` was, and is the only spelling for all
 > twenty algorithms.
 
@@ -110,7 +123,7 @@ If an operation exists on one receiver of a family, it exists on all of them —
 
 ### A guaranteed value is not nullable
 
-`row.number('size')`, `Elements.text`, `Element.attr`, `JsonDocument.to<T>()` return the value or
+`row.number('size')`, `Elements.text`, `Element.attr`, `JsonDocument.to<T>()`, `Env.get` return the value or
 throw a `StateError` that names what was missing. `…OrNull` is the form that expects absence.
 
 > *Why:* `attr` returned `String?`, and fourteen call sites wrote `attr('href')!`, which failed
@@ -121,12 +134,12 @@ throw a `StateError` that names what was missing. `…OrNull` is the form that e
 Sealed types for option kinds, download states and crawl failures; typed parameters instead of
 `Object`. A body is four typed arguments, not one `Object?` that throws at runtime. Two
 `Object` parameters remain, each where a receiver-side spelling already takes every form:
-`ctx.follow` (a link, a `Uri`, an element or elements) and `client.scrape` (a `Uri`, `Uri`s or
-`Request`s).
+`ctx.follow` (a link, a `Uri`, an element, any iterable of them, or a `JsonDocument` holding
+them) and `client.scrape` (a `Uri`, `Uri`s or `Request`s).
 
 ### Public means a caller uses it
 
-Parser internals, FFI shims and query engines are private. Something that must cross a library
+Parser internals, native shims and query engines are private. Something that must cross a library
 boundary but is not API says so in its name: `NativeBridge`. Nothing in `lib/` exists only for
 tests.
 
@@ -147,7 +160,7 @@ tests.
 ### A builder only where the order means something
 
 `Scrape`'s hooks are a chain because the order is the lifecycle. A command is a constructor:
-`CliCommand(values:, commands:, handler:)` — one list of `Arg`s and `Opt`s, since the kind is
+`CliCommand(name, description, values:, commands:, handler:)` — one list of `Arg`s and `Opt`s, since the kind is
 in the type. Builder methods return the receiver; a
 registration returns its unregistration.
 
@@ -178,7 +191,11 @@ implies `strict: false`:
 
 ```dart
 await run('git diff --quiet').isOk;   // was: strict: false, quiet: true
+(await api.post(json: x).json)['id']; // throws unless 2xx; `await api.post(…)` is lenient
 ```
+
+> *Why (HTTP):* README's dashboard example carried on after a 401, and every API call wrote a
+> three-line status check. A verb returns `Fetch`, a `Future<Response>` whose readings check.
 
 ---
 
@@ -190,12 +207,19 @@ A setting every call would otherwise repeat belongs to a scope.
 
 | Scope | Holds |
 |---|---|
-| `Http.scope` | client, timeout, headers, cookies, `retries`, `delay` (per-host gap) |
+| `Http.scope` | client, timeout, headers, cookies (or a `jar:` to start from), `retries`, `delay` (per-origin gap, jittered ±25 %) |
 | `Shell.scope` | workdir, environment, timeout, encoding, failure policy |
 | `Cancel.scope` | the cancel token |
 
 A genuinely per-call argument (`headers:`, `input:`, `args:`) stays an argument and wins over
 the scope.
+
+### A scope inside another inherits what it does not set
+
+An inner `Http.scope(retries: 2)` keeps the outer client, cookie jar and headers; an inner
+`Cancel.scope` hears the outer token.
+
+> *Why:* a nested `Http.scope` silently dropped the logged-in session and reset the user agent.
 
 ### The scope is the only way in
 
@@ -241,7 +265,8 @@ writes `Cancel.token?.throwIfCancelled()` — whose `?.` silently does nothing o
 ### Opened once, at the top
 
 `Cli.run` opens the `Cancel.scope` whose token is `ctx.cancel`, so ^C stops downloads,
-processes and pools with no code at all. Nothing else is opened implicitly.
+processes and pools with no code at all. Inside it `print` is a durable write, landing above a
+live spinner instead of on its row. Nothing else is opened implicitly.
 
 ---
 
@@ -301,9 +326,17 @@ These are the rules the September 2026 audit added. Each was a silent failure.
   to 50 MB, compressed or unpacked — the protocols' own limits.
 - **A page is its origin's.** robots.txt, `delay` and `perHost` belong to scheme, site and port;
   scope stays by host.
-- **A prompt talks to the person**: every word of it goes to stderr, so `app > out` captures
-  none of it. **An indicator is a log line**: `-q` silences spinners, bars and boards, and nothing
-  in the live region is wider than the terminal less one.
+- **A prompt talks to the person, and so does an indicator**: every word of a prompt, spinner,
+  bar or board goes to stderr, so `app > out.json` captures only data. **An indicator is a log
+  line**: `-q` silences spinners, bars and boards, and nothing in the live region is wider than
+  the terminal less one. Colour and redraw are decided per sink; `NO_COLOR` turns off colour,
+  not redraw.
+- **An abandoned request is aborted, not only drained.** Draining waits for a response; one
+  that never comes held its pool permit forever.
+- **A batch reports its failures.** `download().show()` ends with "2 of 6 failed", never
+  "all done" over failures.
+- **A test list runs the small case.** `sorted.take(3)` was tested only at 5000 items, so its
+  full-sort branch returned every element unnoticed.
 - **Input that is not UTF-8 does not fail the operation.** Process output decodes with
   `allowMalformed: true`.
 - **Every CLI failure is one line and a code.** 64 for usage, 1 for anything else, 128+n for
@@ -337,7 +370,12 @@ These are the rules the September 2026 audit added. Each was a silent failure.
 ### Measure back to back, or not at all
 
 Startup drifts ±80 ms between runs. A claim is two numbers from the same minute, alternating
-order. `tool/startup.dart` prints the per-module table.
+order. `tool/startup.dart` prints the per-module table: six alternating rounds, median and
+minimum over bare. Two rounds in a fixed order produced 120 ms phantoms.
+
+Startup under `dart run` is front-end compile: the same programs compiled to kernel start in
+~90 ms whatever they import. `dart run -r` (the resident compiler) halves it for a script run
+again and again.
 
 ### Nothing third-party at runtime but `path`
 
@@ -346,9 +384,11 @@ Every parser, the HTTP client and the archive formats are the package's own. `pa
 
 ### Sharing code across modules is measured like anything else
 
-> *Why:* rebuilding `NativeBridge` on `ffi.dart` would have made one marshalling layer and cost
-> every `hash`/`fs`/`http` import ~30 ms of compile, and hashing's calls would have gone from
-> ~11 ns to ~57 ns. The two stay separate.
+> *Why:* rebuilding `NativeBridge` on the old general-purpose `ffi.dart` would have cost every
+> `hash`/`fs`/`http` import ~30 ms of compile, and hashing's calls would have gone from ~11 ns
+> to ~57 ns. `ffi.dart` itself was deleted in Audit IV: calling through wider-than-declared
+> signatures returned garbage silently, and the OS calls a script needs (`chmod`) are typed
+> methods on `Path` instead.
 
 ### An isolate is sent what it needs and nothing near it
 
@@ -434,7 +474,7 @@ where it goes, whether it is a terminal, how wide, whether it takes colour — *
   `lib/src/<module>/` holds the parts. No `show`, no re-export, no `part` across modules. A
   module uses another through its module file.
 - **Every document format is `formats`.** Data formats decode into `JsonDocument` (JSON, YAML,
-  TOML, INI); markup into one tree (HTML, XML). `http`'s bridges (`res.html`, `url.xml()`) live
+  TOML, INI); markup into one tree (HTML, XML). `http`'s bridges (`res.html`, `url.get().xml`) live
   in `http`.
 - **One markup tree.** `Node`, `Element`, `Text`, `Attribute`, `Nodes`, `Elements` serve HTML
   and XML; `Element.syntax` decides serialisation and case folding.
