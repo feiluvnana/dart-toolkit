@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'mock_client.dart';
 import 'package:dart_toolkit/dart_toolkit.dart';
@@ -948,6 +950,119 @@ void main() {
       });
     });
   }, testOn: '!windows');
+
+  group('the third audit', () {
+    int mode(String path) => FileStat.statSync(path).mode & 0xfff;
+
+    test('a write that fails after its temp file opened leaves the old file and no temp', () async {
+      await Path.tempDir((dir) async {
+        final f = dir / 'secret';
+        f.writeTextSync('old');
+        await expectLater(() => f.writeBytes(_Faulty()), throwsStateError);
+        expect(() => f.writeBytesSync(_Faulty()), throwsStateError);
+        expect(() => (dir / 'new').writeBytesSync(_Faulty()), throwsStateError);
+        expect(f.readTextSync(), 'old');
+        expect(dir.listSync().map((e) => e.name), ['secret'], reason: 'it used to leave the temp file behind');
+      });
+    });
+
+    test('a folder that refuses a new file is written in place', () async {
+      await Path.tempDir((dir) async {
+        final f = dir / 'shut' / 'f.txt';
+        f.writeTextSync('old');
+        (dir / 'shut').chmodSync('555');
+        addTearDown(() => (dir / 'shut').chmodSync('755'));
+        await f.writeText('new');
+        expect(f.readTextSync(), 'new');
+        f.writeTextSync('newer');
+        expect(f.readTextSync(), 'newer');
+      });
+    });
+
+    test('changes on a file outlives atomic writes, and a directory hides their temps', () async {
+      await Path.tempDir((dir) async {
+        final f = dir / 'w.txt';
+        f.writeTextSync('0');
+        final onFile = <Set<Path>>[], onDir = <Set<Path>>[];
+        final a = f.changes(debounce: const Duration(milliseconds: 100)).listen(onFile.add);
+        final b = dir.changes(debounce: const Duration(milliseconds: 100)).listen(onDir.add);
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        onFile.clear();
+        onDir.clear();
+        for (var i = 1; i <= 3; i++) {
+          f.writeTextSync('$i');
+          await Future<void>.delayed(const Duration(milliseconds: 400));
+        }
+        await a.cancel();
+        await b.cancel();
+        expect(onFile.length, greaterThanOrEqualTo(3), reason: 'it used to stop after the first write');
+        expect(onFile.expand((b) => b).toSet(), {f});
+        expect(onDir.expand((b) => b).map((e) => e.name).toSet(), {'w.txt'});
+      });
+    });
+
+    test('filename and sanitized drop control characters', () {
+      expect('a\x00b\x1fc'.filename, 'abc');
+      expect('/x/a\x00b'.path.sanitized, '/x/ab');
+    });
+
+    test('glob: a leading ] is one of the set, and one brace alternative is literal', () async {
+      await Path.tempDir((dir) async {
+        for (final n in [']', 'a]', 'b', 'b{1}.txt', 'b1.txt']) {
+          (dir / n).writeTextSync('');
+        }
+        expect(dir.globSync('[]]').map((e) => e.name), [']']);
+        expect(dir.globSync('[!]]').map((e) => e.name), ['b']);
+        expect(dir.globSync('b{1}.txt').map((e) => e.name), ['b{1}.txt']);
+        expect((await dir.glob('{b1,b{1}}.txt').toList()).map((e) => e.name).toSet(), {'b1.txt', 'b{1}.txt'});
+      });
+    });
+
+    test('copy into itself is refused however the two paths are spelled', () async {
+      await Path.tempDir((dir) async {
+        (dir / 'a' / 'f').writeTextSync('x');
+        // On macOS the temp folder is behind a link: `/var` is `/private/var`.
+        final real = Path(dir.asDir.resolveSymbolicLinksSync());
+        expect(() => (dir / 'a').copySync(real / 'a' / 'sub'), throwsA(isA<FileSystemException>()));
+        await expectLater(
+          () => Path(p.relative(real / 'a')).copy(dir / 'a' / 'sub'),
+          throwsA(isA<FileSystemException>()),
+        );
+        expect(() => Path('$dir/a/../a').copySync(p.relative(dir / 'a' / 'x')), throwsA(isA<FileSystemException>()));
+        expect((dir / 'a').listSync(recursive: true).map((e) => e.name), ['f']);
+      });
+    });
+
+    test('chmod without who leaves the umask bits alone, as chmod(1) does', () async {
+      final r = Process.runSync('/bin/sh', ['-c', 'umask']);
+      final umask = int.parse('${r.stdout}'.trim(), radix: 8);
+      await Path.tempDir((dir) async {
+        final f = dir / 'f';
+        f.writeTextSync('');
+        f.chmodSync('444');
+        f.chmodSync('+w');
+        expect(mode(f), 0x124 | (0x92 & ~umask));
+        f.chmodSync('a+w');
+        expect(mode(f), 0x1b6, reason: 'a is every class, umask or not');
+      });
+    });
+
+    test('temp names are random, so writers in two isolates do not share one', () async {
+      await Path.tempDir((dir) async {
+        final f = dir / 'shared.txt';
+        await Future.wait([
+          for (var i = 0; i < 4; i++)
+            Isolate.run(() {
+              for (var j = 0; j < 20; j++) {
+                f.writeTextSync('$i' * 1000);
+              }
+            }),
+        ]);
+        expect(RegExp(r'^(\d)\1{999}$').hasMatch(f.readTextSync()), isTrue);
+        expect(dir.listSync().map((e) => e.name), ['shared.txt']);
+      });
+    });
+  }, testOn: '!windows');
 }
 
 /// The pattern rules `glob` documents — `*`, `**` and `?` — as one regular expression.
@@ -974,4 +1089,16 @@ RegExp _globLike(String pattern) {
     }
   }
   return RegExp('$buffer\$');
+}
+
+/// Bytes that fail to be read: a write that breaks after its temp file is open.
+class _Faulty with ListMixin<int> {
+  @override
+  int length = 4096;
+
+  @override
+  int operator [](int i) => throw StateError('no byte $i');
+
+  @override
+  void operator []=(int i, int v) {}
 }

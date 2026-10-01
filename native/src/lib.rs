@@ -26,29 +26,28 @@ pub(crate) fn set_error(msg: &str) {
     LAST_ERROR.with(|e| *e.borrow_mut() = msg.to_string());
 }
 
-/// Runs `f`, storing its error message for `tk_last_error` and mapping it to -1.
+/// Runs `f`, storing its error message for `tk_last_error` and mapping it to -1, or -2 for a
+/// panic. The message is taken from the payload on this thread: a rayon worker's panic
+/// reaches here resumed, and a hook would have recorded it on the worker's thread.
 pub(crate) fn guard(f: impl FnOnce() -> Result<i32, String>) -> i32 {
     static PANIC_HOOK: std::sync::Once = std::sync::Once::new();
-    PANIC_HOOK.call_once(|| {
-        std::panic::set_hook(Box::new(|info| {
-            let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
-                s.to_string()
-            } else if let Some(s) = info.payload().downcast_ref::<String>() {
-                s.clone()
-            } else {
-                "native panic".to_string()
-            };
-            set_error(&msg);
-        }));
-    });
-
+    // Silent: the message travels through `tk_last_error`, not stderr.
+    PANIC_HOOK.call_once(|| std::panic::set_hook(Box::new(|_| {})));
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(Ok(n)) => n,
         Ok(Err(m)) => {
             set_error(&m);
             -1
         }
-        Err(_) => -2,
+        Err(payload) => {
+            let msg = match (payload.downcast_ref::<&str>(), payload.downcast_ref::<String>()) {
+                (Some(s), _) => s.to_string(),
+                (_, Some(s)) => s.clone(),
+                _ => "native panic".to_string(),
+            };
+            set_error(&msg);
+            -2
+        }
     }
 }
 
