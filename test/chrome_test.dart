@@ -58,7 +58,7 @@ void main() {
     var challenged = 0;
     final hits = <String, int>{};
     String? ownPixel;
-    // What the working directory held before any test here ran; see the last test.
+    // What the working directory held before these tests; see the last tearDownAll.
     final before = Directory.current.listSync().map((e) => e.path).toSet();
 
     setUpAll(() async {
@@ -145,8 +145,7 @@ void main() {
             case '/who':
               response.headers.contentType = ContentType.html;
               response.write('<html><body><p id="sent">${request.headers.value('cookie')}</p></body></html>');
-            // Nothing in the markup; everything in the script. This is the page an HTTP
-            // client cannot read and a browser can.
+            // Nothing in the markup; everything in the script.
             case '/rendered':
               response.headers.contentType = ContentType.html;
               response.write('''
@@ -156,29 +155,19 @@ void main() {
       '<ul class="items"><li class="item">alpha</li><li class="item">beta</li></ul>';
   }, 150);
 </script></body></html>''');
-            // An interstitial that becomes the real page on its own, the way Cloudflare's
-            // does: 403, a marker, and a reload.
-            case '/challenge':
-              challenged++;
-              if (challenged <= 2) {
+            // An interstitial that clears after two reloads, as Cloudflare's does, and one
+            // that never clears.
+            case '/challenge' || '/stuck':
+              response.headers.contentType = ContentType.html;
+              if (request.uri.path == '/challenge' && ++challenged > 2) {
+                response.write('<html><body><h1 id="real">through</h1></body></html>');
+              } else {
                 response.statusCode = 403;
-                response.headers.contentType = ContentType.html;
                 response.write('''
 <html><head><title>Just a moment...</title></head>
 <body class="cf-browser-verification">Checking your browser
 <script>setTimeout(() => location.reload(), 300);</script></body></html>''');
-              } else {
-                response.headers.contentType = ContentType.html;
-                response.write('<html><body><h1 id="real">through</h1></body></html>');
               }
-            // One that never clears, the captcha nobody clicked.
-            case '/stuck':
-              response.statusCode = 403;
-              response.headers.contentType = ContentType.html;
-              response.write('''
-<html><head><title>Just a moment...</title></head>
-<body class="cf-browser-verification">Checking your browser
-<script>setTimeout(() => location.reload(), 300);</script></body></html>''');
             case '/form':
               response.headers.contentType = ContentType.html;
               response.write('''
@@ -215,8 +204,7 @@ void main() {
     });
   </script>
 </body></html>''');
-            // A page that opens a dialog while it loads. Chrome holds the renderer on it,
-            // so nothing below `load` ever happens until someone answers.
+            // Opens a dialog while loading; Chrome holds `load` until it is answered.
             case '/dialog':
               response.headers.contentType = ContentType.html;
               response.write('''
@@ -306,9 +294,7 @@ void main() {
       final dir = await Directory.systemTemp.createTemp('dt_chrome_download_');
       try {
         final into = Path(dir.path) / 'asset.bin';
-        // The bug this pins: a fresh download is a GET with no `range`, which used to be
-        // indistinguishable from a page and got rendered — 2048 binary bytes came back as
-        // the DOM Chrome builds to display them. `Request.raw` is what tells them apart.
+        // A fresh download is a GET with no `range`; `Request.raw` keeps it from being rendered.
         await Http.scope(client: browser, () => into.download(base.resolve('/asset')).drain<void>());
         expect(await into.asFile.length(), 2048);
         expect(await into.asFile.readAsBytes(), everyElement(7));
@@ -328,8 +314,7 @@ void main() {
       final stuck = Request('GET', base.resolve('/stuck'))..[ChromeClient.challenge] = 1.s;
       final res = await (await browser.send(stuck)).read();
 
-      // Not an exception, not a closed tab: the interstitial itself, with its real status,
-      // for the caller to decide about — and a human to click, in a visible window.
+      // The interstitial itself, with its real status, and the tab not closed.
       expect(res.statusCode, 403);
       expect(res.text, contains('Just a moment'));
       expect(browser.isClosed, isFalse);
@@ -454,8 +439,7 @@ void main() {
         final jar = await page.cookies();
         expect(jar.map((c) => '${c.name}=${c.value}'), contains('who=me'));
 
-        // Handed to a plain socket client: cookies are not per port, so another server on the
-        // same host is sent the browser's session.
+        // Cookies are not per port, so another server on the same host gets the session.
         final api = await HttpServer.bind(base.host, 0);
         addTearDown(api.close);
         api.listen(
@@ -469,8 +453,6 @@ void main() {
     }, skip: absent);
 
     test('a dialog is answered, so the tab is not lost to it', () async {
-      // Without an answer Chrome holds the renderer and this never returns: `load` does not
-      // fire, the render times out, and the tab goes back into the pool still blocked.
       final page = await browser.open();
       final res = await page.goto(base.resolve('/dialog')).timeout(20.s);
       expect(res.text, contains('answered null'), reason: 'dismissed by default');
@@ -528,9 +510,7 @@ void main() {
       addTearDown(() => dir.delete(recursive: true));
       final page = await browser.open();
 
-      // Twenty chunks 200ms apart is about four seconds of transfer, against a wait of two:
-      // a deadline on the whole thing would fail it, and a wait on silence does not, because
-      // Chrome reports progress about twice a second the entire way.
+      // ~4 s of transfer against a 2 s wait: the wait is on silence, not the total.
       await page.goto(base.resolve('/downloads'));
       final began = DateTime.now();
       final slow = await page.waitForDownload(
@@ -565,8 +545,7 @@ void main() {
     }, skip: absent);
 
     test('a download nobody waits for lands nowhere a person would find it', () async {
-      // A wait with no `to:` that sees nothing, and then a click nobody waits for at all: the
-      // browser-wide download directory used to be left pointing at the working directory.
+      // A wait with no `to:` that sees nothing, then a click nobody waits for.
       final page = await browser.open(base.resolve('/downloads'));
       expect(await page.waitForDownload(() async {}, timeout: 1.s), isNull);
       await page.click('#get');
@@ -788,8 +767,7 @@ Future<void> main() async {
       unawaited(
         proxy.forEach((request) async {
           final target = request.requestedUri;
-          // Chrome talks to its own services through whatever proxy it is given; this one
-          // only relays plain HTTP to the test server, and says so to everything else.
+          // Only plain HTTP to the test server is relayed; Chrome's own services are refused.
           if (request.method == 'CONNECT' || !target.hasScheme || target.host != '127.0.0.1') {
             request.response.statusCode = HttpStatus.badGateway;
             await request.response.close();
@@ -814,8 +792,7 @@ Future<void> main() async {
       final through = await ChromeClient.launch(
         tabs: 1,
         proxy: 'http://127.0.0.1:${proxy.port}'.url,
-        // Chrome bypasses the loopback for a proxy by default, which is exactly what this
-        // test needs it not to do.
+        // Chrome bypasses the proxy for loopback by default.
         args: const ['--proxy-bypass-list=<-loopback>'],
       );
       try {
@@ -843,8 +820,7 @@ Future<void> main() async {
       final first = await ChromeClient.launch(profile: profile, tabs: 1);
       final page = await first.open(base.resolve('/rendered'));
       await page.cookies([
-        // Dated, not a session cookie: a session cookie is one a browser is *meant* to forget
-        // when it closes, so it would prove nothing about the profile.
+        // Dated: a session cookie is meant to be forgotten on close.
         Cookie('remembered', 'yes')
           ..domain = base.host
           ..path = '/'
@@ -852,8 +828,7 @@ Future<void> main() async {
       ]);
       await page.close();
 
-      // A second browser on the same profile is refused, and says which it is rather than
-      // leaving the reader to suspect the proxy, the binary or the timeout.
+      // A second browser on the same profile is refused, naming the profile.
       await expectLater(
         ChromeClient.launch(profile: profile, tabs: 1),
         throwsA(
@@ -862,7 +837,7 @@ Future<void> main() async {
       );
       await first.close();
 
-      // ...and once it lets go, the same profile is the same browser: the cookie is still there.
+      // Once released, the same profile is the same browser.
       final second = await ChromeClient.launch(profile: profile, tabs: 1);
       try {
         final again = await second.open(base.resolve('/rendered'));
@@ -900,7 +875,7 @@ Future<void> main() async {
     }, skip: absent);
   });
 
-  group('audit fixes: chrome', () {
+  group('ChromePage navigation, frames and downloads', () {
     late HttpServer server;
     late HttpServer other;
     late Uri base;
@@ -1036,7 +1011,7 @@ Future<void> main() async {
     }, skip: absent);
   });
 
-  group('audit IV: chrome', () {
+  group('ChromePage scroll, cookies and connect', () {
     late HttpServer server;
     late HttpServer other;
     late Uri base;
