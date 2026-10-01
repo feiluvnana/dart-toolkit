@@ -1699,6 +1699,188 @@ void main() {
       expect(Io.stripAnsi(failed.stderr), contains('✖ no URL given'));
     });
   });
+
+  group('ConsoleTheme and builders', () {
+    late StringBuffer out;
+    late StringBuffer err;
+    setUp(() {
+      Io.out = out = StringBuffer();
+      Io.err = err = StringBuffer();
+    });
+    tearDown(() {
+      Io.reset();
+      Console.theme = const ConsoleTheme();
+    });
+
+    test('a log line is the theme\'s indent, mark and colour', () {
+      Console.theme = ConsoleTheme(ok: '✔', indent: '', success: (s) => '<$s>', warning: (s) => s.toUpperCase());
+      Console.ok('built');
+      Console.warn('careful');
+      Console.theme = const ConsoleTheme();
+      Console.info('default');
+      expect(out.toString(), '<✔ built>\n  ℹ default\n');
+      expect(err.toString(), '⚠ CAREFUL\n');
+    });
+
+    test('themed() scopes a theme to its body and what it awaits', () async {
+      await Future.wait([
+        Console.themed(const ConsoleTheme(info: '>'), () async {
+          await Future<void>.delayed(Duration.zero);
+          Console.info('inside');
+          Console.spinner('spun').succeed();
+        }),
+        Future<void>.delayed(Duration.zero, () => Console.info('beside')),
+      ]);
+      Console.info('after');
+      expect(out.toString(), contains('  > inside\n'));
+      expect(out.toString(), contains('  ℹ beside\n'));
+      expect(out.toString(), endsWith('  ℹ after\n'));
+      expect(err.toString(), contains('  ⠋ spun...'), reason: 'the scoped theme kept the default frames');
+    });
+
+    test('a spinner draws the theme\'s frames and marks; line: draws the whole line', () {
+      Console.theme = const ConsoleTheme(frames: ['o'], ok: '+', error: 'x');
+      Console.spinner('Two').succeed();
+      Console.spinner('Three').fail('nope');
+      final views = <SpinnerView>[];
+      Console.spinner('Four', line: (s) => 'start ${(views..add(s)).last.text} ${s.frame}').stop();
+      expect(err.toString(), contains('  o Two...\n'));
+      expect(out.toString(), matches(RegExp(r'^  \+ Two \(\d+ms\)\n$')));
+      expect(err.toString(), matches(RegExp(r'  x nope \(\d+ms\)\n')));
+      expect(err.toString(), endsWith('start Four o\n'));
+      expect(views.single.isLive, isFalse, reason: 'without a terminal: the line a log keeps');
+    });
+
+    test('a bar draws the theme\'s glyphs; line: draws it from a ProgressView', () async {
+      Console.theme = const ConsoleTheme(fill: '#', empty: '.');
+      Console.progress(4, message: 'up', columns: 80).tick(2);
+      final views = <ProgressView>[];
+      final bar = Console.progress(
+        4,
+        columns: 40,
+        line: (p) =>
+            '${(views..add(p)).last.bar(4)}|${p.bar(4, head: '>')}|${p.percent}|${p.current}/${p.total}|${p.label}',
+      )..tick(0);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      bar.tick(2, 'x');
+      expect(err.toString().split('\n'), [
+        '  up: [##########..........] 50% (2/4)',
+        '....|....|0|0/4|null',
+        '##..|#>..|50|2/4|x',
+        '',
+      ]);
+      final p = views.last;
+      expect(p.columns, 39);
+      expect(p.isLive, isFalse);
+      // Two steps in no less than 100 ms: at most 20 a second, so at least 100 ms to go.
+      expect(p.rate, inInclusiveRange(1e-9, 20));
+      expect(p.eta, greaterThanOrEqualTo(const Duration(milliseconds: 100)));
+      expect(p.elapsed, greaterThanOrEqualTo(const Duration(milliseconds: 100)));
+    });
+
+    test('a board hands task: a TaskView with its number, state, bytes and speed', () async {
+      final views = <TaskView>[];
+      final board = Console.tasks(
+        total: 3,
+        columns: 80,
+        task: (t) => '${(views..add(t)).last.index}/${t.count} ${t.name}',
+      );
+      board.report(_batch(0, 3, _task('a', 'a.bin', 0, 0, 1000)));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      board.report(_batch(0, 3, _task('a', 'a.bin', 0.5, 500, 1000)));
+      board.report(_batch(0, 3, _task('b', 'b.bin', null, null, null, status: 'skipped', done: true)));
+      board.report(_batch(1, 3, _task('a', 'a.bin', 1, 1000, 1000, status: 'done', done: true)));
+      board.report(_batch(3, 3, _task('c', 'c.bin', null, null, null, status: 'failed', done: true)));
+      board.done();
+      expect(err.toString(), '2/3 b.bin\n1/3 a.bin\n3/3 c.bin\n');
+      final [b, a, c] = views;
+      expect([b.state, a.state, c.state], [TaskState.skipped, TaskState.done, TaskState.failed]);
+      expect((a.bytes, a.bytesTotal, a.fraction, a.percent), (1000, 1000, 1.0, 100));
+      // 500 bytes in no less than 100 ms, then 500 more weighted by the time they took:
+      // at most 5000/s plus 500/1.5.
+      expect(a.speed, inInclusiveRange(1, 5334));
+      expect(a.elapsed, greaterThanOrEqualTo(const Duration(milliseconds: 100)));
+      expect(a.batch.bytes, 1000);
+      expect(a.batch.bytesTotal, isNull, reason: 'c has not been heard of yet');
+      expect(c.batch.bytesTotal, 1000, reason: 'every task sized; a skip and a failure add nothing');
+      expect(c.batch.fraction, 1.0);
+      expect(a.batch.speed, greaterThan(0));
+    });
+
+    test('the default board line without a terminal is unchanged by the views', () {
+      Console.tasks(
+        total: 2,
+        columns: 80,
+      ).report(_batch(1, 2, _task('a', 'a.bin', 1, 2048, 2048, status: 'done', done: true)));
+      expect(err.toString(), '  [1/2] a.bin (2.0 KB) [done]\n');
+    });
+
+    test('rule and prompts draw with the theme', () async {
+      Console.theme = const ConsoleTheme(border: '+=++|++++++', prompt: '? ', promptEnd: ' › ');
+      Console.rule();
+      Io.input = () => 'sam';
+      expect(await Console.ask('Name'), 'sam');
+      expect(out.toString(), '${'=' * 80}\n');
+      expect(err.toString(), '? Name › ');
+    });
+
+    test('ascii is ASCII everywhere, tables included', () {
+      Console.theme = ConsoleTheme.ascii;
+      Console.ok('a');
+      Console.rule();
+      Table.cells(
+        ['k'],
+        [
+          ['v'],
+        ],
+      ).show();
+      expect(out.toString(), '  + a\n${'-' * 80}\n+---+\n| k |\n+---+\n| v |\n+---+\n');
+    });
+
+    test('a terminal that cannot draw Unicode gets the ASCII theme', () async {
+      final ascii = await _script(
+        '''
+        void main() {
+          Console.ok('done');
+          Table.cells(['k'], [['v']]).show();
+          Lifecycle.onExit(null);
+        }
+      ''',
+        env: {'LC_ALL': 'C', 'TERM': 'xterm'},
+      );
+      expect(Io.stripAnsi(ascii.stdout), '  + done\n+---+\n| k |\n+---+\n| v |\n+---+\n');
+    }, testOn: '!windows');
+
+    test('Table.show takes a border of 11 glyphs, an alignment per column and a cell builder', () {
+      final t = Table.cells(
+        ['name', 'n'],
+        [
+          ['a', 1],
+          ['bcd', 100],
+        ],
+      );
+      t.show(border: '+-++|++++++', align: 'cr');
+      t.show(border: '', cell: (row, column) => column == 'n' ? '#${row.text(column)}' : row.text(column));
+      t.show(border: ' -  ||||   ');
+      expect(
+        out.toString(),
+        '+------+-----+\n'
+        '| name |   n |\n'
+        '+------+-----+\n'
+        '|  a   |   1 |\n'
+        '| bcd  | 100 |\n'
+        '+------+-----+\n'
+        '  name   n\n'
+        '  a      #1\n'
+        '  bcd    #100\n'
+        '| name | n   |\n'
+        '|------|-----|\n'
+        '| a    | 1   |\n'
+        '| bcd  | 100 |\n',
+      );
+      expect(() => t.show(border: '+-+'), throwsArgumentError);
+    });
+  });
 }
 
 /// Runs [source] as a program of its own: what `Cli.run` does to the process — exit codes,

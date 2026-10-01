@@ -473,14 +473,22 @@ final class Table {
     });
   }
 
-  /// Prints this table with borders to `Io.out`; a short row is padded, a long one cut.
+  /// Prints this table to `Io.out`, the package's only table renderer.
   ///
-  /// This is the package's only table renderer: anything with rows and columns to print
-  /// becomes a [Table] first, `Table.cells` being the shortest way in.
-  void show() {
-    // A missing cell is blank, as `toCsv` and `toMarkdown` write it, not the word `null`.
+  /// [border] is 11 glyphs read off the box — top `┌─┬┐`, side `│`, middle `├┼┤`, bottom
+  /// `└┴┘` — by default the console theme's. A divider whose joints are spaces is left out;
+  /// `''` draws no border. [align] has a letter per column, `l`, `r` or `c`, as in LaTeX.
+  /// [cell] writes a cell's text (default: the value, a missing one blank).
+  ///
+  /// ```dart
+  /// t.show(border: '+-++|++++++', align: 'lr', cell: (r, c) => c == 'size' ? r.number(c).humanBytes : r.text(c));
+  /// ```
+  void show({String? border, String align = '', String Function(Row row, String column)? cell}) {
+    border ??= IoBridge.border?.call() ?? '┌─┬┐│├┼┤└┴┘';
+    final g = border.isEmpty ? List.filled(11, ' ') : [for (final r in border.runes) String.fromCharCode(r)];
+    if (g.length != 11) throw ArgumentError.value(border, 'border', 'Not 11 glyphs');
     final grid = [
-      for (final r in rows) [for (final c in columns) r[c] == null ? '' : '${r[c]}'],
+      for (final r in rows) [for (final c in columns) cell?.call(r, c) ?? r.text(c)],
     ];
     final widths = [for (final h in columns) Io.width(h)];
     for (final row in grid) {
@@ -489,20 +497,42 @@ final class Table {
       }
     }
 
-    String divider(String left, String mid, String right, String cross) =>
-        '$left${widths.map((w) => mid * (w + 2)).join(cross)}$right';
-    String line(List<String> row) =>
-        '│${[for (var i = 0; i < columns.length; i++) ' ${row[i]}${' ' * (widths[i] - Io.width(row[i]))} '].join('│')}│';
+    String padded(String text, int i) {
+      final gap = widths[i] - Io.width(text);
+      return switch (i < align.length ? align[i] : 'l') {
+        'r' => ' ' * gap + text,
+        'c' => ' ' * (gap ~/ 2) + text + ' ' * (gap - gap ~/ 2),
+        _ => text + ' ' * gap,
+      };
+    }
 
-    Io.out.writeln(divider('┌', '─', '┐', '┬'));
+    final out = StringBuffer();
+    void divider(String left, String cross, String right) {
+      if ('$left$cross$right'.trim().isNotEmpty) {
+        out.writeln('$left${widths.map((w) => g[1] * (w + 2)).join(cross)}$right');
+      }
+    }
+
+    void line(List<String> row) {
+      final side = g[4];
+      final text = '$side${[for (var i = 0; i < columns.length; i++) ' ${padded(row[i], i)} '].join(side)}$side';
+      out.writeln(side == ' ' ? text.trimRight() : text);
+    }
+
+    divider(g[0], g[2], g[3]);
     if (columns.isNotEmpty) {
-      Io.out.writeln(line(columns));
-      Io.out.writeln(divider('├', '─', '┤', '┼'));
+      line(columns);
+      divider(g[5], g[6], g[7]);
     }
-    for (final row in grid) {
-      Io.out.writeln(line(row));
+    grid.forEach(line);
+    divider(g[8], g[9], g[10]);
+    // Above a live spinner or board, never on its rows.
+    void write() => Io.out.write(out);
+    if (IoBridge.above case final above?) {
+      above(write);
+    } else {
+      write();
     }
-    Io.out.writeln(divider('└', '─', '┘', '┴'));
   }
 
   /// The rows, as `jsonEncode` wants them: `jsonEncode(table)` is a JSON array of objects.

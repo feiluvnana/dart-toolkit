@@ -230,6 +230,13 @@ with a "did you mean"; a thrown exception prints one red line and exits 1; a sig
 after the `Lifecycle.onExit` hooks. Log lines, `print` and child output scroll above a live
 spinner instead of garbling it.
 
+What the console draws is a theme of tokens plus a builder per part:
+
+```dart
+Console.theme = ConsoleTheme(ok: '✔', fill: '█', empty: '░');   // marks, glyphs, palette
+await pairs.download().show(task: (t) => '${t.index}/${t.count} ${t.name} ${t.bar(20)} ${t.speed.humanBytes}/s');
+```
+
 ### Testing
 
 `Io` is the only sink and `Client` the only way to the network. Copy

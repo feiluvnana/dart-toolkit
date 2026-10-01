@@ -951,8 +951,29 @@ final stage = await Console.select('Stage', Stage.values, or: Stage.dev);
 | `Console.rule([title])`, `Console.writeln` | unlevelled; `print` inside `Cli.run` |
 | `.bold`, `.red`, `.green`, `.dim`, … | styling on `String` |
 
+Customizing: `ConsoleTheme` holds the tokens every part shares — palette (`accent`, `success`,
+`warning`, `danger`, `muted`, `highlight`), marks (`ok`, `info`, `warn`, `error`, `debug`),
+`indent`, spinner `frames`/`interval`, bar `fill`/`empty`/`head`, the table `border`, board
+`tree` and prompt marks. A part's line is its builder, handed a typed view that carries the
+theme (`p.bar(30)` draws in its glyphs):
+
+```dart
+Console.theme = ConsoleTheme(ok: '✔', accent: (s) => s.magenta);       // process-wide
+await Console.themed(ConsoleTheme.ascii, () => build());               // one piece of work
+Console.progress(n, line: (p) => '${p.bar(30)} ${p.percent}% eta ${p.eta?.humanized ?? '…'}');
+Console.spinner('Indexing', line: (s) => '${s.frame} ${s.text} ${s.elapsed.humanized}');
+await pairs.download().show(
+  task: (t) => '${t.index}/${t.count} ${t.name} ${t.speed.humanBytes}/s',   // TaskView: state, bytes, eta…
+  header: (b) => '${b.completed}/${b.total} ${b.speed.humanBytes}/s',     // BatchView
+);
+table.show(border: '+-++|++++++', align: 'lr', cell: (row, c) => row.text(c));
+```
+
+`isLive` on a view says whether the line is redrawn in place or is the one a log keeps.
+
 - Under `-q` indicators draw nothing; only a failure's final line is written.
-- Without a terminal everything degrades to plain lines; braille falls back to ASCII.
+- Without a terminal everything degrades to plain lines; a terminal that cannot draw Unicode
+  gets `ConsoleTheme.ascii`.
 - Prompts are async (^C ends cleanly, echo restored) and write to stderr; `confirm` re-asks on
   anything but yes/no.
 

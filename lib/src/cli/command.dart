@@ -14,14 +14,13 @@ final class UsageException implements Exception {
   String toString() => message;
 }
 
-/// Callback action executed when a CLI command is triggered.
+/// What runs a [CliCommand].
 typedef CommandHandler = FutureOr<void> Function(CliContext ctx);
 
 /// Something a [CliCommand] declares and a handler reads back through [CliContext.call]:
 /// an [Opt], written `--name`, or an [Arg], written by its position.
 ///
-/// The declaration itself is the key, so a name is written once and its type is the type
-/// that comes back:
+/// The declaration is the key, so a name is written once and its type comes back:
 ///
 /// ```dart
 /// final top = Opt.number('top', 'How many to show').abbr('n').or(10);
@@ -31,8 +30,8 @@ typedef CommandHandler = FutureOr<void> Function(CliContext ctx);
 /// ctx(id)   // a String, statically
 /// ```
 ///
-/// [T] carries whether a value is guaranteed: both are nullable until `or` gives a default
-/// or `required` insists on one, and a flag is always a `bool`.
+/// Both are nullable until `or` gives a default or `required` insists on one; a flag is
+/// always a `bool`.
 ///
 /// {@category CLI}
 sealed class CliValue<T> {
@@ -44,20 +43,16 @@ sealed class CliValue<T> {
 
   const CliValue(this.name, {this.description = ''});
 
-  /// Turns the text on the command line into the value, throwing [UsageException] when it
-  /// is not one.
+  /// The value of [raw], or a [UsageException].
   T _parse(String raw);
 
-  /// Used when it is absent, or `null` when there is none.
   T? get _or;
 
-  /// Whether parsing fails when it is absent. Never true for a flag.
   bool get _isRequired;
 
-  /// The values it is restricted to, shown in help, or `null` when it is not.
   List<Object?>? get _choices => null;
 
-  /// What kind of value it takes, as help writes it after the name: `<int>`, `<a|b>`.
+  /// What help writes after the name: `<int>`, `<a|b>`.
   String get _hint;
 }
 
@@ -65,10 +60,9 @@ sealed class CliValue<T> {
 ///
 /// {@category CLI}
 sealed class CliOption<T> extends CliValue<T> {
-  /// The single-character short form, used as `-a`.
   final String? _abbr;
 
-  /// The environment variable read when the option is not on the command line.
+  /// Read when the option is not on the command line.
   final String? _env;
 
   const CliOption(super.name, {super.description, String? abbr, String? env})
@@ -76,7 +70,6 @@ sealed class CliOption<T> extends CliValue<T> {
       _env = env,
       assert(abbr == null || abbr.length == 1, 'abbr is one character');
 
-  /// Whether this option takes a value of its own on the command line.
   bool get _takesValue => true;
 
   /// How a second occurrence combines with the first, or `null` when the last one wins.
@@ -94,12 +87,8 @@ sealed class CliOption<T> extends CliValue<T> {
   CliOption<T> abbr(String letter);
 }
 
-/// A positional argument, written where it stands rather than by name. See [Arg].
-///
-/// A positional is a declared value like an option, which is the whole point: it is typed,
-/// it may have a default, it may be required, and it prints itself in `--help`. Before this
-/// existed every program pulled its own out of `CliContext.rest` and checked it by hand, and
-/// none of them showed up in the usage line.
+/// A positional argument: typed, defaulted and required like an option, and shown in the
+/// usage line.
 ///
 /// {@category CLI}
 final class Arg<T> extends CliValue<T> {
@@ -117,8 +106,7 @@ final class Arg<T> extends CliValue<T> {
   @override
   final String _hint;
 
-  /// How the values of a variadic argument fold into one list, or `null` when it takes one
-  /// value. Its presence is what makes it variadic: at most one per command, and last.
+  /// Set for a variadic argument: at most one per command, and last.
   final _Join? _join;
 
   bool get _variadic => _join != null;
@@ -170,7 +158,6 @@ final class Arg<T> extends CliValue<T> {
   @override
   T _parse(String raw) => _parseValue(raw);
 
-  /// The same argument as an [Arg] of [U], with a default or a requirement.
   Arg<U> _as<U>({U Function(String raw)? parse, U? or, bool required = false, _Join? join}) => Arg<U>._(
     name,
     parse: parse ?? (raw) => _parse(raw) as U,
@@ -191,8 +178,7 @@ final class Arg<T> extends CliValue<T> {
   };
 }
 
-/// What turns an optional [Arg] into one whose value is guaranteed, and so whose
-/// [CliContext.call] is non-nullable. It reads the same as [OptionalOpt] on purpose.
+/// What makes an [Arg]'s value guaranteed, so [CliContext.call] is non-nullable; as [OptionalOpt].
 ///
 /// {@category CLI}
 extension OptionalArg<T extends Object> on Arg<T?> {
@@ -203,11 +189,8 @@ extension OptionalArg<T extends Object> on Arg<T?> {
   /// nothing at all was given.
   Arg<T> required() => _as(required: true);
 
-  /// The same argument, taking everything that is left: `tk hash <paths>...`. None at all is
-  /// `[]`; `.many().required()` insists on at least one. It reads the same as
-  /// [OptionalOpt.many], and each value is parsed and checked as one would be.
-  ///
-  /// At most one per command, and it must be declared last.
+  /// The same argument, taking everything that is left: `tk hash <paths>...`. None is `[]`;
+  /// `.many().required()` insists on one. At most one per command, declared last.
   Arg<List<T>> many() => _as(
     parse: (raw) => [_parse(raw) as T],
     or: List<T>.unmodifiable(const []),
@@ -215,10 +198,8 @@ extension OptionalArg<T extends Object> on Arg<T?> {
   );
 }
 
-/// A boolean option: present means true, and it never consumes a value. See [Opt.flag].
-///
-/// `--dry=false` and `--no-dry` both say false; anything but `true` or `false` after an `=`
-/// is a usage error rather than a silent `true`.
+/// A boolean option; `--dry=false` and `--no-dry` say false, and any other `=value` is a
+/// usage error, never a silent `true`.
 final class _Flag extends CliOption<bool> {
   const _Flag(super.name, {super.description, super.abbr, super.env});
 
@@ -248,13 +229,10 @@ final class _Flag extends CliOption<bool> {
   CliOption<bool> abbr(String letter) => _Flag(name, description: description, abbr: letter, env: _env);
 }
 
-/// An option: a flag, a string, an integer, one of a fixed set, or whatever a function
-/// of your own returns. Every kind is behind this one name.
+/// An option: a flag, a string, an integer, one of a fixed set, or what a function returns.
 ///
-/// All but [flag] produce a nullable option; [OptionalOpt.or] and [OptionalOpt.required]
-/// are what guarantee a value, and they are what make [CliContext.call] return a
-/// non-nullable [T]. [OptionalOpt.many] takes it any number of times, and [env] reads it
-/// from the environment when it is not given.
+/// All but [flag] are nullable until [OptionalOpt.or] or [OptionalOpt.required];
+/// [OptionalOpt.many] repeats it, [env] reads it from the environment.
 ///
 /// ```dart
 /// final dry     = Opt.flag('dry-run', 'Print, do not write').abbr('d'); // bool
@@ -365,16 +343,12 @@ final class Opt<T> extends CliOption<T> {
   );
 }
 
-/// What turns an optional [Opt] into one whose value is guaranteed, and so whose
-/// [CliContext.call] is non-nullable.
+/// What makes an [Opt]'s value guaranteed, so [CliContext.call] is non-nullable.
 ///
 /// {@category CLI}
 extension OptionalOpt<T extends Object> on Opt<T?> {
-  /// The same option with [value] when it is absent.
-  ///
-  /// Throws [ArgumentError] when the option is restricted and [value] is not one of its
-  /// choices — a default the parser would reject is a bug in the declaration, not in the
-  /// command line.
+  /// The same option with [value] when it is absent; [ArgumentError] when [value] is not
+  /// among its choices.
   Opt<T> or(T value) => _as(or: _allowed(_choices, value));
 
   /// The same option, but parsing fails when it is absent.
@@ -389,12 +363,11 @@ extension OptionalOpt<T extends Object> on Opt<T?> {
   );
 }
 
-/// How a repeated option folds a second occurrence into the first. Untyped, because a
-/// generic function type would not survive being read through a `CliOption<Object?>`.
+/// Folds a repeated value into the first. Untyped: a generic function type would not survive
+/// being read through a `CliOption<Object?>`.
 typedef _Join = Object? Function(Object? previous, Object? next);
 
-/// [value], when [choices] allows it: a default the parser would reject is a bug in the
-/// declaration, not in the command line.
+/// [value], when [choices] allows it: a default the parser would reject is a declaration bug.
 T _allowed<T>(List<Object?>? choices, T value) {
   if (choices != null && !choices.contains(value)) {
     throw ArgumentError.value(value, 'value', 'Not one of ${choices.map(_label).join(', ')}');
@@ -402,7 +375,6 @@ T _allowed<T>(List<Object?>? choices, T value) {
   return value;
 }
 
-/// The label a value is spelled with on the command line and in help text.
 String _label(Object? value) => value is Enum ? value.name : '$value';
 
 /// [what] is how the error names it: `option "--top"`, `argument <n>`.
@@ -467,16 +439,11 @@ String? _closest(String typed, Iterable<String> candidates) {
 ///
 /// {@category CLI}
 class CliContext {
-  /// Positional arguments as they were typed, plus everything after a `--` terminator.
-  ///
-  /// The raw list, for a command that declares no [Arg]s. One that does reads them through
-  /// [call] instead, typed and checked, and this is what they were bound from.
+  /// Positional arguments as typed, plus everything after `--`; the [Arg]s are bound from it.
   final List<String> rest;
 
   /// Cancelled on SIGINT, SIGTERM and [Lifecycle.exit], before the other exit hooks run.
-  ///
-  /// [Cli.run] makes it the ambient [Cancel.token] for the whole action, so a download,
-  /// a crawl, a `retry` or a `run` inside it already stops; this is the handle that stops them.
+  /// [Cli.run] makes it the ambient [Cancel.token], so what runs inside already stops with it.
   final CancelToken cancel;
 
   final Map<CliValue<Object?>, Object?> _values;
@@ -485,15 +452,12 @@ class CliContext {
     : _values = values,
       cancel = cancel ?? CancelToken();
 
-  /// The value of [option] — the option itself is the key, so its type is its value's.
+  /// The value of [value], typed by its declaration.
   ///
   /// ```dart
   /// if (ctx(dry)) return;
   /// final n = ctx(top); // int, because `top` was declared with `.or(10)`
   /// ```
-  ///
-  /// Throws [StateError] only when a non-nullable option somehow reaches a handler
-  /// unset — a declared default or `required()` is what rules that out.
   T call<T>(CliValue<T> value) {
     if (_values.containsKey(value)) return _values[value] as T;
     if (value._or case final fallback?) return fallback;
@@ -501,16 +465,13 @@ class CliContext {
     throw StateError('${value is Arg ? '<${value.name}>' : '--${value.name}'} was not given and has no default.');
   }
 
-  /// Whether [value] was given — on the command line, or through its [CliOption.env] —
-  /// rather than defaulted.
+  /// Whether [value] was given, on the command line or by its [CliOption.env], not defaulted.
   bool given(CliValue<Object?> value) => _values.containsKey(value);
 }
 
 /// A command: a name, the values it takes, subcommands and the handler that runs it.
 ///
-/// Everything a command is, it is given: `values`, `commands` and [handler] are constructor
-/// arguments, and nothing sets them afterwards. `values` holds its [Arg]s and [Opt]s in one
-/// list — the kind is in the type — and the [Arg]s bind in the order they are listed.
+/// `values` holds its [Arg]s and [Opt]s in one list; the [Arg]s bind in the order listed.
 ///
 /// ```dart
 /// CliCommand('fetch', 'Fetch a thing', values: [url, verbose], handler: fetch)
@@ -521,7 +482,7 @@ class CliCommand {
   final String name;
   final String description;
 
-  /// What runs when this command is dispatched; usage is printed when it is `null`.
+  /// What runs when this command is dispatched; `null` prints usage.
   final CommandHandler? handler;
 
   final List<Arg<Object?>> _args;
@@ -549,21 +510,13 @@ class CliCommand {
     }
   }
 
-  /// Looks up an option by name, walking up to the root command.
-  CliOption<Object?>? _findOption(String name) {
-    for (final option in _options) {
-      if (option.name == name) return option;
-    }
-    return _parent?._findOption(name);
-  }
+  /// The nearest option named [name], here or in an ancestor.
+  CliOption<Object?>? _findOption(String name) =>
+      _options.where((o) => o.name == name).firstOrNull ?? _parent?._findOption(name);
 
-  /// Looks up an option by short form, walking up to the root command.
-  CliOption<Object?>? _findAbbr(String abbr) {
-    for (final option in _options) {
-      if (option._abbr == abbr) return option;
-    }
-    return _parent?._findAbbr(abbr);
-  }
+  /// The nearest option with short form [abbr], here or in an ancestor.
+  CliOption<Object?>? _findAbbr(String abbr) =>
+      _options.where((o) => o._abbr == abbr).firstOrNull ?? _parent?._findAbbr(abbr);
 
   /// This command, then each ancestor up to the root.
   Iterable<CliCommand> get _chain sync* {
@@ -572,32 +525,26 @@ class CliCommand {
     }
   }
 
-  /// Prints usage help for this command, to [sink] — stdout for `--help`, stderr when it is
-  /// the answer to a mistake.
+  /// Prints usage to [sink]: stdout for `--help`, stderr as the answer to a mistake.
   void _printUsage([StringSink? sink]) {
     final out = sink ?? Io.out;
-    // Only what this command actually has. `[command]` on a program with no subcommands is
-    // an invitation to type something that cannot work.
     final shape = [for (final arg in _args) arg._placeholder, '[options]', if (_subcommands.isNotEmpty) '[command]'];
     out.writeln('${'Usage:'.bold} $_fullName ${shape.join(' ')}');
     if (description.isNotEmpty) out.writeln('\n$description');
 
-    // Every row first, then one column wide enough for the widest left-hand side: an option
-    // that shows what it takes (`-a, --algo <md5|sha1>`) does not fit a fixed 20.
+    // One column as wide as the widest left side: `-a, --algo <md5|sha1>` overflows a fixed 20.
     final inherited = [for (final cmd in _chain.skip(1)) ...cmd._options];
     final args = [for (final arg in _args) (arg._placeholder, _describe(arg))];
     final commands = [for (final sub in _subcommands.values) (sub.name, sub.description)];
     final options = [
       ..._optionRows(_options),
-      // Only what this command will actually answer to.
       if (_findOption('help') == null)
         (_findAbbr('h') == null ? '-h, --help' : '    --help', 'Print this help message'),
       if (_parent == null && _version != null && _findOption('version') == null) ('    --version', 'Print the version'),
       if (_parent == null && this is Cli && _findOption('completion') == null)
         ('    --completion <shell>', 'Print a completion script (bash, zsh, fish)'),
     ];
-    // What an ancestor declared is accepted here too, so it is shown here too — apart, since
-    // it means the same under every command.
+    // An ancestor's options are accepted here too, shown apart.
     final global = _optionRows(inherited);
     final width = [
       for (final (left, _) in [...args, ...commands, ...options, ...global]) left.length,
@@ -619,19 +566,17 @@ class CliCommand {
 
   List<(String, String)> _optionRows(Iterable<CliOption<Object?>> options) => [
     for (final option in options)
-      // An ancestor's option that something nearer has taken the name of is not reachable
-      // here, and one whose short form was taken is reachable by its long form only.
+      // One shadowed by a nearer name is unreachable; one whose short form was taken has its long form only.
       if (_findOption(option.name) == option)
         (
           '${option._abbr != null && _findAbbr(option._abbr) == option ? '-${option._abbr}, ' : '    '}'
               '--${option.name}${option._takesValue ? ' ${option._hint}' : ''}',
-          // A flag's fallback is `false`, which is what absence already means; saying so is noise.
+          // A flag's `false` default is what absence means; saying so is noise.
           _describe(option, fallback: option._takesValue),
         ),
   ];
 
-  /// The help line for one declared value: what it is for, what it may be, what it is when
-  /// it is absent. One renderer, so an argument and an option read alike.
+  /// The help line for an argument or an option: what it is for, may be, and defaults to.
   static String _describe(CliValue<Object?> value, {bool fallback = true}) {
     var desc = value.description;
     if (value._choices case final allowed? when allowed.isNotEmpty) {
@@ -653,10 +598,8 @@ class CliCommand {
     return desc.trimLeft();
   }
 
-  /// Binds the positionals to the arguments this command declared, in order.
-  ///
-  /// A command that declares none keeps the old behaviour exactly: [CliContext.rest] is
-  /// whatever was typed and nothing is checked. Declaring them is what buys the checking.
+  /// Binds the positionals to the declared arguments, in order; with none declared, nothing
+  /// is checked.
   void _bind(List<String> rest, Map<CliValue<Object?>, Object?> values) {
     if (_args.isEmpty) return;
     var at = 0;
@@ -701,8 +644,7 @@ class CliCommand {
     return Cancel.scope(() => _run(args, {}, cancel), token: cancel);
   }
 
-  /// Stores [value] for [option]: a repeatable one adds to what is there, any other
-  /// replaces it.
+  /// Stores [value] for [option]: a repeatable one adds to what is there.
   static void _set(Map<CliValue<Object?>, Object?> values, CliOption<Object?> option, Object? value) {
     final join = option._join;
     values[option] = join != null && values.containsKey(option) ? join(values[option], value) : value;
@@ -719,9 +661,7 @@ class CliCommand {
 
   Future<void> _execute(List<String> args, Map<CliValue<Object?>, Object?> values, CancelToken cancel) async {
     final rest = <String>[];
-    // Taking `-h` for something of your own takes `-h` and nothing else: a command that has a
-    // `--host` should still answer `--help`, and one that declares a `help` option owns the
-    // long form alone. Conflating the two lost `--help` to any command with an `h` abbr.
+    // Taking `-h` takes `-h` only: a command with `--host -h` still answers `--help`.
     final ownsLong = _findOption('help') != null;
     final ownsShort = _findAbbr('h') != null;
 
@@ -739,10 +679,8 @@ class CliCommand {
           !isLong && arg.startsWith('-') && arg.length > 1 && num.tryParse(arg) != null && _findAbbr(arg[1]) == null;
       if (isNumber || (!isLong && (!arg.startsWith('-') || arg.length <= 1))) {
         if (rest.isEmpty && _subcommands.isNotEmpty) {
-          // The first positional naming a subcommand dispatches to it, carrying what is parsed so far.
           if (_subcommands[arg] case final sub?) return sub._run(args.sublist(i + 1), values, cancel);
-          // One that names none is a typo unless this command takes positionals of its own:
-          // printing usage and exiting 0, or running the parent with it, both hid the mistake.
+          // Naming none is a typo, unless this command takes positionals of its own.
           if (_args.isEmpty) {
             final guess = _closest(arg, _subcommands.keys);
             throw UsageException('Unknown command "$arg".${guess == null ? '' : ' Did you mean "$guess"?'}');
@@ -830,8 +768,7 @@ class CliCommand {
       }
     }
 
-    // What the command line left unsaid, the environment may say; then required checks,
-    // for this command and every ancestor. Defaults live on the option.
+    // The environment fills what the command line left out; then required checks, up the chain.
     for (final cmd in _chain) {
       for (final option in cmd._options) {
         if (values.containsKey(option)) continue;
@@ -855,8 +792,7 @@ class CliCommand {
     if (handler != null) {
       await handler!(CliContext._(rest, values, cancel: cancel));
     } else if (_subcommands.isNotEmpty) {
-      // A program of subcommands run with none was not asked for help: the usage is the
-      // answer to a mistake, on stderr, and the exit code says so.
+      // Run with no subcommand: a mistake, so usage goes to stderr and the exit is 64.
       _printUsage(Io.err);
       throw const _NoCommand();
     } else {
@@ -865,18 +801,15 @@ class CliCommand {
   }
 }
 
-/// No command was named where one had to be. The usage already said what there is, so
-/// [Cli.run] adds nothing to it and exits 64.
+/// No command was named where one had to be; the usage already said so, and [Cli.run] exits 64.
 final class _NoCommand extends UsageException {
   const _NoCommand() : super('No command given.');
 }
 
 /// The root command: a program's name, version and entry point.
 ///
-/// Every program gets `-v`/`--verbose` (debug logging) and `-q`/`--quiet` (warnings and
-/// errors only), mapped onto [Console.level] before the handler runs, and `--completion
-/// bash|zsh|fish`, which prints a completion script for the declared tree. A program that
-/// declares an option of the same name or short form keeps its own.
+/// Every program gets `-v`/`--verbose` and `-q`/`--quiet` (onto [Console.level]) and
+/// `--completion bash|zsh|fish`; one that declares the same name or short form keeps its own.
 ///
 /// {@category CLI}
 class Cli extends CliCommand {
@@ -927,8 +860,7 @@ class Cli extends CliCommand {
 
   static final _scriptSuffix = RegExp(r'(\.dart)?(-[\w.]+)?\.(snapshot|dill|aot|jit)$|\.dart$|\.exe$');
 
-  /// A built-in flag, unless [declared] already has one by that name; without its short
-  /// form when that is taken.
+  /// A built-in flag, unless [declared] has the name; without [short] when that is taken.
   static CliOption<bool>? _builtIn(Iterable<CliValue<Object?>> declared, String long, String short, String help) {
     final options = declared.whereType<CliOption<Object?>>();
     return options.any((o) => o.name == long)
@@ -947,30 +879,17 @@ class Cli extends CliCommand {
     }
   }
 
-  /// Parses [args], runs the matching command, then runs the exit hooks and releases
-  /// the signal handlers so the process can end — whether the action returned or threw.
+  /// Parses [args], runs the matching command inside a [Cancel.scope], then runs the exit
+  /// hooks and releases the signal handlers, whether the action returned or threw.
   ///
-  /// To fail, `throw`: `throw 'no URL given'` prints `✖ no URL given` and exits 1, with no
-  /// try/catch anywhere. (`Lifecycle.exit` is for code outside a [Cli]; its `Future<Never>`
-  /// cannot be `return`ed from an `async` handler.) A `print` in the action is written above
-  /// whatever spinner or board is live, as [Console.writeln] is.
-  ///
-  /// A usage error — unknown option or command, bad choice, missing required option — is
-  /// printed to stderr and exits with code 64. Anything else the action throws is printed
-  /// as `✖ error` and exits with code 1, its stack trace shown under `--verbose`: no script
-  /// needs a try/catch of its own to fail readably. [CliCommand.run] throws instead; use it
-  /// to test. `ctx.cancel` is cancelled first on a signal, on [Lifecycle.exit], and when the
-  /// action ends.
-  ///
-  /// The action runs inside a [Cancel.scope] holding that token, so everything under it
-  /// — downloads, crawls, `retry`, `run` — stops with it and takes no token of its own.
+  /// To fail, `throw`: `throw 'no URL given'` prints `✖ no URL given` and exits 1 (stack
+  /// trace under `--verbose`). A usage error exits 64. [CliCommand.run] throws instead; use
+  /// it to test. A `print` in the action lands above a live spinner, as [Console.writeln].
   @override
   Future<void> run(List<String> args) async {
     final cancel = CancelToken();
     Lifecycle.onExit(cancel.cancel);
     try {
-      // A `print` in the action is a durable write like [Console.writeln]: it lands above a
-      // spinner or a board instead of on its row.
       await runZoned(
         () => Cancel.scope(() => _run(args, {}, cancel), token: cancel),
         zoneSpecification: ZoneSpecification(print: (_, _, _, line) => Console.writeln(line)),
@@ -981,8 +900,7 @@ class Cli extends CliCommand {
       final cmd = e.command ?? _fullName;
       await Lifecycle.exit('${e.message}\n  Run "$cmd --help" for usage.', 64);
     } catch (e, trace) {
-      // A signal is already on its way out through the exit hooks; what the action threw
-      // on being cancelled is not news.
+      // A signal is already leaving through the exit hooks; a throw from being cancelled is not news.
       if (_exiting) await Completer<Never>().future;
       Console.debug('$trace');
       await Lifecycle.exit(e, 1);
