@@ -4,14 +4,8 @@ part of '../../../formats.dart';
 // `collection` importing `formats` for them put every parser in the package into a program
 // that only wanted a `Table`, about 280 ms of `dart run` compile.
 
-/// A JSON array of objects as a [Table].
+/// JSON objects as a [Table]; `JsonDocument.table` is the one-document form.
 ///
-/// {@category Collections}
-extension JsonTableExtensions on JsonDocument {
-  /// The rows of this array of objects; a non-object element is skipped.
-  Table get table => list.table;
-}
-
 /// {@category Collections}
 extension JsonDocumentsTableExtensions on Iterable<JsonDocument> {
   /// The rows of these documents, each an object; a non-object is skipped.

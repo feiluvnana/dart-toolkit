@@ -1,21 +1,5 @@
 part of '../../formats.dart';
 
-/// TOML decoding.
-///
-/// {@category Formats}
-extension StringTomlExtensions on String {
-  /// This TOML text as a document: tables and arrays of tables become nested objects and
-  /// arrays, dotted keys nest, strings of all four kinds decode, numbers and booleans are
-  /// themselves, dates and times stay text.
-  ///
-  /// Covers TOML 1.0 as scripts use it, checked by `test/formats_test.dart` rather than
-  /// against the specification's own suite. A table defined twice, an inline table or a static
-  /// array extended afterwards, and `[[a]]` on a key that is not an array of tables are errors.
-  ///
-  /// Throws [FormatException] with a line number on bad syntax.
-  JsonDocument get toml => JsonDocument(_TomlParser(this).parse());
-}
-
 final class _TomlParser {
   final String s;
   int i = 0;
@@ -26,7 +10,6 @@ final class _TomlParser {
   // What made each table, by identity: a `[header]` (defined, so never again), a header's
   // path (implicit, so a later header may define it), a dotted key, or an inline table — which
   // nothing may extend. Only an array `[[header]]` made may be appended to.
-  final Set<Object> _defined = Set.identity();
   final Set<Object> _implicit = Set.identity();
   final Set<Object> _dotted = Set.identity();
   final Set<Object> _frozen = Set.identity();
@@ -72,13 +55,12 @@ final class _TomlParser {
         throw _error('"$name" is already a value, not an array of tables');
       }
       final table = <String, Object?>{};
-      _defined.add(table);
       list.add(table);
       current = table;
     } else if (existing == null) {
-      _defined.add(current = target[name] = <String, Object?>{});
+      current = target[name] = <String, Object?>{};
     } else if (existing is Map<String, Object?> && _implicit.remove(existing)) {
-      _defined.add(current = existing);
+      current = existing;
     } else if (existing is Map<String, Object?>) {
       throw _error('Table "${path.join('.')}" is defined twice');
     } else {

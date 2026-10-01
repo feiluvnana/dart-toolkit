@@ -1,21 +1,5 @@
 part of '../../formats.dart';
 
-/// INI decoding.
-///
-/// {@category Formats}
-extension StringIniExtensions on String {
-  /// This INI text as a document: one object per `[section]`, keys before any section at the
-  /// root. `;` and `#` start comments; `key = value` and `key: value` both work; quoted values
-  /// lose their quotes.
-  ///
-  /// Dots nest: `a.b = 1` and `[server.tls]` are tables inside tables. A key that cannot nest
-  /// — `x.y.z` after `x.y` is already a value, or `x.y` after it is already a table, as Java
-  /// properties files write them — stays whole in its section, so `log4j.appender.A1` and
-  /// `log4j.appender.A1.layout` both read back. A quoted part of a section name is one name,
-  /// dots and all: `["www.example.com"]`, and git's `[remote "origin"]` is `remote.origin`.
-  JsonDocument get ini => JsonDocument(_parseIni(this));
-}
-
 final _iniNewline = RegExp(r'\r?\n');
 
 int _findAssign(String line) {

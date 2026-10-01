@@ -38,9 +38,3 @@ final class XmlDocument {
   @override
   String toString() => markup;
 }
-
-/// {@category Formats}
-extension StringXmlExtensions on String {
-  /// This string parsed as XML.
-  XmlDocument get xml => XmlDocument.parse(this);
-}

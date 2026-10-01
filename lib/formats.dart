@@ -19,6 +19,7 @@ import 'dart:io';
 
 import 'collection.dart';
 
+part 'src/formats/conversions.dart';
 part 'src/formats/html/dom.dart';
 part 'src/formats/html/entities.dart';
 part 'src/formats/html/parser.dart';

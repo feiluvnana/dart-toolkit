@@ -170,7 +170,7 @@ final class _Parser {
       if (raw.startsWith('\n')) raw = raw.substring(1);
       if (raw.isEmpty) return;
     }
-    _run.add(current, decodeEntities(raw));
+    _run.add(current, _decodeEntities(raw, _References.text));
   }
 
   /// Whether the element being inserted sits in SVG or MathML, where `/>` closes an
@@ -334,7 +334,9 @@ final class _Parser {
       var raw = src.substring(pos, close?.start ?? src.length);
       if (name == 'textarea' && raw.startsWith('\n')) raw = raw.substring(1);
       if (raw.isNotEmpty) {
-        element.nodes.add(Text(_rcdataElements.contains(name) ? decodeEntities(raw) : raw)..parent = element);
+        element.nodes.add(
+          Text(_rcdataElements.contains(name) ? _decodeEntities(raw, _References.text) : raw)..parent = element,
+        );
       }
       pos = close?.past ?? src.length;
       return;

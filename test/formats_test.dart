@@ -1,4 +1,5 @@
 // ignore_for_file: experimental_member_use
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dart_toolkit/dart_toolkit.dart';
@@ -244,7 +245,7 @@ cert = 'a;b'
     });
 
     test('entities: named, decimal, hex, and unterminated', () {
-      expect(decodeEntities('&lt;a&gt; &amp; &#65;&#x42; &nbsp;x &unknown; &amp'), '<a> & AB \u00a0x &unknown; &');
+      expect('&lt;a&gt; &amp; &#65;&#x42; &nbsp;x &unknown; &amp'.html.text, '<a> & AB \u00a0x &unknown; &');
     });
 
     test('attributes: quoted, unquoted, valueless, duplicated, case', () {
@@ -1235,6 +1236,137 @@ folded: >
       expect(() => 'a = ["x" "y"]'.toml, throwsFormatException);
       expect(() => 'a = [1\n2]'.toml, throwsFormatException);
       expect('a = ["x", "y"]'.toml['a'].raw, ['x', 'y']);
+    });
+  });
+
+  group('JsonDocument reading', () {
+    test('an error names the path, however the value was reached', () {
+      final doc = '{"a": [{"b c": "x"}], "items": [{"id": "q"}]}'.json;
+      expect(
+        () => doc['a'][0]['b c'].to<int>(),
+        throwsA(
+          isA<StateError>().having((e) => e.message, 'message', r'''$.a[0]['b c'] is "x" (String), expected int'''),
+        ),
+      );
+      expect(
+        () => doc.$(r'$..id').first.to<int>(),
+        throwsA(isA<StateError>().having((e) => e.message, 'message', startsWith(r'($..id)[0] is "q"'))),
+      );
+      expect(
+        () => doc['items'].$(r'$[*].id').first.to<int>(),
+        throwsA(isA<StateError>().having((e) => e.message, 'message', startsWith(r'$.items($[*].id)[0] is'))),
+      );
+      expect(
+        () => doc['items'].list.first.map['id']!.to<bool>(),
+        throwsA(isA<StateError>().having((e) => e.message, 'message', startsWith(r'$.items[0].id is'))),
+      );
+      expect(
+        () => '{"m": {"k": "x"}}'.json['m'].to<Map<String, int>>(),
+        throwsA(isA<StateError>().having((e) => e.message, 'message', r'$.m.k is "x", expected int')),
+      );
+    });
+
+    test('or is the default, typed by it', () {
+      final ini = 'debug = true\nport = x\n'.ini;
+      expect(ini['debug'].or(false), isTrue);
+      expect(ini['missing'].or(false), isFalse);
+      expect(ini['port'].or(8080), 8080);
+      expect('{"n": "42"}'.json['n'].or(0), 42);
+    });
+
+    test('to<DateTime> reads ISO 8601 text', () {
+      final doc = '{"t": "2026-10-01T12:30:00Z", "d": "2026-10-01", "bad": "soon"}'.json;
+      expect(doc['t'].to<DateTime>(), DateTime.utc(2026, 10, 1, 12, 30));
+      expect(doc['d'].to<DateTime>(), DateTime(2026, 10, 1));
+      expect(doc['bad'].toOrNull<DateTime>(), isNull);
+      expect(() => doc['bad'].to<DateTime>(), throwsStateError);
+    });
+
+    test('save writes JSON or YAML by extension, and read reads it back', () async {
+      final dir = await Directory.systemTemp.createTemp('tk_fmt');
+      addTearDown(() => dir.delete(recursive: true));
+      final doc = '{"name": "x", "list": [1, 2.5, null], "nan": 1}'.json;
+      final json = await doc.save('${dir.path}/a/b.json');
+      expect(await json.readAsString(), '${const JsonEncoder.withIndent('  ').convert(doc.raw)}\n');
+      expect((await JsonDocument.read(json.path)).raw, doc.raw);
+      final yaml = await doc.save('${dir.path}/c.yml');
+      expect(await yaml.readAsString(), doc.toYaml());
+      expect((await JsonDocument.read(yaml.path)).raw, doc.raw);
+      expect(
+        () => doc.save('${dir.path}/c.toml'),
+        throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('".toml"'))),
+      );
+      expect(await File('${dir.path}/c.toml').exists(), isFalse);
+    });
+  });
+
+  group('Elements, one hop closer', () {
+    final doc =
+        '<ul id="u"><li class="x"><a href="/a">A</a></li><li><a>B</a></li><li class="x"><a href="b">C</a></li></ul>'
+            .html;
+
+    test('attrs, markup and table', () {
+      expect(doc.$('a').attrs('href'), ['/a', 'b']);
+      expect(doc.$('nothing').attrs('href'), isEmpty);
+      expect(doc.$('li.x').markup, '<li class="x"><a href="/a">A</a></li>');
+      expect(() => doc.$('nothing').markup, throwsStateError);
+      expect('<table><tr><th>k</th></tr><tr><td>v</td></tr></table>'.html.$('table').table.rows, [
+        {'k': 'v'},
+      ]);
+    });
+
+    test('a leading combinator reads from the element', () {
+      final ul = doc.$('#u').first;
+      expect(ul.$('> li.x').texts, ['A', 'C']);
+      expect(ul.$('> a'), isEmpty);
+      final first = doc.$('li').first;
+      expect(first.$('+ li').texts, ['B']);
+      expect(first.$('~ li').texts, ['B', 'C']);
+      expect(first.$('~ li > a[href]').attrs('href'), ['b']);
+      expect(first.$('> a, ~ li a').texts, ['A', 'B', 'C']);
+      expect(doc.$('li').$('+ li').texts, ['B', 'C']);
+      expect(doc.$('li.x').$('> a').texts, ['A', 'C']);
+      // Without a combinator nothing changes: a descendant, with ancestors anywhere.
+      expect(first.$('ul a').texts, ['A']);
+    });
+
+    test('links resolve against the address and the <base href>', () {
+      const page = '<a href="/x?q=1">1</a><a href="y">2</a><a>none</a><img src="i.png"><a href="http://o/">3</a>';
+      final url = Uri.parse('https://site.test/dir/page.html');
+      expect(page.html.$('a, img').links.map((u) => '$u'), ['/x?q=1', 'y', 'i.png', 'http://o/']);
+      expect(HtmlDocument.parse(page, url: url).$('a, img').links.map((u) => '$u'), [
+        'https://site.test/x?q=1',
+        'https://site.test/dir/y',
+        'https://site.test/dir/i.png',
+        'http://o/',
+      ]);
+      final based = HtmlDocument.parse('<head><base href="/other/"></head>$page', url: url);
+      expect(based.base, Uri.parse('https://site.test/other/'));
+      expect(based.$('a').links.take(2).map((u) => '$u'), ['https://site.test/x?q=1', 'https://site.test/other/y']);
+      expect(
+        '<base href="https://cdn.test/s/"><a href="y">'.html.$('a').links.single,
+        Uri.parse('https://cdn.test/s/y'),
+      );
+      expect('<a href="http://[bad">'.html.$('a').links, isEmpty);
+      expect(page.html.base, isNull);
+      final res = Response('<a href="y">', 200, url: Uri.parse('https://site.test/d/p'));
+      expect(res.html.$('a').links.single, Uri.parse('https://site.test/d/y'));
+    });
+  });
+
+  group('XPath order with attributes', () {
+    test('an attribute sorts after its element and before its content, as written', () {
+      final doc = '<r><e b="1" a="2"><c/></e><f a="3"/></r>'.xml;
+      final nodes = doc.$x('//c | //@a | //e | //@b');
+      expect(nodes.map((n) => n is Attribute ? '@${n.name}=${n.value}' : (n as Element).name), [
+        'e',
+        '@b=1',
+        '@a=2',
+        'c',
+        '@a=3',
+      ]);
+      expect(doc.$x('//*[@a]').length, 2);
+      expect(doc.$x('//e/@*').texts, ['1', '2']);
     });
   });
 }

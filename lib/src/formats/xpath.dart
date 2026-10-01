@@ -72,24 +72,17 @@ final class _Shared {
     return _slot[child] ?? -1;
   }
 
-  /// Every node's position in document order, attributes included, for the queries whose
-  /// result has to be sorted — a union, or a path through an axis that does not keep
-  /// document order. Most never ask; see [_Path.eval].
-  ///
-  /// Two cheaper-looking shapes were tried and are both slower, measured: computing an
-  /// (owner, slot) key inside the comparator (four map lookups per comparison instead of
-  /// one), and the same key precomputed per node (thousands of tiny maps for one large one).
+  /// Every element's and text's position in document order, for the queries whose result
+  /// has to be sorted — a union, or a path through an axis that does not keep document
+  /// order. Most never ask; see [_Path.eval]. An attribute is not in it: it sorts by its
+  /// element, then by its place among that element's attributes, worked out only for the
+  /// attributes a result holds rather than minted for every attribute in the document.
   Map<Node, int>? _order;
 
   Map<Node, int> order(_Document document) => _order ??= () {
     final order = <Node, int>{document: 0};
     _eachBelow(document, (n) {
       order[n] = order.length;
-      if (n is Element && n is! _Document) {
-        for (final MapEntry(:key, :value) in n.attributes.entries) {
-          order[Attribute(key, value, n)] = order.length;
-        }
-      }
       return false;
     });
     return order;
@@ -100,8 +93,26 @@ extension on List<Node> {
   /// Puts a node-set in document order.
   void sortIn(_Ctx c) {
     final order = c._shared.order(c.document);
-    sort((x, y) => (order[x] ?? -1).compareTo(order[y] ?? -1));
+    sort((x, y) {
+      final kx = order[x is Attribute ? x.parent : x] ?? -1;
+      final ky = order[y is Attribute ? y.parent : y] ?? -1;
+      if (kx != ky) return kx.compareTo(ky);
+      // One element: itself first, then its attributes as written.
+      if (x is! Attribute) return y is Attribute ? -1 : 0;
+      if (y is! Attribute) return 1;
+      return _slotOf(x).compareTo(_slotOf(y));
+    });
   }
+}
+
+/// Where [a] is among its element's attributes.
+int _slotOf(Attribute a) {
+  var i = 0;
+  for (final k in a.parent!.attributes.keys) {
+    if (k == a.name) return i;
+    i++;
+  }
+  return i;
 }
 
 /// The parent, or the document node above the root element, or `null` above that.
@@ -623,6 +634,11 @@ final class _XStep {
         }
       case _Axis.attribute:
         if (n is Element && n is! _Document) {
+          // `@href` is one lookup, not a walk over every attribute the element has.
+          if (test == _NodeTest.name) {
+            final v = n.attributes[name];
+            return v != null && visit(Attribute(name, v, n));
+          }
           for (final MapEntry(:key, :value) in n.attributes.entries) {
             if (visit(Attribute(key, value, n))) return true;
           }
