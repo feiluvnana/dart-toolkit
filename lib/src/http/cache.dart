@@ -19,7 +19,13 @@ final class _Cache {
       if (stored.headers['etag'] case final tag?) request.headers['if-none-match'] = tag;
       if (stored.headers['last-modified'] case final date?) request.headers['if-modified-since'] = date;
     }
-    final res = await send(request);
+    final StreamedResponse res;
+    try {
+      res = await send(request);
+    } catch (_) {
+      if (stored != null) unawaited(stored.raf.close().catchError((Object _) {}));
+      rethrow;
+    }
     if (res.statusCode == 304 && stored != null) {
       unawaited(_drain(res));
       final raf = stored.raf;
