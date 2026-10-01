@@ -480,13 +480,15 @@ serve all four.
 ```dart
 final pubspec = (await 'pubspec.yaml'.path.readText()).yaml;
 final name = pubspec['name'].to<String>();            // or StateError naming $.name
-final port = pubspec['port'].toOrNull<int>() ?? 8080; // absence expected
+final port = pubspec['port'].or(8080);                // absence expected; T is the default's
 final tags = pubspec['topics'].to<List<String>>();     // every element converted
 final deps = pubspec['dependencies'].to<Map<String, Object?>>();
 ```
 
 - `to<T>()` returns `T` or throws `StateError('$.server.port is "x" (String), expected int')`.
 - `to<int>()` on `1.7` is a mismatch, not `1`.
+- `to<DateTime>()` reads ISO 8601 text: `"2026-10-01"`, `"2026-10-01T12:30:00Z"`.
+- `or(v)` is `toOrNull<T>() ?? v` with `T` taken from `v`; `toOrNull` stays for a `null` answer.
 - Typed lists and maps work for `String`, `int`, `double`, `num` and `bool`.
 
 ```dart
@@ -522,6 +524,7 @@ a quoted part of a section name keeps its dots: `["www.example.com"]`, `[remote 
 
 ```dart
 final config = await JsonDocument.read('config.toml');
+await config.save('config.json'); // JSON indented two spaces, or YAML for .yaml/.yml
 ```
 
 **JSONPath** — `$` returns a list of documents:
@@ -547,7 +550,10 @@ final page = await url.get().html; // or res.html, or '<p>…</p>'.html
 page.$('h1').text;                                  // the first match
 page.$('td.title > a[href]').attr('href');         // or StateError naming the tag
 page.$('link[rel=next]').attrOrNull('href');        // absence expected
+page.$('a.download').attrs('href');                 // every match that has one, as written
+page.$('a.download, img').links;                    // href (or src) as Uri, resolved against the page
 page.$('#songs tr').$('td:nth-child(3)').texts;     // query a result again
+page.$('ul.menu').first.$('> li');                  // a leading combinator reads from the element
 page.$x('//tr[td[2]="FLAC"]/td[1]/a/@href').texts;
 ```
 
@@ -599,9 +605,18 @@ e.markup;        // serialised; e.innerMarkup for the content
 e.table;         // a <table> as a Table: repeated headers become Price_2, colspan/rowspan fill
 ```
 
-On `Elements`, the singular readings answer for the first match: `text` and `attr` throw when nothing
-matched (`attrOrNull` returns `null`). The plurals (`texts`, `lines`) answer for all matches. `Nodes` is what `$x`
-returns, since XPath can select attributes and text nodes; `.elements` narrows it.
+On `Elements`, the singular readings answer for the first match: `text`, `lines`, `attr` and
+`markup` throw when nothing matched (`attrOrNull` returns `null`; `table` is empty). The plurals
+— `texts`, `attrs(name)` and `links` — answer for all matches. `Nodes` is what `$x` returns,
+since XPath can select attributes and text nodes; `.elements` narrows it.
+
+`links` resolves each `href` (or `src`) against the document's `base`: its `<base href>`,
+resolved against the address it was fetched from — `res.html` knows it, and
+`HtmlDocument.parse(text, url: …)` takes it. A document with neither keeps links as written.
+
+`e.$` also takes a selector that starts with a combinator, read from `e` as `:has()` reads
+one: `> li.x` is its children, `+ dd` the next sibling, `~ p` the later ones. In a list such
+as `> a, b`, every alternative is read from `e`, so `b` is a descendant of it.
 
 XML keeps case and prefixes:
 

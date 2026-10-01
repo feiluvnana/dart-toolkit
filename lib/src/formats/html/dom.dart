@@ -139,15 +139,11 @@ final class Element extends Node {
   ///
   /// Names fold to lowercase for HTML and match as written for XML. A prefixed XML name
   /// (`media:content`) can be selected by escaping the colon as `r'media\:content'`, or with the XPath form.
-  Elements $(String selector) {
-    final s = _Selector.parse(selector, fold: syntax == Syntax.html);
-    _scopes.add(this);
-    try {
-      return Elements(s.matchAll(this));
-    } finally {
-      _scopes.removeLast();
-    }
-  }
+  ///
+  /// A selector may start with a combinator, read from this element as `:has()` reads one:
+  /// `> li.x` is its children, `+ dd` the next sibling, `~ p` the later ones. Every
+  /// alternative of such a list is read from it, so in `> a, b` the `b` is a descendant.
+  Elements $(String selector) => Elements(_Selector.parse(selector, fold: syntax == Syntax.html).from(this));
 
   /// The nodes matching XPath [expression] with this element as the context; see XPath.
   Nodes $x(String expression) => Nodes(_XPath.parse(expression).select(this));
@@ -254,6 +250,74 @@ final class Element extends Node {
     return sb.toString();
   }
 
+  /// This `<table>` (or the first one below this element) as rows of named columns.
+  ///
+  /// The header is the first row of `<th>` cells, or the first row of a `<thead>` whatever
+  /// its cells; a column without a name is `c1, c2, …`, and a name that repeats gets a
+  /// suffix (`Price`, `Price_2`) so no column hides another. Every other `<tr>` with a `<td>`
+  /// is a row. A cell's `colspan` and `rowspan` repeat its text into every column and row it
+  /// covers, so a row's values stay under their headings.
+  Table get table {
+    final t = name == 'table' ? this : $('table').firstOrNull;
+    if (t == null) return Table(const [], const []);
+    List<String>? header;
+    final body = <List<String?>>[];
+    // Cells a rowspan carries down: column → (text, rows still to fill).
+    final carried = <int, (String, int)>{};
+    for (final tr in _within(t, const {'tr'}, const {'table'})) {
+      final cells = _within(tr, const {'th', 'td'}, const {'table', 'tr'});
+      if (cells.isEmpty) continue;
+      if (header == null && (tr.parent?.name == 'thead' || cells.every((c) => c.name == 'th'))) {
+        header = [
+          for (final c in cells)
+            for (var k = _span(c, 'colspan', 1000); k > 0; k--) c.text.trim(),
+        ];
+        continue;
+      }
+      if (!cells.any((c) => c.name == 'td')) continue;
+      final row = <String?>[];
+      void fill() {
+        for (var c = carried[row.length]; c != null; c = carried[row.length]) {
+          final (text, left) = c;
+          left == 1 ? carried.remove(row.length) : carried[row.length] = (text, left - 1);
+          row.add(text);
+        }
+      }
+
+      for (final c in cells) {
+        fill();
+        final text = c.text.trim();
+        final down = _span(c, 'rowspan', 65534);
+        for (var k = _span(c, 'colspan', 1000); k > 0; k--) {
+          if (down > 1) carried[row.length] = (text, down - 1);
+          row.add(text);
+        }
+      }
+      fill();
+      body.add(row);
+    }
+    final names = header ?? const <String>[];
+    final width = body.fold(names.length, (w, r) => r.length > w ? r.length : w);
+    final seen = <String, int>{};
+    final columns = <String>[];
+    for (var i = 0; i < width; i++) {
+      var name = i < names.length && names[i].isNotEmpty ? names[i] : 'c${i + 1}';
+      final n = seen[name] = (seen[name] ?? 0) + 1;
+      if (n > 1) {
+        var k = n;
+        while (seen.containsKey('${name}_$k')) {
+          k++;
+        }
+        name = '${name}_$k';
+        seen[name] = 1;
+      }
+      columns.add(name);
+    }
+    return Table(columns, [
+      for (final r in body) {for (var i = 0; i < columns.length; i++) columns[i]: i < r.length ? r[i] : null},
+    ]);
+  }
+
   /// The next element sibling, or `null`.
   Element? get nextElement => _sibling(1);
 
@@ -274,7 +338,8 @@ final class Element extends Node {
 final _ws = RegExp(r'\s+');
 
 /// The elements a query matched, in document order. A [List], with the first match's
-/// [text], [attr], [lines] and [$] one hop closer: `doc.$('a').attr('href')`.
+/// [text], [attr], [lines], [markup] and [table] one hop closer — `doc.$('a').attr('href')` —
+/// and every match's in [texts], [attrs] and [links].
 ///
 /// {@category Formats}
 extension type Elements(List<Element> _list) implements List<Element> {
@@ -294,23 +359,46 @@ extension type Elements(List<Element> _list) implements List<Element> {
   /// Attribute [name] on the first match, or `null` when it is absent or nothing matched.
   String? attrOrNull(String name) => _list.firstOrNull?.attributes[name];
 
-  /// Every descendant of every match that matches [selector], each once, in document order.
+  /// Attribute [name] on every match that has it, in document order; [attr] is the first.
+  List<String> attrs(String name) => [for (final e in _list) ?e.attributes[name]];
+
+  /// The first match serialised; see [Element.markup]. Throws [StateError] when nothing matched.
+  String get markup => _first.markup;
+
+  /// The first match's [Element.table], or an empty table when nothing matched.
+  Table get table => _list.isEmpty ? Table(const [], const []) : _list.first.table;
+
+  /// Every match's `href` — or `src`, where it has none — as a [Uri] resolved against its
+  /// document's [HtmlDocument.base]: `doc.$('a.next').links`, `doc.$('img').links`. With no
+  /// base, a link is as written. A match with neither attribute, or a value that is not a
+  /// URI, is skipped.
+  List<Uri> get links {
+    final out = <Uri>[];
+    Element? root;
+    Uri? base;
+    for (final e in _list) {
+      final href = e.attributes['href'] ?? e.attributes['src'];
+      if (href == null) continue;
+      final uri = Uri.tryParse(href.trim());
+      if (uri == null) continue;
+      var top = e;
+      for (var p = top.parent; p != null; p = p.parent) {
+        top = p;
+      }
+      if (!identical(top, root)) (root, base) = (top, _baseOf(top));
+      out.add(base == null ? uri : base.resolveUri(uri));
+    }
+    return out;
+  }
+
+  /// Every element each match's [Element.$] finds, each once, in document order.
   Elements $(String selector) {
     final s = _Selector.parse(selector, fold: _list.firstOrNull?.syntax != Syntax.xml);
     final seen = <Element>{};
     return Elements([
       for (final e in _list)
-        ...() {
-          _scopes.add(e);
-          try {
-            return [
-              for (final m in s.matchAll(e))
-                if (seen.add(m)) m,
-            ];
-          } finally {
-            _scopes.removeLast();
-          }
-        }(),
+        for (final m in s.from(e))
+          if (seen.add(m)) m,
     ]);
   }
 
@@ -367,11 +455,20 @@ final class HtmlDocument {
   /// The `<html>` element. Parsing always produces one, with `<head>` and `<body>` inside.
   final Element root;
 
-  HtmlDocument(this.root);
+  /// A document over [root]; [url] is where it came from, which relative links resolve
+  /// against.
+  HtmlDocument(this.root, {Uri? url}) {
+    if (url != null) _urls[root] = url;
+  }
 
   /// Parses [text] as HTML. Tag soup is fine: unclosed `<p>` and `<li>`, missing
   /// `<html>`/`<body>`, and `<tr>` straight inside `<table>` all land where a browser puts them.
-  factory HtmlDocument.parse(String text) => HtmlDocument(_parseHtml(text));
+  /// [url] is the page's address, which [base] and [Elements.links] resolve against.
+  factory HtmlDocument.parse(String text, {Uri? url}) => HtmlDocument(_parseHtml(text), url: url);
+
+  /// What a relative link on this page is relative to: its `<base href>`, resolved against the
+  /// address it was parsed with, or that address; `null` when it has neither.
+  Uri? get base => _baseOf(root);
 
   /// Every element matching CSS [selector], in document order.
   Elements $(String selector) => Elements(_Selector.parse(selector).matchAll(root, includeSelf: true));
@@ -394,6 +491,27 @@ final class HtmlDocument {
 
   @override
   String toString() => markup;
+}
+
+/// The address each parsed HTML document came from, by its root element: kept beside the
+/// tree rather than in a field, so no element is larger for it.
+final _urls = Expando<Uri>('url');
+
+/// [root]'s base address: the first `<base href>` in its `<head>`, resolved against the address
+/// the document was parsed with, or that address.
+Uri? _baseOf(Element root) {
+  final url = _urls[root];
+  for (final head in root.children) {
+    if (head.name != 'head') continue;
+    for (final e in head.children) {
+      final href = e.name == 'base' ? e.attributes['href'] : null;
+      if (href == null) continue;
+      final uri = Uri.tryParse(href.trim());
+      if (uri == null) break;
+      return url == null ? uri : url.resolveUri(uri);
+    }
+  }
+  return url;
 }
 
 /// Stands for the document above `<html>`, so an absolute XPath has somewhere to start.
@@ -612,93 +730,8 @@ List<Element> _within(Element root, Set<String> names, Set<String> stop) {
   }
 }
 
-/// An HTML `<table>` as a [Table].
-///
-/// {@category Formats}
-extension ElementTableExtensions on Element {
-  /// This `<table>` (or the first one below this element) as rows of named columns.
-  ///
-  /// The header is the first row of `<th>` cells, or the first row of a `<thead>` whatever
-  /// its cells; a column without a name is `c1, c2, …`, and a name that repeats gets a
-  /// suffix (`Price`, `Price_2`) so no column hides another. Every other `<tr>` with a `<td>`
-  /// is a row. A cell's `colspan` and `rowspan` repeat its text into every column and row it
-  /// covers, so a row's values stay under their headings.
-  Table get table {
-    final t = name == 'table' ? this : $('table').firstOrNull;
-    if (t == null) return Table(const [], const []);
-    List<String>? header;
-    final body = <List<String?>>[];
-    // Cells a rowspan carries down: column → (text, rows still to fill).
-    final carried = <int, (String, int)>{};
-    for (final tr in _within(t, const {'tr'}, const {'table'})) {
-      final cells = _within(tr, const {'th', 'td'}, const {'table', 'tr'});
-      if (cells.isEmpty) continue;
-      if (header == null && (tr.parent?.name == 'thead' || cells.every((c) => c.name == 'th'))) {
-        header = [
-          for (final c in cells)
-            for (var k = _span(c, 'colspan', 1000); k > 0; k--) c.text.trim(),
-        ];
-        continue;
-      }
-      if (!cells.any((c) => c.name == 'td')) continue;
-      final row = <String?>[];
-      void fill() {
-        for (var c = carried[row.length]; c != null; c = carried[row.length]) {
-          final (text, left) = c;
-          left == 1 ? carried.remove(row.length) : carried[row.length] = (text, left - 1);
-          row.add(text);
-        }
-      }
-
-      for (final c in cells) {
-        fill();
-        final text = c.text.trim();
-        final down = _span(c, 'rowspan', 65534);
-        for (var k = _span(c, 'colspan', 1000); k > 0; k--) {
-          if (down > 1) carried[row.length] = (text, down - 1);
-          row.add(text);
-        }
-      }
-      fill();
-      body.add(row);
-    }
-    final names = header ?? const <String>[];
-    final width = body.fold(names.length, (w, r) => r.length > w ? r.length : w);
-    final seen = <String, int>{};
-    final columns = <String>[];
-    for (var i = 0; i < width; i++) {
-      var name = i < names.length && names[i].isNotEmpty ? names[i] : 'c${i + 1}';
-      final n = seen[name] = (seen[name] ?? 0) + 1;
-      if (n > 1) {
-        var k = n;
-        while (seen.containsKey('${name}_$k')) {
-          k++;
-        }
-        name = '${name}_$k';
-        seen[name] = 1;
-      }
-      columns.add(name);
-    }
-    return Table(columns, [
-      for (final r in body) {for (var i = 0; i < columns.length; i++) columns[i]: i < r.length ? r[i] : null},
-    ]);
-  }
-}
-
 /// A cell's `colspan` or `rowspan`: 1 when absent or unreadable, at most [max].
 int _span(Element cell, String name, int max) {
   final n = int.tryParse(cell.attributes[name]?.trim() ?? '') ?? 1;
   return n < 1 ? 1 : (n > max ? max : n);
-}
-
-/// {@category Formats}
-extension ElementsTableExtensions on Elements {
-  /// The first matched element's [ElementTableExtensions.table].
-  Table get table => isEmpty ? Table(const [], const []) : first.table;
-}
-
-/// {@category Formats}
-extension StringHtmlExtensions on String {
-  /// This string parsed as HTML.
-  HtmlDocument get html => HtmlDocument.parse(this);
 }

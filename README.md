@@ -86,12 +86,13 @@ A cancel or a timeout stops the whole process tree, not just the direct child.
 ```dart
 final doc = await url.get().html;                               // or '<p>…</p>'.html
 final title = doc.$('h1').text;
-for (final a in doc.$('td.title > a[href]')) print(a.attr('href'));
+final links = doc.$('td.title > a').links;                      // List<Uri>, resolved; attrs('href') as written
+final items = doc.$('ul').first.$('> li.x');                    // a leading combinator reads from the element
 final flac = doc.$x('//tr[td[2]="FLAC"]/td[1]/a/@href').texts;
 final price = doc.$('th:contains(Price) + td').text;
 final lines = doc.$('article').lines;                           // block-aware text, scripts skipped
 final table = doc.$('table#songs').table;                       // colspan, duplicate headers kept
-print(doc.$('main').first.markup);
+print(doc.$('main').markup);
 ```
 
 The parser puts tag soup where a browser does. It decodes `&lang=en` in a URL as the literal
@@ -106,9 +107,10 @@ JSON, YAML, TOML and INI all decode to one `JsonDocument`, so one query language
 final pubspec = (await 'pubspec.yaml'.path.readText()).yaml;
 final deps = pubspec.$(r'$.dependencies.*').length;
 final port = configText.toml['server']['port'].to<int>();       // or StateError naming $.server.port
-final debug = iniText.ini['debug'].toOrNull<bool>() ?? false;   // absence expected
+final debug = iniText.ini['debug'].or(false);                   // absence expected, typed by the default
 final tags = pubspec['topics'].to<List<String>>();
 final all = streamText.yaml.documents;                          // `.yaml` is the first document
+await pubspec.save('pubspec.json');                             // JSON or YAML, by extension
 ```
 
 ### Paths and archives

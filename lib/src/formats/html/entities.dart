@@ -344,13 +344,10 @@ const _windows1252 = <int, int>{
   0x99: 0x2122, 0x9a: 0x0161, 0x9b: 0x203a, 0x9c: 0x0153, 0x9e: 0x017e, 0x9f: 0x0178,
 };
 
-/// Decodes `&amp;`, `&#38;`, `&#x26;` and the HTML 4 named references in [text], as HTML 5
-/// decodes text: a name without its `;` is decoded only when it is one of the legacy names.
-String decodeEntities(String text) => _decodeEntities(text, _References.text);
-
 /// How references read where they are found.
 enum _References {
-  /// HTML text: see [decodeEntities].
+  /// HTML text: `&amp;`, `&#38;`, `&#x26;` and the HTML 4 named references, decoded as
+  /// HTML 5 decodes text — a name without its `;` only when it is one of the legacy names.
   text,
 
   /// An HTML attribute value: as text, except that a legacy name without its `;` stays

@@ -1,21 +1,5 @@
 part of '../../formats.dart';
 
-/// YAML decoding and encoding.
-///
-/// {@category Formats}
-extension StringYamlExtensions on String {
-  /// This YAML text as a document: block and flow mappings and sequences, plain and quoted
-  /// scalars (over several lines too), `|` and `>` blocks, anchors, aliases and `<<` merge
-  /// keys, comments. A key defined twice is an error.
-  /// Numbers, booleans and null are themselves; dates and times stay text; `!!str` keeps a
-  /// scalar text and any other tag is ignored.
-  ///
-  /// A stream of several documents reads as its first; [YamlDocument.documents] has them all.
-  ///
-  /// Throws [FormatException] with a line number on bad syntax.
-  YamlDocument get yaml => YamlDocument._(_YamlParser(this).parse());
-}
-
 /// A YAML document: the first document of the stream, and the whole stream in [documents].
 ///
 /// A stream is one conversion with one answer, so `.yaml` never changes type with the number
@@ -28,17 +12,6 @@ final class YamlDocument extends JsonDocument {
   final List<JsonDocument> documents;
 
   YamlDocument._(List<Object?> docs) : documents = [for (final d in docs) JsonDocument(d)], super(docs.firstOrNull);
-}
-
-/// {@category Formats}
-extension JsonDocumentYamlExtensions on JsonDocument {
-  /// This document as YAML: block style, two-space indent, quoted only where a plain scalar
-  /// would read as something else.
-  String toYaml() {
-    final sb = StringBuffer();
-    _emitYaml(raw, sb, 0, inList: false);
-    return sb.toString();
-  }
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -1432,7 +1432,7 @@ Future<({List<Uri> pages, List<Uri> maps})> _sitemap(Uint8List bytes, Uri from) 
       if (loc.startsWith('<![CDATA[') && loc.endsWith(']]>')) {
         loc = loc.substring(9, loc.length - 3).trim();
       } else {
-        loc = decodeEntities(loc);
+        loc = loc.html.text;
       }
       if (read(loc) case final url?) into.add(url);
     }

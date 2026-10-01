@@ -8,16 +8,35 @@ part of '../../../formats.dart';
 final class _Selector {
   final List<_Complex> _alternatives;
 
-  const _Selector._(this._alternatives);
+  /// Whether an alternative starts with `+` or `~`, so what it finds is beside the scope
+  /// rather than below it.
+  final bool _sideways;
+
+  _Selector._(this._alternatives)
+    : _sideways = _alternatives.any((c) => c.relative && c.combinators.first != '>' && c.combinators.first != ' ');
 
   static final _cache = <(String, bool), _Selector>{};
 
   /// Parses [source], or returns the cached result. Throws [FormatException] on bad syntax.
   ///
   /// [fold] lowercases type and attribute names, which is what HTML wants and what XML,
-  /// whose names are case-sensitive, does not.
-  static _Selector parse(String source, {bool fold = true}) =>
-      _compiled(_cache, (source, fold), () => _Selector._(_SelectorParser(source, fold).parseList()));
+  /// whose names are case-sensitive, does not. A list with an alternative that starts with a
+  /// combinator is read relative to `:scope`, every alternative of it; see [from].
+  static _Selector parse(String source, {bool fold = true}) => _compiled(_cache, (source, fold), () {
+    final list = _SelectorParser(source, fold).parseList();
+    return _Selector._(list.any((c) => c.relative) ? _SelectorParser(source, fold).parseList(relative: true) : list);
+  });
+
+  /// What `scope.$` finds: the descendants of [scope] that match, or for a relative selector
+  /// (`> li`, `+ dd`, `~ p`) the elements standing so to it.
+  List<Element> from(Element scope) {
+    _scopes.add(scope);
+    try {
+      return matchAll(_sideways ? scope.parent ?? scope : scope);
+    } finally {
+      _scopes.removeLast();
+    }
+  }
 
   /// Whether [e] matches.
   bool matches(Element e) => _withSiblings(() => _matches(e));
@@ -289,19 +308,24 @@ final class _SelectorParser {
     }
   }
 
-  /// A complex selector; with [relative], one that may start with a combinator and is
-  /// anchored at `:scope` — a descendant of it when no combinator is written.
+  /// A complex selector; with [relative], or when it starts with a combinator, one anchored
+  /// at `:scope` — a descendant of it when no combinator is written.
   _Complex parseComplex({bool relative = false}) {
-    if (relative) {
+    final lead = i < s.length && (s[i] == '>' || s[i] == '+' || s[i] == '~');
+    if (relative || lead) {
       var comb = ' ';
-      if (i < s.length && (s[i] == '>' || s[i] == '+' || s[i] == '~')) {
+      if (lead) {
         comb = s[i];
         i++;
         skipWs();
       }
-      final rest = parseComplex();
+      final rest = _chain();
       return _Complex([_scopeCompound, ...rest.compounds], [comb, ...rest.combinators], relative: true);
     }
+    return _chain();
+  }
+
+  _Complex _chain() {
     final compounds = <_Compound>[parseCompound()];
     final combinators = <String>[];
     while (true) {
