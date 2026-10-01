@@ -40,10 +40,12 @@ int _columnsOr(int? fixed) => fixed != null && fixed > 0 ? fixed : Io.columns ??
 
 String _bar(int current, int total, String message) {
   const barLength = 20;
+  final prefix = message.isNotEmpty ? '$message: ' : '';
+  // A stream-sourced batch has no total until its source closes: work done against none is unknown, not 0%.
+  if (total <= 0 && current > 0) return '  $prefix[${'-' * barLength}] --% ($current/?)';
   final percent = total > 0 ? ((current / total) * 100).clamp(0, 100).toInt() : 0;
   final filled = total > 0 ? ((current / total) * barLength).clamp(0, barLength).toInt() : 0;
   final bar = '=' * filled + '-' * (barLength - filled);
-  final prefix = message.isNotEmpty ? '$message: ' : '';
   return '  $prefix[$bar] $percent% ($current/$total)';
 }
 
@@ -411,7 +413,7 @@ final class TaskBoard extends _Meter {
           final all? when all > 0 => ' (${all.humanBytes})',
           _ => '',
         };
-        Io.err.writeln('  [$_current/$total] ${task.label}$size [${task.status ?? 'done'}]');
+        Io.err.writeln('  [$_current/${total > 0 ? total : '?'}] ${task.label}$size [${task.status ?? 'done'}]');
       }
     }
     _show();

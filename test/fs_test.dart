@@ -132,6 +132,7 @@ void main() {
       expect('AIR / Farewell song'.filename, equals('AIR _ Farewell song'));
       expect(r'a\b'.filename, equals('a_b'));
       expect('  spaced   out  '.filename, equals('spaced out'));
+      expect('\n  DISC.01\n  Kanon\t\r\n'.filename, equals('DISC.01 Kanon'));
       expect('///'.filename, equals('___'));
       expect(''.filename, equals('_'));
 

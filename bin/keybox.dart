@@ -122,6 +122,7 @@ Future<void> run() async {
 
   // Stage 2: Track links and downloads, merged — tracks resolve while artwork transfers.
   stage('Resolving tracks and downloading assets');
+  var unresolved = 0;
   final songs = khinsider.url
       .scrape<Asset>()
       .onResponse((ctx) {
@@ -148,13 +149,19 @@ Future<void> run() async {
           );
         }
       })
-      .onError((ctx) => Console.warn(ctx.failure))
+      .onError((ctx) {
+        unresolved++;
+        Console.warn(ctx.failure);
+      })
       .rights;
 
   final last = await [
     Stream.fromIterable(artwork.pairs),
     songs,
   ].merge().download(concurrency: concurrency).show(message: 'Downloading', done: 'All assets downloaded.');
+
+  // An archive missing tracks is not the box set: stop here, and the next run resumes what is missing.
+  if (unresolved + (last?.failed ?? 0) > 0) throw 'Incomplete — run again to resume.';
 
   // Stage 3: Archive
   stage('Creating zip archive');

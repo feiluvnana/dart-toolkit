@@ -1216,6 +1216,10 @@ void main() {
         ),
       );
       expect(progress.total, equals(0), reason: 'an open stream has no total yet');
+      progress.report(
+        BatchDownloadProgress(completed: 1, total: null, written: 1, current: Downloaded(url, path, 1024)),
+      );
+      expect(err.toString(), contains('[1/?] a.txt'), reason: 'work done against no total is unknown, not out of 0');
 
       progress.report(BatchDownloadProgress(completed: 1, total: 2, written: 1, current: Downloaded(url, path, 1024)));
       expect(progress.total, equals(2), reason: 'total is revised as the source discovers work');

@@ -1,7 +1,7 @@
 part of '../../fs.dart';
 
 final _invalidPathChars = RegExp(r'[:*?"<>|\r\n\t]');
-final _invalidNameChars = RegExp(r'[/\\:*?"<>|\r\n\t]');
+final _invalidNameChars = RegExp(r'[/\\:*?"<>|]');
 final _whitespaceCollapse = RegExp(r'\s+');
 final _braceSlash = RegExp(r'\{[^}]*/');
 final _classEscape = RegExp(r'[\\^\[]');
@@ -624,7 +624,7 @@ extension StringPathExtensions on String {
   /// the result is never empty, `.` or `..`. Use [Path.sanitized] for a whole path, which
   /// keeps its separators.
   Path get filename {
-    final cleaned = replaceAll(_invalidNameChars, '_').replaceAll(_whitespaceCollapse, ' ').trim();
+    final cleaned = replaceAll(_whitespaceCollapse, ' ').trim().replaceAll(_invalidNameChars, '_');
     final name = switch (cleaned) {
       '' || '.' => '_',
       '..' => '__',
