@@ -6,53 +6,32 @@ import 'package:test/test.dart';
 
 void main() {
   group('Core Either', () {
-    test('Left and Right properties and pattern matching', () {
+    test('Left and Right are read by pattern, leftOrNull and rightOrNull', () {
       final Either<String, int> right = Right(42);
       final Either<String, int> left = Left('error');
 
-      expect(right.isRight, isTrue);
-      expect(right.isLeft, isFalse);
+      expect(right is Right, isTrue);
       expect(right.rightOrNull, equals(42));
       expect(right.leftOrNull, isNull);
 
-      expect(left.isLeft, isTrue);
-      expect(left.isRight, isFalse);
+      expect(left is Left, isTrue);
       expect(left.leftOrNull, equals('error'));
       expect(left.rightOrNull, isNull);
 
-      // fold
-      expect(right.fold((l) => 'L: $l', (r) => 'R: $r'), equals('R: 42'));
-      expect(left.fold((l) => 'L: $l', (r) => 'R: $r'), equals('L: error'));
-
-      // map
-      final mappedRight = right.mapRight((r) => r * 2);
-      expect(mappedRight, equals(const Right<String, int>(84)));
-
-      final mappedLeft = left.mapRight((r) => r * 2);
-      expect(mappedLeft, equals(const Left<String, int>('error')));
-
-      // mapLeft
-      final leftMapped = left.mapLeft((l) => l.toUpperCase());
-      expect(leftMapped, equals(const Left<String, int>('ERROR')));
+      String describe(Either<String, int> e) => switch (e) {
+        Left(:final value) => 'L: $value',
+        Right(:final value) => 'R: $value',
+      };
+      expect(describe(right), 'R: 42');
+      expect(describe(left), 'L: error');
     });
 
-    test('Either.tryCatchSync and Either.tryCatch', () async {
-      final syncSuccess = Either.tryCatchSync(() => 10 + 5);
-      expect(syncSuccess, equals(const Right<Object, int>(15)));
-
-      final syncFailure = Either.tryCatchSync<int>(() => throw FormatException('bad'));
-      expect(syncFailure.isLeft, isTrue);
-      expect(syncFailure.leftOrNull, isA<FormatException>());
-
-      final asyncSuccess = await Either.tryCatch(() async => 'hello');
-      expect(asyncSuccess, equals(const Right<Object, String>('hello')));
-
-      final asyncFailure = await Either.tryCatch<String>(() async => throw StateError('failed'));
-      expect(asyncFailure.isLeft, isTrue);
-      expect(asyncFailure.leftOrNull, isA<StateError>());
-
-      // tryCatch also accepts a synchronous closure.
-      expect(await Either.tryCatch(() => 1), equals(const Right<Object, int>(1)));
+    test('rights, lefts and unwrap() read a batch still settling (B-CORE-2)', () async {
+      Future<List<Either<Object, int>>> batch() async => [const Right(1), Left(StateError('x')), const Right(3)];
+      expect(await batch().rights, [1, 3]);
+      expect(await batch().lefts, [isA<StateError>()]);
+      await expectLater(batch().unwrap(), throwsStateError);
+      expect(await Future.value(<Either<Object, int>>[const Right(2)]).unwrap(), [2]);
     });
 
     test('Either.unwrap returns the Right value or throws the Left value', () {
@@ -131,17 +110,6 @@ void main() {
       const rightNum = Right<String, num>(42);
       expect(rightObj == rightNum, isTrue);
     });
-
-    test('Either.tryCatchSync captures any thrown error, whatever its type', () {
-      final parsed = Either.tryCatchSync(() => int.parse('not_a_num'));
-      expect(parsed.isLeft, isTrue);
-      expect(parsed.leftOrNull, isA<FormatException>());
-
-      // Narrowing happens afterwards, so no error type can be unrepresentable.
-      final narrowed = Either.tryCatchSync<int>(() => throw StateError('boom')).mapLeft((e) => FormatException('\$e'));
-      expect(narrowed.isLeft, isTrue);
-      expect(narrowed.leftOrNull, isA<FormatException>());
-    });
   });
 
   group('core', () {
@@ -170,7 +138,7 @@ void main() {
     });
 
     test('Either keeps the stack trace of the failure it caught', () async {
-      final outcome = await Either.tryCatch(() async => _boom());
+      final [outcome] = await [0].parallelize((_) => _boom());
       try {
         outcome.unwrap();
         fail('should throw');
@@ -191,16 +159,12 @@ void main() {
   });
 
   group('Environment & .env utilities', () {
-    tearDown(() {
-      Env.reset();
-    });
-
     test('a # is a comment only after whitespace, and an escaped quote stays inside its quotes', () {
-      final env = Env.parse('URL=http://x/#frag\nPASS=a#b\nQ="say \\"hi\\" \\\\ ok"\nPORT=80 # web\n');
+      final env = Env.parse('URL=http://x/#frag\nPASS=a#b\nQ="say \\"hi\\" \\\\ ok"\nWEB_PORT=80 # web\n');
       expect(env['URL'], 'http://x/#frag');
       expect(env['PASS'], 'a#b');
       expect(env['Q'], r'say "hi" \ ok');
-      expect(env['PORT'], '80');
+      expect(env['WEB_PORT'], '80');
     });
 
     test('a prompt reads through Io.readLine, which is async and scriptable', () async {
@@ -236,7 +200,6 @@ SINGLE_QUOTED='single quote value'
       final loaded = Env.parse(sample, override: true);
       expect(loaded['TEST_VAR_XYZ'], equals('12345'));
       expect(Env.get('TEST_VAR_XYZ'), equals('12345'));
-      expect(Env.require('TEST_VAR_XYZ'), equals('12345'));
       expect(Env.has('TEST_VAR_XYZ'), isTrue);
       expect(Env.all().containsKey('TEST_VAR_XYZ'), isTrue);
     });
@@ -248,23 +211,32 @@ SINGLE_QUOTED='single quote value'
       expect(Env.get('MY_CUSTOM_CONFIG'), equals('enabled'));
     });
 
-    test('Env.require throws StateError when missing', () {
-      expect(() => Env.require('DEFINITELY_MISSING_VAR_9999'), throwsA(isA<StateError>()));
-    });
-
-    test('Env.get is null when missing; ?? supplies the fallback', () {
-      expect(Env.get('NON_EXISTENT_VAR') ?? 'fallback_val', equals('fallback_val'));
+    test('Env.get throws naming the key when missing; or: is the fallback (B-CORE-1)', () {
+      expect(
+        () => Env.get('DEFINITELY_MISSING_VAR_9999'),
+        throwsA(isA<StateError>().having((e) => e.message, 'message', contains('DEFINITELY_MISSING_VAR_9999'))),
+      );
+      expect(Env.get('NON_EXISTENT_VAR', or: 'fallback_val'), equals('fallback_val'));
+      expect(Env.getOrNull('NON_EXISTENT_VAR'), isNull);
       expect(Env.isCI, isA<bool>());
     });
 
+    test('an empty variable is unset for get, getOrNull, has and parse', () {
+      Env.set('AUDIT_EMPTY', '');
+      expect(Env.getOrNull('AUDIT_EMPTY'), isNull);
+      expect(Env.has('AUDIT_EMPTY'), isFalse);
+      expect(Env.get('AUDIT_EMPTY', or: 'd'), 'd');
+      expect(() => Env.get('AUDIT_EMPTY'), throwsStateError);
+      Env.parse('AUDIT_EMPTY=filled');
+      expect(Env.get('AUDIT_EMPTY'), 'filled');
+    });
+
     test('Env.parse without override preserves a value loaded earlier', () {
-      Env.remove('AUDIT_FIRST_WINS');
       Env.parse('AUDIT_FIRST_WINS=first');
       Env.parse('AUDIT_FIRST_WINS=second');
       expect(Env.get('AUDIT_FIRST_WINS'), equals('first'));
       Env.parse('AUDIT_FIRST_WINS=third', override: true);
       expect(Env.get('AUDIT_FIRST_WINS'), equals('third'));
-      Env.remove('AUDIT_FIRST_WINS');
     });
   });
 
@@ -300,7 +272,6 @@ SINGLE_QUOTED='single quote value'
         'KEY="-----BEGIN\nabc\n-----END"\n=novalue\nexport\tTAB=1\nOPEN="never closes\nNEXT=2\nS=\'a\nb\'',
         override: true,
       );
-      addTearDown(Env.reset);
       expect(parsed, {
         'KEY': '-----BEGIN\nabc\n-----END',
         'TAB': '1',
@@ -320,8 +291,6 @@ SINGLE_QUOTED='single quote value'
     });
 
     test('Env.parse repeated key has last line win in both parsed and Env.get (CORE-3)', () {
-      Env.remove('REPEAT_KEY');
-      addTearDown(() => Env.remove('REPEAT_KEY'));
       final parsed = Env.parse('REPEAT_KEY=first\nREPEAT_KEY=second\n');
       expect(parsed['REPEAT_KEY'], 'second');
       expect(Env.get('REPEAT_KEY'), 'second');

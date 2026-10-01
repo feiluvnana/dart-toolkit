@@ -207,6 +207,9 @@ final class Table {
   /// A CSV row is frozen already.
   static Row _copy(Map<String, Object?> r) => r is _CsvRow ? r as Row : Row(Map<String, Object?>.unmodifiable(r));
 
+  /// A row this table just built and nobody else holds: frozen by a view, not a copy.
+  static Row _own(Map<String, Object?> r) => Row(UnmodifiableMapView(r));
+
   /// The rows as a query.
   Sequence<Row> get sequence => rows.sequence;
 
@@ -223,11 +226,12 @@ final class Table {
     return [for (final r in rows) r[c]];
   }
 
-  /// Every value of [column] as a number; a cell that is not one throws. Text reads as a
-  /// decimal number only: `0x10`, `NaN` and `Infinity` are not numbers in a table.
-  List<num> numbers(String column) {
+  /// Every value of [column] as a number, ready to fold: `t.numbers('bytes').sum`. A cell
+  /// that is not one throws. Text reads as a decimal number only: `0x10`, `NaN` and
+  /// `Infinity` are not numbers in a table.
+  Sequence<num> numbers(String column) {
     final c = _has(column);
-    return [for (final r in rows) r.number(c)];
+    return Sequence<num>._([for (final r in rows) r.number(c)]);
   }
 
   /// Every value of [column] as text.
@@ -314,7 +318,7 @@ final class Table {
   Table select(List<String> names) {
     names.forEach(_has);
     return Table._(List.unmodifiable(names), [
-      for (final r in rows) _copy({for (final n in names) n: r[n]}),
+      for (final r in rows) _own({for (final n in names) n: r[n]}),
     ], _order);
   }
 
@@ -331,7 +335,7 @@ final class Table {
   Table rename(Map<String, String> names) => Table._(
     List.unmodifiable([for (final c in columns) names[c] ?? c]),
     [
-      for (final r in rows) _copy({for (final MapEntry(:key, :value) in r.entries) names[key] ?? key: value}),
+      for (final r in rows) _own({for (final MapEntry(:key, :value) in r.entries) names[key] ?? key: value}),
     ],
     [for (final (col, desc) in _order) (names[col] ?? col, desc)],
   );
@@ -339,7 +343,7 @@ final class Table {
   /// A new column [name] computed from each row.
   Table derive(String name, Object? Function(Row row) value) =>
       Table._(List.unmodifiable([...columns.where((c) => c != name), name]), [
-        for (final r in rows) _copy({...r, name: value(r)}),
+        for (final r in rows) _own({...r, name: value(r)}),
       ], _order);
 
   /// One row per distinct combination of [by] (every column when omitted); the first wins.
@@ -379,11 +383,11 @@ final class Table {
       final keyVal = r[on];
       final matches = keyVal == null ? null : index[_Key([keyVal])];
       if (matches == null) {
-        if (left) out.add(_copy({...r, for (final c in rightColumns.values) c: null}));
+        if (left) out.add(_own({...r, for (final c in rightColumns.values) c: null}));
         continue;
       }
       for (final m in matches) {
-        out.add(_copy({...r, for (final MapEntry(:key, :value) in rightColumns.entries) value: m[key]}));
+        out.add(_own({...r, for (final MapEntry(:key, :value) in rightColumns.entries) value: m[key]}));
       }
     }
     return Table._(List.unmodifiable([...columns, ...rightColumns.values]), out, const []);
@@ -406,7 +410,7 @@ final class Table {
       for (final c in columnValues) {
         row[c] = _foldCells(agg, [for (final r in byColumn[c] ?? const <Row>[]) r[value]]);
       }
-      out.add(_copy(row));
+      out.add(_own(row));
     }
     return Table._(List.unmodifiable([rows, ...columnValues]), out, const []);
   }
@@ -547,7 +551,7 @@ final class TableGroups {
   Table _fold(Map<String, Object? Function(List<Row> rows)> folds) =>
       Table._(List.unmodifiable([..._keys, ...folds.keys]), [
         for (final MapEntry(key: k, value: rows) in _groups.entries)
-          Table._copy({
+          Table._own({
             for (var i = 0; i < _keys.length; i++) _keys[i]: k.parts[i],
             for (final MapEntry(key: name, value: f) in folds.entries) name: f(rows),
           }),
@@ -625,7 +629,8 @@ int _compareCells(Object? a, Object? b) => _compare(_cell(a), _cell(b));
 /// and `1,5` — a decimal comma, or two values — is not a number at all.
 final _thousands = RegExp(r'^[+-]?\d{1,3}(,\d{3})+(\.\d+)?$');
 
-/// `JsonDocument.to<T>`'s coercions, plus thousands separators in text: `'1,200'` reads as 1200.
+/// `JsonDocument.to<T>`'s coercions, plus thousands separators in text (`'1,200'` reads as
+/// 1200) and ISO 8601 text as a [DateTime].
 T? _coerce<T>(Object? val) {
   if (val == null) return null;
   if (val is T) return val as T;
@@ -652,6 +657,7 @@ T? _coerce<T>(Object? val) {
     if (val == 'false' || val == false) return false as T;
     return null;
   }
+  if (T == DateTime) return val is String ? DateTime.tryParse(val.trim()) as T? : null;
   var text = val is String ? val.trim() : '$val';
   if (text.contains(',') && _thousands.hasMatch(text)) text = text.replaceAll(',', '');
   final isNumeric = T == num || T == int || T == double;

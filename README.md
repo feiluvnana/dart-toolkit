@@ -23,7 +23,7 @@ its startup and wants less.
 | Import | What it holds |
 |---|---|
 | `core.dart` | `Either`, `Env`, `Io`, durations (`60.s`) |
-| `async.dart` | `parallelize`, `Worker`/`Pool`, `retry`, `Mutex`, `Cancel.scope`, stream operators |
+| `async.dart` | `parallelize`, `Worker`/`Pool`, `retry`, `Semaphore`, `Cancel.scope`, stream operators |
 | `collection.dart` | `Sequence` (lazy queries) and `Table` (rows of named columns: CSV, JSON, Markdown, console) |
 | `formats.dart` | `JsonDocument` for JSON, YAML, TOML and INI; one markup tree for HTML and XML, with CSS `$` and XPath `$x` |
 | `fs.dart` | `Path`, archives (zip, 7z, rar, tar.*), compression |

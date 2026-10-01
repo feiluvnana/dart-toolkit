@@ -189,7 +189,7 @@ void main() {
       expect(results.length, equals(5));
       expect(results[0], equals(const Right<Object, String>('res-1')));
       expect(results[1], equals(const Right<Object, String>('res-2')));
-      expect(results[2].isLeft, isTrue);
+      expect(results[2] is Left, isTrue);
       expect((results[2].leftOrNull as Exception).toString(), contains('item 3 failed'));
       expect(results[3], equals(const Right<Object, String>('res-4')));
       expect(results[4], equals(const Right<Object, String>('res-5')));
@@ -224,10 +224,10 @@ void main() {
 
       expect(results.length, equals(3));
       // item 3 finishes first, item 2 fails, item 1 finishes last
-      final rightValues = results.where((e) => e.isRight).map((e) => e.rightOrNull).toList();
+      final rightValues = results.whereType<Right<Object, int>>().map((e) => e.value).toList();
       expect(rightValues, containsAll([10, 30]));
 
-      final leftValues = results.where((e) => e.isLeft).toList();
+      final leftValues = results.whereType<Left<Object, int>>().toList();
       expect(leftValues.length, equals(1));
     });
   });
@@ -310,28 +310,7 @@ void main() {
     });
   });
 
-  group('Async Synchronization (Mutex & Semaphore)', () {
-    test('Mutex protects critical sections exclusively', () async {
-      final lock = Mutex();
-      var activeWorkers = 0;
-      var maxWorkers = 0;
-      final output = <int>[];
-
-      await [1, 2, 3].parallelize((id) async {
-        await lock.run(() async {
-          activeWorkers++;
-          if (activeWorkers > maxWorkers) maxWorkers = activeWorkers;
-          await Future<void>.delayed(10.ms);
-          output.add(id);
-          activeWorkers--;
-        });
-      }, concurrency: 3);
-
-      expect(maxWorkers, equals(1));
-      expect(output.length, equals(3));
-      expect(lock.isLocked, isFalse);
-    });
-
+  group('Async Synchronization (Semaphore)', () {
     test('Semaphore limits concurrent access to maxPermits', () async {
       final sem = Semaphore(2);
       var inFlight = 0;
@@ -466,15 +445,6 @@ void main() {
       );
     });
 
-    test('delayBy shifts every item and still completes', () async {
-      final sw = Stopwatch()..start();
-      final shifted = await Stream.fromIterable([1, 2, 3]).delayBy(40.ms).toList();
-      sw.stop();
-
-      expect(shifted, equals([1, 2, 3]));
-      expect(sw.elapsedMilliseconds, greaterThanOrEqualTo(35));
-    });
-
     test('a paused subscription receives nothing and drains on resume', () async {
       final controller = StreamController<int>();
       final received = <List<int>>[];
@@ -509,18 +479,6 @@ void main() {
   });
 
   group('Isolate Utilities', () {
-    test('(() => computation()).isolate() executes on background isolate', () async {
-      final res = await (() {
-        var sum = 0;
-        for (var i = 0; i < 1000; i++) {
-          sum += i;
-        }
-        return sum;
-      }).isolate();
-
-      expect(res, equals(499500));
-    });
-
     test('parallelize with isolate: true runs workers on background isolates', () async {
       final numbers = [10, 20, 30];
       final results = await numbers.parallelize((n) {
@@ -530,7 +488,7 @@ void main() {
 
       expect(results.length, equals(3));
       expect(results[0], equals(const Right<Object, int>(20)));
-      expect(results[1].isLeft, isTrue);
+      expect(results[1] is Left, isTrue);
       expect(results[2], equals(const Right<Object, int>(60)));
     });
 
@@ -565,7 +523,7 @@ void main() {
 
       expect(outcomes.length, equals(3));
       expect(outcomes[0], equals(const Right<Object, int>(100)));
-      expect(outcomes[1].isLeft, isTrue);
+      expect(outcomes[1] is Left, isTrue);
       expect(outcomes[1].leftOrNull, isA<FormatException>());
       expect(outcomes[2], equals(const Right<Object, int>(300)));
     });
@@ -664,7 +622,7 @@ void main() {
 
     test('Stream.parallelize(isolate: true) cancelled early cleans up workers', () async {
       final res = await Stream.fromIterable([1, 2, 3, 4, 5]).parallelize(_double, isolate: true, concurrency: 4).first;
-      expect(res.isRight, isTrue);
+      expect(res is Right, isTrue);
     });
 
     test('Iterable.parallelize(isolate: true) sends the item, not the list around it', () async {
@@ -673,7 +631,7 @@ void main() {
       final mixed = <Object>[1, port, 3];
       final out = await mixed.parallelize((x) => x is int ? x : 0, isolate: true);
       expect(out[0], const Right<Object, int>(1));
-      expect(out[1].isLeft, isTrue, reason: 'the port cannot cross, and fails only itself');
+      expect(out[1] is Left, isTrue, reason: 'the port cannot cross, and fails only itself');
       expect(out[2], const Right<Object, int>(3));
     });
 
@@ -849,9 +807,9 @@ void main() {
       expect(shared.isCancelled, isFalse);
     });
 
-    test('delay, Semaphore and Mutex stop when the scope is cancelled', () async {
+    test('delay and Semaphore stop when the scope is cancelled', () async {
       final stop = CancelToken();
-      final lock = Mutex();
+      final lock = Semaphore(1);
       final held = Completer<void>();
       unawaited(lock.run(() => held.future));
       final waiting = Cancel.scope(() => lock.run(() => 'got it'), token: stop);
@@ -872,7 +830,7 @@ void main() {
       expect(events, [1, 3]);
     });
 
-    test('debounce and delayBy keep their timing with one timer', () async {
+    test('debounce keeps its timing with one timer', () async {
       final controller = StreamController<int>();
       final out = controller.stream.debounce(40.ms).toList();
       controller.add(1);
@@ -882,11 +840,27 @@ void main() {
       controller.add(3);
       await controller.close();
       expect(await out, [2, 3]);
+    });
 
-      final watch = Stopwatch()..start();
-      final delayed = await Stream.fromIterable([1, 2, 3]).delayBy(30.ms).toList();
-      expect(delayed, [1, 2, 3]);
-      expect(watch.elapsed, greaterThanOrEqualTo(30.ms));
+    test('chunkEvery emits the batch held before an error ahead of it (ASYNC-2)', () async {
+      final controller = StreamController<int>();
+      final events = <Object>[];
+      final done = Completer<void>();
+      controller.stream
+          .chunkEvery(1.s)
+          .listen(events.add, onError: (Object e) => events.add('error'), onDone: done.complete);
+      controller
+        ..add(1)
+        ..add(2)
+        ..addError(StateError('x'))
+        ..add(3);
+      await controller.close();
+      await done.future;
+      expect(events, [
+        [1, 2],
+        'error',
+        [3],
+      ]);
     });
 
     test('a sub-millisecond retry delay is not rounded to nothing', () async {
@@ -902,7 +876,7 @@ void main() {
     test('parallelize keeps order and settles failures, on an isolate too', () async {
       final local = await [1, -1, 3].parallelize((x) => x < 0 ? throw ArgumentError() : x * 2);
       expect(local.rights, [2, 6]);
-      expect(local[1].isLeft, isTrue);
+      expect(local[1] is Left, isTrue);
       final remote = await [1, 2, 3, 4, 5].parallelize(_double, isolate: true, concurrency: 2);
       expect(remote.rights, [2, 4, 6, 8, 10]);
     });

@@ -77,16 +77,3 @@ class Permit {
     _semaphore._release();
   }
 }
-
-/// A mutual exclusion lock ensuring only one critical section executes at any time.
-///
-/// {@category Concurrency}
-class Mutex {
-  final Semaphore _semaphore = Semaphore(1);
-
-  /// Whether the mutex is currently locked.
-  bool get isLocked => _semaphore.permits == 0;
-
-  /// Executes [action] while holding the mutex lock.
-  Future<T> run<T>(FutureOr<T> Function() action) => _semaphore.run(action);
-}

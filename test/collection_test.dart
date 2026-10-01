@@ -26,7 +26,7 @@ void main() {
       expect(s.sequence, same(s));
     });
 
-    test('shape: distinct, chunk, windowed, pairwise, zip, cartesian, interleave, scan, takeLast, skipLast', () {
+    test('shape: distinct, chunk, windowed, pairwise, zip, takeLast, skipLast', () {
       expect([3, 1, 3, 2, 1].sequence.distinct.toList(), [3, 1, 2]);
       expect(words.sequence.distinctBy((w) => w[0]).toList(), ['apple', 'banana']);
       expect([1, 2, 3, 4, 5].sequence.chunk(2).toList(), [
@@ -46,13 +46,9 @@ void main() {
       ]);
       expect([1, 2, 3].sequence.pairwise.toList(), [(1, 2), (2, 3)]);
       expect([1, 2, 3].sequence.zip(['a', 'b']).toList(), [(1, 'a'), (2, 'b')]);
-      expect([1, 2].sequence.cartesian(['a', 'b']).toList(), [(1, 'a'), (1, 'b'), (2, 'a'), (2, 'b')]);
-      expect([1, 3, 5].sequence.interleave([2, 4]).toList(), [1, 2, 3, 4, 5]);
-      expect([1, 2, 3].sequence.scan(0, (a, b) => a + b).toList(), [1, 3, 6]);
       expect([1, 2, 3, 4].sequence.takeLast(2).toList(), [3, 4]);
       expect([1, 2, 3, 4].sequence.skipLast(3).toList(), [1]);
       expect([1, 2, 3].sequence.reversed.toList(), [3, 2, 1]);
-      expect([1, 2, 3].sequence.whereNot((n) => n.isEven).toList(), [1, 3]);
       expect(
         [
           [1],
@@ -81,7 +77,7 @@ void main() {
       expect([3, 1, 2].sequence.sortedDescending.toList(), [3, 2, 1]);
       expect([3, 1, 2].sequence.max, 3);
       expect(<int>[].sequence.min, isNull);
-      expect(words.sequence.sortedBy((w) => w.length).thenWith((a, b) => b.compareTo(a)).toList(), [
+      expect(words.sequence.sortedBy((w) => w.length).thenBy((w) => w, descending: true).toList(), [
         'apple',
         'banana',
         'avocado',
@@ -121,11 +117,6 @@ void main() {
             .toList(),
         ['One:10', 'Two:20', 'Two:21', 'Three:null'],
       );
-      expect(songs.sequence.groupJoin(pages, on: (s) => s.href, to: (p) => p.href, (s, ps) => ps.length).toList(), [
-        1,
-        2,
-        0,
-      ]);
     });
 
     test('groupBy, countBy, indexBy, partition, numbers', () {
@@ -150,8 +141,6 @@ void main() {
       expect(<int>[].sequence.average, isNull);
       expect(words.sequence.maxBy((w) => w.length), 'apricot');
       expect(words.sequence.minBy((w) => w.length), 'apple');
-      expect([3, 9, 1].sequence.minMax((n) => n), (1, 9));
-      expect([1, 3].sequence.none((n) => n.isEven), isTrue);
     });
 
     test('a Map is a Sequence of records and comes back as a Map', () {
@@ -160,12 +149,8 @@ void main() {
       expect(m.sequence.where((p) => p.$2.isOdd).toMap(), {'a': 1, 'c': 3});
       expect(m.sequence.mapValues((v) => v * 10).toMap(), {'a': 10, 'b': 20, 'c': 30});
       expect(m.sequence.mapKeys((k) => k.toUpperCase()).toMap(), {'A': 1, 'B': 2, 'C': 3});
-      expect(m.sequence.inverted.toMap(), {1: 'a', 2: 'b', 3: 'c'});
       expect(m.sequence.followedBy({'b': 5}.sequence).toMap((a, b) => a + b), {'a': 1, 'b': 7, 'c': 3});
       expect(m.sequence.sortedByValue(descending: true).keys.toList(), ['c', 'b', 'a']);
-      final (ks, vs) = m.sequence.unzip;
-      expect(ks, ['a', 'b', 'c']);
-      expect(vs, [1, 2, 3]);
       for (final (k, v) in m.sequence) {
         expect(m[k], v);
       }
@@ -294,6 +279,10 @@ void main() {
         t.select(['x']),
         t.derive('y', (r) => 2),
         t.rename({'x': 'z'}),
+        t.join(t, on: 'x'),
+        t.leftJoin(t.derive('y', (r) => 3), on: 'x'),
+        t.groupBy('x').count(),
+        t.pivot(rows: 'x', column: 'x', value: 'x'),
       ]) {
         expect(() => derived.rows.first[derived.columns.first] = 0, throwsUnsupportedError);
       }
@@ -705,6 +694,61 @@ void main() {
       source.add(0);
       expect(sorted.first, 0);
       expect(sorted.length, 4);
+    });
+  });
+
+  group('the fourth audit', () {
+    test('a Sequence answers length, last, elementAt and toList from its source', () {
+      final s = [1, 2, 3].sequence.map((n) => n * 10);
+      expect(s.length, 3);
+      expect(s.last, 30);
+      expect(s.elementAt(1), 20);
+      expect(s.isNotEmpty, isTrue);
+      expect(() => s.toList(growable: false).add(1), throwsUnsupportedError);
+      expect(s.toList()..add(40), [10, 20, 30, 40]);
+      final sorted = [3, 1, 2].sequence.sorted;
+      expect(sorted.toList(), [1, 2, 3]);
+      expect(sorted.last, 3);
+      expect(sorted.elementAt(1), 2);
+    });
+
+    test('Table.numbers is a Sequence, ready to fold (B-COLL-1)', () {
+      final t = Table.csv('bytes\n"1,200"\n800\n');
+      expect(t.numbers('bytes').sum, 2000);
+      expect(t.numbers('bytes').max, 1200);
+    });
+
+    test('numbers: plain text parses first; grouped commas, signs and the rest (P-COLL-3, COLL-8)', () {
+      final r = Row({
+        'big': '1e400',
+        'grouped': '-1,234.5',
+        'plus': '+1,000',
+        'bad': '1,20',
+        'trail': '1,000,',
+        'lead': ',100',
+        'dot': '1,000.',
+        'hex': '-0x1',
+        'pad': ' 12 ',
+      });
+      expect(r.getOrNull<int>('big'), isNull);
+      expect(() => r.get<int>('big'), throwsStateError);
+      expect(r.number('grouped'), -1234.5);
+      expect(r.get<int>('plus'), 1000);
+      for (final c in ['bad', 'trail', 'lead', 'dot', 'hex']) {
+        expect(r.numberOrNull(c), isNull, reason: c);
+      }
+      expect(r.get<int>('pad'), 12);
+    });
+
+    test('get<DateTime> reads ISO 8601 text (F-11)', () {
+      final r = Row({'at': '2024-01-02T03:04:05Z', 'day': '2024-03-01', 'no': 'soon', 'n': 5});
+      expect(r.get<DateTime>('at'), DateTime.utc(2024, 1, 2, 3, 4, 5));
+      expect(r.get<DateTime>('day'), DateTime(2024, 3, 1));
+      expect(r.getOrNull<DateTime>('no'), isNull);
+      expect(r.getOrNull<DateTime>('n'), isNull);
+      expect(() => r.get<DateTime>('no'), throwsStateError);
+      final at = DateTime(2020);
+      expect(Row({'d': at}).get<DateTime>('d'), same(at));
     });
   });
 }

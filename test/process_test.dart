@@ -107,7 +107,7 @@ void main() {
           final res = await run('printenv DART_TOOLKIT_TEST_VAR', quiet: true);
           expect(res.text, equals('propagated_value'));
         } finally {
-          Env.remove('DART_TOOLKIT_TEST_VAR');
+          Env.set('DART_TOOLKIT_TEST_VAR', '');
         }
       }
     });
@@ -313,8 +313,9 @@ void main() {
       final dir = await Directory.systemTemp.createTemp('which');
       addTearDown(() => dir.delete(recursive: true));
       File('${dir.path}/tool').writeAsStringSync('#!/bin/sh\necho hi');
+      final path = Env.get('PATH');
       Env.set('PATH', dir.path);
-      addTearDown(() => Env.remove('PATH'));
+      addTearDown(() => Env.set('PATH', path));
       expect(await which('tool'), isNull);
     }, testOn: '!windows');
 

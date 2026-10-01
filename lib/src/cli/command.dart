@@ -826,7 +826,7 @@ class CliCommand {
       for (final option in cmd._options) {
         if (values.containsKey(option)) continue;
         if (option._env case final variable?) {
-          if (Env.get(variable) case final raw? when raw.isNotEmpty) {
+          if (Env.getOrNull(variable) case final raw?) {
             values[option] = option._parse(raw);
             continue;
           }
