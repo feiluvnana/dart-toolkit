@@ -743,7 +743,6 @@ class _Host<T> {
   /// still applies; whichever is longer wins, so robots can slow a host but never hurry it.
   Duration gap = Duration.zero;
   int inFlight = 0;
-  int consecutiveFailures = 0;
   int backoffs = 0;
   DateTime nextSend = DateTime.fromMillisecondsSinceEpoch(0);
   bool paused = false;
@@ -1065,9 +1064,8 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
   );
 
   Future<void> transportFailure(_Host<T> host, _Item<T> item, Uri url, Object e, StackTrace st) {
-    host.consecutiveFailures++;
     if (stopped) return Future.value();
-    if (!_certain(e) && host.consecutiveFailures < 3 && item.attempt <= cfg.retries) {
+    if (_replayable(item.request.method) && !_certain(e) && item.attempt <= cfg.retries) {
       requeue(host, item, (200 * item.attempt).ms);
       return Future.value();
     }
@@ -1192,7 +1190,6 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
       return transportFailure(host, item, sent.url, e, st);
     }
     if (stopped) return;
-    host.consecutiveFailures = 0;
     bytes += builder.length;
 
     final res = Response.bytes(
@@ -1207,8 +1204,9 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     final status = res.statusCode;
 
     if (status >= 300 && status < 400) return redirect(host, item, sent, res);
+    final replayable = _replayable(sent.method);
     if (status == 429 || status == 503) {
-      final wait = retryAfter(res, host);
+      final wait = replayable ? retryAfter(res, host) : _Retry.declined(streamed);
       if (wait == null) return refuse(host, item, res);
       pause(host, wait);
       if (item.attempt <= cfg.retries) {
@@ -1219,7 +1217,7 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
       return refuse(host, item, res);
     }
     if (status >= 500) {
-      if (item.attempt <= cfg.retries) return requeue(host, item, (200 * item.attempt).ms);
+      if (replayable && item.attempt <= cfg.retries) return requeue(host, item, (200 * item.attempt).ms);
       return refuse(host, item, res);
     }
     if (status < 200 || status >= 300) return refuse(host, item, res);
@@ -1301,9 +1299,9 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
         if (!read.add(map)) continue;
         active++;
         fetchOwn(map, agent, cap: _sitemapCap)
-            .then((bytes) {
+            .then((bytes) async {
               if (bytes == null || stopped) return;
-              final (:pages, :maps) = _sitemap(bytes, map);
+              final (:pages, :maps) = await _sitemap(bytes, map);
               pending.addAll(maps);
               for (final page in pages) {
                 enqueue(_Item<T>(_page(page), none));
@@ -1365,45 +1363,6 @@ Uri _resolve(Uri base, Object target) => switch (target) {
 /// A fresh copy the engine can send once per attempt, with redirects left to it.
 Request _clone(Request req) => req.copy()..followRedirects = false;
 
-/// A sink that holds what it is given, and throws [_Over] past its cap.
-final class _Capped implements Sink<List<int>> {
-  final int cap;
-  final BytesBuilder bytes = BytesBuilder(copy: false);
-
-  _Capped(this.cap);
-
-  @override
-  void add(List<int> chunk) {
-    if (bytes.length + chunk.length > cap) throw const _Over();
-    bytes.add(chunk);
-  }
-
-  @override
-  void close() {}
-}
-
-final class _Over implements Exception {
-  const _Over();
-}
-
-/// [bytes] unzipped, or `null` when they are not a whole gzip stream or unpack to more than
-/// [cap] — a sitemap is a file from the site, and a small one can be a bomb.
-Uint8List? _gunzip(Uint8List bytes, int cap) {
-  final out = _Capped(cap);
-  try {
-    final sink = gzip.decoder.startChunkedConversion(out);
-    // Fed a slice at a time, so the cap is checked while the output grows rather than after.
-    for (var at = 0; at < bytes.length; at += 16384) {
-      final end = at + 16384 < bytes.length ? at + 16384 : bytes.length;
-      sink.add(Uint8List.sublistView(bytes, at, end));
-    }
-    sink.close();
-  } catch (_) {
-    return null;
-  }
-  return out.bytes.takeBytes();
-}
-
 final _sitemapIndex = RegExp(r'<sitemapindex[\s>]', caseSensitive: false);
 final _sitemapUrlset = RegExp(r'<urlset[\s>]', caseSensitive: false);
 final _sitemapLoc = RegExp(r'<loc\b[^>]*>(.*?)</loc>', caseSensitive: false, dotAll: true);
@@ -1415,10 +1374,25 @@ final _sitemapLoc = RegExp(r'<loc\b[^>]*>(.*?)</loc>', caseSensitive: false, dot
 /// `.xml.gz` most large sites serve — is unpacked first, and one that is not XML is read as
 /// the plain-text form the protocol also allows, a URL a line. A file that cannot be read
 /// names nothing.
-({List<Uri> pages, List<Uri> maps}) _sitemap(Uint8List bytes, Uri from) {
+Future<({List<Uri> pages, List<Uri> maps})> _sitemap(Uint8List bytes, Uri from) async {
   final pages = <Uri>[];
   final maps = <Uri>[];
-  final raw = bytes.length > 2 && bytes[0] == 0x1f && bytes[1] == 0x8b ? _gunzip(bytes, _sitemapCap) : bytes;
+  Uint8List? raw = bytes;
+  if (bytes.length > 2 && bytes[0] == 0x1f && bytes[1] == 0x8b) {
+    try {
+      final builder = BytesBuilder(copy: false);
+      await for (final chunk in _inflated(Stream.value(bytes), _Encoding.gzip, from)) {
+        if (builder.length + chunk.length > _sitemapCap) {
+          raw = null;
+          break;
+        }
+        builder.add(chunk);
+      }
+      if (raw != null) raw = builder.takeBytes();
+    } catch (_) {
+      raw = null;
+    }
+  }
   if (raw == null) return (pages: pages, maps: maps);
   final text = utf8.decode(raw, allowMalformed: true);
   Uri? read(String href) => switch (Uri.tryParse(href.trim())) {
@@ -1431,6 +1405,8 @@ final _sitemapLoc = RegExp(r'<loc\b[^>]*>(.*?)</loc>', caseSensitive: false, dot
       var loc = m[1]!.trim();
       if (loc.startsWith('<![CDATA[') && loc.endsWith(']]>')) {
         loc = loc.substring(9, loc.length - 3).trim();
+      } else {
+        loc = decodeEntities(loc);
       }
       if (read(loc) case final url?) into.add(url);
     }

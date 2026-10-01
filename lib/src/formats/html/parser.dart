@@ -48,6 +48,8 @@ const _closesSibling = <String, (Set<String>, Set<String>)>{
   'rp': ({'rt', 'rp'}, {'ruby'}),
 };
 
+const _tableParts = {'table', 'tbody', 'tfoot', 'thead', 'tr', 'td', 'th', 'caption', 'colgroup', 'col'};
+
 const _headings = {'h1', 'h2', 'h3', 'h4', 'h5', 'h6'};
 
 /// SVG's mixed-case names, by the lowercase a tag-soup tokenizer reads them as: inside
@@ -237,7 +239,12 @@ final class _Parser {
       insert(Element('p'), selfClosing: true);
       return true;
     }
-    closeTo(name);
+    closeInScope(
+      {name},
+      _tableParts.contains(name)
+          ? const {'table', 'template'}
+          : const {'table', 'td', 'th', 'caption', 'template', 'object', 'marquee', 'applet'},
+    );
     return true;
   }
 
@@ -247,16 +254,6 @@ final class _Parser {
       ..add(html)
       ..add(head);
     _svg = _math = 0;
-  }
-
-  /// Pops open elements up to and including the nearest [name]; nothing if it is not open.
-  void closeTo(String name) {
-    for (var i = open.length - 1; i > 0; i--) {
-      if (open[i].name == name) {
-        _truncate(i);
-        return;
-      }
-    }
   }
 
   bool startTag() {

@@ -136,6 +136,14 @@ final class Pool<T, R> {
     }
   }
 
+  _Slot<T, R> _fresh(_Slot<T, R> slot) {
+    if (_closed != null) {
+      slot.kill(StateError('The pool is closed.'));
+      throw StateError('The pool is closed.');
+    }
+    return slot;
+  }
+
   /// The next free worker: an idle one, a new one while there are fewer than [size] — which
   /// is also how a dead one is replaced — or the first to come free.
   Future<_Slot<T, R>> _acquire(CancelToken? token) async {
@@ -146,7 +154,7 @@ final class Pool<T, R> {
       if (_waiting.isEmpty && _idle.length + _busy.length + _starting < size) {
         _starting++;
         try {
-          return _take(await _start());
+          return _take(_fresh(await _start()));
         } finally {
           _starting--;
         }
@@ -163,7 +171,7 @@ final class Pool<T, R> {
       if (_idle.length + _busy.length + _starting < size) {
         _starting++;
         try {
-          return _take(await _start());
+          return _take(_fresh(await _start()));
         } finally {
           _starting--;
         }

@@ -47,7 +47,7 @@ String _bar(int current, int total, String message) {
   return '  $prefix[$bar] $percent% ($current/$total)';
 }
 
-bool _interactive() => Io.isTerminal && Io.color;
+bool _interactive() => Io.isErrTerminal;
 
 /// Whether an indicator is shown at all: `-q` asks for warnings and errors only, and a
 /// spinner, a bar or a board is neither.
@@ -104,7 +104,7 @@ abstract class _Live {
       buffer.write('\r\x1b[K\n');
     }
     if (_rows > lines.length) buffer.write('\x1b[${_rows - lines.length}A');
-    Io.out.write(buffer.toString());
+    Io.err.write(buffer.toString());
     _rows = lines.length;
   }
 
@@ -117,7 +117,7 @@ abstract class _Live {
       buffer.write('\r\x1b[K\n');
     }
     buffer.write('\x1b[${_rows}A');
-    Io.out.write(buffer.toString());
+    Io.err.write(buffer.toString());
     _rows = 0;
   }
 }
@@ -236,7 +236,7 @@ final class Spinner extends _Live {
         _render();
       });
     } else {
-      Io.out.writeln('  ${style.frames.first} $_text...');
+      Io.err.writeln('  ${style.frames.first} $_text...');
     }
   }
 
@@ -349,7 +349,7 @@ final class ProgressBar extends _Meter {
     final decile = total > 0 ? (_current * 10 ~/ total).clamp(0, 10) : 0;
     if (decile == _lastDecile) return;
     _lastDecile = decile;
-    Io.out.writeln(_line(label));
+    Io.err.writeln(_line(label));
   }
 }
 
@@ -448,7 +448,7 @@ final class TaskBoard extends _Meter {
           final all? when all > 0 => ' (${_formatBytes(all)})',
           _ => '',
         };
-        Io.out.writeln('  [$_current/$total] ${task.label}$size [${task.status ?? 'done'}]');
+        Io.err.writeln('  [$_current/$total] ${task.label}$size [${task.status ?? 'done'}]');
       }
     }
     _show();
@@ -818,11 +818,23 @@ extension StreamBatchProgressExtensions<T extends BatchProgress> on Stream<T> {
     var failed = true;
     try {
       await for (final p in this) {
+        if (p.current.isDone && p.current.status == 'failed') {
+          Console.error(p.current.error ?? p.current.label);
+        }
         board.report(last = p);
       }
       failed = false;
     } finally {
-      board.done(failed ? null : done);
+      final failCount = last?.failed ?? 0;
+      if (failed) {
+        board.done(null);
+      } else if (failCount > 0) {
+        board.done(null);
+        final total = last?.total ?? last?.completed ?? failCount;
+        Console.warn('$failCount of $total failed');
+      } else {
+        board.done(done);
+      }
     }
     return last;
   }

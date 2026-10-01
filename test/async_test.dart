@@ -636,6 +636,11 @@ void main() {
       expect(out.rights.toList()..sort(), [2, 4, 6]);
     });
 
+    test('Stream.parallelize(isolate: true) cancelled early cleans up workers', () async {
+      final res = await Stream.fromIterable([1, 2, 3, 4, 5]).parallelize(_double, isolate: true, concurrency: 4).first;
+      expect(res.isRight, isTrue);
+    });
+
     test('Iterable.parallelize(isolate: true) sends the item, not the list around it', () async {
       final port = ReceivePort();
       addTearDown(port.close);

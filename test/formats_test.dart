@@ -475,6 +475,13 @@ cert = 'a;b'
       expect(t.rows.first.length, 2);
       expect(t.length, 1);
     });
+
+    test('a stray </div> inside a <td> does not close the table', () {
+      const html = '<table><tr><th>a</th></tr><tr><td>val</div></td></tr><tr><td>row2</td></tr></table>';
+      final doc = html.html;
+      expect(doc.$('table tr').length, 3);
+      expect(doc.$('table').table.length, 2);
+    });
   });
 
   group('positional pseudo-classes', () {

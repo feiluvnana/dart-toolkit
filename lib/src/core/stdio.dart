@@ -12,7 +12,7 @@ class Io {
   static String? Function()? input;
 
   /// The active standard output sink. Assign to redirect it; assign `null` to restore.
-  static StringSink get out => _out ?? _stdout;
+  static StringSink get out => _out ?? (_outTakesColor ? _stdout : _plainStdout);
   static set out(StringSink? sink) => _out = sink;
 
   /// The active standard error sink. Assign to redirect it; assign `null` to restore.
@@ -22,8 +22,10 @@ class Io {
   static StringSink get err => _err ?? (_errTakesColor ? _stderr : _plainStderr);
   static set err(StringSink? sink) => _err = sink;
 
-  static bool get _errTakesColor => _color ?? (color && _ansiStderr);
+  static bool get _outTakesColor => _color ?? _ansiTerminal;
+  static bool get _errTakesColor => _color ?? _ansiStderr;
 
+  static final StringSink _plainStdout = _Plain(_stdout);
   static final StringSink _plainStderr = _Plain(_stderr);
 
   /// The process sinks with a closed pipe made harmless: `app --help | head` ends the
@@ -45,11 +47,25 @@ class Io {
   /// every cursor-control path gates on this rather than on `stdout.hasTerminal`.
   static bool get isTerminal => !isRedirected && _hasTerminal;
 
+  /// Whether stderr is going somewhere other than the process's own stderr.
+  static bool get isErrRedirected => _err != null;
+
+  /// Whether the *active* error sink is an interactive terminal.
+  static bool get isErrTerminal => !isErrRedirected && _hasErrTerminal;
+
   /// A native call, asked once: whether stdout is a terminal does not change while it runs,
   /// and asking per call was most of the cost of a progress tick.
   static final bool _hasTerminal = () {
     try {
       return stdout.hasTerminal;
+    } catch (_) {
+      return false;
+    }
+  }();
+
+  static final bool _hasErrTerminal = () {
+    try {
+      return stderr.hasTerminal;
     } catch (_) {
       return false;
     }

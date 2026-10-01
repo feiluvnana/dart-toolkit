@@ -477,6 +477,7 @@ Future<ShellResult> _exec(
     if (stop.isCompleted) return;
     // Synchronously, so a signal that is about to end this process still reaches them.
     tree = _signalTree([for (final p in processes) p.pid], ProcessSignal.sigterm);
+    registerHaltedProcessPids(tree);
     stop.complete(why);
   }
 
@@ -586,6 +587,7 @@ Future<void> _reap(List<int> tree) async {
   for (final pid in left) {
     Process.killPid(pid, ProcessSignal.sigkill);
   }
+  unregisterHaltedProcessPids(tree);
 }
 
 /// A child's output on its way to the terminal. While a spinner or a board is drawn it

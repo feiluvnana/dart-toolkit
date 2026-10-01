@@ -809,8 +809,9 @@ final class IoClient implements Client {
     final HttpClientResponse response;
     final token = Cancel.token;
     void Function()? heard;
+    final contentLength = request.contentLength;
+    final io = await _client.openUrl(request.method, request.url);
     try {
-      final io = await _client.openUrl(request.method, request.url);
       if (token != null) {
         if (token.isCancelled) {
           io.abort(_cancelled(token));
@@ -823,7 +824,7 @@ final class IoClient implements Client {
       io
         ..followRedirects = false
         ..persistentConnection = request.persistentConnection
-        ..contentLength = request.contentLength;
+        ..contentLength = contentLength;
       io.headers.set('accept-encoding', _literal(request) ? 'identity' : _acceptEncoding);
       request.headers.forEach((k, v) => io.headers.set(k, v));
       // A held body goes out in one write; a streamed one is pumped, so a `files:` upload
@@ -835,7 +836,11 @@ final class IoClient implements Client {
       }
       response = await io.close();
     } on HttpException catch (e) {
+      io.abort(e);
       throw ClientException(e.message, request.url);
+    } catch (e) {
+      io.abort(e);
+      rethrow;
     } finally {
       heard?.call();
     }

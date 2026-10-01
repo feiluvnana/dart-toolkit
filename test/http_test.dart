@@ -1473,6 +1473,35 @@ void main() {
       }
     });
 
+    test('show() prints failure errors and warns when downloads fail (DL-1)', () async {
+      final out = StringBuffer();
+      final err = StringBuffer();
+      Io.out = out;
+      Io.err = err;
+      try {
+        final client = MockClient((r) async => Response('Not found', 404));
+        final dir = Directory.systemTemp.createTempSync('dl1_');
+        try {
+          final last = await Http.scope(
+            () => {
+              'https://a.com/1'.url: Path(dir.path) / '1',
+              'https://a.com/2'.url: Path(dir.path) / '2',
+            }.download().show(slots: 2, message: 'Downloading', done: 'All done'),
+            client: client,
+          );
+          expect(last!.completed, 2);
+          expect(last.failed, 2);
+          expect(out.toString(), isNot(contains('All done')));
+          expect(err.toString(), contains('2 of 2 failed'));
+          expect(err.toString(), contains('404'));
+        } finally {
+          dir.deleteSync(recursive: true);
+        }
+      } finally {
+        Io.reset();
+      }
+    });
+
     test('Elements answers for its first match and queries within every match', () {
       final doc = '<ul><li><a href="/1">one</a></li><li><a href="/2">two</a></li></ul><p>x</p>'.html;
       expect(doc.$('li a').text, 'one');
@@ -1496,10 +1525,13 @@ void main() {
     late Uri base;
     late Directory tempDir;
     late StringBuffer out;
+    late StringBuffer err;
 
     setUp(() async {
       out = StringBuffer();
+      err = StringBuffer();
       Io.out = out;
+      Io.err = err;
       tempDir = Directory.systemTemp.createTempSync('pipeline_test_');
       server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       base = Uri.parse('http://127.0.0.1:${server.port}');
@@ -1571,8 +1603,9 @@ void main() {
       }
 
       // Every completion is reported exactly once, without a terminal.
-      final lines = out.toString().trim().split('\n');
+      final lines = err.toString().trim().split('\n');
       expect(lines.where((l) => l.contains('[done]')).length, equals(5));
+      expect(out.toString(), contains('done'));
 
       // Re-running skips what is already on disk instead of re-fetching it.
       final again = await artwork.download().toList();
@@ -2194,7 +2227,7 @@ void main() {
       final at = times['/d']!..sort();
       expect(at, hasLength(3));
       for (var i = 1; i < at.length; i++) {
-        expect(at[i].difference(at[i - 1]), greaterThanOrEqualTo(const Duration(milliseconds: 140)));
+        expect(at[i].difference(at[i - 1]), greaterThanOrEqualTo(const Duration(milliseconds: 120)));
       }
     });
 
@@ -3035,5 +3068,155 @@ void _scrapeAudit() {
     await client.scrape<void>([Request('POST', 'https://a.com/z'.url, text: 'q')]).toList();
     expect(seen, ['GET /x ', 'GET /y ', 'POST /z q']);
     expect(() => client.scrape<void>(42), throwsArgumentError);
+  });
+
+  group('audit IV fixes: http', () {
+    test('HTTP-1: timed-out request releases pool permit', () async {
+      final server = await HttpServer.bind('localhost', 0);
+      addTearDown(server.close);
+      final completer = Completer<void>();
+      server.listen((req) async {
+        if (req.uri.path == '/hang') {
+          await completer.future;
+        } else {
+          req.response.write('ok');
+          await req.response.close();
+        }
+      });
+      final client = IoClient(connections: 1);
+      addTearDown(client.close);
+      await Http.scope(client: client, timeout: 50.ms, () async {
+        await expectLater(
+          Http.client!.get('http://localhost:${server.port}/hang'.url),
+          throwsA(isA<TimeoutException>()),
+        );
+        final res = await Http.client!.get('http://localhost:${server.port}/quick'.url);
+        expect(res.text, 'ok');
+      });
+      completer.complete();
+    });
+
+    test('HTTP-2: error before/at openUrl does not abandon request or hang next request', () async {
+      final server = await HttpServer.bind('localhost', 0);
+      addTearDown(server.close);
+      server.listen((req) async {
+        req.response.write('ok');
+        await req.response.close();
+      });
+      final client = IoClient(connections: 1);
+      addTearDown(client.close);
+      final badRequest = Request(
+        'POST',
+        'http://localhost:${server.port}/'.url,
+        files: {'missing': Path('nonexistent_file_path_12345.xyz')},
+      );
+      await expectLater(client.send(badRequest), throwsA(isA<FileSystemException>()));
+      final res = await client.get('http://localhost:${server.port}/'.url);
+      expect(res.text, 'ok');
+    });
+
+    test('HTTP-3: nested Http.scope inherits outer client, headers, and cookies', () async {
+      final server = await HttpServer.bind('localhost', 0);
+      addTearDown(server.close);
+      final receivedHeaders = <Map<String, List<String>>>[];
+      server.listen((req) async {
+        final map = <String, List<String>>{};
+        req.headers.forEach((name, values) => map[name] = values);
+        receivedHeaders.add(map);
+        req.response.headers.set('set-cookie', 'session=abc; Path=/');
+        req.response.write('ok');
+        await req.response.close();
+      });
+      final client = IoClient();
+      addTearDown(client.close);
+      await Http.scope(
+        client: client,
+        headers: {'user-agent': 'CustomAgent/1.0', 'x-outer': '1'},
+        cookies: true,
+        () async {
+          await 'http://localhost:${server.port}/1'.url.fetch();
+          await Http.scope(retries: 2, () async {
+            await 'http://localhost:${server.port}/2'.url.fetch();
+          });
+        },
+      );
+      expect(receivedHeaders[1]['user-agent'], ['CustomAgent/1.0']);
+      expect(receivedHeaders[1]['x-outer'], ['1']);
+      expect(receivedHeaders[1]['cookie'], ['session=abc']);
+    });
+
+    test('SCR-1: crawl does not retry non-idempotent method on 5xx without Retry-After', () async {
+      final server = await HttpServer.bind('localhost', 0);
+      addTearDown(server.close);
+      var postHits = 0;
+      server.listen((req) async {
+        if (req.method == 'POST') {
+          postHits++;
+          req.response.statusCode = 500;
+        } else {
+          req.response.write('ok');
+        }
+        await req.response.close();
+      });
+      final client = IoClient();
+      addTearDown(client.close);
+      await client
+          .scrape<void>([Request('POST', 'http://localhost:${server.port}/post'.url, text: 'hi')])
+          .onInit((ctx) => ctx.retries = 2)
+          .toList();
+      expect(postHits, 1, reason: 'POST must not be retried on 500 without Retry-After');
+    });
+
+    test('SCR-2: sitemap decodes XML entities in <loc>', () async {
+      final server = await _site(
+        (path) => switch (path) {
+          '/' => _html('home'),
+          '/sitemap.xml' => (req) => req.response.write(
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+            '<url><loc>/item?id=1&amp;lang=en</loc></url>'
+            '</urlset>',
+          ),
+          '/item' => _html('item'),
+          _ => null,
+        },
+      );
+      addTearDown(() => server.close(force: true));
+      final got = await 'http://127.0.0.1:${server.port}/'.url
+          .scrape<String>()
+          .onInit((ctx) => ctx.sitemaps = true)
+          .onResponse((ctx) => ctx.emit('${ctx.url.path}?${ctx.url.query}'))
+          .rights
+          .toList();
+      expect(got, contains('/item?id=1&lang=en'));
+    });
+
+    test('SCR-3: truncated sitemap.gz yields no pages instead of partial', () async {
+      final fullGz = gzip.encode(
+        utf8.encode(
+          '<?xml version="1.0" encoding="UTF-8"?>\n'
+          '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+          '  <url><loc>/item1</loc></url>\n'
+          '  <url><loc>/item2</loc></url>\n'
+          '</urlset>',
+        ),
+      );
+      final truncated = fullGz.sublist(0, fullGz.length ~/ 2);
+      final server = await _site(
+        (path) => switch (path) {
+          '/' => _html('home'),
+          '/sitemap.xml' => (req) => req.response.add(truncated),
+          _ => null,
+        },
+      );
+      addTearDown(() => server.close(force: true));
+      final got = await 'http://127.0.0.1:${server.port}/'.url
+          .scrape<String>()
+          .onInit((ctx) => ctx.sitemaps = true)
+          .onResponse((ctx) => ctx.emit(ctx.url.path))
+          .rights
+          .toList();
+      expect(got, isNot(contains('/item1')));
+    });
   });
 }

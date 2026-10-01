@@ -79,8 +79,7 @@ Future<void> fetch(CliContext ctx) async {
 
   await Http.scope(timeout: 30.s, () async {
     if (ctx(out) case final path?) {
-      final last = await path.path.download(url, overwrite: true).show(slots: 1, message: 'Fetching', done: 'Fetched');
-      if (last?.current case DownloadFailed(:final error)) await Lifecycle.exit('$error');
+      await path.path.download(url, overwrite: true).show(slots: 1, message: 'Fetching', done: 'Fetched');
       Console.ok('$path is ${await path.path.size()} bytes');
       return;
     }

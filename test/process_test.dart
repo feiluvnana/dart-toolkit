@@ -323,5 +323,14 @@ void main() {
       expect(await run('printf "a\\nb\\nc"').stream.toList(), ['a', 'b', 'c']);
       await expectLater(run('sh -c "echo x; exit 3"').stream.toList(), throwsA(isA<ShellException>()));
     }, testOn: '!windows');
+
+    test('a child that traps SIGTERM is reaped with SIGKILL on stop (PROC-1)', () async {
+      final token = CancelToken();
+      final future = Cancel.scope(() => run(r'sh -c "trap \"\" TERM; sleep 5"'), token: token);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      token.cancel();
+      await expectLater(future, throwsA(isA<CancelledException>()));
+      await killHaltedProcesses();
+    }, testOn: '!windows');
   });
 }

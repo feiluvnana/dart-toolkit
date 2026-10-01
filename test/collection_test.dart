@@ -579,6 +579,8 @@ void main() {
 
   group('Sorted pays only for what it is asked', () {
     test('take(n) and first equal the full sort; length does not sort', () {
+      expect([5, 3, 9, 1, 7, 2, 8, 4, 6, 0].sequence.sorted.take(3).toList(), [0, 1, 2]);
+      expect([5, 3, 9, 1, 7, 2, 8, 4, 6, 0].sequence.sortedBy((e) => e).take(3).toList(), [0, 1, 2]);
       var extracted = 0;
       final items = [for (var i = 0; i < 5000; i++) (i * 7919) % 1009];
       final sorted = items.sequence.sortedBy((e) {

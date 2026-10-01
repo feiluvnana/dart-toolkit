@@ -21,6 +21,8 @@ class _Task implements TaskProgress {
   final String? status;
   @override
   final bool isDone;
+  @override
+  Object? get error => null;
   const _Task(this.taskId, this.label, this.ratio, this.received, this.total, this.status, this.isDone);
 }
 
@@ -29,6 +31,8 @@ class _Batch implements BatchProgress {
   final int completed;
   @override
   final int? total;
+  @override
+  int get failed => 0;
   @override
   final TaskProgress current;
   const _Batch(this.completed, this.total, this.current);
@@ -107,8 +111,8 @@ void main() {
       expect(Io.stripAnsi(err.toString()), contains('careful'));
       // stop() ends it with no final line: without a terminal each spinner still announces
       // itself when it starts, so what `stop` owes is the absence of an ending, not silence.
-      expect(Io.stripAnsi(out.toString()), isNot(contains('✓')));
-      expect(Io.stripAnsi(out.toString()), contains('Three...'));
+      expect(Io.stripAnsi(err.toString()), isNot(contains('✓')));
+      expect(Io.stripAnsi(err.toString()), contains('Three...'));
     });
 
     test('SpinnerStyle takes frames of its own', () {
@@ -117,12 +121,12 @@ void main() {
       expect(SpinnerStyle.braille.frames.first, equals('⠋'));
       expect(SpinnerStyle.braille.frames, hasLength(10));
 
-      final out = StringBuffer();
-      Io.out = out;
+      final err = StringBuffer();
+      Io.err = err;
       addTearDown(Io.reset);
       // Without a terminal the first frame is what gets written.
       Console.spinner('Waiting', style: pulse).stop();
-      expect(Io.stripAnsi(out.toString()), contains('a Waiting'));
+      expect(Io.stripAnsi(err.toString()), contains('a Waiting'));
     });
 
     test('Console.writeln writes unlevelled, and ignores the log level', () {
@@ -437,14 +441,14 @@ void main() {
     });
 
     test('ProgressBar truncates long labels to fit within terminal width', () {
-      final out = StringBuffer();
-      Io.out = out;
+      final err = StringBuffer();
+      Io.err = err;
       addTearDown(Io.reset);
       Console.progress(556, message: 'Audio Tracks', columns: 80).tick(
         0,
         'DISC.21／ LB!キャラクターソング・semicrystalline.Little Busters! original arrange album・Rockstar Busters! 他より #11',
       );
-      final line = out.toString().trimRight();
+      final line = err.toString().trimRight();
 
       // Line length in terminal columns must not exceed terminalColumns - 1
       expect(Io.width(line), lessThanOrEqualTo(79));
@@ -454,17 +458,19 @@ void main() {
 
     test('TaskBoard counts completions and revises its total upward', () {
       final out = StringBuffer();
+      final err = StringBuffer();
       Io.out = out;
+      Io.err = err;
       addTearDown(Io.reset);
       final multi = Console.tasks(total: 10, slots: 3, message: 'Downloading Assets', columns: 80);
 
       multi.report(_batch(1, 10, _task('task1', 'song01.flac', 0.5, 500000, 1000000)));
-      expect(out.toString(), isEmpty); // nothing durable until something finishes
+      expect(err.toString(), isEmpty); // nothing durable until something finishes
       multi.report(_batch(2, 12, _task('song03', 'song03.flac', 1, 600000, 600000, status: 'done', done: true)));
 
       expect(multi.current, 2);
       expect(multi.total, 12);
-      expect(out.toString(), contains('[2/12] song03.flac (585.9 KB) [done]'));
+      expect(err.toString(), contains('[2/12] song03.flac (585.9 KB) [done]'));
       expect(() => multi.done('All assets completed.'), returnsNormally);
       expect(out.toString(), contains('All assets completed.'));
     });
@@ -1076,10 +1082,13 @@ void main() {
 
   group('Io seam', () {
     late StringBuffer out;
+    late StringBuffer err;
 
     setUp(() {
       out = StringBuffer();
+      err = StringBuffer();
       Io.out = out;
+      Io.err = err;
     });
 
     tearDown(() {
@@ -1159,12 +1168,12 @@ void main() {
       }
       progress.done('finished');
 
-      final lines = out.toString().trim().split('\n');
-      expect(lines.length, greaterThanOrEqualTo(4));
+      final lines = err.toString().trim().split('\n');
+      expect(lines.length, greaterThanOrEqualTo(3));
       for (final name in ['a.txt', 'b.txt', 'c.txt']) {
-        expect(lines.where((l) => l.contains(name)).length, equals(1), reason: '\$name reported exactly once');
+        expect(lines.where((l) => l.contains(name)).length, equals(1), reason: '$name reported exactly once');
       }
-      expect(lines.last, contains('finished'));
+      expect(out.toString(), contains('finished'));
     });
 
     test('report() renders a BatchProgress without the caller restating its fields', () {
@@ -1190,9 +1199,10 @@ void main() {
       );
       progress.done('finished');
 
-      final lines = out.toString().trim().split('\n');
+      final lines = err.toString().trim().split('\n');
       expect(lines.any((l) => l.contains('a.txt') && l.contains('[done]')), isTrue);
       expect(lines.any((l) => l.contains('b.txt') && l.contains('[skipped]')), isTrue);
+      expect(out.toString(), contains('finished'));
     });
 
     test('ProgressBar without a terminal reports each new tenth, not each tick', () {
@@ -1202,15 +1212,17 @@ void main() {
         ..tick()
         ..tick();
       progress.done('finished');
-      expect(out.toString().trim().split('\n').length, equals(4));
+      expect(err.toString().trim().split('\n').length, equals(3));
+      expect(out.toString(), contains('finished'));
 
+      err.clear();
       out.clear();
       final fine = Console.progress(1000, message: 'steps', columns: 80);
       for (var i = 0; i < 1000; i++) {
         fine.tick();
       }
       fine.done();
-      expect(out.toString().trim().split('\n').length, lessThanOrEqualTo(11), reason: 'one line per tenth');
+      expect(err.toString().trim().split('\n').length, lessThanOrEqualTo(11), reason: 'one line per tenth');
     });
   });
 

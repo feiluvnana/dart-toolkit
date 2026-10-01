@@ -32,6 +32,9 @@ abstract interface class TaskProgress {
 
   /// A terminal label such as `done`, `skipped` or `failed`, or `null` while running.
   String? get status;
+
+  /// The error that caused this task to fail, or `null` if it did not fail.
+  Object? get error => null;
 }
 
 /// A batch of [TaskProgress] units.
@@ -43,6 +46,9 @@ abstract interface class BatchProgress {
 
   /// Units in the batch, or `null` while the source is still producing them.
   int? get total;
+
+  /// Units that failed to complete.
+  int get failed => 0;
 
   /// The update that triggered this event.
   TaskProgress get current;

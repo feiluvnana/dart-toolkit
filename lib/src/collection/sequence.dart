@@ -558,7 +558,7 @@ final class Sorted<T> extends Sequence<T> {
       return [for (final i in _smallest(elements.length, count, compare)) elements[i]];
     }
     final order = [for (var i = 0; i < elements.length; i++) i]..sort(compare);
-    return [for (final i in order) elements[i]];
+    return [for (final i in count == null || count >= order.length ? order : order.take(count)) elements[i]];
   }
 
   // What does not need the order does not pay for it, and what needs only the front of it

@@ -381,11 +381,17 @@ impl Policy {
         if self.trusted {
             return Ok(());
         }
+        let mut first_err = None;
         for link in &self.links {
             if !resolve(link, 0).is_some_and(|real| real.starts_with(&self.root)) {
                 let _ = std::fs::remove_file(link);
-                return Err(format!("{}: link leads out of the destination", link.display()));
+                if first_err.is_none() {
+                    first_err = Some(format!("{}: link leads out of the destination", link.display()));
+                }
             }
+        }
+        if let Some(err) = first_err {
+            return Err(err);
         }
         Ok(())
     }

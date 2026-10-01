@@ -248,6 +248,18 @@ void main() {
       }
     }, testOn: '!windows');
 
+    test('all escaping links are removed on refusal, not only the first (ARC-1)', () async {
+      final tree = tmp / 'multi_links';
+      tree.mkdirSync();
+      Link(tree / 'out1').createSync('../../../../etc');
+      Link(tree / 'out2').createSync('../../../../tmp');
+      expect(Process.runSync('zip', ['-qry', tmp / 'multi.zip', 'out1', 'out2'], workingDirectory: tree).exitCode, 0);
+      final dest = tmp / 'multi_dest';
+      await expectLater(() => (tmp / 'multi.zip').extractTo(dest), throwsA(isA<FormatException>()));
+      expect(FileSystemEntity.typeSync(dest / 'out1', followLinks: false), FileSystemEntityType.notFound);
+      expect(FileSystemEntity.typeSync(dest / 'out2', followLinks: false), FileSystemEntityType.notFound);
+    }, testOn: '!windows');
+
     test('a link whose target does not exist yet is still refused when it leads out', () async {
       // `d/b` → `..` stays inside; `l` → `d/b/../pwned.txt` is inside by its text, dangles, and
       // lands one level above the destination once `d/b` is followed.

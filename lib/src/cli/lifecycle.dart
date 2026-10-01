@@ -14,9 +14,13 @@ void _ensureSignalHandlers() {
     Console._restoreTerminal();
     // A second signal while the listeners run does not run them again; it is the user
     // saying a cleanup is taking too long, and it leaves now.
-    if (_exiting) _terminate(128 + signal.signalNumber);
+    if (_exiting) {
+      killHaltedProcessesSync();
+      _terminate(128 + signal.signalNumber);
+    }
     _exiting = true;
     await _runExitHooks();
+    await killHaltedProcesses();
     _terminate(128 + signal.signalNumber);
   }
 
@@ -31,14 +35,16 @@ void _ensureSignalHandlers() {
   } catch (_) {}
 }
 
+Future<void>? _hooksRun;
+
 /// Runs every exit listener in registration order; one that throws does not stop the rest.
-Future<void> _runExitHooks() async {
+Future<void> _runExitHooks() => _hooksRun ??= () async {
   for (final hook in List.of(_exitHooks)) {
     try {
       await hook();
     } catch (_) {}
   }
-}
+}();
 
 /// `dart:io`'s `exit`, reachable from inside [Lifecycle] where the static shadows the name.
 Never _terminate(int code) => exit(code);
@@ -90,6 +96,7 @@ class Lifecycle {
   static void Function() onExit(FutureOr<void> Function()? callback) {
     if (callback == null) {
       _exitHooks.clear();
+      _hooksRun = null;
       _sigintSub?.cancel();
       _sigtermSub?.cancel();
       _sigintSub = _sigtermSub = null;
@@ -115,6 +122,7 @@ class Lifecycle {
   static Future<Never> exit([Object? message, int? code]) async {
     if (message != null) Io.err.writeln('  ✖ $message'.red);
     await _runExitHooks();
+    await killHaltedProcesses();
     _terminate(code ?? (message == null ? 0 : 1));
   }
 }

@@ -78,8 +78,8 @@ class Http {
     Duration? delay,
     Path? cache,
   }) async {
-    final owned = client == null;
-    final inner = client ?? IoClient();
+    final owned = client == null && Http.client == null;
+    final inner = client ?? Http.client ?? IoClient();
     final shared = timeout == null && headers == null && !cookies && retries <= 0 && delay == null && cache == null
         ? inner
         : _ScopeClient(
@@ -196,9 +196,12 @@ final class _ScopeClient implements Client {
       await _polite(request.url);
       // Sending consumes a request, and a retry sends it again.
       final sent = budget == 0 ? request : request.copy();
+      if (_inner is _ScopeClient) sent[_Retry.none] = true;
+      final stop = CancelToken();
+      Cancel.token?.onCancel(() => stop.cancel(Cancel.reason));
       final StreamedResponse res;
       try {
-        res = await _timed(_inner.send(sent));
+        res = await _timed(Cancel.scope(() => _inner.send(sent), token: stop), stop);
       } catch (e) {
         if (attempt > budget || !replayable || _certain(e) || e is CancelledException || Cancel.isCancelled) rethrow;
         await _sleep((200 * attempt).ms);
@@ -217,12 +220,13 @@ final class _ScopeClient implements Client {
   /// A response that lands after the wait was given up on still holds its connection — and
   /// under `IoClient(connections:)` its permit — until its body is read, so it is drained
   /// rather than abandoned: left alone, N timeouts would take all N permits for good.
-  Future<StreamedResponse> _timed(Future<StreamedResponse> pending) {
+  Future<StreamedResponse> _timed(Future<StreamedResponse> pending, CancelToken stop) {
     final timeout = _timeout;
     if (timeout == null) return pending;
     return pending.timeout(
       timeout,
       onTimeout: () {
+        stop.cancel();
         unawaited(pending.then(_drain, onError: (Object _) {}));
         throw TimeoutException('No response within $timeout', timeout);
       },

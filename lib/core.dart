@@ -15,6 +15,7 @@ import 'dart:math';
 part 'src/core/cancel.dart';
 part 'src/core/either.dart';
 part 'src/core/env.dart';
+part 'src/core/process_registry.dart';
 part 'src/core/progress.dart';
 part 'src/core/stdio.dart';
 part 'src/core/string_extensions.dart';

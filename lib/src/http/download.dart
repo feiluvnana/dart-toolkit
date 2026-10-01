@@ -56,6 +56,12 @@ sealed class DownloadProgress implements TaskProgress {
   };
 
   @override
+  Object? get error => switch (this) {
+    DownloadFailed(:final error) => error,
+    _ => null,
+  };
+
+  @override
   String toString() => '$runtimeType($path)';
 }
 
@@ -95,6 +101,7 @@ final class DownloadSkipped extends DownloadProgress {
 /// {@category Networking}
 final class DownloadFailed extends DownloadProgress {
   /// What went wrong.
+  @override
   final Object error;
 
   const DownloadFailed(super.url, super.path, this.error);
@@ -115,6 +122,10 @@ class BatchDownloadProgress implements BatchProgress {
   /// Files newly written, excluding skips and failures.
   final int written;
 
+  /// Files that failed to download.
+  @override
+  final int failed;
+
   /// The update that triggered this event.
   @override
   final DownloadProgress current;
@@ -123,6 +134,7 @@ class BatchDownloadProgress implements BatchProgress {
     required this.completed,
     required this.total,
     required this.written,
+    this.failed = 0,
     required this.current,
   });
 
@@ -130,7 +142,7 @@ class BatchDownloadProgress implements BatchProgress {
   double? get ratio => total == null ? null : (total! > 0 ? (completed / total!).clamp(0.0, 1.0) : 1.0);
 
   @override
-  String toString() => 'BatchDownloadProgress($completed/${total ?? '?'}, new: $written, $current)';
+  String toString() => 'BatchDownloadProgress($completed/${total ?? '?'}, new: $written, failed: $failed, $current)';
 }
 
 /// Bytes buffered before the writer waits for the disk. Bounds the memory a download
@@ -438,6 +450,7 @@ Stream<BatchDownloadProgress> _batchDownload(
   var discovered = 0;
   var completed = 0;
   var written = 0;
+  var failed = 0;
   var sourceDone = false;
   var stopped = false;
   // The consumer stopped listening: nobody is left to tell, so the transfers just stop.
@@ -467,6 +480,7 @@ Stream<BatchDownloadProgress> _batchDownload(
         completed: completed,
         total: knownTotal ?? (sourceDone ? discovered : null),
         written: written,
+        failed: failed,
         current: progress,
       ),
     );
@@ -482,6 +496,7 @@ Stream<BatchDownloadProgress> _batchDownload(
     while (queue.isNotEmpty) {
       final item = queue.removeFirst();
       completed++;
+      failed++;
       emit(DownloadFailed(item.url, item.path, reason));
     }
     if (active.isEmpty) {
@@ -522,6 +537,7 @@ Stream<BatchDownloadProgress> _batchDownload(
           if (p.isDone) {
             completed++;
             if (p is Downloaded) written++;
+            if (p is DownloadFailed) failed++;
           }
           emit(p);
         }
@@ -535,6 +551,7 @@ Stream<BatchDownloadProgress> _batchDownload(
           await (cancelToken == null ? transfer() : Cancel.scope(transfer, token: cancelToken));
         } catch (e) {
           completed++;
+          failed++;
           emit(DownloadFailed(item.url, item.path, e));
         } finally {
           active.remove(task);
