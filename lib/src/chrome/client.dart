@@ -188,6 +188,15 @@ final class ChromeClient implements Client {
   final ChromeWait _wait;
   final Device _device;
   final Uri? _proxy;
+
+  /// The proxy's user and password, percent-decoded.
+  late final (String, String)? _login = switch (_proxy?.userInfo) {
+    final String info when info.isNotEmpty => switch (info.indexOf(':')) {
+      -1 => (Uri.decodeComponent(info), ''),
+      final colon => (Uri.decodeComponent(info.substring(0, colon)), Uri.decodeComponent(info.substring(colon + 1))),
+    },
+    _ => null,
+  };
   final bool _stealth;
   final Set<Resource> _block;
   final Semaphore _permits;
@@ -205,6 +214,9 @@ final class ChromeClient implements Client {
   /// The socket went away under this client.
   var _gone = false;
   String? _agent;
+
+  /// `navigator.userAgentData` for Chrome's own agent: an override without it empties `brands`.
+  Map<String, Object?>? _metadata;
 
   ChromeClient._(
     this._socket, {
@@ -578,6 +590,7 @@ final class ChromeClient implements Client {
     await _dress(tab);
     page._listen();
     await page.block(_block);
+    await _call('Target.setAutoAttach', ChromePage._attach, tab);
     final tree = await _call('Page.getFrameTree', null, tab);
     page._frame = ((tree['frameTree'] as Map?)?['frame'] as Map?)?['id'] as String? ?? '';
     return page;
@@ -600,6 +613,7 @@ final class ChromeClient implements Client {
       await _call('Emulation.setUserAgentOverride', {
         'userAgent': device.userAgent ?? await _browserAgent() ?? '',
         'acceptLanguage': ?device.locale,
+        if (device.userAgent == null) 'userAgentMetadata': ?_metadata,
       }, tab);
     }
     for (final (method, params) in [
@@ -641,7 +655,29 @@ final class ChromeClient implements Client {
   Future<String?> _browserAgent() async {
     if (_device.userAgent ?? _agent case final known?) return known;
     try {
-      final ua = (await _call('Browser.getVersion'))['userAgent'] as String?;
+      final version = await _call('Browser.getVersion');
+      final ua = version['userAgent'] as String?;
+      if ('${version['product']}'.split('/') case [final product, final full]) {
+        final major = full.split('.').first;
+        final arm = Platform.version.contains('arm');
+        _metadata = {
+          'brands': [
+            {'brand': 'Chromium', 'version': major},
+            {'brand': _stealth ? 'Google Chrome' : product, 'version': major},
+            {'brand': 'Not.A/Brand', 'version': '99'},
+          ],
+          'fullVersion': full,
+          'platform': switch (Platform.operatingSystem) {
+            'macos' => 'macOS',
+            final os => os[0].toUpperCase() + os.substring(1),
+          },
+          'platformVersion': '',
+          'architecture': arm ? 'arm' : 'x86',
+          'model': '',
+          'mobile': _device.mobile,
+          'bitness': '64',
+        };
+      }
       return _agent = _stealth ? ua?.replaceFirst('HeadlessChrome', 'Chrome') : ua;
     } catch (_) {
       return null;
