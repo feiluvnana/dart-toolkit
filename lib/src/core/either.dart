@@ -8,12 +8,6 @@ Object _throwable(Object? value) => value ?? StateError('Unwrapped a Left holdin
 sealed class Either<L, R> {
   const Either();
 
-  /// Whether this instance is a [Left].
-  bool get isLeft => this is Left<L, R>;
-
-  /// Whether this instance is a [Right].
-  bool get isRight => this is Right<L, R>;
-
   /// The left value if this is a [Left], or `null` otherwise.
   L? get leftOrNull => switch (this) {
     Left<L, R>(:final value) => value,
@@ -26,49 +20,11 @@ sealed class Either<L, R> {
     Left<L, R>() => null,
   };
 
-  /// Unfolds the either into a single value of type [T].
-  T fold<T>(T Function(L left) onLeft, T Function(R right) onRight) => switch (this) {
-    Left<L, R>(:final value) => onLeft(value),
-    Right<L, R>(:final value) => onRight(value),
-  };
-
-  /// Maps the success value if [Right], preserving [Left].
-  Either<L, T> mapRight<T>(T Function(R right) transform) => switch (this) {
-    Right<L, R>(:final value) => Right(transform(value)),
-    Left<L, R>(:final value, :final trace) => Left(value, trace),
-  };
-
-  /// Maps the left failure value if [Left], preserving [Right] and the captured trace.
-  Either<T, R> mapLeft<T>(T Function(L left) transform) => switch (this) {
-    Left<L, R>(:final value, :final trace) => Left(transform(value), trace),
-    Right<L, R>(:final value) => Right(value),
-  };
-
   /// The [Right] value, or throws the [Left] value with the trace it was caught with.
   R unwrap() => switch (this) {
     Right<L, R>(:final value) => value,
     Left<L, R>(:final value, :final trace) => Error.throwWithStackTrace(_throwable(value), trace ?? StackTrace.current),
   };
-
-  /// Runs [action], sync or async, capturing anything it throws as a [Left].
-  ///
-  /// Narrow the failure type afterwards with [mapLeft].
-  static Future<Either<Object, T>> tryCatch<T>(FutureOr<T> Function() action) async {
-    try {
-      return Right(await action());
-    } catch (error, trace) {
-      return Left(error, trace);
-    }
-  }
-
-  /// Runs [action], capturing anything it throws as a [Left], without an `await`.
-  static Either<Object, T> tryCatchSync<T>(T Function() action) {
-    try {
-      return Right(action());
-    } catch (error, trace) {
-      return Left(error, trace);
-    }
-  }
 }
 
 /// The failure / left branch of [Either].
@@ -78,7 +34,7 @@ final class Left<L, R> extends Either<L, R> {
   /// The underlying left value.
   final L value;
 
-  /// Where the failure was caught, when [Either.tryCatch] produced it; [unwrap] rethrows with it.
+  /// Where the failure was caught, when it was; [unwrap] rethrows with it.
   final StackTrace? trace;
 
   /// Creates a [Left] outcome.
@@ -142,8 +98,23 @@ extension StreamEitherExtensions<L, R> on Stream<Either<L, R>> {
   Stream<R> unwrap() => map((outcome) => outcome.unwrap());
 
   /// Only the [Right] values, discarding failures.
-  Stream<R> get rights => where((outcome) => outcome.isRight).map((outcome) => (outcome as Right<L, R>).value);
+  Stream<R> get rights => where((outcome) => outcome is Right<L, R>).map((outcome) => (outcome as Right<L, R>).value);
 
   /// Only the [Left] values.
-  Stream<L> get lefts => where((outcome) => outcome.isLeft).map((outcome) => (outcome as Left<L, R>).value);
+  Stream<L> get lefts => where((outcome) => outcome is Left<L, R>).map((outcome) => (outcome as Left<L, R>).value);
+}
+
+/// The same helpers on a batch still settling, so the `await` needs no parentheses:
+/// `await files.parallelize(f).rights`.
+///
+/// {@category Formats}
+extension FutureEitherListExtensions<L, R> on Future<List<Either<L, R>>> {
+  /// Every [Right] value in order, throwing the first [Left] value encountered.
+  Future<List<R>> unwrap() => then((outcomes) => outcomes.unwrap());
+
+  /// Only the [Right] values, discarding failures.
+  Future<List<R>> get rights => then((outcomes) => outcomes.rights);
+
+  /// Only the [Left] values.
+  Future<List<L>> get lefts => then((outcomes) => outcomes.lefts);
 }

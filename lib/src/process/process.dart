@@ -384,14 +384,8 @@ final class _Live {
   bool abandoned = false;
 }
 
-/// The environment children inherit: the process's plus [Env] overrides plus [extra], or
-/// `null` — inherit as is — when there is nothing to add.
-Map<String, String>? _childEnv(Map<String, String>? extra) {
-  if (extra == null && !Env.hasOverrides) return null;
-  final all = Env.all();
-  if (extra != null) all.addAll(extra);
-  return all;
-}
+/// The environment children inherit: the process's plus [Env] overrides plus [extra].
+Map<String, String> _childEnv(Map<String, String>? extra) => {...Env.all(), ...?extra};
 
 Future<void> _feed(Process process, String? input, Encoding encoding) async {
   try {
@@ -690,15 +684,15 @@ final class _Echo {
 ///
 /// {@category System}
 Future<Path?> which(String executable) async {
-  final pathVar = Env.get('PATH') ?? '';
+  final pathVar = Env.getOrNull('PATH') ?? '';
   final separator = Platform.isWindows ? ';' : ':';
   final paths = pathVar.split(separator).where((p) => p.isNotEmpty);
 
   final extensions = switch (Platform.isWindows) {
     false => const [''],
-    true when executable.contains('.') => ['', ...?Env.get('PATHEXT')?.split(';').where((e) => e.isNotEmpty)],
+    true when executable.contains('.') => ['', ...?Env.getOrNull('PATHEXT')?.split(';').where((e) => e.isNotEmpty)],
     true => [
-      ...(Env.get('PATHEXT')?.split(';').where((e) => e.isNotEmpty) ?? const ['.com', '.exe', '.bat', '.cmd']),
+      ...(Env.getOrNull('PATHEXT')?.split(';').where((e) => e.isNotEmpty) ?? const ['.com', '.exe', '.bat', '.cmd']),
     ],
   };
 

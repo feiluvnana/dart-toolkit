@@ -56,12 +56,12 @@ Future<void> find(CliContext ctx) async {
 
   final files = await Path.current.glob(glob).toList();
   final sized = Table.rows(
-    (await files.parallelize((f) async => {'bytes': await f.size(), 'file': f.relativeTo(Path.current)})).rights,
+    await files.parallelize((f) async => {'bytes': await f.size(), 'file': f.relativeTo(Path.current)}).rights,
   );
 
   if (sized.isEmpty) return Console.warn('nothing matched $glob');
   sized.orderBy('bytes', descending: true).take(ctx(top)).show();
-  Console.ok('${sized.length} files, ${sized.numbers('bytes').sequence.sum} bytes');
+  Console.ok('${sized.length} files, ${sized.numbers('bytes').sum} bytes');
 }
 
 /// Any of the four document formats, queried with one language.

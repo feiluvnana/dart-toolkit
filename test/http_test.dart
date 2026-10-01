@@ -460,63 +460,6 @@ void main() {
       expect(items.isEmpty, isTrue);
     });
 
-    test('res.isolate() runs parsing and extraction on background isolate', () async {
-      final res = Response('''
-        <html>
-          <body>
-            <ul class="users">
-              <li data-id="1">Alice</li>
-              <li data-id="2">Bob</li>
-            </ul>
-          </body>
-        </html>
-      ''', 200);
-
-      final extracted = await res.isolate((r) {
-        final items = r.html.$('.users li');
-        return items.map((e) => {'id': e.attrOrNull('data-id'), 'name': e.text}).toList();
-      });
-
-      expect(
-        extracted,
-        equals([
-          {'id': '1', 'name': 'Alice'},
-          {'id': '2', 'name': 'Bob'},
-        ]),
-      );
-    });
-
-    test('Response.isolate composes with html(), json() and xml()', () async {
-      final htmlRes = Response('<div><span class="val">42</span></div>', 200);
-      final numVal = await htmlRes.isolate((r) => r.html.$('.val').firstOrNull?.text);
-      expect(numVal, equals('42'));
-
-      final jsonRes = Response('{"user": {"name": "John"}}', 200);
-      final nameVal = await jsonRes.isolate((r) => r.json.$(r'$.user.name').firstOrNull?.to<String>());
-      expect(nameVal, equals('John'));
-
-      final xmlRes = Response('<root><item id="99">Hello</item></root>', 200);
-      final xmlVal = await xmlRes.isolate((r) => r.xml.$x('//item').text);
-      expect(xmlVal, equals('Hello'));
-
-      final mockClient = MockClient((req) async {
-        if (req.url.path == '/api/item') {
-          return Response('{"id": 99, "title": "Toolkit"}', 200);
-        }
-        return Response('<html><body><h1>Hello Uri Isolate</h1></body></html>', 200);
-      });
-
-      await Http.scope(client: mockClient, () async {
-        final itemRes = await 'https://example.com/api/item'.url.get();
-        final title = await itemRes.isolate((r) => r.json['title'].to<String>());
-        expect(title, equals('Toolkit'));
-
-        final pageRes = await 'https://example.com/page'.url.get();
-        final heading = await pageRes.isolate((r) => r.html.$('h1').firstOrNull?.text);
-        expect(heading, equals('Hello Uri Isolate'));
-      });
-    });
-
     test('follow rejects a non-Uri, non-String target', () async {
       final client = MockClient((request) async => Response('<html></html>', 200));
 
@@ -1003,7 +946,7 @@ void main() {
                 summary = s;
                 order.add('finish');
               })) {
-            order.add(r.isRight ? 'item' : 'left');
+            order.add(r is Right ? 'item' : 'left');
           }
         }, client: client);
 
@@ -2166,7 +2109,7 @@ void main() {
 
     test('an odd Retry-After is waited on and retried, not thrown out of the crawl', () async {
       final got = await (base / 'busy').scrape<String>().onResponse((ctx) => ctx.emit(ctx.response.text)).toList();
-      expect(got.map((e) => e.isRight), [isTrue]);
+      expect(got.map((e) => e is Right), [isTrue]);
       expect(hits['/busy'], 2);
     });
 

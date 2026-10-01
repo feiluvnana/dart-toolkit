@@ -82,13 +82,21 @@ final class Pool<T, R> {
   /// captures nothing a port cannot carry. What `init` throws is thrown here.
   static Future<Pool<T, R>> spawn<T, R>(Worker<T, R> Function() create, {int size = 4, bool isolate = true}) async {
     final pool = Pool<T, R>._(create, size, isolate);
-    final started = await Future.wait([for (var i = 0; i < pool.size; i++) Either.tryCatch(pool._start)]);
+    final started = await Future.wait([for (var i = 0; i < pool.size; i++) _settled(pool._start)]);
     pool._idle.addAll(started.rights);
     if (started.lefts.firstOrNull case final error?) {
       pool._kill(null);
       throw error;
     }
     return pool;
+  }
+
+  static Future<Either<Object, S>> _settled<S>(Future<S> Function() start) async {
+    try {
+      return Right(await start());
+    } catch (error, trace) {
+      return Left(error, trace);
+    }
   }
 
   Future<_Slot<T, R>> _start() => _isolate ? _Remote.spawn(_create) : _Local.start(_create());

@@ -16,7 +16,7 @@ enum PathType { file, dir, link, none }
 /// {@category Files}
 extension type const Path(String path) implements String {
   /// The user's home directory.
-  static Path get home => Path(Env.get('HOME') ?? Env.get('USERPROFILE') ?? Directory.current.path);
+  static Path get home => Path(Env.getOrNull('HOME') ?? Env.getOrNull('USERPROFILE') ?? Directory.current.path);
 
   /// The system temporary directory.
   static Path get temp => Path(Directory.systemTemp.path);

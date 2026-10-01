@@ -41,6 +41,16 @@ extension StreamExtensions<T> on Stream<T> {
         timer?.cancel();
         if (batch.isNotEmpty) sink.add(batch);
       },
+      // An error closes the window early: what arrived before it is emitted before it.
+      onError: (error, trace, sink, _) {
+        timer?.cancel();
+        timer = null;
+        if (batch.isNotEmpty) {
+          sink.add(batch);
+          batch = <T>[];
+        }
+        sink.addError(error, trace);
+      },
       onCancel: () async => timer?.cancel(),
     );
   }
@@ -136,37 +146,6 @@ extension StreamExtensions<T> on Stream<T> {
     );
   }
 
-  /// Shifts the emission of every item forward by [duration].
-  Stream<T> delayBy(Duration duration) {
-    // The delay is the same for every item, so they come due in arrival order: a queue and
-    // one timer on its head, rather than a timer per item.
-    final queue = Queue<(int, T)>();
-    final clock = Stopwatch()..start();
-    Timer? timer;
-    late EventSink<T> out;
-    late void Function() settle;
-    void due() {
-      timer = null;
-      final now = clock.elapsedMicroseconds;
-      while (queue.isNotEmpty && queue.first.$1 <= now) {
-        out.add(queue.removeFirst().$2);
-      }
-      if (queue.isNotEmpty) timer = Timer(Duration(microseconds: queue.first.$1 - now), due);
-      settle();
-    }
-
-    return _lift<T>(
-      onData: (item, sink, settled) {
-        (out, settle) = (sink, settled);
-        queue.add((clock.elapsedMicroseconds + duration.inMicroseconds, item));
-        timer ??= Timer(duration, due);
-      },
-      onDone: (_) {},
-      pending: () => queue.isNotEmpty,
-      onCancel: () async => timer?.cancel(),
-    );
-  }
-
   /// Maps each item to a stream and merges the results concurrently.
   ///
   /// Inner streams run at the same time; use `asyncExpand` for one at a time. A paused
@@ -204,7 +183,7 @@ extension StreamExtensions<T> on Stream<T> {
 
   /// Shared plumbing for the operators above: forwards events through a controller,
   /// honours pause and resume, and stays open past the source's `done` for as long
-  /// as [pending] reports outstanding work — which is what stops [delayBy] and
+  /// as [pending] reports outstanding work — which is what stops [throttle] and
   /// [flatMap] from dropping their last events.
   Stream<R> _lift<R>({
     required void Function(T item, EventSink<R> sink, void Function() settled) onData,

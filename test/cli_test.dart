@@ -1101,7 +1101,7 @@ void main() {
     tearDown(() {
       Io.reset();
       Io.color = null;
-      Env.remove('NO_COLOR');
+      Env.set('NO_COLOR', '');
     });
 
     test('captures subprocess output, not just Console output', () async {
@@ -1270,7 +1270,7 @@ void main() {
       Io.reset();
       Io.color = null;
       Console.level = LogLevel.info;
-      Env.reset();
+      Env.set('TK_TEST_TOKEN', '');
     });
 
     final dry = Opt.flag('dry', abbr: 'd');

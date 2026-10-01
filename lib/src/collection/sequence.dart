@@ -41,9 +41,6 @@ class Sequence<T> extends Iterable<T> {
   /// What the operators iterate; [Sorted] answers its sorted list here.
   Iterable<T> get _items => _source;
 
-  /// A sequence of nothing.
-  const Sequence.empty() : _source = const Iterable.empty();
-
   /// The sequence `0, 1, …, n-1`, or `start, start+step, …` while below [end].
   static Sequence<int> range(int startOrCount, [int? end, int step = 1]) {
     final start = end == null ? 0 : startOrCount;
@@ -60,6 +57,27 @@ class Sequence<T> extends Iterable<T> {
 
   @override
   Iterator<T> get iterator => _items.iterator;
+
+  // What the source answers without a walk — a list's length, a mapped list's last — it
+  // answers here too, rather than `Iterable`'s default walk of every element.
+
+  @override
+  int get length => _items.length;
+
+  @override
+  bool get isEmpty => _items.isEmpty;
+
+  @override
+  bool get isNotEmpty => _items.isNotEmpty;
+
+  @override
+  T get last => _items.last;
+
+  @override
+  T elementAt(int index) => _items.elementAt(index);
+
+  @override
+  List<T> toList({bool growable = true}) => _items.toList(growable: growable);
 
   // ---- the SDK's lazy operators, returning a Sequence so the chain continues
 
@@ -94,9 +112,6 @@ class Sequence<T> extends Iterable<T> {
   Sequence<R> cast<R>() => Sequence._(_items.cast<R>());
 
   // ---- shape
-
-  /// Elements that fail [test].
-  Sequence<T> whereNot(bool Function(T element) test) => where((e) => !test(e));
 
   /// Each element with its position.
   Sequence<(int, T)> get indexed => Sequence._(_items.indexed);
@@ -172,40 +187,6 @@ class Sequence<T> extends Iterable<T> {
     }
   }());
 
-  /// Every `(a, b)` with `a` from here and `b` from [other].
-  Sequence<(T, R)> cartesian<R>(Iterable<R> other) => Sequence._(() sync* {
-    for (final a in _items) {
-      for (final b in other) {
-        yield (a, b);
-      }
-    }
-  }());
-
-  /// Alternating elements from here and [other]; the longer finishes alone.
-  Sequence<T> interleave(Iterable<T> other) => Sequence._(() sync* {
-    final a = iterator, b = other.iterator;
-    var moreA = a.moveNext(), moreB = b.moveNext();
-    while (moreA || moreB) {
-      if (moreA) {
-        yield a.current;
-        moreA = a.moveNext();
-      }
-      if (moreB) {
-        yield b.current;
-        moreB = b.moveNext();
-      }
-    }
-  }());
-
-  /// The running [combine] from [seed]: `[1, 2, 3].sequence.scan(0, (a, b) => a + b)` is `1, 3, 6`.
-  Sequence<R> scan<R>(R seed, R Function(R acc, T element) combine) => Sequence._(() sync* {
-    var acc = seed;
-    for (final e in _items) {
-      acc = combine(acc, e);
-      yield acc;
-    }
-  }());
-
   /// The last [count] elements.
   Sequence<T> takeLast(int count) => Sequence._(() sync* {
     final list = toList();
@@ -221,11 +202,6 @@ class Sequence<T> extends Iterable<T> {
   /// The elements in reverse.
   Sequence<T> get reversed => Sequence._(() sync* {
     yield* toList().reversed;
-  }());
-
-  /// A random permutation.
-  Sequence<T> shuffled([Random? random]) => Sequence._(() sync* {
-    yield* toList()..shuffle(random);
   }());
 
   // ---- order
@@ -297,19 +273,6 @@ class Sequence<T> extends Iterable<T> {
     }
   }());
 
-  /// Group join: every element here with the list of its matches on [other], possibly empty.
-  Sequence<R> groupJoin<U, K, R>(
-    Iterable<U> other,
-    R Function(T mine, List<U> theirs) select, {
-    required K Function(T element) on,
-    required K Function(U element) to,
-  }) => Sequence._(() sync* {
-    final index = other.sequence.groupBy(to).toMap();
-    for (final e in _items) {
-      yield select(e, index[on(e)] ?? const []);
-    }
-  }());
-
   // ---- grouping: each group is a Sequence with a key, so the sentence continues on it
 
   /// One [Group] per distinct [key], in first-seen order; each group is a [Sequence] of its
@@ -365,13 +328,13 @@ class Sequence<T> extends Iterable<T> {
   }
 
   /// The element with the largest [key], or `null`.
-  T? maxBy<K extends Comparable<K>>(K Function(T element) key) => minMax(key)?.$2;
+  T? maxBy<K extends Comparable<K>>(K Function(T element) key) => _minMax(key)?.$2;
 
   /// The element with the smallest [key], or `null`.
-  T? minBy<K extends Comparable<K>>(K Function(T element) key) => minMax(key)?.$1;
+  T? minBy<K extends Comparable<K>>(K Function(T element) key) => _minMax(key)?.$1;
 
   /// The smallest and largest [key] holders in one pass, or `null` when empty.
-  (T min, T max)? minMax<K extends Comparable<K>>(K Function(T element) key) {
+  (T min, T max)? _minMax<K extends Comparable<K>>(K Function(T element) key) {
     final it = iterator;
     if (!it.moveNext()) return null;
     var min = it.current, max = it.current;
@@ -389,9 +352,6 @@ class Sequence<T> extends Iterable<T> {
     }
     return (min, max);
   }
-
-  /// Whether no element passes [test].
-  bool none(bool Function(T element) test) => !any(test);
 
   @override
   String toString() {
@@ -424,9 +384,6 @@ extension SequenceOfPairsExtensions<K, V> on Sequence<(K, V)> {
   /// The same values, keys through [transform].
   Sequence<(R, V)> mapKeys<R>(R Function(K key) transform) => map((p) => (transform(p.$1), p.$2));
 
-  /// Values as keys and keys as values.
-  Sequence<(V, K)> get inverted => map((p) => (p.$2, p.$1));
-
   /// Pairs sorted by key; keys must be [Comparable].
   Sorted<(K, V)> sortedByKey({bool descending = false}) => Sorted<(K, V)>._(this, [_byKey((p) => p.$1, descending)]);
 
@@ -445,9 +402,6 @@ extension SequenceOfPairsExtensions<K, V> on Sequence<(K, V)> {
     }
     return out;
   }
-
-  /// Two lists, keys and values.
-  (List<K>, List<V>) get unzip => (keys.toList(), values.toList());
 }
 
 /// One group of a [Sequence.groupBy]: the elements that share [key], as a [Sequence].
@@ -587,9 +541,6 @@ final class Sorted<T> extends Sequence<T> {
   /// The next key, applied where the earlier ones tie; largest first when [descending].
   Sorted<T> thenBy<K extends Comparable<K>>(K Function(T element) key, {bool descending = false}) =>
       Sorted<T>._(_source, [..._keys, _byKey(key, descending)]);
-
-  /// The next tie-break, as a comparator.
-  Sorted<T> thenWith(Comparator<T> compare) => Sorted<T>._(_source, [..._keys, _byComparator(compare)]);
 }
 
 /// The positions of the [count] smallest of `0 … n-1` by [compare], in order: a max-heap of
@@ -634,6 +585,9 @@ final class _Deferred<T> extends Iterable<T> {
 
   @override
   Iterator<T> get iterator => _make().iterator;
+
+  @override
+  List<T> toList({bool growable = true}) => _make().toList(growable: growable);
 }
 
 /// One sort key: what to pull out of an element, and how two of those compare.

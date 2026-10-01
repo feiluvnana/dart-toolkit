@@ -832,7 +832,7 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
 
   void add(Either<ScrapeFailure, T> outcome) {
     if (controller.isClosed) return;
-    if (outcome.isLeft) failures++;
+    if (outcome is Left) failures++;
     controller.add(outcome);
   }
 

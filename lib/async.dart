@@ -13,7 +13,6 @@ import 'dart:math';
 
 import 'core.dart';
 
-part 'src/async/isolate.dart';
 part 'src/async/parallelize.dart';
 part 'src/async/pool.dart';
 part 'src/async/retry.dart';

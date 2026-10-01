@@ -503,28 +503,6 @@ final class Response {
   /// The body parsed as JSON, once per response instance.
   JsonDocument get json => _json ??= JsonDocument.parse(text);
 
-  /// Runs [action] on a copy of this response inside a background [Isolate].
-  ///
-  /// Copies the body, status, headers and URL — not the client. Extract data in [action];
-  /// returning a parsed document copies it all back and buys nothing.
-  Future<R> isolate<R>(FutureOr<R> Function(Response res) action) {
-    final bytes = this.bytes;
-    final code = statusCode;
-    final hdrs = Map<String, String>.of(headers);
-    final method = request?.method ?? 'GET';
-    final reqUrl = url;
-    return (() {
-      final copy = Response.bytes(
-        bytes,
-        code,
-        headers: hdrs,
-        request: reqUrl != null ? Request(method, reqUrl) : null,
-        url: reqUrl,
-      );
-      return action(copy);
-    }).isolate();
-  }
-
   @override
   String toString() => 'Response($statusCode${reasonPhrase == null ? '' : ' $reasonPhrase'}, ${bytes.length} bytes)';
 }

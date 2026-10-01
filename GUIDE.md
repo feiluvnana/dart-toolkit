@@ -156,7 +156,7 @@ test.
 | library | holds | imports |
 |---|---|---|
 | `core.dart` | `Either`, `Env`, `Io`, `.url`, `60.s`, progress interfaces | — |
-| `async.dart` | `Cancel`, `parallelize`, `Worker`, `Pool`, `retry`, `Semaphore`, `Mutex`, stream operators | `core` |
+| `async.dart` | `Cancel`, `parallelize`, `Worker`, `Pool`, `retry`, `Semaphore`, stream operators | `core` |
 | `collection.dart` | `Sequence`, `Group`, `Table`, `Row` | `formats` |
 | `formats.dart` | `JsonDocument`, `YamlDocument`, TOML, INI, the HTML/XML tree, `$`, `$x` | `collection` |
 | `fs.dart` | `Path`, watching, archives, compression | `native` |
@@ -173,38 +173,39 @@ test.
 
 ### `Either`
 
-A value that is one of two things: `Left` (a failure) or `Right` (a success).
+A settled outcome, `Left` (a failure) or `Right` (a success): what `parallelize`, `Pool`
+and `scrape` hand back. A script reads one; it does not build its own (`try` is shorter).
 
 ```dart
-final parsed = Either.tryCatchSync(() => int.parse(raw));   // Either<Object, int>
-final fetched = await Either.tryCatch(() => url.get().json); // the same, awaited
-
-parsed.isRight;
-parsed.rightOrNull;
-parsed.fold((e) => 'failed: $e', (v) => 'got $v');
-parsed.mapRight((n) => n * 2);
-parsed.unwrap(); // the value, or throw the Left
+final [outcome] = await [url].parallelize(fetch);
+outcome.rightOrNull ?? fallback;
+outcome.unwrap(); // the value, or throw the Left with its trace
+switch (outcome) {
+  Right(:final value) => use(value),
+  Left(:final value) => Console.warn('$value'),
+}
 ```
 
-On a list or a stream of outcomes:
+On a list or a stream of outcomes, and on the future of a list, so no parentheses:
 
 ```dart
 settled.rights;   // the successes
 settled.lefts;    // the failures
 settled.unwrap(); // the successes, or throw the first failure
+await urls.parallelize(fetch).rights;
 ```
 
 ### `Env`
 
-The process environment, with overrides that a test can set and reset.
+The process environment, with in-memory overrides. An empty variable counts as unset.
 
 ```dart
-Env.get('HOME');
-Env.require('API_TOKEN'); // throws, naming the key
+Env.get('API_TOKEN');            // throws, naming the key, when unset
+Env.get('PORT', or: '8080');
+Env.getOrNull('HOME');
 Env.has('CI');
 Env.isCI;
-Env.set('TZ', 'UTC');
-Env.reset();
+Env.set('TZ', 'UTC');            // children of `run` inherit it
 
 Env.load();                                   // .env into the overrides
 Env.load(path: '.env.local', override: true); // …and let it beat the real environment
@@ -256,7 +257,7 @@ importing it. Anything that streams a `BatchProgress` can be drawn with `.show()
 ### Cancellation is ambient
 
 A token is never passed through a call. `Cancel.scope` holds one, and `download`, `retry`,
-`run`, `parallelize`, `Pool`, `Mutex`, `Semaphore`, `Duration.delay` and `.cancellable` all
+`run`, `parallelize`, `Pool`, `Semaphore`, `Duration.delay` and `.cancellable` all
 read it. `timeout:` cancels the scope after that long:
 
 ```dart
@@ -356,10 +357,7 @@ The backoff wait ends as soon as the scope is cancelled.
 
 ```dart
 final gate = Semaphore(4);
-await gate.run(() => work()); // held for the action
-
-final lock = Mutex();
-await lock.run(() async => work());
+await gate.run(() => work()); // held for the action; Semaphore(1) is a lock
 ```
 
 ### Stream operators
@@ -372,7 +370,6 @@ numbers.chunk(100);          // fixed-size lists
 numbers.chunkEvery(1.s);     // whatever arrived in each window
 numbers.debounce(300.ms);    // the last of a burst
 numbers.throttle(1.s);       // at most one per window
-numbers.delayBy(100.ms);
 numbers.flatMap((n) => Stream.value(n * 2));
 [numbers, numbers].merge();  // one stream out of many
 ```
@@ -395,14 +392,14 @@ final top = tracks.sequence
 
 | | |
 |---|---|
-| shape | `where`, `whereNot`, `map`, `expand`, `take`, `skip`, `takeWhile`, `skipWhile`, `takeLast`, `skipLast` |
-| order | `sortedBy`, `sortedWith`, `sorted`, `sortedDescending`, `thenBy`, `thenWith`, `reversed`, `shuffled` |
-| windows | `chunk(n)`, `windowed(n, step:)`, `pairwise`, `indexed`, `scan` |
+| shape | `where`, `map`, `expand`, `take`, `skip`, `takeWhile`, `skipWhile`, `takeLast`, `skipLast` |
+| order | `sortedBy`, `sortedWith`, `sorted`, `sortedDescending`, `thenBy`, `reversed` |
+| windows | `chunk(n)`, `windowed(n, step:)`, `pairwise`, `indexed` |
 | sets | `distinct`, `distinctBy`, `union`, `intersect`, `except` |
-| pairs | `zip`, `cartesian`, `interleave` |
-| joins | `innerJoin`, `leftJoin`, `groupJoin` |
+| pairs | `zip` |
+| joins | `innerJoin`, `leftJoin` |
 | grouping | `groupBy`, `countBy`, `indexBy`, `partition` |
-| folds | `sum`, `average`, `sumBy`, `averageBy`, `max`, `min`, `maxBy`, `minBy`, `minMax` |
+| folds | `sum`, `average`, `sumBy`, `averageBy`, `max`, `min`, `maxBy`, `minBy` |
 | ranges | `Sequence.range(count)`, `Sequence.range(from, to, step)` |
 
 - A sort runs again on every read.
@@ -453,8 +450,9 @@ sales.join(regions, on: 'region');
 ```
 
 Reading a cell: `row.text('name')`, `row.number('size')`, `row.numberOrNull('size')`,
-`row.get<int>('n')`. A thousands separator is stripped only where it groups thousands, so
-`'1,5'` is not 15.
+`row.get<int>('n')`, `row.get<DateTime>('at')` (ISO 8601 text). A thousands separator is
+stripped only where it groups thousands, so `'1,5'` is not 15. `t.numbers('bytes')` is a
+`Sequence<num>`, so `.sum`, `.max` and `.average` follow directly.
 
 Writing: `t.toCsv()`, `t.toNdjson()`, `t.toMarkdown()`, `t.toJson()`, `await t.save(path)` — in
 the format the extension names, `.csv`, `.tsv`, `.json`, `.ndjson`/`.jsonl` or `.md`, the same
@@ -1513,7 +1511,7 @@ Future<({Uri page, String file})> find(String title) async {
 }
 
 Future<void> main() => Http.scope(retries: 2, delay: 1.s, () async {
-  final found = (await ['frankenstein', 'dracula'].parallelize(find)).rights;
+  final found = await ['frankenstein', 'dracula'].parallelize(find).rights;
   await {
     for (final (:page, :file) in found)
       page.resolve('downloads/$file').replace(query: 'source=download'): 'books'.path / file,

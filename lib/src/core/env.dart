@@ -12,59 +12,46 @@ class Env {
   /// Returns the current merged environment map (custom loaded vars taking precedence over system vars).
   static Map<String, String> all() => {...Platform.environment, ..._custom};
 
-  /// The variable [key], or `null`: `Env.get('PORT') ?? '8080'`.
-  static String? get(String key) => _custom[key] ?? Platform.environment[key];
+  /// The variable [key], or [or] when it is unset or empty; with no [or], a [StateError]
+  /// naming the key: `Env.get('API_TOKEN')`, `Env.get('PORT', or: '8080')`.
+  static String get(String key, {String? or}) =>
+      getOrNull(key) ?? or ?? (throw StateError('Missing required environment variable: $key'));
+
+  /// The variable [key], or `null` when it is unset or empty.
+  static String? getOrNull(String key) => switch (_custom[key] ?? Platform.environment[key]) {
+    final value? when value.isNotEmpty => value,
+    _ => null,
+  };
 
   /// Sets or overrides a custom environment variable in-memory.
   static void set(String key, String value) => _custom[key] = value;
 
-  /// Removes an in-memory custom environment variable.
-  static void remove(String key) => _custom.remove(key);
-
-  /// Whether any override has been set, loaded or parsed.
-  static bool get hasOverrides => _custom.isNotEmpty;
-
-  /// Drops every override; the process environment is untouched.
-  static void reset() => _custom.clear();
-
-  /// Checks if an environment variable [key] is defined and non-empty.
-  static bool has(String key) => get(key)?.isNotEmpty ?? false;
-
-  /// Retrieves a required environment variable [key]. Throws a [StateError] if missing or empty.
-  static String require(String key) {
-    final val = get(key);
-    if (val == null || val.isEmpty) {
-      throw StateError('Missing required environment variable: $key');
-    }
-    return val;
-  }
+  /// Whether the variable [key] is set and non-empty.
+  static bool has(String key) => getOrNull(key) != null;
 
   /// Whether the current script is running in a Continuous Integration (CI) environment.
   ///
   /// Checks common CI environment variables (`CI`, `GITHUB_ACTIONS`, `GITLAB_CI`, `TRAVIS`, `CIRCLECI`, `BITBUCKET_BUILD_NUMBER`, `TF_BUILD`).
   static bool get isCI =>
-      const {'true', '1'}.contains(get('CI')) ||
-      const [
-        'GITHUB_ACTIONS',
-        'GITLAB_CI',
-        'TRAVIS',
-        'CIRCLECI',
-        'BITBUCKET_BUILD_NUMBER',
-        'TF_BUILD',
-      ].any((key) => get(key) != null);
+      const {'true', '1'}.contains(getOrNull('CI')) ||
+      const ['GITHUB_ACTIONS', 'GITLAB_CI', 'TRAVIS', 'CIRCLECI', 'BITBUCKET_BUILD_NUMBER', 'TF_BUILD'].any(has);
 
   /// Parses a `.env` format [source] string and loads key-value pairs into custom environment.
   ///
-  /// If [override] is `false` (default), a variable already defined — in `Platform.environment`
-  /// or by an earlier [parse], [load] or [set] — is preserved. Supports `#` comments, `export`,
+  /// If [override] is `false` (default), a variable already defined — non-empty, in
+  /// `Platform.environment` or by an earlier [parse], [load] or [set] — is preserved. Supports `#` comments, `export`,
   /// single and double quotes — a quoted value may span lines, which is how a PEM key is
   /// written — and `\n`, `\"` and `\\` inside double quotes; not `${VAR}` expansion. A line
   /// with no key (`=value`) is skipped.
   static Map<String, String> parse(String source, {bool override = false}) {
     final parsed = <String, String>{};
     final lines = source.split(_envLineBreakRegex);
-    final existingCustom = _custom.keys.toSet();
-    final existingPlatform = Platform.environment.keys.toSet();
+    // What is defined before this parse, so a key repeated within it is still the parse's
+    // own; an empty variable is unset here as it is for [get].
+    final defined = {
+      for (final MapEntry(:key, :value) in all().entries)
+        if (value.isNotEmpty) key,
+    };
 
     for (var n = 0; n < lines.length; n++) {
       var line = lines[n].trim();
@@ -93,7 +80,7 @@ class Env {
       }
 
       parsed[key] = value;
-      if (override || (!existingPlatform.contains(key) && !existingCustom.contains(key))) {
+      if (override || !defined.contains(key)) {
         _custom[key] = value;
       }
     }

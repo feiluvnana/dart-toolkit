@@ -16,8 +16,8 @@ extension IterableParallelExtensions<T> on Iterable<T> {
   /// over a function; a [Worker] of your own is for state built once per isolate.
   ///
   /// ```dart
-  /// final settled = await urls.parallelize(fetch);            // every outcome
-  /// final pages   = (await urls.parallelize(fetch)).unwrap(); // or throw the first
+  /// final settled = await urls.parallelize(fetch);          // every outcome
+  /// final pages   = await urls.parallelize(fetch).unwrap(); // or throw the first
   /// ```
   Future<List<Either<Object, R>>> parallelize<R>(
     FutureOr<R> Function(T item) worker, {
