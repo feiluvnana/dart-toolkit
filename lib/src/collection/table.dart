@@ -287,7 +287,7 @@ final class Table {
     names.forEach(_has);
     return Table._(List.unmodifiable(names), [
       for (final r in rows) _own({for (final n in names) n: r[n]}),
-    ], _order);
+    ], _orderWhile(names.contains));
   }
 
   /// Every column but [names].
@@ -312,7 +312,11 @@ final class Table {
   Table derive(String name, Object? Function(Row row) value) =>
       Table._(List.unmodifiable([...columns.where((c) => c != name), name]), [
         for (final r in rows) _own({...r, name: value(r)}),
-      ], _order);
+      ], _orderWhile((c) => c != name));
+
+  /// [_order] up to its first key not [kept]: a later key only breaks that one's ties, and a
+  /// stale key would re-sort rows that are already in order.
+  List<(String, bool)> _orderWhile(bool Function(String column) kept) => [..._order.takeWhile((o) => kept(o.$1))];
 
   /// One row per distinct combination of [by] (every column when omitted); the first wins.
   Table distinct([List<String>? by]) {
@@ -368,17 +372,21 @@ final class Table {
   /// A crosstab: one row per [rows] value, one column per [column] value, [value] folded by [agg].
   Table pivot({required String rows, required String column, required String value, Agg agg = Agg.sum}) {
     [rows, column, value].forEach(_has);
-    final columnValues = <String>{for (final r in this.rows) r.text(column)}.toList();
+    // A value named like the [rows] column gets `name_2`, so it does not overwrite the key.
+    final seen = {rows};
+    final names = {
+      for (final c in <String>{for (final r in this.rows) r.text(column)}) c: seen.add(c) ? c : _unused(c, seen),
+    };
     final out = <Row>[];
     for (final group in this.rows.sequence.groupBy((r) => _Key([r[rows]]))) {
       final row = <String, Object?>{rows: group.key.parts.first};
       final byColumn = group.groupBy((r) => r.text(column)).toMap();
-      for (final c in columnValues) {
-        row[c] = _foldCells(agg, [for (final r in byColumn[c] ?? const <Row>[]) r[value]]);
+      for (final MapEntry(key: c, value: name) in names.entries) {
+        row[name] = _foldCells(agg, [for (final r in byColumn[c] ?? const <Row>[]) r[value]]);
       }
       out.add(_own(row));
     }
-    return Table._(List.unmodifiable([rows, ...columnValues]), out, const []);
+    return Table._(List.unmodifiable([rows, ...names.values]), out, const []);
   }
 
   /// CSV text with a header row; fields are quoted when they need it, and a row of one empty
@@ -615,51 +623,57 @@ int _compareCells(Object? a, Object? b) => _compare(_cell(a), _cell(b));
 final _thousands = RegExp(r'^[+-]?\d{1,3}(,\d{3})+(\.\d+)?$');
 
 /// `JsonDocument.to<T>`'s coercions, plus thousands separators and ISO 8601 [DateTime] text.
+/// A nullable [T] reads as its base type; `1.7` is not an `int`.
 T? _coerce<T>(Object? val) {
   if (val == null) return null;
   if (val is T) return val as T;
-  if (T == String) return '$val' as T;
+  bool same<X>() => T == X || T == _typeOf<X?>();
+  if (same<String>()) return '$val' as T;
   if (val is num) {
-    if (T == num) return val.isFinite ? val as T : null;
-    if (T == int) {
-      if (!val.isFinite) return null;
-      try {
-        return val.toInt() as T;
-      } catch (_) {
-        return null;
-      }
-    }
-    if (T == double) return val.isFinite ? val.toDouble() as T : null;
-    if (T == bool) {
+    if (same<num>()) return val.isFinite ? val as T : null;
+    if (same<int>()) return _integral(val) as T?;
+    if (same<double>()) return val.isFinite ? val.toDouble() as T : null;
+    if (same<bool>()) {
       if (val == 1) return true as T;
       if (val == 0) return false as T;
     }
     return null;
   }
-  if (T == bool) {
+  if (same<bool>()) {
     if (val == 'true' || val == true) return true as T;
     if (val == 'false' || val == false) return false as T;
     return null;
   }
-  if (T == DateTime) return val is String ? DateTime.tryParse(val.trim()) as T? : null;
+  if (same<DateTime>()) return val is String ? DateTime.tryParse(val.trim()) as T? : null;
+  final isInt = same<int>(), isDouble = same<double>();
+  if (!isInt && !isDouble && !same<num>()) return null;
   var text = val is String ? val.trim() : '$val';
   if (text.contains(',') && _thousands.hasMatch(text)) text = text.replaceAll(',', '');
-  final isNumeric = T == num || T == int || T == double;
-  if (isNumeric) {
-    if (text.startsWith('0x') || text.startsWith('0X') || text.startsWith('+0x') || text.startsWith('-0x')) return null;
-    final n = num.tryParse(text);
-    if (n == null || !n.isFinite) return null;
-    if (T == num) return n as T;
-    if (T == double) return n.toDouble() as T;
-    if (T == int) {
-      try {
-        return (n is int ? n : n.toInt()) as T?;
-      } catch (_) {
-        return null;
-      }
-    }
+  // `num.tryParse` reads hex; a cell's `0x10` is text.
+  if (_hex.hasMatch(text)) return null;
+  final n = num.tryParse(text);
+  if (n == null || !n.isFinite) return null;
+  return (isInt
+          ? _integral(n)
+          : isDouble
+          ? n.toDouble()
+          : n)
+      as T?;
+}
+
+final _hex = RegExp('^[+-]?0x', caseSensitive: false);
+
+Type _typeOf<X>() => X;
+
+/// [n] as an `int` when it is a whole number in range, else `null`.
+int? _integral(num n) {
+  if (n is int) return n;
+  if (!n.isFinite || n != n.truncateToDouble()) return null;
+  try {
+    return n.toInt();
+  } catch (_) {
+    return null;
   }
-  return null;
 }
 
 /// A CSV's columns and the index every row shares, so a row is just its cells.

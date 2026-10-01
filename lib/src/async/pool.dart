@@ -113,10 +113,10 @@ final class Pool<T, R> {
       if (slot != null) {
         unregister?.call();
         _release(slot);
-        if (--_active == 0 && _waiting.isEmpty && !(_drained?.isCompleted ?? true)) {
-          _drained!.complete();
-        }
+        _active--;
       }
+      // Also when no worker came: a failed start may have been the last thing [close] waits on.
+      if (_active == 0 && _waiting.isEmpty && !(_drained?.isCompleted ?? true)) _drained!.complete();
     }
   }
 
@@ -146,6 +146,10 @@ final class Pool<T, R> {
         throw _poolClosed();
       }
       return _take(slot);
+    } catch (_) {
+      // The waiter behind retries the start (or sees the pool closed) rather than hang.
+      if (_waiting.isNotEmpty) _waiting.removeFirst().complete(null);
+      rethrow;
     } finally {
       _starting--;
     }
@@ -168,7 +172,11 @@ final class Pool<T, R> {
       final handed = await free.future;
       unregister?.call();
       if (handed != null) return handed;
-      if (_hasRoom) return _startBusy();
+      if (_hasRoom) {
+        if (_closed == null && !(token?.isCancelled ?? false)) return _startBusy();
+        // Not starting the replacement after all: pass the wake on, or the queue behind hangs.
+        if (_waiting.isNotEmpty) _waiting.removeFirst().complete(null);
+      }
     }
   }
 
@@ -185,7 +193,10 @@ final class Pool<T, R> {
     try {
       for (var i = next(); i < items.length && !(token?.isCancelled ?? false); i = next()) {
         try {
-          if (slot == null || slot.isDead) slot = _take(await _start());
+          if (slot == null || slot.isDead) {
+            slot = _take(await _start());
+            if (token?.isCancelled ?? false) break; // cancelled while it spawned: the item stays cancelled
+          }
           final value = slot.run(items[i]);
           into[i] = Right(value is Future<R> ? await value : value);
         } catch (error, trace) {

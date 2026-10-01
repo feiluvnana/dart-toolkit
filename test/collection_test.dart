@@ -740,6 +740,40 @@ void main() {
       expect(r.get<int>('pad'), 12);
     });
 
+    test('get<int> refuses a fraction rather than truncate, and a nullable T reads as its base', () {
+      final r = Row({'p': '19.99', 'n': 2.7, 'w': 3.0, 's': '5', 'f': '4.0', 'hex': '-0X10'});
+      expect(r.getOrNull<int>('p'), isNull);
+      expect(() => r.get<int>('n'), throwsStateError);
+      expect(r.get<int>('w'), 3);
+      expect(r.get<int>('f'), 4);
+      expect(r.getOrNull<int?>('s'), 5);
+      expect(r.getOrNull<double?>('s'), 5.0);
+      expect(r.getOrNull<String?>('n'), '2.7');
+      expect(r.numberOrNull('hex'), isNull);
+    });
+
+    test('pivot: a value named like the rows column gets a fresh name', () {
+      final p = Table.rows([
+        {'k': 'x', 'c': 'k', 'v': 1},
+        {'k': 'y', 'c': 'z', 'v': 2},
+      ]).pivot(rows: 'k', column: 'c', value: 'v');
+      expect(p.columns, ['k', 'k_2', 'z']);
+      expect(p.rows.map((r) => r['k']), ['x', 'y']);
+      expect(p.rows.first['k_2'], 1);
+    });
+
+    test('thenBy after derive replaces a sort column does not re-sort by the new values', () {
+      final t = Table.rows([
+        {'a': 2, 'b': 1, 'i': 0},
+        {'a': 1, 'b': 2, 'i': 1},
+        {'a': 1, 'b': 1, 'i': 2},
+      ]);
+      // The old `a` order stays as the tie-break under `b`.
+      expect(t.orderBy('a').derive('a', (r) => -r.number('i')).thenBy('b').rows.map((r) => r['i']), [2, 0, 1]);
+      expect(t.orderBy('a').drop(['a']).thenBy('b').rows.map((r) => r['i']), [2, 0, 1]);
+      expect(t.orderBy('a').select(['a', 'i']).thenBy('i', descending: true).rows.map((r) => r['i']), [2, 1, 0]);
+    });
+
     test('get<DateTime> reads ISO 8601 text', () {
       final r = Row({'at': '2024-01-02T03:04:05Z', 'day': '2024-03-01', 'no': 'soon', 'n': 5});
       expect(r.get<DateTime>('at'), DateTime.utc(2024, 1, 2, 3, 4, 5));
