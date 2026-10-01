@@ -169,15 +169,19 @@ class Sequence<T> extends Iterable<T> {
   }
 
   /// Neighbouring pairs: `(e0, e1), (e1, e2), …`.
-  Sequence<(T, T)> get pairwise => Sequence._(() sync* {
-    final it = iterator;
-    if (!it.moveNext()) return;
-    var prev = it.current;
-    while (it.moveNext()) {
-      yield (prev, it.current);
-      prev = it.current;
+  Sequence<(T, T)> get pairwise {
+    Iterable<(T, T)> pairs() sync* {
+      final it = iterator;
+      if (!it.moveNext()) return;
+      var prev = it.current;
+      while (it.moveNext()) {
+        yield (prev, it.current);
+        prev = it.current;
+      }
     }
-  }());
+
+    return Sequence._(pairs());
+  }
 
   /// Elements paired with [other]'s, stopping at the shorter.
   Sequence<(T, R)> zip<R>(Iterable<R> other) => Sequence._(() sync* {
