@@ -984,6 +984,7 @@ table.show(border: Border.markdown, align: 'lr', cell: (row, c) => row.text(c));
 
 Terminal apps, full-screen or inline: a state, a `view` of widgets, an `update` that answers events.
 Its own import — `import 'package:dart_toolkit/tui.dart';` — beside `Console`, not built on it.
+`Border` and `CancelledException` come from `core` (or the barrel), shared with `Console`.
 
 ```dart
 final n = await Tui.run(0,

@@ -16,8 +16,8 @@ found the opposite; its *why* is that finding. What a release changed is in `CHA
 own namespaces; per-module libraries are for a program that measured.
 
 **Own namespaces.** A module stays out of the barrel when its names could collide with `dart:`
-or its compile cost falls on programs that never use it. Today: `package:dart_toolkit/chrome.dart`
-(`ChromeClient`, `ChromePage`, `Device`, `Dialog`, …) — −32 ms on every `http` import.
+or its compile cost falls on programs that never use it. Today: `chrome.dart` (`ChromeClient`,
+`ChromePage`, …; −32 ms on every `http` import) and `tui.dart` (terminal apps; ~35 ms over `core`).
 
 > *Why:* a package name silently beats a `dart:` name — the barrel's old `Native` hid
 > `dart:ffi`'s `@Native`; and every scraper paid Chrome's compile.
@@ -209,6 +209,9 @@ Each of these was a silent failure.
 - **A compressed body ends where its stream does;** truncated input is an error, never a short body.
 - **A crawl's own files are capped:** robots.txt at 512 KiB, sitemaps at 50 MB. robots.txt, `delay`
   and `perHost` belong to the origin; crawl scope stays by host.
+- **A terminal app reads and draws on `/dev/tty`,** reading in a helper isolate under
+  `stty … min 0 time 1`, so stdin stays the program's and `app > out` stays clean; every exit —
+  `Lifecycle.exit` too, which skips `finally` — restores it through `IoBridge.restores`.
 - **Prompts and indicators go to stderr,** so `app > out.json` captures only data. `-q` silences
   spinners, bars and boards; the live region is never wider than the terminal less one. `NO_COLOR`
   turns off colour, not redraw.
@@ -287,6 +290,18 @@ top-level function; one written in a method captures the whole context.
 
 **Writing names the format; reading works it out.** `archiveTo`/`compressTo` use the extension;
 `extractTo`, `entries`, `decompressTo` sniff the magic number, so a `.bin` that is a 7z opens.
+
+**Two UI approaches, never mixed.** `Console` (in `cli`) prints inline above the scrollback: logs,
+spinners, bars, boards, prompts. `Tui` (`tui.dart`) owns the screen: an app loop, widgets, keys.
+Neither imports the other; what both need (`Border`, `IoBridge.restores`) lives in `core`.
+
+**Customization is a theme of tokens plus a builder per component.** The theme (`ConsoleTheme`,
+`TuiTheme`) holds only what components share: palette, marks, glyphs, `Border`. Anything else is
+the component's own builder over a typed snapshot (`task: (t) => …`, `item: (c) => …`), and the
+snapshot's helpers (`t.bar(20)`) draw in the theme unless told otherwise. Same names in both UIs.
+
+> *Why:* presets (`SpinnerStyle`) and format strings capped what a script could draw; a builder
+> caps nothing and is still one line.
 
 **The renderer is the type.** `Table.show()` is the only table renderer. `Io` answers sink
 questions (terminal? width? colour?) *per sink*, so `2>log` gets no escape codes.

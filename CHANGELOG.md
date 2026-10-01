@@ -2,6 +2,100 @@
 
 ## Unreleased
 
+### Console themes, a TUI framework, and a second bug hunt
+
+#### Upgrading
+
+| Before | After |
+|---|---|
+| `sdk: ^3.10.0` | `sdk: ^3.8.0` (checked on Dart 3.8.0) |
+| `row.get<int>('price')` on `2.7` gave `2` | `null` from `getOrNull`, a `StateError` from `get`; whole numbers (`3.0`) still read as `int` |
+| `doc['t'].to<DateTime>()` read `2024-02-30` and `"12345678"` | needs a `YYYY-MM-DD` start with real field values |
+| `doc['x'].or(false)` in an untyped context returned the raw value | converts by the fallback's type |
+| `api / 'projects:batchGet'` was a scheme | a path segment |
+| XPath `contains("a")` silently used the context | a `FormatException` at parse (arity and unknown names are checked) |
+| an indented `[x]` line right after an INI key | a continuation of that key, as in configparser |
+| a cancelled `download()` reported only what had started | files never started count as failed, so `show()` reports the true "N of M failed" |
+| non-UTF-8 terminals got ASCII spinner frames only | the whole `ConsoleTheme.ascii` (marks, rule, borders, tree) |
+
+#### Added
+
+- `ConsoleTheme` (palette, marks, frames, bar glyphs, `Border`, prompt marks), with
+  `Console.theme = …` and `Console.themed(theme, body)`.
+- Per-component builders over typed views:
+  - `line:` on `Console.progress`/`spinner`/`spin`;
+  - `task:` and `header:` on `Console.tasks` and `.show()`;
+  - `cell:` on `Table.show`.
+
+  The views are `ProgressView`, `SpinnerView`, `TaskView` and `BatchView`. They carry `index`,
+  `count`, `name`, `state`, `bytes`, `speed`, `eta`, `bar(width)` and the active theme.
+- The download board shows a smoothed speed and an ETA.
+- `Table.show(border:, align:, cell:)`. `Border` (in `core`, shared with `Tui`) has the presets
+  `square`, `rounded`, `double`, `heavy`, `ascii`, `markdown` and `none`.
+- `num.humanBytes` (was `int`).
+- `package:dart_toolkit/tui.dart`, outside the barrel:
+  - `Tui.run` (full screen) and `Tui.inline`, both Elm-style; `TuiApp` as the class form.
+  - Widgets: `Label`, `VStack`/`HStack` (`.fixed`/`.flex`/`.percent`), `Box`, `Menu`, `Grid`,
+    `Tabs`, `Field`, `Gauge`, `Spin`, `Paint`, `Themed`.
+  - `Choice` (filter, multi), `TuiTheme`, builder contexts.
+  - Typed `Key`/`Char`/`Paste`/`Mouse`/`Resize` events; a diffed cell buffer with colour downgrade.
+  - The `Terminal` seam and `FakeTerminal` for tests.
+- `tk pick [glob]`: type to filter, print the chosen path.
+- `IoBridge.restores`: `Lifecycle.exit` puts a running TUI's terminal back before it exits.
+
+#### Fixed
+
+- Chrome:
+  - A site's 401 was answered with the proxy password.
+  - Proxy passwords were sent percent-encoded.
+  - `cookies()` threw on cookies like `a=x,y`.
+  - `press('.')` acted as Delete.
+  - Concurrent `waitForDownload`s lost files.
+  - `block:` did not reach cross-origin iframes.
+  - `screenshot(selector:)` cut off padding and border.
+  - `waitForDownload(() => goto(file))` threw.
+  - A frame view used after `close()` spun until its timeout.
+  - IPv6 proxies lost their brackets.
+  - Stealth sent empty `userAgentData` brands.
+- HTTP:
+  - A nested scope turned off the outer scope's `retries`.
+  - A crawl timeout left the hung request holding its socket.
+  - Each scoped request leaked a cancel listener.
+  - `cache:` leaked a file when a send failed.
+  - robots.txt and sitemaps were asked with the seed's query.
+  - One bad `href` failed the whole page.
+  - Cancelling during `onInit` did not stop the crawl.
+  - A batch outside a scope opened a client per file.
+  - `pages: 0` hung.
+- Core:
+  - A `Pool` whose replacement worker failed to start hung its queue, and `close()` with it.
+  - A cancelled `parallelize(isolate: true)` still ran an item.
+  - `pivot` lost keys when a value named the rows column.
+  - `thenBy` after `select`/`derive` lost the earlier order.
+  - `'-0X10'` read as a number.
+  - `1048575.humanBytes` gave `1024.0 KB`.
+  - `.env`: a stray quote swallowed the lines up to the next quote.
+- Formats:
+  - XPath `*` matched the document node.
+  - A positional step on nested inputs came back out of order.
+  - `true() > false()` was false, and `string(1e15)` gave `1e+15`.
+  - A rowspan past a short row landed in the wrong row.
+  - `</script/>` swallowed the page.
+  - `to<int>` clamped huge doubles.
+  - YAML: a quoted `"<<"` merged; `a: &x` followed by a same-indent list failed; `!!str` gave
+    `null`; a lone `\r` was not a line break.
+  - `doc.$('> body')` matched nothing, and `Elements.$('> li')` was out of order.
+  - `<base>` outside `<head>` was ignored.
+  - `<pre>&#10;` kept the newline.
+  - `C:\cfg.d\settings` was given an extension.
+- `keybox` stops instead of zipping an incomplete box set. An unknown batch total shows `?`.
+  `filename` collapses newlines and tabs.
+
+#### Smaller
+
+About 1,500 fewer library lines with the same API: comments keep only the *why*, and duplicated
+logic is merged.
+
 ### Audit IV
 
 About 120 bugs found with real sockets, headless Chrome, ptys and differential fuzzing, each fixed
