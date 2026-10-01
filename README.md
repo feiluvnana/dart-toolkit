@@ -4,45 +4,9 @@
 [![Dart](https://img.shields.io/badge/Dart-3.10%2B-blue.svg)](https://dart.dev)
 [![GitHub](https://img.shields.io/badge/GitHub-feiluvnana%2Fdart--toolkit-brightgreen.svg)](https://github.com/feiluvnana/dart-toolkit)
 
-A toolkit for Dart scripts: processes, files, formats, HTTP, scraping, a real browser, and a CLI
-framework. It is written so that a script needs as few lines as possible and runs fast.
-
-```dart
-import 'package:dart_toolkit/dart_toolkit.dart';
-```
-
-This is the tour, with one example per idea. [`GUIDE.md`](GUIDE.md) is the manual.
-
----
-
-## Modules
-
-One import brings everything. The per-module libraries are for a program that has measured
-its startup and wants less.
-
-| Import | What it holds |
-|---|---|
-| `core.dart` | `Either`, `Env`, `Io`, durations (`60.s`) |
-| `async.dart` | `parallelize`, `Worker`/`Pool`, `retry`, `Semaphore`, `Cancel.scope`, stream operators |
-| `collection.dart` | `Sequence` (lazy queries) and `Table` (rows of named columns: CSV, JSON, Markdown, console) |
-| `formats.dart` | `JsonDocument` for JSON, YAML, TOML and INI; one markup tree for HTML and XML, with CSS `$` and XPath `$x` |
-| `fs.dart` | `Path`, archives (zip, 7z, rar, tar.*), compression |
-| `hash.dart` | 16 digests, 4 checksums, HMAC, encodings, `Secure` |
-| `process.dart` | `run`, pipelines, `which`, `Shell.scope` |
-| `http.dart` | requests, `Http.scope`, `IoClient`, crawling, downloads |
-| **`chrome.dart`** | `ChromeClient` and `ChromePage`: Chrome as a `Client`, and a tab to drive. It is **not** in the barrel: it is a third of `http`'s source, so only a program that opens a browser compiles it |
-| `cli.dart` | `Cli`, typed `Opt`/`Arg`, `Console`, `Lifecycle` |
-| `native.dart` | `NativeLib`, the loader for the package's Rust library |
-
-Nothing third-party runs at runtime except `path`. Every parser and the HTTP client are the
-package's own, and each is checked in the tests against the package it replaced.
-
-What Dart cannot do fast — hashing, archives, content decoding, legacy charsets — runs in `dart_toolkit_native`,
-a Rust library the package ships prebuilt for macOS (arm64, x64) and Linux (x64, arm64). There
-is no Windows build yet. `NativeLib.isAvailable` says whether it loaded; anything that needs it
-throws an `UnsupportedError` saying why.
-
-## Installation
+A toolkit for Dart scripts — processes, files, formats, HTTP, scraping, a real browser, a CLI
+framework — built for short scripts that start fast. This is the tour; [`GUIDE.md`](GUIDE.md)
+is the manual.
 
 ```yaml
 dependencies:
@@ -50,6 +14,28 @@ dependencies:
     git:
       url: https://github.com/feiluvnana/dart-toolkit.git
 ```
+
+```dart
+import 'package:dart_toolkit/dart_toolkit.dart';   // every module but chrome.dart
+```
+
+| Import | Holds |
+|---|---|
+| `core.dart` | `Either`, `Env`, `Io`, durations (`60.s`) |
+| `async.dart` | `parallelize`, `Worker`/`Pool`, `retry`, `Semaphore`, `Cancel.scope`, stream operators |
+| `collection.dart` | `Sequence` (lazy queries), `Table` (CSV, JSON, Markdown, console) |
+| `formats.dart` | `JsonDocument` for JSON/YAML/TOML/INI; one HTML/XML tree with CSS `$` and XPath `$x` |
+| `fs.dart` | `Path`, archives (zip, 7z, rar, tar.*), compression |
+| `hash.dart` | digests, checksums, HMAC, encodings, `Secure` |
+| `process.dart` | `run`, pipelines, `which`, `Shell.scope` |
+| `http.dart` | requests, `Http.scope`, `IoClient`, crawling, downloads |
+| `chrome.dart` | `ChromeClient`, `ChromePage` — **not in the barrel**; import it by name |
+| `cli.dart` | `Cli`, typed `Opt`/`Arg`, `Console`, `Lifecycle` |
+| `native.dart` | `NativeLib`, the loader for the bundled Rust library |
+
+The only runtime dependency is `path`. Hashing, archives, content decoding and legacy charsets
+run in a Rust library shipped prebuilt for macOS (arm64, x64) and Linux (x64, arm64); no Windows
+build yet. Without it, those calls throw `UnsupportedError` (`NativeLib.reason` says why).
 
 ---
 
@@ -61,80 +47,61 @@ dependencies:
 final branch = await run('git branch --show-current').text;     // quiet, trimmed
 if (await run('git diff --quiet').isOk) print('clean');         // an answer, not a throw
 await run(r'ls *.dart | wc -l', shell: true);                   // a real /bin/sh
-await run('git commit -m', args: [message]);                   // an argument nothing re-reads
+await run('git commit -m', args: [message]);                    // never re-parsed
 await run('vim notes.txt', inherit: true);                      // interactive child
-final piped = await ('echo "apple\nbanana"' | 'grep an').run();
-```
+final piped = await ('git ls-files' | 'wc -l').run().text;
 
-`run` returns a `ShellRun`, and the getter you read sets the policy: `.text` and `.lines` imply
-`quiet`, and `.isOk` implies `strict: false`. Settings every command would repeat belong to the
-scope:
-
-```dart
-await Shell.scope(workdir: repo, timeout: 30.s, () async {
+await Shell.scope(workdir: repo, timeout: 30.s, () async {      // settings for every run inside
   await run('git fetch --all');
-  await run('git status --short');
 });
 ```
 
-A cancel or a timeout stops the whole process tree, not just the direct child.
+The getter sets the policy: `.text`/`.lines` imply `quiet`, `.isOk` implies `strict: false`. A
+cancel or timeout stops the whole process tree.
 
 ### HTML and XML
-
-`$` is CSS and `$x` is XPath 1.0, on every document.
 
 ```dart
 final doc = await url.get().html;                               // or '<p>…</p>'.html
 final title = doc.$('h1').text;
-final links = doc.$('td.title > a').links;                      // List<Uri>, resolved; attrs('href') as written
-final items = doc.$('ul').first.$('> li.x');                    // a leading combinator reads from the element
-final flac = doc.$x('//tr[td[2]="FLAC"]/td[1]/a/@href').texts;
+final links = doc.$('td.title > a').links;                      // List<Uri>, resolved
+final items = doc.$('ul').first.$('> li.x');                    // relative to the element
+final flac = doc.$x('//tr[td[2]="FLAC"]/td[1]/a/@href').texts;  // XPath 1.0
 final price = doc.$('th:contains(Price) + td').text;
-final lines = doc.$('article').lines;                           // block-aware text, scripts skipped
-final table = doc.$('table#songs').table;                       // colspan, duplicate headers kept
-print(doc.$('main').markup);
+final lines = doc.$('article').lines;                           // block-aware text
+final table = doc.$('table#songs').table;                       // a Table
 ```
-
-The parser puts tag soup where a browser does. It decodes `&lang=en` in a URL as the literal
-text, because that is how a browser reads it.
 
 ### Formats
 
-JSON, YAML, TOML and INI all decode to one `JsonDocument`, so one query language and one
-`to<T>()` serve them all.
+JSON, YAML, TOML and INI decode to one `JsonDocument`.
 
 ```dart
-final pubspec = (await 'pubspec.yaml'.path.readText()).yaml;
-final deps = pubspec.$(r'$.dependencies.*').length;
+final pubspec = await JsonDocument.read('pubspec.yaml');        // parser by extension
+final deps = pubspec.$(r'$.dependencies.*').length;             // JSONPath
 final port = configText.toml['server']['port'].to<int>();       // or StateError naming $.server.port
-final debug = iniText.ini['debug'].or(false);                   // absence expected, typed by the default
+final debug = iniText.ini['debug'].or(false);                   // absence expected
 final tags = pubspec['topics'].to<List<String>>();
-final all = streamText.yaml.documents;                          // `.yaml` is the first document
-await pubspec.save('pubspec.json');                             // JSON or YAML, by extension
+await pubspec.save('pubspec.json');
 ```
 
 ### Paths and archives
 
-`Path` is an extension type over `String`, so it goes anywhere a path string does.
+`Path` is an extension type over `String`.
 
 ```dart
 final dir = Path.temp / 'project';
-await dir.archiveTo('${dir.path}.tar.zst');                     // the extension names the format
-await 'download.bin'.path.extractTo('out', only: '**/*.txt');   // the magic number decides
+await dir.archiveTo('${dir.path}.tar.zst');                     // format from the extension
+await 'download.bin'.path.extractTo('out', only: '**/*.txt');   // format from the magic number
 final readme = await 'release.zip'.path.entry('README.md');     // one entry, no extraction
 if (await 'cache.json'.path.olderThan(1.h)) await refresh();    // true when missing
 await for (final batch in 'src'.path.changes()) print(batch);   // debounced watch
-dir / 'AIR / Farewell song'.filename;                           // one safe component
 ```
 
-Extraction treats an archive as untrusted: setuid bits are dropped, links that escape the
-destination are refused, and output is capped at 200× the archive's size (never below 1 GiB).
-`trusted: true` lifts all three.
+Extraction treats an archive as untrusted (no setuid, no escaping links, a 200× size cap);
+`trusted: true` lifts that.
 
 ### Collections
-
-Nothing is added to `Iterable` or `Map`. The way in is a conversion: `.sequence` for a lazy
-query, and `.table` for rows of named columns.
 
 ```dart
 final top = tracks.sequence
@@ -144,99 +111,55 @@ final top = tracks.sequence
 
 final t = await Table.read('sales.csv');                        // CSV, TSV, JSON, NDJSON
 t.where((r) => r.number('size') > 1e6).orderBy('disc').select(['title', 'size']).show();
-await for (final row in Table.readRows('huge.csv')) print(row['id']);   // streamed
 ```
 
 ### Hashing
 
-The receiver can be a `String`, a `List<int>` or a `Path`, and each offers the same five
-methods: `hash`, `hashBytes`, `checksum`, `hmac` and `hmacBytes`.
+`hash`, `checksum` and `hmac` work on a `String`, a `List<int>` or a `Path`.
 
 ```dart
 'abc'.hash(Hash.sha256);
-await file.hash(Hash.blake3);                                   // every core, ~10 GB/s
+await file.hash(Hash.blake3);                                   // every core
 final digests = await files.hash(Hash.xxh3);                    // Map<Path, String>, parallel
 final dupes = await 'photos'.path.duplicates();                 // List<List<Path>>
-'body'.hmac(Hash.blake2b, secret);                              // BLAKE2's own keyed mode
 Secure.token(); bytes.hex; '6869'.hexBytes;
 ```
 
-Encryption, password hashing and signatures are out of scope, on purpose.
-
-### Concurrency
-
-`parallelize` is the quick form. It settles every item into an `Either`, and you choose the
-error policy where you use the results.
+### Concurrency and cancellation
 
 ```dart
 final settled = await urls.parallelize(fetch, concurrency: 8);  // List<Either<Object, Page>>
 final pages = settled.unwrap();                                 // or .rights, .lefts
 final thumbs = await images.parallelize(resize, isolate: true); // long-lived isolates
-```
 
-Underneath is a `Pool` of `Worker`s. Subclass `Worker` when each isolate needs state set up
-once:
-
-```dart
-final class Resize extends Worker<Path, Path> {
-  late final RegExp suffix;
-  @override
-  void init() => suffix = RegExp(r'\.png$');                    // once per isolate
-  @override
-  Future<Path> run(Path image) async => image;                  // once per item
-}
-
-final pool = await Pool.spawn(Resize.new, size: 4);
-await for (final done in pool.map(Stream.fromIterable(images))) print(done);
-await pool.close();
-```
-
-### Cancellation
-
-A cancel token is never passed as an argument. `Cancel.scope` holds it, and `download`, `run`,
-`retry`, `Pool` and `.cancellable` read it from there. `Cli.run` opens the scope for you, so ^C
-stops everything:
-
-```dart
-await Cancel.scope(token: stop, () async {
+await Cancel.scope(timeout: 5.m, () async {                     // download, run, retry, Pool… read it
   for (final item in items) {
     Cancel.throwIfCancelled();
     await handle(item);
   }
-  final page = await slow.cancellable;                          // CancelledException on cancel
 });
 ```
 
-### Requests
+`parallelize` is sugar over a `Pool` of `Worker`s; subclass `Worker` for per-isolate state.
+`Cli.run` opens the cancel scope, so ^C stops everything.
 
-`Http.scope` holds the client and every setting a request would otherwise repeat.
+### Requests
 
 ```dart
 await Http.scope(timeout: 30.s, retries: 3, delay: 500.ms, cookies: true, () async {
-  await login.post(form: {'user': user, 'pass': pass});         // session kept across the redirect
+  await login.post(form: {'user': user, 'pass': pass});
   final doc = await dashboard.get().html;                       // throws unless 2xx
-  final id = (await api.withQuery({'v': 2}).post(json: {'name': 'x'}).json)['id'];
+  final id = (await api.post(json: {'name': 'x'}).json)['id'];
   final res = await api.get();                                  // any status: res.isOk
   await upload.post(form: {'title': 'beach'}, files: {'photo': 'beach.jpg'.path});
 });
 ```
 
-- `retries:` covers transport errors, 5xx responses, and 429/503 with `Retry-After`. A POST is
-  not sent twice unless the server said when to ask again.
-- A verb's `.json`, `.text`, `.html`, `.xml` and `.bytes` throw `HttpException: 404 Not Found`
-  unless 2xx; awaiting the verb itself gives the `Response` whatever its status.
-- `delay:` is the gap between two requests to the same host, downloads included, jittered ±25 %.
-- `cache:` keeps GETs on disk and asks conditionally the next run.
-- `url.events()` streams server-sent events or NDJSON: `api.events(json: {...})` is the POST a
-  streaming API asks for.
-- A body is one of `text:`, `bytes:`, `form:`, `json:` or `files:`, and the same words are used
-  on `Request`, the verbs and `follow`.
-- Credentials never leave their origin: not on a redirect, and not to a third-party host a
-  Chrome tab loads from.
+`retries:` covers transport errors, 5xx and 429/503 (never a second POST unless `Retry-After`
+said so); `delay:` spaces requests per host; `cache:` keeps GETs on disk. `url.events()` streams
+SSE or NDJSON.
 
 ### Crawling
-
-A crawl is five hooks on a chain, plus the stream of what they emit:
 
 ```dart
 final stories = url.scrape<Story>()
@@ -246,176 +169,98 @@ final stories = url.scrape<Story>()
       for (final a in ctx.html.$('.titleline > a')) {
         ctx.emit((title: a.text, link: ctx.resolve(a)));
       }
-      ctx.follow(ctx.html.$('a.next'));
+      ctx.follow(ctx.html.$('a.next'));                         // same hosts, never twice
     })
     .onError((ctx) => Console.warn('${ctx.failure}'))
     .onFinish((summary) => Console.info('$summary'));
 
-await for (final story in stories.rights) print(story);
+await Http.scope(() => stories.rights.forEach(print));          // failures are Left items
 ```
 
-The chain is sugar over `Crawler<T>`, which has the same hooks as methods. Subclass it when a
-crawl needs state or a test:
+The chain is sugar over `Crawler<T>`; subclass it when a crawl needs state or a test.
+
+### Chrome
 
 ```dart
-final class Titles extends Crawler<String> {
-  final Uri home;
-  final seen = <String>{};
-  Titles(this.home);
+import 'package:dart_toolkit/chrome.dart';
 
-  @override
-  void onInit(InitContext<String> ctx) => ctx.seed(home);
-  @override
-  void onResponse(ResponseContext<String> ctx) {
-    for (final h in ctx.html.$('h2')) {
-      if (seen.add(h.text)) ctx.emit(h.text);
-    }
-  }
-}
-
-final titles = await Http.scope(() => Titles(home).run().rights.toList());
-```
-
-`follow` stays on the seed's hosts and never fetches a page twice. A failure arrives as a
-`Left` item, never as a stream error.
-
-### Clients and Chrome
-
-Every request goes through one `Client`. Name it once, in `Http.scope(client:)`, or hold it and
-call the same verbs on it directly.
-
-```dart
-import 'package:dart_toolkit/chrome.dart'; // beside the barrel, for ChromeClient
-
-IoClient(connections: 32, perHost: 6, proxy: 'http://user:pass@host:8080'.url);
-
-final chrome = await ChromeClient.launch(block: Resource.heavy, profile: 'session'.path);
+final chrome = await ChromeClient.launch(block: Resource.heavy);
 await Http.scope(client: chrome, () => url.scrape<Item>().onResponse(parse).rights.forEach(print));
-await chrome.page(url, (tab) => tab.click('.accept'));          // only a held client has tabs
+
+final tab = await chrome.open(loginUrl);
+await tab.fill('#user', 'me');
+await tab.waitForNavigation(() => tab.click('button[type=submit]'));   // armed before the click
+final file = await tab.waitForDownload(() => tab.click('.statement'), to: 'out'.path);
+await Http.scope(jar: await tab.cookies(), () => api.get().json);      // the browser's session
 await chrome.close();
 ```
 
-`ChromeClient` speaks the DevTools protocol to the Chrome you already have installed. Here is
-what it does:
-
-- **Rendering.** A page arrives as its DOM after its own scripts have run, so `$`, `$x` and the
-  crawl engine work on it unchanged.
-- **Files.** A file, or anything with `Request.raw`, goes through a plain socket, carrying the
-  browser's cookies.
-- **Lifetime.** A launched Chrome dies with your program, even on `kill -9`, and takes its
-  temporary profile with it.
-
-### Driving a page
-
-```dart
-final tab = await chrome.open(loginUrl);
-await tab.fill('#user', 'me');
-await tab.waitForNavigation(() => tab.click('button[type=submit]'));
-final file = await tab.waitForDownload(() => tab.click('.statement'), to: 'out'.path);
-final api = await tab.waitForResponse('/api/items', () => tab.click('.more'));
-await tab.close();
-```
-
-Each of the three waits takes the action that triggers it. That way the wait is armed before
-the click, so a fast page cannot finish before the wait starts.
+Pages arrive as their DOM after their scripts ran, so `$`, `$x` and crawls work unchanged. A
+launched Chrome dies with your program, even on `kill -9`.
 
 ### Downloads
 
-A download is atomic (a `.part` file renamed on success) and resumable. One file is a batch of
-one, so it uses the same `download` and `show` as a thousand files:
+Atomic (`.part`, renamed on success) and resumable. One file is a batch of one.
 
 ```dart
 await 'sdk.zip'.path.download(url, checksum: (Hash.sha256, digest)).show();
 await {for (final u in urls) u: 'out'.path / u.pathSegments.last}.download(concurrency: 8).show();
-await [Stream.fromIterable(fixed), scraped].merge().download().show();
 ```
 
 ### CLI
 
-An option is a value: its name is written once, and its type is the type `ctx(…)` returns.
-Positionals work the same way.
-
 ```dart
-final env = Opt.among('env', Env.values, 'Where to ship').abbr('e').or(Env.production);
-final token = Opt.text('token').env('GITHUB_TOKEN').required();   // [env: GITHUB_TOKEN] in help
-final headers = Opt.text('header').abbr('H').many();             // List<String>
+enum Stage { dev, production }
+
+final stage = Opt.among('stage', Stage.values, 'Where to ship').abbr('s').or(Stage.production);
+final token = Opt.text('token').env('GITHUB_TOKEN').required();  // [env: GITHUB_TOKEN] in help
 final id = Arg.text('id', 'The build to ship').required();
 
-Future<void> main(List<String> args) => Cli(               // named after its script: deploy.dart
-  values: [id, env, token, headers],
+Future<void> main(List<String> args) => Cli(                     // named after the script
+  values: [id, stage, token],
   handler: (ctx) async {
-    if (!await Console.confirm('Ship ${ctx(id)} to ${ctx(env).name}?', or: true)) return;
+    if (!await Console.confirm('Ship ${ctx(id)} to ${ctx(stage).name}?', or: true)) return;
     await Console.spin('Deploying', () => ship(ctx(id)));
   },
 ).run(args);
 ```
 
-Every `Cli` answers `-v/--verbose`, `-q/--quiet`, `-h/--help` and
-`--completion bash|zsh|fish`, unless it declares those names itself. Failures behave like this:
-
-| Failure | Result |
-|---|---|
-| A usage error | exit 64, with a "did you mean" |
-| Any other exception — `throw 'no such build'` is how a handler fails | one red line, exit 1; the stack trace only with `-v` |
-| A signal | exit 128+n |
-
-Prompts are async, so ^C at a prompt ends the program cleanly.
-
-### Lifecycle and console
-
-```dart
-final release = Lifecycle.onExit(unlock);     // register; call `release()` to undo
-await Lifecycle.exit('no URL given');         // run the hooks, red message, exit 1
-
-final spinner = Console.spinner('Connecting');
-Console.info('resolved 3 hosts');             // scrolls above the spinner
-spinner.succeed('ready');
-```
-
-Every write goes through one live region. Log lines, a `print` inside `Cli.run`, a child
-process's output and prompts all land above a spinner or progress board instead of on top of it. Without a terminal, each one
-becomes plain durable lines.
+Every `Cli` has `--help`, `-v`, `-q` and `--completion bash|zsh|fish`. A usage error exits 64
+with a "did you mean"; a thrown exception prints one red line and exits 1; a signal exits 128+n
+after the `Lifecycle.onExit` hooks. Log lines, `print` and child output scroll above a live
+spinner instead of garbling it.
 
 ### Testing
 
-`Io` is the only sink, and `Client` is the only way to the network, so a test replaces both.
-`MockClient` is forty lines in [`test/mock_client.dart`](test/mock_client.dart); copy it.
+`Io` is the only sink and `Client` the only way to the network. Copy
+[`test/mock_client.dart`](test/mock_client.dart).
 
 ```dart
-final buffer = StringBuffer();
-Io.out = buffer;
-Console.ok('captured');
-Io.reset();
-
+Io.out = StringBuffer();
 await Http.scope(client: MockClient((r) async => Response('{"ok":true}', 200)), () => url.get().json);
+Io.reset();
 ```
 
 ---
 
 ## Executables
 
-`bin/` holds three programs, examples of what a script over the package looks like:
-
 | Program | What it does |
 |---|---|
-| [`tk`](bin/tk.dart) | the toolkit as a tool: `hash`, `find`, `read`, `fetch`, `pack`, `peek` |
-| [`keybox`](bin/keybox.dart) | scrapes a box set's artwork and tracks, downloads them all, and zips the result |
-| [`books`](bin/books.dart) | public-domain ebooks from Standard Ebooks, over plain HTTP or by clicking in Chrome |
+| [`tk`](bin/tk.dart) | `hash`, `find`, `read`, `fetch`, `pack`, `peek` |
+| [`keybox`](bin/keybox.dart) | scrapes a box set's artwork and tracks, downloads them, zips the result |
+| [`books`](bin/books.dart) | public-domain ebooks from Standard Ebooks, over HTTP or by clicking in Chrome |
 
 ```sh
 dart run dart_toolkit:tk find 'lib/**/*.dart' --top 5
-dart run dart_toolkit:books "pride and prejudice" frankenstein -f kepub
 ```
 
-A script of your own compiles on every `dart run`; `dart run -r script.dart` keeps the compiler
-resident and roughly halves the start of the next run.
+`dart run -r script.dart` keeps the compiler resident and roughly halves the next start.
 
 ## More
 
-- [`GUIDE.md`](GUIDE.md): every module in full, a cookbook, and notes on testing, performance
-  and troubleshooting.
-- [`CONVENTIONS.md`](CONVENTIONS.md): the rules this API follows, and why.
-- [`CHANGELOG.md`](CHANGELOG.md): what each release contains.
+[`GUIDE.md`](GUIDE.md) (the manual and cookbook) · [`CONVENTIONS.md`](CONVENTIONS.md) (the
+rules, and why) · [`CHANGELOG.md`](CHANGELOG.md) (releases)
 
 ## License
 

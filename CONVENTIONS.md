@@ -5,514 +5,325 @@ The package optimises for two things, in this order:
 1. **How little a script has to write.**
 2. **How fast it runs.**
 
-Coherence, documentation and feature count come after both. Every rule below exists because an
-audit found the opposite; the *why* line under each rule is that finding. What a release
-changed is in `CHANGELOG.md`, not here.
+Coherence, documentation and feature count come after both. Each rule exists because an audit
+found the opposite; its *why* is that finding. What a release changed is in `CHANGELOG.md`.
 
 ---
 
 ## 1. Surface
 
-### One import
+**One import.** `package:dart_toolkit/dart_toolkit.dart` exports every module except those with
+own namespaces; per-module libraries are for a program that measured.
 
-`package:dart_toolkit/dart_toolkit.dart` exports every module except the ones listed under
-[Own namespaces](#own-namespaces). The per-module libraries exist for a program that measured
-and wants less.
+**Own namespaces.** A module stays out of the barrel when its names could collide with `dart:`
+or its compile cost falls on programs that never use it. Today: `package:dart_toolkit/chrome.dart`
+(`ChromeClient`, `ChromePage`, `Device`, `Dialog`, …) — −32 ms on every `http` import.
 
-### Own namespaces
+> *Why:* a package name silently beats a `dart:` name — the barrel's old `Native` hid
+> `dart:ffi`'s `@Native`; and every scraper paid Chrome's compile.
 
-A module is **not** in the barrel when its names are short enough to collide with a `dart:`
-name, or when its compile cost falls on programs that never use it. Today that is
-`package:dart_toolkit/chrome.dart` (`ChromeClient`, `ChromePage`, `Device`, `Resource`,
-`ChromeWait`, `Dialog`): a third of `http`'s source, −32 ms on every `http` import.
+**One name per operation.** No aliases, not even deprecated. Two doors are fine only when the
+situation picks the door: `url.get()` (no client in hand, uses `Http.scope`) vs `client.get(url)`.
 
-> *Why:* a package name silently beats a `dart:` name. The barrel's old `Native` class hid
-> `dart:ffi`'s `@Native` annotation, so `@Native<…>(symbol: …)` failed with "abstract class".
-> And a scraper that never drives a tab paid Chrome's compile on every `dart run`.
+> *Why:* `download`/`downloadAll`, `outerHtml`/`markup`, `client.crawl`/`client.scrape` made
+> call sites choose for no reason.
 
-### One name per operation
+**A conversion is the way in.** `'…'.url`, `.path`, `.json`, `.html`, `.table`, `60.s`. Nothing
+else goes on `String`, `Iterable` or `Map`; the vocabulary lives on the returned type. A module's
+conversions are one extension (`StringFormatsExtensions`).
 
-No aliases, not even deprecated ones. When two spellings exist, one is deleted.
-
-> *Why:* `download` beside `downloadAll`, `outerHtml` beside `markup`, `isNull` beside
-> `isNotNull`, `client.crawl` beside `client.scrape` — each pair made call sites choose for no
-> reason.
-
-**Two doors are fine when the situation picks the door.** `url.get()` is for code with no
-client in hand (it needs `Http.scope`); `client.get(url)` is for code holding one. Neither can
-do the other's job.
-
-### A conversion is the way in
-
-`'…'.url`, `.path`, `.json`, `.yaml`, `.html`, `.sequence`, `.table`, `60.s`. Nothing else is
-added to `String`, `Iterable` or `Map`; the vocabulary lives on the type the conversion returns.
-A module's conversions are one extension (`StringFormatsExtensions`), not one per getter.
-
-### One word per idea, everywhere
+**One word per idea.**
 
 | Idea | Word |
 |---|---|
 | a default | `or` — `Opt.…or(v)`, `ask(or:)`, `confirm(or:)` |
-| a body | `text` / `bytes` / `form` / `json`, plus `files` (pairs with `form` as one multipart body) |
+| a body | `text` / `bytes` / `form` / `json`, plus `files` (multipart with `form`) |
 | serialising markup | `markup` |
 | one file or a thousand | `download` |
-| a guaranteed value | the bare name; `…OrNull` for the caller who expects absence |
-| repeatable | `.many()`, on `Opt` and `Arg` alike |
-| a link, resolved | `links` — against the document's `<base href>`, else its URL |
-| unset | an empty environment variable is unset, for `Env.get`, `getOrNull`, `has` and `parse` |
+| a guaranteed value | the bare name; `…OrNull` when absence is expected |
+| repeatable | `.many()`, on `Opt` and `Arg` |
+| a resolved link | `links` — against `<base href>`, else the document URL |
+| unset | an empty env var is unset, for `Env.get`, `getOrNull`, `has`, `parse` |
 
-### A name is written once
-
-Anything declared and then looked up again by string is a typo the compiler cannot see. A CLI
-option **is** its value:
+**A name is written once.** A CLI option **is** its value — no string lookup to mistype:
 
 ```dart
 final top = Opt.number('top', 'How many to show').abbr('n').or(10);
-final id = Arg.text('id', 'The build').required();
-// …
 ctx(top); // int
-ctx(id);  // String
 ```
 
-The help text is the second positional and every other property is a chain step (`.abbr`,
-`.env`, `.or`, `.many`) — Dart cannot mix an optional positional with named parameters, and
-`tk` wrote `description:` thirteen times.
+Help text is the 2nd positional; every other property is a chain step (`.abbr`, `.env`, `.or`,
+`.many`). `Opt.among('algo', Hash.values)` takes the enum. `Table` still keys by column name —
+a CSV's columns are unknown until read.
 
-`Opt` and `Arg` differ only in how they are written on the command line. `Opt.among('algo',
-Hash.values)` takes the enum, so nothing rebuilds it from a string. `Table` still keys by
-column name, because a CSV's columns are unknown until it is read.
+> *Why:* Dart cannot mix an optional positional with named parameters, and `tk` wrote
+> `description:` thirteen times.
 
-### Short syntax is sugar over a class
-
-Every quick spelling is built on a class a program can hold, subclass and test, and there is
-one engine behind both.
+**Short syntax is sugar over a class.**
 
 | Quick | Full |
 |---|---|
-| `items.parallelize(fn, isolate: true)` | `Worker<T, R>` + `Pool` — `init()` once per isolate, `run(item)` per item |
-| `url.scrape<T>()…onResponse(…)` | `class MyCrawler extends Crawler<T>` — the same hooks as methods |
+| `items.parallelize(fn, isolate: true)` | `Worker<T, R>` + `Pool` — `init()` per isolate, `run(item)` per item |
+| `url.scrape<T>()…onResponse(…)` | `class MyCrawler extends Crawler<T>` — same hooks as methods |
 
-> *Why:* a one-off script wants one line; a real program wants state, reuse and tests. When the
-> two are separate implementations they drift. The chain's lifecycle hooks are kept as separate
-> hooks in both forms — never collapsed into one handler.
+One engine behind both; the lifecycle hooks stay separate in both forms, never one handler.
 
-### A method earns its place by what it deletes at the call site
+> *Why:* a script wants one line, a program wants state and tests; two implementations drift.
 
-Measured by the scripts people write, of which `bin/keybox.dart`, `bin/books.dart` and
-`bin/tk.dart` are examples, not the census. A method that merely composes two others one line
-apart does not earn it; one that a script author reaches for — `countBy`, `frame()`, a browser's
-`cookies()` — earns it even where `bin/` never calls it.
+**A method earns its place by what it deletes at the call site** — judged by usefulness to
+script authors, not by what `bin/` calls. Composing two others does not earn it; `countBy`,
+`frame()`, `cookies()` do. `Element.attr` and `Sequence.union` duplicate others but stay: shorter.
 
-> *Deleted for this reason:* `gzipTo`, `Table.tsv`, `Ansi.strip`, `Console.table`,
-> `Sequence.count`, `String.stripped`, twenty-one per-algorithm digest shortcuts; in Audit IV
-> `Mutex`, `Sequence.none`/`whereNot`/`shuffled`, `Either.fold`/`isLeft`, `Env.require`.
-> Kept by the same audit, though `bin/` never calls them: Chrome's `frame`, `scroll`, `back`,
-> `pdf` and dialogs, `countBy`, `chunkEvery`, `Duration.jittered`, unrar.
-> `text.hash(Hash.sha256)` is longer than `text.sha256` was, and is the only spelling for all
-> twenty algorithms.
+> *Why:* deleted `gzipTo`, `Ansi.strip`, `Sequence.count`, twenty-one digest shortcuts
+> (`text.hash(Hash.sha256)` covers all twenty algorithms), `Mutex`, `Env.require`; kept
+> Chrome's `frame`/`pdf`/dialogs, `chunkEvery`, `Duration.jittered` though `bin/` never calls them.
 
-The rule cuts both ways: `Element.attr` and `Sequence.union` duplicate something expressible
-elsewhere and stay, because deleting them makes call sites longer.
+**A grid has no holes.** An operation on one receiver of a family is on all of them, or none.
 
-### A grid has no holes
+> *Why:* `hash`, `hmac`, `checksum` existed on unpredictable subsets of `String`/`List<int>`/`Path`.
 
-If an operation exists on one receiver of a family, it exists on all of them — or on none.
+**A guaranteed value is not nullable.** `row.number('size')`, `Element.attr`, `JsonDocument.to<T>()`,
+`Env.get` return the value or throw a `StateError` naming what was missing; `…OrNull` expects absence.
 
-> *Why:* `hash`, `hashBytes`, `checksum`, `hmac`, `hmacBytes` once existed on different subsets
-> of `String`, `List<int>` and `Path`, and nobody could predict which.
+> *Why:* fourteen call sites wrote `attr('href')!`, failing with no name in the message.
 
-### A guaranteed value is not nullable
+**Illegal states are not representable.** Sealed types for option kinds, download states and crawl
+failures; a body is four typed arguments, not one `Object?`. Two `Object` parameters remain where
+the receiver already takes every form: `ctx.follow` and `client.scrape`.
 
-`row.number('size')`, `Elements.text`, `Element.attr`, `JsonDocument.to<T>()`, `Env.get` return the value or
-throw a `StateError` that names what was missing. `…OrNull` is the form that expects absence.
+**Public means a caller uses it.** Parser internals, native shims and query engines are private;
+something that must cross libraries but is not API says so (`NativeBridge`). Nothing in `lib/`
+exists only for tests.
 
-> *Why:* `attr` returned `String?`, and fourteen call sites wrote `attr('href')!`, which failed
-> as "Null check operator used on a null value" with no name in it.
+**Names.** A read-only boolean is `is…`; a switch or parameter is a bare adjective. Async is bare,
+its sync twin ends in `Sync` (only in `fs`). A pure function of the receiver is a getter
+(`sorted`, `res.json`). Short beats descriptive (`done:`, not `successMessage:`). A name that
+collides with `dart:` is namespaced: `Lifecycle.exit`, never a top-level `exit`.
 
-### Illegal states are not representable
+**Events are pairs.** `on<event>` registers, `<event>` fires, `onExit(null)` unregisters.
 
-Sealed types for option kinds, download states and crawl failures; typed parameters instead of
-`Object`. A body is four typed arguments, not one `Object?` that throws at runtime. Two
-`Object` parameters remain, each where a receiver-side spelling already takes every form:
-`ctx.follow` (a link, a `Uri`, an element, any iterable of them, or a `JsonDocument` holding
-them) and `client.scrape` (a `Uri`, `Uri`s or `Request`s).
+**A builder only where order means something.** `Scrape`'s hooks chain because order is the
+lifecycle; a command is a constructor, `CliCommand(name, description, values:, commands:, handler:)`.
+Builders return the receiver; a registration returns its unregistration.
 
-### Public means a caller uses it
+**A wait is armed before its trigger.** `page.waitForNavigation(() => page.click('a'))`; likewise
+`waitForDownload`, `waitForResponse`. Where arming first is impossible, wait on a second signal
+(`back()` waits on the lifecycle event *or* the URL changing).
 
-Parser internals, native shims and query engines are private. Something that must cross a library
-boundary but is not API says so in its name: `NativeBridge`. Nothing in `lib/` exists only for
-tests.
+> *Why:* a fast page finishes before the next line runs.
 
-### Names
+**Help describes this command.** The usage line lists its positionals, `[options]`, `[command]`
+only with subcommands, and accepted ancestor options as "Global options". One renderer for both.
 
-- A read-only boolean is `is…`; a settable switch or a parameter is a bare adjective.
-- The async form is bare; its sync twin ends in `Sync`. Sync twins exist only in `fs`.
-- A pure function of the receiver is a getter (`sorted`, `sum`, `res.json`). IO or an argument
-  makes it a method.
-- Short and meaningful beats descriptive: `done:`, not `successMessage:`.
-- A bare name that collides with `dart:` is namespaced: `Lifecycle.exit`, never a top-level
-  `exit` (which would silently win over `dart:io`'s).
+**A built-in yields to a declaration.** `-h`, `-v`, `-q`, `--version`, `--completion` answer only
+where the program has not taken the name; built-ins are options, never commands.
 
-### Events are pairs
+**A reading implies its policy.** The getter a caller reads sets the policy: `run().text`/`.lines`
+imply `quiet`, `.isOk` implies `strict: false`. HTTP verbs return `Fetch`, a `Future<Response>`
+whose readings (`.json/.text/.html/.xml/.bytes`) throw unless 2xx; awaiting it bare is lenient.
 
-`on<event>` registers, `<event>` fires. `onExit(null)` unregisters. Nothing else.
-
-### A builder only where the order means something
-
-`Scrape`'s hooks are a chain because the order is the lifecycle. A command is a constructor:
-`CliCommand(name, description, values:, commands:, handler:)` — one list of `Arg`s and `Opt`s, since the kind is
-in the type. Builder methods return the receiver; a
-registration returns its unregistration.
-
-### A wait is armed before its trigger
-
-`page.waitForNavigation(() => page.click('a'))`, not `click(); waitForNavigation();` — a fast
-page finishes before the next line runs. `waitForDownload` and `waitForResponse` have the same
-shape. Where arming first is impossible, wait on a second signal (`back()` waits on the
-lifecycle event *or* the URL changing).
-
-### Help describes this command
-
-The usage line is built from what the command holds: its positionals by name, `[options]`,
-`[command]` only when it has subcommands, and the ancestor options it accepts as "Global
-options". `Arg` and `Opt` share one help renderer.
-
-### A built-in yields to a declaration
-
-`-h`, `-v`, `-q`, `--version` and `--completion` answer only where the program has not taken
-the name or the short form. Built-ins are options, never commands — the command namespace is
-the program's.
-
-### A reading implies its policy
-
-When the getter a caller reads already says what it wants, the operation lets that getter set
-the policy. `run()` starts a microtask late, so `.text`/`.lines` imply `quiet` and `.isOk`
-implies `strict: false`:
-
-```dart
-await run('git diff --quiet').isOk;   // was: strict: false, quiet: true
-(await api.post(json: x).json)['id']; // throws unless 2xx; `await api.post(…)` is lenient
-```
-
-> *Why (HTTP):* README's dashboard example carried on after a 401, and every API call wrote a
-> three-line status check. A verb returns `Fetch`, a `Future<Response>` whose readings check.
+> *Why:* README's dashboard example carried on after a 401, and every API call wrote a
+> three-line status check.
 
 ---
 
 ## 2. Scopes
 
-### Ambient over threaded
-
-A setting every call would otherwise repeat belongs to a scope.
+**Ambient over threaded.** A setting every call would repeat belongs to a scope. A truly per-call
+argument (`headers:`, `input:`, `args:`) stays an argument and wins.
 
 | Scope | Holds |
 |---|---|
-| `Http.scope` | client, timeout, headers, cookies (or a `jar:` to start from), `retries`, `delay` (per-origin gap, jittered ±25 %) |
+| `Http.scope` | client, timeout, headers, cookies (or `jar:` to start from), `retries`, `delay` (per-origin, ±25 % jitter) |
 | `Shell.scope` | workdir, environment, timeout, encoding, failure policy |
 | `Cancel.scope` | the cancel token |
 
-A genuinely per-call argument (`headers:`, `input:`, `args:`) stays an argument and wins over
-the scope.
+**An inner scope inherits what it does not set.** An inner `Http.scope(retries: 2)` keeps the outer
+client, jar and headers; an inner `Cancel.scope` hears the outer token.
 
-### A scope inside another inherits what it does not set
+> *Why:* a nested `Http.scope` silently dropped the logged-in session.
 
-An inner `Http.scope(retries: 2)` keeps the outer client, cookie jar and headers; an inner
-`Cancel.scope` hears the outer token.
+**The scope is the only way in.** A token reaches `download`, `retry`, `run`, `Pool` and
+`.cancellable` through `Cancel.scope` alone.
 
-> *Why:* a nested `Http.scope` silently dropped the logged-in session and reset the user agent.
+> *Why:* `cancelWith(token:)` beside `Cancel.scope` was two ways to say one thing.
 
-### The scope is the only way in
+**Every operation honours the scope** — including a process's children, a retry's backoff, a pool's
+queue, a plain `delay`, a lock's waiters, and a response body whose headers are in (cut client-side,
+since `dart:io` then ignores `abort()`).
 
-Not the default way — the only one. A token reaches `download`, `retry`, `run`, `Pool` and
-`.cancellable` through `Cancel.scope` and nowhere else. What a scope holds is named once, where
-it opens.
+> *Why:* `run('sleep 3')` in a cancelled scope finished at 3 s, and `kill -TERM` left children running.
 
-> *Why:* `cancelWith(token:)` beside `Cancel.scope` was two ways to say one thing, and audits
-> kept finding the token threaded through call sites anyway.
+**A scope holds settings, never a capability.** Timeouts and jars mean the same to every client;
+driving a tab lives on the object (`chrome.page(…)` beside `chrome.get(…)`), checked by the compiler.
 
-### Every operation honours the scope
+**Credentials never leave their origin.** A scope's `authorization` and jar reach only their
+scheme+host+port: not across a redirect (`Request._hop`), not to a second origin the code talks to,
+not to a third-party subresource in a Chrome tab.
 
-If an operation can take time, it stops when `Cancel.scope` cancels — including the parts that
-are easy to forget: a process's children, a retry's backoff, a pool's queued items, a plain
-`delay`, a lock's waiters, a crawl, a response body whose headers are in (`dart:io` ignores
-`abort()` then, so the body is cut from the client side), and a scope opened inside another,
-which hears the outer one.
+> *Why:* `Network.setExtraHTTPHeaders` sent the bearer token to every CDN a page loaded.
 
-> *Why:* `run('sleep 3')` in a cancelled scope used to finish at 3 s, and `kill -TERM` left
-> the children running.
+**Scopes read alike.** `Cancel.isCancelled`, `.reason`, `.throwIfCancelled()` mirror `CancelToken`
+(`Cancel.token?.throwIfCancelled()` silently did nothing). A *reading* is quiet outside a scope;
+an *adapter* like `.cancellable` throws.
 
-### A scope holds settings, never a capability
-
-Every client means the same thing by a timeout or a cookie jar, so a scope can hold them. A
-capability — driving a tab — lives on the object: `chrome.page(…)` sits beside `chrome.get(…)`,
-and the compiler rules on it. No probing the ambient client for what it can do.
-
-### Credentials never leave their origin
-
-A scope's `authorization` and cookie jar reach the origin they belong to — scheme, host and
-port — and nothing else: not another host or port on a redirect, not `http` after `https`
-(`Request._hop`), not a second origin the scope's code talks to (credential headers bind to the
-first request's origin), and not a third-party subresource inside a Chrome tab.
-
-> *Why:* `Network.setExtraHTTPHeaders` sent the scope's bearer token to every CDN a page loaded.
-
-### Scopes read alike
-
-`Cancel.isCancelled`, `.reason` and `.throwIfCancelled()` mirror `CancelToken`, so nobody
-writes `Cancel.token?.throwIfCancelled()` — whose `?.` silently does nothing outside a scope. A
-*reading* is quiet outside a scope; an *adapter* like `.cancellable` throws there.
-
-### Opened once, at the top
-
-`Cli.run` opens the `Cancel.scope` whose token is `ctx.cancel`, so ^C stops downloads,
-processes and pools with no code at all. Inside it `print` is a durable write, landing above a
-live spinner instead of on its row. Nothing else is opened implicitly.
+**Opened once, at the top.** `Cli.run` opens the `Cancel.scope` behind `ctx.cancel`, so ^C stops
+everything with no code; inside it `print` lands above a live spinner. Nothing else opens implicitly.
 
 ---
 
 ## 3. Seams
 
-### A seam is two methods; unknown means ignored
+**A seam is two methods; unknown means ignored.** A pluggable thing is an `abstract interface class`
+(`Client` is `send` and `close`). Implementation-specific options travel as typed keys
+(`RequestKey`) others ignore — no capability flags, no `switch` over implementations. A key all must
+honour belongs to the seam (`Request.raw`). Each seam ships a conformance battery
+(`test/client_conformance.dart`).
 
-A pluggable thing is an `abstract interface class` you can implement in an afternoon — `Client`
-is `send` and `close`. What one implementation understands and another does not travels as a
-typed key (`RequestKey`) that the others ignore. No capability flags, no `switch` over
-implementations. A seam ships with a conformance battery (`test/client_conformance.dart`).
+**A seam absorbs the difference.** `Client.close()` is `Future<void>`, never `FutureOr<void>`.
 
-A key every implementation must honour belongs to the seam: `Request.raw` (*the resource,
-never a rendering of it*) is on `Request`, not on `ChromeClient`.
+**Sending consumes a request.** A client writes on it (default headers, `cookie`), so a `Request`
+is single-use; anything that re-sends copies it first.
 
-### A seam absorbs the difference
-
-`Client.close()` is `Future<void>`, never `FutureOr<void>`: one implementation's convenience
-must not become every caller's `if (x case Future f)`.
-
-### Sending consumes a request
-
-A client writes on the request it is handed (default headers, `cookie`), so a `Request` is
-single-use. Anything that re-sends copies it first.
-
-### A policy with three callers is written once
-
-A redirect hop's rules (303 → bodiless GET, 307/308 keep both, credentials stop at another
-host) are `Request._hop`, shared by `IoClient`, the cookie jar and the crawl engine.
+**A policy with three callers is written once.** Redirect rules (303 → bodiless GET, 307/308 keep
+both, credentials stop at another origin) are `Request._hop`, shared by `IoClient`, the jar and the crawl.
 
 ---
 
 ## 4. Robustness
 
-These are the rules the September 2026 audit added. Each was a silent failure.
+Each of these was a silent failure.
 
-- **Parse the real world, not the spec's happy path.** Cookie dates use RFC 6265's lenient
-  parser; `HttpDate.parse` throws `HttpException`, not `FormatException`. HTML entities without
-  `;` decode only for the legacy names, and never inside a URL-like attribute value.
-- **Nothing lands in the working directory unless asked.** Chrome downloads go to a folder the
-  client owns and are moved to `to:` on completion.
-- **A child process never outlives a stop.** Chrome and `run` children are killed as a process
-  tree on cancel, timeout and a caught signal; a launched Chrome also on `kill -9` of the parent
-  (its watchdog). A `run` child that the parent's `kill -9` orphans is not tracked: its stdin is
-  its own, so it cannot be the lifeline.
-- **A command string is what a simple command is.** Shell syntax outside quotes is refused, never
-  passed as an argument; `shell: true` or `|` is the way to a shell. An unclosed quote is a
-  `FormatException`.
-- **Every abandoned response is drained.** A timed-out or redirected body is read (small) or
-  cancelled (large), so pool permits come back and keep-alive survives.
-- **Untrusted archives are contained.** No path escapes the destination, no link leads out even
-  before its target exists, nothing is written through a link already there, no setuid bit
-  survives, and output is capped by ratio unless the caller opts out.
-- **A compressed body ends where its stream does.** A decoder that ran out of input mid-stream is
-  an error, never a short body.
-- **A crawl's own files are capped like its pages.** robots.txt is read to 512 KiB and a sitemap
-  to 50 MB, compressed or unpacked — the protocols' own limits.
-- **A page is its origin's.** robots.txt, `delay` and `perHost` belong to scheme, site and port;
-  scope stays by host.
-- **A prompt talks to the person, and so does an indicator**: every word of a prompt, spinner,
-  bar or board goes to stderr, so `app > out.json` captures only data. **An indicator is a log
-  line**: `-q` silences spinners, bars and boards, and nothing in the live region is wider than
-  the terminal less one. Colour and redraw are decided per sink; `NO_COLOR` turns off colour,
-  not redraw.
-- **An abandoned request is aborted, not only drained.** Draining waits for a response; one
-  that never comes held its pool permit forever.
+- **Parse the real world.** Cookie dates use RFC 6265's lenient parser; HTML entities without `;`
+  decode only for legacy names, never inside a URL-like attribute.
+- **Nothing lands in the working directory unless asked.** Chrome downloads go to a client-owned
+  folder and move to `to:` on completion.
+- **A child never outlives a stop.** Chrome and `run` children die as a process tree on cancel,
+  timeout and caught signal; a launched Chrome also on the parent's `kill -9` (watchdog).
+- **A command string is a simple command.** Unquoted shell syntax is refused; `shell: true` or `|`
+  reaches a shell. An unclosed quote is a `FormatException`.
+- **An abandoned response is aborted and drained,** so pool permits return and keep-alive survives.
+- **Untrusted archives are contained.** No path or link escapes the destination, nothing is written
+  through an existing link, no setuid survives; output is capped at 200× the archive, never below
+  1 GiB (a fixed cap is wrong for both big archives and small bombs).
+- **A compressed body ends where its stream does;** truncated input is an error, never a short body.
+- **A crawl's own files are capped:** robots.txt at 512 KiB, sitemaps at 50 MB. robots.txt, `delay`
+  and `perHost` belong to the origin; crawl scope stays by host.
+- **Prompts and indicators go to stderr,** so `app > out.json` captures only data. `-q` silences
+  spinners, bars and boards; the live region is never wider than the terminal less one. `NO_COLOR`
+  turns off colour, not redraw.
 - **A write replaces, never truncates.** `writeText`/`writeBytes`/`writeLines` rename a finished
-  sibling over the target, keeping its mode and links; a ^C mid-write used to leave half a
-  config for the next run to parse.
-- **A batch reports its failures.** `download().show()` ends with "2 of 6 failed", never
-  "all done" over failures.
-- **A test list runs the small case.** `sorted.take(3)` was tested only at 5000 items, so its
-  full-sort branch returned every element unnoticed.
-- **Input that is not UTF-8 does not fail the operation.** Process output decodes with
-  `allowMalformed: true`.
-- **Every CLI failure is one line and a code.** 64 for usage, 1 for anything else, 128+n for
-  a signal. The stack trace is for `--verbose`.
-- **Nothing a signal must reach blocks the event loop.** A blocking read (a prompt) runs on a
-  helper isolate, so ^C is always heard.
-- **A data format refuses nesting deeper than 1000; a walk over decoded data uses a stack.** A
-  config file that deep is an attack; JSONPath `..` runs over what `jsonDecode` accepted, so it
-  walks any depth. (YAML flow collections overflowed at 4 000 levels.)
-- **An unterminated construct is a `FormatException`, never a hang or a `RangeError`.** Every
-  scanning loop either consumes input or fails. (`[a: 1]` used to hang the YAML parser.)
-- **A tree walk recurses to a depth, then continues on a stack.** Recursion is a third faster on
-  real pages; the stack lets a document nested 100 000 deep still parse, query and serialise.
-- **A browser-wide setting belongs to whoever owns the browser.** A launched browser is set
-  once; a browser we joined is changed only while needed, then handed back.
-- **Stored bytes are never decoded.** `Request.raw` or a `range` means the representation: ask
-  for `identity` and decode nothing.
-- **One retry policy.** A sender with its own budget (the crawl) marks its requests, so an
-  enclosing `Http.scope(retries:)` does not multiply it. It never sends a POST or PATCH twice —
-  the server may have acted on the first — except after a 429 or 503 with `Retry-After`, which
-  says the request was not processed.
-- **A cap is a ratio with a floor.** A fixed number is too small for a big archive and too
-  large to stop a small bomb: extraction is capped at 200× the archive, never below 1 GiB.
-- **A differential test backs every in-house replacement.** The HTML, XML and YAML parsers are
-  checked against `package:html`, `xml` and `yaml` (dev dependencies only).
+  sibling over the target, keeping mode and links. (*Why:* ^C left half a config.)
+- **A batch reports its failures:** `download().show()` ends "2 of 6 failed", never "all done".
+- **A test list runs the small case.** (*Why:* `sorted.take(3)` was tested only at 5000 items and
+  its full-sort branch returned everything.)
+- **Non-UTF-8 input does not fail;** process output decodes with `allowMalformed: true`.
+- **Every CLI failure is one line and a code:** 64 usage, 1 otherwise, 128+n signal; stack trace
+  under `--verbose`.
+- **Nothing a signal must reach blocks the event loop;** a blocking prompt read runs on a helper isolate.
+- **Depth is bounded or walked on a stack.** Formats refuse nesting deeper than 1000; walks over
+  decoded data use a stack; tree walks recurse to a depth, then continue on a stack (a third faster,
+  and 100 000 levels still parse). (*Why:* YAML flow collections overflowed at 4 000.)
+- **An unterminated construct is a `FormatException`,** never a hang. (*Why:* `[a: 1]` hung YAML.)
+- **A browser-wide setting belongs to the browser's owner.** A joined browser is changed only while
+  needed, then handed back.
+- **Stored bytes are never decoded.** `Request.raw` or a `range` asks for `identity`.
+- **One retry policy.** The crawl marks its requests so an outer `Http.scope(retries:)` does not
+  multiply them. POST/PATCH is never re-sent, except after 429/503 with `Retry-After`.
+- **Every in-house replacement has a differential test** against `package:html`, `xml`, `yaml` (dev only).
 
 ---
 
 ## 5. Performance
 
-### Measure back to back, or not at all
+**Measure back to back, or not at all.** Startup drifts ±80 ms. A claim is two numbers from the same
+minute, alternating order; `tool/startup.dart` runs six alternating rounds (median, min over bare).
+`dart run` startup is front-end compile; `dart run -r` halves it for repeated runs.
 
-Startup drifts ±80 ms between runs. A claim is two numbers from the same minute, alternating
-order. `tool/startup.dart` prints the per-module table: six alternating rounds, median and
-minimum over bare. Two rounds in a fixed order produced 120 ms phantoms.
+> *Why:* two rounds in fixed order produced 120 ms phantoms.
 
-Startup under `dart run` is front-end compile: the same programs compiled to kernel start in
-~90 ms whatever they import. `dart run -r` (the resident compiler) halves it for a script run
-again and again.
+**Nothing third-party at runtime but `path`.** `package:html`, `xml`, `archive` and `http` cost a
+second of compile per `dart run`.
 
-### Nothing third-party at runtime but `path`
+**Sharing code across modules is measured like anything else.**
 
-Every parser, the HTTP client and the archive formats are the package's own. `package:html`,
-`xml`, `archive` and `http` together cost a second of front-end compile per `dart run`.
+> *Why:* building `NativeBridge` on a general `ffi.dart` would have cost every `hash`/`fs`/`http`
+> import ~30 ms and hashing calls 11 → 57 ns. `ffi.dart` was later deleted: wider-than-declared
+> signatures returned garbage; `chmod` is a typed method on `Path` instead.
 
-### Sharing code across modules is measured like anything else
+**An isolate is sent only what it needs.** Closures for `Isolate.run`/`Pool` are built in a
+top-level function; one written in a method captures the whole context.
 
-> *Why:* rebuilding `NativeBridge` on the old general-purpose `ffi.dart` would have cost every
-> `hash`/`fs`/`http` import ~30 ms of compile, and hashing's calls would have gone from ~11 ns
-> to ~57 ns. `ffi.dart` itself was deleted in Audit IV: calling through wider-than-declared
-> signatures returned garbage silently, and the OS calls a script needs (`chmod`) are typed
-> methods on `Path` instead.
+> *Why:* `parallelize(isolate: true)` sent its entire input to every isolate — 20.9 s, now 70 ms.
 
-### An isolate is sent what it needs and nothing near it
+**A module does not import another to add one method.** `Table.read(path)`, not `Path.table()`.
 
-A closure handed to `Isolate.run` or a `Pool` is built in a top-level function. A closure written
-inside a method shares that method's whole context, and the isolate copies all of it.
+> *Why:* `fs` in `collection` cost +40–253 ms; moving `JsonDocument.table` into `formats` saved 125 ms.
 
-> *Why:* `parallelize(isolate: true)` sent its entire input list to every isolate — 20.9 s for
-> what now takes 70 ms.
-
-### A module does not import another to add one method
-
-`Table.read(path)` lives on `Table`, not `Path.table()`: importing `fs` into `collection`
-measured +40 to +253 ms on `formats`, and would put `dart:ffi` in modules that never use it.
-`collection` also imported all of `formats` for `JsonDocument.table`; the extension now lives in
-`formats`, −125 ms back to back for a collection-only script.
-
-### An order is applied when it is read
-
-`take(n)` after `orderBy`/`sortedBy` selects `n`; `length` and `isEmpty` never sort.
+**An order is applied when read.** `take(n)` after `orderBy` selects `n`; `length`/`isEmpty` never sort.
 
 > *Why:* `orderBy(…).take(10)` sorted all 500k rows (165 ms, now 25).
 
-### A hot return is not a record
-
-A non-inlined per-token function returning a four-field record cost 8% of the whole HTML parse.
-Measure before choosing records on a hot path.
+**A hot return is not a record:** a per-token four-field record cost 8 % of the HTML parse.
 
 ### The native library does what Dart cannot do fast
 
-`native/` is one Rust `cdylib`, `dart_toolkit_native`, prebuilt per platform under
-`native/prebuilt/<os>_<arch>/` and loaded by `NativeLib`.
+`native/` is one Rust `cdylib`, prebuilt under `native/prebuilt/<os>_<arch>/`, loaded lazily
+(~12 ms) by `NativeLib`, imported only by `fs`, `hash`, `http`.
 
-- Only `fs`, `hash` and `http` import it, so `dart:ffi` costs nothing to a program that uses
-  none of them. Opening the library is lazy (~12 ms, first use).
-- It holds digests, MACs, archive formats, content-decoding, the WHATWG legacy charsets
-  (decode only) and `chmod`, which `dart:io` lacks — nothing else. There is no Dart
-  fallback: two implementations of one primitive are two places for a bug. Without the library
-  those calls throw `UnsupportedError` saying what was needed.
-- Bytes cross as pointer and length (zero-copy leaf calls where the SDK allows), files cross by
-  path, and long work runs in `Isolate.run`. No callbacks into Dart.
-- Every buffer-filling function takes its capacity; every entry point is wrapped in `guard`, so
-  neither an overrun nor a panic crosses the ABI. Memory comes from `tk_alloc`, never the host
-  `malloc`.
-- Output per call is bounded, and "call again" is signalled by filling the buffer exactly. No
-  length travels as an `i32`.
-- Every file is read by the library: on the calling isolate up to 4 MiB, in a worker isolate
-  above it — starting one costs about what SHA-256 takes over 4 MiB.
-- **An export changes the ABI.** Adding or changing a `tk_` function bumps `tk_version` and
-  `NativeLib._abi` together and rebuilds all four prebuilts, so a stale library is refused at
-  load instead of failing later with "Failed to lookup symbol".
+- **Scope:** digests, MACs, archives, content-decoding, legacy charsets (decode), `chmod`. No Dart
+  fallback — two implementations are two bugs; without the library those calls throw `UnsupportedError`.
+- **Boundary:** bytes as pointer+length, files by path, long work in `Isolate.run`, no callbacks.
+  Buffers carry their capacity, entry points are wrapped in `guard`, memory comes from `tk_alloc`;
+  "call again" is a full buffer; no length is an `i32`. Files are read by the library: on the caller up to 4 MiB, a worker above.
+- **An export changes the ABI:** bump `tk_version` and `NativeLib._abi` together and rebuild all
+  four prebuilts, so a stale library is refused at load.
 - A new primitive is one Rust function, one `lookupFunction`, and its published test vector.
-- Native assets (`hook/build.dart`) were measured at +50–65 ms on every `dart run` and are not
-  used.
+- Native assets (`hook/build.dart`) are not used: +50–65 ms on every `dart run`.
 
-### Cryptography beyond hashing is out of scope
+**Cryptography beyond hashing is out of scope** (no ciphers, password hashing, signatures, JWT).
 
-No ciphers, password hashing, key agreement, signatures or JWT. Hashing, HMAC and encodings
-stay, because identifying and verifying data is what scripts do.
+**Files stream:** hashing, downloading and archiving take the file, not its bytes.
 
-### Files stream
+**Writing names the format; reading works it out.** `archiveTo`/`compressTo` use the extension;
+`extractTo`, `entries`, `decompressTo` sniff the magic number, so a `.bin` that is a 7z opens.
 
-Hashing, downloading and archiving take the file, not its bytes.
+**The renderer is the type.** `Table.show()` is the only table renderer. `Io` answers sink
+questions (terminal? width? colour?) *per sink*, so `2>log` gets no escape codes.
 
-### Writing names the format; reading works it out
-
-`archiveTo`/`compressTo` read the destination's extension. `extractTo`, `archiveEntries` and
-`decompressTo` sniff the magic number and fall back to the name, so a `.bin` that is a 7z opens.
-
-### The renderer is the type
-
-`Table.show()` is the only table renderer. `Io` answers every question about the active sink —
-where it goes, whether it is a terminal, how wide, whether it takes colour — *per sink*, so
-`2>log` gets no escape codes. `cli` asks `Io`; it keeps no second namespace.
-
-### Errors are chosen at the use site
-
-`parallelize`, `Pool` and `scrape` settle each item into `Either`; the caller picks `rights`,
-`lefts` or `unwrap()`. Only a throwing `onInit` or `onFinish` reaches a stream's error channel.
-`Cli.run` catches everything else and prints one line.
+**Errors are chosen at the use site.** `parallelize`, `Pool` and `scrape` settle items into
+`Either`; the caller picks `rights`, `lefts` or `unwrap()`. `Cli.run` prints the rest as one line.
 
 ---
 
 ## 6. Layout
 
-- **One library per module.** `lib/<module>.dart` holds the doc, imports and `part` list;
-  `lib/src/<module>/` holds the parts. No `show`, no re-export, no `part` across modules. A
-  module uses another through its module file.
-- **Every document format is `formats`.** Data formats decode into `JsonDocument` (JSON, YAML,
-  TOML, INI); markup into one tree (HTML, XML). `http`'s bridges (`res.html`, `url.get().xml`) live
-  in `http`.
-- **One markup tree.** `Node`, `Element`, `Text`, `Attribute`, `Nodes`, `Elements` serve HTML
-  and XML; `Element.syntax` decides serialisation and case folding.
-- **`$` is CSS and `$x` is XPath**, on every document.
+- **One library per module.** `lib/<module>.dart` holds doc, imports, `part` list; parts in
+  `lib/src/<module>/`. No `show`, no re-export, no cross-module `part`.
+- **Every document format is `formats`.** JSON/YAML/TOML/INI decode to `JsonDocument`; HTML/XML to one
+  tree (`Node`, `Element`, …; `Element.syntax` decides serialisation). `$` is CSS, `$x` XPath.
+  `http`'s bridges (`res.html`) live in `http`.
 - **Two modules meet through an interface in `core`** (`TaskProgress`, `BatchProgress`).
-- **One namespace owns the terminal.** Everything that writes to it is on `Console`, over one
-  live region: a renderer owns the bottom rows, and any durable write — including `run`'s
-  echoed output — clears them, lands, and redraws them below.
-- **Tests are one file per module**, plus `<module>_diff_test.dart` where a piece replaced a
-  package and is checked against it. No upper-bound timing assertions (a lower bound — "waited
-  at least the delay" — cannot flake); speed is `make bench`.
-- **A module that writes to the terminal without importing `cli` goes through `IoBridge`**, so
-  the live region is never overwritten.
+- **One namespace owns the terminal:** `Console`, over one live region that durable writes clear,
+  land above, and redraw. A module that writes without importing `cli` goes through `IoBridge`.
+- **Tests are one file per module,** plus `<module>_diff_test.dart` for replaced packages. No
+  upper-bound timing assertions; speed is `make bench`.
 
 ---
 
 ## 7. Release
 
-- `make` — analyze, format check, tests. `make native` — build the Rust library for this host
-  (`RUST_TARGET=…` cross-builds with `cargo-zigbuild`; Windows needs an MSVC toolchain for
-  unrar). `make release` — all of it, plus `cargo audit`.
-- **`.pubignore` repeats `.gitignore`.** A `.pubignore` *replaces* `.gitignore` for pub; the
-  0.0.5 dry run was 65 MB without the scratch patterns.
-- **Nothing generated is committed.** A stray download in the repo root once went into a commit.
-- Executables run through pub's snapshot: `dart run dart_toolkit:<name>`.
-- The version number is the owner's call.
+- `make` — analyze, format, tests. `make native` — build for this host (`RUST_TARGET=…` cross-builds
+  via `cargo-zigbuild`). `make release` — all, plus `cargo audit`.
+- **`.pubignore` repeats `.gitignore`** — it replaces it for pub. (*Why:* a 65 MB dry run.)
+- **Nothing generated is committed.** (*Why:* a stray download went into a commit.)
+- Executables run as `dart run dart_toolkit:<name>`. The version number is the owner's call.
 
 ---
 
 ## 8. Documentation
 
-- `README.md` is the tour: one example per idea, the common case only.
+- `README.md` is the tour: one example per idea, common case only.
 - `GUIDE.md` is the manual: every module, every use case, a cookbook.
-- This file is the rationale. `CHANGELOG.md` is what each release contains.
+- This file is the rationale; `CHANGELOG.md` is what each release contains.
 - A doc comment says what the signature cannot. Keep the *why*; drop the restatement.
