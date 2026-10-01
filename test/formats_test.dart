@@ -1370,6 +1370,122 @@ folded: >
       expect(doc.$x('//e/@*').texts, ['1', '2']);
     });
   });
+
+  group('formats hunt regressions', () {
+    test('XPath * never matches the document node', () {
+      expect('<r><a/></r>'.xml.$x('/descendant-or-self::*').length, 2);
+      expect('<r><a/></r>'.xml.$x('//*[count(/descendant-or-self::*) = 2]').length, 2);
+    });
+
+    test('a descendant step with a positional predicate from nested inputs is in document order', () {
+      final d = '<r><c><c><b id="1"/></c><b id="2"/></c></r>'.xml;
+      expect(d.$x('//c/descendant::b[last()]').elements.map((e) => e.id), ['1', '2']);
+    });
+
+    test('XPath compares booleans as numbers, writes numbers without exponents, checks arity', () {
+      final r = '<r/>'.xml;
+      expect(r.$x('/r[true() > false()]').length, 1);
+      expect(r.$x('/r[true() < 2]').length, 1);
+      expect(r.$x('/r[string(1000000000000000) = "1000000000000000"]').length, 1);
+      expect(r.$x('/r[string(0.0000001) = "0.0000001"]').length, 1);
+      expect(r.$x('/r[string(-0.00000015) = "-0.00000015"]').length, 1);
+      expect(() => r.$x('/r[contains("abc")]'), throwsFormatException);
+      expect(() => r.$x('/r[count()]'), throwsFormatException);
+      expect(() => r.$x('/r[true(1)]'), throwsFormatException);
+    });
+
+    test('or() converts to the fallback\'s type even where T is Object', () {
+      final ini = 'debug = maybe\nport = 80x\non = yes'.ini;
+      final Map<String, Object> cfg = {
+        'debug': ini['debug'].or(false),
+        'port': ini['port'].or(8080),
+        'on': ini['on'].or(false),
+      };
+      expect(cfg, {'debug': false, 'port': 8080, 'on': true});
+      expect(JsonDocument(1.5).or<num>(5), 1.5);
+    });
+
+    test('a rowspan carried past a short row keeps its column', () {
+      final h = '<table><tr><th>A<th>B<th>C<tr><td>a<td>b<td rowspan=2>c<tr><td>d<tr><td>e<td>f<td>g</table>';
+      expect(h.html.$('table').table.rows, [
+        {'A': 'a', 'B': 'b', 'C': 'c'},
+        {'A': 'd', 'B': null, 'C': 'c'},
+        {'A': 'e', 'B': 'f', 'C': 'g'},
+      ]);
+    });
+
+    test('a raw-text end tag may carry a slash or attributes', () {
+      for (final end in ['</script/>', '</script foo>', '</SCRIPT >']) {
+        expect('<script>a$end<p>x</p>'.html.body.markup, '<body><p>x</p></body>');
+      }
+      expect('<script>a</scriptx>b</script><p>x</p>'.html.$('script').text, 'a</scriptx>b');
+      expect('<title>t</title foo><p>x</p>'.html.$('title').text, 't');
+    });
+
+    test('to<int> refuses a double past int64; to<DateTime> wants a real ISO date', () {
+      expect(JsonDocument(1e300).toOrNull<int>(), isNull);
+      expect(JsonDocument(9223372036854775808.0).toOrNull<int>(), isNull);
+      expect(() => JsonDocument(-1e19).to<int>(), throwsStateError);
+      expect(JsonDocument(-9223372036854775808.0).to<int>(), -9223372036854775807 - 1);
+      for (final bad in ['2024-02-30', '2023-02-29', '2024-13-45T25:61:61', '2024-01-01T24:00', '12345678']) {
+        expect(JsonDocument(bad).toOrNull<DateTime>(), isNull, reason: bad);
+      }
+      expect(JsonDocument('2024-02-29 03:04').to<DateTime>(), DateTime(2024, 2, 29, 3, 4));
+    });
+
+    test('YAML: only a plain << merges, and toYaml quotes the key', () {
+      final y = 'a: &a {x: 1}\nb:\n  "<<": *a\n  y: 2\nc: {"<<": 1}';
+      expect(_plain(y.yaml.raw), _plain(reference.loadYaml(y)));
+      expect(JsonDocument({'<<': 1}).toYaml(), '"<<": 1\n');
+      expect(
+        JsonDocument({
+          '<<': {'a': 1},
+        }).toYaml().yaml.raw,
+        {
+          '<<': {'a': 1},
+        },
+      );
+    });
+
+    test('YAML: an anchored or tagged value takes items at its key\'s indent', () {
+      for (final y in ['a: &x\n- 1\n- 2\nb: *x', 'a: !!seq\n- 1\nb: 2', '- &x\n- 1']) {
+        expect(_plain(y.yaml.raw), _plain(reference.loadYaml(y)), reason: y);
+      }
+    });
+
+    test('INI: an indented [line] continues a value', () {
+      expect('x =\n   [1, 2]\ny = 3'.ini.raw, {'x': '[1, 2]', 'y': 3});
+    });
+
+    test('a leading combinator on a document reads from its root', () {
+      final d = '<ul><li>1<ul><li>a<li>b</ul><li>2</ul>'.html;
+      expect(d.$('> body').single.name, 'body');
+      expect('<r><a/><b><a/></b></r>'.xml.$('> a').length, 1);
+      expect(d.$('ul').$('> li').map((e) => e.nodes.first.text), ['1', 'a', 'b', '2']);
+      expect(d.$('ul').$x('li').elements.map((e) => e.nodes.first.text), ['1', 'a', 'b', '2']);
+      expect(d.$('li').$x('following-sibling::li[1]').texts, ['b', '2']);
+    });
+
+    test('base, url, pre, lone CR, !!str and Windows paths', () {
+      final u = Uri.parse('https://ex.com/dir/page.html');
+      expect(HtmlDocument.parse('<p>hi</p><base href="/sub/"><a href="x">', url: u).$('a').links.single.path, '/sub/x');
+      expect(
+        HtmlDocument.parse('<base target=_blank><base href="/s2/"><a href="x">', url: u).$('a').links.single.path,
+        '/s2/x',
+      );
+      final doc = HtmlDocument.parse('<a href="x">', url: u);
+      HtmlDocument(doc.root, url: Uri.parse('https://other/'));
+      expect(doc.$('a').links.single.host, 'ex.com');
+      expect('<pre>&#10;x</pre>'.html.$('pre').text, reference.parse('<pre>&#10;x</pre>').querySelector('pre')!.text);
+      expect('a: 1\rb: 2'.yaml.raw, {'a': 1, 'b': 2});
+      expect('a=1\rb=2'.ini.raw, {'a': 1, 'b': 2});
+      expect('a: !!str\nb: 1'.yaml.raw, {'a': '', 'b': 1});
+      expect(
+        JsonDocument.read(r'C:\cfg.d\settings'),
+        throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('no extension'))),
+      );
+    });
+  });
 }
 
 /// package:yaml's YamlMap/YamlList as plain Dart, for comparison.
