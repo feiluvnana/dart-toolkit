@@ -9,9 +9,11 @@
 ///   dart run dart_toolkit:tk fetch https://example.com
 ///   dart run dart_toolkit:tk pack lib --to /tmp/lib.zip
 ///   dart run dart_toolkit:tk peek /tmp/lib.zip
+///   vim $(dart run dart_toolkit:tk pick 'lib/**/*.dart')
 library;
 
 import 'package:dart_toolkit/dart_toolkit.dart';
+import 'package:dart_toolkit/tui.dart';
 
 /// The options and arguments, declared once as values: the name is written here and nowhere
 /// else, and `ctx(top)` comes back an `int` because `top` says so.
@@ -39,6 +41,7 @@ Future<void> main(List<String> args) => Cli(
     CliCommand('fetch', 'GET a URL to stdout or --out', values: [link, out], handler: fetch),
     CliCommand('pack', 'Archive a directory as --to says', values: [dir, to], handler: pack),
     CliCommand('peek', 'List an archive without extracting it', values: [archive], handler: peek),
+    CliCommand('pick', 'Choose a file by typing; print its path', values: [pattern], handler: pick),
   ],
 ).run(args);
 
@@ -105,4 +108,20 @@ Future<void> peek(CliContext ctx) async {
     files.map((e) => {'size': e.size, 'packed': e.compressedSize, 'name': e.name}),
   ).orderBy('size', descending: true).take(20).show();
   Console.ok('${files.length} files, ${files.sequence.sumBy((e) => e.size).toInt().humanBytes} uncompressed');
+}
+
+/// Type to filter, arrows to move, Enter prints the path; the picker draws on the terminal, not stdout.
+Future<void> pick(CliContext ctx) async {
+  final files = [for (final f in await Path.current.glob(ctx(pattern)).toList()) f.relativeTo(Path.current)]..sort();
+  final choice = Choice(filter: true);
+  final path = await Tui.inline<String?>(
+    null,
+    view: (_) => VStack([Label('${files.length} files › ${choice.query}'), Menu(files, choice).fixed(10)]),
+    update: (s, e) => switch (e) {
+      Key.enter when choice.index >= 0 => Tui.quit(files[choice.index]),
+      Key.esc => Tui.quit(),
+      _ => s,
+    },
+  );
+  if (path != null) print(path);
 }

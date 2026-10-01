@@ -16,7 +16,7 @@ dependencies:
 ```
 
 ```dart
-import 'package:dart_toolkit/dart_toolkit.dart';   // every module but chrome.dart
+import 'package:dart_toolkit/dart_toolkit.dart';   // every module but chrome.dart and tui.dart
 ```
 
 | Import | Holds |
@@ -31,6 +31,7 @@ import 'package:dart_toolkit/dart_toolkit.dart';   // every module but chrome.da
 | `http.dart` | requests, `Http.scope`, `IoClient`, crawling, downloads |
 | `chrome.dart` | `ChromeClient`, `ChromePage` — **not in the barrel**; import it by name |
 | `cli.dart` | `Cli`, typed `Opt`/`Arg`, `Console`, `Lifecycle` |
+| `tui.dart` | `Tui.run`/`Tui.inline` terminal apps, widgets, keys — **not in the barrel** |
 | `native.dart` | `NativeLib`, the loader for the bundled Rust library |
 
 The only runtime dependency is `path`. Hashing, archives, content decoding and legacy charsets
@@ -230,6 +231,20 @@ with a "did you mean"; a thrown exception prints one red line and exits 1; a sig
 after the `Lifecycle.onExit` hooks. Log lines, `print` and child output scroll above a live
 spinner instead of garbling it.
 
+### Terminal apps
+
+```dart
+import 'package:dart_toolkit/tui.dart';
+
+final pick = Choice(filter: true);                        // type to narrow, arrows to move
+final file = await Tui.inline<String?>(null,
+  view: (_) => VStack([Label('Open: ${pick.query}'), Menu(files, pick).fixed(8)]),
+  update: (s, e) => e == Key.enter ? Tui.quit(files[pick.index]) : s);
+```
+
+`Tui.run` is the same app full-screen. Widgets: `Label`, `VStack`/`HStack`, `Box`, `Menu`, `Grid`,
+`Tabs`, `Field`, `Gauge`, `Spin`, `Paint`.
+
 ### Testing
 
 `Io` is the only sink and `Client` the only way to the network. Copy
@@ -247,7 +262,7 @@ Io.reset();
 
 | Program | What it does |
 |---|---|
-| [`tk`](bin/tk.dart) | `hash`, `find`, `read`, `fetch`, `pack`, `peek` |
+| [`tk`](bin/tk.dart) | `hash`, `find`, `read`, `fetch`, `pack`, `peek`, `pick` |
 | [`keybox`](bin/keybox.dart) | scrapes a box set's artwork and tracks, downloads them, zips the result |
 | [`books`](bin/books.dart) | public-domain ebooks from Standard Ebooks, over HTTP or by clicking in Chrome |
 

@@ -11,7 +11,7 @@
 // goes through pub's incremental snapshot and pays none of this after the first run.
 import 'dart:io';
 
-const modules = ['core', 'formats', 'collection', 'async', 'cli', 'fs', 'hash', 'process', 'http', 'chrome'];
+const modules = ['core', 'formats', 'collection', 'async', 'cli', 'fs', 'hash', 'process', 'http', 'chrome', 'tui'];
 
 Future<void> main(List<String> args) async {
   final selected = args.isEmpty ? modules : args;

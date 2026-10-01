@@ -4,8 +4,8 @@
 /// same as the five modules a scraper would list by hand (measured: within 70 ms); a program
 /// that wants less imports `core.dart`, `fs.dart`, `http.dart`… individually.
 ///
-/// One module is deliberately not here: `chrome.dart`, a third of `http`'s source, so only a
-/// program that opens a browser compiles it.
+/// Two modules are deliberately not here, so only a program that uses them compiles them:
+/// `chrome.dart`, a third of `http`'s source, and `tui.dart`, terminal apps.
 library;
 
 export 'async.dart';
