@@ -1,14 +1,13 @@
 /// # Hashing & Encoding
 ///
 /// Digests and checksums of files, bytes and text; HMAC; hex, base64 and base32; secure
-/// random bytes, tokens and UUIDs. The algorithm is always an argument — `text.hash(Hash.sha256)`,
-/// `file.hash(Hash.blake3)` — so there is one spelling for all twenty, not a shortcut for five. The digests run in the toolkit's native library
-/// (`NativeLib`) and throw [UnsupportedError] naming what they needed when it did not load;
-/// the encodings and the random helpers are pure Dart and always work.
+/// random bytes, tokens and UUIDs. The algorithm is an argument — `text.hash(Hash.sha256)`,
+/// `file.hash(Hash.blake3)` — one spelling for all twenty. Digests run in the native library
+/// (`NativeLib`) and throw [UnsupportedError] without it; encodings and randomness are pure Dart.
 ///
-/// This is what a script needs to identify, verify and encode data. Protecting data —
-/// ciphers, password hashing, key agreement, signatures, JWT — is not here on purpose: an
-/// automation toolkit has no business owning that, and getting it wrong is expensive.
+/// It identifies, verifies and encodes data; protecting it (ciphers, password hashing,
+/// signatures, JWT) is out of scope on purpose.
+
 ///
 /// {@category Hashing}
 library;

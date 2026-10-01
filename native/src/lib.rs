@@ -16,10 +16,8 @@ mod digest;
 mod inflate;
 mod text;
 
-// Thread-local, which is sound only because every caller reads the message in the same
-// synchronous block as the call that failed. Dart does not promise an isolate keeps one OS
-// thread across message-loop turns, so never put an `await` between a failing call and its
-// `tk_last_error`.
+// Thread-local: sound only because the caller reads it in the same synchronous block as the
+// failing call. An isolate may change OS thread across an `await`, so never put one between.
 thread_local! {
     static LAST_ERROR: RefCell<String> = RefCell::new(String::new());
 }
@@ -82,9 +80,8 @@ pub(crate) unsafe fn opt_text<'a>(ptr: *const u8, len: usize) -> Result<Option<&
     }
 }
 
-/// Hands `data` to the caller as a Rust allocation it frees with `tk_free`; writes pointer and
-/// length, and returns 0. The length travels only in `out_len`: returned as an `i32` it went
-/// negative past 2 GiB.
+/// Hands `data` to the caller as a Rust allocation it frees with `tk_free`, and returns 0.
+/// The length travels in `out_len`, never as an `i32` return, which would overflow past 2 GiB.
 pub(crate) fn give(data: Vec<u8>, out_ptr: *mut *mut u8, out_len: *mut usize) -> i32 {
     let mut boxed = data.into_boxed_slice();
     let len = boxed.len();
@@ -97,7 +94,7 @@ pub(crate) fn give(data: Vec<u8>, out_ptr: *mut *mut u8, out_len: *mut usize) ->
     0
 }
 
-/// The ABI version; `NativeLib` refuses a library that reports another one. 3 added `tk_chmod`.
+/// The ABI version; `NativeLib` refuses a library that reports another one.
 #[no_mangle]
 pub extern "C" fn tk_version() -> u32 {
     3
@@ -138,11 +135,9 @@ pub unsafe extern "C" fn tk_last_error(out: *mut u8, cap: usize) -> i32 {
     })
 }
 
-/// Allocates `len` zeroed bytes, released with `tk_dealloc`.
-///
-/// Exported so the Dart side never has to look `malloc` up in the host process, which
-/// `DynamicLibrary.process()` cannot do everywhere — and so Dart and Rust stop sharing an
-/// allocator by coincidence.
+/// Allocates `len` zeroed bytes, released with `tk_dealloc`; `DynamicLibrary.process()`
+/// cannot find `malloc` everywhere.
+
 #[no_mangle]
 pub extern "C" fn tk_alloc(len: usize) -> *mut u8 {
     if len == 0 {

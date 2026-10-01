@@ -12,11 +12,8 @@ Uint8List _randomBytes(int n) {
   return Uint8List.view(words.buffer, 0, n);
 }
 
-/// Random bytes, tokens, identifiers, and comparing digests without leaking where they
-/// differ — everything here draws on the operating system's secure random source.
-///
-/// The name is not `Crypto` on purpose: this package identifies, verifies and encodes
-/// data, and does not protect it. See the `hash` library doc.
+/// Random bytes, tokens and UUIDs from the operating system's secure source, and a
+/// constant-time comparison. Not `Crypto`: this package does not protect data.
 ///
 /// {@category Hashing}
 abstract final class Secure {
@@ -35,10 +32,9 @@ abstract final class Secure {
     return '${h.substring(0, 8)}-${h.substring(8, 12)}-${h.substring(12, 16)}-${h.substring(16, 20)}-${h.substring(20)}';
   }
 
-  /// Whether [a] and [b] are equal, in time that depends only on their lengths.
-  ///
-  /// Use it to compare a digest or a MAC against one that arrived from outside; `==` on a
-  /// list stops at the first difference and so says how much of a guess was right.
+  /// Whether [a] and [b] are equal, in time that depends only on their lengths: for a MAC
+  /// that arrived from outside, where an early exit would leak how much of a guess was right.
+
   static bool equals(List<int> a, List<int> b) {
     if (a.length != b.length) return false;
     var diff = 0;

@@ -37,16 +37,13 @@ enum Hash {
   /// Whether this is a checksum rather than a cryptographic hash.
   bool get isChecksum => index >= crc32.index;
 
-  /// The digest of the file at [path], read by the library: here when it is small, in a
-  /// worker isolate when it is large.
+  /// The digest of the file at [path]: on this isolate up to [_inline] bytes, else in a worker.
   Future<Uint8List> _file(String path, {List<int>? key}) async =>
       await File(path).length() <= _inline ? _ofFile(this, key, path) : Isolate.run(() => _ofFile(this, key, path));
 
   /// The digests of [paths], in order, hashed in parallel by the native library in a worker isolate.
-  Future<List<Uint8List>> files(List<String> paths) async {
-    if (paths.isEmpty) return const [];
-    return Isolate.run(() => _ofFiles(this, paths));
-  }
+  Future<List<Uint8List>> files(List<String> paths) async =>
+      paths.isEmpty ? const [] : await Isolate.run(() => _ofFiles(this, paths));
 
   /// The digests of [paths], in order, hashed in parallel by the native library synchronously.
   List<Uint8List> filesSync(List<String> paths) => paths.isEmpty ? const [] : _ofFiles(this, paths);
@@ -133,11 +130,9 @@ extension StringHashExtensions on String {
   Uint8List hmacBytes(Hash algorithm, String key) => utf8.encode(this).hmacBytes(algorithm, utf8.encode(key));
 }
 
-/// Big-endian bytes as an integer, for the 32-bit checksums.
-///
-/// A 64-bit checksum is refused rather than returned wrapped: shifting eight bytes into a
-/// signed Dart `int` makes half of all inputs negative, which does not match what other
-/// tools print and silently breaks anything comparing the two.
+/// Big-endian bytes as an integer, for the 32-bit checksums. A 64-bit one is refused: as a
+/// signed `int` half of all values would be negative, unlike what other tools print.
+
 int _int(Hash algorithm, Uint8List bytes) {
   if (bytes.length > 4) {
     throw ArgumentError.value(

@@ -1,8 +1,7 @@
 part of '../../fs.dart';
 
-/// The formats `archiveTo` writes, by the extension that names each one; the order is the
-/// native library's code for it. Reading never needs this — the library reads the file's
-/// magic number — and `.rar`, which is read-only, is refused by the library by name.
+/// The formats `archiveTo` writes, by extension; the order is the native library's code.
+/// `.rar` is read-only, and the library refuses it by name.
 enum _Archive {
   zip('.zip'),
   sevenZip('.7z'),
@@ -16,7 +15,6 @@ enum _Archive {
   final String extension;
   const _Archive(this.extension);
 
-  /// The format for [path], by extension.
   static _Archive of(String path) {
     final lower = path.toLowerCase();
     if (lower.endsWith('.tgz')) return tarGz;
@@ -99,14 +97,12 @@ extension PathArchiveExtensions on Path {
   /// Extracts the archive at this path into [destination], restoring permissions and times;
   /// [only] extracts just the entries that match a [glob] pattern: `only: '**/*.txt'`.
   ///
-  /// The format comes from the file's magic number, so a renamed or extension-less archive
-  /// still extracts; the name is only consulted when the bytes are inconclusive, which is
-  /// what tells a `.tar.gz` from a lone `.gz`.
+  /// The format comes from the magic number, so a renamed archive still extracts; the name
+  /// only tells a `.tar.gz` from a lone `.gz`.
   ///
-  /// An archive is assumed to come from somewhere else, so by default it may not write more
-  /// than 200 times its own size (at least 1 GiB), setuid, setgid and sticky bits are
-  /// dropped, and a link that leads out of [destination] is refused. [trusted] lifts all
-  /// three; nothing lifts the refusal of an entry named outside [destination].
+  /// By default an archive may not write more than 200 times its own size (at least 1 GiB),
+  /// loses setuid, setgid and sticky bits, and may not make a link out of [destination].
+  /// [trusted] lifts all three; nothing lifts the refusal of an entry named outside it.
   ///
   /// Throws [FormatException] on a corrupt archive, a wrong [password] or one of the refusals
   /// above, [UnsupportedError] when the native library did not load.
@@ -133,10 +129,9 @@ extension PathArchiveExtensions on Path {
 
   /// Decompresses this single-stream file into [destination].
   ///
-  /// The codec is read from the file's magic number unless [codec] names one, so a stream
-  /// saved without its extension still decompresses. Throws [FormatException] when the
-  /// bytes are none of gzip, xz, zstd or bzip2, or decompress to more than [extractTo]'s cap
-  /// — which leaves nothing at [destination] — unless [trusted].
+  /// The codec is read from the magic number unless [codec] names one. Throws
+  /// [FormatException] when the bytes are none of gzip, xz, zstd or bzip2, or decompress to
+  /// more than [extractTo]'s cap — which leaves nothing at [destination] — unless [trusted].
   Future<File> decompressTo(String destination, {Compression? codec, bool trusted = false}) async {
     await Isolate.run(() => _NativeArchive.decompress(codec, path, destination, _flags(trusted)));
     return File(destination);
@@ -146,8 +141,9 @@ extension PathArchiveExtensions on Path {
   static int _flags(bool trusted) => (trusted ? 1 : 0) | (Platform.isMacOS || Platform.isWindows ? 2 : 0);
 
   static Compression _codecOf(String path) {
+    final lower = path.toLowerCase();
     for (final c in Compression.values) {
-      if (path.toLowerCase().endsWith(c.extension)) return c;
+      if (lower.endsWith(c.extension)) return c;
     }
     throw ArgumentError(
       'No codec for "$path"; extensions are ${Compression.values.map((c) => c.extension).join(', ')}',
@@ -158,7 +154,6 @@ extension PathArchiveExtensions on Path {
 typedef _U8 = Pointer<Uint8>;
 typedef _Text = (_U8, int);
 
-/// The archive functions of `dart_toolkit_native`, by file path.
 final class _NativeArchive {
   static final _lib = NativeBridge.require();
   static final _list = _lib
@@ -192,8 +187,7 @@ final class _NativeArchive {
         int Function(int, _U8, int, _U8, int, int)
       >('tk_decompress');
 
-  /// [texts] as UTF-8 in one native allocation, each as a pointer and a length; `null`, and
-  /// the empty string with it, is a null pointer.
+  /// [texts] as UTF-8 in one native allocation; `null` and `''` are a null pointer.
   static R _with<R>(List<String?> texts, R Function(List<_Text> args) body) {
     final encoded = [for (final t in texts) utf8.encode(t ?? '')];
     return NativeBridge.withBytes([for (final e in encoded) ...e], (base, _) {
@@ -221,10 +215,11 @@ final class _NativeArchive {
   }
 
   static List<ArchiveEntry> list(String path, String? password) {
-    final data = _with([
-      path,
-      password,
-    ], (a) => _take((out, len) => _list(a[0].$1, a[0].$2, a[1].$1, a[1].$2, out, len)));
+    final data = _with([path, password], (a) {
+      final [(p, pl), (pw, pwl)] = a;
+      return _take((out, len) => _list(p, pl, pw, pwl, out, len));
+    });
+
     return [
       for (final e in (jsonDecode(utf8.decode(data)) as List).cast<Map<String, Object?>>())
         ArchiveEntry(

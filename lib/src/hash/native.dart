@@ -1,12 +1,10 @@
 part of '../../hash.dart';
 
-// Bindings to the digest half of dart_toolkit_native. Every receiver in `digest.dart` ends in
-// one of the three functions at the bottom: bytes in memory, one file, many files.
+// Every receiver in `digest.dart` ends in one of the three functions at the bottom.
 
 typedef _U8 = Pointer<Uint8>;
 typedef _Handle = Pointer<Void>;
 
-/// The native functions, looked up once on first use.
 final class _N {
   static final lib = NativeBridge.require();
 
@@ -35,16 +33,14 @@ final class _N {
       );
 }
 
-/// The longest digest the library produces (SHA-512, BLAKE2b), and so the size of every
-/// fixed-digest output buffer.
+/// The longest digest (SHA-512, BLAKE2b): the size of every output buffer.
 const _maxDigest = 64;
 
 /// A file up to this size is read by the library on the calling isolate; a larger one in a
 /// worker isolate, which costs about 2 ms to start — what SHA-256 takes over 4 MiB.
 const _inline = 4 << 20;
 
-/// A failed MAC is always the key's fault — one too long for BLAKE2, not 32 bytes for BLAKE3,
-/// or a checksum asked to take one — so it is an [ArgumentError]; a digest cannot fail.
+/// A failed MAC is always the key's fault, so an [ArgumentError]; a digest cannot fail.
 Never _fail(Hash algorithm, List<int>? key) {
   final message = '${algorithm.name}: ${NativeBridge.lastError()}';
   throw key == null ? StateError(message) : ArgumentError(message);
@@ -74,7 +70,7 @@ Uint8List _ofFile(Hash algorithm, List<int>? key, String path) {
       ? _N.digestNew(algorithm.index)
       : NativeBridge.withBytes(key, (k, n) => _N.macNew(algorithm.index, k, n));
   if (h == nullptr) _fail(algorithm, key);
-  // The handle is released by `digestFinal` whether or not the file could be read.
+  // `digestFinal` releases the handle even after a failed read.
   final failure = NativeBridge.withText(path, (p, n) => _N.digestFile(h, p, n)) < 0 ? NativeBridge.lastError() : null;
   final digest = NativeBridge.withOut(_maxDigest, (out) => _N.digestFinal(h, out, _maxDigest));
   if (failure != null) throw FileSystemException(failure, path);
@@ -91,7 +87,8 @@ List<Uint8List> _ofFiles(Hash algorithm, List<String> paths) {
     try {
       final count = _N.digestFiles(algorithm.index, p, n, buf, cap);
       if (count < 0) throw FileSystemException(NativeBridge.lastError(), null);
-      // Each digest is matched to its file by position, so a short count is a wrong answer.
+      // Digests match files by position, so a short count is a wrong answer.
+
       if (count != paths.length) throw StateError('hashed $count of ${paths.length} files');
       return Uint8List.fromList(buf.asTypedList(cap));
     } finally {
