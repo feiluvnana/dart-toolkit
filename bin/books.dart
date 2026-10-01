@@ -23,16 +23,15 @@ enum Format {
   const Format(this.suffix);
 }
 
-final titles = Arg.text('titles', description: 'One search per book').many().required();
-final format = Opt.among('format', Format.values, abbr: 'f').or(Format.epub);
-final into = Opt.text('to', abbr: 'o', description: 'Where the files land').or('books');
-final browser = Opt.flag('browser', abbr: 'b', description: 'Click each download in Chrome');
-final proxy = Opt.text('proxy', description: 'Send everything through this proxy').env('HTTPS_PROXY');
+final titles = Arg.text('titles', 'One search per book').many().required();
+final format = Opt.among('format', Format.values).abbr('f').or(Format.epub);
+final into = Opt.text('to', 'Where the files land').abbr('o').or('books');
+final browser = Opt.flag('browser', 'Click each download in Chrome').abbr('b');
+final proxy = Opt.text('proxy', 'Send everything through this proxy').env('HTTPS_PROXY');
 
 final site = 'https://standardebooks.org'.url;
 
 void main(List<String> args) => Cli(
-  name: 'books',
   description: 'Download public-domain ebooks from Standard Ebooks.',
   values: [titles, format, into, browser, proxy],
   handler: run,
@@ -48,7 +47,7 @@ Future<void> run(CliContext ctx) async {
       final settled = await ctx(titles).parallelize((title) => link(title, ctx(format)));
       settled.lefts.forEach(Console.warn);
       final found = settled.rights;
-      if (found.isEmpty) return Lifecycle.exit('nothing found');
+      if (found.isEmpty) throw 'nothing found';
       if (client case final ChromeClient chrome) {
         for (final (:page, :file) in found) {
           final saved = await Console.spin(

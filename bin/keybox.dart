@@ -19,7 +19,6 @@ typedef Asset = ({Uri url, Path path});
 
 /// Downloads the whole box set — artwork, documents, every track in every format — and zips it.
 void main(List<String> args) => Cli(
-  name: 'keybox',
   description: 'Key BOX Scraper & Downloader',
   version: '0.0.6',
   handler: (ctx) => Http.scope(run, timeout: 60.s, retries: 3),

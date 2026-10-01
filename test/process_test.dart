@@ -380,4 +380,40 @@ void main() {
       }
     }, testOn: '!windows');
   });
+
+  group('fourth audit', () {
+    Future<String> survivors(String marker) async =>
+        ((await Process.run('pgrep', ['-f', marker])).stdout as String).trim();
+
+    test('kill() stops a command and what it started, and settles the run', () async {
+      final marker = 'tk_kill_${pid}_${DateTime.now().microsecondsSinceEpoch}';
+      final server = run("sh -c 'sleep 31 & sleep 32; # $marker'", quiet: true);
+      await 300.ms.delay();
+      expect(await survivors(marker), isNotEmpty, reason: 'it is running before the kill');
+      await server.kill();
+      expect(await survivors(marker), isEmpty, reason: 'no child outlives kill()');
+      await expectLater(server, throwsA(isA<CancelledException>()));
+    }, testOn: '!windows');
+
+    test('kill() before the command is up still stops it, and after it ended changes nothing', () async {
+      final early = run('sleep 30', quiet: true);
+      await early.kill();
+      await expectLater(early, throwsA(isA<CancelledException>()));
+
+      final done = run('echo hi', quiet: true);
+      expect((await done).text, 'hi');
+      await done.kill();
+      expect((await done).text, 'hi');
+    }, testOn: '!windows');
+
+    test('kill() ends a stream without an error on it', () async {
+      final tail = run('sh -c "echo ready; sleep 30"');
+      final lines = <String>[];
+      final listening = tail.stream.listen(lines.add).asFuture<void>();
+      await 300.ms.delay();
+      await tail.kill();
+      await listening;
+      expect(lines, ['ready']);
+    }, testOn: '!windows');
+  });
 }

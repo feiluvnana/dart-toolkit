@@ -26,7 +26,7 @@ Iterable<(String, CliCommand)> _tree(CliCommand root, [String? path]) sync* {
 Iterable<(CliOption<Object?>, List<String>)> _reachable(CliCommand command) sync* {
   for (final option in command._chain.expand((c) => c._options)) {
     if (command._findOption(option.name) != option) continue;
-    yield (option, ['--${option.name}', if (option.abbr case final a? when command._findAbbr(a) == option) '-$a']);
+    yield (option, ['--${option.name}', if (option._abbr case final a? when command._findAbbr(a) == option) '-$a']);
   }
 }
 
@@ -120,7 +120,7 @@ String _fish(CliCommand root) {
       final hasAbbr = spellings.any((s) => s.startsWith('-') && !s.startsWith('--'));
       final parts = [
         'complete -c ${root.name} -n $at -l ${option.name}',
-        if (hasAbbr) '-s ${option.abbr}',
+        if (hasAbbr) '-s ${option._abbr}',
         if (option.description.isNotEmpty) '-d ${quote(option.description)}',
         // fish reads `-a` as a list of words, so a space inside one choice is escaped.
         if (option._takesValue)

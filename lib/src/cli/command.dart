@@ -24,7 +24,7 @@ typedef CommandHandler = FutureOr<void> Function(CliContext ctx);
 /// that comes back:
 ///
 /// ```dart
-/// final top = Opt.number('top', abbr: 'n').or(10);
+/// final top = Opt.number('top', 'How many to show').abbr('n').or(10);
 /// final id  = Arg.text('id').required();
 /// …
 /// ctx(top)  // an int, statically
@@ -66,13 +66,14 @@ sealed class CliValue<T> {
 /// {@category CLI}
 sealed class CliOption<T> extends CliValue<T> {
   /// The single-character short form, used as `-a`.
-  final String? abbr;
+  final String? _abbr;
 
   /// The environment variable read when the option is not on the command line.
   final String? _env;
 
-  const CliOption(super.name, {super.description, this.abbr, String? env})
-    : _env = env,
+  const CliOption(super.name, {super.description, String? abbr, String? env})
+    : _abbr = abbr,
+      _env = env,
       assert(abbr == null || abbr.length == 1, 'abbr is one character');
 
   /// Whether this option takes a value of its own on the command line.
@@ -87,6 +88,10 @@ sealed class CliOption<T> extends CliValue<T> {
   /// A set variable satisfies `required()`, and `--help` shows it as `[env: NAME]`. An
   /// empty one is treated as unset.
   CliOption<T> env(String name);
+
+  /// The same option, also written as `-` and [letter]: `Opt.number('top').abbr('n')` takes
+  /// `-n 5`. A chain step like [env], so the description can be the second positional.
+  CliOption<T> abbr(String letter);
 }
 
 /// A positional argument, written where it stands rather than by name. See [Arg].
@@ -135,15 +140,15 @@ final class Arg<T> extends CliValue<T> {
        _join = join;
 
   /// A string argument.
-  static Arg<String?> text(String name, {String description = ''}) =>
+  static Arg<String?> text(String name, [String description = '']) =>
       Arg<String?>._(name, parse: (raw) => raw, hint: '<text>', description: description);
 
   /// An integer argument, rejected during parsing when it is not one.
-  static Arg<int?> number(String name, {String description = ''}) =>
+  static Arg<int?> number(String name, [String description = '']) =>
       Arg<int?>._(name, parse: (raw) => _int('argument <$name>', raw), hint: '<int>', description: description);
 
   /// An argument restricted to [values], matched by [Enum.name] or `toString()`.
-  static Arg<V?> among<V>(String name, List<V> values, {String description = ''}) => Arg<V?>._(
+  static Arg<V?> among<V>(String name, List<V> values, [String description = '']) => Arg<V?>._(
     name,
     parse: (raw) => _among('argument <$name>', values, raw),
     hint: _choiceHint(values),
@@ -155,7 +160,7 @@ final class Arg<T> extends CliValue<T> {
   ///
   /// A constructor tears off as a parser, so `Arg.by('file', Path.new)` is an argument that
   /// arrives as a `Path`.
-  static Arg<V?> by<V>(String name, V Function(String raw) parse, {String description = ''}) => Arg<V?>._(
+  static Arg<V?> by<V>(String name, V Function(String raw) parse, [String description = '']) => Arg<V?>._(
     name,
     parse: (raw) => _guard('argument <$name>', parse, raw),
     hint: '<value>',
@@ -237,7 +242,10 @@ final class _Flag extends CliOption<bool> {
   String get _hint => '';
 
   @override
-  CliOption<bool> env(String name) => _Flag(this.name, description: description, abbr: abbr, env: name);
+  CliOption<bool> env(String name) => _Flag(this.name, description: description, abbr: _abbr, env: name);
+
+  @override
+  CliOption<bool> abbr(String letter) => _Flag(name, description: description, abbr: letter, env: _env);
 }
 
 /// An option: a flag, a string, an integer, one of a fixed set, or whatever a function
@@ -249,15 +257,17 @@ final class _Flag extends CliOption<bool> {
 /// from the environment when it is not given.
 ///
 /// ```dart
-/// final dry     = Opt.flag('dry-run', abbr: 'd');                  // bool
-/// final out     = Opt.text('out', abbr: 'o');                      // String?
-/// final to      = Opt.text('to', abbr: 't').required();            // String
-/// final top     = Opt.number('top', abbr: 'n').or(10);             // int
+/// final dry     = Opt.flag('dry-run', 'Print, do not write').abbr('d'); // bool
+/// final out     = Opt.text('out').abbr('o');                       // String?
+/// final to      = Opt.text('to').abbr('t').required();             // String
+/// final top     = Opt.number('top', 'How many to show').or(10);    // int
 /// final algo    = Opt.among('algo', Hash.values).or(Hash.sha256);  // Hash
 /// final since   = Opt.by('since', DateTime.parse);                 // DateTime?
-/// final headers = Opt.text('header', abbr: 'H').many();            // List<String>
+/// final headers = Opt.text('header').abbr('H').many();             // List<String>
 /// final token   = Opt.text('token').env('GITHUB_TOKEN').required(); // String
 /// ```
+///
+/// The second positional is the help text; [abbr] adds the short form.
 ///
 /// {@category CLI}
 final class Opt<T> extends CliOption<T> {
@@ -297,39 +307,31 @@ final class Opt<T> extends CliOption<T> {
        _join = join;
 
   /// A boolean option. Present means true; it never consumes a value.
-  static CliOption<bool> flag(String name, {String description = '', String? abbr}) =>
-      _Flag(name, description: description, abbr: abbr);
+  static CliOption<bool> flag(String name, [String description = '']) => _Flag(name, description: description);
 
   /// A string option.
-  static Opt<String?> text(String name, {String description = '', String? abbr}) =>
-      Opt<String?>._(name, parse: (raw) => raw, hint: '<text>', description: description, abbr: abbr);
+  static Opt<String?> text(String name, [String description = '']) =>
+      Opt<String?>._(name, parse: (raw) => raw, hint: '<text>', description: description);
 
   /// An integer option, rejected during parsing when it is not one.
-  static Opt<int?> number(String name, {String description = '', String? abbr}) => Opt<int?>._(
-    name,
-    parse: (raw) => _int('option "--$name"', raw),
-    hint: '<int>',
-    description: description,
-    abbr: abbr,
-  );
+  static Opt<int?> number(String name, [String description = '']) =>
+      Opt<int?>._(name, parse: (raw) => _int('option "--$name"', raw), hint: '<int>', description: description);
 
   /// An option restricted to [values], matched by [Enum.name] or `toString()`.
-  static Opt<V?> among<V>(String name, List<V> values, {String description = '', String? abbr}) => Opt<V?>._(
+  static Opt<V?> among<V>(String name, List<V> values, [String description = '']) => Opt<V?>._(
     name,
     parse: (raw) => _among('option "--$name"', values, raw),
     hint: _choiceHint(values),
     description: description,
-    abbr: abbr,
     choices: values,
   );
 
   /// An option parsed by [parse]; anything it throws becomes a [UsageException].
-  static Opt<V?> by<V>(String name, V Function(String raw) parse, {String description = '', String? abbr}) => Opt<V?>._(
+  static Opt<V?> by<V>(String name, V Function(String raw) parse, [String description = '']) => Opt<V?>._(
     name,
     parse: (raw) => _guard('option "--$name"', parse, raw),
     hint: '<value>',
     description: description,
-    abbr: abbr,
   );
 
   @override
@@ -338,13 +340,23 @@ final class Opt<T> extends CliOption<T> {
   @override
   Opt<T> env(String name) => _as(parse: _parseValue, env: name, or: _or, required: _isRequired, join: _join);
 
+  @override
+  Opt<T> abbr(String letter) => _as(parse: _parseValue, abbr: letter, or: _or, required: _isRequired, join: _join);
+
   /// The same option as an [Opt] of [U]: everything carried over but what is given here.
-  Opt<U> _as<U>({U Function(String raw)? parse, String? env, U? or, bool required = false, _Join? join}) => Opt<U>._(
+  Opt<U> _as<U>({
+    U Function(String raw)? parse,
+    String? env,
+    String? abbr,
+    U? or,
+    bool required = false,
+    _Join? join,
+  }) => Opt<U>._(
     name,
     parse: parse ?? (raw) => _parse(raw) as U,
     hint: _hint,
     description: description,
-    abbr: abbr,
+    abbr: abbr ?? _abbr,
     env: env ?? _env,
     choices: _choices,
     or: or,
@@ -461,9 +473,6 @@ class CliContext {
   /// [call] instead, typed and checked, and this is what they were bound from.
   final List<String> rest;
 
-  /// The command that was dispatched.
-  final CliCommand command;
-
   /// Cancelled on SIGINT, SIGTERM and [Lifecycle.exit], before the other exit hooks run.
   ///
   /// [Cli.run] makes it the ambient [Cancel.token] for the whole action, so a download,
@@ -472,7 +481,7 @@ class CliContext {
 
   final Map<CliValue<Object?>, Object?> _values;
 
-  CliContext(this.rest, Map<CliValue<Object?>, Object?> values, this.command, {CancelToken? cancel})
+  CliContext._(this.rest, Map<CliValue<Object?>, Object?> values, {CancelToken? cancel})
     : _values = values,
       cancel = cancel ?? CancelToken();
 
@@ -504,7 +513,7 @@ class CliContext {
 /// list — the kind is in the type — and the [Arg]s bind in the order they are listed.
 ///
 /// ```dart
-/// CliCommand('fetch', description: 'Fetch a thing', values: [url, verbose], handler: fetch)
+/// CliCommand('fetch', 'Fetch a thing', values: [url, verbose], handler: fetch)
 /// ```
 ///
 /// {@category CLI}
@@ -520,9 +529,10 @@ class CliCommand {
   final Map<String, CliCommand> _subcommands;
   CliCommand? _parent;
 
+  /// [description] is the line `--help` shows for it, here and in its parent's list.
   CliCommand(
-    this.name, {
-    this.description = '',
+    this.name,
+    this.description, {
     this.handler,
     Iterable<CliValue<Object?>> values = const [],
     Iterable<CliCommand> commands = const [],
@@ -550,7 +560,7 @@ class CliCommand {
   /// Looks up an option by short form, walking up to the root command.
   CliOption<Object?>? _findAbbr(String abbr) {
     for (final option in _options) {
-      if (option.abbr == abbr) return option;
+      if (option._abbr == abbr) return option;
     }
     return _parent?._findAbbr(abbr);
   }
@@ -613,7 +623,7 @@ class CliCommand {
       // here, and one whose short form was taken is reachable by its long form only.
       if (_findOption(option.name) == option)
         (
-          '${option.abbr != null && _findAbbr(option.abbr!) == option ? '-${option.abbr}, ' : '    '}'
+          '${option._abbr != null && _findAbbr(option._abbr) == option ? '-${option._abbr}, ' : '    '}'
               '--${option.name}${option._takesValue ? ' ${option._hint}' : ''}',
           // A flag's fallback is `false`, which is what absence already means; saying so is noise.
           _describe(option, fallback: option._takesValue),
@@ -843,7 +853,7 @@ class CliCommand {
     if (_root case final Cli cli) cli._applyLevel(values);
 
     if (handler != null) {
-      await handler!(CliContext(rest, values, this, cancel: cancel));
+      await handler!(CliContext._(rest, values, cancel: cancel));
     } else if (_subcommands.isNotEmpty) {
       // A program of subcommands run with none was not asked for help: the usage is the
       // answer to a mistake, on stderr, and the exit code says so.
@@ -876,15 +886,17 @@ class Cli extends CliCommand {
   final CliOption<bool>? _verbose;
   final CliOption<bool>? _quiet;
 
+  /// [name] defaults to the script's: `bin/tk.dart`, pub's `tk.dart-3.x.snapshot` and a
+  /// compiled `tk.exe` are all `tk`.
   Cli({
-    String name = 'app',
+    String? name,
     String description = '',
     String? version,
     Iterable<CliValue<Object?>> values = const [],
     Iterable<CliCommand> commands = const [],
     CommandHandler? handler,
   }) : this._(
-         name,
+         name ?? _scriptName(),
          description,
          version,
          values,
@@ -896,14 +908,24 @@ class Cli extends CliCommand {
 
   Cli._(
     super.name,
-    String description,
+    super.description,
     this.version,
     Iterable<CliValue<Object?>> values,
     Iterable<CliCommand> commands,
     CommandHandler? handler,
     this._verbose,
     this._quiet,
-  ) : super(description: description, values: [...values, ?_verbose, ?_quiet], commands: commands, handler: handler);
+  ) : super(values: [...values, ?_verbose, ?_quiet], commands: commands, handler: handler);
+
+  /// The script's file name, less what `dart run`, pub and `dart compile` put after it.
+  static String _scriptName() {
+    final script = Platform.script;
+    if (script.scheme != 'file' || script.pathSegments.isEmpty) return 'app';
+    final name = script.pathSegments.last.replaceFirst(_scriptSuffix, '');
+    return name.isEmpty ? 'app' : name;
+  }
+
+  static final _scriptSuffix = RegExp(r'(\.dart)?(-[\w.]+)?\.(snapshot|dill|aot|jit)$|\.dart$|\.exe$');
 
   /// A built-in flag, unless [declared] already has one by that name; without its short
   /// form when that is taken.
@@ -911,7 +933,10 @@ class Cli extends CliCommand {
     final options = declared.whereType<CliOption<Object?>>();
     return options.any((o) => o.name == long)
         ? null
-        : Opt.flag(long, abbr: options.any((o) => o.abbr == short) ? null : short, description: help);
+        : switch (Opt.flag(long, help)) {
+            final flag when options.any((o) => o._abbr == short) => flag,
+            final flag => flag.abbr(short),
+          };
   }
 
   void _applyLevel(Map<CliValue<Object?>, Object?> values) {
@@ -924,6 +949,11 @@ class Cli extends CliCommand {
 
   /// Parses [args], runs the matching command, then runs the exit hooks and releases
   /// the signal handlers so the process can end — whether the action returned or threw.
+  ///
+  /// To fail, `throw`: `throw 'no URL given'` prints `✖ no URL given` and exits 1, with no
+  /// try/catch anywhere. (`Lifecycle.exit` is for code outside a [Cli]; its `Future<Never>`
+  /// cannot be `return`ed from an `async` handler.) A `print` in the action is written above
+  /// whatever spinner or board is live, as [Console.writeln] is.
   ///
   /// A usage error — unknown option or command, bad choice, missing required option — is
   /// printed to stderr and exits with code 64. Anything else the action throws is printed
@@ -939,7 +969,12 @@ class Cli extends CliCommand {
     final cancel = CancelToken();
     Lifecycle.onExit(cancel.cancel);
     try {
-      await Cancel.scope(() => _run(args, {}, cancel), token: cancel);
+      // A `print` in the action is a durable write like [Console.writeln]: it lands above a
+      // spinner or a board instead of on its row.
+      await runZoned(
+        () => Cancel.scope(() => _run(args, {}, cancel), token: cancel),
+        zoneSpecification: ZoneSpecification(print: (_, _, _, line) => Console.writeln(line)),
+      );
     } on _NoCommand {
       await Lifecycle.exit(null, 64);
     } on UsageException catch (e) {
@@ -950,7 +985,7 @@ class Cli extends CliCommand {
       // on being cancelled is not news.
       if (_exiting) await Completer<Never>().future;
       Console.debug('$trace');
-      await Lifecycle.exit('$e', 1);
+      await Lifecycle.exit(e, 1);
     } finally {
       await _runExitHooks();
       Lifecycle.onExit(null);

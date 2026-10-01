@@ -225,7 +225,7 @@ ShellRun run(
   Encoding? encoding,
   bool shell = false,
   bool inherit = false,
-}) => ShellRun._((scope, live) {
+}) => ShellRun._((scope, control) {
   final display = _display(command, args);
   if (shell) {
     if (Platform.isWindows && args.isNotEmpty) {
@@ -234,7 +234,7 @@ ShellRun run(
     final stage = Platform.isWindows
         ? ('cmd', ['/c', command])
         : ('/bin/sh', ['-c', command, 'sh', ...args]); // `sh` is $0; args are $1…
-    return _exec([stage], display, scope, input: input, inherit: inherit, live: live);
+    return _exec([stage], display, scope, control, input: input, inherit: inherit);
   }
   final parts = _splitCommand(command.trim());
   if (parts.isEmpty) throw ArgumentError('Cannot execute an empty command string');
@@ -244,10 +244,10 @@ ShellRun run(
     ],
     display,
     scope,
+    control,
     input: input,
     inherit: inherit,
     viaShell: Platform.isWindows,
-    live: live,
   );
 }, (workdir: workdir, env: env, timeout: timeout, encoding: encoding, quiet: quiet, strict: strict));
 
@@ -285,13 +285,13 @@ List<String> _cmdSafe(List<String> args) {
 ///
 /// {@category System}
 final class ShellRun implements Future<ShellResult> {
-  final Future<ShellResult> Function(_Shell scope, _Live? live) _start;
+  final Future<ShellResult> Function(_Shell scope, _Control control) _start;
   final _Shell _scope;
   final bool? _quiet;
   final bool? _strict;
   bool _wantsOutput = false;
   bool _wantsAnswer = false;
-  _Live? _live;
+  final _control = _Control();
 
   /// [given] is what the call site said; the rest comes from the enclosing [Shell.scope],
   /// read here, in the caller's zone, and not when the process starts.
@@ -313,7 +313,7 @@ final class ShellRun implements Future<ShellResult> {
         quiet: _quiet ?? (_wantsOutput || _wantsAnswer ? true : null),
         strict: _strict ?? (_wantsAnswer ? false : null),
       ),
-      _live,
+      _control,
     ),
   );
 
@@ -329,22 +329,34 @@ final class ShellRun implements Future<ShellResult> {
   /// }
   /// ```
   Stream<String> get stream {
-    if (_live case final live?) return live.lines.stream;
-    final live = _live = _Live();
-    live.lines = StreamController<String>(
-      onCancel: () {
-        live.abandoned = true;
-        live.halt?.call(const CancelledException('The stream was cancelled.'));
-      },
+    if (_control.lines case final lines?) return lines.stream;
+    final lines = _control.lines = StreamController<String>(
+      onCancel: () => _control.stop(const CancelledException('The stream was cancelled.')),
     );
     _result.then(
-      (_) => live.lines.close(),
+      (_) => lines.close(),
       onError: (Object error, StackTrace trace) {
-        if (!live.abandoned) live.lines.addError(error, trace);
-        live.lines.close();
+        if (_control.stopped == null) lines.addError(error, trace);
+        lines.close();
       },
     );
-    return live.lines.stream;
+    return lines.stream;
+  }
+
+  /// Stops it and everything it started — SIGTERM, then SIGKILL after two seconds — and
+  /// completes once they are gone. For the server a script starts, uses and stops:
+  ///
+  /// ```dart
+  /// final server = run('dart run bin/server.dart');
+  /// await run('dart test');
+  /// await server.kill();
+  /// ```
+  ///
+  /// Awaiting the run itself afterwards throws [CancelledException]; one that had already
+  /// ended keeps its result.
+  Future<void> kill() async {
+    _control.stop(const CancelledException('The command was killed.'));
+    await _result.then((_) {}, onError: (_) {});
   }
 
   /// The trimmed stdout, not echoed.
@@ -375,13 +387,22 @@ final class ShellRun implements Future<ShellResult> {
   Stream<ShellResult> asStream() => _result.asStream();
 }
 
-/// A [ShellRun.stream]: where the lines go, and how its listener stops the command.
-final class _Live {
-  late final StreamController<String> lines;
+/// How a [ShellRun] reaches its running command: where [ShellRun.stream]'s lines go, and how
+/// a cancelled stream or [ShellRun.kill] stops it.
+final class _Control {
+  StreamController<String>? lines;
+
+  /// Set by the command once its processes are up.
   void Function(Object why)? halt;
 
-  /// Whether the listener went away, so nobody wants the error its stopping causes.
-  bool abandoned = false;
+  /// Why the caller stopped it, so nobody is handed the error its stopping causes.
+  Object? stopped;
+
+  /// Stops the command now, or as soon as it is up.
+  void stop(Object why) {
+    stopped ??= why;
+    halt?.call(why);
+  }
 }
 
 /// The environment children inherit: the process's plus [Env] overrides plus [extra].
@@ -404,14 +425,15 @@ const _grace = Duration(seconds: 2);
 Future<ShellResult> _exec(
   List<(String, List<String>)> stages,
   String display,
-  _Shell scope, {
+  _Shell scope,
+  _Control control, {
   String? input,
   bool inherit = false,
   bool viaShell = false,
-  _Live? live,
 }) async {
+  final streamed = control.lines;
   if (inherit && input != null) throw ArgumentError('input: cannot be given to a child that inherits stdin');
-  if (inherit && live != null) throw ArgumentError('stream cannot read a child that inherits stdout');
+  if (inherit && streamed != null) throw ArgumentError('stream cannot read a child that inherits stdout');
 
   if (scope.workdir case final workdir?) {
     final stat = await FileStat.stat(workdir.path);
@@ -467,9 +489,9 @@ Future<ShellResult> _exec(
     final subscriptions = <StreamSubscription<String>>[];
     final drained = <Future<void>>[];
     void capture(Stream<List<int>> stream, StringBuffer into, {required bool err}) {
-      final echo = (scope.quiet || (!err && live != null)) ? null : _Echo(err: err);
+      final echo = (scope.quiet || (!err && streamed != null)) ? null : _Echo(err: err);
       final done = Completer<void>();
-      final lines = err ? null : live?.lines;
+      final lines = err ? null : streamed;
       var text = stream.transform(scope.decoder);
       if (lines != null) {
         // The live lines are the output; the buffer keeps them for the result.
@@ -528,8 +550,8 @@ Future<ShellResult> _exec(
     final unregister = token?.onCancel(
       () => halt(CancelledException(token.reason?.toString() ?? 'Operation was cancelled.')),
     );
-    live?.halt = halt;
-    if (live?.abandoned ?? false) halt(const CancelledException('The stream was cancelled.'));
+    control.halt = halt;
+    if (control.stopped case final why?) halt(why);
     final ended = <int>[];
     final exits = Future.wait([
       for (final (i, p) in processes.indexed) p.exitCode.then((code) => (ended..add(i), code).$2),
@@ -579,11 +601,28 @@ final _psWhitespace = RegExp(r'\s+');
 /// What Windows runs for [executable]: the file itself when the `PATH` has it and it is a
 /// program, or `cmd.exe` — the second field — for a `.bat`, a `.cmd` or a built-in such as
 /// `dir`, which nothing else can run.
+///
+/// A name found on the `PATH` is remembered until `PATH` or `PATHEXT` changes: finding it
+/// is a stat per directory per extension, some 400 of them, on every `run`.
 Future<(String, bool)> _windowsTarget(String executable) async {
-  final found = (executable.contains('/') || executable.contains('\\')) ? Path(executable) : await which(executable);
+  final bare = !executable.contains('/') && !executable.contains('\\');
+  if (bare) {
+    final key = '${Env.getOrNull('PATH')}\u0000${Env.getOrNull('PATHEXT')}';
+    if (key != _targetsKey) {
+      _targets.clear();
+      _targetsKey = key;
+    }
+    if (_targets[executable] case final hit?) return hit;
+  }
+  final found = bare ? await which(executable) : Path(executable);
   if (found == null) return (executable, true);
-  return const {'bat', 'cmd'}.contains(found.ext.toLowerCase()) ? (executable, true) : (found.path, false);
+  final target = const {'bat', 'cmd'}.contains(found.ext.toLowerCase()) ? (executable, true) : (found.path, false);
+  if (bare) _targets[executable] = target;
+  return target;
 }
+
+final _targets = <String, (String, bool)>{};
+String? _targetsKey;
 
 /// Sends [signal] to [roots] and everything they started, and returns every pid it sent to.
 ///
@@ -722,10 +761,10 @@ Future<bool> _isProgram(Path candidate) async {
 class CommandPipeline {
   final List<String> _commands;
 
-  CommandPipeline(List<String> commands) : _commands = List.unmodifiable(commands);
+  CommandPipeline._(List<String> commands) : _commands = List.unmodifiable(commands);
 
   /// Pipes the output of this pipeline into another [next] command.
-  CommandPipeline operator |(String next) => CommandPipeline([..._commands, next]);
+  CommandPipeline operator |(String next) => CommandPipeline._([..._commands, next]);
 
   /// Executes this command pipeline asynchronously.
   ///
@@ -740,8 +779,7 @@ class CommandPipeline {
     bool? quiet,
     bool? strict,
     Encoding? encoding,
-  }) => ShellRun._((scope, live) {
-    if (_commands.isEmpty) throw StateError('Cannot execute an empty command pipeline');
+  }) => ShellRun._((scope, control) {
     final stages = [
       for (final cmd in _commands)
         switch (_splitCommand(cmd.trim())) {
@@ -749,7 +787,7 @@ class CommandPipeline {
           [final exe, ...final args] => (exe, args),
         },
     ];
-    return _exec(stages, _commands.join(' | '), scope, input: input, viaShell: Platform.isWindows, live: live);
+    return _exec(stages, _commands.join(' | '), scope, control, input: input, viaShell: Platform.isWindows);
   }, (workdir: workdir, env: env, timeout: timeout, encoding: encoding, quiet: quiet, strict: strict));
 }
 
@@ -760,7 +798,7 @@ class CommandPipeline {
 /// {@category System}
 extension StringShellExtensions on String {
   /// Starts a command pipeline with this command piped into [next].
-  CommandPipeline operator |(String next) => CommandPipeline([this, next]);
+  CommandPipeline operator |(String next) => CommandPipeline._([this, next]);
 }
 
 /// Extension on [Path] for executing scripts or binaries directly.
@@ -783,14 +821,14 @@ extension PathShellExtensions on Path {
     Encoding? encoding,
     bool inherit = false,
   }) => ShellRun._(
-    (scope, live) => _exec(
+    (scope, control) => _exec(
       [(absolute.path, args)],
       _display(path, args),
       scope,
+      control,
       input: input,
       inherit: inherit,
       viaShell: Platform.isWindows && const {'bat', 'cmd'}.contains(ext.toLowerCase()),
-      live: live,
     ),
     (workdir: workdir, env: env, timeout: timeout, encoding: encoding, quiet: quiet, strict: strict),
   );

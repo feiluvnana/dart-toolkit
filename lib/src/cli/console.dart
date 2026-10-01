@@ -51,7 +51,7 @@ bool _interactive() => Io.isErrTerminal;
 
 /// Whether an indicator is shown at all: `-q` asks for warnings and errors only, and a
 /// spinner, a bar or a board is neither.
-bool _shown() => Console.isEnabled(LogLevel.info);
+bool _shown() => Console._isEnabled(LogLevel.info);
 
 String _formatBytes(int bytes) {
   if (bytes < 1024) return '$bytes B';
@@ -128,45 +128,20 @@ abstract class _Live {
 
 // ---- spinners --------------------------------------------------------------------------
 
-/// The frames an indeterminate [Spinner] cycles through, and how fast.
-///
-/// The named ones cover what a terminal usually wants; the constructor takes any frames,
-/// so a program with its own is not stuck choosing from this list:
-///
-/// ```dart
-/// const pulse = SpinnerStyle(['·', 'o', 'O', 'o'], interval: Duration(milliseconds: 120));
-/// Console.spinner('Waiting', style: pulse);
-/// ```
-///
-/// {@category Terminal}
-final class SpinnerStyle {
-  /// The frames, drawn in order and wrapped around.
-  final List<String> frames;
-
-  /// How long each frame stays on screen.
-  final Duration interval;
-
-  const SpinnerStyle(this.frames, {this.interval = const Duration(milliseconds: 80)});
-
-  /// The rotating braille dot, the default: eight dots in one cell, so it turns in place
-  /// without changing width.
-  static const braille = SpinnerStyle(['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']);
-
-  /// A single braille dot orbiting the cell — quieter than [braille].
-  static const dot = SpinnerStyle(['⠁', '⠂', '⠄', '⡀', '⢀', '⠠', '⠐', '⠈']);
-
-  /// ASCII, for a terminal or a font that will not draw braille.
-  static const line = SpinnerStyle([r'-', r'\', r'|', r'/'], interval: Duration(milliseconds: 100));
-
-  /// A growing and shrinking ellipsis, for waiting on something slow.
-  static const ellipsis = SpinnerStyle(['   ', '.  ', '.. ', '...'], interval: Duration(milliseconds: 300));
-
-  /// A bar that rises and falls.
-  static const bar = SpinnerStyle(['▁', '▃', '▄', '▅', '▆', '▇', '▆', '▅', '▄', '▃']);
-
-  /// A circling arc.
-  static const arc = SpinnerStyle(['◜', '◠', '◝', '◞', '◡', '◟'], interval: Duration(milliseconds: 100));
-}
+/// The frames a [Spinner] cycles through: a braille dot that turns in place in one cell, or
+/// ASCII where braille would not draw — the Linux console, a non-UTF-8 locale, the old
+/// Windows console.
+final List<String> _spinnerFrames = () {
+  String? env(String name) => switch (Platform.environment[name]) {
+    final v? when v.isNotEmpty => v,
+    _ => null,
+  };
+  final locale = env('LC_ALL') ?? env('LC_CTYPE') ?? env('LANG') ?? 'UTF-8';
+  final braille = Platform.isWindows
+      ? env('WT_SESSION') != null || env('TERM_PROGRAM') != null
+      : env('TERM') != 'linux' && locale.toLowerCase().replaceAll('-', '').contains('utf8');
+  return braille ? const ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] : const [r'-', r'\', r'|', r'/'];
+}();
 
 /// An indeterminate spinner, for work with no measurable size.
 ///
@@ -186,16 +161,13 @@ final class SpinnerStyle {
 ///
 /// {@category Terminal}
 final class Spinner extends _Live {
-  /// The frames being drawn.
-  final SpinnerStyle style;
-
   final Stopwatch _watch = Stopwatch();
   String _text;
   Timer? _timer;
   int _frame = 0;
   bool _stopped = false;
 
-  Spinner._(this._text, this.style);
+  Spinner._(this._text);
 
   /// The message beside the frame. Assigning redraws it without restarting the animation.
   String get text => _text;
@@ -206,18 +178,12 @@ final class Spinner extends _Live {
     _render();
   }
 
-  /// How long this spinner has been running.
-  Duration get elapsed => _watch.elapsed;
-
-  /// Whether it is still spinning.
-  bool get isSpinning => !_stopped;
-
   @override
   bool get _running => !_stopped;
 
   @override
   List<String> _lines() {
-    final frame = style.frames[_frame % style.frames.length];
+    final frame = _spinnerFrames[_frame % _spinnerFrames.length];
     final time = _watch.elapsed.humanized;
     // The text is cut, never the styled line: truncating a string with escapes in it can
     // cut one in half and leave the terminal wearing the colour. A line wider than the
@@ -234,13 +200,13 @@ final class Spinner extends _Live {
     if (!_shown()) return;
     if (_interactive()) {
       Console._push(this);
-      _timer = Timer.periodic(style.interval, (_) {
+      _timer = Timer.periodic(const Duration(milliseconds: 80), (_) {
         if (_stopped) return;
         _frame++;
         _render();
       });
     } else {
-      Io.err.writeln('  ${style.frames.first} $_text...');
+      Io.err.writeln('  ${_spinnerFrames.first} $_text...');
     }
   }
 
@@ -253,10 +219,7 @@ final class Spinner extends _Live {
   /// Ends it with `⚠ message`, on stderr.
   void warn([String? message]) => _finish('⚠', message ?? _text, (s) => s.yellow, LogLevel.warn);
 
-  /// Ends it with `ℹ message`, on stdout.
-  void info([String? message]) => _finish('ℹ', message ?? _text, (s) => s.cyan, LogLevel.info);
-
-  /// Ends it with no final line at all.
+  /// Ends it with no final line at all: the neutral end.
   void stop() => _finish(null, null, null, LogLevel.info);
 
   @override
@@ -592,7 +555,7 @@ class Console {
   static set level(LogLevel value) => _processLevel = value;
 
   /// Whether [level] currently permits [candidate] to be written.
-  static bool isEnabled(LogLevel candidate) => candidate.index >= level.index && level != LogLevel.silent;
+  static bool _isEnabled(LogLevel candidate) => candidate.index >= level.index && level != LogLevel.silent;
 
   /// Runs [action], sync or async, with logging suppressed.
   ///
@@ -611,7 +574,7 @@ class Console {
 
   /// Writes [line] at [severity], warnings and errors on stderr.
   static void _log(LogLevel severity, String line) {
-    if (!isEnabled(severity)) return;
+    if (!_isEnabled(severity)) return;
     _durable(() => (severity.index >= LogLevel.warn.index ? Io.err : Io.out).writeln(line));
   }
 
@@ -750,14 +713,23 @@ class Console {
 
   /// Prompts for one of [choices], of any element type.
   ///
-  /// [display] renders each choice, which keeps records and domain objects usable:
+  /// An enum shows by its [Enum.name], as `Opt.among` spells it; [display] renders anything
+  /// else, which keeps records and domain objects usable:
   /// `await Console.select('Target', servers, display: (s) => s.name)`.
+  ///
+  /// [T] is never nullable, so `ctx(bump) ?? await Console.select('Bump', Bump.values)` is a
+  /// `Bump`.
   ///
   /// Throws [ArgumentError] at once when [or] is not one of [choices], as `Opt.or` does: a
   /// default the prompt cannot offer is a bug in the call, not in the answer.
-  static Future<T> select<T>(String message, List<T> choices, {T? or, String Function(T choice)? display}) {
+  static Future<T> select<T extends Object>(
+    String message,
+    List<T> choices, {
+    T? or,
+    String Function(T choice)? display,
+  }) {
     if (choices.isEmpty) throw ArgumentError('Choices cannot be empty');
-    String label(T choice) => display?.call(choice) ?? '$choice';
+    String label(T choice) => display?.call(choice) ?? _label(choice);
     final fallback = or != null ? choices.indexOf(or) : -1;
     if (or != null && fallback < 0) {
       throw ArgumentError.value(or, 'or', 'Not one of ${choices.map(label).join(', ')}');
@@ -779,14 +751,6 @@ class Console {
   }
 
   // ---- the screen ----
-
-  /// Clears the terminal screen.
-  static void clear() {
-    if (!_interactive()) return;
-    _stack.clear();
-    IoBridge.above = null;
-    Io.out.write('\x1B[2J\x1B[0;0H');
-  }
 
   /// Renders a horizontal divider rule across the terminal with an optional centered [title].
   static void rule([String? title]) => _durable(() {
@@ -821,20 +785,13 @@ class Console {
   /// ```
   ///
   /// Use [spin] instead when the work is a single call: it ends the spinner for you.
-  static Spinner spinner(String message, {SpinnerStyle style = SpinnerStyle.braille}) =>
-      Spinner._(message, style).._start();
+  static Spinner spinner(String message) => Spinner._(message).._start();
 
   /// Runs [action] behind an indeterminate spinner; [done] and [failed] replace [message]
   /// on the final line. Whatever [action] returns comes back; whatever it throws is rethrown
   /// after the failure line.
-  static Future<T> spin<T>(
-    String message,
-    FutureOr<T> Function() action, {
-    String? done,
-    String? failed,
-    SpinnerStyle style = SpinnerStyle.braille,
-  }) async {
-    final spinner = Console.spinner(message, style: style);
+  static Future<T> spin<T>(String message, FutureOr<T> Function() action, {String? done, String? failed}) async {
+    final spinner = Console.spinner(message);
     try {
       final result = await action();
       spinner.succeed(done);

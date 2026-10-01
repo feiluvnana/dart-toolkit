@@ -334,13 +334,12 @@ An option is a value: its name is written once, and its type is the type `ctx(â€
 Positionals work the same way.
 
 ```dart
-final env = Opt.among('env', Env.values, abbr: 'e').or(Env.production);
+final env = Opt.among('env', Env.values, 'Where to ship').abbr('e').or(Env.production);
 final token = Opt.text('token').env('GITHUB_TOKEN').required();   // [env: GITHUB_TOKEN] in help
-final headers = Opt.text('header', abbr: 'H').many();             // List<String>
-final id = Arg.text('id').required();
+final headers = Opt.text('header').abbr('H').many();             // List<String>
+final id = Arg.text('id', 'The build to ship').required();
 
-Future<void> main(List<String> args) => Cli(
-  name: 'deploy',
+Future<void> main(List<String> args) => Cli(               // named after its script: deploy.dart
   values: [id, env, token, headers],
   handler: (ctx) async {
     if (!await Console.confirm('Ship ${ctx(id)} to ${ctx(env).name}?', or: true)) return;
@@ -355,7 +354,7 @@ Every `Cli` answers `-v/--verbose`, `-q/--quiet`, `-h/--help` and
 | Failure | Result |
 |---|---|
 | A usage error | exit 64, with a "did you mean" |
-| Any other exception | one red line, exit 1; the stack trace only with `-v` |
+| Any other exception â€” `throw 'no such build'` is how a handler fails | one red line, exit 1; the stack trace only with `-v` |
 | A signal | exit 128+n |
 
 Prompts are async, so ^C at a prompt ends the program cleanly.
@@ -371,8 +370,8 @@ Console.info('resolved 3 hosts');             // scrolls above the spinner
 spinner.succeed('ready');
 ```
 
-Every write goes through one live region. Log lines, a child process's output and prompts all
-land above a spinner or progress board instead of on top of it. Without a terminal, each one
+Every write goes through one live region. Log lines, a `print` inside `Cli.run`, a child
+process's output and prompts all land above a spinner or progress board instead of on top of it. Without a terminal, each one
 becomes plain durable lines.
 
 ### FFI

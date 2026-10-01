@@ -15,38 +15,37 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 
 /// The options and arguments, declared once as values: the name is written here and nowhere
 /// else, and `ctx(top)` comes back an `int` because `top` says so.
-final paths = Arg.by('paths', Path.new, description: 'Files to digest').many().required();
-final pattern = Arg.text('pattern', description: 'A glob, relative to here').or('**/*');
-final file = Arg.by('file', Path.new, description: 'A YAML, TOML, INI or JSON file').required();
-final link = Arg.by('url', (raw) => raw.url, description: 'The URL to GET').required();
-final dir = Arg.by('dir', Path.new, description: 'The directory to archive').required();
-final archive = Arg.by('archive', Path.new, description: 'The archive to list').required();
+final paths = Arg.by('paths', Path.new, 'Files to digest').many().required();
+final pattern = Arg.text('pattern', 'A glob, relative to here').or('**/*');
+final file = Arg.by('file', Path.new, 'A YAML, TOML, INI or JSON file').required();
+final link = Arg.by('url', (raw) => raw.url, 'The URL to GET').required();
+final dir = Arg.by('dir', Path.new, 'The directory to archive').required();
+final archive = Arg.by('archive', Path.new, 'The archive to list').required();
 
-final algo = Opt.among('algo', Hash.values, abbr: 'a', description: 'Digest algorithm').or(Hash.sha256);
-final top = Opt.number('top', abbr: 'n', description: 'How many to show').or(10);
-final query = Opt.text('query', abbr: 'q', description: r'A JSONPath, e.g. $.dependencies.*');
-final asYaml = Opt.flag('yaml', abbr: 'y', description: 'Print the document as YAML');
-final out = Opt.text('out', abbr: 'o', description: 'Write to this path instead of stdout');
-final to = Opt.by('to', Path.new, abbr: 't', description: 'Destination, e.g. out.zip or out.tar.gz').required();
+final algo = Opt.among('algo', Hash.values, 'Digest algorithm').abbr('a').or(Hash.sha256);
+final top = Opt.number('top', 'How many to show').abbr('n').or(10);
+final query = Opt.text('query', r'A JSONPath, e.g. $.dependencies.*').abbr('q');
+final asYaml = Opt.flag('yaml', 'Print the document as YAML').abbr('y');
+final out = Opt.text('out', 'Write to this path instead of stdout').abbr('o');
+final to = Opt.by('to', Path.new, 'Destination, e.g. out.zip or out.tar.gz').abbr('t').required();
 
 Future<void> main(List<String> args) => Cli(
-  name: 'tk',
   description: 'Small jobs, from the toolkit',
   version: '0.0.6',
   commands: [
-    CliCommand('hash', description: 'Digest files, one per line', values: [paths, algo], handler: hash),
-    CliCommand('find', description: 'The biggest files a glob matches', values: [pattern, top], handler: find),
-    CliCommand('read', description: 'Query a document', values: [file, query, asYaml], handler: read),
-    CliCommand('fetch', description: 'GET a URL to stdout or --out', values: [link, out], handler: fetch),
-    CliCommand('pack', description: 'Archive a directory as --to says', values: [dir, to], handler: pack),
-    CliCommand('peek', description: 'List an archive without extracting it', values: [archive], handler: peek),
+    CliCommand('hash', 'Digest files, one per line', values: [paths, algo], handler: hash),
+    CliCommand('find', 'The biggest files a glob matches', values: [pattern, top], handler: find),
+    CliCommand('read', 'Query a document', values: [file, query, asYaml], handler: read),
+    CliCommand('fetch', 'GET a URL to stdout or --out', values: [link, out], handler: fetch),
+    CliCommand('pack', 'Archive a directory as --to says', values: [dir, to], handler: pack),
+    CliCommand('peek', 'List an archive without extracting it', values: [archive], handler: peek),
   ],
 ).run(args);
 
 /// Every file in one call to the native library, which hashes them in parallel.
 Future<void> hash(CliContext ctx) async {
   final digests = await ctx(paths).hash(ctx(algo));
-  digests.forEach((path, digest) => Io.out.writeln('$digest  $path'));
+  digests.forEach((path, digest) => print('$digest  $path'));
 }
 
 /// A glob, then the biggest matches as a table.
@@ -68,9 +67,9 @@ Future<void> find(CliContext ctx) async {
 Future<void> read(CliContext ctx) async {
   final doc = await JsonDocument.read(ctx(file));
   if (ctx(query) case final expression?) {
-    return doc.$(expression).forEach(Io.out.writeln);
+    return doc.$(expression).forEach(print);
   }
-  Io.out.writeln(ctx(asYaml) ? doc.toYaml() : '$doc');
+  print(ctx(asYaml) ? doc.toYaml() : '$doc');
 }
 
 /// To stdout, or to a file with progress.

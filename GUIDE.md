@@ -90,11 +90,10 @@ Future<void> main() async {
 ```dart
 import 'package:dart_toolkit/dart_toolkit.dart';
 
-final top = Opt.number('top', abbr: 'n').or(10);
-final out = Opt.text('out', abbr: 'o').or('out.csv');
+final top = Opt.number('top', 'How many rows').abbr('n').or(10);
+final out = Opt.text('out', 'Where to write them').abbr('o').or('out.csv');
 
 void main(List<String> args) => Cli(
-  name: 'report',
   values: [top, out],
   handler: (ctx) async {
     final rows = await Console.spin('Fetching', () => fetch(ctx(top)));
@@ -819,6 +818,14 @@ await for (final line in run('tail -f app.log').stream) {
 }
 ```
 
+`kill()` stops one you started and did not await — a server for the length of a test run:
+
+```dart
+final server = run('dart run bin/server.dart');
+await run('dart test');
+await server.kill();   // the server and its children are gone when this returns
+```
+
 **Stopping a command stops its whole tree.** A cancelled `Cancel.scope`, a `timeout` or a ^C
 under `Cli.run` sends SIGTERM to the child and everything it started, then SIGKILL after 2 s. A
 cancel throws `CancelledException`. A timeout throws `ShellTimeoutException`, which is a
@@ -1236,21 +1243,24 @@ An option's name is written once, and its type is the type you read back.
 ```dart
 enum Stage { dev, staging, production }
 
-final stage = Opt.among('stage', Stage.values, abbr: 's').or(Stage.production); // Stage
-final token = Opt.text('token').env('DEPLOY_TOKEN').required();              // String
-final workers = Opt.number('workers', abbr: 'w').or(4);                      // int
-final dryRun = Opt.flag('dry-run', abbr: 'd');                               // bool
-final headers = Opt.text('header', abbr: 'H').many();                        // List<String>
-final since = Opt.by('since', DateTime.parse);                               // DateTime?
+final stage = Opt.among('stage', Stage.values, 'Where to deploy').or(Stage.production); // Stage
+final token = Opt.text('token').env('DEPLOY_TOKEN').required();            // String
+final workers = Opt.number('workers').abbr('w').or(4);                     // int
+final dryRun = Opt.flag('dry-run', 'Print, do not deploy').abbr('d');      // bool
+final headers = Opt.text('header').abbr('H').many();                       // List<String>
+final since = Opt.by('since', DateTime.parse);                             // DateTime?
 
-final id = Arg.text('id').required();          // String
+final id = Arg.text('id', 'The build').required();   // String
 final count = Arg.number('count').or(1);       // int
 final targets = Arg.text('targets').many().required(); // List<String>, at least one
 final files = Arg.by('files', Path.new).many();          // List<Path>, parsed one by one
 ```
 
+The second positional is the help line, on an `Opt`, an `Arg` and a `CliCommand` alike.
+
 | modifier | |
 |---|---|
+| `.abbr('n')` | the short form, `-n` |
 | `.or(v)` | a default; `ctx(…)` is then non-nullable |
 | `.required()` | omitting it is a usage error |
 | `.many()` | `-H a -H b` gives `['a', 'b']`; without it the last occurrence wins. On an `Arg`, everything left, declared last |
@@ -1264,13 +1274,12 @@ answers to `-5`.
 
 ```dart
 final cli = Cli(
-  name: 'deployer',
-  version: '1.2.0',
+  version: '1.2.0', // name: defaults to the script's, so bin/deployer.dart is `deployer`
   values: [id, stage, token, workers, dryRun], // Args bind in the order they are listed
   handler: (ctx) => Console.info('deploying ${ctx(id)} to ${ctx(stage).name}'),
   commands: [
-    CliCommand('db', description: 'Database', commands: [
-      CliCommand('migrate', description: 'Run migrations', handler: (ctx) {}),
+    CliCommand('db', 'Database', commands: [
+      CliCommand('migrate', 'Run migrations', handler: (ctx) {}),
     ]),
   ],
 );
@@ -1294,7 +1303,7 @@ source <(dart run dart_toolkit:tk --completion bash)   # or add it to ~/.bashrc
 | exit code | |
 |---|---|
 | 0 | the handler returned |
-| 1 | the handler threw: one red `✖ error` line, with the trace under `--verbose` |
+| 1 | the handler threw: one red `✖ error` line, with the trace under `--verbose`. `throw 'no such stage'` is how a handler fails |
 | 64 | a usage error, including an unknown subcommand or option, which says `Did you mean "build"?`; and a program of subcommands run with none, whose usage goes to stderr |
 | 128+n | a signal; the exit hooks ran |
 
@@ -1337,10 +1346,11 @@ final result = await Console.spin('Building', () => run('make'), done: 'Built');
 | `Console.spin(msg, action)` | a spinner ended for you when `action` settles |
 | `Console.progress(total)` | one bar: `tick([n])`, `done()` |
 | `Console.tasks()` / `stream.show()` | a board with a row per task running at once; `slots:` fixes the count |
-| `Console.rule([title])`, `Console.writeln`, `Console.clear()` | unlevelled |
+| `Console.rule([title])`, `Console.writeln` | unlevelled; inside `Cli.run`, `print` is `Console.writeln` |
 
 Under `-q` a spinner, a bar and a board draw nothing, and only a failure's final line is
-written.
+written. A spinner ends with `succeed`, `fail`, `warn` or the silent `stop()`; it draws braille,
+or ASCII on a terminal or locale that cannot.
 
 **Prompts are async**, so ^C at a prompt ends the program cleanly and turns echo back on. They
 write to stderr, so `app > out.txt` captures the output and none of the questions; `confirm`
@@ -1350,7 +1360,7 @@ asks again on anything that is not a yes or a no:
 final name = await Console.ask('Project name', or: 'app', validate: (v) => v.contains(' ') ? 'no spaces' : null);
 final go = await Console.confirm('Continue?', or: true);
 final password = await Console.secret('Password');
-final stage = await Console.select('Stage', Stage.values, or: Stage.dev, display: (s) => s.name);
+final stage = await Console.select('Stage', Stage.values, or: Stage.dev); // an enum shows by name
 ```
 
 Without a terminal every indicator degrades to plain lines. Styling is on `String`: `.bold`,

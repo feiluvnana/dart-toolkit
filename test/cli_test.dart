@@ -84,13 +84,13 @@ void main() {
       addTearDown(Io.reset);
 
       final spinner = Console.spinner('Connecting');
-      expect(spinner.isSpinning, isTrue);
       spinner.text = 'Fetching the index';
       expect(spinner.text, equals('Fetching the index'));
+      expect(Io.stripAnsi(out.toString()), isEmpty, reason: 'still spinning: no ending yet');
       spinner.succeed('index ready');
 
-      expect(spinner.isSpinning, isFalse);
-      expect(Io.stripAnsi(out.toString()), contains('index ready'));
+      // The ending says how long it took, which is what `elapsed` was read for.
+      expect(Io.stripAnsi(out.toString()), matches(RegExp(r'✓ index ready \(\d+ms\)')));
       // A second ending is not a second line.
       spinner.fail('ignored');
       expect(Io.stripAnsi(out.toString()), isNot(contains('ignored')));
@@ -115,19 +115,21 @@ void main() {
       expect(Io.stripAnsi(err.toString()), contains('Three...'));
     });
 
-    test('SpinnerStyle takes frames of its own', () {
-      const pulse = SpinnerStyle(['a', 'b'], interval: Duration(milliseconds: 10));
-      expect(pulse.frames, equals(['a', 'b']));
-      expect(SpinnerStyle.braille.frames.first, equals('⠋'));
-      expect(SpinnerStyle.braille.frames, hasLength(10));
-
-      final err = StringBuffer();
-      Io.err = err;
-      addTearDown(Io.reset);
+    test('a spinner draws braille, or ASCII where the locale cannot', () async {
+      const source = """
+        void main() {
+          Console.spinner('Waiting').stop();
+          Lifecycle.onExit(null);
+        }
+      """;
+      final utf8 = await _script(source, env: {'LC_ALL': 'en_US.UTF-8', 'TERM': 'xterm'});
+      final ascii = await _script(source, env: {'LC_ALL': 'C', 'TERM': 'xterm'});
+      final console = await _script(source, env: {'LC_ALL': 'en_US.UTF-8', 'TERM': 'linux'});
       // Without a terminal the first frame is what gets written.
-      Console.spinner('Waiting', style: pulse).stop();
-      expect(Io.stripAnsi(err.toString()), contains('a Waiting'));
-    });
+      expect(utf8.stderr, contains('⠋ Waiting...'));
+      expect(ascii.stderr, contains('- Waiting...'));
+      expect(console.stderr, contains('- Waiting...'));
+    }, testOn: '!windows');
 
     test('Console.writeln writes unlevelled, and ignores the log level', () {
       final out = StringBuffer();
@@ -259,6 +261,16 @@ void main() {
       expect(env, equals('prod'));
     });
 
+    test('select shows an enum by its name, and what it returns is never nullable', () async {
+      feed(['release']);
+      const Mode? given = null;
+      // `Mode`, not `Mode?`: the `??` reads as the answer or the prompt.
+      final Mode mode = given ?? await Console.select('Mode', Mode.values);
+      expect(mode, Mode.release);
+      expect(out.toString(), contains('2) release'));
+      expect(out.toString(), isNot(contains('Mode.')));
+    });
+
     test('select returns the default on empty input', () async {
       feed(['']);
       final env = await Console.select('Environment', ['dev', 'staging'], or: 'staging');
@@ -319,20 +331,20 @@ void main() {
       int? parsedConcurrency;
       bool? isVerbose;
 
-      final verbose = Opt.flag('verbose', abbr: 'v');
-      final concurrency = Opt.number('concurrency', abbr: 'c').or(4);
-      final out = Opt.text('out', abbr: 'o').or('dist');
+      final verbose = Opt.flag('verbose').abbr('v');
+      final concurrency = Opt.number('concurrency').abbr('c').or(4);
+      final out = Opt.text('out').abbr('o').or('dist');
 
       final cli = Cli(
         commands: [
           CliCommand(
             'fetch',
-            description: 'Fetch data',
+            'Fetch data',
             values: [verbose],
             commands: [
               CliCommand(
                 'scrape',
-                description: 'Scrape URLs',
+                'Scrape URLs',
                 values: [concurrency, out],
                 handler: (ctx) {
                   executed = true;
@@ -365,8 +377,8 @@ void main() {
       expect(kinds.map((o) => o.name), ['f', 't', 'n', 'a', 'b']);
 
       bool? flagged;
-      final flag = Opt.flag('dry', abbr: 'd');
-      await CliCommand('app', values: [flag], handler: (ctx) => flagged = ctx(flag)).run(['-d']);
+      final flag = Opt.flag('dry').abbr('d');
+      await CliCommand('app', '', values: [flag], handler: (ctx) => flagged = ctx(flag)).run(['-d']);
       expect(flagged, isTrue);
     });
 
@@ -385,6 +397,7 @@ void main() {
         commands: [
           CliCommand(
             'build',
+            '',
             values: [jobs, watch, mode, out],
             handler: (ctx) {
               // Each of these is statically typed by its option; nothing here is a cast.
@@ -482,8 +495,9 @@ void main() {
       final format = Opt.among('format', Mode.values).or(Mode.debug);
       final cli = CliCommand(
         'app',
+        '',
         commands: [
-          CliCommand('build', values: [format], handler: (ctx) => chosenFormat = ctx(format).name),
+          CliCommand('build', '', values: [format], handler: (ctx) => chosenFormat = ctx(format).name),
         ],
       );
 
@@ -503,14 +517,16 @@ void main() {
       bool? isDryRun;
       int? concurrency;
 
-      final dryRun = Opt.flag('dry-run', abbr: 'd');
-      final workers = Opt.number('concurrency', abbr: 'c').or(4);
+      final dryRun = Opt.flag('dry-run').abbr('d');
+      final workers = Opt.number('concurrency').abbr('c').or(4);
 
       final cli = CliCommand(
         'app',
+        '',
         commands: [
           CliCommand(
             'serve',
+            '',
             values: [dryRun, workers],
             handler: (ctx) {
               isDryRun = ctx(dryRun);
@@ -538,12 +554,13 @@ void main() {
       int? offset;
       List<String>? rest;
 
-      final offsetOpt = Opt.number('offset', abbr: 'o');
+      final offsetOpt = Opt.number('offset').abbr('o');
 
       final cli = Cli(
         commands: [
           CliCommand(
             'seek',
+            '',
             values: [offsetOpt],
             handler: (ctx) {
               offset = ctx(offsetOpt);
@@ -574,15 +591,17 @@ void main() {
       bool? dry;
       int? jobs;
       List<String>? rest;
-      final verboseOpt = Opt.flag('verbose', abbr: 'v');
-      final dryOpt = Opt.flag('dry-run', abbr: 'd');
-      final jobsOpt = Opt.number('jobs', abbr: 'j').or(1);
+      final verboseOpt = Opt.flag('verbose').abbr('v');
+      final dryOpt = Opt.flag('dry-run').abbr('d');
+      final jobsOpt = Opt.number('jobs').abbr('j').or(1);
       final cli = CliCommand(
         'app',
+        '',
         values: [verboseOpt, dryOpt, jobsOpt],
         commands: [
           CliCommand(
             'build',
+            '',
             handler: (ctx) {
               verbose = ctx(verboseOpt);
               dry = ctx(dryOpt);
@@ -611,7 +630,7 @@ void main() {
       Io.out = out;
       try {
         final tokenOpt = Opt.text('token');
-        final cli = CliCommand('app', values: [tokenOpt], handler: (ctx) => token = ctx(tokenOpt));
+        final cli = CliCommand('app', '', values: [tokenOpt], handler: (ctx) => token = ctx(tokenOpt));
         await cli.run(['--token', '--help']);
         expect(token, equals('--help'));
         expect(out.toString(), isNot(contains('Usage')));
@@ -631,6 +650,7 @@ void main() {
 
       final cli = CliCommand(
         'app',
+        '',
         values: [since, port],
         handler: (ctx) {
           parsed = ctx(since);
@@ -667,6 +687,7 @@ void main() {
 
       final cli = CliCommand(
         'app',
+        '',
         values: [nameOpt, portOpt, sizeOpt],
         handler: (ctx) {
           // `nameOpt` and `portOpt` are nullable types; `sizeOpt` is not, and needs no `!`.
@@ -688,7 +709,7 @@ void main() {
       final format = Opt.text('format').or('all');
       final cli = Cli(
         values: [format],
-        commands: [CliCommand('download', handler: (ctx) => subFmt = ctx(format))],
+        commands: [CliCommand('download', '', handler: (ctx) => subFmt = ctx(format))],
         handler: (ctx) => parentFmt = ctx(format),
       );
 
@@ -719,8 +740,8 @@ void main() {
 
     test('a required option is enforced at parse time', () async {
       String? token;
-      final tokenOpt = Opt.text('token', abbr: 't', description: 'API token').required();
-      final cli = CliCommand('app', values: [tokenOpt], handler: (ctx) => token = ctx(tokenOpt));
+      final tokenOpt = Opt.text('token', 'API token').abbr('t').required();
+      final cli = CliCommand('app', '', values: [tokenOpt], handler: (ctx) => token = ctx(tokenOpt));
 
       await cli.run(['--token', 'abc']);
       expect(token, equals('abc'));
@@ -733,8 +754,9 @@ void main() {
       // Required is also enforced from an ancestor command, and shows up in help.
       final nested = CliCommand(
         'app',
+        '',
         values: [Opt.number('port').required()],
-        commands: [CliCommand('serve', handler: (_) {})],
+        commands: [CliCommand('serve', '', handler: (_) {})],
       );
       expect(() => nested.run(['serve']), throwsA(isA<UsageException>()));
     });
@@ -810,6 +832,7 @@ void main() {
 
       await CliCommand(
         'demo',
+        '',
         values: [id, count],
         handler: (ctx) {
           seenId = ctx(id); // String, statically
@@ -824,7 +847,7 @@ void main() {
     test('a default fills an absent one, and a bad value is a usage error', () async {
       var seen = 0;
       final count = Arg.number('count').or(3);
-      final cli = CliCommand('demo', values: [count], handler: (ctx) => seen = ctx(count));
+      final cli = CliCommand('demo', '', values: [count], handler: (ctx) => seen = ctx(count));
 
       await cli.run([]);
       expect(seen, 3, reason: 'absent, so the default');
@@ -833,7 +856,7 @@ void main() {
 
     test('a missing required one names itself, and an extra one is refused', () {
       final id = Arg.text('id').required();
-      final cli = CliCommand('demo', values: [id], handler: (_) {});
+      final cli = CliCommand('demo', '', values: [id], handler: (_) {});
 
       expect(() => cli.run([]), throwsA(isA<UsageException>().having((e) => e.message, 'message', contains('<id>'))));
       expect(
@@ -849,6 +872,7 @@ void main() {
       String? seenTag;
       final cli = CliCommand(
         'demo',
+        '',
         values: [tag, paths],
         handler: (ctx) {
           seenTag = ctx(tag);
@@ -865,7 +889,7 @@ void main() {
     test('a choice argument is matched by name, and an unknown one is refused', () async {
       final level = Arg.among('level', LogLevel.values).or(LogLevel.info);
       Object? seen;
-      final cli = CliCommand('demo', values: [level], handler: (ctx) => seen = ctx(level));
+      final cli = CliCommand('demo', '', values: [level], handler: (ctx) => seen = ctx(level));
 
       await cli.run(['warn']);
       expect(seen, LogLevel.warn);
@@ -874,7 +898,7 @@ void main() {
 
     test('a command that declares none keeps rest exactly as it was', () async {
       List<String>? seen;
-      await CliCommand('demo', handler: (ctx) => seen = ctx.rest).run(['a', 'b', 'c']);
+      await CliCommand('demo', '', handler: (ctx) => seen = ctx.rest).run(['a', 'b', 'c']);
       expect(seen, ['a', 'b', 'c'], reason: 'nothing checked, nothing consumed');
     });
 
@@ -882,12 +906,8 @@ void main() {
       final help = await usageOf(
         CliCommand(
           'demo',
-          description: 'Does a thing',
-          values: [
-            Arg.text('id', description: 'Which one').required(),
-            Arg.text('extra').many(),
-            Opt.flag('verbose', abbr: 'v'),
-          ],
+          'Does a thing',
+          values: [Arg.text('id', 'Which one').required(), Arg.text('extra').many(), Opt.flag('verbose').abbr('v')],
           handler: (_) {},
         ),
         ['--help'],
@@ -902,13 +922,9 @@ void main() {
     });
 
     test('a program with commands still advertises them', () async {
-      final help = await usageOf(
-        CliCommand(
-          'demo',
-          commands: [CliCommand('go', description: 'Go', handler: (_) {})],
-        ),
-        ['--help'],
-      );
+      final help = await usageOf(CliCommand('demo', '', commands: [CliCommand('go', 'Go', handler: (_) {})]), [
+        '--help',
+      ]);
       expect(help, contains('Usage: demo [options] [command]'));
       expect(help, contains('Commands:'));
     });
@@ -917,8 +933,9 @@ void main() {
       final help = await usageOf(
         CliCommand(
           'demo',
+          '',
           commands: [
-            CliCommand('go', description: 'Go', values: [Arg.text('where').required()], handler: (_) {}),
+            CliCommand('go', 'Go', values: [Arg.text('where').required()], handler: (_) {}),
           ],
         ),
         ['go', '--help'],
@@ -933,7 +950,8 @@ void main() {
         // A command with a `--host` still answers `--help`; `-h` is the one it took.
         await CliCommand(
           'demo',
-          values: [Opt.text('host', abbr: 'h').or('127.0.0.1')],
+          '',
+          values: [Opt.text('host').abbr('h').or('127.0.0.1')],
           handler: (_) => fail('help should have run instead'),
         ).run(['--help']);
       } finally {
@@ -946,17 +964,18 @@ void main() {
 
     test('a command that declares its own help option keeps it', () async {
       var ran = false;
-      await CliCommand('demo', values: [Opt.flag('help')], handler: (_) => ran = true).run(['--help']);
+      await CliCommand('demo', '', values: [Opt.flag('help')], handler: (_) => ran = true).run(['--help']);
       expect(ran, isTrue, reason: 'the declared option won, and usage was not printed');
     });
 
     test('an option among the positionals is still an option', () async {
       final id = Arg.text('id').required();
-      final loud = Opt.flag('loud', abbr: 'l');
+      final loud = Opt.flag('loud').abbr('l');
       String? seen;
       var wasLoud = false;
       await CliCommand(
         'demo',
+        '',
         values: [id, loud],
         handler: (ctx) {
           seen = ctx(id);
@@ -1039,12 +1058,12 @@ void main() {
 
   group('cli', () {
     test('an ArgumentError in the action is not a usage error', () async {
-      final cli = CliCommand('demo', handler: (ctx) => throw ArgumentError('bug in the action'));
+      final cli = CliCommand('demo', '', handler: (ctx) => throw ArgumentError('bug in the action'));
       expect(() => cli.run([]), throwsA(isA<ArgumentError>()));
     });
 
     test('a usage error is a UsageException with the message', () async {
-      final cli = CliCommand('demo', values: [Opt.number('n')]);
+      final cli = CliCommand('demo', '', values: [Opt.number('n')]);
       expect(
         () => cli.run(['--n', 'x']),
         throwsA(isA<UsageException>().having((e) => e.message, 'message', contains('"x" for option "--n"'))),
@@ -1273,13 +1292,13 @@ void main() {
       Env.set('TK_TEST_TOKEN', '');
     });
 
-    final dry = Opt.flag('dry', abbr: 'd');
-    final verbose = Opt.flag('verbose', abbr: 'v');
-    final jobs = Opt.number('jobs', abbr: 'j');
+    final dry = Opt.flag('dry').abbr('d');
+    final verbose = Opt.flag('verbose').abbr('v');
+    final jobs = Opt.number('jobs').abbr('j');
 
     Future<CliContext> parse(List<String> argv, {List<CliValue<Object?>>? values}) async {
       late CliContext seen;
-      await CliCommand('app', values: values ?? [dry, verbose, jobs], handler: (c) => seen = c).run(argv);
+      await CliCommand('app', '', values: values ?? [dry, verbose, jobs], handler: (c) => seen = c).run(argv);
       return seen;
     }
 
@@ -1304,7 +1323,7 @@ void main() {
     });
 
     test('an unknown subcommand is a usage error that suggests the near one', () async {
-      final app = CliCommand('app', commands: [CliCommand('build', handler: (_) {})]);
+      final app = CliCommand('app', '', commands: [CliCommand('build', '', handler: (_) {})]);
       await expectLater(
         app.run(['biuld']),
         throwsA(
@@ -1324,15 +1343,16 @@ void main() {
     test('a subcommand\'s help shows the options it inherits', () async {
       await CliCommand(
         'app',
+        '',
         values: [verbose],
-        commands: [CliCommand('build', handler: (_) {})],
+        commands: [CliCommand('build', '', handler: (_) {})],
       ).run(['build', '--help']);
       expect(out.toString(), contains('Global options:'));
       expect(out.toString(), contains('-v, --verbose'));
     });
 
     test('many() collects every occurrence, in order', () async {
-      final header = Opt.text('header', abbr: 'H').many();
+      final header = Opt.text('header').abbr('H').many();
       final ctx = await parse(['-H', 'a: 1', '--header=b: 2', '-Hc: 3'], values: [header]);
       expect(ctx(header), ['a: 1', 'b: 2', 'c: 3']);
       expect((await parse([], values: [header]))(header), isEmpty);
@@ -1344,7 +1364,7 @@ void main() {
       Env.set('TK_TEST_TOKEN', 'from-env');
       expect((await parse([], values: [token]))(token), 'from-env');
       expect((await parse(['--token', 'typed'], values: [token]))(token), 'typed');
-      await CliCommand('app', values: [token]).run(['--help']);
+      await CliCommand('app', '', values: [token]).run(['--help']);
       expect(out.toString(), contains('[env: TK_TEST_TOKEN]'));
     });
 
@@ -1366,7 +1386,7 @@ void main() {
       final app = Cli(
         name: 'app',
         commands: [
-          CliCommand('build', values: [Opt.among('mode', Mode.values)], handler: (_) {}),
+          CliCommand('build', '', values: [Opt.among('mode', Mode.values)], handler: (_) {}),
         ],
       );
       await app.run(['--completion', 'bash']);
@@ -1375,7 +1395,7 @@ void main() {
       out.clear();
       await app.run(['--completion=fish']);
       expect(out.toString(), contains("-a 'build'"));
-      await expectLater(CliCommand('x').run([]), completes);
+      await expectLater(CliCommand('x', '').run([]), completes);
     });
   });
 
@@ -1397,9 +1417,10 @@ void main() {
       final help = await helpOf(
         CliCommand(
           'demo',
+          '',
           values: [
-            Opt.number('num', abbr: 'n'),
-            Opt.flag('dry', abbr: 'd'),
+            Opt.number('num').abbr('n'),
+            Opt.flag('dry').abbr('d'),
             Opt.among('mode', ['fast', 'slow']),
             Opt.text('name'),
           ],
@@ -1419,6 +1440,7 @@ void main() {
       late (String, int, bool) seen;
       await CliCommand(
         'demo',
+        '',
         values: [a, loud, b],
         handler: (ctx) => seen = (ctx(a), ctx(b), ctx(loud)),
       ).run(['x', '--loud', '7']);
@@ -1428,7 +1450,7 @@ void main() {
     test('Arg.<kind>.many() parses each value, and required() means at least one', () async {
       final ns = Arg.number('ns').many();
       List<int>? seen;
-      final cli = CliCommand('sum', values: [ns], handler: (ctx) => seen = ctx(ns));
+      final cli = CliCommand('sum', '', values: [ns], handler: (ctx) => seen = ctx(ns));
       await cli.run(['1', '2', '3']);
       expect(seen, [1, 2, 3]);
       await cli.run([]);
@@ -1439,40 +1461,36 @@ void main() {
       );
       final some = Arg.by('files', Uri.parse).many().required();
       await expectLater(
-        CliCommand('x', values: [some], handler: (_) {}).run([]),
+        CliCommand('x', '', values: [some], handler: (_) {}).run([]),
         throwsA(isA<UsageException>().having((e) => e.message, 'message', 'Missing argument: <files>...')),
       );
     });
 
     test('-vd=false gives the value to the flag it follows', () async {
-      final v = Opt.flag('verbose', abbr: 'v');
-      final d = Opt.flag('dry', abbr: 'd');
+      final v = Opt.flag('verbose').abbr('v');
+      final d = Opt.flag('dry').abbr('d');
       late (bool, bool) seen;
-      await CliCommand('demo', values: [v, d], handler: (ctx) => seen = (ctx(v), ctx(d))).run(['-vd=false']);
+      await CliCommand('demo', '', values: [v, d], handler: (ctx) => seen = (ctx(v), ctx(d))).run(['-vd=false']);
       expect(seen, (true, false));
     });
 
     test('a mistyped option is offered the one it is close to', () async {
       await expectLater(
-        CliCommand('demo', values: [Opt.text('name')], handler: (_) {}).run(['--nme', 'x']),
+        CliCommand('demo', '', values: [Opt.text('name')], handler: (_) {}).run(['--nme', 'x']),
         throwsA(isA<UsageException>().having((e) => e.message, 'message', contains('Did you mean "--name"?'))),
       );
     });
 
     test('a bad number names the option it was given to', () async {
       await expectLater(
-        CliCommand(
-          'demo',
-          values: [Opt.number('top', abbr: 'n')],
-          handler: (_) {},
-        ).run(['-n', 'abc']),
+        CliCommand('demo', '', values: [Opt.number('top').abbr('n')], handler: (_) {}).run(['-n', 'abc']),
         throwsA(isA<UsageException>().having((e) => e.message, 'message', contains('option "--top"'))),
       );
     });
 
     test('a program of subcommands run with none exits 64, usage on stderr', () async {
       final process = await _start('''
-        Future<void> main(List<String> a) => Cli(name: 'demo', commands: [CliCommand('go', handler: (_) {})]).run(a);
+        Future<void> main(List<String> a) => Cli(name: 'demo', commands: [CliCommand('go', '', handler: (_) {})]).run(a);
       ''');
       final out = process.stdout.transform(const SystemEncoding().decoder).join();
       final err = process.stderr.transform(const SystemEncoding().decoder).join();
@@ -1585,13 +1603,9 @@ void main() {
     test('fish completion uses _reachable and offers help (CLI-8)', () async {
       final app = Cli(
         name: 'app',
-        values: [Opt.flag('quick', abbr: 'q')],
+        values: [Opt.flag('quick').abbr('q')],
         commands: [
-          CliCommand(
-            'sub',
-            values: [Opt.flag('quiet', abbr: 'q')],
-            handler: (_) {},
-          ),
+          CliCommand('sub', '', values: [Opt.flag('quiet').abbr('q')], handler: (_) {}),
         ],
         handler: (_) {},
       );
@@ -1607,12 +1621,90 @@ void main() {
       expect(fish, contains(r"test (__app_path) = \'app sub\'"));
     });
   });
+
+  group('the call site, the fourth audit', () {
+    Future<String> helpOf(CliCommand command) async {
+      final out = StringBuffer();
+      Io.out = out;
+      Io.color = false;
+      try {
+        await command.run(['--help']);
+      } finally {
+        Io.reset();
+        Io.color = null;
+      }
+      return out.toString();
+    }
+
+    test('the description is the second positional, and abbr() adds the short form', () async {
+      final top = Opt.number('top', 'How many to show').abbr('n').or(10);
+      final dry = Opt.flag('dry', 'Print, do not write').abbr('d');
+      final id = Arg.text('id', 'What to fetch').required();
+      int? seen;
+      bool? wasDry;
+      final go = CliCommand(
+        'go',
+        'Go and fetch',
+        values: [id, top, dry],
+        handler: (ctx) {
+          seen = ctx(top);
+          wasDry = ctx(dry);
+        },
+      );
+      final root = CliCommand('app', 'The app', commands: [go]);
+
+      final help = await helpOf(go);
+      expect(help, contains('Go and fetch'));
+      expect(help, contains('What to fetch'));
+      expect(help, matches(RegExp(r'-n, --top <int>\s+How many to show \[default: 10\]')));
+      expect(help, matches(RegExp(r'-d, --dry\s+Print, do not write')));
+      expect(await helpOf(root), matches(RegExp(r'go\s+Go and fetch')));
+
+      await root.run(['go', 'x', '-n', '3', '-d']);
+      expect((seen, wasDry), (3, true));
+    });
+
+    test('abbr() keeps what the chain said before it, in any order', () async {
+      final a = Opt.text('token').env('TK_TEST_TOKEN').abbr('t').required();
+      final b = Opt.among('mode', Mode.values).or(Mode.debug).abbr('m');
+      final c = Opt.text('header').abbr('H').many();
+      late (String, Mode, List<String>) got;
+      final cmd = CliCommand('x', '', values: [a, b, c], handler: (ctx) => got = (ctx(a), ctx(b), ctx(c)));
+      await cmd.run(['-t', 'secret', '-H', '1', '-H', '2']);
+      expect((got.$1, got.$2), ('secret', Mode.debug));
+      expect(got.$3, ['1', '2']);
+      await cmd.run(['-t', 's', '-m', 'release']);
+      expect(got.$2, Mode.release);
+      expect(await helpOf(cmd), contains('[env: TK_TEST_TOKEN] [required]'));
+    });
+
+    test('a print inside Cli.run is a durable write, like Console.writeln', () async {
+      final out = StringBuffer();
+      Io.out = out;
+      addTearDown(Io.reset);
+      await Cli(name: 'demo', handler: (_) => print('from print')).run([]);
+      expect(out.toString(), 'from print\n');
+    });
+
+    test('Cli is named after its script, and throw is how a handler fails', () async {
+      final named = await _script('''
+        Future<void> main() => Cli(handler: (_) {}).run(['--completion', 'bash']);
+      ''');
+      expect(named.stdout, contains('complete -o default -F _main_completion main'));
+
+      final failed = await _script('''
+        Future<void> main() => Cli(handler: (_) async => throw 'no URL given').run([]);
+      ''');
+      expect(failed.exitCode, 1);
+      expect(Io.stripAnsi(failed.stderr), contains('✖ no URL given'));
+    });
+  });
 }
 
 /// Runs [source] as a program of its own: what `Cli.run` does to the process — exit codes,
 /// signals — cannot be watched from inside the test runner.
-Future<ShellResult> _script(String source) async {
-  final process = await _start(source);
+Future<ShellResult> _script(String source, {Map<String, String>? env}) async {
+  final process = await _start(source, env: env);
   final (out, err) = await (
     process.stdout.transform(const SystemEncoding().decoder).join(),
     process.stderr.transform(const SystemEncoding().decoder).join(),
@@ -1620,11 +1712,11 @@ Future<ShellResult> _script(String source) async {
   return ShellResult(command: 'script', exitCode: await process.exitCode, stdout: out, stderr: err);
 }
 
-Future<Process> _start(String source) async {
+Future<Process> _start(String source, {Map<String, String>? env}) async {
   final dir = await Directory.systemTemp.createTemp('cli_script_');
   addTearDown(() => dir.delete(recursive: true));
   final file = File('${dir.path}/main.dart')
     ..writeAsStringSync("import 'package:dart_toolkit/dart_toolkit.dart';\n$source");
   final packages = File('.dart_tool/package_config.json').absolute.path;
-  return Process.start(Platform.resolvedExecutable, ['--packages=$packages', file.path]);
+  return Process.start(Platform.resolvedExecutable, ['--packages=$packages', file.path], environment: env);
 }
