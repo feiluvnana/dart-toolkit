@@ -12,6 +12,23 @@ final class _XPath {
   /// [source] compiled and cached; a [FormatException] on bad syntax.
   static _XPath parse(String source) => _compiled(_cache, source, () => _XPath._(_XPathParser(source).parse()));
 
+  /// Whether every node selected lies at or below the context: a relative path down the
+  /// child, descendant, attribute and self axes.
+  bool get downward {
+    final r = _root;
+    return r is _Path &&
+        !r.absolute &&
+        r.filter == null &&
+        r.steps.every(
+          (s) =>
+              s.axis == _Axis.child ||
+              s.axis == _Axis.descendant ||
+              s.axis == _Axis.descendantOrSelf ||
+              s.axis == _Axis.attribute ||
+              s.axis == _Axis.self,
+        );
+  }
+
   /// The nodes selected from [context], in document order; an absolute path starts at the
   /// document above its root. A [FormatException] when the result is not a node-set.
   List<Node> select(Node context) {
@@ -182,9 +199,12 @@ final class _Path extends _XNode {
     for (final step in steps) {
       final single = current.length == 1;
       final axis = step.axis;
-      // A child step keeps order when the inputs do not nest; checking is far cheaper than
-      // the sort: `//tr/td`.
-      if (axis == _Axis.child && sorted && !flat && !single) flat = _isFlat(current);
+      final down = axis == _Axis.descendant || axis == _Axis.descendantOrSelf;
+      // Positions count per input, so `descendant::b[1]` from nested inputs interleaves.
+      final positional = step._leading < step.predicates.length;
+      // A child step, or a positional descendant one, keeps order when the inputs do not nest;
+      // checking is far cheaper than the sort: `//tr/td`.
+      if ((axis == _Axis.child || (down && positional)) && sorted && !flat && !single) flat = _isFlat(current);
       final Set<Node>? seen = single || !axis.mayRepeat(flat) ? null : {};
       final next = <Node>[];
       for (final n in current) {
@@ -201,7 +221,7 @@ final class _Path extends _XNode {
         (sorted, flat) = switch (axis) {
           _Axis.child => (sorted && flat, flat),
           _Axis.attribute => (sorted, true),
-          _Axis.descendant || _Axis.descendantOrSelf => (sorted, false),
+          _Axis.descendant || _Axis.descendantOrSelf => (sorted && (flat || !positional), false),
           _ => (single, single && axis != _Axis.following),
         };
       }
@@ -302,10 +322,10 @@ final class _Binary extends _XNode {
     return switch (op) {
       '=' => _compare(a, b, (x, y) => x == y, (x, y) => x == y),
       '!=' => _compare(a, b, (x, y) => x != y, (x, y) => x != y),
-      '<' => _compare(a, b, (x, y) => _num(x) < _num(y), (x, y) => x < y),
-      '>' => _compare(a, b, (x, y) => _num(x) > _num(y), (x, y) => x > y),
-      '<=' => _compare(a, b, (x, y) => _num(x) <= _num(y), (x, y) => x <= y),
-      '>=' => _compare(a, b, (x, y) => _num(x) >= _num(y), (x, y) => x >= y),
+      '<' => _compare(a, b, (x, y) => _num(x) < _num(y), (x, y) => x < y, relational: true),
+      '>' => _compare(a, b, (x, y) => _num(x) > _num(y), (x, y) => x > y, relational: true),
+      '<=' => _compare(a, b, (x, y) => _num(x) <= _num(y), (x, y) => x <= y, relational: true),
+      '>=' => _compare(a, b, (x, y) => _num(x) >= _num(y), (x, y) => x >= y, relational: true),
       '+' => _numOf(a) + _numOf(b),
       '-' => _numOf(a) - _numOf(b),
       '*' => _numOf(a) * _numOf(b),
@@ -316,9 +336,19 @@ final class _Binary extends _XNode {
     };
   }
 
-  /// XPath 1.0 comparison: a node-set compares by the string value of any of its nodes.
-  static bool _compare(Object a, Object b, bool Function(String, String) str, bool Function(double, double) num) {
-    if (a is bool || b is bool) return str(_bool(a).toString(), _bool(b).toString());
+  /// XPath 1.0 comparison: a node-set compares by the string value of any of its nodes; beside
+  /// a boolean it is one, and `<`, `>` compare booleans as numbers.
+  static bool _compare(
+    Object a,
+    Object b,
+    bool Function(String, String) str,
+    bool Function(double, double) num, {
+    bool relational = false,
+  }) {
+    if (a is bool || b is bool) {
+      if (!relational) return str(_bool(a).toString(), _bool(b).toString());
+      return num(_num(a is List<Node> ? _bool(a) : a), _num(b is List<Node> ? _bool(b) : b));
+    }
     if (a is List<Node> && b is List<Node>) return a.any((x) => b.any((y) => str(x.text, y.text)));
     if (a is List<Node>) return a.any((x) => _compare(x.text, b, str, num));
     if (b is List<Node>) return b.any((y) => _compare(a, y.text, str, num));
@@ -558,7 +588,7 @@ final class _XStep {
     _NodeTest.node => true,
     _NodeTest.text => n is Text,
     _NodeTest.none => false,
-    _ when n is! Element && n is! Attribute => false,
+    _ when n is _Document || (n is! Element && n is! Attribute) => false,
     _NodeTest.any => true,
     _NodeTest.prefix => _nameOf(n).startsWith(name),
     _NodeTest.name => _nameOf(n) == name,
@@ -762,10 +792,21 @@ double _numOf(Object v) => v is List<Node> ? (v.isEmpty ? double.nan : _num(v.fi
 String _string(Object v) => switch (v) {
   final String s => s,
   0.0 => '0', // -0 too
-  final double d => d == d.truncateToDouble() && d.abs() < 1e15 ? d.toInt().toString() : d.toString(),
+  final double d => _decimal(d),
   final bool b => b.toString(),
   _ => '',
 };
+
+/// [d] as XPath writes a number: no exponent, an integer without a fraction.
+String _decimal(double d) {
+  if (!d.isFinite) return '$d';
+  if (d == d.truncateToDouble()) return d.abs() < 1e18 ? '${d.toInt()}' : '${BigInt.from(d)}';
+  final s = '$d', e = s.indexOf('e');
+  if (e == -1) return s;
+  // Only a small fraction has an exponent here: 1.5e-7 is 0.00000015.
+  final sign = d < 0 ? '-' : '';
+  return '${sign}0.${'0' * (-int.parse(s.substring(e + 1)) - 1)}${s.substring(sign.length, e).replaceAll('.', '')}';
+}
 
 String _stringOf(Object v) => v is List<Node> ? (v.isEmpty ? '' : v.first.text) : _string(v);
 
@@ -887,8 +928,20 @@ final class _XPathParser {
         _expect(',');
       }
     }
+    final (min, max) = _arity[name] ?? (throw FormatException('Unsupported XPath function $name()', s, i));
+    if (args.length < min || args.length > max) throw FormatException('Wrong argument count for $name()', s, i);
     return _Call(name, args);
   }
+
+  /// Each function's fewest and most arguments.
+  static const _arity = {
+    'last': (0, 0), 'position': (0, 0), 'true': (0, 0), 'false': (0, 0), //
+    'count': (1, 1), 'sum': (1, 1), 'not': (1, 1), 'boolean': (1, 1), 'floor': (1, 1), 'ceiling': (1, 1),
+    'round': (1, 1), 'string': (0, 1), 'number': (0, 1), 'string-length': (0, 1), 'normalize-space': (0, 1),
+    'name': (0, 1), 'local-name': (0, 1), 'contains': (2, 2), 'starts-with': (2, 2), 'ends-with': (2, 2),
+    'substring-before': (2, 2), 'substring-after': (2, 2), 'substring': (2, 3), 'translate': (3, 3),
+    'concat': (2, 1 << 30),
+  };
 
   static _XStep _descendantOrSelf() => _XStep(_Axis.descendantOrSelf, _NodeTest.node, const []);
 

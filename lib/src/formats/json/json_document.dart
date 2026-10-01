@@ -50,7 +50,9 @@ class JsonDocument {
 
   static String _extensionOf(String path) {
     final dot = path.lastIndexOf('.');
-    return dot == -1 || path.indexOf('/', dot) != -1 ? '' : path.substring(dot + 1).toLowerCase();
+    return dot == -1 || path.indexOf('/', dot) != -1 || path.indexOf(r'\', dot) != -1
+        ? ''
+        : path.substring(dot + 1).toLowerCase();
   }
 
   static FormatException _unknownExtension(String path, String ext, String verb, String known) =>
@@ -138,8 +140,21 @@ class JsonDocument {
     return v is T && !identical(v, _miss) ? v : null;
   }
 
-  /// [toOrNull] with a default, [T] being the default's type: `ini['debug'].or(false)`.
-  T or<T extends Object>(T fallback) => toOrNull<T>() ?? fallback;
+  /// [toOrNull] with a default, converting to the default's own type: `ini['debug'].or(false)`
+  /// is a `bool` even where [T] is inferred as `Object`.
+  T or<T extends Object>(T fallback) {
+    final v = T != Object
+        ? toOrNull<T>()
+        : switch (fallback) {
+            bool() => toOrNull<bool>(),
+            int() => toOrNull<int>(),
+            double() => toOrNull<double>(),
+            String() => toOrNull<String>(),
+            DateTime() => toOrNull<DateTime>(),
+            _ => toOrNull<T>(),
+          };
+    return v is T ? v : fallback;
+  }
 
   /// This document as block-style YAML, quoted only where a plain scalar would misread;
   /// `.yaml` reads it back as it was.
@@ -170,7 +185,9 @@ Object? _as<T>(Object? v, JsonDocument doc, {required bool strict}) {
   if (same<num>()) return v is String ? num.tryParse(v.trim()) ?? _miss : _miss;
   if (same<int>()) {
     return switch (v) {
-      final double d when d.isFinite && d == d.truncateToDouble() => d.toInt(),
+      // Past int64 a double has no int: toInt() would clamp.
+      final double d when d >= -9223372036854775808.0 && d < 9223372036854775808.0 && d == d.truncateToDouble() =>
+        d.toInt(),
       final String s => int.tryParse(s.trim()) ?? _miss,
       _ => _miss,
     };
@@ -189,7 +206,7 @@ Object? _as<T>(Object? v, JsonDocument doc, {required bool strict}) {
       _ => _miss,
     };
   }
-  if (same<DateTime>()) return v is String ? DateTime.tryParse(v.trim()) ?? _miss : _miss;
+  if (same<DateTime>()) return v is String ? _date(v.trim()) ?? _miss : _miss;
   if (v is List) {
     if (same<List<String>>()) return _eachOf<String>(v, doc, strict);
     if (same<List<int>>()) return _eachOf<int>(v, doc, strict);
@@ -233,6 +250,20 @@ Object _eachOf<E>(Object v, JsonDocument doc, bool strict) {
     out['$key'] = e as E;
   }
   return out;
+}
+
+final _isoDate = RegExp(r'^(\d{4})-(\d\d)-(\d\d)(?:[Tt ](\d\d)(?::?(\d\d)(?::?(\d\d))?)?)?');
+
+/// [s] as an ISO 8601 date or date-time, its fields in range: `DateTime.tryParse` takes
+/// `12345678` and rolls `2024-02-30` into March.
+DateTime? _date(String s) {
+  final m = _isoDate.firstMatch(s);
+  if (m == null) return null;
+  int at(int i) => int.parse(m[i] ?? '0');
+  final month = at(2), day = at(3);
+  if (month < 1 || month > 12 || day < 1 || day > DateTime.utc(at(1), month + 1, 0).day) return null;
+  if (at(4) > 23 || at(5) > 59 || at(6) > 59) return null;
+  return DateTime.tryParse(s);
 }
 
 String _describe(Object? v) => v is String ? '"$v"' : '$v';

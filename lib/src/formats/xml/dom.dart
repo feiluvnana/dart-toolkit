@@ -15,7 +15,7 @@ final class XmlDocument {
 
   /// Every element matching CSS [selector], in document order. Names match case-sensitively;
   /// escape a prefix's colon, `$(r'media\:content')`, or use [$x].
-  Elements $(String selector) => Elements(_Selector.parse(selector, fold: false).matchAll(root, includeSelf: true));
+  Elements $(String selector) => Elements(_Selector.parse(selector, fold: false).inDocument(root));
 
   /// The nodes XPath [expression] selects from the root: `//item`, `//a/@href`,
   /// `//book[@lang='en' and price>10]/title/text()`.

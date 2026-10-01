@@ -86,7 +86,9 @@ final class _YamlParser {
     if (++_depth > 1000) _fail('nested deeper than 1000');
   }
 
-  _YamlParser(String text) : this._(text.replaceAll('\r\n', '\n').split('\n'));
+  /// CR LF and a lone CR are line breaks.
+  _YamlParser(String text)
+    : this._((text.contains('\r') ? text.replaceAll('\r\n', '\n').replaceAll('\r', '\n') : text).split('\n'));
 
   /// A trailing newline ends the last line rather than starting an empty one `|+` would keep.
   _YamlParser._(List<String> raw) : source = raw.last.isEmpty ? (raw..removeLast()) : raw, lines = _split(raw);
@@ -223,17 +225,19 @@ final class _YamlParser {
     List<Object?>? merges;
     while (pos < lines.length && line.indent == indent && line.entry != null) {
       final (key, rest) = line.entry!;
-      if (key != '<<' && out.containsKey(key)) _fail('"$key" is defined twice');
+      // Only a plain `<<` merges: `"<<"` is a key.
+      final merge = key == '<<' && line.text.startsWith('<<');
+      if (!merge && out.containsKey(key)) _fail('"$key" is defined twice');
       pos++;
       final Object? value;
       if (rest.isNotEmpty) {
-        value = _flowOrScalar(rest, indent);
+        value = _flowOrScalar(rest, indent, inMap: true);
       } else if (pos < lines.length && line.indent == indent && line.isItem) {
         value = _sequence(indent); // `key:` with its items at the key's own indent
       } else {
         value = _below(indent);
       }
-      key == '<<' ? (merges ??= []).add(value) : out[key] = value;
+      merge ? (merges ??= []).add(value) : out[key] = value;
     }
     if (pos < lines.length && line.indent > indent) _fail('unexpected indentation');
     return merges == null ? out : _merge(out, merges);
@@ -255,19 +259,22 @@ final class _YamlParser {
   }
 
   /// The value after a key or dash on the line just consumed, possibly continuing below;
-  /// its parent collection is at [parent].
-  Object? _flowOrScalar(String t, int parent) {
+  /// its parent collection is at [parent], a mapping's with [inMap].
+  Object? _flowOrScalar(String t, int parent, {bool inMap = false}) {
     if (t.startsWith('&') || t.startsWith('!')) {
       final sp = t.indexOf(' ');
       final name = sp == -1 ? t.substring(1) : t.substring(1, sp);
       final rest = sp == -1 ? '' : t.substring(sp + 1).trim();
       final Object? value;
       if (rest.isEmpty) {
-        value = _below(parent);
+        // `a: &x` with its items at the key's own indent, as a plain `a:` takes them.
+        final items = inMap && pos < lines.length && line.indent == parent && line.isItem;
+        final below = items ? _sequence(parent) : _below(parent);
+        value = below == null && name == '!str' ? '' : below;
       } else if (name == '!str' && !'"\'[{|>*&!'.contains(rest[0])) {
         value = _plainText(rest, parent); // `!!str 123` is the text 123
       } else {
-        value = _flowOrScalar(rest, parent);
+        value = _flowOrScalar(rest, parent, inMap: inMap);
       }
       if (t.startsWith('&')) anchors[name] = value;
       return value;
@@ -535,7 +542,7 @@ final class _YamlParser {
             final start = i;
             final v = value();
             final k = (t[start] == '"' || t[start] == "'") ? '$v' : t.substring(start, i).trim();
-            if (k == '<<') return (merges ??= []).add(afterColon());
+            if (k == '<<' && t[start] == '<') return (merges ??= []).add(afterColon());
             if (out.containsKey(k)) _fail('"$k" is defined twice');
             out[k] = afterColon();
           });
@@ -707,4 +714,4 @@ final _unsafePlain = RegExp(
 
 /// [s] plain when it would read back as itself, double-quoted otherwise.
 String _yamlScalar(String s) =>
-    s.isNotEmpty && _YamlParser._plain(s) == s && !_unsafePlain.hasMatch(s) ? s : jsonEncode(s);
+    s.isNotEmpty && s != '<<' && _YamlParser._plain(s) == s && !_unsafePlain.hasMatch(s) ? s : jsonEncode(s);

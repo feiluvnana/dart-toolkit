@@ -1,6 +1,6 @@
 part of '../../formats.dart';
 
-final _iniNewline = RegExp(r'\r?\n');
+final _iniNewline = RegExp(r'\r\n?|\n');
 
 int _findAssign(String line) {
   for (var i = 0; i < line.length; i++) {
@@ -53,6 +53,13 @@ Map<String, Object?> _parseIni(String text) {
     n++;
     final line = raw.trim();
     if (line.isEmpty || line.startsWith(';') || line.startsWith('#')) continue;
+    // A more indented line continues the value, even one that looks like `[a section]`.
+    final indent = raw.length - raw.trimLeft().length;
+    if (last case (final lastIndent, final map, final key) when indent > lastIndent) {
+      final existing = map[key];
+      map[key] = existing == null ? line : '$existing\n$line';
+      continue;
+    }
     final close = line.startsWith('[') ? line.indexOf(']') : -1;
     // `[section] ; comment` is a section too.
     final rest = close != -1 && close < line.length - 1 ? line.substring(close + 1).trimLeft() : '';
@@ -62,12 +69,6 @@ Map<String, Object?> _parseIni(String text) {
         section = table(section, part);
       }
       last = null;
-      continue;
-    }
-    final indent = raw.length - raw.trimLeft().length;
-    if (last case (final lastIndent, final map, final key) when indent > lastIndent) {
-      final existing = map[key];
-      map[key] = existing == null ? line : '$existing\n$line';
       continue;
     }
     final eq = _findAssign(line);

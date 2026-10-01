@@ -10,8 +10,12 @@ final class _Selector {
   /// Whether an alternative starts with `+` or `~`, finding elements beside the scope.
   final bool _sideways;
 
+  /// Whether the alternatives start from `:scope`: a leading combinator.
+  final bool relative;
+
   _Selector._(this._alternatives)
-    : _sideways = _alternatives.any((c) => c.relative && c.combinators.first != '>' && c.combinators.first != ' ');
+    : _sideways = _alternatives.any((c) => c.relative && c.combinators.first != '>' && c.combinators.first != ' '),
+      relative = _alternatives.any((c) => c.relative);
 
   static final _cache = <(String, bool), _Selector>{};
 
@@ -32,6 +36,9 @@ final class _Selector {
       _scopes.removeLast();
     }
   }
+
+  /// What `doc.$` finds: from [root] itself, or with [root] as the scope of `> body`.
+  List<Element> inDocument(Element root) => relative ? from(root) : matchAll(root, includeSelf: true);
 
   /// Whether [e] matches.
   bool matches(Element e) => _withSiblings(() => _matches(e));

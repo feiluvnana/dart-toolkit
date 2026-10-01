@@ -155,12 +155,14 @@ final class _Parser {
       // Text inside an element in head, such as a `<noscript>`, stays there.
       if (open.length == 1 || identical(current, head)) ensureBody();
     }
+    var data = _decodeEntities(raw, _References.text);
+    // `&#10;` is a newline too.
     if (_dropNewline) {
       _dropNewline = false;
-      if (raw.startsWith('\n')) raw = raw.substring(1);
-      if (raw.isEmpty) return;
+      if (data.startsWith('\n')) data = data.substring(1);
+      if (data.isEmpty) return;
     }
-    _run.add(current, _decodeEntities(raw, _References.text));
+    _run.add(current, data);
   }
 
   /// Inside SVG or MathML, where `/>` closes an element and CDATA is text.
@@ -454,7 +456,8 @@ const _linkBoundaries = {'td', 'th', 'caption', 'table', 'template', 'object', '
 
 const _blockBoundaries = {'table', 'td', 'th', 'div', 'section', 'article', 'body', 'li', 'ul', 'ol', 'blockquote'};
 
-/// The first `</$name\s*>`, any case, at or after [from].
+/// The first `</$name` then whitespace, `/` or `>`, any case, at or after [from], through the
+/// next `>`: `</script/>` and `</script foo>` end a script too.
 
 ({int start, int past})? _endTag(String src, int from, String name) {
   for (var i = src.indexOf('<', from); i != -1 && i + 1 < src.length; i = src.indexOf('<', i + 1)) {
@@ -466,10 +469,11 @@ const _blockBoundaries = {'table', 'td', 'th', 'div', 'section', 'article', 'bod
       k++;
     }
     if (k != name.length) continue;
-    while (j < src.length && _isSpace(src.codeUnitAt(j))) {
-      j++;
-    }
-    if (j < src.length && src.codeUnitAt(j) == 0x3e) return (start: i, past: j + 1);
+    if (j >= src.length) return null;
+    final c = src.codeUnitAt(j);
+    if (c != 0x3e && c != 0x2f && !_isSpace(c)) continue;
+    final gt = src.indexOf('>', j);
+    return gt == -1 ? null : (start: i, past: gt + 1);
   }
   return null;
 }

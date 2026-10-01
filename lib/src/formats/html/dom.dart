@@ -274,7 +274,10 @@ final class Element extends Node {
           row.add(text);
         }
       }
-      fill();
+      // Cells carried past a short row's end keep their columns, with gaps between.
+      for (var max = carried.keys.fold(-1, (m, k) => k > m ? k : m); row.length <= max;) {
+        carried.containsKey(row.length) ? fill() : row.add(null);
+      }
       body.add(row);
     }
     final names = header ?? const <String>[];
@@ -373,22 +376,25 @@ extension type Elements(List<Element> _list) implements List<Element> {
   Elements $(String selector) {
     final s = _Selector.parse(selector, fold: _list.firstOrNull?.syntax != Syntax.xml);
     final seen = <Element>{};
-    return Elements([
+    final out = [
       for (final e in _list)
         for (final m in s.from(e))
           if (seen.add(m)) m,
-    ]);
+    ];
+    // A descendant query from scopes in order finds in order; `> li` from nested ones does not.
+    return Elements(s.relative && _list.length > 1 ? _inOrder(out) : out);
   }
 
   /// The nodes XPath [expression] selects from each match, each once, in document order.
   Nodes $x(String expression) {
     final x = _XPath.parse(expression);
     final seen = <Node>{};
-    return Nodes([
+    final out = [
       for (final e in _list)
         for (final n in x.select(e))
           if (seen.add(n)) n,
-    ]);
+    ];
+    return Nodes(_list.length > 1 && !(x.downward && _isFlat(_list)) ? _inOrder(out) : out);
   }
 
   Element get _first => _list.isEmpty ? throw StateError('Nothing matched the selector') : _list.first;
@@ -433,7 +439,8 @@ final class HtmlDocument {
 
   /// A document over [root]; relative links resolve against [url].
   HtmlDocument(this.root, {Uri? url}) {
-    if (url != null) _urls[root] = url;
+    // The first address a root is given stays: another document over it must not move links.
+    if (url != null) _urls[root] ??= url;
   }
 
   /// Parses [text] as HTML; tag soup lands where a browser puts it. [url] is the page's
@@ -445,7 +452,7 @@ final class HtmlDocument {
   Uri? get base => _baseOf(root);
 
   /// Every element matching CSS [selector], in document order.
-  Elements $(String selector) => Elements(_Selector.parse(selector).matchAll(root, includeSelf: true));
+  Elements $(String selector) => Elements(_Selector.parse(selector).inDocument(root));
 
   /// The nodes XPath [expression] selects: `//a/@href`, `//tr[td[2]="FLAC"]/td[1]/a`,
   /// `//h2[contains(., "Tracks")]/following-sibling::table[1]`.
@@ -470,20 +477,47 @@ final class HtmlDocument {
 /// Each document's address by root element, kept outside the tree so no element pays a field.
 final _urls = Expando<Uri>('url');
 
-/// See [HtmlDocument.base].
+/// See [HtmlDocument.base]: the first `<base href>` anywhere, as a browser reads it.
 Uri? _baseOf(Element root) {
   final url = _urls[root];
-  for (final head in root.children) {
-    if (head.name != 'head') continue;
-    for (final e in head.children) {
-      final href = e.name == 'base' ? e.attributes['href'] : null;
-      if (href == null) continue;
-      final uri = Uri.tryParse(href.trim());
-      if (uri == null) break;
-      return url == null ? uri : url.resolveUri(uri);
+  String? href;
+  _eachBelow(root, (e) => e is Element && e.name == 'base' && (href = e.attributes['href']) != null);
+  final uri = href == null ? null : Uri.tryParse(href!.trim());
+  if (uri == null) return url;
+  return url == null ? uri : url.resolveUri(uri);
+}
+
+/// [nodes] in document order, sorted only when they are not already.
+List<T> _inOrder<T extends Node>(List<T> nodes) {
+  if (nodes.length < 2) return nodes;
+  final order = <Node, int>{};
+  int key(Node n) {
+    final e = n is Attribute ? n.parent! : n;
+    final k = order[e];
+    if (k != null) return k;
+    var top = e;
+    for (var p = top.parent; p != null; p = p.parent) {
+      top = p;
     }
+    order[top] = order.length;
+    _eachBelow(top, (m) {
+      order[m] = order.length;
+      return false;
+    });
+    return order[e] ?? -1;
   }
-  return url;
+
+  var sorted = true;
+  for (var i = 1; i < nodes.length && sorted; i++) {
+    sorted = key(nodes[i - 1]) <= key(nodes[i]);
+  }
+  if (sorted) return nodes;
+  return nodes..sort((x, y) {
+    final c = key(x).compareTo(key(y));
+    if (c != 0) return c;
+    if (x is! Attribute) return y is Attribute ? -1 : 0;
+    return y is! Attribute ? 1 : _slotOf(x).compareTo(_slotOf(y));
+  });
 }
 
 /// The document node above the root, where an absolute XPath starts; minted per walk, so equal
