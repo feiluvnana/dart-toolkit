@@ -88,6 +88,20 @@
   - `<base>` outside `<head>` was ignored.
   - `<pre>&#10;` kept the newline.
   - `C:\cfg.d\settings` was given an extension.
+- Files and archives:
+  - An atomic write on a full disk emptied the original.
+  - The temp file was written before its mode was set.
+  - A tar holding a read-only folder failed to extract.
+  - `archiveTo('x.zip')` from inside the folder archived the old archive.
+  - `archiveTo` hung on a FIFO; FIFOs, sockets and devices are now skipped.
+  - `changes()` on a file stopped after one write and reported temp files.
+  - A cross-device `move` merged into a non-empty folder.
+  - Multi-threaded xz had no memory cap.
+  - `filename` kept NUL and control characters.
+  - Globs `[]]`, `[!]]` and `b{1}` did not match what they mean.
+  - `copy` into itself was missed across relative and absolute paths.
+  - `chmod('+w')` ignored the umask.
+  - `DART_TOOLKIT_NATIVE=` (empty) disabled the library.
 - `keybox` stops instead of zipping an incomplete box set. An unknown batch total shows `?`.
   `filename` collapses newlines and tabs.
 
