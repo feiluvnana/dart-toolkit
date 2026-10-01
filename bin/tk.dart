@@ -83,7 +83,7 @@ Future<void> fetch(CliContext ctx) async {
       Console.ok('$path is ${await path.path.size()} bytes');
       return;
     }
-    Io.out.write((await url.fetch()).text);
+    Io.out.write(await url.get().text);
   });
 }
 

@@ -102,7 +102,6 @@ final class Request {
   /// turns this off and follows its own.
   bool followRedirects = true;
   int maxRedirects = 20;
-  bool persistentConnection = true;
 
   /// Client-specific directives, absent until one is set; see [RequestKey].
   Map<RequestKey<Object>, Object>? _directives;
@@ -175,8 +174,22 @@ final class Request {
     .._multipart = _multipart
     ..followRedirects = followRedirects
     ..maxRedirects = maxRedirects
-    ..persistentConnection = persistentConnection
     .._directives = _directives == null ? null : Map.of(_directives!);
+
+  /// Sends this request through the enclosing [Http.scope]'s client, or a fresh one, and
+  /// buffers the body: `await Request('POST', url, json: {...}).send()`.
+  ///
+  /// The verbs on [UriExtensions] and [ClientExtensions] are this with the request built
+  /// for you; what comes back is a [Fetch], whose readings throw unless 2xx.
+  ///
+  /// This request is copied before it goes out, so it comes back untouched and sending it
+  /// twice sends it twice — a scope stamps its `cookie` and default headers onto what it
+  /// sends, and without the copy the second send would carry the first send's jar and skip
+  /// the refresh. [Response.request] is the copy that went on the wire.
+  ///
+  /// Inside `Http.scope(retries:)`, a body cut off half-way is fetched again like any other
+  /// transport failure — for a method that may be sent twice; see [Http.scope].
+  Fetch send() => Fetch._(_buffered(this));
 
   /// The request that follows a [status] redirect to [to] — the chain's policy, written once
   /// for the three places that walk a chain: [IoClient], the scope that walks one to keep the
@@ -192,7 +205,6 @@ final class Request {
     final next = Request(downgrade ? 'GET' : method, to)
       ..followRedirects = followRedirects
       ..maxRedirects = maxRedirects
-      ..persistentConnection = persistentConnection
       .._directives = _directives == null ? null : Map.of(_directives!);
     for (final MapEntry(:key, :value) in headers.entries) {
       if (downgrade && (key == 'content-type' || key == 'content-length')) continue;
@@ -234,7 +246,7 @@ void _body(
   ];
   if (given.length > 1) throw ArgumentError('Pass at most one body: ${given.join(', ')} were all given.');
   if (text != null) request.text = text;
-  if (bytes != null) request.bytes = Uint8List.fromList(bytes);
+  if (bytes != null) request.bytes = bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
   if (json != null) request.json = json;
   if (files != null) {
     final body = _Multipart(form ?? const {}, files);
@@ -344,11 +356,6 @@ String _status(int code, String? reason) => reason == null || reason.isEmpty ? '
 CancelledException _cancelled(CancelToken token) =>
     CancelledException(token.reason?.toString() ?? 'Operation was cancelled.');
 
-/// Waits [duration], or throws [CancelledException] as soon as the enclosing [Cancel.scope]
-/// is cancelled — a backoff, a `Retry-After` and a `delay:` gap are where a scope's
-/// requests spend their time, so they are where a cancel must land.
-Future<void> _sleep(Duration duration) => duration.delay();
-
 /// Whether [error] is one a second attempt might not meet: the connection, not the request.
 ///
 /// A TLS failure is the same on every attempt, and a cancel is not a failure at all.
@@ -391,8 +398,6 @@ final class StreamedResponse {
   /// The URL that answered, after any redirects the client followed.
   final Uri? url;
 
-  final bool isRedirect;
-
   StreamedResponse(
     this.stream,
     this.statusCode, {
@@ -401,12 +406,14 @@ final class StreamedResponse {
     this.request,
     Uri? url,
     this.reasonPhrase,
-    this.isRedirect = false,
   }) : headers = headers is Headers ? headers : Headers(headers),
        url = url ?? request?.url;
 
   /// Whether the status code is 2xx.
   bool get isOk => statusCode >= 200 && statusCode < 300;
+
+  /// Whether this is a redirect the client did not follow: a 3xx with a `location`.
+  bool get isRedirect => statusCode ~/ 100 == 3 && headers.containsKey('location');
 
   /// This response over another [body]: the same status, headers and URL.
   StreamedResponse _carrying(Stream<List<int>> body) => StreamedResponse(
@@ -417,7 +424,6 @@ final class StreamedResponse {
     request: request,
     url: url,
     reasonPhrase: reasonPhrase,
-    isRedirect: isRedirect,
   );
 
   /// Buffers the body.
@@ -433,7 +439,6 @@ final class StreamedResponse {
       request: request,
       url: url,
       reasonPhrase: reasonPhrase,
-      isRedirect: isRedirect,
     );
   }
 }
@@ -453,8 +458,6 @@ final class Response {
   /// The URL that answered, after any redirects the client followed.
   final Uri? url;
 
-  final bool isRedirect;
-
   String? _text;
   JsonDocument? _json;
   HtmlDocument? _html;
@@ -468,7 +471,6 @@ final class Response {
     Request? request,
     Uri? url,
     String? reasonPhrase,
-    bool isRedirect = false,
   }) : this.bytes(
          utf8.encode(body),
          statusCode,
@@ -476,7 +478,6 @@ final class Response {
          request: request,
          url: url,
          reasonPhrase: reasonPhrase,
-         isRedirect: isRedirect,
        );
 
   Response.bytes(
@@ -486,13 +487,15 @@ final class Response {
     this.request,
     Uri? url,
     this.reasonPhrase,
-    this.isRedirect = false,
   }) : bytes = bytes is Uint8List ? bytes : Uint8List.fromList(bytes),
        headers = headers is Headers ? headers : Headers(headers),
        url = url ?? request?.url;
 
   /// Whether the status code is 2xx.
   bool get isOk => statusCode >= 200 && statusCode < 300;
+
+  /// Whether this is a redirect the client did not follow: a 3xx with a `location`.
+  bool get isRedirect => statusCode ~/ 100 == 3 && headers.containsKey('location');
 
   /// The body decoded once, by the `charset` of `content-type`; UTF-8 when it names none.
   String get text => _text ??= _decode(bytes, headers['content-type']);
@@ -524,6 +527,87 @@ final class Response {
 
   @override
   String toString() => 'Response($statusCode${reasonPhrase == null ? '' : ' $reasonPhrase'}, ${bytes.length} bytes)';
+}
+
+/// A request on its way: awaited, the [Response] whatever its status; read, the body —
+/// and only a 2xx one.
+///
+/// Every verb returns one. The reading a call site asks for says what it wants, so the
+/// status check comes with it, as `run('…').text` implies `quiet`:
+///
+/// ```dart
+/// final score = (await api.post(json: x).json)['score'];   // throws unless 2xx
+/// final res = await api.post(json: x);                       // any status; check res.isOk
+/// ```
+///
+/// A reading that meets another status throws [HttpException] naming it and the URL that
+/// answered — `HttpException: 404 Not Found, uri = https://…` — which is what a script that
+/// lets it reach `Cli.run` wants reported. An error page parses fine and then matches
+/// nothing; this is why the readings do not parse it.
+///
+/// {@category Networking}
+final class Fetch implements Future<Response> {
+  final Future<Response> _response;
+
+  Fetch._(this._response);
+
+  /// The response, or [HttpException] unless its status is 2xx.
+  Future<Response> get _ok => _response.then(
+    (res) => res.isOk ? res : throw HttpException(_status(res.statusCode, res.reasonPhrase), uri: res.url),
+  );
+
+  /// The body parsed as JSON; see [Response.json].
+  Future<JsonDocument> get json => _ok.then((res) => res.json);
+
+  /// The body decoded as text; see [Response.text].
+  Future<String> get text => _ok.then((res) => res.text);
+
+  /// The body parsed as HTML.
+  Future<HtmlDocument> get html => _ok.then((res) => res.html);
+
+  /// The body parsed as XML.
+  Future<XmlDocument> get xml => _ok.then((res) => res.xml);
+
+  /// The body as it arrived.
+  Future<Uint8List> get bytes => _ok.then((res) => res.bytes);
+
+  @override
+  Future<R> then<R>(FutureOr<R> Function(Response value) onValue, {Function? onError}) =>
+      _response.then(onValue, onError: onError);
+
+  @override
+  Future<Response> catchError(Function onError, {bool Function(Object error)? test}) =>
+      _response.catchError(onError, test: test);
+
+  @override
+  Future<Response> whenComplete(FutureOr<void> Function() action) => _response.whenComplete(action);
+
+  @override
+  Future<Response> timeout(Duration timeLimit, {FutureOr<Response> Function()? onTimeout}) =>
+      _response.timeout(timeLimit, onTimeout: onTimeout);
+
+  @override
+  Stream<Response> asStream() => _response.asStream();
+}
+
+/// [Request.send]: [request] through the scope's client or a fresh one, its body buffered.
+Future<Response> _buffered(Request request) async {
+  final lease = _clientFor();
+  final budget = _replays(request);
+  try {
+    for (var attempt = 0; ; attempt++) {
+      // The send retries its own failures; what is left to this loop is the body.
+      final res = await lease.client.send(request.copy());
+      try {
+        return await res.read();
+      } catch (e) {
+        if (attempt >= budget || !_transient(e) || Cancel.isCancelled) rethrow;
+        await (200 * (attempt + 1)).ms.delay();
+      }
+    }
+  } finally {
+    lease.close();
+  }
 }
 
 final _charset = RegExp(r'charset=["\x27]?([^;"\x27\s>]+)', caseSensitive: false);
@@ -628,7 +712,7 @@ abstract interface class Client {
   ///
   /// A client may write on the request it is handed — a scope stamps its default headers
   /// and its `cookie` there — so **sending consumes a request**. Everything in this module
-  /// that sends one the caller owns copies it first ([UriExtensions.send],
+  /// that sends one the caller owns copies it first ([Request.send],
   /// [ClientExtensions.get] and its siblings, the crawl engine); a caller reaching `send`
   /// directly and meaning to reuse the request copies it with [Request.copy].
   Future<StreamedResponse> send(Request request);
@@ -715,10 +799,9 @@ final class IoClient implements Client {
   /// permit is held until the body is read to the end, cancelled or thrown, so the cap
   /// counts transfers rather than handshakes.
   ///
-  /// [keepAlive] is how long an idle connection is kept for the next request, and
   /// [connectTimeout] bounds the handshake alone — [Http.scope]'s `timeout:` bounds the
-  /// wait for a response, which is a different thing and composes with this one.
-  /// [userAgent] is sent when a request does not name its own.
+  /// wait for a response, which is a different thing and composes with this one. A
+  /// `user-agent` or `connection: close` is a header: `Http.scope(headers: …)`.
   ///
   /// [proxy] sends everything through an HTTP proxy — `http://user:pass@host:8080`, with the
   /// credentials taken from the URL. Without it `dart:io`'s own reading of `http_proxy` and
@@ -735,18 +818,14 @@ final class IoClient implements Client {
   IoClient({
     int? connections,
     int? perHost,
-    Duration? keepAlive,
     Duration? connectTimeout,
-    String? userAgent,
     Uri? proxy,
     bool insecure = false,
     HttpClient? client,
   }) : _client = client ?? HttpClient(),
        _permits = connections == null ? null : Semaphore(connections) {
     if (perHost != null) _client.maxConnectionsPerHost = perHost;
-    if (keepAlive != null) _client.idleTimeout = keepAlive;
     if (connectTimeout != null) _client.connectionTimeout = connectTimeout;
-    if (userAgent != null) _client.userAgent = userAgent;
     if (insecure) _client.badCertificateCallback = (_, _, _) => true;
     if (proxy != null) {
       _client.findProxy = (_) => 'PROXY ${proxy.host}:${proxy.port}';
@@ -833,7 +912,6 @@ final class IoClient implements Client {
       }
       io
         ..followRedirects = false
-        ..persistentConnection = request.persistentConnection
         ..contentLength = contentLength;
       io.headers.set('accept-encoding', _literal(request) ? 'identity' : _acceptEncoding);
       request.headers.forEach((k, v) => io.headers.set(k, v));
@@ -885,7 +963,6 @@ final class IoClient implements Client {
       request: request,
       url: request.url,
       reasonPhrase: response.reasonPhrase,
-      isRedirect: response.isRedirect,
     );
   }
 

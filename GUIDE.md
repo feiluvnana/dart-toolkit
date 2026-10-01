@@ -58,7 +58,7 @@ whether it loaded and `NativeLib.reason` says why not.
 import 'package:dart_toolkit/dart_toolkit.dart';
 
 Future<void> main() => Http.scope(() async {
-  final doc = await 'https://news.ycombinator.com'.url.html();
+  final doc = await 'https://news.ycombinator.com'.url.get().html;
   for (final row in doc.$('tr.athing')) {
     print(row.$('.titleline > a').text);
   }
@@ -177,7 +177,7 @@ A value that is one of two things: `Left` (a failure) or `Right` (a success).
 
 ```dart
 final parsed = Either.tryCatchSync(() => int.parse(raw));   // Either<Object, int>
-final fetched = await Either.tryCatch(() => url.json());    // the same, awaited
+final fetched = await Either.tryCatch(() => url.get().json); // the same, awaited
 
 parsed.isRight;
 parsed.rightOrNull;
@@ -341,7 +341,7 @@ work.
 
 ```dart
 final data = await retry(
-  () => api.json(),
+  () => api.get().json,
   attempts: 3,
   delay: 200.ms,
   maxDelay: 5.s,
@@ -545,7 +545,7 @@ HTML and XML share `Node`, `Element`, `Text`, `Attribute`, `Nodes` and `Elements
 document, **`$` is CSS and `$x` is XPath**.
 
 ```dart
-final page = await url.html(); // or res.html, or '<p>…</p>'.html
+final page = await url.get().html; // or res.html, or '<p>…</p>'.html
 page.$('h1').text;                                  // the first match
 page.$('td.title > a[href]').attr('href');         // or StateError naming the tag
 page.$('link[rel=next]').attrOrNull('href');        // absence expected
@@ -608,7 +608,7 @@ returns, since XPath can select attributes and text nodes; `.elements` narrows i
 XML keeps case and prefixes:
 
 ```dart
-final feed = await url.xml();
+final feed = await url.get().xml;
 for (final item in feed.$('item')) {
   print(item.$('title').text);
 }
@@ -848,8 +848,9 @@ await url.get(); await url.head(); await url.delete();
 await url.post(json: {'name': 'x'});
 await url.put(text: 'body');
 await url.patch(form: {'q': 'dart'});
-await url.fetch();          // a GET that throws unless 2xx: `HttpException: 404 Not Found, uri = …`
-await url.json(); await url.html(); await url.xml();
+await url.get().json;       // a reading throws unless 2xx: `HttpException: 404 Not Found, uri = …`
+await url.get().text; await url.get().html; await url.get().xml; await url.get().bytes;
+await Request('POST', url, json: {'n': 1}).send();  // a request built by hand
 url / 'users';              // append a path segment
 url.withQuery({'page': 2, 'q': null});
 ```
@@ -862,10 +863,19 @@ memory.
 await api.post(form: {'title': 'holiday'}, files: {'photo': 'beach.jpg'.path});
 ```
 
+Awaiting a verb gives the `Response` whatever its status; reading through it — `.json`,
+`.text`, `.html`, `.xml`, `.bytes` — is the body of a 2xx and an `HttpException` naming the
+status and the URL otherwise, as `run('…').text` implies `quiet`:
+
+```dart
+final score = (await api.post(json: x).json)['score'];   // no status check to write
+final res = await api.post(json: x);                       // any status; check res.isOk
+```
+
 A `Response`:
 
 ```dart
-res.statusCode; res.isOk; res.headers; res.url;   // url: the one that answered
+res.statusCode; res.isOk; res.isRedirect; res.headers; res.url;   // url: the one that answered
 res.text;    // BOM, then content-type's charset, then (HTML only) the <meta>; UTF-8 otherwise
 res.bytes; res.json; res.html; res.xml;           // each parsed once
 ```
@@ -904,7 +914,7 @@ await Http.scope(timeout: 30.s, retries: 2, delay: 500.ms, headers: {'user-agent
 | `headers:` | added to each request that does not set them; `authorization` and `cookie` only to the first request's origin |
 | `cookies: true` | a jar for the life of the scope; it walks redirects hop by hop, where logins set their session |
 | `retries:` | transport errors (a body cut off half-way included), 5xx, and 429/503 honouring `Retry-After` (up to 30 s); never TLS failures, and never a second POST or PATCH unless a 429/503 said when to ask again |
-| `delay:` | the minimum gap between two requests to one host, redirect hops and downloads included |
+| `delay:` | the gap between two requests to one host, redirect hops and downloads included, jittered ±25 % (a fixed gap is a bot signal) |
 | `cache:` | a folder that keeps every GET answered with an `ETag` or `Last-Modified`; the next run asks conditionally and a `304` is served from disk |
 
 Everything the scope waits on — a backoff, a `Retry-After`, a `delay:` gap, a request in flight —
@@ -943,7 +953,7 @@ one client can do:
 ```dart
 final chrome = await ChromeClient.launch();
 await chrome.get(url);
-await chrome.html(url);
+await chrome.get(url).html;
 await chrome.page(url, (p) => p.click('.download')); // only Chrome has a tab
 await chrome.close();
 ```
@@ -1494,11 +1504,11 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 final site = 'https://standardebooks.org'.url;
 
 Future<({Uri page, String file})> find(String title) async {
-  final results = await (site / 'ebooks').replace(queryParameters: {'query': title}).html();
+  final results = await (site / 'ebooks').replace(queryParameters: {'query': title}).get().html;
   final about = results.$('li[typeof="schema:Book"]').attrOrNull('about');
   if (about == null) throw 'no book matches "$title"';
   final page = site.resolve('$about/');
-  final epub = (await page.html()).$('a.epub').attr('href').split('/').last;
+  final epub = (await page.get().html).$('a.epub').attr('href').split('/').last;
   return (page: page, file: epub);
 }
 
@@ -1704,7 +1714,7 @@ void main() {
     expect(buffer.toString(), contains('captured'));
 
     final client = MockClient((req) async => Response('{"ok": true}', 200));
-    final doc = await Http.scope(client: client, () => 'https://x.test'.url.json());
+    final doc = await Http.scope(client: client, () => 'https://x.test'.url.get().json);
     expect(doc['ok'].to<bool>(), isTrue);
   });
 

@@ -370,7 +370,7 @@ extension PathDownloadExtensions on Path {
             broke ?? HttpException('Download incomplete: expected $total bytes but received $received bytes', uri: url);
         if (attempt >= budget || !_transient(error) || Cancel.isCancelled) throw error;
         // Cut off: carry on from what is on disk.
-        await _sleep(_Retry.backoff(attempt));
+        await _Retry.backoff(attempt).delay();
         offset = received;
       }
 

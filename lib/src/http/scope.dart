@@ -49,8 +49,9 @@ class Http {
   /// retried order is two orders. The one exception is a 429 or 503 carrying `Retry-After`,
   /// which is the server saying it did not process the request and when to ask again.
   ///
-  /// [delay] is the crawl's `ctx.delay` for the same: the least time between two requests,
-  /// hops and downloads included, to one host — `www.` or not.
+  /// [delay] is the crawl's `ctx.delay` for the same: the time between two requests, hops
+  /// and downloads included, to one host — `www.` or not. Each gap is jittered by ±25 %,
+  /// since a metronome is a bot signal; `500.ms` waits 375 to 625 ms.
   ///
   /// ```dart
   /// await Http.scope(retries: 3, delay: 500.ms, () => urls.pairs.download().show());
@@ -204,14 +205,14 @@ final class _ScopeClient implements Client {
         res = await _timed(Cancel.scope(() => _inner.send(sent), token: stop), stop);
       } catch (e) {
         if (attempt > budget || !replayable || !_transient(e) || Cancel.isCancelled) rethrow;
-        await _sleep((200 * attempt).ms);
+        await (200 * attempt).ms.delay();
         continue;
       }
       if (attempt > budget || Cancel.isCancelled) return res;
-      final wait = replayable ? _Retry.after(res, attempt) : _Retry.declined(res);
+      final wait = _Retry.after(res, attempt, once: !replayable);
       if (wait == null) return res;
       await _drain(res);
-      await _sleep(wait);
+      await wait.delay();
     }
   }
 
@@ -236,7 +237,7 @@ final class _ScopeClient implements Client {
   /// Waits for [url]'s host to be due, and books the slot after it.
   ///
   /// Slots are booked when asked for rather than when sent, so ten downloads started at once
-  /// leave one [_delay] apart instead of all waking together after the first.
+  /// leave about one [_delay] apart instead of all waking together after the first.
   Future<void> _polite(Uri url) async {
     final gap = _delay;
     if (gap == null) return;
@@ -244,8 +245,8 @@ final class _ScopeClient implements Client {
     final now = DateTime.now();
     final booked = _slots[site];
     final at = booked == null || booked.isBefore(now) ? now : booked;
-    _slots[site] = at.add(gap);
-    if (at.isAfter(now)) await _sleep(at.difference(now));
+    _slots[site] = at.add(gap.jittered());
+    if (at.isAfter(now)) await at.difference(now).delay();
   }
 
   /// [res] with the scope's timeout on each chunk of its body as well as on its headers.
@@ -271,22 +272,17 @@ abstract final class _Retry {
   /// How long to wait before sending again after [res] on [attempt], or `null` when [res] is
   /// the answer: a 429 or 503 waits what `Retry-After` asks — or backs off, doubling from half
   /// a second — and any other 5xx waits a little longer each time.
-  static Duration? after(StreamedResponse res, int attempt) {
+  ///
+  /// [once] is a request that must not be sent twice: only a 429 or 503 whose `Retry-After`
+  /// says when to ask again is retried, which is the server saying it did nothing.
+  static Duration? after(StreamedResponse res, int attempt, {bool once = false}) {
     final status = res.statusCode;
     if (status == 429 || status == 503) {
       final asked = retryAfter(res.headers);
       if (asked != null) return asked > longest ? null : asked;
-      return backoff(attempt - 1);
+      return once ? null : backoff(attempt - 1);
     }
-    return status >= 500 ? (200 * attempt).ms : null;
-  }
-
-  /// [after] for a request that must not be sent twice: only a 429 or 503 whose
-  /// `Retry-After` says when to ask again, which is the server saying it did nothing.
-  static Duration? declined(StreamedResponse res) {
-    if (res.statusCode != 429 && res.statusCode != 503) return null;
-    final asked = retryAfter(res.headers);
-    return asked == null || asked > longest ? null : asked;
+    return status >= 500 && !once ? (200 * attempt).ms : null;
   }
 
   /// Half a second, doubled [times] times, and never more than thirty.

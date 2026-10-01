@@ -26,17 +26,17 @@ part of '../../http.dart';
 extension ClientExtensions on Client {
   /// Sends [request] through this client and buffers the body.
   ///
-  /// The request is copied before it goes out; see [UriExtensions.send].
-  Future<Response> fire(Request request) => _withClient(this, () => request.url.send(request));
+  /// The request is copied before it goes out; see [Request.send].
+  Fetch fire(Request request) => _withClient(this, request.send);
 
   /// GET.
-  Future<Response> get(Uri url, {Map<String, String>? headers}) => _withClient(this, () => url.get(headers: headers));
+  Fetch get(Uri url, {Map<String, String>? headers}) => _withClient(this, () => url.get(headers: headers));
 
   /// HEAD: the headers without the body.
-  Future<Response> head(Uri url, {Map<String, String>? headers}) => _withClient(this, () => url.head(headers: headers));
+  Fetch head(Uri url, {Map<String, String>? headers}) => _withClient(this, () => url.head(headers: headers));
 
   /// POST; see [UriExtensions.post] for the body.
-  Future<Response> post(
+  Fetch post(
     Uri url, {
     Map<String, String>? headers,
     String? text,
@@ -50,7 +50,7 @@ extension ClientExtensions on Client {
   );
 
   /// PUT; see [UriExtensions.post] for the body.
-  Future<Response> put(
+  Fetch put(
     Uri url, {
     Map<String, String>? headers,
     String? text,
@@ -64,7 +64,7 @@ extension ClientExtensions on Client {
   );
 
   /// PATCH; see [UriExtensions.post] for the body.
-  Future<Response> patch(
+  Fetch patch(
     Uri url, {
     Map<String, String>? headers,
     String? text,
@@ -78,7 +78,7 @@ extension ClientExtensions on Client {
   );
 
   /// DELETE; see [UriExtensions.post] for the body.
-  Future<Response> delete(
+  Fetch delete(
     Uri url, {
     Map<String, String>? headers,
     String? text,
@@ -90,22 +90,6 @@ extension ClientExtensions on Client {
     this,
     () => url.delete(headers: headers, text: text, bytes: bytes, form: form, json: json, files: files),
   );
-
-  /// GETs [url] and throws [HttpException] unless the status is 2xx.
-  Future<Response> fetch(Uri url, {Map<String, String>? headers}) =>
-      _withClient(this, () => url.fetch(headers: headers));
-
-  /// [fetch], parsed as JSON.
-  Future<JsonDocument> json(Uri url, {Map<String, String>? headers}) =>
-      _withClient(this, () => url.json(headers: headers));
-
-  /// [fetch], parsed as HTML.
-  Future<HtmlDocument> html(Uri url, {Map<String, String>? headers}) =>
-      _withClient(this, () => url.html(headers: headers));
-
-  /// [fetch], parsed as XML.
-  Future<XmlDocument> xml(Uri url, {Map<String, String>? headers}) =>
-      _withClient(this, () => url.xml(headers: headers));
 
   /// What [url] streams, an event at a time; see [UriExtensions.events].
   Stream<ServerEvent> events(Uri url, {Map<String, String>? headers, Object? json}) =>

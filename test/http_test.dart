@@ -59,8 +59,8 @@ void main() {
       });
       final reused = Request('GET', 'https://a.com/x'.url);
       await Http.scope(cookies: true, client: client, () async {
-        await 'https://a.com/x'.url.send(reused);
-        await 'https://a.com/x'.url.send(reused);
+        await reused.send();
+        await reused.send();
       });
       // Without the copy the second send carries the first send's jar and the refresh is
       // skipped, because the guard is "does this request already name a cookie".
@@ -77,8 +77,8 @@ void main() {
       expect((await client.get('https://a.com/g'.url)).statusCode, 200);
       await client.post('https://a.com/p'.url, json: {'a': 1});
       await client.head('https://a.com/h'.url);
-      expect((await client.json('https://a.com/j'.url))['n'].raw, 1);
-      expect((await client.html('https://a.com/d'.url)).$('p').text, 'hi');
+      expect((await client.get('https://a.com/j'.url).json)['n'].raw, 1);
+      expect((await client.get('https://a.com/d'.url).html).$('p').text, 'hi');
       expect(seen, ['GET /g', 'POST /p', 'HEAD /h', 'GET /j', 'GET /d']);
     });
 
@@ -350,7 +350,7 @@ void main() {
       final client = MockClient((request) async => Response('<html>not found</html>', 404));
 
       await Http.scope(client: client, () async {
-        await expectLater('https://example.com/missing'.url.html(), throwsA(isA<HttpException>()));
+        await expectLater('https://example.com/missing'.url.get().html, throwsA(isA<HttpException>()));
 
         final res = await 'https://example.com/missing'.url.get();
         expect(res.isOk, isFalse);
@@ -395,7 +395,7 @@ void main() {
 
       final pages = await Http.scope(() async {
         expect(identical(Http.client, client), isTrue);
-        final a = await 'https://example.com/a'.url.html();
+        final a = await 'https://example.com/a'.url.get().html;
         final b = await 'https://example.com/b'.url.get();
         expect(b.isOk, isTrue);
         return [a.$('b').first.text, b.text];
@@ -1423,7 +1423,7 @@ void main() {
         await url.post(bytes: [65, 66]);
         await url.post(form: {'q': 'a b'});
         await url.post(json: {'n': 1});
-        await url.send(Request('POST', url, json: {'n': 2}));
+        await Request('POST', url, json: {'n': 2}).send();
       }, client: client);
 
       expect(sent, [
@@ -2227,7 +2227,8 @@ void main() {
       final at = times['/d']!..sort();
       expect(at, hasLength(3));
       for (var i = 1; i < at.length; i++) {
-        expect(at[i].difference(at[i - 1]), greaterThanOrEqualTo(const Duration(milliseconds: 120)));
+        // Jittered ±25 %: never less than 112 ms, with a little slack for the clock.
+        expect(at[i].difference(at[i - 1]), greaterThanOrEqualTo(const Duration(milliseconds: 100)));
       }
     });
 
@@ -2294,6 +2295,7 @@ void main() {
 
   _nativeDecoding();
   group('audit fixes: scrape', _scrapeAudit);
+  group('audit IV: a reading implies its policy', _readings);
   group('audit fixes: client', () {
     late HttpServer server;
     late Uri base;
@@ -2606,7 +2608,7 @@ void main() {
         await r.response.close();
       };
       await Http.scope(delay: 300.ms, () => (base / 'a').get());
-      expect(at['/b']!.difference(at['/a']!), greaterThanOrEqualTo(const Duration(milliseconds: 290)));
+      expect(at['/b']!.difference(at['/a']!), greaterThanOrEqualTo(const Duration(milliseconds: 215)));
     });
 
     test('cookies: an empty Domain is ignored, and a Secure one over http is refused', () async {
@@ -2659,8 +2661,12 @@ void main() {
         await r.response.close();
       };
       await expectLater(
-        (base / 'missing').fetch(),
-        throwsA(isA<HttpException>().having((e) => e.message, 'message', '404 Not Found')),
+        (base / 'missing').get().text,
+        throwsA(
+          isA<HttpException>()
+              .having((e) => e.message, 'message', '404 Not Found')
+              .having((e) => e.uri, 'uri', base / 'missing'),
+        ),
       );
     });
 
@@ -3134,9 +3140,9 @@ void _scrapeAudit() {
         headers: {'user-agent': 'CustomAgent/1.0', 'x-outer': '1'},
         cookies: true,
         () async {
-          await 'http://localhost:${server.port}/1'.url.fetch();
+          await 'http://localhost:${server.port}/1'.url.get();
           await Http.scope(retries: 2, () async {
-            await 'http://localhost:${server.port}/2'.url.fetch();
+            await 'http://localhost:${server.port}/2'.url.get();
           });
         },
       );
@@ -3226,7 +3232,7 @@ void _scrapeAudit() {
         throw const FormatException('bad format');
       });
       await expectLater(
-        Http.scope(client: client, retries: 3, () => 'http://example.com'.url.fetch()),
+        Http.scope(client: client, retries: 3, () => 'http://example.com'.url.get()),
         throwsA(isA<FormatException>()),
       );
       expect(attempts, 1);
@@ -3435,5 +3441,98 @@ void _scrapeAudit() {
           .toList();
       expect(customHookRan, isTrue);
     });
+  });
+}
+
+void _readings() {
+  late HttpServer server;
+  late Uri base;
+  late List<HttpHeaders> seen;
+
+  setUp(() async {
+    seen = [];
+    server = await HttpServer.bind('127.0.0.1', 0);
+    base = Uri.parse('http://127.0.0.1:${server.port}');
+    server.listen((r) async {
+      seen.add(r.headers);
+      final (status, type, body) = switch (r.uri.path) {
+        '/j' => (200, 'application/json', '{"n":1}'),
+        '/x' => (200, 'application/xml', '<a><b>hi</b></a>'),
+        '/h' => (200, 'text/html', '<p>hi</p>'),
+        '/moved' => (302, 'text/plain', ''),
+        _ => (404, 'text/html', '<p>gone</p>'),
+      };
+      r.response
+        ..statusCode = status
+        ..headers.set('content-type', type);
+      if (status == 302) r.response.headers.set('location', '/j');
+      r.response.write(body);
+      await r.response.close();
+    });
+  });
+
+  tearDown(() => server.close(force: true));
+
+  test('awaiting a verb is lenient; each reading is the body of a 2xx', () async {
+    final res = await (base / 'missing').get();
+    expect(res.statusCode, 404);
+    expect(res.text, '<p>gone</p>');
+
+    expect((await (base / 'j').get().json)['n'].to<int>(), 1);
+    expect(await (base / 'h').get().text, '<p>hi</p>');
+    expect((await (base / 'h').get().html).$('p').text, 'hi');
+    expect((await (base / 'x').get().xml).$('b').text, 'hi');
+    expect(await (base / 'j').get().bytes, utf8.encode('{"n":1}'));
+    expect((await (base / 'j').post(json: {'a': 1}).json)['n'].to<int>(), 1);
+  });
+
+  test('a reading of a non-2xx throws HttpException naming the status and the url', () async {
+    final missing = base / 'missing';
+    final fails = throwsA(
+      isA<HttpException>().having((e) => e.message, 'message', '404 Not Found').having((e) => e.uri, 'uri', missing),
+    );
+    final get = missing.get;
+    await expectLater(get().json, fails);
+    await expectLater(get().text, fails);
+    await expectLater(get().html, fails);
+    await expectLater(get().xml, fails);
+    await expectLater(get().bytes, fails);
+    final client = IoClient();
+    addTearDown(client.close);
+    await expectLater(client.get(missing).text, fails);
+    await expectLater(client.post(missing, json: {}).json, fails);
+  });
+
+  test('a redirect followed reads as its target; one not followed is isRedirect and fails a reading', () async {
+    expect((await (base / 'moved').get().json)['n'].to<int>(), 1);
+    final res = await (Request('GET', base / 'moved')..followRedirects = false).send();
+    expect(res.statusCode, 302);
+    expect(res.isRedirect, isTrue);
+    expect((await (base / 'j').get()).isRedirect, isFalse);
+    await expectLater(
+      (Request('GET', base / 'moved')..followRedirects = false).send().text,
+      throwsA(isA<HttpException>()),
+    );
+    expect(Response('', 302).isRedirect, isFalse, reason: 'a 3xx without a location is not a redirect');
+  });
+
+  test('Request.send goes through the scope and leaves the request untouched', () async {
+    final req = Request('POST', base / 'j', json: {'a': 1});
+    final res = await Http.scope(headers: {'x-scope': '1'}, () => req.send());
+    expect(res.json['n'].to<int>(), 1);
+    expect(seen.single.value('x-scope'), '1');
+    expect(req.headers.containsKey('x-scope'), isFalse);
+  });
+
+  test('connection: close is a header, and so is the user agent', () async {
+    await Http.scope(headers: {'connection': 'close', 'user-agent': 'me/1'}, () => (base / 'j').get());
+    expect(seen.single.persistentConnection, isFalse);
+    expect(seen.single.value('user-agent'), 'me/1');
+  });
+
+  test('a Uint8List body is sent without a copy', () {
+    final body = Uint8List.fromList([1, 2, 3]);
+    expect(identical(Request('POST', base, bytes: body).bytes, body), isTrue);
+    expect(Request('POST', base, bytes: [1, 2]).bytes, isA<Uint8List>());
   });
 }

@@ -1224,7 +1224,6 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
       request: sent,
       url: streamed.url,
       headers: streamed.headers,
-      isRedirect: streamed.isRedirect,
       reasonPhrase: streamed.reasonPhrase,
     );
     final status = res.statusCode;
@@ -1232,7 +1231,7 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     if (status >= 300 && status < 400) return redirect(host, item, sent, res);
     final replayable = _replayable(sent.method);
     if (status == 429 || status == 503) {
-      final wait = replayable ? retryAfter(res, host) : _Retry.declined(streamed);
+      final wait = replayable ? retryAfter(res, host) : _Retry.after(streamed, item.attempt, once: true);
       if (wait == null) return refuse(host, item, res);
       pause(host, wait);
       if (item.attempt <= cfg.retries) {

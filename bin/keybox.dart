@@ -46,7 +46,7 @@ Future<void> run() async {
   // Stage 1: Official metadata & images
   stage('Scraping official album metadata and artworks');
   await Console.spin('Parsing official website...', () async {
-    final doc = await (site / 'key_box.html').html();
+    final doc = await (site / 'key_box.html').get().html;
     for (final li in doc.$('.key_cd_track_box ul li')) {
       final title = li.$('.track_disc_title').text.filename;
       final d = int.parse(title.match(discTitle, 1)!);
@@ -101,7 +101,7 @@ Future<void> run() async {
         'Live Streams/profile_$name.jpg',
     ]);
 
-    final msgDoc = await (site / 'message.html').html();
+    final msgDoc = await (site / 'message.html').get().html;
     const categories = ['Anime Staff', 'Voice Cast', 'Guest Tributes', 'Key Staff & Creators'];
     for (final (i, box) in msgDoc.$('.message_white_box').take(4).indexed) {
       for (final (n, a) in box.$('a[href*="message_"]').indexed) {
@@ -113,7 +113,7 @@ Future<void> run() async {
       }
     }
 
-    final topicsDoc = await (site / 'topics.html').html();
+    final topicsDoc = await (site / 'topics.html').get().html;
     for (final img in topicsDoc.$('.topics_box img')) {
       final src = img.attr('src');
       grab(src, base / 'Others/Events & Topics' / src.path.name);

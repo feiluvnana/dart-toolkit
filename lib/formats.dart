@@ -3,7 +3,7 @@
 /// One module for every document: `JsonDocument` with JSONPath, and YAML, TOML and INI decoded
 /// into it; `HtmlDocument` and `XmlDocument`, one markup tree, each with CSS `\$` and XPath
 /// `\$x`; YAML written back out. Parsers are the package's own, and the module has no
-/// dependencies. The `http` bridges — `res.html`, `url.json()` — are in `http`.
+/// dependencies. The `http` bridges — `res.html`, `url.get().json` — are in `http`.
 ///
 /// ```dart
 /// final pubspec = (await 'pubspec.yaml'.path.readText()).yaml;

@@ -25,7 +25,6 @@ final class MockClient implements Client {
           request: request,
           url: res.url ?? request.url,
           reasonPhrase: res.reasonPhrase,
-          isRedirect: res.isRedirect,
         );
       });
 

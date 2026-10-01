@@ -1,6 +1,6 @@
 part of '../../http.dart';
 
-/// HTTP requests and JSON on [Uri].
+/// HTTP requests on [Uri].
 ///
 /// {@category Networking}
 extension UriExtensions on Uri {
@@ -30,44 +30,19 @@ extension UriExtensions on Uri {
     return Uri.parse(s.substring(0, q) + rest);
   }
 
-  /// Sends [request] through the enclosing [Http.scope]'s client, or a fresh one, and
-  /// buffers the body.
-  ///
-  /// A program that wants a particular client — a mock, a proxy, one with a timeout — says
-  /// so once by wrapping its work in [Http.scope], or holds the client and calls
-  /// [ClientExtensions.get] and its siblings on it.
-  ///
-  /// [request] is copied before it goes out, so the caller's object comes back untouched
-  /// and sending it twice sends it twice — a scope stamps its `cookie` and default headers
-  /// onto what it sends, and without the copy the second send would carry the first send's
-  /// jar and skip the refresh. [Response.request] is the copy that went on the wire.
-  ///
-  /// Inside `Http.scope(retries:)`, a body cut off half-way is fetched again like any other
-  /// transport failure — for a method that may be sent twice; see [Http.scope].
-  Future<Response> send(Request request) async {
-    final lease = _clientFor();
-    final budget = _replays(request);
-    try {
-      for (var attempt = 0; ; attempt++) {
-        // The send retries its own failures; what is left to this loop is the body.
-        final res = await lease.client.send(request.copy());
-        try {
-          return await res.read();
-        } catch (e) {
-          if (attempt >= budget || !_transient(e) || Cancel.isCancelled) rethrow;
-          await _sleep((200 * (attempt + 1)).ms);
-        }
-      }
-    } finally {
-      lease.close();
-    }
-  }
-
   /// GET.
-  Future<Response> get({Map<String, String>? headers}) => send(Request('GET', this, headers: headers));
+  ///
+  /// Awaited, it is the [Response] whatever the status; read through [Fetch.json],
+  /// [Fetch.text], [Fetch.html], [Fetch.xml] or [Fetch.bytes], it throws unless 2xx:
+  ///
+  /// ```dart
+  /// final res = await url.get();          // any status
+  /// final doc = await url.get().json;     // 2xx, or HttpException: 404 Not Found
+  /// ```
+  Fetch get({Map<String, String>? headers}) => Request('GET', this, headers: headers).send();
 
   /// HEAD: the headers without the body.
-  Future<Response> head({Map<String, String>? headers}) => send(Request('HEAD', this, headers: headers));
+  Fetch head({Map<String, String>? headers}) => Request('HEAD', this, headers: headers).send();
 
   /// POST. The body is named by what it is — at most one of [text] (UTF-8), [bytes],
   /// [form] (url-encoded), [json] or [files] — and carries the matching `content-type`. The
@@ -83,60 +58,45 @@ extension UriExtensions on Uri {
   /// await api.post(form: {'q': 'dart'});
   /// await api.post(form: {'title': 'holiday'}, files: {'photo': '~/beach.jpg'.path});
   /// ```
-  Future<Response> post({
+  Fetch post({
     Map<String, String>? headers,
     String? text,
     List<int>? bytes,
     Map<String, String>? form,
     Object? json,
     Map<String, Path>? files,
-  }) => send(Request('POST', this, headers: headers, text: text, bytes: bytes, form: form, json: json, files: files));
+  }) => Request('POST', this, headers: headers, text: text, bytes: bytes, form: form, json: json, files: files).send();
 
   /// PUT; see [post] for the body.
-  Future<Response> put({
+  Fetch put({
     Map<String, String>? headers,
     String? text,
     List<int>? bytes,
     Map<String, String>? form,
     Object? json,
     Map<String, Path>? files,
-  }) => send(Request('PUT', this, headers: headers, text: text, bytes: bytes, form: form, json: json, files: files));
+  }) => Request('PUT', this, headers: headers, text: text, bytes: bytes, form: form, json: json, files: files).send();
 
   /// PATCH; see [post] for the body.
-  Future<Response> patch({
+  Fetch patch({
     Map<String, String>? headers,
     String? text,
     List<int>? bytes,
     Map<String, String>? form,
     Object? json,
     Map<String, Path>? files,
-  }) => send(Request('PATCH', this, headers: headers, text: text, bytes: bytes, form: form, json: json, files: files));
+  }) => Request('PATCH', this, headers: headers, text: text, bytes: bytes, form: form, json: json, files: files).send();
 
   /// DELETE; see [post] for the body.
-  Future<Response> delete({
+  Fetch delete({
     Map<String, String>? headers,
     String? text,
     List<int>? bytes,
     Map<String, String>? form,
     Object? json,
     Map<String, Path>? files,
-  }) => send(Request('DELETE', this, headers: headers, text: text, bytes: bytes, form: form, json: json, files: files));
-
-  /// GETs this URI and throws [HttpException] unless the status is 2xx.
-  ///
-  /// `url.json()`, `url.html()` and `url.xml()` are `fetch` plus a parse; use [get] with
-  /// [Response.isOk] to handle a failure yourself.
-  ///
-  /// The exception reads as the status line does — `404 Not Found` — and carries this URI,
-  /// so a script that lets it reach `Cli.run` has already reported the failure.
-  Future<Response> fetch({Map<String, String>? headers}) async {
-    final res = await get(headers: headers);
-    if (!res.isOk) throw HttpException(_status(res.statusCode, res.reasonPhrase), uri: this);
-    return res;
-  }
-
-  /// Fetches this URI and parses the response body as JSON; see [fetch].
-  Future<JsonDocument> json({Map<String, String>? headers}) async => (await fetch(headers: headers)).json;
+  }) =>
+      Request('DELETE', this, headers: headers, text: text, bytes: bytes, form: form, json: json, files: files).send();
 
   /// What this URI streams, an event at a time: server-sent events, or anything else a line
   /// at a time — NDJSON, a log.
@@ -153,7 +113,7 @@ extension UriExtensions on Uri {
   /// ```
   ///
   /// It goes through the scope's client, so its headers and timeout apply; a status that is
-  /// not 2xx throws as [fetch] does. Stopping the loop closes the connection.
+  /// not 2xx throws as [Fetch.json] does. Stopping the loop closes the connection.
   Stream<ServerEvent> events({Map<String, String>? headers, Object? json}) =>
       _events(this, Http.client, headers: headers, json: json);
 }

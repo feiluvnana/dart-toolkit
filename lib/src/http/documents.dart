@@ -10,15 +10,3 @@ extension ResponseDocumentExtensions on Response {
   /// The body parsed as XML, once per response instance.
   XmlDocument get xml => _xml ??= XmlDocument.parse(text);
 }
-
-/// Fetch-and-parse on [Uri]; each throws [HttpException] unless the status is 2xx — an error
-/// page parses fine and then matches nothing. Use `get` with `isOk` to handle it yourself.
-///
-/// {@category Networking}
-extension UriDocumentExtensions on Uri {
-  /// Fetches this URI and parses the body as HTML.
-  Future<HtmlDocument> html({Map<String, String>? headers}) async => (await fetch(headers: headers)).html;
-
-  /// Fetches this URI and parses the body as XML.
-  Future<XmlDocument> xml({Map<String, String>? headers}) async => (await fetch(headers: headers)).xml;
-}

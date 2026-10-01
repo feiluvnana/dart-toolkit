@@ -84,7 +84,7 @@ A cancel or a timeout stops the whole process tree, not just the direct child.
 `$` is CSS and `$x` is XPath 1.0, on every document.
 
 ```dart
-final doc = await url.html();                                   // or '<p>…</p>'.html
+final doc = await url.get().html;                               // or '<p>…</p>'.html
 final title = doc.$('h1').text;
 for (final a in doc.$('td.title > a[href]')) print(a.attr('href'));
 final flac = doc.$x('//tr[td[2]="FLAC"]/td[1]/a/@href').texts;
@@ -212,15 +212,18 @@ await Cancel.scope(token: stop, () async {
 ```dart
 await Http.scope(timeout: 30.s, retries: 3, delay: 500.ms, cookies: true, () async {
   await login.post(form: {'user': user, 'pass': pass});         // session kept across the redirect
-  final doc = await dashboard.html();                           // throws on non-2xx
-  final res = await api.withQuery({'v': 2}).post(json: {'name': 'x'});
+  final doc = await dashboard.get().html;                       // throws unless 2xx
+  final id = (await api.withQuery({'v': 2}).post(json: {'name': 'x'}).json)['id'];
+  final res = await api.get();                                  // any status: res.isOk
   await upload.post(form: {'title': 'beach'}, files: {'photo': 'beach.jpg'.path});
 });
 ```
 
 - `retries:` covers transport errors, 5xx responses, and 429/503 with `Retry-After`. A POST is
   not sent twice unless the server said when to ask again.
-- `delay:` is the minimum gap between two requests to the same host, downloads included.
+- A verb's `.json`, `.text`, `.html`, `.xml` and `.bytes` throw `HttpException: 404 Not Found`
+  unless 2xx; awaiting the verb itself gives the `Response` whatever its status.
+- `delay:` is the gap between two requests to the same host, downloads included, jittered ±25 %.
 - `cache:` keeps GETs on disk and asks conditionally the next run.
 - `url.events()` streams server-sent events or NDJSON: `api.events(json: {...})` is the POST a
   streaming API asks for.
@@ -411,7 +414,7 @@ Io.out = buffer;
 Console.ok('captured');
 Io.reset();
 
-await Http.scope(client: MockClient((r) async => Response('{"ok":true}', 200)), () => url.json());
+await Http.scope(client: MockClient((r) async => Response('{"ok":true}', 200)), () => url.get().json);
 ```
 
 ---
