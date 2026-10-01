@@ -1,7 +1,8 @@
 /// # Dart Toolkit
 ///
 /// Everything in one import, costing within 70 ms of the five modules a scraper would list by
-/// hand. `chrome.dart` is deliberately left out, so only a program that opens a browser compiles it.
+/// hand. `chrome.dart` and `tui.dart` are left out, so only a program that opens a browser or
+/// draws a terminal app compiles them.
 library;
 
 export 'async.dart';

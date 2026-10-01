@@ -7,7 +7,7 @@
 // median and the minimum over bare. Read the deltas, not the totals.
 import 'dart:io';
 
-const modules = ['core', 'formats', 'collection', 'async', 'cli', 'fs', 'hash', 'process', 'http', 'chrome'];
+const modules = ['core', 'formats', 'collection', 'async', 'cli', 'fs', 'hash', 'process', 'http', 'chrome', 'tui'];
 
 Future<void> main(List<String> args) async {
   final selected = args.isEmpty ? modules : args;

@@ -24,7 +24,7 @@ dependencies:
 ```
 
 ```dart
-import 'package:dart_toolkit/dart_toolkit.dart';   // every module except chrome.dart
+import 'package:dart_toolkit/dart_toolkit.dart';   // every module except chrome.dart and tui.dart
 ```
 
 A single module (`package:dart_toolkit/http.dart`, …) is for a program that measured its
@@ -75,6 +75,7 @@ Future<void> main() => Http.scope(() async {
 | `http.dart` | `Request`, `Response`, `Client`, `Http.scope`, `Crawler`, downloads | `fs`, `hash`, `formats` |
 | `chrome.dart` | `ChromeClient`, `ChromePage`, `Device`, `Resource` — **not in the barrel** | `http` |
 | `cli.dart` | `Opt`, `Arg`, `CliCommand`, `Cli`, `Lifecycle`, `Console` | `core` |
+| `tui.dart` | `Tui`, `TuiApp`, widgets, `Key`/`Char`/`Mouse`, `FakeTerminal` — **not in the barrel** | `core` |
 | `native.dart` | `NativeLib` | — |
 
 ---
@@ -976,6 +977,54 @@ table.show(border: '+-++|++++++', align: 'lr', cell: (row, c) => row.text(c));
   gets `ConsoleTheme.ascii`.
 - Prompts are async (^C ends cleanly, echo restored) and write to stderr; `confirm` re-asks on
   anything but yes/no.
+
+---
+
+## `tui`
+
+Terminal apps, full-screen or inline: a state, a `view` of widgets, an `update` that answers events.
+Its own import — `import 'package:dart_toolkit/tui.dart';` — beside `Console`, not built on it.
+
+```dart
+final n = await Tui.run(0,
+  view: (n) => Box(Label('Count: $n'), title: 'Counter'),
+  update: (n, e) => switch (e) {
+    Key.up => n + 1,
+    Char(char: 'q') => Tui.quit(),
+    _ => n,
+  });
+```
+
+`Tui.inline` runs the same app in the rows under the cursor and erases them on the way out —
+a picker inside a script. Frames diff a cell buffer, so only changed cells are written; it draws
+on `/dev/tty`, never stdout, so `tk pick > path.txt` works.
+
+| | |
+|---|---|
+| `Label`, `Label.spans`, `VStack`, `HStack`, `Box` | text (wraps, aligns), stacks, borders; size a child with `.fixed(n)`, `.flex([w])`, `.percent(p)` |
+| `Menu(items, choice)`, `Grid(rows, columns:, choice:)`, `Tabs(titles, choice)` | lists, tables, tabs; a `Choice` holds the cursor, `filter:` (type to narrow), `multi:` (Space checks) |
+| `Field(prompt:, placeholder:, mask:, validate:, history:)` | a readline-style input; hold it across frames |
+| `Gauge(0.4)`, `Gauge.of(Progress(…))`, `Spin('Loading')` | progress; a spinner animates itself |
+| `Paint((c) => …)`, `Themed(theme, child)` | a one-off widget on a `Canvas`; a subtree's theme |
+| `Tui.send(future or stream)`, `init:` | background work, fed back to `update` |
+| `class App extends TuiApp<S>` | the same engine as a class |
+
+Keys reach the focused `Field`/`Menu`/`Grid`/`Tabs` first; Tab and Shift+Tab move the focus,
+`mouse: true` adds clicks and the wheel. Match events as patterns: `Key.up`, `const Key('s', ctrl:
+true)`, `Char(:final char)`, `Mouse(kind: MouseKind.press, :final y)`, `Paste(:final text)`,
+`Resize()`. `TuiTheme` holds the shared tokens (palette, borders, glyphs); each widget's own look is
+its parameters and builders (`item:`, `cell:`, `header:`, `bar:`, `builder:`):
+
+```dart
+final pick = Choice(filter: true, multi: true);
+Menu(files, pick, item: (c) => Label.spans([Span(c.checked ? '✔ ' : '  '), ...c.highlighted],
+    style: c.selected ? c.theme.selected : null));
+```
+
+^C, SIGTERM and a cancelled `Cancel.scope` throw `CancelledException`; every way out restores
+the terminal. Colour falls back 24-bit → 256 → 16 → attributes only (`NO_COLOR`). POSIX only.
+Test with `Tui.terminal = FakeTerminal(width: 40, height: 10)`: `type`, `press`, `mouse`,
+`resize`, then read `screen`.
 
 ---
 
