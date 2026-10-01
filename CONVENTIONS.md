@@ -333,6 +333,9 @@ These are the rules the September 2026 audit added. Each was a silent failure.
   not redraw.
 - **An abandoned request is aborted, not only drained.** Draining waits for a response; one
   that never comes held its pool permit forever.
+- **A write replaces, never truncates.** `writeText`/`writeBytes`/`writeLines` rename a finished
+  sibling over the target, keeping its mode and links; a ^C mid-write used to leave half a
+  config for the next run to parse.
 - **A batch reports its failures.** `download().show()` ends with "2 of 6 failed", never
   "all done" over failures.
 - **A test list runs the small case.** `sorted.take(3)` was tested only at 5000 items, so its
@@ -423,8 +426,8 @@ Measure before choosing records on a hot path.
 
 - Only `fs`, `hash` and `http` import it, so `dart:ffi` costs nothing to a program that uses
   none of them. Opening the library is lazy (~12 ms, first use).
-- It holds digests, MACs, archive formats, content-decoding and the WHATWG legacy charsets
-  (decode only) — nothing else. There is no Dart
+- It holds digests, MACs, archive formats, content-decoding, the WHATWG legacy charsets
+  (decode only) and `chmod`, which `dart:io` lacks — nothing else. There is no Dart
   fallback: two implementations of one primitive are two places for a bug. Without the library
   those calls throw `UnsupportedError` saying what was needed.
 - Bytes cross as pointer and length (zero-copy leaf calls where the SDK allows), files cross by
@@ -434,8 +437,11 @@ Measure before choosing records on a hot path.
   `malloc`.
 - Output per call is bounded, and "call again" is signalled by filling the buffer exactly. No
   length travels as an `i32`.
-- A small file is read by Dart and hashed in memory; a large one (> 4 MiB) is read by the
-  library inside an isolate — starting one costs about what SHA-256 takes over 4 MiB.
+- Every file is read by the library: on the calling isolate up to 4 MiB, in a worker isolate
+  above it — starting one costs about what SHA-256 takes over 4 MiB.
+- **An export changes the ABI.** Adding or changing a `tk_` function bumps `tk_version` and
+  `NativeLib._abi` together and rebuilds all four prebuilts, so a stale library is refused at
+  load instead of failing later with "Failed to lookup symbol".
 - A new primitive is one Rust function, one `lookupFunction`, and its published test vector.
 - Native assets (`hook/build.dart`) were measured at +50–65 ms on every `dart run` and are not
   used.

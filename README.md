@@ -394,7 +394,7 @@ await Http.scope(client: MockClient((r) async => Response('{"ok":true}', 200)), 
 
 ## Executables
 
-`bin/` holds three programs, which also serve as the benchmarks for the package's brevity:
+`bin/` holds three programs, examples of what a script over the package looks like:
 
 | Program | What it does |
 |---|---|
@@ -406,6 +406,9 @@ await Http.scope(client: MockClient((r) async => Response('{"ok":true}', 200)), 
 dart run dart_toolkit:tk find 'lib/**/*.dart' --top 5
 dart run dart_toolkit:books "pride and prejudice" frankenstein -f kepub
 ```
+
+A script of your own compiles on every `dart run`; `dart run -r script.dart` keeps the compiler
+resident and roughly halves the start of the next run.
 
 ## More
 

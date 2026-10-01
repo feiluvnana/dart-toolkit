@@ -945,6 +945,7 @@ await Http.scope(timeout: 30.s, retries: 2, delay: 500.ms, headers: {'user-agent
 | `timeout:` | bounds the wait for headers **and** for each body chunk; a late response is drained, never leaked |
 | `headers:` | added to each request that does not set them; `authorization` and `cookie` only to the first request's origin |
 | `cookies: true` | a jar for the life of the scope; it walks redirects hop by hop, where logins set their session |
+| `jar: cookies` | the same jar, started with cookies from elsewhere — `await page.cookies()` after a browser login |
 | `retries:` | transport errors (a body cut off half-way included), 5xx, and 429/503 honouring `Retry-After` (up to 30 s); never TLS failures, and never a second POST or PATCH unless a 429/503 said when to ask again |
 | `delay:` | the gap between two requests to one host, redirect hops and downloads included, jittered ±25 % (a fixed gap is a bot signal) |
 | `cache:` | a folder that keeps every GET answered with an `ETag` or `Last-Modified`; the next run asks conditionally and a `304` is served from disk |
@@ -1672,6 +1673,19 @@ code.
 | XML with 40k bare `&` | 12.3 s | 1.3 ms |
 | redirect chain, 5 GETs × 3 hops | 11 TCP connections | 1 |
 
+Since 0.0.6 (Audit IV), same method:
+
+| | 0.0.6 | now |
+|---|---|---|
+| `import 'package:dart_toolkit/http.dart'` (Chrome moved to its own library) | — | −32 ms |
+| `JsonDocument` `['id'].to<int>()`, 200k objects | 9.4 ms | 3.2 ms |
+| `file.hash(xxh3)`, 1 MiB file | 454 µs | 97 µs |
+| directory `size()`, 10k files | 113 ms | 28 ms |
+| 96 MiB to `.zst` / `.xz` | 299 ms / 48.3 s | 88 ms / 15.7 s |
+| `Table.select`, 200k rows | 72 ms | 38 ms |
+| a Chrome render with `waitFor`, 2.7 MB DOM | ~320 ms | ~262 ms |
+| `waitForDownload`, small file | ~210 ms | ~8 ms |
+
 The rules behind the numbers:
 - **Nothing third-party at runtime but `path`.** `package:html`, `xml`, `archive` and `http`
   together would cost about a second of compile time on every `dart run`.
@@ -1681,7 +1695,12 @@ The rules behind the numbers:
 - **Block what you don't read.** `ChromeClient.launch(block: Resource.heavy)` is the biggest win
   available to a rendered crawl.
 - **Native assets were measured and rejected:** +50–65 ms on every `dart run`.
-- **Measure back to back.** Startup drifts ±80 ms between runs, so `make bench` alternates.
+- **Measure back to back.** Startup drifts ±80 ms between runs, so `make bench` alternates
+  six rounds and prints the median and the minimum.
+- **Startup is compile time.** Under `dart run` a script is compiled before it runs; the same
+  program as kernel starts in ~90 ms whatever it imports. `dart run -r` keeps a resident
+  compiler, which halved a scraper's start (0.83 → 0.40 s); a package executable
+  (`dart run dart_toolkit:tk`) runs from pub's snapshot and pays it once.
 
 ---
 

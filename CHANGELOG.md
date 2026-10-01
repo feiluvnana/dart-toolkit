@@ -2,14 +2,221 @@
 
 ## Unreleased
 
-The second audit, applied. Six auditors probed the package with real sockets, a headless
+### Audit IV
+
+Seven auditors read every module with real sockets, headless Chrome 154, ptys and differential
+fuzzing against `package:html`, `xml` and `yaml`. They found about 120 bugs; each is fixed with
+a regression test. They also judged every public symbol by whether a script author would reach
+for it, not by whether `bin/` happens to call it.
+
+The worst bugs were silent:
+- `sorted.take(3)` returned every element.
+- A stray `</div>` in a cell dropped the rest of a table.
+- A batch of six failed downloads printed "✓ all done".
+- A timed-out request held its pool permit forever.
+- A nested `Http.scope` lost the login session.
+- Spinners wrote into `app > out.json`.
+- A child process that ignored SIGTERM outlived ^C.
+
+The largest API change: an HTTP reading now checks the status. `ffi` is gone, and Chrome has its
+own import.
+
+#### Upgrading
+
+| Before | After |
+|---|---|
+| `await url.json()` / `url.html()` / `url.xml()` / `url.fetch()` | `await url.get().json` / `.html` / `.xml` / `.text` / `.bytes` — each throws `HttpException` unless 2xx; `await url.get()` is still the lenient `Response` |
+| `final r = await api.post(json: x); if (!r.isOk) throw …; r.json['id']` | `(await api.post(json: x).json)['id']` |
+| `client.fetch(u)` / `client.json(u)` / `client.html(u)` / `client.xml(u)` | `client.get(u).text` / `.json` / `.html` / `.xml` |
+| `await url.send(Request('POST', url, json: {…}))` | `await Request('POST', url, json: {…}).send()` |
+| `IoClient(userAgent: 'me/1')` | `Http.scope(headers: {'user-agent': 'me/1'}, …)` |
+| `IoClient(keepAlive: d)`, `request.persistentConnection = false` | `headers: {'connection': 'close'}` |
+| `Response(…, isRedirect: true)` | drop the argument; `isRedirect` is a getter |
+| `ChromeClient` from `dart_toolkit.dart` | `import 'package:dart_toolkit/chrome.dart';` |
+| `ChromeClient.attach(port: 9222)`, `chrome.isNewBrowser` | `ChromeClient.connect(port: 9222)` joins a running browser first |
+| `page.reload()` | `page.goto(page.url)` |
+| `ctx.response.html.$('a.next')` | `ctx.html.$('a.next')` |
+| `ctx.resolve(a.attr('href'))` | `ctx.resolve(a)` (an `Element` or `Elements`) |
+| `for (final u in api.json['next'].to<List<String>>()) ctx.follow(u)` | `ctx.follow(api.json['next'])` |
+| `Opt.number('top', abbr: 'n', description: 'How many').or(10)` | `Opt.number('top', 'How many').abbr('n').or(10)` |
+| `Arg.text('id', description: 'The build')` | `Arg.text('id', 'The build')` |
+| `CliCommand('hash', description: 'Digest', values: …)` | `CliCommand('hash', 'Digest', values: …)` (`''` for none) |
+| `Cli(name: 'tk', …)` | `Cli(…)` — the script's name |
+| `Io.out.writeln(x)` inside `Cli.run` | `print(x)` — it lands above a live spinner |
+| `Console.select('Bump', Bump.values, display: (b) => b.name)` | `Console.select('Bump', Bump.values)` |
+| `return Lifecycle.exit('nothing found')` in a handler | `throw 'nothing found'` |
+| `Console.spinner('x', style: SpinnerStyle.dot)` | `Console.spinner('x')` |
+| `spinner.info(…)`, `spinner.isSpinning`, `spinner.elapsed`, `Console.clear()` | `stop()` / `succeed` / `warn` / `fail`; the end line prints the time |
+| `Env.require('TOKEN')` | `Env.get('TOKEN')` (throws naming the key when unset or empty) |
+| `Env.get('PORT') ?? '8080'` | `Env.get('PORT', or: '8080')`; `Env.getOrNull` is the nullable form |
+| `Env.remove(k)` / `Env.reset()` | `Env.set(k, '')` — an empty variable is unset |
+| `(await xs.parallelize(f)).rights` | `await xs.parallelize(f).rights` (also `.lefts`, `.unwrap()`) |
+| `e.isLeft`, `e.fold(…)`, `e.mapRight(f)`, `Either.tryCatch(f)` | `e is Left`, a `switch`, `try` |
+| `Mutex().run(f)` | `Semaphore(1).run(f)` |
+| `stream.delayBy(d)` | `throttle`, or `Http.scope(delay:)` to pace requests |
+| `(() => work()).isolate()`, `res.isolate(…)` | `Isolate.run(() => work())` |
+| `seq.none(t)`, `seq.whereNot(t)`, `seq.shuffled()` | `!seq.any(t)`, `seq.where((e) => !t(e))`, `seq.toList()..shuffle()` |
+| `seq.interleave`, `scan`, `cartesian`, `groupJoin`, `pairs.inverted`, `pairs.unzip`, `thenWith`, `Sequence.empty()` | a loop or collection literal; `groupBy` + `indexBy`; `thenBy`; `const <T>[].sequence` |
+| `t.numbers('bytes').sequence.sum` | `t.numbers('bytes').sum` |
+| `ini['debug'].toOrNull<bool>() ?? false` | `ini['debug'].or(false)` |
+| `for (final a in doc.$('a[href]')) a.attr('href')` | `doc.$('a[href]').attrs('href')`, or `.links` for resolved `Uri`s |
+| `doc.$('main').first.markup` | `doc.$('main').markup` |
+| `ul.children.where((e) => e.name == 'li' && …)` | `ul.$('> li.x')` |
+| `DateTime.parse(doc['t'].to<String>())` | `doc['t'].to<DateTime>()`; `row.get<DateTime>('t')` |
+| `File(p).writeAsString(JsonEncoder.withIndent('  ').convert(doc.raw))` | `doc.save(p)` (`.json`, `.yaml`) |
+| `decodeEntities(s)` | `s.html.text` |
+| `import 'package:dart_toolkit/ffi.dart'` | a dedicated binding (`package:sqlite3`), or `dart:ffi`'s `lookupFunction` |
+| `run('chmod +x $f')` | `await f.chmod('+x')` (octal or symbolic) |
+| `archive.archiveEntries()` | `archive.entries()` |
+| `Archive.of(name)`, `Archive.isWritable` | gone — `archiveTo` reads the extension and lists the writable ones |
+| `archiveTo('x.rar')` / a tar password threw `ArgumentError` | `FormatException`, before anything is created |
+| `Hash.sha256.file(p)` | `p.hashBytes(Hash.sha256)` |
+| `NativeLib.version` | gone — a library with the wrong ABI (now 3) is refused at load |
+| `path.watch()` | `path.changes()`, or `path.asDir.watch()` for raw events |
+| `createTemp` + `try`/`finally` + `delete(recursive:)` | `await Path.tempDir((d) async { … })` |
+| `'$n bytes'` | `n.humanBytes` (`'20.0 MB'`) |
+
+#### Fixed
+
+The full list is in the regression tests; these are the ones a script would have hit.
+
+- **Data:**
+  - `sorted.take(n)` returned everything when `n ≥ length/8`.
+  - `orderBy` on a mixed numeric and text column depended on input order, and CSV blanks sorted first.
+  - `where` after `orderBy` dropped the order.
+  - A `join` name clash overwrote a column.
+  - `Table.read('t.md')` returned garbage.
+- **HTML, XML and YAML:**
+  - A stray end tag closed a whole table. `<td>` in `<thead>` lost the header row. `:scope` inside `Element.$` meant the root. `<optgroup>` nested.
+  - XML attributes were written with a raw `<`.
+  - `toYaml` did not round-trip control characters or `"..."`.
+  - YAML block scalars lost trailing spaces.
+  - INI continuation lines (`setup.cfg`) were misread.
+- **HTTP:**
+  - A timed-out request to a server that never answered kept its pool permit forever.
+  - A failed upload left its connection open, and the next request hung.
+  - A nested `Http.scope` dropped the outer client, cookies and headers.
+  - Retries re-sent errors that cannot change.
+  - An XML `encoding=` declaration was ignored.
+  - `withQuery` lost repeated keys.
+  - A HEAD that got a 303 downloaded the body.
+- **Crawling:**
+  - The crawl re-sent POSTs.
+  - Sitemap `&amp;` was taken literally, and a truncated `.gz` sitemap passed as complete.
+  - One blip turned retries off for a whole host.
+  - `http://h` and `/` were crawled twice.
+- **Chrome:**
+  - Non-UTF-8 pages came back garbled.
+  - An empty 404 was retried as a transport error.
+  - `waitFor` threw on a JS redirect.
+  - `press('Escape')` stuck a key down on macOS.
+  - `stealth` still said `HeadlessChrome`.
+  - A screenshot below the fold was blank.
+- **Terminal and processes:**
+  - Spinners, bars and boards wrote to stdout; now they go to stderr.
+  - Colour on stderr was decided by stdout, and `NO_COLOR` turned off redraw.
+  - Exit hooks ran twice after ^C, and the error line was erased by the next spinner frame.
+  - ^C in `Console.secret` outside `Cli` left echo off.
+  - A child that trapped SIGTERM outlived ^C.
+  - `ls ~` and `echo $HOME` were passed literally; they are refused now.
+  - `.lines` trimmed the leading spaces of `git status --short`.
+  - A pipeline hid a failed earlier stage behind exit 0.
+  - A failed command printed three lines.
+- **Downloads:** a batch where every download failed reported "all done". `show()` now ends with "2 of 6 failed".
+- **Archives and files:**
+  - A refused extraction left all but the first escaping link on disk.
+  - An out-of-range `level` panicked in Rust, and zip `level: 0` threw.
+  - 7z ignored `level`, lost the exec bit and never reported encryption.
+  - `archiveTo` dropped symlinks.
+  - Directory modes were not restored on extract or kept on copy.
+  - `copy` into its own subtree recursed.
+  - `filename` did not cap at 255 bytes.
+  - `base64Bytes` refused whitespace.
+- **Core:**
+  - A `Cancel.scope` timeout cancelled the caller's shared token.
+  - Cancelling `parallelize(isolate: true)` early could keep the process alive.
+  - `Pool.close()` failed queued work.
+  - `Env.parse` was quadratic after an unclosed quote.
+  - `chunkEvery` let an error overtake its batch.
+
+#### Removed
+
+- **`package:dart_toolkit/ffi.dart`:** 1067 lines, plus its tests. Calling through wider-than-declared signatures returned garbage on a wrong signature, and the OS calls a script needs are typed methods now (`chmod`).
+- **Second spellings:**
+  - HTTP: `fetch` and `json()`/`html()`/`xml()` on `Uri` and `Client`, `url.send(Request)`, `IoClient(userAgent:, keepAlive:)`, `Request.persistentConnection`.
+  - Chrome: `ChromeClient.attach`, `isNewBrowser`, `reload`.
+  - Core and async: `Mutex`, `Env.require`, `Either.isLeft`/`isRight`/`fold`/`mapLeft`/`mapRight`/`tryCatch`, `.isolate()`, `Response.isolate`.
+  - Sequence: `empty`, `none`, `whereNot`, `shuffled`, `groupJoin`, `thenWith`, `inverted`, `unzip`.
+  - Files: `Path.watch`.
+- **Decorative:** `SpinnerStyle` and five styles, `Spinner.info`, `Console.clear`, `Sequence.interleave`/`scan`/`cartesian`, `Stream.delayBy`.
+- **Test seams and internals:** `Env.remove`/`reset`/`hasOverrides`, `Spinner.isSpinning`/`elapsed`, `NativeLib.version`. Now private: `Console.isEnabled`, `CliContext.command`, the `CommandPipeline` constructor, `Archive`, `Hash.file`, `decodeEntities`. Gone from `test/`: `keybox_test.dart`.
+- **Kept on purpose, though `bin/` never calls them:**
+  - Chrome: `frame()`, `cookies()`, `scroll`, `hover`, `back`/`forward`, `pdf`, dialogs, the `Device` locale and timezone.
+  - Archives and HTTP: unrar, `IoClient(connectTimeout:)`.
+  - Core and collection: `Duration.jittered`, `chunkEvery`, `nonNulls`, `flattened`, `countBy`, `innerJoin`/`leftJoin`, `Row.getOrNull`, `Agg.list`/`first`/`last`.
+  - Elsewhere: every ANSI colour, XPath.
+
+#### Added
+
+- **HTTP:**
+  - `Fetch`, the `Future<Response>` every verb returns, with checking readings.
+  - `Request.send()`.
+  - `Http.scope(jar:)` starts the cookie jar from elsewhere, so a browser login carries over to plain sockets: `Http.scope(jar: await page.cookies(), …)`.
+  - `Http.scope(delay:)` jitters each gap ±25 %.
+- **Crawling:** `ctx.html`; `resolve(Element)`; `follow` of any iterable or a `JsonDocument`; `InitContext.canonical`; `<base href>` honoured.
+- **Chrome:**
+  - `package:dart_toolkit/chrome.dart`.
+  - `page.scroll(toEnd: true)`.
+  - `waitForDownload` spaces its starts ~120 ms apart per tab, so a loop over many small files gets every one; Chrome drops downloads past about ten a second.
+- **Formats:** `Elements.attrs`, `.links`, `.markup`; `HtmlDocument.base`; a leading `>`/`+`/`~` in `Element.$`; `JsonDocument.or`, `.save`, `to<DateTime>()`.
+- **Core and collection:** `rights`/`lefts`/`unwrap()` on `Future<List<Either>>`; `Row.get<DateTime>`; `Env.getOrNull`; `int.humanBytes`.
+- **CLI and processes:**
+  - `ShellRun.kill()`.
+  - `Cli` takes its name from the script, and the help text is a positional.
+  - `print` inside `Cli.run` lands above a live spinner.
+  - `Console.select` shows enums by name.
+- **Files:**
+  - `Path.tempDir((d) async {…})`; `chmod`/`chmodSync` (octal or symbolic).
+  - `writeText`/`writeBytes`/`writeLines` replace atomically, keeping mode and links.
+  - `copy` keeps directory modes.
+  - Multi-threaded zstd and xz from 32 MiB.
+
+#### Faster
+
+Back to back, alternating order, median of ≥ 6 runs.
+
+| | Before | After |
+|---|---|---|
+| `import 'package:dart_toolkit/http.dart'` (Chrome split out) | | −32 ms |
+| `JsonDocument` `['id'].to<int>()`, 200k objects / `.map` | 9.4 / 32.0 ms | 3.2 / 15.9 ms |
+| XPath `//td/@id \| //tr/@class` / `//*[@class]` | 15.7 / 2.44 ms | 7.4 / 1.59 ms |
+| `file.hashBytes(xxh3)`, 1 MiB / `sha256`, 4 MiB | 454 / 2650 µs | 97 / 1435 µs |
+| directory `size()`, 10k files | 113 ms | 28 ms |
+| 96 MiB to `.zst` / `.xz` / `.tar.zst` | 299 ms / 48.3 s / 285 ms | 88 ms / 15.7 s / 81 ms |
+| `Table.select` / `derive`, 200k rows | 72 / 72 ms | 38 / 45 ms |
+| `Sequence.map(f).toList()`, 1M | 9 ms | 6 ms |
+| Chrome render with `waitFor`, 2.7 MB DOM | 308–336 ms | 261–263 ms |
+| `waitForDownload`, small file | ~210 ms | ~8 ms |
+| a `Uint8List` request body, 8 MiB | ~520 µs | 0.7 µs |
+
+Slower on purpose: an atomic rewrite of a 1 KiB file costs ~170 µs instead of 41 µs, the price of never leaving half a file. The dylib grew 1.1–1.4 % for multi-threaded zstd and `tk_chmod`. `tool/startup.dart` now runs six alternating rounds and prints the median and the minimum. README and GUIDE mention `dart run -r`, which halved a scraper's start.
+
+#### Not done
+
+- `process` still imports `fs` for `Path`. Taking `String` paths saved 72 ms on a process-only import but would have cost `Path.run()`.
+- `parallelize(show:)` needs a progress seam from `core` to `cli` that does not exist yet.
+- Date-looking text columns still sort as text: ISO 8601 already sorts correctly, and parsing every cell would slow every sort.
+- The 49 `createTemp` sites in the tests are `setUp`/`tearDown` pairs and stay.
+
+### The second audit
+
+Applied earlier in this release. Six auditors probed the package with real sockets, a headless
 Chrome, a probe C library and about 50 000 fuzzed parser inputs, then each finding was fixed
 with a regression test. The worst were silent: an archive that could write outside its
 destination, a bearer token carried from https to http, a resumed download spliced from two
 versions of a file, a truncated gzip body returned as 200, and a crawl that ^C could not stop.
-FFI now calls what it used to refuse.
 
-### Upgrading
+#### Upgrading
 
 | Before | After |
 |---|---|
@@ -30,10 +237,8 @@ FFI now calls what it used to refuse.
 | a scope's `authorization` went to every host | only to the origin of the scope's first request |
 | prompts on stdout | prompts on stderr |
 | a CSV header `id,id` read as one `id` | `id`, `id_2` |
-| `lookupFunction<Double Function(Double, Int32), …>('ldexp')(1.0, 10)` | `libm.call('ldexp', C.f64, 1.0, 10)` |
-| `libc.call('pow', C.f64, 2, 10.0)` threw | computes garbage, since ints and doubles now mix — write `2.0` |
 
-### Safety
+#### Safety
 
 - **Fixed: an archive could write outside its destination.** A link whose target did not
   exist yet was never checked, so `d/b → ..` plus `l → d/b/../x` extracted "fine" and a second
@@ -51,7 +256,7 @@ FFI now calls what it used to refuse.
 - **Fixed: a crawl's own files were uncapped.** robots.txt is read to 512 KiB and a sitemap to
   50 MB, compressed or unpacked; a corrupt gzip sitemap no longer throws an uncaught error.
 
-### Cancellation
+#### Cancellation
 
 - **Every wait hears the scope.** A crawl, a request (mid-body too), a retry's backoff, a
   `Retry-After` wait, a `delay:` gap, `Duration.delay`, `Mutex` and `Semaphore` all stop on
@@ -62,7 +267,7 @@ FFI now calls what it used to refuse.
 - `Cancel`, `CancelToken` and `CancelledException` moved from `async` to `core`, unchanged.
 - `run()` keeps its timeout and cancel armed while a background child holds stdout open.
 
-### HTTP and Chrome
+#### HTTP and Chrome
 
 - **Added: `url.events()`** — server-sent events or NDJSON as a `Stream<ServerEvent>`.
 - **Added: `Http.scope(cache: dir)`** — a conditional-GET cache for scripts run again and again;
@@ -88,21 +293,13 @@ FFI now calls what it used to refuse.
   download waits could claim one file, a download from a new tab was missed, and a download
   overwrote a file of the same name (it lands as `name (2).ext`); a 204 was a transport error.
 
-### Native and FFI
+#### Native
 
-- **Integers and doubles mix in one call** on macOS and Linux, up to eight arguments:
-  `atof`, `strtod`, `lround`, `ldexp`, `fma`. On Windows a mix is refused.
-- **Added:** `C.f32`; calling a key makes a value of that type (`C.f32(2.0)`, and `C.i32(a)` to
-  read a negative int in a callback); variadics via `fn(name, ret, fixed: n)`; `Ffi.errno`;
-  `s.out(C.i32)` out-parameters; `C.i32.list(ptr, n)` array views; `C.struct([...])` with typed
-  field keys; `own(p, 'free', size:)`.
-- An unmodifiable typed list is no longer written to. A callback that throws says so on stderr.
-- **Faster:** `abs` 19 → 12 ns, `sqrt` 30 → 15 ns, `strlen(String)` 80 → 66 ns, and
-  `fn.async` 72 → 4 µs on kept helper isolates.
 - **Fixed:** zip times are local time, as `unzip` reads them. A batch hash with an empty file
-  name gave the files after it the wrong digests.
+  name gave the files after it the wrong digests. (This audit's FFI work went with `ffi.dart`
+  in Audit IV.)
 
-### Formats
+#### Formats
 
 - **Nothing silent:** a bad TOML or YAML escape is a `FormatException` with its line, not a
   `RangeError`. TOML refuses a table defined twice, an extended inline table, and `[[a]]` over
@@ -117,7 +314,7 @@ FFI now calls what it used to refuse.
 - **Faster:** `nextElement` over 40k siblings 1.1 s → under 1 ms; `/>` under deep markup
   2.4 s → 30 ms; stray XML end tags 0.5 s → 2 ms.
 
-### Processes and concurrency
+#### Processes and concurrency
 
 - **`run()`:** `args:` (`$1`… under `shell: true`) and `.stream` for live lines. An unclosed
   quote is a `FormatException`, and `|`, `&&`, `;`, `>` or `$(` outside quotes an
@@ -129,7 +326,7 @@ FFI now calls what it used to refuse.
 - A `flatMap` mapper that throws is the stream's error. `.env` values may span lines.
 - **Faster:** `parallelize` ~10× without isolates and ~20% with; `debounce` ~50×; `delayBy` ~3×.
 
-### CLI, tables and files
+#### CLI, tables and files
 
 - **Help says what an option takes** (`--top <int>`, `--mode <fast|slow>`). A mistyped option
   gets a did-you-mean, a bad number names its option, and a program of subcommands run with
@@ -146,19 +343,18 @@ FFI now calls what it used to refuse.
 - **Faster start:** `collection` no longer imports `formats` (−125 ms for a collection-only
   script, back to back).
 
-### Programs and docs
+#### Programs and docs
 
 - `tk read` is `JsonDocument.read`; `tk get` lost its hand-written status check; `tk find` lists
   files, not directories, over a `Table`. `tk` and `keybox` report 0.0.6. `books` closes its tab.
-- README, GUIDE and the FFI library doc follow every change above; GUIDE's `requests.crawl` is
+- README and GUIDE follow every change above; GUIDE's `requests.crawl` is
   gone and the lack of HTML foster parenting is documented.
 
-### Not done
+#### Not done
 
 - A `run` child orphaned by the parent's `kill -9` is not tracked: its stdin is its own, so it
   cannot be the watchdog's lifeline (Chrome's watchdog is unchanged).
-- The FFI mixed, variadic and eight-argument paths are verified on macOS arm64 only. There is
-  still no Windows prebuilt.
+- There is still no Windows prebuilt.
 - In a cross-origin iframe, resource blocking and credential grants do not apply yet.
 
 ## 0.0.6

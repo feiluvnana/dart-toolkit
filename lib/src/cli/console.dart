@@ -53,16 +53,6 @@ bool _interactive() => Io.isErrTerminal;
 /// spinner, a bar or a board is neither.
 bool _shown() => Console._isEnabled(LogLevel.info);
 
-String _formatBytes(int bytes) {
-  if (bytes < 1024) return '$bytes B';
-  var value = bytes / 1024;
-  for (final unit in const ['KB', 'MB']) {
-    if (value < 1024) return '${value.toStringAsFixed(1)} $unit';
-    value /= 1024;
-  }
-  return '${value.toStringAsFixed(1)} GB';
-}
-
 // ---- the live region -------------------------------------------------------------------
 
 /// A renderer that owns the bottom rows of the terminal and can redraw them in place.
@@ -377,8 +367,8 @@ final class TaskBoard extends _Meter {
       null => ('----------', ' --%'),
     };
     final size = switch ((task.received, task.total)) {
-      (final got?, final all?) when all > 0 => '(${_formatBytes(got)}/${_formatBytes(all)}) ',
-      (final got?, _) when got > 0 => '(${_formatBytes(got)}) ',
+      (final got?, final all?) when all > 0 => '(${got.humanBytes}/${all.humanBytes}) ',
+      (final got?, _) when got > 0 => '(${got.humanBytes}) ',
       _ => '',
     };
     final status = switch (task.status) {
@@ -418,7 +408,7 @@ final class TaskBoard extends _Meter {
       // Without a terminal there is no cursor to move: one durable line per finished task.
       if (!_interactive() && _shown()) {
         final size = switch (task.total) {
-          final all? when all > 0 => ' (${_formatBytes(all)})',
+          final all? when all > 0 => ' (${all.humanBytes})',
           _ => '',
         };
         Io.err.writeln('  [$_current/$total] ${task.label}$size [${task.status ?? 'done'}]');

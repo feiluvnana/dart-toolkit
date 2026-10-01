@@ -161,7 +161,7 @@ void main() {
       final dir = Path(Directory.systemTemp.createTempSync('shell_').path);
       addTearDown(() => dir.deleteSync(recursive: true));
       (dir / 'hello.sh').writeTextSync('#!/bin/sh\necho from-script\n');
-      await run('chmod +x ${dir / 'hello.sh'}', quiet: true);
+      await (dir / 'hello.sh').chmod('+x');
 
       await Shell.scope(
         () async {
