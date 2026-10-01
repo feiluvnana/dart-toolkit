@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math';
 
 import 'package:dart_toolkit/native.dart';
@@ -499,4 +500,66 @@ void main() {
     await arc.extractTo(outClasses, only: '[n]ote.txt');
     expect([for (final f in outClasses.filesSync(recursive: true)) f.relativeTo(outClasses)], ['note.txt']);
   });
+
+  test('only: a leading ] is one of the set, and one brace alternative is literal', () async {
+    final tree = tmp / 'names';
+    for (final n in [']', 'a', 'b{1}.txt', 'b1.txt']) {
+      (tree / n).writeTextSync(n);
+    }
+    final arc = tmp / 'names.zip';
+    await tree.archiveTo(arc);
+    Future<List<String>> only(String glob) async {
+      final out = tmp / 'only_${glob.hashCode}';
+      await arc.extractTo(out, only: glob);
+      return [for (final f in out.filesSync()) f.name]..sort();
+    }
+
+    expect(await only('[]]'), [']']);
+    expect(await only('[!]]'), ['a']);
+    expect(await only('b{1}.txt'), ['b{1}.txt']);
+  });
+
+  test('a read-only directory in a tar extracts, and keeps its mode', () async {
+    (src / 'ro' / 'f.txt').writeTextSync('hi');
+    (src / 'ro').chmodSync('555');
+    addTearDown(() {
+      for (final d in [src / 'ro', tmp / 'out' / 'ro']) {
+        if (d.existsSync()) d.chmodSync('755');
+      }
+    });
+    await src.archiveTo(tmp / 'ro.tar.gz');
+    await (tmp / 'ro.tar.gz').extractTo(tmp / 'out');
+    expect((tmp / 'out' / 'ro' / 'f.txt').readTextSync(), 'hi');
+    expect(FileStat.statSync(tmp / 'out' / 'ro').mode & 0x1ff, 0x16d); // 0555
+  }, testOn: '!windows');
+
+  test('an archive named bare, in the folder it archives, does not contain the last one', () async {
+    // In a child process: the working directory is the whole test runner's.
+    (tmp / 'self.dart').writeTextSync('''
+import 'package:dart_toolkit/fs.dart';
+void main() async {
+  for (final ext in ['zip', 'tar.gz', '7z']) {
+    await Path('.').archiveTo('self.\$ext');
+    await Path('.').archiveTo('self.\$ext');
+  }
+}
+''');
+    final r = await Process.run(Platform.resolvedExecutable, [
+      '--packages=${(await Isolate.packageConfig)!.toFilePath()}',
+      tmp / 'self.dart',
+    ], workingDirectory: src);
+    expect(r.exitCode, 0, reason: '${r.stderr}');
+    for (final ext in ['zip', 'tar.gz', '7z']) {
+      expect((await (src / 'self.$ext').entries()).map((e) => e.name), isNot(contains('self.$ext')), reason: ext);
+    }
+  });
+
+  test('a FIFO in the tree is skipped, not waited on', () async {
+    (src / 'pipe').asFile.parent.createSync(recursive: true);
+    expect(Process.runSync('mkfifo', [src / 'pipe']).exitCode, 0);
+    for (final ext in ['zip', '7z', 'tar']) {
+      await src.archiveTo(tmp / 'p.$ext').timeout(const Duration(seconds: 10));
+      expect((await (tmp / 'p.$ext').entries()).map((e) => e.name), isNot(contains('pipe')), reason: ext);
+    }
+  }, testOn: '!windows');
 }

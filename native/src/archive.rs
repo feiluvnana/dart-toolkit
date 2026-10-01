@@ -239,8 +239,40 @@ fn workers(size: u64) -> u32 {
     std::thread::available_parallelism().map_or(1, |n| n.get() as u32)
 }
 
+/// xz(1)'s compression memory (MiB) and dictionary (KiB) per preset 0..=9.
+const XZ_PRESETS: [(u64, u64); 10] =
+    [(3, 256), (9, 1024), (17, 2048), (32, 4096), (48, 4096), (94, 8192), (94, 8192), (186, 16384), (370, 32768), (674, 65536)];
+
+/// xz's threads for `size` bytes at `level`: no more than the cores, the 3-dictionary blocks
+/// the input fills, or what a quarter of RAM (2 GiB when unknown) holds at a preset's memory
+/// plus an input and output block per thread. One thread is the single-threaded encoder.
+fn xz_threads(level: u32, size: u64) -> u32 {
+    let (mem, dict) = XZ_PRESETS[level.min(9) as usize];
+    let block = (3 * dict << 10).max(1 << 20);
+    let per_thread = (mem << 20) + 2 * block;
+    let budget = ram().map_or(2 << 30, |r| r / 4);
+    let n = (workers(size) as u64).min(size.div_ceil(block)).min(budget / per_thread);
+    if n > 1 {
+        n as u32
+    } else {
+        0
+    }
+}
+
+/// Physical memory in bytes, where the OS says.
+#[cfg(unix)]
+fn ram() -> Option<u64> {
+    // SAFETY: `sysconf` only reads configuration.
+    let (pages, page) = unsafe { (libc::sysconf(libc::_SC_PHYS_PAGES), libc::sysconf(libc::_SC_PAGESIZE)) };
+    (pages > 0 && page > 0).then(|| pages as u64 * page as u64)
+}
+#[cfg(not(unix))]
+fn ram() -> Option<u64> {
+    None
+}
+
 fn xz_encoder<W: Write>(out: W, level: u32, size: u64) -> Result<xz2::write::XzEncoder<W>, String> {
-    match workers(size) {
+    match xz_threads(level, size) {
         0 => Ok(xz2::write::XzEncoder::new(out, level)),
         n => {
             let stream = xz2::stream::MtStreamBuilder::new()
@@ -569,7 +601,10 @@ fn glob(p: &[char], s: &[char], fold: bool) -> bool {
         }
         ['?', rest @ ..] => !s.is_empty() && s[0] != '/' && glob(rest, &s[1..], fold),
         ['[', rest @ ..] => {
-            if let Some(end) = rest.iter().position(|&c| c == ']') {
+            // A `]` first in the set, after any `!` or `^`, is one of it rather than its end.
+            let lead = usize::from(matches!(rest.first(), Some('!' | '^')));
+            let from = if rest.get(lead) == Some(&']') { lead + 1 } else { lead };
+            if let Some(end) = rest[from..].iter().position(|&c| c == ']').map(|e| e + from) {
                 if !s.is_empty() && s[0] != '/' {
                     let class = &rest[..end];
                     let after = &rest[end + 1..];
@@ -640,15 +675,18 @@ fn glob(p: &[char], s: &[char], fold: bool) -> bool {
                     }
                 }
                 alts.push(&inside[start..]);
-                for alt in alts {
-                    let mut combined = Vec::with_capacity(alt.len() + after.len());
-                    combined.extend_from_slice(alt);
-                    combined.extend_from_slice(after);
-                    if glob(&combined, s, fold) {
-                        return true;
+                // One alternative is no choice: `b{1}.txt` names itself.
+                if alts.len() > 1 {
+                    for alt in alts {
+                        let mut combined = Vec::with_capacity(alt.len() + after.len());
+                        combined.extend_from_slice(alt);
+                        combined.extend_from_slice(after);
+                        if glob(&combined, s, fold) {
+                            return true;
+                        }
                     }
+                    return false;
                 }
-                return false;
             }
             !s.is_empty() && eq('{', s[0]) && glob(rest, &s[1..], fold)
         }
@@ -929,10 +967,14 @@ fn extract(path: &str, dest: &str, password: Option<&str>, only: Option<&str>, f
                 } else {
                     pol.charge(e.size(), &name)?;
                 }
+                // Made here and given its mode last, with the others: `unpack_in` sets a
+                // read-only mode at once, and the directory's own entries are then refused.
                 if kind.is_dir() {
+                    pol.contains(&target)?;
+                    std::fs::create_dir_all(&target).map_err(|e| format!("{}: {}", target.display(), e))?;
                     let mtime = e.header().mtime().ok().map(|m| m as i64);
-                    let mode = e.header().mode().ok();
-                    dirs.push((target.clone(), mode, mtime));
+                    dirs.push((target, e.header().mode().ok(), mtime));
+                    continue;
                 }
                 if e.unpack_in(root).msg()? && kind.is_file() {
                     count += 1;
@@ -1083,6 +1125,8 @@ enum ItemKind {
 
 /// Files under `src` (or `src` itself) as (relative name, path, kind), sorted, without
 /// `dest`: an archive written inside the tree it archives would otherwise contain itself.
+/// Only regular files, directories and links: a FIFO, socket or device is skipped, as
+/// opening one would block or read a stream that never ends.
 fn walk(src: &Path, dest: &Path) -> Result<Vec<(String, PathBuf, ItemKind)>, String> {
     let mut out = Vec::new();
     if let Ok(meta) = src.symlink_metadata() {
@@ -1092,7 +1136,9 @@ fn walk(src: &Path, dest: &Path) -> Result<Vec<(String, PathBuf, ItemKind)>, Str
         }
     }
     // The destination's name relative to the source, when it lands inside it.
-    let own = match (src.canonicalize(), dest.parent().and_then(|p| p.canonicalize().ok())) {
+    // A bare file name's parent is "", which `canonicalize` refuses: it is the working directory.
+    let parent = dest.parent().map(|p| if p.as_os_str().is_empty() { Path::new(".") } else { p });
+    let own = match (src.canonicalize(), parent.and_then(|p| p.canonicalize().ok())) {
         (Ok(s), Some(d)) => dest.file_name().and_then(|n| d.join(n).strip_prefix(&s).ok().map(|r| r.to_path_buf())),
         _ => None,
     };
@@ -1111,8 +1157,10 @@ fn walk(src: &Path, dest: &Path) -> Result<Vec<(String, PathBuf, ItemKind)>, Str
                 Ok(target) => ItemKind::Symlink(target),
                 Err(_) => continue,
             }
-        } else {
+        } else if ft.is_file() {
             ItemKind::File
+        } else {
+            continue;
         };
         out.push((rel, entry.path().to_path_buf(), kind));
     }

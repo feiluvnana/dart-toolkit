@@ -26,8 +26,30 @@ void main() {
 
     expect(await reason('/nonexistent/lib.dylib'), contains('not found: /nonexistent/lib.dylib'));
     // A file that is not a library, rather than the bundled copy loading in its place.
-    expect(await reason('pubspec.yaml'), startsWith('pubspec.yaml: '));
+    // Made absolute: the loader would search its own path for a relative name.
+    expect(
+      await reason('pubspec.yaml'),
+      startsWith('${Directory.current.path}${Platform.pathSeparator}pubspec.yaml: '),
+    );
   });
+
+  test(
+    'DART_TOOLKIT_NATIVE empty is unset, and relative is against the working directory',
+    () async {
+      Future<String> reason(String override) async {
+        final r = await Process.run(
+          Platform.resolvedExecutable,
+          ['run', 'test/fixtures/native_reason.dart'],
+          environment: {'DART_TOOLKIT_NATIVE': override},
+        );
+        return '${r.stdout}'.trim();
+      }
+
+      expect(await reason(''), 'null');
+      expect(await reason('native/prebuilt/${NativeBridge.target}/${NativeBridge.fileName}'), 'null');
+    },
+    skip: NativeLib.isAvailable ? null : 'dart_toolkit_native did not load',
+  );
 
   test('require hands over the library, or says why it cannot', () {
     if (NativeLib.isAvailable) {

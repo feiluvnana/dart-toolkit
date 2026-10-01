@@ -3,7 +3,7 @@ part of '../../native.dart';
 /// The toolkit's native library, `dart_toolkit_native`, shipped prebuilt inside the package.
 /// What needs it throws [UnsupportedError] when it did not load.
 ///
-/// Looked for at `DART_TOOLKIT_NATIVE` (a path, and then nowhere else), beside the running
+/// Looked for at `DART_TOOLKIT_NATIVE` (a path, and then nowhere else; empty is unset), beside the running
 /// executable, then in `native/prebuilt/<os>_<arch>/` inside the package.
 ///
 /// {@category Native}
@@ -25,7 +25,9 @@ abstract final class NativeLib {
   static const _abi = 3;
 
   static DynamicLibrary? _load() {
-    final override = Platform.environment['DART_TOOLKIT_NATIVE'];
+    // Empty is unset; relative is against the working directory, never the loader's search path.
+    final env = Platform.environment['DART_TOOLKIT_NATIVE'];
+    final override = env == null || env.isEmpty ? null : p.absolute(env);
     final candidates = override != null
         ? [override]
         : [

@@ -87,7 +87,8 @@ extension PathArchiveExtensions on Path {
   /// Writes `.zip`, `.7z`, `.tar` and `.tar.gz`/`.xz`/`.zst`/`.bz2` (or `.tgz`, …); any other
   /// extension is an [ArgumentError]. zip and 7z take a [password] (AES-256). A password for
   /// a tar, a `.rar` (read-only) and a [level] out of the codec's range are a
-  /// [FormatException] that says so, and leave nothing behind.
+  /// [FormatException] that says so, and leave nothing behind. Only files, directories and
+  /// links go in: a FIFO, socket or device is skipped.
   Future<File> archiveTo(String destination, {String? password, int? level}) async {
     final format = _Archive.of(destination);
     await Isolate.run(() => _NativeArchive.create(format, path, destination, password, level ?? -1));

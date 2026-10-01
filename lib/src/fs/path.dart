@@ -4,7 +4,9 @@ final _invalidPathChars = RegExp(r'[:*?"<>|\r\n\t]');
 final _invalidNameChars = RegExp(r'[/\\:*?"<>|]');
 final _whitespaceCollapse = RegExp(r'\s+');
 final _braceSlash = RegExp(r'\{[^}]*/');
-final _classEscape = RegExp(r'[\\^\[]');
+final _classEscape = RegExp(r'[\\^\[\]]');
+final _controlChars = RegExp(r'[\x00-\x1f]');
+final _tempName = RegExp(r'^\..+\.[0-9a-f]{16}\.tmp$');
 
 /// The type of filesystem entity at a [Path].
 ///
@@ -167,8 +169,8 @@ extension type const Path(String path) implements String {
     _ => 0,
   };
 
-  /// This path with invalid filesystem characters replaced in every component; separators
-  /// survive. For a single component use [StringPathExtensions.filename].
+  /// This path with invalid filesystem characters replaced, and control characters removed,
+  /// in every component; separators survive. For one component use [StringPathExtensions.filename].
   Path get sanitized {
     // The root (`/`, `C:\`, `\\server\share`) is the one place a `:` belongs.
     final root = p.rootPrefix(path);
@@ -176,7 +178,11 @@ extension type const Path(String path) implements String {
       root +
           p.joinAll([
             for (final part in p.split(path.substring(root.length)))
-              part.replaceAll(_invalidPathChars, '_').replaceAll(_whitespaceCollapse, ' ').trim(),
+              part
+                  .replaceAll(_invalidPathChars, '_')
+                  .replaceAll(_controlChars, '')
+                  .replaceAll(_whitespaceCollapse, ' ')
+                  .trim(),
           ]),
     );
   }
@@ -207,7 +213,9 @@ extension type const Path(String path) implements String {
   ///
   /// Atomic: the bytes go to a temporary file beside this one, renamed over it, so a reader
   /// (or a ^C halfway) sees the old file or the new one. An existing file keeps its
-  /// permissions, and a link keeps pointing where it did. A device or a FIFO is written in place.
+  /// permissions, and a link keeps pointing where it did. A device or a FIFO is written in
+  /// place, and so is a file in a folder that refuses a new one; any other failure leaves the
+  /// old file as it was. The new file is a new inode: hard links and xattrs stay with the old.
   Future<File> writeText(String content, {Encoding encoding = utf8}) => writeBytes(encoding.encode(content));
 
   /// [writeText], synchronously.
@@ -218,19 +226,18 @@ extension type const Path(String path) implements String {
     final (:target, :mode) = _writePlan(path);
     if (target == null) return asFile.writeAsBytes(bytes);
     if (mode == null) await File(target).parent.create(recursive: true);
-    final tmp = File(_tempBeside(target));
+    final opened = _openTemp(target, mode);
+    if (opened == null) return asFile.writeAsBytes(bytes);
+    final (tmp, out) = opened;
     try {
-      await tmp.writeAsBytes(bytes);
-    } on FileSystemException {
-      // A folder that takes no new file, around a file that may be written: in place, then.
-      await tmp.delete().catchError((Object _) => tmp);
-      return asFile.writeAsBytes(bytes);
-    }
-    try {
-      if (mode != null) _chmod(tmp.path, mode);
+      try {
+        await out.writeFrom(bytes);
+      } finally {
+        await out.close();
+      }
       await tmp.rename(target);
     } catch (_) {
-      await tmp.delete().catchError((Object _) => tmp);
+      _deleteQuietly(tmp);
       rethrow;
     }
     return asFile;
@@ -244,16 +251,18 @@ extension type const Path(String path) implements String {
       return asFile;
     }
     if (mode == null) File(target).parent.createSync(recursive: true);
-    final tmp = File(_tempBeside(target));
-    try {
-      tmp.writeAsBytesSync(bytes);
-    } on FileSystemException {
-      _deleteQuietly(tmp);
+    final opened = _openTemp(target, mode);
+    if (opened == null) {
       asFile.writeAsBytesSync(bytes);
       return asFile;
     }
+    final (tmp, out) = opened;
     try {
-      if (mode != null) _chmod(tmp.path, mode);
+      try {
+        out.writeFromSync(bytes);
+      } finally {
+        out.closeSync();
+      }
       tmp.renameSync(target);
     } catch (_) {
       _deleteQuietly(tmp);
@@ -354,7 +363,10 @@ extension type const Path(String path) implements String {
     // A `/` inside braces — `{a,b/c}` — makes the depth one of several, so it is not bounded.
     final unbounded = rest.contains('**') || _braceSlash.hasMatch(rest);
     return (
-      p.isAbsolute(pattern) ? (prefix.isEmpty ? p.rootPrefix(pattern) : prefix) : p.join(path, prefix),
+      // `C:` alone, before `/*.txt`, is the drive's working directory, not its root.
+      p.isAbsolute(pattern)
+          ? (prefix.length < p.rootPrefix(pattern).length ? p.rootPrefix(pattern) : prefix)
+          : p.join(path, prefix),
       rest,
       unbounded ? null : segments.length - fixed,
       dirs,
@@ -426,7 +438,9 @@ extension type const Path(String path) implements String {
 
   void _checkCopy(PathType t, String targetPath) {
     if (t == PathType.none) throw FileSystemException('Cannot copy non-existent path', path);
-    if (t == PathType.dir && (path == targetPath || p.isWithin(path, targetPath))) {
+    if (t != PathType.dir) return;
+    final (from, to) = (_real(path), _real(targetPath));
+    if (from == to || p.isWithin(from, to)) {
       throw FileSystemException('Cannot copy a directory into itself', path);
     }
   }
@@ -444,6 +458,7 @@ extension type const Path(String path) implements String {
       // Only across devices: copying over any other failure (a non-empty directory in the
       // way) would merge into the target and then delete the source.
       if (!_crossDevice(e)) rethrow;
+      _checkReplace(t, targetPath);
       await copy(targetPath);
       await delete(recursive: true);
     }
@@ -458,9 +473,26 @@ extension type const Path(String path) implements String {
       _entity(t).renameSync(targetPath);
     } on FileSystemException catch (e) {
       if (!_crossDevice(e)) rethrow;
+      _checkReplace(t, targetPath);
       copySync(targetPath);
       deleteSync(recursive: true);
     }
+  }
+
+  /// Refuses, as rename(2) would, what a copy across devices would merge into or put beside:
+  /// a non-empty directory, a directory in place of a file, or a file in place of one.
+  void _checkReplace(PathType t, String targetPath) {
+    final there = _pathType(FileSystemEntity.typeSync(targetPath, followLinks: false));
+    final (reason, code) = switch (there) {
+      PathType.dir when t != PathType.dir => ('Is a directory', 21),
+      PathType.dir when Directory(targetPath).listSync().isNotEmpty => (
+        'Directory not empty',
+        Platform.isWindows ? 145 : (Platform.isMacOS ? 66 : 39),
+      ),
+      PathType.file || PathType.link when t == PathType.dir => ('Not a directory', 20),
+      _ => (null, 0),
+    };
+    if (reason != null) throw FileSystemException('Cannot move to $targetPath', path, OSError(reason, code));
   }
 
   /// The entity this is, as [t] says: a link is renamed as a link, never through its target.
@@ -509,7 +541,9 @@ extension type const Path(String path) implements String {
       writeTextSync(readTextSync(encoding: encoding).replaceAll(from, replacement), encoding: encoding);
 
   /// The paths that changed under this file or directory, sent as a batch once nothing has
-  /// changed for [debounce], so a build that writes a hundred files is one rebuild.
+  /// changed for [debounce], so a build that writes a hundred files is one rebuild. A file
+  /// is watched through its folder, so it outlives atomic writes; their temporary files are
+  /// left out.
   ///
   /// ```dart
   /// await for (final changed in 'lib'.path.changes()) rebuild(changed);
@@ -524,26 +558,34 @@ extension type const Path(String path) implements String {
         return events.cancel();
       },
     );
-    out.onListen = () => events = asFile
-        .watch(recursive: FileSystemEntity.isDirectorySync(path))
-        .listen(
-          (e) {
-            batch.add(Path(e.path));
-            if (e is FileSystemMoveEvent && e.destination != null) batch.add(Path(e.destination!));
-            quiet?.cancel();
-            quiet = Timer(debounce, () {
-              final ready = batch;
-              batch = {};
-              out.add(ready);
-            });
-          },
-          onError: out.addError,
-          onDone: () {
-            quiet?.cancel();
-            if (batch.isNotEmpty) out.add(batch);
-            out.close();
-          },
-        );
+    out.onListen = () {
+      final isDir = FileSystemEntity.isDirectorySync(path);
+      // A file is watched through its folder: an atomic write renames a new file over it,
+      // which ends a watch on the file itself.
+      final watched = isDir ? asDir.watch(recursive: true) : Directory(p.dirname(path)).watch();
+      events = watched.listen(
+        (e) {
+          final hit = [
+            e.path,
+            if (e is FileSystemMoveEvent && e.destination != null) e.destination!,
+          ].where((f) => isDir ? !_isTemp(p.basename(f)) : p.basename(f) == name);
+          if (hit.isEmpty) return;
+          batch.addAll(isDir ? hit.map(Path.new) : [this]);
+          quiet?.cancel();
+          quiet = Timer(debounce, () {
+            final ready = batch;
+            batch = {};
+            out.add(ready);
+          });
+        },
+        onError: out.addError,
+        onDone: () {
+          quiet?.cancel();
+          if (batch.isNotEmpty) out.add(batch);
+          out.close();
+        },
+      );
+    };
     return out.stream;
   }
 }
@@ -560,16 +602,36 @@ extension StringPathExtensions on String {
 
   /// This string as a single path component, safe to join with [Path.operator /].
   ///
-  /// Separators and reserved characters become `_`, whitespace runs collapse, and the
-  /// result is never empty, `.` or `..`; at most 255 UTF-8 bytes, keeping the extension.
+  /// Separators and reserved characters become `_`, control characters go, whitespace runs
+  /// collapse, and the result is never empty, `.` or `..`; at most 255 UTF-8 bytes, keeping
+  /// the extension.
   Path get filename {
-    final cleaned = replaceAll(_whitespaceCollapse, ' ').trim().replaceAll(_invalidNameChars, '_');
+    final cleaned = replaceAll(
+      _whitespaceCollapse,
+      ' ',
+    ).trim().replaceAll(_controlChars, '').replaceAll(_invalidNameChars, '_');
     final name = switch (cleaned) {
       '' || '.' => '_',
       '..' => '__',
       _ => cleaned,
     };
     return Path(_capFilename(name));
+  }
+}
+
+/// [path] absolute, with the links on the part of it that exists resolved: `/var/x` and
+/// `x` run from `/private/var` are one place.
+String _real(String path) {
+  var head = p.canonicalize(path);
+  final tail = <String>[];
+  for (;;) {
+    try {
+      return p.joinAll([File(head).resolveSymbolicLinksSync(), ...tail.reversed]);
+    } on FileSystemException {
+      if (p.dirname(head) == head) return p.canonicalize(path);
+      tail.add(p.basename(head));
+      head = p.dirname(head);
+    }
   }
 }
 
@@ -638,11 +700,13 @@ int _modeOf(String mode, String path) {
     final m = _symbolicClause.firstMatch(clause);
     if (m == null) throw FormatException('Not an octal or symbolic mode', mode);
     final who = m[1]!.isEmpty || m[1]!.contains('a') ? 'ugo' : m[1]!;
-    // The bits [who] covers: rwx and the special bit of each class.
+    // The bits [who] covers: rwx and the special bit of each class; with no who at all, as
+    // chmod(1) has it, not those the umask clears.
     var mask = 0;
     if (who.contains('u')) mask |= 0x9c0; // 04700
     if (who.contains('g')) mask |= 0x438; // 02070
     if (who.contains('o')) mask |= 0x207; // 01007
+    if (m[1]!.isEmpty) mask &= ~_umask;
     for (final op in _symbolicOp.allMatches(m[2]!)) {
       var perm = 0;
       for (final c in op[2]!.split('')) {
@@ -665,6 +729,21 @@ int _modeOf(String mode, String path) {
   }
   return bits;
 }
+
+/// The process umask, read once without umask(2), whose set-and-restore races other isolates:
+/// from `/proc` on Linux, else from `sh`. Windows has none.
+final int _umask = () {
+  if (Platform.isWindows) return 0;
+  try {
+    final status = File('/proc/self/status').readAsStringSync();
+    final m = RegExp(r'^Umask:\s*([0-7]+)', multiLine: true).firstMatch(status);
+    if (m != null) return int.parse(m[1]!, radix: 8);
+  } on FileSystemException {
+    // Not Linux, or no procfs.
+  }
+  final r = Process.runSync('/bin/sh', ['-c', 'umask']);
+  return int.tryParse('${r.stdout}'.trim(), radix: 8) ?? 0x12; // 022
+}();
 
 /// Where an atomic write renames its temporary file to (this path, or the file a link here
 /// leads to) and the existing file's mode. No target means write in place: for a device, a
@@ -704,13 +783,38 @@ void _deleteQuietly(File file) {
   }
 }
 
-var _tempCount = 0;
+/// A new, empty file beside [target] for its next contents, open for writing and given [mode]
+/// before a byte is in it; `null` when the folder refuses a new file (write in place, then).
+/// The name is random and the file made exclusively, so no other writer shares it.
+(File, RandomAccessFile)? _openTemp(String target, int? mode) {
+  for (var tries = 0; ; tries++) {
+    final tmp = File(p.join(p.dirname(target), '.${p.basename(target)}.${Secure.bytes(8).hex}.tmp'));
+    try {
+      tmp.createSync(exclusive: true);
+    } on FileSystemException catch (e) {
+      final code = e.osError?.errorCode;
+      if ((Platform.isWindows ? const {5, 19} : const {1, 13, 30}).contains(code)) return null;
+      if (code == (Platform.isWindows ? 80 : 17) && tries < 3) continue;
+      rethrow;
+    }
+    try {
+      final out = tmp.openSync(mode: FileMode.writeOnly);
+      try {
+        if (mode != null) _chmod(tmp.path, mode);
+      } catch (_) {
+        out.closeSync();
+        rethrow;
+      }
+      return (tmp, out);
+    } catch (_) {
+      _deleteQuietly(tmp);
+      rethrow;
+    }
+  }
+}
 
-/// A name beside [target] for its next contents, unique to this process and isolate.
-String _tempBeside(String target) => p.join(
-  p.dirname(target),
-  '.${p.basename(target)}.$pid.${DateTime.now().microsecondsSinceEpoch}.${_tempCount++}.tmp',
-);
+/// Whether [name] is one of [_openTemp]'s files.
+bool _isTemp(String name) => _tempName.hasMatch(name);
 
 Future<void> _deleteNonDir(String path) async {
   try {
@@ -825,12 +929,15 @@ int _classEnd(String pattern, int open) {
   return end < 0 || pattern.substring(open, end).contains('/') ? -1 : end;
 }
 
-/// Where the `}` closing the brace opened at [open] is, nested braces skipped, or -1.
+/// Where the `}` closing the brace opened at [open] is, nested braces skipped, or -1 when
+/// there is none or only one alternative inside: `b{1}.txt` names itself.
 int _braceEnd(String pattern, int open) {
-  var depth = 0;
+  var depth = 0, choice = false;
   for (var i = open; i < pattern.length; i++) {
-    if (pattern[i] == '{') depth++;
-    if (pattern[i] == '}' && --depth == 0) return i;
+    final c = pattern[i];
+    if (c == '{') depth++;
+    if (c == ',' && depth == 1) choice = true;
+    if (c == '}' && --depth == 0) return choice ? i : -1;
   }
   return -1;
 }
