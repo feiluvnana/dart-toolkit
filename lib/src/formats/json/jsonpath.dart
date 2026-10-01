@@ -10,10 +10,10 @@ class _JsonPath {
 
   static final _cache = <String, _JsonPath>{};
 
-  /// Compiles or retrieves a cached JSONPath expression.
+  /// [expression] compiled, once per distinct text.
   static _JsonPath of(String expression) => _compiled(_cache, expression, () => _JsonPath._(_parse(expression)));
 
-  /// Evaluates this expression against [root] and returns all matching values in document order.
+  /// Every value this selects from [root], in document order.
   List<Object?> read(Object? root) {
     var nodes = <Object?>[root];
     for (final step in _steps) {
@@ -46,9 +46,9 @@ class _JsonPath {
           steps.add(const _Descend(null, includeSelf: true));
           continue;
         }
-        final name = _readName(text, i);
-        steps.add(_Descend(name.$1 == '*' ? null : name.$1));
-        i = name.$2;
+        final (name, end) = _readName(text, i);
+        steps.add(_Descend(name == '*' ? null : name));
+        i = end;
         continue;
       }
 
@@ -64,28 +64,29 @@ class _JsonPath {
         continue;
       }
 
-      final name = _readName(text, i);
-      if (name.$1.isNotEmpty) {
-        steps.add(name.$1 == '*' ? const _Wild() : _Child(name.$1));
-      }
-      i = name.$2;
+      final (name, end) = _readName(text, i);
+      if (name.isNotEmpty) steps.add(name == '*' ? const _Wild() : _Child(name));
+      i = end;
     }
 
     return steps;
   }
 
-  /// The bracket whose content starts at [start]: `*`, a quoted name, an index, a slice
-  /// `start:end:step`, or a comma-separated union of those. Returns the step and where the
-  /// text after the `]` resumes.
+  /// The bracket whose content starts at [start] — `*`, a quoted name, an index, a slice, or a
+  /// union of those — and the index after its `]`.
   static (_Step, int) _bracket(String text, int start, String expression) {
     Never fail(String why) => throw FormatException('$why in JSONPath', expression, start);
     final parts = <_Step>[];
     var i = start;
-    while (true) {
+    void spaces() {
       while (i < text.length && text[i] == ' ') {
         i++;
       }
       if (i >= text.length) fail('Unclosed bracket');
+    }
+
+    while (true) {
+      spaces();
       final c = text[i];
       if (c == '?' || c == '(') fail('Filters are not supported — use .where on the result');
       if (c == '"' || c == "'") {
@@ -118,10 +119,7 @@ class _JsonPath {
           fail('Invalid bracket expression "[$item]"');
         }
       }
-      while (i < text.length && text[i] == ' ') {
-        i++;
-      }
-      if (i >= text.length) fail('Unclosed bracket');
+      spaces();
       if (text[i] == ']') return (parts.length == 1 ? parts.single : _Parts(parts), i + 1);
       if (text[i] != ',') fail('Expected "," or "]"');
       i++;
@@ -148,9 +146,7 @@ final class _Child extends _Step {
 
   @override
   void apply(Object? node, List<Object?> out) {
-    if (node is Map && node.containsKey(key)) {
-      out.add(node[key]);
-    }
+    if (node is Map && node.containsKey(key)) out.add(node[key]);
   }
 }
 

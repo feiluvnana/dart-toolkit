@@ -4,7 +4,7 @@ final class _TomlParser {
   final String s;
   int i = 0;
   final Map<String, Object?> root = {};
-  Map<String, Object?> current;
+  late Map<String, Object?> current = root;
   int _depth = 0;
 
   // What made each table, by identity: a `[header]` (defined, so never again), a header's
@@ -15,16 +15,13 @@ final class _TomlParser {
   final Set<Object> _frozen = Set.identity();
   final Set<Object> _tables = Set.identity();
 
-  _TomlParser(this.s) : current = {} {
-    current = root;
-  }
+  _TomlParser(this.s);
 
   Map<String, Object?> parse() {
     while (true) {
       _skipBlank();
       if (i >= s.length) return root;
-      final c = s[i];
-      if (c == '[') {
+      if (s[i] == '[') {
         _tableHeader();
       } else {
         _keyValue(current);
@@ -46,17 +43,12 @@ final class _TomlParser {
     final name = path.last;
     final existing = target[name];
     if (array) {
-      final List<Object?> list;
       if (existing == null) {
-        _tables.add(list = target[name] = <Object?>[]);
-      } else if (_tables.contains(existing)) {
-        list = existing as List<Object?>;
-      } else {
+        _tables.add(target[name] = <Object?>[]);
+      } else if (!_tables.contains(existing)) {
         throw _error('"$name" is already a value, not an array of tables');
       }
-      final table = <String, Object?>{};
-      list.add(table);
-      current = table;
+      (target[name] as List<Object?>).add(current = <String, Object?>{});
     } else if (existing == null) {
       current = target[name] = <String, Object?>{};
     } else if (existing is Map<String, Object?> && _implicit.remove(existing)) {
@@ -216,20 +208,8 @@ final class _TomlParser {
         if (i >= s.length) throw _error('Unterminated string');
         final e = s[i];
         switch (e) {
-          case 'n':
-            sb.write('\n');
-          case 't':
-            sb.write('\t');
-          case 'r':
-            sb.write('\r');
-          case 'b':
-            sb.write('\b');
-          case 'f':
-            sb.write('\f');
-          case '"':
-            sb.write('"');
-          case r'\':
-            sb.write(r'\');
+          case 'n' || 't' || 'r' || 'b' || 'f' || '"' || r'\':
+            sb.write(_escapes[e]);
           case 'u' || 'U':
             final n = e == 'u' ? 4 : 8;
             var code = 0;
@@ -314,9 +294,7 @@ final class _TomlParser {
       if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
         i++;
       } else if (c == '#') {
-        while (i < s.length && s[i] != '\n') {
-          i++;
-        }
+        _comment();
       } else {
         return;
       }
@@ -325,12 +303,16 @@ final class _TomlParser {
 
   void _lineEnd() {
     _ws();
+    _comment();
+    if (i < s.length && s[i] != '\n' && s[i] != '\r') throw _error('Expected the end of the line');
+  }
+
+  void _comment() {
     if (i < s.length && s[i] == '#') {
       while (i < s.length && s[i] != '\n') {
         i++;
       }
     }
-    if (i < s.length && s[i] != '\n' && s[i] != '\r') throw _error('Expected the end of the line');
   }
 
   void _expect(String t) {
@@ -342,6 +324,8 @@ final class _TomlParser {
     final line = s.substring(0, i < s.length ? i : s.length).split('\n').length;
     return FormatException('TOML line $line: $message');
   }
+
+  static const _escapes = {'n': '\n', 't': '\t', 'r': '\r', 'b': '\b', 'f': '\f', '"': '"', r'\': r'\'};
 
   static int _hex(int c) => switch (c) {
     >= 0x30 && <= 0x39 => c - 0x30,

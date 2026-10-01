@@ -1,8 +1,5 @@
-// The HTML 4 named character references (252), `apos`, the six upper-case spellings HTML 5
-// keeps for compatibility, and HTML 5's punctuation and common symbols (`&lpar;`, `&check;`).
-// Numeric references are decoded arithmetically. The long tail of HTML 5 names is not here on
-// purpose: this table covers what pages use, and the full list is 2 231 entries of startup
-// cost.
+// HTML 4's named references, `apos`, HTML 5's upper-case compatibility spellings and its common
+// punctuation and symbols. Not HTML 5's full 2 231: pages rarely use them, and they cost startup.
 
 part of '../../../formats.dart';
 
@@ -320,9 +317,7 @@ const Map<String, String> _entities = {
   'sung': '\u{266a}',
 };
 
-/// The names HTML 5 still decodes without a `;` — the Latin-1 set pages wrote before the
-/// semicolon was enforced. Anything else needs its `;`, which is what keeps `?a=1&lang=en`
-/// a query string rather than `?a=1〈=en`.
+/// The legacy names HTML 5 decodes without a `;`; any other needs it, so `?a=1&lang=en` stays.
 const _legacyEntities = {
   'AElig', 'AMP', 'Aacute', 'Acirc', 'Agrave', 'Aring', 'Atilde', 'Auml', 'COPY', 'Ccedil', 'ETH', 'Eacute', //
   'Ecirc', 'Egrave', 'Euml', 'GT', 'Iacute', 'Icirc', 'Igrave', 'Iuml', 'LT', 'Ntilde', 'Oacute', 'Ocirc',
@@ -335,8 +330,7 @@ const _legacyEntities = {
   'times', 'uacute', 'ucirc', 'ugrave', 'uml', 'uuml', 'yacute', 'yen', 'yuml',
 };
 
-/// What a numeric reference to 0x80–0x9F means: the Windows-1252 character a page with
-/// that byte meant, as every browser reads it. The five holes in that code page are absent.
+/// Numeric references 0x80–0x9F read as Windows-1252, as browsers do.
 const _windows1252 = <int, int>{
   0x80: 0x20ac, 0x82: 0x201a, 0x83: 0x0192, 0x84: 0x201e, 0x85: 0x2026, 0x86: 0x2020, 0x87: 0x2021, //
   0x88: 0x02c6, 0x89: 0x2030, 0x8a: 0x0160, 0x8b: 0x2039, 0x8c: 0x0152, 0x8e: 0x017d, 0x91: 0x2018,
@@ -346,17 +340,14 @@ const _windows1252 = <int, int>{
 
 /// How references read where they are found.
 enum _References {
-  /// HTML text: `&amp;`, `&#38;`, `&#x26;` and the HTML 4 named references, decoded as
-  /// HTML 5 decodes text — a name without its `;` only when it is one of the legacy names.
+  /// HTML text, decoded as HTML 5 does: without a `;` only a legacy name.
   text,
 
-  /// An HTML attribute value: as text, except that a legacy name without its `;` stays
-  /// literal before a letter, digit or `=` — there it is a query parameter (`&copy=2`)
-  /// far more often than a character.
+  /// An HTML attribute: as text, but a `;`-less legacy name before a letter, digit or `=` is
+  /// literal, being far more often a query parameter (`&copy=2`).
   attribute,
 
-  /// XML: the five predefined names and numeric references, each with its `;`, and any
-  /// other `&` as written.
+  /// XML: the five predefined names and numeric references, each with its `;`.
   xml,
 }
 
@@ -365,8 +356,7 @@ const _xmlEntities = {'lt': '<', 'gt': '>', 'amp': '&', 'quot': '"', 'apos': "'"
 String _decodeEntities(String text, _References mode) {
   var amp = text.indexOf('&');
   if (amp == -1) return text;
-  // The run between two references is copied in one go. Walking it code unit at a time
-  // costs about four times as much, and most text has far more prose than entities.
+  // Runs between references are copied whole: 4× faster than walking code units.
   final sb = StringBuffer();
   var last = 0;
   while (amp != -1) {
@@ -385,11 +375,9 @@ String _decodeEntities(String text, _References mode) {
   return sb.toString();
 }
 
-/// The reference starting after the `&` at [start]: what it decodes to and where the text
-/// after it resumes, or `(null, _)` when the `&` is literal.
-///
-/// Scans only as far as a reference could reach, never to the next `;`: looking for that
-/// from every `&` made a document with many bare ampersands quadratic — 8.9 s for 240 KB.
+/// The reference after the `&` at [start] and where the text resumes, or `(null, _)` when the
+/// `&` is literal. Never scans ahead for a `;`, which made bare ampersands quadratic.
+
 (String?, int) _reference(String text, int start, _References mode) {
   final xml = mode == _References.xml;
   var i = start;

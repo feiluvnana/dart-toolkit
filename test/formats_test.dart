@@ -135,6 +135,7 @@ name = "b"
       expect(t['literal'].raw, r'C:\path');
       expect(t['multi'].raw, 'line one\nline twocontinued');
       expect(t['raw'].raw, r'keep \n here');
+      expect(r'k = "a\\b\"\t"'.toml['k'].raw, 'a\\b"\t');
       expect(t['int'].raw, 1000);
       expect(t['hex'].raw, 255);
       expect(t['float'].raw, -350.0);

@@ -1,10 +1,9 @@
-// The markup tree: nodes, elements, and the queries on them. HTML and XML differ in how
-// they are parsed and serialised, not in what they parse into, so there is one tree.
+// The one markup tree HTML and XML both parse into, and the queries on it.
 
 part of '../../../formats.dart';
 
-/// Which markup an [Element] was parsed from, and so how it serialises: HTML keeps its
-/// void and raw-text elements, XML closes everything and may close it in one tag.
+/// Which markup an [Element] came from, and so how it serialises: HTML keeps void and
+/// raw-text elements, XML closes everything, empty ones as `<e/>`.
 ///
 /// {@category Formats}
 enum Syntax { html, xml }
@@ -63,15 +62,12 @@ final class Attribute extends Node {
   @override
   String get markup {
     final sb = StringBuffer('$name="');
-    _writeEscaped(sb, value, attribute: true, xml: parent is Element && (parent as Element).syntax == Syntax.xml);
+    _writeEscaped(sb, value, attribute: true, xml: parent?.syntax == Syntax.xml);
     return (sb..write('"')).toString();
   }
 
-  /// Two of these are the same attribute when they name the same thing on the same element.
-  ///
-  /// An `@href` step and a document-order walk each mint their own instance for one
-  /// attribute, and the sets and maps that de-duplicate and order a node-set have to see
-  /// those as one node — otherwise a union repeats attributes and cannot sort them.
+  /// Equal when they name the same attribute on the same element: XPath mints a new instance
+  /// per step, and a node-set must de-duplicate and sort them as one node.
   @override
   bool operator ==(Object other) => other is Attribute && other.name == name && identical(other.parent, parent);
 
@@ -79,20 +75,15 @@ final class Attribute extends Node {
   int get hashCode => Object.hash(identityHashCode(parent), name);
 }
 
-/// An element: a [name], its [attributes], and the [nodes] inside it.
-///
-/// One class for both markups: an HTML tag name and attribute name arrive lowercased, an
-/// XML one as written, and [syntax] is what decides how the element serialises and whether
-/// a CSS selector folds case.
+/// An element: a [name], its [attributes], and the [nodes] inside it. HTML names arrive
+/// lowercased, XML ones as written; [syntax] decides serialisation and CSS case folding.
 ///
 /// {@category Formats}
 final class Element extends Node {
-  /// The tag name: lowercase for HTML (`a`, `div`, `td`), as written for XML
-  /// (`item`, `media:content`).
+  /// The tag name: `div` for HTML, as written for XML (`media:content`).
   final String name;
 
-  /// Attributes by name — lowercased for HTML, as written for XML — values decoded. A
-  /// valueless attribute is `''`.
+  /// Attributes by name, values decoded; a valueless attribute is `''`.
   final Map<String, String> attributes;
 
   /// Child nodes in document order.
@@ -101,8 +92,7 @@ final class Element extends Node {
   /// Which markup this element came from.
   final Syntax syntax;
 
-  /// Where this element was put in its parent's [nodes]: a hint that [nextElement] checks
-  /// before searching, so walking a run of siblings is linear rather than quadratic.
+  /// Index in the parent's [nodes], checked before searching, so sibling walks stay linear.
   int _slot = 0;
 
   Element(this.name, [Map<String, String>? attributes, this.syntax = Syntax.html]) : attributes = attributes ?? {};
@@ -128,24 +118,20 @@ final class Element extends Node {
     },
   };
 
-  /// Attribute [name] on this element. Throws a [StateError] naming the attribute and the tag
-  /// when it is absent; [attrOrNull] is for the caller who expects that.
+  /// Attribute [name], or a [StateError] naming it and the tag; see [attrOrNull].
   String attr(String name) => attributes[name] ?? (throw StateError('<${this.name}> has no $name attribute'));
 
   /// Attribute [name] on this element, or `null`.
   String? attrOrNull(String name) => attributes[name];
 
-  /// Every descendant matching CSS [selector], in document order.
+  /// Every descendant matching CSS [selector], in document order. HTML names fold to
+  /// lowercase; for an XML prefix escape the colon, `r'media\:content'`.
   ///
-  /// Names fold to lowercase for HTML and match as written for XML. A prefixed XML name
-  /// (`media:content`) can be selected by escaping the colon as `r'media\:content'`, or with the XPath form.
-  ///
-  /// A selector may start with a combinator, read from this element as `:has()` reads one:
-  /// `> li.x` is its children, `+ dd` the next sibling, `~ p` the later ones. Every
-  /// alternative of such a list is read from it, so in `> a, b` the `b` is a descendant.
+  /// A leading combinator reads from this element, as in `:has()`: `> li.x` is its children,
+  /// `+ dd` the next sibling, `~ p` the later ones; in `> a, b` the `b` is a descendant.
   Elements $(String selector) => Elements(_Selector.parse(selector, fold: syntax == Syntax.html).from(this));
 
-  /// The nodes matching XPath [expression] with this element as the context; see XPath.
+  /// The nodes XPath [expression] selects with this element as the context.
   Nodes $x(String expression) => Nodes(_XPath.parse(expression).select(this));
 
   @override
@@ -174,14 +160,11 @@ final class Element extends Node {
     }
   }
 
-  /// The text as it reads on the page, one line per entry: a line ends at a `<br>`, a
-  /// newline, and either edge of a block element (`p`, `div`, `li`, `tr`, `h1`…); table
-  /// cells on one row are separated by a tab; `head`, `script`, `style`, `template` and
-  /// `noscript` are skipped. Entities are decoded, blank lines dropped, each line trimmed.
+  /// The text as it reads on the page, trimmed, blank lines dropped: lines break at `<br>`,
+  /// newlines and block elements (`p`, `div`, `li`, `tr`…), cells in a row are tab-separated,
+  /// and `head`, `script`, `style`, `template` and `noscript` are skipped.
   ///
-  /// A non-breaking space counts as a space here, unlike in [text]: these are lines meant to
-  /// be read, while [text] is the node's string value and has to stay faithful — XPath's
-  /// `string()` and every predicate comparison go through it.
+  /// A non-breaking space is a space here but not in [text], which XPath compares against.
   List<String> get lines {
     final out = <String>[];
     final current = StringBuffer();
@@ -252,11 +235,9 @@ final class Element extends Node {
 
   /// This `<table>` (or the first one below this element) as rows of named columns.
   ///
-  /// The header is the first row of `<th>` cells, or the first row of a `<thead>` whatever
-  /// its cells; a column without a name is `c1, c2, …`, and a name that repeats gets a
-  /// suffix (`Price`, `Price_2`) so no column hides another. Every other `<tr>` with a `<td>`
-  /// is a row. A cell's `colspan` and `rowspan` repeat its text into every column and row it
-  /// covers, so a row's values stay under their headings.
+  /// The header is the first all-`<th>` row or the first `<thead>` row; an unnamed column is
+  /// `c1, c2, …` and a repeated name gets a suffix (`Price_2`). `colspan` and `rowspan` repeat
+  /// a cell's text into every column and row it covers.
   Table get table {
     final t = name == 'table' ? this : $('table').firstOrNull;
     if (t == null) return Table(const [], const []);
@@ -337,23 +318,22 @@ final class Element extends Node {
 
 final _ws = RegExp(r'\s+');
 
-/// The elements a query matched, in document order. A [List], with the first match's
-/// [text], [attr], [lines], [markup] and [table] one hop closer — `doc.$('a').attr('href')` —
-/// and every match's in [texts], [attrs] and [links].
+/// The elements a query matched, in document order: a [List] with the first match's [text],
+/// [attr], [lines], [markup] and [table] (`doc.$('a').attr('href')`), and every match's
+/// [texts], [attrs] and [links].
 ///
 /// {@category Formats}
 extension type Elements(List<Element> _list) implements List<Element> {
   /// The first match's text. Throws [StateError] when nothing matched.
   String get text => _first.text;
 
-  /// The first match's text lines; see [Element.lines]. Throws [StateError] when nothing matched.
+  /// The first match's [Element.lines]. Throws [StateError] when nothing matched.
   List<String> get lines => _first.lines;
 
   /// Every match's text, in document order; [text] is the first one.
   List<String> get texts => [for (final e in _list) e.text];
 
-  /// Attribute [name] on the first match. Throws a [StateError] when nothing matched or the
-  /// first match has no such attribute.
+  /// Attribute [name] on the first match; a [StateError] when nothing matched or it is absent.
   String attr(String name) => _first.attr(name);
 
   /// Attribute [name] on the first match, or `null` when it is absent or nothing matched.
@@ -368,10 +348,8 @@ extension type Elements(List<Element> _list) implements List<Element> {
   /// The first match's [Element.table], or an empty table when nothing matched.
   Table get table => _list.isEmpty ? Table(const [], const []) : _list.first.table;
 
-  /// Every match's `href` — or `src`, where it has none — as a [Uri] resolved against its
-  /// document's [HtmlDocument.base]: `doc.$('a.next').links`, `doc.$('img').links`. With no
-  /// base, a link is as written. A match with neither attribute, or a value that is not a
-  /// URI, is skipped.
+  /// Every match's `href` (or `src`) resolved against its [HtmlDocument.base], or as written
+  /// without one: `doc.$('img').links`. A match with neither, or not a URI, is skipped.
   List<Uri> get links {
     final out = <Uri>[];
     Element? root;
@@ -402,7 +380,7 @@ extension type Elements(List<Element> _list) implements List<Element> {
     ]);
   }
 
-  /// The nodes matching XPath [expression] from each match, each node once, in document order.
+  /// The nodes XPath [expression] selects from each match, each once, in document order.
   Nodes $x(String expression) {
     final x = _XPath.parse(expression);
     final seen = <Node>{};
@@ -416,17 +394,15 @@ extension type Elements(List<Element> _list) implements List<Element> {
   Element get _first => _list.isEmpty ? throw StateError('Nothing matched the selector') : _list.first;
 }
 
-/// The nodes an XPath query selected, in document order: elements, text and attributes. A
-/// [List], with the first node's [text] and [attr] one hop closer, and [elements] to go on
-/// with CSS: `doc.$x('//table[.//th="Title"]').elements.$('td')`.
+/// The nodes an XPath query selected, in document order: a [List] with the first node's
+/// [text] and [attr], and [elements] to go on with CSS: `doc.$x('//table').elements.$('td')`.
 ///
 /// {@category Formats}
 extension type Nodes(List<Node> _list) implements List<Node> {
   /// The first node's string value. Throws [StateError] when nothing matched.
   String get text => _list.isEmpty ? throw StateError('Nothing matched the XPath expression') : _list.first.text;
 
-  /// Attribute [name] on the first element. Throws a [StateError] when no element was
-  /// selected or the first has no such attribute.
+  /// Attribute [name] on the first element; a [StateError] when there is none or it is absent.
   String attr(String name) =>
       (_list.whereType<Element>().firstOrNull ?? (throw StateError('No element matched the XPath expression'))).attr(
         name,
@@ -455,26 +431,24 @@ final class HtmlDocument {
   /// The `<html>` element. Parsing always produces one, with `<head>` and `<body>` inside.
   final Element root;
 
-  /// A document over [root]; [url] is where it came from, which relative links resolve
-  /// against.
+  /// A document over [root]; relative links resolve against [url].
   HtmlDocument(this.root, {Uri? url}) {
     if (url != null) _urls[root] = url;
   }
 
-  /// Parses [text] as HTML. Tag soup is fine: unclosed `<p>` and `<li>`, missing
-  /// `<html>`/`<body>`, and `<tr>` straight inside `<table>` all land where a browser puts them.
-  /// [url] is the page's address, which [base] and [Elements.links] resolve against.
+  /// Parses [text] as HTML; tag soup lands where a browser puts it. [url] is the page's
+  /// address, which [base] and [Elements.links] resolve against.
   factory HtmlDocument.parse(String text, {Uri? url}) => HtmlDocument(_parseHtml(text), url: url);
 
-  /// What a relative link on this page is relative to: its `<base href>`, resolved against the
-  /// address it was parsed with, or that address; `null` when it has neither.
+  /// What relative links resolve against: `<base href>` (resolved against the parse address),
+  /// else that address, else `null`.
   Uri? get base => _baseOf(root);
 
   /// Every element matching CSS [selector], in document order.
   Elements $(String selector) => Elements(_Selector.parse(selector).matchAll(root, includeSelf: true));
 
-  /// The nodes matching XPath [expression], from the document: `//a/@href`,
-  /// `//tr[td[2]="FLAC"]/td[1]/a`, `//h2[contains(., "Tracks")]/following-sibling::table[1]`.
+  /// The nodes XPath [expression] selects: `//a/@href`, `//tr[td[2]="FLAC"]/td[1]/a`,
+  /// `//h2[contains(., "Tracks")]/following-sibling::table[1]`.
   Nodes $x(String expression) => Nodes(_XPath.parse(expression).select(root));
 
   /// The `<head>` element.
@@ -493,12 +467,10 @@ final class HtmlDocument {
   String toString() => markup;
 }
 
-/// The address each parsed HTML document came from, by its root element: kept beside the
-/// tree rather than in a field, so no element is larger for it.
+/// Each document's address by root element, kept outside the tree so no element pays a field.
 final _urls = Expando<Uri>('url');
 
-/// [root]'s base address: the first `<base href>` in its `<head>`, resolved against the address
-/// the document was parsed with, or that address.
+/// See [HtmlDocument.base].
 Uri? _baseOf(Element root) {
   final url = _urls[root];
   for (final head in root.children) {
@@ -514,10 +486,8 @@ Uri? _baseOf(Element root) {
   return url;
 }
 
-/// Stands for the document above `<html>`, so an absolute XPath has somewhere to start.
-///
-/// One is made whenever a walk reaches the top, so two of them are the same node when they
-/// stand above the same root.
+/// The document node above the root, where an absolute XPath starts; minted per walk, so equal
+/// by root.
 final class _Document extends Element {
   final Element root;
   _Document(this.root) : super('#document', const {}, root.syntax);
@@ -531,9 +501,8 @@ final class _Document extends Element {
   int get hashCode => identityHashCode(root);
 }
 
-/// [make]'s result for [key], made once and kept among the last 256 — the cache every
-/// compiled query uses (CSS, XPath, JSONPath). A program that builds queries from data, a
-/// column name or a user's input, would otherwise grow it forever.
+/// [make]'s result for [key], cached among the last 256: the CSS, XPath and JSONPath cache,
+/// bounded for programs that build queries from data.
 V _compiled<K, V>(Map<K, V> cache, K key, V Function() make) {
   final hit = cache[key];
   if (hit != null) return hit;
@@ -541,14 +510,12 @@ V _compiled<K, V>(Map<K, V> cache, K key, V Function() make) {
   return cache[key] = make();
 }
 
-/// How deep the tree walks recurse before they carry on with an explicit stack. Recursion
-/// measured a third faster on real pages; the stack is what lets a document nested a
-/// hundred thousand deep be read rather than overflow.
+/// How deep tree walks recurse before switching to an explicit stack: recursion is a third
+/// faster, the stack survives documents nested 100 000 deep.
 const _deep = 256;
 
 /// Visits the nodes below [n] in document order until [visit] returns true, and returns
-/// whether it did. [depth] limits how far down: 1 is the children. `$`'s `:has()` and every
-/// XPath axis that goes down walk with this.
+/// whether it did; [depth] 1 is the children only.
 bool _eachBelow(Node n, bool Function(Node) visit, {int depth = 1 << 30}) {
   final lists = <List<Node>>[];
   final at = <int>[];
@@ -584,19 +551,10 @@ const _blockElements = {
 /// Elements [Element.lines] leaves out: nothing in them is read on the page.
 const _hiddenElements = {'script', 'style', 'template', 'noscript', 'head'};
 
-/// Writes [root] and everything below it into [sb] as markup, in one buffer.
-///
-/// One buffer and an explicit stack: concatenating each element's children into a string
-/// for its parent copied every subtree once per level above it, and recursing overflowed
-/// on a document nested deep enough.
+/// Writes [root] as markup into [sb], with an explicit stack so deep documents don't overflow.
 void _serialize(Node root, StringBuffer sb) {
   if (root is! Element) {
-    switch (root) {
-      case final Text t:
-        _writeEscaped(sb, t.data, attribute: false);
-      default:
-        sb.write(root.markup);
-    }
+    root is Text ? _writeEscaped(sb, root.data, attribute: false) : sb.write(root.markup);
     return;
   }
   if (!_writeStartTag(root, sb)) return;
@@ -627,9 +585,8 @@ void _serialize(Node root, StringBuffer sb) {
   }
 }
 
-/// Writes [e]'s start tag. Returns whether its children and end tag are still to come:
-/// false for a void element, an empty XML one (`<e/>`), and a raw-text one, whose content
-/// is written here, unescaped, with its end tag.
+/// Writes [e]'s start tag, and returns whether its children and end tag are still to come:
+/// not for a void element, an empty XML one, or a raw-text one, written whole here.
 bool _writeStartTag(Element e, StringBuffer sb) {
   sb
     ..write('<')
@@ -653,9 +610,7 @@ bool _writeStartTag(Element e, StringBuffer sb) {
   sb.write('>');
   if (e.name == 'pre' || e.name == 'textarea' || e.name == 'listing') {
     final first = e.nodes.firstOrNull;
-    if (first is Text && first.data.startsWith('\n')) {
-      sb.write('\n');
-    }
+    if (first is Text && first.data.startsWith('\n')) sb.write('\n');
   }
   if (_voidElements.contains(e.name)) return false;
   if (!_rawTextElements.contains(e.name)) return true;
@@ -697,12 +652,9 @@ void _writeEscaped(StringBuffer sb, String s, {required bool attribute, bool xml
   }
 }
 
-/// Elements below [root] named in [names], skipping whatever is inside a nested element
-/// named in [stop], in document order.
-///
-/// The walk a `<table>` needs: a table inside a cell keeps its own rows, and a row keeps
-/// its own cells. Doing it with `$` instead meant a subtree search per row whose matches
-/// then had to be filtered back down by their nearest ancestor.
+/// Elements below [root] named in [names], in document order, not entering one named in
+/// [stop]: a nested table keeps its own rows, a row its own cells.
+
 List<Element> _within(Element root, Set<String> names, Set<String> stop) {
   final out = <Element>[];
   final lists = <List<Node>>[];

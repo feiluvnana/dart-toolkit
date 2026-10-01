@@ -1,8 +1,6 @@
 part of '../../../formats.dart';
 
-// These live in `formats`, which already imports `collection`, and not the other way round:
-// `collection` importing `formats` for them put every parser in the package into a program
-// that only wanted a `Table`, about 280 ms of `dart run` compile.
+// Here, not in `collection`: importing `formats` there costs a `Table`-only program ~280 ms.
 
 /// JSON objects as a [Table]; `JsonDocument.table` is the one-document form.
 ///

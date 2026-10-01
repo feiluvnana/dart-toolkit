@@ -50,8 +50,8 @@ Element _parseXml(String source) {
       final gt = src.indexOf('>', pos);
       final name = src.substring(pos + 2, gt == -1 ? src.length : gt).trim();
       pos = gt == -1 ? src.length : gt + 1;
-      // A name that is not open is ignored without a search: a stray close under a deep
-      // stack searched the whole stack, and forty thousand of them took 5 s.
+      // A name not open is ignored without searching the stack, which made stray closes quadratic.
+
       final i = (openNames[name] ?? 0) == 0 ? -1 : open.lastIndexWhere((e) => e.name == name);
       if (i != -1) {
         run.flush();
