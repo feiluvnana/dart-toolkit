@@ -8,10 +8,11 @@ This document defines the structured, three-round auditing and refinement workfl
 
 ```mermaid
 flowchart TD
-    subgraph Round 1: Core Audits
+    subgraph Round 1: Foundation Audits
         A1["Subagent: Features & Ergonomics\n(AUDIT_FEATURES.md)"]
         A2["Subagent: Bloat & Dead Code\n(AUDIT_BLOAT.md)"]
         A3["Subagent: Performance & Optimization\n(AUDIT_PERFORMANCE.md)"]
+        A4["Subagent: Conventions & Docs Defects\n(AUDIT_CONVENTIONS.md)"]
     end
 
     G1{"Gate 1: Review & Implement Round 1 Changes"}
@@ -31,6 +32,7 @@ flowchart TD
     A1 --> G1
     A2 --> G1
     A3 --> G1
+    A4 --> G1
     G1 --> B1
     G1 --> B2
     B1 --> G2
@@ -43,7 +45,7 @@ flowchart TD
 
 ## Round 1: Foundation Audits (Parallel Subagents)
 
-The lead agent spawns three independent subagents concurrently. Each subagent reads the codebase and writes its findings and recommendations to its dedicated Markdown file.
+The lead agent spawns four independent subagents concurrently. Each subagent reads the codebase, documentation, and conventions, writing its findings and recommendations to its dedicated Markdown file.
 
 ### Subagent 1.1: Missing Features & API Ergonomics
 - **Role**: `Feature & Ergonomics Auditor`
@@ -69,21 +71,30 @@ The lead agent spawns three independent subagents concurrently. Each subagent re
   - Review I/O and process execution (stream buffering, isolate boundaries, native FFI overhead).
   - Recommend concrete optimizations with algorithmic and memory impact analysis.
 
+### Subagent 1.4: Conventions & Documentation Defects
+- **Role**: `Conventions & Specs Auditor`
+- **Output Target**: `AUDIT_CONVENTIONS.md`
+- **Scope**:
+  - Audit `CONVENTIONS.md`, `GUIDE.md`, `README.md`, and top-level library docstrings for internal defects, obsolete guidance, and self-contradictory rules.
+  - Scrutinize whether any written conventions are themselves problematic, dogmatic, or counter-productive (e.g. banning necessary abstractions, enforcing brittle patterns, or prescribing outdated Dart idioms).
+  - Identify gaps where conventions are silent or ambiguous, leading to divergent implementations across modules.
+  - Verify that documented code examples in docstrings and guides match actual current runtime signatures and behavior.
+
 ---
 
 ## Gate 1: Implementation & Consolidation
 
 Before proceeding to Round 2:
-1. The lead agent reviews `AUDIT_FEATURES.md`, `AUDIT_BLOAT.md`, and `AUDIT_PERFORMANCE.md`.
-2. Plan and execute the accepted additions, prunings, and performance optimizations.
+1. The lead agent reviews `AUDIT_FEATURES.md`, `AUDIT_BLOAT.md`, `AUDIT_PERFORMANCE.md`, and `AUDIT_CONVENTIONS.md`.
+2. Plan and execute the accepted additions, prunings, performance optimizations, and convention/documentation updates.
 3. Validate compilation and tests (`dart analyze`, `dart test`).
-4. Remove the intermediate Round 1 audit files once resolved or archive as needed.
+4. Remove or archive the intermediate Round 1 audit files once resolved.
 
 ---
 
 ## Round 2: API Refinement & Consistency (Parallel Subagents)
 
-Once the codebase structure is refined from Round 1, the lead agent spawns two focused subagents to polish the public API experience.
+Once the core foundation, bloat, performance, and conventions have been corrected in Round 1, the lead agent spawns two focused subagents to polish the public API experience.
 
 ### Subagent 2.1: API Brevity & Discoverability
 - **Role**: `Discoverability Auditor`
@@ -100,7 +111,7 @@ Once the codebase structure is refined from Round 1, the lead agent spawns two f
   - Audit naming conventions across all modules (e.g. `ConsoleTheme` vs. `TuiTheme`, verb names in HTTP vs. Client).
   - Verify parameter ordering conventions across related functions.
   - Audit return type semantics (nullable vs non-nullable exceptions, `Either` vs thrown errors).
-  - Ensure uniform adherence to repository conventions documented in `CONVENTIONS.md`.
+  - Ensure uniform adherence to the updated repository conventions in `CONVENTIONS.md`.
 
 ---
 
