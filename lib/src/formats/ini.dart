@@ -25,39 +25,30 @@ Map<String, Object?> _parseIni(String text) {
   final root = <String, Object?>{};
   var section = root;
   var n = 0;
-  // [name] in [table], made if absent; a name already holding a value cannot become a table.
+  // [name] in [table], made if absent.
   Map<String, Object?> table(Map<String, Object?> table, String name) => switch (table[name] ??= <String, Object?>{}) {
     final Map<String, Object?> t => t,
     _ => throw FormatException('INI line $n: "$name" is already a value'),
   };
-  // [value] at the dotted [key] in [section], or at [key] whole when a part of it is already
-  // a value, or the key already holds a table.
+  // [value] at the dotted [key], or at [key] whole when a part of it is already a value or the
+  // key already holds a table; returns where it went, for continuation lines.
   (Map<String, Object?>, String) put(Map<String, Object?> section, String key, Object? value) {
     var target = section;
     final parts = key.split('.');
     for (final part in parts.take(parts.length - 1)) {
       final next = target[part] ??= <String, Object?>{};
-      if (next is! Map<String, Object?>) {
-        section[key] = value;
-        return (section, key);
-      }
+      if (next is! Map<String, Object?>) return (section..[key] = value, key);
       target = next;
     }
-    if (parts.length > 1 && target[parts.last] is Map) {
-      section[key] = value;
-      return (section, key);
-    } else if (target[parts.last] is Map) {
-      throw FormatException('INI line $n: "${parts.last}" is already a table');
-    } else {
-      target[parts.last] = value;
-      return (target, parts.last);
+    if (target[parts.last] is Map) {
+      if (parts.length == 1) throw FormatException('INI line $n: "$key" is already a table');
+      return (section..[key] = value, key);
     }
+    return (target..[parts.last] = value, parts.last);
   }
 
-  int? lastIndent;
-  Map<String, Object?>? lastTarget;
-  String? lastKey;
-
+  // The last key's indent, map and name: a more indented line continues its value.
+  (int, Map<String, Object?>, String)? last;
   for (final raw in text.split(_iniNewline)) {
     n++;
     final line = raw.trim();
@@ -70,23 +61,19 @@ Map<String, Object?> _parseIni(String text) {
       for (final part in _sectionName(line.substring(1, close))) {
         section = table(section, part);
       }
-      lastIndent = null;
-      lastTarget = null;
-      lastKey = null;
+      last = null;
       continue;
     }
-    final rawIndent = raw.length - raw.trimLeft().length;
-    if (lastKey != null && lastTarget != null && lastIndent != null && rawIndent > lastIndent) {
-      final existing = lastTarget[lastKey];
-      lastTarget[lastKey] = existing == null ? line : '$existing\n$line';
+    final indent = raw.length - raw.trimLeft().length;
+    if (last case (final lastIndent, final map, final key) when indent > lastIndent) {
+      final existing = map[key];
+      map[key] = existing == null ? line : '$existing\n$line';
       continue;
     }
     final eq = _findAssign(line);
     if (eq == -1) {
       section[line] = null;
-      lastIndent = rawIndent;
-      lastTarget = section;
-      lastKey = line;
+      last = (indent, section, line);
       continue;
     }
     final key = line.substring(0, eq).trim();
@@ -98,10 +85,8 @@ Map<String, Object?> _parseIni(String text) {
       final comment = _findComment(value);
       if (comment != -1) value = value.substring(0, comment).trim();
     }
-    final (t, k) = put(section, key, quote != -1 ? value : _scalar(value));
-    lastIndent = rawIndent;
-    lastTarget = t;
-    lastKey = k;
+    final (map, at) = put(section, key, quote != -1 ? value : _scalar(value));
+    last = (indent, map, at);
   }
   return root;
 }

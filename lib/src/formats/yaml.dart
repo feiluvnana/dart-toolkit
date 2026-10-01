@@ -1,10 +1,7 @@
 part of '../../formats.dart';
 
-/// A YAML document: the first document of the stream, and the whole stream in [documents].
-///
-/// A stream is one conversion with one answer, so `.yaml` never changes type with the number
-/// of `---` markers — which it did when several documents decoded to a list, and a
-/// one-document list could not be told from a stream.
+/// A YAML stream: its first document, and all of them in [documents] — so `.yaml` has one type
+/// however many `---` markers there are.
 ///
 /// {@category Formats}
 final class YamlDocument extends JsonDocument {
@@ -14,10 +11,6 @@ final class YamlDocument extends JsonDocument {
   YamlDocument._(List<Object?> docs) : documents = [for (final d in docs) JsonDocument(d)], super(docs.firstOrNull);
 }
 
-// ---------------------------------------------------------------------------------------------
-// Parser
-// ---------------------------------------------------------------------------------------------
-
 final class _Line {
   final int number;
   final int indent;
@@ -25,17 +18,17 @@ final class _Line {
 
   _Line(this.number, this.indent, this.text);
 
-  /// The key and the rest when this line starts a mapping entry, else `null`; found once
-  /// per line, however many times the parser asks.
+  /// The key and the rest when this line starts a mapping entry, else `null`; computed once.
   late final (String, String)? entry = _entry(text);
 
   /// `---` or `...` at the left margin: a document boundary, which ends any scalar.
-  bool get isMarker => indent == 0 && (text == '---' || text.startsWith('--- ') || text == '...');
+  bool get isMarker => indent == 0 && _isMarker(text);
+
+  static bool _isMarker(String t) => t == '---' || t.startsWith('--- ') || t == '...';
 
   bool get isItem => text == '-' || text.startsWith('- ');
 
-  /// `key: rest`, scanned by hand. A regular expression with a lazy key and `\s*:` before
-  /// the colon backtracked quadratically: a line of 20 000 spaces took 2.5 s.
+  /// `key: rest`, scanned by hand: a regular expression backtracked quadratically on long lines.
   static (String, String)? _entry(String t) {
     if (t.isEmpty) return null;
     final c = t[0];
@@ -79,16 +72,14 @@ int _closingQuote(String t, int from) {
 final class _YamlParser {
   final List<_Line> lines;
 
-  /// The document as written. A block scalar and a multi-line quoted one read from here,
-  /// not from [lines]: [lines] has had comments stripped and blank lines dropped, and both
-  /// keep blank lines and whatever looks like a comment.
+  /// The raw lines, for block and multi-line quoted scalars, which keep the blank lines and
+  /// `#` text that [lines] drops.
   final List<String> source;
 
   final Map<String, Object?> anchors = {};
   int pos = 0;
 
-  /// How many collections the current node sits in; past 1000 the input is refused rather
-  /// than allowed to overflow the stack.
+  /// Collection nesting; past 1000 the input is refused rather than overflow the stack.
   int _depth = 0;
 
   void _enter() {
@@ -97,8 +88,7 @@ final class _YamlParser {
 
   _YamlParser(String text) : this._(text.replaceAll('\r\n', '\n').split('\n'));
 
-  /// A trailing newline ends the last line rather than starting an empty one — which a
-  /// `|+` block would otherwise keep as a blank line that was never written.
+  /// A trailing newline ends the last line rather than starting an empty one `|+` would keep.
   _YamlParser._(List<String> raw) : source = raw.last.isEmpty ? (raw..removeLast()) : raw, lines = _split(raw);
 
   static List<_Line> _split(List<String> raw) => [
@@ -123,10 +113,7 @@ final class _YamlParser {
     return line;
   }
 
-  /// Whether the quote at [i] starts a quoted string rather than being an apostrophe.
-  ///
-  /// `name: don't # x` has a `'` in the middle of a word: treating that as an opening quote
-  /// left the string unterminated and kept the comment as part of the value.
+  /// Whether the quote at [i] opens a string rather than being an apostrophe (`don't # x`).
   static bool _opensString(String line, int i) => i == 0 || ' \t:-[{,>'.contains(line[i - 1]);
 
   Never _fail(String why) =>
@@ -213,8 +200,8 @@ final class _YamlParser {
     while (pos < lines.length && line.indent == indent && line.isItem) {
       final text = line.text;
       var rest = text == '-' ? '' : text.substring(2).trimLeft();
-      // Where the rest starts, which is where a mapping or a sequence begun on the dash
-      // line is indented to: `-   a: 1` puts `b: 2` under `a`, four columns in.
+      // A collection begun on the dash line is indented to where it starts: `-   a: 1` puts
+      // `b: 2` four columns in.
       final column = indent + text.length - rest.length;
       rest = _keyProperty(rest) ?? rest;
       if (rest.isEmpty) {
@@ -267,8 +254,8 @@ final class _YamlParser {
     return merged..addAll(out);
   }
 
-  /// The value that follows a key or a dash on the line just consumed, possibly
-  /// continuing on the lines after; its parent collection is at [parent].
+  /// The value after a key or dash on the line just consumed, possibly continuing below;
+  /// its parent collection is at [parent].
   Object? _flowOrScalar(String t, int parent) {
     if (t.startsWith('&') || t.startsWith('!')) {
       final sp = t.indexOf(' ');
@@ -302,8 +289,8 @@ final class _YamlParser {
 
   Object? _alias(String name) => anchors.containsKey(name) ? anchors[name] : _fail('unknown alias *$name');
 
-  /// A plain scalar and the more-indented lines that continue it: joined by a space, or
-  /// by a newline for each blank line between.
+  /// A plain scalar and its more-indented continuation lines, joined by a space, or a
+  /// newline per blank line between.
   String _plainText(String t, int parent) {
     bool continues() =>
         pos < lines.length && line.indent > parent && line.entry == null && !line.isItem && !line.isMarker;
@@ -321,9 +308,8 @@ final class _YamlParser {
     return sb.toString();
   }
 
-  /// A quoted scalar that does not close on its line: the source lines up to its closing
-  /// quote, folded — a line break is a space, a blank line a newline, and in double quotes
-  /// a `\` at the end of a line joins it to the next with nothing between.
+  /// A quoted scalar that does not close on its line, folded: a break is a space, a blank line
+  /// a newline, and in double quotes a trailing `\` joins lines with nothing between.
   String _multilineQuoted(String first) {
     final double = first[0] == '"';
     final parts = [first.substring(1)];
@@ -369,8 +355,7 @@ final class _YamlParser {
     return n.isOdd;
   }
 
-  /// A flow collection may span lines until its brackets balance; brackets inside quotes
-  /// do not count.
+  /// [t] and the lines after it until its brackets (outside quotes) balance.
   String _joinFlow(String t) {
     final sb = StringBuffer(t);
     var depth = 0;
@@ -407,20 +392,16 @@ final class _YamlParser {
 
   static final _blockHeader = RegExp('[|>+-]');
 
-  /// A `|` literal or `>` folded block: the following source lines indented past [parent],
-  /// blank lines and interior spacing included.
+  /// A `|` literal or `>` folded block: the source lines after it indented past [parent].
   Object? _block(String header, int parent) {
     final folded = header[0] == '>';
     final keep = header.contains('+'), strip = header.contains('-');
-    // An explicit indentation indicator counts from the parent's indentation: `a: |2` is
-    // content two columns in from `a`.
+    // An indentation indicator counts from the parent: `a: |2` is two columns in from `a`.
     final explicit = int.tryParse(header.replaceAll(_blockHeader, '').trim());
     var blockIndent = explicit == null ? -1 : (parent < 0 ? 0 : parent) + explicit;
     final body = <String>[];
     var leading = 0; // blank lines before the first content line, which are content too
-    // From the line after the header, not from the next line [lines] kept: that skipped
-    // the blank lines a block may start with.
-    var row = lines[pos - 1].number;
+    var row = lines[pos - 1].number; // the source line after the header, blank or not
     for (; row < source.length; row++) {
       final text = source[row];
       if (text.trim().isEmpty) {
@@ -436,7 +417,7 @@ final class _YamlParser {
         if (column <= parent) break; // dedented before any content: the block is empty
         blockIndent = column;
       }
-      if (column < blockIndent || (column == 0 && (text == '---' || text.startsWith('--- ') || text == '...'))) break;
+      if (column < blockIndent || (column == 0 && _Line._isMarker(text))) break;
       body.add(folded ? text.substring(blockIndent).trimRight() : text.substring(blockIndent));
     }
     while (pos < lines.length && lines[pos].number <= row) {
@@ -457,9 +438,8 @@ final class _YamlParser {
     return keep ? text + '\n' * (trailing + 1) : '$text\n';
   }
 
-  /// Folded style: a break between two lines is a space, unless blank lines stand between
-  /// them — then each blank is a newline — or either is indented past the block, when the
-  /// break itself is kept too. Spaces inside a line are content and are left alone.
+  /// Folded style: a break is a space, or a newline per blank line between, and is kept when
+  /// either line is more indented.
   static String _fold(List<String> body) {
     final out = StringBuffer();
     String? previous;
@@ -615,8 +595,7 @@ final class _YamlParser {
         _ => 0,
       };
       if (hex > 0) {
-        // Exactly [hex] hex digits: `int.tryParse` would also take a sign, and `\u-00e`
-        // decoded to -14.
+        // Exactly [hex] digits: `int.tryParse` would also take a sign.
         var code = 0;
         for (var k = 1; k <= hex; k++) {
           final d = i + k < body.length ? _TomlParser._hex(body.codeUnitAt(i + k)) : -1;
@@ -680,10 +659,6 @@ final class _YamlParser {
     return t;
   }
 }
-
-// ---------------------------------------------------------------------------------------------
-// Emitter
-// ---------------------------------------------------------------------------------------------
 
 void _emitYaml(Object? value, StringBuffer sb, int indent, {required bool inList}) {
   final pad = '  ' * indent;

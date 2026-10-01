@@ -1,20 +1,18 @@
 part of '../../../formats.dart';
 
-/// A parsed JSON document with JSONPath selector, indexing, and serialization support.
+/// A JSON value with JSONPath, indexing, typed reads and serialization.
 ///
 /// {@category Formats}
 class JsonDocument {
-  /// The underlying raw JSON value (Map, List, or primitive).
+  /// The underlying value: a Map, List, or primitive.
   final Object? raw;
 
-  /// The document this was read out of, and the step that reached it — a key, an index, or
-  /// a JSONPath result — for the path [to] names in its error: `$.a[0]`. Kept as parts and
-  /// joined only when an error asks: building the string on every `[]` was most of what
-  /// reading a large document cost.
+  // The parent and the key, index or JSONPath result that reached this, for the path an error
+  // names (`$.a[0]`); joined only on error, as building it on every `[]` dominated large reads.
   final JsonDocument? _parent;
   final Object? _step;
 
-  /// Creates a [JsonDocument] wrapping a [raw] JSON value.
+  /// Wraps [raw].
   const JsonDocument(this.raw) : _parent = null, _step = null;
 
   const JsonDocument._at(this.raw, JsonDocument this._parent, this._step);
@@ -22,9 +20,8 @@ class JsonDocument {
   /// Parses [text] as JSON.
   factory JsonDocument.parse(String text) => JsonDocument(jsonDecode(text));
 
-  /// The document in the file at [path], read as its extension says: `.json`, `.yaml` or
-  /// `.yml`, `.toml`, and `.ini`, `.cfg` or `.conf`. Any other extension is a
-  /// [FormatException] naming the ones it knows. A YAML stream reads as its first document.
+  /// The document in the file at [path], parsed by extension: `.json`, `.yaml`/`.yml`, `.toml`,
+  /// `.ini`/`.cfg`/`.conf`; any other is a [FormatException]. A YAML stream reads as its first.
   static Future<JsonDocument> read(String path) async {
     final ext = _extensionOf(path);
     final JsonDocument Function(String) parse = switch (ext) {
@@ -32,26 +29,19 @@ class JsonDocument {
       'yaml' || 'yml' => (t) => t.yaml,
       'toml' => (t) => t.toml,
       'ini' || 'cfg' || 'conf' => (t) => t.ini,
-      _ => throw FormatException(
-        '$path: cannot read ${ext.isEmpty ? 'a file with no extension' : '".$ext"'}; '
-        'json, yaml, yml, toml, ini, cfg and conf can be read',
-      ),
+      _ => throw _unknownExtension(path, ext, 'read', 'json, yaml, yml, toml, ini, cfg and conf can be read'),
     };
     return parse(await File(path).readAsString());
   }
 
-  /// Writes this document to [path] as its extension says — `.json` indented two spaces,
-  /// `.yaml` or `.yml` as [toYaml] — creating parent directories; [read] reads it back. Any
-  /// other extension is a [FormatException].
+  /// Writes this document to [path], creating parent directories: `.json` indented two spaces,
+  /// `.yaml`/`.yml` as [toYaml]; any other extension is a [FormatException].
   Future<File> save(String path) async {
     final ext = _extensionOf(path);
     final text = switch (ext) {
       'json' => '${_encode(raw, indent: '  ')}\n',
       'yaml' || 'yml' => toYaml(),
-      _ => throw FormatException(
-        '$path: cannot write ${ext.isEmpty ? 'a file with no extension' : '".$ext"'}; '
-        'json, yaml and yml can be written',
-      ),
+      _ => throw _unknownExtension(path, ext, 'write', 'json, yaml and yml can be written'),
     };
     final file = File(path);
     await file.parent.create(recursive: true);
@@ -63,18 +53,17 @@ class JsonDocument {
     return dot == -1 || path.indexOf('/', dot) != -1 ? '' : path.substring(dot + 1).toLowerCase();
   }
 
+  static FormatException _unknownExtension(String path, String ext, String verb, String known) =>
+      FormatException('$path: cannot $verb ${ext.isEmpty ? 'a file with no extension' : '".$ext"'}; $known');
+
   /// Every value JSONPath [expression] selects: `$.store.book[*].author`, `$..id`,
-  /// `$.items[0,2]`, `$.items[-2:]`, `$['a','b']`. Filters are not supported — `.where` on
-  /// the result is shorter.
+  /// `$.items[0,2]`, `$.items[-2:]`, `$['a','b']`. No filters: `.where` on the result is shorter.
   List<JsonDocument> $(String expression) => [
     for (final (i, v) in _JsonPath.of(expression).read(raw).indexed) JsonDocument._at(v, this, (expression, i)),
   ];
 
-  /// Accesses a child node by map key ([String]) or list index ([int]).
-  ///
-  /// A negative index counts from the end, as `$[-1]` does. A missing key or an
-  /// out-of-range index yields the null document; any other key type throws
-  /// [ArgumentError].
+  /// The child at a map key ([String]) or list index ([int], negative from the end); a missing
+  /// one is the null document, and any other key type an [ArgumentError].
   JsonDocument operator [](Object keyOrIndex) {
     final raw = this.raw;
     switch (keyOrIndex) {
@@ -105,16 +94,16 @@ class JsonDocument {
   static String _key(String path, String k) =>
       _identifier.hasMatch(k) ? '$path.$k' : "$path['${k.replaceAll("'", r"\'")}']";
 
-  /// Whether this JSON document represents null.
+  /// Whether [raw] is null.
   bool get isNull => raw == null;
 
-  /// Returns [raw] as a list of [JsonDocument]s, or empty list.
+  /// [raw]'s elements, or empty when it is not a list.
   List<JsonDocument> get list => switch (raw) {
     final List<Object?> l => [for (var i = 0; i < l.length; i++) JsonDocument._at(l[i], this, i)],
     _ => const [],
   };
 
-  /// Returns [raw] as a map of String to [JsonDocument]s, or empty map.
+  /// [raw]'s entries, or empty when it is not a map.
   Map<String, JsonDocument> get map => switch (raw) {
     final Map<Object?, Object?> m => {
       for (final MapEntry(:key, :value) in m.entries)
@@ -128,11 +117,10 @@ class JsonDocument {
 
   /// This value as [T], or a [StateError] naming where it is and what it was.
   ///
-  /// A number or boolean written as text reads as one (`"42"`, `"true"`), and ISO 8601 text
-  /// as a [DateTime]; anything asked for as `String` is text, a map or list as JSON; an
-  /// integral double is an `int`, and a fraction is not — `1.7` does not quietly become `1`.
-  /// `List<E>` and `Map<String, E>` convert every element, for `E` of `String`, `int`,
-  /// `double`, `num` or `bool`. A nullable [T] accepts null.
+  /// Text converts to a number, boolean or ISO 8601 [DateTime] (`"42"`, `"true"`); `String`
+  /// takes anything, a map or list as JSON; an integral double is an `int`, but `1.7` is not.
+  /// `List<E>` and `Map<String, E>` convert each element for `E` of `String`, `int`, `double`,
+  /// `num` or `bool`. A nullable [T] accepts null.
   T to<T>() {
     final raw = this.raw;
     if (raw is T) return raw;
@@ -153,16 +141,16 @@ class JsonDocument {
   /// [toOrNull] with a default, [T] being the default's type: `ini['debug'].or(false)`.
   T or<T extends Object>(T fallback) => toOrNull<T>() ?? fallback;
 
-  /// This document as YAML: block style, two-space indent, quoted only where a plain scalar
-  /// would read as something else. `.yaml` reads it back as it was.
+  /// This document as block-style YAML, quoted only where a plain scalar would misread;
+  /// `.yaml` reads it back as it was.
   String toYaml() {
     final sb = StringBuffer();
     _emitYaml(raw, sb, 0, inList: false);
     return sb.toString();
   }
 
-  /// Converts this document to a JSON encoded string. A NaN or an infinity — which YAML
-  /// has and JSON does not — is written as `null`, as JavaScript writes it.
+  /// This document as JSON; NaN and infinities (which YAML has) are written as `null`, as
+  /// JavaScript does.
   @override
   String toString() => _encode(raw);
 }
@@ -172,9 +160,8 @@ const _miss = Object();
 
 Type _typeOf<X>() => X;
 
-/// [v], the value of [doc], as [T], or [_miss]. With [strict], an element of a list or map
-/// that does not convert throws a [StateError] naming it rather than failing the whole
-/// value anonymously.
+/// [v], the value of [doc], as [T], or [_miss]. With [strict], a list or map element that does
+/// not convert throws a [StateError] naming it.
 Object? _as<T>(Object? v, JsonDocument doc, {required bool strict}) {
   if (v is T) return v;
   if (v == null) return _miss;
@@ -220,9 +207,7 @@ Object? _as<T>(Object? v, JsonDocument doc, {required bool strict}) {
   return _miss;
 }
 
-/// Every element of the list or map [v], the value of [doc], as [E], in a `List<E>` or
-/// `Map<String, E>`, or [_miss] when one does not convert. An element's path is built only
-/// for the error.
+/// The list or map [v] with every element as [E], or [_miss] when one does not convert.
 Object _eachOf<E>(Object v, JsonDocument doc, bool strict) {
   Object? one(Object? x, Object at) {
     final e = _as<E>(x, doc, strict: strict);
@@ -252,9 +237,9 @@ Object _eachOf<E>(Object v, JsonDocument doc, bool strict) {
 
 String _describe(Object? v) => v is String ? '"$v"' : '$v';
 
-/// [v] as JSON, indented by [indent] when one is given. Only a value that fails pays for the
-/// second walk, which replaces what JSON cannot hold: a non-finite number with `null`,
-/// anything else with its `toString()`.
+/// [v] as JSON. Only a value that fails pays for a second walk, which writes a non-finite
+/// number as `null` and anything else unencodable as its `toString()`.
+
 String _encode(Object? v, {String? indent}) {
   try {
     return indent == null ? jsonEncode(v) : JsonEncoder.withIndent(indent).convert(v);

@@ -1,12 +1,7 @@
 part of '../../../formats.dart';
 
-/// A parsed XML document.
-///
-/// The tree is the package's one markup tree — [Element], [Text], [Attribute] and [Node] —
-/// with [Element.syntax] set to [Syntax.xml], so names keep their case and their prefixes
-/// and an empty element serialises as `<tag/>`.
-///
-/// Queries read the same as they do on [HtmlDocument]: `$` is CSS and `$x` is XPath.
+/// A parsed XML document: the same tree and queries as [HtmlDocument], with [Element.syntax]
+/// [Syntax.xml], so names keep case and prefix and an empty element serialises as `<tag/>`.
 ///
 /// {@category Formats}
 final class XmlDocument {
@@ -18,15 +13,13 @@ final class XmlDocument {
   /// Parses [text] as XML. Throws [FormatException] when there is no document element.
   factory XmlDocument.parse(String text) => XmlDocument(_parseXml(text));
 
-  /// Every element matching CSS [selector], in document order.
-  ///
-  /// XML names are matched as written, not folded: `$('item')` and `$('Item')` are
-  /// different elements. A prefixed name like `media:content` can be selected by escaping
-  /// the colon as `$(r'media\:content')` or with [$x].
+  /// Every element matching CSS [selector], in document order. Names match case-sensitively;
+  /// escape a prefix's colon, `$(r'media\:content')`, or use [$x].
   Elements $(String selector) => Elements(_Selector.parse(selector, fold: false).matchAll(root, includeSelf: true));
 
-  /// The nodes matching XPath [expression], evaluated from the document root: `//item`,
-  /// `/rss/channel/item[1]/title`, `//a/@href`, `//book[@lang='en' and price>10]/title/text()`.
+  /// The nodes XPath [expression] selects from the root: `//item`, `//a/@href`,
+  /// `//book[@lang='en' and price>10]/title/text()`.
+
   Nodes $x(String expression) => Nodes(_XPath.parse(expression).select(root));
 
   /// The document's text.

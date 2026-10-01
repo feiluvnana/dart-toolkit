@@ -1,6 +1,5 @@
-// CSS selectors, the part scrapers use: type, `#id`, `.class`, the seven attribute forms,
-// the four combinators, selector lists, escapes, the structural pseudo-classes, and the
-// logical ones — `:not`, `:is`, `:where`, and `:has` with a relative selector.
+// CSS selectors as scrapers use them: type, `#id`, `.class`, attribute forms, combinators,
+// lists, escapes, structural pseudo-classes, `:not`, `:is`, `:where` and relative `:has`.
 
 part of '../../../formats.dart';
 
@@ -8,8 +7,7 @@ part of '../../../formats.dart';
 final class _Selector {
   final List<_Complex> _alternatives;
 
-  /// Whether an alternative starts with `+` or `~`, so what it finds is beside the scope
-  /// rather than below it.
+  /// Whether an alternative starts with `+` or `~`, finding elements beside the scope.
   final bool _sideways;
 
   _Selector._(this._alternatives)
@@ -17,18 +15,15 @@ final class _Selector {
 
   static final _cache = <(String, bool), _Selector>{};
 
-  /// Parses [source], or returns the cached result. Throws [FormatException] on bad syntax.
-  ///
-  /// [fold] lowercases type and attribute names, which is what HTML wants and what XML,
-  /// whose names are case-sensitive, does not. A list with an alternative that starts with a
-  /// combinator is read relative to `:scope`, every alternative of it; see [from].
+  /// [source] compiled and cached; a [FormatException] on bad syntax. [fold] lowercases names
+  /// (HTML, not XML). If any alternative starts with a combinator, all are relative to `:scope`.
   static _Selector parse(String source, {bool fold = true}) => _compiled(_cache, (source, fold), () {
     final list = _SelectorParser(source, fold).parseList();
     return _Selector._(list.any((c) => c.relative) ? _SelectorParser(source, fold).parseList(relative: true) : list);
   });
 
-  /// What `scope.$` finds: the descendants of [scope] that match, or for a relative selector
-  /// (`> li`, `+ dd`, `~ p`) the elements standing so to it.
+  /// What `scope.$` finds: matching descendants, or for `> li`, `+ dd`, `~ p` the elements so
+  /// related to [scope].
   List<Element> from(Element scope) {
     _scopes.add(scope);
     try {
@@ -68,21 +63,16 @@ final class _Selector {
   });
 }
 
-/// Where each element sits among its element siblings, for the length of one query.
-///
-/// The positional pseudo-classes and the sibling combinators all ask that question, and
-/// asking the tree directly costs a scan per candidate — which makes a selector quadratic
-/// in the number of siblings. This fills one list per parent and answers from it. It lives
-/// for exactly one query: the tree cannot change underneath it, and the next query builds a
-/// fresh one, so nothing can go stale.
+/// Each element's position among its element siblings, indexed per parent for one query, so
+/// positional pseudo-classes and sibling combinators are not quadratic; never stale, as the
+/// next query builds a fresh one.
 final class _Siblings {
   final Map<Element, List<Element>> _children = {};
   final Map<Element, int> _index = {};
   final Map<(Element, String), (List<Element>, Map<Element, int>)> _byType = {};
 
-  /// For each complex selector and compound index, which elements are already known to
-  /// have — or not to have — a match for that compound and everything left of it somewhere
-  /// along a combinator's walk; see [_Complex._along].
+  /// Per complex selector and compound index, the elements known to reach — or not — a match
+  /// for that compound and its left; see [_Complex._along].
   final Map<_Complex, List<Map<Element, bool>?>> _reach = {};
 
   Map<Element, bool> reach(_Complex c, int i) =>
@@ -153,8 +143,7 @@ final class _Siblings {
   }
 }
 
-/// The index for the query in progress. A nested query — `:has()`, `:not()` — reuses the
-/// enclosing one, since it walks the same tree.
+/// The index for the query in progress; a nested `:has()` or `:not()` reuses it.
 _Siblings? _active;
 
 T _withSiblings<T>(T Function() body) {
@@ -167,8 +156,7 @@ T _withSiblings<T>(T Function() body) {
   }
 }
 
-/// The active index. A predicate is only ever called from inside a query, so the fallback
-/// is defensive: correct, just uncached.
+/// The active index; predicates run inside a query, so the fallback is only defensive.
 _Siblings get _sibs => _active ?? _Siblings();
 
 /// A chain of compound selectors and the combinators between them, matched right to left.
@@ -176,8 +164,8 @@ final class _Complex {
   final List<_Compound> compounds;
   final List<String> combinators; // between compounds[i] and compounds[i+1]
 
-  /// Whether [compounds] starts with `:scope` — the relative selector inside `:has()` —
-  /// whose answer depends on which element is the scope, so nothing about it is remembered.
+  /// Whether [compounds] starts with `:scope`, whose answer depends on the scope, so nothing
+  /// about it is remembered.
   final bool relative;
 
   const _Complex(this.compounds, this.combinators, {this.relative = false});
@@ -197,17 +185,12 @@ final class _Complex {
 
   static Element? _up(Element e) => e.parent;
 
-  /// Whether [start] or anything [step] reaches from it matches compound [i] and the rest
-  /// of the chain to its left — the walk the descendant and sibling combinators make.
-  ///
-  /// Remembered per element for the length of the query. Without it, `p div div div span`
-  /// in a hundred nested divs tried every way of assigning the divs to the compounds, which
-  /// is exponential in their number: 413 ms for a page a browser answers instantly. Every
-  /// element passed on the way gets the answer found, so each is walked past once.
+  /// Whether [start] or anything [step] reaches from it matches compound [i] and the chain
+  /// to its left. Remembered per element for the query, as `p div div div span` in nested divs
+  /// is otherwise exponential.
   bool _along(Element? start, int i, Element? Function(Element) step) {
     if (start == null) return false;
-    // Below two compounds from the left the walk is linear anyway, and remembering costs
-    // more than it saves: `article h2 a` measured a third slower with it.
+    // Near the left the walk is linear, and remembering made `article h2 a` a third slower.
     if (i < 2 || relative) {
       for (Element? e = start; e != null; e = step(e)) {
         if (_match(e, i)) return true;
@@ -245,7 +228,7 @@ final class _Relative {
 
   const _Relative(this.complex);
 
-  /// Whether anything related to [scope] as this selector says matches it.
+  /// Whether anything so related to [scope] matches.
   bool matchesFrom(Element scope) {
     final combinators = complex.combinators;
     final siblingsOnly = combinators.every((c) => c == '+' || c == '~');
@@ -308,21 +291,15 @@ final class _SelectorParser {
     }
   }
 
-  /// A complex selector; with [relative], or when it starts with a combinator, one anchored
-  /// at `:scope` — a descendant of it when no combinator is written.
+  /// A complex selector, anchored at `:scope` with [relative] or a leading combinator (a
+  /// descendant of it when none is written).
   _Complex parseComplex({bool relative = false}) {
     final lead = i < s.length && (s[i] == '>' || s[i] == '+' || s[i] == '~');
-    if (relative || lead) {
-      var comb = ' ';
-      if (lead) {
-        comb = s[i];
-        i++;
-        skipWs();
-      }
-      final rest = _chain();
-      return _Complex([_scopeCompound, ...rest.compounds], [comb, ...rest.combinators], relative: true);
-    }
-    return _chain();
+    if (!relative && !lead) return _chain();
+    final comb = lead ? s[i++] : ' ';
+    skipWs();
+    final rest = _chain();
+    return _Complex([_scopeCompound, ...rest.compounds], [comb, ...rest.combinators], relative: true);
   }
 
   _Complex _chain() {
@@ -374,9 +351,7 @@ final class _SelectorParser {
         break;
       }
     }
-    if (type == null && tests.isEmpty) {
-      throw FormatException('Expected a selector', s, i);
-    }
+    if (type == null && tests.isEmpty) throw FormatException('Expected a selector', s, i);
     return _Compound(type, tests);
   }
 
@@ -391,28 +366,21 @@ final class _SelectorParser {
       i++;
       return (e) => of(e) != null;
     }
-    var op = '';
-    if (i < s.length && s[i] != '=') {
-      op = s[i];
-      i++;
-    }
+    final op = '${i < s.length && s[i] != '=' ? s[i++] : ''}=';
     if (i >= s.length || s[i] != '=') throw FormatException('Expected "=" in attribute selector', s, i);
     i++;
-    op += '=';
     skipWs();
     final value = string();
     skipWs();
-    var ci = false;
-    if (i < s.length && (s[i] == 'i' || s[i] == 'I')) {
-      ci = true;
+    final ci = i < s.length && (s[i] == 'i' || s[i] == 'I');
+    if (ci) {
       i++;
       skipWs();
     }
     expect(']');
     String norm(String v) => ci ? v.toLowerCase() : v;
     final want = norm(value);
-    // A substring or word test for nothing matches nothing, as the spec has it; matching
-    // every element with the attribute made `[class^=""]` a synonym for `[class]`.
+    // A substring or word test for nothing matches nothing, per the spec.
     if (want.isEmpty && op != '=' && op != '|=') return (e) => false;
     _Test present(bool Function(String v) test) => (e) {
       final v = of(e);
@@ -484,20 +452,16 @@ final class _SelectorParser {
       case 'nth-last-of-type':
         final f = _nth(arg ?? '');
         return (e) => f(_sibs.typeCountOf(e) - _sibs.typeIndexOf(e));
-      // jQuery's, which every scraping library since has kept: the text contains [arg].
+      // jQuery's, which scraping libraries kept: the text contains [arg].
       case 'contains':
-        final want = switch (arg ?? '') {
-          final a when a.length >= 2 && (a[0] == '"' || a[0] == "'") && a.endsWith(a[0]) => a.substring(
-            1,
-            a.length - 1,
-          ),
-          final a => a,
-        };
+        final a = arg ?? '';
+        final want = a.length >= 2 && (a[0] == '"' || a[0] == "'") && a.endsWith(a[0])
+            ? a.substring(1, a.length - 1)
+            : a;
         return (e) => e.text.contains(want);
       case 'empty':
         return (e) => e.nodes.every((n) => n is Text && n.data.isEmpty);
-      // A nested selector is read in the same markup as the one around it: on XML, where
-      // names are case-sensitive, `:not(Item)` means `Item` and not `item`.
+      // A nested selector folds as the outer one does: on XML `:not(Item)` means `Item`.
       case 'not':
         final inner = _Selector.parse(arg ?? '', fold: fold);
         return (e) => !inner.matches(e);
@@ -531,12 +495,11 @@ final class _SelectorParser {
       if (k == null) throw FormatException('Bad :nth-child argument "$arg"');
       return (n) => n == k;
     }
-    final aStr = m[1]!;
-    final a = aStr.isEmpty || aStr == '+'
-        ? 1
-        : aStr == '-'
-        ? -1
-        : int.parse(aStr);
+    final a = switch (m[1]!) {
+      '' || '+' => 1,
+      '-' => -1,
+      final x => int.parse(x),
+    };
     final b = int.tryParse(m[2] ?? '') ?? 0;
     return (n) {
       if (a == 0) return n == b;
@@ -552,7 +515,7 @@ final class _SelectorParser {
       i++;
     }
     if (i < s.length && s[i] == r'\') {
-      // The slow path, only for a name that has an escape in it: Tailwind's `md\:flex`.
+      // The slow path, for an escape: Tailwind's `md\:flex`.
       final sb = StringBuffer(s.substring(start, i));
       while (i < s.length) {
         if (s[i] == r'\') {
@@ -618,8 +581,8 @@ final class _SelectorParser {
   }
 }
 
-/// Whether [value] has [word] as one of its whitespace-separated words — what `.class` and
-/// `~=` ask — scanned in place rather than split into a list per element.
+/// Whether [value] has [word] among its whitespace-separated words, scanned without splitting.
+
 bool _hasWord(String? value, String word) {
   if (value == null || value.isEmpty) return false;
   var start = 0;

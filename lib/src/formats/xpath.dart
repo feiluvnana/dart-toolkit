@@ -1,12 +1,7 @@
 part of '../../formats.dart';
 
-/// A compiled XPath 1.0 expression: location paths on all thirteen axes but `namespace`,
-/// with their abbreviations; `*`, `prefix:*`, `text()`, `node()`; predicates; `|`; the
-/// arithmetic, comparison and boolean operators; and the core function library bar `id()`
-/// and `lang()`, plus `ends-with()`.
-///
-/// Parsed once per expression and cached. It is `$x` on every document, element and
-/// query result.
+/// A compiled, cached XPath 1.0 expression: every axis but `namespace`, the abbreviations,
+/// operators and core functions bar `id()` and `lang()`, plus `ends-with()`.
 final class _XPath {
   final _XNode _root;
 
@@ -14,13 +9,11 @@ final class _XPath {
 
   static final _cache = <String, _XPath>{};
 
-  /// Compiles [source], or returns the cached result. Throws [FormatException] on bad syntax.
+  /// [source] compiled and cached; a [FormatException] on bad syntax.
   static _XPath parse(String source) => _compiled(_cache, source, () => _XPath._(_XPathParser(source).parse()));
 
-  /// The nodes this expression selects with [context] as the context node, in document
-  /// order. An absolute path starts at the document above [context]'s root element.
-  ///
-  /// Throws [FormatException] when the expression evaluates to a string, number or boolean.
+  /// The nodes selected from [context], in document order; an absolute path starts at the
+  /// document above its root. A [FormatException] when the result is not a node-set.
   List<Node> select(Node context) {
     var root = context;
     for (var p = root.parent; p != null; p = p.parent) {
@@ -51,14 +44,10 @@ final class _Ctx {
   _Ctx at(Node n, int position, int size) => _Ctx._(n, position, size, document, _shared);
 }
 
-/// What one query computes about the tree, kept for its length only: the tree cannot change
-/// underneath it, and the next query builds its own.
+/// What one query computes about the tree; the next query builds its own.
 final class _Shared {
-  /// Where each node sits in its parent's child list, filled one parent at a time.
-  ///
-  /// The sibling axes each need a node's slot before they can walk away from it, and asking
-  /// the list with `indexOf` costs a scan per node — which made `following-sibling` over n
-  /// siblings quadratic. The CSS engine keeps the same index for the same reason.
+  /// Each node's index among its parent's children, filled per parent, so sibling axes are
+  /// not quadratic.
   final Map<Node, int> _slot = {};
   final Set<Node> _indexed = {};
 
@@ -72,11 +61,8 @@ final class _Shared {
     return _slot[child] ?? -1;
   }
 
-  /// Every element's and text's position in document order, for the queries whose result
-  /// has to be sorted — a union, or a path through an axis that does not keep document
-  /// order. Most never ask; see [_Path.eval]. An attribute is not in it: it sorts by its
-  /// element, then by its place among that element's attributes, worked out only for the
-  /// attributes a result holds rather than minted for every attribute in the document.
+  /// Every element's and text's document-order position, built only when a result must be
+  /// sorted (see [_Path.eval]). Attributes sort by their element, then their place on it.
   Map<Node, int>? _order;
 
   Map<Node, int> order(_Document document) => _order ??= () {
@@ -129,18 +115,15 @@ List<Node> _down(Node n) => switch (n) {
   _ => const [],
 };
 
-// ---------------------------------------------------------------------------------------------
-// Expression tree. Values are List<Node> (a node-set, always in document order), String,
-// double or bool.
-// ---------------------------------------------------------------------------------------------
+// Values are List<Node> (a node-set, always in document order), String, double or bool.
 
 sealed class _XNode {
   const _XNode();
 
   Object eval(_Ctx c);
 
-  /// The value as a boolean, which a node-set can answer without being built: a path stops
-  /// at its first node, so `//article[.//img]` looks at one image per article, not all.
+  /// The value as a boolean, without building a node-set: `//article[.//img]` stops at the
+  /// first image.
   bool test(_Ctx c) => _bool(eval(c));
 
   /// Whether this reads the context position or size — `position()`, `last()` — outside
@@ -150,8 +133,7 @@ sealed class _XNode {
   /// Whether this can evaluate to a number, which as a predicate means a position.
   bool get isNumeric => false;
 
-  /// Whether a predicate of this shape depends on where its node sits in the set. One that
-  /// does not can filter an axis as it is walked, and lets `//x[…]` be a single step.
+  /// Whether a predicate depends on position; one that does not filters an axis as it walks.
   bool get positional => isNumeric || usesPosition;
 }
 
@@ -189,12 +171,8 @@ final class _Path extends _XNode {
     return v;
   }
 
-  /// Each step's results are gathered per context node and joined, and whether the join is
-  /// still in document order — and still free of duplicates — follows from what the
-  /// inputs were and which axis ran: a child step keeps order only when no input node
-  /// contains another, a reverse axis from one node yields it backwards, and so on. The
-  /// whole-document order map is built only when that reasoning runs out, which for the
-  /// paths a scraper writes is almost never.
+  /// Joins each step's per-node results, tracking from the inputs and the axis whether the
+  /// join is still sorted and duplicate-free, so the document-wide sort is almost never run.
   @override
   Object eval(_Ctx c) {
     var current = _start(c);
@@ -204,9 +182,8 @@ final class _Path extends _XNode {
     for (final step in steps) {
       final single = current.length == 1;
       final axis = step.axis;
-      // Whether a child step keeps order turns on whether the inputs nest, which after a
-      // descendant step is not known — but is cheap to find out, and far cheaper than the
-      // document-wide sort that not knowing costs: `//tr/td`, `//article/header`.
+      // A child step keeps order when the inputs do not nest; checking is far cheaper than
+      // the sort: `//tr/td`.
       if (axis == _Axis.child && sorted && !flat && !single) flat = _isFlat(current);
       final Set<Node>? seen = single || !axis.mayRepeat(flat) ? null : {};
       final next = <Node>[];
@@ -241,9 +218,8 @@ final class _Path extends _XNode {
   }
 }
 
-/// Whether no node of [sorted], a node-set in document order, is an ancestor of another.
-/// A subtree is a contiguous run of document order, so it is enough that none contains the
-/// node right after it.
+/// Whether no node of the document-ordered [sorted] is an ancestor of another; subtrees are
+/// contiguous, so checking each node's successor suffices.
 bool _isFlat(List<Node> sorted) {
   for (var i = 1; i < sorted.length; i++) {
     final above = sorted[i - 1];
@@ -465,10 +441,6 @@ final class _Call extends _XNode {
   }
 }
 
-// ---------------------------------------------------------------------------------------------
-// Steps
-// ---------------------------------------------------------------------------------------------
-
 enum _Axis {
   child,
   descendant,
@@ -486,9 +458,8 @@ enum _Axis {
   /// A reverse axis lists nodes nearest first, and its positions count that way.
   bool get reverse => this == ancestor || this == ancestorOrSelf || this == precedingSibling || this == preceding;
 
-  /// Whether the step can reach one node from two inputs. A node has one parent, so a
-  /// child, attribute or self step never does; a descendant step does only when one input
-  /// contains another — when the inputs are not [flat].
+  /// Whether the step can reach one node from two inputs: never for child, attribute or self;
+  /// for a descendant step only when the inputs are not [flat].
   bool mayRepeat(bool flat) => switch (this) {
     child || attribute || self => false,
     descendant || descendantOrSelf => !flat,
@@ -496,18 +467,7 @@ enum _Axis {
   };
 
   static final _byName = {
-    'child': child,
-    'descendant': descendant,
-    'parent': parent,
-    'ancestor': ancestor,
-    'following-sibling': followingSibling,
-    'preceding-sibling': precedingSibling,
-    'following': following,
-    'preceding': preceding,
-    'attribute': attribute,
-    'self': self,
-    'descendant-or-self': descendantOrSelf,
-    'ancestor-or-self': ancestorOrSelf,
+    for (final a in values) a.name.replaceAllMapped(RegExp('[A-Z]'), (m) => '-${m[0]!.toLowerCase()}'): a,
   };
 
   /// `following-sibling` → [followingSibling].
@@ -528,9 +488,8 @@ final class _XStep {
   /// How many predicates at the front ignore position, and so filter the walk itself.
   final int _leading;
 
-  /// The position a `[k]` right after those pins the step to: the walk stops at the k-th
-  /// match rather than collecting the axis and throwing all but one away, so
-  /// `following-sibling::li[1]` reads one sibling. `null` when there is none.
+  /// The `[k]` right after those, if any: the walk stops at the k-th match, so
+  /// `following-sibling::li[1]` reads one sibling.
   final int? _pin;
 
   _XStep(this.axis, this.test, this.predicates, {this.name = ''})
@@ -686,13 +645,8 @@ final class _XStep {
   }
 }
 
-/// `descendant-or-self::node()/child::x[k]` — what `//x[k]` means — as one step: every
-/// `x` whose position among its parent's matching children passes, in document order.
-///
-/// Run as two steps it applied the child step to every node in the document, then sorted
-/// the lot, because children of nested parents interleave. Here each parent's selection is
-/// made as the walk enters it and its members are emitted as the walk reaches them, which
-/// is document order by construction. The same holds for `//@x[k]`.
+/// `//x[k]` (or `//@x[k]`) as one step: each parent's selection is made as the walk enters it
+/// and emitted as the walk reaches it, in document order without a sort.
 final class _DescendantStep extends _XStep {
   final _XStep inner;
 
@@ -741,11 +695,8 @@ final class _DescendantStep extends _XStep {
   bool any(_Ctx c, Node context, bool Function(Node) then) => apply(c, context).any(then);
 }
 
-/// `descendant-or-self::node()` followed by a child or attribute step — what `//` writes —
-/// is one step. With no positional predicate it is `descendant::x[…]`, which walks the
-/// subtree once instead of taking the children of every node in it; with one, `//p[1]`
-/// is the first `p` of each parent rather than the first in the document, and it is a
-/// [_DescendantStep].
+/// `//` before a child or attribute step as one step: `descendant::x[…]` without a positional
+/// predicate, else a [_DescendantStep] (`//p[1]` is each parent's first `p`).
 List<_XStep> _collapse(List<_XStep> steps) {
   final out = <_XStep>[];
   for (var i = 0; i < steps.length; i++) {
@@ -766,10 +717,6 @@ List<_XStep> _collapse(List<_XStep> steps) {
   return out;
 }
 
-// ---------------------------------------------------------------------------------------------
-// Values
-// ---------------------------------------------------------------------------------------------
-
 bool _bool(Object v) => switch (v) {
   final bool b => b,
   final double d => d != 0 && !d.isNaN,
@@ -785,9 +732,8 @@ double _num(Object v) => switch (v) {
   _ => double.nan,
 };
 
-/// Whether [s] is XPath 1.0's number: digits with an optional fraction and minus sign,
-/// whitespace around. No exponent, no `+`, no `Infinity` — all of which `double.parse`
-/// takes. Scanned by hand, since every numeric comparison in a predicate comes through here.
+/// Whether [s] is an XPath 1.0 number: `-`, digits, a fraction, whitespace around; none of the
+/// exponent, `+` or `Infinity` that `double.parse` takes.
 bool _isXPathNumber(String s) {
   var i = 0, end = s.length;
   while (i < end && _isSpace(s.codeUnitAt(i))) {
@@ -822,10 +768,6 @@ String _string(Object v) => switch (v) {
 };
 
 String _stringOf(Object v) => v is List<Node> ? (v.isEmpty ? '' : v.first.text) : _string(v);
-
-// ---------------------------------------------------------------------------------------------
-// Parser
-// ---------------------------------------------------------------------------------------------
 
 const _nodeTypeTests = {'text', 'node', 'comment', 'processing-instruction'};
 
@@ -865,8 +807,7 @@ final class _XPathParser {
 
   _XNode _unary() {
     _ws();
-    if (_take('-')) return _Negate(_unary());
-    return _union();
+    return _take('-') ? _Negate(_unary()) : _union();
   }
 
   _XNode _union() {
@@ -906,8 +847,7 @@ final class _XPathParser {
 
   _XNode _filterPredicates(_XNode primary) {
     _ws();
-    if (i < s.length && s[i] == '[') return _Filter(primary, _predicates());
-    return primary;
+    return i < s.length && s[i] == '[' ? _Filter(primary, _predicates()) : primary;
   }
 
   _XNode _primary() {
@@ -1002,8 +942,8 @@ final class _XPathParser {
     final name = _name();
     if (name.isEmpty) throw FormatException('Expected a name test in XPath', s, i);
     if (_nodeTypeTests.contains(name) && _take('()')) {
-      // comment() and processing-instruction() parse but match nothing: the parsers keep
-      // neither kind of node.
+      // comment() and processing-instruction() match nothing: the parsers keep neither.
+
       final test = switch (name) {
         'node' => _NodeTest.node,
         'text' => _NodeTest.text,

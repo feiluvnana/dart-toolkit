@@ -1,5 +1,5 @@
-// Differential tests: the in-house HTML, XML, XPath, CSS and YAML against the packages they
-// replaced, on the inputs the audit found diverging and on seeded random documents.
+// The in-house HTML, XML, XPath, CSS and YAML against the packages they replaced, on known
+// divergences and seeded random documents.
 // ignore_for_file: experimental_member_use
 import 'dart:convert';
 import 'dart:math';
@@ -62,8 +62,7 @@ void main() {
       '<svg><foreignObject width=1>x</foreignObject></svg><p>after',
       '<p>a</ p>b</>c',
       '<p>&lpar;1&rpar; &check; &star; &period;&colon;&NewLine;x</p>',
-      // Not here on purpose: `<noscript>`, which package:html reads as raw text and ours as
-      // markup, so `noscript img` still finds a pixel's image.
+      // Not `<noscript>`: package:html reads it as raw text, ours as markup (`noscript img`).
     ];
     for (final c in cases) {
       test(c.replaceAll('\n', r'\n'), () => expect(_ours(c.html.root), _theirs(hp.parse(c).documentElement!)));
@@ -108,7 +107,7 @@ void main() {
       '<r>AT&T; x</r>',
       '<r a="&#10;&#9;x"/>',
     ]) {
-      test(c, () => expect(_oursXml(c.xml.root), _theirsXml(xd.XmlDocument.parse(c).rootElement)));
+      test(c, () => expect(_ours(c.xml.root), _theirsXml(xd.XmlDocument.parse(c).rootElement)));
     }
 
     const src =
@@ -196,9 +195,7 @@ void main() {
   });
 }
 
-// ---------------------------------------------------------------------------------------------
-// Normalised renderings, so two trees compare as strings
-// ---------------------------------------------------------------------------------------------
+// Normalised renderings, so two trees compare as strings.
 
 String _attrs(Iterable<MapEntry<String, String>> a) =>
     (a.toList()..sort((x, y) => x.key.compareTo(y.key))).map((x) => ' ${x.key}="${x.value}"').join();
@@ -209,45 +206,33 @@ String _ours(Node n) => switch (n) {
   _ => '',
 };
 
-/// package:html keeps comments and may leave text split around one; ours drops comments.
-String _theirs(hd.Node n) {
-  if (n is hd.Text) return '"${n.data}"';
-  if (n is! hd.Element) return '';
+/// Rendered children with adjacent texts merged: the references keep comments, and may leave
+/// text split around one; ours drops comments.
+String _merged(Iterable<String> children) {
   final parts = <String>[];
-  for (final k in n.nodes) {
-    final s = _theirs(k);
+  for (final s in children) {
     if (s.isEmpty) continue;
-    if (k is hd.Text && parts.isNotEmpty && parts.last.startsWith('"')) {
+    if (s.startsWith('"') && parts.isNotEmpty && parts.last.startsWith('"')) {
       parts.last = parts.last.substring(0, parts.last.length - 1) + s.substring(1);
     } else {
       parts.add(s);
     }
   }
-  final attrs = _attrs(n.attributes.entries.map((e) => MapEntry('${e.key}', e.value)));
-  return '<${n.localName}$attrs>${parts.join()}</${n.localName}>';
+  return parts.join();
 }
 
-String _oursXml(Node n) => switch (n) {
-  Text() => '"${n.data}"',
-  Element() => '<${n.name}${_attrs(n.attributes.entries)}>${n.nodes.map(_oursXml).join()}</${n.name}>',
-  _ => '',
-};
+String _theirs(hd.Node n) {
+  if (n is hd.Text) return '"${n.data}"';
+  if (n is! hd.Element) return '';
+  final attrs = _attrs(n.attributes.entries.map((e) => MapEntry('${e.key}', e.value)));
+  return '<${n.localName}$attrs>${_merged(n.nodes.map(_theirs))}</${n.localName}>';
+}
 
 String _theirsXml(xd.XmlNode n) {
   if (n is xd.XmlText || n is xd.XmlCDATA) return '"${n.value}"';
   if (n is! xd.XmlElement) return '';
-  final parts = <String>[];
-  for (final k in n.children) {
-    final s = _theirsXml(k);
-    if (s.isEmpty) continue;
-    if ((k is xd.XmlText || k is xd.XmlCDATA) && parts.isNotEmpty && parts.last.startsWith('"')) {
-      parts.last = parts.last.substring(0, parts.last.length - 1) + s.substring(1);
-    } else {
-      parts.add(s);
-    }
-  }
   final attrs = _attrs(n.attributes.map((a) => MapEntry(a.name.qualified, a.value)));
-  return '<${n.name.qualified}$attrs>${parts.join()}</${n.name.qualified}>';
+  return '<${n.name.qualified}$attrs>${_merged(n.children.map(_theirsXml))}</${n.name.qualified}>';
 }
 
 String _node(Node n) => switch (n) {
@@ -277,9 +262,7 @@ String _show(Object? v) => switch (v) {
   _ => '$v',
 };
 
-// ---------------------------------------------------------------------------------------------
-// Seeded generators
-// ---------------------------------------------------------------------------------------------
+// Seeded generators.
 
 const _texts = [
   'a',
@@ -295,8 +278,8 @@ const _texts = [
 ];
 const _values = ['x', '?a=1&lang=en', 'a&amp;b', '&copy=2', 'say "hi"', "it's", '', 'https://x.com/a:b#c'];
 
-/// Well-formed markup from the elements a scraper meets, nested only where HTML allows, so
-/// the two parsers must agree node for node.
+/// Well-formed markup nested only where HTML allows, so the parsers must agree node for node.
+
 String _randomHtml(Random r) {
   const children = {
     'div': ['div', 'p', 'ul', 'span', 'table', 'a', 'h2'],

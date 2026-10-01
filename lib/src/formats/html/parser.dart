@@ -1,9 +1,5 @@
-// A tag-soup HTML parser: one pass, no HTML5 insertion modes, the implicit closes and
-// synthesised elements a scraper meets in practice.
-//
-// What it leaves out on purpose is foster parenting: a `<div>` or stray text straight inside
-// a `<table>` stays there, where a browser would move it before the table. `.table` reads
-// the same either way; `$('table').text` includes the stray text.
+// A one-pass tag-soup HTML parser: no insertion modes, just the implicit closes and synthesised
+// elements scrapers meet. No foster parenting: stray content in a `<table>` stays there.
 
 part of '../../../formats.dart';
 
@@ -29,9 +25,7 @@ const _closesP = {
   'nav', 'ol', 'p', 'pre', 'section', 'table', 'ul', 'li', 'dt', 'dd',
 };
 
-/// A start tag that closes an open element of the same group: `<li>` after `<li>`, `<td>`
-/// after `<th>`. Keyed by the incoming tag, valued by what it closes and the boundary it
-/// stops at.
+/// Start tag → (the open elements it closes, the boundary it stops at): `<li>` after `<li>`.
 const _closesSibling = <String, (Set<String>, Set<String>)>{
   'li': ({'li'}, {'ul', 'ol', 'menu'}),
   'dt': ({'dt', 'dd'}, {'dl'}),
@@ -52,9 +46,7 @@ const _tableParts = {'table', 'tbody', 'tfoot', 'thead', 'tr', 'td', 'th', 'capt
 
 const _headings = {'h1', 'h2', 'h3', 'h4', 'h5', 'h6'};
 
-/// SVG's mixed-case names, by the lowercase a tag-soup tokenizer reads them as: inside
-/// `<svg>` they are put back, as a browser does, so `viewBox` serialises as `viewBox` and a
-/// renderer still reads it.
+/// SVG's mixed-case names by their lowercase, restored inside `<svg>` as a browser does.
 final _svgTags = {
   for (final n in const [
     'altGlyph', 'altGlyphDef', 'altGlyphItem', 'animateColor', 'animateMotion', 'animateTransform', 'clipPath', //
@@ -95,12 +87,10 @@ final class _Parser {
 
   final _TextRun _run = _TextRun();
 
-  /// Set by `<pre>`, `<listing>` and `<textarea>`: a newline straight after the start tag
-  /// is not content.
+  /// Set by `<pre>` and `<listing>`: a newline straight after the start tag is not content.
   bool _dropNewline = false;
 
-  /// How many `<svg>` and `<math>` elements are open. Counted rather than searched for:
-  /// scanning the open stack on every `/>` was quadratic on a page of them.
+  /// Open `<svg>` and `<math>` elements, counted so `/>` need not scan the stack.
   int _svg = 0, _math = 0;
 
   /// CR LF and a lone CR read as LF, as the HTML input stream does.
@@ -173,8 +163,7 @@ final class _Parser {
     _run.add(current, _decodeEntities(raw, _References.text));
   }
 
-  /// Whether the element being inserted sits in SVG or MathML, where `/>` closes an
-  /// element and CDATA is text, as in XML.
+  /// Inside SVG or MathML, where `/>` closes an element and CDATA is text.
   bool get inForeign => _svg + _math > 0;
 
   /// Consumes the markup at [pos] (which is `<`); returns false when it is not markup.
@@ -220,8 +209,7 @@ final class _Parser {
   bool endTag() {
     final start = pos + 2;
     if (start >= src.length) return false; // `</` at the very end is text
-    // `</>` is dropped, and `</` before anything but a letter opens a bogus comment that
-    // runs to the next `>`: `</ p>` is nothing, as in a browser.
+    // `</` before a non-letter is a bogus comment to the next `>`: `</ p>` is nothing.
     if (!_isAlpha(src.codeUnitAt(start))) return skipTo('>');
     final i = _nameEnd(src, start);
     var name = src.substring(start, i).toLowerCase();
@@ -290,14 +278,12 @@ final class _Parser {
       if (_headElements.contains(name)) {
         if (!open.contains(head)) openHead();
       } else if (identical(current, head) || identical(current, html)) {
-        // Only head itself ends at body content. Inside a `<noscript>` or `<template>` in
-        // head — the tag-manager and pixel snippets nearly every page carries — the content
-        // is that element's, and the title, meta and canonical link after it are head's.
+        // Only head itself ends at body content: tag-manager `<noscript>` snippets in head
+        // keep their content, and the head elements after them stay in head.
         ensureBody();
       }
     }
-    // `/>` closes an element only where XML rules apply; on `<div/>` it is noise, and the
-    // text after it is the div's.
+    // `/>` closes only in foreign content; on `<div/>` it is noise.
     insert(element, selfClosing: selfClosing && (name == 'svg' || name == 'math' || inForeign));
     return true;
   }
@@ -328,8 +314,7 @@ final class _Parser {
     if (_voidElements.contains(name) || selfClosing) return;
 
     if (_rawTextElements.contains(name) || _rcdataElements.contains(name)) {
-      // Scanned in place: copying the rest of the document to run a regex over it costs a
-      // full-document copy per <script> or <style>, and a page has many of both.
+      // Scanned in place: a regex would copy the rest of the document per <script>.
       final close = _endTag(src, pos, name);
       var raw = src.substring(pos, close?.start ?? src.length);
       if (name == 'textarea' && raw.startsWith('\n')) raw = raw.substring(1);
@@ -361,10 +346,8 @@ final class _Parser {
   }
 }
 
-/// Text on its way into a tree. Adjacent runs — `a < b` is three of them — are gathered
-/// and land as one [Text] when something else arrives, rather than being concatenated onto
-/// the last node run by run, which copied the text so far every time and was quadratic in
-/// the number of runs.
+/// Gathers adjacent text runs (`a < b` is three) into one [Text] when something else arrives,
+/// rather than appending run by run, which is quadratic.
 final class _TextRun {
   Element? _target;
 
@@ -409,11 +392,9 @@ int _nameEnd(String src, int i) {
   return i;
 }
 
-/// Reads a start tag's attributes from [i], just past its name, into [into] — the first of
-/// a name wins, values decoded — and returns where the tag ends, negated when it ended in
-/// `/>`. HTML folds names to lowercase and decodes HTML's references; XML keeps names as
-/// written and decodes its own five. An int rather than a record: the record measured 8%
-/// off the whole parse.
+/// Reads a start tag's attributes from [i] into [into] (first of a name wins, values decoded)
+/// and returns where the tag ends, negated after `/>` — an int, as a record cost 8% of the
+/// parse. HTML lowercases names and decodes HTML's references; XML only its five.
 int _scanAttributes(String src, int i, Map<String, String> into, {required bool html}) {
   while (true) {
     while (i < src.length && _isSpace(src.codeUnitAt(i))) {
@@ -468,14 +449,13 @@ int _scanAttributes(String src, int i, Map<String, String> into, {required bool 
   }
 }
 
-/// Where an open `<a>` stops being one a new `<a>` can close: a cell or a nested table
-/// starts a fresh scope, as the spec's formatting-element markers do.
+/// Where a new `<a>` stops looking for an open one to close, as the spec's markers do.
 const _linkBoundaries = {'td', 'th', 'caption', 'table', 'template', 'object', 'marquee', 'applet', 'button'};
 
 const _blockBoundaries = {'table', 'td', 'th', 'div', 'section', 'article', 'body', 'li', 'ul', 'ol', 'blockquote'};
 
-/// The end tag `</[name]>` at or after [from], allowing whitespace before the `>` and any
-/// case in the name — `</$name\s*>` without compiling a pattern or copying the source.
+/// The first `</$name\s*>`, any case, at or after [from].
+
 ({int start, int past})? _endTag(String src, int from, String name) {
   for (var i = src.indexOf('<', from); i != -1 && i + 1 < src.length; i = src.indexOf('<', i + 1)) {
     if (src.codeUnitAt(i + 1) != 0x2f) continue; // not `</`
