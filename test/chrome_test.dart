@@ -599,31 +599,37 @@ void main() {
       );
     }, skip: absent);
 
-    test('a launched browser fetches nothing it was not asked for, and its death is noticed', () async {
-      final marker = '--tk-marker-${DateTime.now().microsecondsSinceEpoch}';
-      final own = await ChromeClient.launch(tabs: 1, args: ['--disable-features=TkOwnFeature', marker]);
-      final [(pid, command)] = await _browsers(marker);
-      expect(command, contains('--disable-component-update'));
-      expect('--disable-features='.allMatches(command), hasLength(1), reason: 'Chrome reads only the last one');
-      expect(command, allOf(contains('TkOwnFeature'), contains('OptimizationGuideModelDownloading')));
+    test(
+      'a launched browser fetches nothing it was not asked for, and its death is noticed',
+      () async {
+        final marker = '--tk-marker-${DateTime.now().microsecondsSinceEpoch}';
+        final own = await ChromeClient.launch(tabs: 1, args: ['--disable-features=TkOwnFeature', marker]);
+        final [(pid, command)] = await _browsers(marker);
+        expect(command, contains('--disable-component-update'));
+        expect('--disable-features='.allMatches(command), hasLength(1), reason: 'Chrome reads only the last one');
+        expect(command, allOf(contains('TkOwnFeature'), contains('OptimizationGuideModelDownloading')));
 
-      Process.killPid(pid, ProcessSignal.sigkill);
-      expect(await _eventually(() => own.isClosed), isTrue);
-      final began = DateTime.now();
-      await expectLater(
-        own.get(base.resolve('/rendered')),
-        throwsA(isA<ClientException>().having((e) => e.message, 'message', contains('disconnected'))),
-      );
-      expect(DateTime.now().difference(began), lessThan(5.s), reason: 'failed at once, not after a timeout');
-      await own.close();
-    }, skip: absent ?? (Platform.isWindows ? 'reads the command line with ps' : null));
+        Process.killPid(pid, ProcessSignal.sigkill);
+        expect(await _eventually(() => own.isClosed), isTrue);
+        final began = DateTime.now();
+        await expectLater(
+          own.get(base.resolve('/rendered')),
+          throwsA(isA<ClientException>().having((e) => e.message, 'message', contains('disconnected'))),
+        );
+        expect(DateTime.now().difference(began), lessThan(5.s), reason: 'failed at once, not after a timeout');
+        await own.close();
+      },
+      skip: absent ?? (Platform.isWindows ? 'reads the command line with ps' : null),
+    );
 
-    test('a program killed with -9 takes its browser and its profile with it', () async {
-      final dir = await Directory.systemTemp.createTemp('tk_orphan_');
-      addTearDown(() => dir.delete(recursive: true));
-      final marker = '--tk-orphan-${DateTime.now().microsecondsSinceEpoch}';
-      final script = File('${dir.path}/child.dart')
-        ..writeAsStringSync('''
+    test(
+      'a program killed with -9 takes its browser and its profile with it',
+      () async {
+        final dir = await Directory.systemTemp.createTemp('tk_orphan_');
+        addTearDown(() => dir.delete(recursive: true));
+        final marker = '--tk-orphan-${DateTime.now().microsecondsSinceEpoch}';
+        final script = File('${dir.path}/child.dart')
+          ..writeAsStringSync('''
 import 'package:dart_toolkit/http.dart';
 Future<void> main() async {
   await ChromeClient.launch(tabs: 1, args: ['$marker']);
@@ -631,21 +637,23 @@ Future<void> main() async {
   await Future<void>.delayed(const Duration(minutes: 5));
 }
 ''');
-      final child = await Process.start(Platform.resolvedExecutable, [
-        '--packages=${Directory.current.path}/.dart_tool/package_config.json',
-        script.path,
-      ]);
-      final said = StringBuffer();
-      child.stderr.transform(utf8.decoder).listen(said.write);
-      final ready = await child.stdout.transform(utf8.decoder).any((out) => out.contains('ready')).timeout(60.s);
-      expect(ready, isTrue, reason: 'the child never launched Chrome: $said');
-      final [(_, command)] = await _browsers(marker);
-      final profile = RegExp(r'--user-data-dir=(\S+)').firstMatch(command)![1]!;
+        final child = await Process.start(Platform.resolvedExecutable, [
+          '--packages=${Directory.current.path}/.dart_tool/package_config.json',
+          script.path,
+        ]);
+        final said = StringBuffer();
+        child.stderr.transform(utf8.decoder).listen(said.write);
+        final ready = await child.stdout.transform(utf8.decoder).any((out) => out.contains('ready')).timeout(60.s);
+        expect(ready, isTrue, reason: 'the child never launched Chrome: $said');
+        final [(_, command)] = await _browsers(marker);
+        final profile = RegExp(r'--user-data-dir=(\S+)').firstMatch(command)![1]!;
 
-      child.kill(ProcessSignal.sigkill);
-      expect(await _eventually(() async => (await _browsers(marker)).isEmpty), isTrue, reason: 'Chrome outlived it');
-      expect(await _eventually(() => !Directory(profile).parent.existsSync()), isTrue, reason: 'the profile is left');
-    }, skip: absent ?? (Platform.isWindows ? 'Windows has no reaper' : null));
+        child.kill(ProcessSignal.sigkill);
+        expect(await _eventually(() async => (await _browsers(marker)).isEmpty), isTrue, reason: 'Chrome outlived it');
+        expect(await _eventually(() => !Directory(profile).parent.existsSync()), isTrue, reason: 'the profile is left');
+      },
+      skip: absent ?? (Platform.isWindows ? 'Windows has no reaper' : null),
+    );
 
     test('the JSON behind the page comes back instead of the DOM', () async {
       final page = await browser.open(base.resolve('/api-page'));

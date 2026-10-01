@@ -120,9 +120,12 @@ final class Element extends Node {
   String? get id => attributes['id'];
 
   /// The `class` attribute split on whitespace.
-  Set<String> get classes => {
-    for (final c in (attributes['class'] ?? '').split(_ws))
-      if (c.isNotEmpty) c,
+  Set<String> get classes => switch (attributes['class']) {
+    null || '' => const {},
+    final s => {
+      for (final c in s.split(_ws))
+        if (c.isNotEmpty) c,
+    },
   };
 
   /// Attribute [name] on this element. Throws a [StateError] naming the attribute and the tag

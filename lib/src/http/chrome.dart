@@ -2055,7 +2055,11 @@ Future<Path> _unused(Path dir, String name) async {
 /// Chrome sanitises the name it suggests; this is the second lock on the door, because the
 /// name is the one part of the destination a remote host chooses.
 String _fileName(String suggested) {
-  final name = suggested.split(RegExp(r'[/\\]')).last.trim();
+  final slash = suggested.lastIndexOf('/');
+  final backslash = suggested.lastIndexOf(r'\');
+  final lastSlash = slash > backslash ? slash : backslash;
+  final raw = lastSlash == -1 ? suggested : suggested.substring(lastSlash + 1);
+  final name = raw.trim();
   return name.isEmpty || name == '.' || name == '..' ? 'download' : name;
 }
 

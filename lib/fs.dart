@@ -16,6 +16,7 @@ import 'dart:typed_data';
 import 'package:path/path.dart' as p;
 
 import 'core.dart';
+import 'hash.dart';
 import 'native.dart';
 
 part 'src/fs/archive.dart';

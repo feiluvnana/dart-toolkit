@@ -95,14 +95,17 @@ final class _Robots {
       c == 0x5f ||
       c == 0x7e;
 
+  static final _productSlash = RegExp(r'([a-z0-9_-]+)/');
+  static final _productStart = RegExp(r'^[a-z0-9_-]+');
+
   /// The product tokens [agent] names: `Googlebot` and `Mozilla` in `Mozilla/5.0
   /// (compatible; Googlebot/2.1)`, `mybot` in `mybot/1.0`. RFC 9309 §2.2.1 matches a group
   /// against these whole, so a `User-agent: bot` group is not `mybot`'s.
   static Set<String> _products(String agent) {
     final lower = agent.toLowerCase();
     return {
-      for (final m in RegExp(r'([a-z0-9_-]+)/').allMatches(lower)) m[1]!,
-      if (RegExp(r'^[a-z0-9_-]+').firstMatch(lower) case final first?) first[0]!,
+      for (final m in _productSlash.allMatches(lower)) m[1]!,
+      if (_productStart.firstMatch(lower) case final first?) first[0]!,
     };
   }
 

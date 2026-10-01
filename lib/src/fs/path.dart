@@ -3,6 +3,8 @@ part of '../../fs.dart';
 final _invalidPathChars = RegExp(r'[:*?"<>|\r\n\t]');
 final _invalidNameChars = RegExp(r'[/\\:*?"<>|\r\n\t]');
 final _whitespaceCollapse = RegExp(r'\s+');
+final _braceSlash = RegExp(r'\{[^}]*/');
+final _classEscape = RegExp(r'[\\^\[]');
 
 /// Represents the type of filesystem entity at a [Path].
 ///
@@ -314,7 +316,7 @@ extension type const Path(String path) implements String {
     final prefix = segments.take(fixed).join('/');
     final rest = segments.skip(fixed).join('/');
     // A `/` inside braces — `{a,b/c}` — makes the depth one of several, so it is not bounded.
-    final unbounded = rest.contains('**') || RegExp(r'\{[^}]*/').hasMatch(rest);
+    final unbounded = rest.contains('**') || _braceSlash.hasMatch(rest);
     return (
       p.isAbsolute(pattern) ? (prefix.isEmpty ? p.rootPrefix(pattern) : prefix) : p.join(path, prefix),
       rest,
@@ -656,7 +658,7 @@ RegExp _globToRegex(String pattern, {bool? caseSensitive}) {
       final negated = body.startsWith('!') || body.startsWith('^');
       if (negated) body = body.substring(1);
       // Inside a class only `\`, `^` and `[` mean something to RegExp that they do not to a glob.
-      body = body.replaceAllMapped(RegExp(r'[\\^\[]'), (m) => '\\${m[0]}');
+      body = body.replaceAllMapped(_classEscape, (m) => '\\${m[0]}');
       buffer.write(negated ? '[^/$body]' : '[$body]');
       i = end + 1;
       continue;
@@ -701,4 +703,66 @@ RegExp _globToRegex(String pattern, {bool? caseSensitive}) {
   }
   buffer.write(r'$');
   return _globCache[(pattern, isSensitive)] = RegExp(buffer.toString(), caseSensitive: isSensitive);
+}
+
+/// Digests and MACs of a file at a [Path].
+///
+/// {@category Files}
+extension PathHashExtensions on Path {
+  /// The [algorithm] digest of this file, hex encoded.
+  Future<String> hash(Hash algorithm) => asFile.hash(algorithm);
+
+  /// The [algorithm] digest of this file.
+  Future<Uint8List> hashBytes(Hash algorithm) => asFile.hashBytes(algorithm);
+
+  /// A 32-bit checksum of this file as an integer: `file.checksum(Hash.crc32c)`.
+  Future<int> checksum(Hash algorithm) => asFile.checksum(algorithm);
+
+  /// The HMAC of this file's contents under [key], hex encoded.
+  Future<String> hmac(Hash algorithm, List<int> key) => asFile.hmac(algorithm, key);
+
+  /// The HMAC of this file's contents under [key].
+  Future<Uint8List> hmacBytes(Hash algorithm, List<int> key) => asFile.hmacBytes(algorithm, key);
+
+  /// The files under this directory that hold the same bytes, each group two or more paths,
+  /// the largest files first. Empty files are left out.
+  ///
+  /// Only files of equal size are compared, by [Hash.xxh3] in parallel, so a tree of unique
+  /// sizes costs one walk and no reads at all.
+  Future<List<List<Path>>> duplicates() => Isolate.run(() {
+    final bySize = <int, List<String>>{};
+    for (final p in globSync('**')) {
+      if (p.typeSync() == PathType.file) (bySize[File(p).lengthSync()] ??= []).add(p);
+    }
+    bySize.remove(0);
+    final candidates = [
+      for (final MapEntry(key: size, value: paths) in bySize.entries)
+        if (paths.length > 1)
+          for (final p in paths) (size, p),
+    ];
+    final digests = candidates.isEmpty
+        ? const <Uint8List>[]
+        : Hash.xxh3.filesSync([for (final (_, p) in candidates) p]);
+    final groups = <(int, String), List<Path>>{};
+    for (var i = 0; i < candidates.length; i++) {
+      (groups[(candidates[i].$1, digests[i].hex)] ??= []).add(Path(candidates[i].$2));
+    }
+    return [
+      for (final MapEntry(:value) in groups.entries.toList()..sort((a, b) => b.key.$1.compareTo(a.key.$1)))
+        if (value.length > 1) value..sort(),
+    ];
+  });
+}
+
+/// Digests of many files at once: `await paths.hash(Hash.xxh3)`.
+///
+/// {@category Files}
+extension PathsHashExtensions on Iterable<Path> {
+  /// Each file's [algorithm] digest, hex encoded, hashed in parallel by the native library.
+  Future<Map<Path, String>> hash(Hash algorithm) async {
+    final paths = toList();
+    if (paths.isEmpty) return {};
+    final digests = await algorithm.files([for (final p in paths) p.path]);
+    return {for (var i = 0; i < paths.length; i++) paths[i]: digests[i].hex};
+  }
 }

@@ -484,9 +484,23 @@ enum _Axis {
     _ => true,
   };
 
+  static final _byName = {
+    'child': child,
+    'descendant': descendant,
+    'parent': parent,
+    'ancestor': ancestor,
+    'following-sibling': followingSibling,
+    'preceding-sibling': precedingSibling,
+    'following': following,
+    'preceding': preceding,
+    'attribute': attribute,
+    'self': self,
+    'descendant-or-self': descendantOrSelf,
+    'ancestor-or-self': ancestorOrSelf,
+  };
+
   /// `following-sibling` → [followingSibling].
-  static _Axis? named(String name) =>
-      values.asNameMap()[name.replaceAllMapped(RegExp('-(.)'), (m) => m[1]!.toUpperCase())];
+  static _Axis? named(String name) => _byName[name];
 }
 
 /// What a step's node test accepts.

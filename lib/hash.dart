@@ -20,7 +20,6 @@ import 'dart:isolate';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'fs.dart';
 import 'native.dart';
 
 part 'src/hash/codec.dart';

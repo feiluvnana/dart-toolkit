@@ -17,8 +17,25 @@ extension StringIniExtensions on String {
 }
 
 final _iniNewline = RegExp(r'\r?\n');
-final _iniAssign = RegExp('[=:]');
-final _iniComment = RegExp(r'\s[;#]');
+
+int _findAssign(String line) {
+  for (var i = 0; i < line.length; i++) {
+    final c = line.codeUnitAt(i);
+    if (c == 0x3d || c == 0x3a) return i;
+  }
+  return -1;
+}
+
+int _findComment(String value) {
+  for (var i = 0; i < value.length - 1; i++) {
+    final c = value.codeUnitAt(i);
+    if (c == 0x20 || c == 0x09) {
+      final next = value.codeUnitAt(i + 1);
+      if (next == 0x3b || next == 0x23) return i;
+    }
+  }
+  return -1;
+}
 
 Map<String, Object?> _parseIni(String text) {
   final root = <String, Object?>{};
@@ -55,14 +72,15 @@ Map<String, Object?> _parseIni(String text) {
     if (line.isEmpty || line.startsWith(';') || line.startsWith('#')) continue;
     final close = line.startsWith('[') ? line.indexOf(']') : -1;
     // `[section] ; comment` is a section too.
-    if (close != -1 && (close == line.length - 1 || line.substring(close + 1).trimLeft().startsWith(RegExp('[;#]')))) {
+    final rest = close != -1 && close < line.length - 1 ? line.substring(close + 1).trimLeft() : '';
+    if (close != -1 && (close == line.length - 1 || rest.startsWith(';') || rest.startsWith('#'))) {
       section = root;
       for (final part in _sectionName(line.substring(1, close))) {
         section = table(section, part);
       }
       continue;
     }
-    final eq = line.indexOf(_iniAssign);
+    final eq = _findAssign(line);
     if (eq == -1) {
       section[line] = null;
       continue;
@@ -73,7 +91,7 @@ Map<String, Object?> _parseIni(String text) {
     if (quote != -1) {
       value = value.substring(1, quote);
     } else {
-      final comment = value.indexOf(_iniComment);
+      final comment = _findComment(value);
       if (comment != -1) value = value.substring(0, comment).trim();
     }
     put(section, key, quote != -1 ? value : _scalar(value));

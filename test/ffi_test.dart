@@ -67,15 +67,23 @@ void main() {
         expect(libc.call('strtod', C.f64, '-0.125xyz', null), -0.125);
       });
 
-      test('both kinds in one call, each in its own order', () {
-        expect(libm.call('ldexp', C.f64, 1.0, 10), 1024.0);
-        expect(libm.call('lround', C.i64, 2.6), 3);
-        expect(libm.call('fma', C.f64, 2.0, 3.0, 4.0), 10.0);
-      }, skip: Platform.isWindows ? 'Win64 passes arguments by position' : null);
+      test(
+        'both kinds in one call, each in its own order',
+        () {
+          expect(libm.call('ldexp', C.f64, 1.0, 10), 1024.0);
+          expect(libm.call('lround', C.i64, 2.6), 3);
+          expect(libm.call('fma', C.f64, 2.0, 3.0, 4.0), 10.0);
+        },
+        skip: Platform.isWindows ? 'Win64 passes arguments by position' : null,
+      );
 
-      test('Windows refuses a mix instead of passing it in the wrong registers', () {
-        expect(() => libm.call('ldexp', C.f64, 1.0, 10), throwsArgumentError);
-      }, skip: Platform.isWindows ? null : 'only Windows refuses');
+      test(
+        'Windows refuses a mix instead of passing it in the wrong registers',
+        () {
+          expect(() => libm.call('ldexp', C.f64, 1.0, 10), throwsArgumentError);
+        },
+        skip: Platform.isWindows ? null : 'only Windows refuses',
+      );
     });
 
     test('a float argument and return', () {

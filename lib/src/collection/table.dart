@@ -1,16 +1,13 @@
 part of '../../collection.dart';
 
-/// One row of a [Table]: column name to value.
-typedef Row = Map<String, Object?>;
-
-/// Typed reads on a row; a value scraped as text still counts as a number.
+/// One row of a [Table]: column name to value, with typed cell reads.
 ///
 /// `number` and `get` throw a [StateError] naming the column and the row when the value is
 /// missing or does not convert, so a typo or a bad cell fails where it happens; the `OrNull`
 /// forms answer `null` instead.
 ///
 /// {@category Collections}
-extension RowExtensions on Map<String, Object?> {
+extension type const Row(Map<String, Object?> _map) implements Map<String, Object?> {
   /// The value of [column] as [T], coercing text to numbers and booleans.
   T get<T>(String column) {
     final value = _coerce<T>(this[column]);
@@ -125,7 +122,9 @@ final class Table {
 
   /// A decoded JSON object as a row, or `null` for anything else.
   static Row? _object(Object? item) => switch (item) {
-    final Map<Object?, Object?> m => {for (final e in m.entries) '${e.key}': e.value},
+    final Map<Object?, Object?> m => Row({
+      for (final e in m.entries) e.key is String ? e.key as String : '${e.key}': e.value,
+    }),
     _ => null,
   };
 
@@ -182,7 +181,9 @@ final class Table {
   static Row? _ndjsonRow(String line) => line.trim().isEmpty
       ? null
       : switch (jsonDecode(line)) {
-          final Map<Object?, Object?> m => {for (final e in m.entries) '${e.key}': e.value},
+          final Map<Object?, Object?> m => Row({
+            for (final e in m.entries) e.key is String ? e.key as String : '${e.key}': e.value,
+          }),
           _ => null,
         };
 
@@ -195,7 +196,7 @@ final class Table {
   /// Rows are frozen on the way in, so the documented immutability is real: a write
   /// through `table.rows` would otherwise change this table and every table derived from it.
   /// A CSV row is frozen already.
-  static Row _copy(Map<String, Object?> r) => r is _CsvRow ? r : Map<String, Object?>.unmodifiable(r);
+  static Row _copy(Map<String, Object?> r) => r is _CsvRow ? r as Row : Row(Map<String, Object?>.unmodifiable(r));
 
   /// The rows as a query.
   Sequence<Row> get sequence => rows.sequence;
@@ -599,27 +600,37 @@ T? _coerce<T>(Object? val) {
   if (val == null) return null;
   if (val is T) return val as T;
   if (T == String) return '$val' as T;
+  if (val is num) {
+    if (T == int) return val.toInt() as T;
+    if (T == double) return val.toDouble() as T;
+    if (T == bool) {
+      if (val == 1) return true as T;
+      if (val == 0) return false as T;
+    }
+    return null;
+  }
+  if (T == bool) {
+    if (val == 'true' || val == true) return true as T;
+    if (val == 'false' || val == false) return false as T;
+    return null;
+  }
   var text = val is String ? val.trim() : '$val';
   if (text.contains(',') && _thousands.hasMatch(text)) text = text.replaceAll(',', '');
   final isNumeric = T == num || T == int || T == double;
-  if (val is! num && isNumeric && !_decimal.hasMatch(text)) {
+  if (isNumeric && !_decimal.hasMatch(text)) {
     return null;
   }
   if (T == num) return num.tryParse(text) as T?;
   if (T == int) {
-    return (val is num ? val.toInt() : int.tryParse(text) ?? double.tryParse(text)?.toInt()) as T?;
+    return (int.tryParse(text) ?? double.tryParse(text)?.toInt()) as T?;
   }
-  if (T == double) return (val is num ? val.toDouble() : double.tryParse(text)) as T?;
-  if (T == bool) {
-    if (val == 'true' || val == 1) return true as T;
-    if (val == 'false' || val == 0) return false as T;
-  }
+  if (T == double) return double.tryParse(text) as T?;
   return null;
 }
 
 /// The columns of a CSV and the index every row of it shares, so a row is its list of
 /// cells and not a map of its own.
-typedef _Header = ({List<String> columns, Map<String, int> index, _CsvRow Function(List<String>) row});
+typedef _Header = ({List<String> columns, Map<String, int> index, Row Function(List<String>) row});
 
 _Header _header(List<String> columns) {
   // A repeated name is the second `name_2`, the third `name_3`: keyed by name, the first
@@ -630,7 +641,7 @@ _Header _header(List<String> columns) {
       if (seen.add(name)) name else _unused(name, seen),
   ]);
   final index = {for (var i = 0; i < cols.length; i++) cols[i]: i};
-  return (columns: cols, index: index, row: (cells) => _CsvRow(index, cells));
+  return (columns: cols, index: index, row: (cells) => Row(_CsvRow(index, cells)));
 }
 
 /// `name_2`, or the first `name_n` that [seen] does not have yet, added to it.

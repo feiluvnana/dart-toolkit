@@ -427,13 +427,16 @@ T _guard<T, V>(String what, V Function(String raw) parse, String raw) {
 String? _closest(String typed, Iterable<String> candidates) {
   int distance(String a, String b) {
     var previous = List<int>.generate(b.length + 1, (i) => i);
+    var current = List<int>.filled(b.length + 1, 0);
     for (var i = 1; i <= a.length; i++) {
-      final current = [i, ...List<int>.filled(b.length, 0)];
+      current[0] = i;
       for (var j = 1; j <= b.length; j++) {
         final cost = a.codeUnitAt(i - 1) == b.codeUnitAt(j - 1) ? 0 : 1;
         current[j] = min(min(current[j - 1] + 1, previous[j] + 1), previous[j - 1] + cost);
       }
+      final temp = previous;
       previous = current;
+      current = temp;
     }
     return previous[b.length];
   }

@@ -38,8 +38,10 @@ Iterable<(CliOption<Object?>, List<String>)> _reachable(CliCommand command) sync
 String _bashWords(Iterable<String> words) =>
     "\$'${words.map((w) => w.replaceAll(r'\', r'\\').replaceAll("'", r"\'").replaceAll('\n', ' ')).join(r'\n')}'";
 
+final _nonWordChar = RegExp(r'\W');
+
 String _bash(CliCommand root) {
-  final fn = '_${root.name.replaceAll(RegExp(r'\W'), '_')}_completion';
+  final fn = '_${root.name.replaceAll(_nonWordChar, '_')}_completion';
   final tree = _tree(root).toList();
   final out = StringBuffer()
     ..writeln('$fn() {')
@@ -87,7 +89,7 @@ String _bash(CliCommand root) {
 
 String _fish(CliCommand root) {
   String quote(String s) => "'${s.replaceAll(r'\', r'\\').replaceAll("'", r"\'")}'";
-  final fn = '__${root.name.replaceAll(RegExp(r'\W'), '_')}_path';
+  final fn = '__${root.name.replaceAll(_nonWordChar, '_')}_path';
   final tree = _tree(root).toList();
   final out = StringBuffer()
     ..writeln('function $fn')

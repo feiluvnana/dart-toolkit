@@ -36,18 +36,31 @@ enum Hash {
 
   /// Whether this is a checksum rather than a cryptographic hash.
   bool get isChecksum => index >= crc32.index;
+
+  /// The digest of the file at [path], read in memory if small and in a worker isolate if large.
+  Future<Uint8List> file(String path, {List<int>? key}) async => await File(path).length() <= _inline
+      ? _ofBytes(this, key, await File(path).readAsBytes())
+      : Isolate.run(() => _ofFile(this, key, path));
+
+  /// The digests of [paths], in order, hashed in parallel by the native library in a worker isolate.
+  Future<List<Uint8List>> files(List<String> paths) async {
+    if (paths.isEmpty) return const [];
+    return Isolate.run(() => _ofFiles(this, paths));
+  }
+
+  /// The digests of [paths], in order, hashed in parallel by the native library synchronously.
+  List<Uint8List> filesSync(List<String> paths) => paths.isEmpty ? const [] : _ofFiles(this, paths);
 }
 
-/// Digests and MACs of a file. Memory is constant in its size: a large file is read by the
-/// native library in a worker isolate, and BLAKE3 hashes one on every core.
+/// Digests and MACs of a file: `await file.hash(Hash.sha256)`.
 ///
 /// {@category Hashing}
-extension PathHashExtensions on Path {
+extension FileHashExtensions on File {
   /// The [algorithm] digest of this file, hex encoded.
   Future<String> hash(Hash algorithm) async => _hex(await hashBytes(algorithm));
 
   /// The [algorithm] digest of this file.
-  Future<Uint8List> hashBytes(Hash algorithm) => _of(algorithm, null);
+  Future<Uint8List> hashBytes(Hash algorithm) => algorithm.file(path);
 
   /// A 32-bit checksum of this file as an integer: `file.checksum(Hash.crc32c)`.
   ///
@@ -58,55 +71,19 @@ extension PathHashExtensions on Path {
   Future<String> hmac(Hash algorithm, List<int> key) async => _hex(await hmacBytes(algorithm, key));
 
   /// The HMAC of this file's contents under [key]; see [BytesHashExtensions.hmacBytes].
-  Future<Uint8List> hmacBytes(Hash algorithm, List<int> key) => _of(algorithm, key);
-
-  /// The files under this directory that hold the same bytes, each group two or more paths,
-  /// the largest files first. Empty files are left out.
-  ///
-  /// Only files of equal size are compared, by [Hash.xxh3] in parallel, so a tree of unique
-  /// sizes costs one walk and no reads at all.
-  Future<List<List<Path>>> duplicates() => Isolate.run(() {
-    final bySize = <int, List<String>>{};
-    for (final p in globSync('**')) {
-      if (p.typeSync() == PathType.file) (bySize[File(p).lengthSync()] ??= []).add(p);
-    }
-    bySize.remove(0);
-    final candidates = [
-      for (final MapEntry(key: size, value: paths) in bySize.entries)
-        if (paths.length > 1)
-          for (final p in paths) (size, p),
-    ];
-    final digests = candidates.isEmpty
-        ? const <Uint8List>[]
-        : _ofFiles(Hash.xxh3, [for (final (_, p) in candidates) p]);
-    final groups = <(int, String), List<Path>>{};
-    for (var i = 0; i < candidates.length; i++) {
-      (groups[(candidates[i].$1, _hex(digests[i]))] ??= []).add(Path(candidates[i].$2));
-    }
-    return [
-      for (final MapEntry(:value) in groups.entries.toList()..sort((a, b) => b.key.$1.compareTo(a.key.$1)))
-        if (value.length > 1) value..sort(),
-    ];
-  });
-
-  Future<Uint8List> _of(Hash algorithm, List<int>? key) async => await asFile.length() <= _inline
-      ? _ofBytes(algorithm, key, await readBytes())
-      : Isolate.run(() => _ofFile(algorithm, key, path));
+  Future<Uint8List> hmacBytes(Hash algorithm, List<int> key) => algorithm.file(path, key: key);
 }
 
-/// Digests of many files at once: `await paths.hash(Hash.xxh3)`.
+/// Digests of many files at once: `await files.hash(Hash.xxh3)`.
 ///
 /// {@category Hashing}
-extension PathsHashExtensions on Iterable<Path> {
+extension FilesHashExtensions on Iterable<File> {
   /// Each file's [algorithm] digest, hex encoded, hashed in parallel by the native library.
-  ///
-  /// One name for one file and for many, as `download` is: this is [PathHashExtensions.hash]
-  /// over a list, in one call to the library instead of one per file.
-  Future<Map<Path, String>> hash(Hash algorithm) async {
-    final paths = toList();
-    if (paths.isEmpty) return {};
-    final digests = await Isolate.run(() => _ofFiles(algorithm, paths));
-    return {for (var i = 0; i < paths.length; i++) paths[i]: _hex(digests[i])};
+  Future<Map<File, String>> hash(Hash algorithm) async {
+    final files = toList();
+    if (files.isEmpty) return {};
+    final digests = await algorithm.files([for (final f in files) f.path]);
+    return {for (var i = 0; i < files.length; i++) files[i]: _hex(digests[i])};
   }
 }
 

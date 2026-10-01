@@ -1404,6 +1404,10 @@ Uint8List? _gunzip(Uint8List bytes, int cap) {
   return out.bytes.takeBytes();
 }
 
+final _sitemapIndex = RegExp(r'<sitemapindex[\s>]', caseSensitive: false);
+final _sitemapUrlset = RegExp(r'<urlset[\s>]', caseSensitive: false);
+final _sitemapLoc = RegExp(r'<loc\b[^>]*>(.*?)</loc>', caseSensitive: false, dotAll: true);
+
 /// The pages and the further sitemaps one sitemap names, resolved against where it came from.
 ///
 /// A `<urlset>`'s `<url><loc>`s are pages and a `<sitemapindex>`'s `<sitemap><loc>`s are
@@ -1421,17 +1425,16 @@ Uint8List? _gunzip(Uint8List bytes, int cap) {
     final url? when href.trim().isNotEmpty => from.resolveUri(url),
     _ => null,
   };
-  try {
-    final root = XmlDocument.parse(text).root;
-    final into = root.local == 'sitemapindex' ? maps : pages;
-    for (final entry in root.children) {
-      for (final loc in entry.children) {
-        if (loc.local == 'loc') {
-          if (read(loc.text) case final url?) into.add(url);
-        }
+  if (_sitemapIndex.hasMatch(text) || _sitemapUrlset.hasMatch(text)) {
+    final into = _sitemapIndex.hasMatch(text) ? maps : pages;
+    for (final m in _sitemapLoc.allMatches(text)) {
+      var loc = m[1]!.trim();
+      if (loc.startsWith('<![CDATA[') && loc.endsWith(']]>')) {
+        loc = loc.substring(9, loc.length - 3).trim();
       }
+      if (read(loc) case final url?) into.add(url);
     }
-  } catch (_) {
+  } else {
     for (final line in text.split('\n')) {
       if (read(line) case final url? when url.scheme == 'http' || url.scheme == 'https') pages.add(url);
     }

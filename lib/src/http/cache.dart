@@ -104,7 +104,7 @@ final class _Cache {
   /// A file name for [url]: FNV-1a over its text, in hex.
   static String _key(Uri url) {
     var hash = 0xcbf29ce484222325;
-    for (final unit in utf8.encode('$url')) {
+    for (final unit in url.toString().codeUnits) {
       hash = (hash ^ unit) * 0x100000001b3;
     }
     return '${(hash >>> 32).toRadixString(16).padLeft(8, '0')}${(hash & 0xffffffff).toRadixString(16).padLeft(8, '0')}';

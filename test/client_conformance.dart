@@ -95,17 +95,21 @@ void clientConformance(String name, FutureOr<Client> Function(Uri base) create, 
       expect((await get('/boom')).statusCode, 500);
     }, skip: skip.contains('status') ? 'skipped by the implementation' : null);
 
-    test('url is the URL that answered, after redirects', () async {
-      final res = await get('/moved');
-      // Either the client followed the hop, or it handed the 302 back for the caller to
-      // follow — but it may not claim the redirect's own URL answered with a 200.
-      if (res.statusCode == 200) {
-        expect(res.url?.path, '/ok', reason: 'followed the redirect but reported the wrong url');
-      } else {
-        expect(res.statusCode, inInclusiveRange(300, 399));
-        expect(res.headers['location'], isNotNull);
-      }
-    }, skip: skip.contains('redirect') ? 'skipped by the implementation' : null);
+    test(
+      'url is the URL that answered, after redirects',
+      () async {
+        final res = await get('/moved');
+        // Either the client followed the hop, or it handed the 302 back for the caller to
+        // follow — but it may not claim the redirect's own URL answered with a 200.
+        if (res.statusCode == 200) {
+          expect(res.url?.path, '/ok', reason: 'followed the redirect but reported the wrong url');
+        } else {
+          expect(res.statusCode, inInclusiveRange(300, 399));
+          expect(res.headers['location'], isNotNull);
+        }
+      },
+      skip: skip.contains('redirect') ? 'skipped by the implementation' : null,
+    );
 
     test('a body arrives as a stream, not one lump', () async {
       final streamed = await client.send(Request('GET', base.resolve('/chunks')));
@@ -122,26 +126,34 @@ void clientConformance(String name, FutureOr<Client> Function(Uri base) create, 
       expect(res.text, 'POST yes payload');
     }, skip: skip.contains('methods') ? 'skipped by the implementation' : null);
 
-    test('a streamed body reaches the server, and its length was announced', () async {
-      // `files:` never fills `Request.bytes`, so an implementation that sends that field
-      // instead of `Request.open()` sends an empty body with a content-length that lies.
-      final dir = await Directory.systemTemp.createTemp('tk_upload_');
-      addTearDown(() => dir.delete(recursive: true));
-      final file = File('${dir.path}/note.txt')..writeAsStringSync('the payload');
-      final request = Request('POST', base.resolve('/upload'), form: {'title': 'x'}, files: {'doc': file.path.path});
-      final res = await (await client.send(request)).read();
-      final [announced, received, ...] = res.text.split(' ');
-      expect(announced, received, reason: 'content-length did not match what arrived');
-      expect(res.text, contains('the payload'));
-      expect(res.text, contains('name="title"'));
-      expect(res.text, contains('filename="note.txt"'));
-    }, skip: skip.contains('methods') ? 'skipped by the implementation' : null);
+    test(
+      'a streamed body reaches the server, and its length was announced',
+      () async {
+        // `files:` never fills `Request.bytes`, so an implementation that sends that field
+        // instead of `Request.open()` sends an empty body with a content-length that lies.
+        final dir = await Directory.systemTemp.createTemp('tk_upload_');
+        addTearDown(() => dir.delete(recursive: true));
+        final file = File('${dir.path}/note.txt')..writeAsStringSync('the payload');
+        final request = Request('POST', base.resolve('/upload'), form: {'title': 'x'}, files: {'doc': file.path.path});
+        final res = await (await client.send(request)).read();
+        final [announced, received, ...] = res.text.split(' ');
+        expect(announced, received, reason: 'content-length did not match what arrived');
+        expect(res.text, contains('the payload'));
+        expect(res.text, contains('name="title"'));
+        expect(res.text, contains('filename="note.txt"'));
+      },
+      skip: skip.contains('methods') ? 'skipped by the implementation' : null,
+    );
 
-    test('an unknown directive is ignored, not refused', () async {
-      const unknown = RequestKey<String>('conformance.unknown');
-      final request = Request('GET', base.resolve('/ok'))..[unknown] = 'whatever';
-      expect((await (await client.send(request)).read()).statusCode, 200);
-    }, skip: skip.contains('directives') ? 'skipped by the implementation' : null);
+    test(
+      'an unknown directive is ignored, not refused',
+      () async {
+        const unknown = RequestKey<String>('conformance.unknown');
+        final request = Request('GET', base.resolve('/ok'))..[unknown] = 'whatever';
+        expect((await (await client.send(request)).read()).statusCode, 200);
+      },
+      skip: skip.contains('directives') ? 'skipped by the implementation' : null,
+    );
 
     test('close is idempotent', () async {
       await client.close();

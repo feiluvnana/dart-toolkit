@@ -50,15 +50,29 @@ extension BytesEncodingExtensions on List<int> {
   }
 }
 
+final _whitespace = RegExp(r'\s');
+final _base32Ignored = RegExp(r'[\s=-]');
+
+int _b32Value(int c) {
+  if (c >= 0x41 && c <= 0x5a) return c - 0x41;
+  if (c >= 0x32 && c <= 0x37) return c - 0x18;
+  throw FormatException('Not base32: ${String.fromCharCode(c)}');
+}
+
 /// Decodings of text: `'6869'.hexBytes`, `'-_8'.base64Bytes`, `'JBSWY3DP'.base32Bytes`.
 ///
 /// {@category Hashing}
 extension StringEncodingExtensions on String {
   /// This hex string as bytes; whitespace is ignored.
   Uint8List get hexBytes {
-    final s = replaceAll(RegExp(r'\s'), '');
+    final s = replaceAll(_whitespace, '');
     if (s.length.isOdd) throw FormatException('Odd-length hex string', this);
-    return Uint8List.fromList([for (var i = 0; i < s.length; i += 2) _nibble(s, i) << 4 | _nibble(s, i + 1)]);
+    final len = s.length ~/ 2;
+    final out = Uint8List(len);
+    for (var i = 0; i < len; i++) {
+      out[i] = _nibble(s, i * 2) << 4 | _nibble(s, i * 2 + 1);
+    }
+    return out;
   }
 
   /// This base64 or base64url string as bytes, padding optional.
@@ -66,12 +80,11 @@ extension StringEncodingExtensions on String {
 
   /// This base32 string as bytes; case, spaces, dashes and padding are ignored.
   Uint8List get base32Bytes {
-    final s = replaceAll(RegExp(r'[\s=-]'), '').toUpperCase();
+    final s = replaceAll(_base32Ignored, '').toUpperCase();
     final out = BytesBuilder(copy: false);
     var bits = 0, acc = 0;
     for (final c in s.codeUnits) {
-      final v = _b32Alphabet.indexOf(String.fromCharCode(c));
-      if (v < 0) throw FormatException('Not base32: ${String.fromCharCode(c)}');
+      final v = _b32Value(c);
       acc = ((acc << 5) | v) & 0xffff;
       bits += 5;
       if (bits >= 8) {

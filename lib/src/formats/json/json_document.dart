@@ -81,7 +81,8 @@ class JsonDocument {
   /// Returns [raw] as a map of String to [JsonDocument]s, or empty map.
   Map<String, JsonDocument> get map => switch (raw) {
     final Map<Object?, Object?> m => {
-      for (final MapEntry(:key, :value) in m.entries) '$key': JsonDocument._at(value, _key('$key')),
+      for (final MapEntry(:key, :value) in m.entries)
+        if (key is String ? key : '$key' case final k) k: JsonDocument._at(value, _key(k)),
     },
     _ => const {},
   };

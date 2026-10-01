@@ -228,6 +228,8 @@ ShellRun run(
 String _display(String command, List<String> args) =>
     args.isEmpty ? command : '$command ${args.map((a) => a.contains(' ') || a.isEmpty ? '"$a"' : a).join(' ')}';
 
+final _cmdUnsafe = RegExp(r'[&|<>^%"\r\n]');
+
 /// [args], refused if `cmd.exe` would read one as something other than an argument.
 ///
 /// `cmd` has no quoting a program can rely on — `%VAR%` expands inside quotes, and `^`, `&`
@@ -235,7 +237,7 @@ String _display(String command, List<String> args) =>
 /// argument is one without them (the "BatBadBut" class of injection).
 List<String> _cmdSafe(List<String> args) {
   for (final arg in args) {
-    if (arg.contains(RegExp(r'[&|<>^%"\r\n]'))) {
+    if (arg.contains(_cmdUnsafe)) {
       throw ArgumentError.value(arg, 'args', 'cannot be passed through cmd.exe safely');
     }
   }
@@ -523,11 +525,13 @@ Future<ShellResult> _exec(
   return result(code);
 }
 
+final _psWhitespace = RegExp(r'\s+');
+
 /// What Windows runs for [executable]: the file itself when the `PATH` has it and it is a
 /// program, or `cmd.exe` — the second field — for a `.bat`, a `.cmd` or a built-in such as
 /// `dir`, which nothing else can run.
 Future<(String, bool)> _windowsTarget(String executable) async {
-  final found = executable.contains(RegExp(r'[\\/]')) ? Path(executable) : await which(executable);
+  final found = (executable.contains('/') || executable.contains('\\')) ? Path(executable) : await which(executable);
   if (found == null) return (executable, true);
   return const {'bat', 'cmd'}.contains(found.ext.toLowerCase()) ? (executable, true) : (found.path, false);
 }
@@ -548,7 +552,7 @@ List<int> _signalTree(List<int> roots, ProcessSignal signal) {
   try {
     final table = Process.runSync('ps', ['-A', '-o', 'pid=', '-o', 'ppid=']).stdout as String;
     for (final line in table.split('\n')) {
-      if (line.trim().split(RegExp(r'\s+')).map(int.tryParse).toList() case [final pid?, final ppid?]) {
+      if (line.trim().split(_psWhitespace).map(int.tryParse).toList() case [final pid?, final ppid?]) {
         (children[ppid] ??= []).add(pid);
       }
     }

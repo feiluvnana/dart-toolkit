@@ -2,10 +2,14 @@ import 'package:dart_toolkit/native.dart';
 import 'package:test/test.dart';
 
 void main() {
-  test('the prebuilt library loads, and says so', () {
-    expect(NativeLib.reason, isNull);
-    expect(NativeLib.isAvailable, isTrue);
-  }, skip: NativeLib.isAvailable ? null : 'dart_toolkit_native did not load: ${NativeLib.reason}');
+  test(
+    'the prebuilt library loads, and says so',
+    () {
+      expect(NativeLib.reason, isNull);
+      expect(NativeLib.isAvailable, isTrue);
+    },
+    skip: NativeLib.isAvailable ? null : 'dart_toolkit_native did not load: ${NativeLib.reason}',
+  );
 
   test('version is read once', () {
     expect(NativeLib.version, greaterThan(0));

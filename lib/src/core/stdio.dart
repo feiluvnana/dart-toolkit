@@ -120,7 +120,7 @@ class Io {
   }();
 
   /// [text] without ANSI escape sequences.
-  static String stripAnsi(String text) => text.replaceAll(_ansiEscape, '');
+  static String stripAnsi(String text) => text.contains('\x1b') ? text.replaceAll(_ansiEscape, '') : text;
 
   /// The terminal columns [text] occupies: escapes zero, East Asian wide characters two.
   static int width(String text) {
@@ -189,6 +189,7 @@ final class _Plain implements StringSink {
 
 int _charVisualWidth(int rune) {
   if (rune < 0x20 || (rune >= 0x7f && rune < 0xa0)) return 0;
+  if (rune < 0x7f) return 1;
   // Combining characters / zero width
   if (rune >= 0x0300 && rune <= 0x036f) return 0;
   if (rune >= 0x200b && rune <= 0x200f) return 0;

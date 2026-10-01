@@ -1,17 +1,14 @@
 part of '../../http.dart';
 
-final Expando<HtmlDocument> _htmlMemo = Expando<HtmlDocument>('htmlMemo');
-final Expando<XmlDocument> _xmlMemo = Expando<XmlDocument>('xmlMemo');
-
 /// HTML and XML on [Response]; `json` is a member, being the format `http` itself speaks.
 ///
 /// {@category Networking}
 extension ResponseDocumentExtensions on Response {
   /// The body parsed as HTML, once per response instance.
-  HtmlDocument get html => _htmlMemo[this] ??= HtmlDocument.parse(text);
+  HtmlDocument get html => _html ??= HtmlDocument.parse(text);
 
   /// The body parsed as XML, once per response instance.
-  XmlDocument get xml => _xmlMemo[this] ??= XmlDocument.parse(text);
+  XmlDocument get xml => _xml ??= XmlDocument.parse(text);
 }
 
 /// Fetch-and-parse on [Uri]; each throws [HttpException] unless the status is 2xx — an error

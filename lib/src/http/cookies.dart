@@ -118,7 +118,8 @@ final class _Jar {
         case 'domain':
           // An empty one is ignored, not obeyed: RFC 6265 §5.2.3 drops the attribute, and
           // the cookie stays host-only.
-          final named = value.toLowerCase().replaceFirst(RegExp('^\\.'), '');
+          final lower = value.toLowerCase();
+          final named = lower.startsWith('.') ? lower.substring(1) : lower;
           if (named.isNotEmpty) domain = named;
         case 'path':
           path = value;

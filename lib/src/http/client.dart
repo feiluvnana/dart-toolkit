@@ -27,6 +27,15 @@ final class Headers extends MapBase<String, String> {
 
   @override
   bool containsKey(Object? key) => key is String && _map.containsKey(key.toLowerCase());
+
+  @override
+  int get length => _map.length;
+
+  @override
+  bool get isEmpty => _map.isEmpty;
+
+  @override
+  bool get isNotEmpty => _map.isNotEmpty;
 }
 
 /// A directive a [Client] may honour, carried on a [Request] under a typed name.
@@ -338,18 +347,7 @@ CancelledException _cancelled(CancelToken token) =>
 /// Waits [duration], or throws [CancelledException] as soon as the enclosing [Cancel.scope]
 /// is cancelled — a backoff, a `Retry-After` and a `delay:` gap are where a scope's
 /// requests spend their time, so they are where a cancel must land.
-Future<void> _sleep(Duration duration) {
-  final token = Cancel.token;
-  if (token == null) return Future<void>.delayed(duration);
-  if (token.isCancelled) return Future.error(_cancelled(token));
-  final done = Completer<void>();
-  final timer = Timer(duration, done.complete);
-  final unregister = token.onCancel(() {
-    timer.cancel();
-    if (!done.isCompleted) done.completeError(_cancelled(token));
-  });
-  return done.future.whenComplete(unregister);
-}
+Future<void> _sleep(Duration duration) => duration.delay();
 
 /// Whether [error] is one a second attempt might not meet: the connection, not the request.
 ///
@@ -459,6 +457,8 @@ final class Response {
 
   String? _text;
   JsonDocument? _json;
+  HtmlDocument? _html;
+  XmlDocument? _xml;
 
   /// A response with a text [body]: `Response('ok', 200)`.
   Response(
