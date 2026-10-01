@@ -39,8 +39,8 @@ final class _N {
 /// fixed-digest output buffer.
 const _maxDigest = 64;
 
-/// A file up to this size is read here and hashed in memory; a larger one is read by the
-/// library in a worker isolate, which costs about 2 ms to start — what SHA-256 takes over 4 MiB.
+/// A file up to this size is read by the library on the calling isolate; a larger one in a
+/// worker isolate, which costs about 2 ms to start — what SHA-256 takes over 4 MiB.
 const _inline = 4 << 20;
 
 /// A failed MAC is always the key's fault — one too long for BLAKE2, not 32 bytes for BLAKE3,

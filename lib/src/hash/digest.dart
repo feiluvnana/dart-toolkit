@@ -37,10 +37,10 @@ enum Hash {
   /// Whether this is a checksum rather than a cryptographic hash.
   bool get isChecksum => index >= crc32.index;
 
-  /// The digest of the file at [path], read in memory if small and in a worker isolate if large.
-  Future<Uint8List> file(String path, {List<int>? key}) async => await File(path).length() <= _inline
-      ? _ofBytes(this, key, await File(path).readAsBytes())
-      : Isolate.run(() => _ofFile(this, key, path));
+  /// The digest of the file at [path], read by the library: here when it is small, in a
+  /// worker isolate when it is large.
+  Future<Uint8List> _file(String path, {List<int>? key}) async =>
+      await File(path).length() <= _inline ? _ofFile(this, key, path) : Isolate.run(() => _ofFile(this, key, path));
 
   /// The digests of [paths], in order, hashed in parallel by the native library in a worker isolate.
   Future<List<Uint8List>> files(List<String> paths) async {
@@ -60,7 +60,7 @@ extension FileHashExtensions on File {
   Future<String> hash(Hash algorithm) async => _hex(await hashBytes(algorithm));
 
   /// The [algorithm] digest of this file.
-  Future<Uint8List> hashBytes(Hash algorithm) => algorithm.file(path);
+  Future<Uint8List> hashBytes(Hash algorithm) => algorithm._file(path);
 
   /// A 32-bit checksum of this file as an integer: `file.checksum(Hash.crc32c)`.
   ///
@@ -71,7 +71,7 @@ extension FileHashExtensions on File {
   Future<String> hmac(Hash algorithm, List<int> key) async => _hex(await hmacBytes(algorithm, key));
 
   /// The HMAC of this file's contents under [key]; see [BytesHashExtensions.hmacBytes].
-  Future<Uint8List> hmacBytes(Hash algorithm, List<int> key) => algorithm.file(path, key: key);
+  Future<Uint8List> hmacBytes(Hash algorithm, List<int> key) => algorithm._file(path, key: key);
 }
 
 /// Digests of many files at once: `await files.hash(Hash.xxh3)`.

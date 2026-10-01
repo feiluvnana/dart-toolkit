@@ -13,6 +13,8 @@ const TAR_GZ: u32 = 3;
 const TAR_XZ: u32 = 4;
 const TAR_ZST: u32 = 5;
 const TAR_BZ2: u32 = 6;
+/// Read-only; `tk_archive_create` refuses it by name.
+const RAR: u32 = 7;
 
 /// Stream codecs for `tk_compress` / `tk_decompress`.
 const GZIP: u32 = 0;
@@ -283,15 +285,52 @@ impl<W: Write> TarWriter<W> {
     }
 }
 
-fn tar_writer(path: &str, format: u32, level: i32) -> Result<TarWriter<BufWriter<File>>, String> {
+/// Input at least this large is compressed on every core by zstd and xz. Below it, starting
+/// the threads costs more than they win, and xz's blocks (three dictionaries, 24 MiB at the
+/// default level) would leave all but one of them idle anyway.
+const PARALLEL: u64 = 32 << 20;
+
+/// The worker threads for `size` bytes of input: 0 (single-threaded) below `PARALLEL`.
+fn workers(size: u64) -> u32 {
+    if size < PARALLEL {
+        return 0;
+    }
+    std::thread::available_parallelism().map_or(1, |n| n.get() as u32)
+}
+
+fn xz_encoder<W: Write>(out: W, level: u32, size: u64) -> Result<xz2::write::XzEncoder<W>, String> {
+    match workers(size) {
+        0 => Ok(xz2::write::XzEncoder::new(out, level)),
+        n => {
+            let stream = xz2::stream::MtStreamBuilder::new()
+                .threads(n)
+                .preset(level)
+                .check(xz2::stream::Check::Crc64)
+                .encoder()
+                .msg()?;
+            Ok(xz2::write::XzEncoder::new_stream(out, stream))
+        }
+    }
+}
+
+fn zstd_encoder<W: Write>(out: W, level: i32, size: u64) -> Result<zstd::stream::write::Encoder<'static, W>, String> {
+    let mut enc = zstd::stream::write::Encoder::new(out, level).msg()?;
+    if let n @ 1.. = workers(size) {
+        enc.multithread(n).msg()?;
+    }
+    Ok(enc)
+}
+
+/// The writer under a tar of `size` bytes of files.
+fn tar_writer(path: &str, format: u32, level: i32, size: u64) -> Result<TarWriter<BufWriter<File>>, String> {
     validate_archive_level(format, level)?;
     let f = BufWriter::new(create_file(path)?);
     let lvl = |d: u32| if level < 0 { d } else { level as u32 };
     Ok(match format {
         TAR => TarWriter::Plain(f),
         TAR_GZ => TarWriter::Gz(flate2::write::GzEncoder::new(f, flate2::Compression::new(lvl(6)))),
-        TAR_XZ => TarWriter::Xz(xz2::write::XzEncoder::new(f, lvl(6))),
-        TAR_ZST => TarWriter::Zst(zstd::stream::write::Encoder::new(f, if level == -1 { 3 } else { level }).msg()?),
+        TAR_XZ => TarWriter::Xz(xz_encoder(f, lvl(6), size)?),
+        TAR_ZST => TarWriter::Zst(zstd_encoder(f, if level == -1 { 3 } else { level }, size)?),
         TAR_BZ2 => TarWriter::Bz2(bzip2::write::BzEncoder::new(f, bzip2::Compression::new(lvl(9)))),
         _ => unreachable!(),
     })
@@ -1160,6 +1199,15 @@ fn walk(src: &Path, dest: &Path) -> Result<Vec<(String, PathBuf, ItemKind)>, Str
 }
 
 fn create(format: u32, src: &str, dest: &str, password: Option<&str>, level: i32) -> Result<i32, String> {
+    // Refused before anything is touched: the destination's folder is not created for nothing.
+    match format {
+        RAR => return Err(format!("{}: rar can only be read; write .zip or .7z instead", dest)),
+        TAR..=TAR_BZ2 if password.is_some() => {
+            return Err(format!("{}: tar has no encryption; write .zip or .7z for a password", dest))
+        }
+        ZIP | SEVENZ | TAR..=TAR_BZ2 => {}
+        _ => return Err(format!("unknown archive format {}", format)),
+    }
     validate_archive_level(format, level)?;
     let src_path = Path::new(src);
     if let Some(p) = Path::new(dest).parent() {
@@ -1207,7 +1255,9 @@ fn create(format: u32, src: &str, dest: &str, password: Option<&str>, level: i32
                     }
                 }
             }
-            w.finish().msg()?;
+            // The central directory is in the buffer until this flush, whose failure is the
+            // archive's: dropping the writer would swallow it.
+            w.finish().msg()?.flush().msg()?;
         }
         SEVENZ => {
             // From the same walk as zip and tar: the crate's own directory walk runs after the
@@ -1249,10 +1299,13 @@ fn create(format: u32, src: &str, dest: &str, password: Option<&str>, level: i32
             z.finish().msg()?;
         }
         TAR | TAR_GZ | TAR_XZ | TAR_ZST | TAR_BZ2 => {
-            if password.is_some() {
-                return Err("tar has no encryption; use zip or 7z".into());
-            }
-            let mut b = tar::Builder::new(tar_writer(dest, format, level)?);
+            let size = items
+                .iter()
+                .filter(|i| matches!(i.2, ItemKind::File))
+                .filter_map(|i| i.1.metadata().ok())
+                .map(|m| m.len())
+                .sum();
+            let mut b = tar::Builder::new(tar_writer(dest, format, level, size)?);
             b.follow_symlinks(false);
             for (name, path, kind) in &items {
                 match kind {
@@ -1268,7 +1321,7 @@ fn create(format: u32, src: &str, dest: &str, password: Option<&str>, level: i32
             let mut buf_writer = inner.finish().msg()?;
             buf_writer.flush().msg()?;
         }
-        _ => return Err(format!("unknown archive format {}", format)),
+        _ => unreachable!(),
     }
     Ok(files)
 }
@@ -1287,7 +1340,9 @@ pub unsafe extern "C" fn tk_archive_create(format: u32, src: *const u8, slen: us
 pub unsafe extern "C" fn tk_compress(codec: u32, src: *const u8, slen: usize, dest: *const u8, dlen: usize, level: i32) -> i32 {
     guard(|| {
         validate_codec_level(codec, level)?;
-        let mut input = BufReader::new(read_file(text(src, slen)?)?);
+        let file = read_file(text(src, slen)?)?;
+        let size = file.metadata().map_or(0, |m| m.len());
+        let mut input = BufReader::new(file);
         let out = BufWriter::new(create_file(text(dest, dlen)?)?);
         let lvl = |d: u32| if level < 0 { d } else { level as u32 };
         match codec {
@@ -1298,13 +1353,13 @@ pub unsafe extern "C" fn tk_compress(codec: u32, src: *const u8, slen: usize, de
                 out.flush().msg()?;
             }
             XZ => {
-                let mut enc = xz2::write::XzEncoder::new(out, lvl(6));
+                let mut enc = xz_encoder(out, lvl(6), size)?;
                 pump(&mut input, &mut enc)?;
                 let mut out = enc.finish().msg()?;
                 out.flush().msg()?;
             }
             ZSTD => {
-                let mut enc = zstd::stream::write::Encoder::new(out, if level == -1 { 3 } else { level }).msg()?;
+                let mut enc = zstd_encoder(out, if level == -1 { 3 } else { level }, size)?;
                 pump(&mut input, &mut enc)?;
                 let mut out = enc.finish().msg()?;
                 out.flush().msg()?;

@@ -18,7 +18,6 @@ describes 0.0.6.
 - [`http`](#http) — requests, the scope, clients, Chrome, crawling, downloads
 - [`cli`](#cli) — options, commands, built-ins, lifecycle, console
 - [`native`](#native) — the Rust library
-- [`ffi`](#ffi) — calling C, in its own namespace
 - [Cookbook](#cookbook)
 - [Testing](#testing)
 - [Performance notes](#performance-notes)
@@ -41,7 +40,7 @@ dependencies:
 import 'package:dart_toolkit/dart_toolkit.dart';
 ```
 
-That one import is every module except `ffi.dart`, which you import by name (see [`ffi`](#ffi)).
+That one import is every module except `chrome.dart`, which you import by name (see [Chrome](#chrome)).
 Import a single module (`package:dart_toolkit/http.dart`, …) only when you have measured and
 want less.
 
@@ -165,7 +164,6 @@ test.
 | `chrome.dart` | `ChromeClient`, `ChromePage`, `Device`, `Resource` — **not in the barrel** | `http` |
 | `cli.dart` | `Opt`, `Arg`, `CliCommand`, `Cli`, `Lifecycle`, `Console` | `core` |
 | `native.dart` | `NativeLib` | — |
-| `ffi.dart` | `Ffi`, `Lib`, `Fn`, `C` — **not in the barrel** | — |
 
 ---
 
@@ -650,6 +648,12 @@ file.withExt('yaml'); file.sanitized;
 
 await file.exists(); await file.size(); await file.modified();
 if (await file.olderThan(1.h)) print('refresh'); // true when missing
+(await dir.size()).humanBytes;                   // '20.0 MB'
+
+final names = await Path.tempDir((tmp) async {  // a fresh folder, deleted afterwards
+  await 'bundle.zip'.path.extractTo(tmp);
+  return [for (final f in tmp.filesSync(recursive: true)) f.name];
+});
 ```
 
 `Path` cannot override `==`, so normalise paths before using them as map keys.
@@ -663,8 +667,15 @@ await file.readText(); await file.readBytes(); await file.readLines();
 file.lines();              // Stream<String>, for a file too big to hold
 await file.writeText('x'); await file.append('y');
 await file.copy(dir / 'b'); await file.move(dir / 'c');
+await (dir / 'run.sh').chmod('+x');   // or '755', 'go-w', 'u=rw,go=r'
 await dir.delete(recursive: true);
 ```
+
+**Writes are atomic.** `writeText`, `writeBytes` and `writeLines` write a temporary file beside
+the target and rename it over, so a reader, or a ^C halfway, sees the old file or the new one and
+never half of either. An existing file keeps its permissions, a link keeps pointing where it did,
+and a read-only file still refuses. A device, a FIFO or `/dev/stdout` is written in place.
+`copy` keeps the modes of the directories it copies.
 
 `move` falls back to copy-and-delete only across filesystems. Moving onto a directory that is not
 empty throws instead of merging into it.
@@ -684,12 +695,12 @@ await for (final batch in dir.changes(debounce: 200.ms)) {
 }
 ```
 
-`dir.watch()` is the raw event stream, and `changes` batches it.
+`changes` is `File.watch` debounced into batches of `Path`s; for the raw events, `dir.asDir.watch()`.
 
 ### Archives and compression
 
 **Writing names the format; reading works it out.** `archiveTo` and `compressTo` take the format
-from the destination's extension. `extractTo`, `archiveEntries`, `entry` and `decompressTo` sniff
+from the destination's extension. `extractTo`, `entries`, `entry` and `decompressTo` sniff
 the file's magic number, so a download without an extension still opens.
 
 ```dart
@@ -698,7 +709,7 @@ await 'photos.rar'.path.extractTo('out');
 await 'bundle.zip'.path.extractTo('docs', only: '**/*.md'); // just what matches
 final readme = await 'bundle.zip'.path.entry('docs/README.md'); // Uint8List, nothing extracted
 
-for (final e in await 'bundle.zip'.path.archiveEntries()) {
+for (final e in await 'bundle.zip'.path.entries()) {
   print('${e.name} ${e.size}');
 }
 
@@ -712,7 +723,7 @@ await 'blob.gz'.path.decompressTo('blob');
 - stops at 200× the archive's size, and never less than 1 GiB, before writing the excess.
 
 `trusted: true` lifts all three for an archive you made yourself. A path that escapes the
-destination is always refused. `rar` is read-only (`Archive.rar.isWritable` is false).
+destination is always refused. `rar` is read-only: `archiveTo('x.rar')` says so.
 Everything runs off the main isolate, so there is no `extractToSync`.
 
 ---
@@ -1386,7 +1397,6 @@ content-encoding decoders and the WHATWG charsets, and nothing else.
 ```dart
 NativeLib.isAvailable; // whether it loaded
 NativeLib.reason;      // why not
-NativeLib.version;     // the ABI version (2)
 ```
 
 It is looked for at `DART_TOOLKIT_NATIVE` (a path), then beside the executable, then at
@@ -1402,125 +1412,6 @@ they needed, and `IoClient` asks only for gzip. There is deliberately no Dart fa
 `make native` builds for this machine. `make native RUST_TARGET=x86_64-unknown-linux-gnu`
 cross-builds with `cargo-zigbuild`. `NativeBridge` is internal plumbing and not covered by the
 versioning promise.
-
----
-
-## `ffi`
-
-Call a C function in one line, with no codegen and no hand-written `lookupFunction<N, D>`.
-
-```dart
-import 'dart:typed_data';
-
-import 'package:dart_toolkit/ffi.dart';
-
-Future<void> main() async {
-  final libc = Ffi.open('c');                 // libc.dylib / libc.so.6 / ucrtbase.dll
-  final strlen = libc.fn('strlen', C.i64);    // looked up once
-  print(strlen('hello'));                     // 5
-  print(libc.call('getenv', C.str, 'HOME'));  // String?
-  print(libc.call('pow', C.f64, 2.0, 10.0));  // 1024.0
-  print(libc.call('ldexp', C.f64, 1.0, 10));  // 1024.0: integers and doubles mix
-  print(libc.call('atof', C.f64, '2.5'));     // 2.5
-  print(libc.call('sqrtf', C.f32, C.f32(2.0))); // 1.414…: a float is written as one
-
-  final name = Uint8List(256);                // a typed list is copied in and back out
-  libc.call('gethostname', C.i32, name, name.length);
-  libc.fn('snprintf', C.i32, fixed: 3)(name, 256, '%d %s %.1f', 42, 'hi', 0.5); // variadic
-
-  if (libc.call('chdir', C.i32, '/nope') < 0) print(Ffi.errno); // 2, ENOENT
-
-  final data = Int32List.fromList([5, -3, 9]);
-  Ffi.scope((s) => libc.call('qsort', C.none, data, data.length, 4,
-      s.callback((int a, int b) => C.i32.at(a) - C.i32.at(b))));
-  print(data); // [-3, 5, 9]
-
-  final buf = libc.own(libc.call('malloc', C.ptr, 1024), 'free', size: 1024); // freed on GC, or:
-  buf.close();
-
-  await libc.fn('usleep', C.i32).async(300000); // on another isolate; this one keeps running
-}
-```
-
-**It lives in its own namespace.** `package:dart_toolkit/ffi.dart` is not exported from the
-barrel. Its names are short on purpose, and short names belong only to programs that asked for
-them. None of them is a `dart:ffi` name, so it imports beside `dart:ffi` with no `hide`.
-
-| | |
-|---|---|
-| `Ffi.open(name)` | `'c'`, `'m'`, `'sqlite3'`, `'z'`, a file name or a path. It searches the script's directory, the system, and Homebrew's paths, finds `lib<name>.so.N` on Linux, and names every candidate when nothing is found |
-| `lib.fn(name, C.x)` | a `Fn<T>`; a missing symbol fails here, not at the call. `fixed: n` for a variadic function |
-| `lib.call(name, C.x, …)` | a one-off call; the lookup is cached |
-| `lib.has(name)`, `lib.path` | |
-| `lib.own(ptr, 'free', size: n)` | an `Owned`, freed by a `NativeFinalizer` or `close()`; `size` tells the GC how much it holds |
-| `fn(…)`, `fn.async(…)` | up to 8 arguments; `async` runs on a helper isolate, kept for the next call |
-| `Ffi.scope((s) => …)` | an arena: `s.alloc(n)`, `s.text(str)`, `s.bytes(list)`, `s.out(C.x)`, `s.callback(f)`; async bodies free when the future completes |
-| `Ffi.callback(f)` | a `Callback` of 0–4 int arguments you `close()` yourself |
-| `Ffi.errno` | this thread's `errno`, as the last call left it |
-
-**Keys.** `C.none`, `i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `bool`, `ptr`, `str`, `f64`
-and `f32` each name a C type. `size_t`, `uint64_t` and `intptr_t` are all `C.i64`. A key does
-four things:
-
-| | |
-|---|---|
-| `libc.fn('abs', C.i32)` | as a return, it narrows what the register held |
-| `C.i32(a)`, `C.f32(1.5)` | called, it is a value as that type holds it: `C.i8(255)` is `-1`, a callback's zero-extended `int` reads `C.i32(a)`, and `C.f32(x)` is a `float` argument |
-| `C.i32.at(address)` | reads one out of memory |
-| `C.u8.list(ptr, n)` | views `n` of them where they lie, as a typed list |
-
-**Out-parameters and structs:**
-
-```dart
-Ffi.scope((s) {
-  final end = s.out(C.ptr);                              // char **endptr
-  libc.call('strtol', C.i64, s.text('42 rest'), end, 10); // 42
-  print(String.fromCharCodes(C.u8.list(end.value, 5)));  // " rest"
-
-  final sec = C.i64.field, nsec = C.i64.field;           // each member named once
-  final timespec = C.struct([sec, nsec]);                // offsets and padding as C lays them out
-  final ts = s.alloc(timespec.size);
-  libc.call('clock_gettime', C.i32, 0, ts);
-  print('${sec[ts]}.${nsec[ts]}');
-});
-```
-
-A per-call `String` is freed when the call returns, so a pointer C keeps into it — `strtol`'s
-`endptr` — needs `s.text` instead.
-
-**Arguments:**
-- `int`, `bool`, `null` (a null pointer), `Pointer`, `Out`, `Owned` and `Callback`.
-- A `String` becomes a UTF-8 `char*` for the duration of the call.
-- Any typed list is copied in and copied back out; an unmodifiable one goes in only.
-- A `double` is a `double` and `C.f32(x)` a `float`. An `int` is always an integer, so
-  `pow(2, 10)` is wrong: write `pow(2.0, 10.0)`.
-
-**How it works:** on the 64-bit ABIs Dart runs on, arguments travel in slots the caller owns,
-and a callee ignores the slots it doesn't declare; Go's `syscall.Syscall6` uses the same trick.
-SysV x64 and AAPCS64 fill the integer and floating-point registers independently, so one
-signature, `(Int64 × 8, Double × 8)`, calls any mix of up to eight. Win64 assigns registers by
-position, so there a call is all integers or all doubles, up to six. A `float` is the low half
-of a `double` register. A variadic function goes through a `VarArgs` signature for its fixed
-count, so the caller does what the platform's `...` expects: the stack on Apple arm64, `al` on
-SysV x64. The return is the one thing the callee leaves partly undefined, which is why it is
-named by a typed key.
-
-**Not supported:** structs by value, more than eight arguments, a variadic function returning
-a `double`, callbacks taking doubles or called from a thread C started, a mix of integers and
-doubles on Windows, and 32-bit platforms. These are refused with an `ArgumentError` rather than
-passed wrongly. The one mistake it cannot catch is a variadic function called without `fixed:`,
-which reads garbage. Use plain `lookupFunction` for the rest; it works alongside `ffi.dart`.
-
-**Cost** (AOT, Apple M-series), against about 8 ns for a typed `lookupFunction`:
-
-| call | ns |
-|---|---|
-| `abs(int)` | 12 |
-| `sqrt(double)` | 15 |
-| `strlen(String)`, including the allocation | 66 |
-| `ldexp(double, int)`, through the mixed shape | 49 |
-| `memset(Uint8List)`, copied in and out | 230 |
-| `fn.async(…)`, after the first | 4 000 |
 
 ---
 
@@ -1711,17 +1602,6 @@ Future<void> watchSrc() async {
       await Console.spin('Analyzing', () => run('dart analyze').isOk);
     }
   }
-}
-```
-
-### Call SQLite directly
-
-```dart
-import 'package:dart_toolkit/ffi.dart';
-
-void main() {
-  final sqlite = Ffi.open('sqlite3');
-  print(sqlite.call('sqlite3_libversion', C.str)); // e.g. 3.43.2
 }
 ```
 

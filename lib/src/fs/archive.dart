@@ -1,13 +1,9 @@
 part of '../../fs.dart';
 
-/// Every container format the package knows, and the extension that names each one.
-///
-/// `archiveTo` writes all but [rar], which is read-only: the format's licence forbids
-/// writing it. Reading never needs this enum — `extractTo` and `archiveEntries` read the
-/// file's magic number — so it is here for `archiveTo`'s destination and for [of].
-///
-/// {@category Files}
-enum Archive {
+/// The formats `archiveTo` writes, by the extension that names each one; the order is the
+/// native library's code for it. Reading never needs this — the library reads the file's
+/// magic number — and `.rar`, which is read-only, is refused by the library by name.
+enum _Archive {
   zip('.zip'),
   sevenZip('.7z'),
   tar('.tar'),
@@ -18,16 +14,10 @@ enum Archive {
   rar('.rar');
 
   final String extension;
-  const Archive(this.extension);
+  const _Archive(this.extension);
 
-  /// Whether [archiveTo] can write this format.
-  bool get isWritable => this != rar;
-
-  /// The format for [path], by extension, or `null`.
-  ///
-  /// This reads the name, not the file. What a file actually is, the native library
-  /// decides from its first bytes when it is read.
-  static Archive? of(String path) {
+  /// The format for [path], by extension.
+  static _Archive of(String path) {
     final lower = path.toLowerCase();
     if (lower.endsWith('.tgz')) return tarGz;
     if (lower.endsWith('.txz')) return tarXz;
@@ -36,7 +26,10 @@ enum Archive {
     for (final a in values) {
       if (lower.endsWith(a.extension)) return a;
     }
-    return null;
+    throw ArgumentError(
+      'No archive format for "$path"; write one of ${[for (final a in values)
+        if (a != rar) a.extension].join(', ')}',
+    );
   }
 }
 
@@ -85,7 +78,7 @@ final class ArchiveEntry {
 /// ```dart
 /// await src.archiveTo('backup.7z', password: 'pw');
 /// await 'release.tar.zst'.path.extractTo(dir);
-/// for (final e in await 'photos.rar'.path.archiveEntries(password: 'pw')) print(e);
+/// for (final e in await 'photos.rar'.path.entries(password: 'pw')) print(e);
 /// ```
 ///
 /// {@category Files}
@@ -93,16 +86,12 @@ extension PathArchiveExtensions on Path {
   /// Archives this file or directory into [destination]; the format is [destination]'s
   /// extension. [level] is the codec's own scale; `null` is its default. Returns the file.
   ///
-  /// zip and 7z take a [password] (AES-256); tar does not and throws [ArgumentError].
-  /// [Archive.rar] cannot be written and throws [ArgumentError] too.
+  /// Writes `.zip`, `.7z`, `.tar` and `.tar.gz`/`.xz`/`.zst`/`.bz2` (or `.tgz`, …); any other
+  /// extension is an [ArgumentError]. zip and 7z take a [password] (AES-256). A password for
+  /// a tar, a `.rar` (read-only) and a [level] out of the codec's range are a
+  /// [FormatException] that says so, and leave nothing behind.
   Future<File> archiveTo(String destination, {String? password, int? level}) async {
-    final format = Archive.of(destination) ?? _unknown(destination);
-    if (!format.isWritable) {
-      throw ArgumentError('${format.name} can only be read; write .zip or .7z instead');
-    }
-    if (format != Archive.zip && format != Archive.sevenZip && password != null) {
-      throw ArgumentError('${format.name} has no encryption; use zip or 7z');
-    }
+    final format = _Archive.of(destination);
     await Isolate.run(() => _NativeArchive.create(format, path, destination, password, level ?? -1));
     return File(destination);
   }
@@ -126,16 +115,14 @@ extension PathArchiveExtensions on Path {
     return Directory(destination);
   }
 
-  /// The contents of the one entry [name] — `'a/b.txt'`, as [archiveEntries] lists it — read
+  /// The contents of the one entry [name] — `'a/b.txt'`, as [entries] lists it — read
   /// without extracting anything else. The size cap is [extractTo]'s, and [trusted] lifts it.
   Future<Uint8List> entry(String name, {String? password, bool trusted = false}) =>
       Isolate.run(() => _NativeArchive.read(path, name, password, _flags(trusted)));
 
   /// The entries of the archive at this path, without extracting; the format is read from
   /// the file itself, as in [extractTo].
-  Future<List<ArchiveEntry>> archiveEntries({String? password}) async {
-    return Isolate.run(() => _NativeArchive.list(path, password));
-  }
+  Future<List<ArchiveEntry>> entries({String? password}) => Isolate.run(() => _NativeArchive.list(path, password));
 
   /// Compresses this file into [destination] with [codec], read from the extension by default.
   Future<File> compressTo(String destination, {Compression? codec, int? level}) async {
@@ -166,10 +153,6 @@ extension PathArchiveExtensions on Path {
       'No codec for "$path"; extensions are ${Compression.values.map((c) => c.extension).join(', ')}',
     );
   }
-
-  static Never _unknown(String path) => throw ArgumentError(
-    'No archive format for "$path"; extensions are ${Archive.values.map((a) => a.extension).join(', ')}',
-  );
 }
 
 typedef _U8 = Pointer<Uint8>;
@@ -266,7 +249,7 @@ final class _NativeArchive {
     return _take((out, len) => _read(p, pl, n, nl, pw, pwl, flags, out, len));
   });
 
-  static void create(Archive format, String src, String dest, String? password, int level) =>
+  static void create(_Archive format, String src, String dest, String? password, int level) =>
       _with([src, dest, password], (a) {
         final [(s, sl), (d, dl), (pw, pwl)] = a;
         _check(_create(format.index, s, sl, d, dl, pw, pwl, level));

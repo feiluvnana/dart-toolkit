@@ -97,9 +97,33 @@ pub(crate) fn give(data: Vec<u8>, out_ptr: *mut *mut u8, out_len: *mut usize) ->
     0
 }
 
+/// The ABI version; `NativeLib` refuses a library that reports another one. 3 added `tk_chmod`.
 #[no_mangle]
 pub extern "C" fn tk_version() -> u32 {
-    2
+    3
+}
+
+/// Sets the permission bits of `path` to `mode`, through a link as chmod(2) does. Windows has
+/// one bit of it: without the owner's write bit the file is read-only.
+#[no_mangle]
+pub unsafe extern "C" fn tk_chmod(path: *const u8, plen: usize, mode: u32) -> i32 {
+    guard(|| {
+        let path = text(path, plen)?;
+        // The message is the OS's alone: the Dart side names the path.
+        let err = |e: std::io::Error| e.to_string();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode & 0o7777)).map_err(err)?;
+        }
+        #[cfg(not(unix))]
+        {
+            let mut perms = std::fs::metadata(path).map_err(err)?.permissions();
+            perms.set_readonly(mode & 0o200 == 0);
+            std::fs::set_permissions(path, perms).map_err(err)?;
+        }
+        Ok(0)
+    })
 }
 
 /// Copies the last error message into `out` (up to `cap` bytes); returns its full length.

@@ -12,6 +12,7 @@ import 'dart:io';
 import 'dart:isolate';
 import 'dart:math';
 
+part 'src/core/bytes.dart';
 part 'src/core/cancel.dart';
 part 'src/core/either.dart';
 part 'src/core/env.dart';

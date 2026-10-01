@@ -26,7 +26,7 @@ sevenz-rust2 = { version = "0.13", default-features = false, features = ["compre
 tar = "0.4"
 flate2 = "1"
 xz2 = { version = "0.1", features = ["static"] }
-zstd = "0.13"
+zstd = { version = "0.13", features = ["zstdmt"] }
 brotli = { version = "7", default-features = false, features = ["std"] }
 bzip2 = "0.5"
 unrar = "0.5"

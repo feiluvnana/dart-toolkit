@@ -60,7 +60,7 @@ Future<void> find(CliContext ctx) async {
 
   if (sized.isEmpty) return Console.warn('nothing matched $glob');
   sized.orderBy('bytes', descending: true).take(ctx(top)).show();
-  Console.ok('${sized.length} files, ${sized.numbers('bytes').sum} bytes');
+  Console.ok('${sized.length} files, ${sized.numbers('bytes').sum.toInt().humanBytes}');
 }
 
 /// Any of the four document formats, queried with one language.
@@ -79,7 +79,7 @@ Future<void> fetch(CliContext ctx) async {
   await Http.scope(timeout: 30.s, () async {
     if (ctx(out) case final path?) {
       await path.path.download(url, overwrite: true).show(slots: 1, message: 'Fetching', done: 'Fetched');
-      Console.ok('$path is ${await path.path.size()} bytes');
+      Console.ok('$path is ${(await path.path.size()).humanBytes}');
       return;
     }
     Io.out.write(await url.get().text);
@@ -95,14 +95,14 @@ Future<void> pack(CliContext ctx) async {
     () => source.archiveTo(target),
     done: 'Packed ${target.name}',
   );
-  Console.ok('${target.name} is ${await target.size()} bytes from ${await source.size()} bytes');
+  Console.ok('${target.name} is ${(await target.size()).humanBytes} from ${(await source.size()).humanBytes}');
 }
 
 Future<void> peek(CliContext ctx) async {
-  final files = (await ctx(archive).archiveEntries()).where((e) => !e.isDir).toList();
+  final files = (await ctx(archive).entries()).where((e) => !e.isDir).toList();
 
   Table.rows(
     files.map((e) => {'size': e.size, 'packed': e.compressedSize, 'name': e.name}),
   ).orderBy('size', descending: true).take(20).show();
-  Console.ok('${files.length} files, ${files.sequence.sumBy((e) => e.size)} bytes uncompressed');
+  Console.ok('${files.length} files, ${files.sequence.sumBy((e) => e.size).toInt().humanBytes} uncompressed');
 }

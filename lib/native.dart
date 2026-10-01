@@ -6,7 +6,7 @@
 ///
 /// It is `NativeLib` and not `Native` because the barrel exports it, and a package name
 /// silently beats a `dart:` one: `Native` hid `dart:ffi`'s `@Native` from every program that
-/// imported both. Calling some other C library is `package:dart_toolkit/ffi.dart`.
+/// imported both.
 ///
 /// {@category Native}
 library;

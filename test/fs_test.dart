@@ -598,7 +598,7 @@ void main() {
     late Path root;
     setUp(() => root = Path(Directory.systemTemp.createTempSync('tk_audit_').path));
     tearDown(() {
-      Process.runSync('chmod', ['-R', 'u+rwx', root]);
+      if ((root / 'shut').existsSync()) (root / 'shut').chmodSync('700');
       root.deleteSync(recursive: true);
     });
 
@@ -621,7 +621,7 @@ void main() {
     test('a directory that cannot be read is skipped, not the end of the glob', () async {
       (root / 'open' / 'a.txt').writeTextSync('a');
       (root / 'shut' / 'b.txt').writeTextSync('b');
-      Process.runSync('chmod', ['000', root / 'shut']);
+      (root / 'shut').chmodSync('000');
       expect((await root.glob('**/*.txt').toList()).map((e) => e.name), ['a.txt']);
       expect(root.globSync('**/*.txt').map((e) => e.name), ['a.txt']);
       expect(root.globSync('*/*.txt').map((e) => e.name), ['a.txt']);
@@ -796,6 +796,155 @@ void main() {
       expect(utf8.encode(ufn).length, lessThanOrEqualTo(255));
       expect(ufn.endsWith('.mp3'), isTrue);
       expect(() => utf8.encode(ufn), returnsNormally);
+    });
+  }, testOn: '!windows');
+
+  group('tempDir, chmod, humanBytes and atomic writes', () {
+    int mode(String path) => FileStat.statSync(path).mode & 0xfff;
+
+    test('tempDir hands out a fresh directory, returns the result and deletes it', () async {
+      late Path seen;
+      final n = await Path.tempDir((dir) async {
+        seen = dir;
+        expect(dir.listSync(), isEmpty);
+        expect(p.isWithin(Path.temp, dir), isTrue);
+        await (dir / 'a' / 'b.txt').writeText('x');
+        return 42;
+      });
+      expect(n, 42);
+      expect(seen.existsSync(), isFalse);
+    });
+
+    test('tempDir deletes its directory when the body throws, and rethrows', () async {
+      late Path seen;
+      await expectLater(
+        Path.tempDir<void>((dir) {
+          seen = dir;
+          (dir / 'f').writeTextSync('x');
+          throw StateError('boom');
+        }),
+        throwsStateError,
+      );
+      expect(seen.existsSync(), isFalse);
+    });
+
+    test('chmod takes octal and symbolic modes', () async {
+      await Path.tempDir((dir) async {
+        final f = dir / 'run.sh';
+        f.writeTextSync('#!/bin/sh\n');
+        await f.chmod('640');
+        expect(mode(f), 0x1a0); // 0640
+        f.chmodSync('+x');
+        expect(mode(f), 0x1e9); // 0751
+        f.chmodSync('go-rwx,u=rw');
+        expect(mode(f), 0x180); // 0600
+        f.chmodSync('a+r,u+s');
+        expect(mode(f), 0x9a4); // 04644
+        f.chmodSync('0755');
+        expect(mode(f), 0x1ed);
+        (dir / 'd').mkdirSync();
+        (dir / 'd').chmodSync('a-x');
+        (dir / 'd').chmodSync('u+X');
+        expect(mode(dir / 'd') & 0x1c0, 0x1c0, reason: 'X is x on a directory');
+        expect(() => f.chmodSync('rwx'), throwsFormatException);
+        expect(() => f.chmodSync('999'), throwsFormatException);
+        expect(() => (dir / 'none').chmodSync('644'), throwsA(isA<FileSystemException>()));
+      });
+    });
+
+    test('copy keeps the modes of the directories it copies', () async {
+      await Path.tempDir((dir) async {
+        final src = dir / 'src';
+        (src / 'private' / 'key').writeTextSync('k');
+        (src / 'private').chmodSync('700');
+        (src / 'shared').mkdirSync();
+        (src / 'shared').chmodSync('775');
+        (src / 'ro').mkdirSync();
+        (src / 'ro' / 'x').writeTextSync('x');
+        (src / 'ro').chmodSync('555');
+        addTearDown(() {
+          for (final d in [src / 'ro', dir / 'a' / 'ro', dir / 'b' / 'ro']) {
+            if (d.existsSync()) d.chmodSync('755');
+          }
+        });
+        await src.copy(dir / 'a');
+        src.copySync(dir / 'b');
+        for (final out in [dir / 'a', dir / 'b']) {
+          expect(mode(out / 'private'), 0x1c0, reason: '$out: 0700');
+          expect(mode(out / 'shared'), 0x1fd, reason: '$out: 0775');
+          expect(mode(out / 'ro'), 0x16d, reason: '$out: 0555, set after its contents');
+          expect((out / 'ro' / 'x').readTextSync(), 'x');
+        }
+      });
+    });
+
+    test('a write replaces the file whole, keeping its mode and leaving no temp file', () async {
+      await Path.tempDir((dir) async {
+        final f = dir / 'conf.ini';
+        f.writeTextSync('old');
+        f.chmodSync('600');
+        // A reader that opened the old file goes on reading it: the new one is a rename, not
+        // a truncate-and-write it could catch halfway.
+        final reader = f.asFile.openSync();
+        await f.writeText('new');
+        expect(String.fromCharCodes(reader.readSync(10)), 'old');
+        reader.closeSync();
+        expect(f.readTextSync(), 'new');
+        expect(mode(f), 0x180, reason: '0600 survives');
+        f.writeBytesSync([1, 2, 3]);
+        expect(f.readBytesSync(), [1, 2, 3]);
+        await f.writeLines(['a', 'b']);
+        f.writeLinesSync(['c']);
+        expect(f.readTextSync(), 'c\n');
+        expect(mode(f), 0x180);
+        expect(dir.listSync().map((e) => e.name), ['conf.ini'], reason: 'no temporary file is left');
+        expect(await (dir / 'new' / 'deep.txt').writeText('made'), isA<File>());
+        expect((dir / 'new' / 'deep.txt').readTextSync(), 'made');
+      });
+    });
+
+    test('a write through a link replaces what it points at, and a read-only file refuses', () async {
+      await Path.tempDir((dir) async {
+        final real = dir / 'real.txt';
+        real.writeTextSync('old');
+        final link = dir / 'link.txt';
+        link.symlinkSync(real);
+        await link.writeText('new');
+        expect(link.typeSync(), PathType.link, reason: 'the link stays a link');
+        expect(real.readTextSync(), 'new');
+
+        final ro = dir / 'ro.txt';
+        ro.writeTextSync('keep');
+        ro.chmodSync('444');
+        await expectLater(() => ro.writeText('nope'), throwsA(isA<FileSystemException>()));
+        expect(() => ro.writeTextSync('nope'), throwsA(isA<FileSystemException>()));
+        expect(ro.readTextSync(), 'keep');
+        ro.chmodSync('644');
+
+        // A device is written in place, never renamed over.
+        expect('/dev/null'.path.writeTextSync('x').path, '/dev/null');
+        expect(FileSystemEntity.typeSync('/dev/null'), isNot(FileSystemEntityType.file));
+      });
+    });
+
+    test('humanBytes is what the progress bars print', () {
+      expect(0.humanBytes, '0 B');
+      expect(1023.humanBytes, '1023 B');
+      expect(1536.humanBytes, '1.5 KB');
+      expect((20 << 20).humanBytes, '20.0 MB');
+      expect((3 << 30).humanBytes, '3.0 GB');
+      expect((5000 << 30).humanBytes, '5000.0 GB');
+    });
+
+    test('size of a directory adds up every file below it, links not followed', () async {
+      await Path.tempDir((dir) async {
+        for (var i = 0; i < 50; i++) {
+          (dir / 'd${i % 5}' / 'f$i').writeBytesSync(List.filled(i, 0));
+        }
+        (dir / 'link').symlinkSync(dir / 'd0');
+        expect(await dir.size(), 1225);
+        expect(dir.sizeSync(), 1225);
+      });
     });
   }, testOn: '!windows');
 }

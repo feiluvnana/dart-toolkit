@@ -21,16 +21,9 @@ abstract final class NativeLib {
     return _reason;
   }
 
-  /// The ABI version this Dart package expects from dart_toolkit_native.
-  static const int expectedVersion = 2;
-
-  /// The ABI version the library reports; 0 when it did not load.
-  static int get version {
-    _library;
-    return _version;
-  }
-
-  static int _version = 0;
+  /// The ABI version this package was built against. A library that reports another one is
+  /// refused at load, with the reason, rather than failing later on a missing symbol.
+  static const _abi = 3;
 
   static DynamicLibrary? _load() {
     final override = Platform.environment['DART_TOOLKIT_NATIVE'];
@@ -42,11 +35,10 @@ abstract final class NativeLib {
       try {
         final lib = DynamicLibrary.open(override);
         final ver = _checkVersion(lib);
-        if (ver != expectedVersion) {
-          _reason = '$override reported ABI version $ver, expected $expectedVersion';
+        if (ver != _abi) {
+          _reason = '$override reported ABI version $ver, expected $_abi';
           return null;
         }
-        _version = ver;
         return lib;
       } catch (e) {
         _reason = '$override: $e';
@@ -64,11 +56,10 @@ abstract final class NativeLib {
       try {
         final lib = DynamicLibrary.open(path);
         final ver = _checkVersion(lib);
-        if (ver != expectedVersion) {
-          failures.add('$path reported ABI version $ver, expected $expectedVersion');
+        if (ver != _abi) {
+          failures.add('$path reported ABI version $ver, expected $_abi');
           continue;
         }
-        _version = ver;
         return lib;
       } catch (e) {
         failures.add('$path: $e');
@@ -99,9 +90,7 @@ abstract final class NativeLib {
 ///
 /// It is public only because those are separate libraries; nothing outside the package
 /// should call it, and it is not covered by the versioning promise. What a program asks
-/// about the native library is on [NativeLib]: [NativeLib.isAvailable], [NativeLib.reason],
-/// [NativeLib.version]. A program binding a C library of its own wants
-/// `package:dart_toolkit/ffi.dart` instead.
+/// about the native library is on [NativeLib]: [NativeLib.isAvailable] and [NativeLib.reason].
 abstract final class NativeBridge {
   /// The library's file name on this platform.
   static String get fileName => switch (Platform.operatingSystem) {
@@ -240,7 +229,7 @@ abstract final class NativeBridge {
           for (var pending = n; ; pending = 0) {
             final w = _inflateInto(handle, input, pending, output, outCap);
             if (w < 0) throw FormatException(lastError());
-            if (w > 0) yield Uint8List.fromList(outView.sublist(0, w));
+            if (w > 0) yield outView.sublist(0, w);
             if (w < outCap) break;
           }
         }

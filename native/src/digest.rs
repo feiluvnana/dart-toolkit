@@ -144,7 +144,9 @@ impl Running {
             return Ok(());
         }
         let mut f = std::fs::File::open(path).map_err(err)?;
-        let mut buf = vec![0u8; 1 << 20];
+        // A buffer the size of the file, up to 1 MiB: most files hashed in bulk are small.
+        let len = f.metadata().map_or(1 << 20, |m| m.len()).clamp(1, 1 << 20);
+        let mut buf = vec![0u8; len as usize];
         loop {
             let n = f.read(&mut buf).map_err(err)?;
             if n == 0 {

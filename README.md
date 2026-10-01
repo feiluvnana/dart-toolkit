@@ -33,7 +33,6 @@ its startup and wants less.
 | **`chrome.dart`** | `ChromeClient` and `ChromePage`: Chrome as a `Client`, and a tab to drive. It is **not** in the barrel: it is a third of `http`'s source, so only a program that opens a browser compiles it |
 | `cli.dart` | `Cli`, typed `Opt`/`Arg`, `Console`, `Lifecycle` |
 | `native.dart` | `NativeLib`, the loader for the package's Rust library |
-| **`ffi.dart`** | `Ffi`, which calls C in one line. It is **not** in the barrel, because its short names (`Ffi`, `C`, `Lib`, `Fn`) are only claimed by a program that imports it |
 
 Nothing third-party runs at runtime except `path`. Every parser and the HTTP client are the
 package's own, and each is checked in the tests against the package it replaced.
@@ -376,36 +375,6 @@ spinner.succeed('ready');
 Every write goes through one live region. Log lines, a `print` inside `Cli.run`, a child
 process's output and prompts all land above a spinner or progress board instead of on top of it. Without a terminal, each one
 becomes plain durable lines.
-
-### FFI
-
-`package:dart_toolkit/ffi.dart` calls C in one line, with no codegen:
-
-```dart
-import 'package:dart_toolkit/ffi.dart';
-
-final libc = Ffi.open('c');
-libc.fn('strlen', C.i64)('hello');                              // 5
-libc.call('getenv', C.str, 'HOME');                             // String?
-final name = Uint8List(256);
-libc.call('gethostname', C.i32, name, name.length);             // filled in place
-libc.call('ldexp', C.f64, 1.0, 10);                             // 1024.0: ints and doubles mix
-libc.call('sqrtf', C.f32, C.f32(2.0));                          // a float
-libc.fn('snprintf', C.i32, fixed: 3)(name, 256, '%d', 42);      // variadic
-if (libc.call('chdir', C.i32, '/nope') < 0) print(Ffi.errno);   // 2
-await libc.fn('usleep', C.i32).async(300000);                   // on another isolate
-```
-
-The rules for arguments and return values:
-
-- A `String` is passed as a scoped `char*`.
-- A typed list is copied in, then copied back out.
-- A key names a C type. As a return (`C.i32`, `C.str`, `C.f64`, `C.f32`) it narrows the
-  result; called (`C.f32(x)`, `C.i8(255)`) it makes a value that type holds.
-- `s.out(C.i32)` is an out-parameter, `C.u8.list(ptr, n)` views an array, and
-  `C.struct([sec, nsec])` lays out a struct whose members are `C.i64.field`s.
-- Structs by value and more than eight arguments need `dart:ffi` directly. On Windows, so
-  does a call that mixes integers and doubles.
 
 ### Testing
 

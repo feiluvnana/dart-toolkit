@@ -18,8 +18,28 @@ extension type const Path(String path) implements String {
   /// The user's home directory.
   static Path get home => Path(Env.getOrNull('HOME') ?? Env.getOrNull('USERPROFILE') ?? Directory.current.path);
 
-  /// The system temporary directory.
+  /// The system temporary directory. For a directory of your own, see [tempDir].
   static Path get temp => Path(Directory.systemTemp.path);
+
+  /// Runs [body] with a fresh, empty directory under [temp], deletes it and everything in it
+  /// afterwards — whether [body] returned or threw — and returns what [body] returned.
+  ///
+  /// ```dart
+  /// final names = await Path.tempDir((dir) async {
+  ///   await archive.extractTo(dir);
+  ///   return [for (final f in dir.filesSync(recursive: true)) f.name];
+  /// });
+  /// ```
+  static Future<R> tempDir<R>(FutureOr<R> Function(Path dir) body) async {
+    final dir = Path((await Directory.systemTemp.createTemp('dart_toolkit_')).path);
+    try {
+      return await body(dir);
+    } finally {
+      // A failed cleanup leaves a folder in the system temp; it must not replace what [body]
+      // returned or threw.
+      await dir.delete(recursive: true).catchError((Object _) {});
+    }
+  }
 
   /// The current working directory.
   static Path get current => Path(Directory.current.path);
@@ -128,25 +148,33 @@ extension type const Path(String path) implements String {
     return asFile;
   }
 
+  /// Sets this path's permission bits, as `chmod` does, through a link: [mode] is octal
+  /// (`'755'`, `'0600'`) or symbolic (`'+x'`, `'u+rw,go-w'`, `'a=r'`).
+  ///
+  /// On Windows only the owner's write bit means anything: without it the file is read-only.
+  /// A [mode] that is neither form is a [FormatException].
+  Future<void> chmod(String mode) async => chmodSync(mode);
+
+  /// Sets this path's permission bits synchronously; see [chmod].
+  void chmodSync(String mode) => _chmod(path, _modeOf(mode, path));
+
   /// Calculates the file size or recursive directory size in bytes.
   ///
   /// A link is measured as what it points at, as `du -L` does for the path it is given;
   /// links met inside a directory are not followed, so nothing is counted twice.
+  ///
+  /// A directory is walked in a worker isolate: a stat per file is far faster there than as
+  /// one `await` each.
   Future<int> size() async => switch (_pathType(await FileSystemEntity.type(path))) {
     PathType.file => await asFile.length(),
-    PathType.dir =>
-      await asDir
-          .list(recursive: true, followLinks: false)
-          .asyncMap((e) async => e is File ? await e.length() : 0)
-          .fold<int>(0, (a, b) => a + b),
+    PathType.dir => await _isolate(_dirSize, path),
     _ => 0,
   };
 
   /// Calculates the file size or recursive directory size in bytes synchronously.
   int sizeSync() => switch (_pathType(FileSystemEntity.typeSync(path))) {
     PathType.file => asFile.lengthSync(),
-    PathType.dir =>
-      asDir.listSync(recursive: true, followLinks: false).whereType<File>().fold(0, (a, f) => a + f.lengthSync()),
+    PathType.dir => _dirSize(path),
     _ => 0,
   };
 
@@ -189,43 +217,75 @@ extension type const Path(String path) implements String {
   List<String> readLinesSync({Encoding encoding = utf8}) => asFile.readAsLinesSync(encoding: encoding);
 
   /// Writes [content] string to this file, creating parent directories if not present.
-  Future<File> writeText(String content, {Encoding encoding = utf8}) async {
-    await asFile.parent.create(recursive: true);
-    return asFile.writeAsString(content, encoding: encoding);
-  }
+  ///
+  /// The write is atomic: the bytes go to a temporary file beside this one, which is then
+  /// renamed over it, so a reader — or a ^C halfway — sees the old file or the new one, never
+  /// half of either. An existing file keeps its permissions, and a link keeps pointing where
+  /// it did, with the file it leads to replaced. A device or a FIFO is written in place.
+  Future<File> writeText(String content, {Encoding encoding = utf8}) => writeBytes(encoding.encode(content));
 
-  /// Writes [content] string to this file synchronously, creating parent directories if not present.
-  File writeTextSync(String content, {Encoding encoding = utf8}) {
-    asFile.parent.createSync(recursive: true);
-    asFile.writeAsStringSync(content, encoding: encoding);
-    return asFile;
-  }
+  /// Writes [content] string to this file synchronously, atomically; see [writeText].
+  File writeTextSync(String content, {Encoding encoding = utf8}) => writeBytesSync(encoding.encode(content));
 
-  /// Writes raw [bytes] to this file, creating parent directories if not present.
+  /// Writes raw [bytes] to this file, creating parent directories if not present; atomic, as
+  /// [writeText] is.
   Future<File> writeBytes(List<int> bytes) async {
-    await asFile.parent.create(recursive: true);
-    return asFile.writeAsBytes(bytes);
+    final (:target, :mode) = _writePlan(path);
+    if (target == null) return asFile.writeAsBytes(bytes);
+    // A file already there has its folder; only a new one may need it made.
+    if (mode == null) await File(target).parent.create(recursive: true);
+    final tmp = File(_tempBeside(target));
+    try {
+      await tmp.writeAsBytes(bytes);
+    } on FileSystemException {
+      // A folder that takes no new file, around a file that may be written: in place, then.
+      await tmp.delete().catchError((Object _) => tmp);
+      return asFile.writeAsBytes(bytes);
+    }
+    try {
+      if (mode != null) _chmod(tmp.path, mode);
+      await tmp.rename(target);
+    } catch (_) {
+      await tmp.delete().catchError((Object _) => tmp);
+      rethrow;
+    }
+    return asFile;
   }
 
-  /// Writes raw [bytes] to this file synchronously, creating parent directories if not present.
+  /// Writes raw [bytes] to this file synchronously, atomically; see [writeText].
   File writeBytesSync(List<int> bytes) {
-    asFile.parent.createSync(recursive: true);
-    asFile.writeAsBytesSync(bytes);
+    final (:target, :mode) = _writePlan(path);
+    if (target == null) {
+      asFile.writeAsBytesSync(bytes);
+      return asFile;
+    }
+    if (mode == null) File(target).parent.createSync(recursive: true);
+    final tmp = File(_tempBeside(target));
+    try {
+      tmp.writeAsBytesSync(bytes);
+    } on FileSystemException {
+      _deleteQuietly(tmp);
+      asFile.writeAsBytesSync(bytes);
+      return asFile;
+    }
+    try {
+      if (mode != null) _chmod(tmp.path, mode);
+      tmp.renameSync(target);
+    } catch (_) {
+      _deleteQuietly(tmp);
+      rethrow;
+    }
     return asFile;
   }
 
-  /// Writes [lines] to this file separated by newlines, creating parent directories if not present.
-  Future<File> writeLines(Iterable<String> lines, {Encoding encoding = utf8}) async {
-    await asFile.parent.create(recursive: true);
-    return asFile.writeAsString(lines.map((l) => '$l\n').join(), encoding: encoding);
-  }
+  /// Writes [lines] to this file, each ending in a newline, creating parent directories if
+  /// not present; atomic, as [writeText] is.
+  Future<File> writeLines(Iterable<String> lines, {Encoding encoding = utf8}) =>
+      writeText(lines.map((l) => '$l\n').join(), encoding: encoding);
 
-  /// Writes [lines] to this file separated by newlines synchronously, creating parent directories if not present.
-  File writeLinesSync(Iterable<String> lines, {Encoding encoding = utf8}) {
-    asFile.parent.createSync(recursive: true);
-    asFile.writeAsStringSync(lines.map((l) => '$l\n').join(), encoding: encoding);
-    return asFile;
-  }
+  /// Writes [lines] to this file synchronously, atomically; see [writeLines].
+  File writeLinesSync(Iterable<String> lines, {Encoding encoding = utf8}) =>
+      writeTextSync(lines.map((l) => '$l\n').join(), encoding: encoding);
 
   /// Lists all entities in this directory.
   Stream<Path> list({bool recursive = false, bool followLinks = false}) =>
@@ -365,11 +425,13 @@ extension type const Path(String path) implements String {
           throw FileSystemException('Cannot copy a directory into itself', path);
         }
         await Directory(targetPath).create(recursive: true);
+        final modes = [(targetPath, (await asDir.stat()).mode)];
         await for (final entity in asDir.list(recursive: true, followLinks: false)) {
           final dest = p.join(targetPath, p.relative(entity.path, from: path));
           switch (entity) {
             case Directory():
               await Directory(dest).create(recursive: true);
+              modes.add((dest, (await entity.stat()).mode));
             case Link():
               await File(dest).parent.create(recursive: true);
               await _deleteNonDir(dest);
@@ -379,6 +441,7 @@ extension type const Path(String path) implements String {
               await entity.copy(dest);
           }
         }
+        _restoreModes(modes);
       case PathType.none:
         throw FileSystemException('Cannot copy non-existent path', path);
     }
@@ -399,11 +462,13 @@ extension type const Path(String path) implements String {
           throw FileSystemException('Cannot copy a directory into itself', path);
         }
         Directory(targetPath).createSync(recursive: true);
+        final modes = [(targetPath, asDir.statSync().mode)];
         for (final entity in asDir.listSync(recursive: true, followLinks: false)) {
           final dest = p.join(targetPath, p.relative(entity.path, from: path));
           switch (entity) {
             case Directory():
               Directory(dest).createSync(recursive: true);
+              modes.add((dest, entity.statSync().mode));
             case Link():
               File(dest).parent.createSync(recursive: true);
               _deleteNonDirSync(dest);
@@ -413,6 +478,7 @@ extension type const Path(String path) implements String {
               entity.copySync(dest);
           }
         }
+        _restoreModes(modes);
       case PathType.none:
         throw FileSystemException('Cannot copy non-existent path', path);
     }
@@ -501,10 +567,6 @@ extension type const Path(String path) implements String {
     return writeTextSync(text.replaceAll(from, replacement), encoding: encoding);
   }
 
-  /// Watches this file or directory for filesystem changes.
-  Stream<FileSystemEvent> watch({bool recursive = false, int events = FileSystemEvent.all}) =>
-      asFile.watch(recursive: recursive, events: events);
-
   /// The paths that changed under this file or directory, a batch at a time: a batch is
   /// sent once nothing has changed for [debounce], so a save that is five events, or a
   /// build that writes a hundred files, is one batch rather than a hundred rebuilds.
@@ -522,24 +584,26 @@ extension type const Path(String path) implements String {
         return events.cancel();
       },
     );
-    out.onListen = () => events = watch(recursive: FileSystemEntity.isDirectorySync(path)).listen(
-      (e) {
-        batch.add(Path(e.path));
-        if (e is FileSystemMoveEvent && e.destination != null) batch.add(Path(e.destination!));
-        quiet?.cancel();
-        quiet = Timer(debounce, () {
-          final ready = batch;
-          batch = {};
-          out.add(ready);
-        });
-      },
-      onError: out.addError,
-      onDone: () {
-        quiet?.cancel();
-        if (batch.isNotEmpty) out.add(batch);
-        out.close();
-      },
-    );
+    out.onListen = () => events = asFile
+        .watch(recursive: FileSystemEntity.isDirectorySync(path))
+        .listen(
+          (e) {
+            batch.add(Path(e.path));
+            if (e is FileSystemMoveEvent && e.destination != null) batch.add(Path(e.destination!));
+            quiet?.cancel();
+            quiet = Timer(debounce, () {
+              final ready = batch;
+              batch = {};
+              out.add(ready);
+            });
+          },
+          onError: out.addError,
+          onDone: () {
+            quiet?.cancel();
+            if (batch.isNotEmpty) out.add(batch);
+            out.close();
+          },
+        );
     return out.stream;
   }
 }
@@ -569,6 +633,127 @@ extension StringPathExtensions on String {
     return Path(_capFilename(name));
   }
 }
+
+/// What a recursive [Path.size] adds up, in a worker isolate or on this one.
+int _dirSize(String path) => Directory(
+  path,
+).listSync(recursive: true, followLinks: false).whereType<File>().fold(0, (a, f) => a + f.lengthSync());
+
+/// [f] of [arg] in a worker isolate, sent nothing but [arg].
+Future<R> _isolate<A, R>(R Function(A) f, A arg) => Isolate.run(() => f(arg));
+
+final _tkChmod = NativeBridge.require()
+    .lookupFunction<Int32 Function(Pointer<Uint8>, IntPtr, Uint32), int Function(Pointer<Uint8>, int, int)>('tk_chmod');
+
+void _chmod(String path, int mode) {
+  if (NativeBridge.withText(path, (ptr, len) => _tkChmod(ptr, len, mode)) < 0) {
+    throw FileSystemException(NativeBridge.lastError(), path);
+  }
+}
+
+/// Copied directories get their source's modes back, deepest first, once everything is in
+/// them: a read-only directory set first would refuse its own contents. Where the native
+/// library did not load, or on Windows, where a directory has no mode, they keep the default.
+void _restoreModes(List<(String, int)> modes) {
+  if (Platform.isWindows || !NativeLib.isAvailable) return;
+  for (final (dir, mode) in modes.reversed) {
+    _chmod(dir, mode & 0xfff);
+  }
+}
+
+final _octalMode = RegExp(r'^[0-7]{1,4}$');
+final _symbolicClause = RegExp(r'^([ugoa]*)((?:[-+=][rwxXst]*)+)$');
+final _symbolicOp = RegExp(r'([-+=])([rwxXst]*)');
+
+/// [mode], octal or symbolic, as the bits to set on [path]; symbolic modes start from its
+/// current ones.
+int _modeOf(String mode, String path) {
+  if (_octalMode.hasMatch(mode)) return int.parse(mode, radix: 8);
+  final stat = FileStat.statSync(path);
+  if (stat.type == FileSystemEntityType.notFound) throw FileSystemException('No such file or directory', path);
+  var bits = stat.mode & 0xfff;
+  final isDir = stat.type == FileSystemEntityType.directory;
+  for (final clause in mode.split(',')) {
+    final m = _symbolicClause.firstMatch(clause);
+    if (m == null) throw FormatException('Not an octal or symbolic mode', mode);
+    final who = m[1]!.isEmpty || m[1]!.contains('a') ? 'ugo' : m[1]!;
+    // The bits [who] covers: rwx and the special bit of each class.
+    var mask = 0;
+    if (who.contains('u')) mask |= 0x9c0; // 04700
+    if (who.contains('g')) mask |= 0x438; // 02070
+    if (who.contains('o')) mask |= 0x207; // 01007
+    for (final op in _symbolicOp.allMatches(m[2]!)) {
+      var perm = 0;
+      for (final c in op[2]!.split('')) {
+        perm |= switch (c) {
+          'r' => 0x124, // 0444
+          'w' => 0x92, // 0222
+          'x' => 0x49, // 0111
+          'X' => isDir || bits & 0x49 != 0 ? 0x49 : 0,
+          's' => 0xc00, // 06000
+          _ => 0x200, // 't', 01000
+        };
+      }
+      perm &= mask;
+      bits = switch (op[1]) {
+        '+' => bits | perm,
+        '-' => bits & ~perm,
+        _ => (bits & ~mask) | perm,
+      };
+    }
+  }
+  return bits;
+}
+
+/// Where an atomic write renames its temporary file to, and the mode to give it first.
+///
+/// That is this path, or the file a link here leads to, with the existing file's mode. It
+/// is no target at all — write in place — for anything but a regular file or nothing: a
+/// device, a FIFO, `/dev/stdout`, a dangling link, which a rename would replace or could not
+/// reach; and for an existing file whose mode cannot be carried over because the native
+/// library did not load.
+({String? target, int? mode}) _writePlan(String path) {
+  const inPlace = (target: null, mode: null);
+  final stat = FileStat.statSync(path);
+  final isLink = FileSystemEntity.isLinkSync(path);
+  if (stat.type == FileSystemEntityType.notFound) {
+    // `/dev/null` stats as nothing at all, and only `exists` sees it.
+    return isLink || File(path).existsSync() ? inPlace : (target: path, mode: null);
+  }
+  if (stat.type != FileSystemEntityType.file) return inPlace;
+  if (Platform.isWindows) return isLink ? inPlace : (target: path, mode: null);
+  final target = isLink ? File(path).resolveSymbolicLinksSync() : path;
+  // A regular file by its mode, and not one of the kernel's own: `/dev/stdout` redirected
+  // to a file is a link to one, and renaming over that would leave the shell's copy behind.
+  if (stat.mode & 0xf000 != 0x8000 ||
+      !NativeLib.isAvailable ||
+      _kernelOwned(p.absolute(path)) ||
+      _kernelOwned(target)) {
+    return inPlace;
+  }
+  // A rename replaces a file it could not write, so the permission is asked first: a
+  // read-only file refuses this write as it refused one in place.
+  File(target).openSync(mode: FileMode.append).closeSync();
+  return (target: target, mode: stat.mode & 0xfff);
+}
+
+bool _kernelOwned(String path) => path.startsWith('/dev/') || path.startsWith('/proc/');
+
+void _deleteQuietly(File file) {
+  try {
+    file.deleteSync();
+  } on FileSystemException {
+    // Never written, or already gone.
+  }
+}
+
+var _tempCount = 0;
+
+/// A name beside [target] for its next contents, unique to this process and isolate.
+String _tempBeside(String target) => p.join(
+  p.dirname(target),
+  '.${p.basename(target)}.$pid.${DateTime.now().microsecondsSinceEpoch}.${_tempCount++}.tmp',
+);
 
 Future<void> _deleteNonDir(String path) async {
   try {
@@ -794,8 +979,8 @@ extension PathHashExtensions on Path {
   /// sizes costs one walk and no reads at all.
   Future<List<List<Path>>> duplicates() => Isolate.run(() {
     final bySize = <int, List<String>>{};
-    for (final p in globSync('**')) {
-      if (p.typeSync() == PathType.file) (bySize[File(p).lengthSync()] ??= []).add(p);
+    for (final f in _walkSync(asDir, null).whereType<File>()) {
+      (bySize[f.lengthSync()] ??= []).add(f.path);
     }
     bySize.remove(0);
     final candidates = [

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:dart_toolkit/native.dart';
 import 'package:test/test.dart';
 
@@ -11,10 +13,21 @@ void main() {
     skip: NativeLib.isAvailable ? null : 'dart_toolkit_native did not load: ${NativeLib.reason}',
   );
 
-  test('version is read once', () {
-    expect(NativeLib.version, equals(2));
-    expect(NativeLib.version, NativeLib.version);
-  }, skip: NativeLib.isAvailable ? null : 'dart_toolkit_native did not load');
+  test('DART_TOOLKIT_NATIVE is the only place looked when set, and a failure says why', () async {
+    Future<String> reason(String override) async {
+      final r = await Process.run(
+        Platform.resolvedExecutable,
+        ['run', 'test/fixtures/native_reason.dart'],
+        environment: {'DART_TOOLKIT_NATIVE': override},
+      );
+      expect(r.exitCode, 0, reason: '${r.stderr}');
+      return '${r.stdout}'.trim();
+    }
+
+    expect(await reason('/nonexistent/lib.dylib'), contains('not found: /nonexistent/lib.dylib'));
+    // A file that is not a library, rather than the bundled copy loading in its place.
+    expect(await reason('pubspec.yaml'), startsWith('pubspec.yaml: '));
+  });
 
   test('require hands over the library, or says why it cannot', () {
     if (NativeLib.isAvailable) {
