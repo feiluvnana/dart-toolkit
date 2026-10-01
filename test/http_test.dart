@@ -1975,7 +1975,7 @@ void main() {
     });
   });
 
-  group('the audit of 0.0.5', () {
+  group('scope, crawl and download edge cases', () {
     late HttpServer server;
     late Uri base;
     late Map<String, int> hits;
@@ -2237,9 +2237,9 @@ void main() {
   });
 
   _nativeDecoding();
-  group('audit fixes: scrape', _scrapeAudit);
-  group('audit IV: a reading implies its policy', _readings);
-  group('audit fixes: client', () {
+  group('scrape edge cases', _scrapeEdges);
+  group('a reading implies its policy', _readings);
+  group('client edge cases', () {
     late HttpServer server;
     late Uri base;
     late Map<String, List<HttpHeaders>> seen;
@@ -2817,7 +2817,7 @@ FutureOr<void> Function(HttpRequest) _html(String body) => (req) {
   req.response.write(body);
 };
 
-void _scrapeAudit() {
+void _scrapeEdges() {
   test('a crawl stops when its Cancel.scope is cancelled', () async {
     final server = await _site((path) => _html('<a href="/${int.parse(path.substring(1)) + 1}">next</a>'));
     addTearDown(() => server.close(force: true));
@@ -3019,7 +3019,7 @@ void _scrapeAudit() {
     expect(() => client.scrape<void>(42), throwsArgumentError);
   });
 
-  group('audit IV fixes: http', () {
+  group('http regressions', () {
     test('jar: seeds the scope with cookies handed over, by their domain', () async {
       final server = await HttpServer.bind('127.0.0.1', 0);
       addTearDown(server.close);
@@ -3046,7 +3046,7 @@ void _scrapeAudit() {
       expect(seen, ['sid=42', 'sid=42']);
     });
 
-    test('HTTP-1: timed-out request releases pool permit', () async {
+    test('timed-out request releases pool permit', () async {
       final server = await HttpServer.bind('localhost', 0);
       addTearDown(server.close);
       final completer = Completer<void>();
@@ -3071,7 +3071,7 @@ void _scrapeAudit() {
       completer.complete();
     });
 
-    test('HTTP-2: error before/at openUrl does not abandon request or hang next request', () async {
+    test('error before/at openUrl does not abandon request or hang next request', () async {
       final server = await HttpServer.bind('localhost', 0);
       addTearDown(server.close);
       server.listen((req) async {
@@ -3090,7 +3090,7 @@ void _scrapeAudit() {
       expect(res.text, 'ok');
     });
 
-    test('HTTP-3: nested Http.scope inherits outer client, headers, and cookies', () async {
+    test('nested Http.scope inherits outer client, headers, and cookies', () async {
       final server = await HttpServer.bind('localhost', 0);
       addTearDown(server.close);
       final receivedHeaders = <Map<String, List<String>>>[];
@@ -3194,7 +3194,7 @@ void _scrapeAudit() {
       expect(got, isNot(contains('/item1')));
     });
 
-    test('HTTP-4: scope retries do not retry non-transient errors', () async {
+    test('scope retries do not retry non-transient errors', () async {
       var attempts = 0;
       final client = MockClient((req) async {
         attempts++;
@@ -3207,14 +3207,14 @@ void _scrapeAudit() {
       expect(attempts, 1);
     });
 
-    test('HTTP-5: XML encoding declaration in prolog is honoured', () async {
+    test('XML encoding declaration in prolog is honoured', () async {
       final xmlHead = '<?xml version="1.0" encoding="Shift_JIS"?>\n<note>hello</note>';
       final bytes = Uint8List.fromList(latin1.encode(xmlHead));
       final res = Response.bytes(bytes, 200, headers: Headers({'content-type': 'application/xml'}));
       expect(res.text, contains('<note>hello</note>'));
     });
 
-    test('HTTP-6: withQuery preserves repeated keys and removeQuery strips query', () {
+    test('withQuery preserves repeated keys and removeQuery strips query', () {
       final u = Uri.parse('http://example.com/search?tag=a&tag=b');
       expect(u.withQuery({'page': 2}).toString(), 'http://example.com/search?tag=a&tag=b&page=2');
       expect(
@@ -3229,7 +3229,7 @@ void _scrapeAudit() {
       expect(u.removeQuery().toString(), 'http://example.com/search');
     });
 
-    test('HTTP-7: HEAD receiving 303 redirect stays HEAD', () async {
+    test('HEAD receiving 303 redirect stays HEAD', () async {
       String? redirectedMethod;
       final server = await HttpServer.bind('127.0.0.1', 0);
       addTearDown(() => server.close(force: true));
@@ -3251,7 +3251,7 @@ void _scrapeAudit() {
       expect(redirectedMethod, 'HEAD');
     });
 
-    test('HTTP-8: cookies on IP host require domain == host', () async {
+    test('cookies on IP host require domain == host', () async {
       final server = await HttpServer.bind('127.0.0.1', 0);
       addTearDown(() => server.close(force: true));
       server.listen((req) {
@@ -3275,7 +3275,7 @@ void _scrapeAudit() {
       });
     });
 
-    test('HTTP-9: download sets mtime from Last-Modified', () async {
+    test('download sets mtime from Last-Modified', () async {
       final server = await HttpServer.bind('127.0.0.1', 0);
       addTearDown(() => server.close(force: true));
       final testDate = DateTime.utc(2020, 1, 1, 12, 0, 0);
@@ -3293,7 +3293,7 @@ void _scrapeAudit() {
       expect(file.lastModifiedSync().toUtc(), testDate);
     });
 
-    test('HTTP-10: redirect drops fragment and maxRedirects defaults to 20', () async {
+    test('redirect drops fragment and maxRedirects defaults to 20', () async {
       expect(Request('GET', Uri.parse('http://example.com')).maxRedirects, 20);
 
       Uri? redirectedTarget;
@@ -3412,7 +3412,7 @@ void _scrapeAudit() {
     });
   });
 
-  group('audit IV: scrape', () {
+  group('scrape regressions', () {
     test('ctx.html is the response parsed once', () async {
       final client = MockClient(
         (r) async => Response('<a href="/b">b</a>', 200, headers: {'content-type': 'text/html'}),

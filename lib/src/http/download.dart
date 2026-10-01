@@ -145,22 +145,15 @@ class BatchDownloadProgress implements BatchProgress {
   String toString() => 'BatchDownloadProgress($completed/${total ?? '?'}, new: $written, failed: $failed, $current)';
 }
 
-/// Bytes buffered before the writer waits for the disk. Bounds the memory a download
-/// can hold when the source is faster than the destination.
+/// Bytes buffered before the writer waits for the disk, bounding memory when the source
+/// outruns the destination.
 const _flushEvery = 4 * 1024 * 1024;
 
-/// How often a transfer in flight reports itself.
-///
-/// A chunk arrives every few kilobytes and the renderer draws at a frame rate, so an event
-/// per chunk allocated two objects and pumped two stream controllers for an update nobody
-/// could see — and made the socket wait on the consumer to do it. The final state is always
-/// reported, whenever it lands.
+/// How often a transfer reports itself: an event per few-KB chunk cost allocations nobody
+/// could see, at a frame rate. The final state is always reported.
 const _reportEvery = Duration(milliseconds: 50);
 
 /// What a download was asked for, on its way from the call site to the transfer.
-///
-/// Spelled once here rather than once per hop between the four `download` receivers, the
-/// batch loop and the writer, as [_Plan] is for a crawl.
 typedef _Transfer = ({
   Map<String, String>? headers,
   bool overwrite,
@@ -169,8 +162,7 @@ typedef _Transfer = ({
   (Hash algorithm, String hex)? checksum,
 });
 
-/// A download whose bytes do not hash to what the caller said they would. The `.part` file
-/// is discarded: it is not what was asked for, and resuming it would never make it so.
+/// A download whose bytes do not hash to what the caller said; its `.part` is discarded.
 ///
 /// {@category Networking}
 final class ChecksumMismatch implements Exception {
@@ -189,24 +181,15 @@ final class ChecksumMismatch implements Exception {
 ///
 /// {@category Networking}
 extension PathDownloadExtensions on Path {
-  /// Downloads [url] to this path atomically, streaming the same [BatchDownloadProgress]
-  /// every other `download` streams — one file is a batch of one, so `show()` renders it
-  /// and nothing has to be wrapped in a map to be reported.
+  /// Downloads [url] to this path atomically, as a batch of one, so `show()` renders it.
   ///
-  /// Writes `<name>.part` and renames on success, verifies `Content-Length`, and stops on
-  /// the enclosing [Cancel.scope]. A failed or cancelled transfer keeps its `.part`; the next
-  /// download of the same path resumes it with a `Range` request when [resume] is set, and
-  /// starts over when the server does not honour the range. The per-file state is
-  /// [BatchDownloadProgress.current].
+  /// Writes `<name>.part`, verifies `Content-Length`, renames on success, and stops on the
+  /// enclosing [Cancel.scope]. A failed transfer keeps its `.part` for the next download to
+  /// resume with a `Range` when [resume] is set.
   ///
-  /// [ifModified] asks the server whether the file changed rather than skipping because it
-  /// is there: the destination's timestamp goes out as `if-modified-since` and a `304` is a
-  /// [DownloadSkipped]. It implies [overwrite], since a file that did change is meant to
-  /// replace the old one.
-  ///
-  /// [checksum] is what the bytes must hash to; anything else is a [DownloadFailed] holding
-  /// a [ChecksumMismatch], and the `.part` is discarded rather than left to resume. It is
-  /// on this form alone: one checksum describes one file, so a batch has no use for it.
+  /// [ifModified] sends the destination's timestamp as `if-modified-since` — a `304` is a
+  /// [DownloadSkipped] — and implies [overwrite]. [checksum] is what the bytes must hash to;
+  /// else a [DownloadFailed] holding a [ChecksumMismatch].
   ///
   /// ```dart
   /// await 'sdk.zip'.path.download(url, checksum: (Hash.sha256, '9f86d0…')).show();
@@ -225,17 +208,12 @@ extension PathDownloadExtensions on Path {
     how: (headers: headers, overwrite: overwrite, resume: resume, ifModified: ifModified, checksum: checksum),
   );
 
-  /// One file, from a fresh start or from the `.part` a failed run left.
+  /// One file, fresh or from the `.part` a failed run left.
   ///
-  /// A resume is only a resume of *the same file*. The first answer's validator — a strong
-  /// `ETag`, else its `Last-Modified` — is kept beside the part as `<name>.part.if-range`,
-  /// and a resume sends it as `If-Range`: a server whose file changed answers `200` with the
-  /// whole new one instead of `206` with the tail of it, which spliced onto the old head was
-  /// a file that had never existed, reported as [Downloaded]. A `206` must also start where
-  /// the part ends; one that does not is thrown away and the file fetched whole.
-  ///
-  /// Inside `Http.scope(retries:)` a transfer cut off half-way — a reset, a server that sent
-  /// less than it announced — carries on from the byte it stopped at, within that budget.
+  /// A resume sends the first answer's validator (kept as `<name>.part.if-range`) as
+  /// `If-Range`, so a changed file comes back whole rather than as a tail spliced onto the
+  /// old head; a `206` not starting where the part ends is refetched whole. Under
+  /// `Http.scope(retries:)` a transfer cut off half-way carries on from where it stopped.
   Stream<DownloadProgress> _download(Uri url, _Transfer how) async* {
     final (:headers, :overwrite, :resume, :ifModified, :checksum) = how;
     final present = await exists();
@@ -259,15 +237,12 @@ extension PathDownloadExtensions on Path {
 
     try {
       var offset = resume && await part.exists() ? await part.length() : 0;
-      // Only against a destination already in place: a half-written `.part` says nothing
-      // about when the whole file was last changed.
+      // A half-written `.part` says nothing about when the file changed.
       final since = ifModified && present && offset == 0 ? HttpDate.format(await modified()) : null;
       var received = offset;
       String? lastModified;
 
       for (var attempt = 0; ; attempt++) {
-        // A download wants the resource, so it says so: a client that renders pages hands
-        // this to plain HTTP instead of building a DOM out of a zip. See [Request.raw].
         final request = Request('GET', url, headers: headers)..[Request.raw] = true;
         if (offset > 0) {
           request.headers['range'] = 'bytes=$offset-';
@@ -286,26 +261,24 @@ extension PathDownloadExtensions on Path {
         }
         if (status == 416 && offset > 0) {
           unawaited(_drain(streamed));
-          // `bytes */N` with N what is already here: the part *is* the file, and a previous
-          // run stopped between the last byte and the rename.
+          // `bytes */N` with N already here: a previous run stopped before the rename.
           if (_contentRange(streamed.headers['content-range']).total == offset) {
             received = offset;
             break;
           }
-          // Otherwise the part is not a prefix of what the server has now; start over.
+          // Otherwise the part is no prefix of the file; start over.
           await _discard(part);
           offset = 0;
           continue;
         }
         if (!streamed.isOk) {
-          // Close the body instead of holding the connection until GC.
           unawaited(_drain(streamed));
           yield DownloadFailed(url, this, HttpException(_status(status, streamed.reasonPhrase), uri: url));
           return;
         }
         final range = _contentRange(streamed.headers['content-range']);
         if (status == 206 && range.start != offset) {
-          // Not the bytes the part is missing: not these, and not a resume.
+          // Not the bytes the part is missing.
           unawaited(_drain(streamed));
           if (offset == 0) {
             yield DownloadFailed(
@@ -340,15 +313,12 @@ extension PathDownloadExtensions on Path {
             sink.add(chunk);
             received += chunk.length;
             unflushed += chunk.length;
-            // `add` only queues, so without this the socket is throttled by the
-            // consumer and never by the disk, and a slow destination buffers the
-            // difference in memory.
+            // `add` only queues: without this a slow disk buffers the difference in memory.
             if (unflushed >= _flushEvery) {
               unflushed = 0;
               await sink.flush();
             }
-            // See [_reportEvery]. The first chunk always reports, so a slow transfer shows
-            // itself at once rather than after the first interval.
+            // The first chunk always reports, so a slow transfer shows itself at once.
             if (clock.elapsed >= nextReport) {
               nextReport = clock.elapsed + _reportEvery;
               yield Downloading(url, this, received: received, total: total);
@@ -361,15 +331,14 @@ extension PathDownloadExtensions on Path {
         }
 
         if (broke == null && (total == null || received == total)) break;
-        if (broke == null && received > total!) {
-          await _discard(part); // not a prefix of anything; useless
-          await _discard(validator);
-          throw HttpException('Download incomplete: expected $total bytes but received $received bytes', uri: url);
-        }
         final error =
             broke ?? HttpException('Download incomplete: expected $total bytes but received $received bytes', uri: url);
+        if (broke == null && received > total!) {
+          await _discard(part); // not a prefix of anything
+          await _discard(validator);
+          throw error;
+        }
         if (attempt >= budget || !_transient(error) || Cancel.isCancelled) throw error;
-        // Cut off: carry on from what is on disk.
         await _Retry.backoff(attempt).delay();
         offset = received;
       }
@@ -406,8 +375,7 @@ Future<void> _discard(File part) async {
   } catch (_) {}
 }
 
-/// What a `content-range` says: where the bytes start (`null` for `*`) and how long the whole
-/// file is (`null` when the server does not know).
+/// A `content-range`'s start (`null` for `*`) and total (`null` when unknown).
 ({int? start, int? total}) _contentRange(String? header) {
   final m = _range.firstMatch(header ?? '');
   if (m == null) return (start: null, total: null);
@@ -416,9 +384,8 @@ Future<void> _discard(File part) async {
 
 final _range = RegExp(r'bytes\s+(?:(\d+)-\d+|\*)/(\d+|\*)', caseSensitive: false);
 
-/// Keeps what identifies the file [headers] describe, for a resume's `If-Range`: a strong
-/// `ETag` (a weak one may not be used there), else the `Last-Modified` date. With neither,
-/// there is nothing to keep, and a resume is trusted as it always was.
+/// Keeps a resume's `If-Range` validator: a strong `ETag` (a weak one may not be used),
+/// else `Last-Modified`; with neither, a resume is trusted.
 Future<void> _keepValidator(File file, Headers headers) async {
   final tag = headers['etag'];
   final value = tag != null && !tag.startsWith('W/') ? tag : headers['last-modified'];
@@ -460,7 +427,7 @@ Stream<BatchDownloadProgress> _batchDownload(
   var failed = 0;
   var sourceDone = false;
   var stopped = false;
-  // The consumer stopped listening: nobody is left to tell, so the transfers just stop.
+  // The consumer stopped listening, so the transfers just stop.
   var abandoned = false;
   StreamSubscription<({Uri url, Path path})>? subscription;
   void Function()? unregister;
@@ -468,8 +435,6 @@ Stream<BatchDownloadProgress> _batchDownload(
 
   // Two pairs naming one destination would write one `.part` from two sockets.
   final destinations = <String>{};
-
-  bool cancelled() => stopped;
 
   void finish() {
     stopped = true;
@@ -493,9 +458,8 @@ Stream<BatchDownloadProgress> _batchDownload(
     );
   }
 
-  // A cancel stops the source, fails what is queued, and lets each transfer in flight end —
-  // the client aborts it — so its [DownloadFailed] is reported before the stream closes. A
-  // client that does not abort is given a moment, not forever.
+  // A cancel stops the source, fails what is queued, and lets transfers in flight report
+  // their [DownloadFailed] as the client aborts them — within a grace period.
   void stop() {
     stopped = true;
     subscription?.cancel();
@@ -513,8 +477,7 @@ Stream<BatchDownloadProgress> _batchDownload(
     }
   }
 
-  // Reading ahead is bounded: a discovery stream that outruns the transfers would
-  // otherwise queue the whole crawl before the first file is written.
+  // A discovery stream that outran the transfers would queue the whole crawl.
   final highWater = limit * 4;
 
   void applyBackpressure() {
@@ -528,7 +491,7 @@ Stream<BatchDownloadProgress> _batchDownload(
   }
 
   void schedule() {
-    if (cancelled() || controller.isClosed) return;
+    if (stopped || controller.isClosed) return;
     applyBackpressure();
 
     while (queue.isNotEmpty && active.length < limit) {
@@ -536,8 +499,7 @@ Stream<BatchDownloadProgress> _batchDownload(
 
       late final Future<void> task;
       Future<void> transfer() async {
-        // The batch owns one client; each file's download joins it rather than opening
-        // a connection of its own.
+        // Each file's download joins the batch's client.
         final transfers = _withClient(lease.client, () => item.path._download(item.url, how));
         await for (final p in transfers) {
           if (abandoned) break;
@@ -553,8 +515,7 @@ Stream<BatchDownloadProgress> _batchDownload(
       task = Future<void>(() async {
         try {
           if (abandoned) return;
-          // The batch's token, wherever the stream happens to be listened to from, so the
-          // client in the zone below can abort on it.
+          // The batch's token, wherever the stream is listened to, so the client can abort.
           await (cancelToken == null ? transfer() : Cancel.scope(transfer, token: cancelToken));
         } catch (e) {
           completed++;
@@ -562,7 +523,7 @@ Stream<BatchDownloadProgress> _batchDownload(
           emit(DownloadFailed(item.url, item.path, e));
         } finally {
           active.remove(task);
-          if (active.isEmpty && (cancelled() || (queue.isEmpty && sourceDone))) {
+          if (active.isEmpty && (stopped || (queue.isEmpty && sourceDone))) {
             finish();
           } else {
             schedule();
@@ -577,8 +538,7 @@ Stream<BatchDownloadProgress> _batchDownload(
 
   controller
     ..onListen = () {
-      // Cancelled before it began, each pair still reports its own [DownloadFailed] — at
-      // once, since a download in a cancelled scope sends nothing.
+      // Cancelled before it began, each pair still reports its own [DownloadFailed], at once.
       final early = cancelToken?.isCancelled ?? false;
       subscription = source.listen(
         (item) {
@@ -659,8 +619,7 @@ extension MapDownloadExtensions on Map<Uri, Path> {
 
   /// Downloads every entry, at most [concurrency] at a time.
   ///
-  /// A `Map` holds one destination per URL. To send one URL to two places, use the
-  /// [IterableDownloadExtensions] form over records.
+  /// One destination per URL; for two, use the [IterableDownloadExtensions] form.
   Stream<BatchDownloadProgress> download({
     Map<String, String>? headers,
     int concurrency = 4,

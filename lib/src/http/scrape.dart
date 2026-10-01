@@ -15,9 +15,7 @@ typedef ErrorHook<T> = FutureOr<void> Function(ErrorContext<T> ctx);
 /// Runs once, after the last item; see [ScrapeSummary].
 typedef FinishHook = FutureOr<void> Function(ScrapeSummary summary);
 
-/// Schedules one more request from inside a hook. See [ResponseContext.follow].
-/// What [HookContext.follow] was asked for, on its way to the engine. The named arguments
-/// are spelled once, here, rather than once per hop between the hook and the frontier.
+/// What [HookContext.follow] was asked for, on its way to the engine.
 final class _Plan<T> {
   final ResponseHook<T>? onResponse;
   final ErrorHook<T>? onError;
@@ -51,10 +49,6 @@ final class _Plan<T> {
 }
 
 typedef _Follow<T> = bool Function(Object target, _Plan<T> plan);
-
-// ---------------------------------------------------------------------------------------------
-// Failures
-// ---------------------------------------------------------------------------------------------
 
 /// A request the crawl could not turn into a handled response. The [Left] of the scrape stream.
 ///
@@ -112,10 +106,7 @@ final class StatusFailed extends ScrapeFailure {
   });
 
   @override
-  String toString() {
-    final reason = response.reasonPhrase;
-    return '${request.method} $url — ${response.statusCode}${reason == null || reason.isEmpty ? '' : ' $reason'}';
-  }
+  String toString() => '${request.method} $url — ${_status(response.statusCode, response.reasonPhrase)}';
 }
 
 /// A hook threw. Programmer errors — `follow(42)` — land here too.
@@ -136,16 +127,8 @@ final class HookFailed extends ScrapeFailure {
   String toString() => '${request.method} $url — hook threw: $error';
 }
 
-// ---------------------------------------------------------------------------------------------
-// Contexts
-// ---------------------------------------------------------------------------------------------
-
-/// The crawl's settings, all of them, set once in [Scrape.onInit].
-///
-/// Defaults: 16 requests in flight, 8 per host, no delay, 30 s timeout, 2 retries, 5 redirect
-/// hops, a 16 MB body cap, a 30 s cap on `Retry-After`, no page or depth limit, and a scope of
-/// the seeds' hosts with or without `www.`. The context is not reachable once the hook
-/// returns. Anything per request — a header, the `user-agent` — is [Scrape.onRequest]'s.
+/// The crawl's settings and seeds, set once in [Scrape.onInit]. Anything per request — a
+/// header, the `user-agent` — is [Scrape.onRequest]'s.
 ///
 /// {@category Crawling}
 final class InitContext<T> {
@@ -164,8 +147,8 @@ final class InitContext<T> {
   /// Re-sends after a transport error or a 5xx; never after a TLS failure.
   int retries = 2;
 
-  /// The longest a server's `Retry-After` may hold a host. A request asking for longer
-  /// fails instead of waiting, so one header cannot park the crawl for hours.
+  /// The longest a server's `Retry-After` may hold a host; a request asking for longer fails
+  /// instead, so one header cannot park the crawl for hours.
   Duration maxRetryAfter = const Duration(seconds: 30);
 
   /// Redirect hops followed before a request fails.
@@ -183,39 +166,27 @@ final class InitContext<T> {
   /// Which URLs [ResponseContext.follow] may go to. Default: the seeds' hosts, `www.` or not.
   bool Function(Uri url)? scope;
 
-  /// Whether each host's `/robots.txt` is fetched once and obeyed.
-  ///
-  /// A path it forbids for this crawl's `user-agent` is dropped and counted in
-  /// [ScrapeSummary.dropped]; a `Crawl-delay` it asks for raises [delay] for that host
-  /// alone, never lowers it. A site with no `robots.txt`, or one that cannot be read,
-  /// forbids nothing.
-  ///
-  /// The rules are read for the `user-agent` the request goes out with — the one
-  /// [Scrape.onRequest] or the scope set, else this crawl's own — so a crawl that names
-  /// itself is held to what the site says to it.
+  /// Whether each host's `/robots.txt` is fetched once and obeyed, for the `user-agent` each
+  /// request goes out with. A forbidden path counts in [ScrapeSummary.dropped]; a
+  /// `Crawl-delay` raises [delay] for that host, never lowers it. A missing or unreadable
+  /// file forbids nothing.
   bool robots = false;
 
-  /// Whether each seed's site's sitemaps seed the crawl as well.
-  ///
-  /// They are the ones its `/robots.txt` lists on `Sitemap:` lines, or `/sitemap.xml` when it
-  /// lists none; a sitemap index is followed to the sitemaps it names, and a gzipped one is
-  /// read as it is. Every page they list is a seed — in scope, deduplicated and, with
-  /// [robots], obeyed like any other — so a whole-site crawl is one line:
+  /// Whether the sitemaps of each seed's site seed the crawl too: those `/robots.txt` lists,
+  /// else `/sitemap.xml`; indexes are followed and gzip is read. Their pages are scoped,
+  /// deduplicated and robots-checked like any other.
   ///
   /// ```dart
   /// site.scrape<Page>().onInit((ctx) => ctx..sitemaps = true..robots = true).onResponse(parse);
   /// ```
   bool sitemaps = false;
 
-  /// What makes two URLs one page, for the visited check: a session id or a tracking
-  /// parameter that changes nothing about the page is taken off here, and the crawl reads the
-  /// page once however many ways it is linked.
+  /// What makes two URLs one page, for the visited check only — requests still go to the URL
+  /// followed.
   ///
   /// ```dart
   /// ctx.canonical = (u) => u.replace(queryParameters: {...u.queryParameters}..remove('sid'));
   /// ```
-  ///
-  /// Only the check sees it: a request still goes to the URL it was followed to.
   Uri Function(Uri url)? canonical;
 
   final List<Request> _seeds;
@@ -277,7 +248,6 @@ sealed class HookContext<T> {
   /// page's `<base href>` once its HTML has been read.
   Uri get url;
 
-  /// What a relative link here is relative to.
   Uri get _base => url;
 
   /// The request as it was scheduled.
@@ -289,8 +259,8 @@ sealed class HookContext<T> {
   /// Metadata carried from the request that scheduled this one.
   Map<String, Object?> get meta;
 
-  /// Resolves [href] against [url], as [follow] does: a [Uri], a [String], or an [Element] —
-  /// or the first of the [Elements] a query matched — by its `href`, else its `src`.
+  /// Resolves [href] — a [Uri], a [String], an [Element] by its `href` else `src`, or the
+  /// first of a query's [Elements] — as [follow] does.
   ///
   /// ```dart
   /// final file = ctx.resolve(ctx.html.$('a.download'));
@@ -311,21 +281,17 @@ sealed class HookContext<T> {
     _emit(item);
   }
 
-  /// Schedules a request for [target]: a [Uri], a [String] href resolved against [url], an
-  /// [Element] by its `href` — else its `src` — or any [Iterable] of these: the [Elements] a
-  /// query matched, a list of URLs. A [JsonDocument] is read for the string or list it holds,
-  /// and holding `null` schedules nothing.
+  /// Schedules a request for [target]: what [resolve] takes, any [Iterable] of it, or a
+  /// [JsonDocument] holding a string, a list or `null` (nothing).
   ///
   /// ```dart
   /// ctx.follow(ctx.html.$('a.next'));      // pagination, whether or not there is a next
   /// ctx.follow(ctx.response.json['next']); // one URL, a list of them, or null on the last page
   /// ```
   ///
-  /// Returns whether anything was scheduled. A target outside the crawl's scope, or with a
-  /// non-http scheme, is dropped unless [offsite] is set; so is one already visited unless
-  /// [revisit] is set, and an element with neither attribute. The body is at most one of [text], [bytes], [form] and [json], the same four words
-  /// [Request] and [UriExtensions.post] take. [onResponse] and [onError] override the crawl's
-  /// hooks for this request.
+  /// Returns whether anything was scheduled. Out of scope or non-http is dropped unless
+  /// [offsite]; already visited, unless [revisit]. The body words are [Request]'s;
+  /// [onResponse] and [onError] override the crawl's hooks for this request.
   bool follow(
     Object target, {
     ResponseHook<T>? onResponse,
@@ -403,8 +369,7 @@ final class ResponseContext<T> extends HookContext<T> {
   /// The response parsed as HTML — [Response.html], parsed once however often it is read.
   HtmlDocument get html => response.html;
 
-  /// The page's [HtmlDocument.base], read the first time it is asked for once the HTML has
-  /// been parsed; a page never read as HTML is not parsed for it.
+  /// The page's `<base href>`, read only once something else has parsed the HTML.
   Uri? _baseRead;
 
   @override
@@ -504,22 +469,10 @@ final class ScrapeSummary {
       '$pages pages, $failures failures, $requests requests, $dropped dropped in ${elapsed.inMilliseconds} ms';
 }
 
-// ---------------------------------------------------------------------------------------------
-// The chain
-// ---------------------------------------------------------------------------------------------
-
 /// A crawl you can hold, subclass and test: the five hooks of [Scrape], as methods.
 ///
-/// `url.scrape<T>()` is the short spelling of this class, and the same engine runs both: a
-/// chain is a [Crawler] whose hooks are the closures it was given. Subclass it when the crawl
-/// has state of its own — a count, what it has seen, where it is writing — which is then a
-/// field rather than a variable a closure captures, and a crawl that can be built in a test
-/// and run against a `MockClient`.
-///
-/// The hooks are the chain's, with the same names, the same contexts and the same defaults:
-/// [onInit] holds every setting and the seeds, [onRequest] edits a request, [onResponse]
-/// handles a 2xx, [onError] decides about a failure — which is a [Left] unless it acts — and
-/// [onFinish] hears the summary. Override the ones the crawl needs.
+/// `url.scrape<T>()` is the short spelling; the same engine runs both. Subclass when the
+/// crawl has state of its own, which is then a field rather than a captured variable.
 ///
 /// ```dart
 /// final class Books extends Crawler<Book> {
@@ -544,11 +497,10 @@ final class ScrapeSummary {
 ///
 /// {@category Crawling}
 abstract class Crawler<T> {
-  /// The seeds the chain's receiver named; a subclass seeds in [onInit].
+  /// The chain's receiver; a subclass seeds in [onInit].
   final List<Request> _seeds = [];
 
-  /// The client a chain was built on ([ClientExtensions.scrape]); `null` reads the scope's
-  /// when the crawl is listened to.
+  /// From [ClientExtensions.scrape]; `null` takes the scope's on listen.
   Client? _client;
 
   /// Once, before anything is sent: settings and seeds, on an [InitContext]. May be async.
@@ -566,16 +518,15 @@ abstract class Crawler<T> {
   /// Once, after the last item. If it throws, the error is the stream's last event.
   FutureOr<void> onFinish(ScrapeSummary summary) {}
 
-  /// The crawl, as the stream [Scrape] is: nothing is sent until it is listened to, and each
-  /// listen is a crawl of its own over the same object.
+  /// The crawl as a stream: nothing is sent until listened to, and each listen is a crawl.
   Stream<Either<ScrapeFailure, T>> run() {
     late final StreamController<Either<ScrapeFailure, T>> controller;
     controller = StreamController(onListen: () => _run(this, controller));
     return controller.stream;
   }
 
-  // What the engine calls. A chain answers with the closures it holds, `null` where it was
-  // given none, so a hook nobody registered costs a crawl nothing — not even its context.
+  // What the engine calls. A chain answers `null` for a hook it was not given, so that hook
+  // costs nothing — not even its context.
   InitHook<T>? get _init => onInit;
   RequestHook? get _request => onRequest;
   ResponseHook<T>? get _response => onResponse;
@@ -583,7 +534,7 @@ abstract class Crawler<T> {
   FinishHook? get _finish => onFinish;
 }
 
-/// The crawler a [Scrape] chain builds: the hooks it registered, and nothing of its own.
+/// The crawler a [Scrape] chain builds.
 final class _Chain<T> extends Crawler<T> {
   InitHook<T>? init;
   RequestHook? request;
@@ -603,10 +554,8 @@ final class _Chain<T> extends Crawler<T> {
   FinishHook? get _finish => finish;
 }
 
-/// A crawl: five hooks on a chain, consumed as a stream — the short spelling of [Crawler].
-///
-/// It is a `Stream<Either<ScrapeFailure, T>>`, so `.rights`, `.lefts`, `.unwrap()`, `.take`
-/// and `.cancellable` apply. Nothing is sent until it is listened to.
+/// A crawl: five hooks on a chain, consumed as a `Stream<Either<ScrapeFailure, T>>` — the
+/// short spelling of [Crawler]. Nothing is sent until it is listened to.
 ///
 /// ```dart
 /// final items = url.scrape<Item>()
@@ -669,17 +618,11 @@ extension IterableRequestScrapeExtensions on Iterable<Request> {
   Scrape<T> scrape<T>() => Scrape<T>._of(this);
 }
 
-// ---------------------------------------------------------------------------------------------
-// Engine
-// ---------------------------------------------------------------------------------------------
-
 /// Sent unless the request, [Scrape.onRequest] or the scope names one.
 const _userAgent = 'dart-toolkit';
 
-/// Identity of a request for deduplication: one 64-bit FNV-1a over the method, the URL and
-/// the body. A number rather than the `Uri` and the body, because the set lives as long as the
-/// crawl — a million URLs held whole was half a gigabyte — and at 64 bits two different
-/// requests colliding, which would silently drop a page, is not a practical concern.
+/// A request's dedupe identity: 64-bit FNV-1a over method, URL and body. A number, because
+/// the visited set lives as long as the crawl — a million URLs held whole was half a gigabyte.
 int _key(String method, Uri url, [List<int> body = const []]) {
   var h = 0xcbf29ce484222325;
   for (final c in method.codeUnits) {
@@ -696,9 +639,8 @@ int _key(String method, Uri url, [List<int> body = const []]) {
   return h;
 }
 
-/// What makes one body another: its bytes, or for a `files:` body — whose bytes are never
-/// held — its fields and each file's path and size, which is what a second upload of the same
-/// form would differ in.
+/// A body's identity: its bytes, or for `files:` (never held) its fields and each file's
+/// path and size.
 List<int> _identity(Request req) => switch (req._multipart) {
   null => req.bytes,
   final body => utf8.encode(
@@ -716,40 +658,34 @@ String _site(String host) => host.startsWith('www.') ? host.substring(4) : host;
 bool _certain(Object e) =>
     e is HandshakeException || e is CertificateException || e is TlsException || e is _BodyTooLarge;
 
-/// A body over the cap; the same on every attempt, so never retried.
+/// A body over the cap; never retried.
 final class _BodyTooLarge extends ClientException {
   const _BodyTooLarge(int cap, Uri url) : super('Response body over $cap bytes', url);
 }
 
-/// The most of a `robots.txt` that is read. RFC 9309 asks a crawler to read at least 500 KiB
-/// and lets it ignore the rest, so a longer file is cut here rather than refused.
+/// RFC 9309 asks for at least 500 KiB of a `robots.txt`; a longer one is cut, not refused.
 const _robotsCap = 512 * 1024;
 
-/// The most a sitemap may be, compressed or not: the protocol's own limit is 50 MB
-/// uncompressed. The file comes from the site being crawled, so it is capped like a page.
+/// The sitemap protocol's own limit, applied compressed or not.
 const _sitemapCap = 50 * 1024 * 1024;
 
-/// One request waiting in the frontier.
-///
-/// A follow is held as its URL and the plan it was scheduled with, and becomes a [Request] —
-/// headers and all — only when it is about to be sent: a frontier is mostly URLs that are
-/// waiting, and a million `Request`s waiting is a lot of `Headers` nobody has read yet.
+/// One request waiting in the frontier, held as a URL and a plan until it is sent: a million
+/// waiting `Request`s is a lot of `Headers` nobody has read yet.
 class _Item<T> {
   final Uri url;
   final _Plan<T> plan;
   final Map<String, Object?> meta;
   final int depth;
 
-  /// A starting point the caller named. Only one of these moves the crawl's home when it
-  /// redirects; a page a sitemap listed is at depth 0 too, and must not.
+  /// A seed the caller named: only it moves the crawl's home when it redirects; a sitemap's
+  /// page is at depth 0 too, and must not.
   final bool seed;
   Request? _request;
   int attempt = 1;
   int hops = 0;
 
-  /// The keys of the redirect chain this item is on, the first request's included. A hop back
-  /// to one of them is the chain's own business — a login that redirects to itself with a
-  /// cookie — and is bounded by the hop budget rather than by the visited set.
+  /// The keys of this item's redirect chain. A hop back into it — a login redirecting to
+  /// itself with a cookie — is bounded by the hop budget, not the visited set.
   List<int>? chain;
 
   _Item(this.url, this.plan, {Request? request, this.meta = const {}, this.depth = 0, this.seed = false})
@@ -766,16 +702,13 @@ class _Item<T> {
 class _Host<T> {
   final Queue<_Item<T>> queue = Queue<_Item<T>>();
 
-  /// This host's `/robots.txt`, fetched and parsed at most once; the future is shared so the
-  /// requests that start together wait on one fetch rather than each making their own.
-  /// `null` inside it is a site with no file, or one that could not be read.
+  /// This host's `/robots.txt`, fetched once and shared; `null` inside is none or unreadable.
   Future<_RobotsTxt?>? robots;
 
-  /// [robots] for each `user-agent` that has asked, since the groups differ by agent.
+  /// [robots] per `user-agent`, since the groups differ by agent.
   final Map<String, _Robots> rules = {};
 
-  /// A gap this host asked for through `Crawl-delay`. The crawl's own [InitContext.delay]
-  /// still applies; whichever is longer wins, so robots can slow a host but never hurry it.
+  /// `Crawl-delay`; the longer of it and [InitContext.delay] applies.
   Duration gap = Duration.zero;
   int inFlight = 0;
   int backoffs = 0;
@@ -811,7 +744,7 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     final held? => _ClientLease(held, false),
     null => _clientFor(),
   };
-  // The scope's `user-agent`, which it stamps on at send time, after the engine has looked.
+  // The scope stamps its `user-agent` at send time, after the engine has looked.
   final scopeAgent = lease.headers == null ? null : Headers(lease.headers)['user-agent'];
 
   final seedHosts = <String>{for (final s in cfg._seeds) _site(s.url.host)};
@@ -819,7 +752,7 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
   Uri canon(Uri url) => canonical == null ? url : _page(canonical(url));
   int keyOf(Request req) => _key(req.method, canon(req.url), _identity(req));
 
-  /// An item's dedupe key, computed without building the request when there is no body.
+  /// Without building the request when there is no body.
   int itemKey(_Item<T> item) =>
       item._request == null ? _key(item.plan.method.toUpperCase(), canon(item.url)) : keyOf(item._request!);
   final inScope = cfg.scope ?? (Uri url) => seedHosts.contains(_site(url.host));
@@ -880,22 +813,15 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
 
   late final void Function() dispatch;
 
-  /// Sitemap readers holding pages back until the frontier has room for them; see
-  /// [seedSitemaps].
+  /// Sitemap readers holding pages back until the frontier has room; see [seedSitemaps].
   final refills = <void Function()>{};
 
-  // Keyed by origin — scheme, site and port — which is what robots.txt belongs to and what
-  // one server is. `www.example.com` and `example.com` are one site, as they are for scope:
-  // two buckets would double `perHost` and halve `delay` for any site linked both ways.
+  // Keyed by scheme, site and port: `www.` and bare are one bucket, or a site linked both
+  // ways would get double `perHost` and half `delay`.
   _Host<T> hostOf(Uri url) => hosts.putIfAbsent('${url.scheme}://${_site(url.host)}:${url.port}', _Host<T>.new);
 
-  /// A file the crawl reads for itself — robots.txt, a sitemap — as the bytes the server
-  /// sent, or `null` for anything but a 2xx. Never through the frontier: it is not a page the
-  /// crawl is for, and a failure to read it is not a failure of the crawl. Raw, so a browser
-  /// client fetches the file rather than rendering it.
-  ///
-  /// At most [cap] bytes are read: past it the file is cut there when [cut], else it is
-  /// `null`, like a file that could not be read.
+  /// A file the crawl reads for itself — robots.txt, a sitemap — outside the frontier, raw,
+  /// capped at [cap] (cut there when [cut]); `null` for a non-2xx or any failure.
   Future<Uint8List?> fetchOwn(Uri url, String agent, {required int cap, bool cut = false}) async {
     final request = Request('GET', url, headers: {'user-agent': agent})
       ..[Request.raw] = true
@@ -905,11 +831,9 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     try {
       res = await pending.timeout(cfg.timeout);
     } catch (_) {
-      // A late answer still holds a connection until its body is read.
       unawaited(pending.then(_drain, onError: (Object _) {}));
       return null;
     }
-    // An error page is not the file: it is drained, not read.
     if (!res.isOk) {
       unawaited(_drain(res).catchError((Object _) {}));
       return null;
@@ -921,9 +845,8 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     }
   }
 
-  /// [host]'s `/robots.txt`, fetched and parsed once. A 4xx is a site with no rules; a 5xx is
-  /// a site that cannot say, and the conservative reading — refuse everything — would strand
-  /// a whole crawl on one bad deploy, so both are read as open.
+  /// [host]'s `/robots.txt`, fetched once. A 5xx reads as open too: refusing everything
+  /// would strand a crawl on one bad deploy.
   Future<_RobotsTxt?> robotsTxt(_Host<T> host, Uri url, String agent) {
     final site = url.replace(path: '/robots.txt', query: null, fragment: null);
     return host.robots ??= fetchOwn(
@@ -934,11 +857,14 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     ).then((bytes) => bytes == null ? null : _RobotsTxt.parse(utf8.decode(bytes, allowMalformed: true), site));
   }
 
-  /// [host]'s rules for [agent].
   Future<_Robots> robotsFor(_Host<T> host, Uri url, String agent) async {
     final file = await robotsTxt(host, url, agent);
     if (file == null) return _Robots.open;
     return host.rules[agent] ??= file.forAgent(agent);
+  }
+
+  void slow(_Host<T> host, _Robots rules) {
+    if (rules.crawlDelay case final asked? when asked > host.gap) host.gap = asked;
   }
 
   void checkReady(_Host<T> host) {
@@ -959,25 +885,17 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     queued++;
     if (cfg.robots && !host.robotsResolved && !host.robotsFetching) {
       host.robotsFetching = true;
-      final agent = scopeAgent ?? _userAgent;
-      robotsFor(host, item.url, agent).then(
-        (rules) {
-          host.robotsResolved = true;
-          if (rules.crawlDelay case final asked? when asked > host.gap) host.gap = asked;
-          checkReady(host);
-          dispatch();
-        },
-        onError: (Object _) {
-          host.robotsResolved = true;
-          checkReady(host);
-          dispatch();
-        },
-      );
+      robotsFor(host, item.url, scopeAgent ?? _userAgent).catchError((Object _) => _Robots.open).then((rules) {
+        host.robotsResolved = true;
+        slow(host, rules);
+        checkReady(host);
+        dispatch();
+      });
     }
     checkReady(host);
   }
 
-  /// Requeues [item] at the front of its host after [after]; the crawl stays open meanwhile.
+  /// Requeues [item] at its host's front after [after]; the crawl stays open meanwhile.
   void requeue(_Host<T> host, _Item<T> item, Duration after) {
     retries++;
     item.attempt++;
@@ -1008,11 +926,19 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     });
   }
 
-  /// How long to hold [host], or `null` when the server asked for longer than
-  /// [InitContext.maxRetryAfter] and the request should fail rather than wait.
+  /// How long to hold [host], or `null` to fail rather than wait past
+  /// [InitContext.maxRetryAfter].
   Duration? retryAfter(Response res, _Host<T> host) {
     if (_Retry.retryAfter(res.headers) case final asked?) return asked > cfg.maxRetryAfter ? null : asked;
     return _Retry.backoff(host.backoffs++);
+  }
+
+  /// Whether [item] left scope by redirecting to [to]. A seed does not: it moves the crawl's
+  /// home with it (apex to www).
+  bool strays(_Item<T> item, Uri to) {
+    if (!item.seed) return !item.offsite && !inScope(to);
+    seedHosts.add(_site(to.host));
+    return false;
   }
 
   bool drop() {
@@ -1047,14 +973,12 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
   }
 
   _Follow<T> followFrom(_Item<T> item, Uri Function() base) => (target, plan) {
-    // A follow that adds no metadata shares its parent's, which for most crawls is the one
-    // empty map: a million follows would otherwise be a million copies of nothing.
+    // A follow adding no metadata shares the one empty map rather than copying nothing.
     final meta = plan.meta == null && item.meta.isEmpty ? const <String, Object?>{} : {...item.meta, ...?plan.meta};
     bool one(Object href) {
       final url = _resolve(base(), href);
       final next = _Item<T>(url, plan, meta: meta, depth: item.depth + 1);
-      // A body is encoded now, so a `follow` that cannot build one fails in the hook that
-      // asked, and so the body is there to be hashed for the visited set.
+      // Encoded now: a bad body fails in the hook that asked, and is there to be hashed.
       if (plan._bodied) {
         next._request = Request(
           plan.method,
@@ -1100,10 +1024,10 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
   HookFailed hookFailed(_Item<T> item, Uri url, Object e) =>
       HookFailed(url: url, request: item.request, depth: item.depth, meta: item.meta, error: e);
 
-  /// The engine has given up on [item]: the error hook decides, else the failure is a [Left].
+  /// The engine has given up on [item]: the error hook decides, else it is a [Left].
   Future<void> fail(_Host<T> host, _Item<T> item, ScrapeFailure failure, StackTrace st) async {
     if (stopped) {
-      // The crawl is over; a request that failed in flight is not news, a hook that threw is.
+      // Over: a request failing in flight is not news, a hook that threw is.
       if (failure is HookFailed) add(Left(failure, st));
       if (running == 0) close();
       return;
@@ -1141,7 +1065,6 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     attempts: item.attempt,
   );
 
-  /// [res] answered [item], and the answer is a failure.
   Future<void> refuse(_Host<T> host, _Item<T> item, Response res) => fail(
     host,
     item,
@@ -1155,16 +1078,15 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     StackTrace.current,
   );
 
-  Future<void> transportFailure(_Host<T> host, _Item<T> item, Uri url, Object e, StackTrace st) {
-    if (stopped) return Future.value();
+  Future<void> transportFailure(_Host<T> host, _Item<T> item, Uri url, Object e, StackTrace st) async {
+    if (stopped) return;
     if (_replayable(item.request.method) && !_certain(e) && item.attempt <= cfg.retries) {
-      requeue(host, item, (200 * item.attempt).ms);
-      return Future.value();
+      return requeue(host, item, (200 * item.attempt).ms);
     }
     return fail(host, item, requestFailed(item, url, e), st);
   }
 
-  Future<void> redirect(_Host<T> host, _Item<T> item, Request sent, Response res) {
+  Future<void> redirect(_Host<T> host, _Item<T> item, Request sent, Response res) async {
     final location = res.headers['location']?.trim();
     if (location == null || location.isEmpty) return refuse(host, item, res);
     if (item.hops >= cfg.redirects) {
@@ -1172,36 +1094,22 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
       return fail(host, item, requestFailed(item, sent.url, e), StackTrace.current);
     }
     final target = _page(sent.url.resolve(location));
-    if (target.scheme != 'http' && target.scheme != 'https') {
+    if ((target.scheme != 'http' && target.scheme != 'https') || strays(item, target)) {
       return refuse(host, item, res);
     }
-    // A seed that redirects — apex to www — moves the crawl's home with it. Only a seed: a
-    // page a sitemap listed is at depth 0 as well, and one that redirected off the site
-    // would otherwise take the crawl with it.
-    if (item.seed) {
-      seedHosts.add(_site(target.host));
-    } else if (!item.offsite && !inScope(target)) {
-      return refuse(host, item, res);
-    }
-
-    // The same policy the client and the scope follow, and the directives go with it: a hop
-    // of a rendered crawl still wants the wait the request it came from asked for.
+    // The client's redirect policy, directives included.
     final next = sent._hop(target, res.statusCode);
     final key = keyOf(next);
     final chain = item.chain ?? [keyOf(item.request)];
-    // Back to a URL of this very chain — `/login` setting a cookie and sending the browser to
-    // `/login` again — is followed, and the hop budget is what stops a loop. Anywhere else
-    // already visited is a page this crawl has, and is counted as the drop it is.
+    // A hop back into this chain is followed (see [_Item.chain]); anywhere else visited drops.
     if (!chain.contains(key) && !item.revisit && item.plan.onResponse == null && !visited.add(key)) {
       dropped++;
-      return Future.value();
+      return;
     }
-
     final hop = _Item<T>(next.url, item.plan, request: next, meta: item.meta, depth: item.depth, seed: item.seed)
       ..hops = item.hops + 1
       ..chain = [...chain, key];
     push(hostOf(target), hop, first: true);
-    return Future.value();
   }
 
   Future<void> handle(_Host<T> host, _Item<T> item, Uri answered, Response res) async {
@@ -1235,7 +1143,9 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
   }
 
   Future<void> execute(_Host<T> host, _Item<T> item) async {
-    final sent = _clone(item.request)..[_Retry.none] = true;
+    final sent = item.request.copy()
+      ..followRedirects = false
+      ..[_Retry.none] = true;
     if (scopeAgent == null) sent.headers.putIfAbsent('user-agent', () => _userAgent);
 
     if (crawler._request case final hook?) {
@@ -1248,16 +1158,14 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
       if (ctx._skipped) return;
     }
 
-    // After the hook, so the rules read are the ones for the agent that will be announced.
+    // After the hook, so the rules are those for the agent that will be announced.
     if (cfg.robots) {
-      final agent = sent.headers['user-agent'] ?? scopeAgent ?? _userAgent;
-      final rules = await robotsFor(host, sent.url, agent);
+      final rules = await robotsFor(host, sent.url, sent.headers['user-agent'] ?? scopeAgent ?? _userAgent);
       if (!rules.allows(sent.url)) {
         dropped++;
         return;
       }
-      // The site's own gap, where it asks for a longer one than the crawl already keeps.
-      if (rules.crawlDelay case final asked? when asked > host.gap) host.gap = asked;
+      slow(host, rules);
     }
     if (stopped) return;
 
@@ -1267,8 +1175,7 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     try {
       streamed = await pending.timeout(cfg.timeout);
     } catch (e, st) {
-      // A send that lands after the timeout still holds a connection until its body is
-      // read, so the abandoned response is drained rather than left to the client's reaper.
+      // A late answer still holds a connection until its body is read.
       unawaited(pending.then(_drain, onError: (Object _) {}));
       return transportFailure(host, item, sent.url, e, st);
     }
@@ -1312,16 +1219,11 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     if (status < 200 || status >= 300) return refuse(host, item, res);
 
     host.backoffs = 0;
-    // A client that follows redirects itself — a browser does, whatever it is asked — answers
-    // from somewhere other than where it was sent. That URL is the page: links resolve against
-    // it, it is deduplicated, and a hop off the site is out of scope as the engine's own would be.
+    // A client that redirects itself (a browser) answers from elsewhere; that URL is the page,
+    // scoped and deduplicated as the engine's own hop would be.
     final answered = _page(res.url ?? sent.url);
     if (answered != sent.url) {
-      if (item.seed) {
-        seedHosts.add(_site(answered.host));
-      } else if (!item.offsite && !inScope(answered)) {
-        return refuse(host, item, res);
-      }
+      if (strays(item, answered)) return refuse(host, item, res);
       if (!item.revisit && !visited.add(_key(sent.method, canon(answered)))) {
         dropped++;
         return;
@@ -1368,14 +1270,9 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     if (inFlight == 0 && queued == 0 && waiting == 0 && running == 0) close();
   };
 
-  /// Seeds the crawl from the sitemaps of [origin]'s site; see [InitContext.sitemaps].
-  ///
-  /// An index is read [InitContext.perHost] sitemaps at a time — one at a time under a
-  /// [InitContext.delay], which is a site asking to be read slowly.
-  ///
-  /// Under [InitContext.pages], the frontier is given only what can still be used: the rest
-  /// wait here as URLs, and no further sitemap is read until they run out — a site of fifty
-  /// thousand pages, crawled for fifty, never holds fifty thousand requests.
+  /// Seeds the crawl from [origin]'s sitemaps, [InitContext.perHost] at a time (one under a
+  /// [InitContext.delay]). Under [InitContext.pages] the frontier gets only what it can use;
+  /// the rest wait here as URLs, so a 50k-page site crawled for 50 never holds 50k requests.
   Future<void> seedSitemaps(Uri origin) async {
     final agent = scopeAgent ?? _userAgent;
     final listed = (await robotsTxt(hostOf(origin), origin, agent))?.sitemaps ?? const <Uri>[];
@@ -1391,7 +1288,7 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
       while (backlog.isNotEmpty && !stopped && !full()) {
         enqueue(_Item<T>(_page(backlog.removeFirst()), none));
       }
-      // An index may name itself, or a thousand sitemaps; neither is a reason to run forever.
+      // An index may name itself, or a thousand sitemaps.
       while (active < lanes && backlog.isEmpty && pending.isNotEmpty && !stopped && read.length < 1000) {
         final map = pending.removeFirst();
         if (!read.add(map)) continue;
@@ -1422,7 +1319,7 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     enqueue(_Item<T>(seed.url, none, request: seed, meta: cfg._seedMeta[seed.url] ?? const {}, seed: true));
   }
   if (cfg.sitemaps) {
-    // `waiting` holds the crawl open while the sitemaps are read, as a retry's timer does.
+    // `waiting` holds the crawl open while sitemaps are read.
     for (final origin in {for (final s in cfg._seeds) s.url.replace(path: '/', query: null, fragment: null)}) {
       waiting++;
       unawaited(
@@ -1437,13 +1334,12 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
   controller
     ..onResume = dispatch
     ..onCancel = close;
-  // ^C, or whatever cancelled the scope, ends the crawl the way [HookContext.stop] does.
+  // A cancelled scope (^C) ends the crawl as [HookContext.stop] does.
   unhear = token?.onCancel(stop);
   dispatch();
 }
 
-/// [url] as a page: without its fragment, and without an empty query — `/p#a`, `/p#b` and
-/// `/p?` are all `/p`.
+/// [url] as a page: `/p#a`, `/p#b` and `/p?` are all `/p`.
 Uri _page(Uri url) {
   url = url.removeFragment();
   if (url.hasAuthority && url.path.isEmpty) url = url.replace(path: '/');
@@ -1462,8 +1358,8 @@ Uri _resolve(Uri base, Object target) => switch (target) {
 /// Where an element links: its `href`, else its `src`.
 String? _link(Element e) => e.attributes['href'] ?? e.attributes['src'];
 
-/// [stream] read to at most [cap] bytes, each chunk within [timeout]. Past [cap] the body is
-/// cut there when [cut], else it is a [_BodyTooLarge]; either way the rest is never read.
+/// [stream] read to at most [cap] bytes, each chunk within [timeout]; past [cap] it is cut
+/// when [cut], else a [_BodyTooLarge].
 Future<Uint8List> _readCapped(
   Stream<List<int>> stream, {
   required int cap,
@@ -1483,20 +1379,12 @@ Future<Uint8List> _readCapped(
   return builder.takeBytes();
 }
 
-/// A fresh copy the engine can send once per attempt, with redirects left to it.
-Request _clone(Request req) => req.copy()..followRedirects = false;
-
 final _sitemapIndex = RegExp(r'<sitemapindex[\s>]', caseSensitive: false);
 final _sitemapUrlset = RegExp(r'<urlset[\s>]', caseSensitive: false);
 final _sitemapLoc = RegExp(r'<loc\b[^>]*>(.*?)</loc>', caseSensitive: false, dotAll: true);
 
-/// The pages and the further sitemaps one sitemap names, resolved against where it came from.
-///
-/// A `<urlset>`'s `<url><loc>`s are pages and a `<sitemapindex>`'s `<sitemap><loc>`s are
-/// sitemaps, matched by local name so a prefixed one reads the same; a gzipped file — the
-/// `.xml.gz` most large sites serve — is unpacked first, and one that is not XML is read as
-/// the plain-text form the protocol also allows, a URL a line. A file that cannot be read
-/// names nothing.
+/// The pages and sitemaps one sitemap names: `<urlset>` locs are pages, `<sitemapindex>` locs
+/// sitemaps; gzip is unpacked, and non-XML is the plain-text form, a URL a line.
 Future<({List<Uri> pages, List<Uri> maps})> _sitemap(Uint8List bytes, Uri from) async {
   final pages = <Uri>[];
   final maps = <Uri>[];

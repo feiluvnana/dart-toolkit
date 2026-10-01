@@ -38,11 +38,8 @@ final class Headers extends MapBase<String, String> {
   bool get isNotEmpty => _map.isNotEmpty;
 }
 
-/// A directive a [Client] may honour, carried on a [Request] under a typed name.
-///
-/// The fields of [Request] describe HTTP and nothing else. A client that is not HTTP — a
-/// browser, a proxy with rules of its own — needs to be told things HTTP has no word for,
-/// and a key is where they go:
+/// A directive a [Client] may honour, carried on a [Request] under a typed name — for what
+/// HTTP has no word for, such as a browser's wait.
 ///
 /// ```dart
 /// const waitFor = RequestKey<String>('wait-for');
@@ -50,13 +47,11 @@ final class Headers extends MapBase<String, String> {
 /// url.scrape<Item>().onRequest((ctx) => ctx.request[waitFor] = '.item');
 /// ```
 ///
-/// A client reads it with the key itself — `waitFor(request)` — and **ignores every key it
-/// does not know**. That is what makes the same crawl run unchanged on [IoClient], which
-/// ignores the wait, and on `ChromeClient` (`chrome.dart`), which honours it.
+/// A client reads it as `waitFor(request)` and **ignores every key it does not know**, so the
+/// same crawl runs on [IoClient] and on `ChromeClient`.
 ///
 /// {@category Networking}
 final class RequestKey<T extends Object> {
-  /// What this key is called, in messages and in `toString`.
   final String name;
 
   const RequestKey(this.name);
@@ -72,25 +67,17 @@ final class RequestKey<T extends Object> {
 
 /// A request: [method], [url], [headers] and a body.
 ///
-/// A body is given one way, by what it is — [text], [bytes], [form], [json] or `files` — and
-/// the same words name it on [UriExtensions.post] and on `follow`. At most one may be set,
-/// `form` with `files` being the one pair that means a single body; the matching
-/// `content-type` comes with it.
+/// The body is at most one of [text], [bytes], [form], [json] or `files` (`form` pairs with
+/// `files`), with its `content-type`; the same words name it on [UriExtensions.post] and
+/// `follow`.
 ///
 /// {@category Networking}
 final class Request {
   /// Answer with the resource itself, never a rendering of it: `request[Request.raw] = true`.
   ///
-  /// The one directive that is not a client's own. A client that renders — `ChromeClient`,
-  /// and any other written later — must hand this request to plain HTTP instead, because
-  /// what the caller wants is the bytes the server sent. A PDF put through a tab comes back
-  /// as the DOM Chrome built to display it, which is not the PDF.
-  ///
-  /// Every download sets it, so `path.download(url)` writes the file and not the viewer
-  /// even inside `Http.scope(client: chrome)`. [IoClient] renders nothing, and reads it as
-  /// *the stored bytes*: it asks for `identity` and decodes nothing, so a `.gz` served with
-  /// `content-encoding: gzip` is written as the `.gz` it is, and a resume appends to a part
-  /// made of the same bytes.
+  /// A rendering client (`ChromeClient`) must hand such a request to plain HTTP; [IoClient]
+  /// asks for `identity` and decodes nothing. Every download sets it, so a `.gz` is written
+  /// as the `.gz` it is and a resume appends the same bytes.
   static const raw = RequestKey<bool>('raw');
 
   final String method;
@@ -98,15 +85,13 @@ final class Request {
   final Headers headers;
   Uint8List bytes;
 
-  /// Whether the client follows redirects itself, up to [maxRedirects]. The scrape engine
-  /// turns this off and follows its own.
+  /// Whether the client follows redirects itself, up to [maxRedirects].
   bool followRedirects = true;
   int maxRedirects = 20;
 
-  /// Client-specific directives, absent until one is set; see [RequestKey].
   Map<RequestKey<Object>, Object>? _directives;
 
-  /// A body that is never held: `files:`, streamed from disk. Null for every other body.
+  /// A `files:` body, streamed from disk and never held.
   _Multipart? _multipart;
 
   Request(
@@ -124,16 +109,12 @@ final class Request {
     _body(this, text: text, bytes: bytes, form: form, json: json, files: files);
   }
 
-  /// The body, for the client that sends it.
-  ///
-  /// **A client sends this, not [bytes].** A buffered body is one chunk of [bytes]; a `files:`
-  /// body is opened from disk each time it is asked for, and [bytes] is empty for it, because
-  /// the whole point of naming a file instead of reading one is that it never has to fit in
-  /// memory. Opening it again rather than replaying a stream is also what lets a 307 and a
-  /// retry send the same upload a second time.
+  /// The body, for the client that sends it. **A client sends this, not [bytes]**: a `files:`
+  /// body leaves [bytes] empty and is opened from disk on each call, so a 307 or a retry can
+  /// send it again.
   Stream<List<int>> open() => _multipart?.open() ?? Stream.value(bytes);
 
-  /// What this request's `content-length` is, whether the body is held or streamed.
+  /// The `content-length`, whether the body is held or streamed.
   int get contentLength => _multipart?.length ?? bytes.length;
 
   /// The body as text, UTF-8. Setting it sets a `content-type` of `text/plain` when none is set.
@@ -155,23 +136,21 @@ final class Request {
     headers.putIfAbsent('content-type', () => 'application/json; charset=utf-8');
   }
 
-  /// Sets the directive [key] carries for the client that answers this request.
-  ///
-  /// `request[waitFor] = '.item'`; read it back with the key, `waitFor(request)`. Throws
+  /// Sets a directive: `request[waitFor] = '.item'`, read back as `waitFor(request)`. Throws
   /// [ArgumentError] when [value] is not of the key's type.
   void operator []=(RequestKey<Object> key, Object value) {
     if (!key._accepts(value)) throw ArgumentError.value(value, key.name, 'is not what this key holds');
     (_directives ??= {})[key] = value;
   }
 
-  /// An independent copy: same method, URL, headers, body, options and directives.
-  ///
-  /// The body buffer is shared rather than duplicated. Every send copies the request it was
-  /// handed, so a 50 MB upload was allocated twice on its way out for nothing; what the copy
-  /// is for is the headers a client writes on, and those are copied.
-  Request copy() => Request(method, url, headers: headers)
+  /// An independent copy: same method, URL, headers, body, options and directives. The body
+  /// buffer is shared — every send copies its request, and only the headers are written on.
+  Request copy() => _options(Request(method, url, headers: headers))
     ..bytes = bytes
-    .._multipart = _multipart
+    .._multipart = _multipart;
+
+  /// [to] with this request's redirect options and a copy of its directives.
+  Request _options(Request to) => to
     ..followRedirects = followRedirects
     ..maxRedirects = maxRedirects
     .._directives = _directives == null ? null : Map.of(_directives!);
@@ -179,33 +158,21 @@ final class Request {
   /// Sends this request through the enclosing [Http.scope]'s client, or a fresh one, and
   /// buffers the body: `await Request('POST', url, json: {...}).send()`.
   ///
-  /// The verbs on [UriExtensions] and [ClientExtensions] are this with the request built
-  /// for you; what comes back is a [Fetch], whose readings throw unless 2xx.
-  ///
-  /// This request is copied before it goes out, so it comes back untouched and sending it
-  /// twice sends it twice — a scope stamps its `cookie` and default headers onto what it
-  /// sends, and without the copy the second send would carry the first send's jar and skip
-  /// the refresh. [Response.request] is the copy that went on the wire.
-  ///
-  /// Inside `Http.scope(retries:)`, a body cut off half-way is fetched again like any other
-  /// transport failure — for a method that may be sent twice; see [Http.scope].
+  /// The request is copied first, so sending it twice sends it twice; [Response.request] is
+  /// the copy that went out. Under `Http.scope(retries:)` a body cut off half-way is fetched
+  /// again, for a method that may be sent twice.
   Fetch send() => Fetch._(_buffered(this));
 
-  /// The request that follows a [status] redirect to [to] — the chain's policy, written once
-  /// for the three places that walk a chain: [IoClient], the scope that walks one to keep the
-  /// cookies each hop sets, and the crawl engine that walks its own.
+  /// The request that follows a [status] redirect to [to], for [IoClient], the scope and the
+  /// crawl alike.
   ///
-  /// 303, and 301 or 302 on anything but GET and HEAD, become a GET with no body, which is
-  /// what every browser does; 307 and 308 keep both. Credentials do not follow to another
-  /// origin — another host, but also `http` after `https`, or another port — as a
-  /// browser's would not: a downgrade would put the bearer token on the wire in the clear.
+  /// 303, and 301/302 on anything but GET and HEAD, become a bodiless GET, as in a browser;
+  /// 307 and 308 keep both. Credentials do not follow to another origin — host, scheme or
+  /// port — so an https→http hop cannot leak a bearer token.
   Request _hop(Uri to, int status) {
     final downgrade = method != 'HEAD' && (status == 303 || ((status == 301 || status == 302) && method != 'GET'));
     final cross = !_sameOrigin(to, url);
-    final next = Request(downgrade ? 'GET' : method, to)
-      ..followRedirects = followRedirects
-      ..maxRedirects = maxRedirects
-      .._directives = _directives == null ? null : Map.of(_directives!);
+    final next = _options(Request(downgrade ? 'GET' : method, to));
     for (final MapEntry(:key, :value) in headers.entries) {
       if (downgrade && (key == 'content-type' || key == 'content-length')) continue;
       if (cross && _credential.contains(key)) continue;
@@ -223,12 +190,8 @@ final class Request {
   String toString() => '$method $url';
 }
 
-/// Puts at most one of [text], [bytes], [form], [json] and [files] on [request]; more than one
-/// is an [ArgumentError]. The one place the body words are turned into a body.
-///
-/// [form] with [files] is the one combination that is not two bodies: they are the fields and
-/// the files of the same `multipart/form-data`, which is how a browser sends a form that has
-/// a file input on it.
+/// Puts at most one body on [request], else an [ArgumentError]. [form] with [files] is one
+/// `multipart/form-data` body: a browser form with a file input.
 void _body(
   Request request, {
   String? text,
@@ -258,12 +221,8 @@ void _body(
   }
 }
 
-/// The `multipart/form-data` a `files:` body is: the fields, then the files, each read off
-/// disk a chunk at a time and never held.
-///
-/// It is made of paths rather than of bytes, which is what lets [Request.open] be called more
-/// than once — a 307 that keeps the method, a retry after a reset connection — where a
-/// `Stream` handed over once could only be sent once.
+/// A `files:` body: the fields, then the files streamed off disk. Paths rather than a
+/// `Stream`, so [Request.open] can be called again for a 307 or a retry.
 final class _Multipart {
   final Map<String, String> fields;
   final Map<String, Path> files;
@@ -290,11 +249,8 @@ final class _Multipart {
 
   late final Uint8List _tail = utf8.encode('--$boundary--\r\n');
 
-  /// The length `content-length` announces, which has to be known before a byte goes out.
-  ///
-  /// The `stat` per file is synchronous on purpose: this is the one moment the length is
-  /// needed and there is nothing to overlap it with, and a file that is not there fails here,
-  /// naming itself, instead of half-way through an upload the server is already reading.
+  /// Synchronous `stat`s on purpose: nothing overlaps them, and a missing file fails here,
+  /// naming itself, rather than half-way through the upload.
   late final int length = _parts.fold(_tail.length, (n, part) {
     final (head, file) = part;
     return n + head.length + (file == null ? 0 : file.asFile.lengthSync() + 2);
@@ -311,15 +267,13 @@ final class _Multipart {
     yield _tail;
   }
 
-  /// A quoted-string value, with the three characters that would end it early taken out —
-  /// which is what a browser does with a filename that has a quote in it.
+  /// A quoted-string value, escaped as a browser escapes a filename.
   static String _quoted(String value) => value.replaceAll('"', '%22').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
 }
 
 final _crlf = utf8.encode('\r\n');
 
-/// The content type an uploaded file announces. Only the extensions an upload actually has;
-/// anything else is bytes, which is what a server assumes anyway.
+/// The content type an uploaded file announces; anything unlisted is bytes.
 String _mime(String ext) => switch (ext.toLowerCase()) {
   'png' => 'image/png',
   'jpg' || 'jpeg' => 'image/jpeg',
@@ -343,32 +297,23 @@ String _mime(String ext) => switch (ext.toLowerCase()) {
 /// Credentials a redirect to another origin does not carry.
 const _credential = {'authorization', 'cookie', 'proxy-authorization'};
 
-/// Whether [a] and [b] are one origin — scheme, host and port — which is what a credential
-/// belongs to. `Uri.port` is the scheme's default when none is written, so `:443` and
-/// nothing agree.
+/// Whether [a] and [b] are one origin: scheme, host and port (`:443` and none agree).
 bool _sameOrigin(Uri a, Uri b) =>
     a.scheme == b.scheme && a.port == b.port && a.host.toLowerCase() == b.host.toLowerCase();
 
-/// What a response that is not the one asked for says about itself: `404 Not Found`.
+/// `404 Not Found`.
 String _status(int code, String? reason) => reason == null || reason.isEmpty ? '$code' : '$code $reason';
 
-/// What an operation the enclosing [Cancel.scope] stopped throws.
 CancelledException _cancelled(CancelToken token) =>
     CancelledException(token.reason?.toString() ?? 'Operation was cancelled.');
 
-/// Whether [error] is one a second attempt might not meet: the connection, not the request.
-///
-/// A TLS failure is the same on every attempt, and a cancel is not a failure at all.
+/// Whether a second attempt might not meet [error]: the connection, not TLS or a cancel.
 bool _transient(Object error) =>
     (error is ClientException || error is SocketException || error is HttpException || error is TimeoutException) &&
     !_certain(error);
 
-/// The request that follows [res] in [current]'s chain — [res]'s body drained first, so the
-/// hop can have its connection — or `null` when [res] is where the chain ends. [first] is the
-/// URL the chain began at, which is the one a caller would recognise in the error.
-///
-/// Written once for the two clients that walk a chain a response at a time — [IoClient], and
-/// the scope that walks one to keep each hop's cookies.
+/// The request after [res] in [current]'s chain, with [res] drained so the hop can reuse its
+/// connection, or `null` where the chain ends. [first] names the chain in the error.
 Future<Request?> _next(Request current, StreamedResponse res, int hop, Uri first) async {
   final status = res.statusCode;
   if (status != 301 && status != 302 && status != 303 && status != 307 && status != 308) return null;
@@ -415,7 +360,6 @@ final class StreamedResponse {
   /// Whether this is a redirect the client did not follow: a 3xx with a `location`.
   bool get isRedirect => statusCode ~/ 100 == 3 && headers.containsKey('location');
 
-  /// This response over another [body]: the same status, headers and URL.
   StreamedResponse _carrying(Stream<List<int>> body) => StreamedResponse(
     body,
     statusCode,
@@ -426,7 +370,6 @@ final class StreamedResponse {
     reasonPhrase: reasonPhrase,
   );
 
-  /// Buffers the body.
   Future<Response> read() async {
     final builder = BytesBuilder(copy: false);
     await for (final chunk in stream) {
@@ -507,21 +450,13 @@ final class Response {
   String toString() => 'Response($statusCode${reasonPhrase == null ? '' : ' $reasonPhrase'}, ${bytes.length} bytes)';
 }
 
-/// A request on its way: awaited, the [Response] whatever its status; read, the body —
-/// and only a 2xx one.
-///
-/// Every verb returns one. The reading a call site asks for says what it wants, so the
-/// status check comes with it, as `run('…').text` implies `quiet`:
+/// A request on its way: awaited, the [Response] whatever its status; read, the body — and
+/// only a 2xx one, else an [HttpException] naming the status and URL.
 ///
 /// ```dart
 /// final score = (await api.post(json: x).json)['score'];   // throws unless 2xx
 /// final res = await api.post(json: x);                       // any status; check res.isOk
 /// ```
-///
-/// A reading that meets another status throws [HttpException] naming it and the URL that
-/// answered — `HttpException: 404 Not Found, uri = https://…` — which is what a script that
-/// lets it reach `Cli.run` wants reported. An error page parses fine and then matches
-/// nothing; this is why the readings do not parse it.
 ///
 /// {@category Networking}
 final class Fetch implements Future<Response> {
@@ -529,7 +464,6 @@ final class Fetch implements Future<Response> {
 
   Fetch._(this._response);
 
-  /// The response, or [HttpException] unless its status is 2xx.
   Future<Response> get _ok => _response.then(
     (res) => res.isOk ? res : throw HttpException(_status(res.statusCode, res.reasonPhrase), uri: res.url),
   );
@@ -574,7 +508,7 @@ Future<Response> _buffered(Request request) async {
   final budget = _replays(request);
   try {
     for (var attempt = 0; ; attempt++) {
-      // The send retries its own failures; what is left to this loop is the body.
+      // The send retries its own failures; this loop retries the body.
       final res = await lease.client.send(request.copy());
       try {
         return await res.read();
@@ -596,18 +530,10 @@ final _metaCharset = RegExp(r'''<meta[^>]+charset\s*=\s*["']?([\w-]+)''', caseSe
 /// An `encoding` declared in an XML prolog `<?xml ... encoding="..."?>`.
 final _xmlEncoding = RegExp(r'''<\?xml\b[^>]*\bencoding\s*=\s*["']([\w-]+)["']''', caseSensitive: false);
 
-/// Bytes the server sent, as text, decided in the order a browser decides it.
-///
-/// 1. A byte-order mark, which outranks every label: a page saved as UTF-8 with a BOM and
-///    served as `charset=iso-8859-1` is UTF-8.
-/// 2. The `content-type`'s `charset`.
-/// 3. For HTML only — `text/html`, or no type at all — a `<meta>` in the first 2 KiB. The
-///    legacy web serves a bare `text/html` and names its charset there. JSON, CSS and
-///    JavaScript are not searched for one: a `<meta` inside a JSON string is not a label.
-/// 4. UTF-8, with bad bytes replaced.
-///
-/// UTF-8 and windows-1252 decode in Dart. Any other WHATWG label — Shift_JIS, EUC-KR, GBK,
-/// Big5, KOI8-R, UTF-16 — is the native library's, and reads as UTF-8 without it.
+/// Bytes as text, decided as a browser does: a BOM; the `content-type` charset; for HTML or
+/// XML (or no type) a `<meta>` or prolog in the first 2 KiB — never in JSON, where `<meta` is
+/// just a string; else UTF-8. Labels beyond UTF-8 and windows-1252 are the native library's,
+/// and read as UTF-8 without it.
 String _decode(Uint8List bytes, String? contentType) {
   if (bytes.length >= 3 && bytes[0] == 0xef && bytes[1] == 0xbb && bytes[2] == 0xbf) {
     return utf8.decode(Uint8List.sublistView(bytes, 3), allowMalformed: true);
@@ -621,8 +547,7 @@ String _decode(Uint8List bytes, String? contentType) {
     final head = _markupHead(bytes);
     if (_isHtml(contentType)) {
       declared = _metaCharset.firstMatch(head)?[1];
-      // The HTML standard: a page cannot declare itself UTF-16 from inside, since its `<meta>`
-      // was just read as ASCII — the label is wrong, and the page is UTF-8.
+      // A `<meta>` just read as ASCII cannot mean UTF-16 (HTML standard).
       if (declared != null && declared.toLowerCase().startsWith('utf-16')) declared = null;
     }
     if (declared == null && _isXml(contentType)) {
@@ -631,28 +556,27 @@ String _decode(Uint8List bytes, String? contentType) {
   }
   return switch (declared?.toLowerCase()) {
     null || 'utf-8' || 'utf8' || 'unicode-1-1-utf-8' => utf8.decode(bytes, allowMalformed: true),
-    // The HTML standard decodes `iso-8859-1` as windows-1252, and a page labelled either
-    // one almost always means the latter: the bytes Latin-1 leaves as C1 controls are
-    // curly quotes and dashes in every page that actually uses them.
+    // The HTML standard reads `iso-8859-1` as windows-1252: its C1 bytes are curly quotes.
     'windows-1252' || 'cp1252' || 'iso-8859-1' || 'latin1' || 'latin-1' || 'us-ascii' || 'ascii' => _windows1252(bytes),
     final label when NativeLib.isAvailable => NativeBridge.decodeText(label, bytes),
     _ => utf8.decode(bytes, allowMalformed: true),
   };
 }
 
-/// Whether a `content-type` is one whose charset may be declared inside an HTML document.
-bool _isHtml(String? contentType) {
-  final type = contentType?.split(';').first.trim().toLowerCase();
-  return type == null || type.isEmpty || type == 'text/html' || type == 'application/xhtml+xml';
-}
+/// HTML or missing: a `<meta>` may declare the charset.
+bool _isHtml(String? contentType) => switch (_mediaType(contentType)) {
+  null || '' || 'text/html' || 'application/xhtml+xml' => true,
+  _ => false,
+};
 
-/// Whether a `content-type` is XML or missing, where encoding may be declared in the XML prolog.
-bool _isXml(String? contentType) {
-  final type = contentType?.split(';').first.trim().toLowerCase();
-  return type == null || type.isEmpty || type.endsWith('/xml') || type.endsWith('+xml');
-}
+/// XML or missing: the prolog may declare the encoding.
+bool _isXml(String? contentType) => switch (_mediaType(contentType)) {
+  null || '' => true,
+  final type => type.endsWith('/xml') || type.endsWith('+xml'),
+};
 
-/// The first 2 KiB decoded as Latin-1 to inspect for markup encoding declarations.
+String? _mediaType(String? contentType) => contentType?.split(';').first.trim().toLowerCase();
+
 String _markupHead(Uint8List bytes) =>
     latin1.decode(Uint8List.sublistView(bytes, 0, bytes.length < 2048 ? bytes.length : 2048), allowInvalid: true);
 
@@ -664,7 +588,7 @@ const _windows1252High = <int>[
   0x2dc, 0x2122, 0x161, 0x203a, 0x153, 0x9d, 0x17e, 0x178,
 ];
 
-/// Into a [Uint16List] rather than a `List<int>`: a 5 MB page went from 60 ms to 9.
+/// Into a [Uint16List]: a 5 MB page is 9 ms, 60 as a `List<int>`.
 String _windows1252(Uint8List bytes) {
   final units = Uint16List(bytes.length);
   for (var i = 0; i < bytes.length; i++) {
@@ -678,39 +602,25 @@ String _windows1252(Uint8List bytes) {
 ///
 /// {@category Networking}
 abstract interface class Client {
-  /// Sends [request] and answers with the response whose body is still arriving.
+  /// Sends [request]; the body is still arriving.
   ///
-  /// The contract an implementation owes its caller: a non-2xx status is a [StreamedResponse],
-  /// not a throw; a transport failure is a [ClientException] or a `dart:io` exception;
-  /// [StreamedResponse.url] is the URL that *answered*, after whatever redirects were
-  /// followed; and a [RequestKey] the implementation does not recognise is ignored.
+  /// The contract: a non-2xx is a [StreamedResponse], not a throw; a transport failure is a
+  /// [ClientException] or a `dart:io` exception; [StreamedResponse.url] is the URL that
+  /// *answered*; an unknown [RequestKey] is ignored. Send [Request.open], of length
+  /// [Request.contentLength] — a `files:` upload is not in [Request.bytes].
   ///
-  /// The body to send is [Request.open], and its length is [Request.contentLength]; a
-  /// `files:` upload is empty in [Request.bytes] and arrives only through those two.
-  ///
-  /// A client may write on the request it is handed — a scope stamps its default headers
-  /// and its `cookie` there — so **sending consumes a request**. Everything in this module
-  /// that sends one the caller owns copies it first ([Request.send],
-  /// [ClientExtensions.get] and its siblings, the crawl engine); a caller reaching `send`
-  /// directly and meaning to reuse the request copies it with [Request.copy].
+  /// **Sending consumes a request**: a client may write on it (a scope stamps headers and
+  /// `cookie`), so a caller reusing one sends a [Request.copy].
   Future<StreamedResponse> send(Request request);
 
   /// Releases connections; the client cannot be used afterwards.
-  ///
-  /// Always a future, so every caller awaits one thing. A client that shuts down over a
-  /// socket — a browser, a pool — needs the wait; one that closes synchronously returns an
-  /// already-completed future and costs its caller nothing. The seam absorbs the difference
-  /// rather than making each call site branch on it.
   Future<void> close();
 }
 
-/// Discards a response body, releasing the connection instead of holding it until the client
-/// reaps an idle one.
+/// Discards a response body and frees its connection; completes when it is free.
 ///
-/// A body up to [_reusable] is read to its end rather than cancelled, because a connection
-/// cut off mid-body cannot be reused: five GETs over a three-hop chain were eleven connections
-/// and are one. A larger one, or one that takes over a second, is cancelled. The future
-/// completes when the connection is free, so a redirect hop that awaits it can take it.
+/// Up to [_reusable] is read to the end, since a connection cut mid-body cannot be reused; a
+/// larger body, or one slower than a second, is cancelled.
 Future<void> _drain(StreamedResponse response) {
   final StreamSubscription<List<int>> sub;
   try {
@@ -743,10 +653,8 @@ Future<void> _drain(StreamedResponse response) {
 /// The most of an unwanted body [_drain] reads to keep its connection.
 const _reusable = 64 * 1024;
 
-/// Whether [request] wants the bytes as the server stores them — [Request.raw], or a `range`,
-/// which counts stored bytes. Such a request asks for `identity` and is never decoded: a
-/// resumed download once decoded its first half and appended the second raw, and passed the
-/// length check as neither the server's file nor its contents.
+/// Whether [request] wants the stored bytes — [Request.raw], or a `range`, which counts them —
+/// so it asks for `identity` and is never decoded.
 bool _literal(Request request) => Request.raw(request) == true || request.headers.containsKey('range');
 
 /// A transport-level failure: the connection closed early, too many redirects, a body over a
@@ -769,30 +677,17 @@ final class ClientException implements Exception {
 final class IoClient implements Client {
   final HttpClient _client;
 
-  /// The total-transfer cap, or `null` when the client was built without `connections:`.
   final Semaphore? _permits;
 
-  /// [perHost] is how many connections may be open to one origin at a time; [connections]
-  /// caps the total in flight across every host, which `dart:io` has no setting for. A
-  /// permit is held until the body is read to the end, cancelled or thrown, so the cap
-  /// counts transfers rather than handshakes.
+  /// [perHost] caps connections to one origin; [connections] caps transfers across all
+  /// hosts, each held until its body ends. [connectTimeout] bounds the handshake alone
+  /// (`Http.scope(timeout:)` bounds the response).
   ///
-  /// [connectTimeout] bounds the handshake alone — [Http.scope]'s `timeout:` bounds the
-  /// wait for a response, which is a different thing and composes with this one. A
-  /// `user-agent` or `connection: close` is a header: `Http.scope(headers: …)`.
-  ///
-  /// [proxy] sends everything through an HTTP proxy — `http://user:pass@host:8080`, with the
-  /// credentials taken from the URL. Without it `dart:io`'s own reading of `http_proxy` and
-  /// `no_proxy` still applies.
-  ///
-  /// A proxy that *rejects* the credentials is `dart:io`'s one rough edge here: it retries the
-  /// 407 rather than handing it back, and there is no way to stop it from outside `HttpClient`.
-  /// `Http.scope(timeout:)` bounds it, and a proxy that seems to hang is worth suspecting of
-  /// having rejected the password rather than of being slow. [insecure] accepts a certificate that does not verify, which
-  /// is a self-signed intranet host and should be nothing else.
-  ///
-  /// [client] takes over an `HttpClient` configured elsewhere — a certificate policy, a
-  /// `findProxy` of its own; the settings here are applied on top of it.
+  /// [proxy] is `http://user:pass@host:8080`; without it `http_proxy`/`no_proxy` apply. A
+  /// proxy that seems to hang may have rejected the password: `dart:io` retries a 407 forever,
+  /// bounded only by `Http.scope(timeout:)`. [insecure] accepts any certificate — for a
+  /// self-signed intranet host only. [client] is an `HttpClient` configured elsewhere, with
+  /// these settings applied on top.
   IoClient({
     int? connections,
     int? perHost,
@@ -813,11 +708,8 @@ final class IoClient implements Client {
         final password = colon == -1 ? '' : proxy.userInfo.substring(colon + 1);
         final credentials = HttpClientBasicCredentials(user, password);
         _client.addProxyCredentials(proxy.host, proxy.port, '', credentials);
-        // `dart:io` matches proxy credentials by the realm the proxy names, so registering
-        // them under the empty one answers only a proxy that uses the empty one — every other
-        // proxy 407s, finds nothing to send, and is asked again forever. This supplies them
-        // for whatever realm was actually asked for, and once per realm, so a wrong password
-        // fails instead of looping.
+        // `dart:io` matches proxy credentials by realm; supply them for whichever realm is
+        // asked, once, so a wrong password fails instead of looping.
         final asked = <String>{};
         _client.authenticateProxy = (host, port, scheme, realm) async {
           if (!asked.add('$host:$port/$realm')) return false;
@@ -826,14 +718,12 @@ final class IoClient implements Client {
         };
       }
     }
-    // The bodies are decoded here instead, because `dart:io` knows only gzip and this asks
-    // for what a browser asks for; see [_Encoding].
+    // Decoded here instead: `dart:io` knows only gzip; see [_Encoding].
     _client.autoUncompress = false;
   }
 
-  /// Honours the enclosing [Cancel.scope]: a cancel aborts the request where it stands —
-  /// waiting for headers, or half-way through a body — and what it was doing fails with
-  /// [CancelledException], so a stalled server cannot hold a cancelled program open.
+  /// Honours the enclosing [Cancel.scope]: a cancel aborts the request — waiting for headers
+  /// or mid-body — with [CancelledException].
   @override
   Future<StreamedResponse> send(Request request) async {
     Cancel.throwIfCancelled();
@@ -853,20 +743,14 @@ final class IoClient implements Client {
     }
   }
 
-  /// Walks the redirect chain rather than letting `dart:io` walk it.
-  ///
-  /// `dart:io` reports the hops it followed but not the headers they carried, and copies
-  /// every header — a credential included — onto a hop that may be another site. Owning the
-  /// chain is what puts [Request._hop]'s policy behind a plain `url.get()`, the same policy a
-  /// crawl already had, and what makes [StreamedResponse.url] the URL that answered rather
-  /// than one re-derived from a list of locations afterwards.
+  /// Walks the redirect chain itself: `dart:io` copies every header, credentials included,
+  /// onto a hop to another site. This puts [Request._hop]'s policy behind `url.get()`.
   Future<StreamedResponse> _send(Request request, void Function() release) async {
     var current = request;
     for (var hop = 0; ; hop++) {
       final res = await _once(current);
       final next = current.followRedirects ? await _next(current, res, hop, request.url) : null;
-      // Only the last hop carries the permit: an intermediate one is drained, and draining a
-      // body that carried it would hand it back while the chain was still walking.
+      // Only the last hop carries the permit; draining an earlier one must not release it.
       if (next == null) return res._carrying(_guarded(res.stream, release, Cancel.token));
       current = next;
     }
@@ -884,8 +768,7 @@ final class IoClient implements Client {
           io.abort(_cancelled(token));
           throw _cancelled(token);
         }
-        // Until the headers are in, aborting is what stops it; after, the body is
-        // [_guarded]'s — `dart:io` ignores an abort once there is a response.
+        // Until the headers; after, [_guarded] stops the body (`dart:io` ignores the abort).
         heard = token.onCancel(() => io.abort(_cancelled(token)));
       }
       io
@@ -893,8 +776,7 @@ final class IoClient implements Client {
         ..contentLength = contentLength;
       io.headers.set('accept-encoding', _literal(request) ? 'identity' : _acceptEncoding);
       request.headers.forEach((k, v) => io.headers.set(k, v));
-      // A held body goes out in one write; a streamed one is pumped, so a `files:` upload
-      // never exists in memory at either end of the socket.
+      // A held body is one write; a `files:` one is pumped, never in memory.
       if (request._multipart != null) {
         await io.addStream(request.open());
       } else if (request.bytes.isNotEmpty) {
@@ -911,10 +793,8 @@ final class IoClient implements Client {
       heard?.call();
     }
     final headers = Headers();
-    // One value per name, so a header the server repeated is joined. `set-cookie` is the
-    // one that cannot be joined with a comma — its `Expires` holds one — and a newline
-    // cannot appear in a header value, so it separates them unambiguously. Chrome's
-    // DevTools protocol joins the same header the same way, so `ChromeClient` agrees.
+    // One value per name. `set-cookie` joins with a newline, not a comma (its `Expires` holds
+    // one) — as Chrome's DevTools protocol does, so `ChromeClient` agrees.
     response.headers.forEach((name, values) => headers[name] = values.join(name == 'set-cookie' ? '\n' : ', '));
     Stream<List<int>> body = response.handleError(
       (Object e) => throw ClientException(e is HttpException ? e.message : '$e', request.url),
@@ -925,8 +805,7 @@ final class IoClient implements Client {
         ? _Encoding.of(headers['content-encoding'])
         : null;
     if (encoding != null) {
-      // The length and the encoding on the wire described the bytes before they were decoded;
-      // neither describes what the caller is about to read.
+      // Both described the bytes on the wire, not what the caller reads.
       body = _inflated(body, encoding, request.url);
       length = null;
       headers
@@ -947,12 +826,8 @@ final class IoClient implements Client {
   @override
   Future<void> close() async => _client.close(force: true);
 
-  /// Hands the permit back when the body ends, however it ends — read to completion, thrown,
-  /// or cancelled by a caller that stopped listening.
-  ///
-  /// Inside a [Cancel.scope] it is also where a cancel lands once the headers are in: the body
-  /// fails with [CancelledException] and the connection is let go, so a server that stalls
-  /// mid-body cannot hold a cancelled download — or the program — open.
+  /// [body], releasing the permit however it ends, and failing with [CancelledException] when
+  /// [token] is cancelled mid-body, so a stalled server cannot hold the program open.
   static Stream<List<int>> _guarded(Stream<List<int>> body, void Function() release, CancelToken? token) {
     StreamSubscription<List<int>>? source;
     void Function()? unheard;

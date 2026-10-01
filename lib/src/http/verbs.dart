@@ -1,10 +1,7 @@
 part of '../../http.dart';
 
-/// The same verbs [UriExtensions] puts on a `Uri`, on a client you are holding.
-///
-/// [Http.scope] is how a client reaches code that has no client to hand — a download deep
-/// in a call chain, a crawl assembled somewhere else. This is the other case: the client is
-/// right there, and saying so is shorter than opening a scope around one call.
+/// The verbs of [UriExtensions], on a client you are holding — shorter than a scope around
+/// one call, and the compiler sees what that client can do beyond the seam.
 ///
 /// ```dart
 /// final chrome = await ChromeClient.connect();   // package:dart_toolkit/chrome.dart
@@ -13,20 +10,11 @@ part of '../../http.dart';
 /// await chrome.page(url, (p) => p.click('.dl'));  // the tab, live
 /// ```
 ///
-/// The difference that matters is not brevity. A scope holds a [Client], and a `Client` is
-/// `send` and `close` — so through a scope, everything a particular client can do *beyond*
-/// the seam is invisible. Held, it is the receiver, and `ChromeClient.page` sits beside
-/// [get] with the compiler deciding whether it exists. Nothing probes, nothing casts, and
-/// nothing throws at runtime for asking a socket to click a button.
-///
-/// Calls nested inside one of these reuse the same client, so a hook that fetches a detail
-/// page opens no connection of its own.
+/// Calls nested inside one of these reuse the same client.
 ///
 /// {@category Networking}
 extension ClientExtensions on Client {
-  /// Sends [request] through this client and buffers the body.
-  ///
-  /// The request is copied before it goes out; see [Request.send].
+  /// Sends a copy of [request] through this client and buffers the body.
   Fetch fire(Request request) => _withClient(this, request.send);
 
   /// GET.
@@ -95,13 +83,9 @@ extension ClientExtensions on Client {
   Stream<ServerEvent> events(Uri url, {Map<String, String>? headers, Object? json}) =>
       _events(url, this, headers: headers, json: json);
 
-  /// A crawl on this client, seeded with [seeds]: a [Uri], an `Iterable<Uri>`, or an
-  /// `Iterable<Request>` for seeds with a method, body or headers of their own — what
-  /// `url.scrape<T>()`, `urls.scrape<T>()` and `requests.scrape<T>()` take as a receiver.
-  ///
-  /// Unlike the verbs, this one cannot go through the zone: a [Scrape] is lazy, and its
-  /// engine starts in whichever zone finally listens to it. The client is carried on the
-  /// crawl instead, so the stream may be built here and consumed anywhere.
+  /// A crawl on this client, seeded with a [Uri], an `Iterable<Uri>` or an
+  /// `Iterable<Request>`. The client rides on the crawl rather than the zone, since a
+  /// [Scrape] starts wherever it is listened to.
   Scrape<T> scrape<T>(Object seeds) => Scrape<T>._of(switch (seeds) {
     Uri() => [Request('GET', _page(seeds))],
     Iterable<Request>() => seeds,
