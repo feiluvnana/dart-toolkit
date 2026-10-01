@@ -185,7 +185,8 @@ Future<void> _erase(Directory directory) async {
 }
 
 /// `--proxy-server`'s value, without credentials: those are answered over the protocol.
-String _server(Uri proxy) => '${proxy.scheme}://${proxy.host}:${proxy.port}';
+String _server(Uri proxy) =>
+    '${proxy.scheme}://${proxy.host.contains(':') ? '[${proxy.host}]' : proxy.host}:${proxy.port}';
 
 /// `net::ERR_NAME_NOT_RESOLVED` → `err name not resolved`.
 String _readable(String error) =>

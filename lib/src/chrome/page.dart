@@ -29,8 +29,10 @@ final class ChromePage {
   /// The render's credentials and the one origin they may go to.
   ({String origin, Map<String, String> headers})? _grant;
 
-  /// What `Fetch.enable` was last told, so an unchanged render costs no round trip.
+  /// What `Fetch.enable` was last told, so an unchanged render costs no round trip, and the
+  /// call itself (`null` when disabled), repeated on every out-of-process frame.
   String? _intercepting;
+  Map<String, Object?>? _fetching;
   Map<String, Object?>? _document;
   Completer<void>? _waiter;
   String _want = '';
@@ -52,6 +54,9 @@ final class ChromePage {
   /// Out-of-process frames by id: their session and last URL.
   final Map<String, ({String session, String url})> _remotes = {};
 
+  /// The tab's watch on each out-of-process frame's session, by session.
+  final Map<String, StreamSubscription<_Cdp>> _children = {};
+
   /// An out-of-process frame, driven through its own session.
   final bool _remote;
   String _frame = '';
@@ -68,7 +73,7 @@ final class ChromePage {
   /// The URL this tab is on, after every redirect and navigation.
   Uri get url => _url;
 
-  bool get isOpen => _alive;
+  bool get isOpen => _alive && _owner._alive && !_client.isClosed;
 
   /// The status of the last document loaded, or `null` before the first.
   int? get statusCode => (_document?['status'] as num?)?.toInt();
@@ -112,7 +117,7 @@ final class ChromePage {
     final deadline = DateTime.now().add(patience);
     while (_interstitial(res) && DateTime.now().isBefore(deadline)) {
       await Future<void>.delayed(const Duration(milliseconds: 500));
-      if (!_alive) break;
+      if (!isOpen) break;
       try {
         res = await response(request);
       } catch (e) {
@@ -123,14 +128,14 @@ final class ChromePage {
     return res;
   }
 
-  /// The bodiless answer of an aborted navigation, if it was a 204/205 or an error status;
-  /// the event may trail the command's reply.
+  /// The bodiless answer of an aborted navigation, if it was a 204/205, an error status or a
+  /// download; the event may trail the command's reply.
   Future<Response?> _empty(Uri url, Request? request) async {
     for (var i = 0; i < 25 && _answer == null; i++) {
       await Future<void>.delayed(const Duration(milliseconds: 20));
     }
     final status = (_answer?['status'] as num?)?.toInt();
-    if (status == null || (status != 204 && status != 205 && status < 400)) return null;
+    if (status == null || (status != 204 && status != 205 && status < 400 && !_attachment(_answer))) return null;
     return Response.bytes(Uint8List(0), status, headers: _wire(_answer?['headers']), request: request, url: url);
   }
 
@@ -193,7 +198,7 @@ new Promise((resolve) => {
         );
         return found == true;
       } catch (e) {
-        if (!_alive || !_navigatedAway(e)) rethrow;
+        if (!isOpen || !_navigatedAway(e)) rethrow;
         await _settle();
       }
     }
@@ -238,7 +243,9 @@ new Promise((resolve) => {
       'ArrowDown' => (40, null),
       'ArrowLeft' => (37, null),
       'ArrowRight' => (39, null),
-      _ => (key.toUpperCase().codeUnitAt(0), key),
+      '' => throw ArgumentError.value(key, 'key', 'is empty'),
+      // Only these share their code unit with a key code: `.` is 46, Delete's.
+      _ => (_plain.hasMatch(key) ? key.toUpperCase().codeUnitAt(0) : 0, key),
     };
     for (final type in ['keyDown', 'keyUp']) {
       await _call('Input.dispatchKeyEvent', {
@@ -249,6 +256,8 @@ new Promise((resolve) => {
       });
     }
   }
+
+  static final _plain = RegExp(r'^[A-Za-z0-9 ]$');
 
   /// Scrolls to the bottom [times] times, [settle] apart, stopping early when the height stops
   /// growing; answers the final height. [toEnd] scrolls until it stops growing, for at most
@@ -381,7 +390,7 @@ new Promise((resolve) => {
   /// (`--proxy-server` cannot carry a password) or a render with a credential to add to its
   /// own origin; otherwise only blocked kinds.
   Future<void> _intercept() async {
-    final authenticating = _client._proxy?.userInfo.isNotEmpty ?? false;
+    final authenticating = _client._login != null;
     final everything = authenticating || _grant != null;
     final kinds = _blocked ?? const <Resource>{};
     final want = everything
@@ -389,19 +398,28 @@ new Promise((resolve) => {
         : (kinds.map((k) => k.name).toList()..sort()).join(',');
     if (want == _intercepting) return;
     _intercepting = want;
-    if (want.isEmpty) return _call('Fetch.disable').then((_) {});
-    await _call('Fetch.enable', {
-      'patterns': everything
-          ? [
-              {'urlPattern': '*', 'requestStage': 'Request'},
-            ]
-          : [
-              for (final kind in kinds)
-                for (final type in kind._types) {'urlPattern': '*', 'resourceType': type, 'requestStage': 'Request'},
-            ],
-      if (authenticating) 'handleAuthRequests': true,
-    });
+    _fetching = want.isEmpty
+        ? null
+        : {
+            'patterns': everything
+                ? [
+                    {'urlPattern': '*', 'requestStage': 'Request'},
+                  ]
+                : [
+                    for (final kind in kinds)
+                      for (final type in kind._types)
+                        {'urlPattern': '*', 'resourceType': type, 'requestStage': 'Request'},
+                  ],
+            if (authenticating) 'handleAuthRequests': true,
+          };
+    await _fetch(_tab);
+    for (final remote in _remotes.entries.toList()) {
+      await _fetch(_Tab(remote.key, remote.value.session)).catchError((Object _) {});
+    }
   }
+
+  /// Applies [_fetching] to [tab]'s session.
+  Future<void> _fetch(_Tab tab) => _client._call(_fetching == null ? 'Fetch.disable' : 'Fetch.enable', _fetching, tab);
 
   /// Sets the cookies in [header] for [url] alone, never as a header every request carries.
   Future<void> _plant(String header, Uri url) async {
@@ -455,7 +473,6 @@ new Promise((resolve) => {
           final from = event.params['frameId'];
           if (_frame.isNotEmpty && from != _frame && _client._pages.any((p) => p != _owner && p._frame == from)) return;
           _client._claimed.add(guid);
-          _owner._downloadBegan = DateTime.now();
           id = guid;
           suggested = event.params['suggestedFilename'] as String?;
           stirred();
@@ -470,10 +487,14 @@ new Promise((resolve) => {
       }
     });
     try {
-      if (_owner._downloadBegan case final began?) {
-        final wait = _downloadGap - DateTime.now().difference(began);
-        if (wait > Duration.zero) await Future<void>.delayed(wait);
-      }
+      // The slot is taken before waiting, so concurrent waits queue rather than all wake at once.
+      final now = DateTime.now();
+      final slot = switch (_owner._downloadBegan) {
+        final began? when began.add(_downloadGap).isAfter(now) => began.add(_downloadGap),
+        _ => now,
+      };
+      _owner._downloadBegan = slot;
+      if (slot.isAfter(now)) await Future<void>.delayed(slot.difference(now));
       stirred();
       await action();
       if (!await finished.future) {
@@ -585,14 +606,18 @@ new Promise((resolve) => {
     _arm((until ?? _client._wait)._lifecycle);
     await _call('Page.navigateToHistoryEntry', {'entryId': entries[index]['id']});
     // A bfcache restore fires no `load`; the URL moving is the other proof.
-    final moved = await Future.any([_settle(timeout), _left(was, timeout)]);
+    var decided = false;
+    final moved = await Future.any([_settle(timeout), _left(was, timeout, () => decided)]);
+    decided = true;
+    // Ends whichever wait lost.
+    _complete();
     _disarm();
     return moved;
   }
 
-  Future<bool> _left(Uri was, Duration? timeout) async {
+  Future<bool> _left(Uri was, Duration? timeout, bool Function() decided) async {
     final deadline = DateTime.now().add(timeout ?? _client._timeout);
-    while (_alive && DateTime.now().isBefore(deadline)) {
+    while (isOpen && !decided() && DateTime.now().isBefore(deadline)) {
       if (_url != was) return true;
       await Future<void>.delayed(const Duration(milliseconds: 20));
     }
@@ -622,18 +647,24 @@ new Promise((resolve) => {
       });
     }
     final all = await _call('Storage.getCookies');
-    return [
-      for (final c in (all['cookies'] as List? ?? const []).cast<Map<String, Object?>>())
-        Cookie(c['name'] as String? ?? '', c['value'] as String? ?? '')
-          ..domain = c['domain'] as String?
-          ..path = c['path'] as String?
-          ..secure = c['secure'] == true
-          ..httpOnly = c['httpOnly'] == true
-          ..expires = switch (c['expires']) {
-            final num at when at > 0 => DateTime.fromMillisecondsSinceEpoch((at * 1000).round()),
-            _ => null,
-          },
-    ];
+    final jar = <Cookie>[];
+    for (final c in (all['cookies'] as List? ?? const []).cast<Map<String, Object?>>()) {
+      // dart:io refuses values Chrome keeps (`x,y`); one such cookie must not cost the jar.
+      try {
+        jar.add(
+          Cookie(c['name'] as String? ?? '', c['value'] as String? ?? '')
+            ..domain = c['domain'] as String?
+            ..path = c['path'] as String?
+            ..secure = c['secure'] == true
+            ..httpOnly = c['httpOnly'] == true
+            ..expires = switch (c['expires']) {
+              final num at when at > 0 => DateTime.fromMillisecondsSinceEpoch((at * 1000).round()),
+              _ => null,
+            },
+        );
+      } on FormatException catch (_) {}
+    }
+    return jar;
   }
 
   /// The page as a PDF. Headless only: a headful Chrome throws `Printing is not available`.
@@ -716,15 +747,22 @@ new Promise((resolve) => {
 
   /// The out-of-process frame whose URL or `<iframe name>` contains [match].
   Future<(String, String)?> _remoteMatching(String match) async {
-    for (final MapEntry(:key, :value) in _remotes.entries) {
-      if (value.url.contains(match)) return (key, value.url);
+    for (final MapEntry(:key, :value) in _remotes.entries.toList()) {
+      // Attached before its first request, so the URL it attached with is blank.
+      var url = value.url;
+      try {
+        final info = await _client._call('Target.getTargetInfo', {'targetId': key});
+        url = '${(info['targetInfo'] as Map<String, Object?>?)?['url'] ?? url}';
+        _remotes[key] = (session: value.session, url: url);
+      } catch (_) {}
+      if (url.contains(match)) return (key, url);
       try {
         final holder = await _call('DOM.getFrameOwner', {'frameId': key});
         final node = await _call('DOM.describeNode', {'backendNodeId': holder['backendNodeId']});
         final attributes = ((node['node'] as Map<String, Object?>?)?['attributes'] as List?) ?? const [];
         for (var i = 0; i + 1 < attributes.length; i += 2) {
           final name = '${attributes[i + 1]}';
-          if (attributes[i] == 'name' && name.isNotEmpty && name.contains(match)) return (key, value.url);
+          if (attributes[i] == 'name' && name.isNotEmpty && name.contains(match)) return (key, url);
         }
       } catch (_) {}
     }
@@ -753,6 +791,10 @@ new Promise((resolve) => {
     _client._pages.remove(this);
     _client._free.remove(this);
     await _events?.cancel();
+    for (final child in _children.values) {
+      await child.cancel();
+    }
+    _children.clear();
     for (final remote in _remotes.values) {
       await _client._sessions.remove(remote.session)?.close();
     }
@@ -765,14 +807,11 @@ new Promise((resolve) => {
 
   // ---- internals -------------------------------------------------------------------------
 
-  /// Contexts for in-process frames, and a session for each out-of-process one.
-  Future<void> _watchFrames() async {
-    await _call('Runtime.enable');
-    await _call('Target.setAutoAttach', {'autoAttach': true, 'waitForDebuggerOnStart': false, 'flatten': true});
-  }
+  /// Contexts for in-process frames; out-of-process ones attach from the tab's start.
+  Future<void> _watchFrames() => _call('Runtime.enable');
 
   Future<Map<String, Object?>> _call(String method, [Map<String, Object?>? params, Duration? timeout]) {
-    if (!_alive) return Future.error(ClientException('The page is closed', _url));
+    if (!isOpen) return Future.error(ClientException('The page is closed', _url));
     return _client._call(method, params, _tab, timeout);
   }
 
@@ -782,6 +821,8 @@ new Promise((resolve) => {
   /// Whether [e] is an evaluation cut short by a navigation, worth retrying once it settles.
   static bool _navigatedAway(Object e) {
     final msg = '$e';
+    // Not this package's own "closed": a dead page or client never comes back.
+    if (e is ClientException && (msg.contains('is closed') || msg.contains('disconnected'))) return false;
     return msg.contains('navigated') || msg.contains('closed') || msg.contains('Execution context was destroyed');
   }
 
@@ -794,14 +835,14 @@ new Promise((resolve) => {
     if (press) ...{'button': 'left', 'buttons': 1, 'clickCount': 1},
   });
 
-  /// The content quad of the first element [selector] matches, scrolled into view, or `null`.
+  /// The border quad of the first element [selector] matches, scrolled into view, or `null`.
   Future<List<num>?> _box(String selector) async {
     final node = await _node(selector);
     if (node == null) return null;
     try {
       await _call('DOM.scrollIntoViewIfNeeded', {'nodeId': node});
       final box = await _call('DOM.getBoxModel', {'nodeId': node});
-      final quad = ((box['model'] as Map<String, Object?>?)?['content'] as List?)?.cast<num>();
+      final quad = ((box['model'] as Map<String, Object?>?)?['border'] as List?)?.cast<num>();
       return quad == null || quad.length < 6 ? null : quad;
     } catch (_) {
       return null;
@@ -843,8 +884,9 @@ new Promise((resolve) => {
           // A challenge renders inside an iframe; only the main frame is this page.
           if (_frame.isNotEmpty && params['frameId'] != _frame) return;
           final answer = _answer = params['response'] as Map<String, Object?>?;
-          // A 204 leaves the document where it was.
+          // A 204 or a download leaves the document where it was.
           if (answer?['status'] case 204 || 205) return;
+          if (_attachment(answer)) return;
           _document = answer;
         case 'Page.frameNavigated':
           final frame = params['frame'] as Map<String, Object?>?;
@@ -860,46 +902,9 @@ new Promise((resolve) => {
           if (_frame.isNotEmpty && params['frameId'] != _frame) return;
           if (params['url'] case final String moved) _url = Uri.tryParse(moved) ?? _url;
           if (_expect == null) _complete();
-        case 'Target.attachedToTarget' when _parent == null:
-          final info = params['targetInfo'] as Map<String, Object?>?;
-          final session = params['sessionId'];
-          if (info?['type'] != 'iframe' || session is! String) return;
-          _client._sessions[session] ??= StreamController<_Cdp>.broadcast();
-          _remotes[info!['targetId'] as String] = (session: session, url: '${info['url'] ?? ''}');
-        case 'Target.detachedFromTarget' when _parent == null:
-          final session = params['sessionId'];
-          _remotes.removeWhere((_, remote) => remote.session == session);
-          unawaited(_client._sessions.remove(session)?.close());
-        case 'Fetch.requestPaused' when _parent == null:
-          // With an authenticating proxy everything pauses, so refusal is by kind. `headers`
-          // replaces the request's, so the grant is merged into the ones it had.
-          final kind = '${params['resourceType']}';
-          final refused = (_blocked ?? const <Resource>{}).any((r) => r._types.contains(kind));
-          final paused = params['request'] as Map<String, Object?>?;
-          final grant = _grant;
-          final own = !refused && grant != null && _origin(Uri.tryParse('${paused?['url']}')) == grant.origin;
-          unawaited(
-            _call(refused ? 'Fetch.failRequest' : 'Fetch.continueRequest', {
-              'requestId': params['requestId'],
-              if (refused) 'errorReason': 'BlockedByClient',
-              if (own) 'headers': _granted(paused?['headers'], grant.headers),
-            }).catchError((Object _) => const <String, Object?>{}),
-          );
-        case 'Fetch.authRequired' when _parent == null:
-          final info = _client._proxy?.userInfo ?? '';
-          final colon = info.indexOf(':');
-          unawaited(
-            _call('Fetch.continueWithAuth', {
-              'requestId': params['requestId'],
-              'authChallengeResponse': info.isEmpty
-                  ? {'response': 'CancelAuth'}
-                  : {
-                      'response': 'ProvideCredentials',
-                      'username': colon == -1 ? info : info.substring(0, colon),
-                      'password': colon == -1 ? '' : info.substring(colon + 1),
-                    },
-            }).catchError((Object _) => const <String, Object?>{}),
-          );
+        case 'Target.attachedToTarget' || 'Target.detachedFromTarget' || 'Fetch.requestPaused' || 'Fetch.authRequired'
+            when _parent == null:
+          _route(event, _tab);
         case 'Page.javascriptDialogOpening' when _parent == null:
           unawaited(_dialog(params));
         case 'Page.lifecycleEvent':
@@ -912,6 +917,82 @@ new Promise((resolve) => {
       }
     });
   }
+
+  /// What the tab answers for itself and for each out-of-process frame, on [on]'s session.
+  void _route(_Cdp event, _Tab on) {
+    final params = event.params;
+    switch (event.method) {
+      case 'Target.attachedToTarget':
+        unawaited(_adopt(params));
+      case 'Target.detachedFromTarget':
+        final session = params['sessionId'];
+        _remotes.removeWhere((_, remote) => remote.session == session);
+        unawaited(_children.remove(session)?.cancel());
+        unawaited(_client._sessions.remove(session)?.close());
+      case 'Fetch.requestPaused':
+        // With an authenticating proxy everything pauses, so refusal is by kind. `headers`
+        // replaces the request's, so the grant is merged into the ones it had.
+        final kind = '${params['resourceType']}';
+        final refused = (_blocked ?? const <Resource>{}).any((r) => r._types.contains(kind));
+        final paused = params['request'] as Map<String, Object?>?;
+        final grant = _grant;
+        final own = !refused && grant != null && _origin(Uri.tryParse('${paused?['url']}')) == grant.origin;
+        unawaited(
+          _client
+              ._call(refused ? 'Fetch.failRequest' : 'Fetch.continueRequest', {
+                'requestId': params['requestId'],
+                if (refused) 'errorReason': 'BlockedByClient',
+                if (own) 'headers': _granted(paused?['headers'], grant.headers),
+              }, on)
+              .catchError((Object _) => const <String, Object?>{}),
+        );
+      case 'Fetch.authRequired':
+        // The proxy's password is for the proxy: a site's 401 is cancelled, which shows its page
+        // as Chrome would (`Default` fails the navigation instead).
+        final proxied = (params['authChallenge'] as Map<String, Object?>?)?['source'] == 'Proxy';
+        unawaited(
+          _client
+              ._call('Fetch.continueWithAuth', {
+                'requestId': params['requestId'],
+                'authChallengeResponse': switch (_client._login) {
+                  (final user, final password) when proxied => {
+                    'response': 'ProvideCredentials',
+                    'username': user,
+                    'password': password,
+                  },
+                  _ => {'response': 'CancelAuth'},
+                },
+              }, on)
+              .catchError((Object _) => const <String, Object?>{}),
+        );
+    }
+  }
+
+  /// Takes on a target Chrome holds at its start: an out-of-process frame gets the tab's
+  /// interception before its first request; anything else is just let go.
+  Future<void> _adopt(Map<String, Object?> params) async {
+    final info = params['targetInfo'] as Map<String, Object?>? ?? const {};
+    final session = params['sessionId'];
+    if (session is! String) return;
+    final child = _Tab('${info['targetId']}', session);
+    try {
+      if (info['type'] == 'iframe' && _alive) {
+        final events = _client._sessions[session] ??= StreamController<_Cdp>.broadcast();
+        _remotes[child.target] = (session: session, url: '${info['url'] ?? ''}');
+        _children[session] = events.stream.listen((event) => _route(event, child));
+        if (_fetching != null) await _fetch(child);
+        await _client._call('Target.setAutoAttach', _attach, child);
+      }
+    } catch (_) {
+    } finally {
+      await _client
+          ._call('Runtime.runIfWaitingForDebugger', null, child)
+          .catchError((Object _) => const <String, Object?>{});
+    }
+  }
+
+  /// Frames attach paused, so [block] and the proxy's login apply to their first request.
+  static const _attach = {'autoAttach': true, 'waitForDebuggerOnStart': true, 'flatten': true};
 
   void _complete() {
     if (_waiter case final waiter? when !waiter.isCompleted) waiter.complete();
@@ -945,6 +1026,9 @@ new Promise((resolve) => {
     }
     return fired;
   }
+
+  static bool _attachment(Map<String, Object?>? res) =>
+      '${_wire(res?['headers'])['content-disposition']}'.toLowerCase().startsWith('attachment');
 
   static bool _challenging(int? status) => status == 403 || status == 503 || status == 429;
 

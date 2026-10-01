@@ -505,6 +505,17 @@ void main() {
       await page.close();
     }, skip: absent);
 
+    test('downloads waited for at once on one page all arrive', () async {
+      final dir = await Directory.systemTemp.createTemp('tk_many_');
+      addTearDown(() => dir.delete(recursive: true));
+      final page = await browser.open(base.resolve('/downloads'));
+      final files = await Future.wait([
+        for (var i = 0; i < 20; i++) page.waitForDownload(() => page.click('#get'), to: dir.path.path, timeout: 5.s),
+      ]);
+      expect(files.whereType<Path>(), hasLength(20));
+      await page.close();
+    }, skip: absent);
+
     test('a slow download is waited out; a stalled one is not', () async {
       final dir = await Directory.systemTemp.createTemp('tk_slow_');
       addTearDown(() => dir.delete(recursive: true));
@@ -694,6 +705,7 @@ Future<void> main() async {
       final page = await browser.open(base.resolve('/rendered'));
       expect(await page.eval('navigator.webdriver'), isNull);
       expect(await page.eval('!!window.chrome'), isTrue);
+      expect(await page.eval('navigator.userAgentData.brands.map((b) => b.brand)'), contains('Google Chrome'));
       await page.close();
     }, skip: absent);
 
@@ -881,6 +893,8 @@ Future<void> main() async {
     late Uri base;
     late ChromeClient browser;
     late Directory scratch;
+    var framedPictures = 0;
+    String? siteSaw;
 
     setUpAll(() async {
       if (chrome == null) return;
@@ -890,8 +904,13 @@ Future<void> main() async {
       other.defaultResponseHeaders.remove('x-frame-options', 'SAMEORIGIN');
       unawaited(
         other.forEach((request) async {
-          request.response.headers.contentType = ContentType.html;
-          request.response.write('<html><body><p id="in">inside</p></body></html>');
+          if (request.uri.path == '/pic.png') {
+            framedPictures++;
+            request.response.headers.contentType = ContentType('image', 'png');
+          } else {
+            request.response.headers.contentType = ContentType.html;
+            request.response.write('<html><body><p id="in">inside</p><img src="/pic.png"></body></html>');
+          }
           await request.response.close();
         }),
       );
@@ -939,6 +958,20 @@ Future<void> main() async {
                 '<a id="b" href="/file2.txt" download="file.txt">b</a>'
                 '<a id="c" href="/file3.txt" target="_blank">c</a></body></html>',
               );
+            case '/keys':
+              response.headers.contentType = ContentType.html;
+              response.write('<html><body><input id="i"></body></html>');
+            case '/box':
+              response.headers.contentType = ContentType.html;
+              response.write(
+                '<html><body><div id="b" style="width:100px;height:50px;padding:20px;border:5px solid red"></div>'
+                '</body></html>',
+              );
+            case '/secret':
+              siteSaw = request.headers.value('authorization');
+              response.statusCode = 401;
+              response.headers.set('www-authenticate', 'Basic realm="site"');
+              response.write('who are you');
             case '/file.txt' || '/file2.txt' || '/file3.txt':
               response.headers.set('content-disposition', 'attachment; filename="file.txt"');
               response.write(request.uri.path);
@@ -993,6 +1026,107 @@ Future<void> main() async {
         expect(page.url.path, '/outer', reason: 'the tab stays where it was');
         expect(await same.text('body'), 'other');
       });
+    }, skip: absent);
+
+    test('what is blocked stays blocked inside a cross-origin frame', () async {
+      final page = await browser.open();
+      try {
+        await page.block({Resource.image});
+        framedPictures = 0;
+        await page.goto(base.resolve('/outer'));
+        final cross = await page.frame('localhost');
+        expect(cross, isNotNull, reason: 'found by its URL');
+        expect(await cross!.text('#in'), 'inside');
+        expect(framedPictures, 0);
+      } finally {
+        await page.close();
+      }
+    }, skip: absent);
+
+    test('press types punctuation as text, not the control key sharing its code', () async {
+      await browser.page(base.resolve('/keys'), (page) async {
+        await page.fill('#i', 'abc');
+        await page.eval('document.querySelector("#i").setSelectionRange(0, 0)');
+        await page.press('.');
+        await page.press('(');
+        expect(await page.eval('document.querySelector("#i").value'), '.(abc');
+        await expectLater(page.press(''), throwsArgumentError);
+      });
+    }, skip: absent);
+
+    test("an element's screenshot includes its padding and border", () async {
+      await browser.page(base.resolve('/box'), (page) async {
+        final png = await page.screenshot(selector: '#b');
+        int at(int offset) => (png[offset] << 24) | (png[offset + 1] << 16) | (png[offset + 2] << 8) | png[offset + 3];
+        expect((at(16), at(20)), (150, 100));
+      });
+    }, skip: absent);
+
+    test('navigating to a file is a download, not an aborted navigation', () async {
+      final dir = await Directory.systemTemp.createTemp('tk_goto_');
+      addTearDown(() => dir.delete(recursive: true));
+      await browser.page(base.resolve('/files'), (page) async {
+        final file = await page.waitForDownload(() => page.goto(base.resolve('/file.txt')), to: Path(dir.path));
+        expect(await file!.readText(), '/file.txt');
+        expect(page.url.path, '/files', reason: 'the page stays where it was');
+      });
+    }, skip: absent);
+
+    test("a proxy's password goes to the proxy alone, decoded, over IPv6 too", () async {
+      final proxied = <String>[];
+      final proxy = await HttpServer.bind(InternetAddress.loopbackIPv6, 0);
+      final forwarder = HttpClient();
+      addTearDown(() async {
+        forwarder.close(force: true);
+        await proxy.close(force: true);
+      });
+      unawaited(
+        proxy.forEach((request) async {
+          final target = request.requestedUri;
+          final login = request.headers.value('proxy-authorization');
+          if (request.method == 'CONNECT' || target.host != '127.0.0.1') {
+            request.response.statusCode = HttpStatus.badGateway;
+          } else if (login == null) {
+            request.response.statusCode = HttpStatus.proxyAuthenticationRequired;
+            request.response.headers.set('proxy-authenticate', 'Basic realm="proxy"');
+          } else {
+            proxied.add(utf8.decode(base64.decode(login.split(' ').last)));
+            final out = await forwarder.openUrl(request.method, target);
+            final auth = request.headers.value('authorization');
+            if (auth != null) out.headers.set('authorization', auth);
+            final answer = await out.close();
+            request.response.statusCode = answer.statusCode;
+            await answer.pipe(request.response);
+            return;
+          }
+          await request.response.close();
+        }),
+      );
+      final through = await ChromeClient.launch(
+        tabs: 1,
+        proxy: Uri.parse('http://me:${Uri.encodeComponent('p@ss:w/rd')}@[::1]:${proxy.port}'),
+        args: const ['--proxy-bypass-list=<-loopback>'],
+      );
+      try {
+        final page = await through.open();
+        expect((await page.goto(base.resolve('/secret'))).statusCode, 401, reason: "the site's own 401 page");
+        expect(proxied, isNotEmpty, reason: 'the page went through the IPv6 proxy');
+        expect(proxied.toSet(), {'me:p@ss:w/rd'});
+        expect(siteSaw, isNull, reason: "the site's challenge never gets the proxy's password");
+      } finally {
+        await through.close();
+      }
+    }, skip: absent);
+
+    test('a frame view of a closed client fails at once', () async {
+      final own = await ChromeClient.launch(tabs: 1);
+      final page = await own.open(base.resolve('/outer'));
+      final same = (await page.frame('same'))!;
+      await own.close();
+      expect(same.isOpen, isFalse);
+      final watch = Stopwatch()..start();
+      await expectLater(same.waitFor('#nothing'), throwsA(isA<ClientException>()));
+      expect(watch.elapsed, lessThan(const Duration(seconds: 2)));
     }, skip: absent);
 
     test('two downloads of one name land side by side, never over each other', () async {
@@ -1094,6 +1228,13 @@ Future<void> main() async {
         expect(there.expires, isNotNull);
         expect(there.expires!.difference(expiry).inSeconds.abs(), lessThan(5));
         expect(jar.firstWhere((c) => c.name == 'here').expires, isNull, reason: 'a session cookie has no date');
+      });
+    }, skip: absent);
+
+    test('a cookie dart:io cannot hold is left out, not the whole jar', () async {
+      await browser.page(base, (page) async {
+        await page.eval("document.cookie = 'odd=x,y; path=/'; document.cookie = 'plain=1; path=/'");
+        expect((await page.cookies()).map((c) => c.name), allOf(contains('plain'), isNot(contains('odd'))));
       });
     }, skip: absent);
 
