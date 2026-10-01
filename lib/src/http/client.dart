@@ -101,7 +101,7 @@ final class Request {
   /// Whether the client follows redirects itself, up to [maxRedirects]. The scrape engine
   /// turns this off and follows its own.
   bool followRedirects = true;
-  int maxRedirects = 5;
+  int maxRedirects = 20;
   bool persistentConnection = true;
 
   /// Client-specific directives, absent until one is set; see [RequestKey].
@@ -187,7 +187,7 @@ final class Request {
   /// origin — another host, but also `http` after `https`, or another port — as a
   /// browser's would not: a downgrade would put the bearer token on the wire in the clear.
   Request _hop(Uri to, int status) {
-    final downgrade = status == 303 || ((status == 301 || status == 302) && method != 'GET' && method != 'HEAD');
+    final downgrade = method != 'HEAD' && (status == 303 || ((status == 301 || status == 302) && method != 'GET'));
     final cross = !_sameOrigin(to, url);
     final next = Request(downgrade ? 'GET' : method, to)
       ..followRedirects = followRedirects
@@ -370,7 +370,7 @@ Future<Request?> _next(Request current, StreamedResponse res, int hop, Uri first
   if (to == null) return null;
   await _drain(res);
   if (hop >= current.maxRedirects) throw ClientException('More than ${current.maxRedirects} redirects', first);
-  return current._hop(current.url.resolveUri(to), status);
+  return current._hop(current.url.resolveUri(to).removeFragment(), status);
 }
 
 /// A response whose body is still arriving; [read] buffers it into a [Response].
@@ -531,6 +531,9 @@ final _charset = RegExp(r'charset=["\x27]?([^;"\x27\s>]+)', caseSensitive: false
 /// A `charset` declared inside a `<meta>`, in either spelling; both carry `charset=`.
 final _metaCharset = RegExp(r'''<meta[^>]+charset\s*=\s*["']?([\w-]+)''', caseSensitive: false);
 
+/// An `encoding` declared in an XML prolog `<?xml ... encoding="..."?>`.
+final _xmlEncoding = RegExp(r'''<\?xml\b[^>]*\bencoding\s*=\s*["']([\w-]+)["']''', caseSensitive: false);
+
 /// Bytes the server sent, as text, decided in the order a browser decides it.
 ///
 /// 1. A byte-order mark, which outranks every label: a page saved as UTF-8 with a BOM and
@@ -552,11 +555,17 @@ String _decode(Uint8List bytes, String? contentType) {
     if (NativeLib.isAvailable) return NativeBridge.decodeText(label, Uint8List.sublistView(bytes, 2));
   }
   var declared = _charset.firstMatch(contentType ?? '')?[1];
-  if (declared == null && _isHtml(contentType)) {
-    declared = _declaredInMarkup(bytes);
-    // The HTML standard: a page cannot declare itself UTF-16 from inside, since its `<meta>`
-    // was just read as ASCII — the label is wrong, and the page is UTF-8.
-    if (declared != null && declared.toLowerCase().startsWith('utf-16')) declared = null;
+  if (declared == null && (_isHtml(contentType) || _isXml(contentType))) {
+    final head = _markupHead(bytes);
+    if (_isHtml(contentType)) {
+      declared = _metaCharset.firstMatch(head)?[1];
+      // The HTML standard: a page cannot declare itself UTF-16 from inside, since its `<meta>`
+      // was just read as ASCII — the label is wrong, and the page is UTF-8.
+      if (declared != null && declared.toLowerCase().startsWith('utf-16')) declared = null;
+    }
+    if (declared == null && _isXml(contentType)) {
+      declared = _xmlEncoding.firstMatch(head)?[1];
+    }
   }
   return switch (declared?.toLowerCase()) {
     null || 'utf-8' || 'utf8' || 'unicode-1-1-utf-8' => utf8.decode(bytes, allowMalformed: true),
@@ -569,20 +578,21 @@ String _decode(Uint8List bytes, String? contentType) {
   };
 }
 
-/// Whether a `content-type` is one whose charset may be declared inside the document.
+/// Whether a `content-type` is one whose charset may be declared inside an HTML document.
 bool _isHtml(String? contentType) {
   final type = contentType?.split(';').first.trim().toLowerCase();
   return type == null || type.isEmpty || type == 'text/html' || type == 'application/xhtml+xml';
 }
 
-/// The charset a document declares in its own first bytes, or `null`.
-String? _declaredInMarkup(Uint8List bytes) {
-  final head = latin1.decode(
-    Uint8List.sublistView(bytes, 0, bytes.length < 2048 ? bytes.length : 2048),
-    allowInvalid: true,
-  );
-  return _metaCharset.firstMatch(head)?[1];
+/// Whether a `content-type` is XML or missing, where encoding may be declared in the XML prolog.
+bool _isXml(String? contentType) {
+  final type = contentType?.split(';').first.trim().toLowerCase();
+  return type == null || type.isEmpty || type.endsWith('/xml') || type.endsWith('+xml');
 }
+
+/// The first 2 KiB decoded as Latin-1 to inspect for markup encoding declarations.
+String _markupHead(Uint8List bytes) =>
+    latin1.decode(Uint8List.sublistView(bytes, 0, bytes.length < 2048 ? bytes.length : 2048), allowInvalid: true);
 
 /// windows-1252 is Latin-1 with 27 printable characters where Latin-1 has C1 controls.
 const _windows1252High = <int>[

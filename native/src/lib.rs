@@ -30,16 +30,27 @@ pub(crate) fn set_error(msg: &str) {
 
 /// Runs `f`, storing its error message for `tk_last_error` and mapping it to -1.
 pub(crate) fn guard(f: impl FnOnce() -> Result<i32, String>) -> i32 {
+    static PANIC_HOOK: std::sync::Once = std::sync::Once::new();
+    PANIC_HOOK.call_once(|| {
+        std::panic::set_hook(Box::new(|info| {
+            let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = info.payload().downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "native panic".to_string()
+            };
+            set_error(&msg);
+        }));
+    });
+
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(Ok(n)) => n,
         Ok(Err(m)) => {
             set_error(&m);
             -1
         }
-        Err(_) => {
-            set_error("native panic");
-            -2
-        }
+        Err(_) => -2,
     }
 }
 

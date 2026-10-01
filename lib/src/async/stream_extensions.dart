@@ -122,6 +122,15 @@ extension StreamExtensions<T> on Stream<T> {
         ended = true;
         if (!(trailing && hasPending)) timer?.cancel();
       },
+      onError: (error, trace, sink, _) {
+        if (trailing && hasPending) {
+          hasPending = false;
+          timer?.cancel();
+          timer = null;
+          sink.add(pending as T);
+        }
+        sink.addError(error, trace);
+      },
       pending: () => trailing && hasPending,
       onCancel: () async => timer?.cancel(),
     );
@@ -204,6 +213,7 @@ extension StreamExtensions<T> on Stream<T> {
     Future<void> Function()? onCancel,
     void Function()? onPause,
     void Function()? onResume,
+    void Function(Object error, StackTrace trace, EventSink<R> sink, void Function() settled)? onError,
   }) {
     late final StreamController<R> controller;
     StreamSubscription<T>? subscription;
@@ -228,7 +238,18 @@ extension StreamExtensions<T> on Stream<T> {
             }
             closeIfIdle();
           },
-          onError: controller.addError,
+          onError: (Object error, StackTrace trace) {
+            if (onError != null) {
+              try {
+                onError(error, trace, controller.sink, closeIfIdle);
+              } catch (e, st) {
+                controller.addError(e, st);
+              }
+            } else {
+              controller.addError(error, trace);
+            }
+            closeIfIdle();
+          },
           onDone: () {
             sourceDone = true;
             onDone(controller.sink);

@@ -120,7 +120,8 @@ class Lifecycle {
   /// final file = (ctx.rest.firstOrNull ?? await Lifecycle.exit('read needs a file')).path;
   /// ```
   static Future<Never> exit([Object? message, int? code]) async {
-    if (message != null) Io.err.writeln('  ✖ $message'.red);
+    Console._stopAll();
+    if (message != null) Console._durable(() => Io.err.writeln('  ✖ $message'.red));
     await _runExitHooks();
     await killHaltedProcesses();
     _terminate(code ?? (message == null ? 0 : 1));

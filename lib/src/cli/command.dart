@@ -6,8 +6,9 @@ part of '../../cli.dart';
 /// {@category CLI}
 final class UsageException implements Exception {
   final String message;
+  final String? command;
 
-  const UsageException(this.message);
+  const UsageException(this.message, [this.command]);
 
   @override
   String toString() => message;
@@ -219,7 +220,7 @@ final class _Flag extends CliOption<bool> {
   @override
   bool _parse(String raw) => switch (raw.toLowerCase()) {
     'true' || '1' || 'yes' => true,
-    'false' || '0' || 'no' || '' => false,
+    'false' || '0' || 'no' => false,
     _ => throw UsageException('Option "--$name" is a flag: it takes true or false, not "$raw".'),
   };
 
@@ -698,6 +699,15 @@ class CliCommand {
   }
 
   Future<void> _run(List<String> args, Map<CliValue<Object?>, Object?> values, CancelToken cancel) async {
+    try {
+      await _execute(args, values, cancel);
+    } on UsageException catch (e) {
+      if (e.command == null) throw UsageException(e.message, _fullName);
+      rethrow;
+    }
+  }
+
+  Future<void> _execute(List<String> args, Map<CliValue<Object?>, Object?> values, CancelToken cancel) async {
     final rest = <String>[];
     // Taking `-h` for something of your own takes `-h` and nothing else: a command that has a
     // `--host` should still answer `--help`, and one that declares a `help` option owns the
@@ -741,11 +751,11 @@ class CliCommand {
         _printUsage();
         return;
       }
-      if (isLong && key == 'version' && _version != null && _findOption('version') == null) {
+      if (isLong && key == 'version' && _parent == null && _version != null && _findOption('version') == null) {
         Io.out.writeln('${_root.name} $_version');
         return;
       }
-      if (isLong && key == 'completion' && _root is Cli && _findOption('completion') == null) {
+      if (isLong && key == 'completion' && _parent == null && _root is Cli && _findOption('completion') == null) {
         final shell = inline ?? (i + 1 < args.length ? args[++i] : null);
         Io.out.write(_completion(_root, shell));
         return;
@@ -933,7 +943,8 @@ class Cli extends CliCommand {
     } on _NoCommand {
       await Lifecycle.exit(null, 64);
     } on UsageException catch (e) {
-      await Lifecycle.exit('${e.message}\n  Run "$name --help" for usage.', 64);
+      final cmd = e.command ?? _fullName;
+      await Lifecycle.exit('${e.message}\n  Run "$cmd --help" for usage.', 64);
     } catch (e, trace) {
       // A signal is already on its way out through the exit hooks; what the action threw
       // on being cancelled is not news.

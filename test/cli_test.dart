@@ -982,6 +982,13 @@ void main() {
       Io.color = false;
       expect('${'a'.red}b'.bold, equals('ab'));
     });
+
+    test('styling emits escapes even when stdout is redirected (CORE-4)', () {
+      final out = StringBuffer();
+      Io.out = out;
+      addTearDown(Io.reset);
+      expect('err'.red, contains('\x1B[31m'));
+    });
   });
 
   group('cli', () {
@@ -1548,6 +1555,57 @@ void main() {
       final result = await Process.run('bash', [script.path]);
       expect(result.stdout, r'dry\ run|');
     }, testOn: '!windows');
+
+    test('bash completion resolves --opt= with choices (CLI-9)', () async {
+      final app = Cli(
+        name: 'app',
+        values: [
+          Opt.among('mode', ['debug', 'release']),
+        ],
+        handler: (_) {},
+      );
+      final out = StringBuffer();
+      Io.out = out;
+      try {
+        await app.run(['--completion', 'bash']);
+      } finally {
+        Io.reset();
+      }
+      final dir = Directory.systemTemp.createTempSync('compl_bash_eq_');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final script = File('${dir.path}/c.sh')
+        ..writeAsStringSync(
+          '${out}COMP_WORDS=(app --mode=d); COMP_CWORD=1; _app_completion; '
+          r'''printf '%s|' "${COMPREPLY[@]}"''',
+        );
+      final result = await Process.run('bash', [script.path]);
+      expect(result.stdout, contains('debug'));
+    }, testOn: '!windows');
+
+    test('fish completion uses _reachable and offers help (CLI-8)', () async {
+      final app = Cli(
+        name: 'app',
+        values: [Opt.flag('quick', abbr: 'q')],
+        commands: [
+          CliCommand(
+            'sub',
+            values: [Opt.flag('quiet', abbr: 'q')],
+            handler: (_) {},
+          ),
+        ],
+        handler: (_) {},
+      );
+      final out = StringBuffer();
+      Io.out = out;
+      try {
+        await app.run(['--completion', 'fish']);
+      } finally {
+        Io.reset();
+      }
+      final fish = out.toString();
+      expect(fish, contains("-l help -d 'Print this help message'"));
+      expect(fish, contains(r"test (__app_path) = \'app sub\'"));
+    });
   });
 }
 

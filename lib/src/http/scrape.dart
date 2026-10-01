@@ -748,6 +748,8 @@ class _Host<T> {
   bool paused = false;
   DateTime pausedUntil = DateTime.fromMillisecondsSinceEpoch(0);
   bool ready = false;
+  bool robotsResolved = false;
+  bool robotsFetching = false;
   Timer? pauseTimer;
 }
 
@@ -841,56 +843,6 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
   // two buckets would double `perHost` and halve `delay` for any site linked both ways.
   _Host<T> hostOf(Uri url) => hosts.putIfAbsent('${url.scheme}://${_site(url.host)}:${url.port}', _Host<T>.new);
 
-  void checkReady(_Host<T> host) {
-    if (stopped || host.ready || host.paused || host.queue.isEmpty || host.inFlight >= cfg.perHost) return;
-    host.ready = true;
-    ready.add(host);
-  }
-
-  void push(_Host<T> host, _Item<T> item, {bool first = false}) {
-    first ? host.queue.addFirst(item) : host.queue.add(item);
-    queued++;
-    checkReady(host);
-  }
-
-  /// Requeues [item] at the front of its host after [after]; the crawl stays open meanwhile.
-  void requeue(_Host<T> host, _Item<T> item, Duration after) {
-    retries++;
-    item.attempt++;
-    waiting++;
-    late final Timer timer;
-    timer = Timer(after, () {
-      timers.remove(timer);
-      waiting--;
-      if (stopped) return;
-      push(host, item, first: true);
-      dispatch();
-    });
-    timers.add(timer);
-  }
-
-  /// Holds [host] for [duration], or for the rest of a longer hold already in place.
-  void pause(_Host<T> host, Duration duration) {
-    final until = DateTime.now().add(duration);
-    if (host.paused && host.pausedUntil.isAfter(until)) return;
-    host.paused = true;
-    host.pausedUntil = until;
-    host.pauseTimer?.cancel();
-    host.pauseTimer = Timer(duration, () {
-      host.pauseTimer = null;
-      host.paused = false;
-      checkReady(host);
-      dispatch();
-    });
-  }
-
-  /// How long to hold [host], or `null` when the server asked for longer than
-  /// [InitContext.maxRetryAfter] and the request should fail rather than wait.
-  Duration? retryAfter(Response res, _Host<T> host) {
-    if (_Retry.retryAfter(res.headers) case final asked?) return asked > cfg.maxRetryAfter ? null : asked;
-    return _Retry.backoff(host.backoffs++);
-  }
-
   /// A file the crawl reads for itself — robots.txt, a sitemap — as the bytes the server
   /// sent, or `null` for anything but a 2xx. Never through the frontier: it is not a page the
   /// crawl is for, and a failure to read it is not a failure of the crawl. Raw, so a browser
@@ -934,6 +886,80 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     final text = await robotsText(host, url, agent);
     if (text == null) return _Robots.open;
     return host.rules[agent] ??= _Robots.parse(text, agent);
+  }
+
+  void checkReady(_Host<T> host) {
+    if (stopped ||
+        host.ready ||
+        host.paused ||
+        host.queue.isEmpty ||
+        host.inFlight >= cfg.perHost ||
+        (cfg.robots && !host.robotsResolved)) {
+      return;
+    }
+    host.ready = true;
+    ready.add(host);
+  }
+
+  void push(_Host<T> host, _Item<T> item, {bool first = false}) {
+    first ? host.queue.addFirst(item) : host.queue.add(item);
+    queued++;
+    if (cfg.robots && !host.robotsResolved && !host.robotsFetching) {
+      host.robotsFetching = true;
+      final agent = scopeAgent ?? _userAgent;
+      robotsFor(host, item.url, agent).then(
+        (rules) {
+          host.robotsResolved = true;
+          if (rules.crawlDelay case final asked? when asked > host.gap) host.gap = asked;
+          checkReady(host);
+          dispatch();
+        },
+        onError: (Object _) {
+          host.robotsResolved = true;
+          checkReady(host);
+          dispatch();
+        },
+      );
+    }
+    checkReady(host);
+  }
+
+  /// Requeues [item] at the front of its host after [after]; the crawl stays open meanwhile.
+  void requeue(_Host<T> host, _Item<T> item, Duration after) {
+    retries++;
+    item.attempt++;
+    waiting++;
+    late final Timer timer;
+    timer = Timer(after, () {
+      timers.remove(timer);
+      waiting--;
+      if (stopped) return;
+      push(host, item, first: true);
+      dispatch();
+    });
+    timers.add(timer);
+  }
+
+  /// Holds [host] for [duration], or for the rest of a longer hold already in place.
+  void pause(_Host<T> host, Duration duration) {
+    final until = DateTime.now().add(duration);
+    if (host.paused && host.pausedUntil.isAfter(until)) return;
+    host.paused = true;
+    host.pausedUntil = until;
+    host.pauseTimer?.cancel();
+    host.pauseTimer = Timer(duration, () {
+      host.pauseTimer = null;
+      host.paused = false;
+      checkReady(host);
+      dispatch();
+    });
+  }
+
+  /// How long to hold [host], or `null` when the server asked for longer than
+  /// [InitContext.maxRetryAfter] and the request should fail rather than wait.
+  Duration? retryAfter(Response res, _Host<T> host) {
+    if (_Retry.retryAfter(res.headers) case final asked?) return asked > cfg.maxRetryAfter ? null : asked;
+    return _Retry.backoff(host.backoffs++);
   }
 
   bool drop() {
@@ -1100,7 +1126,7 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     // Back to a URL of this very chain — `/login` setting a cookie and sending the browser to
     // `/login` again — is followed, and the hop budget is what stops a loop. Anywhere else
     // already visited is a page this crawl has, and is counted as the drop it is.
-    if (!chain.contains(key) && !item.revisit && !visited.add(key)) {
+    if (!chain.contains(key) && !item.revisit && item.plan.onResponse == null && !visited.add(key)) {
       dropped++;
       return Future.value();
     }
@@ -1348,6 +1374,7 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
 /// `/p?` are all `/p`.
 Uri _page(Uri url) {
   url = url.removeFragment();
+  if (url.hasAuthority && url.path.isEmpty) url = url.replace(path: '/');
   if (!url.hasQuery || url.query.isNotEmpty) return url;
   final text = '$url';
   return Uri.parse(text.substring(0, text.length - 1));

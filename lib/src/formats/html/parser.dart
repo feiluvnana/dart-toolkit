@@ -43,7 +43,7 @@ const _closesSibling = <String, (Set<String>, Set<String>)>{
   'tbody': ({'thead', 'tbody', 'tfoot', 'caption'}, {'table'}),
   'tfoot': ({'thead', 'tbody', 'tfoot', 'caption'}, {'table'}),
   'option': ({'option'}, {'select', 'datalist', 'optgroup'}),
-  'optgroup': ({'optgroup', 'option'}, {'select'}),
+  'optgroup': ({'optgroup'}, {'select'}),
   'rt': ({'rt', 'rp'}, {'ruby'}),
   'rp': ({'rt', 'rp'}, {'ruby'}),
 };
@@ -309,11 +309,13 @@ final class _Parser {
     // A link cannot hold a link, nor a heading a heading: the second closes the first.
     if (name == 'a' || name == 'nobr') closeInScope(name == 'a' ? const {'a'} : const {'nobr'}, _linkBoundaries);
     if (_headings.contains(name) && _headings.contains(current.name)) open.removeLast();
+    if (name == 'optgroup') closeInScope(const {'option'}, const {'select', 'optgroup'});
     if (_closesSibling[name] case (final closes, final boundary)?) closeInScope(closes, boundary);
     if (inBody) {
       // Table plumbing a browser would synthesise: <tr> straight in <table>, <td> without <tr>.
       if (name == 'tr' && current.name == 'table') insert(Element('tbody'), selfClosing: false);
-      if ((name == 'td' || name == 'th') && (current.name == 'table' || current.name == 'tbody')) {
+      if ((name == 'td' || name == 'th') &&
+          (current.name == 'table' || current.name == 'tbody' || current.name == 'thead' || current.name == 'tfoot')) {
         insert(Element('tr'), selfClosing: false);
       }
     }

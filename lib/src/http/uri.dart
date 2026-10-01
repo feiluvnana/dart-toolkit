@@ -13,13 +13,22 @@ extension UriExtensions on Uri {
   /// This URI with [params] added to its query; a `null` value removes the parameter.
   ///
   /// `url.withQuery({'page': 2, 'q': 'dart'})`.
-  Uri withQuery(Map<String, Object?> params) => replace(
-    queryParameters: {
-      ...queryParameters,
-      for (final MapEntry(:key, :value) in params.entries)
-        if (value != null) key: '$value',
-    }..removeWhere((k, _) => params.containsKey(k) && params[k] == null),
-  );
+  Uri withQuery(Map<String, Object?> params) {
+    final all = {...queryParametersAll};
+    params.forEach((k, v) => v == null ? all.remove(k) : all[k] = v is Iterable ? [for (final x in v) '$x'] : ['$v']);
+    return all.isEmpty ? removeQuery() : replace(queryParameters: all);
+  }
+
+  /// This URI without its query string.
+  Uri removeQuery() {
+    if (!hasQuery) return this;
+    final s = toString();
+    final q = s.indexOf('?');
+    if (q < 0) return this;
+    final f = s.indexOf('#', q);
+    final rest = f < 0 ? '' : s.substring(f);
+    return Uri.parse(s.substring(0, q) + rest);
+  }
 
   /// Sends [request] through the enclosing [Http.scope]'s client, or a fresh one, and
   /// buffers the body.

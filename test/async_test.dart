@@ -420,6 +420,32 @@ void main() {
       expect(await throttled, equals([1, 4]));
     });
 
+    test('throttle(trailing: true) emits pending item before error (ASYNC-2)', () async {
+      final controller = StreamController<int>();
+      final items = <int>[];
+      Object? receivedError;
+      final completer = Completer<void>();
+
+      controller.stream
+          .throttle(100.ms, leading: true, trailing: true)
+          .listen(
+            items.add,
+            onError: (Object e) {
+              receivedError = e;
+              completer.complete();
+            },
+          );
+
+      controller.add(1); // emitted immediately (leading)
+      controller.add(2); // pending (trailing)
+      controller.addError(StateError('boom'));
+
+      await completer.future;
+      expect(items, equals([1, 2]));
+      expect(receivedError, isA<StateError>());
+      await controller.close();
+    });
+
     test('chunkEvery batches per window and skips empty windows', () async {
       final controller = StreamController<int>();
       final windows = controller.stream.chunkEvery(30.ms).toList();
@@ -768,6 +794,17 @@ void main() {
       expect(await Future.wait(inFlight), [0, 0]);
     });
 
+    test('Pool.close() completes already-queued runs and refuses new ones (ASYNC-3)', () async {
+      final pool = await Pool.spawn(_Slow.new, size: 1, isolate: false);
+      final first = pool.run(1);
+      final queued = pool.run(2);
+      final closing = pool.close();
+      expect(() => pool.run(3), throwsA(isA<StateError>()));
+      await closing;
+      expect(await first, equals(1));
+      expect(await queued, equals(2));
+    });
+
     test('the queue is first come, first served', () async {
       final pool = await Pool.spawn(_Tracking.new, size: 1, isolate: false);
       addTearDown(pool.close);
@@ -801,6 +838,15 @@ void main() {
       await expectLater(Cancel.scope(() => 5.s.delay(), timeout: 50.ms), throwsA(isA<CancelledException>()));
       expect(watch.elapsed, lessThan(4.s));
       expect(await Cancel.scope(() => 1, timeout: 1.s), 1);
+    });
+
+    test('Cancel.scope(token: shared, timeout:) does not cancel the shared token on timeout (CORE-1)', () async {
+      final shared = CancelToken();
+      await expectLater(
+        Cancel.scope(() => 5.s.delay(), token: shared, timeout: 50.ms),
+        throwsA(isA<CancelledException>()),
+      );
+      expect(shared.isCancelled, isFalse);
     });
 
     test('delay, Semaphore and Mutex stop when the scope is cancelled', () async {

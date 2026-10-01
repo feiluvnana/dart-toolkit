@@ -83,6 +83,9 @@ abstract class _Live {
   /// Whether it still wants to be drawn at all; a finished one never repaints.
   bool get _running;
 
+  /// Stops this renderer and cancels any timer.
+  void _stop();
+
   /// Redraws through the frame gate, and only while this is the renderer on screen.
   void _render() {
     if (!_running || !identical(Console._top, this)) return;
@@ -97,7 +100,8 @@ abstract class _Live {
     final buffer = StringBuffer();
     if (_rows > 0) buffer.write('\x1b[${_rows}A');
     for (final line in lines) {
-      buffer.write('\r\x1b[K$line\n');
+      final sanitized = line.replaceAll(RegExp(r'[\x00-\x1a\x1c-\x1f\x7f]'), ' ');
+      buffer.write('\r\x1b[K$sanitized\n');
     }
     // Rows the last frame used and this one does not: a board whose slot count shrank.
     for (var i = lines.length; i < _rows; i++) {
@@ -255,6 +259,9 @@ final class Spinner extends _Live {
   /// Ends it with no final line at all.
   void stop() => _finish(null, null, null, LogLevel.info);
 
+  @override
+  void _stop() => stop();
+
   /// The final line is a log line at [severity]: `-q` keeps a failure and drops a success.
   void _finish(String? mark, String? message, String Function(String)? paint, LogLevel severity) {
     if (_stopped) return;
@@ -311,6 +318,9 @@ abstract class _Meter extends _Live {
     Console._pop(this);
     if (message != null && message.isNotEmpty) Console._log(LogLevel.info, '  ✓ $message'.green);
   }
+
+  @override
+  void _stop() => done();
 }
 
 /// A single-line progress bar over [total] steps.
@@ -516,6 +526,7 @@ class Console {
     _top?._wipe();
     _stack.add(live);
     IoBridge.above = _durable;
+    IoBridge.suspend = _suspend;
     live._paint();
   }
 
@@ -525,8 +536,30 @@ class Console {
     final wasTop = index == _stack.length - 1;
     if (wasTop) live._wipe();
     _stack.removeAt(index);
-    if (_stack.isEmpty) IoBridge.above = null;
+    if (_stack.isEmpty) {
+      IoBridge.above = null;
+      IoBridge.suspend = null;
+    }
     if (wasTop) _top?._paint();
+  }
+
+  static Future<T> _suspend<T>(Future<T> Function() action) async {
+    final live = _top?.._wipe();
+    try {
+      return await action();
+    } finally {
+      live?._paint();
+    }
+  }
+
+  static void _stopAll() {
+    while (_stack.isNotEmpty) {
+      final live = _stack.removeLast();
+      live._wipe();
+      live._stop();
+    }
+    IoBridge.above = null;
+    IoBridge.suspend = null;
   }
 
   /// Writes something that stays on screen, above whatever is live.
@@ -685,10 +718,23 @@ class Console {
 
   /// Prompts for sensitive input, hiding typed characters.
   static Future<String> secret(String message) => _prompt(() async {
+    StreamSubscription<ProcessSignal>? sigint;
+    StreamSubscription<ProcessSignal>? sigterm;
+    void onSig(ProcessSignal s) {
+      _restoreTerminal();
+      exit(128 + s.signalNumber);
+    }
+
     try {
       if (Io.input == null && stdin.hasTerminal) {
         stdin.echoMode = false;
         _echoOff = true;
+        try {
+          sigint = ProcessSignal.sigint.watch().listen(onSig);
+          if (!Platform.isWindows) {
+            sigterm = ProcessSignal.sigterm.watch().listen(onSig);
+          }
+        } catch (_) {}
       }
     } catch (_) {}
     try {
@@ -696,6 +742,8 @@ class Console {
       Io.err.writeln();
       return input;
     } finally {
+      await sigint?.cancel();
+      await sigterm?.cancel();
       _restoreTerminal();
     }
   });

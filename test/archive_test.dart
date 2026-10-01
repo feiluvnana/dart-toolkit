@@ -76,6 +76,8 @@ void main() {
     }
     final zipEntries = await (tmp / 'p.zip').archiveEntries();
     expect(zipEntries.where((e) => !e.isDir).every((e) => e.isEncrypted), isTrue);
+    final szEntries = await (tmp / 'p.7z').archiveEntries(password: 'sesame');
+    expect(szEntries.where((e) => !e.isDir).every((e) => e.isEncrypted), isTrue);
     expect(() => src.archiveTo(tmp / 'x.tar.gz', password: 'pw'), throwsArgumentError);
   });
 
@@ -354,5 +356,105 @@ void main() {
       expect(utf8.decode(await archive.entry('sub/text.txt')), (src / 'sub' / 'text.txt').readTextSync(), reason: ext);
       await expectLater(() => archive.entry('nope.txt'), throwsA(isA<FormatException>()), reason: ext);
     }
+  });
+
+  test('ARC-2 & ARC-3: compression level validation and zip level 0 (Stored)', () async {
+    final note = src / 'note.txt';
+    // Invalid bzip2 level 0
+    await expectLater(
+      () => note.compressTo(tmp / 'bad.bz2', codec: Compression.bzip2, level: 0),
+      throwsA(isA<FormatException>()),
+    );
+    // Invalid gzip negative level
+    await expectLater(
+      () => note.compressTo(tmp / 'bad.gz', codec: Compression.gzip, level: -5),
+      throwsA(isA<FormatException>()),
+    );
+    // Invalid gzip level > 9
+    await expectLater(
+      () => note.compressTo(tmp / 'bad.gz', codec: Compression.gzip, level: 10),
+      throwsA(isA<FormatException>()),
+    );
+    // Valid zstd negative level
+    final zst = tmp / 'fast.zst';
+    await note.compressTo(zst, codec: Compression.zstd, level: -1);
+    expect(zst.existsSync(), isTrue);
+    await zst.decompressTo(tmp / 'fast.txt');
+    expect((tmp / 'fast.txt').readTextSync(), note.readTextSync());
+
+    // Zip with level: 0 (Stored)
+    final zipStored = tmp / 'stored.zip';
+    await src.archiveTo(zipStored, level: 0);
+    final entries = await zipStored.archiveEntries();
+    final noteEntry = entries.firstWhere((e) => e.name == 'note.txt');
+    expect(noteEntry.compressedSize, equals(noteEntry.size));
+    await zipStored.extractTo(tmp / 'stored_out');
+    expect(digests(tmp / 'stored_out'), equals(digests(src)));
+  });
+
+  test('ARC-4: 7z encryption flag and executable bit', () async {
+    final archive = tmp / 'enc.7z';
+    await src.archiveTo(archive, password: 'secret');
+    final entries = await archive.archiveEntries(password: 'secret');
+    expect(entries.where((e) => !e.isDir).every((e) => e.isEncrypted), isTrue);
+
+    if (!Platform.isWindows) {
+      final script = src / 'run.sh';
+      script.writeTextSync('#!/bin/sh\necho ok\n');
+      Process.runSync('chmod', ['755', script]);
+      final sz = tmp / 'exec.7z';
+      await src.archiveTo(sz);
+      final out = tmp / 'exec_out';
+      await sz.extractTo(out);
+      final stat = File((out / 'run.sh').path).statSync();
+      expect(stat.mode & 0x1ED, 0x1ED); // 0755
+    }
+  });
+
+  test('ARC-5: archive preserves symlinks in zip and tar', () async {
+    final link = src / 'note_link.txt';
+    Link(link.path).createSync('note.txt');
+    for (final ext in ['.zip', '.tar', '.tar.gz']) {
+      final arc = tmp / 'sym$ext';
+      await src.archiveTo(arc);
+      final out = tmp / 'sym_out$ext';
+      await arc.extractTo(out);
+      final outLink = Link((out / 'note_link.txt').path);
+      expect(outLink.existsSync(), isTrue, reason: ext);
+      expect(outLink.targetSync(), 'note.txt', reason: ext);
+    }
+  }, testOn: '!windows');
+
+  test('ARC-6: directory permissions and mtimes are restored in reverse order', () async {
+    final privDir = src / 'private_dir';
+    privDir.mkdirSync();
+    (privDir / 'secret.txt').writeTextSync('secret');
+    Process.runSync('chmod', ['700', privDir]);
+
+    for (final ext in ['.zip', '.7z', '.tar']) {
+      final arc = tmp / 'perm$ext';
+      await src.archiveTo(arc);
+      final out = tmp / 'perm_out$ext';
+      await arc.extractTo(out);
+      final stat = Directory((out / 'private_dir').path).statSync();
+      expect(stat.mode & 0x1FF, 0x1C0, reason: '$ext directory should restore 0700 mode');
+    }
+    Process.runSync('chmod', ['755', privDir]);
+  }, testOn: '!windows');
+
+  test('ARC-7: glob with braces and character classes in extractTo(only:)', () async {
+    final arc = tmp / 'glob.zip';
+    await src.archiveTo(arc);
+
+    final outBraces = tmp / 'braces_out';
+    await arc.extractTo(outBraces, only: '{note.txt,sub/text.txt}');
+    expect(
+      [for (final f in outBraces.filesSync(recursive: true)) f.relativeTo(outBraces)]..sort(),
+      ['note.txt', 'sub/text.txt']..sort(),
+    );
+
+    final outClasses = tmp / 'classes_out';
+    await arc.extractTo(outClasses, only: '[n]ote.txt');
+    expect([for (final f in outClasses.filesSync(recursive: true)) f.relativeTo(outClasses)], ['note.txt']);
   });
 }

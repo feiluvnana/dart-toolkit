@@ -62,13 +62,21 @@ class Cancel {
   /// keeps working.
   static Future<T> scope<T>(FutureOr<T> Function() body, {CancelToken? token, Duration? timeout}) async {
     final outer = Cancel.token;
-    final own = token ?? CancelToken();
-    final unlink = outer == null || identical(outer, own) ? null : outer.onCancel(() => own.cancel(outer.reason));
+    final own = (token != null && timeout != null) ? CancelToken() : (token ?? CancelToken());
+    final List<void Function()> unlinks = [];
+    if (token != null && !identical(token, own)) {
+      unlinks.add(token.onCancel(() => own.cancel(token.reason)));
+    }
+    if (outer != null && !identical(outer, own) && !identical(outer, token)) {
+      unlinks.add(outer.onCancel(() => own.cancel(outer.reason)));
+    }
     final timer = timeout == null ? null : Timer(timeout, () => own.cancel('Timed out after ${timeout.humanized}.'));
     try {
       return await runZoned(() async => body(), zoneValues: {_cancelKey: own});
     } finally {
-      unlink?.call();
+      for (final unlink in unlinks) {
+        unlink();
+      }
       timer?.cancel();
     }
   }
@@ -79,7 +87,7 @@ class Cancel {
 /// {@category Concurrency}
 class CancelToken {
   bool _isCancelled = false;
-  final Set<void Function()> _listeners = {};
+  final List<void Function()> _listeners = [];
   Object? _reason;
 
   CancelToken();
@@ -95,12 +103,15 @@ class CancelToken {
     if (_isCancelled) return;
     _isCancelled = true;
     _reason = reason;
-    for (final listener in _listeners.toList()) {
+    final pending = _listeners.toList();
+    _listeners.clear();
+    for (final listener in pending) {
       try {
         listener();
-      } catch (_) {}
+      } catch (e, st) {
+        Zone.current.handleUncaughtError(e, st);
+      }
     }
-    _listeners.clear();
   }
 
   /// Registers [listener] to run when cancellation is requested.
@@ -109,11 +120,16 @@ class CancelToken {
   /// own — a long-lived token otherwise retains every listener ever registered.
   void Function() onCancel(void Function() listener) {
     if (_isCancelled) {
-      listener();
+      try {
+        listener();
+      } catch (e, st) {
+        Zone.current.handleUncaughtError(e, st);
+      }
       return () {};
     }
-    _listeners.add(listener);
-    return () => _listeners.remove(listener);
+    void registration() => listener();
+    _listeners.add(registration);
+    return () => _listeners.remove(registration);
   }
 
   /// Throws a [CancelledException] if cancellation has already been requested.

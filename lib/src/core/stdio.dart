@@ -12,14 +12,16 @@ class Io {
   static String? Function()? input;
 
   /// The active standard output sink. Assign to redirect it; assign `null` to restore.
-  static StringSink get out => _out ?? (_outTakesColor ? _stdout : _plainStdout);
+  static StringSink get out =>
+      _out != null ? (_outTakesColor ? _out! : _Plain(_out!)) : (_outTakesColor ? _stdout : _plainStdout);
   static set out(StringSink? sink) => _out = sink;
 
   /// The active standard error sink. Assign to redirect it; assign `null` to restore.
   ///
   /// The process's stderr is asked about colour on its own: `app 2>log` keeps colour on the
   /// terminal and writes a log with no escapes in it.
-  static StringSink get err => _err ?? (_errTakesColor ? _stderr : _plainStderr);
+  static StringSink get err =>
+      _err != null ? (_errTakesColor ? _err! : _Plain(_err!)) : (_errTakesColor ? _stderr : _plainStderr);
   static set err(StringSink? sink) => _err = sink;
 
   static bool get _outTakesColor => _color ?? _ansiTerminal;
@@ -115,12 +117,15 @@ class Io {
 
   static set color(bool? value) => _color = value;
 
+  /// Whether an explicit colour override was set via [color], or `null` if none.
+  static bool? get colorOverride => _color;
+
   static bool? _color;
 
   /// Whether the process's stdout takes escapes: a native call, asked once.
   static final bool _ansiTerminal = () {
     try {
-      return stdout.supportsAnsiEscapes;
+      return stdout.supportsAnsiEscapes && !Env.has('NO_COLOR');
     } catch (_) {
       return false;
     }
@@ -180,6 +185,9 @@ final class IoBridge {
 
   /// Runs a durable write above the live region, or `null` when nothing is live.
   static void Function(void Function() write)? above;
+
+  /// Runs [action] with the live region wiped, repainting when the future completes.
+  static Future<T> Function<T>(Future<T> Function() action)? suspend;
 }
 
 /// A sink that drops escapes on the way through: stderr when it is not a terminal.
@@ -209,10 +217,17 @@ int _charVisualWidth(int rune) {
   // Combining characters / zero width
   if (rune >= 0x0300 && rune <= 0x036f) return 0;
   if (rune >= 0x200b && rune <= 0x200f) return 0;
+  if (rune == 0x200d) return 0;
   if (rune >= 0xfe00 && rune <= 0xfe0f) return 0;
+  if (rune >= 0x1f3fb && rune <= 0x1f3ff) return 0;
 
-  // East Asian Wide / Fullwidth / Emoji. Dingbats (✓ ✖ ⚠, U+2600–27BF) are one column.
-  if ((rune >= 0x1100 && rune <= 0x115f) ||
+  // East Asian Wide / Fullwidth / Emoji. Dingbats (✓ ✖ ⚠, U+2600–27BF) are mostly one column,
+  // but ✅, ❌, ☕, ⚡ are Wide (2 columns).
+  if (rune == 0x2615 ||
+      rune == 0x26a1 ||
+      rune == 0x2705 ||
+      rune == 0x274c ||
+      (rune >= 0x1100 && rune <= 0x115f) ||
       rune == 0x2329 ||
       rune == 0x232a ||
       (rune >= 0x2e80 && rune <= 0x303e) ||

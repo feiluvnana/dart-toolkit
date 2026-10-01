@@ -310,9 +310,64 @@ SINGLE_QUOTED='single quote value'
       });
     });
 
+    test('Env.parse handles unclosed quotes without quadratic blowup (CORE-2)', () {
+      final input = 'UNCLOSED="start of value\n${List.filled(5000, 'KEY=val').join('\n')}';
+      final watch = Stopwatch()..start();
+      final parsed = Env.parse(input);
+      expect(watch.elapsedMilliseconds, lessThan(300));
+      expect(parsed['UNCLOSED'], '"start of value');
+      expect(parsed['KEY'], 'val');
+    });
+
+    test('Env.parse repeated key has last line win in both parsed and Env.get (CORE-3)', () {
+      Env.remove('REPEAT_KEY');
+      addTearDown(() => Env.remove('REPEAT_KEY'));
+      final parsed = Env.parse('REPEAT_KEY=first\nREPEAT_KEY=second\n');
+      expect(parsed['REPEAT_KEY'], 'second');
+      expect(Env.get('REPEAT_KEY'), 'second');
+    });
+
     test('jittered keeps sub-millisecond precision', () {
       const d = Duration(microseconds: 900);
       expect(d.jittered(0), d);
+    });
+
+    test('CancelToken: registering same function twice gives independent slots (CORE-6)', () {
+      final token = CancelToken();
+      var count = 0;
+      void listener() => count++;
+
+      final off1 = token.onCancel(listener);
+      final off2 = token.onCancel(listener);
+
+      off1();
+      token.cancel();
+      expect(count, 1);
+      off2();
+    });
+
+    test('CancelToken: throwing listener routes to Zone uncaught error (CORE-7)', () {
+      final errors = <Object>[];
+      runZonedGuarded(
+        () {
+          final token = CancelToken();
+          token.onCancel(() => throw 'listener error');
+          token.cancel();
+        },
+        (e, st) {
+          errors.add(e);
+        },
+      );
+      expect(errors, contains('listener error'));
+    });
+
+    test('Io.width measures wide dingbats and skin tone modifiers correctly (CORE-7)', () {
+      expect(Io.width('✅'), 2);
+      expect(Io.width('❌'), 2);
+      expect(Io.width('☕'), 2);
+      expect(Io.width('⚡'), 2);
+      // '👍' is 2, skin tone modifier is 0, so '👍🏽' is 2
+      expect(Io.width('👍🏽'), 2);
     });
   });
 

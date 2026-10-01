@@ -12,15 +12,15 @@ void main() {
   );
 
   test('version is read once', () {
-    expect(NativeLib.version, greaterThan(0));
+    expect(NativeLib.version, equals(2));
     expect(NativeLib.version, NativeLib.version);
   }, skip: NativeLib.isAvailable ? null : 'dart_toolkit_native did not load');
 
   test('require hands over the library, or says why it cannot', () {
     if (NativeLib.isAvailable) {
-      expect(NativeBridge.require('x'), isNotNull);
+      expect(NativeBridge.require(), isNotNull);
     } else {
-      expect(() => NativeBridge.require('hashing'), throwsA(isA<UnsupportedError>()));
+      expect(() => NativeBridge.require(), throwsA(isA<UnsupportedError>()));
     }
   });
 

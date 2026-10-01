@@ -75,8 +75,8 @@ extension StringEncodingExtensions on String {
     return out;
   }
 
-  /// This base64 or base64url string as bytes, padding optional.
-  Uint8List get base64Bytes => base64Decode(base64.normalize(this));
+  /// This base64 or base64url string as bytes, padding optional; whitespace is ignored.
+  Uint8List get base64Bytes => base64Decode(base64.normalize(replaceAll(_whitespace, '')));
 
   /// This base32 string as bytes; case, spaces, dashes and padding are ignored.
   Uint8List get base32Bytes {

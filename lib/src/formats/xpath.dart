@@ -85,7 +85,7 @@ final class _Shared {
     final order = <Node, int>{document: 0};
     _eachBelow(document, (n) {
       order[n] = order.length;
-      if (n is Element) {
+      if (n is Element && n is! _Document) {
         for (final MapEntry(:key, :value) in n.attributes.entries) {
           order[Attribute(key, value, n)] = order.length;
         }
@@ -113,8 +113,8 @@ Node? _up(Node n) => switch (n) {
 
 /// Child nodes of an element, or the root element of a document node.
 List<Node> _down(Node n) => switch (n) {
-  Element() => n.nodes,
   _Document() => [n.root],
+  Element() => n.nodes,
   _ => const [],
 };
 
@@ -331,10 +331,10 @@ final class _Binary extends _XNode {
 
   /// XPath 1.0 comparison: a node-set compares by the string value of any of its nodes.
   static bool _compare(Object a, Object b, bool Function(String, String) str, bool Function(double, double) num) {
+    if (a is bool || b is bool) return str(_bool(a).toString(), _bool(b).toString());
     if (a is List<Node> && b is List<Node>) return a.any((x) => b.any((y) => str(x.text, y.text)));
     if (a is List<Node>) return a.any((x) => _compare(x.text, b, str, num));
     if (b is List<Node>) return b.any((y) => _compare(a, y.text, str, num));
-    if (a is bool || b is bool) return str(_bool(a).toString(), _bool(b).toString());
     if (a is double || b is double) return num(_num(a), _num(b));
     return str(_string(a), _string(b));
   }
@@ -594,7 +594,12 @@ final class _XStep {
     _NodeTest.name => _nameOf(n) == name,
   };
 
-  static String _nameOf(Node n) => n is Element ? n.name : (n as Attribute).name;
+  static String _nameOf(Node n) => switch (n) {
+    _Document() => '',
+    Element() => n.name,
+    Attribute() => n.name,
+    _ => '',
+  };
 
   /// Visits the axis from [n] in axis order until [visit] returns true; returns whether it did.
   bool _each(_Ctx c, Node n, bool Function(Node) visit) {
@@ -617,7 +622,7 @@ final class _XStep {
           if (visit(p)) return true;
         }
       case _Axis.attribute:
-        if (n is Element) {
+        if (n is Element && n is! _Document) {
           for (final MapEntry(:key, :value) in n.attributes.entries) {
             if (visit(Attribute(key, value, n))) return true;
           }
@@ -711,7 +716,7 @@ final class _DescendantStep extends _XStep {
         out.add(m);
         next[top] = j + 1;
       }
-      if (m is Element) enter(m);
+      if (m is Element && m is! _Document) enter(m);
     }
     return out;
   }

@@ -63,6 +63,8 @@ class Env {
   static Map<String, String> parse(String source, {bool override = false}) {
     final parsed = <String, String>{};
     final lines = source.split(_envLineBreakRegex);
+    final existingCustom = _custom.keys.toSet();
+    final existingPlatform = Platform.environment.keys.toSet();
 
     for (var n = 0; n < lines.length; n++) {
       var line = lines[n].trim();
@@ -79,16 +81,9 @@ class Env {
       if (value.startsWith('"') || value.startsWith("'")) {
         // A quote that does not close on its line closes on a later one; one that never
         // closes is the line's own text, and takes no line after it.
-        var raw = value;
-        var closed = _quoted(raw);
-        var end = n;
-        while (closed == null && end + 1 < lines.length) {
-          raw = '$raw\n${lines[++end]}';
-          closed = _quoted(raw);
-        }
-        if (closed != null) {
-          value = closed;
-          n = end;
+        if (_parseQuoted(lines, n, value) case final res?) {
+          value = res.value;
+          n = res.endLine;
         }
       } else {
         // A comment starts at a `#` after whitespace, as in a shell: `URL=http://x/#frag` and
@@ -98,7 +93,7 @@ class Env {
       }
 
       parsed[key] = value;
-      if (override || (!Platform.environment.containsKey(key) && !_custom.containsKey(key))) {
+      if (override || (!existingPlatform.contains(key) && !existingCustom.contains(key))) {
         _custom[key] = value;
       }
     }
@@ -106,30 +101,85 @@ class Env {
     return parsed;
   }
 
-  /// The value of a quoted [raw] up to its closing quote — with `\"`, `\\` and `\n`
-  /// unescaped inside double quotes, and nothing inside single ones — or `null` when it
-  /// never closes.
-  static String? _quoted(String raw) {
-    if (raw.startsWith("'")) {
-      final close = raw.indexOf("'", 1);
-      return close == -1 ? null : raw.substring(1, close);
+  /// Parses a quoted value spanning lines starting at [startLine].
+  /// Returns the unescaped value and the line index where the quote closed, or `null` if unclosed.
+  static ({String value, int endLine})? _parseQuoted(List<String> lines, int startLine, String value) {
+    if (value.startsWith("'")) {
+      final close = value.indexOf("'", 1);
+      if (close != -1) return (value: value.substring(1, close), endLine: startLine);
+      for (var l = startLine + 1; l < lines.length; l++) {
+        final c = lines[l].indexOf("'");
+        if (c != -1) {
+          final parts = [
+            value.substring(1),
+            for (var i = startLine + 1; i < l; i++) lines[i],
+            lines[l].substring(0, c),
+          ];
+          return (value: parts.join('\n'), endLine: l);
+        }
+      }
+      return null;
     }
-    final out = StringBuffer();
-    for (var i = 1; i < raw.length; i++) {
-      final char = raw[i];
-      if (char == '"') return out.toString();
-      if (char == r'\' && i + 1 < raw.length) {
-        final next = raw[++i];
-        out.write(switch (next) {
-          'n' => '\n',
-          '"' || r'\' => next,
-          _ => '\\$next',
-        });
-      } else {
-        out.write(char);
+
+    var foundClose = false;
+    var closeLine = -1;
+    var closeCol = -1;
+    var escaped = false;
+    for (var i = 1; i < value.length; i++) {
+      if (escaped) {
+        escaped = false;
+      } else if (value[i] == r'\') {
+        escaped = true;
+      } else if (value[i] == '"') {
+        foundClose = true;
+        closeLine = startLine;
+        closeCol = i;
+        break;
       }
     }
-    return null;
+    if (!foundClose) {
+      for (var l = startLine + 1; l < lines.length; l++) {
+        final text = lines[l];
+        for (var i = 0; i < text.length; i++) {
+          if (escaped) {
+            escaped = false;
+          } else if (text[i] == r'\') {
+            escaped = true;
+          } else if (text[i] == '"') {
+            foundClose = true;
+            closeLine = l;
+            closeCol = i;
+            break;
+          }
+        }
+        if (foundClose) break;
+      }
+    }
+    if (!foundClose) return null;
+
+    final out = StringBuffer();
+    var esc = false;
+    for (var l = startLine; l <= closeLine; l++) {
+      final text = l == startLine ? value.substring(1) : lines[l];
+      final limit = l == closeLine ? (l == startLine ? closeCol - 1 : closeCol) : text.length;
+      if (l > startLine) out.write('\n');
+      for (var i = 0; i < limit; i++) {
+        if (esc) {
+          esc = false;
+          final next = text[i];
+          out.write(switch (next) {
+            'n' => '\n',
+            '"' || r'\' => next,
+            _ => '\\$next',
+          });
+        } else if (text[i] == r'\') {
+          esc = true;
+        } else {
+          out.write(text[i]);
+        }
+      }
+    }
+    return (value: out.toString(), endLine: closeLine);
   }
 
   /// Loads environment variables from the `.env` file at [path].

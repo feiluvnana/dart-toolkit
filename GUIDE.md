@@ -601,8 +601,8 @@ e.markup;        // serialised; e.innerMarkup for the content
 e.table;         // a <table> as a Table: repeated headers become Price_2, colspan/rowspan fill
 ```
 
-On `Elements`, the singular readings answer for the first match: `text` throws when nothing
-matched, and `attr` is `null`. The plurals (`texts`, `lines`) answer for all matches. `Nodes` is what `$x`
+On `Elements`, the singular readings answer for the first match: `text` and `attr` throw when nothing
+matched (`attrOrNull` returns `null`). The plurals (`texts`, `lines`) answer for all matches. `Nodes` is what `$x`
 returns, since XPath can select attributes and text nodes; `.elements` narrows it.
 
 XML keeps case and prefixes:

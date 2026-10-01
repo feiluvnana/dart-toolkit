@@ -21,14 +21,40 @@ abstract final class NativeLib {
     return _reason;
   }
 
+  /// The ABI version this Dart package expects from dart_toolkit_native.
+  static const int expectedVersion = 2;
+
   /// The ABI version the library reports; 0 when it did not load.
-  static final int version = _library?.lookupFunction<Uint32 Function(), int Function()>('tk_version')() ?? 0;
+  static int get version {
+    _library;
+    return _version;
+  }
+
+  static int _version = 0;
 
   static DynamicLibrary? _load() {
-    final candidates = <String>[
-      ?Platform.environment['DART_TOOLKIT_NATIVE'],
-      p.join(p.dirname(Platform.resolvedExecutable), NativeBridge.fileName),
-    ];
+    final override = Platform.environment['DART_TOOLKIT_NATIVE'];
+    if (override != null) {
+      if (!File(override).existsSync()) {
+        _reason = 'DART_TOOLKIT_NATIVE file not found: $override';
+        return null;
+      }
+      try {
+        final lib = DynamicLibrary.open(override);
+        final ver = _checkVersion(lib);
+        if (ver != expectedVersion) {
+          _reason = '$override reported ABI version $ver, expected $expectedVersion';
+          return null;
+        }
+        _version = ver;
+        return lib;
+      } catch (e) {
+        _reason = '$override: $e';
+        return null;
+      }
+    }
+
+    final candidates = <String>[p.join(p.dirname(Platform.resolvedExecutable), NativeBridge.fileName)];
     // Inside the package, for `dart run` from a checkout or a pub cache.
     final root = _packageRoot();
     if (root != null) candidates.add(p.join(root, 'native', 'prebuilt', NativeBridge.target, NativeBridge.fileName));
@@ -36,13 +62,29 @@ abstract final class NativeLib {
     for (final path in candidates) {
       if (!File(path).existsSync()) continue;
       try {
-        return DynamicLibrary.open(path);
+        final lib = DynamicLibrary.open(path);
+        final ver = _checkVersion(lib);
+        if (ver != expectedVersion) {
+          failures.add('$path reported ABI version $ver, expected $expectedVersion');
+          continue;
+        }
+        _version = ver;
+        return lib;
       } catch (e) {
         failures.add('$path: $e');
       }
     }
     _reason = failures.isEmpty ? 'no ${NativeBridge.fileName} at ${candidates.join(', ')}' : failures.join('; ');
     return null;
+  }
+
+  static int _checkVersion(DynamicLibrary lib) {
+    try {
+      final fn = lib.lookupFunction<Uint32 Function(), int Function()>('tk_version');
+      return fn();
+    } catch (_) {
+      return 0;
+    }
   }
 
   /// The package root, from the location of this library.
@@ -77,11 +119,11 @@ abstract final class NativeBridge {
     return '${Platform.operatingSystem}_$arch';
   }
 
-  /// The library, or an [UnsupportedError] that says what [feature] needed and why it is absent.
-  static DynamicLibrary require(String feature) {
+  /// The library, or an [UnsupportedError] that says why it is absent.
+  static DynamicLibrary require() {
     final lib = NativeLib._library;
     if (lib == null) {
-      throw UnsupportedError('$feature needs dart_toolkit_native, which did not load: ${NativeLib.reason}');
+      throw UnsupportedError('dart_toolkit_native did not load: ${NativeLib.reason}');
     }
     return lib;
   }
@@ -101,24 +143,20 @@ abstract final class NativeBridge {
     }
   }
 
-  static final _lastError = require(
-    'error',
-  ).lookupFunction<Int32 Function(Pointer<Uint8>, IntPtr), int Function(Pointer<Uint8>, int)>('tk_last_error');
+  static final _lastError = require()
+      .lookupFunction<Int32 Function(Pointer<Uint8>, IntPtr), int Function(Pointer<Uint8>, int)>('tk_last_error');
 
   /// The library's own allocator, rather than the host process's `malloc`.
   ///
   /// `DynamicLibrary.process()` cannot find `malloc` on every platform, and sharing an
   /// allocator across the boundary by coincidence is not worth the one saved export.
-  static final Pointer<Uint8> Function(int) _alloc = require(
-    'memory',
-  ).lookupFunction<Pointer<Uint8> Function(IntPtr), Pointer<Uint8> Function(int)>('tk_alloc');
-  static final void Function(Pointer<Uint8>, int) _dealloc = require(
-    'memory',
-  ).lookupFunction<Void Function(Pointer<Uint8>, IntPtr), void Function(Pointer<Uint8>, int)>('tk_dealloc');
+  static final Pointer<Uint8> Function(int) _alloc = require()
+      .lookupFunction<Pointer<Uint8> Function(IntPtr), Pointer<Uint8> Function(int)>('tk_alloc');
+  static final void Function(Pointer<Uint8>, int) _dealloc = require()
+      .lookupFunction<Void Function(Pointer<Uint8>, IntPtr), void Function(Pointer<Uint8>, int)>('tk_dealloc');
   // What the library allocated itself, as opposed to what [alloc] handed out.
-  static final void Function(Pointer<Uint8>, int) _free = require(
-    'free',
-  ).lookupFunction<Void Function(Pointer<Uint8>, IntPtr), void Function(Pointer<Uint8>, int)>('tk_free');
+  static final void Function(Pointer<Uint8>, int) _free = require()
+      .lookupFunction<Void Function(Pointer<Uint8>, IntPtr), void Function(Pointer<Uint8>, int)>('tk_free');
 
   /// [size] bytes of native memory, released by [free].
   static Pointer<Uint8> alloc(int size) => _alloc(size);
@@ -164,20 +202,20 @@ abstract final class NativeBridge {
     }
   }
 
-  static final _inflateNew = require(
-    'content-encoding',
-  ).lookupFunction<Pointer<Void> Function(Uint32), Pointer<Void> Function(int)>('tk_inflate_new');
-  static final _inflateInto = require('content-encoding')
+  static final _inflateNew = require().lookupFunction<Pointer<Void> Function(Uint32), Pointer<Void> Function(int)>(
+    'tk_inflate_new',
+  );
+  static final _inflateInto = require()
       .lookupFunction<
         Int32 Function(Pointer<Void>, Pointer<Uint8>, IntPtr, Pointer<Uint8>, IntPtr),
         int Function(Pointer<Void>, Pointer<Uint8>, int, Pointer<Uint8>, int)
       >('tk_inflate_into');
-  static final _inflateFinish = require(
-    'content-encoding',
-  ).lookupFunction<Int32 Function(Pointer<Void>), int Function(Pointer<Void>)>('tk_inflate_finish');
-  static final _inflateFree = require(
-    'content-encoding',
-  ).lookupFunction<Void Function(Pointer<Void>), void Function(Pointer<Void>)>('tk_inflate_free');
+  static final _inflateFinish = require().lookupFunction<Int32 Function(Pointer<Void>), int Function(Pointer<Void>)>(
+    'tk_inflate_finish',
+  );
+  static final _inflateFree = require().lookupFunction<Void Function(Pointer<Void>), void Function(Pointer<Void>)>(
+    'tk_inflate_free',
+  );
 
   /// [body] with a `content-encoding` undone as it arrives; [codec] is 1 gzip, 3 brotli,
   /// 4 zstd.
@@ -216,7 +254,7 @@ abstract final class NativeBridge {
     }
   }
 
-  static final _decodeText = require('charsets')
+  static final _decodeText = require()
       .lookupFunction<
         Int32 Function(Pointer<Uint8>, IntPtr, Pointer<Uint8>, IntPtr, Pointer<Pointer<Uint8>>, Pointer<IntPtr>),
         int Function(Pointer<Uint8>, int, Pointer<Uint8>, int, Pointer<Pointer<Uint8>>, Pointer<IntPtr>)

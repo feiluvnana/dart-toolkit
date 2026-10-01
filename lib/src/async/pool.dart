@@ -102,8 +102,9 @@ final class Pool<T, R> {
     _Slot<T, R>? slot;
     void Function()? unregister;
     try {
+      if (_closed != null) throw StateError('The pool is closed.');
       // The common case takes no await: a free worker is there and nobody queued first.
-      slot = _idle.isNotEmpty && _waiting.isEmpty && _closed == null && !(token?.isCancelled ?? false)
+      slot = _idle.isNotEmpty && _waiting.isEmpty && !(token?.isCancelled ?? false)
           ? _take(_idle.removeLast())
           : await _acquire(token);
       _active++;
@@ -117,7 +118,9 @@ final class Pool<T, R> {
       if (slot != null) {
         unregister?.call();
         _release(slot);
-        if (--_active == 0 && !(_drained?.isCompleted ?? true)) _drained!.complete();
+        if (--_active == 0 && _waiting.isEmpty && !(_drained?.isCompleted ?? true)) {
+          _drained!.complete();
+        }
       }
     }
   }
@@ -128,7 +131,7 @@ final class Pool<T, R> {
     if (slot.isDead) {
       _busy.remove(slot);
       if (_waiting.isNotEmpty) _waiting.removeFirst().complete(null);
-    } else if (_closed == null && _waiting.isNotEmpty) {
+    } else if (_waiting.isNotEmpty) {
       _waiting.removeFirst().complete(slot); // still busy: it changes hands
     } else {
       _busy.remove(slot);
@@ -284,11 +287,10 @@ final class Pool<T, R> {
   /// Waits for the items in flight, runs every worker's [Worker.close] and ends the
   /// isolates. Calling it again returns the same future; [run] after it throws.
   Future<void> close() => _closed ??= () async {
-    for (final waiter in _waiting) {
-      waiter.complete(null);
+    while (_idle.isNotEmpty && _waiting.isNotEmpty) {
+      _waiting.removeFirst().complete(_take(_idle.removeLast()));
     }
-    _waiting.clear();
-    if (_active > 0) await (_drained = Completer<void>()).future;
+    if (_active > 0 || _waiting.isNotEmpty) await (_drained = Completer<void>()).future;
     await Future.wait([for (final slot in _idle) slot.close()]);
     _idle.clear();
   }();

@@ -48,23 +48,31 @@ Map<String, Object?> _parseIni(String text) {
   };
   // [value] at the dotted [key] in [section], or at [key] whole when a part of it is already
   // a value, or the key already holds a table.
-  void put(Map<String, Object?> section, String key, Object? value) {
+  (Map<String, Object?>, String) put(Map<String, Object?> section, String key, Object? value) {
     var target = section;
     final parts = key.split('.');
     for (final part in parts.take(parts.length - 1)) {
       final next = target[part] ??= <String, Object?>{};
       if (next is! Map<String, Object?>) {
         section[key] = value;
-        return;
+        return (section, key);
       }
       target = next;
     }
     if (parts.length > 1 && target[parts.last] is Map) {
       section[key] = value;
+      return (section, key);
+    } else if (target[parts.last] is Map) {
+      throw FormatException('INI line $n: "${parts.last}" is already a table');
     } else {
       target[parts.last] = value;
+      return (target, parts.last);
     }
   }
+
+  int? lastIndent;
+  Map<String, Object?>? lastTarget;
+  String? lastKey;
 
   for (final raw in text.split(_iniNewline)) {
     n++;
@@ -78,11 +86,23 @@ Map<String, Object?> _parseIni(String text) {
       for (final part in _sectionName(line.substring(1, close))) {
         section = table(section, part);
       }
+      lastIndent = null;
+      lastTarget = null;
+      lastKey = null;
+      continue;
+    }
+    final rawIndent = raw.length - raw.trimLeft().length;
+    if (lastKey != null && lastTarget != null && lastIndent != null && rawIndent > lastIndent) {
+      final existing = lastTarget[lastKey];
+      lastTarget[lastKey] = existing == null ? line : '$existing\n$line';
       continue;
     }
     final eq = _findAssign(line);
     if (eq == -1) {
       section[line] = null;
+      lastIndent = rawIndent;
+      lastTarget = section;
+      lastKey = line;
       continue;
     }
     final key = line.substring(0, eq).trim();
@@ -94,7 +114,10 @@ Map<String, Object?> _parseIni(String text) {
       final comment = _findComment(value);
       if (comment != -1) value = value.substring(0, comment).trim();
     }
-    put(section, key, quote != -1 ? value : _scalar(value));
+    final (t, k) = put(section, key, quote != -1 ? value : _scalar(value));
+    lastIndent = rawIndent;
+    lastTarget = t;
+    lastKey = k;
   }
   return root;
 }

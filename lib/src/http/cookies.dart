@@ -42,7 +42,8 @@ final class _Cookie {
   bool sendsTo(Uri url) {
     if (secure && url.scheme != 'https') return false;
     final host = url.host.toLowerCase();
-    if (hostOnly ? host != domain : !(host == domain || host.endsWith('.$domain'))) return false;
+    final isIp = InternetAddress.tryParse(host) != null;
+    if (hostOnly || isIp ? host != domain : !(host == domain || host.endsWith('.$domain'))) return false;
     final target = url.path.isEmpty ? '/' : url.path;
     return target == path || (target.startsWith(path) && (path.endsWith('/') || target[path.length] == '/'));
   }
@@ -141,8 +142,12 @@ final class _Jar {
       expires = maxAge > 0x7fffffff ? DateTime.utc(9999) : DateTime.now().add(Duration(seconds: maxAge));
     }
     // A cookie may widen its domain to a parent of the host it came from, never to
-    // another site and never to a bare suffix.
-    if (domain != null && !(host == domain || (host.endsWith('.$domain') && domain.contains('.')))) return null;
+    // another site and never to a bare suffix. An IP host requires domain == host.
+    final isIp = InternetAddress.tryParse(host) != null;
+    if (domain != null &&
+        (isIp ? host != domain : !(host == domain || (host.endsWith('.$domain') && domain.contains('.'))))) {
+      return null;
+    }
 
     return _Cookie(
       name: pair.substring(0, eq).trim(),

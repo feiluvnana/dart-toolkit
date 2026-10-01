@@ -21,8 +21,8 @@ final class XmlDocument {
   /// Every element matching CSS [selector], in document order.
   ///
   /// XML names are matched as written, not folded: `$('item')` and `$('Item')` are
-  /// different elements. A prefixed name is not a CSS identifier, so `media:content`
-  /// needs [$x].
+  /// different elements. A prefixed name like `media:content` can be selected by escaping
+  /// the colon as `$(r'media\:content')` or with [$x].
   Elements $(String selector) => Elements(_Selector.parse(selector, fold: false).matchAll(root, includeSelf: true));
 
   /// The nodes matching XPath [expression], evaluated from the document root: `//item`,

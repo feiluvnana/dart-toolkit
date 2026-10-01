@@ -24,9 +24,11 @@ final class _Cache {
     final res = await send(request);
     if (res.statusCode == 304 && stored != null) {
       unawaited(_drain(res));
-      final length = await file.length() - stored.offset;
+      final raf = stored.raf;
+      final length = await raf.length() - stored.offset;
+      await raf.setPosition(stored.offset);
       return StreamedResponse(
-        file.openRead(stored.offset),
+        _streamRaf(raf, length),
         200,
         contentLength: length,
         headers: stored.headers,
@@ -34,6 +36,9 @@ final class _Cache {
         url: res.url,
         reasonPhrase: 'OK',
       );
+    }
+    if (stored != null) {
+      unawaited(stored.raf.close().catchError((Object _) {}));
     }
     final headers = res.headers;
     if (res.statusCode != 200 ||
@@ -54,24 +59,53 @@ final class _Cache {
 
   /// The stored answer for [url] in [file], or `null` when there is none or it is another
   /// URL's — two URLs whose names collide never serve each other.
-  static Future<({Headers headers, int offset})?> _load(File file, Uri url) async {
+  static Future<({Headers headers, int offset, RandomAccessFile raf})?> _load(File file, Uri url) async {
+    RandomAccessFile? raf;
     try {
+      raf = await file.open(mode: FileMode.read);
       final head = <int>[];
-      await for (final chunk in file.openRead()) {
+      var found = false;
+      while (head.length < 1 << 20) {
+        final chunk = await raf.read(2048);
+        if (chunk.isEmpty) break;
         final end = chunk.indexOf(0x0a);
         if (end == -1) {
           head.addAll(chunk);
-          if (head.length > 1 << 20) return null;
-          continue;
+        } else {
+          head.addAll(chunk.take(end));
+          await raf.setPosition(head.length + 1);
+          found = true;
+          break;
         }
-        head.addAll(chunk.take(end));
-        break;
+      }
+      if (!found) {
+        await raf.close();
+        return null;
       }
       final meta = jsonDecode(utf8.decode(head)) as Map<String, Object?>;
-      if (meta['url'] != '$url') return null;
-      return (headers: Headers((meta['headers'] as Map).cast<String, String>()), offset: head.length + 1);
+      if (meta['url'] != '$url') {
+        await raf.close();
+        return null;
+      }
+      return (headers: Headers((meta['headers'] as Map).cast<String, String>()), offset: head.length + 1, raf: raf);
     } catch (_) {
+      if (raf != null) unawaited(raf.close().catchError((Object _) {}));
       return null; // not there, or not ours: fetch it
+    }
+  }
+
+  static Stream<List<int>> _streamRaf(RandomAccessFile raf, int remaining) async* {
+    try {
+      var left = remaining;
+      while (left > 0) {
+        final toRead = left < 64 * 1024 ? left : 64 * 1024;
+        final chunk = await raf.read(toRead);
+        if (chunk.isEmpty) break;
+        left -= chunk.length;
+        yield chunk;
+      }
+    } finally {
+      await raf.close();
     }
   }
 

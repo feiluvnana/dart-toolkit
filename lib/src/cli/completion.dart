@@ -46,6 +46,9 @@ String _bash(CliCommand root) {
   final out = StringBuffer()
     ..writeln('$fn() {')
     ..writeln('  local cur="\${COMP_WORDS[COMP_CWORD]}" prev="\${COMP_WORDS[COMP_CWORD-1]}" path="${root.name}" i')
+    ..writeln(
+      '  if [[ "\$cur" == *=* ]]; then prev="\${cur%%=*}" cur="\${cur#*=}"; elif [[ "\$prev" == "=" ]]; then prev="\${COMP_WORDS[COMP_CWORD-2]}"; fi',
+    )
     // A reply with a space in it is one word: escaped as it goes on the command line.
     ..writeln(r"  local IFS=$'\n'")
     ..writeln('  for ((i = 1; i < COMP_CWORD; i++)); do')
@@ -112,12 +115,12 @@ String _fish(CliCommand root) {
     for (final sub in command._subcommands.values) {
       out.writeln('complete -c ${root.name} -f -n $at -a ${quote(sub.name)} -d ${quote(sub.description)}');
     }
-    // Declared once, offered under every command below it.
-    final under = quote('string match -qr ${quote('^${RegExp.escape(path)}( |\$)')} -- ($fn)');
-    for (final option in command._options) {
+    out.writeln('complete -c ${root.name} -n $at -l help -d ${quote('Print this help message')}');
+    for (final (option, spellings) in _reachable(command)) {
+      final hasAbbr = spellings.any((s) => s.startsWith('-') && !s.startsWith('--'));
       final parts = [
-        'complete -c ${root.name} -n $under -l ${option.name}',
-        if (option.abbr case final a?) '-s $a',
+        'complete -c ${root.name} -n $at -l ${option.name}',
+        if (hasAbbr) '-s ${option.abbr}',
         if (option.description.isNotEmpty) '-d ${quote(option.description)}',
         // fish reads `-a` as a list of words, so a space inside one choice is escaped.
         if (option._takesValue)

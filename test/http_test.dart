@@ -3218,5 +3218,222 @@ void _scrapeAudit() {
           .toList();
       expect(got, isNot(contains('/item1')));
     });
+
+    test('HTTP-4: scope retries do not retry non-transient errors', () async {
+      var attempts = 0;
+      final client = MockClient((req) async {
+        attempts++;
+        throw const FormatException('bad format');
+      });
+      await expectLater(
+        Http.scope(client: client, retries: 3, () => 'http://example.com'.url.fetch()),
+        throwsA(isA<FormatException>()),
+      );
+      expect(attempts, 1);
+    });
+
+    test('HTTP-5: XML encoding declaration in prolog is honoured', () async {
+      final xmlHead = '<?xml version="1.0" encoding="Shift_JIS"?>\n<note>hello</note>';
+      final bytes = Uint8List.fromList(latin1.encode(xmlHead));
+      final res = Response.bytes(bytes, 200, headers: Headers({'content-type': 'application/xml'}));
+      expect(res.text, contains('<note>hello</note>'));
+    });
+
+    test('HTTP-6: withQuery preserves repeated keys and removeQuery strips query', () {
+      final u = Uri.parse('http://example.com/search?tag=a&tag=b');
+      expect(u.withQuery({'page': 2}).toString(), 'http://example.com/search?tag=a&tag=b&page=2');
+      expect(
+        u.withQuery({
+          'tag': ['x', 'y'],
+        }).toString(),
+        'http://example.com/search?tag=x&tag=y',
+      );
+      final cleared = u.withQuery({'tag': null});
+      expect(cleared.hasQuery, isFalse);
+      expect(cleared.toString(), 'http://example.com/search');
+      expect(u.removeQuery().toString(), 'http://example.com/search');
+    });
+
+    test('HTTP-7: HEAD receiving 303 redirect stays HEAD', () async {
+      String? redirectedMethod;
+      final server = await HttpServer.bind('127.0.0.1', 0);
+      addTearDown(() => server.close(force: true));
+      server.listen((req) {
+        if (req.uri.path == '/first') {
+          req.response
+            ..statusCode = 303
+            ..headers.set('location', 'http://127.0.0.1:${server.port}/second')
+            ..close();
+        } else {
+          redirectedMethod = req.method;
+          req.response
+            ..statusCode = 200
+            ..close();
+        }
+      });
+      final res = await 'http://127.0.0.1:${server.port}/first'.url.head();
+      expect(res.statusCode, 200);
+      expect(redirectedMethod, 'HEAD');
+    });
+
+    test('HTTP-8: cookies on IP host require domain == host', () async {
+      final server = await HttpServer.bind('127.0.0.1', 0);
+      addTearDown(() => server.close(force: true));
+      server.listen((req) {
+        if (req.uri.path == '/set') {
+          req.response
+            ..headers.add('set-cookie', 'c1=1; Domain=127.0.0.1; Path=/')
+            ..headers.add('set-cookie', 'c2=2; Domain=0.0.1; Path=/')
+            ..statusCode = 200
+            ..close();
+        } else {
+          req.response
+            ..write(req.headers.value('cookie') ?? '')
+            ..close();
+        }
+      });
+      await Http.scope(cookies: true, () async {
+        await 'http://127.0.0.1:${server.port}/set'.url.get();
+        final check = await 'http://127.0.0.1:${server.port}/check'.url.get();
+        expect(check.text, contains('c1=1'));
+        expect(check.text, isNot(contains('c2=2')));
+      });
+    });
+
+    test('HTTP-9: download sets mtime from Last-Modified', () async {
+      final server = await HttpServer.bind('127.0.0.1', 0);
+      addTearDown(() => server.close(force: true));
+      final testDate = DateTime.utc(2020, 1, 1, 12, 0, 0);
+      server.listen((req) {
+        req.response
+          ..headers.set('last-modified', HttpDate.format(testDate))
+          ..write('file content')
+          ..close();
+      });
+      final dir = Directory.systemTemp.createTempSync('dl_mtime_');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final file = File('${dir.path}/out.txt');
+      await Path(file.path).download('http://127.0.0.1:${server.port}/file'.url).toList();
+      expect(file.existsSync(), isTrue);
+      expect(file.lastModifiedSync().toUtc(), testDate);
+    });
+
+    test('HTTP-10: redirect drops fragment and maxRedirects defaults to 20', () async {
+      expect(Request('GET', Uri.parse('http://example.com')).maxRedirects, 20);
+
+      Uri? redirectedTarget;
+      final server = await HttpServer.bind('127.0.0.1', 0);
+      addTearDown(() => server.close(force: true));
+      server.listen((req) {
+        if (req.uri.path == '/hop') {
+          req.response
+            ..statusCode = 302
+            ..headers.set('location', 'http://127.0.0.1:${server.port}/target#frag')
+            ..close();
+        } else {
+          redirectedTarget = req.requestedUri;
+          req.response
+            ..statusCode = 200
+            ..close();
+        }
+      });
+      final res = await 'http://127.0.0.1:${server.port}/hop'.url.get();
+      expect(res.statusCode, 200);
+      expect(redirectedTarget?.hasFragment, isFalse);
+    });
+
+    test('SCR-5: seed with empty path and link with / dedupe to same page', () async {
+      var visits = 0;
+      final server = await HttpServer.bind('127.0.0.1', 0);
+      addTearDown(() => server.close(force: true));
+      server.listen((req) {
+        if (req.uri.path == '/') {
+          visits++;
+          req.response
+            ..headers.set('content-type', 'text/html')
+            ..write('<a href="/">home</a>')
+            ..close();
+        } else {
+          req.response.statusCode = 404;
+          req.response.close();
+        }
+      });
+      final seed = Uri.parse('http://127.0.0.1:${server.port}');
+      final res = await seed.scrape<String>().onResponse((ctx) => ctx.emit(ctx.url.path)).rights.toList();
+      expect(res, ['/']);
+      expect(visits, 1);
+    });
+
+    test('SCR-6: crawl delay from robots.txt applies before first follow', () async {
+      final times = <DateTime>[];
+      final server = await HttpServer.bind('127.0.0.1', 0);
+      addTearDown(() => server.close(force: true));
+      server.listen((req) {
+        if (req.uri.path == '/robots.txt') {
+          req.response
+            ..headers.set('content-type', 'text/plain')
+            ..write('User-agent: *\nCrawl-delay: 1\n')
+            ..close();
+        } else {
+          times.add(DateTime.now());
+          req.response
+            ..headers.set('content-type', 'text/html')
+            ..write('<a href="/p1">p1</a>')
+            ..close();
+        }
+      });
+      final seed = Uri.parse('http://127.0.0.1:${server.port}/');
+      await seed
+          .scrape<void>()
+          .onInit((ctx) {
+            ctx.robots = true;
+            ctx.concurrency = 4;
+            ctx.perHost = 4;
+          })
+          .onResponse((ctx) {
+            for (final a in ctx.response.html.$('a')) {
+              ctx.follow(a);
+            }
+          })
+          .rights
+          .toList();
+      expect(times.length, greaterThanOrEqualTo(2));
+      if (times.length >= 2) {
+        expect(times[1].difference(times[0]), greaterThanOrEqualTo(const Duration(milliseconds: 900)));
+      }
+    });
+
+    test('SCR-7: follow with its own onResponse runs hook even if redirecting to visited URL', () async {
+      var customHookRan = false;
+      final server = await HttpServer.bind('127.0.0.1', 0);
+      addTearDown(() => server.close(force: true));
+      server.listen((req) {
+        if (req.uri.path == '/') {
+          req.response
+            ..headers.set('content-type', 'text/html')
+            ..write('<a href="/special">special</a>')
+            ..close();
+        } else if (req.uri.path == '/special') {
+          req.response
+            ..statusCode = 302
+            ..headers.set('location', '/')
+            ..close();
+        }
+      });
+      final seed = Uri.parse('http://127.0.0.1:${server.port}/');
+      await seed
+          .scrape<void>()
+          .onResponse((ctx) {
+            ctx.follow(
+              'http://127.0.0.1:${server.port}/special'.url,
+              onResponse: (c) {
+                customHookRan = true;
+              },
+            );
+          })
+          .rights
+          .toList();
+      expect(customHookRan, isTrue);
+    });
   });
 }

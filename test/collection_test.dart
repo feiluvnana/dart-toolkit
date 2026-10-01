@@ -575,6 +575,106 @@ void main() {
       await t.save('${dir.path}/t.md');
       expect(File('${dir.path}/t.md').readAsStringSync(), startsWith('| a | b |'));
     });
+
+    test('COLL-2: mixed numeric and text column sorts numbers first', () {
+      final t1 = Table.rows([
+        {'val': 'alpha'},
+        {'val': 10},
+        {'val': 'beta'},
+        {'val': 2},
+      ]);
+      final t2 = Table.rows([
+        {'val': 2},
+        {'val': 'beta'},
+        {'val': 10},
+        {'val': 'alpha'},
+      ]);
+      expect(t1.orderBy('val').texts('val'), ['2', '10', 'alpha', 'beta']);
+      expect(t2.orderBy('val').texts('val'), ['2', '10', 'alpha', 'beta']);
+    });
+
+    test('COLL-3: blank CSV cells sort last, ascending and descending', () {
+      final t = Table.csv('id,score\n1,10\n2,\n3,5\n4,  \n');
+      expect(t.orderBy('score').texts('id'), ['3', '1', '2', '4']);
+      expect(t.orderBy('score', descending: true).texts('id'), ['1', '3', '2', '4']);
+    });
+
+    test('COLL-4: where, select, rename, derive, distinct preserve _order', () {
+      final t = Table.rows([
+        {'cat': 'b', 'num': 2, 'name': 'two'},
+        {'cat': 'a', 'num': 3, 'name': 'three'},
+        {'cat': 'a', 'num': 1, 'name': 'one'},
+      ]);
+      final sorted = t.orderBy('cat').thenBy('num');
+      expect(sorted.texts('name'), ['one', 'three', 'two']);
+
+      final filtered = t.orderBy('cat').where((r) => r['num'] != 2).thenBy('num');
+      expect(filtered.texts('name'), ['one', 'three']);
+
+      expect(t.orderBy('num').where((r) => r['cat'] == 'a').take(1).texts('name'), ['one']);
+
+      expect(t.orderBy('cat').select(['cat', 'num', 'name']).thenBy('num').texts('name'), ['one', 'three', 'two']);
+
+      final renamed = t.orderBy('cat').rename({'cat': 'category'}).thenBy('num');
+      expect(renamed.columns, contains('category'));
+      expect(renamed.texts('name'), ['one', 'three', 'two']);
+
+      expect(t.orderBy('cat').derive('d', (r) => 1).thenBy('num').texts('name'), ['one', 'three', 'two']);
+
+      expect(t.orderBy('cat').distinct().thenBy('num').texts('name'), ['one', 'three', 'two']);
+    });
+
+    test('COLL-5: Table.read rejects .md, Table.readRows rejects .json and .md', () async {
+      final dir = Directory.systemTemp.createTempSync('unsupported_');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final md = File('${dir.path}/t.md')..writeAsStringSync('| a |\n|---|');
+      final json = File('${dir.path}/t.json')..writeAsStringSync('[{"a":1}]');
+
+      await expectLater(Table.read(md.path), throwsUnsupportedError);
+      await expectLater(Table.readRows(md.path).toList(), throwsUnsupportedError);
+      await expectLater(Table.readRows(json.path).toList(), throwsUnsupportedError);
+    });
+
+    test('COLL-6: join column name clash does not overwrite existing _2 columns', () {
+      final t1 = Table.rows([
+        {'id': 1, 'x': 'left_x', 'x_2': 'left_x2'},
+      ]);
+      final t2 = Table.rows([
+        {'id': 1, 'x': 'right_x'},
+      ]);
+      final joined = t1.join(t2, on: 'id');
+      expect(joined.columns, ['id', 'x', 'x_2', 'x_3']);
+      expect(joined.rows.single, {'id': 1, 'x': 'left_x', 'x_2': 'left_x2', 'x_3': 'right_x'});
+    });
+
+    test('COLL-7: join and leftJoin do not match null keys', () {
+      final t1 = Table.rows([
+        {'id': null, 'a': 1},
+        {'id': 2, 'a': 2},
+      ]);
+      final t2 = Table.rows([
+        {'id': null, 'b': 99},
+        {'id': 2, 'b': 20},
+      ]);
+      final inner = t1.join(t2, on: 'id');
+      expect(inner.rows.length, 1);
+      expect(inner.rows.single, {'id': 2, 'a': 2, 'b': 20});
+
+      final left = t1.leftJoin(t2, on: 'id');
+      expect(left.rows.length, 2);
+      expect(left.rows, [
+        {'id': null, 'a': 1, 'b': null},
+        {'id': 2, 'a': 2, 'b': 20},
+      ]);
+    });
+
+    test('COLL-8: get<int> on 1e400 throws StateError, not UnsupportedError', () {
+      final t = Table.rows([
+        {'val': '1e400'},
+      ]);
+      expect(() => t.rows.single.get<int>('val'), throwsStateError);
+      expect(t.rows.single.getOrNull<int>('val'), isNull);
+    });
   });
 
   group('Sorted pays only for what it is asked', () {

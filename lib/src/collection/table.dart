@@ -107,10 +107,16 @@ final class Table {
   }
 
   /// The table in the file at [path], by its extension: `.json` (an array of objects),
-  /// `.ndjson` or `.jsonl`, `.tsv`, and CSV for anything else. [save] is the way back.
+  /// The table in the file at [path], by its extension: `.json` (an array of objects),
+  /// `.ndjson` or `.jsonl`, `.tsv`, and CSV for anything else. JSON, NDJSON, TSV and CSV
+  /// can be read back with [read].
   static Future<Table> read(String path, {String? separator}) async {
+    final ext = _extension(path);
+    if (ext == 'md' || ext == 'markdown') {
+      throw UnsupportedError('Table.read does not support Markdown');
+    }
     final text = await File(path).readAsString();
-    return switch (_extension(path)) {
+    return switch (ext) {
       'json' => switch (jsonDecode(text)) {
         final List<Object?> items => Table.rows([for (final item in items) ?_object(item)]),
         _ => throw FormatException('$path is not a JSON array of objects'),
@@ -132,6 +138,9 @@ final class Table {
   /// than memory, or to stop early. The same rows [read] would give, one at a time.
   static Stream<Row> readRows(String path, {String? separator}) async* {
     final ext = _extension(path);
+    if (ext == 'json' || ext == 'md' || ext == 'markdown') {
+      throw UnsupportedError('Table.readRows does not support $ext');
+    }
     final text = File(path).openRead().transform(utf8.decoder);
     if (ext == 'ndjson' || ext == 'jsonl') {
       await for (final line in text.transform(const LineSplitter())) {
@@ -233,7 +242,12 @@ final class Table {
       : throw ArgumentError('No column "$name"; columns are ${columns.join(', ')}');
 
   /// Only the rows that pass [test].
-  Table where(bool Function(Row row) test) => Table._(columns, rows.where(test).toList(), const []);
+  Table where(bool Function(Row row) test) {
+    if (_unsorted case final unsorted?) {
+      return Table._ordered(columns, unsorted.where(test).toList(), _order);
+    }
+    return Table._(columns, rows.where(test).toList(), _order);
+  }
 
   /// The first [count] rows. Straight after [orderBy], only those [count] are sorted.
   Table take(int count) => Table._(columns, _top(count), _order);
@@ -301,7 +315,7 @@ final class Table {
     names.forEach(_has);
     return Table._(List.unmodifiable(names), [
       for (final r in rows) _copy({for (final n in names) n: r[n]}),
-    ], const []);
+    ], _order);
   }
 
   /// Every column but [names].
@@ -314,15 +328,19 @@ final class Table {
   }
 
   /// Columns renamed by [names], old to new.
-  Table rename(Map<String, String> names) => Table._(List.unmodifiable([for (final c in columns) names[c] ?? c]), [
-    for (final r in rows) _copy({for (final MapEntry(:key, :value) in r.entries) names[key] ?? key: value}),
-  ], const []);
+  Table rename(Map<String, String> names) => Table._(
+    List.unmodifiable([for (final c in columns) names[c] ?? c]),
+    [
+      for (final r in rows) _copy({for (final MapEntry(:key, :value) in r.entries) names[key] ?? key: value}),
+    ],
+    [for (final (col, desc) in _order) (names[col] ?? col, desc)],
+  );
 
   /// A new column [name] computed from each row.
   Table derive(String name, Object? Function(Row row) value) =>
       Table._(List.unmodifiable([...columns.where((c) => c != name), name]), [
         for (final r in rows) _copy({...r, name: value(r)}),
-      ], const []);
+      ], _order);
 
   /// One row per distinct combination of [by] (every column when omitted); the first wins.
   Table distinct([List<String>? by]) {
@@ -331,7 +349,7 @@ final class Table {
     return Table._(columns, [
       for (final r in rows)
         if (seen.add(_Key([for (final k in keys) r[k]]))) r,
-    ], const []);
+    ], _order);
   }
 
   /// Inner join on [on] here and [to] (default [on]) on [other]. A column both tables have,
@@ -344,15 +362,22 @@ final class Table {
   Table _join(Table other, String on, String to, {required bool left}) {
     _has(on);
     other._has(to);
-    final index = other.rows.sequence.groupBy((r) => _Key([r[to]])).toMap();
-    final mine = _names ??= columns.toSet();
-    final rightColumns = {
-      for (final c in other.columns)
-        if (c != to) c: mine.contains(c) ? '${c}_2' : c,
-    };
+    final index = <_Key, List<Row>>{};
+    for (final r in other.rows) {
+      final k = r[to];
+      if (k == null) continue;
+      (index[_Key([k])] ??= []).add(r);
+    }
+    final seen = {...columns};
+    final rightColumns = <String, String>{};
+    for (final c in other.columns) {
+      if (c == to) continue;
+      rightColumns[c] = seen.add(c) ? c : _unused(c, seen);
+    }
     final out = <Row>[];
     for (final r in rows) {
-      final matches = index[_Key([r[on]])];
+      final keyVal = r[on];
+      final matches = keyVal == null ? null : index[_Key([keyVal])];
       if (matches == null) {
         if (left) out.add(_copy({...r, for (final c in rightColumns.values) c: null}));
         continue;
@@ -430,8 +455,8 @@ final class Table {
   }
 
   /// Writes this table to [path] in the format its extension names — `.json`, `.ndjson` or
-  /// `.jsonl`, `.md`, `.tsv`, and CSV for anything else — creating parent directories. The
-  /// way back is [read], which reads the same extensions.
+  /// `.jsonl`, `.md`, `.tsv`, and CSV for anything else — creating parent directories.
+  /// JSON, NDJSON, TSV and CSV can be read back with [read].
   Future<File> save(String path, {String? separator}) async {
     final file = File(path);
     await file.parent.create(recursive: true);
@@ -570,7 +595,10 @@ final class _Key {
 /// does it once per row up front.
 typedef _Cell = (num? number, Object? value);
 
-_Cell _cell(Object? value) => (_coerce<num>(value), value);
+_Cell _cell(Object? value) {
+  if (value is String && value.trim().isEmpty) return (null, null);
+  return (_coerce<num>(value), value);
+}
 
 /// Cells in sort order: numbers as numbers, then like-typed comparables, then as text.
 /// `null` sorts last.
@@ -579,7 +607,13 @@ int _compare(_Cell a, _Cell b) {
   final (nb, vb) = b;
   if (va == null) return vb == null ? 0 : 1;
   if (vb == null) return -1;
-  if (na != null && nb != null) return na.compareTo(nb);
+  if (na != null || nb != null) {
+    return na == null
+        ? 1
+        : nb == null
+        ? -1
+        : na.compareTo(nb);
+  }
   if (va is Comparable && vb is Comparable && va.runtimeType == vb.runtimeType) return va.compareTo(vb);
   return '$va'.compareTo('$vb');
 }
@@ -591,18 +625,22 @@ int _compareCells(Object? a, Object? b) => _compare(_cell(a), _cell(b));
 /// and `1,5` — a decimal comma, or two values — is not a number at all.
 final _thousands = RegExp(r'^[+-]?\d{1,3}(,\d{3})+(\.\d+)?$');
 
-/// A decimal number as a person writes one in a cell. `num.tryParse` also takes `0x10`,
-/// `NaN` and `Infinity`, none of which a spreadsheet column means as a number.
-final _decimal = RegExp(r'^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$');
-
 /// `JsonDocument.to<T>`'s coercions, plus thousands separators in text: `'1,200'` reads as 1200.
 T? _coerce<T>(Object? val) {
   if (val == null) return null;
   if (val is T) return val as T;
   if (T == String) return '$val' as T;
   if (val is num) {
-    if (T == int) return val.toInt() as T;
-    if (T == double) return val.toDouble() as T;
+    if (T == num) return val.isFinite ? val as T : null;
+    if (T == int) {
+      if (!val.isFinite) return null;
+      try {
+        return val.toInt() as T;
+      } catch (_) {
+        return null;
+      }
+    }
+    if (T == double) return val.isFinite ? val.toDouble() as T : null;
     if (T == bool) {
       if (val == 1) return true as T;
       if (val == 0) return false as T;
@@ -617,14 +655,20 @@ T? _coerce<T>(Object? val) {
   var text = val is String ? val.trim() : '$val';
   if (text.contains(',') && _thousands.hasMatch(text)) text = text.replaceAll(',', '');
   final isNumeric = T == num || T == int || T == double;
-  if (isNumeric && !_decimal.hasMatch(text)) {
-    return null;
+  if (isNumeric) {
+    if (text.startsWith('0x') || text.startsWith('0X') || text.startsWith('+0x') || text.startsWith('-0x')) return null;
+    final n = num.tryParse(text);
+    if (n == null || !n.isFinite) return null;
+    if (T == num) return n as T;
+    if (T == double) return n.toDouble() as T;
+    if (T == int) {
+      try {
+        return (n is int ? n : n.toInt()) as T?;
+      } catch (_) {
+        return null;
+      }
+    }
   }
-  if (T == num) return num.tryParse(text) as T?;
-  if (T == int) {
-    return (int.tryParse(text) ?? double.tryParse(text)?.toInt()) as T?;
-  }
-  if (T == double) return double.tryParse(text) as T?;
   return null;
 }
 

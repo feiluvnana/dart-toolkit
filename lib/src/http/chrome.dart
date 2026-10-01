@@ -764,11 +764,7 @@ final class ChromeClient implements Client {
     _pages.add(page);
     await _call('Page.enable', null, tab);
     await _call('Network.enable', null, tab);
-    await _call('Runtime.enable', null, tab);
     await _call('Page.setLifecycleEventsEnabled', {'enabled': true}, tab);
-    // A cross-origin iframe runs in a process of its own and is reachable only through a
-    // session of its own, which Chrome opens for each one as it appears; see [ChromePage.frame].
-    await _call('Target.setAutoAttach', {'autoAttach': true, 'waitForDebuggerOnStart': false, 'flatten': true}, tab);
     await _dress(tab);
     page._listen();
     await page.block(_block);
@@ -796,7 +792,7 @@ final class ChromeClient implements Client {
     if (device.mobile) {
       await _call('Emulation.setTouchEmulationEnabled', {'enabled': true, 'maxTouchPoints': 5}, tab);
     }
-    if (device.userAgent != null || device.locale != null) {
+    if (_stealth || device.userAgent != null || device.locale != null) {
       await _call('Emulation.setUserAgentOverride', {
         'userAgent': device.userAgent ?? await _browserAgent() ?? '',
         'acceptLanguage': ?device.locale,
@@ -843,7 +839,9 @@ final class ChromeClient implements Client {
     if (_agent != null) return _agent;
     try {
       final version = await _call('Browser.getVersion');
-      return _agent = version['userAgent'] as String?;
+      var ua = version['userAgent'] as String?;
+      if (_stealth && ua != null) ua = ua.replaceFirst('HeadlessChrome', 'Chrome');
+      return _agent = ua;
     } catch (_) {
       return null;
     }
@@ -1006,7 +1004,7 @@ final class ChromePage {
       _disarm();
       // A 204 or 205 is an answer that keeps the page where it was, and Chrome reports it as
       // an aborted navigation. It is a response — the server said "nothing to show".
-      if (error.contains('ERR_ABORTED')) {
+      if (error.contains('ERR_ABORTED') || error.contains('ERR_HTTP_RESPONSE_CODE_FAILURE')) {
         if (await _empty(url, request) case final answered?) return answered;
       }
       throw ClientException(_readable(error), url);
@@ -1025,26 +1023,35 @@ final class ChromePage {
     while (DateTime.now().isBefore(deadline)) {
       await Future<void>.delayed(const Duration(milliseconds: 500));
       if (!_alive) break;
-      res = await response(request);
+      try {
+        res = await response(request);
+      } catch (e) {
+        final msg = '$e';
+        if (msg.contains('navigated') || msg.contains('closed') || msg.contains('Execution context was destroyed')) {
+          await _settle();
+          continue;
+        }
+        rethrow;
+      }
       if (!_interstitial(res)) return res;
     }
     return res;
   }
 
-  /// The bodiless answer an aborted navigation got, if it got a 204 or 205; the event may
-  /// trail the command's reply by a moment.
+  /// The bodiless answer an aborted navigation got, if it got a 204 or 205, or an empty 4xx/5xx;
+  /// the event may trail the command's reply by a moment.
   Future<Response?> _empty(Uri url, Request? request) async {
     for (var i = 0; i < 25 && _answer == null; i++) {
       await Future<void>.delayed(const Duration(milliseconds: 20));
     }
     final answer = _answer;
     final status = (answer?['status'] as num?)?.toInt();
-    if (status != 204 && status != 205) return null;
+    if (status == null || (status != 204 && status != 205 && status < 400)) return null;
     final headers = Headers();
     if (answer?['headers'] case final Map<String, Object?> raw) {
       raw.forEach((name, value) => headers[name] = '$value');
     }
-    return Response.bytes(Uint8List(0), status!, headers: headers, request: request, url: url);
+    return Response.bytes(Uint8List(0), status, headers: headers, request: request, url: url);
   }
 
   /// The page as it stands now: the DOM its scripts have built, under the status and headers
@@ -1071,7 +1078,7 @@ final class ChromePage {
     headers
       ..remove('content-encoding')
       ..['content-length'] = '${bytes.length}'
-      ..putIfAbsent('content-type', () => '$mime; charset=utf-8');
+      ..['content-type'] = '$mime; charset=utf-8';
     return Response.bytes(
       bytes,
       statusCode ?? 200,
@@ -1101,19 +1108,34 @@ final class ChromePage {
     final limit = timeout ?? _client._timeout;
     final quoted = jsonEncode(selector);
     final hit = gone ? '!document.querySelector($quoted)' : '!!document.querySelector($quoted)';
-    final found = await eval(
-      '''
+    final deadline = DateTime.now().add(limit);
+    while (true) {
+      final remaining = deadline.difference(DateTime.now());
+      if (remaining <= Duration.zero) return false;
+      try {
+        final found = await eval(
+          '''
 new Promise((resolve) => {
   const hit = () => $hit;
   if (hit()) return resolve(true);
   const observer = new MutationObserver(() => { if (hit()) { observer.disconnect(); resolve(true); } });
   observer.observe(document.documentElement, {childList: true, subtree: true, attributes: true});
-  setTimeout(() => { observer.disconnect(); resolve(false); }, ${limit.inMilliseconds});
+  setTimeout(() => { observer.disconnect(); resolve(false); }, ${remaining.inMilliseconds});
 })''',
-      awaitPromise: true,
-      timeout: limit + const Duration(seconds: 5),
-    );
-    return found == true;
+          awaitPromise: true,
+          timeout: remaining + const Duration(seconds: 5),
+        );
+        return found == true;
+      } catch (e) {
+        if (!_alive) rethrow;
+        final msg = '$e';
+        if (msg.contains('navigated') || msg.contains('closed') || msg.contains('Execution context was destroyed')) {
+          await _settle();
+          continue;
+        }
+        rethrow;
+      }
+    }
   }
 
   /// Clicks the first element [selector] matches, as a mouse would.
@@ -1178,14 +1200,13 @@ new Promise((resolve) => {
       'ArrowDown' => (40, null),
       'ArrowLeft' => (37, null),
       'ArrowRight' => (39, null),
-      _ => (key.codeUnitAt(0), key),
+      _ => (key.toUpperCase().codeUnitAt(0), key),
     };
     for (final type in ['keyDown', 'keyUp']) {
       await _call('Input.dispatchKeyEvent', {
-        'type': type == 'keyDown' && text != null ? 'keyDown' : type,
+        'type': type,
         'key': key,
         'windowsVirtualKeyCode': code,
-        'nativeVirtualKeyCode': code,
         if (type == 'keyDown' && text != null) 'text': text,
       });
     }
@@ -1240,13 +1261,19 @@ new Promise((resolve) => {
     if (selector != null) {
       final quad = await _box(selector);
       if (quad == null) return Uint8List(0);
-      params['clip'] = {
-        'x': quad[0],
-        'y': quad[1],
-        'width': quad[2] - quad[0],
-        'height': quad[5] - quad[1],
-        'scale': 1,
-      };
+      final metrics = await _call('Page.getLayoutMetrics');
+      final visual = metrics['visualViewport'] as Map<String, Object?>? ?? const {};
+      final pageX = (visual['pageX'] as num?)?.toDouble() ?? 0.0;
+      final pageY = (visual['pageY'] as num?)?.toDouble() ?? 0.0;
+      params
+        ..['captureBeyondViewport'] = true
+        ..['clip'] = {
+          'x': quad[0] + pageX,
+          'y': quad[1] + pageY,
+          'width': quad[2] - quad[0],
+          'height': quad[5] - quad[1],
+          'scale': 1,
+        };
     } else if (full) {
       final metrics = await _call('Page.getLayoutMetrics');
       final size = (metrics['cssContentSize'] ?? metrics['contentSize']) as Map<String, Object?>?;
@@ -1470,7 +1497,7 @@ new Promise((resolve) => {
           if (res == null || !'${res['url']}'.contains(match)) return;
           id = event.params['requestId'] as String?;
           answered = res;
-        case 'Network.loadingFinished':
+        case 'Network.loadingFinished' || 'Network.loadingFailed':
           if (event.params['requestId'] == id && !finished.isCompleted) finished.complete();
       }
     });
@@ -1618,14 +1645,17 @@ new Promise((resolve) => {
         ],
       });
     }
-    final all = await _call('Network.getCookies');
+    final all = await _call('Storage.getCookies');
     return [
       for (final c in (all['cookies'] as List? ?? const []).cast<Map<String, Object?>>())
         Cookie(c['name'] as String? ?? '', c['value'] as String? ?? '')
           ..domain = c['domain'] as String?
           ..path = c['path'] as String?
           ..secure = c['secure'] == true
-          ..httpOnly = c['httpOnly'] == true,
+          ..httpOnly = c['httpOnly'] == true
+          ..expires = (c['expires'] is num && (c['expires'] as num) > 0)
+              ? DateTime.fromMillisecondsSinceEpoch(((c['expires'] as num) * 1000).round())
+              : null,
     ];
   }
 
@@ -1700,8 +1730,18 @@ new Promise((resolve) => {
   ///
   /// Answers `null` when nothing matches. What comes back is a view of part of this tab, so
   /// closing it closes nothing; close the page it came from.
+  bool _framesEnabled = false;
+
+  Future<void> _ensureFramesEnabled() async {
+    if (_framesEnabled) return;
+    _framesEnabled = true;
+    await _call('Runtime.enable');
+    await _call('Target.setAutoAttach', {'autoAttach': true, 'waitForDebuggerOnStart': false, 'flatten': true});
+  }
+
   Future<ChromePage?> frame(String match) async {
     final owner = _owner;
+    await owner._ensureFramesEnabled();
     final tree = await owner._call('Page.getFrameTree');
     var found = _descend((tree['frameTree'] as Map<String, Object?>?) ?? const {}, match, root: true);
     // A cross-origin frame is not in the tree; it is found by its URL, or by the `name` on
@@ -1771,6 +1811,10 @@ new Promise((resolve) => {
     _client._pages.remove(this);
     _client._free.remove(this);
     await _events?.cancel();
+    for (final remote in _remotes.values) {
+      await _client._sessions.remove(remote.session)?.close();
+    }
+    _remotes.clear();
     await _client._sessions.remove(_tab.session)?.close();
     try {
       await _client._call('Target.closeTarget', {'targetId': _tab.target});

@@ -49,11 +49,12 @@ List<String> _splitCommand(String command) {
       if (current.isNotEmpty || quoted) args.add(current.toString());
       current.clear();
       quoted = false;
-    } else if (_shellSyntax(command, i) case final syntax?) {
-      throw ArgumentError(
-        '"$command" uses $syntax, which only a shell reads: pass shell: true, or pipe with '
-        "('a' | 'b').run()",
-      );
+    } else if (_shellSyntax(command, i, current.isEmpty) case final syntax?) {
+      final hint = switch (syntax) {
+        '`*`' || '`?`' || '`[`' => 'pass shell: true, or expand with Path.glob',
+        _ => "pass shell: true, or pipe with ('a' | 'b').run()",
+      };
+      throw ArgumentError('"$command" uses $syntax, which only a shell reads: $hint');
     } else {
       current.writeCharCode(char);
     }
@@ -66,11 +67,34 @@ List<String> _splitCommand(String command) {
 }
 
 /// The shell operator starting at [i] of [command], unquoted, or `null`.
-String? _shellSyntax(String command, int i) => switch (command[i]) {
-  '|' || '&' || ';' || '<' || '>' || '`' => '`${command[i]}`',
-  r'$' when i + 1 < command.length && command[i + 1] == '(' => r'`$(`',
-  _ => null,
-};
+String? _shellSyntax(String command, int i, bool atStartOfWord) {
+  final char = command[i];
+  if (char == '|' || char == '&' || char == ';' || char == '<' || char == '>' || char == '`') {
+    return '`$char`';
+  }
+  if (char == '*' || char == '?' || char == '[') {
+    return '`$char`';
+  }
+  if (atStartOfWord && char == '~') {
+    return '`~`';
+  }
+  if (char == r'$' && i + 1 < command.length) {
+    if (command[i + 1] == '(') return r'`$(`';
+    if (command[i + 1] == '{') return r'`${`';
+    final next = command.codeUnitAt(i + 1);
+    if (_isIdentStart(next)) {
+      var j = i + 1;
+      while (j < command.length && _isIdentChar(command.codeUnitAt(j))) {
+        j++;
+      }
+      return '`\$${command.substring(i + 1, j)}`';
+    }
+  }
+  return null;
+}
+
+bool _isIdentStart(int c) => (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a) || c == 0x5f; // A-Z, a-z, _
+bool _isIdentChar(int c) => _isIdentStart(c) || (c >= 0x30 && c <= 0x39); // A-Z, a-z, _, 0-9
 
 const _shellKey = #dartToolkitShellScope;
 
@@ -204,8 +228,11 @@ ShellRun run(
 }) => ShellRun._((scope, live) {
   final display = _display(command, args);
   if (shell) {
+    if (Platform.isWindows && args.isNotEmpty) {
+      throw ArgumentError('args: cannot be passed with shell: true on Windows');
+    }
     final stage = Platform.isWindows
-        ? ('cmd', ['/c', command, ..._cmdSafe(args)])
+        ? ('cmd', ['/c', command])
         : ('/bin/sh', ['-c', command, 'sh', ...args]); // `sh` is $0; args are $1…
     return _exec([stage], display, scope, input: input, inherit: inherit, live: live);
   }
@@ -303,7 +330,6 @@ final class ShellRun implements Future<ShellResult> {
   /// ```
   Stream<String> get stream {
     if (_live case final live?) return live.lines.stream;
-    _wantsOutput = true;
     final live = _live = _Live();
     live.lines = StreamController<String>(
       onCancel: () {
@@ -392,138 +418,166 @@ Future<ShellResult> _exec(
 }) async {
   if (inherit && input != null) throw ArgumentError('input: cannot be given to a child that inherits stdin');
   if (inherit && live != null) throw ArgumentError('stream cannot read a child that inherits stdout');
-  final token = Cancel.token;
-  token?.throwIfCancelled();
-  final processes = <Process>[];
-  final environment = _childEnv(scope.env);
-  try {
-    for (final (executable, args) in stages) {
-      final (exe, cmd) = viaShell ? await _windowsTarget(executable) : (executable, false);
-      processes.add(
-        await Process.start(
-          exe,
-          cmd ? _cmdSafe(args) : args,
-          workingDirectory: scope.workdir?.path,
-          environment: environment,
-          runInShell: cmd,
-          mode: inherit ? ProcessStartMode.inheritStdio : ProcessStartMode.normal,
+
+  if (scope.workdir case final workdir?) {
+    final stat = await FileStat.stat(workdir.path);
+    if (stat.type == FileSystemEntityType.notFound) {
+      final result = ShellResult(
+        command: display,
+        exitCode: 127,
+        stdout: '',
+        stderr: 'No such working directory: ${workdir.path}\n',
+      );
+      if (scope.strict) throw ShellException(result);
+      return result;
+    }
+  }
+
+  Future<ShellResult> execute() async {
+    final token = Cancel.token;
+    token?.throwIfCancelled();
+    final processes = <Process>[];
+    final environment = _childEnv(scope.env);
+    try {
+      for (final (executable, args) in stages) {
+        final (exe, cmd) = viaShell ? await _windowsTarget(executable) : (executable, false);
+        processes.add(
+          await Process.start(
+            exe,
+            cmd ? _cmdSafe(args) : args,
+            workingDirectory: scope.workdir?.path,
+            environment: environment,
+            runInShell: cmd,
+            mode: inherit ? ProcessStartMode.inheritStdio : ProcessStartMode.normal,
+          ),
+        );
+      }
+    } on ProcessException catch (e) {
+      for (final p in processes) {
+        p.kill(ProcessSignal.sigkill);
+      }
+      // A shell's codes: 126 for a file that is there but cannot be run, 127 for none at all.
+      final code = e.errorCode == 13 ? 126 : 127;
+      final result = ShellResult(
+        command: display,
+        exitCode: code,
+        stdout: '',
+        stderr: '${e.message}: ${e.executable}\n',
+      );
+      if (scope.strict) throw ShellException(result);
+      return result;
+    }
+
+    final stdoutBuf = StringBuffer();
+    final stderrBuf = StringBuffer();
+    final subscriptions = <StreamSubscription<String>>[];
+    final drained = <Future<void>>[];
+    void capture(Stream<List<int>> stream, StringBuffer into, {required bool err}) {
+      final echo = (scope.quiet || (!err && live != null)) ? null : _Echo(err: err);
+      final done = Completer<void>();
+      final lines = err ? null : live?.lines;
+      var text = stream.transform(scope.decoder);
+      if (lines != null) {
+        // The live lines are the output; the buffer keeps them for the result.
+        text = text.transform(const LineSplitter()).map((line) {
+          lines.add(line);
+          return '$line\n';
+        });
+      }
+      subscriptions.add(
+        text.listen(
+          (data) {
+            into.write(data);
+            echo?.add(data);
+          },
+          onError: (Object _) {
+            echo?.close();
+            if (!done.isCompleted) done.complete();
+          },
+          onDone: () {
+            echo?.close();
+            if (!done.isCompleted) done.complete();
+          },
         ),
       );
+      drained.add(done.future);
     }
-  } on ProcessException catch (e) {
-    for (final p in processes) {
-      p.kill(ProcessSignal.sigkill);
-    }
-    // A shell's codes: 126 for a file that is there but cannot be run, 127 for none at all.
-    final code = e.errorCode == 13 ? 126 : 127;
-    final result = ShellResult(command: display, exitCode: code, stdout: '', stderr: '${e.message}: ${e.executable}\n');
-    if (scope.strict) throw ShellException(result);
-    return result;
-  }
 
-  final stdoutBuf = StringBuffer();
-  final stderrBuf = StringBuffer();
-  final subscriptions = <StreamSubscription<String>>[];
-  final drained = <Future<void>>[];
-  void capture(Stream<List<int>> stream, StringBuffer into, {required bool err}) {
-    final echo = scope.quiet ? null : _Echo(err: err);
-    final done = Completer<void>();
-    final lines = err ? null : live?.lines;
-    var text = stream.transform(scope.decoder);
-    if (lines != null) {
-      // The live lines are the output; the buffer keeps them for the result.
-      text = text.transform(const LineSplitter()).map((line) {
-        lines.add(line);
-        return '$line\n';
-      });
+    var fed = Future<void>.value();
+    if (!inherit) {
+      // Readers first: a child that echoes a large [input] fills its stdout pipe and stops
+      // reading stdin, so feeding before draining deadlocks both sides.
+      for (var i = 0; i < processes.length - 1; i++) {
+        processes[i].stdout.pipe(processes[i + 1].stdin).catchError((_) {});
+      }
+      capture(processes.last.stdout, stdoutBuf, err: false);
+      for (final p in processes) {
+        capture(p.stderr, stderrBuf, err: true);
+      }
+      fed = _feed(processes.first, input, scope.encoding);
     }
-    subscriptions.add(
-      text.listen(
-        (data) {
-          into.write(data);
-          echo?.add(data);
-        },
-        onError: (Object _) {
-          echo?.close();
-          if (!done.isCompleted) done.complete();
-        },
-        onDone: () {
-          echo?.close();
-          if (!done.isCompleted) done.complete();
-        },
-      ),
+
+    // Why it is being stopped, once something decides it is: a timeout or the scope's token.
+    final stop = Completer<Object>();
+    var tree = const <int>[];
+    void halt(Object why) {
+      if (stop.isCompleted) return;
+      // Synchronously, so a signal that is about to end this process still reaches them.
+      tree = _signalTree([for (final p in processes) p.pid], ProcessSignal.sigterm);
+      registerHaltedProcessPids(tree);
+      stop.complete(why);
+    }
+
+    final timer = scope.timeout == null
+        ? null
+        : Timer(scope.timeout!, () => halt(TimeoutException('"$display" timed out after ${scope.timeout}')));
+    final unregister = token?.onCancel(
+      () => halt(CancelledException(token.reason?.toString() ?? 'Operation was cancelled.')),
     );
-    drained.add(done.future);
-  }
+    live?.halt = halt;
+    if (live?.abandoned ?? false) halt(const CancelledException('The stream was cancelled.'));
+    final ended = <int>[];
+    final exits = Future.wait([
+      for (final (i, p) in processes.indexed) p.exitCode.then((code) => (ended..add(i), code).$2),
+    ]);
+    // The output is waited for under the same timeout and cancel as the exits: a background
+    // child left holding stdout open (`sleep 60 &`) would otherwise hold this call with it.
+    final settled = await Future.any<Object>([
+      exits.then((codes) async => (await Future.wait([...drained, fed]), codes).$2),
+      stop.future,
+    ]);
+    timer?.cancel();
+    unregister?.call();
 
-  var fed = Future<void>.value();
-  if (!inherit) {
-    // Readers first: a child that echoes a large [input] fills its stdout pipe and stops
-    // reading stdin, so feeding before draining deadlocks both sides.
-    for (var i = 0; i < processes.length - 1; i++) {
-      processes[i].stdout.pipe(processes[i + 1].stdin).catchError((_) {});
+    ShellResult result(int code) =>
+        ShellResult(command: display, exitCode: code, stdout: '$stdoutBuf', stderr: '$stderrBuf');
+
+    if (settled is! List<int>) {
+      await _reap(tree);
+      for (final s in subscriptions) {
+        await s.cancel();
+      }
+      throw switch (settled) {
+        TimeoutException(:final message, :final duration) => ShellTimeoutException(result(-1), message, duration),
+        _ => settled,
+      };
     }
-    capture(processes.last.stdout, stdoutBuf, err: false);
-    for (final p in processes) {
-      capture(p.stderr, stderrBuf, err: true);
+    bool isBrokenPipe(int i, int code) {
+      if (i + 1 >= settled.length) return false;
+      if (code == -13 || code == 141) return true;
+      if (ended.indexOf(i + 1) < ended.indexOf(i) && '$stderrBuf'.contains('Broken pipe')) {
+        return true;
+      }
+      return false;
     }
-    fed = _feed(processes.first, input, scope.encoding);
+
+    final codes = [for (final (i, code) in settled.indexed) isBrokenPipe(i, code) ? 0 : code];
+    final code = codes.lastWhere((c) => c != 0, orElse: () => 0);
+    if (scope.strict && code != 0) throw ShellException(result(code));
+    return result(code);
   }
 
-  // Why it is being stopped, once something decides it is: a timeout or the scope's token.
-  final stop = Completer<Object>();
-  var tree = const <int>[];
-  void halt(Object why) {
-    if (stop.isCompleted) return;
-    // Synchronously, so a signal that is about to end this process still reaches them.
-    tree = _signalTree([for (final p in processes) p.pid], ProcessSignal.sigterm);
-    registerHaltedProcessPids(tree);
-    stop.complete(why);
-  }
-
-  final timer = scope.timeout == null
-      ? null
-      : Timer(scope.timeout!, () => halt(TimeoutException('"$display" timed out after ${scope.timeout}')));
-  final unregister = token?.onCancel(
-    () => halt(CancelledException(token.reason?.toString() ?? 'Operation was cancelled.')),
-  );
-  live?.halt = halt;
-  if (live?.abandoned ?? false) halt(const CancelledException('The stream was cancelled.'));
-  // When each stage exits, in order: a stage that fails after the one it feeds has gone was
-  // stopped by the broken pipe (`yes | head -1`), which is how a pipeline ends, not a failure.
-  final ended = <int>[];
-  final exits = Future.wait([
-    for (final (i, p) in processes.indexed) p.exitCode.then((code) => (ended..add(i), code).$2),
-  ]);
-  // The output is waited for under the same timeout and cancel as the exits: a background
-  // child left holding stdout open (`sleep 60 &`) would otherwise hold this call with it.
-  final settled = await Future.any<Object>([
-    exits.then((codes) async => (await Future.wait([...drained, fed]), codes).$2),
-    stop.future,
-  ]);
-  timer?.cancel();
-  unregister?.call();
-
-  ShellResult result(int code) =>
-      ShellResult(command: display, exitCode: code, stdout: '$stdoutBuf', stderr: '$stderrBuf');
-
-  if (settled is! List<int>) {
-    await _reap(tree);
-    for (final s in subscriptions) {
-      await s.cancel();
-    }
-    throw switch (settled) {
-      TimeoutException(:final message, :final duration) => ShellTimeoutException(result(-1), message, duration),
-      _ => settled,
-    };
-  }
-  final codes = [
-    for (final (i, code) in settled.indexed)
-      i + 1 < settled.length && ended.indexOf(i + 1) < ended.indexOf(i) ? 0 : code,
-  ];
-  final code = codes.lastWhere((c) => c != 0, orElse: () => 0);
-  if (scope.strict && code != 0) throw ShellException(result(code));
-  return result(code);
+  return (inherit && IoBridge.suspend != null) ? IoBridge.suspend!(execute) : execute();
 }
 
 final _psWhitespace = RegExp(r'\s+');
@@ -640,7 +694,13 @@ Future<Path?> which(String executable) async {
   final separator = Platform.isWindows ? ';' : ':';
   final paths = pathVar.split(separator).where((p) => p.isNotEmpty);
 
-  final extensions = Platform.isWindows ? ['', ...?Env.get('PATHEXT')?.split(';')] : [''];
+  final extensions = switch (Platform.isWindows) {
+    false => const [''],
+    true when executable.contains('.') => ['', ...?Env.get('PATHEXT')?.split(';').where((e) => e.isNotEmpty)],
+    true => [
+      ...(Env.get('PATHEXT')?.split(';').where((e) => e.isNotEmpty) ?? const ['.com', '.exe', '.bat', '.cmd']),
+    ],
+  };
 
   final candidates = [
     for (final dir in paths)
@@ -730,7 +790,7 @@ extension PathShellExtensions on Path {
     bool inherit = false,
   }) => ShellRun._(
     (scope, live) => _exec(
-      [(path, args)],
+      [(absolute.path, args)],
       _display(path, args),
       scope,
       input: input,

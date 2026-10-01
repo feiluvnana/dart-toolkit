@@ -291,7 +291,11 @@ final class _TomlParser {
       }
       out.add(_value());
       _skipBlank();
-      if (i < s.length && s[i] == ',') i++;
+      if (i < s.length && s[i] == ',') {
+        i++;
+      } else if (i >= s.length || s[i] != ']') {
+        throw _error('Expected "," or "]"');
+      }
     }
   }
 

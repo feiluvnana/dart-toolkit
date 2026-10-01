@@ -177,7 +177,7 @@ typedef _Text = (_U8, int);
 
 /// The archive functions of `dart_toolkit_native`, by file path.
 final class _NativeArchive {
-  static final _lib = NativeBridge.require('archives');
+  static final _lib = NativeBridge.require();
   static final _list = _lib
       .lookupFunction<
         Int32 Function(_U8, IntPtr, _U8, IntPtr, Pointer<_U8>, Pointer<IntPtr>),

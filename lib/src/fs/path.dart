@@ -358,8 +358,12 @@ extension type const Path(String path) implements String {
         await asFile.copy(targetPath);
       case PathType.link:
         await File(targetPath).parent.create(recursive: true);
+        await _deleteNonDir(targetPath);
         await Link(targetPath).create(await asLink.target());
       case PathType.dir:
+        if (path == targetPath || p.isWithin(path, targetPath)) {
+          throw FileSystemException('Cannot copy a directory into itself', path);
+        }
         await Directory(targetPath).create(recursive: true);
         await for (final entity in asDir.list(recursive: true, followLinks: false)) {
           final dest = p.join(targetPath, p.relative(entity.path, from: path));
@@ -368,6 +372,7 @@ extension type const Path(String path) implements String {
               await Directory(dest).create(recursive: true);
             case Link():
               await File(dest).parent.create(recursive: true);
+              await _deleteNonDir(dest);
               await Link(dest).create(await entity.target());
             case File():
               await File(dest).parent.create(recursive: true);
@@ -387,8 +392,12 @@ extension type const Path(String path) implements String {
         asFile.copySync(targetPath);
       case PathType.link:
         File(targetPath).parent.createSync(recursive: true);
+        _deleteNonDirSync(targetPath);
         Link(targetPath).createSync(asLink.targetSync());
       case PathType.dir:
+        if (path == targetPath || p.isWithin(path, targetPath)) {
+          throw FileSystemException('Cannot copy a directory into itself', path);
+        }
         Directory(targetPath).createSync(recursive: true);
         for (final entity in asDir.listSync(recursive: true, followLinks: false)) {
           final dest = p.join(targetPath, p.relative(entity.path, from: path));
@@ -397,6 +406,7 @@ extension type const Path(String path) implements String {
               Directory(dest).createSync(recursive: true);
             case Link():
               File(dest).parent.createSync(recursive: true);
+              _deleteNonDirSync(dest);
               Link(dest).createSync(entity.targetSync());
             case File():
               File(dest).parent.createSync(recursive: true);
@@ -551,12 +561,65 @@ extension StringPathExtensions on String {
   /// keeps its separators.
   Path get filename {
     final cleaned = replaceAll(_invalidNameChars, '_').replaceAll(_whitespaceCollapse, ' ').trim();
-    return Path(switch (cleaned) {
+    final name = switch (cleaned) {
       '' || '.' => '_',
       '..' => '__',
       _ => cleaned,
-    });
+    };
+    return Path(_capFilename(name));
   }
+}
+
+Future<void> _deleteNonDir(String path) async {
+  try {
+    await Link(path).delete();
+  } catch (_) {
+    try {
+      await File(path).delete();
+    } catch (_) {}
+  }
+}
+
+void _deleteNonDirSync(String path) {
+  try {
+    Link(path).deleteSync();
+  } catch (_) {
+    try {
+      File(path).deleteSync();
+    } catch (_) {}
+  }
+}
+
+String _capFilename(String name) {
+  final bytes = utf8.encode(name);
+  if (bytes.length <= 255) return name;
+  final ext = p.extension(name);
+  final extBytes = utf8.encode(ext);
+  if (extBytes.length >= 255) {
+    return _truncateUtf8(name, 255);
+  }
+  final base = name.substring(0, name.length - ext.length);
+  final budget = 255 - extBytes.length;
+  final truncated = _truncateUtf8(base, budget);
+  return '$truncated$ext';
+}
+
+String _truncateUtf8(String s, int maxBytes) {
+  final buf = StringBuffer();
+  var total = 0;
+  for (final rune in s.runes) {
+    final len = rune <= 0x7F
+        ? 1
+        : rune <= 0x7FF
+        ? 2
+        : rune <= 0xFFFF
+        ? 3
+        : 4;
+    if (total + len > maxBytes) break;
+    buf.writeCharCode(rune);
+    total += len;
+  }
+  return buf.toString();
 }
 
 PathType _pathType(FileSystemEntityType type) => switch (type) {

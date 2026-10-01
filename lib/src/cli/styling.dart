@@ -7,7 +7,7 @@ extension StringAnsiExtensions on String {
   /// Wraps this string in SGR [code], reopening it after any nested reset so that
   /// styles compose: `('a'.red + 'b').bold` leaves `b` bold.
   String _wrap(String code) {
-    if (!Io.color) return this;
+    if (Io.colorOverride == false) return this;
     final reopened = replaceAll('\x1B[0m', '\x1B[0m\x1B[${code}m');
     return '\x1B[${code}m$reopened\x1B[0m';
   }

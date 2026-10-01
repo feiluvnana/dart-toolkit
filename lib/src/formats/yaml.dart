@@ -313,6 +313,9 @@ final class _YamlParser {
       return value;
     }
     if (t.startsWith('*')) return _alias(t.substring(1).trim());
+    if (t == '?' || t.startsWith('? ') || t.startsWith('?\t')) {
+      _fail('explicit mapping keys ("?") are not supported');
+    }
     if (t.startsWith('|') || t.startsWith('>')) return _block(t, parent);
     if (t.startsWith('[') || t.startsWith('{')) return _flow(_joinFlow(t));
     if (t.startsWith('"') || t.startsWith("'")) {
@@ -448,7 +451,11 @@ final class _YamlParser {
     for (; row < source.length; row++) {
       final text = source[row];
       if (text.trim().isEmpty) {
-        blockIndent == -1 ? leading++ : body.add('');
+        if (blockIndent == -1) {
+          leading++;
+        } else {
+          body.add(folded ? '' : (text.length > blockIndent ? text.substring(blockIndent) : ''));
+        }
         continue;
       }
       final column = text.length - text.trimLeft().length;
@@ -457,12 +464,13 @@ final class _YamlParser {
         blockIndent = column;
       }
       if (column < blockIndent || (column == 0 && (text == '---' || text.startsWith('--- ') || text == '...'))) break;
-      body.add(text.substring(blockIndent).trimRight());
+      body.add(folded ? text.substring(blockIndent).trimRight() : text.substring(blockIndent));
     }
     while (pos < lines.length && lines[pos].number <= row) {
       pos++;
     }
     if (body.isNotEmpty) body.insertAll(0, List.filled(leading, ''));
+    if (body.isEmpty) return keep ? '\n' * leading : '';
 
     // Trailing blank lines are chomping's business rather than content.
     var trailing = 0;
@@ -571,7 +579,9 @@ final class _YamlParser {
           final out = <String, Object?>{};
           List<Object?>? merges;
           entries('}', () {
-            final k = '${value()}';
+            final start = i;
+            final v = value();
+            final k = (t[start] == '"' || t[start] == "'") ? '$v' : t.substring(start, i).trim();
             if (k == '<<') return (merges ??= []).add(afterColon());
             if (out.containsKey(k)) _fail('"$k" is defined twice');
             out[k] = afterColon();
@@ -679,7 +689,7 @@ final class _YamlParser {
         return true;
       case 'false' || 'False' || 'FALSE':
         return false;
-      case '.inf' || '.Inf' || '.INF' || '+.inf':
+      case '.inf' || '.Inf' || '.INF' || '+.inf' || '+.Inf' || '+.INF':
         return double.infinity;
       case '-.inf' || '-.Inf' || '-.INF':
         return double.negativeInfinity;
@@ -743,7 +753,9 @@ void _emitYaml(Object? value, StringBuffer sb, int indent, {required bool inList
 
 /// What makes a plain scalar read back as something else: an indicator first, `: ` or a
 /// `:` at the end (a key), ` #` (a comment), space at either end, a line break.
-final _unsafePlain = RegExp(r'''^[\s\-?:,\[\]{}#&*!|>'"%@`]|:\s|:$|\s#|\s$|\n''');
+final _unsafePlain = RegExp(
+  r'''^[\s\-?:,\[\]{}#&*!|>'"%@`]|^(---|\.\.\.)(\s|$)|:\s|:$|\s#|\s$|[\x00-\x08\n-\x1f\x7f-\x9f\u2028\u2029\ufeff]''',
+);
 
 /// [s] plain when it would read back as itself, double-quoted otherwise.
 String _yamlScalar(String s) =>

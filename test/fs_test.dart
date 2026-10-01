@@ -757,6 +757,46 @@ void main() {
       expect(await (root / 'moved.txt').type(), PathType.link);
       expect(await (root / 'f.txt').exists(), isTrue);
     });
+
+    test('FS-1: copy and copySync refuse copying a directory into itself or child', () async {
+      final src = root / 'self_src';
+      await src.mkdir();
+      await (src / 'sub').mkdir();
+      await expectLater(() => src.copy(src / 'sub' / 'out'), throwsA(isA<FileSystemException>()));
+      await expectLater(() => src.copy(src), throwsA(isA<FileSystemException>()));
+      expect(() => src.copySync(src / 'sub' / 'out'), throwsA(isA<FileSystemException>()));
+      expect(() => src.copySync(src), throwsA(isA<FileSystemException>()));
+    });
+
+    test('FS-2: copy and copySync overwrite existing non-directory destination when copying link', () async {
+      final target = root / 'target.txt';
+      await target.writeText('hello');
+      final link = root / 'link.txt';
+      await link.symlink(target.path);
+
+      final dstFile = root / 'dst.txt';
+      await dstFile.writeText('existing');
+      await link.copy(dstFile);
+      expect(await dstFile.type(), PathType.link);
+
+      final dstFile2 = root / 'dst2.txt';
+      dstFile2.writeTextSync('existing2');
+      link.copySync(dstFile2);
+      expect(dstFile2.typeSync(), PathType.link);
+    });
+
+    test('FS-3: filename caps length at 255 UTF-8 bytes keeping extension', () {
+      final longTitle = 'a' * 300;
+      final fn = '$longTitle.txt'.filename;
+      expect(utf8.encode(fn).length, lessThanOrEqualTo(255));
+      expect(fn.endsWith('.txt'), isTrue);
+
+      final unicodeLong = '名前' * 150;
+      final ufn = '$unicodeLong.mp3'.filename;
+      expect(utf8.encode(ufn).length, lessThanOrEqualTo(255));
+      expect(ufn.endsWith('.mp3'), isTrue);
+      expect(() => utf8.encode(ufn), returnsNormally);
+    });
   }, testOn: '!windows');
 }
 

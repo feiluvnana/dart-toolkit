@@ -91,6 +91,8 @@ void main() {
       expect('6869'.hexBytes, [0x68, 0x69]);
       expect([251, 255].base64Url, '-_8');
       expect('-_8'.base64Bytes, [251, 255]);
+      expect(' -_8 \r\n\t'.base64Bytes, [251, 255]);
+      expect('aGVsbG8=\n'.base64Bytes, utf8.encode('hello'));
       expect(utf8.encode('Hello!').base32, 'JBSWY3DPEE');
       expect('jbsw y3dp ee=='.base32Bytes, utf8.encode('Hello!'));
       expect(Secure.uuid(), matches(RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')));

@@ -1111,6 +1111,132 @@ flow: {<<: *o, z: 4}
       );
     });
   });
+
+  group('audit formats regressions (FMT-2..14)', () {
+    test('FMT-2: optgroup after optgroup does not nest', () {
+      final doc = '<select><optgroup label="A"><option>1</option><optgroup label="B"><option>2</option></select>'.html;
+      final groups = doc.$('select > optgroup');
+      expect(groups, hasLength(2));
+      expect(groups.first.attr('label'), 'A');
+      expect(groups.last.attr('label'), 'B');
+    });
+
+    test('FMT-3: td/th directly in thead/tfoot gets implied tr for table', () {
+      final doc =
+          '<table><thead><th>Col A</th><th>Col B</th></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table>'.html;
+      final table = doc.root.table;
+      expect(table.columns, ['Col A', 'Col B']);
+      expect(table.rows, hasLength(1));
+    });
+
+    test('FMT-4: :scope in Element.\$ matches the element itself', () {
+      final doc = '<div><ul id="u1"><li>1</li><li>2</li></ul><ul id="u2"><li>3</li></ul></div>'.html;
+      final u1 = doc.$('#u1').first;
+      expect(u1.$(':scope > li').texts, ['1', '2']);
+    });
+
+    test('FMT-5: XML serialization escapes < in attribute values and newlines/tabs', () {
+      final xml = XmlDocument.parse('<root attr="a &lt; b&#10;&#9;c"/>');
+      expect(xml.markup, contains('attr="a &lt; b&#10;&#9;c"'));
+    });
+
+    test('FMT-6: toYaml round-trips control chars, U+0085, --- and ...', () {
+      for (final s in ['...', '---', '\x07bell', '\x85nel', '--- \nhello']) {
+        final y = JsonDocument({'k': s});
+        expect(y.toYaml().yaml['k'].raw, s);
+      }
+    });
+
+    test('FMT-7: INI continuation lines append to key value', () {
+      final ini =
+          '''
+[options]
+install_requires =
+    requests
+    urllib3
+'''
+              .ini;
+      expect(ini['options']['install_requires'].raw, 'requests\nurllib3');
+    });
+
+    test('FMT-8: INI table followed by scalar at same key throws FormatException', () {
+      expect(() => 'a.b = 1\na = 2'.ini, throwsFormatException);
+    });
+
+    test('FMT-9: pre/textarea/listing preserves leading newline on re-parse and deep tables do not stack overflow', () {
+      final doc = '<pre>\n\nfirst line\nsecond line</pre>'.html;
+      expect(doc.$('pre').first.text, '\nfirst line\nsecond line');
+      final serialized = doc.markup;
+      final reparsed = serialized.html;
+      expect(reparsed.$('pre').first.text, '\nfirst line\nsecond line');
+
+      var html = '<table>';
+      for (var i = 0; i < 500; i++) {
+        html += '<div>';
+      }
+      html += '<tr><td>deep</td></tr>';
+      for (var i = 0; i < 500; i++) {
+        html += '</div>';
+      }
+      html += '</table>';
+      expect(html.html.root.table.rows, hasLength(1));
+    });
+
+    test('FMT-10: YAML block scalar spaces, empty block, +.Inf, flow key raw text, ? error', () {
+      final doc1 =
+          '''
+literal: |
+  line 1  
+  line 2  
+folded: >
+  line 1  
+  line 2  
+'''
+              .yaml;
+      expect(doc1['literal'].raw, 'line 1  \nline 2  \n');
+      expect(doc1['folded'].raw, 'line 1 line 2\n');
+
+      final emptyBlock = 'empty: |\nnext: 1'.yaml;
+      expect(emptyBlock['empty'].raw, '');
+
+      final inf = 'pos: +.Inf\npos_upper: +.INF'.yaml;
+      expect(inf['pos'].raw, double.infinity);
+      expect(inf['pos_upper'].raw, double.infinity);
+
+      final flow = '{1.20: val}'.yaml;
+      expect(flow.raw, {'1.20': 'val'});
+
+      expect(() => '? a\n: 1'.yaml, throwsFormatException);
+    });
+
+    test('FMT-11: &lang; and &rang; decode to U+27E8 and U+27E9', () {
+      final doc = '<p>&lang;math&rang;</p>'.html;
+      expect(doc.$('p').first.text, '\u{27e8}math\u{27e9}');
+    });
+
+    test('FMT-12: XPath comparison involving booleans handles empty node-sets properly', () {
+      final doc = '<root><item>val</item></root>'.html;
+      expect(doc.$x('//item[missing = false()]'), hasLength(1));
+      expect(doc.$x('//item[missing = true()]'), isEmpty);
+      expect(doc.$x('//item[missing != true()]'), hasLength(1));
+    });
+
+    test('FMT-13: exhaustive switch over Node without default case', () {
+      final Node node = '<div/>'.html.root;
+      final kind = switch (node) {
+        Element() => 'element',
+        Text() => 'text',
+        Attribute() => 'attribute',
+      };
+      expect(kind, 'element');
+    });
+
+    test('FMT-14: TOML arrays require commas between elements', () {
+      expect(() => 'a = ["x" "y"]'.toml, throwsFormatException);
+      expect(() => 'a = [1\n2]'.toml, throwsFormatException);
+      expect('a = ["x", "y"]'.toml['a'].raw, ['x', 'y']);
+    });
+  });
 }
 
 /// package:yaml's YamlMap/YamlList as plain Dart, for comparison.
@@ -1135,7 +1261,6 @@ String _ours(Node n) => switch (n) {
   Element() => 'E:${n.name}:${n.text.trim()}',
   Attribute() => 'A:${n.name}=${n.value}',
   Text() => 'T:${n.data.trim()}',
-  _ => 'O:${n.runtimeType}',
 };
 
 String _theirs(reference.XmlNode n) => switch (n) {

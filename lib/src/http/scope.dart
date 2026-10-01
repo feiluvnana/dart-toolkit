@@ -203,7 +203,7 @@ final class _ScopeClient implements Client {
       try {
         res = await _timed(Cancel.scope(() => _inner.send(sent), token: stop), stop);
       } catch (e) {
-        if (attempt > budget || !replayable || _certain(e) || e is CancelledException || Cancel.isCancelled) rethrow;
+        if (attempt > budget || !replayable || !_transient(e) || Cancel.isCancelled) rethrow;
         await _sleep((200 * attempt).ms);
         continue;
       }
@@ -240,7 +240,7 @@ final class _ScopeClient implements Client {
   Future<void> _polite(Uri url) async {
     final gap = _delay;
     if (gap == null) return;
-    final site = _site(url.host);
+    final site = '${url.scheme}://${_site(url.host)}:${url.port}';
     final now = DateTime.now();
     final booked = _slots[site];
     final at = booked == null || booked.isBefore(now) ? now : booked;

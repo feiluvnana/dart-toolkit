@@ -283,10 +283,23 @@ void main() {
 
     test('an unterminated quote and shell syntax are refused, not run wrongly', () async {
       await expectLater(run("echo 'abc"), throwsFormatException);
-      for (final command in ['echo a | wc -l', 'true && echo hi', 'echo a > f', r'echo $(id)', 'a; b']) {
+      for (final command in [
+        'echo a | wc -l',
+        'true && echo hi',
+        'echo a > f',
+        r'echo $(id)',
+        'a; b',
+        'echo *',
+        'echo ?',
+        'echo [ab]',
+        'ls ~',
+        r'echo $HOME',
+        r'echo ${PATH}',
+      ]) {
         await expectLater(run(command), throwsArgumentError, reason: command);
       }
       expect(await run("echo 'a | b' \"c && d\"").text, 'a | b c && d'); // quoted, they are text
+      expect(await run("echo '*' '?' '[a]' '~' '\$HOME'").text, '* ? [a] ~ \$HOME');
     }, testOn: '!windows');
 
     test('args are appended as they are, and are \$1… under shell: true', () async {
@@ -331,6 +344,39 @@ void main() {
       token.cancel();
       await expectLater(future, throwsA(isA<CancelledException>()));
       await killHaltedProcesses();
+    }, testOn: '!windows');
+
+    test('ShellResult.lines preserves leading whitespace (PROC-4)', () {
+      final res = ShellResult(command: 'test', exitCode: 0, stdout: '  col1  col2\n    indent\n', stderr: '');
+      expect(res.lines, ['  col1  col2', '    indent']);
+    });
+
+    test('ShellException.toString is concise with last stderr line (PROC-6)', () {
+      final res = ShellResult(command: 'false', exitCode: 1, stdout: '', stderr: 'first line\nerror: not found');
+      expect(ShellException(res).toString(), '"false" exited with code 1: error: not found');
+    });
+
+    test('missing workdir reports 127 with clear message (PROC-8)', () async {
+      final r = await run('ls', workdir: Path('/nonexistent/path/xyz'), strict: false, quiet: true);
+      expect(r.exitCode, 127);
+      expect(r.stderr, contains('No such working directory'));
+    });
+
+    test('pipefail does not hide real failure of upstream stage (PROC-5)', () async {
+      final res = await (r'sh -c "sleep 0.2; exit 3"' | 'true').run(strict: false, quiet: true);
+      expect(res.exitCode, 3);
+    }, testOn: '!windows');
+
+    test('stream does not silence stderr (PROC-9)', () async {
+      final err = StringBuffer();
+      Io.err = err;
+      try {
+        final lines = await run(r'sh -c "echo warn >&2; echo out"').stream.toList();
+        expect(lines, ['out']);
+        expect(err.toString(), contains('warn'));
+      } finally {
+        Io.reset();
+      }
     }, testOn: '!windows');
   });
 }

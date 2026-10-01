@@ -63,7 +63,7 @@ final class Attribute extends Node {
   @override
   String get markup {
     final sb = StringBuffer('$name="');
-    _writeEscaped(sb, value, attribute: true);
+    _writeEscaped(sb, value, attribute: true, xml: parent is Element && (parent as Element).syntax == Syntax.xml);
     return (sb..write('"')).toString();
   }
 
@@ -138,8 +138,16 @@ final class Element extends Node {
   /// Every descendant matching CSS [selector], in document order.
   ///
   /// Names fold to lowercase for HTML and match as written for XML. A prefixed XML name
-  /// (`media:content`) is not a CSS identifier; select those with the XPath form.
-  Elements $(String selector) => Elements(_Selector.parse(selector, fold: syntax == Syntax.html).matchAll(this));
+  /// (`media:content`) can be selected by escaping the colon as `r'media\:content'`, or with the XPath form.
+  Elements $(String selector) {
+    final s = _Selector.parse(selector, fold: syntax == Syntax.html);
+    _scopes.add(this);
+    try {
+      return Elements(s.matchAll(this));
+    } finally {
+      _scopes.removeLast();
+    }
+  }
 
   /// The nodes matching XPath [expression] with this element as the context; see XPath.
   Nodes $x(String expression) => Nodes(_XPath.parse(expression).select(this));
@@ -292,8 +300,17 @@ extension type Elements(List<Element> _list) implements List<Element> {
     final seen = <Element>{};
     return Elements([
       for (final e in _list)
-        for (final m in s.matchAll(e))
-          if (seen.add(m)) m,
+        ...() {
+          _scopes.add(e);
+          try {
+            return [
+              for (final m in s.matchAll(e))
+                if (seen.add(m)) m,
+            ];
+          } finally {
+            _scopes.removeLast();
+          }
+        }(),
     ]);
   }
 
@@ -383,9 +400,9 @@ final class HtmlDocument {
 ///
 /// One is made whenever a walk reaches the top, so two of them are the same node when they
 /// stand above the same root.
-final class _Document extends Node {
+final class _Document extends Element {
   final Element root;
-  _Document(this.root);
+  _Document(this.root) : super('#document', const {}, root.syntax);
   @override
   String get text => root.text;
   @override
@@ -504,7 +521,7 @@ bool _writeStartTag(Element e, StringBuffer sb) {
       ..write(' ')
       ..write(key)
       ..write('="');
-    _writeEscaped(sb, value, attribute: true);
+    _writeEscaped(sb, value, attribute: true, xml: e.syntax == Syntax.xml);
     sb.write('"');
   }
   if (e.syntax == Syntax.xml) {
@@ -516,6 +533,12 @@ bool _writeStartTag(Element e, StringBuffer sb) {
     return false;
   }
   sb.write('>');
+  if (e.name == 'pre' || e.name == 'textarea' || e.name == 'listing') {
+    final first = e.nodes.firstOrNull;
+    if (first is Text && first.data.startsWith('\n')) {
+      sb.write('\n');
+    }
+  }
   if (_voidElements.contains(e.name)) return false;
   if (!_rawTextElements.contains(e.name)) return true;
   for (final n in e.nodes) {
@@ -530,15 +553,18 @@ bool _writeStartTag(Element e, StringBuffer sb) {
 
 /// Writes [s] with `&`, `<` and `>` escaped for a text node, or `&` and `"` for a
 /// double-quoted attribute, copying the runs between them whole.
-void _writeEscaped(StringBuffer sb, String s, {required bool attribute}) {
+void _writeEscaped(StringBuffer sb, String s, {required bool attribute, bool xml = false}) {
   var from = 0;
   for (var i = 0; i < s.length; i++) {
     final c = s.codeUnitAt(i);
     final String? escape = switch (c) {
       0x26 => '&amp;',
-      0x3c when !attribute => '&lt;',
+      0x3c => '&lt;',
       0x3e when !attribute => '&gt;',
       0x22 when attribute => '&quot;',
+      0x0a when attribute && xml => '&#10;',
+      0x0d when attribute && xml => '&#13;',
+      0x09 when attribute && xml => '&#9;',
       _ => null,
     };
     if (escape == null) continue;
@@ -561,15 +587,29 @@ void _writeEscaped(StringBuffer sb, String s, {required bool attribute}) {
 /// then had to be filtered back down by their nearest ancestor.
 List<Element> _within(Element root, Set<String> names, Set<String> stop) {
   final out = <Element>[];
-  void walk(Element e) {
-    for (final node in e.nodes) {
+  final lists = <List<Node>>[];
+  final at = <int>[];
+  var list = root.nodes;
+  var i = 0;
+  while (true) {
+    if (i < list.length) {
+      final node = list[i++];
       if (node is! Element || stop.contains(node.name)) continue;
-      names.contains(node.name) ? out.add(node) : walk(node);
+      if (names.contains(node.name)) {
+        out.add(node);
+      } else if (node.nodes.isNotEmpty) {
+        lists.add(list);
+        at.add(i);
+        list = node.nodes;
+        i = 0;
+      }
+    } else if (lists.isEmpty) {
+      return out;
+    } else {
+      list = lists.removeLast();
+      i = at.removeLast();
     }
   }
-
-  walk(root);
-  return out;
 }
 
 /// An HTML `<table>` as a [Table].

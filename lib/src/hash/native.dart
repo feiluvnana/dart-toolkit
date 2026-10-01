@@ -8,7 +8,7 @@ typedef _Handle = Pointer<Void>;
 
 /// The native functions, looked up once on first use.
 final class _N {
-  static final lib = NativeBridge.require('hashing');
+  static final lib = NativeBridge.require();
 
   static final digestNew = lib.lookupFunction<_Handle Function(Uint32), _Handle Function(int)>('tk_digest_new');
   static final macNew = lib.lookupFunction<_Handle Function(Uint32, _U8, IntPtr), _Handle Function(int, _U8, int)>(

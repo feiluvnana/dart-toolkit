@@ -263,6 +263,7 @@ extension PathDownloadExtensions on Path {
       // about when the whole file was last changed.
       final since = ifModified && present && offset == 0 ? HttpDate.format(await modified()) : null;
       var received = offset;
+      String? lastModified;
 
       for (var attempt = 0; ; attempt++) {
         // A download wants the resource, so it says so: a client that renders pages hands
@@ -275,6 +276,7 @@ extension PathDownloadExtensions on Path {
           request.headers.putIfAbsent('if-modified-since', () => since);
         }
         final streamed = await lease.client.send(request);
+        if (streamed.headers['last-modified'] case final lm?) lastModified = lm;
         final status = streamed.statusCode;
 
         if (status == 304 && offset == 0) {
@@ -384,6 +386,11 @@ extension PathDownloadExtensions on Path {
 
       await part.rename(asFile.path);
       await _discard(validator);
+      if (lastModified != null) {
+        try {
+          await asFile.setLastModified(HttpDate.parse(lastModified));
+        } catch (_) {}
+      }
       yield Downloaded(url, this, received);
     } catch (e) {
       yield DownloadFailed(url, this, e);

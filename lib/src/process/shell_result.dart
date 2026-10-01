@@ -26,8 +26,9 @@ class ShellResult {
 
   const ShellResult({required this.command, required this.exitCode, required this.stdout, required this.stderr});
 
-  /// Non-empty, trimmed lines extracted from [stdout].
-  List<String> get lines => stdout.split(_newline).map((line) => line.trim()).where((line) => line.isNotEmpty).toList();
+  /// Non-empty lines extracted from [stdout], with trailing whitespace trimmed.
+  List<String> get lines =>
+      stdout.split(_newline).map((line) => line.trimRight()).where((line) => line.isNotEmpty).toList();
 
   @override
   String toString() => text.isNotEmpty ? text : stderr.trim();
@@ -42,8 +43,11 @@ class ShellException implements Exception {
   const ShellException(this.result);
 
   @override
-  String toString() =>
-      'ShellException: Command "${result.command}" exited with code ${result.exitCode}.\nStderr:\n${result.stderr.trim()}';
+  String toString() {
+    final last = result.stderr.trim().split(_newline).lastOrNull?.trim();
+    final tail = (last != null && last.isNotEmpty) ? ': $last' : '';
+    return '"${result.command}" exited with code ${result.exitCode}$tail';
+  }
 }
 
 /// Thrown when a command outlives its `timeout`, after it and its children are stopped.

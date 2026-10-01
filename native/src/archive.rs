@@ -170,15 +170,129 @@ fn tar_reader(path: &str, kind: &str) -> Result<Box<dyn Read>, String> {
     })
 }
 
-fn tar_writer(path: &str, format: u32, level: i32) -> Result<Box<dyn Write>, String> {
+fn validate_archive_level(format: u32, level: i32) -> Result<(), String> {
+    if level < 0 && level != -1 {
+        if format != TAR_ZST {
+            return Err("compression level cannot be negative".into());
+        }
+    }
+    match format {
+        ZIP | TAR_GZ => {
+            if level > 9 {
+                return Err("gzip/zip level is 0..=9".into());
+            }
+        }
+        TAR_XZ => {
+            if level > 9 {
+                return Err("xz level is 0..=9".into());
+            }
+        }
+        TAR_BZ2 => {
+            if level == 0 || level > 9 {
+                return Err("bzip2 level is 1..=9".into());
+            }
+        }
+        SEVENZ => {
+            if level > 9 {
+                return Err("7z level is 0..=9".into());
+            }
+        }
+        TAR_ZST => {
+            if level > 22 {
+                return Err("zstd level is up to 22".into());
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn validate_codec_level(codec: u32, level: i32) -> Result<(), String> {
+    if level < 0 && level != -1 {
+        if codec != ZSTD {
+            return Err("compression level cannot be negative".into());
+        }
+    }
+    match codec {
+        GZIP => {
+            if level > 9 {
+                return Err("gzip/zip level is 0..=9".into());
+            }
+        }
+        XZ => {
+            if level > 9 {
+                return Err("xz level is 0..=9".into());
+            }
+        }
+        BZIP2 => {
+            if level == 0 || level > 9 {
+                return Err("bzip2 level is 1..=9".into());
+            }
+        }
+        ZSTD => {
+            if level > 22 {
+                return Err("zstd level is up to 22".into());
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+enum TarWriter<W: Write> {
+    Plain(W),
+    Gz(flate2::write::GzEncoder<W>),
+    Xz(xz2::write::XzEncoder<W>),
+    Zst(zstd::stream::write::Encoder<'static, W>),
+    Bz2(bzip2::write::BzEncoder<W>),
+}
+
+impl<W: Write> Write for TarWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Plain(w) => w.write(buf),
+            Self::Gz(w) => w.write(buf),
+            Self::Xz(w) => w.write(buf),
+            Self::Zst(w) => w.write(buf),
+            Self::Bz2(w) => w.write(buf),
+        }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Self::Plain(w) => w.flush(),
+            Self::Gz(w) => w.flush(),
+            Self::Xz(w) => w.flush(),
+            Self::Zst(w) => w.flush(),
+            Self::Bz2(w) => w.flush(),
+        }
+    }
+}
+
+impl<W: Write> TarWriter<W> {
+    fn finish(self) -> std::io::Result<W> {
+        match self {
+            Self::Plain(mut w) => {
+                w.flush()?;
+                Ok(w)
+            }
+            Self::Gz(w) => w.finish(),
+            Self::Xz(w) => w.finish(),
+            Self::Zst(w) => w.finish(),
+            Self::Bz2(w) => w.finish(),
+        }
+    }
+}
+
+fn tar_writer(path: &str, format: u32, level: i32) -> Result<TarWriter<BufWriter<File>>, String> {
+    validate_archive_level(format, level)?;
     let f = BufWriter::new(create_file(path)?);
     let lvl = |d: u32| if level < 0 { d } else { level as u32 };
     Ok(match format {
-        TAR => Box::new(f),
-        TAR_GZ => Box::new(flate2::write::GzEncoder::new(f, flate2::Compression::new(lvl(6)))),
-        TAR_XZ => Box::new(xz2::write::XzEncoder::new(f, lvl(6))),
-        TAR_ZST => Box::new(zstd::stream::write::Encoder::new(f, if level < 0 { 3 } else { level }).msg()?.auto_finish()),
-        TAR_BZ2 => Box::new(bzip2::write::BzEncoder::new(f, bzip2::Compression::new(lvl(9)))),
+        TAR => TarWriter::Plain(f),
+        TAR_GZ => TarWriter::Gz(flate2::write::GzEncoder::new(f, flate2::Compression::new(lvl(6)))),
+        TAR_XZ => TarWriter::Xz(xz2::write::XzEncoder::new(f, lvl(6))),
+        TAR_ZST => TarWriter::Zst(zstd::stream::write::Encoder::new(f, if level == -1 { 3 } else { level }).msg()?),
+        TAR_BZ2 => TarWriter::Bz2(bzip2::write::BzEncoder::new(f, bzip2::Compression::new(lvl(9)))),
         _ => unreachable!(),
     })
 }
@@ -208,13 +322,24 @@ fn list(path: &str, password: Option<&str>) -> Result<Vec<Entry>, String> {
         "7z" => {
             let pw = sevenz_rust2::Password::from(password.unwrap_or(""));
             let reader = sevenz_rust2::SevenZReader::open(path, pw).msg()?;
-            for f in &reader.archive().files {
+            let archive = reader.archive();
+            for (i, f) in archive.files.iter().enumerate() {
+                let encrypted = archive
+                    .stream_map
+                    .file_folder_index
+                    .get(i)
+                    .copied()
+                    .flatten()
+                    .and_then(|fi| archive.folders.get(fi))
+                    .is_some_and(|folder| {
+                        folder.coders.iter().any(|c| c.decompression_method_id() == sevenz_rust2::SevenZMethod::ID_AES256SHA256)
+                    });
                 out.push(Entry {
                     name: f.name().to_string(),
                     size: f.size(),
                     compressed: f.compressed_size,
                     dir: f.is_directory(),
-                    encrypted: false,
+                    encrypted,
                     modified: if f.has_last_modified_date { Some(f.last_modified_date().to_unix_time_secs()) } else { None },
                 });
             }
@@ -476,6 +601,90 @@ fn glob(p: &[char], s: &[char], fold: bool) -> bool {
             }
         }
         ['?', rest @ ..] => !s.is_empty() && s[0] != '/' && glob(rest, &s[1..], fold),
+        ['[', rest @ ..] => {
+            if let Some(end) = rest.iter().position(|&c| c == ']') {
+                if !s.is_empty() && s[0] != '/' {
+                    let class = &rest[..end];
+                    let after = &rest[end + 1..];
+                    let (negated, spec) = if class.starts_with(&['!']) || class.starts_with(&['^']) {
+                        (true, &class[1..])
+                    } else {
+                        (false, class)
+                    };
+                    let mut matched = false;
+                    let mut i = 0;
+                    while i < spec.len() {
+                        if i + 2 < spec.len() && spec[i + 1] == '-' {
+                            let (c_s, c_f, sc) = if fold {
+                                (spec[i].to_ascii_lowercase(), spec[i + 2].to_ascii_lowercase(), s[0].to_ascii_lowercase())
+                            } else {
+                                (spec[i], spec[i + 2], s[0])
+                            };
+                            if sc >= c_s && sc <= c_f {
+                                matched = true;
+                                break;
+                            }
+                            i += 3;
+                        } else {
+                            if eq(spec[i], s[0]) {
+                                matched = true;
+                                break;
+                            }
+                            i += 1;
+                        }
+                    }
+                    if (matched != negated) && glob(after, &s[1..], fold) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            !s.is_empty() && eq('[', s[0]) && glob(rest, &s[1..], fold)
+        }
+        ['{', rest @ ..] => {
+            let mut depth = 0;
+            let mut close = None;
+            for (idx, &c) in rest.iter().enumerate() {
+                if c == '{' {
+                    depth += 1;
+                } else if c == '}' {
+                    if depth == 0 {
+                        close = Some(idx);
+                        break;
+                    } else {
+                        depth -= 1;
+                    }
+                }
+            }
+            if let Some(end) = close {
+                let inside = &rest[..end];
+                let after = &rest[end + 1..];
+                let mut d = 0;
+                let mut start = 0;
+                let mut alts = Vec::new();
+                for (i, &c) in inside.iter().enumerate() {
+                    if c == '{' {
+                        d += 1;
+                    } else if c == '}' {
+                        d -= 1;
+                    } else if c == ',' && d == 0 {
+                        alts.push(&inside[start..i]);
+                        start = i + 1;
+                    }
+                }
+                alts.push(&inside[start..]);
+                for alt in alts {
+                    let mut combined = Vec::with_capacity(alt.len() + after.len());
+                    combined.extend_from_slice(alt);
+                    combined.extend_from_slice(after);
+                    if glob(&combined, s, fold) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            !s.is_empty() && eq('{', s[0]) && glob(rest, &s[1..], fold)
+        }
         [c, rest @ ..] => !s.is_empty() && eq(*c, s[0]) && glob(rest, &s[1..], fold),
     }
 }
@@ -625,6 +834,7 @@ fn extract(path: &str, dest: &str, password: Option<&str>, only: Option<&str>, f
     std::fs::create_dir_all(root).msg()?;
     let mut pol = Policy::new(path, root, only, flags)?;
     let mut count = 0;
+    let mut dirs: Vec<(PathBuf, Option<u32>, Option<i64>)> = Vec::new();
     match kind {
         "zip" => {
             let mut z = zip_open(path)?;
@@ -641,6 +851,7 @@ fn extract(path: &str, dest: &str, password: Option<&str>, only: Option<&str>, f
                 if f.is_dir() {
                     pol.contains(&target)?;
                     std::fs::create_dir_all(&target).msg()?;
+                    dirs.push((target.clone(), f.unix_mode(), zip_mtime(&f)));
                     continue;
                 }
                 if f.is_symlink() {
@@ -676,13 +887,19 @@ fn extract(path: &str, dest: &str, password: Option<&str>, only: Option<&str>, f
                         return Ok(true);
                     }
                     let target = inside(root, &name).map_err(seven_err)?;
+                    let mtime = if e.has_last_modified_date { Some(e.last_modified_date().to_unix_time_secs()) } else { None };
+                    let mode = if e.has_windows_attributes && (e.windows_attributes >> 16) != 0 {
+                        Some(e.windows_attributes >> 16)
+                    } else {
+                        None
+                    };
                     if e.is_directory() {
                         pol.contains(&target).map_err(seven_err)?;
                         std::fs::create_dir_all(&target).map_err(sevenz_rust2::Error::io)?;
+                        dirs.push((target.clone(), mode, mtime));
                         return Ok(true);
                     }
-                    let mtime = if e.has_last_modified_date { Some(e.last_modified_date().to_unix_time_secs()) } else { None };
-                    write_file(&mut pol, &target, r, e.size(), &name, mtime, None).map_err(seven_err)?;
+                    write_file(&mut pol, &target, r, e.size(), &name, mtime, mode).map_err(seven_err)?;
                     count += 1;
                     Ok(true)
                 })
@@ -750,6 +967,11 @@ fn extract(path: &str, dest: &str, password: Option<&str>, only: Option<&str>, f
                 } else {
                     pol.charge(e.size(), &name)?;
                 }
+                if kind.is_dir() {
+                    let mtime = e.header().mtime().ok().map(|m| m as i64);
+                    let mode = e.header().mode().ok();
+                    dirs.push((target.clone(), mode, mtime));
+                }
                 if e.unpack_in(root).msg()? && kind.is_file() {
                     count += 1;
                 }
@@ -757,6 +979,15 @@ fn extract(path: &str, dest: &str, password: Option<&str>, only: Option<&str>, f
         }
     }
     pol.finish()?;
+    for (dir, mode, mtime) in dirs.into_iter().rev() {
+        if let Some(s) = mtime {
+            #[cfg(unix)]
+            if let Ok(f) = std::fs::File::open(&dir) {
+                let _ = f.set_modified(unix_time(s));
+            }
+        }
+        set_mode(&dir, mode, pol.trusted);
+    }
     Ok(count)
 }
 
@@ -884,13 +1115,21 @@ pub unsafe extern "C" fn tk_archive_read(
 // create
 // ---------------------------------------------------------------------------------------------
 
-/// Files under `src` (or `src` itself) as (relative name, path, is_dir), sorted, without
+enum ItemKind {
+    File,
+    Dir,
+    Symlink(PathBuf),
+}
+
+/// Files under `src` (or `src` itself) as (relative name, path, kind), sorted, without
 /// `dest`: an archive written inside the tree it archives would otherwise contain itself.
-fn walk(src: &Path, dest: &Path) -> Result<Vec<(String, PathBuf, bool)>, String> {
+fn walk(src: &Path, dest: &Path) -> Result<Vec<(String, PathBuf, ItemKind)>, String> {
     let mut out = Vec::new();
-    if src.is_file() {
-        out.push((src.file_name().unwrap().to_string_lossy().to_string(), src.to_path_buf(), false));
-        return Ok(out);
+    if let Ok(meta) = src.symlink_metadata() {
+        if meta.is_file() {
+            out.push((src.file_name().unwrap().to_string_lossy().to_string(), src.to_path_buf(), ItemKind::File));
+            return Ok(out);
+        }
     }
     // The destination's name relative to the source, when it lands inside it.
     let own = match (src.canonicalize(), dest.parent().and_then(|p| p.canonicalize().ok())) {
@@ -904,33 +1143,44 @@ fn walk(src: &Path, dest: &Path) -> Result<Vec<(String, PathBuf, bool)>, String>
             continue;
         }
         let rel = relative.to_string_lossy().replace('\\', "/");
-        let is_dir = entry.file_type().is_dir();
-        // Symlinks are skipped on purpose: an archive may be extracted anywhere, and a
-        // link pointing out of the tree is the same hazard `inside` exists to stop.
-        if entry.file_type().is_symlink() {
-            continue;
-        }
-        out.push((rel, entry.path().to_path_buf(), is_dir));
+        let ft = entry.file_type();
+        let kind = if ft.is_dir() {
+            ItemKind::Dir
+        } else if ft.is_symlink() {
+            match std::fs::read_link(entry.path()) {
+                Ok(target) => ItemKind::Symlink(target),
+                Err(_) => continue,
+            }
+        } else {
+            ItemKind::File
+        };
+        out.push((rel, entry.path().to_path_buf(), kind));
     }
     Ok(out)
 }
 
 fn create(format: u32, src: &str, dest: &str, password: Option<&str>, level: i32) -> Result<i32, String> {
+    validate_archive_level(format, level)?;
     let src_path = Path::new(src);
     if let Some(p) = Path::new(dest).parent() {
         std::fs::create_dir_all(p).msg()?;
     }
     let items = walk(src_path, Path::new(dest))?;
-    let files = items.iter().filter(|i| !i.2).count() as i32;
+    let files = items.iter().filter(|i| !matches!(i.2, ItemKind::Dir)).count() as i32;
     match format {
         ZIP => {
             let mut w = zip::ZipWriter::new(BufWriter::new(create_file(dest)?));
-            for (name, path, is_dir) in &items {
+            for (name, path, kind) in &items {
+                let method = if level == 0 {
+                    zip::CompressionMethod::Stored
+                } else {
+                    zip::CompressionMethod::Deflated
+                };
                 let mut opts = zip::write::SimpleFileOptions::default()
-                    .compression_method(zip::CompressionMethod::Deflated)
-                    .compression_level(if level < 0 { None } else { Some(level as i64) })
+                    .compression_method(method)
+                    .compression_level(if level <= 0 { None } else { Some(level as i64) })
                     .large_file(true);
-                if let Ok(meta) = std::fs::metadata(path) {
+                if let Ok(meta) = path.symlink_metadata() {
                     #[cfg(unix)]
                     {
                         use std::os::unix::fs::PermissionsExt;
@@ -944,11 +1194,17 @@ fn create(format: u32, src: &str, dest: &str, password: Option<&str>, level: i32
                 if let Some(pw) = password {
                     opts = opts.with_aes_encryption(zip::AesMode::Aes256, pw);
                 }
-                if *is_dir {
-                    w.add_directory(name, opts).msg()?;
-                } else {
-                    w.start_file(name, opts).msg()?;
-                    pump(BufReader::new(read_file(path.to_str().ok_or("bad path")?)?), &mut w)?;
+                match kind {
+                    ItemKind::Dir => {
+                        w.add_directory(name, opts).msg()?;
+                    }
+                    ItemKind::Symlink(target) => {
+                        w.add_symlink(name, target.to_string_lossy(), opts).msg()?;
+                    }
+                    ItemKind::File => {
+                        w.start_file(name, opts).msg()?;
+                        pump(BufReader::new(read_file(path.to_str().ok_or("bad path")?)?), &mut w)?;
+                    }
                 }
             }
             w.finish().msg()?;
@@ -957,15 +1213,37 @@ fn create(format: u32, src: &str, dest: &str, password: Option<&str>, level: i32
             // From the same walk as zip and tar: the crate's own directory walk runs after the
             // destination exists, and archived a truncated copy of it into itself.
             let mut z = sevenz_rust2::SevenZWriter::new(create_file(dest)?).msg()?;
+            let lvl = if level < 0 { 6 } else { level as u32 };
+            let lzma2_cfg: sevenz_rust2::SevenZMethodConfiguration =
+                sevenz_rust2::SevenZMethodConfiguration::new(sevenz_rust2::SevenZMethod::LZMA2)
+                    .with_options(sevenz_rust2::MethodOptions::LZMA2(sevenz_rust2::lzma::LZMA2Options::with_preset(lvl)));
             if let Some(pw) = password {
                 z.set_content_methods(vec![
                     sevenz_rust2::AesEncoderOptions::new(sevenz_rust2::Password::from(pw)).into(),
-                    sevenz_rust2::SevenZMethod::LZMA2.into(),
+                    lzma2_cfg,
                 ]);
+            } else {
+                z.set_content_methods(vec![lzma2_cfg]);
             }
-            for (name, path, is_dir) in &items {
-                let entry = sevenz_rust2::SevenZArchiveEntry::from_path(path, name.clone());
-                let reader = if *is_dir { None } else { Some(BufReader::new(read_file(path.to_str().ok_or("bad path")?)?)) };
+            for (name, path, kind) in &items {
+                if matches!(kind, ItemKind::Symlink(_)) {
+                    continue;
+                }
+                let mut entry = sevenz_rust2::SevenZArchiveEntry::from_path(path, name.clone());
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Ok(meta) = path.symlink_metadata() {
+                        let mode = meta.permissions().mode();
+                        entry.has_windows_attributes = true;
+                        entry.windows_attributes = 0x8000 | (mode << 16);
+                    }
+                }
+                let reader = if matches!(kind, ItemKind::Dir) {
+                    None
+                } else {
+                    Some(BufReader::new(read_file(path.to_str().ok_or("bad path")?)?))
+                };
                 z.push_archive_entry(entry, reader).msg()?;
             }
             z.finish().msg()?;
@@ -976,15 +1254,19 @@ fn create(format: u32, src: &str, dest: &str, password: Option<&str>, level: i32
             }
             let mut b = tar::Builder::new(tar_writer(dest, format, level)?);
             b.follow_symlinks(false);
-            for (name, path, is_dir) in &items {
-                if *is_dir {
-                    b.append_dir(name, path).msg()?;
-                } else {
-                    b.append_path_with_name(path, name).msg()?;
+            for (name, path, kind) in &items {
+                match kind {
+                    ItemKind::Dir => {
+                        b.append_dir(name, path).msg()?;
+                    }
+                    ItemKind::File | ItemKind::Symlink(_) => {
+                        b.append_path_with_name(path, name).msg()?;
+                    }
                 }
             }
-            let mut inner = b.into_inner().msg()?;
-            inner.flush().msg()?;
+            let inner = b.into_inner().msg()?;
+            let mut buf_writer = inner.finish().msg()?;
+            buf_writer.flush().msg()?;
         }
         _ => return Err(format!("unknown archive format {}", format)),
     }
@@ -1004,14 +1286,35 @@ pub unsafe extern "C" fn tk_archive_create(format: u32, src: *const u8, slen: us
 #[no_mangle]
 pub unsafe extern "C" fn tk_compress(codec: u32, src: *const u8, slen: usize, dest: *const u8, dlen: usize, level: i32) -> i32 {
     guard(|| {
-        let input = BufReader::new(read_file(text(src, slen)?)?);
+        validate_codec_level(codec, level)?;
+        let mut input = BufReader::new(read_file(text(src, slen)?)?);
         let out = BufWriter::new(create_file(text(dest, dlen)?)?);
         let lvl = |d: u32| if level < 0 { d } else { level as u32 };
         match codec {
-            GZIP => pump(input, flate2::write::GzEncoder::new(out, flate2::Compression::new(lvl(6))))?,
-            XZ => pump(input, xz2::write::XzEncoder::new(out, lvl(6)))?,
-            ZSTD => pump(input, zstd::stream::write::Encoder::new(out, if level < 0 { 3 } else { level }).msg()?.auto_finish())?,
-            BZIP2 => pump(input, bzip2::write::BzEncoder::new(out, bzip2::Compression::new(lvl(9))))?,
+            GZIP => {
+                let mut enc = flate2::write::GzEncoder::new(out, flate2::Compression::new(lvl(6)));
+                pump(&mut input, &mut enc)?;
+                let mut out = enc.finish().msg()?;
+                out.flush().msg()?;
+            }
+            XZ => {
+                let mut enc = xz2::write::XzEncoder::new(out, lvl(6));
+                pump(&mut input, &mut enc)?;
+                let mut out = enc.finish().msg()?;
+                out.flush().msg()?;
+            }
+            ZSTD => {
+                let mut enc = zstd::stream::write::Encoder::new(out, if level == -1 { 3 } else { level }).msg()?;
+                pump(&mut input, &mut enc)?;
+                let mut out = enc.finish().msg()?;
+                out.flush().msg()?;
+            }
+            BZIP2 => {
+                let mut enc = bzip2::write::BzEncoder::new(out, bzip2::Compression::new(lvl(9)));
+                pump(&mut input, &mut enc)?;
+                let mut out = enc.finish().msg()?;
+                out.flush().msg()?;
+            }
             _ => return Err(format!("unknown codec {}", codec)),
         }
         Ok(0)
