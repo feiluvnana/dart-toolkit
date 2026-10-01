@@ -201,6 +201,20 @@ void main() {
       expect(plain(Menu(['a', 'b', 'c', 'd', 'e'], pick), 8, height: 3), '  ○ b  │\n  ○ c  ┃\n› ○ d  ┃');
     });
 
+    test('a running app leaves a restore for an exit that skips finally', () async {
+      final term = Tui.terminal = FakeTerminal(width: 20, height: 5);
+      final run = Tui.run<int>(0, view: (_) => Label('x'), update: (s, e) => s);
+      await pump();
+      expect(term.isAltScreen, isTrue);
+      expect(IoBridge.restores, hasLength(1));
+      IoBridge.restores.first(); // what `Lifecycle.exit` does before `exit`
+      expect(term.isAltScreen, isFalse);
+      expect(term.isCursorVisible, isTrue);
+      expect(term.isOpen, isFalse);
+      expect(IoBridge.restores, isEmpty);
+      run.ignore();
+    });
+
     test('Menu filters as typed and highlights the match', () async {
       final term = Tui.terminal = FakeTerminal(width: 20, height: 5);
       final pick = Choice(filter: true);

@@ -173,6 +173,7 @@ final class _Engine<S> {
     _active = this;
     try {
       await term.open();
+      IoBridge.restores.add(_restore);
       term.write(
         inline
             ? '\x1b[?25l\x1b[?2004h'
@@ -339,6 +340,7 @@ final class _Engine<S> {
   void _restore() {
     if (_restored) return;
     _restored = true;
+    IoBridge.restores.remove(_restore);
     if (identical(_active, this)) _active = null;
     for (final t in [_escTimer, _frameTimer, _animTimer]) {
       t?.cancel();

@@ -43,7 +43,14 @@ Future<void> _runExitHooks() => _hooksRun ??= () async {
 }();
 
 /// `dart:io`'s `exit`, reachable from inside [Lifecycle] where the static shadows the name.
-Never _terminate(int code) => exit(code);
+Never _terminate(int code) {
+  for (final restore in List.of(IoBridge.restores)) {
+    try {
+      restore();
+    } catch (_) {}
+  }
+  exit(code);
+}
 
 void _noop() {}
 

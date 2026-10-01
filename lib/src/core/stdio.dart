@@ -145,6 +145,10 @@ final class IoBridge {
 
   /// The console theme's border glyphs, for `collection`'s `Table.show`; set once `cli` draws.
   static Border Function()? border;
+
+  /// Synchronous terminal restores (a TUI's raw mode and alternate screen) that `cli` runs
+  /// before it ends the process, since `exit` skips every `finally`.
+  static final Set<void Function()> restores = {};
 }
 
 /// A sink that drops escapes on the way through.
