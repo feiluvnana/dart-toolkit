@@ -7,6 +7,8 @@ extension NumBytesExtensions on num {
   /// This many bytes in binary units, one decimal: `512 B`, `1.5 KB`, `20.0 MB`, `3.2 GB`;
   /// a rate reads the same: `'${speed.humanBytes}/s'`.
   String get humanBytes {
+    if (isNaN) return 'NaN B';
+    if (isInfinite) return isNegative ? '-Infinity B' : 'Infinity B';
     if (round() < 1024) return '${round()} B';
     var value = this / 1024;
     // The unit is picked on the rounded figure, so 1048575 is `1.0 MB`, not `1024.0 KB`.

@@ -107,6 +107,26 @@ extension UriExtensions on Uri {
   /// A non-2xx throws as [Fetch.json] does; stopping the loop closes the connection.
   Stream<ServerEvent> events({Map<String, String>? headers, Object? json}) =>
       _events(this, Http.client, headers: headers, json: json);
+
+  /// Downloads this URI to [destination] (a [Path] or [String]).
+  Stream<BatchDownloadProgress> download(
+    Object destination, {
+    Map<String, String>? headers,
+    bool overwrite = false,
+    bool resume = true,
+    bool ifModified = false,
+    (Hash algorithm, String hex)? checksum,
+  }) {
+    final dest = destination is Path ? destination : Path(destination.toString());
+    return dest.download(
+      this,
+      headers: headers,
+      overwrite: overwrite,
+      resume: resume,
+      ifModified: ifModified,
+      checksum: checksum,
+    );
+  }
 }
 
 /// [UriExtensions.events] on [client] (the scope's when asked for), or a fresh one.

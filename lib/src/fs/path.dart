@@ -13,6 +13,26 @@ final _tempName = RegExp(r'^\..+\.[0-9a-f]{16}\.tmp$');
 /// {@category Files}
 enum PathType { file, dir, link, none }
 
+/// The front door for filesystem operations and paths.
+///
+/// {@category Files}
+abstract final class Fs {
+  /// Wraps [path] as a [Path].
+  static Path path(String path) => Path(path);
+
+  /// The current working directory.
+  static Path get current => Path.current;
+
+  /// The user's home directory.
+  static Path get home => Path.home;
+
+  /// The system temporary directory.
+  static Path get temp => Path.temp;
+
+  /// Runs [body] with a fresh, empty directory under [temp], deleted afterwards.
+  static Future<R> tempDir<R>(FutureOr<R> Function(Path dir) body) => Path.tempDir(body);
+}
+
 /// A filesystem path that is also a [String], with path and filesystem helpers.
 ///
 /// {@category Files}
@@ -172,19 +192,19 @@ extension type const Path(String path) implements String {
   /// This path with invalid filesystem characters replaced, and control characters removed,
   /// in every component; separators survive. For one component use [StringPathExtensions.filename].
   Path get sanitized {
-    // The root (`/`, `C:\`, `\\server\share`) is the one place a `:` belongs.
+    final useSlash = !path.contains(r'\');
     final root = p.rootPrefix(path);
-    return Path(
-      root +
-          p.joinAll([
-            for (final part in p.split(path.substring(root.length)))
-              part
-                  .replaceAll(_invalidPathChars, '_')
-                  .replaceAll(_controlChars, '')
-                  .replaceAll(_whitespaceCollapse, ' ')
-                  .trim(),
-          ]),
-    );
+    final rawParts = path.substring(root.length).split(RegExp(r'[/\\]'));
+    final parts = [
+      for (final part in rawParts)
+        part
+            .replaceAll(_invalidPathChars, '_')
+            .replaceAll(_controlChars, '')
+            .replaceAll(_whitespaceCollapse, ' ')
+            .trim(),
+    ];
+    final sep = useSlash ? '/' : p.separator;
+    return Path(root + parts.join(sep));
   }
 
   /// Reads this file as a string.
@@ -362,11 +382,11 @@ extension type const Path(String path) implements String {
     final rest = segments.skip(fixed).join('/');
     // A `/` inside braces — `{a,b/c}` — makes the depth one of several, so it is not bounded.
     final unbounded = rest.contains('**') || _braceSlash.hasMatch(rest);
+    final rawStart = p.isAbsolute(pattern)
+        ? (prefix.length < p.rootPrefix(pattern).length ? p.rootPrefix(pattern) : prefix)
+        : p.join(path, prefix);
     return (
-      // `C:` alone, before `/*.txt`, is the drive's working directory, not its root.
-      p.isAbsolute(pattern)
-          ? (prefix.length < p.rootPrefix(pattern).length ? p.rootPrefix(pattern) : prefix)
-          : p.join(path, prefix),
+      p.normalize(rawStart),
       rest,
       unbounded ? null : segments.length - fixed,
       dirs,

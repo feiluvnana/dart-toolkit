@@ -4,7 +4,7 @@ Object _throwable(Object? value) => value ?? StateError('Unwrapped a Left holdin
 
 /// A failure [Left] or a success [Right].
 ///
-/// {@category Formats}
+/// {@category Utilities}
 sealed class Either<L, R> {
   const Either();
 

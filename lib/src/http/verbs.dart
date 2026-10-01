@@ -83,6 +83,27 @@ extension ClientExtensions on Client {
   Stream<ServerEvent> events(Uri url, {Map<String, String>? headers, Object? json}) =>
       _events(url, this, headers: headers, json: json);
 
+  /// Downloads [url] to [destination] (a [Path] or [String]) through this client.
+  Stream<BatchDownloadProgress> download(
+    Uri url,
+    Object destination, {
+    Map<String, String>? headers,
+    bool overwrite = false,
+    bool resume = true,
+    bool ifModified = false,
+    (Hash algorithm, String hex)? checksum,
+  }) => _withClient(
+    this,
+    () => (destination is Path ? destination : Path(destination.toString())).download(
+      url,
+      headers: headers,
+      overwrite: overwrite,
+      resume: resume,
+      ifModified: ifModified,
+      checksum: checksum,
+    ),
+  );
+
   /// A crawl on this client, seeded with a [Uri], an `Iterable<Uri>` or an
   /// `Iterable<Request>`. The client rides on the crawl rather than the zone, since a
   /// [Scrape] starts wherever it is listened to.

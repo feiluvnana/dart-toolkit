@@ -47,6 +47,39 @@ enum Hash {
 
   /// The digests of [paths], in order, hashed in parallel by the native library synchronously.
   List<Uint8List> filesSync(List<String> paths) => paths.isEmpty ? const [] : _ofFiles(this, paths);
+
+  /// Computes the hex digest of [text]'s UTF-8 bytes.
+  String text(String text, {Encoding encoding = utf8}) => _hex(digest(encoding.encode(text)));
+
+  /// Computes the hex digest of [bytes].
+  String bytes(List<int> bytes) => _hex(digest(bytes));
+
+  /// Computes the raw byte digest of [bytes] in memory.
+  Uint8List digest(List<int> bytes) => _ofBytes(this, null, bytes);
+
+  /// Computes the hex digest of the file at [pathOrFile].
+  ///
+  /// Accepts a [File], [String] path, or any object whose `toString()` is a path.
+  Future<String> file(Object pathOrFile) async => _hex(await fileBytes(pathOrFile));
+
+  /// Computes the raw byte digest of the file at [pathOrFile].
+  Future<Uint8List> fileBytes(Object pathOrFile) async {
+    final path = pathOrFile is File ? pathOrFile.path : pathOrFile.toString();
+    return _file(path);
+  }
+
+  /// Computes the HMAC hex digest of [bytes] under [key].
+  String hmacBytes(List<int> key, List<int> bytes) => _hex(_ofBytes(this, key, bytes));
+
+  /// Computes the HMAC hex digest of [text] under [key].
+  String hmacText(List<int> key, String text, {Encoding encoding = utf8}) =>
+      hmacBytes(key, encoding.encode(text));
+
+  /// Computes the HMAC hex digest of the file at [pathOrFile] under [key].
+  Future<String> hmacFile(List<int> key, Object pathOrFile) async {
+    final path = pathOrFile is File ? pathOrFile.path : pathOrFile.toString();
+    return _hex(await _file(path, key: key));
+  }
 }
 
 /// Digests and MACs of a file: `await file.hash(Hash.sha256)`.

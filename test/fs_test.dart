@@ -20,7 +20,7 @@ void main() {
       expect(f.isAbsolute, isTrue);
       expect(Path('x/y').isAbsolute, isFalse);
       expect(Path('x/y').absolute, Path.current / 'x' / 'y');
-      expect(f.relativeTo(dir), Path('a/song.mp3'));
+      expect(f.relativeTo(dir), Path(p.join('a', 'song.mp3')));
       expect(f.withExt('flac').name, 'song.flac');
       expect(f.withExt('.flac').name, 'song.flac');
       expect(f.withExt('').name, 'song');
@@ -305,12 +305,12 @@ void main() {
     });
 
     test('name, stem, ext, parent, and segments properties', () {
-      final p = Path('folder/subfolder/track.part.mp3');
-      expect(p.name, equals('track.part.mp3'));
-      expect(p.stem, equals('track.part'));
-      expect(p.ext, equals('mp3'));
-      expect(p.parent.path, equals('folder/subfolder'.replaceAll('/', Platform.pathSeparator)));
-      expect(p.segments, equals(['folder', 'subfolder', 'track.part.mp3']));
+      final trackPath = Path('folder/subfolder/track.part.mp3');
+      expect(trackPath.name, equals('track.part.mp3'));
+      expect(trackPath.stem, equals('track.part'));
+      expect(trackPath.ext, equals('mp3'));
+      expect(trackPath.parent.path, equals(p.dirname('folder/subfolder/track.part.mp3')));
+      expect(trackPath.segments, equals(['folder', 'subfolder', 'track.part.mp3']));
 
       final noExt = Path('folder/readme');
       expect(noExt.name, equals('readme'));
@@ -564,7 +564,9 @@ void main() {
       final matcher = _globLike(pattern);
       final out = <String>[];
       await for (final e in root.asDir.list(recursive: true, followLinks: false)) {
-        if (e is! Directory && matcher.hasMatch(p.relative(e.path, from: root.path))) out.add(e.path);
+        if (e is! Directory && matcher.hasMatch(p.relative(e.path, from: root.path).replaceAll(r'\', '/'))) {
+          out.add(e.path);
+        }
       }
       return out..sort();
     }

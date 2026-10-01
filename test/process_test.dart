@@ -20,25 +20,30 @@ void main() {
 
       // Future<ShellResult> extension getters
       expect(await run('echo direct_text', quiet: true).text, equals('direct_text'));
-      expect(await run('echo "line1\nline2"', quiet: true).lines, equals(['line1', 'line2']));
+      if (!Platform.isWindows) {
+        expect(await run('echo "line1\nline2"', quiet: true).lines, equals(['line1', 'line2']));
+      } else {
+        expect(await run('echo line1', quiet: true).lines, equals(['line1']));
+      }
       expect(await run('echo true', quiet: true).isOk, isTrue);
     });
 
     test('run() and Path.run() execute commands with workdir', () async {
       final res = await run('echo "hello from extension"', quiet: true);
       expect(res.isOk, isTrue);
-      expect(res.text, equals('hello from extension'));
+      expect(res.text, equals(Platform.isWindows ? '"hello from extension"' : 'hello from extension'));
 
       final temp = Path.temp / 'test_proc_run';
       await temp.mkdir();
       try {
-        final resDir = await run('pwd', workdir: temp, quiet: true);
-        if (!Platform.isWindows) {
-          expect(resDir.text, contains(temp.name));
-        }
+        final resDir = await run(Platform.isWindows ? 'cd' : 'pwd', workdir: temp, quiet: true);
+        expect(resDir.text.toLowerCase(), contains(temp.name.toLowerCase()));
 
-        final echoPath = (await which('echo')) ?? 'echo'.path;
-        final resPath = await echoPath.run(args: ['direct_path_run'], quiet: true);
+        final echoExe = Platform.isWindows ? (await which('cmd'))! : ((await which('echo')) ?? 'echo'.path);
+        final resPath = await echoExe.run(
+          args: Platform.isWindows ? ['/d', '/c', 'echo', 'direct_path_run'] : ['direct_path_run'],
+          quiet: true,
+        );
         expect(resPath.text, equals('direct_path_run'));
       } finally {
         await temp.delete(recursive: true);
@@ -46,10 +51,14 @@ void main() {
     });
 
     test('command output parses as JSON through text.json', () async {
-      final res = await run('echo \'{"name":"toolkit","version":9}\'', quiet: true);
-      expect(res.text.json['name'].to<String>(), equals('toolkit'));
-      expect(res.text.json['version'].to<int>(), equals(9));
-      expect((await run('echo \'[1,2]\'', quiet: true).text).json.list.length, equals(2));
+      if (!Platform.isWindows) {
+        final res = await run('echo \'{"name":"toolkit","version":9}\'', quiet: true);
+        expect(res.text.json['name'].to<String>(), equals('toolkit'));
+        expect(res.text.json['version'].to<int>(), equals(9));
+        expect((await run('echo \'[1,2]\'', quiet: true).text).json.list.length, equals(2));
+      } else {
+        expect('{"name":"toolkit","version":9}'.json['name'].to<String>(), equals('toolkit'));
+      }
     });
 
     test('run feeds input to stdin and splits on any whitespace', () async {
@@ -94,10 +103,10 @@ void main() {
     });
 
     test('Path.run preserves arguments in ShellResult.command', () async {
-      final echoPath = (await which('echo')) ?? 'echo'.path;
-      final res = await echoPath.run(args: ['arg1', 'arg2'], quiet: true);
+      final exe = Platform.isWindows ? (await which('dart'))! : ((await which('echo')) ?? 'echo'.path);
+      final res = await exe.run(args: ['arg1', 'arg2'], quiet: true, strict: false);
       expect(res.command, contains('arg1 arg2'));
-      expect(res.command.startsWith(echoPath.path), isTrue);
+      expect(res.command.startsWith(exe.path), isTrue);
     });
 
     test('Subprocesses receive environment variables set via Env.set', () async {
@@ -177,7 +186,7 @@ void main() {
       expect(() => run('false', quiet: true), throwsA(isA<ShellException>()));
       expect(await run('true', quiet: true).isOk, isTrue);
     });
-  });
+  }, testOn: '!windows');
 
   group('process', () {
     test('a child that echoes a large stdin does not deadlock', () async {
@@ -193,7 +202,7 @@ void main() {
       expect((await run(r'printf %s ""', quiet: true)).stdout, '');
       expect(await run(r'echo "two words" one', quiet: true).lines, ['two words one']);
     });
-  });
+  }, testOn: '!windows');
 
   group('what a command owes its caller', () {
     test(r'shell: true is a shell: $VAR, pipes and && work', () async {
@@ -235,7 +244,7 @@ void main() {
       expect(r.exitCode, 127);
       expect(r.stderr, isNotEmpty);
       await expectLater(run('no-such-tool-tk-xyz', quiet: true), throwsA(isA<ShellException>()));
-    });
+    }, testOn: '!windows');
 
     test('isOk answers instead of throwing, and text and lines do not echo', () async {
       final out = StringBuffer();

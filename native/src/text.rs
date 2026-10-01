@@ -3,6 +3,7 @@
 
 
 use crate::{bytes, give, guard, text};
+use std::slice;
 
 /// Decodes `len` bytes in the charset `label` names (any WHATWG label, case-insensitive) into
 /// UTF-16 code units, native byte order, handed back as a Rust allocation freed with `tk_free`.
@@ -24,8 +25,7 @@ pub unsafe extern "C" fn tk_decode_text(
         let cap = decoder.max_utf16_buffer_length(input.len()).ok_or("body too large to decode")?;
         let mut units = vec![0u16; cap];
         let (_, _, written, _) = decoder.decode_to_utf16(input, &mut units, true);
-        units.truncate(written);
-        let raw: Vec<u8> = units.iter().flat_map(|u| u.to_ne_bytes()).collect();
+        let raw = unsafe { slice::from_raw_parts(units.as_ptr() as *const u8, written * 2) }.to_vec();
         Ok(give(raw, out, out_len))
     })
 }

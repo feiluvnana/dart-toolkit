@@ -43,9 +43,9 @@ class JsonDocument {
       'yaml' || 'yml' => toYaml(),
       _ => throw _unknownExtension(path, ext, 'write', 'json, yaml and yml can be written'),
     };
-    final file = File(path);
-    await file.parent.create(recursive: true);
-    return file.writeAsString(text);
+    final p = Path(path);
+    await p.writeText(text);
+    return File(path);
   }
 
   static String _extensionOf(String path) {
@@ -63,6 +63,9 @@ class JsonDocument {
   List<JsonDocument> $(String expression) => [
     for (final (i, v) in _JsonPath.of(expression).read(raw).indexed) JsonDocument._at(v, this, (expression, i)),
   ];
+
+  /// Every value JSONPath [expression] selects; alias for [$].
+  List<JsonDocument> query(String expression) => $(expression);
 
   /// The child at a map key ([String]) or list index ([int], negative from the end); a missing
   /// one is the null document, and any other key type an [ArgumentError].

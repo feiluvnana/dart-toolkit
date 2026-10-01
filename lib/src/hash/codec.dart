@@ -3,11 +3,20 @@ part of '../../hash.dart';
 const _hexDigits = '0123456789abcdef';
 const _b32Alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
+final _hexLookup16 = Uint16List.fromList([
+  for (var b = 0; b < 256; b++)
+    Endian.host == Endian.little
+        ? _hexDigits.codeUnitAt((b >> 4) & 0xf) | (_hexDigits.codeUnitAt(b & 0xf) << 8)
+        : (_hexDigits.codeUnitAt((b >> 4) & 0xf) << 8) | _hexDigits.codeUnitAt(b & 0xf),
+]);
+final _b32Codes = Uint8List.fromList(_b32Alphabet.codeUnits);
+
 String _hex(List<int> bytes) {
-  final out = Uint8List(bytes.length * 2);
-  for (var i = 0; i < bytes.length; i++) {
-    out[2 * i] = _hexDigits.codeUnitAt(bytes[i] >> 4 & 0xf);
-    out[2 * i + 1] = _hexDigits.codeUnitAt(bytes[i] & 0xf);
+  final len = bytes.length;
+  final out = Uint8List(len * 2);
+  final out16 = Uint16List.view(out.buffer);
+  for (var i = 0; i < len; i++) {
+    out16[i] = _hexLookup16[bytes[i]];
   }
   return String.fromCharCodes(out);
 }
@@ -35,18 +44,20 @@ extension BytesEncodingExtensions on List<int> {
 
   /// Base32 (RFC 4648) without padding, as authenticator secrets use it.
   String get base32 {
-    final sb = StringBuffer();
-    var bits = 0, acc = 0;
+    if (isEmpty) return '';
+    final outLen = ((length * 8) + 4) ~/ 5;
+    final out = Uint8List(outLen);
+    var bits = 0, acc = 0, k = 0;
     for (final b in this) {
       acc = (acc << 8) | b;
       bits += 8;
       while (bits >= 5) {
         bits -= 5;
-        sb.write(_b32Alphabet[(acc >> bits) & 31]);
+        out[k++] = _b32Codes[(acc >> bits) & 31];
       }
     }
-    if (bits > 0) sb.write(_b32Alphabet[(acc << (5 - bits)) & 31]);
-    return sb.toString();
+    if (bits > 0) out[k++] = _b32Codes[(acc << (5 - bits)) & 31];
+    return String.fromCharCodes(out);
   }
 }
 
@@ -81,17 +92,17 @@ extension StringEncodingExtensions on String {
   /// This base32 string as bytes; case, spaces, dashes and padding are ignored.
   Uint8List get base32Bytes {
     final s = replaceAll(_base32Ignored, '').toUpperCase();
-    final out = BytesBuilder(copy: false);
-    var bits = 0, acc = 0;
+    final out = Uint8List((s.length * 5) ~/ 8);
+    var bits = 0, acc = 0, k = 0;
     for (final c in s.codeUnits) {
       final v = _b32Value(c);
       acc = ((acc << 5) | v) & 0xffff;
       bits += 5;
       if (bits >= 8) {
         bits -= 8;
-        out.addByte((acc >> bits) & 0xff);
+        out[k++] = (acc >> bits) & 0xff;
       }
     }
-    return out.takeBytes();
+    return out;
   }
 }

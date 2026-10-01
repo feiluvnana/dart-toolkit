@@ -144,8 +144,8 @@ final class Canvas {
 
   /// Draws a border round the edge, [title] in its top edge, and returns the canvas inside it.
   Canvas box({Border? border, Style? style, String? title}) {
-    final b = border ?? theme.borders;
-    final s = style ?? theme.border;
+    final b = border ?? theme.border;
+    final s = style ?? theme.borderStyle;
     if (b.side.isEmpty) {
       if (title != null) text(0, 0, title, s + const Style(bold: true));
       return area(0, title == null ? 0 : 1);

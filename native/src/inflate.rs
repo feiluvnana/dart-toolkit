@@ -89,7 +89,10 @@ impl Inflater {
         if data.is_empty() {
             return;
         }
-        if self.pos > 0 {
+        if self.pos == self.input.len() {
+            self.input.clear();
+            self.pos = 0;
+        } else if self.pos > 32768 && self.pos >= self.input.len() / 2 {
             self.input.drain(..self.pos);
             self.pos = 0;
         }

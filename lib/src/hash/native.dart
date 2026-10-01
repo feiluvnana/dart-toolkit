@@ -51,9 +51,21 @@ Uint8List _ofBytes(Hash algorithm, List<int>? key, List<int> data) {
   final k = key?.length ?? 0, n = data.length, size = k + n + _maxDigest;
   final buf = NativeBridge.alloc(size);
   try {
-    final view = buf.asTypedList(size)
-      ..setAll(0, key ?? const [])
-      ..setAll(k, data);
+    final view = buf.asTypedList(size);
+    if (k > 0) {
+      if (key is Uint8List) {
+        view.setRange(0, k, key);
+      } else {
+        view.setAll(0, key!);
+      }
+    }
+    if (n > 0) {
+      if (data is Uint8List) {
+        view.setRange(k, k + n, data);
+      } else {
+        view.setAll(k, data);
+      }
+    }
     final len = key == null
         ? _N.digest(algorithm.index, buf + k, n, buf + k + n, _maxDigest)
         : _N.hmac(algorithm.index, buf, k, buf + k, n, buf + k + n, _maxDigest);

@@ -36,3 +36,77 @@ extension StringFormatsExtensions on String {
   /// This string parsed as XML.
   XmlDocument get xml => XmlDocument.parse(this);
 }
+
+/// The front door for document parsing and reading across formats (JSON, YAML, TOML, INI, HTML, XML).
+///
+/// {@category Formats}
+abstract final class Doc {
+  /// The document in the file at [path] (a [String] or [Path]), parsed by extension:
+  /// `.json`, `.yaml`/`.yml`, `.toml`, `.ini`/`.cfg`/`.conf`.
+  static Future<JsonDocument> read(Object path) => JsonDocument.read(path.toString());
+
+  /// Parses [text] as JSON.
+  static JsonDocument json(String text) => JsonDocument.parse(text);
+
+  /// Parses [text] as JSON; see [json].
+  static JsonDocument parseJson(String text) => json(text);
+
+  /// Parses [text] as YAML.
+  static YamlDocument yaml(String text) => text.yaml;
+
+  /// Parses [text] as YAML; see [yaml].
+  static YamlDocument parseYaml(String text) => yaml(text);
+
+  /// Parses [text] as TOML.
+  static JsonDocument toml(String text) => text.toml;
+
+  /// Parses [text] as TOML; see [toml].
+  static JsonDocument parseToml(String text) => toml(text);
+
+  /// Parses [text] as INI.
+  static JsonDocument ini(String text) => text.ini;
+
+  /// Parses [text] as INI; see [ini].
+  static JsonDocument parseIni(String text) => ini(text);
+
+  /// Parses [text] as HTML.
+  static HtmlDocument html(String text) => HtmlDocument.parse(text);
+
+  /// Parses [text] as HTML; see [html].
+  static HtmlDocument parseHtml(String text) => html(text);
+
+  /// Parses [text] as XML.
+  static XmlDocument xml(String text) => XmlDocument.parse(text);
+
+  /// Parses [text] as XML; see [xml].
+  static XmlDocument parseXml(String text) => xml(text);
+}
+
+/// An alias for [Doc] for full-name discoverability: `Document.read('config.yaml')`.
+typedef Document = Doc;
+
+/// Format reading helpers on [Path].
+///
+/// {@category Formats}
+extension PathFormatsExtensions on Path {
+  /// Reads and parses this file based on its extension (.json, .yaml, .toml, .ini).
+  Future<JsonDocument> readDoc() => Doc.read(path);
+
+  /// Reads and parses this file as JSON.
+  Future<JsonDocument> readJson() async => JsonDocument.parse(await readText());
+
+  /// Reads and parses this file as YAML.
+  Future<YamlDocument> readYaml() async => (await readText()).yaml;
+
+  /// Reads and parses this file as TOML.
+  Future<JsonDocument> readToml() async => (await readText()).toml;
+
+  /// Reads and parses this file as INI.
+  Future<JsonDocument> readIni() async => (await readText()).ini;
+
+  /// Reads and parses this file as HTML.
+  Future<HtmlDocument> readHtml() async => HtmlDocument.parse(await readText());
+
+  /// Reads and parses this file as XML.
+  Future<XmlDocument> readXml() async => XmlDocument.parse(await readText());
+}

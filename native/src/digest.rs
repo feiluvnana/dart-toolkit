@@ -141,9 +141,7 @@ impl Running {
             return Ok(());
         }
         let mut f = std::fs::File::open(path).map_err(err)?;
-        // A buffer the size of the file, up to 1 MiB: most files hashed in bulk are small.
-        let len = f.metadata().map_or(1 << 20, |m| m.len()).clamp(1, 1 << 20);
-        let mut buf = vec![0u8; len as usize];
+        let mut buf = [0u8; 64 * 1024];
         loop {
             let n = f.read(&mut buf).map_err(err)?;
             if n == 0 {
@@ -227,9 +225,35 @@ pub unsafe extern "C" fn tk_digest_final(h: Handle, out: *mut u8, cap: usize) ->
 #[no_mangle]
 pub unsafe extern "C" fn tk_digest(alg: u32, data: *const u8, len: usize, out: *mut u8, cap: usize) -> i32 {
     guard(|| {
-        let mut d = Running::new(alg)?;
-        d.update(bytes(data, len));
-        put(out, cap, &d.finish())
+        let input = bytes(data, len);
+        macro_rules! compute {
+            ($t:ty) => {
+                put(out, cap, &<$t as Digest>::digest(input))
+            };
+        }
+        match alg {
+            0 => compute!(md5::Md5),
+            1 => compute!(sha1::Sha1),
+            2 => compute!(sha2::Sha224),
+            3 => compute!(sha2::Sha256),
+            4 => compute!(sha2::Sha384),
+            5 => compute!(sha2::Sha512),
+            6 => compute!(sha2::Sha512_256),
+            7 => compute!(sha3::Sha3_224),
+            8 => compute!(sha3::Sha3_256),
+            9 => compute!(sha3::Sha3_384),
+            10 => compute!(sha3::Sha3_512),
+            11 => compute!(sha3::Keccak256),
+            12 => compute!(blake2::Blake2s256),
+            13 => compute!(blake2::Blake2b512),
+            BLAKE3 => put(out, cap, blake3::hash(input).as_bytes()),
+            15 => compute!(ripemd::Ripemd160),
+            16 => put(out, cap, &crc32fast::hash(input).to_be_bytes()),
+            17 => put(out, cap, &crc32c::crc32c(input).to_be_bytes()),
+            18 => put(out, cap, &xxhash_rust::xxh64::xxh64(input, 0).to_be_bytes()),
+            19 => put(out, cap, &xxhash_rust::xxh3::xxh3_64(input).to_be_bytes()),
+            other => Err(format!("digest {} is not a valid algorithm code", other)),
+        }
     })
 }
 
@@ -242,22 +266,47 @@ pub unsafe extern "C" fn tk_digest_files(alg: u32, paths: *const u8, plen: usize
     guard(|| {
         let joined = text(paths, plen)?;
         let names: Vec<&str> = if joined.is_empty() { Vec::new() } else { joined.split('\0').collect() };
-        Running::new(alg)?;
-        let digests = names
-            .par_iter()
-            .map(|p| {
+        let dlen = match alg {
+            0 => 16,
+            1 => 20,
+            2 => 28,
+            3 => 32,
+            4 => 48,
+            5 => 64,
+            6 => 32,
+            7 => 28,
+            8 => 32,
+            9 => 48,
+            10 => 64,
+            11 => 32,
+            12 => 32,
+            13 => 64,
+            BLAKE3 => 32,
+            15 => 20,
+            16 => 4,
+            17 => 4,
+            18 => 8,
+            19 => 8,
+            other => return Err(format!("digest {} is not a valid algorithm code", other)),
+        };
+        let needed = names.len().checked_mul(dlen).ok_or("size overflow")?;
+        if needed > cap {
+            return Err(format!("output buffer holds {} bytes, needs {}", cap, needed));
+        }
+        let out_slice = bytes_mut(out, needed);
+        out_slice
+            .par_chunks_exact_mut(dlen)
+            .zip(names.par_iter())
+            .try_for_each(|(slot, p)| {
                 let mut d = Running::new(alg)?;
                 d.file(p)?;
-                Ok(d.finish())
-            })
-            .collect::<Result<Vec<Vec<u8>>, String>>()?;
-        let joined: Vec<u8> = digests.concat();
-        put(out, cap, &joined)?;
+                let res = d.finish();
+                slot.copy_from_slice(&res);
+                Ok::<(), String>(())
+            })?;
         Ok(names.len() as i32)
     })
 }
-
-
 
 /// Copies `data` into `out`, refusing rather than overrunning when `cap` is too small.
 fn put(out: *mut u8, cap: usize, data: &[u8]) -> Result<i32, String> {
@@ -280,8 +329,48 @@ pub unsafe extern "C" fn tk_hmac(
     cap: usize,
 ) -> i32 {
     guard(|| {
-        let mut m = Running::keyed(alg, bytes(key, klen))?;
-        m.update(bytes(data, dlen));
-        put(out, cap, &m.finish())
+        let k = bytes(key, klen);
+        let d = bytes(data, dlen);
+        macro_rules! hmac {
+            ($t:ty) => {{
+                let mut mac = <Hmac<$t> as KeyInit>::new_from_slice(k).msg()?;
+                Mac::update(&mut mac, d);
+                put(out, cap, &mac.finalize().into_bytes())
+            }};
+        }
+        match alg {
+            0 => hmac!(md5::Md5),
+            1 => hmac!(sha1::Sha1),
+            2 => hmac!(sha2::Sha224),
+            3 => hmac!(sha2::Sha256),
+            4 => hmac!(sha2::Sha384),
+            5 => hmac!(sha2::Sha512),
+            6 => hmac!(sha2::Sha512_256),
+            7 => hmac!(sha3::Sha3_224),
+            8 => hmac!(sha3::Sha3_256),
+            9 => hmac!(sha3::Sha3_384),
+            10 => hmac!(sha3::Sha3_512),
+            11 => hmac!(sha3::Keccak256),
+            12 => {
+                let mut mac = <blake2::Blake2sMac256 as KeyInit>::new_from_slice(k)
+                    .map_err(|_| format!("the key must be at most 32 bytes, not {}", k.len()))?;
+                Mac::update(&mut mac, d);
+                put(out, cap, &mac.finalize().into_bytes())
+            }
+            13 => {
+                let mut mac = <blake2::Blake2bMac512 as KeyInit>::new_from_slice(k)
+                    .map_err(|_| format!("the key must be at most 64 bytes, not {}", k.len()))?;
+                Mac::update(&mut mac, d);
+                put(out, cap, &mac.finalize().into_bytes())
+            }
+            BLAKE3 => {
+                let key_arr: &[u8; 32] =
+                    k.try_into().map_err(|_| format!("the key must be exactly 32 bytes, not {}", k.len()))?;
+                put(out, cap, blake3::keyed_hash(key_arr, d).as_bytes())
+            }
+            15 => hmac!(ripemd::Ripemd160),
+            16..=19 => Err("a checksum takes no key".into()),
+            other => Err(format!("digest {} is not a valid algorithm code", other)),
+        }
     })
 }

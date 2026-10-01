@@ -187,9 +187,14 @@ final class Pool<T, R> {
 
   /// Runs every item of [items], yielding outcomes in completion order (or input order when [ordered] is true).
   ///
+  /// [items] can be a [Stream<T>] or an [Iterable<T>].
   /// At most [size] items are in flight; a busy pool or a paused listener pauses [items]. The
   /// enclosing [Cancel.scope] ends the stream. The pool stays open.
-  Stream<Either<Object, R>> map(Stream<T> items, {bool ordered = false}) => _map(items, ordered: ordered);
+  Stream<Either<Object, R>> map(Object items, {bool ordered = false}) {
+    if (items is Stream<T>) return _map(items, ordered: ordered);
+    if (items is Iterable<T>) return _map(Stream.fromIterable(items), ordered: ordered);
+    throw ArgumentError.value(items, 'items', 'Expected Stream<$T> or Iterable<$T>');
+  }
 
   Stream<Either<Object, R>> _map(Stream<T> items, {bool ordered = false, void Function()? onEnd}) {
     CancelToken? token;

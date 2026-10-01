@@ -179,6 +179,23 @@ extension PathArchiveExtensions on Path {
     return File(destination);
   }
 
+  /// Archives this file or directory as a zip file to [destination] as a [Stream] of [ArchiveProgress].
+  Stream<ArchiveProgress> zip(String destination, {String? password, int? level}) =>
+      archive(destination.endsWith('.zip') ? destination : '$destination.zip', password: password, level: level);
+
+  /// Archives this file or directory as a zip file to [destination].
+  Future<File> zipTo(
+    String destination, {
+    String? password,
+    int? level,
+    void Function(ArchiveProgress progress)? onProgress,
+  }) => archiveTo(
+    destination.endsWith('.zip') ? destination : '$destination.zip',
+    password: password,
+    level: level,
+    onProgress: onProgress,
+  );
+
   /// Extracts the archive at this path into [destination] as a [Stream] of [ArchiveProgress].
   Stream<ArchiveProgress> extract(String destination, {String? password, String? only, bool trusted = false}) {
     return _NativeArchive.extractStream(path, destination, password, only, _flags(trusted));

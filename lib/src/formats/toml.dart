@@ -21,7 +21,7 @@ final class _TomlParser {
     while (true) {
       _skipBlank();
       if (i >= s.length) return root;
-      if (s[i] == '[') {
+      if (s.codeUnitAt(i) == 0x5B /* [ */) {
         _tableHeader();
       } else {
         _keyValue(current);
@@ -100,7 +100,7 @@ final class _TomlParser {
     final parts = <String>[];
     while (true) {
       _ws();
-      if (i < s.length && (s[i] == '"' || s[i] == "'")) {
+      if (i < s.length && (s.codeUnitAt(i) == 0x22 || s.codeUnitAt(i) == 0x27)) {
         parts.add(_string());
       } else {
         final start = i;
@@ -111,7 +111,7 @@ final class _TomlParser {
         parts.add(s.substring(start, i));
       }
       _ws();
-      if (i < s.length && s[i] == '.') {
+      if (i < s.length && s.codeUnitAt(i) == 0x2E /* . */) {
         i++;
         continue;
       }
@@ -121,11 +121,11 @@ final class _TomlParser {
 
   Object? _value() {
     if (i >= s.length) throw _error('Expected a value');
-    final c = s[i];
-    if (c == '"' || c == "'") return _string();
-    if (c == '[' || c == '{') {
+    final c = s.codeUnitAt(i);
+    if (c == 0x22 || c == 0x27) return _string();
+    if (c == 0x5B || c == 0x7B) { // [ or {
       if (++_depth > 1000) throw _error('nested deeper than 1000');
-      final v = c == '[' ? _array() : _freeze(_inlineTable());
+      final v = c == 0x5B ? _array() : _freeze(_inlineTable());
       _depth--;
       return v;
     }
@@ -186,24 +186,30 @@ final class _TomlParser {
   }
 
   String _string() {
+    final qCode = s.codeUnitAt(i);
     final q = s[i];
     final triple = s.startsWith(q * 3, i);
     i += triple ? 3 : 1;
     if (triple && s.startsWith('\n', i)) i++;
     if (triple && s.startsWith('\r\n', i)) i += 2;
     final sb = StringBuffer();
+    var chunkStart = i;
     while (true) {
       if (i >= s.length) throw _error('Unterminated string');
-      if (triple ? s.startsWith(q * 3, i) : s[i] == q) {
+      final c = s.codeUnitAt(i);
+      if (triple ? s.startsWith(q * 3, i) : c == qCode) {
+        if (i > chunkStart) sb.write(s.substring(chunkStart, i));
         i += triple ? 3 : 1;
         // A quote right before the closing triple belongs to the content.
-        while (triple && i < s.length && s[i] == q) {
-          sb.write(q);
+        final extraStart = i;
+        while (triple && i < s.length && s.codeUnitAt(i) == qCode) {
           i++;
         }
+        if (i > extraStart) sb.write(s.substring(extraStart, i));
         return sb.toString();
       }
-      if (q == '"' && s[i] == r'\') {
+      if (qCode == 0x22 /* " */ && c == 0x5C /* \ */) {
+        if (i > chunkStart) sb.write(s.substring(chunkStart, i));
         i++;
         if (i >= s.length) throw _error('Unterminated string');
         final e = s[i];
@@ -225,18 +231,21 @@ final class _TomlParser {
             i += n;
           case '\n' || '\r' || ' ' || '\t':
             // Line-ending backslash in a multi-line string: skip whitespace and newlines.
-            while (i < s.length && ' \t\r\n'.contains(s[i])) {
+            while (i < s.length) {
+              final cu = s.codeUnitAt(i);
+              if (cu != 0x20 && cu != 0x09 && cu != 0x0D && cu != 0x0A) break;
               i++;
             }
+            chunkStart = i;
             continue;
           default:
             throw _error('Bad escape \\$e');
         }
         i++;
+        chunkStart = i;
         continue;
       }
-      if (!triple && (s[i] == '\n' || s[i] == '\r')) throw _error('Newline in a single-line string');
-      sb.write(s[i]);
+      if (!triple && (c == 0x0A || c == 0x0D)) throw _error('Newline in a single-line string');
       i++;
     }
   }
@@ -247,15 +256,15 @@ final class _TomlParser {
     while (true) {
       _skipBlank();
       if (i >= s.length) throw _error('Unterminated array');
-      if (s[i] == ']') {
+      if (s.codeUnitAt(i) == 0x5D /* ] */) {
         i++;
         return out;
       }
       out.add(_value());
       _skipBlank();
-      if (i < s.length && s[i] == ',') {
+      if (i < s.length && s.codeUnitAt(i) == 0x2C /* , */) {
         i++;
-      } else if (i >= s.length || s[i] != ']') {
+      } else if (i >= s.length || s.codeUnitAt(i) != 0x5D /* ] */) {
         throw _error('Expected "," or "]"');
       }
     }
@@ -265,14 +274,14 @@ final class _TomlParser {
     i++; // {
     final out = <String, Object?>{};
     _ws();
-    if (i < s.length && s[i] == '}') {
+    if (i < s.length && s.codeUnitAt(i) == 0x7D /* } */) {
       i++;
       return out;
     }
     while (true) {
       _keyValue(out);
       _ws();
-      if (i < s.length && s[i] == ',') {
+      if (i < s.length && s.codeUnitAt(i) == 0x2C /* , */) {
         i++;
         continue;
       }
@@ -282,7 +291,9 @@ final class _TomlParser {
   }
 
   void _ws() {
-    while (i < s.length && (s[i] == ' ' || s[i] == '\t')) {
+    while (i < s.length) {
+      final c = s.codeUnitAt(i);
+      if (c != 0x20 && c != 0x09) break;
       i++;
     }
   }
@@ -290,10 +301,10 @@ final class _TomlParser {
   /// Whitespace, newlines and comments.
   void _skipBlank() {
     while (i < s.length) {
-      final c = s[i];
-      if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+      final c = s.codeUnitAt(i);
+      if (c == 0x20 || c == 0x09 || c == 0x0A || c == 0x0D) {
         i++;
-      } else if (c == '#') {
+      } else if (c == 0x23 /* # */) {
         _comment();
       } else {
         return;
@@ -304,12 +315,14 @@ final class _TomlParser {
   void _lineEnd() {
     _ws();
     _comment();
-    if (i < s.length && s[i] != '\n' && s[i] != '\r') throw _error('Expected the end of the line');
+    if (i < s.length && s.codeUnitAt(i) != 0x0A && s.codeUnitAt(i) != 0x0D) {
+      throw _error('Expected the end of the line');
+    }
   }
 
   void _comment() {
-    if (i < s.length && s[i] == '#') {
-      while (i < s.length && s[i] != '\n') {
+    if (i < s.length && s.codeUnitAt(i) == 0x23) {
+      while (i < s.length && s.codeUnitAt(i) != 0x0A) {
         i++;
       }
     }
@@ -321,7 +334,11 @@ final class _TomlParser {
   }
 
   FormatException _error(String message) {
-    final line = s.substring(0, i < s.length ? i : s.length).split('\n').length;
+    var line = 1;
+    final limit = i < s.length ? i : s.length;
+    for (var k = 0; k < limit; k++) {
+      if (s.codeUnitAt(k) == 0x0A) line++;
+    }
     return FormatException('TOML line $line: $message');
   }
 

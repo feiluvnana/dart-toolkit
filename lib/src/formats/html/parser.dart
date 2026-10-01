@@ -229,8 +229,8 @@ final class _Parser {
       insert(Element('p'), selfClosing: true);
       return true;
     }
-    closeInScope(
-      {name},
+    closeInScopeSingle(
+      name,
       _tableParts.contains(name)
           ? const {'table', 'template'}
           : const {'table', 'td', 'th', 'caption', 'template', 'object', 'marquee', 'applet'},
@@ -293,11 +293,11 @@ final class _Parser {
   void insert(Element element, {required bool selfClosing}) {
     _run.flush();
     final name = element.name;
-    if (_closesP.contains(name)) closeInScope({'p'}, _blockBoundaries);
+    if (_closesP.contains(name)) closeInScopeSingle('p', _blockBoundaries);
     // A link cannot hold a link, nor a heading a heading: the second closes the first.
-    if (name == 'a' || name == 'nobr') closeInScope(name == 'a' ? const {'a'} : const {'nobr'}, _linkBoundaries);
+    if (name == 'a' || name == 'nobr') closeInScopeSingle(name, _linkBoundaries);
     if (_headings.contains(name) && _headings.contains(current.name)) open.removeLast();
-    if (name == 'optgroup') closeInScope(const {'option'}, const {'select', 'optgroup'});
+    if (name == 'optgroup') closeInScopeSingle('option', const {'select', 'optgroup'});
     if (_closesSibling[name] case (final closes, final boundary)?) closeInScope(closes, boundary);
     if (inBody) {
       // Table plumbing a browser would synthesise: <tr> straight in <table>, <td> without <tr>.
@@ -332,6 +332,19 @@ final class _Parser {
     if (name == 'svg') _svg++;
     if (name == 'math') _math++;
     if (name == 'pre' || name == 'listing') _dropNewline = true;
+  }
+
+  /// Pops open elements up to and including the nearest one matching [close], unless one in
+  /// [boundary] is met first.
+  void closeInScopeSingle(String close, Set<String> boundary) {
+    for (var i = open.length - 1; i > 0; i--) {
+      final n = open[i].name;
+      if (n == close) {
+        _truncate(i);
+        return;
+      }
+      if (boundary.contains(n)) return;
+    }
   }
 
   /// Pops open elements up to and including the nearest one in [closes], unless one in
@@ -433,7 +446,7 @@ int _scanAttributes(String src, int i, Map<String, String> into, {required bool 
         final quoted = q == 0x22 || q == 0x27;
         final start = quoted ? i + 1 : i;
         if (quoted) {
-          i = src.indexOf(String.fromCharCode(q), start);
+          i = src.indexOf(q == 0x22 ? '"' : "'", start);
           if (i == -1) i = src.length;
         } else {
           while (i < src.length && !_isSpace(src.codeUnitAt(i)) && src.codeUnitAt(i) != 0x3e) {

@@ -17,10 +17,15 @@ final class XmlDocument {
   /// escape a prefix's colon, `$(r'media\:content')`, or use [$x].
   Elements $(String selector) => Elements(_Selector.parse(selector, fold: false).inDocument(root));
 
+  /// Every element matching CSS [selector]; alias for [$].
+  Elements select(String selector) => $(selector);
+
   /// The nodes XPath [expression] selects from the root: `//item`, `//a/@href`,
   /// `//book[@lang='en' and price>10]/title/text()`.
-
   Nodes $x(String expression) => Nodes(_XPath.parse(expression).select(root));
+
+  /// The nodes XPath [expression] selects from the root; alias for [$x].
+  Nodes xpath(String expression) => $x(expression);
 
   /// The document's text.
   String get text => root.text;

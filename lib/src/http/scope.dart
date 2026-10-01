@@ -21,10 +21,10 @@ class Http {
   /// session — and sends them back. The jar lives as long as this call, never on disk.
   ///
   /// ```dart
-  /// await Http.scope(cookies: true, () async {
+  /// await Http.scope(() async {
   ///   await login.post(form: {'user': u, 'pass': p});
   ///   await for (final item in dashboard.scrape<Item>()...) { ... }
-  /// });
+  /// }, cookies: true);
   /// ```
   ///
   /// [jar] starts the jar (implying [cookies]): log in through a browser, then fetch at
@@ -36,7 +36,7 @@ class Http {
   ///   await p.waitForNavigation(() => p.click('#go'));
   ///   return p.cookies();
   /// });
-  /// await Http.scope(jar: session, () => api.get().json);
+  /// await Http.scope(() => api.get().json, jar: session);
   /// ```
   ///
   /// A cookie without a domain is skipped; a leading dot matches subdomains.
@@ -51,7 +51,7 @@ class Http {
   /// jittered ±25 % since a metronome is a bot signal.
   ///
   /// ```dart
-  /// await Http.scope(retries: 3, delay: 500.ms, () => urls.pairs.download().show());
+  /// await Http.scope(() => urls.download().show(), retries: 3, delay: 500.ms);
   /// ```
   ///
   /// [cache] keeps each GET answered with an `ETag` or `Last-Modified` in that folder and
@@ -102,7 +102,97 @@ class Http {
       if (owned) await inner.close();
     }
   }
+
+  /// GET [url] (a [Uri] or [String]).
+  static Fetch get(Object url, {Map<String, String>? headers}) => _asUri(url).get(headers: headers);
+
+  /// HEAD [url] (a [Uri] or [String]).
+  static Fetch head(Object url, {Map<String, String>? headers}) => _asUri(url).head(headers: headers);
+
+  /// POST [url] (a [Uri] or [String]).
+  static Fetch post(
+    Object url, {
+    Map<String, String>? headers,
+    String? text,
+    List<int>? bytes,
+    Map<String, String>? form,
+    Object? json,
+    Map<String, Path>? files,
+  }) => _asUri(url).post(headers: headers, text: text, bytes: bytes, form: form, json: json, files: files);
+
+  /// PUT [url] (a [Uri] or [String]).
+  static Fetch put(
+    Object url, {
+    Map<String, String>? headers,
+    String? text,
+    List<int>? bytes,
+    Map<String, String>? form,
+    Object? json,
+    Map<String, Path>? files,
+  }) => _asUri(url).put(headers: headers, text: text, bytes: bytes, form: form, json: json, files: files);
+
+  /// DELETE [url] (a [Uri] or [String]).
+  static Fetch delete(
+    Object url, {
+    Map<String, String>? headers,
+    String? text,
+    List<int>? bytes,
+    Map<String, String>? form,
+    Object? json,
+    Map<String, Path>? files,
+  }) => _asUri(url).delete(headers: headers, text: text, bytes: bytes, form: form, json: json, files: files);
+
+  /// PATCH [url] (a [Uri] or [String]).
+  static Fetch patch(
+    Object url, {
+    Map<String, String>? headers,
+    String? text,
+    List<int>? bytes,
+    Map<String, String>? form,
+    Object? json,
+    Map<String, Path>? files,
+  }) => _asUri(url).patch(headers: headers, text: text, bytes: bytes, form: form, json: json, files: files);
+
+  /// Downloads [url] (a [Uri] or [String]) to [destination] (a [Path] or [String]).
+  static Stream<BatchDownloadProgress> download(
+    Object url,
+    Object destination, {
+    Map<String, String>? headers,
+    bool overwrite = false,
+    bool resume = true,
+    bool ifModified = false,
+    (Hash algorithm, String hex)? checksum,
+  }) {
+    final dest = destination is Path ? destination : Path(destination.toString());
+    return dest.download(
+      _asUri(url),
+      headers: headers,
+      overwrite: overwrite,
+      resume: resume,
+      ifModified: ifModified,
+      checksum: checksum,
+    );
+  }
+
+  /// What [url] (a [Uri] or [String]) streams, an event at a time; see [UriExtensions.events].
+  static Stream<ServerEvent> events(Object url, {Map<String, String>? headers, Object? json}) =>
+      _asUri(url).events(headers: headers, json: json);
+
+  /// A crawl seeded with [seeds] (a [Uri], [String], `Iterable<Uri>`, or `Iterable<Request>`).
+  static Scrape<T> scrape<T>(Object seeds) {
+    if (seeds is String) return _asUri(seeds).scrape<T>();
+    if (seeds is Uri) return seeds.scrape<T>();
+    if (seeds is Iterable<Uri>) return seeds.scrape<T>();
+    if (seeds is Iterable<Request>) return seeds.scrape<T>();
+    throw ArgumentError.value(seeds, 'seeds', 'Must be a Uri, String, Iterable<Uri>, or Iterable<Request>');
+  }
 }
+
+Uri _asUri(Object url) => switch (url) {
+  Uri u => u,
+  String s => Uri.parse(s),
+  _ => throw ArgumentError.value(url, 'url', 'Expected a Uri or String'),
+};
 
 /// Applies a scope's default headers, timeout, cookie jar, retries, delay and cache to every
 /// request.

@@ -631,7 +631,7 @@ abstract class _Meter extends _Live {
 /// {@category Terminal}
 final class ProgressBar extends _Meter {
   /// Steps in the run.
-  final int total;
+  int total;
 
   final String Function(ProgressView) _line;
   final _rate = _Rate();
@@ -650,6 +650,19 @@ final class ProgressBar extends _Meter {
     _rate.add(_current, _now);
     final view = ProgressView._(_theme, _width, _watch.elapsed, live, message, label, _current, total, _rate.perSecond);
     return Io.truncate(_line(view), _width);
+  }
+
+  /// Sets the progress directly to [value] (and optionally [label] and [total]).
+  void set(int value, {int? total, String? label}) {
+    if (_isDone) return;
+    _current = value;
+    if (total != null && total > 0) this.total = total;
+    if (label != null) _label = label;
+    if (_interactive() || !_shown()) return _show();
+    final decile = this.total > 0 ? (_current * 10 ~/ this.total).clamp(0, 10) : 0;
+    if (decile == _lastDecile) return;
+    _lastDecile = decile;
+    Io.err.writeln(_draw(label, live: false));
   }
 
   /// Advances the progress by [count] and optionally displays [label].
@@ -1232,6 +1245,39 @@ extension StreamBatchProgressExtensions<T extends BatchProgress> on Stream<T> {
       final failed = completed ? last?.failed ?? 0 : 0;
       board.done(completed && failed == 0 ? done : null);
       if (failed > 0) Console.warn('$failed of ${last?.total ?? last?.completed ?? failed} failed');
+    }
+    return last;
+  }
+}
+
+/// Rendering a single task's progress as it runs.
+///
+/// {@category Terminal}
+extension StreamTaskProgressExtensions<T extends TaskProgress> on Stream<T> {
+  /// Draws this task's progress in a [ProgressBar] until it ends, then prints [done].
+  ///
+  /// ```dart
+  /// await 'files'.path.archive('files.zip').show(message: 'Compressing', done: 'Archive created.');
+  /// ```
+  Future<T?> show({String message = '', String? done, int? columns, String Function(ProgressView view)? line}) async {
+    ProgressBar? bar;
+    T? last;
+    var completed = false;
+    try {
+      await for (final p in this) {
+        last = p;
+        if (p.isDone && p.status == 'failed') Console.error(p.error ?? p.label);
+        final total = p.total ?? (p.ratio != null ? 100 : 0);
+        final current = p.total != null
+            ? (p.ratio != null ? (p.ratio! * total).round() : (p.received ?? 0))
+            : ((p.ratio ?? 0) * 100).round();
+        bar ??= ProgressBar._(total > 0 ? total : 100, message, columns, line);
+        bar.set(current, total: total > 0 ? total : null, label: p.label);
+      }
+      completed = true;
+    } finally {
+      final failed = (last?.status == 'failed' || last?.error != null) ? 1 : 0;
+      bar?.done(completed && failed == 0 ? done : null);
     }
     return last;
   }

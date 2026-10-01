@@ -165,6 +165,39 @@ class Shell {
     );
     return runZoned(() async => body(), zoneValues: {_shellKey: scope});
   }
+
+  /// Runs [command] or an executable with [args].
+  static ShellRun run(
+    String command, {
+    List<String> args = const [],
+    Path? workdir,
+    Map<String, String>? env,
+    Duration? timeout,
+    String? input,
+    bool? quiet,
+    bool? strict,
+    Encoding? encoding,
+    bool shell = false,
+    bool inherit = false,
+  }) => _run(
+    command,
+    args: args,
+    workdir: workdir,
+    env: env,
+    timeout: timeout,
+    input: input,
+    quiet: quiet,
+    strict: strict,
+    encoding: encoding,
+    shell: shell,
+    inherit: inherit,
+  );
+
+  /// The executable on the `PATH` [Env] sees, or `null`.
+  static Future<Path?> which(String executable) => _which(executable);
+
+  /// Builds a command pipeline: `Shell.pipe(['ls', 'grep dart']).run()`.
+  static CommandPipeline pipe(List<String> commands) => CommandPipeline._(commands);
 }
 
 /// Runs [command], echoing its output unless [quiet].
@@ -203,6 +236,32 @@ ShellRun run(
   Encoding? encoding,
   bool shell = false,
   bool inherit = false,
+}) => _run(
+  command,
+  args: args,
+  workdir: workdir,
+  env: env,
+  timeout: timeout,
+  input: input,
+  quiet: quiet,
+  strict: strict,
+  encoding: encoding,
+  shell: shell,
+  inherit: inherit,
+);
+
+ShellRun _run(
+  String command, {
+  List<String> args = const [],
+  Path? workdir,
+  Map<String, String>? env,
+  Duration? timeout,
+  String? input,
+  bool? quiet,
+  bool? strict,
+  Encoding? encoding,
+  bool shell = false,
+  bool inherit = false,
 }) => ShellRun._((scope, control) {
   final display = _display(command, args);
   if (shell) {
@@ -210,9 +269,9 @@ ShellRun run(
       throw ArgumentError('args: cannot be passed with shell: true on Windows');
     }
     final stage = Platform.isWindows
-        ? ('cmd', ['/c', command])
+        ? ('cmd', ['/d', '/c', command])
         : ('/bin/sh', ['-c', command, 'sh', ...args]); // `sh` is $0; args are $1…
-    return _exec([stage], display, scope, control, input: input, inherit: inherit);
+    return _exec([stage], display, scope, control, input: input, inherit: inherit, viaShell: Platform.isWindows);
   }
   final parts = _splitCommand(command.trim());
   if (parts.isEmpty) throw ArgumentError('Cannot execute an empty command string');
@@ -421,16 +480,28 @@ Future<ShellResult> _exec(
     try {
       for (final (executable, args) in stages) {
         final (exe, cmd) = viaShell ? await _windowsTarget(executable) : (executable, false);
-        processes.add(
-          await Process.start(
-            exe,
-            cmd ? _cmdSafe(args) : args,
-            workingDirectory: scope.workdir?.path,
-            environment: environment,
-            runInShell: cmd,
-            mode: inherit ? ProcessStartMode.inheritStdio : ProcessStartMode.normal,
-          ),
-        );
+        if (cmd) {
+          processes.add(
+            await Process.start(
+              'cmd',
+              ['/d', '/c', exe, ..._cmdSafe(args)],
+              workingDirectory: scope.workdir?.path,
+              environment: environment,
+              mode: inherit ? ProcessStartMode.inheritStdio : ProcessStartMode.normal,
+            ),
+          );
+        } else {
+          processes.add(
+            await Process.start(
+              exe,
+              args,
+              workingDirectory: scope.workdir?.path,
+              environment: environment,
+              runInShell: false,
+              mode: inherit ? ProcessStartMode.inheritStdio : ProcessStartMode.normal,
+            ),
+          );
+        }
       }
     } on ProcessException catch (e) {
       for (final p in processes) {
@@ -669,7 +740,9 @@ final class _Echo {
 /// The executable on the `PATH` [Env] sees, or `null`.
 ///
 /// {@category System}
-Future<Path?> which(String executable) async {
+Future<Path?> which(String executable) => _which(executable);
+
+Future<Path?> _which(String executable) async {
   final paths = (Env.getOrNull('PATH') ?? '').split(Platform.isWindows ? ';' : ':').where((p) => p.isNotEmpty);
   final pathExt = Env.getOrNull('PATHEXT')?.split(';').where((e) => e.isNotEmpty);
   final extensions = switch (Platform.isWindows) {

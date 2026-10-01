@@ -181,10 +181,10 @@ final class Span {
 ///
 /// {@category CLI}
 final class TuiTheme {
-  final Style? _text, _muted, _accent, _selected, _focused, _border, _success, _warning, _error;
-  final Border? _borders;
-  final String? _scrollTrack, _scrollThumb, _barFill, _barEmpty, _barHead, _checked, _unchecked, _pointer;
-  final List<String>? _spinner;
+  final Style? _text, _muted, _accent, _selected, _focused, _borderStyle, _success, _warning, _error;
+  final Border? _border;
+  final String? _scrollTrack, _scrollThumb, _fill, _empty, _head, _checked, _unchecked, _pointer;
+  final List<String>? _frames;
 
   const TuiTheme({
     Style? text,
@@ -192,39 +192,44 @@ final class TuiTheme {
     Style? accent,
     Style? selected,
     Style? focused,
-    Style? border,
+    Style? borderStyle,
     Style? success,
     Style? warning,
     Style? error,
+    Border? border,
     Border? borders,
     String? scrollTrack,
     String? scrollThumb,
+    String? fill,
     String? barFill,
+    String? empty,
     String? barEmpty,
+    String? head,
     String? barHead,
     String? checked,
     String? unchecked,
     String? pointer,
+    List<String>? frames,
     List<String>? spinner,
   }) : _text = text,
        _muted = muted,
        _accent = accent,
        _selected = selected,
        _focused = focused,
-       _border = border,
+       _borderStyle = borderStyle,
        _success = success,
        _warning = warning,
        _error = error,
-       _borders = borders,
+       _border = border ?? borders,
        _scrollTrack = scrollTrack,
        _scrollThumb = scrollThumb,
-       _barFill = barFill,
-       _barEmpty = barEmpty,
-       _barHead = barHead,
+       _fill = fill ?? barFill,
+       _empty = empty ?? barEmpty,
+       _head = head ?? barHead,
        _checked = checked,
        _unchecked = unchecked,
        _pointer = pointer,
-       _spinner = spinner;
+       _frames = frames ?? spinner;
 
   /// Plain text.
   Style get text => _text ?? Style.none;
@@ -241,25 +246,49 @@ final class TuiTheme {
   /// The border and title of a box holding the focus.
   Style get focused => _focused ?? const Style(fg: Color.cyan);
 
-  /// Every other border.
-  Style get border => _border ?? Style.none;
+  /// The style for borders.
+  Style get borderStyle => _borderStyle ?? Style.none;
 
   Style get success => _success ?? const Style(fg: Color.green);
   Style get warning => _warning ?? const Style(fg: Color.yellow);
   Style get error => _error ?? const Style(fg: Color.red);
 
   /// The glyphs a [Box] draws with unless it names its own.
-  Border get borders => _borders ?? Border.rounded;
+  Border get border => _border ?? Border.rounded;
+
+  /// Alias for [border].
+  Border get borders => border;
 
   String get scrollTrack => _scrollTrack ?? '│';
   String get scrollThumb => _scrollThumb ?? '┃';
-  String get barFill => _barFill ?? '█';
-  String get barEmpty => _barEmpty ?? '░';
-  String get barHead => _barHead ?? '';
+
+  /// A bar's filled glyph.
+  String get fill => _fill ?? '█';
+
+  /// Alias for [fill].
+  String get barFill => fill;
+
+  /// A bar's empty glyph.
+  String get empty => _empty ?? '░';
+
+  /// Alias for [empty].
+  String get barEmpty => empty;
+
+  /// A bar's head glyph.
+  String get head => _head ?? '';
+
+  /// Alias for [head].
+  String get barHead => head;
+
   String get checked => _checked ?? '◉';
   String get unchecked => _unchecked ?? '○';
   String get pointer => _pointer ?? '›';
-  List<String> get spinner => _spinner ?? const ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+  /// Spinner animation frames.
+  List<String> get frames => _frames ?? const ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+  /// Alias for [frames].
+  List<String> get spinner => frames;
 
   /// This theme with [base] filling what it leaves unset.
   TuiTheme _over(TuiTheme base) => TuiTheme(
@@ -268,19 +297,19 @@ final class TuiTheme {
     accent: _accent ?? base._accent,
     selected: _selected ?? base._selected,
     focused: _focused ?? base._focused,
-    border: _border ?? base._border,
+    borderStyle: _borderStyle ?? base._borderStyle,
     success: _success ?? base._success,
     warning: _warning ?? base._warning,
     error: _error ?? base._error,
-    borders: _borders ?? base._borders,
+    border: _border ?? base._border,
     scrollTrack: _scrollTrack ?? base._scrollTrack,
     scrollThumb: _scrollThumb ?? base._scrollThumb,
-    barFill: _barFill ?? base._barFill,
-    barEmpty: _barEmpty ?? base._barEmpty,
-    barHead: _barHead ?? base._barHead,
+    fill: _fill ?? base._fill,
+    empty: _empty ?? base._empty,
+    head: _head ?? base._head,
     checked: _checked ?? base._checked,
     unchecked: _unchecked ?? base._unchecked,
     pointer: _pointer ?? base._pointer,
-    spinner: _spinner ?? base._spinner,
+    frames: _frames ?? base._frames,
   );
 }

@@ -72,7 +72,7 @@ final class Progress {
   /// Glyphs default to the theme's.
   String bar(int width, {String? fill, String? empty, String? head}) {
     if (width <= 0) return '';
-    final (f, e, h) = (fill ?? theme.barFill, empty ?? theme.barEmpty, head ?? theme.barHead);
+    final (f, e, h) = (fill ?? theme.fill, empty ?? theme.empty, head ?? theme.head);
     final done = ((fraction ?? 0) * width).floor();
     final tip = h.isNotEmpty && done < width ? 1 : 0;
     return f * done + h * tip + e * (width - done - tip);

@@ -277,8 +277,25 @@ final class Table {
   }
 
   static List<Row> _sort(List<Row> rows, List<(String, bool)> order) {
+    if (order.isEmpty) return rows;
     final keys = _keys(rows, order);
-    final positions = [for (var i = 0; i < rows.length; i++) i]..sort((x, y) => _compareAt(keys, order, x, y));
+    final positions = [for (var i = 0; i < rows.length; i++) i];
+    if (order.length == 1) {
+      final keyCol = keys[0];
+      final desc = order[0].$2;
+      positions.sort((x, y) {
+        final a = keyCol[x], b = keyCol[y];
+        if (a.$2 == null || b.$2 == null) {
+          if (a.$2 == null && b.$2 == null) return x.compareTo(y);
+          return a.$2 == null ? 1 : -1;
+        }
+        final c = _compare(a, b);
+        if (c != 0) return desc ? -c : c;
+        return x.compareTo(y);
+      });
+    } else {
+      positions.sort((x, y) => _compareAt(keys, order, x, y));
+    }
     return List.unmodifiable([for (final i in positions) rows[i]]);
   }
 
@@ -437,12 +454,23 @@ final class Table {
     final file = File(path);
     await file.parent.create(recursive: true);
     final ext = _extension(path);
-    return file.writeAsString(switch (ext) {
+    final content = switch (ext) {
       'json' => jsonEncode(rows),
       'ndjson' || 'jsonl' => toNdjson(),
       'md' || 'markdown' => toMarkdown(),
       _ => toCsv(separator: separator ?? (ext == 'tsv' ? '\t' : ',')),
-    });
+    };
+    final tmp = File('$path.${DateTime.now().microsecondsSinceEpoch}.tmp');
+    try {
+      await tmp.writeAsString(content);
+      await tmp.rename(path);
+      return File(path);
+    } catch (_) {
+      try {
+        if (await tmp.exists()) await tmp.delete();
+      } catch (_) {}
+      rethrow;
+    }
   }
 
   /// Prints this table to `Io.out`, the package's only table renderer.
@@ -650,7 +678,7 @@ T? _coerce<T>(Object? val) {
   var text = val is String ? val.trim() : '$val';
   if (text.contains(',') && _thousands.hasMatch(text)) text = text.replaceAll(',', '');
   // `num.tryParse` reads hex; a cell's `0x10` is text.
-  if (_hex.hasMatch(text)) return null;
+  if (_isHexPrefix(text)) return null;
   final n = num.tryParse(text);
   if (n == null || !n.isFinite) return null;
   return (isInt
@@ -661,7 +689,18 @@ T? _coerce<T>(Object? val) {
       as T?;
 }
 
-final _hex = RegExp('^[+-]?0x', caseSensitive: false);
+bool _isHexPrefix(String s) {
+  if (s.isEmpty) return false;
+  var idx = 0;
+  final c0 = s.codeUnitAt(0);
+  if (c0 == 0x2B || c0 == 0x2D) {
+    idx++;
+  }
+  if (s.length < idx + 2) return false;
+  final c1 = s.codeUnitAt(idx);
+  final c2 = s.codeUnitAt(idx + 1);
+  return c1 == 0x30 && (c2 == 0x78 || c2 == 0x58);
+}
 
 Type _typeOf<X>() => X;
 

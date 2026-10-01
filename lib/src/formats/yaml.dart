@@ -31,35 +31,50 @@ final class _Line {
   /// `key: rest`, scanned by hand: a regular expression backtracked quadratically on long lines.
   static (String, String)? _entry(String t) {
     if (t.isEmpty) return null;
-    final c = t[0];
-    bool colonAt(int j) => j < t.length && t[j] == ':' && (j + 1 == t.length || t[j + 1] == ' ' || t[j + 1] == '\t');
-    if (c == '"' || c == "'") {
+    final c = t.codeUnitAt(0);
+    bool colonAt(int j) =>
+        j < t.length &&
+        t.codeUnitAt(j) == 0x3A /* : */ &&
+        (j + 1 == t.length || t.codeUnitAt(j + 1) == 0x20 || t.codeUnitAt(j + 1) == 0x09);
+    if (c == 0x22 /* " */ || c == 0x27 /* ' */) {
       final end = _closingQuote(t, 0);
       if (end == -1) return null;
       var j = end + 1;
-      while (j < t.length && (t[j] == ' ' || t[j] == '\t')) {
+      while (j < t.length) {
+        final cu = t.codeUnitAt(j);
+        if (cu != 0x20 && cu != 0x09) break;
         j++;
       }
-      return colonAt(j) ? (_YamlParser._unescape(t.substring(1, end), c == '"'), t.substring(j + 1).trim()) : null;
+      return colonAt(j) ? (_YamlParser._unescape(t.substring(1, end), c == 0x22), t.substring(j + 1).trim()) : null;
     }
-    if ('[]{},#&*!|>%@`'.contains(c) || ('-?:'.contains(c) && (t.length == 1 || t[1] == ' '))) return null;
+    if (_isIndicator(c) || (_isDashQuestionColon(c) && (t.length == 1 || t.codeUnitAt(1) == 0x20))) return null;
     for (var j = 1; j < t.length; j++) {
       if (colonAt(j)) return (t.substring(0, j).trimRight(), t.substring(j + 1).trim());
     }
     return null;
   }
+
+  static bool _isIndicator(int c) => switch (c) {
+    0x5B /* [ */ || 0x5D /* ] */ || 0x7B /* { */ || 0x7D /* } */ ||
+    0x2C /* , */ || 0x23 /* # */ || 0x26 /* & */ || 0x2A /* * */ ||
+    0x21 /* ! */ || 0x7C /* | */ || 0x3E /* > */ || 0x25 /* % */ ||
+    0x40 /* @ */ || 0x60 /* ` */ => true,
+    _ => false,
+  };
+
+  static bool _isDashQuestionColon(int c) => c == 0x2D /* - */ || c == 0x3F /* ? */ || c == 0x3A /* : */;
 }
 
 /// Where the quote opening [t] at [from] closes, or -1: `\` escapes in double quotes, `''`
 /// is a quote in single ones.
 int _closingQuote(String t, int from) {
-  final q = t[from];
+  final q = t.codeUnitAt(from);
   for (var j = from + 1; j < t.length; j++) {
-    final c = t[j];
-    if (q == '"' && c == r'\') {
+    final c = t.codeUnitAt(j);
+    if (q == 0x22 /* " */ && c == 0x5C /* \ */) {
       j++;
     } else if (c == q) {
-      if (q == "'" && j + 1 < t.length && t[j + 1] == "'") {
+      if (q == 0x27 /* ' */ && j + 1 < t.length && t.codeUnitAt(j + 1) == 0x27) {
         j++;
       } else {
         return j;
@@ -103,12 +118,12 @@ final class _YamlParser {
   static String _stripComment(String line) {
     if (!line.contains('#')) return line;
     for (var i = 0; i < line.length; i++) {
-      final c = line[i];
-      if ((c == '"' || c == "'") && _opensString(line, i)) {
+      final c = line.codeUnitAt(i);
+      if ((c == 0x22 || c == 0x27) && _opensString(line, i)) {
         final end = _closingQuote(line, i);
         if (end == -1) return line;
         i = end;
-      } else if (c == '#' && (i == 0 || line[i - 1] == ' ' || line[i - 1] == '\t')) {
+      } else if (c == 0x23 /* # */ && (i == 0 || line.codeUnitAt(i - 1) == 0x20 || line.codeUnitAt(i - 1) == 0x09)) {
         return line.substring(0, i);
       }
     }
@@ -116,7 +131,15 @@ final class _YamlParser {
   }
 
   /// Whether the quote at [i] opens a string rather than being an apostrophe (`don't # x`).
-  static bool _opensString(String line, int i) => i == 0 || ' \t:-[{,>'.contains(line[i - 1]);
+  static bool _opensString(String line, int i) {
+    if (i == 0) return true;
+    final prev = line.codeUnitAt(i - 1);
+    return switch (prev) {
+      0x20 /*   */ || 0x09 /* \t */ || 0x3A /* : */ || 0x2D /* - */ ||
+      0x5B /* [ */ || 0x7B /* { */ || 0x2C /* , */ || 0x3E /* > */ => true,
+      _ => false,
+    };
+  }
 
   Never _fail(String why) =>
       throw FormatException('YAML line ${pos < lines.length ? line.number : lines.lastOrNull?.number ?? 1}: $why');
@@ -356,7 +379,7 @@ final class _YamlParser {
   /// Whether [t] ends in an odd run of backslashes: the last one escapes the line break.
   static bool _escapesBreak(String t) {
     var n = 0;
-    while (n < t.length && t[t.length - 1 - n] == r'\') {
+    while (n < t.length && t.codeUnitAt(t.length - 1 - n) == 0x5C /* \ */) {
       n++;
     }
     return n.isOdd;
@@ -366,21 +389,21 @@ final class _YamlParser {
   String _joinFlow(String t) {
     final sb = StringBuffer(t);
     var depth = 0;
-    String? quote;
+    int? quote;
     void count(String x) {
       for (var j = 0; j < x.length; j++) {
-        final c = x[j];
+        final c = x.codeUnitAt(j);
         if (quote != null) {
-          if (c == r'\' && quote == '"') {
+          if (c == 0x5C /* \ */ && quote == 0x22 /* " */) {
             j++;
           } else if (c == quote) {
             quote = null;
           }
-        } else if (c == '"' || c == "'") {
+        } else if (c == 0x22 || c == 0x27) {
           quote = c;
-        } else if (c == '[' || c == '{') {
+        } else if (c == 0x5B || c == 0x7B) { // [ or {
           depth++;
-        } else if (c == ']' || c == '}') {
+        } else if (c == 0x5D || c == 0x7D) { // ] or }
           depth--;
         }
       }
@@ -474,14 +497,19 @@ final class _YamlParser {
   Object? _flow(String t) {
     var i = 0;
     void ws() {
-      while (i < t.length && (t[i] == ' ' || t[i] == '\t')) {
+      while (i < t.length) {
+        final c = t.codeUnitAt(i);
+        if (c != 0x20 && c != 0x09) break;
         i++;
       }
     }
 
+    bool isFlowSep(int c) =>
+        c == 0x20 || c == 0x2C || c == 0x5B || c == 0x5D || c == 0x7B || c == 0x7D;
+
     String word() {
       final start = i;
-      while (i < t.length && !' ,[]{}'.contains(t[i])) {
+      while (i < t.length && !isFlowSep(t.codeUnitAt(i))) {
         i++;
       }
       return t.substring(start, i);
@@ -491,20 +519,22 @@ final class _YamlParser {
 
     /// A collection's entries up to [close]; [entry] reads one.
     void entries(String close, void Function() entry) {
+      final closeCode = close.codeUnitAt(0);
       i++;
       while (true) {
         ws();
         if (i >= t.length) _fail('unterminated flow collection');
-        if (t[i] == close) {
+        if (t.codeUnitAt(i) == closeCode) {
           i++;
           return;
         }
         entry();
         ws();
         if (i >= t.length) _fail('unterminated flow collection');
-        if (t[i] == ',') {
+        final c = t.codeUnitAt(i);
+        if (c == 0x2C /* , */) {
           i++;
-        } else if (t[i] != close) {
+        } else if (c != closeCode) {
           _fail('expected "," or "$close" in a flow collection');
         }
       }
@@ -513,64 +543,73 @@ final class _YamlParser {
     /// A key's value after an optional `:`, or `null` without one.
     Object? afterColon() {
       ws();
-      if (i >= t.length || t[i] != ':') return null;
+      if (i >= t.length || t.codeUnitAt(i) != 0x3A /* : */) return null;
       i++;
       ws();
-      return i < t.length && ',]}'.contains(t[i]) ? null : value();
+      if (i < t.length) {
+        final c = t.codeUnitAt(i);
+        if (c == 0x2C || c == 0x5D || c == 0x7D) return null; // ,]}
+      }
+      return value();
     }
 
     value = () {
       ws();
       if (i >= t.length) _fail('unterminated flow collection');
-      switch (t[i]) {
-        case '[':
+      final c = t.codeUnitAt(i);
+      switch (c) {
+        case 0x5B /* [ */:
           _enter();
           final out = <Object?>[];
           entries(']', () {
             final v = value();
             ws();
             // `[a: 1]` is a sequence holding a one-entry mapping.
-            out.add(i < t.length && t[i] == ':' ? {'$v': afterColon()} : v);
+            out.add(i < t.length && t.codeUnitAt(i) == 0x3A /* : */ ? {'$v': afterColon()} : v);
           });
           _depth--;
           return out;
-        case '{':
+        case 0x7B /* { */:
           _enter();
           final out = <String, Object?>{};
           List<Object?>? merges;
           entries('}', () {
             final start = i;
             final v = value();
-            final k = (t[start] == '"' || t[start] == "'") ? '$v' : t.substring(start, i).trim();
-            if (k == '<<' && t[start] == '<') return (merges ??= []).add(afterColon());
+            final firstC = t.codeUnitAt(start);
+            final k = (firstC == 0x22 || firstC == 0x27) ? '$v' : t.substring(start, i).trim();
+            if (k == '<<' && firstC == 0x3C /* < */) return (merges ??= []).add(afterColon());
             if (out.containsKey(k)) _fail('"$k" is defined twice');
             out[k] = afterColon();
           });
           _depth--;
           return merges == null ? out : _merge(out, merges!);
-        case '"' || "'":
+        case 0x22 /* " */ || 0x27 /* ' */:
           final end = _closingQuote(t, i);
           if (end == -1) _fail('unterminated quoted scalar');
-          final v = _unescape(t.substring(i + 1, end), t[i] == '"');
+          final v = _unescape(t.substring(i + 1, end), c == 0x22);
           i = end + 1;
           return v;
-        case '*':
+        case 0x2A /* * */:
           i++;
           return _alias(word());
-        case '&' || '!':
-          final anchor = t[i] == '&';
+        case 0x26 /* & */ || 0x21 /* ! */:
+          final anchor = c == 0x26;
           i++;
           final name = word();
           ws();
           final start = i;
-          final v = i < t.length && !',]}'.contains(t[i]) ? value() : null;
+          final v = (i < t.length && (t.codeUnitAt(i) != 0x2C && t.codeUnitAt(i) != 0x5D && t.codeUnitAt(i) != 0x7D))
+              ? value()
+              : null;
           if (anchor) anchors[name] = v;
           return name == '!str' && v is! String && v is! Map && v is! List ? t.substring(start, i).trim() : v;
       }
       final start = i;
-      while (i < t.length &&
-          !',[]{}'.contains(t[i]) &&
-          !(t[i] == ':' && (i + 1 >= t.length || ' ,[]{}'.contains(t[i + 1])))) {
+      while (i < t.length) {
+        final cu = t.codeUnitAt(i);
+        if (isFlowSep(cu)) break;
+        if (cu == 0x3A /* : */ && (i + 1 >= t.length || isFlowSep(t.codeUnitAt(i + 1)))) break;
         i++;
       }
       return _plain(t.substring(start, i).trim());
@@ -588,11 +627,14 @@ final class _YamlParser {
     if (!double) return body.replaceAll("''", "'");
     if (!body.contains(r'\')) return body;
     final sb = StringBuffer();
+    var chunkStart = 0;
     for (var i = 0; i < body.length; i++) {
-      final c = body[i];
-      if (c != r'\' || i + 1 >= body.length) {
-        sb.write(c);
+      final c = body.codeUnitAt(i);
+      if (c != 0x5C /* \ */ || i + 1 >= body.length) {
         continue;
+      }
+      if (i > chunkStart) {
+        sb.write(body.substring(chunkStart, i));
       }
       final e = body[++i];
       final hex = switch (e) {
@@ -612,6 +654,7 @@ final class _YamlParser {
         if (code > 0x10FFFF) throw FormatException('\\$e${body.substring(i + 1, i + 1 + hex)} is past U+10FFFF');
         sb.writeCharCode(code);
         i += hex;
+        chunkStart = i + 1;
         continue;
       }
       sb.write(switch (e) {
@@ -630,6 +673,10 @@ final class _YamlParser {
         'P' => ' ',
         _ => e, // `\\`, `\"`, `\/`, `\ ` and anything unknown
       });
+      chunkStart = i + 1;
+    }
+    if (chunkStart < body.length) {
+      sb.write(body.substring(chunkStart));
     }
     return sb.toString();
   }

@@ -524,6 +524,10 @@ final class Sorted<T> extends Sequence<T> {
   /// The next key, applied where the earlier ones tie; largest first when [descending].
   Sorted<T> thenBy<K extends Comparable<K>>(K Function(T element) key, {bool descending = false}) =>
       Sorted<T>._(_source, [..._keys, _byKey(key, descending)]);
+
+  /// The next comparator, applied where the earlier keys tie.
+  Sorted<T> thenByWith(Comparator<T> compare) =>
+      Sorted<T>._(_source, [..._keys, _byComparator(compare)]);
 }
 
 /// The positions of the [count] smallest of `0 … n-1` by [compare], in order, via a max-heap of

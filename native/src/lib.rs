@@ -134,25 +134,27 @@ pub unsafe extern "C" fn tk_last_error(out: *mut u8, cap: usize) -> i32 {
     })
 }
 
-/// Allocates `len` zeroed bytes, released with `tk_dealloc`; `DynamicLibrary.process()`
+/// Allocates `len` uninitialized bytes, released with `tk_dealloc`; `DynamicLibrary.process()`
 /// cannot find `malloc` everywhere.
-
 #[no_mangle]
 pub extern "C" fn tk_alloc(len: usize) -> *mut u8 {
     if len == 0 {
         return std::ptr::null_mut();
     }
-    let mut buffer = vec![0u8; len];
-    let ptr = buffer.as_mut_ptr();
-    std::mem::forget(buffer);
-    ptr
+    let layout = match std::alloc::Layout::array::<u8>(len) {
+        Ok(l) => l,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    unsafe { std::alloc::alloc(layout) }
 }
 
 /// Releases what `tk_alloc` returned. `len` must be the length it was asked for.
 #[no_mangle]
 pub unsafe extern "C" fn tk_dealloc(ptr: *mut u8, len: usize) {
     if !ptr.is_null() && len != 0 {
-        drop(Vec::from_raw_parts(ptr, len, len));
+        if let Ok(layout) = std::alloc::Layout::array::<u8>(len) {
+            std::alloc::dealloc(ptr, layout);
+        }
     }
 }
 

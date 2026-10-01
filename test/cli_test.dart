@@ -469,6 +469,25 @@ void main() {
       expect(line.startsWith('  Audio Tracks: ['), isTrue);
     });
 
+    test('StreamTaskProgressExtensions.show renders single task stream to ProgressBar', () async {
+      final out = StringBuffer();
+      final err = StringBuffer();
+      Io.out = out;
+      Io.err = err;
+      addTearDown(Io.reset);
+
+      final stream = Stream<TaskProgress>.fromIterable([
+        _task('t1', 'file1.txt', 0.5, 50, 100),
+        _task('t1', 'file2.txt', 1.0, 100, 100, done: true, status: 'done'),
+      ]);
+
+      final last = await stream.show(message: 'Compressing', done: 'Archive created.');
+      expect(last, isNotNull);
+      expect(last!.label, 'file2.txt');
+      expect(last.isDone, isTrue);
+      expect(out.toString(), contains('Archive created.'));
+    });
+
     test('TaskBoard counts completions and revises its total upward', () {
       final out = StringBuffer();
       final err = StringBuffer();
@@ -1125,14 +1144,14 @@ void main() {
 
     test('captures subprocess output, not just Console output', () async {
       Console.ok('via Console');
-      await run('echo SUBPROCESS_MARKER');
+      await run('echo SUBPROCESS_MARKER', shell: Platform.isWindows);
 
       expect(out.toString(), contains('via Console'));
       expect(out.toString(), contains('SUBPROCESS_MARKER'));
     });
 
     test('quiet: true still suppresses subprocess output', () async {
-      final result = await run('echo QUIET_MARKER', quiet: true);
+      final result = await run('echo QUIET_MARKER', quiet: true, shell: Platform.isWindows);
 
       expect(result.stdout, contains('QUIET_MARKER'));
       expect(out.toString(), isNot(contains('QUIET_MARKER')));

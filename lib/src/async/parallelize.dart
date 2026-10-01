@@ -4,6 +4,15 @@ part of '../../async.dart';
 ///
 /// {@category Concurrency}
 extension IterableParallelExtensions<T> on Iterable<T> {
+  /// Maps [worker] over all elements, at most [concurrency] at a time, emitting results
+  /// on a [Stream]. Unwraps successes; errors are emitted as stream error events.
+  Stream<R> parallel<R>(
+    FutureOr<R> Function(T item) worker, {
+    int concurrency = 4,
+    bool isolate = false,
+    bool ordered = false,
+  }) => parallelize(worker, concurrency: concurrency, isolate: isolate, ordered: ordered).unwrap();
+
   /// Maps [worker] over all elements, at most [concurrency] at a time, emitting outcomes
   /// on a [Stream] as they settle.
   ///
@@ -28,6 +37,15 @@ extension IterableParallelExtensions<T> on Iterable<T> {
 ///
 /// {@category Concurrency}
 extension StreamParallelExtensions<T> on Stream<T> {
+  /// Maps [worker] over stream items, at most [concurrency] at a time.
+  /// Unwraps successes; errors are emitted as stream error events.
+  Stream<R> parallel<R>(
+    FutureOr<R> Function(T item) worker, {
+    int concurrency = 4,
+    bool isolate = false,
+    bool ordered = false,
+  }) => parallelize(worker, concurrency: concurrency, isolate: isolate, ordered: ordered).unwrap();
+
   /// Maps [worker] over stream items, emitting outcomes as they settle.
   ///
   /// Set [ordered: true] to emit in input order; default is `ordered: false` (completion order).

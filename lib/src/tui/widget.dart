@@ -308,7 +308,7 @@ final class Box extends Widget {
 
   @override
   void paint(Canvas canvas) {
-    final b = border ?? canvas.theme.borders;
+    final b = border ?? canvas.theme.border;
     final e = b.side.isEmpty ? 0 : 1;
     final top = e == 0 && title != null ? 1 : 0;
     final before = canvas._frame.focusPainted;
@@ -321,7 +321,7 @@ final class Box extends Widget {
         )
         .draw(child ?? Paint((_) {}));
     final focused = !before && canvas._frame.focusPainted;
-    canvas.box(border: b, title: title, style: style ?? (focused ? canvas.theme.focused : canvas.theme.border));
+    canvas.box(border: b, title: title, style: style ?? (focused ? canvas.theme.focused : canvas.theme.borderStyle));
   }
 }
 
