@@ -176,7 +176,7 @@ final class Span {
 ///
 /// ```dart
 /// await Tui.run(s, theme: TuiTheme(accent: Style(fg: Color.magenta)), view: …, update: …);
-/// Themed(TuiTheme(border: Border.double), sidebar)
+/// Themed(TuiTheme(borders: Border.double), sidebar)
 /// ```
 ///
 /// {@category CLI}

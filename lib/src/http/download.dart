@@ -202,7 +202,7 @@ extension PathDownloadExtensions on Path {
     bool ifModified = false,
     (Hash algorithm, String hex)? checksum,
   }) => _batchDownload(
-    Stream.value((url: url, path: this)),
+    Stream.value((url: url, path: this, headers: null)),
     knownTotal: 1,
     concurrency: 1,
     how: (headers: headers, overwrite: overwrite, resume: resume, ifModified: ifModified, checksum: checksum),
@@ -406,17 +406,34 @@ Future<String?> _readValidator(File file) async {
 }
 
 Stream<BatchDownloadProgress> _batchDownload(
-  Stream<({Uri url, Path path})> source, {
+  Stream<({Uri url, Path path, Map<String, String>? headers})> source, {
   required _Transfer how,
   int? knownTotal,
   int concurrency = 4,
+  Duration? delay,
 }) {
   final cancelToken = Cancel.token;
   final controller = StreamController<BatchDownloadProgress>();
   final limit = concurrency > 0 ? concurrency : 1;
-  final queue = Queue<({Uri url, Path path})>();
+  final queue = Queue<({Uri url, Path path, Map<String, String>? headers})>();
   final active = <Future<void>>{};
-  final lease = _clientFor();
+  final baseLease = _clientFor();
+  final lease = delay != null && delay > Duration.zero
+      ? _ClientLease(
+          _ScopeClient(
+            baseLease.client,
+            baseLease.headers,
+            null,
+            null,
+            retries: 0,
+            delay: delay,
+            cache: null,
+            owned: baseLease._owned,
+          ),
+          true,
+          headers: baseLease.headers,
+        )
+      : baseLease;
 
   var discovered = 0;
   var completed = 0;
@@ -426,7 +443,7 @@ Stream<BatchDownloadProgress> _batchDownload(
   var stopped = false;
   // The consumer stopped listening, so the transfers just stop.
   var abandoned = false;
-  StreamSubscription<({Uri url, Path path})>? subscription;
+  StreamSubscription<({Uri url, Path path, Map<String, String>? headers})>? subscription;
   void Function()? unregister;
   Timer? grace;
 
@@ -501,8 +518,18 @@ Stream<BatchDownloadProgress> _batchDownload(
 
       late final Future<void> task;
       Future<void> transfer() async {
+        final itemHeaders = item.headers == null
+            ? how.headers
+            : (how.headers == null ? item.headers : {...how.headers!, ...item.headers!});
+        final itemHow = (
+          headers: itemHeaders,
+          overwrite: how.overwrite,
+          resume: how.resume,
+          ifModified: how.ifModified,
+          checksum: how.checksum,
+        );
         // Passed, not zoned: an `async*` body runs in the zone that listens.
-        final transfers = item.path._download(item.url, how, lease.client);
+        final transfers = item.path._download(item.url, itemHow, lease.client);
         await for (final p in transfers) {
           if (abandoned) break;
           if (p.isDone) {
@@ -581,12 +608,38 @@ extension IterableDownloadExtensions on Iterable<({Uri url, Path path})> {
     bool overwrite = false,
     bool resume = true,
     bool ifModified = false,
+    Duration? delay,
+  }) {
+    final items = toList();
+    return _batchDownload(
+      Stream.fromIterable(items.map((i) => (url: i.url, path: i.path, headers: null))),
+      knownTotal: items.length,
+      concurrency: concurrency,
+      delay: delay,
+      how: (headers: headers, overwrite: overwrite, resume: resume, ifModified: ifModified, checksum: null),
+    );
+  }
+}
+
+/// Batch downloads over pairs that carry per-asset headers.
+///
+/// {@category Networking}
+extension IterableDownloadWithHeadersExtensions on Iterable<({Uri url, Path path, Map<String, String>? headers})> {
+  /// Downloads every pair with its headers, at most [concurrency] at a time.
+  Stream<BatchDownloadProgress> download({
+    Map<String, String>? headers,
+    int concurrency = 4,
+    bool overwrite = false,
+    bool resume = true,
+    bool ifModified = false,
+    Duration? delay,
   }) {
     final items = toList();
     return _batchDownload(
       Stream.fromIterable(items),
       knownTotal: items.length,
       concurrency: concurrency,
+      delay: delay,
       how: (headers: headers, overwrite: overwrite, resume: resume, ifModified: ifModified, checksum: null),
     );
   }
@@ -605,9 +658,31 @@ extension StreamDownloadExtensions on Stream<({Uri url, Path path})> {
     bool overwrite = false,
     bool resume = true,
     bool ifModified = false,
+    Duration? delay,
+  }) => _batchDownload(
+    map((i) => (url: i.url, path: i.path, headers: null)),
+    concurrency: concurrency,
+    delay: delay,
+    how: (headers: headers, overwrite: overwrite, resume: resume, ifModified: ifModified, checksum: null),
+  );
+}
+
+/// Batch downloads over streaming pairs that carry per-asset headers.
+///
+/// {@category Networking}
+extension StreamDownloadWithHeadersExtensions on Stream<({Uri url, Path path, Map<String, String>? headers})> {
+  /// Downloads pairs as they arrive with their per-asset headers.
+  Stream<BatchDownloadProgress> download({
+    Map<String, String>? headers,
+    int concurrency = 4,
+    bool overwrite = false,
+    bool resume = true,
+    bool ifModified = false,
+    Duration? delay,
   }) => _batchDownload(
     this,
     concurrency: concurrency,
+    delay: delay,
     how: (headers: headers, overwrite: overwrite, resume: resume, ifModified: ifModified, checksum: null),
   );
 }
@@ -628,11 +703,13 @@ extension MapDownloadExtensions on Map<Uri, Path> {
     bool overwrite = false,
     bool resume = true,
     bool ifModified = false,
+    Duration? delay,
   }) => pairs.download(
     headers: headers,
     concurrency: concurrency,
     overwrite: overwrite,
     resume: resume,
     ifModified: ifModified,
+    delay: delay,
   );
 }

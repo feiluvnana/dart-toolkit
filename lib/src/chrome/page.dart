@@ -73,7 +73,11 @@ final class ChromePage {
   /// The URL this tab is on, after every redirect and navigation.
   Uri get url => _url;
 
+  /// Whether this tab is open and its client is connected.
   bool get isOpen => _alive && _owner._alive && !_client.isClosed;
+
+  /// Whether this tab or its client has been closed.
+  bool get isClosed => !isOpen;
 
   /// The status of the last document loaded, or `null` before the first.
   int? get statusCode => (_document?['status'] as num?)?.toInt();
@@ -334,6 +338,9 @@ new Promise((resolve) => {
     _ => null,
   };
 
+  /// The `innerText` of the first element [selector] matches, or `null`; see [text].
+  Future<String?> textOrNull(String selector) => text(selector);
+
   /// Attribute [name] of the first element [selector] matches, or `null`. Resolved by the
   /// DOM, so `href` and `src` come back absolute.
   Future<String?> attr(String selector, String name) async => switch (await eval('''(() => {
@@ -345,6 +352,9 @@ new Promise((resolve) => {
     final String found => found,
     _ => null,
   };
+
+  /// Attribute [name] of the first element [selector] matches, or `null`; see [attr].
+  Future<String?> attrOrNull(String selector, String name) => attr(selector, name);
 
   /// Whether [selector] matches anything right now.
   Future<bool> has(String selector) async => await eval('!!${_q(selector)}') == true;

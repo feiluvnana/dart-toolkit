@@ -20,6 +20,12 @@ sealed class Either<L, R> {
     Left<L, R>() => null,
   };
 
+  /// Whether this outcome is a failure [Left].
+  bool get isLeft => this is Left<L, R>;
+
+  /// Whether this outcome is a success [Right].
+  bool get isRight => this is Right<L, R>;
+
   /// The [Right] value, or throws the [Left] value with the trace it was caught with.
   R unwrap() => switch (this) {
     Right<L, R>(:final value) => value,
@@ -101,7 +107,7 @@ extension StreamEitherExtensions<L, R> on Stream<Either<L, R>> {
 }
 
 /// The same helpers on a batch still settling, so the `await` needs no parentheses:
-/// `await files.parallelize(f).rights`.
+/// `await batch.rights`.
 ///
 /// {@category Formats}
 extension FutureEitherListExtensions<L, R> on Future<List<Either<L, R>>> {

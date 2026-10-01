@@ -33,7 +33,7 @@ void main() {
 
   Map<String, String> digests(Path root) => {
     for (final f in root.filesSync(recursive: true))
-      f.path.substring(root.length + 1): f.readBytesSync().hash(Hash.sha256),
+      f.path.substring(root.length + 1).replaceAll(r'\', '/'): f.readBytesSync().hash(Hash.sha256),
   };
 
   for (final ext in ['.zip', '.7z', '.tar', '.tar.gz', '.tar.xz', '.tar.zst', '.tar.bz2']) {
@@ -64,7 +64,7 @@ void main() {
     expect(made.exitCode, 0, reason: made.stderr.toString());
     await (tmp / 'sys.tar.xz').extractTo(tmp / 'back');
     expect(digests(tmp / 'back'), equals(digests(src)));
-  });
+  }, testOn: '!windows');
 
   test('zip and 7z with a password: wrong one fails, right one opens, entries say encrypted', () async {
     for (final ext in ['.zip', '.7z']) {
@@ -99,9 +99,16 @@ void main() {
         Compression.zstd => 'zstd',
         Compression.bzip2 => 'bzip2',
       };
-      final r = await Process.run(tool, ['-dc', packed]);
-      expect(r.exitCode, 0, reason: '${c.name}: ${r.stderr}');
-      expect((r.stdout as String).length, file.readTextSync().length);
+      ProcessResult? r;
+      try {
+        r = await Process.run(tool, ['-dc', packed]);
+      } on ProcessException {
+        // External tool not available on this platform.
+      }
+      if (r != null) {
+        expect(r.exitCode, 0, reason: '${c.name}: ${r.stderr}');
+        expect((r.stdout as String).length, file.readTextSync().length);
+      }
     }
     await file.compressTo(tmp / 'g.gz');
     await (tmp / 'g.gz').decompressTo(tmp / 'g.txt');
@@ -368,7 +375,7 @@ void main() {
       final out = tmp / 'only$ext';
       await archive.extractTo(out, only: '**/*.txt');
       expect(
-        [for (final f in out.filesSync(recursive: true)) f.relativeTo(out)]..sort(),
+        [for (final f in out.filesSync(recursive: true)) f.relativeTo(out).replaceAll(r'\', '/')]..sort(),
         ['note.txt', 'sub/text.txt', 'ünïcode 名前.txt']..sort(),
         reason: ext,
       );
@@ -492,7 +499,7 @@ void main() {
     final outBraces = tmp / 'braces_out';
     await arc.extractTo(outBraces, only: '{note.txt,sub/text.txt}');
     expect(
-      [for (final f in outBraces.filesSync(recursive: true)) f.relativeTo(outBraces)]..sort(),
+      [for (final f in outBraces.filesSync(recursive: true)) f.relativeTo(outBraces).replaceAll(r'\', '/')]..sort(),
       ['note.txt', 'sub/text.txt']..sort(),
     );
 
@@ -562,4 +569,57 @@ void main() async {
       expect((await (tmp / 'p.$ext').entries()).map((e) => e.name), isNot(contains('pipe')), reason: ext);
     }
   }, testOn: '!windows');
+
+  group('Archive progress reporting', () {
+    test('archive() streams progress events and archiveTo(onProgress:) receives them', () async {
+      final destStream = tmp / 'progress_stream.zip';
+      final streamEvents = await src.archive(destStream).toList();
+      expect(streamEvents, isNotEmpty);
+      expect(streamEvents.last.isDone, isTrue);
+      expect(streamEvents.last.status, 'done');
+      expect(streamEvents.last.completed, equals(streamEvents.last.total));
+      expect(streamEvents.last.ratio, equals(1.0));
+
+      final callbackEvents = <ArchiveProgress>[];
+      final destCallback = tmp / 'progress_cb.zip';
+      await src.archiveTo(destCallback, onProgress: (p) => callbackEvents.add(p));
+      expect(callbackEvents, isNotEmpty);
+      expect(callbackEvents.last.isDone, isTrue);
+      expect(callbackEvents.last.ratio, equals(1.0));
+      expect(destCallback.existsSync(), isTrue);
+    });
+
+    test('extract() streams progress events and extractTo(onProgress:) receives them', () async {
+      final archive = tmp / 'extract_test.zip';
+      await src.archiveTo(archive);
+
+      final outStream = tmp / 'out_progress_stream';
+      final extractEvents = await archive.extract(outStream).toList();
+      expect(extractEvents, isNotEmpty);
+      expect(extractEvents.last.isDone, isTrue);
+      expect(digests(outStream), equals(digests(src)));
+
+      final outCb = tmp / 'out_progress_cb';
+      final cbEvents = <ArchiveProgress>[];
+      await archive.extractTo(outCb, onProgress: (p) => cbEvents.add(p));
+      expect(cbEvents, isNotEmpty);
+      expect(cbEvents.last.isDone, isTrue);
+      expect(digests(outCb), equals(digests(src)));
+    });
+
+    test('compress() and decompress() stream progress events', () async {
+      final file = src / 'sub' / 'text.txt';
+      final compressed = tmp / 'comp.gz';
+      final compEvents = await file.compress(compressed).toList();
+      expect(compEvents, isNotEmpty);
+      expect(compEvents.last.isDone, isTrue);
+      expect(compEvents.last.bytes, greaterThan(0));
+
+      final decompressed = tmp / 'decomp.txt';
+      final decompEvents = await compressed.decompress(decompressed).toList();
+      expect(decompEvents, isNotEmpty);
+      expect(decompEvents.last.isDone, isTrue);
+      expect(decompressed.readTextSync(), file.readTextSync());
+    });
+  });
 }

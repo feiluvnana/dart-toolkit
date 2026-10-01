@@ -74,17 +74,26 @@ class Http {
     final owned = client == null && Http.client == null;
     final inner = client ?? Http.client ?? IoClient();
     final keeps = cookies || jar != null;
+    final parent = inner is _ScopeClient ? inner : null;
+    final effectiveTimeout = timeout ?? parent?._timeout;
+    final effectiveHeaders = parent?._headers != null ? {...parent!._headers!, ...?headers} : headers;
+    final effectiveJar = jar != null
+        ? (_Jar()..seed(jar))
+        : (cookies || parent?._jar != null ? (parent?._jar ?? _Jar()) : null);
+    final effectiveRetries = retries > 0 ? retries : (parent?._retries ?? 0);
+    final effectiveDelay = (delay != null && delay > Duration.zero) ? delay : parent?._delay;
+    final effectiveCache = cache != null ? _Cache(cache) : parent?._cache;
+
     final shared = timeout == null && headers == null && !keeps && retries <= 0 && delay == null && cache == null
         ? inner
         : _ScopeClient(
             inner,
-            headers,
-            timeout,
-            keeps ? (_Jar()..seed(jar ?? const [])) : null,
-            // An inner scope that sets none keeps the outer's budget.
-            retries: retries > 0 ? retries : (inner is _ScopeClient ? inner._retries : 0),
-            delay: delay != null && delay > Duration.zero ? delay : null,
-            cache: cache == null ? null : _Cache(cache),
+            effectiveHeaders,
+            effectiveTimeout,
+            effectiveJar,
+            retries: effectiveRetries,
+            delay: effectiveDelay,
+            cache: effectiveCache,
             owned: owned,
           );
     try {

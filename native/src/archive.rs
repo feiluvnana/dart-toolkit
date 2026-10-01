@@ -24,6 +24,81 @@ const BZIP2: u32 = 3;
 /// `tk_decompress` codec meaning "read the file's magic number".
 const DETECT: u32 = u32::MAX;
 
+pub type ProgressCb = Option<unsafe extern "C" fn(
+    completed: u64,
+    total: u64,
+    bytes: u64,
+    bytes_total: u64,
+    name: *const u8,
+    name_len: usize,
+)>;
+
+#[inline]
+unsafe fn report_progress(
+    cb: ProgressCb,
+    completed: u64,
+    total: u64,
+    bytes: u64,
+    bytes_total: u64,
+    name: &str,
+) {
+    if let Some(f) = cb {
+        f(completed, total, bytes, bytes_total, name.as_ptr(), name.len());
+    }
+}
+
+fn strip_unc(p: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let s = p.to_str().unwrap_or("");
+        if s.starts_with(r"\\?\") {
+            return PathBuf::from(&s[4..]);
+        }
+    }
+    p.to_path_buf()
+}
+
+fn canonicalize_safe(p: &Path) -> std::io::Result<PathBuf> {
+    if let Ok(c) = p.canonicalize() {
+        return Ok(strip_unc(&c));
+    }
+    let mut non_existing = Vec::new();
+    let mut current = p;
+    while !current.exists() {
+        if let Some(name) = current.file_name() {
+            non_existing.push(name);
+        }
+        if let Some(parent) = current.parent() {
+            current = parent;
+        } else {
+            break;
+        }
+    }
+    if let Ok(c) = current.canonicalize() {
+        let mut canon = strip_unc(&c);
+        for part in non_existing.into_iter().rev() {
+            canon.push(part);
+        }
+        return Ok(canon);
+    }
+    Ok(strip_unc(p))
+}
+
+fn path_starts_with(child: &Path, parent: &Path) -> bool {
+    let c = canonicalize_safe(child).unwrap_or_else(|_| strip_unc(child));
+    let p = canonicalize_safe(parent).unwrap_or_else(|_| strip_unc(parent));
+    #[cfg(windows)]
+    {
+        let c_str = c.to_string_lossy().to_lowercase();
+        let p_str = p.to_string_lossy().to_lowercase();
+        c_str.starts_with(&p_str)
+    }
+    #[cfg(not(windows))]
+    {
+        c.starts_with(&p)
+    }
+}
+
 #[derive(serde::Serialize)]
 struct Entry {
     name: String,
@@ -436,7 +511,7 @@ impl Policy {
             limit,
             only: only.map(|p| p.replace('\\', "/").chars().collect()),
             fold: flags & FOLD_CASE != 0,
-            root: root.canonicalize().map_err(|e| format!("{}: {}", root.display(), e))?,
+            root: canonicalize_safe(root).map_err(|e| format!("{}: {}", root.display(), e))?,
             links: Vec::new(),
             checked: std::collections::HashSet::new(),
         })
@@ -473,7 +548,7 @@ impl Policy {
             return Ok(());
         }
         match resolve(dir, 0) {
-            Some(real) if real.starts_with(&self.root) => {
+            Some(real) if path_starts_with(&real, &self.root) => {
                 self.checked.insert(dir.to_path_buf());
                 Ok(())
             }
@@ -510,7 +585,7 @@ impl Policy {
         }
         let mut result = Ok(());
         for link in &self.links {
-            if !resolve(link, 0).is_some_and(|real| real.starts_with(&self.root)) {
+            if !resolve(link, 0).is_some_and(|real| path_starts_with(&real, &self.root)) {
                 let _ = std::fs::remove_file(link);
                 if result.is_ok() {
                     result = Err(format!("{}: link leads out of the destination", link.display()));
@@ -832,7 +907,7 @@ fn seven_err(m: String) -> sevenz_rust2::Error {
     sevenz_rust2::Error::other(m)
 }
 
-fn extract(path: &str, dest: &str, password: Option<&str>, only: Option<&str>, flags: u32) -> Result<i32, String> {
+fn extract(path: &str, dest: &str, password: Option<&str>, only: Option<&str>, flags: u32, progress: ProgressCb) -> Result<i32, String> {
     let kind = detect_read(path)?;
     let root = Path::new(dest);
     std::fs::create_dir_all(root).msg()?;
@@ -842,12 +917,28 @@ fn extract(path: &str, dest: &str, password: Option<&str>, only: Option<&str>, f
     match kind {
         "zip" => {
             let mut z = zip_open(path)?;
+            let total = z.len() as u64;
+            let mut total_bytes = 0u64;
+            for i in 0..z.len() {
+                if let Ok(f) = z.by_index(i) {
+                    if !f.is_dir() {
+                        total_bytes = total_bytes.saturating_add(f.size());
+                    }
+                }
+            }
+            let mut bytes_done = 0u64;
+            unsafe {
+                report_progress(progress, 0, total, 0, total_bytes, "");
+            }
             for i in 0..z.len() {
                 let mut f = match password {
                     Some(pw) => z.by_index_decrypt(i, pw.as_bytes()).msg()?,
                     None => z.by_index(i).msg()?,
                 };
                 let name = f.name().to_string();
+                unsafe {
+                    report_progress(progress, i as u64, total, bytes_done, total_bytes, &name);
+                }
                 let target = inside(root, &name)?;
                 if !pol.wants(&name) {
                     continue;
@@ -866,7 +957,11 @@ fn extract(path: &str, dest: &str, password: Option<&str>, only: Option<&str>, f
                 }
                 let (size, mtime, mode) = (f.size(), zip_mtime(&f), f.unix_mode());
                 write_file(&mut pol, &target, &mut f, size, &name, mtime, mode)?;
+                bytes_done += size;
                 count += 1;
+                unsafe {
+                    report_progress(progress, (i + 1) as u64, total, bytes_done, total_bytes, &name);
+                }
             }
         }
         "7z" => {
@@ -882,12 +977,23 @@ fn extract(path: &str, dest: &str, password: Option<&str>, only: Option<&str>, f
             }
             pol.charge(wanted, path)?;
             pol.budget = u64::MAX;
+            let total = reader.archive().files.len() as u64;
+            let total_bytes = wanted;
+            let mut bytes_done = 0u64;
+            let mut idx = 0u64;
+            unsafe {
+                report_progress(progress, 0, total, 0, total_bytes, "");
+            }
             reader
                 .for_each_entries(|e, r| {
                     let name = e.name().to_string();
+                    unsafe {
+                        report_progress(progress, idx, total, bytes_done, total_bytes, &name);
+                    }
                     if !pol.wants(&name) {
                         // A solid block is one stream: an entry not wanted is still read past.
                         std::io::copy(r, &mut std::io::sink()).map_err(sevenz_rust2::Error::io)?;
+                        idx += 1;
                         return Ok(true);
                     }
                     let target = inside(root, &name).map_err(seven_err)?;
@@ -897,24 +1003,40 @@ fn extract(path: &str, dest: &str, password: Option<&str>, only: Option<&str>, f
                         pol.contains(&target).map_err(seven_err)?;
                         std::fs::create_dir_all(&target).map_err(sevenz_rust2::Error::io)?;
                         dirs.push((target.clone(), mode, mtime));
+                        idx += 1;
                         return Ok(true);
                     }
                     write_file(&mut pol, &target, r, e.size(), &name, mtime, mode).map_err(seven_err)?;
+                    bytes_done += e.size();
                     count += 1;
+                    idx += 1;
+                    unsafe {
+                        report_progress(progress, idx, total, bytes_done, total_bytes, &name);
+                    }
                     Ok(true)
                 })
                 .msg()?;
         }
         "rar" => {
             let mut a = rar(path, password).open_for_processing().msg()?;
+            let mut idx = 0u64;
+            let mut bytes_done = 0u64;
+            unsafe {
+                report_progress(progress, 0, 0, 0, 0, "");
+            }
             while let Some(h) = a.read_header().msg()? {
                 let name = h.entry().filename.to_string_lossy().to_string();
                 let target = inside(root, &name)?;
+                unsafe {
+                    report_progress(progress, idx, 0, bytes_done, 0, &name);
+                }
                 if !pol.wants(&name) {
                     a = h.skip().msg()?;
+                    idx += 1;
                     continue;
                 }
                 let is_file = h.entry().is_file();
+                let fsize = if is_file { h.entry().unpacked_size } else { 0 };
                 if is_file {
                     pol.charge(h.entry().unpacked_size, &name)?;
                 }
@@ -937,7 +1059,12 @@ fn extract(path: &str, dest: &str, password: Option<&str>, only: Option<&str>, f
                     if !pol.trusted {
                         strip_setid(&target);
                     }
+                    bytes_done += fsize;
                     count += 1;
+                }
+                idx += 1;
+                unsafe {
+                    report_progress(progress, idx, 0, bytes_done, 0, &name);
                 }
             }
         }
@@ -946,11 +1073,20 @@ fn extract(path: &str, dest: &str, password: Option<&str>, only: Option<&str>, f
             // Without it the crate keeps the permission bits and drops setuid, setgid, sticky.
             t.set_preserve_permissions(pol.trusted);
             t.set_preserve_mtime(true);
+            let mut idx = 0u64;
+            let mut bytes_done = 0u64;
+            unsafe {
+                report_progress(progress, 0, 0, 0, 0, "");
+            }
             for e in t.entries().msg()? {
                 let mut e = e.msg()?;
                 let name = e.path().msg()?.to_string_lossy().to_string();
                 let target = inside(root, &name)?;
+                unsafe {
+                    report_progress(progress, idx, 0, bytes_done, 0, &name);
+                }
                 if !pol.wants(&name) {
+                    idx += 1;
                     continue;
                 }
                 let kind = e.header().entry_type();
@@ -974,23 +1110,33 @@ fn extract(path: &str, dest: &str, password: Option<&str>, only: Option<&str>, f
                     std::fs::create_dir_all(&target).map_err(|e| format!("{}: {}", target.display(), e))?;
                     let mtime = e.header().mtime().ok().map(|m| m as i64);
                     dirs.push((target, e.header().mode().ok(), mtime));
+                    idx += 1;
                     continue;
                 }
+                let fsize = e.size();
                 if e.unpack_in(root).msg()? && kind.is_file() {
+                    bytes_done += fsize;
                     count += 1;
+                }
+                idx += 1;
+                unsafe {
+                    report_progress(progress, idx, 0, bytes_done, 0, &name);
                 }
             }
         }
     }
     pol.finish()?;
     for (dir, mode, mtime) in dirs.into_iter().rev() {
-        if let Some(s) = mtime {
+        if let Some(_s) = mtime {
             #[cfg(unix)]
             if let Ok(f) = std::fs::File::open(&dir) {
-                let _ = f.set_modified(unix_time(s));
+                let _ = f.set_modified(unix_time(_s));
             }
         }
         set_mode(&dir, mode, pol.trusted);
+    }
+    unsafe {
+        report_progress(progress, count as u64, count as u64, 0, 0, "");
     }
     Ok(count)
 }
@@ -1012,7 +1158,23 @@ pub unsafe extern "C" fn tk_archive_extract(
     olen: usize,
     flags: u32,
 ) -> i32 {
-    guard(|| extract(text(path, plen)?, text(dest, dlen)?, opt_text(pw, pwlen)?, opt_text(only, olen)?, flags))
+    tk_archive_extract_progress(path, plen, dest, dlen, pw, pwlen, only, olen, flags, None)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn tk_archive_extract_progress(
+    path: *const u8,
+    plen: usize,
+    dest: *const u8,
+    dlen: usize,
+    pw: *const u8,
+    pwlen: usize,
+    only: *const u8,
+    olen: usize,
+    flags: u32,
+    progress: ProgressCb,
+) -> i32 {
+    guard(|| extract(text(path, plen)?, text(dest, dlen)?, opt_text(pw, pwlen)?, opt_text(only, olen)?, flags, progress))
 }
 
 /// An entry name as the caller would write it: `/`-separated, no leading `./`.
@@ -1138,7 +1300,7 @@ fn walk(src: &Path, dest: &Path) -> Result<Vec<(String, PathBuf, ItemKind)>, Str
     // The destination's name relative to the source, when it lands inside it.
     // A bare file name's parent is "", which `canonicalize` refuses: it is the working directory.
     let parent = dest.parent().map(|p| if p.as_os_str().is_empty() { Path::new(".") } else { p });
-    let own = match (src.canonicalize(), parent.and_then(|p| p.canonicalize().ok())) {
+    let own = match (canonicalize_safe(src), parent.and_then(|p| canonicalize_safe(p).ok())) {
         (Ok(s), Some(d)) => dest.file_name().and_then(|n| d.join(n).strip_prefix(&s).ok().map(|r| r.to_path_buf())),
         _ => None,
     };
@@ -1167,7 +1329,7 @@ fn walk(src: &Path, dest: &Path) -> Result<Vec<(String, PathBuf, ItemKind)>, Str
     Ok(out)
 }
 
-fn create(format: u32, src: &str, dest: &str, password: Option<&str>, level: i32) -> Result<i32, String> {
+fn create(format: u32, src: &str, dest: &str, password: Option<&str>, level: i32, progress: ProgressCb) -> Result<i32, String> {
     // Refused before anything is touched: the destination's folder is not created for nothing.
     match format {
         RAR => return Err(format!("{}: rar can only be read; write .zip or .7z instead", dest)),
@@ -1184,6 +1346,21 @@ fn create(format: u32, src: &str, dest: &str, password: Option<&str>, level: i32
     }
     let items = walk(src_path, Path::new(dest))?;
     let files = items.iter().filter(|i| !matches!(i.2, ItemKind::Dir)).count() as i32;
+    let total_items = items.len() as u64;
+    let total_bytes: u64 = items
+        .iter()
+        .filter(|i| matches!(i.2, ItemKind::File))
+        .filter_map(|i| i.1.metadata().ok())
+        .map(|m| m.len())
+        .sum();
+
+    unsafe {
+        report_progress(progress, 0, total_items, 0, total_bytes, "");
+    }
+
+    let mut completed: u64 = 0;
+    let mut bytes_done: u64 = 0;
+
     match format {
         ZIP => {
             let mut w = zip::ZipWriter::new(BufWriter::new(create_file(dest)?));
@@ -1211,6 +1388,9 @@ fn create(format: u32, src: &str, dest: &str, password: Option<&str>, level: i32
                 if let Some(pw) = password {
                     opts = opts.with_aes_encryption(zip::AesMode::Aes256, pw);
                 }
+                unsafe {
+                    report_progress(progress, completed, total_items, bytes_done, total_bytes, name);
+                }
                 match kind {
                     ItemKind::Dir => {
                         w.add_directory(name, opts).msg()?;
@@ -1220,8 +1400,15 @@ fn create(format: u32, src: &str, dest: &str, password: Option<&str>, level: i32
                     }
                     ItemKind::File => {
                         w.start_file(name, opts).msg()?;
-                        pump(BufReader::new(read_file(path.to_str().ok_or("bad path")?)?), &mut w)?;
+                        let file = read_file(path.to_str().ok_or("bad path")?)?;
+                        let flen = file.metadata().map_or(0, |m| m.len());
+                        pump(BufReader::new(file), &mut w)?;
+                        bytes_done += flen;
                     }
+                }
+                completed += 1;
+                unsafe {
+                    report_progress(progress, completed, total_items, bytes_done, total_bytes, name);
                 }
             }
             // The central directory is still buffered; dropping the writer would swallow its error.
@@ -1245,8 +1432,13 @@ fn create(format: u32, src: &str, dest: &str, password: Option<&str>, level: i32
             }
             for (name, path, kind) in &items {
                 if matches!(kind, ItemKind::Symlink(_)) {
+                    completed += 1;
                     continue;
                 }
+                unsafe {
+                    report_progress(progress, completed, total_items, bytes_done, total_bytes, name);
+                }
+                #[allow(unused_mut)]
                 let mut entry = sevenz_rust2::SevenZArchiveEntry::from_path(path, name.clone());
                 #[cfg(unix)]
                 {
@@ -1257,22 +1449,27 @@ fn create(format: u32, src: &str, dest: &str, password: Option<&str>, level: i32
                         entry.windows_attributes = 0x8000 | (mode << 16);
                     }
                 }
+                let flen = if matches!(kind, ItemKind::File) {
+                    path.metadata().map_or(0, |m| m.len())
+                } else {
+                    0
+                };
                 let reader = if matches!(kind, ItemKind::Dir) {
                     None
                 } else {
                     Some(BufReader::new(read_file(path.to_str().ok_or("bad path")?)?))
                 };
                 z.push_archive_entry(entry, reader).msg()?;
+                bytes_done += flen;
+                completed += 1;
+                unsafe {
+                    report_progress(progress, completed, total_items, bytes_done, total_bytes, name);
+                }
             }
             z.finish().msg()?;
         }
         TAR | TAR_GZ | TAR_XZ | TAR_ZST | TAR_BZ2 => {
-            let size = items
-                .iter()
-                .filter(|i| matches!(i.2, ItemKind::File))
-                .filter_map(|i| i.1.metadata().ok())
-                .map(|m| m.len())
-                .sum();
+            let size = total_bytes;
             let codec = match format {
                 TAR_GZ => Some(GZIP),
                 TAR_XZ => Some(XZ),
@@ -1283,6 +1480,14 @@ fn create(format: u32, src: &str, dest: &str, password: Option<&str>, level: i32
             let mut b = tar::Builder::new(encoder(codec, BufWriter::new(create_file(dest)?), level, size)?);
             b.follow_symlinks(false);
             for (name, path, kind) in &items {
+                unsafe {
+                    report_progress(progress, completed, total_items, bytes_done, total_bytes, name);
+                }
+                let flen = if matches!(kind, ItemKind::File) {
+                    path.metadata().map_or(0, |m| m.len())
+                } else {
+                    0
+                };
                 match kind {
                     ItemKind::Dir => {
                         b.append_dir(name, path).msg()?;
@@ -1291,10 +1496,18 @@ fn create(format: u32, src: &str, dest: &str, password: Option<&str>, level: i32
                         b.append_path_with_name(path, name).msg()?;
                     }
                 }
+                bytes_done += flen;
+                completed += 1;
+                unsafe {
+                    report_progress(progress, completed, total_items, bytes_done, total_bytes, name);
+                }
             }
             b.into_inner().msg()?.finish().msg()?.flush().msg()?;
         }
         _ => unreachable!(),
+    }
+    unsafe {
+        report_progress(progress, total_items, total_items, total_bytes, total_bytes, "");
     }
     Ok(files)
 }
@@ -1302,32 +1515,57 @@ fn create(format: u32, src: &str, dest: &str, password: Option<&str>, level: i32
 /// Archives `src` (a file or directory) into `dest`; returns the number of files added.
 #[no_mangle]
 pub unsafe extern "C" fn tk_archive_create(format: u32, src: *const u8, slen: usize, dest: *const u8, dlen: usize, pw: *const u8, pwlen: usize, level: i32) -> i32 {
-    guard(|| create(format, text(src, slen)?, text(dest, dlen)?, opt_text(pw, pwlen)?, level))
+    tk_archive_create_progress(format, src, slen, dest, dlen, pw, pwlen, level, None)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn tk_archive_create_progress(format: u32, src: *const u8, slen: usize, dest: *const u8, dlen: usize, pw: *const u8, pwlen: usize, level: i32, progress: ProgressCb) -> i32 {
+    guard(|| create(format, text(src, slen)?, text(dest, dlen)?, opt_text(pw, pwlen)?, level, progress))
 }
 
 // ---- single streams
 
 #[no_mangle]
 pub unsafe extern "C" fn tk_compress(codec: u32, src: *const u8, slen: usize, dest: *const u8, dlen: usize, level: i32) -> i32 {
+    tk_compress_progress(codec, src, slen, dest, dlen, level, None)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn tk_compress_progress(codec: u32, src: *const u8, slen: usize, dest: *const u8, dlen: usize, level: i32, progress: ProgressCb) -> i32 {
     guard(|| {
         validate_codec_level(codec, level)?;
-        let file = read_file(text(src, slen)?)?;
-        let size = file.metadata().map_or(0, |m| m.len());
+        let src_str = text(src, slen)?;
+        let file = read_file(src_str)?;
+        let total_size = file.metadata().map_or(0, |m| m.len());
+        report_progress(progress, 0, 1, 0, total_size, src_str);
         let mut input = BufReader::new(file);
         let out = BufWriter::new(create_file(text(dest, dlen)?)?);
-        let mut enc = encoder(Some(codec), out, level, size)?;
-        pump(&mut input, &mut enc)?;
+        let mut enc = encoder(Some(codec), out, level, total_size)?;
+        let mut done = 0u64;
+        let mut buf = [0u8; 64 * 1024];
+        loop {
+            let n = input.read(&mut buf).msg()?;
+            if n == 0 {
+                break;
+            }
+            enc.write_all(&buf[..n]).msg()?;
+            done += n as u64;
+            report_progress(progress, 0, 1, done, total_size, src_str);
+        }
         enc.finish().msg()?.flush().msg()?;
+        report_progress(progress, 1, 1, total_size, total_size, src_str);
         Ok(0)
     })
 }
 
-fn decompress(codec: u32, path: &str, dest: &str, flags: u32) -> Result<i32, String> {
+fn decompress(codec: u32, path: &str, dest: &str, flags: u32, progress: ProgressCb) -> Result<i32, String> {
     let codec = if codec == DETECT {
         sniff_codec(path).ok_or_else(|| format!("{}: not a gzip, xz, zstd or bzip2 stream", path))?
     } else {
         codec
     };
+    let total_size = std::fs::metadata(path).map_or(0, |m| m.len());
+    unsafe { report_progress(progress, 0, 1, 0, total_size, path); }
     let pol = Policy::new(path, Path::new("."), None, flags)?;
     let input = BufReader::new(read_file(path)?);
     let mut decoder: Box<dyn Read> = match codec {
@@ -1338,22 +1576,46 @@ fn decompress(codec: u32, path: &str, dest: &str, flags: u32) -> Result<i32, Str
         _ => return Err(format!("unknown codec {}", codec)),
     };
     let mut out = BufWriter::new(create_file(dest)?);
-    let copied = std::io::copy(&mut (&mut decoder).take(pol.limit.saturating_add(1)), &mut out)
-        .and_then(|n| out.flush().map(|_| n))
-        .msg();
-    let result = match copied {
-        Ok(n) if n > pol.limit => Err(format!(
-            "{}: decompresses to more than {} bytes, {}× the file and at least 1 GiB; decompress with trusted: true if that is expected",
-            path, pol.limit, RATIO
-        )),
-        Ok(_) => Ok(0),
-        Err(e) => Err(e),
-    };
-    if result.is_err() {
+    let mut done = 0u64;
+    let mut buf = [0u8; 64 * 1024];
+    let limit = pol.limit.saturating_add(1);
+    let mut err = None;
+    loop {
+        let max_read = (limit.saturating_sub(done)).min(buf.len() as u64) as usize;
+        if max_read == 0 {
+            err = Some(format!(
+                "{}: decompresses to more than {} bytes, {}× the file and at least 1 GiB; decompress with trusted: true if that is expected",
+                path, pol.limit, RATIO
+            ));
+            break;
+        }
+        let n = match decoder.read(&mut buf[..max_read]) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => {
+                err = Some(e.to_string());
+                break;
+            }
+        };
+        if let Err(e) = out.write_all(&buf[..n]) {
+            err = Some(e.to_string());
+            break;
+        }
+        done += n as u64;
+        unsafe { report_progress(progress, 0, 1, done, total_size, path); }
+    }
+    if err.is_none() {
+        if let Err(e) = out.flush() {
+            err = Some(e.to_string());
+        }
+    }
+    if let Some(e) = err {
         drop(out);
         let _ = std::fs::remove_file(dest);
+        return Err(e);
     }
-    result
+    unsafe { report_progress(progress, 1, 1, done, done, path); }
+    Ok(0)
 }
 
 /// Decompresses the single stream at `src` into `dest`; `codec` `DETECT` reads the magic
@@ -1361,5 +1623,10 @@ fn decompress(codec: u32, path: &str, dest: &str, flags: u32) -> Result<i32, Str
 /// and a stream that passes the cap leaves no file behind.
 #[no_mangle]
 pub unsafe extern "C" fn tk_decompress(codec: u32, src: *const u8, slen: usize, dest: *const u8, dlen: usize, flags: u32) -> i32 {
-    guard(|| decompress(codec, text(src, slen)?, text(dest, dlen)?, flags))
+    tk_decompress_progress(codec, src, slen, dest, dlen, flags, None)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn tk_decompress_progress(codec: u32, src: *const u8, slen: usize, dest: *const u8, dlen: usize, flags: u32, progress: ProgressCb) -> i32 {
+    guard(|| decompress(codec, text(src, slen)?, text(dest, dlen)?, flags, progress))
 }

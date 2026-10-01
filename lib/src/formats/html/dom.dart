@@ -22,6 +22,34 @@ sealed class Node {
   /// This node serialised back to the markup it came from.
   String get markup;
 
+  /// Removes this node from its parent element, or does nothing if it has no parent.
+  void remove() {
+    final p = parent;
+    if (p == null) return;
+    if (this is Attribute) {
+      p.attributes.remove((this as Attribute).name);
+    } else {
+      p.nodes.remove(this);
+    }
+    parent = null;
+  }
+
+  /// Replaces this node in its parent's children with [other].
+  void replaceWith(Node other) {
+    final p = parent;
+    if (p == null) return;
+    if (this is Attribute) {
+      throw StateError('Cannot replace an attribute with a node');
+    }
+    final index = p.nodes.indexOf(this);
+    if (index != -1) {
+      other.remove();
+      other.parent = p;
+      p.nodes[index] = other;
+      parent = null;
+    }
+  }
+
   @override
   String toString() => markup;
 }
@@ -123,6 +151,43 @@ final class Element extends Node {
 
   /// Attribute [name] on this element, or `null`.
   String? attrOrNull(String name) => attributes[name];
+
+  /// This element's `href` (or `src`) resolved against its document's base address,
+  /// or `null` when neither attribute is present or valid.
+  Uri? get link {
+    final href = attributes['href'] ?? attributes['src'];
+    if (href == null) return null;
+    final uri = Uri.tryParse(href.trim());
+    if (uri == null) return null;
+    var top = this;
+    for (var p = top.parent; p != null; p = p.parent) {
+      top = p;
+    }
+    final base = _baseOf(top);
+    return base == null ? uri : base.resolveUri(uri);
+  }
+
+  /// Appends [node] to this element's children.
+  void append(Node node) {
+    node.remove();
+    node.parent = this;
+    nodes.add(node);
+  }
+
+  /// Prepends [node] to this element's children.
+  void prepend(Node node) {
+    node.remove();
+    node.parent = this;
+    nodes.insert(0, node);
+  }
+
+  /// Removes all child nodes from this element.
+  void clear() {
+    for (final node in nodes) {
+      node.parent = null;
+    }
+    nodes.clear();
+  }
 
   /// Every descendant matching CSS [selector], in document order. HTML names fold to
   /// lowercase; for an XML prefix escape the colon, `r'media\:content'`.
@@ -330,6 +395,12 @@ extension type Elements(List<Element> _list) implements List<Element> {
   /// The first match's text. Throws [StateError] when nothing matched.
   String get text => _first.text;
 
+  /// The first match's text, or `null` when nothing matched.
+  String? get textOrNull => _list.firstOrNull?.text;
+
+  /// The first match's resolved [Element.link], or `null` when nothing matched or it has no link.
+  Uri? get link => _list.firstOrNull?.link;
+
   /// The first match's [Element.lines]. Throws [StateError] when nothing matched.
   List<String> get lines => _first.lines;
 
@@ -397,6 +468,13 @@ extension type Elements(List<Element> _list) implements List<Element> {
     return Nodes(_list.length > 1 && !(x.downward && _isFlat(_list)) ? _inOrder(out) : out);
   }
 
+  /// Removes every matched element from its parent.
+  void remove() {
+    for (final e in _list) {
+      e.remove();
+    }
+  }
+
   Element get _first => _list.isEmpty ? throw StateError('Nothing matched the selector') : _list.first;
 }
 
@@ -407,6 +485,9 @@ extension type Elements(List<Element> _list) implements List<Element> {
 extension type Nodes(List<Node> _list) implements List<Node> {
   /// The first node's string value. Throws [StateError] when nothing matched.
   String get text => _list.isEmpty ? throw StateError('Nothing matched the XPath expression') : _list.first.text;
+
+  /// The first node's string value, or `null` when nothing matched.
+  String? get textOrNull => _list.firstOrNull?.text;
 
   /// Attribute [name] on the first element; a [StateError] when there is none or it is absent.
   String attr(String name) =>
@@ -428,6 +509,13 @@ extension type Nodes(List<Node> _list) implements List<Node> {
 
   /// XPath [expression] from each selected element, each node once.
   Nodes $x(String expression) => elements.$x(expression);
+
+  /// Removes every matched node from its parent.
+  void remove() {
+    for (final n in _list) {
+      n.remove();
+    }
+  }
 }
 
 /// A parsed HTML document with CSS selectors.

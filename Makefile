@@ -7,17 +7,7 @@
 
 DART ?= dart
 
-# The folder under native/prebuilt/ — `<os>_<arch>`, as NativeBridge.target names it — for
-# RUST_TARGET when one is given, else for this machine.
-os_of = $(if $(findstring darwin,$1),macos,$(if $(findstring windows,$1)$(findstring MINGW,$1)$(findstring MSYS,$1),windows,linux))
-arch_of = $(if $(findstring aarch64,$1)$(findstring arm64,$1),arm64,x64)
-HOST := $(shell uname -sm | tr 'A-Z ' 'a-z-')
-TARGET := $(if $(RUST_TARGET),$(call os_of,$(RUST_TARGET))_$(call arch_of,$(RUST_TARGET)),$(call os_of,$(HOST))_$(call arch_of,$(HOST)))
-LIB := $(if $(findstring macos,$(TARGET)),libdart_toolkit_native.dylib,$(if $(findstring windows,$(TARGET)),dart_toolkit_native.dll,libdart_toolkit_native.so))
-# Another OS links through zig; another mac architecture links with Apple's own toolchain.
-CARGO := $(if $(and $(RUST_TARGET),$(if $(findstring darwin,$(RUST_TARGET)),,cross)),cargo zigbuild,cargo build)
-
-.PHONY: all check format analyze test native native-clean audit bench startup release clean
+.PHONY: all check format analyze test native native-all native-clean audit bench startup release clean
 
 all: check test
 
@@ -32,17 +22,18 @@ format:
 test:
 	$(DART) test
 
-## The native library. Needs cargo; nothing else. Another mac architecture needs
-## `rustup target add x86_64-apple-darwin`; another OS needs zig and `cargo install cargo-zigbuild`:
+## The native library. Builds into native/prebuilt/<os>_<arch>/.
+##   make native                                           -> host platform
 ##   make native RUST_TARGET=x86_64-unknown-linux-gnu      -> native/prebuilt/linux_x64/
+##   make native-all                                       -> all supported platforms
 native:
-	cd native && $(CARGO) --release $(if $(RUST_TARGET),--target $(RUST_TARGET),)
-	mkdir -p native/prebuilt/$(TARGET)
-	cp native/target/$(if $(RUST_TARGET),$(RUST_TARGET)/,)release/$(LIB) native/prebuilt/$(TARGET)/
-	@ls -la native/prebuilt/$(TARGET)/
+	$(DART) run tool/native.dart $(if $(RUST_TARGET),--target=$(RUST_TARGET),)
+
+native-all:
+	$(DART) run tool/native.dart --all
 
 native-clean:
-	cd native && cargo clean
+	$(DART) run tool/native.dart --clean-only
 
 ## The archive parsers read files from the internet, so the release checks them for advisories.
 
@@ -51,10 +42,10 @@ audit:
 		&& (cd native && cargo audit) \
 		|| echo "cargo-audit not installed: cargo install cargo-audit (skipping advisory check)"
 
-startup:
-	$(DART) run tool/startup.dart
+bench:
+	$(DART) run tool/bench.dart
 
-bench: startup
+startup: bench
 
 release: check test native audit
 	@echo "Bump version in pubspec.yaml and move Unreleased in CHANGELOG.md, then: git tag v$$(grep '^version' pubspec.yaml | cut -d' ' -f2)"

@@ -227,6 +227,35 @@ cert = 'a;b'
       final doc = HtmlDocument.parse('<p id="x">A &amp; B &lt;c&gt;<br>D\nE<br></p>');
       expect(doc.$('#x').first.lines, equals(['A & B <c>', 'D', 'E']));
     });
+
+    test('DOM mutations: remove, replaceWith, clear, append, prepend', () {
+      final doc = '<div><p class="del">1</p><p id="target">2</p><span class="del">3</span></div>'.html;
+      // Elements.remove()
+      doc.$('.del').remove();
+      expect(doc.$('div').text.trim(), '2');
+
+      // replaceWith
+      final target = doc.$('#target').first;
+      final replacement = Element('p')..append(Text('new'));
+      target.replaceWith(replacement);
+      expect(doc.$('p').text, 'new');
+
+      // append / prepend
+      final div = doc.$('div').first;
+      div.prepend(Element('header')..append(Text('Start')));
+      div.append(Element('footer')..append(Text('End')));
+      expect(div.children.map((e) => e.name).toList(), ['header', 'p', 'footer']);
+
+      // clear
+      div.clear();
+      expect(div.nodes, isEmpty);
+      expect(div.children, isEmpty);
+
+      // Nodes.remove() on XPath
+      final xmlDoc = '<root><a id="1"/><b>keep</b><a id="2"/></root>'.xml;
+      xmlDoc.$x('//a').remove();
+      expect(xmlDoc.$x('//*').map((n) => (n as Element).name).toList(), ['root', 'b']);
+    });
   });
 
   group('html parser', () {
@@ -1299,6 +1328,24 @@ folded: >
       );
       expect(await File('${dir.path}/c.toml').exists(), isFalse);
     });
+
+    test('in-place mutation with []= and remove()', () {
+      final doc = '{"server": {"port": 8080, "tags": ["a", "b"]}}'.json;
+      doc['server']['port'] = 9000;
+      doc['server']['tags'][0] = 'first';
+      doc['server']['ssl'] = true;
+      expect(doc['server']['port'].raw, 9000);
+      expect(doc['server']['tags'][0].raw, 'first');
+      expect(doc['server']['ssl'].raw, true);
+
+      final removed = doc['server'].remove('ssl');
+      expect(removed, true);
+      expect(doc['server']['ssl'].raw, isNull);
+
+      final removedItem = doc['server']['tags'].remove(1);
+      expect(removedItem, 'b');
+      expect(doc['server']['tags'].list.length, 1);
+    });
   });
 
   group('Elements, one hop closer', () {
@@ -1484,6 +1531,28 @@ folded: >
         JsonDocument.read(r'C:\cfg.d\settings'),
         throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('no extension'))),
       );
+    });
+
+    test('Elements and Nodes textOrNull and link helpers', () {
+      final doc = HtmlDocument.parse(
+        '<div><a href="/target">Click</a><p>Hello</p></div>',
+        url: Uri.parse('https://example.com/base/'),
+      );
+      expect(doc.$('p').text, 'Hello');
+      expect(doc.$('p').textOrNull, 'Hello');
+      expect(doc.$('.missing').textOrNull, isNull);
+      expect(() => doc.$('.missing').text, throwsStateError);
+
+      expect(doc.$x('//p').text, 'Hello');
+      expect(doc.$x('//p').textOrNull, 'Hello');
+      expect(doc.$x('//missing').textOrNull, isNull);
+      expect(() => doc.$x('//missing').text, throwsStateError);
+
+      final a = doc.$('a').first;
+      expect(a.link, Uri.parse('https://example.com/target'));
+      expect(doc.$('a').link, Uri.parse('https://example.com/target'));
+      expect(doc.$('p').link, isNull);
+      expect(doc.$('.missing').link, isNull);
     });
   });
 }

@@ -4,7 +4,7 @@ part of '../../http.dart';
 /// one call, and the compiler sees what that client can do beyond the seam.
 ///
 /// ```dart
-/// final chrome = await ChromeClient.connect();   // package:dart_toolkit/chrome.dart
+/// final chrome = await ChromeClient.launch();    // package:dart_toolkit/chrome.dart
 ///
 /// await chrome.get(url);                       // the page, rendered
 /// await chrome.page(url, (p) => p.click('.dl'));  // the tab, live

@@ -17,6 +17,7 @@ typedef FinishHook = FutureOr<void> Function(ScrapeSummary summary);
 
 /// What [HookContext.follow] was asked for, on its way to the engine.
 final class _Plan<T> {
+  final RequestHook? onRequest;
   final ResponseHook<T>? onResponse;
   final ErrorHook<T>? onError;
   final Map<String, Object?>? meta;
@@ -31,6 +32,7 @@ final class _Plan<T> {
   final bool offsite;
 
   const _Plan({
+    this.onRequest,
     this.onResponse,
     this.onError,
     this.meta,
@@ -166,6 +168,18 @@ final class InitContext<T> {
   /// Which URLs [ResponseContext.follow] may go to. Default: the seeds' hosts, `www.` or not.
   bool Function(Uri url)? scope;
 
+  /// Default headers to apply to every request sent by the crawl.
+  final Headers headers = Headers();
+
+  /// Whether to maintain cookies across requests and redirects during the crawl.
+  bool cookies = false;
+
+  /// Initial cookies to seed the crawl's cookie jar (e.g. from an authenticated session).
+  Iterable<Cookie>? jar;
+
+  /// Whether to jitter [delay] by ±25% to avoid bot patterns. Default is true.
+  bool jitter = true;
+
   /// Whether each host's `/robots.txt` is fetched once and obeyed, for the `user-agent` each
   /// request goes out with. A forbidden path counts in [ScrapeSummary.dropped]; a
   /// `Crawl-delay` raises [delay] for that host, never lowers it. A missing or unreadable
@@ -205,13 +219,13 @@ final class InitContext<T> {
   }
 }
 
-/// A request about to be sent. Edit [request] — a header, the `user-agent`, a signature — or
-/// [skip] it.
+/// A request about to be sent. Edit [request] — its method, URL, headers, the `user-agent`,
+/// a signature, its body — or [skip] it.
 ///
 /// {@category Crawling}
 final class RequestContext {
-  /// The request as it will be sent; its `headers` are yours to edit.
-  final Request request;
+  /// The request as it will be sent; mutable and re-assignable.
+  Request request;
 
   /// Hops from a seed; seeds are 0.
   final int depth;
@@ -226,8 +240,31 @@ final class RequestContext {
 
   RequestContext._(this.request, this.depth, this.attempt, this.meta);
 
-  /// Where the request is going.
+  /// Where the request is going. Setting it updates [request].
   Uri get url => request.url;
+  set url(Uri value) => request = request.copy(url: value);
+
+  /// The HTTP method. Setting it updates [request].
+  String get method => request.method;
+  set method(String value) => request = request.copy(method: value);
+
+  /// The headers as they will be sent.
+  Headers get headers => request.headers;
+
+  /// Sets the body to UTF-8 text and sets content-type to text/plain if none is set.
+  set text(String value) => request.text = value;
+
+  /// Sets the body to form-encoded data.
+  set form(Map<String, String> value) => request.form = value;
+
+  /// Sets the body to JSON.
+  set json(Object? value) => request.json = value;
+
+  /// Sets a request directive.
+  void operator []=(RequestKey<Object> key, Object value) => request[key] = value;
+
+  /// Reads a request directive.
+  T? directive<T extends Object>(RequestKey<T> key) => key(request);
 
   /// Drops the request. Nothing is sent and nothing is reported.
   void skip() => _skipped = true;
@@ -291,9 +328,10 @@ sealed class HookContext<T> {
   ///
   /// Returns whether anything was scheduled. Out of scope or non-http is dropped unless
   /// [offsite]; already visited, unless [revisit]. The body words are [Request]'s;
-  /// [onResponse] and [onError] override the crawl's hooks for this request.
+  /// [onRequest], [onResponse] and [onError] override the crawl's hooks for this request.
   bool follow(
     Object target, {
+    RequestHook? onRequest,
     ResponseHook<T>? onResponse,
     ErrorHook<T>? onError,
     Map<String, Object?>? meta,
@@ -311,6 +349,7 @@ sealed class HookContext<T> {
     final scheduled = _follow(
       target,
       _Plan<T>(
+        onRequest: onRequest,
         onResponse: onResponse,
         onError: onError,
         meta: meta,
@@ -327,6 +366,80 @@ sealed class HookContext<T> {
     );
     if (scheduled) _acted();
     return scheduled;
+  }
+
+  /// Submits [form] with its fields (and any [values] overriding them).
+  ///
+  /// Extracts all inputs (`<input>`, `<textarea>`, `<select>`) within the form, preserving
+  /// existing values (including hidden CSRF tokens), merges [values], and follows the
+  /// form's `action` using its `method` (defaults to GET if unspecified, or POST).
+  bool submit(
+    Element form, {
+    Map<String, String>? values,
+    RequestHook? onRequest,
+    ResponseHook<T>? onResponse,
+    ErrorHook<T>? onError,
+    Map<String, Object?>? meta,
+    Map<String, String>? headers,
+    bool revisit = false,
+    bool offsite = false,
+  }) {
+    final fields = <String, String>{};
+    for (final input in form.$('input')) {
+      final name = input.attributes['name'];
+      if (name == null || name.isEmpty) continue;
+      final type = input.attributes['type']?.toLowerCase();
+      if ((type == 'checkbox' || type == 'radio') && !input.attributes.containsKey('checked')) {
+        continue;
+      }
+      fields[name] = input.attributes['value'] ?? '';
+    }
+    for (final ta in form.$('textarea')) {
+      final name = ta.attributes['name'];
+      if (name == null || name.isEmpty) continue;
+      fields[name] = ta.text;
+    }
+    for (final sel in form.$('select')) {
+      final name = sel.attributes['name'];
+      if (name == null || name.isEmpty) continue;
+      final opt = sel.$('option[selected]').firstOrNull ?? sel.$('option').firstOrNull;
+      if (opt != null) {
+        fields[name] = opt.attributes['value'] ?? opt.text;
+      }
+    }
+    if (values != null) {
+      fields.addAll(values);
+    }
+    final method = (form.attributes['method'] ?? 'GET').toUpperCase();
+    final action = form.attributes['action'] ?? '';
+    if (method == 'POST') {
+      return follow(
+        action,
+        method: 'POST',
+        form: fields,
+        onRequest: onRequest,
+        onResponse: onResponse,
+        onError: onError,
+        meta: meta,
+        headers: headers,
+        revisit: revisit,
+        offsite: offsite,
+      );
+    } else {
+      final resolved = resolve(action);
+      final uri = resolved.replace(queryParameters: {...resolved.queryParameters, ...fields});
+      return follow(
+        uri,
+        method: method,
+        onRequest: onRequest,
+        onResponse: onResponse,
+        onError: onError,
+        meta: meta,
+        headers: headers,
+        revisit: revisit,
+        offsite: offsite,
+      );
+    }
   }
 
   /// Ends the crawl: the frontier is dropped and nothing more is sent. Hooks already running
@@ -366,8 +479,13 @@ final class ResponseContext<T> extends HookContext<T> {
   @override
   final Map<String, Object?> meta;
 
+  final void Function(Duration after, Request? request) _retry;
+
   /// The response parsed as HTML — [Response.html], parsed once however often it is read.
   HtmlDocument get html => response.html;
+
+  /// Cookies set by this response.
+  List<Cookie> get cookies => response.cookies;
 
   /// The page's `<base href>`, read only once something else has parsed the HTML.
   Uri? _baseRead;
@@ -384,8 +502,16 @@ final class ResponseContext<T> extends HookContext<T> {
     required this.meta,
     required void Function(T item) emit,
     required _Follow<T> follow,
+    required void Function(Duration after, Request? request) retry,
     required void Function() stop,
-  }) : super._(emit, follow, stop);
+  }) : _retry = retry,
+       super._(emit, follow, stop);
+
+  /// Retries this request after [after], optionally replacing or updating [request].
+  void retry({Duration after = Duration.zero, Request? request}) {
+    _open('retry');
+    _retry(after, request);
+  }
 }
 
 /// A request the engine has given up on. Unless the hook acts — [retry], [ignore], [emit] or
@@ -399,7 +525,7 @@ final class ErrorContext<T> extends HookContext<T> {
   /// Requests sent so far for this URL.
   final int attempt;
 
-  final void Function(Duration after) _retry;
+  final void Function(Duration after, Request? request, Map<String, String>? headers) _retry;
   bool _handled = false;
 
   ErrorContext._(this.failure, this.attempt, super.emit, super.follow, this._retry, super.stop) : super._();
@@ -414,10 +540,11 @@ final class ErrorContext<T> extends HookContext<T> {
   Map<String, Object?> get meta => failure.meta;
 
   /// Sends the request again [after] a wait, past the engine's own retry budget.
-  void retry({Duration after = Duration.zero}) {
+  /// Optionally replaces [request] or merges additional [headers].
+  void retry({Duration after = Duration.zero, Request? request, Map<String, String>? headers}) {
     _open('retry');
     _handled = true;
-    _retry(after);
+    _retry(after, request, headers);
   }
 
   /// Swallows the failure: nothing goes to the stream.
@@ -583,19 +710,64 @@ final class Scrape<T> extends StreamView<Either<ScrapeFailure, T>> {
   );
 
   /// Once, on listen, with every setting on an [InitContext]. May be async.
-  Scrape<T> onInit(InitHook<T> hook) => this.._chain.init = hook;
+  Scrape<T> onInit(InitHook<T> hook) {
+    final prev = _chain.init;
+    _chain.init = prev == null
+        ? hook
+        : (ctx) async {
+            await prev(ctx);
+            await hook(ctx);
+          };
+    return this;
+  }
 
   /// Before every send, retries included.
-  Scrape<T> onRequest(RequestHook hook) => this.._chain.request = hook;
+  Scrape<T> onRequest(RequestHook hook) {
+    final prev = _chain.request;
+    _chain.request = prev == null
+        ? hook
+        : (ctx) async {
+            await prev(ctx);
+            if (!ctx._skipped) await hook(ctx);
+          };
+    return this;
+  }
 
   /// On every 2xx.
-  Scrape<T> onResponse(ResponseHook<T> hook) => this.._chain.response = hook;
+  Scrape<T> onResponse(ResponseHook<T> hook) {
+    final prev = _chain.response;
+    _chain.response = prev == null
+        ? hook
+        : (ctx) async {
+            await prev(ctx);
+            await hook(ctx);
+          };
+    return this;
+  }
 
   /// When the engine has given up on a request; the failure is a [Left] unless the hook acts.
-  Scrape<T> onError(ErrorHook<T> hook) => this.._chain.error = hook;
+  Scrape<T> onError(ErrorHook<T> hook) {
+    final prev = _chain.error;
+    _chain.error = prev == null
+        ? hook
+        : (ctx) async {
+            await prev(ctx);
+            if (!ctx._handled) await hook(ctx);
+          };
+    return this;
+  }
 
   /// Once, after the last item. If it throws, the error is the stream's last event.
-  Scrape<T> onFinish(FinishHook hook) => this.._chain.finish = hook;
+  Scrape<T> onFinish(FinishHook hook) {
+    final prev = _chain.finish;
+    _chain.finish = prev == null
+        ? hook
+        : (summary) async {
+            await prev(summary);
+            await hook(summary);
+          };
+    return this;
+  }
 }
 
 /// Scrape entry points; see [Scrape].
@@ -693,6 +865,7 @@ class _Item<T> {
 
   Request get request => _request ??= Request(plan.method, url, headers: plan.headers);
 
+  RequestHook? get onRequest => plan.onRequest;
   ResponseHook<T>? get onResponse => plan.onResponse;
   ErrorHook<T>? get onError => plan.onError;
   bool get revisit => plan.revisit;
@@ -748,6 +921,8 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     final held? => _ClientLease(held, false),
     null => _clientFor(),
   };
+  final keepsCookies = cfg.cookies || cfg.jar != null;
+  final jar = keepsCookies ? (_Jar()..seed(cfg.jar ?? const [])) : null;
   // The scope stamps its `user-agent` at send time, after the engine has looked.
   final scopeAgent = lease.headers == null ? null : Headers(lease.headers)['user-agent'];
 
@@ -980,7 +1155,7 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
 
   _Follow<T> followFrom(_Item<T> item, Uri Function() base) => (target, plan) {
     // A follow adding no metadata shares the one empty map rather than copying nothing.
-    final meta = plan.meta == null && item.meta.isEmpty ? const <String, Object?>{} : {...item.meta, ...?plan.meta};
+    final meta = <String, Object?>{...item.meta, ...?plan.meta};
     bool one(Object href) {
       final Uri url;
       try {
@@ -1052,7 +1227,11 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
       item.attempt,
       (value) => add(Right(value)),
       followFrom(item, () => failure.url),
-      (after) => requeue(host, item, after),
+      (after, req, hdrs) {
+        if (req != null) item._request = req;
+        if (hdrs != null) item.request.headers.addAll(hdrs);
+        requeue(host, item, after);
+      },
       stop,
     );
     try {
@@ -1143,6 +1322,11 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
       meta: item.meta,
       emit: (value) => add(Right(value)),
       follow: followFrom(item, () => ctx._base),
+      retry: (after, req) {
+        pages--;
+        if (req != null) item._request = req;
+        requeue(host, item, after);
+      },
       stop: stop,
     );
     try {
@@ -1159,12 +1343,18 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
   }
 
   Future<void> execute(_Host<T> host, _Item<T> item) async {
-    final sent = item.request.copy()
+    var sent = item.request.copy()
       ..followRedirects = false
       ..[_Retry.none] = true;
     if (scopeAgent == null) sent.headers.putIfAbsent('user-agent', () => _userAgent);
+    if (cfg.headers.isNotEmpty) {
+      for (final MapEntry(:key, :value) in cfg.headers.entries) {
+        sent.headers.putIfAbsent(key, () => value);
+      }
+    }
 
-    if (crawler._request case final hook?) {
+    final hook = item.onRequest ?? crawler._request;
+    if (hook != null) {
       final ctx = RequestContext._(sent, item.depth, item.attempt, item.meta);
       try {
         await hook(ctx);
@@ -1172,20 +1362,30 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
         return fail(host, item, hookFailed(item, sent.url, e), st);
       }
       if (ctx._skipped) return;
+      sent = ctx.request
+        ..followRedirects = false
+        ..[_Retry.none] = true;
     }
 
     // After the hook, so the rules are those for the agent that will be announced.
+    final targetHost = hostOf(sent.url);
     if (cfg.robots) {
-      final rules = await robotsFor(host, sent.url, sent.headers['user-agent'] ?? scopeAgent ?? _userAgent);
+      final rules = await robotsFor(targetHost, sent.url, sent.headers['user-agent'] ?? scopeAgent ?? _userAgent);
       if (!rules.allows(sent.url)) {
         dropped++;
         return;
       }
-      slow(host, rules);
+      slow(targetHost, rules);
     }
     if (stopped) return;
 
     requests++;
+    if (jar != null) {
+      if (item.hops > 0) sent.headers.remove('cookie');
+      if (!sent.headers.containsKey('cookie')) {
+        if (jar.headerFor(sent.url) case final header?) sent.headers['cookie'] = header;
+      }
+    }
     // Its own token, so a timeout aborts the request; the crawl's ^C reaches it mid-body too.
     final abort = CancelToken();
     final unhear = token?.onCancel(() => abort.cancel(token.reason));
@@ -1209,6 +1409,12 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     unhear?.call();
     if (stopped) return;
     bytes += body.length;
+
+    if (jar != null) {
+      if (streamed.headers['set-cookie'] case final header?) {
+        jar.store(streamed.url ?? sent.url, header);
+      }
+    }
 
     final res = Response.bytes(
       body,
@@ -1272,7 +1478,7 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
           pause(host, wait);
           continue;
         }
-        host.nextSend = now.add(gap);
+        host.nextSend = now.add(cfg.jitter ? gap.jittered() : gap);
       }
       final item = host.queue.removeFirst();
       queued--;
@@ -1338,7 +1544,7 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
 
   if (cfg.pages case final max? when max <= 0) return close();
   for (final seed in cfg._seeds) {
-    enqueue(_Item<T>(seed.url, none, request: seed, meta: cfg._seedMeta[seed.url] ?? const {}, seed: true));
+    enqueue(_Item<T>(seed.url, none, request: seed, meta: Map.of(cfg._seedMeta[seed.url] ?? const {}), seed: true));
   }
   if (cfg.sitemaps) {
     // `waiting` holds the crawl open while sitemaps are read.
@@ -1382,8 +1588,9 @@ Uri _resolve(Uri base, Object target) => switch (target) {
 /// Stripped from an href anywhere in it, as a browser does.
 final _tabOrNewline = RegExp('[\t\n\r]');
 
-/// Where an element links: its `href`, else its `src`.
-String? _link(Element e) => e.attributes['href'] ?? e.attributes['src'];
+/// Where an element links: its `href`, else its `src`, or for `<form>` its `action`.
+String? _link(Element e) =>
+    e.attributes['href'] ?? e.attributes['src'] ?? (e.name == 'form' ? (e.attributes['action'] ?? '') : null);
 
 /// [stream] read to at most [cap] bytes, each chunk within [timeout]; past [cap] it is cut
 /// when [cut], else a [_BodyTooLarge].

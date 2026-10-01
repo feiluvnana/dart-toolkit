@@ -185,40 +185,13 @@ final class Pool<T, R> {
     return slot;
   }
 
-  /// One worker of its own taking indices from [next] until they run out (`parallelize` runs
-  /// [size] lanes); a dead worker is replaced before the next item.
-  Future<void> _lane(List<T> items, List<Either<Object, R>?> into, int Function() next, CancelToken? token) async {
-    _Slot<T, R>? slot;
-    final unregister = _isolate ? token?.onCancel(() => slot?.kill(_cancelledBy(token))) : null;
-    try {
-      for (var i = next(); i < items.length && !(token?.isCancelled ?? false); i = next()) {
-        try {
-          if (slot == null || slot.isDead) {
-            slot = _take(await _start());
-            if (token?.isCancelled ?? false) break; // cancelled while it spawned: the item stays cancelled
-          }
-          final value = slot.run(items[i]);
-          into[i] = Right(value is Future<R> ? await value : value);
-        } catch (error, trace) {
-          into[i] = Left(error, trace);
-        }
-      }
-    } finally {
-      unregister?.call();
-      if (slot != null) {
-        _busy.remove(slot);
-        slot.kill(_poolClosed());
-      }
-    }
-  }
-
-  /// Runs every item of [items], yielding outcomes in completion order.
+  /// Runs every item of [items], yielding outcomes in completion order (or input order when [ordered] is true).
   ///
   /// At most [size] items are in flight; a busy pool or a paused listener pauses [items]. The
   /// enclosing [Cancel.scope] ends the stream. The pool stays open.
-  Stream<Either<Object, R>> map(Stream<T> items) => _map(items);
+  Stream<Either<Object, R>> map(Stream<T> items, {bool ordered = false}) => _map(items, ordered: ordered);
 
-  Stream<Either<Object, R>> _map(Stream<T> items, {void Function()? onEnd}) {
+  Stream<Either<Object, R>> _map(Stream<T> items, {bool ordered = false, void Function()? onEnd}) {
     CancelToken? token;
     late final StreamController<Either<Object, R>> controller;
     StreamSubscription<T>? subscription;
@@ -227,9 +200,21 @@ final class Pool<T, R> {
     // Two independent reasons to hold the source: every worker busy, and a paused listener.
     var full = false;
     var ended = false;
+    var nextIndex = 0;
+    var nextToEmit = 0;
+    final buffer = <int, Either<Object, R>>{};
+
+    void flushOrdered() {
+      if (ordered) {
+        while (buffer.containsKey(nextToEmit)) {
+          controller.add(buffer.remove(nextToEmit++)!);
+        }
+      }
+    }
 
     void end() {
       if (ended) return;
+      flushOrdered();
       ended = true;
       unregister?.call();
       subscription?.cancel();
@@ -247,12 +232,20 @@ final class Pool<T, R> {
         subscription = items.listen(
           (item) {
             if (token?.isCancelled ?? false) return;
+            final index = nextIndex++;
             if (++active == size && !full) {
               full = true;
               subscription?.pause();
             }
             _outcome(item, token).then((outcome) {
-              if (!controller.isClosed) controller.add(outcome);
+              if (!controller.isClosed) {
+                if (!ordered) {
+                  controller.add(outcome);
+                } else {
+                  buffer[index] = outcome;
+                  flushOrdered();
+                }
+              }
               active--;
               if (full) {
                 full = false;

@@ -1,31 +1,48 @@
 part of '../../core.dart';
 
-/// PIDs sent SIGTERM that must be confirmed dead (or SIGKILLed) before this process exits.
-final _haltedProcessPids = <int>{};
+/// Internal bridge for managing halted subprocesses across modules.
+final class ProcessBridge {
+  ProcessBridge._();
+
+  /// PIDs sent SIGTERM that must be confirmed dead (or SIGKILLed) before this process exits.
+  static final Set<int> _haltedProcessPids = <int>{};
+
+  /// Registers [pids] that were sent SIGTERM and must be reaped.
+  static void registerHalted(Iterable<int> pids) => _haltedProcessPids.addAll(pids);
+
+  /// Unregisters [pids] once reaped.
+  static void unregisterHalted(Iterable<int> pids) => _haltedProcessPids.removeAll(pids);
+
+  /// Waits up to 200 ms for halted processes to exit, then SIGKILLs the rest.
+  static Future<void> killHalted() async {
+    if (Platform.isWindows || _haltedProcessPids.isEmpty) return;
+    final deadline = DateTime.now().add(const Duration(milliseconds: 200));
+    while (DateTime.now().isBefore(deadline)) {
+      _haltedProcessPids.removeWhere((pid) => !Process.killPid(pid, ProcessSignal.sigcont));
+      if (_haltedProcessPids.isEmpty) return;
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    killHaltedSync();
+  }
+
+  /// SIGKILLs every registered halted process now.
+  static void killHaltedSync() {
+    if (Platform.isWindows) return;
+    for (final pid in _haltedProcessPids) {
+      Process.killPid(pid, ProcessSignal.sigkill);
+    }
+    _haltedProcessPids.clear();
+  }
+}
 
 /// Registers [pids] that were sent SIGTERM and must be reaped.
-void registerHaltedProcessPids(Iterable<int> pids) => _haltedProcessPids.addAll(pids);
+void registerHaltedProcessPids(Iterable<int> pids) => ProcessBridge.registerHalted(pids);
 
 /// Unregisters [pids] once reaped.
-void unregisterHaltedProcessPids(Iterable<int> pids) => _haltedProcessPids.removeAll(pids);
+void unregisterHaltedProcessPids(Iterable<int> pids) => ProcessBridge.unregisterHalted(pids);
 
 /// Waits up to 200 ms for halted processes to exit, then SIGKILLs the rest.
-Future<void> killHaltedProcesses() async {
-  if (Platform.isWindows || _haltedProcessPids.isEmpty) return;
-  final deadline = DateTime.now().add(const Duration(milliseconds: 200));
-  while (DateTime.now().isBefore(deadline)) {
-    _haltedProcessPids.removeWhere((pid) => !Process.killPid(pid, ProcessSignal.sigcont));
-    if (_haltedProcessPids.isEmpty) return;
-    await Future<void>.delayed(const Duration(milliseconds: 20));
-  }
-  killHaltedProcessesSync();
-}
+Future<void> killHaltedProcesses() => ProcessBridge.killHalted();
 
 /// SIGKILLs every registered halted process now.
-void killHaltedProcessesSync() {
-  if (Platform.isWindows) return;
-  for (final pid in _haltedProcessPids) {
-    Process.killPid(pid, ProcessSignal.sigkill);
-  }
-  _haltedProcessPids.clear();
-}
+void killHaltedProcessesSync() => ProcessBridge.killHaltedSync();

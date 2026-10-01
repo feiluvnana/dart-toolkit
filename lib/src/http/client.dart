@@ -145,9 +145,26 @@ final class Request {
 
   /// An independent copy: same method, URL, headers, body, options and directives. The body
   /// buffer is shared — every send copies its request, and only the headers are written on.
-  Request copy() => _options(Request(method, url, headers: headers))
-    ..bytes = bytes
-    .._multipart = _multipart;
+  /// Pass parameters to override specific parts of the request.
+  Request copy({
+    String? method,
+    Uri? url,
+    Map<String, String>? headers,
+    String? text,
+    List<int>? bytes,
+    Map<String, String>? form,
+    Object? json,
+    Map<String, Path>? files,
+  }) {
+    final next = _options(Request(method ?? this.method, url ?? this.url, headers: headers ?? this.headers));
+    if (text != null || bytes != null || form != null || json != null || files != null) {
+      _body(next, text: text, bytes: bytes, form: form, json: json, files: files);
+    } else {
+      next.bytes = this.bytes;
+      next._multipart = _multipart;
+    }
+    return next;
+  }
 
   /// [to] with this request's redirect options and a copy of its directives.
   Request _options(Request to) => to
@@ -445,6 +462,21 @@ final class Response {
 
   /// The body parsed as JSON, once per response instance.
   JsonDocument get json => _json ??= JsonDocument.parse(text);
+
+  /// Cookies set by this response in its `Set-Cookie` headers.
+  List<Cookie> get cookies {
+    final header = headers['set-cookie'];
+    if (header == null || header.isEmpty) return const [];
+    final out = <Cookie>[];
+    for (final line in header.split('\n')) {
+      final trimmed = line.trim();
+      if (trimmed.isEmpty) continue;
+      try {
+        out.add(Cookie.fromSetCookieValue(trimmed));
+      } catch (_) {}
+    }
+    return out;
+  }
 
   @override
   String toString() => 'Response($statusCode${reasonPhrase == null ? '' : ' $reasonPhrase'}, ${bytes.length} bytes)';

@@ -76,7 +76,7 @@ script authors, not by what `bin/` calls. Composing two others does not earn it;
 
 > *Why:* deleted `gzipTo`, `Ansi.strip`, `Sequence.count`, twenty-one digest shortcuts
 > (`text.hash(Hash.sha256)` covers all twenty algorithms), `Mutex`, `Env.require`; kept
-> Chrome's `frame`/`pdf`/dialogs, `chunkEvery`, `Duration.jittered` though `bin/` never calls them.
+> Chrome's `frame`/`pdf`/dialogs, `chunk`, `Duration.jittered` though `bin/` never calls them.
 
 **A grid has no holes.** An operation on one receiver of a family is on all of them, or none.
 

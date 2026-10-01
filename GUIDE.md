@@ -169,9 +169,9 @@ token.cancel('done');
 ### `parallelize`
 
 ```dart
-final settled = await urls.parallelize((u) => u.get(), concurrency: 8); // List<Either<Object, Response>>
-final streamed = pages.parallelize(parse, concurrency: 4);              // Stream, as items finish
-final digests = await blobs.parallelize(slowDigest, isolate: true);     // long-lived isolates
+final settled = await urls.parallelize((u) => u.get(), concurrency: 8).toList(); // List<Either<Object, Response>>
+final streamed = pages.parallelize(parse, concurrency: 4);                      // Stream, as items finish
+final digests = await blobs.parallelize(slowDigest, isolate: true).toList();     // long-lived isolates
 ```
 
 With `isolate: true` each item and result crosses a port; the function crosses once per

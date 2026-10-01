@@ -4,41 +4,24 @@ part of '../../async.dart';
 ///
 /// {@category Concurrency}
 extension IterableParallelExtensions<T> on Iterable<T> {
-  /// Maps [worker] over all elements, at most [concurrency] at a time.
+  /// Maps [worker] over all elements, at most [concurrency] at a time, emitting outcomes
+  /// on a [Stream] as they settle.
   ///
-  /// Settles every task in input order; a failure is that item's [Left], never a throw, and an
-  /// item the enclosing [Cancel.scope] skipped is a [Left] of [CancelledException].
+  /// Set [ordered: true] to emit in input order; default is `ordered: false` (completion order).
   ///
   /// [isolate] runs the work on up to [concurrency] isolates, started once; the worker is copied
   /// once per isolate. For state built once per isolate, use a [Worker] in a [Pool].
   ///
   /// ```dart
-  /// final settled = await urls.parallelize(fetch);          // every outcome
-  /// final pages   = await urls.parallelize(fetch).unwrap(); // or throw the first
+  /// await for (final page in urls.parallelize(fetch).rights) { ... }
+  /// final list = await urls.parallelize(fetch).toList();
   /// ```
-  Future<List<Either<Object, R>>> parallelize<R>(
+  Stream<Either<Object, R>> parallelize<R>(
     FutureOr<R> Function(T item) worker, {
     int concurrency = 4,
     bool isolate = false,
-  }) async {
-    final list = toList();
-    if (list.isEmpty) return [];
-    final pool = Pool<T, R>._(_factory(worker), min(concurrency, list.length), isolate);
-    final results = List<Either<Object, R>?>.filled(list.length, null);
-    var next = 0;
-    // One lane per worker, each taking the next index: no per-item queue.
-    final token = Cancel.token;
-    int take() => next++;
-    try {
-      await Future.wait([for (var i = 0; i < pool.size; i++) pool._lane(list, results, take, token)]);
-    } finally {
-      pool._kill(null);
-    }
-    return [
-      for (final outcome in results)
-        outcome ?? Left(token != null ? _cancelledBy(token) : const CancelledException('Operation was aborted.')),
-    ];
-  }
+    bool ordered = false,
+  }) => Stream.fromIterable(this).parallelize(worker, concurrency: concurrency, isolate: isolate, ordered: ordered);
 }
 
 /// Bounded parallel map over a [Stream].
@@ -47,6 +30,8 @@ extension IterableParallelExtensions<T> on Iterable<T> {
 extension StreamParallelExtensions<T> on Stream<T> {
   /// Maps [worker] over stream items, emitting outcomes as they settle.
   ///
+  /// Set [ordered: true] to emit in input order; default is `ordered: false` (completion order).
+  ///
   /// A failure is a [Left], never an error event (`.unwrap()` forwards it). Pausing the consumer
   /// pauses the source; the enclosing [Cancel.scope] stops it. [isolate] starts up to
   /// [concurrency] isolates as work arrives and ends them with the stream.
@@ -54,9 +39,10 @@ extension StreamParallelExtensions<T> on Stream<T> {
     FutureOr<R> Function(T item) worker, {
     int concurrency = 4,
     bool isolate = false,
+    bool ordered = false,
   }) {
     final pool = Pool<T, R>._(_factory(worker), concurrency, isolate);
-    return pool._map(this, onEnd: () => pool._kill(null));
+    return pool._map(this, ordered: ordered, onEnd: () => pool._kill(null));
   }
 }
 

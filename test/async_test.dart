@@ -183,16 +183,22 @@ void main() {
   });
 
   group('Async parallelize on Iterable', () {
-    test('preserves input order and isolates errors into Left', () async {
+    test('preserves input order and isolates errors into Left when ordered: true', () async {
       final items = [1, 2, 3, 4, 5];
 
-      final results = await items.parallelize((item) async {
-        if (item == 3) {
-          throw Exception('item 3 failed');
-        }
-        await Future<void>.delayed(((6 - item) * 10).ms);
-        return 'res-$item';
-      }, concurrency: 3);
+      final results = await items
+          .parallelize(
+            (item) async {
+              if (item == 3) {
+                throw Exception('item 3 failed');
+              }
+              await Future<void>.delayed(((6 - item) * 10).ms);
+              return 'res-$item';
+            },
+            concurrency: 3,
+            ordered: true,
+          )
+          .toList();
 
       expect(results.length, equals(5));
       expect(results[0], equals(const Right<Object, String>('res-1')));
@@ -201,6 +207,19 @@ void main() {
       expect((results[2].leftOrNull as Exception).toString(), contains('item 3 failed'));
       expect(results[3], equals(const Right<Object, String>('res-4')));
       expect(results[4], equals(const Right<Object, String>('res-5')));
+    });
+
+    test('returns a Stream by default and emits in completion order', () async {
+      final items = [1, 2, 3];
+      final results = await items
+          .parallelize((item) async {
+            await Future<void>.delayed(((4 - item) * 10).ms);
+            return item;
+          }, concurrency: 3)
+          .rights
+          .toList();
+
+      expect(results, equals([3, 2, 1]));
     });
 
     test('respects concurrency limit', () async {
@@ -214,7 +233,7 @@ void main() {
         await Future<void>.delayed(20.ms);
         currentInFlight--;
         return item;
-      }, concurrency: 3);
+      }, concurrency: 3).drain<void>();
 
       expect(maxInFlight, lessThanOrEqualTo(3));
     });
@@ -331,7 +350,7 @@ void main() {
           await Future<void>.delayed(15.ms);
           inFlight--;
         });
-      }, concurrency: 5);
+      }, concurrency: 5).drain<void>();
 
       expect(maxInFlight, lessThanOrEqualTo(2));
       expect(sem.permits, equals(2));
@@ -489,10 +508,16 @@ void main() {
   group('Isolate Utilities', () {
     test('parallelize with isolate: true runs workers on background isolates', () async {
       final numbers = [10, 20, 30];
-      final results = await numbers.parallelize((n) {
-        if (n == 20) throw ArgumentError('bad 20');
-        return n * 2;
-      }, isolate: true);
+      final results = await numbers
+          .parallelize(
+            (n) {
+              if (n == 20) throw ArgumentError('bad 20');
+              return n * 2;
+            },
+            isolate: true,
+            ordered: true,
+          )
+          .toList();
 
       expect(results.length, equals(3));
       expect(results[0], equals(const Right<Object, int>(20)));
@@ -502,22 +527,29 @@ void main() {
 
     test('parallelize().unwrap() preserves order and throws the first failure', () async {
       final numbers = [1, 2, 3, 4, 5];
-      final squares = (await numbers.parallelize((n) async {
-        await Future<void>.delayed(5.ms);
-        return n * n;
-      }, concurrency: 2)).unwrap();
+      final squares = await numbers
+          .parallelize(
+            (n) async {
+              await Future<void>.delayed(5.ms);
+              return n * n;
+            },
+            concurrency: 2,
+            ordered: true,
+          )
+          .unwrap()
+          .toList();
 
       expect(squares, equals([1, 4, 9, 16, 25]));
 
       final settled = await numbers.parallelize((n) async {
         if (n == 3) throw StateError('failed on 3');
         return n;
-      });
+      }).toList();
       expect(() => settled.unwrap(), throwsA(isA<StateError>()));
     });
 
     test('parallelize does not throw on a workload with zero failures', () async {
-      final outcomes = await [1, 2].parallelize((n) => n * 2);
+      final outcomes = await [1, 2].parallelize((n) => n * 2).toList();
       expect(outcomes.rights, equals([2, 4]));
       expect(outcomes.lefts, isEmpty);
     });
@@ -527,7 +559,7 @@ void main() {
       final outcomes = await numbers.parallelize((n) async {
         if (n == 20) throw FormatException('bad format');
         return n * 10;
-      });
+      }, ordered: true).toList();
 
       expect(outcomes.length, equals(3));
       expect(outcomes[0], equals(const Right<Object, int>(100)));
@@ -541,13 +573,13 @@ void main() {
       await [1, 2, 3].parallelize<void>((n) async {
         await Future<void>.delayed(5.ms);
         seen.add(n);
-      }, concurrency: 2);
+      }, concurrency: 2).drain<void>();
 
       expect(seen.length, equals(3));
       expect(seen.toSet(), equals({1, 2, 3}));
     });
 
-    test('parallelize with CancelToken reports unexecuted work as Left', () async {
+    test('parallelize with CancelToken stops emitting when cancelled', () async {
       final token = CancelToken();
       final items = [1, 2, 3, 4, 5];
       Future.delayed(15.ms, () => token.cancel('cancelled by user'));
@@ -556,13 +588,12 @@ void main() {
         () => items.parallelize((n) async {
           await Future<void>.delayed(50.ms);
           return n;
-        }, concurrency: 1),
+        }, concurrency: 1).toList(),
         token: token,
       );
 
-      expect(outcomes.lefts, isNotEmpty);
-      expect(outcomes.lefts.whereType<CancelledException>(), isNotEmpty);
-      expect(() => outcomes.unwrap(), throwsA(isA<CancelledException>()));
+      expect(outcomes, isEmpty);
+      expect(token.isCancelled, isTrue);
     });
   });
 
@@ -637,7 +668,7 @@ void main() {
       final port = ReceivePort();
       addTearDown(port.close);
       final mixed = <Object>[1, port, 3];
-      final out = await mixed.parallelize((x) => x is int ? x : 0, isolate: true);
+      final out = await mixed.parallelize((x) => x is int ? x : 0, isolate: true, ordered: true).toList();
       expect(out[0], const Right<Object, int>(1));
       expect(out[1] is Left, isTrue, reason: 'the port cannot cross, and fails only itself');
       expect(out[2], const Right<Object, int>(3));
@@ -753,7 +784,10 @@ void main() {
       final token = CancelToken();
       Timer(Duration.zero, token.cancel);
       final watch = Stopwatch()..start();
-      final out = await Cancel.scope(() => [2, 2].parallelize(_sleepFor, isolate: true, concurrency: 1), token: token);
+      final out = await Cancel.scope(
+        () => [2, 2].parallelize(_sleepFor, isolate: true, concurrency: 1).toList(),
+        token: token,
+      );
       expect(watch.elapsed, lessThan(1500.ms));
       expect(out.lefts, everyElement(isA<CancelledException>()));
       expect(out.rights, isEmpty);
@@ -908,10 +942,10 @@ void main() {
     });
 
     test('parallelize keeps order and settles failures, on an isolate too', () async {
-      final local = await [1, -1, 3].parallelize((x) => x < 0 ? throw ArgumentError() : x * 2);
+      final local = await [1, -1, 3].parallelize((x) => x < 0 ? throw ArgumentError() : x * 2, ordered: true).toList();
       expect(local.rights, [2, 6]);
       expect(local[1] is Left, isTrue);
-      final remote = await [1, 2, 3, 4, 5].parallelize(_double, isolate: true, concurrency: 2);
+      final remote = await [1, 2, 3, 4, 5].parallelize(_double, isolate: true, concurrency: 2, ordered: true).toList();
       expect(remote.rights, [2, 4, 6, 8, 10]);
     });
   });

@@ -80,6 +80,59 @@ class JsonDocument {
     }
   }
 
+  /// Sets a map key ([String]) or list index ([int]) to [value].
+  ///
+  /// If [value] is a [JsonDocument], its [raw] value is stored.
+  /// Throws [StateError] if this document is neither a Map nor a List.
+  void operator []=(Object keyOrIndex, Object? value) {
+    final v = value is JsonDocument ? value.raw : value;
+    final r = raw;
+    switch (keyOrIndex) {
+      case final String k:
+        if (r is Map) {
+          r[k] = v;
+        } else {
+          throw StateError('Cannot set property "$k" on non-map JSON ($runtimeType)');
+        }
+      case final int i:
+        if (r is List) {
+          final at = i < 0 ? r.length + i : i;
+          if (at < 0 || at >= r.length) {
+            throw RangeError.index(i, r, 'index');
+          }
+          r[at] = v;
+        } else {
+          throw StateError('Cannot set index "$i" on non-list JSON ($runtimeType)');
+        }
+      default:
+        throw ArgumentError.value(keyOrIndex, 'keyOrIndex', 'Must be a String key or an int index');
+    }
+  }
+
+  /// Removes a map key ([String]) or list index ([int]).
+  ///
+  /// Returns the removed value, or `null`.
+  Object? remove(Object keyOrIndex) {
+    final r = raw;
+    switch (keyOrIndex) {
+      case final String k:
+        if (r is Map) {
+          return r.remove(k);
+        }
+        return null;
+      case final int i:
+        if (r is List) {
+          final at = i < 0 ? r.length + i : i;
+          if (at >= 0 && at < r.length) {
+            return r.removeAt(at);
+          }
+        }
+        return null;
+      default:
+        throw ArgumentError.value(keyOrIndex, 'keyOrIndex', 'Must be a String key or an int index');
+    }
+  }
+
   /// Where this sits in the document it came from: `$`, `$.a[0]`, `$['x.y']`.
   String get _path {
     final parent = _parent;

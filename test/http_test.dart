@@ -1059,6 +1059,88 @@ void main() {
         },
       );
 
+      test('InitContext.cookies and jar preserve cookies across requests and hops', () async {
+        final seen = <String, String?>{};
+        final client = MockClient((request) async {
+          seen[request.url.path] = request.headers['cookie'];
+          if (request.url.path == '/login') {
+            return Response('ok', 200, headers: {'set-cookie': 'session=abc; Path=/'});
+          }
+          return Response('protected', 200);
+        });
+
+        final outcomes = await Http.scope(() async {
+          return await 'https://example.com/login'.url
+              .scrape<String>()
+              .onInit(
+                (c) => c
+                  ..cookies = true
+                  ..jar = [
+                    Cookie('seed', '123')
+                      ..domain = 'example.com'
+                      ..path = '/',
+                  ],
+              )
+              .onResponse((ctx) {
+                if (ctx.url.path == '/login') {
+                  expect(ctx.cookies.map((c) => '${c.name}=${c.value}'), contains('session=abc'));
+                  ctx.follow('/dashboard');
+                } else {
+                  ctx.emit(ctx.response.text);
+                }
+              })
+              .rights
+              .toList();
+        }, client: client);
+
+        expect(outcomes, equals(['protected']));
+        expect(seen['/login'], contains('seed=123'));
+        expect(seen['/dashboard'], contains('session=abc'));
+        expect(seen['/dashboard'], contains('seed=123'));
+      });
+
+      test('submit() extracts form inputs, merges values, and follows action', () async {
+        Request? submitted;
+        final client = MockClient((request) async {
+          if (request.url.path == '/page') {
+            return Response(
+              '<form action="/search" method="post">'
+              '<input type="hidden" name="csrf" value="token123">'
+              '<input type="text" name="q" value="old">'
+              '<select name="category"><option value="tech" selected>Tech</option></select>'
+              '</form>',
+              200,
+            );
+          }
+          submitted = request;
+          return Response('results', 200);
+        });
+
+        final outcomes = await Http.scope(() async {
+          return await 'https://example.com/page'.url
+              .scrape<String>()
+              .onResponse((ctx) {
+                if (ctx.url.path == '/page') {
+                  final form = ctx.html.$('form').first;
+                  ctx.submit(form, values: {'q': 'dart'});
+                } else {
+                  ctx.emit(ctx.response.text);
+                }
+              })
+              .rights
+              .toList();
+        }, client: client);
+
+        expect(outcomes, equals(['results']));
+        expect(submitted, isNotNull);
+        expect(submitted!.method, equals('POST'));
+        expect(submitted!.url.path, equals('/search'));
+        expect(submitted!.headers['content-type'], contains('application/x-www-form-urlencoded'));
+        expect(submitted!.text, contains('csrf=token123'));
+        expect(submitted!.text, contains('q=dart'));
+        expect(submitted!.text, contains('category=tech'));
+      });
+
       test('a Scrape is a Stream; a throwing onInit sends nothing and is the only event', () async {
         var sent = 0;
         final client = MockClient((request) async {
@@ -1091,6 +1173,102 @@ void main() {
         }, client: client);
 
         expect(outcomes.rights, equals(['detail-fallback']));
+      });
+
+      test('onRequest modifies url, method, body, headers, and request re-assignment', () async {
+        Request? received;
+        final client = MockClient((request) async {
+          received = request;
+          return Response('{"status":"ok"}', 200, headers: {'content-type': 'application/json'});
+        });
+
+        final outcomes = await Http.scope(() async {
+          return await 'https://example.com/original'.url
+              .scrape<String>()
+              .onRequest((ctx) {
+                ctx.url = Uri.parse('https://example.com/modified?q=1');
+                ctx.method = 'POST';
+                ctx.json = {'hello': 'world'};
+                ctx.headers['x-custom'] = 'custom-value';
+              })
+              .onResponse((ctx) => ctx.emit(ctx.response.text))
+              .toList();
+        }, client: client);
+
+        expect(outcomes.rights, equals(['{"status":"ok"}']));
+        expect(received?.method, equals('POST'));
+        expect(received?.url, equals(Uri.parse('https://example.com/modified?q=1')));
+        expect(received?.headers['x-custom'], equals('custom-value'));
+        expect(received?.headers['content-type'], contains('application/json'));
+        expect(received?.text, equals('{"hello":"world"}'));
+      });
+
+      test('multiple onRequest hooks chain in sequence', () async {
+        final calls = <String>[];
+        final client = MockClient((request) async {
+          return Response('ok', 200);
+        });
+
+        await Http.scope(() async {
+          return await 'https://example.com/'.url
+              .scrape<void>()
+              .onRequest((ctx) {
+                calls.add('first');
+                ctx.headers['h1'] = '1';
+              })
+              .onRequest((ctx) {
+                calls.add('second:${ctx.headers['h1']}');
+                ctx.headers['h2'] = '2';
+              })
+              .toList();
+        }, client: client);
+
+        expect(calls, equals(['first', 'second:1']));
+      });
+
+      test('follow with onRequest overrides request for specific follow target', () async {
+        final seenHeaders = <String, String?>{};
+        final client = MockClient((request) async {
+          seenHeaders[request.url.path] = request.headers['x-step'];
+          return Response('<html><a href="/step2">link</a></html>', 200);
+        });
+
+        await Http.scope(() async {
+          return await 'https://example.com/start'.url.scrape<void>().onResponse((ctx) {
+            ctx.follow(
+              '/step2',
+              onRequest: (reqCtx) {
+                reqCtx.headers['x-step'] = 'special';
+              },
+            );
+          }).toList();
+        }, client: client);
+
+        expect(seenHeaders['/start'], isNull);
+        expect(seenHeaders['/step2'], equals('special'));
+      });
+
+      test('ResponseContext.retry retries from 200 OK soft error', () async {
+        var attempts = 0;
+        final client = MockClient((request) async {
+          attempts++;
+          if (attempts == 1) {
+            return Response('Please verify captcha', 200);
+          }
+          return Response('actual data', 200);
+        });
+
+        final outcomes = await Http.scope(() async {
+          return await 'https://example.com/soft-error'.url.scrape<String>().onResponse((ctx) {
+            if (ctx.response.text.contains('captcha')) {
+              return ctx.retry();
+            }
+            ctx.emit(ctx.response.text);
+          }).toList();
+        }, client: client);
+
+        expect(outcomes.rights, equals(['actual data']));
+        expect(attempts, equals(2));
       });
     });
 
@@ -1132,6 +1310,28 @@ void main() {
       final atBreak = served;
       await Future<void>.delayed(const Duration(milliseconds: 400));
       expect(served, lessThanOrEqualTo(atBreak + 2), reason: 'only the in-flight requests may finish');
+    });
+
+    test('download pairs with per-asset headers', () async {
+      final seenHeaders = <String, String?>{};
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      server.listen((req) async {
+        seenHeaders[req.uri.path] = req.headers.value('x-custom-token');
+        req.response.write('hello');
+        await req.response.close();
+      });
+      addTearDown(() => server.close(force: true));
+      final dir = Path(Directory.systemTemp.createTempSync('dl_hdrs_').path);
+      addTearDown(() => dir.delete(recursive: true));
+
+      final base = Uri.parse('http://127.0.0.1:${server.port}/');
+      final items = [
+        (url: base / '1', path: dir / '1.bin', headers: {'x-custom-token': 'token-1'}),
+        (url: base / '2', path: dir / '2.bin', headers: {'x-custom-token': 'token-2'}),
+      ];
+      await items.download(concurrency: 1).toList();
+      expect(seenHeaders['/1'], equals('token-1'));
+      expect(seenHeaders['/2'], equals('token-2'));
     });
 
     test('a scope timeout fails a stalled server instead of hanging', () async {
@@ -3120,6 +3320,27 @@ void _scrapeEdges() {
       expect(receivedHeaders[1]['user-agent'], ['CustomAgent/1.0']);
       expect(receivedHeaders[1]['x-outer'], ['1']);
       expect(receivedHeaders[1]['cookie'], ['session=abc']);
+    });
+
+    test('nested Http.scope inherits timeout and headers merge', () async {
+      final server = await HttpServer.bind('localhost', 0);
+      addTearDown(server.close);
+      final receivedHeaders = <Map<String, List<String>>>[];
+      server.listen((req) async {
+        final map = <String, List<String>>{};
+        req.headers.forEach((name, values) => map[name] = values);
+        receivedHeaders.add(map);
+        req.response.write('ok');
+        await req.response.close();
+      });
+
+      await Http.scope(timeout: 5.s, headers: {'x-outer': '1'}, () async {
+        await Http.scope(headers: {'x-inner': '2'}, () async {
+          await 'http://localhost:${server.port}/test'.url.get();
+        });
+      });
+      expect(receivedHeaders.single['x-outer'], ['1']);
+      expect(receivedHeaders.single['x-inner'], ['2']);
     });
 
     test('SCR-1: crawl does not retry non-idempotent method on 5xx without Retry-After', () async {

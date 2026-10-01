@@ -14,12 +14,12 @@ void _ensureSignalHandlers() {
     Console._restoreTerminal();
     // A second signal while the listeners run means a cleanup hangs: leave now.
     if (_exiting) {
-      killHaltedProcessesSync();
+      ProcessBridge.killHaltedSync();
       _terminate(128 + signal.signalNumber);
     }
     _exiting = true;
     await _runExitHooks();
-    await killHaltedProcesses();
+    await ProcessBridge.killHalted();
     _terminate(128 + signal.signalNumber);
   }
 
@@ -108,12 +108,18 @@ class Lifecycle {
   /// ```
   static Future<Never> exit([Object? message, int? code]) async {
     Console._stopAll();
-    if (message != null) {
-      final t = Console.theme;
-      Console._durable(() => Io.err.writeln(t._line(t.danger, t.error, '$message')));
+    final int exitCode;
+    if (message is int && code == null) {
+      exitCode = message;
+    } else {
+      if (message != null) {
+        final t = Console.theme;
+        Console._durable(() => Io.err.writeln(t._line(t.danger, t.error, '$message')));
+      }
+      exitCode = code ?? (message == null ? 0 : 1);
     }
     await _runExitHooks();
-    await killHaltedProcesses();
-    _terminate(code ?? (message == null ? 0 : 1));
+    await ProcessBridge.killHalted();
+    _terminate(exitCode);
   }
 }

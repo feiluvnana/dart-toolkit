@@ -3,7 +3,7 @@ import 'package:dart_toolkit/dart_toolkit.dart';
 const keyBase = 'https://key.visualarts.gr.jp/key20th/';
 const khinsider = 'https://downloads.khinsider.com/game-soundtracks/album/key-box-for-two-decades-2019';
 const baseName = 'Key BOX -for two decades- (2019)';
-const formats = ['mp3', 'flac'];
+const formats = ['mp3' /*, 'flac'*/];
 const concurrency = 4;
 
 /// The patterns, compiled once: every one of them is read inside a loop over a page.
@@ -125,6 +125,16 @@ Future<void> run() async {
   var unresolved = 0;
   final songs = khinsider.url
       .scrape<Asset>()
+      .onRequest((ctx) {
+        ctx.headers.addAll({
+          'accept':
+              'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+          'accept-language': 'en-US,en;q=0.9,vi;q=0.8',
+          'cache-control': 'max-age=0',
+          'priority': 'u=0, i',
+          'upgrade-insecure-requests': '1',
+        });
+      })
       .onResponse((ctx) {
         for (final tr in ctx.html.$('#songlist tr')) {
           final tds = tr.$('td');

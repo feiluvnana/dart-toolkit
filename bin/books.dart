@@ -45,7 +45,7 @@ Future<void> run(CliContext ctx) async {
   try {
     // One second between two requests to the site, and a flaky answer is asked again.
     await Http.scope(client: client, retries: 2, delay: 1.s, () async {
-      final settled = await ctx(titles).parallelize((title) => link(title, ctx(format)));
+      final settled = await ctx(titles).parallelize((title) => link(title, ctx(format))).toList();
       settled.lefts.forEach(Console.warn);
       final found = settled.rights;
       if (found.isEmpty) throw 'nothing found';

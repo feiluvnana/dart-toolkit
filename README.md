@@ -129,9 +129,9 @@ Secure.token(); bytes.hex; '6869'.hexBytes;
 ### Concurrency and cancellation
 
 ```dart
-final settled = await urls.parallelize(fetch, concurrency: 8);  // List<Either<Object, Page>>
-final pages = settled.unwrap();                                 // or .rights, .lefts
-final thumbs = await images.parallelize(resize, isolate: true); // long-lived isolates
+final settled = await urls.parallelize(fetch, concurrency: 8).toList();  // List<Either<Object, Page>>
+final pages = settled.unwrap();                                         // or .rights, .lefts
+final thumbs = await images.parallelize(resize, isolate: true).toList(); // long-lived isolates
 
 await Cancel.scope(timeout: 5.m, () async {                     // download, run, retry, Pool… read it
   for (final item in items) {
