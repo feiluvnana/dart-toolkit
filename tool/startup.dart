@@ -1,10 +1,11 @@
 // Measures what each module costs to import under `dart run`, as a delta against a
 // bare script, so a change to a module's closure is measured rather than argued.
 //
-//   dart run tool/startup.dart            # every module, two rounds
+//   dart run tool/startup.dart            # every module, six rounds
 //   dart run tool/startup.dart http html  # a subset
 //
-// Timings drift by tens of milliseconds between runs; read the deltas, not the totals.
+// Timings drift by tens of milliseconds between runs, so each round alternates the order and the
+// table reports the median and the minimum over bare. Read the deltas, not the totals.
 //
 // This measures `dart run file.dart`. A package executable — `dart run dart_toolkit:keybox` —
 // goes through pub's incremental snapshot and pays none of this after the first run.
@@ -35,18 +36,25 @@ Future<void> main(List<String> args) async {
 
     await time('bare'); // warm the VM cache once
     final names = ['bare', ...selected, 'barrel'];
-    final totals = {for (final n in names) n: 0};
-    const rounds = 2;
+    final samples = {for (final n in names) n: <int>[]};
+    const rounds = 6;
     for (var r = 0; r < rounds; r++) {
-      for (final n in names) {
-        totals[n] = totals[n]! + await time(n);
+      for (final n in r.isEven ? names : names.reversed) {
+        samples[n]!.add(await time(n));
       }
     }
-    final bare = totals['bare']! ~/ rounds;
-    stdout.writeln('${'import'.padRight(12)} ${'ms'.padLeft(6)} ${'over bare'.padLeft(10)}');
+    int median(List<int> xs) => (xs.toList()..sort())[xs.length ~/ 2];
+    int least(List<int> xs) => xs.reduce((a, b) => a < b ? a : b);
+    final bare = samples['bare']!;
+    stdout.writeln(
+      '${'import'.padRight(12)} ${'median'.padLeft(7)} ${'over bare'.padLeft(10)} ${'min over'.padLeft(9)}',
+    );
     for (final n in names) {
-      final ms = totals[n]! ~/ rounds;
-      stdout.writeln('${n.padRight(12)} ${'$ms'.padLeft(6)} ${(n == 'bare' ? '—' : '+${ms - bare}').padLeft(10)}');
+      final xs = samples[n]!;
+      String over(int Function(List<int>) f) => n == 'bare' ? '—' : '+${f(xs) - f(bare)}';
+      stdout.writeln(
+        '${n.padRight(12)} ${'${median(xs)}'.padLeft(7)} ${over(median).padLeft(10)} ${over(least).padLeft(9)}',
+      );
     }
   } finally {
     dir.deleteSync(recursive: true);

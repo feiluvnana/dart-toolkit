@@ -3,7 +3,7 @@
 // RFC 6265's storage and matching rules, less the public-suffix list: a `Domain` is
 // accepted when the host it came from is inside it, which stops `a.example.com` setting a
 // cookie for `other.com` but not for `com`. Nothing here is public — a scope either
-// keeps cookies or does not, and `Http.scope(cookies: true)` is the whole vocabulary.
+// keeps cookies or does not: `Http.scope(cookies: true)`, or `jar:` to start it with some.
 
 part of '../../http.dart';
 
@@ -67,6 +67,29 @@ final class _Jar {
       _cookies.removeWhere((c) => c.sameAs(cookie));
       // A cookie already past its expiry is a deletion, which the removal above has done.
       if (!cookie.isExpiredAt(DateTime.now())) _cookies.add(cookie);
+    }
+  }
+
+  /// Takes cookies handed over whole — a browser's, from `page.cookies()` — rather than
+  /// parsed from a response. One with no domain is skipped; a leading dot means subdomains.
+  void seed(Iterable<Cookie> given) {
+    final now = DateTime.now();
+    for (final c in given) {
+      final raw = c.domain?.toLowerCase();
+      if (raw == null || raw.isEmpty) continue;
+      final cookie = _Cookie(
+        name: c.name,
+        value: c.value,
+        domain: raw.startsWith('.') ? raw.substring(1) : raw,
+        path: c.path ?? '/',
+        expires: c.expires,
+        secure: c.secure,
+        hostOnly: !raw.startsWith('.'),
+      );
+      if (cookie.isExpiredAt(now)) continue;
+      _cookies
+        ..removeWhere((k) => k.sameAs(cookie))
+        ..add(cookie);
     }
   }
 

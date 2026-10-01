@@ -7,7 +7,7 @@ part of '../../http.dart';
 /// right there, and saying so is shorter than opening a scope around one call.
 ///
 /// ```dart
-/// final chrome = await ChromeClient.connect();
+/// final chrome = await ChromeClient.connect();   // package:dart_toolkit/chrome.dart
 ///
 /// await chrome.get(url);                       // the page, rendered
 /// await chrome.page(url, (p) => p.click('.dl'));  // the tab, live
@@ -15,7 +15,7 @@ part of '../../http.dart';
 ///
 /// The difference that matters is not brevity. A scope holds a [Client], and a `Client` is
 /// `send` and `close` — so through a scope, everything a particular client can do *beyond*
-/// the seam is invisible. Held, it is the receiver, and [ChromeClient.page] sits beside
+/// the seam is invisible. Held, it is the receiver, and `ChromeClient.page` sits beside
 /// [get] with the compiler deciding whether it exists. Nothing probes, nothing casts, and
 /// nothing throws at runtime for asking a socket to click a button.
 ///

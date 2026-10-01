@@ -38,6 +38,21 @@ class Http {
   /// });
   /// ```
   ///
+  /// [jar] starts the jar with cookies from elsewhere and implies [cookies]: log in through
+  /// a browser, where the JavaScript and the captcha are, then fetch at socket speed.
+  ///
+  /// ```dart
+  /// final session = await chrome.page(login, (p) async {
+  ///   await p.fill('#user', user);
+  ///   await p.waitForNavigation(() => p.click('#go'));
+  ///   return p.cookies();
+  /// });
+  /// await Http.scope(jar: session, () => api.get().json);
+  /// ```
+  ///
+  /// A cookie without a domain has no origin to belong to and is skipped; a domain with a
+  /// leading dot (Chrome's way of writing `Domain=`) matches its subdomains too.
+  ///
   /// [retries] is the crawl's retry policy for everything else in the scope — every
   /// `url.get()` and every download, none of them wrapped in a `retry`: a transport error or a
   /// 5xx is sent again, a 429 or 503 after the `Retry-After` it asked for (one asking for more
@@ -75,19 +90,21 @@ class Http {
     Duration? timeout,
     Map<String, String>? headers,
     bool cookies = false,
+    Iterable<Cookie>? jar,
     int retries = 0,
     Duration? delay,
     Path? cache,
   }) async {
     final owned = client == null && Http.client == null;
     final inner = client ?? Http.client ?? IoClient();
-    final shared = timeout == null && headers == null && !cookies && retries <= 0 && delay == null && cache == null
+    final keeps = cookies || jar != null;
+    final shared = timeout == null && headers == null && !keeps && retries <= 0 && delay == null && cache == null
         ? inner
         : _ScopeClient(
             inner,
             headers,
             timeout,
-            cookies ? _Jar() : null,
+            keeps ? (_Jar()..seed(jar ?? const [])) : null,
             retries: retries < 0 ? 0 : retries,
             delay: delay != null && delay > Duration.zero ? delay : null,
             cache: cache == null ? null : _Cache(cache),

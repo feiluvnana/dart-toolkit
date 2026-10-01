@@ -453,6 +453,18 @@ void main() {
         await page.eval("document.cookie = 'who=me; path=/'");
         final jar = await page.cookies();
         expect(jar.map((c) => '${c.name}=${c.value}'), contains('who=me'));
+
+        // Handed to a plain socket client: cookies are not per port, so another server on the
+        // same host is sent the browser's session.
+        final api = await HttpServer.bind(base.host, 0);
+        addTearDown(api.close);
+        api.listen(
+          (req) => req.response
+            ..write(req.headers.value('cookie'))
+            ..close(),
+        );
+        final echoed = await Http.scope(jar: jar, () => Uri.parse('http://${base.host}:${api.port}/').get().text);
+        expect(echoed, contains('who=me'));
       });
     }, skip: absent);
 
@@ -497,6 +509,17 @@ void main() {
       expect(file, isNotNull);
       expect(file!.name, 'report.bin', reason: 'the name the site gave it');
       expect(await file.readBytes(), hasLength(1024));
+      await page.close();
+    }, skip: absent);
+
+    test('a tight loop of small downloads gets every file', () async {
+      final dir = await Directory.systemTemp.createTemp('tk_loop_');
+      addTearDown(() => dir.delete(recursive: true));
+      final page = await browser.open(base.resolve('/downloads'));
+      for (var i = 0; i < 15; i++) {
+        final file = await page.waitForDownload(() => page.click('#get'), to: dir.path.path, timeout: 2.s);
+        expect(file, isNotNull, reason: 'download ${i + 1} of 15');
+      }
       await page.close();
     }, skip: absent);
 

@@ -21,6 +21,11 @@ final class ChromePage {
 
   StreamSubscription<_Cdp>? _events;
   FutureOr<void> Function(Dialog dialog)? _onDialog;
+
+  /// When this tab last started a download: Chrome starts about ten a second per page and
+  /// silently drops the rest, so [waitForDownload] keeps its starts [_downloadGap] apart.
+  DateTime? _downloadBegan;
+  static const _downloadGap = Duration(milliseconds: 120);
   Set<Resource>? _blocked;
 
   /// The credentials the render in progress carries, and the one origin they may go to.
@@ -530,9 +535,9 @@ new Promise((resolve) => {
   /// time. Silence is the thing worth giving up on, and a transfer that has died goes quiet at
   /// once, so waiting on silence is both more patient and quicker to notice a real failure.
   ///
-  /// Chrome lets one page start about ten downloads a second; past that a click starts
-  /// nothing and this answers `null` after [timeout]. A loop over many tiny files from one page
-  /// waits a beat between them.
+  /// Chrome lets one page start about ten downloads a second and drops the rest, so a wait
+  /// that follows another on the same tab within ~120 ms holds back its action until then; a
+  /// loop over many tiny files needs no pacing of its own.
   ///
   /// ```dart
   /// final file = await page.waitForDownload(() => page.click('.download'), to: 'books'.path);
@@ -566,6 +571,7 @@ new Promise((resolve) => {
           final from = event.params['frameId'];
           if (_frame.isNotEmpty && from != _frame && _client._pages.any((p) => p != _owner && p._frame == from)) return;
           _client._claimed.add(guid);
+          _owner._downloadBegan = DateTime.now();
           id = guid;
           suggested = event.params['suggestedFilename'] as String?;
           stirred();
@@ -578,6 +584,10 @@ new Promise((resolve) => {
       }
     });
     try {
+      if (_owner._downloadBegan case final began?) {
+        final wait = _downloadGap - DateTime.now().difference(began);
+        if (wait > Duration.zero) await Future<void>.delayed(wait);
+      }
       stirred();
       await action();
       if (!await finished.future) {
@@ -725,7 +735,8 @@ new Promise((resolve) => {
 
   /// This browser's cookies, and the way to give it some.
   ///
-  /// `page.cookies()` reads them — after a login, to hand to something that is not a browser.
+  /// `page.cookies()` reads them — after a login, to hand to something that is not a browser:
+  /// `Http.scope(jar: await page.cookies(), …)` carries the session to plain sockets.
   /// `page.cookies(saved)` puts [saved] in first, which is how a session a person logged into
   /// by hand once becomes the session every run after it has. A cookie that names no domain
   /// is attached to the page the tab is on. Cookies belong to the browser rather than to the

@@ -3020,6 +3020,32 @@ void _scrapeAudit() {
   });
 
   group('audit IV fixes: http', () {
+    test('jar: seeds the scope with cookies handed over, by their domain', () async {
+      final server = await HttpServer.bind('127.0.0.1', 0);
+      addTearDown(server.close);
+      final seen = <String?>[];
+      server.listen((req) async {
+        seen.add(req.headers.value('cookie'));
+        await req.response.close();
+      });
+      final url = 'http://127.0.0.1:${server.port}/a'.url;
+      await Http.scope(
+        jar: [
+          Cookie('sid', '42')..domain = '127.0.0.1',
+          Cookie('other', 'x')..domain = 'example.com',
+          Cookie('nodomain', 'y'),
+          Cookie('old', 'z')
+            ..domain = '127.0.0.1'
+            ..expires = DateTime(2000),
+        ],
+        () async {
+          await url.get();
+          await url.get();
+        },
+      );
+      expect(seen, ['sid=42', 'sid=42']);
+    });
+
     test('HTTP-1: timed-out request releases pool permit', () async {
       final server = await HttpServer.bind('localhost', 0);
       addTearDown(server.close);
