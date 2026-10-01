@@ -44,7 +44,8 @@ class Http {
   /// [retries] is the crawl's policy for every request and download in the scope: a
   /// transport error, a broken-off body or a 5xx is sent again, a 429 or 503 after its
   /// `Retry-After` (over 30 s is handed back), a TLS failure never. POST and PATCH are resent
-  /// only on a 429 or 503 with `Retry-After` — the server saying it did nothing.
+  /// only on a 429 or 503 with `Retry-After` — the server saying it did nothing. A nested
+  /// scope setting none keeps the outer's.
   ///
   /// [delay] spaces requests to one host (`www.` or not), hops and downloads included,
   /// jittered ±25 % since a metronome is a bot signal.
@@ -80,7 +81,8 @@ class Http {
             headers,
             timeout,
             keeps ? (_Jar()..seed(jar ?? const [])) : null,
-            retries: retries < 0 ? 0 : retries,
+            // An inner scope that sets none keeps the outer's budget.
+            retries: retries > 0 ? retries : (inner is _ScopeClient ? inner._retries : 0),
             delay: delay != null && delay > Duration.zero ? delay : null,
             cache: cache == null ? null : _Cache(cache),
             owned: owned,
@@ -178,12 +180,11 @@ final class _ScopeClient implements Client {
       await _polite(request.url);
       // Sending consumes a request, and a retry sends it again.
       final sent = budget == 0 ? request : request.copy();
-      if (_inner is _ScopeClient) sent[_Retry.none] = true;
-      final stop = CancelToken();
-      Cancel.token?.onCancel(() => stop.cancel(Cancel.reason));
+      // Only the innermost retrying scope retries.
+      if (budget > 0 && _inner is _ScopeClient) sent[_Retry.none] = true;
       final StreamedResponse res;
       try {
-        res = await _timed(Cancel.scope(() => _inner.send(sent), token: stop), stop);
+        res = await _timed(sent);
       } catch (e) {
         if (attempt > budget || !replayable || !_transient(e) || Cancel.isCancelled) rethrow;
         await (200 * attempt).ms.delay();
@@ -197,19 +198,30 @@ final class _ScopeClient implements Client {
     }
   }
 
-  /// [pending] within [_timeout]. A late response is drained, or it would hold its connection
-  /// — and its `IoClient(connections:)` permit — for good.
-  Future<StreamedResponse> _timed(Future<StreamedResponse> pending, CancelToken stop) {
+  /// [sent]'s headers within [_timeout], aborting it when late. A late response is drained, or
+  /// it would hold its connection — and its `IoClient(connections:)` permit — for good.
+  Future<StreamedResponse> _timed(Request sent) async {
     final timeout = _timeout;
-    if (timeout == null) return pending;
-    return pending.timeout(
-      timeout,
-      onTimeout: () {
-        stop.cancel();
-        unawaited(pending.then(_drain, onError: (Object _) {}));
-        throw TimeoutException('No response within $timeout', timeout);
-      },
-    );
+    if (timeout == null) return _inner.send(sent);
+    final stop = CancelToken();
+    // The enclosing scope reaches [stop] until the body ends, so a cancel still cuts it mid-body.
+    final outer = Cancel.token;
+    final unhear = outer?.onCancel(() => stop.cancel(outer.reason)) ?? () {};
+    final pending = Cancel.scope(() => _inner.send(sent), token: stop);
+    try {
+      final res = await pending.timeout(
+        timeout,
+        onTimeout: () {
+          stop.cancel();
+          unawaited(pending.then(_drain, onError: (Object _) {}));
+          throw TimeoutException('No response within $timeout', timeout);
+        },
+      );
+      return res._carrying(IoClient._guarded(res.stream, unhear, null));
+    } catch (_) {
+      unhear();
+      rethrow;
+    }
   }
 
   /// Waits for [url]'s host to be due, and books the next slot now, so ten downloads started

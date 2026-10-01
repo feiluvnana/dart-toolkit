@@ -1,12 +1,20 @@
 part of '../../http.dart';
 
+/// A colon before any `/`, `?` or `#`, not starting `://`: an href would read it as a scheme.
+final _schemeLike = RegExp(r'^[^/?#:]+:(?!//)');
+
 /// HTTP requests on [Uri].
 ///
 /// {@category Networking}
 extension UriExtensions on Uri {
   /// Appends [part] as a path segment: `'https://x.com/api'.url / 'users'` is
-  /// `https://x.com/api/users`. An absolute or `..` [part] resolves as an href would.
-  Uri operator /(String part) => (path.endsWith('/') ? this : replace(path: '$path/')).resolve(part);
+  /// `https://x.com/api/users`. An absolute or `..` [part] resolves as an href would; a
+  /// `projects:batchGet` stays a segment.
+  Uri operator /(String part) {
+    final dir = path.endsWith('/') ? this : replace(path: '$path/');
+    // Appended, not resolved: a relative `./a:b` would come back as `a%3Ab`.
+    return _schemeLike.hasMatch(part) ? Uri.parse('${dir.removeFragment().removeQuery()}$part') : dir.resolve(part);
+  }
 
   /// This URI with [params] added to its query; a `null` value removes the parameter:
   /// `url.withQuery({'page': 2, 'q': 'dart'})`.

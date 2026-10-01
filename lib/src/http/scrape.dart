@@ -728,12 +728,16 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
   // A copy: `ctx.seed` adds to it, and a crawler run twice must not start from both runs' seeds.
   final cfg = InitContext<T>._([...crawler._seeds]);
   if (crawler._init case final init?) {
+    // A listener gone while an async init runs ends the crawl before its first request.
+    var gone = false;
+    controller.onCancel = () => gone = true;
     try {
       await init(cfg);
     } catch (e, st) {
       controller.addError(e, st);
       return controller.close();
     }
+    if (gone) return;
   }
   if (cfg.concurrency < 1) cfg.concurrency = 1;
   if (cfg.perHost < 1) cfg.perHost = 1;
@@ -826,11 +830,13 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     final request = Request('GET', url, headers: {'user-agent': agent})
       ..[Request.raw] = true
       ..[_Retry.none] = true;
-    final pending = lease.client.send(request);
+    final abort = CancelToken();
+    final pending = Cancel.scope(() => lease.client.send(request), token: abort);
     final StreamedResponse res;
     try {
       res = await pending.timeout(cfg.timeout);
     } catch (_) {
+      abort.cancel();
       unawaited(pending.then(_drain, onError: (Object _) {}));
       return null;
     }
@@ -848,7 +854,7 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
   /// [host]'s `/robots.txt`, fetched once. A 5xx reads as open too: refusing everything
   /// would strand a crawl on one bad deploy.
   Future<_RobotsTxt?> robotsTxt(_Host<T> host, Uri url, String agent) {
-    final site = url.replace(path: '/robots.txt', query: null, fragment: null);
+    final site = Uri(scheme: url.scheme, host: url.host, port: url.port, path: '/robots.txt');
     return host.robots ??= fetchOwn(
       site,
       agent,
@@ -927,10 +933,10 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
   }
 
   /// How long to hold [host], or `null` to fail rather than wait past
-  /// [InitContext.maxRetryAfter].
-  Duration? retryAfter(Response res, _Host<T> host) {
+  /// [InitContext.maxRetryAfter]; with [once] (not replayable), only a `Retry-After` is waited.
+  Duration? retryAfter(Response res, _Host<T> host, {bool once = false}) {
     if (_Retry.retryAfter(res.headers) case final asked?) return asked > cfg.maxRetryAfter ? null : asked;
-    return _Retry.backoff(host.backoffs++);
+    return once ? null : _Retry.backoff(host.backoffs++);
   }
 
   /// Whether [item] left scope by redirecting to [to]. A seed does not: it moves the crawl's
@@ -976,7 +982,12 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     // A follow adding no metadata shares the one empty map rather than copying nothing.
     final meta = plan.meta == null && item.meta.isEmpty ? const <String, Object?>{} : {...item.meta, ...?plan.meta};
     bool one(Object href) {
-      final url = _resolve(base(), href);
+      final Uri url;
+      try {
+        url = _resolve(base(), href);
+      } on FormatException {
+        return drop();
+      }
       final next = _Item<T>(url, plan, meta: meta, depth: item.depth + 1);
       // Encoded now: a bad body fails in the hook that asked, and is there to be hashed.
       if (plan._bodied) {
@@ -1093,7 +1104,12 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
       final e = ClientException('Too many redirects', sent.url);
       return fail(host, item, requestFailed(item, sent.url, e), StackTrace.current);
     }
-    final target = _page(sent.url.resolve(location));
+    final Uri target;
+    try {
+      target = _resolve(sent.url, location);
+    } on FormatException catch (e, st) {
+      return fail(host, item, requestFailed(item, sent.url, e), st);
+    }
     if ((target.scheme != 'http' && target.scheme != 'https') || strays(item, target)) {
       return refuse(host, item, res);
     }
@@ -1170,22 +1186,27 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     if (stopped) return;
 
     requests++;
+    // Its own token, so a timeout aborts the request; the crawl's ^C reaches it mid-body too.
+    final abort = CancelToken();
+    final unhear = token?.onCancel(() => abort.cancel(token.reason));
     final StreamedResponse streamed;
-    final pending = lease.client.send(sent);
-    try {
-      streamed = await pending.timeout(cfg.timeout);
-    } catch (e, st) {
-      // A late answer still holds a connection until its body is read.
-      unawaited(pending.then(_drain, onError: (Object _) {}));
-      return transportFailure(host, item, sent.url, e, st);
-    }
-
     final Uint8List body;
     try {
+      final pending = Cancel.scope(() => lease.client.send(sent), token: abort);
+      try {
+        streamed = await pending.timeout(cfg.timeout);
+      } catch (_) {
+        abort.cancel();
+        // A late answer still holds a connection until its body is read.
+        unawaited(pending.then(_drain, onError: (Object _) {}));
+        rethrow;
+      }
       body = await _readCapped(streamed.stream, cap: cfg.bodyLimit, url: sent.url, timeout: cfg.timeout);
     } catch (e, st) {
+      unhear?.call();
       return transportFailure(host, item, sent.url, e, st);
     }
+    unhear?.call();
     if (stopped) return;
     bytes += body.length;
 
@@ -1202,7 +1223,7 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     if (status >= 300 && status < 400) return redirect(host, item, sent, res);
     final replayable = _replayable(sent.method);
     if (status == 429 || status == 503) {
-      final wait = replayable ? retryAfter(res, host) : _Retry.after(streamed, item.attempt, once: true);
+      final wait = retryAfter(res, host, once: !replayable);
       if (wait == null) return refuse(host, item, res);
       pause(host, wait);
       if (item.attempt <= cfg.retries) {
@@ -1315,12 +1336,15 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     refills.remove(pump);
   }
 
+  if (cfg.pages case final max? when max <= 0) return close();
   for (final seed in cfg._seeds) {
     enqueue(_Item<T>(seed.url, none, request: seed, meta: cfg._seedMeta[seed.url] ?? const {}, seed: true));
   }
   if (cfg.sitemaps) {
     // `waiting` holds the crawl open while sitemaps are read.
-    for (final origin in {for (final s in cfg._seeds) s.url.replace(path: '/', query: null, fragment: null)}) {
+    for (final origin in {
+      for (final s in cfg._seeds) Uri(scheme: s.url.scheme, host: s.url.host, port: s.url.port, path: '/'),
+    }) {
       waiting++;
       unawaited(
         seedSitemaps(origin).catchError((Object _) {}).whenComplete(() {
@@ -1351,9 +1375,12 @@ Uri _page(Uri url) {
 /// [target] against [base], as a page; see [_page].
 Uri _resolve(Uri base, Object target) => switch (target) {
   Uri() => _page(base.resolveUri(target)),
-  String() => _page(base.resolve(target)),
+  String() => _page(base.resolve(target.trim().replaceAll(_tabOrNewline, ''))),
   _ => throw ArgumentError.value(target, 'target', 'Must be a Uri, a String href or an Element'),
 };
+
+/// Stripped from an href anywhere in it, as a browser does.
+final _tabOrNewline = RegExp('[\t\n\r]');
 
 /// Where an element links: its `href`, else its `src`.
 String? _link(Element e) => e.attributes['href'] ?? e.attributes['src'];

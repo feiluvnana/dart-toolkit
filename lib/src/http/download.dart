@@ -214,7 +214,7 @@ extension PathDownloadExtensions on Path {
   /// `If-Range`, so a changed file comes back whole rather than as a tail spliced onto the
   /// old head; a `206` not starting where the part ends is refetched whole. Under
   /// `Http.scope(retries:)` a transfer cut off half-way carries on from where it stopped.
-  Stream<DownloadProgress> _download(Uri url, _Transfer how) async* {
+  Stream<DownloadProgress> _download(Uri url, _Transfer how, Client client) async* {
     final (:headers, :overwrite, :resume, :ifModified, :checksum) = how;
     final present = await exists();
     if (present && !overwrite && !ifModified) {
@@ -227,10 +227,9 @@ extension PathDownloadExtensions on Path {
       return;
     }
 
-    final lease = _clientFor();
     final part = File('${asFile.path}.part');
     final validator = File('${asFile.path}.part.if-range');
-    final budget = switch (lease.client) {
+    final budget = switch (client) {
       final _ScopeClient scope => scope._retries,
       _ => 0,
     };
@@ -250,7 +249,7 @@ extension PathDownloadExtensions on Path {
         } else if (since != null && attempt == 0) {
           request.headers.putIfAbsent('if-modified-since', () => since);
         }
-        final streamed = await lease.client.send(request);
+        final streamed = await client.send(request);
         if (streamed.headers['last-modified'] case final lm?) lastModified = lm;
         final status = streamed.statusCode;
 
@@ -363,8 +362,6 @@ extension PathDownloadExtensions on Path {
       yield Downloaded(url, this, received);
     } catch (e) {
       yield DownloadFailed(url, this, e);
-    } finally {
-      lease.close();
     }
   }
 }
@@ -464,6 +461,11 @@ Stream<BatchDownloadProgress> _batchDownload(
     stopped = true;
     subscription?.cancel();
     final reason = _cancelled(cancelToken!);
+    // Pairs the source never gave fail too, so `N of M failed` counts every file not written.
+    if (knownTotal case final total?) {
+      completed += total - discovered;
+      failed += total - discovered;
+    }
     while (queue.isNotEmpty) {
       final item = queue.removeFirst();
       completed++;
@@ -499,8 +501,8 @@ Stream<BatchDownloadProgress> _batchDownload(
 
       late final Future<void> task;
       Future<void> transfer() async {
-        // Each file's download joins the batch's client.
-        final transfers = _withClient(lease.client, () => item.path._download(item.url, how));
+        // Passed, not zoned: an `async*` body runs in the zone that listens.
+        final transfers = item.path._download(item.url, how, lease.client);
         await for (final p in transfers) {
           if (abandoned) break;
           if (p.isDone) {

@@ -1350,7 +1350,8 @@ void main() {
 
       expect(seen, isNotEmpty);
       expect(served, lessThan(20), reason: 'the batch stopped rather than running to the end');
-      expect(seen.last.completed, lessThan(20));
+      expect(seen.last.written, lessThan(20));
+      expect(seen.last.failed, 20 - seen.last.written, reason: 'what was not written counts as failed');
     });
 
     test('the four body words read the same on Request, the verbs and follow', () async {
@@ -2239,6 +2240,7 @@ void main() {
   _nativeDecoding();
   group('scrape edge cases', _scrapeEdges);
   group('a reading implies its policy', _readings);
+  group('scope, crawl and download over real sockets', _sockets);
   group('client edge cases', () {
     late HttpServer server;
     late Uri base;
@@ -3674,5 +3676,272 @@ void _readings() {
     final body = Uint8List.fromList([1, 2, 3]);
     expect(identical(Request('POST', base, bytes: body).bytes, body), isTrue);
     expect(Request('POST', base, bytes: [1, 2]).bytes, isA<Uint8List>());
+  });
+}
+
+/// A [CancelToken] counting the listeners still registered on it.
+class _Listened extends CancelToken {
+  var live = 0;
+
+  @override
+  void Function() onCancel(void Function() listener) {
+    live++;
+    final unregister = super.onCancel(listener);
+    var gone = false;
+    return () {
+      if (!gone) live--;
+      gone = true;
+      unregister();
+    };
+  }
+}
+
+void _sockets() {
+  late HttpServer server;
+  late Uri base;
+  late List<HttpRequest> seen;
+  late List<HttpRequest> held;
+  var hangRobots = false;
+
+  Future<void> serve() async {
+    server = await HttpServer.bind('127.0.0.1', 0);
+    base = Uri.parse('http://127.0.0.1:${server.port}');
+    server.listen((req) async {
+      seen.add(req);
+      final res = req.response;
+      switch (req.uri.path) {
+        case final path when path.startsWith('/hang') || (hangRobots && path == '/robots.txt'):
+          held.add(req);
+          return;
+        case '/stall':
+          res.contentLength = 10;
+          res.add([1]);
+          await res.flush();
+          held.add(req);
+          return;
+        case '/500':
+          res.statusCode = 500;
+        case '/429':
+          res.statusCode = 429;
+          res.headers.set('retry-after', '2');
+        case '/bad-location':
+          res.statusCode = 302;
+          res.headers.set('location', 'http://[bad');
+        case '/links':
+          res.headers.contentType = ContentType.html;
+          res.write('<a href=" /a\n ">a</a><a href="http://[bad">bad</a><a href="/b">b</a>');
+        case '/etag':
+          res.headers.set('etag', '"e1"');
+          res.write('cached');
+        default:
+          res.write('ok ${req.uri.path}');
+      }
+      await res.close();
+    });
+  }
+
+  setUp(() async {
+    seen = [];
+    held = [];
+    hangRobots = false;
+    await serve();
+  });
+
+  tearDown(() async {
+    for (final req in held) {
+      try {
+        await req.response.close();
+      } catch (_) {}
+    }
+    await server.close(force: true);
+  });
+
+  int hits(String path) => seen.where((r) => r.uri.path == path).length;
+
+  test('a nested scope keeps the outer retries, and only the innermost retries', () async {
+    await Http.scope(retries: 2, () => Http.scope(headers: {'x': '1'}, () => (base / '500').get()));
+    expect(hits('/500'), 3);
+    seen.clear();
+    await Http.scope(retries: 3, () => Http.scope(retries: 1, () => (base / '500').get()));
+    expect(hits('/500'), 2);
+  });
+
+  test('a crawl timeout aborts the request, freeing its connection', () async {
+    final client = IoClient(perHost: 1);
+    addTearDown(client.close);
+    final got = await Http.scope(
+      client: client,
+      () => [base / 'hang', base / 'ok']
+          .scrape<String>()
+          .onInit(
+            (ctx) => ctx
+              ..timeout = 300.ms
+              ..perHost = 1,
+          )
+          .onResponse((ctx) => ctx.emit(ctx.url.path))
+          .toList(),
+    );
+    expect(got.rights, ['/ok']);
+    expect((got.lefts.single as RequestFailed).error, isA<TimeoutException>());
+  });
+
+  test('a robots.txt timeout aborts its request too', () async {
+    hangRobots = true;
+    final client = IoClient(perHost: 1);
+    addTearDown(client.close);
+    final got = await Http.scope(
+      client: client,
+      () => (base / 'page')
+          .scrape<String>()
+          .onInit(
+            (ctx) => ctx
+              ..timeout = 300.ms
+              ..robots = true,
+          )
+          .onResponse((ctx) => ctx.emit(ctx.url.path))
+          .rights
+          .toList(),
+    );
+    expect(got, ['/page']);
+  });
+
+  test('a scoped request leaves no listener behind, and still stops on cancel', () async {
+    final token = _Listened();
+    await Cancel.scope(token: token, () async {
+      await Http.scope(timeout: 5.s, () async {
+        for (var i = 0; i < 20; i++) {
+          await (base / 'x').get();
+        }
+      });
+    });
+    expect(token.live, 0);
+
+    for (final path in ['hang', 'stall']) {
+      final stop = CancelToken();
+      Timer(200.ms, stop.cancel);
+      final watch = Stopwatch()..start();
+      await expectLater(
+        Cancel.scope(token: stop, () => Http.scope(timeout: 5.s, () => (base / path).get())),
+        throwsA(isA<CancelledException>()),
+      );
+      expect(watch.elapsed, lessThan(2.s), reason: path);
+    }
+  });
+
+  test('a cache file is closed when the send fails', () async {
+    final probe = await Process.run('lsof', ['-v']).then<bool>((_) => true, onError: (Object _) => false);
+    if (!probe) return markTestSkipped('needs lsof');
+    final dir = Directory.systemTemp.createTempSync('cache');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    await Http.scope(cache: Path(dir.path), () => (base / 'etag').get());
+    await server.close(force: true);
+    await Http.scope(cache: Path(dir.path), () async {
+      for (var i = 0; i < 3; i++) {
+        await expectLater((base / 'etag').get(), throwsA(anything));
+      }
+    });
+    final open = (await Process.run('lsof', ['-p', '$pid'])).stdout as String;
+    expect(open.split('\n').where((l) => l.contains(dir.path)), isEmpty);
+  }, skip: Platform.isWindows ? 'needs lsof' : false);
+
+  test('robots.txt and the sitemap are asked of the origin, not the seed\'s query', () async {
+    await base
+        .replace(path: '/s', query: 'q=1', fragment: 'f')
+        .scrape<String>()
+        .onInit(
+          (ctx) => ctx
+            ..robots = true
+            ..sitemaps = true,
+        )
+        .toList();
+    expect([for (final r in seen) '${r.uri}'], containsAll(['/robots.txt', '/sitemap.xml', '/s?q=1']));
+  });
+
+  test('an href is cleaned as a browser does, and an unparseable one is dropped', () async {
+    ScrapeSummary? summary;
+    final got = await (base / 'links')
+        .scrape<String>()
+        .onResponse((ctx) {
+          ctx.emit(ctx.url.path);
+          if (ctx.depth == 0) ctx.follow(ctx.html.$('a'));
+        })
+        .onFinish((s) => summary = s)
+        .toList();
+    expect(got.lefts, isEmpty);
+    expect(got.rights, ['/links', '/a', '/b']);
+    expect(summary!.dropped, 1);
+  });
+
+  test('an unparseable Location is a failure the error hook hears', () async {
+    final failures = <ScrapeFailure>[];
+    final got = await (base / 'bad-location').scrape<String>().onError((ctx) => failures.add(ctx.failure)).toList();
+    expect((failures.single as RequestFailed).error, isA<FormatException>());
+    expect(got.lefts.single, same(failures.single));
+  });
+
+  test('a crawl cancelled during an async onInit sends nothing', () async {
+    final sub = base.scrape<String>().onInit((ctx) => Future<void>.delayed(200.ms)).listen((_) {});
+    await Future<void>.delayed(50.ms);
+    await sub.cancel();
+    await Future<void>.delayed(400.ms);
+    expect(seen, isEmpty);
+  });
+
+  test('a batch outside a scope shares one client', () async {
+    final dir = Directory.systemTemp.createTempSync('batch');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final pairs = [for (var i = 0; i < 4; i++) (url: base / 'f$i', path: Path('${dir.path}/f$i'))];
+    await pairs.download(concurrency: 1).toList();
+    expect({for (final r in seen) r.connectionInfo!.remotePort}, hasLength(1));
+  });
+
+  test('pages: 0 ends the crawl at once', () async {
+    ScrapeSummary? summary;
+    final got = await base
+        .scrape<String>()
+        .onInit((ctx) => ctx.pages = 0)
+        .onFinish((s) => summary = s)
+        .toList()
+        .timeout(3.s);
+    expect(got, isEmpty);
+    expect(summary!.requests, 0);
+    expect(seen, isEmpty);
+  });
+
+  test('a cancelled batch counts every file it did not write as failed', () async {
+    final dir = Directory.systemTemp.createTempSync('batch');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final pairs = [for (var i = 0; i < 40; i++) (url: base / 'hang$i', path: Path('${dir.path}/h$i'))];
+    final stop = CancelToken();
+    Timer(300.ms, stop.cancel);
+    BatchDownloadProgress? last;
+    await Cancel.scope(token: stop, () async {
+      await for (final p in pairs.download(concurrency: 2)) {
+        last = p;
+      }
+    });
+    expect((last!.completed, last!.total, last!.failed), (40, 40, 40));
+  });
+
+  test('a segment with a colon stays a path segment', () {
+    final api = 'https://x.com/api?k=1'.url;
+    expect('${api / 'projects:batchGet'}', 'https://x.com/api/projects:batchGet');
+    expect('${api / 'https://y.com/z'}', 'https://y.com/z');
+    expect('${api / '../up'}', 'https://x.com/up');
+  });
+
+  test('a POST told to come back is held to maxRetryAfter', () async {
+    final watch = Stopwatch()..start();
+    final got = await [Request('POST', base / '429', text: 'x')]
+        .scrape<String>()
+        .onInit(
+          (ctx) => ctx
+            ..retries = 2
+            ..maxRetryAfter = 1.s,
+        )
+        .toList();
+    expect(got.lefts.single, isA<StatusFailed>());
+    expect(hits('/429'), 1);
+    expect(watch.elapsed, lessThan(1.s));
   });
 }
