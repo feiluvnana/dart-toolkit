@@ -8,6 +8,16 @@ import 'package:test/test.dart';
 
 void main() {
   group('Cancel.scope', () {
+    test('an outer scope cancels the inner one, not the shared token it was given', () async {
+      final shared = CancelToken(), outer = CancelToken();
+      Timer(Duration.zero, outer.cancel);
+      await expectLater(
+        Cancel.scope(() => Cancel.scope(() => 2.s.delay(), token: shared), token: outer),
+        throwsA(isA<CancelledException>()),
+      );
+      expect(shared.isCancelled, isFalse);
+    });
+
     test('the token is ambient: retry and cancellable find it without being passed one', () async {
       final stop = CancelToken();
       var attempts = 0;
@@ -79,8 +89,13 @@ void main() {
       final inner = CancelToken();
       await Cancel.scope(() async {
         expect(Cancel.token, same(outer));
-        await Cancel.scope(() async => expect(Cancel.token, same(inner)), token: inner);
+        await Cancel.scope(() async {
+          expect(Cancel.token, isNot(same(outer)));
+          inner.cancel('inner');
+          expect(Cancel.reason, 'inner');
+        }, token: inner);
         expect(Cancel.token, same(outer));
+        expect(outer.isCancelled, isFalse);
       }, token: outer);
     });
 
@@ -723,6 +738,32 @@ void main() {
       expect(await pool.run(0), 0, reason: 'the killed isolate was replaced');
     });
 
+    test('a replacement that fails to start fails the queue, not hangs it, and close completes', () async {
+      for (final closing in [false, true]) {
+        final marker = File('${Directory.systemTemp.createTempSync('pool').path}/fail');
+        final pool = await Pool.spawn(() => _Fragile(marker.path), size: 1);
+        marker.writeAsStringSync(''); // every worker started from here on fails its init
+        final runs = [
+          for (final i in [0, 1, 2]) pool.run(i).then<Object>((v) => v, onError: (Object e) => e),
+        ];
+        await runs.first;
+        if (closing) await pool.close().timeout(3.s);
+        final rest = await Future.wait(runs.skip(1)).timeout(3.s);
+        expect(rest, everyElement(isStateError), reason: 'closing: $closing');
+        marker.parent.deleteSync(recursive: true);
+      }
+    });
+
+    test('a scope cancelled while a lane spawns its isolate runs nothing', () async {
+      final token = CancelToken();
+      Timer(Duration.zero, token.cancel);
+      final watch = Stopwatch()..start();
+      final out = await Cancel.scope(() => [2, 2].parallelize(_sleepFor, isolate: true, concurrency: 1), token: token);
+      expect(watch.elapsed, lessThan(1500.ms));
+      expect(out.lefts, everyElement(isA<CancelledException>()));
+      expect(out.rights, isEmpty);
+    });
+
     test('map keeps at most size items in flight', () async {
       final pool = await Pool.spawn(_Tracking.new, size: 2, isolate: false);
       addTearDown(pool.close);
@@ -882,6 +923,29 @@ void main() {
 }
 
 int _double(int x) => x * 2;
+
+int _sleepFor(int seconds) {
+  sleep(Duration(seconds: seconds));
+  return seconds;
+}
+
+/// Fails its init once [marker] exists; item 0 ends its isolate.
+final class _Fragile extends Worker<int, int> {
+  final String marker;
+
+  _Fragile(this.marker);
+
+  @override
+  void init() {
+    if (File(marker).existsSync()) throw StateError('no replacement');
+  }
+
+  @override
+  int run(int item) {
+    if (item == 0) Isolate.exit();
+    return item;
+  }
+}
 
 final class _Counting extends Worker<int, (int, int)> {
   static var inits = 0;

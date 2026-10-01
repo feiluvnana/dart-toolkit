@@ -58,8 +58,10 @@ class Env {
       var value = line.substring(eqIdx + 1).trim();
       if (key.isEmpty) continue;
       if (value.startsWith('"') || value.startsWith("'")) {
-        // A quote that never closes is the line's own text.
-        if (_parseQuoted(lines, n, value) case final res?) {
+        // A quote that never closes is the line's own text. The raw tail keeps the trailing
+        // whitespace a multi-line value's first line has.
+        final raw = lines[n].substring(lines[n].indexOf('=') + 1).trimLeft();
+        if (_parseQuoted(lines, n, raw) case final res?) {
           value = res.value;
           n = res.endLine;
         }
@@ -76,12 +78,16 @@ class Env {
   }
 
   /// The unescaped quoted [value] opened on [startLine] and the line it closes on, or `null`.
+  ///
+  /// As in dotenv, a value spans lines only when its closing quote ends a line (a comment may
+  /// follow), so a stray quote further down does not swallow the lines between.
   static ({String value, int endLine})? _parseQuoted(List<String> lines, int startLine, String value) {
     if (value.startsWith("'")) {
       for (var l = startLine; l < lines.length; l++) {
         final c = l == startLine ? value.indexOf("'", 1) : lines[l].indexOf("'");
         if (c == -1) continue;
         if (l == startLine) return (value: value.substring(1, c), endLine: l);
+        if (!_endsLine(lines[l].substring(c + 1))) return null;
         final body = [value.substring(1), ...lines.getRange(startLine + 1, l), lines[l].substring(0, c)];
         return (value: body.join('\n'), endLine: l);
       }
@@ -104,6 +110,7 @@ class Env {
         } else if (c == r'\') {
           escaped = true;
         } else if (c == '"') {
+          if (l > startLine && !_endsLine(text.substring(i + 1))) return null;
           return (value: out.toString(), endLine: l);
         } else {
           out.write(c);
@@ -111,6 +118,12 @@ class Env {
       }
     }
     return null;
+  }
+
+  /// Whether [rest], after a closing quote, is only whitespace or a comment.
+  static bool _endsLine(String rest) {
+    final tail = rest.trim();
+    return tail.isEmpty || tail.startsWith('#');
   }
 
   /// [parse]s the `.env` file at [path], if it exists.

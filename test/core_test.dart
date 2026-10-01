@@ -281,6 +281,18 @@ SINGLE_QUOTED='single quote value'
       });
     });
 
+    test('.env: a value spans lines only to a quote that ends a line, keeping its whitespace', () {
+      final parsed = Env.parse('F="open\nG=1\nH="tab" x\nL="  first   \n  next"\nS=\'a\nT=\'b\' c', override: true);
+      expect(parsed, {'F': '"open', 'G': '1', 'H': 'tab', 'L': '  first   \n  next', 'S': "'a", 'T': 'b'});
+    });
+
+    test('humanBytes picks the unit after rounding', () {
+      expect(1048575.humanBytes, '1.0 MB');
+      expect(1023.7.humanBytes, '1.0 KB');
+      expect((1024 * 1024 * 1024 - 1).humanBytes, '1.0 GB');
+      expect(1023.humanBytes, '1023 B');
+    });
+
     test('Env.parse handles unclosed quotes without quadratic blowup', () {
       final input = 'UNCLOSED="start of value\n${List.filled(5000, 'KEY=val').join('\n')}';
       final watch = Stopwatch()..start();

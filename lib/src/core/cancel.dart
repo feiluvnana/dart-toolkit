@@ -39,15 +39,20 @@ class Cancel {
   /// Runs [body] with [token] — or a fresh one — as the ambient token.
   ///
   /// A nested scope is cancelled with the outer one, so library code opening its own scope
-  /// under `Cli.run` still stops on ^C. [timeout] cancels it after that long. The token is not
-  /// cancelled on the way out, so one shared between scopes keeps working.
+  /// under `Cli.run` still stops on ^C. [timeout] cancels it after that long. Neither reaches
+  /// [token] itself (the ambient token is then a fresh one that [token] cancels), nor does the
+  /// way out, so one shared between scopes keeps working.
   ///
   /// ```dart
   /// await Cancel.scope(() => page.download(), timeout: 5.s);
   /// ```
   static Future<T> scope<T>(FutureOr<T> Function() body, {CancelToken? token, Duration? timeout}) async {
     final outer = Cancel.token;
-    final own = (token != null && timeout != null) ? CancelToken() : (token ?? CancelToken());
+    // A linked token of its own whenever something else could cancel it: an outer scope or a
+    // timeout must not cancel a caller's shared token for good.
+    final own = (token != null && timeout == null && (outer == null || identical(outer, token)))
+        ? token
+        : CancelToken();
     final unlinks = <void Function()>[];
     if (token != null && !identical(token, own)) {
       unlinks.add(token.onCancel(() => own.cancel(token.reason)));
