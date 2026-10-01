@@ -16,6 +16,11 @@ This document defines the structured, three-round auditing and refinement workfl
 3. **Full Stack & Cross-Platform Scope**:
    - Audits cover the entire repository: Dart libraries (`lib/`), CLI tools (`bin/`), test suites (`test/`), internal tooling (`tool/`), specifications (`CONVENTIONS.md`, `GUIDE.md`), and native Rust FFI code (`native/src/*.rs`, `Cargo.toml`).
    - Cross-platform parity (Windows cmd/PowerShell vs. POSIX bash, path separators, file locking, and line endings) is a primary requirement.
+4. **Benchmark Guardrail**:
+   - Any performance refactor proposed by Subagent 1.3 must be benchmarked using `dart run tool/bench.dart`. If performance gains are negligible (<5%) but readability or maintainability suffers, reject the change.
+5. **Model Tiering for Efficiency**:
+   - Spawning subagents for scanning and auditing should use fast, wide-context models (`Model: 'flash'`).
+   - Complex code implementation, architectural synthesis, and triage at Gates 1, 2, and 3 run on `inherit` (or `pro`).
 
 ---
 
@@ -23,40 +28,43 @@ This document defines the structured, three-round auditing and refinement workfl
 
 ```mermaid
 flowchart TD
-    subgraph Round 1: Foundation & Defect Audits
-        A1["Subagent 1.1: Features & Ergonomics\n(AUDIT_FEATURES.md)"]
-        A2["Subagent 1.2: Bloat & Simplification\n(AUDIT_BLOAT.md)"]
-        A3["Subagent 1.3: Performance & FFI\n(AUDIT_PERFORMANCE.md)"]
-        A4["Subagent 1.4: Conventions & Docs Defects\n(AUDIT_CONVENTIONS.md)"]
+    S0["Step 0: Baseline Health Check\n(dart analyze, dart test, native build)"] --> R1
+
+    subgraph R1["Round 1: Foundation & Defect Audits (Parallel 'flash' Subagents)"]
+        A1["Subagent 1.1: Features & Ergonomics\n(AUDIT_FEATURES.md)\nFocus: Public facades & APIs"]
+        A2["Subagent 1.2: Bloat & Simplification\n(AUDIT_BLOAT.md)\nFocus: SDK extensions & dead code"]
+        A3["Subagent 1.3: Performance & FFI\n(AUDIT_PERFORMANCE.md)\nFocus: Rust native, I/O & memory"]
+        A4["Subagent 1.4: Conventions & Docs Defects\n(AUDIT_CONVENTIONS.md)\nFocus: Specs, docstrings & guides"]
     end
 
-    G1{"Gate 1: Triage, Clean Cut & Implement Round 1"}
+    R1 --> G1{"Gate 1: Triage & Phased Clean Cuts\n1. Deduplicate & Triage\n2. Batch A: Pure Deletions\n3. Batch B: Internal Refactors & FFI\n4. Batch C: Essential Additions\n5. Bench & Test Verification"}
 
-    subgraph Round 2: Design & Consistency
-        B1["Subagent 2.1: Brevity & Discoverability\n(AUDIT_DISCOVERABILITY.md)"]
-        B2["Subagent 2.2: Architectural Consistency\n(AUDIT_CONSISTENCY.md)"]
+    subgraph R2["Round 2: Design & Consistency (Parallel 'flash' Subagents)"]
+        B1["Subagent 2.1: Brevity & Discoverability\n(AUDIT_DISCOVERABILITY.md)\nFocus: Autocomplete facades & syntax"]
+        B2["Subagent 2.2: Architectural Consistency\n(AUDIT_CONSISTENCY.md)\nFocus: Naming, params & return types"]
     end
 
-    G2{"Gate 2: Triage & Harmonize Round 2"}
+    G1 --> R2
+    R2 --> G2{"Gate 2: API Harmonization & Doc Drift Guard\n1. Apply clean renames & alignments\n2. Sync GUIDE.md, README.md, docstrings\n3. Verify analyze & tests"}
 
-    subgraph Round 3: Bug Fixing & Hardening
+    subgraph R3["Round 3: Bug Fixing & Hardening"]
         C1["Cross-Platform Verification & Edge Cases\n(Windows vs. POSIX, Race Conditions)"]
-        C2["Verification Suite: dart analyze & full test run"]
+        C2["Full Verification: dart analyze & full test run"]
         C3["Git Commit & Push"]
     end
 
-    A1 --> G1
-    A2 --> G1
-    A3 --> G1
-    A4 --> G1
-    G1 --> B1
-    G1 --> B2
-    B1 --> G2
-    B2 --> G2
-    G2 --> C1
-    C1 --> C2
-    C2 --> C3
+    G2 --> R3
 ```
+
+---
+
+## Step 0: Baseline Health Check
+
+Before spawning subagents:
+1. Run `dart analyze` to ensure zero pre-existing compilation issues.
+2. Run `dart test` to ensure the baseline test suite passes.
+3. If native library binaries are missing or outdated, run `dart run tool/build_native.dart`.
+4. Run `dart run tool/bench.dart` to establish baseline timing numbers.
 
 ---
 
@@ -77,11 +85,14 @@ All subagents **must** format every finding in their respective `AUDIT_*.md` fil
 
 ## Round 1: Foundation Audits (Parallel Subagents)
 
-The lead agent spawns four independent subagents concurrently. Each subagent reads the relevant parts of the codebase, native Rust code, documentation, and conventions, writing its findings to its designated output file.
+The lead agent spawns four independent subagents concurrently (`Model: 'flash'`). To eliminate redundant scanning overhead, each subagent is assigned a targeted domain:
 
 ### Subagent 1.1: Missing Features & API Ergonomics
 - **Role**: `Feature & Ergonomics Auditor`
 - **Output Target**: `AUDIT_FEATURES.md`
+- **Target Matrix**:
+  - Public facades: `lib/*.dart`
+  - High-level domains: `lib/src/http/`, `lib/src/formats/`, `lib/src/chrome/`, `lib/src/cli/`
 - **Scope**:
   - Identify missing capabilities compared to modern toolkits (e.g. streaming transformations, HTTP verb coverage, compression formats, XPath/DOM queries).
   - Identify clunky, verbose, or high-friction API signatures (redundant parameter requirements, lack of factory constructors, awkward type conversions).
@@ -90,6 +101,9 @@ The lead agent spawns four independent subagents concurrently. Each subagent rea
 ### Subagent 1.2: Bloat & Code Simplification
 - **Role**: `Bloat & Simplification Auditor`
 - **Output Target**: `AUDIT_BLOAT.md`
+- **Target Matrix**:
+  - Core type extensions: `lib/src/core/`, `lib/src/fs/path.dart`
+  - Internal abstractions: `lib/src/async/`, `lib/src/collection/`, `lib/src/process/`
 - **Scope**:
   - Identify loose extensions on primitive SDK types (`String`, `List`, `Map`, `int`) that pollute global autocompletion without strong justification.
   - Identify redundant methods, unnecessary overloads, duplicate helper classes, and dead code paths.
@@ -98,38 +112,55 @@ The lead agent spawns four independent subagents concurrently. Each subagent rea
 ### Subagent 1.3: Performance & Native FFI Optimization
 - **Role**: `Performance & FFI Auditor`
 - **Output Target**: `AUDIT_PERFORMANCE.md`
+- **Target Matrix**:
+  - Native Rust code: `native/src/*.rs`, `native/Cargo.toml`
+  - FFI boundaries & workers: `lib/src/hash/native.dart`, `lib/src/fs/archive.dart`, `lib/src/async/pool.dart`
+  - Hot loops & I/O pipelines: `lib/src/fs/`, `lib/src/process/`
 - **Scope**:
   - Identify hot-path bottlenecks, unnecessary intermediate memory allocations, and redundant buffer copies.
-  - Review the native Rust layer (`native/src/*.rs`, `Cargo.toml`) and the Dart FFI boundary (`NativeBridge`, pointer allocations, worker isolate boundaries).
-  - Evaluate I/O performance: file stream chunking, socket buffering, and process pipeline backpressure.
-  - Propose algorithmic and memory optimizations with quantified impact.
+  - Review pointer allocations (`NativeBridge.alloc`), copying overhead, and isolate boundary costs.
+  - Verify findings against `tool/bench.dart` metrics.
 
 ### Subagent 1.4: Conventions & Documentation Defects
 - **Role**: `Conventions & Specs Auditor`
 - **Output Target**: `AUDIT_CONVENTIONS.md`
+- **Target Matrix**:
+  - Guidelines & documentation: `CONVENTIONS.md`, `GUIDE.md`, `README.md`
+  - Public docstrings: library-level and class-level doc comments across all `lib/*.dart` and `lib/src/`
 - **Scope**:
-  - Audit `CONVENTIONS.md`, `GUIDE.md`, `README.md`, and top-level library docstrings for internal defects, obsolete advice, and self-contradictory rules.
+  - Audit `CONVENTIONS.md`, `GUIDE.md`, `README.md`, and docstrings for internal defects, obsolete advice, and self-contradictory rules.
   - Scrutinize whether any written conventions are themselves defective, dogmatic, or counter-productive (e.g. banning necessary abstractions, enforcing brittle patterns, or assuming POSIX-only environments).
   - Identify gaps where conventions are silent or ambiguous, causing divergent implementations across modules.
   - Validate that documented code snippets match actual current runtime signatures and behavior.
 
 ---
 
-## Gate 1: Implementation & Clean-Cut Consolidation
+## Gate 1: Implementation & Phased Clean Cuts
 
-Before proceeding to Round 2:
-1. The lead agent reviews `AUDIT_FEATURES.md`, `AUDIT_BLOAT.md`, `AUDIT_PERFORMANCE.md`, and `AUDIT_CONVENTIONS.md`.
-2. Apply the **Gate 1 Triage Priority Rule**: resolve conflicts favoring bloat removal and clean ergonomics over speculative additions.
-3. Apply the **Clean-Cut Policy**: remove dead/bloated code immediately without `@Deprecated` shims. Refactor call sites across `lib/`, `bin/`, `tool/`, and `test/`.
-4. Update `CONVENTIONS.md`, `GUIDE.md`, and docstrings to correct any defects found in Subagent 1.4.
-5. Validate compilation and tests (`dart analyze`, `dart test`).
-6. Remove intermediate Round 1 audit files once all accepted changes are committed.
+Before proceeding to Round 2, the lead agent executes a phased consolidation:
+
+1. **Deduplication & Triage (5 mins)**:
+   - Merge overlapping findings across the four `AUDIT_*.md` files.
+   - Apply the **Gate 1 Triage Priority Rule**: Bloat Pruning > Ergonomics > Performance > Speculative Features.
+2. **Batch A (Pure Deletions & Clean Cuts)**:
+   - Delete dead code, duplicate helpers, and polluting extensions immediately without `@Deprecated` shims.
+   - Verify with `dart analyze` and `dart test`.
+3. **Batch B (Internal Refactors & FFI Optimizations)**:
+   - Apply accepted performance improvements and FFI memory optimizations.
+   - Benchmark with `dart run tool/bench.dart` to verify real gains.
+   - Verify with `dart test`.
+4. **Batch C (Essential Feature Additions)**:
+   - Implement accepted high-value ergonomic additions with accompanying tests.
+   - Update `CONVENTIONS.md` to fix any spec defects.
+   - Verify with `dart test`.
+5. **Clean Up**:
+   - Delete intermediate Round 1 audit files once all accepted items are committed.
 
 ---
 
 ## Round 2: API Refinement & Consistency (Parallel Subagents)
 
-Once the core foundation, bloat, performance, and conventions have been resolved in Round 1, the lead agent spawns two focused subagents to polish the public API.
+Once the core foundation, bloat, performance, and conventions have been resolved in Round 1, the lead agent spawns two focused subagents (`Model: 'flash'`).
 
 ### Subagent 2.1: API Brevity & Discoverability
 - **Role**: `Discoverability Auditor`
@@ -150,12 +181,14 @@ Once the core foundation, bloat, performance, and conventions have been resolved
 
 ---
 
-## Gate 2: Implementation & Harmonization
+## Gate 2: Implementation & Doc Drift Guard
 
 Before proceeding to Round 3:
 1. The lead agent reviews `AUDIT_DISCOVERABILITY.md` and `AUDIT_CONSISTENCY.md`.
 2. Apply API renames, facade additions, and consistency alignments (clean cuts only, no deprecated shims).
-3. Update tests and documentation to reflect harmonized conventions.
+3. **Documentation Drift Guard**:
+   - Update all examples in `GUIDE.md`, `README.md`, and docstrings to reflect new names and signatures.
+   - Verify no outdated API references remain.
 4. Verify with `dart analyze` and relevant test suites.
 5. Clean up Round 2 audit files.
 
@@ -164,7 +197,7 @@ Before proceeding to Round 3:
 ## Round 3: Bug Fixing & Hardening
 
 Round 3 focuses on correctness, reliability, and edge-case testing:
-1. **Edge Case Resolution**:
+1. **Edge Case & Cross-Platform Resolution**:
    - Address silent failures, unhandled stream cancellations, and race conditions.
    - Audit cross-platform compatibility:
      - Windows cmd/PowerShell built-ins, batch files, quoting rules, and AutoRun registry immunity (`/d /c`).
