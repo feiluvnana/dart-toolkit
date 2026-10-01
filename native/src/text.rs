@@ -1,9 +1,6 @@
-//! Legacy charsets for HTTP bodies: Shift_JIS, EUC-JP, GBK, Big5, EUC-KR, the ISO-8859 and
-//! windows code pages, KOI8 and the rest of the WHATWG Encoding Standard — the table every
-//! browser reads a page with, which is what `encoding_rs` is.
-//!
-//! Decode only. UTF-8 and windows-1252, the two a crawl meets almost always, stay in Dart; this
-//! is for the long tail, where the alternative was a page of U+FFFD.
+//! Legacy charsets for HTTP bodies (Shift_JIS, GBK, Big5, EUC-KR, KOI8, …): the WHATWG
+//! Encoding Standard via `encoding_rs`. Decode only; UTF-8 and windows-1252 stay in Dart.
+
 
 use crate::{bytes, give, guard, text};
 

@@ -17,7 +17,7 @@ LIB := $(if $(findstring macos,$(TARGET)),libdart_toolkit_native.dylib,$(if $(fi
 # Another OS links through zig; another mac architecture links with Apple's own toolchain.
 CARGO := $(if $(and $(RUST_TARGET),$(if $(findstring darwin,$(RUST_TARGET)),,cross)),cargo zigbuild,cargo build)
 
-.PHONY: all check format analyze deps test native native-clean audit bench startup release clean
+.PHONY: all check format analyze test native native-clean audit bench startup release clean
 
 all: check test
 
@@ -45,7 +45,7 @@ native-clean:
 	cd native && cargo clean
 
 ## The archive parsers read files from the internet, so the release checks them for advisories.
-## `cargo install cargo-audit` if it is missing; the target says so rather than failing silently.
+
 audit:
 	@command -v cargo-audit >/dev/null 2>&1 \
 		&& (cd native && cargo audit) \

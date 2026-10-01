@@ -4,13 +4,11 @@
 //! 5 sha512, 6 sha512/256, 7 sha3-224, 8 sha3-256, 9 sha3-384, 10 sha3-512, 11 keccak256,
 //! 12 blake2s, 13 blake2b, 14 blake3, 15 ripemd160, 16 crc32, 17 crc32c, 18 xxh64, 19 xxh3.
 //!
-//! A MAC is a digest with a key, and runs through the same handle: `tk_mac_new` makes one,
-//! `tk_digest_file` and `tk_digest_final` feed and finish either. HMAC is
-//! the construction for everything but the BLAKE family, which is specified with a keyed mode
-//! of its own and uses it: BLAKE2 takes a key of up to its block size, BLAKE3 exactly 32 bytes.
+//! A MAC runs through the same handle as a digest (`tk_mac_new`, then `tk_digest_file` and
+//! `tk_digest_final`). It is HMAC except for BLAKE, which uses its own keyed mode: BLAKE2 a
+//! key up to its block size, BLAKE3 exactly 32 bytes.
 //!
-//! Every function that writes into a caller buffer takes its capacity and refuses to
-//! overrun it, and every entry point runs inside `guard` so a panic cannot cross the ABI.
+//! Caller buffers carry their capacity, and every entry point runs inside `guard`.
 
 use crate::{bytes, bytes_mut, guard, text, Handle, Msg};
 use digest::{Digest, DynDigest, KeyInit};
@@ -62,7 +60,6 @@ impl<M: Mac + 'static> DynMac for M {
     }
 }
 
-// ---- Digests and checksums, streaming
 
 enum Running {
     Dyn(Box<dyn DynDigest>),
@@ -237,9 +234,9 @@ pub unsafe extern "C" fn tk_digest(alg: u32, data: *const u8, len: usize, out: *
 }
 
 /// The digests of many files at once, on every core: `paths` is their UTF-8 names joined by
-/// NUL, and the digests land in `out` back to back in the same order. Returns how many.
-/// One file that cannot be read fails the call, naming it — an empty name too, which is a file
-/// that does not exist and not one to skip: skipping it moved every later digest up a place.
+/// NUL, and the digests land in `out` back to back in the same order. Returns how many. One
+/// unreadable file fails the call, an empty name included: skipping it would shift every
+/// later digest.
 #[no_mangle]
 pub unsafe extern "C" fn tk_digest_files(alg: u32, paths: *const u8, plen: usize, out: *mut u8, cap: usize) -> i32 {
     guard(|| {
@@ -260,7 +257,7 @@ pub unsafe extern "C" fn tk_digest_files(alg: u32, paths: *const u8, plen: usize
     })
 }
 
-// ---- MACs
+
 
 /// Copies `data` into `out`, refusing rather than overrunning when `cap` is too small.
 fn put(out: *mut u8, cap: usize, data: &[u8]) -> Result<i32, String> {

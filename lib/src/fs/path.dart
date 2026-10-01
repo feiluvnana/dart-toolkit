@@ -6,12 +6,12 @@ final _whitespaceCollapse = RegExp(r'\s+');
 final _braceSlash = RegExp(r'\{[^}]*/');
 final _classEscape = RegExp(r'[\\^\[]');
 
-/// Represents the type of filesystem entity at a [Path].
+/// The type of filesystem entity at a [Path].
 ///
 /// {@category Files}
 enum PathType { file, dir, link, none }
 
-/// A path representation on top of [String] with canonical normalization and filesystem helpers.
+/// A filesystem path that is also a [String], with path and filesystem helpers.
 ///
 /// {@category Files}
 extension type const Path(String path) implements String {
@@ -21,8 +21,8 @@ extension type const Path(String path) implements String {
   /// The system temporary directory. For a directory of your own, see [tempDir].
   static Path get temp => Path(Directory.systemTemp.path);
 
-  /// Runs [body] with a fresh, empty directory under [temp], deletes it and everything in it
-  /// afterwards — whether [body] returned or threw — and returns what [body] returned.
+  /// Runs [body] with a fresh, empty directory under [temp], deleted afterwards whether
+  /// [body] returned or threw, and returns what [body] returned.
   ///
   /// ```dart
   /// final names = await Path.tempDir((dir) async {
@@ -35,8 +35,7 @@ extension type const Path(String path) implements String {
     try {
       return await body(dir);
     } finally {
-      // A failed cleanup leaves a folder in the system temp; it must not replace what [body]
-      // returned or threw.
+      // A failed cleanup must not replace what [body] returned or threw.
       await dir.delete(recursive: true).catchError((Object _) {});
     }
   }
@@ -49,9 +48,8 @@ extension type const Path(String path) implements String {
 
   /// The canonical form of this path, with `.` and `..` segments resolved.
   ///
-  /// `Path` is an extension type over [String] and so cannot override `==`:
-  /// `Path('/a/b/../b')` and `Path('/a/b')` are distinct map keys. **Normalize at
-  /// map boundaries** — `map[p.normalized]` — to make them coincide.
+  /// An extension type cannot override `==`, so `Path('/a/b/../b')` and `Path('/a/b')` are
+  /// distinct map keys: normalize at map boundaries, `map[p.normalized]`.
   Path get normalized => Path(p.normalize(path));
 
   /// The final component of this path (e.g. `'song.mp3'` or `'folder'`).
@@ -96,16 +94,16 @@ extension type const Path(String path) implements String {
   /// This path as a [Directory]. See [dirs] for the directories *inside* it.
   Directory get asDir => Directory(path);
 
-  /// Returns the current entity type.
+  /// The entity type here; a link is not followed.
   Future<PathType> type() async => _pathType(await FileSystemEntity.type(path, followLinks: false));
 
-  /// Checks if this path exists on disk.
+  /// Whether anything, a dangling link included, is at this path.
   Future<bool> exists() async => await type() != PathType.none;
 
-  /// Returns the current entity type synchronously.
+  /// The entity type here, synchronously.
   PathType typeSync() => _pathType(FileSystemEntity.typeSync(path, followLinks: false));
 
-  /// Checks synchronously if this path exists on disk.
+  /// Whether anything is at this path, synchronously.
   bool existsSync() => typeSync() != PathType.none;
 
   /// When this file or directory was last modified.
@@ -116,16 +114,10 @@ extension type const Path(String path) implements String {
 
   /// Whether this was last modified more than [age] ago, or is not there at all — the
   /// question a cache asks: `if (await cache.olderThan(1.h)) refresh();`.
-  Future<bool> olderThan(Duration age) async {
-    final stat = await FileStat.stat(path);
-    return stat.type == FileSystemEntityType.notFound || DateTime.now().difference(stat.modified) > age;
-  }
+  Future<bool> olderThan(Duration age) async => _older(await FileStat.stat(path), age);
 
   /// Whether this was last modified more than [age] ago, or is not there; see [olderThan].
-  bool olderThanSync(Duration age) {
-    final stat = FileStat.statSync(path);
-    return stat.type == FileSystemEntityType.notFound || DateTime.now().difference(stat.modified) > age;
-  }
+  bool olderThanSync(Duration age) => _older(FileStat.statSync(path), age);
 
   /// Creates this file if it does not exist, else sets its modification time to now.
   Future<File> touch() async {
@@ -137,7 +129,7 @@ extension type const Path(String path) implements String {
     return asFile.create();
   }
 
-  /// Creates this file if it does not exist, else sets its modification time to now.
+  /// [touch], synchronously.
   File touchSync() {
     if (asFile.existsSync()) {
       asFile.setLastModifiedSync(DateTime.now());
@@ -158,32 +150,27 @@ extension type const Path(String path) implements String {
   /// Sets this path's permission bits synchronously; see [chmod].
   void chmodSync(String mode) => _chmod(path, _modeOf(mode, path));
 
-  /// Calculates the file size or recursive directory size in bytes.
+  /// The size in bytes of this file, or of everything under this directory.
   ///
-  /// A link is measured as what it points at, as `du -L` does for the path it is given;
-  /// links met inside a directory are not followed, so nothing is counted twice.
-  ///
-  /// A directory is walked in a worker isolate: a stat per file is far faster there than as
-  /// one `await` each.
+  /// This path is followed if it is a link; links inside a directory are not, so nothing is
+  /// counted twice. A directory is walked in a worker isolate, a sync stat per file.
   Future<int> size() async => switch (_pathType(await FileSystemEntity.type(path))) {
     PathType.file => await asFile.length(),
-    PathType.dir => await _isolate(_dirSize, path),
+    PathType.dir => await Isolate.run(() => _dirSize(path)),
     _ => 0,
   };
 
-  /// Calculates the file size or recursive directory size in bytes synchronously.
+  /// [size], synchronously.
   int sizeSync() => switch (_pathType(FileSystemEntity.typeSync(path))) {
     PathType.file => asFile.lengthSync(),
     PathType.dir => _dirSize(path),
     _ => 0,
   };
 
-  /// This path with invalid filesystem characters replaced in every component.
-  ///
-  /// Separators survive, because this is a path. For a single component — a scraped
-  /// title that may contain `/` — use [StringPathExtensions.filename].
+  /// This path with invalid filesystem characters replaced in every component; separators
+  /// survive. For a single component use [StringPathExtensions.filename].
   Path get sanitized {
-    // The root — `/`, `C:\`, `\\server\share` — is kept whole: it is the one place a `:` belongs.
+    // The root (`/`, `C:\`, `\\server\share`) is the one place a `:` belongs.
     final root = p.rootPrefix(path);
     return Path(
       root +
@@ -216,23 +203,20 @@ extension type const Path(String path) implements String {
   /// Reads this file as a list of lines synchronously.
   List<String> readLinesSync({Encoding encoding = utf8}) => asFile.readAsLinesSync(encoding: encoding);
 
-  /// Writes [content] string to this file, creating parent directories if not present.
+  /// Writes [content] to this file, creating parent directories if not present.
   ///
-  /// The write is atomic: the bytes go to a temporary file beside this one, which is then
-  /// renamed over it, so a reader — or a ^C halfway — sees the old file or the new one, never
-  /// half of either. An existing file keeps its permissions, and a link keeps pointing where
-  /// it did, with the file it leads to replaced. A device or a FIFO is written in place.
+  /// Atomic: the bytes go to a temporary file beside this one, renamed over it, so a reader
+  /// (or a ^C halfway) sees the old file or the new one. An existing file keeps its
+  /// permissions, and a link keeps pointing where it did. A device or a FIFO is written in place.
   Future<File> writeText(String content, {Encoding encoding = utf8}) => writeBytes(encoding.encode(content));
 
-  /// Writes [content] string to this file synchronously, atomically; see [writeText].
+  /// [writeText], synchronously.
   File writeTextSync(String content, {Encoding encoding = utf8}) => writeBytesSync(encoding.encode(content));
 
-  /// Writes raw [bytes] to this file, creating parent directories if not present; atomic, as
-  /// [writeText] is.
+  /// Writes [bytes] to this file; atomic, as [writeText] is.
   Future<File> writeBytes(List<int> bytes) async {
     final (:target, :mode) = _writePlan(path);
     if (target == null) return asFile.writeAsBytes(bytes);
-    // A file already there has its folder; only a new one may need it made.
     if (mode == null) await File(target).parent.create(recursive: true);
     final tmp = File(_tempBeside(target));
     try {
@@ -252,7 +236,7 @@ extension type const Path(String path) implements String {
     return asFile;
   }
 
-  /// Writes raw [bytes] to this file synchronously, atomically; see [writeText].
+  /// [writeBytes], synchronously.
   File writeBytesSync(List<int> bytes) {
     final (:target, :mode) = _writePlan(path);
     if (target == null) {
@@ -278,12 +262,11 @@ extension type const Path(String path) implements String {
     return asFile;
   }
 
-  /// Writes [lines] to this file, each ending in a newline, creating parent directories if
-  /// not present; atomic, as [writeText] is.
+  /// Writes [lines] to this file, each ending in a newline; atomic, as [writeText] is.
   Future<File> writeLines(Iterable<String> lines, {Encoding encoding = utf8}) =>
       writeText(lines.map((l) => '$l\n').join(), encoding: encoding);
 
-  /// Writes [lines] to this file synchronously, atomically; see [writeLines].
+  /// [writeLines], synchronously.
   File writeLinesSync(Iterable<String> lines, {Encoding encoding = utf8}) =>
       writeTextSync(lines.map((l) => '$l\n').join(), encoding: encoding);
 
@@ -295,29 +278,31 @@ extension type const Path(String path) implements String {
   List<Path> listSync({bool recursive = false, bool followLinks = false}) =>
       asDir.listSync(recursive: recursive, followLinks: followLinks).map((e) => Path(e.path)).toList();
 
-  /// Lists only files located in this directory.
-  Stream<Path> files({bool recursive = false}) =>
-      asDir.list(recursive: recursive, followLinks: false).where((e) => e is File).map((e) => Path(e.path));
+  /// The files in this directory.
+  Stream<Path> files({bool recursive = false}) => _only<File>(recursive);
 
-  /// Lists only files located in this directory synchronously.
-  List<Path> filesSync({bool recursive = false}) =>
-      asDir.listSync(recursive: recursive, followLinks: false).whereType<File>().map((e) => Path(e.path)).toList();
+  /// The files in this directory, synchronously.
+  List<Path> filesSync({bool recursive = false}) => _onlySync<File>(recursive);
 
-  /// Lists only subdirectories located in this directory.
-  Stream<Path> dirs({bool recursive = false}) =>
-      asDir.list(recursive: recursive, followLinks: false).where((e) => e is Directory).map((e) => Path(e.path));
+  /// The subdirectories of this directory.
+  Stream<Path> dirs({bool recursive = false}) => _only<Directory>(recursive);
 
-  /// Lists only subdirectories located in this directory synchronously.
-  List<Path> dirsSync({bool recursive = false}) =>
-      asDir.listSync(recursive: recursive, followLinks: false).whereType<Directory>().map((e) => Path(e.path)).toList();
+  /// The subdirectories of this directory, synchronously.
+  List<Path> dirsSync({bool recursive = false}) => _onlySync<Directory>(recursive);
 
-  /// Lists only symbolic links located in this directory.
-  Stream<Path> links({bool recursive = false}) =>
-      asDir.list(recursive: recursive, followLinks: false).where((e) => e is Link).map((e) => Path(e.path));
+  /// The symbolic links in this directory.
+  Stream<Path> links({bool recursive = false}) => _only<Link>(recursive);
 
-  /// Lists only symbolic links located in this directory synchronously.
-  List<Path> linksSync({bool recursive = false}) =>
-      asDir.listSync(recursive: recursive, followLinks: false).whereType<Link>().map((e) => Path(e.path)).toList();
+  /// The symbolic links in this directory, synchronously.
+  List<Path> linksSync({bool recursive = false}) => _onlySync<Link>(recursive);
+
+  Stream<Path> _only<T>(bool recursive) =>
+      asDir.list(recursive: recursive, followLinks: false).where((e) => e is T).map((e) => Path(e.path));
+
+  List<Path> _onlySync<T>(bool recursive) => [
+    for (final e in asDir.listSync(recursive: recursive, followLinks: false))
+      if (e is T) Path(e.path),
+  ];
 
   /// Streams the files matching [pattern], e.g. `'**/*.mp3'` or `'lib/**/*.{dart,md}'`.
   ///
@@ -326,12 +311,9 @@ extension type const Path(String path) implements String {
   /// A pattern ending in `/` matches directories instead of files: `'**/test/'`. A link is
   /// matched as itself, like a file, and never followed.
   ///
-  /// The walk goes only where the pattern can match: `'build/**/*.o'` descends into
-  /// `build`, and a pattern without `**` is never followed deeper than it has segments. An
-  /// absolute pattern starts from its own root; a directory that cannot be read is skipped.
-  ///
-  /// Defaults to platform case sensitivity (case-sensitive on Linux, insensitive on Windows/macOS).
-  /// Pass [caseSensitive] to override.
+  /// The walk goes only where the pattern can match: `'build/**/*.o'` descends into `build`,
+  /// and a pattern without `**` no deeper than it has segments. An unreadable directory is
+  /// skipped. [caseSensitive] defaults to the platform's (insensitive on macOS and Windows).
   Stream<Path> glob(String pattern, {bool? caseSensitive}) async* {
     final (start, rest, depth, dirs) = _globPlan(pattern);
     if (start != path && !await Directory(start).exists()) return;
@@ -355,14 +337,8 @@ extension type const Path(String path) implements String {
     ];
   }
 
-  /// Where a [glob] has to start, what it matches from there, and how deep it can go.
-  ///
-  /// The segments before the first wildcard are a directory, not a pattern, and the
-  /// segments after it bound the depth unless one of them is `**`. Walking the whole
-  /// subtree and filtering the result instead meant a glob under one directory paid for
-  /// every other directory beside it.
-  ///
-  /// The fourth value is whether the pattern asked for directories, by ending in `/`.
+  /// Where a [glob] starts (the segments before the first wildcard), what it matches from
+  /// there, how deep it can go (unbounded with `**`), and whether it asked for directories.
   (String start, String rest, int? depth, bool dirs) _globPlan(String pattern) {
     var normalized = pattern.replaceAll(r'\', '/');
     final dirs = normalized.length > 1 && normalized.endsWith('/');
@@ -388,7 +364,7 @@ extension type const Path(String path) implements String {
   /// Creates a directory at this path.
   Future<Directory> mkdir({bool recursive = true}) => asDir.create(recursive: recursive);
 
-  /// Creates a directory at this path synchronously.
+  /// [mkdir], synchronously.
   Directory mkdirSync({bool recursive = true}) {
     asDir.createSync(recursive: recursive);
     return asDir;
@@ -400,7 +376,7 @@ extension type const Path(String path) implements String {
     return asLink.create(target);
   }
 
-  /// Creates a symlink at this path pointing to [target] synchronously.
+  /// [symlink], synchronously.
   Link symlinkSync(String target) {
     asLink.parent.createSync(recursive: true);
     asLink.createSync(target);
@@ -409,78 +385,49 @@ extension type const Path(String path) implements String {
 
   /// Copies this file, directory or link to [targetPath].
   ///
-  /// A link is copied as a link, with the same target, whether it is this path or inside
-  /// this directory — as `cp -R` does — so a [move] across devices keeps them.
+  /// A link is copied as a link, whether it is this path or inside this directory, as
+  /// `cp -R` does, so a [move] across devices keeps them.
   Future<void> copy(String targetPath) async {
-    switch (await type()) {
-      case PathType.file:
-        await File(targetPath).parent.create(recursive: true);
-        await asFile.copy(targetPath);
-      case PathType.link:
-        await File(targetPath).parent.create(recursive: true);
-        await _deleteNonDir(targetPath);
-        await Link(targetPath).create(await asLink.target());
-      case PathType.dir:
-        if (path == targetPath || p.isWithin(path, targetPath)) {
-          throw FileSystemException('Cannot copy a directory into itself', path);
-        }
-        await Directory(targetPath).create(recursive: true);
-        final modes = [(targetPath, (await asDir.stat()).mode)];
-        await for (final entity in asDir.list(recursive: true, followLinks: false)) {
-          final dest = p.join(targetPath, p.relative(entity.path, from: path));
-          switch (entity) {
-            case Directory():
-              await Directory(dest).create(recursive: true);
-              modes.add((dest, (await entity.stat()).mode));
-            case Link():
-              await File(dest).parent.create(recursive: true);
-              await _deleteNonDir(dest);
-              await Link(dest).create(await entity.target());
-            case File():
-              await File(dest).parent.create(recursive: true);
-              await entity.copy(dest);
-          }
-        }
-        _restoreModes(modes);
-      case PathType.none:
-        throw FileSystemException('Cannot copy non-existent path', path);
+    final t = await type();
+    _checkCopy(t, targetPath);
+    if (t != PathType.dir) return _copyOne(_entity(t), targetPath);
+    await Directory(targetPath).create(recursive: true);
+    final modes = [(targetPath, (await asDir.stat()).mode)];
+    await for (final entity in asDir.list(recursive: true, followLinks: false)) {
+      final dest = p.join(targetPath, p.relative(entity.path, from: path));
+      if (entity is Directory) {
+        await Directory(dest).create(recursive: true);
+        modes.add((dest, (await entity.stat()).mode));
+      } else {
+        await _copyOne(entity, dest);
+      }
     }
+    _restoreModes(modes);
   }
 
-  /// Copies this file, directory or link to [targetPath] synchronously; see [copy].
+  /// [copy], synchronously.
   void copySync(String targetPath) {
-    switch (typeSync()) {
-      case PathType.file:
-        File(targetPath).parent.createSync(recursive: true);
-        asFile.copySync(targetPath);
-      case PathType.link:
-        File(targetPath).parent.createSync(recursive: true);
-        _deleteNonDirSync(targetPath);
-        Link(targetPath).createSync(asLink.targetSync());
-      case PathType.dir:
-        if (path == targetPath || p.isWithin(path, targetPath)) {
-          throw FileSystemException('Cannot copy a directory into itself', path);
-        }
-        Directory(targetPath).createSync(recursive: true);
-        final modes = [(targetPath, asDir.statSync().mode)];
-        for (final entity in asDir.listSync(recursive: true, followLinks: false)) {
-          final dest = p.join(targetPath, p.relative(entity.path, from: path));
-          switch (entity) {
-            case Directory():
-              Directory(dest).createSync(recursive: true);
-              modes.add((dest, entity.statSync().mode));
-            case Link():
-              File(dest).parent.createSync(recursive: true);
-              _deleteNonDirSync(dest);
-              Link(dest).createSync(entity.targetSync());
-            case File():
-              File(dest).parent.createSync(recursive: true);
-              entity.copySync(dest);
-          }
-        }
-        _restoreModes(modes);
-      case PathType.none:
-        throw FileSystemException('Cannot copy non-existent path', path);
+    final t = typeSync();
+    _checkCopy(t, targetPath);
+    if (t != PathType.dir) return _copyOneSync(_entity(t), targetPath);
+    Directory(targetPath).createSync(recursive: true);
+    final modes = [(targetPath, asDir.statSync().mode)];
+    for (final entity in asDir.listSync(recursive: true, followLinks: false)) {
+      final dest = p.join(targetPath, p.relative(entity.path, from: path));
+      if (entity is Directory) {
+        Directory(dest).createSync(recursive: true);
+        modes.add((dest, entity.statSync().mode));
+      } else {
+        _copyOneSync(entity, dest);
+      }
+    }
+    _restoreModes(modes);
+  }
+
+  void _checkCopy(PathType t, String targetPath) {
+    if (t == PathType.none) throw FileSystemException('Cannot copy non-existent path', path);
+    if (t == PathType.dir && (path == targetPath || p.isWithin(path, targetPath))) {
+      throw FileSystemException('Cannot copy a directory into itself', path);
     }
   }
 
@@ -494,16 +441,15 @@ extension type const Path(String path) implements String {
     try {
       await _entity(t).rename(targetPath);
     } on FileSystemException catch (e) {
-      // Only a rename across devices becomes copy-and-delete: any other failure — a
-      // non-empty directory in the way, a permission — is the answer, and copying over it
-      // would merge into the target and then delete the source.
+      // Only across devices: copying over any other failure (a non-empty directory in the
+      // way) would merge into the target and then delete the source.
       if (!_crossDevice(e)) rethrow;
       await copy(targetPath);
       await delete(recursive: true);
     }
   }
 
-  /// Moves this file or directory to [targetPath] synchronously, copying and deleting across filesystems.
+  /// [move], synchronously.
   void moveSync(String targetPath) {
     final t = typeSync();
     if (t == PathType.none) throw FileSystemException('Cannot move non-existent path', path);
@@ -532,7 +478,7 @@ extension type const Path(String path) implements String {
     PathType.none => null,
   };
 
-  /// Deletes this file, directory, or link synchronously.
+  /// [delete], synchronously.
   void deleteSync({bool recursive = false}) => switch (typeSync()) {
     PathType.file => asFile.deleteSync(),
     PathType.dir => asDir.deleteSync(recursive: recursive),
@@ -546,30 +492,24 @@ extension type const Path(String path) implements String {
     return asFile.writeAsString(content, mode: FileMode.append, encoding: encoding);
   }
 
-  /// Appends [content] to this file synchronously, creating parent directories and file if not present.
+  /// [append], synchronously.
   File appendSync(String content, {Encoding encoding = utf8}) {
     asFile.parent.createSync(recursive: true);
     asFile.writeAsStringSync(content, mode: FileMode.append, encoding: encoding);
     return asFile;
   }
 
-  /// Rewrites this file, replacing occurrences of [from] with [replacement].
-  ///
-  /// Writes to disk. The inherited [String.replaceAll] operates on the path text.
-  Future<File> replaceText(Pattern from, String replacement, {Encoding encoding = utf8}) async {
-    final text = await readText(encoding: encoding);
-    return writeText(text.replaceAll(from, replacement), encoding: encoding);
-  }
+  /// Rewrites this file with [from] replaced by [replacement]; the inherited
+  /// [String.replaceAll] works on the path text instead.
+  Future<File> replaceText(Pattern from, String replacement, {Encoding encoding = utf8}) async =>
+      writeText((await readText(encoding: encoding)).replaceAll(from, replacement), encoding: encoding);
 
-  /// Rewrites this file synchronously, replacing occurrences of [from] with [replacement].
-  File replaceTextSync(Pattern from, String replacement, {Encoding encoding = utf8}) {
-    final text = readTextSync(encoding: encoding);
-    return writeTextSync(text.replaceAll(from, replacement), encoding: encoding);
-  }
+  /// [replaceText], synchronously.
+  File replaceTextSync(Pattern from, String replacement, {Encoding encoding = utf8}) =>
+      writeTextSync(readTextSync(encoding: encoding).replaceAll(from, replacement), encoding: encoding);
 
-  /// The paths that changed under this file or directory, a batch at a time: a batch is
-  /// sent once nothing has changed for [debounce], so a save that is five events, or a
-  /// build that writes a hundred files, is one batch rather than a hundred rebuilds.
+  /// The paths that changed under this file or directory, sent as a batch once nothing has
+  /// changed for [debounce], so a build that writes a hundred files is one rebuild.
   ///
   /// ```dart
   /// await for (final changed in 'lib'.path.changes()) rebuild(changed);
@@ -608,11 +548,11 @@ extension type const Path(String path) implements String {
   }
 }
 
-/// Convenience extension on [String] to convert to [Path] or join paths.
+/// [String] as a [Path]: `'out'.path`, `'out' / 'a.txt'`.
 ///
 /// {@category Files}
 extension StringPathExtensions on String {
-  /// Wraps this string into a [Path].
+  /// This string as a [Path].
   Path get path => Path(this);
 
   /// Joins this path with [other].
@@ -620,9 +560,8 @@ extension StringPathExtensions on String {
 
   /// This string as a single path component, safe to join with [Path.operator /].
   ///
-  /// Separators and reserved characters become `_`, whitespace runs collapse, and
-  /// the result is never empty, `.` or `..`. Use [Path.sanitized] for a whole path, which
-  /// keeps its separators.
+  /// Separators and reserved characters become `_`, whitespace runs collapse, and the
+  /// result is never empty, `.` or `..`; at most 255 UTF-8 bytes, keeping the extension.
   Path get filename {
     final cleaned = replaceAll(_whitespaceCollapse, ' ').trim().replaceAll(_invalidNameChars, '_');
     final name = switch (cleaned) {
@@ -634,13 +573,37 @@ extension StringPathExtensions on String {
   }
 }
 
-/// What a recursive [Path.size] adds up, in a worker isolate or on this one.
-int _dirSize(String path) => Directory(
-  path,
-).listSync(recursive: true, followLinks: false).whereType<File>().fold(0, (a, f) => a + f.lengthSync());
+bool _older(FileStat stat, Duration age) =>
+    stat.type == FileSystemEntityType.notFound || DateTime.now().difference(stat.modified) > age;
 
-/// [f] of [arg] in a worker isolate, sent nothing but [arg].
-Future<R> _isolate<A, R>(R Function(A) f, A arg) => Isolate.run(() => f(arg));
+int _dirSize(String path) {
+  var total = 0;
+  for (final e in Directory(path).listSync(recursive: true, followLinks: false)) {
+    if (e is File) total += e.lengthSync();
+  }
+  return total;
+}
+
+/// [entity], a file or a link, copied to [dest]; a link keeps its target.
+Future<void> _copyOne(FileSystemEntity entity, String dest) async {
+  await File(dest).parent.create(recursive: true);
+  if (entity is Link) {
+    await _deleteNonDir(dest);
+    await Link(dest).create(await entity.target());
+  } else {
+    await (entity as File).copy(dest);
+  }
+}
+
+void _copyOneSync(FileSystemEntity entity, String dest) {
+  File(dest).parent.createSync(recursive: true);
+  if (entity is Link) {
+    _deleteNonDirSync(dest);
+    Link(dest).createSync(entity.targetSync());
+  } else {
+    (entity as File).copySync(dest);
+  }
+}
 
 final _tkChmod = NativeBridge.require()
     .lookupFunction<Int32 Function(Pointer<Uint8>, IntPtr, Uint32), int Function(Pointer<Uint8>, int, int)>('tk_chmod');
@@ -651,9 +614,8 @@ void _chmod(String path, int mode) {
   }
 }
 
-/// Copied directories get their source's modes back, deepest first, once everything is in
-/// them: a read-only directory set first would refuse its own contents. Where the native
-/// library did not load, or on Windows, where a directory has no mode, they keep the default.
+/// Copied directories get their modes back deepest first, once filled: a read-only one set
+/// first would refuse its contents. Skipped on Windows and without the native library.
 void _restoreModes(List<(String, int)> modes) {
   if (Platform.isWindows || !NativeLib.isAvailable) return;
   for (final (dir, mode) in modes.reversed) {
@@ -665,8 +627,7 @@ final _octalMode = RegExp(r'^[0-7]{1,4}$');
 final _symbolicClause = RegExp(r'^([ugoa]*)((?:[-+=][rwxXst]*)+)$');
 final _symbolicOp = RegExp(r'([-+=])([rwxXst]*)');
 
-/// [mode], octal or symbolic, as the bits to set on [path]; symbolic modes start from its
-/// current ones.
+/// [mode], octal or symbolic (relative to [path]'s current bits), as the bits to set.
 int _modeOf(String mode, String path) {
   if (_octalMode.hasMatch(mode)) return int.parse(mode, radix: 8);
   final stat = FileStat.statSync(path);
@@ -705,13 +666,10 @@ int _modeOf(String mode, String path) {
   return bits;
 }
 
-/// Where an atomic write renames its temporary file to, and the mode to give it first.
-///
-/// That is this path, or the file a link here leads to, with the existing file's mode. It
-/// is no target at all — write in place — for anything but a regular file or nothing: a
-/// device, a FIFO, `/dev/stdout`, a dangling link, which a rename would replace or could not
-/// reach; and for an existing file whose mode cannot be carried over because the native
-/// library did not load.
+/// Where an atomic write renames its temporary file to (this path, or the file a link here
+/// leads to) and the existing file's mode. No target means write in place: for a device, a
+/// FIFO, `/dev/stdout` or a dangling link, which a rename would replace or could not reach,
+/// and for an existing file whose mode cannot be carried over without the native library.
 ({String? target, int? mode}) _writePlan(String path) {
   const inPlace = (target: null, mode: null);
   final stat = FileStat.statSync(path);
@@ -723,16 +681,15 @@ int _modeOf(String mode, String path) {
   if (stat.type != FileSystemEntityType.file) return inPlace;
   if (Platform.isWindows) return isLink ? inPlace : (target: path, mode: null);
   final target = isLink ? File(path).resolveSymbolicLinksSync() : path;
-  // A regular file by its mode, and not one of the kernel's own: `/dev/stdout` redirected
-  // to a file is a link to one, and renaming over that would leave the shell's copy behind.
+  // Not one of the kernel's own: `/dev/stdout` redirected to a file is a link to one, and
+  // renaming over it would leave the shell's copy behind.
   if (stat.mode & 0xf000 != 0x8000 ||
       !NativeLib.isAvailable ||
       _kernelOwned(p.absolute(path)) ||
       _kernelOwned(target)) {
     return inPlace;
   }
-  // A rename replaces a file it could not write, so the permission is asked first: a
-  // read-only file refuses this write as it refused one in place.
+  // A rename would replace a read-only file, so ask for write permission first.
   File(target).openSync(mode: FileMode.append).closeSync();
   return (target: target, mode: stat.mode & 0xfff);
 }
@@ -776,17 +733,11 @@ void _deleteNonDirSync(String path) {
 }
 
 String _capFilename(String name) {
-  final bytes = utf8.encode(name);
-  if (bytes.length <= 255) return name;
+  if (utf8.encode(name).length <= 255) return name;
   final ext = p.extension(name);
-  final extBytes = utf8.encode(ext);
-  if (extBytes.length >= 255) {
-    return _truncateUtf8(name, 255);
-  }
-  final base = name.substring(0, name.length - ext.length);
-  final budget = 255 - extBytes.length;
-  final truncated = _truncateUtf8(base, budget);
-  return '$truncated$ext';
+  final extBytes = utf8.encode(ext).length;
+  if (extBytes >= 255) return _truncateUtf8(name, 255);
+  return _truncateUtf8(name.substring(0, name.length - ext.length), 255 - extBytes) + ext;
 }
 
 String _truncateUtf8(String s, int maxBytes) {
@@ -816,10 +767,8 @@ PathType _pathType(FileSystemEntityType type) => switch (type) {
 
 final _globCache = <(String, bool), RegExp>{};
 
-/// Everything under [dir], at most [depth] levels down, skipping what cannot be read.
-///
-/// `Directory.list(recursive: true)` has no depth, so a glob that cannot match below its
-/// own segment count would still walk everything there; with `**` it is the faster walk.
+/// Everything under [dir], at most [depth] levels down, skipping what cannot be read;
+/// `Directory.list(recursive: true)` has no depth limit.
 Stream<FileSystemEntity> _walk(Directory dir, int depth) async* {
   if (depth < 1) return;
   await for (final entity in dir.list(followLinks: false).handleError((_) {}, test: _unreadable)) {
@@ -828,11 +777,8 @@ Stream<FileSystemEntity> _walk(Directory dir, int depth) async* {
   }
 }
 
-/// [_walk], synchronously; unbounded when [depth] is `null`.
-///
-/// An unbounded walk is one `listSync(recursive: true)` — about 1.8× faster than a listing
-/// per directory — and only when that throws, at the first directory it cannot read, is it
-/// walked again a directory at a time so the unreadable one can be skipped.
+/// [_walk], synchronously; unbounded when [depth] is `null`. An unbounded walk is one
+/// `listSync(recursive: true)`, 1.8× faster, redone per directory only if that throws.
 List<FileSystemEntity> _walkSync(Directory dir, int? depth, [List<FileSystemEntity>? out]) {
   if (depth == null && out == null) {
     try {
@@ -856,8 +802,8 @@ List<FileSystemEntity> _walkSync(Directory dir, int? depth, [List<FileSystemEnti
 
 bool _unreadable(Object? e) => e is FileSystemException;
 
-/// [child], somewhere under [start], relative to it and with forward slashes. A substring:
-/// `p.relative` normalizes both paths per call and was most of what a large glob cost.
+/// [child], under [start], relative to it with forward slashes; a substring, because
+/// `p.relative` normalizes per call and dominated a large glob.
 String _relative(String start, String child) {
   final rel = child.substring(start.endsWith(p.separator) || start.endsWith('/') ? start.length : start.length + 1);
   return Platform.isWindows ? rel.replaceAll(r'\', '/') : rel;
@@ -891,66 +837,57 @@ int _braceEnd(String pattern, int open) {
 
 RegExp _globToRegex(String pattern, {bool? caseSensitive}) {
   final isSensitive = caseSensitive ?? (!Platform.isWindows && !Platform.isMacOS);
-  final cached = _globCache[(pattern, isSensitive)];
-  if (cached != null) return cached;
-  final normalized = pattern.replaceAll(r'\', '/');
+  return _globCache[(pattern, isSensitive)] ??= RegExp(_globSource(pattern), caseSensitive: isSensitive);
+}
+
+String _globSource(String pattern) {
+  final g = pattern.replaceAll(r'\', '/');
   final buffer = StringBuffer('^');
   // The ends of the braces open around `i`, innermost last: a `,` inside one is `|`.
   final braces = <int>[];
   var i = 0;
-  while (i < normalized.length) {
-    final c = normalized[i];
-    if (c == '[' && _classEnd(normalized, i) > 0) {
-      final end = _classEnd(normalized, i);
-      var body = normalized.substring(i + 1, end);
+  while (i < g.length) {
+    final c = g[i];
+    final classEnd = c == '[' ? _classEnd(g, i) : -1;
+    final braceEnd = c == '{' ? _braceEnd(g, i) : -1;
+    if (classEnd > 0) {
+      var body = g.substring(i + 1, classEnd);
       final negated = body.startsWith('!') || body.startsWith('^');
       if (negated) body = body.substring(1);
       // Inside a class only `\`, `^` and `[` mean something to RegExp that they do not to a glob.
       body = body.replaceAllMapped(_classEscape, (m) => '\\${m[0]}');
       buffer.write(negated ? '[^/$body]' : '[$body]');
-      i = end + 1;
+      i = classEnd + 1;
       continue;
     }
-    if (c == '{' && _braceEnd(normalized, i) > 0) {
-      braces.add(_braceEnd(normalized, i));
+    if (g.startsWith('**/', i)) {
+      buffer.write('(?:.+/)?');
+      i += 3;
+      continue;
+    }
+    if (g.startsWith('**', i)) {
+      buffer.write('.*');
+      i += 2;
+      continue;
+    }
+    if (braceEnd > 0) {
+      braces.add(braceEnd);
       buffer.write('(?:');
-      i++;
-      continue;
-    }
-    if (braces.isNotEmpty && i == braces.last) {
+    } else if (braces.isNotEmpty && i == braces.last) {
       braces.removeLast();
       buffer.write(')');
-      i++;
-      continue;
-    }
-    if (c == ',' && braces.isNotEmpty) {
-      buffer.write('|');
-      i++;
-      continue;
-    }
-    if (c == '*' && i + 1 < normalized.length && normalized[i + 1] == '*') {
-      if (i + 2 < normalized.length && normalized[i + 2] == '/') {
-        buffer.write('(?:.+/)?');
-        i += 3;
-        continue;
-      } else {
-        buffer.write('.*');
-        i += 2;
-        continue;
-      }
-    } else if (c == '*') {
-      buffer.write('[^/]*');
-    } else if (c == '?') {
-      buffer.write('[^/]');
-    } else if (r'.+()^$[]{}|'.contains(c)) {
-      buffer.write('\\$c');
     } else {
-      buffer.write(c);
+      buffer.write(switch (c) {
+        ',' when braces.isNotEmpty => '|',
+        '*' => '[^/]*',
+        '?' => '[^/]',
+        _ when r'.+()^$[]{}|'.contains(c) => '\\$c',
+        _ => c,
+      });
     }
     i++;
   }
-  buffer.write(r'$');
-  return _globCache[(pattern, isSensitive)] = RegExp(buffer.toString(), caseSensitive: isSensitive);
+  return (buffer..write(r'$')).toString();
 }
 
 /// Digests and MACs of a file at a [Path].
@@ -972,11 +909,9 @@ extension PathHashExtensions on Path {
   /// The HMAC of this file's contents under [key].
   Future<Uint8List> hmacBytes(Hash algorithm, List<int> key) => asFile.hmacBytes(algorithm, key);
 
-  /// The files under this directory that hold the same bytes, each group two or more paths,
-  /// the largest files first. Empty files are left out.
-  ///
-  /// Only files of equal size are compared, by [Hash.xxh3] in parallel, so a tree of unique
-  /// sizes costs one walk and no reads at all.
+  /// The files under this directory that hold the same bytes, in groups of two or more,
+  /// largest first; empty files are left out. Only equal sizes are read, by [Hash.xxh3].
+
   Future<List<List<Path>>> duplicates() => Isolate.run(() {
     final bySize = <int, List<String>>{};
     for (final f in _walkSync(asDir, null).whereType<File>()) {

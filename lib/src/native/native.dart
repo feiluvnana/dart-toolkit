@@ -1,11 +1,10 @@
 part of '../../native.dart';
 
-/// The toolkit's native library, `dart_toolkit_native`: one Rust `cdylib` with the same
-/// functions on every platform, shipped prebuilt inside the package. `hash` and the archive
-/// half of `fs` are thin bindings to it and throw [UnsupportedError] when it did not load.
+/// The toolkit's native library, `dart_toolkit_native`, shipped prebuilt inside the package.
+/// What needs it throws [UnsupportedError] when it did not load.
 ///
-/// Lookup order: `DART_TOOLKIT_NATIVE` (a path), the directory of the running executable, then
-/// `native/prebuilt/<os>_<arch>/` inside the package.
+/// Looked for at `DART_TOOLKIT_NATIVE` (a path, and then nowhere else), beside the running
+/// executable, then in `native/prebuilt/<os>_<arch>/` inside the package.
 ///
 /// {@category Native}
 abstract final class NativeLib {
@@ -21,76 +20,55 @@ abstract final class NativeLib {
     return _reason;
   }
 
-  /// The ABI version this package was built against. A library that reports another one is
-  /// refused at load, with the reason, rather than failing later on a missing symbol.
+  /// The ABI version this package was built against; a library reporting another is refused
+  /// at load rather than failing later on a missing symbol.
   static const _abi = 3;
 
   static DynamicLibrary? _load() {
     final override = Platform.environment['DART_TOOLKIT_NATIVE'];
-    if (override != null) {
-      if (!File(override).existsSync()) {
-        _reason = 'DART_TOOLKIT_NATIVE file not found: $override';
-        return null;
-      }
-      try {
-        final lib = DynamicLibrary.open(override);
-        final ver = _checkVersion(lib);
-        if (ver != _abi) {
-          _reason = '$override reported ABI version $ver, expected $_abi';
-          return null;
-        }
-        return lib;
-      } catch (e) {
-        _reason = '$override: $e';
-        return null;
-      }
-    }
-
-    final candidates = <String>[p.join(p.dirname(Platform.resolvedExecutable), NativeBridge.fileName)];
-    // Inside the package, for `dart run` from a checkout or a pub cache.
-    final root = _packageRoot();
-    if (root != null) candidates.add(p.join(root, 'native', 'prebuilt', NativeBridge.target, NativeBridge.fileName));
+    final candidates = override != null
+        ? [override]
+        : [
+            p.join(p.dirname(Platform.resolvedExecutable), NativeBridge.fileName),
+            if (_packageRoot() case final root?)
+              p.join(root, 'native', 'prebuilt', NativeBridge.target, NativeBridge.fileName),
+          ];
     final failures = <String>[];
     for (final path in candidates) {
       if (!File(path).existsSync()) continue;
       try {
         final lib = DynamicLibrary.open(path);
-        final ver = _checkVersion(lib);
-        if (ver != _abi) {
-          failures.add('$path reported ABI version $ver, expected $_abi');
-          continue;
-        }
-        return lib;
+        final ver = _version(lib);
+        if (ver == _abi) return lib;
+        failures.add('$path reported ABI version $ver, expected $_abi');
       } catch (e) {
         failures.add('$path: $e');
       }
     }
-    _reason = failures.isEmpty ? 'no ${NativeBridge.fileName} at ${candidates.join(', ')}' : failures.join('; ');
+    _reason = failures.isNotEmpty
+        ? failures.join('; ')
+        : override != null
+        ? 'DART_TOOLKIT_NATIVE file not found: $override'
+        : 'no ${NativeBridge.fileName} at ${candidates.join(', ')}';
     return null;
   }
 
-  static int _checkVersion(DynamicLibrary lib) {
+  static int _version(DynamicLibrary lib) {
     try {
-      final fn = lib.lookupFunction<Uint32 Function(), int Function()>('tk_version');
-      return fn();
+      return lib.lookupFunction<Uint32 Function(), int Function()>('tk_version')();
     } catch (_) {
       return 0;
     }
   }
 
-  /// The package root, from the location of this library.
   static String? _packageRoot() {
     final uri = Isolate.resolvePackageUriSync(Uri.parse('package:dart_toolkit/core.dart'));
-    if (uri == null || uri.scheme != 'file') return null;
-    return p.dirname(p.dirname(uri.toFilePath()));
+    return uri == null || uri.scheme != 'file' ? null : p.dirname(p.dirname(uri.toFilePath()));
   }
 }
 
-/// The FFI plumbing `fs` and `hash` bind through.
-///
-/// It is public only because those are separate libraries; nothing outside the package
-/// should call it, and it is not covered by the versioning promise. What a program asks
-/// about the native library is on [NativeLib]: [NativeLib.isAvailable] and [NativeLib.reason].
+/// The FFI plumbing `fs`, `hash` and `http` bind through: public only because those are
+/// separate libraries, and not covered by the versioning promise. Programs ask [NativeLib].
 abstract final class NativeBridge {
   /// The library's file name on this platform.
   static String get fileName => switch (Platform.operatingSystem) {
@@ -124,8 +102,7 @@ abstract final class NativeBridge {
     try {
       final n = _lastError(buf, cap);
       if (n <= 0) return 'unknown error';
-      // A message longer than the buffer is cut, and cutting mid-character would make
-      // `utf8.decode` throw over the top of the error being reported.
+      // A cut message may end mid-character.
       return utf8.decode(buf.asTypedList(n < cap ? n : cap), allowMalformed: true);
     } finally {
       free(buf, cap);
@@ -135,10 +112,7 @@ abstract final class NativeBridge {
   static final _lastError = require()
       .lookupFunction<Int32 Function(Pointer<Uint8>, IntPtr), int Function(Pointer<Uint8>, int)>('tk_last_error');
 
-  /// The library's own allocator, rather than the host process's `malloc`.
-  ///
-  /// `DynamicLibrary.process()` cannot find `malloc` on every platform, and sharing an
-  /// allocator across the boundary by coincidence is not worth the one saved export.
+  // The library's own allocator: `DynamicLibrary.process()` cannot find `malloc` everywhere.
   static final Pointer<Uint8> Function(int) _alloc = require()
       .lookupFunction<Pointer<Uint8> Function(IntPtr), Pointer<Uint8> Function(int)>('tk_alloc');
   static final void Function(Pointer<Uint8>, int) _dealloc = require()
@@ -207,18 +181,13 @@ abstract final class NativeBridge {
   );
 
   /// [body] with a `content-encoding` undone as it arrives; [codec] is 1 gzip, 3 brotli,
-  /// 4 zstd.
-  ///
-  /// It is here rather than in `http` so that `http` binds no FFI of its own. Nothing is
-  /// buffered — a chunk off the socket goes in and whatever it decoded to comes out, which is
-  /// often nothing while a decoder fills its window. Corrupt data, and a body that ends before
-  /// its compressed stream does, are a [FormatException].
+  /// 4 zstd. Here so `http` binds no FFI of its own. Corrupt data, and a body that ends
+  /// before its compressed stream does, are a [FormatException].
   static Stream<List<int>> inflate(Stream<List<int>> body, int codec) async* {
     const inCap = 64 * 1024, outCap = 256 * 1024;
     final handle = _inflateNew(codec);
     if (handle == nullptr) throw FormatException(lastError());
-    // One input and one output buffer for the life of the handle, so a chunk costs no
-    // allocation. An output that fills the buffer exactly means more is pending.
+    // One buffer each way for the handle's life; an output that fills one means more is pending.
     final input = alloc(inCap), output = alloc(outCap);
     final inView = input.asTypedList(inCap), outView = output.asTypedList(outCap);
     try {
@@ -234,7 +203,7 @@ abstract final class NativeBridge {
           }
         }
       }
-      // Reached only when the body ended by itself; a listener that stopped early skips it.
+      // Skipped when the listener stopped early.
       if (_inflateFinish(handle) < 0) throw FormatException(lastError());
     } finally {
       _inflateFree(handle);
@@ -249,9 +218,9 @@ abstract final class NativeBridge {
         int Function(Pointer<Uint8>, int, Pointer<Uint8>, int, Pointer<Pointer<Uint8>>, Pointer<IntPtr>)
       >('tk_decode_text');
 
-  /// [bytes] read in the charset [label] names — any label of the WHATWG Encoding Standard,
-  /// so `shift_jis`, `euc-kr`, `gb2312`, `big5`, `koi8-r` and the rest. An unknown label reads
-  /// as UTF-8; malformed bytes become U+FFFD.
+  /// [bytes] read in the charset [label] names (any WHATWG label: `shift_jis`, `euc-kr`, …).
+  /// An unknown label reads as UTF-8; malformed bytes become U+FFFD.
+
   static String decodeText(String label, Uint8List bytes) {
     final units = withText(
       label,

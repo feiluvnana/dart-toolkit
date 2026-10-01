@@ -36,30 +36,16 @@ struct Entry {
 
 /// The first `n` bytes of `path`, or fewer at end of file.
 fn head(path: &str, n: usize) -> Vec<u8> {
-    let mut buf = vec![0u8; n];
-    match File::open(path) {
-        Ok(f) => {
-            let mut r = BufReader::new(f);
-            let mut filled = 0;
-            while filled < n {
-                match r.read(&mut buf[filled..]) {
-                    Ok(0) | Err(_) => break,
-                    Ok(k) => filled += k,
-                }
-            }
-            buf.truncate(filled);
-            buf
-        }
-        Err(_) => Vec::new(),
+    let mut buf = Vec::with_capacity(n);
+    if let Ok(f) = File::open(path) {
+        // On a read error `buf` keeps what was read before it.
+        let _ = f.take(n as u64).read_to_end(&mut buf);
     }
+    buf
 }
 
-/// The container format of the bytes themselves, when they say so without ambiguity.
-///
-/// A magic number outranks the file name: an archive keeps its format when it is renamed,
-/// downloaded without an extension or saved as `.bin`. The single-stream codecs are not
-/// here because they are ambiguous — a gzip member holds a tar or any other single file —
-/// and are resolved by `detect_read` after the extension has had its say.
+/// The container format by magic number, which outranks the file name. Single-stream codecs
+/// are ambiguous (a gzip holds a tar or any one file), so `detect_read` asks the name first.
 fn sniff(path: &str) -> Option<&'static str> {
     let b = head(path, 512);
     if b.len() >= 4 && &b[0..2] == b"PK" && matches!(b[2], 3 | 5 | 7) {
@@ -173,75 +159,30 @@ fn tar_reader(path: &str, kind: &str) -> Result<Box<dyn Read>, String> {
 }
 
 fn validate_archive_level(format: u32, level: i32) -> Result<(), String> {
-    if level < 0 && level != -1 {
-        if format != TAR_ZST {
-            return Err("compression level cannot be negative".into());
-        }
-    }
     match format {
-        ZIP | TAR_GZ => {
-            if level > 9 {
-                return Err("gzip/zip level is 0..=9".into());
-            }
-        }
-        TAR_XZ => {
-            if level > 9 {
-                return Err("xz level is 0..=9".into());
-            }
-        }
-        TAR_BZ2 => {
-            if level == 0 || level > 9 {
-                return Err("bzip2 level is 1..=9".into());
-            }
-        }
-        SEVENZ => {
-            if level > 9 {
-                return Err("7z level is 0..=9".into());
-            }
-        }
-        TAR_ZST => {
-            if level > 22 {
-                return Err("zstd level is up to 22".into());
-            }
-        }
-        _ => {}
+        SEVENZ if level > 9 => Err("7z level is 0..=9".into()),
+        ZIP | TAR_GZ => validate_codec_level(GZIP, level),
+        TAR_XZ => validate_codec_level(XZ, level),
+        TAR_ZST => validate_codec_level(ZSTD, level),
+        TAR_BZ2 => validate_codec_level(BZIP2, level),
+        _ => validate_codec_level(DETECT, level),
     }
-    Ok(())
 }
 
+/// `level` against the codec's range; -1 is its default, and only zstd goes below it.
 fn validate_codec_level(codec: u32, level: i32) -> Result<(), String> {
-    if level < 0 && level != -1 {
-        if codec != ZSTD {
-            return Err("compression level cannot be negative".into());
-        }
-    }
-    match codec {
-        GZIP => {
-            if level > 9 {
-                return Err("gzip/zip level is 0..=9".into());
-            }
-        }
-        XZ => {
-            if level > 9 {
-                return Err("xz level is 0..=9".into());
-            }
-        }
-        BZIP2 => {
-            if level == 0 || level > 9 {
-                return Err("bzip2 level is 1..=9".into());
-            }
-        }
-        ZSTD => {
-            if level > 22 {
-                return Err("zstd level is up to 22".into());
-            }
-        }
-        _ => {}
-    }
-    Ok(())
+    let err = match codec {
+        _ if level < -1 && codec != ZSTD => "compression level cannot be negative",
+        GZIP if level > 9 => "gzip/zip level is 0..=9",
+        XZ if level > 9 => "xz level is 0..=9",
+        BZIP2 if level == 0 || level > 9 => "bzip2 level is 1..=9",
+        ZSTD if level > 22 => "zstd level is up to 22",
+        _ => return Ok(()),
+    };
+    Err(err.into())
 }
 
-enum TarWriter<W: Write> {
+enum Encoder<W: Write> {
     Plain(W),
     Gz(flate2::write::GzEncoder<W>),
     Xz(xz2::write::XzEncoder<W>),
@@ -249,7 +190,7 @@ enum TarWriter<W: Write> {
     Bz2(bzip2::write::BzEncoder<W>),
 }
 
-impl<W: Write> Write for TarWriter<W> {
+impl<W: Write> Write for Encoder<W> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self {
             Self::Plain(w) => w.write(buf),
@@ -270,7 +211,7 @@ impl<W: Write> Write for TarWriter<W> {
     }
 }
 
-impl<W: Write> TarWriter<W> {
+impl<W: Write> Encoder<W> {
     fn finish(self) -> std::io::Result<W> {
         match self {
             Self::Plain(mut w) => {
@@ -285,9 +226,9 @@ impl<W: Write> TarWriter<W> {
     }
 }
 
-/// Input at least this large is compressed on every core by zstd and xz. Below it, starting
-/// the threads costs more than they win, and xz's blocks (three dictionaries, 24 MiB at the
-/// default level) would leave all but one of them idle anyway.
+/// Input at least this large is compressed on every core by zstd and xz; below it the threads
+/// cost more than they win, and xz's 24 MiB blocks would leave all but one idle.
+
 const PARALLEL: u64 = 32 << 20;
 
 /// The worker threads for `size` bytes of input: 0 (single-threaded) below `PARALLEL`.
@@ -321,24 +262,21 @@ fn zstd_encoder<W: Write>(out: W, level: i32, size: u64) -> Result<zstd::stream:
     Ok(enc)
 }
 
-/// The writer under a tar of `size` bytes of files.
-fn tar_writer(path: &str, format: u32, level: i32, size: u64) -> Result<TarWriter<BufWriter<File>>, String> {
-    validate_archive_level(format, level)?;
-    let f = BufWriter::new(create_file(path)?);
+/// The `codec` writer over `out`, or `out` itself for `None`; `size` is the input's, and
+/// `level` -1 is the codec's default.
+fn encoder<W: Write>(codec: Option<u32>, out: W, level: i32, size: u64) -> Result<Encoder<W>, String> {
     let lvl = |d: u32| if level < 0 { d } else { level as u32 };
-    Ok(match format {
-        TAR => TarWriter::Plain(f),
-        TAR_GZ => TarWriter::Gz(flate2::write::GzEncoder::new(f, flate2::Compression::new(lvl(6)))),
-        TAR_XZ => TarWriter::Xz(xz_encoder(f, lvl(6), size)?),
-        TAR_ZST => TarWriter::Zst(zstd_encoder(f, if level == -1 { 3 } else { level }, size)?),
-        TAR_BZ2 => TarWriter::Bz2(bzip2::write::BzEncoder::new(f, bzip2::Compression::new(lvl(9)))),
-        _ => unreachable!(),
+    Ok(match codec {
+        None => Encoder::Plain(out),
+        Some(GZIP) => Encoder::Gz(flate2::write::GzEncoder::new(out, flate2::Compression::new(lvl(6)))),
+        Some(XZ) => Encoder::Xz(xz_encoder(out, lvl(6), size)?),
+        Some(ZSTD) => Encoder::Zst(zstd_encoder(out, if level == -1 { 3 } else { level }, size)?),
+        Some(BZIP2) => Encoder::Bz2(bzip2::write::BzEncoder::new(out, bzip2::Compression::new(lvl(9)))),
+        Some(c) => return Err(format!("unknown codec {}", c)),
     })
 }
 
-// ---------------------------------------------------------------------------------------------
-// list
-// ---------------------------------------------------------------------------------------------
+// ---- list
 
 fn list(path: &str, password: Option<&str>) -> Result<Vec<Entry>, String> {
     let kind = detect_read(path)?;
@@ -379,7 +317,7 @@ fn list(path: &str, password: Option<&str>) -> Result<Vec<Entry>, String> {
                     compressed: f.compressed_size,
                     dir: f.is_directory(),
                     encrypted,
-                    modified: if f.has_last_modified_date { Some(f.last_modified_date().to_unix_time_secs()) } else { None },
+                    modified: f.has_last_modified_date.then(|| f.last_modified_date().to_unix_time_secs()),
                 });
             }
         }
@@ -428,9 +366,7 @@ pub unsafe extern "C" fn tk_archive_list(path: *const u8, plen: usize, pw: *cons
     })
 }
 
-// ---------------------------------------------------------------------------------------------
-// extract
-// ---------------------------------------------------------------------------------------------
+// ---- extract
 
 /// `flags` bit: the archive is trusted — no size cap, setuid/setgid kept, links may point anywhere.
 const TRUSTED: u32 = 1;
@@ -438,15 +374,13 @@ const TRUSTED: u32 = 1;
 const FOLD_CASE: u32 = 2;
 
 /// What an untrusted archive may write: 200 times its own size, and never less than 1 GiB.
-///
-/// A ratio rather than a fixed number, because a fixed number is either too small for a large
-/// legitimate archive or too large to stop a small bomb; the floor keeps a tiny archive of a
-/// compressible file from tripping it. Source trees, logs and dumps compress 5–50×.
+/// A fixed cap is too small for a large archive or too large to stop a small bomb; source
+/// trees, logs and dumps compress 5–50×.
 const RATIO: u64 = 200;
 const FLOOR: u64 = 1 << 30;
 
-/// How an extraction is allowed to go: what it may write, which entries it wants, and the
-/// links it made, which are checked again once everything they could point at exists.
+/// What an extraction may write, which entries it wants, and the links it made, which are
+/// checked again once everything they could point at exists.
 struct Policy {
     trusted: bool,
     budget: u64,
@@ -455,8 +389,7 @@ struct Policy {
     fold: bool,
     root: PathBuf,
     links: Vec<PathBuf>,
-    /// Directories already found to be inside `root`. A directory stays one — `link` never
-    /// replaces a directory — so a hit needs no second look until a link is made.
+    /// Directories already found inside `root`; cleared whenever a link is made.
     checked: std::collections::HashSet<PathBuf>,
 }
 
@@ -502,8 +435,7 @@ impl Policy {
     }
 
     /// `dir` is inside the destination once links are resolved. Asked of every directory an
-    /// entry lands in, not only once this extraction has made a link: a link already in the
-    /// destination — left by an earlier archive — leads out just as well.
+    /// entry lands in: a link left by an earlier archive leads out just as well.
     fn contains(&mut self, dir: &Path) -> Result<(), String> {
         if self.trusted || self.checked.contains(dir) {
             return Ok(());
@@ -537,27 +469,23 @@ impl Policy {
         Ok(())
     }
 
-    /// Checks every link again now that everything it could point through exists: a link to
-    /// `b/..` is inside by its text and outside once `b` turns out to be a link to `.`. A
-    /// link whose target does not exist is followed as far as it goes, since whatever is
-    /// written through it later lands where it points.
+    /// Checks every link again now that everything it could point through exists: `b/..` is
+    /// inside by its text and outside once `b` is a link to `.`. A dangling link is followed
+    /// as far as it goes.
     fn finish(&self) -> Result<(), String> {
         if self.trusted {
             return Ok(());
         }
-        let mut first_err = None;
+        let mut result = Ok(());
         for link in &self.links {
             if !resolve(link, 0).is_some_and(|real| real.starts_with(&self.root)) {
                 let _ = std::fs::remove_file(link);
-                if first_err.is_none() {
-                    first_err = Some(format!("{}: link leads out of the destination", link.display()));
+                if result.is_ok() {
+                    result = Err(format!("{}: link leads out of the destination", link.display()));
                 }
             }
         }
-        if let Some(err) = first_err {
-            return Err(err);
-        }
-        Ok(())
+        result
     }
 }
 
@@ -813,9 +741,8 @@ fn zip_mtime(f: &zip::read::ZipFile) -> Option<i64> {
     f.last_modified().and_then(zip_to_unix)
 }
 
-/// A zip entry's time as a Unix time. A zip stores the wall-clock time where it was made, with
-/// no zone, and every tool from `unzip` to Explorer reads it as local time; read as UTC it came
-/// out hours off, and only this library's own archives round-tripped.
+/// A zip entry's time as a Unix time. A zip stores zoneless wall-clock time, and every tool
+/// from `unzip` to Explorer reads it as local time.
 #[cfg(unix)]
 fn zip_to_unix(d: zip::DateTime) -> Option<i64> {
     // SAFETY: `tm` is plain data, and `mktime` only reads and normalises it.
@@ -853,7 +780,7 @@ fn unix_to_zip(secs: i64) -> Option<zip::DateTime> {
     .ok()
 }
 
-// Windows has no prebuilt yet; there the stamp is read and written as UTC, as it was before.
+// Windows: read and written as UTC.
 #[cfg(not(unix))]
 fn zip_to_unix(d: zip::DateTime) -> Option<i64> {
     time::OffsetDateTime::try_from(d).ok().map(|t| t.unix_timestamp())
@@ -926,12 +853,8 @@ fn extract(path: &str, dest: &str, password: Option<&str>, only: Option<&str>, f
                         return Ok(true);
                     }
                     let target = inside(root, &name).map_err(seven_err)?;
-                    let mtime = if e.has_last_modified_date { Some(e.last_modified_date().to_unix_time_secs()) } else { None };
-                    let mode = if e.has_windows_attributes && (e.windows_attributes >> 16) != 0 {
-                        Some(e.windows_attributes >> 16)
-                    } else {
-                        None
-                    };
+                    let mtime = e.has_last_modified_date.then(|| e.last_modified_date().to_unix_time_secs());
+                    let mode = Some(e.windows_attributes >> 16).filter(|&m| e.has_windows_attributes && m != 0);
                     if e.is_directory() {
                         pol.contains(&target).map_err(seven_err)?;
                         std::fs::create_dir_all(&target).map_err(sevenz_rust2::Error::io)?;
@@ -1150,9 +1073,7 @@ pub unsafe extern "C" fn tk_archive_read(
     })
 }
 
-// ---------------------------------------------------------------------------------------------
-// create
-// ---------------------------------------------------------------------------------------------
+// ---- create
 
 enum ItemKind {
     File,
@@ -1255,13 +1176,12 @@ fn create(format: u32, src: &str, dest: &str, password: Option<&str>, level: i32
                     }
                 }
             }
-            // The central directory is in the buffer until this flush, whose failure is the
-            // archive's: dropping the writer would swallow it.
+            // The central directory is still buffered; dropping the writer would swallow its error.
             w.finish().msg()?.flush().msg()?;
         }
         SEVENZ => {
-            // From the same walk as zip and tar: the crate's own directory walk runs after the
-            // destination exists, and archived a truncated copy of it into itself.
+            // Our own walk, as for zip and tar: the crate's runs after the destination exists
+            // and would archive it into itself.
             let mut z = sevenz_rust2::SevenZWriter::new(create_file(dest)?).msg()?;
             let lvl = if level < 0 { 6 } else { level as u32 };
             let lzma2_cfg: sevenz_rust2::SevenZMethodConfiguration =
@@ -1305,7 +1225,14 @@ fn create(format: u32, src: &str, dest: &str, password: Option<&str>, level: i32
                 .filter_map(|i| i.1.metadata().ok())
                 .map(|m| m.len())
                 .sum();
-            let mut b = tar::Builder::new(tar_writer(dest, format, level, size)?);
+            let codec = match format {
+                TAR_GZ => Some(GZIP),
+                TAR_XZ => Some(XZ),
+                TAR_ZST => Some(ZSTD),
+                TAR_BZ2 => Some(BZIP2),
+                _ => None,
+            };
+            let mut b = tar::Builder::new(encoder(codec, BufWriter::new(create_file(dest)?), level, size)?);
             b.follow_symlinks(false);
             for (name, path, kind) in &items {
                 match kind {
@@ -1317,9 +1244,7 @@ fn create(format: u32, src: &str, dest: &str, password: Option<&str>, level: i32
                     }
                 }
             }
-            let inner = b.into_inner().msg()?;
-            let mut buf_writer = inner.finish().msg()?;
-            buf_writer.flush().msg()?;
+            b.into_inner().msg()?.finish().msg()?.flush().msg()?;
         }
         _ => unreachable!(),
     }
@@ -1332,9 +1257,7 @@ pub unsafe extern "C" fn tk_archive_create(format: u32, src: *const u8, slen: us
     guard(|| create(format, text(src, slen)?, text(dest, dlen)?, opt_text(pw, pwlen)?, level))
 }
 
-// ---------------------------------------------------------------------------------------------
-// single streams
-// ---------------------------------------------------------------------------------------------
+// ---- single streams
 
 #[no_mangle]
 pub unsafe extern "C" fn tk_compress(codec: u32, src: *const u8, slen: usize, dest: *const u8, dlen: usize, level: i32) -> i32 {
@@ -1344,34 +1267,9 @@ pub unsafe extern "C" fn tk_compress(codec: u32, src: *const u8, slen: usize, de
         let size = file.metadata().map_or(0, |m| m.len());
         let mut input = BufReader::new(file);
         let out = BufWriter::new(create_file(text(dest, dlen)?)?);
-        let lvl = |d: u32| if level < 0 { d } else { level as u32 };
-        match codec {
-            GZIP => {
-                let mut enc = flate2::write::GzEncoder::new(out, flate2::Compression::new(lvl(6)));
-                pump(&mut input, &mut enc)?;
-                let mut out = enc.finish().msg()?;
-                out.flush().msg()?;
-            }
-            XZ => {
-                let mut enc = xz_encoder(out, lvl(6), size)?;
-                pump(&mut input, &mut enc)?;
-                let mut out = enc.finish().msg()?;
-                out.flush().msg()?;
-            }
-            ZSTD => {
-                let mut enc = zstd_encoder(out, if level == -1 { 3 } else { level }, size)?;
-                pump(&mut input, &mut enc)?;
-                let mut out = enc.finish().msg()?;
-                out.flush().msg()?;
-            }
-            BZIP2 => {
-                let mut enc = bzip2::write::BzEncoder::new(out, bzip2::Compression::new(lvl(9)));
-                pump(&mut input, &mut enc)?;
-                let mut out = enc.finish().msg()?;
-                out.flush().msg()?;
-            }
-            _ => return Err(format!("unknown codec {}", codec)),
-        }
+        let mut enc = encoder(Some(codec), out, level, size)?;
+        pump(&mut input, &mut enc)?;
+        enc.finish().msg()?.flush().msg()?;
         Ok(0)
     })
 }

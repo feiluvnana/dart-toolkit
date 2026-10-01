@@ -1,14 +1,10 @@
-// Measures what each module costs to import under `dart run`, as a delta against a
-// bare script, so a change to a module's closure is measured rather than argued.
+// What each module costs to import under `dart run file.dart`, as a delta over a bare script.
 //
 //   dart run tool/startup.dart            # every module, six rounds
 //   dart run tool/startup.dart http html  # a subset
 //
-// Timings drift by tens of milliseconds between runs, so each round alternates the order and the
-// table reports the median and the minimum over bare. Read the deltas, not the totals.
-//
-// This measures `dart run file.dart`. A package executable — `dart run dart_toolkit:keybox` —
-// goes through pub's incremental snapshot and pays none of this after the first run.
+// Timings drift by tens of milliseconds, so rounds alternate order and the table reports the
+// median and the minimum over bare. Read the deltas, not the totals.
 import 'dart:io';
 
 const modules = ['core', 'formats', 'collection', 'async', 'cli', 'fs', 'hash', 'process', 'http', 'chrome'];
@@ -19,14 +15,11 @@ Future<void> main(List<String> args) async {
   final pkg = File('.dart_tool/package_config.json').absolute.path;
   try {
     File('${dir.path}/bare.dart').writeAsStringSync('void main() => print(0);\n');
-    for (final m in selected) {
+    for (final (name, lib) in [for (final m in selected) (m, m), ('barrel', 'dart_toolkit')]) {
       File(
-        '${dir.path}/$m.dart',
-      ).writeAsStringSync("import 'package:dart_toolkit/$m.dart';\nvoid main() => print(0);\n");
+        '${dir.path}/$name.dart',
+      ).writeAsStringSync("import 'package:dart_toolkit/$lib.dart';\nvoid main() => print(0);\n");
     }
-    File(
-      '${dir.path}/barrel.dart',
-    ).writeAsStringSync("import 'package:dart_toolkit/dart_toolkit.dart';\nvoid main() => print(0);\n");
 
     Future<int> time(String name) async {
       final sw = Stopwatch()..start();

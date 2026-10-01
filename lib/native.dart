@@ -1,12 +1,10 @@
 /// # Native
 ///
-/// `NativeLib`: the loader for `dart_toolkit_native`, the Rust library that gives `hash`,
-/// `fs` and `http` the same fast functions on every platform. Import it to ask
-/// `NativeLib.isAvailable` before calling something that needs it.
+/// `NativeLib`: the loader for `dart_toolkit_native`, the Rust library behind `hash`, `fs`
+/// and `http`. Ask `NativeLib.isAvailable` before calling something that needs it.
 ///
-/// It is `NativeLib` and not `Native` because the barrel exports it, and a package name
-/// silently beats a `dart:` one: `Native` hid `dart:ffi`'s `@Native` from every program that
-/// imported both.
+/// Not `Native`: the barrel exports it, and it would hide `dart:ffi`'s `@Native`.
+
 ///
 /// {@category Native}
 library;
