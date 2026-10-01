@@ -169,24 +169,6 @@ final class Span {
   const Span(this.text, [this.style = Style.none]);
 }
 
-/// The glyphs a box is drawn with.
-///
-/// {@category CLI}
-final class Border {
-  final String topLeft, top, topRight, side, bottomLeft, bottomRight;
-
-  const Border(this.topLeft, this.top, this.topRight, this.side, this.bottomLeft, this.bottomRight);
-
-  static const rounded = Border('╭', '─', '╮', '│', '╰', '╯');
-  static const square = Border('┌', '─', '┐', '│', '└', '┘');
-  static const double = Border('╔', '═', '╗', '║', '╚', '╝');
-  static const heavy = Border('┏', '━', '┓', '┃', '┗', '┛');
-  static const ascii = Border('+', '-', '+', '|', '+', '+');
-
-  /// No glyphs and no space: a [Box] with it is only its padding and title.
-  static const none = Border('', '', '', '', '', '');
-}
-
 /// The tokens every widget shares: palette and glyph sets. A widget's own parameters and builders
 /// are its tweaks; this is what keeps a screen of them consistent.
 ///

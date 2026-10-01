@@ -51,9 +51,8 @@ final class ConsoleTheme {
   /// A bar's filled and empty glyphs, and the tip a board row's bar ends in.
   final String fill, empty, head;
 
-  /// 11 glyphs read off a box — top `┌─┬┐`, side `│`, middle `├┼┤`, bottom `└┴┘` — for
-  /// `Table.show`; [Console.rule] repeats the second.
-  final String border;
+  /// `Table.show`'s border; [Console.rule] repeats its [Border.top].
+  final Border border;
 
   /// A board row's prefix, and its last row's.
   final (String, String) tree;
@@ -79,7 +78,7 @@ final class ConsoleTheme {
     this.fill = '=',
     this.empty = '-',
     this.head = '>',
-    this.border = '┌─┬┐│├┼┤└┴┘',
+    this.border = Border.square,
     this.tree = ('├─', '└─'),
     this.prompt = '',
     this.promptEnd = ': ',
@@ -93,7 +92,7 @@ final class ConsoleTheme {
     error: 'x',
     debug: '.',
     frames: [r'-', r'\', r'|', r'/'],
-    border: '+-++|++++++',
+    border: Border.ascii,
     tree: ('|-', '`-'),
   );
 
@@ -1137,7 +1136,7 @@ class Console {
   static void rule([String? title]) => _durable(() {
     final t = theme;
     final cols = Io.columns ?? 80;
-    final glyph = t.border.isEmpty ? ' ' : String.fromCharCode(t.border.runes.elementAt(1));
+    final glyph = t.border.top.isEmpty ? ' ' : t.border.top;
     if (title == null || title.isEmpty) return Io.out.writeln(glyph * cols);
     final titleLen = Io.width(title) + 2;
     if (titleLen >= cols) return Io.out.writeln('${glyph * 2} $title ${glyph * 2}');

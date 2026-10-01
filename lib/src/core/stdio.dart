@@ -144,7 +144,7 @@ final class IoBridge {
   static Future<T> Function<T>(Future<T> Function() action)? suspend;
 
   /// The console theme's border glyphs, for `collection`'s `Table.show`; set once `cli` draws.
-  static String Function()? border;
+  static Border Function()? border;
 }
 
 /// A sink that drops escapes on the way through.

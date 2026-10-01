@@ -439,18 +439,14 @@ final class Table {
 
   /// Prints this table to `Io.out`, the package's only table renderer.
   ///
-  /// [border] is 11 glyphs read off the box — top `┌─┬┐`, side `│`, middle `├┼┤`, bottom
-  /// `└┴┘` — by default the console theme's. A divider whose joints are spaces is left out;
-  /// `''` draws no border. [align] has a letter per column, `l`, `r` or `c`, as in LaTeX.
+  /// [border] defaults to the console theme's; [Border.none] draws only aligned columns. [align] has a letter per column, `l`, `r` or `c`, as in LaTeX.
   /// [cell] writes a cell's text (default: the value, a missing one blank).
   ///
   /// ```dart
-  /// t.show(border: '+-++|++++++', align: 'lr', cell: (r, c) => c == 'size' ? r.number(c).humanBytes : r.text(c));
+  /// t.show(border: Border.ascii, align: 'lr', cell: (r, c) => c == 'size' ? r.number(c).humanBytes : r.text(c));
   /// ```
-  void show({String? border, String align = '', String Function(Row row, String column)? cell}) {
-    border ??= IoBridge.border?.call() ?? '┌─┬┐│├┼┤└┴┘';
-    final g = border.isEmpty ? List.filled(11, ' ') : [for (final r in border.runes) String.fromCharCode(r)];
-    if (g.length != 11) throw ArgumentError.value(border, 'border', 'Not 11 glyphs');
+  void show({Border? border, String align = '', String Function(Row row, String column)? cell}) {
+    final b = border ?? IoBridge.border?.call() ?? Border.square;
     final grid = [
       for (final r in rows) [for (final c in columns) cell?.call(r, c) ?? r.text(c)],
     ];
@@ -472,24 +468,24 @@ final class Table {
 
     final out = StringBuffer();
     void divider(String left, String cross, String right) {
-      if ('$left$cross$right'.trim().isNotEmpty) {
-        out.writeln('$left${widths.map((w) => g[1] * (w + 2)).join(cross)}$right');
+      if (b.top.isNotEmpty && '$left$cross$right'.trim().isNotEmpty) {
+        out.writeln('$left${widths.map((w) => b.top * (w + 2)).join(cross)}$right');
       }
     }
 
     void line(List<String> row) {
-      final side = g[4];
+      final side = b.side.isEmpty ? ' ' : b.side;
       final text = '$side${[for (var i = 0; i < columns.length; i++) ' ${padded(row[i], i)} '].join(side)}$side';
       out.writeln(side == ' ' ? text.trimRight() : text);
     }
 
-    divider(g[0], g[2], g[3]);
+    divider(b.topLeft, b.topTee, b.topRight);
     if (columns.isNotEmpty) {
       line(columns);
-      divider(g[5], g[6], g[7]);
+      divider(b.leftTee, b.cross, b.rightTee);
     }
     grid.forEach(line);
-    divider(g[8], g[9], g[10]);
+    divider(b.bottomLeft, b.bottomTee, b.bottomRight);
     // Above a live spinner or board, never on its rows.
     void write() => Io.out.write(out);
     if (IoBridge.above case final above?) {

@@ -1820,7 +1820,11 @@ void main() {
     });
 
     test('rule and prompts draw with the theme', () async {
-      Console.theme = const ConsoleTheme(border: '+=++|++++++', prompt: '? ', promptEnd: ' › ');
+      Console.theme = const ConsoleTheme(
+        border: Border(top: '='),
+        prompt: '? ',
+        promptEnd: ' › ',
+      );
       Console.rule();
       Io.input = () => 'sam';
       expect(await Console.ask('Name'), 'sam');
@@ -1855,7 +1859,7 @@ void main() {
       expect(Io.stripAnsi(ascii.stdout), '  + done\n+---+\n| k |\n+---+\n| v |\n+---+\n');
     }, testOn: '!windows');
 
-    test('Table.show takes a border of 11 glyphs, an alignment per column and a cell builder', () {
+    test('Table.show takes a Border, an alignment per column and a cell builder', () {
       final t = Table.cells(
         ['name', 'n'],
         [
@@ -1863,9 +1867,9 @@ void main() {
           ['bcd', 100],
         ],
       );
-      t.show(border: '+-++|++++++', align: 'cr');
-      t.show(border: '', cell: (row, column) => column == 'n' ? '#${row.text(column)}' : row.text(column));
-      t.show(border: ' -  ||||   ');
+      t.show(border: Border.ascii, align: 'cr');
+      t.show(border: Border.none, cell: (row, column) => column == 'n' ? '#${row.text(column)}' : row.text(column));
+      t.show(border: Border.markdown);
       expect(
         out.toString(),
         '+------+-----+\n'
@@ -1882,7 +1886,6 @@ void main() {
         '| a    | 1   |\n'
         '| bcd  | 100 |\n',
       );
-      expect(() => t.show(border: '+-+'), throwsArgumentError);
     });
   });
 }

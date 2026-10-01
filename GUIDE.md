@@ -967,7 +967,7 @@ await pairs.download().show(
   task: (t) => '${t.index}/${t.count} ${t.name} ${t.speed.humanBytes}/s',   // TaskView: state, bytes, eta…
   header: (b) => '${b.completed}/${b.total} ${b.speed.humanBytes}/s',     // BatchView
 );
-table.show(border: '+-++|++++++', align: 'lr', cell: (row, c) => row.text(c));
+table.show(border: Border.markdown, align: 'lr', cell: (row, c) => row.text(c)); // also square, rounded, double, heavy, ascii, none
 ```
 
 `isLive` on a view says whether the line is redrawn in place or is the one a log keeps.
