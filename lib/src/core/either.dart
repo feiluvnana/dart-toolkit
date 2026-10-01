@@ -2,7 +2,7 @@ part of '../../core.dart';
 
 Object _throwable(Object? value) => value ?? StateError('Unwrapped a Left holding null');
 
-/// A type-safe disjoint union representing either a failure [Left] or a success [Right].
+/// A failure [Left] or a success [Right].
 ///
 /// {@category Formats}
 sealed class Either<L, R> {
@@ -27,17 +27,15 @@ sealed class Either<L, R> {
   };
 }
 
-/// The failure / left branch of [Either].
+/// The failure branch of [Either].
 ///
 /// {@category Formats}
 final class Left<L, R> extends Either<L, R> {
-  /// The underlying left value.
   final L value;
 
   /// Where the failure was caught, when it was; [unwrap] rethrows with it.
   final StackTrace? trace;
 
-  /// Creates a [Left] outcome.
   const Left(this.value, [this.trace]);
 
   @override
@@ -50,14 +48,12 @@ final class Left<L, R> extends Either<L, R> {
   String toString() => 'Left($value)';
 }
 
-/// The success / right branch of [Either].
+/// The success branch of [Either].
 ///
 /// {@category Formats}
 final class Right<L, R> extends Either<L, R> {
-  /// The underlying right value.
   final R value;
 
-  /// Creates a [Right] outcome.
   const Right(this.value);
 
   @override

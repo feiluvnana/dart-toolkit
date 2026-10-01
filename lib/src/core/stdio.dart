@@ -7,8 +7,7 @@ class Io {
   static StringSink? _out;
   static StringSink? _err;
 
-  /// Replaces standard input. Return `null` to signal end of input, which lets
-  /// tests and non-interactive runs exercise the end-of-input path of a prompt.
+  /// Replaces standard input; returning `null` is end of input.
   static String? Function()? input;
 
   /// The active standard output sink. Assign to redirect it; assign `null` to restore.
@@ -18,8 +17,7 @@ class Io {
 
   /// The active standard error sink. Assign to redirect it; assign `null` to restore.
   ///
-  /// The process's stderr is asked about colour on its own: `app 2>log` keeps colour on the
-  /// terminal and writes a log with no escapes in it.
+  /// Colour is decided for stderr on its own, so `app 2>log` writes a log with no escapes.
   static StringSink get err =>
       _err != null ? (_errTakesColor ? _err! : _Plain(_err!)) : (_errTakesColor ? _stderr : _plainStderr);
   static set err(StringSink? sink) => _err = sink;
@@ -30,23 +28,26 @@ class Io {
   static final StringSink _plainStdout = _Plain(_stdout);
   static final StringSink _plainStderr = _Plain(_stderr);
 
-  /// The process sinks with a closed pipe made harmless: `app --help | head` ends the
-  /// reader early, and without this the write that follows is an unhandled `Broken pipe`.
+  /// The process sinks with a closed pipe made harmless: `app --help | head` would otherwise end
+  /// in an unhandled `Broken pipe`.
   static final IOSink _stdout = _quiet(stdout);
   static final IOSink _stderr = _quiet(stderr);
 
-  static IOSink _quiet(IOSink sink) {
-    sink.done.catchError((_) {});
-    return sink;
+  static IOSink _quiet(IOSink sink) => sink..done.catchError((_) {});
+
+  static bool _ask(bool Function() native) {
+    try {
+      return native();
+    } catch (_) {
+      return false;
+    }
   }
 
   /// Whether output is going somewhere other than the process's own stdout.
   static bool get isRedirected => _out != null;
 
-  /// Whether the *active* output sink is an interactive terminal.
-  ///
-  /// Redirecting [out] must also redirect the decision about what to render, so
-  /// every cursor-control path gates on this rather than on `stdout.hasTerminal`.
+  /// Whether the *active* output sink is an interactive terminal; cursor control gates on this,
+  /// not `stdout.hasTerminal`, so redirecting [out] redirects the decision too.
   static bool get isTerminal => !isRedirected && _hasTerminal;
 
   /// Whether stderr is going somewhere other than the process's own stderr.
@@ -55,23 +56,11 @@ class Io {
   /// Whether the *active* error sink is an interactive terminal.
   static bool get isErrTerminal => !isErrRedirected && _hasErrTerminal;
 
-  /// A native call, asked once: whether stdout is a terminal does not change while it runs,
-  /// and asking per call was most of the cost of a progress tick.
-  static final bool _hasTerminal = () {
-    try {
-      return stdout.hasTerminal;
-    } catch (_) {
-      return false;
-    }
-  }();
-
-  static final bool _hasErrTerminal = () {
-    try {
-      return stderr.hasTerminal;
-    } catch (_) {
-      return false;
-    }
-  }();
+  // Native calls, asked once: per call they were most of the cost of a progress tick.
+  static final _hasTerminal = _ask(() => stdout.hasTerminal);
+  static final _hasErrTerminal = _ask(() => stderr.hasTerminal);
+  static final _ansiTerminal = _ask(() => stdout.supportsAnsiEscapes && !Env.has('NO_COLOR'));
+  static final _ansiStderr = _ask(() => stderr.supportsAnsiEscapes && !Env.has('NO_COLOR'));
 
   /// The width of the active terminal, or `null` when there is no terminal.
   static int? get columns {
@@ -85,9 +74,8 @@ class Io {
 
   /// Reads a line from standard input or the [input] override; `null` at end of input.
   ///
-  /// The read blocks a helper isolate, never this one, so a signal handler — `Cli.run`'s
-  /// ^C — still runs while a prompt waits. Nothing is left listening afterwards, so a script
-  /// that asks one question still ends when `main` does.
+  /// The read blocks a helper isolate, so `Cli.run`'s ^C handler still runs while a prompt waits,
+  /// and nothing is left listening on stdin afterwards.
   static Future<String?> readLine({Encoding encoding = utf8}) async {
     if (input case final scripted?) return scripted();
     return Isolate.run(() => stdin.readLineSync(encoding: encoding));
@@ -100,45 +88,16 @@ class Io {
     input = null;
   }
 
-  /// Whether ANSI styling is enabled.
-  ///
-  /// Resolution order: an explicit assignment here, then `NO_COLOR`, then the active sink —
-  /// redirecting [out] disables styling so captured output is plain. Assign `null` to
-  /// restore the automatic answer.
-  ///
-  /// This lives beside [out], [isTerminal] and [width] because it is the same question they
-  /// answer: what the active sink can render.
-  static bool get color {
-    if (_color != null) return _color!;
-    if (isRedirected) return false;
-    if (Env.has('NO_COLOR')) return false;
-    return _ansiTerminal;
-  }
+  /// Whether ANSI styling is enabled: an assignment here, else off when [out] is redirected or
+  /// `NO_COLOR` is set, else whether the terminal takes escapes. Assign `null` to restore.
+  static bool get color => _color ?? (!isRedirected && !Env.has('NO_COLOR') && _ansiTerminal);
 
   static set color(bool? value) => _color = value;
 
-  /// Whether an explicit colour override was set via [color], or `null` if none.
+  /// The value assigned to [color], or `null`.
   static bool? get colorOverride => _color;
 
   static bool? _color;
-
-  /// Whether the process's stdout takes escapes: a native call, asked once.
-  static final bool _ansiTerminal = () {
-    try {
-      return stdout.supportsAnsiEscapes && !Env.has('NO_COLOR');
-    } catch (_) {
-      return false;
-    }
-  }();
-
-  /// The same question of stderr, which is often somewhere else.
-  static final bool _ansiStderr = () {
-    try {
-      return stderr.supportsAnsiEscapes && !Env.has('NO_COLOR');
-    } catch (_) {
-      return false;
-    }
-  }();
 
   /// [text] without ANSI escape sequences.
   static String stripAnsi(String text) => text.contains('\x1b') ? text.replaceAll(_ansiEscape, '') : text;
@@ -171,13 +130,8 @@ class Io {
   }
 }
 
-/// Not API: how `cli`'s live region lets another module write above it.
-///
-/// `process` echoes a child's output and cannot import `cli`, which owns the bottom rows
-/// of the terminal while a spinner or a board is drawn. `cli` sets [above] while something
-/// is live and clears it when nothing is; a writer that finds it set hands its write over,
-/// and the renderer is cleared, the write lands where it stood, and the renderer is drawn
-/// again below it.
+/// Not API: how a module that cannot import `cli` (e.g. `process` echoing a child) writes above
+/// `cli`'s live region. `cli` sets [above] while something is live.
 ///
 /// {@category CLI}
 final class IoBridge {
@@ -190,7 +144,7 @@ final class IoBridge {
   static Future<T> Function<T>(Future<T> Function() action)? suspend;
 }
 
-/// A sink that drops escapes on the way through: stderr when it is not a terminal.
+/// A sink that drops escapes on the way through.
 final class _Plain implements StringSink {
   final StringSink _sink;
 
@@ -214,15 +168,14 @@ final class _Plain implements StringSink {
 int _charVisualWidth(int rune) {
   if (rune < 0x20 || (rune >= 0x7f && rune < 0xa0)) return 0;
   if (rune < 0x7f) return 1;
-  // Combining characters / zero width
+  // Combining and zero-width.
   if (rune >= 0x0300 && rune <= 0x036f) return 0;
   if (rune >= 0x200b && rune <= 0x200f) return 0;
   if (rune == 0x200d) return 0;
   if (rune >= 0xfe00 && rune <= 0xfe0f) return 0;
   if (rune >= 0x1f3fb && rune <= 0x1f3ff) return 0;
 
-  // East Asian Wide / Fullwidth / Emoji. Dingbats (✓ ✖ ⚠, U+2600–27BF) are mostly one column,
-  // but ✅, ❌, ☕, ⚡ are Wide (2 columns).
+  // East Asian Wide/Fullwidth and emoji; of the dingbats only ☕ ⚡ ✅ ❌ are wide.
   if (rune == 0x2615 ||
       rune == 0x26a1 ||
       rune == 0x2705 ||

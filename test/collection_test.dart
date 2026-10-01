@@ -380,7 +380,7 @@ void main() {
     });
   });
 
-  group('audit regressions', () {
+  group('regressions', () {
     test('a stray quote is a character, not the start of the rest of the file', () {
       final t = Table.csv('size,name\n5" floppy,disk\n3,tape\n4,reel\n');
       expect(t.length, 3);
@@ -395,7 +395,7 @@ void main() {
     });
 
     test('CSV rows read like the maps they replaced', () {
-      // A repeated header is `a_2`, not a column lost: keyed by name, the first `a` was gone.
+      // A repeated header is `a_2`, not a column lost.
       final t = Table.csv('a,b,a\n1,2,3\n4\n\n5,6,7,8\n');
       expect(t.columns, ['a', 'b', 'a_2']);
       expect(t.rows.map((r) => Map.of(r)).toList(), [
@@ -462,7 +462,7 @@ void main() {
     });
   });
 
-  group('CSV and Table, the second audit', () {
+  group('CSV and Table edge cases', () {
     test('a quote never closed is a FormatException naming its line', () {
       expect(
         () => Table.csv('a,b\n1,"open\n2,3\n'),
@@ -476,7 +476,7 @@ void main() {
       final bad = File('${dir.path}/bad.csv')..writeAsStringSync('a\n"never closed\n');
       await expectLater(Table.readRows(bad.path).toList(), throwsA(isA<FormatException>()));
 
-      // One cell of 8 MB spans ~128 chunks; rescanning it on every chunk was quadratic.
+      // One cell of 8 MB spans ~128 chunks; rescanning it per chunk would be quadratic.
       final big = File('${dir.path}/big.csv')..writeAsStringSync('a,b\n"${'x' * (8 << 20)}",1\n2,3\n');
       final rows = await Table.readRows(big.path).toList();
       expect(rows.map((r) => r['b']), ['1', '3']);
@@ -565,7 +565,7 @@ void main() {
       expect(File('${dir.path}/t.md').readAsStringSync(), startsWith('| a | b |'));
     });
 
-    test('COLL-2: mixed numeric and text column sorts numbers first', () {
+    test('mixed numeric and text column sorts numbers first', () {
       final t1 = Table.rows([
         {'val': 'alpha'},
         {'val': 10},
@@ -582,13 +582,13 @@ void main() {
       expect(t2.orderBy('val').texts('val'), ['2', '10', 'alpha', 'beta']);
     });
 
-    test('COLL-3: blank CSV cells sort last, ascending and descending', () {
+    test('blank CSV cells sort last, ascending and descending', () {
       final t = Table.csv('id,score\n1,10\n2,\n3,5\n4,  \n');
       expect(t.orderBy('score').texts('id'), ['3', '1', '2', '4']);
       expect(t.orderBy('score', descending: true).texts('id'), ['1', '3', '2', '4']);
     });
 
-    test('COLL-4: where, select, rename, derive, distinct preserve _order', () {
+    test('where, select, rename, derive, distinct preserve _order', () {
       final t = Table.rows([
         {'cat': 'b', 'num': 2, 'name': 'two'},
         {'cat': 'a', 'num': 3, 'name': 'three'},
@@ -613,7 +613,7 @@ void main() {
       expect(t.orderBy('cat').distinct().thenBy('num').texts('name'), ['one', 'three', 'two']);
     });
 
-    test('COLL-5: Table.read rejects .md, Table.readRows rejects .json and .md', () async {
+    test('Table.read rejects .md, Table.readRows rejects .json and .md', () async {
       final dir = Directory.systemTemp.createTempSync('unsupported_');
       addTearDown(() => dir.deleteSync(recursive: true));
       final md = File('${dir.path}/t.md')..writeAsStringSync('| a |\n|---|');
@@ -624,7 +624,7 @@ void main() {
       await expectLater(Table.readRows(json.path).toList(), throwsUnsupportedError);
     });
 
-    test('COLL-6: join column name clash does not overwrite existing _2 columns', () {
+    test('join column name clash does not overwrite existing _2 columns', () {
       final t1 = Table.rows([
         {'id': 1, 'x': 'left_x', 'x_2': 'left_x2'},
       ]);
@@ -636,7 +636,7 @@ void main() {
       expect(joined.rows.single, {'id': 1, 'x': 'left_x', 'x_2': 'left_x2', 'x_3': 'right_x'});
     });
 
-    test('COLL-7: join and leftJoin do not match null keys', () {
+    test('join and leftJoin do not match null keys', () {
       final t1 = Table.rows([
         {'id': null, 'a': 1},
         {'id': 2, 'a': 2},
@@ -657,7 +657,7 @@ void main() {
       ]);
     });
 
-    test('COLL-8: get<int> on 1e400 throws StateError, not UnsupportedError', () {
+    test('get<int> on 1e400 throws StateError, not UnsupportedError', () {
       final t = Table.rows([
         {'val': '1e400'},
       ]);
@@ -697,7 +697,7 @@ void main() {
     });
   });
 
-  group('the fourth audit', () {
+  group('coercion and folding', () {
     test('a Sequence answers length, last, elementAt and toList from its source', () {
       final s = [1, 2, 3].sequence.map((n) => n * 10);
       expect(s.length, 3);
@@ -712,13 +712,13 @@ void main() {
       expect(sorted.elementAt(1), 2);
     });
 
-    test('Table.numbers is a Sequence, ready to fold (B-COLL-1)', () {
+    test('Table.numbers is a Sequence, ready to fold', () {
       final t = Table.csv('bytes\n"1,200"\n800\n');
       expect(t.numbers('bytes').sum, 2000);
       expect(t.numbers('bytes').max, 1200);
     });
 
-    test('numbers: plain text parses first; grouped commas, signs and the rest (P-COLL-3, COLL-8)', () {
+    test('numbers: plain text parses first; grouped commas, signs and the rest', () {
       final r = Row({
         'big': '1e400',
         'grouped': '-1,234.5',
@@ -740,7 +740,7 @@ void main() {
       expect(r.get<int>('pad'), 12);
     });
 
-    test('get<DateTime> reads ISO 8601 text (F-11)', () {
+    test('get<DateTime> reads ISO 8601 text', () {
       final r = Row({'at': '2024-01-02T03:04:05Z', 'day': '2024-03-01', 'no': 'soon', 'n': 5});
       expect(r.get<DateTime>('at'), DateTime.utc(2024, 1, 2, 3, 4, 5));
       expect(r.get<DateTime>('day'), DateTime(2024, 3, 1));

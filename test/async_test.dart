@@ -142,9 +142,7 @@ void main() {
       token.onCancel(() => fired++);
       unregister();
 
-      // Work that completes normally deregisters itself; not observable from here
-      // beyond "it still behaves", but it is what stops a long-lived token from
-      // retaining every listener it was ever given.
+      // Work that completes normally deregisters itself (not observable beyond "it still behaves").
       final controller = StreamController<int>();
       await Cancel.scope(token: token, () async {
         await Future<int>.value(1).cancellable;
@@ -399,7 +397,7 @@ void main() {
       expect(await throttled, equals([1, 4]));
     });
 
-    test('throttle(trailing: true) emits pending item before error (ASYNC-2)', () async {
+    test('throttle(trailing: true) emits pending item before error', () async {
       final controller = StreamController<int>();
       final items = <int>[];
       Object? receivedError;
@@ -614,7 +612,7 @@ void main() {
     });
   });
 
-  group('audit: what the bugs pointed at', () {
+  group('regressions', () {
     test('Stream.parallelize(isolate: true) returns values, not unsendable Lefts', () async {
       final out = await Stream.fromIterable([1, 2, 3]).parallelize(_double, isolate: true).toList();
       expect(out.rights.toList()..sort(), [2, 4, 6]);
@@ -735,7 +733,7 @@ void main() {
     });
   });
 
-  group('second audit', () {
+  group('edge cases', () {
     test('close runs every worker\'s close, the busy ones\' too', () async {
       _Slow.closes = 0;
       final pool = await Pool.spawn(_Slow.new, size: 2, isolate: false);
@@ -752,7 +750,7 @@ void main() {
       expect(await Future.wait(inFlight), [0, 0]);
     });
 
-    test('Pool.close() completes already-queued runs and refuses new ones (ASYNC-3)', () async {
+    test('Pool.close() completes already-queued runs and refuses new ones', () async {
       final pool = await Pool.spawn(_Slow.new, size: 1, isolate: false);
       final first = pool.run(1);
       final queued = pool.run(2);
@@ -798,7 +796,7 @@ void main() {
       expect(await Cancel.scope(() => 1, timeout: 1.s), 1);
     });
 
-    test('Cancel.scope(token: shared, timeout:) does not cancel the shared token on timeout (CORE-1)', () async {
+    test('Cancel.scope(token: shared, timeout:) does not cancel the shared token on timeout', () async {
       final shared = CancelToken();
       await expectLater(
         Cancel.scope(() => 5.s.delay(), token: shared, timeout: 50.ms),
@@ -842,7 +840,7 @@ void main() {
       expect(await out, [2, 3]);
     });
 
-    test('chunkEvery emits the batch held before an error ahead of it (ASYNC-2)', () async {
+    test('chunkEvery emits the batch held before an error ahead of it', () async {
       final controller = StreamController<int>();
       final events = <Object>[];
       final done = Completer<void>();

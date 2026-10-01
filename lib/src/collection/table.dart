@@ -2,9 +2,8 @@ part of '../../collection.dart';
 
 /// One row of a [Table]: column name to value, with typed cell reads.
 ///
-/// `number` and `get` throw a [StateError] naming the column and the row when the value is
-/// missing or does not convert, so a typo or a bad cell fails where it happens; the `OrNull`
-/// forms answer `null` instead.
+/// `number` and `get` throw a [StateError] naming the column and row when the value is missing
+/// or does not convert; the `OrNull` forms answer `null`.
 ///
 /// {@category Collections}
 extension type const Row(Map<String, Object?> _map) implements Map<String, Object?> {
@@ -36,8 +35,8 @@ extension type const Row(Map<String, Object?> _map) implements Map<String, Objec
 /// {@category Collections}
 enum Agg { count, sum, avg, min, max, first, last, list }
 
-/// Rows of named columns: what a scraped listing, a CSV, a JSON array of objects and an HTML
-/// `<table>` all are. Eager, immutable; every operation returns a new table.
+/// Rows of named columns (a scraped listing, a CSV, a JSON array of objects, an HTML `<table>`).
+/// Eager and immutable; every operation returns a new table.
 ///
 /// ```dart
 /// final t = doc.$('table#songs').table;
@@ -52,8 +51,7 @@ final class Table {
   /// The rows; each has every column, `null` where a value is missing.
   List<Row> get rows => _rows ??= _sort(_unsorted!, _order);
 
-  /// The rows, once they are in order. `null` only for a table [orderBy] made that nothing
-  /// has read yet: `orderBy(…).take(10)` then picks the ten without sorting the rest.
+  /// `null` until an [orderBy] table is read, so `orderBy(…).take(10)` can select without sorting.
   List<Row>? _rows;
 
   /// The rows [_order] has not been applied to yet, while [_rows] is `null`.
@@ -61,8 +59,7 @@ final class Table {
 
   final List<(String, bool)> _order;
 
-  /// [columns] as a set, built on the first lookup. A table is immutable, so it cannot go
-  /// stale, and every operation that names a column asks [_has] rather than scanning.
+  /// [columns] as a set, for [_has].
   Set<String>? _names;
 
   Table._(this.columns, List<Row> rows, this._order) : _rows = rows, _unsorted = null;
@@ -81,8 +78,7 @@ final class Table {
     return Table(columns, list);
   }
 
-  /// A table from [headers] and positional [rows] — the shape a program already has when
-  /// it is about to print something. A short row is padded, a long one cut.
+  /// A table from [headers] and positional [rows]; a short row is padded, a long one cut.
   ///
   /// ```dart
   /// Table.cells(['setting', 'value'], [['workers', 8], ['dry run', false]]).show();
@@ -91,14 +87,11 @@ final class Table {
     for (final row in rows) {for (var i = 0; i < headers.length; i++) headers[i]: i < row.length ? row[i] : null},
   ]);
 
-  /// A table from CSV text (RFC 4180: quoted fields, doubled quotes, newlines inside quotes).
-  /// The first record names the columns; every value is a [String]. A leading byte-order
-  /// mark is dropped, and a quote that does not open a field is only a character.
+  /// A table from RFC 4180 CSV text; the first record names the columns and every value is a
+  /// [String].
   ///
-  /// A blank line is not a record, before the header or after it; `""` on a line of its own
-  /// is a row with one empty cell. A header that repeats a name reads the second as
-  /// `name_2`, as [join] names a clash, so no column is lost. A quote that is never closed
-  /// is a [FormatException], never the rest of the file swallowed into one cell.
+  /// A leading BOM and blank lines are skipped (`""` alone is a row of one empty cell); a
+  /// repeated header name becomes `name_2`; an unclosed quote is a [FormatException].
   factory Table.csv(String text, {String separator = ','}) {
     final (records, _) = _scanCsv(text, _oneChar(separator), 0, done: true);
     if (records.isEmpty) return Table(const [], const []);
@@ -107,9 +100,7 @@ final class Table {
   }
 
   /// The table in the file at [path], by its extension: `.json` (an array of objects),
-  /// The table in the file at [path], by its extension: `.json` (an array of objects),
-  /// `.ndjson` or `.jsonl`, `.tsv`, and CSV for anything else. JSON, NDJSON, TSV and CSV
-  /// can be read back with [read].
+  /// `.ndjson`/`.jsonl`, `.tsv`, and CSV for anything else.
   static Future<Table> read(String path, {String? separator}) async {
     final ext = _extension(path);
     if (ext == 'md' || ext == 'markdown') {
@@ -134,8 +125,8 @@ final class Table {
     _ => null,
   };
 
-  /// The rows of the CSV, TSV or NDJSON file at [path], as they are read: for a file larger
-  /// than memory, or to stop early. The same rows [read] would give, one at a time.
+  /// The rows [read] would give for a CSV, TSV or NDJSON file, streamed: for a file larger than
+  /// memory, or to stop early.
   static Stream<Row> readRows(String path, {String? separator}) async* {
     final ext = _extension(path);
     if (ext == 'json' || ext == 'md' || ext == 'markdown') {
@@ -152,9 +143,8 @@ final class Table {
     _Header? header;
     var pending = '';
     var first = true;
-    // The record a chunk ends inside is carried into the next one, and read again from its
-    // start — but only once what has arrived since is as long as what is carried. Rescanning
-    // on every chunk made one record the size of the file cost the file's size squared.
+    // The record a chunk ends inside is carried over and rescanned only once as much text has
+    // arrived as is carried, so one huge record is not quadratic.
     final arrived = <String>[];
     var waiting = 0;
     await for (final piece in text) {
@@ -187,24 +177,14 @@ final class Table {
   factory Table.ndjson(String text) => Table.rows([for (final line in text.split('\n')) ?_ndjsonRow(line)]);
 
   /// One NDJSON line's object; `null` for a blank line or one that holds something else.
-  static Row? _ndjsonRow(String line) => line.trim().isEmpty
-      ? null
-      : switch (jsonDecode(line)) {
-          final Map<Object?, Object?> m => Row({
-            for (final e in m.entries) e.key is String ? e.key as String : '${e.key}': e.value,
-          }),
-          _ => null,
-        };
+  static Row? _ndjsonRow(String line) => line.trim().isEmpty ? null : _object(jsonDecode(line));
 
-  /// The separator's code unit. The scanner reads one at a time, so a longer separator would
-  /// silently match on its first character alone.
+  /// The separator's code unit; a longer one would silently match on its first character.
   static int _oneChar(String separator) => separator.length == 1
       ? separator.codeUnitAt(0)
       : throw ArgumentError.value(separator, 'separator', 'must be exactly one character');
 
-  /// Rows are frozen on the way in, so the documented immutability is real: a write
-  /// through `table.rows` would otherwise change this table and every table derived from it.
-  /// A CSV row is frozen already.
+  /// Rows are frozen on the way in, so a write through `table.rows` cannot reach derived tables.
   static Row _copy(Map<String, Object?> r) => r is _CsvRow ? r as Row : Row(Map<String, Object?>.unmodifiable(r));
 
   /// A row this table just built and nobody else holds: frozen by a view, not a copy.
@@ -217,18 +197,14 @@ final class Table {
   bool get isEmpty => rows.isEmpty;
   bool get isNotEmpty => rows.isNotEmpty;
 
-  // The column is checked once, not once per row: `_has` scans the column list, so leaving
-  // it inside the comprehension made reading one column cost rows × columns comparisons.
-
   /// Every value of [column], top to bottom: `t['title']`. Rows are `t.rows[i]`.
   List<Object?> operator [](String column) {
     final c = _has(column);
     return [for (final r in rows) r[c]];
   }
 
-  /// Every value of [column] as a number, ready to fold: `t.numbers('bytes').sum`. A cell
-  /// that is not one throws. Text reads as a decimal number only: `0x10`, `NaN` and
-  /// `Infinity` are not numbers in a table.
+  /// Every value of [column] as a number: `t.numbers('bytes').sum`. A cell that is not a decimal
+  /// number (`0x10`, `NaN` and `Infinity` are not) throws.
   Sequence<num> numbers(String column) {
     final c = _has(column);
     return Sequence<num>._([for (final r in rows) r.number(c)]);
@@ -256,8 +232,7 @@ final class Table {
   /// The first [count] rows. Straight after [orderBy], only those [count] are sorted.
   Table take(int count) => Table._(columns, _top(count), _order);
 
-  /// The first [count] rows in order: from a table that is not sorted yet, a selection of
-  /// the [count] smallest rather than a sort of every row.
+  /// The first [count] rows in order, selected rather than sorted when not sorted yet.
   List<Row> _top(int count) {
     final unsorted = _unsorted;
     if (_rows != null || unsorted == null || count >= unsorted.length ~/ 8) return rows.take(count).toList();
@@ -270,7 +245,6 @@ final class Table {
   Table skip(int count) => Table._(columns, rows.skip(count).toList(), _order);
 
   /// Sorted by [column], largest first when [descending]; numbers compare as numbers, `null` last.
-  ///
   /// The sort runs when the rows are first read, so `orderBy(…).take(n)` sorts only `n`.
   Table orderBy(String column, {bool descending = false}) =>
       Table._ordered(columns, _sourceRows, [(_has(column), descending)]);
@@ -279,12 +253,10 @@ final class Table {
   Table thenBy(String column, {bool descending = false}) =>
       Table._ordered(columns, _sourceRows, [..._order, (_has(column), descending)]);
 
-  /// The rows an order applies to: the unsorted ones when this table's own order has not
-  /// run yet, since the new order replaces it anyway.
+  /// The rows a new order applies to: unsorted when this table's order has not run (it is replaced).
   List<Row> get _sourceRows => _unsorted ?? rows;
 
-  /// Each sort column pulled and coerced once per row rather than once per comparison; see
-  /// [_Cell].
+  /// Each sort column pulled and coerced once per row, not once per comparison.
   static List<List<_Cell>> _keys(List<Row> rows, List<(String, bool)> order) => [
     for (final (col, _) in order) [for (final r in rows) _cell(r[col])],
   ];
@@ -292,11 +264,8 @@ final class Table {
   /// Rows [x] and [y] by [order]. The position is the last tie-break, so the order is stable.
   static int _compareAt(List<List<_Cell>> keys, List<(String, bool)> order, int x, int y) {
     for (var k = 0; k < order.length; k++) {
-      final a = keys[k][x];
-      final b = keys[k][y];
-      // An empty cell is missing data, not a small value, so it sorts last whichever
-      // way the column is sorted — which is what `orderBy` has always documented, and
-      // what negating the whole comparison quietly undid for a descending sort.
+      final a = keys[k][x], b = keys[k][y];
+      // An empty cell is missing data: last in either direction.
       if (a.$2 == null || b.$2 == null) {
         if (a.$2 == null && b.$2 == null) continue;
         return a.$2 == null ? 1 : -1;
@@ -313,8 +282,7 @@ final class Table {
     return List.unmodifiable([for (final i in positions) rows[i]]);
   }
 
-  /// Only [names], in that order. A name that is not a column throws, as it does
-  /// everywhere else a column is named.
+  /// Only [names], in that order.
   Table select(List<String> names) {
     names.forEach(_has);
     return Table._(List.unmodifiable(names), [
@@ -399,9 +367,7 @@ final class Table {
 
   /// A crosstab: one row per [rows] value, one column per [column] value, [value] folded by [agg].
   Table pivot({required String rows, required String column, required String value, Agg agg = Agg.sum}) {
-    _has(rows);
-    _has(column);
-    _has(value);
+    [rows, column, value].forEach(_has);
     final columnValues = <String>{for (final r in this.rows) r.text(column)}.toList();
     final out = <Row>[];
     for (final group in this.rows.sequence.groupBy((r) => _Key([r[rows]]))) {
@@ -415,10 +381,8 @@ final class Table {
     return Table._(List.unmodifiable([rows, ...columnValues]), out, const []);
   }
 
-  /// CSV text with a header row; fields are quoted when they need it.
-  ///
-  /// A row of one empty cell is written `""`: an empty line is a blank line, which a reader
-  /// skips, so the row would not come back.
+  /// CSV text with a header row; fields are quoted when they need it, and a row of one empty
+  /// cell is `""` so it reads back.
   String toCsv({String separator = ','}) {
     _oneChar(separator);
 
@@ -591,12 +555,8 @@ final class _Key {
   int get hashCode => Object.hashAll(parts);
 }
 
-/// Cells compare as numbers when both are numbers or read as numbers, `null` last, text otherwise.
-/// A cell prepared for comparison: the number it coerces to, when it does, and the cell.
-///
-/// The coercion is the expensive half — a text cell is trimmed, stripped of its thousands
-/// separators and parsed — and a sort compares each cell about log n times, so [_sorted]
-/// does it once per row up front.
+/// A cell prepared for comparison: the number it coerces to, if any, and the cell. Coercion is
+/// the expensive half, so a sort does it once per row up front.
 typedef _Cell = (num? number, Object? value);
 
 _Cell _cell(Object? value) {
@@ -625,12 +585,10 @@ int _compare(_Cell a, _Cell b) {
 /// Two raw cells by the same rule, for the comparisons that are not a sort.
 int _compareCells(Object? a, Object? b) => _compare(_cell(a), _cell(b));
 
-/// Digits grouped in threes by commas, the only commas a number may have: `1,200` is 1200,
-/// and `1,5` — a decimal comma, or two values — is not a number at all.
+/// The only commas a number may have: `1,200` is 1200, `1,5` is not a number.
 final _thousands = RegExp(r'^[+-]?\d{1,3}(,\d{3})+(\.\d+)?$');
 
-/// `JsonDocument.to<T>`'s coercions, plus thousands separators in text (`'1,200'` reads as
-/// 1200) and ISO 8601 text as a [DateTime].
+/// `JsonDocument.to<T>`'s coercions, plus thousands separators and ISO 8601 [DateTime] text.
 T? _coerce<T>(Object? val) {
   if (val == null) return null;
   if (val is T) return val as T;
@@ -678,13 +636,11 @@ T? _coerce<T>(Object? val) {
   return null;
 }
 
-/// The columns of a CSV and the index every row of it shares, so a row is its list of
-/// cells and not a map of its own.
+/// A CSV's columns and the index every row shares, so a row is just its cells.
 typedef _Header = ({List<String> columns, Map<String, int> index, Row Function(List<String>) row});
 
 _Header _header(List<String> columns) {
-  // A repeated name is the second `name_2`, the third `name_3`: keyed by name, the first
-  // was silently lost, and a table written back repeated the survivor.
+  // A repeated name becomes `name_2`, `name_3`, … so no column is lost.
   final seen = <String>{};
   final cols = List<String>.unmodifiable([
     for (final name in columns)
@@ -701,8 +657,8 @@ String _unused(String name, Set<String> seen) {
   }
 }
 
-/// A CSV row: the header's shared index over the record's cells. A short record reads
-/// `null` past its end, a long one is cut at the header, as the map it replaces did.
+/// A CSV row: the header's shared index over the record's cells. A short record reads `null`
+/// past its end; a long one is cut at the header.
 final class _CsvRow extends UnmodifiableMapBase<String, Object?> {
   final Map<String, int> _index;
   final List<String> _cells;
@@ -725,15 +681,10 @@ final class _CsvRow extends UnmodifiableMapBase<String, Object?> {
   Iterable<String> get keys => _index.keys;
 }
 
-/// RFC 4180 records of [text] from [start]: quoted fields, doubled quotes, newlines inside
-/// quotes, CRLF or LF. Unquoted cells are sliced out rather than rebuilt a character at a
-/// time, which is most of why this is four times the old scanner.
+/// RFC 4180 records of [text] from [start], CRLF or LF; unquoted cells are sliced, not rebuilt.
 ///
-/// Unless [done], the text is a prefix of more to come, and the last record is left unread
-/// when it may continue: the second value is where it starts, for the next call to resume.
-///
-/// A blank line is not a record; a line that is only `""` is one empty cell, and is. A
-/// quote still open at the end of [text] when it is [done] is a [FormatException].
+/// Unless [done], [text] is a prefix and a record that may continue is left unread; the second
+/// value is where to resume. A quote still open when [done] is a [FormatException].
 (List<List<String>>, int) _scanCsv(String text, int sep, int start, {required bool done, bool bom = true}) {
   if (bom && start == 0 && text.startsWith('\uFEFF')) start = 1;
   final records = <List<String>>[];

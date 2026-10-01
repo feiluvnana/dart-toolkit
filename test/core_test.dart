@@ -26,7 +26,7 @@ void main() {
       expect(describe(left), 'L: error');
     });
 
-    test('rights, lefts and unwrap() read a batch still settling (B-CORE-2)', () async {
+    test('rights, lefts and unwrap() read a batch still settling', () async {
       Future<List<Either<Object, int>>> batch() async => [const Right(1), Left(StateError('x')), const Right(3)];
       expect(await batch().rights, [1, 3]);
       expect(await batch().lefts, [isA<StateError>()]);
@@ -211,7 +211,7 @@ SINGLE_QUOTED='single quote value'
       expect(Env.get('MY_CUSTOM_CONFIG'), equals('enabled'));
     });
 
-    test('Env.get throws naming the key when missing; or: is the fallback (B-CORE-1)', () {
+    test('Env.get throws naming the key when missing; or: is the fallback', () {
       expect(
         () => Env.get('DEFINITELY_MISSING_VAR_9999'),
         throwsA(isA<StateError>().having((e) => e.message, 'message', contains('DEFINITELY_MISSING_VAR_9999'))),
@@ -266,7 +266,7 @@ SINGLE_QUOTED='single quote value'
     });
   });
 
-  group('second audit', () {
+  group('edge cases', () {
     test('.env: a quoted value spans lines; a line with no key is skipped', () {
       final parsed = Env.parse(
         'KEY="-----BEGIN\nabc\n-----END"\n=novalue\nexport\tTAB=1\nOPEN="never closes\nNEXT=2\nS=\'a\nb\'',
@@ -281,7 +281,7 @@ SINGLE_QUOTED='single quote value'
       });
     });
 
-    test('Env.parse handles unclosed quotes without quadratic blowup (CORE-2)', () {
+    test('Env.parse handles unclosed quotes without quadratic blowup', () {
       final input = 'UNCLOSED="start of value\n${List.filled(5000, 'KEY=val').join('\n')}';
       final watch = Stopwatch()..start();
       final parsed = Env.parse(input);
@@ -290,7 +290,7 @@ SINGLE_QUOTED='single quote value'
       expect(parsed['KEY'], 'val');
     });
 
-    test('Env.parse repeated key has last line win in both parsed and Env.get (CORE-3)', () {
+    test('Env.parse repeated key has last line win in both parsed and Env.get', () {
       final parsed = Env.parse('REPEAT_KEY=first\nREPEAT_KEY=second\n');
       expect(parsed['REPEAT_KEY'], 'second');
       expect(Env.get('REPEAT_KEY'), 'second');
@@ -301,7 +301,7 @@ SINGLE_QUOTED='single quote value'
       expect(d.jittered(0), d);
     });
 
-    test('CancelToken: registering same function twice gives independent slots (CORE-6)', () {
+    test('CancelToken: registering same function twice gives independent slots', () {
       final token = CancelToken();
       var count = 0;
       void listener() => count++;
@@ -315,7 +315,7 @@ SINGLE_QUOTED='single quote value'
       off2();
     });
 
-    test('CancelToken: throwing listener routes to Zone uncaught error (CORE-7)', () {
+    test('CancelToken: throwing listener routes to Zone uncaught error', () {
       final errors = <Object>[];
       runZonedGuarded(
         () {
@@ -330,7 +330,7 @@ SINGLE_QUOTED='single quote value'
       expect(errors, contains('listener error'));
     });
 
-    test('Io.width measures wide dingbats and skin tone modifiers correctly (CORE-7)', () {
+    test('Io.width measures wide dingbats and skin tone modifiers correctly', () {
       expect(Io.width('✅'), 2);
       expect(Io.width('❌'), 2);
       expect(Io.width('☕'), 2);

@@ -1,6 +1,6 @@
 part of '../../async.dart';
 
-/// A concurrency-limiting synchronization primitive.
+/// An async counting semaphore.
 ///
 /// {@category Concurrency}
 class Semaphore {
@@ -9,17 +9,14 @@ class Semaphore {
 
   Semaphore(int permits) : _currentPermits = permits > 0 ? permits : 1;
 
-  /// Number of currently available permits.
+  /// Permits available now.
   int get permits => _currentPermits;
 
-  /// Number of tasks currently waiting for a permit.
+  /// Callers waiting for a permit.
   int get waiting => _waiters.length;
 
-  /// Acquires a permit, waiting asynchronously if none are available.
-  ///
-  /// The returned [Permit] must be released when the work finishes. The enclosing
-  /// [Cancel.scope] stops the wait: a cancelled waiter leaves the queue and this throws
-  /// [CancelledException].
+  /// A permit, waiting for one if none is free; release it when done. Cancelling the enclosing
+  /// [Cancel.scope] removes the waiter and throws [CancelledException].
   Future<Permit> acquire() async {
     final token = Cancel.token;
     token?.throwIfCancelled();
@@ -40,8 +37,7 @@ class Semaphore {
     return Permit._(this);
   }
 
-  /// Executes [action] safely within this semaphore, automatically acquiring
-  /// and releasing the permit.
+  /// Runs [action] holding a permit.
   Future<T> run<T>(FutureOr<T> Function() action) async {
     final permit = await acquire();
     try {
@@ -53,15 +49,14 @@ class Semaphore {
 
   void _release() {
     if (_waiters.isNotEmpty) {
-      final next = _waiters.removeFirst();
-      next.complete();
+      _waiters.removeFirst().complete();
     } else {
       _currentPermits++;
     }
   }
 }
 
-/// A permit representing acquired access to a [Semaphore].
+/// A held [Semaphore] permit.
 ///
 /// {@category Concurrency}
 class Permit {
@@ -70,7 +65,7 @@ class Permit {
 
   Permit._(this._semaphore);
 
-  /// Releases the permit back to its semaphore. Safe and idempotent to call multiple times.
+  /// Returns the permit to its semaphore; idempotent.
   void release() {
     if (_released) return;
     _released = true;

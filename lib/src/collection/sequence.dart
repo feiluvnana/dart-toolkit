@@ -16,12 +16,9 @@ extension MapSequenceExtensions<K, V> on Map<K, V> {
   Sequence<(K, V)> get sequence => Sequence<(K, V)>._(entries.map((e) => (e.key, e.value)));
 }
 
-/// A lazy query over elements — LINQ's `IEnumerable`, Kotlin's `Sequence` — that is also an
-/// [Iterable], so it goes anywhere one does. Every step returns a [Sequence] and runs when the
-/// result is read; the terminal operations ([toList], [sum], [groupBy], [first], …) run it.
-///
-/// A verb with `By` takes a key selector; an adjective (`sorted`, `distinct`, `reversed`)
-/// returns a new sequence; the SDK's names are kept where the SDK has the operation.
+/// A lazy query (LINQ's `IEnumerable`, Kotlin's `Sequence`) that is also an [Iterable]. Every
+/// step returns a [Sequence] and runs when the result is read. A `…By` verb takes a key
+/// selector; the SDK's names are kept where the SDK has the operation.
 ///
 /// ```dart
 /// final top = tracks.sequence
@@ -58,8 +55,7 @@ class Sequence<T> extends Iterable<T> {
   @override
   Iterator<T> get iterator => _items.iterator;
 
-  // What the source answers without a walk — a list's length, a mapped list's last — it
-  // answers here too, rather than `Iterable`'s default walk of every element.
+  // Delegated so a list source answers without `Iterable`'s default walk.
 
   @override
   int get length => _items.length;
@@ -79,7 +75,7 @@ class Sequence<T> extends Iterable<T> {
   @override
   List<T> toList({bool growable = true}) => _items.toList(growable: growable);
 
-  // ---- the SDK's lazy operators, returning a Sequence so the chain continues
+  // ---- the SDK's lazy operators, returning a Sequence
 
   @override
   Sequence<T> where(bool Function(T element) test) => Sequence._(_items.where(test));
@@ -210,8 +206,7 @@ class Sequence<T> extends Iterable<T> {
 
   // ---- order
 
-  /// Sorted by [compare]; `thenBy` adds a tie-break. Elements that are [Comparable] have
-  /// [ComparableSequenceExtensions.sorted] instead.
+  /// Sorted by [compare]; `thenBy` adds a tie-break.
   Sorted<T> sortedWith(Comparator<T> compare) => Sorted<T>._(_items, [_byComparator(compare)]);
 
   /// Sorted by [key], largest first when [descending]; `thenBy` adds the next key.
@@ -237,8 +232,8 @@ class Sequence<T> extends Iterable<T> {
 
   // ---- joins: the other side is indexed once, this side streams
 
-  /// Inner join: every pair whose [on] key here equals [to] on [other], through [select].
-  /// (`join` is the SDK's string join, so this is `innerJoin`.)
+  /// Every pair whose [on] key here equals [to] on [other], through [select] (`join` is taken
+  /// by the SDK's string join).
   ///
   /// ```dart
   /// songs.sequence.innerJoin(pages, on: (s) => s.href, to: (p) => p.href, (s, p) => (s.title, p.size));
@@ -277,10 +272,9 @@ class Sequence<T> extends Iterable<T> {
     }
   }());
 
-  // ---- grouping: each group is a Sequence with a key, so the sentence continues on it
+  // ---- grouping
 
-  /// One [Group] per distinct [key], in first-seen order; each group is a [Sequence] of its
-  /// elements with a [Group.key].
+  /// One [Group] (a [Sequence] with a [Group.key]) per distinct [key], in first-seen order.
   ///
   /// ```dart
   /// tracks.sequence.groupBy((t) => t.disc).mapValues((g) => g.sumBy((t) => t.seconds)).toMap()
@@ -359,7 +353,7 @@ class Sequence<T> extends Iterable<T> {
 
   @override
   String toString() {
-    final head = _items.take(5).toList(); // one pass, so a single-use source is not consumed twice
+    final head = _items.take(5).toList(); // one pass: a single-use source is read once
     return 'Sequence(${head.take(4).join(', ')}${head.length > 4 ? ', …' : ''})';
   }
 }
@@ -398,11 +392,7 @@ extension SequenceOfPairsExtensions<K, V> on Sequence<(K, V)> {
   Map<K, V> toMap([V Function(V existing, V incoming)? merge]) {
     final out = <K, V>{};
     for (final (k, v) in this) {
-      if (merge != null && out.containsKey(k)) {
-        out[k] = merge(out[k] as V, v);
-      } else {
-        out[k] = v;
-      }
+      out[k] = merge != null && out.containsKey(k) ? merge(out[k] as V, v) : v;
     }
     return out;
   }
@@ -476,10 +466,7 @@ extension ComparableSequenceExtensions<T extends Comparable<Object>> on Sequence
   T? get min => fold<T?>(null, (m, e) => m == null || e.compareTo(m) < 0 ? e : m);
 }
 
-/// A [Sequence] sorted by one or more keys; [thenBy] adds the next one.
-///
-/// Each [thenBy] sorts the source again with one more key, stably, so equal primary keys keep
-/// the secondary order.
+/// A [Sequence] sorted, stably, by one or more keys; [thenBy] adds the next one.
 ///
 /// {@category Collections}
 final class Sorted<T> extends Sequence<T> {
@@ -487,19 +474,14 @@ final class Sorted<T> extends Sequence<T> {
 
   Sorted._(super.source, this._keys) : super._();
 
-  /// Sorted when read, each time it is read, like every other step: a cached sort went on
-  /// answering the source as it was the first time.
+  /// Sorted afresh on every read, like every other step.
   @override
-  Iterable<T> get _items => _Deferred(_sort);
-
-  List<T> _sort() => _sorted(null);
+  Iterable<T> get _items => _Deferred(() => _sorted(null));
 
   /// The first [count] elements in order, or all of them when [count] is `null`.
   List<T> _sorted(int? count) {
     final elements = _source.toList();
-    // Each key is extracted once per element rather than once per comparison: a sort of n
-    // elements makes about n·log n comparisons, so a selector that lowercases a string or
-    // parses a date was being paid for that many times over.
+    // Each key is extracted once per element, not once per comparison.
     final extracts = [
       for (final k in _keys) [for (final e in elements) k.extract(e)],
     ];
@@ -519,10 +501,7 @@ final class Sorted<T> extends Sequence<T> {
     return [for (final i in count == null || count >= order.length ? order : order.take(count)) elements[i]];
   }
 
-  // What does not need the order does not pay for it, and what needs only the front of it
-  // pays for the front: `sortedBy(…).take(10)` over a million elements selects ten rather
-  // than sorting a million, and `length` does not sort at all. Each still reads the source
-  // afresh, as every step does.
+  // What does not need the order does not sort; `take(n)` and `first` select only the front.
 
   @override
   int get length => _source.length;
@@ -547,9 +526,8 @@ final class Sorted<T> extends Sequence<T> {
       Sorted<T>._(_source, [..._keys, _byKey(key, descending)]);
 }
 
-/// The positions of the [count] smallest of `0 … n-1` by [compare], in order: a max-heap of
-/// the best so far, whose root — the worst of them — is replaced by anything that beats it.
-/// O(n log count), against a sort's O(n log n), for the `take(10)` of an ordering.
+/// The positions of the [count] smallest of `0 … n-1` by [compare], in order, via a max-heap of
+/// the best so far: O(n log count).
 List<int> _smallest(int n, int count, int Function(int x, int y) compare) {
   if (count <= 0) return const [];
   final heap = <int>[];
@@ -594,10 +572,7 @@ final class _Deferred<T> extends Iterable<T> {
   List<T> toList({bool growable = true}) => _make().toList(growable: growable);
 }
 
-/// One sort key: what to pull out of an element, and how two of those compare.
-///
-/// Splitting the two is what lets [Sorted] extract once per element; a bare [Comparator]
-/// has the selector sealed inside it and has to be handed whole elements every time.
+/// One sort key, split into extraction and comparison so [Sorted] extracts once per element.
 final class _SortKey<T> {
   final Object? Function(T element) extract;
   final int Function(Object? a, Object? b) compare;
@@ -605,12 +580,11 @@ final class _SortKey<T> {
   const _SortKey(this.extract, this.compare);
 }
 
-/// A key from a selector; its values compare as [Comparable], which is what `sortedBy`'s
-/// `K extends Comparable<K>` and a record half alike guarantee.
+/// A key from a selector whose values are [Comparable].
 _SortKey<T> _byKey<T>(Object? Function(T element) key, bool descending) => _SortKey<T>(
   key,
   descending ? (a, b) => (b as Comparable<Object?>).compareTo(a) : (a, b) => (a as Comparable<Object?>).compareTo(b),
 );
 
-/// A caller's own comparator: nothing can be extracted from it, so the element is the key.
+/// A caller's comparator: the element is the key.
 _SortKey<T> _byComparator<T>(Comparator<T> compare) => _SortKey<T>((e) => e, (a, b) => compare(a as T, b as T));

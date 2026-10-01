@@ -2,10 +2,8 @@ part of '../../async.dart';
 
 /// The work a [Pool] does, one item at a time, in a class you can hold, subclass and test.
 ///
-/// [init] runs once per worker — once per isolate — before its first item, which is where
-/// a database is opened, a model loaded or a regex table built; [run] runs per item; [close]
-/// runs when the pool closes. The pool is handed a *factory* rather than an instance, so the
-/// state a worker builds in [init] is built where it is used and never crosses a port:
+/// [init] runs once per worker (per isolate) before its first item, [run] per item, [close] when
+/// the pool closes. The pool takes a *factory*, so what [init] builds never crosses a port:
 ///
 /// ```dart
 /// final class Resize extends Worker<Path, Path> {
@@ -21,8 +19,6 @@ part of '../../async.dart';
 /// await pool.close();
 /// ```
 ///
-/// `parallelize` is this class with a function for a worker.
-///
 /// {@category Concurrency}
 abstract class Worker<T, R> {
   const Worker();
@@ -37,7 +33,7 @@ abstract class Worker<T, R> {
   FutureOr<void> close() {}
 }
 
-/// A function as a [Worker]: what `parallelize` hands its [Pool].
+/// A function as a [Worker], for `parallelize`.
 final class _Fn<T, R> extends Worker<T, R> {
   final FutureOr<R> Function(T item) _fn;
 
@@ -49,12 +45,9 @@ final class _Fn<T, R> extends Worker<T, R> {
 
 /// [size] long-lived [Worker]s, each on an isolate of its own, fed one item at a time.
 ///
-/// A failing item fails that item only — [run] throws, [map] yields a [Left] — and the
-/// worker goes on to the next. An isolate that dies is replaced before the next item. The
-/// enclosing [Cancel.scope] stops it: an item in flight fails with a [CancelledException]
-/// and its isolate is ended, since work inside one cannot be interrupted any other way.
-/// `isolate: false` keeps the workers on this isolate, for work that is cheap or waits on
-/// IO, and is what `parallelize` without `isolate:` runs on.
+/// A failing item fails only itself ([run] throws, [map] yields a [Left]); a dead isolate is
+/// replaced before the next item. The enclosing [Cancel.scope] fails the items in flight and
+/// kills their isolates. `isolate: false` keeps the workers here, for cheap or IO-bound work.
 ///
 /// {@category Concurrency}
 final class Pool<T, R> {
@@ -65,8 +58,7 @@ final class Pool<T, R> {
   final bool _isolate;
   final List<_Slot<T, R>> _idle = [];
   final Set<_Slot<T, R>> _busy = {};
-  // First come, first served: a worker coming free goes straight to the longest waiter, and
-  // `null` wakes one to start a worker in place of a dead one.
+  // FIFO; completing with `null` wakes a waiter to start a worker in place of a dead one.
   final Queue<Completer<_Slot<T, R>?>> _waiting = Queue();
   int _active = 0;
   Completer<void>? _drained;
@@ -75,11 +67,8 @@ final class Pool<T, R> {
 
   Pool._(this._create, int size, this._isolate) : size = size > 0 ? size : 1;
 
-  /// Starts [size] workers from [create] — a constructor tear-off such as `Resize.new`, or a
-  /// top-level function — and waits for every [Worker.init].
-  ///
-  /// [create] is sent to each isolate, so it must be sendable: a tear-off or a closure that
-  /// captures nothing a port cannot carry. What `init` throws is thrown here.
+  /// Starts [size] workers from [create] and waits for every [Worker.init], rethrowing what one
+  /// throws. [create] is sent to each isolate, so it must be sendable (e.g. `Resize.new`).
   static Future<Pool<T, R>> spawn<T, R>(Worker<T, R> Function() create, {int size = 4, bool isolate = true}) async {
     final pool = Pool<T, R>._(create, size, isolate);
     final started = await Future.wait([for (var i = 0; i < pool.size; i++) _settled(pool._start)]);
@@ -101,16 +90,14 @@ final class Pool<T, R> {
 
   Future<_Slot<T, R>> _start() => _isolate ? _Remote.spawn(_create) : _Local.start(_create());
 
-  /// Runs one [item] on the next free worker, and returns what it returns or throws what
-  /// it throws.
+  /// Runs [item] on the next free worker.
   Future<R> run(T item) async => (await _outcome(item, Cancel.token)).unwrap();
 
-  /// [run], settled: what `map` collects, with no rethrow to catch again.
   Future<Either<Object, R>> _outcome(T item, CancelToken? token) async {
     _Slot<T, R>? slot;
     void Function()? unregister;
     try {
-      if (_closed != null) throw StateError('The pool is closed.');
+      if (_closed != null) throw _poolClosed();
       // The common case takes no await: a free worker is there and nobody queued first.
       slot = _idle.isNotEmpty && _waiting.isEmpty && !(token?.isCancelled ?? false)
           ? _take(_idle.removeLast())
@@ -133,8 +120,8 @@ final class Pool<T, R> {
     }
   }
 
-  /// Hands [slot] to the first waiter, or back to the idle list. A closing pool takes it
-  /// back too, so [close] runs every worker's [Worker.close] — the busy ones' included.
+  /// Hands [slot] to the first waiter, or back to the idle list (also while closing, so [close]
+  /// reaches every worker).
   void _release(_Slot<T, R> slot) {
     if (slot.isDead) {
       _busy.remove(slot);
@@ -147,29 +134,31 @@ final class Pool<T, R> {
     }
   }
 
-  _Slot<T, R> _fresh(_Slot<T, R> slot) {
-    if (_closed != null) {
-      slot.kill(StateError('The pool is closed.'));
-      throw StateError('The pool is closed.');
+  bool get _hasRoom => _idle.length + _busy.length + _starting < size;
+
+  /// A new busy worker; killed again if the pool closed while it started.
+  Future<_Slot<T, R>> _startBusy() async {
+    _starting++;
+    try {
+      final slot = await _start();
+      if (_closed != null) {
+        slot.kill(_poolClosed());
+        throw _poolClosed();
+      }
+      return _take(slot);
+    } finally {
+      _starting--;
     }
-    return slot;
   }
 
-  /// The next free worker: an idle one, a new one while there are fewer than [size] — which
-  /// is also how a dead one is replaced — or the first to come free.
+  /// The next free worker: an idle one, a new one while under [size] (which also replaces a
+  /// dead one), or the first to come free.
   Future<_Slot<T, R>> _acquire(CancelToken? token) async {
     while (true) {
       token?.throwIfCancelled();
-      if (_closed != null) throw StateError('The pool is closed.');
+      if (_closed != null) throw _poolClosed();
       if (_idle.isNotEmpty && _waiting.isEmpty) return _take(_idle.removeLast());
-      if (_waiting.isEmpty && _idle.length + _busy.length + _starting < size) {
-        _starting++;
-        try {
-          return _take(_fresh(await _start()));
-        } finally {
-          _starting--;
-        }
-      }
+      if (_waiting.isEmpty && _hasRoom) return _startBusy();
       final free = Completer<_Slot<T, R>?>();
       _waiting.add(free);
       // A cancelled scope wakes its own waiters; nothing coming free would.
@@ -179,14 +168,7 @@ final class Pool<T, R> {
       final handed = await free.future;
       unregister?.call();
       if (handed != null) return handed;
-      if (_idle.length + _busy.length + _starting < size) {
-        _starting++;
-        try {
-          return _take(_fresh(await _start()));
-        } finally {
-          _starting--;
-        }
-      }
+      if (_hasRoom) return _startBusy();
     }
   }
 
@@ -195,9 +177,8 @@ final class Pool<T, R> {
     return slot;
   }
 
-  /// One worker of its own feeding on [next] until it runs dry: what `parallelize` runs
-  /// [size] of. A lane holds its worker for every item, so an item costs the work and no
-  /// queue; a worker that dies is replaced before the lane's next item.
+  /// One worker of its own taking indices from [next] until they run out (`parallelize` runs
+  /// [size] lanes); a dead worker is replaced before the next item.
   Future<void> _lane(List<T> items, List<Either<Object, R>?> into, int Function() next, CancelToken? token) async {
     _Slot<T, R>? slot;
     final unregister = _isolate ? token?.onCancel(() => slot?.kill(_cancelledBy(token))) : null;
@@ -215,17 +196,15 @@ final class Pool<T, R> {
       unregister?.call();
       if (slot != null) {
         _busy.remove(slot);
-        slot.kill(StateError('The pool is closed.'));
+        slot.kill(_poolClosed());
       }
     }
   }
 
-  /// Runs every item of [items] and yields each outcome as it settles, in whatever order
-  /// they finish.
+  /// Runs every item of [items], yielding outcomes in completion order.
   ///
-  /// At most [size] items are in flight: a busy pool pauses [items], and a paused listener
-  /// pauses it too, so nothing is buffered on anyone's behalf. The enclosing [Cancel.scope]
-  /// ends the stream. The pool stays open; closing it is the caller's.
+  /// At most [size] items are in flight; a busy pool or a paused listener pauses [items]. The
+  /// enclosing [Cancel.scope] ends the stream. The pool stays open.
   Stream<Either<Object, R>> map(Stream<T> items) => _map(items);
 
   Stream<Either<Object, R>> _map(Stream<T> items, {void Function()? onEnd}) {
@@ -292,8 +271,8 @@ final class Pool<T, R> {
     return controller.stream;
   }
 
-  /// Waits for the items in flight, runs every worker's [Worker.close] and ends the
-  /// isolates. Calling it again returns the same future; [run] after it throws.
+  /// Waits for the items in flight, runs every [Worker.close] and ends the isolates. Idempotent;
+  /// [run] after it throws.
   Future<void> close() => _closed ??= () async {
     while (_idle.isNotEmpty && _waiting.isNotEmpty) {
       _waiting.removeFirst().complete(_take(_idle.removeLast()));
@@ -303,12 +282,11 @@ final class Pool<T, R> {
     _idle.clear();
   }();
 
-  /// Ends everything now, in-flight items included: what `parallelize` does when it is
-  /// finished or cancelled, since a function worker has no `close` to wait for.
+  /// Ends everything now, in-flight items included (a function worker has no `close`).
   void _kill(Object? why) {
     _closed ??= Future.value();
     for (final slot in [..._idle, ..._busy]) {
-      slot.kill(why ?? StateError('The pool is closed.'));
+      slot.kill(why ?? _poolClosed());
     }
     _idle.clear();
     for (final waiter in _waiting) {
@@ -331,8 +309,7 @@ sealed class _Slot<T, R> {
   void kill(Object why);
 }
 
-/// A worker on this isolate. It cannot be interrupted, so [kill] lets an item in flight
-/// finish and only stops the next one.
+/// A worker on this isolate; [kill] cannot interrupt an item in flight, only stop the next.
 final class _Local<T, R> extends _Slot<T, R> {
   final Worker<T, R> _worker;
   @override
@@ -370,8 +347,7 @@ final class _Remote<T, R> extends _Slot<T, R> {
 
   _Remote._(this._isolate, this._inbox, this._replies, this._exits);
 
-  /// Starts an isolate that builds its worker from [create] and runs its `init`. The
-  /// factory is the only thing copied; no item, no list, nothing of the caller's.
+  /// Starts an isolate that builds its worker from [create] (the only thing copied) and inits it.
   static Future<_Slot<T, R>> spawn<T, R>(Worker<T, R> Function() create) async {
     final ready = Completer<SendPort>();
     _Remote<T, R>? remote;
@@ -419,11 +395,10 @@ final class _Remote<T, R> extends _Slot<T, R> {
     switch (message) {
       case _Failure(:final error, :final trace):
         pending?.completeError(error, trace ?? StackTrace.empty);
-      case _Closed(): // the worker closed; the isolate ends on its own
+      case _Closed(): // the isolate ends on its own
         isDead = true;
         pending?.complete();
-        _replies.close();
-        _exits.close();
+        _closePorts();
       case final value:
         pending?.complete(value);
     }
@@ -434,6 +409,10 @@ final class _Remote<T, R> extends _Slot<T, R> {
     final pending = _pending;
     _pending = null;
     pending?.completeError(why);
+    _closePorts();
+  }
+
+  void _closePorts() {
     _replies.close();
     _exits.close();
   }
@@ -454,11 +433,9 @@ final class _Remote<T, R> extends _Slot<T, R> {
   }
 }
 
-/// The isolate side: build the worker, `init` it, then answer each item with its value — or
-/// a [_Failure] — until a [_Closed] says close.
-///
-/// Top level, so the spawn copies the factory and a reply port and nothing else. An item and
-/// a value cross bare: a record around each cost a third of a small item's round trip.
+/// The isolate side: build and `init` the worker, then answer each item with its value or a
+/// [_Failure] until [_Closed]. Top level so the spawn copies nothing else; items and values
+/// cross bare because a record around each cost a third of a small item's round trip.
 Future<void> _serve<T, R>((Worker<T, R> Function(), SendPort) setup) async {
   final (create, reply) = setup;
   final Worker<T, R> worker;
@@ -504,8 +481,7 @@ void _fail(SendPort reply, Object error, StackTrace trace) {
   }
 }
 
-/// A worker's failure on its way back; a value no caller can produce, so anything else is a
-/// result.
+/// A worker's failure on its way back; no caller can produce one, so anything else is a result.
 final class _Failure {
   final Object error;
   final StackTrace? trace;
@@ -517,3 +493,5 @@ final class _Failure {
 final class _Closed {
   const _Closed();
 }
+
+StateError _poolClosed() => StateError('The pool is closed.');

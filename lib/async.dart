@@ -1,7 +1,7 @@
 /// # Async & Concurrency
 ///
-/// Bounded parallelism, retries, synchronisation primitives, isolate
-/// offloading and stream operators. Cancellation (`Cancel.scope`) lives in `core`.
+/// Bounded parallelism, retries, a semaphore, isolate pools and stream operators. Cancellation
+/// (`Cancel.scope`) lives in `core`.
 ///
 /// {@category Concurrency}
 library;

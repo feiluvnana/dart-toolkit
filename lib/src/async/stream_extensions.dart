@@ -4,9 +4,7 @@ part of '../../async.dart';
 ///
 /// {@category Concurrency}
 extension StreamExtensions<T> on Stream<T> {
-  /// Batches items into lists of [size] (mirrors `Iterable.chunk`).
-  ///
-  /// The final batch is short if the stream does not divide evenly.
+  /// Batches items into lists of [size]; the last may be shorter.
   Stream<List<T>> chunk(int size) async* {
     if (size <= 0) throw ArgumentError.value(size, 'size', 'Must be positive');
     var batch = <T>[];
@@ -20,35 +18,27 @@ extension StreamExtensions<T> on Stream<T> {
     if (batch.isNotEmpty) yield batch;
   }
 
-  /// Batches items collected within each window of [duration].
-  ///
-  /// A window that collects nothing emits nothing.
+  /// Batches items collected within each window of [duration]; an empty window emits nothing.
   Stream<List<T>> chunkEvery(Duration duration) {
     var batch = <T>[];
     Timer? timer;
+    void flush(EventSink<List<T>> sink) {
+      timer?.cancel();
+      timer = null;
+      if (batch.isEmpty) return;
+      sink.add(batch);
+      batch = <T>[];
+    }
+
     return _lift<List<T>>(
       onData: (item, sink, _) {
         batch.add(item);
-        timer ??= Timer(duration, () {
-          timer = null;
-          if (batch.isNotEmpty) {
-            sink.add(batch);
-            batch = <T>[];
-          }
-        });
+        timer ??= Timer(duration, () => flush(sink));
       },
-      onDone: (sink) {
-        timer?.cancel();
-        if (batch.isNotEmpty) sink.add(batch);
-      },
-      // An error closes the window early: what arrived before it is emitted before it.
+      onDone: flush,
+      // An error closes the window early, so what arrived before it is emitted before it.
       onError: (error, trace, sink, _) {
-        timer?.cancel();
-        timer = null;
-        if (batch.isNotEmpty) {
-          sink.add(batch);
-          batch = <T>[];
-        }
+        flush(sink);
         sink.addError(error, trace);
       },
       onCancel: () async => timer?.cancel(),
@@ -57,8 +47,7 @@ extension StreamExtensions<T> on Stream<T> {
 
   /// Emits an item only after [duration] has passed with no newer item.
   Stream<T> debounce(Duration duration) {
-    // One timer, re-armed for the remainder when it fires early, instead of a new timer per
-    // item: a burst of a hundred thousand items costs one timer, not a hundred thousand.
+    // One timer, re-armed for the remainder when it fires early, not one per item.
     Timer? timer;
     T? pending;
     var hasPending = false;
@@ -94,9 +83,8 @@ extension StreamExtensions<T> on Stream<T> {
 
   /// Emits at most one item per [duration] window.
   ///
-  /// [leading] emits the item that opens a window, [trailing] the last *other* item
-  /// seen during it. An item alone in its window is emitted once either way. A trailing
-  /// emission opens the next window, so two items are never closer than [duration].
+  /// [leading] emits the item that opens a window, [trailing] the last *other* item seen during
+  /// it. A trailing emission opens the next window, so no two items are closer than [duration].
   Stream<T> throttle(Duration duration, {bool leading = true, bool trailing = false}) {
     if (!leading && !trailing) throw ArgumentError('throttle needs leading, trailing or both; neither emits nothing');
     Timer? timer;
@@ -148,8 +136,7 @@ extension StreamExtensions<T> on Stream<T> {
 
   /// Maps each item to a stream and merges the results concurrently.
   ///
-  /// Inner streams run at the same time; use `asyncExpand` for one at a time. A paused
-  /// consumer pauses them all, not only the outer stream.
+  /// Use `asyncExpand` for one at a time. Pausing the consumer pauses every inner stream too.
   Stream<R> flatMap<R>(Stream<R> Function(T item) mapper) {
     final inner = <StreamSubscription<R>>{};
     return _lift<R>(
@@ -181,10 +168,8 @@ extension StreamExtensions<T> on Stream<T> {
     );
   }
 
-  /// Shared plumbing for the operators above: forwards events through a controller,
-  /// honours pause and resume, and stays open past the source's `done` for as long
-  /// as [pending] reports outstanding work — which is what stops [throttle] and
-  /// [flatMap] from dropping their last events.
+  /// Forwards events through a controller with pause/resume, staying open past the source's
+  /// `done` while [pending] reports work, so [throttle] and [flatMap] keep their last events.
   Stream<R> _lift<R>({
     required void Function(T item, EventSink<R> sink, void Function() settled) onData,
     required void Function(EventSink<R> sink) onDone,
@@ -208,8 +193,7 @@ extension StreamExtensions<T> on Stream<T> {
       onListen: () {
         subscription = listen(
           (item) {
-            // What an operator's callback throws — a `flatMap` mapper — is the stream's error,
-            // not the zone's.
+            // What a callback (a `flatMap` mapper) throws is the stream's error, not the zone's.
             try {
               onData(item, controller.sink, closeIfIdle);
             } catch (error, trace) {
@@ -261,8 +245,7 @@ extension StreamExtensions<T> on Stream<T> {
 extension IterableStreamExtensions<T> on Iterable<Stream<T>> {
   /// One stream of every item from all of these, as they arrive; done when all are done.
   ///
-  /// Unlike `yield*` after `yield*`, the sources run at the same time. Errors pass through
-  /// and the stream continues. Cancelling cancels every source.
+  /// The sources run concurrently; errors pass through, and cancelling cancels every source.
   Stream<T> merge() => Stream<Stream<T>>.fromIterable(this).flatMap((s) => s);
 }
 

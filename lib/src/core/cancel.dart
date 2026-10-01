@@ -2,10 +2,8 @@ part of '../../core.dart';
 
 const _cancelKey = #dartToolkitCancelToken;
 
-/// The ambient cancellation seam.
-///
-/// A token is not threaded through the calls that cooperate with it; a scope holds one
-/// and everything inside it stops together — the same shape as `Http.scope`.
+/// Ambient cancellation: a scope holds a token and everything inside it that cooperates stops
+/// together, with no token threaded through the calls.
 ///
 /// ```dart
 /// final stop = CancelToken();
@@ -14,9 +12,7 @@ const _cancelKey = #dartToolkitCancelToken;
 /// }, token: stop);
 /// ```
 ///
-/// `Cli.run` opens one around the action, so `ctx.cancel` is already ambient: a signal,
-/// `Lifecycle.exit` or the end of the action stops every download, retry, crawl and `run`
-/// inside it.
+/// `Cli.run` opens one around the action, so a signal or `Lifecycle.exit` stops everything inside.
 ///
 /// {@category Concurrency}
 class Cancel {
@@ -26,13 +22,11 @@ class Cancel {
   /// Whether the enclosing [scope] has been cancelled; `false` outside one.
   static bool get isCancelled => token?.isCancelled ?? false;
 
-  /// Why the enclosing [scope] was cancelled, or `null` — outside one, or when it was
-  /// cancelled without a reason.
+  /// Why the enclosing [scope] was cancelled, or `null`.
   static Object? get reason => token?.reason;
 
-  /// Throws a [CancelledException] if the enclosing [scope] has been cancelled.
-  ///
-  /// What a loop of its own calls to cooperate:
+  /// Throws a [CancelledException] if the enclosing [scope] has been cancelled; outside one it
+  /// does nothing (unlike `.cancellable`, an adapter that would silently do nothing there).
   ///
   /// ```dart
   /// for (final item in items) {
@@ -40,30 +34,21 @@ class Cancel {
   ///   await handle(item);
   /// }
   /// ```
-  ///
-  /// Outside a scope this does nothing, for the same reason [isCancelled] is `false`
-  /// there: nothing has cancelled it. That is the difference from
-  /// [StreamCancelExtensions.cancellable], which throws a [StateError] outside a scope —
-  /// an adapter with no scope to bind to would be a wrapper that silently does nothing,
-  /// where a reading of the ambient state has a true answer either way.
   static void throwIfCancelled() => token?.throwIfCancelled();
 
   /// Runs [body] with [token] — or a fresh one — as the ambient token.
   ///
-  /// Returns what [body] returns. A scope inside another hears the outer one: cancelling
-  /// the outer token cancels this one too, so library code that opens a scope of its own
-  /// under `Cli.run` still stops on ^C. [timeout] cancels it after that long:
+  /// A nested scope is cancelled with the outer one, so library code opening its own scope
+  /// under `Cli.run` still stops on ^C. [timeout] cancels it after that long. The token is not
+  /// cancelled on the way out, so one shared between scopes keeps working.
   ///
   /// ```dart
   /// await Cancel.scope(() => page.download(), timeout: 5.s);
   /// ```
-  ///
-  /// Nothing here cancels the token on the way out, so a token shared between scopes
-  /// keeps working.
   static Future<T> scope<T>(FutureOr<T> Function() body, {CancelToken? token, Duration? timeout}) async {
     final outer = Cancel.token;
     final own = (token != null && timeout != null) ? CancelToken() : (token ?? CancelToken());
-    final List<void Function()> unlinks = [];
+    final unlinks = <void Function()>[];
     if (token != null && !identical(token, own)) {
       unlinks.add(token.onCancel(() => own.cancel(token.reason)));
     }
@@ -87,10 +72,8 @@ class Cancel {
 /// {@category Concurrency}
 class CancelToken {
   bool _isCancelled = false;
-  final List<void Function()> _listeners = [];
+  final _listeners = <void Function()>[];
   Object? _reason;
-
-  CancelToken();
 
   /// Whether cancellation has been requested.
   bool get isCancelled => _isCancelled;
@@ -105,31 +88,30 @@ class CancelToken {
     _reason = reason;
     final pending = _listeners.toList();
     _listeners.clear();
-    for (final listener in pending) {
-      try {
-        listener();
-      } catch (e, st) {
-        Zone.current.handleUncaughtError(e, st);
-      }
-    }
+    pending.forEach(_notify);
   }
 
   /// Registers [listener] to run when cancellation is requested.
   ///
-  /// Returns a function that unregisters it. Call it when the work finishes on its
-  /// own — a long-lived token otherwise retains every listener ever registered.
+  /// Returns a function that unregisters it; call it when the work finishes on its own, or a
+  /// long-lived token retains every listener ever registered.
   void Function() onCancel(void Function() listener) {
     if (_isCancelled) {
-      try {
-        listener();
-      } catch (e, st) {
-        Zone.current.handleUncaughtError(e, st);
-      }
+      _notify(listener);
       return () {};
     }
+    // A closure per registration, so an unregister (even called twice) removes only its own.
     void registration() => listener();
     _listeners.add(registration);
     return () => _listeners.remove(registration);
+  }
+
+  static void _notify(void Function() listener) {
+    try {
+      listener();
+    } catch (e, st) {
+      Zone.current.handleUncaughtError(e, st);
+    }
   }
 
   /// Throws a [CancelledException] if cancellation has already been requested.
@@ -137,7 +119,6 @@ class CancelToken {
     if (_isCancelled) throw _exception;
   }
 
-  /// What an operation this token stopped throws.
   CancelledException get _exception => CancelledException(_reason?.toString() ?? 'Operation was cancelled.');
 }
 
@@ -155,22 +136,20 @@ class CancelledException implements Exception {
 
 /// Cancellation for any [Stream].
 ///
-/// An operation that cooperates by itself — a download, a crawl, `retry` — reads
-/// [Cancel.token] and needs none of this; [cancellable] is for a stream that does not.
+/// Downloads, crawls and `retry` already read [Cancel.token]; this is for a stream that does not.
 ///
 /// {@category Concurrency}
 extension StreamCancelExtensions<T> on Stream<T> {
   /// This stream, ended when the enclosing [Cancel.scope] is cancelled.
   ///
-  /// The stream closes; it does not fail. Whether that is an ending or an error is the
-  /// caller's to decide, and [Cancel.isCancelled] after the loop is what says which:
+  /// The stream closes rather than fails; [Cancel.isCancelled] after the loop says which it was:
   ///
   /// ```dart
   /// await for (final item in results.cancellable) { ... }
   /// if (Cancel.isCancelled) return;
   /// ```
   ///
-  /// Throws [StateError] outside a scope: a token is named once, where the scope opens.
+  /// Throws [StateError] outside a scope.
   Stream<T> get cancellable {
     final token = Cancel.token ?? _noToken();
     late final StreamController<T> controller;
@@ -186,10 +165,7 @@ extension StreamCancelExtensions<T> on Stream<T> {
 
     controller = StreamController<T>(
       onListen: () {
-        if (token.isCancelled) {
-          finish();
-          return;
-        }
+        if (token.isCancelled) return finish();
         unregister = token.onCancel(finish);
         subscription = listen(
           controller.add,
@@ -210,7 +186,6 @@ extension StreamCancelExtensions<T> on Stream<T> {
         await sub?.cancel();
       },
     );
-
     return controller.stream;
   }
 }
@@ -219,22 +194,14 @@ extension StreamCancelExtensions<T> on Stream<T> {
 ///
 /// {@category Concurrency}
 extension FutureCancelExtensions<T> on Future<T> {
-  /// This future, failed with a [CancelledException] as soon as the enclosing
-  /// [Cancel.scope] is cancelled.
-  ///
-  /// A future has no quiet ending to offer — it completes with a value or an error — so
-  /// where [StreamCancelExtensions.cancellable] closes, this one fails. The underlying work
-  /// is not interrupted. Throws [StateError] outside a scope.
+  /// This future, failed with a [CancelledException] as soon as the enclosing [Cancel.scope] is
+  /// cancelled. The underlying work is not interrupted. Throws [StateError] outside a scope.
   Future<T> get cancellable {
     final token = Cancel.token ?? _noToken();
-    if (token.isCancelled) {
-      return Future<T>.error(token._exception);
-    }
+    if (token.isCancelled) return Future<T>.error(token._exception);
     final completer = Completer<T>();
     final unregister = token.onCancel(() {
-      if (!completer.isCompleted) {
-        completer.completeError(token._exception);
-      }
+      if (!completer.isCompleted) completer.completeError(token._exception);
     });
     then(
       (value) {

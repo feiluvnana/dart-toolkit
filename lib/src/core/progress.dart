@@ -1,10 +1,4 @@
-// The seam between something that makes progress and something that renders it.
-//
-// Both interfaces live here, in the one module every other module already depends
-// on, so a producer (`http`) and a renderer (`cli`) can meet without an edge
-// between them.
-//
-// {@category Utilities}
+// The progress seam: in `core` so a producer (`http`) and a renderer (`cli`) meet without an edge.
 
 part of '../../core.dart';
 

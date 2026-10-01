@@ -22,38 +22,29 @@ extension IntDurationExtensions on int {
 
 final _random = Random();
 
-/// Functional extensions on [Duration].
+/// Formatting, jitter and cancellable waits on [Duration].
 ///
 /// {@category Utilities}
 extension DurationExtensions on Duration {
   /// A human-readable form: `125ms`, `45s`, `2m 15s`, `1h 5m 2s`.
   String get humanized {
-    if (inMilliseconds < 1000) {
-      return '${inMilliseconds}ms';
-    }
-    final hours = inHours;
-    final minutes = inMinutes % 60;
-    final seconds = inSeconds % 60;
-
-    final parts = <String>[];
-    if (hours > 0) parts.add('${hours}h');
-    if (minutes > 0) parts.add('${minutes}m');
-    if (seconds > 0 || parts.isEmpty) parts.add('${seconds}s');
-
-    return parts.join(' ');
+    if (inMilliseconds < 1000) return '${inMilliseconds}ms';
+    final hours = inHours, minutes = inMinutes % 60, seconds = inSeconds % 60;
+    return [
+      if (hours > 0) '${hours}h',
+      if (minutes > 0) '${minutes}m',
+      if (seconds > 0 || (hours == 0 && minutes == 0)) '${seconds}s',
+    ].join(' ');
   }
 
-  /// Randomizes this duration within `[1 - factor, 1 + factor]` range.
+  /// This duration scaled by a random factor in `[1 - factor, 1 + factor]`.
   Duration jittered([double factor = 0.25, Random? random]) {
-    final rand = random ?? _random;
-    final clampedFactor = factor.clamp(0.0, 1.0);
-    final variance = (rand.nextDouble() * 2 - 1) * clampedFactor;
+    final variance = ((random ?? _random).nextDouble() * 2 - 1) * factor.clamp(0.0, 1.0);
     return Duration(microseconds: max(0, (inMicroseconds * (1 + variance)).round()));
   }
 
-  /// Waits this long, or throws [CancelledException] as soon as the enclosing
-  /// [Cancel.scope] is cancelled — a wait is where a loop spends its time, so it is where
-  /// it must stop.
+  /// Waits this long, or throws [CancelledException] as soon as the enclosing [Cancel.scope] is
+  /// cancelled.
   Future<void> delay() {
     final token = Cancel.token;
     if (token == null) return Future<void>.delayed(this);
