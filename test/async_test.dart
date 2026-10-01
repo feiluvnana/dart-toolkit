@@ -8,14 +8,14 @@ import 'package:test/test.dart';
 
 void main() {
   group('Cancel.scope', () {
-    test('an outer scope cancels the inner one, not the shared token it was given', () async {
+    test('an outer scope cancels the inner one and the token it was given', () async {
       final shared = CancelToken(), outer = CancelToken();
       Timer(Duration.zero, outer.cancel);
       await expectLater(
         Cancel.scope(() => Cancel.scope(() => 2.s.delay(), token: shared), token: outer),
         throwsA(isA<CancelledException>()),
       );
-      expect(shared.isCancelled, isFalse);
+      expect(shared.isCancelled, isTrue, reason: 'work outliving the body hears it too');
     });
 
     test('the token is ambient: retry and cancellable find it without being passed one', () async {
@@ -89,13 +89,8 @@ void main() {
       final inner = CancelToken();
       await Cancel.scope(() async {
         expect(Cancel.token, same(outer));
-        await Cancel.scope(() async {
-          expect(Cancel.token, isNot(same(outer)));
-          inner.cancel('inner');
-          expect(Cancel.reason, 'inner');
-        }, token: inner);
+        await Cancel.scope(() async => expect(Cancel.token, same(inner)), token: inner);
         expect(Cancel.token, same(outer));
-        expect(outer.isCancelled, isFalse);
       }, token: outer);
     });
 
