@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dart_toolkit/chrome.dart';
 import 'package:dart_toolkit/dart_toolkit.dart';
 import 'package:test/test.dart';
 
@@ -630,7 +631,7 @@ void main() {
         final marker = '--tk-orphan-${DateTime.now().microsecondsSinceEpoch}';
         final script = File('${dir.path}/child.dart')
           ..writeAsStringSync('''
-import 'package:dart_toolkit/http.dart';
+import 'package:dart_toolkit/chrome.dart';
 Future<void> main() async {
   await ChromeClient.launch(tabs: 1, args: ['$marker']);
   print('ready');
@@ -682,7 +683,7 @@ Future<void> main() async {
           ..domain = base.host
           ..path = '/',
       ]);
-      await page.reload();
+      await page.goto(page.url);
       expect(await page.text('#sent'), contains('sid=restored'));
       await page.close();
     }, skip: absent);
@@ -1010,6 +1011,132 @@ Future<void> main() async {
         expect(third!.name, 'file (3).txt');
       });
     }, skip: absent);
+  });
+
+  group('audit IV: chrome', () {
+    late HttpServer server;
+    late HttpServer other;
+    late Uri base;
+    late Uri away;
+    late ChromeClient browser;
+
+    setUpAll(() async {
+      if (chrome == null) return;
+      Future<HttpServer> serve() async {
+        final s = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        unawaited(
+          s.forEach((request) async {
+            final response = request.response;
+            switch (request.uri.path) {
+              case '/echo':
+                response.write(request.headers.value('cookie') ?? '');
+              // A feed that grows by one screen per scroll, six times, and then ends.
+              case '/feed':
+                response.headers.contentType = ContentType.html;
+                response.write('''
+<html><body><div id="feed"></div><script>
+  let n = 0;
+  const more = () => {
+    for (let i = 0; i < 5; i++) {
+      const p = document.createElement('p');
+      p.className = 'post';
+      p.style.height = '400px';
+      p.textContent = 'post ' + (n++);
+      document.getElementById('feed').appendChild(p);
+    }
+  };
+  more();
+  window.addEventListener('scroll', () => {
+    if (n < 35 && window.innerHeight + window.scrollY >= document.body.scrollHeight - 10) more();
+  });
+</script></body></html>''');
+              default:
+                response.headers.contentType = ContentType.html;
+                response.write('<html><body>${request.uri.path}</body></html>');
+            }
+            await response.close();
+          }),
+        );
+        return s;
+      }
+
+      server = await serve();
+      other = await serve();
+      base = Uri.parse('http://127.0.0.1:${server.port}');
+      away = Uri.parse('http://localhost:${other.port}');
+      browser = await ChromeClient.launch(tabs: 1);
+    });
+
+    tearDownAll(() async {
+      if (chrome == null) return;
+      await browser.close();
+      await server.close(force: true);
+      await other.close(force: true);
+    });
+
+    test('scroll(toEnd:) reads a feed to its end; scroll() stops after three', () async {
+      await browser.page(base.resolve('/feed'), (page) async {
+        await page.scroll(settle: 200.ms);
+        expect((await page.html()).$('.post').length, lessThan(35), reason: 'three scrolls, not the feed');
+        await page.scroll(toEnd: true, settle: 200.ms);
+        expect((await page.html()).$('.post').length, 35);
+      });
+    }, skip: absent);
+
+    test('cookies() is the whole browser\'s jar, dates kept, not only the page\'s', () async {
+      final expiry = DateTime.now().toUtc().add(const Duration(days: 2));
+      await browser.page(away, (page) async {
+        await page.eval("document.cookie = 'there=1; path=/; expires=${HttpDate.format(expiry)}'");
+      });
+      await browser.page(base, (page) async {
+        await page.eval("document.cookie = 'here=1; path=/'");
+        final jar = await page.cookies();
+        expect(jar.map((c) => c.name), containsAll(['here', 'there']));
+        final there = jar.firstWhere((c) => c.name == 'there');
+        expect(there.expires, isNotNull);
+        expect(there.expires!.difference(expiry).inSeconds.abs(), lessThan(5));
+        expect(jar.firstWhere((c) => c.name == 'here').expires, isNull, reason: 'a session cookie has no date');
+      });
+    }, skip: absent);
+
+    test('a raw request carries the browser\'s cookies for its own URL and no other', () async {
+      await browser.page(away, (page) => page.eval("document.cookie = 'elsewhere=1; path=/'"));
+      await browser.page(base, (page) => page.eval("document.cookie = 'mine=1; path=/'"));
+      Future<String> echo() async =>
+          (await browser.send(Request('GET', base.resolve('/echo'))..[Request.raw] = true).then((r) => r.read())).text;
+      // With no tab open the jar is read whole and matched here; with one, Chrome matches it.
+      for (final sent in [await echo(), await browser.page(away, (_) => echo())]) {
+        expect(sent, contains('mine=1'));
+        expect(sent, isNot(contains('elsewhere')));
+      }
+    }, skip: absent);
+
+    test(
+      'connect starts a browser that outlives the client, and the next run joins it',
+      () async {
+        final dir = await Directory.systemTemp.createTemp('tk_connect_');
+        final socket = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+        final port = socket.port;
+        await socket.close();
+        final marker = '--tk-connect-${DateTime.now().microsecondsSinceEpoch}';
+        try {
+          final first = await ChromeClient.connect(port: port, profile: dir.path.path, headless: true, args: [marker]);
+          await first.close();
+          final [(pid, _)] = await _browsers(marker);
+          final second = await ChromeClient.connect(port: port, profile: dir.path.path, headless: true, args: [marker]);
+          expect(await second.page(base, (p) => p.text('body')), '/');
+          await second.close();
+          expect((await _browsers(marker)).map((b) => b.$1), [pid], reason: 'the second run joined, it did not start');
+        } finally {
+          for (final (pid, _) in await _browsers(marker)) {
+            Process.killPid(pid);
+          }
+          await _eventually(() async => (await _browsers(marker)).isEmpty);
+          await dir.delete(recursive: true).catchError((Object _) => dir);
+        }
+      },
+      skip: absent ?? (Platform.isWindows ? 'reads the command line with ps' : null),
+    );
   });
 
   if (chrome != null) {

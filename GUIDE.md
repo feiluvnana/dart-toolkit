@@ -75,9 +75,9 @@ Future<void> main() async {
       .scrape<Map<String, Object?>>()
       .onInit((ctx) => ctx.pages = 50)
       .onResponse((ctx) {
-        final links = ctx.response.html.$('a[href]');
+        final links = ctx.html.$('a[href]');
         for (final a in links) {
-          ctx.emit({'title': a.text, 'href': '${ctx.resolve(a.attr('href'))}'});
+          ctx.emit({'title': a.text, 'href': '${ctx.resolve(a)}'});
         }
         ctx.follow(links);
       });
@@ -161,7 +161,8 @@ test.
 | `fs.dart` | `Path`, watching, archives, compression | `native` |
 | `hash.dart` | `Hash`, `Secure`, hex/base64/base32 | `native` |
 | `process.dart` | `run`, `ShellRun`, `Shell.scope`, pipelines, `which` | `fs` |
-| `http.dart` | `Request`, `Response`, `Client`, `Http.scope`, `ChromeClient`, `Crawler`, downloads | `fs`, `hash`, `formats` |
+| `http.dart` | `Request`, `Response`, `Client`, `Http.scope`, `Crawler`, downloads | `fs`, `hash`, `formats` |
+| `chrome.dart` | `ChromeClient`, `ChromePage`, `Device`, `Resource` — **not in the barrel** | `http` |
 | `cli.dart` | `Opt`, `Arg`, `CliCommand`, `Cli`, `Lifecycle`, `Console` | `core` |
 | `native.dart` | `NativeLib` | — |
 | `ffi.dart` | `Ffi`, `Lib`, `Fn`, `C` — **not in the barrel** | — |
@@ -993,12 +994,19 @@ against it.
 Chromium download. The page you get back is the DOM **after its own scripts have run**, so `$`,
 `$x` and the crawl engine work on it unchanged.
 
+It is its own library, outside the barrel: it is a third of `http`'s source, and a script that
+never opens a browser does not compile it.
+
+```dart
+import 'package:dart_toolkit/chrome.dart';
+import 'package:dart_toolkit/dart_toolkit.dart';
+```
+
 | | |
 |---|---|
 | `ChromeClient.launch()` | a fresh browser, owned and killed by the client |
 | `ChromeClient.launch(profile: dir)` | owned, but keeps its cookies and login between runs |
-| `ChromeClient.attach(port: 9222)` | join a browser already running; never killed |
-| `ChromeClient.connect()` | attach if one is up, else start one that outlives the run (`~/.dart_toolkit/chrome`) |
+| `ChromeClient.connect()` | join the browser on port 9222 if one is up, else start one that outlives the run (`~/.dart_toolkit/chrome`); never killed |
 
 ```dart
 final chrome = await ChromeClient.launch(
@@ -1014,7 +1022,7 @@ final chrome = await ChromeClient.launch(
 What the client guarantees:
 - **Nothing lands in your working directory.**
   - A launched browser downloads into its own temp folder.
-  - A browser you attached to is pointed there only while a wait is open, then handed back.
+  - A browser you joined is pointed there only while a wait is open, then handed back.
   - Only a finished file is moved into `to:`. A download that is given up is cancelled and its
     partial file erased.
 - **Credentials stay on their origin.** A scope's cookie is given to the browser for the page's
@@ -1033,9 +1041,6 @@ What the client guarantees:
   optimisation-guide downloads, so a fresh profile no longer fetches about 40 MB in its first
   minute. Your own `--disable-features=` is merged with the built-in list.
 
-`isNewBrowser` says whether this run started the browser, i.e. whether `proxy:`, `headless:`
-and `args:` applied at all.
-
 Per request, with keys:
 
 ```dart
@@ -1047,7 +1052,7 @@ url.scrape<String>().onRequest((ctx) {
 ```
 
 Only a GET without a `range` is rendered. POSTs, resumable downloads and assets go to the plain
-client underneath, with the browser's cookies and user-agent.
+client underneath, with the browser's cookies for that URL and its user-agent.
 
 ### Driving a page
 
@@ -1076,15 +1081,15 @@ exception from `action`.
 
 | | |
 |---|---|
-| `goto(url)`, `back()`, `forward()`, `reload()` | navigation |
+| `goto(url)`, `back()`, `forward()` | navigation; `goto(page.url)` loads it again |
 | `html()`, `response()`, `url`, `statusCode` | what the tab holds right now |
 | `waitFor(sel)`, `waitWhile(sel)` | a mutation observer; `false` on timeout |
 | `click`, `fill`, `press`, `select`, `hover`, `upload` | real input events, with a DOM fallback |
 | `text(sel)`, `attr(sel, name)`, `has(sel)` | one value off the live page |
 | `frame(match)` | an iframe as a page of its own |
-| `scroll(times:, settle:)` | an infinite feed until it stops growing |
+| `scroll(times:, settle:)`, `scroll(toEnd: true)` | an infinite feed, three screens or until it stops growing |
 | `eval(js)`, `screenshot()`, `pdf()` | anything else |
-| `cookies([restore])`, `headers(map)`, `block(kinds)` | the tab's session and filters |
+| `cookies([restore])`, `headers(map)`, `block(kinds)` | the browser's whole cookie jar (dates kept), the tab's headers and filters |
 | `onDialog(handler)` | answer `alert`/`confirm`/`prompt`; unanswered ones are dismissed |
 
 ### Crawling
@@ -1097,10 +1102,10 @@ final stories = 'https://news.ycombinator.com'.url
     .onInit((ctx) => ctx..concurrency = 8..delay = 200.ms..pages = 50..robots = true)
     .onRequest((ctx) => ctx.request.headers['accept-language'] = 'en')
     .onResponse((ctx) {
-      for (final a in ctx.response.html.$('.titleline > a')) {
-        ctx.emit((title: a.text, link: ctx.resolve(a.attr('href'))));
+      for (final a in ctx.html.$('.titleline > a')) {
+        ctx.emit((title: a.text, link: ctx.resolve(a)));
       }
-      ctx.follow(ctx.response.html.$('a.morelink'));
+      ctx.follow(ctx.html.$('a.morelink'));
     })
     .onError((ctx) => Console.warn('${ctx.failure}'))
     .onFinish((summary) => Console.info('$summary'));
@@ -1122,7 +1127,7 @@ final class Titles extends Crawler<String> {
 
   @override
   void onResponse(ResponseContext<String> ctx) {
-    for (final h in ctx.response.html.$('h1, h2')) {
+    for (final h in ctx.html.$('h1, h2')) {
       if (seen.add(h.text)) ctx.emit(h.text);
     }
   }
@@ -1151,7 +1156,8 @@ Seeds: `url.scrape<T>()`, `urls.scrape<T>()`, `requests.scrape<T>()`, `ctx.seed(
 | `pages` / `depth` | — | stop after N pages / drop requests deeper than N hops |
 | `scope` | the seeds' hosts | where `follow` may go |
 | `robots` | false | fetch each host's robots.txt once and obey it, for the user-agent actually sent |
-| `sitemaps` | false | seed from the sitemaps robots.txt lists, or `/sitemap.xml`; indexes and `.gz` followed |
+| `sitemaps` | false | seed from the sitemaps robots.txt lists, or `/sitemap.xml`; indexes and `.gz` followed. Under `pages`, only what the budget can use enters the frontier |
+| `canonical` | — | `(Uri u) => …`: what makes two URLs one page for the visited check, e.g. without a `sid` parameter. The request still goes to the URL followed |
 
 **`onRequest`** runs before every send. `ctx.request` is yours to edit, and `ctx.skip()` drops
 the request.
@@ -1162,8 +1168,9 @@ Chrome's included. From here you can:
 ```dart
 ctx.emit(item);
 ctx.follow(href, meta: {'from': 'index'}, onResponse: (child) {/* … */});
-ctx.follow(ctx.response.html.$('a.next')); // elements: each one's href, else its src
-ctx.resolve(href); // against the URL that answered
+ctx.follow(ctx.html.$('a.next')); // elements: each one's href, else its src
+ctx.follow(ctx.response.json['next']); // a URL, a list of them, or null on the last page
+ctx.resolve(href); // a String, Uri or element, against the URL that answered or its <base href>
 ctx.stop();
 ```
 
@@ -1172,6 +1179,9 @@ What `follow` does:
 - It strips fragments and an empty `?`, and never fetches a URL twice (a multipart body counts
   its files). A redirect back into its own chain — a login setting a cookie — is followed.
 - It takes elements too: each one's `href`, else its `src`; one with neither is a drop.
+- It takes any `Iterable` of links, and a `JsonDocument` holding a string, a list or `null`.
+- Once the page has been read as HTML (`ctx.html`), relative links resolve against its
+  `<base href>`.
 - It drops `mailto:` and `javascript:` links.
 - It returns `false` when it drops something, so nothing vanishes silently.
 - It takes the same body words as `post`.
@@ -1568,11 +1578,11 @@ Future<void> listing() async {
         .scrape<Map<String, Object?>>()
         .onInit((c) => c..concurrency = 8..delay = 200.ms..robots = true)
         .onResponse((c) {
-          for (final tr in c.response.html.$('table tbody tr')) {
+          for (final tr in c.html.$('table tbody tr')) {
             final td = tr.$('td').texts;
             c.emit({'name': td[0], 'size': td[1]});
           }
-          c.follow(c.response.html.$('a.next'));
+          c.follow(c.html.$('a.next'));
         })
         .rights
         .toList(),
@@ -1588,7 +1598,7 @@ Future<void> site() async {
   final pages = 'https://example.com'.url
       .scrape<String>()
       .onInit((ctx) => ctx..sitemaps = true..robots = true..concurrency = 4)
-      .onResponse((ctx) => ctx.emit('${ctx.url} ${ctx.response.html.$('title').text}'));
+      .onResponse((ctx) => ctx.emit('${ctx.url} ${ctx.html.$('title').text}'));
   await Http.scope(() => pages.rights.forEach(print));
 }
 ```
@@ -1606,7 +1616,7 @@ Future<void> asMe(Uri loginUrl, Uri listUrl) async {
   await page.close();
 
   await Http.scope(client: chrome, () async {
-    await listUrl.scrape<String>().onResponse((c) => c.emit(c.response.html.$('h1').text)).rights.forEach(print);
+    await listUrl.scrape<String>().onResponse((c) => c.emit(c.html.$('h1').text)).rights.forEach(print);
   });
   await chrome.close(); // the profile keeps the login for next time
 }
@@ -1636,8 +1646,8 @@ Future<void> gallery(Uri url) async {
         .scrape<({Uri url, Path path})>()
         .onRequest((c) => c.request[ChromeClient.waitFor] = '.gallery img')
         .onResponse((c) {
-          for (final img in c.response.html.$('.gallery img[src]')) {
-            final src = c.resolve(img.attr('src'));
+          for (final img in c.html.$('.gallery img[src]')) {
+            final src = c.resolve(img);
             c.emit((url: src, path: 'out'.path / src.pathSegments.last.filename));
           }
         })

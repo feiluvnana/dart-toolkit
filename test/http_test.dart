@@ -3385,6 +3385,177 @@ void _scrapeAudit() {
       expect(customHookRan, isTrue);
     });
   });
+
+  group('audit IV: scrape', () {
+    test('ctx.html is the response parsed once', () async {
+      final client = MockClient(
+        (r) async => Response('<a href="/b">b</a>', 200, headers: {'content-type': 'text/html'}),
+      );
+      final got = await Http.scope(
+        client: client,
+        () => 'https://a.com/'.url
+            .scrape<bool>()
+            .onResponse((ctx) => ctx.emit(identical(ctx.html, ctx.response.html)))
+            .rights
+            .toList(),
+      );
+      expect(got, [true]);
+    });
+
+    test('resolve takes an element or a query, by its href, else its src', () async {
+      final client = MockClient(
+        (r) async => Response(
+          '<a class="f" href="files/a.epub">a</a><img src="/i.png"><span id="x"></span>',
+          200,
+          headers: {'content-type': 'text/html'},
+        ),
+      );
+      final got = await Http.scope(
+        client: client,
+        () => 'https://a.com/book/'.url
+            .scrape<Object>()
+            .onResponse((ctx) {
+              ctx.emit(ctx.resolve(ctx.html.$('a.f')));
+              ctx.emit(ctx.resolve(ctx.html.$('img').first));
+              ctx.emit(ctx.resolve('../up'));
+              for (final bad in [ctx.html.$('#x'), ctx.html.$('.none')]) {
+                try {
+                  ctx.resolve(bad);
+                } on StateError catch (e) {
+                  ctx.emit(e.message);
+                }
+              }
+            })
+            .rights
+            .toList(),
+      );
+      expect(got, [
+        'https://a.com/book/files/a.epub'.url,
+        'https://a.com/i.png'.url,
+        'https://a.com/up'.url,
+        '<span> has no href or src',
+        'Nothing matched the selector',
+      ]);
+    });
+
+    test('follow takes any iterable of links, and the JSON that holds them', () async {
+      final client = MockClient((r) async {
+        return switch (r.url.path) {
+          '/api' => Response('{"next": ["/p/1", "/p/2"], "more": "/p/3", "none": null}', 200),
+          _ => Response('', 200),
+        };
+      });
+      final scheduled = <bool>[];
+      final got = await Http.scope(
+        client: client,
+        () => 'https://a.com/api'.url
+            .scrape<String>()
+            .onResponse((ctx) {
+              ctx.emit(ctx.url.path);
+              if (ctx.url.path != '/api') return;
+              final doc = ctx.response.json;
+              scheduled
+                ..add(ctx.follow(['/p/4', 'https://a.com/p/5'.url]))
+                ..add(ctx.follow(doc['next']))
+                ..add(ctx.follow(doc['more']))
+                ..add(ctx.follow(doc['none']))
+                ..add(ctx.follow(doc['absent']));
+            })
+            .rights
+            .toList(),
+      );
+      expect(scheduled, [true, true, true, false, false]);
+      expect(got.toSet(), {'/api', '/p/1', '/p/2', '/p/3', '/p/4', '/p/5'});
+    });
+
+    test('canonical: a page linked with a session id is read once, at the URL it was linked by', () async {
+      final fetched = <String>[];
+      final client = MockClient((r) async {
+        fetched.add('${r.url}');
+        return Response(
+          '<a href="/a?sid=1">a</a><a href="/a?sid=2">a</a><a href="/a">a</a><a href="/b?sid=3">b</a>',
+          200,
+          headers: {'content-type': 'text/html'},
+        );
+      });
+      await Http.scope(
+        client: client,
+        () => 'https://a.com/'.url
+            .scrape<void>()
+            .onInit((ctx) => ctx.canonical = (u) => u.replace(queryParameters: {...u.queryParameters}..remove('sid')))
+            .onResponse((ctx) => ctx.follow(ctx.html.$('a')))
+            .drain<void>(),
+      );
+      expect(fetched, ['https://a.com/', 'https://a.com/a?sid=1', 'https://a.com/b?sid=3']);
+    });
+
+    test('follow and resolve honour <base href> once the page is read as HTML', () async {
+      final fetched = <String>[];
+      final client = MockClient((r) async {
+        fetched.add(r.url.path);
+        return Response(
+          '<html><head><base href="/sub/"></head><body><a href="x">x</a></body></html>',
+          200,
+          headers: {'content-type': 'text/html'},
+        );
+      });
+      final resolved = await Http.scope(
+        client: client,
+        () => 'https://a.com/dir/page'.url
+            .scrape<Uri>()
+            .onInit((ctx) => ctx.depth = 1)
+            .onResponse((ctx) {
+              if (ctx.depth > 0) return;
+              ctx.emit(ctx.resolve('y'));
+              ctx.follow(ctx.html.$('a'));
+              ctx.emit(ctx.resolve('z'));
+            })
+            .rights
+            .toList(),
+      );
+      expect(resolved, ['https://a.com/dir/y'.url, 'https://a.com/sub/z'.url], reason: 'unread, the page is its URL');
+      expect(fetched, ['/dir/page', '/sub/x']);
+    });
+
+    test('a sitemap seeds no more than the page budget can use, and refills what robots drops', () async {
+      final hits = <String>[];
+      final server = await _site((path) {
+        hits.add(path);
+        return switch (path) {
+          '/robots.txt' => (req) => req.response.write('User-agent: *\nDisallow: /p/1\n'),
+          '/sitemap.xml' => (req) => req.response.write(
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+            // Each page twice: a duplicate is dropped as it enters the frontier, so the count
+            // of drops says how much of the sitemap was ever put there.
+            '${[
+              for (var i = 0; i < 400; i++)
+                for (final _ in [1, 2]) '<url><loc>http://127.0.0.1:${req.connectionInfo!.localPort}/p/$i</loc></url>',
+            ].join()}'
+            '</urlset>',
+          ),
+          _ => _html(path),
+        };
+      });
+      addTearDown(() => server.close(force: true));
+      ScrapeSummary? summary;
+      final got = await 'http://127.0.0.1:${server.port}/'.url
+          .scrape<String>()
+          .onInit(
+            (ctx) => ctx
+              ..sitemaps = true
+              ..robots = true
+              ..pages = 30
+              ..concurrency = 4,
+          )
+          .onResponse((ctx) => ctx.emit(ctx.url.path))
+          .onFinish((s) => summary = s)
+          .rights
+          .toList();
+      expect(got, hasLength(30), reason: '/p/1, /p/10… are disallowed, and the backlog makes up for them');
+      expect(got.where((p) => p.startsWith('/p/1')), isEmpty);
+      expect(summary!.dropped, lessThan(100), reason: 'the frontier was given what the budget could use, not 800 URLs');
+    });
+  });
 }
 
 void _readings() {

@@ -52,7 +52,7 @@ final class Headers extends MapBase<String, String> {
 ///
 /// A client reads it with the key itself — `waitFor(request)` — and **ignores every key it
 /// does not know**. That is what makes the same crawl run unchanged on [IoClient], which
-/// ignores the wait, and on [ChromeClient], which honours it.
+/// ignores the wait, and on `ChromeClient` (`chrome.dart`), which honours it.
 ///
 /// {@category Networking}
 final class RequestKey<T extends Object> {
@@ -81,7 +81,7 @@ final class RequestKey<T extends Object> {
 final class Request {
   /// Answer with the resource itself, never a rendering of it: `request[Request.raw] = true`.
   ///
-  /// The one directive that is not a client's own. A client that renders — [ChromeClient],
+  /// The one directive that is not a client's own. A client that renders — `ChromeClient`,
   /// and any other written later — must hand this request to plain HTTP instead, because
   /// what the caller wants is the bytes the server sent. A PDF put through a tab comes back
   /// as the DOM Chrome built to display it, which is not the PDF.
@@ -914,7 +914,7 @@ final class IoClient implements Client {
     // One value per name, so a header the server repeated is joined. `set-cookie` is the
     // one that cannot be joined with a comma — its `Expires` holds one — and a newline
     // cannot appear in a header value, so it separates them unambiguously. Chrome's
-    // DevTools protocol joins the same header the same way, so [ChromeClient] agrees.
+    // DevTools protocol joins the same header the same way, so `ChromeClient` agrees.
     response.headers.forEach((name, values) => headers[name] = values.join(name == 'set-cookie' ? '\n' : ', '));
     Stream<List<int>> body = response.handleError(
       (Object e) => throw ClientException(e is HttpException ? e.message : '$e', request.url),

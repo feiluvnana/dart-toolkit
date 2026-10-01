@@ -83,21 +83,6 @@ final class _Jar {
     return matching.isEmpty ? null : [for (final c in matching) '${c.name}=${c.value}'].join('; ');
   }
 
-  /// A cookie as the DevTools protocol describes one, for [ChromeClient] to match by the
-  /// same rules as this jar: a leading dot on the domain is what makes it not host-only.
-  static _Cookie _of(Map<String, Object?> cdp) {
-    final domain = (cdp['domain'] as String? ?? '').toLowerCase();
-    return _Cookie(
-      name: cdp['name'] as String? ?? '',
-      value: cdp['value'] as String? ?? '',
-      domain: domain.startsWith('.') ? domain.substring(1) : domain,
-      path: cdp['path'] as String? ?? '/',
-      expires: null,
-      secure: cdp['secure'] == true,
-      hostOnly: !domain.startsWith('.'),
-    );
-  }
-
   /// One `set-cookie` value, or `null` when it is not one.
   static _Cookie? _parse(String line, Uri from) {
     final parts = line.split(';');

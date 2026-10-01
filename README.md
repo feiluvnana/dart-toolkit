@@ -29,7 +29,8 @@ its startup and wants less.
 | `fs.dart` | `Path`, archives (zip, 7z, rar, tar.*), compression |
 | `hash.dart` | 16 digests, 4 checksums, HMAC, encodings, `Secure` |
 | `process.dart` | `run`, pipelines, `which`, `Shell.scope` |
-| `http.dart` | requests, `Http.scope`, `IoClient`, `ChromeClient`, crawling, downloads |
+| `http.dart` | requests, `Http.scope`, `IoClient`, crawling, downloads |
+| **`chrome.dart`** | `ChromeClient` and `ChromePage`: Chrome as a `Client`, and a tab to drive. It is **not** in the barrel: it is a third of `http`'s source, so only a program that opens a browser compiles it |
 | `cli.dart` | `Cli`, typed `Opt`/`Arg`, `Console`, `Lifecycle` |
 | `native.dart` | `NativeLib`, the loader for the package's Rust library |
 | **`ffi.dart`** | `Ffi`, which calls C in one line. It is **not** in the barrel, because its short names (`Ffi`, `C`, `Lib`, `Fn`) are only claimed by a program that imports it |
@@ -243,10 +244,10 @@ final stories = url.scrape<Story>()
     .onInit((ctx) => ctx..concurrency = 8..robots = true..sitemaps = true)
     .onRequest((ctx) => ctx.request.headers['accept-language'] = 'en')
     .onResponse((ctx) {
-      for (final a in ctx.response.html.$('.titleline > a')) {
-        ctx.emit((title: a.text, link: ctx.resolve(a.attr('href'))));
+      for (final a in ctx.html.$('.titleline > a')) {
+        ctx.emit((title: a.text, link: ctx.resolve(a)));
       }
-      ctx.follow(ctx.response.html.$('a.next'));
+      ctx.follow(ctx.html.$('a.next'));
     })
     .onError((ctx) => Console.warn('${ctx.failure}'))
     .onFinish((summary) => Console.info('$summary'));
@@ -267,7 +268,7 @@ final class Titles extends Crawler<String> {
   void onInit(InitContext<String> ctx) => ctx.seed(home);
   @override
   void onResponse(ResponseContext<String> ctx) {
-    for (final h in ctx.response.html.$('h2')) {
+    for (final h in ctx.html.$('h2')) {
       if (seen.add(h.text)) ctx.emit(h.text);
     }
   }
@@ -285,6 +286,8 @@ Every request goes through one `Client`. Name it once, in `Http.scope(client:)`,
 call the same verbs on it directly.
 
 ```dart
+import 'package:dart_toolkit/chrome.dart'; // beside the barrel, for ChromeClient
+
 IoClient(connections: 32, perHost: 6, proxy: 'http://user:pass@host:8080'.url);
 
 final chrome = await ChromeClient.launch(block: Resource.heavy, profile: 'session'.path);

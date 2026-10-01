@@ -207,6 +207,17 @@ final class InitContext<T> {
   /// ```
   bool sitemaps = false;
 
+  /// What makes two URLs one page, for the visited check: a session id or a tracking
+  /// parameter that changes nothing about the page is taken off here, and the crawl reads the
+  /// page once however many ways it is linked.
+  ///
+  /// ```dart
+  /// ctx.canonical = (u) => u.replace(queryParameters: {...u.queryParameters}..remove('sid'));
+  /// ```
+  ///
+  /// Only the check sees it: a request still goes to the URL it was followed to.
+  Uri Function(Uri url)? canonical;
+
   final List<Request> _seeds;
   final Map<Uri, Map<String, Object?>> _seedMeta = {};
 
@@ -262,8 +273,12 @@ sealed class HookContext<T> {
 
   HookContext._(this._emit, this._follow, this._stop);
 
-  /// The URL this hook is about; [resolve] and [follow] resolve against it.
+  /// The URL this hook is about; [resolve] and [follow] resolve against it, or against the
+  /// page's `<base href>` once its HTML has been read.
   Uri get url;
+
+  /// What a relative link here is relative to.
+  Uri get _base => url;
 
   /// The request as it was scheduled.
   Request get request;
@@ -274,8 +289,20 @@ sealed class HookContext<T> {
   /// Metadata carried from the request that scheduled this one.
   Map<String, Object?> get meta;
 
-  /// Resolves [href] — a [Uri] or a [String] — against [url], as [follow] does.
-  Uri resolve(Object href) => _resolve(url, href);
+  /// Resolves [href] against [url], as [follow] does: a [Uri], a [String], or an [Element] —
+  /// or the first of the [Elements] a query matched — by its `href`, else its `src`.
+  ///
+  /// ```dart
+  /// final file = ctx.resolve(ctx.html.$('a.download'));
+  /// ```
+  ///
+  /// Throws a [StateError] for an element with neither, or a query that matched nothing.
+  Uri resolve(Object href) => _resolve(_base, switch (href) {
+    List<Element>(isEmpty: true) => throw StateError('Nothing matched the selector'),
+    List<Element>(:final first) => _link(first) ?? (throw StateError('<${first.name}> has no href or src')),
+    Element() => _link(href) ?? (throw StateError('<${href.name}> has no href or src')),
+    _ => href,
+  });
 
   /// Emits [item] on the scrape stream.
   void emit(T item) {
@@ -284,11 +311,14 @@ sealed class HookContext<T> {
     _emit(item);
   }
 
-  /// Schedules a request for [target]: a [Uri], a [String] href resolved against [url], or
-  /// the [Element]s a query matched, each by its `href` — else its `src`:
+  /// Schedules a request for [target]: a [Uri], a [String] href resolved against [url], an
+  /// [Element] by its `href` — else its `src` — or any [Iterable] of these: the [Elements] a
+  /// query matched, a list of URLs. A [JsonDocument] is read for the string or list it holds,
+  /// and holding `null` schedules nothing.
   ///
   /// ```dart
-  /// ctx.follow(ctx.response.html.$('a.next'));   // pagination, whether or not there is a next
+  /// ctx.follow(ctx.html.$('a.next'));      // pagination, whether or not there is a next
+  /// ctx.follow(ctx.response.json['next']); // one URL, a list of them, or null on the last page
   /// ```
   ///
   /// Returns whether anything was scheduled. A target outside the crawl's scope, or with a
@@ -369,6 +399,16 @@ final class ResponseContext<T> extends HookContext<T> {
 
   @override
   final Map<String, Object?> meta;
+
+  /// The response parsed as HTML — [Response.html], parsed once however often it is read.
+  HtmlDocument get html => response.html;
+
+  /// The page's [HtmlDocument.base], read the first time it is asked for once the HTML has
+  /// been parsed; a page never read as HTML is not parsed for it.
+  Uri? _baseRead;
+
+  @override
+  Uri get _base => _baseRead ?? (response._html == null ? url : _baseRead = response._html!.base ?? url);
 
   ResponseContext._({
     required this.response,
@@ -492,10 +532,10 @@ final class ScrapeSummary {
 ///
 ///   @override
 ///   void onResponse(ResponseContext<Book> ctx) {
-///     for (final b in ctx.response.html.$('.book')) {
+///     for (final b in ctx.html.$('.book')) {
 ///       if (titles.add(b.$('h2').text)) ctx.emit(Book.of(b));
 ///     }
-///     ctx.follow(ctx.response.html.$('a.next'));
+///     ctx.follow(ctx.html.$('a.next'));
 ///   }
 /// }
 ///
@@ -573,7 +613,7 @@ final class _Chain<T> extends Crawler<T> {
 ///     .onInit((ctx) => ctx..concurrency = 8..pages = 50)
 ///     .onResponse((ctx) {
 ///       ctx.emit(parse(ctx.response));
-///       ctx.follow(ctx.response.html.$('a.next'));
+///       ctx.follow(ctx.html.$('a.next'));
 ///     })
 ///     .onError((ctx) => log('${ctx.failure}'))
 ///     .onFinish((s) => log('$s'));
@@ -656,8 +696,6 @@ int _key(String method, Uri url, [List<int> body = const []]) {
   return h;
 }
 
-int _keyOf(Request req) => _key(req.method, req.url, _identity(req));
-
 /// What makes one body another: its bytes, or for a `files:` body — whose bytes are never
 /// held — its fields and each file's path and size, which is what a second upload of the same
 /// form would differ in.
@@ -723,20 +761,17 @@ class _Item<T> {
   ErrorHook<T>? get onError => plan.onError;
   bool get revisit => plan.revisit;
   bool get offsite => plan.offsite;
-
-  /// The dedupe key, computed without building the request when there is no body to hash.
-  int get key => _request == null ? _key(plan.method.toUpperCase(), url) : _keyOf(_request!);
 }
 
 class _Host<T> {
   final Queue<_Item<T>> queue = Queue<_Item<T>>();
 
-  /// This host's `/robots.txt`, fetched at most once; the future is shared so the
+  /// This host's `/robots.txt`, fetched and parsed at most once; the future is shared so the
   /// requests that start together wait on one fetch rather than each making their own.
   /// `null` inside it is a site with no file, or one that could not be read.
-  Future<String?>? robots;
+  Future<_RobotsTxt?>? robots;
 
-  /// [robots] read for each `user-agent` that has asked, since the groups differ by agent.
+  /// [robots] for each `user-agent` that has asked, since the groups differ by agent.
   final Map<String, _Robots> rules = {};
 
   /// A gap this host asked for through `Crawl-delay`. The crawl's own [InitContext.delay]
@@ -780,6 +815,13 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
   final scopeAgent = lease.headers == null ? null : Headers(lease.headers)['user-agent'];
 
   final seedHosts = <String>{for (final s in cfg._seeds) _site(s.url.host)};
+  final canonical = cfg.canonical;
+  Uri canon(Uri url) => canonical == null ? url : _page(canonical(url));
+  int keyOf(Request req) => _key(req.method, canon(req.url), _identity(req));
+
+  /// An item's dedupe key, computed without building the request when there is no body.
+  int itemKey(_Item<T> item) =>
+      item._request == null ? _key(item.plan.method.toUpperCase(), canon(item.url)) : keyOf(item._request!);
   final inScope = cfg.scope ?? (Uri url) => seedHosts.contains(_site(url.host));
   final visited = <int>{};
   final hosts = <String, _Host<T>>{};
@@ -838,6 +880,10 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
 
   late final void Function() dispatch;
 
+  /// Sitemap readers holding pages back until the frontier has room for them; see
+  /// [seedSitemaps].
+  final refills = <void Function()>{};
+
   // Keyed by origin — scheme, site and port — which is what robots.txt belongs to and what
   // one server is. `www.example.com` and `example.com` are one site, as they are for scope:
   // two buckets would double `perHost` and halve `delay` for any site linked both ways.
@@ -851,41 +897,48 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
   /// At most [cap] bytes are read: past it the file is cut there when [cut], else it is
   /// `null`, like a file that could not be read.
   Future<Uint8List?> fetchOwn(Uri url, String agent, {required int cap, bool cut = false}) async {
+    final request = Request('GET', url, headers: {'user-agent': agent})
+      ..[Request.raw] = true
+      ..[_Retry.none] = true;
+    final pending = lease.client.send(request);
+    final StreamedResponse res;
     try {
-      final request = Request('GET', url, headers: {'user-agent': agent})
-        ..[Request.raw] = true
-        ..[_Retry.none] = true;
-      final res = await lease.client.send(request).timeout(cfg.timeout);
-      final builder = BytesBuilder(copy: false);
-      await for (final chunk in res.stream.timeout(cfg.timeout)) {
-        if (builder.length + chunk.length > cap) {
-          if (!cut) return null;
-          builder.add(Uint8List.sublistView(Uint8List.fromList(chunk), 0, cap - builder.length));
-          break;
-        }
-        builder.add(chunk);
-      }
-      return res.isOk ? builder.takeBytes() : null;
+      res = await pending.timeout(cfg.timeout);
+    } catch (_) {
+      // A late answer still holds a connection until its body is read.
+      unawaited(pending.then(_drain, onError: (Object _) {}));
+      return null;
+    }
+    // An error page is not the file: it is drained, not read.
+    if (!res.isOk) {
+      unawaited(_drain(res).catchError((Object _) {}));
+      return null;
+    }
+    try {
+      return await _readCapped(res.stream, cap: cap, url: url, timeout: cfg.timeout, cut: cut);
     } catch (_) {
       return null;
     }
   }
 
-  /// [host]'s `/robots.txt`, fetched once. A 4xx is a site with no rules; a 5xx is a site
-  /// that cannot say, and the conservative reading — refuse everything — would strand a
-  /// whole crawl on one bad deploy, so both are read as open.
-  Future<String?> robotsText(_Host<T> host, Uri url, String agent) => host.robots ??= fetchOwn(
-    url.replace(path: '/robots.txt', query: null, fragment: null),
-    agent,
-    cap: _robotsCap,
-    cut: true,
-  ).then((bytes) => bytes == null ? null : utf8.decode(bytes, allowMalformed: true));
+  /// [host]'s `/robots.txt`, fetched and parsed once. A 4xx is a site with no rules; a 5xx is
+  /// a site that cannot say, and the conservative reading — refuse everything — would strand
+  /// a whole crawl on one bad deploy, so both are read as open.
+  Future<_RobotsTxt?> robotsTxt(_Host<T> host, Uri url, String agent) {
+    final site = url.replace(path: '/robots.txt', query: null, fragment: null);
+    return host.robots ??= fetchOwn(
+      site,
+      agent,
+      cap: _robotsCap,
+      cut: true,
+    ).then((bytes) => bytes == null ? null : _RobotsTxt.parse(utf8.decode(bytes, allowMalformed: true), site));
+  }
 
   /// [host]'s rules for [agent].
   Future<_Robots> robotsFor(_Host<T> host, Uri url, String agent) async {
-    final text = await robotsText(host, url, agent);
-    if (text == null) return _Robots.open;
-    return host.rules[agent] ??= _Robots.parse(text, agent);
+    final file = await robotsTxt(host, url, agent);
+    if (file == null) return _Robots.open;
+    return host.rules[agent] ??= file.forAgent(agent);
   }
 
   void checkReady(_Host<T> host) {
@@ -974,7 +1027,7 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     final url = item.url;
     if (url.scheme != 'http' && url.scheme != 'https') return drop();
     if (!item.offsite && !inScope(url)) return drop();
-    if (!item.revisit && !visited.add(item.key)) return drop();
+    if (!item.revisit && !visited.add(itemKey(item))) return drop();
     push(hostOf(url), item);
     return true;
   }
@@ -982,6 +1035,9 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
   void stop() {
     if (stopped) return;
     stopped = true;
+    for (final refill in refills.toList()) {
+      refill();
+    }
     ready.clear();
     for (final h in hosts.values) {
       queued -= h.queue.length;
@@ -990,17 +1046,12 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     if (running == 0) close();
   }
 
-  _Follow<T> followFrom(_Item<T> item, Uri base) => (target, plan) {
+  _Follow<T> followFrom(_Item<T> item, Uri Function() base) => (target, plan) {
     // A follow that adds no metadata shares its parent's, which for most crawls is the one
     // empty map: a million follows would otherwise be a million copies of nothing.
     final meta = plan.meta == null && item.meta.isEmpty ? const <String, Object?>{} : {...item.meta, ...?plan.meta};
-    bool one(Object target) {
-      final href = switch (target) {
-        Element(:final attributes) => attributes['href'] ?? attributes['src'],
-        _ => target,
-      };
-      if (href == null) return drop();
-      final url = _resolve(base, href);
+    bool one(Object href) {
+      final url = _resolve(base(), href);
       final next = _Item<T>(url, plan, meta: meta, depth: item.depth + 1);
       // A body is encoded now, so a `follow` that cannot build one fails in the hook that
       // asked, and so the body is there to be hashed for the visited set.
@@ -1019,14 +1070,29 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
       return enqueue(next);
     }
 
-    var scheduled = false;
-    if (target is Iterable<Element>) {
-      for (final e in target) {
-        if (one(e)) scheduled = true;
+    bool each(Object? target) {
+      switch (target) {
+        case null:
+          return false;
+        case Element():
+          return switch (_link(target)) {
+            final href? => one(href),
+            null => drop(),
+          };
+        case JsonDocument(:final raw):
+          return each(raw);
+        case Iterable():
+          var scheduled = false;
+          for (final t in target) {
+            if (each(t)) scheduled = true;
+          }
+          return scheduled;
+        default:
+          return one(target);
       }
-    } else {
-      scheduled = one(target);
     }
+
+    final scheduled = each(target);
     dispatch();
     return scheduled;
   };
@@ -1050,7 +1116,7 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
       failure,
       item.attempt,
       (value) => add(Right(value)),
-      followFrom(item, failure.url),
+      followFrom(item, () => failure.url),
       (after) => requeue(host, item, after),
       stop,
     );
@@ -1121,8 +1187,8 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     // The same policy the client and the scope follow, and the directives go with it: a hop
     // of a rendered crawl still wants the wait the request it came from asked for.
     final next = sent._hop(target, res.statusCode);
-    final key = _keyOf(next);
-    final chain = item.chain ?? [_keyOf(item.request)];
+    final key = keyOf(next);
+    final chain = item.chain ?? [keyOf(item.request)];
     // Back to a URL of this very chain — `/login` setting a cookie and sending the browser to
     // `/login` again — is followed, and the hop budget is what stops a loop. Anywhere else
     // already visited is a page this crawl has, and is counted as the drop it is.
@@ -1143,7 +1209,8 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     final hook = item.onResponse ?? crawler._response;
     if (hook == null) return;
     running++;
-    final ctx = ResponseContext<T>._(
+    late final ResponseContext<T> ctx;
+    ctx = ResponseContext<T>._(
       response: res,
       request: item.request,
       url: answered,
@@ -1151,7 +1218,7 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
       pages: pages,
       meta: item.meta,
       emit: (value) => add(Right(value)),
-      follow: followFrom(item, answered),
+      follow: followFrom(item, () => ctx._base),
       stop: stop,
     );
     try {
@@ -1206,20 +1273,17 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
       return transportFailure(host, item, sent.url, e, st);
     }
 
-    final builder = BytesBuilder(copy: false);
+    final Uint8List body;
     try {
-      await for (final chunk in streamed.stream.timeout(cfg.timeout)) {
-        if (builder.length + chunk.length > cfg.bodyLimit) throw _BodyTooLarge(cfg.bodyLimit, sent.url);
-        builder.add(chunk);
-      }
+      body = await _readCapped(streamed.stream, cap: cfg.bodyLimit, url: sent.url, timeout: cfg.timeout);
     } catch (e, st) {
       return transportFailure(host, item, sent.url, e, st);
     }
     if (stopped) return;
-    bytes += builder.length;
+    bytes += body.length;
 
     final res = Response.bytes(
-      builder.takeBytes(),
+      body,
       streamed.statusCode,
       request: sent,
       url: streamed.url,
@@ -1258,7 +1322,7 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
       } else if (!item.offsite && !inScope(answered)) {
         return refuse(host, item, res);
       }
-      if (!item.revisit && !visited.add(_key(sent.method, answered))) {
+      if (!item.revisit && !visited.add(_key(sent.method, canon(answered)))) {
         dropped++;
         return;
       }
@@ -1269,6 +1333,9 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
 
   dispatch = () {
     if (closed || stopped || controller.isPaused) return;
+    for (final refill in refills.toList()) {
+      refill();
+    }
     final now = DateTime.now();
     while (inFlight < cfg.concurrency && ready.isNotEmpty) {
       if (cfg.pages case final max? when pages + inFlight >= max) break;
@@ -1305,21 +1372,27 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
   ///
   /// An index is read [InitContext.perHost] sitemaps at a time — one at a time under a
   /// [InitContext.delay], which is a site asking to be read slowly.
+  ///
+  /// Under [InitContext.pages], the frontier is given only what can still be used: the rest
+  /// wait here as URLs, and no further sitemap is read until they run out — a site of fifty
+  /// thousand pages, crawled for fifty, never holds fifty thousand requests.
   Future<void> seedSitemaps(Uri origin) async {
     final agent = scopeAgent ?? _userAgent;
-    final listed = switch (await robotsText(hostOf(origin), origin, agent)) {
-      final text? => _Robots.sitemaps(text, origin),
-      null => const <Uri>[],
-    };
+    final listed = (await robotsTxt(hostOf(origin), origin, agent))?.sitemaps ?? const <Uri>[];
     final pending = Queue.of(listed.isEmpty ? [origin.resolve('/sitemap.xml')] : listed);
     final read = <Uri>{};
+    final backlog = Queue<Uri>();
     final lanes = cfg.delay > Duration.zero ? 1 : cfg.perHost;
     final done = Completer<void>();
     var active = 0;
+    bool full() => cfg.pages != null && pages + inFlight + queued >= cfg.pages!;
     late final void Function() pump;
     pump = () {
+      while (backlog.isNotEmpty && !stopped && !full()) {
+        enqueue(_Item<T>(_page(backlog.removeFirst()), none));
+      }
       // An index may name itself, or a thousand sitemaps; neither is a reason to run forever.
-      while (active < lanes && pending.isNotEmpty && !stopped && read.length < 1000) {
+      while (active < lanes && backlog.isEmpty && pending.isNotEmpty && !stopped && read.length < 1000) {
         final map = pending.removeFirst();
         if (!read.add(map)) continue;
         active++;
@@ -1328,21 +1401,21 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
               if (bytes == null || stopped) return;
               final (:pages, :maps) = await _sitemap(bytes, map);
               pending.addAll(maps);
-              for (final page in pages) {
-                enqueue(_Item<T>(_page(page), none));
-              }
-              dispatch();
+              backlog.addAll(pages);
             })
             .catchError((Object _) {})
             .whenComplete(() {
               active--;
               pump();
+              dispatch();
             });
       }
-      if (active == 0 && !done.isCompleted) done.complete();
+      if (active == 0 && (stopped || backlog.isEmpty) && !done.isCompleted) done.complete();
     };
+    refills.add(pump);
     pump();
     await done.future;
+    refills.remove(pump);
   }
 
   for (final seed in cfg._seeds) {
@@ -1386,6 +1459,30 @@ Uri _resolve(Uri base, Object target) => switch (target) {
   _ => throw ArgumentError.value(target, 'target', 'Must be a Uri, a String href or an Element'),
 };
 
+/// Where an element links: its `href`, else its `src`.
+String? _link(Element e) => e.attributes['href'] ?? e.attributes['src'];
+
+/// [stream] read to at most [cap] bytes, each chunk within [timeout]. Past [cap] the body is
+/// cut there when [cut], else it is a [_BodyTooLarge]; either way the rest is never read.
+Future<Uint8List> _readCapped(
+  Stream<List<int>> stream, {
+  required int cap,
+  required Uri url,
+  Duration? timeout,
+  bool cut = false,
+}) async {
+  final builder = BytesBuilder(copy: false);
+  await for (final chunk in timeout == null ? stream : stream.timeout(timeout)) {
+    if (builder.length + chunk.length > cap) {
+      if (!cut) throw _BodyTooLarge(cap, url);
+      builder.add(chunk.sublist(0, cap - builder.length));
+      break;
+    }
+    builder.add(chunk);
+  }
+  return builder.takeBytes();
+}
+
 /// A fresh copy the engine can send once per attempt, with redirects left to it.
 Request _clone(Request req) => req.copy()..followRedirects = false;
 
@@ -1406,15 +1503,7 @@ Future<({List<Uri> pages, List<Uri> maps})> _sitemap(Uint8List bytes, Uri from) 
   Uint8List? raw = bytes;
   if (bytes.length > 2 && bytes[0] == 0x1f && bytes[1] == 0x8b) {
     try {
-      final builder = BytesBuilder(copy: false);
-      await for (final chunk in _inflated(Stream.value(bytes), _Encoding.gzip, from)) {
-        if (builder.length + chunk.length > _sitemapCap) {
-          raw = null;
-          break;
-        }
-        builder.add(chunk);
-      }
-      if (raw != null) raw = builder.takeBytes();
+      raw = await _readCapped(_inflated(Stream.value(bytes), _Encoding.gzip, from), cap: _sitemapCap, url: from);
     } catch (_) {
       raw = null;
     }

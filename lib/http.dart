@@ -1,8 +1,8 @@
 /// # HTTP & Web Scraping
 ///
-/// `Request`, `Response` and `Client` — over `dart:io` as [IoClient], over Chrome's DevTools
-/// protocol as [ChromeClient] — requests and JSON on `Uri`, a Scrapy-style scraping pipeline,
-/// atomic downloads and the shared-client scope seam. Parsing is in `formats.dart`.
+/// `Request`, `Response` and `Client` over `dart:io` as [IoClient], requests and JSON on `Uri`,
+/// a Scrapy-style scraping pipeline, atomic downloads and the shared-client scope seam.
+/// Parsing is in `formats.dart`; the Chrome client is `chrome.dart`, outside the barrel.
 ///
 /// {@category Crawling}
 library;
@@ -21,7 +21,6 @@ import 'hash.dart';
 import 'native.dart';
 
 part 'src/http/cache.dart';
-part 'src/http/chrome.dart';
 part 'src/http/client.dart';
 part 'src/http/cookies.dart';
 part 'src/http/documents.dart';

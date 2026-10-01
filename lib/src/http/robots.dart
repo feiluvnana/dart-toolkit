@@ -108,27 +108,30 @@ final class _Robots {
       if (_productStart.firstMatch(lower) case final first?) first[0]!,
     };
   }
+}
 
-  /// The sitemaps [text] lists on `Sitemap:` lines, resolved against [site].
-  ///
-  /// They belong to no group — a `Sitemap:` line applies to every agent wherever it sits —
-  /// so they are read apart from the rules.
-  static List<Uri> sitemaps(String text, Uri site) => [
-    for (final raw in text.split('\n'))
-      if (raw.split('#').first.trim() case final line when line.toLowerCase().startsWith('sitemap:'))
-        if (Uri.tryParse(line.substring('sitemap:'.length).trim()) case final url? when url.path.isNotEmpty)
-          site.resolveUri(url),
-  ];
+/// One group of a robots.txt: the agents it names and what it says to them.
+typedef _Group = ({Set<String> agents, List<(String, bool)> rules, Duration? delay});
 
-  /// Parses [text] for [agent], falling back to the `*` group when it names no other.
-  ///
+/// A site's whole robots.txt, read once: its groups, for whichever agent asks, and its
+/// sitemaps. What a crawl keeps per site — the parsed rules, never the text, which may be
+/// half a megabyte.
+final class _RobotsTxt {
+  final List<_Group> _groups;
+
+  /// What `Sitemap:` lines list, resolved against the site. They belong to no group — a
+  /// `Sitemap:` line applies to every agent wherever it sits.
+  final List<Uri> sitemaps;
+
+  const _RobotsTxt(this._groups, this.sitemaps);
+
   /// A group is its `User-agent` lines and the rules under them; a `User-agent` after a
   /// rule starts the next group. Blank lines are skipped rather than read as the end of one,
   /// as RFC 9309's parsers do: a file with a blank line between an agent and its rules means
   /// the rules for that agent.
-  static _Robots parse(String text, String agent) {
-    final wanted = _products(agent);
-    final groups = <({Set<String> agents, List<(String, bool)> rules, Duration? delay})>[];
+  factory _RobotsTxt.parse(String text, Uri site) {
+    final groups = <_Group>[];
+    final sitemaps = <Uri>[];
     var agents = <String>{};
     var rules = <(String, bool)>[];
     Duration? delay;
@@ -156,30 +159,36 @@ final class _Robots {
         case 'disallow':
           sawRule = true;
           // An empty `Disallow` forbids nothing, which is how a group says "everything".
-          if (value.isNotEmpty) rules.add((_normal(value), false));
+          if (value.isNotEmpty) rules.add((_Robots._normal(value), false));
         case 'allow':
           sawRule = true;
-          if (value.isNotEmpty) rules.add((_normal(value), true));
+          if (value.isNotEmpty) rules.add((_Robots._normal(value), true));
         case 'crawl-delay':
           sawRule = true;
           final seconds = double.tryParse(value);
           if (seconds != null && seconds > 0) delay = Duration(microseconds: (seconds * 1e6).round());
+        case 'sitemap':
+          if (Uri.tryParse(value) case final url? when url.path.isNotEmpty) sitemaps.add(site.resolveUri(url));
       }
     }
     flush();
+    return _RobotsTxt(groups, sitemaps);
+  }
 
-    // The most specific group that names this agent, else the `*` one.
+  /// The rules for [agent]: the groups that name it, else the `*` ones.
+  _Robots forAgent(String agent) {
+    final wanted = _Robots._products(agent);
     final mine = [
-      for (final g in groups)
+      for (final g in _groups)
         if (g.agents.any(wanted.contains)) g,
     ];
     final chosen = mine.isNotEmpty
         ? mine
         : [
-            for (final g in groups)
+            for (final g in _groups)
               if (g.agents.contains('*')) g,
           ];
-    if (chosen.isEmpty) return open;
+    if (chosen.isEmpty) return _Robots.open;
 
     // Longest match wins, and a tie goes to Allow.
     final all = [for (final g in chosen) ...g.rules]

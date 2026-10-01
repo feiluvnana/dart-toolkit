@@ -125,7 +125,7 @@ Future<void> run() async {
   final songs = khinsider.url
       .scrape<Asset>()
       .onResponse((ctx) {
-        for (final tr in ctx.response.html.$('#songlist tr')) {
+        for (final tr in ctx.html.$('#songlist tr')) {
           final tds = tr.$('td');
           if (tds.length < 4) continue;
           final href = tds[3].$('a').attr('href');
@@ -140,9 +140,9 @@ Future<void> run() async {
           ctx.follow(
             href,
             onResponse: (song) {
-              final page = song.response.html;
+              final page = song.html;
               for (final (ext, path) in missing.sequence) {
-                song.emit((url: song.resolve(page.$('a[href*=".$ext"]').attr('href')), path: path));
+                song.emit((url: song.resolve(page.$('a[href*=".$ext"]')), path: path));
               }
             },
           );

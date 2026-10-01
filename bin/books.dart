@@ -10,6 +10,7 @@
 /// `<meta refresh>` starts the real transfer, which only a browser follows.
 library;
 
+import 'package:dart_toolkit/chrome.dart';
 import 'package:dart_toolkit/dart_toolkit.dart';
 
 /// What a book page offers, by the end of each link's file name.
