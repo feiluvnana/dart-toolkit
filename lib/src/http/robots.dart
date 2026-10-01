@@ -1,29 +1,21 @@
-// What a site's /robots.txt allows, for the crawl engine's `ctx.robots`.
-//
-// RFC 9309: the groups whose `User-agent` matches, the longest matching `Allow` or
-// `Disallow` wins, and a tie goes to `Allow`. `Crawl-delay` is not in the RFC and every
-// major crawler honours it anyway, so it is read and handed to the engine's own delay.
-//
-// Nothing here is public: a crawl either respects robots or does not, and
-// `ctx.robots = true` is the whole vocabulary.
+// What a site's /robots.txt allows, for `ctx.robots`. RFC 9309: the matching groups' longest
+// `Allow`/`Disallow` wins, a tie to `Allow`. `Crawl-delay` is not in the RFC, but every major
+// crawler honours it.
 
 part of '../../http.dart';
 
 /// One site's rules, as they apply to one user agent.
 final class _Robots {
-  /// Path prefixes and whether they are allowed, longest first so the first match wins.
+  /// Longest first, so the first match wins.
   final List<(String prefix, bool allowed)> _rules;
 
-  /// What the site asked for between requests, or `null`.
   final Duration? crawlDelay;
 
   const _Robots(this._rules, this.crawlDelay);
 
-  /// Nothing forbidden — what a site with no `robots.txt`, or one that cannot be read,
-  /// is taken to mean.
+  /// Nothing forbidden: no `robots.txt`, or an unreadable one.
   static const open = _Robots([], null);
 
-  /// Whether [url]'s path may be fetched.
   bool allows(Uri url) {
     final target = _normal(url.path.isEmpty ? '/' : '${url.path}${url.hasQuery ? '?${url.query}' : ''}');
     for (final (prefix, allowed) in _rules) {
@@ -32,12 +24,8 @@ final class _Robots {
     return true;
   }
 
-  /// A robots path against a URL path, with `*` for any run and `$` for the end.
-  ///
-  /// The first piece is a prefix and the pieces between stars are found leftmost, which is
-  /// never wrong for them; an anchored last piece is the one that is not, since
-  /// `/*.php$` has to find the `.php` at the end of `/a.php/b.php` and not the first one, so
-  /// it is matched as a suffix instead.
+  /// A robots path (`*` any run, `$` the end) against a URL path. Middle pieces match
+  /// leftmost; an anchored last piece is a suffix, so `/*.php$` matches `/a.php/b.php`.
   static bool _matches(String pattern, String target) {
     if (!pattern.contains('*') && !pattern.endsWith(r'$')) return target.startsWith(pattern);
     final anchored = pattern.endsWith(r'$');
@@ -58,10 +46,8 @@ final class _Robots {
     return target.length - tail.length >= at && target.endsWith(tail);
   }
 
-  /// [path] spelled one way, so a rule and a URL that mean the same bytes compare equal
-  /// (RFC 9309 §2.2.2): anything outside printable ASCII percent-encoded as UTF-8, every
-  /// escape in upper case, and an escaped unreserved character — which `Uri` writes bare —
-  /// written bare. `Disallow: /café` then forbids `/caf%C3%A9`, and `%3c` is `%3C`.
+  /// [path] spelled one way (RFC 9309 §2.2.2): non-ASCII percent-encoded as UTF-8, escapes
+  /// upper-cased, unreserved ones unescaped — so `/café` is `/caf%C3%A9` and `%3c` is `%3C`.
   static String _normal(String path) {
     final out = StringBuffer();
     final bytes = utf8.encode(path);
@@ -98,9 +84,8 @@ final class _Robots {
   static final _productSlash = RegExp(r'([a-z0-9_-]+)/');
   static final _productStart = RegExp(r'^[a-z0-9_-]+');
 
-  /// The product tokens [agent] names: `Googlebot` and `Mozilla` in `Mozilla/5.0
-  /// (compatible; Googlebot/2.1)`, `mybot` in `mybot/1.0`. RFC 9309 §2.2.1 matches a group
-  /// against these whole, so a `User-agent: bot` group is not `mybot`'s.
+  /// The product tokens [agent] names — `mozilla` and `googlebot` in `Mozilla/5.0
+  /// (compatible; Googlebot/2.1)` — matched whole (RFC 9309 §2.2.1): `bot` is not `mybot`.
   static Set<String> _products(String agent) {
     final lower = agent.toLowerCase();
     return {
@@ -110,25 +95,19 @@ final class _Robots {
   }
 }
 
-/// One group of a robots.txt: the agents it names and what it says to them.
 typedef _Group = ({Set<String> agents, List<(String, bool)> rules, Duration? delay});
 
-/// A site's whole robots.txt, read once: its groups, for whichever agent asks, and its
-/// sitemaps. What a crawl keeps per site — the parsed rules, never the text, which may be
-/// half a megabyte.
+/// A site's parsed robots.txt — never the text, which may be half a megabyte.
 final class _RobotsTxt {
   final List<_Group> _groups;
 
-  /// What `Sitemap:` lines list, resolved against the site. They belong to no group — a
-  /// `Sitemap:` line applies to every agent wherever it sits.
+  /// `Sitemap:` lines, resolved; they belong to no group.
   final List<Uri> sitemaps;
 
   const _RobotsTxt(this._groups, this.sitemaps);
 
-  /// A group is its `User-agent` lines and the rules under them; a `User-agent` after a
-  /// rule starts the next group. Blank lines are skipped rather than read as the end of one,
-  /// as RFC 9309's parsers do: a file with a blank line between an agent and its rules means
-  /// the rules for that agent.
+  /// A `User-agent` after a rule starts the next group; blank lines do not end one, as in
+  /// RFC 9309's parsers.
   factory _RobotsTxt.parse(String text, Uri site) {
     final groups = <_Group>[];
     final sitemaps = <Uri>[];
@@ -158,7 +137,7 @@ final class _RobotsTxt {
           agents.add(value.toLowerCase());
         case 'disallow':
           sawRule = true;
-          // An empty `Disallow` forbids nothing, which is how a group says "everything".
+          // An empty `Disallow` forbids nothing.
           if (value.isNotEmpty) rules.add((_Robots._normal(value), false));
         case 'allow':
           sawRule = true;
@@ -178,16 +157,12 @@ final class _RobotsTxt {
   /// The rules for [agent]: the groups that name it, else the `*` ones.
   _Robots forAgent(String agent) {
     final wanted = _Robots._products(agent);
-    final mine = [
+    List<_Group> where(bool Function(Set<String>) test) => [
       for (final g in _groups)
-        if (g.agents.any(wanted.contains)) g,
+        if (test(g.agents)) g,
     ];
-    final chosen = mine.isNotEmpty
-        ? mine
-        : [
-            for (final g in _groups)
-              if (g.agents.contains('*')) g,
-          ];
+    final mine = where((agents) => agents.any(wanted.contains));
+    final chosen = mine.isNotEmpty ? mine : where((agents) => agents.contains('*'));
     if (chosen.isEmpty) return _Robots.open;
 
     // Longest match wins, and a tie goes to Allow.

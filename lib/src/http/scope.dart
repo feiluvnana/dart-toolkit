@@ -2,11 +2,8 @@ part of '../../http.dart';
 
 const _clientKey = #dartToolkitHttpClient;
 
-/// The ambient HTTP client seam.
-///
-/// No entry point in this module takes a `client:`. A scope names one once, for every
-/// request, download and crawl inside it, so a script reuses connections without threading
-/// a client through every call — and sets the timeout and default headers in the same place.
+/// The ambient HTTP client seam: no entry point takes a `client:`; a scope names one for
+/// every request, download and crawl inside it, with its timeout and default headers.
 ///
 /// {@category Networking}
 class Http {
@@ -15,21 +12,13 @@ class Http {
 
   /// Runs [body] with one shared client for every HTTP call inside it.
   ///
-  /// [timeout] bounds the wait for response headers and for each body chunk; a stalled
-  /// server fails with [TimeoutException] instead of hanging the program. [headers] are
-  /// added to every request that does not set them itself — a `user-agent`, a referer.
-  /// A credential among them — `authorization`, `cookie` — goes only to the origin of the
-  /// scope's first request: an API token must not ride along to the presigned storage URL
-  /// the API answers with. Another origin that needs one is given it per call.
+  /// [timeout] bounds the wait for headers and for each body chunk ([TimeoutException]).
+  /// [headers] fill in what a request does not set; a credential among them goes only to the
+  /// origin of the scope's first request, so an API token does not ride along to the
+  /// presigned URL the API answers with.
   ///
-  /// [cookies] keeps what the responses set and sends them back, so a login and the pages
-  /// behind it are one scope and nothing parses `set-cookie` by hand. The jar lives as
-  /// long as this call and is never written to disk.
-  ///
-  /// It walks the redirect chain itself, hop by hop, because a login is a POST that answers a
-  /// 302 and sets the session *on that hop*: the response at the end of the chain carries no
-  /// `set-cookie` at all, so a client left to follow its own redirects would arrive with the
-  /// session already thrown away.
+  /// [cookies] keeps what responses set — on every redirect hop, where a login sets its
+  /// session — and sends them back. The jar lives as long as this call, never on disk.
   ///
   /// ```dart
   /// await Http.scope(cookies: true, () async {
@@ -38,8 +27,8 @@ class Http {
   /// });
   /// ```
   ///
-  /// [jar] starts the jar with cookies from elsewhere and implies [cookies]: log in through
-  /// a browser, where the JavaScript and the captcha are, then fetch at socket speed.
+  /// [jar] starts the jar (implying [cookies]): log in through a browser, then fetch at
+  /// socket speed.
   ///
   /// ```dart
   /// final session = await chrome.page(login, (p) async {
@@ -50,40 +39,26 @@ class Http {
   /// await Http.scope(jar: session, () => api.get().json);
   /// ```
   ///
-  /// A cookie without a domain has no origin to belong to and is skipped; a domain with a
-  /// leading dot (Chrome's way of writing `Domain=`) matches its subdomains too.
+  /// A cookie without a domain is skipped; a leading dot matches subdomains.
   ///
-  /// [retries] is the crawl's retry policy for everything else in the scope — every
-  /// `url.get()` and every download, none of them wrapped in a `retry`: a transport error or a
-  /// 5xx is sent again, a 429 or 503 after the `Retry-After` it asked for (one asking for more
-  /// than 30 s is handed back), a TLS failure never. A body that breaks off half-way is a
-  /// transport error too, and a download picks up where it stopped. A crawl keeps its own
-  /// `ctx.retries`.
+  /// [retries] is the crawl's policy for every request and download in the scope: a
+  /// transport error, a broken-off body or a 5xx is sent again, a 429 or 503 after its
+  /// `Retry-After` (over 30 s is handed back), a TLS failure never. POST and PATCH are resent
+  /// only on a 429 or 503 with `Retry-After` — the server saying it did nothing.
   ///
-  /// POST and PATCH are not sent twice, because the server may have acted on the first: a
-  /// retried order is two orders. The one exception is a 429 or 503 carrying `Retry-After`,
-  /// which is the server saying it did not process the request and when to ask again.
-  ///
-  /// [delay] is the crawl's `ctx.delay` for the same: the time between two requests, hops
-  /// and downloads included, to one host — `www.` or not. Each gap is jittered by ±25 %,
-  /// since a metronome is a bot signal; `500.ms` waits 375 to 625 ms.
+  /// [delay] spaces requests to one host (`www.` or not), hops and downloads included,
+  /// jittered ±25 % since a metronome is a bot signal.
   ///
   /// ```dart
   /// await Http.scope(retries: 3, delay: 500.ms, () => urls.pairs.download().show());
   /// ```
   ///
-  /// [cache] keeps every GET answered with an `ETag` or a `Last-Modified` under that folder,
-  /// and asks with `if-none-match` / `if-modified-since` the next time: a `304` is served
-  /// from disk as the `200` it stands for. It is for the script run again and again while it
-  /// is being written — the second run reads what did not change instead of fetching it.
-  /// A request that asks conditionally itself, a download, and a `cache-control: no-store`
-  /// answer are left alone.
+  /// [cache] keeps each GET answered with an `ETag` or `Last-Modified` in that folder and
+  /// asks conditionally next time, serving a `304` from disk as its `200` — for a script
+  /// rerun while it is written. Conditional requests, downloads and `no-store` are left alone.
   ///
-  /// Every wait here — a backoff, a `Retry-After`, a [delay] gap — and every request in
-  /// flight stops when the enclosing [Cancel.scope] is cancelled.
-  ///
-  /// The client is closed when [body] completes, unless [client] was supplied — an
-  /// open client delays process exit until its idle connections time out.
+  /// Every wait and request in flight stops when the enclosing [Cancel.scope] is cancelled.
+  /// The client is closed when [body] completes, unless [client] was supplied.
   static Future<T> scope<T>(
     FutureOr<T> Function() body, {
     Client? client,
@@ -133,7 +108,7 @@ final class _ScopeClient implements Client {
   /// When each site may next be sent to, for [_delay].
   final Map<String, DateTime> _slots = {};
 
-  /// The origin of the first request, which the credentials among [_headers] belong to.
+  /// The first request's origin, which owns the credentials among [_headers].
   Uri? _home;
 
   _ScopeClient(
@@ -167,16 +142,12 @@ final class _ScopeClient implements Client {
     final jar = _jar;
     if (jar == null && _delay == null) return _bounded(await _fire(request));
 
-    // With a jar or a delay the chain is walked here, hop by hop. A login is a POST that
-    // answers 302 and sets the session cookie *on that hop*; the response at the end of the
-    // chain carries no `set-cookie` at all, so a client left to follow its own redirects — any
-    // client, since this wraps whichever one the scope holds — arrives with the cookie already
-    // thrown away. And a hop is a request to a host like any other, so it waits its turn.
+    // Walked here, hop by hop: a login sets its cookie on the 302, which a client following
+    // its own redirects throws away; and each hop waits its [_delay] turn.
     final follow = request.followRedirects;
     var current = request;
     for (var hop = 0; ; hop++) {
-      // A request that names its own `cookie` keeps it: a per-call argument beats the scope.
-      // A hop names none of its own, the jar being what sent it there.
+      // A request's own `cookie` beats the jar; a hop has none of its own.
       if (jar != null) {
         if (hop > 0) current.headers.remove('cookie');
         if (!current.headers.containsKey('cookie')) {
@@ -186,26 +157,19 @@ final class _ScopeClient implements Client {
       current.followRedirects = false;
       final res = await _fire(current);
       try {
-        // Stored against the URL that answered, so a cookie belongs to the host that set it.
-        if (jar != null) {
-          if (res.headers['set-cookie'] case final header?) jar.store(res.url ?? current.url, header);
-        }
+        if (res.headers['set-cookie'] case final header? when jar != null) jar.store(res.url ?? current.url, header);
         final next = follow ? await _next(current, res, hop, request.url) : null;
         if (next == null) return _bounded(res);
         current = next;
       } catch (_) {
-        // A response nobody will read still holds its connection until it is read.
         unawaited(_drain(res));
         rethrow;
       }
     }
   }
 
-  /// One request, spaced by [_delay] and retried by the crawl's policy, and its headers
-  /// bounded by [_timeout].
-  ///
-  /// A POST or a PATCH is sent again only when the server said it did not act on it — a 429
-  /// or 503 with a `Retry-After`; see [Http.scope].
+  /// One request, spaced by [_delay], retried by the crawl's policy, headers bounded by
+  /// [_timeout].
   Future<StreamedResponse> _fire(Request request) async {
     final budget = _Retry.none(request) == true ? 0 : _retries;
     final replayable = _replayable(request.method);
@@ -233,11 +197,8 @@ final class _ScopeClient implements Client {
     }
   }
 
-  /// [pending], failing with [TimeoutException] when its headers take longer than [_timeout].
-  ///
-  /// A response that lands after the wait was given up on still holds its connection — and
-  /// under `IoClient(connections:)` its permit — until its body is read, so it is drained
-  /// rather than abandoned: left alone, N timeouts would take all N permits for good.
+  /// [pending] within [_timeout]. A late response is drained, or it would hold its connection
+  /// — and its `IoClient(connections:)` permit — for good.
   Future<StreamedResponse> _timed(Future<StreamedResponse> pending, CancelToken stop) {
     final timeout = _timeout;
     if (timeout == null) return pending;
@@ -251,10 +212,8 @@ final class _ScopeClient implements Client {
     );
   }
 
-  /// Waits for [url]'s host to be due, and books the slot after it.
-  ///
-  /// Slots are booked when asked for rather than when sent, so ten downloads started at once
-  /// leave about one [_delay] apart instead of all waking together after the first.
+  /// Waits for [url]'s host to be due, and books the next slot now, so ten downloads started
+  /// at once leave a [_delay] apart rather than waking together.
   Future<void> _polite(Uri url) async {
     final gap = _delay;
     if (gap == null) return;
@@ -266,7 +225,7 @@ final class _ScopeClient implements Client {
     if (at.isAfter(now)) await at.difference(now).delay();
   }
 
-  /// [res] with the scope's timeout on each chunk of its body as well as on its headers.
+  /// [res] with [_timeout] on each body chunk.
   StreamedResponse _bounded(StreamedResponse res) =>
       _timeout == null ? res : res._carrying(res.stream.timeout(_timeout));
 
@@ -278,20 +237,16 @@ final class _ScopeClient implements Client {
 
 /// The retry policy, written once for the crawl and for [Http.scope]'s `retries:`.
 abstract final class _Retry {
-  /// Marks a request its sender retries itself — the crawl, whose budget is `ctx.retries` —
-  /// so a scope around it does not multiply that budget by its own.
+  /// Marks a request its sender retries itself (the crawl), so a scope does not multiply the
+  /// budget.
   static const none = RequestKey<bool>('retry.none');
 
-  /// The longest a `Retry-After` may hold a scope's request; one asking for longer is handed
-  /// back rather than waited out. The crawl's `ctx.maxRetryAfter` defaults to the same.
+  /// The longest `Retry-After` a scope waits out; longer is handed back.
   static const longest = Duration(seconds: 30);
 
-  /// How long to wait before sending again after [res] on [attempt], or `null` when [res] is
-  /// the answer: a 429 or 503 waits what `Retry-After` asks — or backs off, doubling from half
-  /// a second — and any other 5xx waits a little longer each time.
-  ///
-  /// [once] is a request that must not be sent twice: only a 429 or 503 whose `Retry-After`
-  /// says when to ask again is retried, which is the server saying it did nothing.
+  /// The wait before resending after [res] on [attempt], or `null` when [res] is the answer: a
+  /// 429 or 503 waits its `Retry-After` or backs off; another 5xx waits a little longer each
+  /// time. With [once] (not replayable) only a 429/503 with `Retry-After` is retried.
   static Duration? after(StreamedResponse res, int attempt, {bool once = false}) {
     final status = res.statusCode;
     if (status == 429 || status == 503) {
@@ -302,14 +257,13 @@ abstract final class _Retry {
     return status >= 500 && !once ? (200 * attempt).ms : null;
   }
 
-  /// Half a second, doubled [times] times, and never more than thirty.
+  /// Half a second, doubled [times] times, at most thirty.
   static Duration backoff(int times) {
     final ms = 500 * (1 << times.clamp(0, 6));
     return Duration(milliseconds: ms > 30000 ? 30000 : ms);
   }
 
-  /// What a server's `Retry-After` asks for — seconds or a date — or `null` when it says
-  /// nothing that can be read.
+  /// A `Retry-After` in seconds or as a date, or `null` when unreadable.
   static Duration? retryAfter(Headers headers) {
     final header = headers['retry-after']?.trim() ?? '';
     final wait = switch (int.tryParse(header)) {
@@ -330,19 +284,15 @@ final class _ClientLease {
 
   const _ClientLease(this.client, this._owned, {this.headers});
 
-  /// Closes the client only if this lease created it.
-  ///
-  /// A lease is closed from synchronous teardown — a crawl finishing, a download's `finally`
-  /// — so a client that closes asynchronously is left to finish on its own; a scope's
-  /// client, the one that may be a browser, is awaited in [Http.scope] instead.
+  /// Closes the client if this lease created it, without waiting: a lease ends in synchronous
+  /// teardown, and a scope's client is awaited in [Http.scope] instead.
   void close() {
     if (!_owned) return;
     unawaited(client.close().catchError((Object _) {}));
   }
 }
 
-/// Runs [body] with [client] as the ambient client, so the calls nested inside it reuse
-/// the connection rather than each opening one of their own.
+/// Runs [body] with [client] as the ambient client.
 T _withClient<T>(Client client, T Function() body) => runZoned(body, zoneValues: {_clientKey: client});
 
 /// The enclosing [Http.scope]'s client, or a fresh one this call owns and must close.

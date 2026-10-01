@@ -1,8 +1,7 @@
 /// # HTTP & Web Scraping
 ///
-/// `Request`, `Response` and `Client` over `dart:io` as [IoClient], requests and JSON on `Uri`,
-/// a Scrapy-style scraping pipeline, atomic downloads and the shared-client scope seam.
-/// Parsing is in `formats.dart`; the Chrome client is `chrome.dart`, outside the barrel.
+/// Requests on `Uri` over [IoClient], a Scrapy-style crawler, atomic downloads, and the
+/// [Http.scope] client seam. Parsing is `formats.dart`; the Chrome client is `chrome.dart`.
 ///
 /// {@category Crawling}
 library;

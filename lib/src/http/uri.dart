@@ -4,14 +4,11 @@ part of '../../http.dart';
 ///
 /// {@category Networking}
 extension UriExtensions on Uri {
-  /// Appends [part] as a path segment, treating this URI as a directory.
-  ///
-  /// `'https://x.com/api'.url / 'users'` is `https://x.com/api/users`. An absolute or
-  /// `..` [part] still resolves as an href would.
+  /// Appends [part] as a path segment: `'https://x.com/api'.url / 'users'` is
+  /// `https://x.com/api/users`. An absolute or `..` [part] resolves as an href would.
   Uri operator /(String part) => (path.endsWith('/') ? this : replace(path: '$path/')).resolve(part);
 
-  /// This URI with [params] added to its query; a `null` value removes the parameter.
-  ///
+  /// This URI with [params] added to its query; a `null` value removes the parameter:
   /// `url.withQuery({'page': 2, 'q': 'dart'})`.
   Uri withQuery(Map<String, Object?> params) {
     final all = {...queryParametersAll};
@@ -26,14 +23,10 @@ extension UriExtensions on Uri {
     final q = s.indexOf('?');
     if (q < 0) return this;
     final f = s.indexOf('#', q);
-    final rest = f < 0 ? '' : s.substring(f);
-    return Uri.parse(s.substring(0, q) + rest);
+    return Uri.parse(s.substring(0, q) + (f < 0 ? '' : s.substring(f)));
   }
 
-  /// GET.
-  ///
-  /// Awaited, it is the [Response] whatever the status; read through [Fetch.json],
-  /// [Fetch.text], [Fetch.html], [Fetch.xml] or [Fetch.bytes], it throws unless 2xx:
+  /// GET. Awaited, the [Response] whatever the status; read through [Fetch], 2xx or a throw.
   ///
   /// ```dart
   /// final res = await url.get();          // any status
@@ -44,14 +37,9 @@ extension UriExtensions on Uri {
   /// HEAD: the headers without the body.
   Fetch head({Map<String, String>? headers}) => Request('HEAD', this, headers: headers).send();
 
-  /// POST. The body is named by what it is — at most one of [text] (UTF-8), [bytes],
-  /// [form] (url-encoded), [json] or [files] — and carries the matching `content-type`. The
-  /// same words name a body on [Request] and on `follow`.
-  ///
-  /// [files] is `multipart/form-data`, read off disk as it goes out and never held, so the
-  /// size of an upload is not the size of the program's heap. It is the one that pairs: with
-  /// [form] it sends the fields and the files together, which is a browser submitting a form
-  /// that has a file input on it.
+  /// POST, with at most one of [text], [bytes], [form] (url-encoded), [json] or [files] and
+  /// its `content-type`. [files] is `multipart/form-data` streamed off disk; with [form] it
+  /// sends fields and files together.
   ///
   /// ```dart
   /// await api.post(json: {'name': 'x'});
@@ -98,13 +86,9 @@ extension UriExtensions on Uri {
   }) =>
       Request('DELETE', this, headers: headers, text: text, bytes: bytes, form: form, json: json, files: files).send();
 
-  /// What this URI streams, an event at a time: server-sent events, or anything else a line
-  /// at a time — NDJSON, a log.
-  ///
-  /// A `text/event-stream` is read as the HTML standard reads one: `data:` lines joined by
-  /// newlines, `event:` defaulting to `message`, `id:` kept until the next one, comments
-  /// skipped. Any other body is one event per non-empty line. Giving [json] makes it a POST
-  /// with that body, which is how a streaming API is asked.
+  /// What this URI streams, an event at a time: server-sent events (read as the HTML
+  /// standard does), or else one event per non-empty line — NDJSON, a log. [json] makes it a
+  /// POST, as a streaming API is asked.
   ///
   /// ```dart
   /// await for (final e in api.events(json: {'stream': true, 'prompt': 'hi'})) {
@@ -112,14 +96,12 @@ extension UriExtensions on Uri {
   /// }
   /// ```
   ///
-  /// It goes through the scope's client, so its headers and timeout apply; a status that is
-  /// not 2xx throws as [Fetch.json] does. Stopping the loop closes the connection.
+  /// A non-2xx throws as [Fetch.json] does; stopping the loop closes the connection.
   Stream<ServerEvent> events({Map<String, String>? headers, Object? json}) =>
       _events(this, Http.client, headers: headers, json: json);
 }
 
-/// [UriExtensions.events] on [client] — the scope's, taken when the stream was asked for
-/// rather than wherever it is listened to — or on a fresh one of its own when `null`.
+/// [UriExtensions.events] on [client] (the scope's when asked for), or a fresh one.
 Stream<ServerEvent> _events(Uri url, Client? client, {Map<String, String>? headers, Object? json}) async* {
   final request = Request(json == null ? 'GET' : 'POST', url, headers: headers, json: json);
   request.headers.putIfAbsent('accept', () => 'text/event-stream');
@@ -165,7 +147,7 @@ Stream<ServerEvent> _events(Uri url, Client? client, {Map<String, String>? heade
           id = value;
       }
     }
-    // An event the stream ended in the middle of is not dispatched, as a browser drops it.
+    // An event cut off by the end is dropped, as a browser does.
   } finally {
     lease.close();
   }
@@ -177,13 +159,11 @@ Stream<ServerEvent> _events(Uri url, Client? client, {Map<String, String>? heade
 /// {@category Networking}
 typedef ServerEvent = ({String event, String data, String? id});
 
-/// How many times a scope may fetch [request]'s body again after it breaks off, which is the
-/// scope's `retries:` for a method that may be sent twice and none for one that may not.
+/// How often a scope may refetch [request]'s broken-off body: its `retries:` if replayable.
 int _replays(Request request) => switch (Http.client) {
   final _ScopeClient scope when _Retry.none(request) != true && _replayable(request.method) => scope._retries,
   _ => 0,
 };
 
-/// Whether sending a [method] twice is what sending it once is. POST and PATCH are not: a
-/// retried POST is a second order.
+/// Whether [method] may be sent twice: a retried POST is a second order.
 bool _replayable(String method) => method != 'POST' && method != 'PATCH';

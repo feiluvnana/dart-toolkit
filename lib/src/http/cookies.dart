@@ -1,9 +1,5 @@
-// The cookie jar a scope keeps, so a login and the pages behind it are one crawl.
-//
-// RFC 6265's storage and matching rules, less the public-suffix list: a `Domain` is
-// accepted when the host it came from is inside it, which stops `a.example.com` setting a
-// cookie for `other.com` but not for `com`. Nothing here is public — a scope either
-// keeps cookies or does not: `Http.scope(cookies: true)`, or `jar:` to start it with some.
+// The cookie jar of `Http.scope(cookies:)`: RFC 6265 storage and matching, less the
+// public-suffix list — `a.example.com` cannot set a cookie for `other.com`, but can for `com`.
 
 part of '../../http.dart';
 
@@ -18,8 +14,7 @@ final class _Cookie {
   final DateTime? expires;
   final bool secure;
 
-  /// Whether only [domain] itself matches, rather than its subdomains too. True unless
-  /// the cookie named a `Domain`.
+  /// Whether only [domain] itself matches: the cookie named no `Domain`.
   final bool hostOnly;
 
   const _Cookie({
@@ -32,13 +27,11 @@ final class _Cookie {
     required this.hostOnly,
   });
 
-  /// Two cookies are the same cookie when they agree on all three, per RFC 6265; setting
-  /// one replaces the other.
+  /// Per RFC 6265, setting one replaces the other.
   bool sameAs(_Cookie other) => other.name == name && other.domain == domain && other.path == path;
 
   bool isExpiredAt(DateTime now) => expires != null && !expires!.isAfter(now);
 
-  /// Whether this cookie goes to [url].
   bool sendsTo(Uri url) {
     if (secure && url.scheme != 'https') return false;
     final host = url.host.toLowerCase();
@@ -50,14 +43,10 @@ final class _Cookie {
 }
 
 /// The cookies one [Http.scope] has been given, and the `cookie` header they make.
-///
-/// A jar belongs to a scope and nothing else: it is the scope that already holds the
-/// client, so a login and the requests after it share connections and cookies alike.
 final class _Jar {
   final List<_Cookie> _cookies = [];
 
-  /// Takes what a response set. [header] is every `set-cookie` the response carried, one
-  /// per line; see [IoClient.send].
+  /// Takes what a response set: [header] is its `set-cookie`s, one per line.
   void store(Uri from, String header) {
     for (final line in header.split('\n')) {
       final cookie = _parse(line, from);
@@ -70,8 +59,8 @@ final class _Jar {
     }
   }
 
-  /// Takes cookies handed over whole — a browser's, from `page.cookies()` — rather than
-  /// parsed from a response. One with no domain is skipped; a leading dot means subdomains.
+  /// Takes cookies handed over whole (a browser's). One with no domain is skipped; a leading
+  /// dot means subdomains.
   void seed(Iterable<Cookie> given) {
     final now = DateTime.now();
     for (final c in given) {
@@ -93,9 +82,7 @@ final class _Jar {
     }
   }
 
-  /// The `cookie` header for [url], or `null` when nothing matches.
-  ///
-  /// Longest path first, as RFC 6265 asks, so a `/admin` cookie precedes the `/` one.
+  /// The `cookie` header for [url], longest path first (RFC 6265), or `null`.
   String? headerFor(Uri url) {
     final now = DateTime.now();
     _cookies.removeWhere((c) => c.isExpiredAt(now));
@@ -106,7 +93,6 @@ final class _Jar {
     return matching.isEmpty ? null : [for (final c in matching) '${c.name}=${c.value}'].join('; ');
   }
 
-  /// One `set-cookie` value, or `null` when it is not one.
   static _Cookie? _parse(String line, Uri from) {
     final parts = line.split(';');
     final pair = parts.first;
@@ -125,8 +111,7 @@ final class _Jar {
       final value = split == -1 ? '' : attribute.substring(split + 1).trim();
       switch (key) {
         case 'domain':
-          // An empty one is ignored, not obeyed: RFC 6265 §5.2.3 drops the attribute, and
-          // the cookie stays host-only.
+          // An empty one is dropped and the cookie stays host-only (RFC 6265 §5.2.3).
           final lower = value.toLowerCase();
           final named = lower.startsWith('.') ? lower.substring(1) : lower;
           if (named.isNotEmpty) domain = named;
@@ -141,16 +126,15 @@ final class _Jar {
           secure = true;
       }
     }
-    // A `Secure` cookie set over plain http is refused, as RFC 6265bis asks: anyone on the
-    // path could have set it, and it would then be trusted over https.
+    // A `Secure` cookie over plain http is refused (RFC 6265bis): anyone on the path could
+    // have set it.
     if (secure && from.scheme != 'https') return null;
-    // Max-Age wins over Expires, and a zero or negative one expires the cookie now. One
-    // too large for a `Duration` is as good as forever.
+    // Max-Age wins over Expires; one too large for a `Duration` is forever.
     if (maxAge != null) {
       expires = maxAge > 0x7fffffff ? DateTime.utc(9999) : DateTime.now().add(Duration(seconds: maxAge));
     }
-    // A cookie may widen its domain to a parent of the host it came from, never to
-    // another site and never to a bare suffix. An IP host requires domain == host.
+    // A domain may widen to a parent of the host, never another site or a bare suffix; an IP
+    // must match exactly.
     final isIp = InternetAddress.tryParse(host) != null;
     if (domain != null &&
         (isIp ? host != domain : !(host == domain || (host.endsWith('.$domain') && domain.contains('.'))))) {
@@ -168,7 +152,7 @@ final class _Jar {
     );
   }
 
-  /// The directory of the request's path, which is where a cookie without a `Path` lives.
+  /// Where a cookie without a `Path` lives: the request path's directory.
   static String _defaultPath(Uri url) {
     final path = url.path;
     if (!path.startsWith('/')) return '/';
@@ -177,40 +161,24 @@ final class _Jar {
   }
 }
 
-/// An `Expires` or a `Retry-After` date, read the way a browser reads one — RFC 6265 §5.1.1 —
-/// or `null` when it is not a date at all.
+/// An `Expires` or `Retry-After` date read as a browser does (RFC 6265 §5.1.1), or `null`.
 ///
-/// `HttpDate.parse` takes the three forms RFC 9110 lists and throws an `HttpException` for the
-/// rest, and what servers actually send is the rest: `Wed, 21-Oct-2026 07:28:00 GMT`, which is
-/// PHP's, and the `01-Jan-1970` a logout uses to delete its cookie. The algorithm reads a date
-/// as tokens — a time, a day, a month, a year, in whatever order — which is every form at once.
+/// Not `HttpDate.parse`, which refuses what servers send — PHP's `Wed, 21-Oct-2026 07:28:00
+/// GMT`, a logout's `01-Jan-1970`: this reads tokens in any order, every form at once.
 DateTime? _httpDate(String text) {
   int? hour, minute, second, day, month, year;
   for (final token in text.split(_dateDelimiters)) {
     if (token.isEmpty) continue;
-    if (hour == null) {
-      if (_dateTime.matchAsPrefix(token) case final m?) {
-        hour = int.parse(m[1]!);
-        minute = int.parse(m[2]!);
-        second = int.parse(m[3]!);
-        continue;
-      }
-    }
-    if (day == null) {
-      if (_dateDay.matchAsPrefix(token) case final m?) {
-        day = int.parse(m[1]!);
-        continue;
-      }
-    }
-    if (month == null && token.length >= 3) {
-      final index = _months.indexOf(token.substring(0, 3).toLowerCase());
-      if (index != -1) {
-        month = index + 1;
-        continue;
-      }
-    }
-    if (year == null) {
-      if (_dateYear.matchAsPrefix(token) case final m?) year = int.parse(m[1]!);
+    if (_dateTime.matchAsPrefix(token) case final m? when hour == null) {
+      hour = int.parse(m[1]!);
+      minute = int.parse(m[2]!);
+      second = int.parse(m[3]!);
+    } else if (_dateDay.matchAsPrefix(token) case final m? when day == null) {
+      day = int.parse(m[1]!);
+    } else if (month == null && token.length >= 3 && _months.contains(token.substring(0, 3).toLowerCase())) {
+      month = _months.indexOf(token.substring(0, 3).toLowerCase()) + 1;
+    } else if (_dateYear.matchAsPrefix(token) case final m? when year == null) {
+      year = int.parse(m[1]!);
     }
   }
   if (hour == null || minute == null || second == null || day == null || month == null || year == null) return null;
@@ -222,7 +190,7 @@ DateTime? _httpDate(String text) {
   return date.day == day ? date : null;
 }
 
-/// Everything RFC 6265 calls a delimiter: the controls it allows, and punctuation but `:`.
+/// RFC 6265's delimiters: tab, space, and punctuation but `:`.
 final _dateDelimiters = RegExp(r'[\x09\x20-\x2F\x3B-\x40\x5B-\x60\x7B-\x7E]+');
 final _dateTime = RegExp(r'(\d{1,2}):(\d{1,2}):(\d{1,2})(?:\D|$)');
 final _dateDay = RegExp(r'(\d{1,2})(?:\D|$)');

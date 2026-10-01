@@ -1,8 +1,6 @@
-// The conditional-GET cache `Http.scope(cache:)` keeps.
-//
-// One file per URL: a line of JSON — the URL and the headers of the `200` — then the body.
-// A single file is renamed into place whole, so a reader never pairs one answer's validator
-// with another answer's bytes. Nothing here is public; `cache:` is the whole vocabulary.
+// The conditional-GET cache of `Http.scope(cache:)`: one file per URL — a JSON line of URL
+// and headers, then the body — renamed into place whole, so a validator never pairs with
+// another answer's bytes.
 
 part of '../../http.dart';
 
@@ -11,8 +9,8 @@ final class _Cache {
 
   _Cache(this.dir);
 
-  /// [request] through [send], asked conditionally when an answer is stored, and a `304`
-  /// answered from disk.
+  /// [request] through [send], conditional when an answer is stored; a `304` is served from
+  /// disk.
   Future<StreamedResponse> through(Request request, Future<StreamedResponse> Function(Request) send) async {
     if (!_wants(request)) return send(request);
     final file = File('${dir.path}${Platform.pathSeparator}${_key(request.url)}');
@@ -37,9 +35,7 @@ final class _Cache {
         reasonPhrase: 'OK',
       );
     }
-    if (stored != null) {
-      unawaited(stored.raf.close().catchError((Object _) {}));
-    }
+    if (stored != null) unawaited(stored.raf.close().catchError((Object _) {}));
     final headers = res.headers;
     if (res.statusCode != 200 ||
         !(headers.containsKey('etag') || headers.containsKey('last-modified')) ||
@@ -49,16 +45,14 @@ final class _Cache {
     return res._carrying(_keep(res.stream, file, request.url, headers));
   }
 
-  /// A plain GET: the cache has no business with a download (its own `ifModified` does this
-  /// for a file), a range, or a request that already asks conditionally.
+  /// A plain GET: not a download or range ([_literal]), nor already conditional.
   static bool _wants(Request request) =>
       request.method == 'GET' &&
       !_literal(request) &&
       !request.headers.containsKey('if-none-match') &&
       !request.headers.containsKey('if-modified-since');
 
-  /// The stored answer for [url] in [file], or `null` when there is none or it is another
-  /// URL's — two URLs whose names collide never serve each other.
+  /// The stored answer for [url] in [file], or `null` — also when it is a colliding URL's.
   static Future<({Headers headers, int offset, RandomAccessFile raf})?> _load(File file, Uri url) async {
     RandomAccessFile? raf;
     try {
@@ -90,7 +84,7 @@ final class _Cache {
       return (headers: Headers((meta['headers'] as Map).cast<String, String>()), offset: head.length + 1, raf: raf);
     } catch (_) {
       if (raf != null) unawaited(raf.close().catchError((Object _) {}));
-      return null; // not there, or not ours: fetch it
+      return null;
     }
   }
 
@@ -109,15 +103,14 @@ final class _Cache {
     }
   }
 
-  /// [body], written to [file] as it is read, and renamed into place only when it is read to
-  /// its end — an answer cut off, or one the caller stopped reading, is not kept.
+  /// [body], written to [file] as it is read, and kept only when read to its end.
   static Stream<List<int>> _keep(Stream<List<int>> body, File file, Uri url, Headers headers) async* {
     final part = File('${file.path}.${Secure.token(6)}.part');
     IOSink? sink;
     var whole = false;
     try {
       await part.parent.create(recursive: true);
-      // A `set-cookie` is the one header that must not be answered twice.
+      // A `set-cookie` must not be answered twice.
       final kept = Map.of(headers)..remove('set-cookie');
       sink = part.openWrite()..add(utf8.encode('${jsonEncode({'url': '$url', 'headers': kept})}\n'));
       await for (final chunk in body) {
@@ -135,7 +128,7 @@ final class _Cache {
     }
   }
 
-  /// A file name for [url]: FNV-1a over its text, in hex.
+  /// FNV-1a of [url], in hex.
   static String _key(Uri url) {
     var hash = 0xcbf29ce484222325;
     for (final unit in url.toString().codeUnits) {
