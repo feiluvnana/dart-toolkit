@@ -2,9 +2,7 @@ part of '../../cli.dart';
 
 /// The completion script for [root] in [shell]: what `app --completion bash` prints.
 ///
-/// Everything it needs is already declared — commands, options, short forms, choices — so a
-/// program gets completion for nothing. zsh reuses the bash script through `bashcompinit`,
-/// which is one script to keep right instead of two.
+/// Built from the declared tree; zsh reuses the bash script through `bashcompinit`.
 String _completion(CliCommand root, String? shell) => switch (shell) {
   'bash' => _bash(root),
   'zsh' => 'autoload -U +X bashcompinit && bashcompinit\n${_bash(root)}',
@@ -21,8 +19,7 @@ Iterable<(String, CliCommand)> _tree(CliCommand root, [String? path]) sync* {
   }
 }
 
-/// What a command answers to: its own options and its ancestors', nearer ones first, each
-/// with the spellings that still reach it there.
+/// The options [command] answers to, nearer first, each with the spellings that reach it.
 Iterable<(CliOption<Object?>, List<String>)> _reachable(CliCommand command) sync* {
   for (final option in command._chain.expand((c) => c._options)) {
     if (command._findOption(option.name) != option) continue;
@@ -30,11 +27,8 @@ Iterable<(CliOption<Object?>, List<String>)> _reachable(CliCommand command) sync
   }
 }
 
-/// [words] as one bash word list for `compgen -W`, each kept whole.
-///
-/// `compgen -W` splits its list on `IFS`, so a choice with a space in it — `'dry run'` —
-/// was offered as two. The list is newline-separated and read with `IFS` set to a newline,
-/// and ANSI-C quoting (`$'…'`) keeps a quote or a `$` in a choice from being expanded.
+/// [words] as one `compgen -W` list, each kept whole: newline-separated (the script sets
+/// `IFS` to a newline, so `'dry run'` is one word) in ANSI-C quotes, so `'` and `$` stay literal.
 String _bashWords(Iterable<String> words) =>
     "\$'${words.map((w) => w.replaceAll(r'\', r'\\').replaceAll("'", r"\'").replaceAll('\n', ' ')).join(r'\n')}'";
 

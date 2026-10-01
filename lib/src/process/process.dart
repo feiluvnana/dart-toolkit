@@ -1,12 +1,9 @@
 part of '../../process.dart';
 
-/// Splits [command] as a POSIX shell would read a simple command: whitespace separates,
-/// single quotes take everything literally, double quotes let `\\ \" \$ \`` escape, and an
-/// unquoted backslash escapes the next character. No expansion of any kind.
+/// Splits [command] as a POSIX shell reads a simple command, with no expansion.
 ///
-/// A quote that never closes is a [FormatException], and unquoted shell syntax — `|`, `&`,
-/// `;`, `<`, `>`, `$(`, a backtick — an [ArgumentError]: exec'd directly, `a | wc -l` would
-/// hand `|` to `a` as an argument and print the wrong thing without a word.
+/// An unclosed quote is a [FormatException]; unquoted shell syntax (`|`, `;`, `$(`, …) an
+/// [ArgumentError], since exec'd directly `a | wc -l` would hand `|` to `a` without a word.
 List<String> _splitCommand(String command) {
   final args = <String>[];
   final current = StringBuffer();
@@ -69,15 +66,7 @@ List<String> _splitCommand(String command) {
 /// The shell operator starting at [i] of [command], unquoted, or `null`.
 String? _shellSyntax(String command, int i, bool atStartOfWord) {
   final char = command[i];
-  if (char == '|' || char == '&' || char == ';' || char == '<' || char == '>' || char == '`') {
-    return '`$char`';
-  }
-  if (char == '*' || char == '?' || char == '[') {
-    return '`$char`';
-  }
-  if (atStartOfWord && char == '~') {
-    return '`~`';
-  }
+  if ('|&;<>`*?['.contains(char) || (atStartOfWord && char == '~')) return '`$char`';
   if (char == r'$' && i + 1 < command.length) {
     if (command[i + 1] == '(') return r'`$(`';
     if (command[i + 1] == '{') return r'`${`';
@@ -142,12 +131,8 @@ typedef _Given = ({
   bool? strict,
 });
 
-/// The ambient shell seam: what every command in a scope shares.
-///
-/// A working directory, an environment, a timeout or a failure policy that every command
-/// would otherwise repeat belongs to the scope that sets it — the shape [Http.scope] has
-/// for a client. Anything genuinely per command — `input:`, `args:`, `shell:` — stays an
-/// argument, and a per-call `workdir:` or `strict:` still wins over the scope's.
+/// What every command in a scope shares: working directory, environment, timeout, encoding
+/// and failure policy. A per-call argument still wins.
 ///
 /// ```dart
 /// await Shell.scope(() async {
@@ -184,33 +169,26 @@ class Shell {
 
 /// Runs [command], echoing its output unless [quiet].
 ///
-/// Throws [ShellException] on a non-zero exit unless [strict] is false; an executable that
-/// is not there is exit code 127, as in a shell. [input] is written to stdin, which is
-/// otherwise closed at once. [inherit] gives the child this terminal — stdin, stdout and
-/// stderr — for `git commit`, `ssh` or `vim`; nothing is captured then. Every other argument
-/// defaults to the enclosing [Shell.scope]'s, so a scope says `workdir:` once instead of
-/// every call.
+/// Throws [ShellException] on a non-zero exit unless [strict] is false; a missing executable
+/// is exit 127, as in a shell. [input] is written to stdin, otherwise closed at once.
+/// [inherit] gives the child this terminal (`git commit`, `ssh`, `vim`); nothing is captured
+/// then. Unset arguments come from the enclosing [Shell.scope].
 ///
-/// The enclosing [Cancel.scope] stops it: the child and everything it started get SIGTERM,
-/// then SIGKILL after two seconds, and this throws [CancelledException]. A [timeout] does
-/// the same and throws [ShellTimeoutException], carrying what was printed until then.
-/// Under `Cli.run` that is also what a ^C or a SIGTERM does to the children.
+/// The enclosing [Cancel.scope] stops it — SIGTERM to the child and everything it started,
+/// SIGKILL two seconds later — and this throws [CancelledException]; a [timeout] does the
+/// same and throws [ShellTimeoutException] with what was printed so far.
 ///
-/// [command] is split here, the way a POSIX shell reads a simple command, and exec'd
-/// directly — so **never interpolate a scraped or user-supplied value into it**. Pass those
-/// as [args], which are appended as they are and never re-read: `run('git commit -m', args:
-/// [message])`. A quote that never closes is a [FormatException]; `|`, `&&` or `>` outside
-/// quotes is an [ArgumentError], since only a shell reads them. [shell] hands the string,
-/// unsplit, to `/bin/sh -c` (`cmd /c` on Windows) for pipes, globs, `&&` and `$VAR`, with
+/// [command] is split as a POSIX shell reads a simple command and exec'd directly, so
+/// **never interpolate a scraped or user-supplied value into it**: pass it in [args], which
+/// is never re-read: `run('git commit -m', args: [message])`. Unquoted `|`, `&&` or `>` is an
+/// [ArgumentError]; [shell] hands the string to `/bin/sh -c` (`cmd /c` on Windows) with
 /// [args] as `$1`, `$2`…: `run(r'grep -c "$1" *.log', shell: true, args: [pattern])`.
 ///
-/// On Windows an executable found on the `PATH` runs directly; only a `.bat`, a `.cmd` or a
-/// `cmd.exe` built-in goes through `cmd.exe`, and there an argument holding one of `cmd`'s
-/// metacharacters (`& | < > ^ % "` or a newline) is an [ArgumentError], since `cmd` would
-/// read it as a command of its own.
+/// On Windows only a `.bat`, a `.cmd` or a `cmd.exe` built-in goes through `cmd.exe`, and
+/// there an argument holding `& | < > ^ % "` or a newline is an [ArgumentError].
 ///
-/// What comes back is a [ShellRun]: a future of the result whose readings say what the
-/// caller wants, so `await run('git diff --quiet').isOk` neither throws nor echoes.
+/// The [ShellRun] that comes back is a future whose readings say what the caller wants:
+/// `await run('git diff --quiet').isOk` neither throws nor echoes.
 ///
 /// {@category System}
 ShellRun run(
@@ -257,11 +235,9 @@ String _display(String command, List<String> args) =>
 
 final _cmdUnsafe = RegExp(r'[&|<>^%"\r\n]');
 
-/// [args], refused if `cmd.exe` would read one as something other than an argument.
-///
-/// `cmd` has no quoting a program can rely on — `%VAR%` expands inside quotes, and `^`, `&`
-/// and `|` are read before the program's own parser sees anything — so the only safe
-/// argument is one without them (the "BatBadBut" class of injection).
+/// [args], refused if `cmd.exe` would read one as more than an argument: `cmd` has no
+/// reliable quoting (`%VAR%` expands inside quotes), so the only safe argument is one
+/// without its metacharacters ("BatBadBut").
 List<String> _cmdSafe(List<String> args) {
   for (final arg in args) {
     if (arg.contains(_cmdUnsafe)) {
@@ -273,10 +249,9 @@ List<String> _cmdSafe(List<String> args) {
 
 /// A command on its way: a `Future<ShellResult>`, and the readings on it.
 ///
-/// It starts in a microtask rather than at once, so a reading chained straight onto
-/// [run] can still say how it should run: [text] and [lines] want the output, not to see
-/// it, so they imply `quiet: true`; [isOk] wants an answer, not an exception, so it also
-/// implies `strict: false`. An argument given to [run] itself still wins.
+/// It starts in a microtask, so a reading chained onto [run] still says how it runs:
+/// [text] and [lines] imply `quiet: true`, [isOk] also `strict: false`. An argument given
+/// to [run] still wins.
 ///
 /// ```dart
 /// final branch = await run('git rev-parse --abbrev-ref HEAD').text;   // not echoed
@@ -293,8 +268,7 @@ final class ShellRun implements Future<ShellResult> {
   bool _wantsAnswer = false;
   final _control = _Control();
 
-  /// [given] is what the call site said; the rest comes from the enclosing [Shell.scope],
-  /// read here, in the caller's zone, and not when the process starts.
+  /// The enclosing [Shell.scope] is read here, in the caller's zone, not when it starts.
   ShellRun._(this._start, _Given given)
     : _scope = _Shell.current.merge(
         workdir: given.workdir,
@@ -317,11 +291,8 @@ final class ShellRun implements Future<ShellResult> {
     ),
   );
 
-  /// Its stdout as it is printed, a line at a time, not echoed — for `tail -f`, a build log
-  /// or a server's output, which `text` would only give back at the end.
-  ///
-  /// A failure is the stream's error once the lines before it are out; cancelling the
-  /// subscription stops the command and everything it started.
+  /// Its stdout a line at a time as it is printed, not echoed. A failure is the stream's
+  /// error after the lines before it; cancelling stops the command and what it started.
   ///
   /// ```dart
   /// await for (final line in run('tail -f app.log').stream) {
@@ -344,7 +315,7 @@ final class ShellRun implements Future<ShellResult> {
   }
 
   /// Stops it and everything it started — SIGTERM, then SIGKILL after two seconds — and
-  /// completes once they are gone. For the server a script starts, uses and stops:
+  /// completes once they are gone:
   ///
   /// ```dart
   /// final server = run('dart run bin/server.dart');
@@ -352,8 +323,7 @@ final class ShellRun implements Future<ShellResult> {
   /// await server.kill();
   /// ```
   ///
-  /// Awaiting the run itself afterwards throws [CancelledException]; one that had already
-  /// ended keeps its result.
+  /// Awaiting the run afterwards throws [CancelledException], unless it had already ended.
   Future<void> kill() async {
     _control.stop(const CancelledException('The command was killed.'));
     await _result.then((_) {}, onError: (_) {});
@@ -387,15 +357,14 @@ final class ShellRun implements Future<ShellResult> {
   Stream<ShellResult> asStream() => _result.asStream();
 }
 
-/// How a [ShellRun] reaches its running command: where [ShellRun.stream]'s lines go, and how
-/// a cancelled stream or [ShellRun.kill] stops it.
+/// Where [ShellRun.stream]'s lines go, and how a cancelled stream or [ShellRun.kill] stops it.
 final class _Control {
   StreamController<String>? lines;
 
   /// Set by the command once its processes are up.
   void Function(Object why)? halt;
 
-  /// Why the caller stopped it, so nobody is handed the error its stopping causes.
+  /// Why the caller stopped it, so nobody is handed the error that causes.
   Object? stopped;
 
   /// Stops the command now, or as soon as it is up.
@@ -418,10 +387,8 @@ Future<void> _feed(Process process, String? input, Encoding encoding) async {
 /// How long a stopped child has between SIGTERM and SIGKILL.
 const _grace = Duration(seconds: 2);
 
-/// Runs [stages] as a pipeline — one stage is one command — and settles it.
-///
-/// Each stage's stdout feeds the next; the last one's stdout and every stage's stderr are
-/// captured. The exit code is the rightmost non-zero one, like `pipefail`.
+/// Runs [stages] as a pipeline: each stdout feeds the next; the last stdout and every stderr
+/// are captured; the exit code is the rightmost non-zero one, like `pipefail`.
 Future<ShellResult> _exec(
   List<(String, List<String>)> stages,
   String display,
@@ -435,18 +402,15 @@ Future<ShellResult> _exec(
   if (inherit && input != null) throw ArgumentError('input: cannot be given to a child that inherits stdin');
   if (inherit && streamed != null) throw ArgumentError('stream cannot read a child that inherits stdout');
 
-  if (scope.workdir case final workdir?) {
-    final stat = await FileStat.stat(workdir.path);
-    if (stat.type == FileSystemEntityType.notFound) {
-      final result = ShellResult(
-        command: display,
-        exitCode: 127,
-        stdout: '',
-        stderr: 'No such working directory: ${workdir.path}\n',
-      );
-      if (scope.strict) throw ShellException(result);
-      return result;
-    }
+  ShellResult refused(int code, String stderr) {
+    final result = ShellResult(command: display, exitCode: code, stdout: '', stderr: stderr);
+    if (scope.strict) throw ShellException(result);
+    return result;
+  }
+
+  if (scope.workdir case final workdir?
+      when (await FileStat.stat(workdir.path)).type == FileSystemEntityType.notFound) {
+    return refused(127, 'No such working directory: ${workdir.path}\n');
   }
 
   Future<ShellResult> execute() async {
@@ -472,16 +436,8 @@ Future<ShellResult> _exec(
       for (final p in processes) {
         p.kill(ProcessSignal.sigkill);
       }
-      // A shell's codes: 126 for a file that is there but cannot be run, 127 for none at all.
-      final code = e.errorCode == 13 ? 126 : 127;
-      final result = ShellResult(
-        command: display,
-        exitCode: code,
-        stdout: '',
-        stderr: '${e.message}: ${e.executable}\n',
-      );
-      if (scope.strict) throw ShellException(result);
-      return result;
+      // A shell's codes: 126 for a file that cannot be run, 127 for none at all.
+      return refused(e.errorCode == 13 ? 126 : 127, '${e.message}: ${e.executable}\n');
     }
 
     final stdoutBuf = StringBuffer();
@@ -578,14 +534,11 @@ Future<ShellResult> _exec(
         _ => settled,
       };
     }
-    bool isBrokenPipe(int i, int code) {
-      if (i + 1 >= settled.length) return false;
-      if (code == -13 || code == 141) return true;
-      if (ended.indexOf(i + 1) < ended.indexOf(i) && '$stderrBuf'.contains('Broken pipe')) {
-        return true;
-      }
-      return false;
-    }
+    bool isBrokenPipe(int i, int code) =>
+        i + 1 < settled.length &&
+        (code == -13 ||
+            code == 141 ||
+            (ended.indexOf(i + 1) < ended.indexOf(i) && '$stderrBuf'.contains('Broken pipe')));
 
     final codes = [for (final (i, code) in settled.indexed) isBrokenPipe(i, code) ? 0 : code];
     final code = codes.lastWhere((c) => c != 0, orElse: () => 0);
@@ -598,12 +551,10 @@ Future<ShellResult> _exec(
 
 final _psWhitespace = RegExp(r'\s+');
 
-/// What Windows runs for [executable]: the file itself when the `PATH` has it and it is a
-/// program, or `cmd.exe` — the second field — for a `.bat`, a `.cmd` or a built-in such as
-/// `dir`, which nothing else can run.
+/// What Windows runs for [executable]: the program on the `PATH`, or `cmd.exe` (the second
+/// field) for a `.bat`, a `.cmd` or a built-in such as `dir`.
 ///
-/// A name found on the `PATH` is remembered until `PATH` or `PATHEXT` changes: finding it
-/// is a stat per directory per extension, some 400 of them, on every `run`.
+/// Remembered until `PATH` or `PATHEXT` changes: finding it is some 400 stats per `run`.
 Future<(String, bool)> _windowsTarget(String executable) async {
   final bare = !executable.contains('/') && !executable.contains('\\');
   if (bare) {
@@ -626,9 +577,8 @@ String? _targetsKey;
 
 /// Sends [signal] to [roots] and everything they started, and returns every pid it sent to.
 ///
-/// The tree is read from one `ps` table, synchronously: a stopped child's own children are
-/// the ones a timeout used to leave running, and reading it asynchronously would lose the
-/// race with a signal that ends this process.
+/// One `ps` table, read synchronously: asynchronously would lose the race with a signal
+/// that ends this process.
 List<int> _signalTree(List<int> roots, ProcessSignal signal) {
   if (Platform.isWindows) {
     for (final pid in roots) {
@@ -708,30 +658,25 @@ final class _Echo {
     if (_partial.isEmpty) return;
     final rest = '$_partial';
     _partial.clear();
-    switch (IoBridge.above) {
-      case final above?:
-        above(() => _sink.writeln(rest));
-      case null:
-        _sink.write(rest);
+    if (IoBridge.above case final above?) {
+      above(() => _sink.writeln(rest));
+    } else {
+      _sink.write(rest);
     }
   }
 }
 
-/// Locates the absolute path of an executable on the `PATH` seen by [Env].
-///
-/// Returns a [Path] to the binary if found, or `null` otherwise.
+/// The executable on the `PATH` [Env] sees, or `null`.
 ///
 /// {@category System}
 Future<Path?> which(String executable) async {
-  final pathVar = Env.getOrNull('PATH') ?? '';
-  final separator = Platform.isWindows ? ';' : ':';
-  final paths = pathVar.split(separator).where((p) => p.isNotEmpty);
-
+  final paths = (Env.getOrNull('PATH') ?? '').split(Platform.isWindows ? ';' : ':').where((p) => p.isNotEmpty);
+  final pathExt = Env.getOrNull('PATHEXT')?.split(';').where((e) => e.isNotEmpty);
   final extensions = switch (Platform.isWindows) {
     false => const [''],
-    true when executable.contains('.') => ['', ...?Env.getOrNull('PATHEXT')?.split(';').where((e) => e.isNotEmpty)],
+    true when executable.contains('.') => ['', ...?pathExt],
     true => [
-      ...(Env.getOrNull('PATHEXT')?.split(';').where((e) => e.isNotEmpty) ?? const ['.com', '.exe', '.bat', '.cmd']),
+      ...pathExt ?? const ['.com', '.exe', '.bat', '.cmd'],
     ],
   };
 
@@ -743,19 +688,17 @@ Future<Path?> which(String executable) async {
   for (var i = 0; i < candidates.length; i++) {
     if (found[i]) return candidates[i];
   }
-
   return null;
 }
 
-/// Whether [candidate] is a file this process could run: a directory, or a file with no
-/// execute bit, is not what a shell would find.
+/// Whether [candidate] is a file with an execute bit: what a shell would find.
 Future<bool> _isProgram(Path candidate) async {
   final stat = await FileStat.stat(candidate.path);
   if (stat.type != FileSystemEntityType.file) return false;
   return Platform.isWindows || stat.mode & 0x49 != 0; // any of u+x, g+x, o+x
 }
 
-/// Pipeline of chained system commands connected via standard streams (e.g. `cmd1 | cmd2 | cmd3`).
+/// Commands chained through their standard streams: `('ls' | 'grep dart').run()`.
 ///
 /// {@category System}
 class CommandPipeline {
@@ -763,14 +706,11 @@ class CommandPipeline {
 
   CommandPipeline._(List<String> commands) : _commands = List.unmodifiable(commands);
 
-  /// Pipes the output of this pipeline into another [next] command.
+  /// Pipes this pipeline's output into [next].
   CommandPipeline operator |(String next) => CommandPipeline._([..._commands, next]);
 
-  /// Executes this command pipeline asynchronously.
-  ///
-  /// Like `pipefail`: [ShellResult.exitCode] is the rightmost non-zero exit code, and
-  /// [strict] throws when any stage fails, not only the last. Unset arguments come from
-  /// the enclosing [Shell.scope]; cancelling and timing out stop every stage, as for [run].
+  /// Runs every stage, as [run] runs one. Like `pipefail`: [ShellResult.exitCode] is the
+  /// rightmost non-zero exit, and [strict] throws when any stage fails.
   ShellRun run({
     Path? workdir,
     Map<String, String>? env,
@@ -791,9 +731,7 @@ class CommandPipeline {
   }, (workdir: workdir, env: env, timeout: timeout, encoding: encoding, quiet: quiet, strict: strict));
 }
 
-/// Pipeline construction on [String]: `('ls' | 'grep dart').run()`.
-///
-/// To run one command, use [run].
+/// Pipeline construction on [String]: `('ls' | 'grep dart').run()`; one command is [run].
 ///
 /// {@category System}
 extension StringShellExtensions on String {
@@ -801,15 +739,12 @@ extension StringShellExtensions on String {
   CommandPipeline operator |(String next) => CommandPipeline._([this, next]);
 }
 
-/// Extension on [Path] for executing scripts or binaries directly.
+/// Running a script or a binary by its path.
 ///
 /// {@category System}
 extension PathShellExtensions on Path {
-  /// Runs the file at this path as a command, with [args] passed as-is (no splitting).
-  ///
-  /// Nothing re-reads [args], on Windows included: only a `.bat` or `.cmd` goes through
-  /// `cmd.exe`, which is the one thing that can run them. Unset arguments come from the
-  /// enclosing [Shell.scope]; see [run].
+  /// Runs this file with [args] as they are, never re-read; otherwise as [run]. On Windows
+  /// only a `.bat` or `.cmd` goes through `cmd.exe`.
   ShellRun run({
     List<String> args = const [],
     Path? workdir,

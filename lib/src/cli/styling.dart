@@ -1,6 +1,6 @@
 part of '../../cli.dart';
 
-/// ANSI terminal styling extensions on [String].
+/// ANSI styling on [String]; a [ConsoleTheme]'s palette is made of these.
 ///
 /// {@category CLI}
 extension StringAnsiExtensions on String {

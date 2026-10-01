@@ -142,6 +142,9 @@ final class IoBridge {
 
   /// Runs [action] with the live region wiped, repainting when the future completes.
   static Future<T> Function<T>(Future<T> Function() action)? suspend;
+
+  /// The console theme's border glyphs, for `collection`'s `Table.show`; set once `cli` draws.
+  static String Function()? border;
 }
 
 /// A sink that drops escapes on the way through.
