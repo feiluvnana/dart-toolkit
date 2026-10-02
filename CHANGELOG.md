@@ -19,6 +19,8 @@
 - `TaskState` was declared in both `cli` and `tui`, so a file importing the barrel and
   `tui.dart` could not name it (ambiguous import). It is now one enum in `core`, re-exported by
   both.
+- `ctx.submit` of a GET form dropped repeated keys in the form's `action` (`?tag=a&tag=b` sent
+  only `tag=b`); it now merges with `withQuery`.
 
 #### Removed
 

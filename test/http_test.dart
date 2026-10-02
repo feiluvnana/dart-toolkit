@@ -1141,6 +1141,27 @@ void main() {
         expect(submitted!.text, contains('category=tech'));
       });
 
+      test('a GET form keeps repeated keys in its action and adds its fields', () async {
+        Uri? submitted;
+        final client = MockClient((request) async {
+          if (request.url.path == '/page') {
+            return Response('<form action="/search?tag=a&amp;tag=b"><input name="q" value="dart"></form>', 200);
+          }
+          submitted = request.url;
+          return Response('results', 200);
+        });
+        await Http.scope(
+          () => 'https://example.com/page'.url.scrape<void>().onResponse((ctx) {
+            if (ctx.url.path == '/page') ctx.submit(ctx.html.$('form').first);
+          }).drain<void>(),
+          client: client,
+        );
+        expect(submitted?.queryParametersAll, {
+          'tag': ['a', 'b'],
+          'q': ['dart'],
+        });
+      });
+
       test('a Scrape is a Stream; a throwing onInit sends nothing and is the only event', () async {
         var sent = 0;
         final client = MockClient((request) async {
@@ -3731,7 +3752,7 @@ void _scrapeEdges() {
         client: client,
         () => 'https://a.com/'.url
             .scrape<void>()
-            .onInit((ctx) => ctx.canonical = (u) => u.replace(queryParameters: {...u.queryParameters}..remove('sid')))
+            .onInit((ctx) => ctx.canonical = (u) => u.withQuery({'sid': null}))
             .onResponse((ctx) => ctx.follow(ctx.html.$('a')))
             .drain<void>(),
       );

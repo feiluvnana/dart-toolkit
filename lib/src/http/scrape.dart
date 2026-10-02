@@ -199,7 +199,7 @@ final class InitContext<T> {
   /// followed.
   ///
   /// ```dart
-  /// ctx.canonical = (u) => u.replace(queryParameters: {...u.queryParameters}..remove('sid'));
+  /// ctx.canonical = (u) => u.withQuery({'sid': null});
   /// ```
   Uri Function(Uri url)? canonical;
 
@@ -426,8 +426,7 @@ sealed class HookContext<T> {
         offsite: offsite,
       );
     } else {
-      final resolved = resolve(action);
-      final uri = resolved.replace(queryParameters: {...resolved.queryParameters, ...fields});
+      final uri = resolve(action).withQuery(fields);
       return follow(
         uri,
         method: method,
