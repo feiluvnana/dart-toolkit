@@ -37,7 +37,7 @@ than 20 subagents, launch them in waves of 20 and wait for each wave.
 Step 0  baseline ............................................ ⏸
 Round 1 (PERF BLOAT FEAT DOC)  pass: audit ⏸ → implement ⏸   up to 3 passes
 Round 2 (DISC CONS)            pass: audit ⏸ → implement ⏸   up to 2 passes
-Round 3 (BUG ×2)               pass: audit ⏸ → implement ⏸   1 pass
+Round 3 (BUG)                  pass: audit ⏸ → implement ⏸   1 pass
 Finish
 ```
 
@@ -68,7 +68,7 @@ Keep this state in your own context for the whole run, and print it whenever a c
 | **Scope** | The modules from the arguments, or all twelve: core, collection, async, process, native, hash, formats, fs, http, cli, tui, chrome. |
 | **Known failures** | The test names that already failed at Step 0, verbatim. |
 | **Skip list** | Earlier runs' rejections plus this run's. |
-| **Ledger** | One row per finding: `ID · TAG · Title · path:line · status · commit`. The ID is `R<round>P<pass>-<nn>` (`R1P2-04`). The status moves `found → confirmed → accepted → applied`, or ends at `rejected (<reason>)`. A `DOC` finding whose *code* is wrong becomes `deferred (R3)`: it is pasted into every Round 3 finder prompt and audited there as a `BUG`. In Round 3, `BUG` rows also note their lens: `BUG (cancel)` or `BUG (platform)`. |
+| **Ledger** | One row per finding: `ID · TAG · Title · path:line · status · commit`. The ID is `R<round>P<pass>-<nn>` (`R1P2-04`). The status moves `found → confirmed → accepted → applied`, or ends at `rejected (<reason>)`. A `DOC` finding whose *code* is wrong becomes `deferred (R3)`: it is pasted into every Round 3 finder prompt and audited there as a `BUG`. |
 | **Checkpoint tag** | The last `checkpoint-*` tag: the base for A/B and for `git log checkpoint-<prev>..`. |
 
 ## 2. Verification
@@ -170,8 +170,8 @@ Changing an `extern "C"` signature bumps both `tk_version()` in `native/src/lib.
 ### 4.1 Find
 
 Spawn one **finder** per *dimension × module group*, all in one message. Which dimensions a
-round audits is in §6. Round 3 has two dimensions that share the tag `BUG`: each finder gets
-one of the two `BUG` blocks in §10, so Round 3 runs two finders per group.
+round audits is in §6. Round 3 has one dimension, `BUG`, with a long checklist, so it runs one
+finder per *module* (twelve, or the scope's modules) instead of per group.
 
 | Group | Modules | Files |
 |---|---|---|
@@ -443,7 +443,7 @@ git fetch && git status -sb
 |---|---|---|---|---|---|---|
 | **1: Foundation** | `PERF`, `BLOAT`, `FEAT`, `DOC` | all three | 15 | 3 | per batch (§5) | `checkpoint-gate1` |
 | **2: Consistency** | `DISC`, `CONS` | all three | 15 | 2 | `refactor: …` | `checkpoint-gate2` |
-| **3: Hardening** | `BUG` cancellation, `BUG` platform | all three | 15 | 1 | `fix: …` | `checkpoint-gate3` |
+| **3: Hardening** | `BUG` | each module | 15 | 1 | `fix: …` | `checkpoint-gate3` |
 
 A round ends when a pass confirms nothing, applies nothing, or reaches the round's max passes.
 Each new pass audits the new HEAD with the grown skip list.
@@ -673,40 +673,72 @@ member beside its short spelling, `Table` keyed by column name, the two `Object`
 
 **Fix:** rename every site; the zero-hit `git grep` from §6 *Round 2 extras* applies.
 
-### `BUG`: cancellation, errors and edge inputs
+### `BUG`: wrong results, hangs, leaks and platform breaks
+
+One tag for every defect. A Round 3 finder owns one module and walks the whole checklist for
+it; a line that cannot apply to that module is skipped, not reported.
 
 **Hunt**
-- *Cancel:* cancel `Cancel.scope` during each async API in `async`, `http`, `process` and `chrome`
-  (`retry` backoff, `Pool` queue, `delay`, lock waiters, `download` mid-body, `run` with children).
-  Afterwards no `Timer`, `StreamSubscription`, isolate, child process or socket may remain open,
-  and pool permits must be returned.
+- *Wrong results:* off-by-one and boundary values (0, 1, max, negative); integer vs double and
+  overflow past `i32`/`i64`; date and number parsing that accepts garbage; regex anchoring and
+  case folding; sort stability and comparator symmetry; `==`/`hashCode` disagreeing; a
+  documented default, cap or exit code (64 / 1 / 128+n) the code does not honour.
+- *Text and encoding:* empty, one character, BOM, CRLF and lone CR, tabs, trailing newline or
+  none; multi-byte UTF-8 split across a chunk boundary; invalid UTF-8; surrogate pairs, combining
+  marks, ZWJ emoji and East Asian width; charset detection from headers and `<meta>`.
+- *Parsers* (`formats`, XPath, CSS, JSONPath, CLI args): unterminated strings, comments and tags
+  (a `FormatException`, never a hang or a `RangeError`); nesting at depth 1000 and beyond;
+  duplicate keys; every escape; huge numbers; parse → serialize → parse round-trip; differential
+  against the reference (`formats_diff_test.dart`).
+- *Cancellation:* cancel `Cancel.scope` during each async API in `async`, `http`, `process`,
+  `fs` and `chrome` (`retry` backoff, `Pool` queue, `delay`, lock waiters, `download` mid-body,
+  `run` with children, archive progress). Afterwards no `Timer`, `StreamSubscription`, isolate,
+  `NativeCallable`, child process, socket or file handle remains open, pool permits are back,
+  and the caller sees `CancelledException`, not a hang.
 - *Errors:* a worker error rethrown without its original stack (`Error.throwWithStackTrace`); a
-  `catch` that swallows; a `Completer` completed twice; cleanup skipped on the error path; a
-  `finally` that awaits after the scope is gone.
-- *Edge inputs:* empty, a single element, multi-byte UTF-8 split across a chunk boundary, BOM, CRLF,
-  non-UTF-8, exactly the 4 MiB native threshold, nesting at depth 1000, an unterminated construct
-  (must be a `FormatException`, never a hang), lengths beyond `i32`.
+  `catch` that swallows; a `Completer` completed twice; an unawaited future whose error escapes
+  the zone; cleanup skipped on the error path; a `finally` that awaits after the scope is gone;
+  an error message missing the name of what failed; throw vs `null` vs `Either` differing from
+  the dartdoc.
+- *Resources:* `tk_alloc` without `tk_free` on a throw; an `HttpClient`, `RandomAccessFile` or
+  `Process` never closed; temp files and directories left behind on failure; unbounded caches,
+  maps, queues or buffers fed by input.
+- *Shared state:* statics and zone values (`Console.theme`, `Io` overrides, `Http.scope`,
+  `Console.level`) leaking between scopes, tests or isolates; re-entrancy; an `ordered: true`
+  that is not; a race only when a concrete schedule triggers it.
+- *Filesystem:* atomic replace (temp + rename keeps mode and symlink target); path traversal and
+  symlink escape on extract (zip-slip); decompression bombs (200× / 1 GiB); files over 4 GiB and
+  the 4 MiB native threshold; non-ASCII and space-containing names; missing vs permission-denied
+  errors; macOS case-insensitive and `/tmp` → `/private/tmp` symlink.
+- *HTTP:* redirect limit, 303 → GET, `Authorization` and cookies dropped cross-origin; cookie
+  domain, path and expiry; robots.txt 512 KiB and sitemap 50 MB caps; gzip/deflate/br decoding;
+  retry only for idempotent verbs; timeouts; `Content-Length` mismatch and truncated chunked
+  bodies; download resume; URL resolution of `//x`, `..`, fragments, IDN and repeated query keys.
+- *Process:* quoting of spaces, quotes, `$` and globs; exit code with pipefail; signal forwarding
+  to the whole tree and reaping (no zombies); stdin closed when unused; a deadlock on large
+  stdout/stderr; env and cwd inheritance; timeout kills the tree.
+- *CLI and TUI:* `--`, `-abc`, `--x=v`, repeated and unknown options, `--no-x`; help that
+  disagrees with parsing; terminal restore (raw mode, cursor, alternate screen, echo) on every
+  exit path: return, throw, ^C, SIGTERM, `exit`; resize; output redirected or not a TTY;
+  `NO_COLOR` and a dumb terminal.
+- *Chrome:* the browser crashing mid-call; tabs leaked after an error; CDP error replies;
+  timeouts; downloads that never finish; frames that load late.
+- *Native/FFI:* the ABI check (`tk_version` vs `NativeLib._abi`); prebuilt lookup by
+  `<os>_<arch>` and the message when it is missing; null pointers; lengths past `i32`; every
+  native error code mapped to a Dart exception.
+- *Windows* (not runnable on macOS; unit-test the *built* command line and path logic):
+  `cmd /d /c` for built-ins, refusal of unsafe `cmd` arguments, `\` separators, drive roots and
+  UNC paths, case-insensitive comparison, atomic replace while a file is locked, CRLF output.
+- *Carried over:* every `deferred (R3)` ledger item; report each that is still true.
 
-**Evidence:** a test sketch: input or schedule → observed wrong output, hang or leak → expected.
+**Evidence:** a reproducible test sketch: input, schedule or platform → observed wrong output,
+hang, leak or crash → expected. For Windows: the command line or path the code builds beside the
+one the platform needs.
 
-**Not a finding:** a theoretical race with no schedule that triggers it; "could be null" where the
-type says otherwise; behaviour CONVENTIONS §4 already defines.
-
-**Fix:** the fix plus the test that failed before it.
-
-### `BUG`: platform parity
-
-**Hunt**
-- *POSIX* (runnable here): the pipefail exit code, signal forwarding to the process tree, CRLF
-  input, `/dev/tty` restore on every exit path.
-- *Windows* (not runnable on macOS): unit tests on the *built* command line and path logic:
-  `cmd /d /c` for built-ins, refusal of unsafe `cmd` arguments, `\` separators and drive roots,
-  atomic replace while a file is locked, native prebuilt lookup by `<os>_<arch>`.
-
-**Evidence:** the command line or path the code builds, beside the one the platform needs.
-
-**Not a finding:** a platform the package doesn't target; behaviour that differs by design and is
+**Not a finding:** a theoretical race with no schedule that triggers it; "could be null" where
+the type says otherwise; behaviour CONVENTIONS §4 already defines; an input the type system
+already rejects; a platform the package doesn't target; a difference that is by design and
 documented.
 
-**Fix:** the fix plus a unit test. Label anything not executed as `unverified-on-windows` in the
-commit body.
+**Fix:** the fix plus the test that failed before it (§5.1 step 5). Label anything not executed
+here as `unverified-on-windows` in the commit body.
