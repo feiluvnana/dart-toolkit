@@ -60,19 +60,19 @@ enum Hash {
   /// Computes the hex digest of the file at [pathOrFile].
   ///
   /// Accepts a [File], [String] path, or any object whose `toString()` is a path.
-  Future<String> file(Object pathOrFile) async => _hex(await fileBytes(pathOrFile));
+  Future<String> file(Object pathOrFile) async => _hex(await fileDigest(pathOrFile));
 
   /// Computes the raw byte digest of the file at [pathOrFile].
-  Future<Uint8List> fileBytes(Object pathOrFile) async {
+  Future<Uint8List> fileDigest(Object pathOrFile) async {
     final path = pathOrFile is File ? pathOrFile.path : pathOrFile.toString();
     return _file(path);
   }
 
   /// Computes the HMAC hex digest of [bytes] under [key].
-  String hmacBytes(List<int> key, List<int> bytes) => _hex(_ofBytes(this, key, bytes));
+  String hmac(List<int> key, List<int> bytes) => _hex(_ofBytes(this, key, bytes));
 
   /// Computes the HMAC hex digest of [text] under [key].
-  String hmacText(List<int> key, String text, {Encoding encoding = utf8}) => hmacBytes(key, encoding.encode(text));
+  String hmacText(List<int> key, String text, {Encoding encoding = utf8}) => hmac(key, encoding.encode(text));
 
   /// Computes the HMAC hex digest of the file at [pathOrFile] under [key].
   Future<String> hmacFile(List<int> key, Object pathOrFile) async {

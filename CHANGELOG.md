@@ -4,6 +4,13 @@
 
 ### Audit V
 
+#### Upgrading
+
+| Before | After |
+|---|---|
+| `Hash.sha256.fileBytes(p)` | `Hash.sha256.fileDigest(p)` (raw bytes, beside `digest`) |
+| `Hash.sha256.hmacBytes(key, data)` | `Hash.sha256.hmac(key, data)` (hex, like `data.hmac(…)`) |
+
 #### Faster
 
 - `formats` no longer imports `fs` (so not `hash`, `native`, `dart:ffi` or `path` either):
