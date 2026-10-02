@@ -426,7 +426,8 @@ await (dir / 'run.sh').chmod('+x');       // or '755', 'go-w', 'u=rw,go=r'
 await dir.delete(recursive: true);
 ```
 
-- **Writes are atomic** (temp file, then rename): a reader or a ^C sees old or new, never half.
+- **`writeText`, `writeBytes` and `writeLines` are atomic** (temp file, then rename): a reader or a
+  ^C sees old or new, never half. `append` writes in place.
   Permissions and links are kept; a read-only file still refuses; devices and FIFOs are written
   in place.
 - `copy` keeps directory modes. `move` copies-and-deletes only across filesystems, and refuses
