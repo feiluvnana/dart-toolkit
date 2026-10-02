@@ -564,23 +564,26 @@ in the body.
   per operation"). A facade member that forwards to the short spelling is not an alias.
 - *Extensions on `String`/`Iterable`/`Map`/`int`* beyond the conversion getter (`.url`, `.path`,
   `.json`, `60.s`). The vocabulary belongs on the returned type.
-- *Public but not API:* `git grep -wn Name -- lib bin test '*.md'` finds only the defining file and
-  tests. Such a symbol goes private, or goes. This includes test-only seams: a parameter,
-  constructor or `@visibleForTesting` that exists for injection.
+- *Not useful or not needed:* a public member a script author would not reach for. It repeats
+  another member, does nothing a one-liner on the result doesn't, or exposes plumbing (an engine,
+  a native shim, a test-only seam such as a parameter or `@visibleForTesting` for injection).
+  The test is never how many callers it has today: this is a toolkit, so ask *is this useful and
+  needed?*
 - *Dead code:* unused private members, branches unreachable after an exhaustive `switch`, a
   parameter every caller passes the same value, flags left over from a removed feature.
 - *Duplicate helpers:* the same escape, quote, byte-format or path join written in two modules.
   Keep one, in `core` only if that adds no import.
 - *Prose:* a doc comment that restates its signature; two `bin/` examples showing one idea.
 
-**Evidence:** the `git grep` hit counts (lib / bin / test / docs) for each symbol removed, and the
-net lines deleted. Name the replacement callers will use.
+**Evidence:** why a script author does not need it (what it duplicates, or what plumbing it
+exposes), the net lines deleted, and the replacement callers will use. `git grep` finds the call
+sites to update; a low count never decides.
 
 **Not a finding:** anything CONVENTIONS keeps on purpose (`Element.attr`, `Sequence.union`,
 `chunk`, Chrome's `frame`/`pdf`/dialogs, `Duration.jittered`); a facade member that forwards to
 the short spelling (discoverability ranks with brevity); a deletion that makes a common call
-longer; "unused in `bin/`" alone, because the bar is usefulness to script authors, not `bin/`
-usage.
+longer; a useful member with few or no callers today, because the bar is usefulness to script
+authors, not who calls it.
 
 **Fix:** delete, and update every call site and doc in the same commit. Commit as `refactor: …`,
 with a CHANGELOG *Removed* line naming the replacement.

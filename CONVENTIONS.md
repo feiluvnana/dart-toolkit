@@ -98,9 +98,14 @@ script authors, not by what `bin/` calls. Composing two others does not earn it;
 failures; a body is four typed arguments, not one `Object?`. Two `Object` parameters remain where
 the receiver already takes every form: `ctx.follow` and `client.scrape`.
 
-**Public means a caller uses it.** Parser internals, native shims and query engines are private;
+**Public means a script author needs it.** A toolkit is judged by what it offers, not by who
+calls it today: a useful member stays with no caller, and a duplicate or a piece of plumbing goes
+however many tests touch it. Parser internals, native shims and query engines are private;
 something that must cross libraries but is not API says so (`NativeBridge`). Nothing in `lib/`
 exists only for tests.
+
+> *Why:* audits counted callers and proposed cutting useful members nobody in `bin/` happened to
+> call yet; the owner's test is "is this useful and needed" (2026-10-02).
 
 **Names.** A read-only boolean is `is…`; a switch or parameter is a bare adjective. Async is bare,
 its sync twin ends in `Sync` (only in `fs`). A pure function of the receiver is a getter
