@@ -102,7 +102,7 @@ the receiver already takes every form: `ctx.follow` and `client.scrape`.
 calls it today: a useful member stays with no caller, and a duplicate or a piece of plumbing goes
 however many tests touch it. Parser internals, native shims and query engines are private;
 something that must cross libraries but is not API says so (`NativeBridge`). Nothing in `lib/`
-exists only for tests.
+exists only for tests, except a seam's fake (`FakeTerminal` for `Tui.terminal`).
 
 > *Why:* audits counted callers and proposed cutting useful members nobody in `bin/` happened to
 > call yet; the owner's test is "is this useful and needed" (2026-10-02).

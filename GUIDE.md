@@ -1161,7 +1161,7 @@ Future<void> release(Path repo) => Shell.scope(workdir: repo, () async {
 
 ## Testing
 
-The seams are `Io` and `Client`; nothing in `lib/` exists for tests.
+The seams are `Io`, `Client` and `Tui.terminal` (with `FakeTerminal`, the one fake `lib/` ships).
 
 ```dart
 import 'package:dart_toolkit/dart_toolkit.dart';
