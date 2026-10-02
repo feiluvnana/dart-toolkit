@@ -87,7 +87,7 @@ Future<void> main() => Http.scope(() async {
 `Left` (failure) or `Right` (success), as `parallelize`, `Pool` and `scrape` hand back.
 
 ```dart
-final [outcome] = await [url].parallelize(fetch);
+final [outcome] = await [url].parallelize(fetch).toList();
 outcome.rightOrNull ?? fallback;
 outcome.unwrap();                       // the value, or throw the Left with its trace
 switch (outcome) {
@@ -96,7 +96,7 @@ switch (outcome) {
 }
 
 settled.rights; settled.lefts; settled.unwrap();   // on a list, a stream, or a future of a list
-await urls.parallelize(fetch).rights;
+await urls.parallelize(fetch).rights.toList();
 ```
 
 ### `Env`
@@ -1068,7 +1068,7 @@ Future<({Uri page, String file})> find(String title) async {
 }
 
 Future<void> main() => Http.scope(retries: 2, delay: 1.s, () async {
-  final found = await ['frankenstein', 'dracula'].parallelize(find).rights;
+  final found = await ['frankenstein', 'dracula'].parallelize(find).rights.toList();
   await {
     for (final (:page, :file) in found)
       page.resolve('downloads/$file').replace(query: 'source=download'): 'books'.path / file,

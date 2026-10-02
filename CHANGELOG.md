@@ -189,7 +189,7 @@ import.
 | `Env.require('TOKEN')` | `Env.get('TOKEN')` (throws naming the key when unset or empty) |
 | `Env.get('PORT') ?? '8080'` | `Env.get('PORT', or: '8080')`; `Env.getOrNull` is nullable |
 | `Env.remove(k)` / `Env.reset()` | `Env.set(k, '')`; an empty variable is unset |
-| `(await xs.parallelize(f)).rights` | `await xs.parallelize(f).rights` (also `.lefts`, `.unwrap()`) |
+| `(await xs.parallelize(f)).rights` | `await xs.parallelize(f).rights.toList()` (also `.lefts`, `.unwrap()`) |
 | `e.isLeft`, `isRight`, `e.fold(…)`, `mapLeft`, `e.mapRight(f)`, `Either.tryCatch(f)` | `e is Left`, a `switch`, `try` |
 | `Mutex().run(f)` | `Semaphore(1).run(f)` |
 | `stream.delayBy(d)` | `throttle`, or `Http.scope(delay:)` to pace requests |
