@@ -521,7 +521,7 @@ new Promise((resolve) => {
   ///
   /// ```dart
   /// final page2 = await page.waitForResponse('/api/items', () => page.click('.next'));
-  /// for (final item in page2!.json['items']) { ... }
+  /// for (final item in page2!.json['items'].list) { ... }
   /// ```
   Future<Response?> waitForResponse(String match, FutureOr<void> Function() action, {Duration? timeout}) async {
     String? id;
