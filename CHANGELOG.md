@@ -12,6 +12,7 @@
 - `Table.length`/`isEmpty`/`isNotEmpty` after `orderBy` no longer run the sort: 1M rows
   400 → <1 ms.
 - A sitemap's `<loc>` is HTML-decoded only when it holds `&` or `<`: 50k plain URLs 9 → 2 ms.
+- `glob` no longer keeps every pattern's `RegExp` forever; one compile per call, before the walk.
 
 #### Removed
 

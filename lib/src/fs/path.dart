@@ -774,8 +774,6 @@ PathType _pathType(FileSystemEntityType type) => switch (type) {
   _ => PathType.none,
 };
 
-final _globCache = <(String, bool), RegExp>{};
-
 /// Everything under [dir], at most [depth] levels down, skipping what cannot be read;
 /// `Directory.list(recursive: true)` has no depth limit.
 Stream<FileSystemEntity> _walk(Directory dir, int depth) async* {
@@ -849,7 +847,7 @@ int _braceEnd(String pattern, int open) {
 
 RegExp _globToRegex(String pattern, {bool? caseSensitive}) {
   final isSensitive = caseSensitive ?? (!Platform.isWindows && !Platform.isMacOS);
-  return _globCache[(pattern, isSensitive)] ??= RegExp(_globSource(pattern), caseSensitive: isSensitive);
+  return RegExp(_globSource(pattern), caseSensitive: isSensitive);
 }
 
 String _globSource(String pattern) {
