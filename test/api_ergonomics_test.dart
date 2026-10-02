@@ -16,7 +16,7 @@ void main() {
     });
   });
 
-  group('Doc & Document facade and Path document readers', () {
+  group('Doc & Document facade', () {
     test('Doc shorthand and parse methods', () {
       final j = Doc.json('{"hello": "world"}');
       expect(j['hello'].to<String>(), 'world');
@@ -48,17 +48,14 @@ void main() {
       expect(json.query(r'$.items[*].name').map((d) => d.to<String>()).toList(), ['A', 'B']);
     });
 
-    test('Path document reading helpers', () async {
+    test('Doc.read takes a Path', () async {
       await Path.tempDir((dir) async {
         final f = dir / 'test.yaml';
         await f.writeText('message: hello\ncount: 7\n');
 
-        final doc = await f.readDoc();
+        final doc = await Doc.read(f);
         expect(doc['message'].to<String>(), 'hello');
         expect(doc['count'].to<int>(), 7);
-
-        final yamlDoc = await f.readYaml();
-        expect(yamlDoc['count'].to<int>(), 7);
       });
     });
   });

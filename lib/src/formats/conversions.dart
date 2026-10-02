@@ -84,29 +84,3 @@ abstract final class Doc {
 
 /// An alias for [Doc] for full-name discoverability: `Document.read('config.yaml')`.
 typedef Document = Doc;
-
-/// Format reading helpers on [Path].
-///
-/// {@category Formats}
-extension PathFormatsExtensions on Path {
-  /// Reads and parses this file based on its extension (.json, .yaml, .toml, .ini).
-  Future<JsonDocument> readDoc() => Doc.read(path);
-
-  /// Reads and parses this file as JSON.
-  Future<JsonDocument> readJson() async => JsonDocument.parse(await readText());
-
-  /// Reads and parses this file as YAML.
-  Future<YamlDocument> readYaml() async => (await readText()).yaml;
-
-  /// Reads and parses this file as TOML.
-  Future<JsonDocument> readToml() async => (await readText()).toml;
-
-  /// Reads and parses this file as INI.
-  Future<JsonDocument> readIni() async => (await readText()).ini;
-
-  /// Reads and parses this file as HTML.
-  Future<HtmlDocument> readHtml() async => HtmlDocument.parse(await readText());
-
-  /// Reads and parses this file as XML.
-  Future<XmlDocument> readXml() async => XmlDocument.parse(await readText());
-}

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Audit V
+
+#### Removed
+
+- `Path.readDoc`/`readJson`/`readYaml`/`readToml`/`readIni`/`readHtml`/`readXml` →
+  `Doc.read(p)`, or `(await p.readText()).yaml` and friends.
+
 ### Console themes, a TUI framework, and a second bug hunt
 
 #### Upgrading
