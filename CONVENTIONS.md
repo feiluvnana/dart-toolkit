@@ -225,7 +225,8 @@ Each of these was a silent failure.
 - **A terminal app reads and draws on `/dev/tty`,** reading in a helper isolate under
   `stty … min 0 time 1`, so stdin stays the program's and `app > out` stays clean; every exit —
   `Lifecycle.exit` too, which skips `finally` — restores it through `IoBridge.restores`.
-- **Prompts and indicators go to stderr,** so `app > out.json` captures only data. `-q` silences
+- **Prompts and live frames go to stderr,** so `app > out.json` captures only data and log lines;
+  an indicator's final ok line is an info log, on stdout. `-q` silences
   spinners, bars and boards; the live region is never wider than the terminal less one. `NO_COLOR`
   turns off colour, not redraw.
 - **A write replaces, never truncates.** `writeText`/`writeBytes`/`writeLines` rename a finished
