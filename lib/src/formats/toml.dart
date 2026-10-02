@@ -21,7 +21,7 @@ final class _TomlParser {
     while (true) {
       _skipBlank();
       if (i >= s.length) return root;
-      if (s.codeUnitAt(i) == 0x5B /* [ */) {
+      if (s.codeUnitAt(i) == 0x5B /* [ */ ) {
         _tableHeader();
       } else {
         _keyValue(current);
@@ -111,7 +111,7 @@ final class _TomlParser {
         parts.add(s.substring(start, i));
       }
       _ws();
-      if (i < s.length && s.codeUnitAt(i) == 0x2E /* . */) {
+      if (i < s.length && s.codeUnitAt(i) == 0x2E /* . */ ) {
         i++;
         continue;
       }
@@ -123,7 +123,8 @@ final class _TomlParser {
     if (i >= s.length) throw _error('Expected a value');
     final c = s.codeUnitAt(i);
     if (c == 0x22 || c == 0x27) return _string();
-    if (c == 0x5B || c == 0x7B) { // [ or {
+    if (c == 0x5B || c == 0x7B) {
+      // [ or {
       if (++_depth > 1000) throw _error('nested deeper than 1000');
       final v = c == 0x5B ? _array() : _freeze(_inlineTable());
       _depth--;
@@ -208,7 +209,7 @@ final class _TomlParser {
         if (i > extraStart) sb.write(s.substring(extraStart, i));
         return sb.toString();
       }
-      if (qCode == 0x22 /* " */ && c == 0x5C /* \ */) {
+      if (qCode == 0x22 /* " */ && c == 0x5C /* \ */ ) {
         if (i > chunkStart) sb.write(s.substring(chunkStart, i));
         i++;
         if (i >= s.length) throw _error('Unterminated string');
@@ -256,15 +257,15 @@ final class _TomlParser {
     while (true) {
       _skipBlank();
       if (i >= s.length) throw _error('Unterminated array');
-      if (s.codeUnitAt(i) == 0x5D /* ] */) {
+      if (s.codeUnitAt(i) == 0x5D /* ] */ ) {
         i++;
         return out;
       }
       out.add(_value());
       _skipBlank();
-      if (i < s.length && s.codeUnitAt(i) == 0x2C /* , */) {
+      if (i < s.length && s.codeUnitAt(i) == 0x2C /* , */ ) {
         i++;
-      } else if (i >= s.length || s.codeUnitAt(i) != 0x5D /* ] */) {
+      } else if (i >= s.length || s.codeUnitAt(i) != 0x5D /* ] */ ) {
         throw _error('Expected "," or "]"');
       }
     }
@@ -274,14 +275,14 @@ final class _TomlParser {
     i++; // {
     final out = <String, Object?>{};
     _ws();
-    if (i < s.length && s.codeUnitAt(i) == 0x7D /* } */) {
+    if (i < s.length && s.codeUnitAt(i) == 0x7D /* } */ ) {
       i++;
       return out;
     }
     while (true) {
       _keyValue(out);
       _ws();
-      if (i < s.length && s.codeUnitAt(i) == 0x2C /* , */) {
+      if (i < s.length && s.codeUnitAt(i) == 0x2C /* , */ ) {
         i++;
         continue;
       }
@@ -304,7 +305,7 @@ final class _TomlParser {
       final c = s.codeUnitAt(i);
       if (c == 0x20 || c == 0x09 || c == 0x0A || c == 0x0D) {
         i++;
-      } else if (c == 0x23 /* # */) {
+      } else if (c == 0x23 /* # */ ) {
         _comment();
       } else {
         return;

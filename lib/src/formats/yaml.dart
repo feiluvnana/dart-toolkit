@@ -36,7 +36,7 @@ final class _Line {
         j < t.length &&
         t.codeUnitAt(j) == 0x3A /* : */ &&
         (j + 1 == t.length || t.codeUnitAt(j + 1) == 0x20 || t.codeUnitAt(j + 1) == 0x09);
-    if (c == 0x22 /* " */ || c == 0x27 /* ' */) {
+    if (c == 0x22 /* " */ || c == 0x27 /* ' */ ) {
       final end = _closingQuote(t, 0);
       if (end == -1) return null;
       var j = end + 1;
@@ -55,10 +55,20 @@ final class _Line {
   }
 
   static bool _isIndicator(int c) => switch (c) {
-    0x5B /* [ */ || 0x5D /* ] */ || 0x7B /* { */ || 0x7D /* } */ ||
-    0x2C /* , */ || 0x23 /* # */ || 0x26 /* & */ || 0x2A /* * */ ||
-    0x21 /* ! */ || 0x7C /* | */ || 0x3E /* > */ || 0x25 /* % */ ||
-    0x40 /* @ */ || 0x60 /* ` */ => true,
+    0x5B /* [ */ ||
+    0x5D /* ] */ ||
+    0x7B /* { */ ||
+    0x7D /* } */ ||
+    0x2C /* , */ ||
+    0x23 /* # */ ||
+    0x26 /* & */ ||
+    0x2A /* * */ ||
+    0x21 /* ! */ ||
+    0x7C /* | */ ||
+    0x3E /* > */ ||
+    0x25 /* % */ ||
+    0x40 /* @ */ ||
+    0x60 /* ` */ => true,
     _ => false,
   };
 
@@ -71,7 +81,7 @@ int _closingQuote(String t, int from) {
   final q = t.codeUnitAt(from);
   for (var j = from + 1; j < t.length; j++) {
     final c = t.codeUnitAt(j);
-    if (q == 0x22 /* " */ && c == 0x5C /* \ */) {
+    if (q == 0x22 /* " */ && c == 0x5C /* \ */ ) {
       j++;
     } else if (c == q) {
       if (q == 0x27 /* ' */ && j + 1 < t.length && t.codeUnitAt(j + 1) == 0x27) {
@@ -135,8 +145,14 @@ final class _YamlParser {
     if (i == 0) return true;
     final prev = line.codeUnitAt(i - 1);
     return switch (prev) {
-      0x20 /*   */ || 0x09 /* \t */ || 0x3A /* : */ || 0x2D /* - */ ||
-      0x5B /* [ */ || 0x7B /* { */ || 0x2C /* , */ || 0x3E /* > */ => true,
+      0x20 /*   */ ||
+      0x09 /* \t */ ||
+      0x3A /* : */ ||
+      0x2D /* - */ ||
+      0x5B /* [ */ ||
+      0x7B /* { */ ||
+      0x2C /* , */ ||
+      0x3E /* > */ => true,
       _ => false,
     };
   }
@@ -379,7 +395,7 @@ final class _YamlParser {
   /// Whether [t] ends in an odd run of backslashes: the last one escapes the line break.
   static bool _escapesBreak(String t) {
     var n = 0;
-    while (n < t.length && t.codeUnitAt(t.length - 1 - n) == 0x5C /* \ */) {
+    while (n < t.length && t.codeUnitAt(t.length - 1 - n) == 0x5C /* \ */ ) {
       n++;
     }
     return n.isOdd;
@@ -394,16 +410,18 @@ final class _YamlParser {
       for (var j = 0; j < x.length; j++) {
         final c = x.codeUnitAt(j);
         if (quote != null) {
-          if (c == 0x5C /* \ */ && quote == 0x22 /* " */) {
+          if (c == 0x5C /* \ */ && quote == 0x22 /* " */ ) {
             j++;
           } else if (c == quote) {
             quote = null;
           }
         } else if (c == 0x22 || c == 0x27) {
           quote = c;
-        } else if (c == 0x5B || c == 0x7B) { // [ or {
+        } else if (c == 0x5B || c == 0x7B) {
+          // [ or {
           depth++;
-        } else if (c == 0x5D || c == 0x7D) { // ] or }
+        } else if (c == 0x5D || c == 0x7D) {
+          // ] or }
           depth--;
         }
       }
@@ -504,8 +522,7 @@ final class _YamlParser {
       }
     }
 
-    bool isFlowSep(int c) =>
-        c == 0x20 || c == 0x2C || c == 0x5B || c == 0x5D || c == 0x7B || c == 0x7D;
+    bool isFlowSep(int c) => c == 0x20 || c == 0x2C || c == 0x5B || c == 0x5D || c == 0x7B || c == 0x7D;
 
     String word() {
       final start = i;
@@ -532,7 +549,7 @@ final class _YamlParser {
         ws();
         if (i >= t.length) _fail('unterminated flow collection');
         final c = t.codeUnitAt(i);
-        if (c == 0x2C /* , */) {
+        if (c == 0x2C /* , */ ) {
           i++;
         } else if (c != closeCode) {
           _fail('expected "," or "$close" in a flow collection');
@@ -543,7 +560,7 @@ final class _YamlParser {
     /// A key's value after an optional `:`, or `null` without one.
     Object? afterColon() {
       ws();
-      if (i >= t.length || t.codeUnitAt(i) != 0x3A /* : */) return null;
+      if (i >= t.length || t.codeUnitAt(i) != 0x3A /* : */ ) return null;
       i++;
       ws();
       if (i < t.length) {
@@ -558,7 +575,7 @@ final class _YamlParser {
       if (i >= t.length) _fail('unterminated flow collection');
       final c = t.codeUnitAt(i);
       switch (c) {
-        case 0x5B /* [ */:
+        case 0x5B /* [ */ :
           _enter();
           final out = <Object?>[];
           entries(']', () {
@@ -569,7 +586,7 @@ final class _YamlParser {
           });
           _depth--;
           return out;
-        case 0x7B /* { */:
+        case 0x7B /* { */ :
           _enter();
           final out = <String, Object?>{};
           List<Object?>? merges;
@@ -578,22 +595,22 @@ final class _YamlParser {
             final v = value();
             final firstC = t.codeUnitAt(start);
             final k = (firstC == 0x22 || firstC == 0x27) ? '$v' : t.substring(start, i).trim();
-            if (k == '<<' && firstC == 0x3C /* < */) return (merges ??= []).add(afterColon());
+            if (k == '<<' && firstC == 0x3C /* < */ ) return (merges ??= []).add(afterColon());
             if (out.containsKey(k)) _fail('"$k" is defined twice');
             out[k] = afterColon();
           });
           _depth--;
           return merges == null ? out : _merge(out, merges!);
-        case 0x22 /* " */ || 0x27 /* ' */:
+        case 0x22 /* " */ || 0x27 /* ' */ :
           final end = _closingQuote(t, i);
           if (end == -1) _fail('unterminated quoted scalar');
           final v = _unescape(t.substring(i + 1, end), c == 0x22);
           i = end + 1;
           return v;
-        case 0x2A /* * */:
+        case 0x2A /* * */ :
           i++;
           return _alias(word());
-        case 0x26 /* & */ || 0x21 /* ! */:
+        case 0x26 /* & */ || 0x21 /* ! */ :
           final anchor = c == 0x26;
           i++;
           final name = word();

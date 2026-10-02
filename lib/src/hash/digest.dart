@@ -72,8 +72,7 @@ enum Hash {
   String hmacBytes(List<int> key, List<int> bytes) => _hex(_ofBytes(this, key, bytes));
 
   /// Computes the HMAC hex digest of [text] under [key].
-  String hmacText(List<int> key, String text, {Encoding encoding = utf8}) =>
-      hmacBytes(key, encoding.encode(text));
+  String hmacText(List<int> key, String text, {Encoding encoding = utf8}) => hmacBytes(key, encoding.encode(text));
 
   /// Computes the HMAC hex digest of the file at [pathOrFile] under [key].
   Future<String> hmacFile(List<int> key, Object pathOrFile) async {

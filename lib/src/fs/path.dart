@@ -385,12 +385,7 @@ extension type const Path(String path) implements String {
     final rawStart = p.isAbsolute(pattern)
         ? (prefix.length < p.rootPrefix(pattern).length ? p.rootPrefix(pattern) : prefix)
         : p.join(path, prefix);
-    return (
-      p.normalize(rawStart),
-      rest,
-      unbounded ? null : segments.length - fixed,
-      dirs,
-    );
+    return (p.normalize(rawStart), rest, unbounded ? null : segments.length - fixed, dirs);
   }
 
   /// Creates a directory at this path.
