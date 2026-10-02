@@ -216,6 +216,6 @@ final class Field extends Widget implements _Control {
         col += w;
       }
     }
-    if (err != null) canvas.text(0, 1, err, t.error);
+    if (err != null) canvas.text(0, 1, err, t.danger);
   }
 }

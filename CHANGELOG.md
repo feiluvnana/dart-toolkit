@@ -10,6 +10,7 @@
 |---|---|
 | `Hash.sha256.fileBytes(p)` | `Hash.sha256.fileDigest(p)` (raw bytes, beside `digest`) |
 | `Hash.sha256.hmacBytes(key, data)` | `Hash.sha256.hmac(key, data)` (hex, like `data.hmac(…)`) |
+| `TuiTheme(error: …)`, `theme.error` | `TuiTheme(danger: …)`, `theme.danger` (as `ConsoleTheme` names it) |
 
 #### Faster
 

@@ -181,7 +181,7 @@ final class Span {
 ///
 /// {@category CLI}
 final class TuiTheme {
-  final Style? _text, _muted, _accent, _selected, _focused, _borderStyle, _success, _warning, _error;
+  final Style? _text, _muted, _accent, _selected, _focused, _borderStyle, _success, _warning, _danger;
   final Border? _border;
   final String? _scrollTrack, _scrollThumb, _fill, _empty, _head, _checked, _unchecked, _pointer;
   final List<String>? _frames;
@@ -195,7 +195,7 @@ final class TuiTheme {
     Style? borderStyle,
     Style? success,
     Style? warning,
-    Style? error,
+    Style? danger,
     Border? border,
     String? scrollTrack,
     String? scrollThumb,
@@ -214,7 +214,7 @@ final class TuiTheme {
        _borderStyle = borderStyle,
        _success = success,
        _warning = warning,
-       _error = error,
+       _danger = danger,
        _border = border,
        _scrollTrack = scrollTrack,
        _scrollThumb = scrollThumb,
@@ -246,7 +246,7 @@ final class TuiTheme {
 
   Style get success => _success ?? const Style(fg: Color.green);
   Style get warning => _warning ?? const Style(fg: Color.yellow);
-  Style get error => _error ?? const Style(fg: Color.red);
+  Style get danger => _danger ?? const Style(fg: Color.red);
 
   /// The glyphs a [Box] draws with unless it names its own.
   Border get border => _border ?? Border.rounded;
@@ -280,7 +280,7 @@ final class TuiTheme {
     borderStyle: _borderStyle ?? base._borderStyle,
     success: _success ?? base._success,
     warning: _warning ?? base._warning,
-    error: _error ?? base._error,
+    danger: _danger ?? base._danger,
     border: _border ?? base._border,
     scrollTrack: _scrollTrack ?? base._scrollTrack,
     scrollThumb: _scrollThumb ?? base._scrollThumb,
