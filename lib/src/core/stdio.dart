@@ -81,11 +81,12 @@ abstract final class Io {
     return Isolate.run(() => stdin.readLineSync(encoding: encoding));
   }
 
-  /// Resets all custom I/O overrides.
+  /// Resets all custom I/O overrides, [color] included.
   static void reset() {
     _out = null;
     _err = null;
     input = null;
+    _color = null;
   }
 
   /// Whether ANSI styling is enabled: an assignment here, else off when [out] is redirected or

@@ -166,7 +166,6 @@ void main() {
 
     tearDown(() {
       Io.reset();
-      Io.color = null;
       Console.level = LogLevel.info;
     });
 
@@ -236,10 +235,7 @@ void main() {
       Io.color = false;
     });
 
-    tearDown(() {
-      Io.reset();
-      Io.color = null;
-    });
+    tearDown(Io.reset);
 
     /// Feeds [lines] to prompts, then end-of-input.
     void feed(List<String> lines) {
@@ -1058,7 +1054,6 @@ void main() {
         ).show();
       } finally {
         Io.reset();
-        Io.color = null;
       }
       final widths = buf.toString().trimRight().split('\n').map((l) => l.runes.length).toSet();
       expect(widths.length, equals(1));
@@ -1139,7 +1134,6 @@ void main() {
 
     tearDown(() {
       Io.reset();
-      Io.color = null;
       Env.set('NO_COLOR', '');
     });
 
@@ -1311,7 +1305,6 @@ void main() {
     });
     tearDown(() {
       Io.reset();
-      Io.color = null;
       Console.level = LogLevel.info;
       Env.set('TK_TEST_TOKEN', '');
     });
@@ -1355,7 +1348,6 @@ void main() {
         await Cli(name: 'app', values: [color, dry], handler: (_) {}).run(['--completion', 'bash']);
       } finally {
         Io.reset();
-        Io.color = null;
       }
       final text = out.toString();
       expect(text, matches(RegExp(r'-c, --\[no-\]color\s+Colour output \[default: true\]')));
@@ -1463,7 +1455,6 @@ void main() {
         await command.run(['--help']);
       } finally {
         Io.reset();
-        Io.color = null;
       }
       return out.toString();
     }
@@ -1563,7 +1554,6 @@ void main() {
       Console.level = LogLevel.warn;
       addTearDown(() {
         Io.reset();
-        Io.color = null;
         Console.level = LogLevel.info;
       });
       await Console.spin('spinning', () async {}, done: 'spun');
@@ -1589,10 +1579,7 @@ void main() {
       final err = StringBuffer();
       Io.err = err;
       Io.color = false;
-      addTearDown(() {
-        Io.reset();
-        Io.color = null;
-      });
+      addTearDown(Io.reset);
       Console.warn(StateError('went wrong'));
       expect(err.toString(), contains('Bad state: went wrong'));
     });
@@ -1686,7 +1673,6 @@ void main() {
         await command.run(['--help']);
       } finally {
         Io.reset();
-        Io.color = null;
       }
       return out.toString();
     }

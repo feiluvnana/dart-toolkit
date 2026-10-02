@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Audit VI
+
+#### Added
+
+- `Io.reset()` clears `Io.color` too, so a teardown is `tearDown(Io.reset)`.
+
 ### Audit V
 
 #### Upgrading

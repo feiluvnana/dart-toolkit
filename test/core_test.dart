@@ -175,6 +175,12 @@ void main() {
       expect(await Io.readLine(), isNull);
     });
 
+    test('Io.reset clears the color override too', () {
+      Io.color = true;
+      Io.reset();
+      expect(Io.colorOverride, isNull);
+    });
+
     test('Env.load parses keys, values, quotes, and comments', () {
       final sample = '''
 # Comments should be ignored
