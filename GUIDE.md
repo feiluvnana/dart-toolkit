@@ -399,7 +399,7 @@ final file = dir / 'config.json';
 'AIR / Farewell'.filename;                // one safe component: 'AIR _ Farewell'; '..' → '__'
 
 file.name; file.stem; file.ext; file.parent; file.segments;
-file.normalized; file.absolute; file.relativeTo(dir); file.withExt('yaml'); file.sanitized;
+file.normalized; file.absolute; file.relativeTo(dir); file.relativeTo(); file.withExt('yaml'); file.sanitized;
 
 await file.exists(); await file.size(); await file.modified();
 await file.olderThan(1.h);                // true when missing

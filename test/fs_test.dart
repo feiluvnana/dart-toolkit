@@ -21,6 +21,7 @@ void main() {
       expect(Path('x/y').isAbsolute, isFalse);
       expect(Path('x/y').absolute, Path.current / 'x' / 'y');
       expect(f.relativeTo(dir), Path(p.join('a', 'song.mp3')));
+      expect((Path.current / 'x' / 'y').relativeTo(), Path(p.join('x', 'y')));
       expect(f.withExt('flac').name, 'song.flac');
       expect(f.withExt('.flac').name, 'song.flac');
       expect(f.withExt('').name, 'song');

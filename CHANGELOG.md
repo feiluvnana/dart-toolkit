@@ -16,6 +16,7 @@
 - `Uri.name`: the last path segment, as `Path.name` — `dir / u.name`, not `u.pathSegments.last`
   (which throws on a bare host).
 - `Doc.html(text, url: …)`: links resolve against a saved page's address from the facade.
+- `path.relativeTo()` with no argument is relative to the working directory.
 
 ### Audit V
 

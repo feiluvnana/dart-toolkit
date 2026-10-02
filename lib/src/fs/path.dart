@@ -95,8 +95,8 @@ extension type const Path(String path) implements String {
   /// This path made absolute against the working directory, and normalized.
   Path get absolute => Path(p.normalize(p.absolute(path)));
 
-  /// This path relative to [from].
-  Path relativeTo(String from) => Path(p.relative(path, from: from));
+  /// This path relative to [from], else to the working directory.
+  Path relativeTo([String? from]) => Path(p.relative(path, from: from));
 
   /// This path with its extension replaced by [ext], with or without the dot; `''` removes it.
   Path withExt(String ext) => Path(p.setExtension(path, ext.isEmpty || ext.startsWith('.') ? ext : '.$ext'));

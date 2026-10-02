@@ -58,7 +58,7 @@ Future<void> find(CliContext ctx) async {
 
   final files = await Path.current.glob(glob).toList();
   final sized = Table.rows(
-    await files.parallelize((f) async => {'bytes': await f.size(), 'file': f.relativeTo(Path.current)}).rights.toList(),
+    await files.parallelize((f) async => {'bytes': await f.size(), 'file': f.relativeTo()}).rights.toList(),
   );
 
   if (sized.isEmpty) return Console.warn('nothing matched $glob');
@@ -112,7 +112,7 @@ Future<void> peek(CliContext ctx) async {
 
 /// Type to filter, arrows to move, Enter prints the path; the picker draws on the terminal, not stdout.
 Future<void> pick(CliContext ctx) async {
-  final files = [for (final f in await Path.current.glob(ctx(pattern)).toList()) f.relativeTo(Path.current)]..sort();
+  final files = [for (final f in await Path.current.glob(ctx(pattern)).toList()) f.relativeTo()]..sort();
   final choice = Choice(filter: true);
   final path = await Tui.inline<String?>(
     null,
