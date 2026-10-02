@@ -202,7 +202,9 @@ final class ChromeClient implements Client {
   final Semaphore _permits;
   final Queue<ChromePage> _free = Queue();
   final Set<ChromePage> _pages = {};
-  final Map<int, Completer<Map<String, Object?>>> _calls = {};
+
+  /// Calls awaiting an answer, with the method each one called, for its error.
+  final Map<int, (Completer<Map<String, Object?>>, String)> _calls = {};
   final Map<String, StreamController<_Cdp>> _sessions = {};
 
   /// Browser-level events (downloads), which belong to no tab.
@@ -433,7 +435,15 @@ final class ChromeClient implements Client {
   /// never starves a crawl; navigated to [url] when given.
   Future<ChromePage> open([Uri? url, ChromeWait? until]) async {
     final page = await _tab();
-    if (url != null) await page.goto(url, until: until);
+    if (url != null) {
+      try {
+        await page.goto(url, until: until);
+      } catch (_) {
+        // The caller never gets the tab to close.
+        await page.close();
+        rethrow;
+      }
+    }
     return page;
   }
 
@@ -584,6 +594,18 @@ final class ChromeClient implements Client {
     _sessions[tab.session] = StreamController<_Cdp>.broadcast();
     final page = ChromePage._(this, tab);
     _pages.add(page);
+    try {
+      await _setUp(page, tab);
+    } catch (_) {
+      await page.close();
+      rethrow;
+    }
+    return page;
+  }
+
+  Future<void> _setUp(ChromePage page, _Tab tab) async {
+    // Not awaited: it only lets a crash be heard, and calls keep their order.
+    unawaited(_call('Inspector.enable', null, tab).then((_) {}, onError: (Object _) {}));
     await _call('Page.enable', null, tab);
     await _call('Network.enable', null, tab);
     await _call('Page.setLifecycleEventsEnabled', {'enabled': true}, tab);
@@ -593,7 +615,6 @@ final class ChromeClient implements Client {
     await _call('Target.setAutoAttach', ChromePage._attach, tab);
     final tree = await _call('Page.getFrameTree', null, tab);
     page._frame = ((tree['frameTree'] as Map?)?['frame'] as Map?)?['id'] as String? ?? '';
-    return page;
   }
 
   /// Applies [_device] and stealth to a new tab. Locale and timezone are tried, not required:
@@ -694,7 +715,7 @@ final class ChromeClient implements Client {
     }
     final id = ++_nextId;
     final completer = Completer<Map<String, Object?>>();
-    _calls[id] = completer;
+    _calls[id] = (completer, method);
     _socket.add(jsonEncode({'id': id, 'method': method, 'params': ?params, 'sessionId': ?tab?.session}));
     final limit = timeout ?? _timeout;
     return completer.future.timeout(
@@ -712,10 +733,10 @@ final class ChromeClient implements Client {
       _ => <String, Object?>{},
     };
     if (message['id'] case final int id) {
-      final completer = _calls.remove(id);
+      final (completer, method) = _calls.remove(id) ?? (null, '');
       if (completer == null || completer.isCompleted) return;
       if (message['error'] case final Map<String, Object?> error) {
-        return completer.completeError(ClientException('${error['message'] ?? error}'));
+        return completer.completeError(ClientException('$method: ${error['message'] ?? error}'));
       }
       return completer.complete((message['result'] as Map<String, Object?>?) ?? const {});
     }
@@ -723,8 +744,14 @@ final class ChromeClient implements Client {
     if (message['sessionId'] case final String id) {
       final session = _sessions[id];
       if (session != null && !session.isClosed) session.add(event);
-    } else if (!_browser.isClosed) {
-      _browser.add(event);
+    } else {
+      // A tab closed under us (by its own script, or a person) leaves the pool with it.
+      if (event.method == 'Target.detachedFromTarget') {
+        for (final page in [..._pages]) {
+          if (page._tab.session == event.params['sessionId']) unawaited(page.close());
+        }
+      }
+      if (!_browser.isClosed) _browser.add(event);
     }
   }
 
@@ -735,7 +762,7 @@ final class ChromeClient implements Client {
   }
 
   void _abort() {
-    for (final completer in _calls.values.toList()) {
+    for (final (completer, _) in _calls.values.toList()) {
       if (!completer.isCompleted) completer.completeError(const ClientException('The browser disconnected'));
     }
     _calls.clear();

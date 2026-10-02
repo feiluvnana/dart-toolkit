@@ -81,6 +81,15 @@
   app.
 - A `Grid` with a `0` in `widths` threw on a terminal narrower than its gaps.
 - `Gauge(done / total)` with nothing to do (`0 / 0`) drew a full bar.
+- A ^C or SIGHUP reaching the shell a launched Chrome runs under ended its wait early: it
+  erased the profile and killed the watcher while Chrome kept running, orphaned. It now waits
+  until Chrome is gone.
+- `ChromeClient.open(url)` and `page(url, …)` leaked the tab when the navigation failed (a bad
+  host in a loop piled up tabs); a tab whose set-up failed leaked the same way.
+- A pooled tab that crashed or was closed under the client (by its own `window.close()`, or a
+  person) went back to the pool and failed every request after; it now leaves the pool.
+- A page script that threw reported "Page script failed: Uncaught"; it now carries what was
+  thrown. A protocol error names the method that failed.
 
 #### Removed
 

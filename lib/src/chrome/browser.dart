@@ -64,6 +64,11 @@ watcher=$!
 exec 3<&-
 wait $chrome
 status=$?
+# A trapped signal ends `wait` early: wait again until Chrome itself is gone.
+while kill -0 $chrome 2>/dev/null; do
+  wait $chrome
+  status=$?
+done
 kill -KILL -- -$watcher || kill -KILL $watcher
 rm -rf "$scratch"
 exit $status

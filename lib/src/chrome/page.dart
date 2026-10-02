@@ -294,7 +294,9 @@ new Promise((resolve) => {
       'contextId': ?_context,
     }, timeout);
     if (result['exceptionDetails'] case final Map<String, Object?> thrown) {
-      throw ClientException('Page script failed: ${thrown['text'] ?? thrown}');
+      // `text` is only "Uncaught"; what was thrown, and where, is in its description.
+      final what = (thrown['exception'] as Map?)?['description'] ?? thrown['text'] ?? thrown;
+      throw ClientException('Page script failed: $what');
     }
     return (result['result'] as Map<String, Object?>?)?['value'];
   }
@@ -908,6 +910,9 @@ new Promise((resolve) => {
           _route(event, _tab);
         case 'Page.javascriptDialogOpening' when _parent == null:
           unawaited(_dialog(params));
+        case 'Inspector.targetCrashed' when _parent == null:
+          // A crashed tab answers nothing again: not one for the pool.
+          unawaited(close());
         case 'Page.lifecycleEvent':
           if (params['name'] != _want) return;
           // Not a subframe's event, nor a late one from the previous document.

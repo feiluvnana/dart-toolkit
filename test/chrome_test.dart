@@ -661,6 +661,85 @@ Future<void> main() async {
       expect(await _eventually(() => !Directory(profile).parent.existsSync()), isTrue, reason: 'the profile is left');
     }, skip: absent ?? (Platform.isWindows ? 'Windows has no reaper' : null));
 
+    test('^C to the reaper leaves Chrome and its profile to the watcher', () async {
+      final dir = await Directory.systemTemp.createTemp('tk_reaper_int_');
+      addTearDown(() => dir.delete(recursive: true));
+      final marker = '--tk-reaper-int-${DateTime.now().microsecondsSinceEpoch}';
+      final script = File('${dir.path}/child.dart')
+        ..writeAsStringSync('''
+import 'package:dart_toolkit/chrome.dart';
+Future<void> main() async {
+  await ChromeClient.launch(tabs: 1, args: ['$marker']);
+  print('ready');
+  await Future<void>.delayed(const Duration(minutes: 5));
+}
+''');
+      final child = await Process.start(Platform.resolvedExecutable, [
+        '--packages=${Directory.current.path}/.dart_tool/package_config.json',
+        script.path,
+      ]);
+      addTearDown(() => child.kill(ProcessSignal.sigkill));
+      final ready = await child.stdout.transform(utf8.decoder).any((out) => out.contains('ready')).timeout(60.s);
+      expect(ready, isTrue);
+      final [(_, command)] = await _browsers(marker);
+      final profile = RegExp(r'--user-data-dir=(\S+)').firstMatch(command)![1]!;
+      // The reaper is the shell the program started; its watcher is a fork with the same line.
+      final ps = await Process.run('ps', ['-Ao', 'pid=,ppid=,command=']);
+      final shell = [
+        for (final line in LineSplitter.split('${ps.stdout}'))
+          if (line.trim().split(RegExp(r'\s+')) case [
+            final id,
+            final parent,
+            ...,
+          ] when line.contains(marker) && line.contains('/bin/sh') && int.parse(parent) == child.pid)
+            int.parse(id),
+      ].single;
+
+      Process.killPid(shell, ProcessSignal.sigint);
+      await Future<void>.delayed(1.s);
+      expect(Directory(profile).existsSync(), isTrue, reason: 'the profile was erased under a running Chrome');
+      child.kill(ProcessSignal.sigkill);
+      expect(await _eventually(() async => (await _browsers(marker)).isEmpty), isTrue, reason: 'Chrome outlived it');
+    }, skip: absent ?? (Platform.isWindows ? 'Windows has no reaper' : null));
+
+    test('a tab whose navigation fails is closed, and a dead pooled tab is not reused', () async {
+      final marker = '--tk-tabs-${DateTime.now().microsecondsSinceEpoch}';
+      final own = await ChromeClient.launch(tabs: 1, args: [marker]);
+      addTearDown(own.close);
+      final [(_, command)] = await _browsers(marker);
+      final profile = RegExp(r'--user-data-dir=(\S+)').firstMatch(command)![1]!;
+      final port = File('$profile/DevToolsActivePort').readAsLinesSync().first;
+      Future<List<Map<String, Object?>>> pages() async => [
+        for (final t in (await Uri.parse('http://127.0.0.1:$port/json/list').get()).json.list)
+          if (t['type'].raw == 'page') (t.raw as Map).cast<String, Object?>(),
+      ];
+
+      final before = (await pages()).length;
+      for (var i = 0; i < 3; i++) {
+        await expectLater(
+          own.page(Uri.parse('http://nonexistent.invalid/'), (p) => 0),
+          throwsA(isA<ClientException>()),
+        );
+      }
+      expect((await pages()).length, before, reason: 'a failed open() leaked its tab');
+
+      expect((await own.get(base.resolve('/rendered'))).statusCode, 200);
+      for (final t in await pages()) {
+        if (t['url'] != 'about:blank') await Uri.parse('http://127.0.0.1:$port/json/close/${t['id']}').get();
+      }
+      await Future<void>.delayed(300.ms);
+      expect((await own.get(base.resolve('/rendered'))).statusCode, 200, reason: 'the closed tab was pooled again');
+    }, skip: absent ?? (Platform.isWindows ? 'reads the command line with ps' : null));
+
+    test('a page script error says what it threw', () async {
+      final page = await browser.open();
+      addTearDown(page.close);
+      await expectLater(
+        page.eval('throw new Error("boom")'),
+        throwsA(isA<ClientException>().having((e) => e.message, 'message', contains('boom'))),
+      );
+    }, skip: absent);
+
     test('the JSON behind the page comes back instead of the DOM', () async {
       final page = await browser.open(base.resolve('/api-page'));
       final res = await page.waitForResponse('/api/items', () => page.click('#more'));
