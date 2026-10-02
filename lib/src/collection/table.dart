@@ -193,9 +193,9 @@ final class Table {
   /// The rows as a query.
   Sequence<Row> get sequence => rows.sequence;
 
-  int get length => rows.length;
-  bool get isEmpty => rows.isEmpty;
-  bool get isNotEmpty => rows.isNotEmpty;
+  int get length => _sourceRows.length;
+  bool get isEmpty => _sourceRows.isEmpty;
+  bool get isNotEmpty => _sourceRows.isNotEmpty;
 
   /// Every value of [column], top to bottom: `t['title']`. Rows are `t.rows[i]`.
   List<Object?> operator [](String column) {
@@ -535,7 +535,7 @@ final class Table {
   List<Row> toJson() => rows;
 
   @override
-  String toString() => 'Table(${columns.length} columns, ${rows.length} rows)';
+  String toString() => 'Table(${columns.length} columns, $length rows)';
 }
 
 /// The groups of a [Table.groupBy]; each fold returns a table of the keys plus the result.
