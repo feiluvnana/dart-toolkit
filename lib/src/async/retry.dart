@@ -1,19 +1,19 @@
 part of '../../async.dart';
 
-/// Runs [action] up to [attempts] times, waiting [delay] × [backoff]ⁿ between tries.
+/// Runs [action], trying again up to [retries] more times, waiting [delay] × [backoff]ⁿ between tries.
 ///
 /// [delay] is jittered by ±25 % unless [jitter] is false and capped at [maxDelay]. [when]
 /// limits which errors are retried (default: everything, `Error`s included); [onRetry] fires
 /// before each wait. The enclosing [Cancel.scope] aborts it, mid-backoff too.
 ///
 /// ```dart
-/// final data = await retry(fetchData, attempts: 3, delay: 200.ms);
+/// final data = await retry(fetchData, retries: 2, delay: 200.ms);
 /// ```
 ///
 /// {@category Concurrency}
 Future<T> retry<T>(
   FutureOr<T> Function() action, {
-  int attempts = 3,
+  int retries = 2,
   Duration delay = const Duration(milliseconds: 200),
   Duration? maxDelay,
   double backoff = 2.0,
@@ -21,7 +21,7 @@ Future<T> retry<T>(
   bool Function(Object error)? when,
   void Function(int attempt, Object error, Duration nextDelay)? onRetry,
 }) async {
-  final maxAttempts = max(attempts, 1);
+  final maxAttempts = max(retries, 0) + 1;
   final factor = backoff >= 1.0 ? backoff : 1.0;
   var attempt = 0;
   var current = delay;

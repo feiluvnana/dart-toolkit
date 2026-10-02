@@ -32,7 +32,7 @@ void main() {
               if (attempts == 2) stop.cancel('enough');
               throw StateError('again');
             },
-            attempts: 5,
+            retries: 4,
             delay: Duration.zero,
           );
         }, token: stop),
@@ -270,7 +270,7 @@ void main() {
           if (count < 3) throw StateError('attempt $count failed');
           return 'success';
         },
-        attempts: 4,
+        retries: 3,
         delay: 10.ms,
         backoff: 1.5,
         jitter: false,
@@ -291,7 +291,7 @@ void main() {
             count++;
             throw FormatException('always fail');
           },
-          attempts: 3,
+          retries: 2,
           delay: 5.ms,
         ),
         throwsA(isA<FormatException>()),
@@ -310,7 +310,7 @@ void main() {
             if (count == 1) throw ArgumentError('invalid arg');
             throw StateError('state error');
           },
-          attempts: 4,
+          retries: 3,
           delay: 5.ms,
           when: (e) => e is ArgumentError,
         ),
@@ -328,7 +328,7 @@ void main() {
           if (count < 2) throw Exception('fail');
           return 'success';
         },
-        attempts: 3,
+        retries: 2,
         delay: 5.ms,
       );
 
@@ -607,7 +607,7 @@ void main() {
           if (attemptCount < 3) throw StateError('retry me');
           return true;
         },
-        attempts: 4,
+        retries: 3,
         delay: 50.ms,
         maxDelay: 60.ms,
         backoff: 3.0,
@@ -935,7 +935,7 @@ void main() {
       const step = Duration(microseconds: 900);
       final waits = <Duration>[];
       await expectLater(
-        retry(() => throw StateError('x'), attempts: 3, delay: step, jitter: false, onRetry: (_, _, d) => waits.add(d)),
+        retry(() => throw StateError('x'), retries: 2, delay: step, jitter: false, onRetry: (_, _, d) => waits.add(d)),
         throwsStateError,
       );
       expect(waits, [step, step * 2]);

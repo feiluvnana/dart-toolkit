@@ -205,7 +205,7 @@ item fails only itself, a dead isolate is replaced, and cancel stops the item in
 ```dart
 final data = await retry(
   () => api.get().json,
-  attempts: 3, delay: 200.ms, maxDelay: 5.s,
+  retries: 2, delay: 200.ms, maxDelay: 5.s,
   when: (e) => e is! FormatException,
   onRetry: (n, e, next) => Console.warn('attempt $n failed; waiting $next'),
 );                                              // the backoff ends on cancel
