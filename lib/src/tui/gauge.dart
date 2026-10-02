@@ -1,10 +1,5 @@
 part of '../../tui.dart';
 
-/// Where a task stands.
-///
-/// {@category CLI}
-enum TaskState { queued, running, done, failed, skipped }
-
 /// A moment of a task's progress, as a [Gauge] `bar:` builder sees it: counts, bytes, timing,
 /// and [bar] to draw it.
 ///

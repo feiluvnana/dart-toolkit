@@ -47,3 +47,8 @@ abstract interface class BatchProgress {
   /// The update that triggered this event.
   TaskProgress get current;
 }
+
+/// Where a task stands, in a `TaskBoard` or a `Gauge`.
+///
+/// {@category Terminal}
+enum TaskState { queued, running, done, failed, skipped }

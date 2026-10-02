@@ -12,6 +12,8 @@ import 'dart:math';
 
 import 'core.dart';
 
+export 'core.dart' show TaskState;
+
 part 'src/cli/styling.dart';
 part 'src/cli/command.dart';
 part 'src/cli/completion.dart';

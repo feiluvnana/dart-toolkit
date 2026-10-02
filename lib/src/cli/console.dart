@@ -207,11 +207,6 @@ final class SpinnerView extends ConsoleView {
   double? get fraction => null;
 }
 
-/// Where a task in a [TaskBoard] stands.
-///
-/// {@category Terminal}
-enum TaskState { queued, running, done, failed, skipped }
-
 /// One task of a [TaskBoard], for its `task:` builder.
 ///
 /// [task] is the event itself: a download's is a `DownloadProgress`, with its `url` and

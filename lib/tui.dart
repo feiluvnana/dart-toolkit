@@ -22,6 +22,8 @@ import 'dart:isolate';
 
 import 'core.dart';
 
+export 'core.dart' show TaskState;
+
 part 'src/tui/app.dart';
 part 'src/tui/canvas.dart';
 part 'src/tui/controls.dart';

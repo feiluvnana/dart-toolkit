@@ -115,6 +115,13 @@ void main() {
     });
   });
 
+  group('TaskState', () {
+    test('is one enum for cli and tui, so both imports can name it', () {
+      expect(TaskState.values.map((s) => s.name), ['queued', 'running', 'done', 'failed', 'skipped']);
+      expect(const Progress(state: TaskState.done).state, TaskState.done);
+    });
+  });
+
   group('TuiTheme tokens', () {
     test('TuiTheme exposes border, borderStyle, frames, fill, empty, head', () {
       const theme = TuiTheme(

@@ -14,6 +14,12 @@
 - A sitemap's `<loc>` is HTML-decoded only when it holds `&` or `<`: 50k plain URLs 9 → 2 ms.
 - `glob` no longer keeps every pattern's `RegExp` forever; one compile per call, before the walk.
 
+#### Fixed
+
+- `TaskState` was declared in both `cli` and `tui`, so a file importing the barrel and
+  `tui.dart` could not name it (ambiguous import). It is now one enum in `core`, re-exported by
+  both.
+
 #### Removed
 
 - `Path.readDoc`/`readJson`/`readYaml`/`readToml`/`readIni`/`readHtml`/`readXml` →
