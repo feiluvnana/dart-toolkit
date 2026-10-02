@@ -265,9 +265,9 @@ sales
     .where((r) => r.number('amount') > 100)
     .orderBy('region')
     .thenBy('amount', descending: true)
+    .take(20)                                     // straight after orderBy: selects, not a full sort
     .select(['region', 'amount'])
     .derive('k', (r) => r.number('amount') / 1000)
-    .take(20)                                     // after orderBy: selects, not a full sort
     .show();
 sales.groupBy('region').sum('amount');
 sales.pivot(rows: 'region', column: 'month', value: 'amount', agg: Agg.sum);
