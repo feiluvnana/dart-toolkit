@@ -1,6 +1,6 @@
 ---
 name: optimize
-description: Thoroughly audit and optimize dart-toolkit in every aspect (performance first, then bloat, API brevity, docs, consistency, bugs, platform parity) in three gated rounds. Use when the user types /optimize or asks for a full optimization or audit pass of the library. Module names after the command limit the scope, e.g. "/optimize http formats".
+description: Thoroughly audit and optimize dart-toolkit in every aspect (performance first, then bloat, API brevity, docs, consistency, bugs, platform parity) in three gated rounds. Use when the user types /optimize or asks for a full optimization or audit pass of the library. Module names after the command limit the scope, e.g. "/optimize http formats"; "--auto" runs without checkpoints.
 ---
 
 # /optimize
@@ -9,9 +9,9 @@ A three-round audit → fix → verify pass over dart-toolkit. You are the **lea
 read-only audit subagents, apply the accepted fixes yourself, and gate every round on the
 release checks. Where this skill and `CONVENTIONS.md` disagree, `CONVENTIONS.md` wins.
 
-> The Claude Code copy (`.claude/skills/optimize/SKILL.md`) is the same skill apart from **Scope** and **Tools**. Change both together.
+> The Claude Code copy (`.claude/skills/optimize/SKILL.md`) is the same skill apart from **Arguments** and **Tools**. Change both together.
 
-**Scope:** the module names typed after `/optimize`. With none, audit every module.
+**Arguments** (typed after `/optimize`): module names limit the scope (with none, every module is audited); `--auto` skips the checkpoints (§0).
 
 ## Tools
 
@@ -29,6 +29,7 @@ message is the report. Never read a whole file when a line range will do.
 
 | Rule | What it means |
 |---|---|
+| **Checkpoints** | Unless `--auto` was passed, **stop and wait for the user** after every step marked ⏸: show the checkpoint report, then end your turn. Continue only on the user's reply: *go*; *drop* / *add* items; *redo* with a note; or *stop*. The user may add items rejected earlier: they override a skeptic's verdict. With `--auto`, print the same report and carry on. Step 0's "tree not clean" stop applies in both modes. |
 | **Priority** | `CONVENTIONS.md` order: **speed > call-site brevity > everything else**. Speed means measured startup, throughput or memory (§1.1). A shorter spelling that costs measurable time loses. Pruning counts as brevity. An addition must delete more at call sites than it adds to the surface, and must cost no measurable startup. Speculative features are rejected. |
 | **Clean cuts** | No `@Deprecated`, shims or aliases. A rename or removal updates every call site in `lib/ bin/ tool/ test/` and every doc in the same commit. |
 | **Reports stay in chat** | No `AUDIT_*.md` or other report files. The decision record (accepted, and rejected with reasons) goes into the gate's commit body, changes go into `CHANGELOG.md` (Unreleased), and new rules go into `CONVENTIONS.md` with their *why*. |
@@ -90,6 +91,7 @@ Changing an `extern "C"` signature bumps both `tk_version()` in `native/src/lib.
    its own commit.
 3. If `native/prebuilt/<host>/` is missing or older than `native/src/`, run **native**.
 4. `git tag -f checkpoint-step0` (local only; tags are never pushed).
+5. ⏸ **Checkpoint:** show the scope, the known failures, and any baseline fix commits.
 
 ## 3. One audit round
 
@@ -115,7 +117,11 @@ Changing an `extern "C"` signature bumps both `tk_version()` in `native/src/lib.
    - *bar*: does it clear §0? Reject speculative features, churn without a measured or
      call-site gain, and anything that already exists under another name.
    Keep a finding only if **both** uphold it. Record the rest as `REJECTED (<lens>): <title>: <reason>`.
-4. **Repeat** each round on HEAD after its gate, with the grown skip list, until a pass confirms
+4. ⏸ **Checkpoint (after every audit pass):** show a table of the confirmed findings, numbered
+   and ranked (tag, title, `path:line`, effect, files touched), the items you would accept
+   under the gate's cap, and the rejected findings with reasons. Implement only what the user
+   approves.
+5. **Repeat** each round on HEAD after its gate, with the grown skip list, until a pass confirms
    nothing new or applies nothing. Round 1 runs at most 3 passes, Round 2 at most 2, and Round 3
    once.
 
@@ -145,7 +151,11 @@ Changing an `extern "C"` signature bumps both `tk_version()` in `native/src/lib.
    commit.
 6. **Close.** Run **gate**, then **startup A/B** on every module touched. Then run
    `git commit --allow-empty -m "chore(gate-1): audit record"` with the accepted and
-   `REJECTED …` lines in its body, push, and `git tag -f checkpoint-gate1`.
+   `REJECTED …` lines in its body.
+7. ⏸ **Checkpoint (after every implementation pass):** show the commits (`git log --oneline
+   checkpoint-<prev>..`), the items rejected by rollback, the gate results, and the A/B deltas.
+   On *go*, push, `git tag -f checkpoint-gate1`, and start the next audit pass. On *revert N*,
+   revert that commit, re-run **gate**, and show the checkpoint again.
 
 ## 6. Round 2: Consistency (2 dimensions, on HEAD after Gate 1)
 
@@ -156,12 +166,13 @@ Changing an `extern "C"` signature bumps both `tk_version()` in `native/src/lib.
 
 ## 7. Gate 2: Harmonize
 
-Follow Gate 1 steps 1, 5 and 6, committing each item as `refactor: …`. In addition:
+Follow Gate 1 steps 1, 5, 6 and 7, committing each item as `refactor: …`. In addition:
 
 - After a rename, `git grep` the old name across the repo (`*.md` and dartdoc included). Zero
   hits may remain outside `CHANGELOG.md`.
 - Run **smoke** after every `cli`/`tui` item.
-- Close with `chore(gate-2): audit record`, push, and `git tag -f checkpoint-gate2`.
+- Close with `chore(gate-2): audit record`, then the step 7 checkpoint. On *go*, push and
+  `git tag -f checkpoint-gate2`.
 
 ## 8. Round 3: Hardening (2 dimensions, then fix and test)
 
@@ -170,8 +181,9 @@ Follow Gate 1 steps 1, 5 and 6, committing each item as `refactor: …`. In addi
 | `BUG` | **Cancellation & errors:** cancelling the scope during each async API in `async`, `http`, `process` and `chrome` leaves no timer, isolate, process or socket open; worker errors rethrow with the original stack; no leaks on error paths; edge inputs (empty, unicode, CRLF, huge) don't crash or mis-parse. Each fix gets a test that proves it. |
 | `BUG` | **Platform parity:** POSIX (runnable here) covers the pipefail exit code, signal forwarding and CRLF input. Windows (not runnable on macOS) is checked with unit tests on the *built* command line and path logic: `cmd /d /c` for built-ins, refusal of unsafe `cmd` args, `\` separators, and atomic replace while a file is locked. Label anything not executed as `unverified-on-windows` in the commit body. |
 
-Commit each fix as `fix: …`. Finish when **gate** passes (apart from *known failures*), the tree
-is clean, and `master` is pushed.
+Round 3 is an audit pass (§3, with its ⏸ checkpoint), then the fixes, each committed as
+`fix: …`, then the Gate 1 step 7 ⏸ checkpoint before the push. Finish when **gate** passes
+(apart from *known failures*), the tree is clean, and `master` is pushed.
 
 ## 9. Finish
 
