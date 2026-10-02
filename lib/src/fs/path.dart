@@ -190,11 +190,12 @@ extension type const Path(String path) implements String {
   };
 
   /// This path with invalid filesystem characters replaced, and control characters removed,
-  /// in every component; separators survive. For one component use [StringPathExtensions.filename].
+  /// in every component; separators survive (on POSIX `\` is a name character, not one). For
+  /// one component use [StringPathExtensions.filename].
   Path get sanitized {
-    final useSlash = !path.contains(r'\');
+    final useSlash = !Platform.isWindows || !path.contains(r'\');
     final root = p.rootPrefix(path);
-    final rawParts = path.substring(root.length).split(RegExp(r'[/\\]'));
+    final rawParts = path.substring(root.length).split(Platform.isWindows ? RegExp(r'[/\\]') : '/');
     final parts = [
       for (final part in rawParts)
         part
@@ -535,7 +536,16 @@ extension type const Path(String path) implements String {
       final isDir = FileSystemEntity.isDirectorySync(path);
       // A file is watched through its folder: an atomic write renames a new file over it,
       // which ends a watch on the file itself.
-      final watched = isDir ? asDir.watch(recursive: true) : Directory(p.dirname(path)).watch();
+      final folder = isDir ? path : p.dirname(path);
+      if (!isDir && !FileSystemEntity.isDirectorySync(folder)) {
+        // A watch on a missing folder never fires and never ends: say so instead.
+        events = const Stream<FileSystemEvent>.empty().listen(null);
+        out
+          ..addError(PathNotFoundException(folder, const OSError('No such file or directory', 2), 'Cannot watch'))
+          ..close();
+        return;
+      }
+      final watched = isDir ? asDir.watch(recursive: true) : Directory(folder).watch();
       events = watched.listen(
         (e) {
           final hit = [

@@ -44,6 +44,10 @@
   `Io.truncate` keeps or cuts it whole.
 - `humanBytes` and `humanized` left a negative value unscaled (`-1536 B`, `-90000ms`); they now
   read `-1.5 KB` and `-1m 30s`.
+- `sanitized` split a POSIX name on `\`, so `r'a\b'` became folder `a` and file `b`; `\` is a
+  separator only on Windows.
+- `changes()` on a file in a missing folder waited forever; the stream now fails with
+  `PathNotFoundException`.
 
 #### Removed
 

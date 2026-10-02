@@ -641,6 +641,19 @@ void main() {
       expect('/a?b/c'.path.sanitized, '/a_b/c');
     });
 
+    test('sanitized keeps a POSIX backslash inside its name', () {
+      expect(r'/x/a\b'.path.sanitized, Platform.isWindows ? r'/x/a/b' : r'/x/a\b');
+      if (!Platform.isWindows) expect(r'/x/a\b'.path.sanitized.name, r'a\b');
+    });
+
+    test('changes under a missing folder fails instead of waiting forever', () async {
+      final missing = '${Directory.systemTemp.path}/tk_no_such_dir_$pid/f.txt'.path;
+      await expectLater(
+        missing.changes().first.timeout(const Duration(seconds: 2)),
+        throwsA(isA<FileSystemException>()),
+      );
+    });
+
     test('olderThan is true for a stale file and for no file at all', () async {
       final cache = root / 'cache.json';
       expect(await cache.olderThan(const Duration(hours: 1)), isTrue);
