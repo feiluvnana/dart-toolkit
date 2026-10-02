@@ -11,14 +11,10 @@ void main() {
       final Either<String, int> left = Left('error');
 
       expect(right is Right, isTrue);
-      expect(right.isRight, isTrue);
-      expect(right.isLeft, isFalse);
       expect(right.rightOrNull, equals(42));
       expect(right.leftOrNull, isNull);
 
       expect(left is Left, isTrue);
-      expect(left.isLeft, isTrue);
-      expect(left.isRight, isFalse);
       expect(left.leftOrNull, equals('error'));
       expect(left.rightOrNull, isNull);
 

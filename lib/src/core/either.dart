@@ -20,12 +20,6 @@ sealed class Either<L, R> {
     Left<L, R>() => null,
   };
 
-  /// Whether this outcome is a failure [Left].
-  bool get isLeft => this is Left<L, R>;
-
-  /// Whether this outcome is a success [Right].
-  bool get isRight => this is Right<L, R>;
-
   /// The [Right] value, or throws the [Left] value with the trace it was caught with.
   R unwrap() => switch (this) {
     Right<L, R>(:final value) => value,
