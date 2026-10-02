@@ -236,7 +236,8 @@ Each of these was a silent failure.
 - **Every CLI failure is one line and a code:** 64 usage, 1 otherwise, 128+n signal; stack trace
   under `--verbose`.
 - **Nothing a signal must reach blocks the event loop;** a blocking prompt read runs on a helper isolate.
-- **Depth is bounded or walked on a stack.** Formats refuse nesting deeper than 1000; walks over
+- **Depth is bounded or walked on a stack.** YAML and TOML refuse nesting deeper than 1000; JSON, XML and
+  HTML parse any depth on a stack; walks over
   decoded data use a stack; tree walks recurse to a depth, then continue on a stack (a third faster,
   and 100 000 levels still parse). (*Why:* YAML flow collections overflowed at 4 000.)
 - **An unterminated construct is a `FormatException`,** never a hang. (*Why:* `[a: 1]` hung YAML.)
