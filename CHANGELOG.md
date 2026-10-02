@@ -15,6 +15,7 @@
 - `Io.reset()` clears `Io.color` too, so a teardown is `tearDown(Io.reset)`.
 - `Uri.name`: the last path segment, as `Path.name` — `dir / u.name`, not `u.pathSegments.last`
   (which throws on a bare host).
+- `Doc.html(text, url: …)`: links resolve against a saved page's address from the facade.
 
 ### Audit V
 

@@ -61,8 +61,8 @@ abstract final class Doc {
   /// Parses [text] as INI.
   static JsonDocument ini(String text) => text.ini;
 
-  /// Parses [text] as HTML.
-  static HtmlDocument html(String text) => HtmlDocument.parse(text);
+  /// Parses [text] as HTML; [url] is the page's address, which `links` resolve against.
+  static HtmlDocument html(String text, {Uri? url}) => HtmlDocument.parse(text, url: url);
 
   /// Parses [text] as XML.
   static XmlDocument xml(String text) => XmlDocument.parse(text);

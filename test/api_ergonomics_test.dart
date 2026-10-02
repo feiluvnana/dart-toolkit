@@ -41,6 +41,12 @@ void main() {
       expect(json.$(r'$.items[*].name').map((d) => d.to<String>()).toList(), ['A', 'B']);
     });
 
+    test('Doc.html(url:) resolves links against the page address', () {
+      final page = Doc.html('<a href="b/c">x</a>', url: 'https://a.com/dir/'.url);
+      expect(page.$('a').links.single.toString(), 'https://a.com/dir/b/c');
+      expect(Doc.html('<a href="b/c">x</a>').$('a').links.single.toString(), 'b/c');
+    });
+
     test('Doc.read takes a Path', () async {
       await Path.tempDir((dir) async {
         final f = dir / 'test.yaml';

@@ -364,7 +364,7 @@ e.table;         // a Table: repeated headers become Price_2, colspan/rowspan fi
   none (`attrOrNull` → `null`, `table` → empty); `texts`, `attrs`, `links` answer for all.
   `$x` returns `Nodes` (it can select attributes and text); `.elements` narrows.
 - `links` resolve against `<base href>`, itself resolved against the fetched URL (`res.html`
-  knows it; `HtmlDocument.parse(text, url: …)` takes it).
+  knows it; `Doc.html(text, url: …)` takes it).
 - **HTML parses as a browser reads it**: `<a>one<a>two` is two links; `/>` counts only in
   SVG/MathML; `<pre>` drops its first newline; legacy entities without `;` never decode inside an
   attribute before `=`/alphanumeric (`?a=1&lang=en` stays); SVG names keep their case. No foster
