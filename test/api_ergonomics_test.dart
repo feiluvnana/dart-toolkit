@@ -139,10 +139,10 @@ void main() {
     });
   });
 
-  group('Async parallel stream helper', () {
-    test('parallel unwraps results in order or completion', () async {
+  group('Async parallelize', () {
+    test('parallelize().unwrap() yields results in order', () async {
       final items = [1, 2, 3];
-      final squares = await items.parallel((x) => x * x, ordered: true).toList();
+      final squares = await items.parallelize((x) => x * x, ordered: true).unwrap().toList();
       expect(squares, [1, 4, 9]);
     });
   });
