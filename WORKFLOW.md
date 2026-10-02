@@ -1,8 +1,22 @@
 # Multi-Agent Audit & Modernization Workflow
 
-A three-round audit → fix → verify pipeline for one **Claude Code (Opus) lead session**. The lead
+A three-round audit → fix → verify pipeline for one **lead agent session** (Claude Code or
+Gemini/Antigravity). The lead
 spawns read-only audit subagents, applies the accepted fixes itself, and gates every round on
 the release checks. `CONVENTIONS.md` outranks this file; where they disagree, it wins.
+
+**Run it:** `/optimize` (all modules) or `/optimize http formats` (a subset), in either tool:
+
+| Tool | Entry point | Audit round runs as |
+|---|---|---|
+| Claude Code | `.claude/skills/optimize/SKILL.md` | the saved workflow `.claude/workflows/optimize-audit.js` (deterministic fan-out) |
+| Gemini / Antigravity (`agy`) | `.agents/skills/optimize/SKILL.md` | the lead spawning subagents by hand, following §3.1 |
+
+Both run the same audit (§3.1): one read-only finder per dimension × module group, a dedupe,
+then two skeptics on each finding (*is it real*, *does it clear the bar*). The lead applies what
+survives. `optimize-audit.js` mirrors §3.1, §4, §6 and §8, so edit them together. Rounds repeat until a pass confirms nothing new.
+Earlier `REJECTED` lines in audit-record commits are passed in as `skip`, so a re-run never
+re-proposes them.
 
 ---
 
@@ -10,7 +24,7 @@ the release checks. `CONVENTIONS.md` outranks this file; where they disagree, it
 
 | Rule | What it means |
 |---|---|
-| **Priority** | `CONVENTIONS.md` order: **call-site brevity > speed > everything else**. Pruning counts as brevity. An addition is accepted only if it deletes more at call sites than it adds to the surface. Speculative features are rejected. |
+| **Priority** | `CONVENTIONS.md` order: **speed > call-site brevity > everything else**. Speed means measured startup, throughput or memory (§1.1); a shorter spelling that costs measurable time loses. Pruning counts as brevity. An addition is accepted only if it deletes more at call sites than it adds to the surface, and costs no measurable startup. Speculative features are rejected. |
 | **Clean cuts** | No `@Deprecated`, shims or aliases. A rename or removal updates every call site in `lib/ bin/ tool/ test/` and every doc in the same commit. |
 | **Reports stay in chat** | Audit reports are subagent return values, never files. No `AUDIT_*.md`, no `.audits/`. The decision record (accepted + rejected-with-reason) goes into the gate's commit body; what changed goes into `CHANGELOG.md` (Unreleased); new rules go into `CONVENTIONS.md` with their *why*. |
 | **`bin/` is examples** | `bin/*.dart` are usage examples, not product. Smoke-test them; delete or merge duplicates freely. |
@@ -18,14 +32,17 @@ the release checks. `CONVENTIONS.md` outranks this file; where they disagree, it
 | **Commit & push** | Push at the end of each gate. Author `feiluvnana`, no `Co-Authored-By` trailer. Never bump `pubspec.yaml` version or move CHANGELOG `Unreleased`: the owner picks the version. |
 | **Co-worker** | Another agent may push to `master`. Before each gate and each push: `git fetch && git status`; if `origin/master` moved, rebase and re-run the gate. Never `reset --hard` or force-push. |
 
-### Tool mapping (Claude Code)
+### Tool mapping
 
-| Need | Use |
-|---|---|
-| Read-only audit subagent | `Agent` with `subagent_type: "Explore"`, `model: "sonnet"`, all of one round's agents in **one message** so they run concurrently |
-| Code search | `git grep -n` / Grep before any Read |
-| Reading code | `Read` with `offset`/`limit` (≤80 lines); never dump whole files |
-| Edits | `Edit` (the lead only; subagents never edit, commit, or touch git) |
+| Need | Claude Code | Gemini / Antigravity |
+|---|---|---|
+| Audit round | `Workflow({name: 'optimize-audit', args})` | parallel subagents (`invoke_subagent`, all in one call); if no subagent tool exists, run the finders yourself one after another |
+| Code search | `git grep -n` / Grep | `git grep -n` / `grep_search` |
+| Reading code | `Read` with `offset`/`limit` (≤80 lines) | `view_file` with a line range (≤80 lines) |
+| Edits | `Edit` | `replace_file_content` / `multi_replace_file_content` |
+
+Only the lead edits. Subagents never edit, commit, or touch git. Neither tool reads whole files
+when a range will do.
 
 ---
 
@@ -76,10 +93,9 @@ Runtime (throughput) changes need their own microbenchmark in the item's commit 
 
 A change to any `extern "C"` signature in `native/src/` bumps **both** `tk_version()` in
 `native/src/lib.rs` and `NativeLib._abi` in `lib/src/native/native.dart`. After a bump, every
-library in `native/prebuilt/*` reports the old ABI and is refused at load, so rebuild **all**
-shipped targets (`make native-all`, or each `make native RUST_TARGET=…` for the dirs present
-in `native/prebuilt/`). If a cross toolchain is missing, **do not commit the bump**: reject the
-item and say which target could not be built.
+library in `native/prebuilt/*` reports the old ABI and is refused at load. `native/prebuilt/`
+is gitignored (it ships through `.pubignore`), so rebuild the host target (`make native`) before
+testing, and add a CHANGELOG line saying the release must run `make native-all`.
 
 ---
 
@@ -110,9 +126,26 @@ items, under 150 lines, High/Medium only.** If nothing qualifies, return exactly
 
 Tags: `FEAT BLOAT PERF DOC DISC CONS BUG`.
 
+### 3.1 One audit round
+
+1. **Find.** One finder per *dimension × module group*, all in parallel. Groups:
+   `foundation` = core, collection, async, process, native, hash; `data` = formats, fs, http;
+   `surface` = cli, tui, chrome (+ `bin/`). The finder prompt is: the dimension's "look for"
+   text (§4, §6 or §8), the group's files, the bar (§0 priority), §3's schema and limits, and the
+   `skip` list. A `/optimize <modules>` run drops groups and modules that are out of scope.
+2. **Dedupe** by `file` + normalized title.
+3. **Verify.** Two skeptics per finding, in parallel, each defaulting to *reject* when unsure:
+   - *real*: open the cited lines and the blast radius. Is it true of the current code, and
+     does the fix work without breaking callers?
+   - *bar*: does it clear the §0 priority? Reject speculative features, churn without a
+     measured or call-site gain, and anything that already exists under another name.
+   A finding survives only if **both** uphold it.
+4. **Return** the confirmed findings (High first) and the rejected ones with reasons. Rejected
+   ones go into the gate's audit record as `REJECTED (<lens>): <title>: <reason>`.
+
 ---
 
-## 4. Round 1: Foundation audits (4 parallel subagents)
+## 4. Round 1: Foundation audits (4 dimensions × 3 groups)
 
 | # | Tag | Target | Look for |
 |---|---|---|---|
@@ -125,7 +158,8 @@ Tags: `FEAT BLOAT PERF DOC DISC CONS BUG`.
 
 1. **Triage.** Dedupe across the four reports. For each surviving item, **verify it yourself**
    (open the cited lines; subagents misread code). Drop anything that breaks a `CONVENTIONS.md`
-   rule. Rank by the priority rule and cap at **15** accepted items.
+   rule. Rank by the priority rule (measured `PERF` first, then `BLOAT`, then the rest) and cap at
+   **15** accepted items.
 2. **Batch A: deletions** (`BLOAT`, doc deletions). One item per commit, `refactor: …`.
 3. **Batch B: refactors and perf** (`PERF`). Run **native** and §1.3 if Rust changes, and
    **startup A/B** if imports change. Commit as `perf: …` with the measurement in the body.
@@ -140,7 +174,7 @@ Tags: `FEAT BLOAT PERF DOC DISC CONS BUG`.
 6. **Close.** Run **gate** and the **startup A/B** over every module touched. Write `git commit --allow-empty -m "chore(gate-1): audit record"` whose body lists accepted / rejected items with
    reasons. Push, then `git tag -f checkpoint-gate1`.
 
-## 6. Round 2: Design consistency (2 parallel subagents)
+## 6. Round 2: Design consistency (2 dimensions × 3 groups)
 
 The subagents audit **HEAD after Gate 1**, not the original code.
 
@@ -159,7 +193,7 @@ additions:
 - Run **smoke** after every `cli` or `tui` item.
 - Close with `chore(gate-2): audit record`, push, `git tag -f checkpoint-gate2`.
 
-## 8. Round 3: Hardening (lead does it, no subagents)
+## 8. Round 3: Hardening (audit with dimensions 3.1 and 3.2, then the lead fixes and tests)
 
 | Task | Done when |
 |---|---|

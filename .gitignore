@@ -25,3 +25,10 @@ Key BOX*
 output/
 out/
 dist/
+
+# Agent config: the /optimize skills and workflow are shared; worktrees and local settings are not
+.claude/*
+!.claude/skills/
+!.claude/workflows/
+.agents/*
+!.agents/skills/

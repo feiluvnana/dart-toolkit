@@ -2,8 +2,9 @@
 
 The package optimises for two things, in this order:
 
-1. **How little a script has to write.**
-2. **How fast it runs.**
+1. **How fast it runs.** Startup, throughput and memory, measured (§5).
+2. **How little a script has to write.** When the two conflict, speed wins: a shorter spelling that
+   costs measurable time loses to a longer one that does not.
 
 Coherence, documentation and feature count come after both. Each rule exists because an audit
 found the opposite; its *why* is that finding. What a release changed is in `CHANGELOG.md`.
