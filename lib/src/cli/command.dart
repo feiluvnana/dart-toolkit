@@ -201,7 +201,10 @@ extension OptionalArg<T extends Object> on Arg<T?> {
 /// A boolean option; `--dry=false` and `--no-dry` say false, and any other `=value` is a
 /// usage error, never a silent `true`.
 final class _Flag extends CliOption<bool> {
-  const _Flag(super.name, {super.description, super.abbr, super.env});
+  const _Flag(super.name, {super.description, super.abbr, super.env, bool or = false}) : _or = or;
+
+  @override
+  final bool _or;
 
   @override
   bool _parse(String raw) => switch (raw.toLowerCase()) {
@@ -209,9 +212,6 @@ final class _Flag extends CliOption<bool> {
     'false' || '0' || 'no' => false,
     _ => throw UsageException('Option "--$name" is a flag: it takes true or false, not "$raw".'),
   };
-
-  @override
-  bool get _or => false;
 
   @override
   bool get _isRequired => false;
@@ -223,10 +223,10 @@ final class _Flag extends CliOption<bool> {
   String get _hint => '';
 
   @override
-  CliOption<bool> env(String name) => _Flag(this.name, description: description, abbr: _abbr, env: name);
+  CliOption<bool> env(String name) => _Flag(this.name, description: description, abbr: _abbr, env: name, or: _or);
 
   @override
-  CliOption<bool> abbr(String letter) => _Flag(name, description: description, abbr: letter, env: _env);
+  CliOption<bool> abbr(String letter) => _Flag(name, description: description, abbr: letter, env: _env, or: _or);
 }
 
 /// An option: a flag, a string, an integer, one of a fixed set, or what a function returns.
@@ -341,6 +341,18 @@ final class Opt<T> extends CliOption<T> {
     required: required,
     join: join,
   );
+}
+
+/// A flag's default.
+///
+/// {@category CLI}
+extension FlagOr on CliOption<bool> {
+  /// The same flag, [value] when absent: `Opt.flag('color', 'Colour output').or(true)` is on
+  /// until `--no-color`, and `--help` shows it as `--[no-]color`.
+  CliOption<bool> or(bool value) => switch (this) {
+    final _Flag f => _Flag(f.name, description: f.description, abbr: f._abbr, env: f._env, or: value),
+    final Opt<bool> o => o._as(or: value),
+  };
 }
 
 /// What makes an [Opt]'s value guaranteed, so [CliContext.call] is non-nullable.
@@ -570,9 +582,10 @@ class CliCommand {
       if (_findOption(option.name) == option)
         (
           '${option._abbr != null && _findAbbr(option._abbr) == option ? '-${option._abbr}, ' : '    '}'
-              '--${option.name}${option._takesValue ? ' ${option._hint}' : ''}',
+              '--${option._takesValue || option._or != true ? '' : '[no-]'}${option.name}'
+              '${option._takesValue ? ' ${option._hint}' : ''}',
           // A flag's `false` default is what absence means; saying so is noise.
-          _describe(option, fallback: option._takesValue),
+          _describe(option, fallback: option._takesValue || option._or == true),
         ),
   ];
 

@@ -1333,6 +1333,37 @@ void main() {
       await expectLater(parse(['--no-jobs']), throwsA(isA<UsageException>()));
     });
 
+    test('a flag can default to on: --no-<flag> turns it off, and help and completion say so', () async {
+      final color = Opt.flag('color', 'Colour output').abbr('c').or(true);
+      expect((await parse([], values: [color]))(color), isTrue);
+      expect((await parse(['--no-color'], values: [color]))(color), isFalse);
+      expect((await parse(['--no-color', '--color'], values: [color]))(color), isTrue);
+      expect((await parse(['--color=false'], values: [color]))(color), isFalse);
+      await expectLater(parse(['--no-color=yes'], values: [color]), throwsA(isA<UsageException>()));
+
+      Env.set('TK_TEST_COLOR', 'false');
+      addTearDown(() => Env.set('TK_TEST_COLOR', ''));
+      final fromEnv = Opt.flag('color').or(true).env('TK_TEST_COLOR');
+      expect((await parse([], values: [fromEnv]))(fromEnv), isFalse, reason: '.env keeps the default');
+
+      final out = StringBuffer();
+      Io.out = out;
+      Io.color = false;
+      try {
+        await CliCommand('app', '', values: [color, dry], handler: (_) {}).run(['--help']);
+        await Cli(name: 'app', values: [color, dry], handler: (_) {}).run(['--completion', 'bash']);
+      } finally {
+        Io.reset();
+        Io.color = null;
+      }
+      final text = out.toString();
+      expect(text, matches(RegExp(r'-c, --\[no-\]color\s+Colour output \[default: true\]')));
+      expect(text, contains('-d, --dry'), reason: 'an off-by-default flag keeps its short form');
+      expect(text, isNot(contains('[no-]dry')));
+      expect(text, contains('--no-color'));
+      expect(text, isNot(contains('--no-dry')));
+    });
+
     test('a bundle takes an attached value with or without =', () async {
       final n = Arg.number('n');
       final ctx = await parse(['-vj=4', '7'], values: [dry, verbose, jobs, n]);

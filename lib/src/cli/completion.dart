@@ -23,7 +23,14 @@ Iterable<(String, CliCommand)> _tree(CliCommand root, [String? path]) sync* {
 Iterable<(CliOption<Object?>, List<String>)> _reachable(CliCommand command) sync* {
   for (final option in command._chain.expand((c) => c._options)) {
     if (command._findOption(option.name) != option) continue;
-    yield (option, ['--${option.name}', if (option._abbr case final a? when command._findAbbr(a) == option) '-$a']);
+    yield (
+      option,
+      [
+        '--${option.name}',
+        if (!option._takesValue && option._or == true) '--no-${option.name}',
+        if (option._abbr case final a? when command._findAbbr(a) == option) '-$a',
+      ],
+    );
   }
 }
 

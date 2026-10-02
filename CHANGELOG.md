@@ -14,6 +14,11 @@
 - A sitemap's `<loc>` is HTML-decoded only when it holds `&` or `<`: 50k plain URLs 9 → 2 ms.
 - `glob` no longer keeps every pattern's `RegExp` forever; one compile per call, before the walk.
 
+#### Added
+
+- A flag can default to on: `Opt.flag('color').or(true)`, turned off by `--no-color`; help shows
+  `--[no-]color` and `[default: true]`, and shell completion offers `--no-color`.
+
 #### Fixed
 
 - `TaskState` was declared in both `cli` and `tui`, so a file importing the barrel and

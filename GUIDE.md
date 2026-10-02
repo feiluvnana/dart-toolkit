@@ -876,7 +876,8 @@ final files = Arg.by('files', Path.new).many();                       // List<Pa
 | `.many()` | `-H a -H b` → `['a', 'b']` (else last wins); on an `Arg`, the rest, declared last |
 | `.env('NAME')` | environment fallback; satisfies `required()`; `[env: NAME]` in help |
 
-Flags take `--x`, `--no-x`, `--x=true|false|yes|no|1|0`. Short flags combine (`-dv`), values
+Flags take `--x`, `--no-x`, `--x=true|false|yes|no|1|0`; `Opt.flag('color').or(true)` is on until
+`--no-color`, shown as `--[no-]color` in help. Short flags combine (`-dv`), values
 attach (`-w8`, `-w=8`), and `-5` is a positional unless an option answers to it.
 
 ### Commands
