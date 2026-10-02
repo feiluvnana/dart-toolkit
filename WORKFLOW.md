@@ -1,290 +1,171 @@
 # Multi-Agent Audit & Modernization Workflow
 
-This document defines the hardened, high-efficiency auditing and refinement workflow for the codebase. Orchestrating agents execute this pipeline sequentially, spawning focused subagents in parallel, persisting findings into compact Markdown reports, and gating progression between rounds with automated verification.
+A three-round audit → fix → verify pipeline for one **Claude Code (Opus) lead session**. The lead
+spawns read-only audit subagents, applies the accepted fixes itself, and gates every round on
+the release checks. `CONVENTIONS.md` outranks this file; where they disagree, it wins.
 
 ---
 
-## Core Operating Principles
+## 0. Ground rules
 
-1. **Clean-Cut Policy (Zero Deprecations)**:
-   - This is a personal project. **Never** use `@Deprecated` annotations, backward-compatibility wrapper shims, or legacy aliases.
-   - When an API or extension is removed or renamed, make a clean cut: delete or rename it immediately, and update all call sites, examples, and tests across `lib/`, `bin/`, `tool/`, and `test/`.
-2. **Gate 1 Triage Priority**:
-   - When recommendations from different audit streams conflict, apply strict prioritization:
-     $$\text{Bloat Pruning} > \text{API Ergonomics} > \text{Performance} > \text{Speculative Features}$$
-   - Only accept new features if they fill genuine standard capabilities (e.g. streaming, missing HTTP verbs, DOM selectors), never speculative "nice-to-haves".
-3. **Full Stack & Cross-Platform Scope**:
-   - Audits cover Dart libraries (`lib/`), CLI tools (`bin/`), tests (`test/`), tooling (`tool/`), specifications (`CONVENTIONS.md`, `GUIDE.md`), and native Rust FFI (`native/src/*.rs`, `Cargo.toml`).
-   - Cross-platform parity (Windows cmd/PowerShell vs. POSIX bash, path separators, file locking, and line endings) is a primary requirement.
-4. **Decoupled Benchmark Guardrails**:
-   - `tool/bench.dart` strictly measures **module startup and import compilation latency**, not runtime throughput. Startup time must not regress by >10 ms for any module.
-   - Runtime performance refactors (FFI, hashing, compression, I/O) are verified via dedicated microbenchmarks or throughput tests (MB/s, memory allocations). If throughput gains are negligible (<5%) but complexity increases, reject the change.
-5. **Speed & Token Optimization Rules**:
-   - **Grep-First File Inspection**: Subagents must use `git grep` / symbol search before reading files, and call `view_file` only on precise line ranges (≤50 lines). Dumps of unchanged code are forbidden.
-   - **Compact Output Schema**: Max 10 items, strictly formatted in <200 lines per report.
-   - **No-Fluff Early Exit**: If a subagent finds no high/medium impact items, it outputs `NO_ACTIONABLE_ITEMS` and exits immediately.
-   - **Parallel Single-Call Dispatch**: All subagents per round are spawned concurrently in a single `invoke_subagent` tool call using `Model: 'flash'`.
-   - **Targeted Module Testing**: During iterative edits in Gate 1/2, run `dart analyze --fatal-infos` and *only the affected module's test* (`dart test test/<module>_test.dart`). Full test suites (`dart test`) run only once at gate completion.
-6. **Two-Strike Rollback Protocol**:
-   - Apply edits per item or micro-batch. Run `dart analyze --fatal-infos`.
-   - If compilation fails, allow **one** corrective attempt (Strike 1).
-   - If compilation still fails (Strike 2), **immediately rollback with `git reset --hard HEAD`**, mark the item `[REJECTED - COMPILATION FAILURE]`, and move to the next item. Never leave the working tree in a broken state.
-7. **Audit Provenance (Archive, Don't Delete)**:
-   - Instead of deleting audit reports, move them to `.audits/round1/` and `.audits/round2/`. This preserves the decision log, rejected items, and rationale for future reference.
+| Rule | What it means |
+|---|---|
+| **Priority** | `CONVENTIONS.md` order: **call-site brevity > speed > everything else**. Pruning counts as brevity. An addition is accepted only if it deletes more at call sites than it adds to the surface. Speculative features are rejected. |
+| **Clean cuts** | No `@Deprecated`, shims or aliases. A rename or removal updates every call site in `lib/ bin/ tool/ test/` and every doc in the same commit. |
+| **Reports stay in chat** | Audit reports are subagent return values, never files. No `AUDIT_*.md`, no `.audits/`. The decision record (accepted + rejected-with-reason) goes into the gate's commit body; what changed goes into `CHANGELOG.md` (Unreleased); new rules go into `CONVENTIONS.md` with their *why*. |
+| **`bin/` is examples** | `bin/*.dart` are usage examples, not product. Smoke-test them; delete or merge duplicates freely. |
+| **One item, one commit** | Apply one accepted item (or one tightly coupled micro-batch), verify, commit locally. Rollback only ever touches the uncommitted item. |
+| **Commit & push** | Push at the end of each gate. Author `feiluvnana`, no `Co-Authored-By` trailer. Never bump `pubspec.yaml` version or move CHANGELOG `Unreleased`: the owner picks the version. |
+| **Co-worker** | Another agent may push to `master`. Before each gate and each push: `git fetch && git status`; if `origin/master` moved, rebase and re-run the gate. Never `reset --hard` or force-push. |
+
+### Tool mapping (Claude Code)
+
+| Need | Use |
+|---|---|
+| Read-only audit subagent | `Agent` with `subagent_type: "Explore"`, `model: "sonnet"`, all of one round's agents in **one message** so they run concurrently |
+| Code search | `git grep -n` / Grep before any Read |
+| Reading code | `Read` with `offset`/`limit` (≤80 lines); never dump whole files |
+| Edits | `Edit` (the lead only; subagents never edit, commit, or touch git) |
 
 ---
 
-## Workflow Architecture Overview
+## 1. Verification commands
 
-```mermaid
-flowchart TD
-    S0["Step 0: Baseline Health Check\n(analyze, format, test, CLI smoke, git tag)"] --> R1
+| Name | Command | When |
+|---|---|---|
+| **fast** | `dart analyze --fatal-infos && dart test test/<module>_test.dart` | after every item |
+| **gate** | `make check test` (analyze, format check, full suite) + **smoke** | end of each gate |
+| **smoke** | `for b in tk books keybox; do dart run bin/$b.dart --help >/dev/null \|\| echo FAIL $b; done` | gate, and after any `cli` change |
+| **native** | `cargo check --manifest-path native/Cargo.toml && make native && dart test test/native_test.dart test/hash_test.dart test/archive_test.dart` | any `native/src/` change |
+| **startup A/B** | see §1.1 | any change under `lib/` that adds an import or top-level initializer |
 
-    subgraph R1["Round 1: Foundation Audits (Single-Call Parallel 'flash' Subagents, Max 10 items each)"]
-        A1["Subagent 1.1: Features & Ergonomics\n(AUDIT_FEATURES.md)\nFocus: Public facades & missing capabilities"]
-        A2["Subagent 1.2: Bloat & Simplification\n(AUDIT_BLOAT.md)\nFocus: SDK extensions & dead code"]
-        A3["Subagent 1.3: Performance & FFI\n(AUDIT_PERFORMANCE.md)\nFocus: Rust native, I/O & memory"]
-        A4["Subagent 1.4: Conventions & Docs Defects\n(AUDIT_CONVENTIONS.md)\nFocus: Specs, docstrings & guides"]
-    end
+Test names map to modules: `test/<module>_test.dart` for `core async collection cli fs hash http
+process tui chrome archive native`; `formats` also runs `test/formats_diff_test.dart`.
 
-    R1 --> G1{"Gate 1: Triage & Phased Clean Cuts\n1. Deduplicate & Triage\n2. Batch A: Pure Deletions (analyze + target test)\n3. Batch B: Internal Refactors & Rust FFI Rebuild\n4. Batch C: Essential Additions (5-Point Test Gate)\n5. Full Test Verification & Checkpoint Tag"}
+### 1.1 Startup A/B (never a standalone number)
 
-    subgraph R2["Round 2: Design & Consistency (Single-Call Parallel 'flash' Subagents)"]
-        B1["Subagent 2.1: Brevity & Discoverability\n(AUDIT_DISCOVERABILITY.md)\nFocus: Autocomplete facades & syntax"]
-        B2["Subagent 2.2: Architectural Consistency\n(AUDIT_CONSISTENCY.md)\nFocus: Naming, params & return types"]
-    end
+Single-run startup drifts ±80 ms on this machine, so a one-off `make bench` proves nothing.
+Compare **back-to-back** against the last checkpoint:
 
-    G1 --> R2
-    R2 --> G2{"Gate 2: API Harmonization & Living CLI Guard\n1. Apply clean renames & alignments\n2. Sync GUIDE.md, README.md, docstrings\n3. Smoke-test bin/ CLI executables\n4. Full Test Verification & Checkpoint Tag"}
-
-    subgraph R3["Round 3: Bug Fixing & Hardening"]
-        C1["Task 3.1: Stream Cancellation & Error Rethrows"]
-        C2["Task 3.2: Host Platform Parity (Windows cmd/PowerShell vs. POSIX)"]
-        C3["Task 3.3: Final Full Verification Suite (analyze, format, test, CLI smoke)"]
-        C4["Completion: Git Commit & Summary Report"]
-    end
-
-    G2 --> R3
-    C1 --> C2 --> C3 --> C4
+```bash
+git worktree add -f ../tk-base checkpoint-<prev>        # once per gate
+(cd ../tk-base && dart pub get >/dev/null)
+for i in 1 2; do
+  (cd ../tk-base && dart run tool/bench.dart <modules> -r 8)
+  dart run tool/bench.dart <modules> -r 8
+done
+git worktree remove --force ../tk-base
 ```
 
----
+Read the **min-over-bare** column. A module regresses if HEAD's min-over-bare is worse than the
+base's in both pairs by more than 10 ms. Quote deltas only, as `base → head`.
 
-## Step 0: Baseline Health Check
+Runtime (throughput) changes need their own microbenchmark in the item's commit body
+(MB/s or ms/op, base vs head, same run). Under 5 % gain plus more code means **reject**.
 
-Before spawning subagents:
-1. **Compilation & Formatting Check**:
-   ```bash
-   dart analyze --fatal-infos
-   dart format --output=none --set-exit-if-changed lib bin test tool
-   ```
-2. **Baseline Test Suite**:
-   ```bash
-   dart test
-   ```
-   *(If flaky timing assertions occur due to environmental load, record failures so regressions are machine-differentiable).*
-3. **Native Rust Binary Verification**:
-   - If `native/src/` has been modified or `native/prebuilt/` is missing:
-     ```bash
-     cargo check --manifest-path native/Cargo.toml
-     dart run tool/build_native.dart
-     ```
-4. **Living CLI Smoke Test**:
-   ```bash
-   dart run bin/tk.dart --help
-   dart run bin/books.dart --help
-   dart run bin/keybox.dart --help
-   ```
-5. **Git Checkpoint Tag**:
-   ```bash
-   git tag -f checkpoint-step0
-   ```
+### 1.2 Two-strike rollback
+
+1. Item fails **fast** → one corrective attempt (strike 1).
+2. Still failing (strike 2) → discard only this item: `git restore --staged --worktree -- .`
+   and `git clean -fd -- lib bin tool test native` (both are safe because every earlier item
+   is already committed). Record it as `REJECTED (compile|test): <one line>` for the gate
+   commit body and move on.
+3. Never leave a red tree between items.
+
+### 1.3 Native ABI lockstep
+
+A change to any `extern "C"` signature in `native/src/` bumps **both** `tk_version()` in
+`native/src/lib.rs` and `NativeLib._abi` in `lib/src/native/native.dart`. After a bump, every
+library in `native/prebuilt/*` reports the old ABI and is refused at load, so rebuild **all**
+shipped targets (`make native-all`, or each `make native RUST_TARGET=…` for the dirs present
+in `native/prebuilt/`). If a cross toolchain is missing, **do not commit the bump**: reject the
+item and say which target could not be built.
 
 ---
 
-## Compact Audit Item Schema (Token-Optimized)
+## 2. Step 0: Baseline
 
-All subagents **must** format findings concisely (under 200 lines total per report, max 10 items). Avoid long code dumps or repeating unchanged code:
+1. `git fetch && git status`: tree clean, `master` == `origin/master`. If not, stop and ask.
+2. Run **gate**. Record any failing test names verbatim: these are the *known failures*, and a
+   later gate passes if it fails on no other test. A failing analyze or format check means
+   stop and fix it first, as its own commit.
+3. If `native/prebuilt/<host>/` is missing or older than `native/src/`, run **native**.
+4. `git tag -f checkpoint-step0` (local only; tags are never pushed).
+
+---
+
+## 3. Audit item schema
+
+Every subagent prompt includes this schema, the round's scope, and these limits: **at most 10
+items, under 150 lines, High/Medium only.** If nothing qualifies, return exactly
+`NO_ACTIONABLE_ITEMS`. Each item must cite a real `path:line` that the subagent opened itself.
 
 ```markdown
-- **[TAG-01] Short Title** (`lib/src/path/to/file.dart#L12-L34`): Severity (High | Medium | Low)
-  - *Problem*: Concise description (1-2 sentences) of the defect, bloat, or friction.
-  - *Diff*:
-    ```dart
-    - oldCode();
-    + newCode();
-    ```
-  - *Rationale*: Concrete impact (e.g. autocompletion clarity, memory reduction, cross-platform safety).
+- **[TAG-01] Title** (`lib/src/x/y.dart:12-34`), High | Medium
+  - Problem: 1–2 sentences.
+  - Fix: a minimal diff, or "delete X; callers use Y".
+  - Call-site effect: tokens/lines saved or added at a typical call, or the measured speedup.
+  - Blast radius: the files that must change (from `git grep`).
 ```
 
----
-
-## Round 1: Foundation Audits (Parallel 'flash' Subagents)
-
-The lead agent spawns all four subagents concurrently in a **single `invoke_subagent` call** with `Model: 'flash'`. Subagents are read-only and must never mutate code or git state.
-
-### Subagent 1.1: Missing Features & API Ergonomics
-- **Role**: `Feature & Ergonomics Auditor`
-- **Output Target**: `AUDIT_FEATURES.md`
-- **Target Matrix**: Public facades (`lib/*.dart`), high-level domains (`lib/src/http/`, `lib/src/formats/`, `lib/src/chrome/`, `lib/src/cli/`).
-- **Scope**:
-  - Missing capabilities compared to modern toolkits (streaming request bodies, HTTP verb symmetry, compression formats, XPath/DOM queries).
-  - Clunky or verbose API signatures (redundant parameter requirements, lack of factory constructors).
-  - Enforce Dart 3 class modifiers (`abstract interface class`, `final class`, `sealed class`) on public APIs.
-
-### Subagent 1.2: Bloat & Code Simplification
-- **Role**: `Bloat & Simplification Auditor`
-- **Output Target**: `AUDIT_BLOAT.md`
-- **Target Matrix**: Core type extensions (`lib/src/core/`, `lib/src/fs/path.dart`), internal abstractions (`lib/src/async/`, `lib/src/collection/`, `lib/src/process/`).
-- **Scope**:
-  - Loose extensions on primitive SDK types (`String`, `List`, `Map`, `int`) that pollute global autocompletion.
-  - Redundant methods, unnecessary overloads, duplicate helper classes, and dead code paths.
-  - Recommend exact items to prune completely under the **Clean-Cut Policy**.
-
-### Subagent 1.3: Performance & Native FFI Optimization
-- **Role**: `Performance & FFI Auditor`
-- **Output Target**: `AUDIT_PERFORMANCE.md`
-- **Target Matrix**: Native Rust (`native/src/*.rs`, `native/Cargo.toml`), FFI workers (`lib/src/hash/native.dart`, `lib/src/fs/archive.dart`, `lib/src/async/pool.dart`), hot loops (`lib/src/fs/`, `lib/src/process/`).
-- **Scope**:
-  - Hot-path bottlenecks, unnecessary intermediate memory allocations, and redundant buffer copies.
-  - Rust FFI boundary: pointer allocation safety (`NativeBridge.alloc`), copying overhead, and isolate boundary costs.
-  - Record churn in high-throughput hot paths (parsers, streaming loops).
-  - Isolate pool safety: ensure worker closures do not capture outer scope, and ensure deterministic cleanup on cancellation.
-
-### Subagent 1.4: Conventions & Documentation Defects
-- **Role**: `Conventions & Specs Auditor`
-- **Output Target**: `AUDIT_CONVENTIONS.md`
-- **Target Matrix**: Guidelines (`CONVENTIONS.md`, `GUIDE.md`, `README.md`), public docstrings across `lib/*.dart` and `lib/src/`.
-- **Scope**:
-  - Internal defects, obsolete advice, and self-contradictory rules in specifications.
-  - Dogmatic or counter-productive conventions (e.g. banning necessary abstractions, enforcing brittle patterns, or assuming POSIX-only environments).
-  - Extension type erasure traps: audit all `extension type` usages (e.g. `Path`) and forbid dangerous `is Path` or `case Path` type checks where runtime erasure causes false matches against raw `String`.
-  - Validate that documented code snippets match actual current runtime signatures and behavior.
+Tags: `FEAT BLOAT PERF DOC DISC CONS BUG`.
 
 ---
 
-## Gate 1: Implementation & Phased Clean Cuts
+## 4. Round 1: Foundation audits (4 parallel subagents)
 
-Before proceeding to Round 2, the lead agent executes a phased consolidation with the **Two-Strike Rollback Protocol**:
+| # | Tag | Target | Look for |
+|---|---|---|---|
+| 1.1 | `FEAT` | facades `lib/*.dart`, `lib/src/{http,formats,chrome,cli}` | capabilities a script really needs that are missing (check first that they don't already exist: XPath, JSONPath, CSS `$`, streaming download, and HTTP verbs all do); verbose signatures; missing Dart 3 modifiers (`final`/`sealed`/`interface`) on public classes |
+| 1.2 | `BLOAT` | `lib/src/{core,collection,async,process}`, `lib/src/fs/path.dart`, `bin/` | extensions on `String/List/Map/int` that only one module uses, duplicate helpers, aliases (e.g. a second spelling of one operator), dead code, test-only seams, duplicate `bin/` examples |
+| 1.3 | `PERF` | `native/src/*.rs`, `lib/src/native/`, `lib/src/hash/native.dart`, `lib/src/fs/archive.dart`, `lib/src/async/pool.dart`, parsers in `lib/src/formats/` | extra copies across the FFI boundary, `tk_alloc`/`tk_free` pairing on error paths, per-element allocation in hot loops, isolate closures capturing large outer state, missing cleanup on cancel |
+| 1.4 | `DOC` | `CONVENTIONS.md`, `GUIDE.md`, `README.md`, `CHANGELOG.md`, public dartdoc | snippets that don't compile against the current API, self-contradicting or obsolete rules, POSIX-only assumptions; `is`/`case` checks on extension types (`Path`, `Row`, `Elements`, `Nodes`), which match any raw `String`/`Map`/`List` after erasure |
 
-1. **Deduplication & Triage**:
-   - Merge overlapping findings across the four `AUDIT_*.md` files. Discard any item violating `CONVENTIONS.md` §1.
-   - Apply the **Gate 1 Triage Priority Rule**: Bloat Pruning > Ergonomics > Performance > Speculative Features.
-   - Cap accepted items at **maximum 15 total changes** to avoid compiler cascades.
-2. **Batch A (Pure Deletions & Clean Cuts)**:
-   - Delete dead code, duplicate helpers, and polluting extensions immediately without `@Deprecated` shims.
-   - Update call sites across `lib/`, `bin/`, `tool/`, and `test/`.
-   - Fast verify: `dart analyze --fatal-infos` + target module test (`dart test test/<module>_test.dart`).
-   - Commit batch: `refactor(gate-1): prune bloat and dead code (Batch A)`.
-3. **Batch B (Internal Refactors & FFI Optimizations)**:
-   - Apply accepted performance improvements and FFI memory optimizations.
-   - **Native Rust Rebuild**: If `native/src/` is touched:
-     ```bash
-     cargo check --manifest-path native/Cargo.toml
-     dart run tool/build_native.dart
-     dart test test/native_test.dart test/hash_test.dart test/archive_test.dart
-     ```
-   - **ABI Lockstep Rule**: Any change to exported C functions must increment `tk_version()` in `native/src/lib.rs` AND `NativeLib._abi` in `lib/src/native/native.dart`.
-   - Fast verify: `dart analyze --fatal-infos` + target test.
-   - Commit batch: `perf(gate-1): optimize FFI and hot loops (Batch B)`.
-4. **Batch C (Essential Feature Additions & 5-Point Test Gate)**:
-   - Implement accepted high-value ergonomic additions. Update `CONVENTIONS.md` to fix any spec defects.
-   - **5-Point Test Gate**: Every new API must have tests covering:
-     1. *Happy path*: Canonical usage.
-     2. *Edge cases*: Empty inputs, boundary lengths, unicode.
-     3. *Failure semantics*: Expected exceptions or `Either.Left` outcomes.
-     4. *Cancellation*: Immediate halting under `Cancel.scope`.
-     5. *Differential*: Replaced engines match ground-truth packages.
-   - Fast verify: `dart analyze --fatal-infos` + target test.
-   - Commit batch: `feat(gate-1): add missing core APIs (Batch C)`.
-5. **Full Gate 1 Verification & Checkpoint**:
-   - Run full test suite: `dart test`.
-   - Check module startup: `dart run tool/bench.dart`.
-   - Move `AUDIT_*.md` files into `.audits/round1/`.
-   - Tag checkpoint: `git tag -f checkpoint-gate1`.
+## 5. Gate 1: Triage and apply
 
----
+1. **Triage.** Dedupe across the four reports. For each surviving item, **verify it yourself**
+   (open the cited lines; subagents misread code). Drop anything that breaks a `CONVENTIONS.md`
+   rule. Rank by the priority rule and cap at **15** accepted items.
+2. **Batch A: deletions** (`BLOAT`, doc deletions). One item per commit, `refactor: …`.
+3. **Batch B: refactors and perf** (`PERF`). Run **native** and §1.3 if Rust changes, and
+   **startup A/B** if imports change. Commit as `perf: …` with the measurement in the body.
+4. **Batch C: additions** (`FEAT`, `DOC` fixes). Each new API gets tests for the cases that
+   apply: happy path; edge (empty, boundary, unicode); failure (the exception or `Left` it
+   documents); cancellation, *if it is async*: it stops under `Cancel.scope`; differential,
+   *if it replaces an engine*: same output as the reference (see `formats_diff_test.dart`).
+   Commit as `feat: …`.
+5. **Docs move with code.** Every commit that changes public API also updates `README.md`,
+   `GUIDE.md`, `CHANGELOG.md` (Unreleased, one table row or bullet) and, for a new rule,
+   `CONVENTIONS.md`.
+6. **Close.** Run **gate** and the **startup A/B** over every module touched. Write `git commit --allow-empty -m "chore(gate-1): audit record"` whose body lists accepted / rejected items with
+   reasons. Push, then `git tag -f checkpoint-gate1`.
 
-## Round 2: API Refinement & Consistency (Parallel Subagents)
+## 6. Round 2: Design consistency (2 parallel subagents)
 
-Once Round 1 is verified, the lead agent spawns both subagents concurrently in a **single `invoke_subagent` call** (`Model: 'flash'`, Max 10 items each).
+The subagents audit **HEAD after Gate 1**, not the original code.
 
-### Subagent 2.1: API Brevity & Discoverability
-- **Role**: `Discoverability Auditor`
-- **Output Target**: `AUDIT_DISCOVERABILITY.md`
-- **Scope**:
-  - Autocomplete discoverability: Ensure central facades (`Http.*`, `Doc.*`, `Shell.*`, `Hash.*`, `Path.*`) expose all key workflows without relying on global function imports.
-  - Balance brevity with discoverability: clean method names without polluting primitive types.
-  - Identify hidden or hard-to-find features that lack discoverable entry points.
+| # | Tag | Look for |
+|---|---|---|
+| 2.1 | `DISC` | workflows reachable only by knowing a top-level function exists; an entry point that is missing from its facade (`Http`, `Path`, `Shell`, `Hash`, `Console`, …) **when adding it doesn't lengthen the common call**. Short globals such as `run(...)` stay. |
+| 2.2 | `CONS` | naming drift between sibling APIs (e.g. `ConsoleTheme`/`TuiTheme` field names, HTTP verb vs `Client` method names), parameter order of related functions, `null` vs throw vs `Either` for the same kind of failure, `_ =>` wildcards over sealed types |
 
-### Subagent 2.2: Architecture & Convention Consistency
-- **Role**: `Consistency Auditor`
-- **Output Target**: `AUDIT_CONSISTENCY.md`
-- **Scope**:
-  - Uniform naming conventions across all modules (e.g. `ConsoleTheme` vs. `TuiTheme`, verb names in HTTP vs. Client).
-  - Consistent parameter ordering conventions across related functions.
-  - Return type semantics: nullable vs non-nullable exceptions, `Either` vs thrown errors.
-  - Pattern matching exhaustiveness: eliminate wildcard escapes (`_ =>`) on sealed domain states.
+## 7. Gate 2: Harmonize
 
----
+Same procedure as Gate 1, steps 1, 5 and 6 (one item per commit, `refactor: …`), with these
+additions:
 
-## Gate 2: Implementation & Living CLI Guard
+- A rename `git grep`s the old name across the whole repo, including `*.md` and dartdoc, and must
+  finish with zero hits outside `CHANGELOG.md`.
+- Run **smoke** after every `cli` or `tui` item.
+- Close with `chore(gate-2): audit record`, push, `git tag -f checkpoint-gate2`.
 
-Before proceeding to Round 3:
-1. The lead agent reviews `AUDIT_DISCOVERABILITY.md` and `AUDIT_CONSISTENCY.md`.
-2. Apply API renames, facade additions, and consistency alignments (clean cuts only, no deprecated shims). Apply the Two-Strike Rollback Protocol.
-3. Commit batch: `refactor(gate-2): harmonize APIs and discoverability`.
-4. **Living CLI & Tooling Smoke Test**:
-   ```bash
-   dart run bin/tk.dart --help
-   dart run bin/books.dart --help
-   dart run bin/keybox.dart --help
-   ```
-5. **Documentation Drift Guard**:
-   - Update all code examples in `GUIDE.md`, `README.md`, and docstrings to reflect new names and signatures.
-   - Run `dart format --output=none --set-exit-if-changed lib bin test tool`.
-6. **Full Gate 2 Verification & Checkpoint**:
-   - Run `dart analyze --fatal-infos` and `dart test`.
-   - Move Round 2 audit files into `.audits/round2/`.
-   - Tag checkpoint: `git tag -f checkpoint-gate2`.
+## 8. Round 3: Hardening (lead does it, no subagents)
 
----
+| Task | Done when |
+|---|---|
+| 3.1 Cancellation & errors | a test shows that cancelling the scope during each async API in `async`, `http`, `process` and `chrome` leaves no timer, isolate, process or socket open, and that worker isolate errors rethrow with the original stack trace |
+| 3.2 Platform parity | **POSIX** (runnable here): pipefail exit code, signal forwarding, CRLF input in parsers. **Windows** (not runnable on this macOS host): use unit tests on the *built* command line and path logic, e.g. `cmd /d /c` for built-ins, refusal of unsafe `cmd` args, `\` separators, and atomic-replace retry when a file is locked. Label anything not executable here as `unverified-on-windows` in the commit body. |
+| 3.3 Final | **gate** passes except *known failures*, `git status` is clean, and `master` is pushed |
 
-## Round 3: Bug Fixing & Hardening
-
-Round 3 focuses on correctness, reliability, and edge-case testing partitioned into discrete tasks:
-
-### Task 3.1: Stream Cancellation & Error Handling
-- Verify unhandled stream cancellations and isolate deadlocks under `Cancel.scope`.
-- Verify that errors in worker isolates rethrow with original stack traces and clean up resources.
-
-### Task 3.2: Host Platform Parity
-- **Windows Parity**:
-  - Verify that `cmd.exe` built-ins run with `/d /c` to prevent AutoRun registry script failure.
-  - Verify argument quoting rules and path separator handling (`\` vs `/`).
-  - Verify file-locking resilience during atomic replace operations.
-- **POSIX Parity**:
-  - Verify pipefail semantics and signal forwarding.
-
-### Task 3.3: Final Full Verification Suite
-Run the complete, machine-verifiable verification suite:
-```bash
-# 1. Code formatting
-dart format --output=none --set-exit-if-changed lib bin test tool
-
-# 2. Strict analysis
-dart analyze --fatal-infos
-
-# 3. Full test suite
-dart test
-
-# 4. CLI living integration tests
-dart run bin/tk.dart --help
-dart run bin/books.dart --help
-dart run bin/keybox.dart --help
-```
-
-### Task 3.4: Completion & Commit
-- Ensure working tree is clean.
-- Commit all hardened bug fixes: `fix(round-3): resolve edge cases and platform parity bugs`.
-- Leave git branch verified and ready for review or push.
+Commit each fix as `fix: …`. End the session with a short summary in chat: the items applied
+per gate, the items rejected and why, the A/B deltas, and anything left unverified.
