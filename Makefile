@@ -7,7 +7,7 @@
 
 DART ?= dart
 
-.PHONY: all check format analyze test native native-all native-clean audit bench startup release clean
+.PHONY: all check format analyze test native native-all native-clean audit bench release clean
 
 all: check test
 
@@ -44,8 +44,6 @@ audit:
 
 bench:
 	$(DART) run tool/bench.dart
-
-startup: bench
 
 release: check test native audit
 	@echo "Bump version in pubspec.yaml and move Unreleased in CHANGELOG.md, then: git tag v$$(grep '^version' pubspec.yaml | cut -d' ' -f2)"

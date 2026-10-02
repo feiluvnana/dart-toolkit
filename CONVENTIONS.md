@@ -241,7 +241,7 @@ Each of these was a silent failure.
 ## 5. Performance
 
 **Measure back to back, or not at all.** Startup drifts ±80 ms. A claim is two numbers from the same
-minute, alternating order; `tool/startup.dart` runs six alternating rounds (median, min over bare).
+minute, alternating order; `tool/bench.dart` runs six alternating rounds (median, min over bare).
 `dart run` startup is front-end compile; `dart run -r` halves it for repeated runs.
 
 > *Why:* two rounds in fixed order produced 120 ms phantoms.

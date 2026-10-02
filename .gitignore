@@ -9,9 +9,8 @@ coverage/
 native/target/
 native/prebuilt/
 
-# Agent config: the /optimize skills and workflow are shared; worktrees and local settings are not
+# Agent config: the /optimize skills are shared; worktrees and local settings are not
 .claude/*
 !.claude/skills/
-!.claude/workflows/
 .agents/*
 !.agents/skills/
