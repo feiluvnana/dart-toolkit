@@ -1,6 +1,7 @@
 part of '../../core.dart';
 
-/// Internal bridge for managing halted subprocesses across modules.
+/// The halted-subprocess registry `process` and `cli` share: public only because those are
+/// separate libraries, and not covered by the versioning promise.
 final class ProcessBridge {
   ProcessBridge._();
 
@@ -34,15 +35,3 @@ final class ProcessBridge {
     _haltedProcessPids.clear();
   }
 }
-
-/// Registers [pids] that were sent SIGTERM and must be reaped.
-void registerHaltedProcessPids(Iterable<int> pids) => ProcessBridge.registerHalted(pids);
-
-/// Unregisters [pids] once reaped.
-void unregisterHaltedProcessPids(Iterable<int> pids) => ProcessBridge.unregisterHalted(pids);
-
-/// Waits up to 200 ms for halted processes to exit, then SIGKILLs the rest.
-Future<void> killHaltedProcesses() => ProcessBridge.killHalted();
-
-/// SIGKILLs every registered halted process now.
-void killHaltedProcessesSync() => ProcessBridge.killHaltedSync();

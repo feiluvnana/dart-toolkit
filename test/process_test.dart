@@ -353,7 +353,7 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 100));
       token.cancel();
       await expectLater(future, throwsA(isA<CancelledException>()));
-      await killHaltedProcesses();
+      await ProcessBridge.killHalted();
     }, testOn: '!windows');
 
     test('ShellResult.lines preserves leading whitespace (PROC-4)', () {

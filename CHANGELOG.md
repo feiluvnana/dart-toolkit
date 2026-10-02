@@ -14,6 +14,8 @@
   → `Doc.json`, `Doc.yaml`, … on `Doc`.
 - `xs.parallel(f)` → `xs.parallelize(f).unwrap()`.
 - `zip`/`zipTo` on `Path` → `archive('x.zip')`/`archiveTo('x.zip')`.
+- `registerHaltedProcessPids`, `unregisterHaltedProcessPids`, `killHaltedProcesses`,
+  `killHaltedProcessesSync` → `ProcessBridge.registerHalted`, …
 
 ### Console themes, a TUI framework, and a second bug hunt
 
