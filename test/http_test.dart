@@ -877,7 +877,7 @@ void main() {
               .scrape<String>()
               .onRequest((ctx) {
                 if (ctx.url.path == '/skip') return ctx.skip();
-                ctx.request.headers['x-sig'] = 'signed:${ctx.attempt}';
+                ctx.headers['x-sig'] = 'signed:${ctx.attempt}';
               })
               .onResponse((ctx) => ctx.emit(ctx.url.path))
               .toList();
@@ -1473,7 +1473,7 @@ void main() {
         () => 'https://a.com/'.url
             .scrape<int>()
             .onRequest((ctx) {
-              if (ctx.url.host == 'a.com') ctx.request.headers['authorization'] = 'Bearer SECRET';
+              if (ctx.url.host == 'a.com') ctx.headers['authorization'] = 'Bearer SECRET';
             })
             .onResponse((ctx) {})
             .toList(),
@@ -2412,7 +2412,7 @@ void main() {
             .scrape<void>()
             .onInit((c) => c.robots = true)
             .onRequest((ctx) {
-              if (agent != null) ctx.request.headers['user-agent'] = agent;
+              if (agent != null) ctx.headers['user-agent'] = agent;
             })
             .onResponse((ctx) => seen.add(ctx.url.path))
             .drain<void>();
@@ -2816,7 +2816,7 @@ void main() {
       await (base / 'start')
           .scrape<void>()
           .onInit((c) => c..robots = true)
-          .onRequest((c) => c.request.headers['user-agent'] = 'mybot/1.0')
+          .onRequest((c) => c.headers['user-agent'] = 'mybot/1.0')
           .onResponse((ctx) {
             fetched.add(ctx.url.path);
             if (ctx.depth == 0) {

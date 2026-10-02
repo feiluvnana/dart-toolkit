@@ -124,7 +124,7 @@ if (query) {
 /// final browser = await ChromeClient.launch(block: Resource.heavy, device: Device.phone);
 /// await Http.scope(client: browser, () async {
 ///   await for (final item in url.scrape<Item>()
-///       .onRequest((ctx) => ctx.request[ChromeClient.waitFor] = '.results .item')
+///       .onRequest((ctx) => ctx[ChromeClient.waitFor] = '.results .item')
 ///       .onResponse(parse)
 ///       .rights) print(item);
 /// });

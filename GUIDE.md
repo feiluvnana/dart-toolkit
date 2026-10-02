@@ -670,9 +670,9 @@ final chrome = await ChromeClient.launch(
 );
 
 url.scrape<String>().onRequest((ctx) {        // per request
-  ctx.request[ChromeClient.waitFor] = '.results .item';
-  ctx.request[ChromeClient.script] = 'window.scrollTo(0, document.body.scrollHeight)';
-  ctx.request[ChromeClient.block] = Resource.heavy;
+  ctx[ChromeClient.waitFor] = '.results .item';
+  ctx[ChromeClient.script] = 'window.scrollTo(0, document.body.scrollHeight)';
+  ctx[ChromeClient.block] = Resource.heavy;
 });
 ```
 
@@ -730,7 +730,7 @@ The chain of five hooks yields a stream of `Either`s.
 final stories = 'https://news.ycombinator.com'.url
     .scrape<({String title, Uri link})>()
     .onInit((ctx) => ctx..concurrency = 8..delay = 200.ms..pages = 50..robots = true)
-    .onRequest((ctx) => ctx.request.headers['accept-language'] = 'en')
+    .onRequest((ctx) => ctx.headers['accept-language'] = 'en')
     .onResponse((ctx) {
       for (final a in ctx.html.$('.titleline > a')) {
         ctx.emit((title: a.text, link: ctx.resolve(a)));
@@ -1132,7 +1132,7 @@ Future<void> gallery(Uri url) async {
   await Http.scope(client: chrome, () async {
     final images = url
         .scrape<({Uri url, Path path})>()
-        .onRequest((c) => c.request[ChromeClient.waitFor] = '.gallery img')
+        .onRequest((c) => c[ChromeClient.waitFor] = '.gallery img')
         .onResponse((c) {
           for (final img in c.html.$('.gallery img[src]')) {
             final src = c.resolve(img);

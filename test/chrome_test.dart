@@ -361,7 +361,7 @@ void main() {
             .resolve('/rendered')
             .scrape<String>()
             .onInit((ctx) => ctx.pages = 1)
-            .onRequest((ctx) => ctx.request[ChromeClient.waitFor] = '.item')
+            .onRequest((ctx) => ctx[ChromeClient.waitFor] = '.item')
             .onResponse((ctx) {
               for (final item in ctx.response.html.$('.item')) {
                 ctx.emit(item.text);
@@ -951,7 +951,7 @@ Future<void> main() async {
       final seen = <String>[];
       await browser
           .scrape<void>(base.resolve('/rendered'))
-          .onRequest((ctx) => ctx.request[ChromeClient.waitFor] = '.item')
+          .onRequest((ctx) => ctx[ChromeClient.waitFor] = '.item')
           .onResponse((ctx) => seen.addAll(ctx.response.html.$('.item').map((e) => e.text)))
           .drain<void>();
       expect(seen, ['alpha', 'beta'], reason: 'the DOM the page built, so it went through Chrome');

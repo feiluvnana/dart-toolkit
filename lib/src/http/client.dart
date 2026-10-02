@@ -44,7 +44,7 @@ final class Headers extends MapBase<String, String> {
 /// ```dart
 /// const waitFor = RequestKey<String>('wait-for');
 ///
-/// url.scrape<Item>().onRequest((ctx) => ctx.request[waitFor] = '.item');
+/// url.scrape<Item>().onRequest((ctx) => ctx[waitFor] = '.item');
 /// ```
 ///
 /// A client reads it as `waitFor(request)` and **ignores every key it does not know**, so the

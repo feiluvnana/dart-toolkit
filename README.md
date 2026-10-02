@@ -165,7 +165,7 @@ SSE or NDJSON.
 ```dart
 final stories = url.scrape<Story>()
     .onInit((ctx) => ctx..concurrency = 8..robots = true..sitemaps = true)
-    .onRequest((ctx) => ctx.request.headers['accept-language'] = 'en')
+    .onRequest((ctx) => ctx.headers['accept-language'] = 'en')
     .onResponse((ctx) {
       for (final a in ctx.html.$('.titleline > a')) {
         ctx.emit((title: a.text, link: ctx.resolve(a)));
