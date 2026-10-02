@@ -9,23 +9,6 @@ coverage/
 native/target/
 native/prebuilt/
 
-# Chrome's in-flight downloads, should one ever escape the client's own folder again
-*.crdownload
-
-# Scratch output of keybox
-*.7z
-*.part
-*.zip
-*.tar.*
-
-# …but the archive fixtures the tests read are checked in.
-!test/fixtures/*
-tmp*
-Key BOX*
-output/
-out/
-dist/
-
 # Agent config: the /optimize skills and workflow are shared; worktrees and local settings are not
 .claude/*
 !.claude/skills/
