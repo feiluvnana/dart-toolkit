@@ -64,9 +64,6 @@ class JsonDocument {
     for (final (i, v) in _JsonPath.of(expression).read(raw).indexed) JsonDocument._at(v, this, (expression, i)),
   ];
 
-  /// Every value JSONPath [expression] selects; alias for [$].
-  List<JsonDocument> query(String expression) => $(expression);
-
   /// The child at a map key ([String]) or list index ([int], negative from the end); a missing
   /// one is the null document, and any other key type an [ArgumentError].
   JsonDocument operator [](Object keyOrIndex) {

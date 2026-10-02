@@ -196,14 +196,8 @@ final class Element extends Node {
   /// `+ dd` the next sibling, `~ p` the later ones; in `> a, b` the `b` is a descendant.
   Elements $(String selector) => Elements(_Selector.parse(selector, fold: syntax == Syntax.html).from(this));
 
-  /// Every descendant matching CSS [selector]; alias for [$].
-  Elements select(String selector) => $(selector);
-
   /// The nodes XPath [expression] selects with this element as the context.
   Nodes $x(String expression) => Nodes(_XPath.parse(expression).select(this));
-
-  /// The nodes XPath [expression] selects with this element as context; alias for [$x].
-  Nodes xpath(String expression) => $x(expression);
 
   @override
   String get text {
@@ -474,12 +468,6 @@ extension type Elements(List<Element> _list) implements List<Element> {
     return Nodes(_list.length > 1 && !(x.downward && _isFlat(_list)) ? _inOrder(out) : out);
   }
 
-  /// Every element each match's [$] finds; alias for [$].
-  Elements select(String selector) => $(selector);
-
-  /// The nodes XPath [expression] selects from each match; alias for [$x].
-  Nodes xpath(String expression) => $x(expression);
-
   /// Removes every matched element from its parent.
   void remove() {
     for (final e in _list) {
@@ -560,15 +548,9 @@ final class HtmlDocument {
   /// Every element matching CSS [selector], in document order.
   Elements $(String selector) => Elements(_Selector.parse(selector).inDocument(root));
 
-  /// Every element matching CSS [selector]; alias for [$].
-  Elements select(String selector) => $(selector);
-
   /// The nodes XPath [expression] selects: `//a/@href`, `//tr[td[2]="FLAC"]/td[1]/a`,
   /// `//h2[contains(., "Tracks")]/following-sibling::table[1]`.
   Nodes $x(String expression) => Nodes(_XPath.parse(expression).select(root));
-
-  /// The nodes XPath [expression] selects from root; alias for [$x].
-  Nodes xpath(String expression) => $x(expression);
 
   /// The `<head>` element.
   Element get head => root.children.firstWhere((e) => e.name == 'head');

@@ -8,6 +8,8 @@
 
 - `Path.readDoc`/`readJson`/`readYaml`/`readToml`/`readIni`/`readHtml`/`readXml` →
   `Doc.read(p)`, or `(await p.readText()).yaml` and friends.
+- `select`, `xpath` (on `Element`, `Elements`, `HtmlDocument`, `XmlDocument`) and
+  `JsonDocument.query` → `$` and `$x`.
 
 ### Console themes, a TUI framework, and a second bug hunt
 

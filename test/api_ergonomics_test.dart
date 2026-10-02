@@ -36,16 +36,14 @@ void main() {
       expect(doc['a'].to<int>(), 1);
     });
 
-    test('Query aliases on HTML and JSON', () {
+    test('Doc.html and Doc.json answer CSS, XPath and JSONPath', () {
       final html = Doc.html('<div class="main"><a href="https://example.com/link">Test</a></div>');
-      expect(html.select('.main a').text, 'Test');
-      expect(html.select('.main a').first.parent?.name, 'div');
-      expect(html.xpath('//a/text()').texts, ['Test']);
-      expect(html.xpath('//a').link?.toString(), 'https://example.com/link');
-      expect(html.xpath('//a').links.map((u) => u.toString()).toList(), ['https://example.com/link']);
+      expect(html.$('.main a').text, 'Test');
+      expect(html.$x('//a/text()').texts, ['Test']);
+      expect(html.$x('//a').link?.toString(), 'https://example.com/link');
 
       final json = Doc.json('{"items": [{"name": "A"}, {"name": "B"}]}');
-      expect(json.query(r'$.items[*].name').map((d) => d.to<String>()).toList(), ['A', 'B']);
+      expect(json.$(r'$.items[*].name').map((d) => d.to<String>()).toList(), ['A', 'B']);
     });
 
     test('Doc.read takes a Path', () async {
