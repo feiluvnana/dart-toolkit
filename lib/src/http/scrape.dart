@@ -1642,7 +1642,8 @@ Future<({List<Uri> pages, List<Uri> maps})> _sitemap(Uint8List bytes, Uri from) 
       var loc = m[1]!.trim();
       if (loc.startsWith('<![CDATA[') && loc.endsWith(']]>')) {
         loc = loc.substring(9, loc.length - 3).trim();
-      } else {
+      } else if (loc.contains('&') || loc.contains('<')) {
+        // Entities and stray markup need the HTML decoder; a plain URL is already its own text.
         loc = loc.html.text;
       }
       if (read(loc) case final url?) into.add(url);
