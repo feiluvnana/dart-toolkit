@@ -48,6 +48,11 @@
   separator only on Windows.
 - `changes()` on a file in a missing folder waited forever; the stream now fails with
   `PathNotFoundException`.
+- `Table.save` replaced a symlink with a plain file and dropped the old file's mode; it now
+  writes through the same atomic write as `Path.writeText`.
+- `orderBy(…).take(-1)` returned an empty table on 8+ rows but threw on fewer; it always throws
+  `RangeError`.
+- `toMarkdown` left a `|` or newline in a header unescaped, adding a column.
 
 #### Removed
 

@@ -785,4 +785,51 @@ void main() {
       expect(Row({'d': at}).get<DateTime>('d'), same(at));
     });
   });
+
+  group('round 3 bugs', () {
+    test('save writes through a link and keeps an odd mode', () async {
+      final dir = Directory.systemTemp.createTempSync('tk_save');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      File('${dir.path}/real.csv').writeAsStringSync('');
+      Link('${dir.path}/out.csv').createSync('${dir.path}/real.csv');
+      await Table.cells(
+        ['a'],
+        [
+          [1],
+        ],
+      ).save('${dir.path}/out.csv');
+      expect(FileSystemEntity.isLinkSync('${dir.path}/out.csv'), isTrue);
+      expect(File('${dir.path}/real.csv').readAsStringSync(), contains('1'));
+      if (!Platform.isWindows) {
+        final secret = File('${dir.path}/secret.csv')..writeAsStringSync('');
+        Process.runSync('chmod', ['600', secret.path]);
+        await Table.cells(
+          ['a'],
+          [
+            [1],
+          ],
+        ).save(secret.path);
+        expect(secret.statSync().mode & 0x1ff, 0x180);
+      }
+    });
+
+    test('take refuses a negative count on every table size', () {
+      Table rows(int n) => Table.rows([
+        for (var i = 0; i < n; i++) {'a': n - i},
+      ]);
+      expect(() => rows(100).orderBy('a').take(-1), throwsRangeError);
+      expect(() => rows(3).orderBy('a').take(-1), throwsRangeError);
+      expect(() => rows(3).take(-1), throwsRangeError);
+    });
+
+    test('toMarkdown escapes a pipe or newline in a header', () {
+      final header = Table.cells(
+        ['a|b', 'c\nd'],
+        [
+          [1, 2],
+        ],
+      ).toMarkdown().split('\n').first;
+      expect(header, r'| a\|b | c d |');
+    });
+  });
 }

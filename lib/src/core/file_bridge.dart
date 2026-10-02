@@ -1,7 +1,8 @@
 part of '../../core.dart';
 
-/// The atomic write `fs` (`Path.writeBytes`) and `formats` (`JsonDocument.save`) share: public
-/// only because those are separate libraries, and not covered by the versioning promise.
+/// The atomic write `fs` (`Path.writeBytes`), `formats` (`JsonDocument.save`) and `collection`
+/// (`Table.save`) share: public only because those are separate libraries, and not covered by
+/// the versioning promise.
 abstract final class FileBridge {
   static final _random = Random.secure();
 

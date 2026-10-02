@@ -234,9 +234,10 @@ final class Table {
 
   /// The first [count] rows in order, selected rather than sorted when not sorted yet.
   List<Row> _top(int count) {
+    RangeError.checkNotNegative(count, 'count');
     final unsorted = _unsorted;
     if (_rows != null || unsorted == null || count >= unsorted.length ~/ 8) return rows.take(count).toList();
-    if (count <= 0) return const [];
+    if (count == 0) return const [];
     final keys = _keys(unsorted, _order);
     return [for (final i in _smallest(unsorted.length, count, (x, y) => _compareAt(keys, _order, x, y))) unsorted[i]];
   }
@@ -439,7 +440,7 @@ final class Table {
     ];
     String cell(Object? v) => (v == null ? '' : '$v').replaceAll('|', r'\|').replaceAll('\n', ' ');
     final sb = StringBuffer()
-      ..writeln('| ${columns.join(' | ')} |')
+      ..writeln('| ${columns.map(cell).join(' | ')} |')
       ..writeln('| ${[for (final n in numeric) n ? '---:' : '---'].join(' | ')} |');
     for (final r in rows) {
       sb.writeln('| ${columns.map((c) => cell(r[c])).join(' | ')} |');
@@ -450,9 +451,7 @@ final class Table {
   /// Writes this table to [path] in the format its extension names — `.json`, `.ndjson` or
   /// `.jsonl`, `.md`, `.tsv`, and CSV for anything else — creating parent directories.
   /// JSON, NDJSON, TSV and CSV can be read back with [read].
-  Future<File> save(String path, {String? separator}) async {
-    final file = File(path);
-    await file.parent.create(recursive: true);
+  Future<File> save(String path, {String? separator}) {
     final ext = _extension(path);
     final content = switch (ext) {
       'json' => jsonEncode(rows),
@@ -460,17 +459,7 @@ final class Table {
       'md' || 'markdown' => toMarkdown(),
       _ => toCsv(separator: separator ?? (ext == 'tsv' ? '\t' : ',')),
     };
-    final tmp = File('$path.${DateTime.now().microsecondsSinceEpoch}.tmp');
-    try {
-      await tmp.writeAsString(content);
-      await tmp.rename(path);
-      return File(path);
-    } catch (_) {
-      try {
-        if (await tmp.exists()) await tmp.delete();
-      } catch (_) {}
-      rethrow;
-    }
+    return FileBridge.write(path, utf8.encode(content));
   }
 
   /// Prints this table to `Io.out`, the package's only table renderer.
