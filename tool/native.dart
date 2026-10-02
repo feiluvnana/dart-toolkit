@@ -61,17 +61,10 @@ Future<bool> _hasCommand(String name) async => await which(name) != null;
 
 Future<void> _ensureRustTarget(String rustTarget) async {
   if (!await _hasCommand('rustup')) return;
-  final res = await run('rustup target list --installed', quiet: true);
-  if (res.isOk) {
-    final installed = res.stdout.split(RegExp(r'\r?\n')).map((e) => e.trim()).where((e) => e.isNotEmpty).toSet();
-    if (!installed.contains(rustTarget)) {
-      Console.info('  Installing target $rustTarget via rustup...');
-      final add = await run('rustup target add $rustTarget', quiet: true);
-      if (!add.isOk) {
-        Console.warn('  Warning: Could not install target $rustTarget: ${add.stderr}');
-      }
-    }
-  }
+  if ((await run('rustup target list --installed').lines).contains(rustTarget)) return;
+  Console.info('  Installing target $rustTarget via rustup...');
+  final add = await run('rustup target add $rustTarget', strict: false, quiet: true);
+  if (!add.isOk) Console.warn('  Warning: Could not install target $rustTarget: ${add.stderr}');
 }
 
 Future<bool> buildOne(String? targetInput, {bool clean = false, bool verbose = true}) async {
@@ -213,13 +206,8 @@ void main(List<String> args) => Cli(
 
     if (cleanOnly) {
       Console.info('Cleaning native build cache...');
-      final res = await run('cargo clean', workdir: nativeDir, quiet: true);
-      if (!res.isOk) {
-        Console.error('cargo clean failed: ${res.stderr}');
-        await Lifecycle.exit(1);
-      } else {
-        Console.info('Clean complete.');
-      }
+      await run('cargo clean', workdir: nativeDir, quiet: true);
+      Console.info('Clean complete.');
       return;
     }
 
