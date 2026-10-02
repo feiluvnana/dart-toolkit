@@ -348,7 +348,7 @@ void main() {
         for (var i = 0; i < 3; i++) {
           expect((await (await browser.send(Request('GET', base.resolve('/rendered')))).read()).statusCode, 200);
         }
-        expect(held.isOpen, isTrue);
+        expect(held.isClosed, isFalse);
       } finally {
         await held.close();
       }
@@ -753,7 +753,7 @@ Future<void> main() async {
 
       // Closing a view of a tab closes nothing; the tab is still there.
       await inner.close();
-      expect(page.isOpen, isTrue);
+      expect(page.isClosed, isFalse);
       expect(await page.text('#here'), 'outside');
       expect(await page.frame('nothing-like-this'), isNull);
       await page.close();
@@ -1115,7 +1115,7 @@ Future<void> main() async {
       final page = await own.open(base.resolve('/outer'));
       final same = (await page.frame('same'))!;
       await own.close();
-      expect(same.isOpen, isFalse);
+      expect(same.isClosed, isTrue);
       final watch = Stopwatch()..start();
       await expectLater(same.waitFor('#nothing'), throwsA(isA<ClientException>()));
       expect(watch.elapsed, lessThan(const Duration(seconds: 2)));

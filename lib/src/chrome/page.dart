@@ -73,11 +73,8 @@ final class ChromePage {
   /// The URL this tab is on, after every redirect and navigation.
   Uri get url => _url;
 
-  /// Whether this tab is open and its client is connected.
-  bool get isOpen => _alive && _owner._alive && !_client.isClosed;
-
   /// Whether this tab or its client has been closed.
-  bool get isClosed => !isOpen;
+  bool get isClosed => !_alive || !_owner._alive || _client.isClosed;
 
   /// The status of the last document loaded, or `null` before the first.
   int? get statusCode => (_document?['status'] as num?)?.toInt();
@@ -121,7 +118,7 @@ final class ChromePage {
     final deadline = DateTime.now().add(patience);
     while (_interstitial(res) && DateTime.now().isBefore(deadline)) {
       await Future<void>.delayed(const Duration(milliseconds: 500));
-      if (!isOpen) break;
+      if (isClosed) break;
       try {
         res = await response(request);
       } catch (e) {
@@ -202,7 +199,7 @@ new Promise((resolve) => {
         );
         return found == true;
       } catch (e) {
-        if (!isOpen || !_navigatedAway(e)) rethrow;
+        if (isClosed || !_navigatedAway(e)) rethrow;
         await _settle();
       }
     }
@@ -627,7 +624,7 @@ new Promise((resolve) => {
 
   Future<bool> _left(Uri was, Duration? timeout, bool Function() decided) async {
     final deadline = DateTime.now().add(timeout ?? _client._timeout);
-    while (isOpen && !decided() && DateTime.now().isBefore(deadline)) {
+    while (!isClosed && !decided() && DateTime.now().isBefore(deadline)) {
       if (_url != was) return true;
       await Future<void>.delayed(const Duration(milliseconds: 20));
     }
@@ -821,7 +818,7 @@ new Promise((resolve) => {
   Future<void> _watchFrames() => _call('Runtime.enable');
 
   Future<Map<String, Object?>> _call(String method, [Map<String, Object?>? params, Duration? timeout]) {
-    if (!isOpen) return Future.error(ClientException('The page is closed', _url));
+    if (isClosed) return Future.error(ClientException('The page is closed', _url));
     return _client._call(method, params, _tab, timeout);
   }
 

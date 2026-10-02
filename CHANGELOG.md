@@ -18,6 +18,7 @@
   `killHaltedProcessesSync` → `ProcessBridge.registerHalted`, …
 - `TuiTheme`'s `borders`, `barFill`, `barEmpty`, `barHead`, `spinner` (parameters and getters) →
   `border`, `fill`, `empty`, `head`, `frames`, the names `ConsoleTheme` uses.
+- `ChromeClient.isOpen`, `ChromePage.isOpen` → `!isClosed`.
 
 ### Console themes, a TUI framework, and a second bug hunt
 

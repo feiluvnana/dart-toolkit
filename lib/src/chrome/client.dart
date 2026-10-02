@@ -249,9 +249,6 @@ final class ChromeClient implements Client {
   /// Whether this client was closed or its browser has gone.
   bool get isClosed => _closed || _gone;
 
-  /// Whether this client is open and connected to its browser.
-  bool get isOpen => !isClosed;
-
   /// Starts a headless Chrome of its own and connects to it.
   ///
   /// [profile] is a user-data directory to keep (cookies, logins); without one the profile
