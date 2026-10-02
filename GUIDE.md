@@ -687,7 +687,7 @@ url.scrape<String>().onRequest((ctx) {        // per request
 - A page is never lost: an expired wait or uncleared challenge returns the DOM as it stands;
   only a refused navigation (DNS, connection refused) throws.
 - Background downloads (component updates, optimisation guides) are disabled; your
-  `--disable-features=` merges with the built-in list.
+  `--disable-features=` merges with the built-in list (`launch` only; `connect` passes `args` as given).
 
 ### Driving a page
 
