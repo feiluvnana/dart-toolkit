@@ -408,9 +408,19 @@ final class ShellRun implements Future<ShellResult> {
   @override
   Future<ShellResult> whenComplete(FutureOr<void> Function() action) => _result.whenComplete(action);
 
+  /// Gives up after [timeLimit] as [Future.timeout] does, and stops the command and everything
+  /// it started then: [ShellTimeoutException] with what was printed so far, or [onTimeout]'s.
   @override
-  Future<ShellResult> timeout(Duration timeLimit, {FutureOr<ShellResult> Function()? onTimeout}) =>
-      _result.timeout(timeLimit, onTimeout: onTimeout);
+  Future<ShellResult> timeout(Duration timeLimit, {FutureOr<ShellResult> Function()? onTimeout}) {
+    var expired = false;
+    final timer = Timer(timeLimit, () {
+      expired = true;
+      _control.stop(TimeoutException('The command timed out after $timeLimit', timeLimit));
+    });
+    final result = _result.whenComplete(timer.cancel);
+    if (onTimeout == null) return result;
+    return result.catchError((Object _) => onTimeout(), test: (e) => expired && e is ShellTimeoutException);
+  }
 
   @override
   Stream<ShellResult> asStream() => _result.asStream();
@@ -484,7 +494,11 @@ Future<ShellResult> _exec(
           processes.add(
             await Process.start(
               'cmd',
-              ['/d', '/c', exe, ..._cmdSafe(args)],
+              [
+                '/d',
+                '/c',
+                ..._cmdSafe([exe, ...args]),
+              ],
               workingDirectory: scope.workdir?.path,
               environment: environment,
               mode: inherit ? ProcessStartMode.inheritStdio : ProcessStartMode.normal,
@@ -591,6 +605,8 @@ Future<ShellResult> _exec(
     ]);
     timer?.cancel();
     unregister?.call();
+    // Ended: a later kill() has nothing left to signal.
+    control.halt = null;
 
     ShellResult result(int code) =>
         ShellResult(command: display, exitCode: code, stdout: '$stdoutBuf', stderr: '$stderrBuf');

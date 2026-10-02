@@ -425,4 +425,43 @@ void main() {
       expect(lines, ['ready']);
     }, testOn: '!windows');
   });
+
+  group('round 3 bugs', () {
+    test('timeout() stops the command it gives up on', () async {
+      final marker = 'tk_to_${pid}_${DateTime.now().microsecondsSinceEpoch}';
+      await expectLater(
+        run("sh -c 'sleep 33; # $marker'", quiet: true).timeout(const Duration(milliseconds: 300)),
+        throwsA(isA<ShellTimeoutException>()),
+      );
+      expect(((await Process.run('pgrep', ['-f', marker])).stdout as String).trim(), isEmpty);
+      final late = await run("sh -c 'sleep 33'", quiet: true).timeout(
+        const Duration(milliseconds: 100),
+        onTimeout: () => ShellResult(command: 'x', exitCode: 9, stdout: '', stderr: ''),
+      );
+      expect(late.exitCode, 9);
+    }, testOn: '!windows');
+
+    test('kill() after the command ended signals nothing', () async {
+      // Signalling a tree starts with `ps`; a `ps` first on the PATH records that it ran.
+      final dir = Directory('.dart_tool/tk_stale_kill')..createSync(recursive: true);
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final ps = File('${dir.path}/ps')..writeAsStringSync('#!/bin/sh\ntouch "\$(dirname "\$0")/ran"\n');
+      Process.runSync('chmod', ['+x', ps.path]);
+      File('${dir.path}/main.dart').writeAsStringSync('''
+import 'package:dart_toolkit/process.dart';
+void main() async {
+  final done = run('true', quiet: true);
+  await done;
+  await done.kill();
+}
+''');
+      final r = await Process.run(
+        Platform.resolvedExecutable,
+        ['${dir.path}/main.dart'],
+        environment: {'PATH': '${dir.absolute.path}:${Platform.environment['PATH']}'},
+      );
+      expect(r.exitCode, 0, reason: '${r.stderr}');
+      expect(File('${dir.path}/ran').existsSync(), isFalse);
+    }, testOn: '!windows');
+  });
 }

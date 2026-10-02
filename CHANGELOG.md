@@ -67,6 +67,12 @@
 - `map(…, ordered: true)` kept pulling the source while one slow early item held up the output,
   buffering every later result; a buffered result now holds its place against `size`.
 - `Pool.spawn` rethrew a failed `Worker.init` without its stack.
+- `run(…).timeout(limit)` threw at the limit but left the command running; it now stops it and
+  everything it started, throwing `ShellTimeoutException` with what was printed.
+- `kill()` on a command that had already ended still listed every process to signal its dead
+  tree, and kept those pids for the exit-time SIGKILL; it now does nothing.
+- On Windows a command run through `cmd /d /c` checked its arguments for `&|<>^%"` but not the
+  program name (`run('"a&calc"')`); both are checked (unverified on Windows).
 
 #### Removed
 
