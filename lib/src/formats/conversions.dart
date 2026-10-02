@@ -45,6 +45,10 @@ abstract final class Doc {
   /// `.json`, `.yaml`/`.yml`, `.toml`, `.ini`/`.cfg`/`.conf`.
   static Future<JsonDocument> read(Object path) => JsonDocument.read(path.toString());
 
+  /// The table in the file at [path], read as [Table.read] does: `.json` (an array of objects),
+  /// `.ndjson`/`.jsonl`, `.tsv`, and CSV for any other extension.
+  static Future<Table> table(Object path, {String? separator}) => Table.read(path.toString(), separator: separator);
+
   /// Parses [text] as JSON.
   static JsonDocument json(String text) => JsonDocument.parse(text);
 

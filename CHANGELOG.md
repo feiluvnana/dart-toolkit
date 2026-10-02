@@ -25,6 +25,7 @@
 
 #### Added
 
+- `Doc.table(path)`: a CSV, TSV, JSON or NDJSON file from the `Doc` facade (forwards to `Table.read`).
 - A flag can default to on: `Opt.flag('color').or(true)`, turned off by `--no-color`; help shows
   `--[no-]color` and `[default: true]`, and shell completion offers `--no-color`.
 

@@ -1312,6 +1312,24 @@ folded: >
       expect(() => doc['bad'].to<DateTime>(), throwsStateError);
     });
 
+    test('Doc.table reads CSV, TSV and JSON tables; a non-array JSON or a missing file throws', () async {
+      final dir = await Directory.systemTemp.createTemp('tk_fmt');
+      addTearDown(() => dir.delete(recursive: true));
+      File('${dir.path}/a.csv').writeAsStringSync('name,n\nx,1\ny,2\n');
+      File('${dir.path}/b.tsv').writeAsStringSync('name\tn\nz\t3\n');
+      File('${dir.path}/c.json').writeAsStringSync('[{"name": "w", "n": 4}]');
+      File('${dir.path}/d.json').writeAsStringSync('{"not": "a list"}');
+
+      final csv = await Doc.table('${dir.path}/a.csv');
+      expect(csv.columns, ['name', 'n']);
+      expect(csv.length, 2);
+      expect((await Doc.table('${dir.path}/b.tsv')).rows.single.text('name'), 'z');
+      expect((await Doc.table('${dir.path}/c.json')).rows.single.number('n'), 4);
+      expect((await Doc.table('${dir.path}/a.csv', separator: ';')).columns, ['name,n']);
+      await expectLater(Doc.table('${dir.path}/d.json'), throwsA(isA<FormatException>()));
+      await expectLater(Doc.table('${dir.path}/missing.csv'), throwsA(isA<FileSystemException>()));
+    });
+
     test('save writes JSON or YAML by extension, and read reads it back', () async {
       final dir = await Directory.systemTemp.createTemp('tk_fmt');
       addTearDown(() => dir.delete(recursive: true));

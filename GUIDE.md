@@ -254,7 +254,7 @@ for (final (k, v) in counts.sequence.sortedByValue(descending: true).take(3)) pr
 ### `Table` — rows of named columns
 
 ```dart
-final sales = await Table.read('sales.csv');      // .csv .tsv .json .ndjson/.jsonl
+final sales = await Table.read('sales.csv');      // .csv .tsv .json .ndjson/.jsonl   (also Doc.table)
 await for (final row in Table.readRows('huge.csv')) print(row['id']);   // streamed
 Table.rows(maps);
 Table.cells(['name', 'size'], [['a', 1], ['b', 2]]);
