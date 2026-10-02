@@ -553,7 +553,7 @@ final class Spinner extends _Live {
   @override
   void _stop() => stop();
 
-  /// The final line is a log line at [severity]: `-q` keeps a failure and drops a success.
+  /// The final line is a log line at [severity]: `-q` keeps a warning or a failure and drops a success.
   void _finish(String Function(String)? colour, String mark, String? message, LogLevel severity) {
     if (_stopped) return;
     _stopped = true;

@@ -975,7 +975,7 @@ table.show(border: Border.markdown, align: 'lr', cell: (row, c) => row.text(c));
 
 `isLive` on a view says whether the line is redrawn in place or is the one a log keeps.
 
-- Under `-q` indicators draw nothing; only a failure's final line is written.
+- Under `-q` indicators draw nothing; only a warning's or a failure's final line is written.
 - Without a terminal everything degrades to plain lines; a terminal that cannot draw Unicode
   gets `ConsoleTheme.ascii`.
 - Prompts are async (^C ends cleanly, echo restored) and write to stderr; `confirm` re-asks on
