@@ -1,12 +1,14 @@
 # Conventions
 
-The package optimises for two things, in this order:
+The package optimises for these, in this order:
 
 1. **How fast it runs.** Startup, throughput and memory, measured (§5).
-2. **How little a script has to write.** When the two conflict, speed wins: a shorter spelling that
-   costs measurable time loses to a longer one that does not.
+2. **How little a script has to write, and how easily its author finds the way**, ranked equal.
+   When they pull apart, keep both: the short spelling, and a facade member (`Http.get`,
+   `Doc.json`, `Fs.home`) that forwards to it. Speed beats both: a shorter or more findable
+   spelling that costs measurable time loses to one that does not.
 
-Coherence, documentation and feature count come after both. Each rule exists because an audit
+Coherence, documentation and feature count come after these. Each rule exists because an audit
 found the opposite; its *why* is that finding. What a release changed is in `CHANGELOG.md`.
 
 ---
@@ -23,11 +25,15 @@ or its compile cost falls on programs that never use it. Today: `chrome.dart` (`
 > *Why:* a package name silently beats a `dart:` name — the barrel's old `Native` hid
 > `dart:ffi`'s `@Native`; and every scraper paid Chrome's compile.
 
-**One name per operation.** No aliases, not even deprecated. Two doors are fine only when the
-situation picks the door: `url.get()` (no client in hand, uses `Http.scope`) vs `client.get(url)`.
+**One name per operation.** No aliases, not even deprecated: two names on one receiver
+(`select`/`$`, `isOpen`/`isClosed`) are out. Two doors are fine when the situation picks the door
+— `url.get()` (no client in hand, uses `Http.scope`) vs `client.get(url)` — or when one is a
+facade member forwarding to the other: `Http.get(url)` is where a newcomer starts typing,
+`'…'.url.get()` is what they write once they know it.
 
 > *Why:* `download`/`downloadAll`, `outerHtml`/`markup`, `client.crawl`/`client.scrape` made
-> call sites choose for no reason.
+> call sites choose for no reason. Facades stay because a script author who doesn't know a
+> conversion exists types the module's name first (owner decision, 2026-10-02).
 
 **A conversion is the way in.** `'…'.url`, `.path`, `.json`, `.html`, `.table`, `60.s`. Nothing
 else goes on `String`, `Iterable` or `Map`; the vocabulary lives on the returned type. A module's

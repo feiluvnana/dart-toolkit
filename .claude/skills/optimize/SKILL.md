@@ -1,6 +1,6 @@
 ---
 name: optimize
-description: Thoroughly audit and optimize dart-toolkit in every aspect (performance first, then bloat, API brevity, docs, consistency, bugs, platform parity) in three gated rounds. Use when the user types /optimize or asks for a full optimization or audit pass of the library. Module names after the command limit the scope, e.g. "/optimize http formats"; "--auto" runs without checkpoints.
+description: Thoroughly audit and optimize dart-toolkit in every aspect (performance first, then API brevity and discoverability, bloat, docs, consistency, bugs, platform parity) in three gated rounds. Use when the user types /optimize or asks for a full optimization or audit pass of the library. Module names after the command limit the scope, e.g. "/optimize http formats"; "--auto" runs without checkpoints.
 ---
 
 # /optimize
@@ -50,7 +50,7 @@ next round starts.
 | Rule | What it means |
 |---|---|
 | **Checkpoints** | Unless `--auto` was passed, **stop and wait for the user** after every step marked ⏸: print the checkpoint report from its template, then end your turn. Continue only on the user's reply (§7). The user may add items rejected earlier: they override a skeptic's verdict. With `--auto`, print the same report and carry on as if the reply were *go*. The stops in §8 apply in both modes. |
-| **Priority** | `CONVENTIONS.md` order: **speed > call-site brevity > everything else**. Speed means measured startup, throughput or memory (§2.1). A shorter spelling that costs measurable time loses. Pruning counts as brevity. An addition must delete more at call sites than it adds to the surface, and must cost no measurable startup. Speculative features are rejected. |
+| **Priority** | `CONVENTIONS.md` order: **speed > call-site brevity = discoverability > everything else**. Speed means measured startup, throughput or memory (§2.1). A shorter spelling that costs measurable time loses. Discoverability means a script author reaches an operation from a facade (`Http.`, `Doc.`, `Fs.`, `Shell.`, `Hash.`, `Console.`) or autocomplete without already knowing its name: a facade member that forwards to the short spelling is not an alias, but a second name on the same receiver is. Pruning counts as brevity. An addition must delete more at call sites than it adds to the surface, and must cost no measurable startup. Speculative features are rejected. |
 | **Clean cuts** | No `@Deprecated`, shims or aliases. A rename or removal updates every call site in `lib/ bin/ tool/ test/` and every doc in the same commit. |
 | **Reports stay in chat** | No `AUDIT_*.md` or other report files. The decision record (accepted, and rejected with reasons) goes into the gate's audit-record commit body, changes go into `CHANGELOG.md` (Unreleased), and new rules go into `CONVENTIONS.md` with their *why*. |
 | **`bin/` is examples** | Smoke-test `bin/*.dart`; delete or merge duplicates freely. |
@@ -200,9 +200,11 @@ Rules:
   "Not a finding" list.
 - If nothing clears the bar, reply exactly `NO_ACTIONABLE_ITEMS` and nothing else.
 
-Priority bar: speed > call-site brevity > everything else. Speed means measured startup,
-throughput or memory. A shorter spelling that costs measurable time loses. Pruning counts as
-brevity. An addition must delete more at call sites than it adds to the surface, and must cost no
+Priority bar: speed > call-site brevity = discoverability > everything else. Speed means
+measured startup, throughput or memory. A shorter spelling that costs measurable time loses.
+Discoverability means reaching an operation from a facade (`Http.`, `Doc.`, `Fs.`, `Shell.`,
+`Hash.`, `Console.`) without knowing its name: a facade member that forwards to the short
+spelling is not an alias; a second name on the same receiver is. Pruning counts as brevity. An addition must delete more at call sites than it adds to the surface, and must cost no
 measurable startup. Speculative features are rejected.
 
 Severity:
@@ -557,8 +559,9 @@ in the body.
 ### `BLOAT`: surface and code that earn nothing
 
 **Hunt**
-- *Aliases:* two spellings of one operation, or a method that only composes two others with no
-  call-site saving (CONVENTIONS §1 "One name per operation").
+- *Aliases:* two names for one operation on the same receiver (`select`/`$`, `isOpen`/`isClosed`),
+  or a method that only composes two others with no call-site saving (CONVENTIONS §1 "One name
+  per operation"). A facade member that forwards to the short spelling is not an alias.
 - *Extensions on `String`/`Iterable`/`Map`/`int`* beyond the conversion getter (`.url`, `.path`,
   `.json`, `60.s`). The vocabulary belongs on the returned type.
 - *Public but not API:* `git grep -wn Name -- lib bin test '*.md'` finds only the defining file and
@@ -574,8 +577,9 @@ in the body.
 net lines deleted. Name the replacement callers will use.
 
 **Not a finding:** anything CONVENTIONS keeps on purpose (`Element.attr`, `Sequence.union`,
-`chunk`, Chrome's `frame`/`pdf`/dialogs, `Duration.jittered`); a deletion that makes a common
-call longer; "unused in `bin/`" alone, because the bar is usefulness to script authors, not `bin/`
+`chunk`, Chrome's `frame`/`pdf`/dialogs, `Duration.jittered`); a facade member that forwards to
+the short spelling (discoverability ranks with brevity); a deletion that makes a common call
+longer; "unused in `bin/`" alone, because the bar is usefulness to script authors, not `bin/`
 usage.
 
 **Fix:** delete, and update every call site and doc in the same commit. Commit as `refactor: …`,
@@ -642,10 +646,12 @@ the doc, mark it `deferred (R3)` in the ledger (§1); Round 3's finders get it.
 **Evidence:** the path a user takes today (what they must already know) beside the path after
 the fix. The common call must not get longer.
 
-**Not a finding:** short globals that are the point (`run(...)`, `ask`, `confirm`); a second door
-to the same operation (an alias, so `BLOAT`) unless the situation picks the door (CONVENTIONS §1).
+**Not a finding:** short globals that are the point (`run(...)`, `ask`, `confirm`); a second name
+on the same receiver (an alias, so `BLOAT`).
 
-**Fix:** *move* the entry point, never duplicate it. A clean cut, with every call site updated.
+**Fix:** add the facade member as a one-line forward to the short spelling, or move a top-level
+function onto the type it takes (a clean cut, every call site updated). Never a second name on
+the same receiver.
 
 ### `CONS`: siblings that read alike
 
@@ -662,8 +668,8 @@ to the same operation (an alias, so `BLOAT`) unless the situation picks the door
 
 **Evidence:** the two sites side by side, each cited, and the CONVENTIONS rule they split on.
 
-**Not a finding:** a difference a CONVENTIONS rule allows (two doors chosen by situation, `Table`
-keyed by column name, the two `Object` parameters on `ctx.follow` and `client.scrape`).
+**Not a finding:** a difference a CONVENTIONS rule allows (two doors chosen by situation, a facade
+member beside its short spelling, `Table` keyed by column name, the two `Object` parameters on `ctx.follow` and `client.scrape`).
 
 **Fix:** rename every site; the zero-hit `git grep` from §6 *Round 2 extras* applies.
 
