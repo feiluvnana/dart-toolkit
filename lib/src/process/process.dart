@@ -213,8 +213,8 @@ abstract final class Shell {
 ///
 /// [command] is split as a POSIX shell reads a simple command and exec'd directly, so
 /// **never interpolate a scraped or user-supplied value into it**: pass it in [args], which
-/// is never re-read: `run('git commit -m', args: [message])`. Unquoted `|`, `&&` or `>` is an
-/// [ArgumentError]; [shell] hands the string to `/bin/sh -c` (`cmd /c` on Windows) with
+/// is never re-read: `run('git commit -m', args: [message])`. Unquoted shell syntax (`| & ; < >`,
+/// a backtick, `* ? [`, a leading `~`, `$VAR`, `${`, `$(`) is an [ArgumentError]; [shell] hands the string to `/bin/sh -c` (`cmd /c` on Windows) with
 /// [args] as `$1`, `$2`…: `run(r'grep -c "$1" *.log', shell: true, args: [pattern])`.
 ///
 /// On Windows only a `.bat`, a `.cmd` or a `cmd.exe` built-in goes through `cmd.exe`, and

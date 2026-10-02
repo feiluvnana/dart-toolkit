@@ -534,7 +534,8 @@ await server.kill();                                             // the server a
 ```
 
 - The string splits like a shell's simple command: an unclosed quote is a `FormatException`;
-  `|`, `&&`, `;`, `>`, `$(` outside quotes is an `ArgumentError` pointing at `shell: true`.
+  unquoted shell syntax (`| & ; < >`, a backtick, the globs `* ? [`, a leading `~`, `$VAR`, `${`,
+  `$(`) is an `ArgumentError` pointing at `shell: true` (or `Path.glob` for a glob).
 - Cancel, `timeout` or ^C send SIGTERM to the whole tree, SIGKILL after 2 s. Cancel throws
   `CancelledException`; timeout throws `ShellTimeoutException` (a `TimeoutException` whose
   `.result` holds the output so far).
