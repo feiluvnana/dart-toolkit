@@ -73,6 +73,10 @@
   tree, and kept those pids for the exit-time SIGKILL; it now does nothing.
 - On Windows a command run through `cmd /d /c` checked its arguments for `&|<>^%"` but not the
   program name (`run('"a&calc"')`); both are checked (unverified on Windows).
+- A ^C at `Console.secret` left through the prompt's own signal watch, cutting off the
+  `Lifecycle.onExit` listeners (Chrome, children, cleanup) mid-run; it now leaves through
+  Lifecycle's handler like any other signal.
+- `Console.secret` trimmed the answer, so a password with a leading or trailing space failed.
 
 #### Removed
 

@@ -1010,11 +1010,12 @@ class Console {
   // Every prompt is async: the read blocks a helper isolate ([Io.readLine]), so `Cli.run`'s
   // ^C handler still runs while one waits.
 
-  /// Writes [question] between the theme's prompt marks and reads one trimmed line, `null`
+  /// Writes [question] between the theme's prompt marks and reads one line, trimmed, `null`
   /// at end of input. Every word goes to stderr, so `app > out.txt` captures no question.
-  static Future<String?> _answer(String question) async {
+  static Future<String?> _answer(String question, {bool trim = true}) async {
     Io.err.write('${theme.prompt}$question${theme.promptEnd}');
-    return (await Io.readLine())?.trim();
+    final line = await Io.readLine();
+    return trim ? line?.trim() : line;
   }
 
   static void _reject(String message) => Io.err.writeln(theme.danger('${theme.indent}$message'));
@@ -1074,29 +1075,23 @@ class Console {
   });
 
   /// Prompts for sensitive input, hiding typed characters.
+  ///
+  /// The answer is kept as typed, spaces included. A ^C while it waits turns echo back on and
+  /// leaves as any signal does, through the [Lifecycle.onExit] listeners.
   static Future<String> secret(String message) => _suspend(() async {
-    final watches = <StreamSubscription<ProcessSignal>>[];
-    void onSig(ProcessSignal s) {
-      _restoreTerminal();
-      exit(128 + s.signalNumber);
-    }
-
     try {
       if (Io.input == null && stdin.hasTerminal) {
+        // Lifecycle's handler restores the terminal first, then runs the exit listeners.
+        _ensureSignalHandlers();
         stdin.echoMode = false;
         _echoOff = true;
-        watches.add(ProcessSignal.sigint.watch().listen(onSig));
-        if (!Platform.isWindows) watches.add(ProcessSignal.sigterm.watch().listen(onSig));
       }
     } catch (_) {}
     try {
-      final input = await _answer(message) ?? '';
+      final input = await _answer(message, trim: false) ?? '';
       Io.err.writeln();
       return input;
     } finally {
-      for (final w in watches) {
-        await w.cancel();
-      }
       _restoreTerminal();
     }
   });

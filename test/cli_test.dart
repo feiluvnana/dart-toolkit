@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
 
@@ -1937,6 +1938,51 @@ void main() {
         '| bcd  | 100 |\n',
       );
     });
+  });
+
+  group('round 3 bugs', () {
+    test('secret keeps the spaces a password starts or ends with', () async {
+      Io.input = () => ' p w ';
+      addTearDown(Io.reset);
+      expect(await Console.secret('Password'), ' p w ');
+    });
+
+    test('^C at a secret prompt still runs the exit hooks', () async {
+      final dir = Directory('.dart_tool/tk_secret_sigint')..createSync(recursive: true);
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final marker = File('${dir.absolute.path}/hooked');
+      File('${dir.path}/main.dart').writeAsStringSync('''
+import 'dart:io';
+import 'package:dart_toolkit/cli.dart';
+void main() async {
+  Lifecycle.onExit(() async {
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    File('${marker.path}').writeAsStringSync('x');
+  });
+  stderr.writeln('pid \$pid');
+  await Console.secret('pw');
+}
+''');
+      // A pty, so the prompt turns echo off and watches for signals as it does for a person.
+      final main = '${dir.path}/main.dart';
+      final child = await Process.start('script', [
+        if (Platform.isMacOS) ...['-q', '/dev/null', Platform.resolvedExecutable, main],
+        if (!Platform.isMacOS) ...['-qc', '${Platform.resolvedExecutable} $main', '/dev/null'],
+      ]);
+      final out = StringBuffer();
+      final ready = Completer<int>();
+      child.stdout.transform<String>(utf8.decoder).listen((s) {
+        out.write(s);
+        if (RegExp(r'pid (\d+)').firstMatch('$out') case final m? when !ready.isCompleted) {
+          ready.complete(int.parse(m[1]!));
+        }
+      });
+      final dartPid = await ready.future.timeout(const Duration(seconds: 30));
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      Process.killPid(dartPid, ProcessSignal.sigint);
+      await child.exitCode.timeout(const Duration(seconds: 10));
+      expect(marker.existsSync(), isTrue, reason: '$out');
+    }, testOn: 'mac-os || linux');
   });
 }
 
