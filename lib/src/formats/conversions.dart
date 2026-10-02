@@ -41,7 +41,7 @@ extension StringFormatsExtensions on String {
 ///
 /// {@category Formats}
 abstract final class Doc {
-  /// The document in the file at [path] (a [String] or [Path]), parsed by extension:
+  /// The document in the file at [path] (a [String] or a `Path`), parsed by extension:
   /// `.json`, `.yaml`/`.yml`, `.toml`, `.ini`/`.cfg`/`.conf`.
   static Future<JsonDocument> read(Object path) => JsonDocument.read(path.toString());
 

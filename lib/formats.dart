@@ -18,7 +18,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'collection.dart';
-import 'fs.dart';
+import 'core.dart';
 
 part 'src/formats/conversions.dart';
 part 'src/formats/html/dom.dart';

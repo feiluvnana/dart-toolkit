@@ -67,13 +67,13 @@ Future<void> main() => Http.scope(() async {
 |---|---|---|
 | `core.dart` | `Either`, `Env`, `Io`, `.url`, `60.s`, progress interfaces | — |
 | `async.dart` | `Cancel`, `parallelize`, `Worker`, `Pool`, `retry`, `Semaphore`, stream operators | `core` |
-| `collection.dart` | `Sequence`, `Group`, `Table`, `Row` | `formats` |
-| `formats.dart` | `JsonDocument`, `YamlDocument`, TOML, INI, the HTML/XML tree, `$`, `$x` | `collection` |
-| `fs.dart` | `Path`, watching, archives, compression | `native` |
+| `collection.dart` | `Sequence`, `Group`, `Table`, `Row` | `core` |
+| `formats.dart` | `JsonDocument`, `YamlDocument`, TOML, INI, the HTML/XML tree, `$`, `$x` | `core`, `collection` |
+| `fs.dart` | `Path`, watching, archives, compression | `core`, `hash`, `native` |
 | `hash.dart` | `Hash`, `Secure`, hex/base64/base32 | `native` |
-| `process.dart` | `run`, `ShellRun`, `Shell.scope`, pipelines, `which` | `fs` |
-| `http.dart` | `Request`, `Response`, `Client`, `Http.scope`, `Crawler`, downloads | `fs`, `hash`, `formats` |
-| `chrome.dart` | `ChromeClient`, `ChromePage`, `Device`, `Resource` — **not in the barrel** | `http` |
+| `process.dart` | `run`, `ShellRun`, `Shell.scope`, pipelines, `which` | `core`, `fs` |
+| `http.dart` | `Request`, `Response`, `Client`, `Http.scope`, `Crawler`, downloads | `async`, `core`, `formats`, `fs`, `hash`, `native` |
+| `chrome.dart` | `ChromeClient`, `ChromePage`, `Device`, `Resource` — **not in the barrel** | `async`, `formats`, `fs`, `http` |
 | `cli.dart` | `Opt`, `Arg`, `CliCommand`, `Cli`, `Lifecycle`, `Console` | `core` |
 | `tui.dart` | `Tui`, `TuiApp`, widgets, `Key`/`Char`/`Mouse`, `FakeTerminal` — **not in the barrel** | `core` |
 | `native.dart` | `NativeLib` | — |

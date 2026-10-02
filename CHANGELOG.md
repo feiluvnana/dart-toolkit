@@ -4,6 +4,12 @@
 
 ### Audit V
 
+#### Faster
+
+- `formats` no longer imports `fs` (so not `hash`, `native`, `dart:ffi` or `path` either):
+  startup over bare 443 → 239 ms and 366 → 269 ms. `JsonDocument.save` and `Path.writeBytes`
+  share one atomic write in `core`; `save` keeps an odd file mode by writing in place.
+
 #### Removed
 
 - `Path.readDoc`/`readJson`/`readYaml`/`readToml`/`readIni`/`readHtml`/`readXml` →

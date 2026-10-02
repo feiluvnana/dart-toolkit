@@ -1329,6 +1329,26 @@ folded: >
       expect(await File('${dir.path}/c.toml').exists(), isFalse);
     });
 
+    test('save replaces a file atomically, keeps an odd mode, and follows a link', () async {
+      final dir = await Directory.systemTemp.createTemp('tk_fmt');
+      addTearDown(() => dir.delete(recursive: true));
+      final doc = '{"a": 1}'.json;
+      final plain = File('${dir.path}/plain.json')..writeAsStringSync('old');
+      final private = File('${dir.path}/private.json')..writeAsStringSync('old');
+      await Process.run('chmod', ['600', private.path]);
+      final link = Link('${dir.path}/link.json')..createSync(plain.path);
+
+      await doc.save(plain.path);
+      await doc.save(private.path);
+      await doc.save(link.path);
+
+      expect(plain.readAsStringSync(), '{\n  "a": 1\n}\n');
+      expect(private.readAsStringSync(), '{\n  "a": 1\n}\n');
+      expect(private.statSync().mode & 0x1ff, 0x180, reason: 'written in place: mode 600 stays');
+      expect(FileSystemEntity.isLinkSync(link.path), isTrue, reason: 'the link still points at plain.json');
+      expect(dir.listSync().map((e) => e.path).where((p) => p.endsWith('.tmp')), isEmpty);
+    }, testOn: '!windows');
+
     test('in-place mutation with []= and remove()', () {
       final doc = '{"server": {"port": 8080, "tags": ["a", "b"]}}'.json;
       doc['server']['port'] = 9000;

@@ -242,54 +242,12 @@ extension type const Path(String path) implements String {
   File writeTextSync(String content, {Encoding encoding = utf8}) => writeBytesSync(encoding.encode(content));
 
   /// Writes [bytes] to this file; atomic, as [writeText] is.
-  Future<File> writeBytes(List<int> bytes) async {
-    final (:target, :mode) = _writePlan(path);
-    if (target == null) return asFile.writeAsBytes(bytes);
-    if (mode == null) await File(target).parent.create(recursive: true);
-    final opened = _openTemp(target, mode);
-    if (opened == null) return asFile.writeAsBytes(bytes);
-    final (tmp, out) = opened;
-    try {
-      try {
-        await out.writeFrom(bytes);
-      } finally {
-        await out.close();
-      }
-      await tmp.rename(target);
-    } catch (_) {
-      _deleteQuietly(tmp);
-      rethrow;
-    }
-    return asFile;
-  }
+  Future<File> writeBytes(List<int> bytes) =>
+      FileBridge.write(path, bytes, chmod: NativeLib.isAvailable ? _chmod : null);
 
   /// [writeBytes], synchronously.
-  File writeBytesSync(List<int> bytes) {
-    final (:target, :mode) = _writePlan(path);
-    if (target == null) {
-      asFile.writeAsBytesSync(bytes);
-      return asFile;
-    }
-    if (mode == null) File(target).parent.createSync(recursive: true);
-    final opened = _openTemp(target, mode);
-    if (opened == null) {
-      asFile.writeAsBytesSync(bytes);
-      return asFile;
-    }
-    final (tmp, out) = opened;
-    try {
-      try {
-        out.writeFromSync(bytes);
-      } finally {
-        out.closeSync();
-      }
-      tmp.renameSync(target);
-    } catch (_) {
-      _deleteQuietly(tmp);
-      rethrow;
-    }
-    return asFile;
-  }
+  File writeBytesSync(List<int> bytes) =>
+      FileBridge.writeSync(path, bytes, chmod: NativeLib.isAvailable ? _chmod : null);
 
   /// Writes [lines] to this file, each ending in a newline; atomic, as [writeText] is.
   Future<File> writeLines(Iterable<String> lines, {Encoding encoding = utf8}) =>
@@ -760,75 +718,7 @@ final int _umask = () {
   return int.tryParse('${r.stdout}'.trim(), radix: 8) ?? 0x12; // 022
 }();
 
-/// Where an atomic write renames its temporary file to (this path, or the file a link here
-/// leads to) and the existing file's mode. No target means write in place: for a device, a
-/// FIFO, `/dev/stdout` or a dangling link, which a rename would replace or could not reach,
-/// and for an existing file whose mode cannot be carried over without the native library.
-({String? target, int? mode}) _writePlan(String path) {
-  const inPlace = (target: null, mode: null);
-  final stat = FileStat.statSync(path);
-  final isLink = FileSystemEntity.isLinkSync(path);
-  if (stat.type == FileSystemEntityType.notFound) {
-    // `/dev/null` stats as nothing at all, and only `exists` sees it.
-    return isLink || File(path).existsSync() ? inPlace : (target: path, mode: null);
-  }
-  if (stat.type != FileSystemEntityType.file) return inPlace;
-  if (Platform.isWindows) return isLink ? inPlace : (target: path, mode: null);
-  final target = isLink ? File(path).resolveSymbolicLinksSync() : path;
-  // Not one of the kernel's own: `/dev/stdout` redirected to a file is a link to one, and
-  // renaming over it would leave the shell's copy behind.
-  if (stat.mode & 0xf000 != 0x8000 ||
-      !NativeLib.isAvailable ||
-      _kernelOwned(p.absolute(path)) ||
-      _kernelOwned(target)) {
-    return inPlace;
-  }
-  // A rename would replace a read-only file, so ask for write permission first.
-  File(target).openSync(mode: FileMode.append).closeSync();
-  return (target: target, mode: stat.mode & 0xfff);
-}
-
-bool _kernelOwned(String path) => path.startsWith('/dev/') || path.startsWith('/proc/');
-
-void _deleteQuietly(File file) {
-  try {
-    file.deleteSync();
-  } on FileSystemException {
-    // Never written, or already gone.
-  }
-}
-
-/// A new, empty file beside [target] for its next contents, open for writing and given [mode]
-/// before a byte is in it; `null` when the folder refuses a new file (write in place, then).
-/// The name is random and the file made exclusively, so no other writer shares it.
-(File, RandomAccessFile)? _openTemp(String target, int? mode) {
-  for (var tries = 0; ; tries++) {
-    final tmp = File(p.join(p.dirname(target), '.${p.basename(target)}.${Secure.bytes(8).hex}.tmp'));
-    try {
-      tmp.createSync(exclusive: true);
-    } on FileSystemException catch (e) {
-      final code = e.osError?.errorCode;
-      if ((Platform.isWindows ? const {5, 19} : const {1, 13, 30}).contains(code)) return null;
-      if (code == (Platform.isWindows ? 80 : 17) && tries < 3) continue;
-      rethrow;
-    }
-    try {
-      final out = tmp.openSync(mode: FileMode.writeOnly);
-      try {
-        if (mode != null) _chmod(tmp.path, mode);
-      } catch (_) {
-        out.closeSync();
-        rethrow;
-      }
-      return (tmp, out);
-    } catch (_) {
-      _deleteQuietly(tmp);
-      rethrow;
-    }
-  }
-}
-
-/// Whether [name] is one of [_openTemp]'s files.
+/// Whether [name] is one of [FileBridge]'s temporary files.
 bool _isTemp(String name) => _tempName.hasMatch(name);
 
 Future<void> _deleteNonDir(String path) async {

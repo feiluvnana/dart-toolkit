@@ -43,9 +43,7 @@ class JsonDocument {
       'yaml' || 'yml' => toYaml(),
       _ => throw _unknownExtension(path, ext, 'write', 'json, yaml and yml can be written'),
     };
-    final p = Path(path);
-    await p.writeText(text);
-    return File(path);
+    return FileBridge.write(path, utf8.encode(text));
   }
 
   static String _extensionOf(String path) {

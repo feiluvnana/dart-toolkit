@@ -17,6 +17,7 @@ part 'src/core/bytes.dart';
 part 'src/core/cancel.dart';
 part 'src/core/either.dart';
 part 'src/core/env.dart';
+part 'src/core/file_bridge.dart';
 part 'src/core/process_registry.dart';
 part 'src/core/progress.dart';
 part 'src/core/stdio.dart';
