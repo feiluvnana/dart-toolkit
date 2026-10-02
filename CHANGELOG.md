@@ -16,6 +16,8 @@
 - `zip`/`zipTo` on `Path` → `archive('x.zip')`/`archiveTo('x.zip')`.
 - `registerHaltedProcessPids`, `unregisterHaltedProcessPids`, `killHaltedProcesses`,
   `killHaltedProcessesSync` → `ProcessBridge.registerHalted`, …
+- `TuiTheme`'s `borders`, `barFill`, `barEmpty`, `barHead`, `spinner` (parameters and getters) →
+  `border`, `fill`, `empty`, `head`, `frames`, the names `ConsoleTheme` uses.
 
 ### Console themes, a TUI framework, and a second bug hunt
 

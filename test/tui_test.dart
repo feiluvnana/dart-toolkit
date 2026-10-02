@@ -299,7 +299,7 @@ void main() {
     });
 
     test('Themed overrides only what it names', () {
-      final w = Themed(const TuiTheme(borders: Border.ascii), Box(Label('x')));
+      final w = Themed(const TuiTheme(border: Border.ascii), Box(Label('x')));
       expect(plain(w, 5), '+---+\n| x |\n+---+');
       final menu = Themed(const TuiTheme(pointer: '>'), Menu(['a'], Choice()));
       expect(plain(menu, 5), '> a');

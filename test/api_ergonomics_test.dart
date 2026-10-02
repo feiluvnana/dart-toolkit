@@ -126,16 +126,11 @@ void main() {
         frames: ['1', '2'],
       );
       expect(theme.border, Border.ascii);
-      expect(theme.borders, Border.ascii);
       expect(theme.borderStyle, const Style(bold: true));
       expect(theme.fill, '#');
-      expect(theme.barFill, '#');
       expect(theme.empty, '.');
-      expect(theme.barEmpty, '.');
       expect(theme.head, '>');
-      expect(theme.barHead, '>');
       expect(theme.frames, ['1', '2']);
-      expect(theme.spinner, ['1', '2']);
     });
   });
 

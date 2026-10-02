@@ -161,7 +161,7 @@ final class Spin extends Widget {
   void paint(Canvas canvas) {
     canvas._animate(interval);
     final t = canvas.theme;
-    final fs = frames ?? t.spinner;
+    final fs = frames ?? t.frames;
     final elapsed = canvas._frame.elapsed;
     final frame = fs[elapsed.inMicroseconds ~/ interval.inMicroseconds % fs.length];
     if (builder != null) return canvas.draw(builder!(SpinContext._(frame, label, elapsed, t)));

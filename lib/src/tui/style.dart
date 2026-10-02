@@ -176,7 +176,7 @@ final class Span {
 ///
 /// ```dart
 /// await Tui.run(s, theme: TuiTheme(accent: Style(fg: Color.magenta)), view: …, update: …);
-/// Themed(TuiTheme(borders: Border.double), sidebar)
+/// Themed(TuiTheme(border: Border.double), sidebar)
 /// ```
 ///
 /// {@category CLI}
@@ -197,20 +197,15 @@ final class TuiTheme {
     Style? warning,
     Style? error,
     Border? border,
-    Border? borders,
     String? scrollTrack,
     String? scrollThumb,
     String? fill,
-    String? barFill,
     String? empty,
-    String? barEmpty,
     String? head,
-    String? barHead,
     String? checked,
     String? unchecked,
     String? pointer,
     List<String>? frames,
-    List<String>? spinner,
   }) : _text = text,
        _muted = muted,
        _accent = accent,
@@ -220,16 +215,16 @@ final class TuiTheme {
        _success = success,
        _warning = warning,
        _error = error,
-       _border = border ?? borders,
+       _border = border,
        _scrollTrack = scrollTrack,
        _scrollThumb = scrollThumb,
-       _fill = fill ?? barFill,
-       _empty = empty ?? barEmpty,
-       _head = head ?? barHead,
+       _fill = fill,
+       _empty = empty,
+       _head = head,
        _checked = checked,
        _unchecked = unchecked,
        _pointer = pointer,
-       _frames = frames ?? spinner;
+       _frames = frames;
 
   /// Plain text.
   Style get text => _text ?? Style.none;
@@ -256,29 +251,17 @@ final class TuiTheme {
   /// The glyphs a [Box] draws with unless it names its own.
   Border get border => _border ?? Border.rounded;
 
-  /// Alias for [border].
-  Border get borders => border;
-
   String get scrollTrack => _scrollTrack ?? '│';
   String get scrollThumb => _scrollThumb ?? '┃';
 
   /// A bar's filled glyph.
   String get fill => _fill ?? '█';
 
-  /// Alias for [fill].
-  String get barFill => fill;
-
   /// A bar's empty glyph.
   String get empty => _empty ?? '░';
 
-  /// Alias for [empty].
-  String get barEmpty => empty;
-
   /// A bar's head glyph.
   String get head => _head ?? '';
-
-  /// Alias for [head].
-  String get barHead => head;
 
   String get checked => _checked ?? '◉';
   String get unchecked => _unchecked ?? '○';
@@ -286,9 +269,6 @@ final class TuiTheme {
 
   /// Spinner animation frames.
   List<String> get frames => _frames ?? const ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-
-  /// Alias for [frames].
-  List<String> get spinner => frames;
 
   /// This theme with [base] filling what it leaves unset.
   TuiTheme _over(TuiTheme base) => TuiTheme(
