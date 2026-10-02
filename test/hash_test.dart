@@ -103,6 +103,9 @@ void main() {
       expect('aGVsbG8=\n'.base64Bytes, utf8.encode('hello'));
       expect(utf8.encode('Hello!').base32, 'JBSWY3DPEE');
       expect('jbsw y3dp ee=='.base32Bytes, utf8.encode('Hello!'));
+      for (final bad in ['JBSWY3DPſ', 'MZXW6ß', 'A', 'JBS']) {
+        expect(() => bad.base32Bytes, throwsA(isA<FormatException>().having((e) => e.source, 'source', bad)));
+      }
       expect(Secure.uuid(), matches(RegExp(r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')));
     });
   });

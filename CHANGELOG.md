@@ -59,6 +59,8 @@
   read a newline; it now writes `&#13;`.
 - A YAML alias bomb (a few nested anchors) parsed instantly and then expanded to billions of
   nodes in whatever walked it; aliases may now expand to 1 000 000 nodes.
+- `base32Bytes` upper-cased with Unicode rules, so `ſ` decoded as `S`, and it accepted lengths
+  nothing encodes to (`'A'` gave no bytes); both are now a `FormatException` naming the input.
 
 #### Removed
 

@@ -64,10 +64,12 @@ extension BytesEncodingExtensions on List<int> {
 final _whitespace = RegExp(r'\s');
 final _base32Ignored = RegExp(r'[\s=-]');
 
-int _b32Value(int c) {
+// ASCII only: `toUpperCase` would turn `ſ` into `S` and `ß` into `SS`.
+int _b32Value(int c, String source) {
   if (c >= 0x41 && c <= 0x5a) return c - 0x41;
+  if (c >= 0x61 && c <= 0x7a) return c - 0x61;
   if (c >= 0x32 && c <= 0x37) return c - 0x18;
-  throw FormatException('Not base32: ${String.fromCharCode(c)}');
+  throw FormatException('Not base32: ${String.fromCharCode(c)}', source);
 }
 
 /// Decodings of text: `'6869'.hexBytes`, `'-_8'.base64Bytes`, `'JBSWY3DP'.base32Bytes`.
@@ -91,11 +93,13 @@ extension StringEncodingExtensions on String {
 
   /// This base32 string as bytes; case, spaces, dashes and padding are ignored.
   Uint8List get base32Bytes {
-    final s = replaceAll(_base32Ignored, '').toUpperCase();
+    final s = replaceAll(_base32Ignored, '');
+    // 1, 3 or 6 characters past a full group carry under a byte: nothing encodes to that.
+    if (const {1, 3, 6}.contains(s.length % 8)) throw FormatException('Invalid base32 length', this);
     final out = Uint8List((s.length * 5) ~/ 8);
     var bits = 0, acc = 0, k = 0;
     for (final c in s.codeUnits) {
-      final v = _b32Value(c);
+      final v = _b32Value(c, this);
       acc = ((acc << 5) | v) & 0xffff;
       bits += 5;
       if (bits >= 8) {
