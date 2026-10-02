@@ -38,6 +38,12 @@
   both.
 - `ctx.submit` of a GET form dropped repeated keys in the form's `action` (`?tag=a&tag=b` sent
   only `tag=b`); it now merges with `withQuery`.
+- An atomic write to a 235–255-byte file name failed with "File name too long": the temporary
+  name did not fit. It now writes in place.
+- `Io.width` counted a ZWJ emoji sequence (`👨‍👩‍👧`) as each emoji; it is one glyph, and
+  `Io.truncate` keeps or cuts it whole.
+- `humanBytes` and `humanized` left a negative value unscaled (`-1536 B`, `-90000ms`); they now
+  read `-1.5 KB` and `-1m 30s`.
 
 #### Removed
 

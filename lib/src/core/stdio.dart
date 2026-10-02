@@ -114,9 +114,11 @@ abstract final class Io {
       }
     }
     if (ascii) return text.length;
-    var w = 0;
+    var w = 0, joined = false;
     for (final rune in stripAnsi(text).runes) {
-      w += _charVisualWidth(rune);
+      // What follows a zero-width joiner draws inside the glyph before it.
+      if (!joined) w += _charVisualWidth(rune);
+      joined = rune == 0x200d;
     }
     return w;
   }
@@ -129,12 +131,16 @@ abstract final class Io {
     if (maxWidth <= ellipsis.length) return '.' * maxWidth;
     final target = maxWidth - ellipsis.length;
     final buffer = StringBuffer();
-    var w = 0;
+    var w = 0, joined = false;
     for (final rune in stripAnsi(text).runes) {
-      final cw = _charVisualWidth(rune);
-      if (w + cw > target) break;
+      // A joined rune rides with its glyph, so a sequence is kept or cut whole.
+      if (!joined) {
+        final cw = _charVisualWidth(rune);
+        if (w + cw > target) break;
+        w += cw;
+      }
       buffer.writeCharCode(rune);
-      w += cw;
+      joined = rune == 0x200d;
     }
     return '$buffer$ellipsis';
   }

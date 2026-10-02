@@ -107,7 +107,11 @@ abstract final class FileBridge {
         tmp.createSync(exclusive: true);
       } on FileSystemException catch (e) {
         final code = e.osError?.errorCode;
-        if ((Platform.isWindows ? const {5, 19} : const {1, 13, 30}).contains(code)) return null;
+        // Refused, or the name plus the temporary suffix is too long: write in place.
+        final refused = Platform.isWindows
+            ? const {5, 19, 206}
+            : (Platform.isMacOS ? const {1, 13, 30, 63} : const {1, 13, 30, 36});
+        if (refused.contains(code)) return null;
         if (code == (Platform.isWindows ? 80 : 17) && tries < 3) continue;
         rethrow;
       }

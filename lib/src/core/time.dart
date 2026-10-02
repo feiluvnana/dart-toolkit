@@ -28,6 +28,7 @@ final _random = Random();
 extension DurationExtensions on Duration {
   /// A human-readable form: `125ms`, `45s`, `2m 15s`, `1h 5m 2s`.
   String get humanized {
+    if (isNegative) return '-${(-this).humanized}';
     if (inMilliseconds < 1000) return '${inMilliseconds}ms';
     final hours = inHours, minutes = inMinutes % 60, seconds = inSeconds % 60;
     return [

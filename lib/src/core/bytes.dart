@@ -9,6 +9,7 @@ extension NumBytesExtensions on num {
   String get humanBytes {
     if (isNaN) return 'NaN B';
     if (isInfinite) return isNegative ? '-Infinity B' : 'Infinity B';
+    if (round() < 0) return '-${(-this).humanBytes}';
     if (round() < 1024) return '${round()} B';
     var value = this / 1024;
     // The unit is picked on the rounded figure, so 1048575 is `1.0 MB`, not `1024.0 KB`.

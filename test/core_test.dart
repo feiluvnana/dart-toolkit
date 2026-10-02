@@ -293,6 +293,23 @@ SINGLE_QUOTED='single quote value'
       expect(1023.humanBytes, '1023 B');
     });
 
+    test('humanBytes and humanized scale a negative value and keep its sign', () {
+      expect((-1536).humanBytes, '-1.5 KB');
+      expect((-512).humanBytes, '-512 B');
+      expect((-90).s.humanized, '-1m 30s');
+      expect((-350).ms.humanized, '-350ms');
+    });
+
+    test('FileBridge writes a file whose name leaves no room for a temporary name', () async {
+      final dir = Directory.systemTemp.createTempSync('tk_long');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final path = '${dir.path}/${'a' * 245}.txt';
+      await FileBridge.write(path, [1]);
+      FileBridge.writeSync(path, [1, 2]);
+      expect(File(path).readAsBytesSync(), [1, 2]);
+      expect(dir.listSync(), hasLength(1));
+    });
+
     test('Env.parse handles unclosed quotes without quadratic blowup', () {
       final input = 'UNCLOSED="start of value\n${List.filled(5000, 'KEY=val').join('\n')}';
       final watch = Stopwatch()..start();
@@ -358,6 +375,12 @@ SINGLE_QUOTED='single quote value'
       expect(Io.width('⚡'), 2);
       // '👍' is 2, skin tone modifier is 0, so '👍🏽' is 2
       expect(Io.width('👍🏽'), 2);
+    });
+
+    test('Io.width counts a ZWJ sequence as one glyph, and truncate never splits one', () {
+      expect(Io.width('👨‍👩‍👧'), 2);
+      expect(Io.width('a👩‍💻b'), 4);
+      expect(Io.truncate('👨‍👩‍👧 family photo', 5), '👨‍👩‍👧...');
     });
   });
 
