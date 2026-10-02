@@ -61,6 +61,9 @@ final class Pool<T, R> {
   // FIFO; completing with `null` wakes a waiter to start a worker in place of a dead one.
   final Queue<Completer<_Slot<T, R>?>> _waiting = Queue();
   int _active = 0;
+  // Waiters woken but not yet running: counted, so [close] does not see an idle pool between
+  // a worker handed on and the item it was handed to.
+  int _waking = 0;
   Completer<void>? _drained;
   int _starting = 0;
   Future<void>? _closed;
@@ -73,9 +76,11 @@ final class Pool<T, R> {
     final pool = Pool<T, R>._(create, size, isolate);
     final started = await Future.wait([for (var i = 0; i < pool.size; i++) _settled(pool._start)]);
     pool._idle.addAll(started.rights);
-    if (started.lefts.firstOrNull case final error?) {
-      pool._kill(null);
-      throw error;
+    for (final outcome in started) {
+      if (outcome case Left(:final value, :final trace)) {
+        pool._kill(null);
+        Error.throwWithStackTrace(value, trace ?? StackTrace.current);
+      }
     }
     return pool;
   }
@@ -116,7 +121,9 @@ final class Pool<T, R> {
         _active--;
       }
       // Also when no worker came: a failed start may have been the last thing [close] waits on.
-      if (_active == 0 && _waiting.isEmpty && !(_drained?.isCompleted ?? true)) _drained!.complete();
+      if (_active == 0 && _waiting.isEmpty && _waking == 0 && !(_drained?.isCompleted ?? true)) {
+        _drained!.complete();
+      }
     }
   }
 
@@ -125,9 +132,9 @@ final class Pool<T, R> {
   void _release(_Slot<T, R> slot) {
     if (slot.isDead) {
       _busy.remove(slot);
-      if (_waiting.isNotEmpty) _waiting.removeFirst().complete(null);
+      if (_waiting.isNotEmpty) _wake(null);
     } else if (_waiting.isNotEmpty) {
-      _waiting.removeFirst().complete(slot); // still busy: it changes hands
+      _wake(slot); // still busy: it changes hands
     } else {
       _busy.remove(slot);
       _idle.add(slot);
@@ -148,7 +155,7 @@ final class Pool<T, R> {
       return _take(slot);
     } catch (_) {
       // The waiter behind retries the start (or sees the pool closed) rather than hang.
-      if (_waiting.isNotEmpty) _waiting.removeFirst().complete(null);
+      if (_waiting.isNotEmpty) _wake(null);
       rethrow;
     } finally {
       _starting--;
@@ -167,17 +174,27 @@ final class Pool<T, R> {
       _waiting.add(free);
       // A cancelled scope wakes its own waiters; nothing coming free would.
       final unregister = token?.onCancel(() {
-        if (_waiting.remove(free)) free.complete(null);
+        if (_waiting.remove(free)) {
+          _waking++;
+          free.complete(null);
+        }
       });
       final handed = await free.future;
+      _waking--;
       unregister?.call();
       if (handed != null) return handed;
       if (_hasRoom) {
         if (_closed == null && !(token?.isCancelled ?? false)) return _startBusy();
         // Not starting the replacement after all: pass the wake on, or the queue behind hangs.
-        if (_waiting.isNotEmpty) _waiting.removeFirst().complete(null);
+        if (_waiting.isNotEmpty) _wake(null);
       }
     }
+  }
+
+  /// Hands the first waiter [slot], or `null` to start one itself.
+  void _wake(_Slot<T, R>? slot) {
+    _waking++;
+    _waiting.removeFirst().complete(slot);
   }
 
   _Slot<T, R> _take(_Slot<T, R> slot) {
@@ -238,7 +255,8 @@ final class Pool<T, R> {
           (item) {
             if (token?.isCancelled ?? false) return;
             final index = nextIndex++;
-            if (++active == size && !full) {
+            // Ordered, a settled item waiting behind a slower one still holds its place.
+            if (++active + buffer.length >= size && !full) {
               full = true;
               subscription?.pause();
             }
@@ -252,7 +270,7 @@ final class Pool<T, R> {
                 }
               }
               active--;
-              if (full) {
+              if (full && active + buffer.length < size) {
                 full = false;
                 subscription?.resume();
               }
@@ -284,9 +302,9 @@ final class Pool<T, R> {
   /// [run] after it throws.
   Future<void> close() => _closed ??= () async {
     while (_idle.isNotEmpty && _waiting.isNotEmpty) {
-      _waiting.removeFirst().complete(_take(_idle.removeLast()));
+      _wake(_take(_idle.removeLast()));
     }
-    if (_active > 0 || _waiting.isNotEmpty) await (_drained = Completer<void>()).future;
+    if (_active > 0 || _waiting.isNotEmpty || _waking > 0) await (_drained = Completer<void>()).future;
     await Future.wait([for (final slot in _idle) slot.close()]);
     _idle.clear();
   }();

@@ -61,6 +61,12 @@
   nodes in whatever walked it; aliases may now expand to 1 000 000 nodes.
 - `base32Bytes` upper-cased with Unicode rules, so `ſ` decoded as `S`, and it accepted lengths
   nothing encodes to (`'A'` gave no bytes); both are now a `FormatException` naming the input.
+- `Pool.close` could return while a queued item still ran, never closing that worker (an
+  isolate and its port leaked): a worker handed from one item to the next looked idle for a
+  moment. It now waits for the handed item.
+- `map(…, ordered: true)` kept pulling the source while one slow early item held up the output,
+  buffering every later result; a buffered result now holds its place against `size`.
+- `Pool.spawn` rethrew a failed `Worker.init` without its stack.
 
 #### Removed
 

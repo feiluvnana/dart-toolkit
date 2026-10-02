@@ -949,6 +949,75 @@ void main() {
       expect(remote.rights, [2, 4, 6, 8, 10]);
     });
   });
+
+  group('round 3 bugs', () {
+    test('Pool.close waits for a queued item and closes its worker', () async {
+      var closes = 0;
+      final pool = await Pool.spawn<int, int>(() => _SlowWorker(() => closes++), size: 1, isolate: false);
+      final a = pool.run(1), b = pool.run(2);
+      var bDone = false;
+      unawaited(b.then((_) => bDone = true));
+      await pool.close();
+      expect(bDone, isTrue);
+      expect(closes, 1);
+      expect(await a, 1);
+    });
+
+    test('ordered map pulls no further than size ahead of a slow first item', () async {
+      final pool = await Pool.spawn<int, int>(_FirstSlow.new, size: 2, isolate: false);
+      var pulled = 0;
+      Iterable<int> source() sync* {
+        for (var i = 0; i < 1000; i++) {
+          pulled++;
+          yield i;
+        }
+      }
+
+      final first = await pool.map(source(), ordered: true).first;
+      expect(first.rightOrNull, 0);
+      expect(pulled, lessThan(10));
+      await pool.close();
+    });
+
+    test('Pool.spawn rethrows an init failure with its own stack', () async {
+      try {
+        await Pool.spawn<int, int>(_BadInit.new, size: 1, isolate: false);
+        fail('no throw');
+      } on StateError catch (_, trace) {
+        expect('$trace', contains('_failInit'));
+      }
+    });
+  });
+}
+
+final class _SlowWorker extends Worker<int, int> {
+  final void Function() onClose;
+  _SlowWorker(this.onClose);
+  @override
+  Future<int> run(int item) async {
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    return item;
+  }
+
+  @override
+  void close() => onClose();
+}
+
+final class _BadInit extends Worker<int, int> {
+  @override
+  void init() => _failInit();
+  @override
+  int run(int item) => item;
+}
+
+Never _failInit() => throw StateError('init failed');
+
+final class _FirstSlow extends Worker<int, int> {
+  @override
+  Future<int> run(int item) async {
+    await Future<void>.delayed(Duration(milliseconds: item == 0 ? 200 : 1));
+    return item;
+  }
 }
 
 int _double(int x) => x * 2;
