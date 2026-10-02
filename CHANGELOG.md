@@ -13,6 +13,8 @@
   400 → <1 ms.
 - A sitemap's `<loc>` is HTML-decoded only when it holds `&` or `<`: 50k plain URLs 9 → 2 ms.
 - `glob` no longer keeps every pattern's `RegExp` forever; one compile per call, before the walk.
+- `Io.width` returns a printable-ASCII string's length without the ANSI and rune scans (every
+  `Table.show` cell, TUI measure, Console redraw): 1M 40-char cells ~110 → ~20 ms.
 
 #### Added
 

@@ -104,6 +104,16 @@ abstract final class Io {
 
   /// The terminal columns [text] occupies: escapes zero, East Asian wide characters two.
   static int width(String text) {
+    // Printable ASCII is one column each, and holds no escape: the common case skips both scans.
+    var ascii = true;
+    for (var i = 0; i < text.length; i++) {
+      final unit = text.codeUnitAt(i);
+      if (unit < 0x20 || unit > 0x7e) {
+        ascii = false;
+        break;
+      }
+    }
+    if (ascii) return text.length;
     var w = 0;
     for (final rune in stripAnsi(text).runes) {
       w += _charVisualWidth(rune);

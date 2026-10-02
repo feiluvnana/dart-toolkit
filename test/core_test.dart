@@ -342,6 +342,15 @@ SINGLE_QUOTED='single quote value'
       expect(errors, contains('listener error'));
     });
 
+    test('Io.width: printable ASCII is its length; escapes, controls and DEL take the full path', () {
+      expect(Io.width(''), 0);
+      expect(Io.width('plain ascii, 123 ~!'), 19);
+      expect(Io.width('\x1b[31mred\x1b[0m'), 3);
+      expect(Io.width('a\tb'), 2);
+      expect(Io.width('a\x7fb'), 2);
+      expect(Io.width('café'), 4);
+    });
+
     test('Io.width measures wide dingbats and skin tone modifiers correctly', () {
       expect(Io.width('✅'), 2);
       expect(Io.width('❌'), 2);
