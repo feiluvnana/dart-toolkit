@@ -40,7 +40,7 @@ enum Agg { count, sum, avg, min, max, first, last, list }
 ///
 /// ```dart
 /// final t = doc.$('table#songs').table;
-/// t.where((r) => r.number('size')! > 1e6).orderBy('disc').thenBy('n').select(['title', 'size']).show();
+/// t.where((r) => r.number('size') > 1e6).orderBy('disc').thenBy('n').select(['title', 'size']).show();
 /// ```
 ///
 /// {@category Collections}
