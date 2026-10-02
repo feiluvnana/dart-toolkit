@@ -7,7 +7,7 @@ extension IterableParallelExtensions<T> on Iterable<T> {
   /// Maps [worker] over all elements, at most [concurrency] at a time, emitting outcomes
   /// on a [Stream] as they settle.
   ///
-  /// Set [ordered: true] to emit in input order; default is `ordered: false` (completion order).
+  /// Pass `ordered: true` to emit in input order instead of completion order.
   ///
   /// [isolate] runs the work on up to [concurrency] isolates, started once; the worker is copied
   /// once per isolate. For state built once per isolate, use a [Worker] in a [Pool].
@@ -30,7 +30,7 @@ extension IterableParallelExtensions<T> on Iterable<T> {
 extension StreamParallelExtensions<T> on Stream<T> {
   /// Maps [worker] over stream items, emitting outcomes as they settle.
   ///
-  /// Set [ordered: true] to emit in input order; default is `ordered: false` (completion order).
+  /// Pass `ordered: true` to emit in input order instead of completion order.
   ///
   /// A failure is a [Left], never an error event (`.unwrap()` forwards it). Pausing the consumer
   /// pauses the source; the enclosing [Cancel.scope] stops it. [isolate] starts up to

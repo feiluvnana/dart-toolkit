@@ -196,8 +196,8 @@ await pool.close();
 ```
 
 `Pool.spawn(create, size:, isolate:)` takes a sendable factory and waits for every `init`
-(`isolate: false` for IO-bound work). `pool.run(item)` throws what `run` threw; `pool.map(stream)`
-is unordered, at most `size` in flight; `pool.close()` runs each `close`, idempotently. A failing
+(`isolate: false` for IO-bound work). `pool.run(item)` throws what `run` threw; `pool.map(items)`
+yields in completion order (`ordered: true` for input order), at most `size` in flight; `pool.close()` runs each `close`, idempotently. A failing
 item fails only itself, a dead isolate is replaced, and cancel stops the item in flight.
 
 ### `retry`, `Semaphore`
