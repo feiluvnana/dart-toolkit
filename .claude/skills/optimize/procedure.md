@@ -1,11 +1,11 @@
-# Multi-Agent Audit & Modernization Workflow
+# /optimize procedure
 
 A three-round audit → fix → verify pipeline for one **lead agent session** (Claude Code or
-Gemini/Antigravity). The lead
-spawns read-only audit subagents, applies the accepted fixes itself, and gates every round on
-the release checks. `CONVENTIONS.md` outranks this file; where they disagree, it wins.
+Gemini/Antigravity). The lead spawns read-only audit subagents, applies the accepted fixes
+itself, and gates every round on the release checks. Where this file and `CONVENTIONS.md`
+disagree, `CONVENTIONS.md` wins.
 
-**Run it:** `/optimize` (all modules) or `/optimize http formats` (a subset), in either tool:
+**Entry points:** `/optimize` (all modules) or `/optimize http formats` (a subset), in either tool:
 
 | Tool | Entry point | Audit round runs as |
 |---|---|---|

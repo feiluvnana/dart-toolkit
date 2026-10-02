@@ -1,7 +1,7 @@
 export const meta = {
   name: 'optimize-audit',
   description: 'Read-only dart-toolkit audit: find per dimension x module group, dedupe, verify each finding through two lenses',
-  whenToUse: 'One audit round of WORKFLOW.md (round 1 foundation, 2 design, 3 hardening); the lead applies the results',
+  whenToUse: 'One audit round of .claude/skills/optimize/procedure.md (round 1 foundation, 2 design, 3 hardening); the lead applies the results',
   phases: [
     { title: 'Find', detail: 'one finder per dimension x module group' },
     { title: 'Verify', detail: 'two skeptics per finding: is it real, does it clear the bar' },
