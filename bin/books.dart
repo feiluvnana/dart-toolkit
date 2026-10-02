@@ -72,14 +72,12 @@ Future<void> run(CliContext ctx) async {
 
 /// The first book [title] finds, and the file name its [format] link points at.
 Future<({Uri page, String file})> link(String title, Format format) async {
-  final results = await (site / 'ebooks').replace(queryParameters: {'query': title}).get().html;
+  final results = await (site / 'ebooks').withQuery({'query': title}).get().html;
   final about = results.$('li[typeof="schema:Book"]').attrOrNull('about');
   if (about == null) throw 'no book matches "$title"';
   final page = site.resolve('$about/');
-  final files = [
-    for (final a in (await page.get().html).$('a[property="schema:contentUrl"]'))
-      if (a.attrOrNull('href')?.split('/').last case final String name when name.endsWith(format.suffix)) name,
-  ]..sort((a, b) => a.length - b.length);
+  final links = (await page.get().html).$('a[property="schema:contentUrl"][href\$="${format.suffix}"]');
+  final files = [for (final href in links.attrs('href')) href.split('/').last]..sort((a, b) => a.length - b.length);
   // `.epub` also ends the kepub and the advanced epub; the plain one is the shortest.
   if (files.isEmpty) throw '"$title" has no ${format.name}';
   Console.info('${about.split('/').skip(2).join(' / ')} → ${files.first}');
