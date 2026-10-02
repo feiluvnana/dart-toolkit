@@ -48,39 +48,18 @@ abstract final class Doc {
   /// Parses [text] as JSON.
   static JsonDocument json(String text) => JsonDocument.parse(text);
 
-  /// Parses [text] as JSON; see [json].
-  static JsonDocument parseJson(String text) => json(text);
-
   /// Parses [text] as YAML.
   static YamlDocument yaml(String text) => text.yaml;
-
-  /// Parses [text] as YAML; see [yaml].
-  static YamlDocument parseYaml(String text) => yaml(text);
 
   /// Parses [text] as TOML.
   static JsonDocument toml(String text) => text.toml;
 
-  /// Parses [text] as TOML; see [toml].
-  static JsonDocument parseToml(String text) => toml(text);
-
   /// Parses [text] as INI.
   static JsonDocument ini(String text) => text.ini;
-
-  /// Parses [text] as INI; see [ini].
-  static JsonDocument parseIni(String text) => ini(text);
 
   /// Parses [text] as HTML.
   static HtmlDocument html(String text) => HtmlDocument.parse(text);
 
-  /// Parses [text] as HTML; see [html].
-  static HtmlDocument parseHtml(String text) => html(text);
-
   /// Parses [text] as XML.
   static XmlDocument xml(String text) => XmlDocument.parse(text);
-
-  /// Parses [text] as XML; see [xml].
-  static XmlDocument parseXml(String text) => xml(text);
 }
-
-/// An alias for [Doc] for full-name discoverability: `Document.read('config.yaml')`.
-typedef Document = Doc;

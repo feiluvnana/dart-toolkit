@@ -16,7 +16,7 @@ void main() {
     });
   });
 
-  group('Doc & Document facade', () {
+  group('Doc facade', () {
     test('Doc shorthand and parse methods', () {
       final j = Doc.json('{"hello": "world"}');
       expect(j['hello'].to<String>(), 'world');
@@ -29,11 +29,6 @@ void main() {
 
       final ini = Doc.ini('[section]\nkey = val');
       expect(ini['section']['key'].to<String>(), 'val');
-    });
-
-    test('Document alias works identically', () {
-      final doc = Document.parseJson('{"a": 1}');
-      expect(doc['a'].to<int>(), 1);
     });
 
     test('Doc.html and Doc.json answer CSS, XPath and JSONPath', () {

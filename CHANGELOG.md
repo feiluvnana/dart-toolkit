@@ -10,6 +10,8 @@
   `Doc.read(p)`, or `(await p.readText()).yaml` and friends.
 - `select`, `xpath` (on `Element`, `Elements`, `HtmlDocument`, `XmlDocument`) and
   `JsonDocument.query` → `$` and `$x`.
+- `Doc.parseJson`/`parseYaml`/`parseToml`/`parseIni`/`parseHtml`/`parseXml` and `typedef Document`
+  → `Doc.json`, `Doc.yaml`, … on `Doc`.
 
 ### Console themes, a TUI framework, and a second bug hunt
 
