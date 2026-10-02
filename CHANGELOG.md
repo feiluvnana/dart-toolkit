@@ -77,6 +77,10 @@
   `Lifecycle.onExit` listeners (Chrome, children, cleanup) mid-run; it now leaves through
   Lifecycle's handler like any other signal.
 - `Console.secret` trimmed the answer, so a password with a leading or trailing space failed.
+- A click on a `Menu` or `Grid` whose filter matched nothing threw `RangeError` and ended the
+  app.
+- A `Grid` with a `0` in `widths` threw on a terminal narrower than its gaps.
+- `Gauge(done / total)` with nothing to do (`0 / 0`) drew a full bar.
 
 #### Removed
 

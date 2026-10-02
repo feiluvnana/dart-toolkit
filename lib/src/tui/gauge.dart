@@ -103,7 +103,8 @@ final class Gauge extends Widget {
   final Style? style;
 
   Gauge(double fraction, {this.style, this.bar})
-    : progress = Progress(current: (fraction.clamp(0, 1) * 10000).round(), total: 10000);
+    // `done / total` with nothing to do is NaN, which clamps to NaN and draws full.
+    : progress = Progress(current: fraction.isNaN ? 0 : (fraction.clamp(0, 1) * 10000).round(), total: 10000);
 
   const Gauge.of(this.progress, {this.bar, this.style});
 

@@ -663,6 +663,45 @@ void main() {
       expect(await run, ['apple', 'cherry']);
     });
   });
+
+  group('round 3 bugs', () {
+    test('a click after the filter matches nothing keeps the app running', () async {
+      final term = Tui.terminal = FakeTerminal(width: 20, height: 5);
+      final pick = Choice(filter: true);
+      final run = Tui.run<int>(
+        0,
+        mouse: true,
+        view: (_) => Menu(['apple', 'banana'], pick),
+        update: (s, e) => e == Key.enter ? Tui.quit(pick.index) : s,
+      );
+      await pump();
+      term.type('zz');
+      await pump();
+      term.mouse(2, 0);
+      await pump();
+      term.press(Key.enter);
+      expect(await run, -1);
+    });
+
+    test('Grid with a 0 width fits a terminal narrower than its gaps', () {
+      expect(
+        () => plain(
+          Grid(
+            [
+              ['a', 'b', 'c', 'd'],
+            ],
+            widths: [3, 0, 3, 0],
+          ),
+          5,
+        ),
+        returnsNormally,
+      );
+    });
+
+    test('Gauge of 0 / 0 is empty, not full', () {
+      expect(plain(Gauge(0 / 0), 15), plain(Gauge(0), 15));
+    });
+  });
 }
 
 enum Mode { debug, release }

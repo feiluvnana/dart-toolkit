@@ -109,7 +109,8 @@ final class Choice extends _Control {
           if (x >= s && x < e) index = i;
         }
       case MouseKind.press:
-        if (y < _rows.length) index = _shown[_rows[y]];
+        // The rows drawn last may outlive a filter that now matches nothing.
+        if (y < _rows.length && _rows[y] < _shown.length) index = _shown[_rows[y]];
       default:
     }
   }
@@ -370,7 +371,8 @@ final class Grid extends Widget {
 
   List<int> _widths(int width) {
     final n = _count;
-    final avail = width - gap * (n - 1).clamp(0, n) - (choice != null ? 2 : 0);
+    final room = width - gap * (n - 1).clamp(0, n) - (choice != null ? 2 : 0);
+    final avail = room < 0 ? 0 : room;
     final ws = List.of(widths ?? _natural());
     while (ws.length < n) {
       ws.add(0);
