@@ -1017,11 +1017,19 @@ void main() {
 
         await Http.scope(() async {
           await [
-            Uri.parse('https://a.com/1'),
-            Uri.parse('https://a.com/2'),
-            Uri.parse('https://a.com/3'),
-            Uri.parse('https://b.com/1'),
-          ].scrape<void>().onInit((c) => c.delay = const Duration(milliseconds: 80)).toList();
+                Uri.parse('https://a.com/1'),
+                Uri.parse('https://a.com/2'),
+                Uri.parse('https://a.com/3'),
+                Uri.parse('https://b.com/1'),
+                // Unjittered: ±25 % would allow gaps of 60 ms, under the bound checked below.
+              ]
+              .scrape<void>()
+              .onInit(
+                (c) => c
+                  ..delay = const Duration(milliseconds: 80)
+                  ..jitter = false,
+              )
+              .toList();
         }, client: client);
 
         final a = stamps['a.com']!..sort();
