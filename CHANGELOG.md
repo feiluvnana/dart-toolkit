@@ -209,7 +209,6 @@ import.
 | `archive.archiveEntries()` | `archive.entries()` |
 | `Archive.of(name)`, `Archive.isWritable` | gone; `archiveTo` reads the extension and lists the writable ones |
 | `archiveTo('x.rar')` or a tar password threw `ArgumentError` | `FormatException`, before anything is created |
-| `Hash.sha256.file(p)` | `p.hashBytes(Hash.sha256)` |
 | `NativeLib.version` | gone; a library with the wrong ABI (now 3) is refused at load |
 | `path.watch()` | `path.changes()`, or `path.asDir.watch()` for raw events |
 | `createTemp` + `try`/`finally` + `delete(recursive:)` | `await Path.tempDir((d) async { … })` |
@@ -236,7 +235,7 @@ import.
 
 - `package:dart_toolkit/ffi.dart` and the second spellings in the table above.
 - `SpinnerStyle` and its five styles, `Env.hasOverrides`.
-- Now private: `Console.isEnabled`, `CliContext.command`, the `CommandPipeline` constructor, `Archive`, `Hash.file`, `decodeEntities`.
+- Now private: `Console.isEnabled`, `CliContext.command`, the `CommandPipeline` constructor, `Archive`, `decodeEntities`.
 
 #### Added
 
