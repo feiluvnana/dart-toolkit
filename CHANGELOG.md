@@ -17,6 +17,7 @@
   (which throws on a bare host).
 - `Doc.html(text, url: …)`: links resolve against a saved page's address from the facade.
 - `path.relativeTo()` with no argument is relative to the working directory.
+- `Hash.crc32.checksum(bytes)` and `.fileChecksum(path)`: the int checksum from the facade.
 
 ### Audit V
 

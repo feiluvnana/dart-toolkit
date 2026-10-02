@@ -68,6 +68,12 @@ enum Hash {
     return _file(path);
   }
 
+  /// A 32-bit checksum of [bytes] as an integer; a 64-bit one throws (read it hex, with [bytes]).
+  int checksum(List<int> bytes) => _int(this, digest(bytes));
+
+  /// A 32-bit checksum of the file at [pathOrFile] as an integer; see [checksum].
+  Future<int> fileChecksum(Object pathOrFile) async => _int(this, await fileDigest(pathOrFile));
+
   /// Computes the HMAC hex digest of [bytes] under [key].
   String hmac(List<int> key, List<int> bytes) => _hex(_ofBytes(this, key, bytes));
 

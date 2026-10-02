@@ -480,6 +480,7 @@ Native, identical on every platform, checked against published vectors. `hash`, 
 bytes.hash(Hash.blake3);
 await file.hash(Hash.xxh3);                  // the library reads the file
 await file.checksum(Hash.crc32);             // an int
+Hash.crc32.checksum(bytes);                  // the facade: text, bytes, file, checksum, hmac…
 'body'.hmac(Hash.sha256, 'secret');
 await file.hmac(Hash.sha512, key);           // streamed
 'body'.hmac(Hash.blake2b, 'key');            // BLAKE2/BLAKE3 keyed mode

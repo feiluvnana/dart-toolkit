@@ -58,6 +58,8 @@ void main() {
         expect(h.length, abc[h]!.length ~/ 2, reason: h.name);
       }
       expect('abc'.checksum(Hash.crc32), 0x352441c2);
+      expect(Hash.crc32.checksum(utf8.encode('abc')), 0x352441c2);
+      expect(() => Hash.xxh3.checksum([1]), throwsArgumentError);
       expect('abc'.hash(Hash.xxh3), '78af5f94892f3950'); // 64 bits, so hex rather than a wrapped int
       expect(''.hash(Hash.sha256), 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
     });
@@ -70,6 +72,7 @@ void main() {
         expect(await f.hash(Hash.sha256), data.hash(Hash.sha256));
         expect(await f.hash(Hash.blake3), data.hash(Hash.blake3));
         expect(await f.checksum(Hash.crc32), data.checksum(Hash.crc32));
+        expect(await Hash.crc32.fileChecksum(f), data.checksum(Hash.crc32));
         expect(await f.hash(Hash.xxh3), data.hash(Hash.xxh3));
         if (await openssl(['dgst', '-sha512', '-r', f]) case final ssl?) {
           expect(ssl.split(' ').first, await f.hash(Hash.sha512));
