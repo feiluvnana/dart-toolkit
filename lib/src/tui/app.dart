@@ -55,7 +55,7 @@ abstract final class Tui {
   ///
   /// ```dart
   /// init: () => Tui.send(Stream.periodic(1.s, (_) => #tick)),
-  /// … Char(char: 'r') => s.loading(Tui.send(fetch().then(Loaded.new))),
+  /// … if (e case Char(char: 'r')) { Tui.send(fetch().then(Loaded.new)); return s.loading(); }
   /// ```
   static void send(Object message) {
     final app = _Engine._active ?? (throw StateError('Tui.send needs a running app.'));
