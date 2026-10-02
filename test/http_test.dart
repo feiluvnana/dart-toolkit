@@ -124,6 +124,13 @@ void main() {
       expect(u.withQuery({'keep': null}).toString(), 'https://a.com/s?q=old');
     });
 
+    test('Uri.name is the last path segment, as Path.name', () {
+      expect('https://a.com/tracks/song%20one.mp3?x=1#t'.url.name, 'song one.mp3');
+      expect('https://a.com/tracks/'.url.name, 'tracks');
+      expect('https://a.com'.url.name, '');
+      expect('https://a.com/'.url.name, '');
+    });
+
     test('a download resumes its .part with a Range request', () async {
       final dir = Directory.systemTemp.createTempSync('resume_');
       try {
@@ -1751,7 +1758,7 @@ void main() {
                 a.attr('href'),
                 onResponse: (song) {
                   final href = song.response.html.$('a').first.attr('href');
-                  song.emit((url: song.resolve(href), path: dir / 'tracks' / song.url.pathSegments.last));
+                  song.emit((url: song.resolve(href), path: dir / 'tracks' / song.url.name));
                 },
               );
             }
@@ -1792,7 +1799,7 @@ void main() {
       final chain = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       chain.listen((req) {
         served++;
-        final n = int.parse(req.uri.pathSegments.last);
+        final n = int.parse(req.uri.name);
         req.response
           ..write(n < 200 ? '<a href="/chain/${n + 1}">next</a>' : '')
           ..close();

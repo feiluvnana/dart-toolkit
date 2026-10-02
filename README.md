@@ -206,7 +206,7 @@ Atomic (`.part`, renamed on success) and resumable. One file is a batch of one.
 
 ```dart
 await 'sdk.zip'.path.download(url, checksum: (Hash.sha256, digest)).show();
-await {for (final u in urls) u: 'out'.path / u.pathSegments.last}.download(concurrency: 8).show();
+await {for (final u in urls) u: 'out'.path / u.name}.download(concurrency: 8).show();
 ```
 
 ### CLI

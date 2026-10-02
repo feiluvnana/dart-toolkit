@@ -16,6 +16,10 @@ extension UriExtensions on Uri {
     return _schemeLike.hasMatch(part) ? Uri.parse('${dir.removeFragment().removeQuery()}$part') : dir.resolve(part);
   }
 
+  /// The last non-empty path segment, decoded, as `Path.name`: `song.mp3` for
+  /// `…/tracks/song.mp3?x=1`, `tracks` for `…/tracks/`, `''` for a bare host.
+  String get name => pathSegments.lastWhere((s) => s.isNotEmpty, orElse: () => '');
+
   /// This URI with [params] added to its query; a `null` value removes the parameter:
   /// `url.withQuery({'page': 2, 'q': 'dart'})`.
   Uri withQuery(Map<String, Object?> params) {

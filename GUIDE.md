@@ -1136,7 +1136,7 @@ Future<void> gallery(Uri url) async {
         .onResponse((c) {
           for (final img in c.html.$('.gallery img[src]')) {
             final src = c.resolve(img);
-            c.emit((url: src, path: 'out'.path / src.pathSegments.last.filename));
+            c.emit((url: src, path: 'out'.path / src.name.filename));
           }
         })
         .rights;
