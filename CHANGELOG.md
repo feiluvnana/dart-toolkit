@@ -13,6 +13,7 @@
 - `Doc.parseJson`/`parseYaml`/`parseToml`/`parseIni`/`parseHtml`/`parseXml` and `typedef Document`
   → `Doc.json`, `Doc.yaml`, … on `Doc`.
 - `xs.parallel(f)` → `xs.parallelize(f).unwrap()`.
+- `zip`/`zipTo` on `Path` → `archive('x.zip')`/`archiveTo('x.zip')`.
 
 ### Console themes, a TUI framework, and a second bug hunt
 

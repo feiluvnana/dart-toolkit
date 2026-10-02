@@ -175,7 +175,7 @@ Future<void> run() async {
 
   // Stage 3: Archive
   stage('Creating zip archive');
-  await base.zip('$baseName.zip').show(message: 'Compressing', done: 'Archive created.');
+  await base.archive('$baseName.zip').show(message: 'Compressing', done: 'Archive created.');
 
   Table.cells(
     ['Property', 'Value'],
