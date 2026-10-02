@@ -40,7 +40,7 @@ abstract final class Tui {
   /// final pick = Choice(filter: true);
   /// final file = await Tui.inline<String?>(null,
   ///   view: (_) => VStack([Label('Open which? ${pick.query}'), Menu(files, pick).fixed(8)]),
-  ///   update: (s, e) => e == Key.enter ? Tui.quit(files[pick.index]) : s);
+  ///   update: (s, e) => e == Key.enter && pick.index >= 0 ? Tui.quit(files[pick.index]) : s);
   /// ```
   static Future<S> inline<S>(
     S initial, {

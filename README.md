@@ -246,7 +246,7 @@ import 'package:dart_toolkit/tui.dart';
 final pick = Choice(filter: true);                        // type to narrow, arrows to move
 final file = await Tui.inline<String?>(null,
   view: (_) => VStack([Label('Open: ${pick.query}'), Menu(files, pick).fixed(8)]),
-  update: (s, e) => e == Key.enter ? Tui.quit(files[pick.index]) : s);
+  update: (s, e) => e == Key.enter && pick.index >= 0 ? Tui.quit(files[pick.index]) : s);
 ```
 
 `Tui.run` is the same app full-screen. Widgets: `Label`, `VStack`/`HStack`, `Box`, `Menu`, `Grid`,

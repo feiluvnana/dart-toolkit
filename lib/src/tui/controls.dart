@@ -17,7 +17,7 @@ abstract class _Control {
 /// ```dart
 /// final pick = Choice(filter: true);
 /// … Menu(files, pick) …
-/// Key.enter => Tui.quit(files[pick.index]),
+/// Key.enter when pick.index >= 0 => Tui.quit(files[pick.index]),
 /// ```
 ///
 /// {@category CLI}
