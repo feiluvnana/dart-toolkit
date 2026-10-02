@@ -197,7 +197,8 @@ await chrome.close();
 ```
 
 Pages arrive as their DOM after their scripts ran, so `$`, `$x` and crawls work unchanged. A
-launched Chrome dies with your program, even on `kill -9`.
+launched Chrome dies with your program, even on `kill -9` (macOS and Linux; on Windows
+`close()` stops it).
 
 ### Downloads
 

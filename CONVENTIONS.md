@@ -211,7 +211,8 @@ Each of these was a silent failure.
 - **Nothing lands in the working directory unless asked.** Chrome downloads go to a client-owned
   folder and move to `to:` on completion.
 - **A child never outlives a stop.** Chrome and `run` children die as a process tree on cancel,
-  timeout and caught signal; a launched Chrome also on the parent's `kill -9` (watchdog).
+  timeout and caught signal; a launched Chrome also on the parent's `kill -9` (a POSIX
+  watchdog; Windows on `close()`).
 - **A command string is a simple command.** Unquoted shell syntax is refused; `shell: true` or `|`
   reaches a shell. An unclosed quote is a `FormatException`.
 - **An abandoned response is aborted and drained,** so pool permits return and keep-alive survives.
