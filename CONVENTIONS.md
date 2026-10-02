@@ -241,7 +241,8 @@ Each of these was a silent failure.
 - **Depth is bounded or walked on a stack.** YAML and TOML refuse nesting deeper than 1000; JSON, XML and
   HTML parse any depth on a stack; walks over
   decoded data use a stack; tree walks recurse to a depth, then continue on a stack (a third faster,
-  and 100 000 levels still parse). (*Why:* YAML flow collections overflowed at 4 000.)
+  and 100 000 levels still parse). (*Why:* YAML flow collections overflowed at 4 000.) YAML
+  aliases may expand to at most 1 000 000 nodes (*why:* a 236-byte alias bomb printed 23 MB).
 - **An unterminated construct is a `FormatException`,** never a hang. (*Why:* `[a: 1]` hung YAML.)
 - **A browser-wide setting belongs to the browser's owner.** A joined browser is changed only while
   needed, then handed back.

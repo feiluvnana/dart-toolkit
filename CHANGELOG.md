@@ -53,6 +53,12 @@
 - `orderBy(…).take(-1)` returned an empty table on 8+ rows but threw on fewer; it always throws
   `RangeError`.
 - `toMarkdown` left a `|` or newline in a header unescaped, adding a column.
+- TOML accepted `0123`, `1__0`, `_1` and `2024-01-01zzz` (as text), and read `"a\ b"` as `ab`;
+  each is now a `FormatException`, as TOML 1.0 says.
+- `.markup` of an XML text node holding a carriage return (`&#13;`) wrote it raw, so a re-parse
+  read a newline; it now writes `&#13;`.
+- A YAML alias bomb (a few nested anchors) parsed instantly and then expanded to billions of
+  nodes in whatever walked it; aliases may now expand to 1 000 000 nodes.
 
 #### Removed
 

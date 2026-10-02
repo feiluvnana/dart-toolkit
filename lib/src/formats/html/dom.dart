@@ -68,7 +68,7 @@ final class Text extends Node {
   @override
   String get markup {
     final sb = StringBuffer();
-    _writeEscaped(sb, data, attribute: false);
+    _writeEscaped(sb, data, attribute: false, xml: parent?.syntax == Syntax.xml);
     return sb.toString();
   }
 }
@@ -682,7 +682,7 @@ const _hiddenElements = {'script', 'style', 'template', 'noscript', 'head'};
 /// Writes [root] as markup into [sb], with an explicit stack so deep documents don't overflow.
 void _serialize(Node root, StringBuffer sb) {
   if (root is! Element) {
-    root is Text ? _writeEscaped(sb, root.data, attribute: false) : sb.write(root.markup);
+    sb.write(root.markup);
     return;
   }
   if (!_writeStartTag(root, sb)) return;
@@ -708,7 +708,7 @@ void _serialize(Node root, StringBuffer sb) {
         at.add(0);
       }
     } else if (n is Text) {
-      _writeEscaped(sb, n.data, attribute: false);
+      _writeEscaped(sb, n.data, attribute: false, xml: e.syntax == Syntax.xml);
     }
   }
 }
@@ -753,7 +753,8 @@ bool _writeStartTag(Element e, StringBuffer sb) {
 }
 
 /// Writes [s] with `&`, `<` and `>` escaped for a text node, or `&` and `"` for a
-/// double-quoted attribute, copying the runs between them whole.
+/// double-quoted attribute, copying the runs between them whole. XML also escapes a carriage
+/// return, which its parser would read back as a newline.
 void _writeEscaped(StringBuffer sb, String s, {required bool attribute, bool xml = false}) {
   var from = 0;
   for (var i = 0; i < s.length; i++) {
@@ -764,7 +765,7 @@ void _writeEscaped(StringBuffer sb, String s, {required bool attribute, bool xml
       0x3e when !attribute => '&gt;',
       0x22 when attribute => '&quot;',
       0x0a when attribute && xml => '&#10;',
-      0x0d when attribute && xml => '&#13;',
+      0x0d when xml => '&#13;',
       0x09 when attribute && xml => '&#9;',
       _ => null,
     };

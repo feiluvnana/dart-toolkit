@@ -154,7 +154,10 @@ final class _TomlParser {
 
   static final _int = RegExp(r'^[+-]?\d+$');
   static final _float = RegExp(r'^[+-]?(\d+\.\d+([eE][+-]?\d+)?|\d+[eE][+-]?\d+)$');
-  static final _dateOrTime = RegExp(r'^\d{4}-\d\d-\d\d|^\d\d:\d\d:\d\d');
+  static final _strayUnderscore = RegExp(r'(?<![0-9A-Fa-f])_|_(?![0-9A-Fa-f])');
+  static final _leadingZero = RegExp(r'^[+-]?0\d');
+  static final _date = RegExp(r'^(\d{4})-(\d\d)-(\d\d)');
+  static final _time = RegExp(r'^(\d\d):(\d\d)(?::(\d\d)(?:\.\d+)?)?(?:[Zz]|[+-]\d\d:\d\d)?$');
 
   Object? _literal(String t) {
     switch (t) {
@@ -169,6 +172,7 @@ final class _TomlParser {
       case 'nan' || '+nan' || '-nan':
         return double.nan;
     }
+    if (t.contains('_') && _strayUnderscore.hasMatch(t)) throw _error('Misplaced "_" in $t');
     final plain = t.replaceAll('_', '');
     // TOML integers are 64-bit, and one that does not fit is an error, not a rounding.
     final radix = switch (plain.length > 2 ? plain.substring(0, 2) : '') {
@@ -177,13 +181,31 @@ final class _TomlParser {
       '0b' => 2,
       _ => _int.hasMatch(plain) ? 10 : 0,
     };
+    if ((radix == 10 || _float.hasMatch(plain)) && _leadingZero.hasMatch(plain)) {
+      throw _error('Leading zero in $t');
+    }
     if (radix != 0) {
       return int.tryParse(radix == 10 ? plain : plain.substring(2), radix: radix) ??
           (throw _error('Integer out of range: $t'));
     }
     if (_float.hasMatch(plain)) return double.parse(plain);
-    if (_dateOrTime.hasMatch(t)) return t; // dates and times stay text
+    if (_isDateOrTime(t)) return t; // dates and times stay text
     throw _error('Not a TOML value: $t');
+  }
+
+  /// Whether [t] is a whole RFC 3339 date, time or both, each field in range.
+  static bool _isDateOrTime(String t) {
+    int at(RegExpMatch m, int g) => int.parse(m.group(g) ?? '0');
+    var rest = t;
+    if (_date.firstMatch(t) case final d?) {
+      if (at(d, 2) < 1 || at(d, 2) > 12 || at(d, 3) < 1 || at(d, 3) > 31) return false;
+      rest = t.substring(d.end);
+      if (rest.isEmpty) return true;
+      if (!'Tt '.contains(rest[0])) return false;
+      rest = rest.substring(1);
+    }
+    final time = _time.firstMatch(rest);
+    return time != null && at(time, 1) < 24 && at(time, 2) < 60 && at(time, 3) <= 60;
   }
 
   String _string() {
@@ -231,7 +253,15 @@ final class _TomlParser {
             sb.writeCharCode(code);
             i += n;
           case '\n' || '\r' || ' ' || '\t':
-            // Line-ending backslash in a multi-line string: skip whitespace and newlines.
+            // Line-ending backslash in a multi-line string: skip whitespace and newlines. Only
+            // blanks may sit between it and the end of its line.
+            var eol = i;
+            while (eol < s.length && (s.codeUnitAt(eol) == 0x20 || s.codeUnitAt(eol) == 0x09)) {
+              eol++;
+            }
+            if (!triple || eol == s.length || (s.codeUnitAt(eol) != 0x0A && s.codeUnitAt(eol) != 0x0D)) {
+              throw _error('Bad escape \\$e');
+            }
             while (i < s.length) {
               final cu = s.codeUnitAt(i);
               if (cu != 0x20 && cu != 0x09 && cu != 0x0D && cu != 0x0A) break;

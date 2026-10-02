@@ -1593,6 +1593,56 @@ folded: >
       expect(doc.$('.missing').link, isNull);
     });
   });
+
+  group('round 3 bugs', () {
+    test('TOML refuses leading zeros, stray underscores and malformed dates', () {
+      for (final bad in [
+        'a = 0123',
+        'a = 1__0',
+        'a = _1',
+        'a = 1_',
+        'a = 1_.5',
+        'a = 01.5',
+        'd = 2024-01-01zzz',
+        't = 12:30:00abc',
+        'd = 2024-13-45',
+      ]) {
+        expect(() => bad.toml, throwsFormatException, reason: bad);
+      }
+    });
+
+    test('TOML keeps every valid number and date form', () {
+      final doc =
+          ('a = 1_000\nb = 0\nc = 0.5\nd = 0xdead_beef\ne = -0\nf = 1e5\ng = 1979-05-27\n'
+                  'h = 1979-05-27T07:32:00Z\ni = 07:32:00\nj = 1979-05-27T00:32:00.999999-07:00')
+              .toml;
+      expect(doc['a'].raw, 1000);
+      expect(doc['d'].raw, 0xdeadbeef);
+      expect(doc['h'].raw, '1979-05-27T07:32:00Z');
+      expect(doc['j'].raw, '1979-05-27T00:32:00.999999-07:00');
+    });
+
+    test('TOML refuses a backslash before a space unless it ends a multi-line line', () {
+      expect(() => r'a = "x\ y"'.toml, throwsFormatException);
+      expect(() => r'a = """x\ y"""'.toml, throwsFormatException);
+      expect('a = """x\\   \n   y"""'.toml['a'].raw, 'xy');
+    });
+
+    test('XML text keeps a carriage return through markup', () {
+      final d = '<a>x&#13;y</a>'.xml;
+      expect(d.markup.xml.root.text, 'x\ry');
+    });
+
+    test('YAML refuses an alias bomb', () {
+      final b = StringBuffer('a: &a [x,x,x,x,x,x,x,x,x]\n');
+      const ks = 'abcdefgh';
+      for (var i = 1; i < ks.length; i++) {
+        b.writeln('${ks[i]}: &${ks[i]} [${List.filled(9, '*${ks[i - 1]}').join(',')}]');
+      }
+      expect(() => b.toString().yaml, throwsFormatException);
+      expect('a: &a [1, 2]\nb: *a\nc: *a'.yaml['c'].raw, [1, 2]);
+    });
+  });
 }
 
 /// package:yaml's YamlMap/YamlList as plain Dart, for comparison.

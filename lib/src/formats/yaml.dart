@@ -333,7 +333,24 @@ final class _YamlParser {
     return _plain(_plainText(t, parent));
   }
 
-  Object? _alias(String name) => anchors.containsKey(name) ? anchors[name] : _fail('unknown alias *$name');
+  Object? _alias(String name) {
+    if (!anchors.containsKey(name)) _fail('unknown alias *$name');
+    final value = anchors[name];
+    // An alias shares its node, but whoever walks the result walks every copy: a few nested
+    // anchors would otherwise expand a kilobyte into billions of nodes.
+    if ((_expanded += _sizeOf(value)) > 1000000) _fail('aliases expand past 1000000 nodes');
+    return value;
+  }
+
+  /// Nodes an alias to a value expands into; aliases inside share it, so each is counted once.
+  int _expanded = 0;
+  final _sizes = Map<Object, int>.identity();
+
+  int _sizeOf(Object? v) => switch (v) {
+    final Map<Object?, Object?> m => _sizes[m] ??= m.values.fold(1, (n, e) => n + _sizeOf(e)),
+    final List<Object?> l => _sizes[l] ??= l.fold(1, (n, e) => n + _sizeOf(e)),
+    _ => 1,
+  };
 
   /// A plain scalar and its more-indented continuation lines, joined by a space, or a
   /// newline per blank line between.
