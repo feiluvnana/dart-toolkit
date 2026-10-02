@@ -15,7 +15,7 @@ const _cancelKey = #dartToolkitCancelToken;
 /// `Cli.run` opens one around the action, so a signal or `Lifecycle.exit` stops everything inside.
 ///
 /// {@category Concurrency}
-class Cancel {
+abstract final class Cancel {
   /// The token of the enclosing [scope], or `null` outside one.
   static CancelToken? get token => Zone.current[_cancelKey] as CancelToken?;
 

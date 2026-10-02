@@ -3,7 +3,7 @@ part of '../../core.dart';
 /// The process's standard I/O, injectable: every console write and read goes through it.
 ///
 /// {@category CLI}
-class Io {
+abstract final class Io {
   static StringSink? _out;
   static StringSink? _err;
 

@@ -6,7 +6,7 @@ const _clientKey = #dartToolkitHttpClient;
 /// every request, download and crawl inside it, with its timeout and default headers.
 ///
 /// {@category Networking}
-class Http {
+abstract final class Http {
   /// The client of the enclosing [scope], or `null` outside one.
   static Client? get client => Zone.current[_clientKey] as Client?;
 

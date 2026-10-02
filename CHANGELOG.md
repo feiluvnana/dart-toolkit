@@ -43,6 +43,8 @@
   `border`, `fill`, `empty`, `head`, `frames`, the names `ConsoleTheme` uses.
 - `ChromeClient.isOpen`, `ChromePage.isOpen` → `!isClosed`.
 - `ChromePage.textOrNull`/`attrOrNull` → `text`/`attr`, which already return `null` on a miss.
+- The implicit constructors `Env()`, `Io()`, `Cancel()`, `Shell()`, `Http()`: the five are
+  `abstract final` namespaces now, like `Doc`, `Fs` and `Secure`.
 
 ### Console themes, a TUI framework, and a second bug hunt
 

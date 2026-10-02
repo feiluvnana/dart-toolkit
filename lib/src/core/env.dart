@@ -6,7 +6,7 @@ final _envCommentRegex = RegExp(r'\s#');
 /// Environment variables: the process's, in-memory overrides, and `.env` parsing.
 ///
 /// {@category System}
-class Env {
+abstract final class Env {
   static final _custom = <String, String>{};
 
   /// The process environment with in-memory overrides on top.

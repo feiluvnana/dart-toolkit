@@ -142,7 +142,7 @@ typedef _Given = ({
 /// ```
 ///
 /// {@category System}
-class Shell {
+abstract final class Shell {
   /// Runs [body] with these settings for every command inside it.
   ///
   /// [env] is added to the enclosing scope's rather than replacing it.
