@@ -1009,7 +1009,7 @@ on `/dev/tty`, never stdout, so `tk pick > path.txt` works.
 | `Menu(items, choice)`, `Grid(rows, columns:, choice:)`, `Tabs(titles, choice)` | lists, tables, tabs; a `Choice` holds the cursor, `filter:` (type to narrow), `multi:` (Space checks) |
 | `Field(prompt:, placeholder:, mask:, validate:, history:)` | a readline-style input; hold it across frames |
 | `Gauge(0.4)`, `Gauge.of(Progress(…))`, `Spin('Loading')` | progress; a spinner animates itself |
-| `Paint((c) => …)`, `Themed(theme, child)` | a one-off widget on a `Canvas`; a subtree's theme |
+| `Paint((c) => …)`, `child.themed(theme)` | a one-off widget on a `Canvas`; a subtree's theme |
 | `Tui.send(future or stream)`, `init:` | background work, fed back to `update` |
 | `class App extends TuiApp<S>` | the same engine as a class |
 

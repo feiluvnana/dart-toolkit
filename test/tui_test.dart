@@ -298,10 +298,10 @@ void main() {
       expect(plain(Tabs(['One', 'Two'], Choice(index: 1)), 12), ' One │ Two');
     });
 
-    test('Themed overrides only what it names', () {
-      final w = Themed(const TuiTheme(border: Border.ascii), Box(Label('x')));
+    test('themed overrides only what it names', () {
+      final w = Box(Label('x')).themed(const TuiTheme(border: Border.ascii));
       expect(plain(w, 5), '+---+\n| x |\n+---+');
-      final menu = Themed(const TuiTheme(pointer: '>'), Menu(['a'], Choice()));
+      final menu = Menu(['a'], Choice()).themed(const TuiTheme(pointer: '>'));
       expect(plain(menu, 5), '> a');
     });
   });

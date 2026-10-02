@@ -79,7 +79,7 @@ final class Canvas {
   final int _x, _y;
   final int width, height;
 
-  /// The theme in force here: the app's, as overridden by enclosing [Themed] widgets.
+  /// The theme in force here: the app's, as overridden by enclosing [Widget.themed] subtrees.
   final TuiTheme theme;
   final _Frame _frame;
 

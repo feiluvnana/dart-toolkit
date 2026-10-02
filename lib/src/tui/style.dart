@@ -172,11 +172,11 @@ final class Span {
 /// The tokens every widget shares: palette and glyph sets. A widget's own parameters and builders
 /// are its tweaks; this is what keeps a screen of them consistent.
 ///
-/// Unset tokens inherit, so a [Themed] subtree changes only what it names:
+/// Unset tokens inherit, so a [Widget.themed] subtree changes only what it names:
 ///
 /// ```dart
 /// await Tui.run(s, theme: TuiTheme(accent: Style(fg: Color.magenta)), view: …, update: …);
-/// Themed(TuiTheme(border: Border.double), sidebar)
+/// sidebar.themed(TuiTheme(border: Border.double))
 /// ```
 ///
 /// {@category CLI}

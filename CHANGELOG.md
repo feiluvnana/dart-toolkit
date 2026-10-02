@@ -4,6 +4,12 @@
 
 ### Audit VI
 
+#### Upgrading
+
+| Before | After |
+|---|---|
+| `Themed(theme, child)` | `child.themed(theme)` (beside `.fixed`, `.flex`, `.percent`) |
+
 #### Added
 
 - `Io.reset()` clears `Io.color` too, so a teardown is `tearDown(Io.reset)`.

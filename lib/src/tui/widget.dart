@@ -27,6 +27,9 @@ abstract class Widget {
   /// In a stack, [n] percent of the stack.
   Widget percent(int n) => _Sized(this, _Size.percent, n);
 
+  /// This subtree under [theme]: what [theme] leaves unset comes from the theme around it.
+  Widget themed(TuiTheme theme) => _Themed(theme, this);
+
   /// This widget as text [width] columns wide: a styled one-off to print, or a golden to test.
   ///
   /// Escapes follow [Io.color] unless [color] says.
@@ -348,14 +351,11 @@ final class Paint extends Widget {
   void paint(Canvas canvas) => painter(canvas);
 }
 
-/// [child] under [theme]: what [theme] leaves unset comes from the theme around it.
-///
-/// {@category CLI}
-final class Themed extends Widget {
+final class _Themed extends Widget {
   final TuiTheme theme;
   final Widget child;
 
-  const Themed(this.theme, this.child);
+  const _Themed(this.theme, this.child);
 
   @override
   int get width => child.width;
