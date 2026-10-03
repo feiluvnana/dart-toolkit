@@ -222,6 +222,48 @@ void main() {
       expect(await innerZip.exists(), isFalse); // cleaned up
       expect(await (bundleDir / 'note.txt').exists(), isTrue); // unbundled directly to parent
 
+      // Bundle directory into zip (with default destination and with flatten/cleanup)
+      final dirToBundle = base / 'to_bundle';
+      await (dirToBundle / 'sub').mkdir();
+      await (dirToBundle / 'sub' / 'deep.txt').writeText('deep content');
+      await (dirToBundle / 'top.txt').writeText('top content');
+
+      // Default bundle creates parent / '$name.zip'
+      final bundledZip = await dirToBundle.bundle(flatten: true);
+      expect(await bundledZip.exists(), isTrue);
+      expect(bundledZip.name, equals('to_bundle.zip'));
+
+      // Check bundled contents are flat
+      final entries = await bundledZip.entries();
+      expect(entries.map((e) => e.name), containsAll(['deep.txt', 'top.txt']));
+      expect(entries.any((e) => e.name.contains('sub/')), isFalse);
+
+      // Bundle with cleanup
+      final dirToClean = base / 'to_clean';
+      await dirToClean.mkdir();
+      await (dirToClean / 'file.txt').writeText('hello');
+      final cleanBundled = await dirToClean.bundle(cleanup: true);
+      expect(await cleanBundled.exists(), isTrue);
+      expect(await dirToClean.exists(), isFalse); // cleaned up
+
+      // packTo and unpackTo aliases
+      final packDir = base / 'pack_dir';
+      await packDir.mkdir();
+      await (packDir / 'test.txt').writeText('packed test');
+      final packedArchive = base / 'packed.zip';
+      await packDir.packTo(packedArchive.path);
+      expect(await packedArchive.exists(), isTrue);
+
+      final unpackedDir = base / 'unpacked';
+      await packedArchive.unpackTo(unpackedDir.path);
+      expect(await (unpackedDir / 'test.txt').readText(), equals('packed test'));
+
+      // compressTo with archive container
+      final compressToArchive = base / 'compressed_container.zip';
+      await packDir.compressTo(compressToArchive.path);
+      expect(await compressToArchive.exists(), isTrue);
+      expect(await compressToArchive.entries(), isNotEmpty);
+
       // Copy & Move with overwrite
       final copied = base / 'copied_dir';
       await folder.copy(copied);

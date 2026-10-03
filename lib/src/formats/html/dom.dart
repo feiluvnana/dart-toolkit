@@ -152,10 +152,10 @@ final class Element extends Node {
   /// Attribute [name] on this element, or `null`.
   String? attrOrNull(String name) => attributes[name];
 
-  /// This element's `href` (or `src`) resolved against its document's base address,
-  /// or `null` when neither attribute is present or valid.
+  /// This element's `href`, `src`, or JavaScript navigation in `onclick` resolved
+  /// against its document's base address, or `null` when neither attribute is present or valid.
   Uri? get link {
-    final href = attributes['href'] ?? attributes['src'];
+    final href = attributes['href'] ?? attributes['src'] ?? _extractUrlFromOnclick(attributes['onclick']);
     if (href == null) return null;
     final uri = Uri.tryParse(href.trim());
     if (uri == null) return null;
@@ -422,14 +422,14 @@ extension type Elements(List<Element> _list) implements List<Element> {
   /// The first match's [Element.table], or an empty table when nothing matched.
   Table get table => _list.isEmpty ? Table(const [], const []) : _list.first.table;
 
-  /// Every match's `href` (or `src`) resolved against its [HtmlDocument.base], or as written
-  /// without one: `doc.$('img').links`. A match with neither, or not a URI, is skipped.
+  /// Every match's `href`, `src`, or `onclick` URL resolved against its [HtmlDocument.base],
+  /// or as written without one: `doc.$('img').links`. A match with neither, or not a URI, is skipped.
   List<Uri> get links {
     final out = <Uri>[];
     Element? root;
     Uri? base;
     for (final e in _list) {
-      final href = e.attributes['href'] ?? e.attributes['src'];
+      final href = e.attributes['href'] ?? e.attributes['src'] ?? _extractUrlFromOnclick(e.attributes['onclick']);
       if (href == null) continue;
       final uri = Uri.tryParse(href.trim());
       if (uri == null) continue;
@@ -561,11 +561,26 @@ final class HtmlDocument {
   /// The document's text, entities decoded.
   String get text => root.text;
 
+  /// Every link in the document (from `a[href]`, `area[href]`, `link[href]`, `[src]`,
+  /// or JavaScript navigation in `[onclick]`), resolved against [base].
+  List<Uri> get links => $(r'a[href], area[href], link[href], [src], [onclick]').links;
+
   /// The document serialised back to HTML.
   String get markup => root.markup;
 
   @override
   String toString() => markup;
+}
+
+final _onclickUrlRegExp = RegExp(
+  r"""(?:(?:window\.|document\.)?location(?:\.href|\.assign|\.replace)?\s*(?:=|\()\s*|window\.open\s*\(\s*)['"]([^'"]+)['"]""",
+  caseSensitive: false,
+);
+
+String? _extractUrlFromOnclick(String? onclick) {
+  if (onclick == null || onclick.isEmpty) return null;
+  final match = _onclickUrlRegExp.firstMatch(onclick);
+  return match?.group(1);
 }
 
 /// Each document's address by root element, kept outside the tree so no element pays a field.

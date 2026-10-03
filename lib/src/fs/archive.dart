@@ -159,39 +159,41 @@ final class ArchiveProgress implements TaskProgress {
 /// {@category Files}
 extension PathArchiveExtensions on Path {
   /// Archives this file or directory into [destination] as a [Stream] of [ArchiveProgress].
+  ///
+  /// Alias for [compress].
   Stream<ArchiveProgress> archive(String destination, {String? password, int? level}) {
-    final format = _Archive.of(destination);
-    return _NativeArchive.createStream(format, path, destination, password, level ?? -1);
+    _Archive.of(destination);
+    return compress(destination, password: password, level: level);
   }
 
-  /// Archives this file or directory into [destination]; the format is [destination]'s
-  /// extension. [level] is the codec's own scale; `null` is its default. [onProgress] receives
-  /// each progress update. Returns the file.
+  /// Archives this file or directory into [destination].
   ///
-  /// Writes `.zip`, `.7z`, `.tar` and `.tar.gz`/`.xz`/`.zst`/`.bz2` (or `.tgz`, …); any other
-  /// extension is an [ArgumentError]. zip and 7z take a [password] (AES-256). A password for
-  /// a tar, a `.rar` (read-only) and a [level] out of the codec's range are a
-  /// [FormatException] that says so, and leave nothing behind. Only files, directories and
-  /// links go in: a FIFO, socket or device is skipped.
+  /// Alias for [compressTo].
   Future<File> archiveTo(
     String destination, {
     String? password,
     int? level,
     void Function(ArchiveProgress progress)? onProgress,
-  }) async {
-    if (onProgress != null) {
-      await for (final p in archive(destination, password: password, level: level)) {
-        onProgress(p);
-      }
-    } else {
-      final format = _Archive.of(destination);
-      await Isolate.run(() => _NativeArchive.create(format, path, destination, password, level ?? -1));
-    }
-    return File(destination);
+  }) {
+    _Archive.of(destination);
+    return compressTo(destination, password: password, level: level, onProgress: onProgress);
   }
 
-  /// Whether this path represents an archive container format (.zip, .7z, .rar, .tar, etc.).
-  bool get isArchive => _Archive.isArchiveFormat(path);
+  /// Packs this file or directory into [destination].
+  ///
+  /// Alias for [compressTo].
+  Future<File> packTo(
+    String destination, {
+    Compression? codec,
+    String? password,
+    int? level,
+    void Function(ArchiveProgress progress)? onProgress,
+  }) =>
+      compressTo(destination, codec: codec, password: password, level: level, onProgress: onProgress);
+
+  /// Whether this path represents an archive container format (.zip, .7z, .rar, .tar, etc.)
+  /// by file extension or magic bytes.
+  bool get isArchive => _Archive.isArchiveFormat(path) || _hasContainerMagic(path);
 
   /// Decompresses this archive or compressed file into [destination].
   ///
@@ -209,13 +211,23 @@ extension PathArchiveExtensions on Path {
     bool trusted = false,
     bool flatten = false,
     Compression? codec,
+    bool? asArchive,
     void Function(ArchiveProgress progress)? onProgress,
   }) async {
     final dest = Path(destination);
     final absPath = p.absolute(path);
     final absDest = p.absolute(dest.path);
 
-    if (!isArchive && codec == null && !_Archive.isArchiveFormat(path)) {
+    final isContainer = asArchive ??
+        (codec == null &&
+            (isArchive ||
+                password != null ||
+                only != null ||
+                flatten ||
+                _Archive.isArchiveFormat(path) ||
+                await FileSystemEntity.isDirectory(absDest)));
+
+    if (!isContainer) {
       // Single-stream decompression to file
       if (onProgress != null) {
         await for (final p in _NativeArchive.decompressStream(codec, absPath, absDest, _flags(trusted))) {
@@ -275,6 +287,7 @@ extension PathArchiveExtensions on Path {
       only: only,
       trusted: trusted,
       flatten: flatten,
+      asArchive: true,
       onProgress: onProgress,
     );
     if (cleanup) {
@@ -282,6 +295,85 @@ extension PathArchiveExtensions on Path {
     }
     return targetDir;
   }
+
+  /// Bundles this directory or file into an archive.
+  ///
+  /// Destination defaults to `parent / '$name.zip'` if omitted.
+  /// If [flatten] is true, files in any subdirectories are bundled at the root level of the archive.
+  /// If [cleanup] is true, the source directory or file is deleted after bundling.
+  Future<Path> bundle({
+    String? destination,
+    bool cleanup = false,
+    bool flatten = false,
+    String? password,
+    int? level,
+    void Function(ArchiveProgress progress)? onProgress,
+  }) async {
+    final dest = destination != null ? Path(destination) : (parent / '$name.zip');
+    final absDest = p.absolute(dest.path);
+    final absPath = p.absolute(path);
+
+    if (cleanup && (p.equals(absPath, absDest) || p.isWithin(absPath, absDest))) {
+      throw StateError(
+        'Cannot cleanup source directory when destination archive is inside it: $absDest',
+      );
+    }
+
+    if (flatten && await FileSystemEntity.isDirectory(path)) {
+      final tempDir = Directory.systemTemp.createTempSync('bundle_flatten_');
+      try {
+        await for (final file in files(recursive: true)) {
+          final target = Path(tempDir.path) / file.name;
+          await file.copy(target, overwrite: true);
+        }
+        await Path(tempDir.path).compressTo(
+          absDest,
+          password: password,
+          level: level,
+          onProgress: onProgress,
+        );
+      } finally {
+        try {
+          await tempDir.delete(recursive: true);
+        } catch (_) {}
+      }
+    } else {
+      await compressTo(
+        absDest,
+        password: password,
+        level: level,
+        onProgress: onProgress,
+      );
+    }
+
+    if (cleanup) {
+      await delete(recursive: true);
+    }
+
+    return dest;
+  }
+
+  /// Unpacks this archive or decompresses this compressed file into [destination].
+  ///
+  /// Alias for [decompressTo].
+  Future<Path> unpackTo(
+    String destination, {
+    String? password,
+    String? only,
+    bool trusted = false,
+    bool flatten = false,
+    Compression? codec,
+    void Function(ArchiveProgress progress)? onProgress,
+  }) =>
+      decompressTo(
+        destination,
+        password: password,
+        only: only,
+        trusted: trusted,
+        flatten: flatten,
+        codec: codec,
+        onProgress: onProgress,
+      );
 
   /// Extracts the archive at this path into [destination].
   ///
@@ -300,6 +392,7 @@ extension PathArchiveExtensions on Path {
       only: only,
       trusted: trusted,
       flatten: flatten,
+      asArchive: true,
       onProgress: onProgress,
     );
     return Directory(d.path);
@@ -312,10 +405,18 @@ extension PathArchiveExtensions on Path {
     String? password,
     String? only,
     bool trusted = false,
+    bool? asArchive,
   }) {
     final absPath = p.absolute(path);
     final absDest = p.absolute(destination);
-    if (!isArchive && codec == null && !_Archive.isArchiveFormat(path)) {
+    final isContainer = asArchive ??
+        (codec == null &&
+            (isArchive ||
+                password != null ||
+                only != null ||
+                _Archive.isArchiveFormat(path) ||
+                Directory(absDest).existsSync()));
+    if (!isContainer) {
       return _NativeArchive.decompressStream(codec, absPath, absDest, _flags(trusted));
     }
     return _NativeArchive.extractStream(absPath, absDest, password, only, _flags(trusted));
@@ -325,7 +426,7 @@ extension PathArchiveExtensions on Path {
   ///
   /// Alias for [decompress].
   Stream<ArchiveProgress> extract(String destination, {String? password, String? only, bool trusted = false}) =>
-      decompress(destination, password: password, only: only, trusted: trusted);
+      decompress(destination, password: password, only: only, trusted: trusted, asArchive: true);
 
   /// The contents of the one entry [name] — `'a/b.txt'`, as [entries] lists it — read
   /// without extracting anything else. The size cap is [extractTo]'s, and [trusted] lifts it.
@@ -336,27 +437,61 @@ extension PathArchiveExtensions on Path {
   /// the file itself, as in [extractTo].
   Future<List<ArchiveEntry>> entries({String? password}) => Isolate.run(() => _NativeArchive.list(p.absolute(path), password));
 
-  /// Compresses this file into [destination] with [codec] as a [Stream] of [ArchiveProgress].
-  Stream<ArchiveProgress> compress(String destination, {Compression? codec, int? level}) {
+  /// Compresses or archives this file or directory into [destination] as a [Stream] of [ArchiveProgress].
+  Stream<ArchiveProgress> compress(
+    String destination, {
+    Compression? codec,
+    String? password,
+    int? level,
+  }) {
+    final absPath = p.absolute(path);
+    final absDest = p.absolute(destination);
+    if (codec == null && (_Archive.isArchiveFormat(destination) || FileSystemEntity.isDirectorySync(absPath))) {
+      final format = _Archive.of(destination);
+      return _NativeArchive.createStream(format, absPath, absDest, password, level ?? -1);
+    }
     final c = codec ?? _codecOf(destination);
-    return _NativeArchive.compressStream(c, p.absolute(path), p.absolute(destination), level ?? -1);
+    return _NativeArchive.compressStream(c, absPath, absDest, level ?? -1);
   }
 
-  /// Compresses this file into [destination] with [codec], read from the extension by default.
-  /// [onProgress] receives each progress update.
+  /// Compresses or archives this file or directory into [destination].
+  ///
+  /// If [destination] is a container archive format (e.g. `.zip`, `.7z`, `.tar`, `.tar.gz`),
+  /// this file or directory is archived into [destination].
+  /// If [destination] is a single-stream compression format (`.gz`, `.xz`, `.zst`, `.bz2`),
+  /// this file is compressed into [destination].
+  ///
+  /// [level] is the codec's own scale; `null` is its default. [onProgress] receives
+  /// each progress update. Returns the destination [File].
   Future<File> compressTo(
     String destination, {
     Compression? codec,
+    String? password,
     int? level,
     void Function(ArchiveProgress progress)? onProgress,
   }) async {
+    final absPath = p.absolute(path);
+    final absDest = p.absolute(destination);
+
+    if (codec == null && (_Archive.isArchiveFormat(destination) || await FileSystemEntity.isDirectory(absPath))) {
+      final format = _Archive.of(destination);
+      if (onProgress != null) {
+        await for (final p in compress(destination, password: password, level: level)) {
+          onProgress(p);
+        }
+      } else {
+        await Isolate.run(() => _NativeArchive.create(format, absPath, absDest, password, level ?? -1));
+      }
+      return File(destination);
+    }
+
     if (onProgress != null) {
       await for (final p in compress(destination, codec: codec, level: level)) {
         onProgress(p);
       }
     } else {
       final c = codec ?? _codecOf(destination);
-      await Isolate.run(() => _NativeArchive.compress(c, p.absolute(path), p.absolute(destination), level ?? -1));
+      await Isolate.run(() => _NativeArchive.compress(c, absPath, absDest, level ?? -1));
     }
     return File(destination);
   }
@@ -372,6 +507,54 @@ extension PathArchiveExtensions on Path {
     throw ArgumentError(
       'No codec for "$path"; extensions are ${Compression.values.map((c) => c.extension).join(', ')}',
     );
+  }
+
+  static bool _hasContainerMagic(String filePath) {
+    final file = File(filePath);
+    if (!file.existsSync()) return false;
+    try {
+      final len = file.lengthSync();
+      if (len < 4) return false;
+      final raf = file.openSync(mode: FileMode.read);
+      try {
+        final bytes = raf.readSync(len < 265 ? len : 265);
+        if (bytes.length >= 4 &&
+            bytes[0] == 0x50 &&
+            bytes[1] == 0x4B &&
+            (bytes[2] == 3 || bytes[2] == 5 || bytes[2] == 7)) {
+          return true;
+        }
+        if (bytes.length >= 6 &&
+            bytes[0] == 0x37 &&
+            bytes[1] == 0x7A &&
+            bytes[2] == 0xBC &&
+            bytes[3] == 0xAF &&
+            bytes[4] == 0x27 &&
+            bytes[5] == 0x1C) {
+          return true;
+        }
+        if (bytes.length >= 7 &&
+            bytes[0] == 0x52 &&
+            bytes[1] == 0x61 &&
+            bytes[2] == 0x72 &&
+            bytes[3] == 0x21 &&
+            bytes[4] == 0x1A &&
+            bytes[5] == 0x07) {
+          return true;
+        }
+        if (bytes.length >= 262 &&
+            bytes[257] == 0x75 &&
+            bytes[258] == 0x73 &&
+            bytes[259] == 0x74 &&
+            bytes[260] == 0x61 &&
+            bytes[261] == 0x72) {
+          return true;
+        }
+      } finally {
+        raf.closeSync();
+      }
+    } catch (_) {}
+    return false;
   }
 }
 

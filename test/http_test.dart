@@ -3505,6 +3505,20 @@ void _scrapeEdges() {
       expect(u.removeQuery().toString(), 'http://example.com/search');
     });
 
+    test('Uri.canonical and canonicalize clean and sort parameters, remove ports and strip fragments', () {
+      final u = Uri.parse('https://EXAMPLE.COM:443/items/?ps_page=&&ps_page=1&sort=date&b=2&a=1#section');
+      expect(u.canonical.toString(), 'https://example.com/items/?a=1&b=2&ps_page=1&sort=date');
+
+      final httpWithPort = Uri.parse('http://example.com:80/path?');
+      expect(httpWithPort.canonical.toString(), 'http://example.com/path');
+
+      final customPort = Uri.parse('http://example.com:8080/path?q=1#');
+      expect(customPort.canonical.toString(), 'http://example.com:8080/path?q=1');
+
+      final keepFrag = u.canonicalize(stripFragment: false);
+      expect(keepFrag.fragment, equals('section'));
+    });
+
     test('HEAD receiving 303 redirect stays HEAD', () async {
       String? redirectedMethod;
       final server = await HttpServer.bind('127.0.0.1', 0);

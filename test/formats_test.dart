@@ -1437,6 +1437,26 @@ folded: >
       expect(page.html.base, isNull);
       final res = Response('<a href="y">', 200, url: Uri.parse('https://site.test/d/p'));
       expect(res.html.$('a').links.single, Uri.parse('https://site.test/d/y'));
+
+      // onclick URL extraction and HtmlDocument.links
+      final onclickDoc = HtmlDocument.parse(
+        '''
+        <div onclick="location.href='/items?p=1'">Items</div>
+        <button onclick="window.location = 'https://other.test/view'">Other</button>
+        <span onclick="window.open('/popup')">Popup</span>
+        <a href="/normal">Link</a>
+        ''',
+        url: Uri.parse('https://site.test/app/'),
+      );
+      expect(onclickDoc.$('div').link, Uri.parse('https://site.test/items?p=1'));
+      expect(onclickDoc.$('button').link, Uri.parse('https://other.test/view'));
+      expect(onclickDoc.$('span').link, Uri.parse('https://site.test/popup'));
+      expect(onclickDoc.links.map((u) => '$u'), [
+        'https://site.test/items?p=1',
+        'https://other.test/view',
+        'https://site.test/popup',
+        'https://site.test/normal',
+      ]);
     });
   });
 

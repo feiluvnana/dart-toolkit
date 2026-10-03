@@ -12,8 +12,14 @@
 
 #### Added
 
+- `Path.compressTo`: unified container archiving (`.zip`, `.7z`, `.tar.*`) and single-stream compression (`.gz`, `.xz`, `.zst`, `.bz2`).
 - `Path.decompressTo`: unified extraction/decompression supporting container archives (`.zip`, `.7z`, `.rar`, `.tar.*`) to directories with `flatten: true`, and single-stream formats (`.gz`, `.xz`, `.zst`, `.bz2`) to files.
+- `Path.bundle({String? destination, bool cleanup, bool flatten})`: bundles a folder or file into an archive (default `parent / '$name.zip'`), with optional `flatten: true` and `cleanup: true`.
 - `Path.unbundle({bool cleanup, bool flatten})`: unbundles archives in-place into their parent folder, with optional `flatten: true` and `cleanup: true` to remove the archive afterward.
+- `Path.packTo` & `Path.unpackTo`: ergonomic aliases for `compressTo` and `decompressTo`.
+- `HtmlDocument.links`: document-wide links getter, extracting URLs from `a[href]`, `area[href]`, `link[href]`, `[src]`, and JavaScript `[onclick]`.
+- `Element.link` & `Elements.links`: extracts URLs from `href`, `src`, and JavaScript navigation in `onclick` (`location.href`, `window.open`, etc.).
+- `Uri.canonical` & `Uri.canonicalize`: URL canonicalization for crawling/deduplication (cleaning empty tokens/values, sorting query keys, removing default ports, and stripping fragments).
 - `Path.files` & `Path.dirs`: added `followLinks` parameter, and `extensions` filtering parameter on `Path.files`.
 - `Path.move` & `Path.copy`: added `overwrite: false` parameter to safely overwrite existing targets.
 - `String` ergonomic helpers: `.after`, `.afterLast`, `.before`, `.beforeLast`, `.between`, `.remove`, `.removeAll`, `.removePrefix`, `.removeSuffix`, `.unquote`, `.collapseWhitespace`, `.lines`, `.words`, `.containsAny`, `.containsAll`.

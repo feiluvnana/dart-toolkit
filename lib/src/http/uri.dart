@@ -38,6 +38,67 @@ extension UriExtensions on Uri {
     return Uri.parse(s.substring(0, q) + (f < 0 ? '' : s.substring(f)));
   }
 
+  /// A canonical representation of this URI for deduplication and crawling:
+  /// - Scheme and host are lowercased.
+  /// - Default ports (80 for http, 443 for https) are removed.
+  /// - Empty query parameters (`&&`), empty values (`key=`), and duplicate keys are cleaned.
+  /// - Query parameters are sorted alphabetically by key.
+  /// - Fragments (`#...`) are removed by default unless [stripFragment] is false.
+  Uri canonicalize({bool stripFragment = true, bool sortQuery = true}) {
+    final scheme = this.scheme.toLowerCase();
+    final host = this.host.toLowerCase();
+    final isDefaultPort = (scheme == 'http' && port == 80) || (scheme == 'https' && port == 443);
+    final cleanPort = isDefaultPort ? null : (hasPort ? port : null);
+
+    String? cleanQuery;
+    if (hasQuery && query.isNotEmpty) {
+      final parts = query.split('&').map((p) => p.trim()).where((p) => p.isNotEmpty);
+      final queryMap = <String, List<String>>{};
+      for (final part in parts) {
+        final eq = part.indexOf('=');
+        final key = eq == -1 ? part : part.substring(0, eq);
+        final val = eq == -1 ? '' : part.substring(eq + 1);
+        if (key.isEmpty || val.isEmpty) continue;
+        final list = queryMap.putIfAbsent(key, () => []);
+        if (!list.contains(val)) list.add(val);
+      }
+      if (queryMap.isNotEmpty) {
+        final keys = queryMap.keys.toList();
+        if (sortQuery) keys.sort();
+        final buf = StringBuffer();
+        var first = true;
+        for (final k in keys) {
+          for (final v in queryMap[k]!) {
+            if (!first) buf.write('&');
+            first = false;
+            buf.write(k);
+            buf.write('=');
+            buf.write(v);
+          }
+        }
+        cleanQuery = buf.toString();
+      }
+    }
+
+    var result = replace(
+      scheme: scheme.isEmpty ? null : scheme,
+      host: host.isEmpty ? null : host,
+      port: cleanPort,
+      query: cleanQuery,
+    );
+    if (cleanQuery == null) {
+      result = result.removeQuery();
+    }
+    if (stripFragment || fragment.isEmpty) {
+      result = result.removeFragment();
+    }
+    return result;
+  }
+
+  /// A canonical representation of this URI with lowercased host, cleaned and sorted query
+  /// parameters, default ports removed, and fragment stripped.
+  Uri get canonical => canonicalize();
+
   /// GET. Awaited, the [Response] whatever the status; read through [Fetch], 2xx or a throw.
   ///
   /// ```dart
