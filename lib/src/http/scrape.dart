@@ -203,6 +203,9 @@ final class InitContext<T> {
   /// ```
   Uri Function(Uri url)? canonical;
 
+  /// Whether to drop duplicate emitted items across the crawl (by `==`). Default is false.
+  bool distinct = false;
+
   final List<Request> _seeds;
   final Map<Uri, Map<String, Object?>> _seedMeta = {};
 
@@ -720,6 +723,9 @@ final class Scrape<T> extends StreamView<Either<ScrapeFailure, T>> {
     return this;
   }
 
+  /// Deduplicates emitted items across the crawl (by `==`).
+  Scrape<T> distinctBy() => onInit((ctx) => ctx.distinct = true);
+
   /// Before every send, retries included.
   Scrape<T> onRequest(RequestHook hook) {
     final prev = _chain.request;
@@ -989,6 +995,12 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     controller.add(outcome);
   }
 
+  final emitted = cfg.distinct ? <T>{} : null;
+  void emit(T item) {
+    if (emitted != null && !emitted.add(item)) return;
+    add(Right(item));
+  }
+
   late final void Function() dispatch;
 
   /// Sitemap readers holding pages back until the frontier has room; see [seedSitemaps].
@@ -1224,7 +1236,7 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
     final ctx = ErrorContext<T>._(
       failure,
       item.attempt,
-      (value) => add(Right(value)),
+      emit,
       followFrom(item, () => failure.url),
       (after, req, hdrs) {
         if (req != null) item._request = req;
@@ -1319,7 +1331,7 @@ Future<void> _run<T>(Crawler<T> crawler, StreamController<Either<ScrapeFailure, 
       depth: item.depth,
       pages: pages,
       meta: item.meta,
-      emit: (value) => add(Right(value)),
+      emit: emit,
       follow: followFrom(item, () => ctx._base),
       retry: (after, req) {
         pages--;

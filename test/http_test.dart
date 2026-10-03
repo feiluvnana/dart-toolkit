@@ -2210,6 +2210,23 @@ void main() {
       expect(await crawler.run().rights.toList(), ['Dune', 'Emma', 'Ulysses']);
       expect(crawler.pages, 4);
     });
+
+    test('distinctBy deduplicates emitted items across pages in a chain crawl', () async {
+      final titles = await Http.scope(
+        () => (base / 'books' / '1')
+            .scrape<String>()
+            .distinctBy()
+            .onResponse((ctx) {
+              for (final h2 in ctx.html.$('h2')) {
+                ctx.emit(h2.text);
+              }
+              ctx.follow(ctx.html.$('a.next'));
+            })
+            .rights
+            .toList(),
+      );
+      expect(titles, ['Dune', 'Emma', 'Ulysses']);
+    });
   });
 
   group('scope, crawl and download edge cases', () {

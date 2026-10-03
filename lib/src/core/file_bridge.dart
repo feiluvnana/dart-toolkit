@@ -110,7 +110,7 @@ abstract final class FileBridge {
         final code = e.osError?.errorCode;
         // Refused, or the name plus the temporary suffix is too long: write in place.
         final refused = Platform.isWindows
-            ? const {5, 19, 206}
+            ? const {5, 19, 123, 206}
             : (Platform.isMacOS ? const {1, 13, 30, 63} : const {1, 13, 30, 36});
         if (refused.contains(code)) return null;
         if (code == (Platform.isWindows ? 80 : 17) && tries < 3) continue;

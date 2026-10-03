@@ -384,6 +384,16 @@ void main() {
       );
     });
 
+    test('distinctBy emits each item once across the stream', () async {
+      final stream = Stream.fromIterable([1, 2, 1, 3, 2, 4]);
+      expect(await stream.distinctBy().toList(), [1, 2, 3, 4]);
+    });
+
+    test('distinctBy deduplicates by key', () async {
+      final stream = Stream.fromIterable(['apple', 'banana', 'avocado', 'blueberry']);
+      expect(await stream.distinctBy((e) => e[0]).toList(), ['apple', 'banana']);
+    });
+
     test('flatmap transforms and flattens streams', () async {
       final stream = Stream.fromIterable([1, 2]);
       final flattened = await stream.flatMap((x) => Stream.fromIterable([x, x * 10])).toList();

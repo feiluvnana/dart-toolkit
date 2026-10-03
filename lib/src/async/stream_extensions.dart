@@ -237,6 +237,12 @@ extension StreamExtensions<T> on Stream<T> {
 
     return controller.stream;
   }
+
+  /// Emits each [key] once, keeping the first element that had it (by `==` when omitted).
+  Stream<T> distinctBy([Object? Function(T element)? key]) {
+    final seen = <Object?>{};
+    return where((item) => seen.add(key == null ? item : key(item)));
+  }
 }
 
 /// Combining several streams.

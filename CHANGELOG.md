@@ -12,12 +12,19 @@
 
 #### Added
 
+- `Stream.distinctBy([key])`: emits each item once by `==` (or by `key`), keeping the first element seen.
+- `Scrape.distinctBy()` and `InitContext.distinct`: drops duplicate emitted items across the crawl.
 - `Io.reset()` clears `Io.color` too, so a teardown is `tearDown(Io.reset)`.
 - `Uri.name`: the last path segment, as `Path.name` — `dir / u.name`, not `u.pathSegments.last`
   (which throws on a bare host).
 - `Doc.html(text, url: …)`: links resolve against a saved page's address from the facade.
 - `path.relativeTo()` with no argument is relative to the working directory.
 - `Hash.crc32.checksum(bytes)` and `.fileChecksum(path)`: the int checksum from the facade.
+
+#### Fixed
+
+- `FileBridge._openTemp`: catches Windows error code 123 (`ERROR_INVALID_NAME`) when a filename leaves no room for a temporary name.
+- `Path.sanitized`: retains forward slashes on Windows when the path contains forward slashes.
 
 ### Audit V
 

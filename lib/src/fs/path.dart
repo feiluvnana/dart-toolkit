@@ -193,7 +193,7 @@ extension type const Path(String path) implements String {
   /// in every component; separators survive (on POSIX `\` is a name character, not one). For
   /// one component use [StringPathExtensions.filename].
   Path get sanitized {
-    final useSlash = !Platform.isWindows || !path.contains(r'\');
+    final useSlash = !Platform.isWindows || path.contains('/') || !path.contains(r'\');
     final root = p.rootPrefix(path);
     final rawParts = path.substring(root.length).split(Platform.isWindows ? RegExp(r'[/\\]') : '/');
     final parts = [
