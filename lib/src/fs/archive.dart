@@ -29,6 +29,17 @@ enum _Archive {
         if (a != rar) a.extension].join(', ')}',
     );
   }
+
+  static bool isArchiveFormat(String path) {
+    final lower = path.toLowerCase();
+    if (lower.endsWith('.tgz') || lower.endsWith('.txz') || lower.endsWith('.tzst') || lower.endsWith('.tbz2')) {
+      return true;
+    }
+    for (final a in values) {
+      if (lower.endsWith(a.extension)) return true;
+    }
+    return false;
+  }
 }
 
 /// Single-stream codecs for `compressTo` and `decompressTo`.
@@ -179,54 +190,156 @@ extension PathArchiveExtensions on Path {
     return File(destination);
   }
 
-  /// Extracts the archive at this path into [destination] as a [Stream] of [ArchiveProgress].
-  Stream<ArchiveProgress> extract(String destination, {String? password, String? only, bool trusted = false}) {
-    return _NativeArchive.extractStream(path, destination, password, only, _flags(trusted));
+  /// Whether this path represents an archive container format (.zip, .7z, .rar, .tar, etc.).
+  bool get isArchive => _Archive.isArchiveFormat(path);
+
+  /// Decompresses this archive or compressed file into [destination].
+  ///
+  /// If this file is a container archive (e.g. `.zip`, `.7z`, `.rar`, `.tar`, `.tar.gz`),
+  /// it is extracted into the directory at [destination].
+  /// If [flatten] is true, files in any extracted subdirectories are moved directly into
+  /// [destination], and the empty intermediate directories are removed.
+  ///
+  /// If this file is a single-stream compressed file (`.gz`, `.xz`, `.zst`, `.bz2`),
+  /// it is decompressed to the file at [destination].
+  Future<Path> decompressTo(
+    String destination, {
+    String? password,
+    String? only,
+    bool trusted = false,
+    bool flatten = false,
+    Compression? codec,
+    void Function(ArchiveProgress progress)? onProgress,
+  }) async {
+    final dest = Path(destination);
+    final absPath = p.absolute(path);
+    final absDest = p.absolute(dest.path);
+
+    if (!isArchive && codec == null && !_Archive.isArchiveFormat(path)) {
+      // Single-stream decompression to file
+      if (onProgress != null) {
+        await for (final p in _NativeArchive.decompressStream(codec, absPath, absDest, _flags(trusted))) {
+          onProgress(p);
+        }
+      } else {
+        await Isolate.run(() => _NativeArchive.decompress(codec, absPath, absDest, _flags(trusted)));
+      }
+      return dest;
+    }
+
+    // Container archive extraction to directory
+    Set<Path> dirsBefore = const {};
+    if (flatten && await dest.exists()) {
+      dirsBefore = await dest.dirs().toSet();
+    }
+
+    if (onProgress != null) {
+      await for (final p in _NativeArchive.extractStream(absPath, absDest, password, only, _flags(trusted))) {
+        onProgress(p);
+      }
+    } else {
+      await Isolate.run(() => _NativeArchive.extract(absPath, absDest, password, only, _flags(trusted)));
+    }
+
+    if (flatten) {
+      final newDirs = (await dest.dirs().toSet()).difference(dirsBefore);
+      for (final dir in newDirs) {
+        await for (final file in dir.files(recursive: true)) {
+          final target = dest / file.name;
+          await file.move(target, overwrite: true);
+        }
+        await dir.delete(recursive: true);
+      }
+    }
+
+    return dest;
   }
 
-  /// Extracts the archive at this path into [destination], restoring permissions and times;
-  /// [only] extracts just the entries that match a [glob] pattern: `only: '**/*.txt'`.
-  /// [onProgress] receives each progress update.
+  /// Unbundles this archive in-place into its parent directory.
   ///
-  /// The format comes from the magic number, so a renamed archive still extracts; the name
-  /// only tells a `.tar.gz` from a lone `.gz`.
-  ///
-  /// By default an archive may not write more than 200 times its own size (at least 1 GiB),
-  /// loses setuid, setgid and sticky bits, and may not make a link out of [destination].
-  /// [trusted] lifts all three; nothing lifts the refusal of an entry named outside it.
-  ///
-  /// Throws [FormatException] on a corrupt archive, a wrong [password] or one of the refusals
-  /// above, [UnsupportedError] when the native library did not load.
-  Future<Directory> extractTo(
-    String destination, {
+  /// If [flatten] is true, files inside any extracted subdirectory are moved directly
+  /// into the parent directory and the intermediate directory is deleted.
+  /// If [cleanup] is true, the archive file itself is deleted after successful unbundling.
+  Future<Path> unbundle({
+    bool cleanup = false,
+    bool flatten = false,
     String? password,
     String? only,
     bool trusted = false,
     void Function(ArchiveProgress progress)? onProgress,
   }) async {
-    if (onProgress != null) {
-      await for (final p in extract(destination, password: password, only: only, trusted: trusted)) {
-        onProgress(p);
-      }
-    } else {
-      await Isolate.run(() => _NativeArchive.extract(path, destination, password, only, _flags(trusted)));
+    final targetDir = parent;
+    await decompressTo(
+      targetDir.path,
+      password: password,
+      only: only,
+      trusted: trusted,
+      flatten: flatten,
+      onProgress: onProgress,
+    );
+    if (cleanup) {
+      await delete();
     }
-    return Directory(destination);
+    return targetDir;
   }
+
+  /// Extracts the archive at this path into [destination].
+  ///
+  /// Alias for [decompressTo].
+  Future<Directory> extractTo(
+    String destination, {
+    String? password,
+    String? only,
+    bool trusted = false,
+    bool flatten = false,
+    void Function(ArchiveProgress progress)? onProgress,
+  }) async {
+    final d = await decompressTo(
+      destination,
+      password: password,
+      only: only,
+      trusted: trusted,
+      flatten: flatten,
+      onProgress: onProgress,
+    );
+    return Directory(d.path);
+  }
+
+  /// Decompresses this archive or compressed stream into [destination] as a [Stream] of [ArchiveProgress].
+  Stream<ArchiveProgress> decompress(
+    String destination, {
+    Compression? codec,
+    String? password,
+    String? only,
+    bool trusted = false,
+  }) {
+    final absPath = p.absolute(path);
+    final absDest = p.absolute(destination);
+    if (!isArchive && codec == null && !_Archive.isArchiveFormat(path)) {
+      return _NativeArchive.decompressStream(codec, absPath, absDest, _flags(trusted));
+    }
+    return _NativeArchive.extractStream(absPath, absDest, password, only, _flags(trusted));
+  }
+
+  /// Extracts the archive at this path into [destination] as a [Stream] of [ArchiveProgress].
+  ///
+  /// Alias for [decompress].
+  Stream<ArchiveProgress> extract(String destination, {String? password, String? only, bool trusted = false}) =>
+      decompress(destination, password: password, only: only, trusted: trusted);
 
   /// The contents of the one entry [name] — `'a/b.txt'`, as [entries] lists it — read
   /// without extracting anything else. The size cap is [extractTo]'s, and [trusted] lifts it.
   Future<Uint8List> entry(String name, {String? password, bool trusted = false}) =>
-      Isolate.run(() => _NativeArchive.read(path, name, password, _flags(trusted)));
+      Isolate.run(() => _NativeArchive.read(p.absolute(path), name, password, _flags(trusted)));
 
   /// The entries of the archive at this path, without extracting; the format is read from
   /// the file itself, as in [extractTo].
-  Future<List<ArchiveEntry>> entries({String? password}) => Isolate.run(() => _NativeArchive.list(path, password));
+  Future<List<ArchiveEntry>> entries({String? password}) => Isolate.run(() => _NativeArchive.list(p.absolute(path), password));
 
   /// Compresses this file into [destination] with [codec] as a [Stream] of [ArchiveProgress].
   Stream<ArchiveProgress> compress(String destination, {Compression? codec, int? level}) {
     final c = codec ?? _codecOf(destination);
-    return _NativeArchive.compressStream(c, path, destination, level ?? -1);
+    return _NativeArchive.compressStream(c, p.absolute(path), p.absolute(destination), level ?? -1);
   }
 
   /// Compresses this file into [destination] with [codec], read from the extension by default.
@@ -243,34 +356,7 @@ extension PathArchiveExtensions on Path {
       }
     } else {
       final c = codec ?? _codecOf(destination);
-      await Isolate.run(() => _NativeArchive.compress(c, path, destination, level ?? -1));
-    }
-    return File(destination);
-  }
-
-  /// Decompresses this single-stream file into [destination] as a [Stream] of [ArchiveProgress].
-  Stream<ArchiveProgress> decompress(String destination, {Compression? codec, bool trusted = false}) {
-    return _NativeArchive.decompressStream(codec, path, destination, _flags(trusted));
-  }
-
-  /// Decompresses this single-stream file into [destination].
-  ///
-  /// The codec is read from the magic number unless [codec] names one. Throws
-  /// [FormatException] when the bytes are none of gzip, xz, zstd or bzip2, or decompress to
-  /// more than [extractTo]'s cap — which leaves nothing at [destination] — unless [trusted].
-  /// [onProgress] receives each progress update.
-  Future<File> decompressTo(
-    String destination, {
-    Compression? codec,
-    bool trusted = false,
-    void Function(ArchiveProgress progress)? onProgress,
-  }) async {
-    if (onProgress != null) {
-      await for (final p in decompress(destination, codec: codec, trusted: trusted)) {
-        onProgress(p);
-      }
-    } else {
-      await Isolate.run(() => _NativeArchive.decompress(codec, path, destination, _flags(trusted)));
+      await Isolate.run(() => _NativeArchive.compress(c, p.absolute(path), p.absolute(destination), level ?? -1));
     }
     return File(destination);
   }
@@ -397,9 +483,9 @@ final class _NativeArchive {
   }
 
   static void extract(String path, String dest, String? password, String? only, int flags) =>
-      _with([path, dest, password, only], (a) {
-        final [(p, pl), (d, dl), (pw, pwl), (o, ol)] = a;
-        _check(_extract(p, pl, d, dl, pw, pwl, o, ol, flags));
+      _with([p.absolute(path), p.absolute(dest), password, only], (a) {
+        final [(p0, pl), (d, dl), (pw, pwl), (o, ol)] = a;
+        _check(_extract(p0, pl, d, dl, pw, pwl, o, ol, flags));
       });
 
   static _ProgressCb _callback(SendPort sendPort, List<NativeCallable<_NativeProgressCb>> callables) {
@@ -510,40 +596,40 @@ final class _NativeArchive {
   }
 
   static Stream<ArchiveProgress> extractStream(String path, String dest, String? password, String? only, int flags) =>
-      _stream(_ExtractTask(path, dest, password, only, flags));
+      _stream(_ExtractTask(p.absolute(path), p.absolute(dest), password, only, flags));
 
-  static Uint8List read(String path, String name, String? password, int flags) => _with([path, name, password], (a) {
-    final [(p, pl), (n, nl), (pw, pwl)] = a;
-    return _take((out, len) => _read(p, pl, n, nl, pw, pwl, flags, out, len));
+  static Uint8List read(String path, String name, String? password, int flags) => _with([p.absolute(path), name, password], (a) {
+    final [(p0, pl), (n, nl), (pw, pwl)] = a;
+    return _take((out, len) => _read(p0, pl, n, nl, pw, pwl, flags, out, len));
   });
 
   static void create(_Archive format, String src, String dest, String? password, int level) =>
-      _with([src, dest, password], (a) {
+      _with([p.absolute(src), p.absolute(dest), password], (a) {
         final [(s, sl), (d, dl), (pw, pwl)] = a;
         _check(_create(format.index, s, sl, d, dl, pw, pwl, level));
       });
 
   static Stream<ArchiveProgress> createStream(_Archive format, String src, String dest, String? password, int level) =>
-      _stream(_CreateTask(format.index, src, dest, password, level));
+      _stream(_CreateTask(format.index, p.absolute(src), p.absolute(dest), password, level));
 
-  static void compress(Compression codec, String src, String dest, int level) => _with([src, dest], (a) {
+  static void compress(Compression codec, String src, String dest, int level) => _with([p.absolute(src), p.absolute(dest)], (a) {
     final [(s, sl), (d, dl)] = a;
     _check(_compress(codec.index, s, sl, d, dl, level));
   });
 
   static Stream<ArchiveProgress> compressStream(Compression codec, String src, String dest, int level) =>
-      _stream(_CompressTask(codec.index, src, dest, level));
+      _stream(_CompressTask(codec.index, p.absolute(src), p.absolute(dest), level));
 
   /// A `null` codec asks the library to read the stream's magic number.
   static const _detect = 0xFFFFFFFF;
 
-  static void decompress(Compression? codec, String src, String dest, int flags) => _with([src, dest], (a) {
+  static void decompress(Compression? codec, String src, String dest, int flags) => _with([p.absolute(src), p.absolute(dest)], (a) {
     final [(s, sl), (d, dl)] = a;
     _check(_decompress(codec?.index ?? _detect, s, sl, d, dl, flags));
   });
 
   static Stream<ArchiveProgress> decompressStream(Compression? codec, String src, String dest, int flags) =>
-      _stream(_DecompressTask(codec?.index, src, dest, flags));
+      _stream(_DecompressTask(codec?.index, p.absolute(src), p.absolute(dest), flags));
 }
 
 sealed class _ProgressTask {}

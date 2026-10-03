@@ -267,28 +267,44 @@ extension type const Path(String path) implements String {
       asDir.listSync(recursive: recursive, followLinks: followLinks).map((e) => Path(e.path)).toList();
 
   /// The files in this directory.
-  Stream<Path> files({bool recursive = false}) => _only<File>(recursive);
+  Stream<Path> files({bool recursive = false, bool followLinks = false, Iterable<String>? extensions}) {
+    var s = _only<File>(recursive, followLinks: followLinks);
+    if (extensions != null) {
+      final exts = {for (final e in extensions) e.startsWith('.') ? e.substring(1).toLowerCase() : e.toLowerCase()};
+      s = s.where((p) => exts.contains(p.ext.toLowerCase()));
+    }
+    return s;
+  }
 
   /// The files in this directory, synchronously.
-  List<Path> filesSync({bool recursive = false}) => _onlySync<File>(recursive);
+  List<Path> filesSync({bool recursive = false, bool followLinks = false, Iterable<String>? extensions}) {
+    var list = _onlySync<File>(recursive, followLinks: followLinks);
+    if (extensions != null) {
+      final exts = {for (final e in extensions) e.startsWith('.') ? e.substring(1).toLowerCase() : e.toLowerCase()};
+      list = list.where((p) => exts.contains(p.ext.toLowerCase())).toList();
+    }
+    return list;
+  }
 
   /// The subdirectories of this directory.
-  Stream<Path> dirs({bool recursive = false}) => _only<Directory>(recursive);
+  Stream<Path> dirs({bool recursive = false, bool followLinks = false}) =>
+      _only<Directory>(recursive, followLinks: followLinks);
 
   /// The subdirectories of this directory, synchronously.
-  List<Path> dirsSync({bool recursive = false}) => _onlySync<Directory>(recursive);
+  List<Path> dirsSync({bool recursive = false, bool followLinks = false}) =>
+      _onlySync<Directory>(recursive, followLinks: followLinks);
 
   /// The symbolic links in this directory.
-  Stream<Path> links({bool recursive = false}) => _only<Link>(recursive);
+  Stream<Path> links({bool recursive = false}) => _only<Link>(recursive, followLinks: false);
 
   /// The symbolic links in this directory, synchronously.
-  List<Path> linksSync({bool recursive = false}) => _onlySync<Link>(recursive);
+  List<Path> linksSync({bool recursive = false}) => _onlySync<Link>(recursive, followLinks: false);
 
-  Stream<Path> _only<T>(bool recursive) =>
-      asDir.list(recursive: recursive, followLinks: false).where((e) => e is T).map((e) => Path(e.path));
+  Stream<Path> _only<T>(bool recursive, {bool followLinks = false}) =>
+      asDir.list(recursive: recursive, followLinks: followLinks).where((e) => e is T).map((e) => Path(e.path));
 
-  List<Path> _onlySync<T>(bool recursive) => [
-    for (final e in asDir.listSync(recursive: recursive, followLinks: false))
+  List<Path> _onlySync<T>(bool recursive, {bool followLinks = false}) => [
+    for (final e in asDir.listSync(recursive: recursive, followLinks: followLinks))
       if (e is T) Path(e.path),
   ];
 
@@ -373,9 +389,12 @@ extension type const Path(String path) implements String {
   ///
   /// A link is copied as a link, whether it is this path or inside this directory, as
   /// `cp -R` does, so a [move] across devices keeps them.
-  Future<void> copy(String targetPath) async {
+  Future<void> copy(String targetPath, {bool overwrite = false}) async {
     final t = await type();
     _checkCopy(t, targetPath);
+    if (overwrite && await Path(targetPath).exists()) {
+      await Path(targetPath).delete(recursive: true);
+    }
     if (t != PathType.dir) return _copyOne(_entity(t), targetPath);
     await Directory(targetPath).create(recursive: true);
     final modes = [(targetPath, (await asDir.stat()).mode)];
@@ -392,9 +411,12 @@ extension type const Path(String path) implements String {
   }
 
   /// [copy], synchronously.
-  void copySync(String targetPath) {
+  void copySync(String targetPath, {bool overwrite = false}) {
     final t = typeSync();
     _checkCopy(t, targetPath);
+    if (overwrite && Path(targetPath).existsSync()) {
+      Path(targetPath).deleteSync(recursive: true);
+    }
     if (t != PathType.dir) return _copyOneSync(_entity(t), targetPath);
     Directory(targetPath).createSync(recursive: true);
     final modes = [(targetPath, asDir.statSync().mode)];
@@ -422,9 +444,12 @@ extension type const Path(String path) implements String {
   /// Moves this file or directory to [targetPath], copying and deleting across filesystems.
   ///
   /// A directory already at [targetPath] is replaced only when it is empty, as `rename` does.
-  Future<void> move(String targetPath) async {
+  Future<void> move(String targetPath, {bool overwrite = false}) async {
     final t = await type();
     if (t == PathType.none) throw FileSystemException('Cannot move non-existent path', path);
+    if (overwrite && await Path(targetPath).exists()) {
+      await Path(targetPath).delete(recursive: true);
+    }
     await File(targetPath).parent.create(recursive: true);
     try {
       await _entity(t).rename(targetPath);
@@ -433,22 +458,25 @@ extension type const Path(String path) implements String {
       // way) would merge into the target and then delete the source.
       if (!_crossDevice(e)) rethrow;
       _checkReplace(t, targetPath);
-      await copy(targetPath);
+      await copy(targetPath, overwrite: overwrite);
       await delete(recursive: true);
     }
   }
 
   /// [move], synchronously.
-  void moveSync(String targetPath) {
+  void moveSync(String targetPath, {bool overwrite = false}) {
     final t = typeSync();
     if (t == PathType.none) throw FileSystemException('Cannot move non-existent path', path);
+    if (overwrite && Path(targetPath).existsSync()) {
+      Path(targetPath).deleteSync(recursive: true);
+    }
     File(targetPath).parent.createSync(recursive: true);
     try {
       _entity(t).renameSync(targetPath);
     } on FileSystemException catch (e) {
       if (!_crossDevice(e)) rethrow;
       _checkReplace(t, targetPath);
-      copySync(targetPath);
+      copySync(targetPath, overwrite: overwrite);
       deleteSync(recursive: true);
     }
   }

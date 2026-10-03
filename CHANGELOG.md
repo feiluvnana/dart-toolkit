@@ -12,6 +12,10 @@
 
 #### Added
 
+- `Path.decompressTo`: unified extraction/decompression supporting container archives (`.zip`, `.7z`, `.rar`, `.tar.*`) to directories with `flatten: true`, and single-stream formats (`.gz`, `.xz`, `.zst`, `.bz2`) to files.
+- `Path.unbundle({bool cleanup, bool flatten})`: unbundles archives in-place into their parent folder, with optional `flatten: true` and `cleanup: true` to remove the archive afterward.
+- `Path.files` & `Path.dirs`: added `followLinks` parameter, and `extensions` filtering parameter on `Path.files`.
+- `Path.move` & `Path.copy`: added `overwrite: false` parameter to safely overwrite existing targets.
 - `String` ergonomic helpers: `.after`, `.afterLast`, `.before`, `.beforeLast`, `.between`, `.remove`, `.removeAll`, `.removePrefix`, `.removeSuffix`, `.unquote`, `.collapseWhitespace`, `.lines`, `.words`, `.containsAny`, `.containsAll`.
 - `StringIterableExtensions`: `.trimmed`, `.nonEmpty`, `.cleaned`, `.collapsed`, `.matching`, `.without`, `.remove`, `.unquoted` on `Iterable<String>`.
 - `Stream.distinctBy([key])`: emits each item once by `==` (or by `key`), keeping the first element seen.

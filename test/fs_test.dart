@@ -206,13 +206,23 @@ void main() {
       await folder.archiveTo(zipFile);
       expect(await zipFile.exists(), isTrue);
 
-      // Unzip
+      // Unzip / DecompressTo
       final extracted = base / 'extracted';
-      await zipFile.extractTo(extracted);
+      await zipFile.decompressTo(extracted);
       expect(await (extracted / 'note.txt').exists(), isTrue);
       expect(await (extracted / 'note.txt').readText(), equals('Archive Note'));
 
-      // Copy & Move
+      // Unbundle with flatten and cleanup
+      final bundleDir = base / 'bundle_test';
+      final innerZip = bundleDir / 'inner.zip';
+      await folder.archiveTo(innerZip);
+      expect(await innerZip.exists(), isTrue);
+
+      await innerZip.unbundle(cleanup: true, flatten: true);
+      expect(await innerZip.exists(), isFalse); // cleaned up
+      expect(await (bundleDir / 'note.txt').exists(), isTrue); // unbundled directly to parent
+
+      // Copy & Move with overwrite
       final copied = base / 'copied_dir';
       await folder.copy(copied);
       expect(await (copied / 'note.txt').exists(), isTrue);
@@ -221,6 +231,19 @@ void main() {
       await copied.move(moved);
       expect(await copied.exists(), isFalse);
       expect(await (moved / 'note.txt').exists(), isTrue);
+
+      // Overwrite test
+      final overwriteFile = base / 'target_over.txt';
+      await overwriteFile.writeText('old');
+      final srcFile = base / 'src_over.txt';
+      await srcFile.writeText('new');
+      await srcFile.move(overwriteFile, overwrite: true);
+      expect(await overwriteFile.readText(), equals('new'));
+
+      // Files with extensions filter
+      final txtFiles = await base.files(recursive: true, extensions: ['txt']).toList();
+      expect(txtFiles.every((f) => f.ext == 'txt'), isTrue);
+      expect(txtFiles.isNotEmpty, isTrue);
 
       // Delete
       await moved.delete(recursive: true);
