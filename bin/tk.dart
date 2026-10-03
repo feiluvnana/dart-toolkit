@@ -95,7 +95,7 @@ Future<void> pack(CliContext ctx) async {
 
   await Console.spin(
     'Packing $source into ${target.name}…',
-    () => source.archiveTo(target),
+    () => source.compressTo(target),
     done: 'Packed ${target.name}',
   );
   Console.ok('${target.name} is ${(await target.size()).humanBytes} from ${(await source.size()).humanBytes}');

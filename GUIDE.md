@@ -406,7 +406,7 @@ await file.olderThan(1.h);                // true when missing
 (await dir.size()).humanBytes;            // '20.0 MB'
 
 final names = await Path.tempDir((tmp) async {   // a fresh folder, deleted afterwards
-  await 'bundle.zip'.path.extractTo(tmp);
+  await 'bundle.zip'.path.decompressTo(tmp);
   return [for (final f in tmp.filesSync(recursive: true)) f.name];
 });
 ```
@@ -453,9 +453,9 @@ Raw watch events: `dir.asDir.watch()`.
 Writing takes the format from the extension; reading sniffs the magic number.
 
 ```dart
-await dir.archiveTo('project.7z', password: 'pw');   // .zip .7z .tar .tar.gz .tar.zst .tar.xz .tar.bz2
-await 'photos.rar'.path.extractTo('out');            // rar is read-only
-await 'bundle.zip'.path.extractTo('docs', only: '**/*.md');
+await dir.compressTo('project.7z', password: 'pw');   // .zip .7z .tar .tar.gz .tar.zst .tar.xz .tar.bz2
+await 'photos.rar'.path.decompressTo('out');            // rar is read-only
+await 'bundle.zip'.path.decompressTo('docs', only: '**/*.md');
 final readme = await 'bundle.zip'.path.entry('docs/README.md');   // Uint8List
 for (final e in await 'bundle.zip'.path.entries()) print('${e.name} ${e.size}');
 
@@ -1233,6 +1233,6 @@ Tips:
 | Multi-document YAML reads only the first | use `.yaml.documents` |
 | A crawl finds nothing a browser shows | the page builds it with scripts: put a `ChromeClient` in the scope, wait with `ChromeClient.waitFor` |
 | A download is HTML instead of the file | an interstitial: request the URL it refreshes to, or click through with `waitForDownload` |
-| `extractTo` says the archive is too large | it expands past 200×; `trusted: true` if you trust it |
+| `decompressTo` says the archive is too large | it expands past 200×; `trusted: true` if you trust it |
 | Shell completion does nothing | bash: `source <(app --completion bash)`; zsh: the same after `autoload -U bashcompinit && bashcompinit`; fish: `app --completion fish \| source` |
 | Tables misalign with non-ASCII | measure with `Io.width` |

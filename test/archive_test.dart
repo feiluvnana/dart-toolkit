@@ -39,20 +39,20 @@ void main() {
   for (final ext in ['.zip', '.7z', '.tar', '.tar.gz', '.tar.xz', '.tar.zst', '.tar.bz2']) {
     test('$ext round-trips and lists', () async {
       final archive = tmp / 'a$ext';
-      await src.archiveTo(archive);
+      await src.compressTo(archive);
       final entries = await archive.entries();
       expect(
         entries.map((e) => e.name.replaceAll(RegExp(r'/$'), '')),
         containsAll(['note.txt', 'sub/deep/random.bin']),
       );
-      await archive.extractTo(tmp / 'out');
+      await archive.decompressTo(tmp / 'out');
       expect(digests(tmp / 'out'), equals(digests(src)));
       if (ext != '.7z') expect((tmp / 'out' / 'emptydir').existsSync(), isTrue, reason: 'empty directories survive');
     });
   }
 
   test('tar.zst and tar.gz open in the system tar; the system tar.xz opens in ours', () async {
-    await src.archiveTo(tmp / 'a.tar.zst');
+    await src.compressTo(tmp / 'a.tar.zst');
     final r = await Process.run('tar', ['-xf', tmp / 'a.tar.zst', '-C', (tmp / 'sys')..mkdirSync()]);
     expect(r.exitCode, 0, reason: r.stderr.toString());
     expect(digests(tmp / 'sys'), equals(digests(src)));
@@ -62,24 +62,24 @@ void main() {
       environment: {'COPYFILE_DISABLE': '1'},
     );
     expect(made.exitCode, 0, reason: made.stderr.toString());
-    await (tmp / 'sys.tar.xz').extractTo(tmp / 'back');
+    await (tmp / 'sys.tar.xz').decompressTo(tmp / 'back');
     expect(digests(tmp / 'back'), equals(digests(src)));
   }, testOn: '!windows');
 
   test('zip and 7z with a password: wrong one fails, right one opens, entries say encrypted', () async {
     for (final ext in ['.zip', '.7z']) {
       final archive = tmp / 'p$ext';
-      await src.archiveTo(archive, password: 'sesame');
-      expect(() => archive.extractTo(tmp / 'wrong$ext', password: 'nope'), throwsA(isA<FormatException>()));
-      expect(() => archive.extractTo(tmp / 'none$ext'), throwsA(anything));
-      await archive.extractTo(tmp / 'right$ext', password: 'sesame');
+      await src.compressTo(archive, password: 'sesame');
+      expect(() => archive.decompressTo(tmp / 'wrong$ext', password: 'nope'), throwsA(isA<FormatException>()));
+      expect(() => archive.decompressTo(tmp / 'none$ext'), throwsA(anything));
+      await archive.decompressTo(tmp / 'right$ext', password: 'sesame');
       expect(digests(tmp / 'right$ext'), equals(digests(src)));
     }
     final zipEntries = await (tmp / 'p.zip').entries();
     expect(zipEntries.where((e) => !e.isDir).every((e) => e.isEncrypted), isTrue);
     final szEntries = await (tmp / 'p.7z').entries(password: 'sesame');
     expect(szEntries.where((e) => !e.isDir).every((e) => e.isEncrypted), isTrue);
-    expect(() => src.archiveTo(tmp / 'x.tar.gz', password: 'pw'), throwsFormatException);
+    expect(() => src.compressTo(tmp / 'x.tar.gz', password: 'pw'), throwsFormatException);
   });
 
   test('single streams: gzip, xz, zstd, bzip2 round-trip and match the system tools', () async {
@@ -118,36 +118,36 @@ void main() {
   test('rar: RAR5 (libarchive), encrypted files and encrypted headers (unrar) with passwords', () async {
     final stored = Path('test/fixtures/rar5_stored.rar');
     expect(await stored.entries(), isNotEmpty);
-    await stored.extractTo(tmp / 'rar5');
+    await stored.decompressTo(tmp / 'rar5');
     expect((tmp / 'rar5').filesSync(recursive: true), isNotEmpty);
 
     final crypted = Path('test/fixtures/crypted.rar');
     expect((await crypted.entries()).any((e) => e.isEncrypted), isTrue);
-    expect(() => crypted.extractTo(tmp / 'wrong', password: 'wrong'), throwsA(anything));
-    await crypted.extractTo(tmp / 'crypted', password: 'unrar');
+    expect(() => crypted.decompressTo(tmp / 'wrong', password: 'wrong'), throwsA(anything));
+    await crypted.decompressTo(tmp / 'crypted', password: 'unrar');
     expect((tmp / 'crypted').filesSync(recursive: true), isNotEmpty);
 
     final headers = Path('test/fixtures/encrypted_headers.rar');
     expect(() => headers.entries(), throwsA(anything), reason: 'even the listing needs the password');
     expect(await headers.entries(password: 'password'), isNotEmpty);
-    await headers.extractTo(tmp / 'headers', password: 'password');
+    await headers.decompressTo(tmp / 'headers', password: 'password');
     expect((tmp / 'headers').filesSync(recursive: true), isNotEmpty);
 
     expect((await Path('test/fixtures/unicode.rar').entries()).first.name, isNotEmpty);
-    expect(() => src.archiveTo(tmp / 'x.rar'), throwsFormatException);
+    expect(() => src.compressTo(tmp / 'x.rar'), throwsFormatException);
   });
 
   test('the format is read from the file, not its name', () async {
     // Every container, renamed to something that says nothing, still lists and extracts.
     for (final ext in ['.zip', '.7z', '.tar', '.tar.gz', '.tar.xz', '.tar.zst', '.tar.bz2']) {
       final named = tmp / 'a$ext';
-      await src.archiveTo(named);
+      await src.compressTo(named);
       final anonymous = tmp / 'blob${ext.replaceAll('.', '_')}';
       await named.copy(anonymous);
 
       expect(anonymous.ext, isEmpty, reason: '$ext: the name must say nothing');
       expect(await anonymous.entries(), isNotEmpty, reason: ext);
-      await anonymous.extractTo(tmp / 'out${ext.replaceAll('.', '_')}');
+      await anonymous.decompressTo(tmp / 'out${ext.replaceAll('.', '_')}');
       expect(digests(tmp / 'out${ext.replaceAll('.', '_')}'), digests(src), reason: ext);
     }
 
@@ -176,17 +176,17 @@ void main() {
   test('rar and a tar with a password are refused by name, before anything is made', () async {
     final out = tmp / 'made' / 'here';
     await expectLater(
-      () => src.archiveTo(out / 'x.rar'),
+      () => src.compressTo(out / 'x.rar'),
       throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('rar can only be read'))),
     );
     await expectLater(
-      () => src.archiveTo(out / 'x.tar.gz', password: 'pw'),
+      () => src.compressTo(out / 'x.tar.gz', password: 'pw'),
       throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('tar has no encryption'))),
     );
     expect((tmp / 'made').existsSync(), isFalse, reason: 'not even the destination folder');
     // An extension that is no format lists the ones that can be written, which rar is not.
     await expectLater(
-      () => src.archiveTo(tmp / 'a.qqq'),
+      () => src.compressTo(tmp / 'a.qqq'),
       throwsA(
         isA<ArgumentError>().having(
           (e) => '${e.message}',
@@ -200,7 +200,7 @@ void main() {
   test('a corrupt archive and an unknown extension say so', () async {
     (tmp / 'bad.zip').writeBytesSync(List.filled(100, 7));
     expect(() => (tmp / 'bad.zip').entries(), throwsA(isA<FormatException>()));
-    expect(() => src.archiveTo(tmp / 'a.qqq'), throwsArgumentError);
+    expect(() => src.compressTo(tmp / 'a.qqq'), throwsArgumentError);
   });
 
   test('an entry that escapes the destination is refused and writes nothing', () async {
@@ -210,7 +210,7 @@ void main() {
     addTearDown(() => dir.deleteSync(recursive: true));
     final into = Path(dir.path) / 'into';
 
-    await expectLater(() => Path('test/fixtures/zip_slip.zip').extractTo(into), throwsA(isA<FormatException>()));
+    await expectLater(() => Path('test/fixtures/zip_slip.zip').decompressTo(into), throwsA(isA<FormatException>()));
     expect(File('${dir.path}/escaped.txt').existsSync(), isFalse);
     expect(File('${dir.path}/also_escaped.txt').existsSync(), isFalse);
     expect(File(Path(dir.path) / 'escaped.txt').existsSync(), isFalse);
@@ -228,10 +228,10 @@ void main() {
       expect(Process.runSync('zip', ['-q', tmp / 'suid.zip', 'suid.sh'], workingDirectory: src).exitCode, 0);
       for (final ext in ['.zip', '.tar', '.tar.gz']) {
         final archive = tmp / 'suid$ext';
-        if (ext != '.zip') await src.archiveTo(archive);
-        await archive.extractTo(tmp / 'plain$ext');
+        if (ext != '.zip') await src.compressTo(archive);
+        await archive.decompressTo(tmp / 'plain$ext');
         expect(mode(tmp / 'plain$ext' / 'suid.sh'), 0x1ed, reason: '$ext: 0755, nothing above it');
-        await archive.extractTo(tmp / 'trusted$ext', trusted: true);
+        await archive.decompressTo(tmp / 'trusted$ext', trusted: true);
         expect(mode(tmp / 'trusted$ext' / 'suid.sh') & 0xe00, isNot(0), reason: '$ext, trusted');
       }
     }, testOn: '!windows');
@@ -243,10 +243,10 @@ void main() {
       File(bomb / 'zeros.bin').openSync(mode: FileMode.write)
         ..truncateSync(2 << 30)
         ..closeSync();
-      await bomb.archiveTo(tmp / 'bomb.tar.zst', level: 1);
+      await bomb.compressTo(tmp / 'bomb.tar.zst', level: 1);
       bomb.deleteSync(recursive: true);
       await expectLater(
-        () => (tmp / 'bomb.tar.zst').extractTo(tmp / 'out'),
+        () => (tmp / 'bomb.tar.zst').decompressTo(tmp / 'out'),
         throwsA(isA<FormatException>().having((e) => e.message, 'message', contains('trusted'))),
       );
       expect(File(tmp / 'out' / 'zeros.bin').existsSync(), isFalse);
@@ -266,12 +266,12 @@ void main() {
       expect(Process.runSync('zip', ['-qry', tmp / 'out.zip', 'out'], workingDirectory: tree).exitCode, 0);
       expect(Process.runSync('tar', ['-cf', tmp / 'out.tar', 'out'], workingDirectory: tree).exitCode, 0);
 
-      await (tmp / 'in.zip').extractTo(tmp / 'x');
+      await (tmp / 'in.zip').decompressTo(tmp / 'x');
       expect(FileSystemEntity.isLinkSync(tmp / 'x' / 'in.txt'), isTrue, reason: 'was a regular file before');
       expect((tmp / 'x' / 'in.txt').readTextSync(), 'inside');
 
       for (final archive in ['out.zip', 'out.tar']) {
-        await expectLater(() => (tmp / archive).extractTo(tmp / 'y$archive'), throwsA(isA<FormatException>()));
+        await expectLater(() => (tmp / archive).decompressTo(tmp / 'y$archive'), throwsA(isA<FormatException>()));
         expect(FileSystemEntity.typeSync(tmp / 'y$archive' / 'out', followLinks: false), FileSystemEntityType.notFound);
       }
     }, testOn: '!windows');
@@ -283,7 +283,7 @@ void main() {
       Link(tree / 'out2').createSync('../../../../tmp');
       expect(Process.runSync('zip', ['-qry', tmp / 'multi.zip', 'out1', 'out2'], workingDirectory: tree).exitCode, 0);
       final dest = tmp / 'multi_dest';
-      await expectLater(() => (tmp / 'multi.zip').extractTo(dest), throwsA(isA<FormatException>()));
+      await expectLater(() => (tmp / 'multi.zip').decompressTo(dest), throwsA(isA<FormatException>()));
       expect(FileSystemEntity.typeSync(dest / 'out1', followLinks: false), FileSystemEntityType.notFound);
       expect(FileSystemEntity.typeSync(dest / 'out2', followLinks: false), FileSystemEntityType.notFound);
     }, testOn: '!windows');
@@ -299,7 +299,7 @@ void main() {
       expect(Process.runSync('tar', ['-cf', tmp / 'dangle.tar', 'd', 'l'], workingDirectory: tree).exitCode, 0);
       for (final archive in ['dangle.zip', 'dangle.tar']) {
         final dest = tmp / 'out$archive' / 'x';
-        await expectLater(() => (tmp / archive).extractTo(dest), throwsA(isA<FormatException>()), reason: archive);
+        await expectLater(() => (tmp / archive).decompressTo(dest), throwsA(isA<FormatException>()), reason: archive);
         expect(FileSystemEntity.typeSync(dest / 'l', followLinks: false), FileSystemEntityType.notFound);
       }
     }, testOn: '!windows');
@@ -318,12 +318,12 @@ void main() {
       expect(Process.runSync('zip', ['-qr', tmp / 'l.zip', 'l'], workingDirectory: tree).exitCode, 0);
       expect(Process.runSync('zip', ['-qr', tmp / 'd.zip', 'd'], workingDirectory: tree).exitCode, 0);
 
-      await (tmp / 'l.zip').extractTo(dest);
+      await (tmp / 'l.zip').decompressTo(dest);
       expect(File(outside / 'pwned.txt').existsSync(), isFalse, reason: 'the bytes went through the link');
       expect(FileSystemEntity.isLinkSync(dest / 'l'), isFalse);
       expect((dest / 'l').readTextSync(), 'replaces the link');
 
-      await expectLater(() => (tmp / 'd.zip').extractTo(dest), throwsA(isA<FormatException>()));
+      await expectLater(() => (tmp / 'd.zip').decompressTo(dest), throwsA(isA<FormatException>()));
       expect(File(outside / 'x.txt').existsSync(), isFalse);
     }, testOn: '!windows');
 
@@ -334,11 +334,11 @@ void main() {
       f.asFile.setLastModifiedSync(when);
       // Written by `zip`, read by this library.
       expect(Process.runSync('zip', ['-q', tmp / 'sys.zip', 'stamped.txt'], workingDirectory: src).exitCode, 0);
-      await (tmp / 'sys.zip').extractTo(tmp / 'mine');
+      await (tmp / 'sys.zip').decompressTo(tmp / 'mine');
       expect((tmp / 'mine' / 'stamped.txt').modifiedSync(), when);
       expect((await (tmp / 'sys.zip').entries()).single.modified, when);
       // Written by this library, read by `unzip`.
-      await f.archiveTo(tmp / 'mine.zip');
+      await f.compressTo(tmp / 'mine.zip');
       (tmp / 'theirs').mkdirSync();
       expect(Process.runSync('unzip', ['-q', tmp / 'mine.zip', '-d', tmp / 'theirs']).exitCode, 0);
       expect((tmp / 'theirs' / 'stamped.txt').modifiedSync(), when);
@@ -349,8 +349,8 @@ void main() {
       ro.writeTextSync('read only');
       ro.asFile.setLastModifiedSync(DateTime.utc(2001, 2, 3, 4, 5, 6));
       ro.chmodSync('444');
-      await src.archiveTo(tmp / 'ro.zip');
-      await (tmp / 'ro.zip').extractTo(tmp / 'ro');
+      await src.compressTo(tmp / 'ro.zip');
+      await (tmp / 'ro.zip').decompressTo(tmp / 'ro');
       expect((tmp / 'ro' / 'ro.txt').modifiedSync().toUtc().year, 2001, reason: 'the mode used to be set first');
       ro.chmodSync('644');
     }, testOn: '!windows');
@@ -359,8 +359,8 @@ void main() {
   test('an archive written inside its own source does not contain itself', () async {
     for (final ext in ['.zip', '.7z', '.tar.gz']) {
       final dest = src / 'backup$ext';
-      await src.archiveTo(dest);
-      await src.archiveTo(dest); // a second run finds the first one there
+      await src.compressTo(dest);
+      await src.compressTo(dest); // a second run finds the first one there
       final names = [for (final e in await dest.entries()) e.name];
       expect(names.where((n) => n.contains('backup')), isEmpty, reason: ext);
       expect(names.where((n) => n.isEmpty), isEmpty, reason: '$ext: no nameless root entry');
@@ -371,9 +371,9 @@ void main() {
   test('only extracts what matches, and entry reads one without extracting', () async {
     for (final ext in ['.zip', '.7z', '.tar.zst']) {
       final archive = tmp / 'a$ext';
-      await src.archiveTo(archive);
+      await src.compressTo(archive);
       final out = tmp / 'only$ext';
-      await archive.extractTo(out, only: '**/*.txt');
+      await archive.decompressTo(out, only: '**/*.txt');
       expect(
         [for (final f in out.filesSync(recursive: true)) f.relativeTo(out).replaceAll(r'\', '/')]..sort(),
         ['note.txt', 'sub/text.txt', 'ünïcode 名前.txt']..sort(),
@@ -410,17 +410,17 @@ void main() {
 
     // Zip with level: 0 (Stored)
     final zipStored = tmp / 'stored.zip';
-    await src.archiveTo(zipStored, level: 0);
+    await src.compressTo(zipStored, level: 0);
     final entries = await zipStored.entries();
     final noteEntry = entries.firstWhere((e) => e.name == 'note.txt');
     expect(noteEntry.compressedSize, equals(noteEntry.size));
-    await zipStored.extractTo(tmp / 'stored_out');
+    await zipStored.decompressTo(tmp / 'stored_out');
     expect(digests(tmp / 'stored_out'), equals(digests(src)));
   });
 
   test('ARC-4: 7z encryption flag and executable bit', () async {
     final archive = tmp / 'enc.7z';
-    await src.archiveTo(archive, password: 'secret');
+    await src.compressTo(archive, password: 'secret');
     final entries = await archive.entries(password: 'secret');
     expect(entries.where((e) => !e.isDir).every((e) => e.isEncrypted), isTrue);
 
@@ -429,9 +429,9 @@ void main() {
       script.writeTextSync('#!/bin/sh\necho ok\n');
       script.chmodSync('755');
       final sz = tmp / 'exec.7z';
-      await src.archiveTo(sz);
+      await src.compressTo(sz);
       final out = tmp / 'exec_out';
-      await sz.extractTo(out);
+      await sz.decompressTo(out);
       final stat = File((out / 'run.sh').path).statSync();
       expect(stat.mode & 0x1ED, 0x1ED); // 0755
     }
@@ -442,9 +442,9 @@ void main() {
     Link(link.path).createSync('note.txt');
     for (final ext in ['.zip', '.tar', '.tar.gz']) {
       final arc = tmp / 'sym$ext';
-      await src.archiveTo(arc);
+      await src.compressTo(arc);
       final out = tmp / 'sym_out$ext';
-      await arc.extractTo(out);
+      await arc.decompressTo(out);
       final outLink = Link((out / 'note_link.txt').path);
       expect(outLink.existsSync(), isTrue, reason: ext);
       expect(outLink.targetSync(), 'note.txt', reason: ext);
@@ -459,9 +459,9 @@ void main() {
 
     for (final ext in ['.zip', '.7z', '.tar']) {
       final arc = tmp / 'perm$ext';
-      await src.archiveTo(arc);
+      await src.compressTo(arc);
       final out = tmp / 'perm_out$ext';
-      await arc.extractTo(out);
+      await arc.decompressTo(out);
       final stat = Directory((out / 'private_dir').path).statSync();
       expect(stat.mode & 0x1FF, 0x1C0, reason: '$ext directory should restore 0700 mode');
     }
@@ -487,24 +487,24 @@ void main() {
       await (tmp / 'big$ext').decompressTo(tmp / 'back$ext');
       expect(await (tmp / 'back$ext').hash(Hash.xxh3), want, reason: ext);
     }
-    await (tmp / 'big.log').archiveTo(tmp / 'big.tar.zst');
-    await (tmp / 'big.tar.zst').extractTo(tmp / 'tar');
+    await (tmp / 'big.log').compressTo(tmp / 'big.tar.zst');
+    await (tmp / 'big.tar.zst').decompressTo(tmp / 'tar');
     expect(await (tmp / 'tar' / 'big.log').hash(Hash.xxh3), want);
   });
 
   test('ARC-7: glob with braces and character classes in extractTo(only:)', () async {
     final arc = tmp / 'glob.zip';
-    await src.archiveTo(arc);
+    await src.compressTo(arc);
 
     final outBraces = tmp / 'braces_out';
-    await arc.extractTo(outBraces, only: '{note.txt,sub/text.txt}');
+    await arc.decompressTo(outBraces, only: '{note.txt,sub/text.txt}');
     expect(
       [for (final f in outBraces.filesSync(recursive: true)) f.relativeTo(outBraces).replaceAll(r'\', '/')]..sort(),
       ['note.txt', 'sub/text.txt']..sort(),
     );
 
     final outClasses = tmp / 'classes_out';
-    await arc.extractTo(outClasses, only: '[n]ote.txt');
+    await arc.decompressTo(outClasses, only: '[n]ote.txt');
     expect([for (final f in outClasses.filesSync(recursive: true)) f.relativeTo(outClasses)], ['note.txt']);
   });
 
@@ -514,10 +514,10 @@ void main() {
       (tree / n).writeTextSync(n);
     }
     final arc = tmp / 'names.zip';
-    await tree.archiveTo(arc);
+    await tree.compressTo(arc);
     Future<List<String>> only(String glob) async {
       final out = tmp / 'only_${glob.hashCode}';
-      await arc.extractTo(out, only: glob);
+      await arc.decompressTo(out, only: glob);
       return [for (final f in out.filesSync()) f.name]..sort();
     }
 
@@ -534,8 +534,8 @@ void main() {
         if (d.existsSync()) d.chmodSync('755');
       }
     });
-    await src.archiveTo(tmp / 'ro.tar.gz');
-    await (tmp / 'ro.tar.gz').extractTo(tmp / 'out');
+    await src.compressTo(tmp / 'ro.tar.gz');
+    await (tmp / 'ro.tar.gz').decompressTo(tmp / 'out');
     expect((tmp / 'out' / 'ro' / 'f.txt').readTextSync(), 'hi');
     expect(FileStat.statSync(tmp / 'out' / 'ro').mode & 0x1ff, 0x16d); // 0555
   }, testOn: '!windows');
@@ -546,8 +546,8 @@ void main() {
 import 'package:dart_toolkit/fs.dart';
 void main() async {
   for (final ext in ['zip', 'tar.gz', '7z']) {
-    await Path('.').archiveTo('self.\$ext');
-    await Path('.').archiveTo('self.\$ext');
+    await Path('.').compressTo('self.\$ext');
+    await Path('.').compressTo('self.\$ext');
   }
 }
 ''');
@@ -565,7 +565,7 @@ void main() async {
     (src / 'pipe').asFile.parent.createSync(recursive: true);
     expect(Process.runSync('mkfifo', [src / 'pipe']).exitCode, 0);
     for (final ext in ['zip', '7z', 'tar']) {
-      await src.archiveTo(tmp / 'p.$ext').timeout(const Duration(seconds: 10));
+      await src.compressTo(tmp / 'p.$ext').timeout(const Duration(seconds: 10));
       expect((await (tmp / 'p.$ext').entries()).map((e) => e.name), isNot(contains('pipe')), reason: ext);
     }
   }, testOn: '!windows');
@@ -573,7 +573,7 @@ void main() async {
   group('Archive progress reporting', () {
     test('archive() streams progress events and archiveTo(onProgress:) receives them', () async {
       final destStream = tmp / 'progress_stream.zip';
-      final streamEvents = await src.archive(destStream).toList();
+      final streamEvents = await src.compress(destStream).toList();
       expect(streamEvents, isNotEmpty);
       expect(streamEvents.last.isDone, isTrue);
       expect(streamEvents.last.status, 'done');
@@ -582,7 +582,7 @@ void main() async {
 
       final callbackEvents = <ArchiveProgress>[];
       final destCallback = tmp / 'progress_cb.zip';
-      await src.archiveTo(destCallback, onProgress: (p) => callbackEvents.add(p));
+      await src.compressTo(destCallback, onProgress: (p) => callbackEvents.add(p));
       expect(callbackEvents, isNotEmpty);
       expect(callbackEvents.last.isDone, isTrue);
       expect(callbackEvents.last.ratio, equals(1.0));
@@ -591,17 +591,17 @@ void main() async {
 
     test('extract() streams progress events and extractTo(onProgress:) receives them', () async {
       final archive = tmp / 'extract_test.zip';
-      await src.archiveTo(archive);
+      await src.compressTo(archive);
 
       final outStream = tmp / 'out_progress_stream';
-      final extractEvents = await archive.extract(outStream).toList();
+      final extractEvents = await archive.decompress(outStream).toList();
       expect(extractEvents, isNotEmpty);
       expect(extractEvents.last.isDone, isTrue);
       expect(digests(outStream), equals(digests(src)));
 
       final outCb = tmp / 'out_progress_cb';
       final cbEvents = <ArchiveProgress>[];
-      await archive.extractTo(outCb, onProgress: (p) => cbEvents.add(p));
+      await archive.decompressTo(outCb, onProgress: (p) => cbEvents.add(p));
       expect(cbEvents, isNotEmpty);
       expect(cbEvents.last.isDone, isTrue);
       expect(digests(outCb), equals(digests(src)));

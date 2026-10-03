@@ -9,6 +9,8 @@
 | Before | After |
 |---|---|
 | `Themed(theme, child)` | `child.themed(theme)` (beside `.fixed`, `.flex`, `.percent`) |
+| `archive(dest)` / `archiveTo(dest)` | `compress(dest)` / `compressTo(dest)` |
+| `extract(dest)` / `extractTo(dest)` | `decompress(dest)` / `decompressTo(dest)` |
 
 #### Added
 
@@ -16,7 +18,6 @@
 - `Path.decompressTo`: unified extraction/decompression supporting container archives (`.zip`, `.7z`, `.rar`, `.tar.*`) to directories with `flatten: true`, and single-stream formats (`.gz`, `.xz`, `.zst`, `.bz2`) to files.
 - `Path.bundle({String? destination, bool cleanup, bool flatten})`: bundles a folder or file into an archive (default `parent / '$name.zip'`), with optional `flatten: true` and `cleanup: true`.
 - `Path.unbundle({bool cleanup, bool flatten})`: unbundles archives in-place into their parent folder, with optional `flatten: true` and `cleanup: true` to remove the archive afterward.
-- `Path.packTo` & `Path.unpackTo`: ergonomic aliases for `compressTo` and `decompressTo`.
 - `HtmlDocument.links`: document-wide links getter, extracting URLs from `a[href]`, `area[href]`, `link[href]`, `[src]`, and JavaScript `[onclick]`.
 - `Element.link` & `Elements.links`: extracts URLs from `href`, `src`, and JavaScript navigation in `onclick` (`location.href`, `window.open`, etc.).
 - `Uri.canonical` & `Uri.canonicalize`: URL canonicalization for crawling/deduplication (cleaning empty tokens/values, sorting query keys, removing default ports, and stripping fragments).
@@ -35,6 +36,7 @@
 
 #### Removed
 
+- `Path.archive`, `Path.archiveTo`, `Path.extract`, `Path.extractTo`: unified exclusively into `Path.compress`, `Path.compressTo`, `Path.decompress`, and `Path.decompressTo`.
 - `Sequence`: `Table` operates directly on standard `List<Row>`, and `IterableNumExtensions` provides `sum`, `average`, `min`, `max` on numbers.
 
 #### Fixed

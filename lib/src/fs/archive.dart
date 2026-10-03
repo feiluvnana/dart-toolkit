@@ -1,6 +1,6 @@
 part of '../../fs.dart';
 
-/// The formats `archiveTo` writes, by extension; the order is the native library's code.
+/// The container formats `compressTo` writes, by extension; the order is the native library's code.
 /// `.rar` is read-only, and the library refuses it by name.
 enum _Archive {
   zip('.zip'),
@@ -146,54 +146,21 @@ final class ArchiveProgress implements TaskProgress {
       'ArchiveProgress($path, ${bytes.humanBytes}${bytesTotal != null ? '/${bytesTotal!.humanBytes}' : ''}, $completed/${total ?? '?'}${status != null ? ', status: $status' : ''})';
 }
 
-/// Archives on [Path]: zip, 7z, rar (read), tar and its gz, xz, zstd and bzip2 forms, with a
-/// password where the format has one. All of it runs in the native library; where it did not
-/// load every call throws [UnsupportedError] with the reason.
+/// Archives and compression on [Path]: zip, 7z, rar (read), tar and its gz, xz, zstd and bzip2 forms,
+/// and single-stream gzip, xz, zstd and bzip2.
 ///
 /// ```dart
-/// await src.archiveTo('backup.7z', password: 'pw');
-/// await 'release.tar.zst'.path.extractTo(dir);
+/// await src.compressTo('backup.7z', password: 'pw');
+/// await 'release.tar.zst'.path.decompressTo(dir);
 /// for (final e in await 'photos.rar'.path.entries(password: 'pw')) print(e);
 /// ```
 ///
 /// {@category Files}
 extension PathArchiveExtensions on Path {
-  /// Archives this file or directory into [destination] as a [Stream] of [ArchiveProgress].
-  ///
-  /// Alias for [compress].
-  Stream<ArchiveProgress> archive(String destination, {String? password, int? level}) {
-    _Archive.of(destination);
-    return compress(destination, password: password, level: level);
-  }
-
-  /// Archives this file or directory into [destination].
-  ///
-  /// Alias for [compressTo].
-  Future<File> archiveTo(
-    String destination, {
-    String? password,
-    int? level,
-    void Function(ArchiveProgress progress)? onProgress,
-  }) {
-    _Archive.of(destination);
-    return compressTo(destination, password: password, level: level, onProgress: onProgress);
-  }
-
-  /// Packs this file or directory into [destination].
-  ///
-  /// Alias for [compressTo].
-  Future<File> packTo(
-    String destination, {
-    Compression? codec,
-    String? password,
-    int? level,
-    void Function(ArchiveProgress progress)? onProgress,
-  }) =>
-      compressTo(destination, codec: codec, password: password, level: level, onProgress: onProgress);
 
   /// Whether this path represents an archive container format (.zip, .7z, .rar, .tar, etc.)
-  /// by file extension or magic bytes.
-  bool get isArchive => _Archive.isArchiveFormat(path) || _hasContainerMagic(path);
+  /// by file extension, magic bytes, or container contents.
+  bool get isArchive => _Archive.isArchiveFormat(path) || _hasContainerMagic(path) || _hasArchiveEntries(path);
 
   /// Decompresses this archive or compressed file into [destination].
   ///
@@ -353,51 +320,6 @@ extension PathArchiveExtensions on Path {
     return dest;
   }
 
-  /// Unpacks this archive or decompresses this compressed file into [destination].
-  ///
-  /// Alias for [decompressTo].
-  Future<Path> unpackTo(
-    String destination, {
-    String? password,
-    String? only,
-    bool trusted = false,
-    bool flatten = false,
-    Compression? codec,
-    void Function(ArchiveProgress progress)? onProgress,
-  }) =>
-      decompressTo(
-        destination,
-        password: password,
-        only: only,
-        trusted: trusted,
-        flatten: flatten,
-        codec: codec,
-        onProgress: onProgress,
-      );
-
-  /// Extracts the archive at this path into [destination].
-  ///
-  /// Alias for [decompressTo].
-  Future<Directory> extractTo(
-    String destination, {
-    String? password,
-    String? only,
-    bool trusted = false,
-    bool flatten = false,
-    void Function(ArchiveProgress progress)? onProgress,
-  }) async {
-    final d = await decompressTo(
-      destination,
-      password: password,
-      only: only,
-      trusted: trusted,
-      flatten: flatten,
-      asArchive: true,
-      onProgress: onProgress,
-    );
-    return Directory(d.path);
-  }
-
   /// Decompresses this archive or compressed stream into [destination] as a [Stream] of [ArchiveProgress].
   Stream<ArchiveProgress> decompress(
     String destination, {
@@ -422,19 +344,13 @@ extension PathArchiveExtensions on Path {
     return _NativeArchive.extractStream(absPath, absDest, password, only, _flags(trusted));
   }
 
-  /// Extracts the archive at this path into [destination] as a [Stream] of [ArchiveProgress].
-  ///
-  /// Alias for [decompress].
-  Stream<ArchiveProgress> extract(String destination, {String? password, String? only, bool trusted = false}) =>
-      decompress(destination, password: password, only: only, trusted: trusted, asArchive: true);
-
   /// The contents of the one entry [name] — `'a/b.txt'`, as [entries] lists it — read
-  /// without extracting anything else. The size cap is [extractTo]'s, and [trusted] lifts it.
+  /// without extracting anything else. The size cap is [decompressTo]'s, and [trusted] lifts it.
   Future<Uint8List> entry(String name, {String? password, bool trusted = false}) =>
       Isolate.run(() => _NativeArchive.read(p.absolute(path), name, password, _flags(trusted)));
 
   /// The entries of the archive at this path, without extracting; the format is read from
-  /// the file itself, as in [extractTo].
+  /// the file itself, as in [decompressTo].
   Future<List<ArchiveEntry>> entries({String? password}) => Isolate.run(() => _NativeArchive.list(p.absolute(path), password));
 
   /// Compresses or archives this file or directory into [destination] as a [Stream] of [ArchiveProgress].
@@ -496,7 +412,7 @@ extension PathArchiveExtensions on Path {
     return File(destination);
   }
 
-  /// The native flags: trusted, and whether [extractTo]'s `only` folds case as [glob] does.
+  /// The native flags: trusted, and whether [decompressTo]'s `only` folds case as [glob] does.
   static int _flags(bool trusted) => (trusted ? 1 : 0) | (Platform.isMacOS || Platform.isWindows ? 2 : 0);
 
   static Compression _codecOf(String path) {
@@ -555,6 +471,17 @@ extension PathArchiveExtensions on Path {
       }
     } catch (_) {}
     return false;
+  }
+
+  static bool _hasArchiveEntries(String filePath) {
+    final file = File(filePath);
+    if (!file.existsSync()) return false;
+    try {
+      final list = _NativeArchive.list(p.absolute(filePath), null);
+      return list.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
   }
 }
 

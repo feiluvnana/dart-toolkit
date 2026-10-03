@@ -48,7 +48,7 @@ extension type const Path(String path) implements String {
   ///
   /// ```dart
   /// final names = await Path.tempDir((dir) async {
-  ///   await archive.extractTo(dir);
+  ///   await archive.decompressTo(dir);
   ///   return [for (final f in dir.filesSync(recursive: true)) f.name];
   /// });
   /// ```

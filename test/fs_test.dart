@@ -203,7 +203,7 @@ void main() {
 
       // Zip
       final zipFile = base / 'archive.zip';
-      await folder.archiveTo(zipFile);
+      await folder.compressTo(zipFile);
       expect(await zipFile.exists(), isTrue);
 
       // Unzip / DecompressTo
@@ -215,7 +215,7 @@ void main() {
       // Unbundle with flatten and cleanup
       final bundleDir = base / 'bundle_test';
       final innerZip = bundleDir / 'inner.zip';
-      await folder.archiveTo(innerZip);
+      await folder.compressTo(innerZip);
       expect(await innerZip.exists(), isTrue);
 
       await innerZip.unbundle(cleanup: true, flatten: true);
@@ -246,20 +246,11 @@ void main() {
       expect(await cleanBundled.exists(), isTrue);
       expect(await dirToClean.exists(), isFalse); // cleaned up
 
-      // packTo and unpackTo aliases
-      final packDir = base / 'pack_dir';
-      await packDir.mkdir();
-      await (packDir / 'test.txt').writeText('packed test');
-      final packedArchive = base / 'packed.zip';
-      await packDir.packTo(packedArchive.path);
-      expect(await packedArchive.exists(), isTrue);
-
-      final unpackedDir = base / 'unpacked';
-      await packedArchive.unpackTo(unpackedDir.path);
-      expect(await (unpackedDir / 'test.txt').readText(), equals('packed test'));
-
       // compressTo with archive container
       final compressToArchive = base / 'compressed_container.zip';
+      final packDir = base / 'pack_dir';
+      await packDir.mkdir();
+      await (packDir / 'test.txt').writeText('compressed test');
       await packDir.compressTo(compressToArchive.path);
       expect(await compressToArchive.exists(), isTrue);
       expect(await compressToArchive.entries(), isNotEmpty);

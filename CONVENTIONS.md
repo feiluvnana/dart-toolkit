@@ -304,8 +304,8 @@ top-level function; one written in a method captures the whole context.
 
 **Files stream:** hashing, downloading and archiving take the file, not its bytes.
 
-**Writing names the format; reading works it out.** `archiveTo`/`compressTo` use the extension;
-`extractTo`, `entries`, `decompressTo` sniff the magic number, so a `.bin` that is a 7z opens.
+**Writing names the format; reading works it out.** `compressTo` uses the extension;
+`decompressTo` and `entries` sniff the magic number, so a `.bin` that is a 7z opens.
 
 **Two UI approaches, never mixed.** `Console` (in `cli`) prints inline above the scrollback: logs,
 spinners, bars, boards, prompts. `Tui` (`tui.dart`) owns the screen: an app loop, widgets, keys.

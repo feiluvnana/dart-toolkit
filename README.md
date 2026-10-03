@@ -92,8 +92,8 @@ await pubspec.save('pubspec.json');
 
 ```dart
 final dir = Path.temp / 'project';
-await dir.archiveTo('$dir.tar.zst');                             // format from the extension
-await 'download.bin'.path.extractTo('out', only: '**/*.txt');   // format from the magic number
+await dir.compressTo('$dir.tar.zst');                             // format from the extension
+await 'download.bin'.path.decompressTo('out', only: '**/*.txt');   // format from the magic number
 final readme = await 'release.zip'.path.entry('README.md');     // one entry, no extraction
 if (await 'cache.json'.path.olderThan(1.h)) await refresh();    // true when missing
 await for (final batch in 'src'.path.changes()) print(batch);   // debounced watch
