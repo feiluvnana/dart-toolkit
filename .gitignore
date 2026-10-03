@@ -4,10 +4,9 @@
 build/
 coverage/
 
-# The native library: cargo's build tree, and the prebuilt binaries (`make native` rebuilds
-# them; `.pubignore` lets them into the published package)
+# The native library: cargo's build tree (prebuilt binaries are committed for git and pub dependencies)
 native/target/
-native/prebuilt/
+native/prebuilt/**/*.d
 
 # Agent config: the /optimize skills are shared; worktrees and local settings are not
 .claude/*

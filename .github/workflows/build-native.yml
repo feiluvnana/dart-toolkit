@@ -1,0 +1,113 @@
+name: Build Native Binaries
+
+on:
+  push:
+    branches: [ master, main ]
+    paths:
+      - 'native/src/**'
+      - 'native/Cargo.*'
+      - 'tool/native.dart'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux_x64
+            rust_target: x86_64-unknown-linux-gnu
+
+          - os: ubuntu-latest
+            target: linux_arm64
+            rust_target: aarch64-unknown-linux-gnu
+            apt_packages: gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+            env:
+              CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+              CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+              CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
+
+          - os: macos-latest
+            target: macos_arm64
+            rust_target: aarch64-apple-darwin
+
+          - os: macos-13
+            target: macos_x64
+            rust_target: x86_64-apple-darwin
+
+          - os: windows-latest
+            target: windows_x64
+            rust_target: x86_64-pc-windows-msvc
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux cross-compilation toolchain
+        if: matrix.apt_packages != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.apt_packages }}
+
+      - name: Set up Dart
+        uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Build native library
+        env: ${{ matrix.env || fromJSON('{}') }}
+        run: dart run tool/native.dart --target=${{ matrix.target }}
+
+      - name: Upload prebuilt artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.target }}
+          path: native/prebuilt/${{ matrix.target }}/*
+
+  commit-binaries:
+    name: Commit prebuilt binaries
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Download all built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: tmp-artifacts
+
+      - name: Stage native binaries
+        run: |
+          mkdir -p native/prebuilt
+          for d in tmp-artifacts/native-*; do
+            target_name="${d#tmp-artifacts/native-}"
+            mkdir -p "native/prebuilt/${target_name}"
+            cp -f "$d"/* "native/prebuilt/${target_name}/"
+          done
+          rm -rf tmp-artifacts
+
+      - name: Commit and push binaries
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add native/prebuilt/
+          if git diff --cached --quiet; then
+            echo "No native binary changes."
+          else
+            git commit -m "chore(native): update prebuilt native binaries [skip ci]"
+            git push origin ${{ github.ref_name }}
+          fi
