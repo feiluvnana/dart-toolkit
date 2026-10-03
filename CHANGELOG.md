@@ -12,6 +12,8 @@
 
 #### Added
 
+- `String` ergonomic helpers: `.after`, `.afterLast`, `.before`, `.beforeLast`, `.between`, `.remove`, `.removeAll`, `.removePrefix`, `.removeSuffix`, `.unquote`, `.collapseWhitespace`, `.lines`, `.words`, `.containsAny`, `.containsAll`.
+- `StringIterableExtensions`: `.trimmed`, `.nonEmpty`, `.cleaned`, `.collapsed`, `.matching`, `.without`, `.remove`, `.unquoted` on `Iterable<String>`.
 - `Stream.distinctBy([key])`: emits each item once by `==` (or by `key`), keeping the first element seen.
 - `Scrape.distinctBy()` and `InitContext.distinct`: drops duplicate emitted items across the crawl.
 - `Io.reset()` clears `Io.color` too, so a teardown is `tearDown(Io.reset)`.
@@ -20,6 +22,10 @@
 - `Doc.html(text, url: …)`: links resolve against a saved page's address from the facade.
 - `path.relativeTo()` with no argument is relative to the working directory.
 - `Hash.crc32.checksum(bytes)` and `.fileChecksum(path)`: the int checksum from the facade.
+
+#### Removed
+
+- `Sequence`: `Table` operates directly on standard `List<Row>`, and `IterableNumExtensions` provides `sum`, `average`, `min`, `max` on numbers.
 
 #### Fixed
 

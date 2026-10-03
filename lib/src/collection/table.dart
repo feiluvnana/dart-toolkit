@@ -190,9 +190,6 @@ final class Table {
   /// A row this table just built and nobody else holds: frozen by a view, not a copy.
   static Row _own(Map<String, Object?> r) => Row(UnmodifiableMapView(r));
 
-  /// The rows as a query.
-  Sequence<Row> get sequence => rows.sequence;
-
   int get length => _sourceRows.length;
   bool get isEmpty => _sourceRows.isEmpty;
   bool get isNotEmpty => _sourceRows.isNotEmpty;
@@ -205,9 +202,9 @@ final class Table {
 
   /// Every value of [column] as a number: `t.numbers('bytes').sum`. A cell that is not a decimal
   /// number (`0x10`, `NaN` and `Infinity` are not) throws.
-  Sequence<num> numbers(String column) {
+  List<num> numbers(String column) {
     final c = _has(column);
-    return Sequence<num>._([for (final r in rows) r.number(c)]);
+    return [for (final r in rows) r.number(c)];
   }
 
   /// Every value of [column] as text.
@@ -396,9 +393,16 @@ final class Table {
       for (final c in <String>{for (final r in this.rows) r.text(column)}) c: seen.add(c) ? c : _unused(c, seen),
     };
     final out = <Row>[];
-    for (final group in this.rows.sequence.groupBy((r) => _Key([r[rows]]))) {
-      final row = <String, Object?>{rows: group.key.parts.first};
-      final byColumn = group.groupBy((r) => r.text(column)).toMap();
+    final groups = <_Key, List<Row>>{};
+    for (final r in this.rows) {
+      groups.putIfAbsent(_Key([r[rows]]), () => []).add(r);
+    }
+    for (final MapEntry(key: groupKey, value: groupRows) in groups.entries) {
+      final row = <String, Object?>{rows: groupKey.parts.first};
+      final byColumn = <String, List<Row>>{};
+      for (final r in groupRows) {
+        byColumn.putIfAbsent(r.text(column), () => []).add(r);
+      }
       for (final MapEntry(key: c, value: name) in names.entries) {
         row[name] = _foldCells(agg, [for (final r in byColumn[c] ?? const <Row>[]) r[value]]);
       }
@@ -534,8 +538,16 @@ final class TableGroups {
   final List<String> _keys;
   final Map<_Key, List<Row>> _groups;
 
+  static Map<_Key, List<Row>> _groupRows(Table table, List<String> keys) {
+    final groups = <_Key, List<Row>>{};
+    for (final r in table.rows) {
+      groups.putIfAbsent(_Key([for (final k in keys) r[k]]), () => []).add(r);
+    }
+    return groups;
+  }
+
   TableGroups._(Table table, this._keys)
-    : _groups = table.rows.sequence.groupBy((r) => _Key([for (final k in _keys) r[k]])).toMap();
+    : _groups = _groupRows(table, _keys);
 
   /// The keys and how many rows each has, in a column named [as].
   Table count({String as = 'count'}) => _fold({as: (rows) => rows.length});
@@ -821,4 +833,52 @@ final class _CsvRow extends UnmodifiableMapBase<String, Object?> {
     }
   }
   return (records, i);
+}
+
+/// Aggregations on numbers: `table.numbers('bytes').sum`.
+extension IterableNumExtensions<T extends num> on Iterable<T> {
+  /// The sum of all elements, or 0 if empty.
+  T get sum => fold<T>(this is Iterable<double> ? 0.0 as T : 0 as T, (a, b) => (a + b) as T);
+
+  /// The arithmetic mean, or 0.0 if empty.
+  double get average => isEmpty ? 0.0 : sum / length;
+
+  /// The minimum element. Throws [StateError] if empty.
+  T get min => isEmpty ? (throw StateError('No elements')) : reduce((a, b) => a < b ? a : b);
+
+  /// The maximum element. Throws [StateError] if empty.
+  T get max => isEmpty ? (throw StateError('No elements')) : reduce((a, b) => a > b ? a : b);
+}
+
+/// The positions of the [count] smallest of `0 … n-1` by [compare], in order, via a max-heap of
+/// the best so far: O(n log count).
+List<int> _smallest(int n, int count, int Function(int x, int y) compare) {
+  if (count <= 0) return const [];
+  final heap = <int>[];
+  void swap(int a, int b) {
+    final t = heap[a];
+    heap[a] = heap[b];
+    heap[b] = t;
+  }
+
+  for (var i = 0; i < n; i++) {
+    if (heap.length < count) {
+      heap.add(i);
+      for (var c = heap.length - 1; c > 0 && compare(heap[c], heap[(c - 1) ~/ 2]) > 0; c = (c - 1) ~/ 2) {
+        swap(c, (c - 1) ~/ 2);
+      }
+    } else if (compare(i, heap[0]) < 0) {
+      heap[0] = i;
+      for (var at = 0;;) {
+        final l = 2 * at + 1, r = l + 1;
+        var m = at;
+        if (l < heap.length && compare(heap[l], heap[m]) > 0) m = l;
+        if (r < heap.length && compare(heap[r], heap[m]) > 0) m = r;
+        if (m == at) break;
+        swap(at, m);
+        at = m;
+      }
+    }
+  }
+  return heap..sort(compare);
 }

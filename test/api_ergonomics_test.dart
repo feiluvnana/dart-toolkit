@@ -104,13 +104,6 @@ void main() {
     });
   });
 
-  group('Sequence sorting thenByWith', () {
-    test('thenByWith adds secondary comparator', () {
-      final items = [(1, 'b'), (2, 'a'), (1, 'a')];
-      final sorted = items.sequence.sortedBy((x) => x.$1).thenByWith((x, y) => x.$2.compareTo(y.$2)).toList();
-      expect(sorted, [(1, 'a'), (1, 'b'), (2, 'a')]);
-    });
-  });
 
   group('Pool map with Iterable', () {
     test('Pool.map accepts Iterable', () async {

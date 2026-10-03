@@ -107,7 +107,7 @@ Future<void> peek(CliContext ctx) async {
   Table.rows(
     files.map((e) => {'size': e.size, 'packed': e.compressedSize, 'name': e.name}),
   ).orderBy('size', descending: true).take(20).show();
-  Console.ok('${files.length} files, ${files.sequence.sumBy((e) => e.size).toInt().humanBytes} uncompressed');
+  Console.ok('${files.length} files, ${files.map((e) => e.size).sum.toInt().humanBytes} uncompressed');
 }
 
 /// Type to filter, arrows to move, Enter prints the path; the picker draws on the terminal, not stdout.

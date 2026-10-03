@@ -156,6 +156,71 @@ void main() {
       expect('No match here'.match(RegExp(r'DISC\.(\d+)'), 1), isNull);
       expect('exact-match'.match('exact'), equals('exact'));
     });
+
+    test('after, afterLast, before, beforeLast extract substrings', () {
+      expect('user=alice&role=admin'.after('='), 'alice&role=admin');
+      expect('user=alice&role=admin'.afterLast('='), 'admin');
+      expect('user=alice&role=admin'.before('='), 'user');
+      expect('user=alice&role=admin'.beforeLast('='), 'user=alice&role');
+
+      expect('plain-text'.after('?', or: 'none'), 'none');
+      expect('plain-text'.after('?'), '');
+      expect('plain-text'.before('?', or: 'default'), 'default');
+      expect('plain-text'.before('?'), '');
+    });
+
+    test('between extracts substrings between delimiters', () {
+      expect("location.href='/mall/list.php'".between("'", "'"), '/mall/list.php');
+      expect('<b>hello world</b>'.between('<b>', '</b>'), 'hello world');
+      expect('prefix [content] suffix'.between('[', ']'), 'content');
+      expect('no end tag [here'.between('[', ']'), '');
+      expect('no start tag here]'.between('[', ']', or: 'missing'), 'missing');
+    });
+
+    test('remove and removeAll delete patterns', () {
+      expect("location.href='index.php'".removeAll(["location.href=", "'"]), 'index.php');
+      expect('hello 123 world 456'.remove(RegExp(r'\d+')), 'hello  world ');
+      expect('foobarfoo'.remove('foo'), 'bar');
+    });
+
+    test('removePrefix and removeSuffix strip ends', () {
+      expect('https://example.com'.removePrefix('https://'), 'example.com');
+      expect('example.com'.removePrefix('https://'), 'example.com');
+      expect('archive.tar.gz'.removeSuffix('.gz'), 'archive.tar');
+      expect('archive.tar'.removeSuffix('.gz'), 'archive.tar');
+    });
+
+    test('unquote strips matching surrounding quotes', () {
+      expect("'hello'".unquote(), 'hello');
+      expect('"world"'.unquote(), 'world');
+      expect('`code`'.unquote(), 'code');
+      expect('"mismatched\''.unquote(), '"mismatched\'');
+      expect('plain'.unquote(), 'plain');
+      expect('""'.unquote(), '');
+    });
+
+    test('collapseWhitespace, lines, words', () {
+      expect('  hello \t\n  world   again  '.collapseWhitespace(), 'hello world again');
+      expect('line1\r\nline2\nline3'.lines, ['line1', 'line2', 'line3']);
+      expect('  foo \t\n bar   baz  '.words, ['foo', 'bar', 'baz']);
+    });
+
+    test('containsAny and containsAll', () {
+      expect('hello world'.containsAny(['foo', 'world']), isTrue);
+      expect('hello world'.containsAny(['foo', 'bar']), isFalse);
+      expect('hello world'.containsAll(['hello', 'world']), isTrue);
+      expect('hello world'.containsAll(['hello', 'bar']), isFalse);
+    });
+
+    test('StringIterableExtensions: trimmed, nonEmpty, cleaned, without, matching', () {
+      final list = ['  apple  ', '', '   ', 'banana', 'orange.php', 'index.php'];
+      expect(list.trimmed.toList(), ['apple', '', '', 'banana', 'orange.php', 'index.php']);
+      expect(list.nonEmpty.toList(), ['  apple  ', '   ', 'banana', 'orange.php', 'index.php']);
+      expect(list.cleaned.toList(), ['apple', 'banana', 'orange.php', 'index.php']);
+      expect(list.without('.php').cleaned.toList(), ['apple', 'banana']);
+      expect(list.matching('.php').toList(), ['orange.php', 'index.php']);
+      expect(["'a'", '"b"'].unquoted().toList(), ['a', 'b']);
+    });
   });
 
   group('Environment & .env utilities', () {

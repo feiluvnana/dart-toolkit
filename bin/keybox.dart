@@ -152,7 +152,7 @@ Future<void> run() async {
             href,
             onResponse: (song) {
               final page = song.html;
-              for (final (ext, path) in missing.sequence) {
+              for (final MapEntry(key: ext, value: path) in missing.entries) {
                 song.emit((url: song.resolve(page.$('a[href*=".$ext"]')), path: path));
               }
             },
