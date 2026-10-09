@@ -23,7 +23,7 @@ extension UriExtensions on Uri {
   /// Always one file name safe on every OS, since the server chooses it: a separator, `:`,
   /// a control or bidi character becomes `_`, a Windows device name gains a `_`, trailing dots
   /// and spaces go, and it is cut to 255 UTF-8 bytes keeping its extension. `..` is `''`.
-  String get name => MessageInternals.safeName(pathSegments.lastWhere((s) => s.isNotEmpty, orElse: () => ''));
+  String get name => MessageInternals.urlName(this);
 
   /// This URI with [params] added to its query; a `null` value removes the parameter:
   /// `url.withQuery({'page': 2, 'q': 'dart'})`.

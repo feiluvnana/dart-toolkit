@@ -170,8 +170,8 @@ final class _Streaming {
 
 final _exchanges = Expando<_Streaming>('exchange');
 
-/// How a status names a URL: its host and path.
-String _label(Uri url) => '${url.host}${url.path.isEmpty ? '/' : url.path}';
+/// How a status names a URL: its host, path and query.
+String _label(Uri url) => '${url.host}${url.path.isEmpty ? '/' : url.path}${url.hasQuery ? '?${url.query}' : ''}';
 
 /// How often a transfer reports its amount: an event per few-KB chunk costs allocations nobody
 /// could see, at a frame rate.

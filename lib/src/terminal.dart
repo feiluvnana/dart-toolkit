@@ -75,6 +75,14 @@ final class TerminalBridge {
   /// Whether what is drawn here draws Unicode: the scope's terminal's answer, else [unicode].
   static bool get drawsUnicode => IoBridge.terminal?.unicode ?? unicode;
 
+  /// The mark an ended item's line starts with.
+  static String markOf(Status<Object?, Object?> status, Palette p) => switch (status) {
+    Done() => p.success(p.marks.ok),
+    Failed() => p.danger(p.marks.error),
+    Stopped() || Skipped() => p.warning(p.marks.warn),
+    _ => p.accent(p.marks.info),
+  };
+
   /// [palette] as it is drawn on a terminal that does ([unicode]) or does not draw Unicode: ASCII
   /// under its unset glyphs there.
   static Palette drawable(Palette palette, {bool? unicode}) =>
@@ -480,13 +488,43 @@ final class Marks {
   };
 }
 
-/// A bar's glyphs: [fill] for the part done, [head] after it (`''` for none), [empty] for the rest.
+/// A bar's glyphs: [fill] for the part done, [head] after it (`''` for none), [empty] for the rest,
+/// and optional fractional [parts] for sub-character smooth progress.
 ///
 /// {@category CLI}
 final class BarGlyphs {
   final String fill, empty, head;
+  final List<String> parts;
 
-  const BarGlyphs(this.fill, this.empty, [this.head = '']);
+  const BarGlyphs(this.fill, this.empty, [this.head = '']) : parts = const [];
+
+  /// Smooth sub-character progress using fractional glyphs.
+  const BarGlyphs.smooth({
+    this.fill = '█',
+    this.empty = ' ',
+    this.parts = const ['▏', '▎', '▍', '▌', '▋', '▊', '▉'],
+  }) : head = '';
+
+  /// Classic solid blocks: `█` and `░`.
+  static const blocks = BarGlyphs('█', '░');
+
+  /// Sleek modern horizontal line with tapered tip: `━`, `─`, `╸`.
+  static const line = BarGlyphs('━', '─', '╸');
+
+  /// Minimalist line on empty background: `━` and ` `.
+  static const solidLine = BarGlyphs('━', ' ');
+
+  /// Dot markers: `●` and `○`.
+  static const dots = BarGlyphs('●', '○');
+
+  /// Square markers: `■` and `□`.
+  static const squares = BarGlyphs('■', '□');
+
+  /// Vertical pipe markers: `▮` and `▯`.
+  static const pipes = BarGlyphs('▮', '▯');
+
+  /// Arrow progress: `=`, `-`, `>`.
+  static const arrow = BarGlyphs('=', '-', '>');
 
   /// Only ASCII.
   static const ascii = BarGlyphs('#', '-');
@@ -494,7 +532,17 @@ final class BarGlyphs {
   /// A bar [width] columns wide, [fraction] of it done.
   String draw(double fraction, int width) {
     if (width <= 0) return '';
-    final done = (fraction * width + 1e-9).floor().clamp(0, width);
+    final f = fraction.clamp(0.0, 1.0);
+    if (parts.isNotEmpty) {
+      final steps = parts.length + 1;
+      final totalUnits = (f * width * steps + 1e-9).floor().clamp(0, width * steps);
+      final full = totalUnits ~/ steps;
+      final remainder = totalUnits % steps;
+      final tip = remainder > 0 && full < width ? parts[remainder - 1] : '';
+      final used = full + (tip.isNotEmpty ? 1 : 0);
+      return fill * full + tip + empty * (width - used).clamp(0, width);
+    }
+    final done = (f * width + 1e-9).floor().clamp(0, width);
     final tip = head.isNotEmpty && done < width ? 1 : 0;
     return fill * done + head * tip + empty * (width - done - tip);
   }
@@ -578,6 +626,69 @@ final class Palette {
     ellipsis: '...',
   );
 
+  /// Palette with modern horizontal line progress bars.
+  static const line = Palette(bar: BarGlyphs.line);
+
+  /// Palette with smooth sub-character fractional progress bars.
+  static const smooth = Palette(bar: BarGlyphs.smooth());
+
+  /// Palette with classic solid block progress bars.
+  static const blocks = Palette(bar: BarGlyphs.blocks);
+
+  /// Palette with dot progress markers.
+  static const dots = Palette(bar: BarGlyphs.dots);
+
+  /// Palette with square progress markers.
+  static const squares = Palette(bar: BarGlyphs.squares);
+
+  /// A copy of this palette with [bar] as its progress bar glyphs.
+  Palette withBar(BarGlyphs bar) => copyWith(bar: bar);
+
+  /// A copy of this palette with the given tokens replaced.
+  Palette copyWith({
+    Style? text,
+    Style? muted,
+    Style? accent,
+    Style? success,
+    Style? warning,
+    Style? danger,
+    Style? selected,
+    Style? focused,
+    Style? borderStyle,
+    Marks? marks,
+    BarGlyphs? bar,
+    Border? border,
+    List<String>? frames,
+    Duration? interval,
+    String? pointer,
+    String? checked,
+    String? unchecked,
+    String? scrollTrack,
+    String? scrollThumb,
+    String? ellipsis,
+  }) => Palette(
+    text: text ?? _text,
+    muted: muted ?? _muted,
+    accent: accent ?? _accent,
+    success: success ?? _success,
+    warning: warning ?? _warning,
+    danger: danger ?? _danger,
+    selected: selected ?? _selected,
+    focused: focused ?? _focused,
+    borderStyle: borderStyle ?? _borderStyle,
+    marks: marks ?? _marks,
+    bar: bar ?? _bar,
+    border: border ?? _border,
+    frames: frames ?? _frames,
+    interval: interval ?? _interval,
+    pointer: pointer ?? _pointer,
+    checked: checked ?? _checked,
+    unchecked: unchecked ?? _unchecked,
+    scrollTrack: scrollTrack ?? _scrollTrack,
+    scrollThumb: scrollThumb ?? _scrollThumb,
+    ellipsis: ellipsis ?? _ellipsis,
+  );
+
   /// Plain text.
   Style get text => _text ?? Style.none;
 
@@ -603,8 +714,8 @@ final class Palette {
   /// The marks of the log levels: `✓ ℹ ⚠ ✖ ·`.
   Marks get marks => _marks ?? const Marks();
 
-  /// A bar's glyphs: `█` and `░`.
-  BarGlyphs get bar => _bar ?? const BarGlyphs('█', '░');
+  /// A bar's glyphs: `━`, `─`, `╸` by default.
+  BarGlyphs get bar => _bar ?? BarGlyphs.line;
 
   /// A box's, a table's and a rule's border.
   Border get border => _border ?? Border.rounded;
@@ -1208,6 +1319,30 @@ final class TaskView with _Drawn {
 
   /// `3.1 MB/s`, or `''`.
   String get pace => _pace(rate, unit);
+
+  /// Key metrics (amounts, pace, and eta) joined together.
+  String get metrics => TerminalBridge.joined([amounts, pace, if (eta != null) 'eta ${eta!.humanized}']);
+
+  /// Whether the task has succeeded.
+  bool get isDone => status is Done;
+
+  /// Whether the task has failed.
+  bool get isFailed => status is Failed;
+
+  /// Whether the task has stopped/cancelled.
+  bool get isStopped => status is Stopped;
+
+  /// Whether the task was skipped.
+  bool get isSkipped => status is Skipped;
+
+  /// Whether the task is currently running.
+  bool get isRunning => status is Running;
+
+  /// Whether the task is finished (done, failed, stopped, or skipped).
+  bool get isOver => status.isFinal;
+
+  /// The mark of this task's status styled with the palette (e.g. `✓`, `✖`, `⚠`).
+  String get mark => TerminalBridge.markOf(status, palette);
 }
 
 /// A batch as it stands, for a `batch:` builder: its header.
@@ -1242,6 +1377,17 @@ final class BatchView with _Drawn {
   final int columns;
   @override
   final Palette palette;
+
+  /// Whether all items have ended.
+  bool get isOver => count != null && ended >= count!;
+
+  /// Key metrics (counts, amounts, pace, and eta) joined together.
+  String get metrics => TerminalBridge.joined([
+    if (count != null) '$ended/$count',
+    if (total != null) amounts,
+    pace,
+    if (eta != null) 'eta ${eta!.humanized}',
+  ]);
 
   const BatchView({
     required this.title,

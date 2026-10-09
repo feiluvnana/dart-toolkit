@@ -130,8 +130,9 @@ extension _Installer on NativeHandle {
   /// The library cargo built under [target] put at [dest] by a rename.
   void _place(String target, String dest) {
     final temp = '$dest.$pid.tmp';
+    Directory(File(dest).parent.path).createSync(recursive: true);
     File(_join([target, 'release', NativeBridge.fileOf(name)])).copySync(temp);
-    File(temp).renameSync(dest);
+    FileBridge.renameSync(File(temp), dest);
   }
 
   /// Compiles this library with [cargo] into [dest], telling [work] each crate it compiles. A

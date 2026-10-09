@@ -359,6 +359,7 @@ void main() {
       expect(Uri.parse('https://x/a%2Fb%3Ac').name, 'a_b_c');
       expect(Uri.parse('https://x/con.txt').name, '_con.txt');
       expect(Uri.parse('https://x/..').name, '');
+      expect(Uri.parse('https://puremedia.kr/mall//shop_image/202009/%BB%E7%B0%A22%281%29.jpg').name, '\uFFFD簢2(1).jpg');
     });
 
     test("'…'.url parses", () => expect('https://x/a'.url, Uri.parse('https://x/a')));

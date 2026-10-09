@@ -868,7 +868,36 @@ String _serverName(Headers headers, Uri? url) {
     final name = _safeName((named ?? '').split(_separator).last);
     if (name.isNotEmpty) return name;
   }
-  return url == null ? '' : _safeName(url.pathSegments.lastWhere((s) => s.isNotEmpty, orElse: () => ''));
+  return url == null ? '' : _safeName(_lastSegment(url));
+}
+
+/// The last non-empty path segment of [url], safely percent-decoded.
+String _lastSegment(Uri url) {
+  final last = url.path.split('/').lastWhere((s) => s.isNotEmpty, orElse: () => '');
+  if (last.isEmpty) return '';
+  return _decodePercent(last);
+}
+
+/// Decodes percent-encoded components, falling back to permissive UTF-8 if standard decoding fails.
+String _decodePercent(String encoded) {
+  try {
+    return Uri.decodeComponent(encoded);
+  } on FormatException {
+    final bytes = <int>[];
+    for (var i = 0; i < encoded.length; i++) {
+      final c = encoded.codeUnitAt(i);
+      if (c == 0x25 && i + 2 < encoded.length) {
+        final byte = int.tryParse(encoded.substring(i + 1, i + 3), radix: 16);
+        if (byte != null) {
+          bytes.add(byte);
+          i += 2;
+          continue;
+        }
+      }
+      bytes.addAll(utf8.encode(String.fromCharCode(c)));
+    }
+    return utf8.decode(bytes, allowMalformed: true);
+  }
 }
 
 /// A `filename*` value (RFC 5987): its percent-escapes are bytes in [charset], UTF-8 or
@@ -963,6 +992,7 @@ abstract final class MessageInternals {
   static set clock(DateTime Function() now) => _now = now;
   static DateTime? httpDate(String text) => _httpDate(text);
   static String safeName(String raw) => _safeName(raw);
+  static String urlName(Uri url) => _safeName(_lastSegment(url));
 
   /// The file name the server gives an answer with [headers] from [url]; see [Response.name].
   static String serverName(Headers headers, Uri? url) => _serverName(headers, url);

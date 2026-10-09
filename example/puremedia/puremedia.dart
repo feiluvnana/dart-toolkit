@@ -1,200 +1,99 @@
 import 'dart:math';
 
-import 'package:dart_toolkit/archive.dart';
-import 'package:dart_toolkit/chrome.dart';
 import 'package:dart_toolkit/cli.dart';
 import 'package:dart_toolkit/collection.dart';
 import 'package:dart_toolkit/image.dart';
 import 'package:dart_toolkit/scrape.dart';
 
 final volumeOption = Option.of<int>('volume', 'Only this volume', short: 'v');
-const finishedAlbums = Key<List<String>>('albums', or: []);
 
 const shop = 'https://puremedia.kr/mall/';
-const misskon = 'https://misskon.com/tag/pure-media/';
-const knownPasswords = ['mrcong.com', 'misskon.com'];
 
 final volumeInTitle = RegExp(r'VOL\s?(\d+)');
-final volumeInPost = RegExp(r'vol\.?\s?(\d+)', caseSensitive: false);
 final artistAndName = RegExp(r'^\s?\[([^\]]*)\]\s?(.*)$');
 final hangul = RegExp('[가-힣]+');
-final photoCount = RegExp(r'(\d+) photos');
-final rarPart = RegExp(r'\.part(\d+)\.rar$');
-
-typedef Post = ({String title, Uri url});
-typedef Part = ({Uri file, Uri page});
 
 Future<void> main(List<String> args) => Cli(
   'Mirrors the Pure Media albums.',
   values: [volumeOption],
-  handler: (ctx) => Http.scope(retry: Retry(3), () async {
-    final here = Path.here.parent;
-    final images = here / 'imgs';
-    final volume = ctx(volumeOption);
-    bool wanted(Object? albumVolume) => volume == null || albumVolume == volume;
+  handler: (ctx) => Console.scope(
+    theme: const ConsoleTheme(rows: 4, task: formatTask),
+    () => Http.scope(retry: Retry(3), () async {
+      final here = Path.here.parent;
+      final images = here / 'imgs';
+      final volume = ctx(volumeOption);
+      bool wanted(Object? albumVolume) => volume == null || albumVolume == volume;
 
-    final catalog = [
-      for (final album in await loadCatalog(here / 'result.json'))
-        if (wanted(album['volume'])) album,
-    ];
-    await downloadThumbnails(catalog, images);
-
-    final posts = await listPosts();
-    final albums = [
-      for (final album in albumsFor(posts, catalog, images))
-        if (wanted(album.volume)) album,
-    ];
-
-    final chrome = await Chrome.launch(block: Resource.heavy);
-    ctx.defer(chrome.close);
-    for (final (i, album) in albums.indexed) {
-      final finished = await ctx.store.read(finishedAlbums);
-      if (finished.contains(album.name)) continue;
-      await mirror(album, chrome, '[${i + 1}/${albums.length}] ${album.name}');
-      await ctx.store.update(finishedAlbums, (names) => [...names, album.name]);
-    }
-  }),
+      final catalog = [
+        for (final album in await loadCatalog(here / 'result.json'))
+          if (wanted(album['volume'])) album,
+      ];
+      await downloadThumbnails(catalog, images);
+    }),
+  ),
 ).run(args);
 
-Future<void> mirror(Album album, Chrome chrome, String title) async {
-  if (!await album.isExtracted()) {
-    final (:parts, :password) = await album.findParts(chrome).show('$title · finding parts');
-    final files = await parts
-        .parallelize((part) => downloadPart(part, album.folder), concurrency: 3)
-        .show('$title · downloading');
-    for (final file in files.where(isFirstVolume)) {
-      await extract(file, album.folder, password).show('$title · extracting');
-    }
-  }
-  await album.folder
-      .files(only: '*.{jpg,jpeg,png}')
-      .parallelize((photo) => photo.compress(original: Original.delete))
-      .show('$title · compressing');
+final class _Thumbnail {
+  final String label;
+  final Uri url;
+  final Path to;
+
+  const _Thumbnail(this.label, this.url, this.to);
+
+  @override
+  String toString() => label;
 }
 
-Task<Path> downloadPart(Part part, Path folder) =>
-    part.file.download(into: folder, accept: 'application/', headers: {'referer': '${part.page}'});
-
-bool isFirstVolume(Path archive) => (rarPart.firstMatch(archive.name)?[1] ?? '1') == '1';
-
-Task<Path> extract(Path archive, Path folder, String? postPassword) => Task.run(archive.name, (_) async {
-  for (final password in {?postPassword, ...knownPasswords}) {
-    try {
-      return await archive.unarchive(
-        into: folder,
-        password: Secret(password),
-        flatten: true,
-        original: Original.delete,
-      );
-    } on PasswordException {
-      continue;
-    }
+String cleanTitle(String raw) {
+  var s = raw.replaceAll(r'\', '/');
+  if (s.endsWith('/thumbnail.jpg')) {
+    s = s.substring(0, s.length - '/thumbnail.jpg'.length);
   }
-  throw PasswordException('Invalid password for $archive: none of the known ones opens it');
-});
+  if (Uri.tryParse(s) case final uri? when uri.hasQuery) {
+    if (uri.queryParameters['ps_goid'] case final id?) return 'Album #$id';
+    if (uri.queryParameters['ps_page'] case final page?) return 'List page $page';
+    if (uri.queryParameters['ps_search'] case final q?) return 'Search "$q"';
+  }
+  if (s.contains('/')) {
+    s = s.split('/').last;
+  }
+  return s;
+}
+
+String pad(String text, int width) {
+  final w = Style.width(text);
+  if (w >= width) return Style.truncate(text, width);
+  return text + ' ' * (width - w);
+}
+
+String formatTask(TaskView t) {
+  final p = t.palette;
+  const width = 32;
+  final title = pad(cleanTitle(t.label), width);
+
+  if (t.isOver) {
+    final size = t.received > 0 ? ' (${t.received.humanBytes})' : '';
+    final line = '${t.isRow ? '  ' : ''}${t.mark} $title$size';
+    return t.isLive ? p.muted(line) : line;
+  }
+
+  final head = t.isRow ? '  ${p.accent(t.frame)} ' : '${p.accent(t.frame)} ';
+  if (t.fraction != null) {
+    final bar = p.accent(t.bar(16));
+    final percent = '${t.percent}%'.padLeft(4);
+    final metrics = t.metrics.isNotEmpty ? '  ${p.muted(t.metrics)}' : '';
+    return '$head$title  $bar  $percent$metrics';
+  }
+
+  final info = t.metrics.isNotEmpty ? t.metrics : '(${t.elapsed.humanized})';
+  return '$head$title  ${p.muted(info)}';
+}
 
 Future<void> downloadThumbnails(List<Row> catalog, Path images) => [
   for (final album in catalog)
     if (album['image'] case final String image when image.isNotEmpty)
-      (url: image.url, to: images / albumFolder(album) / 'thumbnail.jpg'),
-].parallelize((thumbnail) => thumbnail.url.download(to: thumbnail.to), concurrency: 8).show('Thumbnails');
-
-final class Album {
-  final int volume;
-  final Post post;
-  final Path folder;
-
-  const Album(this.volume, this.post, this.folder);
-
-  String get name => folder.name;
-
-  Future<bool> isExtracted() async =>
-      await folder.exists() &&
-      await folder.files(only: '*.{rar,zip,7z}').isEmpty &&
-      await folder.files(only: '*.{jpg,jpeg,png,webp}').any((photo) => photo.name != 'thumbnail.jpg');
-
-  Task<({List<Part> parts, String? password})> findParts(Chrome chrome) => Task.run(name, (work) async {
-    final page = await post.url.get().html;
-    final links = [
-      for (final button in page.$('a.shortc-button'))
-        if (button.text.contains('MediaFire')) button.link,
-    ];
-    if (links.isEmpty) throw MissingException('MediaFire link', where: '${post.url}');
-
-    final parts = <Part>[];
-    for (final link in links) {
-      work.amount(parts.length, total: links.length, unit: Unit.items);
-      final mediafire = link.host.startsWith('ouo.') ? await skipOuo(chrome, link) : link;
-      final file = (await mediafire.get().html).$('#downloadButton').link;
-      parts.add((file: file, page: mediafire));
-    }
-    return (parts: parts, password: passwordOn(page));
-  });
-}
-
-String? passwordOn(Html page) {
-  final labels = page.$('div.box.info strong').where((label) => label.text.toLowerCase().contains('password'));
-  final field = labels.firstOrNull?.next;
-  if (field == null) return null;
-  return field.attr('value', or: field.text).trim();
-}
-
-Task<Uri> skipOuo(Chrome chrome, Uri link) => Task.run('$link', (work) async {
-  final page = await chrome.open(link, render: const Render(wait: Wait.dom));
-  work.defer(page.close);
-  for (var step = 0; step < 3 && page.url.host.startsWith('ouo.'); step++) {
-    await page.wait('#btn-main:not(.disabled)');
-    await page.submit('#btn-main');
-  }
-  if (page.url.host.startsWith('ouo.')) throw MissingException('way past ouo.io', where: '${page.url}');
-  return page.url;
-});
-
-Future<List<Post>> listPosts() async {
-  final pages = await misskon.url
-      .crawl<Post>(
-        onResponse: (page) {
-          for (final link in page.html.$('h2.post-box-title a')) {
-            page.emit((title: link.text.trim(), url: link.link));
-          }
-          page.html.$('.pagination a').links.forEach(page.follow);
-        },
-      )
-      .show('Listing MissKon');
-  return pages.expand((posts) => posts).toList();
-}
-
-List<Album> albumsFor(List<Post> posts, List<Row> catalog, Path images) {
-  final catalogByVolume = {
-    for (final album in catalog)
-      if (album['volume'] case final int volume) volume: album,
-  };
-  final postsByVolume = <int, Set<Post>>{};
-  for (final post in posts) {
-    if (volumeInPost.firstMatch(post.title)?[1] case final volume?) {
-      postsByVolume.putIfAbsent(int.parse(volume), () => {}).add(post);
-    }
-  }
-
-  final volumes = postsByVolume.keys.toList()..sort();
-  return [
-    for (final volume in volumes)
-      for (final post in postsByVolume[volume]!)
-        Album(
-          volume,
-          post,
-          images /
-              postFolder(catalogByVolume[volume], volume, post.title, severalPosts: postsByVolume[volume]!.length > 1),
-        ),
-  ];
-}
-
-String postFolder(Row? album, int volume, String title, {required bool severalPosts}) {
-  final folder = album != null ? albumFolder(album) : '${volumeLabel(volume)} - ${title.filename}';
-  if (!severalPosts) return folder;
-  final edition = title.contains('AI Enhanced') ? 'AI Enhanced' : '${photoCount.firstMatch(title)?[1]} photos';
-  return '$folder [$edition]';
-}
+      _Thumbnail(albumFolder(album), image.url, images / albumFolder(album) / 'thumbnail.jpg'),
+].parallelize((thumbnail) => thumbnail.url.download(to: thumbnail.to), concurrency: 4).show('Thumbnails');
 
 String albumFolder(Map<String, Object?> album) {
   final volume = album['volume'];

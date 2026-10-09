@@ -66,6 +66,41 @@ void main() {
       expect(identical(Tally.batch(batch), Tally.batch(batch)), isTrue);
       await batch;
     });
+
+    test('BarGlyphs draws standard, smooth fractional and preset bars accurately', () {
+      // Standard block & ascii
+      expect(const BarGlyphs('█', '░').draw(0.5, 10), '█████░░░░░');
+      expect(BarGlyphs.ascii.draw(0.4, 10), '####------');
+      expect(BarGlyphs.line.draw(0.5, 10), '━━━━━╸────');
+      expect(BarGlyphs.dots.draw(0.3, 10), '●●●○○○○○○○');
+      expect(BarGlyphs.squares.draw(0.3, 10), '■■■□□□□□□□');
+
+      // Smooth fractional eighths
+      const smooth = BarGlyphs.smooth(empty: '-');
+      expect(smooth.draw(0.0, 10), '----------');
+      expect(smooth.draw(1.0, 10), '██████████');
+      // 0.25 on width 10 = 2.5 chars -> 2 full blocks + 4/8 remainder ('▌') + 7 empty
+      expect(smooth.draw(0.25, 10), '██▌-------');
+      // 0.1125 on width 10 = 1.125 chars -> 1 full block + 1/8 remainder ('▏') + 8 empty
+      expect(smooth.draw(0.1125, 10), '█▏--------');
+    });
+
+    test('ConsoleTheme accepts bar directly and TaskView provides ergonomic helpers', () {
+      const theme = ConsoleTheme(bar: BarGlyphs.dots);
+      expect(theme.palette.bar, BarGlyphs.dots);
+
+      const tv = TaskView(
+        label: 'Upload',
+        status: Done(null, null),
+        received: 2048,
+        total: 2048,
+        unit: Unit.bytes,
+      );
+      expect(tv.isDone, isTrue);
+      expect(tv.isOver, isTrue);
+      expect(tv.mark, contains('✓'));
+      expect(tv.metrics, contains('2.0 KB/2.0 KB'));
+    });
   });
 
   group('Cli: values and their types', () {

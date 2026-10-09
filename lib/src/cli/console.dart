@@ -17,6 +17,7 @@ part of '../cli.dart';
 /// {@category CLI}
 final class ConsoleTheme {
   final Palette? _palette;
+  final BarGlyphs? _bar;
   final int? _rows;
   final String Function(TaskView view)? _task;
   final String Function(BatchView view)? _batch;
@@ -26,6 +27,7 @@ final class ConsoleTheme {
 
   const ConsoleTheme({
     Palette? palette,
+    BarGlyphs? bar,
     int? rows,
     String Function(TaskView view)? task,
     String Function(BatchView view)? batch,
@@ -33,6 +35,7 @@ final class ConsoleTheme {
     String Function(LogView view)? log,
     String Function(PromptView view)? prompt,
   }) : _palette = palette,
+       _bar = bar,
        _rows = rows,
        _task = task,
        _batch = batch,
@@ -41,7 +44,10 @@ final class ConsoleTheme {
        _prompt = prompt;
 
   /// The tokens: colours, marks, glyphs.
-  Palette get palette => _palette ?? const Palette();
+  Palette get palette {
+    final p = _palette ?? const Palette();
+    return _bar != null ? p.withBar(_bar) : p;
+  }
 
   /// The most item rows a batch draws under its header; the rest are `+N more`.
   int get rows => _rows ?? 8;
@@ -66,6 +72,7 @@ final class ConsoleTheme {
       (final mine?, final theirs?) => TerminalBridge.over(mine, theirs),
       (final mine, final theirs) => mine ?? theirs,
     },
+    bar: _bar ?? base._bar,
     rows: _rows ?? base._rows,
     task: _task ?? base._task,
     batch: _batch ?? base._batch,
@@ -136,14 +143,6 @@ String _fit(int columns, String head, double? fraction, String tail, Palette p) 
 
 const _joined = TerminalBridge.joined;
 
-/// The mark an ended item's line starts with.
-String _markOf(Status<Object?, Object?> status, Palette p) => switch (status) {
-  Done() => p.success(p.marks.ok),
-  Failed() => p.danger(p.marks.error),
-  Stopped() || Skipped() => p.warning(p.marks.warn),
-  _ => p.accent(p.marks.info),
-};
-
 String _taskLine(TaskView t) {
   final p = t.palette;
   final status = t.status;
@@ -155,7 +154,7 @@ String _taskLine(TaskView t) {
       _ => '',
     };
     final size = t.unit == Unit.bytes && t.received > 0 ? ' (${t.received.humanBytes})' : '';
-    final line = '${t.isRow ? '  ' : ''}${_markOf(status, p)} ${t.label}$size$note';
+    final line = '${t.isRow ? '  ' : ''}${t.mark} ${t.label}$size$note';
     return t.isLive ? p.muted(line) : line;
   }
   final percent = t.percent == null ? '' : '${t.percent}%';
@@ -166,7 +165,7 @@ String _taskLine(TaskView t) {
     t.pace,
     eta,
     t.step ?? '',
-    if (!t.isRow && t.fraction == null) '(${t.elapsed.humanized})',
+    if (t.fraction == null) '(${t.elapsed.humanized})',
   ]);
   final head = t.isRow ? '  ${t.label}' : '${p.accent(t.frame)} ${t.label}';
   return _fit(t.columns, head, t.fraction, p.muted(tail), p);

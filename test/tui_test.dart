@@ -463,7 +463,11 @@ void main() {
     });
 
     test('Gauge draws a bar and its percent in the palette\'s glyphs', () {
-      expect(plain(Gauge(0.5), 15), '█████░░░░░  50%');
+      expect(plain(Gauge(0.5), 15), '━━━━━╸────  50%');
+      expect(
+        plain(Gauge(0.5).themed(const TuiTheme(palette: Palette.blocks)), 15),
+        '█████░░░░░  50%',
+      );
       expect(
         plain(Gauge(0.5).themed(const TuiTheme(palette: Palette(bar: BarGlyphs('=', '.')))), 15),
         '=====.....  50%',
