@@ -1,0 +1,16 @@
+# Dart
+.dart_tool/
+.packages
+build/
+coverage/
+
+# The native libraries: cargo's build tree, and native/lib/, which a first use fills (a download
+# from the release of these sources, else a build); no binary is committed
+native/target/
+native/lib/
+
+# Agent config: the /optimize skills are shared; worktrees and local settings are not
+.claude/*
+!.claude/skills/
+.agents/*
+!.agents/skills/

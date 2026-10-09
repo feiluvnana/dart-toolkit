@@ -1,0 +1,161 @@
+part of '../core.dart';
+
+/// The halted-subprocess registry `process` and `cli` share: public only because those are
+/// separate libraries, and not covered by the versioning promise.
+final class ProcessBridge {
+  ProcessBridge._();
+
+  /// Whether [error] is a command that could not run at all (exit 126 or 127), which [Retry]
+  /// never repeats. Every `ShellException` installs it as it is made, so it answers for each one.
+  static bool Function(Object error) cannotRun = _never;
+
+  static bool _never(Object _) => false;
+
+  /// How many children own the terminal now (`Shell.interact`): while above zero, ^C is theirs,
+  /// and `Cli` leaves it to them rather than stopping the program.
+  static int interactive = 0;
+
+  /// Whether [Env.set] or [Env.parse] has set a variable, so a child needs an environment of its own.
+  static bool get isEnvOverridden => Env._isOverridden;
+
+  /// PIDs sent SIGTERM that must be confirmed dead (or SIGKILLed) before this process exits.
+  static final Set<int> _haltedProcessPids = <int>{};
+
+  /// Registers [pids] that were sent SIGTERM and must be reaped.
+  static void registerHalted(Iterable<int> pids) => _haltedProcessPids.addAll(pids);
+
+  /// Unregisters [pids] once reaped.
+  static void unregisterHalted(Iterable<int> pids) => _haltedProcessPids.removeAll(pids);
+
+  /// Waits up to 200 ms for halted processes to exit, then SIGKILLs the rest: what a leaving
+  /// `Cli` does, so no child outlives it.
+  static Future<void> killHalted() async {
+    if (Platform.isWindows || _haltedProcessPids.isEmpty) return;
+    final deadline = DateTime.now().add(const Duration(milliseconds: 200));
+    while (DateTime.now().isBefore(deadline)) {
+      _haltedProcessPids.removeWhere((pid) => !Process.killPid(pid, ProcessSignal.sigcont));
+      if (_haltedProcessPids.isEmpty) return;
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    killHaltedSync();
+  }
+
+  /// SIGKILLs every registered halted process now.
+  static void killHaltedSync() {
+    if (Platform.isWindows) return;
+    for (final pid in _haltedProcessPids) {
+      Process.killPid(pid, ProcessSignal.sigkill);
+    }
+    _haltedProcessPids.clear();
+  }
+
+  /// Assigns child process [pid] to the kill-on-close Windows Job Object.
+  static void assignJob(int pid) {
+    if (!Platform.isWindows) return;
+    _WindowsJob.assign(pid);
+  }
+
+  /// Whether process [pid] is alive.
+  static bool isPidAlive(int pid) {
+    if (Platform.isWindows) {
+      try {
+        return _WindowsJob.isAlive(pid);
+      } catch (_) {
+        // best-effort alive check
+        return false;
+      }
+    }
+    try {
+      return Process.runSync('kill', ['-0', '$pid']).exitCode == 0;
+    } catch (_) {
+      // best-effort alive check
+      return false;
+    }
+  }
+}
+
+final class _WindowsJob {
+  static final _k32 = DynamicLibrary.open('kernel32.dll');
+  static final _createJobObject = _k32
+      .lookupFunction<
+        Pointer<Void> Function(Pointer<Void>, Pointer<Void>),
+        Pointer<Void> Function(Pointer<Void>, Pointer<Void>)
+      >('CreateJobObjectW');
+  static final _setInformationJobObject = _k32
+      .lookupFunction<
+        Int32 Function(Pointer<Void>, Int32, Pointer<Void>, Uint32),
+        int Function(Pointer<Void>, int, Pointer<Void>, int)
+      >('SetInformationJobObject');
+  static final _assignProcessToJobObject = _k32
+      .lookupFunction<Int32 Function(Pointer<Void>, Pointer<Void>), int Function(Pointer<Void>, Pointer<Void>)>(
+        'AssignProcessToJobObject',
+      );
+  static final _openProcess = _k32
+      .lookupFunction<Pointer<Void> Function(Uint32, Int32, Uint32), Pointer<Void> Function(int, int, int)>(
+        'OpenProcess',
+      );
+  static final _getExitCodeProcess = _k32
+      .lookupFunction<Int32 Function(Pointer<Void>, Pointer<Uint32>), int Function(Pointer<Void>, Pointer<Uint32>)>(
+        'GetExitCodeProcess',
+      );
+  static final _getLastError = _k32.lookupFunction<Uint32 Function(), int Function()>('GetLastError');
+  static final _closeHandle = _k32.lookupFunction<Int32 Function(Pointer<Void>), int Function(Pointer<Void>)>(
+    'CloseHandle',
+  );
+  static final _localAlloc = _k32
+      .lookupFunction<Pointer<Void> Function(Uint32, IntPtr), Pointer<Void> Function(int, int)>('LocalAlloc');
+  static final _localFree = _k32
+      .lookupFunction<Pointer<Void> Function(Pointer<Void>), Pointer<Void> Function(Pointer<Void>)>('LocalFree');
+
+  static Pointer<Void>? _handle;
+
+  static Pointer<Void> _getJob() {
+    if (_handle != null) return _handle!;
+    final job = _createJobObject(nullptr, nullptr);
+    if (job.address == 0) return _handle = job;
+    final is64 = sizeOf<IntPtr>() == 8;
+    final infoSize = is64 ? 144 : 112;
+    final info = _localAlloc(0x0040, infoSize); // LMEM_ZEROINIT = 0x0040
+    try {
+      final byteData = ByteData.sublistView(info.cast<Uint8>().asTypedList(infoSize));
+      byteData.setUint32(16, 0x2000, Endian.host); // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+      _setInformationJobObject(job, 9, info, infoSize); // JobObjectExtendedLimitInformation = 9
+    } finally {
+      _localFree(info);
+    }
+    return _handle = job;
+  }
+
+  static void assign(int pid) {
+    try {
+      final job = _getJob();
+      if (job.address == 0) return;
+      // PROCESS_SET_QUOTA (0x0100) | PROCESS_TERMINATE (0x0001)
+      final proc = _openProcess(0x0100 | 0x0001, 0, pid);
+      if (proc.address == 0) return;
+      try {
+        _assignProcessToJobObject(job, proc);
+      } finally {
+        _closeHandle(proc);
+      }
+    } catch (_) {} // best-effort job object assignment
+  }
+
+  static bool isAlive(int pid) {
+    // PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    final proc = _openProcess(0x1000, 0, pid);
+    if (proc.address == 0) {
+      return _getLastError() == 5; // ERROR_ACCESS_DENIED means process exists
+    }
+    final code = _localAlloc(0x0040, 4);
+    try {
+      if (_getExitCodeProcess(proc, code.cast<Uint32>()) != 0) {
+        return code.cast<Uint32>().value == 259; // STILL_ACTIVE = 259
+      }
+      return false;
+    } finally {
+      _localFree(code);
+      _closeHandle(proc);
+    }
+  }
+}

@@ -1,0 +1,70 @@
+[package]
+name = "dart_toolkit_native"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+members = ["common", "torrent"]
+resolver = "2"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+tk_common = { path = "common" }
+# digests and MACs
+md-5 = "0.10"
+sha2 = "0.10"
+sha1 = "0.10"
+sha3 = "0.10"
+blake2 = "0.10"
+blake3 = { version = "1", features = ["mmap", "rayon"] }
+memmap2 = "0.9"
+ripemd = "0.1"
+digest = "0.10"
+hmac = "0.12"
+crc32c = "0.6"
+xxhash-rust = { version = "0.8", features = ["xxh64", "xxh3"] }
+# archives
+zip = { version = "2", default-features = false, features = ["deflate", "bzip2", "zstd", "aes-crypto", "time"] }
+sevenz-rust2 = { version = "0.13", default-features = false, features = ["compress", "aes256", "bzip2", "util"] }
+tar = "0.4"
+flate2 = "1"
+xz2 = { version = "0.1", features = ["static"] }
+zstd = { version = "0.13", features = ["zstdmt"] }
+brotli = { version = "7", default-features = false, features = ["std"] }
+bzip2 = "0.5"
+unrar = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+time = "0.3"
+walkdir = "2"
+crc32fast = "1"
+rayon = "1"
+# legacy charsets for HTTP bodies, decode only
+encoding_rs = "0.8"
+# image processing
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp", "tiff"] }
+fast_image_resize = { version = "5", features = ["rayon"] }
+kamadak-exif = "0.6"
+imagesize = "0.13"
+image_hasher = "3"
+libwebp-sys = "0.14"
+# better JPEG and PNG output, and the perceptual metric compression searches with
+mozjpeg = "0.10"
+oxipng = { version = "10", default-features = false, features = ["parallel"] }
+ssimulacra2 = "0.5"
+
+# The assembly backends, where they build: `sha2-asm` refuses every Windows target.
+[target.'cfg(not(windows))'.dependencies]
+sha2 = { version = "0.10", features = ["asm"] }
+sha1 = { version = "0.10", features = ["asm"] }
+# zip stamps are wall-clock time: `mktime` and `localtime_r` read them as the machine does.
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true

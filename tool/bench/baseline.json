@@ -1,0 +1,360 @@
+{
+  "html_parse_dart_dev": {
+    "name": "html_parse_dart_dev",
+    "module": "formats/html",
+    "timeUs": 377.19,
+    "throughput": 215668495.9834566,
+    "throughputUnit": "MB/s",
+    "peakRss": 90619904,
+    "referenceTimeUs": 2017.43,
+    "referenceThroughput": 40322588.64000238
+  },
+  "html_parse_hn": {
+    "name": "html_parse_hn",
+    "module": "formats/html",
+    "timeUs": 345.09,
+    "throughput": 98185980.4688632,
+    "throughputUnit": "MB/s",
+    "peakRss": 90734592,
+    "referenceTimeUs": 1132.71,
+    "referenceThroughput": 29913216.975218724
+  },
+  "selector_a": {
+    "name": "selector_a",
+    "module": "formats/html",
+    "timeUs": 21.689,
+    "throughput": 46106.32117663332,
+    "throughputUnit": "ops/s",
+    "peakRss": 58703872
+  },
+  "selector__item": {
+    "name": "selector__item",
+    "module": "formats/html",
+    "timeUs": 35.868,
+    "throughput": 27880.004460800716,
+    "throughputUnit": "ops/s",
+    "peakRss": 58753024
+  },
+  "selector_div___a": {
+    "name": "selector_div___a",
+    "module": "formats/html",
+    "timeUs": 21.452,
+    "throughput": 46615.700167816525,
+    "throughputUnit": "ops/s",
+    "peakRss": 58736640
+  },
+  "xpath___a": {
+    "name": "xpath___a",
+    "module": "formats/xpath",
+    "timeUs": 25.952,
+    "throughput": 38532.67570900123,
+    "throughputUnit": "ops/s",
+    "peakRss": 58228736
+  },
+  "xpath___div__class__item__": {
+    "name": "xpath___div__class__item__",
+    "module": "formats/xpath",
+    "timeUs": 43.262,
+    "throughput": 23114.973880079513,
+    "throughputUnit": "ops/s",
+    "peakRss": 58753024
+  },
+  "json_parse": {
+    "name": "json_parse",
+    "module": "formats/json",
+    "timeUs": 60.36,
+    "throughput": 290656063.61829025,
+    "throughputUnit": "MB/s",
+    "peakRss": 59834368,
+    "referenceTimeUs": 60.214,
+    "referenceThroughput": 291360813.0999436
+  },
+  "yaml_parse": {
+    "name": "yaml_parse",
+    "module": "formats/yaml",
+    "timeUs": 39.513333333333335,
+    "throughput": 58613126.37084529,
+    "throughputUnit": "MB/s",
+    "peakRss": 59260928,
+    "referenceTimeUs": 160.21,
+    "referenceThroughput": 14456026.46526434
+  },
+  "xml_parse": {
+    "name": "xml_parse",
+    "module": "formats/xml",
+    "timeUs": 69.78333333333333,
+    "throughput": 135376164.31812754,
+    "throughputUnit": "MB/s",
+    "peakRss": 59588608,
+    "referenceTimeUs": 278.0133333333333,
+    "referenceThroughput": 33980384.63383051
+  },
+  "toml_parse": {
+    "name": "toml_parse",
+    "module": "formats/toml",
+    "timeUs": 8.304,
+    "throughput": 103564547.2061657,
+    "throughputUnit": "MB/s",
+    "peakRss": 58228736
+  },
+  "table_csv_parse": {
+    "name": "table_csv_parse",
+    "module": "collection",
+    "timeUs": 111.74,
+    "throughput": 563101843.5654197,
+    "throughputUnit": "MB/s",
+    "peakRss": 58867712
+  },
+  "table_ndjson_parse": {
+    "name": "table_ndjson_parse",
+    "module": "collection",
+    "timeUs": 818.78,
+    "throughput": 189172915.8015584,
+    "throughputUnit": "MB/s",
+    "peakRss": 59949056
+  },
+  "table_query_ops": {
+    "name": "table_query_ops",
+    "module": "collection",
+    "timeUs": 704.23,
+    "throughput": 1419.9906280618547,
+    "throughputUnit": "ops/s",
+    "peakRss": 58949632
+  },
+  "hash_sha256_1mb": {
+    "name": "hash_sha256_1mb",
+    "module": "hash",
+    "timeUs": 331.66,
+    "throughput": 3161599228.1251884,
+    "throughputUnit": "MB/s",
+    "peakRss": 30900224
+  },
+  "hash_sha1_1mb": {
+    "name": "hash_sha1_1mb",
+    "module": "hash",
+    "timeUs": 761.5,
+    "throughput": 1376987524.6224558,
+    "throughputUnit": "MB/s",
+    "peakRss": 29753344
+  },
+  "hash_md5_1mb": {
+    "name": "hash_md5_1mb",
+    "module": "hash",
+    "timeUs": 1208.53,
+    "throughput": 867645817.6462314,
+    "throughputUnit": "MB/s",
+    "peakRss": 29802496
+  },
+  "hash_blake3_1mb": {
+    "name": "hash_blake3_1mb",
+    "module": "hash",
+    "timeUs": 437.07,
+    "throughput": 2399103118.493605,
+    "throughputUnit": "MB/s",
+    "peakRss": 29802496
+  },
+  "image_resize_thumbnail": {
+    "name": "image_resize_thumbnail",
+    "module": "image",
+    "timeUs": 2645.85,
+    "throughput": 377.9503751157473,
+    "throughputUnit": "ops/s",
+    "peakRss": 40845312
+  },
+  "image_phash": {
+    "name": "image_phash",
+    "module": "image",
+    "timeUs": 944.78,
+    "throughput": 1058.447469252101,
+    "throughputUnit": "ops/s",
+    "peakRss": 30277632
+  },
+  "image_compress_2560": {
+    "name": "image_compress_2560",
+    "module": "image",
+    "timeUs": 1349280.3333333333,
+    "throughput": 0.7411358301870059,
+    "throughputUnit": "images/s",
+    "peakRss": 805175296
+  },
+  "image_compress_batch_8": {
+    "name": "image_compress_batch_8",
+    "module": "image",
+    "timeUs": 4531518.0,
+    "throughput": 1.7654128263420779,
+    "throughputUnit": "images/s",
+    "peakRss": 2759786496
+  },
+  "image_deblock_2560": {
+    "name": "image_deblock_2560",
+    "module": "image",
+    "timeUs": 2141.5,
+    "throughput": 466.9624095260331,
+    "throughputUnit": "ops/s",
+    "peakRss": 60047360
+  },
+  "image_enhance_2560": {
+    "name": "image_enhance_2560",
+    "module": "image",
+    "timeUs": 23638.0,
+    "throughput": 42.30476351637194,
+    "throughputUnit": "ops/s",
+    "peakRss": 218873856
+  },
+  "image_sharpness_2560": {
+    "name": "image_sharpness_2560",
+    "module": "image",
+    "timeUs": 5823.4,
+    "throughput": 171.72098773912148,
+    "throughputUnit": "ops/s",
+    "peakRss": 76824576
+  },
+  "image_crop_auto_2560": {
+    "name": "image_crop_auto_2560",
+    "module": "image",
+    "timeUs": 3604.25,
+    "throughput": 277.4502323645696,
+    "throughputUnit": "ops/s",
+    "peakRss": 55541760
+  },
+  "image_grid_12": {
+    "name": "image_grid_12",
+    "module": "image",
+    "timeUs": 15021.4,
+    "throughput": 66.57169105409616,
+    "throughputUnit": "ops/s",
+    "peakRss": 96993280
+  },
+  "image_similar_60_files": {
+    "name": "image_similar_60_files",
+    "module": "image",
+    "timeUs": 12107.6,
+    "throughput": 4955.565099606858,
+    "throughputUnit": "files/s",
+    "peakRss": 119717888
+  },
+  "async_parallelize_500": {
+    "name": "async_parallelize_500",
+    "module": "async",
+    "timeUs": 388.53,
+    "throughput": 2573.8038246724836,
+    "throughputUnit": "ops/s",
+    "peakRss": 90767360
+  },
+  "native_ffi_call_10k": {
+    "name": "native_ffi_call_10k",
+    "module": "native",
+    "timeUs": 37.88,
+    "throughput": 26399.155227032734,
+    "throughputUnit": "ops/s",
+    "peakRss": 28377088
+  },
+  "http_keep_alive_requests": {
+    "name": "http_keep_alive_requests",
+    "module": "http",
+    "timeUs": 66.4,
+    "throughput": 15060.240963855422,
+    "throughputUnit": "req/s",
+    "peakRss": 59588608,
+    "referenceTimeUs": 53.16,
+    "referenceThroughput": 18811.136192626032
+  },
+  "fs_files_recursive_1k": {
+    "name": "fs_files_recursive_1k",
+    "module": "fs",
+    "timeUs": 499.3,
+    "throughput": 1001401.962747847,
+    "throughputUnit": "files/s",
+    "peakRss": 64438272,
+    "referenceTimeUs": 447.65,
+    "referenceThroughput": 1116944.041103541
+  },
+  "process_run_overhead": {
+    "name": "process_run_overhead",
+    "module": "process",
+    "timeUs": 43709.45,
+    "throughput": 22.87834781723403,
+    "throughputUnit": "ops/s",
+    "peakRss": 33439744,
+    "referenceTimeUs": 43678.6,
+    "referenceThroughput": 22.894506692064304
+  },
+  "archive_zip_roundtrip": {
+    "name": "archive_zip_roundtrip",
+    "module": "archive",
+    "timeUs": 599205.3333333334,
+    "throughput": 56231862.644747265,
+    "throughputUnit": "MB/s",
+    "peakRss": 69271552,
+    "referenceTimeUs": 695179.6666666666,
+    "referenceThroughput": 48468667.332521714
+  },
+  "http_download_64mb": {
+    "name": "http_download_64mb",
+    "module": "http",
+    "timeUs": 21642.333333333332,
+    "throughput": 3100814637.978037,
+    "throughputUnit": "MB/s",
+    "peakRss": 185253888,
+    "referenceTimeUs": 20509.333333333332,
+    "referenceThroughput": 3272113379.2744765
+  },
+  "scrape_crawl_300_c1": {
+    "name": "scrape_crawl_300_c1",
+    "module": "scrape",
+    "timeUs": 22447.5,
+    "throughput": 13364.517206815905,
+    "throughputUnit": "pages/s",
+    "peakRss": 63258624
+  },
+  "scrape_crawl_300_c16": {
+    "name": "scrape_crawl_300_c16",
+    "module": "scrape",
+    "timeUs": 17459.0,
+    "throughput": 17183.11472592932,
+    "throughputUnit": "pages/s",
+    "peakRss": 63717376
+  },
+  "cli_console_info_100k": {
+    "name": "cli_console_info_100k",
+    "module": "cli",
+    "timeUs": 151202.0,
+    "throughput": 661366.9131360697,
+    "throughputUnit": "lines/s",
+    "peakRss": 58785792,
+    "referenceTimeUs": 123321.0,
+    "referenceThroughput": 810891.9000008109
+  },
+  "chrome_open_html": {
+    "name": "chrome_open_html",
+    "module": "chrome",
+    "timeUs": 31839.8,
+    "throughput": 31.40723245749031,
+    "throughputUnit": "pages/s",
+    "peakRss": 60801024
+  },
+  "chrome_eval_roundtrip": {
+    "name": "chrome_eval_roundtrip",
+    "module": "chrome",
+    "timeUs": 289.985,
+    "throughput": 3448.454230391227,
+    "throughputUnit": "evals/s",
+    "peakRss": 36683776
+  },
+  "torrent_create_256mb": {
+    "name": "torrent_create_256mb",
+    "module": "torrent",
+    "timeUs": 35814.6,
+    "throughput": 7495140417.595058,
+    "throughputUnit": "MB/s",
+    "peakRss": 160677888
+  },
+  "torrent_swarm_256mb": {
+    "name": "torrent_swarm_256mb",
+    "module": "torrent",
+    "timeUs": 498022.3333333333,
+    "throughput": 539002847.9311838,
+    "throughputUnit": "MB/s",
+    "peakRss": 160694272
+  }
+}

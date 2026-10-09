@@ -1,0 +1,59 @@
+/// # Tui
+///
+/// Full-screen and inline terminal apps: [Tui.run] takes a state, a `view` of it built from
+/// widgets ([Label], [VStack], [HStack], [Box], [Menu], [Grid], [Field], [Tabs], [Button],
+/// [Clickable], [Popup], [Board], [Spin], [Scroll], [Log], [Markdown], [Picture], [Paint]) and an
+/// `update` that answers [KeyPress]es, [Char]s, [Mouse] and your own messages. A cell buffer is
+/// diffed so each frame writes only what changed; colour falls back from 24-bit to 256 to 16 to
+/// none; the terminal is put back on every way out.
+///
+/// {@category CLI}
+library;
+
+import 'dart:async';
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'src/terminal.dart';
+export 'src/terminal.dart'
+    show
+        BarGlyphs,
+        BatchView,
+        Char,
+        Choice,
+        Color,
+        FakeTerminal,
+        Focusable,
+        ItemView,
+        KeyPress,
+        LogLevel,
+        LogView,
+        Marks,
+        Mouse,
+        MouseKind,
+        Palette,
+        Paste,
+        Resize,
+        Sent,
+        StringStyles,
+        Style,
+        Tally,
+        TallyItem,
+        TaskView,
+        TuiEvent;
+
+import 'src/core.dart';
+
+export 'core.dart';
+
+part 'src/tui/app.dart';
+part 'src/tui/button.dart';
+part 'src/tui/canvas.dart';
+part 'src/tui/controls.dart';
+part 'src/tui/field.dart';
+part 'src/tui/gauge.dart';
+part 'src/tui/markdown.dart';
+part 'src/tui/picture.dart';
+part 'src/tui/scroll.dart';
+part 'src/tui/style.dart';
+part 'src/tui/widget.dart';

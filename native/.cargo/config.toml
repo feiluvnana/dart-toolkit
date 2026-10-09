@@ -1,0 +1,11 @@
+# unrar picks its SIMD paths with `__builtin_cpu_supports`, whose `__cpu_model` zig's runtime
+# cannot link into a shared library on x86-64 Linux; the portable path is the one it takes.
+[env]
+CXXFLAGS_x86_64_unknown_linux_gnu = "-D__builtin_cpu_supports(x)=0"
+
+# The MSVC runtime linked in, so the DLLs load on a PC without the VC++ Redistributable.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

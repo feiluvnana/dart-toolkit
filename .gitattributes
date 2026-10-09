@@ -1,0 +1,4 @@
+# LF in every checkout, Windows too: goldens such as test/api_names.txt compare byte for byte.
+* text=auto eol=lf
+# Fixtures are real-world bytes (a CRLF page among them), never converted.
+test/fixtures/** -text
