@@ -569,6 +569,31 @@ void main() {
   });
 
   group('CSV', () {
+    test('TSV has no quoting: a quote is a character, and a tab or line break is not written', () {
+      final t = Table.parse('title\tyear\n"Friends" pilot\t1994\n"Weird\t1995\n', TableFormat.tsv);
+      expect(_raw(t, 'title'), ['"Friends" pilot', '"Weird']);
+      expect(Table.parse(t.encode(TableFormat.tsv), TableFormat.tsv).rows, t.rows);
+      expect(
+        () => Table(
+          ['a'],
+          [
+            {'a': 'x\ny'},
+          ],
+        ).encode(TableFormat.tsv),
+        _format('Invalid TSV at row 1, column "a": a tab or line break has no TSV form'),
+      );
+      expect(
+        Table(
+          ['a'],
+          [
+            {'a': 'x\ty'},
+          ],
+        ).encode(TableFormat.csv, separator: '\t'),
+        'a\n"x\ty"\n',
+        reason: 'CSV quotes',
+      );
+    });
+
     test('a quote never closed is a FormatException naming its line', () {
       expect(() => _csv('a,b\n1,"open\n2,3\n'), _format(contains('line 2')));
     });
@@ -708,7 +733,7 @@ void main() {
     test('get<DateTime> reads ISO 8601 text', () {
       final r = Row({'at': '2024-01-02T03:04:05Z', 'day': '2024-03-01', 'no': 'soon', 'n': 5});
       expect(r.get<DateTime>('at'), DateTime.utc(2024, 1, 2, 3, 4, 5));
-      expect(r.get<DateTime>('day'), DateTime(2024, 3, 1));
+      expect(r.get<DateTime>('day'), DateTime.utc(2024, 3, 1));
       expect(() => r.get<DateTime>('no'), throwsFormatException);
       expect(() => r.get<DateTime>('n'), throwsFormatException);
       expect((() => r.get<DateTime>('nowhere')).orNull, isNull);
@@ -737,6 +762,31 @@ void main() {
   group('streaming', () {
     late String tmp;
     setUp(() => tmp = tempDir('table_stream_'));
+
+    test('a streamed failure names the line in the file, past every chunk', () async {
+      final nd = '$tmp/x.ndjson';
+      File(nd).writeAsStringSync('${'{"i":1,"pad":"${'x' * 40}"}\n' * 200000}{bad\n');
+      await expectLater(
+        Table.lines(nd).drain<void>(),
+        _format(endsWith('x.ndjson, line 200001: Unexpected character')),
+      );
+      final csv = '$tmp/x.csv';
+      File(csv).writeAsStringSync('a,b\n${'1,"q ""x"""\n' * 300000}"open,1\n');
+      await expectLater(
+        Table.lines(csv).drain<void>(),
+        _format(endsWith('x.csv, line 300002: the quote opened here is never closed')),
+      );
+    });
+
+    test('a streamed TSV has no quoting, and a written one refuses a tab or line break', () async {
+      final path = '$tmp/t.tsv';
+      File(path).writeAsStringSync('title\tyear\n"Friends" pilot\t1994\n"Weird\t1995\n');
+      expect(await Table.lines(path).map((r) => r['title']).toList(), ['"Friends" pilot', '"Weird']);
+      await expectLater(
+        Stream.value(<String, Object?>{'a': 'x\ty'}).pipe(Table.writer('$tmp/w.tsv')),
+        _format('Invalid TSV at row 1, column "a": a tab or line break has no TSV form'),
+      );
+    });
 
     test('Table.writer writes the format its extension names, atomically on close (COL-3)', () async {
       // Rows are `Map<String, Object?>`, as a Row is.

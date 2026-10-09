@@ -60,7 +60,7 @@ class ChromeEvalBenchmark extends ChromeOpenBenchmark {
   Future<int> run(int count) async {
     final page = await _chrome.open(Uri.parse('http://127.0.0.1:${_server.port}/'));
     for (var i = 0; i < count; i++) {
-      if ((await page.eval('1 + $i')).raw != 1 + i) throw StateError('bad eval');
+      if (await page.eval<int>('1 + $i') != 1 + i) throw StateError('bad eval');
     }
     await page.close();
     return count;

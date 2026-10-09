@@ -52,12 +52,14 @@ final _symbolicOp = RegExp(r'([-+=])([rwxXst]*)');
 /// [mode], octal or symbolic (relative to [path]'s current bits), as the bits to set.
 Future<int> _modeOf(Mode mode, String path) async {
   if (mode.bits case final bits?) {
-    if (await FileSystemEntity.type(path) == FileSystemEntityType.notFound) throw _notFound(path, 'Cannot chmod');
+    if (await FileSystemEntity.type(path) == FileSystemEntityType.notFound) {
+      throw FileBridge.notFound(path, 'Cannot chmod');
+    }
     return bits;
   }
   final clauses = [for (final clause in mode.split(',')) _symbolicClause.firstMatch(clause)!];
   final stat = await FileStat.stat(path);
-  if (stat.type == FileSystemEntityType.notFound) throw _notFound(path, 'Cannot chmod');
+  if (stat.type == FileSystemEntityType.notFound) throw FileBridge.notFound(path, 'Cannot chmod');
   var bits = stat.mode & 0xfff;
   final isDir = stat.type == FileSystemEntityType.directory;
   for (final m in clauses) {

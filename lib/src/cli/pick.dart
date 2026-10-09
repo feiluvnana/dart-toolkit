@@ -143,10 +143,7 @@ final class _Picker<T extends Object> {
   void _handle(TuiEvent<Never> e) {
     switch (e) {
       case const KeyPress('c', ctrl: true):
-        // Raw mode reads ^C as a byte: raised as the SIGINT it would have been, so a `Cli`
-        // leaves through its cleanups with 130; the terminal's own watch then ends this.
-        if (TerminalBridge.isTty(term) && Process.killPid(pid, ProcessSignal.sigint)) return;
-        _interrupt();
+        TerminalBridge.ctrlC(term, _interrupt);
       // A filter that matches nothing has nothing to pick.
       case KeyPress.enter when choice.multi && choice.checked.isNotEmpty:
         _finish(picked: choice.checked.toList()..sort());

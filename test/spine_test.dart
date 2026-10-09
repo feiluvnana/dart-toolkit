@@ -216,7 +216,7 @@ void main() {
     test('an error an inner retry gave up on is not tried again by an outer one', () async {
       var sends = 0;
       final batch = ['x'].parallelize(
-        (s) => const Retry(2, backoff: Duration.zero).attempt(() {
+        (s) => const Retry(2, backoff: Duration.zero).run(() {
           sends++;
           throw const SocketException('down');
         }),

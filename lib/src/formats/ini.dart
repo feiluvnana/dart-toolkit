@@ -123,8 +123,10 @@ List<String> _sectionName(String name) {
 
 /// [doc] as INI: the root's values, then a `[section]` per map (`[a.b]` for one inside another),
 /// each with its values; text that would read back otherwise is quoted, and a line break
-/// continues on an indented line. A list, or a value at the root that is not a map, is a
-/// [FormatException] naming where: INI has neither.
+/// continues on an indented line. What would not read back as itself is a [FormatException]
+/// naming where: a list or a root that is not a map (INI has neither), a key that holds `=`, `:`,
+/// `.` or a line break or starts like a comment or a section, a value that needs both quotes, and
+/// a continued line that is blank, padded, quoted or starts like a comment.
 String _ini(Doc doc) {
   final root = doc.raw;
   if (root is! Map<Object?, Object?>) throw FormatException('Invalid INI at \$: ${_kind(root)}, not a map');
@@ -132,21 +134,23 @@ String _ini(Doc doc) {
   final pending = <(Map<Object?, Object?>, List<String>, String)>[(root, const [], r'$')];
   while (pending.isNotEmpty) {
     final (section, name, path) = pending.removeLast();
+    // A failure's path is joined only when one is thrown.
+    Never fail(Object? key, String why) => throw FormatException('Invalid INI at ${Doc._key(path, '$key')}: $why');
     final values = <(String, Object?)>[];
     final below = <(Map<Object?, Object?>, List<String>, String)>[];
     for (final MapEntry(:key, value: v) in section.entries) {
       final value = v is Doc ? v.raw : v;
-      final at = Doc._key(path, '$key');
       switch (value) {
         case final Map<Object?, Object?> m:
-          below.add((m, [...name, '$key'], at));
+          below.add((m, [...name, '$key'], Doc._key(path, '$key')));
         case List<Object?>():
-          throw FormatException('Invalid INI at $at: a list has no INI form');
+          fail(key, 'a list has no INI form');
         default:
-          if ('$key'.contains(_iniKeyBreak)) {
-            throw FormatException('Invalid INI at $at: the key holds = or : or a line break');
+          final k = '$key';
+          if (k.isEmpty || k != k.trim() || k.contains(_iniKeyBreak) || _iniLead.contains(k[0])) {
+            fail(key, 'the key is empty, padded, holds = : . or a line break, or starts with ; # or [');
           }
-          values.add(('$key', value));
+          values.add((k, value));
       }
     }
     if (name.isNotEmpty && (values.isNotEmpty || below.isEmpty)) {
@@ -154,31 +158,49 @@ String _ini(Doc doc) {
       out.writeln('[${name.map(_iniSection).join('.')}]');
     }
     for (final (key, value) in values) {
-      out.writeln(value == null ? '$key =' : '$key = ${_iniValue(value)}');
+      if (value == null) {
+        out.writeln('$key =');
+      } else {
+        out.writeln('$key = ${_iniValue(value) ?? fail(key, 'the value would not read back as itself')}');
+      }
     }
     pending.addAll(below.reversed);
   }
   return out.toString();
 }
 
-final _iniKeyBreak = RegExp(r'[=:\n\r]');
+final _iniKeyBreak = RegExp(r'[=:.\n\r]');
+
+/// What a key may not start with: a comment or a section.
+const _iniLead = ';#[';
+
+final _iniSectionBreak = RegExp(r'[.\]"\s]');
 
 /// A section name's part, quoted when it holds what would split it.
-String _iniSection(String part) => part.contains(RegExp(r'[.\]"\s]')) ? '"$part"' : part;
+String _iniSection(String part) => part.contains(_iniSectionBreak) ? '"$part"' : part;
 
 /// [value] as an INI value: as written when it reads back as itself, else quoted; each line
-/// break continues on an indented line.
-String _iniValue(Object value) {
+/// break continues on an indented line. `null` when no spelling reads back as [value].
+String? _iniValue(Object value) {
   final text = value is DateTime ? value.toIso8601String() : '$value';
-  if (text.contains('\n')) return text.split('\n').map((l) => l.trim()).join('\n  ');
-  final plain =
-      text == text.trim() &&
-      !text.startsWith('"') &&
-      !text.startsWith("'") &&
-      !text.contains(' ;') &&
-      !text.contains(' #') &&
-      !text.contains('\t;') &&
-      !text.contains('\t#');
-  if (plain) return text;
-  return text.contains('"') ? "'$text'" : '"$text"';
+  if (text.contains('\r')) return null;
+  if (text.contains('\n')) {
+    final lines = text.split('\n');
+    final readable =
+        lines.every((l) => l.isNotEmpty && _iniPlain(l)) && lines.skip(1).every((l) => l[0] != ';' && l[0] != '#');
+    return readable ? lines.join('\n  ') : null;
+  }
+  if (_iniPlain(text)) return text;
+  if (!text.contains('"')) return '"$text"';
+  return text.contains("'") ? null : "'$text'";
 }
+
+/// Whether [text] reads back as itself unquoted: no padding, no opening quote, no comment.
+bool _iniPlain(String text) =>
+    text == text.trim() &&
+    !text.startsWith('"') &&
+    !text.startsWith("'") &&
+    !text.contains(' ;') &&
+    !text.contains(' #') &&
+    !text.contains('\t;') &&
+    !text.contains('\t#');

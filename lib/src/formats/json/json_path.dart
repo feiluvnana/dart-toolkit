@@ -4,14 +4,14 @@ part of '../../../json.dart';
 /// wherever a JSONPath's text does, and is compiled once.
 ///
 /// ```dart
-/// final ids = r'$.items[*].id'.jsonPath;
+/// final ids = 'items[*].id'.jsonPath;     // the root's `$` may go unwritten
 /// doc.$(ids).to<List<int>>();
 /// ```
 ///
 /// {@category Formats}
 extension type const JsonPath._(String _text) implements String {
-  /// [text] as a JSONPath; one that does not parse (or does not start at `$`) is a
-  /// [FormatException] naming where.
+  /// [text] as a JSONPath, from the root whether or not it starts `$`; one that does not parse
+  /// is a [FormatException] naming where.
   JsonPath(String text) : _text = text {
     _JsonPath.of(text);
   }
@@ -21,7 +21,7 @@ extension type const JsonPath._(String _text) implements String {
 ///
 /// {@category Formats}
 extension StringJsonPathExtensions on String {
-  /// This text as a [JsonPath]: `r'$.items[*].id'.jsonPath`. One that does not parse is a
+  /// This text as a [JsonPath]: `'items[*].id'.jsonPath`. One that does not parse is a
   /// [FormatException].
   JsonPath get jsonPath => JsonPath(this);
 }

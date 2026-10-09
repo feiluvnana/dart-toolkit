@@ -64,26 +64,60 @@ bool _completes(CliCommand command) =>
 /// The values [command]'s arguments are restricted to, each once.
 Iterable<String> _argChoices(CliCommand command) => {for (final arg in command._args) ...?arg._choices?.map(_label)};
 
-/// [words] as one `compgen -W` list, each kept whole: newline-separated (the script sets
-/// `IFS` to a newline, so `'dry run'` is one word) in ANSI-C quotes, so `'` and `$` stay literal.
-String _bashWords(Iterable<String> words) =>
-    "\$'${words.map((w) => w.replaceAll(r'\', r'\\').replaceAll("'", r"\'").replaceAll('\n', ' ')).join(r'\n')}'";
+/// [word] in bash's ANSI-C quotes: one argument, `'`, `$` and `\` kept literal.
+String _bashQuote(String word) => "\$'${word.replaceAll(r'\', r'\\').replaceAll("'", r"\'").replaceAll('\n', r'\n')}'";
 
 final _nonWordChar = RegExp(r'\W');
 
+/// What [command] completes to where no option wants a value: its subcommands, its arguments'
+/// choices, its options and built-ins.
+List<String> _words(CliCommand command) => [
+  ...command._named.keys,
+  ..._argChoices(command),
+  for (final (_, spellings) in _reachable(command)) ...spellings,
+  for (final (spellings, _) in _builtIns(command)) ...spellings,
+  if (_completes(command)) '--completion',
+];
+
+/// Every `path:spelling` of an option that takes a value: a walk over the words skips its value.
+List<String> _valued(List<(String, CliCommand)> tree) => [
+  for (final (path, command) in tree)
+    for (final (option, spellings) in _reachable(command))
+      if (option._takesValue)
+        for (final s in spellings) '$path:$s',
+];
+
+const _shells = ['bash', 'zsh', 'fish', 'powershell'];
+
 String _bash(CliCommand root) {
-  final fn = '_${root.name.replaceAll(_nonWordChar, '_')}_completion';
+  final base = root.name.replaceAll(_nonWordChar, '_');
+  final fn = '_${base}_completion', reply = '_${base}_reply';
   final tree = _tree(root).toList();
+  String offer(Iterable<String> words) => '$reply ${words.map(_bashQuote).join(' ')}';
   final out = StringBuffer()
+    // The words that start with what is typed, each escaped as it goes on the command line.
+    ..writeln('$reply() {')
+    ..writeln('  local w')
+    ..writeln(r'''  for w in "$@"; do [[ "$w" == "$cur"* ]] && COMPREPLY+=("$(printf '%q' "$w")"); done''')
+    ..writeln('}')
     ..writeln('$fn() {')
     ..writeln('  local cur="\${COMP_WORDS[COMP_CWORD]}" prev="\${COMP_WORDS[COMP_CWORD-1]}" path="${root.name}" i')
+    ..writeln('  COMPREPLY=()')
     ..writeln(
       '  if [[ "\$cur" == *=* ]]; then prev="\${cur%%=*}" cur="\${cur#*=}"; elif [[ "\$prev" == "=" ]]; then prev="\${COMP_WORDS[COMP_CWORD-2]}"; fi',
     )
-    // A reply with a space in it is one word: escaped as it goes on the command line.
-    ..writeln(r"  local IFS=$'\n'")
-    ..writeln('  for ((i = 1; i < COMP_CWORD; i++)); do')
-    ..writeln('    case "\$path \${COMP_WORDS[i]}" in');
+    ..writeln('  for ((i = 1; i < COMP_CWORD; i++)); do');
+  final valued = _valued(tree);
+  if (valued.isNotEmpty) {
+    // An option's value is not a command: `--out build` stays where it is.
+    out
+      ..writeln('    case "\$path:\${COMP_WORDS[i]}" in')
+      ..writeln(
+        '      ${valued.map((v) => '"$v"').join('|')}) [[ "\${COMP_WORDS[i+1]}" == "=" ]] && ((i++)); ((i++)); continue ;;',
+      )
+      ..writeln('    esac');
+  }
+  out.writeln('    case "\$path \${COMP_WORDS[i]}" in');
   final nested = [for (final (path, _) in tree.skip(1)) '"$path"'];
   if (nested.isNotEmpty) out.writeln('      ${nested.join('|')}) path="\$path \${COMP_WORDS[i]}" ;;');
   for (final (alias, target) in _aliasPaths(root)) {
@@ -93,11 +127,7 @@ String _bash(CliCommand root) {
     ..writeln('    esac')
     ..writeln('  done')
     ..writeln('  case "\$path:\$prev" in');
-  if (_completes(root)) {
-    out.writeln(
-      '    "${root.name}:--completion") COMPREPLY=(\$(compgen -W "bash zsh fish powershell" -- "\$cur")); return ;;',
-    );
-  }
+  if (_completes(root)) out.writeln('    "${root.name}:--completion") ${offer(_shells)}; return ;;');
   for (final (path, command) in tree) {
     for (final (option, spellings) in _reachable(command)) {
       if (!option._takesValue) continue;
@@ -107,7 +137,7 @@ String _bash(CliCommand root) {
         null when _noFiles(option) => '    $when) compopt +o default 2>/dev/null; return ;;',
         // Any value: an empty reply, so `-o default` offers file names.
         null => '    $when) return ;;',
-        _ => '    $when) COMPREPLY=(\$(compgen -W ${_bashWords(choices)} -- "\$cur" | sed \'s/ /\\\\ /g\')); return ;;',
+        _ => '    $when) ${offer(choices)}; return ;;',
       });
     }
   }
@@ -115,14 +145,7 @@ String _bash(CliCommand root) {
     ..writeln('  esac')
     ..writeln('  case "\$path" in');
   for (final (path, command) in tree) {
-    final words = [
-      ...command._named.keys,
-      ..._argChoices(command),
-      for (final (_, spellings) in _reachable(command)) ...spellings,
-      for (final (spellings, _) in _builtIns(command)) ...spellings,
-      if (_completes(command)) '--completion',
-    ];
-    out.writeln('    "$path") COMPREPLY=(\$(compgen -W ${_bashWords(words)} -- "\$cur" | sed \'s/ /\\\\ /g\')) ;;');
+    out.writeln('    "$path") ${offer(_words(command))} ;;');
   }
   return (out
         ..writeln('  esac')
@@ -142,8 +165,10 @@ String _zshHelp(String text) => text
     .replaceAll(':', r'\:')
     .replaceAll('\n', ' ');
 
-/// [text] as one word of an `_arguments` `(a b c)` or `((a\:help))` list.
-String _zshWord(String text) => _zshHelp(text).replaceAll(' ', r'\ ').replaceAll('(', r'\(').replaceAll(')', r'\)');
+/// [text] as one word of an `_arguments` `(a b c)` or `((a\:help))` list, which zsh `eval`s.
+String _zshWord(String text) => _zshHelp(text).replaceAllMapped(_zshSpecial, (m) => '\\${m[0]}');
+
+final _zshSpecial = RegExp('[ ()\'"\$`]');
 
 /// How zsh completes a value read by [value]: one of its choices, nothing for a number, else a file.
 String _zshAction(CliValue<Object?> value) => switch (value._choices) {
@@ -179,7 +204,7 @@ List<String> _zshSpecs(CliCommand command) {
     option(spellings, help);
   }
   if (_completes(command)) {
-    option(['--completion'], 'Print a completion script', value: ':shell:(bash zsh fish powershell)');
+    option(['--completion'], 'Print a completion script', value: ':shell:(${_shells.join(' ')})');
   }
   if (command._subcommands.isNotEmpty) {
     final items = [
@@ -207,8 +232,14 @@ String _zsh(CliCommand root) {
     // `path` is zsh's own: the array tied to PATH.
     ..writeln('  local cmd_path=${_zshQuote(root.name)} first=1 i');
   if (tree.length > 1) {
+    out.writeln('  for ((i = 2; i < CURRENT; i++)); do');
+    if (_valued(tree) case final valued when valued.isNotEmpty) {
+      out
+        ..writeln('    case "\$cmd_path:\${words[i]}" in')
+        ..writeln('      ${valued.map(_zshQuote).join('|')}) (( i++ )); continue ;;')
+        ..writeln('    esac');
+    }
     out
-      ..writeln('  for ((i = 2; i < CURRENT; i++)); do')
       ..writeln('    case "\$cmd_path \${words[i]}" in')
       ..writeln('      ${[for (final (path, _) in tree.skip(1)) _zshQuote(path)].join('|')})')
       ..writeln('        cmd_path="\$cmd_path \${words[i]}" first=\$i ;;');
@@ -238,15 +269,29 @@ String _zsh(CliCommand root) {
 
 String _fish(CliCommand root) {
   String quote(String s) => "'${s.replaceAll(r'\', r'\\').replaceAll("'", r"\'")}'";
-  // fish reads `-a` as a list of words, so a space inside one is escaped.
-  String words(Iterable<String> all) => quote(all.map((w) => w.replaceAll(' ', r'\ ')).join(' '));
+  // fish expands `-a` as a command line does, so each word's specials are escaped.
+  String words(Iterable<String> all) =>
+      quote(all.map((w) => w.replaceAllMapped(_fishSpecial, (m) => '\\${m[0]}')).join(' '));
   final fn = '__${root.name.replaceAll(_nonWordChar, '_')}_path';
   final tree = _tree(root).toList();
   final out = StringBuffer()
     ..writeln('function $fn')
     ..writeln('  set -l path ${root.name}')
+    ..writeln('  set -l skip 0')
     ..writeln('  for w in (commandline -opc)[2..-1]')
-    ..writeln('    switch "\$path \$w"');
+    ..writeln('    if test \$skip = 1')
+    ..writeln('      set skip 0')
+    ..writeln('      continue')
+    ..writeln('    end');
+  if (_valued(tree) case final valued when valued.isNotEmpty) {
+    out
+      ..writeln('    switch "\$path:\$w"')
+      ..writeln('      case ${valued.map(quote).join(' ')}')
+      ..writeln('        set skip 1')
+      ..writeln('        continue')
+      ..writeln('    end');
+  }
+  out.writeln('    switch "\$path \$w"');
   final nested = [for (final (path, _) in tree.skip(1)) quote(path)];
   if (nested.isNotEmpty) {
     out
@@ -267,18 +312,18 @@ String _fish(CliCommand root) {
     final at = quote('test ($fn) = ${quote(path)}');
     final complete = 'complete -c ${root.name} -n $at';
     for (final MapEntry(key: name, value: sub) in command._named.entries) {
-      out.writeln('$complete -f -a ${quote(name)} -d ${quote(sub.help)}');
+      out.writeln('$complete -f -a ${words([name])} -d ${quote(sub.help)}');
     }
     if (_argChoices(command) case final choices when choices.isNotEmpty) {
       out.writeln('$complete -f -a ${words(choices)}');
     }
     for (final (spellings, help) in _builtIns(command)) {
       out.writeln(
-        '$complete -l ${spellings.last.substring(2)} -d ${quote(help)}${spellings.length > 1 ? ' -s h' : ''}',
+        '$complete -l ${spellings.last.substring(2)} -d ${quote(help)}${spellings.length > 1 ? ' -s ${spellings.first.substring(1)}' : ''}',
       );
     }
     if (_completes(command)) {
-      out.writeln("$complete -l completion -d ${quote('Print a completion script')} -xa 'bash zsh fish powershell'");
+      out.writeln('$complete -l completion -d ${quote('Print a completion script')} -xa ${words(_shells)}');
     }
     for (final (option, spellings) in _reachable(command)) {
       final hasShort = spellings.any((s) => !s.startsWith('--'));
@@ -318,7 +363,12 @@ String _powershell(CliCommand root) {
     ..writeln(r"  $done = if ($wordToComplete -eq '') { $words.Count } else { $words.Count - 1 }")
     ..writeln('  \$path = ${_psQuote(root.name)}; \$prev = \'\'; \$cur = \$wordToComplete; \$lead = \'\'')
     ..writeln(r"  if ($cur -match '^(--[^=]+)=(.*)$') { $prev = $Matches[1]; $cur = $Matches[2]; $lead = $prev + '=' }")
+    ..writeln('  \$valued = ${list(_valued(tree))}')
     ..writeln(r'  for ($i = 1; $i -lt $done; $i++) {')
+    // An option's value is not a command: `--out build` stays where it is.
+    ..writeln(r'''    if ($valued -contains "${path}:$($words[$i])" -and $i + 1 -lt $done) {''')
+    ..writeln(r"      $i++; if ($lead -eq '') { $prev = $words[$i] }; continue")
+    ..writeln('    }')
     ..writeln(r'    $next = "$path $($words[$i])"')
     ..writeln(r'    switch -exact ($next) {');
   for (final (path, _) in tree.skip(1)) {
@@ -333,7 +383,7 @@ String _powershell(CliCommand root) {
     ..writeln('  }')
     ..writeln(r'  $candidates = switch -exact ("${path}:$prev") {');
   if (_completes(root)) {
-    out.writeln("    ${_psQuote('${root.name}:--completion')} { ${list(['bash', 'zsh', 'fish', 'powershell'])} }");
+    out.writeln("    ${_psQuote('${root.name}:--completion')} { ${list(_shells)} }");
   }
   for (final (path, command) in tree) {
     for (final (option, spellings) in _reachable(command)) {
@@ -347,14 +397,7 @@ String _powershell(CliCommand root) {
   }
   out.writeln(r'    default { switch -exact ($path) {');
   for (final (path, command) in tree) {
-    final words = [
-      ...command._named.keys,
-      ..._argChoices(command),
-      for (final (_, spellings) in _reachable(command)) ...spellings,
-      for (final (spellings, _) in _builtIns(command)) ...spellings,
-      if (_completes(command)) '--completion',
-    ];
-    out.writeln('      ${_psQuote(path)} { ${list(words)} }');
+    out.writeln('      ${_psQuote(path)} { ${list(_words(command))} }');
   }
   return (out
         ..writeln('    } }')
@@ -366,6 +409,8 @@ String _powershell(CliCommand root) {
         ..writeln('}'))
       .toString();
 }
+
+final _fishSpecial = RegExp(r'''[ \\'"$()*?~{}\[\];&|<>#^]''');
 
 /// Whether a value is never a file name: a number, a duration, a date, a URL, a secret.
 bool _noFiles(CliValue<Object?> value) =>

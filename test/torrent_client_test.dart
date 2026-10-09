@@ -6,6 +6,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:dart_toolkit/hash.dart' show Hash;
 import 'package:dart_toolkit/torrent.dart';
 import 'package:test/test.dart' hide Retry;
 
@@ -200,6 +201,95 @@ void main() {
     task.cancel('enough');
     expect(await task.settled, isA<Stopped<Object?, Path>>().having((s) => s.reason, 'reason', 'enough'));
     expect(DateTime.now().difference(started), lessThan(const Duration(seconds: 2)));
+  });
+
+  group('file indices', () {
+    test('count no BEP 47 padding file, as Metainfo.files does: read(1) is the second real file', () async {
+      const piece = 16384;
+      final a = _bytes(100, 3), b = _bytes(100, 4);
+      final first = Uint8List(piece)..setRange(0, a.length, a);
+      final padded = Torrent.decode(
+        Bencode.encode({
+          'info': {
+            'name': 'padded',
+            'piece length': piece,
+            'pieces': Uint8List.fromList([...Hash.sha1.bytes(first).bytes, ...Hash.sha1.bytes(b).bytes]),
+            'files': [
+              {
+                'length': a.length,
+                'path': ['a.bin'],
+              },
+              {
+                'length': piece - a.length,
+                'path': ['.pad', '${piece - a.length}'],
+                'attr': 'p',
+              },
+              {
+                'length': b.length,
+                'path': ['b.bin'],
+              },
+            ],
+          },
+        }),
+      );
+      final dir = '${tmp.path}/padded';
+      File('$dir/padded/a.bin')
+        ..createSync(recursive: true)
+        ..writeAsBytesSync(a);
+      File('$dir/padded/b.bin').writeAsBytesSync(b);
+      final client = await _local(dir);
+      addTearDown(client.close);
+      final job = client.add(padded);
+      await job;
+      final got = BytesBuilder(copy: false);
+      await job.read(1).forEach(got.add);
+      expect(got.takeBytes(), b);
+    });
+  });
+
+  group('restarting', () {
+    test('a job cancelled before the engine had it is added afresh', () async {
+      final job = leecher.add(torrent)..cancel('changed my mind');
+      expect(await job.settled, isA<Stopped<Torrent, Path>>());
+      final again = leecher.add(torrent);
+      expect(again, isNot(same(job)));
+      expect(await again, '${tmp.path}/leech/set');
+    });
+
+    test('a job cancelled while it downloads runs again when added again, a new outcome to await', () async {
+      final lonely = await Torrent.create('$source/a.bin', name: 'lonely', private: true, trackers: [_nowhere]);
+      final job = leecher.add(lonely);
+      await job.statuses.firstWhere((s) => s is Running<Torrent, Path> && s.step == 'downloading');
+      job.cancel('later');
+      expect(await job.settled, isA<Stopped<Torrent, Path>>());
+      final again = leecher.add(lonely);
+      expect(again, same(job));
+      expect(again.status, isA<Running<Torrent, Path>>());
+      final next = again.settled;
+      again.cancel('done looking');
+      expect(await next, isA<Stopped<Torrent, Path>>().having((s) => s.reason, 'reason', 'done looking'));
+    });
+  });
+
+  group('read', () {
+    test('cancelling the subscription stops a read that waits on pieces no peer sends', () async {
+      final lonely = await Torrent.create('$source/a.bin', name: 'lonely', private: true, trackers: [_nowhere]);
+      final job = leecher.add(lonely);
+      final sub = job.read(0).listen((_) {});
+      await job.statuses.firstWhere((s) => s is Running<Torrent, Path> && s.step == 'downloading');
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      await sub.cancel();
+      expect(job.status, isA<Running<Torrent, Path>>(), reason: 'the job runs on; only the read stopped');
+    });
+
+    test('a cancel where it was made ends it with a CancelledException', () async {
+      final lonely = await Torrent.create('$source/a.bin', name: 'alone', private: true, trackers: [_nowhere]);
+      final job = leecher.add(lonely);
+      await expectLater(
+        Cancel.scope(timeout: const Duration(milliseconds: 500), () => job.read(0).toList()),
+        throwsA(isA<CancelledException>()),
+      );
+    });
   });
 
   test(

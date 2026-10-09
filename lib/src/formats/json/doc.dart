@@ -46,7 +46,7 @@ final class _Origin {
 /// final cfg = await Doc.read('config.yaml');
 /// cfg['server']['port'].to<int>();          // MissingException naming $.server.port
 /// cfg['server']['port'].to(or: 8080);       // blank and absent both take the default
-/// cfg.$(r'$.items[*].id').to<List<int>>();
+/// cfg.$('items[*].id').to<List<int>>();     // JSONPath; the root's `$` may go unwritten
 /// await cfg.save('config.toml');
 /// ```
 ///
@@ -134,8 +134,9 @@ final class Doc implements Saveable {
     _ => throw _badKey(key),
   };
 
-  /// The values JSONPath [expression] selects: `$.store.book[*].author`, `$..id`,
-  /// `$.items[0,2]`, `$.items[-2:]`, `$['a','b']`; no filters (`.list.where` is shorter).
+  /// The values JSONPath [expression] selects: `store.book[*].author`, `..id`, `items[0,2]`,
+  /// `items[-2:]`, `['a','b']`, with or without the root's `$`; no filters (`.where` on the
+  /// selection is shorter).
   DocSelection $(String expression) => DocSelection._(this, expression, _JsonPath.of(expression).read(raw));
 
   /// This value as [T]: `int`, `double`, `num`, `bool`, `String`, `Duration`, `DateTime`, `Uri`,
@@ -290,7 +291,8 @@ final class Doc implements Saveable {
   }
 
   /// Writes this document to [to] in the format its extension names (see [DocFormat]),
-  /// atomically, creating folders; a file there is replaced unless [conflict] says otherwise.
+  /// atomically, into a folder that exists; a file there is replaced unless [conflict] says
+  /// otherwise.
   /// A YAML stream saves every document.
   @override
   Task<Path> save(String to, {Conflict conflict = Conflict.overwrite}) {
@@ -342,7 +344,7 @@ final class Doc implements Saveable {
   /// [value] does not read as [type]: `Invalid JSON at $.port: "eighty", not an int`.
   FormatException _invalid(Object? value, String type, {Object? at}) {
     final where = at == null ? _where() : (at is int ? _where(at: at) : _keyWhere('$at'));
-    return FormatException('$where: ${value is String ? '"$value"' : _kind(value)}, not ${_article(type)}');
+    return FormatException('$where: ${value is String ? '"$value"' : _kind(value)}, not ${article(type)}');
   }
 
   String _keyWhere(String key) {
@@ -360,38 +362,48 @@ final class Doc implements Saveable {
   }
 }
 
-/// What a JSONPath query selected: [first], [single], each as a [list], or all of them read as
-/// one value with [to] (`.to<List<int>>()`).
+/// What a JSONPath query selected: each match a [Doc], in document order, or all of them read
+/// as one value with [to] (`.to<List<int>>()`).
 ///
 /// {@category Formats}
-final class DocSelection {
+final class DocSelection extends Iterable<Doc> {
   final Doc _doc;
   final String _expression;
   final List<Object?> _values;
 
   DocSelection._(this._doc, this._expression, this._values);
 
-  /// How many values matched.
+  @override
+  Iterator<Doc> get iterator => _all.list.iterator;
+
+  @override
   int get length => _values.length;
 
+  @override
   bool get isEmpty => _values.isEmpty;
+
+  @override
+  bool get isNotEmpty => _values.isNotEmpty;
 
   /// The selection as one list document, for its path.
   Doc get _all => Doc._at(_values, _doc, _Query(_expression));
 
   /// The first match; a [MissingException] naming the query when nothing matched.
+  @override
   Doc get first => _values.isEmpty ? throw _all._missing() : _all[0];
+
+  /// The last match; a [MissingException] naming the query when nothing matched.
+  @override
+  Doc get last => _values.isEmpty ? throw _all._missing() : _all[-1];
 
   /// The one match; a [MissingException] when nothing matched, a [FormatException] when more
   /// than one did.
+  @override
   Doc get single => switch (_values.length) {
     0 => throw _all._missing(),
     1 => _all[0],
     final n => throw FormatException('${_all._where()}: $n matches, not one'),
   };
-
-  /// Every match, each a document.
-  List<Doc> get list => _all.list;
 
   /// Every match as one value [T], as [Doc.to] reads it: `.to<List<String>>()`.
   T to<T>({T? or, String? format, String? decimal}) => _all.to<T>(or: or, format: format, decimal: decimal);
@@ -491,10 +503,8 @@ String _kind(Object? v) => switch (v) {
   bool() => 'a bool',
   List() => 'a list',
   Map() => 'a map',
-  _ => _article('${v.runtimeType}'),
+  _ => article('${v.runtimeType}'),
 };
-
-String _article(String type) => '${'aeiouAEIOU'.contains(type[0]) ? 'an' : 'a'} $type';
 
 /// [v] as JSON. Only a value that fails pays for a second walk, which writes a nested [Doc] as its
 /// value, a non-finite number as `null` (as JavaScript does) and anything else as its text.

@@ -17,6 +17,7 @@ export 'src/core.dart'
         FileBridge,
         IoBridge,
         ProcessBridge,
+        RetryInternals,
         StatusInternals,
         StoreInternals,
         TaskInternals,

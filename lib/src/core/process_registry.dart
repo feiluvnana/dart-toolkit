@@ -27,19 +27,6 @@ final class ProcessBridge {
   /// Unregisters [pids] once reaped.
   static void unregisterHalted(Iterable<int> pids) => _haltedProcessPids.removeAll(pids);
 
-  /// Waits up to 200 ms for halted processes to exit, then SIGKILLs the rest: what a leaving
-  /// `Cli` does, so no child outlives it.
-  static Future<void> killHalted() async {
-    if (Platform.isWindows || _haltedProcessPids.isEmpty) return;
-    final deadline = DateTime.now().add(const Duration(milliseconds: 200));
-    while (DateTime.now().isBefore(deadline)) {
-      _haltedProcessPids.removeWhere((pid) => !Process.killPid(pid, ProcessSignal.sigcont));
-      if (_haltedProcessPids.isEmpty) return;
-      await Future<void>.delayed(const Duration(milliseconds: 20));
-    }
-    killHaltedSync();
-  }
-
   /// SIGKILLs every registered halted process now.
   static void killHaltedSync() {
     if (Platform.isWindows) return;
@@ -55,23 +42,30 @@ final class ProcessBridge {
     _WindowsJob.assign(pid);
   }
 
-  /// Whether process [pid] is alive.
+  /// Whether process [pid] is alive: one that is there but not this user's counts.
   static bool isPidAlive(int pid) {
     if (Platform.isWindows) {
       try {
         return _WindowsJob.isAlive(pid);
-      } catch (_) {
-        // best-effort alive check
-        return false;
+      } on ArgumentError catch (_) {
+        return false; // kernel32 without the export: no answer, so not alive
       }
     }
-    try {
-      return Process.runSync('kill', ['-0', '$pid']).exitCode == 0;
-    } catch (_) {
-      // best-effort alive check
-      return false;
-    }
+    return _Posix.isAlive(pid);
   }
+}
+
+/// `kill(pid, 0)`, the probe that sends nothing.
+final class _Posix {
+  static final _lib = DynamicLibrary.process();
+  static final _kill = _lib.lookupFunction<Int32 Function(Int32, Int32), int Function(int, int)>('kill', isLeaf: true);
+  static final _errno = _lib.lookupFunction<Pointer<Int32> Function(), Pointer<Int32> Function()>(
+    Platform.isMacOS ? '__error' : '__errno_location',
+    isLeaf: true,
+  );
+
+  /// Whether [pid] is there: `kill` succeeds, or refuses with EPERM (another user's).
+  static bool isAlive(int pid) => pid > 0 && (_kill(pid, 0) == 0 || _errno().value == 1);
 }
 
 final class _WindowsJob {

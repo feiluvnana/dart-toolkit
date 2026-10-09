@@ -9,6 +9,8 @@ import 'package:dart_toolkit/html.dart';
 import 'package:dart_toolkit/xml.dart';
 import 'package:html/dom.dart' as hd;
 import 'package:html/parser.dart' as hp;
+// ignore: implementation_imports
+import 'package:html/src/constants.dart' show entities;
 import 'package:test/test.dart';
 import 'package:xml/xml.dart' as xd;
 import 'package:xml/xpath.dart';
@@ -64,11 +66,28 @@ void main() {
       '<svg><foreignObject width=1>x</foreignObject></svg><p>after',
       '<p>a</ p>b</>c',
       '<p>&lpar;1&rpar; &check; &star; &period;&colon;&NewLine;x</p>',
+      // A start tag closes an open <p> only within the spec's button scope.
+      '<p><button><div>x</div></button>',
+      '<p>a<object><p>b</object>c',
+      '<p>a<center>b</center>', '<p>a<summary>b</summary>', '<p>a<listing>\nb</listing>', '<p>a<dir><li>b</dir>',
+      '<p>a</p><table><tr><td>b</p>c</td></tr></table>',
+      '<button>a<button>b',
+      // Inside SVG, <style> and <title> are elements like any other.
+      '<svg><style>a &amp; b</style></svg>',
+      '<svg><title>a &amp; <b>c</b></title></svg>',
+      '<svg><foreignObject><style>p{}</style></foreignObject></svg>',
+      '<a b/c=d>x</a>',
       // Not `<noscript>`: package:html reads it as raw text, ours as markup (`noscript img`).
     ];
     for (final c in cases) {
       test(c.replaceAll('\n', r'\n'), () => expect(_ours(c.html.root), _theirs(hp.parse(c).documentElement!)));
     }
+
+    test('every named reference decodes as package:html decodes it', () {
+      for (final MapEntry(:key, :value) in entities.entries) {
+        if (key.endsWith(';')) expect('<p>&$key</p>'.html.$('p').first.rawText, value, reason: key);
+      }
+    });
 
     test('seeded random well-formed documents', () {
       final r = Random(7);
@@ -183,6 +202,12 @@ void main() {
       'x: {a: [1, {b: 2}]}',
       'x: 1 # a: b',
       "x: 'a # b'",
+      // An apostrophe inside a plain scalar opens no string.
+      "a: rock 'n roll # c\nb: 1",
+      "a: [rock 'n roll] # c\nb: 1",
+      "c: Match it using '== #identifier'.",
+      "d: it's 'x' # c",
+      "- 'a' # c\n- !!str 'b'\n- &x 'c'\n- {k: 'v'}",
     ];
     for (final c in [...cases, 'k${' ' * 300}: v', '- x${' ' * 300}y']) {
       test(jsonEncode(c), () {

@@ -1,7 +1,7 @@
 part of '../../path.dart';
 
 /// A glob, checked when made: `*` within a name, `**` across folders, `?`, `[abc]`, `[!abc]`,
-/// `{a,b}`. It is a [String], so it goes wherever a glob's text does (`files(only:)`,
+/// `{a,b}`, and `\` before a character to mean that character (`a\*b`); folders are `/`. It is a [String], so it goes wherever a glob's text does (`files(only:)`,
 /// `ignore:`, an archive's `only:`), and is compiled once.
 ///
 /// ```dart
@@ -23,6 +23,8 @@ extension type const Glob._(String _text) implements String {
     var brackets = 0, braces = 0;
     for (var i = 0; i < text.length; i++) {
       switch (text[i]) {
+        case r'\':
+          i++;
         case '[' when brackets == 0:
           brackets = 1;
         case ']' when brackets == 1:

@@ -125,10 +125,7 @@ void main() {
           if (e.path.split(Platform.pathSeparator).last.startsWith('dart_toolkit_chrome_')) e.path,
       ];
       final before = scratch().toSet();
-      await expectLater(
-        Chrome.launch(browser: Browser(executable: '${Directory.systemTemp.path}/tk-no-such-chrome')),
-        throwsA(anything),
-      );
+      await expectLater(Chrome.launch(executable: '${Directory.systemTemp.path}/tk-no-such-chrome'), throwsA(anything));
       expect(scratch().where((p) => !before.contains(p)), isEmpty);
     });
   });
@@ -247,6 +244,21 @@ void main() {
       );
     }, skip: absent);
 
+    test("a page's waits end at a cancel of their work, not at their timeout", () async {
+      final page = await chrome.open(null);
+      addTearDown(page.close);
+      await expectLater(
+        Cancel.scope(timeout: const Duration(milliseconds: 300), () => page.goto(base.resolve('/never'))),
+        throwsA(isA<CancelledException>()),
+      );
+      await expectLater(
+        Cancel.scope(timeout: const Duration(milliseconds: 300), () => page.wait('.never')),
+        throwsA(isA<CancelledException>()),
+      );
+      expect(page.isClosed, isFalse, reason: 'the tab is still there to use');
+      expect(await page.eval<int>('1 + 1'), 2);
+    }, skip: absent);
+
     test('expectDownload into a folder is a Task of the file; a rerun is Done(fresh: false)', () async {
       final dir = tempDir();
       final page = await chrome.open(base.resolve('/downloads'));
@@ -265,11 +277,13 @@ void main() {
       expect(res.json['items'].list, hasLength(3));
     }, skip: absent);
 
-    test('eval is a Doc; a script that throws is a ChromeException', () async {
+    test('eval is the type asked for, a Doc to read JSON in; a script that throws is a ChromeException', () async {
       final page = await chrome.open(base.resolve('/links'));
       addTearDown(page.close);
-      expect((await page.eval('({a: [1, 2]})'))['a'].list, hasLength(2));
-      await expectLater(page.eval('null.x'), throwsA(isA<ChromeException>()));
+      expect((await page.eval<Doc>('({a: [1, 2]})'))['a'].list, hasLength(2));
+      expect(await page.eval<String>('document.querySelector("#next").id'), 'next');
+      expect(await page.eval<int>('"41"') + 1, 42, reason: 'read as Doc.to reads it');
+      await expectLater(page.eval<Object?>('null.x'), throwsA(isA<ChromeException>()));
     }, skip: absent);
 
     test('screenshot of the window, of one element, of the whole page; a missing element is Missing', () async {
@@ -308,6 +322,19 @@ void main() {
             .toList();
       });
       expect(items, ['alpha', 'beta']);
+    }, skip: absent);
+
+    test('a cancel while Chrome starts stops it and erases its folder', () async {
+      List<String> scratch() => [
+        for (final e in Directory.systemTemp.listSync())
+          if (e.path.split(Platform.pathSeparator).last.startsWith('dart_toolkit_chrome_')) e.path,
+      ];
+      final before = scratch().toSet();
+      await expectLater(
+        Cancel.scope(timeout: const Duration(milliseconds: 50), () => Chrome.launch()),
+        throwsA(isA<CancelledException>()),
+      );
+      expect(scratch().where((p) => !before.contains(p)), isEmpty);
     }, skip: absent);
 
     test('a closed client fails at once, saying the browser is gone', () async {

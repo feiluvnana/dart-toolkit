@@ -228,7 +228,7 @@ void main() => print((${library == 'torrent' ? 'NativeBridge.torrent' : 'NativeB
       final torrent = '${Directory.current.path}/native/lib/${NativeBridge.target}/${NativeBridge.fileOf('torrent')}';
       File(dest).parent.createSync(recursive: true);
       File(torrent).copySync(dest);
-      expect(handle.reason, contains('reported ABI version 2'));
+      expect(handle.reason, contains('reported ABI version ${NativeBridge.torrent.abi}'));
       publish();
       await install();
       expect(handle.reason, anyOf(isNull, contains('so the next run loads it')));
@@ -242,6 +242,20 @@ void main() => print((${library == 'torrent' ? 'NativeBridge.torrent' : 'NativeB
       task.cancel('enough');
       expect(await task.settled, isA<Stopped<Object?, void>>());
       expect(File(dest).existsSync(), isFalse);
+    });
+
+    test('a cancel stops what cargo started too, not only cargo', () async {
+      final pidFile = '${tempDir('tk_pid_')}/child';
+      final spawning = cargo('/bin/mkdir -p "\$t"; /bin/sleep 30 & echo \$! > "$pidFile"; wait');
+      final task = Task.run('install', (work) => handle.install(work, releases: releases, cargo: spawning));
+      await task.statuses.firstWhere((s) => s is Running && s.step == 'compiling dart_toolkit_native');
+      while (!File(pidFile).existsSync() || File(pidFile).readAsStringSync().trim().isEmpty) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      final child = File(pidFile).readAsStringSync().trim();
+      task.cancel('enough');
+      expect(await task.settled, isA<Stopped<Object?, void>>());
+      expect(Process.runSync('kill', ['-0', child]).exitCode, isNot(0), reason: 'the child is gone with cargo');
     });
   }, testOn: '!windows');
 }

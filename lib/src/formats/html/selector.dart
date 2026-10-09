@@ -13,9 +13,16 @@ final class _Selector {
   /// Whether the alternatives start from `:scope`: a leading combinator.
   final bool relative;
 
+  /// How many levels below where [from] starts a match can be: one per combinator when no
+  /// alternative has a descendant one (`> li` is the children), else unbounded.
+  final int _reach;
+
   _Selector._(this._alternatives)
     : _sideways = _alternatives.any((c) => c.relative && c.combinators.first != '>' && c.combinators.first != ' '),
-      relative = _alternatives.any((c) => c.relative);
+      relative = _alternatives.any((c) => c.relative),
+      _reach = _alternatives.every((c) => c.relative && !c.combinators.contains(' '))
+          ? _alternatives.fold(0, (m, c) => c.combinators.length > m ? c.combinators.length : m)
+          : 1 << 30;
 
   static final _cache = <(String, bool), _Selector>{};
 
@@ -31,7 +38,7 @@ final class _Selector {
   List<Element> from(Element scope) {
     _scopes.add(scope);
     try {
-      return matchAll(_sideways ? scope.parent ?? scope : scope);
+      return matchAll(_sideways ? scope.parent ?? scope : scope, reach: _reach);
     } finally {
       _scopes.removeLast();
     }
@@ -45,14 +52,15 @@ final class _Selector {
 
   bool _matches(Element e) => _alternatives.any((c) => c.matches(e));
 
-  /// Every descendant of [root] that matches, in document order; [root] itself too when
-  /// [includeSelf] is set.
-  List<Element> matchAll(Element root, {bool includeSelf = false}) => _withSiblings(() {
+  /// Every descendant of [root] that matches, in document order, no more than [reach] levels
+  /// down; [root] itself too when [includeSelf] is set.
+  List<Element> matchAll(Element root, {bool includeSelf = false, int reach = 1 << 30}) => _withSiblings(() {
     final out = <Element>[];
     void walk(Element e, int depth) {
       for (final n in e._nodes) {
         if (n is! Element) continue;
         if (_matches(n)) out.add(n);
+        if (depth + 1 >= reach) continue;
         if (depth < _deep) {
           walk(n, depth + 1);
         } else {
@@ -404,8 +412,25 @@ final class _SelectorParser {
     };
   }
 
+  /// `:not`, `:is`, `:where` and `:has` open around the one being read; past 256 the text is
+  /// refused rather than the stack overflowing.
+  static int _nesting = 0;
+
   _Test pseudo() {
     final name = ident().toLowerCase();
+    if (name == 'not' || name == 'is' || name == 'where' || name == 'has') {
+      if (_nesting == 256) throw FormatException('Selector nested deeper than 256', s, i);
+      _nesting++;
+      try {
+        return _pseudo(name);
+      } finally {
+        _nesting--;
+      }
+    }
+    return _pseudo(name);
+  }
+
+  _Test _pseudo(String name) {
     String? arg;
     if (i < s.length && s[i] == '(') {
       i++;

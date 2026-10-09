@@ -129,22 +129,32 @@ final class _YamlParser {
     return line;
   }
 
-  /// Whether the quote at [i] opens a string rather than being an apostrophe (`don't # x`).
+  /// Whether the quote at [i] opens a string: only where a scalar starts — the line's start, after
+  /// `:`, `[`, `{`, `,`, a `-` or `?` indicator, or a tag or anchor. Anywhere else it is a
+  /// character of a plain scalar (`don't`, `rock 'n roll # c`), so a ` #` after it is a comment.
   static bool _opensString(String line, int i) {
-    if (i == 0) return true;
-    final prev = line.codeUnitAt(i - 1);
-    return switch (prev) {
-      0x20 /*   */ ||
-      0x09 /* \t */ ||
-      0x3A /* : */ ||
-      0x2D /* - */ ||
-      0x5B /* [ */ ||
-      0x7B /* { */ ||
-      0x2C /* , */ ||
-      0x3E /* > */ => true,
-      _ => false,
-    };
+    var p = i - 1;
+    while (p >= 0 && (line.codeUnitAt(p) == 0x20 || line.codeUnitAt(p) == 0x09)) {
+      p--;
+    }
+    if (p < 0) return true;
+    switch (line.codeUnitAt(p)) {
+      case 0x3A /* : */ || 0x5B /* [ */ || 0x7B /* { */ || 0x2C /* , */ :
+        return true;
+      case 0x2D /* - */ || 0x3F /* ? */ when p == 0 || _isBlank(line.codeUnitAt(p - 1)):
+        return p < i - 1; // `- "x"`, not `-"x"`
+    }
+    // A property before it: `!!str "1"`, `&a 'x'`.
+    if (p == i - 1) return false;
+    var start = p;
+    while (start > 0 && !_isBlank(line.codeUnitAt(start - 1))) {
+      start--;
+    }
+    final c = line.codeUnitAt(start);
+    return c == 0x21 /* ! */ || c == 0x26 /* & */;
   }
+
+  static bool _isBlank(int c) => c == 0x20 || c == 0x09;
 
   Never _fail(String why) =>
       throw FormatException('YAML line ${pos < lines.length ? line.number : lines.lastOrNull?.number ?? 1}: $why');
@@ -820,18 +830,53 @@ final class _YamlItem {
   const _YamlItem(this.value);
 }
 
-/// What makes a plain scalar read back as something else: an indicator first, `: ` or a
-/// `:` at the end (a key), ` #` (a comment), space at either end, a line break.
-final _unsafePlain = RegExp(
-  r'''^[\s\-?:,\[\]{}#&*!|>'"%@`]|^(---|\.\.\.)(\s|$)|:\s|:$|\s#|\s$|[\x00-\x08\n-\x1f\x7f-\x9f  ﻿]''',
-);
+/// [s] plain when it would read back as itself, double-quoted otherwise. Scanned by hand: two
+/// regular expressions per scalar were three quarters of writing a document.
+String _yamlScalar(String s) => s.isNotEmpty && s != '<<' && !_yamlTyped(s) && !_unsafePlain(s) ? s : jsonEncode(s);
 
-/// [s] plain when it would read back as itself, double-quoted otherwise.
-String _yamlScalar(String s) =>
-    s.isNotEmpty && s != '<<' && !_yamlTyped.hasMatch(s) && !_unsafePlain.hasMatch(s) ? s : jsonEncode(s);
+/// What makes a plain scalar read back as something else: an indicator first, `---` or `...`
+/// alone, `: ` or a `:` at the end (a key), ` #` (a comment), space at the end, a line break or
+/// another character YAML does not print.
+bool _unsafePlain(String s) {
+  final first = s.codeUnitAt(0);
+  if (_yamlSpace(first) || '-?:,[]{}#&*!|>\'"%@`'.contains(s[0])) return true;
+  if ((s.startsWith('---') || s.startsWith('...')) && (s.length == 3 || _yamlSpace(s.codeUnitAt(3)))) return true;
+  if (_yamlSpace(s.codeUnitAt(s.length - 1)) || s.codeUnitAt(s.length - 1) == 0x3a) return true;
+  for (var i = 0; i < s.length; i++) {
+    final c = s.codeUnitAt(i);
+    if (c < 0x20 && c != 0x09 || c >= 0x7f && c <= 0x9f || c == 0x2028 || c == 0x2029 || c == 0xfeff) return true;
+    if (c == 0x3a && _yamlSpace(s.codeUnitAt(i + 1))) return true; // `:` is never last here
+    if (c == 0x23 && i > 0 && _yamlSpace(s.codeUnitAt(i - 1))) return true;
+  }
+  return false;
+}
 
-/// A plain scalar YAML's core schema reads as something other than text: null, a boolean, a
+/// Whitespace as a regular expression's `\s` has it.
+bool _yamlSpace(int c) =>
+    c == 0x20 ||
+    (c >= 0x09 && c <= 0x0d) ||
+    c == 0xa0 ||
+    c == 0x1680 ||
+    (c >= 0x2000 && c <= 0x200a) ||
+    c == 0x2028 ||
+    c == 0x2029 ||
+    c == 0x202f ||
+    c == 0x205f ||
+    c == 0x3000 ||
+    c == 0xfeff;
+
+/// Whether YAML's core schema reads plain [s] as something other than text: null, a boolean, a
 /// number, an infinity or NaN.
-final _yamlTyped = RegExp(
-  r'^(~|null|Null|NULL|true|True|TRUE|false|False|FALSE|[+-]?\.(inf|Inf|INF)|\.(nan|NaN|NAN)|[+-]?\d+|0x[0-9a-fA-F]+|0o[0-7]+|[+-]?(\d+\.\d*|\.\d+|\d+)([eE][+-]?\d+)?)$',
-);
+bool _yamlTyped(String s) {
+  if (_yamlWords.contains(s)) return true;
+  final c = s.codeUnitAt(0);
+  // Only something that starts like a number can be one; most scalars are words.
+  return (c >= 0x30 && c <= 0x39 || c == 0x2b || c == 0x2d || c == 0x2e) && _yamlNumber.hasMatch(s);
+}
+
+const _yamlWords = {
+  '~', 'null', 'Null', 'NULL', 'true', 'True', 'TRUE', 'false', 'False', 'FALSE', //
+  '.inf', '.Inf', '.INF', '+.inf', '+.Inf', '+.INF', '-.inf', '-.Inf', '-.INF', '.nan', '.NaN', '.NAN',
+};
+
+final _yamlNumber = RegExp(r'^([+-]?\d+|0x[0-9a-fA-F]+|0o[0-7]+|[+-]?(\d+\.\d*|\.\d+|\d+)([eE][+-]?\d+)?)$');

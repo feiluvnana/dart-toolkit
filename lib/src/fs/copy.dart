@@ -37,7 +37,7 @@ final class _Temps {
     work.defer(() async {
       await Future.wait([..._busy]);
       for (final temp in _live) {
-        await _gone(temp);
+        await FileBridge.gone(temp);
       }
     });
   }
@@ -45,7 +45,7 @@ final class _Temps {
   /// A new name beside [target], as an atomic write's temporary file is named, so a watch
   /// leaves it out.
   String beside(String target) {
-    final temp = p.join(p.dirname(target), '.${p.basename(target)}.${FileBridge.token()}.tmp');
+    final temp = FileBridge.temp(target);
     _live.add(temp);
     return temp;
   }
@@ -60,27 +60,6 @@ final class _Temps {
     settled.whenComplete(() => _busy.remove(settled));
     return future;
   }
-}
-
-/// [path] deleted, whatever it is; one already gone is no matter.
-Future<void> _gone(String path) async {
-  try {
-    switch (await FileSystemEntity.type(path, followLinks: false)) {
-      case FileSystemEntityType.directory:
-        await Directory(path).delete(recursive: true);
-      case FileSystemEntityType.notFound:
-        return;
-      case FileSystemEntityType.link:
-        await Link(path).delete();
-      default:
-        await File(path).delete();
-    }
-  } on FileSystemException catch (_) {} // gone already, or not ours to delete: left
-}
-
-/// Throws a [CancelledException] when [work] has been asked to stop.
-void _check(Work work) {
-  if (work.isStopped) throw CancelledException('${Cancel.reason ?? 'cancelled'}');
 }
 
 /// Where a write of [src] to [target] goes under [conflict] (the file there, a free name
@@ -115,12 +94,12 @@ Future<String> _real(String path) async {
   }
 }
 
-/// [_copy]'s and [_move]'s file: [src], a file or a link, put at [target] through a temporary
-/// file beside it. With [bytes], the copy's bytes are reported on [work].
-Future<void> _put(Work work, _Temps temps, String src, String target, {required bool bytes}) async {
-  await Directory(p.dirname(target)).create(recursive: true);
+/// [_copy]'s and [_move]'s file: [src], a file or a link ([link] when the caller knows), put at
+/// [target], whose folder is there, through a temporary file beside it. With [bytes], the
+/// copy's bytes are reported on [work].
+Future<void> _put(Work work, _Temps temps, String src, String target, {required bool bytes, bool? link}) async {
   final temp = temps.beside(target);
-  if (await FileSystemEntity.isLink(src)) {
+  if (link ?? await FileSystemEntity.isLink(src)) {
     await Link(temp).create(await Link(src).target());
     await FileBridge.rename(Link(temp), target);
   } else {
@@ -135,7 +114,7 @@ Future<void> _put(Work work, _Temps temps, String src, String target, {required 
       await temps.track(File(src).copy(temp));
       if (bytes) work.amount(size, total: size);
     }
-    _check(work);
+    Cancel.check();
     await FileBridge.rename(File(temp), target);
   }
   temps.landed(temp);
@@ -144,15 +123,20 @@ Future<void> _put(Work work, _Temps temps, String src, String target, {required 
 /// [PathExtensions.copy].
 Future<Path> _copy(Work work, String src, String dest, Conflict conflict) async {
   final type = await FileSystemEntity.type(src, followLinks: false);
-  if (type == FileSystemEntityType.notFound) throw _notFound(src, 'Cannot copy');
+  if (type == FileSystemEntityType.notFound) throw FileBridge.notFound(src, 'Cannot copy');
   final temps = _Temps(work);
   if (type == FileSystemEntityType.directory) return _copyDir(work, temps, src, dest, conflict);
   final target = await _settle(src, dest, conflict, 'copy');
-  if (target == null || await _sameFile(src, target)) {
+  if (target == null) {
     TaskInternals.stale(work);
-    return Path(target ?? dest);
+    return Path(dest);
   }
   try {
+    if (await _sameFile(src, target)) {
+      TaskInternals.stale(work);
+      return Path(target);
+    }
+    await Directory(p.dirname(target)).create(recursive: true);
     await _put(work, temps, src, target, bytes: true);
   } finally {
     FileBridge.release(target);
@@ -199,45 +183,127 @@ Future<Path> _copyDir(Work work, _Temps temps, String src, String dest, Conflict
   }
 }
 
-/// Everything under [src] put into the folder [dest], made when missing; each file settled by
-/// [conflict]. Reports the files; answers whether any was written.
-Future<bool> _fill(Work work, _Temps temps, String src, String dest, Conflict conflict) async {
-  final made = <(String, int)>[];
-  final files = <(String from, String to)>[];
-  await Directory(dest).create(recursive: true);
-  made.add((dest, (await FileStat.stat(src)).mode));
+/// The folder [from], under a folder of the destination, put at [to]: the folder there, one
+/// made, a free name beside a file or link in its way, or `null` when [conflict] leaves it out.
+/// A link there is in the way, never walked through. [made] gets each folder made, with its
+/// source's mode.
+Future<String?> _folder(String from, String to, Conflict conflict, String verb, List<(String, int)> made) async {
+  var target = to;
+  switch (await FileSystemEntity.type(to, followLinks: false)) {
+    case FileSystemEntityType.directory:
+      return to;
+    case FileSystemEntityType.notFound:
+      break;
+    default:
+      final settled = await _settle(from, to, conflict, verb);
+      if (settled == null) return null;
+      FileBridge.release(settled);
+      if (settled == to) throw FileSystemException('Cannot $verb a folder over a file: $to', from);
+      target = settled;
+  }
+  await Directory(target).create();
+  made.add((target, (await FileStat.stat(from)).mode));
+  return target;
+}
+
+/// Everything under [src] for the folder [dest]: its files (each `(from, to, isLink)`) and the
+/// folders they go in, made as they are found by [_folder]; what [conflict] leaves out is not
+/// listed.
+Future<List<(String, String, bool)>> _plan(
+  String src,
+  String dest,
+  Conflict conflict,
+  String verb,
+  List<(String, int)> made, {
+  List<String>? dirs,
+}) async {
+  final files = <(String, String, bool)>[];
+  // Each source folder's place in the destination; `null` for one left out, with what is in it.
+  final into = <String, String?>{_trimmed(src): dest};
   await for (final entity in Directory(src).list(recursive: true, followLinks: false)) {
-    final to = p.join(dest, _relative(src, entity.path));
+    final path = entity.path;
+    final cut = _lastSeparator(path);
+    final parent = into[path.substring(0, cut)];
+    if (parent == null) {
+      if (entity is Directory) into[path] = null;
+      continue;
+    }
+    final to = p.join(parent, path.substring(cut + 1));
     if (entity is Directory) {
-      final there = await Directory(to).exists();
-      await Directory(to).create(recursive: true);
-      if (!there) made.add((to, (await entity.stat()).mode));
+      into[path] = await _folder(path, to, conflict, verb, made);
+      dirs?.add(path);
     } else {
-      files.add((entity.path, to));
+      files.add((path, to, entity is Link));
     }
   }
+  return files;
+}
+
+/// Where [path]'s last separator is.
+int _lastSeparator(String path) {
+  final slash = path.lastIndexOf('/');
+  if (!Platform.isWindows) return slash;
+  final back = path.lastIndexOf(r'\');
+  return back > slash ? back : slash;
+}
+
+/// [path] without the separators it ends in, as a listing's entries name their folder.
+String _trimmed(String path) {
+  var end = path.length;
+  while (end > 1 && _lastSeparator(path.substring(0, end)) == end - 1) {
+    end--;
+  }
+  return path.substring(0, end);
+}
+
+/// [body] for each of [items], [_fileConcurrency] at a time, each slot taking the next as it
+/// frees; the first failure stops the rest and is thrown.
+Future<void> _each<T>(List<T> items, Future<void> Function(T item) body) async {
+  var next = 0;
+  var failed = false;
+  Future<void> slot() async {
+    while (!failed && next < items.length) {
+      Cancel.check();
+      try {
+        await body(items[next++]);
+      } catch (_) {
+        failed = true;
+        rethrow;
+      }
+    }
+  }
+
+  await Future.wait([for (var i = 0; i < _fileConcurrency && i < items.length; i++) slot()]);
+}
+
+/// Everything under [src] put into the folder [dest], made when missing; each file settled by
+/// [conflict], and so is a folder that a file or link stands in the way of. Reports the files;
+/// answers whether any was written.
+Future<bool> _fill(Work work, _Temps temps, String src, String dest, Conflict conflict) async {
+  final made = <(String, int)>[];
+  // A folder that was there keeps its own mode: only the ones made here get the source's.
+  if (!await Directory(dest).exists()) {
+    await Directory(dest).create(recursive: true);
+    made.add((dest, (await FileStat.stat(src)).mode));
+  }
+  final files = await _plan(src, dest, conflict, 'copy', made);
   var done = 0, wrote = false;
   work.amount(0, total: files.length, unit: Unit.items);
-  for (var i = 0; i < files.length; i += _fileConcurrency) {
-    _check(work);
-    await Future.wait([
-      for (final (from, to) in files.skip(i).take(_fileConcurrency))
-        () async {
-          final target = await _settle(from, to, conflict, 'copy');
-          if (target != null) {
-            try {
-              await _put(work, temps, from, target, bytes: false);
-              wrote = true;
-            } finally {
-              FileBridge.release(target);
-            }
-          }
-          work
-            ..step(_relative(src, from))
-            ..amount(++done, total: files.length, unit: Unit.items);
-        }(),
-    ]);
-  }
+  await _each(files, (file) async {
+    final (from, to, link) = file;
+    final target = await _settle(from, to, conflict, 'copy');
+    if (target != null) {
+      try {
+        await _put(work, temps, from, target, bytes: false, link: link);
+        wrote = true;
+      } finally {
+        FileBridge.release(target);
+      }
+    }
+    work
+      ..step(_relative(src, from))
+      ..amount(++done, total: files.length, unit: Unit.items);
+  });
   _restoreModes(made);
   return wrote;
 }
@@ -245,16 +311,18 @@ Future<bool> _fill(Work work, _Temps temps, String src, String dest, Conflict co
 /// [PathExtensions.move].
 Future<Path> _move(Work work, String src, String dest, Conflict conflict) async {
   final type = await FileSystemEntity.type(src, followLinks: false);
-  if (type == FileSystemEntityType.notFound) throw _notFound(src, 'Cannot move');
+  if (type == FileSystemEntityType.notFound) throw FileBridge.notFound(src, 'Cannot move');
   if (p.equals(p.absolute(src), p.absolute(dest))) {
     TaskInternals.stale(work);
     return Path(dest);
   }
   final isDir = type == FileSystemEntityType.directory;
   if (isDir) await _refuseInside(src, dest, 'move');
-  final there = await FileSystemEntity.type(dest, followLinks: false);
-  if (isDir && there == FileSystemEntityType.directory) return _mergeMove(work, src, dest, conflict);
-  final target = there == FileSystemEntityType.notFound ? dest : await _settle(src, dest, conflict, 'move');
+  if (isDir && await FileSystemEntity.type(dest, followLinks: false) == FileSystemEntityType.directory) {
+    return _mergeMove(work, src, dest, conflict);
+  }
+  // Settled even when nothing is there: the claim keeps a second move from landing on it too.
+  final target = await _settle(src, dest, conflict, 'move');
   if (target == null) {
     TaskInternals.stale(work);
     return Path(dest);
@@ -264,7 +332,7 @@ Future<Path> _move(Work work, String src, String dest, Conflict conflict) async 
       throw FileSystemException('Cannot move a folder over a file: $target', src);
     }
     await Directory(p.dirname(target)).create(recursive: true);
-    await _rename(work, src, target, isDir: isDir);
+    await _rename(work, _Temps(work), src, target, isDir: isDir, link: type == FileSystemEntityType.link);
   } finally {
     FileBridge.release(target);
   }
@@ -274,11 +342,19 @@ Future<Path> _move(Work work, String src, String dest, Conflict conflict) async 
 /// [src] renamed to [target]; across devices, copied there (as [_copy] copies, so atomically)
 /// and then deleted, a file's bytes reported when [bytes]. A file renamed over a file replaces
 /// it in one step.
-Future<void> _rename(Work work, String src, String target, {required bool isDir, bool bytes = true}) async {
+Future<void> _rename(
+  Work work,
+  _Temps temps,
+  String src,
+  String target, {
+  required bool isDir,
+  required bool link,
+  bool bytes = true,
+}) async {
   try {
     final entity = isDir
         ? Directory(src)
-        : await FileSystemEntity.isLink(src)
+        : link
         ? Link(src)
         : File(src) as FileSystemEntity;
     await FileBridge.rename(entity, target);
@@ -286,7 +362,6 @@ Future<void> _rename(Work work, String src, String target, {required bool isDir,
   } on FileSystemException catch (e) {
     if (!_crossDevice(e)) rethrow;
   }
-  final temps = _Temps(work);
   if (isDir) {
     final temp = temps.beside(target);
     await _fill(work, temps, src, temp, Conflict.fail);
@@ -294,47 +369,37 @@ Future<void> _rename(Work work, String src, String target, {required bool isDir,
     temps.landed(temp);
     await Directory(src).delete(recursive: true);
   } else {
-    await _put(work, temps, src, target, bytes: bytes);
+    await _put(work, temps, src, target, bytes: bytes, link: link);
     await _deleteOne(src);
   }
 }
 
 /// The folder [src] moved into the folder [dest]: each file renamed into place and settled by
-/// [conflict]; what a skip leaves behind stays in [src], with its folders.
+/// [conflict], as is a folder a file or link stands in the way of; what a skip leaves behind
+/// stays in [src], with its folders.
 Future<Path> _mergeMove(Work work, String src, String dest, Conflict conflict) async {
-  final files = <(String from, String to)>[];
   final dirs = <String>[];
-  await for (final entity in Directory(src).list(recursive: true, followLinks: false)) {
-    final to = p.join(dest, _relative(src, entity.path));
-    if (entity is Directory) {
-      dirs.add(entity.path);
-      await Directory(to).create(recursive: true);
-    } else {
-      files.add((entity.path, to));
-    }
-  }
+  final made = <(String, int)>[];
+  final files = await _plan(src, dest, conflict, 'move', made, dirs: dirs);
+  final temps = _Temps(work);
   var done = 0, moved = false;
   work.amount(0, total: files.length, unit: Unit.items);
-  for (var i = 0; i < files.length; i += _fileConcurrency) {
-    _check(work);
-    await Future.wait([
-      for (final (from, to) in files.skip(i).take(_fileConcurrency))
-        () async {
-          final target = await _settle(from, to, conflict, 'move');
-          if (target != null) {
-            try {
-              await _rename(work, from, target, isDir: false, bytes: false);
-              moved = true;
-            } finally {
-              FileBridge.release(target);
-            }
-          }
-          work
-            ..step(_relative(src, from))
-            ..amount(++done, total: files.length, unit: Unit.items);
-        }(),
-    ]);
-  }
+  await _each(files, (file) async {
+    final (from, to, link) = file;
+    final target = await _settle(from, to, conflict, 'move');
+    if (target != null) {
+      try {
+        await _rename(work, temps, from, target, isDir: false, link: link, bytes: false);
+        moved = true;
+      } finally {
+        FileBridge.release(target);
+      }
+    }
+    work
+      ..step(_relative(src, from))
+      ..amount(++done, total: files.length, unit: Unit.items);
+  });
+  _restoreModes(made);
   // Emptied folders go, deepest first; one a skip left a file in stays.
   for (final dir in [...dirs.reversed, src]) {
     try {
@@ -383,7 +448,7 @@ Future<void> _delete(Work work, String path, bool recursive) async {
 
 /// [PathExtensions.deleteEmpty].
 Future<void> _deleteEmpty(Work work, String root) async {
-  if (!await Directory(root).exists()) throw _notFound(root, 'Cannot delete empty folders in');
+  if (!await Directory(root).exists()) throw FileBridge.notFound(root, 'Cannot delete empty folders in');
   final dirs = [
     await for (final e in Directory(
       root,
@@ -392,7 +457,7 @@ Future<void> _deleteEmpty(Work work, String root) async {
   ]..sort((a, b) => b.length.compareTo(a.length));
   var done = 0;
   for (final dir in [...dirs, root]) {
-    _check(work);
+    Cancel.check();
     try {
       await Directory(dir).delete();
     } on FileSystemException catch (_) {} // not empty, or not ours to delete: left
@@ -489,7 +554,7 @@ Future<void> _trashLinux(FileSystemEntity entity) async {
       if (moved == null && record != null) await File(record!).delete();
       return moved;
     } catch (_) {
-      if (record != null) await _gone(record!);
+      if (record != null) await FileBridge.gone(record!);
       rethrow;
     }
   }

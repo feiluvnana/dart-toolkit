@@ -7,7 +7,7 @@ enum _Kind { any, string, boolean, duration, date, secret, uri, integer, real, n
 abstract final class CoerceBridge {
   static final _durationRegex = RegExp(r'([+-]?\d+(?:\.\d+)?)\s*(ms|us|µs|s|m|h|d)', caseSensitive: false);
   static final _isoDate = RegExp(
-    r'^(\d{4})-(\d\d)-(\d\d)(?:[Tt ](\d\d)(?::?(\d\d)(?::?(\d\d)(?:\.(\d+))?)?)?)?(?:Z|[+-]\d\d:?\d\d)?$',
+    r'^(\d{4})-(\d\d)-(\d\d)(?:[Tt ](\d\d)(?::?(\d\d)(?::?(\d\d)(?:\.(\d+))?)?)?)?([Zz]|[+-]\d\d:?\d\d)?$',
   );
   static final _thousands = RegExp(r'^[+-]?\d{1,3}(,\d{3})+(\.\d+)?$');
   static final _thousandsDot = RegExp(r'^[+-]?\d{1,3}(\.\d{3})+(,\d+)?$');
@@ -62,16 +62,10 @@ abstract final class CoerceBridge {
   }
 
   /// Whether [coerce] reads text as [T] at all (`Path` is a `String` here).
-  static bool reads<T>() =>
-      _same<T, String>() ||
-      _same<T, int>() ||
-      _same<T, double>() ||
-      _same<T, num>() ||
-      _same<T, bool>() ||
-      _same<T, Duration>() ||
-      _same<T, DateTime>() ||
-      _same<T, Uri>() ||
-      _same<T, Secret>();
+  static bool reads<T>() => switch (_kinds[T] ??= _kindOf<T>()) {
+    _Kind.any || _Kind.none => false,
+    _ => true,
+  };
 
   /// [s] as a key whose plain order is natural order, as `compareNatural` orders them: for `Table`.
   static String naturalKey(String s) => _naturalKey(s);
@@ -105,9 +99,6 @@ abstract final class CoerceBridge {
       if (s.isEmpty) return null;
       if (num.tryParse(s) case final n?) return _toDuration(n);
       if (_clock(s) ?? _isoDuration(s) case final d?) return d;
-
-      final matches = _durationRegex.allMatches(s).toList();
-      if (matches.isEmpty) return null;
 
       // Verify the entire non-whitespace string is covered by the matches.
       var totalMicroseconds = 0.0;
@@ -181,24 +172,12 @@ abstract final class CoerceBridge {
 
   static DateTime? _toDateTime(Object? value, {String? format}) {
     if (value is DateTime) return value;
-    if (value is int) {
-      if (value >= 100000000 && value < 100000000000) {
-        return DateTime.fromMillisecondsSinceEpoch(value * 1000, isUtc: true);
-      }
-      if (value >= 100000000000) {
-        return DateTime.fromMillisecondsSinceEpoch(value, isUtc: true);
-      }
-      return null;
-    }
-    if (value is double) {
-      final intVal = value.round();
-      if (intVal >= 100000000 && intVal < 100000000000) {
-        return DateTime.fromMillisecondsSinceEpoch(intVal * 1000, isUtc: true);
-      }
-      if (intVal >= 100000000000) {
-        return DateTime.fromMillisecondsSinceEpoch(intVal, isUtc: true);
-      }
-      return null;
+    // An epoch: seconds from 1973, else milliseconds.
+    if (value is num) {
+      if (!value.isFinite) return null;
+      final n = value.round();
+      if (n < 100000000) return null;
+      return DateTime.fromMillisecondsSinceEpoch(n < 100000000000 ? n * 1000 : n, isUtc: true);
     }
     if (value is String) {
       final s = value.trim();
@@ -222,7 +201,14 @@ abstract final class CoerceBridge {
           final minute = m[5] != null ? int.parse(m[5]!) : 0;
           final second = m[6] != null ? int.parse(m[6]!) : 0;
           if (hour <= 23 && minute <= 59 && second <= 59) {
-            return DateTime.tryParse(s);
+            // Text without a zone is UTC, as `format:` and RFC dates without one are.
+            final micros = int.parse((m[7] ?? '').padRight(6, '0').substring(0, 6));
+            final at = DateTime.utc(year, month, day, hour, minute, second, 0, micros);
+            final zone = m[8] ?? 'Z';
+            if (zone == 'Z' || zone == 'z') return at;
+            final digits = zone.replaceAll(':', '');
+            final offset = int.parse(digits.substring(1, 3)) * 60 + int.parse(digits.substring(3));
+            return at.subtract(Duration(minutes: zone.startsWith('-') ? -offset : offset));
           }
         }
         return null;

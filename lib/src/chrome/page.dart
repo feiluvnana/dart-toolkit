@@ -145,6 +145,7 @@ final class Page {
       final deadline = Clock.current.elapsed + patience;
       while (_interstitial(res) && Clock.current.elapsed < deadline) {
         await const Duration(milliseconds: 500).delay();
+        Cancel.check();
         if (isClosed) break;
         try {
           res = await _response(request);
@@ -181,6 +182,7 @@ new Promise((resolve) => {
   Future<Response?> _empty(Uri url, Request? request) async {
     for (var i = 0; i < 25 && _answer == null; i++) {
       await const Duration(milliseconds: 20).delay();
+      Cancel.check();
     }
     final status = (_answer?['status'] as num?)?.toInt();
     if (status == null || (status != 204 && status != 205 && status < 400 && !_attachment(_answer))) return null;
@@ -350,10 +352,16 @@ new Promise((resolve) => {
     return height;
   }
 
-  /// Runs [expression] in the page and answers its value as a [Doc], a promise's once it
-  /// settles: `(await page.eval('fetch("/api").then(r => r.json())'))['items'].list`. A script
-  /// that throws (or rejects) is a [ChromeException].
-  Future<Doc> eval(String expression, {Duration? timeout}) async => Doc(await _value(expression, timeout: timeout));
+  /// Runs [expression] in the page and answers its value as [T], a promise's once it settles:
+  /// `await page.eval<String>('document.title')`, or a [Doc] to read JSON in
+  /// (`(await page.eval<Doc>('fetch("/api").then(r => r.json())'))['items'].list`). A value
+  /// that is not a [T] is read as `Doc.to` reads it; a script that throws (or rejects) is a
+  /// [ChromeException].
+  Future<T> eval<T>(String expression, {Duration? timeout}) async {
+    final doc = Doc(await _value(expression, timeout: timeout));
+    // `eval<Doc>` keeps the document; any other type is read out of it.
+    return <T>[] is List<Doc> ? doc as T : doc.to<T>();
+  }
 
   /// [eval]'s value as it came: what the page's own steps read.
   Future<Object?> _value(String expression, {Duration? timeout}) async {
@@ -620,7 +628,7 @@ new Promise((resolve) => {
       try {
         await _place(from, target);
       } finally {
-        if (conflict == Conflict.rename) FileBridge.release(target);
+        FileBridge.release(target);
       }
       return Path(target);
     } finally {
@@ -744,6 +752,7 @@ new Promise((resolve) => {
     while (!isClosed && !decided() && Clock.current.elapsed < deadline) {
       if (_url != was) return true;
       await const Duration(milliseconds: 20).delay();
+      Cancel.check();
     }
     return _url != was;
   }
@@ -904,10 +913,11 @@ new Promise((resolve) => {
   /// Contexts for in-process frames; out-of-process ones attach from the tab's start.
   Future<void> _watchFrames() => _call('Runtime.enable');
 
+  /// [method] on this tab's session; a cancel of the enclosing work ends it.
   Future<Map<String, Object?>> _call(String method, [Map<String, Object?>? params, Duration? timeout]) {
-    if (_client.isClosed) return _client._call(method, params, _tab, timeout);
+    if (_client.isClosed) return _client._call(method, params, _tab, timeout, true);
     if (isClosed) return Future.error(ChromeException('The page is closed', method: method, uri: _url));
-    return _client._call(method, params, _tab, timeout);
+    return _client._call(method, params, _tab, timeout, true);
   }
 
   /// The JavaScript for the first match of [selector].
@@ -1143,7 +1153,8 @@ new Promise((resolve) => {
     if (waiter == null) return true;
     var fired = true;
     try {
-      await waiter.future.timeout(timeout ?? _timeout, onTimeout: () => fired = false);
+      final settled = waiter.future.timeout(timeout ?? _timeout, onTimeout: () => fired = false);
+      await (Cancel.token == null ? settled : settled.cancellable);
     } finally {
       if (identical(_waiter, waiter)) _disarm();
     }
@@ -1204,7 +1215,8 @@ final class Dialog {
     if (_answered) return;
     _answered = true;
     try {
-      await _page._call('Page.handleJavaScriptDialog', {'accept': accept, 'promptText': ?text});
+      // Never cut short: an open dialog holds the tab's renderer.
+      await _page._client._call('Page.handleJavaScriptDialog', {'accept': accept, 'promptText': ?text}, _page._tab);
     } catch (_) {} // best-effort: the dialog may be gone already
   }
 }

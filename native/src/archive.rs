@@ -109,7 +109,6 @@ fn path_starts_with(child: &Path, parent: &Path) -> bool {
     }
 }
 
-#[derive(serde::Serialize)]
 struct Entry {
     name: String,
     size: u64,
@@ -516,6 +515,11 @@ fn list(path: &str, password: Option<&str>) -> Result<Vec<Entry>, String> {
     Ok(out)
 }
 
+/// Whether a 7z entry is a link: its Unix mode, in the high half of its attributes, says S_IFLNK.
+fn sevenz_link(e: &sevenz_rust2::SevenZArchiveEntry) -> bool {
+    e.has_windows_attributes && e.windows_attributes & 0x8000 != 0 && (e.windows_attributes >> 16) & 0o170000 == 0o120000
+}
+
 /// Whether the 7z file at index `i` sits in an AES-encrypted folder.
 fn sevenz_encrypted(archive: &sevenz_rust2::Archive, i: usize) -> bool {
     archive
@@ -530,12 +534,16 @@ fn sevenz_encrypted(archive: &sevenz_rust2::Archive, i: usize) -> bool {
         })
 }
 
-/// Writes the entries of the archive at `path` as a JSON array; the caller frees with `tk_free`.
+/// Writes the entries of the archive at `path` as [record]s back to back; the caller frees with
+/// `tk_free`.
 #[no_mangle]
 pub unsafe extern "C" fn tk_archive_list(path: *const u8, plen: usize, pw: *const u8, pwlen: usize, out: *mut *mut u8, out_len: *mut usize) -> i32 {
     guard(|| {
-        let entries = list(text(path, plen)?, opt_text(pw, pwlen)?)?;
-        Ok(give(serde_json::to_vec(&entries).msg()?, out, out_len))
+        let mut all = Vec::new();
+        for e in list(text(path, plen)?, opt_text(pw, pwlen)?)? {
+            record(&e, &mut all);
+        }
+        Ok(give(all, out, out_len))
     })
 }
 
@@ -575,7 +583,8 @@ impl Policy {
             trusted,
             budget: limit,
             limit,
-            only: only.map(|p| p.replace('\\', "/").chars().collect()),
+            // A `\` escapes the character after it, as in a Dart glob.
+            only: only.map(|p| p.chars().collect()),
             fold: flags & FOLD_CASE != 0,
             root: canonicalize_safe(root).map_err(|e| format!("{}: {}", root.display(), e))?,
             links: Vec::new(),
@@ -745,7 +754,9 @@ fn glob(p: &[char], s: &[char], fold: bool) -> bool {
             // A `]` first in the set, after any `!` or `^`, is one of it rather than its end.
             let lead = usize::from(matches!(rest.first(), Some('!' | '^')));
             let from = if rest.get(lead) == Some(&']') { lead + 1 } else { lead };
-            if let Some(end) = rest[from..].iter().position(|&c| c == ']').map(|e| e + from) {
+            // A set never spans a `/`: `[a/b]` is the folder `[a` and the name `b]`, as in Dart.
+            let close = rest[from..].iter().position(|&c| c == ']').map(|e| e + from);
+            if let Some(end) = close.filter(|&end| !rest[..end].contains(&'/')) {
                 if !s.is_empty() && s[0] != '/' {
                     let class = &rest[..end];
                     let after = &rest[end + 1..];
@@ -787,8 +798,14 @@ fn glob(p: &[char], s: &[char], fold: bool) -> bool {
         ['{', rest @ ..] => {
             let mut depth = 0;
             let mut close = None;
+            let mut escaped = false;
             for (idx, &c) in rest.iter().enumerate() {
-                if c == '{' {
+                if std::mem::take(&mut escaped) {
+                    continue;
+                }
+                if c == '\\' {
+                    escaped = true;
+                } else if c == '{' {
                     depth += 1;
                 } else if c == '}' {
                     if depth == 0 {
@@ -805,8 +822,14 @@ fn glob(p: &[char], s: &[char], fold: bool) -> bool {
                 let mut d = 0;
                 let mut start = 0;
                 let mut alts = Vec::new();
+                let mut escaped = false;
                 for (i, &c) in inside.iter().enumerate() {
-                    if c == '{' {
+                    if std::mem::take(&mut escaped) {
+                        continue;
+                    }
+                    if c == '\\' {
+                        escaped = true;
+                    } else if c == '{' {
                         d += 1;
                     } else if c == '}' {
                         d -= 1;
@@ -831,6 +854,7 @@ fn glob(p: &[char], s: &[char], fold: bool) -> bool {
             }
             !s.is_empty() && eq('{', s[0]) && glob(rest, &s[1..], fold)
         }
+        ['\\', c, rest @ ..] => !s.is_empty() && eq(*c, s[0]) && glob(rest, &s[1..], fold),
         [c, rest @ ..] => !s.is_empty() && eq(*c, s[0]) && glob(rest, &s[1..], fold),
     }
 }
@@ -1169,6 +1193,14 @@ fn extract(path: &str, dest: &str, password: Option<&str>, only: Option<&str>, f
                         idx += 1;
                         return Ok(true);
                     }
+                    if sevenz_link(e) {
+                        let mut link = String::new();
+                        Read::take(&mut *r, 4096).read_to_string(&mut link).map_err(sevenz_rust2::Error::io)?;
+                        std::io::copy(r, &mut std::io::sink()).map_err(sevenz_rust2::Error::io)?;
+                        pol.link(&target, &name, &link).map_err(seven_err)?;
+                        idx += 1;
+                        return Ok(true);
+                    }
                     write_file(&mut pol, &target, r, e.size(), &name, mtime, mode).map_err(seven_err)?;
                     bytes_done += e.size();
                     count += 1;
@@ -1445,9 +1477,11 @@ fn contents(
 ) -> Result<(), String> {
     let kind = detect_read(path)?;
     let mut pol = Policy::new(path, Path::new("."), only, flags)?;
+    // The bytes after OWNED free ones, as [own] hands them over.
     fn take(pol: &mut Policy, from: &mut dyn Read, size: u64, name: &str) -> Result<Vec<u8>, String> {
         pol.charge(size, name)?;
-        let mut out = Vec::with_capacity(size.min(1 << 30) as usize);
+        let mut out = Vec::with_capacity(OWNED + size.min(1 << 30) as usize);
+        out.resize(OWNED, 0);
         copy_capped(from, &mut out, size, name)?;
         Ok(out)
     }
@@ -1492,7 +1526,7 @@ fn contents(
             let width = std::mem::size_of::<sevenz_rust2::SevenZArchiveEntry>();
             reader
                 .for_each_entries(|e, r| {
-                    if e.is_directory() || !pol.wants(e.name()) {
+                    if e.is_directory() || sevenz_link(e) || !pol.wants(e.name()) {
                         // A solid block is one stream: an entry not wanted is still read past.
                         std::io::copy(r, &mut std::io::sink()).map_err(sevenz_rust2::Error::io)?;
                         return Ok(true);
@@ -1530,8 +1564,11 @@ fn contents(
                     modified: None,
                     name,
                 };
-                let (data, next) = h.read().msg()?;
+                let (bytes, next) = h.read().msg()?;
                 a = next;
+                let mut data = Vec::with_capacity(OWNED + bytes.len());
+                data.resize(OWNED, 0);
+                data.extend_from_slice(&bytes);
                 if !emit(entry, data) {
                     return Ok(());
                 }
@@ -1582,43 +1619,62 @@ fn contents_caught(
     )
 }
 
-/// A file's header as the caller reads it: size, compressed size and modified time (`i64::MIN`
-/// for none) as little-endian 64-bit numbers, a byte that is 1 when encrypted, then the name.
-fn header(e: &Entry) -> Vec<u8> {
-    let mut h = Vec::with_capacity(25 + e.name.len());
-    h.extend_from_slice(&e.size.to_le_bytes());
-    h.extend_from_slice(&e.compressed.to_le_bytes());
-    h.extend_from_slice(&e.modified.unwrap_or(i64::MIN).to_le_bytes());
-    h.push(u8::from(e.encrypted));
-    h.extend_from_slice(e.name.as_bytes());
-    h
+/// One entry as the caller reads it, added to `out`: size, compressed size and modified time
+/// (`i64::MIN` for none) as little-endian 64-bit numbers, a byte (1 encrypted, 2 a folder), the
+/// name's length as a little-endian 32-bit number, then the name. `tk_archive_list` writes them
+/// back to back; a pass hands one with each file.
+fn record(e: &Entry, out: &mut Vec<u8>) {
+    out.extend_from_slice(&e.size.to_le_bytes());
+    out.extend_from_slice(&e.compressed.to_le_bytes());
+    out.extend_from_slice(&e.modified.unwrap_or(i64::MIN).to_le_bytes());
+    out.push(u8::from(e.encrypted) | (u8::from(e.dir) << 1));
+    out.extend_from_slice(&(e.name.len() as u32).to_le_bytes());
+    out.extend_from_slice(e.name.as_bytes());
 }
 
-/// Hears a pass: `code` 1 is a file (`head` and `data`), 0 the end, -1 a failure (`head` its
-/// message). Each buffer is the caller's, freed with `tk_free`; nothing calls after 0 or -1.
+/// Bytes ahead of the data in a buffer [own] hands over: its length and capacity.
+const OWNED: usize = 16;
+
+/// `data`, whose first [OWNED] bytes were left for it, handed over as its data's address: the
+/// caller frees it with `tk_release` given only that address, as a Dart finalizer does, so the
+/// bytes reach Dart without a copy.
+fn own(mut data: Vec<u8>) -> (*mut u8, usize) {
+    let (len, cap) = (data.len(), data.capacity());
+    data[..8].copy_from_slice(&(len as u64).to_le_bytes());
+    data[8..OWNED].copy_from_slice(&(cap as u64).to_le_bytes());
+    let base = data.as_mut_ptr();
+    std::mem::forget(data);
+    // SAFETY: the vector holds at least OWNED bytes.
+    (unsafe { base.add(OWNED) }, len - OWNED)
+}
+
+/// Frees a buffer [own] handed over, by the address it gave.
+#[no_mangle]
+pub unsafe extern "C" fn tk_release(data: *mut u8) {
+    if data.is_null() {
+        return;
+    }
+    let base = data.sub(OWNED);
+    let len = u64::from_le_bytes(std::slice::from_raw_parts(base, 8).try_into().unwrap()) as usize;
+    let cap = u64::from_le_bytes(std::slice::from_raw_parts(base.add(8), 8).try_into().unwrap()) as usize;
+    drop(Vec::from_raw_parts(base, len, cap));
+}
+
+/// Hears a pass: `code` 1 is a file (`head` its [record], freed with `tk_free`, and `data` its
+/// bytes, freed with `tk_release`), 0 the end, -1 a failure (`head` its message). Nothing calls
+/// after 0 or -1.
 pub type ContentsCb = Option<unsafe extern "C" fn(code: i32, head: *mut u8, head_len: usize, data: *mut u8, data_len: usize)>;
 
 /// A pass over an archive's files on a thread of its own, one file ahead of the caller.
 struct Contents {
-    /// Pulled by `tk_archive_contents_next`; `None` when a listener hears the pass.
-    files: Option<std::sync::mpsc::Receiver<Result<(Entry, Vec<u8>), String>>>,
-    /// For a listener: one `()` per file the caller is ready for. Dropped, it stops the pass.
-    more: Option<std::sync::mpsc::Sender<()>>,
-}
-
-/// Hands `head` and `data` to `cb` as allocations it owns.
-unsafe fn tell(cb: unsafe extern "C" fn(i32, *mut u8, usize, *mut u8, usize), code: i32, head: Vec<u8>, data: Vec<u8>) {
-    let (mut h, mut hl, mut d, mut dl) = (std::ptr::null_mut(), 0, std::ptr::null_mut(), 0);
-    give(head, &mut h, &mut hl);
-    give(data, &mut d, &mut dl);
-    cb(code, h, hl, d, dl);
+    /// One `()` per file the caller is ready for. Dropped, it stops the pass.
+    more: std::sync::mpsc::Sender<()>,
 }
 
 /// Starts reading the files of the archive at `path` (as `contents` does) on a thread of its
-/// own, and returns the pass, or null with `tk_last_error` set. Without `listener` the caller
-/// pulls each file with `tk_archive_contents_next`; with one, it asks for each with
-/// `tk_archive_contents_more` and hears it there. `tk_archive_contents_free` ends the pass at
-/// any time; a listener still hears its 0 after that.
+/// own, and returns the pass, or null with `tk_last_error` set. The caller asks for each file
+/// with `tk_archive_contents_more` and hears it on `listener`; `tk_archive_contents_free` ends the
+/// pass at any time, and the listener still hears its 0 after that.
 #[no_mangle]
 pub unsafe extern "C" fn tk_archive_contents(
     path: *const u8,
@@ -1635,71 +1691,41 @@ pub unsafe extern "C" fn tk_archive_contents(
         let path = text(path, plen)?.to_string();
         let password = opt_text(pw, pwlen)?.map(str::to_string);
         let only = opt_text(only, olen)?.map(str::to_string);
-        let pass = match listener {
-            None => {
-                let (tx, rx) = std::sync::mpsc::sync_channel(1);
-                std::thread::spawn(move || {
-                    let mut emit = |e: Entry, d: Vec<u8>| tx.send(Ok((e, d))).is_ok();
-                    if let Err(m) = contents_caught(&path, password.as_deref(), only.as_deref(), flags, &mut emit) {
-                        let _ = tx.send(Err(m));
-                    }
-                });
-                Contents { files: Some(rx), more: None }
-            }
-            Some(cb) => {
-                let (more, asked) = std::sync::mpsc::channel::<()>();
-                std::thread::spawn(move || {
-                    let mut emit = |e: Entry, d: Vec<u8>| {
-                        // Read ahead by one: this file waits here until the caller asks for it.
-                        if asked.recv().is_err() {
-                            return false;
-                        }
-                        unsafe { tell(cb, 1, header(&e), d) };
-                        true
-                    };
-                    match contents_caught(&path, password.as_deref(), only.as_deref(), flags, &mut emit) {
-                        Ok(()) => unsafe { tell(cb, 0, Vec::new(), Vec::new()) },
-                        Err(m) => unsafe { tell(cb, -1, m.into_bytes(), Vec::new()) },
-                    }
-                });
-                Contents { files: None, more: Some(more) }
-            }
+        let cb = listener.ok_or("a pass needs a listener")?;
+        let (more, asked) = std::sync::mpsc::channel::<()>();
+        let tell = move |code: i32, head: Vec<u8>, data: Option<Vec<u8>>| {
+            let (mut h, mut hl) = (std::ptr::null_mut(), 0);
+            give(head, &mut h, &mut hl);
+            let (d, dl) = data.map_or((std::ptr::null_mut(), 0), own);
+            unsafe { cb(code, h, hl, d, dl) };
         };
-        out = Box::into_raw(Box::new(pass)) as *mut std::ffi::c_void;
+        std::thread::spawn(move || {
+            let mut emit = |e: Entry, d: Vec<u8>| {
+                // Read ahead by one: this file waits here until the caller asks for it.
+                if asked.recv().is_err() {
+                    return false;
+                }
+                let mut head = Vec::new();
+                record(&e, &mut head);
+                tell(1, head, Some(d));
+                true
+            };
+            match contents_caught(&path, password.as_deref(), only.as_deref(), flags, &mut emit) {
+                Ok(()) => tell(0, Vec::new(), None),
+                Err(m) => tell(-1, m.into_bytes(), None),
+            }
+        });
+        out = Box::into_raw(Box::new(Contents { more })) as *mut std::ffi::c_void;
         Ok(0)
     });
     out
 }
 
-/// The next file of a pass `tk_archive_contents` started without a listener: 1 with its header
-/// and bytes in `head` and `data` (the caller's, freed with `tk_free`), 0 at the end, -1 failed.
-#[no_mangle]
-pub unsafe extern "C" fn tk_archive_contents_next(
-    pass: *mut std::ffi::c_void,
-    head: *mut *mut u8,
-    head_len: *mut usize,
-    data: *mut *mut u8,
-    data_len: *mut usize,
-) -> i32 {
-    guard(|| {
-        let files = live::<Contents>(pass)?.files.as_ref().ok_or("a pass with a listener is not pulled")?;
-        match files.recv() {
-            Ok(Ok((e, d))) => {
-                give(header(&e), head, head_len);
-                give(d, data, data_len);
-                Ok(1)
-            }
-            Ok(Err(m)) => Err(m),
-            Err(_) => Ok(0),
-        }
-    })
-}
-
-/// Asks a listener's pass for one more file.
+/// Asks a pass for one more file.
 #[no_mangle]
 pub unsafe extern "C" fn tk_archive_contents_more(pass: *mut std::ffi::c_void) {
-    if let Ok(Contents { more: Some(more), .. }) = live::<Contents>(pass) {
-        let _ = more.send(());
+    if let Ok(c) = live::<Contents>(pass) {
+        let _ = c.more.send(());
     }
 }
 
@@ -1894,7 +1920,13 @@ fn create(
                 z.set_content_methods(vec![lzma2_cfg]);
             }
             for (name, path, kind) in &items {
-                if matches!(kind, ItemKind::Symlink(_)) {
+                if let ItemKind::Symlink(target) = kind {
+                    // A file holding its target, marked S_IFLNK, as p7zip writes a link.
+                    let mut entry = sevenz_rust2::SevenZArchiveEntry::new_file(name);
+                    entry.has_windows_attributes = true;
+                    entry.windows_attributes = 0x8000 | (0o120777 << 16);
+                    let text = target.to_string_lossy().into_owned().into_bytes();
+                    z.push_archive_entry(entry, Some(std::io::Cursor::new(text))).msg()?;
                     completed += 1;
                     continue;
                 }

@@ -13,6 +13,9 @@ final class _Codec<I, T> {
 
   Object? item(I item) => _encode(item, _item, 'item');
 
+  /// [item] as JSON, unchecked: for one [item] has checked already.
+  Object? json(I item) => _item == null ? item : _item.encode(item);
+
   I itemOf(Object? json) => _item == null ? json as I : _item.decode(json);
 
   Object? value(T value) => _encode(value, _value, 'value');

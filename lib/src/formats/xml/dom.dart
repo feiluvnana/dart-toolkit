@@ -50,7 +50,7 @@ final class Xml implements Saveable {
   /// The document as XML text, with an XML declaration.
   String encode() => '<?xml version="1.0" encoding="UTF-8"?>\n${root.markup}\n';
 
-  /// Writes [encode] to [to] as UTF-8, atomically, creating folders; a file there is replaced
+  /// Writes [encode] to [to] as UTF-8, atomically, into a folder that exists; a file there is replaced
   /// unless [conflict] says otherwise.
   @override
   Task<Path> save(String to, {Conflict conflict = Conflict.overwrite}) =>

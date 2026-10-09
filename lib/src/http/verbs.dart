@@ -35,17 +35,7 @@ extension UriVerbs on Uri {
     Object? json,
     Map<String, String>? files,
     String? file,
-  }) => Request(
-    'POST',
-    this,
-    headers: headers,
-    text: text,
-    bytes: bytes,
-    form: form,
-    json: json,
-    files: files,
-    file: file,
-  ).send();
+  }) => _verb('POST', this, headers, text, bytes, form, json, files, file);
 
   /// PUT; see [post] for the body.
   Task<Response> put({
@@ -56,17 +46,7 @@ extension UriVerbs on Uri {
     Object? json,
     Map<String, String>? files,
     String? file,
-  }) => Request(
-    'PUT',
-    this,
-    headers: headers,
-    text: text,
-    bytes: bytes,
-    form: form,
-    json: json,
-    files: files,
-    file: file,
-  ).send();
+  }) => _verb('PUT', this, headers, text, bytes, form, json, files, file);
 
   /// PATCH; see [post] for the body.
   Task<Response> patch({
@@ -77,17 +57,7 @@ extension UriVerbs on Uri {
     Object? json,
     Map<String, String>? files,
     String? file,
-  }) => Request(
-    'PATCH',
-    this,
-    headers: headers,
-    text: text,
-    bytes: bytes,
-    form: form,
-    json: json,
-    files: files,
-    file: file,
-  ).send();
+  }) => _verb('PATCH', this, headers, text, bytes, form, json, files, file);
 
   /// DELETE; see [post] for the body.
   Task<Response> delete({
@@ -98,18 +68,31 @@ extension UriVerbs on Uri {
     Object? json,
     Map<String, String>? files,
     String? file,
-  }) => Request(
-    'DELETE',
-    this,
-    headers: headers,
-    text: text,
-    bytes: bytes,
-    form: form,
-    json: json,
-    files: files,
-    file: file,
-  ).send();
+  }) => _verb('DELETE', this, headers, text, bytes, form, json, files, file);
 }
+
+/// The verbs with a body, one way.
+Task<Response> _verb(
+  String method,
+  Uri url,
+  Map<String, String>? headers,
+  String? text,
+  List<int>? bytes,
+  Map<String, Object?>? form,
+  Object? json,
+  Map<String, String>? files,
+  String? file,
+) => Request(
+  method,
+  url,
+  headers: headers,
+  text: text,
+  bytes: bytes,
+  form: form,
+  json: json,
+  files: files,
+  file: file,
+).send();
 
 /// Sending a [Request] as it is: a form's `submission`, a method the verbs do not name.
 ///

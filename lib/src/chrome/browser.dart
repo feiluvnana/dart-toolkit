@@ -215,7 +215,10 @@ Future<Uri> _activePort(Directory profile, Process process, Duration timeout) as
   final deadline = DateTime.now().add(timeout);
   var exited = false;
   unawaited(process.exitCode.then((_) => exited = true));
+  final token = Cancel.token;
   while (DateTime.now().isBefore(deadline)) {
+    // A cancel while it starts: the caller stops the process and erases its folder.
+    token?.check();
     if (await file.exists()) {
       final lines = (await file.readAsString()).split('\n');
       if (lines.length >= 2 && lines[0].trim().isNotEmpty) {

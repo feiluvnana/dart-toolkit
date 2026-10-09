@@ -137,7 +137,11 @@ final class _Restart implements Exception {
   /// Whether the part is kept, to be carried on with a range.
   final bool keep;
 
-  const _Restart({this.keep = false});
+  /// Whether a part's range was not honoured: the file comes in one stream from then on, so a
+  /// server that says `Accept-Ranges` and answers ranges whole is not asked again and again.
+  final bool unranged;
+
+  const _Restart({this.keep = false, this.unranged = false});
 }
 
 final class _Download {
@@ -318,6 +322,7 @@ final class _Download {
         return await _once(since);
       } on _Restart catch (restart) {
         // From the top, or from the part of the name the server gave: not a retry.
+        if (restart.unranged) _unranged = true;
         if (!restart.keep) await _forget();
       }
     }
@@ -363,7 +368,7 @@ final class _Download {
     if (status == 206 && range.start != offset) {
       unawaited(_drain(res));
       // Not the bytes the part is missing.
-      if (offset == 0) throw ClientException('206 for bytes ${range.start}- of a request for all of it', url);
+      if (offset == 0) throw _Final('206 for bytes ${range.start}- of a request for all of it', url);
       throw const _Restart();
     }
     final resumed = status == 206;
@@ -376,7 +381,7 @@ final class _Download {
       await _keepValidator(_validator, res.headers);
     }
     final total = resumed ? range.total : res.contentLength;
-    if (segments > 1 && !resumed && total != null && _ranged(res.headers)) {
+    if (segments > 1 && !_unranged && !resumed && total != null && _ranged(res.headers)) {
       if (_Segments.plan(_part, _ranges, total, segments, res.headers) case final job?) {
         await job.run(this, first: res);
         return job.modified;
@@ -388,6 +393,9 @@ final class _Download {
 
   /// Whether the server's name for the file has been settled.
   var _named = false;
+
+  /// Whether a part's range came back whole or misplaced: [segments] no longer apply.
+  var _unranged = false;
 
   /// Settles the name the server gives the file, for a download [into] a folder: the URL's own
   /// name was a guess until now. A body that is the wrong name's tail ([offset] past 0), or one
@@ -631,7 +639,7 @@ final class _Segments {
         if (res.statusCode != 206 || _contentRange(res.headers['content-range']).start != from) {
           if (res.isOk) {
             unawaited(_drain(res));
-            throw const _Restart();
+            throw const _Restart(unranged: true);
           }
           throw await _refused(res, ask);
         }

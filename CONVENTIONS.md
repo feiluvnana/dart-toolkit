@@ -95,7 +95,7 @@ This file states rules. What a release changed is in `CHANGELOG.md`.
 | 46 | **Where lines go:** `info`/`ok`/`line` to stdout; `debug`, `warn`, `error`, prompts and everything an indicator draws to stderr. So `app --json \| jq` gets only data. |
 | 47 | **A live region exists only on an ANSI terminal;** elsewhere each item writes one line when it ends. Durable lines print once, above the region, from the outermost display. |
 | 48 | **Customization is a theme of builders over typed views,** with one shared `Palette`; the views have the same names in both UIs; an ASCII palette is picked where the terminal cannot draw Unicode. |
-| 49 | **One seam per side effect,** each with a shipped fake: `Http.scope(client: Client.fake(…))`, `Shell.scope(runner: Runner.fake(…))`, `Io.scope(terminal: FakeTerminal(…), stdin:, stdout:, stderr:)`, `Clock.scope(clock: Clock.fake())`, `Env.scope`, `Store.memory()`, `cli.test(args)`. |
+| 49 | **One seam per side effect,** each with a shipped fake: `Http.scope(client: Client.fake(…))`, `Shell.scope(runner: Runner.fake(…))`, `Io.scope(terminal: FakeTerminal(…), stdin:, stdout:, stderr:)` (`FakeTerminal` behind its own `testing.dart`), `Clock.scope(clock: Clock.fake())`, `Env.scope`, `Store.memory()`, `cli.test(args)`. |
 
 ## 8. Native
 

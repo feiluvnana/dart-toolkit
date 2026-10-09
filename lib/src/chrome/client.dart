@@ -116,7 +116,8 @@ final class Device {
   );
 }
 
-/// How Chrome is started: the setting value of [Chrome.launch] and [Chrome.connect].
+/// How [Chrome.connect] starts a Chrome when none answers (`start:`); [Chrome.launch] takes the
+/// same settings as its own parameters.
 ///
 /// {@category Networking}
 final class Browser {
@@ -124,8 +125,8 @@ final class Browser {
   /// installed in the usual places.
   final String? executable;
 
-  /// Where the profile (cookies, logins) is kept: a folder store's folder. Without one, or with
-  /// a memory store, a launched browser's profile is temporary, erased on close.
+  /// Where the profile (cookies, logins) is kept: a folder store's folder; else
+  /// `Store.app('dart_toolkit') / 'chrome'`.
   final Store? store;
 
   final bool headless;
@@ -396,9 +397,15 @@ final class Chrome implements Client {
   /// Whether this client was closed or its browser has gone.
   bool get isClosed => _closed || _gone;
 
-  /// Starts a Chrome of its own, as [browser] says, and connects to it; none installed is a
-  /// [MissingException]. On macOS and Linux it dies with the program however it ends,
-  /// `kill -9` included; on Windows only [close] stops it.
+  /// Starts a Chrome of its own and connects to it; none installed is a [MissingException]. On
+  /// macOS and Linux it dies with the program however it ends, `kill -9` included; on Windows
+  /// only [close] stops it. A cancel while it starts stops it.
+  ///
+  /// [executable] is the Chrome to run (else `DART_TOOLKIT_CHROME`, else the first Chrome,
+  /// Chromium or Edge installed in the usual places); [store] keeps its profile (cookies,
+  /// logins) in a folder store's folder, else the profile is temporary, erased on close;
+  /// [headless] hides its window; [args] are more flags (a `--disable-features=` is merged with
+  /// the ones Chrome starts with); [stealth] hides the marks automation leaves.
   ///
   /// [render] is how pages are read unless a request says otherwise; [device] what they think
   /// they run on; [concurrency] how many render at once; [block] what every tab refuses to load.
@@ -409,12 +416,16 @@ final class Chrome implements Client {
   ///
   /// ```dart
   /// final chrome = await Chrome.launch(
-  ///   browser: Browser(headless: true, store: app / 'chrome'),
+  ///   headless: false, store: app / 'chrome',
   ///   render: Render(wait: Wait.load, challenge: 60.s),
   ///   device: Device.phone, concurrency: 4, proxies: [proxy], block: Resource.heavy);
   /// ```
   static Future<Chrome> launch({
-    Browser browser = const Browser(),
+    String? executable,
+    Store? store,
+    bool headless = true,
+    List<String> args = const [],
+    bool stealth = true,
     Render render = const Render(),
     Device device = Device.desktop,
     int concurrency = 4,
@@ -422,8 +433,8 @@ final class Chrome implements Client {
     Set<Resource> block = const {},
   }) async {
     _checkSettings(render, concurrency, proxies);
-    final binary = _binary(browser.executable);
-    final kept = browser.store?.folder;
+    final binary = _binary(executable);
+    final kept = store?.folder;
     final own = kept == null ? null : Directory(kept).absolute;
     await own?.create(recursive: true);
     // One folder per run, so one `rm` (ours, or the reaper's after a crash) takes it all.
@@ -436,12 +447,12 @@ final class Chrome implements Client {
       await File(_join(dir.path, 'DevToolsActivePort')).delete().catchError((Object _) => File('')); // none: fine
     }
     final command = _flags(
-      headless: browser.headless,
+      headless: headless,
       port: 0,
       profile: dir.path,
-      stealth: browser.stealth,
+      stealth: stealth,
       proxies: proxies,
-      args: browser.args,
+      args: args,
     );
     final Process process;
     try {
@@ -464,7 +475,7 @@ final class Chrome implements Client {
         concurrency: concurrency,
         device: device,
         proxies: proxies,
-        stealth: browser.stealth,
+        stealth: stealth,
         block: block,
         process: process,
         scratch: scratch,
@@ -871,22 +882,34 @@ final class Chrome implements Client {
 
   // ---- the protocol ----------------------------------------------------------------------
 
-  Future<Map<String, Object?>> _call(String method, [Map<String, Object?>? params, _Tab? tab, Duration? timeout]) {
+  /// [method] called, on [tab]'s session when given. With [cancellable] (a page's waits and
+  /// steps), a cancel of the enclosing work ends it with a [CancelledException]; the calls
+  /// that answer events and clean up are never cut short.
+  Future<Map<String, Object?>> _call(
+    String method, [
+    Map<String, Object?>? params,
+    _Tab? tab,
+    Duration? timeout,
+    bool cancellable = false,
+  ]) {
     // Returned, not thrown, so `_call(…).catchError` in an event handler catches it.
     if (_gone) return Future.error(ChromeException._gone);
+    final token = cancellable ? Cancel.token : null;
+    if (token != null && token.isCancelled) return Future.error(CancelledException.of(token));
     if (_closed && method != 'Target.closeTarget') return Future.error(ChromeException._closed);
     final id = ++_nextId;
     final completer = Completer<Map<String, Object?>>();
     _calls[id] = (completer, method);
     _socket.add(jsonEncode({'id': id, 'method': method, 'params': ?params, 'sessionId': ?tab?.session}));
     final limit = timeout ?? _render._timeout;
-    return completer.future.timeout(
+    final answer = completer.future.timeout(
       limit,
       onTimeout: () {
         _calls.remove(id);
         throw TimeoutBridge('Chrome $method', limit);
       },
     );
+    return token == null ? answer : answer.cancellable;
   }
 
   void _dispatch(Object? frame) {

@@ -19,7 +19,7 @@ void main() {
     test('a JsonPath is checked when made and goes where one does', () {
       final doc = Doc.parse('{"items": [{"id": 1}, {"id": 2}]}', DocFormat.json);
       expect(doc.$(r'$.items[*].id'.jsonPath).to<List<int>>(), [1, 2]);
-      expect(() => 'items'.jsonPath, throwsFormatException);
+      expect(doc.$('items[*].id'.jsonPath).to<List<int>>(), [1, 2], reason: 'the root\'s \$ may go unwritten');
       expect(() => JsonPath(r'$.items['), throwsFormatException);
     });
   });
@@ -60,7 +60,7 @@ void main() {
                 .json;
         expect(doc['d'].to<DateTime>(format: 'dd/MM/yyyy'), DateTime.utc(2026, 10, 8));
         expect(doc['p'].to<double>(decimal: ','), 1234.5);
-        expect(doc['ds'].to<List<DateTime>>(), [DateTime.parse('2026-10-08'), DateTime.utc(1994, 11, 6, 8, 49, 37)]);
+        expect(doc['ds'].to<List<DateTime>>(), [DateTime.utc(2026, 10, 8), DateTime.utc(1994, 11, 6, 8, 49, 37)]);
         expect(doc['ts'].to<List<Duration>>(), [
           const Duration(minutes: 3, seconds: 45),
           const Duration(minutes: 1),
@@ -140,7 +140,7 @@ void main() {
       test('to<DateTime> reads ISO 8601 text', () {
         final doc = '{"t": "2026-10-01T12:30:00Z", "d": "2026-10-01", "bad": "soon"}'.json;
         expect(doc['t'].to<DateTime>(), DateTime.utc(2026, 10, 1, 12, 30));
-        expect(doc['d'].to<DateTime>(), DateTime(2026, 10, 1));
+        expect(doc['d'].to<DateTime>(), DateTime.utc(2026, 10, 1));
         expect(() => doc['bad'].to<DateTime>(), throwsFormatException);
         expect((() => doc['missing'].to<DateTime>()).orNull, isNull);
       });
@@ -152,7 +152,7 @@ void main() {
         for (final bad in ['2024-02-30', '2023-02-29', '2024-13-45T25:61:61', '2024-01-01T24:00', '12345678']) {
           expect(() => Doc(bad).to<DateTime>(), throwsFormatException, reason: bad);
         }
-        expect(const Doc('2024-02-29 03:04').to<DateTime>(), DateTime(2024, 2, 29, 3, 4));
+        expect(const Doc('2024-02-29 03:04').to<DateTime>(), DateTime.utc(2024, 2, 29, 3, 4));
       });
 
       test('a failure names the path and the file, however the value was reached', () async {
@@ -199,13 +199,21 @@ void main() {
     });
 
     group('JSONPath', () {
+      test('a selection is an Iterable of documents', () {
+        final d = '{"items": [{"id": 1}, {"id": 2}, {"id": 3}]}'.json;
+        expect([for (final id in d.$('items[*].id')) id.to<int>()], [1, 2, 3]);
+        expect(d.$('items[*].id').where((x) => x.to<int>() > 1).map((x) => x.raw), [2, 3]);
+        expect(d.$('items[*].id').last.to<int>(), 3);
+        expect(() => d.$('nope').last, _missing(r'Missing $(nope)'));
+      });
+
       test(r'$ returns a selection: first, single, list, to (FMT-1)', () {
         final d = '{"name": "x", "items": [{"id": 1}, {"id": 2}]}'.json;
         expect(d.$(r'$.name').single.to<String>(), 'x');
         expect(() => d.$(r'$.name').to<String>(), _format(contains('a list, not a String')));
         expect(d.$(r'$.items[*].id').to<List<int>>(), [1, 2]);
         expect(d.$(r'$.items[*].id').first.to<int>(), 1);
-        expect(d.$(r'$.items[*].id').list.map((x) => x.raw), [1, 2]);
+        expect(d.$(r'$.items[*].id').map((x) => x.raw), [1, 2]);
         expect(d.$(r'$.items[*].id').length, 2);
         expect(() => d.$(r'$.items[*].id').single, _format(contains('2 matches, not one')));
         expect(() => d.$(r'$.nope').first, _missing(r'Missing $($.nope)'));
@@ -215,14 +223,14 @@ void main() {
       test(r'$..[0] applies to the node and every descendant', () {
         final d = '{"a": [1, 2], "b": {"c": [3, [4, 5]]}}'.json;
         expect(d.$(r'$..[0]').to<List<int>>(), [1, 3, 4]);
-        expect('[[1, 2], [3]]'.json.$(r'$..[0]').list.map((x) => x.raw), [
+        expect('[[1, 2], [3]]'.json.$(r'$..[0]').map((x) => x.raw), [
           [1, 2],
           1,
           3,
         ]);
       });
 
-      test('slices and unions; a filter, or no leading \$, is a FormatException', () {
+      test('slices and unions, with or without the leading \$; a filter or a stray ] is a FormatException', () {
         final d = '{"l":[0,1,2,3,4,5],"a":1,"x.y":2}'.json;
         List<Object?> q(String e) => d.$(e).to<List<Object?>>();
         expect(q(r'$.l[1:4]'), [1, 2, 3]);
@@ -231,15 +239,18 @@ void main() {
         expect(q(r'$.l[0,2]'), [0, 2]);
         expect(q(r"$['a','x.y']"), [1, 2]);
         expect(() => d.$(r'$.l[?(@ > 1)]'), throwsFormatException);
-        expect(() => d.$('l[0]'), throwsFormatException);
+        expect(q('l[0]'), [0]);
+        expect(q('..a'), [1]);
+        expect(() => d.$(r'$.l]'), throwsFormatException, reason: 'was the key "l]"');
+        expect(() => d.$(r'$.a.b]'), throwsFormatException);
       });
 
       test('.. walks any depth jsonDecode reads, in document order', () {
         final deep = '${'{"a":' * 50000}1${'}' * 50000}'.json;
-        expect(deep.$(r'$..a').list, hasLength(50000));
+        expect(deep.$(r'$..a'), hasLength(50000));
         final d = '{"a":{"id":1,"b":[{"id":2},{"c":{"id":3}}]},"id":4}'.json;
         expect(d.$(r'$..id').to<List<int>>(), [4, 1, 2, 3]);
-        expect(d.$(r'$..*').list, hasLength(9));
+        expect(d.$(r'$..*'), hasLength(9));
       });
     });
 
@@ -518,6 +529,18 @@ void main() {
   });
 
   group('yaml', () {
+    test("an apostrophe inside a plain scalar opens no string, so a comment after it is one", () {
+      const text = "a: rock 'n roll # c\nb: [rock 'n roll] # c\nc: x 'y #z'\nd: 'quoted' # c\ne: !!str 'x'";
+      expect(text.yaml.raw, {
+        'a': "rock 'n roll",
+        'b': ["rock 'n roll"],
+        'c': "x 'y",
+        'd': 'quoted',
+        'e': 'x',
+      });
+      expect(text.yaml.raw, reference.loadYaml(text));
+    });
+
     const doc = '''
 # a pubspec-shaped document
 name: dart_toolkit
@@ -565,7 +588,7 @@ multi: this is one
     test('the query API is the JSON one', () {
       final y = doc.yaml;
       expect(y['name'].to<String>(), 'dart_toolkit');
-      expect(y.$(r'$.dependencies.*').list, hasLength(2));
+      expect(y.$(r'$.dependencies.*'), hasLength(2));
       expect(y['steps'][1]['run'].to<String>(), 'dart pub get\ndart test\n');
       expect(y['notes'].to<String>(), 'folded text on two lines\n');
       expect(y['matrix']['count'].to<int>(), 3);
@@ -843,6 +866,18 @@ folded: >
   });
 
   group('toml', () {
+    test('dotted keys count toward the 1000-deep bound, as brackets do', () {
+      final deep = List.filled(100000, 'a').join('.');
+      expect(() => 'x = {$deep = 1}'.toml, _format(contains('nested deeper than 1000')));
+      expect(() => '$deep = 1'.toml, _format(contains('nested deeper than 1000')));
+      expect(() => '[$deep]'.toml, _format(contains('nested deeper than 1000')));
+      expect(
+        () => '[${List.filled(600, 'a').join('.')}]\n${List.filled(600, 'b').join('.')} = 1'.toml,
+        throwsFormatException,
+      );
+      expect('${List.filled(900, 'a').join('.')} = 1'.toml.encode(DocFormat.json), isNotEmpty);
+    });
+
     const doc = '''
 # comment
 title = "TOML \\u00e9 example"
@@ -1022,6 +1057,22 @@ name = "b"
   });
 
   group('ini', () {
+    test('what would not read back as itself is not written: a FormatException naming where', () {
+      for (final value in ['a\n# b', 'a\n; b', 'a\n\nb', '\nb', 'a\n  b', ' x\ny', 'a\rb', ''' it's "x"''']) {
+        expect(
+          () => Doc({'k': value}).encode(DocFormat.ini),
+          _format(startsWith(r'Invalid INI at $.k:')),
+          reason: value,
+        );
+      }
+      for (final key in ['a.b', ';c', '#c', '[x', ' sp', '']) {
+        expect(() => Doc({key: 1}).encode(DocFormat.ini), throwsFormatException, reason: key);
+      }
+      for (final value in ['a\nb', 'a\n[s]', ' lead', '"q"', 'x = y']) {
+        expect(Doc({'k': value}).encode(DocFormat.ini).ini['k'].raw, value, reason: value);
+      }
+    });
+
     test('sections, comments, quotes, dotted keys; every value text (FMT-9)', () {
       final i =
           '''

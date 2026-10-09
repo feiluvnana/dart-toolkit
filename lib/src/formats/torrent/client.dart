@@ -128,7 +128,8 @@ final class TorrentClient implements Finalizable {
   }
 
   /// [torrent] added and started: a [TorrentJob], a task that ends with where it landed
-  /// (`<into>/<name>`). A torrent already here is its job. [files] downloads only those indices
+  /// (`<into>/<name>`). A torrent already here is its job, run again when it ended [Stopped] or
+  /// [Failed]. [files] downloads only those indices
   /// of [Metainfo.files]; [maxPeers] caps its peers; [into] puts it elsewhere than [this.into].
   /// Files already there are checked and kept where they match.
   TorrentJob add(Torrent torrent, {String? into, List<int>? files, int? maxPeers}) {
@@ -144,7 +145,13 @@ final class TorrentClient implements Finalizable {
         }
       }
     }
-    if (_jobs[torrent.infoHash] case final job?) return job;
+    if (_jobs[torrent.infoHash] case final job?) {
+      // One stopped before the engine had it is added afresh; any other is run again.
+      if (job._id != null || !job._status.isFinal) {
+        if (job._status case Stopped() || Failed()) job.resume();
+        return job;
+      }
+    }
     final options = {
       'folder': into == null ? this.into : File(into).absolute.path,
       'files': files,
@@ -324,7 +331,11 @@ final class TorrentJob implements Task<Path> {
     }
     client._watch();
     _read();
-    // The engine says when it completes, so `Done` comes then rather than at the next poll.
+    _awaitDone(id);
+  }
+
+  /// The engine says when it completes, so `Done` comes then rather than at the next poll.
+  void _awaitDone(int id) {
     final stop = _waiting = CancelToken();
     _TorrentNative.call('wait for ${item._label}', stop, (done) => _TorrentNative.wait(client._session, id, done)).then(
       (_) => _read(),
@@ -397,13 +408,15 @@ final class TorrentJob implements Task<Path> {
     _set(Paused(item, label: label));
   }
 
-  /// Runs it again after a [pause], or a [Failed] (a new run, a new outcome to await).
-  /// Anything else stays as it is.
+  /// Runs it again after a [pause], a [Failed] or a [Stopped] (a new run, a new outcome to
+  /// await). Anything else stays as it is.
   void resume() {
     final id = _id;
-    if (id == null || (_status is! Paused && _status is! Failed)) return;
+    if (id == null || (_status is! Paused && _status is! Failed && _status is! Stopped)) return;
+    final ended = _status.isFinal;
     _control(id, 1, 'resume');
     _set(Running(item, label: label, step: 'checking', unit: Unit.bytes));
+    if (ended) _awaitDone(id);
     client._watch();
   }
 
@@ -426,7 +439,7 @@ final class TorrentJob implements Task<Path> {
   }
 
   /// Stops it: it ends [Stopped] and stays in [TorrentClient.jobs], paused in the engine,
-  /// until removed.
+  /// until removed; [resume], or adding it again, runs it again.
   @override
   void cancel([String reason = 'cancelled']) {
     if (_status.isFinal) return;
@@ -448,19 +461,55 @@ final class TorrentJob implements Task<Path> {
   /// The bytes of file [index] (of [metainfo]'s files) from [start], as they arrive: the pieces
   /// it reaches are fetched first, so a video plays while the rest downloads. It waits for the
   /// metadata and the check of what is on disk; a job that ends first ends it with its error.
+  ///
+  /// Cancelling the subscription stops the read in flight and frees the reader, even while it
+  /// waits for pieces no peer sends; a cancel where it was made ends it with a
+  /// [CancelledException].
   Stream<List<int>> read(int index, {int start = 0}) {
     if (index < 0 || start < 0) throw ArgumentError('Invalid read: index $index from $start');
-    return _stream(index, start, Cancel.token);
+    final outer = Cancel.token;
+    final stop = CancelToken();
+    void Function()? unlink;
+    StreamSubscription<List<int>>? source;
+    late final StreamController<List<int>> out;
+    out = StreamController(
+      onListen: () {
+        unlink = outer?.onCancel(() => stop.cancel(outer.reason));
+        source = _stream(index, start, stop).listen(
+          out.add,
+          onError: out.addError,
+          onDone: () {
+            unlink?.call();
+            out.close();
+          },
+        );
+      },
+      onPause: () => source?.pause(),
+      onResume: () => source?.resume(),
+      onCancel: () {
+        unlink?.call();
+        // First the native read, so the generator is not left awaiting it.
+        stop.cancel('read cancelled');
+        return source?.cancel().then<void>(
+          (_) {},
+          onError: (Object e, StackTrace st) => e is CancelledException ? null : Error.throwWithStackTrace(e, st),
+        );
+      },
+    );
+    return out.stream;
   }
 
-  Stream<List<int>> _stream(int index, int start, CancelToken? token) async* {
-    final meta = await metainfo;
+  Stream<List<int>> _stream(int index, int start, CancelToken token) async* {
+    final meta = await _unless(metainfo, token);
     if (index >= meta.files.length) {
       throw ArgumentError.value(index, 'index', 'Invalid file index, expected below ${meta.files.length}');
     }
-    await statuses.firstWhere(
-      (s) => s.isFinal || s is Running<Torrent, Path> && s.step == 'downloading',
-      orElse: () => _status,
+    await _unless(
+      statuses.firstWhere(
+        (s) => s.isFinal || s is Running<Torrent, Path> && s.step == 'downloading',
+        orElse: () => _status,
+      ),
+      token,
     );
     switch (_status) {
       case Failed(:final error, :final stackTrace):
@@ -527,8 +576,8 @@ final class TorrentJob implements Task<Path> {
       _ => false,
     };
     if (same) return;
-    // A failed job that runs again is a new run: a new outcome to await.
-    if (_status is Failed && !status.isFinal) {
+    // A failed or stopped job that runs again is a new run: a new outcome to await.
+    if ((_status is Failed || _status is Stopped) && !status.isFinal) {
       _done = _outcome();
       _end = Completer();
       _warnings.clear();
@@ -607,6 +656,26 @@ final class TorrentJob implements Task<Path> {
 
   @override
   String toString() => 'TorrentJob($label, $_status)';
+}
+
+/// [future], or a [CancelledException] once [token] is cancelled; what [future] does goes on.
+Future<T> _unless<T>(Future<T> future, CancelToken token) {
+  if (token.isCancelled) return Future.error(CancelledException.of(token));
+  final result = Completer<T>();
+  final unlink = token.onCancel(() {
+    if (!result.isCompleted) result.completeError(CancelledException.of(token));
+  });
+  future.then(
+    (value) {
+      unlink();
+      if (!result.isCompleted) result.complete(value);
+    },
+    onError: (Object error, StackTrace stackTrace) {
+      unlink();
+      if (!result.isCompleted) result.completeError(error, stackTrace);
+    },
+  );
+  return result.future;
 }
 
 /// Magnet links as text.

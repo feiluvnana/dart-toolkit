@@ -191,14 +191,19 @@ Future<void> _stopTree(List<Process> processes) async {
     } on ProcessException catch (_) {} // no taskkill: the job object ends them with this process
     return;
   }
-  // The roots first, synchronously: a `Cli` that is leaving reaps what is registered.
+  // The roots first, synchronously: a `Cli` that is leaving reaps what is registered. They are
+  // frozen, not ended, while the table is read: a root that died first would hand its children
+  // to init, out of the tree.
   for (final pid in roots) {
-    Process.killPid(pid, ProcessSignal.sigterm);
+    Process.killPid(pid, ProcessSignal.sigstop);
   }
   ProcessBridge.registerHalted(roots);
   final tree = {...roots, ...await _descendants(roots)};
-  for (final pid in tree.difference(roots.toSet())) {
+  for (final pid in tree) {
     Process.killPid(pid, ProcessSignal.sigterm);
+  }
+  for (final pid in roots) {
+    Process.killPid(pid, ProcessSignal.sigcont);
   }
   ProcessBridge.registerHalted(tree);
   // SIGCONT is the probe: it reaches a live process harmlessly and fails on a gone one.
@@ -223,8 +228,9 @@ Future<List<int>> _descendants(List<int> roots) async {
   final children = <int, List<int>>{};
   try {
     final table = await Process.run('ps', ['-A', '-o', 'pid=', '-o', 'ppid=']);
+    final space = RegExp(r'\s+');
     for (final line in '${table.stdout}'.split('\n')) {
-      if (line.trim().split(RegExp(r'\s+')).map(int.tryParse).toList() case [final pid?, final ppid?]) {
+      if (line.trim().split(space).map(int.tryParse).toList() case [final pid?, final ppid?]) {
         (children[ppid] ??= []).add(pid);
       }
     }

@@ -137,8 +137,9 @@ impl Running {
         }
     }
 
-    /// Feeds the file at `path` in; BLAKE3 maps a large one and hashes it on every core.
-    /// Every `STEP` bytes it tells `progress` how far it is and stops if the caller asked.
+    /// Feeds the file at `path` in; BLAKE3 hashes a large one on every core, a buffer at a time
+    /// (never a map, which a file truncated meanwhile turns into a SIGBUS). Every `STEP` bytes
+    /// it tells `progress` how far it is and stops if the caller asked.
     fn file(&mut self, path: &str, progress: ProgressCb) -> Result<(), String> {
         const STEP: usize = 32 << 20;
         let err = |e: std::io::Error| format!("{}: {}", path, e);
@@ -150,24 +151,40 @@ impl Running {
             }
             stopped()
         };
-        if let Running::Blake3(b) = self {
-            if total >= STEP as u64 {
-                // SAFETY: the map is read only while this call holds it; a file changed under it
-                // hashes as whatever it held, as a read would.
-                let map = unsafe { memmap2::Mmap::map(&f) }.map_err(err)?;
-                let mut done = 0u64;
-                for slice in map.chunks(STEP) {
-                    b.update_rayon(slice);
-                    done += slice.len() as u64;
-                    tell(done)?;
+        // Filled whole where it can be: a short read would hand BLAKE3 a small slice.
+        fn fill(f: &mut std::fs::File, buf: &mut [u8]) -> std::io::Result<usize> {
+            let mut n = 0;
+            while n < buf.len() {
+                match f.read(&mut buf[n..])? {
+                    0 => break,
+                    k => n += k,
                 }
-                return Ok(());
             }
+            Ok(n)
+        }
+        let mut done = 0u64;
+        if let (Running::Blake3(b), true) = (&mut *self, total >= STEP as u64) {
+            // Two buffers: the next is read on its own thread while every core hashes this one.
+            const BUF: usize = 16 << 20;
+            let (mut this, mut next) = (vec![0u8; BUF], vec![0u8; BUF]);
+            let mut n = fill(&mut f, &mut this).map_err(err)?;
+            while n > 0 {
+                let read = std::thread::scope(|scope| {
+                    let reader = scope.spawn(|| fill(&mut f, &mut next));
+                    b.update_rayon(&this[..n]);
+                    reader.join().unwrap_or_else(|_| Err(std::io::Error::other("read panicked")))
+                });
+                done += n as u64;
+                tell(done)?;
+                n = read.map_err(err)?;
+                std::mem::swap(&mut this, &mut next);
+            }
+            return Ok(());
         }
         let mut buf = vec![0u8; 1 << 20];
-        let (mut done, mut told) = (0u64, 0u64);
+        let mut told = 0u64;
         loop {
-            let n = f.read(&mut buf).map_err(err)?;
+            let n = fill(&mut f, &mut buf).map_err(err)?;
             if n == 0 {
                 return Ok(());
             }

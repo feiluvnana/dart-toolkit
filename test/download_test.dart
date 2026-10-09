@@ -360,6 +360,25 @@ void main() {
       await (base / 'f.bin').download(to: '$dir/f.bin', segments: 3);
       expect(File('$dir/f.bin').readAsBytesSync(), file);
     });
+
+    test('a server that says Accept-Ranges but answers ranges whole is one stream, asked once more', () async {
+      var asked = 0;
+      final (_, base) = await serve((r) {
+        // Past a dozen it refuses, so a download that plans its parts again and again fails.
+        if (++asked > 12) {
+          r.response.statusCode = 500;
+          return;
+        }
+        r.response.headers.set('accept-ranges', 'bytes');
+        r.response
+          ..contentLength = file.length
+          ..add(file);
+      });
+      await (base / 'f.bin').download(to: '$dir/f.bin', segments: 3);
+      expect(File('$dir/f.bin').readAsBytesSync(), file);
+      expect(asked, lessThanOrEqualTo(4), reason: 'the plan, its parts answered whole, then one stream');
+      expect(File('$dir/f.bin.part.ranges').existsSync(), isFalse);
+    });
   });
 
   group('many', () {

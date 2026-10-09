@@ -773,7 +773,7 @@ class CliCommand {
       } else if (i + 1 < args.length) {
         _set(values, option, option._spec.parse(args[++i]));
       } else {
-        throw UsageException('Option --$key needs a value');
+        throw UsageException('Option ${isLong ? '--' : '-'}$key needs a value');
       }
     }
 
@@ -988,7 +988,7 @@ final class Cli extends CliCommand {
     ctx._ended = outcome;
     return runZoned(
       () async {
-        final code = _codeOf(outcome, run);
+        final code = _codeOf(outcome, run, command);
         await _closeAll(ctx._cleanups);
         return code;
       },
@@ -997,8 +997,8 @@ final class Cli extends CliCommand {
     );
   }
 
-  /// The exit code [outcome] means, and its one line when nothing said it yet.
-  int _codeOf(Status<Object?, Object?> outcome, _RunState run) {
+  /// The exit code [outcome] of [command]'s handler means, and its one line when nothing said it yet.
+  int _codeOf(Status<Object?, Object?> outcome, _RunState run, CliCommand command) {
     switch (outcome) {
       case Done():
         return run.failedWork ? 1 : 0;
@@ -1010,7 +1010,7 @@ final class Cli extends CliCommand {
         return e.code;
       case Failed(error: final UsageException e):
         Console.error(_oneLine(e.message));
-        Io.stderr.writeln('Run "${e._command ?? name} --help" for usage.');
+        Io.stderr.writeln('Run "${e._command ?? command._fullName} --help" for usage.');
         return 64;
       case Failed(:final error, :final stackTrace):
         Console.debug('$error');

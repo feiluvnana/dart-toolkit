@@ -684,7 +684,7 @@ void main() async {
     expect(entry.compressedSize, entry.size);
   });
 
-  test('a 7z keeps the executable bit; zip and tar keep a link as a link; a folder its 0700', () async {
+  test('every container keeps the executable bit, a link as a link (a 7z too), a folder its 0700', () async {
     final script = await (src / 'run.sh').writeText('#!/bin/sh\necho ok\n');
     await script.chmod('755');
     await (src / 'note_link.txt').symlink('note.txt');
@@ -695,9 +695,53 @@ void main() async {
       await (await src.archive(to: tmp / 'a$ext')).unarchive(into: out);
       expect(FileStat.statSync(out / 'run.sh').mode & 0x1ed, 0x1ed, reason: ext);
       expect(FileStat.statSync(out / 'private_dir').mode & 0x1ff, 0x1c0, reason: ext);
-      if (ext != '.7z') expect(Link(out / 'note_link.txt').targetSync(), 'note.txt', reason: ext);
+      expect(Link(out / 'note_link.txt').targetSync(), 'note.txt', reason: ext);
     }
+    final contents = [await for (final f in (await Archive.read(tmp / 'a.7z')).contents()) f.entry.name];
+    expect(contents, isNot(contains('note_link.txt')), reason: 'contents leaves links out, as for zip');
   }, testOn: '!windows');
+
+  test(r'only: takes a \ before a character to mean it', () async {
+    await (src / 'a*b.txt').writeText('star');
+    await (src / 'axb.txt').writeText('x');
+    final zip = await src.archive(to: tmp / 'esc.zip');
+    await zip.unarchive(into: tmp / 'esc', only: r'a\*b.txt');
+    expect([await for (final f in (tmp / 'esc').files()) f.name], ['a*b.txt']);
+    await (src / '[a' / 'b]').writeText('set');
+    await (await src.archive(to: tmp / 'set.zip')).unarchive(into: tmp / 'set', only: '[a/b]');
+    expect(
+      [await for (final f in (tmp / 'set').files(only: '**')) f.relativeTo(tmp / 'set')],
+      ['[a/b]'],
+      reason: 'a set never spans a /, in Rust as in Dart',
+    );
+  }, testOn: '!windows');
+
+  test('unarchive into a mount point that is there moves in by renames on its own volume', () async {
+    final mount = tmp / 'mnt';
+    await mount.mkdir();
+    final image = tmp / 'v.dmg';
+    if ((await Process.run('hdiutil', [
+              'create',
+              '-quiet',
+              '-size',
+              '20m',
+              '-fs',
+              'APFS',
+              '-volname',
+              'TK',
+              image,
+            ])).exitCode !=
+            0 ||
+        (await Process.run('hdiutil', ['attach', '-quiet', '-nobrowse', '-mountpoint', mount, image])).exitCode != 0) {
+      markTestSkipped('hdiutil cannot make a volume here');
+      return;
+    }
+    addTearDown(() => Process.run('hdiutil', ['detach', '-force', '-quiet', mount]));
+    final zip = await src.archive(to: tmp / 'm.zip');
+    await zip.unarchive(into: mount);
+    expect(await (mount / 'note.txt').readText(), startsWith('Archive Note'));
+    expect([await for (final e in tmp.entries()) e.name], isNot(contains(startsWith('.mnt'))));
+  }, testOn: 'mac-os');
 
   test('a stream large enough for every core round-trips through zstd and xz', () async {
     final big = tmp / 'big.log';

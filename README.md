@@ -35,6 +35,7 @@ Import the topics you use; each brings `core` and what its own API hands out.
 | `torrent.dart`          | `Torrent` (`Metainfo`, `Magnet`), `TorrentClient`                                                                                                |
 | `cli.dart`              | `Cli`, typed `Option`/`Arg`, `Console`, `show`                                                                                                   |
 | `tui.dart`              | `Tui.run` terminal apps, widgets                                                                                                                 |
+| `testing.dart`          | `FakeTerminal`: the screen and keys `Console` and `Tui` draw on in a test                                                                        |
 | `native.dart`           | `Native.check()`, `Native.install()`                                                                                                             |
 
 The only runtime dependency is `path`. Hashing, archives, images and the torrent engine run in
@@ -179,7 +180,8 @@ await for (final f in dir.files(only: '**/*.mp3', ignore: ['node_modules/'], hid
 final newest = await dir.files(only: '*.log', order: Order.newest).first;
 ```
 
-`**` is recursive. Links are listed, never followed. A missing folder is a `PathNotFoundException`.
+`**` is recursive; `\*` is a literal `*`; a `..` is refused. Links are listed, never followed. A
+missing folder is a `PathNotFoundException`.
 
 **I want to copy or move.**
 
@@ -190,7 +192,8 @@ await Path('done.txt').move(into: 'archive', conflict: Conflict.rename);
 ```
 
 Exactly one of `to:` (the new path) or `into:` (a folder). A rerun skips what is there; folders
-merge, and `conflict:` settles each file. A stopped copy leaves no half file; an overwrite renames
+merge, and `conflict:` settles each file (and a folder a file or link stands in the way of). Two
+writers never land on one name at once. A stopped copy leaves no half file; an overwrite renames
 over the old file, never deletes it first.
 
 **I want to rename many files.**
@@ -261,11 +264,13 @@ print(doc.encode(DocFormat.yaml));
 final page = await url.get().html;
 final titles = page.$('h2 a').texts;
 final links = page.$('h2 a').links;                       // resolved against the page
+final next = page.$('a.next').link;                       // the first match's
 final row = page.$x('//tr[td[1]="FLAC"]').first;          // XPath comes with html.dart
 await url.get().html.save('copy.html');
 ```
 
-`text` is what a reader sees; `rawText` is the markup's text. Plurals have one entry per match.
+`text` is what a reader sees; `rawText` is the markup's text. Plurals (`texts`, `links`) have one
+entry per match; singulars (`text`, `attr`, `link`) read the first match that has one.
 
 **I want to query a CSV.**
 
@@ -282,7 +287,7 @@ await Table.lines('big.csv').where((r) => r.get<num>('price') > 10).pipe(Table.w
 ```dart
 final songs = '**/*.{mp3,flac}'.glob;                     // a FormatException here if malformed
 await Path('run.sh').chmod('755'.mode);
-final ids = r'$.items[*].id'.jsonPath;
+final ids = 'items[*].id'.jsonPath;                       // `$.items[*].id`; the `$` is optional
 ```
 
 `Mode`, `Glob`, `Css`, `XPath`, `JsonPath`, `Hex` and `Mime` are `String`s: plain text works
@@ -334,7 +339,8 @@ final titles = await crawl.items.toList();
 ```
 
 A page is `Done(page, items)`, `Skipped(page, 'robots' | 'outside')` or `Failed`. A rerun with the
-same `store:` carries on.
+same `store:` carries on. A page of another kind is read by its own hook,
+`ctx.follow(link, onResponse: readSong)`; hooks shared between crawls are a `Crawler` subclass.
 
 **I want pages a browser renders.**
 
@@ -401,8 +407,7 @@ await img.close();
 **I want to download or make a torrent.**
 
 ```dart
-final t = await Torrent.read('ubuntu.torrent');
-await t.download(into: 'iso').show('Ubuntu');
+await Torrent.read('ubuntu.torrent').download(into: 'iso').show('Ubuntu');
 final made = await Torrent.create('dist').show('Hashing');
 ```
 
@@ -453,7 +458,8 @@ final n = await Tui.run<int, String>(0,
 ```
 
 Widgets include `Field` (multi-line, suggestions), `Button`, `Clickable`, `Popup`, `Tooltip`,
-`Board(tally)`, `Markdown` and `Picture`. Test on `Io.scope(…, terminal: FakeTerminal())`.
+`Board(tally)`, `Markdown` and `Picture`. Test on `Io.scope(…, terminal: FakeTerminal())`, from
+`testing.dart`.
 
 ---
 

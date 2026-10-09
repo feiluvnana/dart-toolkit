@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:dart_toolkit/src/core.dart' show IoBridge;
 import 'package:dart_toolkit/cli.dart' show Console;
 import 'package:dart_toolkit/tui.dart';
+import 'package:dart_toolkit/testing.dart';
 import 'package:test/test.dart' hide Retry;
 
 /// Lets input reach the app and the frame it causes reach the terminal.
@@ -126,6 +127,35 @@ void main() {
       expect(await decode(['\x1b', '[A']), [KeyPress.up]);
     });
 
+    test('a UTF-8 character cut by a slow read waits past the ESC timeout', () async {
+      final term = FakeTerminal();
+      final got = await events(term, () async {
+        term.send([0xe3]);
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+        term.send([0x81, 0x82]);
+      });
+      expect(got, [const Char('あ')]);
+    });
+
+    test('a byte that does not continue a character ends it, and is read on its own', () async {
+      expect(
+        await decode([
+          [0xe3, 0x61],
+        ]),
+        [const Char('\ufffd'), const Char('a')],
+      );
+    });
+
+    test('a paste whose end marker is cut by a slow read still ends', () async {
+      final term = FakeTerminal();
+      final got = await events(term, () async {
+        term.type('\x1b[200~hello\x1b');
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+        term.type('[201~x');
+      });
+      expect(got, [isA<Paste>().having((p) => p.text, 'text', 'hello'), const Char('x')]);
+    });
+
     test('bracketed paste is one Paste with newlines', () async {
       final got = await decode(['\x1b[200~one\r\ntwo\x1b[201~']);
       expect(got.single, isA<Paste>().having((p) => p.text, 'text', 'one\ntwo'));
@@ -166,6 +196,31 @@ void main() {
       expect(Label('👍').width, 2);
       expect(Label('é').width, 1);
       expect(Label('👨‍👩‍👧').width, 2);
+    });
+
+    test('emoji presentation is two columns, every mark and jamo none (Unicode data)', () {
+      expect([
+        for (final c in ['✨', '⭐', '⏳', '⌛', '❓', '🀄', '🈁']) Style.width(c),
+      ], everyElement(2));
+      expect(Style.width('\u304b\u3099'), 2, reason: 'NFD が, as macOS names a file');
+      expect(Style.width('\u1112\u1161\u11ab'), 2, reason: 'NFD 한');
+      expect(Style.width('\u05e9\u05bc'), 1, reason: 'Hebrew with dagesh');
+      expect(Style.width('\u0e01\u0e48'), 1, reason: 'Thai with a tone mark');
+      expect(Style.width('a\u200bb'), 2);
+    });
+
+    test('a cut keeps a combining mark with its letter', () {
+      expect(Style.truncate('\u304b\u3099\u304b\u3099\u304b\u3099', 5), '\u304b\u3099\u304b\u3099…');
+    });
+
+    test('plain text drops every escape, and they take no width', () {
+      const raw = '\x1b(B\x1b[mok\x1b7\x1b8 \x1b]8;;https://x\x07link\x1b]8;;\x07';
+      expect(Style.plain(raw), 'ok link');
+      expect(Style.width(raw), 7);
+    });
+
+    test('wrapping keeps a paragraph\'s indent on each of its lines', () {
+      expect(Style.wrap('Run:\n  app build --out site', 14), ['Run:', '  app build', '  --out site']);
     });
 
     test('a wide character that does not fit is not split', () {

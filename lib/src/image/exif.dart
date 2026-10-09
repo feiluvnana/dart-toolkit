@@ -47,6 +47,37 @@ _Exif _exif(Uint8List head) {
   return (taken: null, orientation: null, camera: null);
 }
 
+/// The EXIF a file [head] of [format] carries, where the decoder reads it to turn the picture
+/// upright: a JPEG's APP1, a PNG's `eXIf` chunk, a WebP's `EXIF` chunk, a TIFF's own first IFD.
+/// `null` for a GIF or BMP, or one whose EXIF is past [head].
+_Exif? _exifOf(Uint8List head, ImageFormat format) {
+  ByteData view(int start, int end) => ByteData.sublistView(head, start, end.clamp(start, head.length));
+  switch (format) {
+    case ImageFormat.jpeg:
+      return _exif(head);
+    case ImageFormat.tiff:
+      return _tiff(ByteData.sublistView(head));
+    case ImageFormat.png:
+      for (var at = 8; at + 8 <= head.length;) {
+        final length = head[at] << 24 | head[at + 1] << 16 | head[at + 2] << 8 | head[at + 3];
+        if (_tagged(head, at + 4, 'eXIf')) return _tiff(view(at + 8, at + 8 + length));
+        at += 12 + length;
+      }
+    case ImageFormat.webp:
+      for (var at = 12; at + 8 <= head.length;) {
+        final length = head[at + 4] | head[at + 5] << 8 | head[at + 6] << 16 | head[at + 7] << 24;
+        if (_tagged(head, at, 'EXIF')) {
+          // Some writers keep JPEG's `Exif\0\0` before the TIFF header.
+          final start = _tagged(head, at + 8, 'Exif') ? at + 14 : at + 8;
+          return _tiff(view(start, at + 8 + length));
+        }
+        at += 8 + length + (length & 1);
+      }
+    case ImageFormat.gif || ImageFormat.bmp:
+  }
+  return null;
+}
+
 /// The luminance table of JPEG Annex K, which libjpeg scales by `-quality`.
 const _annexK = [
   16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55, //

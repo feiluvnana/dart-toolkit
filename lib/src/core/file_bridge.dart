@@ -26,8 +26,11 @@ abstract final class FileBridge {
 
   /// Where a write to [target] goes under [conflict], or `null` to leave what is there
   /// ([Conflict.skip], and [Conflict.newer] when [source] is not newer). [verb] and [subject]
-  /// word the [PathExistsException] of [Conflict.fail]: `Cannot verb subject: target exists`. A name [Conflict.rename] picks is claimed until [release]d, so two writers never
-  /// pick one name. Folders are never in conflict: callers merge them.
+  /// word the [PathExistsException] of [Conflict.fail]: `Cannot verb subject: target exists`.
+  ///
+  /// The answer is claimed until [release]d, and a claimed name counts as taken under every
+  /// policy, so two writers in this isolate never land on one name unasked: every non-null
+  /// answer must be released. Folders are never in conflict: callers merge them.
   static String? settle(
     String target,
     Conflict conflict, {
@@ -35,27 +38,44 @@ abstract final class FileBridge {
     required String subject,
     DateTime? source,
   }) {
-    if (_claims.contains(target) && conflict == Conflict.rename) return free(target, claimed: _claims);
-    final there = FileSystemEntity.typeSync(target, followLinks: false);
-    if (there == FileSystemEntityType.notFound) return target;
-    return switch (conflict) {
+    final claimed = _claims.containsKey(target);
+    if (!claimed && FileSystemEntity.typeSync(target, followLinks: false) == FileSystemEntityType.notFound) {
+      return _claim(target);
+    }
+    final pick = switch (conflict) {
       Conflict.skip => null,
       Conflict.overwrite => target,
-      Conflict.rename => free(target, claimed: _claims),
+      Conflict.rename => free(target, claimed: {..._claims.keys}),
       Conflict.fail => throw PathExistsException(target, const OSError(), 'Cannot $verb $subject: $target exists'),
       Conflict.newer when source == null => throw ArgumentError.value(
         conflict,
         'conflict',
         'Invalid conflict: nothing to compare with',
       ),
-      Conflict.newer => source!.isAfter(FileStat.statSync(target).modified) ? target : null,
+      // A name another writer holds has no time yet to compare with: it is left to that one.
+      Conflict.newer => !claimed && source!.isAfter(FileStat.statSync(target).modified) ? target : null,
     };
+    return pick == null ? null : _claim(pick);
   }
 
-  /// Gives up the claim [settle] made on [path], once the file is there or will not be.
-  static void release(String path) => _claims.remove(path);
+  /// Gives up one claim [settle] made on [path], once the file is there or will not be.
+  static void release(String path) {
+    final n = _claims[path];
+    if (n == null) return;
+    if (n > 1) {
+      _claims[path] = n - 1;
+    } else {
+      _claims.remove(path);
+    }
+  }
 
-  static final _claims = <String>{};
+  static String _claim(String path) {
+    _claims[path] = (_claims[path] ?? 0) + 1;
+    return path;
+  }
+
+  /// The names [settle] answered and not yet [release]d, with how many writers hold each.
+  static final _claims = <String, int>{};
 
   /// What every `Saveable.save` does: [bytes] written atomically to [to] (whose folder must be
   /// there), settled by [conflict]
@@ -79,7 +99,7 @@ abstract final class FileBridge {
       try {
         await write(target, await bytes());
       } finally {
-        if (conflict == Conflict.rename) release(target);
+        release(target);
       }
       return Path(target);
     });
@@ -97,6 +117,33 @@ abstract final class FileBridge {
 
   /// 16 random hex digits: a name no other run picks.
   static String token() => [for (var i = 0; i < 8; i++) _random.nextInt(256).toRadixString(16).padLeft(2, '0')].join();
+
+  /// A new name beside [target] for its next contents, `.name.<token>.tmp`: what every atomic
+  /// write, copy and extraction stages in, and what a watch leaves out.
+  static String temp(String target) {
+    final cut = max(target.lastIndexOf('/'), target.lastIndexOf(Platform.pathSeparator));
+    return '${target.substring(0, cut + 1)}.${target.substring(cut + 1)}.${token()}.tmp';
+  }
+
+  /// [path] deleted, whatever it is, a link never followed; one already gone is no matter.
+  static Future<void> gone(String path) async {
+    try {
+      switch (await FileSystemEntity.type(path, followLinks: false)) {
+        case FileSystemEntityType.notFound:
+          return;
+        case FileSystemEntityType.directory:
+          await Directory(path).delete(recursive: true);
+        case FileSystemEntityType.link:
+          await Link(path).delete();
+        default:
+          await File(path).delete();
+      }
+    } on FileSystemException catch (_) {} // gone already, or not ours to delete: left
+  }
+
+  /// The [PathNotFoundException] a missing input is, worded the same everywhere.
+  static PathNotFoundException notFound(String path, String message) =>
+      PathNotFoundException(path, const OSError('No such file or directory', 2), message);
 
   /// [text], read from [path], parsed by [parse]; what it cannot read is a [FormatException]
   /// naming the file — `Invalid TOML in bad.toml: …` — with the text and offset, so it prints
@@ -253,31 +300,6 @@ abstract final class FileBridge {
     }
   }
 
-  /// [path] replaced by what [fill] writes to the file it is handed: a temporary file beside
-  /// [path] with its mode (as [write] makes it), renamed over it when [fill] answers `true` and
-  /// deleted otherwise, so a failed fill leaves the old file. Where [write] writes in place,
-  /// [fill] is handed [path] itself.
-  static void replaceSync(String path, bool Function(String into) fill, {void Function(String path, int mode)? chmod}) {
-    final (:target, :mode) = _plan(path);
-    final opened = target == null ? null : _openTemp(target, mode, chmod);
-    if (opened == null) {
-      fill(path);
-      return;
-    }
-    final (tmp, out) = opened;
-    out.closeSync();
-    try {
-      if (fill(tmp.path)) {
-        renameSync(tmp, target!);
-      } else {
-        _deleteQuietly(tmp);
-      }
-    } catch (_) {
-      _deleteQuietly(tmp);
-      rethrow;
-    }
-  }
-
   /// Where the temporary file is renamed to (this path, or the file a link here leads to) and
   /// the existing file's mode. No target means write in place: for a device, a FIFO,
   /// `/dev/stdout` or a dangling link, which a rename would replace or could not reach.
@@ -320,10 +342,7 @@ abstract final class FileBridge {
   /// file, or [mode] can't be given without [chmod] (write in place, then). The name has 64
   /// random bits from a secure source, so no other writer opens it.
   static (File, RandomAccessFile)? _openTemp(String target, int? mode, void Function(String, int)? chmod) {
-    final cut = max(target.lastIndexOf('/'), target.lastIndexOf(Platform.pathSeparator));
-    final dir = target.substring(0, cut + 1), name = target.substring(cut + 1);
-    final hex = token();
-    final tmp = File('$dir.$name.$hex.tmp');
+    final tmp = File(temp(target));
     RandomAccessFile out;
     try {
       out = _open(tmp);

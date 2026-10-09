@@ -355,10 +355,10 @@ final class NativeHandle {
 /// Programs ask [Native].
 abstract final class NativeBridge {
   /// `dart_toolkit_native`: digests, archives, content-decoding, charsets, images, piece hashes.
-  static final main = NativeHandle._('native', 12);
+  static final main = NativeHandle._('native', 13);
 
   /// `dart_toolkit_torrent`: the BitTorrent engine.
-  static final torrent = NativeHandle._('torrent', 2);
+  static final torrent = NativeHandle._('torrent', 3);
 
   static List<NativeHandle> get _all => [main, torrent];
 

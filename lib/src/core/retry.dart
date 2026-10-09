@@ -29,8 +29,8 @@ final class Retry {
   /// Which errors are worth another try; `null` for the default.
   final bool Function(Object error)? when;
 
-  const Retry(this.times, {this.backoff = const Duration(milliseconds: 200), this.max, this.when})
-    : assert(times >= 0, 'Invalid times, expected at least 0');
+  /// A negative [times] is an [ArgumentError] where the policy is used.
+  const Retry(this.times, {this.backoff = const Duration(milliseconds: 200), this.max, this.when});
 
   /// Never again.
   static const none = Retry(0);
@@ -41,12 +41,10 @@ final class Retry {
   /// [body], tried as this policy says, as a [Task]: each retry a [Warned] on it.
   Task<T> run<T>(FutureOr<T> Function() body, {String label = 'retry'}) {
     _check();
-    return TaskInternals.start(label, label, (work) => attempt(body));
+    return TaskInternals.start(label, label, (work) => _loop(body));
   }
 
-  /// [body], tried as this policy says, in the work around the caller: each retry a
-  /// [Warned] there. Not a task: for a library's own loop inside its task.
-  Future<T> attempt<T>(FutureOr<T> Function() body, {void Function(RetryWarning warning)? onRetry}) async {
+  Future<T> _loop<T>(FutureOr<T> Function() body, {void Function(RetryWarning warning)? onRetry}) async {
     _check();
     final frame = _RetryFrame.inside();
     var tries = 0;
@@ -134,3 +132,14 @@ bool _permanent(Object error) =>
     error is CancelledException ||
     error is BatchException ||
     ProcessBridge.cannotRun(error);
+
+/// Not API: a [Retry] loop for a library's own work inside its task, not a task of its own.
+abstract final class RetryInternals {
+  /// [body], tried as [retry] says, in the work around the caller: each retry a [Warned] there,
+  /// or handed to [onRetry].
+  static Future<T> attempt<T>(
+    Retry retry,
+    FutureOr<T> Function() body, {
+    void Function(RetryWarning warning)? onRetry,
+  }) => retry._loop(body, onRetry: onRetry);
+}

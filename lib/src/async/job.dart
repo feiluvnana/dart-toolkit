@@ -103,10 +103,12 @@ final class Job<I, T> implements Task<T> {
     if (_remote) return _pool._link?.send({'resume': id});
     if (_status is! Paused && _status is! Failed) return;
     if (_pool._closing != null) throw StateError('Cannot resume $label: its pool is closed');
+    _pool._unfinished[item] ??= this; // unfinished again: an equal item added now gives this job
     _pool._start(this);
   }
 
-  /// Stops it if it runs, its cleanups run, and the pool forgets it: it ends [Stopped].
+  /// Stops it if it runs (it ends [Stopped], its cleanups run), and the pool forgets it. A
+  /// finished job keeps its outcome.
   void remove() {
     if (_remote) return _pool._link?.send({'remove': id});
     if (_removed) return;

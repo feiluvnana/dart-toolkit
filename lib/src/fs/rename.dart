@@ -137,16 +137,18 @@ final class Renames extends Iterable<(Path from, Path to)> {
 
 /// [moves] made as a batch: all staged under temporary names, then each landed; one that
 /// lands is added to [landed]. A target something is at is a [PathExistsException], unless it is
-/// in [replace]: what the plan meant to overwrite.
+/// in [replace]: what the plan meant to overwrite. A cancel puts back what items that never ran
+/// had staged.
 Batch<(Path, Path), Path> _run(List<(Path, Path)> moves, Set<String> replace, List<(Path, Path)>? landed) {
   Future<Map<(Path, Path), Object>>? staging;
+  final settled = <(Path, Path)>{};
   // Every source to a temporary name beside it, once, before any lands: what a cycle needs.
   Future<Map<(Path, Path), Object>> stage() => staging ??= () async {
     final staged = <(Path, Path), Object>{};
     for (final move in moves) {
       final from = move.$1;
       try {
-        final temp = p.join(p.dirname(from), '.${p.basename(from)}.${FileBridge.token()}.tmp');
+        final temp = FileBridge.temp(from);
         final entity = await FileSystemEntity.isLink(from) ? Link(from) : File(from) as FileSystemEntity;
         await FileBridge.rename(entity, temp);
         staged[move] = entity is Link ? Link(temp) : File(temp);
@@ -156,11 +158,26 @@ Batch<(Path, Path), Path> _run(List<(Path, Path)> moves, Set<String> replace, Li
     }
     return staged;
   }();
+  // What a cancel leaves staged, the items that will never run it, goes back where it was:
+  // the running items put it back before they end, so the batch ends with it done.
+  Future<void> unstage() async {
+    for (final MapEntry(key: move, value: staged) in (await staging ?? const {}).entries) {
+      if (staged is! FileSystemEntity || !settled.add(move)) continue;
+      try {
+        await FileBridge.rename(staged, move.$1);
+      } on FileSystemException catch (_) {} // best-effort: it stays at its temporary name
+    }
+  }
+
   return moves.parallelize<Path>(
     (move) => TaskInternals.start(move, '${move.$1.name} -> ${move.$2.name}', (work) async {
+      work.defer(() async {
+        if (work.isStopped) await unstage();
+      });
       final (from, to) = move;
       final staged = (await stage())[move]!;
       if (staged is! FileSystemEntity) throw staged;
+      settled.add(move);
       try {
         if (!replace.contains(to) &&
             await FileSystemEntity.type(to, followLinks: false) != FileSystemEntityType.notFound) {

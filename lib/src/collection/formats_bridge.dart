@@ -69,6 +69,9 @@ const _c1 = [
   0x0153, 0x9d, 0x017e, 0x0178,
 ];
 
+/// [type] with its article, for a failure: `an int`, `a String`.
+String article(String type) => '${'aeiouAEIOU'.contains(type[0]) ? 'an' : 'a'} $type';
+
 /// [make]'s result for [key], cached among the last 256: the CSS, XPath and JSONPath caches,
 /// bounded for programs that build queries from data.
 V compiled<K, V>(Map<K, V> cache, K key, V Function() make) {

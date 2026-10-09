@@ -25,8 +25,8 @@ Stream<Path> _listing(
   Duration? newerThan,
   Order? order,
 ) {
-  if (only != null && (only.isEmpty || p.isAbsolute(only) || only.startsWith('/'))) {
-    throw ArgumentError.value(only, 'only', 'Invalid glob: give one relative to $root');
+  if (only != null && (only.isEmpty || p.isAbsolute(only) || only.startsWith('/') || only.split('/').contains('..'))) {
+    throw ArgumentError.value(only, 'only', 'Invalid glob: give one relative to $root, inside it');
   }
   if (minSize != null && minSize < 0) throw ArgumentError.value(minSize, 'minSize', 'Invalid size: negative');
   if (newerThan != null && newerThan <= Duration.zero) {
@@ -69,7 +69,7 @@ final class _List {
     this.newerThan,
     this.order,
   ) {
-    final segments = only.replaceAll(r'\', '/').split('/')..removeWhere((s) => s.isEmpty || s == '.');
+    final segments = only.split('/')..removeWhere((s) => s.isEmpty || s == '.');
     var fixed = 0;
     // The last segment is always part of the match, never of the prefix.
     while (fixed < segments.length - 1 && !segments[fixed].contains(_wildcard)) {
@@ -87,7 +87,9 @@ final class _List {
 
   Stream<Path> run() async* {
     if (!await Directory(root).exists()) {
-      if (await FileSystemEntity.type(root) == FileSystemEntityType.notFound) throw _notFound(root, 'Cannot list');
+      if (await FileSystemEntity.type(root) == FileSystemEntityType.notFound) {
+        throw FileBridge.notFound(root, 'Cannot list');
+      }
       throw FileSystemException('Cannot list: not a folder', root);
     }
     final start = prefix.isEmpty ? root : p.join(root, prefix);
@@ -344,8 +346,8 @@ String _relative(String start, String child) {
   return Platform.isWindows ? rel.replaceAll(r'\', '/') : rel;
 }
 
-/// The characters that make a glob segment a pattern rather than a name.
-final _wildcard = RegExp(r'[*?[{]');
+/// The characters that make a glob segment a pattern rather than a name; `\` escapes one.
+final _wildcard = RegExp(r'[*?[{\\]');
 
 /// Where the `]` closing the class opened at [open] is, or -1 when it is only a `[`.
 int _classEnd(String pattern, int open) {
@@ -363,6 +365,10 @@ int _braceEnd(String pattern, int open) {
   var depth = 0, choice = false;
   for (var i = open; i < pattern.length; i++) {
     final c = pattern[i];
+    if (c == r'\') {
+      i++;
+      continue;
+    }
     if (c == '{') depth++;
     if (c == ',' && depth == 1) choice = true;
     if (c == '}' && --depth == 0) return choice ? i : -1;
@@ -374,14 +380,19 @@ int _braceEnd(String pattern, int open) {
 RegExp _globToRegex(String pattern) =>
     RegExp(_globSource(pattern), caseSensitive: !Platform.isWindows && !Platform.isMacOS);
 
-String _globSource(String pattern) {
-  final g = pattern.replaceAll(r'\', '/');
+String _globSource(String g) {
   final buffer = StringBuffer('^');
   // The ends of the braces open around `i`, innermost last: a `,` inside one is `|`.
   final braces = <int>[];
   var i = 0;
   while (i < g.length) {
     final c = g[i];
+    // `\x` is `x` itself, as gitignore and the shell read it; a `\` at the end is one.
+    if (c == r'\') {
+      buffer.write(RegExp.escape(i + 1 < g.length ? g[i + 1] : c));
+      i += 2;
+      continue;
+    }
     final classEnd = c == '[' ? _classEnd(g, i) : -1;
     final braceEnd = c == '{' ? _braceEnd(g, i) : -1;
     if (classEnd > 0) {

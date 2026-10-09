@@ -20,6 +20,7 @@ const _libraries = [
   'path',
   'process',
   'scrape',
+  'testing',
   'torrent',
   'tui',
   'xml',

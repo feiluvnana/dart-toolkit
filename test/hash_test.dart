@@ -311,6 +311,15 @@ void main() {
     late Path dir;
     setUp(() => dir = tempDir('hash_'));
 
+    test('a file truncated while BLAKE3 reads it fails or hashes what it read, never ends the process', () async {
+      final f = File(dir / 'sparse.bin');
+      (f.openSync(mode: FileMode.write)..truncateSync(4 << 30)).closeSync();
+      final task = Hash.blake3.file(f.path).settled;
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      (f.openSync(mode: FileMode.append)..truncateSync(0)).closeSync();
+      expect(await task, anyOf(isA<Done<Object?, Digest>>(), isA<Failed<Object?, Digest>>()));
+    }, testOn: '!windows');
+
     test('a file larger than the inline limit hashes and MACs as its bytes do, reporting its bytes', () async {
       final bytes = Uint8List.fromList(List.generate(40 << 20, (i) => (i * 7) & 0xff));
       final big = await (dir / 'big.bin').writeBytes(bytes);

@@ -142,14 +142,14 @@ extension PathExtensions on Path {
   Future<int> size() async => switch (_pathType(await FileSystemEntity.type(_p))) {
     PathType.file => await File(_p).length(),
     PathType.dir => await Isolate.run(() => _dirSize(_p)),
-    _ => throw _notFound(_p, 'Cannot measure'),
+    _ => throw FileBridge.notFound(_p, 'Cannot measure'),
   };
 
   /// When this was last modified, or a [PathNotFoundException]: a missing path has no last
   /// modification. [olderThan] answers `true` for one, where that is the question.
   Future<DateTime> modified() async {
     final stat = await FileStat.stat(_p);
-    return stat.type == FileSystemEntityType.notFound ? throw _notFound(_p, 'Cannot stat') : stat.modified;
+    return stat.type == FileSystemEntityType.notFound ? throw FileBridge.notFound(_p, 'Cannot stat') : stat.modified;
   }
 
   /// Whether this was last modified more than [age] ago, or is not there at all: the question
@@ -164,7 +164,7 @@ extension PathExtensions on Path {
   Future<int> free() async {
     final at = absolute._p;
     final type = await FileSystemEntity.type(at);
-    if (type == FileSystemEntityType.notFound) throw _notFound(at, 'Cannot read free space of');
+    if (type == FileSystemEntityType.notFound) throw FileBridge.notFound(at, 'Cannot read free space of');
     final dir = type == FileSystemEntityType.directory ? at : p.dirname(at);
     return Isolate.run(() => Platform.isWindows ? _Sys.freeWindows(dir) : _Sys.freePosix(dir));
   }
@@ -305,9 +305,9 @@ extension PathExtensions on Path {
   /// Every listing ([files], [dirs], [entries]) takes the same words:
   /// - [only], a glob relative to this folder: `*` any run within one segment, `**` any number
   ///   of segments (a glob with `**` is recursive; one without goes no deeper than its
-  ///   segments), `?` one character, `[abc]`/`[a-z]`/`[!abc]` a set, `{a,b}` either. Without
-  ///   it, this folder's own entries. Case follows the platform (insensitive on macOS and
-  ///   Windows).
+  ///   segments), `?` one character, `[abc]`/`[a-z]`/`[!abc]` a set, `{a,b}` either, `\*`
+  ///   a `*`. Without it, this folder's own entries; a `..` in it is an [ArgumentError]. Case
+  ///   follows the platform (insensitive on macOS and Windows).
   /// - [ignore], `.gitignore` patterns relative to this folder (`'build/'`, `'*.g.dart'`,
   ///   `'!keep.txt'`), and [gitignore], which honours the `.gitignore` files on the way and
   ///   skips `.git`: an ignored folder is never entered.
@@ -361,7 +361,8 @@ extension PathExtensions on Path {
   /// A file is copied to a temporary file beside its destination and renamed into place, so a
   /// stopped or failed copy leaves no half file and the destination, if any, as it was. A
   /// folder onto a folder merges, and [conflict] settles each file inside that is already
-  /// there: [Conflict.skip] (the default, a rerun neither destroys nor duplicates; nothing
+  /// there, and as a whole each folder a file or link stands in the way of (a link there is
+  /// never written through): [Conflict.skip] (the default, a rerun neither destroys nor duplicates; nothing
   /// copied is `Done(fresh: false)`), `overwrite` (renamed over, never deleted first),
   /// `rename` (a free `name (1).ext`), `fail` (a [PathExistsException]), `newer`.
   ///
@@ -369,7 +370,7 @@ extension PathExtensions on Path {
   /// file and files for a folder; nothing here is a [PathNotFoundException].
   Task<Path> copy({String? to, String? into, Conflict conflict = Conflict.skip}) {
     final dest = _destination('copy', to, into);
-    return TaskInternals.start(this, _label(_p), (work) => _copy(work, _p, dest, conflict));
+    return TaskInternals.start(this, FileBridge.label(_p), (work) => _copy(work, _p, dest, conflict));
   }
 
   /// Moves this file, folder or link: [to] names where, or [into] is a folder it goes in
@@ -381,19 +382,19 @@ extension PathExtensions on Path {
   /// [PathNotFoundException].
   Task<Path> move({String? to, String? into, Conflict conflict = Conflict.skip}) {
     final dest = _destination('move', to, into);
-    return TaskInternals.start(this, _label(_p), (work) => _move(work, _p, dest, conflict));
+    return TaskInternals.start(this, FileBridge.label(_p), (work) => _move(work, _p, dest, conflict));
   }
 
   /// Deletes this file, link, or empty folder; a folder with anything in it only when
   /// [recursive]. Nothing here is `Done(fresh: false)`, not an error. A link is deleted, never
   /// what it points to.
   Task<void> delete({bool recursive = false}) =>
-      TaskInternals.start(this, _label(_p), (work) => _delete(work, _p, recursive));
+      TaskInternals.start(this, FileBridge.label(_p), (work) => _delete(work, _p, recursive));
 
   /// Deletes every empty folder under this one, deepest first (so a folder holding only empty
   /// ones goes too), and this one if it ends up empty. Reports the folders as it goes; one it
   /// cannot delete is left. This folder missing is a [PathNotFoundException].
-  Task<void> deleteEmpty() => TaskInternals.start(this, _label(_p), (work) => _deleteEmpty(work, _p));
+  Task<void> deleteEmpty() => TaskInternals.start(this, FileBridge.label(_p), (work) => _deleteEmpty(work, _p));
 
   /// Moves this file or folder to the trash of the volume it is on: on macOS `~/.Trash` or the
   /// volume's `.Trashes`, on Linux the XDG trash with its `.trashinfo`, on Windows the Recycle
@@ -401,10 +402,10 @@ extension PathExtensions on Path {
   ///
   /// Where the platform would delete it for good instead (no trash on that volume, a removable
   /// or network drive), it is an [UnsupportedError] and the file stays.
-  Task<void> trash() => TaskInternals.start(this, _label(_p), (work) => _trash(work, _p));
+  Task<void> trash() => TaskInternals.start(this, FileBridge.label(_p), (work) => _trash(work, _p));
 
   /// Makes this folder, and the folders above it; one already there is `Done(fresh: false)`.
-  Task<Path> mkdir() => TaskInternals.start(this, _label(_p), (work) async {
+  Task<Path> mkdir() => TaskInternals.start(this, FileBridge.label(_p), (work) async {
     if (await FileSystemEntity.isDirectory(_p)) TaskInternals.stale(work);
     await Directory(_p).create(recursive: true);
     return this;
@@ -412,7 +413,7 @@ extension PathExtensions on Path {
 
   /// Makes this path a link to [target], and its folders; [target] is stored as it is given,
   /// so a relative one is relative to this link's folder.
-  Task<Path> symlink(String target) => TaskInternals.start(this, _label(_p), (work) async {
+  Task<Path> symlink(String target) => TaskInternals.start(this, FileBridge.label(_p), (work) async {
     await Link(_p).create(target, recursive: true);
     return this;
   });
@@ -454,11 +455,12 @@ extension PathExtensions on Path {
   /// lock.
   Future<T> lock<T>(FutureOr<T> Function() body, {bool wait = true}) => _lock(_p, body, wait);
 
-  /// The files under this folder that hold the same bytes, in groups of two or more, largest
-  /// first, each group sorted; empty files are left out. Only files sharing a size and their
-  /// first 4 KiB are read whole. Reports the files sized, then the bytes hashed; this folder
-  /// missing is a [PathNotFoundException].
-  Task<List<List<Path>>> duplicates() => TaskInternals.start(this, _label(_p), (work) => _duplicates(work, _p));
+  /// The files under this folder that hold the same bytes (the same size and BLAKE3), in groups
+  /// of two or more, largest first, each group sorted; empty files are left out. Only files
+  /// sharing a size and their first 4 KiB are read whole, on every core. Reports its step, not
+  /// an amount; this folder missing is a [PathNotFoundException].
+  Task<List<List<Path>>> duplicates() =>
+      TaskInternals.start(this, FileBridge.label(_p), (work) => _duplicates(work, _p));
 
   /// Where a copy or move to [to] or [into] lands: exactly one of them.
   String _destination(String verb, String? to, String? into) => switch ((to, into)) {
@@ -500,16 +502,6 @@ extension StringPathExtensions on String {
     });
   }
 }
-
-/// [path] as a row names it: its folder and name.
-String _label(String path) {
-  final parts = p.split(path);
-  return parts.length < 2 ? path : p.joinAll(parts.sublist(parts.length - 2));
-}
-
-/// The [PathNotFoundException] a missing input is, said the same way everywhere.
-PathNotFoundException _notFound(String path, [String message = '']) =>
-    PathNotFoundException(path, const OSError('No such file or directory', 2), message);
 
 PathType _pathType(FileSystemEntityType type) => switch (type) {
   FileSystemEntityType.file => PathType.file,

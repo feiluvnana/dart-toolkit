@@ -158,7 +158,8 @@ Stream<ServerEvent> _connection(
   request.headers.putIfAbsent('accept', () => 'text/event-stream');
   if (state.id case final id? when id.isNotEmpty) request.headers['last-event-id'] = id;
   state.stream = false;
-  final res = await _exchange(s, request, idle: false);
+  // Never through the scope's cache: a live stream is not an answer to keep or replay.
+  final res = await _chain(s, request, idle: false);
   {
     if (res.statusCode == 204) {
       unawaited(_drain(res));

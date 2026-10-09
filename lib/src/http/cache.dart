@@ -1,6 +1,7 @@
 // The response cache of `Http.scope(cache:)`: a GET's `200` kept for as long as the scope
 // says, in memory or in the scope's store. On disk, one file per URL and credential (a JSON
-// line of URL, credential, `Vary` values, headers and time, then the body), renamed into place
+// line of URL, the URL that answered, credential, `Vary` values, headers and time, then the
+// body), renamed into place
 // whole, so a validator never pairs with another answer's bytes.
 
 part of '../http.dart';
@@ -8,6 +9,9 @@ part of '../http.dart';
 /// One kept answer.
 final class _Kept {
   final String url;
+
+  /// The URL that answered, after redirects: what a served answer's links resolve against.
+  final String answered;
 
   /// The credentials and cookies it was asked with, hashed: one user's page is never another's.
   final String who;
@@ -17,10 +21,18 @@ final class _Kept {
   final int length;
   final Stream<List<int>> Function() body;
 
-  const _Kept(this.url, this.who, this.vary, this.headers, this.at, this.length, this.body);
+  const _Kept(this.url, this.answered, this.who, this.vary, this.headers, this.at, this.length, this.body);
 
-  bool answers(Request request, String who) =>
-      url == '${request.url}' && this.who == who && vary.entries.every((e) => request.headers[e.key] == e.value);
+  /// This with [headers], [at], [length] and [body] in place of its own.
+  _Kept again(Headers headers, DateTime at, int length, Stream<List<int>> Function() body) =>
+      _Kept(url, answered, who, vary, headers, at, length, body);
+
+  /// Whether this answers [request] asked by [who], its `Vary` headers read as they go out:
+  /// the request's own, else [defaults], the scope's.
+  bool answers(Request request, String who, Headers defaults) =>
+      url == '${request.url}' &&
+      this.who == who &&
+      vary.entries.every((e) => (request.headers[e.key] ?? defaults[e.key]) == e.value);
 }
 
 abstract class _Cache {
@@ -64,22 +76,31 @@ abstract class _Cache {
 
   /// [request] through [send], or answered here: an answer younger than [fresh] with no request,
   /// an older one asked for conditionally, a `304` served from here as the `200` it stands for.
+  /// [defaults] are the scope's headers, which the request goes out with where it has none.
+  /// [request] is left as it is: a retry sends it again through here.
   Future<StreamedResponse> through(
     Request request, {
     required String who,
     required Duration fresh,
+    required Headers defaults,
     required Future<StreamedResponse> Function(Request request) send,
   }) async {
     final hashed = _hash(who);
     final key = _hash('${request.url}\n$hashed');
     var stored = await load(key);
-    if (stored != null && !stored.answers(request, hashed)) stored = null;
+    if (stored != null && !stored.answers(request, hashed, defaults)) stored = null;
     if (stored != null && Clock.current.now().difference(stored.at) < fresh) return _serve(stored, request);
+    var asked = request;
     if (stored != null) {
-      if (stored.headers['etag'] case final tag?) request.headers['if-none-match'] = tag;
-      if (stored.headers['last-modified'] case final date?) request.headers['if-modified-since'] = date;
+      final tag = stored.headers['etag'];
+      final date = stored.headers['last-modified'];
+      if (tag != null || date != null) {
+        asked = request.copy();
+        if (tag != null) asked.headers['if-none-match'] = tag;
+        if (date != null) asked.headers['if-modified-since'] = date;
+      }
     }
-    final res = await send(request);
+    final res = await send(asked);
     if (res.statusCode == 304 && stored != null) {
       unawaited(_drain(res));
       // A 304 carries the headers that changed (RFC 9111 §4.3.4): they replace what is kept.
@@ -99,8 +120,9 @@ abstract class _Cache {
     }
     final kept = _Kept(
       '${request.url}',
+      '${res.url ?? request.url}',
       hashed,
-      {for (final h in varies ?? const <String>[]) h: request.headers[h]},
+      {for (final h in varies ?? const <String>[]) h: request.headers[h] ?? defaults[h]},
       Headers(res.headers)..remove('set-cookie'),
       Clock.current.now(),
       0,
@@ -117,7 +139,7 @@ abstract class _Cache {
       contentLength: kept.length,
       headers: Headers(kept.headers),
       request: request,
-      url: url ?? request.url,
+      url: url ?? Uri.parse(kept.answered),
       reasonPhrase: 'OK',
     );
     _servedKey[res] = true;
@@ -145,24 +167,27 @@ final class _MemoryCache extends _Cache {
     final entry = _entries[key];
     if (entry == null) return null;
     final (kept, body) = entry;
-    return _Kept(kept.url, kept.who, kept.vary, kept.headers, kept.at, body.length, () => Stream.value(body));
+    return kept.again(kept.headers, kept.at, body.length, () => Stream.value(body));
   }
 
+  /// Past [_cap] the body is passed through and nothing more held: a 5 GB stream read under
+  /// `cache:` is never in memory.
   @override
   Stream<List<int>> keep(String key, _Kept kept, Stream<List<int>> body) async* {
-    final out = BytesBuilder(copy: false);
+    BytesBuilder? out = BytesBuilder(copy: false);
     await for (final chunk in body) {
-      out.add(chunk);
+      if (out != null && out.length + chunk.length > _cap) out = null;
+      out?.add(chunk);
       yield chunk;
     }
-    _put(key, kept, out.takeBytes());
+    if (out != null) _put(key, kept, out.takeBytes());
   }
 
   @override
   Future<void> refresh(String key, _Kept kept, Headers headers) async {
     final entry = _entries[key];
     if (entry == null) return;
-    _put(key, _Kept(kept.url, kept.who, kept.vary, headers, Clock.current.now(), 0, Stream.empty), entry.$2);
+    _put(key, kept.again(headers, Clock.current.now(), 0, Stream.empty), entry.$2);
   }
 
   void _put(String key, _Kept kept, Uint8List body) {
@@ -211,8 +236,10 @@ final class _FolderCache extends _Cache {
       if (!found) return null;
       final meta = jsonDecode(utf8.decode(head)) as Map<String, Object?>;
       final offset = head.length + 1;
+      final url = meta['url']! as String;
       return _Kept(
-        meta['url']! as String,
+        url,
+        meta['answered'] as String? ?? url,
         meta['who']! as String,
         (meta['vary'] as Map?)?.cast<String, String?>() ?? const {},
         Headers((meta['headers']! as Map).cast<String, String>()),
@@ -228,7 +255,7 @@ final class _FolderCache extends _Cache {
   }
 
   static List<int> _meta(_Kept kept, Headers headers, DateTime at) => utf8.encode(
-    '${jsonEncode({'url': kept.url, 'who': kept.who, 'vary': kept.vary, 'headers': Map.of(headers), 'at': at.millisecondsSinceEpoch})}\n',
+    '${jsonEncode({'url': kept.url, 'answered': kept.answered, 'who': kept.who, 'vary': kept.vary, 'headers': Map.of(headers), 'at': at.millisecondsSinceEpoch})}\n',
   );
 
   @override

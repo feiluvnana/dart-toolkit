@@ -4,8 +4,8 @@ part of '../../../torrent.dart';
 /// link, whose metadata comes from peers). Either downloads, and a [TorrentClient] adds either.
 ///
 /// ```dart
-/// final t = await Torrent.read('ubuntu.torrent');   // or Torrent.decode(bytes), Torrent.parse(magnet)
-/// await t.download(into: 'iso').show('Ubuntu');
+/// await Torrent.read('ubuntu.torrent').download(into: 'iso').show('Ubuntu');
+/// // or Torrent.decode(bytes), Torrent.parse(magnet)
 /// ```
 ///
 /// {@category Formats}
@@ -86,6 +86,19 @@ sealed class Torrent {
   });
 }
 
+/// Downloading the torrent a read ends in.
+///
+/// {@category Formats}
+extension TorrentFuture on Future<Torrent> {
+  /// The torrent this ends in, downloaded as [Torrent.download] downloads it:
+  /// `await Torrent.read('a.torrent').download(into: 'iso')`.
+  Task<Path> download({required String into, List<int>? files}) => TaskInternals.start(
+    Path(into),
+    FileBridge.label(into),
+    (work) async => (await this).download(into: into, files: files),
+  );
+}
+
 /// A magnet link: what a torrent is called, its metadata still to come from peers.
 ///
 /// {@category Formats}
@@ -127,11 +140,8 @@ final class Magnet extends Torrent {
       if (raw.length == 40 && RegExp(r'^[0-9a-fA-F]{40}$').hasMatch(raw)) {
         hash = raw.toLowerCase();
       } else if (raw.length == 32) {
-        try {
-          hash = raw.base32Bytes.hex;
-        } on FormatException {
-          fail('the btih hash "$raw" is not base32');
-        }
+        if (!RegExp(r'^[A-Za-z2-7]{32}$').hasMatch(raw)) fail('the btih hash "$raw" is not base32');
+        hash = raw.base32Bytes.hex;
       } else {
         fail('the btih hash "$raw" is not 40 hex digits nor 32 base32 ones');
       }
@@ -316,6 +326,12 @@ final class Metainfo extends Torrent implements Saveable {
     } else {
       fail('neither "files" nor "length" in info');
     }
+    final count = (offset + pieceLength - 1) ~/ pieceLength;
+    if (pieces.length != count * 20) {
+      fail(
+        '${pieces.length ~/ 20} piece hashes for ${offset.humanBytes} in pieces of $pieceLength bytes, expected $count',
+      );
+    }
     final trackers = <Uri>{
       if (root['announce'] case final Uint8List a) ?Uri.tryParse(utf8.decode(a, allowMalformed: true)),
       if (root['announce-list'] case final List<Object> tiers)
@@ -336,8 +352,9 @@ final class Metainfo extends Torrent implements Saveable {
       trackers: List.unmodifiable(trackers),
       comment: textOf('comment'),
       createdBy: textOf('created by'),
+      // A date past what a DateTime holds is no date, as in every client.
       creationDate: switch (root['creation date']) {
-        final int s => DateTime.fromMillisecondsSinceEpoch(s * 1000, isUtc: true),
+        final int s when s.abs() <= _maxSeconds => DateTime.fromMillisecondsSinceEpoch(s * 1000, isUtc: true),
         _ => null,
       },
       isPrivate: info['private'] == 1,
@@ -420,6 +437,9 @@ final class Metainfo extends Torrent implements Saveable {
   @override
   String toString() => 'Metainfo($name, ${size.humanBytes}, ${files.length} files)';
 }
+
+/// The seconds since the epoch a [DateTime] can hold either side.
+const _maxSeconds = 8640000000000;
 
 /// [b], text in the charset [encoding] names (a torrent's `encoding` key), UTF-8 without one;
 /// what does not decode becomes U+FFFD, never a list of numbers.

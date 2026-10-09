@@ -16,6 +16,7 @@ Future<StreamedResponse> _exchange(_Settings s, Request request, {bool idle = tr
         '${request.headers['authorization'] ?? s.credentialFor(request.url)?.reveal ?? ''}\n'
         '${request.headers['cookie'] ?? s.jar._headerFor(request.url) ?? ''}',
     fresh: cache,
+    defaults: s.headers,
     send: (r) => _chain(s, r, idle: idle, step: step),
   );
 }
@@ -138,7 +139,8 @@ Future<R> _retrying<R>(
     return again && (policy.when?.call(e) ?? true);
   }
 
-  return Retry(policy.times, backoff: policy.backoff, max: policy.max, when: worth).attempt(
+  return RetryInternals.attempt(
+    Retry(policy.times, backoff: policy.backoff, max: policy.max, when: worth),
     () async {
       if (asked case final wait?) {
         asked = null;
@@ -197,16 +199,25 @@ bool _replayable(String method) => method != 'POST' && method != 'PATCH';
 
 // ---- the shared client ----------------------------------------------------------------------
 
-/// The client of requests in no scope's `client:`: made on first use and shared, so back-to-back
-/// requests reuse one keep-alive connection (and one TLS handshake); closed a turn after the
-/// last request ends, since an idle socket would hold the process open.
+/// The client of requests in no scope's `client:`: made on first use and shared, so requests
+/// reuse one keep-alive connection (and one TLS handshake), with a script's work between them
+/// too. Closed once nothing has been in flight for [_keepAlive], since an idle socket holds the
+/// process open: a script without `Cli` ends at most that much after its last request; `Cli.run`
+/// closes it at once.
 IoClient? _shared;
 var _leases = 0;
+Timer? _idle;
+
+/// How long the shared client keeps idle connections: longer than parsing a page or writing a
+/// file between two requests, short enough not to be felt when a script ends.
+const _keepAlive = Duration(milliseconds: 100);
 
 /// What [s] sends through, and the release of the lease on it.
 (Client, void Function()) _transport(_Settings s) {
   if (s.client case final client?) return (client, () {});
-  final client = _shared ??= IoClient();
+  _idle?.cancel();
+  _idle = null;
+  final client = _shared ??= _openShared();
   _leases++;
   var released = false;
   return (
@@ -215,13 +226,25 @@ var _leases = 0;
       if (released) return;
       released = true;
       if (--_leases > 0) return;
-      Timer.run(() {
-        if (_leases > 0 || !identical(_shared, client)) return;
-        _shared = null;
-        unawaited(client.close().catchError((Object _) {})); // best-effort: nothing is in flight
-      });
+      // In the root zone: a fake clock or a cancel scope around the last request is not its.
+      _idle = Zone.root.createTimer(_keepAlive, () => unawaited(_closeShared()));
     },
   );
+}
+
+IoClient _openShared() {
+  IoBridge.stops.add(_closeShared);
+  return IoClient();
+}
+
+/// Closes the shared client: idle for [_keepAlive], or `Cli.run` ending.
+Future<void> _closeShared() async {
+  _idle?.cancel();
+  _idle = null;
+  IoBridge.stops.remove(_closeShared);
+  final client = _shared;
+  _shared = null;
+  await client?.close().catchError((Object _) {}); // best-effort: nothing is in flight
 }
 
 // ---- time limits ----------------------------------------------------------------------------

@@ -47,6 +47,8 @@ abstract interface class Batch<I, T> implements Future<List<T>> {
       }
       if (batch._started) throw StateError('Cannot merge a batch that has started: merge batches as they are made');
       batch._gates.add(gate);
+      // Its outcome is the merged batch's: it is never news on its own.
+      batch._done.future.ignore();
     }
     return _Merged(all.cast<_Batch<I, T>>());
   }
@@ -77,6 +79,7 @@ extension IterableParallelize<I> on Iterable<I> {
   }) {
     _checkConcurrency(concurrency);
     _checkTimeout(timeout);
+    retry._check();
     final items = this;
     final count = items is List<I> || items is Set<I> ? items.length : null;
     return _Batch<I, T>(_IterableSource(items), count, work, concurrency, retry, timeout, isolate);
@@ -103,6 +106,7 @@ extension StreamParallelize<I> on Stream<I> {
   }) {
     _checkConcurrency(concurrency);
     _checkTimeout(timeout);
+    retry._check();
     return _Batch<I, T>(_StreamSource(this), null, work, concurrency, retry, timeout, isolate);
   }
 }
@@ -175,15 +179,12 @@ FutureOr<_Outcome<T>> _attempt<T>(
   // A batch hears its own cancel once for all its items, and abandons the ones still running.
   final void Function() unlisten;
   if (abandon != null && timeout == null) {
-    abandon.stop = () => settle(_Stop(_reasonOf(token)));
+    abandon.stop = () => settle(classify(CancelledException.of(token), StackTrace.current));
     unlisten = _noUnlink;
   } else {
     unlisten = token.onCancel(() {
-      grace = Timer(_grace, () {
-        timedOut
-            ? settle(_Error(TimeoutBridge(subject, timeout!), StackTrace.current))
-            : settle(_Stop(_reasonOf(token)));
-      });
+      // Unheard, it ends as it would have had it thrown the cancel: a scope's deadline is a timeout.
+      grace = Timer(_grace, () => settle(classify(CancelledException.of(token), StackTrace.current)));
     });
   }
   if (timeout != null) {
@@ -291,8 +292,10 @@ final class _StreamSource<I> extends _Source<I> {
   @override
   List<I> rest() => const [];
 
+  /// Ends a pending [next] with no item; the cancel closes it so the intake stops at once.
   @override
-  Future<void> close() => _at.cancel();
+  Future<void> close() => _closed ??= _at.cancel();
+  Future<void>? _closed;
 }
 
 /// At most [_free] holders at once, served in turn.
@@ -330,7 +333,7 @@ final class _Gate {
 
 // ---- the batch -----------------------------------------------------------------------------
 
-final class _Batch<I, T> implements Batch<I, T> {
+final class _Batch<I, T> with _Awaitable<List<T>> implements Batch<I, T> {
   final _Source<I> _source;
   int? _count;
   final FutureOr<T> Function(I item) _work;
@@ -349,7 +352,6 @@ final class _Batch<I, T> implements Batch<I, T> {
   final _valueListeners = <StreamController<T>>[];
   final _done = Completer<List<T>>();
   final _end = Completer<List<Status<I, T>>>();
-  final _cancelled = Completer<void>();
   bool _started = false, _exhausted = false, _finished = false;
   int _running = 0, _ended = 0;
   (Object, StackTrace)? _bug, _sourceError;
@@ -361,7 +363,8 @@ final class _Batch<I, T> implements Batch<I, T> {
     _token = token;
     _unlink = unlink;
     _token.onCancel(() {
-      _cancelled.complete();
+      // A source waiting for its next item gives none.
+      _source.close().ignore();
       // What has not stopped on its own within the grace is left behind.
       Timer(_grace, () {
         for (final slot in [..._slots]) {
@@ -417,7 +420,7 @@ final class _Batch<I, T> implements Batch<I, T> {
     if (_bug case (final e, final st)) {
       controller.addError(e, st);
     } else if (_token.isCancelled) {
-      controller.addError(CancelledException(_reasonOf(_token)));
+      controller.addError(CancelledException.of(_token));
     }
     controller.close();
   }
@@ -433,7 +436,7 @@ final class _Batch<I, T> implements Batch<I, T> {
   Future<Map<I, T>> toMap() async {
     final statuses = await settled;
     if (_bug case (final e, final st)) Error.throwWithStackTrace(e, st);
-    if (_token.isCancelled) throw CancelledException(_reasonOf(_token));
+    if (_token.isCancelled) throw CancelledException.of(_token);
     return {
       for (final status in statuses)
         if (status case Done(:final item, :final value)) item: value,
@@ -457,7 +460,7 @@ final class _Batch<I, T> implements Batch<I, T> {
         final (I,)? next;
         try {
           final pending = _source.next();
-          next = pending is Future<(I,)?> ? await Future.any([pending, _cancelled.future.then((_) => null)]) : pending;
+          next = pending is Future<(I,)?> ? await pending : pending;
         } catch (e, st) {
           _release();
           _sourceError = (e, st);
@@ -528,9 +531,6 @@ final class _Batch<I, T> implements Batch<I, T> {
   void _progress(_Slot<I, T> slot) {
     final parent = _parent;
     if (parent == null) return;
-    // The clock is a zone lookup: asked only every 32 items. The last report is the finish's.
-    if (++_unreported < 32) return;
-    _unreported = 0;
     final now = Clock.current.elapsed;
     if (now - _reported < _reportEvery) return;
     _reported = now;
@@ -538,7 +538,6 @@ final class _Batch<I, T> implements Batch<I, T> {
   }
 
   Duration _reported = const Duration(days: -1);
-  int _unreported = 31;
   static const _reportEvery = Duration(milliseconds: 50);
 
   void _bugged(Object error, StackTrace stackTrace) {
@@ -571,7 +570,7 @@ final class _Batch<I, T> implements Batch<I, T> {
     if (_token.isCancelled) {
       // A stop is no news: it is never an unhandled error.
       _done.future.ignore();
-      _done.completeError(CancelledException(_reasonOf(_token)));
+      _done.completeError(CancelledException.of(_token));
       return;
     }
     final failures = [
@@ -591,32 +590,11 @@ final class _Batch<I, T> implements Batch<I, T> {
     }
   }
 
-  // ---- Future<List<T>>
+  @override
+  Future<List<T>> get _future => _done.future;
 
   @override
-  Stream<List<T>> asStream() {
-    return _done.future.asStream();
-  }
-
-  @override
-  Future<List<T>> catchError(Function onError, {bool Function(Object error)? test}) {
-    return _done.future.catchError(onError, test: test);
-  }
-
-  @override
-  Future<R> then<R>(FutureOr<R> Function(List<T> value) onValue, {Function? onError}) {
-    return _done.future.then(onValue, onError: onError);
-  }
-
-  @override
-  Future<List<T>> timeout(Duration timeLimit, {FutureOr<List<T>> Function()? onTimeout}) {
-    return _done.future.timeout(timeLimit, onTimeout: onTimeout);
-  }
-
-  @override
-  Future<List<T>> whenComplete(FutureOr<void> Function() action) {
-    return _done.future.whenComplete(action);
-  }
+  String get _subject => '${_count ?? '?'} items';
 
   @override
   String toString() => 'Batch(${_slots.length}/${_count ?? '?'})';
@@ -711,17 +689,24 @@ final class _Slot<I, T> extends _Sink with _Freshness {
 }
 
 /// Batches merged by [Batch.merge].
-final class _Merged<I, T> implements Batch<I, T> {
+final class _Merged<I, T> with _Awaitable<List<T>> implements Batch<I, T> {
   final List<_Batch<I, T>> _parts;
-  late final Future<List<T>> _done = _all();
+  @override
+  late final Future<List<T>> _future = _all();
 
-  _Merged(this._parts);
+  _Merged(this._parts) {
+    // Its outcome is news, as a batch's is, from the start.
+    _future;
+  }
+
+  @override
+  String get _subject => '${count ?? '?'} items';
 
   Future<List<T>> _all() async {
     final settled = await this.settled;
     final firstBug = _parts.map((p) => p._bug).nonNulls.firstOrNull;
     if (firstBug case (final e, final st)) Error.throwWithStackTrace(e, st);
-    if (_parts.any((p) => p._token.isCancelled)) throw CancelledException(_reasonOf(_parts.first._token));
+    if (_parts.where((p) => p._token.isCancelled).firstOrNull case final p?) throw CancelledException.of(p._token);
     final failures = [
       for (final s in settled)
         if (s is Failed<I, T>) s,
@@ -768,24 +753,6 @@ final class _Merged<I, T> implements Batch<I, T> {
       part.cancel(reason);
     }
   }
-
-  @override
-  Stream<List<T>> asStream() => _done.asStream();
-
-  @override
-  Future<List<T>> catchError(Function onError, {bool Function(Object error)? test}) =>
-      _done.catchError(onError, test: test);
-
-  @override
-  Future<R> then<R>(FutureOr<R> Function(List<T> value) onValue, {Function? onError}) =>
-      _done.then(onValue, onError: onError);
-
-  @override
-  Future<List<T>> timeout(Duration timeLimit, {FutureOr<List<T>> Function()? onTimeout}) =>
-      _done.timeout(timeLimit, onTimeout: onTimeout);
-
-  @override
-  Future<List<T>> whenComplete(FutureOr<void> Function() action) => _done.whenComplete(action);
 }
 
 /// [streams] as one, every event of each as it comes; it ends when all have.
@@ -903,8 +870,9 @@ final class _Worker {
     final id = _next++;
     final done = Completer<Object?>();
     _pending[id] = (done, sink);
-    final unlisten = token.onCancel(() => _inbox.send((id, #cancel, _reasonOf(token))));
+    // The item goes first: a cancel the isolate hears before it would be dropped.
     _inbox.send((id, #run, item));
+    final unlisten = token.onCancel(() => _inbox.send((id, #cancel, _reasonOf(token))));
     try {
       return await done.future as T;
     } finally {

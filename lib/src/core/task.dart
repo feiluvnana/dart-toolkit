@@ -116,7 +116,7 @@ mixin _Freshness on _Sink {
   bool _freshFor(Object? value, bool own) => own && !(_hasChild && identical(value, _childValue) && !_childFresh);
 }
 
-final class _Task<T> extends _Sink with _Freshness implements Task<T> {
+final class _Task<T> extends _Sink with _Freshness, _Awaitable<T> implements Task<T> {
   @override
   final Object? item;
   @override
@@ -189,7 +189,11 @@ final class _Task<T> extends _Sink with _Freshness implements Task<T> {
     _final = status;
     // Most work defers nothing: it ends at once, with no turn of the event loop spent.
     if (_cleanups.isEmpty) return _ended(status);
-    _runCleanups(_cleanups, status, _warned).then((_) => _ended(status));
+    // Cleanups run whatever stopped the work: a cancel around it does not reach them, and what
+    // they start is still this task's part.
+    CancelInternals.run(() => _runCleanups(_cleanups, status, _warned), CancelToken(), {
+      _sinkKey: this,
+    }).then((_) => _ended(status));
   }
 
   void _ended(Status<Object?, T> status) {
@@ -246,41 +250,11 @@ final class _Task<T> extends _Sink with _Freshness implements Task<T> {
     }
   }
 
-  // ---- Future<T>
+  @override
+  Future<T> get _future => _done.future;
 
   @override
-  Stream<T> asStream() {
-    return _done.future.asStream();
-  }
-
-  @override
-  Future<T> catchError(Function onError, {bool Function(Object error)? test}) {
-    return _done.future.catchError(onError, test: test);
-  }
-
-  @override
-  Future<R> then<R>(FutureOr<R> Function(T value) onValue, {Function? onError}) {
-    return _done.future.then(onValue, onError: onError);
-  }
-
-  @override
-  /// The value, or [onTimeout]'s (else a [TimeoutException] naming this task) if it takes
-  /// longer than [timeLimit]. Either way a task out of time is cancelled: nobody waits for it.
-  Future<T> timeout(Duration timeLimit, {FutureOr<T> Function()? onTimeout}) {
-    return _done.future.timeout(
-      timeLimit,
-      onTimeout: () {
-        cancel('timed out after ${timeLimit.humanized}');
-        if (onTimeout != null) return onTimeout();
-        throw TimeoutBridge(label, timeLimit);
-      },
-    );
-  }
-
-  @override
-  Future<T> whenComplete(FutureOr<void> Function() action) {
-    return _done.future.whenComplete(action);
-  }
+  String get _subject => label;
 
   @override
   String toString() => 'Task($label, $_status)';
@@ -330,6 +304,43 @@ final class _TaskWork<T> extends _BaseWork {
 
   @override
   void _markStale() => _task._fresh = false;
+}
+
+/// A [Future] of [_future]'s outcome, timed out as a [Task] is: what is out of time is cancelled
+/// (nobody waits for it) and the [TimeoutException] names [_subject].
+mixin _Awaitable<T> implements Future<T> {
+  Future<T> get _future;
+
+  /// What a timeout names.
+  String get _subject;
+
+  void cancel([String reason = 'cancelled']);
+
+  @override
+  Stream<T> asStream() => _future.asStream();
+
+  @override
+  Future<T> catchError(Function onError, {bool Function(Object error)? test}) =>
+      _future.catchError(onError, test: test);
+
+  @override
+  Future<R> then<R>(FutureOr<R> Function(T value) onValue, {Function? onError}) =>
+      _future.then(onValue, onError: onError);
+
+  /// The value, or [onTimeout]'s (else a [TimeoutException] naming this work) if it takes
+  /// longer than [timeLimit]. Either way work out of time is cancelled: nobody waits for it.
+  @override
+  Future<T> timeout(Duration timeLimit, {FutureOr<T> Function()? onTimeout}) => _future.timeout(
+    timeLimit,
+    onTimeout: () {
+      cancel('timed out after ${timeLimit.humanized}');
+      if (onTimeout != null) return onTimeout();
+      throw TimeoutBridge(_subject, timeLimit);
+    },
+  );
+
+  @override
+  Future<T> whenComplete(FutureOr<void> Function() action) => _future.whenComplete(action);
 }
 
 /// What every [Work] in this library can do beyond the interface.

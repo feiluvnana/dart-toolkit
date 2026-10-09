@@ -154,6 +154,14 @@ void main() {
   });
 
   group('entities', () {
+    test('every HTML 5 named reference decodes, as package:html decodes it', () {
+      expect(
+        '<p>Dvo&rcaron;&aacute;k &ccaron;&lstrok;&zcaron; &rightarrow; &langle;x&rangle; &pm;1</p>'.html.text,
+        'Dvořák čłž → ⟨x⟩ ±1',
+      );
+      expect('<p>&zzz; &rightarrow</p>'.html.text, '&zzz; &rightarrow', reason: 'only legacy names go without ;');
+    });
+
     test('named, decimal, hex, and unterminated', () {
       expect('&lt;a&gt; &amp; &#65;&#x42; &nbsp;x &unknown; &amp'.html.text, '<a> & AB x &unknown; &');
       expect(
@@ -185,11 +193,11 @@ void main() {
   group('serialisation', () {
     test('is markup, everywhere, and round-trips', () {
       const src = '<p class="a&amp;b">x &lt; y</p>';
-      expect(src.html.body.innerMarkup, src);
+      expect(src.html.body.markup, '<body>$src</body>');
       expect(src.html.encode(), '<html><head></head><body>$src</body></html>');
       expect('<r><e/></r>'.xml.encode(), '<?xml version="1.0" encoding="UTF-8"?>\n<r><e/></r>\n');
       const elements = '<div class="a"><p>x &amp; y</p><br><img src="i.png"></div>';
-      expect(elements.html.body.innerMarkup, elements);
+      expect(elements.html.body.markup, '<body>$elements</body>');
     });
 
     test('a newline after <pre> is dropped once, so a second one survives a round trip', () {
@@ -222,7 +230,7 @@ void main() {
       expect(div.children.map((e) => e.name), ['a', 'c']);
     });
 
-    test('DOM mutations: remove, replace, clear, append, prepend', () {
+    test('DOM mutations: remove, replace, clear, append', () {
       final doc = '<div><p class="del">1</p><p id="target">2</p><span class="del">3</span></div>'.html;
       // Elements.remove()
       doc.$('.del').detach();
@@ -234,11 +242,10 @@ void main() {
       target.replace(replacement);
       expect(doc.$('p').first.text, 'new');
 
-      // append / prepend
+      // append
       final div = doc.$('div').first;
-      div.prepend(Element('header')..append(Text('Start')));
       div.append(Element('footer')..append(Text('End')));
-      expect(div.children.map((e) => e.name).toList(), ['header', 'p', 'footer']);
+      expect(div.children.map((e) => e.name).toList(), ['p', 'footer']);
 
       // clear
       div.clear();
@@ -307,6 +314,22 @@ void main() {
   });
 
   group('css selectors', () {
+    test('nesting past 256 is a FormatException, not a stack overflow', () {
+      final page = '<ul><li>a</li></ul>'.html;
+      expect(page.$('${':not(' * 201}p${')' * 201}'), hasLength(5));
+      expect(() => page.$('${':not(' * 5000}p${')' * 5000}'), throwsFormatException);
+      expect(() => page.$('ul${':has(' * 5000}li${')' * 5000}'), throwsFormatException);
+    });
+
+    test('a relative selector finds as deep as its combinators reach, from any depth', () {
+      final page = '<ul id=u><li>1<ul><li>2</li></ul></li><li>3</li></ul><p>x</p>'.html;
+      final ul = page.$('#u').first;
+      expect(ul.$('> li').map((e) => e.nodes.first.text), ['1', '3']);
+      expect(ul.$('> li > ul > li').texts, ['2']);
+      expect(ul.$('> li li').texts, ['2']);
+      expect(ul.$('+ p').texts, ['x']);
+    });
+
     test('combinators, attribute operators, pseudo-classes, lists', () {
       final doc =
           '''
@@ -402,7 +425,7 @@ void main() {
       expect(d.$('> body').single.name, 'body');
       expect('<r><a/><b><a/></b></r>'.xml.$('> a').length, 1);
       expect(d.$('ul').$('> li').map((e) => e.nodes.first.text), ['1', 'a', 'b', '2']);
-      expect(d.$('ul').$x('li').elements.map((e) => e.nodes.first.text), ['1', 'a', 'b', '2']);
+      expect(d.$('ul').$x('li').map((e) => (e as Element).nodes.first.text), ['1', 'a', 'b', '2']);
       expect(d.$('li').$x('following-sibling::li[1]').texts, ['b', '2']);
     });
 
@@ -512,7 +535,7 @@ void main() {
       );
       expect((() => doc.$('b').first.attr('href')).orNull, isNull);
       expect(doc.$('i').firstOrNull?.attr('href'), isNull);
-      expect(doc.$x('//a').elements.first.attr('href'), '/x');
+      expect(doc.$x('//a').attr('href'), '/x');
       expect((() => doc.$('b').first.attr('href')).or('none'), 'none');
       expect(doc.$('b').first.attr('href', or: 'none'), 'none');
       expect(doc.$('a').first.attr('href', or: 'none'), '/x', reason: 'a present value wins');
@@ -626,20 +649,6 @@ void main() {
       expect(doc.$x('//a/@href').attrs('href'), [null, null], reason: 'an attribute has no attributes');
     });
 
-    test('pairs reads th/td rows, dt/dd and Label: value lines, the first of a label kept', () {
-      final doc =
-          '''<div class="info">
-        <table><tr><th>Size:</th><td>4 MB</td></tr><tr><th>Size</th><td>5 MB</td></tr><tr><td>a</td><td>b</td></tr></table>
-        <dl><dt>Released</dt><dd>2019</dd></dl>
-        <p>Password unrar: <span>mrcong.com</span></p><p>http://example.com</p><p>Empty: </p>
-      </div>'''
-              .html;
-      expect(doc.$('.info').first.pairs, {'Size': '4 MB', 'Released': '2019', 'Password unrar': 'mrcong.com'});
-      expect(doc.$('dl').first.pairs, {'Released': '2019'});
-      expect('<p>x</p>'.html.$('p').first.pairs, isEmpty);
-      expect(() => doc.$('.none').first.pairs, throwsA(isA<MissingException>()));
-    });
-
     test('an XPath selection reads as a CSS one does, and its attributes are links (FMT-26)', () {
       final doc = Html.parse(
         '<div><a href="/a" class="x">one</a><a class="y">two</a><table><tr><th>k</th><td>v</td></tr></table></div>',
@@ -647,10 +656,9 @@ void main() {
       );
       final links = doc.$x('//a');
       expect(links.attrs('class'), ['x', 'y']);
-      expect(links.elements.first.lines, ['one']);
+      expect(links.whereType<Element>().first.lines, ['one']);
       expect(links.first.markup, '<a href="/a" class="x">one</a>');
-      expect(doc.$x('//table').elements.first.table.rows.single, {'c1': 'k', 'c2': 'v'});
-      expect(doc.$x('//div').elements.first.pairs, {'k': 'v'});
+      expect((doc.$x('//table').first as Element).table.rows.single, {'c1': 'k', 'c2': 'v'});
       expect(doc.$x('//a/@href').links, [Uri.parse('https://ex.com/a')]);
       expect(doc.$x('//a/@href').texts, ['/a']);
       expect(() => doc.$x('//none').first, throwsA(isA<MissingException>()));
@@ -660,6 +668,22 @@ void main() {
       final doc =
           '<ul id="u"><li class="x"><a href="/a">A</a></li><li><a>B</a></li><li class="x"><a href="b">C</a></li></ul>'
               .html;
+
+      test('text, attr and link read the first match, naming the query when there is none', () {
+        final page = Html.parse(doc.encode(), url: Uri.parse('https://ex.com/d/'));
+        expect(page.$('a').text, 'A');
+        expect(page.$('li a:not([href])').attr('href', or: '-'), '-');
+        expect(page.$('a').attr('href'), '/a');
+        expect(page.$('li:nth-child(2) a, li:nth-child(3) a').attr('href'), 'b', reason: 'the first that has it');
+        expect(page.$('li:nth-child(2) a, li:nth-child(3) a').link, Uri.parse('https://ex.com/d/b'));
+        expect(page.$x('//a').attr('href'), '/a', reason: 'an XPath selection reads as a CSS one');
+        expect(() => page.$('h1').text, throwsA(isA<MissingException>().having((e) => '$e', 'text', contains('"h1"'))));
+        expect(
+          () => page.$('li').attr('href'),
+          throwsA(isA<MissingException>().having((e) => '$e', 'text', contains('"li"'))),
+        );
+        expect(() => page.$('li').link, throwsA(isA<MissingException>()));
+      });
 
       test('attrs, markup and table', () {
         expect(doc.$('a').attrs('href'), ['/a', null, 'b']);
@@ -763,7 +787,7 @@ void main() {
       expect('${a.link}', 'https://site.test/b3/y');
       base.detach();
       expect('${a.link}', 'https://site.test/dir/y', reason: 'the <base> left the tree');
-      doc.head.prepend('<base href="/b4/">'.html.$('base').first);
+      doc.head.append('<base href="/b4/">'.html.$('base').first);
       expect('${a.link}', 'https://site.test/b4/y', reason: 'a parsed <base> moved in');
       doc.head.clear();
       expect('${a.link}', 'https://site.test/dir/y');
@@ -958,29 +982,23 @@ void main() {
       expect(doc.$x('//p[contains(., "hidden")]'), isEmpty);
       expect(doc.$x('//div[.="onetwo"]'), hasLength(1), reason: 'inline elements are not kept apart');
     });
-
-    test('Html.decodeEntities decodes as HTML text does (FMT-37)', () {
-      expect(Html.decodeEntities('caf&eacute; &amp; &lt;b&gt; &#x41;'), 'café & <b> A');
-      expect(Html.decodeEntities('no entities'), 'no entities');
-    });
   });
 
   group('tree edits', () {
-    test('classes is a live set: add and remove write the attribute (FMT-31)', () {
-      final p = '<p class="a  b">x</p><i>y</i>'.html;
-      final el = p.$('p').first;
-      expect(el.classes, {'a', 'b'});
-      expect(el.classes.add('c'), isTrue);
-      expect(el.classes.add('a'), isFalse);
-      expect(el.attr('class'), 'a b c');
-      el.classes.remove('a');
-      expect(el.attributes['class'], 'b c');
-      final i = p.$('i').first;
-      i.classes.add('only');
-      expect(i.attributes['class'], 'only', reason: 'an element with no class gains one');
-      i.classes.remove('only');
-      expect(i.attributes.containsKey('class'), isFalse);
-      expect(() => i.classes.add('two words'), throwsArgumentError);
+    test('detaching a selection takes every match out, siblings and nested ones alike', () {
+      final page = '<ul><li>1</li><li>2<b>x</b></li><li>3</li></ul><div><div><div>d</div></div></div>'.html;
+      page.$('li, b').detach();
+      expect(page.$('ul').first.nodes, isEmpty);
+      page.$('div').detach();
+      expect(page.body.nodes.map((n) => n.markup), ['<ul></ul>']);
+    });
+
+    test('detaching a selection that holds the <base> moves every link back to the address', () {
+      final page = Html.parse('<base href="/b/"><a href="x">x</a>', url: Uri.parse('https://ex.com/d/'));
+      final a = page.$('a').first;
+      expect('${a.link}', 'https://ex.com/b/x');
+      page.$('base').detach();
+      expect('${a.link}', 'https://ex.com/d/x');
     });
 
     test('detach takes a selection or a node out of its tree; an attribute is not a child', () {
@@ -1009,6 +1027,18 @@ void main() {
   });
 
   group('images', () {
+    test('a srcset URL may hold commas: it runs to whitespace', () {
+      final doc = Html.parse(
+        '<img srcset="https://cdn.x/upload/w_400,c_scale/a.jpg 400w, https://cdn.x/upload/w_800,c_scale/a.jpg 800w">'
+        '<img srcset="/one.jpg, /two.jpg 2x">',
+        url: Uri.parse('https://ex.com/'),
+      );
+      expect(doc.imageLinks, [
+        Uri.parse('https://cdn.x/upload/w_800,c_scale/a.jpg'),
+        Uri.parse('https://ex.com/two.jpg'),
+      ]);
+    });
+
     test('a <picture> yields its image, from its <img> or its <source> (FMT-22)', () {
       final doc = Html.parse(
         '<picture><source srcset="/big.webp 2x, /small.webp 1x"><img src="/fallback.jpg"></picture>'

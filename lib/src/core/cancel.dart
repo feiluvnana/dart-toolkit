@@ -22,9 +22,6 @@ abstract final class Cancel {
   /// Whether the enclosing [scope] has been cancelled; `false` outside one.
   static bool get isCancelled => token?.isCancelled ?? false;
 
-  /// Why the enclosing [scope] was cancelled, or `null`.
-  static Object? get reason => token?.reason;
-
   /// Throws a [CancelledException] if the enclosing [scope] has been cancelled; outside one it
   /// does nothing (unlike `.cancellable`, an adapter, which throws a [StateError] there).
   ///

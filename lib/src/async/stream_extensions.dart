@@ -217,60 +217,7 @@ extension StreamsMerge<T> on Iterable<Stream<T>> {
   ///
   /// For streams that arrive as events, `stream.map(toStream).merge()`; for batches,
   /// `Batch.merge`; for items, `parallelize`.
-  Stream<T> merge({int concurrency = 4}) {
-    if (concurrency < 1) {
-      throw ArgumentError.value(concurrency, 'concurrency', 'Invalid concurrency, expected at least 1');
-    }
-    final sources = iterator;
-    late final StreamController<T> out;
-    final active = <StreamSubscription<T>>{};
-    var exhausted = false;
-    var paused = false;
-
-    void fill() {
-      while (!exhausted && active.length < concurrency) {
-        if (!sources.moveNext()) {
-          exhausted = true;
-          break;
-        }
-        late final StreamSubscription<T> subscription;
-        subscription = sources.current.listen(
-          out.add,
-          onError: out.addError,
-          onDone: () {
-            active.remove(subscription);
-            fill();
-          },
-        );
-        if (paused) subscription.pause();
-        active.add(subscription);
-      }
-      if (exhausted && active.isEmpty && !out.isClosed) out.close();
-    }
-
-    out = StreamController<T>(
-      onListen: fill,
-      onPause: () {
-        paused = true;
-        for (final s in active) {
-          s.pause();
-        }
-      },
-      onResume: () {
-        paused = false;
-        for (final s in active) {
-          s.resume();
-        }
-      },
-      onCancel: () async {
-        exhausted = true;
-        final all = [...active];
-        active.clear();
-        await Future.wait([for (final s in all) s.cancel()]);
-      },
-    );
-    return out.stream;
-  }
+  Stream<T> merge({int concurrency = 4}) => Stream.fromIterable(this).merge(concurrency: concurrency);
 }
 
 /// Combining streams that arrive as events: `stream.map(toStream).merge()`.

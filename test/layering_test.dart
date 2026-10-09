@@ -22,6 +22,7 @@ void main() {
       'process': {'core'},
       'scrape': {'core', 'html', 'http', 'json', 'markup', 'message', 'path'},
       'terminal': {'core'},
+      'testing': {'core', 'terminal'},
       'torrent': {'core', 'hash', 'native', 'path'},
       'tui': {'core', 'terminal'},
       'xml': {},

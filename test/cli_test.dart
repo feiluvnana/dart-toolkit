@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:dart_toolkit/cli.dart';
+import 'package:dart_toolkit/testing.dart';
 import 'package:test/test.dart' hide Retry;
 
 import 'support.dart';
@@ -82,7 +83,7 @@ void main() {
         Env.set('TK_TEST_RATIO', '0.5');
         expect((await cli.test(['--wait', '1m30s', '--since', '2026-10-08'])).exitCode, 0);
       });
-      expect(seen, [const Duration(minutes: 1, seconds: 30), DateTime.parse('2026-10-08'), 0.5]);
+      expect(seen, [const Duration(minutes: 1, seconds: 30), DateTime.utc(2026, 10, 8), 0.5]);
       final bad = await cli.test(['--wait', 'soon']);
       expect(bad.exitCode, 64);
       expect(bad.stderr, contains('Invalid value "soon" for option "--wait": expected a duration'));
@@ -424,6 +425,74 @@ void main() {
       expect((await cli.test(['--completion', 'fish'])).stdout, contains('complete -c app'));
       expect((await cli.test(['--completion', 'tcsh'])).exitCode, 64);
     });
+
+    test('a missing value names the option as it was written', () async {
+      final top = Option.of<int>('top', 'How many', short: 'n');
+      final cli = Cli('x', name: 'app', values: [top], handler: (_) {});
+      expect((await cli.test(['-n'])).stderr, contains('Option -n needs a value'));
+      expect((await cli.test(['--top'])).stderr, contains('Option --top needs a value'));
+    });
+
+    test("a subcommand handler's UsageException points at that command's help", () async {
+      final cli = Cli(
+        'x',
+        name: 'app',
+        commands: [CliCommand('build', 'Builds', handler: (_) => throw const UsageException('bad id'))],
+      );
+      final result = await cli.test(['build']);
+      expect(result.exitCode, 64);
+      expect(result.stderr, contains('Run "app build --help" for usage.'));
+    });
+
+    group('completion scripts', () {
+      final out = Option.of<String>('out', 'Out', short: 'o');
+      final mode = Option.among('mode', 'Mode', values: ['fast', 'dry run', "it's", r'$HOME']);
+      Cli tree() => Cli(
+        'x',
+        name: 'app',
+        values: [out],
+        commands: [
+          CliCommand('build', 'Builds', values: [mode], handler: (_) {}),
+        ],
+      );
+
+      /// What bash offers for [words], the last one being typed, from the script `app` prints.
+      Future<List<String>> bash(List<String> words) async {
+        final script = (await tree().test(['--completion', 'bash'])).stdout;
+        final quoted = words.map((w) => "'${w.replaceAll("'", r"'\''")}'").join(' ');
+        final r = await Process.run('bash', [
+          '-c',
+          '$script\nCOMP_WORDS=($quoted); COMP_CWORD=${words.length - 1}; _app_completion; printf "%s\\n" "\${COMPREPLY[@]}"',
+        ]);
+        return '${r.stdout}'.split('\n').where((l) => l.isNotEmpty).toList();
+      }
+
+      test('bash offers a choice as it goes on the command line, quotes and dollars kept', () async {
+        expect(await bash(['app', 'build', '--mode', '']), ['fast', r'dry\ run', r"it\'s", r'\$HOME']);
+        expect(await bash(['app', 'build', '--mode', 'i']), [r"it\'s"]);
+      }, testOn: '!windows');
+
+      test('bash does not take an option value for a command', () async {
+        expect(await bash(['app', '-o', 'build', '']), contains('--out'));
+        expect(await bash(['app', '-o', 'build', '']), isNot(contains('--mode')));
+        expect(await bash(['app', 'build', '']), contains('--mode'));
+      }, testOn: '!windows');
+
+      test('zsh and fish escape what their shells evaluate', () async {
+        final zsh = (await tree().test(['--completion', 'zsh'])).stdout;
+        expect(zsh, contains(r"(fast dry\ run it\'\''s \$HOME)"));
+        expect(zsh, contains("'app:-o'"), reason: 'the walk skips an option value');
+        final fish = (await tree().test(['--completion', 'fish'])).stdout;
+        expect(fish, contains(r"-xa 'fast dry\\ run it\\\'s \\$HOME'"));
+        expect(fish, contains("case 'app:--out' 'app:-o'"));
+      });
+
+      test("fish gives each built-in its own letter", () async {
+        final fish = (await tree().test(['--completion', 'fish'])).stdout;
+        expect(fish, allOf(contains('-l verbose -d \'Show debug output\' -s v'), contains('-s q'), contains('-s h')));
+        expect(RegExp(r'-l (verbose|quiet) .* -s h').hasMatch(fish), isFalse);
+      });
+    });
   });
 
   group('Console: logs', () {
@@ -512,7 +581,7 @@ void main() {
       expect(Style.truncate('abcdefgh', 5, ellipsis: '...'), 'ab...');
       expect(Style.pad('ab', 4, align: Align.right), '  ab');
       expect(Style.wrap('one two three', 7), ['one two', 'three']);
-      expect(Io.scope(() => Style.link(Uri.parse('https://x.dev'))('docs'), color: false), completion('docs'));
+      expect(Io.scope(() => 'docs'.link(Uri.parse('https://x.dev')), color: false), completion('docs'));
       expect(Palette.ascii.ellipsis, '...');
       expect('x'.red, isA<String>());
     });
@@ -687,7 +756,7 @@ void main() {
         final bar = Console.bar('Crawling', count: 3);
         bar.tick(label: 'one');
         bar.tick(label: 'two');
-        bar.add(Failed('three', const FormatException('lost'), StackTrace.empty));
+        bar.tally.add(Failed('three', const FormatException('lost'), StackTrace.empty));
         await expectLater(bar.close(), throwsA(isA<BatchException<Object?, Object?>>()));
         final ok = Console.bar('Fine');
         ok.tick();

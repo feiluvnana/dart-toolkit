@@ -21,13 +21,19 @@ extension on Request {
 
 /// Failures that will not change on a second attempt.
 bool _certain(Object e) => switch (e) {
-  _BodyTooLarge() => true,
+  _Final() => true,
   ClientException(cause: final cause?) => _certain(cause),
   _ => e is HandshakeException || e is CertificateException || e is TlsException,
 };
 
+/// A failure the same request would meet again (a redirect loop, an answer that cannot be what
+/// was asked for): never retried.
+final class _Final extends ClientException {
+  const _Final(super.message, [super.uri]);
+}
+
 /// A body over the cap; never retried.
-final class _BodyTooLarge extends ClientException {
+final class _BodyTooLarge extends _Final {
   const _BodyTooLarge(int cap, Uri url) : super('Response body over $cap bytes', url);
 }
 
@@ -56,7 +62,7 @@ Future<Request?> _next(Request current, StreamedResponse res, int hop, Uri first
   }
   if (to == null) return null;
   await _drain(res);
-  if (hop >= current.redirects) throw ClientException('More than ${current.redirects} redirects', first);
+  if (hop >= current.redirects) throw _Final('More than ${current.redirects} redirects', first);
   return current._hopTo(to, res.statusCode);
 }
 

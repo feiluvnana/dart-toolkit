@@ -72,7 +72,7 @@ final class Image implements Finalizable, Saveable {
     final abs = File(path).absolute.path;
     final size = (await FileStat.stat(abs)).size;
     if (size < 0) throw PathNotFoundException(path, const OSError('No such file or directory', 2), 'Cannot read image');
-    final h = await _work(size * 8, () => _loadFile(abs, side));
+    final h = await _work(_pixelBytes(await ImageInfo._head(abs, _headBytes), size), () => _loadFile(abs, side));
     return Image._made(Pointer.fromAddress(h), 'read image $path');
   }
 
@@ -80,7 +80,8 @@ final class Image implements Finalizable, Saveable {
   static Future<Image> decode(List<int> bytes, {int? maxSide}) async {
     final side = _side(maxSide);
     final data = bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
-    final h = await _work(data.length * 8, () => _loadMemory(data, side));
+    final head = data.length <= _headBytes ? data : Uint8List.sublistView(data, 0, _headBytes);
+    final h = await _work(_pixelBytes(head, data.length), () => _loadMemory(data, side));
     return Image._made(Pointer.fromAddress(h), 'decode image');
   }
 
@@ -470,6 +471,20 @@ int _loadMemory(Uint8List bytes, int maxSide) {
   final h = NativeBridge.main.withBytes(bytes, (p, len) => _ImageNative.loadMemory(p, len, 0, maxSide));
   if (h == nullptr) throw FormatException('Invalid image: ${NativeBridge.main.lastError()}');
   return h.address;
+}
+
+/// How much of a file the header gives its size in: the first 16 KiB, for every format written.
+const _headBytes = 16 << 10;
+
+/// The bytes of pixels the image whose file starts with [head] decodes to, from its header: a
+/// small file can hold a huge picture. [fileSize] times 8 when the header does not say.
+int _pixelBytes(Uint8List head, int fileSize) {
+  try {
+    final (w, h) = _probeMemory(head, null);
+    return w * h * 4;
+  } on FormatException {
+    return fileSize * 8; // no size in the head: the decode says what is wrong
+  }
 }
 
 /// [maxSide] as the native decoder takes it: 0 for none.

@@ -61,10 +61,10 @@ enum Hash {
   /// missing file is a [PathNotFoundException].
   Task<Digest> file(String path, {Secret? key}) {
     final k = _keyOf(key);
-    return TaskInternals.start(path, _label(path), (work) async {
+    return TaskInternals.start(path, FileBridge.label(path), (work) async {
       final stat = await FileStat.stat(path);
       if (stat.type == FileSystemEntityType.notFound) {
-        throw PathNotFoundException(path, const OSError('No such file or directory', 2), 'Cannot hash');
+        throw FileBridge.notFound(path, 'Cannot hash');
       }
       if (stat.type == FileSystemEntityType.file && stat.size <= _inline) {
         return Digest._(_ofFile(index, k, path, nullptr, nullptr));
@@ -93,12 +93,6 @@ enum Hash {
 
 /// [key]'s bytes, as a MAC takes them.
 Uint8List? _keyOf(Secret? key) => key == null ? null : utf8.encode(key.reveal);
-
-/// [path] as a row names it: its folder and name.
-String _label(String path) {
-  final parts = path.split(Platform.isWindows ? RegExp(r'[/\\]') : RegExp('/'))..removeWhere((p) => p.isEmpty);
-  return parts.length < 2 ? path : '${parts[parts.length - 2]}/${parts.last}';
-}
 
 /// What a worker runs to hash [path] with algorithm [alg]: only plain values cross with it.
 Uint8List Function(NativeProgress, Pointer<Uint8>) _fileCall(int alg, Uint8List? key, String path) =>

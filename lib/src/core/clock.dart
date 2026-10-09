@@ -176,19 +176,20 @@ final class Deadline {
 
 /// The deadlines of one clock, earliest first, with one real timer armed for the earliest live
 /// one. Cancelled deadlines are dropped when they reach the front, or in a sweep once they
-/// outnumber the live ones.
+/// outnumber the live ones; with none live there is no timer, so nothing holds the program open.
 final class _Deadlines {
   final Clock _clock;
   final Zone _zone;
   final _heap = <Deadline>[];
   Timer? _timer;
   Duration? _armed;
-  int _dead = 0;
+  int _dead = 0, _live = 0;
 
   _Deadlines(this._clock, this._zone);
 
   Deadline add(Duration after, void Function() fire) {
     final d = Deadline._(_clock.elapsed + after, fire, this);
+    _live++;
     _push(d);
     if (_armed == null || d._at < _armed!) _arm(d._at);
     return d;
@@ -242,6 +243,7 @@ final class _Deadlines {
       final d = _pop();
       if (d._fire case final fire?) {
         d._fire = null;
+        _live--;
         due.add(fire);
       }
     }
@@ -254,6 +256,13 @@ final class _Deadlines {
 
   /// Counts a cancel; a heap mostly of cancelled deadlines is rebuilt without them.
   void _cancelled() {
+    if (--_live == 0) {
+      _timer?.cancel();
+      _timer = _armed = null;
+      _heap.clear();
+      _dead = 0;
+      return;
+    }
     if (++_dead < 1024 || _dead * 2 < _heap.length) return;
     final live = [
       for (final d in _heap)

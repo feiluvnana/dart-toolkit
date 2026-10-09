@@ -82,7 +82,7 @@ extension _Installer on NativeHandle {
       } on FormatException {
         return '$url is not gzip';
       } on FileSystemException catch (e) {
-        await _gone(temp);
+        await FileBridge.gone(temp);
         return 'could not write $dest: ${e.message}';
       }
       return _versionAt(dest) == abi ? null : '$url is not dart_toolkit_$name at ABI $abi';
@@ -110,7 +110,7 @@ extension _Installer on NativeHandle {
     final total = response.contentLength < 0 ? null : response.contentLength;
     final body = BytesBuilder(copy: false);
     await for (final chunk in response.timeout(_patience)) {
-      if (work != null && work.isStopped) throw CancelledException('${Cancel.reason ?? 'cancelled'}');
+      if (work != null) Cancel.check();
       body.add(chunk);
       work?.amount(body.length, total: total);
     }
@@ -147,7 +147,9 @@ extension _Installer on NativeHandle {
     } on ProcessException {
       return _noCargo;
     }
-    final stop = Cancel.token?.onCancel(process.kill);
+    // The whole tree: cargo dies alone on a signal, and its rustc children write on.
+    Future<void>? killed;
+    final stop = Cancel.token?.onCancel(() => killed = _killTree(process.pid));
     try {
       final stderr = StringBuffer();
       final out = process.stdout.drain<void>();
@@ -158,13 +160,14 @@ extension _Installer on NativeHandle {
       }
       await out;
       final code = await process.exitCode;
-      if (work.isStopped) throw CancelledException('${Cancel.reason ?? 'cancelled'}');
+      Cancel.check();
       if (code != 0) return _cargoFailed('$stderr');
       _place(target, dest);
       return null;
     } finally {
       stop?.call();
-      if (fresh) await _gone(target);
+      await killed;
+      if (fresh) await FileBridge.gone(target);
     }
   }
 
@@ -183,15 +186,19 @@ extension _Installer on NativeHandle {
   }
 }
 
-/// [path] deleted, whatever it is; one already gone is no matter.
-Future<void> _gone(String path) async {
-  try {
-    await Directory(path).delete(recursive: true);
-  } on FileSystemException {
-    try {
-      await File(path).delete();
-    } on FileSystemException catch (_) {} // already gone
+/// The process [pid] and everything under it killed, children first found: `taskkill /T` on
+/// Windows, else each found by `pgrep -P` while it is stopped, so none is started meanwhile.
+Future<void> _killTree(int pid) async {
+  if (Platform.isWindows) {
+    await Process.run('taskkill', ['/T', '/F', '/PID', '$pid']);
+    return;
   }
+  Process.killPid(pid, ProcessSignal.sigstop);
+  final children = await Process.run('pgrep', ['-P', '$pid']);
+  for (final child in '${children.stdout}'.split('\n').map(int.tryParse).nonNulls) {
+    await _killTree(child);
+  }
+  Process.killPid(pid, ProcessSignal.sigkill);
 }
 
 /// SHA-256 of [data] in hex, in Dart: what checks a download before any native code loads.

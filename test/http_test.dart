@@ -410,6 +410,21 @@ void main() {
       expect(() => Http.scope(credentials: {'https://x/path': const Secret('t')}, () {}), throwsArgumentError);
     });
 
+    test('a redirect loop fails once, never retried: it would loop again', () async {
+      var n = 0;
+      final fake = Client.fake((r) {
+        n++;
+        return Response('', 302, headers: {'location': '/loop'});
+      });
+      await Http.scope(client: fake, retry: _quick, () async {
+        await expectLater(
+          Uri.parse('https://l.test/loop').get(),
+          throwsA(isA<ClientException>().having((e) => e.message, 'message', contains('redirects'))),
+        );
+      });
+      expect(n, 21, reason: 'the first request and its 20 redirects, once');
+    });
+
     test('credentials go only to their origin, never across a redirect', () async {
       final (other, otherSeen) = await _site((r) => r.response.write('other'));
       final (base, seen) = await _site((r) {
@@ -708,6 +723,47 @@ void main() {
       });
       expect(seen, hasLength(2));
     });
+
+    test('a revalidation that is retried is still answered by its 304', () async {
+      var n = 0;
+      final fake = Client.fake((r) {
+        n++;
+        if (n == 1) return Response('v1', 200, headers: {'etag': '"x"'});
+        if (n == 2) return Response('busy', 503);
+        if (r.headers['if-none-match'] == '"x"') return Response('', 304);
+        return Response('v2', 200);
+      });
+      final url = Uri.parse('https://a.test/page');
+      await Http.scope(client: fake, cache: 1.ms, retry: _quick, () async {
+        expect(await url.get().text, 'v1');
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+        expect(await url.get().text, 'v1');
+      });
+      expect(n, 3);
+    });
+
+    test("Vary is read from the headers that went out, the scope's included", () async {
+      final fake = Client.fake(
+        (r) => Response('${r.headers['accept-language']}', 200, headers: {'vary': 'accept-language'}),
+      );
+      final url = Uri.parse('https://b.test/page');
+      Future<String> asked(String language) =>
+          Http.scope(client: fake, cache: 1.d, headers: {'accept-language': language}, () => url.get().text);
+      expect([await asked('fr'), await asked('en'), await asked('fr')], ['fr', 'en', 'fr']);
+    });
+
+    test('a served answer keeps the URL that answered it, after its redirects', () async {
+      final fake = Client.fake(
+        (r) => r.url.path == '/a' ? Response('', 301, headers: {'location': '/dir/b'}) : Response('b', 200),
+      );
+      final url = Uri.parse('https://c.test/a');
+      await Http.scope(client: fake, cache: 1.d, () async {
+        expect((await url.get()).url, Uri.parse('https://c.test/dir/b'));
+        final served = url.get();
+        expect((await served).url, Uri.parse('https://c.test/dir/b'));
+        expect(await served.settled, isA<Done<Object?, Response>>().having((d) => d.fresh, 'fresh', isFalse));
+      });
+    });
   });
 
   group('Client.fake', () {
@@ -845,6 +901,18 @@ void main() {
       final events = await base.events(reconnect: true).toList();
       expect([for (final e in events) e.data], ['x1', 'x2']);
       expect([for (final r in seen) r.headers.value('last-event-id')], [null, '1', '2']);
+    });
+
+    test("a stream never goes through the scope's cache", () async {
+      var n = 0;
+      final fake = Client.fake(
+        (r) => Response('data: event ${++n}\n\n', 200, headers: {'content-type': 'text/event-stream'}),
+      );
+      final url = Uri.parse('https://e.test/stream');
+      final got = await Http.scope(client: fake, cache: 1.d, () async {
+        return [for (var i = 0; i < 2; i++) ...await url.events().map((e) => e.data).toList()];
+      });
+      expect(got, ['event 1', 'event 2']);
     });
   });
 }

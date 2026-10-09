@@ -28,8 +28,8 @@ class _JsonPath {
   static List<_Step> _parse(String expression) {
     final text = expression.trim();
     final steps = <_Step>[];
-    if (!text.startsWith(r'$')) throw FormatException(r'JSONPath starts at the root, $', expression, 0);
-    var i = 1;
+    // The root's `$` may go unwritten: `items[*].id` is `$.items[*].id`, `..id` is `$..id`.
+    var i = text.startsWith(r'$') ? 1 : 0;
 
     while (i < text.length) {
       if (text.startsWith('..', i)) {
@@ -127,6 +127,7 @@ class _JsonPath {
   static (String, int) _readName(String text, int start) {
     var end = start;
     while (end < text.length && text[end] != '.' && text[end] != '[') {
+      if (text[end] == ']') throw FormatException('Unexpected "]" in JSONPath', text, end);
       end++;
     }
     return (text.substring(start, end).trim(), end);

@@ -4,4 +4,4 @@
 
 mod torrent;
 
-tk_common::exports!(2);
+tk_common::exports!(3);

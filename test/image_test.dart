@@ -347,6 +347,15 @@ void main() {
       );
     });
 
+    test("a PNG's eXIf orientation turns its size as Image.read turns its pixels", () async {
+      final png = await Image.blank(width: 40, height: 20, color: Rgba.red).encode(ImageFormat.png);
+      final file = await write('turned.png', _pngWithOrientation(png, 6));
+      final info = await ImageInfo.read(file);
+      final img = await Image.read(file);
+      expect((info.width, info.height, info.orientation), (img.width, img.height, 6));
+      expect((img.width, img.height), (20, 40));
+    });
+
     test('quality reads the luminance table as libjpeg quality, in either order', () async {
       for (final q in [10, 30, 50, 75, 95]) {
         expect((await ImageInfo.read(await write('q$q.jpg', _jpegHeader(q)))).quality, q);
@@ -578,6 +587,15 @@ void main() {
       expect(File(file).readAsBytesSync(), plain);
     });
 
+    test('a turned PNG keeps its EXIF, so it still shows upright', () async {
+      final png = await (await _photo(40, 20)).encode(ImageFormat.png);
+      final file = await write('turned.png', _pngWithOrientation(png, 6));
+      await Path(file).optimize(original: Original.delete);
+      final img = await Image.read(file);
+      expect((img.width, img.height), (20, 40));
+      expect((await ImageInfo.read(file)).orientation, 6);
+    });
+
     test('a PNG is recompressed; a GIF is left with a note; keep is an ArgumentError', () async {
       final img = await _photo(64, 48);
       final png = await write('o.png', await img.encode(ImageFormat.png));
@@ -649,6 +667,25 @@ Uint8List _withExif(
     ...tiff,
     ...jpeg.sublist(2),
   ]);
+}
+
+/// [png] with an `eXIf` chunk after its header whose Orientation is [orientation].
+Uint8List _pngWithOrientation(Uint8List png, int orientation) {
+  final tiff = [
+    0x4D, 0x4D, 0, 0x2A, 0, 0, 0, 8, 0, 1, //
+    0x01, 0x12, 0, 3, 0, 0, 0, 1, 0, orientation, 0, 0, 0, 0, 0, 0,
+  ];
+  List<int> be32(int v) => [v >> 24 & 0xFF, v >> 16 & 0xFF, v >> 8 & 0xFF, v & 0xFF];
+  var crc = 0xFFFFFFFF;
+  for (final b in [...'eXIf'.codeUnits, ...tiff]) {
+    crc ^= b;
+    for (var k = 0; k < 8; k++) {
+      crc = crc & 1 != 0 ? (crc >>> 1) ^ 0xEDB88320 : crc >>> 1;
+    }
+  }
+  final chunk = [...be32(tiff.length), ...'eXIf'.codeUnits, ...tiff, ...be32(crc ^ 0xFFFFFFFF)];
+  // After the signature (8) and IHDR (25).
+  return Uint8List.fromList([...png.sublist(0, 33), ...chunk, ...png.sublist(33)]);
 }
 
 /// A photo-like picture: smooth gradients under per-pixel noise, so a codec has detail to keep.

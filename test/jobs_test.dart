@@ -25,6 +25,27 @@ void main() {
       expect(error, isA<FormatException>().having((e) => e.message, 'message', allOf(contains(home), contains('99'))));
     });
 
+    test('a record a run left is emptied before its lock goes: a program that opened it finds nothing', () async {
+      final home = tempDir();
+      Directory('$home/local').createSync();
+      final left = File('$home/local/1.json')
+        ..writeAsStringSync(
+          jsonEncode({
+            'version': 1,
+            'jobs': [
+              {'id': 'aaaaaaaaaaaa', 'item': 'left'},
+            ],
+          }),
+        );
+      final other = await left.open(); // another program, between the list and the delete
+      addTearDown(other.close);
+      final pool = Pool(_Echo.new, store: Store(home));
+      addTearDown(pool.close);
+      final adopted = await pool.changes.firstWhere((job) => job.item == 'left').timeout(5.s);
+      expect(await adopted, 'left');
+      expect(await other.length(), 0, reason: 'what it holds open is empty, so the jobs run once');
+    });
+
     test('jobs a closed pool stopped stay in its record; finished ones do not', () async {
       final home = tempDir();
       final pool = Pool(_Echo.new, store: Store(home));

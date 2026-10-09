@@ -105,7 +105,7 @@ extension type const Row(Map<String, Object?> _map) implements Map<String, Objec
     final comma = mark == '.' && cell is String ? CoerceBridge.coerce<num>(cell, decimal: ',') : null;
     final hint = comma == null ? '' : "; with decimal: ',' it reads $comma";
     final head = row == null ? 'Invalid value' : row.schema.invalid(row.place);
-    throw FormatException('$head: ${_describe(cell)} in "$column", not ${_article('$T')}$hint');
+    throw FormatException('$head: ${_describe(cell)} in "$column", not ${article('$T')}$hint');
   }
 }
 
@@ -124,8 +124,6 @@ bool _blank(Object? cell) => cell == null || (cell is String && cell.trim().isEm
 
 /// A cell's own text for an error: quoted when it is text.
 String _describe(Object? cell) => cell is String ? '"$cell"' : '$cell';
-
-String _article(String type) => '${'aeiouAEIOU'.contains(type[0]) ? 'an' : 'a'} $type';
 
 /// A row the library built, frozen by a view rather than a copy.
 final class _TableRow extends _SchemaRow {
@@ -360,7 +358,12 @@ final class Table implements Saveable {
       case TableFormat.csv || TableFormat.tsv:
         // Cells are kept as offsets into the text and read as they are asked for: a CSV held
         // whole costs its text and a few bytes a cell, not an object per cell.
-        final data = _CsvCells.scan(t, _oneChar(separator ?? _sniffSeparator(t)));
+        final data = _CsvCells.scan(
+          t,
+          _oneChar(separator ?? _sniffSeparator(t)),
+          format._label,
+          quotes: format == TableFormat.csv,
+        );
         if (data.length == 0) return Table._(schema(const []), const [], const []);
         final header = schema(_names(_RecordCells(data, 0), trailing: true));
         return Table._(header, _CsvRows(data, header), const []);
@@ -717,16 +720,19 @@ final class Table implements Saveable {
 
   /// This table as [format]'s text: CSV and TSV with a header row (CSV's [separator] `,` unless
   /// given), JSON an indented array of objects, NDJSON one object a line, Markdown with numbers
-  /// right-aligned. A [DateTime] is written in ISO 8601.
+  /// right-aligned. A [DateTime] is written in ISO 8601. TSV has no quoting, so a tab or line
+  /// break in a cell is a [FormatException] naming it.
   String encode(TableFormat format, {String? separator}) => switch (format) {
-    TableFormat.csv || TableFormat.tsv => _csv(format._separator(separator) ?? ','),
+    TableFormat.csv => _csv(format._separator(separator) ?? ',', tsv: false),
+    TableFormat.tsv => _csv('\t', tsv: true),
     TableFormat.json => '${_json(toJson(), indent: '  ')}\n',
     TableFormat.ndjson => _objects.map(_json).join('\n') + (rows.isEmpty ? '' : '\n'),
     TableFormat.markdown => _markdown(),
   };
 
   /// Writes this table to [to] in the format its extension names (see [TableFormat]),
-  /// atomically, creating folders; a file there is replaced unless [conflict] says otherwise.
+  /// atomically, into a folder that exists; a file there is replaced unless [conflict] says
+  /// otherwise.
   @override
   Task<Path> save(String to, {Conflict conflict = Conflict.overwrite, String? separator}) {
     final format = TableFormat._of(to);
@@ -744,11 +750,16 @@ final class Table implements Saveable {
   /// Each row keyed by exactly [columns], so a written file reads back as this table.
   Iterable<Map<String, Object?>> get _objects => rows.map((r) => {for (final c in columns) c: r[c]});
 
-  String _csv(String separator) {
+  String _csv(String separator, {required bool tsv}) {
     final sb = StringBuffer();
-    _csvLine(sb, columns, separator);
-    for (final r in rows) {
-      _csvLine(sb, [for (final c in columns) _written(r[c])], separator);
+    _csvLine(sb, columns, separator, tsv: tsv ? (i) => 'the header' : null);
+    for (final (n, r) in rows.indexed) {
+      _csvLine(
+        sb,
+        [for (final c in columns) _written(r[c])],
+        separator,
+        tsv: tsv ? (i) => 'row ${n + 1}, column "${columns[i]}"' : null,
+      );
     }
     return sb.toString();
   }
@@ -1007,9 +1018,9 @@ final class _CsvRow extends _SchemaRow {
   Iterable<String> get keys => schema.columns;
 }
 
-/// The cells of a CSV text, held as offsets: two per cell (its start and end in [text]), where
-/// each record's cells begin, and where in [text] it starts. A cell that had to be rebuilt — a
-/// doubled quote, text after a closing quote — is in [_rebuilt], its start `-1 - its index`.
+/// The cells of a CSV or TSV text, held as offsets: two per cell (its start and end in [text]),
+/// where each record's cells begin, and where in [text] it starts. A cell that had to be rebuilt —
+/// a doubled quote, text after a closing quote — is in [_rebuilt], its start `-1 - its index`.
 final class _CsvCells {
   final String text;
   final Int32List _cells;
@@ -1017,7 +1028,10 @@ final class _CsvCells {
   final Int32List _starts;
   final List<String> _rebuilt;
 
-  _CsvCells._(this.text, this._cells, this._records, this._starts, this._rebuilt);
+  /// Where the text not yet read starts: [text]'s length unless the scan was not `done`.
+  final int end;
+
+  _CsvCells._(this.text, this._cells, this._records, this._starts, this._rebuilt, this.end);
 
   /// Records in all, the header included.
   int get length => _records.length - 1;
@@ -1033,17 +1047,13 @@ final class _CsvCells {
   }
 
   /// The line of [text] record [r] starts on, from 1: counted only when a failure asks.
-  int lineOf(int r) {
-    final end = _starts[r];
-    var line = 1;
-    for (var i = text.indexOf('\n'); i != -1 && i < end; i = text.indexOf('\n', i + 1)) {
-      line++;
-    }
-    return line;
-  }
+  int lineOf(int r) => _lineAt(text, _starts[r]);
 
-  /// [text] scanned as RFC 4180 records, cells kept as offsets.
-  factory _CsvCells.scan(String text, int sep) {
+  /// [text] scanned into records, cells kept as offsets: RFC 4180 with [quotes] (CSV), split at
+  /// [sep] and line breaks alone without (TSV, which has no quoting). Unless [done], [text] is a
+  /// prefix: a record that may continue is left unread, from [end]. A quote still open when
+  /// [done] is a [FormatException] `<label> line n: …`.
+  factory _CsvCells.scan(String text, int sep, String label, {bool quotes = true, bool done = true}) {
     var cells = Int32List(1024);
     var used = 0;
     final records = <int>[0];
@@ -1057,25 +1067,42 @@ final class _CsvCells {
       count++;
     }
 
+    _CsvCells result(int end) => _CsvCells._(
+      text,
+      Int32List.sublistView(cells, 0, used),
+      Int32List.fromList(records),
+      Int32List.fromList(starts),
+      rebuilt,
+      end,
+    );
+
     var i = 0;
     final n = text.length;
-    bool end(int c) => c == sep || c == 0x0a || c == 0x0d;
+    bool stop(int c) => c == sep || c == 0x0a || c == 0x0d;
     while (i < n) {
       final first = count;
       final from = i;
+      final kept = rebuilt.length;
+      // The record may continue past what has arrived: forget its cells and resume at it.
+      _CsvCells partial() {
+        used = first * 2;
+        count = first;
+        rebuilt.length = kept;
+        return result(from);
+      }
+
       // Whether the record's first cell was quoted: `""` is a value, an empty line is not.
-      final quoted = text.codeUnitAt(i) == 0x22;
+      final quoted = quotes && text.codeUnitAt(i) == 0x22;
       while (true) {
-        if (i < n && text.codeUnitAt(i) == 0x22) {
+        if (quotes && i < n && text.codeUnitAt(i) == 0x22) {
           StringBuffer? cell;
           var s = i + 1;
           var q = s;
           while (true) {
             q = text.indexOf('"', s);
-            if (q < 0) {
-              final line = '\n'.allMatches(text.substring(0, i)).length + 1;
-              throw FormatException('CSV line $line: the quote opened here is never closed');
-            }
+            // An open quote at the end, or one that may be the first of a doubled pair.
+            if (!done && (q < 0 || q + 1 == n)) return partial();
+            if (q < 0) throw FormatException('$label line ${_lineAt(text, i)}: the quote opened here is never closed');
             if (q + 1 < n && text.codeUnitAt(q + 1) == 0x22) {
               (cell ??= StringBuffer()).write(text.substring(s, q + 1));
               s = q + 2;
@@ -1086,7 +1113,7 @@ final class _CsvCells {
           }
           // Anything between the closing quote and the separator is kept as it stands.
           final rest = i;
-          while (i < n && !end(text.codeUnitAt(i))) {
+          while (i < n && !stop(text.codeUnitAt(i))) {
             i++;
           }
           if (cell == null && rest == i) {
@@ -1102,15 +1129,22 @@ final class _CsvCells {
           }
         } else {
           final s = i;
-          while (i < n && !end(text.codeUnitAt(i))) {
+          while (i < n && !stop(text.codeUnitAt(i))) {
             i++;
           }
           add(s, i);
         }
+        if (i >= n && !done) return partial();
         if (i < n) {
           final c = text.codeUnitAt(i++);
           if (c == sep) continue;
-          if (c == 0x0d && i < n && text.codeUnitAt(i) == 0x0a) i++;
+          if (c == 0x0d) {
+            if (i < n && text.codeUnitAt(i) == 0x0a) {
+              i++;
+            } else if (i >= n && !done) {
+              return partial(); // a CR whose LF has not arrived
+            }
+          }
         }
         // A blank line is no record: one empty cell, unquoted.
         final blank = !quoted && count - first == 1 && cells[used - 2] >= 0 && cells[used - 2] == cells[used - 1];
@@ -1124,14 +1158,17 @@ final class _CsvCells {
         break;
       }
     }
-    return _CsvCells._(
-      text,
-      Int32List.sublistView(cells, 0, used),
-      Int32List.fromList(records),
-      Int32List.fromList(starts),
-      rebuilt,
-    );
+    return result(n);
   }
+}
+
+/// The line of [text] that offset [at] is on, from 1.
+int _lineAt(String text, int at) {
+  var line = 1;
+  for (var i = text.indexOf('\n'); i != -1 && i < at; i = text.indexOf('\n', i + 1)) {
+    line++;
+  }
+  return line;
 }
 
 /// A record's cells, read from [_CsvCells] as they are asked for.
@@ -1176,83 +1213,6 @@ final class _CsvRows extends ListBase<Row> {
   void operator []=(int index, Row value) => throw UnsupportedError("Cannot change a table's rows");
 }
 
-/// RFC 4180 records of [text] from [start], CRLF or LF; unquoted cells are sliced, not rebuilt.
-///
-/// Unless [done], [text] is a prefix and a record that may continue is left unread; the second
-/// value is where to resume. A quote still open when [done] is a [FormatException].
-(List<List<String>>, int) _scanCsv(String text, int sep, int start, {required bool done}) {
-  final records = <List<String>>[];
-  final n = text.length;
-  var i = start;
-  bool end(int c) => c == sep || c == 0x0a || c == 0x0d;
-  while (i < n) {
-    final from = i;
-    final record = <String>[];
-    // Whether the record's first cell was quoted: `""` is a value, an empty line is not.
-    final quoted = text.codeUnitAt(i) == 0x22;
-    void finish() {
-      if (quoted || record.length > 1 || record.first.isNotEmpty) records.add(record);
-    }
-
-    while (true) {
-      if (i < n && text.codeUnitAt(i) == 0x22) {
-        // Only a doubled quote or text after the closing one needs a buffer; the rest is a slice.
-        StringBuffer? cell;
-        var s = i + 1;
-        var q = s;
-        while (true) {
-          q = text.indexOf('"', s);
-          // An open quote at the end, or a quote that may be the first of a doubled pair.
-          if (!done && (q < 0 || q + 1 == n)) return (records, from);
-          if (q < 0) throw const FormatException('a quote is never closed');
-          if (q + 1 < n && text.codeUnitAt(q + 1) == 0x22) {
-            (cell ??= StringBuffer()).write(text.substring(s, q + 1));
-            s = q + 2;
-            continue;
-          }
-          i = q + 1;
-          break;
-        }
-        final rest = i;
-        while (i < n && !end(text.codeUnitAt(i))) {
-          i++;
-        }
-        record.add(
-          cell == null && rest == i
-              ? text.substring(s, q)
-              : ((cell ?? StringBuffer())
-                      ..write(text.substring(s, q))
-                      ..write(text.substring(rest, i)))
-                    .toString(),
-        );
-      } else {
-        final s = i;
-        while (i < n && !end(text.codeUnitAt(i))) {
-          i++;
-        }
-        record.add(text.substring(s, i));
-      }
-      if (i >= n) {
-        if (!done) return (records, from);
-        finish();
-        return (records, n);
-      }
-      final c = text.codeUnitAt(i++);
-      if (c == sep) continue;
-      if (c == 0x0d) {
-        if (i < n) {
-          if (text.codeUnitAt(i) == 0x0a) i++;
-        } else if (!done) {
-          return (records, from);
-        }
-      }
-      finish();
-      break;
-    }
-  }
-  return (records, i);
-}
-
 /// The header and rows of a Markdown table: `| a | b |`, then `| --- | ---: |`, then a line a
 /// row; the outer pipes are optional and `\|` is a pipe in a cell.
 (List<String>, List<List<String>>) _markdownRows(String text) {
@@ -1290,16 +1250,25 @@ final class _CsvRows extends ListBase<Row> {
 }
 
 /// [cells] as one CSV line in [sb]: a field is quoted when it holds the separator, a quote or a
-/// line break, and a row of one empty cell is `""` so it reads back.
-void _csvLine(StringBuffer sb, List<String> cells, String separator) {
+/// line break, and a row of one empty cell is `""` so it reads back. With [tsv] (which names a
+/// cell's place) it is a TSV line, which has no quoting: a tab or line break in a cell is a
+/// [FormatException].
+void _csvLine(StringBuffer sb, List<String> cells, String separator, {String Function(int cell)? tsv}) {
   final start = sb.length;
   for (var i = 0; i < cells.length; i++) {
     if (i > 0) sb.write(separator);
     final s = cells[i];
+    if (tsv != null) {
+      if (s.contains('\t') || s.contains('\n') || s.contains('\r')) {
+        throw FormatException('Invalid TSV at ${tsv(i)}: a tab or line break has no TSV form');
+      }
+      sb.write(s);
+      continue;
+    }
     final quote = s.contains(separator) || s.contains('"') || s.contains('\n') || s.contains('\r');
     sb.write(quote ? '"${s.replaceAll('"', '""')}"' : s);
   }
-  if (sb.length == start) sb.write('""');
+  if (sb.length == start && tsv == null) sb.write('""');
   sb.write('\n');
 }
 
@@ -1365,6 +1334,9 @@ final class _RowReader {
   /// Data rows (or NDJSON lines) so far.
   int _row = 0;
 
+  /// Line breaks in the CSV or TSV text read so far, for the line a failure names.
+  int _lines = 0;
+
   _RowReader(this._path, this._format, String? separator, this._decimal)
     : _sep = separator == null ? null : Table._oneChar(separator);
 
@@ -1391,8 +1363,10 @@ final class _RowReader {
         final end = done ? chunk.length : chunk.lastIndexOf('\n') + 1;
         _pending = chunk.substring(end);
         final rows = <Row>[];
-        for (final line in chunk.substring(0, end).split('\n')) {
-          if (end == 0) break;
+        final lines = end == 0 ? <String>[] : chunk.substring(0, end).split('\n');
+        // The break that ends the last line starts no line of its own.
+        if (lines.isNotEmpty && lines.last.isEmpty) lines.removeLast();
+        for (final line in lines) {
           if (Table._ndjsonRow(line, ++_row) case final object?) {
             final schema = _Schema(object.keys.toList(), source: _path, format: _format, decimal: _decimal);
             rows.add(Row(_TableRow(schema, object)));
@@ -1401,20 +1375,26 @@ final class _RowReader {
         return rows;
       }
       final sep = _sep ??= Table._oneChar(Table._sniffSeparator(chunk));
-      final (records, rest) = _scanCsv(chunk, sep, 0, done: done);
-      _pending = chunk.substring(rest);
+      final data = _CsvCells.scan(chunk, sep, _format._label, quotes: _format == TableFormat.csv, done: done);
+      _pending = chunk.substring(data.end);
       final rows = <Row>[];
-      for (final r in records) {
+      for (var r = 0; r < data.length; r++) {
+        final cells = _RecordCells(data, r);
         if (_head case final head?) {
-          rows.add(Row(_CsvRow(head, r, null, ++_row)));
+          rows.add(Row(_CsvRow(head, cells, null, ++_row)));
         } else {
-          _head = _Schema(_names(r, trailing: true), source: _path, format: _format, decimal: _decimal);
+          _head = _Schema(_names(cells, trailing: true), source: _path, format: _format, decimal: _decimal);
         }
       }
+      _lines += _lineAt(chunk, data.end) - 1;
       return rows;
     } on FormatException catch (e) {
-      final message = e.message.replaceFirst(RegExp(r'^NDJSON line (\d+): '), r'line $1: ');
-      throw FormatException('Invalid ${_format._label} in $_path${message.startsWith('line ') ? ', ' : ': '}$message');
+      // `CSV line 3: …` counts in this chunk; NDJSON's already counts in the file.
+      final label = _format._label;
+      final at = RegExp('^$label line (\\d+): ').firstMatch(e.message);
+      final line = at == null ? null : int.parse(at[1]!) + (_format == TableFormat.ndjson ? 0 : _lines);
+      final why = at == null ? e.message : e.message.substring(at.end);
+      throw FormatException('Invalid $label in $_path${line == null ? '' : ', line $line'}: $why');
     }
   }
 }
@@ -1493,7 +1473,7 @@ final class _TableWriter implements StreamConsumer<Row> {
               ..writeln('| ${columns.map(_mdCell).join(' | ')} |')
               ..writeln('| ${[for (final _ in columns) '---'].join(' | ')} |');
           } else {
-            _csvLine(_buffer, columns, _separator);
+            _csvLine(_buffer, columns, _separator, tsv: _format == TableFormat.tsv ? (i) => 'the header' : null);
           }
           return columns;
         }();
@@ -1511,7 +1491,13 @@ final class _TableWriter implements StreamConsumer<Row> {
         if (_format == TableFormat.markdown) {
           _buffer.writeln('| ${cells.map(_mdCell).join(' | ')} |');
         } else {
-          _csvLine(_buffer, cells, _separator);
+          final n = _rows + 1;
+          _csvLine(
+            _buffer,
+            cells,
+            _separator,
+            tsv: _format == TableFormat.tsv ? (i) => 'row $n, column "${columns[i]}"' : null,
+          );
         }
     }
     _rows++;

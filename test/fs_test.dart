@@ -291,6 +291,25 @@ void main() {
   });
 
   group('listings', () {
+    test('only: with a .. in it is an ArgumentError: a listing stays inside its folder', () async {
+      await (dir / 'secret.txt').writeText('s');
+      await (dir / 'inner').mkdir();
+      expect(() => (dir / 'inner').files(only: '../*'), throwsArgumentError);
+      expect(() => (dir / 'inner').files(only: 'a/../../*'), throwsArgumentError);
+    });
+
+    test(r'a \ escapes the next character, in a glob and a .gitignore', () async {
+      final g = dir / 'g';
+      for (final n in ['a*b', 'axb', 'trail ', 'keep']) {
+        await (g / n).writeText('');
+      }
+      await (g / '.gitignore').writeText('a\\*b\ntrail\\ \n');
+      expect(names(await g.files(gitignore: true).toList())..sort(), ['.gitignore', 'axb', 'keep']);
+      expect(names(await g.files(only: r'a\*b').toList()), ['a*b']);
+      expect(r'a\*b'.glob.matches('axb'), isFalse);
+      expect(r'\{a,b\}'.glob.matches('{a,b}'), isTrue);
+    }, testOn: '!windows');
+
     setUp(() async {
       for (final f in [
         'lib/a.dart',
@@ -448,6 +467,43 @@ void main() {
   });
 
   group('copy and move', () {
+    test('two moves onto one name at once: the second is settled, never renamed over the first', () async {
+      await (dir / 'a' / '1.txt').writeText('from a');
+      await (dir / 'b' / '1.txt').writeText('from b');
+      final out = await (dir / 'out').mkdir();
+      await Future.wait([(dir / 'a' / '1.txt').move(into: out), (dir / 'b' / '1.txt').move(into: out)]);
+      expect(await (out / '1.txt').readText(), 'from a');
+      expect(await (dir / 'b' / '1.txt').readText(), 'from b', reason: 'skipped, so still where it was');
+      final copies = [
+        (dir / 'c.txt').writeText('c').then((f) => f.copy(to: out / '2.txt', conflict: Conflict.rename)),
+        (dir / 'd.txt').writeText('d').then((f) => f.copy(to: out / '2.txt', conflict: Conflict.rename)),
+      ];
+      expect((await Future.wait(copies)).toSet(), {out / '2.txt', out / '2 (1).txt'});
+    });
+
+    test('a merge keeps the mode of a folder that was there', () async {
+      await (dir / 'src' / 'x.txt').writeText('x');
+      await (dir / 'src').chmod('700');
+      await (dir / 'dst' / 'y.txt').writeText('y');
+      await (dir / 'dst').chmod('755');
+      await (dir / 'src').copy(to: dir / 'dst');
+      expect(mode(dir / 'dst'), 0x1ed);
+    }, testOn: '!windows');
+
+    test('inside a merge, a file where a folder goes is settled by conflict as a whole', () async {
+      await (dir / 's' / 'a' / 'x.txt').writeText('x');
+      await (dir / 's' / 'b.txt').writeText('b');
+      await (dir / 'd' / 'a').writeText('file a');
+      final skipped = (dir / 's').copy(to: dir / 'd');
+      expect(await skipped, dir / 'd');
+      expect((await (dir / 'd' / 'a').readText(), await (dir / 'd' / 'b.txt').readText()), ('file a', 'b'));
+      await (dir / 's').copy(to: dir / 'd', conflict: Conflict.rename);
+      expect(await (dir / 'd' / 'a (1)' / 'x.txt').readText(), 'x');
+      await expectLater((dir / 's').copy(to: dir / 'd', conflict: Conflict.fail), throwsA(isA<PathExistsException>()));
+      await (dir / 's').move(to: dir / 'd');
+      expect(await (dir / 's' / 'a' / 'x.txt').readText(), 'x', reason: 'a move skips it too, and leaves it');
+    });
+
     test('exactly one of to: and into:; into keeps the name (FS-15)', () async {
       final f = await (dir / 'a.txt').writeText('x');
       expect(() => f.copy(), throwsArgumentError);
@@ -713,6 +769,19 @@ void main() {
     Future<Renames> plan(String? Function(Path f) fn, {Conflict conflict = Conflict.skip}) =>
         dir.files().plan(fn, conflict: conflict);
 
+    test('a cancelled apply puts back what it staged for the items that never ran', () async {
+      for (var i = 0; i < 40; i++) {
+        await (dir / 'f$i.JPG').writeText('$i');
+      }
+      final batch = (await plan((f) => f.withExt('jpg').name)).apply();
+      await batch.statuses.first;
+      batch.cancel();
+      await batch.settled;
+      final all = names(await dir.entries().toList());
+      expect(all.where((n) => n.endsWith('.tmp')), isEmpty);
+      expect(all, hasLength(40));
+    });
+
     test('plan, apply and undo, a cycle included', () async {
       for (final (n, t) in [('a', 'AAA'), ('b', 'BBB'), ('c', 'CCC')]) {
         await (dir / '$n.txt').writeText(t);
@@ -823,6 +892,15 @@ void main() {
   });
 
   group('watching and locks', () {
+    test('cancelled before it has started, changes and tail leave nothing running', () async {
+      final log = await (dir / 'app.log').writeText('x\n');
+      for (final kind in ['changes', 'tail']) {
+        final exited = ReceivePort();
+        await Isolate.spawn(_listenAndCancel, (kind, log as String), onExit: exited.sendPort);
+        await exited.first.timeout(const Duration(seconds: 20), onTimeout: () => fail('$kind kept its isolate alive'));
+      }
+    });
+
     test('changes batches a burst of writes, outlives atomic writes, hides their temps', () async {
       final f = await (dir / 'w.txt').writeText('0');
       final onFile = <FileChanges>[], onDir = <FileChanges>[];
@@ -1034,4 +1112,12 @@ Future<Path?> _otherVolume() async {
     return await device(shm.path) == await device(Directory.systemTemp.path) ? null : Path(shm.path);
   }
   return null;
+}
+
+/// Listens to [args]' stream (`changes` of the file's folder, or its `tail`) and cancels at once:
+/// the isolate ends only once nothing of it is left running.
+Future<void> _listenAndCancel((String, String) args) async {
+  final (kind, log) = args;
+  final stream = kind == 'tail' ? Path(log).tail() : Path(log).parent.changes();
+  await stream.listen((_) {}).cancel();
 }

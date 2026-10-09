@@ -5,8 +5,7 @@
 /// and Bencode.
 ///
 /// ```dart
-/// final t = await Torrent.read('ubuntu.torrent');
-/// await t.download(into: 'iso').show('Ubuntu');
+/// await Torrent.read('ubuntu.torrent').download(into: 'iso').show('Ubuntu');
 /// ```
 ///
 /// {@category Formats}

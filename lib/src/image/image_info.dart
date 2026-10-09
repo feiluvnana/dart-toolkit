@@ -239,7 +239,8 @@ final class ImageInfo {
     this.quality,
   });
 
-  /// The header of the image file at [path]: size, format and, for a JPEG, its EXIF and quality.
+  /// The header of the image file at [path]: size, format, the EXIF its first 64 KiB hold (a
+  /// JPEG's, PNG's, WebP's or TIFF's) and, for a JPEG, its quality.
   /// A missing file is a [PathNotFoundException], a format this library does not read a
   /// [FormatException] naming the file.
   static Future<ImageInfo> read(String path) async {
@@ -280,7 +281,7 @@ final class ImageInfo {
     final format =
         ImageFormat._sniff(head) ?? (throw FormatException(_invalid(path, 'not a format this library reads')));
     final (w, h) = size ?? _probeMemory(head, path, past: !whole);
-    final exif = format == ImageFormat.jpeg ? _exif(head) : null;
+    final exif = _exifOf(head, format);
     final turned = (exif?.orientation ?? 1) >= 5;
     return ImageInfo(
       width: turned ? h : w,

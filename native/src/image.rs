@@ -1524,41 +1524,24 @@ fn compress(
         let out = encode(img, quality, true)?;
         return Ok(fits(&out).then_some((out, quality, f64::NAN)));
     }
+    // A budget with no score asked: only the size counts, so nothing is scored, and the highest
+    // quality goes first since it usually fits.
+    let scoring = target <= 100.0;
     let mut scaled = Cow::Borrowed(img);
     for _ in 0..=5 {
-        let source = linear(&viewed(&scaled))?;
-        // Quality only raises both the score and the size: the lowest one that scores [target] is
-        // also the smallest, and over budget the highest one that fits is the best left.
-        let (mut lo, mut hi) = (SEARCH_LOW, SEARCH_HIGH);
-        let (mut good, mut fitting): (Option<(Vec<u8>, u8, f64)>, Option<(Vec<u8>, u8, f64)>) =
-            (None, None);
-        while lo <= hi {
-            let q = lo + (hi - lo) / 2;
-            let out = encode(&scaled, q, false)?;
-            let score = similarity(&source, &viewed(&image::load_from_memory(&out).msg()?))?;
-            let ok = fits(&out);
-            if score >= target && ok {
-                good = Some((out, q, score));
-                hi = q - 1;
-            } else if !ok {
-                hi = q - 1;
-            } else {
-                fitting = Some((out, q, score));
-                lo = q + 1;
-            }
-        }
-        let met = good.is_some();
-        if let Some((out, q, score)) = good.or(fitting) {
-            // The thorough pass can move a few pixels: it is kept only if it still scores what the
-            // search found and is no larger.
-            let last = encode(&scaled, q, true)?;
-            if last.len() < out.len() {
-                let again = similarity(&source, &viewed(&image::load_from_memory(&last).msg()?))?;
-                if again >= if met { target } else { score } {
-                    return Ok(Some((last, q, again)));
+        let found = if scoring {
+            scored_search(&scaled, &encode, &fits, target)?
+        } else {
+            largest_fitting(&scaled, &encode, &fits)?.map(|(out, q)| {
+                // The thorough pass, kept when it is smaller and still fits.
+                match encode(&scaled, q, true) {
+                    Ok(last) if last.len() < out.len() && fits(&last) => (last, q, f64::NAN),
+                    _ => (out, q, f64::NAN),
                 }
-            }
-            return Ok(Some((out, q, score)));
+            })
+        };
+        if found.is_some() {
+            return Ok(found);
         }
         // Even the lowest quality is over budget: a smaller picture, then search again.
         let (w, h) = (scaled.width() * 9 / 10, scaled.height() * 9 / 10);
@@ -1568,6 +1551,77 @@ fn compress(
         scaled = Cow::Owned(scaled.resize(w, h, image::imageops::FilterType::Lanczos3));
     }
     Ok(None)
+}
+
+/// The lowest quality whose encoding of [img] scores [target] and [fits], else the highest that
+/// fits: the bytes, the quality and the score; `None` when even the lowest is over.
+fn scored_search(
+    img: &DynamicImage,
+    encode: &impl Fn(&DynamicImage, u8, bool) -> Result<Vec<u8>, String>,
+    fits: &impl Fn(&Vec<u8>) -> bool,
+    target: f64,
+) -> Result<Option<(Vec<u8>, u8, f64)>, String> {
+    let source = linear(&viewed(img))?;
+    // Quality only raises both the score and the size: the lowest one that scores [target] is
+    // also the smallest, and over budget the highest one that fits is the best left.
+    let (mut lo, mut hi) = (SEARCH_LOW, SEARCH_HIGH);
+    let (mut good, mut fitting): (Option<(Vec<u8>, u8, f64)>, Option<(Vec<u8>, u8, f64)>) = (None, None);
+    while lo <= hi {
+        let q = lo + (hi - lo) / 2;
+        let out = encode(img, q, false)?;
+        // Over budget is too high whatever it scores: not scored.
+        if !fits(&out) {
+            hi = q - 1;
+            continue;
+        }
+        let score = similarity(&source, &viewed(&image::load_from_memory(&out).msg()?))?;
+        if score >= target {
+            good = Some((out, q, score));
+            hi = q - 1;
+        } else {
+            fitting = Some((out, q, score));
+            lo = q + 1;
+        }
+    }
+    let met = good.is_some();
+    let Some((out, q, score)) = good.or(fitting) else {
+        return Ok(None);
+    };
+    // The thorough pass can move a few pixels: it is kept only if it still scores what the
+    // search found and is no larger.
+    let last = encode(img, q, true)?;
+    if last.len() < out.len() {
+        let again = similarity(&source, &viewed(&image::load_from_memory(&last).msg()?))?;
+        if again >= if met { target } else { score } {
+            return Ok(Some((last, q, again)));
+        }
+    }
+    Ok(Some((out, q, score)))
+}
+
+/// The highest quality in the search range whose fast encoding [fits], with it: the top one
+/// first, then a binary search below it; `None` when even the lowest is over.
+fn largest_fitting(
+    img: &DynamicImage,
+    encode: &impl Fn(&DynamicImage, u8, bool) -> Result<Vec<u8>, String>,
+    fits: &impl Fn(&Vec<u8>) -> bool,
+) -> Result<Option<(Vec<u8>, u8)>, String> {
+    let top = encode(img, SEARCH_HIGH, false)?;
+    if fits(&top) {
+        return Ok(Some((top, SEARCH_HIGH)));
+    }
+    let (mut lo, mut hi, mut best) = (SEARCH_LOW, SEARCH_HIGH - 1, None);
+    while lo <= hi {
+        let q = lo + (hi - lo) / 2;
+        let out = encode(img, q, false)?;
+        if fits(&out) {
+            best = Some((out, q));
+            lo = q + 1;
+        } else {
+            hi = q - 1;
+        }
+    }
+    Ok(best)
 }
 
 #[no_mangle]
@@ -1607,8 +1661,9 @@ pub unsafe extern "C" fn tk_image_compress(
 }
 
 /// The PNG file [data] recompressed by oxipng: every pixel, bit depth, palette and frame kept.
-/// With [strip] the chunks that do not change the picture (text, EXIF, timestamps) go too;
-/// without it every chunk stays.
+/// With [strip] the chunks that do not change the picture (text, EXIF, timestamps) go too,
+/// except the EXIF of a picture that is turned, since its orientation lives there; without it
+/// every chunk stays.
 #[no_mangle]
 pub unsafe extern "C" fn tk_image_png(
     data: *const u8,
@@ -1618,9 +1673,19 @@ pub unsafe extern "C" fn tk_image_png(
     out_len: *mut usize,
 ) -> i32 {
     guard(|| {
+        let data = unsafe { bytes(data, len) };
         let mut opts = oxipng::Options::from_preset(PNG_PRESET);
-        opts.strip = if strip { oxipng::StripChunks::Safe } else { oxipng::StripChunks::None };
-        let out = oxipng::optimize_from_memory(unsafe { bytes(data, len) }, &opts).msg()?;
+        opts.strip = match (strip, read_exif_orientation_from_bytes(data)) {
+            (false, _) => oxipng::StripChunks::None,
+            // oxipng's `Safe` set, which it does not export, and the EXIF.
+            (true, 2..=8) => oxipng::StripChunks::Keep(
+                [*b"cICP", *b"iCCP", *b"sRGB", *b"pHYs", *b"acTL", *b"fcTL", *b"fdAT", *b"eXIf"]
+                    .into_iter()
+                    .collect(),
+            ),
+            (true, _) => oxipng::StripChunks::Safe,
+        };
+        let out = oxipng::optimize_from_memory(data, &opts).msg()?;
         give(out, out_ptr, out_len);
         Ok(0)
     })

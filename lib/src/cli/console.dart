@@ -599,8 +599,8 @@ extension BatchShow<I, T> on Batch<I, T> {
   }
 }
 
-/// A display fed by hand, for work that has no task: [tick] for each item done, or [add] its
-/// real statuses; [close] ends it. It draws a [Tally] as a batch's `show` does.
+/// A display fed by hand, for work that has no task: [tick] for each item done, or its real
+/// statuses added to [tally]; [close] ends it. It draws a [Tally] as a batch's `show` does.
 ///
 /// ```dart
 /// final bar = Console.bar('Crawling', count: links.length);
@@ -610,7 +610,8 @@ extension BatchShow<I, T> on Batch<I, T> {
 ///
 /// {@category CLI}
 final class Bar {
-  /// What it has been told: hand it to `Board` to draw the same work in a `Tui` app.
+  /// What it has been told: `bar.tally.add(status)` for an item's progress, how it ended, a
+  /// warning; hand it to `Board` to draw the same work in a `Tui` app.
   final Tally tally;
   late final _Display _display;
   int _ticks = 0;
@@ -624,9 +625,6 @@ final class Bar {
     _ticks++;
     tally.add(Done(_Tick(_ticks), null, label: label ?? '$_ticks'));
   }
-
-  /// [status] about an item: its progress, how it ended, a warning.
-  void add(Status<Object?, Object?> status) => tally.add(status);
 
   /// Ends it with its summary: `✓ title (3.1s)`, or `⚠ title: 2 of 50 failed` and a
   /// [BatchException] holding the failures.
@@ -948,13 +946,8 @@ abstract final class Console {
   }) async => [for (final i in await _choose(question, choices, true, or, label, filter)) choices[i]];
 }
 
-/// [value] as an answer or a hint shows it.
-String _label(Object? value) => switch (value) {
-  Enum() => value.name,
-  Duration() => value.humanized,
-  DateTime() => value.toIso8601String(),
-  _ => '$value',
-};
+/// [value] as an answer, a hint or a choice shows it.
+const _label = TerminalBridge.label;
 
 /// How [Console.ask] reads a [T] when no `parse:` is given; [what] names the call for the error.
 T Function(String) _reader<T extends Object>(String what) {

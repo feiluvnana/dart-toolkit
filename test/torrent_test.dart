@@ -68,6 +68,12 @@ void main() {
       );
       expect(Bencode.decode(_b('${'l' * 200}${'e' * 200}')), isA<List<Object>>());
     });
+
+    test('encode refuses the nesting decode refuses, so what it writes reads back', () {
+      Object nest(int n) => n == 0 ? <Object>[] : <Object>[nest(n - 1)];
+      expect(() => Bencode.encode(nest(Bencode.maxDepth)), throwsArgumentError);
+      expect(Bencode.decode(Bencode.encode(nest(Bencode.maxDepth - 1))), isA<List<Object>>());
+    });
   });
 
   group('Magnet', () {
@@ -93,6 +99,9 @@ void main() {
       expect(() => Torrent.parse('magnet:?dn=Test'), says('no xt=urn:btih:'));
       expect(() => Torrent.parse('magnet:?xt=urn:btmh:1220abcd'), says('v2-only'));
       expect(() => Torrent.parse('magnet:?xt=urn:btih:xyz'), says('40 hex digits'));
+      // Padding and dashes are no base32 digits: decoded, they would make a 19-byte hash.
+      expect(() => Torrent.parse('magnet:?xt=urn:btih:2N42H3TLNNVQ2MRVX7XZKYAXSCX3QBQ='), says('not base32'));
+      expect(() => Torrent.parse('magnet:?xt=urn:btih:2N42H3TLNNVQ2MRVX7XZKYAXSCX3QB-I'), says('not base32'));
       expect(() => Torrent.parse('http://example.com'), says('not a magnet'));
     });
   });
@@ -165,6 +174,51 @@ void main() {
       expect(t.files.map((f) => ('${f.path}', f.size, f.offset)), [('a.txt', 10, 0), ('sub/b.txt', 24, 16)]);
       expect((t.size, t.isFolder), (34, true));
     });
+
+    test('a creation date past what a DateTime holds is no date, never a RangeError', () {
+      final info = {'name': 'x', 'piece length': 16, 'pieces': Uint8List(20), 'length': 1};
+      expect(Torrent.decode(Bencode.encode({'creation date': 1 << 60, 'info': info})).creationDate, isNull);
+      expect(Torrent.decode(Bencode.encode({'creation date': -(1 << 50), 'info': info})).creationDate, isNull);
+    });
+
+    test('piece hashes that do not match the size are a FormatException, never a native failure', () async {
+      final info = {'name': 'f.bin', 'piece length': 16, 'pieces': Uint8List(60), 'length': 10};
+      expect(
+        () => Torrent.decode(Bencode.encode({'info': info})),
+        throwsA(isA<FormatException>().having((e) => e.message, 'm', contains('3 piece hashes'))),
+      );
+      expect(
+        () => Torrent.decode(
+          Bencode.encode({
+            'info': {...info, 'pieces': Uint8List(0)},
+          }),
+        ),
+        throwsFormatException,
+      );
+    });
+
+    test('create and verify open files as pieces reach them, so a folder past the descriptor limit works', () async {
+      final dir = Directory('${tmp.path}/many')..createSync();
+      for (var i = 0; i < 300; i++) {
+        File('${dir.path}/f$i.txt').writeAsStringSync('file $i');
+      }
+      final script = File('${tmp.path}/many.dart')
+        ..writeAsStringSync('''
+import 'package:dart_toolkit/torrent.dart';
+Future<void> main() async {
+  final made = await Torrent.create('${dir.path}');
+  print('complete=\${(await made.verify('${tmp.path}')).isComplete}');
+}
+''');
+      final run = await Process.run('/bin/sh', [
+        '-c',
+        r'ulimit -n 128 && exec "$0" run --packages="$1" "$2"',
+        Platform.resolvedExecutable,
+        '${Directory.current.path}/.dart_tool/package_config.json',
+        script.path,
+      ]);
+      expect('${run.stdout}${run.stderr}', contains('complete=true'));
+    }, testOn: '!windows');
 
     test('the info hash is of the info bytes, even when a comment holds "4:infod" (TOR-14)', () {
       final info = {'name': 'x', 'piece length': 16, 'pieces': Uint8List(20), 'length': 1};

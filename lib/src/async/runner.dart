@@ -49,21 +49,25 @@ String _jobsText(List<Map<String, Object?>> jobs) => jsonEncode({'version': _sto
 
 // ---- a program's own jobs ------------------------------------------------------------------
 
-/// This program's unfinished jobs, in `local/<pid>.json`, locked while it runs.
+/// This program's unfinished jobs ([_kept] names them), in `local/<pid>.json`, locked while it
+/// runs.
 final class _Record<I, T> {
   final String _folder;
   final _Codec<I, T> _codec;
+  final List<Job<I, T>> Function() _kept;
   RandomAccessFile? _held;
   Future<void> _writing = Future.value();
+  bool _due = false;
 
-  _Record(this._folder, this._codec);
+  _Record(this._folder, this._codec, this._kept);
 
   String get _local => _join(_folder, 'local');
 
   File get _file => File(_join(_local, '$pid.json'));
 
   /// The jobs of the runs that ended without finishing them, as (id, item, paused): each such
-  /// record is read, then deleted. A run still going holds its lock, and is left alone.
+  /// record is read and emptied under its lock, then deleted. A run still going holds its lock,
+  /// and is left alone.
   Future<List<(String, I, bool)>> adopt() async {
     final out = <(String, I, bool)>[];
     final dir = Directory(_local);
@@ -76,11 +80,13 @@ final class _Record<I, T> {
         await held.lock(FileLock.exclusive);
       } on FileSystemException catch (_) {
         await held?.close();
-        continue; // its program is running
+        continue; // its program is running, or another program took it first
       }
       try {
         await held.setPosition(0);
         final text = utf8.decode(await held.read(await held.length()), allowMalformed: true);
+        // Emptied before the lock goes: a program that opened it meanwhile finds nothing to take.
+        await held.truncate(0);
         for (final job in _readJobs(text, entry.path)) {
           out.add(('${job['id']}', _codec.itemOf(job['item']), job['paused'] == true));
         }
@@ -94,15 +100,21 @@ final class _Record<I, T> {
     return out;
   }
 
-  /// Writes [jobs] as this program's, in place: the lock holds the file, so it is not replaced.
-  Future<void> save(List<Job<I, T>> jobs) {
-    final text = _jobsText([
-      for (final job in jobs) {'id': job.id, 'item': _codec.item(job.item), if (job.status is Paused) 'paused': true},
-    ]);
+  /// Writes the jobs as this program's, in place (the lock holds the file, so it is not
+  /// replaced). Changes made while a write waits share it.
+  Future<void> save() {
+    if (_due) return _writing;
+    _due = true;
     return _writing = _writing.catchError((Object _) {}).then((_) async {
       // A failed write before is replaced by this whole one.
+      _due = false;
+      final bytes = utf8.encode(
+        _jobsText([
+          for (final job in _kept())
+            {'id': job.id, 'item': _codec.json(job.item), if (job.status is Paused) 'paused': true},
+        ]),
+      );
       final held = _held ??= await _open();
-      final bytes = utf8.encode(text);
       await held.setPosition(0);
       await held.writeFrom(bytes);
       await held.truncate(bytes.length);
@@ -117,16 +129,17 @@ final class _Record<I, T> {
     return held;
   }
 
-  /// The last write, [jobs], then the lock let go: the next run continues them. With none
-  /// left, the record goes.
-  Future<void> close(List<Job<I, T>> jobs) async {
-    if (jobs.isNotEmpty || _held != null) {
-      await save(jobs).catchError((Object _) {}); // unwritten, it leaves nothing to continue
+  /// The last write, then the lock let go: the next run continues the jobs. With none left,
+  /// the record goes.
+  Future<void> close() async {
+    final left = _kept().isNotEmpty;
+    if (left || _held != null) {
+      await save().catchError((Object _) {}); // unwritten, it leaves nothing to continue
     }
     await _writing.catchError((Object _) {}); // as above
     await _held?.close();
     _held = null;
-    if (jobs.isEmpty) {
+    if (!left) {
       try {
         await _file.delete();
       } on FileSystemException catch (_) {} // never written: nothing to delete
@@ -475,7 +488,7 @@ final class _Runner<I, T> {
       for (final job in _pool._jobs.values)
         {
           'id': job.id,
-          'item': codec.item(job.item),
+          'item': codec.json(job.item),
           'status': switch (job.status) {
             Waiting() || Running() => const {'kind': 'waiting'}, // run again by the next runner
             final other => codec.status(other),
@@ -549,7 +562,7 @@ final class _Runner<I, T> {
 
   Map<String, Object?> _json(Job<I, T> job) => {
     'id': job.id,
-    'item': _pool._codec.item(job.item),
+    'item': _pool._codec.json(job.item),
     'status': _pool._codec.status(job.status),
   };
 

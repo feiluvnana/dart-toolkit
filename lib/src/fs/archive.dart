@@ -96,7 +96,7 @@ final class Archive {
   /// archive a [FormatException]; a wrong or missing password a [PasswordException].
   static Task<Archive> read(String path, {Secret? password, bool unsafe = false}) {
     final at = p.absolute(path);
-    return TaskInternals.start(Path(path), _label(path), (work) async {
+    return TaskInternals.start(Path(path), FileBridge.label(path), (work) async {
       await _there(at);
       final pw = password?.reveal;
       final listed = await NativeBridge.main.run(work, _listCall(at, pw));
@@ -118,7 +118,7 @@ final class Archive {
   /// else; a [MissingException] when there is none.
   Task<Uint8List> entry(String name) {
     final at = p.absolute(path), pw = _password?.reveal, flags = _flags(_unsafe);
-    return TaskInternals.start(path, '${_label(path)}: $name', (work) async {
+    return TaskInternals.start(path, '${FileBridge.label(path)}: $name', (work) async {
       try {
         return await NativeBridge.main.run(work, _readCall(at, name, pw, flags));
       } on FormatException catch (e) {
@@ -211,9 +211,9 @@ extension PathArchiveExtensions on Path {
     if (original != Original.keep && (p.equals(src, dest) || p.isWithin(src, dest))) {
       throw ArgumentError('Cannot ${original.name} $this once archived: $to is inside it');
     }
-    return TaskInternals.start(this, _label(this), (work) async {
+    return TaskInternals.start(this, FileBridge.label(this), (work) async {
       final type = await FileSystemEntity.type(src);
-      if (type == FileSystemEntityType.notFound) throw _missing(src, 'Cannot archive');
+      if (type == FileSystemEntityType.notFound) throw FileBridge.notFound(src, 'Cannot archive');
       final isDir = type == FileSystemEntityType.directory;
       if (format.isStream && isDir) throw ArgumentError('Cannot compress the folder $this to $to: it holds one file');
       if (!isDir && only != null) throw ArgumentError.value(only, 'only', 'Invalid filter for $this, a file');
@@ -230,7 +230,7 @@ extension PathArchiveExtensions on Path {
       }
       try {
         final picked = only == null ? null : await Path(src).files(only: only).toList();
-        final temp = _beside(target);
+        final temp = FileBridge.temp(target);
         work.defer(() => _gone(temp));
         void report(NativeReport r) => work
           ..amount(r.bytes, total: r.bytesTotal == 0 ? null : r.bytesTotal)
@@ -279,7 +279,7 @@ extension PathArchiveExtensions on Path {
     bool unsafe = false,
   }) {
     final src = p.absolute(this), dest = p.absolute(into), flags = _flags(unsafe);
-    return TaskInternals.start(this, _label(this), (work) async {
+    return TaskInternals.start(this, FileBridge.label(this), (work) async {
       await _there(src);
       _refuseLaterPart(src);
       final code = NativeBridge.main.withText(src, _N.format);
@@ -326,7 +326,7 @@ extension PathArchiveExtensions on Path {
           return Path(into);
         }
         try {
-          final temp = _beside(target);
+          final temp = FileBridge.temp(target);
           work.defer(() => _gone(temp));
           await NativeBridge.main.run(work, _decompressCall(src, temp, flags), onProgress: report);
           await FileBridge.rename(File(temp), target);
@@ -334,10 +334,13 @@ extension PathArchiveExtensions on Path {
           FileBridge.release(target);
         }
       } else {
-        final stage = _beside(dest);
+        // Inside a folder that is there, so the moves in are renames on its own volume even when
+        // it is a mount point or a link to another one; beside it otherwise, renamed in whole.
+        final there = await FileSystemEntity.type(dest) != FileSystemEntityType.notFound;
+        final stage = FileBridge.temp(there ? p.join(dest, p.basename(src)) : dest);
         work.defer(() => _gone(stage));
         await NativeBridge.main.run(work, _extractCall(src, stage, pw, only, flags), onProgress: report);
-        if (!flatten && await FileSystemEntity.type(dest) == FileSystemEntityType.notFound) {
+        if (!flatten && !there) {
           await Directory(p.dirname(dest)).create(recursive: true);
           await FileBridge.rename(Directory(stage), dest);
         } else if (!await _merge(work, stage, dest, conflict, flatten, this)) {
@@ -350,28 +353,17 @@ extension PathArchiveExtensions on Path {
   }
 }
 
-/// [path] as a row names it: its folder and name.
-String _label(String path) {
-  final parts = p.split(path);
-  return parts.length < 2 ? path : p.joinAll(parts.sublist(parts.length - 2));
-}
-
-PathNotFoundException _missing(String path, String message) =>
-    PathNotFoundException(path, const OSError('No such file or directory', 2), message);
-
 /// Nothing, or a [PathNotFoundException] when [path] is not there: checked first, so a missing
 /// file never reads as a damaged one.
 Future<void> _there(String path) async {
-  if (await FileSystemEntity.type(path) == FileSystemEntityType.notFound) throw _missing(path, 'Cannot open');
+  if (await FileSystemEntity.type(path) == FileSystemEntityType.notFound) {
+    throw FileBridge.notFound(path, 'Cannot open');
+  }
 }
 
 /// [path]'s modification time when [conflict] compares it, else `null`.
 Future<DateTime?> _modified(String path, Conflict conflict) async =>
     conflict == Conflict.newer ? (await FileStat.stat(path)).modified : null;
-
-/// A new name beside [target], as an atomic write's temporary file is named, so a watch leaves
-/// it out.
-String _beside(String target) => p.join(p.dirname(target), '.${p.basename(target)}.${FileBridge.token()}.tmp');
 
 /// [path] deleted, whatever it is; one already gone is no matter. On Windows a read-only file
 /// is made writable first.
@@ -406,8 +398,13 @@ Future<void> _dispose(Original original, String src, List<Path>? picked, {bool v
 
 /// [picked], under [root], as the native walk takes them: relative names, each after a NUL, so
 /// that none at all is not mistaken for everything; `null` for everything.
-String? _names(String root, List<Path>? picked) =>
-    picked == null ? null : '\x00${picked.map((f) => p.relative(f, from: root)).join('\x00')}';
+String? _names(String root, List<Path>? picked) {
+  if (picked == null) return null;
+  // The listing's paths are under its normalized root: a cut, not `p.relative` per file.
+  final base = p.normalize(root);
+  final cut = base.endsWith(p.separator) ? base.length : base.length + 1;
+  return '\x00${picked.map((f) => f.substring(cut)).join('\x00')}';
+}
 
 /// The native flags: unsafe, and whether `only` folds case as the platform's paths do.
 int _flags(bool unsafe) => (unsafe ? 1 : 0) | (Platform.isMacOS || Platform.isWindows ? 2 : 0);
@@ -601,6 +598,7 @@ abstract final class _N {
   static final contentsFree = _lib.lookupFunction<Void Function(Pointer<Void>), void Function(Pointer<Void>)>(
     'tk_archive_contents_free',
   );
+  static final release = _lib.lookup<NativeFunction<Void Function(Pointer<Void>)>>('tk_release');
 }
 
 /// [texts] as UTF-8 in one native allocation; `null` and `''` are a null pointer.
@@ -678,29 +676,35 @@ Uint8List _take(String subject, String? password, int Function(Pointer<_U8> out,
   }
 }
 
-List<ArchiveEntry> _entriesOf(Uint8List listed) => [
-  for (final e in (jsonDecode(utf8.decode(listed)) as List).cast<Map<String, Object?>>())
-    ArchiveEntry(
-      name: e['name'] as String,
-      size: e['size'] as int,
-      compressedSize: e['compressed'] as int,
-      isDir: e['dir'] as bool,
-      isEncrypted: e['encrypted'] as bool,
-      modified: e['modified'] == null ? null : DateTime.fromMillisecondsSinceEpoch((e['modified'] as int) * 1000),
-    ),
-];
+/// The entries `tk_archive_list` writes, each a record as [_entryAt] reads it.
+List<ArchiveEntry> _entriesOf(Uint8List listed) {
+  final entries = <ArchiveEntry>[];
+  for (var at = 0; at < listed.length;) {
+    final (entry, next) = _entryAt(listed, at);
+    entries.add(entry);
+    at = next;
+  }
+  return entries;
+}
 
-/// A file's header as `tk_archive_contents` writes it, read back.
-ArchiveEntry _entryOf(Uint8List head) {
-  final d = ByteData.sublistView(head);
-  final modified = d.getInt64(16, Endian.little);
-  return ArchiveEntry(
-    name: utf8.decode(Uint8List.sublistView(head, 25)),
-    size: d.getInt64(0, Endian.little),
-    compressedSize: d.getInt64(8, Endian.little),
-    isDir: false,
-    isEncrypted: head[24] == 1,
-    modified: modified == _noTime ? null : DateTime.fromMillisecondsSinceEpoch(modified * 1000),
+/// The entry recorded at [at] in [bytes], and where the next one starts: size, compressed
+/// size and modified time (`i64::MIN` for none) as little-endian 64-bit numbers, a flags byte
+/// (1 encrypted, 2 a folder), the name's length as a little-endian 32-bit number, the name.
+(ArchiveEntry, int) _entryAt(Uint8List bytes, int at) {
+  final d = ByteData.sublistView(bytes);
+  final modified = d.getInt64(at + 16, Endian.little);
+  final flags = bytes[at + 24];
+  final end = at + 29 + d.getUint32(at + 25, Endian.little);
+  return (
+    ArchiveEntry(
+      name: utf8.decode(Uint8List.sublistView(bytes, at + 29, end)),
+      size: d.getInt64(at, Endian.little),
+      compressedSize: d.getInt64(at + 8, Endian.little),
+      isDir: flags & 2 != 0,
+      isEncrypted: flags & 1 != 0,
+      modified: modified == _noTime ? null : DateTime.fromMillisecondsSinceEpoch(modified * 1000),
+    ),
+    end,
   );
 }
 
@@ -732,8 +736,9 @@ Stream<({ArchiveEntry entry, Uint8List bytes})> _contents(String path, String? p
 
   void heard(int code, _U8 head, int headLen, _U8 data, int dataLen) {
     if (code == 1) {
-      final entry = _entryOf(NativeBridge.main.adopt(head, headLen));
-      final bytes = NativeBridge.main.adopt(data, dataLen);
+      final (entry, _) = _entryAt(NativeBridge.main.adopt(head, headLen), 0);
+      // The library's own buffer, freed when the list is: no copy of a file's bytes.
+      final bytes = data.asTypedList(dataLen, finalizer: _N.release, token: data.cast());
       asked = false;
       if (pass == nullptr) return;
       out.add((entry: entry, bytes: bytes));
@@ -742,7 +747,6 @@ Stream<({ArchiveEntry entry, Uint8List bytes})> _contents(String path, String? p
     }
     // The pass's last word: nothing calls after it.
     final failure = code < 0 ? utf8.decode(NativeBridge.main.adopt(head, headLen), allowMalformed: true) : null;
-    NativeBridge.main.adopt(data, dataLen);
     listener.close();
     if (pass == nullptr) return;
     end();
@@ -794,7 +798,7 @@ Stream<({ArchiveEntry entry, Uint8List bytes})> _contents(String path, String? p
 /// or missing password a [PasswordException], and anything else a [FormatException].
 Exception _failure(String message, String subject, String? password) {
   final m = message.toLowerCase();
-  if (_osError.hasMatch(m)) return NativeBridge.fileError(message, subject, '');
+  if (NativeBridge.fileError(message, subject, '') case final os when os is! FormatException) return os;
   if (_missingPassword.any(m.contains)) return PasswordException('Invalid archive in $subject: missing password');
   // Without a password, a CRC or a corrupt stream is damage; with one, the likeliest cause is it.
   if (_wrongPassword.any(m.contains) || (password != null && _damage.any(m.contains))) {
@@ -803,7 +807,6 @@ Exception _failure(String message, String subject, String? password) {
   return FormatException('Invalid archive in $subject: $message');
 }
 
-final _osError = RegExp(r'\(os error (\d+)\)');
 const _missingPassword = ['password required', 'passwordrequired', 'password for encrypted archive not specified'];
 const _wrongPassword = ['password provided is incorrect', 'wrong password', 'maybebadpassword'];
 const _damage = ['file crc error', 'corrupted input data', 'checksum'];

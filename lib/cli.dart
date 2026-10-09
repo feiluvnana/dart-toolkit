@@ -2,7 +2,7 @@
 ///
 /// `Cli` for commands, options and arguments; `Console` for logs, prompts and drawing work
 /// (`task.show(title)`, `batch.show(title)`, `Console.bar`); `Style` and the `Palette` for how
-/// it looks; `FakeTerminal` to test it under `Io.scope(terminal:)`.
+/// it looks; `FakeTerminal` (`testing.dart`) to test it under `Io.scope(terminal:)`.
 ///
 /// {@category CLI}
 library;
@@ -18,7 +18,6 @@ export 'src/terminal.dart'
         BatchView,
         Char,
         Color,
-        FakeTerminal,
         ItemView,
         KeyPress,
         LogLevel,

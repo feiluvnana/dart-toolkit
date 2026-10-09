@@ -2,6 +2,8 @@ part of '../core.dart';
 
 final _envLineBreakRegex = RegExp(r'\r?\n');
 final _envCommentRegex = RegExp(r'\s#');
+
+/// A `$VAR` or `${VAR}`, or the `$` a `\$` escapes.
 final _envReference = RegExp(r'\\\$|\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)');
 
 final class _CaseInsensitiveMap<V> extends MapBase<String, V> {
@@ -78,23 +80,7 @@ abstract final class Env {
   /// A blank value is absence: [or], `null` for a nullable [T], else a [MissingException]. A
   /// value that is there but does not read as [T] is a [FormatException], which [or] does not
   /// answer: `Env.get<int>('PORT', or: 0)` covers an unset variable, never a mistyped one.
-  static T get<T extends Object?>(String key, {T? or}) {
-    final raw = _raw(key);
-    if (raw == null) {
-      if (or != null) return or;
-      // Untyped (`Object?`, the bound) still throws: only an asked-for `?` is the absence door.
-      if (null is T && T != _Unknown) return null as T;
-      throw MissingException('variable $key', where: 'the environment');
-    }
-    final parsed = CoerceBridge.coerce<T>(raw);
-    if (parsed != null) return parsed;
-    if (T != Object && T != _Unknown && !CoerceBridge.reads<T>()) {
-      throw ArgumentError(
-        'Env.get<$T>: must be String, int, double, num, bool, Duration, DateTime, Uri, Path or Secret',
-      );
-    }
-    throw FormatException('Invalid variable $key: "$raw", expected $T');
-  }
+  static T get<T extends Object?>(String key, {T? or}) => _readText(_raw(key), or, variable: key);
 
   static String? _raw(String key) {
     for (_EnvLayer? layer = _layer; layer != null; layer = layer.parent) {
@@ -118,23 +104,6 @@ abstract final class Env {
 
   /// Whether [key] holds a value that is not blank.
   static bool has(String key) => _raw(key) != null;
-
-  /// Whether this runs under continuous integration: `CI`, or the variable a known CI sets.
-  static bool get isCI {
-    final ci = _raw('CI')?.toLowerCase();
-    if (ci == 'true' || ci == '1') return true;
-    for (final key in const [
-      'GITHUB_ACTIONS',
-      'GITLAB_CI',
-      'TRAVIS',
-      'CIRCLECI',
-      'BITBUCKET_BUILD_NUMBER',
-      'TF_BUILD',
-    ]) {
-      if (_raw(key) != null) return true;
-    }
-    return false;
-  }
 
   /// Runs [body], then undoes every [set] and [unset] made inside it. The scope holds until
   /// [body]'s result (a future, a task, a batch) has finished.
@@ -246,8 +215,6 @@ abstract final class Env {
     final tail = rest.trim();
     return tail.isEmpty || tail.startsWith('#');
   }
-
-  /// A `$VAR` or `${VAR}` as it stands now, or the `$` a `\$` escapes.
 
   /// Whether anything was set or unset, so a child needs an environment of its own.
   static bool get _isOverridden {

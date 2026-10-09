@@ -35,7 +35,8 @@ abstract final class Bencode {
 }
 
 void _encode(Object? value, BytesBuilder out, int depth) {
-  if (depth > Bencode.maxDepth) {
+  // As deep as [Bencode.decode] reads back: a list or dictionary at most [Bencode.maxDepth] down.
+  if (depth >= Bencode.maxDepth && value is! Uint8List && (value is List || value is Map)) {
     throw ArgumentError.value(value, 'value', 'Invalid bencode: nested past ${Bencode.maxDepth}');
   }
   void bytes(List<int> b) => out

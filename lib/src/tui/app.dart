@@ -248,13 +248,6 @@ final class _Engine<S, M> {
     _fail(const CancelledException('Interrupted'), StackTrace.current);
   }
 
-  /// Raw mode reads ^C as a byte: raised as the SIGINT it would have been, so a `Cli` leaves
-  /// through its cleanups with 130; the terminal's own watch then ends the app.
-  void _ctrlC() {
-    if (TerminalBridge.isTty(term) && !Platform.isWindows && Process.killPid(pid, ProcessSignal.sigint)) return;
-    _interrupt();
-  }
-
   /// [message], from `send`, `listen`, a [Button] or a [Clickable], as the [Sent] it is.
   void _message(Object? message) {
     if (message is M) return _event(Sent<M>(message));
@@ -273,7 +266,7 @@ final class _Engine<S, M> {
   void _event(TuiEvent<M> e) {
     if (_done.isCompleted) return;
     try {
-      if (e == const KeyPress('c', ctrl: true)) return _ctrlC();
+      if (e == const KeyPress('c', ctrl: true)) return TerminalBridge.ctrlC(term, _interrupt);
       if (e is Resize) {
         _front = null;
         _askPosition = inline && app.mouse;

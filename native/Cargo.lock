@@ -451,7 +451,6 @@ dependencies = [
  "cfg-if",
  "constant_time_eq 0.4.2",
  "cpufeatures 0.3.1",
- "memmap2",
  "rayon-core",
 ]
 
@@ -873,7 +872,6 @@ dependencies = [
  "libc",
  "libwebp-sys",
  "md-5",
- "memmap2",
  "mozjpeg",
  "oxipng",
  "rayon",

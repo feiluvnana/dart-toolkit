@@ -141,7 +141,9 @@ class Element extends Node {
   int _slot = 0;
 
   Element(this.name, [Map<String, String>? attributes, this.syntax = Syntax.html])
-    : attributes = name == 'base' ? _BaseAttributes(attributes ?? {}) : attributes ?? {};
+    : attributes = name == 'base' ? _BaseAttributes(attributes ?? {}) : attributes ?? {} {
+    if (name == 'base') _baseElements++;
+  }
 
   /// Child elements, skipping text.
   Selection<Element> get children => Selection._(_nodes.whereType<Element>().toList(), '> *');
@@ -154,10 +156,6 @@ class Element extends Node {
 
   /// The `id` attribute, or `null`.
   String? get id => attributes['id'];
-
-  /// The `class` attribute as a set that writes through: `el.classes.add('active')` changes the
-  /// attribute.
-  Set<String> get classes => _Classes(this);
 
   /// Attribute [name]; when it is absent, [or], else a [MissingException] naming it and the tag.
   String attr(String name, {String? or}) =>
@@ -225,9 +223,6 @@ class Element extends Node {
 
   /// Appends [node] to this element's children, detaching it from where it was.
   void append(Node node) => _insert(node, _nodes.length);
-
-  /// Prepends [node] to this element's children, detaching it from where it was.
-  void prepend(Node node) => _insert(node, 0);
 
   void _insert(Node node, int at) {
     if (node is Attribute) throw ArgumentError.value(node, 'node', 'Invalid child: an attribute');
@@ -351,15 +346,6 @@ class Element extends Node {
     return out;
   }
 
-  /// The children serialised, without this element's own tags.
-  String get innerMarkup {
-    final sb = StringBuffer();
-    for (final n in _nodes) {
-      _serialize(n, sb);
-    }
-    return sb.toString();
-  }
-
   @override
   String get markup {
     final sb = StringBuffer();
@@ -414,35 +400,6 @@ class Element extends Node {
       for (final MapEntry(:key, :value) in raw.entries)
         if (value.length == 1) key: value.first else key: value,
     };
-  }
-
-  /// The labelled values here, as a reader pairs them: `<th>Size</th><td>4 MB</td>` rows,
-  /// `<dt>`/`<dd>` pairs, and `Label: value` lines. A key loses its trailing colon; the first of
-  /// a repeated label is kept; `{}` when there are none.
-  ///
-  /// ```dart
-  /// final info = page.$('.infobox').first.pairs;   // {'Released': '2019', 'Size': '4 MB'}
-  /// ```
-  Map<String, String> get pairs {
-    final out = <String, String>{};
-    void put(String key, String value) {
-      final k = key.endsWith(':') || key.endsWith('：') ? key.substring(0, key.length - 1).trim() : key;
-      if (k.isNotEmpty && value.isNotEmpty) out.putIfAbsent(k, () => value);
-    }
-
-    for (final row in [if (name == 'tr') this, ...$('tr')]) {
-      if (row.children.toList() case [final th, final td] when th.name == 'th' && td.name == 'td') {
-        put(th.text, td.text);
-      }
-    }
-    for (final dt in [if (name == 'dt') this, ...$('dt')]) {
-      if (dt.next case final dd? when dd.name == 'dd') put(dt.text, dd.text);
-    }
-    for (final line in lines) {
-      final at = _pairMark.firstMatch(line);
-      if (at != null && at.start > 0) put(line.substring(0, at.start).trim(), line.substring(at.end).trim());
-    }
-    return out;
   }
 
   /// The [Request] a browser sends when this form is submitted, or, for a submit button
@@ -607,59 +564,6 @@ Uri _withoutQuery(Uri u) => Uri(
 
 final _ws = RegExp(r'\s+');
 
-/// An element's `class` attribute as a set: reads split it, writes join it back.
-final class _Classes extends SetBase<String> {
-  final Element _e;
-
-  _Classes(this._e);
-
-  List<String> get _list => switch (_e.attributes['class']) {
-    null => const [],
-    final s => [
-      for (final c in s.split(_ws))
-        if (c.isNotEmpty) c,
-    ],
-  };
-
-  void _write(List<String> classes) =>
-      classes.isEmpty ? _e.attributes.remove('class') : _e.attributes['class'] = classes.join(' ');
-
-  static String _token(String value) => value.isEmpty || value.contains(_ws)
-      ? throw ArgumentError.value(value, 'value', 'Invalid class: one name, without spaces')
-      : value;
-
-  @override
-  bool add(String value) {
-    final list = _list;
-    if (list.contains(_token(value))) return false;
-    _write([...list, value]);
-    return true;
-  }
-
-  @override
-  bool remove(Object? value) {
-    final list = _list;
-    if (!list.remove(value)) return false;
-    _write(list);
-    return true;
-  }
-
-  @override
-  bool contains(Object? element) => _list.contains(element);
-
-  @override
-  String? lookup(Object? element) => contains(element) ? element as String : null;
-
-  @override
-  Iterator<String> get iterator => _list.toSet().iterator;
-
-  @override
-  int get length => _list.toSet().length;
-
-  @override
-  Set<String> toSet() => _list.toSet();
-}
-
 /// The nodes a query matched, in document order: a CSS `$` gives elements, an XPath `$x` any
 /// node. It is an [Iterable], and stays a selection through [where], [take] and [skip]; its
 /// plurals ([texts], [attrs]) have one entry per match, so they line up.
@@ -733,21 +637,44 @@ final class Selection<N extends Node> extends Iterable<N> {
   @override
   Selection<N> skip(int count) => Selection._(_nodes.skip(count).toList(), _query);
 
-  /// Only the elements: what an XPath selected, ready for CSS.
-  Selection<Element> get elements => Selection._(_nodes.whereType<Element>().toList(), _query);
+  /// The first match's [Node.text]: `page.$('h1').text`. A [MissingException] naming the query
+  /// when nothing matched.
+  String get text => first.text;
 
   /// Every match's [Node.text].
   List<String> get texts => [for (final n in _nodes) n.text];
+
+  /// Attribute [name] of the first match that has it: `page.$('meta[name=description]').attr('content')`.
+  /// When none has it, [or], else a [MissingException] naming it and the query.
+  String attr(String name, {String? or}) {
+    for (final n in _nodes) {
+      if (n is Element) {
+        if (n.attributes[name] case final value?) return value;
+      }
+    }
+    return or ?? (throw MissingException('attribute "$name"', where: '"$_query"'));
+  }
 
   /// Every match's attribute [name], `null` where it has none (or is not an element).
   List<String?> attrs(String name) => [for (final n in _nodes) n is Element ? n.attributes[name] : null];
 
   /// Every match's link, resolved against its document's base address: an element's
   /// [Element.link], an attribute's value (`$x('//a/@href')`). What is not a link is skipped.
-  List<Uri> get links => [
-    for (final (n, base) in _withBase)
-      ?(n is Element ? n._linkIn(base) : (n is Attribute && !_isScript(n.value) ? _resolve(n.value, base) : null)),
-  ];
+  List<Uri> get links => [for (final (n, base) in _withBase) ?_linkOf(n, base)];
+
+  /// [n]'s link against [base]: an element's [Element.link], an attribute's value; `null` for
+  /// anything else.
+  static Uri? _linkOf(Node n, Uri? base) =>
+      n is Element ? n._linkIn(base) : (n is Attribute && !_isScript(n.value) ? _resolve(n.value, base) : null);
+
+  /// The first match's link, among those that have one (see [links]): `page.$('a.next').link`.
+  /// A [MissingException] naming the query when none does.
+  Uri get link {
+    for (final (n, base) in _withBase) {
+      if (_linkOf(n, base) case final u?) return u;
+    }
+    throw MissingException('link', where: '"$_query"');
+  }
 
   /// Every match's [Element.imageLink]; one with none is skipped.
   List<Uri> get imageLinks => [for (final (n, base) in _withBase) ?(n is Element ? n._imageLinkIn(base) : null)];
@@ -791,8 +718,19 @@ final class Selection<N extends Node> extends Iterable<N> {
 
   /// Takes every match out of its tree.
   void detach() {
+    // Per parent at once, so taking out many siblings or nested matches stays linear.
+    final byParent = <Element, Set<Node>>{};
     for (final n in _nodes) {
-      n.detach();
+      final p = n._parent;
+      if (p == null) continue;
+      n is Attribute ? n.detach() : (byParent[p] ??= Set.identity()).add(n);
+    }
+    if (_baseElements > 0 && byParent.isNotEmpty) _edits++; // one bump for every base moved
+    for (final MapEntry(key: p, value: gone) in byParent.entries) {
+      p._nodes.removeWhere(gone.contains);
+      for (final n in gone) {
+        n._parent = null;
+      }
     }
   }
 
@@ -820,8 +758,10 @@ final class Html implements Saveable {
     if (url != null) _urls[root] = url;
   }
 
-  /// [text] parsed as a browser parses it: tag soup lands where a browser puts it. [url] is the
-  /// page's address, which links resolve against.
+  /// [text] parsed as a browser parses it: implied end tags, void and raw-text elements, SVG and
+  /// MathML land where a browser puts them. Two repairs are not made: misnested formatting
+  /// (`<b>1<p>2</b>3`) closes rather than being re-opened, and stray text in a `<table>` stays
+  /// there. [url] is the page's address, which links resolve against.
   static Html parse(String text, {Uri? url}) {
     final (root, doctype) = _parseHtml(text);
     return Html._(root, doctype, url: url);
@@ -831,10 +771,6 @@ final class Html implements Saveable {
   /// else `<meta charset>`, else UTF-8.
   static Future<Html> read(String path) async =>
       parse(Response.bytes(await File(path).readAsBytes(), 200, headers: const {'content-type': 'text/html'}).text);
-
-  /// [text] with its character references decoded, as HTML text decodes them:
-  /// `Html.decodeEntities('caf&eacute;')` is `café`.
-  static String decodeEntities(String text) => _decodeEntities(text, _References.text);
 
   /// The address the page was parsed with, if any.
   Uri? get url => _urls[root];
@@ -883,7 +819,7 @@ final class Html implements Saveable {
   /// The page as HTML text, its doctype first.
   String encode() => '${_doctype ?? ''}${root.markup}';
 
-  /// Writes [encode] to [to] as UTF-8, atomically, creating folders; a file there is replaced
+  /// Writes [encode] to [to] as UTF-8, atomically, into a folder that exists; a file there is replaced
   /// unless [conflict] says otherwise. A page that declares another charset gets a byte-order
   /// mark, which a browser believes over the `<meta>`.
   @override
@@ -893,10 +829,11 @@ final class Html implements Saveable {
       final charset = m.attributes['charset'] ?? _charsetIn(m.attributes['content']);
       return charset != null && !charset.trim().toLowerCase().startsWith('utf-8');
     });
-    return [
-      if (declared) ...const [0xef, 0xbb, 0xbf],
-      ...utf8.encode(text),
-    ];
+    final bytes = utf8.encode(text);
+    if (!declared) return bytes;
+    return Uint8List(bytes.length + 3)
+      ..setAll(0, const [0xef, 0xbb, 0xbf])
+      ..setAll(3, bytes);
   });
 
   @override
@@ -931,15 +868,40 @@ String? _bestSrcset(String? srcSet) {
   if (srcSet == null) return null;
   var top = -1.0;
   String? best;
-  for (final c in srcSet.split(',')) {
-    if (c.trim().isEmpty) continue;
-    final [url, ...rest] = c.trim().split(_ws);
-    final desc = rest.firstOrNull?.toLowerCase();
-    final n = desc == null ? 1.0 : double.tryParse(desc.substring(0, desc.length - 1)) ?? 1.0;
+  // As the HTML spec splits it: a URL runs to whitespace, so it may hold commas
+  // (`w_800,c_scale`); its descriptors run to the next comma.
+  final n = srcSet.length;
+  var i = 0;
+  while (i < n) {
+    while (i < n && (_isSpace(srcSet.codeUnitAt(i)) || srcSet.codeUnitAt(i) == 0x2c)) {
+      i++;
+    }
+    if (i >= n) break;
+    final from = i;
+    while (i < n && !_isSpace(srcSet.codeUnitAt(i))) {
+      i++;
+    }
+    var to = i;
+    final bare = srcSet.codeUnitAt(to - 1) == 0x2c; // `a.jpg, b.jpg 2x`: no descriptor
+    while (to > from && srcSet.codeUnitAt(to - 1) == 0x2c) {
+      to--;
+    }
+    final url = srcSet.substring(from, to);
+    String? desc;
+    if (!bare) {
+      final d = i;
+      while (i < n && srcSet.codeUnitAt(i) != 0x2c) {
+        i++;
+      }
+      desc = srcSet.substring(d, i).trim().split(_ws).first.toLowerCase();
+      if (desc.isEmpty) desc = null;
+    }
+    if (url.isEmpty) continue;
+    final size = desc == null ? 1.0 : double.tryParse(desc.substring(0, desc.length - 1)) ?? 1.0;
     final density = switch (desc) {
       null => top < 0 ? 1.0 : -1.0,
-      final d when d.endsWith('w') => n,
-      final d when d.endsWith('x') => n * 1000.0,
+      final d when d.endsWith('w') => size,
+      final d when d.endsWith('x') => size * 1000.0,
       _ => 1.0,
     };
     if (density > top) (top, best) = (density, url);
@@ -961,8 +923,13 @@ final _urls = Expando<Uri>('url');
 /// links while editing stays linear.
 var _edits = 0;
 
+/// `<base>` elements ever made: while there are none, no edit can move a base, and moving a
+/// subtree need not search it.
+var _baseElements = 0;
+
 /// Whether [n] is or holds a `<base>`: only then can moving it change a document's base.
-bool _holdsBase(Node n) => n is Element && (n.name == 'base' || _eachBelow(n, (m) => m is Element && m.name == 'base'));
+bool _holdsBase(Node n) =>
+    _baseElements > 0 && n is Element && (n.name == 'base' || _eachBelow(n, (m) => m is Element && m.name == 'base'));
 
 /// Each root's base and the [_edits] it was read at.
 final _bases = Expando<(int, Uri?)>('base');
@@ -1416,6 +1383,3 @@ final class _Folded {
   @override
   String toString() => String.fromCharCodes(_units, 0, _length);
 }
-
-/// What separates a label from its value on a line: a colon and a space, or a full-width colon.
-final _pairMark = RegExp(r': |：');

@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:dart_toolkit/process.dart';
+import 'package:dart_toolkit/src/core.dart' show ProcessBridge;
 import 'package:dart_toolkit/src/process/process.dart' show ShellInternals;
 import 'package:test/test.dart' hide Retry;
 
@@ -108,9 +109,18 @@ void main() {
         'echo *',
         'ls ~',
         r'echo $HOME',
+        'echo a # comment',
+        r'echo $1 $@',
+        r'echo $$',
+        'echo {a,b}',
+        'echo x{1..3}',
+        'FOO=1 env',
       ]) {
         expect(() => Shell.run(line), throwsArgumentError, reason: line);
       }
+      expect(ShellInternals.split('find . -exec rm {} + a=b c#d', windows: false), [
+        'find', '.', '-exec', 'rm', '{}', '+', 'a=b', 'c#d', //
+      ], reason: 'a lone {}, a later a=b and a # inside a word are words');
     }, testOn: '!windows');
 
     test('the Windows splitter keeps backslashes, so a program path stays whole (X-15)', () {
@@ -241,6 +251,13 @@ void main() {
       await expectLater(Cancel.scope(() => Shell.run('sleep 5'), token: token), throwsA(isA<CancelledException>()));
     }, testOn: '!windows');
 
+    test('a timeout stops a grandchild whose parent dies first', () async {
+      final marker = _marker('orphan');
+      await Shell.sh('sh -c "sleep 34; true # $marker"; true', timeout: 400.ms).settled;
+      await 600.ms.delay();
+      expect(await _survivors(marker), isEmpty, reason: 'the inner shell is in the tree though the outer one is gone');
+    }, testOn: '!windows');
+
     test('a child that ignores SIGTERM is killed', () async {
       final run = Shell.sh(r'trap "" TERM; sleep 5');
       await 200.ms.delay();
@@ -313,6 +330,11 @@ void main() {
       expect((await run).text, 'out');
     }, testOn: '!windows');
 
+    test('errors listened to before the command says anything gets every line', () async {
+      expect(await Shell.sh('sleep 0.1; echo hi >&2').errors.toList(), ['hi']);
+      expect(await Shell.run('true').errors.toList(), isEmpty);
+    }, testOn: '!windows');
+
     test('a character split across reads decodes whole in output, text and the echo', () async {
       final euros = File('${tempDir()}/e.txt')..writeAsStringSync('€' * 300000);
       expect(await Shell.run('cat', args: [euros.path]).text, '€' * 300000);
@@ -363,6 +385,14 @@ void main() {
 
       await expectLater(Shell.run('cat', stream: failing()), throwsFormatException);
     }, testOn: '!windows');
+
+    test('a stream input is let go when the command ends, though it has not', () async {
+      final released = Completer<void>();
+      final input = StreamController<List<int>>(onCancel: released.complete);
+      await Shell.run('true', stream: input.stream);
+      await released.future.timeout(5.s);
+      await input.close();
+    }, testOn: '!windows');
   });
 
   group('Runner.fake', () {
@@ -394,6 +424,16 @@ void main() {
         await expectLater(Shell.interact('false'), throwsA(isA<ShellException>()));
       }, runner: Runner.fake((c) => ShellResult(c, exitCode: c.program == 'false' ? 1 : 0)));
     });
+  });
+
+  group('process liveness', () {
+    test('a live process is alive, another user\'s too; a reaped one is not', () async {
+      expect(ProcessBridge.isPidAlive(pid), isTrue);
+      expect(ProcessBridge.isPidAlive(1), isTrue, reason: 'init is root\'s: EPERM is still alive');
+      final child = await Process.start('true', []);
+      await child.exitCode;
+      expect(ProcessBridge.isPidAlive(child.pid), isFalse);
+    }, testOn: '!windows');
   });
 
   group('interact', () {

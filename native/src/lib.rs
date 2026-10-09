@@ -18,7 +18,7 @@ pub(crate) use tk_common::{
     bytes, bytes_mut, create_file, give, guard, live, opt_text, read_file, set_error, stopped, text, watch, Handle, Msg,
     Watched,
 };
-tk_common::exports!(12);
+tk_common::exports!(13);
 
 /// Sets the permission bits of `path` to `mode`, through a link as chmod(2) does. Windows has
 /// one bit of it: without the owner's write bit the file is read-only.

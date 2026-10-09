@@ -1,8 +1,5 @@
 part of '../../tui.dart';
 
-/// Columns a code point takes: ASCII inline, the rest as [Style.width] measures.
-int _cellWidth(int rune) => rune >= 0x20 && rune < 0x7f ? 1 : IoBridge.runeWidth(rune);
-
 bool _isControl(int rune) => rune < 0x20 || (rune >= 0x7f && rune < 0xa0);
 
 /// [text] as cells: each grapheme (a code point and the zero-width ones joining it) with its width.
@@ -11,11 +8,13 @@ Iterable<(String, int)> _graphemes(String text) sync* {
   var i = 0;
   while (i < runes.length) {
     final start = i;
-    final w = _cellWidth(runes[i]);
+    final w = IoBridge.runeWidth(runes[i]);
     i++;
     // A control (`\n`, `\t`, ESC) is its own grapheme: it never joins the one before it.
     if (!_isControl(runes[start])) {
-      while (i < runes.length && !_isControl(runes[i]) && (_cellWidth(runes[i]) == 0 || runes[i - 1] == 0x200d)) {
+      while (i < runes.length &&
+          !_isControl(runes[i]) &&
+          (IoBridge.runeWidth(runes[i]) == 0 || runes[i - 1] == 0x200d)) {
         i++;
       }
     }

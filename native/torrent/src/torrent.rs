@@ -138,6 +138,26 @@ unsafe fn session<'a>(h: *mut c_void) -> Result<&'a Arc<Session>, String> {
         .ok_or_else(|| "torrent session is closed".to_string())
 }
 
+/// The engine's index of file [index] when the BEP 47 padding files are not counted, as the
+/// caller counts them: the engine counts every file, [padding] says which are padding.
+fn engine_index(padding: &[bool], index: usize) -> Result<usize, String> {
+    padding
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| !**p)
+        .nth(index)
+        .map(|(i, _)| i)
+        .ok_or_else(|| format!("no file {index} in this torrent"))
+}
+
+/// [engine_index] for a torrent whose metadata is in.
+fn engine_file(t: &ManagedTorrent, index: usize) -> Result<usize, String> {
+    let padding: Vec<bool> = t
+        .with_metadata(|m| m.file_infos.iter().map(|f| f.attrs.padding).collect())
+        .map_err(chain)?;
+    engine_index(&padding, index)
+}
+
 fn torrent(s: &Session, id: u64) -> Result<Arc<ManagedTorrent>, String> {
     s.get(TorrentIdOrHash::Id(id as usize))
         .ok_or_else(|| format!("no torrent {id} in this session"))
@@ -249,7 +269,8 @@ pub unsafe extern "C" fn tk_torrent_add(
             AddTorrent::from_url(text(source, slen)?.to_string())
         };
         id = run(done, None, async move {
-            let peers = o.peers.unwrap_or_default();
+            let mut peers = o.peers.unwrap_or_default();
+            let mut only = o.files;
             let mut add = add;
             let mut folder = None;
             if let Some(to) = o.folder {
@@ -266,7 +287,17 @@ pub unsafe extern "C" fn tk_torrent_add(
                         return Ok((id as i64, Vec::new()))
                     }
                     AddTorrentResponse::ListOnly(l) => {
-                        let several = l.info.iter_file_details().nth(1).is_some();
+                        let padding: Vec<bool> =
+                            l.info.iter_file_details().map(|f| f.attrs().padding).collect();
+                        if let Some(files) = only.take() {
+                            only = Some(
+                                files
+                                    .into_iter()
+                                    .map(|i| engine_index(&padding, i))
+                                    .collect::<Result<_, _>>()?,
+                            );
+                        }
+                        let several = padding.iter().filter(|p| !**p).nth(1).is_some();
                         let name = l.info.name().map(|n| n.to_string()).filter(|n| {
                             !n.is_empty()
                                 && Path::new(n)
@@ -278,6 +309,8 @@ pub unsafe extern "C" fn tk_torrent_add(
                             _ => PathBuf::from(&to),
                         });
                         add = AddTorrent::from_bytes(l.torrent_bytes);
+                        // The peers that sent a magnet's metadata, so the add asks no one twice.
+                        peers.extend(l.seen_peers);
                     }
                     AddTorrentResponse::Added(..) => {
                         return Err("the torrent started while being listed".into())
@@ -286,7 +319,7 @@ pub unsafe extern "C" fn tk_torrent_add(
             }
             let options = AddTorrentOptions {
                 paused: o.paused,
-                only_files: o.files,
+                only_files: only,
                 overwrite: true,
                 output_folder: folder.map(|f| f.to_string_lossy().into_owned()),
                 initial_peers: Some(peers),
@@ -311,7 +344,8 @@ struct Info<'a> {
     files: Vec<(String, u64)>,
 }
 
-/// The torrent's name, info hash, output folder and files (`[path, size]`), as JSON.
+/// The torrent's name, info hash, output folder and files (`[path, size]`, padding files left
+/// out), as JSON.
 #[no_mangle]
 pub unsafe extern "C" fn tk_torrent_info(
     h: *mut c_void,
@@ -326,6 +360,7 @@ pub unsafe extern "C" fn tk_torrent_info(
             .with_metadata(|m| {
                 m.file_infos
                     .iter()
+                    .filter(|f| !f.attrs.padding)
                     .map(|f| {
                         (
                             f.relative_filename.to_string_lossy().replace('\\', "/"),
@@ -402,7 +437,7 @@ pub unsafe extern "C" fn tk_torrent_control(h: *mut c_void, id: u64, op: u32) ->
     })
 }
 
-/// Downloads only the files whose indices [files] (a JSON list) holds.
+/// Downloads only the files whose indices [files] (a JSON list, padding files not counted) holds.
 #[no_mangle]
 pub unsafe extern "C" fn tk_torrent_select(
     h: *mut c_void,
@@ -414,8 +449,11 @@ pub unsafe extern "C" fn tk_torrent_select(
         let _in = runtime().enter();
         let s = session(h)?;
         let t = torrent(s, id)?;
-        let only: std::collections::HashSet<usize> =
-            serde_json::from_str(text(files, len)?).msg()?;
+        let wanted: Vec<usize> = serde_json::from_str(text(files, len)?).msg()?;
+        let only = wanted
+            .into_iter()
+            .map(|i| engine_file(&t, i))
+            .collect::<Result<std::collections::HashSet<usize>, _>>()?;
         runtime()
             .block_on(s.update_only_files(&t, &only))
             .map_err(chain)?;
@@ -465,7 +503,8 @@ pub unsafe extern "C" fn tk_torrent_stream_open(h: *mut c_void, id: u64, file: u
     guard(|| {
         let _in = runtime().enter();
         let t = torrent(session(h)?, id)?;
-        let stream = runtime().block_on(t.stream(file as usize)).map_err(chain)?;
+        let file = engine_file(&t, file as usize)?;
+        let stream = runtime().block_on(t.stream(file)).map_err(chain)?;
         let reader: Reader = Arc::new(tokio::sync::Mutex::new(Box::new(stream)));
         out = Box::into_raw(Box::new(reader)) as *mut c_void;
         Ok(0)

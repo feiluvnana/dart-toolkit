@@ -276,15 +276,13 @@ void main() {
       expect(site.asked.first.headers['user-agent'], 'dart-toolkit');
     });
 
-    test('meta rides with a follow, and a follow can carry its own hooks', () async {
+    test('meta rides with a follow, and a follow can carry its own onResponse', () async {
       final site = _Site({'/': '<a href="/d">d</a>', '/d': '<h2>detail</h2>'});
-      final detail = Hooks<String>(
-        onResponse: (ctx) => ctx.emit('${ctx.meta['from']}: ${ctx.html.$('h2').first.text}'),
-      );
+      void detail(ResponseContext<String> ctx) => ctx.emit('${ctx.meta['from']}: ${ctx.html.$('h2').first.text}');
       final items = await site.scope(
         () => _home
             .crawl<String>(
-              onResponse: (ctx) => ctx.follow(ctx.html.$('a').first.link, meta: {'from': 'home'}, hooks: detail),
+              onResponse: (ctx) => ctx.follow(ctx.html.$('a').first.link, meta: {'from': 'home'}, onResponse: detail),
             )
             .items
             .toList(),
@@ -348,25 +346,18 @@ void main() {
       });
     });
 
-    test('then runs both hooks in order; onError after an ignore does not run', () async {
-      final order = <String>[];
-      final site = _Site({'/': '<a href="/x">x</a>'});
-      final a = Hooks<String>(
-        onResponse: (ctx) => order.add('a'),
-        onError: (ctx) {
-          order.add('a!');
-          ctx.ignore();
-        },
+    test('onInit adds seeds before anything is sent, a follow of its own reading them', () async {
+      final site = _Site({'/': '<h2>home</h2>', '/api': '<h2>api</h2>'});
+      final items = await site.scope(
+        () => _home
+            .crawl<String>(
+              onInit: (ctx) => ctx.follow(_home / 'api', onResponse: (r) => r.emit('own ${r.html.$('h2').first.text}')),
+              onResponse: (ctx) => ctx.emit(ctx.html.$('h2').first.text),
+            )
+            .items
+            .toList(),
       );
-      final b = Hooks<String>(
-        onResponse: (ctx) {
-          order.add('b');
-          _read(ctx);
-        },
-        onError: (ctx) => order.add('b!'),
-      );
-      await site.scope(() => _home.crawl<String>(hooks: a.then(b)));
-      expect(order, ['a', 'b', 'a!']);
+      expect(items..sort(), ['home', 'own api']);
     });
 
     test('a context defers a cleanup to when its page ends, and steps on its row', () async {
@@ -545,7 +536,7 @@ void main() {
         await expectLater(
           _home.crawl<String>(
             store: Store.memory(),
-            onResponse: (ctx) => ctx.follow(_home / 'a', hooks: const Hooks()),
+            onResponse: (ctx) => ctx.follow(_home / 'a', onResponse: (_) {}),
           ),
           throwsArgumentError,
         );

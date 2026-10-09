@@ -1,65 +1,7 @@
 part of '../../scrape.dart';
 
-// ---- hooks ---------------------------------------------------------------------------------
-
-/// The hooks of a crawl as one value: what `url.crawl` and [Crawler] take, written once, shared
-/// by crawls, and composed with [then].
-///
-/// ```dart
-/// final polite = Hooks<Item>(onRequest: (ctx) => ctx.headers['user-agent'] = 'mine/1.0');
-/// url.crawl<Item>(hooks: polite.then(Hooks(onResponse: parse)));
-/// ```
-///
-/// {@category Crawling}
-final class Hooks<T> {
-  /// Runs once, before anything is sent: [InitContext.follow] adds pages, from a file or an API.
-  final FutureOr<void> Function(InitContext<T> ctx)? onInit;
-
-  /// Runs before each send, a retry's included: edit [RequestContext.request], or skip it.
-  final FutureOr<void> Function(RequestContext<T> ctx)? onRequest;
-
-  /// Runs on each 2xx: emit items, follow links.
-  final FutureOr<void> Function(ResponseContext<T> ctx)? onResponse;
-
-  /// Runs when a page failed: retry it, ignore it, emit a fallback, or let it fail.
-  final FutureOr<void> Function(ErrorContext<T> ctx)? onError;
-
-  const Hooks({this.onInit, this.onRequest, this.onResponse, this.onError});
-
-  /// These hooks, then [next]'s: where both hold a slot, this one's runs first, synchronously
-  /// when both are. For `onError`, [next]'s runs only when this one left the failure undecided
-  /// (no `retry`, `ignore`, `emit` or `follow`).
-  Hooks<T> then(Hooks<T> next) => Hooks(
-    onInit: _after(onInit, next.onInit),
-    onRequest: _after(onRequest, next.onRequest),
-    onResponse: _after(onResponse, next.onResponse),
-    onError: _afterError(onError, next.onError),
-  );
-}
-
-/// [a] then [b], either alone; synchronous when both are.
-FutureOr<void> Function(C)? _after<C>(FutureOr<void> Function(C)? a, FutureOr<void> Function(C)? b) {
-  if (a == null) return b;
-  if (b == null) return a;
-  return (ctx) {
-    final r = a(ctx);
-    return r is Future ? r.then((_) => b(ctx)) : b(ctx);
-  };
-}
-
-/// [a] then [b] for `onError`: [b] runs only when [a] left the failure undecided.
-FutureOr<void> Function(ErrorContext<T>)? _afterError<T>(
-  FutureOr<void> Function(ErrorContext<T>)? a,
-  FutureOr<void> Function(ErrorContext<T>)? b,
-) {
-  if (a == null) return b;
-  if (b == null) return a;
-  return (ctx) {
-    FutureOr<void> next() => ctx._decided ? null : b(ctx);
-    final r = a(ctx);
-    return r is Future ? r.then((_) => next()) : next();
-  };
-}
+/// What reads one page: a crawl's `onResponse`, or one a follow names for its page.
+typedef _OnResponse<T> = FutureOr<void> Function(ResponseContext<T> ctx);
 
 // ---- contexts ------------------------------------------------------------------------------
 
@@ -170,35 +112,46 @@ mixin _Scheduling<T> on HookContext<T> {
 
   /// Schedules a GET of [url], resolved against this page; `null` schedules nothing, so a link
   /// that may be missing reads in one expression. [meta] is carried to that page's hooks,
-  /// [headers] sent with it, and [hooks] read it instead of the crawl's. Answers whether it was
-  /// scheduled: one already seen, too deep, not http(s) or outside `within` is not.
+  /// [headers] sent with it, and [onResponse] reads it instead of the crawl's. Answers whether
+  /// it was scheduled: one already seen, too deep, not http(s) or outside `within` is not.
   ///
   /// ```dart
   /// ctx.follow(ctx.html.$('a.next').firstOrNull?.link);
   /// ctx.follow(ctx.json['next'].to<Uri?>());
   /// ```
-  bool follow(Uri? url, {Map<String, Object?>? meta, Map<String, String>? headers, Hooks<T>? hooks}) {
+  bool follow(
+    Uri? url, {
+    Map<String, Object?>? meta,
+    Map<String, String>? headers,
+    FutureOr<void> Function(ResponseContext<T> ctx)? onResponse,
+  }) {
     _open('follow');
     if (url == null) return false;
     final target = _resolve(_base, url);
-    return _scheduled(Request('GET', target, headers: headers), meta, hooks);
+    return _scheduled(Request('GET', target, headers: headers), meta, onResponse);
   }
 
   /// Schedules [request] as it is (its method, headers and body), its URL resolved against this
   /// page: a form as a browser submits it is `ctx.send(form.submission)`. Dropped as [follow]
   /// drops.
-  bool send(Request request, {Map<String, Object?>? meta, Hooks<T>? hooks}) {
+  bool send(
+    Request request, {
+    Map<String, Object?>? meta,
+    FutureOr<void> Function(ResponseContext<T> ctx)? onResponse,
+  }) {
     _open('send');
     final target = _resolve(_base, request.url);
-    return _scheduled(target == request.url ? request.copy() : request.copy(url: target), meta, hooks);
+    return _scheduled(target == request.url ? request.copy() : request.copy(url: target), meta, onResponse);
   }
 
-  bool _scheduled(Request request, Map<String, Object?>? meta, Hooks<T>? hooks) {
+  bool _scheduled(Request request, Map<String, Object?>? meta, _OnResponse<T>? onResponse) {
+    final added = meta == null || meta.isEmpty ? null : meta;
     final done = _engine.schedule(
       request,
       depth: _at.depth + 1,
-      meta: meta == null || meta.isEmpty ? _at.meta : {..._at.meta, ...meta},
-      hooks: hooks,
+      meta: added == null ? _at.meta : {..._at.meta, ...added},
+      added: added,
+      onResponse: onResponse,
     );
     if (done) _acted();
     return done;
@@ -218,16 +171,25 @@ final class InitContext<T> {
   InitContext._(this._engine);
 
   /// Adds a GET of [url] as a seed; see [ResponseContext.follow].
-  bool follow(Uri url, {Map<String, Object?>? meta, Map<String, String>? headers, Hooks<T>? hooks}) => send(
+  bool follow(
+    Uri url, {
+    Map<String, Object?>? meta,
+    Map<String, String>? headers,
+    FutureOr<void> Function(ResponseContext<T> ctx)? onResponse,
+  }) => send(
     Request('GET', url, headers: headers),
     meta: meta,
-    hooks: hooks,
+    onResponse: onResponse,
   );
 
   /// Adds [request] as a seed, sent as it is: a login POST, a search form's submission.
-  bool send(Request request, {Map<String, Object?>? meta, Hooks<T>? hooks}) {
+  bool send(
+    Request request, {
+    Map<String, Object?>? meta,
+    FutureOr<void> Function(ResponseContext<T> ctx)? onResponse,
+  }) {
     if (_closed) throw StateError('Cannot send after onInit has returned');
-    return _engine.schedule(request, depth: 0, meta: meta ?? const {}, hooks: hooks, seed: true);
+    return _engine.schedule(request, depth: 0, meta: meta ?? const {}, onResponse: onResponse, seed: true);
   }
 }
 
@@ -347,8 +309,8 @@ final class ErrorContext<T> extends HookContext<T> with _Scheduling<T> {
 
 // ---- the class form ------------------------------------------------------------------------
 
-/// A crawl you can hold, subclass and test: the hooks of [Hooks] as methods, and the settings of
-/// `url.crawl` as its constructor's. Both run one engine.
+/// A crawl you can hold, subclass and test: `url.crawl`'s hooks as methods, and its settings as
+/// the constructor's. Both run one engine; a subclass is how hooks are shared between crawls.
 ///
 /// ```dart
 /// final class Books extends Crawler<Book> {
@@ -369,9 +331,6 @@ final class ErrorContext<T> extends HookContext<T> with _Scheduling<T> {
 ///
 /// {@category Crawling}
 abstract class Crawler<T> {
-  /// The hooks the methods run unless overridden; `super.onX(ctx)` runs the set's.
-  final Hooks<T>? hooks;
-
   final int? _depth;
   final int? _pages;
   final bool _robots;
@@ -396,12 +355,11 @@ abstract class Crawler<T> {
   /// - [store]: the frontier and the pages seen, kept as the crawl goes: a rerun with it carries
   ///   on (its seeds added to what is left), `store.clear()` starts over, and a crawl that
   ///   finishes clears it. Under a store, `meta` must be JSON-ready, and a follow cannot carry
-  ///   hooks of its own (it is resumed with the crawl's).
+  ///   an `onResponse` of its own (it is resumed with the crawl's).
   /// - [concurrency]: pages in flight in all; to one host, `Http.scope(perHost:)`, else 4.
   /// - [canonical]: what makes two URLs one page, for the seen check only:
   ///   `canonical: (u) => u.withQuery({'sid': null})`.
   Crawler({
-    this.hooks,
     int? depth,
     int? pages,
     bool robots = false,
@@ -426,16 +384,16 @@ abstract class Crawler<T> {
   }
 
   /// Once, before anything is sent: more seeds, on an [InitContext]. May be async.
-  FutureOr<void> onInit(InitContext<T> ctx) => hooks?.onInit?.call(ctx);
+  FutureOr<void> onInit(InitContext<T> ctx) {}
 
-  /// Before every send, retries included.
-  FutureOr<void> onRequest(RequestContext<T> ctx) => hooks?.onRequest?.call(ctx);
+  /// Before every send, retries included: edit [RequestContext.request], or skip it.
+  FutureOr<void> onRequest(RequestContext<T> ctx) {}
 
-  /// On every 2xx.
-  FutureOr<void> onResponse(ResponseContext<T> ctx) => hooks?.onResponse?.call(ctx);
+  /// On every 2xx: emit items, follow links.
+  FutureOr<void> onResponse(ResponseContext<T> ctx) {}
 
-  /// When a page failed; it fails unless this acts.
-  FutureOr<void> onError(ErrorContext<T> ctx) => hooks?.onError?.call(ctx);
+  /// When a page failed: retry it, ignore it, emit a fallback, or let it fail.
+  FutureOr<void> onError(ErrorContext<T> ctx) {}
 
   /// The crawl from [seeds] (GETs), started at once, with the scope's settings where it is
   /// called. Each run is a crawl of its own.
@@ -449,10 +407,22 @@ abstract class Crawler<T> {
   FutureOr<void> Function(ErrorContext<T>)? get _error => onError;
 }
 
-/// The crawler `url.crawl` builds: the set's own hooks, read straight.
-final class _HooksCrawler<T> extends Crawler<T> {
-  _HooksCrawler(
-    Hooks<T> hooks, {
+/// The crawler `url.crawl` builds: its named hooks, a missing one costing nothing.
+final class _Hooked<T> extends Crawler<T> {
+  @override
+  final FutureOr<void> Function(InitContext<T>)? _init;
+  @override
+  final FutureOr<void> Function(RequestContext<T>)? _request;
+  @override
+  final FutureOr<void> Function(ResponseContext<T>)? _response;
+  @override
+  final FutureOr<void> Function(ErrorContext<T>)? _error;
+
+  _Hooked(
+    this._init,
+    this._request,
+    this._response,
+    this._error, {
     required super.depth,
     required super.pages,
     required super.robots,
@@ -461,24 +431,16 @@ final class _HooksCrawler<T> extends Crawler<T> {
     required super.store,
     required super.concurrency,
     required super.canonical,
-  }) : super(hooks: hooks);
-
-  @override
-  FutureOr<void> Function(InitContext<T>)? get _init => hooks?.onInit;
-  @override
-  FutureOr<void> Function(RequestContext<T>)? get _request => hooks?.onRequest;
-  @override
-  FutureOr<void> Function(ResponseContext<T>)? get _response => hooks?.onResponse;
-  @override
-  FutureOr<void> Function(ErrorContext<T>)? get _error => hooks?.onError;
+  });
 }
 
 /// Crawling from a URL.
 ///
 /// {@category Crawling}
 extension UriCrawl on Uri {
-  /// A crawl seeded here: a [Crawl], a `Batch` of pages, started at once. The settings are
-  /// [Crawler]'s; [hooks] runs first, then the hooks named here.
+  /// A crawl seeded here: a [Crawl], a `Batch` of pages, started at once. The settings and
+  /// hooks are [Crawler]'s: [onInit] adds seeds, [onRequest] edits or skips a send,
+  /// [onResponse] reads each 2xx, [onError] decides a failure.
   ///
   /// ```dart
   /// final crawl = url.crawl<Item>(
@@ -500,24 +462,24 @@ extension UriCrawl on Uri {
     Store? store,
     int concurrency = 8,
     Uri Function(Uri url)? canonical,
-    Hooks<T>? hooks,
+    FutureOr<void> Function(InitContext<T> ctx)? onInit,
     FutureOr<void> Function(RequestContext<T> ctx)? onRequest,
     FutureOr<void> Function(ResponseContext<T> ctx)? onResponse,
     FutureOr<void> Function(ErrorContext<T> ctx)? onError,
-  }) {
-    final named = Hooks<T>(onRequest: onRequest, onResponse: onResponse, onError: onError);
-    return _HooksCrawler<T>(
-      hooks == null ? named : hooks.then(named),
-      depth: depth,
-      pages: pages,
-      robots: robots,
-      sitemaps: sitemaps,
-      within: within,
-      store: store,
-      concurrency: concurrency,
-      canonical: canonical,
-    ).run([this]);
-  }
+  }) => _Hooked<T>(
+    onInit,
+    onRequest,
+    onResponse,
+    onError,
+    depth: depth,
+    pages: pages,
+    robots: robots,
+    sitemaps: sitemaps,
+    within: within,
+    store: store,
+    concurrency: concurrency,
+    canonical: canonical,
+  ).run([this]);
 }
 
 // ---- the crawl -----------------------------------------------------------------------------
@@ -665,12 +627,12 @@ final class _Skip implements Exception {
 }
 
 /// One page waiting in the frontier or being read: its request (and redirect chain), where it
-/// came from, and the hooks that read it.
+/// came from, and the `onResponse` of its own that reads it, if any.
 final class _Page<T> {
   final Request request;
   final int depth;
   final Map<String, Object?> meta;
-  final Hooks<T>? hooks;
+  final _OnResponse<T>? onResponse;
 
   /// A seed the caller named: only it moves the crawl's home when it redirects.
   final bool seed;
@@ -678,7 +640,7 @@ final class _Page<T> {
   /// Its id in the store, when there is one.
   int? id;
 
-  _Page(this.request, {required this.depth, required this.meta, this.hooks, this.seed = false});
+  _Page(this.request, {required this.depth, required this.meta, this.onResponse, this.seed = false});
 
   Uri get url => request.url;
 
@@ -700,6 +662,9 @@ final class _Host<T> {
   /// Whether robots.txt has been read, when the crawl obeys it.
   bool robotsKnown = false;
   bool robotsAsked = false;
+
+  /// Whether it is in the engine's ready queue: a flag, so a push never scans the queue.
+  bool ready = false;
 }
 
 /// RFC 9309 asks for at least 500 KiB of a `robots.txt`; a longer one is cut, not refused.
@@ -755,7 +720,9 @@ final class _Engine<T> {
     _stopped = true;
     for (final host in _hosts.values) {
       _queued -= host.queue.length;
-      host.queue.clear();
+      host
+        ..queue.clear()
+        ..ready = false;
     }
     _ready.clear();
     _backlog.clear();
@@ -867,7 +834,10 @@ final class _Engine<T> {
         final now = Clock.current.elapsed;
         for (var tried = _ready.length; tried > 0; tried--) {
           final host = _ready.removeFirst();
-          if (host.queue.isEmpty) continue;
+          if (host.queue.isEmpty) {
+            host.ready = false;
+            continue;
+          }
           _ready.add(host);
           if (host.inFlight >= _perHost || (crawler._robots && !host.robotsKnown)) continue;
           final page = host.queue.first;
@@ -931,7 +901,7 @@ final class _Engine<T> {
     final host = _hostOf(page.url);
     first ? host.queue.addFirst(page) : host.queue.add(page);
     _queued++;
-    if (!_ready.contains(host)) _ready.add(host);
+    if (!host.ready) _ready.add(host..ready = true);
     if (crawler._robots && !host.robotsAsked) {
       host.robotsAsked = true;
       _busy++;
@@ -949,31 +919,34 @@ final class _Engine<T> {
     _notify();
   }
 
-  /// Schedules [request] unless it is too deep, not http(s), outside `within`, or seen.
+  /// Schedules [request] unless it is too deep, not http(s), outside `within`, or seen. Under a
+  /// store, [added] (the part of [meta] this follow brings; all of it when not given) is checked
+  /// to be JSON-ready: what it inherits was checked when its page was scheduled.
   bool schedule(
     Request request, {
     required int depth,
     required Map<String, Object?> meta,
-    Hooks<T>? hooks,
+    Map<String, Object?>? added,
+    _OnResponse<T>? onResponse,
     bool seed = false,
   }) {
     if (_stopped || _cancelled) return false;
     if (_journal != null) {
-      if (hooks != null) {
+      if (onResponse != null) {
         throw ArgumentError.value(
-          hooks,
-          'hooks',
+          onResponse,
+          'onResponse',
           'Invalid follow: a crawl with a store resumes its pages with its own hooks; route by meta instead',
         );
       }
-      _jsonReady(meta);
+      _jsonReady(added ?? meta);
     }
     final url = _page(request.url);
     final page = _Page<T>(
       request.url == url ? request : request.copy(url: url),
       depth: depth,
       meta: meta,
-      hooks: hooks,
+      onResponse: onResponse,
       seed: seed,
     );
     if (crawler._depth case final most? when depth > most) return false;
@@ -1024,7 +997,7 @@ final class _Engine<T> {
       items.clear();
       var sent = current.copy()..followRedirects = false;
       if (!sent.headers.containsKey('user-agent')) sent.headers['user-agent'] = _agent;
-      final onRequest = page.hooks?.onRequest ?? crawler._request;
+      final onRequest = crawler._request;
       if (onRequest != null) {
         final ctx = RequestContext<T>._(this, page, work, sent, attempt);
         try {
@@ -1091,7 +1064,7 @@ final class _Engine<T> {
             final key = _keyOf(next);
             // A hop back into this chain is followed (a login redirecting to itself with a
             // cookie); one to a page seen elsewhere ends this one, read there.
-            if (!chain.contains(key) && page.hooks?.onResponse == null) {
+            if (!chain.contains(key) && page.onResponse == null) {
               if (!_visited.add(key)) return items;
               _journal?.visited(key);
             }
@@ -1107,7 +1080,7 @@ final class _Engine<T> {
         final answered = _page(res.url ?? sent.url);
         // A client that redirects itself (a browser) answers from elsewhere.
         if (answered != _page(sent.url) && !page.seed && !_within(answered)) throw const _Skip('outside');
-        final onResponse = page.hooks?.onResponse ?? crawler._response;
+        final onResponse = page.onResponse ?? crawler._response;
         _handled++;
         if (onResponse == null) return items;
         final ctx = ResponseContext<T>._(this, page, work, res, sent, answered, attempt, items);
@@ -1124,7 +1097,7 @@ final class _Engine<T> {
         return items;
       }
 
-      final onError = page.hooks?.onError ?? crawler._error;
+      final onError = crawler._error;
       if (onError == null) Error.throwWithStackTrace(error!, trace);
       final ctx = ErrorContext<T>._(this, page, work, error!, trace, sent, attempt, items);
       try {
@@ -1251,7 +1224,8 @@ final class _Engine<T> {
 void _jsonReady(Map<String, Object?> meta) {
   for (final MapEntry(:key, :value) in meta.entries) {
     try {
-      if (jsonEncode(jsonDecode(jsonEncode(value))) != jsonEncode(value)) throw const FormatException();
+      final encoded = jsonEncode(value);
+      if (jsonEncode(jsonDecode(encoded)) != encoded) throw const FormatException();
     } catch (_) {
       throw ArgumentError.value(
         value,
@@ -1342,6 +1316,25 @@ final _sitemapIndex = RegExp(r'<sitemapindex[\s>]', caseSensitive: false);
 final _sitemapUrlset = RegExp(r'<urlset[\s>]', caseSensitive: false);
 final _sitemapLoc = RegExp(r'<loc\b[^>]*>(.*?)</loc>', caseSensitive: false, dotAll: true);
 
+/// XML's five named entities and its character references: all a `<loc>` holds (`&amp;` in
+/// nearly every URL with a query), so a 50k-URL sitemap is not 50k HTML parses.
+final _xmlEntity = RegExp('&(amp|lt|gt|quot|apos|#[0-9]+|#x[0-9a-fA-F]+);');
+
+String _entity(Match m) => switch (m[1]!) {
+  'amp' => '&',
+  'lt' => '<',
+  'gt' => '>',
+  'quot' => '"',
+  'apos' => "'",
+  final ref => switch (int.tryParse(
+    ref[1] == 'x' ? ref.substring(2) : ref.substring(1),
+    radix: ref[1] == 'x' ? 16 : 10,
+  )) {
+    final code? when code > 0 && code <= 0x10ffff => String.fromCharCode(code),
+    _ => m[0]!,
+  },
+};
+
 /// The pages and sitemaps one sitemap names: `<urlset>` locs are pages, `<sitemapindex>` locs
 /// sitemaps; gzip is unpacked, and non-XML is the plain-text form, a URL a line.
 Future<({List<Uri> pages, List<Uri> maps})> _sitemap(Uint8List bytes, Uri from) async {
@@ -1372,9 +1365,11 @@ Future<({List<Uri> pages, List<Uri> maps})> _sitemap(Uint8List bytes, Uri from) 
       var loc = m[1]!.trim();
       if (loc.startsWith('<![CDATA[') && loc.endsWith(']]>')) {
         loc = loc.substring(9, loc.length - 3).trim();
-      } else if (loc.contains('&') || loc.contains('<')) {
-        // Entities and stray markup need the HTML decoder; a plain URL is already its own text.
+      } else if (loc.contains('<')) {
+        // Stray markup needs the HTML decoder; a plain URL is already its own text.
         loc = Html.parse(loc).text;
+      } else if (loc.contains('&')) {
+        loc = loc.replaceAllMapped(_xmlEntity, _entity);
       }
       if (read(loc) case final url?) into.add(url);
     }

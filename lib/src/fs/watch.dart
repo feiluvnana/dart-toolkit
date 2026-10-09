@@ -13,9 +13,11 @@ Stream<FileChanges> _changes(String path, Duration debounce) {
   Timer? quiet;
   void Function()? unlisten;
   var added = <Path>{}, modified = <Path>{}, removed = <Path>{};
+  var stopped = false;
   late final StreamController<FileChanges> out;
 
   Future<void> stop() async {
+    stopped = true;
     quiet?.cancel();
     unlisten?.call();
     await events?.cancel();
@@ -42,10 +44,12 @@ Stream<FileChanges> _changes(String path, Duration debounce) {
         // A watch on a missing folder never fires and never ends: say so instead.
         unlisten?.call();
         out
-          ..addError(_notFound(folder, 'Cannot watch'))
+          ..addError(FileBridge.notFound(folder, 'Cannot watch'))
           ..close();
         return;
       }
+      // Cancelled while it looked: nothing is started, so nothing is left running.
+      if (stopped) return;
       final name = p.basename(path);
       bool wanted(String f) => isDir ? !_isTemp(p.basename(f)) : p.basename(f) == name;
       events = (isDir ? Directory(path).watch(recursive: true) : Directory(folder).watch()).listen(
@@ -199,15 +203,18 @@ Stream<String> _tail(String path, Encoding encoding) {
           }
         } on FileSystemException catch (_) {} // gone or unreadable already: the poll picks it up
       }
+      // Cancelled while it looked: nothing is started, so nothing is left running.
+      if (stopped) return;
       final name = p.basename(path);
       try {
         final folder = Directory(p.dirname(p.absolute(path)));
-        if (FileSystemEntity.isWatchSupported && await folder.exists()) {
+        if (FileSystemEntity.isWatchSupported && await folder.exists() && !stopped) {
           watch = folder.watch().listen((e) {
             if (p.basename(e.path) == name) check();
           }, onError: (Object _) {}); // the poll below still checks
         }
       } on FileSystemException catch (_) {} // no watch here: the poll alone checks
+      if (stopped) return watch?.cancel();
       poll = Timer.periodic(const Duration(milliseconds: 100), (_) => check());
     },
     onCancel: stop,

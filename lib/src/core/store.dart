@@ -86,34 +86,46 @@ final class Store {
   });
 
   /// Forgets everything in it, sub-stores included: how anything starts over.
-  Future<void> clear() => lock(() async {
-    if (_memory case final memory?) {
-      memory.values.removeWhere((name, _) => name.startsWith(_prefix));
-      return;
-    }
-    final dir = Directory(folder!);
-    if (!await dir.exists()) return;
-    await for (final entry in dir.list(followLinks: false)) {
-      if (entry.path.endsWith('${Platform.pathSeparator}.lock')) continue;
-      await entry.delete(recursive: true);
-    }
-  });
+  Future<void> clear() async {
+    // A store never written has nothing to forget, and gets no folder for it.
+    if (folder case final folder? when !await Directory(folder).exists()) return;
+    return lock(() async {
+      if (_memory case final memory?) {
+        memory.values.removeWhere((name, _) => name.startsWith(_prefix));
+        return;
+      }
+      await for (final entry in Directory(folder!).list(followLinks: false)) {
+        if (entry.path.endsWith('${Platform.pathSeparator}.lock')) continue;
+        await entry.delete(recursive: true);
+      }
+    });
+  }
 
   /// Runs [body] holding this store's lock: other runs of the program, and other calls here,
-  /// wait. A folder's lock is a file in it, so it holds across processes.
+  /// wait. A folder's lock is a file in it, so it holds across processes. A sub-store has a lock
+  /// of its own, and work inside [body] already holds this one: a write inside [update] or
+  /// [lock] goes ahead.
   Future<R> lock<R>(FutureOr<R> Function() body) async {
-    final id = folder ?? 'memory:${identityHashCode(_memory)}';
+    final Object id = folder ?? (_memory!, _prefix);
+    final held = Zone.current[_heldKey] as Set<Object>?;
+    if (held != null && held.contains(id)) return await body();
+    Future<R> holding() => runZoned(
+      () async => await body(),
+      zoneValues: {
+        _heldKey: {...?held, id},
+      },
+    );
     final previous = _locks[id];
     final mine = Completer<void>();
     _locks[id] = mine.future;
     try {
       await previous;
-      if (folder == null) return await body();
+      if (folder == null) return await holding();
       await Directory(folder!).create(recursive: true);
       final file = await File(_join(folder!, '.lock')).open(mode: FileMode.append);
       try {
         await file.lock(FileLock.blockingExclusive);
-        return await body();
+        return await holding();
       } finally {
         await file.close();
       }
@@ -161,7 +173,10 @@ final class Store {
   /// What a store writes inside, as this version of the library writes it.
   static const _version = 1;
 
-  static final _locks = <String, Future<void>>{};
+  static final _locks = <Object, Future<void>>{};
+
+  /// The locks the work in a zone holds.
+  static const _heldKey = #dartToolkitStoreLocks;
 
   static String _join(String a, String b) =>
       a.endsWith('/') || a.endsWith(Platform.pathSeparator) ? '$a$b' : '$a${Platform.pathSeparator}$b';
@@ -246,7 +261,7 @@ final class Key<T> {
   }
 
   void _checkName() {
-    if (name.isEmpty || name.startsWith('.') || name.contains(RegExp(r'[/\\:*?"<>|]'))) {
+    if (name.isEmpty || name.startsWith('.') || name.contains(_unsafe)) {
       throw ArgumentError.value(name, 'name', 'Invalid key name, expected a plain file name');
     }
   }
@@ -255,33 +270,35 @@ final class Key<T> {
   /// map [T] names.
   T _cast(Object? json) {
     if (json is T) return json;
+    // Whether T is an S (or an S?, which covers both).
     bool names<S>() => <T>[] is List<S>;
     if (json is List) {
-      if (names<List<String>>() || names<List<String>?>()) return List<String>.from(json) as T;
-      if (names<List<int>>() || names<List<int>?>()) return List<int>.from(json) as T;
-      if (names<List<double>>() || names<List<double>?>()) return [for (final n in json) (n as num).toDouble()] as T;
-      if (names<List<num>>() || names<List<num>?>()) return List<num>.from(json) as T;
-      if (names<List<bool>>() || names<List<bool>?>()) return List<bool>.from(json) as T;
-      if (names<Set<String>>() || names<Set<String>?>()) return Set<String>.from(json) as T;
-      if (names<Set<int>>() || names<Set<int>?>()) return Set<int>.from(json) as T;
-      if (names<List<Map<String, Object?>>>()) return [for (final m in json) Map<String, Object?>.from(m as Map)] as T;
+      if (names<List<String>?>()) return List<String>.from(json) as T;
+      if (names<List<int>?>()) return List<int>.from(json) as T;
+      if (names<List<double>?>()) return [for (final n in json) (n as num).toDouble()] as T;
+      if (names<List<num>?>()) return List<num>.from(json) as T;
+      if (names<List<bool>?>()) return List<bool>.from(json) as T;
+      if (names<Set<String>?>()) return Set<String>.from(json) as T;
+      if (names<Set<int>?>()) return Set<int>.from(json) as T;
+      if (names<List<Map<String, Object?>>?>()) return [for (final m in json) Map<String, Object?>.from(m as Map)] as T;
     }
     if (json is Map) {
-      if (names<Map<String, String>>() || names<Map<String, String>?>()) return Map<String, String>.from(json) as T;
-      if (names<Map<String, int>>() || names<Map<String, int>?>()) return Map<String, int>.from(json) as T;
-      if (names<Map<String, num>>() || names<Map<String, num>?>()) return Map<String, num>.from(json) as T;
-      if (names<Map<String, bool>>() || names<Map<String, bool>?>()) return Map<String, bool>.from(json) as T;
-      if (names<Map<String, Object?>>() || names<Map<String, Object?>?>()) {
-        return Map<String, Object?>.from(json) as T;
-      }
-      if (names<Map<String, List<String>>>()) {
+      if (names<Map<String, String>?>()) return Map<String, String>.from(json) as T;
+      if (names<Map<String, int>?>()) return Map<String, int>.from(json) as T;
+      if (names<Map<String, num>?>()) return Map<String, num>.from(json) as T;
+      if (names<Map<String, bool>?>()) return Map<String, bool>.from(json) as T;
+      // Before `Map<String, Object?>`, which every string-keyed map is.
+      if (names<Map<String, List<String>>?>()) {
         return {for (final MapEntry(:key, :value) in json.entries) key as String: List<String>.from(value as List)}
             as T;
       }
+      if (names<Map<String, Object?>?>()) return Map<String, Object?>.from(json) as T;
     }
-    if (json is num && (names<double>() || names<double?>())) return json.toDouble() as T;
+    if (json is num && names<double?>()) return json.toDouble() as T;
     return json as T;
   }
+
+  static final _unsafe = RegExp(r'[/\\:*?"<>|]');
 
   /// Keys whose type has made the round trip once.
   static final _checked = <Key<Object?>>{};

@@ -87,14 +87,14 @@ void main() {
       final doc = feed.xml;
       expect(doc.root.name, 'rss');
       expect(doc.root.attr('version'), '2.0');
-      final creator = doc.$x('//dc:creator').elements.first;
+      final creator = doc.$x('//dc:creator').first as Element;
       expect((creator.name, creator.prefix, creator.local), ('dc:creator', 'dc', 'creator'));
       expect(doc.$x('//channel/title').first.text, 'Key Sounds & more');
       expect(doc.$x('//item[1]/title').first.text, 'First <post>');
       expect(doc.$x('//description').first.text, 'Some <b>bold</b> text & more');
-      expect(doc.$x('//media:content').elements.first.attr('url'), 'https://cdn.example/1.mp3');
+      expect(doc.$x('//media:content').attr('url'), 'https://cdn.example/1.mp3');
       expect(doc.$x('//item').$('title').map((n) => n.text), ['First <post>', '二番目', 'Third']);
-      expect(doc.$x('//empty').elements.first.markup, '<empty/>');
+      expect(doc.$x('//empty').first.markup, '<empty/>');
       expect(doc.encode().xml.$x('//item').length, 3);
       expect(() => 'just text'.xml, throwsFormatException);
       expect(() => doc.$x('//item/'), throwsFormatException);
@@ -203,6 +203,14 @@ void main() {
   });
 
   group('xpath', () {
+    test('nesting past 256 is a FormatException, not a stack overflow; a run of minus signs is not nesting', () {
+      final doc = '<r><li>1</li><li>2</li></r>'.xml;
+      expect(doc.$x('${'(' * 200}//li${')' * 200}'), hasLength(2));
+      expect(() => doc.$x('${'(' * 100000}//li${')' * 100000}'), throwsFormatException);
+      expect(doc.$x('//li[${'-' * 100001}1 = -1]'), hasLength(2));
+      expect(doc.$x('//li[${'-' * 100000}2 = 2]'), hasLength(2));
+    });
+
     test('every expression selects the same nodes as package:xml', () {
       final ours = feed.xml;
       final theirs = reference.XmlDocument.parse(feed);
@@ -233,10 +241,10 @@ void main() {
       expect(page.$x('//tr[td[2]="FLAC"]/td[1]/a/@href').first.text, '/2');
       expect(page.$x('//a/@href').texts, ['/1', '/2']);
       expect(page.$x('//h2/following-sibling::p[2]').first.text, 'second');
-      expect(page.$x('//table[.//th="Title"]').elements.$('td:first-child a').map((a) => a.text), ['One', 'Two']);
-      expect(page.$x('//td[a]').elements.$x('a/text()').texts, ['One', 'Two']);
+      expect(page.$x('//table[.//th="Title"]').$('td:first-child a').map((a) => a.text), ['One', 'Two']);
+      expect(page.$x('//td[a]').$x('a/text()').texts, ['One', 'Two']);
       expect(page.$('tr').$x('td[2]').texts, ['MP3', 'FLAC']);
-      expect((() => page.$x('//nothing').elements.first.attr('href')).orNull, isNull);
+      expect((() => page.$x('//nothing').attr('href')).orNull, isNull);
       expect(() => page.$x('//nothing').first.text, throwsA(isA<MissingException>()));
     });
 
@@ -285,8 +293,8 @@ void main() {
       test('reverse axes count nearest first', () {
         expect(x('//li[3]/preceding-sibling::li[1]'), ['2']);
         expect(x('//li[3]/preceding-sibling::li[last()]'), ['1']);
-        expect(doc.$x('//b/ancestor::d[1]').elements.first.attr('id'), '2');
-        expect(doc.$x('//b/ancestor::*').elements.map((e) => e.name), ['r', 'd', 'd'], reason: 'document order');
+        expect(doc.$x('//b/ancestor::d[1]').attr('id'), '2');
+        expect(doc.$x('//b/ancestor::*').map((e) => (e as Element).name), ['r', 'd', 'd'], reason: 'document order');
       });
 
       test('arithmetic, the rest of the function library, following and preceding', () {
@@ -400,12 +408,12 @@ void main() {
 
       test('a child step over nested contexts comes back in document order', () {
         final nested = '<r><x><a/><x><b/></x><c/></x></r>'.xml;
-        expect(nested.$x('//x/*').elements.map((e) => e.name), ['a', 'x', 'b', 'c']);
+        expect(nested.$x('//x/*').map((e) => (e as Element).name), ['a', 'x', 'b', 'c']);
       });
 
       test('a descendant step with a positional predicate from nested inputs is in document order', () {
         final d = '<r><c><c><b id="1"/></c><b id="2"/></c></r>'.xml;
-        expect(d.$x('//c/descendant::b[last()]').elements.map((e) => e.id), ['1', '2']);
+        expect(d.$x('//c/descendant::b[last()]').map((e) => (e as Element).id), ['1', '2']);
       });
 
       test('an attribute sorts after its element and before its content, as written', () {

@@ -11,7 +11,6 @@
 library;
 
 import 'dart:async';
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'src/terminal.dart';
@@ -22,7 +21,6 @@ export 'src/terminal.dart'
         Char,
         Choice,
         Color,
-        FakeTerminal,
         Focusable,
         ItemView,
         KeyPress,

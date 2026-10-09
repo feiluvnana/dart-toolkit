@@ -7,6 +7,9 @@ final class _TomlParser {
   late Map<String, Object?> current = root;
   int _depth = 0;
 
+  /// How deep the current `[table]` header is.
+  int _tableDepth = 0;
+
   // What made each table, by identity: a `[header]` (defined, so never again), a header's
   // path (implicit, so a later header may define it), a dotted key, or an inline table — which
   // nothing may extend. Only an array `[[header]]` made may be appended to.
@@ -34,6 +37,8 @@ final class _TomlParser {
     final array = s.startsWith('[[', i);
     i += array ? 2 : 1;
     final path = _key();
+    if (path.length > 1000) throw _error('nested deeper than 1000');
+    _tableDepth = path.length;
     _ws();
     _expect(array ? ']]' : ']');
     var target = root;
@@ -85,6 +90,8 @@ final class _TomlParser {
 
   void _keyValue(Map<String, Object?> table) {
     final path = _key();
+    // Dotted keys nest as brackets do, and count toward the same bound.
+    if (_tableDepth + _depth + path.length > 1000) throw _error('nested deeper than 1000');
     _ws();
     _expect('=');
     _ws();
@@ -421,17 +428,17 @@ String _toml(Doc doc) {
   // is an element of an array of tables.
   final pending = <(Map<Object?, Object?>, List<String>, String, bool)>[(root, const [], r'$', false)];
   while (pending.isNotEmpty) {
-    final (table, name, path, element) = pending.removeLast();
+    final (table, name, at, element) = pending.removeLast();
     final values = <MapEntry<Object?, Object?>>[];
     final below = <(Map<Object?, Object?>, List<String>, String, bool)>[];
     for (final MapEntry(:key, value: v) in table.entries) {
       final value = v is Doc ? v.raw : v;
-      final at = Doc._key(path, '$key');
       if (value is Map<Object?, Object?>) {
-        below.add((value, [...name, '$key'], at, false));
+        below.add((value, [...name, '$key'], Doc._key(at, '$key'), false));
       } else if (value is List<Object?> && value.isNotEmpty && value.every((x) => (x is Doc ? x.raw : x) is Map)) {
+        final where = Doc._key(at, '$key');
         for (final (i, x) in value.indexed) {
-          below.add(((x is Doc ? x.raw : x) as Map<Object?, Object?>, [...name, '$key'], '$at[$i]', true));
+          below.add(((x is Doc ? x.raw : x) as Map<Object?, Object?>, [...name, '$key'], '$where[$i]', true));
         }
       } else {
         values.add(MapEntry(key, value));
@@ -443,47 +450,111 @@ String _toml(Doc doc) {
       out.writeln(element ? '[[$header]]' : '[$header]');
     }
     for (final MapEntry(:key, :value) in values) {
-      out.writeln('${_tomlKey('$key')} = ${_tomlValue(value, Doc._key(path, '$key'))}');
+      out
+        ..write(_tomlKey('$key'))
+        ..write(' = ');
+      _tomlValue(out, value, at, '$key');
+      out.writeln();
     }
     pending.addAll(below.reversed);
   }
   return out.toString();
 }
 
-final _tomlBare = RegExp(r'^[A-Za-z0-9_-]+$');
+String _tomlKey(String key) => _isTomlBare(key) ? key : _tomlString(key);
 
-String _tomlKey(String key) => _tomlBare.hasMatch(key) ? key : _tomlString(key);
+bool _isTomlBare(String key) {
+  if (key.isEmpty) return false;
+  for (var i = 0; i < key.length; i++) {
+    if (!_TomlParser._isBare(key.codeUnitAt(i))) return false;
+  }
+  return true;
+}
 
-/// [value], at [path], as an inline TOML value.
-String _tomlValue(Object? value, String path) => switch (value) {
-  null => throw FormatException('Invalid TOML at $path: null has no TOML form'),
-  final Doc d => _tomlValue(d.raw, path),
-  final String s => _tomlString(s),
-  final double d when d.isNaN => 'nan',
-  final double d when d.isInfinite => d.isNegative ? '-inf' : 'inf',
-  final DateTime d => d.toIso8601String(),
-  bool() || num() => '$value',
-  final List<Object?> l => '[${[for (final (i, x) in l.indexed) _tomlValue(x, '$path[$i]')].join(', ')}]',
-  final Map<Object?, Object?> m =>
-    '{${[for (final MapEntry(:key, value: x) in m.entries) '${_tomlKey('$key')} = ${_tomlValue(x, Doc._key(path, '$key'))}'].join(', ')}}',
-  _ => _tomlString('$value'),
-};
+/// [value], at key [key] (a `String` or an index) below [parent], written into [out] as an inline
+/// TOML value. The path a failure names is joined only when one is thrown.
+void _tomlValue(StringBuffer out, Object? value, String parent, Object key) {
+  String path() => key is int ? '$parent[$key]' : Doc._key(parent, '$key');
+  switch (value) {
+    case null:
+      throw FormatException('Invalid TOML at ${path()}: null has no TOML form');
+    case final Doc d:
+      _tomlValue(out, d.raw, parent, key);
+    case final String s:
+      _writeTomlString(out, s);
+    case final double d when d.isNaN:
+      out.write('nan');
+    case final double d when d.isInfinite:
+      out.write(d.isNegative ? '-inf' : 'inf');
+    case final DateTime d:
+      out.write(d.toIso8601String());
+    case bool() || num():
+      out.write(value);
+    case final List<Object?> l:
+      final at = path();
+      out.write('[');
+      for (final (i, x) in l.indexed) {
+        if (i > 0) out.write(', ');
+        _tomlValue(out, x, at, i);
+      }
+      out.write(']');
+    case final Map<Object?, Object?> m:
+      final at = path();
+      out.write('{');
+      var first = true;
+      for (final MapEntry(key: k, value: x) in m.entries) {
+        if (!first) out.write(', ');
+        first = false;
+        out
+          ..write(_tomlKey('$k'))
+          ..write(' = ');
+        _tomlValue(out, x, at, '$k');
+      }
+      out.write('}');
+    default:
+      _writeTomlString(out, '$value');
+  }
+}
 
 /// [s] as a TOML basic string.
 String _tomlString(String s) {
-  final sb = StringBuffer('"');
-  for (final c in s.runes) {
-    sb.write(switch (c) {
-      0x22 => r'\"',
-      0x5c => r'\\',
-      0x08 => r'\b',
-      0x09 => r'\t',
-      0x0a => r'\n',
-      0x0c => r'\f',
-      0x0d => r'\r',
-      < 0x20 || 0x7f => '\\u${c.toRadixString(16).padLeft(4, '0')}',
-      _ => String.fromCharCode(c),
-    });
+  final out = StringBuffer();
+  _writeTomlString(out, s);
+  return out.toString();
+}
+
+/// [s] as a TOML basic string into [out], the runs between escapes copied whole.
+void _writeTomlString(StringBuffer out, String s) {
+  out.write('"');
+  var from = 0;
+  for (var i = 0; i < s.length; i++) {
+    final c = s.codeUnitAt(i);
+    final String escape;
+    switch (c) {
+      case 0x22:
+        escape = r'\"';
+      case 0x5c:
+        escape = r'\\';
+      case 0x08:
+        escape = r'\b';
+      case 0x09:
+        escape = r'\t';
+      case 0x0a:
+        escape = r'\n';
+      case 0x0c:
+        escape = r'\f';
+      case 0x0d:
+        escape = r'\r';
+      case < 0x20 || 0x7f:
+        escape = '\\u${c.toRadixString(16).padLeft(4, '0')}';
+      default:
+        continue;
+    }
+    if (i > from) out.write(s.substring(from, i));
+    out.write(escape);
+    from = i + 1;
   }
-  return (sb..write('"')).toString();
+  out
+    ..write(from == 0 ? s : s.substring(from))
+    ..write('"');
 }

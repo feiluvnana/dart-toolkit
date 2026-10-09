@@ -123,14 +123,14 @@ final class Pool<I, T> implements Detachable {
   /// Reads the folder store: continues what a run that ended left, and shows the runner's jobs.
   Future<void> _open() async {
     final folder = store.folder!;
-    final record = _record = _Record(folder, _codec);
+    final record = _record = _Record(folder, _codec, _kept);
     for (final (id, item, paused) in await record.adopt()) {
       if (_closing != null) return;
       final job = Job<I, T>._(this, id, item, isDetached: false);
       _meet(job);
       paused ? job._set(Paused(item)) : _start(job);
     }
-    await record.save(_kept());
+    await record.save();
     if (_link == null) await _Link.find(this, folder);
   }
 
@@ -246,7 +246,7 @@ final class Pool<I, T> implements Detachable {
       for (final batch in [..._batches]) batch.statuses.drain<void>(),
     ]);
     await _opened.catchError((Object _) {}); // what the store said is the changes' error
-    await _record?.close(_kept());
+    await _record?.close();
     await _link?.close();
     // This program stops watching the detached jobs; they run on in their runner.
     for (final job in [..._jobs.values]) {
@@ -286,7 +286,7 @@ final class Pool<I, T> implements Detachable {
       if (_isRunner) {
         _runner?.persist();
       } else if (!job.isDetached) {
-        _record?.save(_kept()).ignore();
+        _record?.save().ignore();
       }
     }
     if (_isRunner) _runner?.tell(job, note);
@@ -370,11 +370,13 @@ final class _Lanes<I, T> {
   /// come free. A cancel of the enclosing scope while it waits is a [CancelledException].
   Future<_Lane<I, T>> take() async {
     final token = Cancel.token;
+    // Woken with no worker: a place came free to start one, and it is this caller's turn.
+    var woken = false;
     while (true) {
       token?.check();
       if (_closed) throw const CancelledException(_closedReason);
-      if (_idle.isNotEmpty && _waiting.isEmpty) return _idle.removeLast();
-      if (_count < _pool.concurrency && _waiting.isEmpty) {
+      if (_idle.isNotEmpty && (_waiting.isEmpty || woken)) return _idle.removeLast();
+      if (_count < _pool.concurrency && (_waiting.isEmpty || woken)) {
         _count++;
         try {
           final lane = _pool.isolate ? await _IsolateLane.start(_pool._create) : await _LocalLane.start(_pool._create);
@@ -393,7 +395,10 @@ final class _Lanes<I, T> {
       });
       final lane = await turn.future;
       unlisten?.call();
-      if (lane == null) continue; // cancelled, closed, or woken to start one
+      if (lane == null) {
+        woken = true;
+        continue; // cancelled, closed, or woken to start one
+      }
       if (token?.isCancelled ?? false) {
         give(lane);
         token!.check();
@@ -655,16 +660,19 @@ Future<void> _serveIsolate<I, T>((Worker<I, T> Function(), SendPort) setup) asyn
     worker = create();
     await worker.init(work);
   });
-  final relayInit = init.statuses.listen((status) => _sendStatus(reply, 0, status));
+  final relayInit = _Relay(reply, 0);
+  final relayingInit = init.statuses.listen(relayInit.add);
   switch (await init.settled) {
     case Failed(:final error, :final stackTrace):
-      await relayInit.cancel();
+      await relayingInit.cancel();
+      relayInit.flush();
       await work.end(Failed(null, error, stackTrace));
       reply.send((0, #failed, _encodeFailure(error, stackTrace)));
       inbox.close();
       return;
     case _:
-      await relayInit.cancel();
+      await relayingInit.cancel();
+      relayInit.flush();
       reply.send((0, #ready, null));
   }
   final running = <int, Task<T>>{};
@@ -672,9 +680,11 @@ Future<void> _serveIsolate<I, T>((Worker<I, T> Function(), SendPort) setup) asyn
     switch (message) {
       case (final int id, #run, final Object? item):
         final task = running[id] = TaskInternals.start(item, '$item', (work) => worker.run(item as I, work));
-        final relay = task.statuses.listen((status) => _sendStatus(reply, id, status));
+        final relay = _Relay(reply, id);
+        final relaying = task.statuses.listen(relay.add);
         final outcome = await task.settled;
-        await relay.cancel();
+        await relaying.cancel();
+        relay.flush();
         running.remove(id);
         switch (outcome) {
           case Done(:final value, :final fresh):
@@ -702,6 +712,43 @@ Future<void> _serveIsolate<I, T>((Worker<I, T> Function(), SendPort) setup) asyn
         reply.send((0, #closed, null));
     }
   };
+}
+
+/// One item's statuses on their way out of its isolate: a [Running] at most every [_reportGap]
+/// (the latest), anything else at once, after the [Running] it held.
+final class _Relay {
+  final SendPort _reply;
+  final int _id;
+  final _since = Stopwatch();
+  Running<Object?, Object?>? _held;
+  Timer? _timer;
+
+  _Relay(this._reply, this._id);
+
+  void add(Status<Object?, Object?> status) {
+    if (status is! Running<Object?, Object?>) {
+      flush();
+      return _sendStatus(_reply, _id, status);
+    }
+    if (!_since.isRunning || _since.elapsed >= _reportGap) return _send(status);
+    _held = status;
+    _timer ??= Timer(_reportGap - _since.elapsed, flush);
+  }
+
+  /// Sends the [Running] it holds, if any.
+  void flush() {
+    _timer?.cancel();
+    _timer = null;
+    if (_held case final held?) _send(held);
+  }
+
+  void _send(Running<Object?, Object?> status) {
+    _held = null;
+    _since
+      ..reset()
+      ..start();
+    _sendStatus(_reply, _id, status);
+  }
 }
 
 void _sendStatus(SendPort reply, int id, Status<Object?, Object?> status) {

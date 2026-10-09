@@ -341,8 +341,15 @@ final class _Stdout {
     if (_bytes case final bytes? when !bytes.isClosed) bytes.close();
   }
 
-  /// What the result holds: the bytes kept, or `null` when a taker took them.
-  Uint8List? get result => _kept?.toBytes();
+  /// What the result holds: the bytes kept, or `null` when a taker took them. They are joined
+  /// once and kept joined, so the result and a late taker share one copy.
+  Uint8List? get result {
+    final kept = _kept;
+    if (kept == null) return null;
+    final bytes = kept.takeBytes();
+    kept.add(bytes);
+    return bytes;
+  }
 }
 
 /// The last whole line in [chunk], decoded, or `null`: only the end of it is looked at.
@@ -428,7 +435,7 @@ final class _Stderr {
       onListen: () {
         final kept = const LineSplitter().convert(text);
         // A line still being printed arrives whole when it ends.
-        final whole = text.endsWith('\n') ? kept : kept.take(kept.length - 1);
+        final whole = text.isEmpty || text.endsWith('\n') ? kept : kept.take(kept.length - 1);
         whole.forEach(controller.add);
         _ended ? controller.close() : _listeners.add(controller);
       },
@@ -462,6 +469,68 @@ final class _Expired {
   const _Expired(this.limit);
 }
 
+/// What stops a run before it ends: the enclosing cancel, or its [limit] ([_Expired]). Its
+/// [processes] die as a tree then; [why] completes with the reason.
+final class _Stop {
+  final List<Process> processes;
+  final _why = Completer<Object>();
+  Future<void> stopped = Future.value();
+  void Function()? _unlisten;
+  Timer? _timer;
+
+  _Stop(this.processes, Duration? limit) {
+    final token = Cancel.token;
+    _unlisten = token?.onCancel(() => halt(CancelledException.of(token)));
+    if (limit != null) _timer = Timer(limit, () => halt(_Expired(limit)));
+  }
+
+  Future<Object> get why => _why.future;
+
+  bool get isStopped => _why.isCompleted;
+
+  void halt(Object why) {
+    if (_why.isCompleted) return;
+    _why.complete(why);
+    stopped = _stopTree(processes);
+  }
+
+  /// The run is over: neither its cancel nor its limit can stop it now.
+  void end() {
+    _timer?.cancel();
+    _unlisten?.call();
+  }
+}
+
+/// The exit code a shell gives: a child killed by signal n is 128 + n.
+int _shellCode(int code) => code < 0 ? 128 - code : code;
+
+/// A [PathNotFoundException] when [place], the working directory of [command], is not there.
+Future<void> _checkWorkdir(String? place, Command command) async {
+  if (place != null && await FileSystemEntity.type(place) == FileSystemEntityType.notFound) {
+    throw PathNotFoundException(
+      place,
+      const OSError('No such file or directory', 2),
+      'Cannot run $command: no working directory',
+    );
+  }
+}
+
+/// [stage] started, or the [ShellException] a shell gives (126, 127) when it cannot be.
+Future<Process> _launch(Command command, Command stage, String? place, _Scope scope, ProcessStartMode mode) async {
+  try {
+    return await _start(stage, place, _childEnv(scope.envOf(stage)), mode);
+  } on ProcessException catch (e) {
+    final code = _codeOf(e) ?? (throw e);
+    throw ShellException(ShellResult._(command, code, Uint8List(0), '${e.message}: ${e.executable}\n'));
+  }
+}
+
+/// The run's limit ran out ([_Expired]) or it was cancelled: the exception it ends with.
+Object _stopped(Object why, ShellResult Function() printed) => switch (why) {
+  _Expired(:final limit) => ShellTimeoutException(printed(), limit),
+  final other => other, // a cancel, or the input stream's own failure
+};
+
 /// Runs [command] (each stage of it) as children of this process.
 Future<ShellResult> _spawn(
   Command command,
@@ -473,42 +542,23 @@ Future<ShellResult> _spawn(
 ) async {
   final stages = command.stages;
   final places = [for (final stage in stages) scope.workdirOf(stage)];
-  for (final place in {...places.nonNulls}) {
-    if (await FileSystemEntity.type(place) == FileSystemEntityType.notFound) {
-      throw PathNotFoundException(
-        place,
-        const OSError('No such file or directory', 2),
-        'Cannot run $command: no working directory',
-      );
-    }
+  for (final place in {...places}) {
+    await _checkWorkdir(place, command);
   }
   Cancel.check();
 
   final processes = <Process>[];
-  final stop = Completer<Object>();
-  Future<void> stopped = Future.value();
-  void halt(Object why) {
-    if (stop.isCompleted) return;
-    stop.complete(why);
-    stopped = _stopTree(processes);
-  }
-
-  final token = Cancel.token;
-  final unlisten = token?.onCancel(() => halt(CancelledException.of(token)));
-  final timer = limit == null ? null : Timer(limit, () => halt(_Expired(limit)));
+  final stop = _Stop(processes, limit);
   try {
     for (final (i, stage) in stages.indexed) {
       try {
-        processes.add(await _start(stage, places[i], _childEnv(scope.envOf(stage)), ProcessStartMode.normal));
-      } on ProcessException catch (e) {
-        final code = _codeOf(e);
+        processes.add(await _launch(command, stage, places[i], scope, ProcessStartMode.normal));
+      } catch (_) {
         await _stopTree(processes);
-        if (code == null) rethrow;
-        // A shell's codes: 126 for a file that cannot run, 127 for none at all.
-        throw ShellException(ShellResult._(command, code, Uint8List(0), '${e.message}: ${e.executable}\n'));
+        rethrow;
       }
       // Stopped while it started: it goes the way the ones before it went.
-      if (stop.isCompleted) stopped = stopped.then((_) => _stopTree([processes.last]));
+      if (stop.isStopped) stop.stopped = stop.stopped.then((_) => _stopTree([processes.last]));
     }
 
     // Readers first: a child that echoes a large input fills its stdout pipe and stops reading
@@ -520,7 +570,7 @@ Future<ShellResult> _spawn(
     for (final p in processes) {
       err.attach(p.stderr);
     }
-    final fed = _feed(processes.first, input, halt);
+    final fed = _feed(processes.first, input, stop.halt);
 
     final ended = <int>[];
     final exits = Future.wait([
@@ -530,36 +580,28 @@ Future<ShellResult> _spawn(
     // left holding stdout open (`sleep 60 &`) would otherwise hold the run with it.
     final settled = await Future.any<Object>([
       exits.then((codes) async => (await Future.wait([out.drained, err.drained, fed]), codes).$2),
-      stop.future,
+      stop.why,
     ]);
 
     if (settled is! List<int>) {
-      await stopped;
-      switch (settled) {
-        case _Expired(:final limit):
-          throw ShellTimeoutException(
-            ShellResult._(command, 124, out.result ?? Uint8List(0), err.text, taken: out.takenBy != null),
-            limit,
-          );
-        case final CancelledException e:
-          throw e;
-        case final error:
-          throw error; // the input stream's own failure
-      }
+      await stop.stopped;
+      throw _stopped(
+        settled,
+        () => ShellResult._(command, 124, out.result ?? Uint8List(0), err.text, taken: out.takenBy != null),
+      );
     }
 
-    int shellCode(int code) => code < 0 ? 128 - code : code; // killed by signal n: 128 + n, as a shell says
+    final said = err.text;
     bool brokenPipe(int i, int code) =>
         i + 1 < settled.length &&
-        (code == 141 || (ended.indexOf(i + 1) < ended.indexOf(i) && err.text.contains('Broken pipe')));
-    final codes = [for (final (i, code) in settled.indexed) brokenPipe(i, shellCode(code)) ? 0 : shellCode(code)];
+        (code == 141 || (ended.indexOf(i + 1) < ended.indexOf(i) && said.contains('Broken pipe')));
+    final codes = [for (final (i, code) in settled.indexed) brokenPipe(i, _shellCode(code)) ? 0 : _shellCode(code)];
     final code = codes.lastWhere((c) => c != 0, orElse: () => 0);
-    final result = ShellResult._(command, code, out.result, err.text, taken: out.takenBy != null);
+    final result = ShellResult._(command, code, out.result, said, taken: out.takenBy != null);
     if (code != 0) throw ShellException(result);
     return result;
   } finally {
-    timer?.cancel();
-    unlisten?.call();
+    stop.end();
   }
 }
 
@@ -571,54 +613,31 @@ Future<ShellResult> _fake(
   _Stdout out,
   _Stderr err,
 ) async {
-  final stop = Completer<Object>();
-  final token = Cancel.token;
-  final unlisten = token?.onCancel(() {
-    if (!stop.isCompleted) stop.complete(CancelledException.of(token));
-  });
-  final timer = limit == null ? null : Timer(limit, () => stop.isCompleted ? null : stop.complete(_Expired(limit)));
+  final stop = _Stop(const [], limit);
   try {
     var code = 0;
     late ShellResult last;
     for (final stage in command.stages) {
-      final answered = await Future.any<Object>([Future.sync(() => answer(stage)), stop.future]);
-      switch (answered) {
-        case ShellResult result:
-          err.addAll(result.stderr);
-          if (result.exitCode != 0) code = result.exitCode;
-          last = result;
-        case _Expired(:final limit):
-          throw ShellTimeoutException(ShellResult._(command, 124, Uint8List(0), err.text), limit);
-        case final error:
-          throw error;
+      final answered = await Future.any<Object>([Future.sync(() => answer(stage)), stop.why]);
+      if (answered is! ShellResult) {
+        throw _stopped(answered, () => ShellResult._(command, 124, Uint8List(0), err.text));
       }
+      err.addAll(answered.stderr);
+      if (answered.exitCode != 0) code = answered.exitCode;
+      last = answered;
     }
     out.add(last.bytes);
     final result = ShellResult._(command, code, out.result, err.text, taken: out.takenBy != null);
     if (code != 0) throw ShellException(result);
     return result;
   } finally {
-    timer?.cancel();
-    unlisten?.call();
+    stop.end();
   }
 }
 
 /// [input] written to [process]'s stdin, which is then closed; an error in an input stream stops
 /// the command through [halt], and is what the run throws.
 Future<void> _feed(Process process, Object? input, void Function(Object why) halt) async {
-  Object? failed;
-  // A generator, not a transformer: a `Stream<Uint8List>` passed as `Stream<List<int>>` would
-  // refuse a `List<int>` transformer, and `await for` keeps the pipe's backpressure.
-  Stream<List<int>> untilError(Stream<List<int>> source) async* {
-    try {
-      await for (final chunk in source) {
-        yield chunk;
-      }
-    } catch (e) {
-      failed = e;
-    }
-  }
-
   try {
     switch (input) {
       case String():
@@ -626,11 +645,41 @@ Future<void> _feed(Process process, Object? input, void Function(Object why) hal
       case List<int>():
         process.stdin.add(input);
       case Stream<List<int>>():
-        await process.stdin.addStream(untilError(input));
+        await _pump(input, process, halt);
     }
     await process.stdin.close();
   } catch (_) {} // the child may have exited and closed its stdin: its exit says the rest
-  if (failed case final why?) halt(why);
+}
+
+/// [source] into [process]'s stdin a chunk at a time, each written before the next is read. The
+/// source is let go when the child exits, so a stream that never ends does not outlive the run.
+Future<void> _pump(Stream<List<int>> source, Process process, void Function(Object why) halt) {
+  final pumped = Completer<void>();
+  late final StreamSubscription<List<int>> reading;
+  void end() {
+    if (pumped.isCompleted) return;
+    pumped.complete();
+    reading.cancel().ignore();
+  }
+
+  reading = source.listen(
+    (chunk) {
+      try {
+        process.stdin.add(chunk);
+        reading.pause(process.stdin.flush().catchError((Object _) => end())); // a closed pipe: the exit says the rest
+      } on StateError catch (_) {
+        end(); // its stdin is closed: the exit says the rest
+      }
+    },
+    onError: (Object e) {
+      halt(e);
+      end();
+    },
+    onDone: end,
+    cancelOnError: true,
+  );
+  process.exitCode.then((_) => end());
+  return pumped.future;
 }
 
 /// [command] run on this terminal: no capture, and ^C is the child's.
@@ -648,53 +697,26 @@ Task<void> _interact(Command command, _Scope scope, Duration? timeout) {
       return;
     }
     final place = scope.workdirOf(command);
-    if (place != null && await FileSystemEntity.type(place) == FileSystemEntityType.notFound) {
-      throw PathNotFoundException(
-        place,
-        const OSError('No such file or directory', 2),
-        'Cannot run $command: no working directory',
-      );
-    }
+    await _checkWorkdir(place, command);
     Future<void> body() async {
       // The terminal sends ^C to the child too: here it only must not end this process.
       final interrupts = ProcessSignal.sigint.watch().listen((_) {});
       ProcessBridge.interactive++;
       try {
-        final Process child;
+        final child = await _launch(command, command, place, scope, ProcessStartMode.inheritStdio);
+        final stop = _Stop([child], limit);
         try {
-          child = await _start(command, place, _childEnv(scope.envOf(command)), ProcessStartMode.inheritStdio);
-        } on ProcessException catch (e) {
-          final code = _codeOf(e) ?? (throw e);
-          throw ShellException(ShellResult._(command, code, Uint8List(0), '${e.message}: ${e.executable}\n'));
-        }
-        final stop = Completer<Object>();
-        Future<void> stopped = Future.value();
-        void halt(Object why) {
-          if (stop.isCompleted) return;
-          stop.complete(why);
-          stopped = _stopTree([child]);
-        }
-
-        final token = Cancel.token;
-        final unlisten = token?.onCancel(() => halt(CancelledException.of(token)));
-        final timer = limit == null ? null : Timer(limit, () => halt(_Expired(limit)));
-        try {
-          final settled = await Future.any<Object>([child.exitCode, stop.future]);
-          switch (settled) {
+          switch (await Future.any<Object>([child.exitCode, stop.why])) {
             case final int code when code != 0:
-              throw ShellException(ShellResult._(command, code < 0 ? 128 - code : code, Uint8List(0), ''));
+              throw ShellException(ShellResult._(command, _shellCode(code), Uint8List(0), ''));
             case int():
               return;
-            case _Expired(:final limit):
-              await stopped;
-              throw ShellTimeoutException(ShellResult._(command, 124, Uint8List(0), ''), limit);
-            case final error:
-              await stopped;
-              throw error;
+            case final why:
+              await stop.stopped;
+              throw _stopped(why, () => ShellResult._(command, 124, Uint8List(0), ''));
           }
         } finally {
-          timer?.cancel();
-          unlisten?.call();
+          stop.end();
         }
       } finally {
         ProcessBridge.interactive--;

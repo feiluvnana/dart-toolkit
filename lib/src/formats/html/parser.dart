@@ -1,5 +1,6 @@
 // A one-pass tag-soup HTML parser: no insertion modes, just the implicit closes and synthesised
-// elements scrapers meet. No foster parenting: stray content in a `<table>` stays there.
+// elements scrapers meet. No foster parenting (stray content in a `<table>` stays there) and no
+// adoption agency (a misnested `</b>` closes what it crosses; nothing is re-opened).
 
 part of '../../markup.dart';
 
@@ -20,9 +21,10 @@ const _headElements = {'title', 'meta', 'link', 'style', 'script', 'base', 'nosc
 
 /// Start tags that close an open `<p>`.
 const _closesP = {
-  'address', 'article', 'aside', 'blockquote', 'details', 'dialog', 'div', 'dl', 'fieldset', 'figcaption', //
-  'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hgroup', 'hr', 'main', 'menu',
-  'nav', 'ol', 'p', 'pre', 'section', 'table', 'ul', 'li', 'dt', 'dd',
+  'address', 'article', 'aside', 'blockquote', 'center', 'details', 'dialog', 'dir', 'div', 'dl', 'fieldset', //
+  'figcaption', 'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hgroup', 'hr',
+  'listing', 'main', 'menu', 'nav', 'ol', 'p', 'plaintext', 'pre', 'search', 'section', 'summary', 'table',
+  'ul', 'xmp', 'li', 'dt', 'dd',
 };
 
 /// Start tag → (the open elements it closes, the boundary it stops at): `<li>` after `<li>`.
@@ -40,6 +42,7 @@ const _closesSibling = <String, (Set<String>, Set<String>)>{
   'optgroup': ({'optgroup'}, {'select'}),
   'rt': ({'rt', 'rp'}, {'ruby'}),
   'rp': ({'rt', 'rp'}, {'ruby'}),
+  'button': ({'button'}, {'applet', 'caption', 'marquee', 'object', 'table', 'td', 'template', 'th'}),
 };
 
 const _tableParts = {'table', 'tbody', 'tfoot', 'thead', 'tr', 'td', 'th', 'caption', 'colgroup', 'col'};
@@ -238,7 +241,7 @@ final class _Parser {
       return true;
     }
     if (name == 'body' || name == 'html' || name == 'head') return true; // closed at the end anyway
-    if (name == 'p' && !open.any((e) => e.name == 'p')) {
+    if (name == 'p' && !_inScope('p', _blockBoundaries)) {
       // A stray </p> is an empty paragraph, as in a browser.
       ensureBody();
       insert(Element('p'), selfClosing: true);
@@ -330,7 +333,9 @@ final class _Parser {
     );
     if (_voidElements.contains(name) || selfClosing) return;
 
-    if (_rawTextElements.contains(name) || _rcdataElements.contains(name)) {
+    // Only HTML's own `<style>`, `<title>`…: inside SVG or MathML they are elements like any other.
+    final foreign = inForeign && parent.name != 'foreignObject';
+    if (!foreign && (_rawTextElements.contains(name) || _rcdataElements.contains(name))) {
       // Scanned in place: a regex would copy the rest of the document per <script>.
       final close = _endTag(src, pos, name);
       var raw = src.substring(pos, close?.start ?? src.length);
@@ -347,6 +352,16 @@ final class _Parser {
     if (name == 'svg') _svg++;
     if (name == 'math') _math++;
     if (name == 'pre' || name == 'listing') _dropNewline = true;
+  }
+
+  /// Whether an element named [name] is open with none in [boundary] above it.
+  bool _inScope(String name, Set<String> boundary) {
+    for (var i = open.length - 1; i > 0; i--) {
+      final n = open[i].name;
+      if (n == name) return true;
+      if (boundary.contains(n)) return false;
+    }
+    return false;
   }
 
   /// Pops open elements up to and including the nearest one matching [close], unless one in
@@ -442,7 +457,7 @@ int _scanAttributes(String src, int i, Map<String, String> into, {required bool 
     final nameStart = i++;
     while (i < src.length) {
       final d = src.codeUnitAt(i);
-      if (_isSpace(d) || d == 0x3d || d == 0x3e || (d == 0x2f && i + 1 < src.length && src.codeUnitAt(i + 1) == 0x3e)) {
+      if (_isSpace(d) || d == 0x3d || d == 0x3e || d == 0x2f) {
         break;
       }
       i++;
@@ -483,7 +498,8 @@ int _scanAttributes(String src, int i, Map<String, String> into, {required bool 
 /// Where a new `<a>` stops looking for an open one to close, as the spec's markers do.
 const _linkBoundaries = {'td', 'th', 'caption', 'table', 'template', 'object', 'marquee', 'applet', 'button'};
 
-const _blockBoundaries = {'table', 'td', 'th', 'div', 'section', 'article', 'body', 'li', 'ul', 'ol', 'blockquote'};
+/// Where a start tag stops looking for an open `<p>` to close: the spec's button scope.
+const _blockBoundaries = {'applet', 'button', 'caption', 'marquee', 'object', 'table', 'td', 'template', 'th'};
 
 /// The first `</$name` then whitespace, `/` or `>`, any case, at or after [from], through the
 /// next `>`: `</script/>` and `</script foo>` end a script too.

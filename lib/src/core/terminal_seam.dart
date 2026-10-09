@@ -4,7 +4,7 @@
 part of '../core.dart';
 
 /// The screen and keyboard an app draws on and reads keys from: the process's terminal, or a
-/// `FakeTerminal` (in `cli` and `tui`) under `Io.scope(terminal:)`.
+/// `FakeTerminal` (in `testing.dart`) under `Io.scope(terminal:)`.
 ///
 /// [open] puts it in raw mode and starts [input]; [close] undoes both and must be synchronous,
 /// because a signal handler calls it on the way out. Escape sequences go through [write].

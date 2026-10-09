@@ -59,6 +59,12 @@ final class _BadInit extends Worker<int, int> {
   int run(int item, Work work) => item * 2;
 }
 
+/// A worker whose isolate exits on item 1.
+final class _Exits extends Worker<int, int> {
+  @override
+  int run(int item, Work work) => item == 1 ? Isolate.exit() : item;
+}
+
 /// A worker that returns a task: its progress is the item's.
 final class _Delegating extends Worker<int, int> {
   @override
@@ -137,6 +143,32 @@ void main() {
       expect(first.single, isA<Failed<int, int>>().having((f) => f.error, 'error', isFormatException));
       expect(_log, ['half-made cleanup']);
       expect(await pool.map([2]), [4]);
+    });
+
+    test('a worker that cannot start fails only its item: the items waiting behind it still run', () async {
+      _BadInit.tries = 0;
+      final pool = Pool(_BadInit.new, concurrency: 1);
+      addTearDown(pool.close);
+      final jobs = [
+        for (final i in [1, 2, 3]) pool.add(i),
+      ];
+      final settled = await Future.wait([for (final job in jobs) job.settled]).timeout(10.s);
+      expect(settled.first, isA<Failed<int, int>>());
+      expect([for (final s in settled.skip(1)) (s as Done<int, int>).value], [4, 6]);
+    });
+
+    test('a worker isolate that dies fails only its item: the items waiting behind it still run', () async {
+      final pool = Pool(_Exits.new, concurrency: 1, isolate: true);
+      addTearDown(pool.close);
+      final jobs = runZonedGuarded(
+        () => [
+          for (final i in [1, 2, 3]) pool.add(i),
+        ],
+        (_, _) {}, // the dead isolate is an Error, which reaches where the job was added
+      )!;
+      final settled = await Future.wait([for (final job in jobs) job.settled]).timeout(10.s);
+      expect(settled.first, isA<Failed<int, int>>());
+      expect([for (final s in settled.skip(1)) (s as Done<int, int>).value], [2, 3]);
     });
 
     test('at most concurrency items run at once, across every map on the pool', () async {
@@ -277,6 +309,17 @@ void main() {
       await expectLater(job, throwsA(isA<PathNotFoundException>()));
       job.resume();
       expect(await job, 'FAIL-JOB');
+    });
+
+    test('a failed job run again is unfinished: an equal item gives it, not a second job', () async {
+      final pool = Pool(_Steps.new);
+      addTearDown(pool.close);
+      final job = pool.add('fail-again');
+      await job.settled;
+      job.resume();
+      expect(pool.add('fail-again'), same(job));
+      expect(await job, 'FAIL-AGAIN');
+      expect(pool.jobs, hasLength(1));
     });
 
     test('an equal unfinished item gives the job it has; a finished one a new job (ASY-15)', () async {

@@ -30,8 +30,8 @@ sealed class Quality {
     return _Fixed(quality);
   }
 
-  /// The best quality whose file is at most [bytes]; with [visual], the smallest that reaches
-  /// that score within the budget. When even the lowest quality is over, the picture shrinks a
+  /// The best quality whose file is at most [bytes], found by size alone, the highest tried
+  /// first; with [visual], the smallest that reaches that score within the budget. When even the lowest quality is over, the picture shrinks a
   /// tenth at a time, five times at most, and `Compressed.width`/`height` say so.
   factory Quality.under(int bytes, {double? visual}) {
     if (bytes < 1) throw ArgumentError.value(bytes, 'bytes', 'Invalid budget, expected at least 1 byte');
@@ -100,7 +100,7 @@ final class _Lossless extends Quality {
 /// What `path.compress` or `path.optimize` did to one file: where it is now, its size [before]
 /// and [after], the picture's size and [format], and the encoder [quality] and SSIMULACRA2
 /// [score] when they were measured (`null` for a lossless or an unchanged file; the score also
-/// at a fixed quality). A file left as it was has `after == before` and is a `Done(fresh:
+/// at a fixed quality and under a budget with no `visual:`, where nothing is scored). A file left as it was has `after == before` and is a `Done(fresh:
 /// false)`; why is a step or a note of its task.
 ///
 /// {@category Image}

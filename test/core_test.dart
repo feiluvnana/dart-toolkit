@@ -19,6 +19,40 @@ void main() {
     });
   });
 
+  group('FileBridge.settle claims', () {
+    Future<List<int>> slow(String text) async {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      return utf8.encode(text);
+    }
+
+    test('two saves at once under rename land on two names', () async {
+      final to = '${tempDir()}/a.txt';
+      final saved = await Future.wait([
+        for (final text in ['first', 'second']) FileBridge.save(to, Conflict.rename, 'x', () => slow(text)),
+      ]);
+      expect(saved.toSet(), hasLength(2));
+      expect({for (final f in saved) File(f).readAsStringSync()}, {'first', 'second'});
+    });
+
+    test('a claimed name is taken under every policy, and free again once released', () async {
+      final to = '${tempDir()}/b.txt';
+      final first = FileBridge.save(to, Conflict.skip, 'x', () => slow('first'));
+      await Future<void>.delayed(const Duration(milliseconds: 20)); // settled, and still writing
+      expect(
+        await FileBridge.save(to, Conflict.skip, 'x', () => slow('second')).settled,
+        isA<Done<Object?, Path>>().having((d) => d.fresh, 'fresh', isFalse),
+      );
+      await expectLater(
+        FileBridge.save(to, Conflict.fail, 'x', () => slow('third')),
+        throwsA(isA<PathExistsException>()),
+      );
+      await first;
+      expect(File(to).readAsStringSync(), 'first');
+      await FileBridge.save(to, Conflict.overwrite, 'x', () => slow('fourth'));
+      expect(File(to).readAsStringSync(), 'fourth');
+    });
+  });
+
   group('Core or', () {
     int reading(int v) => v;
     String throwing() => throw MissingException('<a> has no href');
@@ -342,7 +376,6 @@ SINGLE_QUOTED='single quote value'
       );
       expect((() => Env.get('NON_EXISTENT_VAR')).or('fallback_val'), equals('fallback_val'));
       expect((() => Env.get('NON_EXISTENT_VAR')).orNull, isNull);
-      expect(Env.isCI, isA<bool>());
     });
 
     test('an empty variable is unset for get, orNull, has and parse', () {
@@ -662,6 +695,180 @@ SINGLE_QUOTED='single quote value'
     expect(1536.humanBytes, '1.5 KB');
   });
 
+  group('batch and task outcomes', () {
+    test('Batch.merge: a part that fails before the others is no unhandled error', () async {
+      final slow = [1].parallelize((i) async {
+        await 200.ms.delay();
+        return i;
+      });
+      final fast = [2].parallelize<int>((i) async => throw Exception('boom $i'));
+      await expectLater(Batch.merge([slow, fast]), throwsA(isA<BatchException<int, int>>()));
+    });
+
+    test('a cleanup runs uncancelled when the scope around the task is cancelled', () async {
+      final stop = CancelToken();
+      final seen = <String>[];
+      late Task<int> task;
+      final scope = Cancel.scope(() {
+        task = Task.run('t', (work) async {
+          work.defer(() async {
+            seen.add('cancelled: ${Cancel.isCancelled}');
+            await 10.ms.delay();
+            seen.add('finished');
+          });
+          await 10.s.delay();
+          return 0;
+        });
+        return task;
+      }, token: stop);
+      await 20.ms.delay();
+      stop.cancel('bye');
+      await expectLater(scope, throwsA(isA<CancelledException>()));
+      expect(seen, ['cancelled: false', 'finished']);
+      expect(await task.statuses.toList(), [isA<Stopped<Object?, int>>()], reason: 'no cleanup warning');
+    });
+
+    test('an isolate batch cancelled while its isolates start runs no item', () async {
+      final dir = tempDir();
+      final batch = ['$dir/a', '$dir/b'].parallelize(_markAfterASecond, isolate: true, concurrency: 2);
+      await Future<void>.delayed(Duration.zero);
+      batch.cancel('stop');
+      expect((await batch.settled).every((s) => s is Stopped), isTrue);
+      await 1500.ms.delay();
+      expect(Directory(dir).listSync(), isEmpty);
+    });
+
+    test('a scope timeout is a TimeoutException for a batch, and for a task that ignores it', () async {
+      await expectLater(
+        Cancel.scope(() => [1, 2].parallelize((i) => 1.s.delay()), timeout: 50.ms),
+        throwsA(isA<TimeoutException>()),
+      );
+      await expectLater(
+        Cancel.scope(() => Task.run('deaf', (w) => Future<void>.delayed(1500.ms)), timeout: 50.ms),
+        throwsA(isA<TimeoutException>()),
+      );
+    });
+
+    test('Batch.timeout cancels the batch and names it, as Task.timeout does', () async {
+      final batch = [1, 2].parallelize((i) => 1.s.delay());
+      await expectLater(
+        batch.timeout(50.ms),
+        throwsA(isA<TimeoutException>().having((e) => '$e', 'text', contains('timed out after 50ms'))),
+      );
+      expect((await batch.settled).every((s) => s is Stopped), isTrue);
+    });
+
+    test('a batch inside a task reports each item that ends, not every 32nd', () async {
+      final task = Task.run(
+        'outer',
+        (work) => List.generate(6, (i) => i).parallelize((i) => (80 * (i + 1)).ms.delay(), concurrency: 6),
+      );
+      final heard = [
+        await for (final s in task.statuses)
+          if (s case Running(:final received)) received,
+      ];
+      expect(heard, containsAll([1, 2, 3, 4, 5, 6]));
+    });
+
+    test('parallelize refuses a negative Retry at the call', () {
+      expect(() => [1].parallelize((i) => i, retry: Retry(int.parse('-1'))), throwsArgumentError);
+    });
+  });
+
+  group('deadlines', () {
+    test('cancelled deadlines keep no timer: a script exits when its work does', () async {
+      final dir = Directory('.dart_tool/tk_deadline')..createSync(recursive: true);
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final script = File('${dir.path}/main.dart')
+        ..writeAsStringSync('''
+import 'package:dart_toolkit/src/core.dart';
+void main() {
+  // What a request does with its 30 s timeout: armed, then cancelled when the answer comes.
+  ClockInternals.after(const Duration(seconds: 30), () => print('fired')).cancel();
+  final a = ClockInternals.after(const Duration(seconds: 30), () => print('fired'));
+  final b = ClockInternals.after(const Duration(seconds: 40), () => print('fired'));
+  a.cancel();
+  b.cancel();
+}
+''');
+      final watch = Stopwatch()..start();
+      final run = await Process.run(Platform.resolvedExecutable, [script.path]);
+      expect(run.exitCode, 0, reason: '${run.stderr}');
+      expect(run.stdout, isEmpty);
+      expect(watch.elapsed, lessThan(const Duration(seconds: 20)), reason: 'not held until the 30 s deadline');
+    }, timeout: const Timeout(Duration(seconds: 90)));
+  });
+
+  group('Store', () {
+    const a = Key<int>('a', or: 0), b = Key<int>('b', or: 0);
+
+    test('the lock is re-entrant: a write inside update, a sub-store inside the lock', () async {
+      final store = Store.memory();
+      await store.update(a, (v) async {
+        await store.write(b, 2);
+        return v + 1;
+      });
+      expect([await store.read(a), await store.read(b)], [1, 2]);
+      await store.lock(() => (store / 'crawl').write(a, 3));
+      expect(await (store / 'crawl').read(a), 3);
+    });
+
+    test('nullable keys of lists of maps and maps of lists come back', () async {
+      const maps = Key<List<Map<String, Object?>>?>('maps', or: null);
+      const lists = Key<Map<String, List<String>>?>('lists', or: null);
+      final store = Store.memory();
+      await store.write(maps, [
+        {'x': 1},
+      ]);
+      await store.write(lists, {
+        'k': ['v'],
+      });
+      expect(await store.read(maps), [
+        {'x': 1},
+      ]);
+      expect(await store.read(lists), {
+        'k': ['v'],
+      });
+      const plain = Key<Map<String, List<String>>>('plain', or: {});
+      await store.write(plain, {
+        'k': ['v'],
+      });
+      expect(await store.read(plain), isA<Map<String, List<String>>>());
+    });
+
+    test('clearing a store never written makes no folder', () async {
+      final dir = tempDir();
+      await Store('$dir/never').clear();
+      expect(Directory('$dir/never').existsSync(), isFalse);
+    });
+  });
+
+  group('coercion: type arguments and zones', () {
+    test('a type the reading cannot make is an ArgumentError, as in Env.get', () {
+      expect(() => '1'.to<List<int>>(), throwsArgumentError);
+      Env.set('TK_LIST', '1');
+      expect(() => Env.get<List<int>>('TK_LIST'), throwsArgumentError);
+    });
+
+    test('text without a zone reads as UTC, as format: and RFC dates do', () {
+      expect('2026-10-09 10:00'.to<DateTime>(), DateTime.utc(2026, 10, 9, 10));
+      expect('2026-10-09t10:00:01.5'.to<DateTime>(), DateTime.utc(2026, 10, 9, 10, 0, 1, 500));
+      expect('2026-10-09'.to<DateTime>(), DateTime.utc(2026, 10, 9));
+      expect('2026-10-09T10:00+02:00'.to<DateTime>(), DateTime.utc(2026, 10, 9, 8));
+      expect('09/10/2026'.to<DateTime>(), DateTime.utc(2026, 10, 9));
+    });
+
+    test('compareNatural orders as its key does', () {
+      const words = ['a', 'A', 'a2', 'a10', 'a02', 'a/b', 'a b', 'a-1', 'é', 'İx', '0', '00', 'x9y', 'x10y', '', '/'];
+      for (final x in words) {
+        for (final y in words) {
+          final byKey = CoerceBridge.naturalKey(x).compareTo(CoerceBridge.naturalKey(y));
+          expect(compareNatural(x, y).sign, (byKey != 0 ? byKey : x.compareTo(y)).sign, reason: '$x vs $y');
+        }
+      }
+    });
+  });
+
   group('the absence doors: T?, or:, the thunk', () {
     test('a nullable type argument answers null for an unset variable, and parses a set one', () {
       Env.set('TK_ABSENCE_PORT', '42');
@@ -678,4 +885,10 @@ SINGLE_QUOTED='single quote value'
       expect((() => missing.readAsStringSync()).orNull, isNull);
     });
   });
+}
+
+/// An isolate's item: after a second (or a cancel), writes [path].
+Future<void> _markAfterASecond(String path) async {
+  await 1.s.delay();
+  File(path).writeAsStringSync('ran');
 }

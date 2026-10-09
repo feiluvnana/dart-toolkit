@@ -78,8 +78,9 @@ abstract final class Shell {
   ///
   /// **Never interpolate a scraped or typed-in value into [line]**: pass it in [args], which is
   /// never re-read (`Shell.run('git commit -m', args: [message])`). Shell syntax (`| & ; < >`, a
-  /// backtick, `* ? [`, a leading `~`, `$VAR`, `%VAR%` on Windows) is an [ArgumentError]: use
-  /// [sh], or a pipeline of [Command]s. An unclosed quote is a [FormatException].
+  /// backtick, `* ? [`, `{a,b}`, a leading `~` or `#`, `$VAR`, `$1`, `FOO=1 cmd`, `%VAR%` on
+  /// Windows) is an [ArgumentError]: use [sh], `env:`, or a pipeline of [Command]s. An unclosed
+  /// quote is a [FormatException].
   ///
   /// The rest is [Command.run]'s.
   static Run run(
@@ -143,8 +144,11 @@ abstract final class Shell {
 Command _parse(String line, List<String> args, String? workdir, Map<String, String?>? env) {
   final trimmed = line.trim();
   if (trimmed.isEmpty) throw ArgumentError.value(line, 'line', 'Invalid command line: empty');
-  // A path with a space in it, naming a file, is one program: `which` gives such paths.
-  final looksLikePath = trimmed.contains(RegExp(r'\s')) && (trimmed.contains('/') || trimmed.contains(r'\'));
+  // A path with a space in it, naming a file, is one program: `which` gives such paths. Only a
+  // line that starts as a path is looked at, so `git -C /repo status` costs no stat.
+  final looksLikePath =
+      (_isAbsolute(trimmed) || trimmed.startsWith('./') || trimmed.startsWith(r'.\')) &&
+      trimmed.contains(RegExp(r'\s'));
   if (looksLikePath && FileSystemEntity.typeSync(trimmed) == FileSystemEntityType.file) {
     return Command(trimmed, args, workdir: workdir, env: env);
   }
@@ -217,6 +221,8 @@ List<String> _splitPosix(String command) {
       if (current.isNotEmpty || quoted) args.add('$current');
       current.clear();
       quoted = false;
+    } else if (char == 0x3d && args.isEmpty && !quoted && _isName('$current')) {
+      throw ArgumentError.value(command, 'line', 'Invalid command line: `$current=` is a shell assignment; pass env:');
     } else if (_posixSyntax(command, i, current.isEmpty && !quoted) case final syntax?) {
       throw ArgumentError.value(command, 'line', 'Invalid command line: $syntax is shell syntax; ${_hint(syntax)}');
     } else {
@@ -238,10 +244,12 @@ String _hint(String syntax) => switch (syntax) {
 /// The shell operator starting at [i] of [command], unquoted, or `null`.
 String? _posixSyntax(String command, int i, bool atStartOfWord) {
   final char = command[i];
-  if ('|&;<>`*?['.contains(char) || (atStartOfWord && char == '~')) return '`$char`';
+  if ('|&;<>`*?['.contains(char) || (atStartOfWord && (char == '~' || char == '#'))) return '`$char`';
+  if (char == '{' && _braces.matchAsPrefix(command, i) != null) return '`{`';
   if (char == r'$' && i + 1 < command.length) {
     if (command[i + 1] == '(') return r'`$(`';
     if (command[i + 1] == '{') return r'`${`';
+    if (r'0123456789@*#?$!-'.contains(command[i + 1])) return '`\$${command[i + 1]}`';
     final next = command.codeUnitAt(i + 1);
     if (_isIdentStart(next)) {
       var j = i + 1;
@@ -253,6 +261,11 @@ String? _posixSyntax(String command, int i, bool atStartOfWord) {
   }
   return null;
 }
+
+/// A brace expansion: `{a,b}` or `{1..3}`; a lone `{}` (`find -exec`) is a word.
+final _braces = RegExp(r'\{[^\s{}]*(?:,|\.\.)[^\s{}]*\}');
+
+bool _isName(String word) => word.isNotEmpty && _isIdentStart(word.codeUnitAt(0)) && word.codeUnits.every(_isIdentChar);
 
 bool _isIdentStart(int c) => (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a) || c == 0x5f; // A-Z, a-z, _
 bool _isIdentChar(int c) => _isIdentStart(c) || (c >= 0x30 && c <= 0x39); // A-Z, a-z, _, 0-9

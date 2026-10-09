@@ -857,7 +857,18 @@ final class _XPathParser {
     }
   }
 
-  _XNode _or() => _level(_and, const ['or']);
+  /// Expressions open around the one being read; past 256 the text is refused, not the stack.
+  int _depth = 0;
+
+  _XNode _or() {
+    if (++_depth > 256) throw FormatException('XPath nested deeper than 256', s, i);
+    try {
+      return _level(_and, const ['or']);
+    } finally {
+      _depth--;
+    }
+  }
+
   _XNode _and() => _level(_equality, const ['and']);
   _XNode _equality() => _level(_relational, const ['!=', '=']);
   _XNode _relational() => _level(_additive, const ['<=', '>=', '<', '>']);
@@ -866,8 +877,14 @@ final class _XPathParser {
   _XNode _multiplicative() => _level(_unary, const ['*', 'div', 'mod']);
 
   _XNode _unary() {
-    _ws();
-    return _take('-') ? _Negate(_unary()) : _union();
+    // A run of minus signs is read in a loop: `--x` is `-(-x)`, and more pair off.
+    var minus = 0;
+    for (_ws(); _take('-'); _ws()) {
+      minus++;
+    }
+    final operand = _union();
+    if (minus == 0) return operand;
+    return minus.isOdd ? _Negate(operand) : _Negate(_Negate(operand));
   }
 
   _XNode _union() {
