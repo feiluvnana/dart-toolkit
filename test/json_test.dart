@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:dart_toolkit/json.dart';
+import 'package:dart_toolkit/collection.dart';
 import 'package:dart_toolkit/src/message.dart' show Response, StatusException;
 import 'package:test/test.dart';
 import 'package:yaml/yaml.dart' as reference;
@@ -181,12 +182,12 @@ void main() {
         );
       });
 
-      test('list, map and table: absent is Missing, another shape a FormatException (FMT-10, FMT-12)', () {
+      test('list, map and rows: absent is Missing, another shape a FormatException (FMT-10, FMT-12)', () {
         final d = '{"rows": [{"a": 1}, {"a": 2}], "s": "x", "bad": [{"a": 1}, 2]}'.json;
-        expect(d['rows'].table.values<int>('a'), [1, 2]);
-        expect(() => d['s'].table, _format(r'Invalid JSON at $.s: a String, not a list'));
-        expect(() => d['bad'].table, _format(r'Invalid JSON at $.bad[1]: an int, not a map'));
-        expect(() => d['none'].table, _missing(r'Missing $.none'));
+        expect(Table.rows(d['rows'].rows).values<int>('a'), [1, 2]);
+        expect(() => d['s'].rows, _format(r'Invalid JSON at $.s: a String, not a list'));
+        expect(() => d['bad'].rows, _format(r'Invalid JSON at $.bad[1]: an int, not a map'));
+        expect(() => d['none'].rows, _missing(r'Missing $.none'));
         expect(() => d['s'].list, _format(r'Invalid JSON at $.s: a String, not a list'));
         expect(() => d['rows'].map, _format(r'Invalid JSON at $.rows: a list, not a map'));
         expect(() => d['none'].map, throwsA(isA<MissingException>()));

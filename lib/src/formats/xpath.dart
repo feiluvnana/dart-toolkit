@@ -1,35 +1,72 @@
-part of '../markup.dart';
+part of '../../xpath.dart';
 
-/// The document node above the root, where an absolute XPath starts; minted per walk, so equal
-/// by root.
-final class _Document extends Element {
-  final Element root;
-  _Document(this.root) : super('#document', const {}, root.syntax) {
-    _nodes.add(root);
+/// An XPath 1.0 location path or expression, checked when made: what `$x(…)` takes. It is a
+/// [String], so it goes wherever an XPath's text does, and is compiled once.
+///
+/// ```dart
+/// final hrefs = '//a/@href'.xpath;
+/// page.$x(hrefs).links;
+/// ```
+///
+/// {@category Formats}
+extension type const XPath._(String _text) implements String {
+  /// [text] as an XPath; one that does not parse is a [FormatException] naming where.
+  XPath(String text) : _text = text {
+    _XPath.parse(text);
   }
-  @override
-  String get text => root.text;
-  @override
-  String get rawText => root.rawText;
-  @override
-  String get markup => root.markup;
-  @override
-  bool operator ==(Object other) => other is _Document && identical(other.root, root);
-  @override
-  int get hashCode => identityHashCode(root);
 }
+
+/// Text read as an XPath.
+///
+/// {@category Formats}
+extension StringXPathExtensions on String {
+  /// This text as an XPath: `'//a/@href'.xpath`. One that does not parse is a [FormatException].
+  XPath get xpath => XPath(this);
+}
+
+/// XPath on an element: `$x`.
+///
+/// {@category Formats}
+extension ElementXPath on Element {
+  /// The nodes XPath [expression] selects from this element: `//a/@href`,
+  /// `//tr[td[2]="FLAC"]/td[1]/a`, `//h2[contains(., "Tracks")]/following-sibling::table[1]`.
+  Selection<Node> $x(String expression) => _xpath([this], expression);
+}
+
+/// XPath on a selection: `$x`.
+///
+/// {@category Formats}
+extension SelectionXPath<N extends Node> on Selection<N> {
+  /// The nodes XPath [expression] selects from each element match, each once, in document order.
+  Selection<Node> $x(String expression) => _xpath(whereType<Element>().toList(), expression);
+}
+
+/// XPath on a document, an `Html` or an `Xml`: `$x`.
+///
+/// {@category Formats}
+extension MarkupXPath on Markup {
+  /// The nodes XPath [expression] selects, from the root: see [ElementXPath.$x].
+  Selection<Node> $x(String expression) => _xpath([root], expression);
+}
+
+bool _isDocument(Node? n) => n != null && MarkupInternals.documentRoot(n) != null;
+
+final _spaces = RegExp(r'\s+');
 
 /// The nodes XPath [expression] selects from each of [scopes], each once, in document order.
 Selection<Node> _xpath(List<Element> scopes, String expression) {
   final x = _XPath.parse(expression);
-  if (scopes.length == 1) return Selection._(x.select(scopes.first), expression);
+  if (scopes.length == 1) return MarkupInternals.selection(x.select(scopes.first), expression);
   final seen = <Node>{};
   final out = [
     for (final e in scopes)
       for (final n in x.select(e))
         if (seen.add(n)) n,
   ];
-  return Selection._(scopes.length > 1 && !(x.downward && _isFlat(scopes)) ? _inOrder(out) : out, expression);
+  return MarkupInternals.selection(
+    scopes.length > 1 && !(x.downward && _isFlat(scopes)) ? MarkupInternals.inOrder(out) : out,
+    expression,
+  );
 }
 
 /// A compiled, cached XPath 1.0 expression: every axis but `namespace`, the abbreviations,
@@ -62,12 +99,14 @@ final class _XPath {
   /// The nodes selected from [context], in document order; an absolute path starts at the
   /// document above its root. A [FormatException] when the result is not a node-set.
   List<Node> select(Node context) {
-    final root = _rootOf(context);
-    final value = _root.eval(_Ctx(context, 1, 1, root is _Document ? root : _Document(root as Element)));
+    final root = MarkupInternals.rootOf(context);
+    final value = _root.eval(
+      _Ctx(context, 1, 1, _isDocument(root) ? root as Element : MarkupInternals.document(root as Element)),
+    );
     if (value is! List<Node>) throw FormatException('XPath does not select nodes: it evaluates to $value');
     return [
       for (final n in value)
-        if (n is! _Document) n,
+        if (!_isDocument(n)) n,
     ];
   }
 }
@@ -76,62 +115,18 @@ final class _Ctx {
   final Node node;
   final int position;
   final int size;
-  final _Document document;
+  final Element document;
 
-  /// Shared with every context this one spawns, so each is built at most once per query.
-  final _Shared _shared;
+  _Ctx(this.node, this.position, this.size, this.document);
 
-  _Ctx(this.node, this.position, this.size, this.document) : _shared = _Shared();
-
-  _Ctx._(this.node, this.position, this.size, this.document, this._shared);
-
-  _Ctx at(Node n, int position, int size) => _Ctx._(n, position, size, document, _shared);
-}
-
-/// What one query computes about the tree; the next query builds its own.
-final class _Shared {
-  /// Each node's index among its parent's children, filled per parent, so sibling axes are
-  /// not quadratic.
-  final Map<Node, int> _slot = {};
-  final Set<Node> _indexed = {};
-
-  int slotOf(Node parent, Node child) {
-    if (_indexed.add(parent)) {
-      final children = _down(parent);
-      for (var i = 0; i < children.length; i++) {
-        _slot[children[i]] = i;
-      }
-    }
-    return _slot[child] ?? -1;
-  }
-
-  /// Every element's and text's document-order position, built only when a result must be
-  /// sorted (see [_Path.eval]). Attributes sort by their element, then their place on it.
-  Map<Node, int>? _order;
-
-  Map<Node, int> order(_Document document) => _order ??= () {
-    final order = <Node, int>{document: 0};
-    _eachBelow(document, (Node n) {
-      order[n] = order.length;
-      return false;
-    });
-    return order;
-  }();
+  _Ctx at(Node n, int position, int size) => _Ctx(n, position, size, document);
 }
 
 extension on List<Node> {
-  /// Puts a node-set in document order.
-  void sortIn(_Ctx c) {
-    final order = c._shared.order(c.document);
-    sort((x, y) {
-      final kx = order[x is Attribute ? x.parent : x] ?? -1;
-      final ky = order[y is Attribute ? y.parent : y] ?? -1;
-      if (kx != ky) return kx.compareTo(ky);
-      // One element: itself first, then its attributes as written.
-      if (x is! Attribute) return y is Attribute ? -1 : 0;
-      if (y is! Attribute) return 1;
-      return _slotOf(x).compareTo(_slotOf(y));
-    });
+  /// Puts a node-set in document order, by the nodes' places in the tree.
+  void sortIn() {
+    final roots = <Node, int>{};
+    sort((x, y) => MarkupInternals.documentOrder(x, y, roots));
   }
 }
 
@@ -139,15 +134,15 @@ bool _isXSpace(int c) => c == 0x20 || c == 0x09 || c == 0x0A || c == 0x0D;
 
 /// The parent, or the document node above the root element, or `null` above that.
 Node? _up(Node n) {
-  if (n is _Document) return null;
-  if (n is Element && n.parent == null) return _Document(n);
+  if (_isDocument(n)) return null;
+  if (n is Element && n.parent == null) return MarkupInternals.document(n);
   return n.parent;
 }
 
 /// Child nodes of an element, or the root element of a document node.
 List<Node> _down(Node n) {
-  if (n is _Document) return [n.root];
-  if (n is Element) return n._nodes;
+  if (MarkupInternals.documentRoot(n) case final root?) return [root];
+  if (n is Element) return MarkupInternals.nodes(n);
   return const [];
 }
 
@@ -175,7 +170,7 @@ sealed class _XNode {
 
 /// [n]'s name for a name test or `name()`: the document's is empty, as XPath 1.0 has it.
 String _nameOf(Node? n) {
-  if (n == null || n is _Document) return '';
+  if (n == null || _isDocument(n)) return '';
   if (n is Element) return n.name;
   if (n is Attribute) return n.name;
   return '';
@@ -261,7 +256,7 @@ final class _Path extends _XNode {
       current = next;
     }
     if (current.length < 2 || sorted) return current;
-    return reversed ? current.reversed.toList() : (current..sortIn(c));
+    return reversed ? current.reversed.toList() : (current..sortIn());
   }
 
   @override
@@ -276,7 +271,7 @@ final class _Path extends _XNode {
 bool _isFlat(List<Node> sorted) {
   for (var i = 1; i < sorted.length; i++) {
     final above = sorted[i - 1];
-    if (above is _Document) return false;
+    if (_isDocument(above)) return false;
     for (var p = sorted[i].parent; p != null; p = p.parent) {
       if (identical(p, above)) return false;
     }
@@ -318,7 +313,7 @@ final class _Union extends _XNode {
     final a = left.eval(c), b = right.eval(c);
     if (a is! List<Node> || b is! List<Node>) throw const FormatException('| needs node-sets on both sides');
     if (a.isEmpty || b.isEmpty) return a.isEmpty ? b : a;
-    return <Node>{...a, ...b}.toList()..sortIn(c);
+    return <Node>{...a, ...b}.toList()..sortIn();
   }
 
   @override
@@ -448,7 +443,7 @@ final class _Call extends _XNode {
       'starts-with' => s(0).startsWith(s(1)),
       'ends-with' => s(0).endsWith(s(1)),
       'string-length' => s(0).runes.length.toDouble(),
-      'normalize-space' => s(0).trim().replaceAll(_ws, ' '),
+      'normalize-space' => s(0).trim().replaceAll(_spaces, ' '),
       'concat' => [for (var i = 0; i < args.length; i++) s(i)].join(),
       'substring-before' => _around(s(0), s(1), before: true),
       'substring-after' => _around(s(0), s(1), before: false),
@@ -610,7 +605,7 @@ final class _XStep {
     _NodeTest.node => true,
     _NodeTest.text => n is Text,
     _NodeTest.none => false,
-    _ when n is _Document || (n is! Element && n is! Attribute) => false,
+    _ when _isDocument(n) || (n is! Element && n is! Attribute) => false,
     _NodeTest.any => true,
     _NodeTest.prefix => _nameOf(n).startsWith(name),
     _NodeTest.name => _nameOf(n) == name,
@@ -624,9 +619,9 @@ final class _XStep {
           if (visit(m)) return true;
         }
       case _Axis.descendant:
-        return _eachBelow(n, visit);
+        return MarkupInternals.eachBelow(n, visit);
       case _Axis.descendantOrSelf:
-        return visit(n) || _eachBelow(n, visit);
+        return visit(n) || MarkupInternals.eachBelow(n, visit);
       case _Axis.self:
         return visit(n);
       case _Axis.parent:
@@ -637,21 +632,22 @@ final class _XStep {
           if (visit(p)) return true;
         }
       case _Axis.attribute:
-        if (n is Element && n is! _Document) {
+        if (n is Element && !_isDocument(n)) {
           // `@href` is one lookup, not a walk over every attribute the element has.
           if (test == _NodeTest.name) {
-            final v = n.attributes[name];
-            return v != null && visit(Attribute._(name, v, n));
+            final v = MarkupInternals.attr(n, name);
+            return v != null && visit(MarkupInternals.attribute(name, v, n));
           }
-          for (final MapEntry(:key, :value) in n.attributes.entries) {
-            if (visit(Attribute._(key, value, n))) return true;
+          final attrs = MarkupInternals.attrs(n);
+          for (var i = 0; i < attrs.length; i += 2) {
+            if (visit(MarkupInternals.attribute(attrs[i], attrs[i + 1], n))) return true;
           }
         }
       case _Axis.followingSibling || _Axis.precedingSibling:
         final p = n is Attribute ? null : _up(n);
         if (p == null) return false;
         final siblings = _down(p);
-        final at = c._shared.slotOf(p, n);
+        final at = MarkupInternals.indexIn(siblings, n);
         if (axis == _Axis.followingSibling) {
           for (var i = at + 1; i < siblings.length; i++) {
             if (visit(siblings[i])) return true;
@@ -663,12 +659,12 @@ final class _XStep {
         }
       case _Axis.following:
         // An attribute's following nodes start with its element's content.
-        if (n is Attribute && _eachBelow(n.parent!, visit)) return true;
+        if (n is Attribute && MarkupInternals.eachBelow(n.parent!, visit)) return true;
         var a = n is Attribute ? n.parent! : n;
         for (var p = _up(a); p != null; a = p, p = _up(a)) {
           final siblings = _down(p);
-          for (var i = c._shared.slotOf(p, a) + 1; i < siblings.length; i++) {
-            if (visit(siblings[i]) || _eachBelow(siblings[i], visit)) return true;
+          for (var i = MarkupInternals.indexIn(siblings, a) + 1; i < siblings.length; i++) {
+            if (visit(siblings[i]) || MarkupInternals.eachBelow(siblings[i], visit)) return true;
           }
         }
       case _Axis.preceding:
@@ -676,9 +672,9 @@ final class _XStep {
         var a = n is Attribute ? n.parent! : n;
         for (var p = _up(a); p != null; a = p, p = _up(a)) {
           final siblings = _down(p);
-          for (var i = c._shared.slotOf(p, a) - 1; i >= 0; i--) {
+          for (var i = MarkupInternals.indexIn(siblings, a) - 1; i >= 0; i--) {
             final below = <Node>[];
-            _eachBelow(siblings[i], (Node m) {
+            MarkupInternals.eachBelow(siblings[i], (Node m) {
               below.add(m);
               return false;
             });
@@ -731,7 +727,7 @@ final class _DescendantStep extends _XStep {
         out.add(m);
         next[top] = j + 1;
       }
-      if (m is Element && m is! _Document) enter(m);
+      if (m is Element && !_isDocument(m)) enter(m);
     }
     return out;
   }

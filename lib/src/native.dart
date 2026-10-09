@@ -7,7 +7,7 @@ import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 
-import 'core.dart';
+import 'base.dart';
 
 part 'native/install.dart';
 part 'native/native.dart';

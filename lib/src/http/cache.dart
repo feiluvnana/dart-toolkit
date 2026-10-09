@@ -38,17 +38,25 @@ final class _Kept {
 abstract class _Cache {
   _Cache();
 
-  /// Memory caches by store: the process's when the scope has no store.
-  static final _memory = <Store?, _MemoryCache>{};
+  /// The process's memory cache, for a scope with no store.
+  static final _process = _MemoryCache();
+
+  /// A memory store's caches by sub-store, held by the store's memory: one the program has let
+  /// go of frees its cache with it.
+  static final _memory = Expando<Map<String, _MemoryCache>>('http cache');
   static final _folders = <String, _FolderCache>{};
 
   /// The cache [s] keeps answers in.
   static _Cache of(_Settings s) => switch (s.store) {
-    final store? when store.folder != null => _folders.putIfAbsent(
+    null => _process,
+    final store when store.folder != null => _folders.putIfAbsent(
       store.folder!,
       () => _FolderCache('${store.folder}${Platform.pathSeparator}cache'),
     ),
-    final store => _memory.putIfAbsent(store, _MemoryCache.new),
+    final store => (_memory[StoreInternals.memory(store)!] ??= {}).putIfAbsent(
+      StoreInternals.prefix(store),
+      _MemoryCache.new,
+    ),
   };
 
   static final _servedKey = Expando<bool>('cached');
@@ -159,45 +167,49 @@ abstract class _Cache {
 /// Answers in this process, the least recently kept dropped past [_cap] bytes.
 final class _MemoryCache extends _Cache {
   static const _cap = 64 << 20;
-  final _entries = <String, (_Kept, Uint8List)>{};
+
+  /// Each answer's description and its body as the chunks it arrived in: the chunks the reader
+  /// was handed anyway, so keeping them copies nothing.
+  final _entries = <String, (_Kept, List<List<int>>, int)>{};
   var _bytes = 0;
 
   @override
   Future<_Kept?> load(String key) async {
     final entry = _entries[key];
     if (entry == null) return null;
-    final (kept, body) = entry;
-    return kept.again(kept.headers, kept.at, body.length, () => Stream.value(body));
+    final (kept, chunks, length) = entry;
+    return kept.again(kept.headers, kept.at, length, () => Stream.fromIterable(chunks));
   }
 
   /// Past [_cap] the body is passed through and nothing more held: a 5 GB stream read under
   /// `cache:` is never in memory.
   @override
   Stream<List<int>> keep(String key, _Kept kept, Stream<List<int>> body) async* {
-    BytesBuilder? out = BytesBuilder(copy: false);
+    List<List<int>>? chunks = [];
+    var length = 0;
     await for (final chunk in body) {
-      if (out != null && out.length + chunk.length > _cap) out = null;
-      out?.add(chunk);
+      length += chunk.length;
+      if (length > _cap) chunks = null;
+      chunks?.add(chunk);
       yield chunk;
     }
-    if (out != null) _put(key, kept, out.takeBytes());
+    if (chunks != null) _put(key, kept, chunks, length);
   }
 
   @override
   Future<void> refresh(String key, _Kept kept, Headers headers) async {
     final entry = _entries[key];
     if (entry == null) return;
-    _put(key, kept.again(headers, Clock.current.now(), 0, Stream.empty), entry.$2);
+    _put(key, kept.again(headers, Clock.current.now(), 0, Stream.empty), entry.$2, entry.$3);
   }
 
-  void _put(String key, _Kept kept, Uint8List body) {
-    if (_entries.remove(key) case (_, final old)) _bytes -= old.length;
-    if (body.length > _cap) return;
-    _entries[key] = (kept, body);
-    _bytes += body.length;
+  void _put(String key, _Kept kept, List<List<int>> chunks, int length) {
+    if (_entries.remove(key) case (_, _, final old)) _bytes -= old;
+    _entries[key] = (kept, chunks, length);
+    _bytes += length;
     while (_bytes > _cap && _entries.isNotEmpty) {
       final first = _entries.keys.first;
-      _bytes -= _entries.remove(first)!.$2.length;
+      _bytes -= _entries.remove(first)!.$3;
     }
   }
 }

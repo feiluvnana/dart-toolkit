@@ -166,6 +166,12 @@ final class _Run implements Run {
       try {
         await FileBridge.writeStream(to, _committed(bytes, _task));
         return Path(to);
+      } catch (_) {
+        // Nothing reads its output now: the command stops rather than wait on a full pipe, and
+        // its pipe is let go so this program can end.
+        _task.cancel('the save failed');
+        _out.drop();
+        rethrow;
       } finally {
         unlink?.call();
         await steps.cancel();
@@ -187,14 +193,8 @@ final class _Run implements Run {
   /// Gives up after [timeLimit] as [Future.timeout] does, and stops the command then, so nothing
   /// is left running: `run(timeout:)` is the way to give a command a limit.
   @override
-  Future<ShellResult> timeout(Duration timeLimit, {FutureOr<ShellResult> Function()? onTimeout}) => _task.timeout(
-    timeLimit,
-    onTimeout: () {
-      _task.cancel('timed out after ${timeLimit.humanized}');
-      if (onTimeout != null) return onTimeout();
-      throw TimeoutBridge('$item', timeLimit);
-    },
-  );
+  Future<ShellResult> timeout(Duration timeLimit, {FutureOr<ShellResult> Function()? onTimeout}) =>
+      TaskInternals.timeout(_task, timeLimit, onTimeout, cancel: _task.cancel, subject: '$item');
 
   @override
   Future<ShellResult> whenComplete(FutureOr<void> Function() action) => _task.whenComplete(action);
@@ -248,7 +248,7 @@ final class _Stdout {
   StreamController<List<int>>? _bytes;
   Sink<List<int>>? _decoder;
   StreamSubscription<List<int>>? _source;
-  bool _ended = false;
+  bool _ended = false, _dropped = false;
 
   _Stdout({required bool echo}) : _echo = echo ? _Echo(err: false) : null;
 
@@ -297,6 +297,7 @@ final class _Stdout {
 
   /// Reads [stdout]: a pipe of a child.
   void attach(Stream<List<int>> stdout) {
+    if (_dropped) return stdout.listen(null).cancel().ignore();
     final source = _source = stdout.listen(
       add,
       onError: (Object _) {}, // a broken pipe: the exit says the rest
@@ -325,6 +326,14 @@ final class _Stdout {
   void _route(List<int> chunk) {
     if (_decoder case final decoder?) decoder.add(chunk);
     if (_bytes case final bytes? when !bytes.isClosed) bytes.add(chunk);
+  }
+
+  /// The taker failed: stdout is read no more, and its pipe is let go (now, or when attached).
+  void drop() {
+    _dropped = true;
+    _source?.cancel().ignore();
+    if (!_drained.isCompleted) _drained.complete();
+    if (_bytes case final bytes? when !bytes.isClosed) bytes.close();
   }
 
   /// The run has ended: the taker ends too.

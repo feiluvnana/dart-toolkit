@@ -4,6 +4,7 @@
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:dart_toolkit/hash.dart' show Hash;
@@ -282,6 +283,20 @@ void main() {
       expect(job.status, isA<Running<Torrent, Path>>(), reason: 'the job runs on; only the read stopped');
     });
 
+    test('a read under way ends when its job is cancelled or its client closes', () async {
+      final lonely = await Torrent.create('$source/a.bin', name: 'lonely', private: true, trackers: [_nowhere]);
+      for (final end in ['cancel', 'close']) {
+        final client = await _local('${tmp.path}/$end');
+        final job = client.add(lonely);
+        final reading = job.read(0).toList();
+        await job.statuses.firstWhere((s) => s is Running<Torrent, Path> && s.step == 'downloading');
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        end == 'cancel' ? job.cancel('done looking') : await client.close();
+        await expectLater(reading, throwsA(isA<CancelledException>()), reason: end);
+        await client.close();
+      }
+    });
+
     test('a cancel where it was made ends it with a CancelledException', () async {
       final lonely = await Torrent.create('$source/a.bin', name: 'alone', private: true, trackers: [_nowhere]);
       final job = leecher.add(lonely);
@@ -290,6 +305,14 @@ void main() {
         throwsA(isA<CancelledException>()),
       );
     });
+  });
+
+  test('close stops a magnet still fetching its metadata, so nothing keeps the program alive', () async {
+    final lonely = await Torrent.create('$source/a.bin', name: 'lonely', private: true, trackers: [_nowhere]);
+    final exited = ReceivePort();
+    await Isolate.spawn(_addThenClose, ('${tmp.path}/magnet', lonely.magnet.uri.toString()), onExit: exited.sendPort);
+    // Before the fix the add's native callback stayed open and the isolate never exited.
+    await exited.first;
   });
 
   test(
@@ -305,4 +328,13 @@ void main() {
       expect(() => leecher.port, throwsStateError);
     },
   );
+}
+
+/// In an isolate of its own: a magnet that finds no peer added, then the client closed.
+Future<void> _addThenClose((String, String) args) async {
+  final client = await _local(args.$1);
+  final job = client.add(Torrent.parse(args.$2));
+  await job.statuses.firstWhere((s) => s is Running<Torrent, Path> && s.step == 'metadata');
+  await Future<void>.delayed(const Duration(milliseconds: 300));
+  await client.close();
 }

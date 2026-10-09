@@ -290,6 +290,35 @@ void main() {
       expect(items, ['home: detail']);
     });
 
+    test('a follow or a seed can carry its own onError, which replaces the crawl\'s for that page', () async {
+      final site = _Site({'/': '<a href="/gone">gone</a>'});
+      final heard = <String>[];
+      final settled = await site.scope(
+        () => _home
+            .crawl<String>(
+              onInit: (ctx) => ctx.follow(
+                _home / 'lost',
+                onError: (e) {
+                  heard.add('seed ${e.url.path}');
+                  e.emit('fallback');
+                },
+              ),
+              onResponse: (ctx) => ctx.follow(
+                ctx.html.$('a').first.link,
+                onError: (e) {
+                  heard.add('follow ${e.url.path}');
+                  e.ignore();
+                },
+              ),
+              onError: (e) => heard.add('crawl ${e.url.path}'),
+            )
+            .settled,
+        retry: Retry.none,
+      );
+      expect(heard, unorderedEquals(['seed /lost', 'follow /gone']));
+      expect(settled.every((s) => s is Done), isTrue);
+    });
+
     test('onError: retry counts against the policy, ignore and emit end the page Done', () async {
       final site = _Site({'/': '<a href="/a">a</a><a href="/b">b</a><a href="/c">c</a>'});
       final tries = <String, int>{};
@@ -402,6 +431,28 @@ void main() {
             .toList(),
       );
       expect(items, ['POST q=dart']);
+    });
+  });
+
+  group('memory', () {
+    test('a finished page lets go of its request and its own hooks while the crawl is held', () async {
+      final site = _Site({'/': '<a href="/a">a</a>', '/a': '<h2>a</h2>'});
+      late WeakReference<Object> hook;
+      Crawl<String>? crawl;
+      await site.scope(() async {
+        crawl = _home.crawl<String>(
+          onResponse: (ctx) {
+            if (ctx.url.path != '/') return;
+            final payload = List<int>.filled(1000, 1);
+            void read(ResponseContext<String> page) => page.emit('${payload.length}');
+            hook = WeakReference(read);
+            ctx.follow(ctx.html.$('a').first.link, onResponse: read);
+          },
+        );
+        expect(await crawl!.items.toList(), ['1000']);
+      });
+      expect(await collected(hook), isTrue);
+      expect(crawl!.count, 2);
     });
   });
 
@@ -537,6 +588,13 @@ void main() {
           _home.crawl<String>(
             store: Store.memory(),
             onResponse: (ctx) => ctx.follow(_home / 'a', onResponse: (_) {}),
+          ),
+          throwsArgumentError,
+        );
+        await expectLater(
+          _home.crawl<String>(
+            store: Store.memory(),
+            onResponse: (ctx) => ctx.follow(_home / 'a', onError: (_) {}),
           ),
           throwsArgumentError,
         );

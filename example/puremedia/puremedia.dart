@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:dart_toolkit/archive.dart';
 import 'package:dart_toolkit/chrome.dart';
 import 'package:dart_toolkit/cli.dart';
+import 'package:dart_toolkit/collection.dart';
 import 'package:dart_toolkit/image.dart';
 import 'package:dart_toolkit/scrape.dart';
 

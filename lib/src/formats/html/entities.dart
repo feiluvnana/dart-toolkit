@@ -2,7 +2,7 @@
 // spellings, common punctuation and symbols) as a map, and the rest in one string searched only
 // when the map misses, as 1 800 more map entries cost startup and a string literal does not.
 
-part of '../../markup.dart';
+part of '../../html.dart';
 
 const Map<String, String> _entities = {
   'AElig': '\u{c6}',
@@ -627,13 +627,21 @@ const _moreEntities =
     '\u{1d537}&zhcy;\u{436}&zigrarr;\u{21dd}&zopf;\u{1d56b}&zscr;\u{1d4cf}';
 
 /// The text of HTML 5's reference [name] (without `&` or `;`) that [_entities] does not hold.
-String? _moreEntity(String name) {
-  final at = _moreEntities.indexOf('&$name;');
-  if (at < 0) return null;
-  final from = at + name.length + 2;
-  final end = _moreEntities.indexOf('&', from);
-  return _moreEntities.substring(from, end < 0 ? _moreEntities.length : end);
-}
+String? _moreEntity(String name) => _more[name];
+
+/// [_moreEntities] as a map, split on the first miss: a page that never needs it pays nothing,
+/// and one that does pays one pass rather than a scan per reference.
+final Map<String, String> _more = () {
+  final out = <String, String>{};
+  for (var at = 0; at < _moreEntities.length;) {
+    final semicolon = _moreEntities.indexOf(';', at + 1);
+    var end = _moreEntities.indexOf('&', semicolon + 1);
+    if (end < 0) end = _moreEntities.length;
+    out[_moreEntities.substring(at + 1, semicolon)] = _moreEntities.substring(semicolon + 1, end);
+    at = end;
+  }
+  return out;
+}();
 
 /// The legacy names HTML 5 decodes without a `;`; any other needs it, so `?a=1&lang=en` stays.
 const _legacyEntities = {
@@ -656,97 +664,39 @@ const _windows1252 = <int, int>{
   0x99: 0x2122, 0x9a: 0x0161, 0x9b: 0x203a, 0x9c: 0x0153, 0x9e: 0x017e, 0x9f: 0x0178,
 };
 
-/// How references read where they are found.
-enum _References {
-  /// HTML text, decoded as HTML 5 does: without a `;` only a legacy name.
-  text,
+/// HTML text's references, decoded as HTML 5 does: without a `;` only a legacy name.
+String _decodeText(String text) => MarkupInternals.decode(text, _textReference);
 
-  /// An HTML attribute: as text, but a `;`-less legacy name before a letter, digit or `=` is
-  /// literal, being far more often a query parameter (`&copy=2`).
-  attribute,
+/// An HTML attribute's: as text, but a `;`-less legacy name before a letter, digit or `=` is
+/// literal, being far more often a query parameter (`&copy=2`).
+String _decodeAttribute(String text) => MarkupInternals.decode(text, _attributeReference);
 
-  /// XML: the five predefined names and numeric references, each with its `;`.
-  xml,
-}
+(String?, int) _textReference(String text, int start) => _reference(text, start, attribute: false);
 
-const _xmlEntities = {'lt': '<', 'gt': '>', 'amp': '&', 'quot': '"', 'apos': "'"};
-
-/// Decodes XML predefined entities and numeric character references.
-String _decodeXmlEntities(String text) => _decodeEntities(text, _References.xml);
-
-String _decodeEntities(String text, _References mode) {
-  var amp = text.indexOf('&');
-  if (amp == -1) return text;
-  // Runs between references are copied whole: 4× faster than walking code units.
-  final sb = StringBuffer();
-  var last = 0;
-  while (amp != -1) {
-    final (decoded, end) = _reference(text, amp + 1, mode);
-    if (decoded == null) {
-      amp = text.indexOf('&', amp + 1);
-      continue;
-    }
-    sb
-      ..write(text.substring(last, amp))
-      ..write(decoded);
-    last = end;
-    amp = text.indexOf('&', last);
-  }
-  sb.write(text.substring(last));
-  return sb.toString();
-}
+(String?, int) _attributeReference(String text, int start) => _reference(text, start, attribute: true);
 
 /// The reference after the `&` at [start] and where the text resumes, or `(null, _)` when the
 /// `&` is literal. Never scans ahead for a `;`, which made bare ampersands quadratic.
-
-(String?, int) _reference(String text, int start, _References mode) {
-  final xml = mode == _References.xml;
-  var i = start;
-  if (i < text.length && text.codeUnitAt(i) == 0x23) {
-    // #: decimal or hex, `;` optional, and a code point no character has reads as U+FFFD.
-    i++;
-    final hex = i < text.length && (text.codeUnitAt(i) | 0x20) == 0x78;
-    if (hex) i++;
-    final from = i;
-    var code = 0;
-    while (i < text.length) {
-      final d = _digit(text.codeUnitAt(i), hex);
-      if (d == -1) break;
-      if (code <= 0x10ffff) code = code * (hex ? 16 : 10) + d;
-      i++;
-    }
-    if (i == from) return (null, 0);
-    final semicolon = i < text.length && text.codeUnitAt(i) == 0x3b;
-    if (semicolon) i++;
-    if (xml && !semicolon) return (null, 0);
-    if (code == 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) return ('\u{fffd}', i);
-    return (String.fromCharCode((xml ? null : _windows1252[code]) ?? code), i);
+(String?, int) _reference(String text, int start, {required bool attribute}) {
+  if (start < text.length && text.codeUnitAt(start) == 0x23) {
+    return MarkupInternals.numericReference(text, start, _windows1252);
   }
-  while (i < text.length && _isAlnum(text.codeUnitAt(i))) {
+  var i = start;
+  while (i < text.length && MarkupInternals.isAlnum(text.codeUnitAt(i))) {
     i++;
   }
   if (i == start) return (null, 0);
   if (i < text.length && text.codeUnitAt(i) == 0x3b) {
     final name = text.substring(start, i);
-    final full = xml ? _xmlEntities[name] : _entities[name] ?? _moreEntity(name);
+    final full = _entities[name] ?? _moreEntity(name);
     if (full != null) return (full, i + 1);
   }
-  if (xml) return (null, 0);
   // No `;`, or a name the table does not have: the longest legacy name it starts with.
   for (var end = i - start > 6 ? start + 6 : i; end > start + 1; end--) {
     final name = text.substring(start, end);
     if (!_legacyEntities.contains(name)) continue;
-    final literal = mode == _References.attribute && end < text.length && (end < i || text.codeUnitAt(end) == 0x3d);
+    final literal = attribute && end < text.length && (end < i || text.codeUnitAt(end) == 0x3d);
     return literal ? (null, 0) : (_entities[name], end);
   }
   return (null, 0);
 }
-
-int _digit(int c, bool hex) {
-  if (c >= 0x30 && c <= 0x39) return c - 0x30;
-  if (!hex) return -1;
-  final l = c | 0x20;
-  return l >= 0x61 && l <= 0x66 ? l - 0x57 : -1;
-}
-
-bool _isAlnum(int c) => (c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a);

@@ -65,6 +65,27 @@ final class _Exits extends Worker<int, int> {
   int run(int item, Work work) => item == 1 ? Isolate.exit() : item;
 }
 
+/// A worker whose isolate ends a moment after item 1 is done: it dies idle.
+final class _DiesIdle extends Worker<int, int> {
+  @override
+  int run(int item, Work work) {
+    if (item == 1) Timer(20.ms, () => Isolate.current.kill(priority: Isolate.immediate));
+    return item;
+  }
+}
+
+/// Answers its item at once.
+final class _Echo extends Worker<int, int> {
+  @override
+  int run(int item, Work work) => item < 0 ? throw const FormatException('negative') : item;
+}
+
+/// Answers each item in a list of its own, a value the collector can free.
+final class _Boxes extends Worker<int, List<int>> {
+  @override
+  List<int> run(int item, Work work) => [item];
+}
+
 /// A worker that returns a task: its progress is the item's.
 final class _Delegating extends Worker<int, int> {
   @override
@@ -169,6 +190,62 @@ void main() {
       final settled = await Future.wait([for (final job in jobs) job.settled]).timeout(10.s);
       expect(settled.first, isA<Failed<int, int>>());
       expect([for (final s in settled.skip(1)) (s as Done<int, int>).value], [2, 3]);
+    });
+
+    test('a worker isolate that died while idle is replaced: the next item runs on a new one', () async {
+      final pool = Pool(_DiesIdle.new, concurrency: 1, isolate: true);
+      addTearDown(pool.close);
+      expect(await pool.add(1), 1);
+      await 300.ms.delay();
+      expect(await pool.add(2).timeout(10.s), 2);
+    });
+
+    test('a long-lived pool keeps its last 100 finished jobs, and a failed one until removed', () async {
+      final pool = Pool(_Echo.new);
+      addTearDown(pool.close);
+      final failed = pool.add(-1);
+      await failed.settled;
+      for (var i = 0; i < 150; i++) {
+        await pool.add(i);
+      }
+      expect(pool.jobs.where((j) => j.status is Done).length, 100);
+      expect(pool.jobs, contains(failed));
+      expect(pool.job(0), isNull, reason: 'the oldest finished jobs are forgotten');
+      expect(pool.job(149)?.status, isA<Done<int, int>>());
+    });
+
+    test('a forgotten finished job lets its value go', () async {
+      final pool = Pool(_Boxes.new);
+      addTearDown(pool.close);
+      final first = WeakReference<Object>(await pool.add(0));
+      for (var i = 1; i <= 100; i++) {
+        await pool.add(i);
+      }
+      expect(await collected(first), isTrue);
+    });
+
+    test('jobs past concurrency wait in a queue: pause, cancel and a scope\'s cancel stop them there', () async {
+      final pool = Pool(_Steps.new, concurrency: 1);
+      addTearDown(pool.close);
+      final token = CancelToken();
+      final first = pool.add('slow-q');
+      final paused = pool.add('p'), cancelled = pool.add('c');
+      late Job<String, String> scoped;
+      await Cancel.scope(() {
+        scoped = pool.add('s');
+      }, token: token);
+      final last = pool.add('d');
+      await _until(first, (s) => s is Running);
+      paused.pause();
+      cancelled.cancel('not wanted');
+      token.cancel('the scope ended');
+      expect(paused.status, isA<Paused<String, String>>());
+      expect(await cancelled.settled, isA<Stopped<String, String>>().having((s) => s.reason, 'reason', 'not wanted'));
+      expect(await scoped.settled, isA<Stopped<String, String>>().having((s) => s.reason, 'reason', 'the scope ended'));
+      first.cancel();
+      expect(await last.timeout(10.s), 'D');
+      paused.resume();
+      expect(await paused.timeout(10.s), 'P');
     });
 
     test('at most concurrency items run at once, across every map on the pool', () async {
@@ -355,6 +432,30 @@ void main() {
       await 10.ms.delay();
       expect(heard.first, isA<Waiting<String, String>>());
       expect(heard.last, isA<Done<String, String>>());
+    });
+
+    test('a changes listener may change jobs as it hears them', () async {
+      final pool = Pool(_Echo.new);
+      addTearDown(pool.close);
+      final heard = <String>[];
+      pool.changes.listen((job) {
+        heard.add('${job.item} ${job.status.runtimeType}');
+        if (job.item == 1 && job.status is Done) pool.add(2);
+      });
+      await pool.add(1);
+      await pool.changes.firstWhere((job) => job.item == 2 && job.status is Done).timeout(5.s);
+      expect(heard, containsAllInOrder(['1 Done<int, int>', '2 Waiting<int, int>', '2 Done<int, int>']));
+    });
+
+    test('timeout stops the job and names it, as a task\'s does', () async {
+      final pool = Pool(_Steps.new);
+      addTearDown(pool.close);
+      final job = pool.add('slow-t');
+      await expectLater(
+        job.timeout(50.ms),
+        throwsA(isA<TimeoutException>().having((e) => '$e', 'text', contains('slow-t'))),
+      );
+      expect(await job.settled.timeout(10.s), isA<Stopped<String, String>>());
     });
 
     test('a cancelled scope around add stops its jobs', () async {

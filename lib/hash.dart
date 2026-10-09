@@ -19,10 +19,10 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'src/core.dart';
+import 'src/base.dart';
 import 'src/native.dart';
 
-export 'core.dart';
+export 'src/foundations.dart';
 export 'src/native.dart' show NativeException;
 
 part 'src/hash/codec.dart';

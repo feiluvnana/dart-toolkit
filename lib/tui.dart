@@ -1,44 +1,54 @@
 /// # Tui
 ///
-/// Full-screen and inline terminal apps: [Tui.run] takes a state, a `view` of it built from
+/// Full-screen and inline terminal apps: [Tui.run] takes a state, a `draw` of it built from
 /// widgets ([Label], [VStack], [HStack], [Box], [Menu], [Grid], [Field], [Tabs], [Button],
 /// [Clickable], [Popup], [Board], [Spin], [Scroll], [Log], [Markdown], [Picture], [Paint]) and an
-/// `update` that answers [KeyPress]es, [Char]s, [Mouse] and your own messages. A cell buffer is
-/// diffed so each frame writes only what changed; colour falls back from 24-bit to 256 to 16 to
-/// none; the terminal is put back on every way out.
+/// `update` that answers every [TuiEvent]: [Start], [KeyPress], [Paste], [Pointer], [Resize],
+/// [Focus], [Blur], [Suspend], [Resume], [Interrupt] and your own messages as [Post]. A cell
+/// buffer is diffed so each frame writes only what changed; colour falls back from 24-bit to 256
+/// to 16 to none; the terminal is put back on every way out.
 ///
 /// {@category CLI}
 library;
 
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'dart:typed_data';
 
+import 'src/keys.dart';
 import 'src/terminal.dart';
+export 'src/keys.dart'
+    show
+        Blur,
+        Choice,
+        Focus,
+        Focusable,
+        Interrupt,
+        KeyPress,
+        Paste,
+        Pointer,
+        PointerKind,
+        Post,
+        Resize,
+        Resume,
+        Start,
+        Suspend,
+        TuiEvent;
 export 'src/terminal.dart'
     show
         BarGlyphs,
         BatchView,
-        Char,
-        Choice,
         Color,
-        Focusable,
         ItemView,
-        KeyPress,
         LogLevel,
         LogView,
         Marks,
-        Mouse,
-        MouseKind,
         Palette,
-        Paste,
-        Resize,
-        Sent,
         StringStyles,
         Style,
         Tally,
         TallyItem,
-        TaskView,
-        TuiEvent;
+        TaskView;
 
 import 'src/core.dart';
 

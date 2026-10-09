@@ -40,9 +40,9 @@ abstract class _Scrolled extends Widget with Focusable {
   }
 
   @override
-  void mouse(Mouse event, int x, int y) {
-    if (event.kind case MouseKind.wheelUp || MouseKind.wheelDown) {
-      _scroll(event.kind == MouseKind.wheelUp ? -3 : 3);
+  void pointer(Pointer event, int x, int y) {
+    if (event.kind case PointerKind.wheelUp || PointerKind.wheelDown) {
+      _scroll(event.kind == PointerKind.wheelUp ? -3 : 3);
       _moved();
     }
   }
@@ -61,6 +61,10 @@ abstract class _Scrolled extends Widget with Focusable {
 final class Scroll extends _Scrolled {
   Widget child;
 
+  /// Whether the last frame drew a scrollbar: the width to lay the child out at first, so a
+  /// child that does not fit is laid out once per frame, not twice.
+  bool _barred = false;
+
   Scroll(this.child, {bool scrollbar = true}) : super(scrollbar);
 
   @override
@@ -72,17 +76,22 @@ final class Scroll extends _Scrolled {
   @override
   void paint(Canvas canvas) {
     canvas.focus(this);
-    var w = canvas.width, h = child.heightAt(w);
-    final bar = scrollbar && h > canvas.height ? 1 : 0;
-    if (bar == 1) h = child.heightAt(w -= 1);
+    final full = canvas.width;
+    var (w, h) = (full - 1, 0);
+    if (!(scrollbar && _barred && (h = child.heightAt(w)) > canvas.height)) {
+      h = child.heightAt(w = full);
+      if (scrollbar && h > canvas.height) h = child.heightAt(w = full - 1);
+    }
+    final bar = w < full ? 1 : 0;
+    _barred = bar == 1;
     _count = h;
     _page = canvas.height;
     _scroll(0);
     if (h <= canvas.height) return canvas.area(0, 0, w).draw(child);
-    // Painted whole off screen, then the rows in view copied: a child cannot start above its canvas.
-    final buf = _Buffer(w, h);
-    child.paint(Canvas._(buf, 0, 0, w, h, canvas.theme, canvas._frame));
-    canvas._blit(buf, _offset);
+    // The child at its full height, starting [_offset] rows above, writes only the rows in view.
+    final top = canvas._y > canvas._top ? canvas._y : canvas._top;
+    final bottom = canvas._y + canvas._shownTo;
+    child.paint(Canvas._(canvas._buf, canvas._x, canvas._y - _offset, w, h, canvas.theme, canvas._frame, top, bottom));
     if (bar == 1) _scrollbar(canvas, _offset, _page, _count);
   }
 }
@@ -103,10 +112,25 @@ final class Log extends _Scrolled {
   final bool follow;
   bool _following;
 
+  /// The widest line seen, and the list and how many of its lines it has measured.
+  int _widest = 0, _measured = 0;
+  List<String>? _of;
+
   Log(this.lines, {this.follow = true, bool scrollbar = true}) : _following = follow, super(scrollbar);
 
+  /// Measures only the lines added since it last did (all of them for another list).
   @override
-  int get width => _max(lines.map(Style.width)) + (scrollbar ? 1 : 0);
+  int get width {
+    if (!identical(_of, lines) || _measured > lines.length) {
+      _widest = _measured = 0;
+      _of = lines;
+    }
+    for (; _measured < lines.length; _measured++) {
+      final w = Style.width(lines[_measured]);
+      if (w > _widest) _widest = w;
+    }
+    return _widest + (scrollbar ? 1 : 0);
+  }
 
   @override
   int heightAt(int width) => lines.isEmpty ? 1 : lines.length;

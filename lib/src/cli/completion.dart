@@ -1,4 +1,4 @@
-part of '../../cli.dart';
+part of '../cli.dart';
 
 /// The completion script for [root] in [shell]: what `app --completion bash` prints.
 ///

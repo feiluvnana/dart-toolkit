@@ -5,7 +5,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:dart_toolkit/process.dart';
-import 'package:dart_toolkit/src/core.dart' show ProcessBridge;
+import 'package:dart_toolkit/src/os.dart';
 import 'package:dart_toolkit/src/process/process.dart' show ShellInternals;
 import 'package:test/test.dart' hide Retry;
 
@@ -366,6 +366,15 @@ void main() {
       expect(File(to).readAsStringSync(), 'first\n');
       expect(Directory(dir).listSync(), hasLength(1), reason: 'no temporary file is left');
     }, testOn: '!windows');
+
+    test('a save that cannot write stops its command, which nothing reads now', () async {
+      final locked = tempDir();
+      Process.runSync('chmod', ['500', locked]);
+      addTearDown(() => Process.runSync('chmod', ['700', locked]));
+      final run = Shell.run('sleep 30');
+      await expectLater(run.save('$locked/out.txt'), throwsA(isA<FileSystemException>()));
+      expect(await run.settled.timeout(10.s), isA<Stopped<Object?, ShellResult>>());
+    }, testOn: '!windows');
   });
 
   group('input', () {
@@ -418,6 +427,36 @@ void main() {
       expect(heard, ['git branch --show-current', 'git diff --quiet', 'git push', 'ls', 'wc -l', 'git log']);
     });
 
+    test('text trims bytes and Unicode spaces alike; lines split as output does', () async {
+      await Shell.scope(() async {
+        expect(await Shell.run('a').text, 'é b\r\ntwo\rthree');
+        expect(await Shell.run('a').lines, ['\u00a0 é b', 'two', 'three']);
+      }, runner: Runner.fake((c) => ShellResult(c, stdout: '\u00a0 é b\r\ntwo\rthree\n \n')));
+    });
+
+    test('Shell.open hands a URL or a path, made absolute, to the platform\'s opener; a failure throws', () async {
+      final heard = <String>[];
+      await Shell.scope(
+        () async {
+          await Shell.open('https://example.com/?a=1&b=2');
+          await Shell.open('-a notes.txt');
+          await expectLater(Shell.open('missing.txt'), throwsA(isA<ShellException>()));
+        },
+        workdir: '/work',
+        runner: Runner.fake((c) {
+          heard.add('$c');
+          return ShellResult(c, exitCode: c.args.last.endsWith('missing.txt') ? 1 : 0);
+        }),
+      );
+      final opener = Platform.isMacOS ? 'open' : 'xdg-open';
+      expect(heard, [
+        "$opener 'https://example.com/?a=1&b=2'",
+        "$opener '/work/-a notes.txt'",
+        '$opener /work/missing.txt',
+      ]);
+      expect(() => Shell.open(' '), throwsArgumentError);
+    }, testOn: '!windows');
+
     test('interact runs on the fake too, and is strict', () async {
       await Shell.scope(() async {
         await Shell.interact('vim notes.txt');
@@ -428,11 +467,11 @@ void main() {
 
   group('process liveness', () {
     test('a live process is alive, another user\'s too; a reaped one is not', () async {
-      expect(ProcessBridge.isPidAlive(pid), isTrue);
-      expect(ProcessBridge.isPidAlive(1), isTrue, reason: 'init is root\'s: EPERM is still alive');
+      expect(OsBridge.isPidAlive(pid), isTrue);
+      expect(OsBridge.isPidAlive(1), isTrue, reason: 'init is root\'s: EPERM is still alive');
       final child = await Process.start('true', []);
       await child.exitCode;
-      expect(ProcessBridge.isPidAlive(child.pid), isFalse);
+      expect(OsBridge.isPidAlive(child.pid), isFalse);
     }, testOn: '!windows');
   });
 

@@ -1,16 +1,20 @@
-part of '../../path.dart';
+part of '../path.dart';
 
 final _tempName = RegExp(r'^\..+\.[0-9a-f]{16}\.tmp$');
 
 /// Whether [name] is one of the temporary files an atomic write or a copy makes.
 bool _isTemp(String name) => _tempName.hasMatch(name);
 
+/// How many [PathExtensions.changes] debounces a batch waits at most for a pause.
+const _longestBatch = 10;
+
 /// [PathExtensions.changes].
 Stream<FileChanges> _changes(String path, Duration debounce) {
   if (debounce <= Duration.zero) throw ArgumentError.value(debounce, 'debounce', 'Invalid debounce: not positive');
   final token = Cancel.token;
   StreamSubscription<FileSystemEvent>? events;
-  Timer? quiet;
+  // [quiet] waits for a pause; [longest] ends a batch that changes never pause in.
+  Timer? quiet, longest;
   void Function()? unlisten;
   var added = <Path>{}, modified = <Path>{}, removed = <Path>{};
   var stopped = false;
@@ -19,6 +23,7 @@ Stream<FileChanges> _changes(String path, Duration debounce) {
   Future<void> stop() async {
     stopped = true;
     quiet?.cancel();
+    longest?.cancel();
     unlisten?.call();
     await events?.cancel();
   }
@@ -39,7 +44,7 @@ Stream<FileChanges> _changes(String path, Duration debounce) {
       final isDir = await FileSystemEntity.isDirectory(path);
       // A file is watched through its folder: an atomic write renames a new file over it,
       // which ends a watch on the file itself.
-      final folder = isDir ? path : p.dirname(path);
+      final folder = isDir ? path : _dirname(path);
       if (!isDir && !await FileSystemEntity.isDirectory(folder)) {
         // A watch on a missing folder never fires and never ends: say so instead.
         unlisten?.call();
@@ -50,8 +55,8 @@ Stream<FileChanges> _changes(String path, Duration debounce) {
       }
       // Cancelled while it looked: nothing is started, so nothing is left running.
       if (stopped) return;
-      final name = p.basename(path);
-      bool wanted(String f) => isDir ? !_isTemp(p.basename(f)) : p.basename(f) == name;
+      final name = _basename(path);
+      bool wanted(String f) => isDir ? !_isTemp(_basename(f)) : _basename(f) == name;
       events = (isDir ? Directory(path).watch(recursive: true) : Directory(folder).watch()).listen(
         (e) {
           final hit = [e.path, if (e is FileSystemMoveEvent && e.destination != null) e.destination!].where(wanted);
@@ -65,23 +70,30 @@ Stream<FileChanges> _changes(String path, Duration debounce) {
               // Linux reports an atomic write as its temp moved over the file: a modification.
               if (wanted(e.path)) removed.add(Path(e.path));
               if (wanted(destination)) {
-                (_isTemp(p.basename(e.path)) ? modified : added).add(Path(destination));
+                (_isTemp(_basename(e.path)) ? modified : added).add(Path(destination));
               }
             case _:
               modified.addAll(hit.map(Path.new));
           }
-          quiet?.cancel();
-          quiet = Timer(debounce, () {
+          void flush() {
+            quiet?.cancel();
+            longest?.cancel();
+            longest = null;
             final ready = FileChanges(added: added, modified: modified, removed: removed);
             added = {};
             modified = {};
             removed = {};
             out.add(ready);
-          });
+          }
+
+          quiet?.cancel();
+          quiet = Timer(debounce, flush);
+          longest ??= Timer(debounce * _longestBatch, flush);
         },
         onError: out.addError,
         onDone: () {
           quiet?.cancel();
+          longest?.cancel();
           if (added.isNotEmpty || modified.isNotEmpty || removed.isNotEmpty) {
             out.add(FileChanges(added: added, modified: modified, removed: removed));
           }
@@ -205,12 +217,12 @@ Stream<String> _tail(String path, Encoding encoding) {
       }
       // Cancelled while it looked: nothing is started, so nothing is left running.
       if (stopped) return;
-      final name = p.basename(path);
+      final name = _basename(path);
       try {
-        final folder = Directory(p.dirname(p.absolute(path)));
+        final folder = Directory(_dirname(_absolute(path)));
         if (FileSystemEntity.isWatchSupported && await folder.exists() && !stopped) {
           watch = folder.watch().listen((e) {
-            if (p.basename(e.path) == name) check();
+            if (_basename(e.path) == name) check();
           }, onError: (Object _) {}); // the poll below still checks
         }
       } on FileSystemException catch (_) {} // no watch here: the poll alone checks
@@ -279,7 +291,7 @@ bool _contended(FileSystemException e) => const {11, 13, 35, 33}.contains(e.osEr
 /// [PathExtensions.lock].
 Future<T> _lock<T>(String path, FutureOr<T> Function() body, bool wait) async {
   // Taken before any await, so callers in this isolate are served in the order they came.
-  final asked = p.absolute(path);
+  final asked = _absolute(path);
   final before = _turns[asked];
   if (before != null && !wait) throw _held(path, 'this process');
   final turn = Completer<void>();

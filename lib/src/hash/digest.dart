@@ -43,9 +43,6 @@ enum Hash {
 
   const Hash(this.length);
 
-  /// Whether this is a checksum rather than a cryptographic hash.
-  bool get isChecksum => index >= crc32.index;
-
   /// The digest of [text]'s bytes in [encoding], or its MAC under [key].
   Digest text(String text, {Secret? key, Encoding encoding = utf8}) => bytes(encoding.encode(text), key: key);
 

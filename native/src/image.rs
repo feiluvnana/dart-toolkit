@@ -6,8 +6,8 @@ use std::io::{Cursor, Read};
 use fast_image_resize as fr;
 use image::{
     codecs::bmp::BmpEncoder, codecs::jpeg::JpegEncoder, codecs::png::PngEncoder,
-    codecs::tiff::TiffEncoder, DynamicImage, ImageEncoder, ImageFormat, ImageReader, Rgba,
-    RgbaImage,
+    codecs::tiff::TiffEncoder, metadata::Orientation, DynamicImage, ImageEncoder, ImageFormat,
+    ImageReader, Rgba, RgbaImage,
 };
 use image_hasher::{HashAlg, HasherConfig};
 use libwebp_sys as webp;
@@ -78,17 +78,71 @@ fn read_exif_orientation_from_file(path: &str) -> u32 {
     }
 }
 
-/// [img] turned upright by the EXIF [orientation] (1–8; anything else leaves it).
+/// [img] turned upright by the EXIF [orientation] (1–8; anything else leaves it): flips and a
+/// half turn in place, a quarter turn into one new buffer, so a turned photo never holds more
+/// than two copies.
 fn upright(img: DynamicImage, orientation: u32) -> DynamicImage {
-    match orientation {
-        2 => img.fliph(),
-        3 => img.rotate180(),
-        4 => img.flipv(),
-        5 => img.rotate90().fliph(),
-        6 => img.rotate90(),
-        7 => img.rotate270().fliph(),
-        8 => img.rotate270(),
-        _ => img,
+    let (turned, horizontal, vertical) = match orientation {
+        2 => (None, true, false),
+        3 => (None, true, true),
+        4 => (None, false, true),
+        5 => (Some(img.rotate90()), true, false),
+        6 => (Some(img.rotate90()), false, false),
+        7 => (Some(img.rotate270()), true, false),
+        8 => (Some(img.rotate270()), false, false),
+        _ => return img,
+    };
+    // The original goes before a flip of the turned copy.
+    let mut out = turned.unwrap_or(img);
+    if horizontal || vertical {
+        let (w, h) = (out.width() as usize, out.height() as usize);
+        let channels = out.color().bytes_per_pixel() as usize;
+        match &mut out {
+            DynamicImage::ImageLuma8(b) => flip(b, w, h, channels, horizontal, vertical),
+            DynamicImage::ImageLumaA8(b) => flip(b, w, h, channels, horizontal, vertical),
+            DynamicImage::ImageRgb8(b) => flip(b, w, h, channels, horizontal, vertical),
+            DynamicImage::ImageRgba8(b) => flip(b, w, h, channels, horizontal, vertical),
+            other => other.apply_orientation(match (horizontal, vertical) {
+                (true, true) => Orientation::Rotate180,
+                (true, false) => Orientation::FlipHorizontal,
+                _ => Orientation::FlipVertical,
+            }),
+        }
+    }
+    out
+}
+
+/// The [w]×[h] plane [buf] of [channels]-byte pixels mirrored in place: left to right with
+/// [horizontal], top to bottom with [vertical]; both is a half turn.
+fn flip(buf: &mut [u8], w: usize, h: usize, channels: usize, horizontal: bool, vertical: bool) {
+    let row = w * channels;
+    if vertical {
+        for y in 0..h / 2 {
+            let (top, bottom) = buf.split_at_mut((h - 1 - y) * row);
+            top[y * row..(y + 1) * row].swap_with_slice(&mut bottom[..row]);
+        }
+    }
+    if horizontal {
+        buf.par_chunks_mut(row).for_each(|line| {
+            line.reverse();
+            line.chunks_exact_mut(channels).for_each(<[u8]>::reverse);
+        });
+    }
+}
+
+/// The 8-bit RGB plane of [img]: borrowed when it is one, so an encoder never copies a photo.
+fn rgb8(img: &DynamicImage) -> Cow<'_, image::RgbImage> {
+    match img {
+        DynamicImage::ImageRgb8(b) => Cow::Borrowed(b),
+        other => Cow::Owned(other.to_rgb8()),
+    }
+}
+
+/// The 8-bit RGBA plane of [img], borrowed when it is one.
+fn rgba8(img: &DynamicImage) -> Cow<'_, RgbaImage> {
+    match img {
+        DynamicImage::ImageRgba8(b) => Cow::Borrowed(b),
+        other => Cow::Owned(other.to_rgba8()),
     }
 }
 
@@ -623,7 +677,7 @@ pub unsafe extern "C" fn tk_image_pad(
 #[no_mangle]
 pub unsafe extern "C" fn tk_image_trim(handle: *mut c_void, threshold: u8) -> *mut c_void {
     op(handle, |native| {
-        let rgba = native.inner.to_rgba8();
+        let rgba = rgba8(&native.inner);
         let w = rgba.width();
         let h = rgba.height();
 
@@ -1160,39 +1214,16 @@ fn code_to_format(code: u32) -> Option<ImageFormat> {
 /// WebP through libwebp, because the `image` crate only writes WebP losslessly and a lossless
 /// 60 MP frame is larger than the JPEG it came from.
 ///
-/// The advanced entry point takes one `0xAARRGGBB` plane and splits the rows across threads
-/// itself; the convenience encoders are single-threaded, which on a 60 MP photo is minutes.
+/// Through the advanced entry point, whose encoder splits the rows across threads; the
+/// convenience encoders are single-threaded, which on a 60 MP photo is minutes. A lossy picture
+/// is imported straight into the YUV planes the encoder reads, from the image's own RGB(A)
+/// buffer; only the lossless coder needs the 4-byte ARGB plane.
 fn encode_webp(img: &DynamicImage, quality: u8, lossless: bool) -> Result<Vec<u8>, String> {
     let (w, h) = (img.width() as i32, img.height() as i32);
     if w <= 0 || h <= 0 || w as u32 > webp::WEBP_MAX_DIMENSION || h as u32 > webp::WEBP_MAX_DIMENSION {
         return Err(format!("WebP cannot hold {}x{}", w, h));
     }
     let has_alpha = img.color().has_alpha();
-    let mut plane: Vec<u32> = match img {
-        DynamicImage::ImageRgba8(buf) => buf
-            .as_raw()
-            .chunks_exact(4)
-            .map(|p| u32::from_le_bytes([p[2], p[1], p[0], p[3]]))
-            .collect(),
-        DynamicImage::ImageRgb8(buf) => buf
-            .as_raw()
-            .chunks_exact(3)
-            .map(|p| 0xff00_0000 | ((p[0] as u32) << 16) | ((p[1] as u32) << 8) | p[2] as u32)
-            .collect(),
-        other if has_alpha => other
-            .to_rgba8()
-            .as_raw()
-            .chunks_exact(4)
-            .map(|p| u32::from_le_bytes([p[2], p[1], p[0], p[3]]))
-            .collect(),
-        other => other
-            .to_rgb8()
-            .as_raw()
-            .chunks_exact(3)
-            .map(|p| 0xff00_0000 | ((p[0] as u32) << 16) | ((p[1] as u32) << 8) | p[2] as u32)
-            .collect(),
-    };
-
     let quality = quality.clamp(1, 100) as f32;
     let abi = webp::WEBP_ENCODER_ABI_VERSION as i32;
 
@@ -1215,16 +1246,20 @@ fn encode_webp(img: &DynamicImage, quality: u8, lossless: bool) -> Result<Vec<u8
         if webp::WebPPictureInitInternal(&mut picture, abi) != 1 {
             return Err("libwebp refused the picture".to_string());
         }
-        picture.use_argb = 0;
+        picture.use_argb = i32::from(lossless);
         picture.width = w;
         picture.height = h;
-        picture.colorspace = if has_alpha {
-            webp::WebPEncCSP::WEBP_YUV420A
+        let imported = if has_alpha {
+            let rgba = rgba8(img);
+            webp::WebPPictureImportRGBA(&mut picture, rgba.as_ptr(), w * 4)
         } else {
-            webp::WebPEncCSP::WEBP_YUV420
+            let rgb = rgb8(img);
+            webp::WebPPictureImportRGB(&mut picture, rgb.as_ptr(), w * 3)
         };
-        picture.argb = plane.as_mut_ptr();
-        picture.argb_stride = w;
+        if imported != 1 {
+            webp::WebPPictureFree(&mut picture);
+            return Err("libwebp could not take this image".to_string());
+        }
 
         let mut writer: webp::WebPMemoryWriter = std::mem::zeroed();
         webp::WebPMemoryWriterInit(&mut writer);
@@ -1249,7 +1284,7 @@ fn encode_webp(img: &DynamicImage, quality: u8, lossless: bool) -> Result<Vec<u8
 /// [scans] also searches progressive scan scripts: about 2% smaller for twice the time, so a
 /// quality search leaves it to the final encode, and scores that encode again.
 fn encode_jpeg(img: &DynamicImage, quality: u8, scans: bool) -> Result<Vec<u8>, String> {
-    let rgb = img.to_rgb8();
+    let rgb = rgb8(img);
     let mut comp = mozjpeg::Compress::new(mozjpeg::ColorSpace::JCS_RGB);
     comp.set_size(rgb.width() as usize, rgb.height() as usize);
     comp.set_quality(quality.clamp(1, 100) as f32);
@@ -1267,7 +1302,7 @@ fn encode_jpeg(img: &DynamicImage, quality: u8, scans: bool) -> Result<Vec<u8>, 
 
 /// [img] as a PNG, then recompressed by oxipng: the same pixels in fewer bytes.
 fn encode_png(img: &DynamicImage) -> Result<Vec<u8>, String> {
-    let rgba = img.to_rgba8();
+    let rgba = rgba8(img);
     let mut raw = Vec::new();
     PngEncoder::new(&mut raw)
         .write_image(
@@ -1292,7 +1327,7 @@ fn encode_image(
     let mut buf = Vec::new();
     match format {
         ImageFormat::Jpeg => {
-            let rgb = img.to_rgb8();
+            let rgb = rgb8(img);
             let encoder = JpegEncoder::new_with_quality(&mut buf, quality.clamp(1, 100));
             encoder
                 .write_image(
@@ -1304,7 +1339,7 @@ fn encode_image(
                 .msg()?;
         }
         ImageFormat::Png => {
-            let rgba = img.to_rgba8();
+            let rgba = rgba8(img);
             let encoder = PngEncoder::new(&mut buf);
             encoder
                 .write_image(
@@ -1317,7 +1352,7 @@ fn encode_image(
         }
         ImageFormat::WebP => return encode_webp(img, quality, lossless),
         ImageFormat::Bmp => {
-            let rgb = img.to_rgb8();
+            let rgb = rgb8(img);
             let encoder = BmpEncoder::new(&mut buf);
             encoder
                 .write_image(
@@ -1329,7 +1364,7 @@ fn encode_image(
                 .msg()?;
         }
         ImageFormat::Tiff => {
-            let rgba = img.to_rgba8();
+            let rgba = rgba8(img);
             let mut cursor = Cursor::new(&mut buf);
             let encoder = TiffEncoder::new(&mut cursor);
             encoder
@@ -1427,26 +1462,43 @@ pub unsafe extern "C" fn tk_image_dominant_color(handle: *mut c_void) -> u32 {
 }
 
 /// The longest side compression scores at: a larger picture is compared as a screen shows it,
-/// which also bounds the metric's memory (about 700 MB at this size).
-const SCORE_SIDE: u32 = 2560;
+/// which also bounds the metric's memory (about 600 MB at this size).
+const SCORE_SIDE: u32 = 2048;
+
+/// One SSIMULACRA2 at a time in the process: each holds about 14 float planes of the picture,
+/// so a batch compressing four files at once would hold four. The encodes around it still
+/// run side by side.
+static SCORING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// [f] while no other score is computed.
+fn scoring<T>(f: impl FnOnce() -> T) -> T {
+    let _one = SCORING.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    f()
+}
 
 /// [img] as compression scores it: shrunk to fit [SCORE_SIDE] when larger.
-fn viewed(img: &DynamicImage) -> Cow<'_, DynamicImage> {
+fn viewed(img: &DynamicImage) -> Result<Cow<'_, DynamicImage>, String> {
     if img.width().max(img.height()) <= SCORE_SIDE {
-        Cow::Borrowed(img)
+        Ok(Cow::Borrowed(img))
     } else {
-        Cow::Owned(img.resize(
-            SCORE_SIDE,
-            SCORE_SIDE,
-            image::imageops::FilterType::Triangle,
-        ))
+        resized(img, SCORE_SIDE, SCORE_SIDE, 1, 0).map(Cow::Owned)
     }
+}
+
+/// The encoding [data] in [format] as [viewed] shows it, through the same resampling as the
+/// source so the two compare fairly; the whole-size decode is dropped before it is scored.
+fn seen(data: &[u8], format: ImageFormat) -> Result<DynamicImage, String> {
+    let whole = image::load_from_memory_with_format(data, format).msg()?;
+    let small = match viewed(&whole)? {
+        Cow::Owned(small) => Some(small),
+        Cow::Borrowed(_) => None,
+    };
+    Ok(small.unwrap_or(whole))
 }
 
 /// [img] in linear light, as SSIMULACRA2 compares.
 fn linear(img: &DynamicImage) -> Result<ssimulacra2::LinearRgb, String> {
-    let px: Vec<[f32; 3]> = img
-        .to_rgb8()
+    let px: Vec<[f32; 3]> = rgb8(img)
         .pixels()
         .map(|p| {
             [
@@ -1469,14 +1521,14 @@ fn linear(img: &DynamicImage) -> Result<ssimulacra2::LinearRgb, String> {
 
 /// SSIMULACRA2 of [b] against [a]: 100 is identical, 90 very high, 70 medium.
 fn similarity(a: &ssimulacra2::LinearRgb, b: &DynamicImage) -> Result<f64, String> {
-    ssimulacra2::compute_frame_ssimulacra2(a.clone(), linear(b)?).msg()
+    scoring(|| ssimulacra2::compute_frame_ssimulacra2(a.clone(), linear(b)?).msg())
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn tk_image_similarity(a: *mut c_void, b: *mut c_void, out: *mut f64) -> i32 {
     guard(|| {
         let (a, b) = (img(a)?, img(b)?);
-        let score = similarity(&linear(&a.inner)?, &b.inner)?;
+        let score = scoring(|| ssimulacra2::compute_frame_ssimulacra2(linear(&a.inner)?, linear(&b.inner)?).msg())?;
         unsafe { *out = score };
         Ok(0)
     })
@@ -1530,7 +1582,7 @@ fn compress(
     let mut scaled = Cow::Borrowed(img);
     for _ in 0..=5 {
         let found = if scoring {
-            scored_search(&scaled, &encode, &fits, target)?
+            scored_search(&scaled, format, &encode, &fits, target)?
         } else {
             largest_fitting(&scaled, &encode, &fits)?.map(|(out, q)| {
                 // The thorough pass, kept when it is smaller and still fits.
@@ -1548,7 +1600,7 @@ fn compress(
         if w < 8 || h < 8 {
             break;
         }
-        scaled = Cow::Owned(scaled.resize(w, h, image::imageops::FilterType::Lanczos3));
+        scaled = Cow::Owned(resized(&scaled, w, h, 2, 0)?);
     }
     Ok(None)
 }
@@ -1557,11 +1609,12 @@ fn compress(
 /// fits: the bytes, the quality and the score; `None` when even the lowest is over.
 fn scored_search(
     img: &DynamicImage,
+    format: ImageFormat,
     encode: &impl Fn(&DynamicImage, u8, bool) -> Result<Vec<u8>, String>,
     fits: &impl Fn(&Vec<u8>) -> bool,
     target: f64,
 ) -> Result<Option<(Vec<u8>, u8, f64)>, String> {
-    let source = linear(&viewed(img))?;
+    let source = linear(&*viewed(img)?)?;
     // Quality only raises both the score and the size: the lowest one that scores [target] is
     // also the smallest, and over budget the highest one that fits is the best left.
     let (mut lo, mut hi) = (SEARCH_LOW, SEARCH_HIGH);
@@ -1574,7 +1627,7 @@ fn scored_search(
             hi = q - 1;
             continue;
         }
-        let score = similarity(&source, &viewed(&image::load_from_memory(&out).msg()?))?;
+        let score = similarity(&source, &seen(&out, format)?)?;
         if score >= target {
             good = Some((out, q, score));
             hi = q - 1;
@@ -1591,7 +1644,7 @@ fn scored_search(
     // search found and is no larger.
     let last = encode(img, q, true)?;
     if last.len() < out.len() {
-        let again = similarity(&source, &viewed(&image::load_from_memory(&last).msg()?))?;
+        let again = similarity(&source, &seen(&last, format)?)?;
         if again >= if met { target } else { score } {
             return Ok(Some((last, q, again)));
         }
@@ -1890,6 +1943,15 @@ fn phash_of(img: &DynamicImage) -> u64 {
     u64::from_be_bytes(arr)
 }
 
+/// How many files [tk_image_phash_files] decodes at once when it must decode them whole.
+const WHOLE_AT_ONCE: usize = 4;
+
+/// Whether the file at [path] starts as a JPEG; an unreadable one counts as one, failing soon.
+fn is_jpeg(path: &str) -> bool {
+    let mut head = [0u8; 3];
+    File::open(path).and_then(|mut f| f.read_exact(&mut head)).map_or(true, |_| head == [0xFF, 0xD8, 0xFF])
+}
+
 /// The longest side [tk_image_phash_files] decodes at: the hash looks at 32 px, and a JPEG
 /// decodes this small at an eighth of the work.
 const PHASH_SIDE: u32 = 256;
@@ -1912,7 +1974,7 @@ pub unsafe extern "C" fn tk_image_phash_files(
         }
         let hashes = std::slice::from_raw_parts_mut(out, names.len());
         let oks = std::slice::from_raw_parts_mut(ok, names.len());
-        hashes.par_iter_mut().zip(oks.par_iter_mut()).zip(names.par_iter()).for_each(|((h, k), p)| {
+        let hash = |(h, k): (&mut u64, &mut u8), p: &str| {
             let decoded = std::fs::read(p).ok().and_then(|data| {
                 let img = decode(&data, 0, PHASH_SIDE).ok()?;
                 Some(upright(img, read_exif_orientation_from_bytes(&data)))
@@ -1924,7 +1986,17 @@ pub unsafe extern "C" fn tk_image_phash_files(
                 }
                 None => *k = 0,
             }
-        });
+        };
+        // A JPEG decodes small; anything else decodes whole first, so those go [WHOLE_AT_ONCE]
+        // at a time rather than one per core.
+        let (jpegs, others): (Vec<_>, Vec<_>) =
+            hashes.iter_mut().zip(oks.iter_mut()).zip(names.iter()).partition(|(_, p)| is_jpeg(p));
+        jpegs.into_par_iter().for_each(|(out, p)| hash(out, p));
+        let mut others = others;
+        while !others.is_empty() {
+            let rest = others.split_off(others.len().saturating_sub(WHOLE_AT_ONCE));
+            rest.into_par_iter().for_each(|(out, p)| hash(out, p));
+        }
         Ok(names.len() as i32)
     })
 }

@@ -88,7 +88,22 @@ final class Pool<I, T> implements Detachable {
   late final _Codec<I, T> _codec = _Codec(_create());
   final _jobs = <String, Job<I, T>>{};
   final _unfinished = <I, Job<I, T>>{};
-  final _changes = StreamController<Job<I, T>>.broadcast();
+  final _latest = <I, Job<I, T>>{};
+
+  /// Finished jobs it may forget, oldest first: past [_keptFinished] the oldest goes.
+  final _finished = Queue<Job<I, T>>();
+
+  /// Jobs waiting for one of the [concurrency] places, each with the ticket it was queued with.
+  final _queue = Queue<(Job<I, T>, int)>();
+
+  /// How many jobs hold a place: waiting for a worker or running on one.
+  int _active = 0;
+
+  // Synchronous, so a listener keeps up with progress rather than queueing it; [_tell] keeps a
+  // change made by a listener for after the one it hears.
+  final _changes = StreamController<Job<I, T>>.broadcast(sync: true);
+  final _told = Queue<Job<I, T>>();
+  bool _telling = false;
   final _batches = <Batch<I, T>>{};
   bool _started = false;
   Future<void>? _closing;
@@ -135,7 +150,8 @@ final class Pool<I, T> implements Detachable {
   }
 
   /// Every job it knows, in the order it met them: its own and, with a folder store, the
-  /// runner's. Finished ones too, until removed.
+  /// runner's. Of the finished ones it keeps the last 100 (a [Failed] one until removed or
+  /// resumed), so a long-lived pool holds no more.
   List<Job<I, T>> get jobs {
     _use();
     return List.unmodifiable(_jobs.values);
@@ -144,11 +160,7 @@ final class Pool<I, T> implements Detachable {
   /// The latest job for [item], or `null` when it has none.
   Job<I, T>? job(I item) {
     _use();
-    if (_unfinished[item] case final job?) return job;
-    for (final job in _jobs.values.toList().reversed) {
-      if (job.item == item) return job;
-    }
-    return null;
+    return _unfinished[item] ?? _latest[item];
   }
 
   /// Each job as it changes: added, on its way, paused, finished or removed. A store that cannot
@@ -181,7 +193,7 @@ final class Pool<I, T> implements Detachable {
       _changed(job, rest: true);
       _sendAdd(job);
     } else {
-      _start(job);
+      _start(job, rest: true);
     }
     return job;
   }
@@ -189,8 +201,7 @@ final class Pool<I, T> implements Detachable {
   Future<void> _sendAdd(Job<I, T> job) async {
     try {
       await _opened;
-      final link = _link ??= _Link(this, store.folder!);
-      link.add(job);
+      (_link ??= _Link(this, store.folder!)).add(job);
     } catch (e, st) {
       job._finish(Failed(job.item, e, st));
     }
@@ -210,7 +221,8 @@ final class Pool<I, T> implements Detachable {
 
   Batch<I, T> _track(Batch<I, T> batch) {
     _batches.add(batch);
-    batch.statuses.listen(null, onDone: () => _batches.remove(batch));
+    // Its end, not its statuses: a listener of those would queue every item's progress.
+    BatchInternals.ended(batch).then((_) => _batches.remove(batch));
     return batch;
   }
 
@@ -271,9 +283,36 @@ final class Pool<I, T> implements Detachable {
   void _meet(Job<I, T> job) {
     _jobs[job.id] = job;
     _unfinished[job.item] = job;
+    _latest[job.item] = job;
   }
 
-  void _start(Job<I, T> job) => job._zone.run(() => TaskInternals.detached(job._go));
+  /// [job] waiting for a place, then run: at once while fewer than [concurrency] jobs hold one,
+  /// else queued, so a thousand waiting jobs cost a thousand queue entries and nothing more. At
+  /// [rest] (just added) the store hears of it.
+  void _start(Job<I, T> job, {bool rest = false}) {
+    job._stopping = null;
+    job._set(Waiting(job.item, label: job.label), rest: rest);
+    if (_active < concurrency && _queue.isEmpty) return _launch(job);
+    _queue.add((job, job._queue()));
+  }
+
+  void _launch(Job<I, T> job) {
+    _active++;
+    job._zone.run(() => TaskInternals.detached(job._go));
+  }
+
+  /// A job let its place go: the next one queued takes it.
+  void _vacate() {
+    _active--;
+    while (_active < concurrency && _queue.isNotEmpty && _closing == null) {
+      final (job, ticket) = _queue.removeFirst();
+      if (job._dequeue(ticket)) _launch(job);
+    }
+  }
+
+  /// The most finished jobs it keeps; a [Failed] one, which [Job.resume] can run again, is kept
+  /// until removed.
+  static const _keptFinished = 100;
 
   /// [job] moved on, or has a [note]; at [rest] (added, finished, paused, removed) the store
   /// hears of it too.
@@ -281,7 +320,7 @@ final class Pool<I, T> implements Detachable {
     if (job.status.isFinal || job._removed) {
       if (identical(_unfinished[job.item], job)) _unfinished.remove(job.item);
     }
-    if (!_changes.isClosed) _changes.add(job);
+    _tell(job);
     if (rest || job.status is Paused) {
       if (_isRunner) {
         _runner?.persist();
@@ -292,9 +331,36 @@ final class Pool<I, T> implements Detachable {
     if (_isRunner) _runner?.tell(job, note);
   }
 
+  /// Every listener of [changes] hears [job]; one a listener's own change brings follows it.
+  void _tell(Job<I, T> job) {
+    if (_changes.isClosed) return;
+    _told.add(job);
+    if (_telling) return;
+    _telling = true;
+    try {
+      while (_told.isNotEmpty && !_changes.isClosed) {
+        _changes.add(_told.removeFirst());
+      }
+    } finally {
+      _telling = false;
+    }
+  }
+
+  /// [job] ended [Done] or [Stopped]: kept among the last [_keptFinished], the oldest forgotten.
+  /// Nothing is forgotten while closing: the jobs it stops are what the store keeps.
+  void _ended(Job<I, T> job) {
+    if (job._remote || job._removed || _closing != null) return;
+    _finished.add(job);
+    while (_finished.length > _keptFinished) {
+      final old = _finished.removeFirst();
+      if (identical(_jobs[old.id], old) && old.status.isFinal) _forget(old);
+    }
+  }
+
   void _forget(Job<I, T> job) {
     _jobs.remove(job.id);
     if (identical(_unfinished[job.item], job)) _unfinished.remove(job.item);
+    if (identical(_latest[job.item], job)) _latest.remove(job.item);
     if (_isRunner) _runner?.removed(job);
   }
 
@@ -355,77 +421,56 @@ extension StreamThrough<I> on Stream<I> {
 
 // ---- workers -------------------------------------------------------------------------------
 
-/// A pool's workers: started as items need them, up to its concurrency, handed out in turn.
+/// A pool's workers: started as items need them, up to its concurrency, handed out in turn by
+/// one [Semaphore] of that many permits.
 final class _Lanes<I, T> {
   final Pool<I, T> _pool;
+  late final _permits = Semaphore(_pool.concurrency);
   final _idle = <_Lane<I, T>>[];
   final _all = <_Lane<I, T>>{};
-  final _waiting = Queue<Completer<_Lane<I, T>?>>();
-  int _count = 0;
+
+  /// What gives back the permit each lane in use holds.
+  final _held = <_Lane<I, T>, void Function()>{};
   bool _closed = false;
 
   _Lanes(this._pool);
 
-  /// The next free worker: an idle one, a new one while under the concurrency, or the first to
-  /// come free. A cancel of the enclosing scope while it waits is a [CancelledException].
+  /// The next free worker: an idle one, else a new one, once a permit is free. A cancel of the
+  /// enclosing scope while it waits is a [CancelledException], with no permit taken.
   Future<_Lane<I, T>> take() async {
-    final token = Cancel.token;
-    // Woken with no worker: a place came free to start one, and it is this caller's turn.
-    var woken = false;
-    while (true) {
-      token?.check();
+    if (_closed) throw const CancelledException(_closedReason);
+    final release = await _permits.acquire();
+    try {
       if (_closed) throw const CancelledException(_closedReason);
-      if (_idle.isNotEmpty && (_waiting.isEmpty || woken)) return _idle.removeLast();
-      if (_count < _pool.concurrency && (_waiting.isEmpty || woken)) {
-        _count++;
-        try {
-          final lane = _pool.isolate ? await _IsolateLane.start(_pool._create) : await _LocalLane.start(_pool._create);
-          _all.add(lane);
-          return lane;
-        } catch (_) {
-          _count--;
-          if (_waiting.isNotEmpty) _waiting.removeFirst().complete(null); // the next tries to start one
-          rethrow;
-        }
+      while (_idle.isNotEmpty) {
+        final lane = _idle.removeLast();
+        if (!lane.isDead) return _hold(lane, release);
+        _all.remove(lane); // its isolate ended while it was idle: its place starts a new one
       }
-      final turn = Completer<_Lane<I, T>?>();
-      _waiting.add(turn);
-      final unlisten = token?.onCancel(() {
-        if (_waiting.remove(turn)) turn.complete(null);
-      });
-      final lane = await turn.future;
-      unlisten?.call();
-      if (lane == null) {
-        woken = true;
-        continue; // cancelled, closed, or woken to start one
-      }
-      if (token?.isCancelled ?? false) {
-        give(lane);
-        token!.check();
-      }
-      return lane;
+      final lane = _pool.isolate ? await _IsolateLane.start(_pool._create) : await _LocalLane.start(_pool._create);
+      _all.add(lane);
+      return _hold(lane, release);
+    } catch (_) {
+      release();
+      rethrow;
     }
   }
 
-  /// [lane] free again: to the first in line, else idle.
+  _Lane<I, T> _hold(_Lane<I, T> lane, void Function() release) {
+    _held[lane] = release;
+    return lane;
+  }
+
+  /// [lane] free again: idle (a dead one dropped), and its permit to the first in line.
   void give(_Lane<I, T> lane) {
-    if (lane.isDead) {
-      _all.remove(lane);
-      _count--;
-      if (_waiting.isNotEmpty) _waiting.removeFirst().complete(null);
-    } else if (_waiting.isNotEmpty) {
-      _waiting.removeFirst().complete(lane);
-    } else {
-      _idle.add(lane);
-    }
+    lane.isDead ? _all.remove(lane) : _idle.add(lane);
+    _held.remove(lane)?.call();
   }
 
-  /// Ends every worker, its setup's cleanups run.
+  /// Ends every worker, its setup's cleanups run. Whoever still waits for one is stopped by the
+  /// closing pool's cancel of its work.
   Future<void> close() async {
     _closed = true;
-    while (_waiting.isNotEmpty) {
-      _waiting.removeFirst().complete(null);
-    }
     await Future.wait([for (final lane in _all) lane.close()]);
     _all.clear();
     _idle.clear();
@@ -515,294 +560,39 @@ final class _Setup implements Work {
 
 // ---- isolates ------------------------------------------------------------------------------
 
-/// A worker on an isolate of its own, running [_serveIsolate].
+/// A worker on an isolate of its own: core's [IsolateBridge], set up as [_LocalLane] is.
 final class _IsolateLane<I, T> extends _Lane<I, T> {
-  final Isolate _isolate;
-  final SendPort _inbox;
-  final RawReceivePort _replies;
-  final RawReceivePort _exits;
-  final _pending = <int, _Pending<T>>{};
-  final _closed = Completer<void>();
-  int _next = 1;
-  bool _dead = false;
+  final IsolateBridge<I, T> _isolate;
 
-  _IsolateLane._(this._isolate, this._inbox, this._replies, this._exits);
+  _IsolateLane._(this._isolate);
 
   /// An isolate that builds its worker from [create] (the one thing copied to it) and inits it;
   /// what init reports goes to the work around this call, what it throws is thrown here.
-  static Future<_IsolateLane<I, T>> start<I, T>(Worker<I, T> Function() create) async {
-    final ready = Completer<SendPort>();
-    final zone = Zone.current;
-    _IsolateLane<I, T>? lane;
-    SendPort? inbox;
-    final replies = RawReceivePort();
-    final exits = RawReceivePort();
-    replies.handler = (Object? message) {
-      if (lane case final lane?) return lane._hear(message);
-      switch (message) {
-        case final SendPort port:
-          inbox = port;
-        case (0, #ready, _):
-          ready.complete(inbox!);
-        case (0, #failed, final Object failure):
-          final (error, trace) = _decodeFailure(failure);
-          ready.completeError(error, trace);
-        case (0, #running, final Running<Object?, Object?> status):
-          zone.run(() => TaskInternals.report(status));
-        case (0, #warned, final Warning warning):
-          zone.run(() => TaskInternals.warn(warning));
-      }
-    };
-    exits.handler = (Object? _) {
-      if (!ready.isCompleted) ready.completeError(RemoteError('The worker isolate exited while it started', ''));
-      lane?._die();
-    };
-    try {
-      final isolate = await Isolate.spawn(
-        _serveIsolate<I, T>,
-        (create, replies.sendPort),
-        onExit: exits.sendPort,
-        errorsAreFatal: false,
-        debugName: 'pool',
-      );
-      return lane = _IsolateLane._(isolate, await ready.future, replies, exits);
-    } catch (_) {
-      replies.close();
-      exits.close();
-      rethrow;
-    }
-  }
+  static Future<_IsolateLane<I, T>> start<I, T>(Worker<I, T> Function() create) async =>
+      _IsolateLane._(await IsolateBridge.start<I, T>(_isolateSetup(create), name: 'pool'));
 
   @override
-  bool get isDead => _dead;
+  bool get isDead => _isolate.isDead;
 
   @override
-  Future<T> run(I item, Work work) async {
-    if (_dead) throw RemoteError('The worker isolate has ended', '');
-    final id = _next++;
-    final pending = _pending[id] = _Pending<T>(Zone.current, work);
-    final token = Cancel.token;
-    final unlisten = token?.onCancel(() => _inbox.send((id, #cancel, '${token.reason ?? 'cancelled'}')));
-    try {
-      _inbox.send((id, #run, item)); // an item that cannot cross throws here, and fails only itself
-      return await pending.done.future;
-    } finally {
-      unlisten?.call();
-      _pending.remove(id);
-    }
-  }
-
-  void _hear(Object? message) {
-    switch (message) {
-      case (0, #closed, _):
-        _closed.complete();
-      case (final int id, final Symbol kind, final Object? payload):
-        final pending = _pending[id];
-        if (pending == null) return;
-        switch (kind) {
-          case #running:
-            pending.zone.run(() => TaskInternals.report(payload! as Running<Object?, Object?>));
-          case #warned:
-            pending.zone.run(() => TaskInternals.warn(payload! as Warning));
-          case #stale:
-            TaskInternals.stale(pending.work);
-          case #value:
-            pending.done.complete(payload as T);
-          case #error:
-            final (error, trace) = _decodeFailure(payload!);
-            pending.done.completeError(error, trace);
-          case #stopped:
-            pending.done.completeError(CancelledException('$payload'));
-        }
-    }
-  }
-
-  void _die() {
-    _dead = true;
-    for (final pending in _pending.values) {
-      if (!pending.done.isCompleted) pending.done.completeError(RemoteError('The worker isolate exited', ''));
-    }
-    if (!_closed.isCompleted) _closed.complete();
-    _replies.close();
-    _exits.close();
-  }
+  Future<T> run(I item, Work work) => _isolate.run(item);
 
   @override
-  Future<void> close() async {
-    if (_dead) return;
-    _inbox.send((0, #close, null));
-    await _closed.future;
-    _dead = true;
-    _replies.close();
-    _exits.close();
-    _isolate.kill(priority: Isolate.immediate);
-  }
+  Future<void> close() => _isolate.close();
 }
 
-final class _Pending<T> {
-  final Zone zone;
-  final Work work;
-  final done = Completer<T>();
-
-  _Pending(this.zone, this.work);
-}
-
-/// The isolate side: build and init the worker, then run each item as a task of its own,
-/// sending back its progress and its outcome, until told to close.
-Future<void> _serveIsolate<I, T>((Worker<I, T> Function(), SendPort) setup) async {
-  final (create, reply) = setup;
-  final inbox = RawReceivePort();
-  reply.send(inbox.sendPort);
-  final work = _Setup();
-  late final Worker<I, T> worker;
-  // What init reports, the item waiting for it hears.
-  final init = Task.run('init', (_) async {
-    worker = create();
-    await worker.init(work);
-  });
-  final relayInit = _Relay(reply, 0);
-  final relayingInit = init.statuses.listen(relayInit.add);
-  switch (await init.settled) {
-    case Failed(:final error, :final stackTrace):
-      await relayingInit.cancel();
-      relayInit.flush();
-      await work.end(Failed(null, error, stackTrace));
-      reply.send((0, #failed, _encodeFailure(error, stackTrace)));
-      inbox.close();
-      return;
-    case _:
-      await relayingInit.cancel();
-      relayInit.flush();
-      reply.send((0, #ready, null));
-  }
-  final running = <int, Task<T>>{};
-  inbox.handler = (Object? message) async {
-    switch (message) {
-      case (final int id, #run, final Object? item):
-        final task = running[id] = TaskInternals.start(item, '$item', (work) => worker.run(item as I, work));
-        final relay = _Relay(reply, id);
-        final relaying = task.statuses.listen(relay.add);
-        final outcome = await task.settled;
-        await relaying.cancel();
-        relay.flush();
-        running.remove(id);
-        switch (outcome) {
-          case Done(:final value, :final fresh):
-            if (!fresh) reply.send((id, #stale, null));
-            try {
-              reply.send((id, #value, value));
-            } catch (e) {
-              reply.send((
-                id,
-                #error,
-                _encodeFailure(ArgumentError('Invalid value: it cannot leave the isolate: $e'), StackTrace.current),
-              ));
-            }
-          case Failed(:final error, :final stackTrace):
-            reply.send((id, #error, _encodeFailure(error, stackTrace)));
-          case Stopped(:final reason):
-            reply.send((id, #stopped, reason));
-          case _:
-        }
-      case (final int id, #cancel, final String reason):
-        running[id]?.cancel(reason);
-      case (0, #close, _):
-        inbox.close();
-        await work.end(const Done(null, null));
-        reply.send((0, #closed, null));
-    }
-  };
-}
-
-/// One item's statuses on their way out of its isolate: a [Running] at most every [_reportGap]
-/// (the latest), anything else at once, after the [Running] it held.
-final class _Relay {
-  final SendPort _reply;
-  final int _id;
-  final _since = Stopwatch();
-  Running<Object?, Object?>? _held;
-  Timer? _timer;
-
-  _Relay(this._reply, this._id);
-
-  void add(Status<Object?, Object?> status) {
-    if (status is! Running<Object?, Object?>) {
-      flush();
-      return _sendStatus(_reply, _id, status);
-    }
-    if (!_since.isRunning || _since.elapsed >= _reportGap) return _send(status);
-    _held = status;
-    _timer ??= Timer(_reportGap - _since.elapsed, flush);
-  }
-
-  /// Sends the [Running] it holds, if any.
-  void flush() {
-    _timer?.cancel();
-    _timer = null;
-    if (_held case final held?) _send(held);
-  }
-
-  void _send(Running<Object?, Object?> status) {
-    _held = null;
-    _since
-      ..reset()
-      ..start();
-    _sendStatus(_reply, _id, status);
-  }
-}
-
-void _sendStatus(SendPort reply, int id, Status<Object?, Object?> status) {
-  switch (status) {
-    case Running(:final received, :final total, :final unit, :final step):
-      reply.send((
-        id,
-        #running,
-        Running<Object?, Object?>(null, received: received, total: total, unit: unit, step: step),
-      ));
-    case Warned(:final warning):
-      try {
-        reply.send((id, #warned, warning));
-      } catch (_) {
-        // A warning whose cause cannot cross goes as its text.
-        reply.send((id, #warned, NoteWarning('$warning')));
-      }
-    case _:
-  }
-}
-
-/// [error] as it crosses back: itself where it can, else as the error table's JSON.
-Object _encodeFailure(Object error, StackTrace trace) => (_CrossingError(error), '$trace');
-
-Object _encodeIfNeeded(Object error) {
+/// [create] as a worker isolate's setup: built here, so the closure copied to the isolate holds
+/// only [create]. Its worker is inited as a local one is; its cleanups run when the pool closes.
+Future<(FutureOr<T> Function(I, Work), Future<void> Function())> Function() _isolateSetup<I, T>(
+  Worker<I, T> Function() create,
+) => () async {
+  final setup = _Setup();
+  final worker = create();
   try {
-    // Probe whether it can be sent: a port to nowhere costs nothing.
-    final probe = RawReceivePort();
-    try {
-      probe.sendPort.send(error);
-    } finally {
-      probe.close();
-    }
-    return error;
-  } catch (_) {
-    return _errorJson(error);
+    await worker.init(setup);
+  } catch (e, st) {
+    await setup.end(Failed(null, e, st));
+    rethrow;
   }
-}
-
-/// An error on its way out of an isolate, sent whole where it can be.
-final class _CrossingError {
-  final Object payload;
-  final bool encoded;
-
-  _CrossingError._(this.payload, this.encoded);
-
-  factory _CrossingError(Object error) {
-    final sent = _encodeIfNeeded(error);
-    return _CrossingError._(sent, !identical(sent, error));
-  }
-}
-
-(Object, StackTrace) _decodeFailure(Object failure) {
-  final (crossing, trace) = failure as (Object, String);
-  final error = crossing as _CrossingError;
-  return (error.encoded ? _errorOf(error.payload) : error.payload, StackTrace.fromString(trace));
-}
+  return (worker.run, () => setup.end(const Done(null, null)));
+};

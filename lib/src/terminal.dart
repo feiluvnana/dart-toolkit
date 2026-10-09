@@ -1,235 +1,34 @@
-/// The terminal both UIs share: keys and the raw terminal, `Style` and the `Palette`, the
-/// `Tally` that models work in progress, the builder views and the `Choice` list model. `cli`
-/// and `tui` each import it, so a script that imports only `core` compiles none of it.
+/// What both UIs draw with: `Style` and the `Palette`, the `Tally` that models work in progress
+/// and the builder views. `cli` and `tui` each import it, so a script that imports only `core`
+/// compiles none of it; the keys and the raw terminal are `keys.dart`'s.
 library;
 
 import 'dart:async';
 import 'dart:collection';
-import 'dart:convert';
-import 'dart:ffi';
 import 'dart:io';
-import 'dart:isolate';
-import 'dart:typed_data';
 
 import 'core.dart';
 
-/// What an app hears: from the terminal a [KeyPress], [Char], [Paste], [Mouse] or [Resize], and its
-/// own messages ([M], from `app.send`) as a [Sent]. Sealed, so a `switch` over it is exhaustive.
-///
-/// {@category CLI}
-sealed class TuiEvent<M> {
-  const TuiEvent();
-}
-
-/// An app's own message, as `app.send` and `app.listen` deliver it.
-///
-/// {@category CLI}
-final class Sent<M> extends TuiEvent<M> {
-  final M message;
-
-  const Sent(this.message);
-
-  @override
-  bool operator ==(Object other) => other is Sent<M> && other.message == message;
-
-  @override
-  int get hashCode => message.hashCode;
-
-  @override
-  String toString() => 'Sent($message)';
-}
-
-/// The terminal is now [width] × [height]; the next frame is already drawn at that size.
-///
-/// {@category CLI}
-final class Resize extends TuiEvent<Never> {
-  final int width, height;
-
-  const Resize(this.width, this.height);
-
-  @override
-  bool operator ==(Object other) => other is Resize && other.width == width && other.height == height;
-
-  @override
-  int get hashCode => Object.hash(width, height);
-
-  @override
-  String toString() => 'Resize($width×$height)';
-}
-
-/// A key that is not text: arrows, Enter, F1–F12, and Ctrl+letter (`const KeyPress('c', ctrl: true)`).
-///
-/// {@category CLI}
-final class KeyPress extends TuiEvent<Never> {
-  /// `up`, `enter`, `f5`, … or the letter of a Ctrl combination.
-  final String name;
-  final bool ctrl, alt, shift;
-
-  const KeyPress(this.name, {this.ctrl = false, this.alt = false, this.shift = false});
-
-  static const up = KeyPress('up');
-  static const down = KeyPress('down');
-  static const left = KeyPress('left');
-  static const right = KeyPress('right');
-  static const home = KeyPress('home');
-  static const end = KeyPress('end');
-  static const pageUp = KeyPress('pageUp');
-  static const pageDown = KeyPress('pageDown');
-  static const insert = KeyPress('insert');
-  static const delete = KeyPress('delete');
-  static const enter = KeyPress('enter');
-  static const tab = KeyPress('tab');
-  static const backTab = KeyPress('tab', shift: true);
-  static const backspace = KeyPress('backspace');
-  static const esc = KeyPress('esc');
-
-  /// Function key [n], 1–12; match it as `const KeyPress('f5')`.
-  factory KeyPress.f(int n, {bool ctrl = false, bool alt = false, bool shift = false}) =>
-      KeyPress('f$n', ctrl: ctrl, alt: alt, shift: shift);
-
-  @override
-  bool operator ==(Object other) =>
-      other is KeyPress && other.name == name && other.ctrl == ctrl && other.alt == alt && other.shift == shift;
-
-  @override
-  int get hashCode => Object.hash(name, ctrl, alt, shift);
-
-  @override
-  String toString() => '${ctrl ? 'ctrl+' : ''}${alt ? 'alt+' : ''}${shift ? 'shift+' : ''}$name';
-}
-
-/// Typed text: one character (a grapheme's first code point and what joins it), maybe with Alt.
-///
-/// {@category CLI}
-final class Char extends TuiEvent<Never> {
-  final String char;
-  final bool alt;
-
-  const Char(this.char, {this.alt = false});
-
-  @override
-  bool operator ==(Object other) => other is Char && other.char == char && other.alt == alt;
-
-  @override
-  int get hashCode => Object.hash(char, alt);
-
-  @override
-  String toString() => '${alt ? 'alt+' : ''}$char';
-}
-
-/// Text pasted in one piece (bracketed paste), newlines and all.
-///
-/// {@category CLI}
-final class Paste extends TuiEvent<Never> {
-  final String text;
-
-  const Paste(this.text);
-
-  @override
-  bool operator ==(Object other) => other is Paste && other.text == text;
-
-  @override
-  int get hashCode => text.hashCode;
-
-  @override
-  String toString() => 'Paste(${text.length} chars)';
-}
-
-/// What a [Mouse] event did.
-///
-/// {@category CLI}
-enum MouseKind { press, release, drag, move, wheelUp, wheelDown }
-
-/// A click, drag or wheel turn at column [x], row [y] (0-based, of the screen).
-///
-/// Only with `mouse: true` on `Tui.run`, which is full-screen.
-///
-/// {@category CLI}
-final class Mouse extends TuiEvent<Never> {
-  final int x, y;
-  final MouseKind kind;
-
-  /// 0 left, 1 middle, 2 right.
-  final int button;
-  final bool ctrl, alt, shift;
-
-  const Mouse(this.x, this.y, this.kind, {this.button = 0, this.ctrl = false, this.alt = false, this.shift = false});
-
-  @override
-  bool operator ==(Object other) =>
-      other is Mouse &&
-      other.x == x &&
-      other.y == y &&
-      other.kind == kind &&
-      other.button == button &&
-      other.ctrl == ctrl &&
-      other.alt == alt &&
-      other.shift == shift;
-
-  @override
-  int get hashCode => Object.hash(x, y, kind, button, ctrl, alt, shift);
-
-  @override
-  String toString() => 'Mouse(${kind.name} $x,$y)';
-}
-
-/// What takes the focus: keys reach it before an app's `update`, Tab moves between the ones on
-/// screen, a click gives it. `Field`, `Scroll`, `Log` and [Choice] are; a custom widget mixes it
-/// in and calls `canvas.focus(this)` when it paints.
-///
-/// ```dart
-/// final class Dial extends Widget with Focusable {
-///   int value = 0;
-///   @override
-///   bool handle(TuiEvent<Object?> event) => switch (event) {
-///     KeyPress.up => (value++, true).$2,
-///     _ => false,
-///   };
-///   @override
-///   void paint(Canvas canvas) => canvas.text(0, 0, '$value', canvas.focus(this) ? canvas.palette.accent : null);
-/// }
-/// ```
-///
-/// {@category CLI}
-mixin Focusable {
-  /// Handles a key, character or paste; `true` when it used it, so `update` does not see it.
-  bool handle(TuiEvent<Object?> event) => false;
-
-  /// A click or a wheel turn at [x], [y] inside it.
-  void mouse(Mouse event, int x, int y) {}
-}
-
-/// Not API: the key reader `cli` and `tui` share, and the terminal facts both draw by.
-///
-/// An instance turns a terminal's bytes into events: [add] each chunk, [cancel] at the end; a
-/// lone ESC is the Esc key once nothing follows it for 30 ms.
+/// Not API: the terminal facts `cli` and `tui` both draw by.
 final class TerminalBridge {
-  final void Function(List<TuiEvent<Never>> events) _onEvents;
-  final _Decoder _decoder;
-  Timer? _esc;
-
-  /// [position] hears a cursor position report (1-based row and column), [kitty] the answer
-  /// that the kitty keyboard protocol is spoken; neither is an event.
-  TerminalBridge(this._onEvents, {void Function(int row, int column)? position, void Function()? kitty})
-    : _decoder = _Decoder(position, kitty);
-
-  void add(List<int> bytes) {
-    _esc?.cancel();
-    _onEvents(_decoder.add(bytes));
-    if (_decoder.isWaiting) _esc = Timer(const Duration(milliseconds: 30), () => _onEvents(_decoder.flush()));
-  }
-
-  void cancel() => _esc?.cancel();
-
-  /// What a signal caught while the terminal is open runs: the reader that is in charge of it.
-  static void Function()? interrupted;
-
   /// The `Tui` app on screen, while one runs: a console display then draws no live region.
   static Object? app;
 
-  /// The scope's terminal (`Io.scope(terminal:)`), else the controlling one, or `null` when
-  /// there is none.
-  static Terminal? connect() => IoBridge.terminal ?? (Platform.isWindows ? _WinConsole.connect() : _Tty.connect());
+  /// [parts] that are not empty, two spaces apart: a line's tail.
+  static String joined(Iterable<String> parts) => parts.where((p) => p.isNotEmpty).join('  ');
+
+  /// A line [columns] wide of [head] (a label, kept), a bar of [fraction] in what is left and a
+  /// tail [tailWidth] wide: the bar gives way first, then the tail. Answers the head cut to fit
+  /// and the bar's glyphs (`''` for none), for a console line and a `Board` row alike.
+  static (String head, String bar) fit(int columns, String head, double? fraction, int tailWidth, Palette p) {
+    final tail = tailWidth == 0 ? 0 : tailWidth + 2;
+    final keep = columns * 2 ~/ 5 > columns - tail - (fraction == null ? 0 : 8)
+        ? columns * 2 ~/ 5
+        : columns - tail - (fraction == null ? 0 : 8);
+    final h = Style.truncate(head, keep < 1 ? 1 : keep, ellipsis: p.ellipsis);
+    final room = columns - Style.width(h) - tail - 2;
+    return (h, fraction == null || room < 4 ? '' : p.bar.draw(fraction, room < 20 ? room : 20));
+  }
 
   /// How a value is named where it is shown: an enum by its `name`, a duration humanized, a date
   /// in ISO 8601, a row (a map) by its cells; a list's default label and a prompt's hint.
@@ -240,28 +39,6 @@ final class TerminalBridge {
     Map() => value.values.map((v) => v ?? '').join(' '),
     _ => '$value',
   };
-
-  /// Whether [t] is the process's terminal, where ^C can be raised as the SIGINT it would be.
-  static bool isTty(Terminal t) => t is _Tty || t is _WinConsole;
-
-  /// ^C, which raw mode reads as a byte: on the process's own terminal it is raised as the SIGINT
-  /// it would have been (a `Cli` then leaves through its cleanups with 130, and the terminal's
-  /// watch ends the reader); elsewhere [interrupt] runs.
-  static void ctrlC(Terminal term, void Function() interrupt) {
-    if (isTty(term) && !Platform.isWindows && Process.killPid(pid, ProcessSignal.sigint)) return;
-    interrupt();
-  }
-
-  /// Whether a picker's filter [query] (lowercased) finds [label] (lowercased): a substring, else
-  /// a subsequence. Without building the ranges: it runs on every item at every key.
-  static bool matches(String label, String query) {
-    if (label.contains(query)) return true;
-    var q = 0;
-    for (var i = 0; i < label.length && q < query.length; i++) {
-      if (label.codeUnitAt(i) == query.codeUnitAt(q)) q++;
-    }
-    return q == query.length;
-  }
 
   /// Colours the process's terminal shows, from the environment: `NO_COLOR` or a scope's
   /// `color: false` leaves attributes only (0). A scope's terminal shows its own.
@@ -290,7 +67,7 @@ final class TerminalBridge {
     return Platform.isWindows
         ? Env.get<String>('WT_SESSION', or: '').isNotEmpty ||
               Env.get<String>('TERM_PROGRAM', or: '').isNotEmpty ||
-              _WinConsole._isUtf8CodePage()
+              _utf8CodePage()
         : Env.get<String>('TERM', or: '') != 'linux' &&
               first(const ['LC_ALL', 'LC_CTYPE', 'LANG']).toLowerCase().replaceAll('-', '').contains('utf8');
   }();
@@ -314,9 +91,6 @@ final class TerminalBridge {
 
   /// [palette] laid over [base]: what a nested theme's unset tokens take.
   static Palette over(Palette palette, Palette base) => palette._over(base);
-
-  /// Where [choice] was drawn: what a widget keeps between frames.
-  static ChoiceLayout layout(Choice<Object?> choice) => choice._layout;
 
   /// The sequence that sets exactly [style] from a reset, at [depth] colours.
   static String sgrOf(Style style, int depth) => style._sgr(depth);
@@ -457,574 +231,6 @@ final class TerminalBridge {
   static int _cube(int c) => c == 0 ? 0 : 55 + c * 40;
 }
 
-/// The process's terminal, through `/dev/tty`: input still works when stdin is a pipe, and
-/// nothing reaches stdout, so `app | next` and `app > out` carry only what the app prints.
-final class _Tty implements Terminal {
-  final RandomAccessFile _out;
-  String? _saved;
-
-  /// The keys, read by a `cat` of the terminal: a read in this process cannot be stopped once
-  /// the modes are restored, and would hold the exit until Enter; a child is killed mid-read.
-  Process? _reader;
-  int _readerPid = -1;
-  StreamController<List<int>> _input = StreamController.broadcast();
-  final StreamController<void> _resized = StreamController.broadcast();
-  final List<StreamSubscription<Object?>> _subs = [];
-  (int, int)? _size;
-
-  _Tty._(this._out);
-
-  /// The controlling terminal, or `null` when there is none (or on Windows).
-  static _Tty? connect() {
-    if (Platform.isWindows) return null;
-    try {
-      return _Tty._(File('/dev/tty').openSync(mode: FileMode.writeOnly));
-    } catch (_) {
-      return null;
-    }
-  }
-
-  static String _stty(List<String> args) {
-    final r = Process.runSync('stty', [Platform.isMacOS ? '-f' : '-F', '/dev/tty', ...args]);
-    if (r.exitCode != 0) throw StateError('stty ${args.join(' ')}: ${r.stderr}'.trim());
-    return '${r.stdout}'.trim();
-  }
-
-  (int, int) get _dims => _size ??=
-      _terminalSize() ??
-      () {
-        try {
-          final rc = _stty(['size']).split(' ').map(int.parse).toList();
-          return (rc[1], rc[0]);
-        } catch (_) {
-          return (80, 24);
-        }
-      }();
-
-  /// The size stdout or stderr reports, when either is the terminal: no process to ask.
-  static (int, int)? _terminalSize() {
-    for (final s in [stdout, stderr]) {
-      try {
-        if (s.hasTerminal) return (s.terminalColumns, s.terminalLines);
-      } catch (_) {} // no size from this terminal: the defaults stand
-    }
-    return null;
-  }
-
-  @override
-  int get width => _dims.$1;
-
-  @override
-  int get height => _dims.$2;
-
-  @override
-  int get colors => TerminalBridge.depth();
-
-  @override
-  bool get unicode => TerminalBridge.unicode;
-
-  @override
-  Stream<List<int>> get input => _input.stream;
-
-  @override
-  Stream<void> get resized => _resized.stream;
-
-  /// One process from open to close: it prints the saved modes, sets raw mode, prints the
-  /// reader's pid, then reads the keys — a `cat` it kills when our end of its stdin closes, so
-  /// the reader dies with this process even after `kill -9` and never reads the shell's input.
-  /// `-isig`: ^C and ^Z arrive as keys; `min 1 time 0`: each key is read as it comes, and cat
-  /// would take a read of nothing for the end of input.
-  static const _session = r'''
-stty -g < /dev/tty >&2 || exit 1
-stty -icanon -echo -isig -ixon -iexten min 1 time 0 < /dev/tty || exit 1
-cat /dev/tty & echo $! >&2
-cat >/dev/null
-kill $!
-''';
-
-  @override
-  Future<void> open() async {
-    if (_input.isClosed) _input = StreamController.broadcast();
-    final reader = _reader = await Process.start('/bin/sh', ['-c', _session]);
-    final lines = <String>[];
-    final ready = Completer<void>();
-    reader.stdout.listen(_input.add);
-    reader.stderr.transform(utf8.decoder).transform(const LineSplitter()).listen((line) {
-      if (lines.length < 2) lines.add(line);
-      if (lines.length == 2 && !ready.isCompleted) ready.complete();
-    }, onDone: () => ready.isCompleted ? null : ready.complete());
-    await ready.future;
-    if (lines.length < 2 || int.tryParse(lines[1]) == null) {
-      _reader = null;
-      throw StateError('stty cannot set up /dev/tty: ${lines.join(' ')}'.trim());
-    }
-    _saved = lines[0];
-    _readerPid = int.parse(lines[1]);
-    void interrupt(ProcessSignal _) => TerminalBridge.interrupted?.call();
-    _subs.addAll([
-      ProcessSignal.sigwinch.watch().listen((_) {
-        _size = null;
-        _resized.add(null);
-      }),
-      ProcessSignal.sigint.watch().listen(interrupt),
-      ProcessSignal.sigterm.watch().listen(interrupt),
-    ]);
-  }
-
-  @override
-  void close() {
-    for (final s in _subs) {
-      s.cancel();
-    }
-    _subs.clear();
-    // Before the modes are restored, so it never reads a line meant for what runs next.
-    if (_readerPid > 0) Process.killPid(_readerPid, ProcessSignal.sigkill);
-    _reader?.stdin.close().ignore();
-    _reader = null;
-    _readerPid = -1;
-    if (_saved case final saved?) {
-      _saved = null;
-      try {
-        _stty([saved]);
-      } catch (_) {} // best-effort: the tty may be gone already
-    }
-    try {
-      _out.closeSync();
-    } catch (_) {} // best-effort: the tty may be gone already
-  }
-
-  @override
-  void write(String data) {
-    try {
-      _out.writeFromSync(utf8.encode(data));
-    } catch (_) {} // best-effort: the tty may be gone already
-  }
-}
-
-/// The Windows console, using SetConsoleMode and raw VT sequences.
-final class _WinConsole implements Terminal {
-  static final _k32 = DynamicLibrary.open('kernel32.dll');
-  static final _getStdHandle = _k32.lookupFunction<Pointer<Void> Function(Int32), Pointer<Void> Function(int)>(
-    'GetStdHandle',
-  );
-  static final _getConsoleMode = _k32
-      .lookupFunction<Int32 Function(Pointer<Void>, Pointer<Uint32>), int Function(Pointer<Void>, Pointer<Uint32>)>(
-        'GetConsoleMode',
-      );
-  static final _setConsoleMode = _k32
-      .lookupFunction<Int32 Function(Pointer<Void>, Uint32), int Function(Pointer<Void>, int)>('SetConsoleMode');
-  static final _getConsoleOutputCP = _k32.lookupFunction<Uint32 Function(), int Function()>('GetConsoleOutputCP');
-  static final _localAlloc = _k32
-      .lookupFunction<Pointer<Void> Function(Uint32, IntPtr), Pointer<Void> Function(int, int)>('LocalAlloc');
-  static final _localFree = _k32
-      .lookupFunction<Pointer<Void> Function(Pointer<Void>), Pointer<Void> Function(Pointer<Void>)>('LocalFree');
-
-  static bool _isUtf8CodePage() {
-    try {
-      return _getConsoleOutputCP() == 65001;
-    } catch (_) {
-      // best-effort code page check
-      return false;
-    }
-  }
-
-  int _savedInMode = 0;
-  int _savedErrMode = 0;
-  bool _isOpen = false;
-  Isolate? _readerIsolate;
-  ReceivePort? _receivePort;
-  StreamController<List<int>> _input = StreamController.broadcast();
-  final StreamController<void> _resized = StreamController.broadcast();
-  Timer? _resizeTimer;
-  (int, int)? _lastDims;
-
-  _WinConsole._();
-
-  static _WinConsole? connect() {
-    if (!Platform.isWindows) return null;
-    final hIn = _getStdHandle(-10);
-    final hErr = _getStdHandle(-12);
-    if (hIn.address == 0 || hErr.address == 0) return null;
-    final mode = _localAlloc(0x0040, 4).cast<Uint32>();
-    try {
-      if (_getConsoleMode(hIn, mode) == 0) return null;
-      if (_getConsoleMode(hErr, mode) == 0) return null;
-      return _WinConsole._();
-    } catch (_) {
-      // not a console
-      return null;
-    } finally {
-      _localFree(mode.cast());
-    }
-  }
-
-  (int, int) get _dims {
-    final size = _Tty._terminalSize();
-    if (size != null) return size;
-    return (80, 24);
-  }
-
-  @override
-  int get width => _dims.$1;
-
-  @override
-  int get height => _dims.$2;
-
-  @override
-  int get colors => TerminalBridge.depth();
-
-  @override
-  bool get unicode => TerminalBridge.unicode;
-
-  @override
-  Stream<List<int>> get input => _input.stream;
-
-  @override
-  Stream<void> get resized => _resized.stream;
-
-  @override
-  Future<void> open() async {
-    if (_isOpen) return;
-    if (_input.isClosed) _input = StreamController.broadcast();
-    final hIn = _getStdHandle(-10);
-    final hErr = _getStdHandle(-12);
-    final modeIn = _localAlloc(0x0040, 4).cast<Uint32>();
-    final modeErr = _localAlloc(0x0040, 4).cast<Uint32>();
-    try {
-      if (_getConsoleMode(hIn, modeIn) != 0) {
-        _savedInMode = modeIn.value;
-        // ENABLE_VIRTUAL_TERMINAL_INPUT (0x0200) | ENABLE_WINDOW_INPUT (0x0008)
-        // Disable ENABLE_PROCESSED_INPUT (0x0001) | ENABLE_LINE_INPUT (0x0002) | ENABLE_ECHO_INPUT (0x0004)
-        final rawIn = (_savedInMode | 0x0200 | 0x0008) & ~(0x0001 | 0x0002 | 0x0004);
-        _setConsoleMode(hIn, rawIn);
-      }
-      if (_getConsoleMode(hErr, modeErr) != 0) {
-        _savedErrMode = modeErr.value;
-        // ENABLE_PROCESSED_OUTPUT (0x0001) | ENABLE_WRAP_AT_EOL_OUTPUT (0x0002) | ENABLE_VIRTUAL_TERMINAL_PROCESSING (0x0004)
-        final rawErr = _savedErrMode | 0x0001 | 0x0002 | 0x0004;
-        _setConsoleMode(hErr, rawErr);
-      }
-    } finally {
-      _localFree(modeIn.cast());
-      _localFree(modeErr.cast());
-    }
-    _isOpen = true;
-
-    final port = _receivePort = ReceivePort();
-    _readerIsolate = await Isolate.spawn(_readConsoleStdin, port.sendPort, debugName: 'WinConsole.reader');
-    port.listen((message) {
-      if (message is! List<int>) return;
-      // ^C is the interrupt where something is in charge of it, and then not a key as well.
-      final interrupt = TerminalBridge.interrupted;
-      final keys = interrupt != null && message.contains(3)
-          ? [
-              for (final b in message)
-                if (b != 3) b,
-            ]
-          : message;
-      if (!identical(keys, message)) interrupt!();
-      if (keys.isNotEmpty && !_input.isClosed) _input.add(keys);
-    });
-
-    _lastDims = _dims;
-    _resizeTimer = Timer.periodic(const Duration(milliseconds: 200), (_) {
-      final current = _dims;
-      if (current != _lastDims) {
-        _lastDims = current;
-        if (!_resized.isClosed) _resized.add(null);
-      }
-    });
-  }
-
-  @override
-  void close() {
-    _resizeTimer?.cancel();
-    _resizeTimer = null;
-    if (_readerIsolate != null) {
-      _readerIsolate!.kill(priority: Isolate.immediate);
-      _readerIsolate = null;
-    }
-    _receivePort?.close();
-    _receivePort = null;
-    if (_isOpen) {
-      _isOpen = false;
-      final hIn = _getStdHandle(-10);
-      final hErr = _getStdHandle(-12);
-      if (_savedInMode != 0) {
-        _setConsoleMode(hIn, _savedInMode);
-        _savedInMode = 0;
-      }
-      if (_savedErrMode != 0) {
-        _setConsoleMode(hErr, _savedErrMode);
-        _savedErrMode = 0;
-      }
-    }
-  }
-
-  @override
-  void write(String data) {
-    try {
-      stderr.write(data);
-    } catch (_) {} // best-effort console write
-  }
-}
-
-void _readConsoleStdin(SendPort send) {
-  final k32 = DynamicLibrary.open('kernel32.dll');
-  final getStdHandle = k32.lookupFunction<Pointer<Void> Function(Int32), Pointer<Void> Function(int)>('GetStdHandle');
-  final readFile = k32
-      .lookupFunction<
-        Int32 Function(Pointer<Void>, Pointer<Uint8>, Uint32, Pointer<Uint32>, Pointer<Void>),
-        int Function(Pointer<Void>, Pointer<Uint8>, int, Pointer<Uint32>, Pointer<Void>)
-      >('ReadFile');
-  final localAlloc = k32.lookupFunction<Pointer<Void> Function(Uint32, IntPtr), Pointer<Void> Function(int, int)>(
-    'LocalAlloc',
-  );
-  final localFree = k32.lookupFunction<Pointer<Void> Function(Pointer<Void>), Pointer<Void> Function(Pointer<Void>)>(
-    'LocalFree',
-  );
-
-  final hIn = getStdHandle(-10);
-  final buf = localAlloc(0x0040, 1024).cast<Uint8>();
-  final read = localAlloc(0x0040, 4).cast<Uint32>();
-  try {
-    while (true) {
-      if (readFile(hIn, buf, 1024, read, nullptr) == 0) break;
-      final count = read.value;
-      if (count > 0) {
-        send.send(Uint8List.fromList(buf.asTypedList(count)));
-      }
-    }
-  } finally {
-    localFree(buf.cast());
-    localFree(read.cast());
-  }
-}
-
-/// Bytes in, events out. Holds a partial sequence until the next chunk, or until [flush] — the
-/// ESC timeout — says a lone ESC was the key.
-final class _Decoder {
-  final void Function(int row, int column)? _position;
-  final void Function()? _kitty;
-  final List<int> _pending = [];
-  final List<int> _paste = [];
-  bool _inPaste = false;
-
-  _Decoder([this._position, this._kitty]);
-
-  /// Whether a lone ESC (or a sequence it starts, cut off) waits on more bytes.
-  bool get isWaiting => _pending.isNotEmpty && _pending.first == 0x1b && !_inPaste;
-
-  List<TuiEvent<Never>> add(List<int> bytes) {
-    _pending.addAll(bytes);
-    final out = <TuiEvent<Never>>[];
-    var i = 0;
-    while (i < _pending.length) {
-      final n = _inPaste ? _pasteStep(i, out) : _step(i, out);
-      if (n == 0) break;
-      i += n;
-    }
-    _pending.removeRange(0, i);
-    return out;
-  }
-
-  /// What waits, read as typed: a lone ESC is Esc, a cut-off sequence is its bytes. Only an ESC
-  /// times out: a character cut mid-way, or the end of a paste, waits for the rest.
-  List<TuiEvent<Never>> flush() {
-    if (_pending.isEmpty || _inPaste || _pending.first != 0x1b) return const [];
-    final bytes = List.of(_pending);
-    _pending.clear();
-    if (bytes.length == 1) return const [KeyPress.esc];
-    final rest = _Decoder().add(bytes.sublist(1));
-    return [if (rest.isEmpty) KeyPress.esc, for (final e in rest) _alt(e)];
-  }
-
-  static TuiEvent<Never> _alt(TuiEvent<Never> e) => switch (e) {
-    Char(:final char) => Char(char, alt: true),
-    KeyPress(:final name, :final ctrl, :final shift) => KeyPress(name, ctrl: ctrl, alt: true, shift: shift),
-    _ => e,
-  };
-
-  int _pasteStep(int i, List<TuiEvent<Never>> out) {
-    const end = [0x1b, 0x5b, 0x32, 0x30, 0x31, 0x7e]; // ESC [ 2 0 1 ~
-    final b = _pending[i];
-    if (b == 0x1b) {
-      for (var k = 0; k < end.length; k++) {
-        if (i + k >= _pending.length) return 0;
-        if (_pending[i + k] != end[k]) {
-          _paste.add(b);
-          return 1;
-        }
-      }
-      _inPaste = false;
-      out.add(Paste(utf8.decode(_paste, allowMalformed: true).replaceAll('\r\n', '\n').replaceAll('\r', '\n')));
-      _paste.clear();
-      return end.length;
-    }
-    _paste.add(b);
-    return 1;
-  }
-
-  /// Decodes one event at [i]; returns the bytes it used, or 0 when it needs more.
-  int _step(int i, List<TuiEvent<Never>> out) {
-    final b = _pending[i];
-    if (b == 0x1b) return _escape(i, out);
-    if (b < 0x80) {
-      out.add(_byte(b));
-      return 1;
-    }
-    final len = b >= 0xf0 ? 4 : (b >= 0xe0 ? 3 : (b >= 0xc0 ? 2 : 1));
-    // A byte that does not continue the character ends it, malformed; the end of a read waits.
-    var n = 1;
-    while (n < len && i + n < _pending.length && _pending[i + n] & 0xc0 == 0x80) {
-      n++;
-    }
-    if (n < len && i + n == _pending.length) return 0;
-    final text = utf8.decode(_pending.sublist(i, i + n), allowMalformed: true);
-    // A combining mark or joiner belongs to the character before it.
-    if (out.isNotEmpty && out.last is Char && IoBridge.runeWidth(text.runes.first) == 0) {
-      final last = out.removeLast() as Char;
-      out.add(Char(last.char + text, alt: last.alt));
-    } else {
-      out.add(Char(text));
-    }
-    return n;
-  }
-
-  static TuiEvent<Never> _byte(int b) => switch (b) {
-    0x0d || 0x0a => KeyPress.enter,
-    0x09 => KeyPress.tab,
-    0x7f || 0x08 => KeyPress.backspace,
-    0x00 => const KeyPress(' ', ctrl: true),
-    < 0x1b => KeyPress(String.fromCharCode(b + 0x60), ctrl: true),
-    < 0x20 => KeyPress(String.fromCharCode(b + 0x40), ctrl: true),
-    _ => Char(String.fromCharCode(b)),
-  };
-
-  /// The keys an SS3 (`ESC O x`) or CSI (`ESC [ … x`) sequence names by its final byte.
-  static const _finals = {
-    0x41: 'up', 0x42: 'down', 0x43: 'right', 0x44: 'left', 0x48: 'home', 0x46: 'end', //
-    0x50: 'f1', 0x51: 'f2', 0x52: 'f3', 0x53: 'f4',
-  };
-
-  int _escape(int i, List<TuiEvent<Never>> out) {
-    if (i + 1 >= _pending.length) return 0;
-    final next = _pending[i + 1];
-    if (next == 0x5b) return _csi(i, out);
-    if (next == 0x4f) {
-      // SS3: ESC O x
-      if (i + 2 >= _pending.length) return 0;
-      if (_finals[_pending[i + 2]] case final name?) out.add(KeyPress(name));
-      return 3;
-    }
-    if (next == 0x1b) {
-      out.add(KeyPress.esc);
-      return 1;
-    }
-    // ESC then a key: Alt+key.
-    final inner = <TuiEvent<Never>>[];
-    final used = _step(i + 1, inner);
-    if (used == 0) return 0;
-    out.addAll(inner.map(_alt));
-    return 1 + used;
-  }
-
-  int _csi(int i, List<TuiEvent<Never>> out) {
-    var j = i + 2;
-    if (j < _pending.length && _pending[j] == 0x3c) return _mouse(i, out);
-    while (j < _pending.length && (_pending[j] < 0x40 || _pending[j] > 0x7e)) {
-      j++;
-    }
-    if (j >= _pending.length) return 0;
-    final raw = String.fromCharCodes(_pending.sublist(i + 2, j));
-    final params = raw.split(';');
-    final last = _pending[j];
-    final used = j - i + 1;
-    // Answers to queries: the kitty protocol's `?flags u`, a cursor position `row;col R`.
-    if (raw.startsWith('?') && last == 0x75) {
-      _kitty?.call();
-      return used;
-    }
-    if (last == 0x52 && params.length == 2 && _position != null && (int.tryParse(params[0]) ?? 0) > 1) {
-      _position(int.parse(params[0]), int.tryParse(params[1]) ?? 1);
-      return used;
-    }
-    if (last == 0x75) {
-      _kittyKey(params, out);
-      return used;
-    }
-    final first = int.tryParse(params[0]) ?? 1;
-    final mod = params.length > 1 ? (int.tryParse(params[1]) ?? 1) - 1 : 0;
-    final (shift, alt, ctrl) = (mod & 1 != 0, mod & 2 != 0, mod & 4 != 0);
-    final name = switch (last) {
-      0x5a => 'tab', // ESC [ Z: Shift+Tab
-      0x7e => switch (first) {
-        1 || 7 => 'home',
-        2 => 'insert',
-        3 => 'delete',
-        4 || 8 => 'end',
-        5 => 'pageUp',
-        6 => 'pageDown',
-        11 || 12 || 13 || 14 || 15 => 'f${first - 10}',
-        17 || 18 || 19 || 20 || 21 => 'f${first - 11}',
-        23 || 24 => 'f${first - 12}',
-        _ => null,
-      },
-      _ => _finals[last],
-    };
-    if (last == 0x7e && first == 200) {
-      _inPaste = true;
-      return used;
-    }
-    if (name != null) out.add(KeyPress(name, ctrl: ctrl, alt: alt, shift: shift || last == 0x5a));
-    return used;
-  }
-
-  /// A key in the kitty keyboard protocol: ESC [ code ; mods u.
-  void _kittyKey(List<String> params, List<TuiEvent<Never>> out) {
-    final code = int.tryParse(params[0].split(':').first) ?? 0;
-    final mod = params.length > 1 ? (int.tryParse(params[1].split(':').first) ?? 1) - 1 : 0;
-    final (shift, alt, ctrl) = (mod & 1 != 0, mod & 2 != 0, mod & 4 != 0);
-    final name = switch (code) {
-      13 => 'enter',
-      9 => 'tab',
-      127 || 8 => 'backspace',
-      27 => 'esc',
-      _ => null,
-    };
-    if (name != null) return out.add(KeyPress(name, ctrl: ctrl, alt: alt, shift: shift));
-    if (code < 0x20) return;
-    final char = String.fromCharCode(code);
-    out.add(
-      ctrl ? KeyPress(char, ctrl: true, alt: alt, shift: shift) : Char(shift ? char.toUpperCase() : char, alt: alt),
-    );
-  }
-
-  /// SGR mouse: ESC [ < b ; x ; y (M | m).
-  int _mouse(int i, List<TuiEvent<Never>> out) {
-    var j = i + 3;
-    while (j < _pending.length && _pending[j] != 0x4d && _pending[j] != 0x6d) {
-      j++;
-    }
-    if (j >= _pending.length) return 0;
-    final p = String.fromCharCodes(_pending.sublist(i + 3, j)).split(';').map(int.tryParse).toList();
-    if (p.length == 3 && p.every((v) => v != null)) {
-      final (b, x, y) = (p[0]!, p[1]! - 1, p[2]! - 1);
-      final kind = b & 64 != 0
-          ? (b & 1 == 0 ? MouseKind.wheelUp : MouseKind.wheelDown)
-          : b & 32 != 0 && b & 3 == 3
-          ? MouseKind.move
-          : b & 32 != 0
-          ? MouseKind.drag
-          : _pending[j] == 0x6d
-          ? MouseKind.release
-          : MouseKind.press;
-      out.add(Mouse(x, y, kind, button: b & 3, shift: b & 4 != 0, alt: b & 8 != 0, ctrl: b & 16 != 0));
-    }
-    return j - i + 1;
-  }
-}
-
 /// A terminal colour: one of the sixteen named ones, a 256-palette index, or 24-bit RGB.
 ///
 /// A terminal that cannot show it gets the nearest it can: RGB → 256 → 16 → none (`NO_COLOR`).
@@ -1121,7 +327,17 @@ final class Style {
   static String truncate(String text, int width, {String ellipsis = '…'}) {
     if (ellipsis == '…' || TextBridge.width(text) <= width) return TextBridge.truncate(text, width);
     final room = width - TextBridge.width(ellipsis) + 1;
-    if (room < 1) return TextBridge.truncate(ellipsis, width);
+    if (room < 1) {
+      // Not even the ellipsis fits: as much of it as does, never the default glyph.
+      final out = StringBuffer();
+      var used = 0;
+      for (final rune in TextBridge.stripAnsi(ellipsis).runes) {
+        used += IoBridge.runeWidth(rune);
+        if (used > width) break;
+        out.writeCharCode(rune);
+      }
+      return '$out';
+    }
     final cut = TextBridge.truncate(text, room);
     final at = cut.lastIndexOf('…');
     return at < 0 ? cut : cut.replaceRange(at, at + 1, ellipsis);
@@ -1528,7 +744,12 @@ final class TallyItem {
   final Duration _started;
   Duration? _ended;
   bool _ran = false;
-  final _meter = _Meter();
+
+  /// Its rate while it runs; an item that has ended keeps none.
+  _Meter? _meter;
+
+  /// What it adds to the tally's sized total, or -1 while its size is unknown.
+  int _counted = -1;
 
   TallyItem._(this._tally, this.item, this._label, this._status, this._started);
 
@@ -1553,7 +774,7 @@ final class TallyItem {
   Duration get elapsed => (_ended ?? _tally._now) - _started;
 
   /// [unit]s per second over the last second; `null` until known.
-  double? get rate => isOver ? null : _meter.rate;
+  double? get rate => isOver ? null : _meter?.rate;
 
   /// Time left at [rate], or `null` while either is unknown.
   Duration? get eta => switch ((_total, rate)) {
@@ -1566,12 +787,13 @@ final class TallyItem {
 }
 
 /// The one model of work in progress, with no renderer: it hears [Status]es (from a [Task], a
-/// [Batch], or [add] by hand) and keeps the items, the counts, the amounts, a windowed rate, the
-/// time left and the failures. The console and the TUI both draw a tally: `show()`,
+/// [Batch], or [add] by hand) and keeps the counts, the amounts, a windowed rate, the time left,
+/// the failures and the items under way. The console and the TUI both draw a tally: `show()`,
 /// `Console.bar` and `Board(tally)`.
 ///
 /// Producers report amounts; the tally measures rates over a sliding second, sampled on every
-/// [sample] (a display's tick), so a stall decays. Time is [Clock.current]'s.
+/// [sample] (a display's tick), so a stall decays. Time is [Clock.current]'s. An item that has
+/// ended is let go once no row shows it: a million items cost what the running ones do.
 ///
 /// ```dart
 /// final tally = Tally.batch(urls.parallelize((u) => u.download(into: 'out')));
@@ -1589,23 +811,25 @@ final class Tally {
   /// Whether this is one task's: its statuses are about one item, drawn as one line.
   final bool isTask;
 
+  /// The items not yet ended, by their slot in the batch (equal inputs apart), else their item.
   final _items = <Object?, TallyItem>{};
-  final _order = <TallyItem>[];
   final _live = <TallyItem>{};
   final _failures = <Failed<Object?, Object?>>[];
   final _notes = <Status<Object?, Object?>>[];
-  final _values = <Object?>[];
   final _changes = StreamController<Status<Object?, Object?>>.broadcast(sync: true);
   final _over = Completer<void>();
   final _amounts = _Meter(), _ends = _Meter();
   final List<TallyItem> _shown = [];
   TallyItem? _latest;
   Duration? _endedAt;
-  int _done = 0, _failed = 0, _skipped = 0, _stopped = 0;
+  int _heard = 0, _done = 0, _failed = 0, _skipped = 0, _stopped = 0;
 
   /// Bytes received now, as the latest reports say; and moved in all, a restart not taking any back.
   int _received = 0, _moved = 0;
   bool _bytes = false;
+
+  /// The sizes known so far, summed, and how many items have none yet.
+  int _sized = 0, _unsized = 0;
 
   /// A tally fed by hand with [add], of [count] items when that is known; [close] ends it.
   Tally({int? count}) : _given = count, _known = null, isTask = false {
@@ -1625,7 +849,7 @@ final class Tally {
     _start;
     // The tally holds how it ended: a failure is in it, not an unhandled error.
     task.settled.ignore();
-    task.statuses.listen(_apply, onDone: _end);
+    task.statuses.listen((s) => _apply(s, null), onDone: _end);
   }
 
   /// [batch]'s statuses, one item each; the count is the batch's once it knows it. The same
@@ -1635,7 +859,11 @@ final class Tally {
   Tally._batch(Batch<Object?, Object?> batch) : _given = null, _known = (() => batch.count), isTask = false {
     _start;
     batch.settled.ignore();
-    batch.statuses.listen(_apply, onDone: _end);
+    if (StatusInternals.slotted(batch) case final slotted?) {
+      slotted.listen((s) => _apply(s.$2, s.$1), onDone: _end);
+    } else {
+      batch.statuses.listen((s) => _apply(s, s.item), onDone: _end);
+    }
   }
 
   static final _ofTask = Expando<Tally>('tally');
@@ -1644,12 +872,9 @@ final class Tally {
   Duration get _now => _clock.elapsed;
 
   /// Items in all: as given, as the batch knows it, or once it is over, as many as were heard.
-  int? get count => _given ?? _known?.call() ?? (isOver ? _order.length : null);
+  int? get count => _given ?? _known?.call() ?? (isOver ? _heard : null);
 
-  /// Every item heard of, in the order first heard.
-  List<TallyItem> get items => UnmodifiableListView(_order);
-
-  /// The item heard of last.
+  /// The item heard of last: a task's one item.
   TallyItem? get latest => _latest;
 
   /// Items ended, and of them done, failed, skipped and stopped.
@@ -1668,16 +893,8 @@ final class Tally {
   /// Bytes in all, once every item is known and sized; `null` before.
   int? get total {
     final n = count;
-    if (!_bytes || n == null || _order.length < n) return null;
-    var sum = 0;
-    for (final item in _order) {
-      if (item._size case final size?) {
-        sum += size;
-      } else {
-        return null;
-      }
-    }
-    return sum;
+    if (!_bytes || n == null || _heard < n || _unsized > 0) return null;
+    return _sized;
   }
 
   /// Bytes per second over the last second; `null` until known, or without bytes.
@@ -1689,7 +906,7 @@ final class Tally {
   /// Time left: by bytes when every size is known, else by items; `null` while unknown.
   Duration? get eta {
     if (isOver) return null;
-    if (isTask) return _order.firstOrNull?.eta;
+    if (isTask) return _latest?.eta;
     if ((total, rate) case (final all?, final r?) when r > 0) return _span((all - _received).clamp(0, all) / r);
     if ((count, itemRate) case (final n?, final r?) when r > 0) return _span((n - ended).clamp(0, n) / r);
     return null;
@@ -1716,17 +933,15 @@ final class Tally {
     _notes.add(status);
   }
 
-  /// Every [Done]'s value, in the order they came.
-  List<Object?> get values => UnmodifiableListView(_values);
-
   /// Each status as it is taken in, [Warned] notes included: what a display redraws on.
   Stream<Status<Object?, Object?>> get changes => _changes.stream;
 
-  /// Takes in [status], by hand. A tally that is over is a [StateError].
+  /// Takes in [status], by hand: statuses of one item share its `item`, and a status after the
+  /// one that ended it is another item's. A tally that is over is a [StateError].
   void add(Status<Object?, Object?> status) {
     if (isOver) throw StateError('Cannot add $status: the tally is closed');
     if (_known != null || isTask) throw StateError('Cannot add $status: the tally hears its own work');
-    _apply(status);
+    _apply(status, status.item);
   }
 
   /// Ends a tally fed by hand.
@@ -1741,7 +956,7 @@ final class Tally {
     _amounts.add(now, _moved);
     _ends.add(now, ended);
     for (final item in _live) {
-      item._meter.add(now, item._received);
+      item._meter?.add(now, item._received);
     }
   }
 
@@ -1774,25 +989,26 @@ final class Tally {
     }
     var more = 0;
     for (final item in _live) {
-      if (!shown.contains(item)) more++;
+      if (!placed.contains(item)) more++;
     }
     return (rows: List.unmodifiable(shown), more: more);
   }
 
-  void _apply(Status<Object?, Object?> status) {
+  /// Takes in [status] of the item at [key].
+  void _apply(Status<Object?, Object?> status, Object? key) {
     if (status is Warned) {
       _note(status);
       _changes.add(status);
       return;
     }
     final now = _now;
-    final key = isTask ? null : status.item;
-    final entry = _items[key] ??= () {
-      final made = TallyItem._(this, status.item, status.label, Waiting(status.item, label: status.label), now);
-      _order.add(made);
-      return made;
-    }();
-    if (entry.isOver) return;
+    var entry = _items[key];
+    if (entry == null) {
+      entry = TallyItem._(this, status.item, status.label, Waiting(status.item, label: status.label), now);
+      _heard++;
+      _unsized++;
+      if (!status.isFinal) _items[key] = entry;
+    }
     entry._label = status.label;
     switch (status) {
       case Running(:final received, :final total, :final unit, :final step):
@@ -1806,16 +1022,16 @@ final class Tally {
           if (entry._unit != Unit.bytes) _moved += received;
         }
         // A restart (a retry from zero) measures again from where it is.
-        if (received < entry._received || unit != entry._unit) entry._meter.reset();
+        final meter = entry._meter ??= _Meter();
+        if (received < entry._received || unit != entry._unit) meter.reset();
         entry
           .._received = received
           .._total = total
           .._unit = unit
           .._step = step;
-        entry._meter.add(now, received);
-      case Done(:final value):
+        meter.add(now, received);
+      case Done():
         _done++;
-        _values.add(value);
         // Done is all of it: the last report may have come a chunk before the end.
         if ((entry._unit, entry._total) case (Unit.bytes, final all?) when entry._received < all) {
           _received += all - entry._received;
@@ -1834,13 +1050,34 @@ final class Tally {
     }
     entry._status = status;
     if (status.isFinal) {
-      entry._ended = now;
+      entry
+        .._ended = now
+        .._meter = null;
       _live.remove(entry);
+      _items.remove(key);
       _ends.add(now, ended);
     }
+    _resize(entry);
     _amounts.add(now, _moved);
     _latest = entry;
     _changes.add(status);
+  }
+
+  /// Keeps [_sized] and [_unsized] as [entry]'s size now says.
+  void _resize(TallyItem entry) {
+    final size = entry._size;
+    if (entry._counted >= 0) {
+      _sized -= entry._counted;
+    } else {
+      _unsized--;
+    }
+    if (size == null) {
+      _unsized++;
+      entry._counted = -1;
+    } else {
+      _sized += size;
+      entry._counted = size;
+    }
   }
 
   void _end() {
@@ -1870,10 +1107,29 @@ String _pace(double? rate, Unit unit) => switch (rate) {
   _ => '',
 };
 
+/// What [TaskView] and [BatchView] draw their fraction with.
+mixin _Drawn {
+  double? get fraction;
+  Palette get palette;
+  Duration get elapsed;
+
+  /// The fraction in whole percent, or `null` while unknown.
+  int? get percent => switch (fraction) {
+    final f? => (f * 100 + 1e-9).floor(),
+    _ => null,
+  };
+
+  /// The spinner's frame now.
+  String get frame => palette.frameAt(elapsed);
+
+  /// A bar [width] columns wide, in the palette's glyphs.
+  String bar(int width) => palette.bar.draw(fraction ?? 0, width);
+}
+
 /// One task's progress, for a `task:` builder: a single task's line, or a row of a batch.
 ///
 /// {@category CLI}
-final class TaskView {
+final class TaskView with _Drawn {
   /// The line's title for a single task, the item's label for a row.
   final String label;
 
@@ -1889,6 +1145,7 @@ final class TaskView {
   /// [unit]s per second over the last second, and the time left; `null` while unknown.
   final double? rate;
   final Duration? eta;
+  @override
   final Duration elapsed;
 
   /// Whether this is a row under a batch's header.
@@ -1899,6 +1156,7 @@ final class TaskView {
 
   /// Columns the line may use.
   final int columns;
+  @override
   final Palette palette;
 
   const TaskView({
@@ -1936,6 +1194,7 @@ final class TaskView {
        elapsed = item.elapsed;
 
   /// From 0.0 to 1.0, or `null` while the size is unknown.
+  @override
   double? get fraction => switch (status) {
     Done() || Skipped() => 1.0,
     _ => switch (total) {
@@ -1943,18 +1202,6 @@ final class TaskView {
       _ => null,
     },
   };
-
-  /// [fraction] in whole percent.
-  int? get percent => switch (fraction) {
-    final f? => (f * 100 + 1e-9).floor(),
-    _ => null,
-  };
-
-  /// The spinner's frame now.
-  String get frame => palette.frameAt(elapsed);
-
-  /// A bar [width] columns wide, in the palette's glyphs.
-  String bar(int width) => palette.bar.draw(fraction ?? 0, width);
 
   /// `1.2 MB/2.0 GB`, `3/8`, or `''`.
   String get amounts => _amounts(received, total, unit);
@@ -1966,7 +1213,7 @@ final class TaskView {
 /// A batch as it stands, for a `batch:` builder: its header.
 ///
 /// {@category CLI}
-final class BatchView {
+final class BatchView with _Drawn {
   final String title;
 
   /// Items in all, or `null` while unknown.
@@ -1985,6 +1232,7 @@ final class BatchView {
   /// Bytes and items per second over the last second, and the time left; `null` while unknown.
   final double? rate, itemRate;
   final Duration? eta;
+  @override
   final Duration elapsed;
 
   /// The label of the item heard of last: a hand-fed bar's latest tick.
@@ -1992,6 +1240,7 @@ final class BatchView {
 
   final bool isLive;
   final int columns;
+  @override
   final Palette palette;
 
   const BatchView({
@@ -2040,20 +1289,12 @@ final class BatchView {
        latest = tally.latest?.label;
 
   /// Items ended of [count], from 0.0 to 1.0; `null` while the count is unknown.
+  @override
   double? get fraction => switch (count) {
     null => null,
     0 => 1.0,
     final n => (ended / n).clamp(0.0, 1.0),
   };
-
-  int? get percent => switch (fraction) {
-    final f? => (f * 100 + 1e-9).floor(),
-    _ => null,
-  };
-
-  String get frame => palette.frameAt(elapsed);
-
-  String bar(int width) => palette.bar.draw(fraction ?? 0, width);
 
   /// `120.0 MB/400.0 MB` once sized, `120.0 MB` before, or `''` without bytes.
   String get amounts => _amounts(received, total, Unit.bytes);
@@ -2062,7 +1303,7 @@ final class BatchView {
   String get pace => received > 0 && rate != null ? _pace(rate, Unit.bytes) : _pace(itemRate, Unit.items);
 }
 
-/// A row of a list to pick from: `Console.pick`'s, a `Menu`'s, a `Tabs` title.
+/// A row of a list to pick from: `list.pick`'s, a `Menu`'s, a `Tabs` title.
 ///
 /// {@category CLI}
 final class ItemView<T> {
@@ -2134,207 +1375,15 @@ final class LogView {
   Style get style => level.styleIn(palette);
 }
 
-// ---- the list model --------------------------------------------------------------------------
-
-/// What a widget keeps of where a [Choice] was drawn, between frames. Not API.
-final class ChoiceLayout {
-  int offset = 0, page = 1;
-  bool horizontal = false;
-
-  /// Where each tab was drawn, and which shown item each row is: for clicks.
-  List<(int, int)> tabs = const [];
-  List<int> rows = const [];
-}
-
-/// A list of [items] to pick from, and where the picking stands: the cursor, the filter, the
-/// checked items. `Console.pick` and a `Menu`, `Grid` or `Tabs` all run on it.
-///
-/// Hold one per list; a widget is rebuilt each frame around it. With [filter], typed text
-/// narrows the list; with [multi], Space checks the cursor's item. [label] names an item (by
-/// default its `toString()`, an enum's `name`).
-///
-/// ```dart
-/// final pick = Choice(files, label: (f) => f.name, filter: true);
-/// … Menu(pick) …
-/// KeyPress.enter when pick.value != null => Tui.quit(pick.value),
-/// ```
-///
-/// {@category CLI}
-final class Choice<T> with Focusable {
-  final String Function(T item)? _label;
-  final bool filter, multi;
-  final Set<int> _checked;
-  final _layout = ChoiceLayout();
-  List<T> _items;
-  String _query = '';
-
-  /// The cursor's item, as an index into the full list; `-1` when the filter matches nothing.
-  int index;
-
-  /// The labels lowercased once a filter needs them, and the query [_shown] was filtered by.
-  List<String>? _lowered;
-  String? _filtered;
-  List<int> _shown = const [];
-
-  Choice(
-    List<T> items, {
-    String Function(T item)? label,
-    this.filter = false,
-    this.multi = false,
-    this.index = 0,
-    Iterable<int> checked = const [],
-  }) : _items = items,
-       _label = label,
-       _checked = {...checked} {
-    if (!multi && _checked.isNotEmpty) throw ArgumentError.value(checked, 'checked', 'Invalid checked: not multi');
-    if (_checked.any((i) => i < 0 || i >= items.length)) {
-      throw ArgumentError.value(checked, 'checked', 'Invalid checked: not an index of items');
-    }
+/// Whether the Windows console's output code page is UTF-8 (65001), as `chcp` reports it: asked
+/// once, and only where neither Windows Terminal nor another emulator says so first. A process,
+/// not `kernel32`'s `GetConsoleOutputCP`, because `dart:ffi` costs every `cli` script 40 ms of
+/// startup; a console that cannot answer answers no.
+bool _utf8CodePage() {
+  try {
+    final out = Process.runSync('chcp.com', const []).stdout;
+    return out is String && RegExp(r'(\d+)\D*$').firstMatch(out.trim())?[1] == '65001';
+  } on Exception catch (_) {
+    return false; // no chcp: the code page is unknown, so not UTF-8
   }
-
-  /// The list to pick from. Assigning another shows it, filtered as [query] says.
-  List<T> get items => _items;
-
-  set items(List<T> next) {
-    _items = next;
-    _lowered = _filtered = null;
-    _checked.removeWhere((i) => i >= next.length);
-  }
-
-  /// Item [i]'s text.
-  String label(int i) => _label?.call(_items[i]) ?? TerminalBridge.label(_items[i]);
-
-  /// What has been typed into the filter.
-  String get query => _query;
-
-  set query(String value) {
-    if (!filter) throw StateError('Cannot filter a Choice made without filter: true');
-    _query = value;
-  }
-
-  /// The checked items' indexes.
-  Set<int> get checked => UnmodifiableSetView(_checked);
-
-  /// The cursor's item, or `null` when the filter matches nothing.
-  T? get value => index >= 0 && index < _items.length ? _items[index] : null;
-
-  /// The checked items, in list order.
-  List<T> get picked => [for (final i in _checked.toList()..sort()) _items[i]];
-
-  /// The items the filter leaves, as indexes into the full list.
-  List<int> get shown {
-    _settle();
-    return _shown;
-  }
-
-  /// Where the filter matches item [i]'s label, as `[start, end)` ranges.
-  List<(int, int)> matchesOf(int i) =>
-      _query.isEmpty ? const [] : _match(label(i).toLowerCase(), _query.toLowerCase()) ?? const [];
-
-  /// Checks or unchecks item [i] (by default the cursor's).
-  void toggle([int? i]) {
-    if (!multi) throw StateError('Cannot check an item of a Choice made without multi: true');
-    final at = i ?? index;
-    if (at < 0 || at >= _items.length) return;
-    if (!_checked.remove(at)) _checked.add(at);
-  }
-
-  /// Moves the cursor [by] items among those shown.
-  void move(int by) {
-    _settle();
-    if (_shown.isEmpty) return;
-    index = _shown[(_shown.indexOf(index) + by).clamp(0, _shown.length - 1)];
-  }
-
-  /// Settles the cursor and the filter on [items]: the labels are read once per list and
-  /// filtered once per query.
-  void _settle() {
-    final q = _query.toLowerCase();
-    final count = _items.length;
-    if (q != _filtered || _shown.length > count) {
-      final lowered = q.isEmpty ? null : _lowered ??= [for (var i = 0; i < count; i++) label(i).toLowerCase()];
-      _shown = lowered == null
-          ? List.generate(count, (i) => i)
-          : [
-              for (var i = 0; i < count; i++)
-                if (TerminalBridge.matches(lowered[i], q)) i,
-            ];
-      _filtered = q;
-    }
-    if (_shown.isEmpty) {
-      index = -1;
-    } else if (!_shown.contains(index)) {
-      index = _shown.firstWhere((i) => i >= index, orElse: () => _shown.last);
-    }
-  }
-
-  @override
-  bool handle(TuiEvent<Object?> event) {
-    final horizontal = _layout.horizontal;
-    final (back, forward) = horizontal ? (KeyPress.left, KeyPress.right) : (KeyPress.up, KeyPress.down);
-    switch (event) {
-      case _ when event == back:
-        move(-1);
-      case _ when event == forward:
-        move(1);
-      case KeyPress.home when !horizontal:
-        move(-_items.length);
-      case KeyPress.end when !horizontal:
-        move(_items.length);
-      case KeyPress.pageUp when !horizontal:
-        move(-_layout.page);
-      case KeyPress.pageDown when !horizontal:
-        move(_layout.page);
-      case Char(char: ' ', alt: false) when multi && index >= 0:
-        toggle();
-      case Char(:final char, alt: false) when filter:
-        _query += char;
-      case Paste(:final text) when filter:
-        _query += text.replaceAll('\n', ' ');
-      case KeyPress.backspace when filter && _query.isNotEmpty:
-        _query = String.fromCharCodes(_query.runes.toList()..removeLast());
-      default:
-        return false;
-    }
-    _settle();
-    return true;
-  }
-
-  @override
-  void mouse(Mouse event, int x, int y) {
-    switch (event.kind) {
-      case MouseKind.wheelUp:
-        move(-1);
-      case MouseKind.wheelDown:
-        move(1);
-      case MouseKind.press when _layout.horizontal:
-        for (final (i, (s, e)) in _layout.tabs.indexed) {
-          if (x >= s && x < e) index = i;
-        }
-      case MouseKind.press:
-        // The rows drawn last may outlive a filter that now matches nothing.
-        final rows = _layout.rows;
-        if (y < rows.length && rows[y] < _shown.length) index = _shown[rows[y]];
-      default:
-    }
-  }
-}
-
-/// The filter's match in [label]: a substring, else a subsequence, as ranges; `null` for none.
-List<(int, int)>? _match(String label, String query) {
-  if (query.isEmpty) return const [];
-  final at = label.indexOf(query);
-  if (at >= 0) return [(at, at + query.length)];
-  final ranges = <(int, int)>[];
-  var q = 0;
-  for (var i = 0; i < label.length && q < query.length; i++) {
-    if (label[i] != query[q]) continue;
-    q++;
-    if (ranges.isNotEmpty && ranges.last.$2 == i) {
-      ranges.last = (ranges.last.$1, i + 1);
-    } else {
-      ranges.add((i, i + 1));
-    }
-  }
-  return q == query.length ? ranges : null;
 }

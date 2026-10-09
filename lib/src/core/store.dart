@@ -11,7 +11,7 @@ part of '../core.dart';
 /// final app = Store.app('books');
 /// const seen = Key<List<String>>('seen', or: []);
 /// final ids = await app.read(seen);                    // `or` until it is first written
-/// await app.update(seen, (ids) => [...ids, book.id]);  // under the store's lock
+/// await app.update(seen, (ids) => [...ids, ...done]);  // once per run: a write is the whole file
 /// await (app / 'crawl').clear();                       // forget: the one way to start over
 /// ```
 ///
@@ -136,15 +136,22 @@ final class Store {
   }
 
   Future<void> _write<T>(Key<T> key, T value) async {
-    final encoded = key._encode(value, this);
-    final text = jsonEncode({'version': _version, 'value': encoded});
-    if (_memory case final memory?) {
-      memory.values['$_prefix${key.name}'] = text;
-      return;
+    final record = {'version': _version, 'value': key._encode(value, this)};
+    try {
+      if (_memory case final memory?) {
+        memory.values['$_prefix${key.name}'] = jsonEncode(record);
+        return;
+      }
+      // Straight to bytes: no copy of the whole text on the way.
+      final bytes = _toBytes.convert(record);
+      await Directory(folder!).create(recursive: true);
+      await FileBridge.write(_join(folder!, '${key.name}.json'), bytes);
+    } on JsonUnsupportedObjectError catch (e) {
+      throw ArgumentError.value(key.name, 'key', 'Invalid key ${key.name}: ${e.unsupportedObject} is not JSON');
     }
-    await Directory(folder!).create(recursive: true);
-    await FileBridge.write(_join(folder!, '${key.name}.json'), utf8.encode(text));
   }
+
+  static final _toBytes = JsonUtf8Encoder();
 
   Future<Object?> _readRaw(String name) async {
     final String text;
@@ -226,10 +233,11 @@ final class Key<T> {
     _checkName();
     if (as case final serializer?) return serializer.encode(value);
     final json = _jsonReady(value);
-    // The first write proves the type comes back, before anything depends on it.
+    // The first write proves the type comes back, before anything depends on it. What
+    // `_jsonReady` made has the shapes JSON reads back as, so no round trip through text is needed.
     if (!_checked.contains(this)) {
       try {
-        _cast(jsonDecode(jsonEncode(json)));
+        _cast(json);
       } catch (_) {
         throw ArgumentError.value(
           name,
@@ -313,11 +321,14 @@ final class Key<T> {
   String toString() => 'Key<$T>($name)';
 }
 
-/// [value] as plain JSON: sets become lists; anything JSON cannot hold is an [ArgumentError].
+/// [value] as plain JSON: sets become lists; anything JSON cannot hold is an [ArgumentError]. A
+/// list or a map that already is plain JSON is answered as it is, not copied.
 Object? _jsonReady(Object? value) => switch (value) {
   null || bool() || num() || String() => value,
   Set() => [for (final v in value) _jsonReady(v)],
+  List() when value.every((v) => identical(_jsonReady(v), v)) => value,
   List() => [for (final v in value) _jsonReady(v)],
+  Map() when value.keys.every((k) => k is String) && value.values.every((v) => identical(_jsonReady(v), v)) => value,
   Map() when value.keys.every((k) => k is String) => {
     for (final MapEntry(:key, :value) in value.entries) key as String: _jsonReady(value),
   },

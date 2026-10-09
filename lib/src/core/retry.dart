@@ -1,4 +1,4 @@
-part of '../core.dart';
+part of '../base.dart';
 
 /// How to try again: [times] more tries after the first, waiting [backoff] before the first
 /// retry and twice as long before each next one, at most [max], each wait ±25 % jitter.

@@ -370,7 +370,7 @@ final class Metainfo extends Torrent implements Saveable {
   /// Writes it to the `.torrent` file [to] as [encode] gives it, atomically.
   @override
   Task<Path> save(String to, {Conflict conflict = Conflict.overwrite}) =>
-      FileBridge.save(to, conflict, 'torrent $name', () => _bytes);
+      FileBridge.save(to, conflict, 'torrent $name', () => [_bytes]);
 
   /// Its files under the folder [dir] (where `download(into: dir)` put them: `dir/<name>` for
   /// one file, `dir/<name>/…` for several) checked against its pieces, natively and in parallel

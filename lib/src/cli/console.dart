@@ -1,4 +1,4 @@
-part of '../../cli.dart';
+part of '../cli.dart';
 
 // ---- the theme -------------------------------------------------------------------------------
 
@@ -129,15 +129,12 @@ final class PromptView {
 /// [head] (a label, kept), then a bar of [fraction] in what is left, then [tail]: the bar gives
 /// way first, then the tail, so a narrow terminal still shows the name.
 String _fit(int columns, String head, double? fraction, String tail, Palette p) {
-  final tailWidth = tail.isEmpty ? 0 : Style.width(tail) + 2;
-  final keep = max(columns * 2 ~/ 5, columns - tailWidth - (fraction == null ? 0 : 8));
-  final h = Style.truncate(head, max(1, keep), ellipsis: p.ellipsis);
-  final room = columns - Style.width(h) - tailWidth - 2;
-  final bar = fraction == null || room < 4 ? '' : '  ${p.accent(p.bar.draw(fraction, min(20, room)))}';
-  return Style.truncate('$h$bar${tail.isEmpty ? '' : '  $tail'}', columns, ellipsis: p.ellipsis);
+  final (h, bar) = TerminalBridge.fit(columns, head, fraction, Style.width(tail), p);
+  final drawn = '$h${bar.isEmpty ? '' : '  ${p.accent(bar)}'}${tail.isEmpty ? '' : '  $tail'}';
+  return Style.truncate(drawn, columns, ellipsis: p.ellipsis);
 }
 
-String _joined(Iterable<String> parts) => parts.where((p) => p.isNotEmpty).join('  ');
+const _joined = TerminalBridge.joined;
 
 /// The mark an ended item's line starts with.
 String _markOf(Status<Object?, Object?> status, Palette p) => switch (status) {
@@ -434,6 +431,9 @@ final class _Display {
   int _tenth = -1;
   bool _ended = false;
 
+  /// When it last wrote a line for work of no known count, past its first hundred items.
+  Duration? _wrote;
+
   _Display(this.title, this.tally) {
     _heard = tally.changes.listen(_hear);
     if (_live && _shown) Console._region.push(this);
@@ -442,7 +442,7 @@ final class _Display {
   List<String> lines(int width) {
     final p = theme.palette;
     if (tally.isTask) {
-      final item = tally.items.firstOrNull;
+      final item = tally.latest;
       final view = item == null
           ? TaskView(label: title, status: const Running(null), elapsed: tally.elapsed, columns: width, palette: p)
           : TaskView.of(item, label: title, columns: width, palette: p);
@@ -466,11 +466,19 @@ final class _Display {
       case _:
     }
     if (_live || !_shown || tally.isTask || !status.isFinal || status is Failed) return;
-    // No terminal: a line per item as it ends, or past a hundred items a line per tenth.
+    // No terminal: a line per item as it ends; past a hundred items, a line per tenth, or every
+    // ten seconds while the count is unknown.
     final count = tally.count;
     final width = (Io.stderrColumns ?? 80) - 1;
     final p = theme.palette;
-    if (count == null || count <= 100) {
+    if (count == null && tally.ended > 100) {
+      final now = Clock.current.elapsed;
+      if (_wrote case final wrote? when now - wrote < const Duration(seconds: 10)) return;
+      _wrote = now;
+      Console._indicate(
+        () => theme.batch(BatchView.of(tally, title: title, isLive: false, columns: width, palette: p)),
+      );
+    } else if (count == null || count <= 100) {
       if (status is Stopped) return;
       final item = tally.latest!;
       Console._indicate(() => theme.task(TaskView.of(item, isRow: true, isLive: false, columns: width, palette: p)));
@@ -620,7 +628,7 @@ final class Bar {
     _display = _Display(title, tally);
   }
 
-  /// One item done, named [label].
+  /// One item done, named [label]. Nothing is kept of it but the counts.
   void tick({String? label}) {
     _ticks++;
     tally.add(Done(_Tick(_ticks), null, label: label ?? '$_ticks'));
@@ -631,13 +639,13 @@ final class Bar {
   Future<void> close() async {
     tally.close();
     if (tally.failures.isEmpty) return _display.finish(null);
-    final error = BatchException<Object?, Object?>(tally.failures, tally.values, tally.count ?? tally.ended);
+    final error = BatchException<Object?, Object?>(tally.failures, const [], tally.count ?? tally.ended);
     _display.finish(error);
     throw error;
   }
 }
 
-/// A [Bar.tick]'s item: each one its own.
+/// A [Bar.tick]'s item: its own, so a tick never ends an item added to the tally by hand.
 final class _Tick {
   final int n;
 
@@ -919,35 +927,28 @@ abstract final class Console {
     final t = theme;
     _emit(() => t._say(LogLevel.error, message), err: true);
   }
-
-  /// One of [choices]: a picker under the cursor on a terminal (arrows move, Enter picks, typing
-  /// filters with [filter], Esc takes [or]), else the choices numbered and a number or a label
-  /// read. Without [or] an answer is required. [label] names a choice (an enum by its `name`).
-  ///
-  /// ```dart
-  /// final env = await Console.pick('Target', servers, label: (s) => s.name, filter: true);
-  /// ```
-  static Future<T> pick<T extends Object>(
-    String question,
-    List<T> choices, {
-    T? or,
-    String Function(T choice)? label,
-    bool filter = false,
-  }) async => choices[(await _choose(question, choices, false, or == null ? null : [or], label, filter)).single];
-
-  /// Any of [choices], as [pick]: Space checks, Enter answers the checked (the cursor's when none
-  /// is). Numbered, it reads numbers or labels separated by commas.
-  static Future<List<T>> pickMany<T extends Object>(
-    String question,
-    List<T> choices, {
-    List<T>? or,
-    String Function(T choice)? label,
-    bool filter = false,
-  }) async => [for (final i in await _choose(question, choices, true, or, label, filter)) choices[i]];
 }
 
 /// [value] as an answer, a hint or a choice shows it.
 const _label = TerminalBridge.label;
+
+/// What `pick.dart` draws its pickers with, from outside `cli`. Not API.
+abstract final class ConsoleBridge {
+  /// [body] run with the live region taken off the screen, and drawn again after.
+  static Future<T> suspend<T>(Future<T> Function() body) => Console._region.suspend(body);
+
+  /// [question] asked on stderr and a line read: `null` at the end of stdin.
+  static Future<String?> answer(String question, {String? hint}) => Console._answer(question, hint: hint);
+
+  /// A rejected answer, as an error line: the question is asked again under it.
+  static void reject(String message) => Console._reject(message);
+
+  /// [data] to the process's terminal as it is, escapes and all.
+  static void raw(String data) => _Region._raw(data);
+
+  /// Control characters, which a drawn line shows as spaces.
+  static RegExp get control => _control;
+}
 
 /// How [Console.ask] reads a [T] when no `parse:` is given; [what] names the call for the error.
 T Function(String) _reader<T extends Object>(String what) {

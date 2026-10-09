@@ -95,7 +95,7 @@ final class Archive {
   /// the archive, at least 1 GiB). Nothing there is a [PathNotFoundException]; what is not an
   /// archive a [FormatException]; a wrong or missing password a [PasswordException].
   static Task<Archive> read(String path, {Secret? password, bool unsafe = false}) {
-    final at = p.absolute(path);
+    final at = PathInternals.absolute(path);
     return TaskInternals.start(Path(path), FileBridge.label(path), (work) async {
       await _there(at);
       final pw = password?.reveal;
@@ -108,7 +108,7 @@ final class Archive {
   /// block is decoded to tell a tarball), else from its name; `null` when it is neither. A
   /// missing file is a [PathNotFoundException].
   static Future<ArchiveFormat?> detect(String path) async {
-    final at = p.absolute(path);
+    final at = PathInternals.absolute(path);
     await _there(at);
     final code = NativeBridge.main.withText(at, _N.format);
     return code <= 0 ? null : ArchiveFormat.values[code - 1];
@@ -117,10 +117,11 @@ final class Archive {
   /// The bytes of the entry [name], as [entries] lists it, read without extracting anything
   /// else; a [MissingException] when there is none.
   Task<Uint8List> entry(String name) {
-    final at = p.absolute(path), pw = _password?.reveal, flags = _flags(_unsafe);
+    final at = PathInternals.absolute(path), pw = _password?.reveal, flags = _flags(_unsafe);
     return TaskInternals.start(path, '${FileBridge.label(path)}: $name', (work) async {
       try {
-        return await NativeBridge.main.run(work, _readCall(at, name, pw, flags));
+        final (address, length) = await NativeBridge.main.run(work, _readCall(at, name, pw, flags));
+        return NativeBridge.main.wrap(address, length);
       } on FormatException catch (e) {
         if (e.message.endsWith(': no entry $name')) throw MissingException('entry $name', where: path);
         rethrow;
@@ -136,7 +137,7 @@ final class Archive {
   /// The archive is read on a native thread, one file ahead of the listener; a paused
   /// subscription holds it there, and a cancelled one or the enclosing [Cancel.scope] stops it.
   Stream<({ArchiveEntry entry, Uint8List bytes})> contents({String? only}) =>
-      _contents(p.absolute(path), _password?.reveal, only, _flags(_unsafe));
+      _contents(PathInternals.absolute(path), _password?.reveal, only, _flags(_unsafe));
 
   @override
   String toString() => 'Archive($path, ${entries.length} entries)';
@@ -207,8 +208,8 @@ extension PathArchiveExtensions on Path {
     if (level != null && level < 0 && format != ArchiveFormat.zst && format != ArchiveFormat.tarZst) {
       throw ArgumentError.value(level, 'level', 'Invalid level: negative');
     }
-    final src = p.absolute(this), dest = p.absolute(to);
-    if (original != Original.keep && (p.equals(src, dest) || p.isWithin(src, dest))) {
+    final src = PathInternals.absolute(this), dest = PathInternals.absolute(to);
+    if (original != Original.keep && (PathInternals.equals(src, dest) || PathInternals.isWithin(src, dest))) {
       throw ArgumentError('Cannot ${original.name} $this once archived: $to is inside it');
     }
     return TaskInternals.start(this, FileBridge.label(this), (work) async {
@@ -278,7 +279,7 @@ extension PathArchiveExtensions on Path {
     Conflict conflict = Conflict.skip,
     bool unsafe = false,
   }) {
-    final src = p.absolute(this), dest = p.absolute(into), flags = _flags(unsafe);
+    final src = PathInternals.absolute(this), dest = PathInternals.absolute(into), flags = _flags(unsafe);
     return TaskInternals.start(this, FileBridge.label(this), (work) async {
       await _there(src);
       _refuseLaterPart(src);
@@ -307,13 +308,12 @@ extension PathArchiveExtensions on Path {
           );
         }
         await Directory(dest).create(recursive: true);
-        final name = p.basename(src);
-        final out = p.join(
-          dest,
-          name.length > format.extension.length && name.toLowerCase().endsWith(format.extension)
-              ? name.substring(0, name.length - format.extension.length)
-              : name,
-        );
+        final name = Path(src).name;
+        final out =
+            Path(dest) /
+            (name.length > format.extension.length && name.toLowerCase().endsWith(format.extension)
+                ? name.substring(0, name.length - format.extension.length)
+                : name);
         final target = FileBridge.settle(
           out,
           conflict,
@@ -337,13 +337,13 @@ extension PathArchiveExtensions on Path {
         // Inside a folder that is there, so the moves in are renames on its own volume even when
         // it is a mount point or a link to another one; beside it otherwise, renamed in whole.
         final there = await FileSystemEntity.type(dest) != FileSystemEntityType.notFound;
-        final stage = FileBridge.temp(there ? p.join(dest, p.basename(src)) : dest);
+        final stage = FileBridge.temp(there ? Path(dest) / Path(src).name : dest);
         work.defer(() => _gone(stage));
         await NativeBridge.main.run(work, _extractCall(src, stage, pw, only, flags), onProgress: report);
         if (!flatten && !there) {
-          await Directory(p.dirname(dest)).create(recursive: true);
+          await Directory(Path(dest).parent).create(recursive: true);
           await FileBridge.rename(Directory(stage), dest);
-        } else if (!await _merge(work, stage, dest, conflict, flatten, this)) {
+        } else if (!await PathInternals.merge(work, stage, dest, conflict, flatten: flatten, subject: this)) {
           TaskInternals.stale(work);
         }
       }
@@ -365,18 +365,11 @@ Future<void> _there(String path) async {
 Future<DateTime?> _modified(String path, Conflict conflict) async =>
     conflict == Conflict.newer ? (await FileStat.stat(path)).modified : null;
 
-/// [path] deleted, whatever it is; one already gone is no matter. On Windows a read-only file
-/// is made writable first.
+/// [path] deleted, whatever it is, a link never followed; one already gone is no matter. On
+/// Windows a read-only file is made writable first.
 Future<void> _gone(String path) async {
   try {
-    switch (await FileSystemEntity.type(path, followLinks: false)) {
-      case FileSystemEntityType.notFound:
-        return;
-      case FileSystemEntityType.directory:
-        await Path(path).delete(recursive: true);
-      default:
-        await Path(path).delete();
-    }
+    await Path(path).delete(recursive: true);
   } on FileSystemException catch (_) {} // not ours to delete after all: left
 }
 
@@ -400,112 +393,21 @@ Future<void> _dispose(Original original, String src, List<Path>? picked, {bool v
 /// that none at all is not mistaken for everything; `null` for everything.
 String? _names(String root, List<Path>? picked) {
   if (picked == null) return null;
-  // The listing's paths are under its normalized root: a cut, not `p.relative` per file.
-  final base = p.normalize(root);
-  final cut = base.endsWith(p.separator) ? base.length : base.length + 1;
+  // The listing's paths are under its normalized root: a cut, not `relativeTo` per file.
+  final base = Path(root).normalized;
+  final cut = base.endsWith(Platform.pathSeparator) || base.endsWith('/') ? base.length : base.length + 1;
   return '\x00${picked.map((f) => f.substring(cut)).join('\x00')}';
 }
 
 /// The native flags: unsafe, and whether `only` folds case as the platform's paths do.
 int _flags(bool unsafe) => (unsafe ? 1 : 0) | (Platform.isMacOS || Platform.isWindows ? 2 : 0);
 
-/// What was extracted into [stage] moved into [dest]: a folder onto a folder merges, anything
-/// else is settled by [conflict], and a link already in [dest] is never walked through: it is in
-/// conflict with what would go there. [flatten]ed, every file and link lands in [dest] itself.
-/// [Conflict.fail] checks every name before anything moves. Answers whether anything moved.
-Future<bool> _merge(Work work, String stage, String dest, Conflict conflict, bool flatten, String archive) async {
-  await Directory(dest).create(recursive: true);
-  work.step('merging');
-  Never taken(String to) => throw PathExistsException(to, const OSError(), 'Cannot unarchive $archive: $to exists');
-  if (flatten) {
-    final moves = [
-      await for (final e in Directory(stage).list(recursive: true, followLinks: false))
-        if (e is! Directory) (e, p.join(dest, p.basename(e.path))),
-    ];
-    if (conflict == Conflict.fail) {
-      final names = <String>{};
-      for (final (_, to) in moves) {
-        if (!names.add(to) || await FileSystemEntity.type(to, followLinks: false) != FileSystemEntityType.notFound) {
-          taken(to);
-        }
-      }
-    }
-    var moved = false;
-    for (final (from, to) in moves) {
-      // A folder of that name is no file to replace or skip for: the file takes a free name.
-      final policy = await FileSystemEntity.isDirectory(to) ? Conflict.rename : conflict;
-      moved = await _land(from, to, policy, archive) || moved;
-    }
-    return moved;
-  }
-  if (conflict == Conflict.fail) {
-    if (await _clash(stage, dest) case final to?) taken(to);
-  }
-  return _mergeInto(stage, dest, conflict, archive);
-}
-
-/// The first path under [to] that something under [from] would land on, other than a folder
-/// on a folder.
-Future<String?> _clash(String from, String to) async {
-  await for (final entry in Directory(from).list(followLinks: false)) {
-    final target = p.join(to, p.basename(entry.path));
-    final there = await FileSystemEntity.type(target, followLinks: false);
-    if (there == FileSystemEntityType.notFound) continue;
-    if (entry is Directory && there == FileSystemEntityType.directory) {
-      if (await _clash(entry.path, target) case final taken?) return taken;
-      continue;
-    }
-    return target;
-  }
-  return null;
-}
-
-/// [from]'s entries moved into the folder [to]: a folder onto nothing in one rename, onto a
-/// folder merged, onto anything else settled as a whole by [conflict], as a file is.
-Future<bool> _mergeInto(String from, String to, Conflict conflict, String archive) async {
-  var moved = false;
-  await for (final entry in Directory(from).list(followLinks: false)) {
-    final target = p.join(to, p.basename(entry.path));
-    final there = await FileSystemEntity.type(target, followLinks: false);
-    if (entry is Directory && there == FileSystemEntityType.directory) {
-      moved = await _mergeInto(entry.path, target, conflict, archive) || moved;
-    } else {
-      moved = await _land(entry, target, conflict, archive) || moved;
-    }
-  }
-  return moved;
-}
-
-/// [entry] renamed to [to], or beside it, as [conflict] settles it; a file is renamed over
-/// what it replaces, while a folder replacing a file or a link takes its place. Answers whether
-/// it moved.
-Future<bool> _land(FileSystemEntity entry, String to, Conflict conflict, String archive) async {
-  final target = FileBridge.settle(
-    to,
-    conflict,
-    verb: 'unarchive',
-    subject: archive,
-    source: await _modified(entry.path, conflict),
-  );
-  if (target == null) return false;
-  try {
-    if (entry is Directory &&
-        await FileSystemEntity.type(target, followLinks: false) != FileSystemEntityType.notFound) {
-      await _gone(target);
-    }
-    await FileBridge.rename(entry, target);
-    return true;
-  } finally {
-    FileBridge.release(target);
-  }
-}
-
 final _partOf = RegExp(r'^(.*)\.part(\d+)\.rar$', caseSensitive: false);
 final _oldPart = RegExp(r'^.*\.r\d\d$', caseSensitive: false);
 
 /// A later part of a RAR volume set is no archive: extracting it names the first part.
 void _refuseLaterPart(String path) {
-  final name = p.basename(path);
+  final name = Path(path).name;
   final first = switch (_partOf.firstMatch(name)) {
     final m? when int.parse(m[2]!) > 1 => '${m[1]}.part${'1'.padLeft(m[2]!.length, '0')}.rar',
     _ => _oldPart.firstMatch(name) == null ? null : '${name.substring(0, name.length - 4)}.rar',
@@ -515,7 +417,7 @@ void _refuseLaterPart(String path) {
 
 /// The files of the archive at [path]: every part of a RAR volume set it opens, else itself.
 Future<List<Path>> _volumes(String path) async {
-  final dir = p.dirname(path), name = p.basename(path);
+  final dir = Path(path).parent, name = Path(path).name;
   final RegExp sibling;
   if (_partOf.firstMatch(name) case final m?) {
     sibling = RegExp('^${RegExp.escape(m[1]!)}\\.part\\d+\\.rar\$', caseSensitive: false);
@@ -527,7 +429,7 @@ Future<List<Path>> _volumes(String path) async {
   return [
     Path(path),
     await for (final e in Directory(dir).list(followLinks: false))
-      if (e is File && p.basename(e.path) != name && sibling.hasMatch(p.basename(e.path))) Path(e.path),
+      if (e is File && Path(e.path).name != name && sibling.hasMatch(Path(e.path).name)) Path(e.path),
   ];
 }
 
@@ -598,7 +500,6 @@ abstract final class _N {
   static final contentsFree = _lib.lookupFunction<Void Function(Pointer<Void>), void Function(Pointer<Void>)>(
     'tk_archive_contents_free',
   );
-  static final release = _lib.lookup<NativeFunction<Void Function(Pointer<Void>)>>('tk_release');
 }
 
 /// [texts] as UTF-8 in one native allocation; `null` and `''` are a null pointer.
@@ -628,10 +529,18 @@ Uint8List Function(NativeProgress, _U8) _listCall(String path, String? password)
       return _take(path, password, (out, len) => _N.list(p0, pl, pw, pwl, out, len));
     });
 
-Uint8List Function(NativeProgress, _U8) _readCall(String path, String name, String? password, int flags) =>
+/// The entry's bytes stay where the library put them: the worker answers their address and
+/// length, and the caller views them in place.
+(int, int) Function(NativeProgress, _U8) _readCall(String path, String name, String? password, int flags) =>
     (_, stop) => _with([path, name, password], (a) {
       final [(p0, pl), (n, nl), (pw, pwl)] = a;
-      return _take(path, password, (out, len) => _N.read(p0, pl, n, nl, pw, pwl, flags, out, len, stop));
+      final out = NativeBridge.main.alloc(16).cast<_U8>(), len = (out + 1).cast<IntPtr>();
+      try {
+        _check(_N.read(p0, pl, n, nl, pw, pwl, flags, out, len, stop), path, password);
+        return (out.value.address, len.value);
+      } finally {
+        NativeBridge.main.free(out.cast(), 16);
+      }
     });
 
 void Function(NativeProgress, _U8) _extractCall(String path, String dest, String? password, String? only, int flags) =>
@@ -717,7 +626,7 @@ Stream<({ArchiveEntry entry, Uint8List bytes})> _contents(String path, String? p
   late final StreamController<({ArchiveEntry entry, Uint8List bytes})> out;
   late final NativeCallable<_NativeContentsCb> listener;
   var pass = nullptr.cast<Void>();
-  var asked = false;
+  var asked = false, cancelled = false;
   void Function()? unhear;
 
   void ask() {
@@ -728,6 +637,7 @@ Stream<({ArchiveEntry entry, Uint8List bytes})> _contents(String path, String? p
 
   // The thread stops at its next file; the listener stays open until it says it has.
   void end() {
+    cancelled = true;
     if (pass == nullptr) return;
     _N.contentsFree(pass);
     pass = nullptr;
@@ -738,7 +648,7 @@ Stream<({ArchiveEntry entry, Uint8List bytes})> _contents(String path, String? p
     if (code == 1) {
       final (entry, _) = _entryAt(NativeBridge.main.adopt(head, headLen), 0);
       // The library's own buffer, freed when the list is: no copy of a file's bytes.
-      final bytes = data.asTypedList(dataLen, finalizer: _N.release, token: data.cast());
+      final bytes = NativeBridge.main.wrap(data.address, dataLen);
       asked = false;
       if (pass == nullptr) return;
       out.add((entry: entry, bytes: bytes));
@@ -764,6 +674,8 @@ Stream<({ArchiveEntry entry, Uint8List bytes})> _contents(String path, String? p
           ..close();
         return;
       }
+      // Cancelled while it looked: no pass is started for nobody.
+      if (cancelled) return out.close();
       listener = NativeCallable<_NativeContentsCb>.listener(heard);
       pass = _with([path, password, only], (a) {
         final [(p0, pl), (pw, pwl), (o, ol)] = a;

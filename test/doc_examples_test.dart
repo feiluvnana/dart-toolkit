@@ -18,12 +18,14 @@ const _libraries = [
   'json',
   'native',
   'path',
+  'pick',
   'process',
   'scrape',
   'testing',
   'torrent',
   'tui',
   'xml',
+  'xpath',
 ];
 
 /// The documents whose ` ```dart ` blocks must compile.

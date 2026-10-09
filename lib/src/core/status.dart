@@ -1,6 +1,6 @@
 // The one state model: every Task, Batch and Job reports `Status`, every display reads it.
 
-part of '../core.dart';
+part of '../base.dart';
 
 /// What one [item] on its way to a value [T] is doing now: [Waiting], [Running], [Paused],
 /// [Done], [Skipped], [Failed] or [Stopped], with [Warned] notes in between.
@@ -221,4 +221,12 @@ abstract final class StatusInternals {
   /// [status] about [item] instead, labelled [label] (its own label when `null`).
   static Status<J, T> about<J, T>(Status<Object?, T> status, J item, [String? label]) =>
       status._about(item, label ?? status._label);
+
+  /// [batch]'s statuses, each with the slot it came from (equal items apart), or `null` for a
+  /// batch that has no slots.
+  static Stream<(Object, Status<I, T>)>? slotted<I, T>(Batch<I, T> batch) => switch (batch) {
+    _Batch<I, T>() => batch._slotted,
+    _Merged<I, T>() => batch._slotted,
+    _ => null,
+  };
 }

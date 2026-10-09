@@ -7,6 +7,7 @@ import 'dart:math';
 import 'package:dart_toolkit/json.dart';
 import 'package:dart_toolkit/html.dart';
 import 'package:dart_toolkit/xml.dart';
+import 'package:dart_toolkit/xpath.dart';
 import 'package:html/dom.dart' as hd;
 import 'package:html/parser.dart' as hp;
 // ignore: implementation_imports

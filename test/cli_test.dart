@@ -2,7 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:dart_toolkit/cli.dart';
+import 'package:dart_toolkit/pick.dart';
+import 'package:dart_toolkit/src/terminal.dart' show TerminalBridge;
 import 'package:dart_toolkit/testing.dart';
 import 'package:test/test.dart' hide Retry;
 
@@ -585,6 +586,12 @@ void main() {
       expect(Palette.ascii.ellipsis, '...');
       expect('x'.red, isA<String>());
     });
+
+    test('truncate where not even a custom ellipsis fits cuts the ellipsis, never drawing …', () {
+      expect(Style.truncate('hello', 2, ellipsis: '...'), '..');
+      expect(Style.truncate('hello', 1, ellipsis: '...'), '.');
+      expect(Style.truncate('hello', 0, ellipsis: '...'), '');
+    });
   });
 
   group('Console: prompts', () {
@@ -628,19 +635,19 @@ void main() {
     });
 
     test('pick and pickMany without a terminal number the choices', () async {
-      final (env, err) = await answering('9\n2\n', () => Console.pick('Target', Target.values));
+      final (env, err) = await answering('9\n2\n', () => Target.values.pick('Target'));
       expect(env, Target.prod);
       expect(err, contains('1) dev'));
-      expect((await answering('\n', () => Console.pick('Target', Target.values, or: Target.dev))).$1, Target.dev);
-      expect((await answering('1, prod\n', () => Console.pickMany('Targets', Target.values))).$1, Target.values);
-      await expectLater(answering('', () => Console.pick('Target', Target.values)), throwsA(isA<MissingException>()));
-      expect(() => Console.pick('T', <String>[]), throwsArgumentError);
-      expect(() => Console.pick('T', ['a'], or: 'b'), throwsArgumentError);
+      expect((await answering('\n', () => Target.values.pick('Target', or: Target.dev))).$1, Target.dev);
+      expect((await answering('1, prod\n', () => Target.values.pickMany('Targets'))).$1, Target.values);
+      await expectLater(answering('', () => Target.values.pick('Target')), throwsA(isA<MissingException>()));
+      expect(() => <String>[].pick('T'), throwsArgumentError);
+      expect(() => ['a'].pick('T', or: 'b'), throwsArgumentError);
     });
 
     test('pick on a terminal runs on the Choice model: arrows, filter, Enter (CLI-17, TUI-6)', () async {
       final term = FakeTerminal(width: 40, height: 10);
-      final picked = Io.scope(() => Console.pick('Server', ['alpha', 'beta', 'gamma'], filter: true), terminal: term);
+      final picked = Io.scope(() => ['alpha', 'beta', 'gamma'].pick('Server', filter: true), terminal: term);
       await _pump();
       expect(term.screen, contains('› alpha'));
       term.type('gm');
@@ -653,9 +660,20 @@ void main() {
       expect(term.isCursorVisible, isTrue);
     });
 
+    test('a key code past Unicode is dropped: the picker reads on, the process lives', () async {
+      final term = FakeTerminal(width: 40, height: 10);
+      final picked = Io.scope(() => ['dev', 'prod'].pick('Env'), terminal: term);
+      await _pump();
+      term.type('\x1b[1114112u');
+      await _pump();
+      term.press(KeyPress.down);
+      term.press(KeyPress.enter);
+      expect(await picked, 'prod');
+    });
+
     test('pickMany on a terminal checks with Space and answers the checked in list order', () async {
       final term = FakeTerminal(width: 40, height: 10);
-      final picked = Io.scope(() => Console.pickMany('Files', ['a', 'b', 'c']), terminal: term);
+      final picked = Io.scope(() => ['a', 'b', 'c'].pickMany('Files'), terminal: term);
       await _pump();
       term.press(KeyPress.down);
       term.press(KeyPress.down);
@@ -772,7 +790,25 @@ void main() {
     });
   });
 
+  group('drawing work of no known count without a terminal', () {
+    test('past a hundred items it writes a line every ten seconds, not one per item', () async {
+      final (_, err) = await _captured(
+        () => Stream.fromIterable(List.generate(1000, (i) => i)).parallelize((i) async => i).show('Stream'),
+      );
+      final lines = err.trim().split('\n');
+      expect(lines.length, lessThan(110), reason: '${lines.length} lines');
+      expect(lines.last, startsWith('✓ Stream'));
+    });
+  });
+
   group('drawing work on a terminal', () {
+    test('the Windows console reports its code page through chcp, which unicode reads', () {
+      final out = Process.runSync('chcp.com', const []);
+      expect(out.exitCode, 0);
+      expect('${out.stdout}'.trim(), matches(RegExp(r'\d+\D*$')));
+      expect(TerminalBridge.unicode, isA<bool>());
+    }, testOn: 'windows');
+
     test('drawing starts when show() is called, before any status (CON-7)', () async {
       final term = FakeTerminal(width: 60, height: 10);
       final gate = Completer<void>();
@@ -919,7 +955,7 @@ void main() {
           tally.add(Running('a', received: i * 1000, total: 10000));
         }
         expect(tally.rate, closeTo(10000, 1), reason: '1000 bytes a tenth of a second');
-        expect(tally.items.single.rate, closeTo(10000, 1));
+        expect(tally.latest!.rate, closeTo(10000, 1));
         expect(tally.eta, const Duration(milliseconds: 500));
         for (var i = 0; i < 12; i++) {
           await clock.advance(const Duration(milliseconds: 100));
@@ -961,8 +997,25 @@ void main() {
       final tally = Tally();
       tally.add(const Running(1, label: 'same', received: 10, total: 100));
       tally.add(const Running(2, label: 'same', received: 90, total: 100));
-      expect(tally.items, hasLength(2));
-      expect([for (final i in tally.items) i.received], [10, 90]);
+      expect(tally.running, 2);
+      expect([for (final i in tally.rows(2).rows) i.received], [10, 90]);
+    });
+
+    test('a batch with equal inputs counts each one: items are told apart by their slot', () async {
+      final batch = [1, 1, 1, 2].parallelize((i) async => i * 10);
+      final tally = Tally.batch(batch);
+      expect(await batch, [10, 10, 10, 20]);
+      await tally.over;
+      expect((tally.count, tally.ended, tally.done), (4, 4, 4));
+      final (_, err) = await _captured(() => [1, 1, 1, 2].parallelize((i) async => i).show('Dups'));
+      expect(err.trim().split('\n'), hasLength(5), reason: 'a line per item, then the ending: $err');
+    });
+
+    test('a hand-fed status after the one that ended an item is another item', () {
+      final tally = Tally()
+        ..add(const Done('x', 1))
+        ..add(const Done('x', 2));
+      expect((tally.done, tally.ended), (2, 2));
     });
 
     test('Tally.task and Tally.batch hear their work and end with it', () async {

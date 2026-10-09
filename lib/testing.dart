@@ -11,19 +11,21 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'src/core.dart';
-import 'src/terminal.dart';
+import 'src/keys.dart';
 
 export 'core.dart';
+export 'src/keys.dart' show KeyPress, PointerKind;
 
-/// A terminal in memory for tests: [type] or [press] keys, [resize] it, and read the [screen]
-/// it shows: a small VT emulator keeps it, alternate screen and all. It answers a cursor position
-/// query, and the kitty keyboard query when [kitty] is set. Use it under `Io.scope(terminal:)`,
-/// for `Console`'s live region and pickers (`cli`) and `Tui` apps (`tui`).
+/// A terminal in memory for tests: [type] or [press] keys, [resize] it, report [focus] and
+/// [blur], [resume] it after ^Z, and read the [screen] it shows: a small VT emulator keeps it,
+/// alternate screen and all. It answers a cursor position query, and the kitty keyboard query
+/// when [kitty] is set. Use it under `Io.scope(terminal:)`, for `Console`'s live region and
+/// pickers (`cli`) and `Tui` apps (`tui`).
 ///
 /// ```dart
 /// final term = FakeTerminal(width: 40, height: 10);
-/// final done = Io.scope(terminal: term, () => Tui.run(0, view: (n) => Label('$n'),
-///     update: (n, e) => e == KeyPress.up ? n + 1 : Tui.quit(n)));
+/// final done = Io.scope(terminal: term, () => Tui.run(0, draw: (n) => Label('$n'),
+///     update: (n, e) => switch (e) { KeyPress.up => n + 1, KeyPress.esc => Tui.quit(n), _ => n }));
 /// Future<void> pump() async { for (var i = 0; i < 3; i++) await Future<void>.delayed(Duration.zero); }
 /// await pump(); term.press(KeyPress.up); await pump();
 /// expect(term.screen, '1');
@@ -46,7 +48,17 @@ final class FakeTerminal implements Terminal {
   /// Every [write], in order: what a frame cost, byte for byte.
   final List<String> writes = [];
 
-  bool isOpen = false, isAltScreen = false, isCursorVisible = true, isMouse = false, isMotion = false, isPaste = false;
+  bool isOpen = false,
+      isAltScreen = false,
+      isCursorVisible = true,
+      isPointer = false,
+      isMotion = false,
+      isPaste = false;
+
+  /// Whether focus reports are on (`?1004h`), and whether the app has stopped itself on ^Z
+  /// until [resume].
+  bool isFocusReport = false, isSuspended = false;
+  Completer<void>? _stopped;
 
   /// Whether the kitty keyboard protocol is on.
   bool isKitty = false;
@@ -85,6 +97,25 @@ final class FakeTerminal implements Terminal {
   @override
   void close() => isOpen = false;
 
+  @override
+  Future<void> suspend() {
+    isSuspended = true;
+    return (_stopped = Completer<void>()).future;
+  }
+
+  /// Runs the app again after it stopped on ^Z, as SIGCONT does.
+  void resume() {
+    isSuspended = false;
+    _stopped?.complete();
+    _stopped = null;
+  }
+
+  /// Reports that the window gained the focus (`ESC [ I`).
+  void focus() => type('\x1b[I');
+
+  /// Reports that the window lost the focus (`ESC [ O`).
+  void blur() => type('\x1b[O');
+
   /// Sends [text] as typed: `'hi'`, or raw sequences like `'\x1b[A'`.
   void type(String text) => _input.add(utf8.encode(text));
 
@@ -95,15 +126,15 @@ final class FakeTerminal implements Terminal {
   void press(KeyPress key) => type(_encode(key));
 
   /// Clicks, moves or scrolls at [x], [y] of the screen (SGR encoding).
-  void mouse(int x, int y, [MouseKind kind = MouseKind.press]) {
+  void pointer(int x, int y, [PointerKind kind = PointerKind.press]) {
     final b = switch (kind) {
-      MouseKind.wheelUp => 64,
-      MouseKind.wheelDown => 65,
-      MouseKind.drag => 32,
-      MouseKind.move => 35,
+      PointerKind.wheelUp => 64,
+      PointerKind.wheelDown => 65,
+      PointerKind.drag => 32,
+      PointerKind.move => 35,
       _ => 0,
     };
-    type('\x1b[<$b;${x + 1};${y + 1}${kind == MouseKind.release ? 'm' : 'M'}');
+    type('\x1b[<$b;${x + 1};${y + 1}${kind == PointerKind.release ? 'm' : 'M'}');
   }
 
   void resize(int width, int height) {
@@ -188,9 +219,11 @@ final class FakeTerminal implements Terminal {
           case '2004':
             isPaste = on;
           case '1000' || '1002' || '1006':
-            isMouse = on;
+            isPointer = on;
           case '1003':
             isMotion = on;
+          case '1004':
+            isFocusReport = on;
         }
       }
       return;

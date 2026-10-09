@@ -24,11 +24,11 @@ import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 
-import 'src/core.dart';
+import 'src/base.dart';
 import 'src/native.dart';
 import 'path.dart';
 
-export 'core.dart';
+export 'src/foundations.dart';
 export 'path.dart';
 export 'src/native.dart' show NativeException;
 

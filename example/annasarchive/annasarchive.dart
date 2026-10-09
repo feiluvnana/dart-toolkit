@@ -12,11 +12,7 @@ import 'search.dart';
 Future<void> main(List<String> args) => Cli(
   "Finds and downloads books from Anna's Archive.",
   pools: [downloads],
-  handler: (ctx) async {
-    final app = BooksApp();
-    ctx.defer(app.archive.close);
-    await app.run();
-  },
+  handler: (ctx) => BooksApp().run(),
 ).run(args);
 
 const orange = Style(fg: Color.rgb(217, 119, 87));
@@ -135,18 +131,6 @@ final class BooksApp extends TuiApp<Screen, Message> {
         ),
       );
 
-  @override
-  void init() {
-    focus(input);
-    send(
-      archive.connect().then<Message>(
-        (_) => const Connected(),
-        onError: (Object error, StackTrace _) => Unreachable(error),
-      ),
-    );
-    listen(downloads.changes.map(DownloadMoved.new));
-  }
-
   List<Action> actionsFor(Book book) {
     final status = downloads.job(book)?.status;
     return [
@@ -167,8 +151,9 @@ final class BooksApp extends TuiApp<Screen, Message> {
   }
 
   Screen _next(Screen screen, TuiEvent<Message> event) {
-    if (event case Sent(:final message)) return _receive(screen, message);
-    if (event is KeyPress || event is Char) notice = null;
+    if (event is Start) return _start(screen);
+    if (event case Post(:final message)) return _receive(screen, message);
+    if (event is KeyPress) notice = null;
     final query = input.text.trim();
     return switch ((screen, event)) {
       (_, const KeyPress('d', ctrl: true)) => Tui.quit(screen),
@@ -180,6 +165,14 @@ final class BooksApp extends TuiApp<Screen, Message> {
       (final Found found, _) when results.handle(event) => _loadMoreNearTheEnd(found),
       _ => screen,
     };
+  }
+
+  Screen _start(Screen screen) {
+    Tui.defer(archive.close);
+    Tui.focus(input);
+    Tui.post<Message>(archive.connect().then((_) => const Connected()), onError: Unreachable.new);
+    Tui.listen(downloads.changes.map(DownloadMoved.new));
+    return screen;
   }
 
   Screen _receive(Screen screen, Message message) {
@@ -234,13 +227,9 @@ final class BooksApp extends TuiApp<Screen, Message> {
 
   void _search(String query, int page) {
     final search = ++latestSearch;
-    send(
-      archive
-          .search(query, page: page)
-          .then<Message>(
-            (result) => Arrived(search, query, page, result),
-            onError: (Object error, StackTrace _) => SearchFailed(search, error),
-          ),
+    Tui.post<Message>(
+      archive.search(query, page: page).then((result) => Arrived(search, query, page, result)),
+      onError: (error) => SearchFailed(search, error),
     );
   }
 
@@ -279,17 +268,12 @@ final class BooksApp extends TuiApp<Screen, Message> {
         job?.remove();
         notice = const Notice('Stopped: downloading it again carries on from there');
       case Action.open:
-        _openInBrowser(book.page);
+        _tell(Shell.open('${book.page}').then((_) => true), 'Opened in your browser', 'Could not open ${book.page}');
       case Action.copy:
         _copy('${book.page}');
       case null:
     }
     return screen;
-  }
-
-  void _openInBrowser(Uri page) {
-    final opener = Platform.isMacOS ? 'open' : (Platform.isWindows ? 'explorer' : 'xdg-open');
-    _tell(Shell.run(opener, args: ['$page']).isOk, 'Opened in your browser', 'Could not open $page');
   }
 
   void _copy(String text) {
@@ -302,15 +286,13 @@ final class BooksApp extends TuiApp<Screen, Message> {
     _tell(copied, 'Copied the link', 'No clipboard tool (pbcopy, clip, wl-copy or xclip)');
   }
 
-  void _tell(Future<bool> done, String success, String failure) => send(
-    done.then<Message>(
-      (ok) => ok ? Notice(success) : Notice(failure, ok: false),
-      onError: (Object _) => Notice(failure, ok: false),
-    ),
+  void _tell(Future<bool> done, String success, String failure) => Tui.post<Message>(
+    done.then((ok) => ok ? Notice(success) : Notice(failure, ok: false)),
+    onError: (_) => Notice(failure, ok: false),
   );
 
   @override
-  Widget view(Screen screen) => VStack([
+  Widget draw(Screen screen) => VStack([
     Label.spans([const Span(' ✻ ', orange), const Span('Books', bold), const Span(" · Anna's Archive", muted)]),
     Label(''),
     _body(screen).flex(),

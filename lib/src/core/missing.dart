@@ -1,4 +1,4 @@
-part of '../core.dart';
+part of '../base.dart';
 
 /// A reading found nothing: a key, a column, a selector, an entry, a tool, a frame.
 /// `Missing <what> [in <where>]`.

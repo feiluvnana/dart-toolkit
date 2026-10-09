@@ -45,10 +45,12 @@ Stream<List<int>> _inflated(Stream<List<int>> body, _Encoding encoding, Uri url)
 
 var _charsetsReady = false;
 
-/// Gives [Response.text] the native library's charsets, the first time a client is made.
+/// Gives [Response.text] the native library's charsets, and cookies `Clock.current`, the first
+/// time a client or a scope is made.
 void _charsets() {
   if (_charsetsReady) return;
   _charsetsReady = true;
+  MessageInternals.clock = () => Clock.current.now();
   MessageInternals.charsets = (label, bytes) =>
       NativeBridge.main.isLoaded ? NativeBridge.main.decodeText(label, bytes) : null;
 }

@@ -1,4 +1,4 @@
-part of '../../path.dart';
+part of '../path.dart';
 
 // `duplicates` binds the native digest itself, so `path` needs no `hash`.
 
@@ -40,7 +40,11 @@ List<List<String>> Function(NativeProgress, Pointer<Uint8>) _duplicatesCall(Stri
 List<List<String>> _sameBytes(String dir, Pointer<Uint8> stop) {
   final bySize = <int, List<String>>{};
   for (final f in _walkSync(Directory(dir)).whereType<File>()) {
-    (bySize[f.lengthSync()] ??= []).add(f.path);
+    try {
+      (bySize[f.lengthSync()] ??= []).add(f.path);
+    } on FileSystemException {
+      // Gone since it was listed: nothing to compare.
+    }
   }
   bySize.remove(0);
   final candidates = <(int, String)>[];
@@ -51,7 +55,12 @@ List<List<String>> _sameBytes(String dir, Pointer<Uint8> stop) {
       if (stop.value != 0) throw const CancelledException();
       final byHead = <int, List<String>>{};
       for (final path in paths) {
-        final raf = File(path).openSync();
+        final RandomAccessFile raf;
+        try {
+          raf = File(path).openSync();
+        } on FileSystemException {
+          continue; // unreadable or gone: it cannot be compared, so it is left out
+        }
         final int n;
         try {
           n = raf.readIntoSync(head.asTypedList(4096));

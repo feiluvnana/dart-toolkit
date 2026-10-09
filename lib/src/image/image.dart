@@ -408,7 +408,7 @@ final class Image implements Finalizable, Saveable {
               'Cannot save image to $to',
             );
           }
-          return _encodeOff(width * height * 4, h, plan);
+          return [await _encodeOff(width * height * 4, h, plan)];
         });
       } finally {
         release();

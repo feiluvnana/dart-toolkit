@@ -7,40 +7,20 @@
 /// {@category CLI}
 library;
 
-import 'dart:async';
-import 'dart:io';
-import 'dart:math';
-
-import 'src/terminal.dart';
+export 'core.dart';
+export 'src/cli.dart' hide ConsoleBridge;
 export 'src/terminal.dart'
     show
         BarGlyphs,
         BatchView,
-        Char,
         Color,
         ItemView,
-        KeyPress,
         LogLevel,
         LogView,
         Marks,
-        Mouse,
-        MouseKind,
         Palette,
-        Paste,
-        Resize,
         StringStyles,
         Style,
         Tally,
         TallyItem,
-        TaskView,
-        TuiEvent;
-
-import 'src/core.dart';
-
-export 'core.dart';
-
-part 'src/cli/command.dart';
-part 'src/cli/completion.dart';
-part 'src/cli/console.dart';
-part 'src/cli/lifecycle.dart';
-part 'src/cli/pick.dart';
+        TaskView;

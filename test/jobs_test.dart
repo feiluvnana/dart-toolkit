@@ -14,6 +14,15 @@ final class _Echo extends Worker<String, String> {
   String run(String item, Work work) => item;
 }
 
+/// Answers `quick` at once and anything else in a minute.
+final class _Slow extends Worker<String, String> {
+  @override
+  Future<String> run(String item, Work work) async {
+    if (item != 'quick') await 1.m.delay();
+    return item;
+  }
+}
+
 void main() {
   group('a folder store', () {
     test('what another version wrote is a FormatException naming the file, on changes', () async {
@@ -44,6 +53,20 @@ void main() {
       final adopted = await pool.changes.firstWhere((job) => job.item == 'left').timeout(5.s);
       expect(await adopted, 'left');
       expect(await other.length(), 0, reason: 'what it holds open is empty, so the jobs run once');
+    });
+
+    test('a job added once the store is open is in the record before it finishes', () async {
+      final home = tempDir();
+      final pool = Pool(_Slow.new, store: Store(home));
+      addTearDown(pool.close);
+      expect(await pool.add('quick'), 'quick');
+      await 200.ms.delay(); // the store is open and its record written
+      pool.add('slow');
+      final record = File('$home/local/$pid.json');
+      for (var i = 0; i < 100 && !record.readAsStringSync().contains('slow'); i++) {
+        await 20.ms.delay();
+      }
+      expect(record.readAsStringSync(), contains('"slow"'), reason: 'a crash now would lose it otherwise');
     });
 
     test('jobs a closed pool stopped stay in its record; finished ones do not', () async {

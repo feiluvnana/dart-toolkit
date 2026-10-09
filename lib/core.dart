@@ -9,6 +9,7 @@ library;
 
 export 'src/core.dart'
     hide
+        BatchInternals,
         CancelInternals,
         ClockInternals,
         CoerceBridge,
@@ -16,6 +17,7 @@ export 'src/core.dart'
         DetachableBridge,
         FileBridge,
         IoBridge,
+        IsolateBridge,
         ProcessBridge,
         RetryInternals,
         StatusInternals,

@@ -1,4 +1,4 @@
-part of '../../path.dart';
+part of '../path.dart';
 
 /// Renaming what a listing found: plan first, apply second.
 ///
@@ -29,7 +29,7 @@ extension PathListingExtensions on Stream<Path> {
       final named = rename(file);
       if (named == null || named.isEmpty || named == file.name || named == file) continue;
       final target = named.contains('/') || named.contains(r'\')
-          ? Path(p.normalize(p.isAbsolute(named) ? named : p.join(file.parent, named)))
+          ? Path(_normalize(_isAbsolute(named) ? named : _join(file.parent, named)))
           : file.parent / named;
       if (file != target) wanted.add((file, target));
     }
@@ -183,7 +183,7 @@ Batch<(Path, Path), Path> _run(List<(Path, Path)> moves, Set<String> replace, Li
             await FileSystemEntity.type(to, followLinks: false) != FileSystemEntityType.notFound) {
           throw PathExistsException(to, const OSError(), 'Cannot rename $from: $to exists');
         }
-        await Directory(p.dirname(to)).create(recursive: true);
+        await Directory(_dirname(to)).create(recursive: true);
         await FileBridge.rename(staged, to);
       } catch (_) {
         try {

@@ -177,17 +177,17 @@ final class Doc implements Saveable {
     _ => throw _shape('a map'),
   };
 
-  /// This list of maps as a [Table]: a [FormatException] for anything but a list, or for an
-  /// element that is not a map, naming it.
-  // Here, not in `collection`: a Table-only program does not compile the document parsers.
-  Table get table => Table.rows([
+  /// This list of maps as maps, for `Table.rows(doc.rows)`: a [FormatException] for anything but
+  /// a list, or for an element that is not a map, naming it. A key that is not a string (YAML
+  /// allows one) is its text.
+  List<Map<String, Object?>> get rows => [
     for (final item in list)
       switch (item.raw) {
         final Map<String, Object?> m => m,
         final Map<Object?, Object?> m => {for (final MapEntry(:key, :value) in m.entries) '$key': value},
         _ => throw item._shape('a map'),
       },
-  ]);
+  ];
 
   // ---- editing
 
@@ -276,7 +276,7 @@ final class Doc implements Saveable {
   /// hold (a `null` in TOML, a list in INI, a stream as JSON) is a [FormatException] naming
   /// where it is.
   String encode(DocFormat format) {
-    final stream = _parent == null ? _origin.stream : null;
+    final stream = _stream;
     if (stream != null && format != DocFormat.yaml) {
       throw FormatException(
         'Invalid ${format._label}: a YAML stream of ${stream.length} documents is one file only as YAML',
@@ -297,8 +297,22 @@ final class Doc implements Saveable {
   @override
   Task<Path> save(String to, {Conflict conflict = Conflict.overwrite}) {
     final format = DocFormat._of(to);
-    return saveBytes(to, conflict, 'Doc', () => utf8.encode(encode(format)));
+    // JSON goes straight to bytes: no text the size of the file on the way.
+    return FileBridge.save(
+      to,
+      conflict,
+      'Doc',
+      () => format == DocFormat.json && _stream == null
+          ? [
+              _jsonBytes(raw, '  '),
+              const [0x0a],
+            ]
+          : [utf8.encode(encode(format))],
+    );
   }
+
+  /// Every document of the YAML stream this root was read from, or `null`.
+  List<Object?>? get _stream => _parent == null ? _origin.stream : null;
 
   /// [raw], so `jsonEncode` writes a document, or one nested in a map, as its value.
   Object? toJson() => raw;
@@ -306,8 +320,15 @@ final class Doc implements Saveable {
   /// A short view for a debugger or a log line; [encode] writes the document.
   @override
   String toString() {
-    final text = _jsonText(raw);
-    return 'Doc(${text.length > 60 ? '${text.substring(0, 59)}…' : text})';
+    // Encoded only as far as shown: a large document's view costs what it prints.
+    final text = _Capped(60);
+    try {
+      JsonEncoder((o) => o is Doc ? o.raw : '$o').startChunkedConversion(StringConversionSink.fromStringSink(text))
+        ..add(raw)
+        ..close();
+    } on _Full catch (_) {} // the view is full; the rest is not shown
+    final t = '${text._sb}';
+    return 'Doc(${t.length > 60 ? '${t.substring(0, 59)}…' : t})';
   }
 
   // ---- failures
@@ -506,22 +527,73 @@ String _kind(Object? v) => switch (v) {
   _ => article('${v.runtimeType}'),
 };
 
-/// [v] as JSON. Only a value that fails pays for a second walk, which writes a nested [Doc] as its
-/// value, a non-finite number as `null` (as JavaScript does) and anything else as its text.
+/// [v] as JSON. Only a value that fails pays for a second walk ([_finite]).
 String _jsonText(Object? v, {String? indent}) {
   try {
     return indent == null ? jsonEncode(v) : JsonEncoder.withIndent(indent).convert(v);
   } on JsonUnsupportedObjectError {
-    Object? finite(Object? v) => switch (v) {
-      final Doc d => finite(d.raw),
-      final double d when !d.isFinite => null,
-      final DateTime d => d.toIso8601String(),
-      final Map<Object?, Object?> m => {for (final MapEntry(:key, :value) in m.entries) '$key': finite(value)},
-      final List<Object?> l => [for (final x in l) finite(x)],
-      _ => v,
-    };
-    return JsonEncoder.withIndent(indent, (o) => '$o').convert(finite(v));
+    return JsonEncoder.withIndent(indent, (o) => '$o').convert(_finite(v));
   }
+}
+
+/// [_jsonText] as UTF-8, written as bytes from the start.
+List<int> _jsonBytes(Object? v, String indent) {
+  try {
+    return JsonUtf8Encoder(indent).convert(v);
+  } on JsonUnsupportedObjectError {
+    return JsonUtf8Encoder(indent, (o) => '$o').convert(_finite(v));
+  }
+}
+
+/// [v] with a nested [Doc] as its value, a non-finite number as `null` (as JavaScript does) and
+/// a [DateTime] in ISO 8601.
+Object? _finite(Object? v) => switch (v) {
+  final Doc d => _finite(d.raw),
+  final double d when !d.isFinite => null,
+  final DateTime d => d.toIso8601String(),
+  final Map<Object?, Object?> m => {for (final MapEntry(:key, :value) in m.entries) '$key': _finite(value)},
+  final List<Object?> l => [for (final x in l) _finite(x)],
+  _ => v,
+};
+
+/// Text that refuses more than [_max] characters, to stop an encoder early.
+final class _Capped implements StringSink {
+  final int _max;
+  final _sb = StringBuffer();
+  _Capped(this._max);
+
+  void _check() {
+    if (_sb.length > _max) throw const _Full();
+  }
+
+  @override
+  void write(Object? object) {
+    _sb.write(object);
+    _check();
+  }
+
+  @override
+  void writeCharCode(int charCode) {
+    _sb.writeCharCode(charCode);
+    _check();
+  }
+
+  @override
+  void writeAll(Iterable<Object?> objects, [String separator = '']) {
+    _sb.writeAll(objects, separator);
+    _check();
+  }
+
+  @override
+  void writeln([Object? object = '']) {
+    _sb.writeln(object);
+    _check();
+  }
+}
+
+/// What [_Capped] throws when it is full.
+final class _Full {
+  const _Full();
 }
 
 final _responseDocs = Expando<Doc>();

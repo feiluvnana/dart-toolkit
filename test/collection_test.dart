@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:dart_toolkit/html.dart';
+import 'package:dart_toolkit/collection.dart';
 import 'package:dart_toolkit/json.dart';
 import 'package:test/test.dart';
 
@@ -249,8 +250,8 @@ void main() {
       expect(t.encode(TableFormat.csv).split('\n').first, 'disc,n,title,size');
 
       final json = '[{"a": 1, "b": "x"}, {"a": 2}]'.json;
-      expect(json.table.columns, ['a', 'b']);
-      expect(json.table.rows, [
+      expect(Table.rows(json.rows).columns, ['a', 'b']);
+      expect(json.rows, [
         {'a': 1, 'b': 'x'},
         {'a': 2},
       ]);
@@ -258,8 +259,11 @@ void main() {
       final html =
           '<table><tr><th>Title</th><th>Size</th></tr><tr><td>A</td><td>10</td></tr><tr><td>B</td><td>20</td></tr></table>'
               .html;
-      expect(html.$('table').first.table.columns, ['Title', 'Size']);
-      expect(html.$('table').first.table.orderBy('Size', descending: true).values<String>('Title'), ['B', 'A']);
+      expect(Table.rows(html.$('table').first.rows).columns, ['Title', 'Size']);
+      expect(Table.rows(html.$('table').first.rows).orderBy('Size', descending: true).values<String>('Title'), [
+        'B',
+        'A',
+      ]);
 
       final dir = tempDir('tbl_');
       expect(await t.save('$dir/out.csv'), '$dir/out.csv');

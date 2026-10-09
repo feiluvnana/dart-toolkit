@@ -1,4 +1,4 @@
-part of '../core.dart';
+part of '../base.dart';
 
 /// Text that never prints: every `toString`, status, error and log shows `•••`. [reveal] is the
 /// only way to the text, so a leak is visible in code review.

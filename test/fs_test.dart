@@ -68,8 +68,7 @@ void main() {
       expect(<Path, int>{Path('a/b/c').normalized: 1}[Path('a/./b//c').normalized], 1);
     });
 
-    test('sanitized and filename', () {
-      expect(Path(r'folder/invalid:*?"<>| name.mp3').sanitized, isNot(contains('*')));
+    test('filename', () {
       expect('AIR / Farewell song'.filename, 'AIR _ Farewell song');
       expect('  spaced   out  '.filename, 'spaced out');
       expect(''.filename, '_');
@@ -77,7 +76,6 @@ void main() {
       expect('report. '.filename, 'report');
       expect('..'.filename, '__');
       expect('a\x00b\x1fc'.filename, 'abc');
-      expect('/x/foo:'.path.sanitized, '/x/foo_');
       final fn = '${'a' * 300}.txt'.filename;
       expect((utf8.encode(fn).length <= 255, fn.endsWith('.txt')), (true, true));
       final target = 'Key BOX'.path / 'DISC01' / '${'AIR / Farewell'.filename}.mp3';
@@ -153,15 +151,18 @@ void main() {
       expect(await f.readText(), 'x');
       expect(await f.writeBytes([1, 2]), f);
       expect(await f.readBytes(), [1, 2]);
-      expect(await f.writeLines(['a', 'b']), f);
-      expect(await f.readLines(), ['a', 'b']);
+      expect(await f.writeText('a\nb\n'), f);
+      expect(await f.lines().toList(), ['a', 'b']);
       expect(await f.appendText('c\n'), f);
-      expect(await f.appendBytes(utf8.encode('d\n')), f);
-      expect(await f.append(Stream.value(utf8.encode('e\n'))), f);
-      expect(await f.readText(), 'a\nb\nc\nd\ne\n');
-      expect(await f.replaceText('c', 'z'), f);
-      expect(await f.readText(), 'a\nb\nz\nd\ne\n');
+      expect(await f.append(Stream.value(utf8.encode('d\n'))), f);
+      expect(await f.readText(), 'a\nb\nc\nd\n');
       expect(await (dir / 'new' / 'more.txt').appendText('made'), dir / 'new' / 'more.txt');
+    });
+
+    test('text that is not its encoding is a FormatException naming the file', () async {
+      final f = await (dir / 'bad.txt').writeBytes([0x61, 0xff, 0xfe]);
+      await expectLater(f.readText(), throwsA(isA<FormatException>().having((e) => e.message, 'message', contains(f))));
+      expect(await f.readText(encoding: latin1), 'aÿþ');
     });
 
     test('write is atomic: a failed source keeps the old file and leaves no temp (FS-23)', () async {
@@ -502,6 +503,31 @@ void main() {
       await expectLater((dir / 's').copy(to: dir / 'd', conflict: Conflict.fail), throwsA(isA<PathExistsException>()));
       await (dir / 's').move(to: dir / 'd');
       expect(await (dir / 's' / 'a' / 'x.txt').readText(), 'x', reason: 'a move skips it too, and leaves it');
+    });
+
+    test('a merge with fail refuses before it writes anything', () async {
+      for (final n in ['a1', 'a2', 'a3', 'z']) {
+        await (dir / 'src' / 'sub' / n).writeText(n);
+      }
+      await (dir / 'dst' / 'sub' / 'z').writeText('mine');
+      await expectLater(
+        (dir / 'src').copy(to: dir / 'dst', conflict: Conflict.fail),
+        throwsA(isA<PathExistsException>().having((e) => e.path, 'path', dir / 'dst' / 'sub' / 'z')),
+      );
+      expect(rel(await (dir / 'dst').files(only: '**').toList(), dir / 'dst'), ['sub/z']);
+      await expectLater(
+        (dir / 'src').move(to: dir / 'dst', conflict: Conflict.fail),
+        throwsA(isA<PathExistsException>()),
+      );
+      expect(rel(await (dir / 'dst').files(only: '**').toList(), dir / 'dst'), ['sub/z']);
+      expect(rel(await (dir / 'src').files(only: '**').toList(), dir / 'src'), ['sub/a1', 'sub/a2', 'sub/a3', 'sub/z']);
+    });
+
+    test('inside a merge, overwrite puts the folder in place of a file or link in its way', () async {
+      await (dir / 's' / 'a' / 'x.txt').writeText('x');
+      await (dir / 'd' / 'a').writeText('file a');
+      await (dir / 's').copy(to: dir / 'd', conflict: Conflict.overwrite);
+      expect(await (dir / 'd' / 'a' / 'x.txt').readText(), 'x');
     });
 
     test('exactly one of to: and into:; into keeps the name (FS-15)', () async {
@@ -923,6 +949,22 @@ void main() {
       expect(onFile.expand((b) => b.all).toSet(), {f});
       expect(onDir.expand((b) => b.all).map((e) => e.name).toSet(), {'w.txt', 'a.txt', 'b.txt', 'c.txt'});
       expect(onDir.last.all.map((e) => e.name).toSet(), {'a.txt', 'b.txt', 'c.txt'}, reason: 'a burst is one batch');
+    });
+
+    test('changes that never pause still end a batch now and then', () async {
+      final batches = <DateTime>[];
+      final sub = dir.changes(debounce: 300.ms).listen((_) => batches.add(DateTime.now()));
+      await Future<void>.delayed(300.ms);
+      final started = DateTime.now();
+      for (var i = 0; DateTime.now().difference(started) < 4.s; i++) {
+        await (dir / 'log.txt').appendText('$i\n');
+        await Future<void>.delayed(30.ms);
+      }
+      final stopped = DateTime.now();
+      await sub.cancel();
+      // The first write may end a batch of its own; after that only the longest wait does.
+      final settled = started.add(1.s);
+      expect(batches.where((t) => t.isAfter(settled) && t.isBefore(stopped)), isNotEmpty);
     });
 
     test('changes on a missing folder fails; it ends with its Cancel.scope (FS-37)', () async {

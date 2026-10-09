@@ -1,4 +1,4 @@
-part of '../core.dart';
+part of '../base.dart';
 
 /// The atomic write `fs` (`Path.writeBytes`), `formats` (`JsonDocument.save`) and `collection`
 /// (`Table.save`) share, and the extension `formats` and `collection` pick a format by: public only because those are separate libraries, and not covered by
@@ -77,11 +77,17 @@ abstract final class FileBridge {
   /// The names [settle] answered and not yet [release]d, with how many writers hold each.
   static final _claims = <String, int>{};
 
-  /// What every `Saveable.save` does: [bytes] written atomically to [to] (whose folder must be
-  /// there), settled by [conflict]
-  /// (a value in memory has no time, so [Conflict.newer] is an [ArgumentError]), as a task about
-  /// the file; a skip is `Done(fresh: false)`.
-  static Task<Path> save(String to, Conflict conflict, String subject, FutureOr<List<int>> Function() bytes) {
+  /// What every `Saveable.save` does: [chunks] written atomically to [to] (whose folder must be
+  /// there), each as it is made, so a large value is never held whole as text and again as bytes;
+  /// settled by [conflict] (a value in memory has no time, so [Conflict.newer] is an
+  /// [ArgumentError]), as a task about the file; a skip is `Done(fresh: false)`. A throw while
+  /// making them leaves the old file. [subject] names the value in a `fail` conflict.
+  static Task<Path> save(
+    String to,
+    Conflict conflict,
+    String subject,
+    FutureOr<Iterable<List<int>>> Function() chunks,
+  ) {
     if (conflict == Conflict.newer) {
       throw ArgumentError.value(conflict, 'conflict', 'Invalid conflict: a value in memory has no time to compare');
     }
@@ -97,7 +103,10 @@ abstract final class FileBridge {
         return Path(to);
       }
       try {
-        await write(target, await bytes());
+        final pieces = await chunks();
+        await (pieces is List<List<int>> && pieces.length == 1
+            ? write(target, pieces.single)
+            : writeStream(target, Stream.fromIterable(pieces)));
       } finally {
         release(target);
       }
@@ -232,7 +241,13 @@ abstract final class FileBridge {
     final (tmp, out) = opened;
     try {
       try {
-        await out.writeFrom(bytes);
+        // In slices: an async write copies what it is given, so the whole list would be held
+        // twice; a 64 KiB copy is short-lived where a larger one lingers until a full GC.
+        const slice = 64 << 10;
+        for (var at = 0; at < bytes.length; at += slice) {
+          final end = min(at + slice, bytes.length);
+          await out.writeFrom(bytes is Uint8List ? Uint8List.sublistView(bytes, at, end) : bytes.sublist(at, end));
+        }
       } finally {
         await out.close();
       }

@@ -378,6 +378,10 @@ final class Chrome implements Client {
     HttpBridge.agents[this] = _browserAgent;
   }
 
+  /// The protocol socket is local: deflating every frame (a screenshot's base64 included) costs
+  /// both ends time and doubles what a large answer holds while it arrives.
+  static const _uncompressed = CompressionOptions.compressionOff;
+
   static void _checkSettings(Render render, int concurrency, List<Uri> proxies) {
     render._check();
     if (concurrency < 1) {
@@ -459,7 +463,7 @@ final class Chrome implements Client {
       process = _reaps
           ? await Process.start('/bin/sh', ['-c', _reaper, 'dart_toolkit_chrome', scratch.path, binary, ...command])
           : await Process.start(binary, command);
-      ProcessBridge.assignJob(process.pid);
+      OsBridge.assignJob(process.pid);
     } catch (_) {
       await _erase(scratch);
       rethrow;
@@ -470,7 +474,10 @@ final class Chrome implements Client {
     drain(process.stderr);
     try {
       final client = Chrome._(
-        await WebSocket.connect('${await _activePort(dir, process, const Duration(seconds: 30))}'),
+        await WebSocket.connect(
+          '${await _activePort(dir, process, const Duration(seconds: 30))}',
+          compression: _uncompressed,
+        ),
         render: render,
         concurrency: concurrency,
         device: device,
@@ -532,7 +539,7 @@ final class Chrome implements Client {
         ),
         mode: ProcessStartMode.detached,
       );
-      ProcessBridge.assignJob(process.pid);
+      OsBridge.assignJob(process.pid);
       // Polled, not `DevToolsActivePort`: that file is stale from the last run until rewritten.
       const limit = Duration(seconds: 30);
       final began = Clock.current.elapsed;
@@ -542,7 +549,7 @@ final class Chrome implements Client {
       }
     }
     return Chrome._(
-      await WebSocket.connect('$endpoint'),
+      await WebSocket.connect('$endpoint', compression: _uncompressed),
       render: render,
       concurrency: concurrency,
       device: device,

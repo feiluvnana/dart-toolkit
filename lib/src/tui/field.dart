@@ -231,30 +231,30 @@ final class Field extends Widget with Focusable {
     switch (event) {
       case _ when lines > 1 && _newline.contains(event):
         _insert('\n');
-      case Char(:final char, alt: false):
-        _insert(char);
+      case KeyPress(:final text?):
+        _insert(text);
       case Paste(:final text):
         _insert(text);
       case KeyPress.left || const KeyPress('b', ctrl: true):
         cursor = _cursor - 1;
       case KeyPress.right || const KeyPress('f', ctrl: true):
         cursor = _cursor + 1;
-      case KeyPress(name: 'left', ctrl: true) || KeyPress(name: 'left', alt: true) || Char(char: 'b', alt: true):
+      case KeyPress(name: 'left', ctrl: true) || KeyPress(name: 'left' || 'b', alt: true):
         _cursor = _wordLeft();
-      case KeyPress(name: 'right', ctrl: true) || KeyPress(name: 'right', alt: true) || Char(char: 'f', alt: true):
+      case KeyPress(name: 'right', ctrl: true) || KeyPress(name: 'right' || 'f', alt: true):
         _cursor = _wordRight();
       case KeyPress.home || const KeyPress('a', ctrl: true):
         _cursor = 0;
       case KeyPress.end || const KeyPress('e', ctrl: true):
         _cursor = _chars.length;
-      case KeyPress.backspace || const KeyPress('h', ctrl: true):
+      case KeyPress.backspace:
         if (_cursor > 0) _cut(_cursor - 1, _cursor);
       // ^D on an empty input is readline's end of input: it reaches `update`.
       case KeyPress.delete || const KeyPress('d', ctrl: true) when event == KeyPress.delete || _chars.isNotEmpty:
         if (_cursor < _chars.length) _chars.removeAt(_cursor);
       case const KeyPress('w', ctrl: true) || const KeyPress('backspace', alt: true):
         _cut(_wordLeft(), _cursor);
-      case Char(char: 'd', alt: true) || KeyPress(name: 'delete', ctrl: true):
+      case KeyPress(name: 'd', alt: true) || KeyPress(name: 'delete', ctrl: true):
         _chars.removeRange(_cursor, _wordRight());
       case const KeyPress('u', ctrl: true):
         _cut(0, _cursor);
@@ -278,8 +278,8 @@ final class Field extends Widget with Focusable {
   }
 
   @override
-  void mouse(Mouse event, int x, int y) {
-    if (event.kind != MouseKind.press) return;
+  void pointer(Pointer event, int x, int y) {
+    if (event.kind != PointerKind.press) return;
     final starts = _starts(_room);
     final line = (_top + y).clamp(0, starts.length - 1);
     var col = Style.width(prompt) - (lines == 1 ? _scroll : 0);

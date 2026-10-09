@@ -88,6 +88,28 @@ void main() {
       final again = await Image.decode(await img.encode(ImageFormat.png));
       expect((again.width, again.height), (8, 16), reason: 'saved as it is seen, so a re-save is not sideways');
     });
+
+    test('every EXIF orientation turns the pixels as rotate and flip would', () async {
+      final plain = await (await _photo(24, 10)).encode(ImageFormat.jpeg);
+      final sensor = await Image.decode(plain);
+      final expected = <int, Image>{
+        2: sensor.flip(horizontal: true),
+        3: sensor.rotate(180),
+        4: sensor.flip(vertical: true),
+        5: sensor.rotate(90).flip(horizontal: true),
+        6: sensor.rotate(90),
+        7: sensor.rotate(270).flip(horizontal: true),
+        8: sensor.rotate(270),
+      };
+      for (final MapEntry(key: orientation, value: want) in expected.entries) {
+        final read = await Image.decode(_withExif(plain, orientation: orientation));
+        expect(
+          await read.encode(ImageFormat.png),
+          await want.encode(ImageFormat.png),
+          reason: 'orientation $orientation',
+        );
+      }
+    });
   });
 
   group('transforms', () {

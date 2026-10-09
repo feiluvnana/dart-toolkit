@@ -3,6 +3,9 @@ part of '../../scrape.dart';
 /// What reads one page: a crawl's `onResponse`, or one a follow names for its page.
 typedef _OnResponse<T> = FutureOr<void> Function(ResponseContext<T> ctx);
 
+/// What decides a page's failure: a crawl's `onError`, or one a follow names for its page.
+typedef _OnError<T> = FutureOr<void> Function(ErrorContext<T> ctx);
+
 // ---- contexts ------------------------------------------------------------------------------
 
 /// What every crawl hook is handed: the page it is about ([url], [depth], [attempt], [meta]),
@@ -96,10 +99,6 @@ mixin _Scheduling<T> on HookContext<T> {
   /// Where a relative link is resolved from.
   Uri get _base => url;
 
-  /// [href] resolved as [follow] resolves a relative URL: against the page's `<base href>`,
-  /// else its URL.
-  Uri resolve(String href) => _resolve(_base, href);
-
   /// Adds [item] to this page's items: `Done(page, items)` once the hooks return, and
   /// `crawl.items`.
   void emit(T item) {
@@ -110,10 +109,11 @@ mixin _Scheduling<T> on HookContext<T> {
 
   List<T> get _items;
 
-  /// Schedules a GET of [url], resolved against this page; `null` schedules nothing, so a link
-  /// that may be missing reads in one expression. [meta] is carried to that page's hooks,
-  /// [headers] sent with it, and [onResponse] reads it instead of the crawl's. Answers whether
-  /// it was scheduled: one already seen, too deep, not http(s) or outside `within` is not.
+  /// Schedules a GET of [url], resolved against this page (its `<base href>`, else its URL);
+  /// `null` schedules nothing, so a link that may be missing reads in one expression. [meta] is
+  /// carried to that page's hooks, [headers] sent with it; [onResponse] reads it and [onError]
+  /// decides its failure instead of the crawl's. Answers whether it was scheduled: one already
+  /// seen, too deep, not http(s) or outside `within` is not.
   ///
   /// ```dart
   /// ctx.follow(ctx.html.$('a.next').firstOrNull?.link);
@@ -124,11 +124,12 @@ mixin _Scheduling<T> on HookContext<T> {
     Map<String, Object?>? meta,
     Map<String, String>? headers,
     FutureOr<void> Function(ResponseContext<T> ctx)? onResponse,
+    FutureOr<void> Function(ErrorContext<T> ctx)? onError,
   }) {
     _open('follow');
     if (url == null) return false;
     final target = _resolve(_base, url);
-    return _scheduled(Request('GET', target, headers: headers), meta, onResponse);
+    return _scheduled(Request('GET', target, headers: headers), meta, onResponse, onError);
   }
 
   /// Schedules [request] as it is (its method, headers and body), its URL resolved against this
@@ -138,13 +139,14 @@ mixin _Scheduling<T> on HookContext<T> {
     Request request, {
     Map<String, Object?>? meta,
     FutureOr<void> Function(ResponseContext<T> ctx)? onResponse,
+    FutureOr<void> Function(ErrorContext<T> ctx)? onError,
   }) {
     _open('send');
     final target = _resolve(_base, request.url);
-    return _scheduled(target == request.url ? request.copy() : request.copy(url: target), meta, onResponse);
+    return _scheduled(target == request.url ? request.copy() : request.copy(url: target), meta, onResponse, onError);
   }
 
-  bool _scheduled(Request request, Map<String, Object?>? meta, _OnResponse<T>? onResponse) {
+  bool _scheduled(Request request, Map<String, Object?>? meta, _OnResponse<T>? onResponse, _OnError<T>? onError) {
     final added = meta == null || meta.isEmpty ? null : meta;
     final done = _engine.schedule(
       request,
@@ -152,6 +154,7 @@ mixin _Scheduling<T> on HookContext<T> {
       meta: added == null ? _at.meta : {..._at.meta, ...added},
       added: added,
       onResponse: onResponse,
+      onError: onError,
     );
     if (done) _acted();
     return done;
@@ -176,10 +179,12 @@ final class InitContext<T> {
     Map<String, Object?>? meta,
     Map<String, String>? headers,
     FutureOr<void> Function(ResponseContext<T> ctx)? onResponse,
+    FutureOr<void> Function(ErrorContext<T> ctx)? onError,
   }) => send(
     Request('GET', url, headers: headers),
     meta: meta,
     onResponse: onResponse,
+    onError: onError,
   );
 
   /// Adds [request] as a seed, sent as it is: a login POST, a search form's submission.
@@ -187,9 +192,17 @@ final class InitContext<T> {
     Request request, {
     Map<String, Object?>? meta,
     FutureOr<void> Function(ResponseContext<T> ctx)? onResponse,
+    FutureOr<void> Function(ErrorContext<T> ctx)? onError,
   }) {
     if (_closed) throw StateError('Cannot send after onInit has returned');
-    return _engine.schedule(request, depth: 0, meta: meta ?? const {}, onResponse: onResponse, seed: true);
+    return _engine.schedule(
+      request,
+      depth: 0,
+      meta: meta ?? const {},
+      onResponse: onResponse,
+      onError: onError,
+      seed: true,
+    );
   }
 }
 
@@ -241,7 +254,7 @@ final class ResponseContext<T> extends HookContext<T> with _Scheduling<T> {
   @override
   Uri get _base {
     if (_baseRead case final read?) return read;
-    final parsed = MarkupInternals.parsed(response);
+    final parsed = HtmlInternals.parsed(response);
     return parsed == null ? url : _baseRead = parsed.base ?? url;
   }
 
@@ -355,7 +368,7 @@ abstract class Crawler<T> {
   /// - [store]: the frontier and the pages seen, kept as the crawl goes: a rerun with it carries
   ///   on (its seeds added to what is left), `store.clear()` starts over, and a crawl that
   ///   finishes clears it. Under a store, `meta` must be JSON-ready, and a follow cannot carry
-  ///   an `onResponse` of its own (it is resumed with the crawl's).
+  ///   an `onResponse` or `onError` of its own (it is resumed with the crawl's).
   /// - [concurrency]: pages in flight in all; to one host, `Http.scope(perHost:)`, else 4.
   /// - [canonical]: what makes two URLs one page, for the seen check only:
   ///   `canonical: (u) => u.withQuery({'sid': null})`.
@@ -627,12 +640,16 @@ final class _Skip implements Exception {
 }
 
 /// One page waiting in the frontier or being read: its request (and redirect chain), where it
-/// came from, and the `onResponse` of its own that reads it, if any.
+/// came from, and the hooks of its own that read it, if any. Once read it keeps only its [url]
+/// and [depth]: a finished page is a crawl's `Done` until the crawl ends.
 final class _Page<T> {
-  final Request request;
+  /// `null` once the page has been read.
+  Request? request;
+  final Uri url;
   final int depth;
-  final Map<String, Object?> meta;
-  final _OnResponse<T>? onResponse;
+  Map<String, Object?> meta;
+  _OnResponse<T>? onResponse;
+  _OnError<T>? onError;
 
   /// A seed the caller named: only it moves the crawl's home when it redirects.
   final bool seed;
@@ -640,9 +657,22 @@ final class _Page<T> {
   /// Its id in the store, when there is one.
   int? id;
 
-  _Page(this.request, {required this.depth, required this.meta, this.onResponse, this.seed = false});
+  _Page(
+    Request this.request, {
+    required this.depth,
+    required this.meta,
+    this.onResponse,
+    this.onError,
+    this.seed = false,
+  }) : url = request.url;
 
-  Uri get url => request.url;
+  /// Lets go of what only reading the page needed.
+  void _spend() {
+    request = null;
+    meta = const {};
+    onResponse = null;
+    onError = null;
+  }
 
   @override
   String toString() => '$url';
@@ -928,14 +958,15 @@ final class _Engine<T> {
     required Map<String, Object?> meta,
     Map<String, Object?>? added,
     _OnResponse<T>? onResponse,
+    _OnError<T>? onError,
     bool seed = false,
   }) {
     if (_stopped || _cancelled) return false;
     if (_journal != null) {
-      if (onResponse != null) {
+      if (onResponse != null || onError != null) {
         throw ArgumentError.value(
-          onResponse,
-          'onResponse',
+          onResponse ?? onError,
+          onResponse != null ? 'onResponse' : 'onError',
           'Invalid follow: a crawl with a store resumes its pages with its own hooks; route by meta instead',
         );
       }
@@ -947,6 +978,7 @@ final class _Engine<T> {
       depth: depth,
       meta: meta,
       onResponse: onResponse,
+      onError: onError,
       seed: seed,
     );
     if (crawler._depth case final most? when depth > most) return false;
@@ -956,7 +988,7 @@ final class _Engine<T> {
     } else if (!_within(url)) {
       return false;
     }
-    final key = _keyOf(page.request);
+    final key = _keyOf(page.request!);
     if (!_visited.add(key)) return false;
     if (_journal case final journal?) page.id = journal.queued(_frozen(page), key);
     _push(page);
@@ -983,6 +1015,7 @@ final class _Engine<T> {
       host.inFlight--;
       _inFlight--;
       if (!_cancelled && page.id != null) _journal?.done(page.id!);
+      page._spend();
       _notify();
     }
   });
@@ -990,7 +1023,7 @@ final class _Engine<T> {
   Future<List<T>> _read(_Page<T> page, _Host<T> host, Work work) async {
     final policy = HttpInternals.retry(_settings);
     final items = <T>[];
-    var current = page.request;
+    var current = page.request!;
     var hops = 0;
     final chain = <int>[_keyOf(current)];
     for (var attempt = 1; ;) {
@@ -1064,7 +1097,7 @@ final class _Engine<T> {
             final key = _keyOf(next);
             // A hop back into this chain is followed (a login redirecting to itself with a
             // cookie); one to a page seen elsewhere ends this one, read there.
-            if (!chain.contains(key) && page.onResponse == null) {
+            if (!chain.contains(key) && page.onResponse == null && page.onError == null) {
               if (!_visited.add(key)) return items;
               _journal?.visited(key);
             }
@@ -1097,7 +1130,7 @@ final class _Engine<T> {
         return items;
       }
 
-      final onError = crawler._error;
+      final onError = page.onError ?? crawler._error;
       if (onError == null) Error.throwWithStackTrace(error!, trace);
       final ctx = ErrorContext<T>._(this, page, work, error!, trace, sent, attempt, items);
       try {
@@ -1238,7 +1271,7 @@ void _jsonReady(Map<String, Object?> meta) {
 
 /// [page] as a store entry: everything a later run needs to send it again, body included.
 Map<String, Object?> _frozen<T>(_Page<T> page) {
-  final request = page.request;
+  final request = page.request!;
   return {
     'url': '${request.url}',
     'method': request.method,
@@ -1303,14 +1336,7 @@ Uri _page(Uri url) {
 }
 
 /// [target] against [base], as a page; see [_page].
-Uri _resolve(Uri base, Object target) => switch (target) {
-  Uri() => _page(base.resolveUri(target)),
-  String() => _page(base.resolve(target.trim().replaceAll(_tabOrNewline, ''))),
-  _ => throw ArgumentError.value(target, 'target', 'Invalid link, expected a Uri or a String'),
-};
-
-/// Stripped from an href anywhere in it, as a browser does.
-final _tabOrNewline = RegExp('[\t\n\r]');
+Uri _resolve(Uri base, Uri target) => _page(base.resolveUri(target));
 
 final _sitemapIndex = RegExp(r'<sitemapindex[\s>]', caseSensitive: false);
 final _sitemapUrlset = RegExp(r'<urlset[\s>]', caseSensitive: false);

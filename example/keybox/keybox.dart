@@ -1,5 +1,6 @@
 import 'package:dart_toolkit/archive.dart';
 import 'package:dart_toolkit/cli.dart';
+import 'package:dart_toolkit/collection.dart';
 import 'package:dart_toolkit/scrape.dart';
 
 final site = 'https://key.visualarts.gr.jp/key20th/'.url;
@@ -176,9 +177,9 @@ Future<void> findSongs(ResponseContext<Asset> page, Map<int, Disc> discs) async 
   for (final row in page.html.$('#songlist tr')) {
     final cells = row.$('td').toList();
     if (cells.length < 4) continue;
-    final href = cells[3].$('a').attr('href');
-    final disc = numberIn(href, discInLink, orIn: cells[1].text);
-    final track = numberIn(href, trackInLink, orIn: cells[2].text);
+    final link = cells[3].$('a').link;
+    final disc = numberIn(link.path, discInLink, orIn: cells[1].text);
+    final track = numberIn(link.path, trackInLink, orIn: cells[2].text);
     final title = discs[disc]!.tracks[track] ?? cells[3].text.filename;
 
     final missing = <String, Path>{};
@@ -188,7 +189,7 @@ Future<void> findSongs(ResponseContext<Asset> page, Map<int, Disc> discs) async 
     }
     if (missing.isEmpty) continue;
 
-    page.follow(page.resolve(href), onResponse: (song) => findFiles(song, missing));
+    page.follow(link, onResponse: (song) => findFiles(song, missing));
   }
 }
 

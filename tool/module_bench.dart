@@ -2,6 +2,10 @@
 //
 //   dart run tool/module_bench.dart            # every module, six rounds
 //   dart run tool/module_bench.dart http html  # a subset
+//   dart run tool/module_bench.dart --exit     # each probe exits, as `Cli.run` does
+//
+// A probe that returns from `main` also waits for the front end's last background optimisations,
+// which jump in bands; one that exits does not, so `--exit` reads what is compiled more steadily.
 //
 // Timings drift by tens of milliseconds, so rounds alternate order and the table reports the
 // median and the minimum over bare. Read the deltas, not the totals.
@@ -22,9 +26,11 @@ const modules = [
   'async',
   'process',
   'cli',
+  'pick',
   'tui',
   'html',
   'xml',
+  'xpath',
   'json',
   'torrent',
   'http',
@@ -35,19 +41,23 @@ const modules = [
 
 final targets = Arg.of<String>('modules', 'Specific modules to benchmark').many().or(modules);
 final roundsOpt = Option.of<int>('rounds', 'Number of measurement rounds', short: 'r').or(6);
+final exitOpt = Option.flag('exit', 'Each probe exits rather than returning from main');
 
 void main(List<String> args) => Cli(
   'Benchmark startup / import cost per module over a bare script and over core.',
-  values: [targets, roundsOpt],
+  values: [targets, roundsOpt, exitOpt],
   handler: (ctx) async {
     final selected = ctx(targets);
     final rounds = ctx(roundsOpt);
+    final main = ctx(exitOpt)
+        ? "import 'dart:io' as io;\nvoid main() { print(0); io.exit(0); }\n"
+        : 'void main() => print(0);\n';
 
     await Path.tempDir((dir) async {
       final pkg = (Path.cwd / '.dart_tool' / 'package_config.json').absolute;
-      await (dir / 'bare.dart').writeText('void main() => print(0);\n');
+      await (dir / 'bare.dart').writeText(main);
       for (final m in selected) {
-        await (dir / '$m.dart').writeText("import 'package:dart_toolkit/$m.dart';\nvoid main() => print(0);\n");
+        await (dir / '$m.dart').writeText("import 'package:dart_toolkit/$m.dart';\n$main");
       }
 
       Future<int> time(String name) async {

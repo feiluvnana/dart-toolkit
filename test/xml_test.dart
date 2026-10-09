@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:dart_toolkit/html.dart';
 import 'package:dart_toolkit/src/message.dart' show Response;
 import 'package:dart_toolkit/xml.dart';
+import 'package:dart_toolkit/xpath.dart';
 import 'package:test/test.dart';
 import 'package:xml/xml.dart' as reference;
 import 'package:xml/xpath.dart';
@@ -81,6 +82,14 @@ void main() {
       expect(doc.$('entry').first.link, Uri.parse('https://x.com/feed/a/b.xml'));
       final res = Response('<urlset><url href="/p"/></urlset>', 200, url: Uri.parse('https://x.com/sitemap.xml'));
       expect(res.xml.$('url').first.link, Uri.parse('https://x.com/p'));
+    });
+
+    test('an XML element named base is an element, not HTML\'s <base href>', () {
+      const src = '<urlset><url><base href="http://other.example/x/"/><loc href="page.html"/></url></urlset>';
+      final doc = Xml.parse(src, url: Uri.parse('https://e.com/sitemap.xml'));
+      expect(doc.$('loc').first.link, Uri.parse('https://e.com/page.html'));
+      doc.$('url').first.append(Element('base', {'href': 'http://third.example/'}, Syntax.xml));
+      expect(doc.$('loc').first.link, Uri.parse('https://e.com/page.html'));
     });
 
     test('the tree: names, prefixes, attributes, entities, CDATA, serialisation', () {

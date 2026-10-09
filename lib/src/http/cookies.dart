@@ -16,7 +16,16 @@ part of '../http.dart';
 ///
 /// {@category Networking}
 final class CookieJar extends Iterable<HttpCookie> implements Saveable {
-  final List<HttpCookie> _cookies = [];
+  /// The most a jar keeps for one domain, and in all, as a browser caps them: past either the
+  /// oldest set goes, so a site setting a new name on every page cannot grow it without end.
+  static const _perDomain = 180, _most = 3000;
+
+  /// Every cookie, oldest set first.
+  final _order = LinkedHashSet<_Jarred>.identity();
+
+  /// The same by domain, oldest set first: a request looks at its host's and its parents' only.
+  final _byDomain = <String, List<_Jarred>>{};
+  var _sets = 0;
 
   /// A jar holding [cookies]; see [add].
   CookieJar([Iterable<HttpCookie> cookies = const []]) {
@@ -31,7 +40,7 @@ final class CookieJar extends Iterable<HttpCookie> implements Saveable {
   /// Writes this jar to the cookie file [to], as [read] reads it, atomically.
   @override
   Task<Path> save(String to, {Conflict conflict = Conflict.overwrite}) =>
-      FileBridge.save(to, conflict, 'cookies', () => utf8.encode(_savedCookies(this, to)));
+      FileBridge.save(to, conflict, 'cookies', () => [utf8.encode(_savedCookies(this, to))]);
 
   /// The jar [json] holds, as [toJson] wrote it; a [FormatException] if it is not that shape.
   factory CookieJar.fromJson(Object? json) {
@@ -61,47 +70,74 @@ final class CookieJar extends Iterable<HttpCookie> implements Saveable {
     return jar;
   }
 
-  /// Stores [cookie], replacing the one of the same name, domain and path. One already expired
-  /// is not kept, and still removes its namesake.
+  /// Stores [cookie], replacing the one of the same name, domain and path; past 180 for its domain
+  /// or 3000 in all the oldest set goes. One already expired (on `Clock.current`) is not kept, and still
+  /// removes its namesake.
   void add(HttpCookie cookie) {
-    _cookies.removeWhere((c) => _same(c, cookie));
-    if (!_lapsed(cookie, DateTime.now())) _cookies.add(cookie);
+    if (_find(cookie) case final old?) _drop(old);
+    if (_lapsed(cookie, Clock.current.now())) return;
+    final entry = _Jarred(cookie, _sets++);
+    final mine = _byDomain[cookie.domain] ??= [];
+    mine.add(entry);
+    _order.add(entry);
+    if (mine.length > _perDomain) _drop(mine.first);
+    if (_order.length > _most) _drop(_order.first);
   }
 
   /// Removes the cookies named [name], of [domain] only when given.
-  void remove(String name, {String? domain}) =>
-      _cookies.removeWhere((c) => c.name == name && (domain == null || c.domain == domain.toLowerCase()));
+  void remove(String name, {String? domain}) {
+    final lower = domain?.toLowerCase();
+    for (final e in [..._order]) {
+      if (e.cookie.name == name && (lower == null || e.cookie.domain == lower)) _drop(e);
+    }
+  }
 
   /// Removes every cookie: the session starts over.
-  void clear() => _cookies.clear();
+  void clear() {
+    _order.clear();
+    _byDomain.clear();
+  }
 
   @override
   Iterator<HttpCookie> get iterator {
     _sweep();
-    return List.of(_cookies).iterator;
+    return [for (final e in _order) e.cookie].iterator;
   }
 
   /// The cookies as JSON, for [CookieJar.fromJson]: what `jsonEncode(jar)` writes.
-  List<Map<String, Object?>> toJson() {
-    _sweep();
-    return [
-      for (final c in _cookies)
-        {
-          'name': c.name,
-          'value': c.value,
-          'domain': c.domain,
-          'path': c.path,
-          'expires': c.expires?.toIso8601String(),
-          'secure': c.secure,
-          'hostOnly': c.hostOnly,
-          'httpOnly': c.httpOnly,
-        },
-    ];
-  }
+  List<Map<String, Object?>> toJson() => [
+    for (final c in this)
+      {
+        'name': c.name,
+        'value': c.value,
+        'domain': c.domain,
+        'path': c.path,
+        'expires': c.expires?.toIso8601String(),
+        'secure': c.secure,
+        'hostOnly': c.hostOnly,
+        'httpOnly': c.httpOnly,
+      },
+  ];
 
   void _sweep() {
-    final now = DateTime.now();
-    _cookies.removeWhere((c) => _lapsed(c, now));
+    final now = Clock.current.now();
+    for (final e in [..._order]) {
+      if (_lapsed(e.cookie, now)) _drop(e);
+    }
+  }
+
+  /// The kept cookie [cookie] would replace, if any.
+  _Jarred? _find(HttpCookie cookie) {
+    for (final e in _byDomain[cookie.domain] ?? const <_Jarred>[]) {
+      if (_same(e.cookie, cookie)) return e;
+    }
+    return null;
+  }
+
+  void _drop(_Jarred e) {
+    _order.remove(e);
+    final mine = _byDomain[e.cookie.domain]!..remove(e);
+    if (mine.isEmpty) _byDomain.remove(e.cookie.domain);
   }
 
   static bool _lapsed(HttpCookie c, DateTime now) => c.expires != null && !c.expires!.isAfter(now);
@@ -115,7 +151,7 @@ final class CookieJar extends Iterable<HttpCookie> implements Saveable {
       final cookie = MessageInternals.setCookie(line, from);
       if (cookie == null) continue;
       // Nor may plain http replace one that is `Secure` (RFC 6265bis §5.7).
-      if (from.scheme != 'https' && _cookies.any((c) => c.secure && _same(c, cookie))) continue;
+      if (from.scheme != 'https' && (_find(cookie)?.cookie.secure ?? false)) continue;
       add(cookie);
     }
   }
@@ -126,26 +162,41 @@ final class CookieJar extends Iterable<HttpCookie> implements Saveable {
   }
 
   /// The `cookie` header for [url], longest path first (RFC 6265) and else in the order set,
-  /// or `null`.
+  /// or `null`. Only the host's domain and its parents' are looked at.
   String? _headerFor(Uri url) {
-    _sweep();
-    // Every match ends with its domain, so a cheap suffix test skips the other sites' cookies.
+    if (_order.isEmpty) return null;
+    final now = Clock.current.now();
     final host = url.host.toLowerCase();
-    final matching = [
-      for (final c in _cookies)
-        if (host.endsWith(c.domain) &&
-            HttpBridge.sendsTo(url, domain: c.domain, path: c.path, secure: c.secure, hostOnly: c.hostOnly))
-          c,
-    ];
+    final matching = <_Jarred>[];
+    final lapsed = <_Jarred>[];
+    for (var domain = host; ;) {
+      for (final e in _byDomain[domain] ?? const <_Jarred>[]) {
+        final c = e.cookie;
+        if (_lapsed(c, now)) {
+          lapsed.add(e);
+        } else if (HttpBridge.sendsTo(url, domain: c.domain, path: c.path, secure: c.secure, hostOnly: c.hostOnly)) {
+          matching.add(e);
+        }
+      }
+      final dot = domain.indexOf('.');
+      if (dot == -1) break;
+      domain = domain.substring(dot + 1);
+    }
+    lapsed.forEach(_drop);
     if (matching.isEmpty) return null;
-    // Stable: equal paths keep the order they were set in.
-    final order = [for (var i = 0; i < matching.length; i++) i]
-      ..sort((a, b) {
-        final byPath = matching[b].path.length.compareTo(matching[a].path.length);
-        return byPath != 0 ? byPath : a.compareTo(b);
-      });
-    return [for (final i in order) '${matching[i].name}=${matching[i].value}'].join('; ');
+    matching.sort((a, b) {
+      final byPath = b.cookie.path.length.compareTo(a.cookie.path.length);
+      return byPath != 0 ? byPath : a.set.compareTo(b.set);
+    });
+    return [for (final e in matching) '${e.cookie.name}=${e.cookie.value}'].join('; ');
   }
+}
+
+/// A cookie in a jar, with when it was set among the others.
+final class _Jarred {
+  final HttpCookie cookie;
+  final int set;
+  _Jarred(this.cookie, this.set);
 }
 
 /// The jar [text], the cookie file [path], holds.

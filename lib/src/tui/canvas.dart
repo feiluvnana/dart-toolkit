@@ -2,24 +2,55 @@ part of '../../tui.dart';
 
 bool _isControl(int rune) => rune < 0x20 || (rune >= 0x7f && rune < 0xa0);
 
-/// [text] as cells: each grapheme (a code point and the zero-width ones joining it) with its width.
-Iterable<(String, int)> _graphemes(String text) sync* {
-  final runes = text.runes.toList();
+/// One-character strings of ASCII, made once: a cell of plain text allocates nothing.
+final List<String> _ascii = List.generate(128, String.fromCharCode);
+
+/// The code point at [i] of [text], a surrogate pair read whole.
+int _runeAt(String text, int i) {
+  final c = text.codeUnitAt(i);
+  if (c & 0xfc00 != 0xd800 || i + 1 >= text.length) return c;
+  final d = text.codeUnitAt(i + 1);
+  return d & 0xfc00 == 0xdc00 ? 0x10000 + ((c & 0x3ff) << 10) + (d & 0x3ff) : c;
+}
+
+/// Calls [cell] with each grapheme of [text] (a code point and the zero-width ones joining it)
+/// and its width, until it answers `false`.
+void _cells(String text, bool Function(String grapheme, int width) cell) {
+  final n = text.length;
   var i = 0;
-  while (i < runes.length) {
+  while (i < n) {
+    final c = text.codeUnitAt(i);
+    // ASCII that nothing after it can join.
+    if (c < 0x80 && (i + 1 == n || text.codeUnitAt(i + 1) < 0x300)) {
+      if (!cell(_ascii[c], c < 0x20 || c == 0x7f ? 0 : 1)) return;
+      i++;
+      continue;
+    }
     final start = i;
-    final w = IoBridge.runeWidth(runes[i]);
-    i++;
+    final first = _runeAt(text, i);
+    i += first > 0xffff ? 2 : 1;
     // A control (`\n`, `\t`, ESC) is its own grapheme: it never joins the one before it.
-    if (!_isControl(runes[start])) {
-      while (i < runes.length &&
-          !_isControl(runes[i]) &&
-          (IoBridge.runeWidth(runes[i]) == 0 || runes[i - 1] == 0x200d)) {
-        i++;
+    if (!_isControl(first)) {
+      var previous = first;
+      while (i < n) {
+        final r = _runeAt(text, i);
+        if (_isControl(r) || !(IoBridge.runeWidth(r) == 0 || previous == 0x200d)) break;
+        previous = r;
+        i += r > 0xffff ? 2 : 1;
       }
     }
-    yield (String.fromCharCodes(runes, start, i), w);
+    if (!cell(text.substring(start, i), IoBridge.runeWidth(first))) return;
   }
+}
+
+/// [text] as cells: each grapheme with its width.
+List<(String, int)> _graphemes(String text) {
+  final out = <(String, int)>[];
+  _cells(text, (g, w) {
+    out.add((g, w));
+    return true;
+  });
+  return out;
 }
 
 /// The screen as cells: a grapheme, a style and a link each; `''` is the right half of a wide one.
@@ -143,7 +174,17 @@ final class Canvas {
   final TuiTheme theme;
   final _Frame _frame;
 
-  Canvas._(this._buf, this._x, this._y, this.width, this.height, this.theme, this._frame);
+  /// The rows of the buffer it may write, `[_top, _bottom)`: a scrolled child is painted only
+  /// where it shows.
+  final int _top, _bottom;
+
+  Canvas._(this._buf, this._x, this._y, this.width, this.height, this.theme, this._frame, [int? top, int? bottom])
+    : _top = top ?? 0,
+      _bottom = bottom ?? _buf.height;
+
+  /// Its first row that shows, and the row after its last.
+  int get _shownFrom => _top - _y < 0 ? 0 : _top - _y;
+  int get _shownTo => _bottom - _y > height ? height : _bottom - _y;
 
   /// The theme's palette.
   Palette get palette => theme.palette;
@@ -152,7 +193,7 @@ final class Canvas {
   Canvas area(int x, int y, [int? w, int? h]) {
     final cx = x.clamp(0, width), cy = y.clamp(0, height);
     final cw = (w ?? width - x).clamp(0, width - cx), ch = (h ?? height - y).clamp(0, height - cy);
-    return Canvas._(_buf, _x + cx, _y + cy, cw, ch, theme, _frame);
+    return Canvas._(_buf, _x + cx, _y + cy, cw, ch, theme, _frame, _top, _bottom);
   }
 
   /// The part of this canvas [widget] takes at its own size: what a click on it reaches.
@@ -163,7 +204,7 @@ final class Canvas {
     return area(0, 0, cw, h > 0 && h < height ? h : height);
   }
 
-  /// Whether the pointer is over this canvas (with `mouse: true`).
+  /// Whether the pointer is over this canvas (with `pointer: true`).
   bool get isHovered => switch (_frame.pointer) {
     (final px, final py) => _inside(px, py),
     null => false,
@@ -175,13 +216,14 @@ final class Canvas {
     null => false,
   };
 
-  bool _inside(int px, int py) => px >= _x && px < _x + width && py >= _y && py < _y + height;
+  bool _inside(int px, int py) =>
+      px >= _x && px < _x + width && py >= _y && py < _y + height && py >= _top && py < _bottom;
 
   /// Writes [text] at [x], [y] in [style] laid over what is there, linking to [link] when given;
   /// returns the column after it. A styled string's own styles go over [style].
   int text(int x, int y, String text, [Style? style, Uri? link]) {
     final base = style ?? Style.none;
-    if (y < 0 || y >= height) return x;
+    if (y < 0 || y >= height || _y + y < _top || _y + y >= _bottom) return x;
     if (text.contains('\x1b')) {
       for (final (t, s) in TerminalBridge.runs(text)) {
         x = this.text(x, y, t, base + s, link);
@@ -189,12 +231,13 @@ final class Canvas {
       return x;
     }
     final url = link?.toString();
-    for (final (g, w) in _graphemes(text)) {
-      if (g == '\n') break;
-      x = _put(x, y, g, w, base, url);
-      if (x >= width) break;
-    }
-    return x;
+    var at = x;
+    _cells(text, (g, w) {
+      if (g == '\n') return false;
+      at = _put(at, y, g, w, base, url);
+      return at < width;
+    });
+    return at;
   }
 
   /// [text] for each span, one after another.
@@ -217,7 +260,9 @@ final class Canvas {
   }
 
   void _set(int x, int y, String g, Style style, [String? link]) {
-    final col = _x + x, i = (_y + y) * _buf.width + col, c = _buf.chars;
+    final row = _y + y;
+    if (row < _top || row >= _bottom) return;
+    final col = _x + x, i = row * _buf.width + col, c = _buf.chars;
     // Writing over either half of a wide character blanks the other half.
     if (g.isNotEmpty && c[i].isEmpty && col > 0) c[i - 1] = ' ';
     if (col + 1 < _buf.width && c[i + 1].isEmpty) c[i + 1] = ' ';
@@ -228,7 +273,7 @@ final class Canvas {
 
   /// Fills the canvas with [char] in [style]: a background, a rule, a blank.
   void fill([Style style = Style.none, String char = ' ']) {
-    for (var y = 0; y < height; y++) {
+    for (var y = _shownFrom; y < _shownTo; y++) {
       for (var x = 0; x < width; x++) {
         final i = (_y + y) * _buf.width + _x + x;
         _buf.chars[i] = char;
@@ -240,7 +285,7 @@ final class Canvas {
 
   /// Lays [style] over every cell of the canvas, keeping what is drawn: a hover, a highlight.
   void tint(Style style) {
-    for (var y = 0; y < height; y++) {
+    for (var y = _shownFrom; y < _shownTo; y++) {
       for (var x = 0; x < width; x++) {
         final i = (_y + y) * _buf.width + _x + x;
         _buf.styles[i] = _buf.styles[i] + style;
@@ -269,23 +314,10 @@ final class Canvas {
     return area(1, 1, width - 2, height - 2);
   }
 
-  /// Copies [from]'s rows from [top] on into this canvas, as many as fit.
-  void _blit(_Buffer from, int top) {
-    final w = width < from.width ? width : from.width;
-    for (var y = 0; y < height && top + y < from.height; y++) {
-      final src = (top + y) * from.width, dst = (_y + y) * _buf.width + _x;
-      for (var x = 0; x < w; x++) {
-        _buf.chars[dst + x] = from.chars[src + x];
-        _buf.styles[dst + x] = from.styles[src + x];
-        _buf.links[dst + x] = from.links[src + x];
-      }
-    }
-  }
-
   /// Paints [widget] on this canvas.
   void draw(Widget widget) {
     // A popup at a position or in the middle takes no room, and still draws.
-    if ((width > 0 && height > 0) || widget is Popup) widget.paint(this);
+    if ((width > 0 && _shownFrom < _shownTo) || widget is Popup) widget.paint(this);
   }
 
   /// Registers [control] for the keys and the pointer over this canvas; returns whether it has
@@ -296,7 +328,9 @@ final class Canvas {
   void _clickable(Object? message, [Focusable? control]) => _register(control, message, true);
 
   bool _register(Focusable? control, Object? message, bool clickable) {
-    _frame.targets.add(_Target(control, message, clickable, _x, _y, width, height));
+    // Only the rows that show take the pointer.
+    final from = _y + _shownFrom, to = _y + _shownTo;
+    _frame.targets.add(_Target(control, message, clickable, _x, from, width, to > from ? to - from : 0));
     if (control == null) return false;
     final first = _frame.focusables.firstOrNull;
     final has =

@@ -722,13 +722,46 @@ final class Table implements Saveable {
   /// given), JSON an indented array of objects, NDJSON one object a line, Markdown with numbers
   /// right-aligned. A [DateTime] is written in ISO 8601. TSV has no quoting, so a tab or line
   /// break in a cell is a [FormatException] naming it.
-  String encode(TableFormat format, {String? separator}) => switch (format) {
-    TableFormat.csv => _csv(format._separator(separator) ?? ',', tsv: false),
-    TableFormat.tsv => _csv('\t', tsv: true),
-    TableFormat.json => '${_json(toJson(), indent: '  ')}\n',
-    TableFormat.ndjson => _objects.map(_json).join('\n') + (rows.isEmpty ? '' : '\n'),
-    TableFormat.markdown => _markdown(),
-  };
+  String encode(TableFormat format, {String? separator}) => _pieces(format, format._separator(separator) ?? ',').join();
+
+  /// [format]'s text in pieces of about 1 MiB: what [encode] joins and [save] writes as it goes.
+  Iterable<String> _pieces(TableFormat format, String separator) sync* {
+    final sb = StringBuffer();
+    switch (format) {
+      case TableFormat.csv || TableFormat.tsv:
+        final tsv = format == TableFormat.tsv;
+        _csvLine(sb, columns, separator, tsv: tsv ? (i) => 'the header' : null);
+        for (final (n, r) in rows.indexed) {
+          _csvLine(
+            sb,
+            [for (final c in columns) _written(r[c])],
+            separator,
+            tsv: tsv ? (i) => 'row ${n + 1}, column "${columns[i]}"' : null,
+          );
+          if (sb.length >= 1 << 20) {
+            yield sb.toString();
+            sb.clear();
+          }
+        }
+      case TableFormat.ndjson:
+        for (final o in _objects) {
+          sb
+            ..write(_json(o))
+            ..write('\n');
+          if (sb.length >= 1 << 20) {
+            yield sb.toString();
+            sb.clear();
+          }
+        }
+      case TableFormat.json:
+        sb
+          ..write(_json(toJson(), indent: '  '))
+          ..write('\n');
+      case TableFormat.markdown:
+        sb.write(_markdown());
+    }
+    yield sb.toString();
+  }
 
   /// Writes this table to [to] in the format its extension names (see [TableFormat]),
   /// atomically, into a folder that exists; a file there is replaced unless [conflict] says
@@ -736,8 +769,8 @@ final class Table implements Saveable {
   @override
   Task<Path> save(String to, {Conflict conflict = Conflict.overwrite, String? separator}) {
     final format = TableFormat._of(to);
-    format._separator(separator);
-    return saveBytes(to, conflict, 'Table', () => utf8.encode(encode(format, separator: separator)));
+    final sep = format._separator(separator) ?? ',';
+    return FileBridge.save(to, conflict, 'Table', () => _pieces(format, sep).map(utf8.encode));
   }
 
   /// The rows as JSON-ready maps over [columns] (a [DateTime] as ISO 8601), so `jsonEncode(table)`
@@ -749,20 +782,6 @@ final class Table implements Saveable {
 
   /// Each row keyed by exactly [columns], so a written file reads back as this table.
   Iterable<Map<String, Object?>> get _objects => rows.map((r) => {for (final c in columns) c: r[c]});
-
-  String _csv(String separator, {required bool tsv}) {
-    final sb = StringBuffer();
-    _csvLine(sb, columns, separator, tsv: tsv ? (i) => 'the header' : null);
-    for (final (n, r) in rows.indexed) {
-      _csvLine(
-        sb,
-        [for (final c in columns) _written(r[c])],
-        separator,
-        tsv: tsv ? (i) => 'row ${n + 1}, column "${columns[i]}"' : null,
-      );
-    }
-    return sb.toString();
-  }
 
   /// Whether every value of [column] is a number or blank, in a table with rows.
   bool _numeric(String column) {
@@ -980,21 +999,25 @@ String _unused(String name, Set<String> seen) {
   }
 }
 
-/// A CSV row: the header's index over the record's cells. A short record reads `null` past its
-/// end; a long one is cut at the header.
+/// A CSV row: the header's index over the record's cells, read from the table's [_CsvCells]
+/// as asked for, or a streamed row's own [_cells]. A short record reads `null` past its end; a
+/// long one is cut at the header.
 final class _CsvRow extends _SchemaRow {
   @override
   final _Schema schema;
 
-  final List<String> _cells;
+  /// A streamed row's cells; `null` for a row of a table read whole.
+  final List<String>? _cells;
 
-  /// The cells' text, for the line a failure names; `null` for a streamed row.
+  /// The cells of the table read whole, which also give the line a failure names.
   final _CsvCells? _data;
 
   /// The record's place: its index in [_data], or the data row's number when streamed.
   final int _record;
 
-  _CsvRow(this.schema, this._cells, this._data, this._record);
+  _CsvRow.read(this.schema, _CsvCells this._data, this._record) : _cells = null;
+
+  _CsvRow.streamed(this.schema, List<String> this._cells, this._record) : _data = null;
 
   @override
   String get place => switch (_data) {
@@ -1003,10 +1026,13 @@ final class _CsvRow extends _SchemaRow {
   };
 
   @override
-  Object? operator [](Object? key) => switch (schema.index[key]) {
-    final i? when i < _cells.length => _cells[i],
-    _ => null,
-  };
+  Object? operator [](Object? key) {
+    final i = schema.index[key];
+    if (i == null) return null;
+    if (_data case final data?) return i < data.count(_record) ? data.cell(_record, i) : null;
+    final cells = _cells!;
+    return i < cells.length ? cells[i] : null;
+  }
 
   @override
   bool containsKey(Object? key) => schema.index.containsKey(key);
@@ -1060,8 +1086,15 @@ final class _CsvCells {
     final starts = <int>[];
     final rebuilt = <String>[];
     var count = 0; // cells so far, over every record
+    var i = 0;
+    final n = text.length;
     void add(int start, int end) {
-      if (used + 2 > cells.length) cells = Int32List(cells.length * 2)..setRange(0, used, cells);
+      if (used + 2 > cells.length) {
+        // Grown to what the text read so far predicts for the whole, so the buffer kept is
+        // little more than its cells, rather than up to twice them.
+        final predicted = (used * (n / (i < 1 ? 1 : i)) * 1.05).ceil() + 64;
+        cells = Int32List(max(predicted, cells.length * 3 ~/ 2))..setRange(0, used, cells);
+      }
       cells[used++] = start;
       cells[used++] = end;
       count++;
@@ -1076,8 +1109,6 @@ final class _CsvCells {
       end,
     );
 
-    var i = 0;
-    final n = text.length;
     bool stop(int c) => c == sep || c == 0x0a || c == 0x0d;
     while (i < n) {
       final first = count;
@@ -1203,8 +1234,7 @@ final class _CsvRows extends ListBase<Row> {
   int get length => _made.length;
 
   @override
-  Row operator [](int index) =>
-      _made[index] ??= Row(_CsvRow(_schema, _RecordCells(_data, index + 1), _data, index + 1));
+  Row operator [](int index) => _made[index] ??= Row(_CsvRow.read(_schema, _data, index + 1));
 
   @override
   set length(int _) => throw UnsupportedError("Cannot change a table's rows");
@@ -1340,12 +1370,13 @@ final class _RowReader {
   _RowReader(this._path, this._format, String? separator, this._decimal)
     : _sep = separator == null ? null : Table._oneChar(separator);
 
-  /// The rows [piece] completes. Pieces are scanned once a MiB has arrived, or as much as the
-  /// record held over, so one huge cell is not rescanned per piece.
+  /// The rows [piece] completes. Pieces are scanned as they come, unless a record is held over:
+  /// then once as much again has arrived, so one huge cell is scanned a doubling number of
+  /// times, not once per piece.
   List<Row> add(String piece) {
     _arrived.add(piece);
     _waiting += piece.length;
-    if (_waiting < 1 << 20 && _waiting < _pending.length) return const [];
+    if (_waiting < _pending.length) return const [];
     return _scan(done: false);
   }
 
@@ -1353,7 +1384,7 @@ final class _RowReader {
   List<Row> close() => _arrived.isEmpty && _pending.isEmpty ? const [] : _scan(done: true);
 
   List<Row> _scan({required bool done}) {
-    var chunk = _pending + _arrived.join();
+    var chunk = (StringBuffer(_pending)..writeAll(_arrived)).toString();
     _arrived.clear();
     _waiting = 0;
     if (_first && chunk.startsWith('﻿')) chunk = chunk.substring(1);
@@ -1381,7 +1412,8 @@ final class _RowReader {
       for (var r = 0; r < data.length; r++) {
         final cells = _RecordCells(data, r);
         if (_head case final head?) {
-          rows.add(Row(_CsvRow(head, cells, null, ++_row)));
+          // Copied out, so a row kept from the stream holds its own cells, not the whole chunk.
+          rows.add(Row(_CsvRow.streamed(head, List.of(cells, growable: false), ++_row)));
         } else {
           _head = _Schema(_names(cells, trailing: true), source: _path, format: _format, decimal: _decimal);
         }

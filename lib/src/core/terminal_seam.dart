@@ -7,7 +7,8 @@ part of '../core.dart';
 /// `FakeTerminal` (in `testing.dart`) under `Io.scope(terminal:)`.
 ///
 /// [open] puts it in raw mode and starts [input]; [close] undoes both and must be synchronous,
-/// because a signal handler calls it on the way out. Escape sequences go through [write].
+/// because a signal handler calls it on the way out; it can be opened again after. Escape
+/// sequences go through [write].
 ///
 /// ```dart
 /// final term = FakeTerminal(width: 40, height: 10);
@@ -35,6 +36,10 @@ abstract interface class Terminal {
   Future<void> open();
 
   void close();
+
+  /// Stops the process as ^Z does (SIGTSTP) and completes once it runs again (SIGCONT). It is
+  /// called closed, and opened again after.
+  Future<void> suspend();
 
   void write(String data);
 }

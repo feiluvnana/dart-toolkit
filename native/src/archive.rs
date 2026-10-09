@@ -1119,18 +1119,19 @@ fn extract(path: &str, dest: &str, password: Option<&str>, only: Option<&str>, f
                 report_progress(progress, 0, total, 0, total_bytes, "")?;
             }
             for i in 0..z.len() {
-                let mut f = match password {
-                    Some(pw) => z.by_index_decrypt(i, pw.as_bytes()).msg()?,
-                    None => z.by_index(i).msg()?,
-                };
-                let name = zip_name(&f).to_string();
-                unsafe {
-                    report_progress(progress, i as u64, total, bytes_done, total_bytes, &name)?;
-                }
+                // Raw first: an entry not wanted is never opened, so never decrypted.
+                let name = zip_name(&z.by_index_raw(i).msg()?).to_string();
                 let target = inside(root, &name)?;
                 if !pol.wants(&name) {
                     continue;
                 }
+                unsafe {
+                    report_progress(progress, i as u64, total, bytes_done, total_bytes, &name)?;
+                }
+                let mut f = match password {
+                    Some(pw) => z.by_index_decrypt(i, pw.as_bytes()).msg()?,
+                    None => z.by_index(i).msg()?,
+                };
                 if f.is_dir() {
                     pol.contains(&target)?;
                     std::fs::create_dir_all(&target).msg()?;
@@ -1364,11 +1365,18 @@ fn plain(name: &str) -> String {
     name.replace('\\', "/").trim_start_matches("./").to_string()
 }
 
+/// The entry `name`'s bytes after [OWNED] free ones, as [own] hands them over.
 fn read_entry(path: &str, name: &str, password: Option<&str>, flags: u32) -> Result<Vec<u8>, String> {
     let kind = detect_read(path)?;
     let mut pol = Policy::new(path, Path::new("."), None, flags)?;
     let want = plain(name);
     let missing = || format!("{}: no entry {}", path, name);
+    // Sized up front from the header, so a large entry is never copied as the vector grows.
+    let sized = |size: u64| {
+        let mut out = Vec::with_capacity(OWNED + size.min(1 << 30) as usize);
+        out.resize(OWNED, 0);
+        out
+    };
     let mut out = Vec::new();
     match kind {
         "zip" => {
@@ -1384,6 +1392,7 @@ fn read_entry(path: &str, name: &str, password: Option<&str>, flags: u32) -> Res
             .msg()?;
             pol.charge(f.size(), name)?;
             let size = f.size();
+            out = sized(size);
             copy_capped(&mut f, &mut out, size, name)?;
         }
         "7z" => {
@@ -1398,6 +1407,7 @@ fn read_entry(path: &str, name: &str, password: Option<&str>, flags: u32) -> Res
                     }
                     found = true;
                     pol.charge(e.size(), name).map_err(seven_err)?;
+                    out = sized(e.size());
                     copy_capped(r, &mut out, e.size(), name).map_err(seven_err)?;
                     Ok(false)
                 })
@@ -1412,7 +1422,7 @@ fn read_entry(path: &str, name: &str, password: Option<&str>, flags: u32) -> Res
                 let Some(h) = a.read_header().msg()? else { return Err(missing()) };
                 if plain(&h.entry().filename.to_string_lossy()) == want && h.entry().is_file() {
                     pol.charge(h.entry().unpacked_size, name)?;
-                    out = h.read().msg()?.0;
+                    out = owned(h.read().msg()?.0);
                     break;
                 }
                 a = h.skip().msg()?;
@@ -1427,6 +1437,7 @@ fn read_entry(path: &str, name: &str, password: Option<&str>, flags: u32) -> Res
                 if n == want && e.header().entry_type().is_file() {
                     pol.charge(e.size(), name)?;
                     let size = e.size();
+                    out = sized(size);
                     copy_capped(&mut e, &mut out, size, name)?;
                     found = true;
                     break;
@@ -1440,8 +1451,9 @@ fn read_entry(path: &str, name: &str, password: Option<&str>, flags: u32) -> Res
     Ok(out)
 }
 
-/// Reads the one entry `name` of the archive at `path` into a Rust allocation the caller frees
-/// with `tk_free`. `flags` is `TRUSTED`, which lifts the size cap as for `tk_archive_extract`.
+/// Reads the one entry `name` of the archive at `path` into a Rust allocation handed over as
+/// [own] does: `out` is the data's address, which the caller frees with `tk_release`. `flags` is
+/// `TRUSTED`, which lifts the size cap as for `tk_archive_extract`.
 #[no_mangle]
 pub unsafe extern "C" fn tk_archive_read(
     path: *const u8,
@@ -1457,8 +1469,10 @@ pub unsafe extern "C" fn tk_archive_read(
 ) -> i32 {
     let _watch = watch(stop);
     guard(|| {
-        let data = read_entry(text(path, plen)?, text(name, nlen)?, opt_text(pw, pwlen)?, flags)?;
-        Ok(give(data, out, out_len))
+        let (data, len) = own(read_entry(text(path, plen)?, text(name, nlen)?, opt_text(pw, pwlen)?, flags)?);
+        *out = data;
+        *out_len = len;
+        Ok(0)
     })
 }
 
@@ -1566,10 +1580,7 @@ fn contents(
                 };
                 let (bytes, next) = h.read().msg()?;
                 a = next;
-                let mut data = Vec::with_capacity(OWNED + bytes.len());
-                data.resize(OWNED, 0);
-                data.extend_from_slice(&bytes);
-                if !emit(entry, data) {
+                if !emit(entry, owned(bytes)) {
                     return Ok(());
                 }
             }
@@ -1633,12 +1644,20 @@ fn record(e: &Entry, out: &mut Vec<u8>) {
 }
 
 /// Bytes ahead of the data in a buffer [own] hands over: its length and capacity.
-const OWNED: usize = 16;
+pub(crate) const OWNED: usize = 16;
+
+/// `data` with [OWNED] free bytes put ahead of it, for [own]: grown in place where the
+/// allocator can, rather than copied into a second buffer.
+fn owned(mut data: Vec<u8>) -> Vec<u8> {
+    data.reserve_exact(OWNED);
+    data.splice(0..0, [0u8; OWNED]);
+    data
+}
 
 /// `data`, whose first [OWNED] bytes were left for it, handed over as its data's address: the
 /// caller frees it with `tk_release` given only that address, as a Dart finalizer does, so the
 /// bytes reach Dart without a copy.
-fn own(mut data: Vec<u8>) -> (*mut u8, usize) {
+pub(crate) fn own(mut data: Vec<u8>) -> (*mut u8, usize) {
     let (len, cap) = (data.len(), data.capacity());
     data[..8].copy_from_slice(&(len as u64).to_le_bytes());
     data[8..OWNED].copy_from_slice(&(cap as u64).to_le_bytes());

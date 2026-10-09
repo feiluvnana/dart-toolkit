@@ -1,6 +1,5 @@
-part of '../../path.dart';
+part of '../path.dart';
 
-final _invalidPathChars = RegExp(r'[:*?"<>|\r\n\t]');
 final _invalidNameChars = RegExp(r'[/\\:*?"<>|]');
 final _whitespaceCollapse = RegExp(r'\s+');
 final _controlChars = RegExp(r'[\x00-\x1f]');
@@ -58,66 +57,50 @@ extension PathExtensions on Path {
   // ---- parts
 
   /// [part] appended to this path, normalized. An absolute [part] replaces this path, as
-  /// `p.join` has it: `dir / '/etc/x'` is `/etc/x`.
-  Path operator /(String part) => Path(p.normalize(p.join(_p, part)));
+  /// `_join` has it: `dir / '/etc/x'` is `/etc/x`.
+  Path operator /(String part) => Path(_normalize(_join(_p, part)));
 
   /// The canonical form of this path, with `.` and `..` segments resolved.
   ///
   /// Every path the library builds (`/`, `parent`, `withExt`, `relativeTo`, listings) is
   /// already normalized, so `base / 'a' / '..' / 'b' == base / 'b'`. Only a path built by
   /// hand from a raw string can still differ: wrap it in `.normalized` once, where it enters.
-  Path get normalized => Path(p.normalize(_p));
+  Path get normalized => Path(_normalize(_p));
 
   /// The final component (`'song.mp3'`, `'folder'`).
-  String get name => p.basename(_p);
+  String get name => _basename(_p);
 
   /// The final component without its extension (`'song'` from `'song.mp3'`).
-  String get stem => p.basenameWithoutExtension(_p);
+  String get stem {
+    final name = _basename(_p);
+    return _isAbsolute(name) ? '' : name.substring(0, name.length - _extension(name).length);
+  }
 
   /// The extension without its dot (`'mp3'` from `'song.mp3'`), or `''`. Only the last one:
   /// `'a.tar.gz'` has `'gz'`.
   String get ext {
-    final e = p.extension(_p);
+    final e = _extension(_p);
     return e.startsWith('.') ? e.substring(1) : e;
   }
 
   /// The folder this is in.
-  Path get parent => Path(p.dirname(_p));
+  Path get parent => Path(_dirname(_p));
 
   /// Whether this path starts at a root.
-  bool get isAbsolute => p.isAbsolute(_p);
+  bool get isAbsolute => _isAbsolute(_p);
 
   /// This path made absolute against the working directory, and normalized.
-  Path get absolute => Path(p.normalize(p.absolute(_p)));
+  Path get absolute => Path(_normalize(_absolute(_p)));
 
   /// This path relative to [from], else to the working directory.
-  Path relativeTo([String? from]) => Path(p.relative(_p, from: from));
+  Path relativeTo([String? from]) => Path(_relativePath(_p, from: from));
 
   /// This path with its last extension replaced by [ext], with or without the dot; `''`
   /// removes it.
-  Path withExt(String ext) => Path(p.setExtension(_p, ext.isEmpty || ext.startsWith('.') ? ext : '.$ext'));
+  Path withExt(String ext) => Path(_setExtension(_p, ext.isEmpty || ext.startsWith('.') ? ext : '.$ext'));
 
   /// The individual path segments.
-  List<String> get segments => p.split(_p);
-
-  /// This path with invalid filesystem characters replaced, and control characters removed,
-  /// in every component; separators survive (on POSIX `\` is a name character, not one). For
-  /// one component use [StringPathExtensions.filename].
-  Path get sanitized {
-    final useSlash = !Platform.isWindows || _p.contains('/') || !_p.contains(r'\');
-    final root = p.rootPrefix(_p);
-    final rawParts = _p.substring(root.length).split(Platform.isWindows ? RegExp(r'[/\\]') : '/');
-    final parts = [
-      for (final part in rawParts)
-        part
-            .replaceAll(_invalidPathChars, '_')
-            .replaceAll(_controlChars, '')
-            .replaceAll(_whitespaceCollapse, ' ')
-            .trim(),
-    ];
-    final sep = useSlash ? '/' : p.separator;
-    return Path(root + parts.join(sep));
-  }
+  List<String> get segments => _split(_p);
 
   // ---- questions
 
@@ -165,14 +148,21 @@ extension PathExtensions on Path {
     final at = absolute._p;
     final type = await FileSystemEntity.type(at);
     if (type == FileSystemEntityType.notFound) throw FileBridge.notFound(at, 'Cannot read free space of');
-    final dir = type == FileSystemEntityType.directory ? at : p.dirname(at);
+    final dir = type == FileSystemEntityType.directory ? at : _dirname(at);
     return Isolate.run(() => Platform.isWindows ? _Sys.freeWindows(dir) : _Sys.freePosix(dir));
   }
 
   // ---- reading
 
-  /// This file's text.
-  Future<String> readText({Encoding encoding = utf8}) => File(_p).readAsString(encoding: encoding);
+  /// This file's text; bytes that are not [encoding] are a [FormatException] naming the file.
+  Future<String> readText({Encoding encoding = utf8}) async {
+    final bytes = await readBytes();
+    try {
+      return encoding.decode(bytes);
+    } on FormatException catch (e) {
+      throw FormatException('Invalid ${encoding.name} in $_p: ${e.message}', e.source, e.offset);
+    }
+  }
 
   /// This file's bytes from [start] up to [end] (its length when `null` or past it): a range
   /// past the end is empty. A negative [start], or an [end] before [start], is an
@@ -180,10 +170,12 @@ extension PathExtensions on Path {
   Future<Uint8List> readBytes({int start = 0, int? end}) async {
     if (start < 0) throw ArgumentError.value(start, 'start', 'Invalid start: negative');
     if (end != null && end < start) throw ArgumentError.value(end, 'end', 'Invalid end: before start ($start)');
-    if (start == 0 && end == null) return File(_p).readAsBytes();
     final raf = await File(_p).open();
     try {
       final length = await raf.length();
+      // A file that reports no length (`/proc`, a FIFO) is read to its end; any other in one
+      // read of its length, which `readAsBytes` would buffer and copy.
+      if (length == 0 && start == 0 && end == null) return await File(_p).readAsBytes();
       final to = end == null || end > length ? length : end;
       if (start >= to) return Uint8List(0);
       await raf.setPosition(start);
@@ -192,9 +184,6 @@ extension PathExtensions on Path {
       await raf.close();
     }
   }
-
-  /// This file's lines, read whole. For a large file, [lines] streams them.
-  Future<List<String>> readLines({Encoding encoding = utf8}) => File(_p).readAsLines(encoding: encoding);
 
   /// This file's lines as they are read, in constant memory: decoded as one stream, so a
   /// character or a `\r\n` that two reads cut arrives whole. `\n`, `\r\n` and `\r` end a line.
@@ -230,10 +219,6 @@ extension PathExtensions on Path {
     return this;
   }
 
-  /// Writes [lines] to this file, each ending in a newline; atomic, as [writeText] is.
-  Future<Path> writeLines(Iterable<String> lines, {Encoding encoding = utf8}) =>
-      writeText(lines.map((l) => '$l\n').join(), encoding: encoding);
-
   /// Writes [source] to this file as it arrives; atomic, as [writeText] is, so the file changes
   /// only once [source] is done, and an error in it leaves the old file as it was.
   ///
@@ -246,10 +231,7 @@ extension PathExtensions on Path {
   }
 
   /// Adds [text] to the end of this file, in place, making it and its folders when missing.
-  Future<Path> appendText(String text, {Encoding encoding = utf8}) => appendBytes(encoding.encode(text));
-
-  /// Adds [bytes] to the end of this file, in place, making it and its folders when missing.
-  Future<Path> appendBytes(List<int> bytes) => append(Stream.value(bytes));
+  Future<Path> appendText(String text, {Encoding encoding = utf8}) => append(Stream.value(encoding.encode(text)));
 
   /// Adds [source] to the end of this file as it arrives, in place, making it and its folders
   /// when missing.
@@ -263,10 +245,6 @@ extension PathExtensions on Path {
     }
     return this;
   }
-
-  /// Rewrites this file with every [from] replaced by [to], atomically.
-  Future<Path> replaceText(Pattern from, String to, {Encoding encoding = utf8}) async =>
-      writeText((await readText(encoding: encoding)).replaceAll(from, to), encoding: encoding);
 
   /// Makes this file (and its folders) when missing, else sets its modification time, a
   /// folder's too, to [at] (now when `null`).
@@ -363,8 +341,9 @@ extension PathExtensions on Path {
   /// folder onto a folder merges, and [conflict] settles each file inside that is already
   /// there, and as a whole each folder a file or link stands in the way of (a link there is
   /// never written through): [Conflict.skip] (the default, a rerun neither destroys nor duplicates; nothing
-  /// copied is `Done(fresh: false)`), `overwrite` (renamed over, never deleted first),
-  /// `rename` (a free `name (1).ext`), `fail` (a [PathExistsException]), `newer`.
+  /// copied is `Done(fresh: false)`), `overwrite` (renamed over, never deleted first; a file
+  /// where a folder goes is replaced by it), `rename` (a free `name (1).ext`), `fail` (a
+  /// [PathExistsException], every name checked before anything is written), `newer`.
   ///
   /// A link is copied as a link, here or inside a folder, as `cp -R` does. Reports bytes for a
   /// file and files for a folder; nothing here is a [PathNotFoundException].
@@ -421,7 +400,8 @@ extension PathExtensions on Path {
   // ---- watching
 
   /// The paths that changed under this folder or at this file, a batch at a time once nothing
-  /// has changed for [debounce], so a build that writes a hundred files is one rebuild. A file
+  /// has changed for [debounce], so a build that writes a hundred files is one rebuild; changes
+  /// that never pause (a log written to all the time) still end a batch every 10 debounces. A file
   /// is watched through its folder, so it outlives atomic writes; their temporary files are
   /// left out. A missing folder fails the stream with a [PathNotFoundException]; the enclosing
   /// [Cancel.scope] ends it with a [CancelledException].
@@ -457,15 +437,16 @@ extension PathExtensions on Path {
 
   /// The files under this folder that hold the same bytes (the same size and BLAKE3), in groups
   /// of two or more, largest first, each group sorted; empty files are left out. Only files
-  /// sharing a size and their first 4 KiB are read whole, on every core. Reports its step, not
-  /// an amount; this folder missing is a [PathNotFoundException].
+  /// sharing a size and their first 4 KiB are read whole, on every core; a file that cannot be
+  /// read, or is gone meanwhile, is left out. Reports its step, not an amount; this folder
+  /// missing is a [PathNotFoundException].
   Task<List<List<Path>>> duplicates() =>
       TaskInternals.start(this, FileBridge.label(_p), (work) => _duplicates(work, _p));
 
   /// Where a copy or move to [to] or [into] lands: exactly one of them.
   String _destination(String verb, String? to, String? into) => switch ((to, into)) {
     (final to?, null) => to,
-    (null, final into?) => p.join(into, name),
+    (null, final into?) => _join(into, name),
     (null, null) => throw ArgumentError('Cannot $verb $_p: give to: or into:'),
     _ => throw ArgumentError('Cannot $verb $_p: give to: or into:, not both'),
   };
@@ -512,7 +493,7 @@ PathType _pathType(FileSystemEntityType type) => switch (type) {
 
 String _capFilename(String name) {
   if (utf8.encode(name).length <= 255) return name;
-  final ext = p.extension(name);
+  final ext = _extension(name);
   final extBytes = utf8.encode(ext).length;
   if (extBytes >= 255) return _truncateUtf8(name, 255);
   return _truncateUtf8(name.substring(0, name.length - ext.length), 255 - extBytes) + ext;

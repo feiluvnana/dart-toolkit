@@ -1,4 +1,4 @@
-part of '../../path.dart';
+part of '../path.dart';
 
 /// Permission bits as `chmod` reads them, checked when made: octal (`'755'`, `'0600'`, `'6755'`)
 /// or symbolic (`'+x'`, `'u+rw,go-w'`, `'a=r'`). It is a [String], so it goes wherever a mode's

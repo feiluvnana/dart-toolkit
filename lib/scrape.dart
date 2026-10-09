@@ -18,8 +18,9 @@ import 'html.dart';
 import 'json.dart';
 import 'src/core.dart';
 import 'src/http.dart';
-import 'src/markup.dart' show MarkupInternals, Xml, XmlResponse;
+import 'src/html.dart' show HtmlInternals;
 import 'src/message.dart';
+import 'xml.dart';
 
 export 'html.dart';
 export 'http.dart';

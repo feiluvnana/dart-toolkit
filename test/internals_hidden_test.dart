@@ -3,19 +3,13 @@ import 'package:test/test.dart';
 
 /// Every name here is internal: no public library may export it.
 const hidden = {
-  'html.dart': [
-    'Selector',
-    'TextRun',
-    'parseHtml',
-    'parseXml',
-    'nameEnd',
-    'scanAttributes',
-    'inOrder',
-    'rootOf',
-    'MarkupInternals',
-    'ElementInternals',
-  ],
+  'html.dart': ['HtmlInternals', 'MarkupInternals', 'Names', 'TextRun'],
+  'xml.dart': ['HtmlInternals', 'MarkupInternals', 'Names', 'TextRun'],
+  'xpath.dart': ['MarkupInternals', 'Names', 'TextRun'],
+  'chrome.dart': ['OsBridge'],
+  'process.dart': ['OsBridge', 'ShellInternals'],
   'core.dart': [
+    'BatchInternals',
     'CoerceBridge',
     'DetachableBridge',
     'FileBridge',
@@ -28,11 +22,13 @@ const hidden = {
     'TextBridge',
     'TimeoutBridge',
   ],
-  'process.dart': ['ShellInternals'],
-  'cli.dart': ['TerminalBridge'],
-  'tui.dart': ['TerminalBridge'],
+  'cli.dart': ['ConsoleBridge', 'KeysBridge', 'TerminalBridge'],
+  'pick.dart': ['ConsoleBridge', 'KeysBridge', 'TerminalBridge'],
+  'tui.dart': ['KeysBridge', 'TerminalBridge'],
+  'testing.dart': ['KeysBridge', 'TerminalBridge'],
   'http.dart': ['HttpBridge', 'HttpInternals', 'MessageInternals'],
-  'path.dart': ['NativeBridge'],
+  'path.dart': ['NativeBridge', 'PathInternals'],
+  'archive.dart': ['NativeBridge', 'PathInternals'],
 };
 
 void main() {

@@ -1,7 +1,5 @@
 part of 'process.dart';
 
-final _newline = RegExp(r'\r?\n');
-
 /// A program to run: [program] with [args], each passed as it is and never re-read, in
 /// [workdir] with [env] on top of the environment. A value: build it once, run it as often as
 /// you like.
@@ -37,11 +35,16 @@ final class Command {
   /// Whether this is a script for `cmd.exe` ([Shell.sh] on Windows): [args] holds the script.
   final bool _cmd;
 
+  /// Whether its script's `%NAME%`s are its environment's, as in a typed line; `false` for a
+  /// line built of quoted words ([Shell.open]), which runs as it is.
+  final bool _expands;
+
   Command(this.program, List<String> args, {this.workdir, Map<String, String?>? env})
     : args = List.unmodifiable(args),
       env = env == null ? null : Map.unmodifiable(env),
       _from = null,
-      _cmd = false {
+      _cmd = false,
+      _expands = false {
     if (program.isEmpty) throw ArgumentError.value(program, 'program', 'Invalid program: empty');
   }
 
@@ -53,13 +56,15 @@ final class Command {
     return Command(File(path).absolute.path, args, workdir: workdir, env: env);
   }
 
-  /// [script] for `cmd.exe`, as [Shell.sh] runs one on Windows.
-  Command._cmdScript(String script, {this.workdir, Map<String, String?>? env})
+  /// [script] for `cmd.exe`, as [Shell.sh] runs one on Windows; with [expand] `false`, run as
+  /// it is.
+  Command._cmdScript(String script, {this.workdir, Map<String, String?>? env, bool expand = true})
     : program = 'cmd.exe',
       args = List.unmodifiable([script]),
       env = env == null ? null : Map.unmodifiable(env),
       _from = null,
-      _cmd = true;
+      _cmd = true,
+      _expands = expand;
 
   /// [stage] with [from] feeding it: a stage of a pipeline, or (with no [from]) one alone again.
   Command._fed(Command? from, Command stage)
@@ -68,7 +73,8 @@ final class Command {
       workdir = stage.workdir,
       env = stage.env,
       _from = from,
-      _cmd = stage._cmd;
+      _cmd = stage._cmd,
+      _expands = stage._expands;
 
   /// A pipeline: this command's stdout fed to [next]'s stdin, each stage's stderr kept. Its exit
   /// code is the rightmost non-zero one, as `set -o pipefail` gives; a stage that only stopped
@@ -116,6 +122,7 @@ final class Command {
       other.workdir == workdir &&
       _sameMap(other.env, env) &&
       other._cmd == _cmd &&
+      other._expands == _expands &&
       other._from == _from;
 
   @override
@@ -219,8 +226,21 @@ final class ShellResult {
   /// Whether it exited 0.
   bool get isOk => exitCode == 0;
 
-  /// [stdout], trimmed.
-  String get text => stdout.trim();
+  /// [stdout], trimmed. Decoded from the trimmed bytes, so a large output is not held twice.
+  String get text {
+    final bytes = _bytes;
+    if (_stdout != null || bytes == null) return stdout.trim();
+    bool space(int b) => b == 0x20 || (b >= 0x09 && b <= 0x0d);
+    var start = 0, end = bytes.length;
+    while (start < end && space(bytes[start])) {
+      start++;
+    }
+    while (end > start && space(bytes[end - 1])) {
+      end--;
+    }
+    // Unicode spaces at either end are trimmed after: `trim` gives the same string when none.
+    return const Utf8Decoder(allowMalformed: true).convert(bytes, start, end).trim();
+  }
 
   /// Its stdout as printed, for an encoding other than UTF-8.
   Uint8List get bytes {
@@ -228,9 +248,9 @@ final class ShellResult {
     return _bytes ?? utf8.encode(stdout);
   }
 
-  /// The non-empty lines of [stdout], right-trimmed.
+  /// The non-empty lines of [stdout], right-trimmed, split as [Run.output] splits them.
   List<String> get lines => [
-    for (final line in stdout.split(_newline))
+    for (final line in const LineSplitter().convert(stdout))
       if (line.trimRight() case final kept when kept.isNotEmpty) kept,
   ];
 
@@ -272,7 +292,7 @@ final class ShellTimeoutException extends TimeoutException {
 /// reason just above its last noise.
 String _tail(String stderr) {
   final said = [
-    for (final line in stderr.trim().split(_newline))
+    for (final line in const LineSplitter().convert(stderr.trim()))
       if (line.trim() case final kept when kept.isNotEmpty) kept,
   ];
   return said.isEmpty ? '' : ': ${said.skip(said.length > 3 ? said.length - 3 : 0).join('\n  ')}';

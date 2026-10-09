@@ -13,11 +13,9 @@ import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:path/path.dart' as p;
-
-import 'src/core.dart';
+import 'src/base.dart';
 import 'src/native.dart';
-import 'path.dart';
+import 'src/path.dart';
 
 export 'path.dart';
 

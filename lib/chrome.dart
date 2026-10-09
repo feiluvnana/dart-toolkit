@@ -24,6 +24,7 @@ import 'json.dart';
 import 'src/core.dart';
 import 'src/http.dart';
 import 'src/message.dart';
+import 'src/os.dart';
 
 export 'html.dart';
 export 'http.dart';

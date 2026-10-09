@@ -7,6 +7,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import '../core.dart';
+import '../os.dart';
 
 part 'command.dart';
 part 'launch.dart';

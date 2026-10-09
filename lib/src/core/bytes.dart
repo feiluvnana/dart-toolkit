@@ -1,4 +1,4 @@
-part of '../core.dart';
+part of '../base.dart';
 
 /// Units on a number: `30.s`, `1.5.h`, `250.ms` for a [Duration], `size.humanBytes` for a size.
 ///

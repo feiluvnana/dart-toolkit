@@ -6,6 +6,24 @@ part of '../../markup.dart';
 /// {@category Formats}
 enum Syntax { html, xml }
 
+/// A parsed document, HTML or XML: an `Html` or an `Xml`. A function that takes either takes a
+/// [Markup]; `xpath.dart` adds `$x` to both through it.
+///
+/// {@category Formats}
+abstract interface class Markup {
+  /// The root element.
+  Element get root;
+
+  /// The address the document was parsed with, if any.
+  Uri? get url;
+
+  /// Every element matching CSS [selector], in document order.
+  Selection<Element> $(String selector);
+
+  /// The document's text: see [Node.text].
+  String get text;
+}
+
 /// A node in a parsed tree: an [Element], a [Text], or an [Attribute] selected by an XPath `@`
 /// step.
 ///
@@ -14,6 +32,10 @@ sealed class Node {
   /// The element containing this node, or `null` at the root.
   Element? get parent => _parent;
   Element? _parent;
+
+  /// Index in the parent's nodes, checked before use (see [_indexIn]), so sibling walks and
+  /// queries need no index of their own.
+  int _slot = 0;
 
   /// The text as a reader sees it: every run of whitespace one space, trimmed; for an HTML
   /// element, what is below it but `<script>`, `<style>`, `<title>` and the rest a page never
@@ -35,7 +57,8 @@ sealed class Node {
       p.attributes.remove(a.name);
     } else {
       if (_holdsBase(this)) _edits++;
-      p._nodes.remove(this);
+      final at = _indexIn(p._nodes, this);
+      if (at != -1) p._nodes.removeAt(at);
     }
     _parent = null;
   }
@@ -50,10 +73,13 @@ sealed class Node {
     if (identical(other, this)) return;
     // Detached first: an earlier sibling's removal would shift this node's index.
     other.detach();
-    final index = p._nodes.indexOf(this);
+    final index = _indexIn(p._nodes, this);
     if (index != -1) {
       if (_holdsBase(this) || _holdsBase(other)) _edits++;
-      other._parent = p;
+      if (_holdsBase(other)) _markBase(p);
+      other
+        .._parent = p
+        .._slot = index;
       p._nodes[index] = other;
       _parent = null;
     }
@@ -127,23 +153,51 @@ class Element extends Node {
   /// The tag name: `div` for HTML, as written for XML (`media:content`).
   final String name;
 
-  /// Attributes by name, values decoded; a valueless attribute is `''`.
-  final Map<String, String> attributes;
+  /// Attributes by name, values decoded, in the order written; a valueless attribute is `''`.
+  /// A view: writing to it changes this element.
+  Map<String, String> get attributes => _Attributes(this);
+
+  /// Names and values, alternating: two slots an attribute rather than a map an element.
+  List<String> _attrs;
 
   /// Child nodes in document order.
   List<Node> get nodes => UnmodifiableListView(_nodes);
   final List<Node> _nodes = [];
 
+  /// [_xml] for an XML element, and [_base] once this is or holds an HTML `<base>`.
+  int _bits;
+
+  static const _xml = 1, _base = 2;
+
   /// Which markup this element came from.
-  final Syntax syntax;
+  Syntax get syntax => _bits & _xml == 0 ? Syntax.html : Syntax.xml;
 
-  /// Index in the parent's [nodes], checked before searching, so sibling walks stay linear.
-  int _slot = 0;
+  Element(this.name, [Map<String, String>? attributes, Syntax syntax = Syntax.html])
+    : _attrs = attributes == null || attributes.isEmpty
+          ? const []
+          : [
+              for (final MapEntry(:key, :value) in attributes.entries) ...[key, value],
+            ],
+      _bits = syntax == Syntax.xml
+          ? _xml
+          : name == 'base'
+          ? _base
+          : 0;
 
-  Element(this.name, [Map<String, String>? attributes, this.syntax = Syntax.html])
-    : attributes = name == 'base' ? _BaseAttributes(attributes ?? {}) : attributes ?? {} {
-    if (name == 'base') _baseElements++;
+  /// What the parsers make: [attrs] already flat, names already interned.
+  Element._parsed(this.name, this._attrs, this._bits);
+
+  /// Attribute [name], or `null`; read without the [attributes] view.
+  String? _attr(String name) {
+    final a = _attrs;
+    for (var i = 0; i < a.length; i += 2) {
+      if (a[i] == name) return a[i + 1];
+    }
+    return null;
   }
+
+  /// Whether this is an HTML `<base>`, whose `href` every link in its document resolves against.
+  bool get _isBase => _bits & _xml == 0 && name == 'base';
 
   /// Child elements, skipping text.
   Selection<Element> get children => Selection._(_nodes.whereType<Element>().toList(), '> *');
@@ -155,11 +209,11 @@ class Element extends Node {
   String? get prefix => name.contains(':') ? name.substring(0, name.indexOf(':')) : null;
 
   /// The `id` attribute, or `null`.
-  String? get id => attributes['id'];
+  String? get id => _attr('id');
 
   /// Attribute [name]; when it is absent, [or], else a [MissingException] naming it and the tag.
   String attr(String name, {String? or}) =>
-      attributes[name] ?? or ?? (throw MissingException('attribute "$name"', where: '<${this.name}>'));
+      _attr(name) ?? or ?? (throw MissingException('attribute "$name"', where: '<${this.name}>'));
 
   /// The top of this element's tree, whose `<base href>` its links resolve against.
   Element get _root => _rootOf(this) as Element;
@@ -192,9 +246,9 @@ class Element extends Node {
       'data-zoom-image',
       'data-highres',
     ]) {
-      if (usable(attributes[a]) case final u?) return u;
+      if (usable(_attr(a)) case final u?) return u;
     }
-    return usable(_bestSrcset(attributes['srcset'])) ?? usable(attributes['src']) ?? _linkIn(base);
+    return usable(_bestSrcset(_attr('srcset'))) ?? usable(_attr('src')) ?? _linkIn(base);
   }
 
   /// This element's `href`, `src`, or the address a script navigates to (a `javascript:` href,
@@ -210,9 +264,9 @@ class Element extends Node {
   /// The link as written: `href`, then `src`, unless it is a script, then the address a script
   /// navigates to.
   String? get _rawLink {
-    final href = attributes['href'] ?? attributes['src'];
+    final href = _attr('href') ?? _attr('src');
     if (href != null && !_isScript(href)) return href;
-    return _extractUrlFromOnclick(href) ?? _extractUrlFromOnclick(attributes['onclick']);
+    return _extractUrlFromOnclick(href) ?? _extractUrlFromOnclick(_attr('onclick'));
   }
 
   /// [link] as `null` instead of a throw, for a bulk read that skips what is not a link.
@@ -227,9 +281,15 @@ class Element extends Node {
   void _insert(Node node, int at) {
     if (node is Attribute) throw ArgumentError.value(node, 'node', 'Invalid child: an attribute');
     node.detach();
-    if (_holdsBase(node)) _edits++;
-    node._parent = this;
-    _nodes.insert(at.clamp(0, _nodes.length), node);
+    if (_holdsBase(node)) {
+      _edits++;
+      _markBase(this);
+    }
+    final i = at.clamp(0, _nodes.length);
+    node
+      .._parent = this
+      .._slot = i;
+    _nodes.insert(i, node);
   }
 
   /// Removes all child nodes from this element.
@@ -266,10 +326,6 @@ class Element extends Node {
   Selection<Element> $(String selector) =>
       Selection._(_Selector.parse(selector, fold: syntax == Syntax.html).from(this), selector);
 
-  /// The nodes XPath [expression] selects from this element: `//a/@href`,
-  /// `//tr[td[2]="FLAC"]/td[1]/a`, `//h2[contains(., "Tracks")]/following-sibling::table[1]`.
-  Selection<Node> $x(String expression) => _xpath([this], expression);
-
   @override
   String get text {
     if (_nodes case [final Text t]) return _collapsed(t.data);
@@ -304,44 +360,39 @@ class Element extends Node {
       current.clear();
     }
 
-    final open = <Element>[this];
-    final at = <int>[0];
-    while (open.isNotEmpty) {
-      final e = open.last;
-      final i = at.last;
-      if (i == e._nodes.length) {
-        open.removeLast();
-        at.removeLast();
-        if (_blockElements.contains(e.name)) flush();
-        continue;
-      }
-      at[at.length - 1] = i + 1;
-      switch (e._nodes[i]) {
-        case final Text t:
-          final data = t.data;
-          var from = 0;
-          for (var nl = data.indexOf('\n'); nl != -1; nl = data.indexOf('\n', from)) {
-            current.write(data.substring(from, nl));
-            flush();
-            from = nl + 1;
-          }
-          current.write(from == 0 ? data : data.substring(from));
-        case final Element child:
-          final name = child.name;
-          if (name == 'br') {
-            flush();
-          } else if (!_hiddenElements.contains(name)) {
-            if (_blockElements.contains(name)) {
+    _walk(
+      this,
+      (n) {
+        switch (n) {
+          case final Text t:
+            final data = t.data;
+            var from = 0;
+            for (var nl = data.indexOf('\n'); nl != -1; nl = data.indexOf('\n', from)) {
+              current.write(data.substring(from, nl));
               flush();
-            } else if ((name == 'td' || name == 'th') && current.isNotEmpty) {
-              current.write('\t');
+              from = nl + 1;
             }
-            open.add(child);
-            at.add(0);
-          }
-        default:
-      }
-    }
+            current.write(from == 0 ? data : data.substring(from));
+          case final Element child:
+            final name = child.name;
+            if (name == 'br') {
+              flush();
+            } else if (!_hiddenElements.contains(name)) {
+              if (_blockElements.contains(name)) {
+                flush();
+              } else if ((name == 'td' || name == 'th') && current.isNotEmpty) {
+                current.write('\t');
+              }
+              return true;
+            }
+          default:
+        }
+        return false;
+      },
+      leave: (e) {
+        if (_blockElements.contains(e.name)) flush();
+      },
+    );
     flush();
     return out;
   }
@@ -367,31 +418,30 @@ class Element extends Node {
       ...$('input:enabled, textarea:enabled, select:enabled, button:enabled'),
     ];
     for (final input in inputs) {
-      final name = input.attributes['name'];
+      final name = input._attr('name');
       if (name == null || name.isEmpty) continue;
       switch (input.name.toLowerCase()) {
         case 'textarea':
           add(name, input.rawText);
         case 'input':
-          final type = (input.attributes['type'] ?? 'text').toLowerCase();
+          final type = (input._attr('type') ?? 'text').toLowerCase();
           if (const {'submit', 'button', 'reset', 'image', 'file'}.contains(type)) {
             continue;
           } else if (type == 'checkbox' || type == 'radio') {
-            if (input.attributes.containsKey('checked')) add(name, input.attributes['value'] ?? 'on');
+            if (input._attr('checked') != null) add(name, input._attr('value') ?? 'on');
           } else {
-            add(name, input.attributes['value'] ?? '');
+            add(name, input._attr('value') ?? '');
           }
         case 'select':
           final options = input.$('option:enabled').toList();
-          final list =
-              input.attributes.containsKey('multiple') || (int.tryParse(input.attributes['size'] ?? '') ?? 1) > 1;
+          final list = input._attr('multiple') != null || (int.tryParse(input._attr('size') ?? '') ?? 1) > 1;
           final chosen = list
-              ? options.where((o) => o.attributes.containsKey('selected'))
+              ? options.where((o) => o._attr('selected') != null)
               : [
-                  options.where((o) => o.attributes.containsKey('selected')).firstOrNull ?? options.firstOrNull,
+                  options.where((o) => o._attr('selected') != null).firstOrNull ?? options.firstOrNull,
                 ].whereType<Element>();
           for (final o in chosen) {
-            add(name, o.attributes['value'] ?? o.text);
+            add(name, o._attr('value') ?? o.text);
           }
         default:
       }
@@ -417,10 +467,10 @@ class Element extends Node {
   /// ```
   Request get submission {
     final tag = name.toLowerCase();
-    final type = (attributes['type'] ?? (tag == 'button' ? 'submit' : 'text')).toLowerCase();
+    final type = (_attr('type') ?? (tag == 'button' ? 'submit' : 'text')).toLowerCase();
     final button = (tag == 'button' || tag == 'input') && (type == 'submit' || type == 'image');
     // A button names its form by `form="id"`, else sits inside it.
-    final form = switch ((tag, attributes['form'])) {
+    final form = switch ((tag, _attr('form'))) {
       ('form', _) => this,
       (_, final id?) when button => _root.$('form').where((f) => f.id == id).firstOrNull,
       _ => button ? closest('form') : null,
@@ -433,17 +483,17 @@ class Element extends Node {
       final List<String> many => [...many, value],
       final other => other,
     };
-    if (attributes['name'] case final pressed? when button && pressed.isNotEmpty) {
+    if (_attr('name') case final pressed? when button && pressed.isNotEmpty) {
       // An image button sends where it was clicked; a script's click is at its corner.
       if (type == 'image') {
         add('$pressed.x', '0');
         add('$pressed.y', '0');
       } else {
-        add(pressed, attributes['value'] ?? '');
+        add(pressed, _attr('value') ?? '');
       }
     }
-    final method = ((button ? attributes['formmethod'] : null) ?? form.attributes['method'] ?? 'GET').trim();
-    final action = ((button ? attributes['formaction'] : null) ?? form.attributes['action'] ?? '').trim();
+    final method = ((button ? _attr('formmethod') : null) ?? form._attr('method') ?? 'GET').trim();
+    final action = ((button ? _attr('formaction') : null) ?? form._attr('action') ?? '').trim();
     final target = Uri.tryParse(action) ?? (throw FormatException('Invalid HTML: form action "$action" is not a URL'));
     final base = _baseOf(form._root);
     final Uri url;
@@ -465,13 +515,14 @@ class Element extends Node {
     return Request('GET', url.replace(query: query));
   }
 
-  /// This `<table>` (or the first one below this element) as rows of named columns; a
-  /// [MissingException] when there is none.
+  /// This `<table>`'s (or the first one below this element's) body rows, each a map from column
+  /// name to cell text, every column in every map, in order: `Table.rows(element.rows)` is it as
+  /// a `collection` table. A [MissingException] when there is no table.
   ///
   /// The header is the first all-`<th>` row or the first `<thead>` row; an unnamed column is
   /// `c1, c2, …` and a repeated name gets a suffix (`Price_2`). `colspan` and `rowspan` repeat
   /// a cell's text into every column and row it covers.
-  Table get table {
+  List<Map<String, String?>> get rows {
     final t = name == 'table' ? this : $('table').firstOrNull;
     if (t == null) throw MissingException('<table>', where: '<$name>');
     List<String>? header;
@@ -530,9 +581,9 @@ class Element extends Node {
       }
       columns.add(name);
     }
-    return Table(columns, [
+    return [
       for (final r in body) {for (var i = 0; i < columns.length; i++) columns[i]: i < r.length ? r[i] : null},
-    ]);
+    ];
   }
 
   /// The next element sibling, or `null`.
@@ -544,12 +595,30 @@ class Element extends Node {
   Element? _sibling(int step) {
     final siblings = parent?._nodes;
     if (siblings == null) return null;
-    if (_slot >= siblings.length || !identical(siblings[_slot], this)) _slot = siblings.indexOf(this);
-    for (var i = _slot + step; i >= 0 && i < siblings.length; i += step) {
+    for (var i = _indexIn(siblings, this) + step; i >= 0 && i < siblings.length; i += step) {
       if (siblings[i] case final Element e) return e;
     }
     return null;
   }
+}
+
+/// The document node above the root, where an absolute XPath starts; minted per walk, so equal
+/// by root.
+final class _Document extends Element {
+  final Element root;
+  _Document(this.root) : super('#document', const {}, root.syntax) {
+    _nodes.add(root);
+  }
+  @override
+  String get text => root.text;
+  @override
+  String get rawText => root.rawText;
+  @override
+  String get markup => root.markup;
+  @override
+  bool operator ==(Object other) => other is _Document && identical(other.root, root);
+  @override
+  int get hashCode => identityHashCode(root);
 }
 
 /// [u] with no query, and so no `?`.
@@ -570,7 +639,7 @@ final _ws = RegExp(r'\s+');
 ///
 /// ```dart
 /// page.$('h2 a').texts;   page.$('a').attrs('href');   page.$('li').at(3).text;
-/// page.$('table').first.table;   page.$x('//a/@href').links;
+/// Table.rows(page.$('table').first.rows);   page.$x('//a/@href').links;
 /// ```
 ///
 /// {@category Formats}
@@ -649,14 +718,14 @@ final class Selection<N extends Node> extends Iterable<N> {
   String attr(String name, {String? or}) {
     for (final n in _nodes) {
       if (n is Element) {
-        if (n.attributes[name] case final value?) return value;
+        if (n._attr(name) case final value?) return value;
       }
     }
     return or ?? (throw MissingException('attribute "$name"', where: '"$_query"'));
   }
 
   /// Every match's attribute [name], `null` where it has none (or is not an element).
-  List<String?> attrs(String name) => [for (final n in _nodes) n is Element ? n.attributes[name] : null];
+  List<String?> attrs(String name) => [for (final n in _nodes) n is Element ? n._attr(name) : null];
 
   /// Every match's link, resolved against its document's base address: an element's
   /// [Element.link], an attribute's value (`$x('//a/@href')`). What is not a link is skipped.
@@ -713,9 +782,6 @@ final class Selection<N extends Node> extends Iterable<N> {
     return Selection._(s.relative && scopes.length > 1 ? _inOrder(out) : out, selector);
   }
 
-  /// The nodes XPath [expression] selects from each element match, each once, in document order.
-  Selection<Node> $x(String expression) => _xpath(_nodes.whereType<Element>().toList(), expression);
-
   /// Takes every match out of its tree.
   void detach() {
     // Per parent at once, so taking out many siblings or nested matches stays linear.
@@ -725,9 +791,10 @@ final class Selection<N extends Node> extends Iterable<N> {
       if (p == null) continue;
       n is Attribute ? n.detach() : (byParent[p] ??= Set.identity()).add(n);
     }
-    if (_baseElements > 0 && byParent.isNotEmpty) _edits++; // one bump for every base moved
+    if (byParent.values.any((gone) => gone.any(_holdsBase))) _edits++; // one bump for every base moved
     for (final MapEntry(key: p, value: gone) in byParent.entries) {
       p._nodes.removeWhere(gone.contains);
+      _renumber(p._nodes);
       for (final n in gone) {
         n._parent = null;
       }
@@ -737,112 +804,6 @@ final class Selection<N extends Node> extends Iterable<N> {
   @override
   String toString() => 'Selection("$_query", ${_nodes.length})';
 }
-
-/// A parsed HTML document.
-///
-/// ```dart
-/// final page = await url.get().html;
-/// page.$('h2 a').texts;
-/// await page.save('copy.html');
-/// ```
-///
-/// {@category Formats}
-final class Html implements Saveable {
-  /// The `<html>` element. Parsing always makes one, with `<head>` and `<body>` inside.
-  final Element root;
-
-  /// The `<!DOCTYPE …>` as written, kept for [encode].
-  final String? _doctype;
-
-  Html._(this.root, this._doctype, {Uri? url}) {
-    if (url != null) _urls[root] = url;
-  }
-
-  /// [text] parsed as a browser parses it: implied end tags, void and raw-text elements, SVG and
-  /// MathML land where a browser puts them. Two repairs are not made: misnested formatting
-  /// (`<b>1<p>2</b>3`) closes rather than being re-opened, and stray text in a `<table>` stays
-  /// there. [url] is the page's address, which links resolve against.
-  static Html parse(String text, {Uri? url}) {
-    final (root, doctype) = _parseHtml(text);
-    return Html._(root, doctype, url: url);
-  }
-
-  /// The page saved at [path], its charset sniffed as a browser sniffs it: a byte-order mark,
-  /// else `<meta charset>`, else UTF-8.
-  static Future<Html> read(String path) async =>
-      parse(Response.bytes(await File(path).readAsBytes(), 200, headers: const {'content-type': 'text/html'}).text);
-
-  /// The address the page was parsed with, if any.
-  Uri? get url => _urls[root];
-
-  /// What relative links resolve against: `<base href>` (resolved against [url]), else [url].
-  Uri? get base => _baseOf(root);
-
-  /// Every element matching CSS [selector], in document order.
-  Selection<Element> $(String selector) => Selection._(_Selector.parse(selector).inDocument(root), selector);
-
-  /// The nodes XPath [expression] selects, from the root: see [Element.$x].
-  Selection<Node> $x(String expression) => _xpath([root], expression);
-
-  /// The `<head>` element.
-  Element get head => root._nodes.whereType<Element>().firstWhere((e) => e.name == 'head');
-
-  /// The `<body>` element.
-  Element get body => root._nodes.whereType<Element>().firstWhere((e) => e.name == 'body');
-
-  /// The page's visible text: see [Node.text].
-  String get text => root.text;
-
-  /// Every text node's text as it is in the markup, the head's and scripts' included.
-  String get rawText => root.rawText;
-
-  /// Every link in the page (`a[href]`, `area[href]`, `link[href]`, `[src]`, a script's
-  /// navigation), resolved against [base].
-  List<Uri> get links => $('a[href], area[href], link[href], [src], [onclick]').links;
-
-  /// The page's first image link (see [Element.imageLink]); a [MissingException] when it has
-  /// none.
-  Uri get imageLink {
-    if (_images.imageLinks.firstOrNull case final u?) return u;
-    throw const MissingException('image link', where: 'the page');
-  }
-
-  /// Every image link in the page, resolved against [base]: an `<img>`, a `<picture>` once,
-  /// a lazy-loaded `data-src`.
-  List<Uri> get imageLinks => _images.imageLinks;
-
-  Selection<Element> get _images {
-    final found = $('img, picture, [data-src], [data-original], [data-lazy-src]');
-    return found.where((e) => !(e.name == 'img' && e.parent?.name == 'picture'));
-  }
-
-  /// The page as HTML text, its doctype first.
-  String encode() => '${_doctype ?? ''}${root.markup}';
-
-  /// Writes [encode] to [to] as UTF-8, atomically, into a folder that exists; a file there is replaced
-  /// unless [conflict] says otherwise. A page that declares another charset gets a byte-order
-  /// mark, which a browser believes over the `<meta>`.
-  @override
-  Task<Path> save(String to, {Conflict conflict = Conflict.overwrite}) => saveBytes(to, conflict, 'Html', () {
-    final text = encode();
-    final declared = $('meta[charset], meta[http-equiv]').any((m) {
-      final charset = m.attributes['charset'] ?? _charsetIn(m.attributes['content']);
-      return charset != null && !charset.trim().toLowerCase().startsWith('utf-8');
-    });
-    final bytes = utf8.encode(text);
-    if (!declared) return bytes;
-    return Uint8List(bytes.length + 3)
-      ..setAll(0, const [0xef, 0xbb, 0xbf])
-      ..setAll(3, bytes);
-  });
-
-  @override
-  String toString() => 'Html(${url ?? 'parsed'})';
-}
-
-final _charsetParam = RegExp(r'charset\s*=\s*["\x27]?([^"\x27;\s]+)', caseSensitive: false);
-
-String? _charsetIn(String? content) => content == null ? null : _charsetParam.firstMatch(content)?[1];
 
 bool _isScript(String href) => href.trimLeft().toLowerCase().startsWith('javascript:');
 
@@ -923,13 +884,33 @@ final _urls = Expando<Uri>('url');
 /// links while editing stays linear.
 var _edits = 0;
 
-/// `<base>` elements ever made: while there are none, no edit can move a base, and moving a
-/// subtree need not search it.
-var _baseElements = 0;
+/// Whether [n] is or holds an HTML `<base>`: only then can moving it change a document's base.
+/// The bit is set up the tree when a `<base>` arrives and never cleared, so at worst a move
+/// bumps [_edits] needlessly; it never walks.
+bool _holdsBase(Node n) => n is Element && n._bits & Element._base != 0;
 
-/// Whether [n] is or holds a `<base>`: only then can moving it change a document's base.
-bool _holdsBase(Node n) =>
-    _baseElements > 0 && n is Element && (n.name == 'base' || _eachBelow(n, (m) => m is Element && m.name == 'base'));
+/// Marks [e] and its ancestors as holding a `<base>`, stopping at one already marked.
+void _markBase(Element? e) {
+  for (; e != null && e._bits & Element._base == 0; e = e.parent) {
+    e._bits |= Element._base;
+  }
+}
+
+/// [n]'s index in [siblings], its parent's nodes: its remembered slot when that is still right,
+/// else every sibling renumbered once, so a walk after an edit stays linear; -1 if not there.
+int _indexIn(List<Node> siblings, Node n) {
+  final s = n._slot;
+  if (s < siblings.length && identical(siblings[s], n)) return s;
+  _renumber(siblings);
+  final t = n._slot;
+  return t < siblings.length && identical(siblings[t], n) ? t : -1;
+}
+
+void _renumber(List<Node> siblings) {
+  for (var i = 0; i < siblings.length; i++) {
+    siblings[i]._slot = i;
+  }
+}
 
 /// Each root's base and the [_edits] it was read at.
 final _bases = Expando<(int, Uri?)>('base');
@@ -941,46 +922,68 @@ Uri? _baseOf(Element root) => switch (_bases[root]) {
   _ => (_bases[root] = (_edits, _findBase(root))).$2,
 };
 
-/// A `<base>`'s attributes, which bump [_edits] on every write: its `href` is every link's.
-final class _BaseAttributes extends MapBase<String, String> {
-  final Map<String, String> _map;
-  _BaseAttributes(this._map);
+/// [Element.attributes]: a map over the element's flat [Element._attrs]. A write to a `<base>`'s
+/// bumps [_edits]: its `href` is every link's.
+final class _Attributes extends MapBase<String, String> {
+  final Element _e;
+  _Attributes(this._e);
 
   @override
-  String? operator [](Object? key) => _map[key];
+  String? operator [](Object? key) => key is String ? _e._attr(key) : null;
 
   @override
   void operator []=(String key, String value) {
-    _edits++;
-    _map[key] = value;
+    if (_e._isBase) _edits++;
+    final a = _e._attrs;
+    for (var i = 0; i < a.length; i += 2) {
+      if (a[i] == key) {
+        a[i + 1] = value;
+        return;
+      }
+    }
+    _e._attrs = [...a, key, value];
   }
 
   @override
   String? remove(Object? key) {
-    _edits++;
-    return _map.remove(key);
+    final a = _e._attrs;
+    for (var i = 0; i < a.length; i += 2) {
+      if (a[i] == key) {
+        if (_e._isBase) _edits++;
+        _e._attrs = [...a.sublist(0, i), ...a.sublist(i + 2)];
+        return a[i + 1];
+      }
+    }
+    return null;
   }
 
   @override
   void clear() {
-    _edits++;
-    _map.clear();
+    if (_e._isBase) _edits++;
+    _e._attrs = const [];
   }
 
   @override
-  Iterable<String> get keys => _map.keys;
+  Iterable<String> get keys => [for (var i = 0; i < _e._attrs.length; i += 2) _e._attrs[i]];
 
   @override
-  int get length => _map.length;
+  int get length => _e._attrs.length ~/ 2;
 
   @override
-  bool containsKey(Object? key) => _map.containsKey(key);
+  bool get isEmpty => _e._attrs.isEmpty;
+
+  @override
+  bool get isNotEmpty => _e._attrs.isNotEmpty;
+
+  @override
+  bool containsKey(Object? key) => key is String && _e._attr(key) != null;
 }
 
 Uri? _findBase(Element root) {
   final url = _urls[root];
+  if (!_holdsBase(root)) return url;
   String? href;
-  _eachBelow(root, (e) => e is Element && e.name == 'base' && (href = e.attributes['href']) != null);
+  _eachBelow(root, (e) => e is Element && e._isBase && (href = e._attr('href')) != null);
   final uri = href == null ? null : Uri.tryParse(href!.trim());
   if (uri == null) return url;
   return url == null ? uri : url.resolveUri(uri);
@@ -989,10 +992,9 @@ Uri? _findBase(Element root) {
 int _slotOf(Attribute a) {
   final p = a.parent;
   if (p == null) return -1;
-  var i = 0;
-  for (final k in p.attributes.keys) {
-    if (k == a.name) return i;
-    i++;
+  final attrs = p._attrs;
+  for (var i = 0; i < attrs.length; i += 2) {
+    if (attrs[i] == a.name) return i ~/ 2;
   }
   return -1;
 }
@@ -1000,31 +1002,51 @@ int _slotOf(Attribute a) {
 /// [nodes] in document order, sorted only when they are not already.
 List<T> _inOrder<T extends Node>(List<T> nodes) {
   if (nodes.length < 2) return nodes;
-  final order = <Node, int>{};
-  int key(Node n) {
-    final e = n is Attribute ? n.parent! : n;
-    final k = order[e];
-    if (k != null) return k;
-    final top = _rootOf(e);
-    order[top] = order.length;
-    _eachBelow(top, (m) {
-      order[m] = order.length;
-      return false;
-    });
-    return order[e] ?? -1;
+  final roots = <Node, int>{};
+  int compare(Node x, Node y) => _documentOrder(x, y, roots);
+  for (var i = 1; i < nodes.length; i++) {
+    if (compare(nodes[i - 1], nodes[i]) > 0) return nodes..sort(compare);
+  }
+  return nodes;
+}
+
+/// [x] against [y] in document order, read from their places in the tree rather than from an
+/// index of every node: an element comes before its attributes (as written), they before its
+/// children, and a document node before all. Trees apart keep the order [roots] first met them.
+int _documentOrder(Node x, Node y, Map<Node, int> roots) {
+  if (identical(x, y)) return 0;
+  if (x is _Document) return y is _Document ? 0 : -1;
+  if (y is _Document) return 1;
+  final ex = x is Attribute ? x.parent! : x, ey = y is Attribute ? y.parent! : y;
+  if (identical(ex, ey)) {
+    if (x is! Attribute) return -1;
+    return y is! Attribute ? 1 : _slotOf(x).compareTo(_slotOf(y));
+  }
+  int depth(Node n) {
+    var d = 0;
+    for (var p = n.parent; p != null; p = p.parent) {
+      d++;
+    }
+    return d;
   }
 
-  var sorted = true;
-  for (var i = 1; i < nodes.length && sorted; i++) {
-    sorted = key(nodes[i - 1]) <= key(nodes[i]);
+  Node a = ex, b = ey;
+  var da = depth(a), db = depth(b);
+  for (; da > db; da--) {
+    a = a.parent!;
   }
-  if (sorted) return nodes;
-  return nodes..sort((x, y) {
-    final c = key(x).compareTo(key(y));
-    if (c != 0) return c;
-    if (x is! Attribute) return y is Attribute ? -1 : 0;
-    return y is! Attribute ? 1 : _slotOf(x).compareTo(_slotOf(y));
-  });
+  for (; db > da; db--) {
+    b = b.parent!;
+  }
+  // One holds the other: the holder, and its attributes, come first.
+  if (identical(a, b)) return identical(a, ex) ? -1 : 1;
+  while (!identical(a.parent, b.parent)) {
+    a = a.parent!;
+    b = b.parent!;
+  }
+  final p = a.parent;
+  if (p == null) return roots.putIfAbsent(a, () => roots.length).compareTo(roots.putIfAbsent(b, () => roots.length));
+  return _indexIn(p._nodes, a).compareTo(_indexIn(p._nodes, b));
 }
 
 /// How deep tree walks recurse before switching to an explicit stack: recursion is a third
@@ -1065,51 +1087,47 @@ bool _eachBelow(Node n, bool Function(Node) visit, {int depth = 1 << 30}) {
   }
 }
 
+/// Walks the nodes below [root] in document order on a stack, so deep documents don't
+/// overflow: [enter] sees each node and answers whether to go below it, and [leave] sees each
+/// element gone below once its nodes are done.
+void _walk(Element root, bool Function(Node n) enter, {void Function(Element e)? leave}) {
+  final open = <Element>[root];
+  final at = <int>[0];
+  while (true) {
+    final e = open.last;
+    final i = at.last;
+    if (i == e._nodes.length) {
+      if (open.length == 1) return;
+      open.removeLast();
+      at.removeLast();
+      leave?.call(e);
+      continue;
+    }
+    at[at.length - 1] = i + 1;
+    final n = e._nodes[i];
+    if (enter(n) && n is Element) {
+      open.add(n);
+      at.add(0);
+    }
+  }
+}
+
 /// [root]'s visible text into [out], on a stack: an HTML element a page never shows is skipped,
 /// and a block, a cell or a `<br>` keeps the words either side of it apart.
 void _foldText(Element root, _Folded out) {
   final html = root.syntax == Syntax.html;
-  final lists = <List<Node>>[];
-  final at = <int>[];
-  final blocks = <bool>[];
-  var list = root._nodes;
-  var i = 0;
-  while (true) {
-    if (i < list.length) {
-      final n = list[i++];
-      if (n is Text) {
-        out.add(n.data);
-      } else if (n is Element) {
-        if (!html) {
-          if (n._nodes.isNotEmpty) {
-            lists.add(list);
-            at.add(i);
-            blocks.add(false);
-            list = n._nodes;
-            i = 0;
-          }
-          continue;
-        }
-        final name = n.name;
-        if (_hiddenElements.contains(name)) continue;
-        final apart = name == 'br' || name == 'td' || name == 'th' || _blockElements.contains(name);
-        if (apart) out.space();
-        if (n._nodes.isNotEmpty) {
-          lists.add(list);
-          at.add(i);
-          blocks.add(apart);
-          list = n._nodes;
-          i = 0;
-        }
-      }
-    } else if (lists.isEmpty) {
-      return;
-    } else {
-      if (blocks.removeLast()) out.space();
-      list = lists.removeLast();
-      i = at.removeLast();
+  bool apart(String name) => name == 'br' || name == 'td' || name == 'th' || _blockElements.contains(name);
+  _walk(root, (n) {
+    if (n is Text) {
+      out.add(n.data);
+      return false;
     }
-  }
+    if (n is! Element) return false;
+    if (!html) return true;
+    if (_hiddenElements.contains(n.name)) return false;
+    if (apart(n.name)) out.space();
+    return true;
+  }, leave: html ? (e) => apart(e.name) ? out.space() : null : null);
 }
 
 /// Elements [Element.lines] breaks a line around, and [Node.text] keeps apart.
@@ -1129,32 +1147,17 @@ void _serialize(Node root, StringBuffer sb) {
     sb.write(root.markup);
     return;
   }
+  void end(Element e) => sb
+    ..write('</')
+    ..write(e.name)
+    ..write('>');
   if (!_writeStartTag(root, sb)) return;
-  final open = <Element>[root];
-  final at = <int>[0];
-  while (open.isNotEmpty) {
-    final e = open.last;
-    final i = at.last;
-    if (i == e._nodes.length) {
-      sb
-        ..write('</')
-        ..write(e.name)
-        ..write('>');
-      open.removeLast();
-      at.removeLast();
-      continue;
-    }
-    at[at.length - 1] = i + 1;
-    final n = e._nodes[i];
-    if (n is Element) {
-      if (_writeStartTag(n, sb)) {
-        open.add(n);
-        at.add(0);
-      }
-    } else if (n is Text) {
-      _writeEscaped(sb, n.data, attribute: false, xml: e.syntax == Syntax.xml);
-    }
-  }
+  _walk(root, (n) {
+    if (n is Element) return _writeStartTag(n, sb);
+    if (n is Text) _writeEscaped(sb, n.data, attribute: false, xml: n._parent?.syntax == Syntax.xml);
+    return false;
+  }, leave: end);
+  end(root);
 }
 
 /// Writes [e]'s start tag, and returns whether its children and end tag are still to come:
@@ -1163,12 +1166,13 @@ bool _writeStartTag(Element e, StringBuffer sb) {
   sb
     ..write('<')
     ..write(e.name);
-  for (final MapEntry(:key, :value) in e.attributes.entries) {
+  final attrs = e._attrs;
+  for (var i = 0; i < attrs.length; i += 2) {
     sb
       ..write(' ')
-      ..write(key)
+      ..write(attrs[i])
       ..write('="');
-    _writeEscaped(sb, value, attribute: true, xml: e.syntax == Syntax.xml);
+    _writeEscaped(sb, attrs[i + 1], attribute: true, xml: e.syntax == Syntax.xml);
     sb.write('"');
   }
   if (e.syntax == Syntax.xml) {
@@ -1229,62 +1233,19 @@ void _writeEscaped(StringBuffer sb, String s, {required bool attribute, bool xml
 /// [stop]: a nested table keeps its own rows, a row its own cells.
 List<Element> _within(Element root, Set<String> names, Set<String> stop) {
   final out = <Element>[];
-  final lists = <List<Node>>[];
-  final at = <int>[];
-  var list = root._nodes;
-  var i = 0;
-  while (true) {
-    if (i < list.length) {
-      final node = list[i++];
-      if (node is! Element || stop.contains(node.name)) continue;
-      if (names.contains(node.name)) {
-        out.add(node);
-      } else if (node._nodes.isNotEmpty) {
-        lists.add(list);
-        at.add(i);
-        list = node._nodes;
-        i = 0;
-      }
-    } else if (lists.isEmpty) {
-      return out;
-    } else {
-      list = lists.removeLast();
-      i = at.removeLast();
-    }
-  }
+  _walk(root, (n) {
+    if (n is! Element || stop.contains(n.name)) return false;
+    if (!names.contains(n.name)) return true;
+    out.add(n);
+    return false;
+  });
+  return out;
 }
 
 /// A cell's `colspan` or `rowspan`: 1 when absent or unreadable, at most [max].
 int _span(Element cell, String name, int max) {
-  final n = int.tryParse(cell.attributes[name]?.trim() ?? '') ?? 1;
+  final n = int.tryParse(cell._attr(name)?.trim() ?? '') ?? 1;
   return n < 1 ? 1 : (n > max ? max : n);
-}
-
-final _responseHtml = Expando<Html>();
-
-/// A response's body read as HTML.
-///
-/// {@category Formats}
-extension HtmlResponse on Response {
-  /// The body as HTML, whatever the status, with [url] as its address.
-  Html get html => _responseHtml[this] ??= Html.parse(text, url: url);
-}
-
-/// A response on its way, read as HTML.
-///
-/// {@category Formats}
-extension HtmlResponseFuture on Future<Response> {
-  /// The body as HTML, once the response is a 2xx; any other status is a [StatusException].
-  Future<Html> get html => then((res) => res.isOk ? res.html : throw StatusException(res));
-}
-
-/// Text read as HTML.
-///
-/// {@category Formats}
-extension HtmlString on String {
-  /// This text as HTML, as [Html.parse] reads it; its links stay as written unless it has a
-  /// `<base href>`.
-  Html get html => Html.parse(this);
 }
 
 const _controls = {'button', 'input', 'select', 'textarea', 'fieldset'};
@@ -1293,7 +1254,7 @@ const _controls = {'button', 'input', 'select', 'textarea', 'fieldset'};
 /// `disabled` `<fieldset>` around it unless [e] sits in that fieldset's first `<legend>`; an
 /// `<option>` is also disabled by a `disabled` `<optgroup>` around it. `null`: not a control.
 bool? _disabled(Element e) {
-  bool off(Element x) => x.attributes.containsKey('disabled');
+  bool off(Element x) => x._attr('disabled') != null;
   switch (e.name.toLowerCase()) {
     case 'option':
       final group = e.parent;

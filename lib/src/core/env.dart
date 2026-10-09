@@ -1,4 +1,4 @@
-part of '../core.dart';
+part of '../base.dart';
 
 final _envLineBreakRegex = RegExp(r'\r?\n');
 final _envCommentRegex = RegExp(r'\s#');

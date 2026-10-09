@@ -1,4 +1,4 @@
-part of '../core.dart';
+part of '../base.dart';
 
 const _sinkKey = #dartToolkitWork;
 
@@ -98,22 +98,21 @@ abstract class _Sink {
   void _childDone(Done<Object?, Object?> done);
 }
 
-/// The value a child task last finished with, and whether it was fresh: a body that hands back
-/// what a child made is as fresh as that child.
+/// The value the last child task finished with when it was not fresh: a body that hands back
+/// what a stale child made is stale too. A fresh child's value is not kept: the work may hold on
+/// to this sink long after, and the value (a response, a file's bytes) is not its own.
 mixin _Freshness on _Sink {
-  Object? _childValue;
-  bool _childFresh = true;
-  bool _hasChild = false;
+  Object? _staleValue;
+  bool _hasStale = false;
 
   @override
   void _childDone(Done<Object?, Object?> done) {
-    _childValue = done.value;
-    _childFresh = done.fresh;
-    _hasChild = true;
+    _hasStale = !done.fresh;
+    _staleValue = _hasStale ? done.value : null;
   }
 
   /// Whether [value], this work's own, is fresh.
-  bool _freshFor(Object? value, bool own) => own && !(_hasChild && identical(value, _childValue) && !_childFresh);
+  bool _freshFor(Object? value, bool own) => own && !(_hasStale && identical(value, _staleValue));
 }
 
 final class _Task<T> extends _Sink with _Freshness, _Awaitable<T> implements Task<T> {
@@ -144,23 +143,9 @@ final class _Task<T> extends _Sink with _Freshness, _Awaitable<T> implements Tas
   Status<Object?, T> get status => _status;
 
   @override
-  Stream<Status<Object?, T>> get statuses {
-    late final StreamController<Status<Object?, T>> controller;
-    controller = StreamController(
-      onListen: () {
-        _warnings.forEach(controller.add);
-        controller.add(_status);
-        // Listening while the cleanups run still hears their warnings and the end.
-        if (_end.isCompleted) {
-          controller.close();
-        } else {
-          _listeners.add(controller);
-        }
-      },
-      onCancel: () => _listeners.remove(controller),
-    );
-    return controller.stream;
-  }
+  // Listening while the cleanups run still hears their warnings and the end.
+  Stream<Status<Object?, T>> get statuses =>
+      _replaying(() => [..._warnings, _status], () => _end.isCompleted, _listeners);
 
   @override
   Future<Status<Object?, T>> get settled {
@@ -330,18 +315,29 @@ mixin _Awaitable<T> implements Future<T> {
   /// The value, or [onTimeout]'s (else a [TimeoutException] naming this work) if it takes
   /// longer than [timeLimit]. Either way work out of time is cancelled: nobody waits for it.
   @override
-  Future<T> timeout(Duration timeLimit, {FutureOr<T> Function()? onTimeout}) => _future.timeout(
-    timeLimit,
-    onTimeout: () {
-      cancel('timed out after ${timeLimit.humanized}');
-      if (onTimeout != null) return onTimeout();
-      throw TimeoutBridge(_subject, timeLimit);
-    },
-  );
+  Future<T> timeout(Duration timeLimit, {FutureOr<T> Function()? onTimeout}) =>
+      _timeout(_future, timeLimit, onTimeout, cancel, _subject);
 
   @override
   Future<T> whenComplete(FutureOr<void> Function() action) => _future.whenComplete(action);
 }
+
+/// [future] timed out as a [Task] is: out of time, the work is [cancel]led and the
+/// [TimeoutException] names [subject].
+Future<T> _timeout<T>(
+  Future<T> future,
+  Duration timeLimit,
+  FutureOr<T> Function()? onTimeout,
+  void Function([String reason]) cancel,
+  String subject,
+) => future.timeout(
+  timeLimit,
+  onTimeout: () {
+    cancel('timed out after ${timeLimit.humanized}');
+    if (onTimeout != null) return onTimeout();
+    throw TimeoutBridge(subject, timeLimit);
+  },
+);
 
 /// What every [Work] in this library can do beyond the interface.
 abstract class _BaseWork implements Work {
@@ -392,4 +388,14 @@ abstract final class TaskInternals {
 
   /// [body] run with no work around it: what it starts is nobody's part.
   static R detached<R>(R Function() body) => runZoned(body, zoneValues: {_sinkKey: null});
+
+  /// [future] timed out as a [Task]'s `timeout` is: out of time, [cancel] stops the work and the
+  /// [TimeoutException] names [subject]. For a `Future` a module implements itself.
+  static Future<T> timeout<T>(
+    Future<T> future,
+    Duration timeLimit,
+    FutureOr<T> Function()? onTimeout, {
+    required void Function([String reason]) cancel,
+    required String subject,
+  }) => _timeout(future, timeLimit, onTimeout, cancel, subject);
 }

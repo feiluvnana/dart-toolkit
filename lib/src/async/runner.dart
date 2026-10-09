@@ -337,7 +337,7 @@ final class _Link<I, T> {
   void add(Job<I, T> job) {
     _adding.add(job.id);
     send({
-      'add': {'id': job.id, 'item': _pool._codec.item(job.item)},
+      'add': {'id': job.id, 'item': _pool._codec.json(job.item)}, // checked by Pool.add
     });
   }
 
@@ -540,7 +540,7 @@ final class _Runner<I, T> {
           item = _pool._codec.itemOf(json);
         } catch (e, st) {
           // The program that sent it hears why, rather than waiting on it.
-          final failed = {'kind': 'failed', 'error': _errorJson(e), 'trace': '$st'};
+          final failed = {'kind': 'failed', 'error': IsolateBridge.errorJson(e), 'trace': '$st'};
           return _broadcast({
             'job': {'id': id, 'item': json, 'status': failed},
           });

@@ -50,3 +50,15 @@ Future<void> cut(HttpRequest r, List<int> bytes, {required int length, int statu
   await socket.flush();
   socket.destroy();
 }
+
+/// Whether what [ref] points to is collected once the garbage collector has run: garbage is
+/// made until it is, or until a few hundred MB later it still is not (a leak).
+Future<bool> collected(WeakReference<Object> ref) async {
+  for (var i = 0; i < 60 && ref.target != null; i++) {
+    // Big enough to be made in old space, where only a full collection frees it.
+    final junk = List<int>.filled(2 << 20, i);
+    if (junk.isEmpty) break;
+    await Future<void>.delayed(Duration.zero);
+  }
+  return ref.target == null;
+}

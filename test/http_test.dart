@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:dart_toolkit/scrape.dart';
+import 'package:dart_toolkit/xpath.dart';
 import 'package:test/test.dart' hide Retry;
 
 import 'client_conformance.dart';
@@ -679,9 +680,62 @@ void main() {
       });
       expect(seen.last.headers.value('cookie'), 'ok=1');
     });
+    test('cookies age on Clock.current: Expires and Max-Age follow a fake clock', () async {
+      final clock = Clock.fake();
+      final sent = <String>[];
+      final fake = Client.fake((r) {
+        sent.add(r.headers['cookie'] ?? '-');
+        if (r.url.path != '/set') return Response('ok', 200);
+        final inAnHour = HttpDate.format(clock.now().add(1.h));
+        return Response('ok', 200, headers: {'set-cookie': 'm=1; Max-Age=3600\nx=1; Expires=$inAnHour'});
+      });
+      final site = Uri.parse('http://a.test/');
+      await Clock.scope(clock: clock, () async {
+        await Http.scope(client: fake, cookies: CookieJar(), () async {
+          await (site / 'set').get();
+          await (site / 'a').get();
+          await clock.advance(2.h);
+          await (site / 'b').get();
+        });
+      });
+      expect(sent.skip(1), ['m=1; x=1', '-']);
+    });
+
+    test('a jar keeps at most 180 cookies a domain and 3000 in all, the oldest going first', () {
+      final jar = CookieJar([for (var i = 0; i < 200; i++) HttpCookie('c$i', 'v', domain: 'a.test')]);
+      expect(jar.length, 180);
+      expect(jar.first.name, 'c20');
+      for (var d = 0; d < 20; d++) {
+        for (var i = 0; i < 160; i++) {
+          jar.add(HttpCookie('c$i', 'v', domain: 'd$d.test'));
+        }
+      }
+      expect(jar.length, 3000);
+      expect(jar.where((c) => c.domain == 'a.test'), isEmpty, reason: 'the oldest went first');
+    });
   });
 
   group('cache', () {
+    test("a memory store's cache is shared by its sub-store's scopes, and goes with the store", () async {
+      var sent = 0;
+      final fake = Client.fake((r) {
+        sent++;
+        return Response('hi', 200);
+      });
+      final url = Uri.parse('https://d.test/a');
+      Future<WeakReference<Object>> run() async {
+        final app = Store.memory();
+        final first = app / 'http';
+        await Http.scope(client: fake, store: first, cache: 1.d, () => url.get());
+        await Http.scope(client: fake, store: app / 'http', cache: 1.d, () => url.get());
+        return WeakReference(first);
+      }
+
+      final store = await run();
+      expect(sent, 1);
+      expect(await collected(store), isTrue);
+    });
+
     test('cache: an answer is served without a request while fresh, Done(fresh: false)', () async {
       final (base, seen) = await _site((r) => r.response.write('v${DateTime.now().microsecondsSinceEpoch}'));
       await Http.scope(cache: 1.d, () async {

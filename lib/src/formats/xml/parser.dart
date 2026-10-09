@@ -7,7 +7,9 @@ Element _parseXml(String source) {
   Element? root;
   final open = <Element>[];
   final openNames = <String, int>{}; // how many of each name are in [open]
-  final run = _TextRun();
+  final run = TextRun();
+  final names = Names();
+  final scratch = <String>[];
   var pos = 0;
 
   // Whitespace or junk outside the document element is dropped.
@@ -62,8 +64,13 @@ Element _parseXml(String source) {
       }
     } else if (pos + 1 < src.length && _isXmlNameStart(src.codeUnitAt(pos + 1))) {
       final nameEndPos = _nameEnd(src, pos + 1);
-      final element = Element(src.substring(pos + 1, nameEndPos), {}, Syntax.xml);
-      final end = _scanAttributes(src, nameEndPos, element.attributes, html: false);
+      final name = names.of(src.substring(pos + 1, nameEndPos));
+      final end = _scanAttributes(src, nameEndPos, scratch..clear(), names, html: false, decode: _decodeXmlEntities);
+      final element = Element._parsed(
+        name,
+        scratch.isEmpty ? const [] : List.of(scratch, growable: false),
+        Element._xml,
+      );
       final selfClosing = end < 0;
       pos = end.abs();
       run.flush();

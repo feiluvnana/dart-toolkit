@@ -22,7 +22,7 @@ final class Span {
 /// getter answers the default when unset, so a builder can wrap it:
 ///
 /// ```dart
-/// await Tui.run(s, theme: const TuiTheme(palette: Palette(accent: Style(fg: Color.magenta))), view: …, update: …);
+/// await Tui.run(s, theme: const TuiTheme(palette: Palette(accent: Style(fg: Color.magenta))), draw: …, update: …);
 /// TuiTheme(item: (i) => HStack([Label(i.isSelected ? '▶' : ' ').fixed(2), const TuiTheme().item(i)]))
 /// ```
 ///

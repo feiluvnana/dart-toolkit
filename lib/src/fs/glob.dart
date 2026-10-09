@@ -1,4 +1,4 @@
-part of '../../path.dart';
+part of '../path.dart';
 
 /// A glob, checked when made: `*` within a name, `**` across folders, `?`, `[abc]`, `[!abc]`,
 /// `{a,b}`, and `\` before a character to mean that character (`a\*b`); folders are `/`. It is a [String], so it goes wherever a glob's text does (`files(only:)`,

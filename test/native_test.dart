@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:dart_toolkit/hash.dart';
 import 'package:dart_toolkit/src/native.dart';
@@ -36,6 +37,13 @@ void main() => print((${library == 'torrent' ? 'NativeBridge.torrent' : 'NativeB
     expect(native.reason, isNull);
     expect(native.missing, isEmpty);
     expect(NativeBridge.main.isLoaded, isTrue);
+  });
+
+  test('decodeText reads a legacy charset into the string, in the library\'s own buffer', () {
+    // 日本 in Shift_JIS, then ASCII and a byte that is no character.
+    final bytes = Uint8List.fromList([0x93, 0xfa, 0x96, 0x7b, 0x61, 0x80]);
+    expect(NativeBridge.main.decodeText('shift_jis', bytes), '日本a\u0080');
+    expect(NativeBridge.main.decodeText('euc-kr', Uint8List(0)), '');
   });
 
   test('hash exports NativeException, worded as the error table has it (HSH-1)', () {

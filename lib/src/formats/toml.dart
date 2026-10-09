@@ -424,21 +424,26 @@ String _toml(Doc doc) {
   final root = doc.raw;
   if (root is! Map<Object?, Object?>) throw FormatException('Invalid TOML at \$: ${_kind(root)}, not a map');
   final out = StringBuffer();
-  // Tables still to write, last first: the map, its header's keys, its JSONPath, and whether it
-  // is an element of an array of tables.
-  final pending = <(Map<Object?, Object?>, List<String>, String, bool)>[(root, const [], r'$', false)];
+  // Tables still to write, last first: the map, its header's keys, its JSONPath (joined only
+  // for a failure), and whether it is an element of an array of tables.
+  final pending = <(Map<Object?, Object?>, List<String>, String Function(), bool)>[(root, const [], () => r'$', false)];
   while (pending.isNotEmpty) {
     final (table, name, at, element) = pending.removeLast();
     final values = <MapEntry<Object?, Object?>>[];
-    final below = <(Map<Object?, Object?>, List<String>, String, bool)>[];
+    final below = <(Map<Object?, Object?>, List<String>, String Function(), bool)>[];
     for (final MapEntry(:key, value: v) in table.entries) {
       final value = v is Doc ? v.raw : v;
       if (value is Map<Object?, Object?>) {
-        below.add((value, [...name, '$key'], Doc._key(at, '$key'), false));
+        below.add((value, [...name, '$key'], () => Doc._key(at(), '$key'), false));
       } else if (value is List<Object?> && value.isNotEmpty && value.every((x) => (x is Doc ? x.raw : x) is Map)) {
-        final where = Doc._key(at, '$key');
+        final names = [...name, '$key'];
         for (final (i, x) in value.indexed) {
-          below.add(((x is Doc ? x.raw : x) as Map<Object?, Object?>, [...name, '$key'], '$where[$i]', true));
+          below.add((
+            (x is Doc ? x.raw : x) as Map<Object?, Object?>,
+            names,
+            () => '${Doc._key(at(), '$key')}[$i]',
+            true,
+          ));
         }
       } else {
         values.add(MapEntry(key, value));
@@ -473,8 +478,8 @@ bool _isTomlBare(String key) {
 
 /// [value], at key [key] (a `String` or an index) below [parent], written into [out] as an inline
 /// TOML value. The path a failure names is joined only when one is thrown.
-void _tomlValue(StringBuffer out, Object? value, String parent, Object key) {
-  String path() => key is int ? '$parent[$key]' : Doc._key(parent, '$key');
+void _tomlValue(StringBuffer out, Object? value, String Function() parent, Object key) {
+  String path() => key is int ? '${parent()}[$key]' : Doc._key(parent(), '$key');
   switch (value) {
     case null:
       throw FormatException('Invalid TOML at ${path()}: null has no TOML form');
@@ -491,15 +496,13 @@ void _tomlValue(StringBuffer out, Object? value, String parent, Object key) {
     case bool() || num():
       out.write(value);
     case final List<Object?> l:
-      final at = path();
       out.write('[');
       for (final (i, x) in l.indexed) {
         if (i > 0) out.write(', ');
-        _tomlValue(out, x, at, i);
+        _tomlValue(out, x, path, i);
       }
       out.write(']');
     case final Map<Object?, Object?> m:
-      final at = path();
       out.write('{');
       var first = true;
       for (final MapEntry(key: k, value: x) in m.entries) {
@@ -508,7 +511,7 @@ void _tomlValue(StringBuffer out, Object? value, String parent, Object key) {
         out
           ..write(_tomlKey('$k'))
           ..write(' = ');
-        _tomlValue(out, x, at, '$k');
+        _tomlValue(out, x, path, '$k');
       }
       out.write('}');
     default:

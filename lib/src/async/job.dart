@@ -49,6 +49,11 @@ final class Job<I, T> implements Task<T> {
   /// Whether [remove] forgot it.
   bool _removed = false;
 
+  /// Whether it waits in its pool's queue for a place, and the ticket of its latest wait there.
+  bool _queued = false;
+  int _ticket = 0;
+  void Function()? _unlistenQueued;
+
   Job._(this._pool, this.id, this.item, {required this.isDetached}) : _zone = Zone.current;
 
   static Completer<T> _outcome<T>() {
@@ -94,6 +99,10 @@ final class Job<I, T> implements Task<T> {
     if (_remote) return _pool._link?.send({'pause': id});
     if (_status is! Waiting && _status is! Running) return;
     _stopping = Stopped.paused;
+    if (_queued) {
+      _unqueue();
+      return _stopped(Stopped.paused);
+    }
     _waiting?.cancel(Stopped.paused);
     _run?.cancel(Stopped.paused);
   }
@@ -128,15 +137,49 @@ final class Job<I, T> implements Task<T> {
     if (_status.isFinal) return _pool._changed(this);
     _stopping = reason;
     if (_status is Paused) return _finish(Stopped(item, reason, label: label));
+    if (_queued) {
+      _unqueue();
+      return _stopped(reason);
+    }
     _waiting?.cancel(reason);
     _run?.cancel(reason);
   }
 
-  /// Runs it: waits for a worker, then runs the item on it.
+  /// Queued for a place in its pool: a cancel of the scope it was added in stops it there. The
+  /// ticket it returns is what [_dequeue] takes it out with.
+  int _queue() {
+    _queued = true;
+    final ticket = ++_ticket;
+    final token = _zone.run(() => Cancel.token);
+    _unlistenQueued = token?.onCancel(() => _halt(CancelledException.of(token).reason));
+    return ticket;
+  }
+
+  /// Out of the queue, to run: `false` when [ticket] is not its latest wait, or it left the
+  /// queue already (paused, stopped).
+  bool _dequeue(int ticket) {
+    if (!_queued || ticket != _ticket) return false;
+    _unqueue();
+    return true;
+  }
+
+  void _unqueue() {
+    _queued = false;
+    _unlistenQueued?.call();
+    _unlistenQueued = null;
+  }
+
+  /// Runs it, holding its place in the pool: waits for a worker, then runs the item on it.
   Future<void> _go() async {
+    try {
+      await _runOnce();
+    } finally {
+      _pool._vacate();
+    }
+  }
+
+  Future<void> _runOnce() async {
     final token = _waiting = CancelToken();
-    _stopping = null;
-    _set(Waiting(item, label: label));
     final _Lane<I, T> lane;
     try {
       lane = await Cancel.scope(_pool._lanes.take, token: token);
@@ -188,8 +231,9 @@ final class Job<I, T> implements Task<T> {
     _finish(Stopped(item, why, label: label));
   }
 
-  /// [status], a step on the way: a [Warned] is a note, the rest its status now.
-  void _set(Status<I, T> status) {
+  /// [status], a step on the way: a [Warned] is a note, the rest its status now. At [rest] (just
+  /// added) the store hears of it.
+  void _set(Status<I, T> status, {bool rest = false}) {
     if (status case final Warned<I, T> warned) {
       if (_warnings.length < 100) _warnings.add(warned);
     } else {
@@ -204,7 +248,7 @@ final class Job<I, T> implements Task<T> {
     for (final listener in [..._listeners]) {
       listener.add(status);
     }
-    _pool._changed(this, note: status is Warned<I, T> ? status : null);
+    _pool._changed(this, rest: rest, note: status is Warned<I, T> ? status : null);
   }
 
   /// How its run ended: [status], a [Done], [Failed] or [Stopped].
@@ -236,6 +280,7 @@ final class Job<I, T> implements Task<T> {
       }
     }
     _pool._changed(this, rest: true);
+    if (status is Done || status is Stopped) _pool._ended(this);
   }
 
   // ---- Future<T>: the current run's outcome
@@ -251,9 +296,11 @@ final class Job<I, T> implements Task<T> {
   Future<R> then<R>(FutureOr<R> Function(T value) onValue, {Function? onError}) =>
       _done.future.then(onValue, onError: onError);
 
+  /// The value, or [onTimeout]'s (else a [TimeoutException] naming it) if it takes longer than
+  /// [timeLimit]. Either way the job is cancelled: nobody waits for it.
   @override
   Future<T> timeout(Duration timeLimit, {FutureOr<T> Function()? onTimeout}) =>
-      _done.future.timeout(timeLimit, onTimeout: onTimeout);
+      TaskInternals.timeout(_done.future, timeLimit, onTimeout, cancel: cancel, subject: label);
 
   @override
   Future<T> whenComplete(FutureOr<void> Function() action) => _done.future.whenComplete(action);

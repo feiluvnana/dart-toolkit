@@ -19,26 +19,32 @@ Import the topics you use; each brings `core` and what its own API hands out.
 
 | Import                  | Holds                                                                                                                                            |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `core.dart`             | `Task`, `Batch` and `parallelize`, `Status`, `Work`, `Retry`, `Cancel`, `Clock`, `Store`/`Key`, `Secret`, `Env`, `Io`, `Path` (the type), `60.s` |
+| `core.dart`             | `Task`, `Batch` and `parallelize`, `Status`, `Work`, `Retry`, `Cancel`, `Clock`, `Semaphore`, `Store`/`Key`, `Secret`, `Env`, `Io`, `Path` (the type), `60.s` |
 | `path.dart`             | `Path`'s parts and files: read, write, list, copy, move, rename plans, watch, lock                                                               |
 | `archive.dart`          | zip, 7z, rar, tar.\*; gz, xz, zst, bz2                                                                                                           |
 | `hash.dart`             | `Hash` (digests, MACs), `Digest`, `Secure`, hex/base32/base64                                                                                    |
-| `async.dart`            | `Worker`, `Pool`, `Job` (pause, resume, detached), stream operators, `Semaphore`                                                                 |
-| `process.dart`          | `Shell.run`, `Command` pipelines, `Shell.interact`, `Shell.which`                                                                                |
+| `async.dart`            | `Worker`, `Pool`, `Job` (pause, resume, detached), stream operators                                                                              |
+| `process.dart`          | `Shell.run`, `Command` pipelines, `Shell.interact`, `Shell.open`, `Shell.which`                                                                  |
 | `json.dart`             | `Doc`: JSON, YAML, TOML, INI; JSONPath                                                                                                           |
-| `html.dart`, `xml.dart` | `Html`, `Xml`, `Selection`, CSS `$` and XPath `$x`                                                                                               |
-| `collection.dart`       | `Table`: CSV, TSV, NDJSON, JSON, Markdown                                                                                                        |
+| `html.dart`, `xml.dart` | `Html`, `Xml`, `Element`, `Selection`, CSS `$`                                                                                                   |
+| `xpath.dart`            | XPath `$x` on an `Element`, a `Selection`, an `Html` or an `Xml`                                                                                 |
+| `collection.dart`       | `Table`: CSV, TSV, NDJSON, JSON, Markdown; `Table.rows(element.rows)`, `Table.rows(doc.rows)`                                                    |
 | `http.dart`             | `url.get()`, `Http.scope`, `download`, cookies, events, `Client.fake`                                                                            |
 | `scrape.dart`           | `url.crawl`, `Crawler`, robots.txt, sitemaps                                                                                                     |
 | `chrome.dart`           | `Chrome`, `Page`: a real browser, as a client or by hand                                                                                         |
 | `image.dart`            | `Image`, `compress` (the smallest file that looks the same), `similar`                                                                           |
 | `torrent.dart`          | `Torrent` (`Metainfo`, `Magnet`), `TorrentClient`                                                                                                |
 | `cli.dart`              | `Cli`, typed `Option`/`Arg`, `Console`, `show`                                                                                                   |
+| `pick.dart`             | `list.pick(question)`, `list.pickMany(question)`: a choice under the cursor                                                                      |
 | `tui.dart`              | `Tui.run` terminal apps, widgets                                                                                                                 |
 | `testing.dart`          | `FakeTerminal`: the screen and keys `Console` and `Tui` draw on in a test                                                                        |
 | `native.dart`           | `Native.check()`, `Native.install()`                                                                                                             |
 
-The only runtime dependency is `path`. Hashing, archives, images and the torrent engine run in
+The formats (`json`, `html`, `xml`, `xpath`), `path`, `archive`, `hash` and `image` bring core
+without `Io`, `Store`, `Border`, `Detachable` and `Terminal`, which they do not use: import
+`core.dart` beside them for those.
+
+Nothing third-party runs: hashing, archives, images and the torrent engine run in
 native libraries: the first call that needs one downloads this platform's build from the release
 of the Rust sources it ships with (checked against its SHA-256), else compiles it with `cargo`.
 
@@ -118,11 +124,13 @@ an outer one.
 final app = Store.app('books');                    // the OS's app-data folder
 const seen = Key<List<String>>('seen', or: []);
 final ids = await app.read(seen);
-await app.update(seen, (ids) => [...ids, 'b-42']);  // under the store's lock
+final fresh = ['b-42', 'b-43'];                    // what this run did
+await app.update(seen, (ids) => [...ids, ...fresh]); // one update per run, under the lock
 await (app / 'crawl').clear();                     // start over
 ```
 
-Writes are atomic and the lock holds across processes. A type JSON can't carry names its
+Writes are atomic and the lock holds across processes. Each write rewrites the key's whole file:
+update once per batch of items, not once per item. A type JSON can't carry names its
 `Serializer`. `DART_TOOLKIT_STORE` moves every `Store.app` (tests, portable installs).
 
 **I want a pool of workers with setup, or jobs I can pause.**
@@ -265,7 +273,7 @@ final page = await url.get().html;
 final titles = page.$('h2 a').texts;
 final links = page.$('h2 a').links;                       // resolved against the page
 final next = page.$('a.next').link;                       // the first match's
-final row = page.$x('//tr[td[1]="FLAC"]').first;          // XPath comes with html.dart
+final row = page.$x('//tr[td[1]="FLAC"]').first;          // XPath comes with xpath.dart
 await url.get().html.save('copy.html');
 ```
 
@@ -340,7 +348,8 @@ final titles = await crawl.items.toList();
 
 A page is `Done(page, items)`, `Skipped(page, 'robots' | 'outside')` or `Failed`. A rerun with the
 same `store:` carries on. A page of another kind is read by its own hook,
-`ctx.follow(link, onResponse: readSong)`; hooks shared between crawls are a `Crawler` subclass.
+`ctx.follow(link, onResponse: readSong, onError: (e) => e.ignore())`, whose `onError` decides its
+failures instead of the crawl's; hooks shared between crawls are a `Crawler` subclass.
 
 **I want pages a browser renders.**
 
@@ -380,6 +389,7 @@ await Shell.run('pg_dump db').save('db.sql');
 await (Command('ls', ['-1']) | Command('wc', ['-l'])).run().text;
 await Shell.sh(r'grep -c "$1" *.log | sort', args: [word]);
 await Shell.interact('git commit');                                      // ^C is the child's
+await Shell.open('https://dart.dev');                                    // a file, folder or URL, in its app
 ```
 
 ---
@@ -443,23 +453,29 @@ await bar.close();
 Console.info('found 3'); Console.warn('slow');
 final name = await Console.ask<String>('Name');
 final pw = await Console.secret('Password');
+final env = await ['dev', 'prod'].pick('Target');   // pick.dart: arrows, filter, Esc
 ```
 
 Everything drawn goes to stderr, so `app --json | jq` gets only data. Without a terminal each item
-writes one line.
+writes one line, and a picker numbers its choices. Pickers are `pick.dart`'s, so a script that
+never picks compiles no key reader.
 
 **I want a terminal app.**
 
 ```dart
 final n = await Tui.run<int, String>(0,
-    view: (n) => VStack([Label('Count: $n'), Button('Add', message: 'add')]),
-    update: (n, e) => switch (e) { Sent() => n + 1, KeyPress.esc => Tui.quit(n), _ => n },
-    mouse: true);
+    draw: (n) => VStack([Label('Count: $n'), Button('Add', message: 'add')]),
+    update: (n, e) => switch (e) { Post() => n + 1, KeyPress.esc => Tui.quit(n), _ => n },
+    pointer: true);
 ```
 
-Widgets include `Field` (multi-line, suggestions), `Button`, `Clickable`, `Popup`, `Tooltip`,
-`Board(tally)`, `Markdown` and `Picture`. Test on `Io.scope(…, terminal: FakeTerminal())`, from
-`testing.dart`.
+Everything is an event: `Start`, `KeyPress` (typed text too), `Paste`, `Pointer`, `Resize`,
+`Focus`/`Blur`, `Suspend`/`Resume` (^Z), `Interrupt` (^C; answer a new state to stay open) and
+your own `Post`s. Side effects are statics: `Tui.post(future, onError:)`, `Tui.listen(stream)`,
+`Tui.defer(cleanup)`, `Tui.focus(control)`, `Tui.quit(state)`. `run` is a `Task`, so it can be
+cancelled. Widgets include `Field` (multi-line, suggestions), `Button`, `Clickable`, `Popup`,
+`Tooltip`, `Board(tally)`, `Markdown` and `Picture`. Test on
+`Io.scope(…, terminal: FakeTerminal())`, from `testing.dart`.
 
 ---
 

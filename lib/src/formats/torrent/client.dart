@@ -185,6 +185,9 @@ final class TorrentClient implements Finalizable {
     _poll?.cancel();
     _poll = null;
     for (final job in _jobs.values) {
+      // An add in flight (a magnet's metadata) holds a native callback open: it would keep
+      // the program alive.
+      job._adding?.cancel('client closed');
       job._waiting?.cancel();
       job._halt('client closed');
     }
@@ -229,6 +232,9 @@ final class TorrentJob implements Task<Path> {
   /// Stops the engine's wait for completion: when it ends, or its client closes.
   CancelToken? _waiting;
   CancelToken? _adding;
+
+  /// The stops of the reads under way, which a [Failed] or [Stopped] end ends.
+  final _reads = <CancelToken>{};
   Path? _root;
   bool _wantPause = false;
 
@@ -460,7 +466,8 @@ final class TorrentJob implements Task<Path> {
 
   /// The bytes of file [index] (of [metainfo]'s files) from [start], as they arrive: the pieces
   /// it reaches are fetched first, so a video plays while the rest downloads. It waits for the
-  /// metadata and the check of what is on disk; a job that ends first ends it with its error.
+  /// metadata and the check of what is on disk; a job that fails or stops, before or during the
+  /// read, ends it with its error (a stop as a [CancelledException]).
   ///
   /// Cancelling the subscription stops the read in flight and frees the reader, even while it
   /// waits for pieces no peer sends; a cancel where it was made ends it with a
@@ -500,6 +507,21 @@ final class TorrentJob implements Task<Path> {
   }
 
   Stream<List<int>> _stream(int index, int start, CancelToken token) async* {
+    _reads.add(token);
+    try {
+      yield* _reading(index, start, token);
+    } on CancelledException {
+      // The job's end stopped it: its failure is the read's.
+      if (_status case Failed(:final error, :final stackTrace)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      rethrow;
+    } finally {
+      _reads.remove(token);
+    }
+  }
+
+  Stream<List<int>> _reading(int index, int start, CancelToken token) async* {
     final meta = await _unless(metainfo, token);
     if (index >= meta.files.length) {
       throw ArgumentError.value(index, 'index', 'Invalid file index, expected below ${meta.files.length}');
@@ -607,6 +629,14 @@ final class TorrentJob implements Task<Path> {
       _end = Completer();
     }
     _status = status;
+    if (status is! Done) {
+      for (final read in [..._reads]) {
+        read.cancel(switch (status) {
+          Stopped(:final reason) => reason,
+          _ => 'failed',
+        });
+      }
+    }
     for (final listener in [..._listeners]) {
       listener
         ..add(status)

@@ -1,4 +1,4 @@
-part of '../../cli.dart';
+part of '../cli.dart';
 
 /// Marks the zone of a `Cli` run with its [_RunState].
 const _runKey = #dartToolkitCliRun;

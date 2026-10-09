@@ -1,4 +1,4 @@
-part of '../core.dart';
+part of '../base.dart';
 
 const _clockKey = #dartToolkitClock;
 
@@ -76,11 +76,15 @@ final class FakeClock extends Clock {
   Future<void> advance(Duration by) async {
     final until = _elapsed + by;
     await _settle();
-    while (true) {
-      _timers.sort();
-      final next = _timers.firstOrNull;
-      if (next == null || next._at > until) break;
-      _timers.remove(next);
+    while (_timers.isNotEmpty) {
+      // The earliest, by one pass: a sort per fired timer made a long backoff test quadratic.
+      var at = 0;
+      for (var i = 1; i < _timers.length; i++) {
+        if (_timers[i].compareTo(_timers[at]) < 0) at = i;
+      }
+      final next = _timers[at];
+      if (next._at > until) break;
+      _timers.removeAt(at);
       if (next._at > _elapsed) _elapsed = next._at;
       next._fire();
       await _settle();
@@ -256,12 +260,11 @@ final class _Deadlines {
 
   /// Counts a cancel; a heap mostly of cancelled deadlines is rebuilt without them.
   void _cancelled() {
-    if (--_live == 0) {
-      _timer?.cancel();
-      _timer = _armed = null;
-      _heap.clear();
-      _dead = 0;
-      return;
+    // The next deadline often comes before the event loop turns (one item after another): the
+    // timer is let go only if none has by then, and then nothing holds the program open.
+    if (--_live == 0 && !_idleCheck) {
+      _idleCheck = true;
+      _zone.run(() => Timer.run(_disarmIfIdle));
     }
     if (++_dead < 1024 || _dead * 2 < _heap.length) return;
     final live = [
@@ -271,6 +274,17 @@ final class _Deadlines {
     _heap.clear();
     _dead = 0;
     live.forEach(_push);
+  }
+
+  bool _idleCheck = false;
+
+  void _disarmIfIdle() {
+    _idleCheck = false;
+    if (_live > 0) return;
+    _timer?.cancel();
+    _timer = _armed = null;
+    _heap.clear();
+    _dead = 0;
   }
 }
 

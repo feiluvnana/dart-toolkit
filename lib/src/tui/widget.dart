@@ -203,14 +203,15 @@ final class Label extends Widget {
   int get width {
     var best = 0, w = 0;
     for (final s in spans) {
-      for (final (g, cw) in _graphemes(s.text)) {
+      _cells(s.text, (g, cw) {
         if (g == '\n') {
           if (w > best) best = w;
           w = 0;
         } else {
           w += cw;
         }
-      }
+        return true;
+      });
     }
     return w > best ? w : best;
   }
@@ -233,18 +234,19 @@ final class Label extends Widget {
     final lines = <List<_Cell>>[[]];
     var w = 0, space = -1;
     for (final s in spans) {
-      for (final (g, cw) in _graphemes(s.text)) {
+      final link = s.link?.toString();
+      _cells(s.text, (g, cw) {
         var line = lines.last;
         if (g == '\n') {
           lines.add([]);
           (w, space) = (0, -1);
-          continue;
+          return true;
         }
         if (wrap && width > 0 && w + cw > width && line.isNotEmpty) {
           if (g == ' ') {
             lines.add([]);
             (w, space) = (0, -1);
-            continue;
+            return true;
           }
           final carry = space >= 0 ? line.sublist(space + 1) : <_Cell>[];
           if (space >= 0) line.removeRange(space, line.length);
@@ -254,9 +256,10 @@ final class Label extends Widget {
           space = -1;
         }
         if (g == ' ') space = line.length;
-        line.add((g, cw, s.style, s.link?.toString()));
+        line.add((g, cw, s.style, link));
         w += cw;
-      }
+        return true;
+      });
     }
     return lines;
   }
@@ -266,7 +269,8 @@ final class Label extends Widget {
     final base = canvas.palette.text + style;
     canvas.fill(base);
     final lines = _lines(canvas.width);
-    for (var y = 0; y < lines.length && y < canvas.height; y++) {
+    final last = canvas._shownTo;
+    for (var y = canvas._shownFrom; y < lines.length && y < last; y++) {
       var line = lines[y];
       var w = _sum(line.map((c) => c.$2));
       if (w > canvas.width) {

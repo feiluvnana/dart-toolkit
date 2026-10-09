@@ -191,13 +191,7 @@ final class _Download {
   Future<Path> run(Work work) async {
     _work = work;
     work.defer(() async {
-      final claim = _claim;
-      if (claim != null) {
-        final absolute = _absolute(_target!);
-        _writing.remove(absolute);
-        _taken.remove(absolute);
-        claim.complete();
-      }
+      if (_claim != null) _release(_target!);
       // A stopped download without resume, or one stopped for good (its job removed), leaves
       // nothing behind; a paused one keeps its part for when it carries on.
       final ended = work.ended;
@@ -240,10 +234,11 @@ final class _Download {
   }
 
   /// Gives up the claim on [path], which is left as it is.
-  void _keepOnly(String path) {
+  void _release(String path) {
     final claim = _claim;
-    _writing.remove(_absolute(path));
-    _taken.remove(_absolute(path));
+    final absolute = _absolute(path);
+    _writing.remove(absolute);
+    _taken.remove(absolute);
     _claim = null;
     claim?.complete();
   }
@@ -408,11 +403,7 @@ final class _Download {
     final wanted = '$into${Platform.pathSeparator}$name';
     if (_target case final guess?) {
       if (name.isEmpty || _absolute(guess) == _absolute(wanted)) return;
-      final claim = _claim;
-      _writing.remove(_absolute(guess));
-      _taken.remove(_absolute(guess));
-      _claim = null;
-      claim?.complete();
+      _release(guess);
       await _forget();
       _target = null;
     }
@@ -426,7 +417,7 @@ final class _Download {
         if (since != null) {
           final served = MessageInternals.httpDate(res.headers['last-modified'] ?? '');
           if (served != null && !served.isAfter(since)) {
-            _keepOnly(path);
+            _release(path);
             throw const _NotModified();
           }
         }
@@ -512,7 +503,7 @@ final class _Segments {
   final File ranges;
   final int total;
 
-  /// The first answer's `If-Range` validator, as [_keepValidator] picks it.
+  /// The first answer's `If-Range` validator; see [_validatorOf].
   final String? validator;
 
   /// The first answer's `Last-Modified`, for the finished file.
@@ -534,17 +525,9 @@ final class _Segments {
     final n = count < most ? count : most;
     if (n < 2) return null;
     final size = (total + n - 1) ~/ n;
-    final tag = headers['etag'];
-    return _Segments(
-      part,
-      ranges,
-      total,
-      tag != null && !tag.startsWith('W/') ? tag : headers['last-modified'],
-      headers['last-modified'],
-      [
-        for (var i = 0; i < n; i++) [i * size, ((i + 1) * size < total ? (i + 1) * size : total) - 1, 0],
-      ],
-    );
+    return _Segments(part, ranges, total, _validatorOf(headers), headers['last-modified'], [
+      for (var i = 0; i < n; i++) [i * size, ((i + 1) * size < total ? (i + 1) * size : total) - 1, 0],
+    ]);
   }
 
   /// The parts [ranges] holds for [part], or `null` when either is missing, unreadable or
@@ -694,11 +677,16 @@ final class _Segments {
 
 final _range = RegExp(r'bytes\s+(?:(\d+)-\d+|\*)/(\d+|\*)', caseSensitive: false);
 
-/// Keeps a resume's `If-Range` validator: a strong `ETag` (a weak one may not be used), else
-/// `Last-Modified`; with neither, a resume is trusted.
+/// A resume's `If-Range` validator: a strong `ETag` (a weak one may not be used), else
+/// `Last-Modified`; `null` with neither, and a resume is trusted.
+String? _validatorOf(Headers headers) => switch (headers['etag']) {
+  final tag? when !tag.startsWith('W/') => tag,
+  _ => headers['last-modified'],
+};
+
+/// Keeps [_validatorOf] [headers] in [file] for the next run's resume.
 Future<void> _keepValidator(File file, Headers headers) async {
-  final tag = headers['etag'];
-  final value = tag != null && !tag.startsWith('W/') ? tag : headers['last-modified'];
+  final value = _validatorOf(headers);
   try {
     if (value == null) {
       await _discard(file);

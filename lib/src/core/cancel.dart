@@ -1,4 +1,4 @@
-part of '../core.dart';
+part of '../base.dart';
 
 const _cancelKey = #dartToolkitCancelToken;
 
@@ -152,6 +152,8 @@ final class _Listener {
     } else {
       t._last = previous;
     }
+    // A removed entry links to nothing: one kept by a stale unlink keeps no later listener alive.
+    previous = next = null;
   }
 }
 

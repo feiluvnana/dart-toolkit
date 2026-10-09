@@ -3,8 +3,10 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:dart_toolkit/html.dart';
+import 'package:dart_toolkit/collection.dart';
 import 'package:dart_toolkit/src/message.dart' show Response;
 import 'package:dart_toolkit/xml.dart';
+import 'package:dart_toolkit/xpath.dart';
 import 'package:html/dom.dart' as html_dom;
 import 'package:html/parser.dart' as reference;
 import 'package:test/test.dart';
@@ -460,17 +462,17 @@ void main() {
   });
 
   group('tables', () {
-    test('table throws when there is no table, as text and attr do', () {
+    test('rows throws when there is no table, as text and attr do', () {
       final doc = '<div><p>x</p></div>'.html;
-      expect(() => doc.$('table').first.table, throwsA(isA<MissingException>()));
-      expect(() => doc.$('div').first.table, throwsA(isA<MissingException>()));
+      expect(() => doc.$('table').first.rows, throwsA(isA<MissingException>()));
+      expect(() => doc.$('div').first.rows, throwsA(isA<MissingException>()));
     });
 
     test('a row reports its own cells, not a nested table\'s', () {
       const html =
           '<table><tr><th>a</th><th>b</th></tr>'
           '<tr><td>1</td><td><table><tr><td>inner</td></tr></table></td></tr></table>';
-      final t = html.html.$('table').first.table;
+      final t = Table.rows(html.html.$('table').first.rows);
       expect(t.columns, ['a', 'b']);
       expect(t.rows.first.length, 2);
       expect(t.length, 1);
@@ -480,17 +482,18 @@ void main() {
       const html = '<table><tr><th>a</th></tr><tr><td>val</div></td></tr><tr><td>row2</td></tr></table>';
       final doc = html.html;
       expect(doc.$('table tr').length, 3);
-      expect(doc.$('table').first.table.length, 2);
+      expect(doc.$('table').first.rows.length, 2);
     });
 
     test('a table: thead of td, duplicate headers, colspan and rowspan', () {
-      final t =
-          '<table><thead><tr><td>Name<td>Score<td>Score</thead>'
-                  '<tr><td rowspan=2>a<td colspan=2>1<tr><td>2<td>3</table>'
-              .html
-              .$('table')
-              .first
-              .table;
+      final t = Table.rows(
+        '<table><thead><tr><td>Name<td>Score<td>Score</thead>'
+                '<tr><td rowspan=2>a<td colspan=2>1<tr><td>2<td>3</table>'
+            .html
+            .$('table')
+            .first
+            .rows,
+      );
       expect(t.columns, ['Name', 'Score', 'Score_2']);
       expect(t.rows.map((r) => r.values.toList()), [
         ['a', '1', '1'],
@@ -500,7 +503,7 @@ void main() {
 
     test('a rowspan carried past a short row keeps its column', () {
       final h = '<table><tr><th>A<th>B<th>C<tr><td>a<td>b<td rowspan=2>c<tr><td>d<tr><td>e<td>f<td>g</table>';
-      expect(h.html.$('table').first.table.rows, [
+      expect(h.html.$('table').first.rows, [
         {'A': 'a', 'B': 'b', 'C': 'c'},
         {'A': 'd', 'B': null, 'C': 'c'},
         {'A': 'e', 'B': 'f', 'C': 'g'},
@@ -510,14 +513,14 @@ void main() {
     test('a th or td directly in thead gets an implied tr', () {
       final doc =
           '<table><thead><th>Col A</th><th>Col B</th></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table>'.html;
-      final table = doc.root.table;
+      final table = Table.rows(doc.root.rows);
       expect(table.columns, ['Col A', 'Col B']);
       expect(table.rows, hasLength(1));
     });
 
     test('a table under 500 stray <div>s still reads its row', () {
       final html = '<table>${'<div>' * 500}<tr><td>deep</td></tr>${'</div>' * 500}</table>';
-      expect(html.html.root.table.rows, hasLength(1));
+      expect(html.html.root.rows, hasLength(1));
     });
   });
 
@@ -658,7 +661,7 @@ void main() {
       expect(links.attrs('class'), ['x', 'y']);
       expect(links.whereType<Element>().first.lines, ['one']);
       expect(links.first.markup, '<a href="/a" class="x">one</a>');
-      expect((doc.$x('//table').first as Element).table.rows.single, {'c1': 'k', 'c2': 'v'});
+      expect((doc.$x('//table').first as Element).rows.single, {'c1': 'k', 'c2': 'v'});
       expect(doc.$x('//a/@href').links, [Uri.parse('https://ex.com/a')]);
       expect(doc.$x('//a/@href').texts, ['/a']);
       expect(() => doc.$x('//none').first, throwsA(isA<MissingException>()));
@@ -689,7 +692,7 @@ void main() {
         expect(doc.$('a').attrs('href'), ['/a', null, 'b']);
         expect(doc.$('nothing').attrs('href'), isEmpty);
         expect(doc.$('li.x').first.markup, '<li class="x"><a href="/a">A</a></li>');
-        expect('<table><tr><th>k</th></tr><tr><td>v</td></tr></table>'.html.$('table').first.table.rows, [
+        expect('<table><tr><th>k</th></tr><tr><td>v</td></tr></table>'.html.$('table').first.rows, [
           {'k': 'v'},
         ]);
       });
@@ -985,6 +988,31 @@ void main() {
   });
 
   group('tree edits', () {
+    test('attributes is a live map: written in place, added last, removed, first of a name wins', () {
+      final a = '<a href="x" id="i" HREF="dup" title>t</a>'.html.$('a').first;
+      expect(a.attributes, {'href': 'x', 'id': 'i', 'title': ''});
+      a.attributes['href'] = 'y';
+      a.attributes['rel'] = 'next';
+      expect(a.attributes.remove('id'), 'i');
+      expect(a.attributes.keys, ['href', 'title', 'rel']);
+      expect(a.markup, '<a href="y" title="" rel="next">t</a>');
+      expect(a.$x('@*').map((n) => n.markup), ['href="y"', 'title=""', 'rel="next"']);
+      a.attributes.clear();
+      expect(a.markup, '<a>t</a>');
+      expect(Element('p', {'k': 'v'}).attributes, {'k': 'v'});
+    });
+
+    test('siblings stay found after edits before them', () {
+      final ul = '<ul><li>1</li><li>2</li><li>3</li></ul>'.html.$('ul').first;
+      final two = ul.$('li').at(1);
+      ul.$('li').first.detach();
+      ul.append(Element('li'));
+      expect(two.previous, isNull);
+      expect(two.next?.text, '3');
+      expect(ul.$('li + li').length, 2);
+      expect(two.$x('following-sibling::li').length, 2);
+    });
+
     test('detaching a selection takes every match out, siblings and nested ones alike', () {
       final page = '<ul><li>1</li><li>2<b>x</b></li><li>3</li></ul><div><div><div>d</div></div></div>'.html;
       page.$('li, b').detach();

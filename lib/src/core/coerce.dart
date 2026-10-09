@@ -1,4 +1,4 @@
-part of '../core.dart';
+part of '../base.dart';
 
 /// What [CoerceBridge.coerce] reads a value as.
 enum _Kind { any, string, boolean, duration, date, secret, uri, integer, real, number, none }

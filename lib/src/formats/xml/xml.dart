@@ -9,8 +9,9 @@ part of '../../markup.dart';
 /// ```
 ///
 /// {@category Formats}
-final class Xml implements Saveable {
+final class Xml implements Markup, Saveable {
   /// The document element.
+  @override
   final Element root;
 
   Xml._(this.root, {Uri? url}) {
@@ -31,17 +32,17 @@ final class Xml implements Saveable {
   }
 
   /// The address the document was parsed with, if any.
+  @override
   Uri? get url => _urls[root];
 
   /// Every element matching CSS [selector], in document order. Names match case-sensitively;
   /// escape a prefix's colon, `$(r'media\:content')`, or use [$x].
+  @override
   Selection<Element> $(String selector) =>
       Selection._(_Selector.parse(selector, fold: false).inDocument(root), selector);
 
-  /// The nodes XPath [expression] selects, from the root: see [Element.$x].
-  Selection<Node> $x(String expression) => _xpath([root], expression);
-
   /// The document's text: see [Node.text].
+  @override
   String get text => root.text;
 
   /// Every text node's text as it is in the markup.
@@ -54,7 +55,7 @@ final class Xml implements Saveable {
   /// unless [conflict] says otherwise.
   @override
   Task<Path> save(String to, {Conflict conflict = Conflict.overwrite}) =>
-      saveBytes(to, conflict, 'Xml', () => utf8.encode(encode()));
+      FileBridge.save(to, conflict, 'Xml', () => [utf8.encode(encode())]);
 
   @override
   String toString() => 'Xml(${url ?? root.name})';

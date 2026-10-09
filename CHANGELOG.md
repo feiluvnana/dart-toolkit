@@ -1,5 +1,85 @@
 # Changelog
 
+## 0.0.3
+
+A second review pass, on memory above all. Every bug below keeps a regression test.
+
+**Tui**
+
+- An app is `draw` and `update` only: `init` and `view` are gone. Everything that happens is an
+  event named by one noun: `Start`, `KeyPress` (now also every typed character: `Char` is gone,
+  `.text` gives the text), `Paste`, `Pointer` (was `Mouse`, opt in with `pointer:`), `Resize`,
+  `Focus`, `Blur`, `Suspend`, `Resume`, `Interrupt` and your own `Post` (was `Sent`).
+- Side effects are statics: `Tui.post(future, onError:)`, `Tui.listen`, `Tui.defer`, `Tui.focus`,
+  `Tui.quit`. `run` returns a `Task`. ^C reaches `update` (a new state keeps the app open; a second
+  ^C within 2 s always quits); ^Z suspends and redraws on `fg`.
+- `cli` no longer exports the events. Removed: `KeyPress.f`, `Tally.items`, `Tally.values`,
+  `TuiApp.state`/`send`/`listen`/`focus`.
+
+**Changed**
+
+- Imports: XPath is `xpath.dart`; the pickers are `pick.dart` as `list.pick(question)` and
+  `list.pickMany(question)`; `Semaphore` is in `core`. `json`, `html`, `xml`, `xpath`, `path`,
+  `archive`, `hash` and `image` no longer re-export `Io`, `Store`, `Key`, `Serializer`, `Border`,
+  `Align`, `Detachable` or `Terminal` (import `core.dart` beside them), and no longer re-export
+  `collection`: `Element.table`/`Doc.table` are `rows`, made a table by `Table.rows(x.rows)`. `Html`
+  and `Xml` share the `Markup` interface.
+- `package:path` is gone: the path grammar is in-house, checked against it in both styles. Nothing
+  third-party runs.
+- Added `Shell.open(target)` and per-follow `onError:` on `follow`/`send`; removed `ctx.resolve`
+  (`follow` resolves relative links), `readLines`, `writeLines`, `appendBytes`, `replaceText`,
+  `Path.sanitized` and `Hash.isChecksum`.
+- A `Pool` keeps its last 100 finished jobs (a failed one until removed or resumed). Waiting jobs
+  cost a queue entry, not a running task. `parallelize(isolate: true)` shares `Pool`'s worker.
+- A merging copy, move or unarchive with `fail` refuses before writing anything; `overwrite`
+  replaces a file where a folder goes. `readText` of bad bytes is a `FormatException`.
+- `Element.attributes` is a live view; `Doc.toString` shows a non-finite number as its text.
+- `compress` scores at 2048 px, one file at a time per process, and lands on slightly different
+  qualities. `lines` splits as `output` does.
+- Native ABI: `dart_toolkit_native` 14 (`dart_toolkit_torrent` stays 3).
+
+**Fixed**
+
+- Crashes: a pool whose idle worker isolate had died; a key code past Unicode in `Console.pick`.
+- Hangs or a program that would not exit: a failed `save()` left its command running; cancelling a
+  batch over an endless iterable; an isolate batch whose result cannot cross or whose worker exits;
+  a cancelled batch held the process 1 s; `TorrentClient.close()` during a magnet's metadata fetch;
+  a torrent `read` when its job ended; `contents()` cancelled at once decoded the whole archive.
+- A batch of instant items could not be cancelled or drawn; `Job.timeout` did not stop the job; a
+  merged batch hid its source's error; a Pool isolate item cancelled as it was sent still ran; a job
+  added after the store opened was not recorded until it finished.
+- Wrong output: a batch's equal inputs merged in its display; a stream batch with no terminal logged
+  every item; kitty keypad keys typed glyphs; `Style.truncate` with a custom ellipsis; cookie expiry
+  ignoring a fake clock; an XML element named `base` moving link resolution; `changes()` under
+  constant writes never ending a batch; `duplicates()` failing on an unreadable file.
+- The 0.0.2 entity table made a rarer HTML entity ~1000× slower than a common one.
+
+**Memory** (peak, before → after)
+
+- Batches keep one status per finished item and no child task's value: 1M items 860 → 128 MB;
+  1000 items holding 1 MiB each 1034 → 47 MB. A removed cancel listener no longer keeps later ones.
+- `Pool.map` and `Pool.changes` no longer queue progress: 100k items with progress 1968 → 58 MB;
+  `merge` of 2M events 292 → 17 MB.
+- A crawl page keeps only its URL once read: 100k pages 311 → 86 MiB. The cookie jar is indexed and
+  capped (180 a domain, 3000 in all); a memory store's cache goes with the store.
+- Image: 16 × 12 MP compressed 4.2 → 1.2 GB; encoders, EXIF turns and lossy WebP copy nothing;
+  Chrome's socket is uncompressed and `pdf()` streams.
+- Files: listings, `size()`, `duplicates()`, copies and moves go folder by folder (300k files
+  105 → 18 MiB); reading, writing, hashing and archive entries hold 1 GiB once, not twice.
+- HTML/XML trees are 37% smaller (50 MB page 766 → 479 MB); sibling queries need no index; kept CSV
+  rows hold only their cells; `Table.save`, `Doc.save` and Store writes stream; YAML holds each line
+  once.
+- Terminal: a display over 1M items adds 24 MB (was 463); `Bar.tick` keeps nothing; `Scroll` paints
+  only what shows; a full-screen app keeps prints as text.
+
+**Faster**
+
+- Startup over `core` (cold `dart run`, `main` calling `exit`): html 173 → 58 ms, xml 174 → 37,
+  json 136 → 39, cli 124 → 86, archive 137 → 98, path 110 → 70, async 52 → 21, native 31 → 2;
+  `module_bench --exit` measures this way.
+- One entry of a 5000-entry AES zip 2.2 s → 24 ms; `lines` 8×; Tui frames 3×; the cookie jar at 8k
+  cookies 14.9 → 1.2 s; per-item timeouts reuse one timer; `FakeClock.advance` is linear.
+
 ## 0.0.2
 
 A review pass: every bug below keeps a regression test. The three examples are rewritten to read

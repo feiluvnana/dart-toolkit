@@ -63,7 +63,7 @@ This file states rules. What a release changed is in `CHANGELOG.md`.
 
 | # | Rule |
 |---|---|
-| 27 | **Topic imports.** One public library per topic; a script imports what it uses. A topic re-exports `core` and the public libraries its own code imports. Shared private code lives in one `lib/src/<name>.dart` reached through a hidden `…Internals`/`…Bridge`, never copied, never public. `test/layering_test.dart` enforces the graph. |
+| 27 | **Topic imports.** One public library per topic; a script imports what it uses. A topic re-exports `core` and the public libraries its own code imports; one whose code needs none of `Io`, `Store`, `Border`, `Detachable` and the `Terminal` seam builds on core's foundations (`src/base.dart`) and re-exports those (`src/foundations.dart`). Shared private code lives in one `lib/src/<name>.dart` reached through a hidden `…Internals`/`…Bridge`, never copied, never public. `test/layering_test.dart` enforces the graph. |
 | 28 | **One name per operation; no aliases.** The public names are a reviewed list (`test/api_names.txt`). |
 | 29 | **`X.read(path)`, `x.save(path)`, `X.parse(text)`, `X.decode(bytes)`, `x.encode()`** for every type with a file form; `save` comes from `Saveable`: a `Task<Path>`, atomic, `conflict:` (overwrite by default: the value in hand is the newer version), and it never makes folders. |
 | 30 | **`String` carries conversions, never processing.** Conversion getters to library types stay (`'…'.path`, `.url`, `.json`, `.html`, `.xml`, `to<T>()`, the colours); text processing is Dart's `String` and `RegExp`. Natural order is `compareNatural`. |
@@ -91,7 +91,7 @@ This file states rules. What a release changed is in `CHANGELOG.md`.
 
 | # | Rule |
 |---|---|
-| 45 | **Two UIs, never mixed:** `Console` (`cli`) prints inline above the scrollback; `Tui` (`tui`) owns the screen or an inline region. What both draw is a `Tally`, in the shared terminal library. |
+| 45 | **Two UIs, never mixed:** `Console` (`cli`) prints inline above the scrollback; `Tui` (`tui`) owns the screen or an inline region. What both draw is a `Tally`, in the shared terminal library. A Tui app is `draw` and `update` only: everything that happens is an event named by one noun for what arrived (`Start`, `KeyPress`, `Pointer`, `Interrupt`, `Post`, never past tense or an `On`/`Event` affix), and its side effects are `Tui.post`/`listen`/`defer`/`focus`. |
 | 46 | **Where lines go:** `info`/`ok`/`line` to stdout; `debug`, `warn`, `error`, prompts and everything an indicator draws to stderr. So `app --json \| jq` gets only data. |
 | 47 | **A live region exists only on an ANSI terminal;** elsewhere each item writes one line when it ends. Durable lines print once, above the region, from the outermost display. |
 | 48 | **Customization is a theme of builders over typed views,** with one shared `Palette`; the views have the same names in both UIs; an ASCII palette is picked where the terminal cannot draw Unicode. |
@@ -111,9 +111,9 @@ This file states rules. What a release changed is in `CHANGELOG.md`.
 
 | # | Rule |
 |---|---|
-| 55 | **Measure back to back, or not at all.** Startup drifts and jumps in bands; a claim is medians of alternating rounds from one sitting (`tool/module_bench.dart`), and says when a delta is a band jump. `dart run` startup is the in-process front end, so measure cold `dart run`, never a cached kernel. |
-| 56 | **A topic import costs at most 15 ms of startup over `core`.** The lever is what a library compiles: a module does not import another to add one method, and rarely used heavy code goes behind its own import. |
-| 57 | **Nothing third-party at runtime but `path`.** |
+| 55 | **Measure back to back, or not at all.** Startup drifts and jumps in bands; a claim is medians of alternating rounds from one sitting (`tool/module_bench.dart`), and says when a delta is a band jump. `dart run` startup is the in-process front end, so measure cold `dart run`, never a cached kernel. A script that returns from `main` also waits for the front end's last background optimisations, one that exits (as `Cli.run` does) does not: measure both. |
+| 56 | **A topic import costs at most 15 ms of startup over `core`.** The lever is what a library compiles: a module does not import another to add one method, and rarely used heavy code goes behind its own import (`xpath`, `pick`). `dart:ffi` costs every program that compiles it, so it is imported only where a native call is the only way. A library boundary costs too: split one only where an import then compiles less. |
+| 57 | **Nothing third-party at runtime.** |
 | 58 | **Small work stays on the caller; a batch goes to a worker,** and an isolate is sent only what it needs (closures built in top-level functions). |
 | 59 | **Throughput is `make bench`:** AOT, one process per case with its own peak RSS; `make bench-check` fails on a regression. |
 

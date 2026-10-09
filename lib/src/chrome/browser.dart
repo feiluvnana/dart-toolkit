@@ -207,7 +207,7 @@ ChromeException _held(String profile, String holder) => ChromeException(
   'quit it, wait for the other run to finish, or give this one a store of its own',
 );
 
-bool _isPidAlive(int pid) => ProcessBridge.isPidAlive(pid);
+bool _isPidAlive(int pid) => OsBridge.isPidAlive(pid);
 
 /// The endpoint from `DevToolsActivePort`, where Chrome writes the port it took and its path.
 Future<Uri> _activePort(Directory profile, Process process, Duration timeout) async {

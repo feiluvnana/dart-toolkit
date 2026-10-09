@@ -191,7 +191,7 @@ Future<void> _loadSession(Store store, CookieJar jar) async {
   final stored = CookieJar.fromJson(saved);
   // What the jar was handed beats what was kept.
   for (final cookie in stored) {
-    if (!jar._cookies.any((c) => CookieJar._same(c, cookie))) jar.add(cookie);
+    if (jar._find(cookie) == null) jar.add(cookie);
   }
 }
 

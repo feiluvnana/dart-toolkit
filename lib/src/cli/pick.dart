@@ -1,4 +1,28 @@
-part of '../../cli.dart';
+part of '../../pick.dart';
+
+/// Picking from a list on the terminal: [pick] one, [pickMany] any.
+///
+/// {@category CLI}
+extension ListPick<T extends Object> on List<T> {
+  /// One of these: a picker under the cursor on a terminal (arrows move, Enter picks, typing
+  /// filters with [filter], Esc takes [or]), else the choices numbered and a number or a label
+  /// read. Without [or] an answer is required. [label] names a choice (an enum by its `name`).
+  ///
+  /// ```dart
+  /// final env = await servers.pick('Target', label: (s) => s.name, filter: true);
+  /// ```
+  Future<T> pick(String question, {T? or, String Function(T choice)? label, bool filter = false}) async =>
+      this[(await _choose(question, this, false, or == null ? null : [or], label, filter)).single];
+
+  /// Any of these, as [pick]: Space checks, Enter answers the checked (the cursor's when none is).
+  /// Numbered, it reads numbers or labels separated by commas.
+  Future<List<T>> pickMany(
+    String question, {
+    List<T>? or,
+    String Function(T choice)? label,
+    bool filter = false,
+  }) async => [for (final i in await _choose(question, this, true, or, label, filter)) this[i]];
+}
 
 /// The picked indexes of [choices], in list order: a picker on a terminal, else numbered input.
 Future<List<int>> _choose<T extends Object>(
@@ -30,7 +54,7 @@ Future<List<int>> _choose<T extends Object>(
       choice.toggle(i);
     }
   }
-  return Console._region.suspend(() async {
+  return ConsoleBridge.suspend(() async {
     if (_keyboard() case final term?) return _Picker<T>(question, choice, fallback, term).run();
     return _numbered(question, choice, many, fallback);
   });
@@ -41,7 +65,7 @@ Future<List<int>> _choose<T extends Object>(
 Terminal? _keyboard() {
   if (IoBridge.terminal case final term?) return term;
   if (Platform.isWindows || !Io.isInteractive || !Io.isStderrTerminal) return null;
-  return TerminalBridge.connect();
+  return KeysBridge.connect();
 }
 
 /// A picker without a terminal: the choices numbered, and a line of numbers or labels read.
@@ -59,7 +83,7 @@ Future<List<int>> _numbered(String question, Choice<Object?> choice, bool many, 
     Io.stderr.writeln(IoBridge.takesColor(true) ? line : Style.plain(line));
   }
   while (true) {
-    final answer = await Console._answer(
+    final answer = await ConsoleBridge.answer(
       'Select 1-$count${many ? ', comma-separated' : ''}',
       hint: fallback?.map((i) => i + 1).join(','),
     );
@@ -76,7 +100,7 @@ Future<List<int>> _numbered(String question, Choice<Object?> choice, bool many, 
       picked.add(i);
     }
     if (picked.isNotEmpty) return picked.toList()..sort();
-    Console._reject('Please enter ${many ? 'numbers' : 'a number'} from 1 to $count.');
+    ConsoleBridge.reject('Please enter ${many ? 'numbers' : 'a number'} from 1 to $count.');
   }
 }
 
@@ -88,7 +112,7 @@ final class _Picker<T extends Object> {
   final List<int>? or;
   final Terminal term;
   final ConsoleTheme theme = Console.theme;
-  late final _keys = TerminalBridge(_events);
+  late final _keys = KeysBridge(_events);
   final _done = Completer<List<int>>();
   StreamSubscription<List<int>>? _sub;
   void Function()? _unlinkCancel;
@@ -98,16 +122,17 @@ final class _Picker<T extends Object> {
   _Picker(this.question, this.choice, this.or, this.term);
 
   /// Writes to the terminal as it is: escapes and all, whatever the colour.
-  void _write(String data) => TerminalBridge.isTty(term) ? _Region._raw(data) : term.write(data);
+  void _write(String data) => KeysBridge.isTty(term) ? ConsoleBridge.raw(data) : term.write(data);
 
   Future<List<int>> run() async {
     await term.open();
     IoBridge.restores.add(_restore);
-    TerminalBridge.interrupted = _interrupt;
+    KeysBridge.interrupted = _interrupt;
     try {
       final token = Cancel.token;
       _unlinkCancel = token?.onCancel(() => _finish(error: CancelledException('${token.reason ?? 'cancelled'}')));
-      _sub = term.input.listen(_keys.add);
+      // What reading a key throws (a terminal's malformed answer) ends the picker, never the process.
+      runZonedGuarded(() => _sub = term.input.listen(_keys.add), (e, st) => _finish(error: e, stackTrace: st));
       _write('\x1b[?25l');
       _draw();
       final picked = await _done.future;
@@ -127,9 +152,9 @@ final class _Picker<T extends Object> {
     _finish(error: const CancelledException('Interrupted'));
   }
 
-  void _finish({List<int>? picked, Object? error}) {
+  void _finish({List<int>? picked, Object? error, StackTrace? stackTrace}) {
     if (_done.isCompleted) return;
-    error == null ? _done.complete(picked) : _done.completeError(error);
+    error == null ? _done.complete(picked) : _done.completeError(error, stackTrace);
   }
 
   void _events(List<TuiEvent<Never>> events) {
@@ -143,7 +168,7 @@ final class _Picker<T extends Object> {
   void _handle(TuiEvent<Never> e) {
     switch (e) {
       case const KeyPress('c', ctrl: true):
-        TerminalBridge.ctrlC(term, _interrupt);
+        KeysBridge.ctrlC(term, _interrupt);
       // A filter that matches nothing has nothing to pick.
       case KeyPress.enter when choice.multi && choice.checked.isNotEmpty:
         _finish(picked: choice.checked.toList()..sort());
@@ -163,8 +188,8 @@ final class _Picker<T extends Object> {
     final width = max(1, term.width - 1);
     final rows = _rows;
     final shown = choice.shown;
-    TerminalBridge.layout(choice).page = rows;
-    final pos = max(0, shown.indexOf(choice.index));
+    KeysBridge.layout(choice).page = rows;
+    final pos = max(0, KeysBridge.position(choice));
     if (pos < _offset) _offset = pos;
     if (pos >= _offset + rows) _offset = pos - rows + 1;
     _offset = _offset.clamp(0, max(0, shown.length - rows));
@@ -190,7 +215,9 @@ final class _Picker<T extends Object> {
     if (_drawn > 1) out.write('\x1b[${_drawn - 1}A');
     out.write('\x1b[J');
     out.write(
-      [for (final l in lines) Style.truncate(l.replaceAll(_control, ' '), width, ellipsis: p.ellipsis)].join('\r\n'),
+      [
+        for (final l in lines) Style.truncate(l.replaceAll(ConsoleBridge.control, ' '), width, ellipsis: p.ellipsis),
+      ].join('\r\n'),
     );
     _write('$out');
     _drawn = lines.length;
@@ -201,7 +228,7 @@ final class _Picker<T extends Object> {
     if (_restored) return;
     _restored = true;
     IoBridge.restores.remove(_restore);
-    if (TerminalBridge.interrupted == _interrupt) TerminalBridge.interrupted = null;
+    if (KeysBridge.interrupted == _interrupt) KeysBridge.interrupted = null;
     _keys.cancel();
     _sub?.cancel();
     _unlinkCancel?.call();

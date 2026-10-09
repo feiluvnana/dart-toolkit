@@ -28,10 +28,7 @@ final class Menu<T> extends Widget {
   const Menu(this.choice, {this.item, this.empty = 'No matches', this.scrollbar = true});
 
   @override
-  int get width =>
-      _max([for (var i = 0; i < choice.items.length; i++) Style.width(choice.label(i))]) +
-      (choice.multi ? 4 : 2) +
-      (scrollbar ? 1 : 0);
+  int get width => KeysBridge.widest(choice) + (choice.multi ? 4 : 2) + (scrollbar ? 1 : 0);
 
   /// The rows the filter leaves, or one for [empty].
   @override
@@ -71,8 +68,8 @@ void _list(
   bool scrollbar,
   Widget Function(int n, int width, bool hovered) row,
 ) {
-  final layout = TerminalBridge.layout(choice);
-  final pos = choice.shown.indexOf(choice.index).clamp(0, count - 1);
+  final layout = KeysBridge.layout(choice);
+  final pos = KeysBridge.position(choice).clamp(0, count - 1);
   final bar = scrollbar && count > canvas.height ? 1 : 0;
   final w = canvas.width - bar;
   if (pos < layout.offset) layout.offset = pos;
@@ -384,7 +381,7 @@ final class Tabs extends Widget {
 
   @override
   void paint(Canvas canvas) {
-    final layout = TerminalBridge.layout(choice)..horizontal = true;
+    final layout = KeysBridge.layout(choice)..horizontal = true;
     final focused = canvas.focus(choice);
     final p = canvas.palette;
     var x = 0;

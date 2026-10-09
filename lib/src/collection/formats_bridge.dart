@@ -1,22 +1,13 @@
-/// Not API: what `collection`, `json` and the markup library share, and no topic import exports:
-/// the one `save` task every value with a file form writes through, text read from a file's
-/// bytes, and the bounded cache of compiled queries (CSS, XPath, JSONPath).
+/// Not API: what `collection`, `json` and the markup libraries share, and no topic import
+/// exports: text read from a file's bytes, and the bounded cache of compiled queries (CSS,
+/// XPath, JSONPath).
 library;
 
 import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
-import '../core.dart';
-
-/// [bytes] written to [to] as `Saveable.save` writes a value: atomically, under [conflict], in a
-/// task about `to` that ends `Done(fresh: false)` when [Conflict.skip] left a file there.
-/// [subject] names the value in a `fail` conflict: `Cannot save Table: out.csv exists`.
-Task<Path> saveBytes(String to, Conflict conflict, String subject, List<int> Function() bytes) =>
-    FileBridge.save(to, conflict, subject, bytes);
-
-/// How a status names the file at [path]: its folder and name.
-String labelOf(String path) => FileBridge.label(path);
+import '../base.dart';
 
 /// The text of a file read as [bytes]: a byte-order mark decides UTF-8 or UTF-16, else strict
 /// UTF-8. Bytes that are not UTF-8 are a [FormatException] naming [format] and [path], or with

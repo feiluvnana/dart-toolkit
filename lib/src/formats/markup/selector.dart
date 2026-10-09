@@ -140,22 +140,11 @@ final class _Siblings {
   /// [e]'s 0-based position among the siblings sharing its tag name.
   int typeIndexOf(Element e) => e.parent == null ? 0 : _typed(e).$2[e] ?? 0;
 
-  /// The next element sibling, or `null`.
-  Element? next(Element e) {
-    final parent = e.parent;
-    if (parent == null) return null;
-    final kids = of(parent);
-    final i = indexOf(e) + 1;
-    return i < kids.length ? kids[i] : null;
-  }
+  /// The next element sibling, or `null`: a walk from its slot, no index.
+  Element? next(Element e) => e.next;
 
   /// The previous element sibling, or `null`.
-  Element? previous(Element e) {
-    final parent = e.parent;
-    if (parent == null) return null;
-    final i = indexOf(e) - 1;
-    return i >= 0 ? of(parent)[i] : null;
-  }
+  Element? previous(Element e) => e.previous;
 }
 
 /// The index for the query in progress; a nested `:has()` or `:not()` reuses it.
@@ -193,7 +182,10 @@ final class _Complex {
     return switch (combinators[i - 1]) {
       '>' => e.parent != null && _match(e.parent!, i - 1),
       ' ' => _along(e.parent, i - 1, _up),
-      '+' => _sibs.previous(e) != null && _match(_sibs.previous(e)!, i - 1),
+      '+' => switch (e.previous) {
+        final p? => _match(p, i - 1),
+        null => false,
+      },
       _ => _along(_sibs.previous(e), i - 1, _sibs.previous),
     };
   }
@@ -351,11 +343,11 @@ final class _SelectorParser {
       if (c == '#') {
         i++;
         final id = ident();
-        tests.add((e) => e.attributes['id'] == id);
+        tests.add((e) => e._attr('id') == id);
       } else if (c == '.') {
         i++;
         final cls = ident();
-        tests.add((e) => _hasWord(e.attributes['class'], cls));
+        tests.add((e) => _hasWord(e._attr('class'), cls));
       } else if (c == '[') {
         i++;
         tests.add(attribute());
@@ -375,7 +367,7 @@ final class _SelectorParser {
     final name = _name(ident());
     // A folded `viewbox` also finds SVG's `viewBox`, which keeps its case.
     final svg = fold ? _svgAttributes[name] : null;
-    String? of(Element e) => svg == null ? e.attributes[name] : e.attributes[name] ?? e.attributes[svg];
+    String? of(Element e) => svg == null ? e._attr(name) : e._attr(name) ?? e._attr(svg);
     skipWs();
     if (i < s.length && s[i] == ']') {
       i++;

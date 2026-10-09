@@ -1,4 +1,4 @@
-part of '../../path.dart';
+part of '../path.dart';
 
 final _tkChmod = NativeBridge.main
     .require()
@@ -109,35 +109,37 @@ final Future<int> _umask = () async {
   return int.tryParse('${r.stdout}'.trim(), radix: 8) ?? 0x12; // 022
 }();
 
-/// The bytes of the files under [path]; an unreadable folder is skipped.
+/// The bytes of the files under [path]; an unreadable folder, or a file gone meanwhile, is
+/// skipped.
 int _dirSize(String path) {
   var total = 0;
   for (final e in _walkSync(Directory(path))) {
-    if (e is File) total += e.lengthSync();
+    if (e is! File) continue;
+    try {
+      total += e.lengthSync();
+    } on FileSystemException {
+      // Gone since it was listed: it has no size to add.
+    }
   }
   return total;
 }
 
-/// Everything under [dir], skipping what cannot be read: one `listSync(recursive: true)`, 1.8×
-/// faster, redone per folder only if that throws. For a worker isolate.
-List<FileSystemEntity> _walkSync(Directory dir, [List<FileSystemEntity>? out]) {
-  if (out == null) {
+/// Everything under [dir], links not followed, folder by folder so only one listing is held,
+/// skipping a folder that cannot be read. For a worker isolate.
+Iterable<FileSystemEntity> _walkSync(Directory dir) sync* {
+  final pending = [dir];
+  while (pending.isNotEmpty) {
+    final List<FileSystemEntity> entries;
     try {
-      return dir.listSync(recursive: true, followLinks: false);
+      entries = pending.removeLast().listSync(followLinks: false);
     } on FileSystemException {
-      // Walked below instead.
+      continue; // unreadable, or gone: skipped, as listings skip it
+    }
+    for (final entity in entries) {
+      yield entity;
+      if (entity is Directory) pending.add(entity);
     }
   }
-  out ??= [];
-  try {
-    for (final entity in dir.listSync(followLinks: false)) {
-      out.add(entity);
-      if (entity is Directory) _walkSync(entity, out);
-    }
-  } on FileSystemException {
-    // Unreadable: skipped, as listings skip it.
-  }
-  return out;
 }
 
 /// The C and Windows calls behind [PathExtensions.free], [PathExtensions.trash] and a folder's
@@ -270,7 +272,7 @@ abstract final class _Sys {
     if (path.startsWith(r'\\') || path.startsWith('//')) {
       throw UnsupportedError('Cannot trash $path: a network path has no Recycle Bin');
     }
-    final root = p.rootPrefix(p.absolute(path));
+    final at = _absolute(path), root = at.substring(0, _rootLength(at));
     final rootPtr = _wide(root.endsWith(r'\') ? root : '$root\\', 1);
     // SHQUERYRBINFO: a DWORD size, then two 64-bit counts.
     final info = _localAlloc(0x0040, 24);

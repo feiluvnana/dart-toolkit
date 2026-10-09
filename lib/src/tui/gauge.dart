@@ -47,12 +47,12 @@ final class Spin extends Widget {
 
 /// Work drawn from its [Tally], as the console's `show()` draws it: one task as one line, a batch
 /// or a `Bar` as a header with a row per running item (`+N more` past [rows]), and the last [log]
-/// warnings and failures under them. The tally is the work's, so building a board in `view`
+/// warnings and failures under them. The tally is the work's, so building a board in `draw`
 /// each frame never listens again; the app redraws as the tally changes.
 ///
 /// ```dart
 /// final work = Tally.batch(urls.parallelize(fetch));
-/// await Tui.run(0, view: (_) => VStack([Board(work, title: 'Fetching'), if (work.isOver) Label('done')]), update: …);
+/// await Tui.run(0, draw: (_) => VStack([Board(work, title: 'Fetching'), if (work.isOver) Label('done')]), update: …);
 /// ```
 ///
 /// {@category CLI}
@@ -103,7 +103,7 @@ final class Board extends Widget {
     }
 
     if (tally.isTask) {
-      final item = tally.items.firstOrNull;
+      final item = tally.latest;
       final view = item == null
           ? TaskView(
               label: title,
@@ -132,17 +132,11 @@ final class Board extends Widget {
 /// [head] (a label, kept), then a bar of [fraction] in what is left, then [tail].
 Widget _fitted(String head, double? fraction, String tail, Style headStyle) => Paint((c) {
   final p = c.palette;
-  final tailWidth = tail.isEmpty ? 0 : Style.width(tail) + 2;
-  final keep = c.width * 2 ~/ 5 > c.width - tailWidth - (fraction == null ? 0 : 8)
-      ? c.width * 2 ~/ 5
-      : c.width - tailWidth - (fraction == null ? 0 : 8);
-  var x = c.text(0, 0, Style.truncate(head, keep < 1 ? 1 : keep, ellipsis: p.ellipsis), headStyle);
-  final room = c.width - x - tailWidth - 2;
-  if (fraction != null && room >= 4) x = c.text(x + 2, 0, p.bar.draw(fraction, room < 20 ? room : 20), p.accent);
+  final (h, bar) = TerminalBridge.fit(c.width, head, fraction, Style.width(tail), p);
+  var x = c.text(0, 0, h, headStyle);
+  if (bar.isNotEmpty) x = c.text(x + 2, 0, bar, p.accent);
   if (tail.isNotEmpty) c.text(x + 2, 0, tail, p.muted);
 });
-
-String _joinedParts(Iterable<String> parts) => parts.where((p) => p.isNotEmpty).join('  ');
 
 /// `name  ██████░░░░  60%  1.2/2.0 MB  3.1 MB/s`, or `✓ name` once it ended.
 Widget _taskRow(TaskView t) {
@@ -158,7 +152,7 @@ Widget _taskRow(TaskView t) {
     return Label.spans([Span('$indent$mark ', style), Span(t.label, p.muted)], wrap: false);
   }
   final eta = t.eta == null ? '' : 'eta ${t.eta!.humanized}';
-  final tail = _joinedParts([t.percent == null ? '' : '${t.percent}%', t.amounts, t.pace, eta, t.step ?? '']);
+  final tail = TerminalBridge.joined([t.percent == null ? '' : '${t.percent}%', t.amounts, t.pace, eta, t.step ?? '']);
   return _fitted(t.isRow ? '$indent${t.label}' : '${t.frame} ${t.label}', t.fraction, tail, p.text);
 }
 
@@ -167,7 +161,7 @@ Widget _batchRow(BatchView b) {
   final p = b.palette;
   final eta = b.eta == null ? '' : 'eta ${b.eta!.humanized}';
   final counts = b.count == null ? '${b.ended} done' : '${b.ended}/${b.count}';
-  final tail = _joinedParts([
+  final tail = TerminalBridge.joined([
     counts,
     if (b.total != null) b.amounts,
     b.pace,

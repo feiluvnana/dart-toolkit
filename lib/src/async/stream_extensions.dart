@@ -262,7 +262,10 @@ extension StreamOfStreamsMerge<T> on Stream<Stream<T>> {
       }
     }
 
+    // Synchronous: each event goes straight on, so sources faster than one event a microtask
+    // do not pile up in it.
     out = StreamController<T>(
+      sync: true,
       onListen: () => sources = listen(
         start,
         onError: out.addError,

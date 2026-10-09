@@ -2,16 +2,7 @@
 // elements scrapers meet. No foster parenting (stray content in a `<table>` stays there) and no
 // adoption agency (a misnested `</b>` closes what it crosses; nothing is re-opened).
 
-part of '../../markup.dart';
-
-/// Elements with no content and no end tag.
-const _voidElements = {
-  'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr', //
-  'basefont', 'bgsound', 'frame', 'keygen', 'command',
-};
-
-/// Elements whose content is raw text up to their end tag, entities left alone.
-const _rawTextElements = {'script', 'style', 'xmp', 'iframe', 'noembed', 'noframes'};
+part of '../../html.dart';
 
 /// Elements whose content is text up to their end tag, entities decoded.
 const _rcdataElements = {'textarea', 'title'};
@@ -49,35 +40,6 @@ const _tableParts = {'table', 'tbody', 'tfoot', 'thead', 'tr', 'td', 'th', 'capt
 
 const _headings = {'h1', 'h2', 'h3', 'h4', 'h5', 'h6'};
 
-/// SVG's mixed-case names by their lowercase, restored inside `<svg>` as a browser does.
-final _svgTags = {
-  for (final n in const [
-    'altGlyph', 'altGlyphDef', 'altGlyphItem', 'animateColor', 'animateMotion', 'animateTransform', 'clipPath', //
-    'feBlend', 'feColorMatrix', 'feComponentTransfer', 'feComposite', 'feConvolveMatrix', 'feDiffuseLighting',
-    'feDisplacementMap', 'feDistantLight', 'feDropShadow', 'feFlood', 'feFuncA', 'feFuncB', 'feFuncG', 'feFuncR',
-    'feGaussianBlur', 'feImage', 'feMerge', 'feMergeNode', 'feMorphology', 'feOffset', 'fePointLight',
-    'feSpecularLighting', 'feSpotLight', 'feTile', 'feTurbulence', 'foreignObject', 'glyphRef', 'linearGradient',
-    'radialGradient', 'textPath',
-  ])
-    n.toLowerCase(): n,
-};
-
-final _svgAttributes = {
-  for (final n in const [
-    'attributeName', 'attributeType', 'baseFrequency', 'baseProfile', 'calcMode', 'clipPathUnits', //
-    'diffuseConstant', 'edgeMode', 'filterUnits', 'glyphRef', 'gradientTransform', 'gradientUnits', 'kernelMatrix',
-    'kernelUnitLength', 'keyPoints', 'keySplines', 'keyTimes', 'lengthAdjust', 'limitingConeAngle', 'markerHeight',
-    'markerUnits', 'markerWidth', 'maskContentUnits', 'maskUnits', 'numOctaves', 'pathLength',
-    'patternContentUnits', 'patternTransform', 'patternUnits', 'pointsAtX', 'pointsAtY', 'pointsAtZ',
-    'preserveAlpha', 'preserveAspectRatio', 'primitiveUnits', 'refX', 'refY', 'repeatCount', 'repeatDur',
-    'requiredExtensions', 'requiredFeatures', 'specularConstant', 'specularExponent', 'spreadMethod',
-    'startOffset', 'stdDeviation', 'stitchTiles', 'surfaceScale', 'systemLanguage', 'tableValues', 'targetX',
-    'targetY', 'textLength', 'viewBox', 'viewTarget', 'xChannelSelector', 'yChannelSelector', 'zoomAndPan',
-  ])
-    n.toLowerCase(): n,
-};
-
-/// Parses [source] into an `<html>` element with `<head>` and `<body>`.
 /// [source] parsed: the `<html>` element, and the `<!DOCTYPE …>` as written.
 (Element, String?) _parseHtml(String source) {
   final parser = _Parser(source);
@@ -92,7 +54,14 @@ final class _Parser {
   final List<Element> open = [];
   int pos = 0;
 
-  final _TextRun _run = _TextRun();
+  final TextRun _run = TextRun();
+
+  /// Tag and attribute names seen so far, so a page of ten thousand `<div class>` holds one
+  /// `div` and one `class`.
+  final Names _names = Names();
+
+  /// The attributes of the tag being read, reused from tag to tag.
+  final List<String> _scratch = [];
 
   /// The first `<!DOCTYPE …>`, as written.
   String? doctype;
@@ -110,7 +79,7 @@ final class _Parser {
   }
 
   Element run() {
-    html._nodes.add(head.._parent = html);
+    MarkupInternals.add(html, head);
     while (pos < src.length) {
       final lt = src.indexOf('<', pos);
       if (lt == -1) {
@@ -136,10 +105,7 @@ final class _Parser {
   void ensureBody() {
     if (body != null) return;
     _run.flush();
-    body = Element('body')
-      .._parent = html
-      .._slot = html._nodes.length;
-    html._nodes.add(body!);
+    MarkupInternals.add(html, body = Element('body'));
     // Whatever was open before the body — nothing legitimate — is abandoned.
     open
       ..clear()
@@ -165,7 +131,7 @@ final class _Parser {
       // Text inside an element in head, such as a `<noscript>`, stays there.
       if (open.length == 1 || identical(current, head)) ensureBody();
     }
-    var data = _decodeEntities(raw, _References.text);
+    var data = _decodeText(raw);
     // `&#10;` is a newline too.
     if (_dropNewline) {
       _dropNewline = false;
@@ -187,7 +153,7 @@ final class _Parser {
     if (c == 0x21) return declaration(); // !
     if (c == 0x3f) return skipTo('>'); // ?
     if (c == 0x2f) return endTag(); // /
-    if (!_isAlpha(c)) return false;
+    if (!MarkupInternals.isAlpha(c)) return false;
     return startTag();
   }
 
@@ -230,10 +196,10 @@ final class _Parser {
     final start = pos + 2;
     if (start >= src.length) return false; // `</` at the very end is text
     // `</` before a non-letter is a bogus comment to the next `>`: `</ p>` is nothing.
-    if (!_isAlpha(src.codeUnitAt(start))) return skipTo('>');
-    final i = _nameEnd(src, start);
-    var name = src.substring(start, i).toLowerCase();
-    if (_svg > 0) name = _svgTags[name] ?? name;
+    if (!MarkupInternals.isAlpha(src.codeUnitAt(start))) return skipTo('>');
+    final i = MarkupInternals.nameEnd(src, start);
+    var name = _names.lower(src.substring(start, i));
+    if (_svg > 0) name = MarkupInternals.svgTags[name] ?? name;
     final gt = src.indexOf('>', i);
     pos = gt == -1 ? src.length : gt + 1;
     if (name == 'br') {
@@ -265,35 +231,33 @@ final class _Parser {
   }
 
   bool startTag() {
-    final nameEndPos = _nameEnd(src, pos + 1);
-    var name = src.substring(pos + 1, nameEndPos).toLowerCase();
-    var attributes = <String, String>{};
-    final end = _scanAttributes(src, nameEndPos, attributes, html: true);
+    final nameEndPos = MarkupInternals.nameEnd(src, pos + 1);
+    var name = _names.lower(src.substring(pos + 1, nameEndPos));
+    final attrs = _scratch..clear();
+    final end = MarkupInternals.scanAttributes(src, nameEndPos, attrs, _names, html: true, decode: _decodeAttribute);
     if (_svg > 0 || name == 'svg') {
-      name = _svgTags[name] ?? name;
-      if (attributes.keys.any(_svgAttributes.containsKey)) {
-        attributes = {for (final MapEntry(:key, :value) in attributes.entries) _svgAttributes[key] ?? key: value};
+      name = MarkupInternals.svgTags[name] ?? name;
+      for (var i = 0; i < attrs.length; i += 2) {
+        attrs[i] = MarkupInternals.svgAttributes[attrs[i]] ?? attrs[i];
       }
     }
     final selfClosing = end < 0;
     pos = end.abs();
 
-    // A second `<html>` or `<body>` adds the attributes the first did not have.
-    if (name == 'html' || name == 'body') {
+    // A second `<html>` or `<body>` adds the attributes the first did not have; a `<head>`
+    // before the body, all of its own.
+    if (name == 'html' || name == 'body' || (name == 'head' && body == null)) {
       if (name == 'body') ensureBody();
-      final target = name == 'html' ? html : body!;
-      attributes.forEach((k, v) => target.attributes.putIfAbsent(k, () => v));
-      return true;
-    }
-    if (name == 'head') {
-      if (body == null) {
-        head.attributes.addAll(attributes);
-        openHead();
+      final target = (name == 'html' ? html : (name == 'body' ? body : head))!.attributes;
+      for (var i = 0; i < attrs.length; i += 2) {
+        name == 'head' ? target[attrs[i]] = attrs[i + 1] : target.putIfAbsent(attrs[i], () => attrs[i + 1]);
       }
+      if (name == 'head') openHead();
       return true;
     }
+    if (name == 'head') return true;
 
-    final element = Element(name, attributes);
+    final element = MarkupInternals.element(name, attrs.isEmpty ? const [] : List.of(attrs, growable: false));
     if (body == null) {
       if (_headElements.contains(name)) {
         if (!open.contains(head)) openHead();
@@ -326,24 +290,18 @@ final class _Parser {
       }
     }
     final parent = current;
-    parent._nodes.add(
-      element
-        .._parent = parent
-        .._slot = parent._nodes.length,
-    );
-    if (_voidElements.contains(name) || selfClosing) return;
+    MarkupInternals.add(parent, element);
+    if (MarkupInternals.voidElements.contains(name) || selfClosing) return;
 
     // Only HTML's own `<style>`, `<title>`…: inside SVG or MathML they are elements like any other.
     final foreign = inForeign && parent.name != 'foreignObject';
-    if (!foreign && (_rawTextElements.contains(name) || _rcdataElements.contains(name))) {
+    if (!foreign && (MarkupInternals.rawTextElements.contains(name) || _rcdataElements.contains(name))) {
       // Scanned in place: a regex would copy the rest of the document per <script>.
       final close = _endTag(src, pos, name);
       var raw = src.substring(pos, close?.start ?? src.length);
       if (name == 'textarea' && raw.startsWith('\n')) raw = raw.substring(1);
       if (raw.isNotEmpty) {
-        element._nodes.add(
-          Text(_rcdataElements.contains(name) ? _decodeEntities(raw, _References.text) : raw).._parent = element,
-        );
+        MarkupInternals.add(element, Text(_rcdataElements.contains(name) ? _decodeText(raw) : raw));
       }
       pos = close?.past ?? src.length;
       return;
@@ -391,110 +349,6 @@ final class _Parser {
   }
 }
 
-/// Gathers adjacent text runs (`a < b` is three) into one [Text] when something else arrives,
-/// Coalesces adjacent text runs so a paragraph of five runs is one [Text] child,
-/// rather than appending run by run, which is quadratic.
-final class _TextRun {
-  Element? _target;
-
-  /// The first run on its own: most text is one run, and needs no buffer.
-  String? _first;
-  final StringBuffer _buffer = StringBuffer();
-
-  void add(Element target, String data) {
-    if (!identical(target, _target)) {
-      flush();
-      _target = target;
-    }
-    if (_first == null) {
-      _first = data;
-    } else {
-      if (_buffer.isEmpty) _buffer.write(_first);
-      _buffer.write(data);
-    }
-  }
-
-  void flush() {
-    final target = _target;
-    var data = _first;
-    _target = _first = null;
-    if (target == null || data == null) return;
-    if (_buffer.isNotEmpty) {
-      data = _buffer.toString();
-      _buffer.clear();
-    }
-    if (data.isEmpty) return;
-    if (target._nodes.lastOrNull case final Text last) {
-      target._nodes.last = Text(last.data + data).._parent = target;
-    } else {
-      target._nodes.add(Text(data).._parent = target);
-    }
-  }
-}
-
-/// Where a tag name starting at [i] ends: at whitespace, `>` or `/`.
-int _nameEnd(String src, int i) {
-  for (int c; i < src.length && !_isSpace(c = src.codeUnitAt(i)) && c != 0x3e && c != 0x2f; i++) {}
-  return i;
-}
-
-/// Reads a start tag's attributes from [i] into [into] (first of a name wins, values decoded)
-/// and returns where the tag ends, negated after `/>` — an int, as a record cost 8% of the
-/// parse. HTML lowercases names and decodes HTML's references; XML only its five.
-int _scanAttributes(String src, int i, Map<String, String> into, {required bool html}) {
-  while (true) {
-    while (i < src.length && _isSpace(src.codeUnitAt(i))) {
-      i++;
-    }
-    if (i >= src.length) return i;
-    final c = src.codeUnitAt(i);
-    if (c == 0x3e) return i + 1;
-    if (c == 0x2f) {
-      // `/` — the self-closing marker, or noise.
-      if (++i < src.length && src.codeUnitAt(i) == 0x3e) return -(i + 1);
-      continue;
-    }
-    final nameStart = i++;
-    while (i < src.length) {
-      final d = src.codeUnitAt(i);
-      if (_isSpace(d) || d == 0x3d || d == 0x3e || d == 0x2f) {
-        break;
-      }
-      i++;
-    }
-    final attribute = src.substring(nameStart, i);
-    while (i < src.length && _isSpace(src.codeUnitAt(i))) {
-      i++;
-    }
-    var value = '';
-    if (i < src.length && src.codeUnitAt(i) == 0x3d) {
-      i++;
-      while (i < src.length && _isSpace(src.codeUnitAt(i))) {
-        i++;
-      }
-      if (i < src.length) {
-        final q = src.codeUnitAt(i);
-        final quoted = q == 0x22 || q == 0x27;
-        final start = quoted ? i + 1 : i;
-        if (quoted) {
-          i = src.indexOf(q == 0x22 ? '"' : "'", start);
-          if (i == -1) i = src.length;
-        } else {
-          while (i < src.length && !_isSpace(src.codeUnitAt(i)) && src.codeUnitAt(i) != 0x3e) {
-            i++;
-          }
-        }
-        value = src.substring(start, i);
-        if (quoted && i < src.length) i++;
-      }
-    }
-    into.putIfAbsent(
-      html ? attribute.toLowerCase() : attribute,
-      () => _decodeEntities(value, html ? _References.attribute : _References.xml),
-    );
-  }
-}
-
 /// Where a new `<a>` stops looking for an open one to close, as the spec's markers do.
 const _linkBoundaries = {'td', 'th', 'caption', 'table', 'template', 'object', 'marquee', 'applet', 'button'};
 
@@ -509,21 +363,16 @@ const _blockBoundaries = {'applet', 'button', 'caption', 'marquee', 'object', 't
     if (src.codeUnitAt(i + 1) != 0x2f) continue; // not `</`
     var j = i + 2;
     var k = 0;
-    while (k < name.length && j < src.length && _toLower(src.codeUnitAt(j)) == name.codeUnitAt(k)) {
+    while (k < name.length && j < src.length && MarkupInternals.toLower(src.codeUnitAt(j)) == name.codeUnitAt(k)) {
       j++;
       k++;
     }
     if (k != name.length) continue;
     if (j >= src.length) return null;
     final c = src.codeUnitAt(j);
-    if (c != 0x3e && c != 0x2f && !_isSpace(c)) continue;
+    if (c != 0x3e && c != 0x2f && !MarkupInternals.isSpace(c)) continue;
     final gt = src.indexOf('>', j);
     return gt == -1 ? null : (start: i, past: gt + 1);
   }
   return null;
 }
-
-int _toLower(int c) => (c >= 0x41 && c <= 0x5a) ? c + 0x20 : c;
-
-bool _isAlpha(int c) => (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a);
-bool _isSpace(int c) => c == 0x20 || c == 0x09 || c == 0x0a || c == 0x0d || c == 0x0c;

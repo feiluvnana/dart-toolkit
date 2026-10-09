@@ -1,4 +1,4 @@
-part of '../../cli.dart';
+part of '../cli.dart';
 
 /// A command line the program cannot act on: an unknown option, a bad value, a missing argument.
 /// `Cli.run` prints it in one line, with where to find the usage, and exits 64; a handler throws

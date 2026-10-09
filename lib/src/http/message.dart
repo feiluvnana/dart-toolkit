@@ -595,6 +595,10 @@ final class StatusException extends HttpException {
 /// format libraries that read a [Response] do not compile the native bridge.
 String? Function(String label, Uint8List bytes)? _charsets;
 
+/// The time a cookie's `Max-Age` counts from: `http` installs `Clock.current`, so a fake clock
+/// ages cookies too. A hook, so this library imports nothing of the package.
+DateTime Function() _now = DateTime.now;
+
 final _charset = RegExp(r'charset=["\x27]?([^;"\x27\s>]+)', caseSensitive: false);
 
 /// A `charset` declared inside a `<meta>`, in either spelling; both carry `charset=`.
@@ -791,7 +795,7 @@ HttpCookie? _setCookie(String line, Uri from, {bool strict = false}) {
   }
   // Max-Age wins over Expires; one too large for a `Duration` is forever.
   if (maxAge != null) {
-    expires = maxAge > 0x7fffffff ? DateTime.utc(9999) : DateTime.now().add(Duration(seconds: maxAge));
+    expires = maxAge > 0x7fffffff ? DateTime.utc(9999) : _now().add(Duration(seconds: maxAge));
   }
   return HttpCookie(
     pair.substring(0, eq).trim(),
@@ -956,6 +960,7 @@ abstract final class MessageInternals {
 
   static HttpCookie? setCookie(String line, Uri from) => _setCookie(line, from, strict: true);
   static set charsets(String? Function(String label, Uint8List bytes) decode) => _charsets = decode;
+  static set clock(DateTime Function() now) => _now = now;
   static DateTime? httpDate(String text) => _httpDate(text);
   static String safeName(String raw) => _safeName(raw);
 

@@ -616,6 +616,23 @@ void main() async {
       expect((await archive.contents().toList()).length, 4);
     });
 
+    test('cancelled before its first file, the pass never starts', () async {
+      final path = await src.archive(to: tmp / 'fifo.tar');
+      final archive = await Archive.read(path);
+      // The archive becomes a FIFO: a pass that starts opens it, and lets the writer through.
+      await File(path).delete();
+      expect(Process.runSync('mkfifo', [path]).exitCode, 0);
+      final writer = await Process.start('sh', ['-c', 'printf x > "\$1"', 'sh', path]);
+      var wrote = false;
+      unawaited(writer.exitCode.then((_) => wrote = true));
+      final sub = archive.contents().listen(null, onError: (Object _) {});
+      await sub.cancel();
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      expect(wrote, isFalse, reason: 'nothing opened the archive after the cancel');
+      await File(path).openRead().drain<void>();
+      await writer.exitCode;
+    }, testOn: '!windows');
+
     test('a paused listener holds the pass back, and resuming delivers the rest', () async {
       final archive = await Archive.read(await src.archive(to: tmp / 'paused.zip'));
       final heard = <String>[];

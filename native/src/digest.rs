@@ -137,10 +137,11 @@ impl Running {
         }
     }
 
-    /// Feeds the file at `path` in; BLAKE3 hashes a large one on every core, a buffer at a time
-    /// (never a map, which a file truncated meanwhile turns into a SIGBUS). Every `STEP` bytes
-    /// it tells `progress` how far it is and stops if the caller asked.
-    fn file(&mut self, path: &str, progress: ProgressCb) -> Result<(), String> {
+    /// Feeds the file at `path` in; with `wide`, BLAKE3 hashes a large one on every core, two
+    /// 16 MiB buffers at a time (never a map, which a file truncated meanwhile turns into a
+    /// SIGBUS); otherwise one 1 MiB buffer, for a caller that already runs a file per core. Every
+    /// `STEP` bytes it tells `progress` how far it is and stops if the caller asked.
+    fn file(&mut self, path: &str, progress: ProgressCb, wide: bool) -> Result<(), String> {
         const STEP: usize = 32 << 20;
         let err = |e: std::io::Error| format!("{}: {}", path, e);
         let mut f = std::fs::File::open(path).map_err(err)?;
@@ -163,7 +164,7 @@ impl Running {
             Ok(n)
         }
         let mut done = 0u64;
-        if let (Running::Blake3(b), true) = (&mut *self, total >= STEP as u64) {
+        if let (Running::Blake3(b), true) = (&mut *self, wide && total >= STEP as u64) {
             // Two buffers: the next is read on its own thread while every core hashes this one.
             const BUF: usize = 16 << 20;
             let (mut this, mut next) = (vec![0u8; BUF], vec![0u8; BUF]);
@@ -247,7 +248,7 @@ pub unsafe extern "C" fn tk_mac_new(alg: u32, key: *const u8, klen: usize) -> Ha
 pub unsafe extern "C" fn tk_digest_file(h: Handle, path: *const u8, plen: usize, progress: ProgressCb, stop: *const u8) -> i32 {
     let _watch = watch(stop);
     guard(|| {
-        crate::live::<Running>(h)?.file(text(path, plen)?, progress)?;
+        crate::live::<Running>(h)?.file(text(path, plen)?, progress, true)?;
         Ok(0)
     })
 }
@@ -318,8 +319,9 @@ pub unsafe extern "C" fn tk_digest_files(alg: u32, paths: *const u8, plen: usize
                 if stop != 0 && unsafe { (*(stop as *const std::sync::atomic::AtomicU8)).load(std::sync::atomic::Ordering::Relaxed) } != 0 {
                     return Err(tk_common::STOPPED.to_string());
                 }
+                // One buffer per file: the files are already spread over every core.
                 let mut d = Running::new(alg)?;
-                d.file(p, None)?;
+                d.file(p, None, false)?;
                 let res = d.finish();
                 slot.copy_from_slice(&res);
                 Ok::<(), String>(())

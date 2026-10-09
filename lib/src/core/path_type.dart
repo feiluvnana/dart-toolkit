@@ -1,4 +1,4 @@
-part of '../core.dart';
+part of '../base.dart';
 
 /// A filesystem path that is also a [String], so a literal needs no wrapping and a `Path` goes
 /// wherever a `String` does.

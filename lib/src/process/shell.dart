@@ -34,14 +34,15 @@ bool _isAbsolute(String path) =>
     (Platform.isWindows && (path.startsWith(r'\') || RegExp(r'^[A-Za-z]:[\\/]').hasMatch(path)));
 
 /// Running programs: a command line ([run]), a shell script ([sh]), a program on this terminal
-/// ([interact]), finding one ([which]), and the settings a block of them shares ([scope]). The
-/// class form is [Command].
+/// ([interact]), a file or URL in its app ([open]), finding one ([which]), and the settings a
+/// block of them shares ([scope]). The class form is [Command].
 ///
 /// ```dart
 /// final status = await Shell.run('git status --short').text;     // stdout, or a ShellException
 /// if (await Shell.run('git diff --quiet').isOk) …                // a Future<bool>
 /// await Shell.run('pg_dump db').save('db.sql');                  // stdout to a file, atomically
 /// await Shell.interact('git commit');                            // your terminal
+/// await Shell.open('report.pdf');                                // its default app
 /// await Shell.sh(r'grep -c "$1" *.log | sort', args: [word]);    // shell syntax, explicitly
 /// ```
 ///
@@ -128,6 +129,26 @@ abstract final class Shell {
     Duration? timeout,
   }) => _parse(line, args, workdir, env).interact(timeout: timeout);
 
+  /// Opens [target], a file, a folder or a URL (`https:`, `mailto:`…), in its default app:
+  /// `open` on macOS, `start` on Windows, `xdg-open` elsewhere. A path resolves against the
+  /// scope's working directory, so it is never read as an option. It ends once the opener has
+  /// handed [target] over, not when the app closes; a non-zero exit (no such file, no app for
+  /// it) is a [ShellException].
+  static Task<void> open(String target) {
+    if (target.trim().isEmpty) throw ArgumentError.value(target, 'target', 'Invalid target: empty');
+    final opened = _url.hasMatch(target)
+        ? target
+        : File(_within(_Scope.current.workdir, target) ?? target).absolute.path;
+    final command = Platform.isMacOS
+        ? Command('open', [opened])
+        : Platform.isWindows
+        ? Command._cmdScript(_cmdWords(['start', '', opened]), expand: false)
+        : Command('xdg-open', [opened]);
+    return TaskInternals.start(opened, opened, (_) async {
+      await command.run();
+    });
+  }
+
   /// Where [program] is: the file on the `PATH` a command would run, as the enclosing scope's
   /// and [env]'s `PATH` (and `PATHEXT` on Windows) name it. A [MissingException]
   /// (`Missing ffmpeg in PATH`) when there is none; `(() => Shell.which('ffmpeg')).orNull` asks
@@ -139,6 +160,9 @@ abstract final class Shell {
     return await _lookup(program, variables) ?? (throw MissingException(program, where: 'PATH'));
   }
 }
+
+/// A URL's scheme: two letters or more, so a Windows drive (`C:`) is a path.
+final _url = RegExp(r'^[A-Za-z][A-Za-z0-9+.-]+:');
 
 /// [line] and [args] as the [Command] [Shell.run] runs.
 Command _parse(String line, List<String> args, String? workdir, Map<String, String?>? env) {

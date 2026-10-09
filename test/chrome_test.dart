@@ -296,6 +296,18 @@ void main() {
       await expectLater(page.screenshot(of: '#absent'), throwsA(isA<MissingException>()));
     }, skip: absent);
 
+    test('pdf reads the whole document, a chunk at a time', () async {
+      final page = await chrome.open(base.resolve('/form'));
+      addTearDown(page.close);
+      final pdf = await page.pdf();
+      expect(pdf.take(5), '%PDF-'.codeUnits);
+      expect(
+        String.fromCharCodes(pdf.skip(pdf.length - 8)),
+        contains('%%EOF'),
+        reason: 'every chunk, the last one too',
+      );
+    }, skip: absent);
+
     test('a frame is a page; one that is not there is a MissingException', () async {
       final page = await chrome.open(base.resolve('/outer'));
       addTearDown(page.close);

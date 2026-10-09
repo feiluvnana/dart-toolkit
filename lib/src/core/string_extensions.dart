@@ -1,4 +1,4 @@
-part of '../core.dart';
+part of '../base.dart';
 
 /// Text read as a typed value.
 ///

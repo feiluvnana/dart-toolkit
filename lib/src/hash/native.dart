@@ -38,8 +38,8 @@ const _maxDigest = 64;
 /// worker isolate, which costs about 2 ms to start — what SHA-256 takes over 4 MiB.
 const _inline = 4 << 20;
 
-/// How much of a stream is handed to the library at a time.
-const _streamChunk = 64 << 10;
+/// How much of a stream, or of a large input in hand, is handed to the library at a time.
+const _streamChunk = 1 << 20;
 
 /// A failed MAC is always the key's fault, so an [ArgumentError]; a digest cannot fail.
 Never _fail(int alg, List<int>? key) {
@@ -48,8 +48,11 @@ Never _fail(int alg, List<int>? key) {
   throw key == null ? NativeException('hash with $name', why) : ArgumentError.value('•••', 'key', '$name: $why');
 }
 
-/// The digest of [data], or its MAC under [key]: key, data and output share one allocation.
+/// The digest of [data], or its MAC under [key]: key, data and output share one allocation, up
+/// to [_streamChunk] of data; more is fed to a handle a slice at a time, so a large input is
+/// never copied whole.
 Uint8List _ofBytes(Hash algorithm, List<int>? key, List<int> data) {
+  if (data.length > _streamChunk) return _ofSlices(algorithm.index, key, data);
   final k = key?.length ?? 0, n = data.length, size = k + n + _maxDigest;
   final buf = NativeBridge.main.alloc(size);
   try {
@@ -65,6 +68,26 @@ Uint8List _ofBytes(Hash algorithm, List<int>? key, List<int> data) {
   } finally {
     NativeBridge.main.free(buf, size);
   }
+}
+
+/// The digest or MAC of [data], fed to a handle through one [_streamChunk] buffer.
+Uint8List _ofSlices(int alg, List<int>? key, List<int> data) {
+  final h = _open(alg, key);
+  final buf = NativeBridge.main.alloc(_streamChunk);
+  try {
+    final view = buf.asTypedList(_streamChunk);
+    for (var at = 0; at < data.length; at += _streamChunk) {
+      final n = min(_streamChunk, data.length - at);
+      view.setRange(0, n, data, at);
+      if (_N.digestUpdate(h, buf, n) < 0) {
+        _finish(alg, h);
+        _fail(alg, key);
+      }
+    }
+  } finally {
+    NativeBridge.main.free(buf, _streamChunk);
+  }
+  return _finish(alg, h);
 }
 
 /// A new digest handle, or a MAC handle under [key]; [_finish] releases it.

@@ -341,6 +341,16 @@ void main() {
       }
     });
 
+    test('bytes past the slice size hash and MAC as the file of them does, in slices', () async {
+      final bytes = Uint8List.fromList(List.generate((3 << 20) + 17, (i) => (i * 13) & 0xff));
+      final f = await (dir / 'three.bin').writeBytes(bytes);
+      for (final h in Hash.values) {
+        expect(h.bytes(bytes), await h.file(f), reason: h.name);
+      }
+      const k = Secret('key');
+      expect(Hash.sha256.bytes(bytes, key: k), await Hash.sha256.file(f, key: k));
+    });
+
     test('a large file stops part way on a cancel, without killing its worker (HSH-3)', () async {
       final big = await (dir / 'big.bin').writeBytes(Uint8List(256 << 20));
       final task = Hash.sha512.file(big);
@@ -384,5 +394,17 @@ void main() {
         throwsA(isA<PathNotFoundException>()),
       );
     });
+
+    test('duplicates leaves out a file it cannot read instead of failing', () async {
+      await (dir / 'a.txt').writeText('same');
+      await (dir / 'b.txt').writeText('same');
+      final locked = await (dir / 'c.txt').writeText('else');
+      await locked.chmod('000');
+      addTearDown(() => locked.chmod('644'));
+      final groups = await dir.duplicates();
+      expect(groups.map((g) => g.map((e) => e.name).toList()).toList(), [
+        ['a.txt', 'b.txt'],
+      ]);
+    }, testOn: '!windows');
   });
 }

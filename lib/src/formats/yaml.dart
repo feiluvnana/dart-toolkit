@@ -64,6 +64,30 @@ final class _Line {
   static bool _isDashQuestionColon(int c) => c == 0x2D /* - */ || c == 0x3F /* ? */ || c == 0x3A /* : */;
 }
 
+/// A text's lines, by where each starts, cut out when one is read. A trailing newline ends the
+/// last line rather than starting an empty one `|+` would keep.
+final class _Source {
+  final String text;
+
+  /// Where each line starts, and one past the last line's newline.
+  final Int32List starts;
+
+  factory _Source(String text) {
+    final starts = <int>[0];
+    for (var i = text.indexOf('\n'); i != -1; i = text.indexOf('\n', i + 1)) {
+      starts.add(i + 1);
+    }
+    if (starts.last != text.length) starts.add(text.length + 1);
+    return _Source._(text, Int32List.fromList(starts));
+  }
+
+  _Source._(this.text, this.starts);
+
+  int get length => starts.length - 1;
+
+  String operator [](int n) => text.substring(starts[n], starts[n + 1] - 1);
+}
+
 /// Where the quote opening [t] at [from] closes, or -1: `\` escapes in double quotes, `''`
 /// is a quote in single ones.
 int _closingQuote(String t, int from) {
@@ -87,8 +111,8 @@ final class _YamlParser {
   final List<_Line> lines;
 
   /// The raw lines, for block and multi-line quoted scalars, which keep the blank lines and
-  /// `#` text that [lines] drops.
-  final List<String> source;
+  /// `#` text that [lines] drops: cut from the text when asked for, not held twice.
+  final _Source source;
 
   final Map<String, Object?> anchors = {};
   int pos = 0;
@@ -102,16 +126,53 @@ final class _YamlParser {
 
   /// CR LF and a lone CR are line breaks.
   _YamlParser(String text)
-    : this._((text.contains('\r') ? text.replaceAll('\r\n', '\n').replaceAll('\r', '\n') : text).split('\n'));
+    : this._(_Source(text.contains('\r') ? text.replaceAll('\r\n', '\n').replaceAll('\r', '\n') : text));
 
-  /// A trailing newline ends the last line rather than starting an empty one `|+` would keep.
-  _YamlParser._(List<String> raw) : source = raw.last.isEmpty ? (raw..removeLast()) : raw, lines = _split(raw);
+  _YamlParser._(this.source) : lines = _split(source);
 
-  static List<_Line> _split(List<String> raw) => [
-    for (var n = 0; n < raw.length; n++)
-      if (_stripComment(raw[n]) case final line when line.trim().isNotEmpty)
-        _Line(n + 1, line.length - line.trimLeft().length, line.trim()),
-  ];
+  /// The lines with content, each its text without indent and comment: one string a line, where
+  /// splitting, stripping and trimming made three.
+  static List<_Line> _split(_Source source) {
+    final text = source.text;
+    final out = <_Line>[];
+    for (var n = 0; n < source.length; n++) {
+      var from = source.starts[n];
+      var to = source.starts[n + 1] - 1; // before the newline
+      var hash = from;
+      while (hash < to && text.codeUnitAt(hash) != 0x23 /* # */ ) {
+        hash++;
+      }
+      if (hash < to) {
+        // Rare: only a line with a `#` is cut on its own to find where its comment starts.
+        to = from + _stripComment(text.substring(from, to)).length;
+      }
+      final start = from;
+      while (from < to && _isSpace(text.codeUnitAt(from))) {
+        from++;
+      }
+      while (to > from && _isSpace(text.codeUnitAt(to - 1))) {
+        to--;
+      }
+      if (from < to) out.add(_Line(n + 1, from - start, text.substring(from, to)));
+    }
+    return out;
+  }
+
+  /// What `String.trim` drops.
+  static bool _isSpace(int c) =>
+      c == 0x20 ||
+      (c >= 0x09 && c <= 0x0d) ||
+      (c >= 0x80 &&
+          (c == 0x85 ||
+              c == 0xa0 ||
+              c == 0x1680 ||
+              (c >= 0x2000 && c <= 0x200a) ||
+              c == 0x2028 ||
+              c == 0x2029 ||
+              c == 0x202f ||
+              c == 0x205f ||
+              c == 0x3000 ||
+              c == 0xfeff));
 
   /// [line] without a `#` comment that is not inside quotes.
   static String _stripComment(String line) {

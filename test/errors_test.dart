@@ -8,9 +8,11 @@ import 'dart:typed_data';
 import 'package:dart_toolkit/archive.dart';
 import 'package:dart_toolkit/async.dart';
 import 'package:dart_toolkit/cli.dart';
+import 'package:dart_toolkit/collection.dart';
 import 'package:dart_toolkit/image.dart';
 import 'package:dart_toolkit/process.dart';
 import 'package:dart_toolkit/scrape.dart';
+import 'package:dart_toolkit/xpath.dart';
 import 'package:dart_toolkit/torrent.dart';
 import 'package:test/test.dart' hide Retry;
 
@@ -33,7 +35,7 @@ void main() {
       'attr': (() => doc.$('a').first.attr('title'), 'Missing attribute "title" in <a>'),
       'link': (() => doc.$('b').first.link, 'Missing link (href, src or onclick) in <b>'),
       'imageLink': (() => doc.$('a').first.imageLink, 'Missing image link in <a>'),
-      'table': (() => doc.$('p').first.table, 'Missing <table> in <p>'),
+      'rows': (() => doc.$('p').first.rows, 'Missing <table> in <p>'),
       'first of an empty selection': (() => doc.$('.none').first, 'Missing match for ".none"'),
       'last of an empty selection': (() => doc.$('.none').last, 'Missing match for ".none"'),
       'single of an empty selection': (() => doc.$('.none').single, 'Missing match for ".none"'),

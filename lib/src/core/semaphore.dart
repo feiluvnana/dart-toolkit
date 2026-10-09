@@ -1,6 +1,7 @@
-part of '../async.dart';
+part of '../base.dart';
 
-/// An async counting semaphore: at most `permits` holders at once, served in turn.
+/// An async counting semaphore: at most `permits` holders at once, served in turn. It is the
+/// one permit queue of the package: a batch's `concurrency` and a pool's workers wait in one.
 ///
 /// ```dart
 /// final gate = Semaphore(4);
@@ -59,6 +60,20 @@ final class Semaphore {
       held = false;
       _release();
     };
+  }
+
+  /// Takes a permit when one is free at once.
+  bool _take() {
+    if (_free <= 0) return false;
+    _free--;
+    return true;
+  }
+
+  /// A permit, in turn: no cancel, no release function, for a holder that releases itself.
+  Future<void> _wait() {
+    final turn = Completer<void>();
+    _waiters.add(turn);
+    return turn.future;
   }
 
   void _release() {

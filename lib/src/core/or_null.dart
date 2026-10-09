@@ -1,4 +1,4 @@
-part of '../core.dart';
+part of '../base.dart';
 
 /// The door for an absence that a reading's own `or:` does not cover: `null`, or a default for an
 /// expression of several steps.

@@ -27,6 +27,7 @@ Nothing has run on Windows. Needs the Rust MSVC toolchain, `nasm`, PowerShell 7 
      argument quoting, `%` inside arguments, built-ins (`dir`, `echo`), `Shell.sh` with operators
      and `%NAME%`.
    - A live `Shell.run(r'C:\tools\ffmpeg.exe -i x')` (the splitter itself is tested on the Mac).
+   - `Shell.open` through `start ""`: a URL, a file and a folder with spaces, a `&` in a URL.
    - `which`: `PATH`/`PATHEXT`, a name whose extension is not in `PATHEXT`, a `PATH` from the
      call's `env`.
    - `taskkill /T /F` tree stops; assign every child (Chrome included) to the kill-on-close Job
@@ -48,27 +49,31 @@ Nothing has run on Windows. Needs the Rust MSVC toolchain, `nasm`, PowerShell 7 
      read/write loop for files over 64 MiB; staging folders holding read-only files;
      `changes()` event semantics.
    - Zip times read and written as local time (`native/src/archive.rs`).
-6. **Text from Windows programs.** The Windows-1252 fallback and UTF-16 LE byte-order marks on real
+6. **Paths.** The in-house grammar (`lib/src/fs/style.dart`, checked against `package:path`'s
+   Windows style on the Mac): drive roots, `\\server\share`, root-relative `\x` keeping the drive,
+   mixed slashes, and drive-letter case in `relativeTo` and `equals`, on real paths.
+7. **Text from Windows programs.** The Windows-1252 fallback and UTF-16 LE byte-order marks on real
    Notepad and Excel files; labels splitting paths on `\`.
-7. **Torrent.** Session folders and stream reads; the engine error mapping (OS codes 2/3 for a
+8. **Torrent.** Session folders and stream reads; the engine error mapping (OS codes 2/3 for a
    missing path, bind errors matched by English text).
-8. **Chrome and downloads.** `DART_TOOLKIT_CHROME`, then `chrome.exe`/`msedge.exe` under
+9. **Chrome and downloads.** `DART_TOOLKIT_CHROME`, then `chrome.exe`/`msedge.exe` under
    `LOCALAPPDATA` and Program Files; a profile held when `<profile>\lockfile` cannot be opened
    (error 32); `OpenProcess`+`GetExitCodeProcess` for "alive"; retry erasing a temporary profile;
    the download folder given with backslashes; without the reaper a launched Chrome dies only on
    `close()`; `connect(start:)`'s default profile in `%APPDATA%`. A download's final rename and the
    Chrome download move use `FileBridge.rename` and fall back to copy-then-rename across volumes.
-9. **Terminal.**
+10. **Terminal.**
    - `_WinConsole`: raw VT input (`SetConsoleMode`), else `ReadConsoleInputW` on a helper isolate;
-     stderr VT output; both modes restored in `close`; `unicode` for code page 65001; ^C raised
-     once, not passed on as a key.
+     stderr VT output; both modes restored in `close`; ^C raised once, not passed on as a key.
+   - `unicode` outside Windows Terminal reads the code page from `chcp.com` (no `dart:ffi` in
+     `cli`): check conhost under 437 and under `chcp 65001`, and what a missing `chcp` answers.
    - Resizes are not watched (no SIGWINCH): the next frame measures; SIGTERM is not watched.
    - The picker is still numbered input on Windows.
    - The kitty keyboard query and the cursor position report (inline mouse) in Windows Terminal.
    - `stderr.supportsAnsiEscapes` decides the live region.
    - Check redraw, colour, `NO_COLOR`, redirection (`> out.txt` holds no escapes), `secret` and
      `-q` in Windows Terminal, conhost, PowerShell 7 and VS Code, and note the results.
-10. **Required.** When Windows is green, state Windows support in README.
+11. **Required.** When Windows is green, state Windows support in README.
 
 ---
 

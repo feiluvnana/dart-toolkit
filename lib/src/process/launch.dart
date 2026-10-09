@@ -56,7 +56,7 @@ Future<Process> _start(Command stage, String? workdir, Map<String, String>? env,
             mode: mode,
           );
   }
-  ProcessBridge.assignJob(child.pid);
+  OsBridge.assignJob(child.pid);
   return child;
 }
 
@@ -64,7 +64,7 @@ const _cmdVariable = 'DART_TOOLKIT_COMMAND';
 
 /// The line `cmd.exe` runs for [stage], or `null` when it runs as a program of its own.
 Future<String?> _cmdLine(Command stage, Map<String, String> variables) async {
-  if (stage._cmd) return _expand(stage.args.single, variables);
+  if (stage._cmd) return stage._expands ? _expand(stage.args.single, variables) : stage.args.single;
   final program = stage.program;
   final String target;
   if (_isBare(program)) {

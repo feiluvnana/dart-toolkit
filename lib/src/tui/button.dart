@@ -30,17 +30,17 @@ Widget _buttonFace(ButtonView b) {
   return Label('[ ${b.label} ]', style: style, wrap: false);
 }
 
-/// A button: it sends [message] to the app's `update` (as a [Sent]) when clicked, or on Enter or
+/// A button: it sends [message] to the app's `update` (as a [Post]) when clicked, or on Enter or
 /// Space while it has the focus. A disabled one takes neither the focus nor clicks. How it looks
 /// in each state is the theme's `button:` builder, or [button].
 ///
 /// ```dart
 /// HStack([Button('Save', message: const Save()), Button('Quit', message: const Quit())], gap: 2)
-/// … case Sent(message: Save()) => save(s), …
+/// … case Post(message: Save()) => save(s), …
 /// ```
 ///
 /// Two buttons with the same label and message are the same button, so one built anew in each
-/// `view` keeps the focus.
+/// `draw` keeps the focus.
 ///
 /// {@category CLI}
 final class Button<M> extends Widget with Focusable {
@@ -56,7 +56,7 @@ final class Button<M> extends Widget with Focusable {
 
   @override
   bool handle(TuiEvent<Object?> event) {
-    if (!enabled || (event != KeyPress.enter && event != const Char(' '))) return false;
+    if (!enabled || (event != KeyPress.enter && event != const KeyPress(' '))) return false;
     _Engine._active?._message(message);
     return true;
   }

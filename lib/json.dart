@@ -8,14 +8,13 @@ library;
 
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
-import 'collection.dart';
 import 'src/collection/formats_bridge.dart';
-import 'src/core.dart';
+import 'src/base.dart';
 import 'src/message.dart';
 
-export 'collection.dart';
-export 'core.dart';
+export 'src/foundations.dart';
 
 part 'src/formats/ini.dart';
 part 'src/formats/json/doc.dart';

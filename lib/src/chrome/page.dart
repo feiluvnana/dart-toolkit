@@ -763,9 +763,23 @@ new Promise((resolve) => {
       'printBackground': background,
       'landscape': landscape,
       'scale': scale,
-      'transferMode': 'ReturnAsBase64',
+      'transferMode': 'ReturnAsStream',
     });
-    return base64.decode(printed['data'] as String? ?? '');
+    // Read a chunk at a time: one base64 answer holds the document several times over.
+    final handle = printed['stream'] as String? ?? '';
+    final out = BytesBuilder(copy: false);
+    try {
+      while (true) {
+        final chunk = await _call('IO.read', {'handle': handle, 'size': 1 << 20});
+        final data = chunk['data'] as String? ?? '';
+        out.add(chunk['base64Encoded'] == true ? base64.decode(data) : utf8.encode(data));
+        if (chunk['eof'] == true) return out.takeBytes();
+      }
+    } finally {
+      await _client
+          ._call('IO.close', {'handle': handle}, _tab)
+          .catchError((Object _) => const <String, Object?>{}); // best-effort: the tab may be gone
+    }
   }
 
   /// Sets headers sent with every request this tab makes from now on (every third-party

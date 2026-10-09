@@ -19,7 +19,9 @@ extension PathImageExtensions on Path {
   /// multi-page TIFF, a CMYK JPEG, a colour profile the output cannot carry, transparency for a
   /// JPEG, a GIF, BMP or TIFF kept in its format), is left as it is: a `Done(fresh: false)`
   /// whose [Compressed.after] is its size, the reason a note (`Warned`) or, for "not smaller",
-  /// a step. One file spreads over every core and holds up to about 700 MB while it is scored.
+  /// a step. One file spreads over every core. A [Quality.visual] score compares the picture at
+  /// 2048 px at most and holds about 600 MB, so the process scores one file at a time while
+  /// the others encode.
   ///
   /// ```dart
   /// await photos.parallelize((p) => p.compress(maxSide: 2560)).show('Compressing');

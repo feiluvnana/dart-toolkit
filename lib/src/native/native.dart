@@ -338,11 +338,34 @@ final class NativeHandle {
   /// [bytes] read in the charset [label] names (any WHATWG label: `shift_jis`, `euc-kr`, …).
   /// An unknown label reads as UTF-8; malformed bytes become U+FFFD.
   String decodeText(String label, Uint8List bytes) {
+    // The input copy is freed before the string is made, and the units are the library's own.
     final units = withText(
       label,
-      (l, ll) => withBytes(bytes, (p, n) => take('decode text', (out, len) => _decodeText(l, ll, p, n, out, len))),
+      (l, ll) => withBytes(bytes, (p, n) => own('decode text', (out, len) => _decodeText(l, ll, p, n, out, len))),
     );
     return String.fromCharCodes(Uint16List.view(units.buffer, units.offsetInBytes, units.length ~/ 2));
+  }
+
+  late final _release = require().lookup<NativeFunction<Void Function(Pointer<Void>)>>('tk_release');
+
+  /// Runs [body] with a pointer-and-length pair the library fills with a buffer it hands over
+  /// whole (its `own`): the bytes are viewed, not copied, and freed with `tk_release` once
+  /// unreachable. A negative return throws [NativeException].
+  Uint8List own(String op, int Function(Pointer<Pointer<Uint8>> out, Pointer<IntPtr> len) body) {
+    final out = alloc(16).cast<Pointer<Uint8>>(), len = (out + 1).cast<IntPtr>();
+    try {
+      if (body(out, len) < 0) throw NativeException(op, lastError());
+      return wrap(out.value.address, len.value);
+    } finally {
+      free(out.cast(), 16);
+    }
+  }
+
+  /// The [len] bytes at [address], a buffer the library handed over whole (its `own`), as a
+  /// list freed with `tk_release` once unreachable: for an address a worker isolate passed back.
+  Uint8List wrap(int address, int len) {
+    final data = Pointer<Uint8>.fromAddress(address);
+    return data.asTypedList(len, finalizer: _release, token: data.cast());
   }
 
   /// Runs [body] with [text] as UTF-8 in native memory; `null` becomes a null pointer.
@@ -355,7 +378,7 @@ final class NativeHandle {
 /// Programs ask [Native].
 abstract final class NativeBridge {
   /// `dart_toolkit_native`: digests, archives, content-decoding, charsets, images, piece hashes.
-  static final main = NativeHandle._('native', 13);
+  static final main = NativeHandle._('native', 14);
 
   /// `dart_toolkit_torrent`: the BitTorrent engine.
   static final torrent = NativeHandle._('torrent', 3);
@@ -442,7 +465,7 @@ abstract final class NativeBridge {
 }
 
 /// [parts] joined by this platform's separator, without doubling one a part already ends with
-/// (a root such as `/` or `C:\`): `package:path` costs every importer its compile time.
+/// (a root such as `/` or `C:\`): `native` does not compile `path`'s grammar for one join.
 String _join(List<String> parts) => parts.reduce(
   (a, b) => a.endsWith('/') || a.endsWith(Platform.pathSeparator) ? '$a$b' : '$a${Platform.pathSeparator}$b',
 );

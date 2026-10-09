@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:dart_toolkit/src/core.dart';
 import 'package:test/test.dart' hide Retry;
@@ -20,9 +21,9 @@ void main() {
   });
 
   group('FileBridge.settle claims', () {
-    Future<List<int>> slow(String text) async {
+    Future<List<List<int>>> slow(String text) async {
       await Future<void>.delayed(const Duration(milliseconds: 50));
-      return utf8.encode(text);
+      return [utf8.encode(text)];
     }
 
     test('two saves at once under rename land on two names', () async {
@@ -629,6 +630,14 @@ SINGLE_QUOTED='single quote value'
       );
       expect(errors, contains('listener error'));
     });
+
+    test('a removed listener is collected though an earlier stale unlink is still held', () async {
+      final token = CancelToken();
+      final stale = token.onCancel(() {});
+      final ref = _listenThenRemove(token, stale);
+      expect(await collected(ref), isTrue);
+      stale();
+    });
   });
 
   group('terminal text: width, truncate, pad and wrap', () {
@@ -770,6 +779,86 @@ SINGLE_QUOTED='single quote value'
       expect(heard, containsAll([1, 2, 3, 4, 5, 6]));
     });
 
+    test('a finished item keeps no value of a child task it awaited', () async {
+      late WeakReference<Object> ref;
+      final batch = [1].parallelize((i) async {
+        final bytes = await Task.run('child', (_) async => List<int>.filled(1 << 16, i));
+        ref = WeakReference(bytes);
+        return bytes.length;
+      });
+      expect(await batch, [1 << 16]);
+      expect(await collected(ref), isTrue);
+      expect(batch.count, 1, reason: 'the batch itself is still held');
+    });
+
+    test('a batch of items that answer at once still hears a cancel', () async {
+      final batch = List.generate(1000000, (i) => i).parallelize((i) => i);
+      Timer.run(() => batch.cancel('enough'));
+      final settled = await batch.settled;
+      expect(settled.whereType<Stopped<int, int>>(), isNotEmpty);
+    });
+
+    test('cancelling a batch over an endless iterable settles', () async {
+      Iterable<int> pages() sync* {
+        for (var i = 0; ; i++) {
+          yield i;
+        }
+      }
+
+      final batch = pages().parallelize((p) => 5.ms.delay());
+      await 30.ms.delay();
+      batch.cancel('enough');
+      final settled = await batch.settled;
+      expect(settled.every((s) => s is Done || s is Stopped), isTrue);
+      expect(batch.count, settled.length);
+    }, timeout: const Timeout(Duration(seconds: 20)));
+
+    test('a cancelled batch leaves no timer once it has settled', () async {
+      final clock = Clock.fake();
+      await Clock.scope(() async {
+        final batch = [1, 2].parallelize((i) => 1.s.delay());
+        await Future<void>.value();
+        batch.cancel('stop');
+        expect((await batch.settled).every((s) => s is Stopped), isTrue);
+      }, clock: clock);
+      expect(clock.pending, 0, reason: 'nothing holds the program open');
+    });
+
+    test('an isolate item whose result cannot cross fails as a bug, not a hang', () async {
+      await expectLater(
+        [1].parallelize(_unsendable, isolate: true).timeout(10.s),
+        throwsA(isA<ArgumentError>().having((e) => '$e', 'text', contains('cannot cross isolates'))),
+      );
+    });
+
+    test('an isolate that exits mid-item fails the item, not a hang', () async {
+      await expectLater([1].parallelize(_exitIsolate, isolate: true).timeout(10.s), throwsA(isA<RemoteError>()));
+    });
+
+    test('a merged batch throws its source error as a single batch does', () async {
+      Stream<int> broken() async* {
+        yield 1;
+        throw const FormatException('source broke');
+      }
+
+      Future<int> work(int i) async => i == 1 ? throw Exception('item failed') : i;
+      await expectLater(broken().parallelize(work), throwsA(isA<FormatException>()));
+      await expectLater(
+        Batch.merge([
+          broken().parallelize(work),
+          [5].parallelize(work),
+        ]),
+        throwsA(isA<FormatException>()),
+      );
+    });
+
+    test('BatchInternals.ended completes once every item settled, whatever the outcome', () async {
+      final failing = [1, 2].parallelize<int>((i) async => throw Exception('no $i'));
+      await BatchInternals.ended(failing);
+      expect((await failing.settled).every((s) => s is Failed), isTrue);
+      await expectLater(failing, throwsA(isA<BatchException<int, int>>()));
+    });
+
     test('parallelize refuses a negative Retry at the call', () {
       expect(() => [1].parallelize((i) => i, retry: Retry(int.parse('-1'))), throwsArgumentError);
     });
@@ -887,8 +976,25 @@ void main() {
   });
 }
 
+/// An isolate's item whose result cannot be sent back.
+Object _unsendable(int i) => RawReceivePort();
+
+/// An isolate's item that ends its isolate.
+Future<int> _exitIsolate(int i) async => Isolate.exit();
+
 /// An isolate's item: after a second (or a cancel), writes [path].
 Future<void> _markAfterASecond(String path) async {
   await 1.s.delay();
   File(path).writeAsStringSync('ran');
+}
+
+/// Listens on [token] after [stale] was registered, unlinks [stale] (still held by the caller)
+/// and then itself: a reference to the listener that only GC can clear.
+WeakReference<Object> _listenThenRemove(CancelToken token, void Function() stale) {
+  final box = [0];
+  void listener() => box[0]++;
+  final off = token.onCancel(listener);
+  stale();
+  off();
+  return WeakReference(listener);
 }
