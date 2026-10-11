@@ -12,8 +12,8 @@ import 'dart:ffi' as ffi;
 import 'dart:io' as io;
 import 'dart:typed_data';
 
-import 'package:dart_toolkit/lib2/hash.dart';
-import 'package:dart_toolkit/lib2/native.dart';
+import 'package:dart_toolkit/hash.dart';
+import 'package:dart_toolkit/native.dart';
 import 'package:test/test.dart';
 
 typedef _U8 = ffi.Pointer<ffi.Uint8>;

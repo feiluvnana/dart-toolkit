@@ -1,13 +1,9 @@
 /// # HTML
 ///
-/// [Html], parsed as a browser parses it, and the tree it shares with `xml.dart` ([Element],
-/// [Node], [Text], [Attribute], [Selection], [Markup]) with CSS `$` queries. XPath `$x` comes
-/// with `xpath.dart`.
-///
-/// {@category Formats}
+/// A tolerant HTML parser and a CSS selector engine: `Html.parse` (or `Html.read` for
+/// files, with an implied `html > head + body`), then `find`/`all` with type, `#id`,
+/// `.class`, `[attr]`, combinators and pseudo-classes (`:first-child`, `:nth-child`,
+/// `:not`, `:has`, `:contains`).
 library;
 
-export 'src/foundations.dart';
-
-export 'src/html.dart' hide HtmlInternals;
-export 'src/markup.dart' hide MarkupInternals, Names, TextRun, Xml, XmlResponse, XmlResponseFuture, XmlString;
+export 'src/html/html.dart';

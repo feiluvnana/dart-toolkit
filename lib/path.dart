@@ -1,10 +1,7 @@
-/// # Files & Paths
+/// # I/O & Filesystem
 ///
-/// What a [Path] can do: its parts (`/`, `name`, `ext`, `parent`, …), reading and writing (writes
-/// are atomic), listings with one vocabulary, and the long operations (copy, move, delete,
-/// trash) as `Task`s that report progress and can be cancelled.
-///
-/// {@category Files}
+/// `File`, `Dir`, `Path` and `Link` with dead-simple one-word methods, all implementing the
+/// core `Reader`/`Writer` traits so they pipe into any other module.
 library;
 
-export 'src/path.dart' hide PathInternals;
+export 'src/fs/io.dart';

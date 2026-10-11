@@ -3,13 +3,13 @@ part of '../../markup.dart';
 /// Which markup an [Element] came from, and so how it serialises: HTML keeps void and
 /// raw-text elements, XML closes everything, empty ones as `<e/>`.
 ///
-/// {@category Formats}
+///
 enum Syntax { html, xml }
 
 /// A parsed document, HTML or XML: an `Html` or an `Xml`. A function that takes either takes a
 /// [Markup]; `xpath.dart` adds `$x` to both through it.
 ///
-/// {@category Formats}
+///
 abstract interface class Markup {
   /// The root element.
   Element get root;
@@ -27,7 +27,7 @@ abstract interface class Markup {
 /// A node in a parsed tree: an [Element], a [Text], or an [Attribute] selected by an XPath `@`
 /// step.
 ///
-/// {@category Formats}
+///
 sealed class Node {
   /// The element containing this node, or `null` at the root.
   Element? get parent => _parent;
@@ -91,7 +91,7 @@ sealed class Node {
 
 /// A run of text, decoded: `&amp;` is already `&`.
 ///
-/// {@category Formats}
+///
 final class Text extends Node {
   /// The text as it is in the markup.
   final String data;
@@ -114,7 +114,7 @@ final class Text extends Node {
 
 /// An attribute, as an XPath `@name` step selects it.
 ///
-/// {@category Formats}
+///
 final class Attribute extends Node {
   final String name;
   final String value;
@@ -148,7 +148,7 @@ final class Attribute extends Node {
 /// An element: a [name], its [attributes], and the [nodes] inside it. HTML names arrive
 /// lowercased, XML ones as written; [syntax] decides serialisation and CSS case folding.
 ///
-/// {@category Formats}
+///
 class Element extends Node {
   /// The tag name: `div` for HTML, as written for XML (`media:content`).
   final String name;
@@ -452,69 +452,6 @@ class Element extends Node {
     };
   }
 
-  /// The [Request] a browser sends when this form is submitted, or, for a submit button
-  /// (`<button>`, `<input type=submit|image>`), when it is pressed: the form's `method` (the
-  /// button's `formmethod`; anything but POST is a GET), its `action` (`formaction`) resolved
-  /// against the page (none is the page itself), and [fields] with the pressed button's own
-  /// name and value. A GET carries the fields as the query, replacing the action's (no fields,
-  /// no `?`); a POST as a form body.
-  ///
-  /// A relative action on a page parsed without its address (`Html.parse(text, url: …)`) is a
-  /// [MissingException], as is anything but a form or a submit button in one.
-  ///
-  /// ```dart
-  /// final req = form.$('button[value=next]').first.submission;  // as that button submits it
-  /// ```
-  Request get submission {
-    final tag = name.toLowerCase();
-    final type = (_attr('type') ?? (tag == 'button' ? 'submit' : 'text')).toLowerCase();
-    final button = (tag == 'button' || tag == 'input') && (type == 'submit' || type == 'image');
-    // A button names its form by `form="id"`, else sits inside it.
-    final form = switch ((tag, _attr('form'))) {
-      ('form', _) => this,
-      (_, final id?) when button => _root.$('form').where((f) => f.id == id).firstOrNull,
-      _ => button ? closest('form') : null,
-    };
-    if (form == null) throw MissingException('form', where: '<$name>');
-    final values = <String, Object>{...form.fields};
-    void add(String key, String value) => values[key] = switch (values[key]) {
-      null => value,
-      final String one => [one, value],
-      final List<String> many => [...many, value],
-      final other => other,
-    };
-    if (_attr('name') case final pressed? when button && pressed.isNotEmpty) {
-      // An image button sends where it was clicked; a script's click is at its corner.
-      if (type == 'image') {
-        add('$pressed.x', '0');
-        add('$pressed.y', '0');
-      } else {
-        add(pressed, _attr('value') ?? '');
-      }
-    }
-    final method = ((button ? _attr('formmethod') : null) ?? form._attr('method') ?? 'GET').trim();
-    final action = ((button ? _attr('formaction') : null) ?? form._attr('action') ?? '').trim();
-    final target = Uri.tryParse(action) ?? (throw FormatException('Invalid HTML: form action "$action" is not a URL'));
-    final base = _baseOf(form._root);
-    final Uri url;
-    if (target.hasScheme) {
-      url = target;
-    } else if (base != null) {
-      url = base.resolveUri(target);
-    } else {
-      throw MissingException('page address', where: '<form action="$action"> (parse the page with url:)');
-    }
-    if (method.toUpperCase() == 'POST') return Request('POST', url, form: values);
-    if (values.isEmpty) return Request('GET', _withoutQuery(url));
-    // Form-encoded as a browser writes it: `q=` for an empty field, `+` for a space.
-    String pair(String k, String v) => '${Uri.encodeQueryComponent(k)}=${Uri.encodeQueryComponent(v)}';
-    final query = [
-      for (final MapEntry(:key, :value) in values.entries)
-        if (value is List<String>) ...value.map((v) => pair(key, v)) else pair(key, '$value'),
-    ].join('&');
-    return Request('GET', url.replace(query: query));
-  }
-
   /// This `<table>`'s (or the first one below this element's) body rows, each a map from column
   /// name to cell text, every column in every map, in order: `Table.rows(element.rows)` is it as
   /// a `collection` table. A [MissingException] when there is no table.
@@ -621,16 +558,6 @@ final class _Document extends Element {
   int get hashCode => identityHashCode(root);
 }
 
-/// [u] with no query, and so no `?`.
-Uri _withoutQuery(Uri u) => Uri(
-  scheme: u.scheme,
-  userInfo: u.userInfo,
-  host: u.host,
-  port: u.hasPort ? u.port : null,
-  path: u.path,
-  fragment: u.hasFragment ? u.fragment : null,
-);
-
 final _ws = RegExp(r'\s+');
 
 /// The nodes a query matched, in document order: a CSS `$` gives elements, an XPath `$x` any
@@ -642,7 +569,7 @@ final _ws = RegExp(r'\s+');
 /// Table.rows(page.$('table').first.rows);   page.$x('//a/@href').links;
 /// ```
 ///
-/// {@category Formats}
+///
 final class Selection<N extends Node> extends Iterable<N> {
   final List<N> _nodes;
 

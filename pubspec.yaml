@@ -1,16 +1,15 @@
 name: dart_toolkit
-description: A lightweight, modular web crawling pipeline and command-line automation toolkit for Dart.
+description: A lightweight, modular command-line automation toolkit for Dart — processes, files, documents, HTTP, browser, images, CLI and terminal apps.
 version: 0.0.4
 repository: https://github.com/feiluvnana/dart-toolkit
 issue_tracker: https://github.com/feiluvnana/dart-toolkit/issues
 homepage: https://github.com/feiluvnana/dart-toolkit
 topics:
-  - web-scraping
-  - crawler
   - http
   - cli
   - automation
   - concurrency
+  - terminal
 
 environment:
   sdk: ^3.8.0

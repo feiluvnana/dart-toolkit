@@ -1,85 +1,44 @@
 import 'dart:io';
 import 'package:test/test.dart';
 
+/// The import graph stays shallow: a topic imports `dart:` and its own
+/// `src/` tree only — never `package:` (r56: only what a program uses should
+/// compile), and `src/` files import `dart:` plus relative paths only.
 void main() {
-  test('a library imports only the libraries its layer allows', () {
-    const allowedImports = <String, Set<String>>{
-      'archive': {'base', 'native', 'path'},
-      'async': {'core'},
-      'base': {},
-      'chrome': {'async', 'core', 'html', 'http', 'json', 'message', 'os', 'path'},
-      'cli': {'core', 'terminal'},
-      'collection': {'core'},
-      'core': {'base'},
-      'foundations': {},
-      'hash': {'base', 'native'},
-      'html': {'base', 'markup', 'message'},
-      'http': {'async', 'core', 'hash', 'message', 'native', 'path'},
-      'image': {'base', 'native', 'path'},
-      'json': {'base', 'message'},
-      'markup': {'base', 'message'},
-      'message': {},
-      'keys': {'core', 'terminal'},
-      'native': {'base'},
-      'os': {},
-      'path': {'base', 'native'},
-      'pick': {'cli', 'core', 'keys', 'terminal'},
-      'process': {'core'},
-      'scrape': {'core', 'html', 'http', 'json', 'message', 'path', 'xml'},
-      'terminal': {'core'},
-      'testing': {'core', 'keys'},
-      'torrent': {'core', 'hash', 'native', 'path'},
-      'tui': {'core', 'keys', 'terminal'},
-      'xml': {},
-      'xpath': {'markup'},
-    };
-
-    final libDir = Directory('lib');
-    final importPattern = RegExp(r'''^\s*import\s+['"](?:\.\.\/|\.\/|src\/)?([a-zA-Z0-9_]+)\.dart['"]''');
-
-    for (final entity in [...libDir.listSync(), ...Directory('lib/src').listSync()]) {
+  test('lib/ imports dart: and itself only', () {
+    final packageImport = RegExp(r'''^\s*import\s+'package:''', multiLine: true);
+    for (final entity in Directory('lib').listSync(recursive: true)) {
       if (entity is! File || !entity.path.endsWith('.dart')) continue;
-      final libName = entity.uri.pathSegments.last.replaceAll('.dart', '');
-      final allowed = allowedImports[libName];
-      expect(allowed, isNotNull, reason: 'Unrecognized library lib/$libName.dart not in layering table');
-
-      final lines = entity.readAsLinesSync();
-      for (final line in lines) {
-        final match = importPattern.firstMatch(line);
-        if (match != null) {
-          final target = match.group(1)!;
-          expect(
-            allowed!.contains(target),
-            isTrue,
-            reason: 'lib/$libName.dart imports "$target.dart" which is not in the allowed list: ${allowed.toList()}',
-          );
-        }
-      }
-    }
-
-    final internal = Directory('lib/src').listSync().whereType<File>().where((f) => f.path.endsWith('.dart'));
-    for (final f in internal) {
-      expect(
-        allowedImports.containsKey(f.uri.pathSegments.last.replaceAll('.dart', '')),
-        isTrue,
-        reason: '${f.path} is a new internal library: add it to the table',
-      );
+      final src = entity.readAsStringSync();
+      expect(packageImport.hasMatch(src), isFalse, reason: '${entity.path} imports package: — use a relative path');
     }
   });
 
-  test('scrape shares its libraries\' helpers instead of copying them', () {
-    final copied = {
-      'lib/src/http/scrape.dart': ['_timedSend', '_drain', '_readCapped', '_BodyTooLarge', '_hostKey', '_replayable'],
+  test('dart:ffi compiles only behind the native seams', () {
+    final ffiImport = RegExp(r'''^\s*import\s+'dart:ffi''', multiLine: true);
+    // The three seams plus the modules that bind native symbols through them:
+    // nothing purely Dart may compile FFI (r56).
+    final allowed = {
+      'lib/src/core/native.dart',
+      'lib/src/chrome/native.dart',
+      'lib/src/tui/native.dart',
+      'lib/src/archive/archive.dart',
+      'lib/src/fs/io.dart',
+      'lib/src/hash/hash.dart',
+      'lib/src/process/process.dart',
+      'lib/src/image/image.dart',
+      'lib/src/chrome/chrome.dart',
+      'lib/src/tui/term.dart',
     };
-    for (final MapEntry(key: path, value: names) in copied.entries) {
-      final src = File(path).readAsStringSync();
-      for (final name in names) {
-        final declared = RegExp(
-          '^(?:final class |[A-Za-z][\\w<>?, ]* )$name\\b *[(<]|^final class $name\\b',
-          multiLine: true,
-        );
-        expect(declared.hasMatch(src), isFalse, reason: '$path declares its own $name; use the shared one');
-      }
+    for (final entity in Directory('lib').listSync(recursive: true)) {
+      if (entity is! File || !entity.path.endsWith('.dart')) continue;
+      if (!ffiImport.hasMatch(entity.readAsStringSync())) continue;
+      final normalized = entity.path.replaceAll(r'\', '/');
+      expect(
+        allowed.contains(normalized),
+        isTrue,
+        reason: '${entity.path} compiles dart:ffi outside a native seam (r56)',
+      );
     }
   });
 }

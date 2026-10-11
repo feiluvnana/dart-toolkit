@@ -7,7 +7,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:dart_toolkit/lib2/archive.dart';
+import 'package:dart_toolkit/archive.dart';
 import 'package:test/test.dart';
 
 /// A minimal tar builder for members the packer never emits (links, dirs).

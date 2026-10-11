@@ -1,10 +1,9 @@
-/// # Processes & Shell
+/// # Processes
 ///
-/// Running programs: `Command` values and pipelines, `Shell.run`/`sh`/`interact`/`open`/`which`,
-/// the `Run` task and its readings, and `Runner.fake` for tests.
-///
-/// {@category System}
+/// `Process.run` for one-shot commands with captured output, or the `Process`
+/// constructor for a streaming child: a `Reader` over stdout and a `Writer`
+/// into stdin, with `line()`/`lines()` streaming, `wait(timeout:)` and
+/// `cancel()` — both of which kill the whole process tree.
 library;
 
-export 'core.dart';
-export 'src/process/process.dart' hide ShellInternals;
+export 'src/process/process.dart';

@@ -1,5 +1,11 @@
 # Conventions
 
+> Status after Phase G: the package surface is `lib2` (moved up to `lib/`).
+> Rules below naming removed nouns (`Batch`, `parallelize`, `Store`, `Secret`,
+> scopes, `Shell`, `Cli.run`, `TuiApp`, `save`/`Saveable`, first-use install)
+> describe the pre-cutover model; reconciling this file with the lib2 surface
+> is follow-up work, not part of the removal.
+
 **One way to do each thing; every method has one behaviour; everything is async; every part works
 on its own and plugs into every other through four shapes and one status model.**
 

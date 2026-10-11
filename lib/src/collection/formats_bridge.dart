@@ -7,8 +7,6 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
-import '../base.dart';
-
 /// The text of a file read as [bytes]: a byte-order mark decides UTF-8 or UTF-16, else strict
 /// UTF-8. Bytes that are not UTF-8 are a [FormatException] naming [format] and [path], or with
 /// [ansi] (an INI or a CSV saved by a Windows program) read as Windows-1252.
@@ -77,7 +75,7 @@ V compiled<K, V>(Map<K, V> cache, K key, V Function() make) {
 /// It keeps the text and offset, so it prints the line and a caret.
 T parsedText<T>(String format, String? where, String text, T Function(String text) parse) {
   try {
-    return FileBridge.parsed(format, where ?? '', text, parse);
+    return _parsed(format, where ?? '', text, parse);
   } on FormatException catch (e) {
     final prefix = 'Invalid $format in ${where ?? ''}: ';
     if (!e.message.startsWith(prefix)) rethrow;
@@ -91,4 +89,38 @@ T parsedText<T>(String format, String? where, String text, T Function(String tex
       StackTrace.current,
     );
   }
+}
+
+/// [text], read from [path], parsed by [parse]; what it cannot read is a [FormatException]
+/// naming the file — `Invalid TOML in bad.toml: …` — with the text and offset, so it prints
+/// the line and a caret.
+T _parsed<T>(String format, String path, String text, T Function(String text) parse) {
+  try {
+    return parse(text);
+  } on FormatException catch (e) {
+    var message = e.message;
+    int? offset = e.offset;
+    // A parser that says where by line: `TOML line 2: …`.
+    if (RegExp('^$format line (\\d+): ').firstMatch(message) case final m?) {
+      message = message.substring(m.end);
+      offset ??= _lineStart(text, int.parse(m[1]!));
+    } else if (message.startsWith('$format: ')) {
+      message = message.substring(format.length + 2);
+    }
+    Error.throwWithStackTrace(
+      FormatException('Invalid $format in $path: $message', e.source is String ? e.source : text, offset),
+      StackTrace.current,
+    );
+  }
+}
+
+/// Where line [line] (1-based) of [text] starts.
+int _lineStart(String text, int line) {
+  var at = 0;
+  for (var n = 1; n < line; n++) {
+    final next = text.indexOf('\n', at);
+    if (next < 0) return at;
+    at = next + 1;
+  }
+  return at;
 }

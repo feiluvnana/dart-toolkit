@@ -8,7 +8,7 @@ part of '../../xpath.dart';
 /// page.$x(hrefs).links;
 /// ```
 ///
-/// {@category Formats}
+///
 extension type const XPath._(String _text) implements String {
   /// [text] as an XPath; one that does not parse is a [FormatException] naming where.
   XPath(String text) : _text = text {
@@ -18,7 +18,7 @@ extension type const XPath._(String _text) implements String {
 
 /// Text read as an XPath.
 ///
-/// {@category Formats}
+///
 extension StringXPathExtensions on String {
   /// This text as an XPath: `'//a/@href'.xpath`. One that does not parse is a [FormatException].
   XPath get xpath => XPath(this);
@@ -26,7 +26,7 @@ extension StringXPathExtensions on String {
 
 /// XPath on an element: `$x`.
 ///
-/// {@category Formats}
+///
 extension ElementXPath on Element {
   /// The nodes XPath [expression] selects from this element: `//a/@href`,
   /// `//tr[td[2]="FLAC"]/td[1]/a`, `//h2[contains(., "Tracks")]/following-sibling::table[1]`.
@@ -35,7 +35,7 @@ extension ElementXPath on Element {
 
 /// XPath on a selection: `$x`.
 ///
-/// {@category Formats}
+///
 extension SelectionXPath<N extends Node> on Selection<N> {
   /// The nodes XPath [expression] selects from each element match, each once, in document order.
   Selection<Node> $x(String expression) => _xpath(whereType<Element>().toList(), expression);
@@ -43,7 +43,7 @@ extension SelectionXPath<N extends Node> on Selection<N> {
 
 /// XPath on a document, an `Html` or an `Xml`: `$x`.
 ///
-/// {@category Formats}
+///
 extension MarkupXPath on Markup {
   /// The nodes XPath [expression] selects, from the root: see [ElementXPath.$x].
   Selection<Node> $x(String expression) => _xpath([root], expression);
@@ -79,7 +79,7 @@ final class _XPath {
   static final _cache = <String, _XPath>{};
 
   /// [source] compiled and cached; a [FormatException] on bad syntax.
-  static _XPath parse(String source) => compiled(_cache, source, () => _XPath._(_XPathParser(source).parse()));
+  static _XPath parse(String source) => _compiled(_cache, source, () => _XPath._(_XPathParser(source).parse()));
 
   /// Whether every node selected lies at or below the context: a relative path down the
   /// child, descendant, attribute and self axes.

@@ -9,12 +9,12 @@
 //
 // Timings drift by tens of milliseconds, so rounds alternate order and the table reports the
 // median and the minimum over bare. Read the deltas, not the totals.
+//
+// Plain `dart:` only (see tool/build_native.dart): probes import package topics,
+// but this driver must run with no package surface of its own.
 library;
 
-import 'package:dart_toolkit/cli.dart';
-import 'package:dart_toolkit/collection.dart';
-import 'package:dart_toolkit/path.dart';
-import 'package:dart_toolkit/process.dart';
+import 'dart:io';
 
 const modules = [
   'core',
@@ -26,75 +26,93 @@ const modules = [
   'async',
   'process',
   'cli',
-  'pick',
   'tui',
   'html',
   'xml',
   'xpath',
   'json',
-  'torrent',
   'http',
-  'scrape',
   'chrome',
   'image',
 ];
 
-final targets = Arg.of<String>('modules', 'Specific modules to benchmark').many().or(modules);
-final roundsOpt = Option.of<int>('rounds', 'Number of measurement rounds', short: 'r').or(6);
-final exitOpt = Option.flag('exit', 'Each probe exits rather than returning from main');
+Future<void> main(List<String> args) async {
+  final selected = <String>[];
+  var rounds = 6;
+  var exit = false;
+  for (var i = 0; i < args.length; i++) {
+    switch (args[i]) {
+      case '--exit':
+        exit = true;
+      case '--rounds' || '-r':
+        if (++i >= args.length) _fail('--rounds needs a number');
+        rounds = int.tryParse(args[i]) ?? _fail('rounds is not a number: ${args[i]}');
+      case '--help' || '-h':
+        stdout.writeln('usage: dart run tool/module_bench.dart [modules...] [--exit] [--rounds N]');
+        return;
+      default:
+        if (args[i].startsWith('-')) _fail('unknown flag ${args[i]} (see --help)');
+        selected.add(args[i]);
+    }
+  }
+  for (final m in selected) {
+    if (!modules.contains(m)) _fail('no module $m (see --help)');
+  }
+  final subset = selected.isEmpty ? modules : selected;
+  final main = exit ? "import 'dart:io' as io;\nvoid main() { print(0); io.exit(0); }\n" : 'void main() => print(0);\n';
 
-void main(List<String> args) => Cli(
-  'Benchmark startup / import cost per module over a bare script and over core.',
-  values: [targets, roundsOpt, exitOpt],
-  handler: (ctx) async {
-    final selected = ctx(targets);
-    final rounds = ctx(roundsOpt);
-    final main = ctx(exitOpt)
-        ? "import 'dart:io' as io;\nvoid main() { print(0); io.exit(0); }\n"
-        : 'void main() => print(0);\n';
+  final dir = await Directory.systemTemp.createTemp('module_bench_');
+  try {
+    final pkg =
+        '${Directory.current.path}${Platform.pathSeparator}.dart_tool${Platform.pathSeparator}package_config.json';
+    await File('${dir.path}${Platform.pathSeparator}bare.dart').writeAsString(main);
+    for (final m in subset) {
+      await File(
+        '${dir.path}${Platform.pathSeparator}$m.dart',
+      ).writeAsString("import 'package:dart_toolkit/$m.dart';\n$main");
+    }
 
-    await Path.tempDir((dir) async {
-      final pkg = (Path.cwd / '.dart_tool' / 'package_config.json').absolute;
-      await (dir / 'bare.dart').writeText(main);
-      for (final m in selected) {
-        await (dir / '$m.dart').writeText("import 'package:dart_toolkit/$m.dart';\n$main");
+    Future<int> time(String name) async {
+      final clock = Stopwatch()..start();
+      final r = await Process.run(Platform.resolvedExecutable, [
+        'run',
+        '--packages=$pkg',
+        '${dir.path}${Platform.pathSeparator}$name.dart',
+      ]);
+      if (r.exitCode != 0) _fail('probe $name failed:\n${r.stderr}');
+      return clock.elapsedMilliseconds;
+    }
+
+    stdout.writeln('Warming VM cache...');
+    await time('bare'); // warm the VM cache once
+
+    final names = ['bare', ...subset];
+    final samples = {for (final n in names) n: <int>[]};
+    stdout.writeln('Running $rounds benchmark rounds...');
+    for (var r = 0; r < rounds; r++) {
+      for (final n in r.isEven ? names : names.reversed) {
+        samples[n]!.add(await time(n));
       }
+    }
 
-      Future<int> time(String name) async {
-        final clock = Stopwatch()..start();
-        await Shell.run('dart', args: ['run', '--packages=$pkg', dir / '$name.dart']);
-        return clock.elapsedMilliseconds;
-      }
+    int median(List<int> xs) => (xs.toList()..sort())[xs.length ~/ 2];
+    int least(List<int> xs) => xs.reduce((a, b) => a < b ? a : b);
+    String over(String base, String n, int Function(List<int>) f) =>
+        n == base || !samples.containsKey(base) ? '—' : '+${f(samples[n]!) - f(samples[base]!)} ms';
 
-      Console.info('Warming VM cache...');
-      await time('bare'); // warm the VM cache once
+    stdout.writeln('import        median   over bare  min over bare  over core');
+    for (final n in names) {
+      stdout.writeln(
+        '${n.padRight(12)}  ${'${median(samples[n]!)} ms'.padRight(7)}  '
+        '${over('bare', n, median).padRight(9)}  ${over('bare', n, least).padRight(13)}  ${n == 'bare' ? '—' : over('core', n, median)}',
+      );
+    }
+  } finally {
+    if (await dir.exists()) await dir.delete(recursive: true);
+  }
+}
 
-      final names = ['bare', ...selected];
-      final samples = {for (final n in names) n: <int>[]};
-
-      Console.info('Running $rounds benchmark rounds...');
-      for (var r = 0; r < rounds; r++) {
-        for (final n in r.isEven ? names : names.reversed) {
-          samples[n]!.add(await time(n));
-        }
-      }
-
-      int median(List<int> xs) => (xs.toList()..sort())[xs.length ~/ 2];
-      int least(List<int> xs) => xs.reduce((a, b) => a < b ? a : b);
-      String over(String base, String n, int Function(List<int>) f) =>
-          n == base || !samples.containsKey(base) ? '—' : '+${f(samples[n]!) - f(samples[base]!)} ms';
-
-      Console.line();
-      await Table.rows([
-        for (final n in names)
-          {
-            'import': n,
-            'median': '${median(samples[n]!)} ms',
-            'over bare': over('bare', n, median),
-            'min over bare': over('bare', n, least),
-            'over core': n == 'bare' ? '—' : over('core', n, median),
-          },
-      ]).show();
-    });
-  },
-).run(args);
+Never _fail(String s) {
+  stderr.writeln('error: $s');
+  exit(1);
+}

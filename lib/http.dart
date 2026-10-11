@@ -1,16 +1,9 @@
 /// # HTTP
 ///
-/// Requests on `Uri` as `Task`s ([UriVerbs]), downloads ([UriDownload]), server-sent events,
-/// and [Http.scope], where the client, timeout, credentials, cookies, cache, retries and per-host
-/// limits are set for a block. Parsing a body is the format libraries' (`html.dart`,
-/// `json.dart`, `xml.dart`); crawling is `scrape.dart`; the browser is `chrome.dart`.
-///
-/// {@category Networking}
+/// A small HTTP/1.1 client — `Http.get`, `post`, `put`, `delete`, `head` — returning a
+/// streaming `Resp` (itself a `Reader`: `Http.get(url).pipe(File('huge.iso'))`) with strict
+/// `text()`, `json()` and `bytes` (a non-2xx throws a `StatusException`), plus resumable
+/// `download` with `retry` and `timeout` throughout.
 library;
 
-export 'core.dart';
-export 'hash.dart' show Hash, Hex, StringHexExtensions;
-
-export 'src/http.dart' hide HttpBridge, HttpInternals;
-export 'src/message.dart' hide MessageInternals;
-export 'dart:io' show HttpException;
+export 'src/http/http.dart';

@@ -9,7 +9,7 @@ part of '../markup.dart';
 /// page.$(links).links;
 /// ```
 ///
-/// {@category Formats}
+///
 extension type const Css._(String _text) implements String {
   /// [text] as a selector; one that does not parse is a [FormatException] naming where.
   Css(String text) : _text = text {
@@ -19,7 +19,7 @@ extension type const Css._(String _text) implements String {
 
 /// Text read as a CSS selector.
 ///
-/// {@category Formats}
+///
 extension StringCssExtensions on String {
   /// This text as a CSS selector: `'h2 a'.css`. One that does not parse is a [FormatException].
   Css get css => Css(this);

@@ -53,6 +53,37 @@ Unicode). New half-block `picture` widget (RGBA frames, transparency,
 animation); sixel output stays deferred. Verified: webp `quality` moves bytes
 while PNG ignores it (both documented). `su`/`ch` stay post-1.0 per the plan.
 
+**Legacy removal (reports Phase G).** `lib2/` moves up to `lib/`: the package
+surface is `archive`, `async`, `chrome`, `cli`, `collection`, `core`, `hash`,
+`html`, `http`, `image`, `json`, `native`, `path`, `process`, `tui`, `xml`,
+`xpath`. Ported along: `xml`/`xpath` with the shared markup tree (dropped from
+the port: form `submission`, `Xml.read`/`save`, `XmlResponse` — they need the
+retired `Request`/`Response`/`Task`/`FileBridge` stack — and the HTML-only test
+halves, since `lib2/html.dart` is a different API), and `collection`'s `Table`
+(`save` is now `Future<File> save(to, {overwrite})`, `show` writes `dart:io`
+stdout directly; the link-through-write `save` case and the legacy-`Doc`
+coercion kind are gone with `FileBridge`/old-`Doc`).
+Retired with reasons (all recoverable from git history): the `scrape` crawler
+(needs a crawler redesign on the lib2 HTTP surface — no `Batch`/`Store`/scopes
+there), `pick` (needs key-reader wiring through the TUI engine), the old
+`testing.dart` VT-emulator `FakeTerminal` (superseded by the lib2 seam of the
+same name), the `torrent` client (needs a lib2 `Store` + torrent seam; the
+rewritten engine stays in `native2/torrent/`), the keybox/puremedia/annasarchive
+examples (old-stack TUI/Jobs/Clients or `scrape`), the throughput benches (their
+surfaces are gone; `tool/module_bench.dart` keeps the import budget), the old
+test suite (replaced by the phase gates), `Native.install()` programmatic
+first-use download (until then `dart run tool/build_native.dart`, i.e. `make
+native`, or a release asset unzipped into `native2/lib/<os>_<arch>/`; the old
+`UnsupportedError` hint naming it is fixed), and `PLAN.md` itself (its keybox +
+old-stack Windows sections are moot; lib2 Windows coverage is the gate suites).
+`tool/build_native.dart` is rewritten plain-`dart:` (its SHA-256 is the one
+documented bootstrap exception), `tool/module_bench.dart` keeps the startup
+budget over the new topics, `test/layering_test.dart` now enforces no
+`package:` imports in `lib/` with `dart:ffi` only behind the three native
+seams, and `test/api_names.txt` is regenerated for the new surface. Follow-ups
+queued: reconciling `CONVENTIONS.md` with the lib2 nouns, sixel `picture`,
+torrent surface + seam, crawler redesign, key-reader `pick`.
+
 ## 0.0.3
 
 A second review pass, on memory above all. Every bug below keeps a regression test.

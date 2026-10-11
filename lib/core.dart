@@ -1,27 +1,9 @@
 /// # Core
 ///
-/// What every other module stands on: `Task`, `Batch` and `parallelize`, `Status`, `Work`,
-/// `Retry`, `Cancel`, `Clock`, `Store` and `Key`, `Secret`, `Env`, `Io` and the units. No
-/// dependencies.
-///
-/// {@category Utilities}
+/// The Rust-like base traits every module stands on ([Reader], [Writer], [Closer],
+/// [Seeker]) and the universal [pipe] primitive that connects them. No dependencies.
 library;
 
-export 'src/core.dart'
-    hide
-        BatchInternals,
-        CancelInternals,
-        ClockInternals,
-        CoerceBridge,
-        Deadline,
-        DetachableBridge,
-        FileBridge,
-        IoBridge,
-        IsolateBridge,
-        ProcessBridge,
-        RetryInternals,
-        StatusInternals,
-        StoreInternals,
-        TaskInternals,
-        TextBridge,
-        TimeoutBridge;
+export 'src/core/errors.dart';
+export 'src/core/pipe.dart';
+export 'src/core/traits.dart';

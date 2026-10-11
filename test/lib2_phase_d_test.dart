@@ -12,11 +12,11 @@ import 'dart:convert';
 import 'dart:io' as io;
 import 'dart:isolate';
 
-import 'package:dart_toolkit/lib2/chrome.dart';
-import 'package:dart_toolkit/lib2/core.dart';
-import 'package:dart_toolkit/lib2/html.dart';
-import 'package:dart_toolkit/lib2/image.dart';
-import 'package:dart_toolkit/lib2/path.dart';
+import 'package:dart_toolkit/chrome.dart';
+import 'package:dart_toolkit/core.dart';
+import 'package:dart_toolkit/html.dart';
+import 'package:dart_toolkit/image.dart';
+import 'package:dart_toolkit/path.dart';
 import 'package:test/test.dart';
 
 /// The browser executable, or `null` when there is none to drive.
@@ -242,9 +242,11 @@ void main() {
         if (now.isEmpty) break;
         await Future<void>.delayed(const Duration(milliseconds: 100));
       }
-      final after = await _chromePids()..removeAll(beforePids);
+      final after = await _chromePids()
+        ..removeAll(beforePids);
       expect(after, isEmpty, reason: 'orphaned browser processes: $after');
-      final profiles = await _tempProfiles()..removeAll(beforeProfiles);
+      final profiles = await _tempProfiles()
+        ..removeAll(beforeProfiles);
       expect(profiles, isEmpty, reason: 'temp profiles left behind: $profiles');
     }, timeout: const Timeout(Duration(seconds: 120)));
   });

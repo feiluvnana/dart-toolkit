@@ -4,10 +4,10 @@
 import 'dart:io' as io;
 import 'dart:typed_data';
 
-import 'package:dart_toolkit/lib2/archive.dart';
-import 'package:dart_toolkit/lib2/cli.dart';
-import 'package:dart_toolkit/lib2/image.dart';
-import 'package:dart_toolkit/lib2/tui.dart';
+import 'package:dart_toolkit/archive.dart';
+import 'package:dart_toolkit/cli.dart';
+import 'package:dart_toolkit/image.dart';
+import 'package:dart_toolkit/tui.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -40,7 +40,8 @@ void main() {
     test('presets draw the fraction', () {
       expect(BarGlyphs.blocks.draw(0.5, 4), '██░░');
       expect(BarGlyphs.ascii.draw(0.5, 4), '##--');
-      expect(BarGlyphs.arrow.draw(0.5, 4), '==>-');      expect(BarGlyphs.blocks.draw(0.0, 3), '░░░');
+      expect(BarGlyphs.arrow.draw(0.5, 4), '==>-');
+      expect(BarGlyphs.blocks.draw(0.0, 3), '░░░');
       expect(BarGlyphs.blocks.draw(1.0, 3), '███');
     });
 
@@ -62,8 +63,38 @@ void main() {
   group('picture', () {
     // 4×2 red/green/blue/white checker, opaque.
     Uint8List frame() => Uint8List.fromList([
-      255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
-      255, 255, 255, 255, 0, 0, 255, 255, 0, 255, 0, 255, 255, 0, 0, 255,
+      255,
+      0,
+      0,
+      255,
+      0,
+      255,
+      0,
+      255,
+      0,
+      0,
+      255,
+      255,
+      255,
+      255,
+      255,
+      255,
+      255,
+      255,
+      255,
+      255,
+      0,
+      0,
+      255,
+      255,
+      0,
+      255,
+      0,
+      255,
+      255,
+      0,
+      0,
+      255,
     ]);
 
     test('half-blocks paint two rows a cell', () {
@@ -76,10 +107,7 @@ void main() {
     test('bad frames are ArgumentErrors', () {
       final term = FakeTerminal(width: 10, height: 4);
       expect(() => term.draw((ui) => ui.picture([], width: 4, height: 2)), throwsArgumentError);
-      expect(
-        () => term.draw((ui) => ui.picture([Uint8List(3)], width: 4, height: 2)),
-        throwsArgumentError,
-      );
+      expect(() => term.draw((ui) => ui.picture([Uint8List(3)], width: 4, height: 2)), throwsArgumentError);
     });
   });
 

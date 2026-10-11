@@ -1,361 +1,505 @@
-part of '../../tui.dart';
-
-bool _isControl(int rune) => rune < 0x20 || (rune >= 0x7f && rune < 0xa0);
-
-/// One-character strings of ASCII, made once: a cell of plain text allocates nothing.
-final List<String> _ascii = List.generate(128, String.fromCharCode);
-
-/// The code point at [i] of [text], a surrogate pair read whole.
-int _runeAt(String text, int i) {
-  final c = text.codeUnitAt(i);
-  if (c & 0xfc00 != 0xd800 || i + 1 >= text.length) return c;
-  final d = text.codeUnitAt(i + 1);
-  return d & 0xfc00 == 0xdc00 ? 0x10000 + ((c & 0x3ff) << 10) + (d & 0x3ff) : c;
-}
-
-/// Calls [cell] with each grapheme of [text] (a code point and the zero-width ones joining it)
-/// and its width, until it answers `false`.
-void _cells(String text, bool Function(String grapheme, int width) cell) {
-  final n = text.length;
-  var i = 0;
-  while (i < n) {
-    final c = text.codeUnitAt(i);
-    // ASCII that nothing after it can join.
-    if (c < 0x80 && (i + 1 == n || text.codeUnitAt(i + 1) < 0x300)) {
-      if (!cell(_ascii[c], c < 0x20 || c == 0x7f ? 0 : 1)) return;
-      i++;
-      continue;
-    }
-    final start = i;
-    final first = _runeAt(text, i);
-    i += first > 0xffff ? 2 : 1;
-    // A control (`\n`, `\t`, ESC) is its own grapheme: it never joins the one before it.
-    if (!_isControl(first)) {
-      var previous = first;
-      while (i < n) {
-        final r = _runeAt(text, i);
-        if (_isControl(r) || !(IoBridge.runeWidth(r) == 0 || previous == 0x200d)) break;
-        previous = r;
-        i += r > 0xffff ? 2 : 1;
-      }
-    }
-    if (!cell(text.substring(start, i), IoBridge.runeWidth(first))) return;
-  }
-}
-
-/// [text] as cells: each grapheme with its width.
-List<(String, int)> _graphemes(String text) {
-  final out = <(String, int)>[];
-  _cells(text, (g, w) {
-    out.add((g, w));
-    return true;
-  });
-  return out;
-}
-
-/// The screen as cells: a grapheme, a style and a link each; `''` is the right half of a wide one.
-final class _Buffer {
-  final int width, height;
-  final List<String> chars;
-  final List<Style> styles;
-  final List<String?> links;
-
-  _Buffer(this.width, this.height)
-    : chars = List.filled(width * height, ' '),
-      styles = List.filled(width * height, Style.none),
-      links = List.filled(width * height, null);
-
-  /// Row [y] as text with SGR at [depth] colours (0: attributes only, -1: none), trailing blanks dropped.
-  String row(int y, int depth) {
-    var end = (y + 1) * width;
-    while (end > y * width &&
-        chars[end - 1] == ' ' &&
-        links[end - 1] == null &&
-        (depth < 0 || _isBlank(styles[end - 1]))) {
-      end--;
-    }
-    final out = StringBuffer();
-    var current = Style.none;
-    String? link;
-    for (var i = y * width; i < end; i++) {
-      if (chars[i].isEmpty) continue;
-      final s = styles[i];
-      if (depth >= 0 && s != current) {
-        out.write(s == Style.none ? '\x1b[0m' : TerminalBridge.sgrOf(s, depth));
-        current = s;
-      }
-      if (depth >= 0 && links[i] != link) out.write(_osc8(link = links[i]));
-      out.write(chars[i]);
-    }
-    if (link != null) out.write(_osc8(null));
-    if (current != Style.none) out.write('\x1b[0m');
-    return '$out';
-  }
-
-  static bool _isBlank(Style s) => s.bg == null && s.reverse != true && s.underline != true;
-}
-
-/// The escape that opens a hyperlink to [url], or closes one (`null`).
-String _osc8(String? url) => '\x1b]8;;${url ?? ''}\x1b\\';
-
-/// Something on screen the pointer or the keys can reach: a [Focusable], something clickable,
-/// or both.
-final class _Target {
-  final Focusable? control;
-  final Object? message;
-  final bool clickable;
-  final int x, y, w, h;
-
-  const _Target(this.control, this.message, this.clickable, this.x, this.y, this.w, this.h);
-
-  bool contains(int px, int py) => px >= x && px < x + w && py >= y && py < y + h;
-}
-
-/// A popup to draw above the rest, and where.
-final class _Layer {
-  final Widget content;
-
-  /// The anchor's rectangle on screen, or `null` for the middle of the screen.
-  final (int, int, int, int)? anchor;
-
-  /// What a click outside it sends, when it has one.
-  final Object? dismiss;
-  final bool dismissible, modal;
-
-  const _Layer(this.content, this.anchor, this.dismiss, {required this.dismissible, required this.modal});
-}
-
-/// What one frame learnt while painting: what the focus and the pointer can reach and where,
-/// popups to draw above, tallies drawn, whether to animate.
-final class _Frame {
-  /// Whether this frame is an app's: a one-off [Widget.render] gives nothing the focus.
-  final bool live;
-  final Focusable? focused;
-  final Duration elapsed;
-
-  /// Where the pointer is, and where a button went down while it is held, on screen.
-  final (int, int)? pointer, pressed;
-  final List<_Target> targets = [];
-  final List<_Layer> popups = [];
-  final Set<Tally> tallies = {};
-  Duration? animate;
-  bool focusPainted = false;
-
-  /// Where a modal popup's targets start: those before it are out of reach.
-  int? modalFrom;
-
-  _Frame(this.focused, this.elapsed, {this.live = true, this.pointer, this.pressed});
-
-  /// The targets the keys and the pointer can reach.
-  Iterable<_Target> get reachable => modalFrom == null ? targets : targets.skip(modalFrom!);
-
-  Iterable<Focusable> get focusables sync* {
-    for (final t in reachable) {
-      if (t.control case final c?) yield c;
-    }
-  }
-}
-
-/// A rectangle of the screen to paint on, in its own coordinates; writes outside it are clipped.
-///
-/// What a [Paint] widget gets, and what every built-in widget paints with:
+/// The immediate-mode canvas: widgets paint cells into [grid] inside [bounds],
+/// flowing down from the cursor. `split` carves bounded child canvases;
+/// `popup` paints centered overlays last. Caller-owned state throughout
+/// (`sel`, `FieldState`, focus flags) — the proposal's style.
 ///
 /// ```dart
-/// Paint((c) => c..fill(Style(bg: Color.blue))..text(1, 0, 'hi', c.palette.accent), height: 1)
+/// term.draw((ui) {
+///   ui.box(title: 'Menu', build: (menu) {
+///     menu.list(['Overview', 'Settings'], sel: sel);
+///   });
+/// });
 /// ```
-///
-/// {@category CLI}
-final class Canvas {
-  final _Buffer _buf;
-  final int _x, _y;
-  final int width, height;
+library;
 
-  /// The theme in force here: the app's, as overridden by enclosing [Widget.themed] subtrees.
-  final TuiTheme theme;
-  final _Frame _frame;
+import 'dart:typed_data';
 
-  /// The rows of the buffer it may write, `[_top, _bottom)`: a scrolled child is painted only
-  /// where it shows.
-  final int _top, _bottom;
+import 'buffer.dart';
+import 'events.dart';
+import 'layout.dart';
+import 'width.dart';
 
-  Canvas._(this._buf, this._x, this._y, this.width, this.height, this.theme, this._frame, [int? top, int? bottom])
-    : _top = top ?? 0,
-      _bottom = bottom ?? _buf.height;
-
-  /// Its first row that shows, and the row after its last.
-  int get _shownFrom => _top - _y < 0 ? 0 : _top - _y;
-  int get _shownTo => _bottom - _y > height ? height : _bottom - _y;
-
-  /// The theme's palette.
-  Palette get palette => theme.palette;
-
-  /// The part of this canvas at [x], [y], [w] wide and [h] tall, clipped to it.
-  Canvas area(int x, int y, [int? w, int? h]) {
-    final cx = x.clamp(0, width), cy = y.clamp(0, height);
-    final cw = (w ?? width - x).clamp(0, width - cx), ch = (h ?? height - y).clamp(0, height - cy);
-    return Canvas._(_buf, _x + cx, _y + cy, cw, ch, theme, _frame, _top, _bottom);
-  }
-
-  /// The part of this canvas [widget] takes at its own size: what a click on it reaches.
-  Canvas _natural(Widget widget) {
-    final w = widget.width;
-    final cw = w > 0 && w < width ? w : width;
-    final h = widget.heightAt(cw);
-    return area(0, 0, cw, h > 0 && h < height ? h : height);
-  }
-
-  /// Whether the pointer is over this canvas (with `pointer: true`).
-  bool get isHovered => switch (_frame.pointer) {
-    (final px, final py) => _inside(px, py),
-    null => false,
-  };
-
-  /// Whether a mouse button went down on this canvas and is still held over it.
-  bool get isPressed => switch (_frame.pressed) {
-    (final px, final py) => _inside(px, py) && isHovered,
-    null => false,
-  };
-
-  bool _inside(int px, int py) =>
-      px >= _x && px < _x + width && py >= _y && py < _y + height && py >= _top && py < _bottom;
-
-  /// Writes [text] at [x], [y] in [style] laid over what is there, linking to [link] when given;
-  /// returns the column after it. A styled string's own styles go over [style].
-  int text(int x, int y, String text, [Style? style, Uri? link]) {
-    final base = style ?? Style.none;
-    if (y < 0 || y >= height || _y + y < _top || _y + y >= _bottom) return x;
-    if (text.contains('\x1b')) {
-      for (final (t, s) in TerminalBridge.runs(text)) {
-        x = this.text(x, y, t, base + s, link);
-      }
-      return x;
-    }
-    final url = link?.toString();
-    var at = x;
-    _cells(text, (g, w) {
-      if (g == '\n') return false;
-      at = _put(at, y, g, w, base, url);
-      return at < width;
-    });
-    return at;
-  }
-
-  /// [text] for each span, one after another.
-  int spans(int x, int y, List<Span> spans, [Style? style]) {
-    for (final s in spans) {
-      x = text(x, y, s.text, (style ?? Style.none) + s.style, s.link);
-    }
-    return x;
-  }
-
-  int _put(int x, int y, String g, int w, Style style, [String? link]) {
-    if (w == 0) return x;
-    if (x < 0 || x + w > width) {
-      if (x >= 0 && x < width) _set(x, y, ' ', style, link);
-      return x + w;
-    }
-    _set(x, y, g, style, link);
-    if (w == 2) _set(x + 1, y, '', style, link);
-    return x + w;
-  }
-
-  void _set(int x, int y, String g, Style style, [String? link]) {
-    final row = _y + y;
-    if (row < _top || row >= _bottom) return;
-    final col = _x + x, i = row * _buf.width + col, c = _buf.chars;
-    // Writing over either half of a wide character blanks the other half.
-    if (g.isNotEmpty && c[i].isEmpty && col > 0) c[i - 1] = ' ';
-    if (col + 1 < _buf.width && c[i + 1].isEmpty) c[i + 1] = ' ';
-    c[i] = g;
-    _buf.styles[i] = _buf.styles[i] + style;
-    _buf.links[i] = link;
-  }
-
-  /// Fills the canvas with [char] in [style]: a background, a rule, a blank.
-  void fill([Style style = Style.none, String char = ' ']) {
-    for (var y = _shownFrom; y < _shownTo; y++) {
-      for (var x = 0; x < width; x++) {
-        final i = (_y + y) * _buf.width + _x + x;
-        _buf.chars[i] = char;
-        _buf.styles[i] = style;
-        _buf.links[i] = null;
-      }
-    }
-  }
-
-  /// Lays [style] over every cell of the canvas, keeping what is drawn: a hover, a highlight.
-  void tint(Style style) {
-    for (var y = _shownFrom; y < _shownTo; y++) {
-      for (var x = 0; x < width; x++) {
-        final i = (_y + y) * _buf.width + _x + x;
-        _buf.styles[i] = _buf.styles[i] + style;
-      }
-    }
-  }
-
-  /// Draws a border round the edge, [title] in its top edge, and returns the canvas inside it.
-  Canvas _box({Border? border, Style? style, String? title}) {
-    final b = border ?? palette.border;
-    final s = style ?? palette.borderStyle;
-    if (b.side.isEmpty) {
-      if (title != null) text(0, 0, title, s + const Style(bold: true));
-      return area(0, title == null ? 0 : 1);
-    }
-    if (width < 2 || height < 2) return area(0, 0, 0, 0);
-    text(0, 0, b.topLeft + b.top * (width - 2) + b.topRight, s);
-    for (var y = 1; y < height - 1; y++) {
-      text(0, y, b.side, s);
-      text(width - 1, y, b.side, s);
-    }
-    text(0, height - 1, b.bottomLeft + b.top * (width - 2) + b.bottomRight, s);
-    if (title != null && width > 4) {
-      text(2, 0, ' ${Style.truncate(title, width - 6, ellipsis: palette.ellipsis)} ', s + const Style(bold: true));
-    }
-    return area(1, 1, width - 2, height - 2);
-  }
-
-  /// Paints [widget] on this canvas.
-  void draw(Widget widget) {
-    // A popup at a position or in the middle takes no room, and still draws.
-    if ((width > 0 && _shownFrom < _shownTo) || widget is Popup) widget.paint(this);
-  }
-
-  /// Registers [control] for the keys and the pointer over this canvas; returns whether it has
-  /// the focus. A [Focusable] widget calls it when it paints.
-  bool focus(Focusable control) => _register(control, null, false);
-
-  /// Makes this canvas send [message] to the app when clicked.
-  void _clickable(Object? message, [Focusable? control]) => _register(control, message, true);
-
-  bool _register(Focusable? control, Object? message, bool clickable) {
-    // Only the rows that show take the pointer.
-    final from = _y + _shownFrom, to = _y + _shownTo;
-    _frame.targets.add(_Target(control, message, clickable, _x, from, width, to > from ? to - from : 0));
-    if (control == null) return false;
-    final first = _frame.focusables.firstOrNull;
-    final has =
-        _frame.live && (identical(_frame.focused, control) || (_frame.focused == null && identical(first, control)));
-    if (has) _frame.focusPainted = true;
-    return has;
-  }
-
-  /// Asks for another frame in [every]: what an animation calls each time it paints.
-  void animate(Duration every) {
-    if (every <= Duration.zero) throw ArgumentError.value(every, 'every', 'Invalid interval, expected more than zero');
-    final a = _frame.animate;
-    if (a == null || every < a) _frame.animate = every;
-  }
-
-  /// Redraws when [tally] changes, while it is drawn.
-  void _watch(Tally tally) => _frame.tallies.add(tally);
-
-  /// Draws [content] above everything once the frame is painted, below or above this canvas.
-  void _popup(Widget content, {Object? dismiss, bool dismissible = false, bool modal = false, bool center = false}) =>
-      _frame.popups.add(
-        _Layer(content, center ? null : (_x, _y, width, height), dismiss, dismissible: dismissible, modal: modal),
-      );
+/// A clickable region: painted by [button], fired by `Term.click`.
+final class Clickable {
+  final Rect rect;
+  final void Function() onPressed;
+  Clickable(this.rect, this.onPressed);
 }
 
-int _sum(Iterable<int> xs) => xs.fold(0, (a, b) => a + b);
+/// A board row: a labeled fraction with trailing text.
+final class BoardRow {
+  final String label;
+  final num val;
+  final num max;
+  const BoardRow(this.label, this.val, this.max);
+}
 
-int _max(Iterable<int> xs) => xs.fold(0, (a, b) => a > b ? a : b);
+/// Editable single-line text: the caller owns it, paints it with
+/// `ui.field(state)`, and feeds it events with `state.handle(ev)`.
+final class FieldState {
+  String _text;
+  int _cursor;
+
+  FieldState([String text = '']) : _text = text, _cursor = text.runes.length;
+
+  String get text => _text;
+  int get cursor => _cursor;
+
+  /// Edits with [ev]: printable text, backspace/delete, arrows, home/end,
+  /// paste. Answers whether the event was consumed.
+  bool handle(TuiEvent ev) {
+    if (ev is Paste) {
+      _insert(ev.text);
+      return true;
+    }
+    if (ev is! KeyPress) return false;
+    final typed = ev.text;
+    if (typed != null) {
+      _insert(typed);
+      return true;
+    }
+    final runes = _text.runes.toList();
+    switch (ev.name) {
+      case 'backspace':
+        if (_cursor > 0) {
+          runes.removeAt(_cursor - 1);
+          _text = String.fromCharCodes(runes);
+          _cursor--;
+        }
+        return true;
+      case 'delete':
+        if (_cursor < runes.length) {
+          runes.removeAt(_cursor);
+          _text = String.fromCharCodes(runes);
+        }
+        return true;
+      case 'left':
+        if (_cursor > 0) _cursor--;
+        return true;
+      case 'right':
+        if (_cursor < runes.length) _cursor++;
+        return true;
+      case 'home':
+        _cursor = 0;
+        return true;
+      case 'end':
+        _cursor = runes.length;
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  void _insert(String s) {
+    final runes = _text.runes.toList();
+    runes.insertAll(_cursor, s.runes);
+    _text = String.fromCharCodes(runes);
+    _cursor += s.runes.length;
+  }
+}
+
+/// The canvas widgets paint on: a [grid], a clip [bounds], a cursor, the
+/// click regions painted this frame, and pending overlays.
+final class Canvas {
+  final Grid grid;
+  Rect bounds;
+  int _cy;
+  final List<Clickable> clickables = [];
+  final List<void Function(Canvas)> _overlays = [];
+
+  /// Hardware cursor position (column, row), set by [field] when focused.
+  (int, int)? cursorPos;
+
+  Canvas(this.grid, {Rect? bounds})
+    : bounds = bounds ?? Rect(0, 0, grid.width, grid.height),
+      _cy = (bounds ?? Rect(0, 0, grid.width, grid.height)).y;
+
+  /// A titled frame. With [build], the content paints inside the border;
+  /// without it (flat form) content flows until [end].
+  /// A too-long title is truncated with `…`, never overflowing.
+  void box({String? title, int padding = 0, void Function(Canvas)? build}) {
+    if (_cy >= bounds.y + bounds.h) return;
+    final w = bounds.w;
+    if (w < 2) return;
+    final inner = w - 2;
+    if (title == null) {
+      _rule('┌${'─' * inner}┐');
+    } else {
+      final label = truncate(' $title ', inner);
+      _rule('┌─$label${'─' * (inner - textWidth(label))}┐');
+    }
+    if (build == null) {
+      _open.add(Rect(bounds.x + 1, _cy, inner, bounds.y + bounds.h - _cy));
+      return;
+    }
+    final content = Rect(bounds.x + 1 + padding, _cy, inner - padding * 2, bounds.y + bounds.h - _cy - 1);
+    final sub = Canvas(grid, bounds: content);
+    build(sub);
+    clickables.addAll(sub.clickables);
+    _overlays.addAll(sub._overlays);
+    if (sub.cursorPos != null) cursorPos = sub.cursorPos;
+    _cy = bounds.y + bounds.h - 1;
+    _rule('└${'─' * inner}┘');
+  }
+
+  final List<Rect> _open = [];
+
+  /// Closes the most recent flat [box]: the bottom rule. (The flat form keeps
+  /// the legacy static-frame look — border top and bottom, raw lines between;
+  /// nested frames want `box(build:)`.)
+  void end() {
+    if (_open.isEmpty) return;
+    final box = _open.removeLast();
+    _rule('└${'─' * box.w}┘');
+  }
+
+  void _rule(String line) {
+    if (_cy < bounds.y + bounds.h) {
+      grid.write(bounds.x, _cy, truncate(line, bounds.w));
+      _cy++;
+    }
+  }
+
+  /// A line of text, wrapped to the bounds.
+  void text(
+    Object content, {
+    TuiColor? fg,
+    TuiColor? bg,
+    bool bold = false,
+    bool dim = false,
+    bool italic = false,
+    bool underline = false,
+    bool reverse = false,
+  }) {
+    final style = CellStyle(bold: bold, dim: dim, italic: italic, underline: underline, reverse: reverse);
+    for (final line in wrap(content.toString(), bounds.w)) {
+      if (_cy >= bounds.y + bounds.h) return;
+      grid.write(bounds.x, _cy, line, fg: fg, bg: bg, attrs: style);
+      _cy++;
+    }
+  }
+
+  /// A labeled gauge filling the bounds width ([glyphs] picks the set;
+  /// [BarGlyphs.ascii] where the terminal cannot draw Unicode).
+  void bar({
+    required num val,
+    required num max,
+    String? label,
+    String? unit,
+    int? width,
+    BarGlyphs glyphs = BarGlyphs.blocks,
+  }) {
+    if (_cy >= bounds.y + bounds.h) return;
+    final w = (width ?? bounds.w).clamp(10, bounds.w);
+    final ratio = max <= 0 ? 1.0 : (val / max).clamp(0.0, 1.0);
+    final pct = '${(ratio * 100).toStringAsFixed(0)}%';
+    final suffix = unit == null ? '' : ' $val/$max $unit';
+    final fixed = '${label == null ? '' : '$label '}$pct$suffix ';
+    final glyphsWidth = (w - textWidth(fixed) - 2).clamp(1, w);
+    grid.write(bounds.x, _cy, '$fixed[${glyphs.draw(ratio, glyphsWidth)}]', fg: TuiColor.green);
+    _cy++;
+  }
+
+  /// A scrollable list: only the viewport rows around [sel] paint, so a
+  /// 10 000-row list never ports all rows. The selection is reversed.
+  void list(List<String> items, {int sel = 0}) {
+    final height = bounds.y + bounds.h - _cy;
+    if (height <= 0) return;
+    var start = 0;
+    if (items.length > height) {
+      start = (sel - height ~/ 2).clamp(0, items.length - height);
+    }
+    for (var i = 0; i < height && start + i < items.length; i++) {
+      final index = start + i;
+      final marker = index == sel ? '▸' : ' ';
+      final line = truncate('$marker ${items[index]}', bounds.w);
+      if (index == sel) {
+        grid.write(bounds.x, _cy, line, attrs: const CellStyle(reverse: true));
+      } else {
+        grid.write(bounds.x, _cy, line);
+      }
+      _cy++;
+    }
+  }
+
+  /// A selectable menu of values, labeled per row.
+  void menu<T>(List<T> items, {required String Function(T) label, required int sel}) =>
+      list([for (final item in items) label(item)], sel: sel);
+
+  /// Splits the remaining bounds: [vert] stacks rows, else columns. Children
+  /// paint their share; [flex] weights shares (equal when omitted).
+  void split(List<void Function(Canvas)> children, {required bool vert, List<int>? flex}) {
+    final rest = Rect(bounds.x, _cy, bounds.w, bounds.y + bounds.h - _cy);
+    if (rest.w <= 0 || rest.h <= 0 || children.isEmpty) return;
+    final weights = flex ?? List<int>.filled(children.length, 1);
+    final sizes = vert ? flexSplit(rest.h, weights) : flexSplit(rest.w, weights);
+    var at = vert ? rest.y : rest.x;
+    for (var i = 0; i < children.length; i++) {
+      final box = vert ? Rect(rest.x, at, rest.w, sizes[i]) : Rect(at, rest.y, sizes[i], rest.h);
+      at += sizes[i];
+      if (box.w <= 0 || box.h <= 0) continue;
+      final sub = Canvas(grid, bounds: box);
+      children[i](sub);
+      clickables.addAll(sub.clickables);
+      _overlays.addAll(sub._overlays);
+      if (sub.cursorPos != null) cursorPos = sub.cursorPos;
+    }
+    _cy = rest.y + rest.h;
+  }
+
+  /// [n] blank lines.
+  void gap([int n = 1]) {
+    for (var i = 0; i < n && _cy < bounds.y + bounds.h; i++) {
+      _cy++;
+    }
+  }
+
+  /// A labeled button: paints (reversed when [focused]) and registers its
+  /// region; `Term.click` fires [onPressed] for pointer presses inside it.
+  void button(String label, {required void Function() onPressed, bool focused = false}) {
+    if (_cy >= bounds.y + bounds.h) return;
+    final text = '[ $label ]';
+    final x = bounds.x;
+    grid.write(x, _cy, truncate(text, bounds.w), attrs: CellStyle(reverse: focused));
+    clickables.add(Clickable(Rect(x, _cy, textWidth(text).clamp(0, bounds.w), 1), onPressed));
+    _cy++;
+  }
+
+  /// An editable field: paints [state] with a block cursor when [focused] and
+  /// records the hardware cursor position for the terminal.
+  void field(FieldState state, {bool focused = false, int? width}) {
+    if (_cy >= bounds.y + bounds.h) return;
+    final w = (width ?? bounds.w).clamp(1, bounds.w);
+    final shown = truncate(state.text, w);
+    grid.write(bounds.x, _cy, shown.padRight(w));
+    if (focused) {
+      // Cursor column in display cells (rune-aware).
+      var col = 0;
+      var i = 0;
+      for (final rune in state.text.runes) {
+        if (i >= state.cursor) break;
+        col += charWidth(rune);
+        i++;
+      }
+      col = col.clamp(0, w - 1);
+      final prev = grid.at(bounds.x + col, _cy);
+      grid.set(bounds.x + col, _cy, Cell(prev.text, prev.fg, prev.bg, const CellStyle(reverse: true)));
+      cursorPos = (bounds.x + col, _cy);
+    }
+    _cy++;
+  }
+
+  /// A tab row; the selected tab is reversed.
+  void tabs(List<String> labels, {required int sel}) {
+    if (_cy >= bounds.y + bounds.h) return;
+    var x = bounds.x;
+    for (var i = 0; i < labels.length; i++) {
+      final tab = ' ${labels[i]} ';
+      if (x + textWidth(tab) > bounds.x + bounds.w) break;
+      grid.write(
+        x,
+        _cy,
+        tab,
+        attrs: CellStyle(reverse: i == sel, bold: i == sel),
+      );
+      x += textWidth(tab) + 1;
+    }
+    _cy++;
+  }
+
+  /// A plain table: rows of cells padded to column widths.
+  void table(List<List<String>> rows) {
+    if (rows.isEmpty) return;
+    final cols = rows.map((r) => r.length).reduce((a, b) => a > b ? a : b);
+    final widths = List<int>.filled(cols, 0);
+    for (final row in rows) {
+      for (var i = 0; i < row.length; i++) {
+        final w = textWidth(row[i]);
+        if (w > widths[i]) widths[i] = w;
+      }
+    }
+    for (final row in rows) {
+      if (_cy >= bounds.y + bounds.h) return;
+      final sb = StringBuffer();
+      for (var i = 0; i < cols; i++) {
+        final cell = i < row.length ? row[i] : '';
+        sb.write(cell.padRight(widths[i] + (i < cols - 1 ? 2 : 0)));
+      }
+      grid.write(bounds.x, _cy, truncate(sb.toString(), bounds.w));
+      _cy++;
+    }
+  }
+
+  /// A centered overlay frame painted after the main content; [build] draws
+  /// inside its border. Dismissal (Esc, outside click) stays caller-owned.
+  void popup({String? title, int width = 40, int height = 10, required void Function(Canvas) build}) {
+    final w = width.clamp(4, grid.width);
+    final h = height.clamp(3, grid.height);
+    final box = Rect((grid.width - w) ~/ 2, (grid.height - h) ~/ 2, w, h);
+    _overlays.add((Canvas ui) {
+      final overlay = Canvas(ui.grid, bounds: box);
+      // Shade the frame area first so content behind does not peek through.
+      for (var y = box.y; y < box.y + box.h; y++) {
+        for (var x = box.x; x < box.x + box.w; x++) {
+          ui.grid.set(x, y, const Cell(' '));
+        }
+      }
+      overlay.box(title: title, build: build);
+      ui.clickables.addAll(overlay.clickables);
+      if (overlay.cursorPos != null) ui.cursorPos = overlay.cursorPos;
+    });
+  }
+
+  /// Status rows: a label and a fraction bar each.
+  void board(List<BoardRow> rows) {
+    for (final row in rows) {
+      if (_cy >= bounds.y + bounds.h) return;
+      bar(val: row.val, max: row.max, label: row.label);
+    }
+  }
+
+  /// Trailing viewport over [lines]: the last rows that fit, scrolled up by
+  /// [offset].
+  void log(List<String> lines, {int offset = 0}) {
+    final height = bounds.y + bounds.h - _cy;
+    if (height <= 0) return;
+    final end = (lines.length - offset).clamp(0, lines.length);
+    final start = (end - height).clamp(0, end);
+    for (var i = start; i < end; i++) {
+      for (final wrapped in wrap(lines[i], bounds.w)) {
+        if (_cy >= bounds.y + bounds.h) return;
+        grid.write(bounds.x, _cy, wrapped);
+        _cy++;
+      }
+    }
+  }
+
+  /// Minimal Markdown: `#`/`##` headings bold, `- ` bullets, `**bold**`,
+  /// `` `code` `` reversed, `> ` quotes dimmed.
+  void markdown(String source) {
+    for (final raw in source.split('\n')) {
+      var line = raw;
+      var bold = false;
+      var dim = false;
+      if (line.startsWith('### ')) {
+        line = line.substring(4);
+        bold = true;
+      } else if (line.startsWith('## ')) {
+        line = line.substring(3);
+        bold = true;
+      } else if (line.startsWith('# ')) {
+        line = line.substring(2);
+        bold = true;
+      } else if (line.startsWith('- ')) {
+        line = '• ${line.substring(2)}';
+      } else if (line.startsWith('> ')) {
+        line = line.substring(2);
+        dim = true;
+      }
+      for (final piece in _inline(line)) {
+        if (_cy >= bounds.y + bounds.h) return;
+        for (final wrapped in wrap(piece.$1, bounds.w)) {
+          if (_cy >= bounds.y + bounds.h) return;
+          grid.write(
+            bounds.x,
+            _cy,
+            wrapped,
+            attrs: CellStyle(bold: bold || piece.$2, reverse: piece.$3, dim: dim),
+          );
+          _cy++;
+        }
+      }
+    }
+  }
+
+  /// Splits [line] into (text, bold, code) runs on `**` and backticks.
+  List<(String, bool, bool)> _inline(String line) {
+    final out = <(String, bool, bool)>[];
+    final buf = StringBuffer();
+    var bold = false;
+    var code = false;
+    void flush() {
+      if (buf.isNotEmpty) {
+        out.add((buf.toString(), bold, code));
+        buf.clear();
+      }
+    }
+
+    var i = 0;
+    while (i < line.length) {
+      if (line.startsWith('**', i)) {
+        flush();
+        bold = !bold;
+        i += 2;
+      } else if (line[i] == '`') {
+        flush();
+        code = !code;
+        i++;
+      } else {
+        buf.write(line[i]);
+        i++;
+      }
+    }
+    flush();
+    return out;
+  }
+
+  /// Pixels drawn as half-block cells: two picture rows a cell, the upper
+  /// pixel `▀`'s foreground and the lower its background (a lone lower pixel
+  /// is `▄`). [frames] are RGBA bytes, [width]×[height] each; more than one
+  /// animates, [every] apart (frame picked by the clock). A pixel more than
+  /// half transparent shows what is behind it (the cell is left alone).
+  /// Larger than the bounds, it scales down to fit. Sixel output stays
+  /// deferred (terminal support matrix + image pipeline).
+  void picture(
+    List<Uint8List> frames, {
+    required int width,
+    required int height,
+    Duration every = const Duration(milliseconds: 100),
+  }) {
+    if (frames.isEmpty) throw ArgumentError.value(frames, 'frames', 'Invalid frames: none');
+    if (width < 1 || height < 1) {
+      throw ArgumentError.value((width, height), 'size', 'Invalid size, expected at least 1×1');
+    }
+    for (final f in frames) {
+      if (f.length != width * height * 4) {
+        throw ArgumentError.value(f.length, 'frames', 'Invalid frame: expected ${width * height * 4} RGBA bytes');
+      }
+    }
+    if (every <= Duration.zero) throw ArgumentError.value(every, 'every', 'Invalid interval, expected more than zero');
+    final frame = frames.length == 1
+        ? frames[0]
+        : frames[DateTime.now().microsecondsSinceEpoch ~/ every.inMicroseconds % frames.length];
+    final availH = (bounds.y + bounds.h - _cy) * 2;
+    if (bounds.w <= 0 || availH <= 0) return;
+    final fit = [width / bounds.w, height / availH, 1.0].reduce((a, b) => a > b ? a : b);
+    final w = (width / fit).floor(), h = (height / fit).floor();
+    TuiColor? at(int x, int y) {
+      if (y >= h) return null;
+      final i = (((y * fit).floor().clamp(0, height - 1)) * width + (x * fit).floor().clamp(0, width - 1)) * 4;
+      return frame[i + 3] < 128 ? null : TuiColor.rgb(frame[i], frame[i + 1], frame[i + 2]);
+    }
+
+    for (var cy = 0; cy * 2 < h; cy++) {
+      if (_cy >= bounds.y + bounds.h) return;
+      for (var x = 0; x < w && bounds.x + x < bounds.x + bounds.w; x++) {
+        final top = at(x, cy * 2), bottom = at(x, cy * 2 + 1);
+        if (top == null && bottom == null) continue;
+        if (top == null) {
+          grid.set(bounds.x + x, _cy, Cell('▄', bottom, null, const CellStyle()));
+        } else {
+          grid.set(bounds.x + x, _cy, Cell('▀', top, bottom, const CellStyle()));
+        }
+      }
+      _cy++;
+    }
+  }
+
+  /// Paints pending overlays (popups) over the main content.
+  void paintOverlays() {
+    for (final overlay in _overlays) {
+      overlay(this);
+    }
+    _overlays.clear();
+  }
+}

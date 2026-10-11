@@ -1,22 +1,11 @@
 /// # Archives
 ///
-/// Zip, 7z, tar and its gz, xz, zstd and bzip2 forms, RAR (read), and single gzip, xz, zstd
-/// and bzip2 streams, through the native library: `dir.archive(to: 'x.zip')`,
-/// `file.unarchive(into: 'out')`, and `Archive.read` to look inside without extracting.
-///
-/// {@category Files}
+/// `Archive.pack`, `unpack`, `list`, `extract` and `open` for ZIP, TAR,
+/// compressed tars (`.tar.gz`, `.tar.xz`, `.tar.zst`, `.tar.bz2`) and gzip —
+/// plus in-memory `zip`/`unzip` and `gzip`/`gunzip` (7z/rar read, never
+/// written). `open` streams a single member as a `Reader`; every member is
+/// sandbox-checked before anything is written.
 library;
 
-import 'dart:async';
-import 'dart:convert';
-import 'dart:ffi';
-import 'dart:io';
-import 'dart:typed_data';
-
-import 'src/base.dart';
-import 'src/native.dart';
-import 'src/path.dart';
-
-export 'path.dart';
-
-part 'src/fs/archive.dart';
+export 'src/archive/archive.dart';
+export 'src/core/errors.dart';

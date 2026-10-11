@@ -1,32 +1,9 @@
-/// # Hashing & Encoding
+/// # Hashing & Checksums
 ///
-/// Digests and checksums of text, bytes, files and streams; MACs; hex, base32 and base64;
-/// secure random bytes, tokens and UUIDs. The algorithm is the receiver, and every input form
-/// gives a [Digest]: `Hash.sha256.text(s)`, `await Hash.blake3.file(path)`, `key:` for a MAC.
-/// Digests run in the native library (`Native`) and throw [UnsupportedError] without it;
-/// encodings and randomness are pure Dart.
-///
-/// It identifies, verifies and encodes data; protecting it (ciphers, password hashing,
-/// signatures, JWT) is out of scope on purpose.
-///
-/// {@category Hashing}
+/// `Hash.sha256`, `md5`, `sha512`, `blake3`, `crc32` and `xxh3` — all callable, all with
+/// `.mac(key)` for keyed authentication and `.writer()` for streaming.
+/// Digests run natively (`tk_digest_*`); without the library the call is an
+/// [UnsupportedError] (r50: no Dart fallback).
 library;
 
-import 'dart:async';
-import 'dart:convert';
-import 'dart:ffi';
-import 'dart:io';
-import 'dart:math';
-import 'dart:typed_data';
-
-import 'src/base.dart';
-import 'src/native.dart';
-
-export 'src/foundations.dart';
-export 'src/native.dart' show NativeException;
-
-part 'src/hash/codec.dart';
-part 'src/hash/digest.dart';
-part 'src/hash/hex.dart';
-part 'src/hash/native.dart';
-part 'src/hash/random.dart';
+export 'src/hash/hash.dart';

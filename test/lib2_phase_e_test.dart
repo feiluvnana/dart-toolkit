@@ -9,8 +9,8 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:dart_toolkit/lib2/async.dart';
-import 'package:dart_toolkit/lib2/tui.dart';
+import 'package:dart_toolkit/async.dart';
+import 'package:dart_toolkit/tui.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -33,7 +33,10 @@ void main() {
       final term = FakeTerminal(width: 30, height: 8);
       Future<void> frame() async {
         term.draw((ui) {
-          ui.box(title: 'root', build: (box) => box.list(files, sel: sel));
+          ui.box(
+            title: 'root',
+            build: (box) => box.list(files, sel: sel),
+          );
         });
       }
 
@@ -64,9 +67,12 @@ void main() {
         stats[stat.$1] = stat.$2;
       }
       term.draw((ui) {
-        ui.box(title: 'Live Monitor', build: (box) {
-          box.bar(val: stats['cpu'] ?? 0, max: 100, label: 'CPU');
-        });
+        ui.box(
+          title: 'Live Monitor',
+          build: (box) {
+            box.bar(val: stats['cpu'] ?? 0, max: 100, label: 'CPU');
+          },
+        );
       });
       expect(term.snapshot.join('\n'), contains('70%'));
       final ev = await term.poll(timeout: const Duration(milliseconds: 100));
@@ -180,10 +186,13 @@ void main() {
             left.box(title: 'Menu', build: (box) => box.list(['Overview', 'Settings', 'Logs'], sel: 1));
           },
           (right) {
-            right.box(title: 'Details', build: (box) {
-              box.text('Server: online', fg: TuiColor.green);
-              box.bar(val: 64, max: 100, label: 'Memory');
-            });
+            right.box(
+              title: 'Details',
+              build: (box) {
+                box.text('Server: online', fg: TuiColor.green);
+                box.bar(val: 64, max: 100, label: 'Memory');
+              },
+            );
           },
         ], vert: false);
       });
@@ -276,7 +285,7 @@ void main() {
 
   group('import budget', () {
     test('tui compiles only its seam (no engine-wide imports)', () {
-      final dir = Directory('lib/lib2/src/tui');
+      final dir = Directory('lib/src/tui');
       final packageImport = RegExp(r'''import\s+'package:''');
       final ffiImport = RegExp(r'''import\s+'dart:ffi''');
       for (final entity in dir.listSync().whereType<File>().where((f) => f.path.endsWith('.dart'))) {

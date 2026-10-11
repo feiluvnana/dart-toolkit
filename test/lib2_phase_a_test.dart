@@ -7,10 +7,10 @@ import 'dart:convert';
 import 'dart:io' as io;
 import 'dart:typed_data';
 
-import 'package:dart_toolkit/lib2/core.dart';
-import 'package:dart_toolkit/lib2/hash.dart';
-import 'package:dart_toolkit/lib2/path.dart';
-import 'package:dart_toolkit/lib2/process.dart';
+import 'package:dart_toolkit/core.dart';
+import 'package:dart_toolkit/hash.dart';
+import 'package:dart_toolkit/path.dart';
+import 'package:dart_toolkit/process.dart';
 import 'package:test/test.dart';
 
 String hexOf(Uint8List b) => DigestValue(b).hex;

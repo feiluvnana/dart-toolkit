@@ -3,7 +3,6 @@ part of '../../collection.dart';
 /// The text formats a [Table] reads and writes. A file's extension names its format: `.json`
 /// (an array of objects), `.ndjson`/`.jsonl`, `.tsv`, `.md`/`.markdown`, and CSV for any other.
 ///
-/// {@category Collections}
 enum TableFormat {
   csv('CSV'),
   tsv('TSV'),
@@ -15,7 +14,7 @@ enum TableFormat {
 
   const TableFormat(this._label);
 
-  static TableFormat _of(String path) => switch (FileBridge.extension(path)) {
+  static TableFormat _of(String path) => switch (_extension(path)) {
     'json' => json,
     'ndjson' || 'jsonl' => ndjson,
     'tsv' => tsv,
@@ -77,7 +76,6 @@ abstract class _SchemaRow extends UnmodifiableMapBase<String, Object?> {
 
 /// A table row: its cells by column name, read typed with [get].
 ///
-/// {@category Collections}
 extension type const Row(Map<String, Object?> _map) implements Map<String, Object?> {
   /// The cell in [column] as [T], read as `Env.get` and `Doc.to` read a value: `int`, `double`,
   /// `num` (`'1,200'`, a size `'1.5 GB'`), `bool` (`yes`, `1`), `Duration`, `DateTime` (ISO 8601,
@@ -100,9 +98,9 @@ extension type const Row(Map<String, Object?> _map) implements Map<String, Objec
     }
     if (cell case final T value) return value;
     final mark = decimal ?? row?.schema.decimal ?? '.';
-    if (CoerceBridge.coerce<T>(cell, format: format, decimal: mark) case final value?) return value;
+    if (_Coerce.coerce<T>(cell, format: format, decimal: mark) case final value?) return value;
     // A European number read with the default mark names the fix.
-    final comma = mark == '.' && cell is String ? CoerceBridge.coerce<num>(cell, decimal: ',') : null;
+    final comma = mark == '.' && cell is String ? _Coerce.coerce<num>(cell, decimal: ',') : null;
     final hint = comma == null ? '' : "; with decimal: ',' it reads $comma";
     final head = row == null ? 'Invalid value' : row.schema.invalid(row.place);
     throw FormatException('$head: ${_describe(cell)} in "$column", not ${article('$T')}$hint');
@@ -158,7 +156,6 @@ final class _TableRow extends _SchemaRow {
 /// `sum`, `average`, `min` and `max` are numbers (`num?`), read with the table's decimal mark; a
 /// blank cell is skipped, and a group with no number gives `null` for each.
 ///
-/// {@category Collections}
 final class Agg {
   final Object? Function(String column, List<Row> rows) _fold;
   final String _column;
@@ -260,8 +257,7 @@ num? _extreme(String column, List<Row> rows, {required bool max}) {
 /// t.groupBy(['region']).agg({'total': Agg.sum('price')});
 /// ```
 ///
-/// {@category Collections}
-final class Table implements Saveable {
+final class Table {
   final _Schema _schema;
 
   /// Column names, in display order.
@@ -331,7 +327,7 @@ final class Table implements Saveable {
     final format = TableFormat._of(path);
     final sep = format._separator(separator);
     _decimal(decimal);
-    return File(path).readAsBytes().then((bytes) {
+    return io.File(path).readAsBytes().then((bytes) {
       final ansi = format == TableFormat.csv || format == TableFormat.tsv;
       final text = decodeText(bytes, format._label, path, ansi: ansi);
       return parsedText(format._label, path, text, (t) => _parse(t, format, sep, decimal, path));
@@ -408,7 +404,7 @@ final class Table implements Saveable {
   static Stream<Row> _lines(String path, TableFormat format, String? separator, String decimal) async* {
     final reader = _RowReader(path, format, separator, decimal);
     try {
-      await for (final piece in File(path).openRead().transform(utf8.decoder)) {
+      await for (final piece in io.File(path).openRead().transform(utf8.decoder)) {
         for (final row in reader.add(piece)) {
           yield row;
         }
@@ -764,13 +760,23 @@ final class Table implements Saveable {
   }
 
   /// Writes this table to [to] in the format its extension names (see [TableFormat]),
-  /// atomically, into a folder that exists; a file there is replaced unless [conflict] says
-  /// otherwise.
-  @override
-  Task<Path> save(String to, {Conflict conflict = Conflict.overwrite, String? separator}) {
+  /// atomically: the file is replaced only once the new contents are whole, so a failure
+  /// leaves the old file. A file already there is replaced unless [overwrite] is false, which
+  /// throws a [StateError] naming it instead.
+  Future<File> save(String to, {bool overwrite = true, String? separator}) {
     final format = TableFormat._of(to);
     final sep = format._separator(separator) ?? ',';
-    return FileBridge.save(to, conflict, 'Table', () => _pieces(format, sep).map(utf8.encode));
+    return _save(to, overwrite, format, sep);
+  }
+
+  /// [save], with [format] and [sep] settled: the separator throws synchronously above.
+  Future<File> _save(String to, bool overwrite, TableFormat format, String separator) async {
+    final file = File(to);
+    if (!overwrite && await file.exists) {
+      throw StateError('Cannot save Table to $to: file exists');
+    }
+    await file.atomic(_pieces(format, separator).join());
+    return file;
   }
 
   /// The rows as JSON-ready maps over [columns] (a [DateTime] as ISO 8601), so `jsonEncode(table)`
@@ -787,7 +793,7 @@ final class Table implements Saveable {
   bool _numeric(String column) {
     if (rows.isEmpty) return false;
     final decimal = _schema.decimal;
-    return rows.every((r) => _blank(r[column]) || CoerceBridge.coerce<num>(r[column], decimal: decimal) != null);
+    return rows.every((r) => _blank(r[column]) || _Coerce.coerce<num>(r[column], decimal: decimal) != null);
   }
 
   String _markdown() {
@@ -812,16 +818,16 @@ final class Table implements Saveable {
     Map<String, Align> align = const {},
     String Function(Row row, String column)? cell,
   }) {
-    final b = border ?? IoBridge.border?.call() ?? const Border();
+    final b = border ?? const Border();
     align.keys.forEach(_schema.has);
     final grid = [
       for (final r in rows)
         [for (final c in columns) (cell?.call(r, c) ?? _written(r[c])).replaceAll('\n', '⏎').replaceAll('\r', '⏎')],
     ];
-    final widths = [for (final h in columns) TextBridge.width(h)];
+    final widths = [for (final h in columns) textWidth(h)];
     for (final row in grid) {
       for (var i = 0; i < columns.length; i++) {
-        widths[i] = max(widths[i], TextBridge.width(row[i]));
+        widths[i] = max(widths[i], textWidth(row[i]));
       }
     }
     // A cell takes its width and a space each side; the borders between and around take one.
@@ -838,8 +844,7 @@ final class Table implements Saveable {
       }
     }
     final aligns = [for (final c in columns) align[c] ?? (_numeric(c) ? Align.right : Align.left)];
-    String padded(String text, int i) =>
-        TextBridge.pad(TextBridge.truncate(text, widths[i]), widths[i], align: aligns[i]);
+    String padded(String text, int i) => _pad(truncate(text, widths[i]), widths[i], align: aligns[i]);
 
     final out = StringBuffer();
     void divider(String left, String cross, String right) {
@@ -864,20 +869,15 @@ final class Table implements Saveable {
     return out.toString();
   }
 
-  /// Prints [render] on `Io.stdout`, fitted to the terminal's width (piped, written whole), above
-  /// a live display when one is drawing.
+  /// Prints [render] on standard output, fitted to the terminal's width (piped, the text is
+  /// written whole).
   Future<void> show({
     Border? border,
     Map<String, Align> align = const {},
     String Function(Row row, String column)? cell,
   }) async {
-    final text = render(width: Io.columns, border: border, align: align, cell: cell);
-    void write() => Io.stdout.write(text);
-    if (IoBridge.above case final above?) {
-      above(write);
-    } else {
-      write();
-    }
+    final width = io.stdout.hasTerminal ? io.stdout.terminalColumns : 80;
+    io.stdout.write(render(width: width, border: border, align: align, cell: cell));
   }
 
   @override
@@ -886,7 +886,6 @@ final class Table implements Saveable {
 
 /// The groups of a [Table.groupBy]; [agg] folds each into one row.
 ///
-/// {@category Collections}
 final class TableGroups {
   final Table _table;
   final List<String> _keys;
@@ -925,7 +924,7 @@ Object? _valueOf(Object? v, String decimal) {
   if (v == null || v is String && v.trim().isEmpty) return null;
   // Text that cannot start a number ('Cat0') is a key as it is, without the full reading.
   if (v is String && !_mayBeNumber(v)) return v;
-  final n = v is num ? v : (v is String ? CoerceBridge.coerce<num>(v, decimal: decimal) : null);
+  final n = v is num ? v : (v is String ? _Coerce.coerce<num>(v, decimal: decimal) : null);
   if (n == null) return v;
   return n is double && n.isFinite && n == n.truncateToDouble() && n.abs() < 9007199254740992 ? n.toInt() : n;
 }
@@ -956,8 +955,8 @@ typedef _Cell = (num? number, Object? value);
 _Cell _cell(Object? value, String decimal) {
   if (value is String) {
     if (value.trim().isEmpty) return (null, null);
-    final n = CoerceBridge.coerce<num>(value, decimal: decimal);
-    return (n, n ?? CoerceBridge.naturalKey(value));
+    final n = _Coerce.coerce<num>(value, decimal: decimal);
+    return (n, n ?? _Coerce.naturalKey(value));
   }
   return (value is num ? value : null, value);
 }
@@ -1431,16 +1430,13 @@ final class _RowReader {
   }
 }
 
-/// [Table.writer]: rows encoded as they arrive and handed to an atomic write, which renames the
-/// file into place on [close].
+/// [Table.writer]: rows buffered as they arrive and written atomically on [close], which
+/// renames the file into place; a failure leaves the old file.
 final class _TableWriter implements StreamConsumer<Row> {
   final String _path;
   final TableFormat _format;
   final String _separator;
 
-  StreamController<List<int>>? _out;
-  Future<void>? _done;
-  Completer<void>? _resumed;
   final _buffer = StringBuffer();
   List<String>? _columns;
   Set<String>? _known;
@@ -1450,39 +1446,17 @@ final class _TableWriter implements StreamConsumer<Row> {
 
   _TableWriter(this._path, this._format, this._separator);
 
-  StreamController<List<int>> get _open => _out ??= () {
-    final out = StreamController<List<int>>(
-      onResume: () {
-        _resumed?.complete();
-        _resumed = null;
-      },
-    );
-    _done = FileBridge.writeStream(_path, out.stream);
-    return out;
-  }();
-
   @override
   Future<void> addStream(Stream<Row> stream) async {
     if (_closed) throw StateError('Cannot add to a closed Table.writer for $_path');
     if (_failed case (final e, final s)) Error.throwWithStackTrace(e, s);
-    final out = _open;
     try {
       await for (final row in stream) {
         _row(row);
-        if (_buffer.length >= 64 << 10) {
-          out.add(utf8.encode(_buffer.toString()));
-          _buffer.clear();
-          // The file is behind: wait until it takes more, so memory stays bounded.
-          if (out.isPaused) await (_resumed ??= Completer()).future;
-        }
       }
     } catch (e, s) {
+      // Nothing is written, so the old file stays as it was.
       _failed = (e, s);
-      // The write fails with it, deleting its temporary file and leaving the old one.
-      out.addError(e, s);
-      try {
-        await _done;
-      } catch (_) {} // the same error, rethrown below
       rethrow;
     }
   }
@@ -1539,15 +1513,631 @@ final class _TableWriter implements StreamConsumer<Row> {
 
   @override
   Future<void> close() async {
-    if (_closed) return _done;
-    _closed = true;
-    final out = _open;
-    if (_failed == null) {
-      if (_format == TableFormat.json) _buffer.write(_rows == 0 ? '[]\n' : '\n]\n');
-      if (_buffer.isNotEmpty) out.add(utf8.encode(_buffer.toString()));
-      _buffer.clear();
+    if (_closed) {
+      if (_failed case (final e, final s)) Error.throwWithStackTrace(e, s);
+      return;
     }
-    await out.close();
-    await _done;
+    _closed = true;
+    if (_failed case (final e, final s)) Error.throwWithStackTrace(e, s);
+    if (_format == TableFormat.json) _buffer.write(_rows == 0 ? '[]\n' : '\n]\n');
+    await File(_path).atomic(_buffer.toString());
+    _buffer.clear();
+  }
+}
+
+/// [path]'s extension, lowercase and without the dot; `''` when its last part has none.
+String _extension(String path) {
+  final dot = path.lastIndexOf('.');
+  return dot == -1 || path.indexOf('/', dot) != -1 || path.indexOf(r'\', dot) != -1
+      ? ''
+      : path.substring(dot + 1).toLowerCase();
+}
+
+/// How a line sits in its width: a table column's.
+enum Align { left, center, right }
+
+/// The glyphs a table is drawn with.
+///
+/// Every glyph defaults to the square one, `const Border()`, so a custom border names only
+/// what differs: `Border(topLeft: '╭', topRight: '╮', bottomLeft: '╰', bottomRight: '╯')`.
+final class Border {
+  final String topLeft, top, topRight, side, bottomLeft, bottomRight;
+
+  /// Where a column divider meets the top and bottom edges, and where a row divider crosses.
+  final String topTee, bottomTee, leftTee, rightTee, cross;
+
+  const Border({
+    this.topLeft = '┌',
+    this.top = '─',
+    this.topRight = '┐',
+    this.side = '│',
+    this.bottomLeft = '└',
+    this.bottomRight = '┘',
+    this.topTee = '┬',
+    this.bottomTee = '┴',
+    this.leftTee = '├',
+    this.rightTee = '┤',
+    this.cross = '┼',
+  });
+
+  static const rounded = Border(topLeft: '╭', topRight: '╮', bottomLeft: '╰', bottomRight: '╯');
+  static const double = Border(
+    topLeft: '╔',
+    top: '═',
+    topRight: '╗',
+    side: '║',
+    bottomLeft: '╚',
+    bottomRight: '╝',
+    topTee: '╦',
+    bottomTee: '╩',
+    leftTee: '╠',
+    rightTee: '╣',
+    cross: '╬',
+  );
+
+  static const ascii = Border._all('+', top: '-', side: '|');
+
+  /// No glyphs: a table is only its aligned columns.
+  static const none = Border._all('');
+
+  /// [glyph] everywhere, but [top] and [side] when given.
+  const Border._all(String glyph, {String? top, String? side})
+    : topLeft = glyph,
+      top = top ?? glyph,
+      topRight = glyph,
+      side = side ?? glyph,
+      bottomLeft = glyph,
+      bottomRight = glyph,
+      topTee = glyph,
+      bottomTee = glyph,
+      leftTee = glyph,
+      rightTee = glyph,
+      cross = glyph;
+}
+
+/// [text] filled with spaces to [width] columns, placed by [align]; text that is already as wide
+/// is returned as it is (cut it with [truncate]).
+String _pad(String text, int width, {Align align = Align.left}) {
+  final gap = width - textWidth(text);
+  if (gap <= 0) return text;
+  return switch (align) {
+    Align.left => '$text${' ' * gap}',
+    Align.right => '${' ' * gap}$text',
+    Align.center => '${' ' * (gap ~/ 2)}$text${' ' * (gap - gap ~/ 2)}',
+  };
+}
+
+/// What [_Coerce.coerce] reads a value as.
+enum _Kind { any, string, boolean, duration, date, uri, integer, real, number, none }
+
+/// Shared coercion logic behind [Row.get]: every typed reading reads a cell one way.
+abstract final class _Coerce {
+  static final _durationRegex = RegExp(r'([+-]?\d+(?:\.\d+)?)\s*(ms|us|µs|s|m|h|d)', caseSensitive: false);
+  static final _isoDate = RegExp(
+    r'^(\d{4})-(\d\d)-(\d\d)(?:[Tt ](\d\d)(?::?(\d\d)(?::?(\d\d)(?:\.(\d+))?)?)?)?([Zz]|[+-]\d\d:?\d\d)?$',
+  );
+  static final _thousands = RegExp(r'^[+-]?\d{1,3}(,\d{3})+(\.\d+)?$');
+  static final _thousandsDot = RegExp(r'^[+-]?\d{1,3}(\.\d{3})+(,\d+)?$');
+
+  /// Coerces [value] to [T], or returns `null` if it cannot be coerced.
+  static T? coerce<T>(Object? value, {String? format, String decimal = '.'}) {
+    if (value == null) return null;
+    if (value is T) return value as T;
+    // Which reading [T] asks for is worked out once per type: rows read it per cell.
+    switch (_kinds[T] ??= _kindOf<T>()) {
+      case _Kind.any:
+        return value as T;
+      case _Kind.string:
+        return (value is DateTime ? value.toIso8601String() : '$value') as T;
+      case _Kind.boolean:
+        return _toBool(value) as T?;
+      case _Kind.duration:
+        return _toDuration(value) as T?;
+      case _Kind.date:
+        return _toDateTime(value, format: format) as T?;
+      case _Kind.uri:
+        return value is String && value.trim().isNotEmpty ? Uri.tryParse(value.trim()) as T? : null;
+      case _Kind.integer || _Kind.real || _Kind.number:
+        final n = _toNum(value, decimal: decimal);
+        if (n == null || !n.isFinite) return null;
+        return switch (_kinds[T]) {
+          _Kind.integer => _integral(n) as T?,
+          _Kind.real => n.toDouble() as T,
+          _ => n as T,
+        };
+      case _Kind.none:
+        return null;
+    }
+  }
+
+  static final _kinds = <Type, _Kind>{};
+
+  static _Kind _kindOf<T>() {
+    if (_same<T, Object>() || _same<T, dynamic>()) return _Kind.any;
+    if (_same<T, String>()) return _Kind.string;
+    if (_same<T, bool>()) return _Kind.boolean;
+    if (_same<T, Duration>()) return _Kind.duration;
+    if (_same<T, DateTime>()) return _Kind.date;
+    if (_same<T, Uri>()) return _Kind.uri;
+    if (_same<T, int>()) return _Kind.integer;
+    if (_same<T, double>()) return _Kind.real;
+    if (_same<T, num>()) return _Kind.number;
+    return _Kind.none;
+  }
+
+  /// [s] as a key whose plain order is natural order, as `compareNatural` orders them: for `Table`.
+  static String naturalKey(String s) => _naturalKey(s);
+
+  static Type _typeOf<X>() => X;
+  static bool _same<A, B>() => A == B || A == _typeOf<B?>();
+
+  static bool? _toBool(Object? value) {
+    if (value is bool) return value;
+    if (value is num) {
+      if (value == 1) return true;
+      if (value == 0) return false;
+      return null;
+    }
+    if (value is String) {
+      return switch (value.trim().toLowerCase()) {
+        'true' || '1' || 'yes' || 'y' || 'on' => true,
+        'false' || '0' || 'no' || 'n' || 'off' => false,
+        _ => null,
+      };
+    }
+    return null;
+  }
+
+  static Duration? _toDuration(Object? value) {
+    if (value is Duration) return value;
+    // A bare number is seconds, as `sleep 90` and `timeout = 90` mean; `90ms` says otherwise.
+    if (value is num) return value.isFinite ? Duration(microseconds: (value * 1000000).round()) : null;
+    if (value is String) {
+      final s = value.trim();
+      if (s.isEmpty) return null;
+      if (num.tryParse(s) case final n?) return _toDuration(n);
+      if (_clock(s) ?? _isoDuration(s) case final d?) return d;
+
+      // Verify the entire non-whitespace string is covered by the matches.
+      var totalMicroseconds = 0.0;
+      var lastEnd = 0;
+      final isNegative = s.startsWith('-');
+      var working = s;
+      if (isNegative || working.startsWith('+')) working = working.substring(1).trim();
+
+      final nonSignMatches = _durationRegex.allMatches(working).toList();
+      if (nonSignMatches.isEmpty) return null;
+
+      for (final m in nonSignMatches) {
+        final prefix = working.substring(lastEnd, m.start).trim();
+        if (prefix.isNotEmpty) return null;
+        lastEnd = m.end;
+
+        final amount = double.tryParse(m.group(1)!);
+        if (amount == null) return null;
+        final unit = m.group(2)!.toLowerCase();
+
+        final factor = switch (unit) {
+          'us' || 'µs' => 1.0,
+          'ms' => 1000.0,
+          's' => 1000000.0,
+          'm' => 60 * 1000000.0,
+          'h' => 3600 * 1000000.0,
+          'd' => 86400 * 1000000.0,
+          _ => 0.0,
+        };
+        totalMicroseconds += amount * factor;
+      }
+      final trailing = working.substring(lastEnd).trim();
+      if (trailing.isNotEmpty) return null;
+
+      final total = (isNegative ? -totalMicroseconds : totalMicroseconds).round();
+      return Duration(microseconds: total);
+    }
+    return null;
+  }
+
+  /// A clock reading, as players and track lists print a length: `3:45` (minutes and seconds),
+  /// `1:02:03`, `-0:30`, `4:13.5`.
+  static final _clockPattern = RegExp(r'^([+-])?(\d+):([0-5]\d)(?::([0-5]\d))?(\.\d+)?$');
+
+  static Duration? _clock(String s) {
+    final m = _clockPattern.firstMatch(s);
+    if (m == null) return null;
+    final (hours, minutes, seconds) = m[4] == null
+        ? (0, int.parse(m[2]!), int.parse(m[3]!))
+        : (int.parse(m[2]!), int.parse(m[3]!), int.parse(m[4]!));
+    final micros = ((hours * 3600 + minutes * 60 + seconds + double.parse('0${m[5] ?? ''}')) * 1000000).round();
+    return Duration(microseconds: m[1] == '-' ? -micros : micros);
+  }
+
+  /// ISO 8601 durations as feeds and APIs write them: `PT4M13S`, `P1DT2H`, `P2W`; years and
+  /// months, which have no fixed length, are not read.
+  static final _isoDurationPattern = RegExp(
+    r'^([+-])?P(?:(\d+(?:[.,]\d+)?)W)?(?:(\d+(?:[.,]\d+)?)D)?(?:T(?:(\d+(?:[.,]\d+)?)H)?(?:(\d+(?:[.,]\d+)?)M)?(?:(\d+(?:[.,]\d+)?)S)?)?$',
+    caseSensitive: false,
+  );
+
+  static Duration? _isoDuration(String s) {
+    final m = _isoDurationPattern.firstMatch(s);
+    // `P` and `PT` alone say nothing.
+    if (m == null || [2, 3, 4, 5, 6].every((g) => m[g] == null)) return null;
+    double part(int g) => m[g] == null ? 0 : double.parse(m[g]!.replaceAll(',', '.'));
+    final seconds = part(2) * 604800 + part(3) * 86400 + part(4) * 3600 + part(5) * 60 + part(6);
+    final micros = (seconds * 1000000).round();
+    return Duration(microseconds: m[1] == '-' ? -micros : micros);
+  }
+
+  static DateTime? _toDateTime(Object? value, {String? format}) {
+    if (value is DateTime) return value;
+    // An epoch: seconds from 1973, else milliseconds.
+    if (value is num) {
+      if (!value.isFinite) return null;
+      final n = value.round();
+      if (n < 100000000) return null;
+      return DateTime.fromMillisecondsSinceEpoch(n < 100000000000 ? n * 1000 : n, isUtc: true);
+    }
+    if (value is String) {
+      final s = value.trim();
+      if (s.isEmpty) return null;
+
+      if (format != null) {
+        return _parseFormattedDate(s, format);
+      }
+
+      // Digits alone are an epoch, as the same number in JSON is: seconds, or milliseconds.
+      if (num.tryParse(s) case final n?) return _toDateTime(n);
+
+      // Check ISO format.
+      final m = _isoDate.firstMatch(s);
+      if (m != null) {
+        final year = int.parse(m[1]!);
+        final month = int.parse(m[2]!);
+        final day = int.parse(m[3]!);
+        if (month >= 1 && month <= 12 && day >= 1 && day <= DateTime.utc(year, month + 1, 0).day) {
+          final hour = m[4] != null ? int.parse(m[4]!) : 0;
+          final minute = m[5] != null ? int.parse(m[5]!) : 0;
+          final second = m[6] != null ? int.parse(m[6]!) : 0;
+          if (hour <= 23 && minute <= 59 && second <= 59) {
+            // Text without a zone is UTC, as `format:` and RFC dates without one are.
+            final micros = int.parse((m[7] ?? '').padRight(6, '0').substring(0, 6));
+            final at = DateTime.utc(year, month, day, hour, minute, second, 0, micros);
+            final zone = m[8] ?? 'Z';
+            if (zone == 'Z' || zone == 'z') return at;
+            final digits = zone.replaceAll(':', '');
+            final offset = int.parse(digits.substring(1, 3)) * 60 + int.parse(digits.substring(3));
+            return at.subtract(Duration(minutes: zone.startsWith('-') ? -offset : offset));
+          }
+        }
+        return null;
+      }
+
+      if (_rfc(s) case final rfc?) return rfc;
+
+      // Common fallback formats: dd/MM/yyyy or yyyy/MM/dd
+      if (s.contains('/')) {
+        return _parseFormattedDate(s, 'dd/MM/yyyy') ?? _parseFormattedDate(s, 'yyyy/MM/dd');
+      }
+    }
+    return null;
+  }
+
+  /// The tokens `format:` reads, longest first, each with what it matches.
+  static const _dateTokens = [
+    ('yyyy', r'(\d{4})'),
+    ('yy', r'(\d{2})'),
+    ('MMMM', r'(\p{L}+)'),
+    ('MMM', r'(\p{L}{3})'),
+    ('MM', r'(\d{1,2})'),
+    ('dd', r'(\d{1,2})'),
+    ('HH', r'(\d{1,2})'),
+    ('mm', r'(\d{1,2})'),
+    ('ss', r'(\d{1,2})'),
+  ];
+
+  /// Each format's pattern and the tokens of its groups, built once per format.
+  static final _formats = <String, (RegExp, List<String>)>{};
+
+  static DateTime? _parseFormattedDate(String s, String format) {
+    final (regex, tokens) = _formats[format] ??= _formatPattern(format);
+    if (tokens.isEmpty) return null;
+    final match = regex.firstMatch(s);
+    if (match == null) return null;
+    var year = 1970, month = 1, day = 1, hour = 0, minute = 0, second = 0;
+    for (var i = 0; i < tokens.length; i++) {
+      final text = match.group(i + 1)!;
+      if (tokens[i] case 'MMMM' || 'MMM') {
+        final m = _month(text);
+        if (m == null) return null;
+        month = m;
+        continue;
+      }
+      final value = int.parse(text);
+      switch (tokens[i]) {
+        case 'yyyy':
+          year = value;
+        case 'yy':
+          year = 2000 + value;
+        case 'MM':
+          month = value;
+        case 'dd':
+          day = value;
+        case 'HH':
+          hour = value;
+        case 'mm':
+          minute = value;
+        case 'ss':
+          second = value;
+      }
+    }
+    if (month < 1 || month > 12 || day < 1 || day > DateTime.utc(year, month + 1, 0).day) return null;
+    if (hour > 23 || minute > 59 || second > 59) return null;
+    return DateTime.utc(year, month, day, hour, minute, second);
+  }
+
+  /// [format] as a pattern: each token a group at its width (so `yyyyMMdd` splits where it was
+  /// written), the rest literal.
+  static (RegExp, List<String>) _formatPattern(String format) {
+    final pattern = StringBuffer('^'), tokens = <String>[];
+    outer:
+    for (var i = 0; i < format.length;) {
+      for (final (token, group) in _dateTokens) {
+        if (format.startsWith(token, i)) {
+          pattern.write(group);
+          tokens.add(token);
+          i += token.length;
+          continue outer;
+        }
+      }
+      pattern.write(RegExp.escape(format[i++]));
+    }
+    pattern.write(r'$');
+    return (RegExp('$pattern', unicode: true, caseSensitive: false), tokens);
+  }
+
+  static const _monthNames = [
+    'january', 'february', 'march', 'april', 'may', 'june', //
+    'july', 'august', 'september', 'october', 'november', 'december',
+  ];
+
+  /// The month [name] names, in English, whole or by its first three letters (`Sept` too).
+  static int? _month(String name) {
+    final lower = name.toLowerCase();
+    if (lower.length < 3) return null;
+    for (var i = 0; i < 12; i++) {
+      final full = _monthNames[i];
+      if (lower == full || lower == full.substring(0, 3) || (lower.length > 3 && full.startsWith(lower))) return i + 1;
+    }
+    return null;
+  }
+
+  /// RFC 1123 / 822 / 850 (`Sun, 06 Nov 1994 08:49:37 GMT`, `Wed, 02 Oct 02 13:00:00 +0200`,
+  /// `Sunday, 06-Nov-94 08:49:37 GMT`) and asctime (`Sun Nov  6 08:49:37 1994`), as headers and
+  /// feeds write them.
+  static final _rfcDate = RegExp(
+    r'^(?:[a-z]{3,9},?\s+)?(\d{1,2})[\s-]([a-z]{3,9})\.?[\s-](\d{2}|\d{4})\s+(\d{1,2}):(\d\d)(?::(\d\d))?\s*(gmt|ut|utc|z|[+-]\d\d:?\d\d|[a-z]{3})?$',
+    caseSensitive: false,
+  );
+  static final _asctime = RegExp(
+    r'^[a-z]{3}\s+([a-z]{3})\s+(\d{1,2})\s+(\d{1,2}):(\d\d):(\d\d)\s+(\d{4})$',
+    caseSensitive: false,
+  );
+
+  /// Hours east of UTC for the zones RFC 822 names.
+  static const _zones = {
+    'gmt': 0, 'ut': 0, 'utc': 0, 'z': 0, 'est': -5, 'edt': -4, 'cst': -6, 'cdt': -5, //
+    'mst': -7, 'mdt': -6, 'pst': -8, 'pdt': -7,
+  };
+
+  static DateTime? _rfc(String s) {
+    if (_asctime.firstMatch(s) case final m?) {
+      return _utc(
+        int.parse(m[6]!),
+        _month(m[1]!),
+        int.parse(m[2]!),
+        int.parse(m[3]!),
+        int.parse(m[4]!),
+        int.parse(m[5]!),
+        0,
+      );
+    }
+    final m = _rfcDate.firstMatch(s);
+    if (m == null) return null;
+    var year = int.parse(m[3]!);
+    if (m[3]!.length == 2) year += year < 50 ? 2000 : 1900;
+    final zone = (m[7] ?? 'gmt').toLowerCase();
+    final int? offset; // minutes east of UTC
+    if (zone.startsWith('+') || zone.startsWith('-')) {
+      final digits = zone.substring(1).replaceAll(':', '');
+      final minutes = int.parse(digits.substring(0, 2)) * 60 + int.parse(digits.substring(2));
+      offset = zone.startsWith('-') ? -minutes : minutes;
+    } else {
+      offset = _zones[zone] == null ? null : _zones[zone]! * 60;
+    }
+    if (offset == null) return null;
+    return _utc(
+      year,
+      _month(m[2]!),
+      int.parse(m[1]!),
+      int.parse(m[4]!),
+      int.parse(m[5]!),
+      int.parse(m[6] ?? '0'),
+      offset,
+    );
+  }
+
+  /// The UTC time of a wall-clock reading [offset] minutes east of UTC, or `null` out of range.
+  static DateTime? _utc(int year, int? month, int day, int hour, int minute, int second, int offset) {
+    if (month == null || day < 1 || day > DateTime.utc(year, month + 1, 0).day) return null;
+    if (hour > 23 || minute > 59 || second > 60) return null;
+    return DateTime.utc(year, month, day, hour, minute, second).subtract(Duration(minutes: offset));
+  }
+
+  static num? _toNum(Object? value, {String decimal = '.'}) {
+    if (value is num) return value;
+    if (value is String) {
+      var text = value.trim();
+      if (text.isEmpty) return null;
+
+      // A grouping pattern needs its separator: most cells skip the regex.
+      if (decimal == ',') {
+        if (text.contains('.') && _thousandsDot.hasMatch(text)) text = text.replaceAll('.', '');
+        text = text.replaceAll(',', '.');
+      } else if (text.contains(',') && _thousands.hasMatch(text)) {
+        text = text.replaceAll(',', '');
+      }
+
+      if (_isHexPrefix(text)) return null;
+      return num.tryParse(text) ?? _bytes(value.trim(), decimal);
+    }
+    return null;
+  }
+
+  /// A size as pages print it, in binary units as `humanBytes` writes them: `1.5 GB`, `512 B`,
+  /// `20MiB`.
+  static final _byteSize = RegExp(r'^(.*?\d)\s*([kmgtp]i?)?b$', caseSensitive: false);
+
+  static int? _bytes(String text, String decimal) {
+    final m = _byteSize.firstMatch(text);
+    if (m == null) return null;
+    final n = _toNum(m[1], decimal: decimal);
+    if (n == null) return null;
+    final power = switch (m[2]?[0].toLowerCase()) {
+      null => 0,
+      'k' => 1,
+      'm' => 2,
+      'g' => 3,
+      't' => 4,
+      _ => 5,
+    };
+    return (n * pow(1024, power)).round();
+  }
+
+  static bool _isHexPrefix(String s) {
+    final i = s.startsWith('+') || s.startsWith('-') ? 1 : 0;
+    return s.length >= i + 2 && s.codeUnitAt(i) == 0x30 && (s.codeUnitAt(i + 1) | 0x20) == 0x78;
+  }
+
+  static int? _integral(num n) => switch (n) {
+    final int i => i,
+    final double d when d >= -9223372036854775808.0 && d < 9223372036854775808.0 && d == d.truncateToDouble() =>
+      d.toInt(),
+    _ => null,
+  };
+}
+
+final _windows = io.Platform.isWindows;
+
+/// [s] as a key whose plain order is natural order: lower-cased; each `/` (and `\` on Windows)
+/// made `U+0000`, below every other character, so segments compare one by one and `a` sorts
+/// before `a/b`; each run of digits written as `0`, its length without leading zeros, then those
+/// digits, so longer numbers sort later and `01` keys as `1`. The `0` keeps a number where a
+/// digit sorts against any other character.
+String _naturalKey(String s) {
+  final lower = s.toLowerCase();
+  final windows = _windows;
+  final n = lower.length;
+  // A run of k digits keys as at most k + 2 units, and runs sit apart: twice the length is room.
+  final out = Uint16List(n * 2 + 2);
+  var o = 0;
+  for (var i = 0; i < n;) {
+    final c = lower.codeUnitAt(i);
+    if (!_digit(c)) {
+      out[o++] = c == 0x2f || (windows && c == 0x5c) ? 0 : c;
+      i++;
+      continue;
+    }
+    while (i + 1 < n && lower.codeUnitAt(i) == 0x30 && _digit(lower.codeUnitAt(i + 1))) {
+      i++;
+    }
+    var end = i;
+    while (end < n && _digit(lower.codeUnitAt(end))) {
+      end++;
+    }
+    out[o++] = 0x30;
+    out[o++] = end - i;
+    while (i < end) {
+      out[o++] = lower.codeUnitAt(i++);
+    }
+  }
+  return String.fromCharCodes(out, 0, o);
+}
+
+bool _digit(int c) => c >= 0x30 && c <= 0x39;
+
+/// The door for an absence that a reading's own `or:` does not cover: `null`, or a default for an
+/// expression of several steps.
+///
+/// Every reading in the package is total — `T` in, `T` out, or a [MissingException] naming what was
+/// absent. A reading that answers for one named thing takes a default itself; this wraps any other
+/// in a thunk so the caller can answer for the absence, and so no member carries a `…OrNull` twin.
+///
+/// ```dart
+/// final cell = (() => row.get<int>('n')).orNull; // int?
+/// final count = (() => row.get<int>('n')).or(0); // int
+/// ```
+///
+/// A thunk, not the value, because a getter evaluates eagerly. The thunk defers it.
+///
+/// [orNull] is for an expected absence and returns `T?`. [or] is for a default that differs and
+/// returns that default's own type — `or('')` is a `String`, `or(0)` an `int` — so nothing needs a
+/// type argument at the call site. Its default is required and **non-null**.
+///
+/// Only a [MissingException] — the one signal that a value was absent — or a missing file becomes
+/// the fallback. A [FormatException] from an unreadable value, an [ArgumentError] from a bad type
+/// argument and an [UnsupportedError] from a missing native library all travel on, so a broken
+/// document is never silently skipped.
+extension Or<T> on T Function() {
+  /// This reading's value, or `null` when it throws a [MissingException] — for an expected absence.
+  T? get orNull {
+    try {
+      return this();
+    } on MissingException {
+      return null;
+    } on io.PathNotFoundException {
+      return null;
+    }
+  }
+
+  /// This reading's value, or [fallback] when it throws a [MissingException] — for a default that
+  /// differs. [fallback] is required, and must be a [T].
+  ///
+  /// A value that is present is returned as it is, whatever its type: the fallback is for an
+  /// absence, never for a value that does not fit.
+  T or(T fallback) {
+    try {
+      return this();
+    } on MissingException {
+      return fallback;
+    } on io.PathNotFoundException {
+      return fallback;
+    }
+  }
+}
+
+/// The same two doors for an async reading, whose absence arrives in the [Future] rather than at
+/// the call, so only an awaited door can see it.
+extension AwaitOr<T> on Future<T> Function() {
+  /// This reading's value, or `null` when the [Future] throws a [MissingException].
+  Future<T?> get orNull async {
+    try {
+      return await this();
+    } on MissingException {
+      return null;
+    } on io.PathNotFoundException {
+      return null;
+    }
+  }
+
+  /// This reading's value, or [fallback] when the [Future] throws a [MissingException]. [fallback]
+  /// may be a `FutureOr`, so a plain value reads as one.
+  Future<T> or(FutureOr<T> fallback) async {
+    try {
+      return await this();
+    } on MissingException {
+      return await fallback;
+    } on io.PathNotFoundException {
+      return await fallback;
+    }
   }
 }

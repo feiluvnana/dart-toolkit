@@ -5,18 +5,12 @@
 #   make native          build the native libraries for this machine into native2/lib/<os>_<arch>/
 #   make native-all      every target this machine can cross-build
 #   make native-release  native-all, then the GitHub release a first use downloads from
-#   make bench           throughput per case (AOT) and startup cost per module
+#   make bench           startup cost per module (JIT)
 #   make release         everything above, then the version bump reminder
 
 DART ?= dart
 
-ifeq ($(OS),Windows_NT)
-BENCH = .dart_tool\bench\runner.exe
-else
-BENCH = .dart_tool/bench/runner
-endif
-
-.PHONY: all check format analyze catches test native native-all native-release audit bench bench-build bench-check release clean
+.PHONY: all check format analyze catches test native native-all native-release audit bench release clean
 
 all: check test
 
@@ -38,7 +32,8 @@ test:
 	$(DART) test
 
 ## The native libraries (dart_toolkit_native, dart_toolkit_chrome, dart_toolkit_tui,
-## dart_toolkit_torrent). A program builds them on its first use too; this is for after an edit to native2/.
+## dart_toolkit_torrent). Build them here after an edit to native2/; without them the
+## native calls are UnsupportedError (programmatic first-use install is follow-up work).
 native:
 	$(DART) run tool/build_native.dart
 
@@ -54,20 +49,11 @@ native-release:
 audit:
 	cargo audit --file native2/Cargo.lock
 
-## Throughput is measured AOT, one process per case (its own peak RSS); startup stays JIT. AOT has
-## no package root, so the native libraries go beside the runner.
-bench-build:
-	$(DART) run tool/build_native.dart --copy-to .dart_tool/bench
-	$(DART) compile exe tool/bench/runner.dart -o $(BENCH)
-
-bench: bench-build
-	$(BENCH)
+## Startup cost per module (JIT medians over a bare script; read the deltas).
+bench:
 	$(DART) run tool/module_bench.dart
 
-bench-check: bench-build
-	$(BENCH) --check
-
-release: check test native audit bench-check
+release: check test native audit
 	@echo Bump the version in pubspec.yaml, move Unreleased in CHANGELOG.md, run make native-release, then tag the version.
 
 clean:
