@@ -37,22 +37,22 @@ format:
 test:
 	$(DART) test
 
-## The native libraries (dart_toolkit_native, dart_toolkit_torrent). A program builds them on its
-## first use too; this is for after an edit to native/.
+## The native libraries (dart_toolkit_native, dart_toolkit_chrome, dart_toolkit_torrent). A program builds them on its
+## first use too; this is for after an edit to native2/.
 native:
 	$(DART) run tool/build_native.dart
 
 native-all:
 	$(DART) run tool/build_native.dart --all
 
-## Needs native/ committed and `gh` signed in: the release is named by the hash of native/.
+## Needs native2/ committed and `gh` signed in: the release is named by the hash of native2/.
 native-release:
 	$(DART) run tool/build_native.dart --release
 
 ## The archive parsers read files from the internet, so the release checks them for advisories
 ## (cargo install cargo-audit).
 audit:
-	cargo audit --file native/Cargo.lock
+	cargo audit --file native2/Cargo.lock
 
 ## Throughput is measured AOT, one process per case (its own peak RSS); startup stays JIT. AOT has
 ## no package root, so the native libraries go beside the runner.

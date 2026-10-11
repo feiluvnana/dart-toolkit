@@ -29,13 +29,17 @@ const targets = <String, String>{
   'windows_arm64': 'aarch64-pc-windows-msvc',
 };
 
-const crates = ['native', 'torrent'];
+const crates = ['native', 'chrome', 'torrent'];
 
 final nativeDir = Path.cwd / 'native2';
 
 Path libOf(String folder, String crate) => nativeDir / 'lib' / folder / NativeBridge.fileOf(crate, folder);
 
-NativeHandle handleOf(String crate) => crate == 'native' ? NativeBridge.main : NativeBridge.torrent;
+NativeHandle handleOf(String crate) => switch (crate) {
+  'native' => NativeBridge.main,
+  'chrome' => NativeBridge.chrome,
+  _ => NativeBridge.torrent,
+};
 
 Future<bool> has(String command) async => await (() => Shell.which(command)).orNull != null;
 

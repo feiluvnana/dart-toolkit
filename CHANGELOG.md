@@ -14,6 +14,19 @@ could block a stop for tens of seconds). JPEG search encodes are back on mozjpeg
 a build requirement again). `lib2` binds only the new ABI; its Dart fallbacks are deleted
 (a missing library is `UnsupportedError`).
 
+**Chrome CDP engine (reports Phase D).** New `native2/chrome` crate
+(`dart_toolkit_chrome`, ABI 1): hidden launch, held-profile refusal, OS
+alive-check, tree-kill reaper with temp-profile delete, and CDP over a
+blocking websocket (one short-lived connection per call) — open/navigate,
+eval, wait, coord click, type, screenshot, print-to-PDF, raw send.
+`lib2/chrome` speaks only through it (a missing library is
+`UnsupportedError`): `Browser.open`/`newTab`/`pages`/`alive`, `Page.goto`,
+`html`, `type`, `pdf`, pipeable `shot`, real-coordinate `click`; `content`,
+`waitFor`, `screenshot` and `newPage` stay as deprecated delegates.
+Deferred with reasons: mid-call cancel (the ABI carries stop bytes; Dart
+passes none yet — calls are bounded by their timeouts instead), download
+folder control, Job-Object tree kill (taskkill like the engine for now).
+
 ## 0.0.3
 
 A second review pass, on memory above all. Every bug below keeps a regression test.
