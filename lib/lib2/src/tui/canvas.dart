@@ -12,6 +12,8 @@
 /// ```
 library;
 
+import 'dart:typed_data';
+
 import 'buffer.dart';
 import 'events.dart';
 import 'layout.dart';
@@ -179,17 +181,17 @@ final class Canvas {
     }
   }
 
-  /// A labeled gauge filling the bounds width.
-  void bar({required num val, required num max, String? label, String? unit, int? width}) {
+  /// A labeled gauge filling the bounds width ([glyphs] picks the set;
+  /// [BarGlyphs.ascii] where the terminal cannot draw Unicode).
+  void bar({required num val, required num max, String? label, String? unit, int? width, BarGlyphs glyphs = BarGlyphs.blocks}) {
     if (_cy >= bounds.y + bounds.h) return;
     final w = (width ?? bounds.w).clamp(10, bounds.w);
     final ratio = max <= 0 ? 1.0 : (val / max).clamp(0.0, 1.0);
     final pct = '${(ratio * 100).toStringAsFixed(0)}%';
     final suffix = unit == null ? '' : ' $val/$max $unit';
     final fixed = '${label == null ? '' : '$label '}$pct$suffix ';
-    final glyphs = (w - textWidth(fixed) - 2).clamp(1, w);
-    final filled = (ratio * glyphs).round().clamp(0, glyphs);
-    grid.write(bounds.x, _cy, '$fixed[${'█' * filled}${'░' * (glyphs - filled)}]', fg: TuiColor.green);
+    final glyphsWidth = (w - textWidth(fixed) - 2).clamp(1, w);
+    grid.write(bounds.x, _cy, '$fixed[${glyphs.draw(ratio, glyphsWidth)}]', fg: TuiColor.green);
     _cy++;
   }
 
@@ -430,6 +432,57 @@ final class Canvas {
     }
     flush();
     return out;
+  }
+
+  /// Pixels drawn as half-block cells: two picture rows a cell, the upper
+  /// pixel `▀`'s foreground and the lower its background (a lone lower pixel
+  /// is `▄`). [frames] are RGBA bytes, [width]×[height] each; more than one
+  /// animates, [every] apart (frame picked by the clock). A pixel more than
+  /// half transparent shows what is behind it (the cell is left alone).
+  /// Larger than the bounds, it scales down to fit. Sixel output stays
+  /// deferred (terminal support matrix + image pipeline).
+  void picture(
+    List<Uint8List> frames, {
+    required int width,
+    required int height,
+    Duration every = const Duration(milliseconds: 100),
+  }) {
+    if (frames.isEmpty) throw ArgumentError.value(frames, 'frames', 'Invalid frames: none');
+    if (width < 1 || height < 1) {
+      throw ArgumentError.value((width, height), 'size', 'Invalid size, expected at least 1×1');
+    }
+    for (final f in frames) {
+      if (f.length != width * height * 4) {
+        throw ArgumentError.value(f.length, 'frames', 'Invalid frame: expected ${width * height * 4} RGBA bytes');
+      }
+    }
+    if (every <= Duration.zero) throw ArgumentError.value(every, 'every', 'Invalid interval, expected more than zero');
+    final frame = frames.length == 1
+        ? frames[0]
+        : frames[DateTime.now().microsecondsSinceEpoch ~/ every.inMicroseconds % frames.length];
+    final availH = (bounds.y + bounds.h - _cy) * 2;
+    if (bounds.w <= 0 || availH <= 0) return;
+    final fit = [width / bounds.w, height / availH, 1.0].reduce((a, b) => a > b ? a : b);
+    final w = (width / fit).floor(), h = (height / fit).floor();
+    TuiColor? at(int x, int y) {
+      if (y >= h) return null;
+      final i = (((y * fit).floor().clamp(0, height - 1)) * width + (x * fit).floor().clamp(0, width - 1)) * 4;
+      return frame[i + 3] < 128 ? null : TuiColor.rgb(frame[i], frame[i + 1], frame[i + 2]);
+    }
+
+    for (var cy = 0; cy * 2 < h; cy++) {
+      if (_cy >= bounds.y + bounds.h) return;
+      for (var x = 0; x < w && bounds.x + x < bounds.x + bounds.w; x++) {
+        final top = at(x, cy * 2), bottom = at(x, cy * 2 + 1);
+        if (top == null && bottom == null) continue;
+        if (top == null) {
+          grid.set(bounds.x + x, _cy, Cell('▄', bottom, null, const CellStyle()));
+        } else {
+          grid.set(bounds.x + x, _cy, Cell('▀', top, bottom, const CellStyle()));
+        }
+      }
+      _cy++;
+    }
   }
 
   /// Paints pending overlays (popups) over the main content.

@@ -20,7 +20,8 @@ import '../fs/io.dart' as fs;
 /// ```
 abstract final class Archive {
   /// Packs the file or directory at [src] into [dst]. The extension of [dst] picks the
-  /// format: `.zip`, `.tar`, `.tar.gz`/`.tgz` or `.gz` (a single stream).
+  /// format: `.zip`, `.tar`, `.tar.gz`/`.tgz`, `.tar.xz`/`.txz`, `.tar.zst`/`.tzst`,
+  /// `.tar.bz2`/`.tbz2` or `.gz` (a single stream).
   static Future<void> pack(Object src, Object dst, {int level = 6}) async {
     final target = _path(dst);
     final lower = target.toLowerCase();
@@ -261,10 +262,14 @@ abstract final class Archive {
 
   static String _absolute(String path) => io.File(path).absolute.path;
 
-  /// The create format code for a destination's extension (zip=0, tar=2, tgz=3).
+  /// The create format code for a destination's extension. NOTE: create codes
+  /// differ from read codes — tar.xz=4, tar.zst=5, tar.bz2=6 here.
   static int _formatCode(String dst) {
     final p = dst.toLowerCase();
     if (p.endsWith('.tar.gz') || p.endsWith('.tgz')) return 3;
+    if (p.endsWith('.tar.xz') || p.endsWith('.txz')) return 4;
+    if (p.endsWith('.tar.zst') || p.endsWith('.tzst')) return 5;
+    if (p.endsWith('.tar.bz2') || p.endsWith('.tbz2')) return 6;
     if (p.endsWith('.tar')) return 2;
     return 0;
   }

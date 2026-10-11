@@ -3,6 +3,8 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 
+import '../tui/buffer.dart';
+
 /// ANSI colour and weight for terminal text: `'Done!'.green`, `'Error!'.red.bold`.
 extension AnsiText on String {
   String get _on => '\x1b[0m';
@@ -120,9 +122,10 @@ abstract final class Cli {
     return n - 1;
   }
 
-  /// A determinate progress [Bar] of [total] units.
-  static Bar bar({required int total, String? label, String? unit, int size = 24}) =>
-      Bar(total: total, label: label, unit: unit, size: size);
+  /// A determinate progress [Bar] of [total] units ([glyphs] picks the set;
+  /// [BarGlyphs.ascii] where the terminal cannot draw Unicode).
+  static Bar bar({required int total, String? label, String? unit, int size = 24, BarGlyphs glyphs = BarGlyphs.blocks}) =>
+      Bar(total: total, label: label, unit: unit, size: size, glyphs: glyphs);
 
   /// Shows [label] while [fn] runs, then clears it.
   static Future<T> spin<T>(String label, Future<T> Function() fn) async {
@@ -208,13 +211,16 @@ final class Bar {
 
   /// The bar width in cells.
   final int size;
+
+  /// The glyph set ([BarGlyphs.ascii] where the terminal cannot draw Unicode).
+  final BarGlyphs glyphs;
   final Stopwatch _clock = Stopwatch()..start();
   int _value = 0;
   int _drawn = -1;
   bool _live = false;
   bool _done = false;
 
-  Bar({required this.total, this.label, this.unit, this.size = 24}) {
+  Bar({required this.total, this.label, this.unit, this.size = 24, this.glyphs = BarGlyphs.blocks}) {
     _live = stderr.hasTerminal;
     _LiveRegion.attach(this);
   }
@@ -234,8 +240,7 @@ final class Bar {
 
   String get _line {
     final ratio = total <= 0 ? 1.0 : _value / total;
-    final filled = (ratio * size).round().clamp(0, size);
-    final bar = '${'█' * filled}${'░' * (size - filled)}';
+    final bar = glyphs.draw(ratio, size);
     final prefix = label == null ? '' : '$label ';
     final suffix = unit == null ? '' : ' $_value/$total $unit';
     return '$prefix[$bar] ${(ratio * 100).toStringAsFixed(0)}%$suffix';

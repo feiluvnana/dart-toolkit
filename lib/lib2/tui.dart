@@ -1,7 +1,7 @@
 /// # TUI
 ///
 /// Full-screen terminal apps: [Tui.run] takes a `draw`/`poll` loop over a
-/// [Term] (`box`, `text`, `bar`, `list`, `split` …), hears [TuiEvent]s
+/// [Term] (`box`, `text`, `bar`, `list`, `split`, `picture` …), hears [TuiEvent]s
 /// (`Start`, `KeyPress`, `Paste`, `Pointer`, `Resize`, `Interrupt`, `Post`),
 /// and restores the terminal on every way out. [FakeTerminal] is the test
 /// seam: frames, keys and resizes without a terminal.

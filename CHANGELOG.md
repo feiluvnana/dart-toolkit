@@ -39,10 +39,19 @@ hardware cursor, 24→256→16→none colour fallback, and widgets (`box`, `text
 `bar`, `list`/`menu`, `split`, `button`, `field`, `tabs`, `table`, `popup`,
 `board`, `log`, `markdown`) plus the `FakeTerminal` test seam (frames, diff
 counts, key/paste/pointer/resize injection). Without the library, owning the
-terminal is `UnsupportedError`. Deferred with reasons: `Picture` (sixel needs
-the image pipeline and a support matrix), focus traversal rings (focus stays
-caller-owned like `sel`), `while tryRecv case` (not legal Dart — drain loops
-instead), SGR extended mouse (basic capture for now).
+terminal is `UnsupportedError`. Deferred with reasons: focus traversal rings
+(focus stays caller-owned like `sel`), `while tryRecv case` (not legal Dart —
+drain loops instead), SGR extended mouse (basic capture for now).
+
+**Polish (reports Phase F).** `Archive.pack` routes `.tar.xz`/`.txz`,
+`.tar.zst`/`.tzst` and `.tar.bz2`/`.tbz2` to their native create codes (which
+differ from the read codes — tar.xz=4, tar.zst=5, tar.bz2=6; packing `.tar.zst`
+as code 6 wrote bz2, found by the new round-trip tests). Shared `BarGlyphs`
+(fill/empty/head with blocks/line/dots/squares/arrow/ascii presets) wired
+into the TUI `bar` and the CLI `Bar` (`ascii` where the terminal cannot draw
+Unicode). New half-block `picture` widget (RGBA frames, transparency,
+animation); sixel output stays deferred. Verified: webp `quality` moves bytes
+while PNG ignores it (both documented). `su`/`ch` stay post-1.0 per the plan.
 
 ## 0.0.3
 

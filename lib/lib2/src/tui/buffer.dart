@@ -178,6 +178,46 @@ int _to256(int r, int g, int b) {
   return 16 + 36 * comp(r) + 6 * comp(g) + comp(b);
 }
 
+/// A bar's glyphs: [fill] for the part done, [head] after it (`''` for none),
+/// [empty] for the rest. Shared by both UIs (`cli` imports this leaf file;
+/// nothing in `tui` imports `cli`). Where the terminal cannot draw Unicode,
+/// reach for [BarGlyphs.ascii].
+final class BarGlyphs {
+  final String fill, empty, head;
+
+  const BarGlyphs(this.fill, this.empty, [this.head = '']);
+
+  /// Classic solid blocks: `█` and `░`.
+  static const blocks = BarGlyphs('█', '░');
+
+  /// Sleek horizontal line with tapered tip: `━`, `─`, `╸`.
+  static const line = BarGlyphs('━', '─', '╸');
+
+  /// Minimalist line on empty background: `━` and ` `.
+  static const solidLine = BarGlyphs('━', ' ');
+
+  /// Dot markers: `●` and `○`.
+  static const dots = BarGlyphs('●', '○');
+
+  /// Square markers: `■` and `□`.
+  static const squares = BarGlyphs('■', '□');
+
+  /// Arrow progress: `=`, `-`, `>`.
+  static const arrow = BarGlyphs('=', '-', '>');
+
+  /// Only ASCII: `#` and `-`.
+  static const ascii = BarGlyphs('#', '-');
+
+  /// A bar [width] columns wide, [fraction] of it done.
+  String draw(double fraction, int width) {
+    if (width <= 0) return '';
+    final f = fraction.clamp(0.0, 1.0);
+    final done = (f * width + 1e-9).floor().clamp(0, width);
+    final tip = head.isNotEmpty && done < width ? 1 : 0;
+    return fill * done + head * tip + empty * (width - done - tip);
+  }
+}
+
 /// Cell text attributes.
 final class CellStyle {
   final bool bold, dim, italic, underline, reverse;
